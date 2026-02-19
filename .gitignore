@@ -29,3 +29,4 @@ workspace/db/
 workspace/db_old/
 workspace/db_old2/
 workflow/genegalleon.sif
+.micromamba/
