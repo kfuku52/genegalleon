@@ -61,8 +61,10 @@ export SINGULARITYENV_run_rps_blast="${SINGULARITYENV_run_rps_blast:-${run_rps_b
 export run_rps_blast="${run_rps_blast:-1}" # The Docker-backed singularity shim forwards this variable directly.
 export SINGULARITYENV_run_generax="${SINGULARITYENV_run_generax:-0}" # GeneRax requires MPI launcher setup not available in local smoke runs.
 export run_generax="${run_generax:-0}" # Forwarded directly by the Docker-backed singularity shim.
-export SINGULARITYENV_run_midpoint_root="${SINGULARITYENV_run_midpoint_root:-1}" # Provide rooted trees without GeneRax in local validation.
-export run_midpoint_root="${run_midpoint_root:-1}" # Forwarded directly by the Docker-backed singularity shim.
+export SINGULARITYENV_run_tree_root="${SINGULARITYENV_run_tree_root:-1}" # Provide rooted trees without GeneRax in local validation.
+export run_tree_root="${run_tree_root:-1}" # Forwarded directly by the Docker-backed singularity shim.
+export SINGULARITYENV_tree_rooting_method="${SINGULARITYENV_tree_rooting_method:-${tree_rooting_method:-mad}}"
+export tree_rooting_method="${tree_rooting_method:-mad}"
 
 source "${dir_script}/script/gg_util.sh" # loading utility functions
 unset_singularity_envs

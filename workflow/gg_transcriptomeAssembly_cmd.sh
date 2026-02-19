@@ -166,7 +166,8 @@ elif [[ ${mode_sraid} -eq 1 ]]; then
     echo "Input SRA list file not found, probably due to the out-of-range specification of array jobs. Exiting."
     exit 1
   fi
-  sra_ids=( $(cat "${file_input_sra_list}") )
+  sra_ids=()
+  mapfile -t sra_ids < "${file_input_sra_list}"
   sp_ub="$(gg_species_name_from_path_or_dot "${file_input_sra_list}")"
   echo "Input SRA list file: ${file_input_sra_list}"
   echo "Species: ${sp_ub}"
@@ -202,10 +203,10 @@ fi
 
 dir_tmp="${dir_tmp_main}/${SGE_TASK_ID}_${sp_ub}"
 dir_amalgkit_getfastq_sp="${dir_amalgkit_getfastq}/${sp_ub}"
-file_amalgkit_metadata="${dir_amalgkit_metadata}/${sp_ub}.metadata.tsv"
-file_amalgkit_getfastq_safely_removed_flag=${dir_amalgkit_getfastq}/${sp_ub}.safely_removed.txt
+file_amalgkit_metadata="${dir_amalgkit_metadata}/${sp_ub}_metadata.tsv"
+file_amalgkit_getfastq_safely_removed_flag=${dir_amalgkit_getfastq}/${sp_ub}_safely_removed.txt
 file_rRNA_contamination_report="${dir_rRNA_contamination_report}/${sp_ub}_rRNA_mapping_rate.tsv"
-file_isoform="${dir_assembly}/${sp_ub}.isoform.fa.gz"
+file_isoform="${dir_assembly}/${sp_ub}_isoform.fa.gz"
 file_longestcds="${dir_longestcds}/${sp_ub}_longestCDS.fa.gz"
 file_longestcds_transcript="${dir_longestcds_transcript}/${sp_ub}_longestCDS.transcript.fa.gz"
 file_longestcds_fx2tab="${dir_longestcds_fx2tab}/${sp_ub}_longestCDS.fx2tab_cds.tsv"
@@ -213,12 +214,12 @@ file_longestcds_mmseqs2taxonomy="${dir_longestcds_mmseqs2taxonomy}/${sp_ub}_long
 file_longestcds_contamination_removal_fasta="${dir_longestcds_contamination_removal_fasta}/${sp_ub}_longestCDS_contamination_removal.fa.gz"
 file_longestcds_contamination_removal_tsv="${dir_longestcds_contamination_removal_tsv}/${sp_ub}_longestCDS_contamination_removal.tsv"
 file_assembly_stat="${dir_assembly_stat}/${sp_ub}_assembly_stat.tsv"
-file_busco_full1="${dir_busco_full1}/${sp_ub}.busco.full.tsv"
-file_busco_short1="${dir_busco_short1}/${sp_ub}.busco.short.txt"
-file_busco_full2="${dir_busco_full2}/${sp_ub}.busco.full.tsv"
-file_busco_short2="${dir_busco_short2}/${sp_ub}.busco.short.txt"
-file_busco_full3="${dir_busco_full3}/${sp_ub}.busco.full.tsv"
-file_busco_short3="${dir_busco_short3}/${sp_ub}.busco.short.txt"
+file_busco_full1="${dir_busco_full1}/${sp_ub}_busco.full.tsv"
+file_busco_short1="${dir_busco_short1}/${sp_ub}_busco.short.txt"
+file_busco_full2="${dir_busco_full2}/${sp_ub}_busco.full.tsv"
+file_busco_short2="${dir_busco_short2}/${sp_ub}_busco.short.txt"
+file_busco_full3="${dir_busco_full3}/${sp_ub}_busco.full.tsv"
+file_busco_short3="${dir_busco_short3}/${sp_ub}_busco.short.txt"
 file_amalgkit_merge_efflen="${dir_amalgkit_merge}/${sp_ub}/${sp_ub}_eff_length.tsv"
 file_amalgkit_merge_count="${dir_amalgkit_merge}/${sp_ub}/${sp_ub}_est_counts.tsv"
 file_amalgkit_merge_tpm="${dir_amalgkit_merge}/${sp_ub}/${sp_ub}_tpm.tsv"
@@ -230,24 +231,24 @@ cd ${dir_tmp}
 
 task="amalgkit metadata/integrate"
 if [[ ! -s ${file_amalgkit_metadata} && ${run_amalgkit_metadata_or_integrate} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   if [[ -e "./metadata" ]]; then
     rm -r "./metadata"
   fi
 
   if [[ ${mode_sraid} -eq 1 ]]; then
-    search_string=$(cat ${file_input_sra_list} | tr -s "\n" | sed ':a;N;$!ba;s/\n/ OR /g' | sed -e "s/ OR $//" -e "s/^/(/" -e "s/$/)/")
-    search_string=$(echo "${search_string}" | sed -e 's/$/ AND "Illumina"[Platform] AND ("RNA-seq"[Strategy] OR "EST"[Strategy])/')
+    search_string=$(tr -s "\n" < "${file_input_sra_list}" | sed ':a;N;$!ba;s/\n/ OR /g' | sed -e "s/ OR $//" -e "s/^/(/" -e "s/$/)/")
+    search_string="${search_string} AND \"Illumina\"[Platform] AND (\"RNA-seq\"[Strategy] OR \"EST\"[Strategy])"
     echo "Entrez search string: ${search_string}"
 
     amalgkit metadata \
     --out_dir "./" \
     --search_string "${search_string}"
 
-    sp_space=$(echo ${sp_ub} | sed -e "s/_/ /g")
+    sp_space="${sp_ub//_/ }"
     {
         head -n 1 "./metadata/metadata.tsv";
-        cat "./metadata/metadata.tsv" | grep -e "${sp_space}";
+        grep -e "${sp_space}" "./metadata/metadata.tsv";
     } | sed -e "s/\t\t\tno\t/\tyes\tyes\tno\t/g" > "./metadata.tsv"
 
   elif [[ ${mode_fastq} -eq 1 ]]; then
@@ -257,7 +258,7 @@ if [[ ! -s ${file_amalgkit_metadata} && ${run_amalgkit_metadata_or_integrate} -e
     --threads ${NSLOTS} \
     --remove_tmp yes
 
-    mv ./metadata_private_fastq.tsv ./metadata/metadata.tsv
+    mv_out ./metadata_private_fastq.tsv ./metadata/metadata.tsv
     python -c "import pandas as pd; d=pd.read_csv('./metadata/metadata.tsv',sep='\t',header=0); d.loc[:,'scientific_name']='${sp_ub}'; d.to_csv('./metadata.tsv',sep='\t',index=False)"
   fi
 
@@ -270,15 +271,16 @@ if [[ ! -s ${file_amalgkit_metadata} && ${run_amalgkit_metadata_or_integrate} -e
 
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="amalgkit getfastq"
-amalgkit_fastq_files=( $(find ${dir_amalgkit_getfastq_sp} -name "*.amalgkit.fastq.gz") )
+amalgkit_fastq_files=()
+mapfile -t amalgkit_fastq_files < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" | sort)
 echo "Number of amalgkit getfastq fastq files: ${#amalgkit_fastq_files[@]}"
 echo "is_fastq_requiring_downstream_analysis_done: $(is_fastq_requiring_downstream_analysis_done)"
 if [[ ( ${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1 ) && $(is_fastq_requiring_downstream_analysis_done) -eq 0 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_amalgkit_getfastq_sp}"
 
   if [[ -e ${file_amalgkit_getfastq_safely_removed_flag} ]]; then
@@ -298,7 +300,7 @@ if [[ ( ${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1 ) &&
   status_amalgkit=$?
   if [[ ${status_amalgkit} -eq 0 ]]; then
     echo "amalgkit getfastq safely finished."
-    mv ${dir_tmp}/getfastq/* ${dir_amalgkit_getfastq_sp}
+    mv_out ${dir_tmp}/getfastq/* ${dir_amalgkit_getfastq_sp}
     rm -r ${dir_tmp}/getfastq
   else
     echo "amalgkit getfastq did not safely finish. Exiting."
@@ -306,12 +308,12 @@ if [[ ( ${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1 ) &&
   fi
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task='rRNA contamination report'
 if [[ ( ! -s ${file_rRNA_contamination_report} ) && ${run_rRNA_contamination_report} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   silva_rrna_ref=$(ensure_silva_rrna_ref_db "${dir_pg}")
   if [[ $? -ne 0 ]]; then
     echo "Failed to prepare SILVA rRNA reference. Exiting."
@@ -362,12 +364,12 @@ if [[ ( ! -s ${file_rRNA_contamination_report} ) && ${run_rRNA_contamination_rep
     rm "./getfastq" # Do not put -r, otherwise the original getfastq files will be deleted.
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task='De novo transcriptome assembly'
 if [[ ! -s ${file_isoform} && ${run_assembly} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_parent_dir "${file_isoform}"
 
   mapfile -t files_right < <(find "${dir_amalgkit_getfastq_sp}" -name "*_2.amalgkit.fastq.gz" | sort)
@@ -398,14 +400,14 @@ if [[ ! -s ${file_isoform} && ${run_assembly} -eq 1 ]]; then
       if [[ ${lib_layout} == 'single' ]]; then
         find "${dir_amalgkit_getfastq_sp}" -name "*.amalgkit.fastq.gz" -exec du -b {} + \
         | sort -nr | head -n 9 | cut -f2 | while read -r file; do
-          cp ${file} ${selected_fastq_dir}; echo ${file}
+          cp_out ${file} ${selected_fastq_dir}; echo ${file}
         done
       elif [[ ${lib_layout} == 'paired' ]]; then
         find "${dir_amalgkit_getfastq_sp}" -name "*_1.amalgkit.fastq.gz" -exec du -b {} + \
         | sort -nr | head -n 9 | cut -f2 | while read -r file1; do
           file2="${file1/_1.amalgkit.fastq.gz/_2.amalgkit.fastq.gz}"
-          cp ${file1} ${selected_fastq_dir}; echo ${file1}
-          cp ${file2} ${selected_fastq_dir}; echo ${file2}
+          cp_out ${file1} ${selected_fastq_dir}; echo ${file1}
+          cp_out ${file2} ${selected_fastq_dir}; echo ${file2}
         done
       fi
     else
@@ -424,7 +426,7 @@ if [[ ! -s ${file_isoform} && ${run_assembly} -eq 1 ]]; then
     total_fastq_len2=$(get_total_fastq_len ${selected_fastq_dir} "*_2.amalgkit.fastq.gz")
     total_fastq_len=$((${total_fastq_len1}+${total_fastq_len2}))
   fi
-  max_assembly_input_fastq_size=$(echo ${max_assembly_input_fastq_size} | sed -e "s/,//g")
+  max_assembly_input_fastq_size="${max_assembly_input_fastq_size//,/}"
   if [[ ${total_fastq_len} -gt ${max_assembly_input_fastq_size} ]]; then
     echo "Total ${lib_layout} fastq length is ${total_fastq_len} bp, which is greater than ${max_assembly_input_fastq_size} bp."
     echo "Only ${max_assembly_input_fastq_size} bp will be used."
@@ -433,7 +435,7 @@ if [[ ! -s ${file_isoform} && ${run_assembly} -eq 1 ]]; then
       rm -r ${assembly_input_fastq_dir}
     fi
     mkdir ${assembly_input_fastq_dir}
-    proportion=$(echo "${max_assembly_input_fastq_size} ${total_fastq_len}" | awk '{printf "%.3f\n", $1/$2}')
+    proportion=$(awk -v max="${max_assembly_input_fastq_size}" -v total="${total_fastq_len}" 'BEGIN {printf "%.3f\n", max/total}')
     echo "Proportion of fastq reads to be used: ${proportion} (${max_assembly_input_fastq_size}/${total_fastq_len})"
     files=()
     if [[ ${lib_layout} == 'single' ]]; then
@@ -501,7 +503,8 @@ if [[ ! -s ${file_isoform} && ${run_assembly} -eq 1 ]]; then
     ${trinity_input}
     # For --NO_SEQTK, see https://github.com/trinityrnaseq/trinityrnaseq/issues/787
     if [[ -s "${dir_tmp}/trinity.Trinity.fasta" ]]; then
-      seqkit seq --threads ${NSLOTS} "${dir_tmp}/trinity.Trinity.fasta" --out-file "${file_isoform}"
+      seqkit seq --threads ${NSLOTS} "${dir_tmp}/trinity.Trinity.fasta" --out-file "tmp.isoform.fa.gz"
+      mv_out "tmp.isoform.fa.gz" "${file_isoform}"
     fi
   elif [[ ${assembly_method} == 'rnaSPAdes' ]]; then
     if [[ ${protocol_rna_seq} == "same" ]]; then
@@ -530,7 +533,8 @@ if [[ ! -s ${file_isoform} && ${run_assembly} -eq 1 ]]; then
     -o rnaspades_output \
     ${rnaspades_input}
     if [[ -s "${dir_tmp}/rnaspades_output/transcripts.fasta" ]]; then
-      seqkit seq --threads ${NSLOTS} "${dir_tmp}/rnaspades_output/transcripts.fasta" --out-file "${file_isoform}"
+      seqkit seq --threads ${NSLOTS} "${dir_tmp}/rnaspades_output/transcripts.fasta" --out-file "tmp.isoform.fa.gz"
+      mv_out "tmp.isoform.fa.gz" "${file_isoform}"
     fi
   else
     echo "Invalid value for 'assembly_method'. Please specify either 'Trinity' or 'rnaSPAdes'."
@@ -540,13 +544,13 @@ if [[ ! -s ${file_isoform} && ${run_assembly} -eq 1 ]]; then
 
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task='Longest CDS extraction'
 disable_if_no_input_file "run_longestcds" ${file_isoform}
 if [[ ( ! -s ${file_longestcds} || ! -s ${file_longestcds_transcript} ) && ${run_longestcds} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_parent_dir "${file_longestcds}"
   ensure_parent_dir "${file_longestcds_transcript}"
 
@@ -584,8 +588,8 @@ if [[ ( ! -s ${file_longestcds} || ! -s ${file_longestcds_transcript} ) && ${run
   | cdskit aggregate -x "${aggregate_expression}" \
   > "${sp_ub}.tmp.aggregated.fa"
 
-  grep -e "^>" "${sp_ub}.tmp.aggregated.fa" | sed -e "s/>//" -e "s/[[:space:]].*//" -e "s/\.p[0-9].*//" \
-  > "${sp_ub}.tmp.aggregated.transcript_id.txt"
+  awk '/^>/ {sub(/^>/, "", $0); sub(/[[:space:]].*$/, "", $0); sub(/\.p[0-9].*$/, "", $0); print}' \
+  "${sp_ub}.tmp.aggregated.fa" > "${sp_ub}.tmp.aggregated.transcript_id.txt"
 
   if [[ -s "${sp_ub}.tmp.aggregated.fa" && -s "${sp_ub}.tmp.aggregated.transcript_id.txt" ]]; then
     echo "Output file detected for the task: ${task}"
@@ -593,21 +597,23 @@ if [[ ( ! -s ${file_longestcds} || ! -s ${file_longestcds_transcript} ) && ${run
     --threads ${NSLOTS} \
     --pattern-file "${sp_ub}.tmp.aggregated.transcript_id.txt" \
     "${sp_ub}.tmp.renamed.fa" \
-    --out-file "${file_longestcds_transcript}"
+    --out-file "${sp_ub}.tmp.longestcds.transcript.fa.gz"
+    mv_out "${sp_ub}.tmp.longestcds.transcript.fa.gz" "${file_longestcds_transcript}"
     sed -e "s/[[:space:]].*//" -e "s/${aggregate_expression}//" "${sp_ub}.tmp.aggregated.fa" \
-    | seqkit seq --threads ${NSLOTS} --out-file "${file_longestcds}"
+    | seqkit seq --threads ${NSLOTS} --out-file "${sp_ub}.tmp.longestcds.fa.gz"
+    mv_out "${sp_ub}.tmp.longestcds.fa.gz" "${file_longestcds}"
   else
     echo "Output file not detected for the task: ${task}"
   fi
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="seqkit fx2tab for the longest CDS sequences"
 disable_if_no_input_file "run_longestcds_fx2tab" ${file_longestcds}
 if [[ ! -s ${file_longestcds_fx2tab} && ${run_longestcds_fx2tab} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   seqkit fx2tab \
   --threads ${NSLOTS} \
@@ -625,13 +631,13 @@ if [[ ! -s ${file_longestcds_fx2tab} && ${run_longestcds_fx2tab} -eq 1 ]]; then
     mv_out "tmp.cds_length.tsv" ${file_longestcds_fx2tab}
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="MMseqs2 Taxonomy of the CDS sequences"
 disable_if_no_input_file "run_longestcds_mmseqs2taxonomy" ${file_longestcds}
 if [[ ! -s ${file_longestcds_mmseqs2taxonomy} && ${run_longestcds_mmseqs2taxonomy} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   ensure_mmseqs_uniref90_db "${dir_mmseqs2_db}" "${NSLOTS}"
   if [[ $? -ne 0 ]]; then
@@ -667,13 +673,13 @@ if [[ ! -s ${file_longestcds_mmseqs2taxonomy} && ${run_longestcds_mmseqs2taxonom
     rm -r "tmp_mmseqs2"
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Contaminated sequence removal from the CDS sequences"
 disable_if_no_input_file "run_longestcds_contamination_removal" ${file_longestcds} ${file_longestcds_fx2tab} ${file_longestcds_mmseqs2taxonomy}
 if [[ ( ! -s ${file_longestcds_contamination_removal_fasta} || ! -s ${file_longestcds_contamination_removal_tsv} ) && ${run_longestcds_contamination_removal} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_parent_dir "${file_longestcds_contamination_removal_fasta}"
 
   if ! ensure_ete_taxonomy_db "${dir_pg}"; then
@@ -693,39 +699,28 @@ if [[ ( ! -s ${file_longestcds_contamination_removal_fasta} || ! -s ${file_longe
 
   if [[ -s "clean_sequences.fa" && -s "lineage_compatibility.tsv" ]]; then
     echo "Output file detected for the task: ${task}"
-    seqkit seq --threads ${NSLOTS} "clean_sequences.fa" --out-file ${file_longestcds_contamination_removal_fasta}
+    seqkit seq --threads ${NSLOTS} "clean_sequences.fa" --out-file "tmp.longestcds.clean.fa.gz"
+    mv_out "tmp.longestcds.clean.fa.gz" ${file_longestcds_contamination_removal_fasta}
     rm "clean_sequences.fa"
     mv_out "lineage_compatibility.tsv" ${file_longestcds_contamination_removal_tsv}
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task='BUSCO for cDNA isoforms (isoform.fasta)'
 disable_if_no_input_file "run_busco1" ${file_isoform}
 if [[ ( ! -s ${file_busco_full1} || ! -s ${file_busco_short1} ) && ${run_busco1} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   seqkit seq --threads ${NSLOTS} ${file_isoform} --out-file "busco_infile_cdna.fa"
 
-  dir_busco_db="/usr/local/db/busco_downloads"
-  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
-
-  if [[ ! -e ${dir_busco_lineage} ]]; then
-    dir_busco_db=${dir_pg_db}/busco_downloads
-    dir_busco_lineage=${dir_busco_db}/lineages/${busco_lineage}
-
-    mkdir -p ${dir_busco_db}
-    flock ${dir_busco_db}/${busco_lineage}.lock -c "
-      if [ ! -e '${dir_busco_db}/lineages/${busco_lineage}' ]; then
-        echo 'Starting BUSCO dataset download.'
-        busco --download ${busco_lineage}
-        mv busco_downloads/* ${dir_busco_db}
-        rm -r busco_downloads
-        echo 'BUSCO dataset download has been finished.'
-      fi
-    "
+  dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}")
+  if [[ $? -ne 0 ]]; then
+    echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+    exit 1
   fi
+  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
 
   busco \
   --in "busco_infile_cdna.fa" \
@@ -746,34 +741,22 @@ if [[ ( ! -s ${file_busco_full1} || ! -s ${file_busco_short1} ) && ${run_busco1}
 
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task='BUSCO for longest CDS'
 disable_if_no_input_file "run_busco2" ${file_longestcds}
 if [[ ( ! -s ${file_busco_full2} || ! -s ${file_busco_short2} ) && ${run_busco2} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   seqkit seq --threads ${NSLOTS} ${file_longestcds} --out-file "busco_infile_cds.fa"
 
-  dir_busco_db="/usr/local/db/busco_downloads"
-  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
-
-  if [[ ! -e ${dir_busco_lineage} ]]; then
-    dir_busco_db=${dir_pg_db}/busco_downloads
-    dir_busco_lineage=${dir_busco_db}/lineages/${busco_lineage}
-
-    mkdir -p ${dir_busco_db}
-    flock ${dir_busco_db}/${busco_lineage}.lock -c "
-      if [ ! -e '${dir_busco_db}/lineages/${busco_lineage}' ]; then
-        echo 'Starting BUSCO dataset download.'
-        busco --download ${busco_lineage}
-        mv busco_downloads/* ${dir_busco_db}
-        rm -r busco_downloads
-        echo 'BUSCO dataset download has been finished.'
-      fi
-    "
+  dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}")
+  if [[ $? -ne 0 ]]; then
+    echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+    exit 1
   fi
+  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
 
   busco \
   --in "busco_infile_cds.fa" \
@@ -794,34 +777,22 @@ if [[ ( ! -s ${file_busco_full2} || ! -s ${file_busco_short2} ) && ${run_busco2}
 
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task='BUSCO for contamination-removed longest CDS'
 disable_if_no_input_file "run_busco3" ${file_longestcds_contamination_removal_fasta}
 if [[ ( ! -s ${file_busco_full3} || ! -s ${file_busco_short3} ) && ${run_busco3} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   seqkit seq --threads ${NSLOTS} ${file_longestcds_contamination_removal_fasta} --out-file "busco_infile_cds.fa"
 
-  dir_busco_db="/usr/local/db/busco_downloads"
-  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
-
-  if [[ ! -e ${dir_busco_lineage} ]]; then
-    dir_busco_db=${dir_pg_db}/busco_downloads
-    dir_busco_lineage=${dir_busco_db}/lineages/${busco_lineage}
-
-    mkdir -p ${dir_busco_db}
-    flock ${dir_busco_db}/${busco_lineage}.lock -c "
-      if [ ! -e '${dir_busco_db}/lineages/${busco_lineage}' ]; then
-        echo 'Starting BUSCO dataset download.'
-        busco --download ${busco_lineage}
-        mv busco_downloads/* ${dir_busco_db}
-        rm -r busco_downloads
-        echo 'BUSCO dataset download has been finished.'
-      fi
-    "
+  dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}")
+  if [[ $? -ne 0 ]]; then
+    echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+    exit 1
   fi
+  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
 
   busco \
   --in "busco_infile_cds.fa" \
@@ -842,7 +813,7 @@ if [[ ( ! -s ${file_busco_full3} || ! -s ${file_busco_short3} ) && ${run_busco3}
 
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task='Assembly statistics'
@@ -850,7 +821,7 @@ disable_if_no_input_file "run_assembly_stat" ${file_isoform}
 if [[ ${run_longestcds} -eq 1 ]]; then disable_if_no_input_file "run_assembly_stat" ${file_longestcds}; fi
 if [[ ${run_longestcds_contamination_removal} -eq 1 ]]; then disable_if_no_input_file "run_assembly_stat" ${file_longestcds_contamination_removal_fasta}; fi
 if [[ ! -s ${file_assembly_stat} && ${run_assembly_stat} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   input_files=${file_isoform}
   if [[ -s ${file_longestcds} ]]; then
@@ -873,13 +844,13 @@ if [[ ! -s ${file_assembly_stat} && ${run_assembly_stat} -eq 1 ]]; then
   fi
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task='amalgkit quant'
 disable_if_no_input_file "run_amalgkit_quant" ${file_amalgkit_metadata}
 if [[ ( ! -s ${file_amalgkit_merge_efflen} || ! -s ${file_amalgkit_merge_count} || ! -s ${file_amalgkit_merge_tpm} ) && ${run_amalgkit_quant} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_amalgkit_quant}/${sp_ub}"
 
   if [[ -e "./getfastq" ]]; then
@@ -892,7 +863,16 @@ if [[ ( ! -s ${file_amalgkit_merge_efflen} || ! -s ${file_amalgkit_merge_count} 
 
   path_reference_fasta_link="./fasta/${sp_ub}_for_kallisto_index.fasta"
   if [[ ${kallisto_reference} == 'species_cds' ]]; then
-    path_kallisto_reference_fasta=$(ls ${dir_pg_input}/species_cds/${sp_ub}_*)
+    kallisto_ref_candidates=()
+    mapfile -t kallisto_ref_candidates < <(find "${dir_pg_input}/species_cds" -maxdepth 1 -type f -name "${sp_ub}_*" | sort)
+    if [[ ${#kallisto_ref_candidates[@]} -eq 0 ]]; then
+      echo "No species_cds reference file matched ${sp_ub}_* in ${dir_pg_input}/species_cds. Exiting."
+      exit 1
+    fi
+    if [[ ${#kallisto_ref_candidates[@]} -gt 1 ]]; then
+      echo "Multiple species_cds reference files matched ${sp_ub}_*. Using the first one: ${kallisto_ref_candidates[0]}"
+    fi
+    path_kallisto_reference_fasta="${kallisto_ref_candidates[0]}"
   elif [[ ${kallisto_reference} == 'longest_transcript' ]]; then
     path_kallisto_reference_fasta=${file_longestcds_transcript}
   elif [[ ${kallisto_reference} == 'longest_cds' ]]; then
@@ -929,20 +909,20 @@ if [[ ( ! -s ${file_amalgkit_merge_efflen} || ! -s ${file_amalgkit_merge_count} 
     if [[ ! -e "${dir_amalgkit_quant}/${sp_ub}" ]]; then
       mkdir -p "${dir_amalgkit_quant}/${sp_ub}"
     fi
-    mv ./quant/* "${dir_amalgkit_quant}/${sp_ub}"
+    mv_out ./quant/* "${dir_amalgkit_quant}/${sp_ub}"
     rm -r "./quant"
     rm "./getfastq" # Do not put -r, otherwise the original getfastq files will be deleted.
   fi
 
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task='amalgkit merge'
 disable_if_no_input_file "run_amalgkit_merge" ${file_amalgkit_metadata}
 if [[ ( ! -s ${file_amalgkit_merge_efflen} || ! -s ${file_amalgkit_merge_count} || ! -s ${file_amalgkit_merge_tpm} || ! -s ${file_amalgkit_merge_metadata} ) && ${run_amalgkit_merge} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   if [[ -e ./quant ]]; then
     rm -r ./quant
@@ -956,7 +936,7 @@ if [[ ( ! -s ${file_amalgkit_merge_efflen} || ! -s ${file_amalgkit_merge_count} 
   #sp_metadata=$(python -c "import pandas; d=pandas.read_csv('${file_amalgkit_metadata}',sep='\t',header=0); print(d.at[0,'scientific_name'].replace(' ','_'))")
   if [[ -s "./merge/${sp_ub}/${sp_ub}_eff_length.tsv" ]]; then
     echo "Copying amalgkit merge outputs from: ./merge/${sp_ub}"
-    mv "./merge/${sp_ub}" "${dir_amalgkit_merge}"
+    mv_out "./merge/${sp_ub}" "${dir_amalgkit_merge}"
     mv_out "./merge/metadata.tsv" "${file_amalgkit_merge_metadata}"
     rm -r "./merge"
     rm "./quant" # Do not put -r, otherwise the original quant files will be deleted.
@@ -965,13 +945,13 @@ if [[ ( ! -s ${file_amalgkit_merge_efflen} || ! -s ${file_amalgkit_merge_count} 
   fi
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task='Multispecies summary'
 is_output_older_than_inputs "^file_" ${file_multispecies_summary}; summary_flag=$?
 if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_multispecies_summary}"
   cd ${dir_multispecies_summary}
 
@@ -989,9 +969,9 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
     --dir_species_cds_busco="${dir_busco}" \
     --tree_annotation_dir="${dir_myscript}/tree_annotation" \
     --min_og_species='auto'
-    mv "annotation_summary.tsv" "$(basename ${dir_busco}).tsv"
-    mv "busco_cds.svg" "$(basename ${dir_busco}).svg"
-    mv "busco_cds.pdf" "$(basename ${dir_busco}).pdf"
+    mv_out "annotation_summary.tsv" "$(basename ${dir_busco}).tsv"
+    mv_out "busco_cds.svg" "$(basename ${dir_busco}).svg"
+    mv_out "busco_cds.pdf" "$(basename ${dir_busco}).pdf"
   done
 
   Rscript ${dir_myscript}/multispecies_transcriptome_summary.r \
@@ -1009,7 +989,7 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
 
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 if [[ ${remove_amalgkit_fastq_after_completion} -eq 1 && $(is_fastq_requiring_downstream_analysis_done) -eq 1 ]]; then
@@ -1017,7 +997,8 @@ if [[ ${remove_amalgkit_fastq_after_completion} -eq 1 && $(is_fastq_requiring_do
   if [[ -e ${dir_amalgkit_getfastq_sp} ]]; then
     rm -r ${dir_amalgkit_getfastq_sp}
     ensure_parent_dir "${file_amalgkit_getfastq_safely_removed_flag}"
-    echo "Fastq files for this species have been safely removed." > ${file_amalgkit_getfastq_safely_removed_flag}
+    echo "Fastq files for this species have been safely removed." > "tmp.amalgkit_getfastq_removed.flag.txt"
+    mv_out "tmp.amalgkit_getfastq_removed.flag.txt" ${file_amalgkit_getfastq_safely_removed_flag}
   fi
 else
   echo "fastp fastq files will not be removed."

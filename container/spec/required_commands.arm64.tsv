@@ -19,7 +19,6 @@ base	kallisto
 base	mafft
 base	makeblastdb
 base	mapnh
-base	maxalign.pl
 base	mcmctree
 base	meme
 base	mmseqs

@@ -32,10 +32,9 @@ The repository is designed for scheduler execution (SLURM/UGE/PBS) with Singular
 8. [Scheduler and Array Semantics](#scheduler-and-array-semantics)
 9. [Configuration and Common Parameters](#configuration-and-common-parameters)
 10. [Compression and FASTA Handling Policy](#compression-and-fasta-handling-policy)
-11. [Tree/Taxonomy Compatibility Notes](#treetaxonomy-compatibility-notes)
-12. [Troubleshooting](#troubleshooting)
-13. [Development and Tests](#development-and-tests)
-14. [License](#license)
+11. [Troubleshooting](#troubleshooting)
+12. [Development and Tests](#development-and-tests)
+13. [License](#license)
 
 ## Repository Layout
 
@@ -180,6 +179,120 @@ Accepted forms:
 - `mode_metadata=1`
   - input: `workspace/input/transcriptome_assembly/amalgkit_metadata/GENUS_SPECIES.metadata.tsv`
 
+### Automated provider formatting helper
+
+Manual formatting can be replaced with `workflow/script/format_species_inputs.py`, which ports key rules from legacy `gfe_dataset` scripts such as:
+
+- `data_formatting_ensemblplants.sh`
+- `data_formatting_phycocosm.sh`
+- `data_formatting_phytozome.sh`
+
+Example (single provider, explicit input directory):
+
+```bash
+python workflow/script/format_species_inputs.py \
+  --provider ensemblplants \
+  --input-dir "/path/to/gfe_dataset/20230216_EnsemblPlants/original_files" \
+  --species-cds-dir workspace/input/species_cds \
+  --species-gff-dir workspace/input/species_gff
+```
+
+Example (all providers, `gfe_dataset` root):
+
+```bash
+python workflow/script/format_species_inputs.py \
+  --provider all \
+  --dataset-root "/path/to/gfe_dataset" \
+  --species-cds-dir workspace/input/species_cds \
+  --species-gff-dir workspace/input/species_gff
+```
+
+Notes:
+
+- output filenames are normalized to start with `Genus_species_...`,
+- CDS IDs are prefixed with `Genus_species_...`,
+- common historical replacements are applied to CDS/GFF text,
+- CDS are padded to codon-length multiples and duplicate IDs are removed.
+
+Download-first workflow (manifest driven):
+
+```bash
+python workflow/script/format_species_inputs.py \
+  --provider all \
+  --download-manifest /path/to/download_manifest.tsv \
+  --download-dir workspace/tmp/input_download_cache \
+  --species-cds-dir workspace/input/species_cds \
+  --species-gff-dir workspace/input/species_gff
+```
+
+Manifest required columns:
+
+- `provider` (`ensemblplants`, `phycocosm`, `phytozome`)
+- `species_key` (directory/file key used in legacy datasets)
+- `cds_url`
+- `gff_url`
+
+Optional columns:
+
+- `cds_filename`
+- `gff_filename`
+
+Use `--download-only` to fetch raw files and stop before formatting.
+Use `--dry-run` to preview downloads and formatting outputs without writing files.
+
+Optional download authentication:
+
+- `--auth-bearer-token-env ENV_NAME`
+  - adds `Authorization: Bearer <token>` from an environment variable.
+- `--http-header "Key: Value"` (repeatable)
+  - add arbitrary request headers (for provider-specific requirements).
+
+Build a manifest automatically from an existing local dataset tree:
+
+```bash
+python workflow/script/build_download_manifest.py \
+  --provider all \
+  --dataset-root "/path/to/gfe_dataset" \
+  --output workspace/input/manifest/download_manifest.tsv
+```
+
+This writes `file://` URLs, so you can test the full download+format pipeline locally before replacing them with remote URLs.
+
+Template file:
+
+- `workspace/input/manifest/download_manifest.template.tsv`
+
+`gg_inputPrep_job.sh` wrapper:
+
+- runs `gg_inputPrep_cmd.sh` inside the container as a single entrypoint,
+- can build a manifest and immediately format inputs in one run,
+- can validate produced `species_cds` and `species_gff` consistency.
+
+Profile-based configuration:
+
+- default profile file is provided at
+  `workspace/input/manifest/inputprep_profile.sh`,
+- edit values there for repeated runs,
+- use `workspace/input/manifest/inputprep_profile.template.sh` as a reset/reference copy.
+
+Alternative runtime overrides (without editing files) via env vars:
+
+- `GG_INPUT_PROVIDER`, `GG_INPUT_STRICT`, `GG_INPUT_OVERWRITE`,
+- `GG_INPUT_DRY_RUN`, `GG_INPUT_DOWNLOAD_MANIFEST`,
+- `GG_INPUT_DATASET_ROOT`, `GG_INPUT_INPUT_DIR`,
+- `GG_INPUT_AUTH_BEARER_TOKEN_ENV`, `GG_INPUT_HTTP_HEADER`,
+- `GG_INPUT_SUMMARY_OUTPUT`.
+- `GG_INPUTPREP_CONFIG` (explicit profile path override).
+
+Optional host dataset bind for `gg_inputPrep_job.sh`:
+
+```bash
+export GG_INPUT_DATASET_HOST_PATH="/absolute/path/to/gfe_dataset"
+bash workflow/gg_inputPrep_job.sh
+```
+
+This binds the host path to `/external/gfe_dataset` in the container and sets `GG_DATASET_ROOT` for `gg_inputPrep_cmd.sh`.
+
 ## Quick Start
 
 From repository root:
@@ -190,22 +303,25 @@ cd workflow
 # 0) Optional environment check in container
 bash gg_test_job.sh
 
-# 1) Orthogroups from species CDS
+# 1) Optional input download/format automation
+bash gg_inputPrep_job.sh
+
+# 2) Orthogroups from species CDS
 bash gg_orthofinder_job.sh
 
-# 2) Species tree inference and dating
+# 3) Species tree inference and dating
 bash gg_speciesTree_job.sh
 
-# 3) Gene-family phylogeny/annotation
+# 4) Gene-family phylogeny/annotation
 bash gg_geneFamilyPhylogeny_job.sh
 
-# 4) (Optional) genome-evolution analyses
+# 5) (Optional) genome-evolution analyses
 bash gg_genomeEvolution_job.sh
 
-# 5) Build orthogroup SQLite DB
+# 6) Build orthogroup SQLite DB
 bash gg_orthogroupDatabasePrep_job.sh
 
-# 6) Progress summaries
+# 7) Progress summaries
 bash gg_progressSummary_job.sh
 ```
 
@@ -217,6 +333,35 @@ Current default in `gg_geneFamilyPhylogeny_cmd.sh` is:
 So array-task cardinality is the number of files in `workspace/input/query2family_input`.
 
 ## Main Stages and What They Do
+
+### `gg_inputPrep_job.sh`
+
+Purpose:
+
+- optional pre-stage to automate input preparation,
+- build manifest tables from local `gfe_dataset` trees,
+- optionally download provider files from a manifest and format into
+  `workspace/input/species_cds` and `workspace/input/species_gff`.
+
+Main scripts:
+
+- `workflow/gg_inputPrep_cmd.sh`
+- `workflow/script/build_download_manifest.py`
+- `workflow/script/format_species_inputs.py`
+
+Notable defaults:
+
+- when `run_build_manifest=1`, generated manifest is reused automatically by `run_format_inputs=1`,
+- `run_validate_inputs=1` validates CDS naming rules and CDS/GFF species-set consistency,
+- each run appends a TSV record to `workspace/output/inputprep/inputprep_runs.tsv` (configurable via `summary_output` or `GG_INPUT_SUMMARY_OUTPUT`).
+
+Quick summary of recent inputPrep runs:
+
+```bash
+python workflow/script/summarize_inputprep_runs.py \
+  --infile workspace/output/inputprep/inputprep_runs.tsv \
+  --last-n 10
+```
 
 ### `gg_transcriptomeAssembly_job.sh`
 
@@ -442,26 +587,6 @@ Tree plotting helpers were updated to be robust with compressed alignments:
 
 - candidate order: `.fa.gz` -> `.fasta` -> `.fa`,
 - plain FASTA is generated temporarily only when required by downstream tools.
-
-## Tree/Taxonomy Compatibility Notes
-
-### Branch label naming
-
-Pipeline branch labeling in outputs/scripts is standardized to `branch_id`.
-
-If your environment uses an older `rkftools::table2phylo()` expecting `numerical_label`, tree plotting can fail with:
-
-- `Missing required columns in table2phylo(): numerical_label`
-
-Recommended action:
-
-- update `rkftools` to a `branch_id`-compatible implementation.
-
-### ETE4 requirement
-
-Tree/taxonomy helper scripts import `ete4` directly.
-
-ETE taxonomy DB setup in `gg_util.sh` uses ETE4 APIs and lock-protected initialization to avoid concurrent DB corruption.
 
 ## Troubleshooting
 

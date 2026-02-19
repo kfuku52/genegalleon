@@ -1,0 +1,2 @@
+##gff-version 3
+chr1	source	gene	1	9	.	+	.	ID=evm.model.OSTLU_25062;Note=Oropetium_20150105_demo

@@ -120,10 +120,10 @@ file_concat_iqtree_pep_root="${dir_concat_iqtree_pep}/concat.pep.rooted.nwk"
 file_constrained_tree="${dir_constrained_tree}/constrained.nwk"
 file_plot_constrained_tree="${dir_constrained_tree}/constrained_tree_constraints.pdf"
 file_iq2mc_prefix="${dir_mcmctree1}/iq2mc"
-file_iq2mc_ctl="${file_iq2mc_prefix}.mcmctree.ctl"
-file_iq2mc_hessian="${file_iq2mc_prefix}.mcmctree.hessian"
-file_iq2mc_rooted_tree="${file_iq2mc_prefix}.rooted.nwk"
-file_iq2mc_dummy_phy="${file_iq2mc_prefix}.dummy.phy"
+file_iq2mc_ctl="${file_iq2mc_prefix}_mcmctree.ctl"
+file_iq2mc_hessian="${file_iq2mc_prefix}_mcmctree.hessian"
+file_iq2mc_rooted_tree="${file_iq2mc_prefix}_rooted.nwk"
+file_iq2mc_dummy_phy="${file_iq2mc_prefix}_dummy.phy"
 file_mcmctree1="${file_iq2mc_ctl}" # Backward-compatible marker name
 file_mcmctree2_raw="${dir_mcmctree2}/iq2mc.mcmctree.out"
 file_mcmctree2="${dir_mcmctree2}/FigTree.tre"
@@ -143,11 +143,13 @@ root_tree_with_outgroup () {
   local outfile=$2
   local tree_description=$3
   local root_log="${dir_tmp}/tmp.nwkit.root.$$.log"
+  local outgroup_label_list=()
   ensure_parent_dir "${outfile}"
   rm -f "${outfile}" "${root_log}"
 
   local missing_outgroup=0
-  for outgroup_label in $(echo ${outgroup_labels} | sed -e "s/,/ /g"); do
+  mapfile -t outgroup_label_list < <(printf '%s' "${outgroup_labels}" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d')
+  for outgroup_label in "${outgroup_label_list[@]}"; do
     if ! grep -q -F "${outgroup_label}" "${infile}"; then
       missing_outgroup=1
       break
@@ -196,7 +198,7 @@ normalize_iq2mc_constraint_tree () {
     return 1
   fi
 
-  mv "${tmpfile}" "${infile}"
+  mv_out "${tmpfile}" "${infile}"
   return 0
 }
 
@@ -406,7 +408,9 @@ if [[ ${run_mcmctree1} -eq 1 || ${run_mcmctree2} -eq 1 ]]; then
     exit 1
   fi
   echo "Using IQ2MC binary: ${iq2mc_binary}"
-  for outgroup_label in $(echo ${outgroup_labels} | sed -e "s/,/ /g"); do
+  outgroup_label_list=()
+  mapfile -t outgroup_label_list < <(printf '%s' "${outgroup_labels}" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d')
+  for outgroup_label in "${outgroup_label_list[@]}"; do
     stop_if_species_not_found_in ${dir_sp_cds} ${outgroup_label}
   done
   if [[ ${timetree_constraint} -eq 0 ]]; then
@@ -421,45 +425,34 @@ task="BUSCO analysis of species-wise CDS files"
 if [[ ${run_busco} -eq 1 ]]; then
   ensure_dir "${dir_species_busco_full}"
   ensure_dir "${dir_species_busco_short}"
-  species_cds_fasta=($(find ${dir_sp_cds} -maxdepth 1 | grep $(get_fasta_extensions_for_grep)))
+  species_cds_fasta=()
+  mapfile -t species_cds_fasta < <(gg_find_fasta_files "${dir_sp_cds}" 1)
   echo "Number of CDS files for BUSCO: ${#species_cds_fasta[@]}"
   if [[ ${#species_cds_fasta[@]} -eq 0 ]]; then
     echo "No CDS file found. Exiting."
     exit 1
   fi
-  for cds_full in ${species_cds_fasta[@]}; do
-    cds=$(basename ${cds_full})
-    sp_ub=$(basename ${cds} | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/")
+  for cds_full in "${species_cds_fasta[@]}"; do
+    cds=$(basename "${cds_full}")
+    sp_ub=$(gg_species_name_from_path "${cds}")
     file_sp_busco_full="${dir_species_busco_full}/${sp_ub}.busco.full.tsv"
     file_sp_busco_short="${dir_species_busco_short}/${sp_ub}.busco.short.txt"
     if [[ ! -s ${file_sp_busco_full} || ! -s ${file_sp_busco_short} ]]; then
-      echo "$(date): Start: ${task}: ${cds}" | tee >(cat >&2)
+      gg_step_start "${task}: ${cds}"
 
       if [[ "${cds}" == *gz ]]; then # Do not quote like "*gz"
         echo "Decompressing gzipped CDS fasta for BUSCO: ${cds}"
         seqkit seq --threads ${NSLOTS} "${dir_sp_cds}/${cds}" --out-file "tmp.busco_input.cds.fasta"
       else
-        cp ${dir_sp_cds}/${cds} ./tmp.busco_input.cds.fasta
+        cp_out ${dir_sp_cds}/${cds} ./tmp.busco_input.cds.fasta
       fi
 
-      dir_busco_db="/usr/local/db/busco_downloads"
+      dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}")
+      if [[ $? -ne 0 ]]; then
+        echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+        exit 1
+      fi
       dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
-
-      if [[ ! -e ${dir_busco_lineage} ]]; then
-        dir_busco_db=${dir_pg_db}/busco_downloads
-        dir_busco_lineage=${dir_busco_db}/lineages/${busco_lineage}
-
-        mkdir -p ${dir_busco_db}
-        flock ${dir_busco_db}/${busco_lineage}.lock -c "
-          if [ ! -e '${dir_busco_db}/lineages/${busco_lineage}' ]; then
-            echo 'Starting BUSCO dataset download.'
-            busco --download ${busco_lineage}
-            mv busco_downloads/* ${dir_busco_db}
-            rm -r busco_downloads
-            echo 'BUSCO dataset download has been finished.'
-          fi
-        "
-      fi
 
       busco \
       --in "tmp.busco_input.cds.fasta" \
@@ -474,8 +467,8 @@ if [[ ${run_busco} -eq 1 ]]; then
       --offline
 
       if [[ $? -eq 0 ]]; then
-        cp ./busco_tmp/run_${busco_lineage}/full_table.tsv ${file_sp_busco_full}
-        cp ./busco_tmp/run_${busco_lineage}/short_summary.txt ${file_sp_busco_short}
+        cp_out ./busco_tmp/run_${busco_lineage}/full_table.tsv ${file_sp_busco_full}
+        cp_out ./busco_tmp/run_${busco_lineage}/short_summary.txt ${file_sp_busco_short}
         rm -r './busco_tmp'
       fi
     else
@@ -484,7 +477,7 @@ if [[ ${run_busco} -eq 1 ]]; then
   done
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Collecting IDs of common BUSCO genes"
@@ -493,36 +486,41 @@ if ! is_species_set_identical "${dir_sp_cds}" "${dir_species_busco_full}"; then
   exit 1
 fi
 if [[ ! -s ${file_busco_summary_table} && ${run_get_busco_summary} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_parent_dir "${file_busco_summary_table}"
 
   python ${dir_myscript}/collect_common_BUSCO_genes.py \
   --busco_outdir ${dir_species_busco_full} \
   --ncpu ${NSLOTS} \
-  --outfile ${file_busco_summary_table}
+  --outfile "tmp.busco_summary_table.tsv"
+  mv_out "tmp.busco_summary_table.tsv" ${file_busco_summary_table}
 
   num_busco_ids=$(( $(wc -l < "${file_busco_summary_table}") - 1 ))
   echo "Number of BUSCO genes: ${num_busco_ids}"
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Generating fasta files for individual single-copy genes"
 ensure_dir "${dir_single_copy_fasta}"
 num_busco_ids=$(( $(wc -l < "${file_busco_summary_table}") - 1 ))
-num_singlecopy_fasta=$(find "${dir_single_copy_fasta}" -name "*.fasta" | wc -l)
+singlecopy_fasta_files=()
+mapfile -t singlecopy_fasta_files < <(gg_find_fasta_files "${dir_single_copy_fasta}" 1)
+num_singlecopy_fasta=${#singlecopy_fasta_files[@]}
 if [[ ! ${num_busco_ids} -eq ${num_singlecopy_fasta} && ${run_individual_get_fasta} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   generate_single_copy_fasta() {
-    local busco_id=$(sed -n ${1}P ${file_busco_summary_table} | sed -e "s/[[:space:]].*//")
+    local busco_id
+    busco_id=$(awk -v row="$1" 'NR==row {print $1; exit}' "${file_busco_summary_table}")
     local remove_nonsingle=$2
     local outfile1="${dir_single_copy_fasta}/${busco_id}.cds.fasta"
     if [[ -s ${outfile1} ]]; then
       return 0
     fi
-    local genes=($(sed -n ${1}P ${file_busco_summary_table} | cut -f 4- ))
+    local genes=()
+    IFS=$'\t' read -r -a genes <<< "$(sed -n "${1}P" "${file_busco_summary_table}" | cut -f 4-)"
     echo "busco_id: ${busco_id}"
     if [[ ${strictly_single_copy_only} -eq 1 ]]; then
       if [[ "${genes[@]}" == *" -"* || "${genes[@]}" == *"- "* ]]; then
@@ -534,15 +532,19 @@ if [[ ! ${num_busco_ids} -eq ${num_singlecopy_fasta} && ${run_individual_get_fas
         return 0
       fi
     fi
-    local genes1=( $(echo ${genes[@]} | sed -e "s/[[:space:]]-[[:space:]]/ /g" -e "s/[^[[:space:]]]*,[^[[:space:]]]*//g" -e "s/[[:space:]]+/ /g") )
+    local genes1=()
+    read -r -a genes1 <<< "$(printf "%s " "${genes[@]}" | sed -e "s/[[:space:]]-[[:space:]]/ /g" -e "s/[^[[:space:]]]*,[^[[:space:]]]*//g" -e "s/[[:space:]]+/ /g")"
     local num_gene=${#genes1[@]}
     if [[ ${num_gene} -eq 0 ]]; then
       echo "Skipping. ${busco_id} has no genes in the selected species."
       return 0
     fi
     if [[ ! -s ${outfile1} ]]; then
-      local pattern_string2=$(echo ${genes1[@]} | sed -e "s/[[:space:]]/ --pattern /g" -e "s/^/--pattern /")
-      seqkit grep --threads 1 ${pattern_string2} --infile-list "species_cds_fasta_list.txt" \
+      local pattern_args=()
+      for gene in "${genes1[@]}"; do
+        pattern_args+=(--pattern "${gene}")
+      done
+      seqkit grep --threads 1 "${pattern_args[@]}" --infile-list "species_cds_fasta_list.txt" \
       | seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads 1 \
       | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 \
       | cdskit pad \
@@ -555,7 +557,7 @@ if [[ ! ${num_busco_ids} -eq ${num_singlecopy_fasta} && ${run_individual_get_fas
     fi
     local fasta_genes=()
     if [[ -s ${outfile1} ]]; then
-      mapfile -t fasta_genes < <(grep -e "^>" ${outfile1} | sed -e "s/^>//")
+      mapfile -t fasta_genes < <(awk '/^>/ {sub(/^>/, "", $0); print}' "${outfile1}")
     fi
     local num_seq=${#fasta_genes[@]}
     # this block needs to be disabeld for ${strictly_single_copy_only} -eq 1, because orthogroups won't be complete
@@ -573,8 +575,7 @@ if [[ ! ${num_busco_ids} -eq ${num_singlecopy_fasta} && ${run_individual_get_fas
     fi
   }
 
-  find ${dir_sp_cds} -maxdepth 1 | grep $(get_fasta_extensions_for_grep) \
-  > species_cds_fasta_list.txt
+  gg_find_fasta_files "${dir_sp_cds}" 1 > species_cds_fasta_list.txt
   num_busco_ids=$(( $(wc -l < "${file_busco_summary_table}") - 1 ))
   for (( i=2; i<=num_busco_ids+1; i++ )); do # starting from 2 because the line 1 is header.
     wait_until_jobn_le ${NSLOTS}
@@ -583,31 +584,33 @@ if [[ ! ${num_busco_ids} -eq ${num_singlecopy_fasta} && ${run_individual_get_fas
   wait
   rm -f tmp.*
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="In-frame mafft alignment"
 ensure_dir "${dir_single_copy_mafft}"
 num_busco_ids=$(( $(wc -l < "${file_busco_summary_table}") - 1 ))
-num_mafft_fasta=$(find "${dir_single_copy_mafft}" -name "*.fasta" | wc -l)
+mafft_fasta_files=()
+mapfile -t mafft_fasta_files < <(gg_find_fasta_files "${dir_single_copy_mafft}" 1)
+num_mafft_fasta=${#mafft_fasta_files[@]}
 if [[ ! ${num_busco_ids} -eq ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   run_mafft() {
     local infile=$1
-    local infile_base=$(echo ${infile} | sed -e "s/\..*//")
+    local infile_base=${infile%%.*}
     local outfile=${dir_single_copy_mafft}/${infile_base}.cds.aln.fasta
     if [[ -s ${outfile} ]]; then
       return 0
     fi
     local infile_path="${dir_single_copy_fasta}/${infile}"
-    local num_seq=$(seqkit seq --threads 1 "${infile_path}" | grep -e "^>" | wc -l)
+    local num_seq=$(gg_count_fasta_records "${infile_path}")
     if [[ ${num_seq} -lt 2 ]]; then
       echo "Skipped. At least 2 sequences are necessary for MAFFT: ${infile}"
       return 0
     fi
     echo "$(date): start mafft: ${infile_base}"
-    cp "${infile_path}" "tmp.${infile_base}.input.cds.fasta"
+    cp_out "${infile_path}" "tmp.${infile_base}.input.cds.fasta"
     cdskit mask \
     --seqfile "tmp.${infile_base}.input.cds.fasta" \
     --outfile tmp.${infile_base}.cds.fasta
@@ -628,31 +631,34 @@ if [[ ! ${num_busco_ids} -eq ${num_mafft_fasta} && ${run_individual_mafft} -eq 1
     --codontable ${genetic_code} \
     --outfile tmp.${infile_base}.cds.aln.fasta
     if [[ -s tmp.${infile_base}.cds.aln.fasta ]]; then
-      cat tmp.${infile_base}.cds.aln.fasta > ${outfile}
+      cp_out tmp.${infile_base}.cds.aln.fasta ${outfile}
     fi
     rm tmp.${infile_base}*
   }
 
-  input_alignment_files=( $(ls ${dir_single_copy_fasta}) )
+  input_alignment_files=()
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_fasta}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
-  for input_alignment_file in ${input_alignment_files[@]}; do
+  for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
     run_mafft ${input_alignment_file} &
   done
   wait
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="TrimAl"
 ensure_dir "${dir_single_copy_trimal}"
-num_trimal_fasta=$(find "${dir_single_copy_trimal}" -name "*.fasta" | wc -l)
+trimal_fasta_files=()
+mapfile -t trimal_fasta_files < <(gg_find_fasta_files "${dir_single_copy_trimal}" 1)
+num_trimal_fasta=${#trimal_fasta_files[@]}
 if [[ ! ${num_busco_ids} -eq ${num_trimal_fasta} && ${run_individual_trimal} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   run_trimal() {
     local infile=$1
-    local infile_base=$(echo ${infile} | sed -e "s/\..*//")
+    local infile_base=${infile%%.*}
     local outfile="${dir_single_copy_trimal}/${infile_base}.trimal.fasta"
     if [[ ! -s ${outfile} ]]; then
       seqkit seq --remove-gaps --threads 1 ${dir_single_copy_mafft}/${infile} > tmp.${infile_base}.degap.fasta
@@ -664,30 +670,31 @@ if [[ ! ${num_busco_ids} -eq ${num_trimal_fasta} && ${run_individual_trimal} -eq
       -ignorestopcodon \
       -automated1
       if [[ -s tmp.${infile_base}.trimal.fasta ]]; then
-        mv tmp.${infile_base}.trimal.fasta ${outfile}
+        mv_out tmp.${infile_base}.trimal.fasta ${outfile}
       fi
       rm tmp.${infile_base}.*
     fi
   }
 
-  input_alignment_files=( $(ls ${dir_single_copy_mafft}) )
+  input_alignment_files=()
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_mafft}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
-  for input_alignment_file in ${input_alignment_files[@]}; do
+  for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
     run_trimal ${input_alignment_file} &
   done
   wait
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Concatenating single-copy CDS fasta files"
 if [[ ( ! -s ${file_concat_cds} || ! -s ${file_concat_pep} ) && ${run_concat_alignment} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_parent_dir "${file_concat_cds}"
   ensure_parent_dir "${file_concat_pep}"
   ensure_dir "${dir_concat_fasta}"
-  mapfile -t trimal_files < <(find "${dir_single_copy_trimal}" -maxdepth 1 -type f | grep $(get_fasta_extensions_for_grep) | sort)
+  mapfile -t trimal_files < <(gg_find_fasta_files "${dir_single_copy_trimal}" 1)
   if [[ ${#trimal_files[@]} -eq 0 ]]; then
     echo "No trimmed single-copy CDS fasta files were found in: ${dir_single_copy_trimal}"
     exit 1
@@ -708,27 +715,31 @@ if [[ ( ! -s ${file_concat_cds} || ! -s ${file_concat_pep} ) && ${run_concat_ali
   done
 
   if [[ ${strictly_single_copy_only} -eq 0 ]]; then
+    concat_cds_tmp="tmp.concat.cds.fa.gz"
     seqkit concat --full --fill "-" --threads ${NSLOTS} "${trimal_files[@]}" \
     | seqkit sort --threads ${NSLOTS} \
-    | seqkit seq --threads ${NSLOTS} --out-file "${file_concat_cds}"
+    | seqkit seq --threads ${NSLOTS} --out-file "${concat_cds_tmp}"
   else
+    concat_cds_tmp="tmp.concat.cds.fa.gz"
     seqkit concat --threads ${NSLOTS} "${trimal_files[@]}" \
     | seqkit sort --threads ${NSLOTS} \
-    | seqkit seq --threads ${NSLOTS} --out-file "${file_concat_cds}"
+    | seqkit seq --threads ${NSLOTS} --out-file "${concat_cds_tmp}"
   fi
+  mv_out "${concat_cds_tmp}" "${file_concat_cds}"
 
   seqkit translate --transl-table ${genetic_code} --threads ${NSLOTS} "${file_concat_cds}" \
-  | seqkit seq --threads ${NSLOTS} --out-file "${file_concat_pep}"
+  | seqkit seq --threads ${NSLOTS} --out-file "tmp.concat.pep.fa.gz"
+  mv_out "tmp.concat.pep.fa.gz" "${file_concat_pep}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="IQ-TREE of the concatenated alignment with a Protein evolution model"
 if [[ ! -s ${file_concat_iqtree_pep} && ${run_concat_iqtree_protein} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_concat_iqtree_pep}"
 
-  ntaxa=$(seqkit seq --threads 1 "${file_concat_pep}" | grep -e "^>" | wc -l)
+  ntaxa=$(gg_count_fasta_records "${file_concat_pep}")
   if [[ ${ntaxa} -lt 4 ]]; then
     bootstrap_params=''
   fi
@@ -764,12 +775,12 @@ if [[ ! -s ${file_concat_iqtree_pep} && ${run_concat_iqtree_protein} -eq 1 ]]; t
   fi
   cd ${dir_tmp}
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Rooting of IQ-TREE's protein tree"
 if [[ ! -s ${file_concat_iqtree_pep_root} && ${run_concat_iqtree_protein} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   root_tree_with_outgroup \
   "${file_concat_iqtree_pep}" \
@@ -788,15 +799,15 @@ if [[ ! -s ${file_concat_iqtree_pep_root} && ${run_concat_iqtree_protein} -eq 1 
     Rscript ${dir_myscript}/nwk2pdf.r --underbar2space=yes --italic=yes --infile=${file_undated_species_tree}
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="IQ-TREE of the concatenated alignment with a DNA evolution model"
 if [[ ! -s ${file_concat_iqtree_dna} && ${run_concat_iqtree_dna} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_concat_iqtree_dna}"
 
-  ntaxa=$(seqkit seq --threads 1 "${file_concat_cds}" | grep -e "^>" | wc -l)
+  ntaxa=$(gg_count_fasta_records "${file_concat_cds}")
   if [[ ${ntaxa} -lt 4 ]]; then
     bootstrap_params=''
   fi
@@ -832,12 +843,12 @@ if [[ ! -s ${file_concat_iqtree_dna} && ${run_concat_iqtree_dna} -eq 1 ]]; then
   fi
   cd ${dir_tmp}
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Rooting of IQ-TREE's DNA tree"
 if [[ ! -s ${file_concat_iqtree_dna_root} && ${run_concat_iqtree_dna} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   root_tree_with_outgroup \
   "${file_concat_iqtree_dna}" \
@@ -856,23 +867,25 @@ if [[ ! -s ${file_concat_iqtree_dna_root} && ${run_concat_iqtree_dna} -eq 1 ]]; 
     Rscript ${dir_myscript}/nwk2pdf.r --underbar2space=yes --italic=yes --infile=${file_undated_species_tree}
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="IQ-TREE for individual single-copy protein trees"
 ensure_dir "${dir_single_copy_iqtree_pep}"
-num_iqtree_pep=$(find "${dir_single_copy_iqtree_pep}" -name "*.nwk" | wc -l)
+iqtree_pep_tree_files=()
+mapfile -t iqtree_pep_tree_files < <(gg_find_file_basenames "${dir_single_copy_iqtree_pep}" "*.nwk")
+num_iqtree_pep=${#iqtree_pep_tree_files[@]}
 if [[ ! ${num_busco_ids} -eq ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   run_iqtree_pep() {
     local infile=$1
-    local infile_base=$(echo ${infile} | sed -e "s/\..*//")
+    local infile_base=${infile%%.*}
     local outfile="${dir_single_copy_iqtree_pep}/${infile_base}.pep.nwk"
     if [[ -s ${outfile} ]]; then
       return 0
     fi
-    local num_seq=$(seqkit seq --threads 1 "${dir_single_copy_trimal}/${infile}" | grep "^>" | wc -l)
+    local num_seq=$(gg_count_fasta_records "${dir_single_copy_trimal}/${infile}")
     if [[ ${num_seq} -lt 3 ]]; then
       echo "Skipped. At least 3 sequences are necessary for IQ-TREE: ${infile}"
       return 0
@@ -886,27 +899,28 @@ if [[ ! ${num_busco_ids} -eq ${num_iqtree_pep} && ${run_individual_iqtree_pep} -
     --prefix tmp.${infile_base} \
     --seed 12345 \
     --redo
-    mv tmp.${infile_base}.treefile ${outfile}
+    mv_out tmp.${infile_base}.treefile ${outfile}
     rm tmp.${infile_base}.*
   }
 
-  input_alignment_files=( $(ls ${dir_single_copy_trimal}) )
+  input_alignment_files=()
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
-  for input_alignment_file in ${input_alignment_files[@]}; do
+  for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
     run_iqtree_pep ${input_alignment_file} &
   done
   wait
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="ASTRAL of individual single-copy protein trees"
 if [[ ( ! -s ${file_astral_tree_pep} || ! -s ${file_astral_log_pep} ) && ${run_astral_pep} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_astral_pep}"
 
-  if ls tmp.astral.* 1> /dev/null 2>&1; then
+  if compgen -G "tmp.astral.*" > /dev/null; then
     rm tmp.astral.*
   fi
 
@@ -939,7 +953,7 @@ if [[ ( ! -s ${file_astral_tree_pep} || ! -s ${file_astral_log_pep} ) && ${run_a
     done
 
     if [[ -s "single_copy.astral.pep.q1.nwk" ]]; then
-      mv single_copy.astral.pep.* "${dir_astral_pep}"
+      mv_out single_copy.astral.pep.* "${dir_astral_pep}"
       mv_out "tmp.astral.log.txt" "${file_astral_log_pep}"
       echo "For more information on support values (e.g., f1, f2, pp1, q1, ...), please refer to: https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md" > "${dir_astral_pep}/README.txt"
     fi
@@ -959,7 +973,10 @@ if [[ ( ! -s ${file_astral_tree_pep} || ! -s ${file_astral_log_pep} ) && ${run_a
     echo "Undated species tree is copied,"
     echo "from: ${file_astral_tree_pep}"
     echo "to: ${file_undated_species_tree}"
-    nwkit drop --name yes --target intnode --infile "${file_astral_tree_pep}" | nwkit label --target intnode --force yes --outfile "${file_undated_species_tree}"
+    nwkit drop --name yes --target intnode --infile "${file_astral_tree_pep}" | nwkit label --target intnode --force yes --outfile "tmp.undated_species_tree.nwk"
+    if [[ -s "tmp.undated_species_tree.nwk" ]]; then
+      mv_out "tmp.undated_species_tree.nwk" "${file_undated_species_tree}"
+    fi
     if [[ ! -s "${file_undated_species_tree}" ]]; then
       echo "Warning: Failed to convert optimized ASTRAL protein tree with nwkit drop|label. Copying optimized tree instead."
       cp_out "${file_astral_tree_pep}" "${file_undated_species_tree}"
@@ -969,28 +986,30 @@ if [[ ( ! -s ${file_astral_tree_pep} || ! -s ${file_astral_log_pep} ) && ${run_a
     fi
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="IQ-TREE for individual single-copy DNA trees"
 ensure_dir "${dir_single_copy_iqtree_dna}"
-num_iqtree_dna=$(find "${dir_single_copy_iqtree_dna}" -name "*.nwk" | wc -l)
+iqtree_dna_tree_files=()
+mapfile -t iqtree_dna_tree_files < <(gg_find_file_basenames "${dir_single_copy_iqtree_dna}" "*.nwk")
+num_iqtree_dna=${#iqtree_dna_tree_files[@]}
 if [[ ! ${num_busco_ids} -eq ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq 1 ]]; then
-	echo "$(date): Start: ${task}" | tee >(cat >&2)
+	gg_step_start "${task}"
 
   run_iqtree_dna() {
     local infile=$1
-    local infile_base=$(echo ${infile} | sed -e "s/\..*//")
+    local infile_base=${infile%%.*}
     local outfile="${dir_single_copy_iqtree_dna}/${infile_base}.dna.nwk"
     if [[ -s ${outfile} ]]; then
       return 0
     fi
-    local num_seq=$(seqkit seq --threads 1 "${dir_single_copy_trimal}/${infile}" | grep "^>" | wc -l)
+    local num_seq=$(gg_count_fasta_records "${dir_single_copy_trimal}/${infile}")
     if [[ ${num_seq} -lt 3 ]]; then
       echo "Skipped. At least 3 sequences are necessary for IQ-TREE: ${infile}"
       return 0
     fi
-    cp "${dir_single_copy_trimal}/${infile}" "./tmp.${infile_base}.input.fasta"
+    cp_out "${dir_single_copy_trimal}/${infile}" "./tmp.${infile_base}.input.fasta"
     iqtree \
     -s "./tmp.${infile_base}.input.fasta" \
     -m ${nucleotide_model} \
@@ -998,27 +1017,28 @@ if [[ ! ${num_busco_ids} -eq ${num_iqtree_dna} && ${run_individual_iqtree_dna} -
     --prefix tmp.${infile_base} \
     --seed 12345 \
     --redo
-    mv tmp.${infile_base}.treefile ${outfile}
+    mv_out tmp.${infile_base}.treefile ${outfile}
     rm tmp.${infile_base}.*
   }
   
-  input_alignment_files=( $(ls ${dir_single_copy_trimal}) )
+  input_alignment_files=()
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
-  for input_alignment_file in ${input_alignment_files[@]}; do
+  for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
     run_iqtree_dna ${input_alignment_file} &
   done
   wait
 else
-	echo "$(date): Skipped: ${task}"
+	gg_step_skip "${task}"
 fi
 
 task="ASTRAL of individual single-copy DNA trees"
 if [[ ( ! -s ${file_astral_tree_dna} || ! -s ${file_astral_log_dna} ) && ${run_astral_dna} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_astral_dna}"
 
-  if ls tmp.astral.* 1> /dev/null 2>&1; then
+  if compgen -G "tmp.astral.*" > /dev/null; then
     rm tmp.astral.*
   fi
 
@@ -1051,7 +1071,7 @@ if [[ ( ! -s ${file_astral_tree_dna} || ! -s ${file_astral_log_dna} ) && ${run_a
     done
 
     if [[ -s "single_copy.astral.dna.q1.nwk" ]]; then
-      mv single_copy.astral.dna.* "${dir_astral_dna}"
+      mv_out single_copy.astral.dna.* "${dir_astral_dna}"
       mv_out "tmp.astral.log.txt" "${file_astral_log_dna}"
       echo "For more information on support values (e.g., f1, f2, pp1, q1, ...), please refer to: https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md" > "${dir_astral_dna}/README.txt"
     fi
@@ -1071,7 +1091,10 @@ if [[ ( ! -s ${file_astral_tree_dna} || ! -s ${file_astral_log_dna} ) && ${run_a
     echo "Undated species tree is copied,"
     echo "from: ${file_astral_tree_dna}"
     echo "to: ${file_undated_species_tree}"
-    nwkit drop --name yes --target intnode --infile "${file_astral_tree_dna}" | nwkit label --target intnode --force yes --outfile "${file_undated_species_tree}"
+    nwkit drop --name yes --target intnode --infile "${file_astral_tree_dna}" | nwkit label --target intnode --force yes --outfile "tmp.undated_species_tree.nwk"
+    if [[ -s "tmp.undated_species_tree.nwk" ]]; then
+      mv_out "tmp.undated_species_tree.nwk" "${file_undated_species_tree}"
+    fi
     if [[ ! -s "${file_undated_species_tree}" ]]; then
       echo "Warning: Failed to convert optimized ASTRAL DNA tree with nwkit drop|label. Copying optimized tree instead."
       cp_out "${file_astral_tree_dna}" "${file_undated_species_tree}"
@@ -1081,13 +1104,13 @@ if [[ ( ! -s ${file_astral_tree_dna} || ! -s ${file_astral_log_dna} ) && ${run_a
     fi
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Species tree plotting"
 disable_if_no_input_file "run_plot_species_trees" ${file_concat_iqtree_dna_root} ${file_concat_iqtree_pep_root} ${file_astral_tree_dna} ${file_astral_tree_pep}
 if [[ ! -s ${file_plot_species_trees} && ${run_plot_species_trees} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   Rscript ${dir_myscript}/plot_species_trees.r \
   --iqtree_dna_nwk=${file_concat_iqtree_dna_root} \
@@ -1104,13 +1127,13 @@ if [[ ! -s ${file_plot_species_trees} && ${run_plot_species_trees} -eq 1 ]]; the
     mv_out "species_trees.pdf" ${file_plot_species_trees}
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Time-constrained tree preparation"
 disable_if_no_input_file "run_constrained_tree" ${file_undated_species_tree}
 if [[ ! -s ${file_constrained_tree} && ${run_constrained_tree} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_parent_dir "${file_constrained_tree}"
   if [[ ${timetree_constraint} -eq 1 ]]; then
     if ! ensure_ete_taxonomy_db "${dir_pg}"; then
@@ -1122,9 +1145,12 @@ if [[ ! -s ${file_constrained_tree} && ${run_constrained_tree} -eq 1 ]]; then
     --infile ${file_undated_species_tree} \
     --timetree "ci" \
     --min_clade_prop 0.2 \
-    --outfile ${file_constrained_tree}
+    --outfile "tmp.constrained.tree.nwk"
+    if [[ -s "tmp.constrained.tree.nwk" ]]; then
+      mv_out "tmp.constrained.tree.nwk" "${file_constrained_tree}"
+    fi
   else
-    tree_string=$(cat "${file_undated_species_tree}")
+    tree_string=$(< "${file_undated_species_tree}")
     for i in $(seq 0 $((${#mcmctree_divergence_time_constraints[@]} - 1))); do
       mdtc=${mcmctree_divergence_time_constraints[${i}]}
       echo "applying ${mdtc}"
@@ -1138,9 +1164,12 @@ if [[ ! -s ${file_constrained_tree} && ${run_constrained_tree} -eq 1 ]]; then
       fi
       left_right="--left_species ${mcmctree_params[0]} --right_species ${mcmctree_params[1]}"
       echo "nwkit mcmctree params: ${left_right} ${bound_params}"
-      tree_string=$(echo "${tree_string}" | nwkit mcmctree ${left_right} ${bound_params})
+      tree_string=$(printf '%s\n' "${tree_string}" | nwkit mcmctree ${left_right} ${bound_params})
     done
-    echo -e "${tree_string}" > ${file_constrained_tree}
+    echo -e "${tree_string}" > "tmp.constrained.tree.nwk"
+    if [[ -s "tmp.constrained.tree.nwk" ]]; then
+      mv_out "tmp.constrained.tree.nwk" "${file_constrained_tree}"
+    fi
   fi
   if [[ -s ${file_constrained_tree} ]]; then
     if ! normalize_iq2mc_constraint_tree ${file_constrained_tree}; then
@@ -1149,27 +1178,30 @@ if [[ ! -s ${file_constrained_tree} && ${run_constrained_tree} -eq 1 ]]; then
     fi
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Constrained range plotting"
 disable_if_no_input_file "run_plot_constrained_tree" ${file_constrained_tree}
 if [[ ! -s ${file_plot_constrained_tree} && ${run_plot_constrained_tree} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   Rscript ${dir_myscript}/plot_constrained_tree.r \
   --infile="${file_constrained_tree}" \
-  --outfile="${file_plot_constrained_tree}"
+  --outfile="tmp.constrained_tree_plot.pdf"
+  if [[ -s "tmp.constrained_tree_plot.pdf" ]]; then
+    mv_out "tmp.constrained_tree_plot.pdf" "${file_plot_constrained_tree}"
+  fi
   if [[ -s ${file_plot_constrained_tree} ]]; then
     echo "Output file found for the task: ${task}"
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="IQ2MC step 2 (IQ-TREE Hessian/control generation)"
 disable_if_no_input_file "run_mcmctree1" ${file_constrained_tree} ${file_concat_cds}
 if [[ ( ! -s ${file_iq2mc_ctl} || ! -s ${file_iq2mc_hessian} || ! -s ${file_iq2mc_rooted_tree} || ! -s ${file_iq2mc_dummy_phy} ) && ${run_mcmctree1} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_mcmctree1}"
 
   if ! normalize_iq2mc_constraint_tree ${file_constrained_tree}; then
@@ -1200,21 +1232,21 @@ if [[ ( ! -s ${file_iq2mc_ctl} || ! -s ${file_iq2mc_hessian} || ! -s ${file_iq2m
   rm -f "./tmp.iq2mc.concat.cds.fasta"
   cd ${dir_tmp}
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="IQ2MC step 3 (MCMCtree dating run)"
 disable_if_no_input_file "run_mcmctree2" ${file_iq2mc_ctl} ${file_iq2mc_hessian} ${file_iq2mc_rooted_tree} ${file_iq2mc_dummy_phy}
 if [[ ! -s ${file_mcmctree2_raw} && ${run_mcmctree2} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_mcmctree2}"
 
   find "${dir_mcmctree2}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   cd ${dir_mcmctree2}
-  cp ${file_iq2mc_ctl} ./
-  cp ${file_iq2mc_hessian} ./
-  cp ${file_iq2mc_rooted_tree} ./
-  cp ${file_iq2mc_dummy_phy} ./
+  cp_out ${file_iq2mc_ctl} ./
+  cp_out ${file_iq2mc_hessian} ./
+  cp_out ${file_iq2mc_rooted_tree} ./
+  cp_out ${file_iq2mc_dummy_phy} ./
 
   # Ensure MCMCtree emits CI-rich summaries (including 95% HPD annotations in FigTree output).
   ctl_basename="$(basename "${file_iq2mc_ctl}")"
@@ -1230,7 +1262,7 @@ if [[ ! -s ${file_mcmctree2_raw} && ${run_mcmctree2} -eq 1 ]]; then
   fi
   cd ${dir_tmp}
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 if [[ ! -s ${file_mcmctree2} && -s ${file_mcmctree2_raw} ]]; then
@@ -1238,7 +1270,10 @@ if [[ ! -s ${file_mcmctree2} && -s ${file_mcmctree2_raw} ]]; then
   awk '
   /Species tree for FigTree/ {print; in_figtree=1; next}
   in_figtree && /^\(\(/ {print; count++; if (count >= 3) exit}
-  ' "${file_mcmctree2_raw}" > "${file_mcmctree2}"
+  ' "${file_mcmctree2_raw}" > "tmp.mcmctree2.txt"
+  if [[ -s "tmp.mcmctree2.txt" ]]; then
+    mv_out "tmp.mcmctree2.txt" "${file_mcmctree2}"
+  fi
   if [[ ! -s "${file_mcmctree2}" ]]; then
     echo "Warning: Failed to extract FigTree content from ${file_mcmctree2_raw}. Copying raw file instead."
     cp_out "${file_mcmctree2_raw}" "${file_mcmctree2}"
@@ -1248,7 +1283,7 @@ fi
 task="Convert tree format"
 disable_if_no_input_file "run_convert_tree_format" ${file_mcmctree2}
 if [[ ! -s ${file_mcmctree2_nwk} && ${run_convert_tree_format} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_parent_dir "${file_mcmctree2_nwk}"
 
   if grep -q -e "UTREE" "${file_mcmctree2}"; then
@@ -1260,7 +1295,7 @@ if [[ ! -s ${file_mcmctree2_nwk} && ${run_convert_tree_format} -eq 1 ]]; then
       sed -e "s/.*UTREE 1 = //" -e "s/;.*/;/" -e "s/[[:space:]]*\[&95%={[0-9.]*,[[:space:]][0-9.]*}\][[:space:]]*//g" -e "s/:[[:space:]]/:/g" \
         > "${dir_mcmctree2}/mcmctree_no95CI.nwk"
   else
-    tree_line="$(grep -E '^\(\(' "${file_mcmctree2}" | tail -n 1)"
+    tree_line="$(awk '/^\(\(/ {line=$0} END {print line}' "${file_mcmctree2}")"
     if [[ -n "${tree_line}" ]]; then
       echo "${tree_line}" > "${dir_mcmctree2}/mcmctree_95CI.nwk"
       echo "${tree_line}" |
@@ -1293,24 +1328,27 @@ if [[ ! -s ${file_mcmctree2_nwk} && ${run_convert_tree_format} -eq 1 ]]; then
     echo "If necessary, please replace the file with: ${file_mcmctree2_nwk}"
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Dated species tree plotting"
 disable_if_no_input_file "run_plot_mcmctreer" ${file_mcmctree2_nwk}
 if [[ ! -s ${file_plot_mcmctreer} && ${run_plot_mcmctreer} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   Rscript ${dir_myscript}/plot_mcmctreer.r \
   --infile="${file_mcmctree2_nwk}" \
-  --outfile="${file_plot_mcmctreer}"
+  --outfile="tmp.plot_mcmctreer.pdf"
+  if [[ -s "tmp.plot_mcmctreer.pdf" ]]; then
+    mv_out "tmp.plot_mcmctreer.pdf" "${file_plot_mcmctreer}"
+  fi
 
   if [[ -s "${file_plot_mcmctreer}" ]]; then
     echo "Output file found for the task: ${task}"
     echo "Output file: ${file_plot_mcmctreer}"
   fi
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 remove_empty_subdirs ${dir_species_tree}

@@ -34,7 +34,7 @@ programs=(\
 "kallisto version"
 "jellyfish --version"
 "mafft --version"
-"maxalign.pl -V"
+"cdskit maxalign -h"
 "meme -version"
 "nwkit -h"
 "nwkit prune -h"

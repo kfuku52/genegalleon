@@ -79,6 +79,33 @@ if (mode == "debug") {
 cat('arguments:\n')
 args = rkftools::get_parsed_args(args, print = TRUE)
 
+set_default_arg = function(args, key, value) {
+  if (!(key %in% names(args)) || is.null(args[[key]]) || !nzchar(as.character(args[[key]]))) {
+    args[[key]] = value
+  }
+  return(args)
+}
+
+args = set_default_arg(args, 'long_branch_display', 'auto')
+args = set_default_arg(args, 'long_branch_ref_quantile', '0.95')
+args = set_default_arg(args, 'long_branch_detect_ratio', '5')
+args = set_default_arg(args, 'long_branch_cap_ratio', '2.5')
+args = set_default_arg(args, 'long_branch_tail_shrink', '0.02')
+args = set_default_arg(args, 'long_branch_max_fraction', '0.1')
+cat('long_branch_display settings:',
+    paste(
+      c(
+        paste0('mode=', args[['long_branch_display']]),
+        paste0('ref_quantile=', args[['long_branch_ref_quantile']]),
+        paste0('detect_ratio=', args[['long_branch_detect_ratio']]),
+        paste0('cap_ratio=', args[['long_branch_cap_ratio']]),
+        paste0('tail_shrink=', args[['long_branch_tail_shrink']]),
+        paste0('max_fraction=', args[['long_branch_max_fraction']])
+      ),
+      collapse = ', '
+    ),
+    '\n')
+
 Rfiles = list.files(file.path(args[['tree_annotation_dir']], 'R'))
 for (Rfile in Rfiles) {
   source(file.path(args[['tree_annotation_dir']], 'R', Rfile))
@@ -146,6 +173,13 @@ for (Rfile in Rfiles) {
 
 # --event_method: Method to annotate branching events. 'auto', 'generax', or 'species_overlap'. 'generax' is preferred if 'auto'.
 
+# --long_branch_display: Branch display mode. "auto" compresses only extreme outlier branches for readability; "no" disables compression.
+# --long_branch_ref_quantile: Reference quantile for branch length baseline in auto mode.
+# --long_branch_detect_ratio: Branches longer than ref_quantile * detect_ratio are considered outlier-long.
+# --long_branch_cap_ratio: Display cap = ref_quantile * cap_ratio before tail shrink is applied.
+# --long_branch_tail_shrink: Shrink ratio applied to (edge_length - display_cap) for outlier-long branches.
+# --long_branch_max_fraction: Skip compression when outlier-long branch fraction exceeds this value.
+
 # --tree_annotation_dir: Directory PATH for the associated local R package
 
 # --pie_chart_value_transformation: 'identity|delog2|delog2p1|delog10|delog10p1'. 
@@ -172,6 +206,15 @@ cat('node_colors:', names(args[['node_colors']]), '=', args[['node_colors']], '\
 
 tree_flag = 0
 g = list()
+df_rpsblast = NULL
+panel_specs = unlist(args[grep("^panel", names(args))])
+domain_specs = panel_specs[grepl('^domain', panel_specs)]
+if (length(domain_specs) > 0) {
+  path_rpsblast = strsplit(domain_specs[[1]], ',')[[1]][2]
+  if (file.exists(path_rpsblast)) {
+    df_rpsblast = read.table(path_rpsblast, sep = '\t', header = TRUE, stringsAsFactors = FALSE, comment.char = '', quote = '', check.name = FALSE)
+  }
+}
 for (col in unlist(args[grep("^panel", names(args))])) {
   if (grepl('^tree', col)) {
     dist_col = strsplit(col, ',')[[1]][2]
@@ -249,13 +292,20 @@ for (col in unlist(args[grep("^panel", names(args))])) {
     }
     g = add_protein_domain_column(g, args, df_rpsblast)
   } else if (grepl('^alignment', col)) {
-    path_seqs = strsplit(col, ',')[[1]][2]
+    alignment_params = strsplit(col, ',')[[1]]
+    path_seqs = alignment_params[2]
+    path_seqs_untrim = ifelse(length(alignment_params) >= 3, alignment_params[3], NA)
     if (file.exists(path_seqs)) {
       seqs = ape::read.FASTA(path_seqs, type = 'DNA')
     } else {
       seqs = NULL
     }
-    g = add_alignment_column(g, args, seqs)
+    if (!is.na(path_seqs_untrim) && file.exists(path_seqs_untrim)) {
+      seqs_untrim = ape::read.FASTA(path_seqs_untrim, type = 'DNA')
+    } else {
+      seqs_untrim = NULL
+    }
+    g = add_alignment_column(g, args, seqs, df_rpsblast = df_rpsblast, seqs_untrim = seqs_untrim)
   } else if (grepl('^fimo', col)) {
     xmax = as.integer(strsplit(col, ',')[[1]][2])
     qvalue = as.numeric(strsplit(col, ',')[[1]][3])

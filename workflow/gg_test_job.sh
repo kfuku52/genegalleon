@@ -63,8 +63,10 @@ export SINGULARITYENV_run_rps_blast="${SINGULARITYENV_run_rps_blast:-0}"
 export run_rps_blast="${run_rps_blast:-0}"
 export SINGULARITYENV_run_generax="${SINGULARITYENV_run_generax:-0}"
 export run_generax="${run_generax:-0}"
-export SINGULARITYENV_run_midpoint_root="${SINGULARITYENV_run_midpoint_root:-1}"
-export run_midpoint_root="${run_midpoint_root:-1}"
+export SINGULARITYENV_run_tree_root="${SINGULARITYENV_run_tree_root:-1}"
+export run_tree_root="${run_tree_root:-1}"
+export SINGULARITYENV_tree_rooting_method="${SINGULARITYENV_tree_rooting_method:-${tree_rooting_method:-mad}}"
+export tree_rooting_method="${tree_rooting_method:-mad}"
 
 source "${dir_script}/script/gg_util.sh" # loading utility functions
 unset_singularity_envs

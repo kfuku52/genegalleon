@@ -22,7 +22,7 @@ run_busco_root_dna=1
 run_busco_root_pep=1
 run_busco_grampa_dna=1
 run_busco_grampa_pep=1
-run_orthogroup_grampa=1 # Requires outputs of run_root=1 of gg_geneFamilyPhylogeny with mode_orthogroup=1
+run_orthogroup_grampa=1 # Requires outputs of run_tree_root=1 of gg_geneFamilyPhylogeny with mode_orthogroup=1
 # Gene family evolution
 run_cafe=0
 run_go_enrichment=0
@@ -97,7 +97,7 @@ file_busco_grampa_dna="${dir_busco_grampa_dna}/grampa_summary.tsv"
 file_busco_grampa_pep="${dir_busco_grampa_pep}/grampa_summary.tsv"
 file_orthogroup_grampa="${dir_orthogroup_grampa}/grampa_summary.tsv"
 file_gene_id="${dir_pg_output}/orthofinder/Orthogroups/Orthogroups.selected.tsv"
-file_go_annotation="${dir_species_cds_annotation}/${species_go_annotation}.annotation.tsv"
+file_go_annotation="${dir_species_cds_annotation}/${species_go_annotation}_annotation.tsv"
 
 if [[ ${run_busco_notung_root_dna} -eq 1 || ${run_busco_notung_root_pep} -eq 1 || ${run_busco_root_dna} -eq 1 || ${run_busco_root_pep} -eq 1 || ${run_busco_grampa_dna} -eq 1 || ${run_busco_grampa_pep} -eq 1 ]]; then
   if [[ ! -s "${notung_jar}" ]]; then
@@ -131,45 +131,34 @@ task="BUSCO analysis of species-wise CDS files"
 if [[ ${run_busco} -eq 1 ]]; then
   ensure_dir "${dir_species_busco_full}"
   ensure_dir "${dir_species_busco_short}"
-  species_cds_fasta=($(find ${dir_sp_cds} -maxdepth 1 | grep $(get_fasta_extensions_for_grep)))
+  species_cds_fasta=()
+  mapfile -t species_cds_fasta < <(gg_find_fasta_files "${dir_sp_cds}" 1)
   echo "Number of CDS files for BUSCO: ${#species_cds_fasta[@]}"
   if [[ ${#species_cds_fasta[@]} -eq 0 ]]; then
     echo "No CDS file found. Exiting."
     exit 1
   fi
-  for cds_full in ${species_cds_fasta[@]}; do
-    cds=$(basename ${cds_full})
+  for cds_full in "${species_cds_fasta[@]}"; do
+    cds=$(basename "${cds_full}")
     sp_ub=$(gg_species_name_from_path "${cds}")
     file_sp_busco_full="${dir_species_busco_full}/${sp_ub}.busco.full.tsv"
     file_sp_busco_short="${dir_species_busco_short}/${sp_ub}.busco.short.txt"
     if [[ ! -s ${file_sp_busco_full} || ! -s ${file_sp_busco_short} ]]; then
-      echo "$(date): Start: ${task}: ${cds}" | tee >(cat >&2)
+      gg_step_start "${task}: ${cds}"
 
       if [[ "${cds}" == *gz ]]; then # Do not quote like "*gz"
         echo "Decompressing gzipped CDS fasta for BUSCO: ${cds}"
         seqkit seq --threads ${NSLOTS} "${dir_sp_cds}/${cds}" --out-file "tmp.busco_input.cds.fasta"
       else
-        cp ${dir_sp_cds}/${cds} ./tmp.busco_input.cds.fasta
+        cp_out ${dir_sp_cds}/${cds} ./tmp.busco_input.cds.fasta
       fi
 
-      dir_busco_db="/usr/local/db/busco_downloads"
+      dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}")
+      if [[ $? -ne 0 ]]; then
+        echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+        exit 1
+      fi
       dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
-
-      if [[ ! -e ${dir_busco_lineage} ]]; then
-        dir_busco_db=${dir_pg_db}/busco_downloads
-        dir_busco_lineage=${dir_busco_db}/lineages/${busco_lineage}
-
-        mkdir -p ${dir_busco_db}
-        flock ${dir_busco_db}/${busco_lineage}.lock -c "
-          if [ ! -e '${dir_busco_db}/lineages/${busco_lineage}' ]; then
-            echo 'Starting BUSCO dataset download.'
-            busco --download ${busco_lineage}
-            mv busco_downloads/* ${dir_busco_db}
-            rm -r busco_downloads
-            echo 'BUSCO dataset download has been finished.'
-          fi
-        "
-      fi
 
       busco \
       --in "tmp.busco_input.cds.fasta" \
@@ -184,8 +173,8 @@ if [[ ${run_busco} -eq 1 ]]; then
       --offline
 
       if [[ $? -eq 0 ]]; then
-        cp ./busco_tmp/run_${busco_lineage}/full_table.tsv ${file_sp_busco_full}
-        cp ./busco_tmp/run_${busco_lineage}/short_summary.txt ${file_sp_busco_short}
+        cp_out ./busco_tmp/run_${busco_lineage}/full_table.tsv ${file_sp_busco_full}
+        cp_out ./busco_tmp/run_${busco_lineage}/short_summary.txt ${file_sp_busco_short}
         rm -r './busco_tmp'
       fi
     else
@@ -194,29 +183,30 @@ if [[ ${run_busco} -eq 1 ]]; then
   done
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Collecting IDs of common BUSCO genes"
 if [[ ! -s ${file_busco_summary_table} && ${run_get_busco_summary} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_parent_dir "${file_busco_summary_table}"
 
   python ${dir_myscript}/collect_common_BUSCO_genes.py \
   --busco_outdir ${dir_species_busco_full} \
   --ncpu ${NSLOTS} \
-  --outfile ${file_busco_summary_table}
+  --outfile "tmp.busco_summary_table.tsv"
+  mv_out "tmp.busco_summary_table.tsv" ${file_busco_summary_table}
 
   num_busco_ids=$(( $(wc -l < "${file_busco_summary_table}") - 1 ))
   echo "Number of BUSCO genes: ${num_busco_ids}"
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Generating fasta files for individual single-copy genes"
 if [[ ${run_busco_getfasta} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_busco_fasta}"
   busco_rows=()
   mapfile -t busco_rows < <(tail -n +2 "${file_busco_summary_table}")
@@ -259,8 +249,7 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
     fi
   }
 
-  find ${dir_sp_cds} -maxdepth 1 | grep $(get_fasta_extensions_for_grep) \
-  > species_cds_fasta_list.txt
+  gg_find_fasta_files "${dir_sp_cds}" 1 > species_cds_fasta_list.txt
   for (( busco_idx=0; busco_idx<num_busco_ids; busco_idx++ )); do
     wait_until_jobn_le ${NSLOTS}
     generate_single_copy_fasta "${busco_idx}" &
@@ -268,17 +257,17 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
   wait
   rm tmp.*
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="In-frame mafft alignment of duplicate-containing BUSCO genes"
 if [[ ${run_busco_mafft} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_busco_mafft}"
 
   run_mafft() {
     infile=$1
-    infile_base=$(echo ${infile} | sed -e "s/\..*//")
+    infile_base=${infile%%.*}
     outfile=${dir_busco_mafft}/${infile_base}.busco.cds.aln.fasta
     if [[ -s ${outfile} ]]; then
       return 0
@@ -289,10 +278,10 @@ if [[ ${run_busco_mafft} -eq 1 ]]; then
     --seqfile ${dir_busco_fasta}/${infile} \
     --outfile tmp.${infile_base}.cds.fasta
 
-    num_seq=$(grep "^>" "tmp.${infile_base}.cds.fasta" | wc -l)
+    num_seq=$(gg_count_fasta_records "tmp.${infile_base}.cds.fasta")
     if [[ ${num_seq} -lt 2 ]]; then
       echo "Skipped MAFFT/backalign because fewer than 2 sequences were found: ${infile}"
-      cp "tmp.${infile_base}.cds.fasta" "${outfile}"
+      cp_out "tmp.${infile_base}.cds.fasta" "${outfile}"
       rm tmp.${infile_base}*
       return 0
     fi
@@ -318,30 +307,31 @@ if [[ ${run_busco_mafft} -eq 1 ]]; then
     --outfile tmp.${infile_base}.cds.aln.fasta
 
     if [[ -s tmp.${infile_base}.cds.aln.fasta ]]; then
-      cat tmp.${infile_base}.cds.aln.fasta > ${outfile}
+      cp_out tmp.${infile_base}.cds.aln.fasta ${outfile}
     fi
     rm tmp.${infile_base}*
   }
 
-  input_alignment_files=( $(ls ${dir_busco_fasta}) )
+  input_alignment_files=()
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_fasta}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
-  for input_alignment_file in ${input_alignment_files[@]}; do
+  for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
     run_mafft ${input_alignment_file} &
   done
   wait
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="TrimAl of duplicate-containing BUSCO genes"
 if [[ ${run_busco_trimal} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_busco_trimal}"
 
   run_trimal() {
     infile=$1
-    infile_base=$(echo ${infile} | sed -e "s/\..*//")
+    infile_base=${infile%%.*}
     outfile="${dir_busco_trimal}/${infile_base}.busco.trimal.fasta"
     if [[ -s ${outfile} ]]; then
       return 0
@@ -357,43 +347,44 @@ if [[ ${run_busco_trimal} -eq 1 ]]; then
     -automated1
 
     if [[ -s tmp.${infile_base}.trimal.fasta ]]; then
-      mv tmp.${infile_base}.trimal.fasta ${outfile}
+      mv_out tmp.${infile_base}.trimal.fasta ${outfile}
     fi
     rm tmp.${infile_base}.*
   }
 
-  input_alignment_files=( $(ls ${dir_busco_mafft}) )
+  input_alignment_files=()
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_mafft}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
-  for input_alignment_file in ${input_alignment_files[@]}; do
+  for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
     run_trimal ${input_alignment_file} &
   done
   wait
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="IQ-TREE for duplicate-containing BUSCO DNA trees"
 if [[ ${run_busco_iqtree_dna} -eq 1 ]]; then
-    echo "$(date): Start: ${task}" | tee >(cat >&2)
+    gg_step_start "${task}"
   ensure_dir "${dir_busco_iqtree_dna}"
 
   busco_iqtree_dna() {
     infile=$1
     indir=$2
     outdir=$3
-    infile_base=$(echo ${infile} | sed -e "s/\..*//")
+    infile_base=${infile%%.*}
     outfile="${outdir}/${infile_base}.busco.nwk"
     if [[ -s ${outfile} ]]; then
       return 0
     fi
-    num_seq=$(seqkit seq --threads 1 "${dir_busco_trimal}/${infile}" | grep "^>" | wc -l)
+    num_seq=$(gg_count_fasta_records "${dir_busco_trimal}/${infile}")
     if [[ ${num_seq} -lt 3 ]]; then
       echo "Skipped. At least 3 sequences are necessary for IQ-TREE: ${infile}"
       return 0
     fi
 
-    cp "${indir}/${infile}" "./tmp.${infile_base}.input.fasta"
+    cp_out "${indir}/${infile}" "./tmp.${infile_base}.input.fasta"
 
     iqtree \
     -s "./tmp.${infile_base}.input.fasta" \
@@ -403,36 +394,37 @@ if [[ ${run_busco_iqtree_dna} -eq 1 ]]; then
     --seed 12345 \
     --redo
 
-    mv tmp.${infile_base}.treefile ${outfile}
+    mv_out tmp.${infile_base}.treefile ${outfile}
     rm tmp.${infile_base}.*
   }
 
-  input_alignment_files=( $(ls ${dir_busco_trimal}) )
+  input_alignment_files=()
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
-  for input_alignment_file in ${input_alignment_files[@]}; do
+  for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
     busco_iqtree_dna ${input_alignment_file} ${dir_busco_trimal} ${dir_busco_iqtree_dna} &
   done
   wait
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="IQ-TREE for duplicate-containing BUSCO protein trees"
 if [[ ${run_busco_iqtree_pep} -eq 1 ]]; then
-    echo "$(date): Start: ${task}" | tee >(cat >&2)
+    gg_step_start "${task}"
   ensure_dir "${dir_busco_iqtree_pep}"
 
   busco_iqtree_pep() {
     infile=$1
     indir=$2
     outdir=$3
-    infile_base=$(echo ${infile} | sed -e "s/\..*//")
+    infile_base=${infile%%.*}
     outfile="${outdir}/${infile_base}.busco.nwk"
     if [[ -s ${outfile} ]]; then
       return 0
     fi
-    num_seq=$(seqkit seq --threads 1 "${dir_busco_trimal}/${infile}" | grep "^>" | wc -l)
+    num_seq=$(gg_count_fasta_records "${dir_busco_trimal}/${infile}")
     if [[ ${num_seq} -lt 3 ]]; then
       echo "Skipped. At least 3 sequences are necessary for IQ-TREE: ${infile}"
       return 0
@@ -449,26 +441,27 @@ if [[ ${run_busco_iqtree_pep} -eq 1 ]]; then
     --seed 12345 \
     --redo
 
-    mv tmp.${infile_base}.treefile ${outfile}
+    mv_out tmp.${infile_base}.treefile ${outfile}
     rm tmp.${infile_base}.*
   }
 
-  input_alignment_files=( $(ls ${dir_busco_trimal}) )
+  input_alignment_files=()
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
-  for input_alignment_file in ${input_alignment_files[@]}; do
+  for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
     busco_iqtree_pep ${input_alignment_file} ${dir_busco_trimal} ${dir_busco_iqtree_pep} &
   done
   wait
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 busco_notung () {
   infile=$1
   indir=$2
   outdir=$3
-  busco_id=$(echo "${infile}" | sed -e "s/\..*//")
+  busco_id=${infile%%.*}
   outfile="${outdir}/${busco_id}.busco.notung.root.zip"
   if [[ -s "${outfile}" ]]; then
     return 0
@@ -500,30 +493,32 @@ busco_notung () {
 
 task="NOTUNG rooting of duplicate-containing BUSCO DNA trees"
 if [[ ${run_busco_notung_root_dna} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
-  infiles=( $(ls ${dir_busco_iqtree_dna}) )
-  for infile in ${infiles[@]}; do
+  infiles=()
+  mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_dna}")
+  for infile in "${infiles[@]}"; do
     wait_until_jobn_le $((${NSLOTS}/2))
     busco_notung ${infile} ${dir_busco_iqtree_dna} ${dir_busco_notung_dna} &
   done
   wait
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="NOTUNG rooting of duplicate-containing BUSCO protein trees"
 if [[ ${run_busco_notung_root_pep} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
-  infiles=( $(ls ${dir_busco_iqtree_pep}) )
-  for infile in ${infiles[@]}; do
+  infiles=()
+  mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_pep}")
+  for infile in "${infiles[@]}"; do
     wait_until_jobn_le $((${NSLOTS}/2))
     busco_notung ${infile} ${dir_busco_iqtree_pep} ${dir_busco_notung_pep} &
   done
   wait
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 busco_species_tree_assisted_gene_tree_rooting () {
@@ -532,7 +527,7 @@ busco_species_tree_assisted_gene_tree_rooting () {
   intreedir=$3
   outdir_txt=$4
   outdir_nwk=$5
-  busco_id=$(echo ${infile} | sed -e "s/\..*//")
+  busco_id=${infile%%.*}
   intree="${intreedir}/${busco_id}.busco.nwk"
   outfile_txt="${outdir_txt}/${busco_id}.busco.root.txt"
   outfile_nwk="${outdir_nwk}/${busco_id}.busco.root.nwk"
@@ -543,7 +538,7 @@ busco_species_tree_assisted_gene_tree_rooting () {
   if [[ -e ./${busco_id}.notung.root ]]; then
     rm -r ./${busco_id}.notung.root
   fi
-  cp ${indir}/${infile} .
+  cp_out ${indir}/${infile} .
   unzip -q ${infile}
 
   Rscript ${dir_myscript}/gene_tree_rooting.r \
@@ -563,30 +558,32 @@ busco_species_tree_assisted_gene_tree_rooting () {
 
 task="Species-tree-guided gene tree rooting of duplicate-containing BUSCO DNA trees"
 if [[ ${run_busco_root_dna} -eq 1 ]]; then
-    echo "$(date): Start: ${task}" | tee >(cat >&2)
+    gg_step_start "${task}"
 
-  infiles=( $(ls ${dir_busco_notung_dna}) )
-  for infile in ${infiles[@]}; do
+  infiles=()
+  mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_dna}")
+  for infile in "${infiles[@]}"; do
     wait_until_jobn_le ${NSLOTS}
     busco_species_tree_assisted_gene_tree_rooting ${infile} ${dir_busco_notung_dna} ${dir_busco_iqtree_dna} ${dir_busco_rooted_txt_dna} ${dir_busco_rooted_nwk_dna} &
   done
   wait
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Species-tree-guided gene tree rooting of duplicate-containing BUSCO protein trees"
 if [[ ${run_busco_root_pep} -eq 1 ]]; then
-    echo "$(date): Start: ${task}" | tee >(cat >&2)
+    gg_step_start "${task}"
 
-  infiles=( $(ls ${dir_busco_notung_pep}) )
-  for infile in ${infiles[@]}; do
+  infiles=()
+  mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_pep}")
+  for infile in "${infiles[@]}"; do
     wait_until_jobn_le ${NSLOTS}
     busco_species_tree_assisted_gene_tree_rooting ${infile} ${dir_busco_notung_pep} ${dir_busco_iqtree_pep} ${dir_busco_rooted_txt_pep} ${dir_busco_rooted_nwk_pep} &
   done
   wait
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 busco_grampa () {
@@ -614,12 +611,14 @@ busco_grampa () {
   | sed -e "s/_/-/g" -e "s/|||/_/g" \
   > "grampa_input_gene_trees.nwk"
 
-  ls -l "${nwk_files[@]}" | sed -e "s|.*/||" > "busco_genetree_filenames.txt"
+  printf "%s\n" "${nwk_files[@]##*/}" > "busco_genetree_filenames.txt"
 
   if [[ ${grampa_h1} == "" ]]; then
     h1_param=""
   else
-    h1_param="-h1 $(echo ${grampa_h1} | sed -e "s/_/-/g" -e "s/[[:space:]]/-/g")"
+    local grampa_h1_normalized=${grampa_h1//_/-}
+    grampa_h1_normalized=${grampa_h1_normalized//[[:space:]]/-}
+    h1_param="-h1 ${grampa_h1_normalized}"
   fi
 
   grampa.py \
@@ -646,15 +645,15 @@ busco_grampa () {
   --sorted_gene_tree_file_names "./busco_genetree_filenames.txt"
 
   if [[ -s "grampa_out/grampa_checknums.txt" && -s "grampa_out/grampa_det.txt" && -s "grampa_out/grampa_out.txt" && -s "grampa_summary.tsv" ]]; then
-    grep "^The MUL-tree with the minimum parsimony score" "./grampa_out/grampa_out.txt" | sed -e "s/.*\t//" > "${outdir}/best_mul_tree.nwk"
-    mv "./grampa_out/grampa_checknums.txt" "${outdir}"
-    mv "./grampa_out/grampa_det.txt" "${outdir}"
-    mv "./grampa_out/grampa_out.txt" "${outdir}"
+    awk -F'\t' '/^The MUL-tree with the minimum parsimony score/ {print $NF}' "./grampa_out/grampa_out.txt" > "${outdir}/best_mul_tree.nwk"
+    mv_out "./grampa_out/grampa_checknums.txt" "${outdir}"
+    mv_out "./grampa_out/grampa_det.txt" "${outdir}"
+    mv_out "./grampa_out/grampa_out.txt" "${outdir}"
     if [[ -s "./grampa_input_gene_trees_filtered.nwk" ]]; then
-      mv "./grampa_input_gene_trees_filtered.nwk" "${outdir}"
+      mv_out "./grampa_input_gene_trees_filtered.nwk" "${outdir}"
     fi
-    mv "./grampa_input_species_tree.nwk" "${outdir}"
-    mv "./grampa_input_gene_trees.nwk" "${outdir}"
+    mv_out "./grampa_input_species_tree.nwk" "${outdir}"
+    mv_out "./grampa_input_gene_trees.nwk" "${outdir}"
     mv_out "./grampa_summary.tsv" "${outfile}"
     rm -r "./grampa_out"
   else
@@ -664,39 +663,41 @@ busco_grampa () {
 
 task="BUSCO-based Grampa analysis for the polyploidization history with BUSCO DNA trees"
 if [[ ! -s ${file_busco_grampa_dna} && ${run_busco_grampa_dna} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   busco_grampa ${dir_busco_rooted_nwk_dna} ${dir_busco_grampa_dna} ${file_busco_grampa_dna}
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="BUSCO-based Grampa analysis for the polyploidization history with BUSCO protein trees"
 if [[ ! -s ${file_busco_grampa_pep} && ${run_busco_grampa_pep} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
   busco_grampa ${dir_busco_rooted_nwk_pep} ${dir_busco_grampa_pep} ${file_busco_grampa_pep}
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="Orthogroup-based Grampa analysis for polyploidization history"
 if [[ ! -s ${file_orthogroup_grampa} && ${run_orthogroup_grampa} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
 
-  og_ids=( $(python -c 'import pandas,sys; d=pandas.read_csv(sys.argv[1],sep="\t",header=0); print(" ".join(d.loc[(d["Total"]>=int(sys.argv[2]))&(d["Total"]<=int(sys.argv[3])),"Orthogroup"].values))' ${file_genecount} ${min_gene_orthogroup_grampa} ${max_gene_orthogroup_grampa}) )
-  file_names=( $(ls ${dir_og_rooted_tree}) )
+  og_ids=()
+  mapfile -t og_ids < <(python -c 'import pandas,sys; d=pandas.read_csv(sys.argv[1],sep="\t",header=0); ids=d.loc[(d["Total"]>=int(sys.argv[2]))&(d["Total"]<=int(sys.argv[3])),"Orthogroup"].astype(str).tolist(); print("\n".join(ids))' ${file_genecount} ${min_gene_orthogroup_grampa} ${max_gene_orthogroup_grampa})
+  file_names=()
+  mapfile -t file_names < <(gg_find_file_basenames "${dir_og_rooted_tree}")
   echo "Number of files in ${dir_og_rooted_tree}: ${#file_names[@]}"
   echo "Number of selected orthogroups with ${min_gene_orthogroup_grampa}<=gene number<=${max_gene_orthogroup_grampa}: ${#og_ids[@]}"
   if [[ -e ./tmp.orthogroup_grampa_indir ]]; then
     rm -r ./tmp.orthogroup_grampa_indir
   fi
   mkdir ./tmp.orthogroup_grampa_indir
-  for file_name in ${file_names[@]}; do
-    for og_id in ${og_ids[@]}; do
+  for file_name in "${file_names[@]}"; do
+    for og_id in "${og_ids[@]}"; do
       if [[ ${file_name} == ${og_id}* ]]; then
-        cp ${dir_og_rooted_tree}/${file_name} ./tmp.orthogroup_grampa_indir
-        og_ids=( ${og_ids[@]/$og_id} )
+        cp_out ${dir_og_rooted_tree}/${file_name} ./tmp.orthogroup_grampa_indir
+        mapfile -t og_ids < <(printf "%s\n" "${og_ids[@]}" | grep -v -Fx "${og_id}" || true)
         break
       fi
     done
@@ -704,13 +705,13 @@ if [[ ! -s ${file_orthogroup_grampa} && ${run_orthogroup_grampa} -eq 1 ]]; then
 
   busco_grampa ./tmp.orthogroup_grampa_indir ${dir_orthogroup_grampa} ${file_orthogroup_grampa}
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task='CAFE analysis'
 disable_if_no_input_file "run_cafe" ${file_genecount} ${file_dated_species_tree}
 if [[ (! -s "${dir_cafe_summary_plot}/summary_all.pdf" || ! -s "${dir_cafe_summary_plot}/summary_significant.pdf") && ${run_cafe} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_cafe}"
 
   if [[ ! -s "${dir_cafe_output}/Gamma_asr.tre" || ! -s "${dir_cafe_output}/Gamma_count.tab" || ! -s "${dir_cafe_output}/Gamma_change.tab" ]]; then
@@ -771,13 +772,13 @@ if [[ (! -s "${dir_cafe_summary_plot}/summary_all.pdf" || ! -s "${dir_cafe_summa
 
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 task="GO enrichment analysis"
 disable_if_no_input_file "run_go_enrichment" "${dir_cafe_output}/Gamma_change.tab" "${dir_cafe_output}/Gamma_branch_probabilities.tab" ${file_gene_id} ${file_go_annotation}
 if [[(! -s "${dir_go_enrichment}/enrichment_significant_${change_direction_go}_${target_branch_go}_significant_go.tsv") && ${run_go_enrichment} -eq 1 ]]; then
-  echo "$(date): Start: ${task}" | tee >(cat >&2)
+  gg_step_start "${task}"
   ensure_dir "${dir_go_enrichment}"
   Rscript ${dir_myscript}/cafe_go_enrichment.r \
   "${dir_cafe_output}/Gamma_change.tab" \
@@ -795,7 +796,7 @@ if [[(! -s "${dir_go_enrichment}/enrichment_significant_${change_direction_go}_$
   fi
   echo "$(date): End: ${task}"
 else
-  echo "$(date): Skipped: ${task}"
+  gg_step_skip "${task}"
 fi
 
 if [[ ${delete_tmp_dir} -eq 1 ]]; then

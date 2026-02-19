@@ -30,7 +30,6 @@ jcvi
 kallisto
 jellyfish
 mafft
-maxalign-rs
 meme
 mmseqs2
 orthofinder

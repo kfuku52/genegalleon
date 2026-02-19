@@ -1,0 +1,9 @@
+pytest
+numpy
+pandas
+biopython
+ete3
+ete4
+sqlalchemy
+tenacity
+tqdm

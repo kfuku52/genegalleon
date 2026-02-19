@@ -14,7 +14,22 @@ import logging
 from tqdm import tqdm
 import pandas as pd
 import sqlalchemy
-from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type
+try:
+    from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type
+except ImportError:
+    def retry(*_args, **_kwargs):
+        def _decorator(func):
+            return func
+        return _decorator
+
+    def wait_fixed(_seconds):
+        return None
+
+    def stop_after_attempt(_attempts):
+        return None
+
+    def retry_if_exception_type(_exception_type):
+        return None
 
 # Configure logging
 logging.basicConfig(
@@ -158,14 +173,48 @@ def process_files(file_path, columns_to_read, available_cols_set=None):
         logger.error(f"Error processing file {file_path}: {e}")
         raise
 
-def apply_cutoff(df, cutoff_stat_str):
+def parse_cutoff_stat(cutoff_stat):
+    parsed = []
+    if cutoff_stat is None:
+        return parsed
+
+    if isinstance(cutoff_stat, (list, tuple)):
+        tokens = cutoff_stat
+    else:
+        tokens = [s.strip() for s in str(cutoff_stat).split('|')]
+
+    for token in tokens:
+        if isinstance(token, (list, tuple)):
+            if len(token) != 2:
+                continue
+            stat_name = str(token[0]).strip().replace("'", "").replace('"', "")
+            stat_value_raw = token[1]
+        else:
+            token_str = str(token).strip().replace("'", "").replace('"', "")
+            if not token_str or ',' not in token_str:
+                continue
+            stat_name, stat_value_raw = token_str.split(',', 1)
+            stat_name = stat_name.strip()
+            stat_value_raw = stat_value_raw.strip()
+
+        if not stat_name:
+            continue
+        try:
+            stat_value = float(stat_value_raw)
+        except (TypeError, ValueError):
+            continue
+        parsed.append((stat_name, stat_value))
+
+    return parsed
+
+
+def apply_cutoff(df, cutoff_stat):
     try:
-        cutoff_stats = [s.strip().replace('\'', '').replace('\"', '') for s in cutoff_stat_str.split('|')]
-        for stat in cutoff_stats:
-            stat_name, stat_value = stat.split(',')
-            stat_value = float(stat_value)
+        cutoff_stats = parse_cutoff_stat(cutoff_stat)
+        for stat_name, stat_value in cutoff_stats:
             if stat_name in df.columns:
-                df = df[df[stat_name].astype(float).fillna(0) >= stat_value]
+                values = pd.to_numeric(df[stat_name], errors='coerce').fillna(0)
+                df = df[values >= stat_value]
         return df
     except Exception as e:
         logger.error(f"Error applying cutoff: {e}")

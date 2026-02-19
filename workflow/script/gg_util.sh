@@ -230,6 +230,57 @@ gg_prepare_cds_fasta_stream() {
   fi
 }
 
+ensure_busco_download_path() {
+  local dir_pg=$1
+  local busco_lineage=$2
+  local sys_busco_db="/usr/local/db/busco_downloads"
+  local sys_busco_lineage="${sys_busco_db}/lineages/${busco_lineage}"
+  local runtime_busco_db
+  local runtime_busco_lineage
+  local lock_file
+
+  if [[ -z "${busco_lineage}" ]]; then
+    echo "ensure_busco_download_path: busco_lineage is empty." >&2
+    return 1
+  fi
+
+  if [[ -e "${sys_busco_lineage}" ]]; then
+    echo "${sys_busco_db}"
+    return 0
+  fi
+
+  runtime_busco_db="$(workspace_db_root "${dir_pg}")/busco_downloads"
+  runtime_busco_lineage="${runtime_busco_db}/lineages/${busco_lineage}"
+  lock_file="${runtime_busco_db}/${busco_lineage}.lock"
+  ensure_dir "${runtime_busco_db}"
+
+  if command -v flock >/dev/null 2>&1; then
+    flock "${lock_file}" -c "
+      if [ ! -e '${runtime_busco_lineage}' ]; then
+        echo 'Starting BUSCO dataset download.'
+        busco --download '${busco_lineage}'
+        mv busco_downloads/* '${runtime_busco_db}'
+        rm -r busco_downloads
+        echo 'BUSCO dataset download has been finished.'
+      fi
+    "
+  elif [[ ! -e "${runtime_busco_lineage}" ]]; then
+    echo "flock command was not found. Proceeding without lock file synchronization: BUSCO dataset download" >&2
+    echo 'Starting BUSCO dataset download.'
+    busco --download "${busco_lineage}"
+    mv busco_downloads/* "${runtime_busco_db}"
+    rm -r busco_downloads
+    echo 'BUSCO dataset download has been finished.'
+  fi
+
+  if [[ ! -e "${runtime_busco_lineage}" ]]; then
+    echo "Failed to prepare BUSCO lineage dataset: ${busco_lineage}" >&2
+    return 1
+  fi
+
+  echo "${runtime_busco_db}"
+}
+
 workspace_input_root() {
   local dir_pg=$1
   if [[ -d "${dir_pg}/input" || -d "${dir_pg}/output" ]]; then
@@ -433,6 +484,20 @@ gg_initialize_data_layout() {
 }
 
 cp_out() {
+	if [[ $# -eq 1 ]]; then
+		if [[ -p /dev/stdin ]]; then
+			ensure_parent_dir "$1"
+			cat > "$1"
+			return $?
+		fi
+		echo "cp_out: at least 2 arguments are required unless stdin is piped."
+		return 1
+	fi
+	if [[ $# -eq 2 && "$1" == "-" ]]; then
+		ensure_parent_dir "$2"
+		cat > "$2"
+		return $?
+	fi
 	if [[ $# -lt 2 ]]; then
 		echo "cp_out: at least 2 arguments are required."
 		return 1
@@ -443,6 +508,20 @@ cp_out() {
 }
 
 mv_out() {
+	if [[ $# -eq 1 ]]; then
+		if [[ -p /dev/stdin ]]; then
+			ensure_parent_dir "$1"
+			cat > "$1"
+			return $?
+		fi
+		echo "mv_out: at least 2 arguments are required unless stdin is piped."
+		return 1
+	fi
+	if [[ $# -eq 2 && "$1" == "-" ]]; then
+		ensure_parent_dir "$2"
+		cat > "$2"
+		return $?
+	fi
 	if [[ $# -lt 2 ]]; then
 		echo "mv_out: at least 2 arguments are required."
 		return 1
@@ -542,7 +621,7 @@ check_species_cds() {
   local dir_pg=$1
   local dir_sp_cds="$(workspace_input_root "${dir_pg}")/species_cds"
   local species_cds_fasta=()
-  mapfile -t species_cds_fasta < <(find "${dir_sp_cds}" -maxdepth 1 -type f | grep $(get_fasta_extensions_for_grep))
+  mapfile -t species_cds_fasta < <(gg_find_fasta_files "${dir_sp_cds}" 1)
   if [[ ${#species_cds_fasta[@]} -eq 0 ]]; then
     echo "No species_cds fasta files were found in: ${dir_sp_cds}"
     exit 1
@@ -558,8 +637,9 @@ check_species_cds() {
     local first_header_sp
     local spfasta_startswith
     sp_ub=$(basename "${spfasta}" | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/")
-    local seq_names=$(seqkit seq "${spfasta}" | grep -e "^>")
-    first_header=$(printf '%s\n' "${seq_names}" | head -n 1 | sed -e "s/[[:space:]].*//")
+    local seq_names
+    seq_names=$(seqkit seq "${spfasta}" | awk '/^>/ {print}')
+    first_header=$(printf '%s\n' "${seq_names}" | awk 'NR==1 {sub(/[[:space:]].*$/, "", $0); print; exit}')
     first_header_no_gt=${first_header#>}
     first_header_sp=$(printf '%s' "${first_header_no_gt}" | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/")
     spfasta_startswith=">${first_header_sp}"
@@ -568,14 +648,16 @@ check_species_cds() {
       echo "Sequence names start with ${spfasta_startswith} but this is not consistent with the species name (${sp_ub}) parsed from the file name of ${spfasta}" >> "${error_log}"
     fi
 
-    local num_all_seq=$(seqkit seq "${spfasta}" | grep -e "^>" | wc -l)
-    local num_uniq_seq=$(seqkit seq "${spfasta}" | grep -e "^>" | sort -u | wc -l)
+    local num_all_seq
+    local num_uniq_seq
+    num_all_seq=$(printf '%s\n' "${seq_names}" | grep -c '^>')
+    num_uniq_seq=$(printf '%s\n' "${seq_names}" | sort -u | grep -c '^>')
     if [[ ${num_all_seq} -ne ${num_uniq_seq} ]]; then
       echo "Sequence names are not unique. # all seqs = ${num_all_seq} and # unique seqs = ${num_uniq_seq}" >> "${error_log}"
     fi
 
     for prohibited_character in "%" "/" "+" ":" ";" "&" "^" "$" "#" "@" "!" "~" "=" "\'" "\"" "\`" "*" "(" ")" "{" "}" "[" "]" "|" "?" " " "\t"; do
-      printf '%s\n' "${seq_names}" | grep -e "^>" | grep -q -F -- "${prohibited_character}"
+      printf '%s\n' "${seq_names}" | grep -q -F -- "${prohibited_character}"
       local exit_code=$?
       if [[ ${exit_code} -eq 0 ]]; then
         echo "Sequence names contain '${prohibited_character}': ${spfasta}" >> "${error_log}"
@@ -806,6 +888,25 @@ gg_test_shell_commands() {
     echo "Testing: ${command_text}"
     eval "${command_text}" > /dev/null
   done
+}
+
+gg_step_start() {
+  local task_name=$1
+  echo "$(date): Start: ${task_name}" | tee >(cat >&2)
+}
+
+gg_step_skip() {
+  local task_name=$1
+  echo "$(date): Skipped: ${task_name}"
+}
+
+gg_count_fasta_records() {
+  local infile=$1
+  if [[ ! -s "${infile}" ]]; then
+    echo 0
+    return 0
+  fi
+  seqkit seq --threads 1 "${infile}" | awk '/^>/{n++} END{print n+0}'
 }
 
 gg_print_spacer() {
@@ -1268,18 +1369,16 @@ _download_jaspar_meme_to_file() {
   output_dir=$(dirname "${output_file}")
   local filename
   filename=$(basename "${output_file}")
-  local year
-  year=$(echo "${filename}" | sed -n 's/^JASPAR\([0-9][0-9][0-9][0-9]\)_.*/\1/p')
   local tmp_file="${output_file}.tmp"
   local downloaded=0
   local url
-  local urls=(
-    "https://jaspar.elixir.no/download/data/${year}/CORE/${filename}"
-    "https://jaspar.genereg.net/download/data/${year}/CORE/${filename}"
-    "https://jaspar${year}.elixir.no/download/data/${year}/CORE/${filename}"
-  )
+  local urls=()
+  local candidate_url
 
-  if [[ -z "${year}" ]]; then
+  while IFS= read -r candidate_url; do
+    urls+=( "${candidate_url}" )
+  done < <(_jaspar_meme_url_candidates "${filename}")
+  if [[ ${#urls[@]} -eq 0 ]]; then
     echo "Could not parse JASPAR year from file name: ${filename}" >&2
     return 1
   fi
@@ -1303,7 +1402,103 @@ _download_jaspar_meme_to_file() {
   mv "${tmp_file}" "${output_file}"
 }
 
-ensure_jaspar_file() {
+_jaspar_year_from_filename() {
+  local filename=$1
+  echo "${filename}" | sed -n 's/^JASPAR\([0-9][0-9][0-9][0-9]\)_.*/\1/p'
+}
+
+_jaspar_meme_url_candidates() {
+  local filename=$1
+  local year
+  year=$(_jaspar_year_from_filename "${filename}")
+  if [[ -z "${year}" ]]; then
+    return 1
+  fi
+  echo "https://jaspar.elixir.no/download/data/${year}/CORE/${filename}"
+  echo "https://jaspar.genereg.net/download/data/${year}/CORE/${filename}"
+  echo "https://jaspar${year}.elixir.no/download/data/${year}/CORE/${filename}"
+}
+
+_jaspar_is_plants_core_meme_filename() {
+  local filename=$1
+  [[ "${filename}" == JASPAR[0-9][0-9][0-9][0-9]_CORE_plants_non-redundant_pfms_meme.txt ]]
+}
+
+_jaspar_is_latest_selector() {
+  local selector=${1:-}
+  [[ -z "${selector}" || "${selector}" == "latest" || "${selector}" == "auto" ]]
+}
+
+_jaspar_remote_meme_file_exists() {
+  local filename=$1
+  local url
+  while IFS= read -r url; do
+    if curl -fsSI --max-time 20 "${url}" >/dev/null 2>&1; then
+      return 0
+    fi
+    if curl -fsSL --max-time 20 --range 0-0 "${url}" -o /dev/null >/dev/null 2>&1; then
+      return 0
+    fi
+  done < <(_jaspar_meme_url_candidates "${filename}")
+  return 1
+}
+
+_jaspar_find_latest_meme_filename_remote() {
+  local skip_remote_lookup=${GG_JASPAR_SKIP_REMOTE_LOOKUP:-0}
+  local max_year=${GG_JASPAR_MAX_YEAR:-$(date +%Y)}
+  local min_year=${GG_JASPAR_MIN_YEAR:-2000}
+  local year
+  local candidate_filename
+
+  if [[ "${skip_remote_lookup}" == "1" ]]; then
+    return 1
+  fi
+  if [[ ! "${max_year}" =~ ^[0-9]+$ ]]; then
+    max_year=$(date +%Y)
+  fi
+  if [[ ! "${min_year}" =~ ^[0-9]+$ ]]; then
+    min_year=2000
+  fi
+  if (( max_year < min_year )); then
+    min_year=${max_year}
+  fi
+
+  for ((year=max_year; year>=min_year; year--)); do
+    candidate_filename="JASPAR${year}_CORE_plants_non-redundant_pfms_meme.txt"
+    if _jaspar_remote_meme_file_exists "${candidate_filename}"; then
+      echo "${candidate_filename}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+_jaspar_find_latest_meme_filename_local() {
+  local sys_dir=$1
+  local runtime_dir=$2
+  local candidate_files=()
+  local file
+
+  shopt -s nullglob
+  for file in "${sys_dir}"/JASPAR*_CORE_plants_non-redundant_pfms_meme.txt "${runtime_dir}"/JASPAR*_CORE_plants_non-redundant_pfms_meme.txt; do
+    if [[ -s "${file}" ]]; then
+      candidate_files+=( "$(basename "${file}")" )
+    fi
+  done
+  shopt -u nullglob
+
+  if [[ ${#candidate_files[@]} -eq 0 ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "${candidate_files[@]}" \
+    | sed -n 's/^\(JASPAR[0-9][0-9][0-9][0-9]_CORE_plants_non-redundant_pfms_meme\.txt\)$/\1/p' \
+    | sort -u \
+    | sort -r \
+    | head -n 1
+}
+
+_ensure_jaspar_file_named() {
   local dir_pg=$1
   local jaspar_filename=$2
   local sys_file="/usr/local/db/jaspar/${jaspar_filename}"
@@ -1331,6 +1526,87 @@ ensure_jaspar_file() {
     return 1
   fi
   echo "${runtime_file}"
+}
+
+ensure_latest_jaspar_file() {
+  local dir_pg=$1
+  local runtime_root="$(workspace_db_root "${dir_pg}")"
+  local runtime_dir="${runtime_root}/jaspar"
+  local sys_dir="/usr/local/db/jaspar"
+  local lock_file="${runtime_root}/locks/jaspar_latest.lock"
+  local latest_marker="${runtime_dir}/latest_core_plants_non-redundant_pfms_meme.filename"
+  local has_flock=1
+  local resolved_filename=""
+  local resolved_path=""
+  local ensure_exit_code=0
+
+  mkdir -p "${runtime_root}" "${runtime_dir}" "$(dirname "${lock_file}")"
+
+  if ! command -v flock >/dev/null 2>&1; then
+    has_flock=0
+    echo "flock command was not found. Proceeding without lock file synchronization: latest JASPAR motif file" >&2
+  fi
+  if [[ ${has_flock} -eq 1 ]]; then
+    exec 8> "${lock_file}"
+    flock 8
+  fi
+
+  if [[ -s "${latest_marker}" ]]; then
+    read -r resolved_filename < "${latest_marker}"
+    if ! _jaspar_is_plants_core_meme_filename "${resolved_filename}"; then
+      resolved_filename=""
+    fi
+    if [[ -n "${resolved_filename}" ]]; then
+      if [[ -s "${sys_dir}/${resolved_filename}" ]]; then
+        resolved_path="${sys_dir}/${resolved_filename}"
+      elif [[ -s "${runtime_dir}/${resolved_filename}" ]]; then
+        resolved_path="${runtime_dir}/${resolved_filename}"
+      fi
+    fi
+  fi
+
+  if [[ -z "${resolved_path}" ]]; then
+    resolved_filename=$(_jaspar_find_latest_meme_filename_remote)
+    if [[ -z "${resolved_filename}" ]]; then
+      resolved_filename=$(_jaspar_find_latest_meme_filename_local "${sys_dir}" "${runtime_dir}")
+    fi
+    if [[ -z "${resolved_filename}" ]]; then
+      echo "Could not resolve latest JASPAR plants CORE MEME motif file." >&2
+      ensure_exit_code=1
+    else
+      resolved_path=$(_ensure_jaspar_file_named "${dir_pg}" "${resolved_filename}")
+      ensure_exit_code=$?
+      if [[ ${ensure_exit_code} -eq 0 ]]; then
+        printf '%s\n' "${resolved_filename}" > "${latest_marker}.tmp"
+        mv "${latest_marker}.tmp" "${latest_marker}"
+      fi
+    fi
+  fi
+
+  if [[ ${has_flock} -eq 1 ]]; then
+    flock -u 8
+    exec 8>&-
+  fi
+
+  if [[ ${ensure_exit_code} -ne 0 ]]; then
+    return ${ensure_exit_code}
+  fi
+  if [[ -z "${resolved_path}" || ! -s "${resolved_path}" ]]; then
+    echo "Latest JASPAR motif file was not prepared correctly: ${resolved_path}" >&2
+    return 1
+  fi
+  echo "${resolved_path}"
+}
+
+ensure_jaspar_file() {
+  local dir_pg=$1
+  local jaspar_filename=${2:-latest}
+
+  if _jaspar_is_latest_selector "${jaspar_filename}"; then
+    ensure_latest_jaspar_file "${dir_pg}"
+    return $?
+  fi
+  _ensure_jaspar_file_named "${dir_pg}" "${jaspar_filename}"
 }
 
 _download_silva_rrna_ref_to_file() {
@@ -1471,6 +1747,27 @@ get_hyphy_genetic_code() {
 
 get_fasta_extensions_for_grep() {
   printf -- "-e %s " ".fa$" ".fa.gz$" ".fas$" ".fas.gz$" ".fasta$" ".fasta.gz$" ".fna$" ".fna.gz$"
+}
+
+gg_find_fasta_files() {
+  local search_dir=$1
+  local maxdepth=${2:-1}
+  if [[ -z "${search_dir}" || ! -d "${search_dir}" ]]; then
+    return 0
+  fi
+  find "${search_dir}" -maxdepth "${maxdepth}" -type f | grep $(get_fasta_extensions_for_grep) | sort
+}
+
+gg_find_file_basenames() {
+  local search_dir=$1
+  local name_pattern=${2:-*}
+  local maxdepth=${3:-1}
+  if [[ -z "${search_dir}" || ! -d "${search_dir}" ]]; then
+    return 0
+  fi
+  find "${search_dir}" -maxdepth "${maxdepth}" -type f ! -name '.*' -name "${name_pattern}" \
+  | awk -F'/' '{print $NF}' \
+  | sort
 }
 
 is_species_set_identical() {

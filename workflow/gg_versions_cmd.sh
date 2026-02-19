@@ -34,8 +34,10 @@ echo 'Map NH used in mapdNdS'
 mapnh
 gg_print_spacer
 
-echo 'MaxAlign'
-maxalign.pl -V
+echo 'CDSKIT'
+cdskit --version
+echo 'CDSKIT maxalign'
+cdskit maxalign -h | head -n 1
 gg_print_spacer
 
 echo 'seqkit'

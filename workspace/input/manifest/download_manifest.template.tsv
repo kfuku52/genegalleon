@@ -1,0 +1,4 @@
+provider	species_key	cds_url	gff_url	cds_filename	gff_filename
+ensemblplants	Ostreococcus_lucimarinus	https://example.org/Ostreococcus_lucimarinus.ASM9206v1.cds.all.fa.gz	https://example.org/Ostreococcus_lucimarinus.ASM9206v1.56.gff3.gz	Ostreococcus_lucimarinus.ASM9206v1.cds.all.fa.gz	Ostreococcus_lucimarinus.ASM9206v1.56.gff3.gz
+phycocosm	Microglena_spYARC_MicrYARC1	https://example.org/MicrYARC1_GeneCatalog_CDS_20220803.fasta.gz	https://example.org/MicrYARC1_GeneCatalog_genes_20220803.gff3.gz	MicrYARC1_GeneCatalog_CDS_20220803.fasta.gz	MicrYARC1_GeneCatalog_genes_20220803.gff3.gz
+phytozome	Hydrocotyle_leucocephala_HAP1v2.1	https://example.org/HleucocephalaHAP1_768_v2.1.cds_primaryTranscriptOnly.fa.gz	https://example.org/HleucocephalaHAP1_768_v2.1.gene.gff3.gz	HleucocephalaHAP1_768_v2.1.cds_primaryTranscriptOnly.fa.gz	HleucocephalaHAP1_768_v2.1.gene.gff3.gz

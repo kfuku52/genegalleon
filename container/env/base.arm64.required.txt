@@ -29,7 +29,6 @@ iqtree=3.*
 jcvi
 kallisto
 mafft
-maxalign-rs
 meme
 mmseqs2
 orthofinder
