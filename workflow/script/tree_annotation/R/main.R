@@ -480,7 +480,96 @@ get_df_protein_backbone = function(df_rps, mode='one_line') {
     return(df_pb)
 }
 
-add_alignment_column <- function(g, args, seqs = NULL) {
+prepare_df_rps_for_plot = function(df_rpsblast, df_tip) {
+    if (is.null(df_rpsblast) || nrow(df_rpsblast)==0) {
+        return(data.frame())
+    }
+    if (!('qacc' %in% colnames(df_rpsblast))) {
+        cat('The qacc column was not found in the rpsblast table.\n')
+        return(data.frame())
+    }
+    if (!('sacc' %in% colnames(df_rpsblast))) {
+        df_rpsblast[,'sacc'] = NA_character_
+    }
+    if (!('stitle' %in% colnames(df_rpsblast))) {
+        df_rpsblast[,'stitle'] = as.character(df_rpsblast[['sacc']])
+    }
+    required_num_cols = c('qlen', 'slen', 'qstart', 'qend')
+    missing_num_cols = required_num_cols[!(required_num_cols %in% colnames(df_rpsblast))]
+    if (length(missing_num_cols)>0) {
+        cat('Required rpsblast columns are missing:', paste(missing_num_cols, collapse=', '), '\n')
+        return(data.frame())
+    }
+    df_rps = df_rpsblast[(df_rpsblast[['qacc']] %in% df_tip[['label']]),,drop=FALSE]
+    if (nrow(df_rps)==0) {
+        return(df_rps)
+    }
+    df_rps[,'sacc_original'] = df_rps[['sacc']]
+    df_rps[,'stitle_original'] = df_rps[['stitle']]
+    df_rps[,'stitle'] = sub(',', '---PLACEHOLDER---', df_rps[['stitle']])
+    df_rps[,'stitle'] = sub(',.*', '', df_rps[['stitle']])
+    df_rps[,'stitle'] = sub('.*---PLACEHOLDER---', '', df_rps[['stitle']])
+    df_rps[,'sacc'] = df_rps[['stitle']]
+    df_rps[,'qlen'] = suppressWarnings(as.numeric(sub(',', '', as.character(df_rps[['qlen']]))))
+    df_rps[,'slen'] = suppressWarnings(as.numeric(sub(',', '', as.character(df_rps[['slen']]))))
+    df_rps[,'qstart'] = suppressWarnings(as.numeric(sub(',', '', as.character(df_rps[['qstart']]))))
+    df_rps[,'qend'] = suppressWarnings(as.numeric(sub(',', '', as.character(df_rps[['qend']]))))
+    df_rps[,'label'] = factor(df_rps[['qacc']], levels=df_tip[['label']])
+    df_rps[,'ymin'] = as.numeric(df_rps[['label']]) - 0.375
+    df_rps[,'ymax'] = as.numeric(df_rps[['label']]) + 0.375
+    return(df_rps)
+}
+
+get_domain_fill_colors = function(df_domain) {
+    if (is.null(df_domain) || nrow(df_domain)==0 || !('sacc' %in% colnames(df_domain))) {
+        return(c())
+    }
+    domain_levels = levels(df_domain[['sacc']])
+    if (is.null(domain_levels) || length(domain_levels)==0) {
+        domain_levels = unique(as.character(df_domain[['sacc']]))
+    }
+    num_domain = length(domain_levels)
+    if (num_domain==0) {
+        return(c())
+    }
+    defaultW <- getOption("warn")
+    options(warn = -1)
+    mycolors = colorRampPalette(RColorBrewer::brewer.pal(12, "Set1"))(num_domain)
+    options(warn = defaultW)
+    names(mycolors) = domain_levels
+    return(mycolors)
+}
+
+map_trimmed_to_untrimmed_nongap_index = function(seq_trim, seq_untrim, gap_code='04') {
+  seq_trim = as.character(seq_trim)
+  seq_untrim = as.character(seq_untrim)
+  out = rep(NA_integer_, length(seq_trim))
+  if (length(seq_trim)==0 || length(seq_untrim)==0) {
+    return(out)
+  }
+  trim_non_gap_idx = which(seq_trim != gap_code)
+  untrim_non_gap_idx = which(seq_untrim != gap_code)
+  if (length(trim_non_gap_idx)==0 || length(untrim_non_gap_idx)==0) {
+    return(out)
+  }
+  trim_tokens = seq_trim[trim_non_gap_idx]
+  untrim_tokens = seq_untrim[untrim_non_gap_idx]
+  u_ptr = 1L
+  for (i in seq_along(trim_tokens)) {
+    tok = trim_tokens[i]
+    while (u_ptr <= length(untrim_tokens) && untrim_tokens[u_ptr] != tok) {
+      u_ptr = u_ptr + 1L
+    }
+    if (u_ptr > length(untrim_tokens)) {
+      return(rep(NA_integer_, length(seq_trim)))
+    }
+    out[trim_non_gap_idx[i]] = u_ptr
+    u_ptr = u_ptr + 1L
+  }
+  return(out)
+}
+
+add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_untrim = NULL) {
   cat(as.character(Sys.time()), 'Adding alignment column.\n')
   
   if (is.null(seqs)) {
@@ -489,38 +578,161 @@ add_alignment_column <- function(g, args, seqs = NULL) {
   }
   
   df_tip <- get_df_tip(g[['tree']])
+  df_rps = prepare_df_rps_for_plot(df_rpsblast, df_tip)
+  domain_fill_colors = c()
+  if (nrow(df_rps) > 0) {
+    df_domain = get_df_domain(df_rps)
+    domain_fill_colors = get_domain_fill_colors(df_domain)
+  }
+  non_domain_fill = '__non_domain__'
+  fill_colors = c(setNames('gray30', non_domain_fill), domain_fill_colors)
+  domain_rank = setNames(seq_along(names(domain_fill_colors)), names(domain_fill_colors))
   
+  key_sep <- ':::DOMAINSEP:::'
+
   # We'll accumulate data frames for each tip in a list (faster than rbind in a loop)
   out_list <- vector("list", length(df_tip[['label']]))
   idx <- 1
+  xmax_val <- 0
   
   for (seqname in df_tip[['label']]) {
+    seqname <- as.character(seqname)
     # Get the sequence associated with this tip
     seq_vec <- as.character(seqs[[seqname]])
     if (length(seq_vec) == 0) next
+    xmax_val <- max(xmax_val, length(seq_vec) - 1)
     
     # Convert to a logical vector: TRUE if not '04', FALSE if '04'
     is_atgc <- (seq_vec != '04')
-    
+    mapped_untrim_nt = rep(NA_integer_, length(seq_vec))
+    has_untrim_map = FALSE
+    if (!is.null(seqs_untrim) && !is.null(seqs_untrim[[seqname]])) {
+      seq_untrim_vec = as.character(seqs_untrim[[seqname]])
+      if (length(seq_untrim_vec) > 0) {
+        mapped_untrim_nt = map_trimmed_to_untrimmed_nongap_index(seq_trim = seq_vec, seq_untrim = seq_untrim_vec, gap_code = '04')
+        has_untrim_map = any(!is.na(mapped_untrim_nt[is_atgc]))
+      }
+    }
+
+    active_domains <- vector("list", length(seq_vec))
+    if (nrow(df_rps) > 0) {
+      df_seq_rps <- df_rps[(df_rps[['qacc']] == seqname), c('sacc', 'qstart', 'qend', 'qlen'), drop = FALSE]
+      if (nrow(df_seq_rps) > 0) {
+        nt_pos_trim = cumsum(is_atgc)
+        seq_aa_len <- suppressWarnings(as.integer(df_seq_rps[1, 'qlen']))
+        if (!is.na(seq_aa_len) && seq_aa_len > 0) {
+          ord <- order(
+            ifelse(df_seq_rps[['sacc']] %in% names(domain_rank), domain_rank[df_seq_rps[['sacc']]], Inf),
+            suppressWarnings(as.numeric(df_seq_rps[['qstart']])),
+            method = 'radix',
+            na.last = TRUE
+          )
+          for (k in ord) {
+            qstart_aa <- suppressWarnings(as.integer(df_seq_rps[k, 'qstart']))
+            qend_aa <- suppressWarnings(as.integer(df_seq_rps[k, 'qend']))
+            if (!is.finite(qstart_aa) || !is.finite(qend_aa)) {
+              next
+            }
+            nt_start <- (qstart_aa - 1L) * 3L + 1L
+            nt_end <- qend_aa * 3L
+            nt_start <- max(1L, nt_start)
+            nt_end <- min(seq_aa_len * 3L, nt_end)
+            if (nt_start > nt_end) {
+              next
+            }
+            if (has_untrim_map) {
+              is_domain_pos <- is_atgc & !is.na(mapped_untrim_nt) & (mapped_untrim_nt >= nt_start) & (mapped_untrim_nt <= nt_end)
+            } else {
+              is_domain_pos <- is_atgc & (nt_pos_trim >= nt_start) & (nt_pos_trim <= nt_end)
+            }
+            hit_idx <- which(is_domain_pos)
+            if (length(hit_idx) > 0) {
+              dlabel <- as.character(df_seq_rps[k, 'sacc'])
+              for (h in hit_idx) {
+                if (is.null(active_domains[[h]]) || length(active_domains[[h]]) == 0) {
+                  active_domains[[h]] <- dlabel
+                } else if (!(dlabel %in% active_domains[[h]])) {
+                  active_domains[[h]] <- c(active_domains[[h]], dlabel)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    key_vec <- rep(NA_character_, length(seq_vec))
+    valid_idx <- which(is_atgc)
+    for (i in valid_idx) {
+      labels_i <- active_domains[[i]]
+      if (is.null(labels_i) || length(labels_i) == 0) {
+        key_vec[i] <- non_domain_fill
+      } else {
+        labels_i <- unique(as.character(labels_i))
+        ord_i <- order(
+          ifelse(labels_i %in% names(domain_rank), domain_rank[labels_i], Inf),
+          labels_i,
+          method = 'radix',
+          na.last = TRUE
+        )
+        key_vec[i] <- paste(labels_i[ord_i], collapse = key_sep)
+      }
+    }
+
     # Run-length encode
-    runs <- rle(is_atgc)
-    
+    runs <- rle(key_vec)
+
     # Identify the start and end indices of each run
     run_ends   <- cumsum(runs$lengths)
     run_starts <- run_ends - runs$lengths + 1
     
-    # Keep only runs that are TRUE (non-'04')
-    keep_idx <- which(runs$value == TRUE)
+    # Keep only runs in non-gap positions
+    keep_idx <- which(!is.na(runs$value))
     if (length(keep_idx) > 0) {
-      df_local <- data.frame(
-        xmin  = run_starts[keep_idx] - 1,  # zero-based for plotting
-        xmax  = run_ends[keep_idx]   - 1,
-        label = seqname,
-        stringsAsFactors = FALSE
-      )
+      local_rows <- list()
+      local_n <- 1
+      for (rk in keep_idx) {
+        xmin_val <- run_starts[rk] - 1
+        xmax_val_run <- run_ends[rk] - 1
+        key_val <- runs$value[rk]
+        if (identical(key_val, non_domain_fill)) {
+          local_rows[[local_n]] <- data.frame(
+            xmin = xmin_val,
+            xmax = xmax_val_run,
+            label = seqname,
+            fill = non_domain_fill,
+            split_index = 1L,
+            split_total = 1L,
+            stringsAsFactors = FALSE
+          )
+          local_n <- local_n + 1
+        } else {
+          labels_run <- strsplit(as.character(key_val), key_sep, fixed = TRUE)[[1]]
+          n_split <- length(labels_run)
+          if (n_split == 0) {
+            next
+          }
+          for (j in seq_len(n_split)) {
+            local_rows[[local_n]] <- data.frame(
+              xmin = xmin_val,
+              xmax = xmax_val_run,
+              label = seqname,
+              fill = labels_run[j],
+              split_index = as.integer(j),
+              split_total = as.integer(n_split),
+              stringsAsFactors = FALSE
+            )
+            local_n <- local_n + 1
+          }
+        }
+      }
+      if (length(local_rows) > 0) {
+        df_local <- do.call(rbind, local_rows)
+      } else {
+        df_local <- data.frame(xmin = numeric(0), xmax = numeric(0), label = character(0), fill = character(0), split_index = integer(0), split_total = integer(0))
+      }
     } else {
       # If there are no TRUE runs, just store an empty data frame
-      df_local <- data.frame(xmin = numeric(0), xmax = numeric(0), label = character(0))
+      df_local <- data.frame(xmin = numeric(0), xmax = numeric(0), label = character(0), fill = character(0), split_index = integer(0), split_total = integer(0))
     }
     
     out_list[[idx]] <- df_local
@@ -532,15 +744,17 @@ add_alignment_column <- function(g, args, seqs = NULL) {
   
   # Factor tip labels in the order they appear in df_tip
   df_aln[['label']] <- factor(df_aln[['label']], levels = df_tip[['label']])
+  df_aln[['fill']] <- factor(df_aln[['fill']], levels = names(fill_colors))
   
   # Add y-coordinates for geom_rect
-  df_aln[['ymin']] <- as.numeric(df_aln[['label']]) - 0.45
-  df_aln[['ymax']] <- as.numeric(df_aln[['label']]) + 0.45
+  y_start <- as.numeric(df_aln[['label']]) - 0.45
+  y_step <- 0.9 / pmax(1, as.numeric(df_aln[['split_total']]))
+  df_aln[['ymin']] <- y_start + (as.numeric(df_aln[['split_index']]) - 1) * y_step
+  df_aln[['ymax']] <- y_start + as.numeric(df_aln[['split_index']]) * y_step
   
   # Create a "backbone" segment spanning the alignment range for each tip
-  xmax_val <- if (nrow(df_aln) > 0) max(df_aln[['xmax']]) else 0
   df_backbone <- data.frame(
-    label = unique(df_aln[['label']]),
+    label = df_tip[['label']],
     x     = 0,
     xend  = xmax_val
   )
@@ -554,11 +768,12 @@ add_alignment_column <- function(g, args, seqs = NULL) {
     ) +
     geom_rect(
       data = df_aln,
-      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
-      fill = 'gray30', alpha = 1
+      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = fill),
+      alpha = 1
     ) +
+    scale_fill_manual(values = fill_colors, guide = 'none') +
     xlim(0, xmax_val) +
-    xlab('Alignment position') +
+    xlab('Alignment position (nt)') +
     theme_minimal(base_size = args[['font_size']]) +
     theme(
       axis.title.y        = element_blank(),
@@ -714,6 +929,14 @@ add_tiplabel_column = function(g, args) {
 }
 
 get_df_domain <- function(df_rps) {
+  domain_values <- as.character(df_rps[['sacc']])
+  domain_values <- domain_values[!is.na(domain_values) & nzchar(domain_values)]
+  domain_order <- character(0)
+  if (length(domain_values) > 0) {
+    domain_counts <- table(domain_values)
+    domain_order <- names(domain_counts)[order(-as.numeric(domain_counts), names(domain_counts), method = 'radix')]
+  }
+  domain_rank <- setNames(seq_along(domain_order), domain_order)
   
   # Prepare output
   out_rows <- list()
@@ -777,17 +1000,27 @@ get_df_domain <- function(df_rps) {
       # Build the interval [current_start, new_pos - 1] for the old set
       # only if the old set is not empty AND we haven't gone past qlen
       if (length(current_set) > 0 && current_start <= qlen && new_pos - 1 >= current_start) {
-        step_value <- (ymax - ymin) / length(current_set)
+        current_set_sorted <- current_set
+        if (length(current_set_sorted) > 1) {
+          ord_set <- order(
+            ifelse(current_set_sorted %in% names(domain_rank), domain_rank[current_set_sorted], Inf),
+            current_set_sorted,
+            method = 'radix',
+            na.last = TRUE
+          )
+          current_set_sorted <- current_set_sorted[ord_set]
+        }
+        step_value <- (ymax - ymin) / length(current_set_sorted)
         borders    <- seq(ymin, ymax, step_value)
         
         # One row per active domain
-        for (j in seq_along(current_set)) {
+        for (j in seq_along(current_set_sorted)) {
           out_rows[[out_idx]] <- data.frame(
             xmin  = current_start - 1,
             xmax  = min(new_pos - 1, qlen - 1),
             ymin  = borders[j],
             ymax  = borders[j + 1],
-            sacc  = current_set[j],
+            sacc  = current_set_sorted[j],
             label = qacc,
             stringsAsFactors = FALSE
           )
@@ -810,15 +1043,25 @@ get_df_domain <- function(df_rps) {
     
     # If anything is still active after the last event (and within qlen)
     if (length(current_set) > 0 && current_start <= qlen) {
-      step_value <- (ymax - ymin) / length(current_set)
+      current_set_sorted <- current_set
+      if (length(current_set_sorted) > 1) {
+        ord_set <- order(
+          ifelse(current_set_sorted %in% names(domain_rank), domain_rank[current_set_sorted], Inf),
+          current_set_sorted,
+          method = 'radix',
+          na.last = TRUE
+        )
+        current_set_sorted <- current_set_sorted[ord_set]
+      }
+      step_value <- (ymax - ymin) / length(current_set_sorted)
       borders    <- seq(ymin, ymax, step_value)
-      for (j in seq_along(current_set)) {
+      for (j in seq_along(current_set_sorted)) {
         out_rows[[out_idx]] <- data.frame(
           xmin  = current_start - 1,
           xmax  = qlen - 1,
           ymin  = borders[j],
           ymax  = borders[j + 1],
-          sacc  = current_set[j],
+          sacc  = current_set_sorted[j],
           label = qacc,
           stringsAsFactors = FALSE
         )
@@ -840,8 +1083,14 @@ get_df_domain <- function(df_rps) {
   }
   out <- do.call(rbind, out_rows)
   
-  # Factor levels by descending frequency
-  sacc_levels <- names(sort(table(out$sacc), decreasing = TRUE))
+  detected_levels <- unique(as.character(out$sacc))
+  if (length(domain_order) == 0) {
+    sacc_levels <- detected_levels[order(detected_levels, method = 'radix')]
+  } else {
+    missing_levels <- detected_levels[!(detected_levels %in% domain_order)]
+    missing_levels <- missing_levels[order(missing_levels, method = 'radix')]
+    sacc_levels <- c(domain_order, missing_levels)
+  }
   out$sacc <- factor(out$sacc, levels = sacc_levels)
   
   out
@@ -882,27 +1131,15 @@ get_df_intron = function(df_tip) {
 add_protein_domain_column = function(g, args, df_rpsblast=NULL) {
     cat(as.character(Sys.time()), 'Adding protein domain column.\n')
     if (is.null(df_rpsblast)) {
-        cat('df_rpsblast is empty. Alignment column will not be added.\n')
+        cat('df_rpsblast is empty. Protein domain column will not be added.\n')
         return(g)
     }
     df_tip = get_df_tip(g[['tree']])
-    df_rps = df_rpsblast[(df_rpsblast[['qacc']] %in% df_tip[['label']]),]
+    df_rps = prepare_df_rps_for_plot(df_rpsblast, df_tip)
     if (nrow(df_rps)==0) {
         cat('No protein domain was detected. The protein domain column will not be added.\n')
         return(g)
     }
-    df_rps[,'sacc_original'] = df_rps[['sacc']]
-    df_rps[,'stitle_original'] = df_rps[['stitle']]
-    df_rps[,'stitle'] = sub(',', '---PLACEHOLDER---', df_rps[['stitle']])
-    df_rps[,'stitle'] = sub(',.*', '', df_rps[['stitle']])
-    df_rps[,'stitle'] = sub('.*---PLACEHOLDER---', '', df_rps[['stitle']])
-    df_rps[,'sacc'] = df_rps[['stitle']]
-    df_rps[,'label'] = factor(df_rps[['qacc']], levels=df_tip[['label']])
-    df_rps[,'ymin'] = as.numeric(df_rps[['label']]) - 0.375
-    df_rps[,'ymax'] = as.numeric(df_rps[['label']]) + 0.375
-    df_rps[,'qlen'] = as.numeric(sub(',', '', df_rps[['qlen']]))
-    df_rps[,'slen'] = as.numeric(sub(',', '', df_rps[['slen']]))
-    df_rps[,'label'] = factor(df_rps[['qacc']], levels=df_tip[['label']])
     df_pb = get_df_protein_backbone(df_rps)
     df_pb[,'label'] = factor(df_pb[['label']], levels=df_tip[['label']])
     df_domain = get_df_domain(df_rps)
@@ -918,7 +1155,7 @@ add_protein_domain_column = function(g, args, df_rpsblast=NULL) {
         geom_segment(mapping=aes(y=label, yend=label), x=0, xend=max(df_rps[['qlen']]), linewidth=0.25, color='gray50', linetype=3) +
         geom_segment(data=df_pb, aes(x=x, xend=xend, y=label, yend=label), linewidth=0.5, color='black') +
         xlim(0, max(df_rps[['qlen']])) +
-        xlab('Amino acid position') +
+        xlab('Amino acid position (aa)') +
         theme_minimal(base_size=args[['font_size']]) +
         guides(
             fill=guide_legend(title=NULL, nrow=6, byrow=FALSE)
@@ -940,12 +1177,7 @@ add_protein_domain_column = function(g, args, df_rpsblast=NULL) {
             plot.margin=unit(args[['margins']], "cm")
         )
     if (nrow(df_domain)>0) {
-        defaultW <- getOption("warn")
-        options(warn = -1)
-        num_domain = length(unique(df_domain[['sacc']]))
-        mycolors = colorRampPalette(RColorBrewer::brewer.pal(12, "Set1"))(num_domain)
-        #mycolors = scales::hue_pal(h=c(0, 360)+15, c=100, l=65, h.start=0, direction = 1)(num_domain)
-        options(warn = defaultW)
+        mycolors = get_domain_fill_colors(df_domain)
         g[['domain']] = g[['domain']] + 
             geom_rect(data=df_domain, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, fill=sacc), alpha=1, inherit.aes=FALSE) +
             scale_fill_manual(values=mycolors)
@@ -1471,6 +1703,223 @@ propagate_tiplab_colors_to_internal_branches = function(gtree, tree) {
     return(gtree)
 }
 
+parse_optional_numeric = function(value, default_value) {
+    if (is.null(value)) {
+        return(default_value)
+    }
+    parsed = suppressWarnings(as.numeric(value))
+    if (!is.finite(parsed)) {
+        return(default_value)
+    }
+    return(parsed)
+}
+
+get_long_branch_display_settings = function(args) {
+    mode = 'auto'
+    if ('long_branch_display' %in% names(args)) {
+        mode = tolower(as.character(args[['long_branch_display']]))
+    }
+    if (!(mode %in% c('auto', 'no'))) {
+        mode = 'auto'
+    }
+    settings = list(
+        mode = mode,
+        ref_quantile = parse_optional_numeric(args[['long_branch_ref_quantile']], 0.95),
+        detect_ratio = parse_optional_numeric(args[['long_branch_detect_ratio']], 5),
+        cap_ratio = parse_optional_numeric(args[['long_branch_cap_ratio']], 2.5),
+        tail_shrink = parse_optional_numeric(args[['long_branch_tail_shrink']], 0.02),
+        max_fraction = parse_optional_numeric(args[['long_branch_max_fraction']], 0.1)
+    )
+    settings[['ref_quantile']] = max(0.5, min(0.99, settings[['ref_quantile']]))
+    settings[['detect_ratio']] = max(1, settings[['detect_ratio']])
+    settings[['cap_ratio']] = max(1, settings[['cap_ratio']])
+    settings[['tail_shrink']] = max(0, min(1, settings[['tail_shrink']]))
+    settings[['max_fraction']] = max(0.01, min(1, settings[['max_fraction']]))
+    return(settings)
+}
+
+compress_long_branches_for_display = function(tree, args) {
+    out = list(
+        tree = tree,
+        compressed = FALSE,
+        note = '',
+        all_edge = data.frame(
+            node = numeric(0),
+            original_edge_length = numeric(0),
+            display_edge_length = numeric(0),
+            is_long_branch_compressed = logical(0),
+            stringsAsFactors = FALSE
+        ),
+        summary = data.frame(
+            node = numeric(0),
+            original_edge_length = numeric(0),
+            display_edge_length = numeric(0),
+            stringsAsFactors = FALSE
+        )
+    )
+    if (is.null(tree[['edge']]) || is.null(tree[['edge.length']])) {
+        return(out)
+    }
+    edge_length = suppressWarnings(as.numeric(tree[['edge.length']]))
+    if (length(edge_length) != nrow(tree[['edge']])) {
+        return(out)
+    }
+    out[['all_edge']] = data.frame(
+        node = tree[['edge']][,2],
+        original_edge_length = edge_length,
+        display_edge_length = edge_length,
+        is_long_branch_compressed = FALSE,
+        stringsAsFactors = FALSE
+    )
+    settings = get_long_branch_display_settings(args)
+    if (settings[['mode']] == 'no') {
+        return(out)
+    }
+    finite_positive = is.finite(edge_length) & (edge_length > 0)
+    if (sum(finite_positive) < 10) {
+        return(out)
+    }
+    ref_value = suppressWarnings(as.numeric(stats::quantile(
+        edge_length[finite_positive],
+        probs = settings[['ref_quantile']],
+        names = FALSE,
+        na.rm = TRUE,
+        type = 7
+    )))
+    if (!is.finite(ref_value) || ref_value <= 0) {
+        return(out)
+    }
+    detect_threshold = ref_value * settings[['detect_ratio']]
+    if (!is.finite(detect_threshold) || detect_threshold <= 0) {
+        return(out)
+    }
+    long_idx = which(finite_positive & (edge_length > detect_threshold))
+    if (length(long_idx) == 0) {
+        return(out)
+    }
+    long_fraction = length(long_idx) / sum(finite_positive)
+    if (long_fraction > settings[['max_fraction']]) {
+        cat(
+            'Long-branch display compression skipped: too many candidates.',
+            'num_long =', length(long_idx),
+            'num_edge =', sum(finite_positive),
+            'ratio =', signif(long_fraction, 4), '\n'
+        )
+        return(out)
+    }
+    cap = ref_value * settings[['cap_ratio']]
+    if (!is.finite(cap) || cap <= 0) {
+        cap = detect_threshold
+    }
+    display_edge_length = edge_length
+    display_edge_length[long_idx] = cap + (pmax(edge_length[long_idx] - cap, 0) * settings[['tail_shrink']])
+    changed_idx = which(is.finite(edge_length) & is.finite(display_edge_length) & (abs(display_edge_length - edge_length) > .Machine$double.eps))
+    if (length(changed_idx) == 0) {
+        return(out)
+    }
+    out[['tree']][['edge.length']] = display_edge_length
+    out[['compressed']] = TRUE
+    out[['all_edge']][['display_edge_length']] = display_edge_length
+    out[['all_edge']][['is_long_branch_compressed']][changed_idx] = TRUE
+    out[['summary']] = out[['all_edge']][out[['all_edge']][['is_long_branch_compressed']], c('node', 'original_edge_length', 'display_edge_length'), drop = FALSE]
+    max_original = max(out[['summary']][['original_edge_length']], na.rm = TRUE)
+    max_display = max(out[['summary']][['display_edge_length']], na.rm = TRUE)
+    out[['note']] = ''
+    cat(
+        'Long-branch display compression applied.',
+        'num_long =', nrow(out[['summary']]),
+        'detect_threshold =', signif(detect_threshold, 4),
+        'max_original =', signif(max_original, 4),
+        'max_display =', signif(max_display, 4), '\n'
+    )
+    return(out)
+}
+
+add_long_branch_compression_marks = function(g, args, compression_info) {
+    if (is.null(compression_info) || !isTRUE(compression_info[['compressed']])) {
+        return(g)
+    }
+    if (!all(c('is_long_branch_compressed', 'node', 'parent', 'x', 'y', 'branch_thickness', 'branch_color') %in% colnames(g[['data']]))) {
+        return(g)
+    }
+    is_mark = (
+        as.logical(g[['data']][['is_long_branch_compressed']]) &
+        is.finite(g[['data']][['x']]) &
+        is.finite(g[['data']][['y']])
+    )
+    is_mark[is.na(is_mark)] = FALSE
+    df_mark = g[['data']][is_mark, c('node', 'parent', 'x', 'y', 'branch_thickness', 'branch_color'), drop = FALSE]
+    if (nrow(df_mark) == 0) {
+        return(g)
+    }
+    node_idx = setNames(seq_len(nrow(g[['data']])), as.character(g[['data']][['node']]))
+    parent_idx = node_idx[as.character(df_mark[['parent']])]
+    parent_x = rep(NA_real_, nrow(df_mark))
+    has_parent = !is.na(parent_idx)
+    parent_x[has_parent] = suppressWarnings(as.numeric(g[['data']][['x']][parent_idx[has_parent]]))
+    df_mark[['parent_x']] = parent_x
+    # If parent x is unavailable (e.g., root edge), skip those rows.
+    is_valid_parent = is.finite(df_mark[['parent_x']])
+    df_mark = df_mark[is_valid_parent, , drop = FALSE]
+    if (nrow(df_mark) == 0) {
+        return(g)
+    }
+    df_mark[['x_start']] = pmin(df_mark[['parent_x']], df_mark[['x']])
+    df_mark[['x_end']] = pmax(df_mark[['parent_x']], df_mark[['x']])
+    df_mark[['edge_len']] = df_mark[['x_end']] - df_mark[['x_start']]
+    df_mark = df_mark[is.finite(df_mark[['edge_len']]) & (df_mark[['edge_len']] > 0), , drop = FALSE]
+    if (nrow(df_mark) == 0) {
+        return(g)
+    }
+    df_mark[['left_end']] = df_mark[['x_start']] + (df_mark[['edge_len']] / 3)
+    df_mark[['mid_start']] = df_mark[['left_end']]
+    df_mark[['mid_end']] = df_mark[['x_start']] + (2 * df_mark[['edge_len']] / 3)
+    df_mark[['right_start']] = df_mark[['mid_end']]
+    df_mark[['branch_color']] = as.character(df_mark[['branch_color']])
+    bad_color = is.na(df_mark[['branch_color']]) | !nzchar(df_mark[['branch_color']])
+    df_mark[['branch_color']][bad_color] = 'black'
+    df_mark = df_mark[df_mark[['mid_end']] > df_mark[['mid_start']], , drop = FALSE]
+    if (nrow(df_mark) == 0) {
+        return(g)
+    }
+    erase_width = pmax(suppressWarnings(as.numeric(df_mark[['branch_thickness']])), 0.25) * 1.5
+    branch_width = pmax(suppressWarnings(as.numeric(df_mark[['branch_thickness']])), 0.25)
+    g = g + geom_segment(
+        data = df_mark,
+        mapping = aes(x = x_start, xend = x_end, y = y, yend = y),
+        inherit.aes = FALSE,
+        color = 'white',
+        linewidth = erase_width,
+        lineend = 'butt'
+    )
+    g = g + geom_segment(
+        data = df_mark,
+        mapping = aes(x = x_start, xend = left_end, y = y, yend = y),
+        inherit.aes = FALSE,
+        color = df_mark[['branch_color']],
+        linewidth = branch_width,
+        lineend = 'butt'
+    )
+    g = g + geom_segment(
+        data = df_mark,
+        mapping = aes(x = mid_start, xend = mid_end, y = y, yend = y),
+        inherit.aes = FALSE,
+        color = df_mark[['branch_color']],
+        linewidth = branch_width,
+        linetype = 'dotted',
+        lineend = 'butt'
+    )
+    g = g + geom_segment(
+        data = df_mark,
+        mapping = aes(x = right_start, xend = x_end, y = y, yend = y),
+        inherit.aes = FALSE,
+        color = df_mark[['branch_color']],
+        linewidth = branch_width,
+        lineend = 'butt'
+    )
+    return(g)
+}
+
 add_tree_column = function(g, args, b, dist_col, nodelabel_col, branch_color, orientation, 
                            pie_chart_value_transformation, path_species_color_table) {
     cat(as.character(Sys.time()), 'Adding tree column.\n')
@@ -1482,12 +1931,23 @@ add_tree_column = function(g, args, b, dist_col, nodelabel_col, branch_color, or
             tree = try_out
         }
     }
+    compression_info = compress_long_branches_for_display(tree, args)
+    tree_display = compression_info[['tree']]
     gname = paste('tree', dist_col, nodelabel_col, branch_color, orientation, sep=',')
-    g[[gname]] = ggtree(tree, size=0, layout='rectangular') + theme_void()
+    g[[gname]] = ggtree(tree_display, size=0, layout='rectangular') + theme_void()
     g[[gname]][['data']] = data.frame(g[[gname]][['data']], stringsAsFactors=FALSE)
     g[[gname]] = append_branch_stats(g[[gname]], b)
+    if (nrow(compression_info[['all_edge']]) > 0) {
+        idx = match(g[[gname]][['data']][['node']], compression_info[['all_edge']][['node']])
+        g[[gname]][['data']][['original_edge_length']] = compression_info[['all_edge']][['original_edge_length']][idx]
+        g[[gname]][['data']][['display_edge_length']] = compression_info[['all_edge']][['display_edge_length']][idx]
+        compressed_flag = rep(FALSE, nrow(g[[gname]][['data']]))
+        has_idx = !is.na(idx)
+        compressed_flag[has_idx] = compression_info[['all_edge']][['is_long_branch_compressed']][idx[has_idx]]
+        g[[gname]][['data']][['is_long_branch_compressed']] = compressed_flag
+    }
     g[[gname]] = append_branch_tiplab_colors(g[[gname]], branch_color, path_species_color_table)
-    g[[gname]] = propagate_tiplab_colors_to_internal_branches(g[[gname]], tree)
+    g[[gname]] = propagate_tiplab_colors_to_internal_branches(g[[gname]], tree_display)
     if (orientation=='R') {
         # reverse x-axis
         x = g[[gname]][['data']][['x']]
@@ -1517,11 +1977,12 @@ add_tree_column = function(g, args, b, dist_col, nodelabel_col, branch_color, or
             #legend.key = element_blank(),
             plot.margin=unit(args[['margins']], "cm")
         )
-    g[[gname]] = add_scale_bar(g[[gname]], args, tree)
+    g[[gname]] = add_scale_bar(g[[gname]], args, tree_display)
     if (args[['show_branch_id']]=='yes') {
         g[[gname]] = g[[gname]] + 
         geom_text(aes(x=branch, y=y, label=paste0('nl', branch_id)), size=1, color='gray70', vjust=1.25)
     }
+    g[[gname]] = add_long_branch_compression_marks(g[[gname]], args, compression_info)
     return(g)
 }
 
@@ -2960,7 +3421,7 @@ add_amino_acid_site_column <- function(g, args, tidy_aln, selected_amino_acid_si
         breaks = 1:length(selected_amino_acid_sites),
         labels = selected_amino_acid_sites
     ) +
-    xlab("Amino acid position") +
+    xlab("Amino acid position (aa)") +
     theme(
         axis.title.y        = element_blank(),
         axis.title.x        = element_text(size = args[["font_size"]]),

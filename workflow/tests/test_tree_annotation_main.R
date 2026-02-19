@@ -591,4 +591,180 @@ if (!isTRUE(all.equal(serial_cmp, parallel_cmp, check.attributes = FALSE))) {
   stop("get_df_polygon parallel path output differs from serial output.")
 }
 
+# 29) compress_long_branches_for_display: extreme outlier branch is shortened in auto mode.
+set.seed(1)
+tree_lb <- ape::rtree(20)
+tree_lb$edge.length <- rep(0.1, length(tree_lb$edge.length))
+tree_lb$edge.length[1] <- 10
+args_lb <- list(
+  long_branch_display = "auto",
+  long_branch_ref_quantile = 0.95,
+  long_branch_detect_ratio = 5,
+  long_branch_cap_ratio = 2.5,
+  long_branch_tail_shrink = 0.02,
+  long_branch_max_fraction = 0.1
+)
+lb_auto <- compress_long_branches_for_display(tree_lb, args_lb)
+if (!isTRUE(lb_auto$compressed)) stop("compress_long_branches_for_display should compress an extreme outlier branch.")
+if (sum(lb_auto$all_edge$is_long_branch_compressed, na.rm = TRUE) != 1) stop("compress_long_branches_for_display should flag exactly one long branch in this fixture.")
+if (!(lb_auto$all_edge$display_edge_length[1] < lb_auto$all_edge$original_edge_length[1])) stop("Outlier branch display length was not shortened.")
+if (!identical(lb_auto$note, "")) stop("Long-branch compression note should be empty (no plot annotation text).")
+lb_no <- compress_long_branches_for_display(
+  tree_lb,
+  list(
+    long_branch_display = "no",
+    long_branch_ref_quantile = 0.95,
+    long_branch_detect_ratio = 5,
+    long_branch_cap_ratio = 2.5,
+    long_branch_tail_shrink = 0.02,
+    long_branch_max_fraction = 0.1
+  )
+)
+if (isTRUE(lb_no$compressed)) stop("compress_long_branches_for_display should be disabled when long_branch_display=no.")
+
+# 30) prepare_df_rps_for_plot: stitle parsing and numeric coercion should be stable.
+df_tip_rps <- data.frame(
+  label = factor(c("g1", "g2"), levels = c("g1", "g2")),
+  y = c(1, 2),
+  stringsAsFactors = FALSE
+)
+df_rps_raw <- data.frame(
+  qacc = c("g1", "g2"),
+  sacc = c("PF0001", "PF0002"),
+  stitle = c("PF0001,Domain_A", "PF0002,Domain_B"),
+  qlen = c("3", "3"),
+  slen = c("300", "300"),
+  qstart = c("1", "2"),
+  qend = c("1", "2"),
+  stringsAsFactors = FALSE
+)
+df_rps_ready <- prepare_df_rps_for_plot(df_rps_raw, df_tip_rps)
+if (!all(as.character(df_rps_ready$sacc) == c("Domain_A", "Domain_B"))) {
+  stop("prepare_df_rps_for_plot should derive sacc labels from stitle suffix.")
+}
+if (!all(is.finite(df_rps_ready$qstart) & is.finite(df_rps_ready$qend))) {
+  stop("prepare_df_rps_for_plot should coerce qstart/qend to numeric.")
+}
+
+# 31) add_alignment_column: alignment blocks should be colored by domain when rpsblast is available.
+g_align_in <- list(
+  tree = list(
+    data = data.frame(
+      isTip = c(TRUE, TRUE),
+      label = c("g1", "g2"),
+      y = c(1, 2),
+      tiplab_color = c("black", "black"),
+      stringsAsFactors = FALSE
+    )
+  )
+)
+args_align <- list(
+  font_size = 6,
+  margins = c(0, 0, 0, 0)
+)
+seqs_align <- list(
+  g1 = c("01", "01", "01", "01", "01", "01", "01", "01", "01"),
+  g2 = c("01", "04", "01", "01", "01", "01", "01", "01", "01")
+)
+g_align_out <- add_alignment_column(g_align_in, args_align, seqs_align, df_rpsblast = df_rps_raw)
+if (!("alignment" %in% names(g_align_out))) {
+  stop("add_alignment_column should add alignment panel.")
+}
+aln_rect_data <- g_align_out$alignment$layers[[2]]$data
+fills <- as.character(aln_rect_data$fill)
+if (!(any(fills == "Domain_A") && any(fills == "Domain_B"))) {
+  stop("add_alignment_column should include domain-specific fill labels.")
+}
+if (!any(fills == "__non_domain__")) {
+  stop("add_alignment_column should preserve non-domain regions in a separate fill class.")
+}
+
+# 32) add_alignment_column: when trimmed alignment removed leading residues, seqs_untrim should prevent false domain shifts.
+g_align_map_in <- list(
+  tree = list(
+    data = data.frame(
+      isTip = c(TRUE),
+      label = c("g1"),
+      y = c(1),
+      tiplab_color = c("black"),
+      stringsAsFactors = FALSE
+    )
+  )
+)
+seqs_trim_map <- list(
+  g1 = c("04", "04", "04", "03", "03", "03", "01", "02", "03")
+)
+seqs_untrim_map <- list(
+  g1 = c("01", "01", "01", "02", "02", "02", "03", "03", "03", "01", "02", "03")
+)
+df_rps_map <- data.frame(
+  qacc = c("g1"),
+  sacc = c("PF0001"),
+  stitle = c("PF0001,Domain_X"),
+  qlen = c("4"),
+  slen = c("100"),
+  qstart = c("1"),
+  qend = c("1"),
+  stringsAsFactors = FALSE
+)
+mapped_idx <- map_trimmed_to_untrimmed_nongap_index(seqs_trim_map$g1, seqs_untrim_map$g1, gap_code = "04")
+if (!all(is.na(mapped_idx[1:3])) || !all(mapped_idx[4:9] == 7:12)) {
+  stop("map_trimmed_to_untrimmed_nongap_index should map trimmed residues to original untrimmed positions.")
+}
+g_no_map <- add_alignment_column(g_align_map_in, args_align, seqs_trim_map, df_rpsblast = df_rps_map)
+fills_no_map <- as.character(g_no_map$alignment$layers[[2]]$data$fill)
+if (!any(fills_no_map == "Domain_X")) {
+  stop("add_alignment_column (without seqs_untrim) should color the first retained codon as domain in this fixture.")
+}
+g_with_map <- add_alignment_column(g_align_map_in, args_align, seqs_trim_map, df_rpsblast = df_rps_map, seqs_untrim = seqs_untrim_map)
+fills_with_map <- as.character(g_with_map$alignment$layers[[2]]$data$fill)
+if (any(fills_with_map == "Domain_X")) {
+  stop("add_alignment_column should not color a domain if the domain codon was removed during trimming.")
+}
+
+# 33) add_alignment_column: overlapping domains should split rectangle height at shared sites.
+seqs_overlap <- list(
+  g1 = c("01", "02", "03", "01", "02", "03", "01", "02", "03")
+)
+df_rps_overlap <- data.frame(
+  qacc = c("g1", "g1"),
+  sacc = c("PF0001", "PF0002"),
+  stitle = c("PF0001,Domain_A", "PF0002,Domain_B"),
+  qlen = c("3", "3"),
+  slen = c("100", "100"),
+  qstart = c("1", "2"),
+  qend = c("2", "3"),
+  stringsAsFactors = FALSE
+)
+g_overlap <- add_alignment_column(g_align_map_in, args_align, seqs_overlap, df_rpsblast = df_rps_overlap)
+rect_overlap <- g_overlap$alignment$layers[[2]]$data
+overlap_block <- rect_overlap[rect_overlap$xmin == 3 & rect_overlap$xmax == 5, , drop = FALSE]
+if (nrow(overlap_block) != 2) {
+  stop("add_alignment_column should create two stacked rectangles for an overlap block.")
+}
+if (!all(sort(as.character(overlap_block$fill)) == c("Domain_A", "Domain_B"))) {
+  stop("add_alignment_column overlap block should contain both domain colors.")
+}
+if (!all(abs((overlap_block$ymax - overlap_block$ymin) - 0.45) < 1e-9)) {
+  stop("add_alignment_column overlap block should split the row height equally for two domains.")
+}
+
+# 34) get_df_domain and add_alignment_column: overlapping domain stack order should be consistent.
+df_tip_overlap <- data.frame(
+  label = factor(c("g1"), levels = c("g1")),
+  y = c(1),
+  stringsAsFactors = FALSE
+)
+df_rps_overlap_ready <- prepare_df_rps_for_plot(df_rps_overlap, df_tip_overlap)
+df_domain_overlap <- get_df_domain(df_rps_overlap_ready)
+domain_overlap_block <- df_domain_overlap[df_domain_overlap$xmin == 1 & df_domain_overlap$xmax == 2, , drop = FALSE]
+if (nrow(domain_overlap_block) != 2) {
+  stop("get_df_domain should create two stacked rectangles for an overlap block.")
+}
+domain_order <- as.character(domain_overlap_block$sacc[order(domain_overlap_block$ymin)])
+alignment_order <- as.character(overlap_block$fill[order(overlap_block$ymin)])
+if (!identical(domain_order, alignment_order)) {
+  stop("Protein domain and alignment overlap stacks should use the same bottom-to-top domain order.")
+}
+
 cat("tree_annotation main.R tests passed.\n")
