@@ -1,0 +1,23 @@
+# R stack merged into genegalleon's base environment
+r-base
+r-ape
+r-aplot
+bioconductor-ggmsa
+r-cowplot
+r-grplasso
+r-ggbeeswarm
+r-ggimage
+r-ggrepel
+bioconductor-ggtree
+r-igraph
+r-magick
+r-magic
+r-missmda
+r-nlme
+r-phangorn
+r-phytools
+r-rcpp
+r-svglite
+bioconductor-treeio
+r-viridis
+r-xml2

@@ -1,0 +1,10 @@
+Package: tree_annotation
+Title: Extra codes for stat_branch2tree_plot.r in the genegalleon
+Version: 0.0.1
+Authors@R: person("Kenji", "Fukushima", email = "kfuku52@gmail.com", role = c("aut", "cre"))
+Description: Extra codes for stat_branch2tree_plot.r in the genegalleon
+Depends: R (>= 3.4.1)
+License: BSD 3-Clause License
+Encoding: UTF-8
+LazyData: true
+Imports: ggtree

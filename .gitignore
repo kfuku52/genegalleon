@@ -1,0 +1,31 @@
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+
+# R
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# Logs / temporary files
+*.log
+*.tmp
+tmp/
+
+# Container / build cache
+.buildx-cache/
+.buildx-cache.new/
+*.sif
+
+# Pipeline outputs and local runtime state
+workspace/output/
+workspace/db/
+workspace/db_old/
+workspace/db_old2/
+workflow/genegalleon.sif

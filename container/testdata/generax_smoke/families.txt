@@ -1,0 +1,6 @@
+[FAMILIES]
+- Phy003AEDB_CUCME
+starting_gene_tree = gene_tree.newick
+alignment = alignment.msa
+mapping = mapping.link
+subst_model = LG

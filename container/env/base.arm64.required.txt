@@ -1,0 +1,59 @@
+# Core Python stack
+python
+pip
+biopython
+cython
+matplotlib
+numpy
+pandas
+pypdf
+reportlab
+requests
+scipy
+sqlalchemy
+statsmodels
+tenacity
+tqdm
+
+# genegalleon bioinformatics core (intended to be cross-arch)
+amas
+blast
+clipkit
+diamond
+# Keep unpinned to allow newer releases. Runtime stability is checked
+# in container/scripts/ensure_generax_stable.sh with automatic fallback.
+generax
+grampa
+hyphy
+iqtree=3.*
+jcvi
+kallisto
+mafft
+maxalign-rs
+meme
+mmseqs2
+orthofinder
+astral-tree
+paml
+sonicparanoid
+spades
+pymol-open-source
+seqkit
+sra-tools
+transdecoder
+trimal
+
+# Merged from former BUSCO-specific environment.
+# NOTE: Trinity + jellyfish are currently excluded on arm64:
+# - Trinity is not reliably solvable in the strict channel profile.
+# - The available arm64 "jellyfish" package is Python-only and does not
+#   provide the required jellyfish CLI binary.
+# BUSCO itself is installed from upstream git tag 6.0.0 via pip
+# to avoid conda sepp/gsl solver conflicts.
+hmmer
+metaeuk
+prodigal
+
+# Installed from GitHub refs by
+# container/scripts/ensure_kfuku52_tools_latest.sh
+# (amalgkit auto-selects newer commit between master and kfdevel by default)
