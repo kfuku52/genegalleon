@@ -1,0 +1,11 @@
+source_pg=/Users/kf/Library/CloudStorage/GoogleDrive-kenji.fukushima@nig.ac.jp/My Drive/psnl/data/Nepenthes_gracilis/20221011_phylogalleon/workspace
+target_species=Amborella_trichopoda,Arabidopsis_thaliana,Cephalotus_follicularis,Dionaea_muscipula,Nepenthes_gracilis,Oryza_sativa,Spinacia_oleracea
+query_reference_species=Arabidopsis_thaliana
+families=AHA,YABBY
+busco_first_n=5
+flank_bp=5000
+diamond_evalue<=1e-40
+diamond_qcovhsp>=60.0
+diamond_pident>=35.0
+species_expression: Oryza_sativa may be absent by design.
+added_species_mode=cds_only_for_Amborella_trichopoda_and_Spinacia_oleracea

@@ -1,0 +1,8 @@
+species	AHA_hits	YABBY_hits	BUSCO_ids	selected_union	cds_written	cds_missing	expression_rows_written
+Amborella_trichopoda	5	5	5	15	15	0	-1
+Arabidopsis_thaliana	12	6	5	23	23	0	19
+Cephalotus_follicularis	7	7	5	19	19	0	19
+Dionaea_muscipula	8	2	5	15	15	0	15
+Nepenthes_gracilis	9	10	5	24	24	0	24
+Oryza_sativa	10	6	5	21	21	0	-1
+Spinacia_oleracea	9	3	5	17	17	0	-1

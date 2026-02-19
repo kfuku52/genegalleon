@@ -1,0 +1,8 @@
+species	is_carnivorous	habitat_wet	leaf_N_percent	genome_size_gb
+Arabidopsis_thaliana	0	0	2.1	0.14
+Cephalotus_follicularis	1	1	1.8	0.49
+Dionaea_muscipula	1	1	1.7	3.20
+Nepenthes_gracilis	1	1	1.6	1.80
+Oryza_sativa	0	1	2.3	0.43
+Amborella_trichopoda	0	1	1.9	0.90
+Spinacia_oleracea	0	0	2.4	1.00
