@@ -9,6 +9,10 @@ source "${dir_myscript}/gg_util.sh" # Load utility functions
 gg_source_home_bashrc
 gg_prepare_cmd_runtime "${dir_pg}" "" 1 1
 
+gg_print_section "genegalleon version"
+echo "${GG_VERSION:-unknown}"
+gg_print_spacer
+
 mapfile -t conda_envs < <(conda env list | awk '/^[A-Za-z0-9]/ {print $1}')
 for conda_env in "${conda_envs[@]}"; do
   gg_print_section "Installed program versions in the conda environment: ${conda_env}"

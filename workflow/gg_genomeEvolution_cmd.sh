@@ -93,6 +93,24 @@ copy_busco_tables() {
   rm -f "./tmp.busco.full_table.tsv"
 }
 
+migrate_legacy_fasta_outputs() {
+  local target_dir=$1
+  local legacy_pattern=$2
+  local legacy_files=()
+
+  if [[ -z "${target_dir}" || -z "${legacy_pattern}" || ! -d "${target_dir}" ]]; then
+    return 0
+  fi
+
+  mapfile -t legacy_files < <(find "${target_dir}" -maxdepth 1 -type f -name "${legacy_pattern}" | sort)
+  for legacy_file in "${legacy_files[@]}"; do
+    local migrated_file="${legacy_file%.fasta}.fa.gz"
+    if [[ ! -s "${migrated_file}" ]]; then
+      seqkit seq --threads 1 "${legacy_file}" --out-file "${migrated_file}"
+    fi
+    rm -f "${legacy_file}"
+  done
+}
 dir_sp_cds="${dir_pg_input}/species_cds"
 dir_og="${dir_pg_output}/orthogroup"
 dir_og_rooted_tree="${dir_og}/rooted_tree"
@@ -249,6 +267,7 @@ task="Generating fasta files for individual single-copy genes"
 if [[ ${run_busco_getfasta} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_busco_fasta}"
+  migrate_legacy_fasta_outputs "${dir_busco_fasta}" "*.busco.cds.fasta"
   busco_rows=()
   mapfile -t busco_rows < <(tail -n +2 "${file_busco_summary_table}")
   num_busco_ids=${#busco_rows[@]}
@@ -269,7 +288,7 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
     if [[ ${#cols[@]} -gt 3 ]]; then
       genes=( "${cols[@]:3}" )
     fi
-    outfile2="${dir_busco_fasta}/${busco_id}.busco.cds.fasta"
+    outfile2="${dir_busco_fasta}/${busco_id}.busco.cds.fa.gz"
     if [[ -s ${outfile2} ]]; then
       return 0
     fi
@@ -282,7 +301,7 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
       fi
       gg_seqkit_grep_by_patterns_from_infile_list 1 "species_cds_fasta_list.txt" "${genes2[@]}" \
       | gg_prepare_cds_fasta_stream 1 \
-      > ${outfile2}
+      | seqkit seq --threads 1 --out-file "${outfile2}"
       if [[ ! -s ${outfile2} ]]; then
         echo "File is empty. Removing: ${outfile2}"
         rm ${outfile2}
@@ -305,24 +324,28 @@ task="In-frame mafft alignment of duplicate-containing BUSCO genes"
 if [[ ${run_busco_mafft} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_busco_mafft}"
+  migrate_legacy_fasta_outputs "${dir_busco_fasta}" "*.busco.cds.fasta"
+  migrate_legacy_fasta_outputs "${dir_busco_mafft}" "*.busco.cds.aln.fasta"
 
   run_mafft() {
     infile=$1
     infile_base=${infile%%.*}
-    outfile=${dir_busco_mafft}/${infile_base}.busco.cds.aln.fasta
+    outfile=${dir_busco_mafft}/${infile_base}.busco.cds.aln.fa.gz
     if [[ -s ${outfile} ]]; then
       return 0
     fi
     echo "$(date): start mafft: ${infile_base}"
 
+    seqkit seq --threads 1 "${dir_busco_fasta}/${infile}" --out-file "tmp.${infile_base}.input.cds.fasta"
     cdskit mask \
-    --seqfile ${dir_busco_fasta}/${infile} \
+    --seqfile "tmp.${infile_base}.input.cds.fasta" \
     --outfile tmp.${infile_base}.cds.fasta
 
     num_seq=$(gg_count_fasta_records "tmp.${infile_base}.cds.fasta")
     if [[ ${num_seq} -lt 2 ]]; then
       echo "Skipped MAFFT/backalign because fewer than 2 sequences were found: ${infile}"
-      cp_out "tmp.${infile_base}.cds.fasta" "${outfile}"
+      seqkit seq --threads 1 "tmp.${infile_base}.cds.fasta" --out-file "tmp.${infile_base}.cds.out.fa.gz"
+      mv_out "tmp.${infile_base}.cds.out.fa.gz" "${outfile}"
       rm tmp.${infile_base}*
       return 0
     fi
@@ -348,13 +371,14 @@ if [[ ${run_busco_mafft} -eq 1 ]]; then
     --outfile tmp.${infile_base}.cds.aln.fasta
 
     if [[ -s tmp.${infile_base}.cds.aln.fasta ]]; then
-      cp_out tmp.${infile_base}.cds.aln.fasta ${outfile}
+      seqkit seq --threads 1 tmp.${infile_base}.cds.aln.fasta --out-file "tmp.${infile_base}.cds.aln.out.fa.gz"
+      mv_out "tmp.${infile_base}.cds.aln.out.fa.gz" ${outfile}
     fi
     rm tmp.${infile_base}*
   }
 
   input_alignment_files=()
-  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_fasta}")
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_fasta}" "*.busco.cds.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
@@ -369,11 +393,13 @@ task="TrimAl of duplicate-containing BUSCO genes"
 if [[ ${run_busco_trimal} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_busco_trimal}"
+  migrate_legacy_fasta_outputs "${dir_busco_mafft}" "*.busco.cds.aln.fasta"
+  migrate_legacy_fasta_outputs "${dir_busco_trimal}" "*.busco.trimal.fasta"
 
   run_trimal() {
     infile=$1
     infile_base=${infile%%.*}
-    outfile="${dir_busco_trimal}/${infile_base}.busco.trimal.fasta"
+    outfile="${dir_busco_trimal}/${infile_base}.busco.trimal.fa.gz"
     if [[ -s ${outfile} ]]; then
       return 0
     fi
@@ -388,13 +414,14 @@ if [[ ${run_busco_trimal} -eq 1 ]]; then
     -automated1
 
     if [[ -s tmp.${infile_base}.trimal.fasta ]]; then
-      mv_out tmp.${infile_base}.trimal.fasta ${outfile}
+      seqkit seq --threads 1 tmp.${infile_base}.trimal.fasta --out-file "tmp.${infile_base}.trimal.out.fa.gz"
+      mv_out "tmp.${infile_base}.trimal.out.fa.gz" ${outfile}
     fi
     rm tmp.${infile_base}.*
   }
 
   input_alignment_files=()
-  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_mafft}")
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_mafft}" "*.busco.cds.aln.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
@@ -409,6 +436,7 @@ task="IQ-TREE for duplicate-containing BUSCO DNA trees"
 if [[ ${run_busco_iqtree_dna} -eq 1 ]]; then
     gg_step_start "${task}"
   ensure_dir "${dir_busco_iqtree_dna}"
+  migrate_legacy_fasta_outputs "${dir_busco_trimal}" "*.busco.trimal.fasta"
 
   busco_iqtree_dna() {
     infile=$1
@@ -425,7 +453,7 @@ if [[ ${run_busco_iqtree_dna} -eq 1 ]]; then
       return 0
     fi
 
-    cp_out "${indir}/${infile}" "./tmp.${infile_base}.input.fasta"
+    seqkit seq --threads 1 "${indir}/${infile}" --out-file "./tmp.${infile_base}.input.fasta"
 
     iqtree \
     -s "./tmp.${infile_base}.input.fasta" \
@@ -440,7 +468,7 @@ if [[ ${run_busco_iqtree_dna} -eq 1 ]]; then
   }
 
   input_alignment_files=()
-  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}")
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}" "*.busco.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
@@ -455,6 +483,7 @@ task="IQ-TREE for duplicate-containing BUSCO protein trees"
 if [[ ${run_busco_iqtree_pep} -eq 1 ]]; then
     gg_step_start "${task}"
   ensure_dir "${dir_busco_iqtree_pep}"
+  migrate_legacy_fasta_outputs "${dir_busco_trimal}" "*.busco.trimal.fasta"
 
   busco_iqtree_pep() {
     infile=$1
@@ -487,7 +516,7 @@ if [[ ${run_busco_iqtree_pep} -eq 1 ]]; then
   }
 
   input_alignment_files=()
-  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}")
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}" "*.busco.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}

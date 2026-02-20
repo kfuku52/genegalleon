@@ -5,12 +5,9 @@ r-aplot
 bioconductor-ggmsa
 r-cowplot
 r-grplasso
-r-ggbeeswarm
-r-ggimage
 r-ggrepel
 bioconductor-ggtree
 r-igraph
-r-magick
 r-magic
 r-missmda
 r-nlme

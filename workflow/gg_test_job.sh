@@ -77,7 +77,7 @@ set_singularityenv
 
 script_files=(
 #gg_test_cmd.sh
-#gg_versions_cmd.sh
+#script/gg_versions.sh
 #gg_orthofinder_cmd.sh
 gg_geneFamilyPhylogeny_cmd.sh
 gg_geneFamilyPhylogeny_cmd.sh
@@ -116,5 +116,8 @@ for script_file in "${script_files[@]}"; do
   echo ""
   echo ""
 done
+if ! gg_trigger_versions_dump "$(basename "${BASH_SOURCE[0]}")"; then
+  echo "Warning: gg_versions trigger failed."
+fi
 
 echo "$(date): Ending"

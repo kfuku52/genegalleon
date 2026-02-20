@@ -1,7 +1,6 @@
 suppressPackageStartupMessages(library(ape))
 suppressPackageStartupMessages(library(ggplot2))
 suppressPackageStartupMessages(library(ggtree))
-suppressPackageStartupMessages(library(aplot))
 suppressPackageStartupMessages(library(rkftools))
 
 cli_args = commandArgs(trailingOnly = TRUE)

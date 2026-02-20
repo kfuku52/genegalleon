@@ -96,4 +96,7 @@ else
     exit "${second_run_exit_code}"
   fi
 fi
+if ! gg_trigger_versions_dump "$(basename "${BASH_SOURCE[0]}")"; then
+  echo "Warning: gg_versions trigger failed."
+fi
 echo "$(date): Ending"

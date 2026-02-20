@@ -33,7 +33,10 @@ echo "$(date): Starting"
 ulimit -s unlimited 2>/dev/null || true
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+dir_script="${script_dir}"
+dir_pg="${script_dir}/../workspace"
 cd "${script_dir}"
+source "${dir_script}/script/gg_util.sh"
 
 SECONDS=0
 export TMPDIR=$(pwd)
@@ -70,6 +73,10 @@ echo "Generated ${sif_name}"
 echo "$SECONDS sec elapsed in singularity build"
 if [[ -n "${zip_pid}" ]]; then
   wait "${zip_pid}"
+fi
+gg_image="${script_dir}/${sif_name}"
+if ! gg_trigger_versions_dump "$(basename "${BASH_SOURCE[0]}")"; then
+  echo "Warning: gg_versions trigger failed."
 fi
 
 echo "$(date): Ending"

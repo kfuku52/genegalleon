@@ -47,7 +47,6 @@ RUN rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archive
     perl \
     pkg-config \
     procps \
-    provean \
     rsync \
     tini \
     unzip \

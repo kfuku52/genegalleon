@@ -10,7 +10,6 @@ cat(paste0('Working at: ', getwd(), '\n'))
 
 library(cowplot, quietly=TRUE)
 library(ggplot2, quietly=TRUE)
-library(ggbeeswarm, quietly=TRUE)
 library(missMDA, quietly=TRUE)
 library(svglite, quietly=TRUE)
 library(rkftools, quietly=TRUE)
@@ -266,7 +265,7 @@ if (length(stat_files)==0) {
 
 
 # %%
-cat('Skipping SNV/PROVEAN summary: feature has been removed from the pipeline.\n')
+cat('Skipping legacy SNV summary: feature has been removed from the pipeline.\n')
 
 # %%
 cat('Ending multispecies_transcriptome_summary.r\n')

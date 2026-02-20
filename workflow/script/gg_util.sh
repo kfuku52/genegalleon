@@ -939,6 +939,134 @@ gg_print_labelled_path_listing() {
   gg_print_spacer
 }
 
+gg_read_repo_version() {
+  local version_file=${1:-}
+  local version="unknown"
+
+  if [[ -n "${version_file}" && -s "${version_file}" ]]; then
+    version="$(head -n 1 "${version_file}" | tr -d '\r')"
+  fi
+  echo "${version}"
+}
+
+gg_trigger_versions_dump() {
+  local trigger_name=${1:-unknown_job}
+  local versions_script
+  local version_file
+  local gg_version
+  local dir_output
+  local versions_dir
+  local timestamp
+  local safe_trigger
+  local log_file
+  local singularity_bin
+  local versions_exit_code
+  local had_errexit=0
+
+  if [[ -z "${dir_script:-}" || -z "${dir_pg:-}" || -z "${gg_image:-}" ]]; then
+    echo "gg_trigger_versions_dump: dir_script/dir_pg/gg_image are required." >&2
+    return 1
+  fi
+
+  version_file="${dir_script}/../VERSION"
+  gg_version="${SINGULARITYENV_GG_VERSION:-}"
+  if [[ -z "${gg_version}" ]]; then
+    gg_version="$(gg_read_repo_version "${version_file}")"
+  fi
+  export SINGULARITYENV_GG_VERSION="${gg_version}"
+
+  versions_script="${dir_script}/script/gg_versions.sh"
+  if [[ ! -s "${versions_script}" ]]; then
+    echo "gg_trigger_versions_dump: versions script not found: ${versions_script}" >&2
+    return 1
+  fi
+
+  if [[ -z "${singularity_command:-}" ]]; then
+    set_singularity_command
+  fi
+  if ! command -v singularity >/dev/null 2>&1; then
+    echo "gg_trigger_versions_dump: singularity command not found. Skipping version dump." >&2
+    return 0
+  fi
+
+  if [[ "${SINGULARITY_BIND:-}" != *":/workspace"* || "${SINGULARITY_BIND:-}" != *":/script"* ]]; then
+    variable_SGEnizer
+    set_singularityenv
+  fi
+
+  dir_output=$(workspace_output_root "${dir_pg}")
+  versions_dir="${dir_output}/versions"
+  ensure_dir "${versions_dir}"
+
+  timestamp=$(date '+%Y%m%d_%H%M%S')
+  safe_trigger=$(echo "${trigger_name}" | tr '[:space:]/' '__' | tr -cd '[:alnum:]_.-')
+  if [[ -z "${safe_trigger}" ]]; then
+    safe_trigger="unknown_job"
+  fi
+  log_file="${versions_dir}/${safe_trigger}.versions.${timestamp}.log"
+
+  if [[ $- == *e* ]]; then
+    had_errexit=1
+    set +e
+  fi
+  {
+    echo "### genegalleon version ###"
+    echo "${gg_version}"
+    echo ""
+    echo "$(date): Triggered gg_versions by ${trigger_name}"
+    ${singularity_command} "${gg_image}" < "${versions_script}" || {
+      cmd_rc=$?
+      if [[ ${versions_exit_code} -eq 0 ]]; then
+        versions_exit_code=${cmd_rc}
+      fi
+    }
+    echo ""
+    echo "### gg_container ###"
+    singularity_bin="$(command -v singularity)"
+    if [[ "${singularity_bin}" == *"/gg_wrapper_bin/"* ]]; then
+      echo "Skipping singularity inspect/version under Docker-backed singularity shim: ${singularity_bin}"
+    else
+      singularity inspect "${gg_image}" || {
+        cmd_rc=$?
+        if [[ ${versions_exit_code} -eq 0 ]]; then
+          versions_exit_code=${cmd_rc}
+        fi
+      }
+      echo ""
+      echo "### singularity version ###"
+      singularity version || {
+        cmd_rc=$?
+        if [[ ${versions_exit_code} -eq 0 ]]; then
+          versions_exit_code=${cmd_rc}
+        fi
+      }
+    fi
+    echo ""
+    echo "### Host OS info ###"
+    if [[ -f /etc/os-release ]]; then
+      cat /etc/os-release
+    else
+      echo "/etc/os-release was not found. Falling back to uname output."
+      uname -a
+    fi
+    echo ""
+    echo "$(date): gg_versions trigger completed"
+  } > "${log_file}" 2>&1
+  versions_exit_code=$?
+  if [[ ${had_errexit} -eq 1 ]]; then
+    set -e
+  fi
+
+  cat "${log_file}"
+  if [[ ${versions_exit_code} -ne 0 ]]; then
+    echo "gg_trigger_versions_dump: failed (exit=${versions_exit_code}). Log: ${log_file}" >&2
+    return "${versions_exit_code}"
+  fi
+
+  echo "gg_trigger_versions_dump: wrote ${log_file}"
+  return 0
+}
+
 enable_all_run_flags_for_debug_mode() {
   local message=${1:-"gg debug mode: All run_* variables are forced to set 1."}
   local debug_mode=${gg_debug_mode:-0}

@@ -46,5 +46,8 @@ set_singularityenv
 
 cd "${dir_pg}"
 ${singularity_command} "${gg_image}" < "${dir_script}/gg_orthogroupDatabasePrep_cmd.sh"
+if ! gg_trigger_versions_dump "$(basename "${BASH_SOURCE[0]}")"; then
+  echo "Warning: gg_versions trigger failed."
+fi
 
 echo "$(date): Ending"

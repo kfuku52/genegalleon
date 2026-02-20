@@ -47,7 +47,9 @@ echo "$(date): Starting"
 ulimit -s unlimited 2>/dev/null || true
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+dir_script="${script_dir}"
 dir_pg="${script_dir}/../workspace"
+gg_image="${script_dir}/../genegalleon.sif"
 source "${script_dir}/script/gg_util.sh"
 dir_pg_input=$(workspace_input_root "${dir_pg}")
 dir_pg_output=$(workspace_output_root "${dir_pg}")
@@ -81,6 +83,9 @@ if [[ -d "${dir_transcriptome_assembly}" ]]; then
 	--mode "${mode_transcriptome_assembly}" \
 	--ncpu "${ncpu_progress_summary}" \
 	--out transcriptome_assembly_summary.tsv
+fi
+if ! gg_trigger_versions_dump "$(basename "${BASH_SOURCE[0]}")"; then
+  echo "Warning: gg_versions trigger failed."
 fi
 
 echo "$(date): Ending"

@@ -42,7 +42,6 @@ programs=(\
 "env PYMOL_HEADLESS=1 QT_QPA_PLATFORM=offscreen pymol -cq -d quit"
 "seqkit version"
 "prefetch --version"
-"provean"
 "busco --version"
 "augustus --species=help"
 "metaeuk -h"

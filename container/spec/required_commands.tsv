@@ -26,7 +26,6 @@ base	nwkit
 base	orthofinder
 base	prefetch
 base	pigz
-base	provean
 base	pymol
 base	rnaspades.py
 base	rpsblast

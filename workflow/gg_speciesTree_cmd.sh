@@ -581,9 +581,18 @@ fi
 
 task="Generating fasta files for individual single-copy genes"
 ensure_dir "${dir_single_copy_fasta}"
+legacy_singlecopy_files=()
+mapfile -t legacy_singlecopy_files < <(find "${dir_single_copy_fasta}" -maxdepth 1 -type f -name "*.cds.fasta" | sort)
+for legacy_singlecopy_file in "${legacy_singlecopy_files[@]}"; do
+  migrated_singlecopy_file="${legacy_singlecopy_file%.fasta}.fa.gz"
+  if [[ ! -s "${migrated_singlecopy_file}" ]]; then
+    seqkit seq --threads 1 "${legacy_singlecopy_file}" --out-file "${migrated_singlecopy_file}"
+  fi
+  rm -f "${legacy_singlecopy_file}"
+done
 num_busco_ids=$(( $(wc -l < "${file_busco_summary_table}") - 1 ))
 singlecopy_fasta_files=()
-mapfile -t singlecopy_fasta_files < <(gg_find_fasta_files "${dir_single_copy_fasta}" 1)
+mapfile -t singlecopy_fasta_files < <(gg_find_file_basenames "${dir_single_copy_fasta}" "*.cds.fa.gz")
 num_singlecopy_fasta=${#singlecopy_fasta_files[@]}
 if [[ ! ${num_busco_ids} -eq ${num_singlecopy_fasta} && ${run_individual_get_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -592,7 +601,7 @@ if [[ ! ${num_busco_ids} -eq ${num_singlecopy_fasta} && ${run_individual_get_fas
     local busco_id
     busco_id=$(awk -v row="$1" 'NR==row {print $1; exit}' "${file_busco_summary_table}")
     local remove_nonsingle=$2
-    local outfile1="${dir_single_copy_fasta}/${busco_id}.cds.fasta"
+    local outfile1="${dir_single_copy_fasta}/${busco_id}.cds.fa.gz"
     if [[ -s ${outfile1} ]]; then
       return 0
     fi
@@ -626,7 +635,7 @@ if [[ ! ${num_busco_ids} -eq ${num_singlecopy_fasta} && ${run_individual_get_fas
       | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 \
       | cdskit pad \
       | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/" \
-      > ${outfile1}
+      | seqkit seq --threads 1 --out-file "${outfile1}"
       if [[ ! -s ${outfile1} ]]; then
         echo "File is empty. Removing: ${outfile1}"
         rm ${outfile1}
@@ -634,7 +643,7 @@ if [[ ! ${num_busco_ids} -eq ${num_singlecopy_fasta} && ${run_individual_get_fas
     fi
     local fasta_genes=()
     if [[ -s ${outfile1} ]]; then
-      mapfile -t fasta_genes < <(awk '/^>/ {sub(/^>/, "", $0); print}' "${outfile1}")
+      mapfile -t fasta_genes < <(seqkit seq --name --threads 1 "${outfile1}")
     fi
     local num_seq=${#fasta_genes[@]}
     # this block needs to be disabeld for ${strictly_single_copy_only} -eq 1, because orthogroups won't be complete
@@ -666,9 +675,18 @@ fi
 
 task="In-frame mafft alignment"
 ensure_dir "${dir_single_copy_mafft}"
+legacy_mafft_files=()
+mapfile -t legacy_mafft_files < <(find "${dir_single_copy_mafft}" -maxdepth 1 -type f -name "*.cds.aln.fasta" | sort)
+for legacy_mafft_file in "${legacy_mafft_files[@]}"; do
+  migrated_mafft_file="${legacy_mafft_file%.fasta}.fa.gz"
+  if [[ ! -s "${migrated_mafft_file}" ]]; then
+    seqkit seq --threads 1 "${legacy_mafft_file}" --out-file "${migrated_mafft_file}"
+  fi
+  rm -f "${legacy_mafft_file}"
+done
 num_busco_ids=$(( $(wc -l < "${file_busco_summary_table}") - 1 ))
 mafft_fasta_files=()
-mapfile -t mafft_fasta_files < <(gg_find_fasta_files "${dir_single_copy_mafft}" 1)
+mapfile -t mafft_fasta_files < <(gg_find_file_basenames "${dir_single_copy_mafft}" "*.cds.aln.fa.gz")
 num_mafft_fasta=${#mafft_fasta_files[@]}
 if [[ ! ${num_busco_ids} -eq ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -676,7 +694,7 @@ if [[ ! ${num_busco_ids} -eq ${num_mafft_fasta} && ${run_individual_mafft} -eq 1
   run_mafft() {
     local infile=$1
     local infile_base=${infile%%.*}
-    local outfile=${dir_single_copy_mafft}/${infile_base}.cds.aln.fasta
+    local outfile=${dir_single_copy_mafft}/${infile_base}.cds.aln.fa.gz
     if [[ -s ${outfile} ]]; then
       return 0
     fi
@@ -687,7 +705,7 @@ if [[ ! ${num_busco_ids} -eq ${num_mafft_fasta} && ${run_individual_mafft} -eq 1
       return 0
     fi
     echo "$(date): start mafft: ${infile_base}"
-    cp_out "${infile_path}" "tmp.${infile_base}.input.cds.fasta"
+    seqkit seq --threads 1 "${infile_path}" --out-file "tmp.${infile_base}.input.cds.fasta"
     cdskit mask \
     --seqfile "tmp.${infile_base}.input.cds.fasta" \
     --outfile tmp.${infile_base}.cds.fasta
@@ -708,13 +726,14 @@ if [[ ! ${num_busco_ids} -eq ${num_mafft_fasta} && ${run_individual_mafft} -eq 1
     --codontable ${genetic_code} \
     --outfile tmp.${infile_base}.cds.aln.fasta
     if [[ -s tmp.${infile_base}.cds.aln.fasta ]]; then
-      cp_out tmp.${infile_base}.cds.aln.fasta ${outfile}
+      seqkit seq --threads 1 tmp.${infile_base}.cds.aln.fasta --out-file "tmp.${infile_base}.cds.aln.out.fa.gz"
+      mv_out "tmp.${infile_base}.cds.aln.out.fa.gz" ${outfile}
     fi
     rm tmp.${infile_base}*
   }
 
   input_alignment_files=()
-  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_fasta}")
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_fasta}" "*.cds.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
@@ -727,8 +746,17 @@ fi
 
 task="TrimAl"
 ensure_dir "${dir_single_copy_trimal}"
+legacy_trimal_files=()
+mapfile -t legacy_trimal_files < <(find "${dir_single_copy_trimal}" -maxdepth 1 -type f -name "*.trimal.fasta" | sort)
+for legacy_trimal_file in "${legacy_trimal_files[@]}"; do
+  migrated_trimal_file="${legacy_trimal_file%.fasta}.fa.gz"
+  if [[ ! -s "${migrated_trimal_file}" ]]; then
+    seqkit seq --threads 1 "${legacy_trimal_file}" --out-file "${migrated_trimal_file}"
+  fi
+  rm -f "${legacy_trimal_file}"
+done
 trimal_fasta_files=()
-mapfile -t trimal_fasta_files < <(gg_find_fasta_files "${dir_single_copy_trimal}" 1)
+mapfile -t trimal_fasta_files < <(gg_find_file_basenames "${dir_single_copy_trimal}" "*.trimal.fa.gz")
 num_trimal_fasta=${#trimal_fasta_files[@]}
 if [[ ! ${num_busco_ids} -eq ${num_trimal_fasta} && ${run_individual_trimal} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -736,7 +764,7 @@ if [[ ! ${num_busco_ids} -eq ${num_trimal_fasta} && ${run_individual_trimal} -eq
   run_trimal() {
     local infile=$1
     local infile_base=${infile%%.*}
-    local outfile="${dir_single_copy_trimal}/${infile_base}.trimal.fasta"
+    local outfile="${dir_single_copy_trimal}/${infile_base}.trimal.fa.gz"
     if [[ ! -s ${outfile} ]]; then
       seqkit seq --remove-gaps --threads 1 ${dir_single_copy_mafft}/${infile} > tmp.${infile_base}.degap.fasta
       seqkit translate --transl-table ${genetic_code} --threads 1 ${dir_single_copy_mafft}/${infile} > tmp.${infile_base}.pep.fasta
@@ -747,14 +775,15 @@ if [[ ! ${num_busco_ids} -eq ${num_trimal_fasta} && ${run_individual_trimal} -eq
       -ignorestopcodon \
       -automated1
       if [[ -s tmp.${infile_base}.trimal.fasta ]]; then
-        mv_out tmp.${infile_base}.trimal.fasta ${outfile}
+        seqkit seq --threads 1 tmp.${infile_base}.trimal.fasta --out-file "tmp.${infile_base}.trimal.out.fa.gz"
+        mv_out "tmp.${infile_base}.trimal.out.fa.gz" ${outfile}
       fi
       rm tmp.${infile_base}.*
     fi
   }
 
   input_alignment_files=()
-  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_mafft}")
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_mafft}" "*.cds.aln.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
@@ -771,7 +800,7 @@ if [[ ( ! -s ${file_concat_cds} || ! -s ${file_concat_pep} ) && ${run_concat_ali
   ensure_parent_dir "${file_concat_cds}"
   ensure_parent_dir "${file_concat_pep}"
   ensure_dir "${dir_concat_fasta}"
-  mapfile -t trimal_files < <(gg_find_fasta_files "${dir_single_copy_trimal}" 1)
+  mapfile -t trimal_files < <(find "${dir_single_copy_trimal}" -maxdepth 1 -type f -name "*.trimal.fa.gz" | sort)
   if [[ ${#trimal_files[@]} -eq 0 ]]; then
     echo "No trimmed single-copy CDS fasta files were found in: ${dir_single_copy_trimal}"
     exit 1
@@ -981,7 +1010,7 @@ if [[ ! ${num_busco_ids} -eq ${num_iqtree_pep} && ${run_individual_iqtree_pep} -
   }
 
   input_alignment_files=()
-  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}")
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}" "*.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}
@@ -1097,9 +1126,9 @@ if [[ ! ${num_busco_ids} -eq ${num_iqtree_dna} && ${run_individual_iqtree_dna} -
     mv_out tmp.${infile_base}.treefile ${outfile}
     rm tmp.${infile_base}.*
   }
-  
+
   input_alignment_files=()
-  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}")
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}" "*.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${NSLOTS}

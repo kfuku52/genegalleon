@@ -4,9 +4,7 @@ mode = ifelse('--debug' %in% cli_args, 'debug', 'batch')
 cli_args = cli_args[cli_args != '--debug']
 
 suppressPackageStartupMessages(library(ape, quietly = TRUE))
-suppressPackageStartupMessages(library(aplot, quietly = TRUE))
 suppressPackageStartupMessages(library(cowplot, quietly = TRUE))
-suppressPackageStartupMessages(library(ggimage, quietly = TRUE))
 suppressPackageStartupMessages(library(ggmsa, quietly = TRUE))
 suppressPackageStartupMessages(library(ggplot2, quietly = TRUE))
 suppressPackageStartupMessages(library(ggrepel, quietly = TRUE))

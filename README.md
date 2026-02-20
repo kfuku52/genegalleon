@@ -3,7 +3,19 @@
 ![GeneGalleon logo](logo/logo.png)
 
 [![Tests](https://github.com/kfuku52/genegalleon/actions/workflows/tests.yml/badge.svg)](https://github.com/kfuku52/genegalleon/actions/workflows/tests.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/kfuku52/genegalleon)](https://github.com/kfuku52/genegalleon/releases)
+[![GitHub Last Commit](https://img.shields.io/github/last-commit/kfuku52/genegalleon)](https://github.com/kfuku52/genegalleon/commits)
+[![GitHub Issues](https://img.shields.io/github/issues/kfuku52/genegalleon)](https://github.com/kfuku52/genegalleon/issues)
+[![GitHub Pull Requests](https://img.shields.io/github/issues-pr/kfuku52/genegalleon)](https://github.com/kfuku52/genegalleon/pulls)
+[![GitHub Stars](https://img.shields.io/github/stars/kfuku52/genegalleon?style=social)](https://github.com/kfuku52/genegalleon/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/kfuku52/genegalleon?style=social)](https://github.com/kfuku52/genegalleon/network/members)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Bash](https://img.shields.io/badge/Bash-5%2B-121011?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![R](https://img.shields.io/badge/R-4%2B-276DC3?logo=r&logoColor=white)](https://www.r-project.org/)
+[![Container](https://img.shields.io/badge/Container-Docker%20%7C%20Apptainer-2496ED?logo=docker&logoColor=white)](https://github.com/kfuku52/genegalleon/tree/master/container)
+[![Scheduler](https://img.shields.io/badge/Scheduler-SLURM%20%7C%20UGE%20%7C%20PBS-6A5ACD)](https://github.com/kfuku52/genegalleon/tree/master/workflow)
+[![FASTA Policy](https://img.shields.io/badge/FASTA-.fa.gz-2EA44F)](https://github.com/kfuku52/genegalleon/blob/master/README.md#compression-and-fasta-handling-policy)
 
 **Navigating the Ocean of Genomic Histories**
 
@@ -528,6 +540,9 @@ Note:
 
 - `gg_test_job.sh`: validates key packages and executables in container environments.
 - `gg_versions_job.sh`: dumps installed versions and DB/asset paths.
+  - the actual collector script is `workflow/script/gg_versions.sh`.
+  - this dump is also auto-triggered at the end of each `gg_*_job.sh` on successful completion.
+  - outputs are written to `workspace/output/versions/*.log`.
 
 ## Scheduler and Array Semantics
 

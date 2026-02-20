@@ -37,12 +37,22 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dir_pg="${script_dir}/../workspace" # pg input and output directory
 dir_script="${script_dir}" # directory where gg_util.sh and gg_*_cmd.sh locate
 gg_image="${script_dir}/../genegalleon.sif" # path to the singularity image
+file_version="${script_dir}/../VERSION"
+gg_version="unknown"
+if [[ -s "${file_version}" ]]; then
+  gg_version="$(head -n 1 "${file_version}" | tr -d '\r')"
+fi
+echo "### genegalleon version ###"
+echo "${gg_version}"
+echo ''
+echo ''
 
 source "${dir_script}/script/gg_util.sh" # loading utility functions
 unset_singularity_envs
 set_singularity_command
 variable_SGEnizer
 set_singularityenv
+export SINGULARITYENV_GG_VERSION="${gg_version}"
 
 if ! command -v singularity >/dev/null 2>&1; then
 	echo "singularity command not found on host. Exiting."
@@ -50,32 +60,8 @@ if ! command -v singularity >/dev/null 2>&1; then
 fi
 
 cd "${dir_pg}"
-${singularity_command} "${gg_image}" < "${dir_script}/gg_versions_cmd.sh"
-echo ''
-echo ''
-
-echo "### gg_container ###"
-singularity_bin="$(command -v singularity)"
-if [[ "${singularity_bin}" == *"/gg_wrapper_bin/"* ]]; then
-	echo "Skipping singularity inspect/version under Docker-backed singularity shim: ${singularity_bin}"
-else
-	singularity inspect "${gg_image}"
-	echo ''
-	echo ''
-	echo "### singularity version ###"
-	singularity version
+if ! gg_trigger_versions_dump "$(basename "${BASH_SOURCE[0]}")"; then
+  echo "Warning: gg_versions trigger failed."
 fi
-echo ''
-echo ''
-
-echo "### Host OS info ###"
-if [[ -f /etc/os-release ]]; then
-	cat /etc/os-release
-else
-	echo "/etc/os-release was not found. Falling back to uname output."
-	uname -a
-fi
-echo ''
-echo ''
 
 echo "$(date): Ending"

@@ -319,15 +319,10 @@ install_r_l1ou() {
 
 verify_plotting_packages_in_r() {
   log "Verifying plotting packages are available in '${r_env_name}'"
-  micromamba run -n "${r_env_name}" Rscript -e "pkgs <- c('Rphylopars','ape','aplot','cowplot','ggimage','ggmsa','ggplot2','ggrepel','ggtree','magick','phangorn','svglite','viridis','xml2'); missing <- pkgs[!vapply(pkgs, requireNamespace, quietly=TRUE, FUN.VALUE=logical(1))]; if (length(missing) > 0) stop(sprintf('Missing packages in env ${r_env_name}: %s', paste(missing, collapse=', ')))"
+  micromamba run -n "${r_env_name}" Rscript -e "pkgs <- c('Rphylopars','ape','aplot','cowplot','ggmsa','ggplot2','ggrepel','ggtree','phangorn','svglite','viridis','xml2'); missing <- pkgs[!vapply(pkgs, requireNamespace, quietly=TRUE, FUN.VALUE=logical(1))]; if (length(missing) > 0) stop(sprintf('Missing packages in env ${r_env_name}: %s', paste(missing, collapse=', ')))"
 }
 
 main() {
-  if ! command -v provean >/dev/null 2>&1; then
-    log "ERROR: provean not found. Install it via apt before running this script."
-    exit 1
-  fi
-
   install_cafe5
   install_mapnh
   install_astral_hybrid_wrapper
