@@ -46,3 +46,7 @@ jobs:
       - name: Parse-check workflow R scripts
         run: |
           Rscript workflow/tests/test_r_scripts_parse.R
+
+      - name: Run lightweight R unit tests
+        run: |
+          Rscript workflow/tests/test_pgls_common_rphylopars.R

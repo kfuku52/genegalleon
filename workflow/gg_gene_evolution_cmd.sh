@@ -69,7 +69,7 @@ radte_max_age="1000" # Upper limit of estimated divergence time in million years
 
 # species_expression data (value in input files)
 exp_value_type="log2p1"
-pgls_use_phenocov=0 # BOOL. Experimental. 1 uses phenocov_list in PGLS (merge_replicates=no); 0 uses mean-only PGLS (merge_replicates=yes).
+pgls_use_phenocov=0 # BOOL. 1 keeps replicate-level rows for gene-tree E-PGLS and enables phenocov in species-tree PGLS (merge_replicates=no); 0 uses merged means.
 
 # Promoter cis-element analysis
 promoter_bp="2000" # Promoter length in bp
@@ -2621,7 +2621,7 @@ else
 	gg_step_skip "${task}"
 fi
 
-task="Gene tree PGLS analysis"
+task="Gene tree E-PGLS analysis"
 disable_if_no_input_file "run_pgls_gene_tree" ${file_sp_trait} ${file_og_expression} ${file_og_dated_tree_analysis}
 if [[ ! -s ${file_og_gene_pgls} && ${run_pgls_gene_tree} -eq 1 ]]; then
 	gg_step_start "${task}"
@@ -2630,13 +2630,15 @@ if [[ ! -s ${file_og_gene_pgls} && ${run_pgls_gene_tree} -eq 1 ]]; then
 		pgls_merge_replicates="no"
 	fi
 
-	Rscript ${dir_myscript}/gene_tree_pgls.r \
+	Rscript ${dir_myscript}/gene_tree_epgls.r \
 	--prefix=${og_id} \
 	--file_tree=${file_og_dated_tree_analysis} \
 	--file_exp=${file_og_expression} \
 	--file_trait=${file_sp_trait} \
 	--replicate_sep="_" \
 	--merge_replicates="${pgls_merge_replicates}" \
+	--ws_subject=auto \
+	--iter=199 \
 	2>&1 | tee pgls.log
 
 
@@ -2910,6 +2912,7 @@ if [[ ${treevis_synteny} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
         --dir_sp_cds "${dir_sp_cds}" \
         --dir_sp_gff "${dir_sp_gff}" \
         --cache_dir "${dir_pg_output}/species_cds_gff_info" \
+        --lock_dir "${dir_tmp_main}/synteny_locks" \
         --gff2genestat_script "${dir_myscript}/gff2genestat.py" \
         --window "${treevis_synteny_window}" \
         --evalue "${query_blast_evalue}" \

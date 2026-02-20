@@ -43,6 +43,18 @@ if (run_mode == 'debug') {
 
 cat('arguments:\n')
 args = rkftools::get_parsed_args(args, print = TRUE)
+if (!is.null(args[['ws_subject']])) {
+  args[['ws_subject']] = tolower(args[['ws_subject']])
+}
+if (!is.null(args[['formula_mode']])) {
+  args[['formula_mode']] = tolower(args[['formula_mode']])
+}
+if (!is.null(args[['cov_mode']])) {
+  args[['cov_mode']] = tolower(args[['cov_mode']])
+}
+if (!is.null(args[['gamma']])) {
+  args[['gamma']] = tolower(args[['gamma']])
+}
 if (is.null(args[['replicate_sep']]) || nchar(args[['replicate_sep']]) == 0) {
   args[['replicate_sep']] = '_'
 }
@@ -52,9 +64,26 @@ if (is.null(args[['merge_replicates']]) || !(args[['merge_replicates']] %in% c('
 if (is.null(args[['ws_subject']]) || !(args[['ws_subject']] %in% c('auto', 'species', 'gene_id'))) {
   args[['ws_subject']] = 'auto'
 }
+if (is.null(args[['formula_mode']]) || !(args[['formula_mode']] %in% c('subject_x', 'x_only'))) {
+  args[['formula_mode']] = 'subject_x'
+}
+if (is.null(args[['cov_mode']]) || !(args[['cov_mode']] %in% c('obs', 'subject'))) {
+  args[['cov_mode']] = 'obs'
+}
+if (is.null(args[['gamma']]) || !(args[['gamma']] %in% c('sample', 'equal'))) {
+  args[['gamma']] = 'sample'
+}
 iter = suppressWarnings(as.integer(args[['iter']]))
 if (is.na(iter) || iter < 9) {
   iter = 199
+}
+cov_diag_scale = suppressWarnings(as.numeric(args[['cov_diag_scale']]))
+if (is.na(cov_diag_scale) || cov_diag_scale <= 0) {
+  cov_diag_scale = 1e-8
+}
+delta = suppressWarnings(as.numeric(args[['delta']]))
+if (is.na(delta) || delta < 0 || delta > 1) {
+  delta = 0.001
 }
 
 leaf_to_species = function(leaf_names) {
@@ -93,7 +122,7 @@ get_expression_bases_local = function(exp, replicate_sep = '_') {
 sort_exp_fn = if (exists('sort_exp', mode = 'function')) get('sort_exp') else sort_exp_local
 get_expression_bases_fn = if (exists('get_expression_bases', mode = 'function')) get('get_expression_bases') else get_expression_bases_local
 
-build_observation_cov_from_gene_tree = function(dat, gene_tree) {
+build_observation_cov_from_gene_tree = function(dat, gene_tree, diag_scale = 1e-8) {
   if (nrow(dat) == 0) {
     return(list(data = dat, Cov = NULL))
   }
@@ -105,7 +134,7 @@ build_observation_cov_from_gene_tree = function(dat, gene_tree) {
   }
   idx = match(dat[['gene_id']], tip_ids)
   cov_obs = cov_gene[idx, idx, drop = FALSE]
-  eps = suppressWarnings(max(diag(cov_obs), na.rm = TRUE)) * 1e-8
+  eps = suppressWarnings(max(diag(cov_obs), na.rm = TRUE)) * diag_scale
   if (!is.finite(eps) || eps <= 0) {
     eps = 1e-8
   }
@@ -114,6 +143,50 @@ build_observation_cov_from_gene_tree = function(dat, gene_tree) {
   rownames(cov_obs) = obs_ids
   colnames(cov_obs) = obs_ids
   return(list(data = dat, Cov = cov_obs))
+}
+
+build_subject_cov_from_gene_tree = function(dat, gene_tree, ws_subject, diag_scale = 1e-8) {
+  cov_gene = ape::vcv.phylo(gene_tree)
+  if (ws_subject == 'gene_id') {
+    subjects = unique(dat[['gene_id']])
+    subjects = subjects[subjects %in% rownames(cov_gene)]
+    if (length(subjects) < 3) {
+      return(NULL)
+    }
+    cov_sub = cov_gene[subjects, subjects, drop = FALSE]
+  } else {
+    tip_species = leaf_to_species(rownames(cov_gene))
+    subjects = unique(dat[['species']])
+    subjects = subjects[subjects %in% unique(tip_species)]
+    if (length(subjects) < 3) {
+      return(NULL)
+    }
+    cov_sub = matrix(0, nrow = length(subjects), ncol = length(subjects), dimnames = list(subjects, subjects))
+    for (i in seq_along(subjects)) {
+      tips_i = names(tip_species)[tip_species == subjects[i]]
+      if (length(tips_i) == 0) {
+        next
+      }
+      for (j in i:length(subjects)) {
+        tips_j = names(tip_species)[tip_species == subjects[j]]
+        if (length(tips_j) == 0) {
+          next
+        }
+        v = mean(cov_gene[tips_i, tips_j, drop = FALSE], na.rm = TRUE)
+        cov_sub[i, j] = v
+        cov_sub[j, i] = v
+      }
+    }
+    if (any(!is.finite(cov_sub))) {
+      return(NULL)
+    }
+  }
+  eps = suppressWarnings(max(diag(cov_sub), na.rm = TRUE)) * diag_scale
+  if (!is.finite(eps) || eps <= 0) {
+    eps = 1e-8
+  }
+  diag(cov_sub) = diag(cov_sub) + eps
+  return(cov_sub)
 }
 
 empty_stat_row = function(output_cols, trait_col, expression_base, fit_mode = 'no_data') {
@@ -187,15 +260,25 @@ resolve_ws_subject = function(ws_subject_arg, merge_replicates) {
   return(ws_subject_arg)
 }
 
-fit_epgls_one = function(df_trait_exp, gene_tree, trait_col, expression_base, expression_cols, merge_replicates, ws_subject, iter, output_cols) {
+fit_epgls_one = function(df_trait_exp, gene_tree, trait_col, expression_base, expression_cols, merge_replicates, ws_subject, iter, formula_mode, cov_mode, cov_diag_scale, delta, gamma, output_cols) {
   dat = prepare_epgls_data(df_trait_exp, trait_col, expression_base, expression_cols, merge_replicates)
   if (nrow(dat) == 0) {
     return(empty_stat_row(output_cols, trait_col, expression_base, 'no_data'))
   }
 
-  cov_obj = build_observation_cov_from_gene_tree(dat, gene_tree)
-  dat = cov_obj[['data']]
-  cov_mat = cov_obj[['Cov']]
+  cov_mat = NULL
+  if (cov_mode == 'subject') {
+    cov_mat = build_subject_cov_from_gene_tree(dat, gene_tree, ws_subject = ws_subject, diag_scale = cov_diag_scale)
+    if (!is.null(cov_mat)) {
+      keep = dat[[ws_subject]] %in% rownames(cov_mat)
+      dat = dat[keep, , drop = FALSE]
+    }
+  }
+  if (is.null(cov_mat)) {
+    cov_obj = build_observation_cov_from_gene_tree(dat, gene_tree, diag_scale = cov_diag_scale)
+    dat = cov_obj[['data']]
+    cov_mat = cov_obj[['Cov']]
+  }
   if (!(ws_subject %in% colnames(dat))) {
     return(empty_stat_row(output_cols, trait_col, expression_base, 'no_data'))
   }
@@ -204,18 +287,36 @@ fit_epgls_one = function(df_trait_exp, gene_tree, trait_col, expression_base, ex
     return(empty_stat_row(output_cols, trait_col, expression_base, 'no_data'))
   }
 
-  fit = try(
-    RRPP::lm.rrpp.ws(
-      y ~ subject_block + x,
-      data = dat,
-      subjects = 'subject_block',
-      Cov = cov_mat,
-      iter = iter,
-      print.progress = FALSE,
-      Parallel = FALSE
-    ),
-    silent = TRUE
-  )
+  fit = try({
+    suppressWarnings(utils::capture.output({
+      if (formula_mode == 'x_only') {
+        fit_obj = RRPP::lm.rrpp.ws(
+          y ~ x,
+          data = dat,
+          subjects = 'subject_block',
+          Cov = cov_mat,
+          iter = iter,
+          delta = delta,
+          gamma = gamma,
+          print.progress = FALSE,
+          Parallel = FALSE
+        )
+      } else {
+        fit_obj = RRPP::lm.rrpp.ws(
+          y ~ subject_block + x,
+          data = dat,
+          subjects = 'subject_block',
+          Cov = cov_mat,
+          iter = iter,
+          delta = delta,
+          gamma = gamma,
+          print.progress = FALSE,
+          Parallel = FALSE
+        )
+      }
+    }))
+    fit_obj
+  }, silent = TRUE)
 
   if (inherits(fit, 'try-error')) {
     return(empty_stat_row(output_cols, trait_col, expression_base, 'epgls_failed'))
@@ -287,8 +388,11 @@ df_trait_exp = merge(exp, trait, by = 'species', all.x = TRUE, sort = FALSE)
 trait_cols = colnames(trait[2:length(trait)])
 
 ws_subject = resolve_ws_subject(args[['ws_subject']], args[['merge_replicates']])
-cat('E-PGLS covariance mode: observation-level covariance derived directly from gene tree tips (gene_id).\n')
+cat('E-PGLS covariance mode option:', args[['cov_mode']], ' (subject mode falls back to observation mode when needed)\n')
 cat('E-PGLS within-subject blocking variable:', ws_subject, '\n')
+cat('E-PGLS formula mode:', args[['formula_mode']], '\n')
+cat('E-PGLS permutation gamma:', args[['gamma']], '\n')
+cat('E-PGLS delta:', delta, '\n')
 output_cols = c('R2', 'R2adj', 'sigma', 'Fstat', 'pval', 'logLik', 'AIC', 'BIC', 'PCC', 'p.adj', 'trait', 'variable', 'fit_mode')
 res_list = list()
 
@@ -307,6 +411,11 @@ for (trait_col in trait_cols) {
       merge_replicates = args[['merge_replicates']],
       ws_subject = ws_subject,
       iter = iter,
+      formula_mode = args[['formula_mode']],
+      cov_mode = args[['cov_mode']],
+      cov_diag_scale = cov_diag_scale,
+      delta = delta,
+      gamma = args[['gamma']],
       output_cols = output_cols
     )
     i = i + 1
@@ -325,7 +434,7 @@ if (nrow(df_stat) > 0) {
   pvals = suppressWarnings(as.numeric(df_stat[, 'pval']))
   df_stat[, 'p.adj'] = p.adjust(pvals, length(pvals), method = 'fdr')
 }
-write.table(df_stat, 'gene_tree_EPGLS.tsv', row.names = FALSE, sep = '\t')
+write.table(df_stat, 'gene_tree_PGLS.tsv', row.names = FALSE, sep = '\t')
 
 plot_df = df_stat
 plot_df[, 'trait'] = factor(plot_df[, 'trait'], levels = trait_cols)
@@ -335,9 +444,9 @@ if (sum(is.finite(plot_df[, 'logp'])) > 0) {
   g = ggplot(plot_df, aes(x = trait, y = logp, fill = variable)) +
     geom_bar(position = 'dodge', stat = 'identity') +
     geom_hline(yintercept = -log(0.05), linetype = 'dashed', color = 'red', linewidth = 0.5)
-  ggsave('gene_EPGLS.barplot.pdf', g)
+  ggsave('gene_PGLS.barplot.pdf', g)
 } else {
-  grDevices::pdf('gene_EPGLS.barplot.pdf')
+  grDevices::pdf('gene_PGLS.barplot.pdf')
   plot.new()
   text(0.5, 0.5, 'No valid E-PGLS result to plot')
   dev.off()

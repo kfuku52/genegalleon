@@ -1,6 +1,118 @@
+extract_try_error_message = function(try_obj) {
+  cond = attr(try_obj, "condition")
+  if (!is.null(cond)) {
+    return(conditionMessage(cond))
+  }
+  msg = suppressWarnings(as.character(try_obj))
+  if (length(msg) == 0 || !nzchar(msg[1])) {
+    return("unknown error")
+  }
+  return(msg[1])
+}
+
+sanitize_cov_matrix = function(m, ridge = 1e-8) {
+  if (!is.matrix(m) || any(dim(m) == 0)) {
+    return(m)
+  }
+  out = suppressWarnings(matrix(as.numeric(m), nrow = nrow(m), ncol = ncol(m)))
+  if (!is.null(rownames(m))) {
+    rownames(out) = rownames(m)
+  }
+  if (!is.null(colnames(m))) {
+    colnames(out) = colnames(m)
+  }
+  out[!is.finite(out)] = 0
+  if (nrow(out) == ncol(out)) {
+    out = (out + t(out)) / 2
+    diag(out) = pmax(diag(out), ridge)
+  }
+  return(out)
+}
+
+sanitize_phenocov_list_generic = function(phenocov_list, ridge = 1e-8) {
+  if (length(phenocov_list) == 0) {
+    return(phenocov_list)
+  }
+  out = lapply(phenocov_list, sanitize_cov_matrix, ridge = ridge)
+  names(out) = names(phenocov_list)
+  return(out)
+}
+
+get_rphylopars_fit_fun = function(fit_fun = NULL) {
+  if (!is.null(fit_fun)) {
+    return(fit_fun)
+  }
+  if (!requireNamespace("Rphylopars", quietly = TRUE)) {
+    stop("Rphylopars is required but not installed.", call. = FALSE)
+  }
+  return(get("phylopars.lm", envir = asNamespace("Rphylopars")))
+}
+
+phylopars.lm.safe = function(formula_obj, trait_data, tree, model = "BM",
+                             pheno_error = TRUE, phylo_correlated = TRUE, pheno_correlated = TRUE,
+                             phenocov_list = list(), trait_col = NULL, expression_col = NULL,
+                             run_mode_label = "wide", ridge = 1e-8, fit_fun = NULL, verbose = TRUE) {
+  base_args = list(
+    formula = formula_obj,
+    trait_data = trait_data,
+    tree = tree,
+    model = model,
+    pheno_error = pheno_error,
+    phylo_correlated = phylo_correlated,
+    pheno_correlated = pheno_correlated,
+    phenocov_list = phenocov_list
+  )
+
+  attempt_specs = list(
+    list(label = paste0(run_mode_label, "_base"), npd = FALSE, usezscores = TRUE, repeat_optim_limit = 1L),
+    list(label = paste0(run_mode_label, "_npd"), npd = TRUE, usezscores = TRUE, repeat_optim_limit = 1L),
+    list(label = paste0(run_mode_label, "_npd_noz"), npd = TRUE, usezscores = FALSE, repeat_optim_limit = 1L),
+    list(label = paste0(run_mode_label, "_npd_retry"), npd = TRUE, usezscores = FALSE, repeat_optim_limit = 2L)
+  )
+
+  if (length(phenocov_list) > 0) {
+    if (!is.null(trait_col) && !is.null(expression_col)) {
+      phenocov_sanitized = sanitize_phenocov_list(phenocov_list, trait_col, expression_col, ridge = ridge)
+    } else {
+      phenocov_sanitized = sanitize_phenocov_list_generic(phenocov_list, ridge = ridge)
+    }
+    attempt_specs = c(attempt_specs, list(
+      list(
+        label = paste0(run_mode_label, "_npd_sanitized"),
+        npd = TRUE,
+        usezscores = FALSE,
+        repeat_optim_limit = 2L,
+        phenocov_list = phenocov_sanitized
+      )
+    ))
+  }
+
+  fit_fn = get_rphylopars_fit_fun(fit_fun = fit_fun)
+  last_error = ""
+  for (attempt in attempt_specs) {
+    call_args = base_args
+    call_args$npd = attempt$npd
+    call_args$usezscores = attempt$usezscores
+    call_args$repeat_optim_limit = attempt$repeat_optim_limit
+    if (!is.null(attempt[['phenocov_list']])) {
+      call_args$phenocov_list = attempt[['phenocov_list']]
+    }
+    fit_try = try(do.call(fit_fn, call_args), silent = TRUE)
+    if (!inherits(fit_try, "try-error")) {
+      return(list(fit = fit_try, fit_mode = attempt$label, error_message = ""))
+    }
+    last_error = extract_try_error_message(fit_try)
+    if (verbose) {
+      cat('phylopars attempt failed:', attempt$label, '::', last_error, '\n')
+    }
+  }
+
+  return(list(fit = NULL, fit_mode = paste0(run_mode_label, "_failed"), error_message = last_error))
+}
+
 build_phenocov_input = function(df_trait_exp, trait_col, expression_cols, expression_base) {
   if (length(expression_cols) == 0) {
-    return(list(trait_data = data.frame(), phenocov_list = list()))
+    return(list(trait_data = data.frame(), phenocov_list = list(), has_within_species_variation = FALSE))
   }
 
   expr_df = df_trait_exp[, expression_cols, drop = FALSE]
@@ -34,7 +146,7 @@ build_phenocov_input = function(df_trait_exp, trait_col, expression_cols, expres
   out[[expression_base]] = x_mean
   is_valid = !is.na(out[['species']]) & nzchar(out[['species']]) & !is.na(out[[trait_col]]) & !is.na(out[[expression_base]])
   if (!any(is_valid)) {
-    return(list(trait_data = data.frame(), phenocov_list = list()))
+    return(list(trait_data = data.frame(), phenocov_list = list(), has_within_species_variation = FALSE))
   }
   out = out[is_valid, c('species', trait_col, expression_base), drop = FALSE]
   x_se2 = x_se2[is_valid]
@@ -56,6 +168,7 @@ build_phenocov_input = function(df_trait_exp, trait_col, expression_cols, expres
 
   out[['se2']][!is.finite(out[['se2']])] = 0
   out[['se2']][out[['se2']] < 0] = 0
+  has_within_species_variation = any(out[['se2']] > 0)
 
   phenocov_list = vector('list', length = nrow(out))
   names(phenocov_list) = out[['species']]
@@ -68,7 +181,58 @@ build_phenocov_input = function(df_trait_exp, trait_col, expression_cols, expres
   }
 
   out = out[, c('species', trait_col, expression_base), drop = FALSE]
-  return(list(trait_data = out, phenocov_list = phenocov_list))
+  return(list(trait_data = out, phenocov_list = phenocov_list, has_within_species_variation = has_within_species_variation))
+}
+
+sanitize_phenocov_list = function(phenocov_list, trait_col, expression_col, ridge = 1e-8) {
+  if (length(phenocov_list) == 0) {
+    return(phenocov_list)
+  }
+  out = lapply(phenocov_list, function(m) {
+    out_m = matrix(0, nrow = 2, ncol = 2)
+    rownames(out_m) = c(trait_col, expression_col)
+    colnames(out_m) = c(trait_col, expression_col)
+    if (is.matrix(m) && all(dim(m) >= c(2, 2))) {
+      if (!is.null(rownames(m)) && !is.null(colnames(m)) &&
+          trait_col %in% rownames(m) && expression_col %in% rownames(m) &&
+          trait_col %in% colnames(m) && expression_col %in% colnames(m)) {
+        vals = suppressWarnings(as.numeric(m[c(trait_col, expression_col), c(trait_col, expression_col), drop = FALSE]))
+      } else {
+        vals = suppressWarnings(as.numeric(m[1:2, 1:2, drop = FALSE]))
+      }
+      if (length(vals) == 4) {
+        out_m[,] = matrix(vals, nrow = 2, byrow = FALSE)
+      }
+    }
+    out_m[!is.finite(out_m)] = 0
+    out_m = (out_m + t(out_m)) / 2
+    diag(out_m) = pmax(diag(out_m), ridge)
+    out_m
+  })
+  names(out) = names(phenocov_list)
+  return(out)
+}
+
+fit_phylopars_lm_with_retries = function(formula_obj, trait_data, tree, model = "BM",
+                                         pheno_error = TRUE, phylo_correlated = TRUE, pheno_correlated = TRUE,
+                                         phenocov_list = list(), trait_col = NULL, expression_col = NULL,
+                                         run_mode_label = "wide", ridge = 1e-8, fit_fun = NULL, verbose = TRUE) {
+  return(phylopars.lm.safe(
+    formula_obj = formula_obj,
+    trait_data = trait_data,
+    tree = tree,
+    model = model,
+    pheno_error = pheno_error,
+    phylo_correlated = phylo_correlated,
+    pheno_correlated = pheno_correlated,
+    phenocov_list = phenocov_list,
+    trait_col = trait_col,
+    expression_col = expression_col,
+    run_mode_label = run_mode_label,
+    ridge = ridge,
+    fit_fun = fit_fun,
+    verbose = verbose
+  ))
 }
 
 run_phylopars_regression = function(df_trait_exp, tree, trait_cols, expression_bases, output_cols, include_foreground_lineage = FALSE, verbose_working = FALSE, use_phenocov = FALSE) {
@@ -98,10 +262,14 @@ run_phylopars_regression = function(df_trait_exp, tree, trait_cols, expression_b
       pheno_error = TRUE
       pheno_correlated = TRUE
       phenocov_list = list()
+      has_within_species_variation = TRUE
       if (use_phenocov) {
         pheno_input = build_phenocov_input(df_trait_exp, trait_col, expression_cols, expression_base)
         df_model = pheno_input[['trait_data']]
         phenocov_list = pheno_input[['phenocov_list']]
+        if ('has_within_species_variation' %in% names(pheno_input)) {
+          has_within_species_variation = isTRUE(pheno_input[['has_within_species_variation']])
+        }
         formula_string = paste(explained_variable, '~', expression_base)
         run_mode = 'phenocov'
         fit_mode = run_mode
@@ -137,17 +305,31 @@ run_phylopars_regression = function(df_trait_exp, tree, trait_cols, expression_b
         next
       }
 
-      out_phylopars = try(phylopars.lm(
-        as.formula(formula_string),
-        trait_data = df_model,
-        tree = tree,
-        model = "BM",
-        pheno_error = pheno_error,
-        phylo_correlated = TRUE,
-        pheno_correlated = pheno_correlated,
-        phenocov_list = phenocov_list
-      ))
-      if (class(out_phylopars) == "try-error" && use_phenocov) {
+      out_phylopars = NULL
+      fit_error_message = ''
+      if (use_phenocov && !has_within_species_variation) {
+        fit_mode = 'phenocov_no_variation'
+        cat('No within-species variation was detected. Switching to mean-based fallback.\n')
+      } else {
+        fit_out = fit_phylopars_lm_with_retries(
+          formula_obj = as.formula(formula_string),
+          trait_data = df_model,
+          tree = tree,
+          model = "BM",
+          pheno_error = pheno_error,
+          phylo_correlated = TRUE,
+          pheno_correlated = pheno_correlated,
+          phenocov_list = phenocov_list,
+          trait_col = trait_col,
+          expression_col = expression_base,
+          run_mode_label = run_mode
+        )
+        out_phylopars = fit_out[['fit']]
+        fit_mode = fit_out[['fit_mode']]
+        fit_error_message = fit_out[['error_message']]
+      }
+
+      if (is.null(out_phylopars) && use_phenocov) {
         mean_col = paste0('mean_', expression_base)
         if (mean_col %in% colnames(df_trait_exp)) {
           cat('phenocov model failed; fallback to mean-based model:', formula_string, '\n')
@@ -160,20 +342,27 @@ run_phylopars_regression = function(df_trait_exp, tree, trait_cols, expression_b
           run_mode = 'mean_fallback'
           fit_mode = run_mode
           if (nrow(df_model) > 0) {
-            out_phylopars = try(phylopars.lm(
-              as.formula(formula_string),
+            fit_out = fit_phylopars_lm_with_retries(
+              formula_obj = as.formula(formula_string),
               trait_data = df_model,
               tree = tree,
               model = "BM",
               pheno_error = TRUE,
               phylo_correlated = TRUE,
-              pheno_correlated = TRUE
-            ))
+              pheno_correlated = TRUE,
+              phenocov_list = list(),
+              trait_col = trait_col,
+              expression_col = expression_base,
+              run_mode_label = run_mode
+            )
+            out_phylopars = fit_out[['fit']]
+            fit_mode = fit_out[['fit_mode']]
+            fit_error_message = fit_out[['error_message']]
           }
         }
       }
 
-      if (class(out_phylopars) != "try-error") {
+      if (!is.null(out_phylopars)) {
         cat('PGLS fit mode:', fit_mode, '\n')
         for (stat in output_cols[1:6]) {
           df_stat[i, stat] = out_phylopars[stat]
@@ -186,14 +375,10 @@ run_phylopars_regression = function(df_trait_exp, tree, trait_cols, expression_b
           df_stat[i, 'PCC'] = pcc
         }
       } else {
-        if (fit_mode == 'mean_fallback') {
-          fit_mode = 'mean_fallback_failed'
-        } else if (fit_mode == 'phenocov') {
-          fit_mode = 'phenocov_failed'
-        } else if (fit_mode == 'wide') {
-          fit_mode = 'wide_failed'
-        }
         cat('error during phylopars process:', formula_string, '\n')
+        if (!is.null(fit_error_message) && nzchar(fit_error_message)) {
+          cat('last phylopars error:', fit_error_message, '\n')
+        }
       }
 
       df_stat[i, 'trait'] = trait_col

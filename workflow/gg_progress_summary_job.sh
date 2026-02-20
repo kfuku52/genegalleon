@@ -2,12 +2,12 @@
 set -eo pipefail
 
 # SLURM in NIG supercomputer
-#SBATCH -J gg_progressSummary
+#SBATCH -J gg_progress_summary
 #SBATCH -c 4 # Number of CPUs
 #SBATCH --mem-per-cpu=8G # RAM per CPU in GB
 #SBATCH -t 2976:00:00 # maximum time in d-hh:mm:ss format. NIG supercomputer epyc/medium MaxTime=2976:00:00
-#SBATCH --output=gg_progressSummary_%A_%a.out
-#SBATCH --error=gg_progressSummary_%A_%a.err
+#SBATCH --output=gg_progress_summary_%A_%a.out
+#SBATCH --error=gg_progress_summary_%A_%a.err
 #SBATCH -p medium # partition name, cluster environment specific
 #SBATCH --chdir=.
 #SBATCH -a 1 # Array job, 1-N
@@ -56,7 +56,7 @@ dir_pg_output=$(workspace_output_root "${dir_pg}")
 dir_orthogroup="${dir_pg_output}/orthogroup"
 dir_transcriptome_assembly="${dir_pg_output}/transcriptome_assembly"
 file_genecount="${dir_pg_output}/orthofinder/Orthogroups/Orthogroups.GeneCount.selected.tsv"
-mode_transcriptome_assembly="auto" # {"auto", "sraid", "fastq", "metadata"} — Set to the same mode as in gg_transcriptomeAssembly_cmd.sh, or use "auto".
+mode_transcriptome_assembly="auto" # {"auto", "sraid", "fastq", "metadata"} — Set to the same mode as in gg_transcriptome_generation_cmd.sh, or use "auto".
 ncpu_progress_summary="${NSLOTS:-1}"
 
 if [[ -d "${dir_orthogroup}" ]]; then

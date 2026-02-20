@@ -2,12 +2,12 @@
 set -eo pipefail
 
 # SLURM in NIG supercomputer
-#SBATCH -J gg_inputPrep
+#SBATCH -J gg_input_generation
 #SBATCH -c 2 # Number of CPUs
 #SBATCH --mem-per-cpu=8G # RAM per CPU in GB
 #SBATCH -t 2976:00:00 # maximum time in d-hh:mm:ss format. NIG supercomputer epyc/medium MaxTime=2976:00:00
-#SBATCH --output=gg_inputPrep_%A_%a.out
-#SBATCH --error=gg_inputPrep_%A_%a.err
+#SBATCH --output=gg_input_generation_%A_%a.out
+#SBATCH --error=gg_input_generation_%A_%a.err
 #SBATCH -p medium # partition name, cluster environment specific
 #SBATCH --chdir=.
 #SBATCH -a 1 # Array job, 1-N
@@ -72,7 +72,7 @@ if ! command -v singularity >/dev/null 2>&1; then
 fi
 
 cd "${dir_pg}"
-${singularity_command} "${gg_image}" < "${dir_script}/gg_inputPrep_cmd.sh"
+${singularity_command} "${gg_image}" < "${dir_script}/gg_input_generation_cmd.sh"
 if ! gg_trigger_versions_dump "$(basename "${BASH_SOURCE[0]}")"; then
   echo "Warning: gg_versions trigger failed."
 fi

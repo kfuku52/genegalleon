@@ -104,6 +104,14 @@ Wrappers expect the SIF at repo root by default:
 
 - `workflow/../genegalleon.sif`
 
+Runtime profile highlights in the current container scaffold:
+
+- single conda runtime env: `base` (`biotools`/`r` split envs are obsolete),
+- `iqtree` is conda-pinned to `3.*`,
+- `pigz` is included for fast compression/decompression,
+- `Notung.jar` is installed during image build,
+- BUSCO is installed from source (`v6.0.0`) during image build.
+
 ## Workspace Layout and Data Model
 
 ### Split layout (recommended)
@@ -173,7 +181,7 @@ Accepted forms:
 - in-frame CDS FASTA,
 - plain gene ID list (one ID per line).
 
-`gg_geneFamilyPhylogeny_cmd.sh` auto-detects query type:
+`gg_gene_evolution_cmd.sh` auto-detects query type:
 
 - FASTA with DNA sequences: translated to AA query,
 - FASTA with protein sequences: used directly,
@@ -181,7 +189,7 @@ Accepted forms:
 
 ### Transcriptome assembly input modes
 
-`gg_transcriptomeAssembly_cmd.sh` supports three mutually exclusive modes:
+`gg_transcriptome_generation_cmd.sh` supports three mutually exclusive modes:
 
 - `mode_sraid=1`
   - input: `workspace/input/species_sra_list/GENUS_SPECIES.txt`
@@ -274,9 +282,9 @@ Template file:
 
 - `workspace/input/manifest/download_manifest.template.tsv`
 
-`gg_inputPrep_job.sh` wrapper:
+`gg_input_generation_job.sh` wrapper:
 
-- runs `gg_inputPrep_cmd.sh` inside the container as a single entrypoint,
+- runs `gg_input_generation_cmd.sh` inside the container as a single entrypoint,
 - can build a manifest and immediately format inputs in one run,
 - can validate produced `species_cds` and `species_gff` consistency.
 
@@ -296,14 +304,14 @@ Alternative runtime overrides (without editing files) via env vars:
 - `GG_INPUT_SUMMARY_OUTPUT`.
 - `GG_INPUTPREP_CONFIG` (explicit profile path override).
 
-Optional host dataset bind for `gg_inputPrep_job.sh`:
+Optional host dataset bind for `gg_input_generation_job.sh`:
 
 ```bash
 export GG_INPUT_DATASET_HOST_PATH="/absolute/path/to/gfe_dataset"
-bash workflow/gg_inputPrep_job.sh
+bash workflow/gg_input_generation_job.sh
 ```
 
-This binds the host path to `/external/gfe_dataset` in the container and sets `GG_DATASET_ROOT` for `gg_inputPrep_cmd.sh`.
+This binds the host path to `/external/gfe_dataset` in the container and sets `GG_DATASET_ROOT` for `gg_input_generation_cmd.sh`.
 
 ## Quick Start
 
@@ -312,32 +320,24 @@ From repository root:
 ```bash
 cd workflow
 
-# 0) Optional environment check in container
-bash gg_test_job.sh
-
 # 1) Optional input download/format automation
-bash gg_inputPrep_job.sh
+bash gg_input_generation_job.sh
 
-# 2) Orthogroups from species CDS
-bash gg_orthofinder_job.sh
+# 2) Unified genome-evolution pipeline
+#    (runs inlined stages: speciesTree -> orthofinder -> genomeEvolution)
+bash gg_genome_evolution_job.sh
 
-# 3) Species tree inference and dating
-bash gg_speciesTree_job.sh
+# 3) Gene-family phylogeny/annotation
+bash gg_gene_evolution_job.sh
 
-# 4) Gene-family phylogeny/annotation
-bash gg_geneFamilyPhylogeny_job.sh
+# 4) Build orthogroup SQLite DB
+bash gg_gene_database_job.sh
 
-# 5) (Optional) genome-evolution analyses
-bash gg_genomeEvolution_job.sh
-
-# 6) Build orthogroup SQLite DB
-bash gg_orthogroupDatabasePrep_job.sh
-
-# 7) Progress summaries
-bash gg_progressSummary_job.sh
+# 5) Progress summaries
+bash gg_progress_summary_job.sh
 ```
 
-Current default in `gg_geneFamilyPhylogeny_cmd.sh` is:
+Current default in `gg_gene_evolution_cmd.sh` is:
 
 - `mode_query2family=1`
 - `query_blast_method="diamond"`
@@ -346,7 +346,7 @@ So array-task cardinality is the number of files in `workspace/input/query2famil
 
 ## Main Stages and What They Do
 
-### `gg_inputPrep_job.sh`
+### `gg_input_generation_job.sh`
 
 Purpose:
 
@@ -357,7 +357,7 @@ Purpose:
 
 Main scripts:
 
-- `workflow/gg_inputPrep_cmd.sh`
+- `workflow/gg_input_generation_cmd.sh`
 - `workflow/script/build_download_manifest.py`
 - `workflow/script/format_species_inputs.py`
 
@@ -375,7 +375,7 @@ python workflow/script/summarize_inputprep_runs.py \
   --last-n 10
 ```
 
-### `gg_transcriptomeAssembly_job.sh`
+### `gg_transcriptome_generation_job.sh`
 
 Purpose:
 
@@ -397,9 +397,9 @@ Notable defaults:
 
 - `assembly_method="Trinity"`
 - `kallisto_reference="longest_cds"`
-- several output FASTA files are `.fa.gz`/`.fasta.gz`.
+- staged FASTA outputs are written as `.fa.gz`.
 
-### `gg_cdsAnnotation_job.sh`
+### `gg_genome_annotation_job.sh`
 
 Purpose:
 
@@ -420,7 +420,23 @@ Notable defaults:
 - most heavy tasks default to `0`,
 - `run_multispecies_summary=1` by default.
 
-### `gg_orthofinder_job.sh`
+### `gg_genome_evolution_job.sh`
+
+Purpose:
+
+- unified genome-evolution entrypoint that serially runs:
+  - inlined species-tree stage (formerly `gg_speciesTree_cmd.sh`)
+  - inlined orthofinder stage (formerly `gg_orthofinder_cmd.sh`)
+  - inlined genome-evolution stage (formerly `gg_genomeEvolution_cmd.sh`)
+- keeps stage-level skip semantics (exit code `8`) and aborts on real failures.
+
+Main output roots:
+
+- `workspace/output/species_tree`
+- `workspace/output/orthofinder`
+- `workspace/output/genome_evolution`
+
+### Inlined Stage: Orthofinder
 
 Purpose:
 
@@ -440,7 +456,7 @@ Notable defaults:
 - `orthogroup_table="HOG"`
 - species-tree-aware OrthoFinder is used when species tree exists.
 
-### `gg_speciesTree_job.sh`
+### Inlined Stage: Species Tree
 
 Purpose:
 
@@ -462,8 +478,10 @@ Notable defaults:
 - `mode_orthogroup=0` (currently marked not supported)
 - `busco_lineage="embryophyta_odb12"`
 - `genetic_code=1`
+- single-copy FASTA/alignment outputs are standardized to `.fa.gz`, and legacy
+  plain `.fasta` files in species-tree intermediate directories are auto-migrated.
 
-### `gg_geneFamilyPhylogeny_job.sh`
+### `gg_gene_evolution_job.sh`
 
 Purpose:
 
@@ -481,15 +499,25 @@ Main outputs:
 Notable defaults in current snapshot:
 
 - `mode_query2family=1`
+- `run_rps_blast=1` (Pfam domain annotation is on by default),
 - `run_tree_plot=1`
 - `run_summary=1`
 - many advanced analyses default to `0`.
 
+Current behavior notes:
+
+- if `run_generax=1`, initial IQ-TREE disables UFBOOT and support is
+  recomputed after GeneRax on the GeneRax topology,
+- Pfam RPS-BLAST DB (`Pfam_LE`) is auto-prepared when missing, with lock-based
+  synchronization for array jobs,
+- gene-tree/species-tree PGLS outputs are `gene_tree_PGLS.tsv` and
+  `species_tree_PGLS.tsv`.
+
 Wrapper-specific note:
 
-- `gg_geneFamilyPhylogeny_job.sh` sets conservative local defaults for some heavy steps via env vars (for example GeneRax and Pfam-related toggles). Review wrapper exports if you want pure command-script defaults.
+- `gg_gene_evolution_job.sh` sets conservative local defaults for some heavy steps via env vars (for example GeneRax and Pfam-related toggles). Review wrapper exports if you want pure command-script defaults.
 
-### `gg_genomeEvolution_job.sh`
+### Inlined Stage: Genome Evolution
 
 Purpose:
 
@@ -506,7 +534,7 @@ Notable defaults:
 - `run_cafe=0`, `run_go_enrichment=0` by default,
 - GO target can be specified by species name or branch ID.
 
-### `gg_orthogroupDatabasePrep_job.sh`
+### `gg_gene_database_job.sh`
 
 Purpose:
 
@@ -521,7 +549,7 @@ Required input directories:
 - `workspace/output/orthogroup/stat.tree`
 - `workspace/output/orthogroup/stat.branch`
 
-### `gg_progressSummary_job.sh`
+### `gg_progress_summary_job.sh`
 
 Purpose:
 
@@ -534,11 +562,10 @@ Main outputs in current working directory:
 
 Note:
 
-- this stage is job-wrapper-only (`gg_progressSummary_cmd.sh` does not exist).
+- this stage is job-wrapper-only (`gg_progress_summary_cmd.sh` does not exist).
 
 ### Utility wrappers
 
-- `gg_test_job.sh`: validates key packages and executables in container environments.
 - `gg_versions_job.sh`: dumps installed versions and DB/asset paths.
   - the actual collector script is `workflow/script/gg_versions.sh`.
   - this dump is also auto-triggered at the end of each `gg_*_job.sh` on successful completion.
@@ -556,12 +583,12 @@ You can run with scheduler submission (`sbatch`, `qsub`) or direct `bash`.
 
 Array-size rules:
 
-- `gg_speciesTree_job.sh`: fixed single task.
-- `gg_geneFamilyPhylogeny_job.sh`:
+- `gg_genome_evolution_job.sh`: fixed single task.
+- `gg_gene_evolution_job.sh`:
   - `mode_orthogroup=1`: number of rows in `Orthogroups.GeneCount.selected.tsv` (excluding header),
   - `mode_query2family=1`: number of files in `workspace/input/query2family_input`.
-- `gg_cdsAnnotation_job.sh`: number of input species CDS files.
-- `gg_transcriptomeAssembly_job.sh`: number of species input units for the chosen mode.
+- `gg_genome_annotation_job.sh`: number of input species CDS files.
+- `gg_transcriptome_generation_job.sh`: number of species input units for the chosen mode.
 
 ## Configuration and Common Parameters
 
@@ -592,16 +619,16 @@ busco_lineage="${GG_COMMON_BUSCO_LINEAGE}"
 
 ## Compression and FASTA Handling Policy
 
-Current behavior is intentionally mixed but compatible:
+Current policy:
 
 - input discovery across major stages supports both plain and gzipped FASTA,
-- some outputs are gzipped by design (for example transcriptome longest-CDS and contamination-removal outputs),
-- some downstream outputs remain plain `.fasta` in current scripts.
+- pipeline-tracked FASTA outputs (especially `file_*` targets in `gg_*_cmd.sh`)
+  are standardized to `.fa.gz`,
+- in-house scripts prefer gzipped FASTA directly; plain FASTA is generated only
+  as temporary/intermediate input when a third-party tool requires uncompressed files.
 
-Tree plotting helpers were updated to be robust with compressed alignments:
-
-- candidate order: `.fa.gz` -> `.fasta` -> `.fa`,
-- plain FASTA is generated temporarily only when required by downstream tools.
+Species-tree and gene-evolution intermediate directories were updated to keep
+main retained FASTA/alignment artifacts gzipped with `.fa.gz` naming.
 
 ## Troubleshooting
 
@@ -619,7 +646,6 @@ Tree plotting helpers were updated to be robust with compressed alignments:
 
 ```bash
 cd workflow
-bash gg_test_job.sh
 bash gg_versions_job.sh
 ```
 

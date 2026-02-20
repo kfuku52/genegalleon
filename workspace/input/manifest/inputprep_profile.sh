@@ -1,5 +1,5 @@
-# Runtime profile for workflow/gg_inputPrep_cmd.sh
-# Loaded automatically by gg_inputPrep_cmd.sh if present.
+# Runtime profile for workflow/gg_input_generation_cmd.sh
+# Loaded automatically by gg_input_generation_cmd.sh if present.
 
 # 0/1 switches
 run_build_manifest=1
@@ -21,7 +21,7 @@ auth_bearer_token_env="" # e.g., GFE_DOWNLOAD_BEARER_TOKEN
 http_header="" # e.g., "User-Agent: genegalleon-inputprep"
 
 # Input source selection:
-# For gg_inputPrep_job.sh + GG_INPUT_DATASET_HOST_PATH, use /external/gfe_dataset.
+# For gg_input_generation_job.sh + GG_INPUT_DATASET_HOST_PATH, use /external/gfe_dataset.
 dataset_root="/external/gfe_dataset"
 input_dir=""
 download_manifest=""

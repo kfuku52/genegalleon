@@ -95,13 +95,36 @@ cat('Elapsed time for species overlap search:', (end - start)[3], 'sec\n')
 
 cat('Starting the analysis of NOTUNG root positions.\n')
 start = proc.time()
-dir_notung = file.path(getwd(), sub('.zip$', '', basename(args[['notung_root_zip']])))
-if (dir.exists(dir_notung)) {
-    unlink(dir_notung, recursive = TRUE)
+zip_members = unzip(args[['notung_root_zip']], list = TRUE)$Name
+zip_members = zip_members[nzchar(zip_members)]
+dir_candidates = unique(sub('/.*$', '', zip_members))
+for (dir_candidate in dir_candidates) {
+    candidate_path = file.path(getwd(), dir_candidate)
+    if (dir.exists(candidate_path)) {
+        unlink(candidate_path, recursive = TRUE)
+    }
 }
 unzip(args[['notung_root_zip']])
-files = list.files(dir_notung)
-nwk_files = files[grep('[0-9]$', files)]
+dir_notung = NULL
+for (dir_candidate in dir_candidates) {
+    candidate_path = file.path(getwd(), dir_candidate)
+    if (dir.exists(candidate_path)) {
+        dir_notung = candidate_path
+        break
+    }
+}
+if (is.null(dir_notung)) {
+    dir_notung_legacy = file.path(getwd(), sub('.zip$', '', basename(args[['notung_root_zip']])))
+    if (dir.exists(dir_notung_legacy)) {
+        dir_notung = dir_notung_legacy
+    }
+}
+if (is.null(dir_notung)) {
+    nwk_files = character(0)
+} else {
+    files = list.files(dir_notung)
+    nwk_files = files[grep('[0-9]$', files)]
+}
 notung_roots = vector(mode='numeric', length(nwk_files))
 cat('Number of rooted NOTUNG trees:', length(nwk_files), '\n')
 
@@ -134,9 +157,15 @@ if (is_mad_compatible_with_notung) {
     cat('The MAD root position is not compatible with NOTUNG results.\n')
     cat('The midpoint root position is found to be compatible with NOTUNG resunts. Returning the midpoint tree.\n')
     out_tree = midpoint_tree
-} else {
+} else if (length(nwk_files) > 0) {
     cat('Neither MAD nor midpoint tree is compatible with NOTUNG results. Returning the first NOTUNG tree.\n')
     out_tree = read.tree(file.path(dir_notung, nwk_files[1]))
+} else if (!is.null(mad_tree)) {
+    cat('No rooted NOTUNG trees were found. Returning the MAD tree.\n')
+    out_tree = mad_tree
+} else {
+    cat('No rooted NOTUNG trees were found. Returning the midpoint tree.\n')
+    out_tree = midpoint_tree
 }
 cat('Elapsed time for the analysis of NOTUNG root positions:', (proc.time() - start)[3], 'sec\n')
 

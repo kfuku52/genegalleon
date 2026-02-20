@@ -76,7 +76,7 @@ IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 OUT=genegalleon_20260211_amd.s
   - available arm64 `jellyfish` builds are Python-only and do not provide the
     required `jellyfish` CLI binary.
 - Repeat-analysis pipeline steps that depended on the removed `repeat` conda env
-  were dropped from `workflow/gg_cdsAnnotation_cmd.sh`.
+  were dropped from `workflow/gg_genome_annotation_cmd.sh`.
 - Required/optional command validation report is generated at build time:
   - `/opt/pg/logs/runtime_validation_<arch>.tsv`
 - `ete4` is installed via `pip` in `base` because `nwkit` imports `ete4`
@@ -98,7 +98,9 @@ Inside built container:
 ```bash
 source /home/.bashrc
 conda activate base
-bash workflow/gg_test_cmd.sh
+hyphy --version
+iqtree --version
+mapnh --help
 ```
 
 Then run one pipeline smoke workflow with minimal data.

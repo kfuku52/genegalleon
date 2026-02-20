@@ -2,6 +2,7 @@
 
 import argparse
 import gzip
+import hashlib
 import os
 import shutil
 import subprocess
@@ -46,6 +47,7 @@ def build_arg_parser():
     parser.add_argument("--dir_sp_cds", required=True, type=str)
     parser.add_argument("--dir_sp_gff", required=True, type=str)
     parser.add_argument("--cache_dir", required=True, type=str)
+    parser.add_argument("--lock_dir", default="", type=str)
     parser.add_argument("--gff2genestat_script", required=True, type=str)
     parser.add_argument("--window", default=5, type=int)
     parser.add_argument("--evalue", default=0.01, type=float)
@@ -59,6 +61,17 @@ def ensure_parent_dir(path):
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
+
+
+def resolve_lock_dir(lock_dir):
+    if isinstance(lock_dir, str) and lock_dir.strip():
+        resolved = lock_dir
+    else:
+        tmp_root = os.environ.get("TMPDIR", tempfile.gettempdir())
+        user_name = os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown_user"
+        resolved = os.path.join(tmp_root, "genegalleon", user_name, "synteny_neighbors_locks")
+    os.makedirs(resolved, exist_ok=True)
+    return resolved
 
 
 def open_text(path):
@@ -142,6 +155,7 @@ def ensure_species_gene_cache(
     species_cds_path,
     dir_sp_gff,
     cache_dir,
+    lock_dir,
     gff2genestat_script,
     threads,
 ):
@@ -149,7 +163,10 @@ def ensure_species_gene_cache(
     out_path = os.path.join(cache_dir, species_name + ".gff_info.tsv")
     if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
         return out_path
-    lock_path = out_path + ".lock"
+    lock_key = "{}|{}".format(os.path.abspath(cache_dir), species_name)
+    lock_name = hashlib.sha1(lock_key.encode("utf-8")).hexdigest() + ".lock"
+    lock_path = os.path.join(lock_dir, lock_name)
+    ensure_parent_dir(lock_path)
     with open(lock_path, "a") as lock_handle:
         if HAS_FCNTL:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
@@ -356,6 +373,7 @@ def main():
     args = build_arg_parser().parse_args()
     args.window = max(1, int(args.window))
     args.threads = max(1, int(args.threads))
+    lock_dir = resolve_lock_dir(args.lock_dir)
     focal_gene_ids = sorted(set(read_fasta_ids(args.focal_cds_fasta)))
     if len(focal_gene_ids) == 0:
         write_empty_output(args.outfile)
@@ -383,6 +401,7 @@ def main():
                 species_cds_path=sp_cds,
                 dir_sp_gff=args.dir_sp_gff,
                 cache_dir=args.cache_dir,
+                lock_dir=lock_dir,
                 gff2genestat_script=args.gff2genestat_script,
                 threads=args.threads,
             )

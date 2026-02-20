@@ -79,15 +79,31 @@ def main():
     outfile = 'grampa_summary.tsv'
 
     print('Processing grampa det file')
-    det = pandas.read_csv(args.grampa_det, sep='\t', header=0, low_memory=False)
+    det = pandas.read_csv(args.grampa_det, sep='\t', header=0, low_memory=False, comment='#')
     det.columns = det.columns.str.replace('^# ', '', regex=True)
     det.columns = det.columns.str.replace('Total score', 'total_score', regex=False)
     det.columns = det.columns.str.replace('Maps', 'maps', regex=False)
-    det = det.loc[(det['GT/MT combo'].str.startswith('*')), :]
-    det = det.loc[(~det['dups'].astype(str).str.endswith('maps found!')), :].reset_index(drop=True)
-    det['gene_tree'] = det['GT/MT combo'].str.replace('* ', '', regex=False).str.replace(' to.*', '', regex=True)
-    det['mul_tree'] = det['GT/MT combo'].str.replace('.* to ', '', regex=True)
-    det = det.loc[:, ['gene_tree', 'mul_tree', 'dups', 'losses', 'total_score', 'maps']]
+
+    if 'GT/MT combo' in det.columns:
+        # Legacy Grampa output format.
+        det = det.loc[(det['GT/MT combo'].str.startswith('*')), :]
+        det = det.loc[(~det['dups'].astype(str).str.endswith('maps found!')), :].reset_index(drop=True)
+        det['gene_tree'] = det['GT/MT combo'].str.replace('* ', '', regex=False).str.replace(' to.*', '', regex=True)
+        det['mul_tree'] = det['GT/MT combo'].str.replace('.* to ', '', regex=True)
+        det = det.loc[:, ['gene_tree', 'mul_tree', 'dups', 'losses', 'total_score', 'maps']]
+    elif {'mul.tree', 'gene.tree', 'dups', 'losses', 'total.score', 'maps'}.issubset(det.columns):
+        # Grampa 1.4.4+ output format.
+        det = det.loc[:, ['mul.tree', 'gene.tree', 'dups', 'losses', 'total.score', 'maps']].copy()
+        det = det.rename(columns={'total.score': 'total_score'})
+        det['gene_tree'] = 'GT-' + det['gene.tree'].astype(str)
+        det['mul_tree'] = 'MT-' + det['mul.tree'].astype(str)
+        det = det.loc[:, ['gene_tree', 'mul_tree', 'dups', 'losses', 'total_score', 'maps']]
+    else:
+        raise ValueError(
+            f'Unsupported grampa detailed format: missing expected columns in {args.grampa_det}. '
+            f'Columns: {list(det.columns)}'
+        )
+
     print('{} Grampa maps were found.'.format(det.shape[0]))
     if det.shape[0] == 0:
         print('No Grampa maps were dound. A placeholder output file will be generated.')
@@ -123,12 +139,29 @@ def main():
             update_det_with_species_genes(det, gt_id, species_names, species_gene_map, row_indices_by_gt)
 
     print('Processing grampa out file')
-    with open(args.grampa_out, 'r') as f:
-        out_txts = f.readlines()
-    out_txts = [l for l in out_txts if l.startswith('MT-')]
-    out_txts = [re.split('\t', l) for l in out_txts]
-    out = pandas.DataFrame(out_txts, columns=['mul_tree', 'H1_node', 'H2_node', 'mul_tree_string', 'multree_score'])
-    out['multree_score'] = out['multree_score'].replace('\n', '', regex=False).astype(int)
+    out = pandas.read_csv(args.grampa_out, sep='\t', header=0, low_memory=False, comment='#')
+    if {'mul.tree', 'h1.node', 'h2.node', 'score', 'labeled.tree'}.issubset(out.columns):
+        # Grampa 1.4.4+ output format.
+        out = out.rename(
+            columns={
+                'mul.tree': 'mul_tree',
+                'h1.node': 'H1_node',
+                'h2.node': 'H2_node',
+                'score': 'multree_score',
+                'labeled.tree': 'mul_tree_string',
+            }
+        )
+        out['mul_tree'] = 'MT-' + out['mul_tree'].astype(str)
+        out['multree_score'] = pandas.to_numeric(out['multree_score'], errors='coerce')
+        out = out.loc[:, ['mul_tree', 'H1_node', 'H2_node', 'mul_tree_string', 'multree_score']]
+    else:
+        # Legacy Grampa output format.
+        with open(args.grampa_out, 'r') as f:
+            out_txts = f.readlines()
+        out_txts = [l for l in out_txts if l.startswith('MT-')]
+        out_txts = [re.split('\t', l) for l in out_txts]
+        out = pandas.DataFrame(out_txts, columns=['mul_tree', 'H1_node', 'H2_node', 'mul_tree_string', 'multree_score'])
+        out['multree_score'] = out['multree_score'].replace('\n', '', regex=False).astype(int)
     print('{} MUL trees were found.'.format(out.shape[0]))
 
     print('Adding the original file names of gene trees')

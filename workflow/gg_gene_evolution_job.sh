@@ -2,12 +2,12 @@
 set -eo pipefail
 
 # SLURM in NIG supercomputer
-#SBATCH -J gg_geneFamilyPhylogeny
+#SBATCH -J gg_gene_evolution
 #SBATCH -c 4 # Number of CPUs
 #SBATCH --mem-per-cpu=8G # RAM per CPU in GB
 #SBATCH -t 2976:00:00 # maximum time in d-hh:mm:ss format. NIG supercomputer epyc/medium MaxTime=2976:00:00
-#SBATCH --output=gg_geneFamilyPhylogeny_%A_%a.out
-#SBATCH --error=gg_geneFamilyPhylogeny_%A_%a.err
+#SBATCH --output=gg_gene_evolution_%A_%a.out
+#SBATCH --error=gg_gene_evolution_%A_%a.err
 #SBATCH -p medium # partition name, cluster environment specific
 #SBATCH --chdir=.
 #SBATCH -a 1 # Array job, 1-N
@@ -75,18 +75,18 @@ set_singularityenv
 
 cd "${dir_pg}"
 set +e
-${singularity_command} "${gg_image}" < "${dir_script}/gg_geneFamilyPhylogeny_cmd.sh"
+${singularity_command} "${gg_image}" < "${dir_script}/gg_gene_evolution_cmd.sh"
 first_run_exit_code=$?
 set -e
 if [[ ${first_run_exit_code} -eq 8 ]]; then
-  echo "Output files were detected. No more run of gg_geneFamilyPhylogeny_cmd.sh is necessary."
+  echo "Output files were detected. No more run of gg_gene_evolution_cmd.sh is necessary."
 else
   if [[ ${first_run_exit_code} -ne 0 ]]; then
     echo "First run exited with code ${first_run_exit_code}. Retrying once."
   fi
   # Jobs are misteriously killed after GeneRax, so run twice to complete all steps if output files were not detected.
   set +e
-  ${singularity_command} "${gg_image}" < "${dir_script}/gg_geneFamilyPhylogeny_cmd.sh"
+  ${singularity_command} "${gg_image}" < "${dir_script}/gg_gene_evolution_cmd.sh"
   second_run_exit_code=$?
   set -e
   if [[ ${second_run_exit_code} -eq 8 ]]; then

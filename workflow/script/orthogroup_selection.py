@@ -337,7 +337,7 @@ def print_selection_stats(args, df_gc_original, df_gc, sp_cols):
     num_sp = (df_gc.loc[:, sp_cols] >= 1).sum(axis=1)
     num_nomissing_og = (num_sp == len(sp_cols)).sum()
     print('Number of selected orthogroups without missing species: {:,}'.format(num_nomissing_og))
-    txt = 'In gg_geneFamilyPhylogeny_job.sh, set the array job range of 1-{} to examine all selected orthogroups.'
+    txt = 'In gg_gene_evolution_job.sh, set the array job range of 1-{} to examine all selected orthogroups.'
     print(txt.format(df_gc.shape[0]))
 
 
