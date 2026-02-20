@@ -49,6 +49,9 @@ if (is.null(args[['replicate_sep']]) || nchar(args[['replicate_sep']]) == 0) {
 if (is.null(args[['merge_replicates']]) || !(args[['merge_replicates']] %in% c('yes', 'no'))) {
   args[['merge_replicates']] = 'yes'
 }
+if (is.null(args[['ws_subject']]) || !(args[['ws_subject']] %in% c('auto', 'species', 'gene_id'))) {
+  args[['ws_subject']] = 'auto'
+}
 iter = suppressWarnings(as.integer(args[['iter']]))
 if (is.na(iter) || iter < 9) {
   iter = 199
@@ -90,20 +93,27 @@ get_expression_bases_local = function(exp, replicate_sep = '_') {
 sort_exp_fn = if (exists('sort_exp', mode = 'function')) get('sort_exp') else sort_exp_local
 get_expression_bases_fn = if (exists('get_expression_bases', mode = 'function')) get('get_expression_bases') else get_expression_bases_local
 
-build_species_tree_from_gene_tree = function(gene_tree) {
-  species = leaf_to_species(gene_tree[['tip.label']])
-  keep_idx = !duplicated(species)
-  keep_tip = gene_tree[['tip.label']][keep_idx]
-  sp_tree = ape::keep.tip(gene_tree, keep_tip)
-  sp_tree[['tip.label']] = species[keep_idx]
-  if (is.null(sp_tree[['edge.length']])) {
-    sp_tree = ape::compute.brlen(sp_tree)
+build_observation_cov_from_gene_tree = function(dat, gene_tree) {
+  if (nrow(dat) == 0) {
+    return(list(data = dat, Cov = NULL))
   }
-  is_bad = !is.finite(sp_tree[['edge.length']]) | (sp_tree[['edge.length']] <= 0)
-  if (any(is_bad)) {
-    sp_tree[['edge.length']][is_bad] = 1e-8
+  cov_gene = ape::vcv.phylo(gene_tree)
+  tip_ids = rownames(cov_gene)
+  dat = dat[dat[['gene_id']] %in% tip_ids, , drop = FALSE]
+  if (nrow(dat) == 0) {
+    return(list(data = dat, Cov = NULL))
   }
-  return(sp_tree)
+  idx = match(dat[['gene_id']], tip_ids)
+  cov_obs = cov_gene[idx, idx, drop = FALSE]
+  eps = suppressWarnings(max(diag(cov_obs), na.rm = TRUE)) * 1e-8
+  if (!is.finite(eps) || eps <= 0) {
+    eps = 1e-8
+  }
+  diag(cov_obs) = diag(cov_obs) + eps
+  obs_ids = paste0('obs_', seq_len(nrow(dat)))
+  rownames(cov_obs) = obs_ids
+  colnames(cov_obs) = obs_ids
+  return(list(data = dat, Cov = cov_obs))
 }
 
 empty_stat_row = function(output_cols, trait_col, expression_base, fit_mode = 'no_data') {
@@ -132,6 +142,7 @@ prepare_epgls_data = function(df_trait_exp, trait_col, expression_base, expressi
       rep(NA_real_, nrow(df_trait_exp))
     }
     dat = data.frame(
+      gene_id = as.character(df_trait_exp[['gene_id']]),
       species = as.character(df_trait_exp[['species']]),
       y = suppressWarnings(as.numeric(df_trait_exp[[trait_col]])),
       x = x,
@@ -146,6 +157,7 @@ prepare_epgls_data = function(df_trait_exp, trait_col, expression_base, expressi
     }
     dat_list = lapply(expression_cols, function(expr_col) {
       data.frame(
+        gene_id = as.character(df_trait_exp[['gene_id']]),
         species = as.character(df_trait_exp[['species']]),
         y = suppressWarnings(as.numeric(df_trait_exp[[trait_col]])),
         x = suppressWarnings(as.numeric(df_trait_exp[[expr_col]])),
@@ -154,34 +166,49 @@ prepare_epgls_data = function(df_trait_exp, trait_col, expression_base, expressi
     })
     dat = do.call(rbind, dat_list)
   }
-  dat = dat[!is.na(dat[['species']]) & nzchar(dat[['species']]) & !is.na(dat[['y']]) & !is.na(dat[['x']]), , drop = FALSE]
+  dat = dat[
+    !is.na(dat[['gene_id']]) & nzchar(dat[['gene_id']]) &
+      !is.na(dat[['species']]) & nzchar(dat[['species']]) &
+      !is.na(dat[['y']]) & !is.na(dat[['x']]),
+    ,
+    drop = FALSE
+  ]
   rownames(dat) = NULL
   return(dat)
 }
 
-fit_epgls_one = function(df_trait_exp, species_tree, trait_col, expression_base, expression_cols, merge_replicates, iter, output_cols) {
+resolve_ws_subject = function(ws_subject_arg, merge_replicates) {
+  if (ws_subject_arg == 'auto') {
+    if (merge_replicates == 'no') {
+      return('gene_id')
+    }
+    return('species')
+  }
+  return(ws_subject_arg)
+}
+
+fit_epgls_one = function(df_trait_exp, gene_tree, trait_col, expression_base, expression_cols, merge_replicates, ws_subject, iter, output_cols) {
   dat = prepare_epgls_data(df_trait_exp, trait_col, expression_base, expression_cols, merge_replicates)
   if (nrow(dat) == 0) {
     return(empty_stat_row(output_cols, trait_col, expression_base, 'no_data'))
   }
 
-  sp_keep = unique(dat[['species']])
-  tree_use = species_tree
-  drop_tips = tree_use[['tip.label']][!(tree_use[['tip.label']] %in% sp_keep)]
-  if (length(drop_tips) > 0) {
-    tree_use = ape::drop.tip(tree_use, drop_tips)
+  cov_obj = build_observation_cov_from_gene_tree(dat, gene_tree)
+  dat = cov_obj[['data']]
+  cov_mat = cov_obj[['Cov']]
+  if (!(ws_subject %in% colnames(dat))) {
+    return(empty_stat_row(output_cols, trait_col, expression_base, 'no_data'))
   }
-  dat = dat[dat[['species']] %in% tree_use[['tip.label']], , drop = FALSE]
-  if (nrow(dat) < 4 || length(unique(dat[['species']])) < 3 || length(tree_use[['tip.label']]) < 3) {
+  dat[['subject_block']] = factor(dat[[ws_subject]])
+  if (nrow(dat) < 4 || length(unique(dat[['species']])) < 3 || length(unique(dat[['gene_id']])) < 3 || length(unique(dat[['subject_block']])) < 3 || is.null(cov_mat)) {
     return(empty_stat_row(output_cols, trait_col, expression_base, 'no_data'))
   }
 
-  cov_mat = ape::vcv.phylo(tree_use)
   fit = try(
     RRPP::lm.rrpp.ws(
-      y ~ x,
+      y ~ subject_block + x,
       data = dat,
-      subjects = 'species',
+      subjects = 'subject_block',
       Cov = cov_mat,
       iter = iter,
       print.progress = FALSE,
@@ -216,7 +243,13 @@ fit_epgls_one = function(df_trait_exp, species_tree, trait_col, expression_base,
   fstat = suppressWarnings(as.numeric(tt[['F']]))
   pval = suppressWarnings(as.numeric(tt[['Pr(>F)']]))
   pcc = suppressWarnings(cor(dat[['x']], dat[['y']], method = 'pearson', use = 'complete.obs'))
-  fit_mode = if (merge_replicates == 'yes') 'epgls_mean' else 'epgls_within_species'
+  fit_mode = if (merge_replicates == 'yes') {
+    'epgls_mean'
+  } else if (ws_subject == 'gene_id') {
+    'epgls_within_copy'
+  } else {
+    'epgls_within_species'
+  }
 
   out = empty_stat_row(output_cols, trait_col, expression_base, fit_mode)
   out[['R2']] = r2
@@ -234,14 +267,14 @@ trait[, 'species'] = sub(' ', '_', trait[, 'species'])
 exp = read.table(args[['file_exp']], header = TRUE, sep = '\t')
 
 if (args[['merge_replicates']] == 'yes') {
-  cat('Expression replicates will be merged. Within-species variation will not be taken into account.\n')
+  cat('Expression replicates will be merged before E-PGLS.\n')
   rownames(exp) = exp[, 1]
   exp = exp[, 2:ncol(exp), drop = FALSE]
   exp = merge_replicates(exp, args[['replicate_sep']])
   exp = cbind(data.frame(gene_id = rownames(exp), stringsAsFactors = FALSE), exp)
   rownames(exp) = NULL
 } else {
-  cat('Expression replicates will not be merged. Within-species variation will be taken into account in RRPP.\n')
+  cat('Expression replicates will not be merged (raw replicate rows retained for RRPP).\n')
 }
 
 exp = sort_exp_fn(exp, tree)
@@ -253,7 +286,9 @@ exp = sort_exp_fn(exp, tree)
 df_trait_exp = merge(exp, trait, by = 'species', all.x = TRUE, sort = FALSE)
 trait_cols = colnames(trait[2:length(trait)])
 
-species_tree = build_species_tree_from_gene_tree(tree)
+ws_subject = resolve_ws_subject(args[['ws_subject']], args[['merge_replicates']])
+cat('E-PGLS covariance mode: observation-level covariance derived directly from gene tree tips (gene_id).\n')
+cat('E-PGLS within-subject blocking variable:', ws_subject, '\n')
 output_cols = c('R2', 'R2adj', 'sigma', 'Fstat', 'pval', 'logLik', 'AIC', 'BIC', 'PCC', 'p.adj', 'trait', 'variable', 'fit_mode')
 res_list = list()
 
@@ -265,11 +300,12 @@ for (trait_col in trait_cols) {
     expression_cols = expression_cols[(expression_cols == expression_base) | (grepl('.*[0-9]$', expression_cols))]
     res_list[[i]] = fit_epgls_one(
       df_trait_exp = df_trait_exp,
-      species_tree = species_tree,
+      gene_tree = tree,
       trait_col = trait_col,
       expression_base = expression_base,
       expression_cols = expression_cols,
       merge_replicates = args[['merge_replicates']],
+      ws_subject = ws_subject,
       iter = iter,
       output_cols = output_cols
     )
