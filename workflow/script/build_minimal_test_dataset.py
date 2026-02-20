@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import re
 import shutil
 import subprocess
@@ -39,6 +40,326 @@ DEFAULT_THRESHOLDS = {
     "evalue": 1e-40,
     "qcovhsp": 60.0,
     "pident": 35.0,
+}
+
+# Keep a tiny synthetic neighborhood signal for YABBY synteny panel testing.
+SYNTENY_DUMMY_CONFIG = {
+    "Cephalotus_follicularis": {
+        "anchors": [
+            {
+                "anchor": "Cephalotus_follicularis_Cfol-v3-25951",
+                "upstream": [
+                    "Cephalotus_follicularis_Cfol-v3-90001",
+                    "Cephalotus_follicularis_Cfol-v3-90002",
+                    "Cephalotus_follicularis_Cfol-v3-90003",
+                    "Cephalotus_follicularis_Cfol-v3-90004",
+                    "Cephalotus_follicularis_Cfol-v3-90005",
+                ],
+                "downstream": [
+                    "Cephalotus_follicularis_Cfol-v3-90006",
+                    "Cephalotus_follicularis_Cfol-v3-90007",
+                    "Cephalotus_follicularis_Cfol-v3-90008",
+                    "Cephalotus_follicularis_Cfol-v3-90009",
+                    "Cephalotus_follicularis_Cfol-v3-90010",
+                ],
+            },
+            {
+                "anchor": "Cephalotus_follicularis_Cfol-v3-04239",
+                "upstream": [
+                    "Cephalotus_follicularis_Cfol-v3-90011",
+                    "Cephalotus_follicularis_Cfol-v3-90012",
+                    "Cephalotus_follicularis_Cfol-v3-90013",
+                    "Cephalotus_follicularis_Cfol-v3-90014",
+                    "Cephalotus_follicularis_Cfol-v3-90015",
+                ],
+                "downstream": [
+                    "Cephalotus_follicularis_Cfol-v3-90016",
+                    "Cephalotus_follicularis_Cfol-v3-90017",
+                    "Cephalotus_follicularis_Cfol-v3-90018",
+                    "Cephalotus_follicularis_Cfol-v3-90019",
+                    "Cephalotus_follicularis_Cfol-v3-90020",
+                ],
+            },
+            {
+                "anchor": "Cephalotus_follicularis_Cfol-v3-07401",
+                "upstream": [
+                    "Cephalotus_follicularis_Cfol-v3-90021",
+                    "Cephalotus_follicularis_Cfol-v3-90022",
+                    "Cephalotus_follicularis_Cfol-v3-90023",
+                    "Cephalotus_follicularis_Cfol-v3-90024",
+                    "Cephalotus_follicularis_Cfol-v3-90025",
+                ],
+                "downstream": [
+                    "Cephalotus_follicularis_Cfol-v3-90026",
+                    "Cephalotus_follicularis_Cfol-v3-90027",
+                    "Cephalotus_follicularis_Cfol-v3-90028",
+                    "Cephalotus_follicularis_Cfol-v3-90029",
+                    "Cephalotus_follicularis_Cfol-v3-90030",
+                ],
+            },
+            {
+                "anchor": "Cephalotus_follicularis_Cfol-v3-04540",
+                "upstream": [
+                    "Cephalotus_follicularis_Cfol-v3-90031",
+                    "Cephalotus_follicularis_Cfol-v3-90032",
+                    "Cephalotus_follicularis_Cfol-v3-90033",
+                    "Cephalotus_follicularis_Cfol-v3-90034",
+                    "Cephalotus_follicularis_Cfol-v3-90035",
+                ],
+                "downstream": [
+                    "Cephalotus_follicularis_Cfol-v3-90036",
+                    "Cephalotus_follicularis_Cfol-v3-90037",
+                    "Cephalotus_follicularis_Cfol-v3-90038",
+                    "Cephalotus_follicularis_Cfol-v3-90039",
+                    "Cephalotus_follicularis_Cfol-v3-90040",
+                ],
+            },
+        ],
+        # Shared groups are used to enforce reproducible cross-tip links.
+        # Other dummy CDS are generated deterministically from dummy IDs.
+        "shared_groups": {
+            # Diagonal upstream links (offsets: -1, -2, -3, -4 across anchors).
+            "diag_up": [
+                "Cephalotus_follicularis_Cfol-v3-90001",
+                "Cephalotus_follicularis_Cfol-v3-90012",
+                "Cephalotus_follicularis_Cfol-v3-90023",
+                "Cephalotus_follicularis_Cfol-v3-90034",
+            ],
+            # Diagonal downstream links (offsets: +4, +3, +2, +1 across anchors).
+            "diag_down": [
+                "Cephalotus_follicularis_Cfol-v3-90009",
+                "Cephalotus_follicularis_Cfol-v3-90018",
+                "Cephalotus_follicularis_Cfol-v3-90027",
+                "Cephalotus_follicularis_Cfol-v3-90036",
+            ],
+        },
+        "shared_group_sequences": {
+            "diag_up": (
+                "atgaaaactgctcttcaaaatgttcatggttatcctcttcgtgattctgttcaagctttc"
+            ),
+            "diag_down": (
+                "atggacttccaagttgctaatcctggatttcatcgtaaggtttctgctcaagataactgg"
+            ),
+        },
+        "dummy_cds_length_nt": 60,
+        "upstream_base_bp": 120,
+        "upstream_step_bp": 120,
+        "downstream_base_bp": 120,
+        "downstream_step_bp": 120,
+    },
+    "Nepenthes_gracilis": {
+        "anchors": [
+            {
+                "anchor": "Nepenthes_gracilis_Nepgr000233",
+                "upstream": [
+                    "Nepenthes_gracilis_Nepgr91001",
+                    "Nepenthes_gracilis_Nepgr91002",
+                    "Nepenthes_gracilis_Nepgr91003",
+                    "Nepenthes_gracilis_Nepgr91004",
+                    "Nepenthes_gracilis_Nepgr91005",
+                ],
+                "downstream": [
+                    "Nepenthes_gracilis_Nepgr91051",
+                    "Nepenthes_gracilis_Nepgr91052",
+                    "Nepenthes_gracilis_Nepgr91053",
+                    "Nepenthes_gracilis_Nepgr91054",
+                    "Nepenthes_gracilis_Nepgr91055",
+                ],
+            },
+            {
+                "anchor": "Nepenthes_gracilis_Nepgr002443",
+                "upstream": [
+                    "Nepenthes_gracilis_Nepgr91006",
+                    "Nepenthes_gracilis_Nepgr91007",
+                    "Nepenthes_gracilis_Nepgr91008",
+                    "Nepenthes_gracilis_Nepgr91009",
+                    "Nepenthes_gracilis_Nepgr91010",
+                ],
+                "downstream": [
+                    "Nepenthes_gracilis_Nepgr91056",
+                    "Nepenthes_gracilis_Nepgr91057",
+                    "Nepenthes_gracilis_Nepgr91058",
+                    "Nepenthes_gracilis_Nepgr91059",
+                    "Nepenthes_gracilis_Nepgr91060",
+                ],
+            },
+            {
+                "anchor": "Nepenthes_gracilis_Nepgr006372",
+                "upstream": [
+                    "Nepenthes_gracilis_Nepgr91011",
+                    "Nepenthes_gracilis_Nepgr91012",
+                    "Nepenthes_gracilis_Nepgr91013",
+                    "Nepenthes_gracilis_Nepgr91014",
+                    "Nepenthes_gracilis_Nepgr91015",
+                ],
+                "downstream": [
+                    "Nepenthes_gracilis_Nepgr91061",
+                    "Nepenthes_gracilis_Nepgr91062",
+                    "Nepenthes_gracilis_Nepgr91063",
+                    "Nepenthes_gracilis_Nepgr91064",
+                    "Nepenthes_gracilis_Nepgr91065",
+                ],
+            },
+            {
+                "anchor": "Nepenthes_gracilis_Nepgr009191",
+                "upstream": [
+                    "Nepenthes_gracilis_Nepgr91016",
+                    "Nepenthes_gracilis_Nepgr91017",
+                    "Nepenthes_gracilis_Nepgr91018",
+                    "Nepenthes_gracilis_Nepgr91019",
+                    "Nepenthes_gracilis_Nepgr91020",
+                ],
+                "downstream": [
+                    "Nepenthes_gracilis_Nepgr91066",
+                    "Nepenthes_gracilis_Nepgr91067",
+                    "Nepenthes_gracilis_Nepgr91068",
+                    "Nepenthes_gracilis_Nepgr91069",
+                    "Nepenthes_gracilis_Nepgr91070",
+                ],
+            },
+            {
+                "anchor": "Nepenthes_gracilis_Nepgr011352",
+                "upstream": [
+                    "Nepenthes_gracilis_Nepgr91021",
+                    "Nepenthes_gracilis_Nepgr91022",
+                    "Nepenthes_gracilis_Nepgr91023",
+                    "Nepenthes_gracilis_Nepgr91024",
+                    "Nepenthes_gracilis_Nepgr91025",
+                ],
+                "downstream": [
+                    "Nepenthes_gracilis_Nepgr91071",
+                    "Nepenthes_gracilis_Nepgr91072",
+                    "Nepenthes_gracilis_Nepgr91073",
+                    "Nepenthes_gracilis_Nepgr91074",
+                    "Nepenthes_gracilis_Nepgr91075",
+                ],
+            },
+            {
+                "anchor": "Nepenthes_gracilis_Nepgr014538",
+                "upstream": [
+                    "Nepenthes_gracilis_Nepgr91026",
+                    "Nepenthes_gracilis_Nepgr91027",
+                    "Nepenthes_gracilis_Nepgr91028",
+                    "Nepenthes_gracilis_Nepgr91029",
+                    "Nepenthes_gracilis_Nepgr91030",
+                ],
+                "downstream": [
+                    "Nepenthes_gracilis_Nepgr91076",
+                    "Nepenthes_gracilis_Nepgr91077",
+                    "Nepenthes_gracilis_Nepgr91078",
+                    "Nepenthes_gracilis_Nepgr91079",
+                    "Nepenthes_gracilis_Nepgr91080",
+                ],
+            },
+            {
+                "anchor": "Nepenthes_gracilis_Nepgr022393",
+                "upstream": [
+                    "Nepenthes_gracilis_Nepgr91031",
+                    "Nepenthes_gracilis_Nepgr91032",
+                    "Nepenthes_gracilis_Nepgr91033",
+                    "Nepenthes_gracilis_Nepgr91034",
+                    "Nepenthes_gracilis_Nepgr91035",
+                ],
+                "downstream": [
+                    "Nepenthes_gracilis_Nepgr91081",
+                    "Nepenthes_gracilis_Nepgr91082",
+                    "Nepenthes_gracilis_Nepgr91083",
+                    "Nepenthes_gracilis_Nepgr91084",
+                    "Nepenthes_gracilis_Nepgr91085",
+                ],
+            },
+            {
+                "anchor": "Nepenthes_gracilis_Nepgr024231",
+                "upstream": [
+                    "Nepenthes_gracilis_Nepgr91036",
+                    "Nepenthes_gracilis_Nepgr91037",
+                    "Nepenthes_gracilis_Nepgr91038",
+                    "Nepenthes_gracilis_Nepgr91039",
+                    "Nepenthes_gracilis_Nepgr91040",
+                ],
+                "downstream": [
+                    "Nepenthes_gracilis_Nepgr91086",
+                    "Nepenthes_gracilis_Nepgr91087",
+                    "Nepenthes_gracilis_Nepgr91088",
+                    "Nepenthes_gracilis_Nepgr91089",
+                    "Nepenthes_gracilis_Nepgr91090",
+                ],
+            },
+            {
+                "anchor": "Nepenthes_gracilis_Nepgr028028",
+                "upstream": [
+                    "Nepenthes_gracilis_Nepgr91041",
+                    "Nepenthes_gracilis_Nepgr91042",
+                    "Nepenthes_gracilis_Nepgr91043",
+                    "Nepenthes_gracilis_Nepgr91044",
+                    "Nepenthes_gracilis_Nepgr91045",
+                ],
+                "downstream": [
+                    "Nepenthes_gracilis_Nepgr91091",
+                    "Nepenthes_gracilis_Nepgr91092",
+                    "Nepenthes_gracilis_Nepgr91093",
+                    "Nepenthes_gracilis_Nepgr91094",
+                    "Nepenthes_gracilis_Nepgr91095",
+                ],
+            },
+            {
+                "anchor": "Nepenthes_gracilis_Nepgr029156",
+                "upstream": [
+                    "Nepenthes_gracilis_Nepgr91046",
+                    "Nepenthes_gracilis_Nepgr91047",
+                    "Nepenthes_gracilis_Nepgr91048",
+                    "Nepenthes_gracilis_Nepgr91049",
+                    "Nepenthes_gracilis_Nepgr91050",
+                ],
+                "downstream": [
+                    "Nepenthes_gracilis_Nepgr91096",
+                    "Nepenthes_gracilis_Nepgr91097",
+                    "Nepenthes_gracilis_Nepgr91098",
+                    "Nepenthes_gracilis_Nepgr91099",
+                    "Nepenthes_gracilis_Nepgr91100",
+                ],
+            },
+        ],
+        "shared_groups": {
+            "diag_up": [
+                "Nepenthes_gracilis_Nepgr91001",
+                "Nepenthes_gracilis_Nepgr91007",
+                "Nepenthes_gracilis_Nepgr91013",
+                "Nepenthes_gracilis_Nepgr91019",
+                "Nepenthes_gracilis_Nepgr91025",
+                "Nepenthes_gracilis_Nepgr91026",
+                "Nepenthes_gracilis_Nepgr91032",
+                "Nepenthes_gracilis_Nepgr91038",
+                "Nepenthes_gracilis_Nepgr91044",
+                "Nepenthes_gracilis_Nepgr91050",
+            ],
+            "diag_down": [
+                "Nepenthes_gracilis_Nepgr91055",
+                "Nepenthes_gracilis_Nepgr91059",
+                "Nepenthes_gracilis_Nepgr91063",
+                "Nepenthes_gracilis_Nepgr91067",
+                "Nepenthes_gracilis_Nepgr91071",
+                "Nepenthes_gracilis_Nepgr91080",
+                "Nepenthes_gracilis_Nepgr91084",
+                "Nepenthes_gracilis_Nepgr91088",
+                "Nepenthes_gracilis_Nepgr91092",
+                "Nepenthes_gracilis_Nepgr91096",
+            ],
+        },
+        "shared_group_sequences": {
+            "diag_up": (
+                "atggctgaaatctctgctgttcaagattcctggactgactgcttatgttgaagccgatgc"
+            ),
+            "diag_down": (
+                "atgcagttcaagccattggttgctgaagttgctgaagcctacgttcaagctgttggtcctgaa"
+            ),
+        },
+        "dummy_cds_length_nt": 60,
+        "upstream_base_bp": 120,
+        "upstream_step_bp": 120,
+        "downstream_base_bp": 120,
+        "downstream_step_bp": 120,
+    },
 }
 
 
@@ -290,6 +611,131 @@ def build_token_pattern(core_ids: Iterable[str]) -> Tuple[re.Pattern, Dict[str, 
     return pattern, token_to_core
 
 
+def collect_synteny_dummy_ids(conf: Dict) -> List[str]:
+    out: List[str] = []
+    seen: Set[str] = set()
+    for anchor_spec in conf.get("anchors", []):
+        for direction in ("upstream", "downstream"):
+            for dummy_id in anchor_spec.get(direction, []):
+                if dummy_id in seen:
+                    continue
+                seen.add(dummy_id)
+                out.append(dummy_id)
+    return out
+
+
+def make_deterministic_dummy_cds(dummy_id: str, length_nt: int = 60) -> str:
+    length_nt = max(18, int(length_nt))
+    if length_nt % 3 != 0:
+        length_nt -= length_nt % 3
+    codons = [
+        "gct",
+        "gcc",
+        "gca",
+        "gcg",
+        "tct",
+        "tcc",
+        "tca",
+        "tcg",
+        "cct",
+        "ccc",
+        "cca",
+        "ccg",
+        "act",
+        "acc",
+        "aca",
+        "acg",
+        "gtt",
+        "gtc",
+        "gta",
+        "gtg",
+        "gat",
+        "gac",
+        "aat",
+        "aac",
+        "caa",
+        "cag",
+        "tat",
+        "tac",
+        "cat",
+        "cac",
+        "aaa",
+        "aag",
+        "cgt",
+        "cgc",
+        "cga",
+        "cgg",
+        "agt",
+        "agc",
+        "att",
+        "atc",
+        "ata",
+        "ctt",
+        "ctc",
+        "cta",
+        "ctg",
+        "ttt",
+        "ttc",
+        "tgg",
+        "tta",
+        "ttg",
+        "ggt",
+        "ggc",
+        "gga",
+        "ggg",
+    ]
+    digest = hashlib.sha256(dummy_id.encode("utf-8")).digest()
+    n_codon = length_nt // 3
+    seq_codons = ["atg"]
+    for i in range(1, n_codon):
+        byte_val = digest[(i - 1) % len(digest)]
+        idx = (byte_val + (i * 17)) % len(codons)
+        seq_codons.append(codons[idx])
+    return "".join(seq_codons)
+
+
+def build_synteny_dummy_cds_map(conf: Dict) -> Dict[str, str]:
+    dummy_ids = collect_synteny_dummy_ids(conf)
+    length_nt = int(conf.get("dummy_cds_length_nt", 60))
+    cds_map: Dict[str, str] = {}
+
+    shared_groups = conf.get("shared_groups", {})
+    shared_group_sequences = conf.get("shared_group_sequences", {})
+    for group_name, members in shared_groups.items():
+        seq = shared_group_sequences.get(group_name, "")
+        seq = seq.strip().lower()
+        if (not seq) or (len(seq) % 3 != 0):
+            raise RuntimeError(
+                f"Invalid shared_group_sequences entry for {group_name}: length must be non-zero and multiple of 3."
+            )
+        for dummy_id in members:
+            cds_map[dummy_id] = seq
+
+    used_sequences = set(cds_map.values())
+    for dummy_id in dummy_ids:
+        if dummy_id in cds_map:
+            continue
+        seq = make_deterministic_dummy_cds(dummy_id=dummy_id, length_nt=length_nt)
+        salt = 0
+        while seq in used_sequences:
+            salt += 1
+            seq = make_deterministic_dummy_cds(
+                dummy_id=f"{dummy_id}#{salt}",
+                length_nt=length_nt,
+            )
+        cds_map[dummy_id] = seq
+        used_sequences.add(seq)
+
+    missing_members = sorted(
+        set(x for members in shared_groups.values() for x in members) - set(dummy_ids)
+    )
+    if missing_members:
+        raise RuntimeError(
+            "shared_groups include unknown dummy IDs: " + ",".join(missing_members)
+        )
+    return cds_map
+
+
 def collect_gene_intervals(
     gff_file: Path,
     selected_gene_ids: Set[str],
@@ -499,6 +945,131 @@ def write_trimmed_expression(
     return kept
 
 
+def collect_core_gene_loci(gff_file: Path, core_ids: Set[str]) -> Dict[str, Tuple[str, int, int]]:
+    loci: Dict[str, Tuple[str, int, int]] = {}
+    if not core_ids:
+        return loci
+    pattern, token_to_core = build_token_pattern(core_ids)
+    with open_text(gff_file) as handle:
+        for raw in handle:
+            if raw.startswith("#"):
+                continue
+            parts = raw.rstrip("\n").split("\t")
+            if len(parts) < 9:
+                continue
+            attr = parts[8]
+            m = pattern.search(attr)
+            if m is None:
+                continue
+            core = token_to_core[m.group(0)]
+            start = int(parts[3])
+            end = int(parts[4])
+            if start > end:
+                start, end = end, start
+            seqid = parts[0]
+            prev = loci.get(core)
+            if prev is None:
+                loci[core] = (seqid, start, end)
+                continue
+            prev_seqid, prev_start, prev_end = prev
+            if prev_seqid != seqid:
+                # Keep the longer locus span if multiple seqids are found.
+                prev_span = prev_end - prev_start
+                new_span = end - start
+                if new_span > prev_span:
+                    loci[core] = (seqid, start, end)
+                continue
+            loci[core] = (seqid, min(prev_start, start), max(prev_end, end))
+    return loci
+
+
+def append_species_synteny_dummies(
+    species: str,
+    out_cds: Path,
+    out_gff: Path,
+    found_ids: Set[str],
+) -> Set[str]:
+    conf = SYNTENY_DUMMY_CONFIG.get(species)
+    if conf is None:
+        return set()
+    if (not out_cds.exists()) or (not out_gff.exists()):
+        return set()
+    anchor_gene_ids = [x.get("anchor", "") for x in conf.get("anchors", [])]
+    anchor_gene_ids = [x for x in anchor_gene_ids if x]
+    if not anchor_gene_ids:
+        return set()
+    core_ids = {
+        strip_species_prefix(species, gid).replace("-", "_")
+        for gid in anchor_gene_ids
+    }
+    dummy_cds = build_synteny_dummy_cds_map(conf)
+    upstream_base_bp = int(conf.get("upstream_base_bp", 120))
+    upstream_step_bp = int(conf.get("upstream_step_bp", 120))
+    downstream_base_bp = int(conf.get("downstream_base_bp", 120))
+    downstream_step_bp = int(conf.get("downstream_step_bp", 120))
+    loci = collect_core_gene_loci(out_gff, core_ids)
+    missing_anchors = []
+    dummy_ids: Set[str] = set()
+    with open(out_cds, "a") as cds_out, open(out_gff, "a") as gff_out:
+        for anchor_spec in conf.get("anchors", []):
+            anchor = anchor_spec.get("anchor", "")
+            if not anchor:
+                continue
+            if anchor not in found_ids:
+                missing_anchors.append(anchor)
+                continue
+            core = strip_species_prefix(species, anchor).replace("-", "_")
+            locus = loci.get(core)
+            if locus is None:
+                missing_anchors.append(anchor)
+                continue
+            seqid, gstart, gend = locus
+            for direction in ("upstream", "downstream"):
+                dummy_list = list(anchor_spec.get(direction, []))
+                for rank, dummy_id in enumerate(dummy_list, start=1):
+                    seq = dummy_cds.get(dummy_id, "")
+                    if not seq:
+                        raise RuntimeError(
+                            f"Dummy CDS sequence not defined: {species} {anchor} {dummy_id}"
+                        )
+                    if direction == "upstream":
+                        shift = upstream_base_bp + ((rank - 1) * upstream_step_bp)
+                        dstart = max(1, gstart - shift)
+                    else:
+                        shift = downstream_base_bp + ((rank - 1) * downstream_step_bp)
+                        dstart = gend + shift
+                    dend = dstart + len(seq) - 1
+                    dcore = strip_species_prefix(species, dummy_id).replace("-", "_")
+                    write_fasta_record(cds_out, dummy_id, seq)
+                    gff_out.write(
+                        "\t".join(
+                            [
+                                seqid,
+                                "CoGe",
+                                "CDS",
+                                str(dstart),
+                                str(dend),
+                                ".",
+                                "+",
+                                ".",
+                                (
+                                    f"Parent={dcore}.mRNA1;ID={dcore}.CDS1;"
+                                    f"Name={dcore}.CDS1;Alias={dcore};CDS={dcore}.CDS1;"
+                                    f"coge_fid=gg_dummy_{dcore.split('_')[-1]}"
+                                ),
+                            ]
+                        )
+                        + "\n"
+                    )
+                    dummy_ids.add(dummy_id)
+    if missing_anchors:
+        print(
+            f"Warning: skipped synteny dummies for missing anchors in {species}: "
+            + ",".join(sorted(missing_anchors))
+        )
+    return dummy_ids
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-pg", required=True, help="Source workspace directory")
@@ -638,11 +1209,11 @@ def main() -> None:
     summary_rows: List[Tuple[str, int, int, int, int, int, int, int]] = []
     for sp in target_species:
         files = species_to_files[sp]
-        selected = selected_ids[sp]
+        selected = set(selected_ids[sp])
 
         out_cds = out_dirs["species_cds"] / files["cds"].name
         found_ids, cds_count = write_trimmed_cds(files["cds"], selected, out_cds)
-        missing_ids = sorted(selected - found_ids)
+        out_gff = None
 
         expr_count = -1
         expr_file = files["expression"]
@@ -666,6 +1237,20 @@ def main() -> None:
             out_gff = out_dirs["species_gff"] / gff_base
             write_shifted_gff(files["gff"], effective_windows, out_gff)
 
+        if out_gff is not None:
+            dummy_ids = append_species_synteny_dummies(
+                species=sp,
+                out_cds=out_cds,
+                out_gff=out_gff,
+                found_ids=found_ids,
+            )
+            if dummy_ids:
+                selected |= dummy_ids
+                found_ids |= dummy_ids
+                cds_count += len(dummy_ids)
+                sources[sp]["DUMMY"] = set(dummy_ids)
+        missing_ids = sorted(selected - found_ids)
+
         aha_n = len(sources[sp]["AHA"])
         yabby_n = len(sources[sp]["YABBY"])
         busco_n = len(sources[sp]["BUSCO"])
@@ -685,8 +1270,8 @@ def main() -> None:
 
         for gid in sorted(selected):
             src = []
-            for label in ("AHA", "YABBY", "BUSCO"):
-                if gid in sources[sp][label]:
+            for label in ("AHA", "YABBY", "BUSCO", "DUMMY"):
+                if gid in sources[sp].get(label, set()):
                     src.append(label)
             manifest_rows.append((sp, gid, ";".join(src)))
 
@@ -719,6 +1304,7 @@ def main() -> None:
                 f"diamond_evalue<={thresholds['evalue']}",
                 f"diamond_qcovhsp>={thresholds['qcovhsp']}",
                 f"diamond_pident>={thresholds['pident']}",
+                "synteny_dummies=enabled (Cephalotus_follicularis,Nepenthes_gracilis)",
                 "species_expression: Oryza_sativa may be absent by design.",
             ]
         )

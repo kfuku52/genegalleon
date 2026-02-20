@@ -55,6 +55,44 @@ source "${dir_myscript}/gg_util.sh" # Load utility functions
 gg_source_home_bashrc
 gg_prepare_cmd_runtime "${dir_pg}" "base" 1 1
 
+copy_busco_tables() {
+  local busco_root_dir="$1"
+  local lineage="$2"
+  local file_full="$3"
+  local file_short="$4"
+  local run_dir="${busco_root_dir}/run_${lineage}"
+  local full_src=""
+  local short_src=""
+  local -a short_candidates=()
+
+  if [[ -s "${run_dir}/full_table.tsv" ]]; then
+    full_src="${run_dir}/full_table.tsv"
+  elif [[ -s "${run_dir}/full_table.tsv.gz" ]]; then
+    gzip -cd "${run_dir}/full_table.tsv.gz" > "./tmp.busco.full_table.tsv"
+    full_src="./tmp.busco.full_table.tsv"
+  fi
+
+  if [[ -s "${run_dir}/short_summary.txt" ]]; then
+    short_src="${run_dir}/short_summary.txt"
+  else
+    mapfile -t short_candidates < <(find "${run_dir}" -maxdepth 1 -type f -name "short_summary*.txt" | sort)
+    if [[ ${#short_candidates[@]} -gt 0 ]]; then
+      short_src="${short_candidates[0]}"
+    fi
+  fi
+
+  if [[ -z "${full_src}" || -z "${short_src}" ]]; then
+    echo "BUSCO outputs were not found under ${run_dir}."
+    echo "Expected full_table.tsv(.gz) and short_summary*.txt."
+    rm -f "./tmp.busco.full_table.tsv"
+    return 1
+  fi
+
+  cp_out "${full_src}" "${file_full}"
+  cp_out "${short_src}" "${file_short}"
+  rm -f "./tmp.busco.full_table.tsv"
+}
+
 dir_sp_cds="${dir_pg_input}/species_cds"
 dir_og="${dir_pg_output}/orthogroup"
 dir_og_rooted_tree="${dir_og}/rooted_tree"
@@ -173,9 +211,12 @@ if [[ ${run_busco} -eq 1 ]]; then
       --offline
 
       if [[ $? -eq 0 ]]; then
-        cp_out ./busco_tmp/run_${busco_lineage}/full_table.tsv ${file_sp_busco_full}
-        cp_out ./busco_tmp/run_${busco_lineage}/short_summary.txt ${file_sp_busco_short}
-        rm -r './busco_tmp'
+        if copy_busco_tables "./busco_tmp" "${busco_lineage}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
+          rm -r './busco_tmp'
+        else
+          echo "Failed to locate normalized BUSCO outputs for ${sp_ub}. Exiting."
+          exit 1
+        fi
       fi
     else
       echo "Skipped BUSCO: ${cds}"

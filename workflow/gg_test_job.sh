@@ -96,11 +96,15 @@ for script_file in "${script_files[@]}"; do
   command="${singularity_command} \"${gg_image}\" < \"${dir_script}/${script_file}\""
   echo "full command: ${command}"
   set +e
-  ${singularity_command} "${gg_image}" < "${dir_script}/${script_file}" \
-    > >(tee "${prefix}.out") \
-    2> >(tee "${prefix}.err" >&2)
+  ${singularity_command} "${gg_image}" < "${dir_script}/${script_file}" > "${prefix}.out" 2> "${prefix}.err"
   script_rc=$?
   set -e
+  if [[ -s "${prefix}.out" ]]; then
+    cat "${prefix}.out"
+  fi
+  if [[ -s "${prefix}.err" ]]; then
+    cat "${prefix}.err" >&2
+  fi
   if [[ ${script_rc} -eq 8 ]]; then
     echo "Skipped: ${script_file} (output files were already detected, exit code 8)"
   elif [[ ${script_rc} -ne 0 ]]; then

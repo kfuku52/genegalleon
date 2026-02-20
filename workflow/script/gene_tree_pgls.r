@@ -9,6 +9,9 @@ library(nlme)
 library(ggplot2)
 library(Rphylopars)
 library(rkftools)
+script_arg = grep('^--file=', commandArgs(trailingOnly = FALSE), value = TRUE)
+script_dir = if (length(script_arg) > 0) dirname(normalizePath(sub('^--file=', '', script_arg[1]))) else getwd()
+source(file.path(script_dir, 'pgls_common.R'))
 
 if (run_mode=='debug') {
     dir_pg = '/Users/kf/Dropbox/collaborators/Yudai_Okuyama/20240606_Asarum_PGLS/workspace_debug'
@@ -27,56 +30,6 @@ if (run_mode=='debug') {
 cat('arguments:\n')
 args = rkftools::get_parsed_args(args, print=TRUE)
 
-run_phylopars = function(df_trait_exp, tree, trait_cols, expression_bases) {
-    nrow = length(trait_cols)*length(expression_bases)
-    stats = c("R2", "R2adj", "sigma", "Fstat", "pval", "logLik", "AIC", "BIC", "PCC", "p.adj", "trait", "variable")
-    df_stat = data.frame(matrix(vector(), nrow, length(stats)))
-    colnames(df_stat) = stats
-    i = 1
-    for (trait_col in trait_cols){
-        for (expression_base in expression_bases) {
-            cat('Working with', trait_col, 'vs', expression_base, '\n')
-            expression_cols = colnames(df_trait_exp)[startsWith(colnames(df_trait_exp), expression_base)]
-            expression_cols = expression_cols[(expression_cols==expression_base)|(grepl('.*[0-9]$', expression_cols))]      
-            explanatory_variables = paste(expression_cols, collapse=' + ')
-            explained_variable = trait_col
-            formula_string = paste(explained_variable, '~', explanatory_variables)
-            cat('PGLS formula:', formula_string, '\n')
-                        
-            out_phylopars = try(phylopars.lm(
-                as.formula(formula_string), 
-                trait_data=df_trait_exp, 
-                tree=tree, 
-                model = "BM", 
-                pheno_error=TRUE,
-                phylo_correlated=TRUE,
-                pheno_correlated=TRUE
-            ))
-            
-
-            if (class(out_phylopars) != "try-error") {
-                for (stat in stats[1:6]){
-                    df_stat[i,stat] = out_phylopars[stat]
-                }
-                df_stat[i,'AIC'] = AIC(out_phylopars)
-                df_stat[i,'BIC'] = BIC(out_phylopars)
-                PCC = cor(df_trait_exp[paste('mean_', expression_base, sep = "")], df_trait_exp[trait_col], method='pearson', use="complete.obs")
-                df_stat[i,'PCC'] = PCC
-                df_stat[i,'trait'] = trait_col
-                df_stat[i,'variable'] = expression_base
-            } else {
-                cat('error during phylopars process:', formula_string, '\n')
-            }
-            i=i+1
-        }
-    }
-    cat('adjusted pvalues are calculated:', '\n')
-    cat('method = fdr', '\n')
-    cat('length =', length(df_stat[,'pval']), '\n')
-    df_stat[,'p.adj'] = p.adjust(df_stat[,'pval'], length(df_stat[,'pval']), method = 'fdr')
-    return(df_stat)
-}
-
 #read input files
 tree = ape::read.tree(args[['file_tree']])
 trait = read.table(args[['file_trait']], header=TRUE, sep='\t')
@@ -94,20 +47,13 @@ if (args[['merge_replicates']]=='yes') {
 }
 exp = sort_exp(exp, tree)
 expression_bases = get_expression_bases(exp, args[['replicate_sep']])
+output_cols = c("R2", "R2adj", "sigma", "Fstat", "pval", "logLik", "AIC", "BIC", "PCC", "p.adj", "trait", "variable", "fit_mode")
 
 #extract trait names
 trait_cols = colnames(trait[2:length(trait)])
 
 #calculate mean expression
-for (col in expression_bases) {
-    is_col = grepl(col, colnames(exp))
-    mean_col = paste('mean_', col, sep='')
-    if (sum(is_col)>1) {
-        exp[,mean_col] = apply(exp[,is_col], 1, function(x){mean(x, na.rm=TRUE)})
-    } else {
-        exp[,mean_col] = exp[,is_col]
-    }
-}
+exp = add_expression_mean_cols(exp, expression_bases)
 
 #prepare species column from the gene_id column
 exp[,'species'] = exp[,'gene_id']
@@ -126,13 +72,20 @@ cat('Number of genes in the tree:', length(tree[['tip.label']]), '\n')
 cat('Number of genes in the table:', nrow(exp), '\n')
 #cat('Do names match?', geiger::name.check(tree, exp), '\n')
 
-df_stat = run_phylopars(df_trait_exp, tree, trait_cols, expression_bases)
+df_stat = run_phylopars_regression(
+    df_trait_exp = df_trait_exp,
+    tree = tree,
+    trait_cols = trait_cols,
+    expression_bases = expression_bases,
+    output_cols = output_cols,
+    include_foreground_lineage = FALSE,
+    verbose_working = TRUE,
+    use_phenocov = (args[['merge_replicates']] != 'yes')
+)
 
 #output1
-df_stat = df_stat[order(df_stat[,'variable']),]
-df_stat = df_stat[apply(df_stat, 1, function(x) !all(is.na(x))), ] # Remove NA-only rows
-rownames(df_stat) = NULL
-file_name = 'gene_PGLS.tsv'
+df_stat = finalize_pgls_stats(df_stat)
+file_name = 'gene_tree_PGLS.tsv'
 write.table(df_stat, file_name, row.names=FALSE, sep='\t')
 head(df_stat)
 

@@ -33,7 +33,6 @@ base	rpsblast
 base	seqkit
 base	sonicparanoid
 base	tblastn
-base	TransDecoder.LongOrfs
 base	Trinity
 base	trimal
 base	augustus

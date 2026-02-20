@@ -48,7 +48,7 @@ programs=(\
 "metaeuk -h"
 "prodigal -v"
 "hmmsearch -h"
-"TransDecoder.LongOrfs --version"
+"cdskit longestcds -h"
 "trimal --version"
 "Trinity --version")
 

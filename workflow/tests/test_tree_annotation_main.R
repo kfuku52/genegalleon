@@ -111,6 +111,18 @@ if (!any(abs(df_n_bad$x_start - 2.5) < 1e-9 & abs(df_n_bad$x_end - 7.5) < 1e-9))
   stop("get_df_N should normalize reversed ranges (e.g., 7:3).")
 }
 
+# 4b) get_df_intron: semicolon is supported, and comma remains backward-compatible.
+df_tip_intron <- data.frame(
+  label = c("g1", "g2", "g3"),
+  intron_positions = c("3;6;9", "12,15", ""),
+  stringsAsFactors = FALSE
+)
+df_intron <- get_df_intron(df_tip_intron)
+if (nrow(df_intron) != 5) stop("get_df_intron should parse both ';' and ',' delimited values.")
+if (!all(c("x", "label") %in% colnames(df_intron))) stop("get_df_intron returned unexpected columns.")
+expected_sites <- c(1, 2, 3, 4, 5)
+if (!all(expected_sites %in% as.numeric(df_intron$x))) stop("get_df_intron should convert positions to codon sites.")
+
 # 5) add_gene_cluster_membership: splits by intergenic distance and chromosome.
 df_tip_cluster <- data.frame(
   so_event = c("L", "L", "L", "L"),

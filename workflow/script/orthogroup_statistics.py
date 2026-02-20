@@ -97,6 +97,96 @@ def build_arg_parser():
     return parser
 
 
+def load_fimo_hits(path):
+    base_cols = ['motif_id', 'motif_alt_id', 'sequence_name', 'start', 'stop', 'strand', 'q-value']
+    if (not path) or (not os.path.exists(path)) or (os.path.getsize(path) == 0):
+        return pandas.DataFrame(columns=base_cols)
+    try:
+        df = pandas.read_csv(path, sep='\t', header=0, index_col=None, dtype=str)
+    except Exception as exc:
+        print('Failed to parse FIMO table {}: {}'.format(path, exc))
+        return pandas.DataFrame(columns=base_cols)
+    if df.empty:
+        return pandas.DataFrame(columns=base_cols)
+
+    colmap = {}
+    for c in df.columns:
+        c_norm = str(c).strip()
+        if c_norm.startswith('#'):
+            c_norm = c_norm.lstrip('#').strip()
+        c_norm = c_norm.lower().replace(' ', '_').replace('-', '_')
+        colmap[c] = c_norm
+    df = df.rename(columns=colmap)
+
+    def pick_col(candidates):
+        for c in candidates:
+            if c in df.columns:
+                return c
+        return None
+
+    motif_col = pick_col(['motif_id', 'pattern_name'])
+    motif_alt_col = pick_col(['motif_alt_id', 'motif_altid', 'alt_id'])
+    seq_col = pick_col(['sequence_name'])
+    start_col = pick_col(['start'])
+    stop_col = pick_col(['stop', 'end'])
+    strand_col = pick_col(['strand'])
+    qvalue_col = pick_col(['q_value', 'qvalue'])
+    if qvalue_col is None:
+        # Legacy FIMO output can miss q-values when disabled; fall back to p-values.
+        qvalue_col = pick_col(['p_value', 'pvalue'])
+
+    required_missing = []
+    if motif_col is None:
+        required_missing.append('motif_id/pattern_name')
+    if seq_col is None:
+        required_missing.append('sequence_name')
+    if start_col is None:
+        required_missing.append('start')
+    if stop_col is None:
+        required_missing.append('stop/end')
+    if qvalue_col is None:
+        required_missing.append('q-value/p-value')
+    if required_missing:
+        print(
+            'FIMO table is missing required columns ({}): {}'.format(
+                ', '.join(required_missing), path
+            )
+        )
+        return pandas.DataFrame(columns=base_cols)
+
+    df_out = pandas.DataFrame(index=df.index.copy())
+    df_out['motif_id'] = df[motif_col].astype(str).str.strip()
+    if motif_alt_col is None:
+        df_out['motif_alt_id'] = df_out['motif_id']
+    else:
+        motif_alt = df[motif_alt_col].astype(str).str.strip()
+        is_missing_alt = motif_alt.str.lower().isin(['', 'na', 'nan', '.'])
+        motif_alt = motif_alt.where(~is_missing_alt, df_out['motif_id'])
+        df_out['motif_alt_id'] = motif_alt
+    df_out['sequence_name'] = df[seq_col].astype(str).str.strip()
+    df_out['start'] = pandas.to_numeric(df[start_col], errors='coerce')
+    df_out['stop'] = pandas.to_numeric(df[stop_col], errors='coerce')
+    if strand_col is None:
+        df_out['strand'] = '.'
+    else:
+        df_out['strand'] = df[strand_col].astype(str).str.strip()
+    df_out['q-value'] = pandas.to_numeric(df[qvalue_col], errors='coerce')
+
+    keep = (
+        (df_out['sequence_name'] != '') &
+        df_out['start'].notna() &
+        df_out['stop'].notna() &
+        df_out['q-value'].notna() &
+        (df_out['motif_id'] != '')
+    )
+    df_out = df_out.loc[keep, base_cols].copy()
+    if df_out.empty:
+        return df_out
+    df_out['start'] = df_out['start'].astype(int)
+    df_out['stop'] = df_out['stop'].astype(int)
+    return df_out
+
+
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
@@ -185,6 +275,18 @@ def main():
         raise AttributeError("Tree object does not provide a common ancestor API.")
 
     def transfer_root(tree_to, tree_from, verbose=False):
+        def set_outgroup_compat(tree, outgroup):
+            try:
+                tree.set_outgroup(outgroup)
+            except AssertionError as exc:
+                # IQ-TREE can keep different support labels on both root children in unrooted trees.
+                # ETE rejects rerooting in that case, so normalize only root-adjacent supports and retry.
+                if 'inconsistent support at the root' not in str(exc):
+                    raise
+                for child in tree.get_children():
+                    child.support = 1.0
+                tree.set_outgroup(outgroup)
+
         tip_set_diff = set(get_leaf_names_compat(tree_to)) - set(get_leaf_names_compat(tree_from))
         if tip_set_diff:
             raise Exception('tree_to has more tips than tree_from. tip_set_diff = ' + str(tip_set_diff))
@@ -194,12 +296,12 @@ def main():
         outgroups = subroot_leaves[0] if not is_n0_bigger_than_n1 else subroot_leaves[1]
         if verbose:
             print('outgroups:', outgroups)
-        tree_to.set_outgroup(ingroups[0])
+        set_outgroup_compat(tree_to, ingroups[0])
         if len(outgroups) == 1:
             outgroup_ancestor = next(node for node in iter_leaves(tree_to) if node.name == outgroups[0])
         else:
             outgroup_ancestor = get_common_ancestor_compat(tree_to, outgroups)
-        tree_to.set_outgroup(outgroup_ancestor)
+        set_outgroup_compat(tree_to, outgroup_ancestor)
         subroot_to = tree_to.get_children()
         subroot_from = tree_from.get_children()
         total_subroot_length_to = sum(node.dist for node in subroot_to)
@@ -888,27 +990,25 @@ def main():
         df_tmp = df_tmp.groupby('qacc', sort=False)['stitle'].agg('; '.join).rename('pfam_domain')
         node_left_merge_tables.append(df_tmp.reset_index().rename(columns={'qacc': 'node_name'}))
     if (os.path.exists(params['fimo'])):
-        df_tmp = pandas.read_csv(params['fimo'], sep='\t', header=0, index_col=None, comment='#')
-        df_tmp.loc[:,'start'] = df_tmp.loc[:,'start'].astype(int)
-        df_tmp.loc[:,'stop'] = df_tmp.loc[:,'stop'].astype(int)
-        join_cols = ['motif_id', 'motif_alt_id', 'start', 'stop', 'strand', 'q-value']
-        df_tmp_join = df_tmp.loc[:, ['sequence_name'] + join_cols].copy()
-        for col_name in join_cols:
-            df_tmp_join.loc[:, col_name] = df_tmp_join[col_name].astype(str)
-        df_tmp2 = (
-            df_tmp_join.groupby('sequence_name', as_index=False, sort=False)[join_cols]
-            .agg('; '.join)
-            .rename(columns={
-                'motif_id': 'fimo_id',
-                'motif_alt_id': 'fimo_alt_id',
-                'start': 'fimo_start',
-                'stop': 'fimo_end',
-                'strand': 'fimo_strand',
-                'q-value': 'fimo_qvalue',
-            })
-        )
-        df_tmp2['node_name'] = df_tmp2['sequence_name']
-        node_left_merge_tables.append(df_tmp2)
+        df_tmp = load_fimo_hits(params['fimo'])
+        if not df_tmp.empty:
+            join_cols = ['motif_id', 'motif_alt_id', 'start', 'stop', 'strand', 'q-value']
+            df_tmp_join = df_tmp.loc[:, ['sequence_name'] + join_cols].copy()
+            df_tmp_join = df_tmp_join.astype({col_name: str for col_name in join_cols})
+            df_tmp2 = (
+                df_tmp_join.groupby('sequence_name', as_index=False, sort=False)[join_cols]
+                .agg('; '.join)
+                .rename(columns={
+                    'motif_id': 'fimo_id',
+                    'motif_alt_id': 'fimo_alt_id',
+                    'start': 'fimo_start',
+                    'stop': 'fimo_end',
+                    'strand': 'fimo_strand',
+                    'q-value': 'fimo_qvalue',
+                })
+            )
+            df_tmp2['node_name'] = df_tmp2['sequence_name']
+            node_left_merge_tables.append(df_tmp2)
     if (os.path.exists(params['promoter_fasta'])):
         df_tmp = get_N_coordinate(file=params['promoter_fasta'])
         node_left_merge_tables.append(df_tmp)

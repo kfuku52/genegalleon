@@ -578,6 +578,15 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
   }
   
   df_tip <- get_df_tip(g[['tree']])
+  seq_names <- names(seqs)
+  if (is.null(seq_names)) {
+    seq_names <- character(0)
+  }
+  missing_labels <- setdiff(as.character(df_tip[['label']]), seq_names)
+  if (length(missing_labels) > 0) {
+    preview <- paste(utils::head(missing_labels, 10), collapse = ',')
+    cat('Alignment is missing', length(missing_labels), 'tip sequence(s). Displaying backbone only. Examples:', preview, '\n')
+  }
   df_rps = prepare_df_rps_for_plot(df_rpsblast, df_tip)
   domain_fill_colors = c()
   if (nrow(df_rps) > 0) {
@@ -1106,11 +1115,13 @@ get_df_intron = function(df_tip) {
         if (df_tip[i,'intron_positions']=='') {
             next
         }
-        if (grepl(',', df_tip[i,'intron_positions'])) {
-            intron_val = df_tip[i,'intron_positions']
-            intron_pos = strsplit(as.character(intron_val), ',')[[1]]
-        } else {
-            intron_pos = df_tip[i,'intron_positions']
+        intron_val = as.character(df_tip[i,'intron_positions'])
+        # gff2genestat now emits ';' delimited positions. Keep ',' for backward compatibility.
+        intron_pos = strsplit(intron_val, '[;,]')[[1]]
+        intron_pos = trimws(intron_pos)
+        intron_pos = intron_pos[intron_pos != '']
+        if (length(intron_pos) == 0) {
+            next
         }
         intron_site = as.numeric(intron_pos)/3
         df_tmp = data.frame(x=intron_site)
@@ -2275,6 +2286,231 @@ add_cluster_membership_column = function(g, args, gname, max_bp_membership){
             plot.margin=unit(args[['margins']], "cm")
         )
   return(g)
+}
+
+add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) {
+    cat(as.character(Sys.time()), 'Adding synteny column.\n')
+    if (is.null(path_synteny) || (!nzchar(path_synteny)) || (!file.exists(path_synteny))) {
+        cat('Synteny table not found. Synteny column will not be added.\n')
+        return(g)
+    }
+    synteny_window = suppressWarnings(as.integer(synteny_window))
+    if (is.na(synteny_window) || (!is.finite(synteny_window)) || (synteny_window < 1)) {
+        synteny_window = 5
+    }
+    df_tip = get_df_tip(g[['tree']])
+    if (nrow(df_tip) < 2) {
+        cat('The tree has fewer than two tips. Synteny column will not be added.\n')
+        return(g)
+    }
+    df_syn = tryCatch(
+        read.table(path_synteny, sep='\t', header=TRUE, stringsAsFactors=FALSE, quote='', comment.char='', check.names=FALSE),
+        error=function(e) NULL
+    )
+    if (is.null(df_syn) || (nrow(df_syn) == 0)) {
+        cat('Synteny table is empty. Synteny column will not be added.\n')
+        return(g)
+    }
+    required_cols = c('node_name', 'offset', 'group_id')
+    if (!all(required_cols %in% colnames(df_syn))) {
+        cat('Synteny table lacks required columns (node_name, offset, group_id). Synteny column will not be added.\n')
+        return(g)
+    }
+    if (!('direction' %in% colnames(df_syn))) {
+        df_syn[['direction']] = ifelse(suppressWarnings(as.integer(df_syn[['offset']])) < 0, 'upstream', 'downstream')
+    }
+    df_syn[['offset']] = suppressWarnings(as.integer(df_syn[['offset']]))
+    df_syn[['group_id']] = as.character(df_syn[['group_id']])
+    df_syn = df_syn[
+        is.finite(df_syn[['offset']]) &
+        (!is.na(df_syn[['group_id']])) &
+        (df_syn[['group_id']] != '') &
+        (df_syn[['offset']] != 0),
+        ,
+        drop=FALSE
+    ]
+    if (nrow(df_syn) == 0) {
+        cat('No valid synteny entries were found. Synteny column will not be added.\n')
+        return(g)
+    }
+    df_syn = df_syn[abs(df_syn[['offset']]) <= synteny_window, , drop=FALSE]
+    if (nrow(df_syn) == 0) {
+        cat('No synteny entries are within the requested window. Synteny column will not be added.\n')
+        return(g)
+    }
+    df_syn = merge(
+        df_syn,
+        df_tip[, c('label', 'y')],
+        by.x='node_name',
+        by.y='label',
+        all.x=TRUE,
+        sort=FALSE
+    )
+    df_syn = df_syn[is.finite(df_syn[['y']]), , drop=FALSE]
+    if (nrow(df_syn) == 0) {
+        cat('No synteny entries matched tree tip labels. Synteny column will not be added.\n')
+        return(g)
+    }
+    df_syn[['direction']] = ifelse(df_syn[['offset']] < 0, 'upstream', 'downstream')
+    df_syn[['x']] = synteny_window + 1 + df_syn[['offset']]
+
+    # Keep neighbor occupancy before group filtering so blank edge positions stay empty.
+    df_back = unique(df_syn[, c('x', 'y'), drop=FALSE])
+    df_back = df_back[order(df_back[['y']], df_back[['x']], method='radix'), , drop=FALSE]
+
+    df_group_tip = unique(df_syn[, c('group_id', 'node_name'), drop=FALSE])
+    df_group_n = aggregate(node_name ~ group_id, data=df_group_tip, FUN=function(v) length(unique(v)))
+    keep_groups = df_group_n[['group_id']][df_group_n[['node_name']] >= 2]
+    if (length(keep_groups) == 0) {
+        cat('No multi-tip synteny groups were detected. Synteny column will not be added.\n')
+        return(g)
+    }
+    df_syn = df_syn[df_syn[['group_id']] %in% keep_groups, , drop=FALSE]
+    if (nrow(df_syn) == 0) {
+        cat('Synteny groups were filtered out. Synteny column will not be added.\n')
+        return(g)
+    }
+
+    pick_nearest_offset = function(df) {
+        if (nrow(df) <= 1) {
+            return(df[1, , drop=FALSE])
+        }
+        if ('neighbor_gene' %in% colnames(df)) {
+            df = df[order(abs(df[['offset']]), df[['neighbor_gene']], method='radix'), , drop=FALSE]
+        } else {
+            df = df[order(abs(df[['offset']]), method='radix'), , drop=FALSE]
+        }
+        return(df[1, , drop=FALSE])
+    }
+
+    # Keep one marker per (tip, direction, group), nearest to the focal gene.
+    key = paste(df_syn[['node_name']], df_syn[['direction']], df_syn[['group_id']], sep='__')
+    df_syn_split = split(df_syn, key, drop=TRUE)
+    df_syn = do.call(
+        rbind,
+        lapply(df_syn_split, pick_nearest_offset)
+    )
+    rownames(df_syn) = NULL
+
+    link_parts = list()
+    link_id = 1L
+    for (direction_name in c('upstream', 'downstream')) {
+        df_dir = df_syn[df_syn[['direction']] == direction_name, , drop=FALSE]
+        if (nrow(df_dir) == 0) {
+            next
+        }
+        gids = unique(df_dir[['group_id']])
+        for (gid in gids) {
+            df_grp = df_dir[df_dir[['group_id']] == gid, , drop=FALSE]
+            if (nrow(df_grp) < 2) {
+                next
+            }
+            df_grp = df_grp[order(df_grp[['y']], method='radix'), , drop=FALSE]
+            for (i in seq_len(nrow(df_grp) - 1)) {
+                x_a = suppressWarnings(as.numeric(df_grp[i, 'x']))
+                x_b = suppressWarnings(as.numeric(df_grp[i + 1, 'x']))
+                y_a = suppressWarnings(as.numeric(df_grp[i, 'y']))
+                y_b = suppressWarnings(as.numeric(df_grp[i + 1, 'y']))
+                if (!(is.finite(x_a) && is.finite(x_b) && is.finite(y_a) && is.finite(y_b))) {
+                    next
+                }
+                link_parts[[link_id]] = data.frame(
+                    x = x_a,
+                    y = y_a,
+                    xend = x_b,
+                    yend = y_b,
+                    direction = direction_name,
+                    link_id = paste0('synteny_link_', link_id),
+                    group_id = gid,
+                    stringsAsFactors=FALSE
+                )
+                link_id = link_id + 1L
+            }
+        }
+    }
+    if (length(link_parts) > 0) {
+        df_link = do.call(rbind, link_parts)
+    } else {
+        df_link = data.frame(
+            x = numeric(0),
+            y = numeric(0),
+            xend = numeric(0),
+            yend = numeric(0),
+            link_id = character(0),
+            group_id = character(0),
+            stringsAsFactors=FALSE
+        )
+    }
+
+    df_point = df_syn[, c('x', 'y', 'group_id', 'node_name', 'offset', 'direction'), drop=FALSE]
+    df_point = df_point[order(df_point[['y']], df_point[['x']], method='radix'), , drop=FALSE]
+    group_levels = sort(unique(c(as.character(df_point[['group_id']]), as.character(df_link[['group_id']]))))
+    point_palette = gg_color_hue(length(group_levels))
+    names(point_palette) = group_levels
+    df_point[['group_id']] = factor(df_point[['group_id']], levels=group_levels)
+    if (nrow(df_link) > 0) {
+        df_link[['group_id']] = factor(df_link[['group_id']], levels=group_levels)
+    }
+
+    x_center = synteny_window + 1
+    x_max = synteny_window * 2 + 1
+    x_tick_df = data.frame(
+        x = c(1, synteny_window, synteny_window + 2, x_max),
+        label = c(paste0('-', synteny_window), '-1', '+1', paste0('+', synteny_window)),
+        stringsAsFactors=FALSE
+    )
+    x_tick_df = x_tick_df[!duplicated(x_tick_df[['x']]), , drop=FALSE]
+
+    df_center = data.frame(
+        x = rep(x_center, nrow(df_tip)),
+        y = df_tip[['y']],
+        stringsAsFactors=FALSE
+    )
+
+    link_layer = NULL
+    if (nrow(df_link) > 0) {
+        link_layer = geom_segment(
+            data=df_link,
+            mapping=aes(x=x, y=y, xend=xend, yend=yend, color=group_id, group=link_id),
+            linewidth=1.8,
+            lineend='round',
+            alpha=0.5
+        )
+    }
+    node_size = 1.5
+
+    g[[gname]] = ggplot(data=df_point) +
+        geom_blank(data=df_tip, aes(y=label)) +
+        geom_segment(data=df_tip, mapping=aes(y=y, yend=y), x=1, xend=x_max, linewidth=0.25, color='gray90') +
+        link_layer +
+        geom_point(data=df_back, mapping=aes(x=x, y=y), color='gray90', size=node_size, alpha=1) +
+        geom_point(data=df_center, mapping=aes(x=x, y=y), color='black', size=node_size, alpha=1) +
+        geom_point(mapping=aes(x=x, y=y, color=group_id), size=node_size, alpha=1) +
+        scale_x_continuous(
+            breaks=x_tick_df[['x']],
+            labels=x_tick_df[['label']],
+            limits=c(0.5, x_max + 0.5)
+        ) +
+        scale_color_manual(values=point_palette) +
+        xlab('Neighboring genes') +
+        theme_minimal(base_size=args[['font_size']]) +
+        guides(
+            color='none'
+        ) +
+        coord_cartesian(clip='off') +
+        theme(
+            axis.title.y=element_blank(),
+            axis.title.x=element_text(size=args[['font_size']]),
+            axis.text.y=element_blank(),
+            axis.ticks.y=element_blank(),
+            axis.text.x=element_text(angle=90, hjust=1, vjust=0.5, color='black', size=args[['font_size']]),
+            panel.grid.major.y=element_blank(),
+            panel.grid.minor.y=element_blank(),
+            panel.grid.minor.x=element_blank(),
+            panel.grid.major.x=element_blank(),
+            plot.margin=unit(args[['margins']], 'cm')
+        )
+    return(g)
 }
 
 gg_color_hue = function(n) {

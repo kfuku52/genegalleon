@@ -68,8 +68,8 @@ COPY container/scripts/install_helvetica_compat_font.sh /opt/pg/scripts/install_
 COPY container/scripts/install_nonconda_fallbacks.sh /opt/pg/scripts/install_nonconda_fallbacks.sh
 COPY container/scripts/validate_runtime.sh /opt/pg/scripts/validate_runtime.sh
 
-# nwkit currently imports ete4 modules directly (not ete3), so install ete4
-# explicitly via pip and assert importability during build.
+# nwkit currently imports ete4 modules directly, so install ete4 explicitly
+# via pip and assert importability during build.
 # Keep this layer focused on architecture/base toolchain setup so it can be
 # reused even when Git refs change.
 RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \

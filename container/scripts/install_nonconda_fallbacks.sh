@@ -58,10 +58,61 @@ resolve_binary() {
   return 1
 }
 
+run_mapnh_smoke_test() {
+  local mapnh_bin=$1
+  local smoke_dir
+  smoke_dir=$(mktemp -d)
+
+  cat > "${smoke_dir}/tiny.fasta" <<'EOF'
+>t1
+ACGTTGCAACGTTGCAACGTTGCAACGTTGCA
+>t2
+ACGTTGCAACGTTGCAACGTTGCAACGTCGCA
+>t3
+ACGTTGCAACGTTGCAACGTTGCAACGTCGTA
+>t4
+ACGTTGCAACGTTGCAACGTTGCAACGCCGTA
+EOF
+  cat > "${smoke_dir}/tiny.nwk" <<'EOF'
+((t1:0.1,t2:0.1):0.2,(t3:0.1,t4:0.1):0.2);
+EOF
+  cat > "${smoke_dir}/tiny.params" <<'EOF'
+alphabet=DNA
+input.sequence.file=$(SEQ)
+input.sequence.format=Fasta
+input.tree.file=$(TREE)
+input.tree.format=Newick
+model=JC69
+rate_distribution=Constant()
+map.type=Total
+output.counts=PerType(prefix=$(OUT).)
+output.tree_with_id.file=$(OUT).with_id.nwk
+EOF
+
+  if ! "${mapnh_bin}" \
+    SEQ="${smoke_dir}/tiny.fasta" \
+    TREE="${smoke_dir}/tiny.nwk" \
+    OUT="${smoke_dir}/tiny_out" \
+    param="${smoke_dir}/tiny.params" \
+    > "${smoke_dir}/tiny.log" 2>&1; then
+    log "mapnh smoke test failed for ${mapnh_bin}"
+    sed -n '1,120p' "${smoke_dir}/tiny.log" >&2 || true
+    rm -rf "${smoke_dir}"
+    return 1
+  fi
+
+  rm -rf "${smoke_dir}"
+}
+
 install_mapnh() {
   if command -v mapnh >/dev/null 2>&1; then
-    log "mapnh already available: $(command -v mapnh)"
-    return
+    local existing_mapnh
+    existing_mapnh=$(command -v mapnh)
+    if run_mapnh_smoke_test "${existing_mapnh}"; then
+      log "mapnh already available and passed smoke test: ${existing_mapnh}"
+      return
+    fi
+    log "Existing mapnh is broken; rebuilding: ${existing_mapnh}"
   fi
 
   local workdir
@@ -71,6 +122,10 @@ install_mapnh() {
 
   local cmake_file="${workdir}/testnh/CMakeLists.txt"
   sed -i -E 's/find_package[[:space:]]*\([[:space:]]*bpp-phyl[[:space:]]+[0-9.]+[[:space:]]+REQUIRED[[:space:]]*\)/find_package(bpp-phyl REQUIRED)/' "${cmake_file}"
+  # Bio++ >=12 with testnh v2.3.2 triggers a homogeneous-mode null dereference in MapNH.cpp.
+  # Guard mapnh code paths so they use `model` when nonhomogeneous mode is disabled.
+  local mapnh_cpp="${workdir}/testnh/TestNH/MapNH.cpp"
+  sed -i 's/modelSet->getSubstitutionModel(0)/model ? model : modelSet->getSubstitutionModel(0)/g' "${mapnh_cpp}"
 
   local jobs
   jobs=$(build_jobs)
@@ -82,6 +137,10 @@ install_mapnh() {
 
   if ! command -v mapnh >/dev/null 2>&1; then
     log "ERROR: mapnh was not installed correctly."
+    exit 1
+  fi
+  if ! run_mapnh_smoke_test "/usr/local/bin/mapnh"; then
+    log "ERROR: mapnh smoke test failed after installation."
     exit 1
   fi
   log "Installed mapnh to /usr/local/bin/mapnh"

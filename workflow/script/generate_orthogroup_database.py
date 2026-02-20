@@ -11,7 +11,11 @@ import gc
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import math
 import logging
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, **_kwargs):
+        return iterable
 import pandas as pd
 import sqlalchemy
 try:

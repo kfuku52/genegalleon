@@ -869,7 +869,8 @@ gg_source_home_bashrc() {
 gg_test_r_packages() {
   local rpackage
   for rpackage in "$@"; do
-    echo "Testing: ${rpackage}" | tee >(cat >&2)
+    echo "Testing: ${rpackage}"
+    echo "Testing: ${rpackage}" >&2
     R -q -e "suppressPackageStartupMessages(library(${rpackage}, quietly=TRUE))" > /dev/null
   done
 }
@@ -877,7 +878,8 @@ gg_test_r_packages() {
 gg_test_python_packages() {
   local pypackage
   for pypackage in "$@"; do
-    echo "Testing: ${pypackage}" | tee >(cat >&2)
+    echo "Testing: ${pypackage}"
+    echo "Testing: ${pypackage}" >&2
     python -c "import ${pypackage}" > /dev/null
   done
 }
@@ -892,7 +894,8 @@ gg_test_shell_commands() {
 
 gg_step_start() {
   local task_name=$1
-  echo "$(date): Start: ${task_name}" | tee >(cat >&2)
+  echo "$(date): Start: ${task_name}"
+  echo "$(date): Start: ${task_name}" >&2
 }
 
 gg_step_skip() {

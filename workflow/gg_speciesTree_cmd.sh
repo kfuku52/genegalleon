@@ -78,6 +78,44 @@ source "${dir_myscript}/gg_util.sh" # Load utility functions
 gg_source_home_bashrc
 gg_prepare_cmd_runtime "${dir_pg}" "base" 1 1
 
+copy_busco_tables() {
+  local busco_root_dir="$1"
+  local lineage="$2"
+  local file_full="$3"
+  local file_short="$4"
+  local run_dir="${busco_root_dir}/run_${lineage}"
+  local full_src=""
+  local short_src=""
+  local -a short_candidates=()
+
+  if [[ -s "${run_dir}/full_table.tsv" ]]; then
+    full_src="${run_dir}/full_table.tsv"
+  elif [[ -s "${run_dir}/full_table.tsv.gz" ]]; then
+    gzip -cd "${run_dir}/full_table.tsv.gz" > "./tmp.busco.full_table.tsv"
+    full_src="./tmp.busco.full_table.tsv"
+  fi
+
+  if [[ -s "${run_dir}/short_summary.txt" ]]; then
+    short_src="${run_dir}/short_summary.txt"
+  else
+    mapfile -t short_candidates < <(find "${run_dir}" -maxdepth 1 -type f -name "short_summary*.txt" | sort)
+    if [[ ${#short_candidates[@]} -gt 0 ]]; then
+      short_src="${short_candidates[0]}"
+    fi
+  fi
+
+  if [[ -z "${full_src}" || -z "${short_src}" ]]; then
+    echo "BUSCO outputs were not found under ${run_dir}."
+    echo "Expected full_table.tsv(.gz) and short_summary*.txt."
+    rm -f "./tmp.busco.full_table.tsv"
+    return 1
+  fi
+
+  cp_out "${full_src}" "${file_full}"
+  cp_out "${short_src}" "${file_short}"
+  rm -f "./tmp.busco.full_table.tsv"
+}
+
 dir_sp_cds="${dir_pg_input}/species_cds"
 dir_og="${dir_pg_output}/orthogroup"
 dir_og_rooted_tree="${dir_og}/rooted_tree"
@@ -120,10 +158,10 @@ file_concat_iqtree_pep_root="${dir_concat_iqtree_pep}/concat.pep.rooted.nwk"
 file_constrained_tree="${dir_constrained_tree}/constrained.nwk"
 file_plot_constrained_tree="${dir_constrained_tree}/constrained_tree_constraints.pdf"
 file_iq2mc_prefix="${dir_mcmctree1}/iq2mc"
-file_iq2mc_ctl="${file_iq2mc_prefix}_mcmctree.ctl"
-file_iq2mc_hessian="${file_iq2mc_prefix}_mcmctree.hessian"
-file_iq2mc_rooted_tree="${file_iq2mc_prefix}_rooted.nwk"
-file_iq2mc_dummy_phy="${file_iq2mc_prefix}_dummy.phy"
+file_iq2mc_ctl="${file_iq2mc_prefix}.mcmctree.ctl"
+file_iq2mc_hessian="${file_iq2mc_prefix}.mcmctree.hessian"
+file_iq2mc_rooted_tree="${file_iq2mc_prefix}.rooted.nwk"
+file_iq2mc_dummy_phy="${file_iq2mc_prefix}.dummy.phy"
 file_mcmctree1="${file_iq2mc_ctl}" # Backward-compatible marker name
 file_mcmctree2_raw="${dir_mcmctree2}/iq2mc.mcmctree.out"
 file_mcmctree2="${dir_mcmctree2}/FigTree.tre"
@@ -432,6 +470,42 @@ if [[ ${run_busco} -eq 1 ]]; then
     echo "No CDS file found. Exiting."
     exit 1
   fi
+  legacy_busco_files=()
+  mapfile -t legacy_busco_files < <(find "${dir_species_busco_full}" "${dir_species_busco_short}" -maxdepth 1 -type f \( -name "*_busco.full.tsv" -o -name "*_busco.short.txt" \) 2>/dev/null | sort)
+  for legacy_busco_file in "${legacy_busco_files[@]}"; do
+    legacy_base=$(basename "${legacy_busco_file}")
+    normalized_base=$(printf '%s\n' "${legacy_base}" | sed -E 's/_busco\.full\.tsv$/.busco.full.tsv/; s/_busco\.short\.txt$/.busco.short.txt/')
+    normalized_path="$(dirname "${legacy_busco_file}")/${normalized_base}"
+    if [[ "${legacy_busco_file}" == "${normalized_path}" ]]; then
+      continue
+    fi
+    if [[ -e "${normalized_path}" ]]; then
+      echo "Removing legacy BUSCO duplicate file: ${legacy_busco_file}"
+      rm -f "${legacy_busco_file}"
+    else
+      echo "Renaming legacy BUSCO file: ${legacy_busco_file} -> ${normalized_path}"
+      mv_out "${legacy_busco_file}" "${normalized_path}"
+    fi
+  done
+  # Remove stale BUSCO outputs from species not present in current species_cds inputs.
+  input_species_set=$(
+    for cds_full in "${species_cds_fasta[@]}"; do
+      gg_species_name_from_path_or_dot "$(basename "${cds_full}")"
+    done | sort -u
+  )
+  busco_output_files=()
+  mapfile -t busco_output_files < <(find "${dir_species_busco_full}" "${dir_species_busco_short}" -maxdepth 1 -type f \( -name "*.busco.full.tsv" -o -name "*.busco.short.txt" \) 2>/dev/null | sort)
+  for busco_file in "${busco_output_files[@]}"; do
+    busco_base=$(basename "${busco_file}")
+    busco_species=${busco_base%.busco.full.tsv}
+    if [[ "${busco_species}" == "${busco_base}" ]]; then
+      busco_species=${busco_base%.busco.short.txt}
+    fi
+    if ! printf '%s\n' "${input_species_set}" | grep -qx "${busco_species}"; then
+      echo "Removing stale BUSCO output for species not in current input: ${busco_file}"
+      rm -f "${busco_file}"
+    fi
+  done
   for cds_full in "${species_cds_fasta[@]}"; do
     cds=$(basename "${cds_full}")
     sp_ub=$(gg_species_name_from_path "${cds}")
@@ -467,9 +541,12 @@ if [[ ${run_busco} -eq 1 ]]; then
       --offline
 
       if [[ $? -eq 0 ]]; then
-        cp_out ./busco_tmp/run_${busco_lineage}/full_table.tsv ${file_sp_busco_full}
-        cp_out ./busco_tmp/run_${busco_lineage}/short_summary.txt ${file_sp_busco_short}
-        rm -r './busco_tmp'
+        if copy_busco_tables "./busco_tmp" "${busco_lineage}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
+          rm -r './busco_tmp'
+        else
+          echo "Failed to locate normalized BUSCO outputs for ${sp_ub}. Exiting."
+          exit 1
+        fi
       fi
     else
       echo "Skipped BUSCO: ${cds}"

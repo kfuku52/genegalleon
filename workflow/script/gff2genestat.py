@@ -160,7 +160,7 @@ def add_intron_info(gff, df_all, id_col='gene_id'):
             max_intron_pos = intron_pos if (intron_pos > max_intron_pos) else max_intron_pos
             intron_positions.append(str(intron_pos))
             current_offset += feature_block_size
-        str_intron_positions = ','.join(intron_positions)
+        str_intron_positions = ';'.join(intron_positions)
         df_intron.at[j,'gene_id'] = seq_name
         df_intron.at[j,'feature_size'] = feature_size
         df_intron.at[j,'num_intron'] = num_intron

@@ -39,7 +39,6 @@ spades
 pymol-open-source
 seqkit
 sra-tools
-transdecoder
 trimal
 
 # Merged from former BUSCO-specific environment.

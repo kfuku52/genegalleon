@@ -40,7 +40,6 @@ spades
 pymol-open-source
 seqkit
 sra-tools
-transdecoder
 trimal
 trinity
 

@@ -55,12 +55,16 @@ echo ''
 echo ''
 
 echo "### gg_container ###"
-singularity inspect "${gg_image}"
-echo ''
-echo ''
-
-echo "### singularity version ###"
-singularity version
+singularity_bin="$(command -v singularity)"
+if [[ "${singularity_bin}" == *"/gg_wrapper_bin/"* ]]; then
+	echo "Skipping singularity inspect/version under Docker-backed singularity shim: ${singularity_bin}"
+else
+	singularity inspect "${gg_image}"
+	echo ''
+	echo ''
+	echo "### singularity version ###"
+	singularity version
+fi
 echo ''
 echo ''
 

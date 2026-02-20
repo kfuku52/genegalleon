@@ -9,6 +9,9 @@ library(nlme)
 library(Rphylopars)
 library(ggplot2)
 library(rkftools)
+script_arg = grep('^--file=', commandArgs(trailingOnly = FALSE), value = TRUE)
+script_dir = if (length(script_arg) > 0) dirname(normalizePath(sub('^--file=', '', script_arg[1]))) else getwd()
+source(file.path(script_dir, 'pgls_common.R'))
 
 cat('Species tree PGLS run_mode:', run_mode, '\n')
 if (run_mode == 'debug') {
@@ -57,56 +60,8 @@ sum_per_species = function(exp, value_type) {
   return(exp)
 }
 
-run_phylopars_regression = function(df_trait_exp, tree, trait_cols, expression_bases, output_cols) {
-  fg_nums = count_foreground_lineage(tree, df_trait_exp[, c('species', trait_cols)])
-  nrow = length(trait_cols) * length(expression_bases)
-  df_stat = data.frame(matrix(vector(), nrow, length(output_cols)))
-  colnames(df_stat) = output_cols
-  i = 1
-  for (trait_col in trait_cols) {
-    for (expression_base in expression_bases) {
-      expression_cols = colnames(df_trait_exp)[startsWith(colnames(df_trait_exp), expression_base)]
-      expression_cols = expression_cols[(expression_cols==expression_base)|(grepl('.*[0-9]$', expression_cols))]
-      explanatory_variables = paste(expression_cols, collapse = ' + ')
-      explained_variable = trait_col
-      formula_string = paste(explained_variable, '~', explanatory_variables)
-      cat('PGLS formula:', formula_string, '\n')
-      out_phylopars = try(phylopars.lm(
-        as.formula(formula_string),
-        trait_data = df_trait_exp,
-        tree = tree,
-        model = "BM",
-        pheno_error = TRUE,
-        phylo_correlated = TRUE,
-        pheno_correlated = TRUE
-      ))
-
-      if (class(out_phylopars) != "try-error") {
-        for (stat in output_cols[1:6]) {
-          df_stat[i, stat] = out_phylopars[stat]
-        }
-        df_stat[i, 'AIC'] = AIC(out_phylopars)
-        df_stat[i, 'BIC'] = BIC(out_phylopars)
-        PCC = cor(df_trait_exp[paste('mean_', expression_base, sep = "")], df_trait_exp[trait_col], method = 'pearson', use = "complete.obs")
-        df_stat[i, 'PCC'] = PCC
-      } else {
-        cat('error during phylopars process:', formula_string, '\n')
-      }
-      df_stat[i, 'trait'] = trait_col
-      df_stat[i, 'variable'] = expression_base
-      df_stat[i, 'num_foreground_lineage'] = fg_nums[[trait_col]]
-      i = i + 1
-    }
-  }
-  cat('adjusted pvalues are calculated:', '\n')
-  cat('method = fdr', '\n')
-  cat('length =', length(df_stat[, 'pval']), '\n')
-  df_stat[, 'p.adj'] = p.adjust(df_stat[, 'pval'], length(df_stat[, 'pval']), method = 'fdr')
-  return(df_stat)
-}
-
 generate_dummy_df_stat = function(tree, exp, trait, output_cols) {
-  fg_nums = count_foreground_lineage(tree, trait)
+  fg_nums = rkftools::count_foreground_lineage(tree, trait)
   trait_cols = colnames(trait[2:length(trait)])
   exp_groups = unique(sub('_[0-9]+$', '', colnames(exp)[2:length(colnames(exp))]))
   df_stat_template = data.frame(matrix(NA, nrow = length(exp_groups), ncol = length(output_cols)))
@@ -120,19 +75,6 @@ generate_dummy_df_stat = function(tree, exp, trait, output_cols) {
     df_stat = rbind(df_stat, df_stat_tmp)
   }
   return(df_stat)
-}
-
-add_expression_mean_cols = function(exp, expression_bases) {
-  for (col in expression_bases) {
-    is_col = grepl(col, colnames(exp))
-    mean_col = paste('mean_', col, sep = '')
-    if (sum(is_col) > 1) {
-      exp[, mean_col] = apply(exp[, is_col], 1, function(x) { mean(x, na.rm = TRUE) })
-    } else {
-      exp[, mean_col] = exp[, is_col]
-    }
-  }
-  return(exp)
 }
 
 save_pgls_plot = function(df_stat, font_size = 8, pval_line = 0.05) {
@@ -218,7 +160,7 @@ tree = ape::read.tree(args[['file_sptree']])
 trait = read.table(args[['file_trait']], header = TRUE, sep = '\t')
 trait[, 'species'] = sub(' ', '_', trait[, 'species'])
 trait_cols = colnames(trait[2:length(trait)])
-output_cols = c("R2", "R2adj", "sigma", "Fstat", "pval", "logLik", "AIC", "BIC", "PCC", "p.adj", "trait", "variable", 'num_foreground_lineage')
+output_cols = c("R2", "R2adj", "sigma", "Fstat", "pval", "logLik", "AIC", "BIC", "PCC", "p.adj", "trait", "variable", "fit_mode", 'num_foreground_lineage')
 
 exp = read.table(args[['file_exp']], header = TRUE, sep = '\t')
 expression_spp = unique(leaf2species(leaf_names = exp[['gene_id']], use_underbar = TRUE))
@@ -262,14 +204,19 @@ cat('Number of species in the processed expression table:', nrow(exp), '\n')
 
 head(df_trait_exp)
 
-df_stat = run_phylopars_regression(df_trait_exp, tree, trait_cols, expression_bases, output_cols)
-df_stat = df_stat[order(df_stat[, 'variable']),]
-df_stat = df_stat[apply(df_stat, 1, function(x) !all(is.na(x))), ] # Remove NA-only rows
-rownames(df_stat) = NULL
+df_stat = run_phylopars_regression(
+  df_trait_exp = df_trait_exp,
+  tree = tree,
+  trait_cols = trait_cols,
+  expression_bases = expression_bases,
+  output_cols = output_cols,
+  include_foreground_lineage = TRUE,
+  use_phenocov = (args[['merge_replicates']] != 'yes')
+)
+df_stat = finalize_pgls_stats(df_stat)
 file_name = 'species_tree_PGLS.tsv'
 write.table(df_stat, file_name, row.names = FALSE, sep = '\t', quote = FALSE)
 cp = save_pgls_plot(df_stat, font_size = 8)
 
 cp
 head(df_stat)
-
