@@ -36,8 +36,12 @@ while IFS= read -r env_name; do
   is_dropped_env "${env_name}" && continue
   pipeline_envs+=("${env_name}")
 done < <(
-  rg -n "conda activate [A-Za-z0-9_.-]+" "${repo_root}/workflow"/gg_*_cmd.sh \
-    | sed -E 's/.*conda activate ([A-Za-z0-9_.-]+).*/\1/' \
+  {
+    rg -n "conda activate [A-Za-z0-9_.-]+" "${repo_root}/workflow/core"/gg_*_core.sh \
+      | sed -E 's/.*conda activate ([A-Za-z0-9_.-]+).*/\1/' || true
+    rg -n 'gg_prepare_cmd_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"[A-Za-z0-9_.-]+"' "${repo_root}/workflow/core"/gg_*_core.sh \
+      | sed -E 's/.*gg_prepare_cmd_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"([A-Za-z0-9_.-]+)".*/\1/' || true
+  } \
     | sort -u
 )
 

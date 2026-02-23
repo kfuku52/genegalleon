@@ -5,7 +5,7 @@ import sys
 import pandas
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "collect_common_BUSCO_genes.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "collect_common_BUSCO_genes.py"
 
 
 def write_busco_full_table(path, rows):
@@ -68,3 +68,43 @@ def test_collect_common_busco_filters_all_missing_and_merges_metadata_by_busco_i
     row_b4 = out.loc[out["busco_id"] == "b4", :].iloc[0]
     assert row_b4["speciesA.tsv"] == "a_gene4_1,a_gene4_2"
     assert row_b4["speciesB.tsv"] == "-"
+
+
+def test_collect_common_busco_ignores_hidden_and_non_file_tsv_entries(tmp_path):
+    busco_dir = tmp_path / "busco_full"
+    busco_dir.mkdir()
+    outfile = tmp_path / "busco_summary.tsv"
+
+    write_busco_full_table(
+        busco_dir / "speciesA.tsv",
+        [
+            ("b1", "Complete", "a_gene1:1-10", "100", "10", "url1", "desc1"),
+        ],
+    )
+    write_busco_full_table(
+        busco_dir / ".hidden.tsv",
+        [
+            ("b1", "Complete", "hidden_gene:1-10", "100", "10", "urlH", "descH"),
+        ],
+    )
+    (busco_dir / "fake.tsv").mkdir()
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--busco_outdir",
+            str(busco_dir),
+            "--outfile",
+            str(outfile),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+    out = pandas.read_csv(outfile, sep="\t")
+    assert out.columns.tolist() == ["busco_id", "orthodb_url", "description", "speciesA.tsv"]
+    assert out.loc[0, "speciesA.tsv"] == "a_gene1"

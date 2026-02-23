@@ -11,7 +11,7 @@ From the project README and Wiki (`gg_versions`):
 - `GeneGalleon` was originally assembled interactively from a miniconda3 Singularity sandbox.
 - The runtime now uses a single conda `base` env, with selected tools installed from GitHub at build time
   (`kfuku52/amalgkit`, `kfuku52/cdskit`, `kfuku52/csubst`, `kfuku52/nwkit`,
-  `kfuku52/kftools`, `kfuku52/rkftools`).
+  `kfuku52/kftools`, `kfuku52/rkftools`, `kfuku52/RADTE`).
   `amalgkit` is selected from the newer branch commit between `master` and
   `kfdevel` by default.
 
@@ -37,21 +37,25 @@ KFU52_REPO_REF=master \
 KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel \
 KFTOOLS_REPO_URL=https://github.com/kfuku52/kftools.git \
 RKFTOOLS_REPO_URL=https://github.com/kfuku52/rkftools.git \
+RADTE_REPO_URL=https://github.com/kfuku52/RADTE.git \
 KFTOOLS_REPO_REF=master \
 RKFTOOLS_REPO_REF=master \
+RADTE_REPO_REF=master \
 IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.sh
 ```
 
 `KFU52_REPO_REF` applies to `cdskit`, `csubst`, and `nwkit`.  
-`KFTOOLS_REPO_REF` and `RKFTOOLS_REPO_REF` override only `kftools`/`rkftools`
+`KFTOOLS_REPO_REF`/`RKFTOOLS_REPO_REF` override only `kftools`/`rkftools`
 and default to `KFU52_REPO_REF` when not set.
+`RADTE_REPO_REF` controls the RADTE Git checkout and defaults to repository HEAD
+when not set.
 For `amalgkit`, auto-selection can be controlled with:
 - `KFU52_AMALGKIT_AUTO_SELECT_REF=1` (default)
 - `KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel` (default)
 - `KFU52_AMALGKIT_REPO_REF=<branch>` (hard override)
 
 `buildx.sh` runs a preflight check to ensure the conda env set used in
-`workflow/gg_*_cmd.sh` is covered by env installs in `container/Dockerfile`.
+`workflow/core/gg_*_core.sh` is covered by env installs in `container/Dockerfile`.
 
 Single-platform local test image:
 
@@ -76,7 +80,7 @@ IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 OUT=genegalleon_20260211_amd.s
   - available arm64 `jellyfish` builds are Python-only and do not provide the
     required `jellyfish` CLI binary.
 - Repeat-analysis pipeline steps that depended on the removed `repeat` conda env
-  were dropped from `workflow/gg_genome_annotation_cmd.sh`.
+  were dropped from `workflow/core/gg_genome_annotation_core.sh`.
 - Required/optional command validation report is generated at build time:
   - `/opt/pg/logs/runtime_validation_<arch>.tsv`
 - `ete4` is installed via `pip` in `base` because `nwkit` imports `ete4`

@@ -41,7 +41,7 @@ font.save(str(dst))
 print(f"Installed {dst}")
 PY
 
-  rm -rf /root/.cache/matplotlib /home/.cache/matplotlib || true
+  rm -rf -- "/root/.cache/matplotlib" "/home/.cache/matplotlib" || true
 
   micromamba run -n "${env_name}" python - <<'PY'
 import matplotlib

@@ -6,7 +6,7 @@ import sys
 import pandas
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "build_uniprot_metadata_from_dat.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "build_uniprot_metadata_from_dat.py"
 
 
 def test_build_uniprot_metadata_from_dat_extracts_extended_fields(tmp_path):

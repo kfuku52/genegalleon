@@ -32,14 +32,14 @@ repo_root <- NA_character_
 if (!is.na(resolved_script_path)) {
   script_dir <- dirname(resolved_script_path)
   repo_root_candidate <- normalizePath(file.path(script_dir, "..", ".."), winslash = "/", mustWork = FALSE)
-  if (dir.exists(file.path(repo_root_candidate, "workflow", "script"))) {
+  if (dir.exists(file.path(repo_root_candidate, "workflow", "support"))) {
     repo_root <- normalizePath(repo_root_candidate, winslash = "/", mustWork = TRUE)
   }
 }
 
 if (is.na(repo_root)) {
   cwd_candidate <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
-  if (dir.exists(file.path(cwd_candidate, "workflow", "script"))) {
+  if (dir.exists(file.path(cwd_candidate, "workflow", "support"))) {
     repo_root <- cwd_candidate
   }
 }
@@ -48,12 +48,19 @@ if (is.na(repo_root)) {
   stop("Could not resolve repository root.")
 }
 
-main_r <- file.path(repo_root, "workflow", "script", "tree_annotation", "R", "main.R")
+main_r <- file.path(repo_root, "workflow", "support", "tree_annotation", "R", "main.R")
 if (!file.exists(main_r)) {
   stop(sprintf("main.R not found: %s", main_r))
 }
 
-suppressPackageStartupMessages(library(tidyr))
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+  cat("test_tree_annotation_main.R: SKIP (ggplot2 is not installed)\n")
+  quit(save = "no", status = 0)
+}
+if (!requireNamespace("ape", quietly = TRUE)) {
+  cat("test_tree_annotation_main.R: SKIP (ape is not installed)\n")
+  quit(save = "no", status = 0)
+}
 suppressPackageStartupMessages(library(ggplot2))
 source(main_r, local = .GlobalEnv)
 

@@ -5,7 +5,7 @@ import sys
 import pandas
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "parse_grampa.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "parse_grampa.py"
 
 
 def test_parse_grampa_writes_summary_with_species_gene_columns(tmp_path):

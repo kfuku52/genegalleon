@@ -7,7 +7,7 @@ import numpy
 import pandas
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "annotate_blast_coverage.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "annotate_blast_coverage.py"
 
 
 def load_module():

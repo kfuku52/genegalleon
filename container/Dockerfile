@@ -11,8 +11,10 @@ ARG KFU52_AMALGKIT_BRANCH_CANDIDATES="master,kfdevel"
 ARG KFU52_AMALGKIT_REPO_REF=""
 ARG KFTOOLS_REPO_URL="https://github.com/kfuku52/kftools.git"
 ARG RKFTOOLS_REPO_URL="https://github.com/kfuku52/rkftools.git"
+ARG RADTE_REPO_URL="https://github.com/kfuku52/RADTE.git"
 ARG KFTOOLS_REPO_REF=""
 ARG RKFTOOLS_REPO_REF=""
+ARG RADTE_REPO_REF=""
 
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -130,6 +132,18 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && git clone --depth 1 --branch "${rkftools_repo_ref}" "${RKFTOOLS_REPO_URL}" /tmp/rkftools \
  && micromamba run -n base R CMD INSTALL /tmp/rkftools \
  && rm -rf /tmp/rkftools \
+ && rm -rf /tmp/radte \
+ && if [[ -n "${RADTE_REPO_REF}" ]]; then \
+      git clone --depth 1 --branch "${RADTE_REPO_REF}" "${RADTE_REPO_URL}" /tmp/radte; \
+    else \
+      git clone --depth 1 "${RADTE_REPO_URL}" /tmp/radte; \
+    fi \
+ && if [[ ! -s /tmp/radte/radte.r ]]; then \
+      echo "RADTE script was not found in ${RADTE_REPO_URL}"; \
+      exit 1; \
+    fi \
+ && install -m 0755 /tmp/radte/radte.r /usr/local/bin/radte.r \
+ && rm -rf /tmp/radte \
  && /opt/pg/scripts/validate_runtime.sh \
       --required "${runtime_required}" \
       --optional "${runtime_optional}" \

@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "format_species_inputs.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "format_species_inputs.py"
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"
 
 

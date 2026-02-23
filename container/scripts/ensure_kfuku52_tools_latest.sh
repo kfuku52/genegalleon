@@ -38,7 +38,7 @@ install_latest_from_github() {
   log "Installing ${tool} from GitHub ${tool_ref}: ${spec}"
 
   local attempt
-  for attempt in $(seq 1 "${max_attempts}"); do
+  for (( attempt=1; attempt<=max_attempts; attempt++ )); do
     if micromamba run -n "${env_name}" \
       pip install --no-cache-dir --upgrade --force-reinstall --no-deps --no-build-isolation "${spec}"; then
       return 0
@@ -68,7 +68,7 @@ get_remote_branch_commit_epoch() {
   if git clone --quiet --depth 1 --single-branch --branch "${branch}" "${remote_url}" "${tmp_dir}/repo" >/dev/null 2>&1; then
     commit_epoch=$(git -C "${tmp_dir}/repo" log -1 --format=%ct 2>/dev/null || true)
   fi
-  rm -rf "${tmp_dir}"
+  rm -rf -- "${tmp_dir}"
 
   echo "${commit_epoch}"
 }
@@ -81,7 +81,10 @@ resolve_amalgkit_ref_by_latest_commit() {
   local best_epoch=-1
   local ref
   local epoch
-  for ref in $(echo "${amalgkit_branch_candidates}" | tr ',' ' '); do
+  local refs=()
+  mapfile -t refs < <(printf '%s' "${amalgkit_branch_candidates}" | tr ',' '\n')
+  for ref in "${refs[@]}"; do
+    ref=$(printf '%s' "${ref}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
     if [[ -z "${ref}" ]]; then
       continue
     fi

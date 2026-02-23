@@ -325,6 +325,9 @@ if (require_internal_node_labels == 1L) {
     validate_internal_node_labels(tree, context = args[['tree_file']])
 }
 tree = ensure_internal_node_names(tree)
+if (!isTRUE(ape::is.binary(tree))) {
+    stop("Input tree is not binary. Resolve tree polytomies upstream before running detect_OU_shift_l1ou.r.")
+}
 tree_original = tree
 trait_table = read.table(args[['trait_file']], header=TRUE, row.names=1, sep="\t")
 trait_table = merge_replicates(trait_table, args[['replicate_sep']])

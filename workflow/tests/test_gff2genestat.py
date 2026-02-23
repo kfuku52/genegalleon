@@ -1,6 +1,6 @@
 import pandas
 
-from workflow.script.gff2genestat import add_intron_info
+from workflow.support.gff2genestat import add_intron_info
 
 
 def test_add_intron_info_uses_semicolon_delimiter():

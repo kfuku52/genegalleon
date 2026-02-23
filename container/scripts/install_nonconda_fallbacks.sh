@@ -97,11 +97,11 @@ EOF
     > "${smoke_dir}/tiny.log" 2>&1; then
     log "mapnh smoke test failed for ${mapnh_bin}"
     sed -n '1,120p' "${smoke_dir}/tiny.log" >&2 || true
-    rm -rf "${smoke_dir}"
+    rm -rf -- "${smoke_dir}"
     return 1
   fi
 
-  rm -rf "${smoke_dir}"
+  rm -rf -- "${smoke_dir}"
 }
 
 install_mapnh() {
@@ -133,7 +133,7 @@ install_mapnh() {
   cmake --build "${workdir}/testnh/build" --target mapnh -j"${jobs}"
 
   install -m 0755 "${workdir}/testnh/build/TestNH/mapnh" /usr/local/bin/mapnh
-  rm -rf "${workdir}"
+  rm -rf -- "${workdir}"
 
   if ! command -v mapnh >/dev/null 2>&1; then
     log "ERROR: mapnh was not installed correctly."
@@ -277,7 +277,7 @@ install_cafe5() {
   if [[ -d "${tool_env_bin}" ]]; then
     install -m 0755 "${src_dir}/bin/cafe5" "${tool_env_bin}/cafe5"
   fi
-  rm -rf "${workdir}"
+  rm -rf -- "${workdir}"
 
   if ! command -v cafe5 >/dev/null 2>&1; then
     log "ERROR: cafe5 was not installed correctly."

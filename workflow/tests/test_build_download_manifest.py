@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "build_download_manifest.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "build_download_manifest.py"
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"
 
 

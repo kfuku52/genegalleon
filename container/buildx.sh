@@ -17,8 +17,10 @@ KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfde
 KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF:-}
 KFTOOLS_REPO_URL=${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}
 RKFTOOLS_REPO_URL=${RKFTOOLS_REPO_URL:-https://github.com/kfuku52/rkftools.git}
+RADTE_REPO_URL=${RADTE_REPO_URL:-https://github.com/kfuku52/RADTE.git}
 KFTOOLS_REPO_REF=${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}
 RKFTOOLS_REPO_REF=${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}
+RADTE_REPO_REF=${RADTE_REPO_REF:-}
 CACHE_DIR=${CACHE_DIR:-.buildx-cache}
 USE_LOCAL_CACHE=${USE_LOCAL_CACHE:-1}
 CACHE_FROM=${CACHE_FROM:-}
@@ -77,7 +79,7 @@ elif [[ "${USE_LOCAL_CACHE}" == "1" ]]; then
   else
     cache_dir_new="${CACHE_DIR}.new"
     mkdir -p "${CACHE_DIR}"
-    rm -rf "${cache_dir_new}"
+    rm -rf -- "${cache_dir_new}"
     cache_args+=(--cache-from "type=local,src=${CACHE_DIR}")
     cache_args+=(--cache-to "type=local,dest=${cache_dir_new},mode=max")
   fi
@@ -96,8 +98,10 @@ if [[ ${#cache_args[@]} -gt 0 ]]; then
     --build-arg KFU52_AMALGKIT_REPO_REF="${KFU52_AMALGKIT_REPO_REF}" \
     --build-arg KFTOOLS_REPO_URL="${KFTOOLS_REPO_URL}" \
     --build-arg RKFTOOLS_REPO_URL="${RKFTOOLS_REPO_URL}" \
+    --build-arg RADTE_REPO_URL="${RADTE_REPO_URL}" \
     --build-arg KFTOOLS_REPO_REF="${KFTOOLS_REPO_REF}" \
     --build-arg RKFTOOLS_REPO_REF="${RKFTOOLS_REPO_REF}" \
+    --build-arg RADTE_REPO_REF="${RADTE_REPO_REF}" \
     --tag "${IMAGE}:${TAG}" \
     "${cache_args[@]}" \
     ${output_flag} \
@@ -115,15 +119,17 @@ else
     --build-arg KFU52_AMALGKIT_REPO_REF="${KFU52_AMALGKIT_REPO_REF}" \
     --build-arg KFTOOLS_REPO_URL="${KFTOOLS_REPO_URL}" \
     --build-arg RKFTOOLS_REPO_URL="${RKFTOOLS_REPO_URL}" \
+    --build-arg RADTE_REPO_URL="${RADTE_REPO_URL}" \
     --build-arg KFTOOLS_REPO_REF="${KFTOOLS_REPO_REF}" \
     --build-arg RKFTOOLS_REPO_REF="${RKFTOOLS_REPO_REF}" \
+    --build-arg RADTE_REPO_REF="${RADTE_REPO_REF}" \
     --tag "${IMAGE}:${TAG}" \
     ${output_flag} \
     .
 fi
 
 if [[ -n "${cache_dir_new}" && -d "${cache_dir_new}" ]]; then
-  rm -rf "${CACHE_DIR}"
+  rm -rf -- "${CACHE_DIR}"
   mv "${cache_dir_new}" "${CACHE_DIR}"
 fi
 

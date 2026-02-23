@@ -5,6 +5,7 @@ r-aplot
 bioconductor-ggmsa
 r-cowplot
 r-grplasso
+r-ggimage
 r-ggrepel
 bioconductor-ggtree
 r-igraph

@@ -40,18 +40,18 @@ run_smoke_test() {
   if [[ ${rc} -ne 0 ]]; then
     log "Smoke test failed with exit code ${rc}."
     tail -n 80 "${log_file}" || true
-    rm -rf "${workdir}"
+    rm -rf -- "${workdir}"
     return 1
   fi
 
   if [[ ! -s "${workdir}/smoke_out/results/Phy003AEDB_CUCME/geneTree.newick" ]]; then
     log "Smoke test did not produce expected output gene tree."
     tail -n 80 "${log_file}" || true
-    rm -rf "${workdir}"
+    rm -rf -- "${workdir}"
     return 1
   fi
 
-  rm -rf "${workdir}"
+  rm -rf -- "${workdir}"
   return 0
 }
 

@@ -88,7 +88,7 @@ set_micromamba_config_safe() {
     echo "[install_env] WARNING: micromamba config ${key} returned: ${out}"
     return 1
   fi
-  if micromamba config list | grep -q "^${key}:"; then
+  if micromamba config list | awk -v key="${key}:" '$1 == key {found=1} END {exit(found ? 0 : 1)}'; then
     echo "[install_env] micromamba config ${key}=${value}"
   else
     echo "[install_env] WARNING: micromamba config ${key} did not persist"

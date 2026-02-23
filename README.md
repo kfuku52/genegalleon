@@ -19,7 +19,7 @@
 
 **Navigating the Ocean of Genomic Histories**
 
-`GeneGalleon` is a container-first comparative genomics and phylogenomics workflow suite.
+[`GeneGalleon`](https://github.com/kfuku52/genegalleon) (/dʒiːn ˈɡæliən/) is a container-first comparative genomics and phylogenomics workflow suite.
 It provides shell-based staged pipelines for:
 
 - transcriptome assembly and expression quantification,
@@ -51,34 +51,37 @@ The repository is designed for scheduler execution (SLURM/UGE/PBS) with Singular
 ## Repository Layout
 
 - `workflow/`
-  - stage command scripts: `gg_*_cmd.sh`
-  - scheduler wrappers: `gg_*_job.sh`
+  - stage command scripts: `core/gg_*_core.sh`
+  - scheduler wrappers: `gg_*_entrypoint.sh`
   - shared parameters: `gg_common_params.sh`
-  - utility scripts: `workflow/script/*`
+  - utility scripts: `workflow/support/*`
 - `workflow/tests/`
   - Python and R tests for key scripts
 - `container/`
   - Docker Buildx scaffold and SIF conversion helper scripts
 - `workspace/`
-  - project-local input/output/db roots
+  - project-local input/output/downloads roots
 - `logo/`, `LICENSE`, `README.md`
 
 ## Execution Model
 
 Typical execution path:
 
-1. Launch `workflow/gg_*_job.sh`.
+1. Launch `workflow/gg_*_entrypoint.sh`.
 2. Wrapper normalizes scheduler env and starts Singularity/Apptainer shell.
-3. Wrapper pipes corresponding `gg_*_cmd.sh` into the container shell.
+3. Wrapper pipes corresponding `core/gg_*_core.sh` into the container shell.
 4. Command script resolves workspace roots, validates inputs, and runs stage tasks.
 
-Most stage behavior is controlled by the top block in each `gg_*_cmd.sh`:
+Most stage behavior is controlled by the top block in each `gg_*_entrypoint.sh`:
 
 ```bash
 ### Start: Modify this block to tailor your analysis ###
 ...
 ### End: Modify this block to tailor your analysis ###
 ```
+
+Each wrapper forwards those variables into the container environment.
+`core/gg_*_core.sh` scripts consume job-supplied configuration and execute stage logic.
 
 ## Container Build and Runtime
 
@@ -126,30 +129,30 @@ workspace/
     species_dnaseq/
     species_trait/
     species_rnaseq/
-    species_sra_list/
-    query2family_input/
+    query_manifest/
+    query_sra_id/
+    query_gene/
     transcriptome_assembly/
   output/
-  db/
+  downloads/
 ```
 
 ### Legacy layout compatibility
 
-Runtime helpers in `workflow/script/gg_util.sh` automatically resolve roots:
+Runtime helpers in `workflow/support/gg_util.sh` automatically resolve roots:
 
 - input root: `workspace_input_root()`
 - output root: `workspace_output_root()`
-- db root: `workspace_db_root()`
+- downloads root: `workspace_downloads_root()`
 
 Behavior:
 
 - if `workspace/input` or `workspace/output` exists, split layout is used,
 - otherwise single-root legacy behavior is used.
 
-DB root preference:
+Downloads root:
 
-- preferred: `workspace/db`
-- fallback: `workspace/output/db` (legacy split DB location)
+- `workspace/downloads`
 
 ## Input Conventions
 
@@ -172,7 +175,7 @@ Major scripts accept:
 - avoid spaces and `|` in IDs when possible,
 - species prefix on IDs (`Genus_species_...`) is strongly recommended.
 
-### `workspace/input/query2family_input`
+### `workspace/input/query_gene`
 
 Each file is one family-level task in `mode_query2family=1`.
 Accepted forms:
@@ -181,7 +184,7 @@ Accepted forms:
 - in-frame CDS FASTA,
 - plain gene ID list (one ID per line).
 
-`gg_gene_evolution_cmd.sh` auto-detects query type:
+`gg_gene_evolution_core.sh` auto-detects query type:
 
 - FASTA with DNA sequences: translated to AA query,
 - FASTA with protein sequences: used directly,
@@ -189,10 +192,10 @@ Accepted forms:
 
 ### Transcriptome assembly input modes
 
-`gg_transcriptome_generation_cmd.sh` supports three mutually exclusive modes:
+`gg_transcriptome_generation_core.sh` supports three mutually exclusive modes:
 
 - `mode_sraid=1`
-  - input: `workspace/input/species_sra_list/GENUS_SPECIES.txt`
+  - input: `workspace/input/query_sra_id/GENUS_SPECIES.txt`
   - one SRA/BioProject ID per line
 - `mode_fastq=1`
   - input: `workspace/input/species_rnaseq/GENUS_SPECIES/*.fastq.gz`
@@ -201,7 +204,7 @@ Accepted forms:
 
 ### Automated provider formatting helper
 
-Manual formatting can be replaced with `workflow/script/format_species_inputs.py`, which ports key rules from legacy `gfe_dataset` scripts such as:
+Manual formatting can be replaced with `workflow/support/format_species_inputs.py`, which ports key rules from legacy `gfe_dataset` scripts such as:
 
 - `data_formatting_ensemblplants.sh`
 - `data_formatting_phycocosm.sh`
@@ -210,7 +213,7 @@ Manual formatting can be replaced with `workflow/script/format_species_inputs.py
 Example (single provider, explicit input directory):
 
 ```bash
-python workflow/script/format_species_inputs.py \
+python workflow/support/format_species_inputs.py \
   --provider ensemblplants \
   --input-dir "/path/to/gfe_dataset/20230216_EnsemblPlants/original_files" \
   --species-cds-dir workspace/input/species_cds \
@@ -220,7 +223,7 @@ python workflow/script/format_species_inputs.py \
 Example (all providers, `gfe_dataset` root):
 
 ```bash
-python workflow/script/format_species_inputs.py \
+python workflow/support/format_species_inputs.py \
   --provider all \
   --dataset-root "/path/to/gfe_dataset" \
   --species-cds-dir workspace/input/species_cds \
@@ -237,10 +240,10 @@ Notes:
 Download-first workflow (manifest driven):
 
 ```bash
-python workflow/script/format_species_inputs.py \
+python workflow/support/format_species_inputs.py \
   --provider all \
   --download-manifest /path/to/download_manifest.tsv \
-  --download-dir workspace/tmp/input_download_cache \
+  --download-dir workspace/output/input_download_cache \
   --species-cds-dir workspace/input/species_cds \
   --species-gff-dir workspace/input/species_gff
 ```
@@ -270,30 +273,30 @@ Optional download authentication:
 Build a manifest automatically from an existing local dataset tree:
 
 ```bash
-python workflow/script/build_download_manifest.py \
+python workflow/support/build_download_manifest.py \
   --provider all \
   --dataset-root "/path/to/gfe_dataset" \
-  --output workspace/input/manifest/download_manifest.tsv
+  --output workspace/input/query_manifest/download_manifest.tsv
 ```
 
 This writes `file://` URLs, so you can test the full download+format pipeline locally before replacing them with remote URLs.
 
-Template file:
+Use `workspace/input/query_manifest/download_manifest.tsv` as the runtime manifest file.
 
-- `workspace/input/manifest/download_manifest.template.tsv`
+`gg_input_generation_entrypoint.sh` wrapper:
 
-`gg_input_generation_job.sh` wrapper:
-
-- runs `gg_input_generation_cmd.sh` inside the container as a single entrypoint,
+- runs `gg_input_generation_core.sh` inside the container as a single entrypoint,
 - can build a manifest and immediately format inputs in one run,
 - can validate produced `species_cds` and `species_gff` consistency.
 
 Profile-based configuration:
 
 - default profile file is provided at
-  `workspace/input/manifest/inputprep_profile.sh`,
+  `workspace/input/query_manifest/inputprep_profile.sh`,
 - edit values there for repeated runs,
-- use `workspace/input/manifest/inputprep_profile.template.sh` as a reset/reference copy.
+- keep only these runtime files in `workspace/input/query_manifest`:
+  - `inputprep_profile.sh`
+  - `download_manifest.tsv`
 
 Alternative runtime overrides (without editing files) via env vars:
 
@@ -304,14 +307,14 @@ Alternative runtime overrides (without editing files) via env vars:
 - `GG_INPUT_SUMMARY_OUTPUT`.
 - `GG_INPUTPREP_CONFIG` (explicit profile path override).
 
-Optional host dataset bind for `gg_input_generation_job.sh`:
+Optional host dataset bind for `gg_input_generation_entrypoint.sh`:
 
 ```bash
 export GG_INPUT_DATASET_HOST_PATH="/absolute/path/to/gfe_dataset"
-bash workflow/gg_input_generation_job.sh
+bash workflow/gg_input_generation_entrypoint.sh
 ```
 
-This binds the host path to `/external/gfe_dataset` in the container and sets `GG_DATASET_ROOT` for `gg_input_generation_cmd.sh`.
+This binds the host path to `/external/gfe_dataset` in the container and sets `GG_DATASET_ROOT` for `gg_input_generation_core.sh`.
 
 ## Quick Start
 
@@ -321,32 +324,32 @@ From repository root:
 cd workflow
 
 # 1) Optional input download/format automation
-bash gg_input_generation_job.sh
+bash gg_input_generation_entrypoint.sh
 
 # 2) Unified genome-evolution pipeline
 #    (runs inlined stages: speciesTree -> orthofinder -> genomeEvolution)
-bash gg_genome_evolution_job.sh
+bash gg_genome_evolution_entrypoint.sh
 
 # 3) Gene-family phylogeny/annotation
-bash gg_gene_evolution_job.sh
+bash gg_gene_evolution_entrypoint.sh
 
 # 4) Build orthogroup SQLite DB
-bash gg_gene_database_job.sh
+bash gg_gene_database_entrypoint.sh
 
 # 5) Progress summaries
-bash gg_progress_summary_job.sh
+bash gg_progress_summary_entrypoint.sh
 ```
 
-Current default in `gg_gene_evolution_cmd.sh` is:
+Current default in `gg_gene_evolution_entrypoint.sh` is:
 
 - `mode_query2family=1`
 - `query_blast_method="diamond"`
 
-So array-task cardinality is the number of files in `workspace/input/query2family_input`.
+So array-task cardinality is the number of files in `workspace/input/query_gene`.
 
 ## Main Stages and What They Do
 
-### `gg_input_generation_job.sh`
+### `gg_input_generation_entrypoint.sh`
 
 Purpose:
 
@@ -357,9 +360,9 @@ Purpose:
 
 Main scripts:
 
-- `workflow/gg_input_generation_cmd.sh`
-- `workflow/script/build_download_manifest.py`
-- `workflow/script/format_species_inputs.py`
+- `workflow/core/gg_input_generation_core.sh`
+- `workflow/support/build_download_manifest.py`
+- `workflow/support/format_species_inputs.py`
 
 Notable defaults:
 
@@ -370,12 +373,12 @@ Notable defaults:
 Quick summary of recent inputPrep runs:
 
 ```bash
-python workflow/script/summarize_inputprep_runs.py \
+python workflow/support/summarize_inputprep_runs.py \
   --infile workspace/output/inputprep/inputprep_runs.tsv \
   --last-n 10
 ```
 
-### `gg_transcriptome_generation_job.sh`
+### `gg_transcriptome_generation_entrypoint.sh`
 
 Purpose:
 
@@ -395,11 +398,11 @@ Main outputs:
 
 Notable defaults:
 
-- `assembly_method="Trinity"`
+- `assembly_method="rnaSPAdes"`
 - `kallisto_reference="longest_cds"`
 - staged FASTA outputs are written as `.fa.gz`.
 
-### `gg_genome_annotation_job.sh`
+### `gg_genome_annotation_entrypoint.sh`
 
 Purpose:
 
@@ -420,15 +423,15 @@ Notable defaults:
 - most heavy tasks default to `0`,
 - `run_multispecies_summary=1` by default.
 
-### `gg_genome_evolution_job.sh`
+### `gg_genome_evolution_entrypoint.sh`
 
 Purpose:
 
 - unified genome-evolution entrypoint that serially runs:
-  - inlined species-tree stage (formerly `gg_speciesTree_cmd.sh`)
-  - inlined orthofinder stage (formerly `gg_orthofinder_cmd.sh`)
-  - inlined genome-evolution stage (formerly `gg_genomeEvolution_cmd.sh`)
-- keeps stage-level skip semantics (exit code `8`) and aborts on real failures.
+  - inlined species-tree stage (formerly `gg_speciesTree_core.sh`)
+  - inlined orthofinder stage (formerly `gg_orthofinder_core.sh`)
+  - inlined genome-evolution stage (formerly `gg_genomeEvolution_core.sh`)
+- preserves output-exists skip behavior at step level and aborts on real failures.
 
 Main output roots:
 
@@ -441,15 +444,15 @@ Main output roots:
 Purpose:
 
 - translate CDS to species proteins,
-- run OrthoFinder and SonicParanoid,
+- run OrthoFinder,
 - select orthogroups for downstream analysis,
 - compare orthogroup methods.
 
 Main outputs:
 
-- `workspace/output/species_protein`
 - `workspace/output/orthofinder`
-- `workspace/output/sonicparanoid`
+
+Temporary protein FASTA files are created under `workspace/downloads/tmp/` and removed automatically after orthogroup-related steps finish.
 
 Notable defaults:
 
@@ -468,8 +471,8 @@ Purpose:
 
 Main outputs:
 
-- `workspace/output/species_tree/undated_species_tree.nwk`
-- `workspace/output/species_tree/dated_species_tree.nwk`
+- `workspace/output/species_tree/species_tree_summary/undated_species_tree.nwk`
+- `workspace/output/species_tree/species_tree_summary/dated_species_tree.nwk`
 - BUSCO and intermediate tree/alignment directories under `species_tree/`.
 
 Notable defaults:
@@ -481,7 +484,7 @@ Notable defaults:
 - single-copy FASTA/alignment outputs are standardized to `.fa.gz`, and legacy
   plain `.fasta` files in species-tree intermediate directories are auto-migrated.
 
-### `gg_gene_evolution_job.sh`
+### `gg_gene_evolution_entrypoint.sh`
 
 Purpose:
 
@@ -515,7 +518,7 @@ Current behavior notes:
 
 Wrapper-specific note:
 
-- `gg_gene_evolution_job.sh` sets conservative local defaults for some heavy steps via env vars (for example GeneRax and Pfam-related toggles). Review wrapper exports if you want pure command-script defaults.
+- `gg_gene_evolution_entrypoint.sh` forwards all top-block variables to the container runtime and also accepts environment-variable overrides for the same names.
 
 ### Inlined Stage: Genome Evolution
 
@@ -534,7 +537,7 @@ Notable defaults:
 - `run_cafe=0`, `run_go_enrichment=0` by default,
 - GO target can be specified by species name or branch ID.
 
-### `gg_gene_database_job.sh`
+### `gg_gene_database_entrypoint.sh`
 
 Purpose:
 
@@ -546,10 +549,10 @@ Main output:
 
 Required input directories:
 
-- `workspace/output/orthogroup/stat.tree`
-- `workspace/output/orthogroup/stat.branch`
+- `workspace/output/orthogroup/stat_tree`
+- `workspace/output/orthogroup/stat_branch`
 
-### `gg_progress_summary_job.sh`
+### `gg_progress_summary_entrypoint.sh`
 
 Purpose:
 
@@ -562,14 +565,14 @@ Main outputs in current working directory:
 
 Note:
 
-- this stage is job-wrapper-only (`gg_progress_summary_cmd.sh` does not exist).
+- this stage runs `workflow/core/gg_progress_summary_core.sh` inside the container.
 
 ### Utility wrappers
 
-- `gg_versions_job.sh`: dumps installed versions and DB/asset paths.
-  - the actual collector script is `workflow/script/gg_versions.sh`.
-  - this dump is also auto-triggered at the end of each `gg_*_job.sh` on successful completion.
-  - outputs are written to `workspace/output/versions/*.log`.
+- Versions dump:
+  - collector script: `workflow/support/gg_versions.sh`
+  - auto-triggered at the end of each `gg_*_entrypoint.sh` on successful completion
+  - outputs are written to `workspace/output/versions/*.log`
 
 ## Scheduler and Array Semantics
 
@@ -583,18 +586,18 @@ You can run with scheduler submission (`sbatch`, `qsub`) or direct `bash`.
 
 Array-size rules:
 
-- `gg_genome_evolution_job.sh`: fixed single task.
-- `gg_gene_evolution_job.sh`:
+- `gg_genome_evolution_entrypoint.sh`: fixed single task.
+- `gg_gene_evolution_entrypoint.sh`:
   - `mode_orthogroup=1`: number of rows in `Orthogroups.GeneCount.selected.tsv` (excluding header),
-  - `mode_query2family=1`: number of files in `workspace/input/query2family_input`.
-- `gg_genome_annotation_job.sh`: number of input species CDS files.
-- `gg_transcriptome_generation_job.sh`: number of species input units for the chosen mode.
+  - `mode_query2family=1`: number of files in `workspace/input/query_gene`.
+- `gg_genome_annotation_entrypoint.sh`: number of input species CDS files.
+- `gg_transcriptome_generation_entrypoint.sh`: number of species input units for the chosen mode.
 
 ## Configuration and Common Parameters
 
 ### Per-stage configuration
 
-Edit only each script's top config block:
+Edit the top config block in each `workflow/gg_*_entrypoint.sh`:
 
 ```bash
 ### Start: Modify this block to tailor your analysis ###
@@ -602,19 +605,29 @@ Edit only each script's top config block:
 ### End: Modify this block to tailor your analysis ###
 ```
 
+`workflow/core/gg_*_core.sh` files use `Job-supplied configuration` blocks and are not the primary place for routine parameter tuning.
+
 ### Shared common parameter file
 
 `workflow/gg_common_params.sh` currently defines:
 
 - `GG_COMMON_GENETIC_CODE` (default `1`)
 - `GG_COMMON_BUSCO_LINEAGE` (default `embryophyta_odb12`)
+- `GG_COMMON_CONTAMINATION_REMOVAL_RANK` (default `phylum`)
+- `GG_COMMON_OUTGROUP_LABELS` (default `Oryza_sativa`)
+- `GG_COMMON_ANNOTATION_REPRESENTATIVE_SPECIES` (default `Arabidopsis_thaliana`)
+- `GG_COMMON_MCMCTREE_DIVERGENCE_TIME_CONSTRAINTS_STR` (default `Arabidopsis_thaliana,Oryza_sativa,130,-`)
+- `GG_COMMON_TREEVIS_CLADE_ORTHOLOG_PREFIX` (default `Arabidopsis_thaliana_`)
+- `GG_COMMON_GRAMPA_H1` (default empty)
+- `GG_COMMON_TARGET_BRANCH_GO` (default `<1>`)
 
-If you want project-wide shared values, source this file explicitly in stage scripts:
+Current stage scripts auto-load `workflow/gg_common_params.sh` when available.
+Their top config blocks use these defaults via parameter expansion, for example:
 
 ```bash
-source "${dir_myscript}/../gg_common_params.sh"
-genetic_code="${GG_COMMON_GENETIC_CODE}"
-busco_lineage="${GG_COMMON_BUSCO_LINEAGE}"
+genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
+busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-embryophyta_odb12}}"
+outgroup_labels="${outgroup_labels:-${GG_COMMON_OUTGROUP_LABELS:-Oryza_sativa}}"
 ```
 
 ## Compression and FASTA Handling Policy
@@ -622,7 +635,7 @@ busco_lineage="${GG_COMMON_BUSCO_LINEAGE}"
 Current policy:
 
 - input discovery across major stages supports both plain and gzipped FASTA,
-- pipeline-tracked FASTA outputs (especially `file_*` targets in `gg_*_cmd.sh`)
+- pipeline-tracked FASTA outputs (especially `file_*` targets in `core/gg_*_core.sh`)
   are standardized to `.fa.gz`,
 - in-house scripts prefer gzipped FASTA directly; plain FASTA is generated only
   as temporary/intermediate input when a third-party tool requires uncompressed files.
@@ -633,7 +646,7 @@ main retained FASTA/alignment artifacts gzipped with `.fa.gz` naming.
 ## Troubleshooting
 
 - Stage skipped unexpectedly:
-  - check `run_*` flags in corresponding `gg_*_cmd.sh`.
+  - check `run_*` flags in corresponding `gg_*_entrypoint.sh`.
 - Array task exits immediately:
   - verify `SGE_TASK_ID`/array range against actual input count.
 - Optional steps not running:
@@ -641,12 +654,12 @@ main retained FASTA/alignment artifacts gzipped with `.fa.gz` naming.
 - Missing tree-dependent outputs in gene-family stage:
   - ensure species-tree prerequisites exist under `workspace/output/species_tree`.
 - Taxonomy errors (ETE/NCBI):
-  - inspect `workspace/db/ete_taxonomy` and rerun with clean lock state if needed.
+  - inspect `workspace/downloads/ete_taxonomy` and rerun with clean lock state if needed.
 - General environment diagnostics:
 
 ```bash
 cd workflow
-bash gg_versions_job.sh
+ls -1 ../workspace/output/versions/*.log
 ```
 
 ## Development and Tests

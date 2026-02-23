@@ -1,9 +1,11 @@
 import ast
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "csubst_site_wrapper.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "csubst_site_wrapper.py"
 
 
 def load_extract_pdb_id():
@@ -40,3 +42,23 @@ def test_extract_pdb_id_parses_expected_identifier(tmp_path):
     extract_pdb_id = load_extract_pdb_id()
     (tmp_path / "csubst_site.2XYZ.fa").write_text(">x\nAA\n", encoding="utf-8")
     assert extract_pdb_id(str(tmp_path)) == "2XYZ"
+
+
+def test_extract_pdb_id_ignores_hidden_files_and_is_deterministic(tmp_path):
+    extract_pdb_id = load_extract_pdb_id()
+    (tmp_path / ".csubst_site.ZZZZ.fa").write_text(">x\nAA\n", encoding="utf-8")
+    (tmp_path / "csubst_site.BBBB.fa").write_text(">x\nAA\n", encoding="utf-8")
+    (tmp_path / "csubst_site.AAAA.fa").write_text(">x\nAA\n", encoding="utf-8")
+    assert extract_pdb_id(str(tmp_path)) == "AAAA"
+
+
+def test_help_has_no_side_effect_files(tmp_path):
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), "--help"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert not (tmp_path / "generate_orthogroup_database.log").exists()
+    assert not (tmp_path / "mpl").exists()

@@ -32,14 +32,14 @@ repo_root <- NA_character_
 if (!is.na(resolved_script_path)) {
   script_dir <- dirname(resolved_script_path)
   repo_root_candidate <- normalizePath(file.path(script_dir, "..", ".."), winslash = "/", mustWork = FALSE)
-  if (dir.exists(file.path(repo_root_candidate, "workflow", "script"))) {
+  if (dir.exists(file.path(repo_root_candidate, "workflow", "support"))) {
     repo_root <- normalizePath(repo_root_candidate, winslash = "/", mustWork = TRUE)
   }
 }
 
 if (is.na(repo_root)) {
   cwd_candidate <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
-  if (dir.exists(file.path(cwd_candidate, "workflow", "script"))) {
+  if (dir.exists(file.path(cwd_candidate, "workflow", "support"))) {
     repo_root <- cwd_candidate
   }
 }
@@ -52,7 +52,7 @@ if (is.na(repo_root)) {
   ))
 }
 
-workflow_script_dir <- file.path(repo_root, "workflow", "script")
+workflow_script_dir <- file.path(repo_root, "workflow", "support")
 
 if (!dir.exists(workflow_script_dir)) {
   stop(sprintf("Workflow script directory not found: %s", workflow_script_dir))

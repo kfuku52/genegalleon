@@ -4,7 +4,7 @@ import sys
 import types
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "orthogroup_statistics.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "orthogroup_statistics.py"
 
 
 def load_module():

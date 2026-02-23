@@ -6,7 +6,7 @@ import numpy
 import pandas
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "orthogroup_selection.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "orthogroup_selection.py"
 
 
 def load_module():
@@ -85,6 +85,24 @@ def test_get_species_protein_files_includes_gzipped_fasta(tmp_path):
 
     files = mod.get_species_protein_files(str(tmp_path))
     assert set(files) == {"sp1.fa", "sp2.fasta.gz", "sp3.fa.gz", "sp4.fas", "sp5.fna.gz"}
+
+
+def test_get_species_protein_files_ignores_hidden_entries_and_directories(tmp_path):
+    mod = load_module()
+    (tmp_path / "sp1.fa").write_text(">a\nAT\n", encoding="utf-8")
+    (tmp_path / ".hidden.fa").write_text(">a\nAT\n", encoding="utf-8")
+    (tmp_path / "sp2.fasta.gz").mkdir()
+
+    files = mod.get_species_protein_files(str(tmp_path))
+    assert files == ["sp1.fa"]
+
+
+def test_get_species_protein_files_returns_sorted_file_names(tmp_path):
+    mod = load_module()
+    (tmp_path / "spB.fa").write_text(">a\nAT\n", encoding="utf-8")
+    (tmp_path / "spA.fa").write_text(">a\nAT\n", encoding="utf-8")
+    files = mod.get_species_protein_files(str(tmp_path))
+    assert files == ["spA.fa", "spB.fa"]
 
 
 def test_get_concatenated_fx2tab_runs_single_seqkit_call(monkeypatch, tmp_path):

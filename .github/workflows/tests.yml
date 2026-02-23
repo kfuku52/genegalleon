@@ -33,6 +33,34 @@ jobs:
         run: |
           python -m pytest -q workflow/tests
 
+  shell-static:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install minimal test dependency
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+
+      - name: Bash syntax check for workflow scripts
+        run: |
+          set -euo pipefail
+          while IFS= read -r script; do
+            bash -n "${script}"
+          done < <(find workflow -type f -name "*.sh" | sort)
+
+      - name: Shell static safety checks
+        run: |
+          python -m pytest -q workflow/tests/test_shell_static_safety.py
+
   r-script-parse:
     runs-on: ubuntu-latest
 
@@ -43,6 +71,10 @@ jobs:
       - name: Set up R
         uses: r-lib/actions/setup-r@v2
 
+      - name: Install R test dependencies
+        run: |
+          Rscript -e 'install.packages(c("ggplot2","ape"), repos="https://cloud.r-project.org")'
+
       - name: Parse-check workflow R scripts
         run: |
           Rscript workflow/tests/test_r_scripts_parse.R
@@ -50,3 +82,4 @@ jobs:
       - name: Run lightweight R unit tests
         run: |
           Rscript workflow/tests/test_pgls_common_rphylopars.R
+          Rscript workflow/tests/test_tree_annotation_main.R

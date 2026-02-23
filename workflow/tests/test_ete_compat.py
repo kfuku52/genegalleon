@@ -1,4 +1,4 @@
-from workflow.script.ete_compat import (
+from workflow.support.ete_compat import (
     backend_name,
     get_leaf_names,
     iter_ancestors,

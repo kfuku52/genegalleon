@@ -24,11 +24,11 @@ check_iq2mc_support() {
     resolved="${bin}"
   fi
 
-  if "${bin}" -h 2>&1 | grep -q -- "--mcmc-bds"; then
+  if "${bin}" -h 2>&1 | awk '/--mcmc-bds/ {found=1} END {exit(found ? 0 : 1)}'; then
     return 0
   fi
   if command -v strings >/dev/null 2>&1 && [[ -n "${resolved}" ]]; then
-    if strings "${resolved}" 2>/dev/null | grep -q -- "--mcmc-bds"; then
+    if strings "${resolved}" 2>/dev/null | awk '/--mcmc-bds/ {found=1} END {exit(found ? 0 : 1)}'; then
       return 0
     fi
   fi
@@ -88,7 +88,7 @@ clone_branch() {
       log "Cloned ${repo_url} branch '${branch}'"
       return 0
     fi
-    rm -rf "${dest_dir}"
+    rm -rf -- "${dest_dir}"
   done
   return 1
 }
@@ -103,7 +103,7 @@ build_mcmctree_iq2mc() {
     "${paml_src}" \
     "master"; then
     log "ERROR: Failed to clone IQ2MC-compatible paml source branch."
-    rm -rf "${tmpdir}"
+    rm -rf -- "${tmpdir}"
     exit 1
   fi
 
@@ -120,12 +120,12 @@ build_mcmctree_iq2mc() {
   done
   if [[ -z "${mcmctree_bin}" ]]; then
     log "ERROR: mcmctree build finished but binary was not found."
-    rm -rf "${tmpdir}"
+    rm -rf -- "${tmpdir}"
     exit 1
   fi
 
   install_into_path "${mcmctree_bin}" "mcmctree"
-  rm -rf "${tmpdir}"
+  rm -rf -- "${tmpdir}"
 }
 
 main() {

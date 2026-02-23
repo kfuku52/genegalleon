@@ -1,10 +1,12 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+import subprocess
+import sys
 
 import pandas
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "generate_orthogroup_database.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "generate_orthogroup_database.py"
 
 
 def load_module():
@@ -69,3 +71,52 @@ def test_apply_cutoff_accepts_preparsed_cutoff_list():
     out = mod.apply_cutoff(df, [("A", 0.8), ("B", 0.5)])
     assert out.shape[0] == 1
     assert out.iloc[0]["A"] == "0.95"
+
+
+def test_import_has_no_logfile_side_effect(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    log_path = tmp_path / "generate_orthogroup_database.log"
+    assert not log_path.exists()
+    load_module()
+    assert not log_path.exists()
+
+
+def test_help_has_no_logfile_side_effect(tmp_path):
+    log_path = tmp_path / "generate_orthogroup_database.log"
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), "--help"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert not log_path.exists()
+
+
+def test_visible_entries_and_has_visible_entries_ignore_hidden_files(tmp_path):
+    mod = load_module()
+    directory = tmp_path / "d"
+    directory.mkdir()
+    (directory / ".DS_Store").write_text("", encoding="utf-8")
+    (directory / "data.tsv").write_text("a\tb\n1\t2\n", encoding="utf-8")
+
+    entries = mod.visible_entries(str(directory))
+    assert entries == ["data.tsv"]
+    assert mod.has_visible_entries(str(directory)) is True
+
+    only_hidden = tmp_path / "only_hidden"
+    only_hidden.mkdir()
+    (only_hidden / ".keep").write_text("", encoding="utf-8")
+    assert mod.visible_entries(str(only_hidden)) == []
+    assert mod.has_visible_entries(str(only_hidden)) is False
+
+
+def test_visible_files_returns_only_non_hidden_regular_files(tmp_path):
+    mod = load_module()
+    directory = tmp_path / "d"
+    directory.mkdir()
+    (directory / "table.tsv").write_text("a\tb\n1\t2\n", encoding="utf-8")
+    (directory / ".DS_Store").write_text("", encoding="utf-8")
+    (directory / "nested").mkdir()
+
+    assert mod.visible_files(str(directory)) == ["table.tsv"]

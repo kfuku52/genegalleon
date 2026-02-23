@@ -35,7 +35,6 @@ mmseqs2
 orthofinder
 astral-tree
 paml
-sonicparanoid
 spades
 pymol-open-source
 seqkit

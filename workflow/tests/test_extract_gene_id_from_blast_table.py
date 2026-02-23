@@ -5,7 +5,7 @@ import sys
 import pandas
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "extract_gene_id_from_blast_table.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "extract_gene_id_from_blast_table.py"
 
 
 def run_extract(tmp_path, rows, min_cov=0.25, max_hits=5000):

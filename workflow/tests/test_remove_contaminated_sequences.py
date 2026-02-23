@@ -1,6 +1,6 @@
 import numpy
 
-from workflow.script.remove_contaminated_sequences import resolve_rank_taxid_from_lineage
+from workflow.support.remove_contaminated_sequences import resolve_rank_taxid_from_lineage
 
 
 class FakeNcbi:

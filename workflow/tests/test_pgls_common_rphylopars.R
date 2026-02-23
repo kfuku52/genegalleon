@@ -32,14 +32,14 @@ repo_root <- NA_character_
 if (!is.na(resolved_script_path)) {
   script_dir <- dirname(resolved_script_path)
   repo_root_candidate <- normalizePath(file.path(script_dir, "..", ".."), winslash = "/", mustWork = FALSE)
-  if (dir.exists(file.path(repo_root_candidate, "workflow", "script"))) {
+  if (dir.exists(file.path(repo_root_candidate, "workflow", "support"))) {
     repo_root <- normalizePath(repo_root_candidate, winslash = "/", mustWork = TRUE)
   }
 }
 
 if (is.na(repo_root)) {
   cwd_candidate <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
-  if (dir.exists(file.path(cwd_candidate, "workflow", "script"))) {
+  if (dir.exists(file.path(cwd_candidate, "workflow", "support"))) {
     repo_root <- cwd_candidate
   }
 }
@@ -52,7 +52,7 @@ if (is.na(repo_root)) {
   ))
 }
 
-source(file.path(repo_root, "workflow", "script", "pgls_common.R"))
+source(file.path(repo_root, "workflow", "support", "pgls_common.R"))
 
 # build_phenocov_input: no within-species variation
 df_no_var <- data.frame(
@@ -141,7 +141,7 @@ fit_ok <- fit_phylopars_lm_with_retries(
   phylo_correlated = TRUE,
   pheno_correlated = TRUE,
   phenocov_list = list(),
-  run_mode_label = "wide",
+  fit_mode_label = "wide",
   fit_fun = phylopars.lm
 )
 stopifnot(!is.null(fit_ok$fit))
@@ -160,7 +160,7 @@ fit_fail <- fit_phylopars_lm_with_retries(
   phylo_correlated = TRUE,
   pheno_correlated = TRUE,
   phenocov_list = list(),
-  run_mode_label = "wide",
+  fit_mode_label = "wide",
   fit_fun = phylopars.lm
 )
 stopifnot(is.null(fit_fail$fit))

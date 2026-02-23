@@ -30,7 +30,6 @@ base	pymol
 base	rnaspades.py
 base	rpsblast
 base	seqkit
-base	sonicparanoid
 base	tblastn
 base	Trinity
 base	trimal
@@ -41,4 +40,5 @@ base	metaeuk
 base	prodigal
 base	hyphy
 base	python
+base	radte.r
 base	Rscript

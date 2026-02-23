@@ -3,7 +3,7 @@ import subprocess
 import sys
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "summarize_inputprep_runs.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "summarize_inputprep_runs.py"
 
 
 def run_script(*args):

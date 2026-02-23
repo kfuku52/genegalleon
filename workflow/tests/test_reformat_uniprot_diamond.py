@@ -6,7 +6,7 @@ import sys
 import pandas
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "script" / "reformat_uniprot_diamond.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "reformat_uniprot_diamond.py"
 
 
 def test_reformat_uniprot_diamond_adds_metadata_columns_except_rnammer(tmp_path):
