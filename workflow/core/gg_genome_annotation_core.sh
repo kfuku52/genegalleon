@@ -75,6 +75,12 @@ copy_busco_tables() {
 }
 
 enable_all_run_flags_for_debug_mode
+uniprot_annotation_method=$(echo "${uniprot_annotation_method:-diamond}" | tr '[:upper:]' '[:lower:]')
+if [[ "${uniprot_annotation_method}" != "diamond" && "${uniprot_annotation_method}" != "mmseqs2" ]]; then
+  echo "Invalid uniprot_annotation_method: ${uniprot_annotation_method}"
+  echo 'uniprot_annotation_method must be either "diamond" or "mmseqs2". Exiting.'
+  exit 1
+fi
 
 resolve_species_file() {
   local search_dir=$1
@@ -325,14 +331,10 @@ else
   gg_step_skip "${task}"
 fi
 
-task="UniProt annotation by DIAMOND"
+task="UniProt annotation (${uniprot_annotation_method})"
 disable_if_no_input_file "run_uniprot_annotation" "${file_sp_cds}"
 if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -eq 1 ]]; then
   gg_step_start "${task}"
-  if ! uniprot_db_prefix=$(ensure_uniprot_sprot_db "${dir_pg}"); then
-    echo "Failed to prepare UniProt Swiss-Prot DB. Exiting."
-    exit 1
-  fi
 
   seqkit seq --remove-gaps --only-id --threads "${NSLOTS}" "${file_sp_cds}" \
   | cdskit pad --codontable "${genetic_code}" \
@@ -340,18 +342,42 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
   | seqkit translate --transl-table "${genetic_code}" --threads "${NSLOTS}" \
   > uniprot.query.pep.fas
 
-  diamond blastp \
-  --query uniprot.query.pep.fas \
-  --threads "${NSLOTS}" \
-  --db "${uniprot_db_prefix}" \
-  --very-sensitive \
-  --out uniprot.diamond.tsv \
-  --outfmt 6 qseqid sseqid pident length evalue bitscore qlen \
-  --max-target-seqs 1 \
-  --evalue 1e-2
+  if [[ "${uniprot_annotation_method}" == "diamond" ]]; then
+    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_db "${dir_pg}"); then
+      echo "Failed to prepare UniProt Swiss-Prot DIAMOND DB. Exiting."
+      exit 1
+    fi
+
+    diamond blastp \
+    --query uniprot.query.pep.fas \
+    --threads "${NSLOTS}" \
+    --db "${uniprot_db_prefix}" \
+    --very-sensitive \
+    --out uniprot.search.tsv \
+    --outfmt 6 qseqid sseqid pident length evalue bitscore qlen \
+    --max-target-seqs 1 \
+    --evalue 1e-2
+  else
+    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${dir_pg}"); then
+      echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
+      exit 1
+    fi
+
+    mmseqs createdb "uniprot.query.pep.fas" "uniprot.queryDB"
+    mmseqs search "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "tmp_mmseqs2_uniprot" \
+    --threads "${NSLOTS}" \
+    --max-seqs 1 \
+    -e 1e-2 \
+    -s 7.5
+    mmseqs convertalis "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "uniprot.search.tsv" \
+    --threads "${NSLOTS}" \
+    --format-output "query,target,pident,alnlen,evalue,bits,qlen"
+    rm -f -- uniprot.queryDB* uniprot.resultDB*
+    rm -rf -- "tmp_mmseqs2_uniprot"
+  fi
 
   python "${dir_script}/reformat_uniprot_diamond.py" \
-  --diamond_tsv uniprot.diamond.tsv \
+  --diamond_tsv uniprot.search.tsv \
   --query_fasta uniprot.query.pep.fas \
   --uniprot_fasta "${uniprot_db_prefix}.pep" \
   --outfile uniprot.annotation.tsv

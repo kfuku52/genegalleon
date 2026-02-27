@@ -48,7 +48,8 @@ fi
 # CDS analysis
 run_get_gff_info="${run_get_gff_info:-0}" # Collect gene information from workspace/input/species_gff
 run_busco_cds="${run_busco_cds:-0}" # Gene set completeness analysis
-run_uniprot_annotation="${run_uniprot_annotation:-0}" # DIAMOND-based CDS annotation against UniProt Swiss-Prot.
+run_uniprot_annotation="${run_uniprot_annotation:-0}" # CDS annotation against UniProt Swiss-Prot.
+uniprot_annotation_method="${uniprot_annotation_method:-diamond}" # diamond|mmseqs2 for UniProt Swiss-Prot annotation search engine.
 run_cds_fx2tab="${run_cds_fx2tab:-0}" # Sequence stats of CDS sequences
 run_cds_mmseqs2taxonomy="${run_cds_mmseqs2taxonomy:-0}" # Taxonomic assignment of CDS sequences
 run_cds_contamination_removal="${run_cds_contamination_removal:-0}" # Removal of contaminated sequences

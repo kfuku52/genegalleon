@@ -64,7 +64,8 @@ run_get_query_fasta="${run_get_query_fasta:-1}" # Activated if mode_query2family
 run_query_blast="${run_query_blast:-1}" # Activated if mode_query2family=1.
 run_get_fasta="${run_get_fasta:-1}" # Generate in-frame CDS fasta file.
 run_rps_blast="${run_rps_blast:-1}" # RPS-BLAST protein domain search.
-run_uniprot_annotation="${run_uniprot_annotation:-0}" # DIAMOND-based annotation against UniProt Swiss-Prot.
+run_uniprot_annotation="${run_uniprot_annotation:-0}" # Annotation against UniProt Swiss-Prot.
+uniprot_annotation_method="${uniprot_annotation_method:-diamond}" # diamond|mmseqs2 for UniProt Swiss-Prot annotation search engine.
 run_mafft="${run_mafft:-1}" # In-frame nucleotide alignment using MAFFT.
 run_amas_original="${run_amas_original:-1}" # Alignment statistics before MaxAlign and TrimAl using AMAS.
 run_maxalign="${run_maxalign:-0}" # Remove anomalous sequences by cdskit maxalign.
