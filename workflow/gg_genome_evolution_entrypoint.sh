@@ -121,39 +121,9 @@ delete_tmp_dir="${delete_tmp_dir:-1}" # After normal completion, delete tmp dire
 
 ### End: Modify this block to tailor your analysis ###
 
-# Forward config variables (including external overrides) into container environment.
-forward_config_vars_to_container_env() {
-  local job_script=$1
-  local var_name
-  local var_names
-  var_names=$(
-    sed -n '/^### Start: Modify this block to tailor your analysis ###$/,/^### End: Modify this block to tailor your analysis ###$/p' "${job_script}" \
-      | sed -n -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p' \
-      | sort -u
-  )
-  while IFS= read -r var_name; do
-    if [[ -z "${var_name}" ]]; then
-      continue
-    fi
-    if [[ -n "${!var_name+x}" ]]; then
-      export "${var_name}"
-      export "SINGULARITYENV_${var_name}=${!var_name}"
-      export "APPTAINERENV_${var_name}=${!var_name}"
-    fi
-  done <<< "${var_names}"
-
-  # gg_debug_mode is read by gg_*_core.sh scripts but defined outside the config block.
-  if [[ -n "${gg_debug_mode+x}" ]]; then
-    export gg_debug_mode
-    export "SINGULARITYENV_gg_debug_mode=${gg_debug_mode}"
-    export "APPTAINERENV_gg_debug_mode=${gg_debug_mode}"
-  fi
-}
-
-forward_config_vars_to_container_env "${BASH_SOURCE[0]}"
-unset -f forward_config_vars_to_container_env
-
 source "${dir_script}/support/gg_util.sh" # loading utility functions
+# Forward config variables (including external overrides) into container environment.
+forward_config_vars_to_container_env "${BASH_SOURCE[0]}"
 gg_scheduler_runtime_prelude
 unset_singularity_envs
 if ! set_singularity_command; then

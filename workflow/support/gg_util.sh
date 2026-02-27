@@ -49,6 +49,47 @@ gg_add_container_bind_mount() {
 	export APPTAINER_BINDPATH
 }
 
+gg_export_var_to_container_env_if_set() {
+	local var_name=$1
+	if [[ -z "${var_name}" ]]; then
+		return 0
+	fi
+	if [[ -n "${!var_name+x}" ]]; then
+		export "${var_name}"
+		export "SINGULARITYENV_${var_name}=${!var_name}"
+		export "APPTAINERENV_${var_name}=${!var_name}"
+	fi
+}
+
+gg_collect_config_var_names_from_job_script() {
+	local job_script=$1
+	sed -n '/^### Start: Modify this block to tailor your analysis ###$/,/^### End: Modify this block to tailor your analysis ###$/p' "${job_script}" \
+		| sed -n -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p' \
+		| sort -u
+}
+
+forward_config_vars_to_container_env() {
+	local job_script=$1
+	shift || true
+	local var_name
+	local var_names
+	var_names=$(gg_collect_config_var_names_from_job_script "${job_script}")
+	while IFS= read -r var_name; do
+		if [[ -z "${var_name}" ]]; then
+			continue
+		fi
+		gg_export_var_to_container_env_if_set "${var_name}"
+	done <<< "${var_names}"
+
+	# gg_debug_mode is read by gg_*_core.sh scripts but defined outside the config block.
+	gg_export_var_to_container_env_if_set "gg_debug_mode"
+
+	while [[ $# -gt 0 ]]; do
+		gg_export_var_to_container_env_if_set "$1"
+		shift
+	done
+}
+
 gg_detect_container_runtime_binary() {
 	if command -v singularity >/dev/null 2>&1; then
 		echo singularity
@@ -1032,17 +1073,15 @@ check_if_species_files_unique() {
 
 is_fastq_requiring_downstream_analysis_done() {
   local run_assembly_local=${run_assembly:-0}
-  local run_rrna_local=${run_rRNA_contamination_report:-0}
   local run_merge_local=${run_amalgkit_merge:-0}
   local out=0
 
   if [[ ( ( ${run_assembly_local} -eq 1 && -s "${file_isoform}" ) || ${run_assembly_local} -eq 0 ) && \
-    ( ( ${run_rrna_local} -eq 1 && -s "${file_rRNA_contamination_report}" ) || ${run_rrna_local} -eq 0 ) && \
     ( ( ${run_merge_local} -eq 1 && -s "${file_amalgkit_merge_count}" ) || ${run_merge_local} -eq 0 ) ]]; then
     out=1
   fi
 
-  if [[ ${run_assembly_local} -eq 0 && ${run_rrna_local} -eq 0 && ${run_merge_local} -eq 0 ]]; then
+  if [[ ${run_assembly_local} -eq 0 && ${run_merge_local} -eq 0 ]]; then
     out=0
   fi
   echo "${out}"

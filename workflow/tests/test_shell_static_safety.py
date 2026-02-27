@@ -424,9 +424,9 @@ def test_progress_summary_entrypoint_uses_auto_forwarding_and_normalized_nslots(
     entrypoint = WORKFLOW_DIR / "gg_progress_summary_entrypoint.sh"
     text = _read_text(entrypoint)
 
-    assert "forward_config_vars_to_container_env()" in text
+    assert "forward_config_vars_to_container_env()" not in text
     assert 'forward_config_vars_to_container_env "${BASH_SOURCE[0]}"' in text
-    assert "unset -f forward_config_vars_to_container_env" in text
+    assert "unset -f forward_config_vars_to_container_env" not in text
     assert "for exported_name in mode_transcriptome_assembly ncpu_progress_summary; do" not in text
     assert 'ncpu_progress_summary="${ncpu_progress_summary:-${NSLOTS:-1}}"' not in text
 
@@ -440,12 +440,25 @@ def test_input_generation_entrypoint_forwards_env_driven_overrides():
     text = _read_text(entrypoint)
 
     assert "for gg_input_var_name in ${!GG_INPUT_@}; do" in text
-    assert 'export "SINGULARITYENV_${gg_input_var_name}=${!gg_input_var_name}"' in text
-    assert 'export "APPTAINERENV_${gg_input_var_name}=${!gg_input_var_name}"' in text
-    assert 'export "SINGULARITYENV_GG_INPUTPREP_CONFIG=${GG_INPUTPREP_CONFIG}"' in text
-    assert 'export "APPTAINERENV_GG_INPUTPREP_CONFIG=${GG_INPUTPREP_CONFIG}"' in text
-    assert 'export "SINGULARITYENV_GG_DATASET_ROOT=${GG_DATASET_ROOT}"' in text
-    assert 'export "APPTAINERENV_GG_DATASET_ROOT=${GG_DATASET_ROOT}"' in text
+    assert 'gg_export_var_to_container_env_if_set "${gg_input_var_name}"' in text
+    assert 'gg_export_var_to_container_env_if_set "GG_INPUTPREP_CONFIG"' in text
+    assert 'gg_export_var_to_container_env_if_set "GG_DATASET_ROOT"' in text
+    assert 'export "SINGULARITYENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
+    assert 'export "APPTAINERENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
+    assert 'export "SINGULARITYENV_GG_INPUTPREP_CONFIG=${GG_INPUTPREP_CONFIG}"' not in text
+    assert 'export "APPTAINERENV_GG_INPUTPREP_CONFIG=${GG_INPUTPREP_CONFIG}"' not in text
+    assert 'export "SINGULARITYENV_GG_DATASET_ROOT=${GG_DATASET_ROOT}"' not in text
+    assert 'export "APPTAINERENV_GG_DATASET_ROOT=${GG_DATASET_ROOT}"' not in text
+
+
+def test_gg_util_has_common_forward_config_export_helpers():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    assert "gg_export_var_to_container_env_if_set()" in text
+    assert "gg_collect_config_var_names_from_job_script()" in text
+    body = _function_body(text, "forward_config_vars_to_container_env")
+    assert "gg_collect_config_var_names_from_job_script" in body
+    assert 'gg_export_var_to_container_env_if_set "gg_debug_mode"' in body
 
 
 def test_ensure_latest_jaspar_file_uses_set_e_safe_assignments():
@@ -479,10 +492,12 @@ def test_gene_convergence_entrypoint_forwards_plot_runtime_envs():
     entrypoint = WORKFLOW_DIR / "gg_gene_convergence_entrypoint.sh"
     text = _read_text(entrypoint)
 
-    assert 'export "SINGULARITYENV_PYMOL_HEADLESS=${PYMOL_HEADLESS}"' in text
-    assert 'export "APPTAINERENV_PYMOL_HEADLESS=${PYMOL_HEADLESS}"' in text
-    assert 'export "SINGULARITYENV_QT_QPA_PLATFORM=${QT_QPA_PLATFORM}"' in text
-    assert 'export "APPTAINERENV_QT_QPA_PLATFORM=${QT_QPA_PLATFORM}"' in text
+    assert 'gg_export_var_to_container_env_if_set "PYMOL_HEADLESS"' in text
+    assert 'gg_export_var_to_container_env_if_set "QT_QPA_PLATFORM"' in text
+    assert 'export "SINGULARITYENV_PYMOL_HEADLESS=${PYMOL_HEADLESS}"' not in text
+    assert 'export "APPTAINERENV_PYMOL_HEADLESS=${PYMOL_HEADLESS}"' not in text
+    assert 'export "SINGULARITYENV_QT_QPA_PLATFORM=${QT_QPA_PLATFORM}"' not in text
+    assert 'export "APPTAINERENV_QT_QPA_PLATFORM=${QT_QPA_PLATFORM}"' not in text
 
 
 def test_gene_evolution_core_uses_run_fimo_not_legacy_run_meme_toggle():
@@ -694,10 +709,10 @@ def test_entrypoints_allow_env_override_for_tmp_cleanup_flags():
 
 def test_entrypoints_forward_cleanup_flags_defined_outside_config_block():
     expected_tokens = {
-        "gg_genome_annotation_entrypoint.sh": 'export "SINGULARITYENV_delete_tmp_dir=${delete_tmp_dir}"',
-        "gg_transcriptome_generation_entrypoint.sh": 'export "SINGULARITYENV_delete_tmp_dir=${delete_tmp_dir}"',
-        "gg_gene_evolution_entrypoint.sh": 'export "SINGULARITYENV_delete_tmp_dir=${delete_tmp_dir}"',
-        "gg_gene_evolution_entrypoint.sh#preexisting": 'export "SINGULARITYENV_delete_preexisting_tmp_dir=${delete_preexisting_tmp_dir}"',
+        "gg_genome_annotation_entrypoint.sh": 'forward_config_vars_to_container_env "${BASH_SOURCE[0]}" "delete_tmp_dir"',
+        "gg_transcriptome_generation_entrypoint.sh": 'forward_config_vars_to_container_env "${BASH_SOURCE[0]}" "delete_tmp_dir"',
+        "gg_gene_evolution_entrypoint.sh": 'forward_config_vars_to_container_env "${BASH_SOURCE[0]}" "delete_tmp_dir" "delete_preexisting_tmp_dir"',
+        "gg_gene_evolution_entrypoint.sh#preexisting": '"delete_preexisting_tmp_dir"',
     }
     for key, token in expected_tokens.items():
         script_name = key.split("#")[0]
@@ -1066,9 +1081,11 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         "--out_dir ${dir_tmp}",
         "--download_dir ${dir_amalgkit_download_dir}",
         "--metadata ${file_amalgkit_metadata}",
+        "--rrna_filter ${amalgkit_rrna_filter}",
+        "--contam_filter ${amalgkit_contam_filter}",
+        "--contam_filter_rank ${amalgkit_contam_filter_rank}",
+        "--filter_order ${amalgkit_filter_order}",
         "ln -s ${dir_amalgkit_getfastq_sp} \"./getfastq\"",
-        "ln -s ${silva_rrna_ref} ${file_reference_fasta_link}",
-        "kallisto index --make-unique -i \"./index/${sp_ub}.idx\" ${file_reference_fasta_link}",
         "--fasta_file ${file_longestcds}",
         "--mmseqs2taxonomy_tsv ${file_longestcds_mmseqs2taxonomy}",
         "--fx2tab_tsv ${file_longestcds_fx2tab}",
@@ -1093,9 +1110,11 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         '--out_dir "${dir_tmp}"',
         '--download_dir "${dir_amalgkit_download_dir}"',
         '--metadata "${file_amalgkit_metadata}"',
+        '--rrna_filter "${amalgkit_rrna_filter}"',
+        '--contam_filter "${amalgkit_contam_filter}"',
+        '--contam_filter_rank "${amalgkit_contam_filter_rank}"',
+        '--filter_order "${amalgkit_filter_order}"',
         'ln -s "${dir_amalgkit_getfastq_sp}" "./getfastq"',
-        'ln -s "${silva_rrna_ref}" "${file_reference_fasta_link}"',
-        'kallisto index --make-unique -i "./index/${sp_ub}.idx" "${file_reference_fasta_link}"',
         '--fasta_file "${file_longestcds}"',
         '--mmseqs2taxonomy_tsv "${file_longestcds_mmseqs2taxonomy}"',
         '--fx2tab_tsv "${file_longestcds_fx2tab}"',
@@ -1889,10 +1908,8 @@ def test_is_fastq_requiring_downstream_analysis_done_quotes_path_checks():
     text = _read_text(util_path)
     body = _function_body(text, "is_fastq_requiring_downstream_analysis_done")
     assert '-s ${file_isoform}' not in body
-    assert '-s ${file_rRNA_contamination_report}' not in body
     assert '-s ${file_amalgkit_merge_count}' not in body
     assert '-s "${file_isoform}"' in body
-    assert '-s "${file_rRNA_contamination_report}"' in body
     assert '-s "${file_amalgkit_merge_count}"' in body
     assert 'echo "${out}"' in body
 
@@ -2103,13 +2120,13 @@ def test_transcriptome_core_guards_sge_task_id_range_before_array_indexing():
     assert text.rindex(metadata_guard) < text.index(metadata_use)
 
 
-def test_transcriptome_core_guards_getfastq_outputs_before_rrna_assembly_and_quant():
+def test_transcriptome_core_guards_getfastq_outputs_before_assembly_and_quant():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
     dir_guard = 'if [[ ! -d "${dir_amalgkit_getfastq_sp}" ]]; then'
     fastq_guard = 'if [[ -z "$(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" -print -quit 2>/dev/null)" ]]; then'
-    assert text.count(dir_guard) >= 3
-    assert text.count(fastq_guard) >= 3
+    assert text.count(dir_guard) >= 2
+    assert text.count(fastq_guard) >= 2
     assert "amalgkit getfastq output directory not found" in text
     assert "No amalgkit getfastq FASTQ files were found in" in text
 

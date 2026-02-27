@@ -55,7 +55,10 @@ mode_metadata="${mode_metadata:-0}" # Need input at workspace/input/transcriptom
 
 run_amalgkit_metadata_or_integrate="${run_amalgkit_metadata_or_integrate:-1}" # Metadata retrieval.
 run_amalgkit_getfastq="${run_amalgkit_getfastq:-1}" # fastq generation from NCBI SRA.
-run_rRNA_contamination_report="${run_rRNA_contamination_report:-1}" # rRNA contamination report.
+amalgkit_rrna_filter="${amalgkit_rrna_filter:-yes}" # read-level rRNA removal in amalgkit getfastq.
+amalgkit_contam_filter="${amalgkit_contam_filter:-yes}" # read-level contamination removal in amalgkit getfastq.
+amalgkit_contam_filter_rank="${amalgkit_contam_filter_rank:-phylum}" # taxonomy rank for read-level contamination removal.
+amalgkit_filter_order="${amalgkit_filter_order:-fastp_first}" # {fastp_first,rrna_first}
 run_assembly="${run_assembly:-1}" # Transcriptome assembly with Trinity or rnaSPAdes.
 run_longestcds="${run_longestcds:-1}" # Longest CDS extraction.
 run_longestcds_fx2tab="${run_longestcds_fx2tab:-1}" # Sequence stats for longest CDS.
@@ -82,46 +85,9 @@ assembly_ram_offset="${assembly_ram_offset:-4}"
 
 delete_tmp_dir="${delete_tmp_dir:-1}" # After this run, delete tmp directory created for each job. Set 0 when debugging.
 
-# Forward config variables (including external overrides) into container environment.
-forward_config_vars_to_container_env() {
-  local job_script=$1
-  local var_name
-  local var_names
-  var_names=$(
-    sed -n '/^### Start: Modify this block to tailor your analysis ###$/,/^### End: Modify this block to tailor your analysis ###$/p' "${job_script}" \
-      | sed -n -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p' \
-      | sort -u
-  )
-  while IFS= read -r var_name; do
-    if [[ -z "${var_name}" ]]; then
-      continue
-    fi
-    if [[ -n "${!var_name+x}" ]]; then
-      export "${var_name}"
-      export "SINGULARITYENV_${var_name}=${!var_name}"
-      export "APPTAINERENV_${var_name}=${!var_name}"
-    fi
-  done <<< "${var_names}"
-
-  # gg_debug_mode is read by gg_*_core.sh scripts but defined outside the config block.
-  if [[ -n "${gg_debug_mode+x}" ]]; then
-    export gg_debug_mode
-    export "SINGULARITYENV_gg_debug_mode=${gg_debug_mode}"
-    export "APPTAINERENV_gg_debug_mode=${gg_debug_mode}"
-  fi
-
-  # Cleanup controls are defined outside the config block but consumed by core script.
-  if [[ -n "${delete_tmp_dir+x}" ]]; then
-    export delete_tmp_dir
-    export "SINGULARITYENV_delete_tmp_dir=${delete_tmp_dir}"
-    export "APPTAINERENV_delete_tmp_dir=${delete_tmp_dir}"
-  fi
-}
-
-forward_config_vars_to_container_env "${BASH_SOURCE[0]}"
-unset -f forward_config_vars_to_container_env
-
 source "${dir_script}/support/gg_util.sh" # loading utility functions
+# Forward config variables (including external overrides) into container environment.
+forward_config_vars_to_container_env "${BASH_SOURCE[0]}" "delete_tmp_dir"
 gg_scheduler_runtime_prelude
 unset_singularity_envs
 if ! set_singularity_command; then

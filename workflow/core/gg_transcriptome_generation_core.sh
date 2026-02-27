@@ -229,7 +229,6 @@ dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq
 dir_amalgkit_download_dir="${dir_pg_db}/amalgkit_downloads"
 file_amalgkit_metadata="${dir_amalgkit_metadata}/${sp_ub}_metadata.tsv"
 file_amalgkit_getfastq_safely_removed_flag=${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}_safely_removed.txt
-file_rRNA_contamination_report="${dir_transcriptome_assembly_output}/amalgkit_metadata_rRNA_mapping_rate/${sp_ub}_rRNA_mapping_rate.tsv"
 file_isoform="${dir_transcriptome_assembly_output}/assembled_transcripts_with_isoforms/${sp_ub}_isoform.fa.gz"
 file_longestcds="${dir_transcriptome_assembly_output}/longest_cds/${sp_ub}_longestCDS.fa.gz"
 file_longestcds_transcript="${dir_transcriptome_assembly_output}/longest_cds_transcript/${sp_ub}_longestCDS.transcript.fa.gz"
@@ -319,14 +318,25 @@ if [[ ( ${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1 ) &&
     rm -f -- "${file_amalgkit_getfastq_safely_removed_flag}"
   fi
 
-		  if amalgkit getfastq \
-		    --out_dir "${dir_tmp}" \
-		    --download_dir "${dir_amalgkit_download_dir}" \
-		    --metadata "${file_amalgkit_metadata}" \
-		    --threads "${NSLOTS}" \
-    --remove_sra yes \
-    --remove_tmp yes \
-    --read_name 'trinity' \
+  if [[ "${amalgkit_contam_filter}" == "yes" ]]; then
+    if ! awk -F '\t' 'NR==1 {found=0; for (i=1; i<=NF; i++) if ($i=="taxid") found=1; exit(found ? 0 : 1)}' "${file_amalgkit_metadata}"; then
+      echo "amalgkit_contam_filter=yes requires a taxid column in metadata: ${file_amalgkit_metadata}. Exiting."
+      exit 1
+    fi
+  fi
+
+			  if amalgkit getfastq \
+			    --out_dir "${dir_tmp}" \
+			    --download_dir "${dir_amalgkit_download_dir}" \
+			    --metadata "${file_amalgkit_metadata}" \
+			    --threads "${NSLOTS}" \
+			    --rrna_filter "${amalgkit_rrna_filter}" \
+			    --contam_filter "${amalgkit_contam_filter}" \
+			    --contam_filter_rank "${amalgkit_contam_filter_rank}" \
+			    --filter_order "${amalgkit_filter_order}" \
+	    --remove_sra yes \
+	    --remove_tmp yes \
+	    --read_name 'trinity' \
     --aws yes \
 	    --ncbi yes \
 	    --redo no; then
@@ -347,74 +357,6 @@ if [[ ( ${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1 ) &&
     exit 1
   fi
   echo "$(date): End: ${task}"
-else
-  gg_step_skip "${task}"
-fi
-
-task='rRNA contamination report'
-if [[ ( ! -s "${file_rRNA_contamination_report}" ) && ${run_rRNA_contamination_report} -eq 1 ]]; then
-  gg_step_start "${task}"
-  if [[ ! -d "${dir_amalgkit_getfastq_sp}" ]]; then
-    echo "amalgkit getfastq output directory not found: ${dir_amalgkit_getfastq_sp}. Exiting."
-    exit 1
-  fi
-  if [[ -z "$(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" -print -quit 2>/dev/null)" ]]; then
-    echo "No amalgkit getfastq FASTQ files were found in: ${dir_amalgkit_getfastq_sp}. Exiting."
-    exit 1
-  fi
-  if ! silva_rrna_ref=$(ensure_silva_rrna_ref_db "${dir_pg}"); then
-    echo "Failed to prepare SILVA rRNA reference. Exiting."
-    exit 1
-  fi
-
-  recreate_dir "./fasta"
-  recreate_dir "./index"
-  recreate_dir "./quant"
-  recreate_dir "./merge"
-  if [[ -e "./getfastq" ]]; then
-    rm -rf -- "./getfastq"
-  fi
-  ln -s "${dir_amalgkit_getfastq_sp}" "./getfastq"
-  file_reference_fasta_link="./fasta/${sp_ub}_dummy_rRNA_for_kallisto_index.fa.gz"
-  ln -s "${silva_rrna_ref}" "${file_reference_fasta_link}"
-  set +e
-  kallisto index --make-unique -i "./index/${sp_ub}.idx" "${file_reference_fasta_link}"
-  status_kallisto=$?
-  set -e
-  if [[ ${status_kallisto} -ne 0 ]]; then
-    echo "kallisto index failed with exit code ${status_kallisto}"
-    exit 1
-  fi
-
-  set +e
-  amalgkit quant \
-  --out_dir "./" \
-  --threads "${NSLOTS}" \
-  --metadata "${file_amalgkit_metadata}" \
-  --clean_fastq no \
-  --fasta_dir "./fasta" \
-  --build_index no
-  exit_code_amalgkit_quant=$?
-
-  amalgkit merge \
-  --out_dir "./" \
-  --metadata "${file_amalgkit_metadata}"
-  exit_code_amalgkit_merge=$?
-  set -e
-
-  if [[ ${exit_code_amalgkit_quant} -ne 0 || ${exit_code_amalgkit_merge} -ne 0 ]]; then
-    echo "amalgkit quant for rRNA contamination rate estimation failed with exit code ${exit_code_amalgkit_quant}"
-    echo "If you got an error 'FileNotFoundError: Could not find index file.', the specified species name may not be the same as the one in the metadata.tsv file."
-    echo "In that case, please correct the species name in the metadata.tsv file (or in your input files/directories) and run this pipeline again."
-    echo "Exiting."
-    exit 1
-  else
-    echo "amalgkit quant for rRNA contamination rate estimation finished successfully"
-    mv_out ./merge/metadata.tsv "${file_rRNA_contamination_report}"
-    rm -f -- "${file_reference_fasta_link}"
-    rm -rf -- "./fasta"
-    rm -f -- "./getfastq" # Do not put -r, otherwise the original getfastq files will be deleted.
-  fi
 else
   gg_step_skip "${task}"
 fi

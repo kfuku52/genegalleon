@@ -65,59 +65,18 @@ summary_output="${summary_output:-}"
 
 ### End: Modify this block to tailor your analysis ###
 
-# Forward config variables (including external overrides) into container environment.
-forward_config_vars_to_container_env() {
-  local job_script=$1
-  local var_name
-  local var_names
-  var_names=$(
-    sed -n '/^### Start: Modify this block to tailor your analysis ###$/,/^### End: Modify this block to tailor your analysis ###$/p' "${job_script}" \
-      | sed -n -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p' \
-      | sort -u
-  )
-  while IFS= read -r var_name; do
-    if [[ -z "${var_name}" ]]; then
-      continue
-    fi
-    if [[ -n "${!var_name+x}" ]]; then
-      export "${var_name}"
-      export "SINGULARITYENV_${var_name}=${!var_name}"
-      export "APPTAINERENV_${var_name}=${!var_name}"
-    fi
-  done <<< "${var_names}"
-
-  # gg_debug_mode is read by gg_*_core.sh scripts but defined outside the config block.
-  if [[ -n "${gg_debug_mode+x}" ]]; then
-    export gg_debug_mode
-    export "SINGULARITYENV_gg_debug_mode=${gg_debug_mode}"
-    export "APPTAINERENV_gg_debug_mode=${gg_debug_mode}"
-  fi
-
-  # Forward GG_INPUT_* runtime overrides consumed by gg_input_generation_core.sh.
-  local gg_input_var_name
-  for gg_input_var_name in ${!GG_INPUT_@}; do
-    export "${gg_input_var_name}"
-    export "SINGULARITYENV_${gg_input_var_name}=${!gg_input_var_name}"
-    export "APPTAINERENV_${gg_input_var_name}=${!gg_input_var_name}"
-  done
-
-  # Optional env-driven defaults consumed by gg_input_generation_core.sh.
-  if [[ -n "${GG_INPUTPREP_CONFIG+x}" ]]; then
-    export GG_INPUTPREP_CONFIG
-    export "SINGULARITYENV_GG_INPUTPREP_CONFIG=${GG_INPUTPREP_CONFIG}"
-    export "APPTAINERENV_GG_INPUTPREP_CONFIG=${GG_INPUTPREP_CONFIG}"
-  fi
-  if [[ -n "${GG_DATASET_ROOT+x}" ]]; then
-    export GG_DATASET_ROOT
-    export "SINGULARITYENV_GG_DATASET_ROOT=${GG_DATASET_ROOT}"
-    export "APPTAINERENV_GG_DATASET_ROOT=${GG_DATASET_ROOT}"
-  fi
-}
-
-forward_config_vars_to_container_env "${BASH_SOURCE[0]}"
-unset -f forward_config_vars_to_container_env
-
 source "${dir_script}/support/gg_util.sh" # loading utility functions
+# Forward config variables (including external overrides) into container environment.
+forward_config_vars_to_container_env "${BASH_SOURCE[0]}"
+
+# Forward GG_INPUT_* runtime overrides consumed by gg_input_generation_core.sh.
+for gg_input_var_name in ${!GG_INPUT_@}; do
+  gg_export_var_to_container_env_if_set "${gg_input_var_name}"
+done
+
+# Optional env-driven defaults consumed by gg_input_generation_core.sh.
+gg_export_var_to_container_env_if_set "GG_INPUTPREP_CONFIG"
+gg_export_var_to_container_env_if_set "GG_DATASET_ROOT"
 gg_scheduler_runtime_prelude
 unset_singularity_envs
 if ! set_singularity_command; then
