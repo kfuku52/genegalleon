@@ -103,6 +103,7 @@ mcmc_clock_model="${mcmc_clock_model:-IND}" # {EQUAL, IND, CORR}
 
 # Orthogroup parameters
 orthogroup_table="${orthogroup_table:-HOG}" # "OG" or "HOG"
+orthogroup_annotation_method="${orthogroup_annotation_method:-mmseqs2}" # blastp|mmseqs2 for representative-gene UniProt annotation in orthogroup selection.
 min_num_gene="${min_num_gene:-4}"
 min_num_species="${min_num_species:-2}"
 max_orthofinder_core_species="${max_orthofinder_core_species:-50}"

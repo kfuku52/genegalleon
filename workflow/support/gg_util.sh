@@ -1961,6 +1961,22 @@ _build_mmseqs_db_from_fasta() {
   touch "${done_file}"
 }
 
+_build_blast_db_from_fasta() {
+  local fasta_file=$1
+  local db_prefix=$2
+  local done_file=$3
+
+  if ! makeblastdb -dbtype prot -in "${fasta_file}" -out "${db_prefix}"; then
+    echo "Failed to build BLASTP DB from FASTA: ${fasta_file}" >&2
+    return 1
+  fi
+  if [[ ! -s "${db_prefix}.pin" || ! -s "${db_prefix}.phr" || ! -s "${db_prefix}.psq" ]]; then
+    echo "BLASTP DB files were not generated: ${db_prefix}" >&2
+    return 1
+  fi
+  touch "${done_file}"
+}
+
 ensure_uniprot_sprot_db() {
   local dir_pg=$1
   local sys_prefix="/usr/local/db/uniprot_sprot"
@@ -2039,6 +2055,63 @@ ensure_uniprot_sprot_mmseqs_db() {
 
   if [[ ! -s "${runtime_mmseqs_db}" || ! -s "${runtime_mmseqs_dbtype}" || ! -s "${runtime_ready}" ]]; then
     echo "MMseqs2 UniProt Swiss-Prot DB download/build failed." >&2
+    return 1
+  fi
+  echo "${runtime_prefix}"
+}
+
+ensure_uniprot_sprot_blast_db() {
+  local dir_pg=$1
+  local sys_prefix="/usr/local/db/uniprot_sprot"
+  local runtime_root="$(workspace_downloads_root "${dir_pg}")"
+  local runtime_dir="${runtime_root}/uniprot_sprot"
+  local runtime_prefix="${runtime_dir}/uniprot_sprot"
+  local runtime_pep="${runtime_prefix}.pep"
+  local runtime_blast_ready="${runtime_prefix}.blast.ready"
+  local lock_file_pep="${runtime_root}/locks/uniprot_sprot.pep.lock"
+  local lock_file_blast="${runtime_root}/locks/uniprot_sprot.blast.lock"
+
+  if [[ -s "${sys_prefix}.pep" && -s "${sys_prefix}.pin" && -s "${sys_prefix}.phr" && -s "${sys_prefix}.psq" ]]; then
+    echo "${sys_prefix}"
+    return 0
+  fi
+  if [[ -s "${runtime_pep}" && -s "${runtime_prefix}.pin" && -s "${runtime_prefix}.phr" && -s "${runtime_prefix}.psq" ]]; then
+    echo "${runtime_prefix}"
+    return 0
+  fi
+
+  mkdir -p "${runtime_root}" "${runtime_dir}"
+
+  if [[ ! -s "${runtime_pep}" ]]; then
+    if [[ -s "${sys_prefix}.pep" ]]; then
+      gg_array_download_once "${lock_file_pep}" "${runtime_pep}" "UniProt Swiss-Prot FASTA" \
+        cp -- "${sys_prefix}.pep" "${runtime_pep}" || return 1
+    else
+      gg_array_download_once "${lock_file_pep}" "${runtime_pep}" "UniProt Swiss-Prot FASTA" \
+        _download_uniprot_sprot_pep_to_file "${runtime_pep}" || return 1
+    fi
+  fi
+  if [[ ! -s "${runtime_pep}" ]]; then
+    echo "UniProt Swiss-Prot FASTA was not found after synchronization: ${runtime_pep}" >&2
+    return 1
+  fi
+
+  if [[ -s "${runtime_prefix}.pin" && -s "${runtime_prefix}.phr" && -s "${runtime_prefix}.psq" && -s "${runtime_blast_ready}" ]]; then
+    echo "${runtime_prefix}"
+    return 0
+  fi
+  if [[ -s "${runtime_prefix}.pin" && -s "${runtime_prefix}.phr" && -s "${runtime_prefix}.psq" && ! -s "${runtime_blast_ready}" ]]; then
+    echo "BLASTP UniProt Swiss-Prot DB exists without ready marker. Reusing existing DB and creating ready marker." >&2
+    touch "${runtime_blast_ready}"
+    echo "${runtime_prefix}"
+    return 0
+  fi
+
+  gg_array_download_once "${lock_file_blast}" "${runtime_blast_ready}" "UniProt Swiss-Prot BLASTP DB" \
+    _build_blast_db_from_fasta "${runtime_pep}" "${runtime_prefix}" "${runtime_blast_ready}" || return 1
+
+  if [[ ! -s "${runtime_prefix}.pin" || ! -s "${runtime_prefix}.phr" || ! -s "${runtime_prefix}.psq" || ! -s "${runtime_blast_ready}" ]]; then
+    echo "BLASTP UniProt Swiss-Prot DB download/build failed." >&2
     return 1
   fi
   echo "${runtime_prefix}"

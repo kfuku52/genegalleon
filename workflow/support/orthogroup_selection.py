@@ -3,9 +3,11 @@
 
 import argparse
 import datetime
+import glob
 import io
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -30,8 +32,9 @@ def build_arg_parser():
     parser.add_argument('--remove_unannotated', metavar='yes|no', default='yes', type=strtobool, help='')
     parser.add_argument('--dir_orthofinder_og', metavar='PATH', default='', type=str, help='', required=True)
     parser.add_argument('--dir_species_protein', metavar='PATH', default='', type=str, help='', required=True)
-    parser.add_argument('--path_diamond_db', metavar='PATH', default='', type=str, help='', required=True)
-    parser.add_argument('--evalue', metavar='FLOAT', default='1e-2', type=str, help='E-value cutoff for DIAMOND BLAST search')
+    parser.add_argument('--annotation_search_method', metavar='blastp|mmseqs2', default='mmseqs2', type=str, help='')
+    parser.add_argument('--path_search_db', metavar='PATH', default='', type=str, help='', required=True)
+    parser.add_argument('--evalue', metavar='FLOAT', default='1e-2', type=str, help='E-value cutoff for BLASTP/MMseqs2 search')
     parser.add_argument('--gene_size_quantiles', metavar='COMMA_SEPARATED_FLOAT', default='0.05,0.25,0.5,0.75,0.95', type=str, help='')
     parser.add_argument('--min_gene_num', metavar='INT', default=4, type=int, help='')
     parser.add_argument('--max_gene_num', metavar='INT', default=1000, type=int, help='')
@@ -202,10 +205,52 @@ def _attach_besthits(df_gc_original_quartile, df_diamond, cols):
     return out
 
 
-def diamond_annotation(df_gc_original_quartile, args):
+def normalize_annotation_search_method(value):
+    method = str(value).strip().lower()
+    if method == 'diamond':
+        method = 'blastp'
+    if method not in {'blastp', 'mmseqs2'}:
+        sys.stderr.write('annotation_search_method must be either "blastp" or "mmseqs2".\n')
+        sys.exit(1)
+    return method
+
+
+def _load_besthit_table(path_out):
+    if not os.path.exists(path_out):
+        return pandas.DataFrame(columns=['qseqid', 'stitle'])
+    print('Loading {}'.format(path_out))
+    try:
+        df_hits = pandas.read_csv(path_out, sep='\t', header=None, low_memory=False)
+    except pandas.errors.EmptyDataError:
+        return pandas.DataFrame(columns=['qseqid', 'stitle'])
+    if df_hits.empty or df_hits.shape[1] < 2:
+        return pandas.DataFrame(columns=['qseqid', 'stitle'])
+    df_hits = df_hits.iloc[:, :2].copy()
+    df_hits.columns = ['qseqid', 'stitle']
+    return df_hits
+
+
+def _cleanup_mmseqs_tmp(tmp_query_db, tmp_result_db, tmp_mmseqs_dir):
+    for path in glob.glob(tmp_query_db + '*') + glob.glob(tmp_result_db + '*'):
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
+    if os.path.isdir(tmp_mmseqs_dir):
+        shutil.rmtree(tmp_mmseqs_dir)
+
+
+def _resolve_mmseqs_db_prefix(path_search_db):
+    if os.path.exists(path_search_db + '.dbtype'):
+        return path_search_db
+    return path_search_db + '.mmseqs'
+
+
+def annotate_representative_genes(df_gc_original_quartile, args):
+    method = normalize_annotation_search_method(args.annotation_search_method)
     tmp_query_fasta = 'tmp.query.fasta'
     tmp_query_list = 'tmp.query.txt'
-    tmp_diamond_out = 'tmp.diamond.out.tsv'
+    tmp_search_out = 'tmp.{}.out.tsv'.format(method)
     if os.path.exists(tmp_query_fasta):
         os.remove(tmp_query_fasta)
     with open(tmp_query_fasta, 'w'):
@@ -215,34 +260,45 @@ def diamond_annotation(df_gc_original_quartile, args):
     query_ids = [str(x) for x in raw_query_ids if pandas.notna(x) and str(x) != '']
     numpy.savetxt(tmp_query_list, query_ids, fmt='%s')
     species_protein_files = get_species_protein_files(args.dir_species_protein)
-    if (not os.path.exists(tmp_diamond_out)) and (len(query_ids) > 0):
-        print('Generating {}'.format(tmp_diamond_out))
+    if (not os.path.exists(tmp_search_out)) and (len(query_ids) > 0):
+        print('Generating {}'.format(tmp_search_out))
         for species_protein_file in species_protein_files:
             species_protein_path = os.path.join(args.dir_species_protein, species_protein_file)
             command_seqkit = [
                 'seqkit', 'grep', '--threads', str(args.ncpu), '--pattern-file', tmp_query_list, species_protein_path
             ]
             run_command(command_seqkit, stdout_file=tmp_query_fasta, append=True, tool_name='seqkit')
-        command_diamond = [
-            'diamond', 'blastp', '--query', tmp_query_fasta, '--threads', str(args.ncpu),
-            '--db', args.path_diamond_db, '--outfmt', '6', 'qseqid', 'stitle', 'evalue', 'bitscore',
-            '--max-target-seqs', '1', '--evalue', args.evalue, '--out', tmp_diamond_out
-        ]
-        run_command(command_diamond, tool_name='diamond')
-    if not os.path.exists(tmp_diamond_out):
-        return _attach_besthits(df_gc_original_quartile, pandas.DataFrame(columns=['qseqid', 'stitle']), cols)
-    print('Loading {}'.format(tmp_diamond_out))
-    try:
-        df_diamond = pandas.read_csv(tmp_diamond_out, sep='\t', header=None, low_memory=False)
-    except pandas.errors.EmptyDataError:
-        df_diamond = pandas.DataFrame(columns=['qseqid', 'stitle'])
-    if not df_diamond.empty:
-        if df_diamond.shape[1] < 2:
-            df_diamond = pandas.DataFrame(columns=['qseqid', 'stitle'])
+        if method == 'blastp':
+            command_blastp = [
+                'blastp', '-query', tmp_query_fasta, '-num_threads', str(args.ncpu),
+                '-db', args.path_search_db, '-outfmt', '6 qseqid stitle evalue bitscore',
+                '-max_target_seqs', '1', '-evalue', args.evalue, '-out', tmp_search_out
+            ]
+            run_command(command_blastp, tool_name='blastp')
         else:
-            df_diamond = df_diamond.iloc[:, :2].copy()
-            df_diamond.columns = ['qseqid', 'stitle']
-    return _attach_besthits(df_gc_original_quartile, df_diamond, cols)
+            mmseqs_db = _resolve_mmseqs_db_prefix(args.path_search_db)
+            tmp_query_db = 'mmseqs2.queryDB'
+            tmp_result_db = 'mmseqs2.resultDB'
+            tmp_mmseqs_dir = 'mmseqs2_tmp_search'
+            run_command(['mmseqs', 'createdb', tmp_query_fasta, tmp_query_db], tool_name='mmseqs')
+            run_command(
+                [
+                    'mmseqs', 'search', tmp_query_db, mmseqs_db, tmp_result_db, tmp_mmseqs_dir,
+                    '--threads', str(args.ncpu), '--max-seqs', '1', '-e', args.evalue, '-s', '7.5',
+                ],
+                tool_name='mmseqs',
+            )
+            run_command(
+                [
+                    'mmseqs', 'convertalis', tmp_query_db, mmseqs_db, tmp_result_db, tmp_search_out,
+                    '--threads', str(args.ncpu), '--format-output', 'query,theader,evalue,bits',
+                ],
+                tool_name='mmseqs',
+            )
+            _cleanup_mmseqs_tmp(tmp_query_db, tmp_result_db, tmp_mmseqs_dir)
+
+    df_hits = _load_besthit_table(tmp_search_out)
+    return _attach_besthits(df_gc_original_quartile, df_hits, cols)
 
 
 def prepare_annotation(args):
@@ -269,7 +325,7 @@ def prepare_annotation(args):
         df_gc_original = pandas.read_csv(file_genecount_in, header=0, sep='\t', low_memory=False)
         df_gc_original_quartile = get_df_gc_original(df_og_original, df_gc_original, fx2tab, args)
         df_gc_original_quartile.to_csv(quartile_path, sep='\t', index=False)
-    df_gc_original_annotated = diamond_annotation(df_gc_original_quartile, args)
+    df_gc_original_annotated = annotate_representative_genes(df_gc_original_quartile, args)
     df_gc_original_annotated.to_csv(file_genecount_annot, sep='\t', index=False)
     return file_genecount_annot
 
@@ -285,7 +341,8 @@ def select_orthogroups(args, file_genecount_in):
     if args.remove_unannotated:
         cols = df_gc_original.columns.str.startswith('besthit_')
         is_annotated = (~((df_gc_original.loc[:, cols] == '') | (df_gc_original.loc[:, cols].isnull()))).any(axis=1)
-        print('Number of excluded orthogroups with no UniProt DIAMOND BLASTP hit: {:,}'.format((~is_annotated).sum()))
+        txt = 'Number of excluded orthogroups with no UniProt {} hit: {:,}'
+        print(txt.format(args.annotation_search_method.upper(), (~is_annotated).sum()))
     else:
         print('Annotation info was not used for the orthogroup selection.')
         is_annotated = True
@@ -379,6 +436,7 @@ def main():
     parser = build_arg_parser()
     args = parser.parse_args()
     args.ncpu = max(1, int(args.ncpu))
+    args.annotation_search_method = normalize_annotation_search_method(args.annotation_search_method)
     start = time.time()
     print('Starting {} at {}'.format(sys.argv[0], datetime.datetime.now()))
     run(args)

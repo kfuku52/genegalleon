@@ -162,18 +162,19 @@ def test_attach_besthits_maps_gene_columns_without_repeated_merges():
     assert pandas.isna(out.loc[out["Orthogroup"] == "OG2", "besthit_0.75"].iloc[0])
 
 
-def test_diamond_annotation_handles_empty_existing_output(tmp_path, monkeypatch):
+def test_annotation_search_handles_empty_existing_output(tmp_path, monkeypatch):
     mod = load_module()
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "tmp.diamond.out.tsv").write_text("", encoding="utf-8")
+    (tmp_path / "tmp.blastp.out.tsv").write_text("", encoding="utf-8")
     df_gc = pandas.DataFrame([{"Orthogroup": "OG1", "geneid_0.5": "g1"}])
     args = SimpleNamespace(
+        annotation_search_method="blastp",
         gene_size_quantiles="0.5",
         dir_species_protein=str(tmp_path),
         ncpu=1,
-        path_diamond_db="dummy",
+        path_search_db="dummy",
         evalue="1e-2",
     )
-    out = mod.diamond_annotation(df_gc, args)
+    out = mod.annotate_representative_genes(df_gc, args)
     assert "besthit_0.5" in out.columns
     assert out["besthit_0.5"].iloc[0] == ""

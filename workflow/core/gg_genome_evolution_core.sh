@@ -309,6 +309,12 @@ ensure_dir "${dir_tmp}"
 cd "${dir_tmp}"
 
 enable_all_run_flags_for_debug_mode
+orthogroup_annotation_method=$(echo "${orthogroup_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
+if [[ "${orthogroup_annotation_method}" != "blastp" && "${orthogroup_annotation_method}" != "mmseqs2" ]]; then
+  echo "Invalid orthogroup_annotation_method: ${orthogroup_annotation_method}"
+  echo 'orthogroup_annotation_method must be either "blastp" or "mmseqs2". Exiting.'
+  exit 1
+fi
 
 root_tree_with_outgroup () {
   local infile=$1
@@ -1948,9 +1954,16 @@ if [[ ! -s "${file_orthogroup_selection}" && ${run_og_selection} -eq 1 ]]; then
   gg_step_start "${task}"
   prepare_species_protein_tmp
   ensure_dir "${dir_orthofinder_filtered}"
-  if ! uniprot_db_prefix=$(ensure_uniprot_sprot_db "${dir_pg}"); then
-    echo "Failed to prepare UniProt Swiss-Prot DB. Exiting."
-    exit 1
+  if [[ "${orthogroup_annotation_method}" == "blastp" ]]; then
+    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${dir_pg}"); then
+      echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
+      exit 1
+    fi
+  else
+    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${dir_pg}"); then
+      echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
+      exit 1
+    fi
   fi
 
   if [[ ${orthogroup_table} == "OG" ]]; then
@@ -1978,7 +1991,8 @@ if [[ ! -s "${file_orthogroup_selection}" && ${run_og_selection} -eq 1 ]]; then
     --min_percent_species_coverage "${min_percent_species_coverage}" \
     --remove_unannotated 'yes' \
     --gene_size_quantiles '0.05,0.25,0.5,0.75,0.95' \
-    --path_diamond_db "${uniprot_db_prefix}" \
+    --annotation_search_method "${orthogroup_annotation_method}" \
+    --path_search_db "${uniprot_db_prefix}" \
     --evalue '1e-2' \
     --ncpu "${NSLOTS}"; then
     exit_code=0

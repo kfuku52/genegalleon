@@ -75,10 +75,10 @@ copy_busco_tables() {
 }
 
 enable_all_run_flags_for_debug_mode
-uniprot_annotation_method=$(echo "${uniprot_annotation_method:-diamond}" | tr '[:upper:]' '[:lower:]')
-if [[ "${uniprot_annotation_method}" != "diamond" && "${uniprot_annotation_method}" != "mmseqs2" ]]; then
+uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
+if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method}" != "mmseqs2" ]]; then
   echo "Invalid uniprot_annotation_method: ${uniprot_annotation_method}"
-  echo 'uniprot_annotation_method must be either "diamond" or "mmseqs2". Exiting.'
+  echo 'uniprot_annotation_method must be either "blastp" or "mmseqs2". Exiting.'
   exit 1
 fi
 
@@ -342,21 +342,20 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
   | seqkit translate --transl-table "${genetic_code}" --threads "${NSLOTS}" \
   > uniprot.query.pep.fas
 
-  if [[ "${uniprot_annotation_method}" == "diamond" ]]; then
-    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_db "${dir_pg}"); then
-      echo "Failed to prepare UniProt Swiss-Prot DIAMOND DB. Exiting."
+  if [[ "${uniprot_annotation_method}" == "blastp" ]]; then
+    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${dir_pg}"); then
+      echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
       exit 1
     fi
 
-    diamond blastp \
-    --query uniprot.query.pep.fas \
-    --threads "${NSLOTS}" \
-    --db "${uniprot_db_prefix}" \
-    --very-sensitive \
-    --out uniprot.search.tsv \
-    --outfmt 6 qseqid sseqid pident length evalue bitscore qlen \
-    --max-target-seqs 1 \
-    --evalue 1e-2
+    blastp \
+    -query uniprot.query.pep.fas \
+    -num_threads "${NSLOTS}" \
+    -db "${uniprot_db_prefix}" \
+    -out uniprot.search.tsv \
+    -outfmt "6 qseqid sseqid pident length evalue bitscore qlen" \
+    -max_target_seqs 1 \
+    -evalue 1e-2
   else
     if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${dir_pg}"); then
       echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."

@@ -408,7 +408,7 @@ Purpose:
 
 - per-species CDS/genome annotation and QC,
 - BUSCO (CDS/genome),
-- UniProt annotation (`diamond` or `mmseqs2`),
+- UniProt annotation (`blastp` or `mmseqs2`),
 - optional MMseqs2 taxonomy and contamination removal,
 - optional genome analyses (SubPhaser, dotplot, GenomeScope).
 
@@ -421,7 +421,7 @@ Main outputs:
 Notable defaults:
 
 - most heavy tasks default to `0`,
-- `uniprot_annotation_method="diamond"` (set `mmseqs2` to avoid DIAMOND for UniProt annotation),
+- `uniprot_annotation_method="mmseqs2"` (set `blastp` to use NCBI BLASTP for UniProt annotation),
 - `run_multispecies_summary=1` by default.
 
 ### `gg_genome_evolution_entrypoint.sh`
@@ -458,6 +458,7 @@ Temporary protein FASTA files are created under `workspace/downloads/tmp/` and r
 Notable defaults:
 
 - `orthogroup_table="HOG"`
+- `orthogroup_annotation_method="mmseqs2"` (set `blastp` to use NCBI BLASTP for representative-gene UniProt annotation)
 - species-tree-aware OrthoFinder is used when species tree exists.
 
 ### Inlined Stage: Species Tree
@@ -506,7 +507,7 @@ Notable defaults in current snapshot:
 - `run_rps_blast=1` (Pfam domain annotation is on by default),
 - `run_tree_plot=1`
 - `run_summary=1`
-- `uniprot_annotation_method="diamond"` (set `mmseqs2` for MMseqs2-based UniProt annotation),
+- `uniprot_annotation_method="mmseqs2"` (set `blastp` for NCBI BLASTP-based UniProt annotation),
 - many advanced analyses default to `0`.
 
 Current behavior notes:

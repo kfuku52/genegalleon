@@ -192,16 +192,16 @@ if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
   csubst_cutoff_stat="OCNany2spe,0|omegaCany2spe,1"; echo "gg debug mode: csubst_cutoff_stat=${csubst_cutoff_stat}"
 fi
 query_blast_method=$(echo "${query_blast_method}" | tr '[:upper:]' '[:lower:]')
-uniprot_annotation_method=$(echo "${uniprot_annotation_method:-diamond}" | tr '[:upper:]' '[:lower:]')
+uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
 tree_rooting_method=$(echo "${tree_rooting_method}" | tr '[:upper:]' '[:lower:]')
 if [[ "${tree_rooting_method}" != "notung" && "${tree_rooting_method}" != "midpoint" && "${tree_rooting_method}" != "mad" && "${tree_rooting_method}" != "md" ]]; then
   echo "Invalid tree_rooting_method: ${tree_rooting_method}"
   echo "tree_rooting_method must be one of notung, midpoint, mad, md. Exiting."
   exit 1
 fi
-if [[ "${uniprot_annotation_method}" != "diamond" && "${uniprot_annotation_method}" != "mmseqs2" ]]; then
+if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method}" != "mmseqs2" ]]; then
   echo "Invalid uniprot_annotation_method: ${uniprot_annotation_method}"
-  echo 'uniprot_annotation_method must be either "diamond" or "mmseqs2". Exiting.'
+  echo 'uniprot_annotation_method must be either "blastp" or "mmseqs2". Exiting.'
   exit 1
 fi
 if [[ ${mode_query2family} -eq 1 && ${run_query_blast} -eq 1 ]]; then
@@ -1061,21 +1061,20 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
     | seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${NSLOTS}" \
     > uniprot.query.pep.fas
 
-    if [[ "${uniprot_annotation_method}" == "diamond" ]]; then
-      if ! uniprot_db_prefix=$(ensure_uniprot_sprot_db "${dir_pg}"); then
-        echo "Failed to prepare UniProt Swiss-Prot DIAMOND DB. Exiting."
+    if [[ "${uniprot_annotation_method}" == "blastp" ]]; then
+      if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${dir_pg}"); then
+        echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
         exit 1
       fi
 
-      diamond blastp \
-      --query uniprot.query.pep.fas \
-      --threads "${NSLOTS}" \
-      --db "${uniprot_db_prefix}" \
-      --very-sensitive \
-      --out uniprot.search.tsv \
-      --outfmt 6 qseqid sseqid pident length evalue bitscore qlen \
-      --max-target-seqs 1 \
-      --evalue 1e-2
+      blastp \
+      -query uniprot.query.pep.fas \
+      -num_threads "${NSLOTS}" \
+      -db "${uniprot_db_prefix}" \
+      -out uniprot.search.tsv \
+      -outfmt "6 qseqid sseqid pident length evalue bitscore qlen" \
+      -max_target_seqs 1 \
+      -evalue 1e-2
     else
       if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${dir_pg}"); then
         echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
