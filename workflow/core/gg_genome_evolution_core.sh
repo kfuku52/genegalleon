@@ -116,36 +116,14 @@ get_busco_summary_gene_count() {
 normalize_busco_table_naming() {
   local full_dir=$1
   local short_dir=$2
-  local -a legacy_full_tables=()
-  local -a legacy_short_tables=()
-  local legacy_table
-  local species_name
-  local canonical_table
-
-  if [[ -d "${full_dir}" ]]; then
-    mapfile -t legacy_full_tables < <(find "${full_dir}" -maxdepth 1 -type f -name "*_busco.full.tsv" 2>/dev/null | sort)
-    for legacy_table in "${legacy_full_tables[@]}"; do
-      species_name=$(basename "${legacy_table}")
-      species_name=${species_name%_busco.full.tsv}
-      canonical_table="${full_dir}/${species_name}.busco.full.tsv"
-      if [[ -s "${canonical_table}" ]]; then
-        echo "Removing legacy duplicate BUSCO full table: ${legacy_table}"
-        rm -f -- "${legacy_table}"
-      fi
-    done
+  # BUSCO outputs are produced directly in canonical naming:
+  #   <species>.busco.full.tsv / <species>.busco.short.txt
+  # Keep this function as a stable call point for summary steps.
+  if [[ -n "${full_dir}" ]]; then
+    ensure_dir "${full_dir}"
   fi
-
-  if [[ -d "${short_dir}" ]]; then
-    mapfile -t legacy_short_tables < <(find "${short_dir}" -maxdepth 1 -type f -name "*_busco.short.txt" 2>/dev/null | sort)
-    for legacy_table in "${legacy_short_tables[@]}"; do
-      species_name=$(basename "${legacy_table}")
-      species_name=${species_name%_busco.short.txt}
-      canonical_table="${short_dir}/${species_name}.busco.short.txt"
-      if [[ -s "${canonical_table}" ]]; then
-        echo "Removing legacy duplicate BUSCO short summary: ${legacy_table}"
-        rm -f -- "${legacy_table}"
-      fi
-    done
+  if [[ -n "${short_dir}" ]]; then
+    ensure_dir "${short_dir}"
   fi
 }
 
@@ -672,7 +650,7 @@ if [[ ${run_species_busco} -eq 1 ]]; then
   busco_output_files=()
   mapfile -t busco_output_files < <(
     find "${dir_species_busco_full}" "${dir_species_busco_short}" -maxdepth 1 -type f \
-      \( -name "*.busco.full.tsv" -o -name "*.busco.short.txt" -o -name "*_busco.full.tsv" -o -name "*_busco.short.txt" \) \
+      \( -name "*.busco.full.tsv" -o -name "*.busco.short.txt" \) \
       2>/dev/null | sort
   )
   for busco_file in "${busco_output_files[@]}"; do
@@ -682,10 +660,6 @@ if [[ ${run_species_busco} -eq 1 ]]; then
       busco_species=${busco_species%.busco.full.tsv}
     elif [[ "${busco_species}" == *.busco.short.txt ]]; then
       busco_species=${busco_species%.busco.short.txt}
-    elif [[ "${busco_species}" == *_busco.full.tsv ]]; then
-      busco_species=${busco_species%_busco.full.tsv}
-    elif [[ "${busco_species}" == *_busco.short.txt ]]; then
-      busco_species=${busco_species%_busco.short.txt}
     fi
     busco_species_found=0
     for input_species in "${input_species_set[@]}"; do
