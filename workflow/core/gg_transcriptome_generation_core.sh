@@ -226,6 +226,7 @@ fi
 
 dir_tmp="${dir_transcriptome_assembly_output}/tmp/${SGE_TASK_ID}_${sp_ub}"
 dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
+dir_amalgkit_download_dir="${dir_pg_db}/amalgkit_downloads"
 file_amalgkit_metadata="${dir_amalgkit_metadata}/${sp_ub}_metadata.tsv"
 file_amalgkit_getfastq_safely_removed_flag=${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}_safely_removed.txt
 file_rRNA_contamination_report="${dir_transcriptome_assembly_output}/amalgkit_metadata_rRNA_mapping_rate/${sp_ub}_rRNA_mapping_rate.tsv"
@@ -250,6 +251,7 @@ file_amalgkit_merge_metadata="${dir_transcriptome_assembly_output}/amalgkit_merg
 file_multispecies_summary="${dir_transcriptome_assembly_output}/annotation_summary/assembly_stat_summary.pdf"
 
 ensure_dir "${dir_tmp}"
+ensure_dir "${dir_amalgkit_download_dir}"
 cd "${dir_tmp}"
 
 task="amalgkit metadata/integrate"
@@ -266,6 +268,7 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
 
     amalgkit metadata \
     --out_dir "./" \
+    --download_dir "${dir_amalgkit_download_dir}" \
     --search_string "${search_string}"
 
     sp_space="${sp_ub//_/ }"
@@ -316,10 +319,11 @@ if [[ ( ${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1 ) &&
     rm -f -- "${file_amalgkit_getfastq_safely_removed_flag}"
   fi
 
-	  if amalgkit getfastq \
-	    --out_dir "${dir_tmp}" \
-	    --metadata "${file_amalgkit_metadata}" \
-	    --threads "${NSLOTS}" \
+		  if amalgkit getfastq \
+		    --out_dir "${dir_tmp}" \
+		    --download_dir "${dir_amalgkit_download_dir}" \
+		    --metadata "${file_amalgkit_metadata}" \
+		    --threads "${NSLOTS}" \
     --remove_sra yes \
     --remove_tmp yes \
     --read_name 'trinity' \

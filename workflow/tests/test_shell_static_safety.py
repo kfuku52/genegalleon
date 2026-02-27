@@ -1064,6 +1064,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
     banned_tokens = [
         "--fastq_dir ${dir_species_fastq}",
         "--out_dir ${dir_tmp}",
+        "--download_dir ${dir_amalgkit_download_dir}",
         "--metadata ${file_amalgkit_metadata}",
         "ln -s ${dir_amalgkit_getfastq_sp} \"./getfastq\"",
         "ln -s ${silva_rrna_ref} ${file_reference_fasta_link}",
@@ -1090,6 +1091,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
     expected_tokens = [
         '--fastq_dir "${dir_species_fastq}"',
         '--out_dir "${dir_tmp}"',
+        '--download_dir "${dir_amalgkit_download_dir}"',
         '--metadata "${file_amalgkit_metadata}"',
         'ln -s "${dir_amalgkit_getfastq_sp}" "./getfastq"',
         'ln -s "${silva_rrna_ref}" "${file_reference_fasta_link}"',
