@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -48,6 +49,8 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
 }
 
 PROVIDERS = ("ensemblplants", "phycocosm", "phytozome")
+DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 86400
+DOWNLOAD_LOCK_SLEEP_SECONDS = 1.0
 
 
 def build_arg_parser():
@@ -207,18 +210,148 @@ def parse_http_headers(http_header_values, auth_bearer_token_env):
     return headers
 
 
-def download_url_to_file(url, destination, headers, timeout, dry_run):
-    if dry_run:
+def resolve_download_lock_stale_seconds():
+    raw = os.environ.get("GG_DOWNLOAD_LOCK_STALE_SECONDS", "").strip()
+    if raw == "":
+        return DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS
+    if value < 1:
+        return 1
+    return value
+
+
+def lock_pid_is_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def read_lock_metadata(lock_path):
+    pid = None
+    started = None
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        raw = ""
+    if raw != "":
+        parts = raw.split("\t")
+        if len(parts) >= 1:
+            try:
+                pid = int(parts[0])
+            except ValueError:
+                pid = None
+        if len(parts) >= 2:
+            try:
+                started = int(parts[1])
+            except ValueError:
+                started = None
+    if started is None:
+        try:
+            started = int(lock_path.stat().st_mtime)
+        except OSError:
+            started = int(time.time())
+    return pid, started
+
+
+def stale_lock_reason(lock_path, stale_seconds):
+    if not lock_path.exists():
+        return ""
+    now = int(time.time())
+    pid, started = read_lock_metadata(lock_path)
+    age = now - started
+    if age < 0:
+        age = 0
+    if pid is not None:
+        if lock_pid_is_alive(pid):
+            return ""
+        return "owner_not_running (pid={}, age={}s)".format(pid, age)
+    if age < stale_seconds:
+        return ""
+    return "owner_unknown_timeout (pid=unknown, age={}s)".format(age)
+
+
+def acquire_download_lock(lock_path, stale_seconds, warnings, lock_context):
+    while True:
+        now = int(time.time())
+        payload = "{}\t{}\t{}\n".format(os.getpid(), now, lock_context)
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            reason = stale_lock_reason(lock_path, stale_seconds)
+            if reason == "":
+                time.sleep(DOWNLOAD_LOCK_SLEEP_SECONDS)
+                continue
+            try:
+                lock_path.unlink()
+                warnings.append(
+                    "[download-lock] recovered stale lock for {}: {} ({})".format(
+                        lock_context, lock_path, reason
+                    )
+                )
+            except FileNotFoundError:
+                continue
+            except OSError:
+                time.sleep(DOWNLOAD_LOCK_SLEEP_SECONDS)
+            continue
+        try:
+            os.write(fd, payload.encode("utf-8"))
+        finally:
+            os.close(fd)
         return
-    tmp = destination.with_suffix(destination.suffix + ".tmp")
-    request = Request(url, headers=headers)
-    with urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
-        while True:
-            chunk = response.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-    tmp.replace(destination)
+
+
+def release_download_lock(lock_path):
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
+def download_url_to_file(
+    url,
+    destination,
+    headers,
+    timeout,
+    dry_run,
+    overwrite,
+    lock_stale_seconds,
+    warnings,
+    lock_context,
+):
+    if dry_run:
+        return False
+    lock_path = Path(str(destination) + ".lock")
+    acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
+    tmp = Path(str(destination) + ".tmp.{}".format(os.getpid()))
+    try:
+        if destination.exists() and destination.stat().st_size > 0 and not overwrite:
+            return False
+        request = Request(url, headers=headers)
+        with urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+        tmp.replace(destination)
+    except Exception:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        raise
+    finally:
+        release_download_lock(lock_path)
+    return True
 
 
 def read_download_manifest(path):
@@ -244,6 +377,7 @@ def download_from_manifest(
     processed = 0
     downloaded = 0
     planned = 0
+    lock_stale_seconds = resolve_download_lock_stale_seconds()
 
     required_cols = {"provider", "species_key", "cds_url", "gff_url"}
     if len(rows) == 0:
@@ -314,8 +448,25 @@ def download_from_manifest(
                 planned += 1
                 continue
             try:
-                download_url_to_file(url, target, headers=headers, timeout=timeout, dry_run=dry_run)
-                downloaded += 1
+                did_download = download_url_to_file(
+                    url,
+                    target,
+                    headers=headers,
+                    timeout=timeout,
+                    dry_run=dry_run,
+                    overwrite=overwrite,
+                    lock_stale_seconds=lock_stale_seconds,
+                    warnings=warnings,
+                    lock_context="[download:{}] {} {}".format(provider, species_key, label),
+                )
+                if did_download:
+                    downloaded += 1
+                elif target.exists() and target.stat().st_size > 0 and not overwrite:
+                    warnings.append(
+                        "[download:{}] {} {} already exists after lock. Skipping: {}".format(
+                            provider, species_key, label, target
+                        )
+                    )
             except Exception as exc:
                 errors.append(
                     "[download:{}] failed {} {} from {} -> {} ({})".format(

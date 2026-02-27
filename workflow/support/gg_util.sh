@@ -380,6 +380,29 @@ gg_prepare_cds_fasta_stream() {
   fi
 }
 
+_download_busco_lineage_to_runtime() {
+  local busco_lineage=$1
+  local runtime_busco_db=$2
+  local runtime_busco_lineage=$3
+  if [[ -e "${runtime_busco_lineage}" ]]; then
+    return 0
+  fi
+  echo "Starting BUSCO dataset download: ${busco_lineage}" >&2
+  if ! busco --download "${busco_lineage}" >&2; then
+    echo "BUSCO dataset download failed: ${busco_lineage}" >&2
+    return 1
+  fi
+  if [[ -d busco_downloads ]]; then
+    find busco_downloads -mindepth 1 -maxdepth 1 -exec mv -f -- {} "${runtime_busco_db}"/ \;
+    rm -rf -- busco_downloads
+  fi
+  if [[ ! -e "${runtime_busco_lineage}" ]]; then
+    echo "BUSCO lineage dataset is still missing after download: ${runtime_busco_lineage}" >&2
+    return 1
+  fi
+  echo "BUSCO dataset download has been finished: ${busco_lineage}" >&2
+}
+
 ensure_busco_download_path() {
   local dir_pg=$1
   local busco_lineage=$2
@@ -405,28 +428,8 @@ ensure_busco_download_path() {
   ensure_dir "${runtime_busco_db}"
   ensure_dir "${runtime_busco_db}/locks"
 
-  if command -v flock >/dev/null 2>&1; then
-    flock "${lock_file}" -c "
-      if [ ! -e '${runtime_busco_lineage}' ]; then
-        echo 'Starting BUSCO dataset download.' >&2
-        busco --download '${busco_lineage}' >&2
-        if [ -d busco_downloads ]; then
-          find busco_downloads -mindepth 1 -maxdepth 1 -exec mv -f -- {} '${runtime_busco_db}'/ \;
-          rm -rf -- busco_downloads
-        fi
-        echo 'BUSCO dataset download has been finished.' >&2
-      fi
-    " >&2
-  elif [[ ! -e "${runtime_busco_lineage}" ]]; then
-    echo "flock command was not found. Proceeding without lock file synchronization: BUSCO dataset download" >&2
-    echo 'Starting BUSCO dataset download.' >&2
-    busco --download "${busco_lineage}" >&2
-    if [[ -d busco_downloads ]]; then
-      find busco_downloads -mindepth 1 -maxdepth 1 -exec mv -f -- {} "${runtime_busco_db}"/ \;
-      rm -rf -- busco_downloads
-    fi
-    echo 'BUSCO dataset download has been finished.' >&2
-  fi
+  gg_array_download_once "${lock_file}" "${runtime_busco_lineage}" "BUSCO dataset download (${busco_lineage})" \
+    _download_busco_lineage_to_runtime "${busco_lineage}" "${runtime_busco_db}" "${runtime_busco_lineage}" || return 1
 
   if [[ ! -e "${runtime_busco_lineage}" ]]; then
     echo "Failed to prepare BUSCO lineage dataset: ${busco_lineage}" >&2
@@ -582,7 +585,6 @@ ensure_ete_taxonomy_db() {
   local dir_taxonomy
   local db_file
   local lock_file
-  local has_flock=1
 
   dir_db=$(workspace_downloads_root "${dir_pg}")
   dir_taxonomy=$(workspace_taxonomy_root "${dir_pg}")
@@ -599,28 +601,13 @@ ensure_ete_taxonomy_db() {
   export XDG_CONFIG_HOME="${dir_taxonomy}"
   export GG_TAXONOMY_DBFILE="${db_file}"
 
-  if ! command -v flock >/dev/null 2>&1; then
-    has_flock=0
-    echo "flock command was not found. Proceeding without lock file synchronization: ETE taxonomy DB" >&2
+  gg_array_download_once "${lock_file}" "${db_file}" "ETE taxonomy DB" \
+    _ensure_ete_taxonomy_db_locked "${db_file}" || return 1
+  if [[ ! -s "${db_file}" ]]; then
+    echo "Failed to prepare ETE taxonomy DB: ${db_file}" >&2
+    return 1
   fi
-
-  if [[ ${has_flock} -eq 1 ]]; then
-    exec 8> "${lock_file}"
-    flock 8
-  fi
-
-  local ensure_exit_code=0
-  if _ensure_ete_taxonomy_db_locked "${db_file}"; then
-    ensure_exit_code=0
-  else
-    ensure_exit_code=$?
-  fi
-
-  if [[ ${has_flock} -eq 1 ]]; then
-    flock -u 8
-    exec 8>&-
-  fi
-  return ${ensure_exit_code}
+  return 0
 }
 
 gg_initialize_data_layout() {
@@ -1496,6 +1483,186 @@ recreate_dir() {
   mkdir -p "${dir}"
 }
 
+gg_lock_stale_seconds() {
+  local stale_seconds="${GG_LOCK_STALE_SECONDS:-86400}"
+  if [[ ! "${stale_seconds}" =~ ^[0-9]+$ ]]; then
+    stale_seconds=86400
+  fi
+  if (( stale_seconds < 1 )); then
+    stale_seconds=1
+  fi
+  echo "${stale_seconds}"
+}
+
+gg_stat_mtime_epoch() {
+  local target=$1
+  if [[ ! -e "${target}" ]]; then
+    echo ""
+    return 0
+  fi
+  if stat --version >/dev/null 2>&1; then
+    stat -c '%Y' "${target}" 2>/dev/null || true
+  else
+    stat -f '%m' "${target}" 2>/dev/null || true
+  fi
+}
+
+gg_lock_pid_is_alive() {
+  local pid=$1
+  if [[ ! "${pid}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  kill -0 "${pid}" 2>/dev/null
+}
+
+gg_lock_marker_path() {
+  local lock_file=$1
+  echo "${lock_file}.owner"
+}
+
+gg_maybe_recover_stale_lock_marker() {
+  local lock_file=$1
+  local description=$2
+  local marker_file
+  marker_file=$(gg_lock_marker_path "${lock_file}")
+  if [[ ! -e "${marker_file}" ]]; then
+    return 0
+  fi
+
+  local marker_pid=""
+  local marker_start_ts=""
+  local marker_mtime=""
+  local stale_seconds
+  stale_seconds=$(gg_lock_stale_seconds)
+  local now_epoch
+  now_epoch=$(date +%s)
+
+  if [[ -s "${marker_file}" ]]; then
+    IFS=$'\t' read -r marker_pid marker_start_ts _ < "${marker_file}" || true
+  fi
+  if [[ ! "${marker_start_ts}" =~ ^[0-9]+$ ]]; then
+    marker_mtime=$(gg_stat_mtime_epoch "${marker_file}")
+    if [[ "${marker_mtime}" =~ ^[0-9]+$ ]]; then
+      marker_start_ts=${marker_mtime}
+    else
+      marker_start_ts=${now_epoch}
+    fi
+  fi
+
+  local marker_age=$(( now_epoch - marker_start_ts ))
+  if (( marker_age < 0 )); then
+    marker_age=0
+  fi
+  local stale_reason=""
+  if [[ -n "${marker_pid}" ]]; then
+    if gg_lock_pid_is_alive "${marker_pid}"; then
+      stale_reason=""
+    else
+      stale_reason="owner_not_running"
+    fi
+  else
+    if (( marker_age >= stale_seconds )); then
+      stale_reason="owner_unknown_timeout"
+    fi
+  fi
+  if [[ -n "${stale_reason}" ]]; then
+    rm -f -- "${marker_file}"
+    echo "Recovered stale lock marker: ${description} (${stale_reason}, age=${marker_age}s, marker=${marker_file})" >&2
+  fi
+}
+
+gg_write_lock_marker() {
+  local lock_file=$1
+  local description=$2
+  local marker_file
+  marker_file=$(gg_lock_marker_path "${lock_file}")
+  printf '%s\t%s\t%s\n' "$$" "$(date +%s)" "${description}" > "${marker_file}"
+}
+
+gg_remove_lock_marker() {
+  local lock_file=$1
+  local marker_file
+  marker_file=$(gg_lock_marker_path "${lock_file}")
+  rm -f -- "${marker_file}"
+}
+
+gg_safe_remove_lock_dir() {
+  local lock_dir=$1
+  if [[ ! -e "${lock_dir}" ]]; then
+    return 0
+  fi
+  if [[ -z "${lock_dir}" || "${lock_dir}" == "/" || "${lock_dir}" == "." ]]; then
+    return 1
+  fi
+  if [[ "${lock_dir}" != *.dlock ]]; then
+    return 1
+  fi
+  rm -rf -- "${lock_dir}"
+}
+
+gg_acquire_mkdir_lock() {
+  local lock_dir=$1
+  local description=$2
+  local owner_file="${lock_dir}/owner"
+  local stale_seconds
+  stale_seconds=$(gg_lock_stale_seconds)
+
+  while true; do
+    if mkdir "${lock_dir}" 2>/dev/null; then
+      printf '%s\t%s\t%s\n' "$$" "$(date +%s)" "${description}" > "${owner_file}"
+      return 0
+    fi
+
+    local marker_pid=""
+    local marker_start_ts=""
+    local marker_mtime=""
+    local now_epoch
+    now_epoch=$(date +%s)
+
+    if [[ -s "${owner_file}" ]]; then
+      IFS=$'\t' read -r marker_pid marker_start_ts _ < "${owner_file}" || true
+    fi
+    if [[ ! "${marker_start_ts}" =~ ^[0-9]+$ ]]; then
+      marker_mtime=$(gg_stat_mtime_epoch "${lock_dir}")
+      if [[ "${marker_mtime}" =~ ^[0-9]+$ ]]; then
+        marker_start_ts=${marker_mtime}
+      else
+        marker_start_ts=${now_epoch}
+      fi
+    fi
+
+    local marker_age=$(( now_epoch - marker_start_ts ))
+    if (( marker_age < 0 )); then
+      marker_age=0
+    fi
+    local stale_reason=""
+    if [[ -n "${marker_pid}" ]]; then
+      if gg_lock_pid_is_alive "${marker_pid}"; then
+        stale_reason=""
+      else
+        stale_reason="owner_not_running"
+      fi
+    else
+      if (( marker_age >= stale_seconds )); then
+        stale_reason="owner_unknown_timeout"
+      fi
+    fi
+
+    if [[ -n "${stale_reason}" ]]; then
+      if gg_safe_remove_lock_dir "${lock_dir}"; then
+        echo "Recovered stale lock directory: ${description} (${stale_reason}, age=${marker_age}s, lock=${lock_dir})" >&2
+        continue
+      fi
+    fi
+    sleep 1
+  done
+}
+
+gg_release_mkdir_lock() {
+  local lock_dir=$1
+  gg_safe_remove_lock_dir "${lock_dir}" || true
+}
+
 gg_array_download_once() {
   local lock_file=$1
   local done_file=$2
@@ -1503,6 +1670,7 @@ gg_array_download_once() {
   shift 3
   local task_id=${SGE_TASK_ID:-1}
   local has_flock=1
+  local lock_dir="${lock_file}.dlock"
 
   mkdir -p "$(dirname "${lock_file}")"
 
@@ -1516,8 +1684,11 @@ gg_array_download_once() {
   if [[ ${has_flock} -eq 1 ]]; then
     exec 9> "${lock_file}"
     flock 9
+    gg_maybe_recover_stale_lock_marker "${lock_file}" "${description}"
+    gg_write_lock_marker "${lock_file}" "${description}"
 
     if [[ -s "${done_file}" ]]; then
+      gg_remove_lock_marker "${lock_file}"
       flock -u 9
       exec 9>&-
       return 0
@@ -1528,36 +1699,47 @@ gg_array_download_once() {
     local download_exit_code=$?
     if [[ ${download_exit_code} -ne 0 ]]; then
       echo "SGE_TASK_ID=${task_id}: download failed: ${description}" >&2
+      gg_remove_lock_marker "${lock_file}"
       flock -u 9
       exec 9>&-
       return ${download_exit_code}
     fi
     if [[ ! -s "${done_file}" ]]; then
       echo "Downloaded DB file not found after synchronization: ${done_file}" >&2
+      gg_remove_lock_marker "${lock_file}"
       flock -u 9
       exec 9>&-
       return 1
     fi
 
     echo "SGE_TASK_ID=${task_id}: download completed: ${description}" >&2
+    gg_remove_lock_marker "${lock_file}"
     flock -u 9
     exec 9>&-
     return 0
   fi
 
-  echo "SGE_TASK_ID=${task_id}: starting download (no flock): ${description}" >&2
+  gg_acquire_mkdir_lock "${lock_dir}" "${description}" || return 1
+  if [[ -s "${done_file}" ]]; then
+    gg_release_mkdir_lock "${lock_dir}"
+    return 0
+  fi
+  echo "SGE_TASK_ID=${task_id}: starting download (mkdir lock fallback): ${description}" >&2
   "$@"
   local download_exit_code=$?
   if [[ ${download_exit_code} -ne 0 ]]; then
-    echo "SGE_TASK_ID=${task_id}: download failed (no flock): ${description}" >&2
+    echo "SGE_TASK_ID=${task_id}: download failed (mkdir lock fallback): ${description}" >&2
+    gg_release_mkdir_lock "${lock_dir}"
     return ${download_exit_code}
   fi
   if [[ ! -s "${done_file}" ]]; then
     echo "Downloaded DB file not found after synchronization: ${done_file}" >&2
+    gg_release_mkdir_lock "${lock_dir}"
     return 1
   fi
 
-  echo "SGE_TASK_ID=${task_id}: download completed (no flock): ${description}" >&2
+  echo "SGE_TASK_ID=${task_id}: download completed (mkdir lock fallback): ${description}" >&2
+  gg_release_mkdir_lock "${lock_dir}"
 }
 
 gg_task_token_contains_sge_id() {
@@ -1739,6 +1921,46 @@ _download_uniprot_sprot_to_prefix() {
   rm -rf -- "${tmp_dir}"
 }
 
+_download_uniprot_sprot_pep_to_file() {
+  local output_file=$1
+  local output_dir
+  output_dir=$(dirname "${output_file}")
+  local tmp_dir
+  tmp_dir=$(mktemp -d "${output_dir}/tmp.uniprot_sprot_pep.XXXXXX")
+  local pep_tmp="${tmp_dir}/uniprot_sprot.pep"
+  local uniprot_url="${GG_UNIPROT_SPROT_URL:-https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz}"
+
+  if ! curl -fsSL "${uniprot_url}" | gzip -dc > "${pep_tmp}"; then
+    echo "Failed to download/decompress UniProt Swiss-Prot FASTA from: ${uniprot_url}" >&2
+    rm -rf -- "${tmp_dir}"
+    return 1
+  fi
+  if [[ ! -s "${pep_tmp}" ]]; then
+    echo "Failed to download UniProt Swiss-Prot FASTA from: ${uniprot_url}" >&2
+    rm -rf -- "${tmp_dir}"
+    return 1
+  fi
+
+  mv -- "${pep_tmp}" "${output_file}"
+  rm -rf -- "${tmp_dir}"
+}
+
+_build_mmseqs_db_from_fasta() {
+  local fasta_file=$1
+  local db_prefix=$2
+  local done_file=$3
+
+  if ! mmseqs createdb "${fasta_file}" "${db_prefix}"; then
+    echo "Failed to build MMseqs2 DB from FASTA: ${fasta_file}" >&2
+    return 1
+  fi
+  if [[ ! -s "${db_prefix}" || ! -s "${db_prefix}.dbtype" ]]; then
+    echo "MMseqs2 DB files were not generated: ${db_prefix}" >&2
+    return 1
+  fi
+  touch "${done_file}"
+}
+
 ensure_uniprot_sprot_db() {
   local dir_pg=$1
   local sys_prefix="/usr/local/db/uniprot_sprot"
@@ -1762,6 +1984,61 @@ ensure_uniprot_sprot_db() {
 
   if [[ ! -s "${runtime_prefix}.pep" || ! -s "${runtime_prefix}.dmnd" ]]; then
     echo "UniProt DB download/build failed." >&2
+    return 1
+  fi
+  echo "${runtime_prefix}"
+}
+
+ensure_uniprot_sprot_mmseqs_db() {
+  local dir_pg=$1
+  local sys_prefix="/usr/local/db/uniprot_sprot"
+  local runtime_root="$(workspace_downloads_root "${dir_pg}")"
+  local runtime_dir="${runtime_root}/uniprot_sprot"
+  local runtime_prefix="${runtime_dir}/uniprot_sprot"
+  local runtime_pep="${runtime_prefix}.pep"
+  local runtime_mmseqs_db="${runtime_prefix}.mmseqs"
+  local runtime_mmseqs_dbtype="${runtime_mmseqs_db}.dbtype"
+  local runtime_ready="${runtime_mmseqs_db}.ready"
+  local lock_file_pep="${runtime_root}/locks/uniprot_sprot.pep.lock"
+  local lock_file_mmseqs="${runtime_root}/locks/uniprot_sprot.mmseqs.lock"
+
+  if [[ -s "${sys_prefix}.pep" && -s "${sys_prefix}.mmseqs" && -s "${sys_prefix}.mmseqs.dbtype" ]]; then
+    echo "${sys_prefix}"
+    return 0
+  fi
+
+  mkdir -p "${runtime_root}" "${runtime_dir}"
+
+  if [[ ! -s "${runtime_pep}" ]]; then
+    if [[ -s "${sys_prefix}.pep" ]]; then
+      gg_array_download_once "${lock_file_pep}" "${runtime_pep}" "UniProt Swiss-Prot FASTA" \
+        cp -- "${sys_prefix}.pep" "${runtime_pep}" || return 1
+    else
+      gg_array_download_once "${lock_file_pep}" "${runtime_pep}" "UniProt Swiss-Prot FASTA" \
+        _download_uniprot_sprot_pep_to_file "${runtime_pep}" || return 1
+    fi
+  fi
+  if [[ ! -s "${runtime_pep}" ]]; then
+    echo "UniProt Swiss-Prot FASTA was not found after synchronization: ${runtime_pep}" >&2
+    return 1
+  fi
+
+  if [[ -s "${runtime_mmseqs_db}" && -s "${runtime_mmseqs_dbtype}" && -s "${runtime_ready}" ]]; then
+    echo "${runtime_prefix}"
+    return 0
+  fi
+  if [[ -s "${runtime_mmseqs_db}" && -s "${runtime_mmseqs_dbtype}" && ! -s "${runtime_ready}" ]]; then
+    echo "MMseqs2 UniProt Swiss-Prot DB exists without ready marker. Reusing existing DB and creating ready marker." >&2
+    touch "${runtime_ready}"
+    echo "${runtime_prefix}"
+    return 0
+  fi
+
+  gg_array_download_once "${lock_file_mmseqs}" "${runtime_ready}" "UniProt Swiss-Prot MMseqs2 DB" \
+    _build_mmseqs_db_from_fasta "${runtime_pep}" "${runtime_mmseqs_db}" "${runtime_ready}" || return 1
+
+  if [[ ! -s "${runtime_mmseqs_db}" || ! -s "${runtime_mmseqs_dbtype}" || ! -s "${runtime_ready}" ]]; then
+    echo "MMseqs2 UniProt Swiss-Prot DB download/build failed." >&2
     return 1
   fi
   echo "${runtime_prefix}"
@@ -2044,6 +2321,7 @@ ensure_latest_jaspar_file() {
   local runtime_dir="${runtime_root}/jaspar"
   local sys_dir="/usr/local/db/jaspar"
   local lock_file="${runtime_root}/locks/jaspar_latest.lock"
+  local lock_dir="${lock_file}.dlock"
   local latest_marker="${runtime_dir}/latest_core_plants_non-redundant_pfms_meme.filename"
   local has_flock=1
   local resolved_filename=""
@@ -2054,11 +2332,15 @@ ensure_latest_jaspar_file() {
 
   if ! command -v flock >/dev/null 2>&1; then
     has_flock=0
-    echo "flock command was not found. Proceeding without lock file synchronization: latest JASPAR motif file" >&2
+    echo "flock command was not found. Using mkdir lock fallback synchronization: latest JASPAR motif file" >&2
   fi
   if [[ ${has_flock} -eq 1 ]]; then
     exec 8> "${lock_file}"
     flock 8
+    gg_maybe_recover_stale_lock_marker "${lock_file}" "latest JASPAR motif file"
+    gg_write_lock_marker "${lock_file}" "latest JASPAR motif file"
+  else
+    gg_acquire_mkdir_lock "${lock_dir}" "latest JASPAR motif file" || return 1
   fi
 
   if [[ -s "${latest_marker}" ]]; then
@@ -2105,8 +2387,11 @@ ensure_latest_jaspar_file() {
   fi
 
   if [[ ${has_flock} -eq 1 ]]; then
+    gg_remove_lock_marker "${lock_file}"
     flock -u 8
     exec 8>&-
+  else
+    gg_release_mkdir_lock "${lock_dir}"
   fi
 
   if [[ ${ensure_exit_code} -ne 0 ]]; then

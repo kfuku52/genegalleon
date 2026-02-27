@@ -162,3 +162,50 @@ def test_download_manifest_missing_required_columns_fails(tmp_path):
     )
     assert completed.returncode == 1, completed.stderr + "\n" + completed.stdout
     assert "missing required columns" in completed.stderr
+
+
+def test_download_manifest_recovers_stale_lock_file(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    cds_source = source_dir / "phyco_cds.fasta"
+    gff_source = source_dir / "phyco_gene.gff3"
+    cds_source.write_text(">jgi|X|1|mRNA.A\nATG\n", encoding="utf-8")
+    gff_source.write_text("scaf\tsrc\tgene\t1\t3\t.\t+\t.\tID=A\n", encoding="utf-8")
+
+    manifest = tmp_path / "manifest.tsv"
+    species_key = "Microglena_spYARC_MicrYARC1"
+    cds_name = "MicrYARC1_GeneCatalog_CDS_20220803.fasta"
+    gff_name = "MicrYARC1_GeneCatalog_genes_20220803.gff3"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "phycocosm",
+                "species_key": species_key,
+                "cds_url": to_file_url(cds_source),
+                "gff_url": to_file_url(gff_source),
+                "cds_filename": cds_name,
+                "gff_filename": gff_name,
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    raw_dir = download_dir / "PhycoCosm" / "species_wise_original" / species_key
+    raw_dir.mkdir(parents=True)
+    stale_lock = raw_dir / (cds_name + ".lock")
+    stale_lock.write_text("999999\t0\tstale\n", encoding="utf-8")
+
+    completed = run_script(
+        "--provider",
+        "phycocosm",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--download-only",
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert (raw_dir / cds_name).exists()
+    assert (raw_dir / gff_name).exists()
+    assert "recovered stale lock" in completed.stderr.lower()

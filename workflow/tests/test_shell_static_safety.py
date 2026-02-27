@@ -744,6 +744,36 @@ def test_download_helpers_use_set_e_safe_command_guards():
     assert 'if ! tar -xzf "${archive_path}" -C "${tmp_dir}"; then' in pfam_body
 
 
+def test_download_lock_helper_tracks_stale_markers_and_uses_mkdir_fallback():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "gg_array_download_once")
+    assert 'local lock_dir="${lock_file}.dlock"' in body
+    assert 'gg_maybe_recover_stale_lock_marker "${lock_file}" "${description}"' in body
+    assert 'gg_write_lock_marker "${lock_file}" "${description}"' in body
+    assert 'gg_acquire_mkdir_lock "${lock_dir}" "${description}"' in body
+    assert 'gg_release_mkdir_lock "${lock_dir}"' in body
+
+
+def test_download_entrypoints_use_shared_lock_helper_for_busco_and_ete():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    busco_body = _function_body(text, "ensure_busco_download_path")
+    ete_body = _function_body(text, "ensure_ete_taxonomy_db")
+    assert 'gg_array_download_once "${lock_file}" "${runtime_busco_lineage}"' in busco_body
+    assert 'gg_array_download_once "${lock_file}" "${db_file}" "ETE taxonomy DB"' in ete_body
+
+
+def test_latest_jaspar_lock_uses_stale_marker_recovery_and_mkdir_fallback():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "ensure_latest_jaspar_file")
+    assert 'local lock_dir="${lock_file}.dlock"' in body
+    assert 'gg_maybe_recover_stale_lock_marker "${lock_file}" "latest JASPAR motif file"' in body
+    assert 'gg_acquire_mkdir_lock "${lock_dir}" "latest JASPAR motif file"' in body
+    assert 'gg_release_mkdir_lock "${lock_dir}"' in body
+
+
 def test_pfam_helpers_use_only_new_runtime_layout_and_function_name():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     gene_core = CORE_DIR / "gg_gene_evolution_core.sh"
@@ -775,7 +805,7 @@ def test_gg_util_avoids_mapfile_for_host_bash_compatibility():
 def test_busco_dataset_move_uses_mv_option_separator():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
-    body = _function_body(text, "ensure_busco_download_path")
+    body = _function_body(text, "_download_busco_lineage_to_runtime")
     assert "-exec mv -f -- {}" in body
     assert "-exec mv -f {}" not in body
 
