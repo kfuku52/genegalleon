@@ -46,36 +46,36 @@ fi
 ### Start: Modify this block to tailor your analysis ###
 
 # CDS analysis
-run_get_gff_info="${run_get_gff_info:-0}" # Collect gene information from workspace/input/species_gff
-run_busco_cds="${run_busco_cds:-0}" # Gene set completeness analysis
-run_uniprot_annotation="${run_uniprot_annotation:-0}" # CDS annotation against UniProt Swiss-Prot.
-uniprot_annotation_method="${uniprot_annotation_method:-mmseqs2}" # blastp|mmseqs2 for UniProt Swiss-Prot annotation search engine.
-run_cds_fx2tab="${run_cds_fx2tab:-0}" # Sequence stats of CDS sequences
-run_cds_mmseqs2taxonomy="${run_cds_mmseqs2taxonomy:-0}" # Taxonomic assignment of CDS sequences
-run_cds_contamination_removal="${run_cds_contamination_removal:-0}" # Removal of contaminated sequences
-run_annotation="${run_annotation:-0}" # Per-gene annotation summary
-run_wgd_ksd="${run_wgd_ksd:-0}" # WGD inference by dS distribution
+run_get_gff_info=0 # Collect gene information from workspace/input/species_gff
+run_busco_cds=0 # Gene set completeness analysis
+run_uniprot_annotation=0 # CDS annotation against UniProt Swiss-Prot.
+uniprot_annotation_method="mmseqs2" # blastp|mmseqs2 for UniProt Swiss-Prot annotation search engine.
+run_cds_fx2tab=0 # Sequence stats of CDS sequences
+run_cds_mmseqs2taxonomy=0 # Taxonomic assignment of CDS sequences
+run_cds_contamination_removal=0 # Removal of contaminated sequences
+run_annotation=0 # Per-gene annotation summary
+run_wgd_ksd=0 # WGD inference by dS distribution
 
 # Genome analysis
-run_busco_genome="${run_busco_genome:-0}" # Gene set completeness analysis
-run_subphaser="${run_subphaser:-0}" # Subgenome structure inference
-run_genome_fx2tab="${run_genome_fx2tab:-0}" # Sequence stats of reference genome
-run_scaffold_histogram="${run_scaffold_histogram:-0}" # Scaffold histogram
-run_genome_mmseqs2taxonomy="${run_genome_mmseqs2taxonomy:-0}" # Taxonomic assignment of genome assembly
-run_genome_contamination_removal="${run_genome_contamination_removal:-0}" # Removal of contaminated sequences
-run_jcvi_dotplot="${run_jcvi_dotplot:-0}" # Self-self synteny dotplot
+run_busco_genome=0 # Gene set completeness analysis
+run_subphaser=0 # Subgenome structure inference
+run_genome_fx2tab=0 # Sequence stats of reference genome
+run_scaffold_histogram=0 # Scaffold histogram
+run_genome_mmseqs2taxonomy=0 # Taxonomic assignment of genome assembly
+run_genome_contamination_removal=0 # Removal of contaminated sequences
+run_jcvi_dotplot=0 # Self-self synteny dotplot
 
 # DNA-seq analysis
-run_genomescope="${run_genomescope:-0}" # GenomeScope
+run_genomescope=0 # GenomeScope
 
 # Summary
-run_multispecies_summary="${run_multispecies_summary:-1}" # Multi-species summary plots and tables
+run_multispecies_summary=1 # Multi-species summary plots and tables
 
 ### End: Modify this block to tailor your analysis ###
 
 # Misc
 exit_if_running=0 # Exit without main analysis if the same SGE_TASK_ID is already running.
-delete_tmp_dir="${delete_tmp_dir:-1}" # After this run, delete tmp directory created for each job. Set 0 when debugging.
+delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Set 0 when debugging.
 
 source "${dir_script}/support/gg_util.sh" # loading utility functions
 # Forward config variables (including external overrides) into container environment.

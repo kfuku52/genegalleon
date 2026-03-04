@@ -3,7 +3,7 @@ import subprocess
 import sys
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "summarize_inputprep_runs.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "summarize_gg_input_generation_runs.py"
 
 
 def run_script(*args):
@@ -18,10 +18,10 @@ def run_script(*args):
 def write_summary_tsv(path):
     path.write_text(
         (
-            "started_utc\tended_utc\tduration_sec\texit_code\tprovider\trun_build_manifest\trun_format_inputs\trun_validate_inputs\tstrict\toverwrite\tdownload_only\tdry_run\tdownload_timeout\tdataset_root\tinput_dir\tdownload_manifest\tdownload_dir\tmanifest_output\tspecies_cds_dir\tspecies_gff_dir\tnum_species_cds\tnum_species_gff\tstage_manifest_status\tstage_format_status\tstage_validate_status\tconfig_file\n"
-            "2026-02-19T10:00:00Z\t2026-02-19T10:10:00Z\t600\t0\tall\t1\t1\t1\t0\t0\t0\t0\t120\t/a\t\t/m1\t/d1\t/o1\t/c1\t/g1\t100\t100\tok\tok\tok\t/p1\n"
-            "2026-02-19T12:00:00Z\t2026-02-19T12:01:00Z\t60\t1\tphycocosm\t1\t1\t1\t1\t0\t0\t0\t120\t/a\t\t/m2\t/d2\t/o2\t/c2\t/g2\t50\t49\tok\tfailed\tskipped\t/p2\n"
-            "2026-02-19T13:00:00Z\t2026-02-19T13:05:00Z\t300\t0\tensemblplants\t1\t1\t1\t0\t1\t0\t0\t120\t/a\t\t/m3\t/d3\t/o3\t/c3\t/g3\t120\t120\tok\tok\tok\t/p3\n"
+            "started_utc\tended_utc\tduration_sec\texit_code\tprovider\trun_build_manifest\trun_format_inputs\trun_validate_inputs\tstrict\toverwrite\tdownload_only\tdry_run\tdownload_timeout\tdataset_root\tinput_dir\tdownload_manifest\tdownload_dir\tmanifest_output\tspecies_cds_dir\tspecies_gff_dir\tspecies_genome_dir\tnum_species_cds\tnum_species_gff\tnum_species_genome\tcds_sequences_before\tcds_sequences_after\tcds_first_sequence_name\tstage_manifest_status\tstage_format_status\tstage_validate_status\tconfig_file\n"
+            "2026-02-19T10:00:00Z\t2026-02-19T10:10:00Z\t600\t0\tall\t1\t1\t1\t0\t0\t0\t0\t120\t/a\t\t/m1\t/d1\t/o1\t/c1\t/g1\t/gn1\t100\t100\t100\t3000\t2900\tGenus_species_A\tok\tok\tok\t/p1\n"
+            "2026-02-19T12:00:00Z\t2026-02-19T12:01:00Z\t60\t1\tphycocosm\t1\t1\t1\t1\t0\t0\t0\t120\t/a\t\t/m2\t/d2\t/o2\t/c2\t/g2\t/gn2\t50\t49\t40\t2000\t1800\tMicroglena_spYARC_gene1\tok\tfailed\tskipped\t/p2\n"
+            "2026-02-19T13:00:00Z\t2026-02-19T13:05:00Z\t300\t0\tensemblplants\t1\t1\t1\t0\t1\t0\t0\t120\t/a\t\t/m3\t/d3\t/o3\t/c3\t/g3\t/gn3\t120\t120\t120\t4000\t3950\tOstreococcus_lucimarinus_OSTLU_25062\tok\tok\tok\t/p3\n"
         ),
         encoding="utf-8",
     )
@@ -34,7 +34,7 @@ def test_summarize_inputprep_runs_stdout(tmp_path):
     completed = run_script("--infile", str(infile), "--last-n", "2")
     assert completed.returncode == 0, completed.stderr
     text = completed.stdout
-    assert "InputPrep Run Summary" in text
+    assert "GG Input Generation Run Summary" in text
     assert "total_runs\t3" in text
     assert "successful_runs\t2" in text
     assert "failed_runs\t1" in text
@@ -57,7 +57,7 @@ def test_summarize_inputprep_runs_outfile(tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert outfile.exists()
     out = outfile.read_text(encoding="utf-8")
-    assert "InputPrep Run Summary" in out
+    assert "GG Input Generation Run Summary" in out
 
 
 def test_summarize_inputprep_runs_missing_file_fails(tmp_path):

@@ -85,6 +85,45 @@ Each wrapper forwards those variables into the container environment.
 
 ## Container Build and Runtime
 
+### One-command build (Docker + SIF)
+
+```bash
+IMAGE=local/genegalleon TAG=dev ./container/gg_container_build_entrypoint.sh
+```
+
+Defaults:
+- `MODE=load`
+- `PLATFORMS`: inferred from host arch (`linux/amd64` or `linux/arm64`)
+- `OUT=./genegalleon.sif`
+
+Useful overrides:
+- `BUILD_SIF=0` to skip `.sif` conversion
+- `ENGINE=singularity` to use Singularity instead of Apptainer
+
+### Use CI-published GHCR images (recommended for users)
+
+This repository now includes CI workflows that publish container images to GHCR:
+
+- periodic publish: `.github/workflows/container-ghcr.yml`
+  - tags: `YYYYMMDD-<sha7>`, `sha-<sha7>`, `latest`
+- release publish + SIF asset upload: `.github/workflows/release-sif.yml`
+  - tags: `<release-tag>`, `YYYYMMDD-<sha7>`, `sha-<sha7>`
+  - release assets: `<repo>_<release-tag>_amd64.sif` and `.sha256`
+
+For reproducible runs, use an immutable tag:
+
+```bash
+apptainer build genegalleon_20260304_abcd123.sif \
+  docker://ghcr.io/kfuku52/genegalleon:20260304-abcd123
+```
+
+You can also use release tags:
+
+```bash
+apptainer build genegalleon_v1.2.3.sif \
+  docker://ghcr.io/kfuku52/genegalleon:v1.2.3
+```
+
 ### Build Docker image (multi-arch)
 
 ```bash
@@ -216,8 +255,8 @@ Example (single provider, explicit input directory):
 python workflow/support/format_species_inputs.py \
   --provider ensemblplants \
   --input-dir "/path/to/gfe_dataset/20230216_EnsemblPlants/original_files" \
-  --species-cds-dir workspace/input/species_cds \
-  --species-gff-dir workspace/input/species_gff
+  --species-cds-dir workspace/output/input_generation/species_cds \
+  --species-gff-dir workspace/output/input_generation/species_gff
 ```
 
 Example (all providers, `gfe_dataset` root):
@@ -226,16 +265,17 @@ Example (all providers, `gfe_dataset` root):
 python workflow/support/format_species_inputs.py \
   --provider all \
   --dataset-root "/path/to/gfe_dataset" \
-  --species-cds-dir workspace/input/species_cds \
-  --species-gff-dir workspace/input/species_gff
+  --species-cds-dir workspace/output/input_generation/species_cds \
+  --species-gff-dir workspace/output/input_generation/species_gff
 ```
 
 Notes:
 
 - output filenames are normalized to start with `Genus_species_...`,
-- CDS IDs are prefixed with `Genus_species_...`,
+- formatted CDS outputs are always gzipped with `.fa.gz` extension,
+- CDS IDs are prefixed with `Genus_species_...` and aggregated to one representative CDS per gene,
 - common historical replacements are applied to CDS/GFF text,
-- CDS are padded to codon-length multiples and duplicate IDs are removed.
+- CDS are padded to codon-length multiples and transcript-level redundancies are collapsed at gene level.
 
 Download-first workflow (manifest driven):
 
@@ -243,25 +283,48 @@ Download-first workflow (manifest driven):
 python workflow/support/format_species_inputs.py \
   --provider all \
   --download-manifest /path/to/download_manifest.tsv \
-  --download-dir workspace/output/input_download_cache \
-  --species-cds-dir workspace/input/species_cds \
-  --species-gff-dir workspace/input/species_gff
+  --download-dir workspace/output/input_generation/tmp/input_download_cache \
+  --species-cds-dir workspace/output/input_generation/species_cds \
+  --species-gff-dir workspace/output/input_generation/species_gff
 ```
 
 Manifest required columns:
 
-- `provider` (`ensemblplants`, `phycocosm`, `phytozome`)
-- `species_key` (directory/file key used in legacy datasets)
-- `cds_url`
-- `gff_url`
+- one of `provider` or `id`
+  - if `provider` is omitted, it is inferred from `id` when possible
+    (`GCF_...`/`GCA_...` or NCBI assembly URL -> `ncbi`,
+    `coge:...`/CoGe URL -> `coge`,
+    `cngb:...`/CNGB URL -> `cngb`)
+- one of `species_key` or `id`
+- `cds_url` and `gff_url` (or `id` for `provider=ncbi` to auto-resolve NCBI URLs)
+  - for `provider=ncbi`, when `species_key` is omitted and `id` is given, `species_key` is inferred from NCBI species metadata (e.g. `Homo_sapiens`).
+  - for non-NCBI providers, `id`-only URL inference is supported via:
+    - provider defaults (EnsemblPlants index discovery),
+    - or env templates: `GG_<PROVIDER>_CDS_URL_TEMPLATE`, `GG_<PROVIDER>_GFF_URL_TEMPLATE`, `GG_<PROVIDER>_GENOME_URL_TEMPLATE`,
+    - and optional page template: `GG_<PROVIDER>_ID_URL_TEMPLATE`.
 
 Optional columns:
 
 - `cds_filename`
 - `gff_filename`
+- `genome_filename`
+- `id` (can be used as `species_key` substitute for any provider)
+- `cds_url_template`, `gff_url_template`, `genome_url_template`
+  (`{id}`, `{species_key}`, `{provider}` placeholders)
 
 Use `--download-only` to fetch raw files and stop before formatting.
 Use `--dry-run` to preview downloads and formatting outputs without writing files.
+Use `--jobs` to set download parallelism (defaults to `NSLOTS`, fallback `1`).
+
+Download concurrency safeguards:
+
+- per-provider caps are applied even when `--jobs` is large.
+- override per-provider cap with:
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_<PROVIDER>` (e.g. `..._NCBI=2`).
+- NCBI E-utilities calls are throttled to documented limits by default:
+  - `3 req/s` without API key,
+  - `10 req/s` with `GG_NCBI_API_KEY`.
+- override NCBI E-utilities rate with `GG_NCBI_EUTILS_MAX_RPS`.
 
 Optional download authentication:
 
@@ -289,23 +352,27 @@ Use `workspace/input/query_manifest/download_manifest.tsv` as the runtime manife
 - can build a manifest and immediately format inputs in one run,
 - can validate produced `species_cds` and `species_gff` consistency.
 
-Profile-based configuration:
+Configuration:
 
-- default profile file is provided at
-  `workspace/input/query_manifest/inputprep_profile.sh`,
-- edit values there for repeated runs,
-- keep only these runtime files in `workspace/input/query_manifest`:
-  - `inputprep_profile.sh`
-  - `download_manifest.tsv`
+- edit the `### Start: Modify this block ... ###` section in
+  `workflow/gg_input_generation_entrypoint.sh`,
+- keep `workspace/input/query_manifest/download_manifest.tsv` as the runtime manifest file.
 
 Alternative runtime overrides (without editing files) via env vars:
 
 - `GG_INPUT_PROVIDER`, `GG_INPUT_STRICT`, `GG_INPUT_OVERWRITE`,
 - `GG_INPUT_DRY_RUN`, `GG_INPUT_DOWNLOAD_MANIFEST`,
 - `GG_INPUT_DATASET_ROOT`, `GG_INPUT_INPUT_DIR`,
+- `GG_INPUT_SPECIES_CDS_DIR`, `GG_INPUT_SPECIES_GFF_DIR`, `GG_INPUT_SPECIES_GENOME_DIR`,
 - `GG_INPUT_AUTH_BEARER_TOKEN_ENV`, `GG_INPUT_HTTP_HEADER`,
 - `GG_INPUT_SUMMARY_OUTPUT`.
-- `GG_INPUTPREP_CONFIG` (explicit profile path override).
+- per-provider download caps:
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBLPLANTS`,
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_PHYCOCOSM`,
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_PHYTOZOME`,
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_NCBI`,
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_COGE`,
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_CNGB`.
 
 Optional host dataset bind for `gg_input_generation_entrypoint.sh`:
 
@@ -356,7 +423,9 @@ Purpose:
 - optional pre-stage to automate input preparation,
 - build manifest tables from local `gfe_dataset` trees,
 - optionally download provider files from a manifest and format into
-  `workspace/input/species_cds` and `workspace/input/species_gff`.
+  `workspace/output/input_generation/species_cds` and
+  `workspace/output/input_generation/species_gff` and
+  `workspace/output/input_generation/species_genome`.
 
 Main scripts:
 
@@ -368,13 +437,15 @@ Notable defaults:
 
 - when `run_build_manifest=1`, generated manifest is reused automatically by `run_format_inputs=1`,
 - `run_validate_inputs=1` validates CDS naming rules and CDS/GFF species-set consistency,
-- each run appends a TSV record to `workspace/output/inputprep/inputprep_runs.tsv` (configurable via `summary_output` or `GG_INPUT_SUMMARY_OUTPUT`).
+- formatted outputs default to `workspace/output/input_generation/species_cds`, `workspace/output/input_generation/species_gff`, and `workspace/output/input_generation/species_genome`,
+- each run appends a TSV record to `workspace/output/input_generation/gg_input_generation_runs.tsv`
+  (configurable via `summary_output` or `GG_INPUT_SUMMARY_OUTPUT`).
 
-Quick summary of recent inputPrep runs:
+Quick summary of recent gg_input_generation runs:
 
 ```bash
-python workflow/support/summarize_inputprep_runs.py \
-  --infile workspace/output/inputprep/inputprep_runs.tsv \
+python workflow/support/summarize_gg_input_generation_runs.py \
+  --infile workspace/output/input_generation/gg_input_generation_runs.tsv \
   --last-n 10
 ```
 

@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 
 import argparse
-from collections import defaultdict
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import gzip
+import json
 import os
 from pathlib import Path
 import re
 import sys
+import threading
 import time
-from urllib.parse import urlparse
+import zipfile
+from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -41,16 +45,92 @@ GFF_EXTENSIONS = (
 
 ENSEMBL_CDS_PATTERN = re.compile(r"(?:^|[._-])cds(?:[._-]|$)", re.IGNORECASE)
 INVALID_ID_CHARS = re.compile(r"[%/\+:;&\^\$#@!~=\'\"`*\(\)\{\}\[\]\|\?\s]+")
+NCBI_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^GC[AF]_[0-9]+\.[0-9]+$", re.IGNORECASE)
+ENSEMBL_GENE_ID_PATTERN = re.compile(r"^ENS[A-Z0-9]*G[0-9]+(?:\.[0-9]+)?$", re.IGNORECASE)
+COGE_ID_HINT_PATTERN = re.compile(r"^coge[:_].+", re.IGNORECASE)
+CNGB_ID_HINT_PATTERN = re.compile(r"^cngb[:_].+", re.IGNORECASE)
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "ensemblplants": Path("20230216_EnsemblPlants") / "original_files",
     "phycocosm": Path("PhycoCosm") / "species_wise_original",
     "phytozome": Path("Phytozome") / "species_wise_original",
+    "ncbi": Path("NCBI_Genome") / "species_wise_original",
+    "coge": Path("CoGe") / "species_wise_original",
+    "cngb": Path("CNGB") / "species_wise_original",
 }
 
-PROVIDERS = ("ensemblplants", "phycocosm", "phytozome")
+PROVIDERS = ("ensemblplants", "phycocosm", "phytozome", "ncbi", "coge", "cngb")
 DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 86400
 DOWNLOAD_LOCK_SLEEP_SECONDS = 1.0
+DEFAULT_NCBI_EUTILS_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+DEFAULT_NCBI_FTP_BASE_URL = "https://ftp.ncbi.nlm.nih.gov"
+DEFAULT_NCBI_DATASETS_BASE_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2"
+NCBI_DATASETS_INCLUDE_BY_LABEL = {
+    "CDS": "CDS_FASTA",
+    "GFF": "GENOME_GFF",
+    "GENOME": "GENOME_FASTA",
+}
+DOWNLOAD_LABELS = ("CDS", "GFF", "GENOME")
+ENSEMBLPLANTS_DEFAULT_ID_URL_TEMPLATES = {
+    "CDS": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/fasta/{id_lower}/cds/",
+    "GFF": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/gff3/{id_lower}/",
+    "GENOME": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/fasta/{id_lower}/dna/",
+}
+PROVIDER_DEFAULT_ID_PAGE_URL_TEMPLATES = {
+    "phycocosm": (
+        "https://genome.jgi.doe.gov/portal/pages/dynamicOrganismDownload.jsf?organism={id}",
+    ),
+    "phytozome": (
+        "https://phytozome-next.jgi.doe.gov/download/file/{id}",
+        "https://phytozome-next.jgi.doe.gov/info/{id}",
+    ),
+    "coge": (
+        "https://genomevolution.org/coge/GenomeInfo.pl?gid={id}",
+    ),
+    "cngb": (
+        "https://db.cngb.org/data_resources/project/{id}",
+    ),
+}
+PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
+    # NCBI E-utilities explicitly documents request-rate limits.
+    # We keep concurrent file downloads conservative and separately enforce
+    # E-utilities request throttling below.
+    "ncbi": 2,
+    # No explicit numeric concurrency guidance was found for these sources;
+    # keep defaults conservative to reduce ban/abuse risk.
+    "ensemblplants": 2,
+    "phycocosm": 1,
+    "phytozome": 1,
+    "coge": 1,
+    "cngb": 1,
+}
+DEFAULT_GLOBAL_DOWNLOAD_WORKERS = 1
+DEFAULT_NCBI_EUTILS_RPS_NO_API_KEY = 3
+DEFAULT_NCBI_EUTILS_RPS_WITH_API_KEY = 10
+_ncbi_eutils_rate_lock = threading.Lock()
+_ncbi_eutils_request_times = deque()
+SPECIES_SUMMARY_COLUMNS = (
+    "updated_utc",
+    "run_started_utc",
+    "provider",
+    "species_key",
+    "species_prefix",
+    "cds_input_path",
+    "gff_input_path",
+    "genome_input_path",
+    "cds_output_path",
+    "gff_output_path",
+    "genome_output_path",
+    "cds_status",
+    "gff_status",
+    "genome_status",
+    "cds_sequences_before",
+    "cds_sequences_after",
+    "cds_first_sequence_name",
+    "aggregated_cds_removed",
+    "overwrite",
+    "dry_run",
+)
 
 
 def build_arg_parser():
@@ -79,19 +159,24 @@ def build_arg_parser():
         default="",
         help=(
             "Provider input directory. For ensemblplants: original_files/. "
-            "For phycocosm/phytozome: species_wise_original/. "
+            "For phycocosm/phytozome/ncbi/coge/cngb: species_wise_original/. "
             "Not allowed when --provider all is used."
         ),
     )
     parser.add_argument(
         "--species-cds-dir",
-        default="workspace/input/species_cds",
+        default="workspace/output/input_generation/species_cds",
         help="Output directory for formatted species CDS FASTA files.",
     )
     parser.add_argument(
         "--species-gff-dir",
-        default="workspace/input/species_gff",
+        default="workspace/output/input_generation/species_gff",
         help="Output directory for formatted species GFF files.",
+    )
+    parser.add_argument(
+        "--species-genome-dir",
+        default="workspace/output/input_generation/species_genome",
+        help="Output directory for formatted species genome FASTA files.",
     )
     parser.add_argument(
         "--overwrite",
@@ -103,13 +188,19 @@ def build_arg_parser():
         default="",
         help=(
             "Optional TSV/CSV manifest for input download. "
-            "Required columns: provider,species_key,cds_url,gff_url. "
-            "Optional columns: cds_filename,gff_filename."
+            "Required columns: one of provider/id "
+            "(provider can be inferred from id for ncbi/coge/cngb in common patterns) "
+            "and one of species_key/id. "
+            "CDS/GFF/genome can be set directly with cds_url/gff_url/genome_url or resolved from id "
+            "(ncbi supports GCF/GCA/NCBI-URL auto-resolution; "
+            "other providers support id-based template/index inference). "
+            "Optional columns: cds_filename,gff_filename,genome_filename,id,"
+            "cds_url_template,gff_url_template,genome_url_template."
         ),
     )
     parser.add_argument(
         "--download-dir",
-        default="workspace/tmp/input_download_cache",
+        default="workspace/output/input_generation/tmp/input_download_cache",
         help=(
             "Directory for raw downloaded provider files. "
             "This can be used as --dataset-root for formatting."
@@ -138,6 +229,15 @@ def build_arg_parser():
         help="Timeout (seconds) per download request.",
     )
     parser.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        help=(
+            "Maximum parallel download workers. "
+            "If <=0, uses NSLOTS when available, otherwise 1."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Plan actions without writing downloaded or formatted files.",
@@ -146,6 +246,23 @@ def build_arg_parser():
         "--strict",
         action="store_true",
         help="Exit with error if any species is missing either CDS or GFF.",
+    )
+    parser.add_argument(
+        "--stats-output",
+        default="",
+        help=(
+            "Optional JSON output path for run stats. "
+            "Includes CDS counts before/after processing and first CDS sequence name."
+        ),
+    )
+    parser.add_argument(
+        "--species-summary-output",
+        default="workspace/output/input_generation/gg_input_generation_species.tsv",
+        help=(
+            "Per-species TSV summary output path. "
+            "Successful formatting results are persisted incrementally and retained across runs "
+            "while referenced species output files exist."
+        ),
     )
     return parser
 
@@ -167,16 +284,235 @@ def detect_manifest_delimiter(path):
 def provider_raw_dir(provider, download_root, species_key):
     if provider == "ensemblplants":
         return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]
-    if provider in ("phycocosm", "phytozome"):
+    if provider in ("phycocosm", "phytozome", "ncbi", "coge", "cngb"):
         return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider] / species_key
     raise ValueError("Unknown provider: {}".format(provider))
+
+
+def infer_provider_from_id(source_id):
+    if source_id == "":
+        return ""
+    lowered = source_id.lower()
+    if NCBI_ASSEMBLY_ACCESSION_PATTERN.match(source_id):
+        return "ncbi"
+    if "ncbi.nlm.nih.gov/datasets/genome/" in lowered:
+        return "ncbi"
+    if COGE_ID_HINT_PATTERN.match(source_id):
+        return "coge"
+    if CNGB_ID_HINT_PATTERN.match(source_id):
+        return "cngb"
+    if "genomevolution.org" in lowered:
+        return "coge"
+    if "cngb.org" in lowered or "cncb.ac.cn" in lowered:
+        return "cngb"
+    return ""
+
+
+def strip_provider_prefix(source_id, provider):
+    text = str(source_id or "").strip()
+    prefix = provider.lower() + ":"
+    if text.lower().startswith(prefix):
+        return text[len(prefix) :]
+    return text
+
+
+def extract_ncbi_accession_from_source_id(source_id):
+    text = str(source_id or "").strip()
+    if NCBI_ASSEMBLY_ACCESSION_PATTERN.match(text):
+        return text
+    match = re.search(r"(GC[AF]_[0-9]+\.[0-9]+)", text, flags=re.IGNORECASE)
+    if match is None:
+        return ""
+    return match.group(1)
+
+
+def provider_env_prefix(provider):
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", provider.upper())
+    return "GG_{}".format(normalized)
+
+
+def is_url_like(text):
+    parsed = urlparse(str(text or ""))
+    return parsed.scheme in ("http", "https", "ftp", "file")
+
+
+def render_id_url_template(template, provider, source_id, species_key):
+    source_clean = str(source_id or "").strip()
+    id_value = strip_provider_prefix(source_clean, provider)
+    if id_value == "":
+        id_value = source_clean
+    mapping = {
+        "id": id_value,
+        "id_raw": source_clean,
+        "id_lower": id_value.lower(),
+        "species_key": species_key,
+        "provider": provider,
+    }
+    return template.format(**mapping)
+
+
+def fetch_text_with_headers(url, timeout, headers):
+    req_headers = dict(headers)
+    if "User-Agent" not in req_headers:
+        req_headers["User-Agent"] = "genegalleon-input-generation"
+    request = Request(url, headers=req_headers)
+    with urlopen(request, timeout=timeout) as response:
+        payload = response.read()
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return payload.decode("utf-8", errors="replace")
+
+
+def parse_links_from_document(base_url, text):
+    links = []
+    seen = set()
+    for href in re.findall(r"""href\s*=\s*["']([^"']+)["']""", text, flags=re.IGNORECASE):
+        candidate = href.strip()
+        if candidate == "" or candidate.startswith("javascript:") or candidate.startswith("#"):
+            continue
+        absolute = urljoin(base_url, candidate)
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+        links.append(absolute)
+    for raw in re.findall(r"""https?://[^\s"'<>]+""", text):
+        candidate = raw.strip()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        links.append(candidate)
+    return links
+
+
+def is_probable_cds_url(url):
+    lower = url.lower()
+    if not is_fasta_filename(lower):
+        return False
+    return any(marker in lower for marker in ("cds", "transcript", "mrna", "cdna", "genecatalog_cds"))
+
+
+def is_probable_gff_url(url):
+    return is_gff_filename(url.lower())
+
+
+def is_probable_genome_url(provider, url):
+    return is_probable_genome_filename(provider, urlparse(url).path.lower())
+
+
+def select_best_url_for_label(provider, label, candidates):
+    if len(candidates) == 0:
+        return ""
+    filtered = []
+    for candidate in candidates:
+        path_lower = urlparse(candidate).path.lower()
+        if label == "CDS":
+            if is_probable_cds_url(path_lower):
+                filtered.append(candidate)
+            continue
+        if label == "GFF":
+            if is_probable_gff_url(path_lower):
+                filtered.append(candidate)
+            continue
+        if label == "GENOME":
+            if is_probable_genome_url(provider, candidate):
+                filtered.append(candidate)
+            continue
+    if len(filtered) == 0:
+        return ""
+    preferred = sorted(filtered, key=lambda x: (".chromosome." in x.lower(), x))
+    return preferred[0]
+
+
+def resolve_urls_from_index_url(provider, index_url, timeout, headers):
+    text = fetch_text_with_headers(index_url, timeout, headers)
+    links = parse_links_from_document(index_url, text)
+    return {
+        "cds_url": select_best_url_for_label(provider, "CDS", links),
+        "gff_url": select_best_url_for_label(provider, "GFF", links),
+        "genome_url": select_best_url_for_label(provider, "GENOME", links),
+    }
+
+
+def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, timeout, headers):
+    resolved = {}
+
+    env_prefix = provider_env_prefix(provider)
+    label_to_key = {"CDS": "cds_url", "GFF": "gff_url", "GENOME": "genome_url"}
+
+    for label in DOWNLOAD_LABELS:
+        template_env = "{}_{}_URL_TEMPLATE".format(env_prefix, label)
+        template = os.environ.get(template_env, "").strip()
+        if template == "":
+            if provider == "ensemblplants":
+                template = ENSEMBLPLANTS_DEFAULT_ID_URL_TEMPLATES.get(label, "")
+        if template == "":
+            continue
+        url = render_id_url_template(template, provider, source_id, species_key)
+        if url.endswith("/"):
+            try:
+                discovered = resolve_urls_from_index_url(provider, url, timeout, headers)
+                resolved[label_to_key[label]] = discovered.get(label_to_key[label], "")
+                continue
+            except Exception:
+                pass
+        resolved[label_to_key[label]] = url
+
+    if (
+        resolved.get("cds_url", "") != ""
+        and resolved.get("gff_url", "") != ""
+        and resolved.get("genome_url", "") != ""
+    ):
+        return resolved
+
+    source_clean = str(source_id or "").strip()
+    if is_url_like(source_clean):
+        discovered = resolve_urls_from_index_url(provider, source_clean, timeout, headers)
+        for key in ("cds_url", "gff_url", "genome_url"):
+            if resolved.get(key, "") == "" and discovered.get(key, "") != "":
+                resolved[key] = discovered[key]
+
+    id_page_template_env = "{}_ID_URL_TEMPLATE".format(env_prefix)
+    id_page_template = os.environ.get(id_page_template_env, "").strip()
+    page_templates = []
+    if id_page_template != "":
+        page_templates.append(id_page_template)
+    page_templates.extend(PROVIDER_DEFAULT_ID_PAGE_URL_TEMPLATES.get(provider, ()))
+
+    for page_template in page_templates:
+        page_url = render_id_url_template(page_template, provider, source_id, species_key)
+        try:
+            discovered = resolve_urls_from_index_url(provider, page_url, timeout, headers)
+        except Exception:
+            continue
+        for key in ("cds_url", "gff_url", "genome_url"):
+            if resolved.get(key, "") == "" and discovered.get(key, "") != "":
+                resolved[key] = discovered[key]
+        if (
+            resolved.get("cds_url", "") != ""
+            and resolved.get("gff_url", "") != ""
+            and resolved.get("genome_url", "") != ""
+        ):
+            break
+
+    if (
+        resolved.get("cds_url", "") == ""
+        or resolved.get("gff_url", "") == ""
+    ):
+        raise ValueError(
+            "could not infer cds/gff urls from id '{}' for provider '{}'".format(source_id, provider)
+        )
+    return resolved
 
 
 def default_download_filename(provider, species_key, label, url):
     parsed = urlparse(url)
     base = Path(parsed.path).name
     if base == "":
-        ext = ".fa.gz" if label == "cds" else ".gff3.gz"
+        if label in ("cds", "genome"):
+            ext = ".fa.gz"
+        else:
+            ext = ".gff3.gz"
         base = "{}.{}{}".format(species_key, label, ext)
     if provider == "ensemblplants":
         if not base.startswith(species_key + "."):
@@ -208,6 +544,328 @@ def parse_http_headers(http_header_values, auth_bearer_token_env):
             )
         headers["Authorization"] = "Bearer {}".format(token)
     return headers
+
+
+def parse_positive_int(value, fallback):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return int(fallback)
+    if parsed < 1:
+        return int(fallback)
+    return parsed
+
+
+def resolve_parallel_jobs(requested_jobs):
+    jobs = parse_positive_int(requested_jobs, 0)
+    if jobs > 0:
+        return jobs
+    env_slots = os.environ.get("NSLOTS", "").strip()
+    if env_slots != "":
+        return parse_positive_int(env_slots, DEFAULT_GLOBAL_DOWNLOAD_WORKERS)
+    return DEFAULT_GLOBAL_DOWNLOAD_WORKERS
+
+
+def resolve_provider_download_limits(global_jobs):
+    limits = {}
+    for provider in PROVIDERS:
+        default_limit = PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS.get(provider, 1)
+        env_name = "GG_INPUT_MAX_CONCURRENT_DOWNLOADS_{}".format(provider.upper())
+        env_value = os.environ.get(env_name, "").strip()
+        limit = parse_positive_int(env_value, default_limit)
+        limits[provider] = max(1, min(int(global_jobs), int(limit)))
+    return limits
+
+
+def resolve_ncbi_api_key():
+    return os.environ.get("GG_NCBI_API_KEY", "").strip()
+
+
+def resolve_ncbi_eutils_max_rps():
+    fallback = DEFAULT_NCBI_EUTILS_RPS_NO_API_KEY
+    if resolve_ncbi_api_key() != "":
+        fallback = DEFAULT_NCBI_EUTILS_RPS_WITH_API_KEY
+    env_value = os.environ.get("GG_NCBI_EUTILS_MAX_RPS", "").strip()
+    return parse_positive_int(env_value, fallback)
+
+
+def throttle_ncbi_eutils_request():
+    max_rps = resolve_ncbi_eutils_max_rps()
+    if max_rps < 1:
+        return
+    window_seconds = 1.0
+    while True:
+        with _ncbi_eutils_rate_lock:
+            now = time.time()
+            while len(_ncbi_eutils_request_times) > 0 and (now - _ncbi_eutils_request_times[0]) >= window_seconds:
+                _ncbi_eutils_request_times.popleft()
+            if len(_ncbi_eutils_request_times) < max_rps:
+                _ncbi_eutils_request_times.append(now)
+                return
+            oldest = _ncbi_eutils_request_times[0]
+            sleep_seconds = window_seconds - (now - oldest)
+        if sleep_seconds < 0.001:
+            sleep_seconds = 0.001
+        time.sleep(sleep_seconds)
+
+
+def fetch_json(url, timeout):
+    request = Request(url, headers={"User-Agent": "genegalleon-input-generation"})
+    with urlopen(request, timeout=timeout) as response:
+        payload = response.read()
+    return json.loads(payload.decode("utf-8"))
+
+
+def resolve_ncbi_eutils_base_url():
+    return os.environ.get("GG_NCBI_EUTILS_BASE_URL", DEFAULT_NCBI_EUTILS_BASE_URL).rstrip("/")
+
+
+def resolve_ncbi_ftp_base_url():
+    return os.environ.get("GG_NCBI_FTP_BASE_URL", DEFAULT_NCBI_FTP_BASE_URL).rstrip("/")
+
+
+def resolve_ncbi_datasets_base_url():
+    return os.environ.get("GG_NCBI_DATASETS_BASE_URL", DEFAULT_NCBI_DATASETS_BASE_URL).rstrip("/")
+
+
+def normalize_ncbi_ftp_path(ftppath):
+    if ftppath == "":
+        return ""
+    ftp_base = resolve_ncbi_ftp_base_url()
+    if ftppath.startswith("ftp://ftp.ncbi.nlm.nih.gov"):
+        return ftp_base + ftppath[len("ftp://ftp.ncbi.nlm.nih.gov"):]
+    if ftppath.startswith("https://ftp.ncbi.nlm.nih.gov"):
+        return ftp_base + ftppath[len("https://ftp.ncbi.nlm.nih.gov"):]
+    if ftppath.startswith("http://ftp.ncbi.nlm.nih.gov"):
+        return ftp_base + ftppath[len("http://ftp.ncbi.nlm.nih.gov"):]
+    if ftppath.startswith("ftp://"):
+        return "https://" + ftppath[len("ftp://"):]
+    return ftppath
+
+
+def infer_ncbi_species_key_from_doc(doc, fallback):
+    candidates = []
+    speciesname = str(doc.get("speciesname", "") or "").strip()
+    organism = str(doc.get("organism", "") or "").strip()
+    if speciesname != "":
+        candidates.append(speciesname)
+    if organism != "":
+        candidates.append(organism)
+    for raw in candidates:
+        text = re.sub(r"\s*\(.*?\)\s*", " ", raw).strip()
+        tokens = re.findall(r"[A-Za-z0-9]+", text)
+        if len(tokens) >= 2:
+            return "{}_{}".format(tokens[0], tokens[1])
+        if len(tokens) == 1:
+            return tokens[0]
+    return fallback
+
+
+def resolve_ncbi_download_urls_from_id(source_id, timeout):
+    accession = extract_ncbi_accession_from_source_id(source_id)
+    if accession == "":
+        raise ValueError(
+            "ncbi id must include an assembly accession like GCF_000001405.40 or GCA_000001405.29: {}".format(
+                source_id
+            )
+        )
+
+    eutils_base = resolve_ncbi_eutils_base_url()
+    term = quote("{}[Assembly Accession]".format(accession), safe="")
+    api_key = resolve_ncbi_api_key()
+    api_key_query = ""
+    if api_key != "":
+        api_key_query = "&api_key={}".format(quote(api_key, safe=""))
+    esearch_url = "{}/esearch.fcgi?db=assembly&term={}&retmode=json{}".format(eutils_base, term, api_key_query)
+    throttle_ncbi_eutils_request()
+    esearch_data = fetch_json(esearch_url, timeout=timeout)
+    uid_list = esearch_data.get("esearchresult", {}).get("idlist", [])
+    if len(uid_list) == 0:
+        raise ValueError("NCBI assembly was not found for id: {}".format(source_id))
+    uid = uid_list[0]
+
+    esummary_url = "{}/esummary.fcgi?db=assembly&id={}&retmode=json{}".format(
+        eutils_base,
+        quote(uid, safe=""),
+        api_key_query,
+    )
+    throttle_ncbi_eutils_request()
+    esummary_data = fetch_json(esummary_url, timeout=timeout)
+    doc = esummary_data.get("result", {}).get(uid, {})
+
+    ftppath_refseq = str(doc.get("ftppath_refseq", "") or "").strip()
+    ftppath_genbank = str(doc.get("ftppath_genbank", "") or "").strip()
+    ftp_dir = ftppath_refseq if ftppath_refseq != "" else ftppath_genbank
+    if ftp_dir == "":
+        raise ValueError("NCBI FTP path was not found in assembly summary for id: {}".format(source_id))
+
+    normalized_ftp_dir = normalize_ncbi_ftp_path(ftp_dir).rstrip("/")
+    assembly_dir_name = Path(urlparse(ftp_dir).path.rstrip("/")).name
+    if assembly_dir_name == "":
+        raise ValueError("Could not parse assembly directory name from: {}".format(ftp_dir))
+
+    cds_filename = "{}_cds_from_genomic.fna.gz".format(assembly_dir_name)
+    gff_filename = "{}_genomic.gff.gz".format(assembly_dir_name)
+    genome_filename = "{}_genomic.fna.gz".format(assembly_dir_name)
+    species_key = infer_ncbi_species_key_from_doc(doc, accession)
+    return {
+        "species_key": species_key,
+        "cds_url": "{}/{}".format(normalized_ftp_dir, cds_filename),
+        "gff_url": "{}/{}".format(normalized_ftp_dir, gff_filename),
+        "genome_url": "{}/{}".format(normalized_ftp_dir, genome_filename),
+        "cds_filename": cds_filename,
+        "gff_filename": gff_filename,
+        "genome_filename": genome_filename,
+    }
+
+
+def resolve_download_urls_from_templates(provider, source_id, species_key, row):
+    cds_template = str(row.get("cds_url_template", "") or "").strip()
+    gff_template = str(row.get("gff_url_template", "") or "").strip()
+    genome_template = str(row.get("genome_url_template", "") or "").strip()
+    if cds_template == "" and gff_template == "" and genome_template == "":
+        return None
+    mapping = {"id": source_id, "species_key": species_key, "provider": provider}
+    resolved = {}
+    try:
+        if cds_template != "":
+            resolved["cds_url"] = cds_template.format(**mapping)
+        if gff_template != "":
+            resolved["gff_url"] = gff_template.format(**mapping)
+        if genome_template != "":
+            resolved["genome_url"] = genome_template.format(**mapping)
+    except KeyError as exc:
+        raise ValueError("template placeholder is not supported: {}".format(exc))
+    return resolved
+
+
+def pick_ncbi_datasets_member_name(member_names, label):
+    if label == "CDS":
+        suffixes = ("/cds_from_genomic.fna", "_cds_from_genomic.fna")
+    elif label == "GFF":
+        suffixes = ("/genomic.gff", "_genomic.gff", "/genomic.gff3", "_genomic.gff3")
+    elif label == "GENOME":
+        suffixes = ("/genomic.fna", "_genomic.fna", "/genomic.fa", "_genomic.fa")
+    else:
+        raise ValueError("Unsupported NCBI datasets label: {}".format(label))
+
+    matches = [name for name in member_names if any(name.endswith(suffix) for suffix in suffixes)]
+    if len(matches) == 0:
+        return ""
+    return sorted(matches)[0]
+
+
+def write_download_payload(destination, payload_bytes):
+    tmp = Path(str(destination) + ".tmp.{}".format(os.getpid()))
+    try:
+        if destination.name.lower().endswith(".gz"):
+            with gzip.open(tmp, "wb") as out:
+                out.write(payload_bytes)
+        else:
+            with open(tmp, "wb") as out:
+                out.write(payload_bytes)
+        tmp.replace(destination)
+    except Exception:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        raise
+
+
+def download_ncbi_datasets_file_from_id(
+    source_id,
+    label,
+    destination,
+    headers,
+    timeout,
+    dry_run,
+    overwrite,
+    lock_stale_seconds,
+    warnings,
+    lock_context,
+):
+    include_annotation_type = NCBI_DATASETS_INCLUDE_BY_LABEL.get(label, "")
+    if include_annotation_type == "":
+        raise ValueError("No datasets include_annotation_type is defined for label: {}".format(label))
+    if dry_run:
+        return False
+
+    lock_path = Path(str(destination) + ".lock")
+    acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
+    tmp_zip = Path(str(destination) + ".datasets.tmp.{}".format(os.getpid()))
+    try:
+        if destination.exists() and destination.stat().st_size > 0 and not overwrite:
+            return False
+
+        base = resolve_ncbi_datasets_base_url()
+        datasets_url = "{}/genome/accession/{}/download?include_annotation_type={}".format(
+            base,
+            quote(source_id, safe=""),
+            quote(include_annotation_type, safe=""),
+        )
+
+        req_headers = dict(headers)
+        if "User-Agent" not in req_headers:
+            req_headers["User-Agent"] = "genegalleon-input-generation"
+        if "Accept" not in req_headers:
+            req_headers["Accept"] = "application/zip"
+        if "Accept-Encoding" not in req_headers:
+            req_headers["Accept-Encoding"] = "identity"
+
+        last_error = None
+        for attempt in range(1, 4):
+            try:
+                request = Request(datasets_url, headers=req_headers)
+                with urlopen(request, timeout=timeout) as response, open(tmp_zip, "wb") as out:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+
+                with zipfile.ZipFile(tmp_zip) as archive:
+                    member_name = pick_ncbi_datasets_member_name(archive.namelist(), label)
+                    if member_name == "":
+                        raise ValueError(
+                            "datasets archive did not contain expected {} member for id {}".format(label, source_id)
+                        )
+                    payload = archive.read(member_name)
+                write_download_payload(destination, payload)
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                try:
+                    tmp_zip.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+                if attempt < 3:
+                    time.sleep(float(attempt))
+                    continue
+        if last_error is not None:
+            raise last_error
+    except Exception:
+        try:
+            tmp_zip.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        raise
+    finally:
+        try:
+            tmp_zip.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        release_download_lock(lock_path)
+    return True
 
 
 def resolve_download_lock_stale_seconds():
@@ -362,6 +1020,96 @@ def read_download_manifest(path):
     return rows
 
 
+def execute_download_target_job(
+    job,
+    headers,
+    timeout,
+    overwrite,
+    lock_stale_seconds,
+    provider_semaphores,
+):
+    provider = job["provider"]
+    source_id = job["source_id"]
+    species_key = job["species_key"]
+    label = job["label"]
+    url = job["url"]
+    target = job["target"]
+    local_warnings = []
+    local_errors = []
+    downloaded = 0
+
+    sem = provider_semaphores.get(provider)
+    if sem is None:
+        sem = threading.Semaphore(1)
+
+    with sem:
+        if target.exists() and target.stat().st_size > 0 and not overwrite:
+            local_warnings.append(
+                "[download:{}] {} {} already exists. Skipping: {}".format(provider, species_key, label, target)
+            )
+            return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded}
+
+        try:
+            did_download = download_url_to_file(
+                url,
+                target,
+                headers=headers,
+                timeout=timeout,
+                dry_run=False,
+                overwrite=overwrite,
+                lock_stale_seconds=lock_stale_seconds,
+                warnings=local_warnings,
+                lock_context="[download:{}] {} {}".format(provider, species_key, label),
+            )
+            if did_download:
+                downloaded += 1
+            elif target.exists() and target.stat().st_size > 0 and not overwrite:
+                local_warnings.append(
+                    "[download:{}] {} {} already exists after lock. Skipping: {}".format(
+                        provider, species_key, label, target
+                    )
+                )
+        except Exception as exc:
+            fallback_exc = None
+            if provider == "ncbi" and source_id != "":
+                try:
+                    did_download = download_ncbi_datasets_file_from_id(
+                        source_id=source_id,
+                        label=label,
+                        destination=target,
+                        headers=headers,
+                        timeout=timeout,
+                        dry_run=False,
+                        overwrite=overwrite,
+                        lock_stale_seconds=lock_stale_seconds,
+                        warnings=local_warnings,
+                        lock_context="[download:{}] {} {} datasets".format(provider, species_key, label),
+                    )
+                    if did_download:
+                        downloaded += 1
+                        local_warnings.append(
+                            "[download:{}] {} {} fallback via NCBI Datasets API for id '{}'".format(
+                                provider, species_key, label, source_id
+                            )
+                        )
+                        return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded}
+                except Exception as fallback_error:
+                    fallback_exc = fallback_error
+            if fallback_exc is None:
+                local_errors.append(
+                    "[download:{}] failed {} {} from {} -> {} ({})".format(
+                        provider, species_key, label, url, target, exc
+                    )
+                )
+            else:
+                local_errors.append(
+                    "[download:{}] failed {} {} from {} -> {} ({}) ; fallback datasets failed ({})".format(
+                        provider, species_key, label, url, target, exc, fallback_exc
+                    )
+                )
+    return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded}
+
+
 def download_from_manifest(
     manifest_path,
     download_root,
@@ -370,6 +1118,7 @@ def download_from_manifest(
     headers,
     timeout,
     dry_run,
+    jobs,
 ):
     rows = read_download_manifest(manifest_path)
     warnings = []
@@ -378,8 +1127,8 @@ def download_from_manifest(
     downloaded = 0
     planned = 0
     lock_stale_seconds = resolve_download_lock_stale_seconds()
+    download_jobs = []
 
-    required_cols = {"provider", "species_key", "cds_url", "gff_url"}
     if len(rows) == 0:
         errors.append("Download manifest is empty: {}".format(manifest_path))
         return {
@@ -389,10 +1138,10 @@ def download_from_manifest(
             "downloaded": downloaded,
             "planned": planned,
         }
-    missing_cols = required_cols - set(rows[0].keys())
-    if missing_cols:
+    header_cols = set(rows[0].keys())
+    if "provider" not in header_cols and "id" not in header_cols:
         errors.append(
-            "Download manifest missing required columns {}: {}".format(sorted(missing_cols), manifest_path)
+            "Download manifest must contain at least one of provider/id columns: {}".format(manifest_path)
         )
         return {
             "warnings": warnings,
@@ -404,24 +1153,104 @@ def download_from_manifest(
 
     for i, row in enumerate(rows, start=2):
         provider = (row.get("provider") or "").strip().lower()
+        source_id = (row.get("id") or "").strip()
         species_key = (row.get("species_key") or "").strip()
         cds_url = (row.get("cds_url") or "").strip()
         gff_url = (row.get("gff_url") or "").strip()
+        genome_url = (row.get("genome_url") or "").strip()
         cds_filename = (row.get("cds_filename") or "").strip()
         gff_filename = (row.get("gff_filename") or "").strip()
+        genome_filename = (row.get("genome_filename") or "").strip()
+        resolved_ncbi = None
+
+        inferred_provider = ""
+        if provider == "" and source_id != "":
+            inferred_provider = infer_provider_from_id(source_id)
+            if inferred_provider != "":
+                provider = inferred_provider
 
         if provider_filter != "all" and provider != provider_filter:
             continue
         processed += 1
 
+        if provider == "":
+            errors.append(
+                "Manifest line {}: provider is empty and could not be inferred from id '{}'".format(i, source_id)
+            )
+            continue
         if provider not in PROVIDERS:
             errors.append("Manifest line {}: unsupported provider '{}'".format(i, provider))
             continue
+        if inferred_provider != "":
+            warnings.append(
+                "Manifest line {}: provider was inferred as '{}' from id '{}'".format(i, inferred_provider, source_id)
+            )
+        if source_id != "" and provider == "ncbi" and (
+            species_key == "" or cds_url == "" or gff_url == "" or genome_url == ""
+        ):
+            try:
+                resolved_ncbi = resolve_ncbi_download_urls_from_id(source_id, timeout=float(timeout))
+            except Exception as exc:
+                errors.append(
+                    "Manifest line {}: failed to resolve id '{}' (provider={}): {}".format(
+                        i, source_id, provider, exc
+                    )
+                )
+                continue
+
         if species_key == "":
-            errors.append("Manifest line {}: species_key is empty".format(i))
+            if resolved_ncbi is not None:
+                species_key = (resolved_ncbi.get("species_key") or "").strip()
+            if species_key == "":
+                species_key = source_id
+        if species_key == "":
+            errors.append("Manifest line {}: species_key/id is empty".format(i))
             continue
+
+        if cds_url == "" or gff_url == "" or genome_url == "":
+            try:
+                resolved_urls = None
+                if source_id != "" and provider == "ncbi":
+                    resolved_urls = resolved_ncbi
+                elif source_id != "":
+                    resolved_urls = resolve_download_urls_from_templates(provider, source_id, species_key, row)
+                    if resolved_urls is None and (cds_url == "" or gff_url == ""):
+                        resolved_urls = resolve_non_ncbi_download_urls_from_id(
+                            provider=provider,
+                            source_id=source_id,
+                            species_key=species_key,
+                            timeout=float(timeout),
+                            headers=headers,
+                        )
+                if resolved_urls is not None:
+                    if cds_url == "":
+                        cds_url = (resolved_urls.get("cds_url") or "").strip()
+                    if gff_url == "":
+                        gff_url = (resolved_urls.get("gff_url") or "").strip()
+                    if genome_url == "":
+                        genome_url = (resolved_urls.get("genome_url") or "").strip()
+                    if cds_filename == "":
+                        cds_filename = (resolved_urls.get("cds_filename") or "").strip()
+                    if gff_filename == "":
+                        gff_filename = (resolved_urls.get("gff_filename") or "").strip()
+                    if genome_filename == "":
+                        genome_filename = (resolved_urls.get("genome_filename") or "").strip()
+                    if species_key == "":
+                        species_key = (resolved_urls.get("species_key") or "").strip()
+            except Exception as exc:
+                errors.append(
+                    "Manifest line {}: failed to resolve urls from id '{}' (provider={}): {}".format(
+                        i, source_id, provider, exc
+                    )
+                )
+                continue
+
         if cds_url == "" or gff_url == "":
-            errors.append("Manifest line {}: cds_url/gff_url is empty for {}".format(i, species_key))
+            errors.append(
+                "Manifest line {}: cds_url/gff_url is empty for {} (set urls directly or provide resolvable id)".format(
+                    i, species_key
+                )
+            )
             continue
 
         raw_dir = provider_raw_dir(provider, download_root, species_key)
@@ -431,11 +1260,15 @@ def download_from_manifest(
             cds_filename = default_download_filename(provider, species_key, "cds", cds_url)
         if gff_filename == "":
             gff_filename = default_download_filename(provider, species_key, "gff", gff_url)
+        if genome_url != "" and genome_filename == "":
+            genome_filename = default_download_filename(provider, species_key, "genome", genome_url)
 
         targets = [
             ("CDS", cds_url, raw_dir / cds_filename),
             ("GFF", gff_url, raw_dir / gff_filename),
         ]
+        if genome_url != "":
+            targets.append(("GENOME", genome_url, raw_dir / genome_filename))
         for label, url, target in targets:
             if target.exists() and target.stat().st_size > 0 and not overwrite:
                 warnings.append(
@@ -447,32 +1280,47 @@ def download_from_manifest(
             if dry_run:
                 planned += 1
                 continue
-            try:
-                did_download = download_url_to_file(
-                    url,
-                    target,
-                    headers=headers,
-                    timeout=timeout,
-                    dry_run=dry_run,
-                    overwrite=overwrite,
-                    lock_stale_seconds=lock_stale_seconds,
-                    warnings=warnings,
-                    lock_context="[download:{}] {} {}".format(provider, species_key, label),
+            download_jobs.append(
+                {
+                    "provider": provider,
+                    "source_id": source_id,
+                    "species_key": species_key,
+                    "label": label,
+                    "url": url,
+                    "target": target,
+                }
+            )
+
+    if len(download_jobs) > 0:
+        max_workers = max(1, int(jobs))
+        provider_limits = resolve_provider_download_limits(max_workers)
+        provider_semaphores = {
+            provider_name: threading.Semaphore(provider_limits.get(provider_name, 1))
+            for provider_name in PROVIDERS
+        }
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(
+                    execute_download_target_job,
+                    job,
+                    headers,
+                    timeout,
+                    overwrite,
+                    lock_stale_seconds,
+                    provider_semaphores,
                 )
-                if did_download:
-                    downloaded += 1
-                elif target.exists() and target.stat().st_size > 0 and not overwrite:
-                    warnings.append(
-                        "[download:{}] {} {} already exists after lock. Skipping: {}".format(
-                            provider, species_key, label, target
-                        )
-                    )
-            except Exception as exc:
-                errors.append(
-                    "[download:{}] failed {} {} from {} -> {} ({})".format(
-                        provider, species_key, label, url, target, exc
-                    )
-                )
+                for job in download_jobs
+            ]
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    errors.append("Unhandled download worker error: {}".format(exc))
+                    continue
+                warnings.extend(result.get("warnings", []))
+                errors.extend(result.get("errors", []))
+                downloaded += int(result.get("downloaded", 0))
 
     if processed == 0:
         warnings.append("No manifest rows matched --provider {}.".format(provider_filter))
@@ -496,11 +1344,69 @@ def is_gff_filename(name):
     return any(lower.endswith(ext) for ext in GFF_EXTENSIONS)
 
 
+def is_probable_genome_filename(provider, name):
+    if not is_fasta_filename(name):
+        return False
+    lower = name.lower()
+    non_genome_markers = (
+        "cds",
+        "mrna",
+        "trna",
+        "rrna",
+        "ncrna",
+        "rna_from_genomic",
+        "transcript",
+        "cdna",
+        "pep",
+        "protein",
+    )
+    if any(marker in lower for marker in non_genome_markers):
+        return False
+    if provider == "ncbi":
+        return "genomic" in lower
+    if provider == "ensemblplants":
+        return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
+    return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold"))
+
+
 def first_token(text):
     parts = text.split()
     if len(parts) == 0:
         return ""
     return parts[0]
+
+
+def extract_header_tag_value(header, tag):
+    pattern = r"\[{}=([^\]]+)\]".format(re.escape(tag))
+    match = re.search(pattern, header)
+    if match is None:
+        return ""
+    return match.group(1).strip()
+
+
+def extract_ncbi_gene_id_from_header(header):
+    db_xref = extract_header_tag_value(header, "db_xref")
+    if db_xref == "":
+        return ""
+    for token in db_xref.split(","):
+        text = token.strip()
+        if text.startswith("GeneID:"):
+            return text[len("GeneID:") :]
+    return ""
+
+
+def extract_ncbi_ensembl_gene_id_from_header(header):
+    db_xref = extract_header_tag_value(header, "db_xref")
+    if db_xref == "":
+        return ""
+    for token in db_xref.split(","):
+        text = token.strip()
+        if not text.startswith("Ensembl:"):
+            continue
+        candidate = text[len("Ensembl:") :].strip()
+        if ENSEMBL_GENE_ID_PATTERN.match(candidate):
+            return candidate
+    return ""
 
 
 def species_prefix_from_value(value):
@@ -517,6 +1423,26 @@ def normalize_output_basename(source_name, species_prefix):
     if source_name.startswith(dotted_prefix):
         return species_prefix + "_" + source_name[len(dotted_prefix):]
     return species_prefix + "_" + source_name
+
+
+def strip_suffix_case_insensitive(text, suffixes):
+    lower = text.lower()
+    for suffix in sorted(suffixes, key=len, reverse=True):
+        if lower.endswith(suffix):
+            return text[: len(text) - len(suffix)]
+    return text
+
+
+def normalize_cds_output_basename(source_name, species_prefix):
+    normalized = normalize_output_basename(source_name, species_prefix)
+    stem = strip_suffix_case_insensitive(normalized, FASTA_EXTENSIONS)
+    return stem + ".fa.gz"
+
+
+def normalize_genome_output_basename(source_name, species_prefix):
+    normalized = normalize_output_basename(source_name, species_prefix)
+    stem = strip_suffix_case_insensitive(normalized, FASTA_EXTENSIONS)
+    return stem + ".fa.gz"
 
 
 def apply_common_replacements(text):
@@ -563,6 +1489,16 @@ def iter_fasta_records(path):
         yield header, "".join(chunks)
 
 
+def count_fasta_records(path):
+    count = 0
+    first_name = ""
+    for header, _ in iter_fasta_records(path):
+        count += 1
+        if first_name == "":
+            first_name = first_token(header)
+    return count, first_name
+
+
 def write_fasta_record(handle, record_id, sequence, width=80):
     handle.write(">{}\n".format(record_id))
     for i in range(0, len(sequence), width):
@@ -596,7 +1532,98 @@ def extract_provider_id(provider, header):
         return extract_ensembl_id(header)
     if provider == "phycocosm":
         return extract_phycocosm_id(header)
+    if provider == "ncbi":
+        return first_token(header)
     return extract_phytozome_id(header)
+
+
+def collapse_transcript_suffix(provider, identifier):
+    text = identifier
+    if provider == "phytozome":
+        text = re.sub(r"[.][0-9]+$", "", text)
+    if provider in ("phycocosm", "phytozome", "ensemblplants", "coge", "cngb"):
+        text = re.sub(r"[._-]t[0-9]+$", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"[._-](?:transcript|mrna|rna|isoform)[._-]?[0-9]+$", "", text, flags=re.IGNORECASE)
+    return text
+
+
+def discover_generic_species_dir_tasks(provider, input_dir):
+    warnings = []
+    errors = []
+    tasks = []
+
+    for species_dir in sorted(input_dir.iterdir()):
+        if not species_dir.is_dir():
+            continue
+        species_key = species_dir.name
+        species_prefix = species_prefix_from_value(species_key)
+        if species_prefix == "":
+            warnings.append(
+                "[{}] skipped '{}': unable to parse species prefix.".format(provider, species_key)
+            )
+            continue
+
+        files = [path for path in species_dir.iterdir() if path.is_file()]
+        cds_matches = [
+            path
+            for path in files
+            if is_fasta_filename(path.name)
+            and any(marker in path.name.lower() for marker in ("cds", "transcript", "mrna", "cdna"))
+        ]
+        if len(cds_matches) == 0:
+            cds_matches = [
+                path
+                for path in files
+                if is_fasta_filename(path.name) and not is_probable_genome_filename(provider, path.name)
+            ]
+        gff_matches = [path for path in files if is_gff_filename(path.name)]
+        genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+
+        cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
+        gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
+        genome_path = pick_single_file(genome_matches, provider, species_key, "genome", warnings)
+
+        if cds_path is None or gff_path is None:
+            errors.append(
+                "[{}] {}: missing {}".format(
+                    provider, species_key, "CDS" if cds_path is None else "GFF"
+                )
+            )
+            continue
+        tasks.append(
+            {
+                "provider": provider,
+                "species_key": species_key,
+                "species_prefix": species_prefix,
+                "cds_path": cds_path,
+                "gff_path": gff_path,
+                "genome_path": genome_path,
+            }
+        )
+    return tasks, warnings, errors
+
+
+def build_gene_aggregate_id(task, header, transcript_id):
+    provider = task["provider"]
+    species_prefix = task["species_prefix"]
+    if provider == "ncbi":
+        ensembl_gene_id = extract_ncbi_ensembl_gene_id_from_header(header)
+        gene_symbol = extract_header_tag_value(header, "gene")
+        gene_id = extract_ncbi_gene_id_from_header(header)
+        if ensembl_gene_id != "":
+            gene_token = ensembl_gene_id
+        elif gene_id != "":
+            gene_token = "GeneID{}".format(gene_id)
+        elif gene_symbol != "":
+            gene_token = gene_symbol
+        else:
+            gene_token = extract_provider_id(provider, header)
+    else:
+        extracted = extract_provider_id(provider, header)
+        collapsed = collapse_transcript_suffix(provider, extracted)
+        gene_token = collapsed if collapsed != "" else extracted
+    prefixed = "{}_{}".format(species_prefix, sanitize_identifier(gene_token))
+    return sanitize_identifier(prefixed)
 
 
 def pick_single_file(matches, provider, species_key, label, warnings):
@@ -619,6 +1646,7 @@ def discover_ensemblplants_tasks(input_dir):
 
     cds_by_species = defaultdict(list)
     gff_by_species = defaultdict(list)
+    genome_by_species = defaultdict(list)
 
     for path in sorted(input_dir.iterdir()):
         if not path.is_file():
@@ -632,8 +1660,11 @@ def discover_ensemblplants_tasks(input_dir):
             continue
         if is_gff_filename(name):
             gff_by_species[species_key].append(path)
+            continue
+        if is_probable_genome_filename("ensemblplants", name):
+            genome_by_species[species_key].append(path)
 
-    for species_key in sorted(set(cds_by_species.keys()) | set(gff_by_species.keys())):
+    for species_key in sorted(set(cds_by_species.keys()) | set(gff_by_species.keys()) | set(genome_by_species.keys())):
         species_prefix = species_prefix_from_value(species_key)
         if species_prefix == "":
             warnings.append(
@@ -655,6 +1686,13 @@ def discover_ensemblplants_tasks(input_dir):
             "GFF",
             warnings,
         )
+        genome_path = pick_single_file(
+            genome_by_species.get(species_key, []),
+            "ensemblplants",
+            species_key,
+            "genome",
+            warnings,
+        )
         if cds_path is None or gff_path is None:
             errors.append(
                 "[ensemblplants] {}: missing {}".format(
@@ -669,6 +1707,7 @@ def discover_ensemblplants_tasks(input_dir):
                 "species_prefix": species_prefix,
                 "cds_path": cds_path,
                 "gff_path": gff_path,
+                "genome_path": genome_path,
             }
         )
 
@@ -694,9 +1733,11 @@ def discover_phycocosm_tasks(input_dir):
         files = [path for path in species_dir.iterdir() if path.is_file()]
         cds_matches = [path for path in files if "fasta" in path.name.lower() and is_fasta_filename(path.name)]
         gff_matches = [path for path in files if "gff" in path.name.lower() and is_gff_filename(path.name)]
+        genome_matches = [path for path in files if is_probable_genome_filename("phycocosm", path.name)]
 
         cds_path = pick_single_file(cds_matches, "phycocosm", species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, "phycocosm", species_key, "GFF", warnings)
+        genome_path = pick_single_file(genome_matches, "phycocosm", species_key, "genome", warnings)
 
         if cds_path is None or gff_path is None:
             errors.append(
@@ -712,6 +1753,7 @@ def discover_phycocosm_tasks(input_dir):
                 "species_prefix": species_prefix,
                 "cds_path": cds_path,
                 "gff_path": gff_path,
+                "genome_path": genome_path,
             }
         )
 
@@ -741,9 +1783,11 @@ def discover_phytozome_tasks(input_dir):
             if ("cds_" in path.name.lower() or ".cds." in path.name.lower()) and is_fasta_filename(path.name)
         ]
         gff_matches = [path for path in files if "gene.gff3" in path.name.lower() and is_gff_filename(path.name)]
+        genome_matches = [path for path in files if is_probable_genome_filename("phytozome", path.name)]
 
         cds_path = pick_single_file(cds_matches, "phytozome", species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, "phytozome", species_key, "GFF", warnings)
+        genome_path = pick_single_file(genome_matches, "phytozome", species_key, "genome", warnings)
 
         if cds_path is None or gff_path is None:
             errors.append(
@@ -759,6 +1803,61 @@ def discover_phytozome_tasks(input_dir):
                 "species_prefix": species_prefix,
                 "cds_path": cds_path,
                 "gff_path": gff_path,
+                "genome_path": genome_path,
+            }
+        )
+
+    return tasks, warnings, errors
+
+
+def discover_ncbi_tasks(input_dir):
+    warnings = []
+    errors = []
+    tasks = []
+
+    for species_dir in sorted(input_dir.iterdir()):
+        if not species_dir.is_dir():
+            continue
+        species_key = species_dir.name
+        species_prefix = species_prefix_from_value(species_key)
+        if species_prefix == "":
+            warnings.append(
+                "[ncbi] skipped '{}': unable to parse species prefix.".format(species_key)
+            )
+            continue
+
+        files = [path for path in species_dir.iterdir() if path.is_file()]
+        cds_matches = [
+            path
+            for path in files
+            if "cds_from_genomic" in path.name.lower() and is_fasta_filename(path.name)
+        ]
+        gff_matches = [
+            path
+            for path in files
+            if "genomic.gff" in path.name.lower() and is_gff_filename(path.name)
+        ]
+        genome_matches = [path for path in files if is_probable_genome_filename("ncbi", path.name)]
+
+        cds_path = pick_single_file(cds_matches, "ncbi", species_key, "CDS", warnings)
+        gff_path = pick_single_file(gff_matches, "ncbi", species_key, "GFF", warnings)
+        genome_path = pick_single_file(genome_matches, "ncbi", species_key, "genome", warnings)
+
+        if cds_path is None or gff_path is None:
+            errors.append(
+                "[ncbi] {}: missing {}".format(
+                    species_key, "CDS" if cds_path is None else "GFF"
+                )
+            )
+            continue
+        tasks.append(
+            {
+                "provider": "ncbi",
+                "species_key": species_key,
+                "species_prefix": species_prefix,
+                "cds_path": cds_path,
+                "gff_path": gff_path,
+                "genome_path": genome_path,
             }
         )
 
@@ -772,36 +1871,117 @@ def discover_tasks(provider, input_dir):
         return discover_phycocosm_tasks(input_dir)
     if provider == "phytozome":
         return discover_phytozome_tasks(input_dir)
+    if provider == "ncbi":
+        return discover_ncbi_tasks(input_dir)
+    if provider == "coge":
+        return discover_generic_species_dir_tasks(provider, input_dir)
+    if provider == "cngb":
+        return discover_generic_species_dir_tasks(provider, input_dir)
     raise ValueError("Unknown provider: {}".format(provider))
 
 
+def build_formatted_cds_id(task, header):
+    extracted = extract_provider_id(task["provider"], header)
+    sanitized = sanitize_identifier(extracted)
+    prefixed = "{}_{}".format(task["species_prefix"], sanitized)
+    return sanitize_identifier(prefixed)
+
+
 def format_cds(task, output_dir, overwrite, dry_run):
-    output_name = normalize_output_basename(task["cds_path"].name, task["species_prefix"])
+    output_name = normalize_cds_output_basename(task["cds_path"].name, task["species_prefix"])
+    output_path = output_dir / output_name
+
+    if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
+        before_count, _ = count_fasta_records(task["cds_path"])
+        after_count, first_existing = count_fasta_records(output_path)
+        return {
+            "status": "skip",
+            "output_path": output_path,
+            "written": after_count,
+            "duplicates": max(0, before_count - after_count),
+            "before_count": before_count,
+            "after_count": after_count,
+            "first_sequence_name": first_existing,
+        }
+
+    before_count = 0
+    aggregated_away = 0
+    first_sequence_name = ""
+    records_by_gene = {}
+    for header, sequence in iter_fasta_records(task["cds_path"]):
+        before_count += 1
+        transcript_id = build_formatted_cds_id(task, header)
+        gene_id = build_gene_aggregate_id(task, header, transcript_id)
+        seq = re.sub(r"\s+", "", sequence).upper()
+        # Keep codon-frame-safe length (equivalent role of `cdskit pad` in shell pipelines).
+        seq = pad_to_codon_length(seq)
+
+        previous = records_by_gene.get(gene_id)
+        if previous is None:
+            records_by_gene[gene_id] = {
+                "id": gene_id,
+                "sequence": seq,
+                "transcript_id": transcript_id,
+            }
+            continue
+
+        previous_seq = previous["sequence"]
+        previous_transcript_id = previous["transcript_id"]
+        # Keep one representative CDS per gene; prefer longer CDS and then lexicographically stable tie-breaker.
+        if len(seq) > len(previous_seq) or (
+            len(seq) == len(previous_seq) and transcript_id < previous_transcript_id
+        ):
+            records_by_gene[gene_id] = {
+                "id": gene_id,
+                "sequence": seq,
+                "transcript_id": transcript_id,
+            }
+
+    ordered_ids = sorted(records_by_gene.keys())
+    after_count = len(ordered_ids)
+    aggregated_away = max(0, before_count - after_count)
+    if len(ordered_ids) > 0:
+        first_sequence_name = ordered_ids[0]
+
+    if not dry_run:
+        with open_text(output_path, "wt") as fout:
+            for gene_id in ordered_ids:
+                write_fasta_record(fout, records_by_gene[gene_id]["id"], records_by_gene[gene_id]["sequence"])
+
+    status = "dry-run" if dry_run else "write"
+    return {
+        "status": status,
+        "output_path": output_path,
+        "written": after_count,
+        "duplicates": aggregated_away,
+        "before_count": before_count,
+        "after_count": after_count,
+        "first_sequence_name": first_sequence_name,
+    }
+
+
+def format_genome(task, output_dir, overwrite, dry_run):
+    genome_path = task.get("genome_path")
+    if genome_path is None:
+        return {"status": "missing", "output_path": None, "written": 0}
+
+    output_name = normalize_genome_output_basename(genome_path.name, task["species_prefix"])
     output_path = output_dir / output_name
     if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
-        return {"status": "skip", "output_path": output_path, "written": 0, "duplicates": 0}
+        return {"status": "skip", "output_path": output_path, "written": 0}
     if dry_run:
-        return {"status": "dry-run", "output_path": output_path, "written": 0, "duplicates": 0}
+        return {"status": "dry-run", "output_path": output_path, "written": 0}
 
-    seen_ids = set()
     written = 0
-    duplicates = 0
-
     with open_text(output_path, "wt") as fout:
-        for header, sequence in iter_fasta_records(task["cds_path"]):
-            extracted = extract_provider_id(task["provider"], header)
-            sanitized = sanitize_identifier(extracted)
-            prefixed = "{}_{}".format(task["species_prefix"], sanitized)
-            final_id = sanitize_identifier(prefixed)
-            if final_id in seen_ids:
-                duplicates += 1
-                continue
-            seen_ids.add(final_id)
+        for header, sequence in iter_fasta_records(genome_path):
+            record_id = first_token(apply_common_replacements(header))
+            if record_id == "":
+                record_id = "unnamed"
             seq = re.sub(r"\s+", "", sequence).upper()
-            seq = pad_to_codon_length(seq)
-            write_fasta_record(fout, final_id, seq)
+            write_fasta_record(fout, record_id, seq)
             written += 1
-    return {"status": "write", "output_path": output_path, "written": written, "duplicates": duplicates}
+    return {"status": "write", "output_path": output_path, "written": written}
 
 
 def format_gff(task, output_dir, overwrite, dry_run):
@@ -841,9 +2021,121 @@ def resolve_provider_inputs(args):
     raise ValueError("Specify either --input-dir or --dataset-root.")
 
 
+def utc_now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def species_row_key(provider, species_key, species_prefix):
+    stable_species = species_key if species_key != "" else species_prefix
+    return "{}\t{}".format(provider, stable_species)
+
+
+def read_species_summary_rows(path):
+    rows = {}
+    if not path.exists() or path.stat().st_size == 0:
+        return rows
+    with open(path, "rt", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for raw in reader:
+            provider = (raw.get("provider") or "").strip()
+            species_key = (raw.get("species_key") or "").strip()
+            species_prefix = (raw.get("species_prefix") or "").strip()
+            if provider == "" or (species_key == "" and species_prefix == ""):
+                continue
+            key = species_row_key(provider, species_key, species_prefix)
+            rows[key] = {col: str(raw.get(col) or "") for col in SPECIES_SUMMARY_COLUMNS}
+    return rows
+
+
+def species_summary_row_has_existing_outputs(row):
+    cds_output = (row.get("cds_output_path") or "").strip()
+    gff_output = (row.get("gff_output_path") or "").strip()
+    genome_output = (row.get("genome_output_path") or "").strip()
+    genome_status = (row.get("genome_status") or "").strip()
+
+    if cds_output == "" or gff_output == "":
+        return False
+    if not Path(cds_output).expanduser().exists():
+        return False
+    if not Path(gff_output).expanduser().exists():
+        return False
+    if genome_output != "" and genome_status != "missing" and not Path(genome_output).expanduser().exists():
+        return False
+    return True
+
+
+def retain_existing_species_summary_rows(rows):
+    retained = {}
+    for key in sorted(rows.keys()):
+        row = rows[key]
+        if species_summary_row_has_existing_outputs(row):
+            retained[key] = row
+    return retained
+
+
+def write_species_summary_rows(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = Path(str(path) + ".tmp.{}".format(os.getpid()))
+    try:
+        with open(tmp_path, "wt", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=SPECIES_SUMMARY_COLUMNS, delimiter="\t")
+            writer.writeheader()
+            for key in sorted(rows.keys()):
+                row = rows[key]
+                payload = {col: str(row.get(col) or "") for col in SPECIES_SUMMARY_COLUMNS}
+                writer.writerow(payload)
+        tmp_path.replace(path)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        raise
+
+
+def format_task_succeeded(cds_result, gff_result, genome_result, dry_run):
+    if dry_run:
+        return False
+    if cds_result["status"] not in ("write", "skip"):
+        return False
+    if gff_result["status"] not in ("write", "skip"):
+        return False
+    if genome_result["status"] not in ("write", "skip", "missing"):
+        return False
+    return True
+
+
+def build_species_summary_row(task, cds_result, gff_result, genome_result, run_started_utc, overwrite, dry_run):
+    return {
+        "updated_utc": utc_now_iso(),
+        "run_started_utc": run_started_utc,
+        "provider": task["provider"],
+        "species_key": task["species_key"],
+        "species_prefix": task["species_prefix"],
+        "cds_input_path": str(task["cds_path"]),
+        "gff_input_path": str(task["gff_path"]),
+        "genome_input_path": str(task["genome_path"]) if task.get("genome_path") is not None else "",
+        "cds_output_path": str(cds_result["output_path"]) if cds_result.get("output_path") is not None else "",
+        "gff_output_path": str(gff_result["output_path"]) if gff_result.get("output_path") is not None else "",
+        "genome_output_path": str(genome_result["output_path"]) if genome_result.get("output_path") is not None else "",
+        "cds_status": cds_result["status"],
+        "gff_status": gff_result["status"],
+        "genome_status": genome_result["status"],
+        "cds_sequences_before": str(cds_result.get("before_count", "")),
+        "cds_sequences_after": str(cds_result.get("after_count", "")),
+        "cds_first_sequence_name": cds_result.get("first_sequence_name", "") or "NA",
+        "aggregated_cds_removed": str(cds_result.get("duplicates", "")),
+        "overwrite": str(int(bool(overwrite))),
+        "dry_run": str(int(bool(dry_run))),
+    }
+
+
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
+    run_started_utc = utc_now_iso()
 
     if args.download_only and args.download_manifest == "":
         parser.error("--download-only requires --download-manifest.")
@@ -854,6 +2146,7 @@ def main():
         parser.error(str(exc))
 
     if args.download_manifest != "":
+        parallel_jobs = resolve_parallel_jobs(args.jobs)
         download_root = Path(args.download_dir).expanduser().resolve()
         download_root.mkdir(parents=True, exist_ok=True)
         report = download_from_manifest(
@@ -864,18 +2157,20 @@ def main():
             headers=http_headers,
             timeout=float(args.download_timeout),
             dry_run=args.dry_run,
+            jobs=parallel_jobs,
         )
         for warning in report["warnings"]:
             sys.stderr.write("Warning: {}\n".format(warning))
         for error in report["errors"]:
             sys.stderr.write("Error: {}\n".format(error))
         print(
-            "Download stage: rows processed={}, files downloaded={}, planned downloads={}, download root={}, dry_run={}".format(
+            "Download stage: rows processed={}, files downloaded={}, planned downloads={}, download root={}, dry_run={}, jobs={}".format(
                 report["processed"],
                 report["downloaded"],
                 report["planned"],
                 download_root,
                 int(args.dry_run),
+                parallel_jobs,
             )
         )
         if args.download_only:
@@ -893,8 +2188,13 @@ def main():
 
     output_cds_dir = Path(args.species_cds_dir).expanduser().resolve()
     output_gff_dir = Path(args.species_gff_dir).expanduser().resolve()
+    output_genome_dir = Path(args.species_genome_dir).expanduser().resolve()
+    species_summary_path = Path(args.species_summary_output).expanduser().resolve()
     output_cds_dir.mkdir(parents=True, exist_ok=True)
     output_gff_dir.mkdir(parents=True, exist_ok=True)
+    output_genome_dir.mkdir(parents=True, exist_ok=True)
+    species_summary_rows = retain_existing_species_summary_rows(read_species_summary_rows(species_summary_path))
+    write_species_summary_rows(species_summary_path, species_summary_rows)
 
     all_tasks = []
     all_warnings = []
@@ -902,7 +2202,11 @@ def main():
 
     for provider, input_dir in provider_inputs:
         if not input_dir.exists() or not input_dir.is_dir():
-            all_errors.append("[{}] input directory not found: {}".format(provider, input_dir))
+            message = "[{}] input directory not found: {}".format(provider, input_dir)
+            if args.provider == "all":
+                all_warnings.append(message)
+            else:
+                all_errors.append(message)
             continue
         tasks, warnings, errors = discover_tasks(provider, input_dir)
         all_tasks.extend(tasks)
@@ -917,36 +2221,87 @@ def main():
     if args.strict and len(all_errors) > 0:
         return 1
     if len(all_tasks) == 0:
-        sys.stderr.write("No species pairs were discovered.\n")
+        sys.stderr.write("No species CDS/GFF pairs were discovered.\n")
         return 1
 
     processed = 0
     total_duplicates = 0
+    total_cds_before = 0
+    total_cds_after = 0
+    first_cds_sequence_name = ""
+    species_with_genome = 0
     for task in all_tasks:
         cds_result = format_cds(task, output_cds_dir, args.overwrite, args.dry_run)
         gff_result = format_gff(task, output_gff_dir, args.overwrite, args.dry_run)
+        genome_result = format_genome(task, output_genome_dir, args.overwrite, args.dry_run)
+        if format_task_succeeded(cds_result, gff_result, genome_result, args.dry_run):
+            key = species_row_key(task["provider"], task["species_key"], task["species_prefix"])
+            species_summary_rows[key] = build_species_summary_row(
+                task,
+                cds_result,
+                gff_result,
+                genome_result,
+                run_started_utc=run_started_utc,
+                overwrite=args.overwrite,
+                dry_run=args.dry_run,
+            )
+            # Persist each successful species incrementally.
+            write_species_summary_rows(species_summary_path, species_summary_rows)
         processed += 1
         total_duplicates += cds_result["duplicates"]
+        total_cds_before += cds_result["before_count"]
+        total_cds_after += cds_result["after_count"]
+        if first_cds_sequence_name == "":
+            first_cds_sequence_name = cds_result["first_sequence_name"]
+        if genome_result["status"] != "missing":
+            species_with_genome += 1
         print(
-            "[{}] {}: CDS={} ({}, {}, duplicates={}), GFF={} ({}, lines={})".format(
+            "[{}] {}: CDS={} ({}, {}, aggregated_away={}, before={}, after={}), GFF={} ({}, lines={}), GENOME={} ({})".format(
                 task["provider"],
                 task["species_prefix"],
                 task["cds_path"].name,
                 cds_result["status"],
                 cds_result["output_path"].name,
                 cds_result["duplicates"],
+                cds_result["before_count"],
+                cds_result["after_count"],
                 task["gff_path"].name,
                 gff_result["status"],
                 gff_result["lines"],
+                task["genome_path"].name if task.get("genome_path") is not None else "NA",
+                genome_result["status"],
             )
         )
 
+    stats = {
+        "species_processed": processed,
+        "num_species_cds_files": processed,
+        "num_species_gff_files": processed,
+        "num_species_genome_files": species_with_genome,
+        "cds_sequences_before": total_cds_before,
+        "cds_sequences_after": total_cds_after,
+        "cds_first_sequence_name": first_cds_sequence_name,
+        "aggregated_cds_removed": total_duplicates,
+        "duplicate_cds_ids_skipped": total_duplicates,
+        "dry_run": int(args.dry_run),
+    }
+    if args.stats_output != "":
+        stats_path = Path(args.stats_output).expanduser().resolve()
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(stats_path, "wt", encoding="utf-8") as handle:
+            json.dump(stats, handle, ensure_ascii=True, indent=2, sort_keys=True)
+
     print(
-        "Finished. species processed: {}, duplicate CDS IDs skipped: {}, output CDS dir: {}, output GFF dir: {}, dry_run={}".format(
+        "Finished. species processed: {}, CDS aggregated away: {}, CDS before/after: {}/{}, first CDS sequence: {}, output CDS dir: {}, output GFF dir: {}, output genome dir: {}, species summary: {}, dry_run={}".format(
             processed,
             total_duplicates,
+            total_cds_before,
+            total_cds_after,
+            first_cds_sequence_name if first_cds_sequence_name != "" else "NA",
             output_cds_dir,
             output_gff_dir,
+            output_genome_dir,
+            species_summary_path,
             int(args.dry_run),
         )
     )

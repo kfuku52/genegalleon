@@ -49,41 +49,41 @@ fi
 
 ### Start: Modify this block to tailor your analysis ###
 
-mode_sraid="${mode_sraid:-1}" # Need input at workspace/input/query_sra_id.
-mode_fastq="${mode_fastq:-0}" # Need input at workspace/input/species_rnaseq.
-mode_metadata="${mode_metadata:-0}" # Need input at workspace/input/transcriptome_assembly/amalgkit_metadata.
+mode_sraid=1 # Need input at workspace/input/query_sra_id.
+mode_fastq=0 # Need input at workspace/input/species_rnaseq.
+mode_metadata=0 # Need input at workspace/input/transcriptome_assembly/amalgkit_metadata.
 
-run_amalgkit_metadata_or_integrate="${run_amalgkit_metadata_or_integrate:-1}" # Metadata retrieval.
-run_amalgkit_getfastq="${run_amalgkit_getfastq:-1}" # fastq generation from NCBI SRA.
-amalgkit_rrna_filter="${amalgkit_rrna_filter:-yes}" # read-level rRNA removal in amalgkit getfastq.
-amalgkit_contam_filter="${amalgkit_contam_filter:-yes}" # read-level contamination removal in amalgkit getfastq.
-amalgkit_contam_filter_rank="${amalgkit_contam_filter_rank:-phylum}" # taxonomy rank for read-level contamination removal.
-amalgkit_filter_order="${amalgkit_filter_order:-fastp_first}" # {fastp_first,rrna_first}
-run_assembly="${run_assembly:-1}" # Transcriptome assembly with Trinity or rnaSPAdes.
-run_longestcds="${run_longestcds:-1}" # Longest CDS extraction.
-run_longestcds_fx2tab="${run_longestcds_fx2tab:-1}" # Sequence stats for longest CDS.
-run_longestcds_mmseqs2taxonomy="${run_longestcds_mmseqs2taxonomy:-0}" # MMseqs2 taxonomy.
-run_longestcds_contamination_removal="${run_longestcds_contamination_removal:-0}" # Contamination removal.
-run_busco1="${run_busco1:-1}" # BUSCO for transcriptome assembly with isoforms.
-run_busco2="${run_busco2:-1}" # BUSCO for longest CDS.
-run_busco3="${run_busco3:-0}" # BUSCO for contamination-removed longest CDS.
-run_assembly_stat="${run_assembly_stat:-1}" # seqkit stat for assembly and CDS files.
-run_amalgkit_quant="${run_amalgkit_quant:-1}" # Expression quantification.
-run_amalgkit_merge="${run_amalgkit_merge:-1}" # Expression merge.
-run_multispecies_summary="${run_multispecies_summary:-1}" # Multi-species summary.
+run_amalgkit_metadata_or_integrate=1 # Metadata retrieval.
+run_amalgkit_getfastq=1 # fastq generation from NCBI SRA.
+run_assembly=1 # Transcriptome assembly with Trinity or rnaSPAdes.
+run_longestcds=1 # Longest CDS extraction.
+run_longestcds_fx2tab=1 # Sequence stats for longest CDS.
+run_longestcds_mmseqs2taxonomy=0 # MMseqs2 taxonomy.
+run_longestcds_contamination_removal=0 # Contamination removal.
+run_busco1=1 # BUSCO for transcriptome assembly with isoforms.
+run_busco2=1 # BUSCO for longest CDS.
+run_busco3=0 # BUSCO for contamination-removed longest CDS.
+run_assembly_stat=1 # seqkit stat for assembly and CDS files.
+run_amalgkit_quant=1 # Expression quantification.
+run_amalgkit_merge=1 # Expression merge.
+run_multispecies_summary=1 # Multi-species summary.
 
-remove_amalgkit_fastq_after_completion="${remove_amalgkit_fastq_after_completion:-1}"
-max_assembly_input_fastq_size="${max_assembly_input_fastq_size:-30,000,000,000}"
-assembly_method="${assembly_method:-rnaSPAdes}" # {Trinity,rnaSPAdes}
-protocol_rna_seq="${protocol_rna_seq:-mixed}" # {same,mixed}
-kallisto_reference="${kallisto_reference:-longest_cds}" # {species_cds,longest_transcript,longest_cds,contamination_removed_longest_cds}
-orf_aggregation_level="${orf_aggregation_level:-i}" # {c,g,i,p}
-assembly_cpu_offset="${assembly_cpu_offset:-0}"
-assembly_ram_offset="${assembly_ram_offset:-4}"
+amalgkit_rrna_filter="yes" # read-level rRNA removal in amalgkit getfastq.
+amalgkit_contam_filter="yes" # read-level contamination removal in amalgkit getfastq.
+amalgkit_contam_filter_rank="phylum" # taxonomy rank for read-level contamination removal.
+amalgkit_filter_order="fastp_first" # {fastp_first,rrna_first}
+remove_amalgkit_fastq_after_completion=1
+max_assembly_input_fastq_size="30,000,000,000"
+assembly_method="rnaSPAdes" # {Trinity,rnaSPAdes}
+protocol_rna_seq="mixed" # {same,mixed}
+kallisto_reference="longest_cds" # {species_cds,longest_transcript,longest_cds,contamination_removed_longest_cds}
+orf_aggregation_level="i" # {c,g,i,p}
+assembly_cpu_offset=0
+assembly_ram_offset=4
 
 ### End: Modify this block to tailor your analysis ###
 
-delete_tmp_dir="${delete_tmp_dir:-1}" # After this run, delete tmp directory created for each job. Set 0 when debugging.
+delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Set 0 when debugging.
 
 source "${dir_script}/support/gg_util.sh" # loading utility functions
 # Forward config variables (including external overrides) into container environment.

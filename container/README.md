@@ -63,6 +63,41 @@ Single-platform local test image:
 IMAGE=local/genegalleon TAG=dev PLATFORMS=linux/arm64 MODE=load ./container/buildx.sh
 ```
 
+## One-command local build (`Docker + SIF`)
+
+```bash
+chmod +x container/gg_container_build_entrypoint.sh
+IMAGE=local/genegalleon TAG=dev ./container/gg_container_build_entrypoint.sh
+```
+
+Defaults:
+- `MODE=load`
+- `PLATFORMS`: inferred from host arch (`linux/amd64` or `linux/arm64`)
+- `OUT=./genegalleon.sif`
+
+Useful overrides:
+- `BUILD_SIF=0` to skip `.sif` conversion
+- `ENGINE=singularity` to use Singularity instead of Apptainer
+
+## CI publishing and reproducible tags
+
+GitHub Actions now publishes GHCR images and release SIF assets:
+
+- `.github/workflows/container-ghcr.yml`
+  - schedule: weekly (UTC)
+  - tags: `YYYYMMDD-<sha7>`, `sha-<sha7>`, `latest`
+- `.github/workflows/release-sif.yml`
+  - trigger: Release `published`
+  - tags: `<release-tag>`, `YYYYMMDD-<sha7>`, `sha-<sha7>`
+  - release assets: `<repo>_<release-tag>_amd64.sif` and `.sha256`
+
+User-side reproducible pull example:
+
+```bash
+apptainer build genegalleon_20260304_abcd123.sif \
+  docker://ghcr.io/<owner>/genegalleon:20260304-abcd123
+```
+
 ## Convert Docker image to `.sif`
 
 ```bash

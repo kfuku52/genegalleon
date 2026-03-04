@@ -1,0 +1,166 @@
+name: release-sif
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag name (example: v1.2.3)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-sif-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-push-and-attach-sif:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release and image tags
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            release_tag="${{ github.event.release.tag_name }}"
+          else
+            release_tag="${{ github.event.inputs.release_tag }}"
+          fi
+
+          if [[ -z "${release_tag}" ]]; then
+            echo "Release tag is empty."
+            exit 1
+          fi
+          if [[ ! "${release_tag}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Release tag contains unsupported characters for container tags: ${release_tag}"
+            exit 1
+          fi
+          release_sha="$(git rev-list -n 1 "${release_tag}" 2>/dev/null || true)"
+          if [[ -z "${release_sha}" ]]; then
+            echo "Release tag was not found in this repository: ${release_tag}"
+            exit 1
+          fi
+          git checkout --detach "${release_sha}"
+
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          repo_name="$(basename "${GITHUB_REPOSITORY}")"
+          image="ghcr.io/${owner}/${repo_name}"
+          date_tag="$(date -u +%Y%m%d)"
+          short_sha="${release_sha:0:7}"
+          immutable_tag="${date_tag}-${short_sha}"
+          build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          sif_name="${repo_name}_${release_tag}_amd64.sif"
+
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "release_sha=${release_sha}" >> "${GITHUB_OUTPUT}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+          echo "immutable_tag=${immutable_tag}" >> "${GITHUB_OUTPUT}"
+          echo "sha_tag=sha-${short_sha}" >> "${GITHUB_OUTPUT}"
+          echo "build_date=${build_date}" >> "${GITHUB_OUTPUT}"
+          echo "sif_name=${sif_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Preflight env coverage check
+        shell: bash
+        run: |
+          set -euo pipefail
+          container/scripts/check_env_coverage.sh .
+
+      - name: Build and push multi-arch release image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: container/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.release_tag }}
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.immutable_tag }}
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.vars.outputs.release_sha }}
+          build-args: |
+            BUILD_DATE=${{ steps.vars.outputs.build_date }}
+            VCS_REF=${{ steps.vars.outputs.release_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Apptainer
+        id: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          if ! sudo apt-get install -y apptainer; then
+            sudo apt-get install -y singularity-container || true
+          fi
+          if command -v apptainer >/dev/null 2>&1; then
+            echo "engine=apptainer" >> "${GITHUB_OUTPUT}"
+          elif command -v singularity >/dev/null 2>&1; then
+            echo "engine=singularity" >> "${GITHUB_OUTPUT}"
+          else
+            echo "Neither apptainer nor singularity is available."
+            exit 1
+          fi
+
+      - name: Build SIF from GHCR release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.vars.outputs.image }}" \
+          TAG="${{ steps.vars.outputs.release_tag }}" \
+          ENGINE="${{ steps.runtime.outputs.engine }}" \
+          OUT="${{ steps.vars.outputs.sif_name }}" \
+            bash container/apptainer_from_docker.sh
+          sha256sum "${{ steps.vars.outputs.sif_name }}" > "${{ steps.vars.outputs.sif_name }}.sha256"
+
+      - name: Upload SIF files to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "${{ steps.vars.outputs.release_tag }}" \
+            "${{ steps.vars.outputs.sif_name }}" \
+            "${{ steps.vars.outputs.sif_name }}.sha256" \
+            --clobber
+
+      - name: Summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "Pushed image tags:"
+            echo "- ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.release_tag }}"
+            echo "- ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.immutable_tag }}"
+            echo "- ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha_tag }}"
+            echo ""
+            echo "Uploaded release assets:"
+            echo "- ${{ steps.vars.outputs.sif_name }}"
+            echo "- ${{ steps.vars.outputs.sif_name }}.sha256"
+          } >> "${GITHUB_STEP_SUMMARY}"

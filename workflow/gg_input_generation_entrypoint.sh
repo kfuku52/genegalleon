@@ -37,31 +37,32 @@ gg_image="${script_dir}/../genegalleon.sif" # path to the singularity image
 
 ### Start: Modify this block to tailor your analysis ###
 
-run_build_manifest="${run_build_manifest:-1}"
-run_format_inputs="${run_format_inputs:-1}"
-run_validate_inputs="${run_validate_inputs:-1}"
+run_build_manifest=1
+run_format_inputs=1
+run_validate_inputs=1
 
-provider="${provider:-all}" # all|ensemblplants|phycocosm|phytozome
-strict="${strict:-0}"
-overwrite="${overwrite:-0}"
-download_only="${download_only:-0}"
-dry_run="${dry_run:-0}"
-download_timeout="${download_timeout:-120}"
+provider="all" # all|ensemblplants|phycocosm|phytozome|ncbi|coge|cngb
+strict=0
+overwrite=0
+download_only=0
+dry_run=0
+download_timeout=120
 
 # Optional download request settings.
-auth_bearer_token_env="${auth_bearer_token_env:-}" # e.g., GFE_DOWNLOAD_BEARER_TOKEN
-http_header="${http_header:-}" # e.g., "User-Agent: genegalleon-inputprep"
-
-# Optional runtime config file.
-config_file="${config_file:-}"
+auth_bearer_token_env="" # e.g., GFE_DOWNLOAD_BEARER_TOKEN
+http_header="" # e.g., "User-Agent: genegalleon-input-generation"
 
 # Optional local raw dataset roots and manifests.
-dataset_root="${dataset_root:-}"
-input_dir="${input_dir:-}"
-download_manifest="${download_manifest:-}"
-download_dir="${download_dir:-}"
-manifest_output="${manifest_output:-}"
-summary_output="${summary_output:-}"
+dataset_root=""
+input_dir=""
+download_manifest=""
+download_dir=""
+manifest_output=""
+summary_output=""
+species_cds_dir=""
+species_gff_dir=""
+species_genome_dir=""
+species_summary_output=""
 
 ### End: Modify this block to tailor your analysis ###
 
@@ -75,7 +76,6 @@ for gg_input_var_name in ${!GG_INPUT_@}; do
 done
 
 # Optional env-driven defaults consumed by gg_input_generation_core.sh.
-gg_export_var_to_container_env_if_set "GG_INPUTPREP_CONFIG"
 gg_export_var_to_container_env_if_set "GG_DATASET_ROOT"
 gg_scheduler_runtime_prelude
 unset_singularity_envs

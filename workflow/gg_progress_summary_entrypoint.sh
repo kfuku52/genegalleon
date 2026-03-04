@@ -43,8 +43,8 @@ dir_pg="${script_dir}/../workspace"
 gg_image="${script_dir}/../genegalleon.sif"
 
 ### Start: Modify this block to tailor your analysis ###
-mode_transcriptome_assembly="${mode_transcriptome_assembly:-auto}" # {"auto", "sraid", "fastq", "metadata"}
-ncpu_progress_summary="${ncpu_progress_summary:-}"
+mode_transcriptome_assembly="auto" # {"auto", "sraid", "fastq", "metadata"}
+ncpu_progress_summary=""
 ### End: Modify this block to tailor your analysis ###
 
 source "${script_dir}/support/gg_util.sh"

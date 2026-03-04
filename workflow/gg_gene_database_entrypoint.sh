@@ -37,7 +37,7 @@ gg_image="${script_dir}/../genegalleon.sif" # path to the singularity image
 
 ### Start: Modify this block to tailor your analysis ###
 
-run_database_prep="${run_database_prep:-1}"
+run_database_prep=1
 
 ### End: Modify this block to tailor your analysis ###
 

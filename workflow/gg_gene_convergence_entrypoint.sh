@@ -45,18 +45,18 @@ gg_image="${script_dir}/../genegalleon.sif" # path to the singularity image
 
 ### Start: Modify this block to tailor your analysis ###
 
-arity_range="${arity_range:-2-10}"
-trait="${trait:-all}"
-skip_lower_order="${skip_lower_order:-yes}"
-min_fg_stem_ratio="${min_fg_stem_ratio:-0.5}"
-min_OCNany2spe="${min_OCNany2spe:-1.8}"
-min_omegaCany2spe="${min_omegaCany2spe:-3.0}"
-min_OCNCoD="${min_OCNCoD:-0}"
-max_per_K="${max_per_K:-100}"
-file_trait="${file_trait:-/workspace/input/species_trait/species_trait.tsv}"
-dir_orthogroup="${dir_orthogroup:-/workspace/output/orthogroup}"
-dir_orthofinder="${dir_orthofinder:-/workspace/output/orthofinder}"
-dir_out="${dir_out:-/workspace/output/csubst_site}"
+arity_range="2-10"
+trait="all"
+skip_lower_order="yes"
+min_fg_stem_ratio="0.5"
+min_OCNany2spe="1.8"
+min_omegaCany2spe="3.0"
+min_OCNCoD=0
+max_per_K=100
+file_trait="/workspace/input/species_trait/species_trait.tsv"
+dir_orthogroup="/workspace/output/orthogroup"
+dir_orthofinder="/workspace/output/orthofinder"
+dir_out="/workspace/output/csubst_site"
 
 ### End: Modify this block to tailor your analysis ###
 

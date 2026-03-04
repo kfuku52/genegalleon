@@ -441,12 +441,9 @@ def test_input_generation_entrypoint_forwards_env_driven_overrides():
 
     assert "for gg_input_var_name in ${!GG_INPUT_@}; do" in text
     assert 'gg_export_var_to_container_env_if_set "${gg_input_var_name}"' in text
-    assert 'gg_export_var_to_container_env_if_set "GG_INPUTPREP_CONFIG"' in text
     assert 'gg_export_var_to_container_env_if_set "GG_DATASET_ROOT"' in text
     assert 'export "SINGULARITYENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
     assert 'export "APPTAINERENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
-    assert 'export "SINGULARITYENV_GG_INPUTPREP_CONFIG=${GG_INPUTPREP_CONFIG}"' not in text
-    assert 'export "APPTAINERENV_GG_INPUTPREP_CONFIG=${GG_INPUTPREP_CONFIG}"' not in text
     assert 'export "SINGULARITYENV_GG_DATASET_ROOT=${GG_DATASET_ROOT}"' not in text
     assert 'export "APPTAINERENV_GG_DATASET_ROOT=${GG_DATASET_ROOT}"' not in text
 
@@ -692,19 +689,19 @@ def test_debug_tree_annotation_paths_do_not_use_legacy_gg_pipeline_repo():
     assert legacy_path_token not in stat_branch2tree
 
 
-def test_entrypoints_allow_env_override_for_tmp_cleanup_flags():
+def test_entrypoints_define_fixed_tmp_cleanup_flags():
     expected_tokens = {
-        "gg_genome_annotation_entrypoint.sh": 'delete_tmp_dir="${delete_tmp_dir:-1}"',
-        "gg_transcriptome_generation_entrypoint.sh": 'delete_tmp_dir="${delete_tmp_dir:-1}"',
-        "gg_gene_evolution_entrypoint.sh": 'delete_tmp_dir="${delete_tmp_dir:-1}"',
-        "gg_gene_evolution_entrypoint.sh#preexisting": 'delete_preexisting_tmp_dir="${delete_preexisting_tmp_dir:-1}"',
-        "gg_genome_evolution_entrypoint.sh": 'delete_tmp_dir="${delete_tmp_dir:-1}"',
+        "gg_genome_annotation_entrypoint.sh": "delete_tmp_dir=1",
+        "gg_transcriptome_generation_entrypoint.sh": "delete_tmp_dir=1",
+        "gg_gene_evolution_entrypoint.sh": "delete_tmp_dir=1",
+        "gg_gene_evolution_entrypoint.sh#preexisting": "delete_preexisting_tmp_dir=1",
+        "gg_genome_evolution_entrypoint.sh": "delete_tmp_dir=1",
     }
 
     for key, token in expected_tokens.items():
         script_name = key.split("#")[0]
         text = _read_text(WORKFLOW_DIR / script_name)
-        assert token in text, f"Missing env-overridable tmp cleanup flag in {script_name}: {token}"
+        assert token in text, f"Missing fixed tmp cleanup flag in {script_name}: {token}"
 
 
 def test_entrypoints_forward_cleanup_flags_defined_outside_config_block():

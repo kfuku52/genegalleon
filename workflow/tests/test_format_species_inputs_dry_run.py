@@ -23,7 +23,16 @@ def make_manifest(path, rows):
     with open(path, "wt", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["provider", "species_key", "cds_url", "gff_url", "cds_filename", "gff_filename"],
+            fieldnames=[
+                "provider",
+                "species_key",
+                "cds_url",
+                "gff_url",
+                "genome_url",
+                "cds_filename",
+                "gff_filename",
+                "genome_filename",
+            ],
             delimiter="\t",
         )
         writer.writeheader()

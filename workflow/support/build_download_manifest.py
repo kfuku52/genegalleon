@@ -26,12 +26,15 @@ GFF_EXTENSIONS = (
     ".gtf.gz",
 )
 
-PROVIDERS = ("ensemblplants", "phycocosm", "phytozome")
+PROVIDERS = ("ensemblplants", "phycocosm", "phytozome", "ncbi", "coge", "cngb")
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "ensemblplants": Path("20230216_EnsemblPlants") / "original_files",
     "phycocosm": Path("PhycoCosm") / "species_wise_original",
     "phytozome": Path("Phytozome") / "species_wise_original",
+    "ncbi": Path("NCBI_Genome") / "species_wise_original",
+    "coge": Path("CoGe") / "species_wise_original",
+    "cngb": Path("CNGB") / "species_wise_original",
 }
 
 
@@ -76,6 +79,31 @@ def is_gff_filename(name):
     return any(lower.endswith(ext) for ext in GFF_EXTENSIONS)
 
 
+def is_probable_genome_filename(provider, name):
+    if not is_fasta_filename(name):
+        return False
+    lower = name.lower()
+    non_genome_markers = (
+        "cds",
+        "mrna",
+        "trna",
+        "rrna",
+        "ncrna",
+        "rna_from_genomic",
+        "transcript",
+        "cdna",
+        "pep",
+        "protein",
+    )
+    if any(marker in lower for marker in non_genome_markers):
+        return False
+    if provider == "ncbi":
+        return "genomic" in lower
+    if provider == "ensemblplants":
+        return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
+    return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold"))
+
+
 def pick_single_file(matches, provider, species_key, label, warnings):
     if len(matches) == 0:
         return None
@@ -96,6 +124,7 @@ def discover_ensemblplants(input_dir):
 
     species_to_cds = {}
     species_to_gff = {}
+    species_to_genome = {}
     for path in sorted(input_dir.iterdir()):
         if not path.is_file():
             continue
@@ -106,10 +135,15 @@ def discover_ensemblplants(input_dir):
             species_to_cds.setdefault(species_key, []).append(path)
         elif is_gff_filename(path.name):
             species_to_gff.setdefault(species_key, []).append(path)
+        elif is_probable_genome_filename("ensemblplants", path.name):
+            species_to_genome.setdefault(species_key, []).append(path)
 
-    for species_key in sorted(set(species_to_cds.keys()) | set(species_to_gff.keys())):
+    for species_key in sorted(set(species_to_cds.keys()) | set(species_to_gff.keys()) | set(species_to_genome.keys())):
         cds_path = pick_single_file(species_to_cds.get(species_key, []), "ensemblplants", species_key, "CDS", warnings)
         gff_path = pick_single_file(species_to_gff.get(species_key, []), "ensemblplants", species_key, "GFF", warnings)
+        genome_path = pick_single_file(
+            species_to_genome.get(species_key, []), "ensemblplants", species_key, "genome", warnings
+        )
         if cds_path is None or gff_path is None:
             errors.append(
                 "[ensemblplants] {}: missing {}".format(
@@ -120,11 +154,14 @@ def discover_ensemblplants(input_dir):
         rows.append(
             {
                 "provider": "ensemblplants",
+                "id": species_key,
                 "species_key": species_key,
                 "cds_url": cds_path.resolve().as_uri(),
                 "gff_url": gff_path.resolve().as_uri(),
+                "genome_url": genome_path.resolve().as_uri() if genome_path is not None else "",
                 "cds_filename": cds_path.name,
                 "gff_filename": gff_path.name,
+                "genome_filename": genome_path.name if genome_path is not None else "",
             }
         )
 
@@ -143,16 +180,46 @@ def discover_species_dir_based(provider, input_dir):
         if provider == "phycocosm":
             cds_matches = [path for path in files if "fasta" in path.name.lower() and is_fasta_filename(path.name)]
             gff_matches = [path for path in files if "gff" in path.name.lower() and is_gff_filename(path.name)]
-        else:
+            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+        elif provider == "phytozome":
             cds_matches = [
                 path
                 for path in files
                 if ("cds_" in path.name.lower() or ".cds." in path.name.lower()) and is_fasta_filename(path.name)
             ]
             gff_matches = [path for path in files if "gene.gff3" in path.name.lower() and is_gff_filename(path.name)]
+            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+        elif provider == "ncbi":
+            cds_matches = [
+                path
+                for path in files
+                if "cds_from_genomic" in path.name.lower() and is_fasta_filename(path.name)
+            ]
+            gff_matches = [
+                path
+                for path in files
+                if "genomic.gff" in path.name.lower() and is_gff_filename(path.name)
+            ]
+            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+        else:
+            cds_matches = [
+                path
+                for path in files
+                if is_fasta_filename(path.name)
+                and any(marker in path.name.lower() for marker in ("cds", "transcript", "mrna", "cdna"))
+            ]
+            if len(cds_matches) == 0:
+                cds_matches = [
+                    path
+                    for path in files
+                    if is_fasta_filename(path.name) and not is_probable_genome_filename(provider, path.name)
+                ]
+            gff_matches = [path for path in files if is_gff_filename(path.name)]
+            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
 
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
+        genome_path = pick_single_file(genome_matches, provider, species_key, "genome", warnings)
         if cds_path is None or gff_path is None:
             errors.append(
                 "[{}] {}: missing {}".format(
@@ -163,20 +230,26 @@ def discover_species_dir_based(provider, input_dir):
         rows.append(
             {
                 "provider": provider,
+                "id": species_key,
                 "species_key": species_key,
                 "cds_url": cds_path.resolve().as_uri(),
                 "gff_url": gff_path.resolve().as_uri(),
+                "genome_url": genome_path.resolve().as_uri() if genome_path is not None else "",
                 "cds_filename": cds_path.name,
                 "gff_filename": gff_path.name,
+                "genome_filename": genome_path.name if genome_path is not None else "",
             }
         )
     return rows, warnings, errors
 
 
-def discover(provider, dataset_root):
+def discover(provider, dataset_root, allow_missing=False):
     input_dir = dataset_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]
     if not input_dir.exists() or not input_dir.is_dir():
-        return [], [], ["[{}] input directory not found: {}".format(provider, input_dir)]
+        message = "[{}] input directory not found: {}".format(provider, input_dir)
+        if allow_missing:
+            return [], [message], []
+        return [], [], [message]
     if provider == "ensemblplants":
         return discover_ensemblplants(input_dir)
     return discover_species_dir_based(provider, input_dir)
@@ -187,7 +260,17 @@ def write_manifest(rows, output_path):
     with open(output_path, "wt", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["provider", "species_key", "cds_url", "gff_url", "cds_filename", "gff_filename"],
+            fieldnames=[
+                "provider",
+                "id",
+                "species_key",
+                "cds_url",
+                "gff_url",
+                "genome_url",
+                "cds_filename",
+                "gff_filename",
+                "genome_filename",
+            ],
             delimiter="\t",
             lineterminator="\n",
         )
@@ -206,8 +289,9 @@ def main():
     all_rows = []
     all_warnings = []
     all_errors = []
+    allow_missing = args.provider == "all"
     for provider in providers:
-        rows, warnings, errors = discover(provider, dataset_root)
+        rows, warnings, errors = discover(provider, dataset_root, allow_missing=allow_missing)
         all_rows.extend(rows)
         all_warnings.extend(warnings)
         all_errors.extend(errors)

@@ -1,4 +1,7 @@
 from pathlib import Path
+import csv
+import gzip
+import json
 import shutil
 import subprocess
 import sys
@@ -20,6 +23,7 @@ def run_script(*args):
 def test_format_species_inputs_with_small_fixture_all_providers(tmp_path):
     out_cds = tmp_path / "species_cds"
     out_gff = tmp_path / "species_gff"
+    stats_json = tmp_path / "stats.json"
 
     completed = run_script(
         "--provider",
@@ -30,27 +34,32 @@ def test_format_species_inputs_with_small_fixture_all_providers(tmp_path):
         str(out_cds),
         "--species-gff-dir",
         str(out_gff),
+        "--stats-output",
+        str(stats_json),
     )
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
 
-    ensembl_cds = out_cds / "Ostreococcus_lucimarinus_ASM9206v1.cds.all.fa"
-    phycocosm_cds = out_cds / "Microglena_spYARC_MicrYARC1_GeneCatalog_CDS_20220803.fasta"
-    phytozome_cds = out_cds / "Hydrocotyle_leucocephala_HleucocephalaHAP1_768_v2.1.cds_primaryTranscriptOnly.fa"
+    ensembl_cds = out_cds / "Ostreococcus_lucimarinus_ASM9206v1.cds.all.fa.gz"
+    phycocosm_cds = out_cds / "Microglena_spYARC_MicrYARC1_GeneCatalog_CDS_20220803.fa.gz"
+    phytozome_cds = out_cds / "Hydrocotyle_leucocephala_HleucocephalaHAP1_768_v2.1.cds_primaryTranscriptOnly.fa.gz"
     assert ensembl_cds.exists()
     assert phycocosm_cds.exists()
     assert phytozome_cds.exists()
 
-    ensembl_text = ensembl_cds.read_text(encoding="utf-8")
+    with gzip.open(ensembl_cds, "rt", encoding="utf-8") as handle:
+        ensembl_text = handle.read()
     assert ensembl_text.count(">Ostreococcus_lucimarinus_OSTLU_25062") == 1
     assert ">Ostreococcus_lucimarinus_OSTLU_99999" in ensembl_text
     assert "ATGAAN" in ensembl_text
 
-    phycocosm_text = phycocosm_cds.read_text(encoding="utf-8")
+    with gzip.open(phycocosm_cds, "rt", encoding="utf-8") as handle:
+        phycocosm_text = handle.read()
     assert ">Microglena_spYARC_mRNA.MigICE15955" in phycocosm_text
     assert ">Microglena_spYARC_mRNA.MigICE_00468" in phycocosm_text
 
-    phytozome_text = phytozome_cds.read_text(encoding="utf-8")
-    assert ">Hydrocotyle_leucocephala_HyleuH1.06G006800.1" in phytozome_text
+    with gzip.open(phytozome_cds, "rt", encoding="utf-8") as handle:
+        phytozome_text = handle.read()
+    assert ">Hydrocotyle_leucocephala_HyleuH1.06G006800" in phytozome_text
     assert "ATGATGAN" in phytozome_text
 
     ensembl_gff = out_gff / "Ostreococcus_lucimarinus_ASM9206v1.56.gff3"
@@ -66,6 +75,12 @@ def test_format_species_inputs_with_small_fixture_all_providers(tmp_path):
 
     phytozome_gff_text = phytozome_gff.read_text(encoding="utf-8")
     assert "evm_27.model." not in phytozome_gff_text
+    stats = json.loads(stats_json.read_text(encoding="utf-8"))
+    assert stats["species_processed"] == 3
+    assert stats["num_species_cds_files"] == 3
+    assert stats["num_species_gff_files"] == 3
+    assert stats["cds_sequences_before"] >= stats["cds_sequences_after"]
+    assert stats["cds_first_sequence_name"] != ""
 
 
 def test_format_species_inputs_strict_mode_fails_on_missing_pair(tmp_path):
@@ -89,3 +104,56 @@ def test_format_species_inputs_strict_mode_fails_on_missing_pair(tmp_path):
     )
     assert completed.returncode == 1, completed.stderr + "\n" + completed.stdout
     assert "missing GFF" in completed.stderr
+
+
+def test_species_summary_is_incremental_and_persistent_across_runs(tmp_path):
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    species_summary = tmp_path / "gg_input_generation_species.tsv"
+
+    first = run_script(
+        "--provider",
+        "ensemblplants",
+        "--dataset-root",
+        str(SMALL_DATASET_ROOT),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert first.returncode == 0, first.stderr + "\n" + first.stdout
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows_first = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows_first) == 1
+    assert rows_first[0]["provider"] == "ensemblplants"
+    assert rows_first[0]["species_prefix"] == "Ostreococcus_lucimarinus"
+    assert int(rows_first[0]["cds_sequences_before"]) >= int(rows_first[0]["cds_sequences_after"])
+    assert rows_first[0]["cds_first_sequence_name"] != ""
+
+    second = run_script(
+        "--provider",
+        "phycocosm",
+        "--dataset-root",
+        str(SMALL_DATASET_ROOT),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert second.returncode == 0, second.stderr + "\n" + second.stdout
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows_second = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows_second) == 2
+    by_key = {(row["provider"], row["species_prefix"]): row for row in rows_second}
+    assert ("ensemblplants", "Ostreococcus_lucimarinus") in by_key
+    assert ("phycocosm", "Microglena_spYARC") in by_key
+    assert by_key[("phycocosm", "Microglena_spYARC")]["cds_first_sequence_name"] != ""

@@ -40,84 +40,84 @@ fi
 ### Start: Modify this block to tailor your analysis ###
 
 # Species-tree workflow flags
-run_species_busco="${run_species_busco:-1}"
-run_species_get_busco_summary="${run_species_get_busco_summary:-1}"
-run_individual_get_fasta="${run_individual_get_fasta:-1}"
-run_individual_mafft="${run_individual_mafft:-1}"
-run_individual_trimal="${run_individual_trimal:-1}"
-run_concat_alignment="${run_concat_alignment:-1}"
-run_concat_iqtree_protein="${run_concat_iqtree_protein:-1}"
-run_concat_iqtree_dna="${run_concat_iqtree_dna:-1}"
-run_individual_iqtree_pep="${run_individual_iqtree_pep:-1}"
-run_astral_pep="${run_astral_pep:-1}"
-run_individual_iqtree_dna="${run_individual_iqtree_dna:-1}"
-run_astral_dna="${run_astral_dna:-1}"
-run_plot_species_trees="${run_plot_species_trees:-1}" # Plotting 4 species trees
-run_constrained_tree="${run_constrained_tree:-1}" # Introduce divergence time constraints for IQ2MC input
-run_plot_constrained_tree="${run_plot_constrained_tree:-1}" # Plot node-wise constrained ranges in constrained.nwk
-run_mcmctree1="${run_mcmctree1:-1}" # IQ2MC step 2
-run_mcmctree2="${run_mcmctree2:-1}" # IQ2MC step 3
-run_convert_tree_format="${run_convert_tree_format:-1}"
-run_plot_mcmctreer="${run_plot_mcmctreer:-1}" # Plot dated species tree
+run_species_busco=1
+run_species_get_busco_summary=1
+run_individual_get_fasta=1
+run_individual_mafft=1
+run_individual_trimal=1
+run_concat_alignment=1
+run_concat_iqtree_protein=1
+run_concat_iqtree_dna=1
+run_individual_iqtree_pep=1
+run_astral_pep=1
+run_individual_iqtree_dna=1
+run_astral_dna=1
+run_plot_species_trees=1 # Plotting 4 species trees
+run_constrained_tree=1 # Introduce divergence time constraints for IQ2MC input
+run_plot_constrained_tree=1 # Plot node-wise constrained ranges in constrained.nwk
+run_mcmctree1=1 # IQ2MC step 2
+run_mcmctree2=1 # IQ2MC step 3
+run_convert_tree_format=1
+run_plot_mcmctreer=1 # Plot dated species tree
 
 # Orthogroup workflow flags
-run_cds_translation="${run_cds_translation:-1}" # Internal helper for temporary protein FASTA generation.
-run_orthofinder="${run_orthofinder:-1}" # OrthoFinder run
-run_og_selection="${run_og_selection:-1}" # Selecting orthogroups for downstream analyses
-run_orthogroup_method_comparison="${run_orthogroup_method_comparison:-1}" # Method comparison plot
+run_cds_translation=1 # Internal helper for temporary protein FASTA generation.
+run_orthofinder=1 # OrthoFinder run
+run_og_selection=1 # Selecting orthogroups for downstream analyses
+run_orthogroup_method_comparison=1 # Method comparison plot
 
 # Genome-evolution workflow flags
-run_genome_busco="${run_genome_busco:-1}"
-run_genome_get_busco_summary="${run_genome_get_busco_summary:-1}"
-run_busco_getfasta="${run_busco_getfasta:-1}"
-run_busco_mafft="${run_busco_mafft:-1}"
-run_busco_trimal="${run_busco_trimal:-1}"
-run_busco_iqtree_dna="${run_busco_iqtree_dna:-1}"
-run_busco_iqtree_pep="${run_busco_iqtree_pep:-1}"
-run_busco_notung_root_dna="${run_busco_notung_root_dna:-1}"
-run_busco_notung_root_pep="${run_busco_notung_root_pep:-1}"
-run_busco_root_dna="${run_busco_root_dna:-1}"
-run_busco_root_pep="${run_busco_root_pep:-1}"
-run_busco_grampa_dna="${run_busco_grampa_dna:-1}"
-run_busco_grampa_pep="${run_busco_grampa_pep:-1}"
-run_orthogroup_grampa="${run_orthogroup_grampa:-1}" # Requires gg_gene_evolution rooted trees
-run_cafe="${run_cafe:-0}"
-run_go_enrichment="${run_go_enrichment:-0}"
+run_genome_busco=1
+run_genome_get_busco_summary=1
+run_busco_getfasta=1
+run_busco_mafft=1
+run_busco_trimal=1
+run_busco_iqtree_dna=1
+run_busco_iqtree_pep=1
+run_busco_notung_root_dna=1
+run_busco_notung_root_pep=1
+run_busco_root_dna=1
+run_busco_root_pep=1
+run_busco_grampa_dna=1
+run_busco_grampa_pep=1
+run_orthogroup_grampa=1 # Requires gg_gene_evolution rooted trees
+run_cafe=0
+run_go_enrichment=0
 
 # Shared parameters
-strictly_single_copy_only="${strictly_single_copy_only:-0}"
-bootstrap_params="${bootstrap_params:--bb 1000 -bnni}"
-nucleotide_model="${nucleotide_model:-GTR+R4}"
-protein_model="${protein_model:-LG+R4}"
-notung_jar="${notung_jar:-/usr/local/bin/Notung.jar}"
+strictly_single_copy_only=0
+bootstrap_params="-bb 1000 -bnni"
+nucleotide_model="GTR+R4"
+protein_model="LG+R4"
+notung_jar="/usr/local/bin/Notung.jar"
 
 # Species-tree parameters
-undated_species_tree="${undated_species_tree:-astral_pep}" # {iqtree_dna,iqtree_pep,astral_dna,astral_pep}
-astral_min_tips="${astral_min_tips:-4}"
-timetree_constraint="${timetree_constraint:-1}"
-mcmc_burnin="${mcmc_burnin:-20000}"
-mcmc_sampfreq="${mcmc_sampfreq:-100}"
-mcmc_nsample="${mcmc_nsample:-20000}"
-mcmc_birth_death_sampling="${mcmc_birth_death_sampling:-1,1,0.5}" # birth,death,sampling_fraction
-mcmc_clock_model="${mcmc_clock_model:-IND}" # {EQUAL, IND, CORR}
+undated_species_tree="astral_pep" # {iqtree_dna,iqtree_pep,astral_dna,astral_pep}
+astral_min_tips=4
+timetree_constraint=1
+mcmc_burnin=20000
+mcmc_sampfreq=100
+mcmc_nsample=20000
+mcmc_birth_death_sampling="1,1,0.5" # birth,death,sampling_fraction
+mcmc_clock_model="IND" # {EQUAL, IND, CORR}
 
 # Orthogroup parameters
-orthogroup_table="${orthogroup_table:-HOG}" # "OG" or "HOG"
-orthogroup_annotation_method="${orthogroup_annotation_method:-mmseqs2}" # blastp|mmseqs2 for representative-gene UniProt annotation in orthogroup selection.
-min_num_gene="${min_num_gene:-4}"
-min_num_species="${min_num_species:-2}"
-max_orthofinder_core_species="${max_orthofinder_core_species:-50}"
-min_percent_species_coverage="${min_percent_species_coverage:-50}"
-max_num_gene="${max_num_gene:-1000}"
+orthogroup_table="HOG" # "OG" or "HOG"
+orthogroup_annotation_method="mmseqs2" # blastp|mmseqs2 for representative-gene UniProt annotation in orthogroup selection.
+min_num_gene=4
+min_num_species=2
+max_orthofinder_core_species=50
+min_percent_species_coverage=50
+max_num_gene=1000
 
 # Genome-evolution parameters
-min_gene_orthogroup_grampa="${min_gene_orthogroup_grampa:-5}"
-max_gene_orthogroup_grampa="${max_gene_orthogroup_grampa:-50}"
-max_size_differential_cafe="${max_size_differential_cafe:-9999999}"
-n_gamma_cats_cafe="${n_gamma_cats_cafe:-4}"
-change_direction_go="${change_direction_go:-increase}" # "increase" or "decrease"
-go_category="${go_category:-BP,MF,CC}" # BP, MF, CC
-delete_tmp_dir="${delete_tmp_dir:-1}" # After normal completion, delete tmp directories. Set 0 when debugging.
+min_gene_orthogroup_grampa=5
+max_gene_orthogroup_grampa=50
+max_size_differential_cafe=9999999
+n_gamma_cats_cafe=4
+change_direction_go="increase" # "increase" or "decrease"
+go_category="BP,MF,CC" # BP, MF, CC
+delete_tmp_dir=1 # After normal completion, delete tmp directories. Set 0 when debugging.
 
 ### End: Modify this block to tailor your analysis ###
 
