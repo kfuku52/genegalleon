@@ -139,7 +139,30 @@ jobs:
             bash container/apptainer_from_docker.sh
           sha256sum "${{ steps.vars.outputs.sif_name }}" > "${{ steps.vars.outputs.sif_name }}.sha256"
 
+      - name: Resolve SIF upload strategy
+        id: sif_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          sif_file="${{ steps.vars.outputs.sif_name }}"
+          limit_bytes=2147483648
+          size_bytes=$(stat -c '%s' "${sif_file}")
+          echo "size_bytes=${size_bytes}" >> "${GITHUB_OUTPUT}"
+          if (( size_bytes < limit_bytes )); then
+            echo "upload_to_release=1" >> "${GITHUB_OUTPUT}"
+          else
+            echo "upload_to_release=0" >> "${GITHUB_OUTPUT}"
+            notice_file="${sif_file}.download.txt"
+            {
+              echo "SIF is larger than GitHub Release asset size limit (2 GiB)."
+              echo "Download it from this workflow run artifact:"
+              echo "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            } > "${notice_file}"
+            echo "notice_file=${notice_file}" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Upload SIF files to GitHub Release
+        if: steps.sif_meta.outputs.upload_to_release == '1'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -148,6 +171,27 @@ jobs:
           gh release upload "${{ steps.vars.outputs.release_tag }}" \
             "${{ steps.vars.outputs.sif_name }}" \
             "${{ steps.vars.outputs.sif_name }}.sha256" \
+            --clobber
+
+      - name: Upload large SIF as workflow artifact
+        if: steps.sif_meta.outputs.upload_to_release != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.vars.outputs.sif_name }}
+          path: ${{ steps.vars.outputs.sif_name }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload checksum and download notice to GitHub Release
+        if: steps.sif_meta.outputs.upload_to_release != '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "${{ steps.vars.outputs.release_tag }}" \
+            "${{ steps.vars.outputs.sif_name }}.sha256" \
+            "${{ steps.sif_meta.outputs.notice_file }}" \
             --clobber
 
       - name: Summary
@@ -160,7 +204,17 @@ jobs:
             echo "- ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.immutable_tag }}"
             echo "- ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha_tag }}"
             echo ""
-            echo "Uploaded release assets:"
-            echo "- ${{ steps.vars.outputs.sif_name }}"
-            echo "- ${{ steps.vars.outputs.sif_name }}.sha256"
+            echo "SIF size (bytes): ${{ steps.sif_meta.outputs.size_bytes }}"
+            if [[ "${{ steps.sif_meta.outputs.upload_to_release }}" == "1" ]]; then
+              echo "Uploaded release assets:"
+              echo "- ${{ steps.vars.outputs.sif_name }}"
+              echo "- ${{ steps.vars.outputs.sif_name }}.sha256"
+            else
+              echo "SIF exceeded GitHub Release size limit and was uploaded as a workflow artifact."
+              echo "Uploaded release assets:"
+              echo "- ${{ steps.vars.outputs.sif_name }}.sha256"
+              echo "- ${{ steps.sif_meta.outputs.notice_file }}"
+              echo "Workflow artifact:"
+              echo "- ${{ steps.vars.outputs.sif_name }}"
+            fi
           } >> "${GITHUB_STEP_SUMMARY}"
