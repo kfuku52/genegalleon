@@ -429,9 +429,7 @@ From repository root:
 ```bash
 # 0) Prepare container image (required)
 # Recommended: pull fixed GHCR tag and build local SIF
-GHCR_TAG="YYYYMMDD-<sha7>"  # example: 20260304-abcd123
-apptainer build genegalleon.sif \
-  docker://ghcr.io/kfuku52/genegalleon:${GHCR_TAG}
+apptainer build genegalleon.sif docker://ghcr.io/kfuku52/genegalleon
 
 # Alternative: build image + SIF locally
 IMAGE=local/genegalleon TAG=dev ./container/gg_container_build_entrypoint.sh
