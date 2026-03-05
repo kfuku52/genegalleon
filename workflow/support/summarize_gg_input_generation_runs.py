@@ -10,7 +10,6 @@ DEFAULT_COLUMNS = [
     "started_utc",
     "exit_code",
     "provider",
-    "stage_manifest_status",
     "stage_format_status",
     "stage_validate_status",
     "num_species_cds",
@@ -86,8 +85,7 @@ def format_summary(rows, last_n):
     lines.append("latest_exit_code\t{}".format(latest.get("exit_code", "")))
     lines.append("latest_provider\t{}".format(latest.get("provider", "")))
     lines.append(
-        "latest_stage_status\tmanifest={};format={};validate={}".format(
-            latest.get("stage_manifest_status", ""),
+        "latest_stage_status\tformat={};validate={}".format(
             latest.get("stage_format_status", ""),
             latest.get("stage_validate_status", ""),
         )

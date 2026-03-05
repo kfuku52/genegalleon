@@ -1,0 +1,214 @@
+name: download-plan
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: download-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install openpyxl
+
+      - name: Prepare seed input root
+        shell: bash
+        run: |
+          set -euo pipefail
+          seed_root="${RUNNER_TEMP}/download_plan_seed"
+          rm -rf "${seed_root}"
+
+          mkdir -p "${seed_root}/Ensembl/original_files"
+          cat > "${seed_root}/Ensembl/original_files/homo_sapiens.GRCh38.cds.all.fa" <<'EOF'
+          >ENSG000001
+          ATGAAATTT
+          EOF
+          cat > "${seed_root}/Ensembl/original_files/homo_sapiens.GRCh38.112.gff3" <<'EOF'
+          chr1	src	gene	1	9	.	+	.	ID=ENSG000001
+          EOF
+          cat > "${seed_root}/Ensembl/original_files/homo_sapiens.GRCh38.dna.primary_assembly.fa" <<'EOF'
+          >chr1
+          ATGCATGC
+          EOF
+
+          mkdir -p "${seed_root}/20230216_EnsemblPlants/original_files"
+          cat > "${seed_root}/20230216_EnsemblPlants/original_files/Ostreococcus_lucimarinus.ASM9206v1.cds.all.fa" <<'EOF'
+          >OSTLU_00001
+          ATGAAATTT
+          EOF
+          cat > "${seed_root}/20230216_EnsemblPlants/original_files/Ostreococcus_lucimarinus.ASM9206v1.56.gff3" <<'EOF'
+          chr1	src	gene	1	9	.	+	.	ID=OSTLU_00001
+          EOF
+          cat > "${seed_root}/20230216_EnsemblPlants/original_files/Ostreococcus_lucimarinus.ASM9206v1.dna.toplevel.fa" <<'EOF'
+          >chr1
+          ATGCATGC
+          EOF
+
+          mkdir -p "${seed_root}/NCBI_Genome/species_wise_original/GCF_000001405.40"
+          cat > "${seed_root}/NCBI_Genome/species_wise_original/GCF_000001405.40/GCF_000001405.40_GRCh38.p14_cds_from_genomic.fna" <<'EOF'
+          >lcl|NC_000001.11_cds_NP_000001.1_1 [gene=ABC1] [db_xref=GeneID:111]
+          ATGAAATTT
+          EOF
+          cat > "${seed_root}/NCBI_Genome/species_wise_original/GCF_000001405.40/GCF_000001405.40_GRCh38.p14_genomic.gff" <<'EOF'
+          chr1	src	gene	1	9	.	+	.	ID=gene1
+          EOF
+          cat > "${seed_root}/NCBI_Genome/species_wise_original/GCF_000001405.40/GCF_000001405.40_GRCh38.p14_genomic.fna" <<'EOF'
+          >chr1
+          ATGCATGC
+          EOF
+
+          mkdir -p "${seed_root}/NCBI_RefSeq/species_wise_original/GCF_000001405.40"
+          cp "${seed_root}/NCBI_Genome/species_wise_original/GCF_000001405.40/GCF_000001405.40_GRCh38.p14_cds_from_genomic.fna" \
+             "${seed_root}/NCBI_RefSeq/species_wise_original/GCF_000001405.40/GCF_000001405.40_GRCh38.p14_cds_from_genomic.fna"
+          cp "${seed_root}/NCBI_Genome/species_wise_original/GCF_000001405.40/GCF_000001405.40_GRCh38.p14_genomic.gff" \
+             "${seed_root}/NCBI_RefSeq/species_wise_original/GCF_000001405.40/GCF_000001405.40_GRCh38.p14_genomic.gff"
+          cp "${seed_root}/NCBI_Genome/species_wise_original/GCF_000001405.40/GCF_000001405.40_GRCh38.p14_genomic.fna" \
+             "${seed_root}/NCBI_RefSeq/species_wise_original/GCF_000001405.40/GCF_000001405.40_GRCh38.p14_genomic.fna"
+
+          mkdir -p "${seed_root}/NCBI_GenBank/species_wise_original/GCA_000001405.29"
+          cat > "${seed_root}/NCBI_GenBank/species_wise_original/GCA_000001405.29/GCA_000001405.29_GRCh38.p14_cds_from_genomic.fna" <<'EOF'
+          >lcl|NC_000001.11_cds_NP_000001.1_1 [gene=ABC1] [db_xref=GeneID:111]
+          ATGAAATTT
+          EOF
+          cat > "${seed_root}/NCBI_GenBank/species_wise_original/GCA_000001405.29/GCA_000001405.29_GRCh38.p14_genomic.gff" <<'EOF'
+          chr1	src	gene	1	9	.	+	.	ID=gene1
+          EOF
+          cat > "${seed_root}/NCBI_GenBank/species_wise_original/GCA_000001405.29/GCA_000001405.29_GRCh38.p14_genomic.fna" <<'EOF'
+          >chr1
+          ATGCATGC
+          EOF
+
+          mkdir -p "${seed_root}/CoGe/species_wise_original/Arabidopsis_thaliana"
+          cat > "${seed_root}/CoGe/species_wise_original/Arabidopsis_thaliana/Arabidopsis_thaliana.coge.gid24739.cds.fa" <<'EOF'
+          >AT1G01010_t1
+          ATGAAATTT
+          EOF
+          cat > "${seed_root}/CoGe/species_wise_original/Arabidopsis_thaliana/Arabidopsis_thaliana.gid24739.gene.gff3" <<'EOF'
+          chr1	src	gene	1	9	.	+	.	ID=AT1G01010
+          EOF
+          cat > "${seed_root}/CoGe/species_wise_original/Arabidopsis_thaliana/Arabidopsis_thaliana.coge.gid24739.genome.fa" <<'EOF'
+          >chr1
+          ATGCATGC
+          EOF
+
+          mkdir -p "${seed_root}/CNGB/species_wise_original/Streptococcus_urinalis"
+          cat > "${seed_root}/CNGB/species_wise_original/Streptococcus_urinalis/Streptococcus_urinalis.cds.fa" <<'EOF'
+          >SURI_0001_t1
+          ATGAAATTT
+          EOF
+          cat > "${seed_root}/CNGB/species_wise_original/Streptococcus_urinalis/Streptococcus_urinalis.gene.gff3" <<'EOF'
+          chr1	src	gene	1	9	.	+	.	ID=SURI_0001
+          EOF
+          cat > "${seed_root}/CNGB/species_wise_original/Streptococcus_urinalis/Streptococcus_urinalis.genome.fa" <<'EOF'
+          >chr1
+          ATGCATGC
+          EOF
+
+          mkdir -p "${seed_root}/Local/species_wise_original/Hydrocotyle_leucocephala_HAP1v2.1"
+          cat > "${seed_root}/Local/species_wise_original/Hydrocotyle_leucocephala_HAP1v2.1/HleucocephalaHAP1_768_v2.1.cds_primaryTranscriptOnly.fa" <<'EOF'
+          >HyleuH1.06G006800.1
+          ATGAAATTT
+          EOF
+          cat > "${seed_root}/Local/species_wise_original/Hydrocotyle_leucocephala_HAP1v2.1/HleucocephalaHAP1_768_v2.1.gene.gff3" <<'EOF'
+          chr1	src	gene	1	9	.	+	.	ID=HyleuH1.06G006800
+          EOF
+
+          echo "seed_root=${seed_root}" >> "${GITHUB_ENV}"
+
+      - name: Build id options snapshot
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist dist/prev
+
+          tag="download-plan-latest"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release download "${tag}" --pattern "id_options_snapshot.json" --dir dist/prev || true
+          fi
+
+          fallback_args=()
+          if [[ -s dist/prev/id_options_snapshot.json ]]; then
+            fallback_args+=(--fallback-snapshot dist/prev/id_options_snapshot.json)
+          fi
+
+          python workflow/support/build_id_options_snapshot.py \
+            --output dist/id_options_snapshot.json \
+            --input-dir "${seed_root}" \
+            "${fallback_args[@]}"
+
+      - name: Build latest download plan XLSX
+        shell: bash
+        run: |
+          set -euo pipefail
+          python workflow/support/build_download_manifest.py \
+            --provider all \
+            --input-dir "${seed_root}" \
+            --id-options-snapshot dist/id_options_snapshot.json \
+            --output dist/download_plan.xlsx
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: download_plan_${{ github.sha }}
+          path: |
+            dist/download_plan.xlsx
+            dist/id_options_snapshot.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to rolling release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="download-plan-latest"
+          title="download_plan.xlsx (latest)"
+          notes="Auto-updated latest download plan template from ${GITHUB_SHA}."
+
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            gh release create "${tag}" --title "${title}" --notes "${notes}"
+          fi
+          gh release upload "${tag}" dist/download_plan.xlsx --clobber
+          gh release upload "${tag}" dist/id_options_snapshot.json --clobber
+
+      - name: Summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "download_plan.xlsx was generated and published."
+            echo ""
+            echo "- Release asset:"
+            echo "  https://github.com/${GITHUB_REPOSITORY}/releases/tag/download-plan-latest"
+            echo "- Direct download URL:"
+            echo "  https://github.com/${GITHUB_REPOSITORY}/releases/download/download-plan-latest/download_plan.xlsx"
+            echo "- Snapshot URL:"
+            echo "  https://github.com/${GITHUB_REPOSITORY}/releases/download/download-plan-latest/id_options_snapshot.json"
+            echo "- This run artifact:"
+            echo "  https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "${GITHUB_STEP_SUMMARY}"

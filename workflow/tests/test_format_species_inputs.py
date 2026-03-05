@@ -28,7 +28,7 @@ def test_format_species_inputs_with_small_fixture_all_providers(tmp_path):
     completed = run_script(
         "--provider",
         "all",
-        "--dataset-root",
+        "--input-dir",
         str(SMALL_DATASET_ROOT),
         "--species-cds-dir",
         str(out_cds),
@@ -94,8 +94,8 @@ def test_format_species_inputs_strict_mode_fails_on_missing_pair(tmp_path):
     completed = run_script(
         "--provider",
         "ensemblplants",
-        "--dataset-root",
-        str(dataset_copy),
+        "--input-dir",
+        str(dataset_copy / "20230216_EnsemblPlants" / "original_files"),
         "--species-cds-dir",
         str(out_cds),
         "--species-gff-dir",
@@ -115,8 +115,8 @@ def test_species_summary_is_incremental_and_persistent_across_runs(tmp_path):
     first = run_script(
         "--provider",
         "ensemblplants",
-        "--dataset-root",
-        str(SMALL_DATASET_ROOT),
+        "--input-dir",
+        str(SMALL_DATASET_ROOT / "20230216_EnsemblPlants" / "original_files"),
         "--species-cds-dir",
         str(out_cds),
         "--species-gff-dir",
@@ -138,8 +138,8 @@ def test_species_summary_is_incremental_and_persistent_across_runs(tmp_path):
     second = run_script(
         "--provider",
         "phycocosm",
-        "--dataset-root",
-        str(SMALL_DATASET_ROOT),
+        "--input-dir",
+        str(SMALL_DATASET_ROOT / "PhycoCosm" / "species_wise_original"),
         "--species-cds-dir",
         str(out_cds),
         "--species-gff-dir",

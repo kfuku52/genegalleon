@@ -1,7 +1,0 @@
-id	provider	species_key	cds_url	gff_url	genome_url	cds_filename	gff_filename	genome_filename
-Ostreococcus_lucimarinus	ensemblplants	Ostreococcus_lucimarinus						
-Microglena_spYARC_MicrYARC1	phycocosm	Microglena_spYARC_MicrYARC1						
-Hydrocotyle_leucocephala_HleucocephalaHAP1_768_v2.1	phytozome	Hydrocotyle_leucocephala_HleucocephalaHAP1_768_v2.1						
-GCF_000091205.1	ncbi	Cyanidioschyzon_merolae						
-coge:arabidopsis_thaliana_v1	coge	Arabidopsis_thaliana						
-cngb:GWHAAAA00000000	cngb	Arabidopsis_thaliana						

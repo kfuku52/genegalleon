@@ -441,11 +441,8 @@ def test_input_generation_entrypoint_forwards_env_driven_overrides():
 
     assert "for gg_input_var_name in ${!GG_INPUT_@}; do" in text
     assert 'gg_export_var_to_container_env_if_set "${gg_input_var_name}"' in text
-    assert 'gg_export_var_to_container_env_if_set "GG_DATASET_ROOT"' in text
     assert 'export "SINGULARITYENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
     assert 'export "APPTAINERENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
-    assert 'export "SINGULARITYENV_GG_DATASET_ROOT=${GG_DATASET_ROOT}"' not in text
-    assert 'export "APPTAINERENV_GG_DATASET_ROOT=${GG_DATASET_ROOT}"' not in text
 
 
 def test_gg_util_has_common_forward_config_export_helpers():

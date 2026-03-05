@@ -37,11 +37,10 @@ gg_image="${script_dir}/../genegalleon.sif" # path to the singularity image
 
 ### Start: Modify this block to tailor your analysis ###
 
-run_build_manifest=1
 run_format_inputs=1
 run_validate_inputs=1
 
-provider="all" # all|ensemblplants|phycocosm|phytozome|ncbi|coge|cngb
+provider="all" # all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|local
 strict=0
 overwrite=0
 download_only=0
@@ -52,17 +51,16 @@ download_timeout=120
 auth_bearer_token_env="" # e.g., GFE_DOWNLOAD_BEARER_TOKEN
 http_header="" # e.g., "User-Agent: genegalleon-input-generation"
 
-# Optional local raw dataset roots and manifests.
-dataset_root=""
+# Optional local raw input directory and manifest.
 input_dir=""
 download_manifest=""
 download_dir=""
-manifest_output=""
 summary_output=""
 species_cds_dir=""
 species_gff_dir=""
 species_genome_dir=""
 species_summary_output=""
+resolved_manifest_output=""
 
 ### End: Modify this block to tailor your analysis ###
 
@@ -75,8 +73,6 @@ for gg_input_var_name in ${!GG_INPUT_@}; do
   gg_export_var_to_container_env_if_set "${gg_input_var_name}"
 done
 
-# Optional env-driven defaults consumed by gg_input_generation_core.sh.
-gg_export_var_to_container_env_if_set "GG_DATASET_ROOT"
 gg_scheduler_runtime_prelude
 unset_singularity_envs
 if ! set_singularity_command; then
@@ -85,18 +81,6 @@ fi
 variable_SGEnizer
 set_singularityenv
 gg_print_scheduler_runtime_summary
-
-if [[ -n "${GG_INPUT_DATASET_HOST_PATH:-}" ]]; then
-  if [[ ! -d "${GG_INPUT_DATASET_HOST_PATH}" ]]; then
-    echo "GG_INPUT_DATASET_HOST_PATH was set but directory was not found: ${GG_INPUT_DATASET_HOST_PATH}"
-    exit 1
-  fi
-  dataset_host_path=$(cd "$(dirname "${GG_INPUT_DATASET_HOST_PATH}")" && pwd -P)/$(basename "${GG_INPUT_DATASET_HOST_PATH}")
-  gg_add_container_bind_mount "${dataset_host_path}:/external/gfe_dataset"
-  export SINGULARITYENV_GG_DATASET_ROOT="/external/gfe_dataset"
-  export APPTAINERENV_GG_DATASET_ROOT="/external/gfe_dataset"
-  echo "Binding external dataset root: ${dataset_host_path} -> /external/gfe_dataset"
-fi
 
 mkdir -p "${dir_pg}"
 cd "${dir_pg}"

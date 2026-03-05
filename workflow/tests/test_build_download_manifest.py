@@ -1,8 +1,11 @@
 from pathlib import Path
 import csv
+import json
 import shutil
 import subprocess
 import sys
+
+from openpyxl import load_workbook
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "build_download_manifest.py"
@@ -19,16 +22,55 @@ def run_script(*args):
 
 
 def read_manifest(path):
+    if path.suffix.lower() == ".xlsx":
+        workbook = load_workbook(path, read_only=True, data_only=True)
+        try:
+            sheet = workbook.active
+            rows = list(sheet.iter_rows(values_only=True))
+        finally:
+            workbook.close()
+        if len(rows) == 0:
+            return []
+        headers = [str(value or "").strip() for value in rows[0]]
+        out = []
+        for values in rows[1:]:
+            if values is None:
+                continue
+            record = {}
+            nonempty = False
+            for idx, key in enumerate(headers):
+                if key == "":
+                    continue
+                value = values[idx] if idx < len(values) else ""
+                text = str(value or "").strip()
+                if text != "":
+                    nonempty = True
+                record[key] = text
+            if nonempty:
+                out.append(record)
+        return out
     with open(path, "rt", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle, delimiter="\t"))
 
 
+def read_list_column_values(sheet, column):
+    values = []
+    row_idx = 1
+    while True:
+        value = sheet.cell(row=row_idx, column=column).value
+        if value is None or str(value).strip() == "":
+            break
+        values.append(str(value).strip())
+        row_idx += 1
+    return values
+
+
 def test_build_download_manifest_from_small_fixture_all(tmp_path):
-    out = tmp_path / "download_manifest.tsv"
+    out = tmp_path / "download_manifest.xlsx"
     completed = run_script(
         "--provider",
         "all",
-        "--dataset-root",
+        "--input-dir",
         str(SMALL_DATASET_ROOT),
         "--output",
         str(out),
@@ -37,9 +79,9 @@ def test_build_download_manifest_from_small_fixture_all(tmp_path):
     assert out.exists()
 
     rows = read_manifest(out)
-    assert len(rows) == 3
+    assert len(rows) == 1
     providers = sorted([row["provider"] for row in rows])
-    assert providers == ["ensemblplants", "phycocosm", "phytozome"]
+    assert providers == ["ensemblplants"]
 
     for row in rows:
         assert row["cds_url"].startswith("file://")
@@ -53,14 +95,14 @@ def test_build_download_manifest_from_small_fixture_all(tmp_path):
 def test_build_download_manifest_strict_fails_on_missing_pair(tmp_path):
     dataset_copy = tmp_path / "small_dataset_copy"
     shutil.copytree(SMALL_DATASET_ROOT, dataset_copy)
-    missing_gff = dataset_copy / "PhycoCosm" / "species_wise_original" / "Microglena_spYARC_MicrYARC1" / "MicrYARC1_GeneCatalog_genes_20220803.gff3"
+    missing_gff = dataset_copy / "20230216_EnsemblPlants" / "original_files" / "Ostreococcus_lucimarinus.ASM9206v1.56.gff3"
     missing_gff.unlink()
 
-    out = tmp_path / "download_manifest.tsv"
+    out = tmp_path / "download_manifest.xlsx"
     completed = run_script(
         "--provider",
-        "phycocosm",
-        "--dataset-root",
+        "ensemblplants",
+        "--input-dir",
         str(dataset_copy),
         "--output",
         str(out),
@@ -71,54 +113,26 @@ def test_build_download_manifest_strict_fails_on_missing_pair(tmp_path):
     assert len(rows) == 0
 
 
-def test_build_download_manifest_ncbi_provider_from_species_dir_fixture(tmp_path):
-    dataset_root = tmp_path / "dataset"
-    ncbi_species_dir = dataset_root / "NCBI_Genome" / "species_wise_original" / "GCF_000001405.40"
-    ncbi_species_dir.mkdir(parents=True)
-    (ncbi_species_dir / "GCF_000001405.40_GRCh38.p14_cds_from_genomic.fna.gz").write_bytes(b"dummy")
-    (ncbi_species_dir / "GCF_000001405.40_GRCh38.p14_genomic.gff.gz").write_bytes(b"dummy")
-    (ncbi_species_dir / "GCF_000001405.40_GRCh38.p14_genomic.fna.gz").write_bytes(b"dummy")
-
-    out = tmp_path / "download_manifest.tsv"
-    completed = run_script(
-        "--provider",
-        "ncbi",
-        "--dataset-root",
-        str(dataset_root),
-        "--output",
-        str(out),
+def test_build_download_manifest_ncbi_like_provider_from_species_dir_fixture(tmp_path):
+    input_root = tmp_path / "dataset"
+    fixtures = (
+        ("ncbi", "NCBI_Genome", "GCF_000001405.40", "GCF_000001405.40_GRCh38.p14"),
+        ("refseq", "NCBI_RefSeq", "GCF_000001405.40", "GCF_000001405.40_GRCh38.p14"),
+        ("genbank", "NCBI_GenBank", "GCA_000001405.29", "GCA_000001405.29_GRCh38.p14"),
     )
-    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    rows = read_manifest(out)
-    assert len(rows) == 1
-    assert rows[0]["provider"] == "ncbi"
-    assert rows[0]["id"] == "GCF_000001405.40"
-    assert rows[0]["species_key"] == "GCF_000001405.40"
-    assert rows[0]["genome_url"].startswith("file://")
-    assert rows[0]["genome_filename"] == "GCF_000001405.40_GRCh38.p14_genomic.fna.gz"
-
-
-def test_build_download_manifest_coge_and_cngb_provider_from_species_dir_fixture(tmp_path):
-    dataset_root = tmp_path / "dataset"
-    species_key = "Arabidopsis_thaliana"
-    provider_dir_name = {"coge": "CoGe", "cngb": "CNGB"}
-
-    for provider in ("coge", "cngb"):
-        species_dir = dataset_root / provider_dir_name[provider] / "species_wise_original" / species_key
+    for provider, provider_dir, accession, stem in fixtures:
+        species_dir = input_root / provider_dir / "species_wise_original" / accession
         species_dir.mkdir(parents=True, exist_ok=True)
-        (species_dir / (species_key + ".cds.fa")).write_text(">AT1G01010_t1\nATGAA\n", encoding="utf-8")
-        (species_dir / (species_key + ".gene.gff3")).write_text(
-            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=AT1G01010\n",
-            encoding="utf-8",
-        )
-        (species_dir / (species_key + ".genome.fa")).write_text(">chr1\nATGCATGC\n", encoding="utf-8")
+        (species_dir / (stem + "_cds_from_genomic.fna.gz")).write_bytes(b"dummy")
+        (species_dir / (stem + "_genomic.gff.gz")).write_bytes(b"dummy")
+        (species_dir / (stem + "_genomic.fna.gz")).write_bytes(b"dummy")
 
-        out = tmp_path / ("download_manifest_{}.tsv".format(provider))
+        out = tmp_path / ("download_manifest_{}.xlsx".format(provider))
         completed = run_script(
             "--provider",
             provider,
-            "--dataset-root",
-            str(dataset_root),
+            "--input-dir",
+            str(input_root),
             "--output",
             str(out),
         )
@@ -126,8 +140,292 @@ def test_build_download_manifest_coge_and_cngb_provider_from_species_dir_fixture
         rows = read_manifest(out)
         assert len(rows) == 1
         assert rows[0]["provider"] == provider
-        assert rows[0]["id"] == species_key
+        assert rows[0]["id"] == accession
+        assert rows[0]["species_key"] == accession
+        assert rows[0]["genome_url"].startswith("file://")
+        assert rows[0]["genome_filename"] == stem + "_genomic.fna.gz"
+
+
+def test_build_download_manifest_ensembl_provider_from_flat_fixture(tmp_path):
+    input_root = tmp_path / "dataset"
+    ensembl_dir = input_root / "Ensembl" / "original_files"
+    ensembl_dir.mkdir(parents=True)
+    (ensembl_dir / "homo_sapiens.GRCh38.cds.all.fa.gz").write_bytes(b"dummy")
+    (ensembl_dir / "homo_sapiens.GRCh38.112.gff3.gz").write_bytes(b"dummy")
+    (ensembl_dir / "homo_sapiens.GRCh38.dna.primary_assembly.fa.gz").write_bytes(b"dummy")
+
+    out = tmp_path / "download_manifest_ensembl.xlsx"
+    completed = run_script(
+        "--provider",
+        "ensembl",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    rows = read_manifest(out)
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "ensembl"
+    assert rows[0]["id"] == "homo_sapiens"
+    assert rows[0]["species_key"] == "homo_sapiens"
+    assert rows[0]["cds_filename"] == "homo_sapiens.GRCh38.cds.all.fa.gz"
+    assert rows[0]["gff_filename"] == "homo_sapiens.GRCh38.112.gff3.gz"
+    assert rows[0]["genome_filename"] == "homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"
+
+
+def test_build_download_manifest_coge_and_cngb_provider_from_species_dir_fixture(tmp_path):
+    input_root = tmp_path / "dataset"
+    species_key = "Arabidopsis_thaliana"
+    provider_dir_name = {"coge": "CoGe", "cngb": "CNGB"}
+
+    for provider in ("coge", "cngb"):
+        species_dir = input_root / provider_dir_name[provider] / "species_wise_original" / species_key
+        species_dir.mkdir(parents=True, exist_ok=True)
+        if provider == "coge":
+            cds_name = "Arabidopsis_thaliana.coge.gid24739.cds.fa"
+            gff_name = "Arabidopsis_thaliana.gid24739.gff3"
+            genome_name = "Arabidopsis_thaliana.coge.gid24739.genome.fa"
+        else:
+            cds_name = species_key + ".cds.fa"
+            gff_name = species_key + ".gene.gff3"
+            genome_name = species_key + ".genome.fa"
+        (species_dir / cds_name).write_text(">AT1G01010_t1\nATGAA\n", encoding="utf-8")
+        (species_dir / gff_name).write_text(
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=AT1G01010\n",
+            encoding="utf-8",
+        )
+        (species_dir / genome_name).write_text(">chr1\nATGCATGC\n", encoding="utf-8")
+
+        out = tmp_path / ("download_manifest_{}.xlsx".format(provider))
+        completed = run_script(
+            "--provider",
+            provider,
+            "--input-dir",
+            str(input_root),
+            "--output",
+            str(out),
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+        rows = read_manifest(out)
+        assert len(rows) == 1
+        assert rows[0]["provider"] == provider
+        expected_id = "24739" if provider == "coge" else species_key
+        assert rows[0]["id"] == expected_id
         assert rows[0]["species_key"] == species_key
-        assert rows[0]["cds_filename"] == species_key + ".cds.fa"
-        assert rows[0]["gff_filename"] == species_key + ".gene.gff3"
-        assert rows[0]["genome_filename"] == species_key + ".genome.fa"
+        assert rows[0]["cds_filename"] == cds_name
+        assert rows[0]["gff_filename"] == gff_name
+        assert rows[0]["genome_filename"] == genome_name
+
+
+def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
+    out = tmp_path / "download_manifest.xlsx"
+    completed = run_script(
+        "--provider",
+        "all",
+        "--input-dir",
+        str(SMALL_DATASET_ROOT),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    workbook = load_workbook(out)
+    try:
+        sheet = workbook["download_plan"]
+        headers = [cell.value for cell in sheet[1]]
+        assert headers[0] == "provider"
+        assert headers[1] == "id"
+
+        validations = list(sheet.data_validations.dataValidation)
+        provider_validation = next(v for v in validations if str(v.sqref) == "A2:A5000")
+        id_validation = next(v for v in validations if str(v.sqref) == "B2:B5000")
+        assert "_lists!$A$1:$A$" in str(provider_validation.formula1)
+        assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
+
+        list_sheet = workbook["_lists"]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 12)]
+        assert provider_values == [
+            "ensembl",
+            "ensemblplants",
+            "ncbi",
+            "refseq",
+            "genbank",
+            "coge",
+            "cngb",
+            "flybase",
+            "wormbase",
+            "vectorbase",
+            "local",
+        ]
+        assert "id_opts_ensembl" in workbook.defined_names
+        assert "id_opts_ncbi" in workbook.defined_names
+        assert "id_opts_coge" in workbook.defined_names
+        assert "id_opts_local" in workbook.defined_names
+    finally:
+        workbook.close()
+
+
+def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
+    input_root = tmp_path / "dataset"
+
+    coge_species_gid = (
+        ("Arabidopsis_thaliana", "24739"),
+        ("Oryza_sativa", "24740"),
+    )
+    for species, gid in coge_species_gid:
+        species_dir = input_root / "CoGe" / "species_wise_original" / species
+        species_dir.mkdir(parents=True, exist_ok=True)
+        (species_dir / (species + ".coge.gid{}.cds.fa".format(gid))).write_text(">g1.t1\nATG\n", encoding="utf-8")
+        (species_dir / (species + ".gid{}.gff3".format(gid))).write_text(
+            "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=g1\n",
+            encoding="utf-8",
+        )
+
+    local_species = ("Hydrocotyle_leucocephala_HAP1v2.1", "Marchantia_polymorpha_v6")
+    for species in local_species:
+        species_dir = input_root / "Local" / "species_wise_original" / species
+        species_dir.mkdir(parents=True, exist_ok=True)
+        (species_dir / (species + ".cds.fa")).write_text(">g1.t1\nATG\n", encoding="utf-8")
+        (species_dir / (species + ".gene.gff3")).write_text("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=g1\n", encoding="utf-8")
+
+    out = tmp_path / "download_manifest_provider_lists.xlsx"
+    completed = run_script(
+        "--provider",
+        "all",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    workbook = load_workbook(out)
+    try:
+        list_sheet = workbook["_lists"]
+        coge_values = read_list_column_values(list_sheet, 7)
+        local_values = read_list_column_values(list_sheet, 12)
+        ncbi_values = read_list_column_values(list_sheet, 4)
+
+        assert coge_values == ["24739 (Arabidopsis thaliana)"]
+        assert local_values == [
+            "Hydrocotyle_leucocephala_HAP1v2.1",
+            "Marchantia_polymorpha_v6",
+        ]
+        assert "GCF_000001405.40 (Homo sapiens)" in ncbi_values
+        assert "GCA_000001405.29 (Homo sapiens)" in ncbi_values
+    finally:
+        workbook.close()
+
+
+def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_path):
+    out = tmp_path / "download_manifest.xlsx"
+    snapshot = tmp_path / "id_options_snapshot.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "providers": {
+                    "ensembl": [
+                        {"id": "homo_sapiens", "species": "Homo sapiens"},
+                        {"id": "pan_troglodytes", "species": "Pan troglodytes"},
+                    ],
+                    "ensemblplants": [
+                        {"id": "arabidopsis_thaliana", "species": "Arabidopsis thaliana"},
+                    ],
+                    "flybase": [
+                        {"id": "dmel_r6.66", "species": "Drosophila melanogaster"},
+                    ],
+                    "wormbase": [
+                        {"id": "caenorhabditis_elegans_prjna13758", "species": "Caenorhabditis elegans"},
+                    ],
+                    "vectorbase": [
+                        {"id": "AgambiaePEST", "species": "Anopheles gambiae"},
+                    ],
+                    "local": [
+                        {"id": "/data/local_species_1", "species": "Local species 1"},
+                        {"id": "/data/local_species_2", "species": "Local species 2"},
+                    ],
+                    "ncbi": [
+                        {"id": "FAKE_NCBI_ID", "species": "Fake species"},
+                    ],
+                    "coge": [
+                        {"id": "99999", "species": "Fake coge species"},
+                    ],
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = run_script(
+        "--provider",
+        "all",
+        "--input-dir",
+        str(SMALL_DATASET_ROOT),
+        "--output",
+        str(out),
+        "--id-options-snapshot",
+        str(snapshot),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    workbook = load_workbook(out)
+    try:
+        list_sheet = workbook["_lists"]
+        ensembl_values = read_list_column_values(list_sheet, 2)
+        ensemblplants_values = read_list_column_values(list_sheet, 3)
+        ncbi_values = read_list_column_values(list_sheet, 4)
+        coge_values = read_list_column_values(list_sheet, 7)
+        flybase_values = read_list_column_values(list_sheet, 9)
+        wormbase_values = read_list_column_values(list_sheet, 10)
+        vectorbase_values = read_list_column_values(list_sheet, 11)
+        local_values = read_list_column_values(list_sheet, 12)
+
+        assert ensembl_values == [
+            "homo_sapiens (Homo sapiens)",
+            "pan_troglodytes (Pan troglodytes)",
+        ]
+        assert ensemblplants_values == [
+            "arabidopsis_thaliana (Arabidopsis thaliana)",
+        ]
+        assert "FAKE_NCBI_ID (Fake species)" not in ncbi_values
+        assert "GCF_000001405.40 (Homo sapiens)" in ncbi_values
+        assert coge_values == ["24739 (Arabidopsis thaliana)"]
+        assert flybase_values == ["dmel_r6.66 (Drosophila melanogaster)"]
+        assert wormbase_values == ["caenorhabditis_elegans_prjna13758 (Caenorhabditis elegans)"]
+        assert vectorbase_values == ["AgambiaePEST (Anopheles gambiae)"]
+        assert local_values == ["/data/local_species_1", "/data/local_species_2"]
+    finally:
+        workbook.close()
+
+
+def test_build_download_manifest_local_provider_from_phytozome_like_fixture(tmp_path):
+    input_root = tmp_path / "dataset"
+    local_species_dir = input_root / "Local" / "species_wise_original" / "Hydrocotyle_leucocephala_HAP1v2.1"
+    local_species_dir.mkdir(parents=True)
+
+    source_dir = SMALL_DATASET_ROOT / "Phytozome" / "species_wise_original" / "Hydrocotyle_leucocephala_HAP1v2.1"
+    for name in (
+        "HleucocephalaHAP1_768_v2.1.cds_primaryTranscriptOnly.fa",
+        "HleucocephalaHAP1_768_v2.1.gene.gff3",
+    ):
+        shutil.copy2(source_dir / name, local_species_dir / name)
+
+    out = tmp_path / "download_manifest_local.xlsx"
+    completed = run_script(
+        "--provider",
+        "local",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    rows = read_manifest(out)
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "local"
+    assert rows[0]["id"] == "Hydrocotyle_leucocephala_HAP1v2.1"
+    assert rows[0]["cds_filename"].endswith(".cds_primaryTranscriptOnly.fa")
+    assert rows[0]["gff_filename"].endswith(".gene.gff3")

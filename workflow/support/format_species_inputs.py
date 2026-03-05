@@ -13,8 +13,13 @@ import sys
 import threading
 import time
 import zipfile
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
+
+try:
+    from openpyxl import load_workbook
+except Exception:  # pragma: no cover - exercised in runtime environments without openpyxl
+    load_workbook = None
 
 
 COMMON_REPLACEMENTS = (
@@ -49,28 +54,84 @@ NCBI_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^GC[AF]_[0-9]+\.[0-9]+$", re.IGNO
 ENSEMBL_GENE_ID_PATTERN = re.compile(r"^ENS[A-Z0-9]*G[0-9]+(?:\.[0-9]+)?$", re.IGNORECASE)
 COGE_ID_HINT_PATTERN = re.compile(r"^coge[:_].+", re.IGNORECASE)
 CNGB_ID_HINT_PATTERN = re.compile(r"^cngb[:_].+", re.IGNORECASE)
+ENSEMBL_ID_HINT_PATTERN = re.compile(r"^ensembl[:_].+", re.IGNORECASE)
+COGE_GID_PATTERN = re.compile(r"^[0-9]+$")
+CNGB_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^(?:CNA[0-9]+|GWH[A-Z0-9]+)$", re.IGNORECASE)
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
+    "ensembl": Path("Ensembl") / "original_files",
     "ensemblplants": Path("20230216_EnsemblPlants") / "original_files",
     "phycocosm": Path("PhycoCosm") / "species_wise_original",
     "phytozome": Path("Phytozome") / "species_wise_original",
     "ncbi": Path("NCBI_Genome") / "species_wise_original",
+    "refseq": Path("NCBI_RefSeq") / "species_wise_original",
+    "genbank": Path("NCBI_GenBank") / "species_wise_original",
     "coge": Path("CoGe") / "species_wise_original",
     "cngb": Path("CNGB") / "species_wise_original",
+    "flybase": Path("FlyBase") / "species_wise_original",
+    "wormbase": Path("WormBase") / "species_wise_original",
+    "vectorbase": Path("VectorBase") / "species_wise_original",
+    "local": Path("Local") / "species_wise_original",
 }
 
-PROVIDERS = ("ensemblplants", "phycocosm", "phytozome", "ncbi", "coge", "cngb")
+PROVIDERS = (
+    "ensembl",
+    "ensemblplants",
+    "phycocosm",
+    "phytozome",
+    "ncbi",
+    "refseq",
+    "genbank",
+    "coge",
+    "cngb",
+    "flybase",
+    "wormbase",
+    "vectorbase",
+    "local",
+)
+DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
+    "ensembl",
+    "ensemblplants",
+    "ncbi",
+    "refseq",
+    "genbank",
+    "coge",
+    "cngb",
+    "flybase",
+    "wormbase",
+    "vectorbase",
+    "local",
+)
 DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 86400
 DOWNLOAD_LOCK_SLEEP_SECONDS = 1.0
 DEFAULT_NCBI_EUTILS_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_NCBI_FTP_BASE_URL = "https://ftp.ncbi.nlm.nih.gov"
 DEFAULT_NCBI_DATASETS_BASE_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2"
+DEFAULT_COGE_API_BASE_URL = "https://genomevolution.org/coge/api/v1"
+DEFAULT_COGE_WEB_BASE_URL = "https://genomevolution.org/coge"
+DEFAULT_CNGB_CNSA_BASE_URL = "https://db.cngb.org/cnsa/ajax"
 NCBI_DATASETS_INCLUDE_BY_LABEL = {
     "CDS": "CDS_FASTA",
     "GFF": "GENOME_GFF",
     "GENOME": "GENOME_FASTA",
 }
 DOWNLOAD_LABELS = ("CDS", "GFF", "GENOME")
+RESOLVED_MANIFEST_PREFERRED_COLUMNS = (
+    "provider",
+    "id",
+    "species_key",
+    "cds_url",
+    "gff_url",
+    "genome_url",
+    "cds_filename",
+    "gff_filename",
+    "genome_filename",
+)
+ENSEMBL_DEFAULT_ID_URL_TEMPLATES = {
+    "CDS": "https://ftp.ensembl.org/pub/current_fasta/{id_lower}/cds/",
+    "GFF": "https://ftp.ensembl.org/pub/current_gff3/{id_lower}/",
+    "GENOME": "https://ftp.ensembl.org/pub/current_fasta/{id_lower}/dna/",
+}
 ENSEMBLPLANTS_DEFAULT_ID_URL_TEMPLATES = {
     "CDS": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/fasta/{id_lower}/cds/",
     "GFF": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/gff3/{id_lower}/",
@@ -83,6 +144,7 @@ PROVIDER_DEFAULT_ID_PAGE_URL_TEMPLATES = {
     "phytozome": (
         "https://phytozome-next.jgi.doe.gov/download/file/{id}",
         "https://phytozome-next.jgi.doe.gov/info/{id}",
+        "https://data.jgi.doe.gov/refine-download/phytozome?genome_id={id}",
     ),
     "coge": (
         "https://genomevolution.org/coge/GenomeInfo.pl?gid={id}",
@@ -96,13 +158,20 @@ PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     # We keep concurrent file downloads conservative and separately enforce
     # E-utilities request throttling below.
     "ncbi": 2,
+    "refseq": 2,
+    "genbank": 2,
     # No explicit numeric concurrency guidance was found for these sources;
     # keep defaults conservative to reduce ban/abuse risk.
+    "ensembl": 2,
     "ensemblplants": 2,
     "phycocosm": 1,
     "phytozome": 1,
     "coge": 1,
     "cngb": 1,
+    "flybase": 2,
+    "wormbase": 2,
+    "vectorbase": 2,
+    "local": 1,
 }
 DEFAULT_GLOBAL_DOWNLOAD_WORKERS = 1
 DEFAULT_NCBI_EUTILS_RPS_NO_API_KEY = 3
@@ -144,23 +213,15 @@ def build_arg_parser():
         "--provider",
         choices=("all",) + PROVIDERS,
         required=True,
-        help="Input provider type. Use 'all' with --dataset-root to process all providers.",
-    )
-    parser.add_argument(
-        "--dataset-root",
-        default="",
-        help=(
-            "Root of gfe_dataset. If --input-dir is omitted, provider-specific default "
-            "subdirectories are used from this root."
-        ),
+        help="Input provider type. Use 'all' with --input-dir pointing to a provider-root directory.",
     )
     parser.add_argument(
         "--input-dir",
         default="",
         help=(
-            "Provider input directory. For ensemblplants: original_files/. "
-            "For phycocosm/phytozome/ncbi/coge/cngb: species_wise_original/. "
-            "Not allowed when --provider all is used."
+            "Provider input directory. For ensembl/ensemblplants: original_files/. "
+            "For phycocosm/phytozome/ncbi/refseq/genbank/coge/cngb/flybase/wormbase/vectorbase/local: species_wise_original/. "
+            "For --provider all, this must be the shared root containing all provider subdirectories."
         ),
     )
     parser.add_argument(
@@ -187,15 +248,28 @@ def build_arg_parser():
         "--download-manifest",
         default="",
         help=(
-            "Optional TSV/CSV manifest for input download. "
-            "Required columns: one of provider/id "
-            "(provider can be inferred from id for ncbi/coge/cngb in common patterns) "
-            "and one of species_key/id. "
+            "Optional XLSX/TSV/CSV manifest for input download. "
+            "Required columns: provider,id (in this order for XLSX templates). "
+            "provider,id are required on every row; species_key is optional. "
             "CDS/GFF/genome can be set directly with cds_url/gff_url/genome_url or resolved from id "
             "(ncbi supports GCF/GCA/NCBI-URL auto-resolution; "
-            "other providers support id-based template/index inference). "
-            "Optional columns: cds_filename,gff_filename,genome_filename,id,"
-            "cds_url_template,gff_url_template,genome_url_template."
+            "other supported providers support id-based template/index inference). "
+            "Supported providers for --download-manifest: "
+            "ensembl, ensemblplants, ncbi, refseq, genbank, coge, cngb, flybase, wormbase, vectorbase, local. "
+            "provider=local reads local files/directories (for example local phytozome files). "
+            "Use --input-dir for direct local phycocosm/phytozome formatting. "
+            "Optional columns: species_key,cds_filename,gff_filename,genome_filename,"
+            "cds_url_template,gff_url_template,genome_url_template,"
+            "local_cds_path,local_gff_path,local_genome_path."
+        ),
+    )
+    parser.add_argument(
+        "--resolved-manifest-output",
+        default="workspace/output/input_generation/download_plan.resolved.tsv",
+        help=(
+            "Output TSV path for resolved download-manifest rows. "
+            "Rows selected for download are written with provider/species_key/URL/filename fields filled. "
+            "Set empty string to disable."
         ),
     )
     parser.add_argument(
@@ -203,7 +277,7 @@ def build_arg_parser():
         default="workspace/output/input_generation/tmp/input_download_cache",
         help=(
             "Directory for raw downloaded provider files. "
-            "This can be used as --dataset-root for formatting."
+            "This can be reused as --input-dir for formatting."
         ),
     )
     parser.add_argument(
@@ -281,10 +355,119 @@ def detect_manifest_delimiter(path):
     return ","
 
 
+def read_download_manifest_xlsx(path):
+    if load_workbook is None:
+        raise ValueError("openpyxl is required to read .xlsx download manifests.")
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet = workbook.active
+        row_iter = sheet.iter_rows(values_only=True)
+        header_row = next(row_iter, None)
+        if header_row is None:
+            return []
+        headers = []
+        for value in header_row:
+            text = str(value).strip() if value is not None else ""
+            headers.append(text)
+        while len(headers) > 0 and headers[-1] == "":
+            headers.pop()
+        if len(headers) == 0:
+            return []
+        if len(headers) < 2 or headers[0] != "provider" or headers[1] != "id":
+            raise ValueError(
+                "XLSX download manifest must have 'provider' and 'id' as the first two columns."
+            )
+
+        rows = []
+        for raw_values in row_iter:
+            values = list(raw_values or ())
+            if len(values) < len(headers):
+                values.extend([None] * (len(headers) - len(values)))
+            row = {}
+            has_nonempty = False
+            for idx, key in enumerate(headers):
+                if key == "":
+                    continue
+                cell = values[idx] if idx < len(values) else None
+                text = str(cell).strip() if cell is not None else ""
+                if text != "":
+                    has_nonempty = True
+                row[key] = text
+            if has_nonempty:
+                rows.append(row)
+        return rows
+    finally:
+        workbook.close()
+
+
+def resolved_manifest_fieldnames(rows):
+    discovered = []
+    for row in rows:
+        for key in row.keys():
+            if key not in discovered:
+                discovered.append(key)
+    ordered = []
+    for key in RESOLVED_MANIFEST_PREFERRED_COLUMNS:
+        ordered.append(key)
+    for key in discovered:
+        if key not in ordered:
+            ordered.append(key)
+    return ordered
+
+
+def build_resolved_manifest_row(
+    raw_row,
+    fieldnames,
+    provider,
+    source_id,
+    species_key,
+    cds_url,
+    gff_url,
+    genome_url,
+    cds_filename,
+    gff_filename,
+    genome_filename,
+):
+    row = {}
+    for key in fieldnames:
+        row[key] = str(raw_row.get(key) or "")
+    row["provider"] = provider
+    row["id"] = source_id
+    row["species_key"] = species_key
+    row["cds_url"] = cds_url
+    row["gff_url"] = gff_url
+    row["genome_url"] = genome_url
+    row["cds_filename"] = cds_filename
+    row["gff_filename"] = gff_filename
+    row["genome_filename"] = genome_filename
+    return row
+
+
+def write_resolved_manifest_tsv(output_path, fieldnames, rows):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "wt", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: str(row.get(key) or "") for key in fieldnames})
+
+
 def provider_raw_dir(provider, download_root, species_key):
-    if provider == "ensemblplants":
+    if provider in ("ensembl", "ensemblplants"):
         return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]
-    if provider in ("phycocosm", "phytozome", "ncbi", "coge", "cngb"):
+    if provider in (
+        "phycocosm",
+        "phytozome",
+        "ncbi",
+        "refseq",
+        "genbank",
+        "coge",
+        "cngb",
+        "flybase",
+        "wormbase",
+        "vectorbase",
+        "local",
+    ):
         return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider] / species_key
     raise ValueError("Unknown provider: {}".format(provider))
 
@@ -297,14 +480,26 @@ def infer_provider_from_id(source_id):
         return "ncbi"
     if "ncbi.nlm.nih.gov/datasets/genome/" in lowered:
         return "ncbi"
+    if ENSEMBL_ID_HINT_PATTERN.match(source_id):
+        return "ensembl"
+    if "ftp.ensembl.org" in lowered or "ensembl.org/pub/current_" in lowered:
+        return "ensembl"
     if COGE_ID_HINT_PATTERN.match(source_id):
         return "coge"
     if CNGB_ID_HINT_PATTERN.match(source_id):
+        return "cngb"
+    if CNGB_ASSEMBLY_ACCESSION_PATTERN.match(source_id):
         return "cngb"
     if "genomevolution.org" in lowered:
         return "coge"
     if "cngb.org" in lowered or "cncb.ac.cn" in lowered:
         return "cngb"
+    if "flybase.org" in lowered:
+        return "flybase"
+    if "wormbase.org" in lowered:
+        return "wormbase"
+    if "vectorbase.org" in lowered:
+        return "vectorbase"
     return ""
 
 
@@ -434,29 +629,293 @@ def resolve_urls_from_index_url(provider, index_url, timeout, headers):
     }
 
 
+def fetch_json_with_headers(url, timeout, headers):
+    text = fetch_text_with_headers(url, timeout, headers)
+    return json.loads(text)
+
+
+def resolve_coge_api_base_url():
+    return os.environ.get("GG_COGE_API_BASE_URL", DEFAULT_COGE_API_BASE_URL).rstrip("/")
+
+
+def resolve_coge_web_base_url():
+    return os.environ.get("GG_COGE_WEB_BASE_URL", DEFAULT_COGE_WEB_BASE_URL).rstrip("/")
+
+
+def resolve_cngb_cnsa_base_url():
+    return os.environ.get("GG_CNGB_CNSA_BASE_URL", DEFAULT_CNGB_CNSA_BASE_URL).rstrip("/")
+
+
+def parse_species_key_candidate(text):
+    cleaned = re.sub(r"\s*\(.*?\)\s*", " ", str(text or "")).strip()
+    tokens = re.findall(r"[A-Za-z0-9]+", cleaned)
+    if len(tokens) >= 2:
+        return "{}_{}".format(tokens[0], tokens[1])
+    if len(tokens) == 1:
+        return tokens[0]
+    return ""
+
+
+def source_id_candidates(provider, source_id, species_key):
+    candidates = []
+
+    def add(value):
+        text = str(value or "").strip()
+        if text == "":
+            return
+        if text in candidates:
+            return
+        candidates.append(text)
+
+    source_clean = str(source_id or "").strip()
+    stripped = strip_provider_prefix(source_clean, provider)
+    add(source_clean)
+    add(stripped)
+
+    if "_" in stripped:
+        add(stripped.rsplit("_", 1)[-1])
+    if species_key != "":
+        add(species_key)
+        if "_" in species_key:
+            add(species_key.rsplit("_", 1)[-1])
+
+    if is_url_like(stripped):
+        parsed = urlparse(stripped)
+        query = parse_qs(parsed.query)
+        if provider == "coge":
+            for gid in query.get("gid", []):
+                add(gid)
+        if provider == "cngb":
+            for qval in query.get("q", []):
+                add(qval)
+            parts = [token for token in parsed.path.split("/") if token != ""]
+            for idx, token in enumerate(parts[:-1]):
+                if token.lower() == "assembly":
+                    add(parts[idx + 1])
+
+    if provider == "phytozome":
+        match = re.search(r"_([0-9]+)_", stripped)
+        if match is not None:
+            add(match.group(1))
+
+    return candidates
+
+
+def normalize_manifest_source_id(provider, source_id):
+    text = str(source_id or "").strip()
+    if text == "":
+        return ""
+    if provider == "local":
+        return text
+    if is_url_like(text):
+        return text
+    match = re.match(r"^(\S+)\s+\(.*\)$", text)
+    if match is not None:
+        return match.group(1)
+    return text
+
+
+def extract_coge_gid_candidate(source_id):
+    candidates = source_id_candidates("coge", source_id, species_key="")
+    for candidate in candidates:
+        stripped = strip_provider_prefix(candidate, "coge")
+        if COGE_GID_PATTERN.match(stripped):
+            return stripped
+    return ""
+
+
+def normalize_lookup_text(text):
+    return re.sub(r"[^a-z0-9]+", "", str(text or "").lower())
+
+
+def pick_best_coge_genome(genomes, source_id):
+    query = strip_provider_prefix(source_id, "coge")
+    query_normalized = normalize_lookup_text(query)
+    selected = None
+    selected_rank = None
+    for genome in genomes:
+        if not isinstance(genome, dict):
+            continue
+        gid = str(genome.get("id", "") or "").strip()
+        if not gid.isdigit():
+            continue
+        name = str(genome.get("name", "") or "")
+        info = str(genome.get("info", "") or "")
+        organism = str((genome.get("organism") or {}).get("name", "") or "")
+        searchable = [name, info, organism]
+        exact = any(query_normalized != "" and normalize_lookup_text(text) == query_normalized for text in searchable)
+        contains = any(query_normalized != "" and query_normalized in normalize_lookup_text(text) for text in searchable)
+        deleted = bool(genome.get("deleted"))
+        certified = bool(genome.get("certified"))
+        rank = (
+            0 if deleted else 1,
+            1 if exact else 0,
+            1 if contains else 0,
+            1 if certified else 0,
+            int(gid),
+        )
+        if selected is None or rank > selected_rank:
+            selected = genome
+            selected_rank = rank
+    return selected
+
+
+def resolve_coge_genome_from_source_id(source_id, timeout, headers):
+    gid = extract_coge_gid_candidate(source_id)
+    if gid == "":
+        raise ValueError("CoGe id must be genome_id (numeric gid). got '{}'".format(source_id))
+    return gid, {"id": int(gid)}
+
+
+def resolve_coge_download_urls_from_id(source_id, species_key, timeout, headers):
+    gid, genome_info = resolve_coge_genome_from_source_id(source_id, timeout, headers)
+    web_base = resolve_coge_web_base_url()
+    api_base = resolve_coge_api_base_url()
+
+    gff_meta_url = (
+        "{}/GenomeInfo.pl?fname=get_gff&gid={}&id_type=name&cds=0&annos=0&nu=0&upa=0&chr=".format(web_base, gid)
+    )
+    gff_meta = fetch_json_with_headers(gff_meta_url, timeout, headers)
+    gff_candidates = [str(item).strip() for item in gff_meta.get("files", []) if str(item).strip() != ""]
+    gff_url = gff_candidates[0] if len(gff_candidates) > 0 else ""
+    gff_filename = str(gff_meta.get("file", "") or "").strip()
+    if gff_url == "" and gff_filename != "":
+        gff_url = "{}/api/v1/downloads/?gid={}&filename={}".format(
+            web_base, gid, quote(gff_filename, safe="")
+        )
+    if gff_url == "":
+        raise ValueError("CoGe did not return a downloadable GFF URL for gid {}".format(gid))
+
+    organism_name = str((genome_info.get("organism") or {}).get("name", "") or "")
+    inferred_species = parse_species_key_candidate(organism_name)
+    if inferred_species == "" and gff_filename != "":
+        prefix = re.sub(r"[.]gid[0-9]+.*$", "", gff_filename, flags=re.IGNORECASE)
+        inferred_species = parse_species_key_candidate(prefix.replace("_", " "))
+    if inferred_species == "":
+        inferred_species = species_key
+    if inferred_species == "":
+        inferred_species = "CoGe_gid{}".format(gid)
+    prefix = sanitize_identifier(inferred_species)
+
+    if gff_filename == "":
+        gff_filename = "{}.coge.gid{}.gff".format(prefix, gid)
+    elif not is_gff_filename(gff_filename):
+        gff_filename = "{}.coge.gid{}.gff".format(prefix, gid)
+
+    return {
+        "species_key": inferred_species,
+        "cds_url": "{}/get_seqs_for_feattype_for_genome.pl?ftid=3;dsgid={};".format(web_base, gid),
+        "gff_url": gff_url,
+        "genome_url": "{}/genomes/{}/sequence".format(api_base, gid),
+        "cds_filename": "{}.coge.gid{}.cds.fa".format(prefix, gid),
+        "gff_filename": gff_filename,
+        "genome_filename": "{}.coge.gid{}.genome.fa".format(prefix, gid),
+    }
+
+
+def resolve_cngb_summary_from_id(cngb_id, timeout, headers):
+    base = resolve_cngb_cnsa_base_url()
+    summary_url = "{}/assembly/public_view/?q={}".format(base, quote(cngb_id, safe=""))
+    payload = fetch_json_with_headers(summary_url, timeout, headers)
+    if payload.get("code") != 0:
+        error_message = str((payload.get("error") or {}).get("content", "") or "").strip()
+        if error_message == "":
+            error_message = "unknown CNGB API error"
+        raise ValueError("CNGB summary lookup failed for '{}': {}".format(cngb_id, error_message))
+    summary = payload.get("data", {}).get("summary_data", {})
+    if not isinstance(summary, dict):
+        raise ValueError("CNGB summary response was malformed for '{}'".format(cngb_id))
+    return summary
+
+
+def resolve_cngb_download_urls_from_id(source_id, timeout, headers):
+    raw_candidates = source_id_candidates("cngb", source_id, species_key="")
+    cngb_id = strip_provider_prefix(source_id, "cngb")
+    if cngb_id == "":
+        cngb_id = source_id
+
+    accession = ""
+    for candidate in raw_candidates:
+        accession = extract_ncbi_accession_from_source_id(candidate)
+        if accession != "":
+            break
+
+    summary = {}
+    if accession == "":
+        summary = resolve_cngb_summary_from_id(cngb_id, timeout, headers)
+        for key in (
+            "refseq_assembly_accession",
+            "genbank_assembly_accession",
+            "accession_id",
+            "external_accession_id",
+        ):
+            accession = extract_ncbi_accession_from_source_id(summary.get(key, ""))
+            if accession != "":
+                break
+
+    if accession == "":
+        raise ValueError(
+            "CNGB id '{}' did not map to a downloadable NCBI assembly accession".format(source_id)
+        )
+
+    resolved = resolve_ncbi_download_urls_from_id(accession, timeout, ncbi_source="auto")
+    if resolved.get("species_key", "") == "":
+        organism_name = str((summary.get("organism") or {}).get("name", "") or "")
+        species_candidate = parse_species_key_candidate(organism_name)
+        if species_candidate != "":
+            resolved["species_key"] = species_candidate
+    return resolved
+
+
+def resolve_provider_specific_download_urls_from_id(provider, source_id, species_key, timeout, headers):
+    if provider == "coge":
+        return resolve_coge_download_urls_from_id(source_id, species_key, timeout, headers)
+    if provider == "cngb":
+        return resolve_cngb_download_urls_from_id(source_id, timeout, headers)
+    return None
+
+
 def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, timeout, headers):
+    if provider not in DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS:
+        raise ValueError(
+            "provider '{}' is not supported for --download-manifest (use --input-dir for local formatting)".format(
+                provider
+            )
+        )
+
     resolved = {}
+    provider_specific_error = None
 
     env_prefix = provider_env_prefix(provider)
     label_to_key = {"CDS": "cds_url", "GFF": "gff_url", "GENOME": "genome_url"}
+    id_candidates = source_id_candidates(provider, source_id, species_key)
+    if len(id_candidates) == 0:
+        id_candidates = [str(source_id or "").strip()]
 
     for label in DOWNLOAD_LABELS:
         template_env = "{}_{}_URL_TEMPLATE".format(env_prefix, label)
         template = os.environ.get(template_env, "").strip()
         if template == "":
+            if provider == "ensembl":
+                template = ENSEMBL_DEFAULT_ID_URL_TEMPLATES.get(label, "")
             if provider == "ensemblplants":
                 template = ENSEMBLPLANTS_DEFAULT_ID_URL_TEMPLATES.get(label, "")
         if template == "":
             continue
-        url = render_id_url_template(template, provider, source_id, species_key)
-        if url.endswith("/"):
-            try:
-                discovered = resolve_urls_from_index_url(provider, url, timeout, headers)
-                resolved[label_to_key[label]] = discovered.get(label_to_key[label], "")
-                continue
-            except Exception:
-                pass
-        resolved[label_to_key[label]] = url
+        for candidate in id_candidates:
+            url = render_id_url_template(template, provider, candidate, species_key)
+            if url.endswith("/"):
+                try:
+                    discovered = resolve_urls_from_index_url(provider, url, timeout, headers)
+                    inferred_url = discovered.get(label_to_key[label], "")
+                    if inferred_url != "":
+                        resolved[label_to_key[label]] = inferred_url
+                        break
+                except Exception:
+                    continue
+            else:
+                resolved[label_to_key[label]] = url
+                break
 
     if (
         resolved.get("cds_url", "") != ""
@@ -464,6 +923,36 @@ def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, tim
         and resolved.get("genome_url", "") != ""
     ):
         return resolved
+
+    try:
+        provider_specific = resolve_provider_specific_download_urls_from_id(
+            provider=provider,
+            source_id=source_id,
+            species_key=species_key,
+            timeout=timeout,
+            headers=headers,
+        )
+    except Exception as exc:
+        provider_specific = None
+        provider_specific_error = exc
+    if provider_specific is not None:
+        for key in (
+            "cds_url",
+            "gff_url",
+            "genome_url",
+            "cds_filename",
+            "gff_filename",
+            "genome_filename",
+            "species_key",
+        ):
+            if resolved.get(key, "") == "" and str(provider_specific.get(key, "") or "").strip() != "":
+                resolved[key] = str(provider_specific[key]).strip()
+        if (
+            resolved.get("cds_url", "") != ""
+            and resolved.get("gff_url", "") != ""
+            and resolved.get("genome_url", "") != ""
+        ):
+            return resolved
 
     source_clean = str(source_id or "").strip()
     if is_url_like(source_clean):
@@ -480,14 +969,21 @@ def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, tim
     page_templates.extend(PROVIDER_DEFAULT_ID_PAGE_URL_TEMPLATES.get(provider, ()))
 
     for page_template in page_templates:
-        page_url = render_id_url_template(page_template, provider, source_id, species_key)
-        try:
-            discovered = resolve_urls_from_index_url(provider, page_url, timeout, headers)
-        except Exception:
-            continue
-        for key in ("cds_url", "gff_url", "genome_url"):
-            if resolved.get(key, "") == "" and discovered.get(key, "") != "":
-                resolved[key] = discovered[key]
+        for candidate in id_candidates:
+            page_url = render_id_url_template(page_template, provider, candidate, species_key)
+            try:
+                discovered = resolve_urls_from_index_url(provider, page_url, timeout, headers)
+            except Exception:
+                continue
+            for key in ("cds_url", "gff_url", "genome_url"):
+                if resolved.get(key, "") == "" and discovered.get(key, "") != "":
+                    resolved[key] = discovered[key]
+            if (
+                resolved.get("cds_url", "") != ""
+                and resolved.get("gff_url", "") != ""
+                and resolved.get("genome_url", "") != ""
+            ):
+                break
         if (
             resolved.get("cds_url", "") != ""
             and resolved.get("gff_url", "") != ""
@@ -499,8 +995,13 @@ def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, tim
         resolved.get("cds_url", "") == ""
         or resolved.get("gff_url", "") == ""
     ):
+        detail = ""
+        if provider_specific_error is not None:
+            detail = " (provider-specific resolver: {})".format(provider_specific_error)
         raise ValueError(
-            "could not infer cds/gff urls from id '{}' for provider '{}'".format(source_id, provider)
+            "could not infer cds/gff urls from id '{}' for provider '{}'{}".format(
+                source_id, provider, detail
+            )
         )
     return resolved
 
@@ -514,7 +1015,7 @@ def default_download_filename(provider, species_key, label, url):
         else:
             ext = ".gff3.gz"
         base = "{}.{}{}".format(species_key, label, ext)
-    if provider == "ensemblplants":
+    if provider in ("ensembl", "ensemblplants"):
         if not base.startswith(species_key + "."):
             base = "{}.{}".format(species_key, base)
     return base
@@ -661,7 +1162,7 @@ def infer_ncbi_species_key_from_doc(doc, fallback):
     return fallback
 
 
-def resolve_ncbi_download_urls_from_id(source_id, timeout):
+def resolve_ncbi_download_urls_from_id(source_id, timeout, ncbi_source="auto"):
     accession = extract_ncbi_accession_from_source_id(source_id)
     if accession == "":
         raise ValueError(
@@ -695,7 +1196,23 @@ def resolve_ncbi_download_urls_from_id(source_id, timeout):
 
     ftppath_refseq = str(doc.get("ftppath_refseq", "") or "").strip()
     ftppath_genbank = str(doc.get("ftppath_genbank", "") or "").strip()
-    ftp_dir = ftppath_refseq if ftppath_refseq != "" else ftppath_genbank
+    selected_source = "auto"
+    if ncbi_source == "refseq":
+        selected_source = "refseq"
+        ftp_dir = ftppath_refseq if ftppath_refseq != "" else ftppath_genbank
+        if ftppath_refseq == "" and ftppath_genbank != "":
+            selected_source = "genbank"
+    elif ncbi_source == "genbank":
+        selected_source = "genbank"
+        ftp_dir = ftppath_genbank if ftppath_genbank != "" else ftppath_refseq
+        if ftppath_genbank == "" and ftppath_refseq != "":
+            selected_source = "refseq"
+    else:
+        ftp_dir = ftppath_refseq if ftppath_refseq != "" else ftppath_genbank
+        if ftppath_refseq != "":
+            selected_source = "refseq"
+        elif ftppath_genbank != "":
+            selected_source = "genbank"
     if ftp_dir == "":
         raise ValueError("NCBI FTP path was not found in assembly summary for id: {}".format(source_id))
 
@@ -716,6 +1233,7 @@ def resolve_ncbi_download_urls_from_id(source_id, timeout):
         "cds_filename": cds_filename,
         "gff_filename": gff_filename,
         "genome_filename": genome_filename,
+        "ncbi_source_db": selected_source,
     }
 
 
@@ -1013,11 +1531,150 @@ def download_url_to_file(
 
 
 def read_download_manifest(path):
+    if path.suffix.lower() == ".xlsx":
+        return read_download_manifest_xlsx(path)
     delimiter = detect_manifest_delimiter(path)
     with open(path, "rt", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter=delimiter)
         rows = [row for row in reader]
     return rows
+
+
+def resolve_local_reference_path(reference, manifest_parent_dir):
+    text = str(reference or "").strip()
+    if text == "":
+        return None
+    if is_url_like(text):
+        parsed = urlparse(text)
+        if parsed.scheme.lower() != "file":
+            raise ValueError("expected local file path or file:// URL, got '{}'".format(reference))
+        path = Path(unquote(parsed.path)).expanduser()
+        return path.resolve()
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = (manifest_parent_dir / path).resolve()
+    else:
+        path = path.resolve()
+    return path
+
+
+def resolve_local_source_id_with_label_fallback(source_id, manifest_parent_dir):
+    text = str(source_id or "").strip()
+    if text == "":
+        return text
+    try:
+        direct_path = resolve_local_reference_path(text, manifest_parent_dir)
+    except Exception:
+        direct_path = None
+    if direct_path is not None and direct_path.exists():
+        return text
+
+    # Accept spreadsheet label format like:
+    #   /path/to/species_dir (Species name)
+    # only when the stripped path actually exists.
+    match = re.match(r"^(.*\S)\s+\([^()]*\)$", text)
+    if match is None:
+        return text
+    stripped = match.group(1).strip()
+    if stripped == "":
+        return text
+    try:
+        stripped_path = resolve_local_reference_path(stripped, manifest_parent_dir)
+    except Exception:
+        return text
+    if stripped_path is not None and stripped_path.exists():
+        return stripped
+    return text
+
+
+def local_reference_to_file_url(reference, manifest_parent_dir):
+    path = resolve_local_reference_path(reference, manifest_parent_dir)
+    if path is None:
+        return ""
+    return path.as_uri()
+
+
+def resolve_local_manifest_row(provider, source_id, species_key, row, manifest_parent_dir, warnings, line_number):
+    cds_url = local_reference_to_file_url(row.get("cds_url", ""), manifest_parent_dir)
+    gff_url = local_reference_to_file_url(row.get("gff_url", ""), manifest_parent_dir)
+    genome_url = local_reference_to_file_url(row.get("genome_url", ""), manifest_parent_dir)
+    cds_filename = str(row.get("cds_filename") or "").strip()
+    gff_filename = str(row.get("gff_filename") or "").strip()
+    genome_filename = str(row.get("genome_filename") or "").strip()
+
+    local_cds_path = str(row.get("local_cds_path") or "").strip()
+    local_gff_path = str(row.get("local_gff_path") or "").strip()
+    local_genome_path = str(row.get("local_genome_path") or "").strip()
+    if cds_url == "" and local_cds_path != "":
+        cds_url = local_reference_to_file_url(local_cds_path, manifest_parent_dir)
+    if gff_url == "" and local_gff_path != "":
+        gff_url = local_reference_to_file_url(local_gff_path, manifest_parent_dir)
+    if genome_url == "" and local_genome_path != "":
+        genome_url = local_reference_to_file_url(local_genome_path, manifest_parent_dir)
+
+    source_id_text = str(source_id or "").strip()
+    source_id_resolved = resolve_local_source_id_with_label_fallback(source_id_text, manifest_parent_dir)
+    if source_id_resolved != source_id_text:
+        warnings.append(
+            "Manifest line {}: provider=local id looked like a labeled choice. "
+            "Using '{}'".format(line_number, source_id_resolved)
+        )
+    source_dir = resolve_local_reference_path(source_id_resolved, manifest_parent_dir)
+    if species_key == "":
+        if source_dir is not None and source_dir.exists() and source_dir.is_dir():
+            species_key = source_dir.name
+        else:
+            species_key = source_id_resolved
+
+    if (cds_url == "" or gff_url == "") and source_dir is not None and source_dir.exists() and source_dir.is_dir():
+        files = [path for path in source_dir.iterdir() if path.is_file()]
+        cds_matches = [
+            path
+            for path in files
+            if is_fasta_filename(path.name)
+            and any(marker in path.name.lower() for marker in ("cds", "transcript", "mrna", "cdna"))
+        ]
+        if len(cds_matches) == 0:
+            cds_matches = [
+                path
+                for path in files
+                if is_fasta_filename(path.name) and not is_probable_genome_filename(provider, path.name)
+            ]
+        gff_matches = [path for path in files if is_gff_filename(path.name)]
+        genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+
+        cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
+        gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
+        genome_path = pick_single_file(genome_matches, provider, species_key, "genome", warnings)
+
+        if cds_url == "" and cds_path is not None:
+            cds_url = cds_path.resolve().as_uri()
+            if cds_filename == "":
+                cds_filename = cds_path.name
+        if gff_url == "" and gff_path is not None:
+            gff_url = gff_path.resolve().as_uri()
+            if gff_filename == "":
+                gff_filename = gff_path.name
+        if genome_url == "" and genome_path is not None:
+            genome_url = genome_path.resolve().as_uri()
+            if genome_filename == "":
+                genome_filename = genome_path.name
+
+    if cds_url == "" or gff_url == "":
+        raise ValueError(
+            "provider=local requires local CDS/GFF paths/URLs or a species directory id. "
+            "line {} id='{}'".format(line_number, source_id_resolved)
+        )
+
+    return {
+        "species_key": species_key,
+        "cds_url": cds_url,
+        "gff_url": gff_url,
+        "genome_url": genome_url,
+        "cds_filename": cds_filename,
+        "gff_filename": gff_filename,
+        "genome_filename": genome_filename,
+    }
 
 
 def execute_download_target_job(
@@ -1071,7 +1728,7 @@ def execute_download_target_job(
                 )
         except Exception as exc:
             fallback_exc = None
-            if provider == "ncbi" and source_id != "":
+            if provider in ("ncbi", "refseq", "genbank") and source_id != "":
                 try:
                     did_download = download_ncbi_datasets_file_from_id(
                         source_id=source_id,
@@ -1119,6 +1776,7 @@ def download_from_manifest(
     timeout,
     dry_run,
     jobs,
+    resolved_manifest_output_path=None,
 ):
     rows = read_download_manifest(manifest_path)
     warnings = []
@@ -1126,6 +1784,8 @@ def download_from_manifest(
     processed = 0
     downloaded = 0
     planned = 0
+    resolved_rows = []
+    resolved_fieldnames = resolved_manifest_fieldnames(rows)
     lock_stale_seconds = resolve_download_lock_stale_seconds()
     download_jobs = []
 
@@ -1138,11 +1798,10 @@ def download_from_manifest(
             "downloaded": downloaded,
             "planned": planned,
         }
+    manifest_parent_dir = manifest_path.parent
     header_cols = set(rows[0].keys())
-    if "provider" not in header_cols and "id" not in header_cols:
-        errors.append(
-            "Download manifest must contain at least one of provider/id columns: {}".format(manifest_path)
-        )
+    if "provider" not in header_cols or "id" not in header_cols:
+        errors.append("Download manifest must contain required columns provider,id: {}".format(manifest_path))
         return {
             "warnings": warnings,
             "errors": errors,
@@ -1153,7 +1812,8 @@ def download_from_manifest(
 
     for i, row in enumerate(rows, start=2):
         provider = (row.get("provider") or "").strip().lower()
-        source_id = (row.get("id") or "").strip()
+        source_id_raw = (row.get("id") or "").strip()
+        source_id = normalize_manifest_source_id(provider, source_id_raw)
         species_key = (row.get("species_key") or "").strip()
         cds_url = (row.get("cds_url") or "").strip()
         gff_url = (row.get("gff_url") or "").strip()
@@ -1163,56 +1823,99 @@ def download_from_manifest(
         genome_filename = (row.get("genome_filename") or "").strip()
         resolved_ncbi = None
 
-        inferred_provider = ""
-        if provider == "" and source_id != "":
-            inferred_provider = infer_provider_from_id(source_id)
-            if inferred_provider != "":
-                provider = inferred_provider
-
         if provider_filter != "all" and provider != provider_filter:
             continue
         processed += 1
 
         if provider == "":
-            errors.append(
-                "Manifest line {}: provider is empty and could not be inferred from id '{}'".format(i, source_id)
-            )
+            errors.append("Manifest line {}: provider is required".format(i))
+            continue
+        if source_id == "":
+            errors.append("Manifest line {}: id is required".format(i))
             continue
         if provider not in PROVIDERS:
             errors.append("Manifest line {}: unsupported provider '{}'".format(i, provider))
             continue
-        if inferred_provider != "":
-            warnings.append(
-                "Manifest line {}: provider was inferred as '{}' from id '{}'".format(i, inferred_provider, source_id)
+        if provider == "coge":
+            coge_gid = extract_coge_gid_candidate(source_id)
+            if coge_gid == "":
+                errors.append(
+                    "Manifest line {}: provider=coge requires numeric genome_id (gid) in id column".format(i)
+                )
+                continue
+            source_id = coge_gid
+        if provider not in DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS:
+            errors.append(
+                "Manifest line {}: provider '{}' is not supported for --download-manifest "
+                "(use --input-dir for local formatting)".format(i, provider)
             )
-        if source_id != "" and provider == "ncbi" and (
-            species_key == "" or cds_url == "" or gff_url == "" or genome_url == ""
-        ):
+            continue
+
+        if provider == "local":
             try:
-                resolved_ncbi = resolve_ncbi_download_urls_from_id(source_id, timeout=float(timeout))
+                resolved_local = resolve_local_manifest_row(
+                    provider=provider,
+                    source_id=source_id,
+                    species_key=species_key,
+                    row=row,
+                    manifest_parent_dir=manifest_parent_dir,
+                    warnings=warnings,
+                    line_number=i,
+                )
+                species_key = str(resolved_local.get("species_key") or "").strip()
+                cds_url = str(resolved_local.get("cds_url") or "").strip()
+                gff_url = str(resolved_local.get("gff_url") or "").strip()
+                genome_url = str(resolved_local.get("genome_url") or "").strip()
+                if cds_filename == "":
+                    cds_filename = str(resolved_local.get("cds_filename") or "").strip()
+                if gff_filename == "":
+                    gff_filename = str(resolved_local.get("gff_filename") or "").strip()
+                if genome_filename == "":
+                    genome_filename = str(resolved_local.get("genome_filename") or "").strip()
             except Exception as exc:
                 errors.append(
-                    "Manifest line {}: failed to resolve id '{}' (provider={}): {}".format(
+                    "Manifest line {}: failed to resolve local paths from id '{}' (provider={}): {}".format(
                         i, source_id, provider, exc
                     )
                 )
                 continue
+        elif provider in ("ncbi", "refseq", "genbank"):
+            accession_candidate = extract_ncbi_accession_from_source_id(source_id)
+            requires_ncbi_resolution = (cds_url == "" or gff_url == "")
+            should_enrich_from_ncbi = accession_candidate != "" and (species_key == "" or genome_url == "")
+            if requires_ncbi_resolution or should_enrich_from_ncbi:
+                try:
+                    preferred_ncbi_source = "auto"
+                    if provider in ("refseq", "genbank"):
+                        preferred_ncbi_source = provider
+                    resolved_ncbi = resolve_ncbi_download_urls_from_id(
+                        source_id,
+                        timeout=float(timeout),
+                        ncbi_source=preferred_ncbi_source,
+                    )
+                except Exception as exc:
+                    if requires_ncbi_resolution:
+                        errors.append(
+                            "Manifest line {}: failed to resolve id '{}' (provider={}): {}".format(
+                                i, source_id, provider, exc
+                            )
+                        )
+                        continue
+                    warnings.append(
+                        "Manifest line {}: skipped optional NCBI enrichment from id '{}' "
+                        "(provider={}): {}".format(i, source_id, provider, exc)
+                    )
+                    resolved_ncbi = None
 
-        if species_key == "":
-            if resolved_ncbi is not None:
-                species_key = (resolved_ncbi.get("species_key") or "").strip()
-            if species_key == "":
-                species_key = source_id
-        if species_key == "":
-            errors.append("Manifest line {}: species_key/id is empty".format(i))
-            continue
+        if species_key == "" and resolved_ncbi is not None:
+            species_key = (resolved_ncbi.get("species_key") or "").strip()
 
-        if cds_url == "" or gff_url == "" or genome_url == "":
+        if provider != "local" and (cds_url == "" or gff_url == "" or genome_url == ""):
             try:
                 resolved_urls = None
-                if source_id != "" and provider == "ncbi":
+                if provider in ("ncbi", "refseq", "genbank"):
                     resolved_urls = resolved_ncbi
-                elif source_id != "":
+                else:
                     resolved_urls = resolve_download_urls_from_templates(provider, source_id, species_key, row)
                     if resolved_urls is None and (cds_url == "" or gff_url == ""):
                         resolved_urls = resolve_non_ncbi_download_urls_from_id(
@@ -1245,6 +1948,12 @@ def download_from_manifest(
                 )
                 continue
 
+        if species_key == "":
+            species_key = source_id
+        if species_key == "":
+            errors.append("Manifest line {}: species_key/id is empty".format(i))
+            continue
+
         if cds_url == "" or gff_url == "":
             errors.append(
                 "Manifest line {}: cds_url/gff_url is empty for {} (set urls directly or provide resolvable id)".format(
@@ -1262,6 +1971,22 @@ def download_from_manifest(
             gff_filename = default_download_filename(provider, species_key, "gff", gff_url)
         if genome_url != "" and genome_filename == "":
             genome_filename = default_download_filename(provider, species_key, "genome", genome_url)
+
+        resolved_rows.append(
+            build_resolved_manifest_row(
+                raw_row=row,
+                fieldnames=resolved_fieldnames,
+                provider=provider,
+                source_id=source_id,
+                species_key=species_key,
+                cds_url=cds_url,
+                gff_url=gff_url,
+                genome_url=genome_url,
+                cds_filename=cds_filename,
+                gff_filename=gff_filename,
+                genome_filename=genome_filename,
+            )
+        )
 
         targets = [
             ("CDS", cds_url, raw_dir / cds_filename),
@@ -1325,12 +2050,23 @@ def download_from_manifest(
     if processed == 0:
         warnings.append("No manifest rows matched --provider {}.".format(provider_filter))
 
+    if resolved_manifest_output_path is not None:
+        try:
+            write_resolved_manifest_tsv(resolved_manifest_output_path, resolved_fieldnames, resolved_rows)
+        except Exception as exc:
+            errors.append(
+                "Failed to write resolved manifest TSV '{}': {}".format(
+                    resolved_manifest_output_path, exc
+                )
+            )
+
     return {
         "warnings": warnings,
         "errors": errors,
         "processed": processed,
         "downloaded": downloaded,
         "planned": planned,
+        "resolved_manifest_output": str(resolved_manifest_output_path) if resolved_manifest_output_path is not None else "",
     }
 
 
@@ -1362,9 +2098,9 @@ def is_probable_genome_filename(provider, name):
     )
     if any(marker in lower for marker in non_genome_markers):
         return False
-    if provider == "ncbi":
+    if provider in ("ncbi", "refseq", "genbank"):
         return "genomic" in lower
-    if provider == "ensemblplants":
+    if provider in ("ensembl", "ensemblplants"):
         return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
     return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold"))
 
@@ -1528,11 +2264,11 @@ def extract_phytozome_id(header):
 
 
 def extract_provider_id(provider, header):
-    if provider == "ensemblplants":
+    if provider in ("ensembl", "ensemblplants"):
         return extract_ensembl_id(header)
     if provider == "phycocosm":
         return extract_phycocosm_id(header)
-    if provider == "ncbi":
+    if provider in ("ncbi", "refseq", "genbank"):
         return first_token(header)
     return extract_phytozome_id(header)
 
@@ -1541,7 +2277,21 @@ def collapse_transcript_suffix(provider, identifier):
     text = identifier
     if provider == "phytozome":
         text = re.sub(r"[.][0-9]+$", "", text)
-    if provider in ("phycocosm", "phytozome", "ensemblplants", "coge", "cngb"):
+    if provider in (
+        "phycocosm",
+        "phytozome",
+        "ensembl",
+        "ensemblplants",
+        "ncbi",
+        "refseq",
+        "genbank",
+        "coge",
+        "cngb",
+        "flybase",
+        "wormbase",
+        "vectorbase",
+        "local",
+    ):
         text = re.sub(r"[._-]t[0-9]+$", "", text, flags=re.IGNORECASE)
         text = re.sub(r"[._-](?:transcript|mrna|rna|isoform)[._-]?[0-9]+$", "", text, flags=re.IGNORECASE)
     return text
@@ -1606,7 +2356,7 @@ def discover_generic_species_dir_tasks(provider, input_dir):
 def build_gene_aggregate_id(task, header, transcript_id):
     provider = task["provider"]
     species_prefix = task["species_prefix"]
-    if provider == "ncbi":
+    if provider in ("ncbi", "refseq", "genbank"):
         ensembl_gene_id = extract_ncbi_ensembl_gene_id_from_header(header)
         gene_symbol = extract_header_tag_value(header, "gene")
         gene_id = extract_ncbi_gene_id_from_header(header)
@@ -1639,7 +2389,7 @@ def pick_single_file(matches, provider, species_key, label, warnings):
     return ordered[0]
 
 
-def discover_ensemblplants_tasks(input_dir):
+def discover_ensembl_like_tasks(input_dir, provider):
     warnings = []
     errors = []
     tasks = []
@@ -1661,48 +2411,49 @@ def discover_ensemblplants_tasks(input_dir):
         if is_gff_filename(name):
             gff_by_species[species_key].append(path)
             continue
-        if is_probable_genome_filename("ensemblplants", name):
+        if is_probable_genome_filename(provider, name):
             genome_by_species[species_key].append(path)
 
     for species_key in sorted(set(cds_by_species.keys()) | set(gff_by_species.keys()) | set(genome_by_species.keys())):
         species_prefix = species_prefix_from_value(species_key)
         if species_prefix == "":
             warnings.append(
-                "[ensemblplants] skipped '{}': unable to parse species prefix.".format(species_key)
+                "[{}] skipped '{}': unable to parse species prefix.".format(provider, species_key)
             )
             continue
 
         cds_path = pick_single_file(
             cds_by_species.get(species_key, []),
-            "ensemblplants",
+            provider,
             species_key,
             "CDS",
             warnings,
         )
         gff_path = pick_single_file(
             gff_by_species.get(species_key, []),
-            "ensemblplants",
+            provider,
             species_key,
             "GFF",
             warnings,
         )
         genome_path = pick_single_file(
             genome_by_species.get(species_key, []),
-            "ensemblplants",
+            provider,
             species_key,
             "genome",
             warnings,
         )
         if cds_path is None or gff_path is None:
             errors.append(
-                "[ensemblplants] {}: missing {}".format(
+                "[{}] {}: missing {}".format(
+                    provider,
                     species_key, "CDS" if cds_path is None else "GFF"
                 )
             )
             continue
         tasks.append(
             {
-                "provider": "ensemblplants",
+                "provider": provider,
                 "species_key": species_key,
                 "species_prefix": species_prefix,
                 "cds_path": cds_path,
@@ -1810,7 +2561,7 @@ def discover_phytozome_tasks(input_dir):
     return tasks, warnings, errors
 
 
-def discover_ncbi_tasks(input_dir):
+def discover_ncbi_like_tasks(input_dir, provider):
     warnings = []
     errors = []
     tasks = []
@@ -1822,7 +2573,7 @@ def discover_ncbi_tasks(input_dir):
         species_prefix = species_prefix_from_value(species_key)
         if species_prefix == "":
             warnings.append(
-                "[ncbi] skipped '{}': unable to parse species prefix.".format(species_key)
+                "[{}] skipped '{}': unable to parse species prefix.".format(provider, species_key)
             )
             continue
 
@@ -1837,22 +2588,23 @@ def discover_ncbi_tasks(input_dir):
             for path in files
             if "genomic.gff" in path.name.lower() and is_gff_filename(path.name)
         ]
-        genome_matches = [path for path in files if is_probable_genome_filename("ncbi", path.name)]
+        genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
 
-        cds_path = pick_single_file(cds_matches, "ncbi", species_key, "CDS", warnings)
-        gff_path = pick_single_file(gff_matches, "ncbi", species_key, "GFF", warnings)
-        genome_path = pick_single_file(genome_matches, "ncbi", species_key, "genome", warnings)
+        cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
+        gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
+        genome_path = pick_single_file(genome_matches, provider, species_key, "genome", warnings)
 
         if cds_path is None or gff_path is None:
             errors.append(
-                "[ncbi] {}: missing {}".format(
+                "[{}] {}: missing {}".format(
+                    provider,
                     species_key, "CDS" if cds_path is None else "GFF"
                 )
             )
             continue
         tasks.append(
             {
-                "provider": "ncbi",
+                "provider": provider,
                 "species_key": species_key,
                 "species_prefix": species_prefix,
                 "cds_path": cds_path,
@@ -1865,17 +2617,21 @@ def discover_ncbi_tasks(input_dir):
 
 
 def discover_tasks(provider, input_dir):
-    if provider == "ensemblplants":
-        return discover_ensemblplants_tasks(input_dir)
+    if provider in ("ensembl", "ensemblplants"):
+        return discover_ensembl_like_tasks(input_dir, provider)
     if provider == "phycocosm":
         return discover_phycocosm_tasks(input_dir)
     if provider == "phytozome":
         return discover_phytozome_tasks(input_dir)
-    if provider == "ncbi":
-        return discover_ncbi_tasks(input_dir)
+    if provider in ("ncbi", "refseq", "genbank"):
+        return discover_ncbi_like_tasks(input_dir, provider)
     if provider == "coge":
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "cngb":
+        return discover_generic_species_dir_tasks(provider, input_dir)
+    if provider in ("flybase", "wormbase", "vectorbase"):
+        return discover_generic_species_dir_tasks(provider, input_dir)
+    if provider == "local":
         return discover_generic_species_dir_tasks(provider, input_dir)
     raise ValueError("Unknown provider: {}".format(provider))
 
@@ -2002,23 +2758,18 @@ def format_gff(task, output_dir, overwrite, dry_run):
 
 def resolve_provider_inputs(args):
     if args.provider == "all":
-        if args.input_dir != "":
-            raise ValueError("--input-dir cannot be used with --provider all.")
-        if args.dataset_root == "":
-            raise ValueError("--dataset-root is required when --provider all is used.")
-        dataset_root = Path(args.dataset_root).expanduser().resolve()
+        if args.input_dir == "":
+            raise ValueError("--input-dir is required when --provider all is used.")
+        input_root = Path(args.input_dir).expanduser().resolve()
         return [
-            (provider, (dataset_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]).resolve())
+            (provider, (input_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]).resolve())
             for provider in PROVIDERS
         ]
 
     provider = args.provider
     if args.input_dir != "":
         return [(provider, Path(args.input_dir).expanduser().resolve())]
-    if args.dataset_root != "":
-        dataset_root = Path(args.dataset_root).expanduser().resolve()
-        return [(provider, (dataset_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]).resolve())]
-    raise ValueError("Specify either --input-dir or --dataset-root.")
+    raise ValueError("Specify --input-dir.")
 
 
 def utc_now_iso():
@@ -2139,6 +2890,12 @@ def main():
 
     if args.download_only and args.download_manifest == "":
         parser.error("--download-only requires --download-manifest.")
+    if args.download_manifest != "" and args.provider in ("phycocosm", "phytozome"):
+        parser.error(
+            "--download-manifest does not support provider '{}'. Use --input-dir for local formatting.".format(
+                args.provider
+            )
+        )
 
     try:
         http_headers = parse_http_headers(args.http_header, args.auth_bearer_token_env)
@@ -2149,6 +2906,9 @@ def main():
         parallel_jobs = resolve_parallel_jobs(args.jobs)
         download_root = Path(args.download_dir).expanduser().resolve()
         download_root.mkdir(parents=True, exist_ok=True)
+        resolved_manifest_output_path = None
+        if args.resolved_manifest_output != "":
+            resolved_manifest_output_path = Path(args.resolved_manifest_output).expanduser().resolve()
         report = download_from_manifest(
             manifest_path=Path(args.download_manifest).expanduser().resolve(),
             download_root=download_root,
@@ -2158,17 +2918,19 @@ def main():
             timeout=float(args.download_timeout),
             dry_run=args.dry_run,
             jobs=parallel_jobs,
+            resolved_manifest_output_path=resolved_manifest_output_path,
         )
         for warning in report["warnings"]:
             sys.stderr.write("Warning: {}\n".format(warning))
         for error in report["errors"]:
             sys.stderr.write("Error: {}\n".format(error))
         print(
-            "Download stage: rows processed={}, files downloaded={}, planned downloads={}, download root={}, dry_run={}, jobs={}".format(
+            "Download stage: rows processed={}, files downloaded={}, planned downloads={}, download root={}, resolved manifest={}, dry_run={}, jobs={}".format(
                 report["processed"],
                 report["downloaded"],
                 report["planned"],
                 download_root,
+                report.get("resolved_manifest_output", ""),
                 int(args.dry_run),
                 parallel_jobs,
             )
@@ -2178,8 +2940,12 @@ def main():
         if len(report["errors"]) > 0 and args.strict:
             return 1
 
-    if args.input_dir == "" and args.dataset_root == "" and args.download_manifest != "":
-        args.dataset_root = str(Path(args.download_dir).expanduser().resolve())
+    if args.input_dir == "" and args.download_manifest != "":
+        download_input_root = Path(args.download_dir).expanduser().resolve()
+        if args.provider == "all":
+            args.input_dir = str(download_input_root)
+        else:
+            args.input_dir = str((download_input_root / DEFAULT_INPUT_RELATIVE_DIRS[args.provider]).resolve())
 
     try:
         provider_inputs = resolve_provider_inputs(args)

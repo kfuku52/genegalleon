@@ -25,6 +25,7 @@ def make_manifest(path, rows):
             handle,
             fieldnames=[
                 "provider",
+                "id",
                 "species_key",
                 "cds_url",
                 "gff_url",
@@ -32,12 +33,18 @@ def make_manifest(path, rows):
                 "cds_filename",
                 "gff_filename",
                 "genome_filename",
+                "local_cds_path",
+                "local_gff_path",
+                "local_genome_path",
             ],
             delimiter="\t",
         )
         writer.writeheader()
         for row in rows:
-            writer.writerow(row)
+            payload = dict(row)
+            if str(payload.get("id", "") or "").strip() == "":
+                payload["id"] = str(payload.get("species_key", "") or "").strip()
+            writer.writerow(payload)
 
 
 def to_file_url(path):
@@ -50,7 +57,7 @@ def test_format_dry_run_does_not_write_outputs(tmp_path):
     completed = run_script(
         "--provider",
         "all",
-        "--dataset-root",
+        "--input-dir",
         str(SMALL_DATASET_ROOT),
         "--species-cds-dir",
         str(out_cds),
@@ -79,12 +86,13 @@ def test_download_dry_run_does_not_fetch_files(tmp_path):
         manifest,
         [
             {
-                "provider": "phycocosm",
-                "species_key": "Microglena_spYARC_MicrYARC1",
+                "provider": "coge",
+                "id": "24739",
+                "species_key": "Arabidopsis_thaliana",
                 "cds_url": to_file_url(cds_source),
                 "gff_url": to_file_url(gff_source),
-                "cds_filename": "MicrYARC1_GeneCatalog_CDS_20220803.fasta",
-                "gff_filename": "MicrYARC1_GeneCatalog_genes_20220803.gff3",
+                "cds_filename": "Arabidopsis_thaliana.cds.fa",
+                "gff_filename": "Arabidopsis_thaliana.gff3",
             }
         ],
     )
@@ -92,7 +100,7 @@ def test_download_dry_run_does_not_fetch_files(tmp_path):
     download_dir = tmp_path / "download_cache"
     completed = run_script(
         "--provider",
-        "phycocosm",
+        "coge",
         "--download-manifest",
         str(manifest),
         "--download-dir",
@@ -101,10 +109,10 @@ def test_download_dry_run_does_not_fetch_files(tmp_path):
         "--dry-run",
     )
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    raw_dir = download_dir / "PhycoCosm" / "species_wise_original" / "Microglena_spYARC_MicrYARC1"
+    raw_dir = download_dir / "CoGe" / "species_wise_original" / "Arabidopsis_thaliana"
     assert raw_dir.exists()
-    assert (raw_dir / "MicrYARC1_GeneCatalog_CDS_20220803.fasta").exists() is False
-    assert (raw_dir / "MicrYARC1_GeneCatalog_genes_20220803.gff3").exists() is False
+    assert (raw_dir / "Arabidopsis_thaliana.cds.fa").exists() is False
+    assert (raw_dir / "Arabidopsis_thaliana.gff3").exists() is False
     assert "planned downloads=2" in completed.stdout
 
 
@@ -112,8 +120,8 @@ def test_invalid_http_header_fails_fast(tmp_path):
     completed = run_script(
         "--provider",
         "ensemblplants",
-        "--dataset-root",
-        str(SMALL_DATASET_ROOT),
+        "--input-dir",
+        str(SMALL_DATASET_ROOT / "20230216_EnsemblPlants" / "original_files"),
         "--http-header",
         "INVALID_HEADER_WITHOUT_COLON",
     )
@@ -125,8 +133,8 @@ def test_auth_bearer_token_env_missing_fails_fast(tmp_path):
     completed = run_script(
         "--provider",
         "ensemblplants",
-        "--dataset-root",
-        str(SMALL_DATASET_ROOT),
+        "--input-dir",
+        str(SMALL_DATASET_ROOT / "20230216_EnsemblPlants" / "original_files"),
         "--auth-bearer-token-env",
         "THIS_ENV_SHOULD_NOT_EXIST_FOR_TEST",
     )
@@ -147,12 +155,13 @@ def test_auth_bearer_token_env_allows_download(tmp_path):
         manifest,
         [
             {
-                "provider": "phycocosm",
-                "species_key": "Microglena_spYARC_MicrYARC1",
+                "provider": "coge",
+                "id": "24739",
+                "species_key": "Arabidopsis_thaliana",
                 "cds_url": to_file_url(cds_source),
                 "gff_url": to_file_url(gff_source),
-                "cds_filename": "MicrYARC1_GeneCatalog_CDS_20220803.fasta",
-                "gff_filename": "MicrYARC1_GeneCatalog_genes_20220803.gff3",
+                "cds_filename": "Arabidopsis_thaliana.cds.fa",
+                "gff_filename": "Arabidopsis_thaliana.gff3",
             }
         ],
     )
@@ -162,7 +171,7 @@ def test_auth_bearer_token_env_allows_download(tmp_path):
     download_dir = tmp_path / "download_cache"
     completed = run_script(
         "--provider",
-        "phycocosm",
+        "coge",
         "--download-manifest",
         str(manifest),
         "--download-dir",
@@ -173,6 +182,6 @@ def test_auth_bearer_token_env_allows_download(tmp_path):
         env=env,
     )
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    raw_dir = download_dir / "PhycoCosm" / "species_wise_original" / "Microglena_spYARC_MicrYARC1"
-    assert (raw_dir / "MicrYARC1_GeneCatalog_CDS_20220803.fasta").exists()
-    assert (raw_dir / "MicrYARC1_GeneCatalog_genes_20220803.gff3").exists()
+    raw_dir = download_dir / "CoGe" / "species_wise_original" / "Arabidopsis_thaliana"
+    assert (raw_dir / "Arabidopsis_thaliana.cds.fa").exists()
+    assert (raw_dir / "Arabidopsis_thaliana.gff3").exists()

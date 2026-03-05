@@ -168,7 +168,7 @@ workspace/
     species_dnaseq/
     species_trait/
     species_rnaseq/
-    query_manifest/
+    input_generation/
     query_sra_id/
     query_gene/
     transcriptome_assembly/
@@ -243,7 +243,7 @@ Accepted forms:
 
 ### Automated provider formatting helper
 
-Manual formatting can be replaced with `workflow/support/format_species_inputs.py`, which ports key rules from legacy `gfe_dataset` scripts such as:
+Manual formatting can be replaced with `workflow/support/format_species_inputs.py`, which ports key rules from legacy raw genome formatting scripts such as:
 
 - `data_formatting_ensemblplants.sh`
 - `data_formatting_phycocosm.sh`
@@ -254,17 +254,17 @@ Example (single provider, explicit input directory):
 ```bash
 python workflow/support/format_species_inputs.py \
   --provider ensemblplants \
-  --input-dir "/path/to/gfe_dataset/20230216_EnsemblPlants/original_files" \
+  --input-dir "/path/to/raw_genomes/20230216_EnsemblPlants/original_files" \
   --species-cds-dir workspace/output/input_generation/species_cds \
   --species-gff-dir workspace/output/input_generation/species_gff
 ```
 
-Example (all providers, `gfe_dataset` root):
+Example (all providers, provider-root input directory):
 
 ```bash
 python workflow/support/format_species_inputs.py \
   --provider all \
-  --dataset-root "/path/to/gfe_dataset" \
+  --input-dir "/path/to/raw_genomes" \
   --species-cds-dir workspace/output/input_generation/species_cds \
   --species-gff-dir workspace/output/input_generation/species_gff
 ```
@@ -282,7 +282,7 @@ Download-first workflow (manifest driven):
 ```bash
 python workflow/support/format_species_inputs.py \
   --provider all \
-  --download-manifest /path/to/download_manifest.tsv \
+  --download-manifest /path/to/download_plan.xlsx \
   --download-dir workspace/output/input_generation/tmp/input_download_cache \
   --species-cds-dir workspace/output/input_generation/species_cds \
   --species-gff-dir workspace/output/input_generation/species_gff
@@ -290,31 +290,54 @@ python workflow/support/format_species_inputs.py \
 
 Manifest required columns:
 
-- one of `provider` or `id`
-  - if `provider` is omitted, it is inferred from `id` when possible
-    (`GCF_...`/`GCA_...` or NCBI assembly URL -> `ncbi`,
-    `coge:...`/CoGe URL -> `coge`,
-    `cngb:...`/CNGB URL -> `cngb`)
-- one of `species_key` or `id`
-- `cds_url` and `gff_url` (or `id` for `provider=ncbi` to auto-resolve NCBI URLs)
+- `provider` (required; first column in XLSX templates)
+- `id` (required; second column in XLSX templates)
+- `species_key` is optional
+- `cds_url` and `gff_url` (or `id` to auto-resolve provider-specific URLs when supported)
   - for `provider=ncbi`, when `species_key` is omitted and `id` is given, `species_key` is inferred from NCBI species metadata (e.g. `Homo_sapiens`).
-  - for non-NCBI providers, `id`-only URL inference is supported via:
-    - provider defaults (EnsemblPlants index discovery),
+  - for `provider=refseq` and `provider=genbank`, NCBI assembly URL resolution is also supported. The selected FTP source is preferred by provider name and falls back when only one source exists.
+  - for `provider=coge`, `id` must be CoGe `genome_id` (numeric `gid`), and CDS/GFF/Genome URLs are auto-built.
+  - for `provider=cngb`, built-in inference resolves CNGB assembly IDs (`CNA...`, `cngb:...`) or linked `GCA/GCF` accessions and maps to downloadable assembly files.
+  - for `provider=flybase`, `provider=wormbase`, and `provider=vectorbase`, `id` can be resolved via explicit URL columns or `GG_<PROVIDER>_*_URL_TEMPLATE`.
+  - for `provider=ensembl` and `provider=ensemblplants`, `id`-only URL inference is supported via:
+    - provider defaults (for example, Ensembl/EnsemblPlants index discovery),
     - or env templates: `GG_<PROVIDER>_CDS_URL_TEMPLATE`, `GG_<PROVIDER>_GFF_URL_TEMPLATE`, `GG_<PROVIDER>_GENOME_URL_TEMPLATE`,
     - and optional page template: `GG_<PROVIDER>_ID_URL_TEMPLATE`.
+  - for `provider=local`, `id` can point to a local species directory (or set explicit local file paths) and formatting starts from local files.
+  - `provider=phycocosm` and `provider=phytozome` are not supported in `--download-manifest`.
+    Use `--input-dir` for local raw-file formatting only.
 
 Optional columns:
 
+- `species_key`
 - `cds_filename`
 - `gff_filename`
 - `genome_filename`
-- `id` (can be used as `species_key` substitute for any provider)
 - `cds_url_template`, `gff_url_template`, `genome_url_template`
   (`{id}`, `{species_key}`, `{provider}` placeholders)
+- `local_cds_path`, `local_gff_path`, `local_genome_path`
+  (for `provider=local`)
+
+XLSX template notes:
+
+- `download_plan.xlsx` includes drop-downs for `provider` and `id`.
+- `id` drop-down values are provider-specific.
+- for large providers (`ncbi`, `refseq`, `genbank`), model-organism IDs are shown as examples.
+- for `coge` and `cngb`, IDs are also example-based by default.
+- for `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, and `local`,
+  IDs can be supplied from a prebuilt `id_options_snapshot.json`.
+- when no snapshot is supplied, non-large providers fall back to IDs discovered from `--input-dir`.
+- drop-down IDs are shown as `ID (Species name)` for non-`local` providers.
+- for `provider=local`, drop-down IDs are plain local directory/path-style IDs.
+- at runtime, `id` parsing uses the token before the first space (for non-`local` providers), so labels like `GCF_000001405.40 (Homo sapiens)` are accepted.
+- any other value can still be typed manually.
 
 Use `--download-only` to fetch raw files and stop before formatting.
 Use `--dry-run` to preview downloads and formatting outputs without writing files.
 Use `--jobs` to set download parallelism (defaults to `NSLOTS`, fallback `1`).
+Resolved manifest rows (for example URL/template/local-path auto-resolution and filename filling)
+are written to:
+- `workspace/output/input_generation/download_plan.resolved.tsv`
 
 Download concurrency safeguards:
 
@@ -338,56 +361,84 @@ Build a manifest automatically from an existing local dataset tree:
 ```bash
 python workflow/support/build_download_manifest.py \
   --provider all \
-  --dataset-root "/path/to/gfe_dataset" \
-  --output workspace/input/query_manifest/download_manifest.tsv
+  --input-dir "/path/to/raw_genomes" \
+  --id-options-snapshot /path/to/id_options_snapshot.json \
+  --output workspace/input/input_generation/download_plan.xlsx
 ```
 
 This writes `file://` URLs, so you can test the full download+format pipeline locally before replacing them with remote URLs.
 
-Use `workspace/input/query_manifest/download_manifest.tsv` as the runtime manifest file.
+Use `workspace/input/input_generation/download_plan.xlsx` as the runtime manifest input file.
+Resolved/filled rows are written to `workspace/output/input_generation/download_plan.resolved.tsv`.
+
+Latest template distribution:
+
+- On each push to the default branch, GitHub Actions runs `build_download_manifest.py`
+  and publishes the latest `download_plan.xlsx`.
+- The workflow first builds `id_options_snapshot.json` (remote provider ID choices),
+  then generates `download_plan.xlsx` from that snapshot.
+- If remote ID fetch fails for some providers, the workflow reuses provider entries
+  from the previous `id_options_snapshot.json` release asset.
+- Release asset URL (rolling latest):
+  `https://github.com/<owner>/<repo>/releases/download/download-plan-latest/download_plan.xlsx`
+- Snapshot asset URL (rolling latest):
+  `https://github.com/<owner>/<repo>/releases/download/download-plan-latest/id_options_snapshot.json`
+- Workflow definition:
+  `.github/workflows/download-plan.yml`
 
 `gg_input_generation_entrypoint.sh` wrapper:
 
 - runs `gg_input_generation_core.sh` inside the container as a single entrypoint,
-- can build a manifest and immediately format inputs in one run,
+- can download provider files from a manifest and format inputs in one run,
 - can validate produced `species_cds` and `species_gff` consistency.
 
 Configuration:
 
 - edit the `### Start: Modify this block ... ###` section in
   `workflow/gg_input_generation_entrypoint.sh`,
-- keep `workspace/input/query_manifest/download_manifest.tsv` as the runtime manifest file.
+- keep `workspace/input/input_generation/download_plan.xlsx` as the runtime manifest input file.
+- check resolved rows at `workspace/output/input_generation/download_plan.resolved.tsv`.
 
 Alternative runtime overrides (without editing files) via env vars:
 
 - `GG_INPUT_PROVIDER`, `GG_INPUT_STRICT`, `GG_INPUT_OVERWRITE`,
 - `GG_INPUT_DRY_RUN`, `GG_INPUT_DOWNLOAD_MANIFEST`,
-- `GG_INPUT_DATASET_ROOT`, `GG_INPUT_INPUT_DIR`,
+- `GG_INPUT_INPUT_DIR`,
 - `GG_INPUT_SPECIES_CDS_DIR`, `GG_INPUT_SPECIES_GFF_DIR`, `GG_INPUT_SPECIES_GENOME_DIR`,
 - `GG_INPUT_AUTH_BEARER_TOKEN_ENV`, `GG_INPUT_HTTP_HEADER`,
 - `GG_INPUT_SUMMARY_OUTPUT`.
 - per-provider download caps:
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBL`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBLPLANTS`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_PHYCOCOSM`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_PHYTOZOME`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_NCBI`,
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_REFSEQ`,
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_GENBANK`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_COGE`,
-  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_CNGB`.
-
-Optional host dataset bind for `gg_input_generation_entrypoint.sh`:
-
-```bash
-export GG_INPUT_DATASET_HOST_PATH="/absolute/path/to/gfe_dataset"
-bash workflow/gg_input_generation_entrypoint.sh
-```
-
-This binds the host path to `/external/gfe_dataset` in the container and sets `GG_DATASET_ROOT` for `gg_input_generation_core.sh`.
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_CNGB`,
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_FLYBASE`,
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_WORMBASE`,
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_VECTORBASE`.
 
 ## Quick Start
 
 From repository root:
 
 ```bash
+# 0) Prepare container image (required)
+# Recommended: pull fixed GHCR tag and build local SIF
+GHCR_TAG="YYYYMMDD-<sha7>"  # example: 20260304-abcd123
+apptainer build genegalleon.sif \
+  docker://ghcr.io/kfuku52/genegalleon:${GHCR_TAG}
+
+# Alternative: build image + SIF locally
+IMAGE=local/genegalleon TAG=dev ./container/gg_container_build_entrypoint.sh
+
+# NOTE:
+# - wrappers use ../genegalleon.sif by default (when run from workflow/)
+# - for ARM users, build SIF on an ARM Linux host; do not reuse amd64 SIF
+
 cd workflow
 
 # 1) Optional input download/format automation
@@ -421,7 +472,6 @@ So array-task cardinality is the number of files in `workspace/input/query_gene`
 Purpose:
 
 - optional pre-stage to automate input preparation,
-- build manifest tables from local `gfe_dataset` trees,
 - optionally download provider files from a manifest and format into
   `workspace/output/input_generation/species_cds` and
   `workspace/output/input_generation/species_gff` and
@@ -430,12 +480,10 @@ Purpose:
 Main scripts:
 
 - `workflow/core/gg_input_generation_core.sh`
-- `workflow/support/build_download_manifest.py`
 - `workflow/support/format_species_inputs.py`
 
 Notable defaults:
 
-- when `run_build_manifest=1`, generated manifest is reused automatically by `run_format_inputs=1`,
 - `run_validate_inputs=1` validates CDS naming rules and CDS/GFF species-set consistency,
 - formatted outputs default to `workspace/output/input_generation/species_cds`, `workspace/output/input_generation/species_gff`, and `workspace/output/input_generation/species_genome`,
 - each run appends a TSV record to `workspace/output/input_generation/gg_input_generation_runs.tsv`

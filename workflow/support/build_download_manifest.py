@@ -2,8 +2,24 @@
 
 import argparse
 import csv
+import json
 from pathlib import Path
+import re
 import sys
+from typing import Dict, Iterable, List, Tuple
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.utils import get_column_letter
+    from openpyxl.workbook.defined_name import DefinedName
+    from openpyxl.styles import Font
+    from openpyxl.worksheet.datavalidation import DataValidation
+except Exception:  # pragma: no cover - exercised in runtime environments without openpyxl
+    Workbook = None
+    get_column_letter = None
+    DefinedName = None
+    Font = None
+    DataValidation = None
 
 
 FASTA_EXTENSIONS = (
@@ -26,22 +42,226 @@ GFF_EXTENSIONS = (
     ".gtf.gz",
 )
 
-PROVIDERS = ("ensemblplants", "phycocosm", "phytozome", "ncbi", "coge", "cngb")
+PROVIDERS = (
+    "ensembl",
+    "ensemblplants",
+    "ncbi",
+    "refseq",
+    "genbank",
+    "coge",
+    "cngb",
+    "flybase",
+    "wormbase",
+    "vectorbase",
+    "local",
+)
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
+    "ensembl": Path("Ensembl") / "original_files",
     "ensemblplants": Path("20230216_EnsemblPlants") / "original_files",
-    "phycocosm": Path("PhycoCosm") / "species_wise_original",
-    "phytozome": Path("Phytozome") / "species_wise_original",
     "ncbi": Path("NCBI_Genome") / "species_wise_original",
+    "refseq": Path("NCBI_RefSeq") / "species_wise_original",
+    "genbank": Path("NCBI_GenBank") / "species_wise_original",
     "coge": Path("CoGe") / "species_wise_original",
     "cngb": Path("CNGB") / "species_wise_original",
+    "flybase": Path("FlyBase") / "species_wise_original",
+    "wormbase": Path("WormBase") / "species_wise_original",
+    "vectorbase": Path("VectorBase") / "species_wise_original",
+    "local": Path("Local") / "species_wise_original",
 }
+
+MANIFEST_FIELDNAMES = (
+    "provider",
+    "id",
+    "species_key",
+    "cds_url",
+    "gff_url",
+    "genome_url",
+    "cds_filename",
+    "gff_filename",
+    "genome_filename",
+    "cds_url_template",
+    "gff_url_template",
+    "genome_url_template",
+    "local_cds_path",
+    "local_gff_path",
+    "local_genome_path",
+)
+
+LARGE_ID_PROVIDERS = ("ncbi", "refseq", "genbank")
+SNAPSHOT_FULL_ID_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "local")
+EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
+
+ID_EXAMPLES_BY_PROVIDER = {
+    "ensembl": (("homo_sapiens", "Homo sapiens"), ("mus_musculus", "Mus musculus")),
+    "ensemblplants": (("Ostreococcus_lucimarinus", "Ostreococcus lucimarinus"),),
+    "ncbi": (("GCF_000001405.40", "Homo sapiens"), ("GCA_000001405.29", "Homo sapiens")),
+    "refseq": (("GCF_000001405.40", "Homo sapiens"),),
+    "genbank": (("GCA_000001405.29", "Homo sapiens"),),
+    "coge": (("24739", "Arabidopsis thaliana"),),
+    "cngb": (("CNA0012345", "Homo sapiens"),),
+    "flybase": (("dmel_r6.61", "Drosophila melanogaster"),),
+    "wormbase": (("celegans_prjna13758_ws290", "Caenorhabditis elegans"),),
+    "vectorbase": (("anopheles_gambiae_pest", "Anopheles gambiae"),),
+    "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
+}
+
+
+def species_label_from_species_key(species_key: str) -> str:
+    text = str(species_key or "").strip()
+    if text == "":
+        return ""
+    parts = text.replace("_", " ").split()
+    normalized = []
+    for idx, part in enumerate(parts):
+        if re.fullmatch(r"[a-z]+", part):
+            if idx == 0:
+                normalized.append(part.capitalize())
+            else:
+                normalized.append(part.lower())
+        else:
+            normalized.append(part)
+    return " ".join(normalized)
+
+
+def format_id_choice(source_id: str, species_label: str) -> str:
+    sid = str(source_id or "").strip()
+    label = str(species_label or "").strip()
+    if sid == "":
+        return ""
+    if label == "":
+        return sid
+    return "{} ({})".format(sid, label)
+
+
+def dedupe_preserve_order(items):
+    out = []
+    seen = set()
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def parse_snapshot_entries(raw_entries):
+    out = []
+    entries = raw_entries
+    if isinstance(entries, dict):
+        entries = [entries]
+    if not isinstance(entries, list):
+        return out
+    for entry in entries:
+        source_id = ""
+        species_label = ""
+        if isinstance(entry, str):
+            source_id = entry
+        elif isinstance(entry, dict):
+            source_id = str(entry.get("id") or entry.get("source_id") or "").strip()
+            species_label = str(entry.get("species") or entry.get("species_label") or entry.get("label") or "").strip()
+        elif isinstance(entry, (tuple, list)) and len(entry) > 0:
+            source_id = str(entry[0] or "").strip()
+            if len(entry) > 1:
+                species_label = str(entry[1] or "").strip()
+        source_id = str(source_id or "").strip()
+        if source_id == "":
+            continue
+        out.append((source_id, species_label))
+    return dedupe_preserve_order(out)
+
+
+def load_id_options_snapshot(path: Path):
+    with open(path, "rt", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    providers_blob = payload.get("providers", payload)
+    if not isinstance(providers_blob, dict):
+        raise ValueError("id options snapshot must contain object key 'providers'")
+    options = {}
+    for provider in PROVIDERS:
+        options[provider] = parse_snapshot_entries(providers_blob.get(provider, []))
+    return options
+
+
+def infer_coge_genome_id_from_files(species_key: str, files: List[Path], warnings: List[str]) -> str:
+    matches = set()
+    key_match = re.search(r"(?:^|[._-])gid([0-9]+)(?:[._-]|$)", species_key, flags=re.IGNORECASE)
+    if key_match is not None:
+        matches.add(key_match.group(1))
+    for path in files:
+        name = path.name
+        for match in re.finditer(r"(?:^|[._-])gid([0-9]+)(?:[._-]|$)", name, flags=re.IGNORECASE):
+            matches.add(match.group(1))
+        for match in re.finditer(r"dsgid[=_-]?([0-9]+)", name, flags=re.IGNORECASE):
+            matches.add(match.group(1))
+    if len(matches) == 0:
+        return ""
+    ordered = sorted(matches)
+    if len(ordered) > 1:
+        warnings.append(
+            "[coge] {}: multiple genome_id candidates detected {}. Using '{}'".format(
+                species_key, ",".join(ordered), ordered[0]
+            )
+        )
+    return ordered[0]
+
+
+def build_provider_id_options(rows: List[Dict[str, str]], snapshot_options=None):
+    if snapshot_options is None:
+        snapshot_options = {}
+    discovered: Dict[str, Dict[str, str]] = {provider: {} for provider in PROVIDERS}
+    for row in rows:
+        provider = str(row.get("provider", "") or "").strip().lower()
+        source_id = str(row.get("id", "") or "").strip()
+        species_label = species_label_from_species_key(str(row.get("species_key", "") or ""))
+        if provider not in discovered or source_id == "":
+            continue
+        if source_id not in discovered[provider]:
+            discovered[provider][source_id] = species_label
+
+    options = {}
+    for provider in PROVIDERS:
+        values = []
+        if provider in EXAMPLE_ONLY_PROVIDERS:
+            values = [
+                format_id_choice(source_id, species_label)
+                for source_id, species_label in ID_EXAMPLES_BY_PROVIDER.get(provider, ())
+            ]
+        else:
+            snapshot_entries = list(snapshot_options.get(provider, []))
+            if provider in SNAPSHOT_FULL_ID_PROVIDERS and len(snapshot_entries) > 0:
+                if provider == "local":
+                    values = [str(source_id).strip() for source_id, _ in snapshot_entries if str(source_id).strip()]
+                else:
+                    values = [
+                        format_id_choice(source_id, species_label if species_label != "" else species_label_from_species_key(source_id))
+                        for source_id, species_label in snapshot_entries
+                    ]
+            if len(values) == 0:
+                if provider == "local":
+                    values = [str(source_id).strip() for source_id in sorted(discovered[provider].keys()) if str(source_id).strip()]
+                    if len(values) == 0:
+                        values = [str(source_id).strip() for source_id, _species_label in ID_EXAMPLES_BY_PROVIDER.get(provider, ())]
+                else:
+                    values = [
+                        format_id_choice(source_id, discovered[provider].get(source_id, ""))
+                        for source_id in sorted(discovered[provider].keys())
+                    ]
+                    if len(values) == 0:
+                        values = [
+                            format_id_choice(source_id, species_label)
+                            for source_id, species_label in ID_EXAMPLES_BY_PROVIDER.get(provider, ())
+                        ]
+        if len(values) == 0:
+            values = [""]
+        options[provider] = dedupe_preserve_order(values)
+    return options
 
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Build a download manifest TSV from an existing local gfe_dataset-style directory. "
+            "Build a download manifest from an existing local provider-root directory. "
             "Generated URLs are file:// URLs for reuse in format_species_inputs.py --download-manifest."
         )
     )
@@ -52,19 +272,28 @@ def build_arg_parser():
         help="Provider to scan (default: all).",
     )
     parser.add_argument(
-        "--dataset-root",
+        "--input-dir",
         required=True,
-        help="Root of gfe_dataset.",
+        help="Root directory containing provider subdirectories used by format_species_inputs.py.",
     )
     parser.add_argument(
         "--output",
-        default="workspace/input/query_manifest/download_manifest.tsv",
-        help="Output TSV path.",
+        default="workspace/input/input_generation/download_plan.xlsx",
+        help="Output path (.xlsx recommended; .tsv/.csv also supported).",
     )
     parser.add_argument(
         "--strict",
         action="store_true",
         help="Exit with error when a species is missing CDS or GFF.",
+    )
+    parser.add_argument(
+        "--id-options-snapshot",
+        default="",
+        help=(
+            "Optional JSON snapshot for provider-specific id dropdown values. "
+            "When set, non-large providers (ensembl/ensemblplants/flybase/wormbase/vectorbase/local) "
+            "prefer snapshot IDs over locally discovered IDs."
+        ),
     )
     return parser
 
@@ -97,9 +326,9 @@ def is_probable_genome_filename(provider, name):
     )
     if any(marker in lower for marker in non_genome_markers):
         return False
-    if provider == "ncbi":
+    if provider in ("ncbi", "refseq", "genbank"):
         return "genomic" in lower
-    if provider == "ensemblplants":
+    if provider in ("ensembl", "ensemblplants"):
         return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
     return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold"))
 
@@ -117,7 +346,7 @@ def pick_single_file(matches, provider, species_key, label, warnings):
     return ordered[0]
 
 
-def discover_ensemblplants(input_dir):
+def discover_ensembl_like(input_dir, provider):
     warnings = []
     errors = []
     rows = []
@@ -135,25 +364,26 @@ def discover_ensemblplants(input_dir):
             species_to_cds.setdefault(species_key, []).append(path)
         elif is_gff_filename(path.name):
             species_to_gff.setdefault(species_key, []).append(path)
-        elif is_probable_genome_filename("ensemblplants", path.name):
+        elif is_probable_genome_filename(provider, path.name):
             species_to_genome.setdefault(species_key, []).append(path)
 
     for species_key in sorted(set(species_to_cds.keys()) | set(species_to_gff.keys()) | set(species_to_genome.keys())):
-        cds_path = pick_single_file(species_to_cds.get(species_key, []), "ensemblplants", species_key, "CDS", warnings)
-        gff_path = pick_single_file(species_to_gff.get(species_key, []), "ensemblplants", species_key, "GFF", warnings)
+        cds_path = pick_single_file(species_to_cds.get(species_key, []), provider, species_key, "CDS", warnings)
+        gff_path = pick_single_file(species_to_gff.get(species_key, []), provider, species_key, "GFF", warnings)
         genome_path = pick_single_file(
-            species_to_genome.get(species_key, []), "ensemblplants", species_key, "genome", warnings
+            species_to_genome.get(species_key, []), provider, species_key, "genome", warnings
         )
         if cds_path is None or gff_path is None:
             errors.append(
-                "[ensemblplants] {}: missing {}".format(
+                "[{}] {}: missing {}".format(
+                    provider,
                     species_key, "CDS" if cds_path is None else "GFF"
                 )
             )
             continue
         rows.append(
             {
-                "provider": "ensemblplants",
+                "provider": provider,
                 "id": species_key,
                 "species_key": species_key,
                 "cds_url": cds_path.resolve().as_uri(),
@@ -189,7 +419,7 @@ def discover_species_dir_based(provider, input_dir):
             ]
             gff_matches = [path for path in files if "gene.gff3" in path.name.lower() and is_gff_filename(path.name)]
             genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
-        elif provider == "ncbi":
+        elif provider in ("ncbi", "refseq", "genbank"):
             cds_matches = [
                 path
                 for path in files
@@ -227,10 +457,19 @@ def discover_species_dir_based(provider, input_dir):
                 )
             )
             continue
+        source_id = species_key
+        if provider == "coge":
+            source_id = infer_coge_genome_id_from_files(species_key, files, warnings)
+            if source_id == "":
+                errors.append(
+                    "[coge] {}: genome_id (gid) was not detected from file names. "
+                    "Include 'gid<NUM>' in at least one input filename.".format(species_key)
+                )
+                continue
         rows.append(
             {
                 "provider": provider,
-                "id": species_key,
+                "id": source_id,
                 "species_key": species_key,
                 "cds_url": cds_path.resolve().as_uri(),
                 "gff_url": gff_path.resolve().as_uri(),
@@ -243,47 +482,124 @@ def discover_species_dir_based(provider, input_dir):
     return rows, warnings, errors
 
 
-def discover(provider, dataset_root, allow_missing=False):
-    input_dir = dataset_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]
+def discover(provider, input_root, allow_missing=False):
+    input_dir = input_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]
     if not input_dir.exists() or not input_dir.is_dir():
         message = "[{}] input directory not found: {}".format(provider, input_dir)
         if allow_missing:
             return [], [message], []
         return [], [], [message]
-    if provider == "ensemblplants":
-        return discover_ensemblplants(input_dir)
+    if provider in ("ensembl", "ensemblplants"):
+        return discover_ensembl_like(input_dir, provider)
     return discover_species_dir_based(provider, input_dir)
 
 
-def write_manifest(rows, output_path):
+def write_manifest_tsv(rows: Iterable[Dict[str, str]], output_path: Path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "wt", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=[
-                "provider",
-                "id",
-                "species_key",
-                "cds_url",
-                "gff_url",
-                "genome_url",
-                "cds_filename",
-                "gff_filename",
-                "genome_filename",
-            ],
+            fieldnames=list(MANIFEST_FIELDNAMES),
             delimiter="\t",
             lineterminator="\n",
         )
         writer.writeheader()
         for row in rows:
-            writer.writerow(row)
+            writer.writerow({key: str(row.get(key, "") or "") for key in MANIFEST_FIELDNAMES})
+
+
+def write_manifest_xlsx(rows: List[Dict[str, str]], output_path: Path, id_options_snapshot=None):
+    if (
+        Workbook is None
+        or get_column_letter is None
+        or DefinedName is None
+        or Font is None
+        or DataValidation is None
+    ):
+        raise RuntimeError(
+            "openpyxl is required to write .xlsx manifests. Install openpyxl or use --output *.tsv."
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "download_plan"
+    sheet.append(list(MANIFEST_FIELDNAMES))
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    sheet.freeze_panes = "A2"
+
+    for row in rows:
+        sheet.append([str(row.get(key, "") or "") for key in MANIFEST_FIELDNAMES])
+
+    list_sheet = workbook.create_sheet("_lists")
+    for idx, provider in enumerate(PROVIDERS, start=1):
+        list_sheet.cell(row=idx, column=1, value=provider)
+    id_options_by_provider = build_provider_id_options(rows, snapshot_options=id_options_snapshot)
+    for col_idx, provider in enumerate(PROVIDERS, start=2):
+        values = list(id_options_by_provider.get(provider, [""]))
+        for row_idx, value in enumerate(values, start=1):
+            list_sheet.cell(row=row_idx, column=col_idx, value=value)
+        col_letter = get_column_letter(col_idx)
+        workbook.defined_names.add(
+            DefinedName(
+                name="id_opts_{}".format(provider),
+                attr_text="'_lists'!${}$1:${}${}".format(col_letter, col_letter, len(values)),
+            )
+        )
+    list_sheet.sheet_state = "hidden"
+
+    provider_validation = DataValidation(
+        type="list",
+        formula1="=_lists!$A$1:$A${}".format(len(PROVIDERS)),
+        allow_blank=False,
+    )
+    sheet.add_data_validation(provider_validation)
+    provider_validation.add("A2:A5000")
+
+    id_validation = DataValidation(
+        type="list",
+        formula1='=INDIRECT("id_opts_"&$A2)',
+        allow_blank=False,
+        errorStyle="information",
+        errorTitle="ID candidates",
+        error=(
+            "This drop-down changes by provider. "
+            "For large providers, model-organism IDs are shown as examples. "
+            "You can still type any other ID value."
+        ),
+    )
+    id_validation.showErrorMessage = False
+    sheet.add_data_validation(id_validation)
+    id_validation.add("B2:B5000")
+
+    workbook.save(output_path)
+
+
+def write_manifest(rows: List[Dict[str, str]], output_path: Path, id_options_snapshot=None):
+    suffix = output_path.suffix.lower()
+    if suffix == ".xlsx":
+        write_manifest_xlsx(rows, output_path, id_options_snapshot=id_options_snapshot)
+        return
+    write_manifest_tsv(rows, output_path)
 
 
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
-    dataset_root = Path(args.dataset_root).expanduser().resolve()
+    input_root = Path(args.input_dir).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve()
+    id_options_snapshot = {}
+    if str(args.id_options_snapshot or "").strip() != "":
+        snapshot_path = Path(args.id_options_snapshot).expanduser().resolve()
+        if not snapshot_path.exists():
+            sys.stderr.write("Warning: id options snapshot was not found and will be ignored: {}\n".format(snapshot_path))
+        else:
+            try:
+                id_options_snapshot = load_id_options_snapshot(snapshot_path)
+            except Exception as exc:
+                sys.stderr.write("Error: failed to read id options snapshot '{}': {}\n".format(snapshot_path, exc))
+                return 1
 
     providers = PROVIDERS if args.provider == "all" else (args.provider,)
     all_rows = []
@@ -291,7 +607,7 @@ def main():
     all_errors = []
     allow_missing = args.provider == "all"
     for provider in providers:
-        rows, warnings, errors = discover(provider, dataset_root, allow_missing=allow_missing)
+        rows, warnings, errors = discover(provider, input_root, allow_missing=allow_missing)
         all_rows.extend(rows)
         all_warnings.extend(warnings)
         all_errors.extend(errors)
@@ -302,7 +618,7 @@ def main():
         sys.stderr.write("Error: {}\n".format(error))
 
     all_rows = sorted(all_rows, key=lambda x: (x["provider"], x["species_key"]))
-    write_manifest(all_rows, output_path)
+    write_manifest(all_rows, output_path, id_options_snapshot=id_options_snapshot)
     print("Manifest written: {} (rows={})".format(output_path, len(all_rows)))
 
     if args.strict and len(all_errors) > 0:
