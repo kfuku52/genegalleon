@@ -295,7 +295,7 @@ Manifest required columns:
 - `species_key` is optional
 - `cds_url` and `gff_url` (or `id` to auto-resolve provider-specific URLs when supported)
   - for `provider=ncbi`, when `species_key` is omitted and `id` is given, `species_key` is inferred from NCBI species metadata (e.g. `Homo_sapiens`).
-  - for `provider=refseq` and `provider=genbank`, NCBI assembly URL resolution is also supported. The selected FTP source is preferred by provider name and falls back when only one source exists.
+  - `provider=ncbi` accepts both `GCF_*` and `GCA_*` assembly accessions and auto-resolves NCBI assembly URLs.
   - for `provider=coge`, `id` must be CoGe `genome_id` (numeric `gid`), and CDS/GFF/Genome URLs are auto-built.
   - for `provider=cngb`, built-in inference resolves CNGB assembly IDs (`CNA...`, `cngb:...`) or linked `GCA/GCF` accessions and maps to downloadable assembly files.
   - for `provider=flybase`, `provider=wormbase`, and `provider=vectorbase`, `id` can be resolved via explicit URL columns or `GG_<PROVIDER>_*_URL_TEMPLATE`.
@@ -323,8 +323,8 @@ XLSX template notes:
 - `download_plan.xlsx` includes drop-downs for `provider` and `id`.
 - `id` drop-down values are provider-specific.
 - provider drop-down order is fixed, and `local` is always listed last.
-- for large providers (`ncbi`, `refseq`, `genbank`), five model-organism IDs are shown as examples.
-- for `coge` and `cngb`, IDs are also example-based by default.
+- for large provider (`ncbi`), five model-organism IDs are shown as examples (mixed `GCF_*`/`GCA_*` formats).
+- for `coge` and `cngb`, IDs are also example-based by default (`coge` shows five model-organism `genome_id` examples).
 - for `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, and `local`,
   IDs can be supplied from a prebuilt `id_options_snapshot.json`.
 - when no snapshot is supplied, non-large providers fall back to IDs discovered from `--input-dir`.

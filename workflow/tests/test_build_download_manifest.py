@@ -116,34 +116,35 @@ def test_build_download_manifest_strict_fails_on_missing_pair(tmp_path):
 def test_build_download_manifest_ncbi_like_provider_from_species_dir_fixture(tmp_path):
     input_root = tmp_path / "dataset"
     fixtures = (
-        ("ncbi", "NCBI_Genome", "GCF_000001405.40", "GCF_000001405.40_GRCh38.p14"),
-        ("refseq", "NCBI_RefSeq", "GCF_000001405.40", "GCF_000001405.40_GRCh38.p14"),
-        ("genbank", "NCBI_GenBank", "GCA_000001405.29", "GCA_000001405.29_GRCh38.p14"),
+        ("NCBI_Genome", "GCF_000001405.40", "GCF_000001405.40_GRCh38.p14"),
+        ("NCBI_RefSeq", "GCF_000001405.40", "GCF_000001405.40_GRCh38.p14"),
+        ("NCBI_GenBank", "GCA_000001405.29", "GCA_000001405.29_GRCh38.p14"),
     )
-    for provider, provider_dir, accession, stem in fixtures:
+    for provider_dir, accession, stem in fixtures:
         species_dir = input_root / provider_dir / "species_wise_original" / accession
         species_dir.mkdir(parents=True, exist_ok=True)
         (species_dir / (stem + "_cds_from_genomic.fna.gz")).write_bytes(b"dummy")
         (species_dir / (stem + "_genomic.gff.gz")).write_bytes(b"dummy")
         (species_dir / (stem + "_genomic.fna.gz")).write_bytes(b"dummy")
 
-        out = tmp_path / ("download_manifest_{}.xlsx".format(provider))
-        completed = run_script(
-            "--provider",
-            provider,
-            "--input-dir",
-            str(input_root),
-            "--output",
-            str(out),
-        )
-        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-        rows = read_manifest(out)
-        assert len(rows) == 1
-        assert rows[0]["provider"] == provider
-        assert rows[0]["id"] == accession
-        assert rows[0]["species_key"] == accession
-        assert rows[0]["genome_url"].startswith("file://")
-        assert rows[0]["genome_filename"] == stem + "_genomic.fna.gz"
+    out = tmp_path / "download_manifest_ncbi.xlsx"
+    completed = run_script(
+        "--provider",
+        "ncbi",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    rows = read_manifest(out)
+    assert len(rows) == 2
+    assert [row["provider"] for row in rows] == ["ncbi", "ncbi"]
+    assert sorted([row["id"] for row in rows]) == ["GCA_000001405.29", "GCF_000001405.40"]
+    for row in rows:
+        assert row["species_key"] in ("GCA_000001405.29", "GCF_000001405.40")
+        assert row["genome_url"].startswith("file://")
+        assert row["genome_filename"].endswith("_genomic.fna.gz")
 
 
 def test_build_download_manifest_ensembl_provider_from_flat_fixture(tmp_path):
@@ -244,13 +245,11 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
 
         list_sheet = workbook["_lists"]
-        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 12)]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 10)]
         assert provider_values == [
             "ensembl",
             "ensemblplants",
             "ncbi",
-            "refseq",
-            "genbank",
             "coge",
             "cngb",
             "flybase",
@@ -303,31 +302,27 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
     workbook = load_workbook(out)
     try:
         list_sheet = workbook["_lists"]
-        coge_values = read_list_column_values(list_sheet, 7)
-        local_values = read_list_column_values(list_sheet, 12)
+        coge_values = read_list_column_values(list_sheet, 5)
+        local_values = read_list_column_values(list_sheet, 10)
         ncbi_values = read_list_column_values(list_sheet, 4)
-        refseq_values = read_list_column_values(list_sheet, 5)
-        genbank_values = read_list_column_values(list_sheet, 6)
 
-        assert coge_values == ["24739 (Arabidopsis thaliana)"]
+        assert coge_values == [
+            "24739 (Arabidopsis thaliana)",
+            "29177 (Oryza sativa)",
+            "42091 (Zea mays)",
+            "78085 (Drosophila melanogaster)",
+            "72417 (Caenorhabditis elegans)",
+        ]
         assert local_values == [
             "Hydrocotyle_leucocephala_HAP1v2.1",
             "Marchantia_polymorpha_v6",
         ]
         assert ncbi_values == [
             "GCF_000001405.40 (Homo sapiens)",
-            "GCF_000001635.27 (Mus musculus)",
-            "GCF_049306965.1 (Danio rerio)",
-            "GCF_000001215.4 (Drosophila melanogaster)",
-            "GCF_000002985.6 (Caenorhabditis elegans)",
-        ]
-        assert refseq_values == ncbi_values
-        assert genbank_values == [
-            "GCA_000001405.29 (Homo sapiens)",
             "GCA_000001635.9 (Mus musculus)",
-            "GCA_049306965.1 (Danio rerio)",
+            "GCF_049306965.1 (Danio rerio)",
             "GCA_000001215.4 (Drosophila melanogaster)",
-            "GCA_000002985.3 (Caenorhabditis elegans)",
+            "GCF_000002985.6 (Caenorhabditis elegans)",
         ]
     finally:
         workbook.close()
@@ -392,11 +387,11 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         ensembl_values = read_list_column_values(list_sheet, 2)
         ensemblplants_values = read_list_column_values(list_sheet, 3)
         ncbi_values = read_list_column_values(list_sheet, 4)
-        coge_values = read_list_column_values(list_sheet, 7)
-        flybase_values = read_list_column_values(list_sheet, 9)
-        wormbase_values = read_list_column_values(list_sheet, 10)
-        vectorbase_values = read_list_column_values(list_sheet, 11)
-        local_values = read_list_column_values(list_sheet, 12)
+        coge_values = read_list_column_values(list_sheet, 5)
+        flybase_values = read_list_column_values(list_sheet, 7)
+        wormbase_values = read_list_column_values(list_sheet, 8)
+        vectorbase_values = read_list_column_values(list_sheet, 9)
+        local_values = read_list_column_values(list_sheet, 10)
 
         assert ensembl_values == [
             "homo_sapiens (Homo sapiens)",
@@ -408,12 +403,18 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         assert "FAKE_NCBI_ID (Fake species)" not in ncbi_values
         assert ncbi_values == [
             "GCF_000001405.40 (Homo sapiens)",
-            "GCF_000001635.27 (Mus musculus)",
+            "GCA_000001635.9 (Mus musculus)",
             "GCF_049306965.1 (Danio rerio)",
-            "GCF_000001215.4 (Drosophila melanogaster)",
+            "GCA_000001215.4 (Drosophila melanogaster)",
             "GCF_000002985.6 (Caenorhabditis elegans)",
         ]
-        assert coge_values == ["24739 (Arabidopsis thaliana)"]
+        assert coge_values == [
+            "24739 (Arabidopsis thaliana)",
+            "29177 (Oryza sativa)",
+            "42091 (Zea mays)",
+            "78085 (Drosophila melanogaster)",
+            "72417 (Caenorhabditis elegans)",
+        ]
         assert flybase_values == ["dmel_r6.66 (Drosophila melanogaster)"]
         assert wormbase_values == ["caenorhabditis_elegans_prjna13758 (Caenorhabditis elegans)"]
         assert vectorbase_values == ["AgambiaePEST (Anopheles gambiae)"]

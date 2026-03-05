@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_utc": "2026-03-05T08:07:35Z",
+  "generated_utc": "2026-03-05T08:31:27Z",
   "providers": {
     "ensembl": [
       {
@@ -2464,67 +2464,23 @@
     ],
     "ncbi": [
       {
-        "id": "GCF_000001215.4",
-        "species": "Drosophila melanogaster"
-      },
-      {
-        "id": "GCF_000001405.40",
-        "species": "Homo sapiens"
-      },
-      {
-        "id": "GCF_000001635.27",
-        "species": "Mus musculus"
-      },
-      {
-        "id": "GCF_000002985.6",
-        "species": "Caenorhabditis elegans"
-      },
-      {
-        "id": "GCF_049306965.1",
-        "species": "Danio rerio"
-      }
-    ],
-    "refseq": [
-      {
-        "id": "GCF_000001215.4",
-        "species": "Drosophila melanogaster"
-      },
-      {
-        "id": "GCF_000001405.40",
-        "species": "Homo sapiens"
-      },
-      {
-        "id": "GCF_000001635.27",
-        "species": "Mus musculus"
-      },
-      {
-        "id": "GCF_000002985.6",
-        "species": "Caenorhabditis elegans"
-      },
-      {
-        "id": "GCF_049306965.1",
-        "species": "Danio rerio"
-      }
-    ],
-    "genbank": [
-      {
         "id": "GCA_000001215.4",
         "species": "Drosophila melanogaster"
-      },
-      {
-        "id": "GCA_000001405.29",
-        "species": "Homo sapiens"
       },
       {
         "id": "GCA_000001635.9",
         "species": "Mus musculus"
       },
       {
-        "id": "GCA_000002985.3",
+        "id": "GCF_000001405.40",
+        "species": "Homo sapiens"
+      },
+      {
+        "id": "GCF_000002985.6",
         "species": "Caenorhabditis elegans"
       },
       {
-        "id": "GCA_049306965.1",
+        "id": "GCF_049306965.1",
         "species": "Danio rerio"
       }
     ],
@@ -2532,6 +2488,22 @@
       {
         "id": "24739",
         "species": "Arabidopsis thaliana"
+      },
+      {
+        "id": "29177",
+        "species": "Oryza sativa"
+      },
+      {
+        "id": "42091",
+        "species": "Zea mays"
+      },
+      {
+        "id": "72417",
+        "species": "Caenorhabditis elegans"
+      },
+      {
+        "id": "78085",
+        "species": "Drosophila melanogaster"
       }
     ],
     "cngb": [

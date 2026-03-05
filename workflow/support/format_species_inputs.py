@@ -220,7 +220,8 @@ def build_arg_parser():
         default="",
         help=(
             "Provider input directory. For ensembl/ensemblplants: original_files/. "
-            "For phycocosm/phytozome/ncbi/refseq/genbank/coge/cngb/flybase/wormbase/vectorbase/local: species_wise_original/. "
+            "For phycocosm/phytozome/ncbi/coge/cngb/flybase/wormbase/vectorbase/local: species_wise_original/. "
+            "Legacy aliases refseq/genbank are treated as ncbi. "
             "For --provider all, this must be the shared root containing all provider subdirectories."
         ),
     )
@@ -255,7 +256,8 @@ def build_arg_parser():
             "(ncbi supports GCF/GCA/NCBI-URL auto-resolution; "
             "other supported providers support id-based template/index inference). "
             "Supported providers for --download-manifest: "
-            "ensembl, ensemblplants, ncbi, refseq, genbank, coge, cngb, flybase, wormbase, vectorbase, local. "
+            "ensembl, ensemblplants, ncbi, coge, cngb, flybase, wormbase, vectorbase, local "
+            "(legacy aliases refseq/genbank are treated as ncbi). "
             "provider=local reads local files/directories (for example local phytozome files). "
             "Use --input-dir for direct local phycocosm/phytozome formatting. "
             "Optional columns: species_key,cds_filename,gff_filename,genome_filename,"

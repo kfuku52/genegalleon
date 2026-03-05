@@ -46,8 +46,6 @@ PROVIDERS = (
     "ensembl",
     "ensemblplants",
     "ncbi",
-    "refseq",
-    "genbank",
     "coge",
     "cngb",
     "flybase",
@@ -55,13 +53,12 @@ PROVIDERS = (
     "vectorbase",
     "local",
 )
+LEGACY_NCBI_PROVIDER_ALIASES = ("refseq", "genbank")
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "ensembl": Path("Ensembl") / "original_files",
     "ensemblplants": Path("20230216_EnsemblPlants") / "original_files",
     "ncbi": Path("NCBI_Genome") / "species_wise_original",
-    "refseq": Path("NCBI_RefSeq") / "species_wise_original",
-    "genbank": Path("NCBI_GenBank") / "species_wise_original",
     "coge": Path("CoGe") / "species_wise_original",
     "cngb": Path("CNGB") / "species_wise_original",
     "flybase": Path("FlyBase") / "species_wise_original",
@@ -69,6 +66,11 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "vectorbase": Path("VectorBase") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
+NCBI_MERGED_INPUT_RELATIVE_DIRS = (
+    Path("NCBI_Genome") / "species_wise_original",
+    Path("NCBI_RefSeq") / "species_wise_original",
+    Path("NCBI_GenBank") / "species_wise_original",
+)
 
 MANIFEST_FIELDNAMES = (
     "provider",
@@ -88,7 +90,7 @@ MANIFEST_FIELDNAMES = (
     "local_genome_path",
 )
 
-LARGE_ID_PROVIDERS = ("ncbi", "refseq", "genbank")
+LARGE_ID_PROVIDERS = ("ncbi",)
 SNAPSHOT_FULL_ID_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "local")
 EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
 
@@ -97,26 +99,18 @@ ID_EXAMPLES_BY_PROVIDER = {
     "ensemblplants": (("Ostreococcus_lucimarinus", "Ostreococcus lucimarinus"),),
     "ncbi": (
         ("GCF_000001405.40", "Homo sapiens"),
-        ("GCF_000001635.27", "Mus musculus"),
-        ("GCF_049306965.1", "Danio rerio"),
-        ("GCF_000001215.4", "Drosophila melanogaster"),
-        ("GCF_000002985.6", "Caenorhabditis elegans"),
-    ),
-    "refseq": (
-        ("GCF_000001405.40", "Homo sapiens"),
-        ("GCF_000001635.27", "Mus musculus"),
-        ("GCF_049306965.1", "Danio rerio"),
-        ("GCF_000001215.4", "Drosophila melanogaster"),
-        ("GCF_000002985.6", "Caenorhabditis elegans"),
-    ),
-    "genbank": (
-        ("GCA_000001405.29", "Homo sapiens"),
         ("GCA_000001635.9", "Mus musculus"),
-        ("GCA_049306965.1", "Danio rerio"),
+        ("GCF_049306965.1", "Danio rerio"),
         ("GCA_000001215.4", "Drosophila melanogaster"),
-        ("GCA_000002985.3", "Caenorhabditis elegans"),
+        ("GCF_000002985.6", "Caenorhabditis elegans"),
     ),
-    "coge": (("24739", "Arabidopsis thaliana"),),
+    "coge": (
+        ("24739", "Arabidopsis thaliana"),
+        ("29177", "Oryza sativa"),
+        ("42091", "Zea mays"),
+        ("78085", "Drosophila melanogaster"),
+        ("72417", "Caenorhabditis elegans"),
+    ),
     "cngb": (("CNA0012345", "Homo sapiens"),),
     "flybase": (("dmel_r6.61", "Drosophila melanogaster"),),
     "wormbase": (("celegans_prjna13758_ws290", "Caenorhabditis elegans"),),
@@ -285,7 +279,7 @@ def build_arg_parser():
     )
     parser.add_argument(
         "--provider",
-        choices=("all",) + PROVIDERS,
+        choices=("all",) + PROVIDERS + LEGACY_NCBI_PROVIDER_ALIASES,
         default="all",
         help="Provider to scan (default: all).",
     )
@@ -344,7 +338,7 @@ def is_probable_genome_filename(provider, name):
     )
     if any(marker in lower for marker in non_genome_markers):
         return False
-    if provider in ("ncbi", "refseq", "genbank"):
+    if provider == "ncbi":
         return "genomic" in lower
     if provider in ("ensembl", "ensemblplants"):
         return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
@@ -437,7 +431,7 @@ def discover_species_dir_based(provider, input_dir):
             ]
             gff_matches = [path for path in files if "gene.gff3" in path.name.lower() and is_gff_filename(path.name)]
             genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
-        elif provider in ("ncbi", "refseq", "genbank"):
+        elif provider == "ncbi":
             cds_matches = [
                 path
                 for path in files
@@ -501,6 +495,43 @@ def discover_species_dir_based(provider, input_dir):
 
 
 def discover(provider, input_root, allow_missing=False):
+    if provider in LEGACY_NCBI_PROVIDER_ALIASES:
+        provider = "ncbi"
+    if provider == "ncbi":
+        warnings = []
+        errors = []
+        rows = []
+        seen_ids = set()
+        existing_dirs = []
+        for rel_dir in NCBI_MERGED_INPUT_RELATIVE_DIRS:
+            input_dir = input_root / rel_dir
+            if not input_dir.exists() or not input_dir.is_dir():
+                continue
+            existing_dirs.append(input_dir)
+            sub_rows, sub_warnings, sub_errors = discover_species_dir_based("ncbi", input_dir)
+            warnings.extend(sub_warnings)
+            errors.extend(sub_errors)
+            for row in sub_rows:
+                source_id = str(row.get("id", "") or "").strip()
+                if source_id != "" and source_id in seen_ids:
+                    warnings.append(
+                        "[ncbi] duplicate accession '{}' across NCBI_Genome/NCBI_RefSeq/NCBI_GenBank. Keeping first occurrence.".format(
+                            source_id
+                        )
+                    )
+                    continue
+                if source_id != "":
+                    seen_ids.add(source_id)
+                rows.append(row)
+        if len(existing_dirs) == 0:
+            message = "[ncbi] input directories not found: {}".format(
+                ", ".join(str((input_root / rel_dir)) for rel_dir in NCBI_MERGED_INPUT_RELATIVE_DIRS)
+            )
+            if allow_missing:
+                return [], [message], []
+            return [], [], [message]
+        return rows, warnings, errors
+
     input_dir = input_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]
     if not input_dir.exists() or not input_dir.is_dir():
         message = "[{}] input directory not found: {}".format(provider, input_dir)
@@ -583,7 +614,7 @@ def write_manifest_xlsx(rows: List[Dict[str, str]], output_path: Path, id_option
         errorTitle="ID candidates",
         error=(
             "This drop-down changes by provider. "
-            "For large providers, five model-organism IDs are shown as examples. "
+            "For provider=ncbi, five model-organism IDs are shown as examples. "
             "You can still type any other ID value."
         ),
     )
@@ -619,11 +650,14 @@ def main():
                 sys.stderr.write("Error: failed to read id options snapshot '{}': {}\n".format(snapshot_path, exc))
                 return 1
 
-    providers = PROVIDERS if args.provider == "all" else (args.provider,)
+    requested_provider = str(args.provider or "").strip().lower()
+    if requested_provider in LEGACY_NCBI_PROVIDER_ALIASES:
+        requested_provider = "ncbi"
+    providers = PROVIDERS if requested_provider == "all" else (requested_provider,)
     all_rows = []
     all_warnings = []
     all_errors = []
-    allow_missing = args.provider == "all"
+    allow_missing = requested_provider == "all"
     for provider in providers:
         rows, warnings, errors = discover(provider, input_root, allow_missing=allow_missing)
         all_rows.extend(rows)
