@@ -13,12 +13,14 @@ try:
     from openpyxl.utils import get_column_letter
     from openpyxl.workbook.defined_name import DefinedName
     from openpyxl.styles import Font
+    from openpyxl.comments import Comment
     from openpyxl.worksheet.datavalidation import DataValidation
 except Exception:  # pragma: no cover - exercised in runtime environments without openpyxl
     Workbook = None
     get_column_letter = None
     DefinedName = None
     Font = None
+    Comment = None
     DataValidation = None
 
 
@@ -576,6 +578,11 @@ def write_manifest_xlsx(rows: List[Dict[str, str]], output_path: Path, id_option
     sheet.append(list(MANIFEST_FIELDNAMES))
     for cell in sheet[1]:
         cell.font = Font(bold=True)
+    if Comment is not None:
+        sheet["B1"].comment = Comment(
+            "IDs not listed in the drop-down are still supported if they are valid in the provider database.",
+            "genegalleon",
+        )
     sheet.freeze_panes = "A2"
 
     for row in rows:
