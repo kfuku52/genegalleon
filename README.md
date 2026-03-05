@@ -391,7 +391,9 @@ Latest template distribution:
 
 - runs `gg_input_generation_core.sh` inside the container as a single entrypoint,
 - can download provider files from a manifest and format inputs in one run,
-- can validate produced `species_cds` and `species_gff` consistency.
+- can validate produced `species_cds` and `species_gff` consistency,
+- can optionally generate `workspace/input/species_trait/species_trait.tsv`
+  from configured trait databases.
 
 Configuration:
 
@@ -407,7 +409,17 @@ Alternative runtime overrides (without editing files) via env vars:
 - `GG_INPUT_INPUT_DIR`,
 - `GG_INPUT_SPECIES_CDS_DIR`, `GG_INPUT_SPECIES_GFF_DIR`, `GG_INPUT_SPECIES_GENOME_DIR`,
 - `GG_INPUT_AUTH_BEARER_TOKEN_ENV`, `GG_INPUT_HTTP_HEADER`,
-- `GG_INPUT_SUMMARY_OUTPUT`.
+- `GG_INPUT_SUMMARY_OUTPUT`,
+- trait generation:
+  `GG_INPUT_TRAIT_PROFILE` (`none` or `gift_starter`; default `none`),
+  `GG_INPUT_RUN_GENERATE_SPECIES_TRAIT`,
+  `GG_INPUT_TRAIT_SPECIES_SOURCE` (`download_manifest` or `species_cds`; default `download_manifest`),
+  `GG_INPUT_SPECIES_TRAIT_OUTPUT`,
+  `GG_INPUT_TRAIT_PLAN`,
+  `GG_INPUT_TRAIT_DATABASE_SOURCES`,
+  `GG_INPUT_TRAIT_DATABASES`,
+  `GG_INPUT_TRAIT_DOWNLOAD_DIR`,
+  `GG_INPUT_TRAIT_DOWNLOAD_TIMEOUT`.
 - per-provider download caps:
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBL`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBLPLANTS`,
@@ -421,6 +433,12 @@ Alternative runtime overrides (without editing files) via env vars:
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_FLYBASE`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_WORMBASE`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_VECTORBASE`.
+
+Quick preset example (enable trait stage with GIFT starter config):
+
+```bash
+GG_INPUT_TRAIT_PROFILE=gift_starter bash workflow/gg_input_generation_entrypoint.sh
+```
 
 ## Quick Start
 
@@ -474,19 +492,77 @@ Purpose:
 - optionally download provider files from a manifest and format into
   `workspace/output/input_generation/species_cds` and
   `workspace/output/input_generation/species_gff` and
-  `workspace/output/input_generation/species_genome`.
+  `workspace/output/input_generation/species_genome`,
+- optionally generate `workspace/input/species_trait/species_trait.tsv` using
+  target species from `download_plan.xlsx` (default) or `species_cds`.
 
 Main scripts:
 
 - `workflow/core/gg_input_generation_core.sh`
 - `workflow/support/format_species_inputs.py`
+- `workflow/support/generate_species_trait.py`
 
 Notable defaults:
 
 - `run_validate_inputs=1` validates CDS naming rules and CDS/GFF species-set consistency,
 - formatted outputs default to `workspace/output/input_generation/species_cds`, `workspace/output/input_generation/species_gff`, and `workspace/output/input_generation/species_genome`,
+- trait generation is opt-in (`run_generate_species_trait=0` by default),
+  and writes `workspace/input/species_trait/species_trait.tsv` when enabled,
+- `trait_profile=gift_starter` is available as a quick preset:
+  sets `run_generate_species_trait=1` and uses `trait_databases=gift`
+  when `trait_databases` is unset or `auto`,
 - each run appends a TSV record to `workspace/output/input_generation/gg_input_generation_runs.tsv`
   (configurable via `summary_output` or `GG_INPUT_SUMMARY_OUTPUT`).
+
+Trait generation inputs:
+
+- trait plan TSV (default: `workspace/input/input_generation/trait_plan.tsv`)
+  - required columns: `database`, `source_column`, `output_trait`
+  - optional columns: `value_type` (`numeric|binary|categorical`),
+    `aggregation`, `positive_values` (comma-separated, for binary mapping),
+    `trait_key`, `trait_key_column`
+  - for `gift`, `trait_key` can be either a trait ID (`Lvl3`, e.g. `1.1.1`)
+    or trait name (`Trait2`, e.g. `Woodiness_1`)
+- database source map TSV (default: `workspace/input/input_generation/trait_database_sources.tsv`)
+  - required column: `database`
+  - optional columns: `acquisition_mode` (`bulk|species_api|gift_api`), `uri`,
+    `species_column`, `delimiter`, `response_format`,
+    `archive_member`, `trait_key_column`,
+    `gift_version`, `gift_trait_ids`, `gift_page_size`,
+    `gift_max_pages_per_trait`, `gift_bias_ref`, `gift_bias_deriv`,
+    `gift_agreement_min`, `gift_versions_api`
+- starter templates are bundled at:
+  - `workspace/input/input_generation/trait_plan.tsv`
+  - `workspace/input/input_generation/trait_database_sources.tsv`
+  - bundled defaults are prewired for `austraits`, `eltontraits`, and
+    `gift` (`gift_api` with official base endpoint), including starter
+    trait names for `woodiness` (`Woodiness_1`, ID `1.1.1`),
+    `plant_height_max_m` (`Plant_height_max`, ID `1.6.2`), and
+    `seed_mass_mean_g` (`Seed_mass_mean`, ID `3.2.3`).
+
+Trait DB retrieval policy in `generate_species_trait.py`:
+
+- `bulk`: fetch/cache full dataset under `workspace/downloads/trait_datasets/<database>/`
+  then subset target species.
+  - `uri` may contain multiple comma-separated sources; all are merged.
+  - ZIP sources are supported (`archive_member` to select file inside archive).
+- `species_api`: query per target species and merge responses.
+- `gift_api`: resolve target species `work_ID` via GIFT
+  `names_matched_unique`, resolve trait tokens from `trait_key` /
+  `gift_trait_ids` (ID or name via `traits_meta`), then query trait pages
+  and filter to target species.
+
+Supported DB IDs can be listed with:
+
+```bash
+python workflow/support/generate_species_trait.py --print-supported-databases
+```
+
+GIFT traits catalog can be inspected with:
+
+```bash
+python workflow/support/generate_species_trait.py --print-gift-traits --gift-trait-search wood --gift-trait-limit 20
+```
 
 Quick summary of recent gg_input_generation runs:
 

@@ -445,6 +445,18 @@ def test_input_generation_entrypoint_forwards_env_driven_overrides():
     assert 'export "APPTAINERENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
 
 
+def test_input_generation_trait_profile_preset_is_wired():
+    entrypoint = WORKFLOW_DIR / "gg_input_generation_entrypoint.sh"
+    core = WORKFLOW_DIR / "core" / "gg_input_generation_core.sh"
+    entry_text = _read_text(entrypoint)
+    core_text = _read_text(core)
+
+    assert 'trait_profile="none"' in entry_text
+    assert "apply_env_override trait_profile GG_INPUT_TRAIT_PROFILE" in core_text
+    assert 'case "${trait_profile}" in' in core_text
+    assert "gift_starter" in core_text
+
+
 def test_gg_util_has_common_forward_config_export_helpers():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)

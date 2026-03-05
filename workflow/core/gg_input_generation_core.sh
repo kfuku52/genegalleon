@@ -14,12 +14,21 @@ gg_source_home_bashrc
 gg_prepare_cmd_runtime "${dir_pg}" "base" 0 1
 
 config_file="${config_file:-gg_input_generation_entrypoint.sh}"
+run_generate_species_trait="${run_generate_species_trait:-0}"
+trait_profile="${trait_profile:-none}"
 
 species_cds_dir="${species_cds_dir:-}"
 species_gff_dir="${species_gff_dir:-}"
 species_genome_dir="${species_genome_dir:-}"
 species_summary_output="${species_summary_output:-}"
 resolved_manifest_output="${resolved_manifest_output:-}"
+species_trait_output="${species_trait_output:-}"
+trait_plan="${trait_plan:-}"
+trait_database_sources="${trait_database_sources:-}"
+trait_download_dir="${trait_download_dir:-}"
+trait_download_timeout="${trait_download_timeout:-120}"
+trait_species_source="${trait_species_source:-download_manifest}"
+trait_databases="${trait_databases:-auto}"
 
 apply_env_override() {
   local var_name=$1
@@ -44,13 +53,38 @@ apply_env_override auth_bearer_token_env GG_INPUT_AUTH_BEARER_TOKEN_ENV
 apply_env_override http_header GG_INPUT_HTTP_HEADER
 apply_env_override run_format_inputs GG_INPUT_RUN_FORMAT_INPUTS
 apply_env_override run_validate_inputs GG_INPUT_RUN_VALIDATE_INPUTS
+apply_env_override run_generate_species_trait GG_INPUT_RUN_GENERATE_SPECIES_TRAIT
+apply_env_override trait_profile GG_INPUT_TRAIT_PROFILE
 apply_env_override species_cds_dir GG_INPUT_SPECIES_CDS_DIR
 apply_env_override species_gff_dir GG_INPUT_SPECIES_GFF_DIR
 apply_env_override species_genome_dir GG_INPUT_SPECIES_GENOME_DIR
 apply_env_override species_summary_output GG_INPUT_SPECIES_SUMMARY_OUTPUT
 apply_env_override resolved_manifest_output GG_INPUT_RESOLVED_MANIFEST_OUTPUT
+apply_env_override species_trait_output GG_INPUT_SPECIES_TRAIT_OUTPUT
+apply_env_override trait_plan GG_INPUT_TRAIT_PLAN
+apply_env_override trait_database_sources GG_INPUT_TRAIT_DATABASE_SOURCES
+apply_env_override trait_download_dir GG_INPUT_TRAIT_DOWNLOAD_DIR
+apply_env_override trait_download_timeout GG_INPUT_TRAIT_DOWNLOAD_TIMEOUT
+apply_env_override trait_species_source GG_INPUT_TRAIT_SPECIES_SOURCE
+apply_env_override trait_databases GG_INPUT_TRAIT_DATABASES
 
 enable_all_run_flags_for_debug_mode
+
+case "${trait_profile}" in
+  ""|none)
+    trait_profile="none"
+    ;;
+  gift_starter)
+    run_generate_species_trait=1
+    if [[ -z "${trait_databases}" || "${trait_databases}" == "auto" ]]; then
+      trait_databases="gift"
+    fi
+    ;;
+  *)
+    echo "Invalid trait_profile: ${trait_profile} (allowed: none|gift_starter)"
+    exit 1
+    ;;
+esac
 
 download_manifest_explicit=0
 if [[ -n "${download_manifest}" ]]; then
@@ -72,6 +106,7 @@ esac
 for binary_flag_name in \
   run_format_inputs \
   run_validate_inputs \
+  run_generate_species_trait \
   strict \
   overwrite \
   download_only \
@@ -86,6 +121,14 @@ done
 
 if ! [[ "${download_timeout}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "Invalid download_timeout: ${download_timeout}"
+  exit 1
+fi
+if ! [[ "${trait_download_timeout}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "Invalid trait_download_timeout: ${trait_download_timeout}"
+  exit 1
+fi
+if [[ "${trait_species_source}" != "download_manifest" && "${trait_species_source}" != "species_cds" ]]; then
+  echo "Invalid trait_species_source: ${trait_species_source} (allowed: download_manifest|species_cds)"
   exit 1
 fi
 
@@ -112,14 +155,29 @@ fi
 if [[ -z "${resolved_manifest_output}" ]]; then
   resolved_manifest_output="${dir_pg_output}/input_generation/download_plan.resolved.tsv"
 fi
+if [[ -z "${species_trait_output}" ]]; then
+  species_trait_output="${dir_pg_input}/species_trait/species_trait.tsv"
+fi
+if [[ -z "${trait_plan}" ]]; then
+  trait_plan="${dir_pg_input}/input_generation/trait_plan.tsv"
+fi
+if [[ -z "${trait_database_sources}" ]]; then
+  trait_database_sources="${dir_pg_input}/input_generation/trait_database_sources.tsv"
+fi
+if [[ -z "${trait_download_dir}" ]]; then
+  trait_download_dir="${dir_pg_db}/trait_datasets"
+fi
 num_species_cds=""
 num_species_gff=""
 num_species_genome=""
+num_species_trait=""
+num_trait_columns=""
 cds_sequences_before=""
 cds_sequences_after=""
 cds_first_sequence_name=""
 stage_format_status="not_run"
 stage_validate_status="not_run"
+stage_trait_status="not_run"
 
 run_started_epoch=$(date +%s)
 run_started_iso=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -215,10 +273,11 @@ write_gg_input_generation_summary_on_exit() {
   if [[ ${exit_code} -ne 0 ]]; then
     if [[ "${stage_format_status}" == "running" ]]; then stage_format_status="failed"; fi
     if [[ "${stage_validate_status}" == "running" ]]; then stage_validate_status="failed"; fi
+    if [[ "${stage_trait_status}" == "running" ]]; then stage_trait_status="failed"; fi
   fi
 
   ensure_parent_dir "${summary_output}"
-  header="started_utc\tended_utc\tduration_sec\texit_code\tprovider\trun_format_inputs\trun_validate_inputs\tstrict\toverwrite\tdownload_only\tdry_run\tdownload_timeout\tinput_dir\tdownload_manifest\tdownload_dir\tspecies_cds_dir\tspecies_gff_dir\tspecies_genome_dir\tnum_species_cds\tnum_species_gff\tnum_species_genome\tcds_sequences_before\tcds_sequences_after\tcds_first_sequence_name\tstage_format_status\tstage_validate_status\tconfig_file"
+  header="started_utc\tended_utc\tduration_sec\texit_code\tprovider\trun_format_inputs\trun_validate_inputs\trun_generate_species_trait\tstrict\toverwrite\tdownload_only\tdry_run\tdownload_timeout\tinput_dir\tdownload_manifest\tdownload_dir\tspecies_cds_dir\tspecies_gff_dir\tspecies_genome_dir\tspecies_trait_output\tnum_species_cds\tnum_species_gff\tnum_species_genome\tnum_species_trait\tnum_trait_columns\tcds_sequences_before\tcds_sequences_after\tcds_first_sequence_name\tstage_format_status\tstage_validate_status\tstage_trait_status\tconfig_file"
   expected_header_line=$(printf '%b' "${header}")
   if [[ -s "${summary_output}" ]]; then
     existing_header_line=$(head -n 1 "${summary_output}" || true)
@@ -242,6 +301,7 @@ write_gg_input_generation_summary_on_exit() {
   row="${row}\t$(sanitize_tsv_value "${provider}")"
   row="${row}\t$(sanitize_tsv_value "${run_format_inputs}")"
   row="${row}\t$(sanitize_tsv_value "${run_validate_inputs}")"
+  row="${row}\t$(sanitize_tsv_value "${run_generate_species_trait}")"
   row="${row}\t$(sanitize_tsv_value "${strict}")"
   row="${row}\t$(sanitize_tsv_value "${overwrite}")"
   row="${row}\t$(sanitize_tsv_value "${download_only}")"
@@ -253,14 +313,18 @@ write_gg_input_generation_summary_on_exit() {
   row="${row}\t$(sanitize_tsv_value "${species_cds_dir}")"
   row="${row}\t$(sanitize_tsv_value "${species_gff_dir}")"
   row="${row}\t$(sanitize_tsv_value "${species_genome_dir}")"
+  row="${row}\t$(sanitize_tsv_value "${species_trait_output}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_cds}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_gff}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_genome}")"
+  row="${row}\t$(sanitize_tsv_value "${num_species_trait}")"
+  row="${row}\t$(sanitize_tsv_value "${num_trait_columns}")"
   row="${row}\t$(sanitize_tsv_value "${cds_sequences_before}")"
   row="${row}\t$(sanitize_tsv_value "${cds_sequences_after}")"
   row="${row}\t$(sanitize_tsv_value "${cds_first_sequence_name}")"
   row="${row}\t$(sanitize_tsv_value "${stage_format_status}")"
   row="${row}\t$(sanitize_tsv_value "${stage_validate_status}")"
+  row="${row}\t$(sanitize_tsv_value "${stage_trait_status}")"
   row="${row}\t$(sanitize_tsv_value "${config_file}")"
   printf '%b\n' "${row}" >> "${summary_output}"
 }
@@ -425,6 +489,65 @@ if [[ ${run_validate_inputs} -eq 1 && ${run_format_inputs} -eq 1 && ${download_o
 else
   gg_step_skip "Validate formatted species inputs"
   stage_validate_status="skipped"
+fi
+
+if [[ ${run_generate_species_trait} -eq 1 ]]; then
+  task="Generate species trait table"
+  gg_step_start "${task}"
+  stage_trait_status="running"
+
+  trait_manifest_path="${download_manifest}"
+  if [[ -z "${trait_manifest_path}" ]]; then
+    trait_manifest_default="${dir_pg_input}/input_generation/download_plan.xlsx"
+    if [[ -s "${trait_manifest_default}" ]]; then
+      trait_manifest_path="${trait_manifest_default}"
+    fi
+  fi
+
+  trait_stats_file="${download_tmp_root}/gg_input_generation_trait_stats.json"
+  ensure_parent_dir "${trait_stats_file}"
+  rm -f -- "${trait_stats_file}"
+  cmd=(python "${dir_script}/generate_species_trait.py")
+  cmd+=(--species-source "${trait_species_source}")
+  cmd+=(--species-cds-dir "${species_cds_dir}")
+  cmd+=(--trait-plan "${trait_plan}")
+  cmd+=(--database-sources "${trait_database_sources}")
+  cmd+=(--databases "${trait_databases}")
+  cmd+=(--downloads-dir "${trait_download_dir}")
+  cmd+=(--output "${species_trait_output}")
+  cmd+=(--download-timeout "${trait_download_timeout}")
+  cmd+=(--stats-output "${trait_stats_file}")
+  if [[ -n "${trait_manifest_path}" ]]; then
+    cmd+=(--download-manifest "${trait_manifest_path}")
+  fi
+  if [[ ${strict} -eq 1 ]]; then
+    cmd+=(--strict)
+  fi
+  if [[ ${dry_run} -eq 1 ]]; then
+    cmd+=(--dry-run)
+  fi
+
+  echo "Running: ${cmd[*]}"
+  if "${cmd[@]}"; then
+    cmd_status=0
+  else
+    cmd_status=$?
+  fi
+  if [[ ${cmd_status} -ne 0 ]]; then
+    stage_trait_status="failed"
+    echo "Failed: ${task} (exit=${cmd_status})"
+    exit "${cmd_status}"
+  fi
+
+  if [[ -s "${trait_stats_file}" ]]; then
+    num_species_trait="$(read_stats_json_field "${trait_stats_file}" "num_species_with_any_trait")"
+    num_trait_columns="$(read_stats_json_field "${trait_stats_file}" "num_trait_columns")"
+    rm -f -- "${trait_stats_file}"
+  fi
+  stage_trait_status="ok"
+else
+  gg_step_skip "Generate species trait table"
+  stage_trait_status="skipped"
 fi
 
 if [[ -d "${download_tmp_root}" ]]; then

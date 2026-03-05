@@ -1,0 +1,4 @@
+database	acquisition_mode	uri	species_column	delimiter	response_format	archive_member	trait_key_column	gift_version	gift_trait_ids	gift_page_size	gift_max_pages_per_trait	gift_bias_ref	gift_bias_deriv	gift_agreement_min	gift_versions_api
+austraits	bulk	https://zenodo.org/api/records/15718081/files/austraits-7.0.0.zip/content	taxon_name	csv		austraits-7.0.0/traits.csv	trait_name								
+eltontraits	bulk	https://ndownloader.figshare.com/files/5631081,https://ndownloader.figshare.com/files/5631084	Scientific	tab											
+gift	gift_api	https://gift.uni-goettingen.de/api/extended/	species	tsv				latest		10000		1	1	0.66	

@@ -39,13 +39,17 @@ gg_image="${script_dir}/../genegalleon.sif" # path to the singularity image
 
 run_format_inputs=1
 run_validate_inputs=1
+run_generate_species_trait=0
 
 provider="all" # all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|local
+trait_profile="none" # none|gift_starter
 strict=0
 overwrite=0
 download_only=0
 dry_run=0
 download_timeout=120
+trait_species_source="download_manifest" # download_manifest|species_cds
+trait_databases="auto" # auto|all|comma-separated IDs
 
 # Optional download request settings.
 auth_bearer_token_env="" # e.g., GFE_DOWNLOAD_BEARER_TOKEN
@@ -61,6 +65,11 @@ species_gff_dir=""
 species_genome_dir=""
 species_summary_output=""
 resolved_manifest_output=""
+species_trait_output=""
+trait_plan=""
+trait_database_sources=""
+trait_download_dir=""
+trait_download_timeout=120
 
 ### End: Modify this block to tailor your analysis ###
 

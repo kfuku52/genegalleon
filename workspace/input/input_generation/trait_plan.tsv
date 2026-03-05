@@ -1,0 +1,8 @@
+database	source_column	output_trait	value_type	aggregation	positive_values	trait_key	trait_key_column
+austraits	value	leaf_N_per_dry_mass	numeric	median		leaf_N_per_dry_mass	trait_name
+austraits	value	genome_size	numeric	median		genome_size	trait_name
+eltontraits	BodyMass-Value	body_mass_g	numeric	median			
+eltontraits	Diet-Vend	is_carnivorous	binary	any			
+gift	trait_value	woodiness	categorical	mode		Woodiness_1	trait_ID
+gift	trait_value	plant_height_max_m	numeric	median		Plant_height_max	trait_ID
+gift	trait_value	seed_mass_mean_g	numeric	median		Seed_mass_mean	trait_ID

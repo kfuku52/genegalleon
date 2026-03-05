@@ -12,9 +12,12 @@ DEFAULT_COLUMNS = [
     "provider",
     "stage_format_status",
     "stage_validate_status",
+    "stage_trait_status",
     "num_species_cds",
     "num_species_gff",
     "num_species_genome",
+    "num_species_trait",
+    "num_trait_columns",
     "cds_sequences_before",
     "cds_sequences_after",
     "cds_first_sequence_name",
@@ -85,9 +88,10 @@ def format_summary(rows, last_n):
     lines.append("latest_exit_code\t{}".format(latest.get("exit_code", "")))
     lines.append("latest_provider\t{}".format(latest.get("provider", "")))
     lines.append(
-        "latest_stage_status\tformat={};validate={}".format(
+        "latest_stage_status\tformat={};validate={};trait={}".format(
             latest.get("stage_format_status", ""),
             latest.get("stage_validate_status", ""),
+            latest.get("stage_trait_status", ""),
         )
     )
     lines.append("")
