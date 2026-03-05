@@ -322,7 +322,8 @@ XLSX template notes:
 
 - `download_plan.xlsx` includes drop-downs for `provider` and `id`.
 - `id` drop-down values are provider-specific.
-- for large providers (`ncbi`, `refseq`, `genbank`), model-organism IDs are shown as examples.
+- provider drop-down order is fixed, and `local` is always listed last.
+- for large providers (`ncbi`, `refseq`, `genbank`), five model-organism IDs are shown as examples.
 - for `coge` and `cngb`, IDs are also example-based by default.
 - for `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, and `local`,
   IDs can be supplied from a prebuilt `id_options_snapshot.json`.

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_utc": "2026-03-05T07:49:55Z",
+  "generated_utc": "2026-03-05T08:07:35Z",
   "providers": {
     "ensembl": [
       {
@@ -2464,24 +2464,68 @@
     ],
     "ncbi": [
       {
-        "id": "GCA_000001405.29",
-        "species": "Homo sapiens"
+        "id": "GCF_000001215.4",
+        "species": "Drosophila melanogaster"
       },
       {
         "id": "GCF_000001405.40",
         "species": "Homo sapiens"
+      },
+      {
+        "id": "GCF_000001635.27",
+        "species": "Mus musculus"
+      },
+      {
+        "id": "GCF_000002985.6",
+        "species": "Caenorhabditis elegans"
+      },
+      {
+        "id": "GCF_049306965.1",
+        "species": "Danio rerio"
       }
     ],
     "refseq": [
       {
+        "id": "GCF_000001215.4",
+        "species": "Drosophila melanogaster"
+      },
+      {
         "id": "GCF_000001405.40",
         "species": "Homo sapiens"
+      },
+      {
+        "id": "GCF_000001635.27",
+        "species": "Mus musculus"
+      },
+      {
+        "id": "GCF_000002985.6",
+        "species": "Caenorhabditis elegans"
+      },
+      {
+        "id": "GCF_049306965.1",
+        "species": "Danio rerio"
       }
     ],
     "genbank": [
       {
+        "id": "GCA_000001215.4",
+        "species": "Drosophila melanogaster"
+      },
+      {
         "id": "GCA_000001405.29",
         "species": "Homo sapiens"
+      },
+      {
+        "id": "GCA_000001635.9",
+        "species": "Mus musculus"
+      },
+      {
+        "id": "GCA_000002985.3",
+        "species": "Caenorhabditis elegans"
+      },
+      {
+        "id": "GCA_049306965.1",
+        "species": "Danio rerio"
       }
     ],
     "coge": [

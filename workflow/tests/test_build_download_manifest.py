@@ -306,14 +306,29 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         coge_values = read_list_column_values(list_sheet, 7)
         local_values = read_list_column_values(list_sheet, 12)
         ncbi_values = read_list_column_values(list_sheet, 4)
+        refseq_values = read_list_column_values(list_sheet, 5)
+        genbank_values = read_list_column_values(list_sheet, 6)
 
         assert coge_values == ["24739 (Arabidopsis thaliana)"]
         assert local_values == [
             "Hydrocotyle_leucocephala_HAP1v2.1",
             "Marchantia_polymorpha_v6",
         ]
-        assert "GCF_000001405.40 (Homo sapiens)" in ncbi_values
-        assert "GCA_000001405.29 (Homo sapiens)" in ncbi_values
+        assert ncbi_values == [
+            "GCF_000001405.40 (Homo sapiens)",
+            "GCF_000001635.27 (Mus musculus)",
+            "GCF_049306965.1 (Danio rerio)",
+            "GCF_000001215.4 (Drosophila melanogaster)",
+            "GCF_000002985.6 (Caenorhabditis elegans)",
+        ]
+        assert refseq_values == ncbi_values
+        assert genbank_values == [
+            "GCA_000001405.29 (Homo sapiens)",
+            "GCA_000001635.9 (Mus musculus)",
+            "GCA_049306965.1 (Danio rerio)",
+            "GCA_000001215.4 (Drosophila melanogaster)",
+            "GCA_000002985.3 (Caenorhabditis elegans)",
+        ]
     finally:
         workbook.close()
 
@@ -391,7 +406,13 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
             "arabidopsis_thaliana (Arabidopsis thaliana)",
         ]
         assert "FAKE_NCBI_ID (Fake species)" not in ncbi_values
-        assert "GCF_000001405.40 (Homo sapiens)" in ncbi_values
+        assert ncbi_values == [
+            "GCF_000001405.40 (Homo sapiens)",
+            "GCF_000001635.27 (Mus musculus)",
+            "GCF_049306965.1 (Danio rerio)",
+            "GCF_000001215.4 (Drosophila melanogaster)",
+            "GCF_000002985.6 (Caenorhabditis elegans)",
+        ]
         assert coge_values == ["24739 (Arabidopsis thaliana)"]
         assert flybase_values == ["dmel_r6.66 (Drosophila melanogaster)"]
         assert wormbase_values == ["caenorhabditis_elegans_prjna13758 (Caenorhabditis elegans)"]
@@ -429,3 +450,35 @@ def test_build_download_manifest_local_provider_from_phytozome_like_fixture(tmp_
     assert rows[0]["id"] == "Hydrocotyle_leucocephala_HAP1v2.1"
     assert rows[0]["cds_filename"].endswith(".cds_primaryTranscriptOnly.fa")
     assert rows[0]["gff_filename"].endswith(".gene.gff3")
+
+
+def test_build_download_manifest_all_rows_keep_local_last(tmp_path):
+    input_root = tmp_path / "dataset"
+
+    ncbi_species_dir = input_root / "NCBI_Genome" / "species_wise_original" / "GCF_000001405.40"
+    ncbi_species_dir.mkdir(parents=True, exist_ok=True)
+    (ncbi_species_dir / "GCF_000001405.40_GRCh38.p14_cds_from_genomic.fna.gz").write_bytes(b"dummy")
+    (ncbi_species_dir / "GCF_000001405.40_GRCh38.p14_genomic.gff.gz").write_bytes(b"dummy")
+    (ncbi_species_dir / "GCF_000001405.40_GRCh38.p14_genomic.fna.gz").write_bytes(b"dummy")
+
+    local_species_dir = input_root / "Local" / "species_wise_original" / "Hydrocotyle_leucocephala_HAP1v2.1"
+    local_species_dir.mkdir(parents=True, exist_ok=True)
+    (local_species_dir / "HleucocephalaHAP1_768_v2.1.cds_primaryTranscriptOnly.fa").write_text(">g1\nATG\n", encoding="utf-8")
+    (local_species_dir / "HleucocephalaHAP1_768_v2.1.gene.gff3").write_text(
+        "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=g1\n",
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "download_manifest.tsv"
+    completed = run_script(
+        "--provider",
+        "all",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    rows = read_manifest(out)
+    assert [row["provider"] for row in rows] == ["ncbi", "local"]

@@ -95,9 +95,27 @@ EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
 ID_EXAMPLES_BY_PROVIDER = {
     "ensembl": (("homo_sapiens", "Homo sapiens"), ("mus_musculus", "Mus musculus")),
     "ensemblplants": (("Ostreococcus_lucimarinus", "Ostreococcus lucimarinus"),),
-    "ncbi": (("GCF_000001405.40", "Homo sapiens"), ("GCA_000001405.29", "Homo sapiens")),
-    "refseq": (("GCF_000001405.40", "Homo sapiens"),),
-    "genbank": (("GCA_000001405.29", "Homo sapiens"),),
+    "ncbi": (
+        ("GCF_000001405.40", "Homo sapiens"),
+        ("GCF_000001635.27", "Mus musculus"),
+        ("GCF_049306965.1", "Danio rerio"),
+        ("GCF_000001215.4", "Drosophila melanogaster"),
+        ("GCF_000002985.6", "Caenorhabditis elegans"),
+    ),
+    "refseq": (
+        ("GCF_000001405.40", "Homo sapiens"),
+        ("GCF_000001635.27", "Mus musculus"),
+        ("GCF_049306965.1", "Danio rerio"),
+        ("GCF_000001215.4", "Drosophila melanogaster"),
+        ("GCF_000002985.6", "Caenorhabditis elegans"),
+    ),
+    "genbank": (
+        ("GCA_000001405.29", "Homo sapiens"),
+        ("GCA_000001635.9", "Mus musculus"),
+        ("GCA_049306965.1", "Danio rerio"),
+        ("GCA_000001215.4", "Drosophila melanogaster"),
+        ("GCA_000002985.3", "Caenorhabditis elegans"),
+    ),
     "coge": (("24739", "Arabidopsis thaliana"),),
     "cngb": (("CNA0012345", "Homo sapiens"),),
     "flybase": (("dmel_r6.61", "Drosophila melanogaster"),),
@@ -565,7 +583,7 @@ def write_manifest_xlsx(rows: List[Dict[str, str]], output_path: Path, id_option
         errorTitle="ID candidates",
         error=(
             "This drop-down changes by provider. "
-            "For large providers, model-organism IDs are shown as examples. "
+            "For large providers, five model-organism IDs are shown as examples. "
             "You can still type any other ID value."
         ),
     )
@@ -617,7 +635,14 @@ def main():
     for error in all_errors:
         sys.stderr.write("Error: {}\n".format(error))
 
-    all_rows = sorted(all_rows, key=lambda x: (x["provider"], x["species_key"]))
+    provider_order = {provider: idx for idx, provider in enumerate(PROVIDERS)}
+    all_rows = sorted(
+        all_rows,
+        key=lambda x: (
+            provider_order.get(str(x.get("provider", "")), len(PROVIDERS)),
+            str(x.get("species_key", "")),
+        ),
+    )
     write_manifest(all_rows, output_path, id_options_snapshot=id_options_snapshot)
     print("Manifest written: {} (rows={})".format(output_path, len(all_rows)))
 
