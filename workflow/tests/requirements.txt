@@ -6,3 +6,4 @@ ete4
 sqlalchemy
 tenacity
 tqdm
+openpyxl
