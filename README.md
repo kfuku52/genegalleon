@@ -324,7 +324,7 @@ XLSX template notes:
 - `id` drop-down values are provider-specific.
 - provider drop-down order is fixed, and `local` is always listed last.
 - for large provider (`ncbi`), five model-organism IDs are shown as examples (mixed `GCF_*`/`GCA_*` formats).
-- for `coge` and `cngb`, IDs are also example-based by default (`coge` shows five model-organism `genome_id` examples).
+- for `coge` and `cngb`, IDs are also example-based by default (both show five model-organism examples).
 - for `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, and `local`,
   IDs can be supplied from a prebuilt `id_options_snapshot.json`.
 - when no snapshot is supplied, non-large providers fall back to IDs discovered from `--input-dir`.

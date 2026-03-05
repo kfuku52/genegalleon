@@ -303,6 +303,7 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
     try:
         list_sheet = workbook["_lists"]
         coge_values = read_list_column_values(list_sheet, 5)
+        cngb_values = read_list_column_values(list_sheet, 6)
         local_values = read_list_column_values(list_sheet, 10)
         ncbi_values = read_list_column_values(list_sheet, 4)
 
@@ -312,6 +313,13 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
             "42091 (Zea mays)",
             "78085 (Drosophila melanogaster)",
             "72417 (Caenorhabditis elegans)",
+        ]
+        assert cngb_values == [
+            "CNA0012345 (Homo sapiens)",
+            "GCF_000001405.40 (Homo sapiens)",
+            "GCA_000001635.9 (Mus musculus)",
+            "GCF_049306965.1 (Danio rerio)",
+            "GCA_000001215.4 (Drosophila melanogaster)",
         ]
         assert local_values == [
             "Hydrocotyle_leucocephala_HAP1v2.1",
@@ -388,6 +396,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         ensemblplants_values = read_list_column_values(list_sheet, 3)
         ncbi_values = read_list_column_values(list_sheet, 4)
         coge_values = read_list_column_values(list_sheet, 5)
+        cngb_values = read_list_column_values(list_sheet, 6)
         flybase_values = read_list_column_values(list_sheet, 7)
         wormbase_values = read_list_column_values(list_sheet, 8)
         vectorbase_values = read_list_column_values(list_sheet, 9)
@@ -414,6 +423,13 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
             "42091 (Zea mays)",
             "78085 (Drosophila melanogaster)",
             "72417 (Caenorhabditis elegans)",
+        ]
+        assert cngb_values == [
+            "CNA0012345 (Homo sapiens)",
+            "GCF_000001405.40 (Homo sapiens)",
+            "GCA_000001635.9 (Mus musculus)",
+            "GCF_049306965.1 (Danio rerio)",
+            "GCA_000001215.4 (Drosophila melanogaster)",
         ]
         assert flybase_values == ["dmel_r6.66 (Drosophila melanogaster)"]
         assert wormbase_values == ["caenorhabditis_elegans_prjna13758 (Caenorhabditis elegans)"]

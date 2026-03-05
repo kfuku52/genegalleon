@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_utc": "2026-03-05T08:31:27Z",
+  "generated_utc": "2026-03-05T08:58:54Z",
   "providers": {
     "ensembl": [
       {
@@ -2510,6 +2510,22 @@
       {
         "id": "CNA0012345",
         "species": "Homo sapiens"
+      },
+      {
+        "id": "GCA_000001215.4",
+        "species": "Drosophila melanogaster"
+      },
+      {
+        "id": "GCA_000001635.9",
+        "species": "Mus musculus"
+      },
+      {
+        "id": "GCF_000001405.40",
+        "species": "Homo sapiens"
+      },
+      {
+        "id": "GCF_049306965.1",
+        "species": "Danio rerio"
       }
     ],
     "flybase": [
