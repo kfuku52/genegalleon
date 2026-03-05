@@ -82,11 +82,10 @@ if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
   max_assembly_input_fastq_size="30,000,000"
 fi
 
-dir_transcriptome_assembly_input="${dir_pg_input}/transcriptome_assembly"
 dir_transcriptome_assembly_output="${dir_pg_output}/transcriptome_assembly"
 dir_input_fastq="${dir_pg_input}/species_rnaseq"
 dir_input_sra_list="${dir_pg_input}/query_sra_id"
-dir_amalgkit_metadata="${dir_transcriptome_assembly_input}/amalgkit_metadata"
+dir_amalgkit_metadata="${dir_pg_input}/amalgkit_metadata"
 dir_amalgkit_quant="${dir_transcriptome_assembly_output}/amalgkit_quant"
 
 if [[ ${mode_fastq} -eq 1 && ! -d "${dir_input_fastq}" ]]; then

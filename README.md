@@ -169,9 +169,9 @@ workspace/
     species_trait/
     species_rnaseq/
     input_generation/
+    amalgkit_metadata/
     query_sra_id/
     query_gene/
-    transcriptome_assembly/
   output/
   downloads/
 ```
@@ -239,7 +239,7 @@ Accepted forms:
 - `mode_fastq=1`
   - input: `workspace/input/species_rnaseq/GENUS_SPECIES/*.fastq.gz`
 - `mode_metadata=1`
-  - input: `workspace/input/transcriptome_assembly/amalgkit_metadata/GENUS_SPECIES.metadata.tsv`
+  - input: `workspace/input/amalgkit_metadata/GENUS_SPECIES.metadata.tsv`
 
 ### Automated provider formatting helper
 

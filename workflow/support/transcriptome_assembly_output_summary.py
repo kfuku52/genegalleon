@@ -57,7 +57,7 @@ def collect_species_from_fastq(input_root):
 
 
 def collect_species_from_metadata(input_root):
-    input_dir = os.path.join(input_root, 'transcriptome_assembly', 'amalgkit_metadata')
+    input_dir = os.path.join(input_root, 'amalgkit_metadata')
     if not os.path.isdir(input_dir):
         raise FileNotFoundError(f'Directory not found: {input_dir}')
     return [filename[:-len('_metadata.tsv')] for filename in sorted_entries(input_dir) if filename.endswith('_metadata.tsv')]

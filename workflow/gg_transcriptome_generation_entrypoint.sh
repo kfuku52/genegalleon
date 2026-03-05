@@ -51,7 +51,7 @@ fi
 
 mode_sraid=1 # Need input at workspace/input/query_sra_id.
 mode_fastq=0 # Need input at workspace/input/species_rnaseq.
-mode_metadata=0 # Need input at workspace/input/transcriptome_assembly/amalgkit_metadata.
+mode_metadata=0 # Need input at workspace/input/amalgkit_metadata.
 
 run_amalgkit_metadata_or_integrate=1 # Metadata retrieval.
 run_amalgkit_getfastq=1 # fastq generation from NCBI SRA.

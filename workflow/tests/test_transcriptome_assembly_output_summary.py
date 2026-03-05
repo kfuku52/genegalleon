@@ -55,7 +55,7 @@ def test_summary_uses_new_metadata_file_suffix(tmp_path: Path):
     input_root = workspace / "input"
     output_dir = workspace / "output" / "transcriptome_assembly"
 
-    metadata_dir = input_root / "transcriptome_assembly" / "amalgkit_metadata"
+    metadata_dir = input_root / "amalgkit_metadata"
     metadata_dir.mkdir(parents=True)
     (metadata_dir / "Homo_sapiens_metadata.tsv").write_text("run\tscientific_name\n", encoding="utf-8")
     (output_dir / "isoform").mkdir(parents=True)
