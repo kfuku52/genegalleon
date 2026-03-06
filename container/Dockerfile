@@ -7,7 +7,7 @@ ARG TARGETPLATFORM
 ARG NOTUNG_DOWNLOAD_PAGE="https://amberjack.compbio.cs.cmu.edu/Notung/download29.html"
 ARG KFU52_REPO_REF="master"
 ARG KFU52_AMALGKIT_AUTO_SELECT_REF="1"
-ARG KFU52_AMALGKIT_BRANCH_CANDIDATES="master,kfdevel"
+ARG KFU52_AMALGKIT_BRANCH_CANDIDATES="master,kfdevel,devel"
 ARG KFU52_AMALGKIT_REPO_REF=""
 ARG KFTOOLS_REPO_URL="https://github.com/kfuku52/kftools.git"
 ARG RKFTOOLS_REPO_URL="https://github.com/kfuku52/rkftools.git"

@@ -13,7 +13,7 @@ From the project README and Wiki (`gg_versions`):
   (`kfuku52/amalgkit`, `kfuku52/cdskit`, `kfuku52/csubst`, `kfuku52/nwkit`,
   `kfuku52/kftools`, `kfuku52/rkftools`, `kfuku52/RADTE`).
   `amalgkit` is selected from the newer branch commit between `master` and
-  `kfdevel` by default.
+  `kfdevel`, and `devel` by default.
 
 So this Dockerfile is designed as:
 1. reproducible base build,
@@ -34,7 +34,7 @@ GitHub refs can be pinned at build time:
 
 ```bash
 KFU52_REPO_REF=master \
-KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel \
+KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel,devel \
 KFTOOLS_REPO_URL=https://github.com/kfuku52/kftools.git \
 RKFTOOLS_REPO_URL=https://github.com/kfuku52/rkftools.git \
 RADTE_REPO_URL=https://github.com/kfuku52/RADTE.git \
@@ -51,7 +51,7 @@ and default to `KFU52_REPO_REF` when not set.
 when not set.
 For `amalgkit`, auto-selection can be controlled with:
 - `KFU52_AMALGKIT_AUTO_SELECT_REF=1` (default)
-- `KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel` (default)
+- `KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel,devel` (default)
 - `KFU52_AMALGKIT_REPO_REF=<branch>` (hard override)
 
 `buildx.sh` runs a preflight check to ensure the conda env set used in

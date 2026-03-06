@@ -4,7 +4,7 @@ set -euo pipefail
 # Example:
 #   IMAGE=ghcr.io/your-org/genegalleon TAG=20260211 MODE=push ./container/buildx.sh
 #   IMAGE=local/genegalleon TAG=dev PLATFORMS=linux/arm64 MODE=load ./container/buildx.sh
-#   KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel MODE=push ./container/buildx.sh
+#   KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel,devel MODE=push ./container/buildx.sh
 
 IMAGE=${IMAGE:-ghcr.io/example/genegalleon}
 TAG=${TAG:-dev}
@@ -13,7 +13,7 @@ MODE=${MODE:-push} # push | load
 NOTUNG_DOWNLOAD_PAGE=${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/download29.html}
 KFU52_REPO_REF=${KFU52_REPO_REF:-master}
 KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-1}
-KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel}
+KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
 KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF:-}
 KFTOOLS_REPO_URL=${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}
 RKFTOOLS_REPO_URL=${RKFTOOLS_REPO_URL:-https://github.com/kfuku52/rkftools.git}
