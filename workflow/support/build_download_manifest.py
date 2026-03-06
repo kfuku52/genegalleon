@@ -53,6 +53,7 @@ PROVIDERS = (
     "flybase",
     "wormbase",
     "vectorbase",
+    "fernbase",
     "local",
 )
 LEGACY_NCBI_PROVIDER_ALIASES = ("refseq", "genbank")
@@ -66,6 +67,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "flybase": Path("FlyBase") / "species_wise_original",
     "wormbase": Path("WormBase") / "species_wise_original",
     "vectorbase": Path("VectorBase") / "species_wise_original",
+    "fernbase": Path("FernBase") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
 NCBI_MERGED_INPUT_RELATIVE_DIRS = (
@@ -93,7 +95,7 @@ MANIFEST_FIELDNAMES = (
 )
 
 LARGE_ID_PROVIDERS = ("ncbi",)
-SNAPSHOT_FULL_ID_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "local")
+SNAPSHOT_FULL_ID_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "fernbase", "local")
 EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
 
 ID_EXAMPLES_BY_PROVIDER = {
@@ -123,6 +125,7 @@ ID_EXAMPLES_BY_PROVIDER = {
     "flybase": (("dmel_r6.61", "Drosophila melanogaster"),),
     "wormbase": (("celegans_prjna13758_ws290", "Caenorhabditis elegans"),),
     "vectorbase": (("anopheles_gambiae_pest", "Anopheles gambiae"),),
+    "fernbase": (("Azolla_filiculoides", "Azolla filiculoides"), ("Salvinia_cucullata_v2", "Salvinia cucullata v2")),
     "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
 }
 
@@ -311,7 +314,7 @@ def build_arg_parser():
         default="",
         help=(
             "Optional JSON snapshot for provider-specific id dropdown values. "
-            "When set, non-large providers (ensembl/ensemblplants/flybase/wormbase/vectorbase/local) "
+            "When set, non-large providers (ensembl/ensemblplants/flybase/wormbase/vectorbase/fernbase/local) "
             "prefer snapshot IDs over locally discovered IDs."
         ),
     )
@@ -353,10 +356,54 @@ def is_probable_genome_filename(provider, name):
     return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold"))
 
 
+FERNBASE_GFF_EXCLUDE_PATTERN = re.compile(
+    r"(?:^|[._-])(te|teanno|repeat|repeats|transpos(?:on)?)(?:[._-]|$)",
+    re.IGNORECASE,
+)
+
+
+def is_probable_cds_filename(provider, name):
+    lower = name.lower()
+    if provider == "fernbase" and (lower.endswith(".cds") or lower.endswith(".cds.gz")):
+        return True
+    if not is_fasta_filename(name):
+        return False
+    return any(marker in lower for marker in ("cds", "transcript", "mrna", "cdna"))
+
+
+def provider_candidate_sort_key(provider, label, name):
+    lower = str(name or "").lower()
+    label_upper = str(label or "").upper()
+    if provider != "fernbase":
+        return (lower,)
+    if label_upper == "CDS":
+        return (
+            0 if "highconfidence" in lower else 1,
+            1 if "lowconfidence" in lower else 0,
+            0 if "cds" in lower else 1,
+            1 if any(marker in lower for marker in ("transcript", "mrna", "cdna")) else 0,
+            lower,
+        )
+    if label_upper == "GFF":
+        return (
+            1 if FERNBASE_GFF_EXCLUDE_PATTERN.search(lower) else 0,
+            0 if "highconfidence" in lower else 1,
+            1 if "lowconfidence" in lower else 0,
+            lower,
+        )
+    if label_upper == "GENOME":
+        return (
+            1 if "chloroplast" in lower else 0,
+            0 if any(marker in lower for marker in ("genome", "assembly", "chr", "chromosome")) else 1,
+            lower,
+        )
+    return (lower,)
+
+
 def pick_single_file(matches, provider, species_key, label, warnings):
     if len(matches) == 0:
         return None
-    ordered = sorted(matches)
+    ordered = sorted(matches, key=lambda path: provider_candidate_sort_key(provider, label, path.name))
     if len(ordered) > 1:
         warnings.append(
             "[{}] {}: multiple {} files found. Using '{}'".format(
@@ -455,8 +502,7 @@ def discover_species_dir_based(provider, input_dir):
             cds_matches = [
                 path
                 for path in files
-                if is_fasta_filename(path.name)
-                and any(marker in path.name.lower() for marker in ("cds", "transcript", "mrna", "cdna"))
+                if is_probable_cds_filename(provider, path.name)
             ]
             if len(cds_matches) == 0:
                 cds_matches = [

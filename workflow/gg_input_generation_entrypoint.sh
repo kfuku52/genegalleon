@@ -60,7 +60,7 @@ run_format_inputs=1
 run_validate_inputs=1
 run_generate_species_trait=0
 
-provider="all" # all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|local
+provider="all" # all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|local
 trait_profile="none" # none|gift_starter
 strict=0
 overwrite=0

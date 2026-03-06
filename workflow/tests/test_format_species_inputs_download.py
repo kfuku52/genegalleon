@@ -1129,6 +1129,7 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
         "flybase": "Drosophila_melanogaster",
         "wormbase": "Caenorhabditis_elegans",
         "vectorbase": "Anopheles_gambiae",
+        "fernbase": "Azolla_filiculoides",
     }
     provider_ids = {
         "ensembl": "homo_sapiens",
@@ -1138,6 +1139,7 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
         "flybase": "dmel_r6.61",
         "wormbase": "celegans_prjna13758_ws290",
         "vectorbase": "anopheles_gambiae_pest",
+        "fernbase": "Azolla_filiculoides",
     }
 
     for provider, source_id in provider_ids.items():
@@ -1177,6 +1179,7 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
         "flybase": "GG_FLYBASE",
         "wormbase": "GG_WORMBASE",
         "vectorbase": "GG_VECTORBASE",
+        "fernbase": "GG_FERNBASE",
     }
     for provider, env_prefix in provider_to_env.items():
         env[env_prefix + "_CDS_URL_TEMPLATE"] = source_dir.resolve().as_uri() + "/{id}.cds.fa"
@@ -1211,6 +1214,7 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
         "flybase": download_dir / "FlyBase" / "species_wise_original" / provider_species["flybase"],
         "wormbase": download_dir / "WormBase" / "species_wise_original" / provider_species["wormbase"],
         "vectorbase": download_dir / "VectorBase" / "species_wise_original" / provider_species["vectorbase"],
+        "fernbase": download_dir / "FernBase" / "species_wise_original" / provider_species["fernbase"],
     }
     for provider, root in expected_roots.items():
         assert root.exists(), provider
@@ -1218,6 +1222,85 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
         assert any(name.endswith(".cds.fa") for name in files), provider
         assert any(name.endswith(".gene.gff3") for name in files), provider
         assert any(name.endswith(".genome.fa") for name in files), provider
+
+
+def test_download_manifest_fernbase_provider_follows_latest_version_subdir(tmp_path):
+    server_root = tmp_path / "server_root"
+    v1_dir = server_root / "ftp" / "Azolla_filiculoides" / "Azolla_asm_v1.0"
+    v2_dir = server_root / "ftp" / "Azolla_filiculoides" / "Azolla_asm_v1.1"
+    v1_dir.mkdir(parents=True, exist_ok=True)
+    v2_dir.mkdir(parents=True, exist_ok=True)
+
+    (v1_dir / "Azolla_filiculoides.CDS.highconfidence_v1.0.fasta").write_text(">old.t1\nATG\n", encoding="utf-8")
+    (v1_dir / "Azolla_filiculoides.gene_models.highconfidence_v1.0.gff").write_text(
+        "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=old\n",
+        encoding="utf-8",
+    )
+    (v1_dir / "Azolla_filiculoides.genome_v1.0.fasta").write_text(">chr1\nATGC\n", encoding="utf-8")
+
+    (v2_dir / "Azolla_filiculoides.CDS.lowconfidence_v1.1.fasta").write_text(">low.t1\nATG\n", encoding="utf-8")
+    (v2_dir / "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta").write_text(">new.t1\nATGAA\n", encoding="utf-8")
+    (v2_dir / "Azolla_filiculoides.gene_models.lowconfidence_v1.1.gff").write_text(
+        "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=low\n",
+        encoding="utf-8",
+    )
+    (v2_dir / "Azolla_filiculoides.gene_models.highconfidence_v1.1.gff").write_text(
+        "chr1\tsrc\tgene\t1\t5\t.\t+\t.\tID=new\n",
+        encoding="utf-8",
+    )
+    (v2_dir / "Azolla_filiculoides.genome_v1.2.fasta").write_text(">chr1\nATGCATGC\n", encoding="utf-8")
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "fernbase",
+                    "id": "Azolla_filiculoides",
+                    "species_key": "Azolla_filiculoides",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_FERNBASE_ID_URL_TEMPLATE"] = "http://127.0.0.1:{}/ftp/{{id}}/".format(server.server_port)
+        download_dir = tmp_path / "download_cache"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--provider",
+                "fernbase",
+                "--download-manifest",
+                str(manifest),
+                "--download-dir",
+                str(download_dir),
+                "--download-only",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    raw_dir = download_dir / "FernBase" / "species_wise_original" / "Azolla_filiculoides"
+    assert (raw_dir / "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta").exists()
+    assert (raw_dir / "Azolla_filiculoides.gene_models.highconfidence_v1.1.gff").exists()
+    assert (raw_dir / "Azolla_filiculoides.genome_v1.2.fasta").exists()
+    assert not (raw_dir / "Azolla_filiculoides.CDS.lowconfidence_v1.1.fasta").exists()
 
 
 def test_download_manifest_ncbi_id_only_auto_resolve(tmp_path):

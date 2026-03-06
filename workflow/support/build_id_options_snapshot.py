@@ -20,10 +20,11 @@ PROVIDERS = (
     "flybase",
     "wormbase",
     "vectorbase",
+    "fernbase",
     "local",
 )
 
-FETCH_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "local")
+FETCH_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "fernbase", "local")
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "local": Path("Local") / "species_wise_original",
@@ -56,6 +57,7 @@ ID_EXAMPLES_BY_PROVIDER = {
     "flybase": (("dmel_r6.61", "Drosophila melanogaster"),),
     "wormbase": (("celegans_prjna13758_ws290", "Caenorhabditis elegans"),),
     "vectorbase": (("anopheles_gambiae_pest", "Anopheles gambiae"),),
+    "fernbase": (("Azolla_filiculoides", "Azolla filiculoides"), ("Salvinia_cucullata_v2", "Salvinia cucullata v2")),
     "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
 }
 
@@ -346,6 +348,26 @@ def fetch_vectorbase_options(timeout):
     return sorted(out, key=lambda x: x[0].lower())
 
 
+def fetch_fernbase_options(timeout):
+    root_url = "https://fernbase.org/ftp/"
+    html_text = fetch_text(root_url, timeout)
+    out = []
+    for link in parse_links(html_text, root_url):
+        path = urlparse(link).path
+        match = re.search(r"/ftp/([^/]+)/?$", path)
+        if match is None:
+            continue
+        source_id = match.group(1).strip()
+        if source_id == "":
+            continue
+        if not re.fullmatch(r"[A-Z][A-Za-z0-9.-]*_[A-Za-z0-9_.-]+", source_id):
+            continue
+        species_label = species_label_from_species_key(source_id)
+        out.append((source_id, species_label))
+    out = dedupe_options(out)
+    return sorted(out, key=lambda x: x[0].lower())
+
+
 def fetch_local_options(input_root):
     if input_root is None:
         return []
@@ -374,6 +396,8 @@ def fetch_provider_options(provider, timeout, input_root):
         return fetch_wormbase_options(timeout)
     if provider == "vectorbase":
         return fetch_vectorbase_options(timeout)
+    if provider == "fernbase":
+        return fetch_fernbase_options(timeout)
     if provider == "local":
         return fetch_local_options(input_root)
     raise ValueError("unexpected fetch provider: {}".format(provider))

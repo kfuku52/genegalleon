@@ -55,6 +55,7 @@ ENSEMBL_GENE_ID_PATTERN = re.compile(r"^ENS[A-Z0-9]*G[0-9]+(?:\.[0-9]+)?$", re.I
 COGE_ID_HINT_PATTERN = re.compile(r"^coge[:_].+", re.IGNORECASE)
 CNGB_ID_HINT_PATTERN = re.compile(r"^cngb[:_].+", re.IGNORECASE)
 ENSEMBL_ID_HINT_PATTERN = re.compile(r"^ensembl[:_].+", re.IGNORECASE)
+FERNBASE_ID_HINT_PATTERN = re.compile(r"^fernbase[:_].+", re.IGNORECASE)
 COGE_GID_PATTERN = re.compile(r"^[0-9]+$")
 CNGB_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^(?:CNA[0-9]+|GWH[A-Z0-9]+)$", re.IGNORECASE)
 
@@ -71,6 +72,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "flybase": Path("FlyBase") / "species_wise_original",
     "wormbase": Path("WormBase") / "species_wise_original",
     "vectorbase": Path("VectorBase") / "species_wise_original",
+    "fernbase": Path("FernBase") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
 
@@ -87,6 +89,7 @@ PROVIDERS = (
     "flybase",
     "wormbase",
     "vectorbase",
+    "fernbase",
     "local",
 )
 DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
@@ -100,6 +103,7 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "flybase",
     "wormbase",
     "vectorbase",
+    "fernbase",
     "local",
 )
 DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 86400
@@ -152,6 +156,9 @@ PROVIDER_DEFAULT_ID_PAGE_URL_TEMPLATES = {
     "cngb": (
         "https://db.cngb.org/data_resources/project/{id}",
     ),
+    "fernbase": (
+        "https://fernbase.org/ftp/{id}/",
+    ),
 }
 PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     # NCBI E-utilities explicitly documents request-rate limits.
@@ -171,6 +178,7 @@ PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     "flybase": 2,
     "wormbase": 2,
     "vectorbase": 2,
+    "fernbase": 2,
     "local": 1,
 }
 DEFAULT_GLOBAL_DOWNLOAD_WORKERS = 1
@@ -220,7 +228,7 @@ def build_arg_parser():
         default="",
         help=(
             "Provider input directory. For ensembl/ensemblplants: original_files/. "
-            "For phycocosm/phytozome/ncbi/coge/cngb/flybase/wormbase/vectorbase/local: species_wise_original/. "
+            "For phycocosm/phytozome/ncbi/coge/cngb/flybase/wormbase/vectorbase/fernbase/local: species_wise_original/. "
             "Legacy aliases refseq/genbank are treated as ncbi. "
             "For --provider all, this must be the shared root containing all provider subdirectories."
         ),
@@ -256,7 +264,7 @@ def build_arg_parser():
             "(ncbi supports GCF/GCA/NCBI-URL auto-resolution; "
             "other supported providers support id-based template/index inference). "
             "Supported providers for --download-manifest: "
-            "ensembl, ensemblplants, ncbi, coge, cngb, flybase, wormbase, vectorbase, local "
+            "ensembl, ensemblplants, ncbi, coge, cngb, flybase, wormbase, vectorbase, fernbase, local "
             "(legacy aliases refseq/genbank are treated as ncbi). "
             "provider=local reads local files/directories (for example local phytozome files). "
             "Use --input-dir for direct local phycocosm/phytozome formatting. "
@@ -468,6 +476,7 @@ def provider_raw_dir(provider, download_root, species_key):
         "flybase",
         "wormbase",
         "vectorbase",
+        "fernbase",
         "local",
     ):
         return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider] / species_key
@@ -484,6 +493,8 @@ def infer_provider_from_id(source_id):
         return "ncbi"
     if ENSEMBL_ID_HINT_PATTERN.match(source_id):
         return "ensembl"
+    if FERNBASE_ID_HINT_PATTERN.match(source_id):
+        return "fernbase"
     if "ftp.ensembl.org" in lowered or "ensembl.org/pub/current_" in lowered:
         return "ensembl"
     if COGE_ID_HINT_PATTERN.match(source_id):
@@ -502,6 +513,8 @@ def infer_provider_from_id(source_id):
         return "wormbase"
     if "vectorbase.org" in lowered:
         return "vectorbase"
+    if "fernbase.org" in lowered:
+        return "fernbase"
     return ""
 
 
@@ -582,11 +595,24 @@ def parse_links_from_document(base_url, text):
     return links
 
 
-def is_probable_cds_url(url):
-    lower = url.lower()
-    if not is_fasta_filename(lower):
+FERNBASE_GFF_EXCLUDE_PATTERN = re.compile(
+    r"(?:^|[._-])(te|teanno|repeat|repeats|transpos(?:on)?)(?:[._-]|$)",
+    re.IGNORECASE,
+)
+
+
+def is_probable_cds_filename(provider, name):
+    lower = name.lower()
+    if provider == "fernbase" and (lower.endswith(".cds") or lower.endswith(".cds.gz")):
+        return True
+    if not is_fasta_filename(name):
         return False
     return any(marker in lower for marker in ("cds", "transcript", "mrna", "cdna", "genecatalog_cds"))
+
+
+def is_probable_cds_url(provider, url):
+    lower = url.lower()
+    return is_probable_cds_filename(provider, lower)
 
 
 def is_probable_gff_url(url):
@@ -597,6 +623,37 @@ def is_probable_genome_url(provider, url):
     return is_probable_genome_filename(provider, urlparse(url).path.lower())
 
 
+def provider_candidate_sort_key(provider, label, name):
+    lower = str(name or "").lower()
+    label_upper = str(label or "").upper()
+    if provider != "fernbase":
+        if label_upper == "GENOME":
+            return (".chromosome." in lower, lower)
+        return (lower,)
+    if label_upper == "CDS":
+        return (
+            0 if "highconfidence" in lower else 1,
+            1 if "lowconfidence" in lower else 0,
+            0 if "cds" in lower else 1,
+            1 if any(marker in lower for marker in ("transcript", "mrna", "cdna")) else 0,
+            lower,
+        )
+    if label_upper == "GFF":
+        return (
+            1 if FERNBASE_GFF_EXCLUDE_PATTERN.search(lower) else 0,
+            0 if "highconfidence" in lower else 1,
+            1 if "lowconfidence" in lower else 0,
+            lower,
+        )
+    if label_upper == "GENOME":
+        return (
+            1 if "chloroplast" in lower else 0,
+            0 if any(marker in lower for marker in ("genome", "assembly", "chr", "chromosome")) else 1,
+            lower,
+        )
+    return (lower,)
+
+
 def select_best_url_for_label(provider, label, candidates):
     if len(candidates) == 0:
         return ""
@@ -604,7 +661,7 @@ def select_best_url_for_label(provider, label, candidates):
     for candidate in candidates:
         path_lower = urlparse(candidate).path.lower()
         if label == "CDS":
-            if is_probable_cds_url(path_lower):
+            if is_probable_cds_url(provider, path_lower):
                 filtered.append(candidate)
             continue
         if label == "GFF":
@@ -617,7 +674,10 @@ def select_best_url_for_label(provider, label, candidates):
             continue
     if len(filtered) == 0:
         return ""
-    preferred = sorted(filtered, key=lambda x: (".chromosome." in x.lower(), x))
+    preferred = sorted(
+        filtered,
+        key=lambda x: provider_candidate_sort_key(provider, label, urlparse(x).path.split("/")[-1]),
+    )
     return preferred[0]
 
 
@@ -869,11 +929,121 @@ def resolve_cngb_download_urls_from_id(source_id, timeout, headers):
     return resolved
 
 
+def fernbase_release_sort_key(name):
+    lower = str(name or "").lower()
+    version_tokens = tuple(int(token) for token in re.findall(r"[0-9]+", lower))
+    has_version = 1 if re.search(r"(?:^|[_-])(?:asm[_-])?v?[0-9]+", lower) else 0
+    return (has_version, version_tokens, lower)
+
+
+def infer_fernbase_species_key(source_id, species_key):
+    explicit = str(species_key or "").strip()
+    if explicit != "":
+        return explicit
+    raw = strip_provider_prefix(source_id, "fernbase")
+    if raw == "":
+        raw = str(source_id or "").strip()
+    if is_url_like(raw):
+        parts = [unquote(part) for part in urlparse(raw).path.split("/") if part]
+        if "ftp" in parts:
+            ftp_index = parts.index("ftp")
+            parts = parts[ftp_index + 1 :]
+        if len(parts) > 0:
+            return parts[0]
+        return ""
+    return raw.split("/", 1)[0]
+
+
+def resolve_fernbase_download_urls_from_id(source_id, species_key, timeout, headers):
+    source_clean = str(source_id or "").strip()
+    root_template = os.environ.get("GG_FERNBASE_ID_URL_TEMPLATE", "").strip()
+    if root_template == "":
+        root_template = "https://fernbase.org/ftp/{id}/"
+
+    index_urls = []
+    if is_url_like(source_clean):
+        index_urls.append(source_clean)
+    id_candidates = source_id_candidates("fernbase", source_id, species_key)
+    if len(id_candidates) == 0:
+        id_candidates = [source_clean]
+    for candidate in id_candidates:
+        rendered = render_id_url_template(root_template, "fernbase", candidate, species_key)
+        if rendered != "":
+            index_urls.append(rendered)
+
+    deduped_index_urls = []
+    seen_index_urls = set()
+    for index_url in index_urls:
+        normalized = str(index_url or "").strip()
+        if normalized == "":
+            continue
+        if normalized in seen_index_urls:
+            continue
+        seen_index_urls.add(normalized)
+        deduped_index_urls.append(normalized)
+
+    inferred_species_key = infer_fernbase_species_key(source_id, species_key)
+    last_error = None
+    for index_url in deduped_index_urls:
+        try:
+            resolved = resolve_urls_from_index_url("fernbase", index_url, timeout, headers)
+        except Exception as exc:
+            last_error = exc
+            continue
+        if (
+            resolved.get("cds_url", "") != ""
+            and resolved.get("gff_url", "") != ""
+            and resolved.get("genome_url", "") != ""
+        ):
+            if inferred_species_key != "":
+                resolved["species_key"] = inferred_species_key
+            return resolved
+
+        try:
+            index_text = fetch_text_with_headers(index_url, timeout, headers)
+        except Exception as exc:
+            last_error = exc
+            continue
+
+        subdir_candidates = []
+        for link in parse_links_from_document(index_url, index_text):
+            path = urlparse(link).path
+            if not path.endswith("/"):
+                continue
+            subdir_name = unquote(path.rstrip("/").split("/")[-1])
+            if subdir_name in ("", "..", ".", inferred_species_key, "chloroplast_genome"):
+                continue
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", subdir_name):
+                continue
+            subdir_candidates.append((fernbase_release_sort_key(subdir_name), link))
+
+        for _sort_key, subdir_url in sorted(subdir_candidates, reverse=True):
+            try:
+                resolved = resolve_urls_from_index_url("fernbase", subdir_url, timeout, headers)
+            except Exception as exc:
+                last_error = exc
+                continue
+            if (
+                resolved.get("cds_url", "") != ""
+                and resolved.get("gff_url", "") != ""
+                and resolved.get("genome_url", "") != ""
+            ):
+                if inferred_species_key != "":
+                    resolved["species_key"] = inferred_species_key
+                return resolved
+
+    if last_error is not None:
+        raise ValueError("FernBase id '{}' did not resolve: {}".format(source_id, last_error))
+    raise ValueError("FernBase id '{}' did not resolve to downloadable CDS/GFF/genome URLs".format(source_id))
+
+
 def resolve_provider_specific_download_urls_from_id(provider, source_id, species_key, timeout, headers):
     if provider == "coge":
         return resolve_coge_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "cngb":
         return resolve_cngb_download_urls_from_id(source_id, timeout, headers)
+    if provider == "fernbase":
+        return resolve_fernbase_download_urls_from_id(source_id, species_key, timeout, headers)
     return None
 
 
@@ -2292,6 +2462,7 @@ def collapse_transcript_suffix(provider, identifier):
         "flybase",
         "wormbase",
         "vectorbase",
+        "fernbase",
         "local",
     ):
         text = re.sub(r"[._-]t[0-9]+$", "", text, flags=re.IGNORECASE)
@@ -2319,8 +2490,7 @@ def discover_generic_species_dir_tasks(provider, input_dir):
         cds_matches = [
             path
             for path in files
-            if is_fasta_filename(path.name)
-            and any(marker in path.name.lower() for marker in ("cds", "transcript", "mrna", "cdna"))
+            if is_probable_cds_filename(provider, path.name)
         ]
         if len(cds_matches) == 0:
             cds_matches = [
@@ -2381,7 +2551,7 @@ def build_gene_aggregate_id(task, header, transcript_id):
 def pick_single_file(matches, provider, species_key, label, warnings):
     if len(matches) == 0:
         return None
-    ordered = sorted(matches)
+    ordered = sorted(matches, key=lambda path: provider_candidate_sort_key(provider, label, path.name))
     if len(ordered) > 1:
         warnings.append(
             "[{}] {}: multiple {} files found. Using '{}'".format(
@@ -2631,7 +2801,7 @@ def discover_tasks(provider, input_dir):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "cngb":
         return discover_generic_species_dir_tasks(provider, input_dir)
-    if provider in ("flybase", "wormbase", "vectorbase"):
+    if provider in ("flybase", "wormbase", "vectorbase", "fernbase"):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "local":
         return discover_generic_species_dir_tasks(provider, input_dir)

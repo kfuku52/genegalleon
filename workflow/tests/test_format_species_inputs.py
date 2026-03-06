@@ -106,6 +106,54 @@ def test_format_species_inputs_strict_mode_fails_on_missing_pair(tmp_path):
     assert "missing GFF" in completed.stderr
 
 
+def test_format_species_inputs_fernbase_prefers_primary_annotation_files(tmp_path):
+    input_dir = tmp_path / "FernBase" / "species_wise_original"
+    species_dir = input_dir / "Azolla_filiculoides"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "Azolla_filiculoides.CDS.lowconfidence_v1.1.fasta").write_text(">Azfi_g1.t1\nATG\n", encoding="utf-8")
+    (species_dir / "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta").write_text(">Azfi_g1.t1\nATGAA\n", encoding="utf-8")
+    (species_dir / "Azolla_filiculoides.transcript.highconfidence_v1.1.fasta").write_text(">Azfi_g1.t1\nATGAAA\n", encoding="utf-8")
+    (species_dir / "Azolla_filiculoides.gene_models.lowconfidence_v1.1.gff").write_text(
+        "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=Azfi_g1\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Azolla_filiculoides.gene_models.highconfidence_v1.1.gff").write_text(
+        "chr1\tsrc\tgene\t1\t5\t.\t+\t.\tID=Azfi_g1\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Azolla_filiculoides.genome_v1.2.fasta").write_text(">chr1\nATGCATGC\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "fernbase",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Azolla_filiculoides_CDS.highconfidence_v1.1.fa.gz"
+    formatted_gff = out_gff / "Azolla_filiculoides_gene_models.highconfidence_v1.1.gff"
+    formatted_genome = out_genome / "Azolla_filiculoides_genome_v1.2.fa.gz"
+    assert formatted_cds.exists()
+    assert formatted_gff.exists()
+    assert formatted_genome.exists()
+
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert ">Azolla_filiculoides_Azfi_g1" in cds_text
+    assert "ATGAAN" in cds_text
+    assert "lowconfidence" not in formatted_gff.name
+
+
 def test_species_summary_is_incremental_and_persistent_across_runs(tmp_path):
     out_cds = tmp_path / "species_cds"
     out_gff = tmp_path / "species_gff"

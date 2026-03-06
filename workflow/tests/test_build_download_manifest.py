@@ -219,6 +219,43 @@ def test_build_download_manifest_coge_and_cngb_provider_from_species_dir_fixture
         assert rows[0]["genome_filename"] == genome_name
 
 
+def test_build_download_manifest_fernbase_provider_prefers_primary_annotation_files(tmp_path):
+    input_root = tmp_path / "dataset"
+    species_dir = input_root / "FernBase" / "species_wise_original" / "Azolla_filiculoides"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "Azolla_filiculoides.CDS.lowconfidence_v1.1.fasta").write_text(">g1.t1\nATG\n", encoding="utf-8")
+    (species_dir / "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta").write_text(">g1.t1\nATGAA\n", encoding="utf-8")
+    (species_dir / "Azolla_filiculoides.transcript.highconfidence_v1.1.fasta").write_text(">g1.t1\nATGAAA\n", encoding="utf-8")
+    (species_dir / "Azolla_filiculoides.gene_models.lowconfidence_v1.1.gff").write_text(
+        "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=g1\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Azolla_filiculoides.gene_models.highconfidence_v1.1.gff").write_text(
+        "chr1\tsrc\tgene\t1\t5\t.\t+\t.\tID=g1\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Azolla_filiculoides.genome_v1.2.fasta").write_text(">chr1\nATGCATGC\n", encoding="utf-8")
+
+    out = tmp_path / "download_manifest_fernbase.xlsx"
+    completed = run_script(
+        "--provider",
+        "fernbase",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    rows = read_manifest(out)
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "fernbase"
+    assert rows[0]["id"] == "Azolla_filiculoides"
+    assert rows[0]["species_key"] == "Azolla_filiculoides"
+    assert rows[0]["cds_filename"] == "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta"
+    assert rows[0]["gff_filename"] == "Azolla_filiculoides.gene_models.highconfidence_v1.1.gff"
+    assert rows[0]["genome_filename"] == "Azolla_filiculoides.genome_v1.2.fasta"
+
+
 def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
     out = tmp_path / "download_manifest.xlsx"
     completed = run_script(
@@ -245,7 +282,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
 
         list_sheet = workbook["_lists"]
-        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 10)]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 11)]
         assert provider_values == [
             "ensembl",
             "ensemblplants",
@@ -255,11 +292,13 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
             "flybase",
             "wormbase",
             "vectorbase",
+            "fernbase",
             "local",
         ]
         assert "id_opts_ensembl" in workbook.defined_names
         assert "id_opts_ncbi" in workbook.defined_names
         assert "id_opts_coge" in workbook.defined_names
+        assert "id_opts_fernbase" in workbook.defined_names
         assert "id_opts_local" in workbook.defined_names
     finally:
         workbook.close()
@@ -304,7 +343,8 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         list_sheet = workbook["_lists"]
         coge_values = read_list_column_values(list_sheet, 5)
         cngb_values = read_list_column_values(list_sheet, 6)
-        local_values = read_list_column_values(list_sheet, 10)
+        fernbase_values = read_list_column_values(list_sheet, 10)
+        local_values = read_list_column_values(list_sheet, 11)
         ncbi_values = read_list_column_values(list_sheet, 4)
 
         assert coge_values == [
@@ -320,6 +360,10 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
             "GCA_000001635.9 (Mus musculus)",
             "GCF_049306965.1 (Danio rerio)",
             "GCA_000001215.4 (Drosophila melanogaster)",
+        ]
+        assert fernbase_values == [
+            "Azolla_filiculoides (Azolla filiculoides)",
+            "Salvinia_cucullata_v2 (Salvinia cucullata v2)",
         ]
         assert local_values == [
             "Hydrocotyle_leucocephala_HAP1v2.1",
@@ -359,6 +403,9 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
                     ],
                     "vectorbase": [
                         {"id": "AgambiaePEST", "species": "Anopheles gambiae"},
+                    ],
+                    "fernbase": [
+                        {"id": "Ceratopteris_richardii", "species": "Ceratopteris richardii"},
                     ],
                     "local": [
                         {"id": "/data/local_species_1", "species": "Local species 1"},
@@ -400,7 +447,8 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         flybase_values = read_list_column_values(list_sheet, 7)
         wormbase_values = read_list_column_values(list_sheet, 8)
         vectorbase_values = read_list_column_values(list_sheet, 9)
-        local_values = read_list_column_values(list_sheet, 10)
+        fernbase_values = read_list_column_values(list_sheet, 10)
+        local_values = read_list_column_values(list_sheet, 11)
 
         assert ensembl_values == [
             "homo_sapiens (Homo sapiens)",
@@ -434,6 +482,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         assert flybase_values == ["dmel_r6.66 (Drosophila melanogaster)"]
         assert wormbase_values == ["caenorhabditis_elegans_prjna13758 (Caenorhabditis elegans)"]
         assert vectorbase_values == ["AgambiaePEST (Anopheles gambiae)"]
+        assert fernbase_values == ["Ceratopteris_richardii (Ceratopteris richardii)"]
         assert local_values == ["/data/local_species_1", "/data/local_species_2"]
     finally:
         workbook.close()
