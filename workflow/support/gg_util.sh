@@ -47,8 +47,68 @@ gg_csv_prepend() {
 	fi
 }
 
+gg_container_mount_destination() {
+	local mount_spec=${1:-}
+	local remainder
+	local destination
+
+	if [[ -z "${mount_spec}" ]]; then
+		return 1
+	fi
+	remainder=${mount_spec#*:}
+	if [[ "${remainder}" == "${mount_spec}" ]]; then
+		return 1
+	fi
+	destination=${remainder%%:*}
+	if [[ -z "${destination}" ]]; then
+		return 1
+	fi
+	printf '%s\n' "${destination}"
+}
+
+gg_container_bind_destination_exists_in_csv() {
+	local destination=${1:-}
+	local csv_mounts=${2:-}
+	local mount_entry
+	local entry_destination
+
+	if [[ -z "${destination}" || -z "${csv_mounts}" ]]; then
+		return 1
+	fi
+
+	IFS=',' read -r -a mount_entries <<< "${csv_mounts}"
+	for mount_entry in "${mount_entries[@]}"; do
+		[[ -n "${mount_entry}" ]] || continue
+		entry_destination=$(gg_container_mount_destination "${mount_entry}" || true)
+		if [[ -n "${entry_destination}" && "${entry_destination}" == "${destination}" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+gg_container_bind_destination_exists() {
+	local mount_spec=${1:-}
+	local destination
+
+	destination=$(gg_container_mount_destination "${mount_spec}" || true)
+	if [[ -z "${destination}" ]]; then
+		return 1
+	fi
+	if gg_container_bind_destination_exists_in_csv "${destination}" "${SINGULARITY_BIND:-}"; then
+		return 0
+	fi
+	if gg_container_bind_destination_exists_in_csv "${destination}" "${SINGULARITY_BINDPATH:-}"; then
+		return 0
+	fi
+	return 1
+}
+
 gg_add_container_bind_mount() {
 	local mount_spec=$1
+	if gg_container_bind_destination_exists "${mount_spec}"; then
+		return 0
+	fi
 	SINGULARITY_BIND=$(gg_csv_prepend "${mount_spec}" "${SINGULARITY_BIND:-}")
 	SINGULARITY_BINDPATH=$(gg_csv_prepend "${mount_spec}" "${SINGULARITY_BINDPATH:-}") # For Julia SLURM with Singularity 2.5
 	APPTAINER_BIND="${SINGULARITY_BIND}"
@@ -1205,6 +1265,11 @@ gg_initialize_conda_shell() {
 	if command -v micromamba >/dev/null 2>&1; then
 		export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/opt/conda}"
 		eval "$(micromamba shell hook --shell bash)"
+		if ! declare -F conda >/dev/null 2>&1 && ! command -v conda >/dev/null 2>&1; then
+			conda() {
+				micromamba "$@"
+			}
+		fi
 		GG_CONDA_SHELL_INITIALIZED=1
 		export GG_CONDA_SHELL_INITIALIZED
 		return 0
@@ -1232,6 +1297,10 @@ gg_activate_conda_env() {
 	fi
 	if ! gg_initialize_conda_shell; then
 		echo "gg_activate_conda_env: failed to initialize conda shell support." >&2
+		return 1
+	fi
+	if ! command -v conda >/dev/null 2>&1; then
+		echo "gg_activate_conda_env: conda command is unavailable after initialization." >&2
 		return 1
 	fi
 	conda activate "${conda_env}"

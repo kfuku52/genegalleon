@@ -49,6 +49,7 @@ fi
 if ! gg_entrypoint_initialize "${BASH_SOURCE[0]}" 1; then
   exit 1
 fi
+gg_entrypoint_name="gg_genome_evolution_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
@@ -136,7 +137,7 @@ delete_tmp_dir=1 # After normal completion, delete tmp directories. Set 0 when d
 
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
 # Forward config variables (including external overrides) into container environment.
-forward_config_vars_to_container_env "${BASH_SOURCE[0]}"
+forward_config_vars_to_container_env "${gg_entrypoint_name}"
 if ! gg_entrypoint_prepare_container_runtime 0; then
   exit 1
 fi
@@ -144,7 +145,7 @@ gg_entrypoint_activate_container_runtime
 
 gg_entrypoint_enter_workspace
 ${singularity_command} "${gg_container_image_path}" < "${gg_core_dir}/gg_genome_evolution_core.sh"
-if ! gg_trigger_versions_dump "$(basename "${BASH_SOURCE[0]}")"; then
+if ! gg_trigger_versions_dump "${gg_entrypoint_name}"; then
   echo "Warning: gg_versions trigger failed."
 fi
 

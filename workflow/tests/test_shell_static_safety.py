@@ -449,7 +449,8 @@ def test_progress_summary_entrypoint_uses_auto_forwarding_and_normalized_nslots(
     text = _read_text(entrypoint)
 
     assert "forward_config_vars_to_container_env()" not in text
-    assert 'forward_config_vars_to_container_env "${BASH_SOURCE[0]}"' in text
+    assert 'gg_entrypoint_name="gg_progress_summary_entrypoint.sh"' in text
+    assert 'forward_config_vars_to_container_env "${gg_entrypoint_name}"' in text
     assert "unset -f forward_config_vars_to_container_env" not in text
     assert "for exported_name in mode_transcriptome_assembly ncpu_progress_summary; do" not in text
     assert 'ncpu_progress_summary="${ncpu_progress_summary:-${NSLOTS:-1}}"' not in text
@@ -511,7 +512,18 @@ def test_gg_util_uses_explicit_conda_shell_initialization():
     body = _function_body(text, "gg_initialize_conda_shell")
     assert "/home/.bashrc" not in text
     assert "micromamba shell hook --shell bash" in body
-    assert "source /opt/conda/etc/profile.d/conda.sh" in body
+    assert 'conda() {' in text
+    assert 'micromamba "$@"' in text
+    assert "source /opt/conda/etc/profile.d/conda.sh" in text
+
+
+def test_gg_add_container_bind_mount_skips_duplicate_destinations():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "gg_add_container_bind_mount")
+    assert "gg_container_mount_destination()" in text
+    assert "gg_container_bind_destination_exists()" in text
+    assert 'if gg_container_bind_destination_exists "${mount_spec}"; then' in body
 
 
 def test_ensure_latest_jaspar_file_uses_set_e_safe_assignments():
@@ -762,9 +774,9 @@ def test_entrypoints_define_fixed_tmp_cleanup_flags():
 
 def test_entrypoints_forward_cleanup_flags_defined_outside_config_block():
     expected_tokens = {
-        "gg_genome_annotation_entrypoint.sh": 'forward_config_vars_to_container_env "${BASH_SOURCE[0]}" "delete_tmp_dir"',
-        "gg_transcriptome_generation_entrypoint.sh": 'forward_config_vars_to_container_env "${BASH_SOURCE[0]}" "delete_tmp_dir"',
-        "gg_gene_evolution_entrypoint.sh": 'forward_config_vars_to_container_env "${BASH_SOURCE[0]}" "delete_tmp_dir" "delete_preexisting_tmp_dir"',
+        "gg_genome_annotation_entrypoint.sh": 'forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir"',
+        "gg_transcriptome_generation_entrypoint.sh": 'forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir"',
+        "gg_gene_evolution_entrypoint.sh": 'forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir" "delete_preexisting_tmp_dir"',
         "gg_gene_evolution_entrypoint.sh#preexisting": '"delete_preexisting_tmp_dir"',
     }
     for key, token in expected_tokens.items():

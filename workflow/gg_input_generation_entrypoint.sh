@@ -52,6 +52,7 @@ fi
 if ! gg_entrypoint_initialize "${BASH_SOURCE[0]}" 0; then
   exit 1
 fi
+gg_entrypoint_name="gg_input_generation_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
@@ -125,7 +126,7 @@ gg_apply_named_env_overrides \
   trait_databases GG_INPUT_TRAIT_DATABASES
 
 # Forward canonical config variables into the container environment.
-forward_config_vars_to_container_env "${BASH_SOURCE[0]}"
+forward_config_vars_to_container_env "${gg_entrypoint_name}"
 
 # Provider-specific download caps are consumed directly downstream.
 gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_MAX_CONCURRENT_DOWNLOADS_"
@@ -137,7 +138,7 @@ gg_entrypoint_activate_container_runtime
 
 gg_entrypoint_enter_workspace
 ${singularity_command} "${gg_container_image_path}" < "${gg_core_dir}/gg_input_generation_core.sh"
-if ! gg_trigger_versions_dump "$(basename "${BASH_SOURCE[0]}")"; then
+if ! gg_trigger_versions_dump "${gg_entrypoint_name}"; then
   echo "Warning: gg_versions trigger failed."
 fi
 
