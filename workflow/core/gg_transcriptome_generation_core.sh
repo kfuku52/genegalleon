@@ -272,8 +272,7 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
     --threads "${NSLOTS}" \
     --remove_tmp yes
 
-    mv_out ./metadata_private_fastq.tsv ./metadata/metadata.tsv
-    python -c "import sys,pandas as pd; d=pd.read_csv('./metadata/metadata.tsv',sep='\t',header=0); d.loc[:,'scientific_name']=sys.argv[1]; d.to_csv('./metadata.tsv',sep='\t',index=False)" "${sp_ub}"
+    mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"
   fi
 
   if [[ -s "./metadata.tsv" ]]; then

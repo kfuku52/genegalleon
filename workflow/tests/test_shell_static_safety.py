@@ -1174,6 +1174,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         "ln -s ${dir_amalgkit_quant}/${sp_ub} ./quant",
         'grep -e "${sp_space}" "./metadata/metadata.tsv"',
         "d.loc[:,'scientific_name']='${sp_ub}'",
+        "mv_out ./metadata_private_fastq.tsv ./metadata.tsv",
     ]
     for token in banned_tokens:
         assert token not in text, f"Found unquoted transcriptome token: {token}"
@@ -1202,7 +1203,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         'ln -s "${file_kallisto_reference_fasta}" "${file_reference_fasta_link}"',
         'ln -s "${dir_amalgkit_quant}/${sp_ub}" "./quant"',
         'grep -F -- "${sp_space}" "./metadata/metadata.tsv"',
-        "d.loc[:,'scientific_name']=sys.argv[1]",
+        'mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"',
     ]
     for token in expected_tokens:
         assert token in text, f"Missing quoted transcriptome token: {token}"
