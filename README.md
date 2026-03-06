@@ -32,14 +32,98 @@ It provides shell-based staged pipelines for:
 
 The repository is designed for scheduler execution (SLURM/UGE/PBS) with Singularity/Apptainer wrappers, while still allowing local runs for development and debugging.
 
+## Quick Start
+
+The fastest way to try GeneGalleon is to run
+`gg_gene_evolution_entrypoint.sh` against the bundled test data.
+The steps below create an isolated smoke-test workspace, so the repository's
+tracked `workspace/` contents are left untouched.
+
+### 1. Prepare the container image
+
+From the repository root:
+
+```bash
+# Recommended: build a local SIF from a published GHCR image
+apptainer build genegalleon.sif docker://ghcr.io/kfuku52/genegalleon
+
+# Alternative: build the image and SIF locally
+IMAGE=local/genegalleon TAG=dev ./container/gg_container_build_entrypoint.sh
+```
+
+Notes:
+
+- wrappers expect `../genegalleon.sif` by default when run from `workflow/`
+- for ARM hosts, build the SIF on an ARM Linux host; do not reuse an amd64 SIF
+
+### 2. Review the default smoke-test config
+
+The bundled test data works with the current default settings in
+`workflow/gg_gene_evolution_entrypoint.sh`.
+
+The relevant defaults are:
+
+- `mode_orthogroup=0`
+- `mode_query2family=1`
+- `query_blast_method="diamond"`
+
+Because the quick-start workspace below contains only one file in
+`input/query_gene`, the wrapper runs a single family query without needing any
+array changes.
+
+All wrappers are configured from the top block:
+
+```bash
+### Start: Modify this block to tailor your analysis ###
+...
+### End: Modify this block to tailor your analysis ###
+```
+
+### 3. Build an isolated quick-start workspace and run it
+
+```bash
+cd workflow
+
+quickstart_workspace="../.quickstart/gg_gene_evolution"
+rm -rf "${quickstart_workspace}"
+mkdir -p "${quickstart_workspace}/input"
+
+cp -R ../workspace/input/species_cds "${quickstart_workspace}/input/"
+cp -R ../workspace/input/species_expression "${quickstart_workspace}/input/"
+cp -R ../workspace/input/species_gff "${quickstart_workspace}/input/"
+cp -R ../workspace/input/species_genome "${quickstart_workspace}/input/"
+cp -R ../workspace/input/species_trait "${quickstart_workspace}/input/"
+
+mkdir -p "${quickstart_workspace}/input/query_gene"
+cp ../workspace/input/query_gene/AHA "${quickstart_workspace}/input/query_gene/"
+
+gg_workspace_dir="${quickstart_workspace}" bash gg_gene_evolution_entrypoint.sh
+```
+
+This writes results under:
+
+- `../.quickstart/gg_gene_evolution/output/query2family`
+- `../.quickstart/gg_gene_evolution/downloads`
+
+### 4. Try other wrappers next
+
+After the smoke test, common next steps are:
+
+- `gg_input_generation_entrypoint.sh`: download and format provider inputs from a manifest, and optionally build `species_trait.tsv`
+- `gg_genome_evolution_entrypoint.sh`: run the combined species-tree, orthogroup, and genome-evolution workflow
+- `gg_transcriptome_generation_entrypoint.sh`: transcriptome assembly and quantification
+- `gg_genome_annotation_entrypoint.sh`: CDS/genome annotation and QC
+- `gg_gene_database_entrypoint.sh`: build the orthogroup SQLite database
+- `gg_progress_summary_entrypoint.sh`: generate summary tables and reports from completed runs
+
 ## Table of Contents
 
-1. [Repository Layout](#repository-layout)
-2. [Execution Model](#execution-model)
-3. [Container Build and Runtime](#container-build-and-runtime)
-4. [Workspace Layout and Data Model](#workspace-layout-and-data-model)
-5. [Input Conventions](#input-conventions)
-6. [Quick Start](#quick-start)
+1. [Quick Start](#quick-start)
+2. [Repository Layout](#repository-layout)
+3. [Execution Model](#execution-model)
+4. [Container Build and Runtime](#container-build-and-runtime)
+5. [Workspace Layout and Data Model](#workspace-layout-and-data-model)
+6. [Input Conventions](#input-conventions)
 7. [Main Stages and What They Do](#main-stages-and-what-they-do)
 8. [Scheduler and Array Semantics](#scheduler-and-array-semantics)
 9. [Configuration and Common Parameters](#configuration-and-common-parameters)
@@ -176,7 +260,7 @@ workspace/
   downloads/
 ```
 
-### Legacy layout compatibility
+### Runtime path resolution
 
 Runtime helpers in `workflow/support/gg_util.sh` automatically resolve roots:
 
@@ -442,49 +526,6 @@ Quick preset example (enable trait stage with GIFT starter config):
 ```bash
 GG_INPUT_TRAIT_PROFILE=gift_starter bash workflow/gg_input_generation_entrypoint.sh
 ```
-
-## Quick Start
-
-From repository root:
-
-```bash
-# 0) Prepare container image (required)
-# Recommended: pull fixed GHCR tag and build local SIF
-apptainer build genegalleon.sif docker://ghcr.io/kfuku52/genegalleon
-
-# Alternative: build image + SIF locally
-IMAGE=local/genegalleon TAG=dev ./container/gg_container_build_entrypoint.sh
-
-# NOTE:
-# - wrappers use ../genegalleon.sif by default (when run from workflow/)
-# - for ARM users, build SIF on an ARM Linux host; do not reuse amd64 SIF
-
-cd workflow
-
-# 1) Optional input download/format automation
-bash gg_input_generation_entrypoint.sh
-
-# 2) Unified genome-evolution pipeline
-#    (runs inlined stages: speciesTree -> orthofinder -> genomeEvolution)
-bash gg_genome_evolution_entrypoint.sh
-
-# 3) Gene-family phylogeny/annotation
-bash gg_gene_evolution_entrypoint.sh
-
-# 4) Build orthogroup SQLite DB
-bash gg_gene_database_entrypoint.sh
-
-# 5) Progress summaries
-bash gg_progress_summary_entrypoint.sh
-```
-
-Current default in `gg_gene_evolution_entrypoint.sh` is:
-
-- `mode_query2family=1`
-- `query_blast_method="diamond"`
-
-So array-task cardinality is the number of files in `workspace/input/query_gene`.
-
 ## Main Stages and What They Do
 
 ### `gg_input_generation_entrypoint.sh`
