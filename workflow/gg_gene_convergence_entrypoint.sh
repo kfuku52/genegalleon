@@ -7,7 +7,7 @@
 #SBATCH -t 60-00:00:00
 #SBATCH --output=gg_gene_convergence_%j.out
 #SBATCH --error=gg_gene_convergence_%j.err
-#SBATCH -p medium
+#SBATCH -p epyc
 #SBATCH --chdir=.
 ##SBATCH --mail-type=ALL
 ##SBATCH --mail-user=<aaa@bbb.com>

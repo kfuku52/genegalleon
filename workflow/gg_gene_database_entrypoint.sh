@@ -7,7 +7,7 @@
 #SBATCH -t 2976:00:00
 #SBATCH --output=gg_gene_database_%j.out
 #SBATCH --error=gg_gene_database_%j.err
-#SBATCH -p medium
+#SBATCH -p epyc
 #SBATCH --chdir=.
 ##SBATCH --mail-type=ALL
 ##SBATCH --mail-user=<aaa@bbb.com>

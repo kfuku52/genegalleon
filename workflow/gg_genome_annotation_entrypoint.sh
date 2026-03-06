@@ -7,7 +7,7 @@
 #SBATCH -t 2976:00:00
 #SBATCH --output=gg_genome_annotation_%A_%a.out
 #SBATCH --error=gg_genome_annotation_%A_%a.err
-#SBATCH -p medium
+#SBATCH -p epyc
 #SBATCH --chdir=.
 #SBATCH -a 1
 ##SBATCH --mail-type=ALL

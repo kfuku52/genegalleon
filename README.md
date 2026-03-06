@@ -35,9 +35,8 @@ The repository is designed for scheduler execution (SLURM/UGE/PBS) with Singular
 ## Quick Start
 
 The fastest way to try GeneGalleon is to run
-`gg_gene_evolution_entrypoint.sh` against the bundled test data.
-The steps below create an isolated smoke-test workspace, so the repository's
-tracked `workspace/` contents are left untouched.
+`gg_gene_evolution_entrypoint.sh` against the bundled test data in the default
+`workspace/`.
 
 ### 1. Prepare the container image
 
@@ -51,61 +50,19 @@ apptainer build genegalleon.sif docker://ghcr.io/kfuku52/genegalleon
 IMAGE=local/genegalleon TAG=dev ./container/gg_container_build_entrypoint.sh
 ```
 
-Notes:
-
-- wrappers expect `../genegalleon.sif` by default when run from `workflow/`
-- for ARM hosts, build the SIF on an ARM Linux host; do not reuse an amd64 SIF
-
-### 2. Review the default smoke-test config
-
-The bundled test data works with the current default settings in
-`workflow/gg_gene_evolution_entrypoint.sh`.
-
-The relevant defaults are:
-
-- `mode_orthogroup=0`
-- `mode_query2family=1`
-- `query_blast_method="diamond"`
-
-Because the quick-start workspace below contains only one file in
-`input/query_gene`, the wrapper runs a single family query without needing any
-array changes.
-
-All wrappers are configured from the top block:
-
-```bash
-### Start: Modify this block to tailor your analysis ###
-...
-### End: Modify this block to tailor your analysis ###
-```
-
-### 3. Build an isolated quick-start workspace and run it
+### 2. Run the bundled quick start
 
 ```bash
 cd workflow
-
-quickstart_workspace="../.quickstart/gg_gene_evolution"
-rm -rf "${quickstart_workspace}"
-mkdir -p "${quickstart_workspace}/input"
-
-cp -R ../workspace/input/species_cds "${quickstart_workspace}/input/"
-cp -R ../workspace/input/species_expression "${quickstart_workspace}/input/"
-cp -R ../workspace/input/species_gff "${quickstart_workspace}/input/"
-cp -R ../workspace/input/species_genome "${quickstart_workspace}/input/"
-cp -R ../workspace/input/species_trait "${quickstart_workspace}/input/"
-
-mkdir -p "${quickstart_workspace}/input/query_gene"
-cp ../workspace/input/query_gene/AHA "${quickstart_workspace}/input/query_gene/"
-
-gg_workspace_dir="${quickstart_workspace}" bash gg_gene_evolution_entrypoint.sh
+bash gg_gene_evolution_entrypoint.sh
 ```
 
 This writes results under:
 
-- `../.quickstart/gg_gene_evolution/output/query2family`
-- `../.quickstart/gg_gene_evolution/downloads`
+- `workspace/output/query2family`
+- `workspace/downloads`
 
-### 4. Try other wrappers next
+### 3. Try other wrappers next
 
 After the smoke test, common next steps are:
 
