@@ -1,21 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+gg_core_bootstrap="/script/support/gg_core_bootstrap.sh"
+if [[ ! -s "${gg_core_bootstrap}" ]]; then
+  gg_core_bootstrap="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../support/gg_core_bootstrap.sh"
+fi
+# shellcheck disable=SC1090
+source "${gg_core_bootstrap}"
+unset gg_core_bootstrap
+
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_gene_convergence_entrypoint.sh.
 ### End: Job-supplied configuration ###
 
-dir_pg="/workspace"
-dir_script="/script/support"
-source "${dir_script}/gg_util.sh" # Load utility functions
-gg_source_home_bashrc
-gg_prepare_cmd_runtime "${dir_pg}" "base" 1 1
+gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 
 # Ensure pymol/csubst plotting works in headless scheduler environments.
 export PYMOL_HEADLESS="${PYMOL_HEADLESS:-1}"
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
 
-python "${dir_script}/csubst_site_wrapper.py" \
+if [[ "${file_trait}" == "auto" ]]; then
+  file_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
+fi
+if [[ "${dir_orthogroup}" == "auto" ]]; then
+  dir_orthogroup="${gg_workspace_output_dir}/orthogroup"
+fi
+if [[ "${dir_orthofinder}" == "auto" ]]; then
+  dir_orthofinder="${gg_workspace_output_dir}/orthofinder"
+fi
+if [[ "${dir_out}" == "auto" ]]; then
+  dir_out="${gg_workspace_output_dir}/csubst_site"
+fi
+
+python "${gg_support_dir}/csubst_site_wrapper.py" \
 --arity_range "${arity_range}" \
 --trait "${trait}" \
 --skip_lower_order "${skip_lower_order}" \

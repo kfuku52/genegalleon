@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+gg_core_bootstrap="/script/support/gg_core_bootstrap.sh"
+if [[ ! -s "${gg_core_bootstrap}" ]]; then
+  gg_core_bootstrap="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../support/gg_core_bootstrap.sh"
+fi
+# shellcheck disable=SC1090
+source "${gg_core_bootstrap}"
+unset gg_core_bootstrap
+
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_input_generation_entrypoint.sh.
 ### End: Job-supplied configuration ###
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
-dir_pg="/workspace"
-dir_script="/script/support"
-source "${dir_script}/gg_util.sh" # Load utility functions
-gg_source_home_bashrc
-gg_prepare_cmd_runtime "${dir_pg}" "base" 0 1
+gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 0 1
 
 config_file="${config_file:-gg_input_generation_entrypoint.sh}"
 run_generate_species_trait="${run_generate_species_trait:-0}"
@@ -29,44 +33,6 @@ trait_download_dir="${trait_download_dir:-}"
 trait_download_timeout="${trait_download_timeout:-120}"
 trait_species_source="${trait_species_source:-download_manifest}"
 trait_databases="${trait_databases:-auto}"
-
-apply_env_override() {
-  local var_name=$1
-  local env_name=$2
-  local env_value="${!env_name:-}"
-  if [[ -n "${env_value}" ]]; then
-    printf -v "${var_name}" '%s' "${env_value}"
-  fi
-}
-
-apply_env_override provider GG_INPUT_PROVIDER
-apply_env_override strict GG_INPUT_STRICT
-apply_env_override overwrite GG_INPUT_OVERWRITE
-apply_env_override download_only GG_INPUT_DOWNLOAD_ONLY
-apply_env_override dry_run GG_INPUT_DRY_RUN
-apply_env_override download_timeout GG_INPUT_DOWNLOAD_TIMEOUT
-apply_env_override input_dir GG_INPUT_INPUT_DIR
-apply_env_override download_manifest GG_INPUT_DOWNLOAD_MANIFEST
-apply_env_override download_dir GG_INPUT_DOWNLOAD_DIR
-apply_env_override summary_output GG_INPUT_SUMMARY_OUTPUT
-apply_env_override auth_bearer_token_env GG_INPUT_AUTH_BEARER_TOKEN_ENV
-apply_env_override http_header GG_INPUT_HTTP_HEADER
-apply_env_override run_format_inputs GG_INPUT_RUN_FORMAT_INPUTS
-apply_env_override run_validate_inputs GG_INPUT_RUN_VALIDATE_INPUTS
-apply_env_override run_generate_species_trait GG_INPUT_RUN_GENERATE_SPECIES_TRAIT
-apply_env_override trait_profile GG_INPUT_TRAIT_PROFILE
-apply_env_override species_cds_dir GG_INPUT_SPECIES_CDS_DIR
-apply_env_override species_gff_dir GG_INPUT_SPECIES_GFF_DIR
-apply_env_override species_genome_dir GG_INPUT_SPECIES_GENOME_DIR
-apply_env_override species_summary_output GG_INPUT_SPECIES_SUMMARY_OUTPUT
-apply_env_override resolved_manifest_output GG_INPUT_RESOLVED_MANIFEST_OUTPUT
-apply_env_override species_trait_output GG_INPUT_SPECIES_TRAIT_OUTPUT
-apply_env_override trait_plan GG_INPUT_TRAIT_PLAN
-apply_env_override trait_database_sources GG_INPUT_TRAIT_DATABASE_SOURCES
-apply_env_override trait_download_dir GG_INPUT_TRAIT_DOWNLOAD_DIR
-apply_env_override trait_download_timeout GG_INPUT_TRAIT_DOWNLOAD_TIMEOUT
-apply_env_override trait_species_source GG_INPUT_TRAIT_SPECIES_SOURCE
-apply_env_override trait_databases GG_INPUT_TRAIT_DATABASES
 
 enable_all_run_flags_for_debug_mode
 
@@ -133,39 +99,39 @@ if [[ "${trait_species_source}" != "download_manifest" && "${trait_species_sourc
 fi
 
 if [[ -z "${download_dir}" ]]; then
-  download_dir="${dir_pg_output}/input_generation/tmp/input_download_cache"
+  download_dir="${gg_workspace_output_dir}/input_generation/tmp/input_download_cache"
 fi
-download_tmp_root="${dir_pg_output}/input_generation/tmp"
+download_tmp_root="${gg_workspace_output_dir}/input_generation/tmp"
 if [[ -z "${summary_output}" ]]; then
-  summary_output="${dir_pg_output}/input_generation/gg_input_generation_runs.tsv"
+  summary_output="${gg_workspace_output_dir}/input_generation/gg_input_generation_runs.tsv"
 fi
 
 if [[ -z "${species_cds_dir}" ]]; then
-  species_cds_dir="${dir_pg_output}/input_generation/species_cds"
+  species_cds_dir="${gg_workspace_output_dir}/input_generation/species_cds"
 fi
 if [[ -z "${species_gff_dir}" ]]; then
-  species_gff_dir="${dir_pg_output}/input_generation/species_gff"
+  species_gff_dir="${gg_workspace_output_dir}/input_generation/species_gff"
 fi
 if [[ -z "${species_genome_dir}" ]]; then
-  species_genome_dir="${dir_pg_output}/input_generation/species_genome"
+  species_genome_dir="${gg_workspace_output_dir}/input_generation/species_genome"
 fi
 if [[ -z "${species_summary_output}" ]]; then
-  species_summary_output="${dir_pg_output}/input_generation/gg_input_generation_species.tsv"
+  species_summary_output="${gg_workspace_output_dir}/input_generation/gg_input_generation_species.tsv"
 fi
 if [[ -z "${resolved_manifest_output}" ]]; then
-  resolved_manifest_output="${dir_pg_output}/input_generation/download_plan.resolved.tsv"
+  resolved_manifest_output="${gg_workspace_output_dir}/input_generation/download_plan.resolved.tsv"
 fi
 if [[ -z "${species_trait_output}" ]]; then
-  species_trait_output="${dir_pg_input}/species_trait/species_trait.tsv"
+  species_trait_output="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
 fi
 if [[ -z "${trait_plan}" ]]; then
-  trait_plan="${dir_pg_input}/input_generation/trait_plan.tsv"
+  trait_plan="${gg_workspace_input_dir}/input_generation/trait_plan.tsv"
 fi
 if [[ -z "${trait_database_sources}" ]]; then
-  trait_database_sources="${dir_pg_input}/input_generation/trait_database_sources.tsv"
+  trait_database_sources="${gg_workspace_input_dir}/input_generation/trait_database_sources.tsv"
 fi
 if [[ -z "${trait_download_dir}" ]]; then
-  trait_download_dir="${dir_pg_db}/trait_datasets"
+  trait_download_dir="${gg_workspace_downloads_dir}/trait_datasets"
 fi
 num_species_cds=""
 num_species_gff=""
@@ -370,7 +336,7 @@ if [[ ${run_format_inputs} -eq 1 ]]; then
     format_stats_file="${download_tmp_root}/gg_input_generation_stats.json"
     ensure_parent_dir "${format_stats_file}"
     rm -f -- "${format_stats_file}"
-    cmd=(python "${dir_script}/format_species_inputs.py")
+    cmd=(python "${gg_support_dir}/format_species_inputs.py")
     cmd+=(--provider "${provider}")
     cmd+=(--species-cds-dir "${species_cds_dir}")
     cmd+=(--species-gff-dir "${species_gff_dir}")
@@ -454,7 +420,7 @@ if [[ ${run_validate_inputs} -eq 1 && ${run_format_inputs} -eq 1 && ${download_o
       exit 1
     fi
   else
-    check_species_cds "${dir_pg}"
+    check_species_cds "${gg_workspace_dir}"
   fi
 
   if [[ ${#gff_files[@]} -eq 0 ]]; then
@@ -498,7 +464,7 @@ if [[ ${run_generate_species_trait} -eq 1 ]]; then
 
   trait_manifest_path="${download_manifest}"
   if [[ -z "${trait_manifest_path}" ]]; then
-    trait_manifest_default="${dir_pg_input}/input_generation/download_plan.xlsx"
+    trait_manifest_default="${gg_workspace_input_dir}/input_generation/download_plan.xlsx"
     if [[ -s "${trait_manifest_default}" ]]; then
       trait_manifest_path="${trait_manifest_default}"
     fi
@@ -507,7 +473,7 @@ if [[ ${run_generate_species_trait} -eq 1 ]]; then
   trait_stats_file="${download_tmp_root}/gg_input_generation_trait_stats.json"
   ensure_parent_dir "${trait_stats_file}"
   rm -f -- "${trait_stats_file}"
-  cmd=(python "${dir_script}/generate_species_trait.py")
+  cmd=(python "${gg_support_dir}/generate_species_trait.py")
   cmd+=(--species-source "${trait_species_source}")
   cmd+=(--species-cds-dir "${species_cds_dir}")
   cmd+=(--trait-plan "${trait_plan}")

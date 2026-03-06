@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dir_pg="/workspace"
-dir_myscript="/script/support"
+gg_core_bootstrap="/script/support/gg_core_bootstrap.sh"
+if [[ ! -s "${gg_core_bootstrap}" ]]; then
+  gg_core_bootstrap="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/gg_core_bootstrap.sh"
+fi
+# shellcheck disable=SC1090
+source "${gg_core_bootstrap}"
+unset gg_core_bootstrap
+
+gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "" 1 1
+
 dir_db="/usr/local/db"
 dir_rpsblastdb="${dir_db}/Pfam_LE"
 dir_jaspardb="${dir_db}/jaspar"
-source "${dir_myscript}/gg_util.sh" # Load utility functions
-gg_source_home_bashrc
-gg_prepare_cmd_runtime "${dir_pg}" "" 1 1
 if [[ -d /opt/conda/bin ]]; then
   export PATH="/opt/conda/bin:${PATH}"
 fi
@@ -17,7 +22,7 @@ gg_print_section "genegalleon version"
 echo "${GG_VERSION:-unknown}"
 gg_print_spacer
 
-if command -v conda >/dev/null 2>&1; then
+if gg_initialize_conda_shell && command -v conda >/dev/null 2>&1; then
   mapfile -t conda_envs < <(
     conda env list 2>/dev/null \
     | awk 'NR>2 && $1 !~ /^#/ {print $1}' \
@@ -25,9 +30,9 @@ if command -v conda >/dev/null 2>&1; then
   )
   for conda_env in "${conda_envs[@]}"; do
     gg_print_section "Installed program versions in the conda environment: ${conda_env}"
-    if conda activate "${conda_env}" >/dev/null 2>&1; then
+    if gg_activate_conda_env "${conda_env}" >/dev/null 2>&1; then
       conda list || true
-      conda deactivate >/dev/null 2>&1 || true
+      gg_deactivate_conda_env
     else
       echo "Failed to activate conda environment: ${conda_env}"
     fi
@@ -90,8 +95,8 @@ else
 fi
 gg_print_spacer
 
-gg_print_section "In-house scripts in: ${dir_myscript}"
-ls -la "${dir_myscript}"
+gg_print_section "In-house scripts in: ${gg_support_dir}"
+ls -la "${gg_support_dir}"
 gg_print_spacer
 
 gg_print_section "Container OS info"

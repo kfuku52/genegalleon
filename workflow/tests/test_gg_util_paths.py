@@ -29,6 +29,82 @@ def test_workspace_pfam_le_dir_is_under_downloads_dedicated_folder(tmp_path):
     assert completed.stdout.strip() == str(project_dir / "downloads" / "pfam" / "Pfam_LE")
 
 
+def test_workspace_layout_defaults_to_split_for_empty_workspace(tmp_path):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"gg_prepare_cmd_runtime {shlex.quote(str(project_dir))} \"\" 0 0; "
+        "printf '%s\\n%s\\n%s\\n%s\\n' "
+        "\"${gg_workspace_layout_resolved}\" "
+        "\"${gg_workspace_input_dir}\" "
+        "\"${gg_workspace_output_dir}\" "
+        "\"${gg_workspace_downloads_dir}\""
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.strip().splitlines()
+    assert lines == [
+        "split",
+        str(project_dir / "input"),
+        str(project_dir / "output"),
+        str(project_dir / "downloads"),
+    ]
+    assert (project_dir / "input").is_dir()
+    assert (project_dir / "output").is_dir()
+    assert (project_dir / "downloads").is_dir()
+
+
+def test_workspace_layout_ignores_root_level_entries_and_stays_split(tmp_path):
+    project_dir = tmp_path / "project"
+    (project_dir / "species_cds").mkdir(parents=True)
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "printf '%s\\n%s\\n%s\\n' "
+        f"\"$(gg_resolve_workspace_layout {shlex.quote(str(project_dir))})\" "
+        f"\"$(workspace_input_root {shlex.quote(str(project_dir))})\" "
+        f"\"$(workspace_output_root {shlex.quote(str(project_dir))})\""
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "split",
+        str(project_dir / "input"),
+        str(project_dir / "output"),
+    ]
+
+
+def test_workspace_layout_no_longer_honors_legacy_override(tmp_path):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"gg_prepare_cmd_runtime {shlex.quote(str(project_dir))} \"\" 0 0; "
+        "printf '%s\\n%s\\n%s\\n%s\\n' "
+        "\"${gg_workspace_layout_resolved}\" "
+        "\"${gg_workspace_input_dir}\" "
+        "\"${gg_workspace_output_dir}\" "
+        "\"${gg_workspace_downloads_dir}\""
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "split",
+        str(project_dir / "input"),
+        str(project_dir / "output"),
+        str(project_dir / "downloads"),
+    ]
+    assert (project_dir / "input").is_dir()
+    assert (project_dir / "output").is_dir()
+    assert (project_dir / "downloads").is_dir()
+
+
 def test_ensure_pfam_le_db_uses_new_workspace_layout_without_migrating_legacy_dir(tmp_path):
     project_dir = tmp_path / "project"
     legacy_dir = project_dir / "downloads" / "Pfam_LE"

@@ -1,24 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Load shared defaults when available.
-gg_core_self="${BASH_SOURCE[0]:-/script/core/gg_gene_evolution_core.sh}"
-gg_common_params_file=""
-for gg_common_params_candidate in \
-  "$(cd "$(dirname "${gg_core_self}")" && pwd)/gg_common_params.sh" \
-  "$(cd "$(dirname "${gg_core_self}")" && pwd)/../gg_common_params.sh" \
-  "/script/gg_common_params.sh"
-do
-  if [[ -s "${gg_common_params_candidate}" ]]; then
-    gg_common_params_file="${gg_common_params_candidate}"
-    break
-  fi
-done
-if [[ -n "${gg_common_params_file}" ]]; then
-  # shellcheck disable=SC1090
-  source "${gg_common_params_file}"
+gg_core_bootstrap="/script/support/gg_core_bootstrap.sh"
+if [[ ! -s "${gg_core_bootstrap}" ]]; then
+  gg_core_bootstrap="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../support/gg_core_bootstrap.sh"
 fi
-unset gg_common_params_file gg_common_params_candidate gg_core_self
+# shellcheck disable=SC1090
+source "${gg_core_bootstrap}"
+unset gg_core_bootstrap
+gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_gene_evolution_entrypoint.sh.
@@ -37,11 +27,7 @@ fi
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
-dir_pg="/workspace"
-dir_script="/script/support"
-source "${dir_script}/gg_util.sh" # Load utility functions
-gg_source_home_bashrc
-gg_prepare_cmd_runtime "${dir_pg}" "base" 1 1
+gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 delete_preexisting_tmp_dir=${delete_preexisting_tmp_dir:-1}
 delete_tmp_dir=${delete_tmp_dir:-1}
 
@@ -213,8 +199,8 @@ if [[ ${mode_query2family} -eq 1 && ${run_query_blast} -eq 1 ]]; then
 fi
 case "${mode_orthogroup}:${mode_query2family}" in
 		"1:0")
-			dir_output_active="${dir_pg_output}/orthogroup"
-			file_orthogroup_genecount_selected="${dir_pg_output}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv"
+			dir_output_active="${gg_workspace_output_dir}/orthogroup"
+			file_orthogroup_genecount_selected="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv"
 			if [[ ! -s "${file_orthogroup_genecount_selected}" ]]; then
 			  echo "Orthogroup gene-count table not found: ${file_orthogroup_genecount_selected}"
 			  exit 1
@@ -243,8 +229,8 @@ case "${mode_orthogroup}:${mode_query2family}" in
 			run_orthogroup_extraction=0
 			;;
 		"0:1")
-			dir_output_active="${dir_pg_output}/query2family"
-			dir_genelist="${dir_pg_input}/query_gene"
+			dir_output_active="${gg_workspace_output_dir}/query2family"
+			dir_genelist="${gg_workspace_input_dir}/query_gene"
 			if [[ ! -d "${dir_genelist}" ]]; then
 			  echo "Input directory does not exist: ${dir_genelist}"
 			  exit 1
@@ -284,15 +270,15 @@ if [[ -z "$og_id" ]]; then
     exit 1
 fi
 
-dir_sp_genome="${dir_pg_input}/species_genome"
-dir_sp_gff="${dir_pg_input}/species_gff"
-dir_sp_expression="${dir_pg_input}/species_expression"
-dir_sp_cds="${dir_pg_input}/species_cds"
-dir_sp_blastdb="${dir_pg_output}/species_cds_blastdb"
-file_sp_trait="${dir_pg_input}/species_trait/species_trait.tsv"
-file_og="${dir_pg_output}/orthofinder/Orthogroups_filtered/Orthogroups.selected.tsv"
+dir_sp_genome="${gg_workspace_input_dir}/species_genome"
+dir_sp_gff="${gg_workspace_input_dir}/species_gff"
+dir_sp_expression="${gg_workspace_input_dir}/species_expression"
+dir_sp_cds="${gg_workspace_input_dir}/species_cds"
+dir_sp_blastdb="${gg_workspace_output_dir}/species_cds_blastdb"
+file_sp_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
+file_og="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.selected.tsv"
 file_og_parameters_dir="${dir_output_active}/parameters"
-dir_species_tree="${dir_pg_output}/species_tree"
+dir_species_tree="${gg_workspace_output_dir}/species_tree"
 dir_species_tree_summary="${dir_species_tree}/species_tree_summary"
 if [[ -s "${dir_species_tree_summary}/dated_species_tree.nwk" ]]; then
 	species_tree_basename="dated_species_tree"
@@ -707,7 +693,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
   fi
 
   export BLASTDB_LMDB_MAP_SIZE=100000000
-  check_species_cds "${dir_pg}"
+  check_species_cds "${gg_workspace_dir}"
   check_if_species_files_unique "${dir_sp_cds}"
 
   if [[ -e "${og_id}".blastQuery.fasta ]]; then
@@ -865,7 +851,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
   fi
   rm -f -- "${query_aa_local}"
 
-  python "${dir_script}/annotate_blast_coverage.py" \
+  python "${gg_support_dir}/annotate_blast_coverage.py" \
   --in blast_out.tsv \
   --ncpu "${NSLOTS}" \
   --outfmt-columns "${outfmt}" \
@@ -890,7 +876,7 @@ if [[ ! -s "${file_og_cds_fasta}" && ${run_get_fasta} -eq 1 ]]; then
     genes=()
 	    read -r -a genes <<< "$(awk -v og="${og_id}" '$1==og {$1=""; sub(/^[[:space:]]+/, "", $0); gsub(",", "", $0); gsub(/\t/, " ", $0); sub(/[[:space:]]*$/, "", $0); gsub(/\047|"/, "", $0); print; exit}' "${file_og}")"
 	elif [[ ${mode_query2family} -eq 1 ]]; then
-	  python "${dir_script}/extract_gene_id_from_blast_table.py" \
+	  python "${gg_support_dir}/extract_gene_id_from_blast_table.py" \
 	  --infile "${file_og_query_blast}" \
 	  --outfile gene_id_list.txt \
 	  --min_query_blast_coverage "${query_blast_coverage}" \
@@ -960,7 +946,7 @@ task="Protein RPS-BLAST"
 disable_if_no_input_file "run_rps_blast" "${file_og_cds_fasta}"
 if [[ ! -s "${file_og_rpsblast}" && ${run_rps_blast} -eq 1 ]]; then
     gg_step_start "${task}"
-    if ! dir_rpsblastdb=$(ensure_pfam_le_db "${dir_pg}"); then
+    if ! dir_rpsblastdb=$(ensure_pfam_le_db "${gg_workspace_dir}"); then
         echo "Failed to prepare Pfam_LE DB. Exiting."
         exit 1
     fi
@@ -1036,7 +1022,7 @@ disable_if_no_input_file "run_get_gff_info" "${file_og_cds_fasta}"
 	  fi
   seqkit seq --threads "${NSLOTS}" "${file_og_cds_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"
 
-  python "${dir_script}/gff2genestat.py" \
+  python "${gg_support_dir}/gff2genestat.py" \
   --dir_gff "${dir_sp_gff}" \
   --feature "CDS" \
   --multiple_hits "longest" \
@@ -1062,7 +1048,7 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
     > uniprot.query.pep.fas
 
     if [[ "${uniprot_annotation_method}" == "blastp" ]]; then
-      if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${dir_pg}"); then
+      if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then
         echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
         exit 1
       fi
@@ -1076,7 +1062,7 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
       -max_target_seqs 1 \
       -evalue 1e-2
     else
-      if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${dir_pg}"); then
+      if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${gg_workspace_dir}"); then
         echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
         exit 1
       fi
@@ -1094,7 +1080,7 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
       rm -rf -- "tmp_mmseqs2_uniprot"
     fi
 
-	    python "${dir_script}/reformat_uniprot_diamond.py" \
+	    python "${gg_support_dir}/reformat_uniprot_diamond.py" \
 	    --diamond_tsv uniprot.search.tsv \
 	    --query_fasta uniprot.query.pep.fas \
 	    --uniprot_fasta "${uniprot_db_prefix}.pep" \
@@ -1876,7 +1862,7 @@ if [[ ! -s "${file_og_expression}" && ${run_get_expression_matrix} -eq 1 ]]; the
 	gg_step_start "${task}"
   seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.trait_matrix_input.fasta"
 
-		python "${dir_script}/get_trait_matrix.py" \
+		python "${gg_support_dir}/get_trait_matrix.py" \
 		--dir_trait "${dir_sp_expression}" \
 		--seqfile "${og_id}.trait_matrix_input.fasta" \
 		--ncpu "${NSLOTS}" \
@@ -1894,7 +1880,7 @@ disable_if_no_input_file "run_get_promoter_fasta" "${file_og_gff_info}"
 if [[ ! -s "${file_og_promoter_fasta}" && ${run_get_promoter_fasta} -eq 1 ]]; then
 	gg_step_start "${task}"
 
-	  python "${dir_script}/get_promoter_fasta.py" \
+	  python "${gg_support_dir}/get_promoter_fasta.py" \
 	  --dir_genome "${dir_sp_genome}" \
 	  --geneinfo_tsv "${file_og_gff_info}" \
 	  --seqkit_exe "seqkit" \
@@ -1913,7 +1899,7 @@ fi
 task="fimo"
 jaspar_path=""
 if [[ ${run_fimo} -eq 1 ]]; then
-  if ! jaspar_path=$(ensure_jaspar_file "${dir_pg}" "${jaspar_file}") || [[ -z "${jaspar_path}" ]]; then
+  if ! jaspar_path=$(ensure_jaspar_file "${gg_workspace_dir}" "${jaspar_file}") || [[ -z "${jaspar_path}" ]]; then
     echo "Failed to prepare JASPAR motif file (${jaspar_file}). Exiting."
     exit 1
   fi
@@ -2199,7 +2185,7 @@ if [[ ! -s "${file_og_mapdnds_parameter}" && ${run_mapdnds_parameter_estimation}
 	--seed 12345 \
 	--redo
 
-	python "${dir_script}/iqtree2mapnh.py" \
+	python "${gg_support_dir}/iqtree2mapnh.py" \
 	--iqtree "${og_id}.iqtree2mapdNdS.iqtree" \
 	--log "${og_id}.iqtree2mapdNdS.log" \
 	--state "${og_id}.iqtree2mapdNdS.state" \
@@ -2292,7 +2278,7 @@ if [[ ! -s "${file_og_codeml_two_ratio}" && "${run_codeml_two_ratio}" -eq 1 ]]; 
     --outfile "codeml_input_${trait}.nwk"
     echo "CodeML input tree: $(< "codeml_input_${trait}.nwk")"
 
-    bash "${dir_script}/shorten_fasta_newick_names.sh" \
+    bash "${gg_support_dir}/shorten_fasta_newick_names.sh" \
     "${file_og_trimmed_aln_analysis}" "codeml_input2_${trait}.fasta" "codeml_input_${trait}.nwk" "codeml_input2_${trait}.nwk" 90
 
     if grep -q "#1:0;$" "codeml_input_${trait}.nwk"; then
@@ -2320,7 +2306,7 @@ if [[ ! -s "${file_og_codeml_two_ratio}" && "${run_codeml_two_ratio}" -eq 1 ]]; 
       codeml_out_time="NA"
     else
       python -c 'from pathlib import Path; import sys; template = Path(sys.argv[1]).read_text(encoding="utf-8"); rendered = template.replace("__SEQFILE__", sys.argv[2]).replace("__TREEFILE__", sys.argv[3]).replace("__ICODE__", sys.argv[4]); Path(sys.argv[5]).write_text(rendered, encoding="utf-8")' \
-        "${dir_script}/codeml/codeml_two_ratio.ctl.template" \
+        "${gg_support_dir}/codeml/codeml_two_ratio.ctl.template" \
         "codeml_input2_${trait}.fasta" \
         "codeml_input2_${trait}.nwk" \
         "$((genetic_code - 1))" \
@@ -2402,7 +2388,7 @@ if [[ ! -s "${file_og_hyphy_dnds}" && ${run_hyphy_dnds} -eq 1 ]]; then
 	      hyphy_genetic_code=$(get_hyphy_genetic_code "${genetic_code}")
 
 
-  hyphy "${dir_script}/hyphy/FitMG94.bf" \
+  hyphy "${gg_support_dir}/hyphy/FitMG94.bf" \
   --alignment "hyphy_input.fasta" \
   --tree "hyphy_input.nwk" \
   --code "${hyphy_genetic_code}" \
@@ -2603,7 +2589,7 @@ if [[ ! -s "${file_og_scm_intron_summary}" && ${run_scm_intron} -eq 1 ]]; then
 	gg_step_start "${task}"
 
 
-	  Rscript "${dir_script}/scm_intron_evolution.r" \
+	  Rscript "${gg_support_dir}/scm_intron_evolution.r" \
 	  --tree_file="${file_og_dated_tree_analysis}" \
 	  --trait_file="${file_og_gff_info}" \
 	  --intron_gain_rate="${intron_gain_rate}" \
@@ -2629,7 +2615,7 @@ if [[ ${run_phylogeneticem} -eq 1 && ( ! -s "${file_og_pem_rdata}" || ! -s "${fi
 		pem_fit_file=${file_og_pem_rdata}
 	fi
 
-		Rscript "${dir_script}/detect_OU_shift_PhylogeneticEM.r" \
+		Rscript "${gg_support_dir}/detect_OU_shift_PhylogeneticEM.r" \
 		--tree_file="${file_og_dated_tree_analysis}" \
 		--trait_file="${file_og_expression}" \
 		--nslots="${NSLOTS}" \
@@ -2693,7 +2679,7 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
 	fi
 
 			l1ou_cmd=(
-			  Rscript "${dir_script}/detect_OU_shift_l1ou.r"
+			  Rscript "${gg_support_dir}/detect_OU_shift_l1ou.r"
 			  --max_nshift="${max_nshift}"
 			  --tree_file="${file_og_dated_tree_analysis}"
 			  --trait_file="${file_og_expression}"
@@ -2745,7 +2731,7 @@ if [[ ! -s "${file_og_species_pgls}" && ${run_pgls_species_tree} -eq 1 ]]; then
 		pgls_merge_replicates="no"
 	fi
 
-		Rscript "${dir_script}/species_tree_pgls.r" \
+		Rscript "${gg_support_dir}/species_tree_pgls.r" \
 		--file_sptree="${species_tree_pruned}" \
 		--file_exp="${file_og_expression}" \
 		--file_trait="${file_sp_trait}" \
@@ -2964,7 +2950,7 @@ if [[ ( ${summary_flag} -eq 1 || ! -s "${file_og_stat_branch}" || ! -s "${file_o
     summary_tmp_files+=( "${summary_promoter_fasta}" )
   fi
 
-		python "${dir_script}/orthogroup_statistics.py" \
+		python "${gg_support_dir}/orthogroup_statistics.py" \
 		--species_tree "${species_tree_pruned}" \
 		--unaligned_aln "${summary_unaligned_fasta}" \
 		--trimal_aln "${summary_trimmed_fasta}" \
@@ -3028,13 +3014,13 @@ if [[ ${treevis_synteny} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
     elif [[ ! -s "${file_og_cds_fasta}" ]]; then
       echo "Focal CDS fasta file not found. Skipping synteny panel input generation: ${file_og_cds_fasta}"
     else
-      python "${dir_script}/synteny_neighbors.py" \
+      python "${gg_support_dir}/synteny_neighbors.py" \
         --focal_cds_fasta "${file_og_cds_fasta}" \
         --dir_sp_cds "${dir_sp_cds}" \
         --dir_sp_gff "${dir_sp_gff}" \
-        --cache_dir "${dir_pg_output}/species_gff_info" \
+        --cache_dir "${gg_workspace_output_dir}/species_gff_info" \
         --lock_dir "${file_og_parameters_dir}/synteny_locks" \
-        --gff2genestat_script "${dir_script}/gff2genestat.py" \
+        --gff2genestat_script "${gg_support_dir}/gff2genestat.py" \
         --window "${treevis_synteny_window}" \
         --evalue "${query_blast_evalue}" \
         --genetic_code "${genetic_code}" \
@@ -3125,9 +3111,9 @@ if ( [[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]] ) && [[ ${run_tr
 	    fi
     cb_path=${file_og_csubst_cb_2/cb_2/cb_ARITY}
 
-    Rscript "${dir_script}/stat_branch2tree_plot.r" \
+    Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
     --stat_branch="${file_og_stat_branch}" \
-    --tree_annotation_dir="${dir_script}/tree_annotation" \
+    --tree_annotation_dir="${gg_support_dir}/tree_annotation" \
 	    --max_delta_intron_present="${treevis_retrotransposition_delta_intron}" \
     --width="7.2" \
     --rel_widths="" \
@@ -3198,7 +3184,7 @@ file_params=(
 			fi
 		done
 
-cd "${dir_pg}"
+cd "${gg_workspace_dir}"
 remove_empty_subdirs "${dir_output_active}"
 
 if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" && ${gg_debug_mode:-0} -eq 0 ]]; then

@@ -2,6 +2,8 @@
 
 # Shared defaults for commonly reused workflow parameters.
 # Individual workflow/core/gg_*_core.sh scripts may override these values.
+# Host-side entrypoint path bootstrap lives in support/gg_entrypoint_bootstrap.sh
+# because this file is also sourced inside the container by core scripts.
 
 : "${GG_COMMON_GENETIC_CODE:=1}"
 : "${GG_COMMON_BUSCO_LINEAGE:=embryophyta_odb12}"

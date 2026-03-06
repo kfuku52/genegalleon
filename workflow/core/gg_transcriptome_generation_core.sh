@@ -1,24 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Load shared defaults when available.
-gg_core_self="${BASH_SOURCE[0]:-/script/core/gg_transcriptome_generation_core.sh}"
-gg_common_params_file=""
-for gg_common_params_candidate in \
-  "$(cd "$(dirname "${gg_core_self}")" && pwd)/gg_common_params.sh" \
-  "$(cd "$(dirname "${gg_core_self}")" && pwd)/../gg_common_params.sh" \
-  "/script/gg_common_params.sh"
-do
-  if [[ -s "${gg_common_params_candidate}" ]]; then
-    gg_common_params_file="${gg_common_params_candidate}"
-    break
-  fi
-done
-if [[ -n "${gg_common_params_file}" ]]; then
-  # shellcheck disable=SC1090
-  source "${gg_common_params_file}"
+gg_core_bootstrap="/script/support/gg_core_bootstrap.sh"
+if [[ ! -s "${gg_core_bootstrap}" ]]; then
+  gg_core_bootstrap="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../support/gg_core_bootstrap.sh"
 fi
-unset gg_common_params_file gg_common_params_candidate gg_core_self
+# shellcheck disable=SC1090
+source "${gg_core_bootstrap}"
+unset gg_core_bootstrap
+gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_transcriptome_generation_entrypoint.sh.
@@ -30,11 +20,7 @@ contamination_removal_rank="${contamination_removal_rank:-${GG_COMMON_CONTAMINAT
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
-dir_pg="/workspace"
-dir_script="/script/support"
-source "${dir_script}/gg_util.sh" # Load utility functions
-gg_source_home_bashrc
-gg_prepare_cmd_runtime "${dir_pg}" "base" 1 1
+gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 delete_tmp_dir=${delete_tmp_dir:-1}
 
 copy_busco_tables() {
@@ -82,10 +68,10 @@ if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
   max_assembly_input_fastq_size="30,000,000"
 fi
 
-dir_transcriptome_assembly_output="${dir_pg_output}/transcriptome_assembly"
-dir_input_fastq="${dir_pg_input}/species_rnaseq"
-dir_input_sra_list="${dir_pg_input}/query_sra_id"
-dir_amalgkit_metadata="${dir_pg_input}/amalgkit_metadata"
+dir_transcriptome_assembly_output="${gg_workspace_output_dir}/transcriptome_assembly"
+dir_input_fastq="${gg_workspace_input_dir}/species_rnaseq"
+dir_input_sra_list="${gg_workspace_input_dir}/query_sra_id"
+dir_amalgkit_metadata="${gg_workspace_input_dir}/amalgkit_metadata"
 dir_amalgkit_quant="${dir_transcriptome_assembly_output}/amalgkit_quant"
 
 if [[ ${mode_fastq} -eq 1 && ! -d "${dir_input_fastq}" ]]; then
@@ -225,7 +211,7 @@ fi
 
 dir_tmp="${dir_transcriptome_assembly_output}/tmp/${SGE_TASK_ID}_${sp_ub}"
 dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
-dir_amalgkit_download_dir="${dir_pg_db}/amalgkit_downloads"
+dir_amalgkit_download_dir="${gg_workspace_downloads_dir}/amalgkit_downloads"
 file_amalgkit_metadata="${dir_amalgkit_metadata}/${sp_ub}_metadata.tsv"
 file_amalgkit_getfastq_safely_removed_flag=${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}_safely_removed.txt
 file_isoform="${dir_transcriptome_assembly_output}/assembled_transcripts_with_isoforms/${sp_ub}_isoform.fa.gz"
@@ -687,7 +673,7 @@ disable_if_no_input_file "run_longestcds_mmseqs2taxonomy" "${file_longestcds}"
 if [[ ! -s "${file_longestcds_mmseqs2taxonomy}" && ${run_longestcds_mmseqs2taxonomy} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  if ! ensure_mmseqs_uniref90_db "${dir_pg_db}/mmseqs2" "${NSLOTS}"; then
+  if ! ensure_mmseqs_uniref90_db "${gg_workspace_downloads_dir}/mmseqs2" "${NSLOTS}"; then
     echo "Failed to prepare MMseqs2 UniRef90 DB. Exiting."
     exit 1
   fi
@@ -700,7 +686,7 @@ if [[ ! -s "${file_longestcds_mmseqs2taxonomy}" && ${run_longestcds_mmseqs2taxon
     mkdir -p "tmp_mmseqs2"
   fi
 
-  mmseqs taxonomy "queryDB" "${dir_pg_db}/mmseqs2/UniRef90_DB" "output_prefix" "tmp" \
+  mmseqs taxonomy "queryDB" "${gg_workspace_downloads_dir}/mmseqs2/UniRef90_DB" "output_prefix" "tmp" \
   --split-mode 2 \
   --split-memory-limit $((${MEM_PER_HOST}*3/4))G \
   --majority 0.5 \
@@ -729,12 +715,12 @@ if [[ ( ! -s "${file_longestcds_contamination_removal_fasta}" || ! -s "${file_lo
   gg_step_start "${task}"
   ensure_parent_dir "${file_longestcds_contamination_removal_fasta}"
 
-  if ! ensure_ete_taxonomy_db "${dir_pg}"; then
+  if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
     echo "Failed to prepare ETE taxonomy DB. Exiting."
     exit 1
   fi
 
-  python "${dir_script}/remove_contaminated_sequences.py" \
+  python "${gg_support_dir}/remove_contaminated_sequences.py" \
   --fasta_file "${file_longestcds}" \
   --mmseqs2taxonomy_tsv "${file_longestcds_mmseqs2taxonomy}" \
   --fx2tab_tsv "${file_longestcds_fx2tab}" \
@@ -762,7 +748,7 @@ if [[ ( ! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna
 
   seqkit seq --threads "${NSLOTS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"
 
-  if ! dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}"); then
+  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
     exit 1
   fi
@@ -799,7 +785,7 @@ if [[ ( ! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longes
 
   seqkit seq --threads "${NSLOTS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"
 
-  if ! dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}"); then
+  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
     exit 1
   fi
@@ -836,7 +822,7 @@ if [[ ( ! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_sho
 
   seqkit seq --threads "${NSLOTS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"
 
-  if ! dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}"); then
+  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
     exit 1
   fi
@@ -922,9 +908,9 @@ if [[ ( ! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_coun
   file_reference_fasta_link="./fasta/${sp_ub}_for_kallisto_index.fasta"
   if [[ ${kallisto_reference} == 'species_cds' ]]; then
     kallisto_ref_candidates=()
-    mapfile -t kallisto_ref_candidates < <(find "${dir_pg_input}/species_cds" -maxdepth 1 -type f -name "${sp_ub}_*" | sort)
+    mapfile -t kallisto_ref_candidates < <(find "${gg_workspace_input_dir}/species_cds" -maxdepth 1 -type f -name "${sp_ub}_*" | sort)
     if [[ ${#kallisto_ref_candidates[@]} -eq 0 ]]; then
-      echo "No species_cds reference file matched ${sp_ub}_* in ${dir_pg_input}/species_cds. Exiting."
+      echo "No species_cds reference file matched ${sp_ub}_* in ${gg_workspace_input_dir}/species_cds. Exiting."
       exit 1
     fi
     if [[ ${#kallisto_ref_candidates[@]} -gt 1 ]]; then
@@ -1027,7 +1013,7 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
   ensure_dir "$(dirname "${file_multispecies_summary}")"
   cd "$(dirname "${file_multispecies_summary}")"
 
-  python "${dir_script}/collect_common_BUSCO_genes.py" \
+  python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
   --busco_outdir "$(dirname "${file_busco_full_longest_cds}")" \
   --ncpu "${NSLOTS}" \
   --outfile busco_table.tsv
@@ -1041,22 +1027,22 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
       echo "Skipping. No BUSCO output was found in: ${dir_busco}"
       continue
     fi
-    Rscript "${dir_script}/annotation_summary.r" \
+    Rscript "${gg_support_dir}/annotation_summary.r" \
     --dir_species_cds_busco="${dir_busco}" \
-    --tree_annotation_dir="${dir_script}/tree_annotation" \
+    --tree_annotation_dir="${gg_support_dir}/tree_annotation" \
     --min_og_species='auto'
     mv_out "annotation_summary.tsv" "$(basename "${dir_busco}").tsv"
     mv_out "busco_cds.svg" "$(basename "${dir_busco}").svg"
     mv_out "busco_cds.pdf" "$(basename "${dir_busco}").pdf"
   done
 
-  Rscript "${dir_script}/multispecies_transcriptome_summary.r" \
+  Rscript "${gg_support_dir}/multispecies_transcriptome_summary.r" \
   --dir_assembly_stat="$(dirname "${file_assembly_stat}")" \
   --dir_amalgkit_metadata="${dir_amalgkit_metadata}" \
   --dir_amalgkit_merge="$(dirname "$(dirname "${file_amalgkit_merge_tpm}")")" \
   --dir_busco_isoform="$(dirname "${file_busco_full_cdna_isoforms}")" \
   --dir_busco_longest_cds="$(dirname "${file_busco_full_longest_cds}")" \
-  --dir_myscript="${dir_script}"
+  --dir_myscript="${gg_support_dir}"
 
   if [[ -e "Rplots.pdf" ]]; then
     rm -f -- "Rplots.pdf"

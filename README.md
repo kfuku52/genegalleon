@@ -186,8 +186,7 @@ Runtime helpers in `workflow/support/gg_util.sh` automatically resolve roots:
 
 Behavior:
 
-- if `workspace/input` or `workspace/output` exists, split layout is used,
-- otherwise single-root legacy behavior is used.
+- layout is always split: `workspace/input`, `workspace/output`, and `workspace/downloads`.
 
 Downloads root:
 
@@ -405,11 +404,15 @@ Configuration:
 Alternative runtime overrides (without editing files) via env vars:
 
 - `GG_INPUT_PROVIDER`, `GG_INPUT_STRICT`, `GG_INPUT_OVERWRITE`,
-- `GG_INPUT_DRY_RUN`, `GG_INPUT_DOWNLOAD_MANIFEST`,
-- `GG_INPUT_INPUT_DIR`,
+- `GG_INPUT_DOWNLOAD_ONLY`, `GG_INPUT_DRY_RUN`,
+- `GG_INPUT_DOWNLOAD_TIMEOUT`,
+- `GG_INPUT_DOWNLOAD_MANIFEST`, `GG_INPUT_INPUT_DIR`, `GG_INPUT_DOWNLOAD_DIR`,
 - `GG_INPUT_SPECIES_CDS_DIR`, `GG_INPUT_SPECIES_GFF_DIR`, `GG_INPUT_SPECIES_GENOME_DIR`,
+- `GG_INPUT_SPECIES_SUMMARY_OUTPUT`,
+- `GG_INPUT_RESOLVED_MANIFEST_OUTPUT`,
 - `GG_INPUT_AUTH_BEARER_TOKEN_ENV`, `GG_INPUT_HTTP_HEADER`,
 - `GG_INPUT_SUMMARY_OUTPUT`,
+- `GG_INPUT_RUN_FORMAT_INPUTS`, `GG_INPUT_RUN_VALIDATE_INPUTS`,
 - trait generation:
   `GG_INPUT_TRAIT_PROFILE` (`none` or `gift_starter`; default `none`),
   `GG_INPUT_RUN_GENERATE_SPECIES_TRAIT`,

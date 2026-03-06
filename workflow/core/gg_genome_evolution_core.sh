@@ -4,25 +4,14 @@ set -euo pipefail
 # Unified genome evolution pipeline (single-file form).
 # Former inline stages are now written directly in this file.
 
-
-# Load shared defaults when available.
-gg_core_self="${BASH_SOURCE[0]:-/script/core/gg_genome_evolution_core.sh}"
-gg_common_params_file=""
-for gg_common_params_candidate in \
-  "$(cd "$(dirname "${gg_core_self}")" && pwd)/gg_common_params.sh" \
-  "$(cd "$(dirname "${gg_core_self}")" && pwd)/../gg_common_params.sh" \
-  "/script/gg_common_params.sh"
-do
-  if [[ -s "${gg_common_params_candidate}" ]]; then
-    gg_common_params_file="${gg_common_params_candidate}"
-    break
-  fi
-done
-if [[ -n "${gg_common_params_file}" ]]; then
-  # shellcheck disable=SC1090
-  source "${gg_common_params_file}"
+gg_core_bootstrap="/script/support/gg_core_bootstrap.sh"
+if [[ ! -s "${gg_core_bootstrap}" ]]; then
+  gg_core_bootstrap="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../support/gg_core_bootstrap.sh"
 fi
-unset gg_common_params_file gg_common_params_candidate gg_core_self
+# shellcheck disable=SC1090
+source "${gg_core_bootstrap}"
+unset gg_core_bootstrap
+gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 #run a busco analysis for all species in species_cds and extract shared complete BUSCO genes among all species.
 #then make cds fasta files including all species' cds sequenes for each BUSCO genes and make alignment
@@ -53,11 +42,7 @@ fi
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
-dir_pg="/workspace"
-dir_script="/script/support"
-source "${dir_script}/gg_util.sh" # Load utility functions
-gg_source_home_bashrc
-gg_prepare_cmd_runtime "${dir_pg}" "base" 1 1
+gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 delete_tmp_dir=${delete_tmp_dir:-1}
 
 copy_busco_tables() {
@@ -184,13 +169,13 @@ clear_directory_contents_safe() {
   fi
 }
 # Directories
-dir_sp_cds="${dir_pg_input}/species_cds"
-dir_og_rooted_tree="${dir_pg_output}/orthogroup/rooted_tree"
+dir_sp_cds="${gg_workspace_input_dir}/species_cds"
+dir_og_rooted_tree="${gg_workspace_output_dir}/orthogroup/rooted_tree"
 
 # Species tree
-dir_species_tree="${dir_pg_output}/species_tree"
-dir_species_busco_full="${dir_pg_output}/species_cds_busco_full"
-dir_species_busco_short="${dir_pg_output}/species_cds_busco_short"
+dir_species_tree="${gg_workspace_output_dir}/species_tree"
+dir_species_busco_full="${gg_workspace_output_dir}/species_cds_busco_full"
+dir_species_busco_short="${gg_workspace_output_dir}/species_cds_busco_short"
 dir_single_copy_fasta="${dir_species_tree}/single_copy_cds_fasta"
 dir_single_copy_mafft="${dir_species_tree}/single_copy_mafft"
 dir_single_copy_trimal="${dir_species_tree}/single_copy_trimal"
@@ -206,14 +191,14 @@ dir_mcmctree2="${dir_species_tree}/mcmctree_main"
 dir_tmp="${dir_species_tree}/tmp"
 
 # Orthogroup
-dir_sp_protein="${dir_pg_db}/tmp/species_protein"
-dir_orthofinder="${dir_pg_output}/orthofinder"
+dir_sp_protein="${gg_workspace_downloads_dir}/tmp/species_protein"
+dir_orthofinder="${gg_workspace_output_dir}/orthofinder"
 dir_orthofinder_og="${dir_orthofinder}/Orthogroups"
 dir_orthofinder_filtered="${dir_orthofinder}/Orthogroups_filtered"
 dir_orthofinder_hog2og="${dir_orthofinder}/hog2og"
 
 # Genome evolution
-dir_genome_evolution="${dir_pg_output}/genome_evolution"
+dir_genome_evolution="${gg_workspace_output_dir}/genome_evolution"
 dir_busco_fasta="${dir_genome_evolution}/busco_cds_fasta"
 dir_busco_mafft="${dir_genome_evolution}/busco_mafft"
 dir_busco_trimal="${dir_genome_evolution}/busco_trimal"
@@ -272,13 +257,13 @@ file_busco_grampa_dna="${dir_genome_evolution}/grampa_busco_dna/grampa_summary.t
 file_busco_grampa_pep="${dir_genome_evolution}/grampa_busco_pep/grampa_summary.tsv"
 file_orthogroup_grampa="${dir_genome_evolution}/grampa_orthogroup/grampa_summary.tsv"
 file_gene_id="${dir_orthofinder_filtered}/Orthogroups.selected.tsv"
-file_go_annotation="${dir_pg_output}/species_cds_annotation/${annotation_representative_species}_annotation.tsv"
+file_go_annotation="${gg_workspace_output_dir}/species_cds_annotation/${annotation_representative_species}_annotation.tsv"
 file_cafe_summary_all_pdf="${dir_cafe}/summary_plot/summary_all.pdf"
 file_cafe_summary_significant_pdf="${dir_cafe}/summary_plot/summary_significant.pdf"
 file_go_enrichment_significant="${dir_cafe}/go_enrichment/enrichment_significant_${change_direction_go}_${target_branch_go}_significant_go.tsv"
 
 # Runtime setup
-check_species_cds "${dir_pg}"
+check_species_cds "${gg_workspace_dir}"
 check_if_species_files_unique "${dir_sp_cds}"
 memory_notung=${MEM_PER_SLOT}
 
@@ -688,7 +673,7 @@ if [[ ${run_species_busco} -eq 1 ]]; then
         cp_out "${dir_sp_cds}"/"${cds}" ./tmp.busco_input.cds.fasta
       fi
 
-      if ! dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}"); then
+      if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
         echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
         exit 1
       fi
@@ -733,7 +718,7 @@ if [[ ! -s "${file_species_busco_summary_table}" && ${run_species_get_busco_summ
   gg_step_start "${task}"
   ensure_parent_dir "${file_species_busco_summary_table}"
 
-  python "${dir_script}/collect_common_BUSCO_genes.py" \
+  python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
   --busco_outdir "${dir_species_busco_full}" \
   --ncpu "${NSLOTS}" \
   --outfile "tmp.busco_summary_table.tsv"
@@ -1025,7 +1010,7 @@ if [[ ! -s "${file_concat_iqtree_pep_root}" && ${run_concat_iqtree_protein} -eq 
   "concatenated protein tree"
 
   if [[ -s "${file_concat_iqtree_pep_root}" ]]; then
-    Rscript "${dir_script}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_concat_iqtree_pep_root}"
+    Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_concat_iqtree_pep_root}"
   fi
 
   if [[ -s "${file_concat_iqtree_pep_root}" && ${undated_species_tree} == 'iqtree_pep' ]]; then
@@ -1033,7 +1018,7 @@ if [[ ! -s "${file_concat_iqtree_pep_root}" && ${run_concat_iqtree_protein} -eq 
     echo "from: ${file_concat_iqtree_pep_root}"
     echo "to: ${file_undated_species_tree}"
     cp_out "${file_concat_iqtree_pep_root}" "${file_undated_species_tree}"
-    Rscript "${dir_script}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
+    Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
   fi
 else
   gg_step_skip "${task}"
@@ -1098,7 +1083,7 @@ if [[ ! -s "${file_concat_iqtree_dna_root}" && ${run_concat_iqtree_dna} -eq 1 ]]
   "concatenated DNA tree"
 
   if [[ -s "${file_concat_iqtree_dna_root}" ]]; then
-    Rscript "${dir_script}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_concat_iqtree_dna_root}"
+    Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_concat_iqtree_dna_root}"
   fi
 
   if [[ -s "${file_concat_iqtree_dna_root}" && ${undated_species_tree} == 'iqtree_dna' ]]; then
@@ -1106,7 +1091,7 @@ if [[ ! -s "${file_concat_iqtree_dna_root}" && ${run_concat_iqtree_dna} -eq 1 ]]
     echo "from: ${file_concat_iqtree_dna_root}"
     echo "to: ${file_undated_species_tree}"
     cp_out "${file_concat_iqtree_dna_root}" "${file_undated_species_tree}"
-    Rscript "${dir_script}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
+    Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
   fi
 else
   gg_step_skip "${task}"
@@ -1180,7 +1165,7 @@ if [[ ( ! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}" ) && ${r
     labels=("pp1" "pp2" "pp3" "f1" "f2" "f3" "q1" "q2" "q3") # https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md
     for i in "${!labels[@]}"; do
       tmp_label_tree="tmp.astral.pep.${labels[i]}.tmp.nwk"
-      python "${dir_script}/extract_astral_support_label.py" \
+      python "${gg_support_dir}/extract_astral_support_label.py" \
       --infile "tmp.astral.out.tree" \
       --outfile "${tmp_label_tree}" \
       --label_key "${labels[i]}"
@@ -1189,7 +1174,7 @@ if [[ ( ! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}" ) && ${r
       "single_copy.astral.pep.${labels[i]}.nwk" \
       "ASTRAL protein tree (${labels[i]})"
       if [[ -s "single_copy.astral.pep.${labels[i]}.nwk" ]]; then
-        Rscript "${dir_script}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="single_copy.astral.pep.${labels[i]}.nwk"
+        Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="single_copy.astral.pep.${labels[i]}.nwk"
       fi
       rm -f -- "${tmp_label_tree}"
     done
@@ -1209,7 +1194,7 @@ if [[ ( ! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}" ) && ${r
 
     if [[ -s "${file_astral_tree_pep_q1}" ]]; then
       if optimize_astral_tree_branch_lengths "${file_astral_tree_pep_q1}" "${file_concat_pep}" "${protein_model}" "${file_astral_tree_pep}" "pep"; then
-        Rscript "${dir_script}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_astral_tree_pep}"
+        Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_astral_tree_pep}"
       else
         echo "Warning: Falling back to unoptimized ASTRAL protein tree."
         cp_out "${file_astral_tree_pep_q1}" "${file_astral_tree_pep}"
@@ -1231,7 +1216,7 @@ if [[ ( ! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}" ) && ${r
       cp_out "${file_astral_tree_pep}" "${file_undated_species_tree}"
     fi
     if [[ -s "${file_undated_species_tree}" ]]; then
-      Rscript "${dir_script}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
+      Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
     fi
   fi
 else
@@ -1305,7 +1290,7 @@ if [[ ( ! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}" ) && ${r
     labels=("pp1" "pp2" "pp3" "f1" "f2" "f3" "q1" "q2" "q3") # https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md
     for i in "${!labels[@]}"; do
       tmp_label_tree="tmp.astral.dna.${labels[i]}.tmp.nwk"
-      python "${dir_script}/extract_astral_support_label.py" \
+      python "${gg_support_dir}/extract_astral_support_label.py" \
       --infile "tmp.astral.out.tree" \
       --outfile "${tmp_label_tree}" \
       --label_key "${labels[i]}"
@@ -1314,7 +1299,7 @@ if [[ ( ! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}" ) && ${r
       "single_copy.astral.dna.${labels[i]}.nwk" \
       "ASTRAL DNA tree (${labels[i]})"
       if [[ -s "single_copy.astral.dna.${labels[i]}.nwk" ]]; then
-        Rscript "${dir_script}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="single_copy.astral.dna.${labels[i]}.nwk"
+        Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="single_copy.astral.dna.${labels[i]}.nwk"
       fi
       rm -f -- "${tmp_label_tree}"
     done
@@ -1334,7 +1319,7 @@ if [[ ( ! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}" ) && ${r
 
     if [[ -s "${file_astral_tree_dna_q1}" ]]; then
       if optimize_astral_tree_branch_lengths "${file_astral_tree_dna_q1}" "${file_concat_cds}" "${nucleotide_model}" "${file_astral_tree_dna}" "dna"; then
-        Rscript "${dir_script}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_astral_tree_dna}"
+        Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_astral_tree_dna}"
       else
         echo "Warning: Falling back to unoptimized ASTRAL DNA tree."
         cp_out "${file_astral_tree_dna_q1}" "${file_astral_tree_dna}"
@@ -1356,7 +1341,7 @@ if [[ ( ! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}" ) && ${r
       cp_out "${file_astral_tree_dna}" "${file_undated_species_tree}"
     fi
     if [[ -s "${file_undated_species_tree}" ]]; then
-      Rscript "${dir_script}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
+      Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
     fi
   fi
 else
@@ -1368,7 +1353,7 @@ disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_dna_root
 if [[ ! -s "${file_plot_species_trees}" && ${run_plot_species_trees} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  Rscript "${dir_script}/plot_species_trees.r" \
+  Rscript "${gg_support_dir}/plot_species_trees.r" \
   --iqtree_dna_nwk="${file_concat_iqtree_dna_root}" \
   --iqtree_pep_nwk="${file_concat_iqtree_pep_root}" \
   --iqtree_dna_log="${dir_concat_iqtree_dna}/tmp.concat.cds.input.fasta.log" \
@@ -1392,8 +1377,8 @@ if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
   gg_step_start "${task}"
     ensure_parent_dir "${file_constrained_tree}"
   if [[ ${timetree_constraint} -eq 1 ]]; then
-    if ! ensure_ete_taxonomy_db "${dir_pg}"; then
-      echo "Error: Failed to prepare ETE taxonomy database under ${dir_pg_db}/ete_taxonomy."
+    if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+      echo "Error: Failed to prepare ETE taxonomy database under ${gg_workspace_downloads_dir}/ete_taxonomy."
       echo "Error: Network access is required to download/update ETE taxonomy data."
       exit 1
     fi
@@ -1445,7 +1430,7 @@ task="Constrained range plotting"
 disable_if_no_input_file "run_plot_constrained_tree" "${file_constrained_tree}"
 if [[ ! -s "${file_plot_constrained_tree}" && ${run_plot_constrained_tree} -eq 1 ]]; then
   gg_step_start "${task}"
-  Rscript "${dir_script}/plot_constrained_tree.r" \
+  Rscript "${gg_support_dir}/plot_constrained_tree.r" \
   --infile="${file_constrained_tree}" \
   --outfile="tmp.constrained_tree_plot.pdf"
   if [[ -s "tmp.constrained_tree_plot.pdf" ]]; then
@@ -1605,7 +1590,7 @@ disable_if_no_input_file "run_plot_mcmctreer" "${file_mcmctree_dated_nwk}"
 if [[ ! -s "${file_plot_mcmctree_pdf}" && ${run_plot_mcmctreer} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  Rscript "${dir_script}/plot_mcmctreer.r" \
+  Rscript "${gg_support_dir}/plot_mcmctreer.r" \
   --infile="${file_mcmctree_dated_nwk}" \
   --outfile="tmp.plot_mcmctreer.pdf"
   if [[ -s "tmp.plot_mcmctreer.pdf" ]]; then
@@ -1915,7 +1900,7 @@ PY
     echo "N0.tsv was not found. Falling back to HOG table: ${hog_table}"
   fi
 
-  python "${dir_script}/orthogroup_table_formatter.py" \
+  python "${gg_support_dir}/orthogroup_table_formatter.py" \
   --file_orthogroup_table "${hog_table}" \
   --dir_out "${dir_orthofinder_hog2og}" \
   --mode "hog2og"
@@ -1929,12 +1914,12 @@ if [[ ! -s "${file_orthogroup_selection}" && ${run_og_selection} -eq 1 ]]; then
   prepare_species_protein_tmp
   ensure_dir "${dir_orthofinder_filtered}"
   if [[ "${orthogroup_annotation_method}" == "blastp" ]]; then
-    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${dir_pg}"); then
+    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then
       echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
       exit 1
     fi
   else
-    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${dir_pg}"); then
+    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${gg_workspace_dir}"); then
       echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
       exit 1
     fi
@@ -1956,7 +1941,7 @@ if [[ ! -s "${file_orthogroup_selection}" && ${run_og_selection} -eq 1 ]]; then
   cp_out "${dir_orthogroup_selection_input}/Orthogroups.tsv" "${dir_orthofinder_filtered}/Orthogroups.tsv"
   cp_out "${dir_orthogroup_selection_input}/Orthogroups.GeneCount.tsv" "${dir_orthofinder_filtered}/Orthogroups.GeneCount.tsv"
 
-  if python "${dir_script}/orthogroup_selection.py" \
+  if python "${gg_support_dir}/orthogroup_selection.py" \
     --dir_orthofinder_og "${dir_orthofinder_filtered}" \
     --dir_species_protein "${dir_sp_protein}" \
     --min_gene_num "${min_num_gene}" \
@@ -1989,7 +1974,7 @@ disable_if_no_input_file "run_orthogroup_method_comparison" "${file_orthofinder_
 if [[ ! -s "${file_orthogroup_method_comparison}" && ${run_orthogroup_method_comparison} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  if python "${dir_script}/orthogroup_method_comparison.py" \
+  if python "${gg_support_dir}/orthogroup_method_comparison.py" \
     --orthofinder_og_genecount "${dir_orthofinder_og}/Orthogroups.GeneCount.tsv" \
     --orthofinder_hog_genecount "${dir_orthofinder_hog2og}/Orthogroups.GeneCount.tsv"; then
     exit_code=0
@@ -2064,7 +2049,7 @@ if [[ ${run_genome_busco} -eq 1 ]]; then
         cp_out "${dir_sp_cds}"/"${cds}" ./tmp.busco_input.cds.fasta
       fi
 
-      if ! dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}"); then
+      if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
         echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
         exit 1
       fi
@@ -2105,7 +2090,7 @@ if [[ ! -s "${file_genome_busco_summary_table}" && ${run_genome_get_busco_summar
   gg_step_start "${task}"
   ensure_parent_dir "${file_genome_busco_summary_table}"
 
-  python "${dir_script}/collect_common_BUSCO_genes.py" \
+  python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
   --busco_outdir "${dir_species_busco_full}" \
   --ncpu "${NSLOTS}" \
   --outfile "tmp.busco_summary_table.tsv"
@@ -2460,7 +2445,7 @@ busco_species_tree_assisted_gene_tree_rooting () {
   cp_out "${indir}"/"${infile}" .
   unzip -q "${infile}"
 
-  Rscript "${dir_script}/species_tree_guided_gene_tree_rooting.r" \
+  Rscript "${gg_support_dir}/species_tree_guided_gene_tree_rooting.r" \
   "--notung_root_zip=./${infile}" \
   "--in_tree=${intree}" \
   "--out_tree=${busco_id}.root.nwk" \
@@ -2605,7 +2590,7 @@ busco_grampa () {
     return 0
   fi
 
-  python "${dir_script}/parse_grampa.py" \
+  python "${gg_support_dir}/parse_grampa.py" \
   --grampa_det "${grampa_det_file}" \
   --grampa_out "${grampa_out_file}" \
   --gene_trees "./grampa_input_gene_trees.nwk" \
@@ -2706,7 +2691,7 @@ if [[ (! -s "${file_cafe_summary_all_pdf}" || ! -s "${file_cafe_summary_signific
     if [[ -d "${dir_cafe_orthogroup_selection}" ]]; then
       rm -rf -- "${dir_cafe_orthogroup_selection}"
     fi
-    python "${dir_script}/cafe_orthogroup_selection.py" \
+    python "${gg_support_dir}/cafe_orthogroup_selection.py" \
     --genecount "${file_orthogroup_genecount_selected}" \
     --dated_species_tree "${file_dated_species_tree}" \
     --output_dir "${dir_cafe_orthogroup_selection}" \
@@ -2730,7 +2715,7 @@ if [[ (! -s "${file_cafe_summary_all_pdf}" || ! -s "${file_cafe_summary_signific
     if [[ -d "${dir_cafe}/each_family_plot" ]]; then
       rm -rf -- "${dir_cafe}/each_family_plot"
     fi
-    if ! Rscript "${dir_script}/cafe_plot_each_family.r" \
+    if ! Rscript "${gg_support_dir}/cafe_plot_each_family.r" \
       "${dir_cafe_output}/Gamma_asr.tre" \
       "${dir_cafe_output}/Gamma_count.tab" \
       "${dir_cafe_output}/Gamma_change.tab" \
@@ -2743,12 +2728,12 @@ if [[ (! -s "${file_cafe_summary_all_pdf}" || ! -s "${file_cafe_summary_signific
     if [[ -d "$(dirname "${file_cafe_summary_all_pdf}")" ]]; then
       rm -rf -- "$(dirname "${file_cafe_summary_all_pdf}")"
     fi
-    Rscript "${dir_script}/cafe_plot_summary.r" \
+    Rscript "${gg_support_dir}/cafe_plot_summary.r" \
     "${dir_cafe_output}/Gamma_asr.tre" \
     "${dir_cafe_output}/Gamma_change.tab" \
     "$(dirname "${file_cafe_summary_all_pdf}")"
 
-    Rscript "${dir_script}/cafe_plot_branch_id.r" \
+    Rscript "${gg_support_dir}/cafe_plot_branch_id.r" \
     "${dir_cafe_output}/Gamma_asr.tre" \
     "$(dirname "${file_cafe_summary_all_pdf}")"
   else
@@ -2766,7 +2751,7 @@ disable_if_no_input_file "run_go_enrichment" "${dir_cafe_output}/Gamma_change.ta
 if [[ ! -s "${file_go_enrichment_significant}" && ${run_go_enrichment} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "$(dirname "${file_go_enrichment_significant}")"
-  if ! Rscript "${dir_script}/cafe_go_enrichment.r" \
+  if ! Rscript "${gg_support_dir}/cafe_go_enrichment.r" \
     "${dir_cafe_output}/Gamma_change.tab" \
     "${dir_cafe_output}/Gamma_branch_probabilities.tab" \
     "${file_gene_id}" \

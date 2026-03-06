@@ -1,24 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Load shared defaults when available.
-gg_core_self="${BASH_SOURCE[0]:-/script/core/gg_genome_annotation_core.sh}"
-gg_common_params_file=""
-for gg_common_params_candidate in \
-  "$(cd "$(dirname "${gg_core_self}")" && pwd)/gg_common_params.sh" \
-  "$(cd "$(dirname "${gg_core_self}")" && pwd)/../gg_common_params.sh" \
-  "/script/gg_common_params.sh"
-do
-  if [[ -s "${gg_common_params_candidate}" ]]; then
-    gg_common_params_file="${gg_common_params_candidate}"
-    break
-  fi
-done
-if [[ -n "${gg_common_params_file}" ]]; then
-  # shellcheck disable=SC1090
-  source "${gg_common_params_file}"
+gg_core_bootstrap="/script/support/gg_core_bootstrap.sh"
+if [[ ! -s "${gg_core_bootstrap}" ]]; then
+  gg_core_bootstrap="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../support/gg_core_bootstrap.sh"
 fi
-unset gg_common_params_file gg_common_params_candidate gg_core_self
+# shellcheck disable=SC1090
+source "${gg_core_bootstrap}"
+unset gg_core_bootstrap
+gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_genome_annotation_entrypoint.sh.
@@ -29,11 +19,7 @@ contamination_removal_rank="${contamination_removal_rank:-${GG_COMMON_CONTAMINAT
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
-dir_pg="/workspace"
-dir_script="/script/support"
-source "${dir_script}/gg_util.sh" # Load utility functions
-gg_source_home_bashrc
-gg_prepare_cmd_runtime "${dir_pg}" "base" 0 1
+gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 0 1
 delete_tmp_dir=${delete_tmp_dir:-1}
 
 copy_busco_tables() {
@@ -111,10 +97,10 @@ resolve_species_file() {
   echo "${matches[0]}"
 }
 
-dir_sp_cds="${dir_pg_input}/species_cds"
-dir_sp_dnaseq="${dir_pg_input}/species_dnaseq"
-dir_mmseqs2_db="${dir_pg_db}/mmseqs2"
-dir_tmp="${dir_pg_output}/tmp"
+dir_sp_cds="${gg_workspace_input_dir}/species_cds"
+dir_sp_dnaseq="${gg_workspace_input_dir}/species_dnaseq"
+dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"
+dir_tmp="${gg_workspace_output_dir}/tmp"
 
 if [[ ! -d "${dir_sp_cds}" ]]; then
   echo "Input directory not found: ${dir_sp_cds}. Exiting."
@@ -143,38 +129,38 @@ echo "Processing ${SGE_TASK_ID}th file: ${file_sp_cds}"
 echo "Scientific name: ${sp_ub}"
 echo "Working directory: ${dir_sp_tmp}"
 
-file_orthogroup="${dir_pg_output}/orthofinder/Orthogroups/Orthogroups.tsv"
-file_sp_expression="$(resolve_species_file "${dir_pg_input}/species_expression" "${sp_ub}" "expression")"
-file_sp_gff="$(resolve_species_file "${dir_pg_input}/species_gff" "${sp_ub}" "gff")"
-file_sp_genome="$(resolve_species_file "${dir_pg_input}/species_genome" "${sp_ub}" "genome")"
-file_sp_subphaser_cfg="$(resolve_species_file "${dir_pg_input}/species_genome_subphaser_cfg" "${sp_ub}" "subphaser cfg")"
+file_orthogroup="${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.tsv"
+file_sp_expression="$(resolve_species_file "${gg_workspace_input_dir}/species_expression" "${sp_ub}" "expression")"
+file_sp_gff="$(resolve_species_file "${gg_workspace_input_dir}/species_gff" "${sp_ub}" "gff")"
+file_sp_genome="$(resolve_species_file "${gg_workspace_input_dir}/species_genome" "${sp_ub}" "genome")"
+file_sp_subphaser_cfg="$(resolve_species_file "${gg_workspace_input_dir}/species_genome_subphaser_cfg" "${sp_ub}" "subphaser cfg")"
 if [[ -s "${file_sp_cds}" ]]; then echo "CDS file found: ${file_sp_cds}"; else echo "CDS file not found."; fi
 if [[ -s "${file_sp_expression}" ]]; then echo "Expression file found: ${file_sp_expression}"; else echo "Expression file not found."; fi
 if [[ -s "${file_sp_gff}" ]]; then echo "GFF file found: ${file_sp_gff}"; else echo "GFF file not found."; fi
 if [[ -s "${file_sp_genome}" ]]; then echo "Genome fasta file found: ${file_sp_genome}"; else echo "Genome fasta file not found."; fi
 if [[ -s "${file_sp_subphaser_cfg}" ]]; then echo "SubPhaser's CFGFILE found: ${file_sp_subphaser_cfg}"; else echo "SubPhaser's CFGFILE not found."; fi
 
-file_sp_gff_info="${dir_pg_output}/species_gff_info/${sp_ub}_gff_info.tsv"
-file_sp_cds_busco_full="${dir_pg_output}/species_cds_busco_full/${sp_ub}_busco.full.tsv"
-file_sp_cds_busco_short="${dir_pg_output}/species_cds_busco_short/${sp_ub}_busco.short.txt"
-file_sp_genome_busco_full="${dir_pg_output}/species_genome_busco_full/${sp_ub}_busco.full.tsv"
-file_sp_genome_busco_short="${dir_pg_output}/species_genome_busco_short/${sp_ub}_busco.short.txt"
-file_sp_uniprot_annotation="${dir_pg_output}/species_cds_uniprot_annotation/${sp_ub}_uniprot.tsv"
-file_sp_annotation="${dir_pg_output}/species_cds_annotation/${sp_ub}_annotation.tsv"
-file_sp_wgd_ksd="${dir_pg_output}/species_cds_wgd_ksd/${sp_ub}_wgd_ksd.tsv"
-file_sp_subphaser="${dir_pg_output}/species_genome_subphaser/${sp_ub}_subphaser.zip"
-file_sp_cds_fx2tab="${dir_pg_output}/species_cds_fx2tab/${sp_ub}_fx2tab_cds.tsv"
-file_sp_genome_fx2tab="${dir_pg_output}/species_genome_fx2tab/${sp_ub}_fx2tab_genome.tsv"
-file_sp_scaffold_histogram="${dir_pg_output}/species_genome_scaffold_histogram/${sp_ub}_scaffold_histogram.pdf"
-file_sp_cds_mmseqs2taxonomy="${dir_pg_output}/species_cds_mmseqs2taxonomy/${sp_ub}_mmseqs2taxonomy.tsv"
-file_sp_cds_contamination_removal_fasta="${dir_pg_output}/species_cds_contamination_removal_fasta/${sp_ub}_contamination_removal.fa.gz"
-file_sp_cds_contamination_removal_tsv="${dir_pg_output}/species_cds_contamination_removal_tsv/${sp_ub}_contamination_removal.tsv"
-file_sp_genome_mmseqs2taxonomy="${dir_pg_output}/species_genome_mmseqs2taxonomy/${sp_ub}_mmseqs2taxonomy.tsv"
-file_sp_genome_contamination_removal_fasta="${dir_pg_output}/species_genome_contamination_removal_fasta/${sp_ub}_contamination_removal.fa.gz"
-file_sp_genome_contamination_removal_tsv="${dir_pg_output}/species_genome_contamination_removal_tsv/${sp_ub}_contamination_removal.tsv"
-file_sp_genomescope="${dir_pg_output}/species_dnaseq_genomescope/${sp_ub}_genomescope.zip"
-file_sp_jcvi_dotplot="${dir_pg_output}/species_jcvi_dotplot/${sp_ub}_jcvi_dotplot.zip"
-file_multispecies_summary="${dir_pg_output}/annotation_summary/annotation_summary.tsv"
+file_sp_gff_info="${gg_workspace_output_dir}/species_gff_info/${sp_ub}_gff_info.tsv"
+file_sp_cds_busco_full="${gg_workspace_output_dir}/species_cds_busco_full/${sp_ub}_busco.full.tsv"
+file_sp_cds_busco_short="${gg_workspace_output_dir}/species_cds_busco_short/${sp_ub}_busco.short.txt"
+file_sp_genome_busco_full="${gg_workspace_output_dir}/species_genome_busco_full/${sp_ub}_busco.full.tsv"
+file_sp_genome_busco_short="${gg_workspace_output_dir}/species_genome_busco_short/${sp_ub}_busco.short.txt"
+file_sp_uniprot_annotation="${gg_workspace_output_dir}/species_cds_uniprot_annotation/${sp_ub}_uniprot.tsv"
+file_sp_annotation="${gg_workspace_output_dir}/species_cds_annotation/${sp_ub}_annotation.tsv"
+file_sp_wgd_ksd="${gg_workspace_output_dir}/species_cds_wgd_ksd/${sp_ub}_wgd_ksd.tsv"
+file_sp_subphaser="${gg_workspace_output_dir}/species_genome_subphaser/${sp_ub}_subphaser.zip"
+file_sp_cds_fx2tab="${gg_workspace_output_dir}/species_cds_fx2tab/${sp_ub}_fx2tab_cds.tsv"
+file_sp_genome_fx2tab="${gg_workspace_output_dir}/species_genome_fx2tab/${sp_ub}_fx2tab_genome.tsv"
+file_sp_scaffold_histogram="${gg_workspace_output_dir}/species_genome_scaffold_histogram/${sp_ub}_scaffold_histogram.pdf"
+file_sp_cds_mmseqs2taxonomy="${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy/${sp_ub}_mmseqs2taxonomy.tsv"
+file_sp_cds_contamination_removal_fasta="${gg_workspace_output_dir}/species_cds_contamination_removal_fasta/${sp_ub}_contamination_removal.fa.gz"
+file_sp_cds_contamination_removal_tsv="${gg_workspace_output_dir}/species_cds_contamination_removal_tsv/${sp_ub}_contamination_removal.tsv"
+file_sp_genome_mmseqs2taxonomy="${gg_workspace_output_dir}/species_genome_mmseqs2taxonomy/${sp_ub}_mmseqs2taxonomy.tsv"
+file_sp_genome_contamination_removal_fasta="${gg_workspace_output_dir}/species_genome_contamination_removal_fasta/${sp_ub}_contamination_removal.fa.gz"
+file_sp_genome_contamination_removal_tsv="${gg_workspace_output_dir}/species_genome_contamination_removal_tsv/${sp_ub}_contamination_removal.tsv"
+file_sp_genomescope="${gg_workspace_output_dir}/species_dnaseq_genomescope/${sp_ub}_genomescope.zip"
+file_sp_jcvi_dotplot="${gg_workspace_output_dir}/species_jcvi_dotplot/${sp_ub}_jcvi_dotplot.zip"
+file_multispecies_summary="${gg_workspace_output_dir}/annotation_summary/annotation_summary.tsv"
 
 ensure_dir "${dir_sp_tmp}"
 cd "${dir_sp_tmp}"
@@ -194,7 +180,7 @@ if command -v flock >/dev/null 2>&1; then
   exec 9> "${species_cds_validation_lock}"
   flock 9
   if [[ ! -s "${species_cds_validation_stamp}" ]]; then
-    check_species_cds "${dir_pg}"
+    check_species_cds "${gg_workspace_dir}"
     check_if_species_files_unique "${dir_sp_cds}"
     touch "${species_cds_validation_stamp}"
   fi
@@ -206,7 +192,7 @@ else
     sleep 1
   done
   if [[ ! -s "${species_cds_validation_stamp}" ]]; then
-    check_species_cds "${dir_pg}"
+    check_species_cds "${gg_workspace_dir}"
     check_if_species_files_unique "${dir_sp_cds}"
     touch "${species_cds_validation_stamp}"
   fi
@@ -226,7 +212,7 @@ if [[ ! -s "${file_sp_gff_info}" && ${run_get_gff_info} -eq 1 ]]; then
   mkdir -p input_gff
   cp_out "${file_sp_gff}" ./input_gff/
 
-  python "${dir_script}/gff2genestat.py" \
+  python "${gg_support_dir}/gff2genestat.py" \
   --dir_gff ./input_gff \
   --feature 'CDS' \
   --multiple_hits 'longest' \
@@ -257,7 +243,7 @@ if [[ ( ! -s "${file_sp_cds_busco_full}" || ! -s "${file_sp_cds_busco_short}" ) 
     busco_infile=${file_sp_cds}
   fi
 
-  if ! dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}"); then
+  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
     exit 1
   fi
@@ -298,7 +284,7 @@ if [[ ( ! -s "${file_sp_genome_busco_full}" || ! -s "${file_sp_genome_busco_shor
     rm -rf -- "./busco_tmp"
   fi
   seqkit seq --threads "${NSLOTS}" "${file_sp_genome}" > "busco_genome_input.fa"
-  if ! dir_busco_db=$(ensure_busco_download_path "${dir_pg}" "${busco_lineage}"); then
+  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
     exit 1
   fi
@@ -343,7 +329,7 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
   > uniprot.query.pep.fas
 
   if [[ "${uniprot_annotation_method}" == "blastp" ]]; then
-    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${dir_pg}"); then
+    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then
       echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
       exit 1
     fi
@@ -357,7 +343,7 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
     -max_target_seqs 1 \
     -evalue 1e-2
   else
-    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${dir_pg}"); then
+    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${gg_workspace_dir}"); then
       echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
       exit 1
     fi
@@ -375,7 +361,7 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
     rm -rf -- "tmp_mmseqs2_uniprot"
   fi
 
-  python "${dir_script}/reformat_uniprot_diamond.py" \
+  python "${gg_support_dir}/reformat_uniprot_diamond.py" \
   --diamond_tsv uniprot.search.tsv \
   --query_fasta uniprot.query.pep.fas \
   --uniprot_fasta "${uniprot_db_prefix}.pep" \
@@ -456,12 +442,12 @@ disable_if_no_input_file "run_cds_contamination_removal" "${file_sp_cds}" "${fil
 if [[ ( ! -s "${file_sp_cds_contamination_removal_fasta}" || ! -s "${file_sp_cds_contamination_removal_tsv}" ) && ${run_cds_contamination_removal} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  if ! ensure_ete_taxonomy_db "${dir_pg}"; then
+  if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
     echo "Failed to prepare ETE taxonomy DB. Exiting."
     exit 1
   fi
 
-  python "${dir_script}/remove_contaminated_sequences.py" \
+  python "${gg_support_dir}/remove_contaminated_sequences.py" \
   --fasta_file "${file_sp_cds}" \
   --mmseqs2taxonomy_tsv "${file_sp_cds_mmseqs2taxonomy}" \
   --fx2tab_tsv "${file_sp_cds_fx2tab}" \
@@ -496,7 +482,7 @@ if [[ ! -s "${file_sp_annotation}" ]] && [[ ${run_annotation} -eq 1 ]]; then
   fi
 
   ensure_parent_dir "${file_sp_annotation}"
-  python "${dir_script}/merge_cds_annotation.py" \
+  python "${gg_support_dir}/merge_cds_annotation.py" \
   --scientific_name "${sp_ub}" \
   --cds_fasta "${file_sp_cds}" \
   --uniprot_tsv "${file_sp_uniprot_annotation}" \
@@ -598,7 +584,7 @@ disable_if_no_input_file "run_scaffold_histogram" "${file_sp_genome_fx2tab}"
 if [[ ! -s "${file_sp_scaffold_histogram}" && ${run_scaffold_histogram} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  python "${dir_script}/scaffold_size_histogram.py" \
+  python "${gg_support_dir}/scaffold_size_histogram.py" \
   --min_scaffold_size 1000000 \
   --fx2tab "${file_sp_genome_fx2tab}"
 
@@ -656,12 +642,12 @@ disable_if_no_input_file "run_genome_contamination_removal" "${file_sp_genome}" 
 if [[ ( ! -s "${file_sp_genome_contamination_removal_fasta}" || ! -s "${file_sp_genome_contamination_removal_tsv}" ) && ${run_genome_contamination_removal} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  if ! ensure_ete_taxonomy_db "${dir_pg}"; then
+  if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
     echo "Failed to prepare ETE taxonomy DB. Exiting."
     exit 1
   fi
 
-  python "${dir_script}/remove_contaminated_sequences.py" \
+  python "${gg_support_dir}/remove_contaminated_sequences.py" \
   --fasta_file "${file_sp_genome}" \
   --mmseqs2taxonomy_tsv "${file_sp_genome_mmseqs2taxonomy}" \
   --fx2tab_tsv "${file_sp_genome_fx2tab}" \
@@ -738,7 +724,7 @@ if [[ ! -s "${file_sp_jcvi_dotplot}" && ${run_jcvi_dotplot} -eq 1 ]]; then
   jcvi_cscore="0.7"
   gff_feature="mRNA"
   sp=${sp_ub//_/ }
-  gff_attribute=$(python "${dir_script}/gff_attribute_identifier.py" --gff_feature "${gff_feature}" --fasta_file "${file_sp_cds}" --gff_file "${file_sp_gff}")
+  gff_attribute=$(python "${gg_support_dir}/gff_attribute_identifier.py" --gff_feature "${gff_feature}" --fasta_file "${file_sp_cds}" --gff_file "${file_sp_gff}")
   selected_scaffolds=$(python -c "import sys,pandas as pd; d=pd.read_csv(sys.argv[1],sep='\t',header=0); d['length']=pd.to_numeric(d['length'],errors='coerce'); ids=d.loc[d['length']>=int(sys.argv[2]),'#id'].dropna().astype(str).tolist(); print(','.join(ids))" "${file_sp_genome_fx2tab}" "${minimum_scaffold_size}")
   if [[ -z "${selected_scaffolds//[[:space:],]/}" ]]; then
     echo "No scaffolds >= ${minimum_scaffold_size} bp were found. Falling back to top 20 longest scaffolds."
@@ -821,16 +807,16 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
   ensure_dir "$(dirname "${file_multispecies_summary}")"
   cd "$(dirname "${file_multispecies_summary}")"
 
-  Rscript "${dir_script}/annotation_summary.r" \
-  --dir_species_tree="${dir_pg_output}/species_tree" \
-  --dir_species_cds_busco="${dir_pg_output}/species_cds_busco_full" \
-  --dir_species_genome_busco="${dir_pg_output}/species_genome_busco_full" \
-  --dir_species_annotation="${dir_pg_output}/species_cds_annotation" \
-  --dir_species_cds_fx2tab="${dir_pg_output}/species_cds_fx2tab" \
-  --dir_species_genome_fx2tab="${dir_pg_output}/species_genome_fx2tab" \
-  --file_species_trait="${dir_pg_input}/species_trait/species_trait.tsv" \
-  --file_orthogroup_gene_count="${dir_pg_output}/orthofinder/Orthogroups/Orthogroups.GeneCount.tsv" \
-  --tree_annotation_dir="${dir_script}/tree_annotation" \
+  Rscript "${gg_support_dir}/annotation_summary.r" \
+  --dir_species_tree="${gg_workspace_output_dir}/species_tree" \
+  --dir_species_cds_busco="${gg_workspace_output_dir}/species_cds_busco_full" \
+  --dir_species_genome_busco="${gg_workspace_output_dir}/species_genome_busco_full" \
+  --dir_species_annotation="${gg_workspace_output_dir}/species_cds_annotation" \
+  --dir_species_cds_fx2tab="${gg_workspace_output_dir}/species_cds_fx2tab" \
+  --dir_species_genome_fx2tab="${gg_workspace_output_dir}/species_genome_fx2tab" \
+  --file_species_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv" \
+  --file_orthogroup_gene_count="${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.tsv" \
+  --tree_annotation_dir="${gg_support_dir}/tree_annotation" \
   --min_og_species='auto'
 
   if [[ -e "Rplots.pdf" ]]; then
@@ -842,7 +828,7 @@ else
   gg_step_skip "${task}"
 fi
 
-remove_empty_subdirs "${dir_pg_output}"
+remove_empty_subdirs "${gg_workspace_output_dir}"
 if [[ ${delete_tmp_dir} -eq 1 ]]; then
     echo "Deleting tmp directory: ${dir_sp_tmp}"
     if [[ -n "${dir_sp_tmp:-}" && "${dir_sp_tmp}" != "/" ]]; then

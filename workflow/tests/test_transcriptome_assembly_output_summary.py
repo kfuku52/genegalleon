@@ -34,7 +34,7 @@ def test_summary_uses_new_fastq_input_path(tmp_path: Path):
         [
             "--dir_transcriptome_assembly",
             str(output_dir),
-            "--dir_pg_input",
+            "--gg_workspace_input_dir",
             str(input_root),
             "--mode",
             "fastq",
@@ -66,7 +66,7 @@ def test_summary_uses_new_metadata_file_suffix(tmp_path: Path):
         [
             "--dir_transcriptome_assembly",
             str(output_dir),
-            "--dir_pg_input",
+            "--gg_workspace_input_dir",
             str(input_root),
             "--mode",
             "metadata",
@@ -122,7 +122,7 @@ def test_summary_ignores_hidden_entries_in_input_and_output_dirs(tmp_path: Path)
         [
             "--dir_transcriptome_assembly",
             str(output_dir),
-            "--dir_pg_input",
+            "--gg_workspace_input_dir",
             str(input_root),
             "--mode",
             "fastq",

@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+gg_print_entrypoint_config_vars() {
+  local entrypoint_name=${1:-}
+
+  case "${entrypoint_name}" in
+    gg_gene_convergence_entrypoint.sh)
+      cat <<'EOF'
+arity_range
+dir_orthofinder
+dir_orthogroup
+dir_out
+file_trait
+max_per_K
+min_OCNCoD
+min_OCNany2spe
+min_fg_stem_ratio
+min_omegaCany2spe
+skip_lower_order
+trait
+EOF
+      ;;
+    gg_gene_database_entrypoint.sh)
+      cat <<'EOF'
+run_database_prep
+EOF
+      ;;
+    gg_gene_evolution_entrypoint.sh)
+      cat <<'EOF'
+check_pruned
+clade_collapse_similarity_method
+clade_collapse_similarity_threshold
+csubst_cutoff_stat
+csubst_exhaustive_until
+csubst_fg_exclude_wg
+csubst_fg_stem_only
+csubst_max_arity
+csubst_max_combination
+exp_value_type
+fimo_qvalue
+generax_model
+generax_rec_model
+intron_gain_rate
+iqtree_fast_mode_gt
+jaspar_file
+l1ou_alpha_upper
+l1ou_convergence
+l1ou_criterion
+l1ou_nbootstrap
+l1ou_use_fit_file
+large_tree_max_nshift
+large_tree_num_gene
+max_num_gene_blast_hit_retrieval
+mode_orthogroup
+mode_query2family
+pgls_use_phenocov
+phylogeneticem_use_fit_file
+promoter_bp
+query_blast_coverage
+query_blast_evalue
+query_blast_method
+radte_max_age
+require_internal_node_labels
+retain_query_in_maxalign
+retrotransposition_rate
+run_amas_cleaned
+run_amas_original
+run_clipkit
+run_codeml_two_ratio
+run_csubst
+run_fimo
+run_generax
+run_get_expression_matrix
+run_get_fasta
+run_get_gff_info
+run_get_promoter_fasta
+run_get_query_fasta
+run_hyphy_dnds
+run_hyphy_relax
+run_hyphy_relax_reversed
+run_iqtree
+run_iqtree_anc
+run_l1ou
+run_mafft
+run_mapdnds
+run_mapdnds_parameter_estimation
+run_maxalign
+run_notung_reconcil
+run_orthogroup_extraction
+run_pgls_species_tree
+run_phylogeneticem
+run_query_blast
+run_rps_blast
+run_scm_intron
+run_summary
+run_tree_dating
+run_tree_plot
+run_tree_pruning
+run_tree_root
+run_trimal
+run_uniprot_annotation
+tree_rooting_method
+treevis_branch_color
+treevis_branch_length
+treevis_clade_ortholog
+treevis_event_method
+treevis_heatmap_transform
+treevis_long_branch_cap_ratio
+treevis_long_branch_detect_ratio
+treevis_long_branch_display
+treevis_long_branch_max_fraction
+treevis_long_branch_ref_quantile
+treevis_long_branch_tail_shrink
+treevis_max_intergenic_dist
+treevis_pie_chart_value_transformation
+treevis_retrotransposition_delta_intron
+treevis_support_value
+treevis_synteny
+treevis_synteny_window
+uniprot_annotation_method
+EOF
+      ;;
+    gg_genome_annotation_entrypoint.sh)
+      cat <<'EOF'
+run_annotation
+run_busco_cds
+run_busco_genome
+run_cds_contamination_removal
+run_cds_fx2tab
+run_cds_mmseqs2taxonomy
+run_genome_contamination_removal
+run_genome_fx2tab
+run_genome_mmseqs2taxonomy
+run_genomescope
+run_get_gff_info
+run_jcvi_dotplot
+run_multispecies_summary
+run_scaffold_histogram
+run_subphaser
+run_uniprot_annotation
+run_wgd_ksd
+uniprot_annotation_method
+EOF
+      ;;
+    gg_genome_evolution_entrypoint.sh)
+      cat <<'EOF'
+astral_min_tips
+bootstrap_params
+change_direction_go
+delete_tmp_dir
+go_category
+max_gene_orthogroup_grampa
+max_num_gene
+max_orthofinder_core_species
+max_size_differential_cafe
+mcmc_birth_death_sampling
+mcmc_burnin
+mcmc_clock_model
+mcmc_nsample
+mcmc_sampfreq
+min_gene_orthogroup_grampa
+min_num_gene
+min_num_species
+min_percent_species_coverage
+n_gamma_cats_cafe
+notung_jar
+nucleotide_model
+orthogroup_annotation_method
+orthogroup_table
+protein_model
+run_astral_dna
+run_astral_pep
+run_busco_getfasta
+run_busco_grampa_dna
+run_busco_grampa_pep
+run_busco_iqtree_dna
+run_busco_iqtree_pep
+run_busco_mafft
+run_busco_notung_root_dna
+run_busco_notung_root_pep
+run_busco_root_dna
+run_busco_root_pep
+run_busco_trimal
+run_cafe
+run_cds_translation
+run_concat_alignment
+run_concat_iqtree_dna
+run_concat_iqtree_protein
+run_constrained_tree
+run_convert_tree_format
+run_genome_busco
+run_genome_get_busco_summary
+run_go_enrichment
+run_individual_get_fasta
+run_individual_iqtree_dna
+run_individual_iqtree_pep
+run_individual_mafft
+run_individual_trimal
+run_mcmctree1
+run_mcmctree2
+run_og_selection
+run_orthofinder
+run_orthogroup_grampa
+run_orthogroup_method_comparison
+run_plot_constrained_tree
+run_plot_mcmctreer
+run_plot_species_trees
+run_species_busco
+run_species_get_busco_summary
+strictly_single_copy_only
+timetree_constraint
+undated_species_tree
+EOF
+      ;;
+    gg_input_generation_entrypoint.sh)
+      cat <<'EOF'
+auth_bearer_token_env
+download_dir
+download_manifest
+download_only
+download_timeout
+dry_run
+http_header
+input_dir
+overwrite
+provider
+resolved_manifest_output
+run_format_inputs
+run_generate_species_trait
+run_validate_inputs
+species_cds_dir
+species_genome_dir
+species_gff_dir
+species_summary_output
+species_trait_output
+strict
+summary_output
+trait_database_sources
+trait_databases
+trait_download_dir
+trait_download_timeout
+trait_plan
+trait_profile
+trait_species_source
+EOF
+      ;;
+    gg_progress_summary_entrypoint.sh)
+      cat <<'EOF'
+mode_transcriptome_assembly
+ncpu_progress_summary
+EOF
+      ;;
+    gg_transcriptome_generation_entrypoint.sh)
+      cat <<'EOF'
+amalgkit_contam_filter
+amalgkit_contam_filter_rank
+amalgkit_filter_order
+amalgkit_rrna_filter
+assembly_cpu_offset
+assembly_method
+assembly_ram_offset
+kallisto_reference
+max_assembly_input_fastq_size
+mode_fastq
+mode_metadata
+mode_sraid
+orf_aggregation_level
+protocol_rna_seq
+remove_amalgkit_fastq_after_completion
+run_amalgkit_getfastq
+run_amalgkit_merge
+run_amalgkit_metadata_or_integrate
+run_amalgkit_quant
+run_assembly
+run_assembly_stat
+run_busco1
+run_busco2
+run_busco3
+run_longestcds
+run_longestcds_contamination_removal
+run_longestcds_fx2tab
+run_longestcds_mmseqs2taxonomy
+run_multispecies_summary
+EOF
+      ;;
+    *)
+      echo "Unknown entrypoint config var registry: ${entrypoint_name}" >&2
+      return 1
+      ;;
+  esac
+}

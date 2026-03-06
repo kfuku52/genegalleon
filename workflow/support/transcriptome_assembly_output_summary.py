@@ -13,7 +13,7 @@ import pandas
 def build_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dir_transcriptome_assembly', metavar='PATH', type=str, required=True, help='')
-    parser.add_argument('--dir_pg_input', metavar='PATH', type=str, default='', help='')
+    parser.add_argument('--gg_workspace_input_dir', metavar='PATH', type=str, default='', help='')
     parser.add_argument(
         '--mode',
         metavar='MODE',
@@ -104,7 +104,7 @@ def run(args):
     start = time.time()
 
     base_dir = args.dir_transcriptome_assembly
-    input_root = args.dir_pg_input if args.dir_pg_input else infer_input_root_from_output_dir(base_dir)
+    input_root = args.gg_workspace_input_dir if args.gg_workspace_input_dir else infer_input_root_from_output_dir(base_dir)
     input_species_list = collect_input_species(input_root, args.mode)
 
     subdirs = sorted_entries(base_dir)

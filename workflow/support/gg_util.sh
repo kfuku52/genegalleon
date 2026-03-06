@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 
+gg_util_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd 2>/dev/null || true)"
+if [[ -n "${gg_util_dir}" && -s "${gg_util_dir}/gg_site_runtime.sh" ]]; then
+	# shellcheck disable=SC1090
+	source "${gg_util_dir}/gg_site_runtime.sh"
+fi
+if [[ -n "${gg_util_dir}" && -s "${gg_util_dir}/gg_entrypoint_config_vars.sh" ]]; then
+	# shellcheck disable=SC1090
+	source "${gg_util_dir}/gg_entrypoint_config_vars.sh"
+fi
+unset gg_util_dir
+
 unset_singularity_envs() {
 	unset SINGULARITY_BIND
 	unset SINGULARITY_BINDPATH
@@ -18,11 +29,10 @@ unset_singularity_envs() {
 }
 
 gg_scheduler_runtime_prelude() {
-	if [[ -n "${PBS_O_WORKDIR:-}" ]]; then
+	if declare -F gg_site_scheduler_prelude >/dev/null 2>&1; then
+		gg_site_scheduler_prelude || return 1
+	elif [[ -n "${PBS_O_WORKDIR:-}" ]]; then
 		cd "${PBS_O_WORKDIR}" || return 1
-		if [[ -d "/bio/package/singularity/singularity_3.0/bin" ]]; then
-			export PATH="${PATH}:/bio/package/singularity/singularity_3.0/bin"
-		fi
 	fi
 	ulimit -s unlimited 2>/dev/null || true
 }
@@ -61,25 +71,57 @@ gg_export_var_to_container_env_if_set() {
 	fi
 }
 
-gg_collect_config_var_names_from_job_script() {
-	local job_script=$1
-	sed -n '/^### Start: Modify this block to tailor your analysis ###$/,/^### End: Modify this block to tailor your analysis ###$/p' "${job_script}" \
-		| sed -n -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p' \
-		| sort -u
+gg_forward_env_vars_with_prefix_to_container_env() {
+	local prefix=${1:-}
+	local var_name
+
+	if [[ -z "${prefix}" ]]; then
+		return 0
+	fi
+
+	while IFS= read -r var_name; do
+		[[ -n "${var_name}" ]] || continue
+		gg_export_var_to_container_env_if_set "${var_name}"
+	done < <(compgen -A variable "${prefix}" | LC_ALL=C sort || true)
+}
+
+gg_apply_named_env_overrides() {
+	local var_name
+	local env_name
+	local env_value
+
+	if [[ $(($# % 2)) -ne 0 ]]; then
+		echo "gg_apply_named_env_overrides: expected var/env pairs." >&2
+		return 1
+	fi
+
+	while [[ $# -gt 0 ]]; do
+		var_name=$1
+		env_name=$2
+		shift 2
+		env_value="${!env_name:-}"
+		if [[ -n "${env_value}" ]]; then
+			printf -v "${var_name}" '%s' "${env_value}"
+		fi
+	done
 }
 
 forward_config_vars_to_container_env() {
 	local job_script=$1
 	shift || true
+	local entrypoint_name
 	local var_name
-	local var_names
-	var_names=$(gg_collect_config_var_names_from_job_script "${job_script}")
+	entrypoint_name="$(basename "${job_script}")"
+	if ! declare -F gg_print_entrypoint_config_vars >/dev/null 2>&1; then
+		echo "forward_config_vars_to_container_env: config var registry helper is unavailable." >&2
+		return 1
+	fi
 	while IFS= read -r var_name; do
 		if [[ -z "${var_name}" ]]; then
 			continue
 		fi
 		gg_export_var_to_container_env_if_set "${var_name}"
-	done <<< "${var_names}"
+	done < <(gg_print_entrypoint_config_vars "${entrypoint_name}")
 
 	# gg_debug_mode is read by gg_*_core.sh scripts but defined outside the config block.
 	gg_export_var_to_container_env_if_set "gg_debug_mode"
@@ -245,22 +287,27 @@ gg_print_scheduler_runtime_summary() {
 
 set_singularityenv() {
   local echo_header="set_singularityenv: "
-  echo ${echo_header}"original: dir_pg = ${dir_pg}"
-  echo ${echo_header}"original: dir_script = ${dir_script}"
-  echo ${echo_header}"original: gg_image = ${gg_image}"
+  local resolved_workspace_dir="${gg_workspace_dir}"
+  local resolved_workflow_dir="${gg_workflow_dir}"
+  local resolved_container_image_path="${gg_container_image_path}"
+  local resolved_workspace_layout=""
+  echo ${echo_header}"original: gg_workspace_dir = ${gg_workspace_dir}"
+  echo ${echo_header}"original: gg_workflow_dir = ${gg_workflow_dir}"
+  echo ${echo_header}"original: gg_container_image_path = ${gg_container_image_path}"
   if [[ $(uname -s) != 'Darwin' ]]; then
     echo "OS is $(uname -s). Getting the original path of symlink."
-    dir_pg=$(cd "$(dirname "${dir_pg}")" && pwd -P)/$(basename "${dir_pg}")
-    dir_script=$(cd "$(dirname "${dir_script}")" && pwd -P)/$(basename "${dir_script}")
-    gg_image=$(cd "$(dirname "${gg_image}")" && pwd -P)/$(basename "${gg_image}")
-    echo ${echo_header}"formatted: dir_pg = ${dir_pg}"
-    echo ${echo_header}"formatted: dir_script = ${dir_script}"
-    echo ${echo_header}"formatted: gg_image = ${gg_image}"
+    resolved_workspace_dir=$(cd "$(dirname "${gg_workspace_dir}")" && pwd -P)/$(basename "${gg_workspace_dir}")
+    resolved_workflow_dir=$(cd "$(dirname "${gg_workflow_dir}")" && pwd -P)/$(basename "${gg_workflow_dir}")
+    resolved_container_image_path=$(cd "$(dirname "${gg_container_image_path}")" && pwd -P)/$(basename "${gg_container_image_path}")
+    echo ${echo_header}"formatted: gg_workspace_dir = ${resolved_workspace_dir}"
+    echo ${echo_header}"formatted: gg_workflow_dir = ${resolved_workflow_dir}"
+    echo ${echo_header}"formatted: gg_container_image_path = ${resolved_container_image_path}"
 	else
 		echo "OS is $(uname -s). Symlink PATHs won't be updated."
 	fi
-	gg_add_container_bind_mount "${dir_pg}:/workspace"
-	gg_add_container_bind_mount "${dir_script}:/script"
+  resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")
+	gg_add_container_bind_mount "${resolved_workspace_dir}:/workspace"
+	gg_add_container_bind_mount "${resolved_workflow_dir}:/script"
 	export SINGULARITYENV_SGE_TASK_ID=${SGE_TASK_ID:-1}
 	export APPTAINERENV_SGE_TASK_ID=${SGE_TASK_ID:-1}
 	export SINGULARITYENV_NSLOTS=${NSLOTS:-1}
@@ -445,7 +492,7 @@ _download_busco_lineage_to_runtime() {
 }
 
 ensure_busco_download_path() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local busco_lineage=$2
   local sys_busco_db="/usr/local/db/busco_downloads"
   local sys_busco_lineage="${sys_busco_db}/lineages/${busco_lineage}"
@@ -463,7 +510,7 @@ ensure_busco_download_path() {
     return 0
   fi
 
-  runtime_busco_db="$(workspace_downloads_root "${dir_pg}")/busco_downloads"
+  runtime_busco_db="$(workspace_downloads_root "${gg_workspace_dir}")/busco_downloads"
   runtime_busco_lineage="${runtime_busco_db}/lineages/${busco_lineage}"
   lock_file="${runtime_busco_db}/locks/busco_downloads.lock"
   ensure_dir "${runtime_busco_db}"
@@ -481,60 +528,58 @@ ensure_busco_download_path() {
 }
 
 workspace_input_root() {
-  local dir_pg=$1
-  if [[ -d "${dir_pg}/input" || -d "${dir_pg}/output" ]]; then
-    echo "${dir_pg}/input"
-  else
-    echo "${dir_pg}"
-  fi
+  local gg_workspace_dir=$1
+  echo "${gg_workspace_dir}/input"
 }
 
 workspace_output_root() {
-  local dir_pg=$1
-  if [[ -d "${dir_pg}/input" || -d "${dir_pg}/output" ]]; then
-    echo "${dir_pg}/output"
-  else
-    echo "${dir_pg}"
-  fi
+  local gg_workspace_dir=$1
+  echo "${gg_workspace_dir}/output"
 }
 
 workspace_downloads_root() {
-  local dir_pg=$1
-  echo "${dir_pg}/downloads"
+  local gg_workspace_dir=$1
+  echo "${gg_workspace_dir}/downloads"
+}
+
+gg_resolve_workspace_layout() {
+  local gg_workspace_dir=$1
+  : "${gg_workspace_dir:?workspace directory is required}"
+  echo "split"
 }
 
 workspace_taxonomy_root() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local dir_db
-  dir_db=$(workspace_downloads_root "${dir_pg}")
+  dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
   echo "${dir_db}/ete_taxonomy"
 }
 
 workspace_pfam_root() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local dir_db
-  dir_db=$(workspace_downloads_root "${dir_pg}")
+  dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
   echo "${dir_db}/pfam"
 }
 
 workspace_pfam_le_dir() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local dir_pfam
-  dir_pfam=$(workspace_pfam_root "${dir_pg}")
+  dir_pfam=$(workspace_pfam_root "${gg_workspace_dir}")
   echo "${dir_pfam}/Pfam_LE"
 }
 
 workspace_taxonomy_dbfile() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local dir_taxonomy
-  dir_taxonomy=$(workspace_taxonomy_root "${dir_pg}")
+  dir_taxonomy=$(workspace_taxonomy_root "${gg_workspace_dir}")
   echo "${dir_taxonomy}/taxa.sqlite"
 }
 
 gg_set_taxonomy_cache_env() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local dir_taxonomy
-  dir_taxonomy=$(workspace_taxonomy_root "${dir_pg}")
+  dir_taxonomy=$(workspace_taxonomy_root "${gg_workspace_dir}")
   ensure_dir "${dir_taxonomy}"
   ensure_dir "${dir_taxonomy}/ete"
   export ETE_DATA_HOME="${dir_taxonomy}"
@@ -621,15 +666,15 @@ PY
 }
 
 ensure_ete_taxonomy_db() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local dir_db
   local dir_taxonomy
   local db_file
   local lock_file
 
-  dir_db=$(workspace_downloads_root "${dir_pg}")
-  dir_taxonomy=$(workspace_taxonomy_root "${dir_pg}")
-  db_file=$(workspace_taxonomy_dbfile "${dir_pg}")
+  dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
+  dir_taxonomy=$(workspace_taxonomy_root "${gg_workspace_dir}")
+  db_file=$(workspace_taxonomy_dbfile "${gg_workspace_dir}")
   lock_file="${dir_db}/locks/ete_taxonomy.lock"
 
   ensure_dir "${dir_db}"
@@ -652,19 +697,17 @@ ensure_ete_taxonomy_db() {
 }
 
 gg_initialize_data_layout() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local dir_input
   local dir_output
   local dir_db
-  dir_input=$(workspace_input_root "${dir_pg}")
-  dir_output=$(workspace_output_root "${dir_pg}")
-  dir_db=$(workspace_downloads_root "${dir_pg}")
-  if [[ "${dir_input}" != "${dir_pg}" || "${dir_output}" != "${dir_pg}" ]]; then
-    ensure_dir "${dir_input}"
-    ensure_dir "${dir_output}"
-  fi
+  dir_input=$(workspace_input_root "${gg_workspace_dir}")
+  dir_output=$(workspace_output_root "${gg_workspace_dir}")
+  dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
+  ensure_dir "${dir_input}"
+  ensure_dir "${dir_output}"
   ensure_dir "${dir_db}"
-  gg_set_taxonomy_cache_env "${dir_pg}"
+  gg_set_taxonomy_cache_env "${gg_workspace_dir}"
 }
 
 cp_out() {
@@ -754,29 +797,38 @@ set_singularity_command() {
   fi
   echo ${echo_header}"hostname = $(hostname)"
   echo ${echo_header}"container runtime = ${runtime_bin}"
-  if [[ $(hostname) == at* || $(hostname) == m* || $(hostname) == igt* || $(hostname) == it* ]]; then
-    echo ${echo_header}"NIG Supercomputer: loading singularity 3"
-    #module load singularity/3.2.0
-    if [[ -e /var/spool/uge ]]; then
-      gg_add_container_bind_mount "/var/spool/uge:/var/spool/uge"
-    fi
-    if [[ -e /var/spool/age ]]; then
-      gg_add_container_bind_mount "/var/spool/age:/var/spool/age"
-    fi
-    gg_add_container_bind_mount "/opt/pkg:/opt/pkg"
-    gg_add_container_bind_mount "/home/geadmin/UGER/uger/spool:/home/geadmin/UGER/uger/spool"
-    #export SINGULARITY_BIND="/usr/local/seq/blast/ncbi:/usr/local/seq/blast/ncbi,${SINGULARITY_BIND}"
-    #singularity_command="singularity shell -B /var/spool/uge:/var/spool/uge -B /opt/pkg:/opt/pkg"
-    singularity_command="${runtime_bin} shell"
-  elif [[ $(hostname) == *nhr.fau.de ]]; then
-  	echo ${echo_header}"NHR FAU Fritz"
-  	singularity_command="${runtime_bin} shell --contain"
+  if declare -F gg_site_container_shell_command >/dev/null 2>&1; then
+    singularity_command="$(gg_site_container_shell_command "${runtime_bin}")"
   else
-    echo ${echo_header}"No special process is activated in this host."
+    echo ${echo_header}"No site adapter was loaded. Using default shell."
     singularity_command="${runtime_bin} shell"
   fi
   echo ${echo_header}'${singularity_command}' = \"${singularity_command}\"
   echo ""
+}
+
+gg_entrypoint_prepare_container_runtime() {
+	local call_exit_if_running=${1:-0}
+	gg_scheduler_runtime_prelude
+	unset_singularity_envs
+	if [[ "${call_exit_if_running}" -eq 1 ]]; then
+		exit_if_running_qstat
+	fi
+	if ! set_singularity_command; then
+		return 1
+	fi
+	variable_SGEnizer
+	return 0
+}
+
+gg_entrypoint_activate_container_runtime() {
+	set_singularityenv
+	gg_print_scheduler_runtime_summary
+}
+
+gg_entrypoint_enter_workspace() {
+	mkdir -p "${gg_workspace_dir}"
+	cd "${gg_workspace_dir}"
 }
 
 exit_if_running_qstat() {
@@ -882,8 +934,8 @@ wait_for_background_jobs() {
 }
 
 check_species_cds() {
-  local dir_pg=$1
-  local dir_sp_cds="$(workspace_input_root "${dir_pg}")/species_cds"
+  local gg_workspace_dir=$1
+  local dir_sp_cds="$(workspace_input_root "${gg_workspace_dir}")/species_cds"
   local species_cds_fasta=()
   local fasta_path
   while IFS= read -r fasta_path; do
@@ -1123,33 +1175,75 @@ get_total_fastq_len() {
 }
 
 gg_prepare_cmd_runtime() {
-  local dir_pg_local=$1
+  local gg_workspace_dir_local=$1
   local conda_env=${2:-}
   local set_unlimited_stack=${3:-1}
   local print_start_message=${4:-1}
 
-  gg_initialize_data_layout "${dir_pg_local}"
-  dir_pg_input=$(workspace_input_root "${dir_pg_local}")
-  dir_pg_output=$(workspace_output_root "${dir_pg_local}")
-  dir_pg_db=$(workspace_downloads_root "${dir_pg_local}")
-  export dir_pg_input dir_pg_output dir_pg_db
+	gg_initialize_data_layout "${gg_workspace_dir_local}"
+	gg_workspace_layout_resolved=$(gg_resolve_workspace_layout "${gg_workspace_dir_local}")
+	gg_workspace_input_dir=$(workspace_input_root "${gg_workspace_dir_local}")
+	gg_workspace_output_dir=$(workspace_output_root "${gg_workspace_dir_local}")
+	gg_workspace_downloads_dir=$(workspace_downloads_root "${gg_workspace_dir_local}")
+	export gg_workspace_layout_resolved gg_workspace_input_dir gg_workspace_output_dir gg_workspace_downloads_dir
 
-  if [[ -n "${conda_env}" ]]; then
-    conda activate "${conda_env}"
-  fi
-  if [[ "${set_unlimited_stack}" -eq 1 ]]; then
-    ulimit -s unlimited
-  fi
-  if [[ "${print_start_message}" -eq 1 ]]; then
-    print_pg_container_starting_message
-  fi
+	if [[ -n "${conda_env}" ]]; then
+		gg_activate_conda_env "${conda_env}"
+	fi
+	if [[ "${set_unlimited_stack}" -eq 1 ]]; then
+		ulimit -s unlimited
+	fi
+	if [[ "${print_start_message}" -eq 1 ]]; then
+		print_gg_container_starting_message
+	fi
 }
 
-gg_source_home_bashrc() {
-  if [[ -f /home/.bashrc ]]; then
-    # shellcheck disable=SC1091
-    source "/home/.bashrc"
-  fi
+gg_initialize_conda_shell() {
+	if [[ "${GG_CONDA_SHELL_INITIALIZED:-0}" -eq 1 ]]; then
+		return 0
+	fi
+	if command -v micromamba >/dev/null 2>&1; then
+		export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/opt/conda}"
+		eval "$(micromamba shell hook --shell bash)"
+		GG_CONDA_SHELL_INITIALIZED=1
+		export GG_CONDA_SHELL_INITIALIZED
+		return 0
+	fi
+	if [[ -f /opt/conda/etc/profile.d/conda.sh ]]; then
+		# shellcheck disable=SC1091
+		source /opt/conda/etc/profile.d/conda.sh
+		GG_CONDA_SHELL_INITIALIZED=1
+		export GG_CONDA_SHELL_INITIALIZED
+		return 0
+	fi
+	if command -v conda >/dev/null 2>&1; then
+		eval "$(conda shell.bash hook)"
+		GG_CONDA_SHELL_INITIALIZED=1
+		export GG_CONDA_SHELL_INITIALIZED
+		return 0
+	fi
+	return 1
+}
+
+gg_activate_conda_env() {
+	local conda_env=${1:-}
+	if [[ -z "${conda_env}" ]]; then
+		return 0
+	fi
+	if ! gg_initialize_conda_shell; then
+		echo "gg_activate_conda_env: failed to initialize conda shell support." >&2
+		return 1
+	fi
+	conda activate "${conda_env}"
+}
+
+gg_deactivate_conda_env() {
+	if [[ "${GG_CONDA_SHELL_INITIALIZED:-0}" -ne 1 ]]; then
+		return 0
+	fi
+	if declare -F conda >/dev/null 2>&1; then
+		conda deactivate >/dev/null 2>&1 || true
+	fi
 }
 
 gg_test_r_packages() {
@@ -1263,12 +1357,12 @@ gg_trigger_versions_dump() {
   local block_exit_code=0
   local had_errexit=0
 
-  if [[ -z "${dir_script:-}" || -z "${dir_pg:-}" || -z "${gg_image:-}" ]]; then
-    echo "gg_trigger_versions_dump: dir_script/dir_pg/gg_image are required." >&2
+  if [[ -z "${gg_workflow_dir:-}" || -z "${gg_support_dir:-}" || -z "${gg_workspace_dir:-}" || -z "${gg_container_image_path:-}" ]]; then
+    echo "gg_trigger_versions_dump: gg_workflow_dir/gg_support_dir/gg_workspace_dir/gg_container_image_path are required." >&2
     return 1
   fi
 
-  version_file="${dir_script}/../VERSION"
+  version_file="${gg_workflow_dir}/../VERSION"
   gg_version="${SINGULARITYENV_GG_VERSION:-}"
   if [[ -z "${gg_version}" ]]; then
     gg_version="$(gg_read_repo_version "${version_file}")"
@@ -1276,7 +1370,7 @@ gg_trigger_versions_dump() {
   export SINGULARITYENV_GG_VERSION="${gg_version}"
   export APPTAINERENV_GG_VERSION="${gg_version}"
 
-  versions_script="${dir_script}/support/gg_versions.sh"
+  versions_script="${gg_support_dir}/gg_versions.sh"
   if [[ ! -s "${versions_script}" ]]; then
     echo "gg_trigger_versions_dump: versions script not found: ${versions_script}" >&2
     return 1
@@ -1302,25 +1396,25 @@ gg_trigger_versions_dump() {
     set_singularityenv
   fi
 
-  dir_output=$(workspace_output_root "${dir_pg}")
+  dir_output=$(workspace_output_root "${gg_workspace_dir}")
   versions_dir="${dir_output}/versions"
   ensure_dir "${versions_dir}"
 
-  container_key_seed="gg_image=${gg_image};runtime=${container_runtime_bin}"
-  if [[ -s "${gg_image}" ]]; then
+  container_key_seed="gg_container_image_path=${gg_container_image_path};runtime=${container_runtime_bin}"
+  if [[ -s "${gg_container_image_path}" ]]; then
     if command -v sha256sum >/dev/null 2>&1; then
-      image_file_hash=$(sha256sum "${gg_image}" | awk '{print $1}')
+      image_file_hash=$(sha256sum "${gg_container_image_path}" | awk '{print $1}')
       container_key_seed="${container_key_seed};image_sha256=${image_file_hash}"
     elif command -v shasum >/dev/null 2>&1; then
-      image_file_hash=$(shasum -a 256 "${gg_image}" | awk '{print $1}')
+      image_file_hash=$(shasum -a 256 "${gg_container_image_path}" | awk '{print $1}')
       container_key_seed="${container_key_seed};image_sha256=${image_file_hash}"
     else
-      image_file_hash=$(cksum "${gg_image}" | awk '{print $1 "-" $2}')
+      image_file_hash=$(cksum "${gg_container_image_path}" | awk '{print $1 "-" $2}')
       container_key_seed="${container_key_seed};image_cksum=${image_file_hash}"
     fi
   fi
   inspect_snapshot=""
-  if inspect_snapshot=$("${container_runtime_bin}" inspect "${gg_image}" 2>/dev/null); then
+  if inspect_snapshot=$("${container_runtime_bin}" inspect "${gg_container_image_path}" 2>/dev/null); then
     if [[ -n "${inspect_snapshot}" ]]; then
       container_key_seed="${container_key_seed};inspect=${inspect_snapshot}"
     fi
@@ -1333,7 +1427,7 @@ gg_trigger_versions_dump() {
     container_key_hash=$(printf '%s' "${container_key_seed}" | cksum | awk '{print $1}')
   fi
   if [[ -z "${container_key_hash}" ]]; then
-    container_key_hash=$(echo "${gg_image}" | tr '[:space:]/:' '_' | tr -cd '[:alnum:]_.-')
+    container_key_hash=$(echo "${gg_container_image_path}" | tr '[:space:]/:' '_' | tr -cd '[:alnum:]_.-')
     if [[ -z "${container_key_hash}" ]]; then
       container_key_hash="unknown_container"
     fi
@@ -1366,7 +1460,7 @@ gg_trigger_versions_dump() {
     echo "${gg_version}"
     echo ""
     echo "$(date): Triggered gg_versions by ${trigger_name}"
-    ${singularity_command} "${gg_image}" < "${versions_script}" || {
+    ${singularity_command} "${gg_container_image_path}" < "${versions_script}" || {
       cmd_rc=$?
       if [[ ${versions_exit_code} -eq 0 ]]; then
         versions_exit_code=${cmd_rc}
@@ -1378,7 +1472,7 @@ gg_trigger_versions_dump() {
     if [[ "${singularity_bin}" == *"/gg_wrapper_bin/"* ]]; then
       echo "Skipping container inspect/version under Docker-backed singularity shim: ${singularity_bin}"
     else
-      "${container_runtime_bin}" inspect "${gg_image}" || {
+      "${container_runtime_bin}" inspect "${gg_container_image_path}" || {
         cmd_rc=$?
         if [[ ${versions_exit_code} -eq 0 ]]; then
           versions_exit_code=${cmd_rc}
@@ -1484,20 +1578,23 @@ ensure_scheduler_defaults() {
   export NSLOTS JOB_ID SGE_TASK_ID MEM_PER_SLOT MEM_PER_HOST
 }
 
-print_pg_container_starting_message() {
-  local dir_pg_input_resolved
-  local dir_pg_output_resolved
-  local dir_pg_db_resolved
+print_gg_container_starting_message() {
+  local gg_workspace_input_dir_resolved
+  local gg_workspace_output_dir_resolved
+  local gg_workspace_downloads_dir_resolved
+  local gg_workspace_layout_local
   ensure_scheduler_defaults
-  dir_pg_input_resolved=$(workspace_input_root "${dir_pg}")
-  dir_pg_output_resolved=$(workspace_output_root "${dir_pg}")
-  dir_pg_db_resolved=$(workspace_downloads_root "${dir_pg}")
+  gg_workspace_layout_local=$(gg_resolve_workspace_layout "${gg_workspace_dir}")
+  gg_workspace_input_dir_resolved=$(workspace_input_root "${gg_workspace_dir}")
+  gg_workspace_output_dir_resolved=$(workspace_output_root "${gg_workspace_dir}")
+  gg_workspace_downloads_dir_resolved=$(workspace_downloads_root "${gg_workspace_dir}")
   echo "$(date): Starting gg Singularity/Apptainer environment"
   echo "pwd: $(pwd)"
-  echo "dir_pg: ${dir_pg}"
-  echo "dir_pg_input: ${dir_pg_input_resolved}"
-  echo "dir_pg_output: ${dir_pg_output_resolved}"
-  echo "dir_pg_db: ${dir_pg_db_resolved}"
+  echo "gg_workspace_dir: ${gg_workspace_dir}"
+  echo "gg_workspace_layout: ${gg_workspace_layout_local}"
+  echo "gg_workspace_input_dir: ${gg_workspace_input_dir_resolved}"
+  echo "gg_workspace_output_dir: ${gg_workspace_output_dir_resolved}"
+  echo "gg_workspace_downloads_dir: ${gg_workspace_downloads_dir_resolved}"
   echo "python: $(command -v python)"
   echo "NSLOTS: ${NSLOTS}"
   echo "MEM_PER_SLOT: ${MEM_PER_SLOT}"
@@ -2017,9 +2114,9 @@ _build_blast_db_from_fasta() {
 }
 
 ensure_uniprot_sprot_db() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local sys_prefix="/usr/local/db/uniprot_sprot"
-  local runtime_root="$(workspace_downloads_root "${dir_pg}")"
+  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
   local runtime_dir="${runtime_root}/uniprot_sprot"
   local runtime_prefix="${runtime_dir}/uniprot_sprot"
   local lock_file="${runtime_root}/locks/uniprot_sprot.lock"
@@ -2045,9 +2142,9 @@ ensure_uniprot_sprot_db() {
 }
 
 ensure_uniprot_sprot_mmseqs_db() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local sys_prefix="/usr/local/db/uniprot_sprot"
-  local runtime_root="$(workspace_downloads_root "${dir_pg}")"
+  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
   local runtime_dir="${runtime_root}/uniprot_sprot"
   local runtime_prefix="${runtime_dir}/uniprot_sprot"
   local runtime_pep="${runtime_prefix}.pep"
@@ -2100,9 +2197,9 @@ ensure_uniprot_sprot_mmseqs_db() {
 }
 
 ensure_uniprot_sprot_blast_db() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local sys_prefix="/usr/local/db/uniprot_sprot"
-  local runtime_root="$(workspace_downloads_root "${dir_pg}")"
+  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
   local runtime_dir="${runtime_root}/uniprot_sprot"
   local runtime_prefix="${runtime_dir}/uniprot_sprot"
   local runtime_pep="${runtime_prefix}.pep"
@@ -2221,13 +2318,13 @@ pfam_le_db_is_ready() {
 }
 
 ensure_pfam_le_db() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local sys_dir="/usr/local/db/Pfam_LE"
-  local runtime_root="$(workspace_downloads_root "${dir_pg}")"
+  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
   local runtime_parent
-  runtime_parent=$(workspace_pfam_root "${dir_pg}")
+  runtime_parent=$(workspace_pfam_root "${gg_workspace_dir}")
   local runtime_dir
-  runtime_dir=$(workspace_pfam_le_dir "${dir_pg}")
+  runtime_dir=$(workspace_pfam_le_dir "${gg_workspace_dir}")
   local lock_file="${runtime_root}/locks/pfam_le.lock"
 
   if pfam_le_db_is_ready "${sys_dir}"; then
@@ -2398,10 +2495,10 @@ _jaspar_find_latest_meme_filename_local() {
 }
 
 _ensure_jaspar_file_named() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local jaspar_filename=$2
   local sys_file="/usr/local/db/jaspar/${jaspar_filename}"
-  local runtime_root="$(workspace_downloads_root "${dir_pg}")"
+  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
   local runtime_file="${runtime_root}/jaspar/${jaspar_filename}"
   local lock_basename
   lock_basename=$(echo "${jaspar_filename}" | tr '/ ' '__')
@@ -2428,8 +2525,8 @@ _ensure_jaspar_file_named() {
 }
 
 ensure_latest_jaspar_file() {
-  local dir_pg=$1
-  local runtime_root="$(workspace_downloads_root "${dir_pg}")"
+  local gg_workspace_dir=$1
+  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
   local runtime_dir="${runtime_root}/jaspar"
   local sys_dir="/usr/local/db/jaspar"
   local lock_file="${runtime_root}/locks/jaspar_latest.lock"
@@ -2486,7 +2583,7 @@ ensure_latest_jaspar_file() {
       echo "Could not resolve latest JASPAR plants CORE MEME motif file." >&2
       ensure_exit_code=1
     else
-      if resolved_path=$(_ensure_jaspar_file_named "${dir_pg}" "${resolved_filename}"); then
+      if resolved_path=$(_ensure_jaspar_file_named "${gg_workspace_dir}" "${resolved_filename}"); then
         ensure_exit_code=0
       else
         ensure_exit_code=$?
@@ -2517,14 +2614,14 @@ ensure_latest_jaspar_file() {
 }
 
 ensure_jaspar_file() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local jaspar_filename=${2:-latest}
 
   if _jaspar_is_latest_selector "${jaspar_filename}"; then
-    ensure_latest_jaspar_file "${dir_pg}"
+    ensure_latest_jaspar_file "${gg_workspace_dir}"
     return $?
   fi
-  _ensure_jaspar_file_named "${dir_pg}" "${jaspar_filename}"
+  _ensure_jaspar_file_named "${gg_workspace_dir}" "${jaspar_filename}"
 }
 
 _download_silva_rrna_ref_to_file() {
@@ -2546,9 +2643,9 @@ _download_silva_rrna_ref_to_file() {
 }
 
 ensure_silva_rrna_ref_db() {
-  local dir_pg=$1
+  local gg_workspace_dir=$1
   local sys_file="/usr/local/db/silva/rRNA_ref.fa.gz"
-  local runtime_root="$(workspace_downloads_root "${dir_pg}")"
+  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
   local runtime_file="${runtime_root}/silva/rRNA_ref.fa.gz"
   local lock_file="${runtime_root}/locks/silva_rrna_ref.lock"
 

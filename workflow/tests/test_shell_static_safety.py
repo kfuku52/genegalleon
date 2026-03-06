@@ -38,11 +38,16 @@ def _core_and_entrypoint_scripts():
     return core_scripts + entrypoint_scripts
 
 
+def _strict_mode_header(script: Path) -> str:
+    max_lines = 60 if script.name.endswith("_entrypoint.sh") else 30
+    return "\n".join(_read_text(script).splitlines()[:max_lines])
+
+
 def _set_e_scripts():
     scripts = []
     for script in _workflow_shell_scripts():
         text = _read_text(script)
-        header = "\n".join(text.splitlines()[:30])
+        header = _strict_mode_header(script)
         if ("set -eo pipefail" in header) or ("set -euo pipefail" in header):
             scripts.append((script, text))
     return scripts
@@ -90,8 +95,7 @@ def test_core_and_entrypoint_scripts_set_pipefail():
     scripts = _core_and_entrypoint_scripts()
     assert scripts, "No core/entrypoint scripts were found."
     for script in scripts:
-        text = _read_text(script)
-        header = "\n".join(text.splitlines()[:20])
+        header = _strict_mode_header(script)
         has_pipefail = ("set -eo pipefail" in header) or ("set -euo pipefail" in header)
         assert has_pipefail, f"Missing pipefail guard in script header: {script}"
 
@@ -100,8 +104,7 @@ def test_core_and_entrypoint_scripts_use_strict_euo_pipefail():
     scripts = _core_and_entrypoint_scripts()
     assert scripts, "No core/entrypoint scripts were found."
     for script in scripts:
-        text = _read_text(script)
-        header = "\n".join(text.splitlines()[:20])
+        header = _strict_mode_header(script)
         assert "set -euo pipefail" in header, f"Use strict mode (set -euo pipefail): {script}"
 
 
@@ -115,9 +118,27 @@ def test_non_library_workflow_shell_scripts_use_strict_euo_pipefail():
     for script in scripts:
         if script in allowed_non_strict:
             continue
-        text = _read_text(script)
-        header = "\n".join(text.splitlines()[:30])
+        header = _strict_mode_header(script)
         assert "set -euo pipefail" in header, f"Use strict mode (set -euo pipefail): {script}"
+
+
+def test_support_directory_has_no_numbered_duplicate_scripts():
+    duplicates = sorted((WORKFLOW_DIR / "support").glob("* 2.*"))
+    assert not duplicates, f"Remove accidental duplicate support scripts: {duplicates}"
+
+
+def test_gg_versions_lists_support_dir_without_undefined_alias():
+    text = _read_text(WORKFLOW_DIR / "support" / "gg_versions.sh")
+    assert "dir_myscript" not in text
+    assert 'ls -la "${gg_support_dir}"' in text
+
+
+def test_gg_versions_uses_shared_core_bootstrap_runtime():
+    text = _read_text(WORKFLOW_DIR / "support" / "gg_versions.sh")
+    assert 'source "${gg_core_bootstrap}"' in text
+    assert 'gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "" 1 1' in text
+    assert 'gg_workspace_dir="/workspace"' not in text
+    assert 'source "${gg_support_dir}/gg_util.sh"' not in text
 
 
 def test_busco_download_lock_is_global():
@@ -241,7 +262,7 @@ def test_support_python_shebangs_use_python3():
 def test_progress_summary_entrypoint_runs_core_script_in_container():
     entrypoint = WORKFLOW_DIR / "gg_progress_summary_entrypoint.sh"
     text = _read_text(entrypoint)
-    assert '< "${dir_script}/core/gg_progress_summary_core.sh"' in text
+    assert '< "${gg_core_dir}/gg_progress_summary_core.sh"' in text
     assert "orthogroup_output_summary.py" not in text
     assert "transcriptome_assembly_output_summary.py" not in text
 
@@ -288,14 +309,14 @@ def test_no_known_unquoted_array_appends_for_output_file_lists():
 
 def test_no_unquoted_dir_script_invocations_in_core_scripts():
     banned_tokens = [
-        "python ${dir_script}/",
-        "Rscript ${dir_script}/",
-        "bash ${dir_script}/",
+        "python ${gg_support_dir}/",
+        "Rscript ${gg_support_dir}/",
+        "bash ${gg_support_dir}/",
     ]
     for script in sorted(CORE_DIR.glob("*.sh")):
         text = _read_text(script)
         for token in banned_tokens:
-            assert token not in text, f"Found unquoted dir_script invocation in {script}: {token}"
+            assert token not in text, f"Found unquoted gg_support_dir invocation in {script}: {token}"
 
 
 def test_no_unquoted_long_option_value_expansions_in_core_scripts():
@@ -404,7 +425,10 @@ def test_all_entrypoints_call_set_singularity_command():
     assert entrypoints, "No entrypoint scripts were found."
     for script in entrypoints:
         text = _read_text(script)
-        assert "set_singularity_command" in text, f"Missing set_singularity_command call: {script}"
+        assert (
+            "set_singularity_command" in text
+            or "gg_entrypoint_prepare_container_runtime" in text
+        ), f"Missing container runtime preparation call: {script}"
 
 
 def test_gg_trigger_versions_dump_is_runtime_agnostic():
@@ -414,9 +438,9 @@ def test_gg_trigger_versions_dump_is_runtime_agnostic():
     assert 'export SINGULARITYENV_GG_VERSION="${gg_version}"' in body
     assert 'export APPTAINERENV_GG_VERSION="${gg_version}"' in body
     assert 'command -v "${container_runtime_bin}"' in body
-    assert '"${container_runtime_bin}" inspect "${gg_image}"' in body
+    assert '"${container_runtime_bin}" inspect "${gg_container_image_path}"' in body
     assert '"${container_runtime_bin}" version || {' in body
-    assert 'singularity inspect "${gg_image}"' not in body
+    assert 'singularity inspect "${gg_container_image_path}"' not in body
     assert 'singularity version || {' not in body
 
 
@@ -430,7 +454,7 @@ def test_progress_summary_entrypoint_uses_auto_forwarding_and_normalized_nslots(
     assert "for exported_name in mode_transcriptome_assembly ncpu_progress_summary; do" not in text
     assert 'ncpu_progress_summary="${ncpu_progress_summary:-${NSLOTS:-1}}"' not in text
 
-    idx_variable_sgenizer = text.index("variable_SGEnizer")
+    idx_variable_sgenizer = text.index("gg_entrypoint_prepare_container_runtime")
     idx_ncpu_default = text.index(': "${ncpu_progress_summary:=${NSLOTS:-1}}"')
     assert idx_ncpu_default > idx_variable_sgenizer
 
@@ -439,8 +463,11 @@ def test_input_generation_entrypoint_forwards_env_driven_overrides():
     entrypoint = WORKFLOW_DIR / "gg_input_generation_entrypoint.sh"
     text = _read_text(entrypoint)
 
-    assert "for gg_input_var_name in ${!GG_INPUT_@}; do" in text
-    assert 'gg_export_var_to_container_env_if_set "${gg_input_var_name}"' in text
+    assert "gg_apply_named_env_overrides \\" in text
+    assert "provider GG_INPUT_PROVIDER" in text
+    assert "trait_profile GG_INPUT_TRAIT_PROFILE" in text
+    assert "for gg_input_var_name in ${!GG_INPUT_@}; do" not in text
+    assert 'gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_MAX_CONCURRENT_DOWNLOADS_"' in text
     assert 'export "SINGULARITYENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
     assert 'export "APPTAINERENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
 
@@ -452,7 +479,9 @@ def test_input_generation_trait_profile_preset_is_wired():
     core_text = _read_text(core)
 
     assert 'trait_profile="none"' in entry_text
-    assert "apply_env_override trait_profile GG_INPUT_TRAIT_PROFILE" in core_text
+    assert "trait_profile GG_INPUT_TRAIT_PROFILE" in entry_text
+    assert "GG_INPUT_" not in core_text
+    assert "apply_env_override()" not in core_text
     assert 'case "${trait_profile}" in' in core_text
     assert "gift_starter" in core_text
 
@@ -461,10 +490,28 @@ def test_gg_util_has_common_forward_config_export_helpers():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
     assert "gg_export_var_to_container_env_if_set()" in text
-    assert "gg_collect_config_var_names_from_job_script()" in text
+    assert "gg_apply_named_env_overrides()" in text
+    assert "gg_forward_env_vars_with_prefix_to_container_env()" in text
     body = _function_body(text, "forward_config_vars_to_container_env")
-    assert "gg_collect_config_var_names_from_job_script" in body
+    assert "gg_print_entrypoint_config_vars" in body
     assert 'gg_export_var_to_container_env_if_set "gg_debug_mode"' in body
+
+
+def test_entrypoint_config_var_registry_covers_all_entrypoints():
+    registry_text = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    entrypoints = sorted(path.name for path in WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
+    assert entrypoints
+    for entrypoint_name in entrypoints:
+        assert f"{entrypoint_name})" in registry_text
+
+
+def test_gg_util_uses_explicit_conda_shell_initialization():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "gg_initialize_conda_shell")
+    assert "/home/.bashrc" not in text
+    assert "micromamba shell hook --shell bash" in body
+    assert "source /opt/conda/etc/profile.d/conda.sh" in body
 
 
 def test_ensure_latest_jaspar_file_uses_set_e_safe_assignments():
@@ -740,7 +787,10 @@ def test_entrypoints_with_exit_if_running_call_duplicate_guard():
     for script_name in scripts:
         text = _read_text(WORKFLOW_DIR / script_name)
         assert "exit_if_running=" in text
-        assert "exit_if_running_qstat" in text, f"Missing duplicate-job guard call in {script_name}"
+        assert (
+            "exit_if_running_qstat" in text
+            or "gg_entrypoint_prepare_container_runtime 1" in text
+        ), f"Missing duplicate-job guard call in {script_name}"
 
 
 def test_download_pfam_helper_guards_output_dir_before_recursive_delete():
@@ -805,7 +855,7 @@ def test_pfam_helpers_use_only_new_runtime_layout_and_function_name():
     assert "downloads/Pfam_LE" not in util_text
     assert "ensure_pfam_domain_db()" not in util_text
     assert "ensure_pfam_domain_db" not in gene_text
-    assert 'ensure_pfam_le_db "${dir_pg}"' in gene_text
+    assert 'ensure_pfam_le_db "${gg_workspace_dir}"' in gene_text
 
 
 def test_get_total_fastq_len_uses_bash3_compatible_read_loop_and_excludes_hidden_files():
@@ -848,7 +898,7 @@ def test_genome_busco_summary_normalizes_legacy_table_names_before_collect_commo
     text = _read_text(script)
     gate = "if [[ ${run_genome_get_busco_summary} -eq 1 ]]; then"
     normalize = 'normalize_busco_table_naming "${dir_species_busco_full}" "${dir_species_busco_short}"'
-    collect = 'python "${dir_script}/collect_common_BUSCO_genes.py" \\'
+    collect = 'python "${gg_support_dir}/collect_common_BUSCO_genes.py" \\'
     assert gate in text
     assert normalize in text
     assert collect in text
@@ -1006,15 +1056,20 @@ def test_core_scripts_use_mkdir_p_for_known_task_directories():
 def test_all_entrypoints_create_workspace_dir_before_cd():
     entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
     assert entrypoints, "No entrypoint scripts were found."
+    util_text = _read_text(WORKFLOW_DIR / "support" / "gg_util.sh")
+    helper_body = _function_body(util_text, "gg_entrypoint_enter_workspace")
+    assert 'mkdir -p "${gg_workspace_dir}"' in helper_body
+    assert 'cd "${gg_workspace_dir}"' in helper_body
+    assert helper_body.index('mkdir -p "${gg_workspace_dir}"') < helper_body.index('cd "${gg_workspace_dir}"')
     for script in entrypoints:
         text = _read_text(script)
-        mkdir_token = 'mkdir -p "${dir_pg}"'
-        cd_token = 'cd "${dir_pg}"'
+        mkdir_token = 'mkdir -p "${gg_workspace_dir}"'
+        cd_token = 'cd "${gg_workspace_dir}"'
+        if "gg_entrypoint_enter_workspace" in text:
+            continue
         assert mkdir_token in text, f"Missing workspace mkdir guard in {script}"
         assert cd_token in text, f"Missing workspace cd in {script}"
-        assert text.index(mkdir_token) < text.index(cd_token), (
-            f"Workspace mkdir must come before cd in {script}"
-        )
+        assert text.index(mkdir_token) < text.index(cd_token), f"Workspace mkdir must come before cd in {script}"
 
 
 def test_genome_evolution_core_quotes_orthogroup_iq2mc_and_busco_summary_options():
@@ -1069,7 +1124,7 @@ def test_genome_evolution_core_quotes_orthogroup_iq2mc_and_busco_summary_options
     assert '--mcmc-iter "${mcmc_burnin},${mcmc_sampfreq},${mcmc_nsample}"' in iq2mc_block
     assert '-T "${NSLOTS}"' in iq2mc_block
 
-    busco_summary_start = text.index('python "${dir_script}/collect_common_BUSCO_genes.py" \\')
+    busco_summary_start = text.index('python "${gg_support_dir}/collect_common_BUSCO_genes.py" \\')
     busco_summary_end = text.index('--outfile "tmp.busco_summary_table.tsv"', busco_summary_start) + len('--outfile "tmp.busco_summary_table.tsv"')
     busco_summary_block = text[busco_summary_start:busco_summary_end]
     assert "--busco_outdir ${dir_species_busco_full}" not in busco_summary_block

@@ -543,14 +543,36 @@ def create_pdf(text, filename):
     # Save the PDF
     c.save()
 
+
+def resolve_workspace_dir(workspace_dir_arg):
+    if workspace_dir_arg not in ('', 'auto'):
+        return os.path.realpath(workspace_dir_arg)
+
+    cwd = os.getcwd()
+    if os.path.isdir(os.path.join(cwd, 'input')) or os.path.isdir(os.path.join(cwd, 'output')):
+        return os.path.realpath(cwd)
+
+    workspace_candidate = os.path.join(cwd, 'workspace')
+    if os.path.isdir(os.path.join(workspace_candidate, 'input')) or os.path.isdir(os.path.join(workspace_candidate, 'output')):
+        return os.path.realpath(workspace_candidate)
+
+    return os.path.realpath(workspace_candidate)
+
+
+def resolve_path_arg(path_arg, workspace_dir, *relative_parts):
+    if path_arg not in ('', 'auto'):
+        return os.path.realpath(path_arg)
+    return os.path.realpath(os.path.join(workspace_dir, *relative_parts))
+
 if __name__ == '__main__':
     print(f'{datetime.datetime.now()}: {__file__} started.', flush=True)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dir_orthogroup', metavar='PATH', default='../workspace/output/orthogroup', type=str, help='')
-    parser.add_argument('--dir_orthofinder', metavar='PATH', default='../workspace/output/orthofinder', type=str, help='')
-    parser.add_argument('--dir_out', metavar='PATH', default='.', type=str, help='')
-    parser.add_argument('--file_trait', metavar='PATH', default='.', type=str, help='')
+    parser.add_argument('--workspace-dir', metavar='PATH', default='auto', type=str, help='')
+    parser.add_argument('--dir_orthogroup', metavar='PATH', default='auto', type=str, help='')
+    parser.add_argument('--dir_orthofinder', metavar='PATH', default='auto', type=str, help='')
+    parser.add_argument('--dir_out', metavar='PATH', default='auto', type=str, help='')
+    parser.add_argument('--file_trait', metavar='PATH', default='auto', type=str, help='')
     parser.add_argument('--ncpu', metavar='INT', default=2, type=int, help='Number of CPUs to use.')
     parser.add_argument('--arity_range', metavar='STR', default='3-10', type=str,
                         help='Hyphen-separated range of arity (K).')
@@ -576,8 +598,11 @@ if __name__ == '__main__':
     min_OCNany2spe = args.min_OCNany2spe
     min_omegaCany2spe = args.min_omegaCany2spe
     min_OCNCoD = args.min_OCNCoD
-    dir_og = os.path.realpath(args.dir_orthogroup)
-    dir_of = os.path.realpath(args.dir_orthofinder)
+    workspace_dir = resolve_workspace_dir(args.workspace_dir)
+    dir_og = resolve_path_arg(args.dir_orthogroup, workspace_dir, 'output', 'orthogroup')
+    dir_of = resolve_path_arg(args.dir_orthofinder, workspace_dir, 'output', 'orthofinder')
+    args.dir_out = resolve_path_arg(args.dir_out, workspace_dir, 'output', 'csubst_site')
+    args.file_trait = resolve_path_arg(args.file_trait, workspace_dir, 'input', 'species_trait', 'species_trait.tsv')
     db_file = os.path.join(dir_og, 'gg_orthogroup.db')
     arity_min = int(args.arity_range.split('-')[0])
     arity_max = int(args.arity_range.split('-')[1])

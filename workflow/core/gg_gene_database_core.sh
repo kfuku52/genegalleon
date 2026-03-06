@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+gg_core_bootstrap="/script/support/gg_core_bootstrap.sh"
+if [[ ! -s "${gg_core_bootstrap}" ]]; then
+  gg_core_bootstrap="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../support/gg_core_bootstrap.sh"
+fi
+# shellcheck disable=SC1090
+source "${gg_core_bootstrap}"
+unset gg_core_bootstrap
+
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_gene_database_entrypoint.sh.
 ### End: Job-supplied configuration ###
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
-dir_pg="/workspace"
-dir_script="/script/support"
-source "${dir_script}/gg_util.sh" # Load utility functions
-gg_source_home_bashrc
-gg_prepare_cmd_runtime "${dir_pg}" "base" 1 1
+gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 
-file_orthogroup_db="${dir_pg_output}/orthogroup/gg_orthogroup.db"
+file_orthogroup_db="${gg_workspace_output_dir}/orthogroup/gg_orthogroup.db"
 
 enable_all_run_flags_for_debug_mode
 
@@ -29,7 +33,7 @@ if [[ ${run_database_prep} -eq 1 ]]; then
       fi
     done
     if [[ ${missing_input} -eq 0 ]]; then
-	      python "${dir_script}/generate_orthogroup_database.py" \
+	      python "${gg_support_dir}/generate_orthogroup_database.py" \
 	      --overwrite 1 \
 	      --dbpath "${file_orthogroup_db}" \
 	      --dir_stat_tree "$(dirname "${file_orthogroup_db}")/stat_tree" \

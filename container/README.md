@@ -135,7 +135,11 @@ IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 OUT=genegalleon_20260211_amd.s
 Inside built container:
 
 ```bash
-source /home/.bashrc
+if command -v micromamba >/dev/null 2>&1; then
+  eval "$(micromamba shell hook --shell bash)"
+elif [[ -f /opt/conda/etc/profile.d/conda.sh ]]; then
+  source /opt/conda/etc/profile.d/conda.sh
+fi
 conda activate base
 hyphy --version
 iqtree --version
