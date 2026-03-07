@@ -177,7 +177,11 @@ case "${IMAGE_SOURCE}" in
     echo "[gg_container_build] skipping local Docker build and using published image ${IMAGE}:${TAG}."
     ;;
   auto)
-    if docker_buildx_available; then
+    if [[ "${BUILD_SIF}" == "1" ]] && image_looks_remote "${IMAGE}"; then
+      resolved_image_source="public"
+      echo "[gg_container_build] IMAGE points at a registry image; skipping local Docker build."
+      echo "[gg_container_build] using Apptainer/Singularity to pull docker://${IMAGE}:${TAG} directly."
+    elif docker_buildx_available; then
       echo "[gg_container_build] step 1/2: docker buildx build"
       (
         cd "${repo_root}"
@@ -195,7 +199,7 @@ case "${IMAGE_SOURCE}" in
         resolved_image_source="public"
         echo "[gg_container_build] docker buildx not found; default local image cannot be built on this host."
         IMAGE="${FALLBACK_REMOTE_IMAGE}"
-        if [[ "${tag_was_default}" == "1" ]]; then
+        if [[ "${tag_was_default}" == "1" || "${TAG}" == "${LOCAL_TAG_DEFAULT}" ]]; then
           TAG="${FALLBACK_REMOTE_TAG}"
         fi
         echo "[gg_container_build] falling back to published image ${IMAGE}:${TAG}."

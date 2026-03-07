@@ -70,7 +70,8 @@ save_pgls_plot = function(df_stat, font_size = 8, pval_line = 0.05) {
     theme_bw() +
     theme(
       axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
-      legend.position = c(0.98, 0.98),
+      legend.position = "inside",
+      legend.position.inside = c(0.98, 0.98),
       legend.justification = c(0.98, 0.98),
       legend.direction = "horizontal",
       legend.box = "horizontal",
@@ -84,7 +85,8 @@ save_pgls_plot = function(df_stat, font_size = 8, pval_line = 0.05) {
     theme_bw() +
     theme(
       axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
-      legend.position = c(0.98, 0.98),
+      legend.position = "inside",
+      legend.position.inside = c(0.98, 0.98),
       legend.justification = c(0.98, 0.98),
       legend.direction = "horizontal",
       legend.box = "horizontal",
@@ -98,7 +100,8 @@ save_pgls_plot = function(df_stat, font_size = 8, pval_line = 0.05) {
     theme_bw() +
     theme(
       axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
-      legend.position = c(0.98, 0.98),
+      legend.position = "inside",
+      legend.position.inside = c(0.98, 0.98),
       legend.justification = c(0.98, 0.98),
       legend.direction = "horizontal",
       legend.box = "horizontal",

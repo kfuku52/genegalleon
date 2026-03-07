@@ -177,7 +177,8 @@ add_node_points = function(g, args) {
     theme(
         legend.title = element_text(size=args[['font_size']]),
         legend.text = element_text(size=args[['font_size']]),
-        legend.position = c(0, 1), 
+        legend.position = "inside",
+        legend.position.inside = c(0, 1),
         legend.justification = c(0, 1), 
         legend.background = element_rect(colour=NA, fill=NA),
         legend.key.size=unit(0.4, 'lines')

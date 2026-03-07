@@ -38,6 +38,43 @@ exit 127
     return f"{bin_dir}{os.pathsep}{os.environ['PATH']}", runtime_log
 
 
+def _prepare_stubbed_path_with_buildx(tmp_path: Path, runtime_name: str) -> tuple[str, Path, Path]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    runtime_log = tmp_path / "runtime.log"
+    docker_log = tmp_path / "docker.log"
+
+    _write_executable(
+        bin_dir / runtime_name,
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "{runtime_log}"
+if [[ "$1" == "build" ]]; then
+  touch "$2"
+fi
+""",
+    )
+    _write_executable(
+        bin_dir / "docker",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "{docker_log}"
+if [[ "$1" == "buildx" && "$2" == "ls" ]]; then
+  exit 0
+fi
+if [[ "$1" == "buildx" && "$2" == "inspect" ]]; then
+  printf '%s\\n' 'Driver: docker'
+  exit 0
+fi
+if [[ "$1" == "buildx" && "$2" == "build" ]]; then
+  exit 0
+fi
+exit 0
+""",
+    )
+    return f"{bin_dir}{os.pathsep}{os.environ['PATH']}", runtime_log, docker_log
+
+
 def _run_entrypoint(tmp_path: Path, runtime_name: str, extra_env: dict[str, str] | None = None):
     path_value, runtime_log = _prepare_stubbed_path(tmp_path, runtime_name)
     env = os.environ.copy()
@@ -55,6 +92,25 @@ def _run_entrypoint(tmp_path: Path, runtime_name: str, extra_env: dict[str, str]
         check=False,
     )
     return completed, runtime_log, Path(env["OUT"])
+
+
+def _run_entrypoint_with_buildx(tmp_path: Path, runtime_name: str, extra_env: dict[str, str] | None = None):
+    path_value, runtime_log, docker_log = _prepare_stubbed_path_with_buildx(tmp_path, runtime_name)
+    env = os.environ.copy()
+    env["PATH"] = path_value
+    env["OUT"] = str(tmp_path / "genegalleon.sif")
+    env["BUILD_SIF"] = "1"
+    if extra_env:
+        env.update(extra_env)
+    completed = subprocess.run(
+        ["bash", str(ENTRYPOINT)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    return completed, runtime_log, docker_log, Path(env["OUT"])
 
 
 def test_container_build_entrypoint_uses_public_image_without_docker_with_apptainer(tmp_path: Path):
@@ -107,6 +163,43 @@ def test_container_build_entrypoint_falls_back_to_official_registry_image_when_d
     assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
         f"build {out_path} docker://ghcr.io/kfuku52/genegalleon:latest"
     ]
+
+
+def test_container_build_entrypoint_falls_back_to_latest_when_local_default_tag_is_explicit(tmp_path: Path):
+    completed, runtime_log, out_path = _run_entrypoint(
+        tmp_path,
+        "apptainer",
+        {
+            "TAG": "dev",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert out_path.is_file()
+    assert "falling back to published image ghcr.io/kfuku52/genegalleon:latest" in completed.stdout
+    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
+        f"build {out_path} docker://ghcr.io/kfuku52/genegalleon:latest"
+    ]
+
+
+def test_container_build_entrypoint_prefers_public_pull_for_remote_image_in_auto_mode_even_with_buildx(tmp_path: Path):
+    completed, runtime_log, docker_log, out_path = _run_entrypoint_with_buildx(
+        tmp_path,
+        "apptainer",
+        {
+            "IMAGE": "ghcr.io/example/genegalleon",
+            "TAG": "20260306-test",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert out_path.is_file()
+    assert "[gg_container_build] resolved_image_source=public" in completed.stdout
+    assert "skipping local Docker build" in completed.stdout
+    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
+        f"build {out_path} docker://ghcr.io/example/genegalleon:20260306-test"
+    ]
+    assert not docker_log.exists()
 
 
 def test_container_build_entrypoint_uses_native_local_build_without_docker(tmp_path: Path):
