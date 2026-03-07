@@ -71,7 +71,8 @@ fi
 dir_transcriptome_assembly_output="${gg_workspace_output_dir}/transcriptome_assembly"
 dir_input_fastq="${gg_workspace_input_dir}/species_rnaseq"
 dir_input_sra_list="${gg_workspace_input_dir}/query_sra_id"
-dir_amalgkit_metadata="${gg_workspace_input_dir}/amalgkit_metadata"
+dir_input_amalgkit_metadata="${gg_workspace_input_dir}/amalgkit_metadata"
+dir_generated_amalgkit_metadata="${dir_transcriptome_assembly_output}/amalgkit_metadata"
 dir_amalgkit_quant="${dir_transcriptome_assembly_output}/amalgkit_quant"
 
 if [[ ${mode_fastq} -eq 1 && ! -d "${dir_input_fastq}" ]]; then
@@ -100,14 +101,14 @@ if [[ ${mode_sraid} -eq 1 ]]; then
   fi
 fi
 if [[ ${mode_metadata} -eq 1 ]]; then
-  if [[ ! -d "${dir_amalgkit_metadata}" ]]; then
-    echo "Missing mode_metadata input directory: ${dir_amalgkit_metadata}"
+  if [[ ! -d "${dir_input_amalgkit_metadata}" ]]; then
+    echo "Missing mode_metadata input directory: ${dir_input_amalgkit_metadata}"
     mode_metadata=0
   else
     metadata_mode_files=()
-    mapfile -t metadata_mode_files < <(find "${dir_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)
+    mapfile -t metadata_mode_files < <(find "${dir_input_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)
     if [[ ${#metadata_mode_files[@]} -eq 0 ]]; then
-      echo "Input directory is empty for mode_metadata: ${dir_amalgkit_metadata}"
+      echo "Input directory is empty for mode_metadata: ${dir_input_amalgkit_metadata}"
       mode_metadata=0
     fi
   fi
@@ -184,14 +185,14 @@ elif [[ ${mode_sraid} -eq 1 ]]; then
   fi
 elif [[ ${mode_metadata} -eq 1 ]]; then
   echo 'Mode: metadata input'
-  if [[ ! -d "${dir_amalgkit_metadata}" ]]; then
-    echo "Input directory does not exist: ${dir_amalgkit_metadata}"
+  if [[ ! -d "${dir_input_amalgkit_metadata}" ]]; then
+    echo "Input directory does not exist: ${dir_input_amalgkit_metadata}"
     exit 1
   fi
   files=()
-  mapfile -t files < <(find "${dir_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)
+  mapfile -t files < <(find "${dir_input_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)
   if [[ ${#files[@]} -eq 0 ]]; then
-    echo "Input directory is empty: ${dir_amalgkit_metadata}"
+    echo "Input directory is empty: ${dir_input_amalgkit_metadata}"
     exit 1
   fi
   id=$((SGE_TASK_ID-1))
@@ -212,7 +213,13 @@ fi
 dir_tmp="${dir_transcriptome_assembly_output}/tmp/${SGE_TASK_ID}_${sp_ub}"
 dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
 dir_amalgkit_download_dir="${gg_workspace_downloads_dir}/amalgkit_downloads"
-file_amalgkit_metadata="${dir_amalgkit_metadata}/${sp_ub}_metadata.tsv"
+file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"
+file_generated_amalgkit_metadata="${dir_generated_amalgkit_metadata}/${sp_ub}_metadata.tsv"
+if [[ ${mode_metadata} -eq 1 ]]; then
+  file_amalgkit_metadata="${file_input_amalgkit_metadata}"
+else
+  file_amalgkit_metadata="${file_generated_amalgkit_metadata}"
+fi
 file_amalgkit_getfastq_safely_removed_flag=${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}_safely_removed.txt
 file_isoform="${dir_transcriptome_assembly_output}/assembled_transcripts_with_isoforms/${sp_ub}_isoform.fa.gz"
 file_longestcds="${dir_transcriptome_assembly_output}/longest_cds/${sp_ub}_longestCDS.fa.gz"
@@ -1037,7 +1044,7 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
 
   Rscript "${gg_support_dir}/multispecies_transcriptome_summary.r" \
   --dir_assembly_stat="$(dirname "${file_assembly_stat}")" \
-  --dir_amalgkit_metadata="${dir_amalgkit_metadata}" \
+  --dir_amalgkit_metadata="${dir_input_amalgkit_metadata}" \
   --dir_amalgkit_merge="$(dirname "$(dirname "${file_amalgkit_merge_tpm}")")" \
   --dir_busco_isoform="$(dirname "${file_busco_full_cdna_isoforms}")" \
   --dir_busco_longest_cds="$(dirname "${file_busco_full_longest_cds}")" \

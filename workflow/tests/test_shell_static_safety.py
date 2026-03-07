@@ -741,6 +741,14 @@ def test_gg_trigger_versions_dump_reuses_one_log_per_container():
     assert 'timestamp=$(date' not in body
 
 
+def test_gg_trigger_versions_dump_does_not_print_full_log_contents():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "gg_trigger_versions_dump")
+    assert 'cat "${log_file}"' not in body
+    assert 'cat "${failed_log_file}"' not in body
+
+
 def test_gg_prepare_cds_fasta_stream_pipes_to_cdskit_pad():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
@@ -845,6 +853,17 @@ def test_download_entrypoints_use_shared_lock_helper_for_busco_and_ete():
     ete_body = _function_body(text, "ensure_ete_taxonomy_db")
     assert 'gg_array_download_once "${lock_file}" "${runtime_busco_lineage}"' in busco_body
     assert 'gg_array_download_once "${lock_file}" "${db_file}" "ETE taxonomy DB"' in ete_body
+
+
+def test_ete_taxonomy_helper_precreates_ete4_cache_dirs():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    set_env_body = _function_body(text, "gg_set_taxonomy_cache_env")
+    locked_body = _function_body(text, "_ensure_ete_taxonomy_db_locked")
+    ensure_body = _function_body(text, "ensure_ete_taxonomy_db")
+    assert 'ensure_dir "${dir_taxonomy}/ete4"' in set_env_body
+    assert 'os.makedirs(os.path.join(cache_dir, "ete4"), exist_ok=True)' in locked_body
+    assert 'ensure_dir "${dir_taxonomy}/ete4"' in ensure_body
 
 
 def test_latest_jaspar_lock_uses_stale_marker_recovery_and_mkdir_fallback():
@@ -1217,6 +1236,14 @@ def test_transcriptome_core_sraid_metadata_filter_handles_zero_match_explicitly(
     assert "No metadata rows matched species" in text
 
 
+def test_transcriptome_core_requires_taxid_for_contam_filter():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    assert 'effective_amalgkit_contam_filter=' not in text
+    assert 'Continuing with effective_amalgkit_contam_filter=no.' not in text
+    assert 'amalgkit_contam_filter=yes requires a taxid column in metadata: ${file_amalgkit_metadata}. Exiting.' in text
+
+
 def test_genome_annotation_core_quotes_known_path_sensitive_options():
     script = CORE_DIR / "gg_genome_annotation_core.sh"
     text = _read_text(script)
@@ -1395,6 +1422,16 @@ def test_gene_evolution_core_uses_exact_header_match_for_missing_query_gene_dete
     assert "if ! awk -v gene=\"${gene_name}\" '" in text
     assert "sub(/[[:space:]].*$/, \"\", header)" in text
     assert "if (header == gene)" in text
+
+
+def test_gene_evolution_core_filters_empty_translated_records_before_diamond_makedb():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    assert "filter_translated_fasta_for_diamond() {" in text
+    assert 'gsub(/\\*/, "", $0)' in text
+    assert 'if ($0 != "") {' in text
+    assert 'printf("Dropped %d translated protein records with empty sequence after stop-codon removal.\\n", dropped) > "/dev/stderr"' in text
+    assert text.count('| filter_translated_fasta_for_diamond \\') >= 2
 
 
 def test_transcriptome_core_quotes_mmseqs_createdb_input_path():
@@ -1833,6 +1870,28 @@ def test_gene_evolution_core_uses_array_optional_args_for_iqtree_and_csubst():
         assert token in text, f"Missing array-based optional args token: {token}"
 
 
+def test_gene_evolution_core_disables_initial_ufboot_when_fast_mode_is_enabled():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    assert 'if [[ ${num_seq} -gt ${iqtree_fast_mode_gt} ]]; then' in text
+    assert 'if [[ ${use_ufboot} -eq 1 ]]; then' in text
+    assert 'Disabling IQ-TREE UFBOOT because fast mode is enabled for large alignments (${num_seq} > ${iqtree_fast_mode_gt}).' in text
+    assert 'other_iqtree_params=()' in text
+    assert 'file_tree="${og_id}.treefile"' in text
+    assert 'other_iqtree_params+=( --fast )' in text
+
+
+def test_gene_evolution_core_keeps_generax_ufboot_task_free_of_fast_flag():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    assert 'Skipping IQ-TREE --fast in UFBOOT-on-GeneRax mode because the options are incompatible.' in text
+
+    ufboot_block_start = text.index('task="IQ-TREE UFBOOT on GeneRax topology"')
+    ufboot_block_end = text.index('build_iqtree_mem_args', ufboot_block_start)
+    ufboot_block = text[ufboot_block_start:ufboot_block_end]
+    assert 'other_iqtree_params+=( --fast )' not in ufboot_block
+
+
 def test_no_pipe_to_grep_q_in_core_and_support_scripts():
     scripts = sorted(CORE_DIR.glob("*.sh")) + sorted((WORKFLOW_DIR / "support").glob("*.sh"))
     pattern = re.compile(r"\|\s*(?:z?grep)\s+-q|\|\s*grep\s+-Fq|\|\s*grep\s+-Fxq")
@@ -2166,12 +2225,12 @@ def test_transcriptome_core_guards_sge_task_id_range_before_array_indexing():
     assert 'mapfile -t files_fastq < <(find "${dir_species_fastq}" -maxdepth 1 -type f ! -name \'.*\' \\( -name "*.fq" -o -name "*.fastq" -o -name "*.fq.gz" -o -name "*.fastq.gz" \\) | sort)' in text
     assert 'mapfile -t dirs < <(find "${dir_input_fastq}" -mindepth 1 -maxdepth 1 -type d ! -name \'.*\' | sort)' in text
     assert 'mapfile -t sra_mode_files < <(find "${dir_input_sra_list}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
-    assert 'mapfile -t metadata_mode_files < <(find "${dir_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
+    assert 'mapfile -t metadata_mode_files < <(find "${dir_input_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
     assert 'mapfile -t files < <(find "${dir_input_sra_list}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
-    assert 'mapfile -t files < <(find "${dir_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
+    assert 'mapfile -t files < <(find "${dir_input_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
     assert re.search(r'^[ \t]*dirs=\( "\$\{dir_input_fastq\}"/\* \)', text, re.MULTILINE) is None
     assert re.search(r'^[ \t]*files=\( "\$\{dir_input_sra_list\}"/\* \)', text, re.MULTILINE) is None
-    assert re.search(r'^[ \t]*files=\( "\$\{dir_amalgkit_metadata\}"/\* \)', text, re.MULTILINE) is None
+    assert re.search(r'^[ \t]*files=\( "\$\{dir_input_amalgkit_metadata\}"/\* \)', text, re.MULTILINE) is None
     assert 'files_fastq=( "${dir_species_fastq}"/* )' not in text
     assert 'if [[ ! "${SGE_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${SGE_TASK_ID} -lt 1 ]]; then' in text
     assert 'if [[ ${#dirs[@]} -eq 0 ]]; then' in text
@@ -2192,6 +2251,20 @@ def test_transcriptome_core_guards_sge_task_id_range_before_array_indexing():
     metadata_use = 'file_metadata="${files[${id}]}"'
     assert metadata_use in text
     assert text.rindex(metadata_guard) < text.index(metadata_use)
+
+
+def test_transcriptome_core_stores_generated_metadata_under_output_dir():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+
+    assert 'dir_input_amalgkit_metadata="${gg_workspace_input_dir}/amalgkit_metadata"' in text
+    assert 'dir_generated_amalgkit_metadata="${dir_transcriptome_assembly_output}/amalgkit_metadata"' in text
+    assert 'file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"' in text
+    assert 'file_generated_amalgkit_metadata="${dir_generated_amalgkit_metadata}/${sp_ub}_metadata.tsv"' in text
+    assert 'if [[ ${mode_metadata} -eq 1 ]]; then' in text
+    assert 'file_amalgkit_metadata="${file_input_amalgkit_metadata}"' in text
+    assert 'file_amalgkit_metadata="${file_generated_amalgkit_metadata}"' in text
+    assert 'file_amalgkit_metadata="${dir_amalgkit_metadata}/${sp_ub}_metadata.tsv"' not in text
 
 
 def test_transcriptome_core_guards_getfastq_outputs_before_assembly_and_quant():

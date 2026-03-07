@@ -39,6 +39,8 @@ done < <(
   {
     rg -n "conda activate [A-Za-z0-9_.-]+" "${repo_root}/workflow/core"/gg_*_core.sh \
       | sed -E 's/.*conda activate ([A-Za-z0-9_.-]+).*/\1/' || true
+    rg -n 'gg_bootstrap_core_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"[A-Za-z0-9_.-]+"' "${repo_root}/workflow/core"/gg_*_core.sh \
+      | sed -E 's/.*gg_bootstrap_core_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"([A-Za-z0-9_.-]+)".*/\1/' || true
     rg -n 'gg_prepare_cmd_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"[A-Za-z0-9_.-]+"' "${repo_root}/workflow/core"/gg_*_core.sh \
       | sed -E 's/.*gg_prepare_cmd_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"([A-Za-z0-9_.-]+)".*/\1/' || true
   } \

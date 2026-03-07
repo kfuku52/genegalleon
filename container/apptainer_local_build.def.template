@@ -1,0 +1,208 @@
+Bootstrap: docker
+From: mambaorg/micromamba:noble
+
+%files
+    @@STAGING_ROOT@@/env /opt/pg/env
+    @@STAGING_ROOT@@/spec /opt/pg/spec
+    @@STAGING_ROOT@@/testdata /opt/pg/testdata
+    @@STAGING_ROOT@@/scripts /opt/pg/scripts
+
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export MAMBA_ROOT_PREFIX=/opt/conda
+    export PATH=/opt/conda/bin:/usr/local/bin:${PATH}
+    export R_LIBS_SITE=/opt/conda/lib/R/library
+
+%labels
+    org.opencontainers.image.title GeneGalleon native build scaffold
+    org.opencontainers.image.description Native Apptainer or Singularity build scaffold for GeneGalleon
+    org.opencontainers.image.source https://github.com/kfuku52/genegalleon
+    org.opencontainers.image.created @@BUILD_DATE@@
+    org.opencontainers.image.revision @@VCS_REF@@
+    io.genegalleon.local_image_ref @@LOCAL_IMAGE_REF@@
+    io.genegalleon.local_image_tag @@LOCAL_IMAGE_TAG@@
+
+%post -c /bin/bash
+    set -euo pipefail
+
+    export DEBIAN_FRONTEND=noninteractive
+    export MAMBA_ROOT_PREFIX=/opt/conda
+    export PATH=/opt/conda/bin:/usr/local/bin:${PATH}
+    export R_LIBS_SITE=/opt/conda/lib/R/library
+
+    target_arch="@@TARGET_ARCH@@"
+    notung_download_page="@@NOTUNG_DOWNLOAD_PAGE@@"
+    kfu52_repo_ref="@@KFU52_REPO_REF@@"
+    kfu52_amalgkit_auto_select_ref="@@KFU52_AMALGKIT_AUTO_SELECT_REF@@"
+    kfu52_amalgkit_branch_candidates="@@KFU52_AMALGKIT_BRANCH_CANDIDATES@@"
+    kfu52_amalgkit_repo_ref="@@KFU52_AMALGKIT_REPO_REF@@"
+    kftools_repo_url="@@KFTOOLS_REPO_URL@@"
+    rkftools_repo_url="@@RKFTOOLS_REPO_URL@@"
+    radte_repo_url="@@RADTE_REPO_URL@@"
+    kftools_repo_ref_override="@@KFTOOLS_REPO_REF@@"
+    rkftools_repo_ref_override="@@RKFTOOLS_REPO_REF@@"
+    radte_repo_ref="@@RADTE_REPO_REF@@"
+
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archives/partial/*
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        augustus \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        default-jre-headless \
+        fastp \
+        gawk \
+        gfortran \
+        git \
+        less \
+        libboost-dev \
+        libbpp-phyl-dev \
+        libcurl4-openssl-dev \
+        libeigen3-dev \
+        libssl-dev \
+        libxml2-dev \
+        parallel \
+        pigz \
+        perl \
+        pkg-config \
+        procps \
+        rsync \
+        tini \
+        unzip \
+        wget \
+        zip
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+    chmod +x /opt/pg/scripts/*.sh
+
+    export USE_DEFAULTS_CHANNEL=0 STRICT_CHANNEL_PRIORITY=1 MAMBA_NO_LOW_SPEED_LIMIT=1
+
+    base_required="/opt/pg/env/base.required.txt"
+    if [[ -f "/opt/pg/env/base.${target_arch}.required.txt" ]]; then
+        base_required="/opt/pg/env/base.${target_arch}.required.txt"
+    fi
+    optional_file="/opt/pg/env/base.${target_arch}.optional.txt"
+    if [[ ! -f "${optional_file}" ]]; then
+        optional_file="/dev/null"
+    fi
+    reconciled_required="/tmp/pg.base.required.txt"
+    sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
+        "${base_required}" /opt/pg/env/base.r.required.txt | awk '!seen[$0]++' > "${reconciled_required}"
+
+    /opt/pg/scripts/install_env.sh base "${base_required}" "${optional_file}" python=3.12
+    /opt/pg/scripts/ensure_generax_stable.sh base
+    micromamba install -y --retry-clean-cache --repodata-ttl 3600 -n base -c conda-forge -c bioconda pymol-open-source
+    micromamba run -n base pip install --no-cache-dir ete4
+    micromamba run -n base python -c "import ete4"
+    /opt/pg/scripts/ensure_iq2mc_toolchain.sh base
+    /opt/pg/scripts/install_env.sh base "${reconciled_required}" /opt/pg/env/base.r.optional.txt r-base
+    /opt/pg/scripts/install_nonconda_fallbacks.sh
+    rm -f "${reconciled_required}"
+
+    runtime_required="/opt/pg/spec/required_commands.tsv"
+    if [[ -f "/opt/pg/spec/required_commands.${target_arch}.tsv" ]]; then
+        runtime_required="/opt/pg/spec/required_commands.${target_arch}.tsv"
+    fi
+    runtime_optional="/opt/pg/spec/optional_commands.${target_arch}.tsv"
+    if [[ ! -f "${runtime_optional}" ]]; then
+        runtime_optional="/dev/null"
+    fi
+
+    kftools_repo_ref="${kftools_repo_ref_override:-${kfu52_repo_ref}}"
+    rkftools_repo_ref="${rkftools_repo_ref_override:-${kfu52_repo_ref}}"
+
+    KFU52_REPO_REF="${kfu52_repo_ref}" \
+    KFU52_AMALGKIT_AUTO_SELECT_REF="${kfu52_amalgkit_auto_select_ref}" \
+    KFU52_AMALGKIT_BRANCH_CANDIDATES="${kfu52_amalgkit_branch_candidates}" \
+    KFU52_AMALGKIT_REPO_REF="${kfu52_amalgkit_repo_ref}" \
+        /opt/pg/scripts/ensure_kfuku52_tools_latest.sh base
+
+    busco_installed=0
+    for attempt in 1 2 3 4 5; do
+        if micromamba run -n base pip install "git+https://gitlab.com/ezlab/busco.git@6.0.0"; then
+            busco_installed=1
+            break
+        fi
+        echo "BUSCO install attempt ${attempt} from GitLab failed; retrying in 15s..."
+        sleep 15
+    done
+    if [[ "${busco_installed}" -ne 1 ]]; then
+        echo "BUSCO GitLab install failed after retries; trying GitHub mirror"
+        if micromamba run -n base pip install "git+https://github.com/ezlab/busco.git@6.0.0"; then
+            busco_installed=1
+        fi
+    fi
+    if [[ "${busco_installed}" -ne 1 ]]; then
+        echo "BUSCO installation failed from both GitLab and GitHub"
+        exit 1
+    fi
+
+    micromamba run -n base pip install --upgrade --force-reinstall --no-deps --no-build-isolation "git+${kftools_repo_url}@${kftools_repo_ref}"
+    /opt/pg/scripts/install_helvetica_compat_font.sh base
+
+    rm -rf /tmp/rkftools
+    git clone --depth 1 --branch "${rkftools_repo_ref}" "${rkftools_repo_url}" /tmp/rkftools
+    micromamba run -n base R CMD INSTALL /tmp/rkftools
+    rm -rf /tmp/rkftools
+
+    rm -rf /tmp/radte
+    if [[ -n "${radte_repo_ref}" ]]; then
+        git clone --depth 1 --branch "${radte_repo_ref}" "${radte_repo_url}" /tmp/radte
+    else
+        git clone --depth 1 "${radte_repo_url}" /tmp/radte
+    fi
+    if [[ ! -s /tmp/radte/radte.r ]]; then
+        echo "RADTE script was not found in ${radte_repo_url}"
+        exit 1
+    fi
+    install -m 0755 /tmp/radte/radte.r /usr/local/bin/radte.r
+    rm -rf /tmp/radte
+
+    /opt/pg/scripts/validate_runtime.sh \
+        --required "${runtime_required}" \
+        --optional "${runtime_optional}" \
+        --report "/opt/pg/logs/runtime_validation_${target_arch}.tsv"
+    micromamba clean -i -l -y
+
+    mkdir -p /home /usr/local/db/Pfam_LE /usr/local/db/jaspar /opt/pg/logs /opt/conda/envs /workspace
+    ln -sfn /opt/conda /opt/conda/envs/base
+    cat > /home/.bashrc <<'EOF_BASHRC'
+export MAMBA_ROOT_PREFIX=/opt/conda
+eval "$(micromamba shell hook --shell bash)"
+conda() { micromamba "$@"; }
+export PATH=/usr/local/bin:${PATH}
+EOF_BASHRC
+    cp /home/.bashrc /root/.bashrc
+
+    notung_url="$("/opt/pg/scripts/resolve_notung_latest.sh" "${notung_download_page}")"
+    tmp_zip="$(mktemp /tmp/notung.XXXXXX.zip)"
+    tmp_dir="$(mktemp -d /tmp/notung.XXXXXX)"
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "${notung_url}" -o "${tmp_zip}"
+    unzip -q "${tmp_zip}" -d "${tmp_dir}"
+    notung_jar="$(find "${tmp_dir}" -type f -name 'Notung-2.9*.jar' | sort -V | tail -n 1)"
+    if [[ -z "${notung_jar}" ]]; then
+        echo "Notung jar was not found in ${notung_url}"
+        exit 1
+    fi
+    cp "${notung_jar}" /usr/local/bin/Notung.jar
+    chmod 0755 /usr/local/bin/Notung.jar
+    rm -f "${tmp_zip}"
+    rm -rf "${tmp_dir}"
+
+    bash /opt/pg/scripts/post_install_notes.sh "${target_arch}"
+
+    env_file="${APPTAINER_ENVIRONMENT:-${SINGULARITY_ENVIRONMENT:-}}"
+    if [[ -n "${env_file}" ]]; then
+        {
+            echo 'export DEBIAN_FRONTEND=noninteractive'
+            echo 'export MAMBA_ROOT_PREFIX=/opt/conda'
+            echo 'export PATH=/opt/conda/bin:/usr/local/bin:${PATH}'
+            echo 'export R_LIBS_SITE=/opt/conda/lib/R/library'
+        } >> "${env_file}"
+    fi
+
+%runscript
+    exec bash "$@"

@@ -642,6 +642,7 @@ gg_set_taxonomy_cache_env() {
   dir_taxonomy=$(workspace_taxonomy_root "${gg_workspace_dir}")
   ensure_dir "${dir_taxonomy}"
   ensure_dir "${dir_taxonomy}/ete"
+  ensure_dir "${dir_taxonomy}/ete4"
   export ETE_DATA_HOME="${dir_taxonomy}"
   export ETE_CONFIG_HOME="${dir_taxonomy}"
   export XDG_DATA_HOME="${dir_taxonomy}"
@@ -698,6 +699,7 @@ candidate_cache_dirs.append(os.path.join(home, ".config", "ete"))
 
 for cache_dir in dict.fromkeys(candidate_cache_dirs):
     os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(os.path.join(cache_dir, "ete4"), exist_ok=True)
 
 def ensure_with_ete4():
     ncbiquery = importlib.import_module("ete4.ncbi_taxonomy.ncbiquery")
@@ -740,6 +742,7 @@ ensure_ete_taxonomy_db() {
   ensure_dir "${dir_db}"
   ensure_dir "${dir_taxonomy}"
   ensure_dir "${dir_taxonomy}/ete"
+  ensure_dir "${dir_taxonomy}/ete4"
   ensure_dir "$(dirname "${lock_file}")"
   export ETE_DATA_HOME="${dir_taxonomy}"
   export ETE_CONFIG_HOME="${dir_taxonomy}"
@@ -1511,7 +1514,6 @@ gg_trigger_versions_dump() {
     had_flock=1
   fi
   if [[ -s "${log_file}" ]]; then
-    cat "${log_file}"
     echo "gg_trigger_versions_dump: skipped existing ${log_file}"
     if [[ ${had_flock} -eq 1 ]]; then
       flock -u 9
@@ -1579,7 +1581,8 @@ gg_trigger_versions_dump() {
     failed_log_file="${versions_dir}/container.${container_key_hash}.versions.failed.$(date '+%Y%m%d_%H%M%S').log"
     if [[ -s "${tmp_log_file}" ]]; then
       mv_out "${tmp_log_file}" "${failed_log_file}"
-      cat "${failed_log_file}"
+    else
+      : > "${failed_log_file}"
     fi
     if [[ ${had_flock} -eq 1 ]]; then
       flock -u 9
@@ -1592,7 +1595,6 @@ gg_trigger_versions_dump() {
   if [[ -s "${tmp_log_file}" ]]; then
     mv_out "${tmp_log_file}" "${log_file}"
   fi
-  cat "${log_file}"
   if [[ ${had_flock} -eq 1 ]]; then
     flock -u 9
     exec 9>&-

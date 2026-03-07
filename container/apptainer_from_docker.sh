@@ -9,7 +9,7 @@ set -euo pipefail
 
 IMAGE=${IMAGE:-ghcr.io/example/genegalleon}
 TAG=${TAG:-dev}
-ENGINE=${ENGINE:-apptainer} # apptainer | singularity
+ENGINE=${ENGINE:-auto} # auto | apptainer | singularity
 
 build_date="$(date '+%Y%m%d')"
 host_arch="$(uname -m)"
@@ -26,10 +26,27 @@ case "${host_arch}" in
 esac
 OUT=${OUT:-genegalleon_${build_date}_${arch_tag}.sif}
 
-if ! command -v "${ENGINE}" >/dev/null 2>&1; then
-  echo "Container engine not found: ${ENGINE}"
-  exit 1
-fi
+resolve_container_engine() {
+  if [[ "${ENGINE}" == "apptainer" || "${ENGINE}" == "singularity" ]]; then
+    if command -v "${ENGINE}" >/dev/null 2>&1; then
+      echo "${ENGINE}"
+      return 0
+    fi
+    echo "Container engine not found: ${ENGINE}" >&2
+    return 1
+  fi
+  if command -v apptainer >/dev/null 2>&1; then
+    echo apptainer
+    return 0
+  fi
+  if command -v singularity >/dev/null 2>&1; then
+    echo singularity
+    return 0
+  fi
+  echo "Neither apptainer nor singularity was found on PATH." >&2
+  return 1
+}
 
-"${ENGINE}" build "${OUT}" "docker://${IMAGE}:${TAG}"
+resolved_engine="$(resolve_container_engine)"
+"${resolved_engine}" build "${OUT}" "docker://${IMAGE}:${TAG}"
 echo "Generated ${OUT}"

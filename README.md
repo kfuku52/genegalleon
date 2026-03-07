@@ -47,7 +47,7 @@ From the repository root:
 apptainer build genegalleon.sif docker://ghcr.io/kfuku52/genegalleon
 
 # Alternative: build the image and SIF locally
-IMAGE=local/genegalleon TAG=dev ./container/gg_container_build_entrypoint.sh
+IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
 ```
 
 ### 2. Run the bundled quick start
@@ -126,20 +126,43 @@ Each wrapper forwards those variables into the container environment.
 
 ## Container Build and Runtime
 
-### One-command build (Docker + SIF)
+### One-command build (local/public selectable)
 
 ```bash
-IMAGE=local/genegalleon TAG=dev ./container/gg_container_build_entrypoint.sh
+IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
 ```
 
 Defaults:
+- `IMAGE_SOURCE=auto`
 - `MODE=load`
 - `PLATFORMS`: inferred from host arch (`linux/amd64` or `linux/arm64`)
 - `OUT=./genegalleon.sif`
+- `IMAGE_SOURCE=local`: build from `container/Dockerfile` via Docker Buildx, or build a SIF natively with Apptainer/Singularity when Docker is unavailable
+- `IMAGE_SOURCE=public`: pull `docker://IMAGE:TAG` directly with Apptainer/Singularity
+- `IMAGE_SOURCE=auto`: prefer local build when Docker is available, otherwise fall back to a public image when `BUILD_SIF=1`
 
 Useful overrides:
 - `BUILD_SIF=0` to skip `.sif` conversion
-- `ENGINE=singularity` to use Singularity instead of Apptainer
+- `ENGINE=singularity` to force Singularity instead of automatic runtime detection
+- `NATIVE_BUILD_FAKEROOT=always` to force `--fakeroot` for native local builds on sites that support it
+
+Public image example:
+
+```bash
+IMAGE_SOURCE=public IMAGE=ghcr.io/kfuku52/genegalleon TAG=latest bash ./gg_container_build_entrypoint.sh
+```
+
+Native local build example on a Docker-less host:
+
+```bash
+IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
+```
+
+If your site requires explicit rootless escalation for definition-file builds, retry with:
+
+```bash
+NATIVE_BUILD_FAKEROOT=always IMAGE_SOURCE=local bash ./gg_container_build_entrypoint.sh
+```
 
 ### Use CI-published GHCR images (recommended for users)
 
@@ -279,7 +302,13 @@ Accepted forms:
 - `mode_fastq=1`
   - input: `workspace/input/species_rnaseq/GENUS_SPECIES/*.fastq.gz`
 - `mode_metadata=1`
-  - input: `workspace/input/amalgkit_metadata/GENUS_SPECIES.metadata.tsv`
+  - input: `workspace/input/amalgkit_metadata/GENUS_SPECIES_metadata.tsv`
+
+For `mode_sraid=1` and `mode_fastq=1`, auto-generated amalgkit metadata is written to:
+
+- `workspace/output/transcriptome_assembly/amalgkit_metadata/GENUS_SPECIES_metadata.tsv`
+
+This keeps `workspace/input/amalgkit_metadata` reserved for explicit `mode_metadata=1` inputs.
 
 ### Automated provider formatting helper
 

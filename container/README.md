@@ -63,21 +63,43 @@ Single-platform local test image:
 IMAGE=local/genegalleon TAG=dev PLATFORMS=linux/arm64 MODE=load ./container/buildx.sh
 ```
 
-## One-command local build (`Docker + SIF`)
+## One-command build (local/public selectable)
 
 ```bash
-chmod +x container/gg_container_build_entrypoint.sh
-IMAGE=local/genegalleon TAG=dev ./container/gg_container_build_entrypoint.sh
+IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
 ```
 
 Defaults:
+- `IMAGE_SOURCE=auto`
 - `MODE=load`
 - `PLATFORMS`: inferred from host arch (`linux/amd64` or `linux/arm64`)
 - `OUT=./genegalleon.sif`
+- `IMAGE_SOURCE=local`: build from `container/Dockerfile` via Docker Buildx, or build a SIF natively with Apptainer/Singularity when Docker is unavailable
+- `IMAGE_SOURCE=public`: pull `docker://IMAGE:TAG` directly with Apptainer/Singularity
+- `IMAGE_SOURCE=auto`: prefer local build when Docker is available, otherwise fall back to a public image when `BUILD_SIF=1`
 
 Useful overrides:
 - `BUILD_SIF=0` to skip `.sif` conversion
-- `ENGINE=singularity` to use Singularity instead of Apptainer
+- `ENGINE=singularity` to force Singularity instead of automatic runtime detection
+- `NATIVE_BUILD_FAKEROOT=always` to force `--fakeroot` for native local builds on sites that support it
+
+Public image example:
+
+```bash
+IMAGE_SOURCE=public IMAGE=ghcr.io/kfuku52/genegalleon TAG=latest bash ./gg_container_build_entrypoint.sh
+```
+
+Native local build example on a Docker-less host:
+
+```bash
+IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
+```
+
+If your site requires explicit rootless escalation for definition-file builds, retry with:
+
+```bash
+NATIVE_BUILD_FAKEROOT=always IMAGE_SOURCE=local bash ./gg_container_build_entrypoint.sh
+```
 
 ## CI publishing and reproducible tags
 

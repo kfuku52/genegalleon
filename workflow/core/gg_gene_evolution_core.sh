@@ -710,6 +710,49 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
     cds_spp+=( "$(gg_species_name_from_path "${cds_file}")" )
   done
   mapfile -t cds_spp < <(printf "%s\n" "${cds_spp[@]}" | sort -u)
+  filter_translated_fasta_for_diamond() {
+    awk '
+      BEGIN {
+        seen = 0
+        dropped = 0
+        header = ""
+        seq = ""
+      }
+      /^>/ {
+        if (seen) {
+          if (seq != "") {
+            print header
+            print seq
+          } else {
+            dropped++
+          }
+        }
+        header = $0
+        seq = ""
+        seen = 1
+        next
+      }
+      {
+        gsub(/\*/, "", $0)
+        if ($0 != "") {
+          seq = seq $0
+        }
+      }
+      END {
+        if (seen) {
+          if (seq != "") {
+            print header
+            print seq
+          } else {
+            dropped++
+          }
+        }
+        if (dropped > 0) {
+          printf("Dropped %d translated protein records with empty sequence after stop-codon removal.\n", dropped) > "/dev/stderr"
+        }
+      }
+    '
+  }
   for sp in "${cds_spp[@]}"; do
     wait_until_jobn_le ${NSLOTS}
     echo "sp: ${sp}"
@@ -774,12 +817,12 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
             if [[ ${sp_cds} =~ ".gz" ]]; then
               seqkit seq --remove-gaps --threads "${NSLOTS}" "${sp_cds}" \
               | seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${NSLOTS}" \
-              | sed '/^>/! s/\*//g' \
+              | filter_translated_fasta_for_diamond \
               > "${sp_cds_diamond_fasta}"
             else
               seqkit seq --remove-gaps --threads "${NSLOTS}" "${sp_cds}" \
               | seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${NSLOTS}" \
-              | sed '/^>/! s/\*//g' \
+              | filter_translated_fasta_for_diamond \
               > "${sp_cds_diamond_fasta}"
             fi
             if [[ "$(head -c 1 "${sp_cds_diamond_fasta}")" != '>' ]]; then
@@ -1337,16 +1380,25 @@ if [[ ! -s "${file_og_iqtree_tree}" && ${run_iqtree} -eq 1 ]]; then
 		if [[ ${run_generax} -eq 1 ]]; then
 			other_iqtree_params=()
 			file_tree="${og_id}.treefile"
+			use_ufboot=0
 			echo "run_generax=1: disabling UFBOOT in the initial IQ-TREE run. Support will be computed on the GeneRax topology."
 		else
 			other_iqtree_params=( --ufboot 1000 --bnni )
 			file_tree="${og_id}.contree"
+			use_ufboot=1
 		fi
 	else
 		other_iqtree_params=()
 		file_tree="${og_id}.treefile"
+		use_ufboot=0
 	fi
 	if [[ ${num_seq} -gt ${iqtree_fast_mode_gt} ]]; then
+	  if [[ ${use_ufboot} -eq 1 ]]; then
+	    echo "Disabling IQ-TREE UFBOOT because fast mode is enabled for large alignments (${num_seq} > ${iqtree_fast_mode_gt})."
+	    other_iqtree_params=()
+	    file_tree="${og_id}.treefile"
+	    use_ufboot=0
+	  fi
 	  other_iqtree_params+=( --fast )
 	fi
 
@@ -1717,7 +1769,7 @@ if [[ ${run_generax} -eq 1 ]]; then
 
 			other_iqtree_params=( --ufboot 1000 --bnni )
 			if [[ ${num_seq} -gt ${iqtree_fast_mode_gt} ]]; then
-			  other_iqtree_params+=( --fast )
+			  echo "Skipping IQ-TREE --fast in UFBOOT-on-GeneRax mode because the options are incompatible."
 			fi
 
 			build_iqtree_mem_args
