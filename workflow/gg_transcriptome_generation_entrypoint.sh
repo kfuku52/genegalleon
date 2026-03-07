@@ -108,8 +108,6 @@ gg_entrypoint_activate_container_runtime
 
 gg_entrypoint_enter_workspace
 ${singularity_command} "${gg_container_image_path}" < "${gg_core_dir}/gg_transcriptome_generation_core.sh"
-if ! gg_trigger_versions_dump "${gg_entrypoint_name}"; then
-  echo "Warning: gg_versions trigger failed."
-fi
+gg_require_versions_dump "${gg_entrypoint_name}"
 
 echo "$(date): Ending"

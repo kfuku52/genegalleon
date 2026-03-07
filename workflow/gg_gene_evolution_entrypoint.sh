@@ -205,7 +205,5 @@ elif [[ ${cmd_exit_code} -ne 0 ]]; then
   echo "gg_gene_evolution_core.sh failed with code ${cmd_exit_code}."
   exit "${cmd_exit_code}"
 fi
-if ! gg_trigger_versions_dump "${gg_entrypoint_name}"; then
-  echo "Warning: gg_versions trigger failed."
-fi
+gg_require_versions_dump "${gg_entrypoint_name}"
 echo "$(date): Ending"

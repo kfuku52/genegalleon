@@ -493,6 +493,8 @@ def test_gg_util_has_common_forward_config_export_helpers():
     assert "gg_export_var_to_container_env_if_set()" in text
     assert "gg_apply_named_env_overrides()" in text
     assert "gg_forward_env_vars_with_prefix_to_container_env()" in text
+    assert "gg_require_versions_dump()" in text
+    assert "gg_resolve_physical_path()" in text
     body = _function_body(text, "forward_config_vars_to_container_env")
     assert "gg_print_entrypoint_config_vars" in body
     assert 'gg_export_var_to_container_env_if_set "gg_debug_mode"' in body
@@ -631,6 +633,13 @@ def test_set_singularityenv_forwards_gg_common_variables():
     text = _read_text(util_path)
     body = _function_body(text, "set_singularityenv")
 
+    assert 'resolved_workspace_dir=$(gg_resolve_physical_path "${gg_workspace_dir}")' in body
+    assert 'resolved_workflow_dir=$(gg_resolve_physical_path "${gg_workflow_dir}")' in body
+    assert 'resolved_container_image_path=$(gg_resolve_physical_path "${gg_container_image_path}")' in body
+    assert 'gg_workspace_dir="${resolved_workspace_dir}"' in body
+    assert 'gg_workflow_dir="${resolved_workflow_dir}"' in body
+    assert 'gg_container_image_path="${resolved_container_image_path}"' in body
+    assert 'resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")' in body
     assert "for gg_common_var_name in ${!GG_COMMON_@}; do" in body
     assert 'export "SINGULARITYENV_${gg_common_var_name}=${!gg_common_var_name}"' in body
     assert 'export "APPTAINERENV_${gg_common_var_name}=${!gg_common_var_name}"' in body
@@ -731,6 +740,16 @@ def test_gg_trigger_versions_dump_preserves_failure_exit_code_tracking():
     assert "if [[ ${block_exit_code} -ne 0 && ${versions_exit_code} -eq 0 ]]; then" in body
 
 
+def test_gg_require_versions_dump_preserves_exit_code_under_set_e():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "gg_require_versions_dump")
+    assert "local versions_exit_code=0" in body
+    assert "gg_trigger_versions_dump" in body
+    assert "versions_exit_code=$?" in body
+    assert 'echo "gg_require_versions_dump: gg_versions trigger failed for ${trigger_name}." >&2' in body
+
+
 def test_gg_trigger_versions_dump_reuses_one_log_per_container():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
@@ -741,12 +760,30 @@ def test_gg_trigger_versions_dump_reuses_one_log_per_container():
     assert 'timestamp=$(date' not in body
 
 
+def test_gg_trigger_versions_dump_key_tracks_versions_script_and_repo_version():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "gg_trigger_versions_dump")
+    assert 'container_key_seed="gg_container_image_path=${gg_container_image_path};runtime=${container_runtime_bin};gg_version=${gg_version}"' in body
+    assert 'versions_script_hash=$(sha256sum "${versions_script}" | awk \'{print $1}\')' in body
+    assert 'container_key_seed="${container_key_seed};versions_script_sha256=${versions_script_hash}"' in body
+
+
 def test_gg_trigger_versions_dump_does_not_print_full_log_contents():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
     body = _function_body(text, "gg_trigger_versions_dump")
     assert 'cat "${log_file}"' not in body
     assert 'cat "${failed_log_file}"' not in body
+
+
+def test_entrypoints_require_versions_dump_success():
+    entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
+    assert entrypoints, "No entrypoint scripts were found."
+    for script in entrypoints:
+        text = _read_text(script)
+        assert 'Warning: gg_versions trigger failed.' not in text, f"Legacy warning-only versions dump handling remains: {script}"
+        assert 'gg_require_versions_dump "${gg_entrypoint_name}"' in text, f"Entry point must fail on versions dump error: {script}"
 
 
 def test_gg_prepare_cds_fasta_stream_pipes_to_cdskit_pad():

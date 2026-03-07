@@ -37,6 +37,23 @@ gg_scheduler_runtime_prelude() {
 	ulimit -s unlimited 2>/dev/null || true
 }
 
+gg_resolve_physical_path() {
+	local path=${1:-}
+	local resolved_path=""
+
+	if [[ -z "${path}" ]]; then
+		return 1
+	fi
+	if command -v readlink >/dev/null 2>&1; then
+		if resolved_path=$(readlink -f -- "${path}" 2>/dev/null); then
+			printf '%s\n' "${resolved_path}"
+			return 0
+		fi
+	fi
+	resolved_path=$(cd "$(dirname "${path}")" && pwd -P)/$(basename "${path}")
+	printf '%s\n' "${resolved_path}"
+}
+
 gg_csv_prepend() {
 	local item=$1
 	local existing=${2:-}
@@ -356,15 +373,21 @@ set_singularityenv() {
   echo ${echo_header}"original: gg_container_image_path = ${gg_container_image_path}"
   if [[ $(uname -s) != 'Darwin' ]]; then
     echo "OS is $(uname -s). Getting the original path of symlink."
-    resolved_workspace_dir=$(cd "$(dirname "${gg_workspace_dir}")" && pwd -P)/$(basename "${gg_workspace_dir}")
-    resolved_workflow_dir=$(cd "$(dirname "${gg_workflow_dir}")" && pwd -P)/$(basename "${gg_workflow_dir}")
-    resolved_container_image_path=$(cd "$(dirname "${gg_container_image_path}")" && pwd -P)/$(basename "${gg_container_image_path}")
+    resolved_workspace_dir=$(gg_resolve_physical_path "${gg_workspace_dir}")
+    resolved_workflow_dir=$(gg_resolve_physical_path "${gg_workflow_dir}")
+    resolved_container_image_path=$(gg_resolve_physical_path "${gg_container_image_path}")
     echo ${echo_header}"formatted: gg_workspace_dir = ${resolved_workspace_dir}"
     echo ${echo_header}"formatted: gg_workflow_dir = ${resolved_workflow_dir}"
     echo ${echo_header}"formatted: gg_container_image_path = ${resolved_container_image_path}"
 	else
 		echo "OS is $(uname -s). Symlink PATHs won't be updated."
 	fi
+  gg_workspace_dir="${resolved_workspace_dir}"
+  gg_workflow_dir="${resolved_workflow_dir}"
+  gg_container_image_path="${resolved_container_image_path}"
+  export gg_workspace_dir
+  export gg_workflow_dir
+  export gg_container_image_path
   resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")
 	gg_add_container_bind_mount "${resolved_workspace_dir}:/workspace"
 	gg_add_container_bind_mount "${resolved_workflow_dir}:/script"
@@ -1418,6 +1441,7 @@ gg_trigger_versions_dump() {
   local container_key_hash
   local inspect_snapshot
   local image_file_hash
+  local versions_script_hash=""
   local log_file
   local tmp_log_file
   local lock_file
@@ -1472,7 +1496,19 @@ gg_trigger_versions_dump() {
   versions_dir="${dir_output}/versions"
   ensure_dir "${versions_dir}"
 
-  container_key_seed="gg_container_image_path=${gg_container_image_path};runtime=${container_runtime_bin}"
+  container_key_seed="gg_container_image_path=${gg_container_image_path};runtime=${container_runtime_bin};gg_version=${gg_version}"
+  if [[ -s "${versions_script}" ]]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      versions_script_hash=$(sha256sum "${versions_script}" | awk '{print $1}')
+      container_key_seed="${container_key_seed};versions_script_sha256=${versions_script_hash}"
+    elif command -v shasum >/dev/null 2>&1; then
+      versions_script_hash=$(shasum -a 256 "${versions_script}" | awk '{print $1}')
+      container_key_seed="${container_key_seed};versions_script_sha256=${versions_script_hash}"
+    else
+      versions_script_hash=$(cksum "${versions_script}" | awk '{print $1 "-" $2}')
+      container_key_seed="${container_key_seed};versions_script_cksum=${versions_script_hash}"
+    fi
+  fi
   if [[ -s "${gg_container_image_path}" ]]; then
     if command -v sha256sum >/dev/null 2>&1; then
       image_file_hash=$(sha256sum "${gg_container_image_path}" | awk '{print $1}')
@@ -1600,6 +1636,27 @@ gg_trigger_versions_dump() {
     exec 9>&-
   fi
   echo "gg_trigger_versions_dump: wrote ${log_file}"
+  return 0
+}
+
+gg_require_versions_dump() {
+  local trigger_name=${1:-unknown_job}
+  local versions_exit_code=0
+  local had_errexit=0
+
+  if [[ $- == *e* ]]; then
+    had_errexit=1
+    set +e
+  fi
+  gg_trigger_versions_dump "${trigger_name}"
+  versions_exit_code=$?
+  if [[ ${had_errexit} -eq 1 ]]; then
+    set -e
+  fi
+  if [[ ${versions_exit_code} -ne 0 ]]; then
+    echo "gg_require_versions_dump: gg_versions trigger failed for ${trigger_name}." >&2
+    return "${versions_exit_code}"
+  fi
   return 0
 }
 

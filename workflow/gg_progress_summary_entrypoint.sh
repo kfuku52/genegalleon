@@ -78,8 +78,6 @@ forward_config_vars_to_container_env "${gg_entrypoint_name}"
 
 gg_entrypoint_enter_workspace
 ${singularity_command} "${gg_container_image_path}" < "${gg_core_dir}/gg_progress_summary_core.sh"
-if ! gg_trigger_versions_dump "${gg_entrypoint_name}"; then
-  echo "Warning: gg_versions trigger failed."
-fi
+gg_require_versions_dump "${gg_entrypoint_name}"
 
 echo "$(date): Ending"
