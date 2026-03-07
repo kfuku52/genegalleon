@@ -44,10 +44,10 @@ From the repository root:
 
 ```bash
 # Recommended: build a local SIF from a published GHCR image
-apptainer build genegalleon.sif docker://ghcr.io/kfuku52/genegalleon
+apptainer build genegalleon.sif docker://ghcr.io/kfuku52/genegalleon:latest
 
-# Alternative: build the image and SIF locally
-IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
+# Alternative: build a SIF locally from this repository
+IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
 ```
 
 ### 2. Run the bundled quick start
