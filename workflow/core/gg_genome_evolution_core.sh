@@ -213,6 +213,7 @@ dir_concat_iqtree_dna="${dir_species_tree}/concatenated_iqtree_dna"
 dir_concat_iqtree_pep="${dir_species_tree}/concatenated_iqtree_pep"
 dir_mcmctree2="${dir_species_tree}/mcmctree_main"
 dir_tmp="${dir_species_tree}/tmp"
+dir_nwkit_download_dir="${gg_workspace_downloads_dir}/nwkit_downloads"
 
 # Orthogroup
 dir_sp_protein="${gg_workspace_downloads_dir}/tmp/species_protein"
@@ -1407,13 +1408,10 @@ disable_if_no_input_file "run_constrained_tree" "${file_undated_species_tree}"
 if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
   gg_step_start "${task}"
     ensure_parent_dir "${file_constrained_tree}"
+  ensure_dir "${dir_nwkit_download_dir}"
   if [[ ${timetree_constraint} -eq 1 ]]; then
-    if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
-      echo "Error: Failed to prepare ETE taxonomy database under ${gg_workspace_downloads_dir}/ete_taxonomy."
-      echo "Error: Network access is required to download/update ETE taxonomy data."
-      exit 1
-    fi
     nwkit mcmctree \
+    --download_dir "${dir_nwkit_download_dir}" \
     --infile "${file_undated_species_tree}" \
     --timetree "ci" \
     --min_clade_prop 0.2 \
@@ -1435,6 +1433,7 @@ if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
         exit 1
       fi
       nwkit_args=(
+        --download_dir "${dir_nwkit_download_dir}"
         --left_species "${mcmctree_params[0]}"
         --right_species "${mcmctree_params[1]}"
       )

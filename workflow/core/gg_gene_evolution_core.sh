@@ -13,7 +13,7 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_gene_evolution_entrypoint.sh.
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
-treevis_clade_ortholog_prefix="${treevis_clade_ortholog_prefix:-${GG_COMMON_TREEVIS_CLADE_ORTHOLOG_PREFIX:-Arabidopsis_thaliana_}}"
+annotation_species="${annotation_species:-${GG_COMMON_ANNOTATION_SPECIES:-auto}}"
 
 # Substitution model in CSUBST and mapdNdS
 if [[ ${genetic_code} -eq 1 ]]; then
@@ -275,6 +275,15 @@ dir_sp_gff="${gg_workspace_input_dir}/species_gff"
 dir_sp_expression="${gg_workspace_input_dir}/species_expression"
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
 dir_sp_blastdb="${gg_workspace_output_dir}/species_cds_blastdb"
+annotation_species_resolved=""
+treevis_clade_ortholog_prefix=""
+annotation_species_candidates=()
+mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_cds}")
+if annotation_species_resolved=$(gg_resolve_annotation_species "${annotation_species}" "${annotation_species_candidates[@]}"); then
+  if [[ -n "${annotation_species_resolved}" ]]; then
+    treevis_clade_ortholog_prefix="${annotation_species_resolved}_"
+  fi
+fi
 file_sp_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
 file_og="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.selected.tsv"
 file_og_parameters_dir="${dir_output_active}/parameters"

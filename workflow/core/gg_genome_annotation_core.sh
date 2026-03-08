@@ -12,15 +12,19 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_genome_annotation_entrypoint.sh.
-busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-embryophyta_odb12}}"
+busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
-contamination_removal_rank="${contamination_removal_rank:-${GG_COMMON_CONTAMINATION_REMOVAL_RANK:-phylum}}"
+contamination_removal_rank="${contamination_removal_rank:-${GG_COMMON_CONTAMINATION_REMOVAL_RANK:-domain}}"
 ### End: Job-supplied configuration ###
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 0 1
 delete_tmp_dir=${delete_tmp_dir:-1}
+busco_lineage_resolved=""
+contamination_removal_rank_for_remove_contaminated_sequences="$(
+  gg_normalize_contamination_removal_rank_for_remove_contaminated_sequences "${contamination_removal_rank}"
+)"
 
 copy_busco_tables() {
   local busco_root_dir="$1"
@@ -58,6 +62,17 @@ copy_busco_tables() {
   cp_out "${full_src}" "${file_full}"
   cp_out "${short_src}" "${file_short}"
   rm -f -- "./tmp.busco.full_table.tsv"
+}
+
+resolve_busco_lineage_for_current_species() {
+  if [[ -n "${busco_lineage_resolved}" ]]; then
+    return 0
+  fi
+  if ! busco_lineage_resolved=$(gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "${sp_ub}"); then
+    echo "Failed to resolve BUSCO lineage for species ${sp_ub} from request: ${busco_lineage}" >&2
+    return 1
+  fi
+  echo "Resolved BUSCO lineage for ${sp_ub}: ${busco_lineage_resolved}"
 }
 
 enable_all_run_flags_for_debug_mode
@@ -243,11 +258,14 @@ if [[ ( ! -s "${file_sp_cds_busco_full}" || ! -s "${file_sp_cds_busco_short}" ) 
     busco_infile=${file_sp_cds}
   fi
 
-  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
-    echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+  if ! resolve_busco_lineage_for_current_species; then
     exit 1
   fi
-  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
+  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
+    echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
+    exit 1
+  fi
+  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
   if busco \
     --in "${busco_infile}" \
@@ -260,7 +278,7 @@ if [[ ( ! -s "${file_sp_cds_busco_full}" || ! -s "${file_sp_cds_busco_short}" ) 
     --lineage_dataset "${dir_busco_lineage}" \
     --download_path "${dir_busco_db}" \
     --offline; then
-    if copy_busco_tables "./busco_tmp" "${busco_lineage}" "${file_sp_cds_busco_full}" "${file_sp_cds_busco_short}"; then
+    if copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_sp_cds_busco_full}" "${file_sp_cds_busco_short}"; then
       rm -rf -- "./busco_tmp"
     else
       echo "Failed to locate normalized BUSCO outputs for CDS BUSCO. Exiting."
@@ -284,11 +302,14 @@ if [[ ( ! -s "${file_sp_genome_busco_full}" || ! -s "${file_sp_genome_busco_shor
     rm -rf -- "./busco_tmp"
   fi
   seqkit seq --threads "${NSLOTS}" "${file_sp_genome}" > "busco_genome_input.fa"
-  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
-    echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+  if ! resolve_busco_lineage_for_current_species; then
     exit 1
   fi
-  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
+  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
+    echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
+    exit 1
+  fi
+  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
   if busco \
     --in "busco_genome_input.fa" \
@@ -301,7 +322,7 @@ if [[ ( ! -s "${file_sp_genome_busco_full}" || ! -s "${file_sp_genome_busco_shor
     --lineage_dataset "${dir_busco_lineage}" \
     --download_path "${dir_busco_db}" \
     --offline; then
-    if copy_busco_tables "./busco_tmp" "${busco_lineage}" "${file_sp_genome_busco_full}" "${file_sp_genome_busco_short}"; then
+    if copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_sp_genome_busco_full}" "${file_sp_genome_busco_short}"; then
       rm -rf -- "./busco_tmp"
       rm -f -- "busco_genome_input.fa"
     else
@@ -452,7 +473,7 @@ if [[ ( ! -s "${file_sp_cds_contamination_removal_fasta}" || ! -s "${file_sp_cds
   --mmseqs2taxonomy_tsv "${file_sp_cds_mmseqs2taxonomy}" \
   --fx2tab_tsv "${file_sp_cds_fx2tab}" \
   --species_name "${sp_ub}" \
-  --rank "${contamination_removal_rank}" \
+  --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
   --ncpu "${NSLOTS}" \
   --rename_seq "no" \
   --verbose "no"
@@ -652,7 +673,7 @@ if [[ ( ! -s "${file_sp_genome_contamination_removal_fasta}" || ! -s "${file_sp_
   --mmseqs2taxonomy_tsv "${file_sp_genome_mmseqs2taxonomy}" \
   --fx2tab_tsv "${file_sp_genome_fx2tab}" \
   --species_name "${sp_ub}" \
-  --rank "phylum" \
+  --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
   --ncpu "${NSLOTS}" \
   --rename_seq "yes" \
   --rename_prefix "scaffold" \

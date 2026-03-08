@@ -127,7 +127,7 @@ generax_rec_model="UndatedDL" # "UndatedDTL" or "UndatedDL"
 radte_max_age=1000 # Upper limit of estimated divergence time in MY.
 
 # species_expression data (value in input files)
-exp_value_type="log2p1"
+exp_value_type="log2p1" # Expression scale used in species_expression input tables.
 pgls_use_phenocov=0 # BOOL.
 
 # Promoter cis-element analysis
@@ -136,25 +136,25 @@ fimo_qvalue="0.05" # False discovery rate threshold for FIMO motif search
 jaspar_file="latest" # "latest"/"auto" or explicit JASPAR filename in ${dir_jaspardb}
 
 # Ornstein-Uhlenbeck modeling of gene expression evolution
-clade_collapse_similarity_method="pearson"
-clade_collapse_similarity_threshold="0.99"
+clade_collapse_similarity_method="pearson" # Similarity metric used when collapsing clades for OU runs.
+clade_collapse_similarity_threshold="0.99" # Similarity cutoff used when collapsing clades for OU runs.
 require_internal_node_labels=1 # BOOL. Require non-empty unique internal node labels in input trees for OU scripts.
 l1ou_criterion="AICc" # "pBIC", "mBIC", "BIC", or "AICc"
 l1ou_nbootstrap=0 # INTEGER.
 l1ou_use_fit_file=1 # BOOL.
-l1ou_alpha_upper="PhylogeneticEM"
+l1ou_alpha_upper="PhylogeneticEM" # Upper alpha bound for l1ou, or "PhylogeneticEM" to reuse that estimate.
 l1ou_convergence=1 # BOOL.
 large_tree_num_gene=1000 # INTEGER.
 large_tree_max_nshift=10 # INTEGER.
 phylogeneticem_use_fit_file=1 # BOOL.
 
 # CSUBST options
-csubst_max_arity=10
-csubst_exhaustive_until=1
-csubst_cutoff_stat="OCNany2spe,2.0|omegaCany2spe,5.0"
-csubst_max_combination=10000
-csubst_fg_exclude_wg="no"
-csubst_fg_stem_only="yes"
+csubst_max_arity=10 # Maximum foreground arity considered by CSUBST.
+csubst_exhaustive_until=1 # Exhaustively enumerate foreground combinations up to this arity.
+csubst_cutoff_stat="OCNany2spe,2.0|omegaCany2spe,5.0" # CSUBST branch-statistic cutoffs used to retain combinations.
+csubst_max_combination=10000 # Maximum number of CSUBST combinations retained after filtering.
+csubst_fg_exclude_wg="no" # Exclude whole-genome duplication branches from CSUBST foregrounds.
+csubst_fg_stem_only="yes" # Restrict CSUBST foreground candidates to stem branches only.
 
 # Intron and chromosomal character evolution
 intron_gain_rate="0.0001" # FLOAT.
@@ -166,18 +166,18 @@ treevis_clade_ortholog=1 # BOOL.
 treevis_support_value="support_unrooted" # "support_unrooted", "dup_conf_score", "no"
 treevis_branch_length="bl_rooted" # "bl_dated", "bl_rooted", "mapdnds_omega"
 treevis_branch_color="l1ou_regime" # "species", "no", or *_regime
-treevis_retrotransposition_delta_intron="-0.5"
+treevis_retrotransposition_delta_intron="-0.5" # Delta-intron cutoff used to flag retrotransposition candidates in plots.
 treevis_heatmap_transform="no" # "no", "log2", "log10p1", "log2p1"
 treevis_pie_chart_value_transformation="identity" # identity|delog2|delog2p1|delog10|delog10p1
 treevis_max_intergenic_dist=100000 # Maximum distance between genes in bp.
 treevis_synteny=1 # BOOL.
 treevis_synteny_window=5 # INTEGER.
 treevis_long_branch_display="auto" # "auto" or "no"
-treevis_long_branch_ref_quantile="0.95"
-treevis_long_branch_detect_ratio=5
-treevis_long_branch_cap_ratio="2.5"
-treevis_long_branch_tail_shrink="0.02"
-treevis_long_branch_max_fraction="0.1"
+treevis_long_branch_ref_quantile="0.95" # Reference branch-length quantile used for long-branch detection.
+treevis_long_branch_detect_ratio=5 # Ratio above the reference used to flag long branches.
+treevis_long_branch_cap_ratio="2.5" # Maximum displayed long-branch length as a multiple of the reference.
+treevis_long_branch_tail_shrink="0.02" # Fraction of the shrunken long-branch tail kept after capping.
+treevis_long_branch_max_fraction="0.1" # Maximum fraction of plot width allocated to a capped long branch.
 
 ### End: Modify this block to tailor your analysis ###
 

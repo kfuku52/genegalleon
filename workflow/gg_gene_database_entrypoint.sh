@@ -56,7 +56,7 @@ gg_entrypoint_name="gg_gene_database_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
-run_database_prep=1
+run_database_prep=1 # Prepare or refresh the local gene database assets.
 
 ### End: Modify this block to tailor your analysis ###
 

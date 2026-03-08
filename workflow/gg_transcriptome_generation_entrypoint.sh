@@ -81,18 +81,17 @@ run_amalgkit_quant=1 # Expression quantification.
 run_amalgkit_merge=1 # Expression merge.
 run_multispecies_summary=1 # Multi-species summary.
 
-amalgkit_rrna_filter="yes" # read-level rRNA removal in amalgkit getfastq.
-amalgkit_contam_filter="yes" # read-level contamination removal in amalgkit getfastq.
-amalgkit_contam_filter_rank="phylum" # taxonomy rank for read-level contamination removal.
+amalgkit_rrna_filter="yes" # read-level rRNA removal in amalgkit getfastq. Observed to finish for ~4.2 Gbp total / ~14 million reads within a 350G job before contamination filtering; exact peak RAM and elapsed time for this step alone were not logged.
+amalgkit_contam_filter="no" # read-level contamination removal in amalgkit getfastq. Rank follows GG_COMMON_CONTAMINATION_REMOVAL_RANK. Setting yes may require >350G RAM for large private FASTQ inputs (for example, ~4.2 Gbp total, ~14 million reads).
 amalgkit_filter_order="fastp_first" # {fastp_first,rrna_first}
-remove_amalgkit_fastq_after_completion=1
-max_assembly_input_fastq_size="30,000,000,000"
+remove_amalgkit_fastq_after_completion=1 # Delete per-species amalgkit FASTQ files after downstream completion.
+max_assembly_input_fastq_size="30,000,000,000" # Maximum total FASTQ length in bp used for transcriptome assembly.
 assembly_method="rnaSPAdes" # {Trinity,rnaSPAdes}
 protocol_rna_seq="mixed" # {same,mixed}
 kallisto_reference="longest_cds" # {species_cds,longest_transcript,longest_cds,contamination_removed_longest_cds}
 orf_aggregation_level="i" # {c,g,i,p}
-assembly_cpu_offset=0
-assembly_ram_offset=4
+assembly_cpu_offset=0 # Number of CPU cores reserved from NSLOTS before launching the assembler.
+assembly_ram_offset=4 # Amount of RAM in GB reserved from MEM_PER_HOST before launching the assembler.
 
 ### End: Modify this block to tailor your analysis ###
 

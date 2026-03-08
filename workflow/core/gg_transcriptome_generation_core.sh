@@ -12,8 +12,8 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_transcriptome_generation_entrypoint.sh.
-busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-embryophyta_odb12}}"
-contamination_removal_rank="${contamination_removal_rank:-${GG_COMMON_CONTAMINATION_REMOVAL_RANK:-phylum}}"
+busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
+contamination_removal_rank="${contamination_removal_rank:-${GG_COMMON_CONTAMINATION_REMOVAL_RANK:-domain}}"
 ### End: Job-supplied configuration ###
 
 ### ----------------------------------------------------------------------- ###
@@ -22,6 +22,13 @@ contamination_removal_rank="${contamination_removal_rank:-${GG_COMMON_CONTAMINAT
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 delete_tmp_dir=${delete_tmp_dir:-1}
+busco_lineage_resolved=""
+contamination_removal_rank_for_remove_contaminated_sequences="$(
+  gg_normalize_contamination_removal_rank_for_remove_contaminated_sequences "${contamination_removal_rank}"
+)"
+contamination_removal_rank_for_amalgkit="$(
+  gg_normalize_contamination_removal_rank_for_amalgkit "${contamination_removal_rank}"
+)"
 
 copy_busco_tables() {
   local busco_root_dir="$1"
@@ -59,6 +66,17 @@ copy_busco_tables() {
   cp_out "${full_src}" "${file_full}"
   cp_out "${short_src}" "${file_short}"
   rm -f -- "./tmp.busco.full_table.tsv"
+}
+
+resolve_busco_lineage_for_current_species() {
+  if [[ -n "${busco_lineage_resolved}" ]]; then
+    return 0
+  fi
+  if ! busco_lineage_resolved=$(gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "${sp_ub}"); then
+    echo "Failed to resolve BUSCO lineage for species ${sp_ub} from request: ${busco_lineage}" >&2
+    return 1
+  fi
+  echo "Resolved BUSCO lineage for ${sp_ub}: ${busco_lineage_resolved}"
 }
 
 # Setting modes
@@ -323,7 +341,7 @@ if [[ ( ${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1 ) &&
 			    --threads "${NSLOTS}" \
 			    --rrna_filter "${amalgkit_rrna_filter}" \
 			    --contam_filter "${amalgkit_contam_filter}" \
-			    --contam_filter_rank "${amalgkit_contam_filter_rank}" \
+			    --contam_filter_rank "${contamination_removal_rank_for_amalgkit}" \
 			    --filter_order "${amalgkit_filter_order}" \
 	    --remove_sra yes \
 	    --remove_tmp yes \
@@ -731,7 +749,7 @@ if [[ ( ! -s "${file_longestcds_contamination_removal_fasta}" || ! -s "${file_lo
   --mmseqs2taxonomy_tsv "${file_longestcds_mmseqs2taxonomy}" \
   --fx2tab_tsv "${file_longestcds_fx2tab}" \
   --species_name "${sp_ub}" \
-  --rank "${contamination_removal_rank}" \
+  --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
   --ncpu "${NSLOTS}" \
   --rename_seq "no" \
   --verbose "no"
@@ -754,11 +772,14 @@ if [[ ( ! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna
 
   seqkit seq --threads "${NSLOTS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"
 
-  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
-    echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+  if ! resolve_busco_lineage_for_current_species; then
     exit 1
   fi
-  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
+  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
+    echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
+    exit 1
+  fi
+  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
   busco \
   --in "busco_infile_cdna.fa" \
@@ -772,7 +793,7 @@ if [[ ( ! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna
   --download_path "${dir_busco_db}" \
   --offline
 
-  if ! copy_busco_tables "./busco_tmp" "${busco_lineage}" "${file_busco_full_cdna_isoforms}" "${file_busco_short_cdna_isoforms}"; then
+  if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_cdna_isoforms}" "${file_busco_short_cdna_isoforms}"; then
     echo "Failed to locate normalized BUSCO outputs for cDNA isoforms. Exiting."
     exit 1
   fi
@@ -791,11 +812,14 @@ if [[ ( ! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longes
 
   seqkit seq --threads "${NSLOTS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"
 
-  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
-    echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+  if ! resolve_busco_lineage_for_current_species; then
     exit 1
   fi
-  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
+  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
+    echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
+    exit 1
+  fi
+  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
   busco \
   --in "busco_infile_cds.fa" \
@@ -809,7 +833,7 @@ if [[ ( ! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longes
   --download_path "${dir_busco_db}" \
   --offline
 
-  if ! copy_busco_tables "./busco_tmp" "${busco_lineage}" "${file_busco_full_longest_cds}" "${file_busco_short_longest_cds}"; then
+  if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_longest_cds}" "${file_busco_short_longest_cds}"; then
     echo "Failed to locate normalized BUSCO outputs for longest CDS. Exiting."
     exit 1
   fi
@@ -828,11 +852,14 @@ if [[ ( ! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_sho
 
   seqkit seq --threads "${NSLOTS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"
 
-  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
-    echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+  if ! resolve_busco_lineage_for_current_species; then
     exit 1
   fi
-  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
+  if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
+    echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
+    exit 1
+  fi
+  dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
   busco \
   --in "busco_infile_cds.fa" \
@@ -846,7 +873,7 @@ if [[ ( ! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_sho
   --download_path "${dir_busco_db}" \
   --offline
 
-  if ! copy_busco_tables "./busco_tmp" "${busco_lineage}" "${file_busco_full_longest_cds_filtered}" "${file_busco_short_longest_cds_filtered}"; then
+  if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_longest_cds_filtered}" "${file_busco_short_longest_cds_filtered}"; then
     echo "Failed to locate normalized BUSCO outputs for contamination-removed longest CDS. Exiting."
     exit 1
   fi

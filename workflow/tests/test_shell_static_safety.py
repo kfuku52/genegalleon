@@ -1929,12 +1929,18 @@ def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
         'left_right="--left_species ${mcmctree_params[0]} --right_species ${mcmctree_params[1]}"',
         'tree_string=$(printf \'%s\\n\' "${tree_string}" | nwkit mcmctree ${left_right} ${bound_params})',
         'echo -e "${tree_string}" > "tmp.constrained.tree.nwk"',
+        'nwkit mcmctree \\n    --infile "${file_undated_species_tree}"',
     ]
     for token in banned_tokens:
         assert token not in text, f"Found string-concatenated mcmctree args token: {token}"
 
     expected_tokens = [
+        'dir_nwkit_download_dir="${gg_workspace_downloads_dir}/nwkit_downloads"',
+        'ensure_dir "${dir_nwkit_download_dir}"',
+        'nwkit mcmctree \\',
+        '--download_dir "${dir_nwkit_download_dir}"',
         "nwkit_args=(",
+        '--download_dir "${dir_nwkit_download_dir}"',
         '--left_species "${mcmctree_params[0]}"',
         '--right_species "${mcmctree_params[1]}"',
         'nwkit_args+=( --lower_bound "${mcmctree_params[2]}" )',
