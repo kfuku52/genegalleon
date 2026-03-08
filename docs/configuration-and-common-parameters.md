@@ -54,7 +54,7 @@ Important note:
 
 - `GG_COMMON_GENETIC_CODE` (default `1`)
 - `GG_COMMON_BUSCO_LINEAGE` (default `auto`)
-- `GG_COMMON_ANNOTATION_SPECIES` (default `auto`)
+- `GG_COMMON_REFERENCE_SPECIES` (default `auto`)
 
 These are intended for values that recur across multiple stages.
 
@@ -71,7 +71,7 @@ For contamination removal, `contamination_removal_rank` is now configured locall
 GeneGalleon treats `domain` as the canonical user-facing value and normalizes tool-specific
 synonyms automatically (for example, `remove_contaminated_sequences.py` receives `superkingdom`).
 
-For annotation-driven stages, `GG_COMMON_ANNOTATION_SPECIES=auto` prefers model species detected
+For annotation-driven stages, `GG_COMMON_REFERENCE_SPECIES=auto` prefers model species detected
 in the relevant dataset and falls back to the first available species when none of the preferred
 models are present. The current priority list keeps only `Arabidopsis_thaliana` and `Oryza_sativa`
 on the plant side, then checks standard cross-clade model species such as human, mouse, zebrafish,
@@ -123,7 +123,7 @@ Core scripts typically consume these values with parameter expansion such as:
 ```bash
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
-annotation_species="${annotation_species:-${GG_COMMON_ANNOTATION_SPECIES:-auto}}"
+annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 ```
 
 ## Entry-point override patterns

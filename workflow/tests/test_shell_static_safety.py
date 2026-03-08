@@ -1314,9 +1314,10 @@ def test_common_busco_lineage_defaults_to_auto():
     assert ': "${GG_COMMON_BUSCO_LINEAGE:=auto}"' in text
 
 
-def test_common_params_define_annotation_species_auto_only_once():
+def test_common_params_define_reference_species_auto_only_once():
     text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
-    assert ': "${GG_COMMON_ANNOTATION_SPECIES:=auto}"' in text
+    assert ': "${GG_COMMON_REFERENCE_SPECIES:=auto}"' in text
+    assert "GG_COMMON_ANNOTATION_SPECIES" not in text
     assert "GG_COMMON_ANNOTATION_REPRESENTATIVE_SPECIES" not in text
     assert "GG_COMMON_MCMCTREE_DIVERGENCE_TIME_CONSTRAINTS_STR" not in text
     assert "GG_COMMON_TREEVIS_CLADE_ORTHOLOG_PREFIX" not in text
@@ -1340,6 +1341,16 @@ def test_core_scripts_resolve_busco_lineage_through_shared_helper():
     assert 'gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "${sp_ub}"' in genome_annotation
     assert 'gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "${sp_ub}"' in transcriptome
     assert 'gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "$@"' in genome_evolution
+
+
+def test_core_scripts_resolve_reference_species_through_shared_helper():
+    gene_evolution = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    genome_evolution = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    assert 'annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"' in gene_evolution
+    assert 'annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"' in genome_evolution
+    assert "GG_COMMON_ANNOTATION_SPECIES" not in gene_evolution
+    assert "GG_COMMON_ANNOTATION_SPECIES" not in genome_evolution
 
 
 def test_genome_evolution_uses_local_optional_grampa_and_go_target_parameters():

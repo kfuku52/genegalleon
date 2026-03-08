@@ -13,7 +13,7 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_gene_evolution_entrypoint.sh.
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
-annotation_species="${annotation_species:-${GG_COMMON_ANNOTATION_SPECIES:-auto}}"
+annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 
 # Substitution model in CSUBST and mapdNdS
 if [[ ${genetic_code} -eq 1 ]]; then
