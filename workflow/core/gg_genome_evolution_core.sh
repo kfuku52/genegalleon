@@ -21,18 +21,14 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 # Configuration variables are provided by gg_genome_evolution_entrypoint.sh.
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
-busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-embryophyta_odb12}}"
+busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 outgroup_labels="${outgroup_labels:-${GG_COMMON_OUTGROUP_LABELS:-Oryza_sativa}}"
-annotation_representative_species="${annotation_representative_species:-${GG_COMMON_ANNOTATION_REPRESENTATIVE_SPECIES:-Arabidopsis_thaliana}}"
-mcmctree_divergence_time_constraints_str="${mcmctree_divergence_time_constraints_str:-${GG_COMMON_MCMCTREE_DIVERGENCE_TIME_CONSTRAINTS_STR:-Arabidopsis_thaliana,Oryza_sativa,130,-}}"
-grampa_h1="${grampa_h1:-${GG_COMMON_GRAMPA_H1:-}}"
-target_branch_go="${target_branch_go:-${GG_COMMON_TARGET_BRANCH_GO:-<1>}}"
+annotation_species="${annotation_species:-${GG_COMMON_ANNOTATION_SPECIES:-auto}}"
+mcmctree_divergence_time_constraints_str="${mcmctree_divergence_time_constraints_str:-}"
+grampa_h1="${grampa_h1:-}"
+target_branch_go="${target_branch_go:-}"
 mcmctree_divergence_time_constraints=()
 if [[ -n "${mcmctree_divergence_time_constraints_str:-}" ]]; then
-  IFS='|' read -r -a mcmctree_divergence_time_constraints <<< "${mcmctree_divergence_time_constraints_str}"
-fi
-if [[ ${#mcmctree_divergence_time_constraints[@]} -eq 0 ]]; then
-  mcmctree_divergence_time_constraints_str="${GG_COMMON_MCMCTREE_DIVERGENCE_TIME_CONSTRAINTS_STR:-Arabidopsis_thaliana,Oryza_sativa,130,-}"
   IFS='|' read -r -a mcmctree_divergence_time_constraints <<< "${mcmctree_divergence_time_constraints_str}"
 fi
 
@@ -44,6 +40,7 @@ fi
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 delete_tmp_dir=${delete_tmp_dir:-1}
+busco_lineage_resolved=""
 
 copy_busco_tables() {
   local busco_root_dir="$1"
@@ -81,6 +78,21 @@ copy_busco_tables() {
   cp_out "${full_src}" "${file_full}"
   cp_out "${short_src}" "${file_short}"
   rm -f -- "./tmp.busco.full_table.tsv"
+}
+
+resolve_busco_lineage_for_species_set() {
+  if [[ -n "${busco_lineage_resolved}" ]]; then
+    return 0
+  fi
+  if [[ $# -eq 0 ]]; then
+    echo "No species names were provided for BUSCO lineage resolution." >&2
+    return 1
+  fi
+  if ! busco_lineage_resolved=$(gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "$@"); then
+    echo "Failed to resolve BUSCO lineage from request: ${busco_lineage}" >&2
+    return 1
+  fi
+  echo "Resolved BUSCO lineage for species set (${#} species): ${busco_lineage_resolved}"
 }
 
 get_busco_summary_gene_count() {
@@ -171,6 +183,18 @@ clear_directory_contents_safe() {
 # Directories
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
 dir_og_rooted_tree="${gg_workspace_output_dir}/orthogroup/rooted_tree"
+annotation_species_resolved=""
+annotation_species_candidates=()
+file_go_annotation=""
+mapfile -t annotation_species_candidates < <(gg_species_names_from_annotation_dir "${gg_workspace_output_dir}/species_cds_annotation")
+if [[ ${#annotation_species_candidates[@]} -eq 0 ]]; then
+  mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_cds}")
+fi
+if annotation_species_resolved=$(gg_resolve_annotation_species "${annotation_species}" "${annotation_species_candidates[@]}"); then
+  if [[ -n "${annotation_species_resolved}" ]]; then
+    file_go_annotation="${gg_workspace_output_dir}/species_cds_annotation/${annotation_species_resolved}_annotation.tsv"
+  fi
+fi
 
 # Species tree
 dir_species_tree="${gg_workspace_output_dir}/species_tree"
@@ -257,7 +281,6 @@ file_busco_grampa_dna="${dir_genome_evolution}/grampa_busco_dna/grampa_summary.t
 file_busco_grampa_pep="${dir_genome_evolution}/grampa_busco_pep/grampa_summary.tsv"
 file_orthogroup_grampa="${dir_genome_evolution}/grampa_orthogroup/grampa_summary.tsv"
 file_gene_id="${dir_orthofinder_filtered}/Orthogroups.selected.tsv"
-file_go_annotation="${gg_workspace_output_dir}/species_cds_annotation/${annotation_representative_species}_annotation.tsv"
 file_cafe_summary_all_pdf="${dir_cafe}/summary_plot/summary_all.pdf"
 file_cafe_summary_significant_pdf="${dir_cafe}/summary_plot/summary_significant.pdf"
 file_go_enrichment_significant="${dir_cafe}/go_enrichment/enrichment_significant_${change_direction_go}_${target_branch_go}_significant_go.tsv"
@@ -604,6 +627,11 @@ if [[ ${run_mcmctree1} -eq 1 || ${run_mcmctree2} -eq 1 ]]; then
     stop_if_species_not_found_in "${dir_sp_cds}" "${outgroup_label}"
   done
   if [[ ${timetree_constraint} -eq 0 ]]; then
+    if [[ ${#mcmctree_divergence_time_constraints[@]} -eq 0 ]]; then
+      echo "timetree_constraint=0 requires mcmctree_divergence_time_constraints_str with one or more records."
+      echo "Example: Arabidopsis_thaliana,Oryza_sativa,130,-|Arabidopsis_thaliana,Amborella_trichopoda,150,200"
+      exit 1
+    fi
     mcmctree_params=()
     if ! parse_mcmctree_constraint_record "${mcmctree_divergence_time_constraints[0]}" mcmctree_params; then
       exit 1
@@ -632,6 +660,9 @@ if [[ ${run_species_busco} -eq 1 ]]; then
       gg_species_name_from_path_or_dot "$(basename "${cds_full}")"
     done | sort -u
   )
+  if ! resolve_busco_lineage_for_species_set "${input_species_set[@]}"; then
+    exit 1
+  fi
   busco_output_files=()
   mapfile -t busco_output_files < <(
     find "${dir_species_busco_full}" "${dir_species_busco_short}" -maxdepth 1 -type f \
@@ -673,11 +704,11 @@ if [[ ${run_species_busco} -eq 1 ]]; then
         cp_out "${dir_sp_cds}"/"${cds}" ./tmp.busco_input.cds.fasta
       fi
 
-      if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
-        echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+      if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
+        echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
         exit 1
       fi
-      dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
+      dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
 	      busco \
 	      --in "tmp.busco_input.cds.fasta" \
@@ -691,7 +722,7 @@ if [[ ${run_species_busco} -eq 1 ]]; then
 	      --download_path "${dir_busco_db}" \
 	      --offline
 
-      if copy_busco_tables "./busco_tmp" "${busco_lineage}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
+      if copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
         rm -rf -- "./busco_tmp"
       else
         echo "Failed to locate normalized BUSCO outputs for ${sp_ub}. Exiting."
@@ -1391,6 +1422,11 @@ if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
       mv_out "tmp.constrained.tree.nwk" "${file_constrained_tree}"
     fi
   else
+    if [[ ${#mcmctree_divergence_time_constraints[@]} -eq 0 ]]; then
+      echo "timetree_constraint=0 requires mcmctree_divergence_time_constraints_str with one or more records."
+      echo "Example: Arabidopsis_thaliana,Oryza_sativa,130,-|Arabidopsis_thaliana,Amborella_trichopoda,150,200"
+      exit 1
+    fi
     tree_string=$(< "${file_undated_species_tree}")
     for mdtc in "${mcmctree_divergence_time_constraints[@]}"; do
       echo "applying ${mdtc}"
@@ -2020,6 +2056,20 @@ if [[ ${run_orthogroup_grampa} -eq 1 ]]; then
   fi
 fi
 
+if [[ -z "${grampa_h1}" ]]; then
+  if [[ ${run_busco_grampa_dna} -eq 1 || ${run_busco_grampa_pep} -eq 1 || ${run_orthogroup_grampa} -eq 1 ]]; then
+    echo "Disabling GRAMPA tasks because grampa_h1 is empty. Set grampa_h1 in gg_genome_evolution_entrypoint.sh to enable them."
+  fi
+  run_busco_grampa_dna=0
+  run_busco_grampa_pep=0
+  run_orthogroup_grampa=0
+fi
+
+if [[ -z "${target_branch_go}" && ${run_go_enrichment} -eq 1 ]]; then
+  echo "Disabling run_go_enrichment because target_branch_go is empty. Set target_branch_go in gg_genome_evolution_entrypoint.sh to enable it."
+  run_go_enrichment=0
+fi
+
 ensure_dir "${dir_tmp}"
 cd "${dir_tmp}"
 
@@ -2032,6 +2082,15 @@ if [[ ${run_genome_busco} -eq 1 ]]; then
   echo "Number of CDS files for BUSCO: ${#species_cds_fasta[@]}"
   if [[ ${#species_cds_fasta[@]} -eq 0 ]]; then
     echo "No CDS file found. Exiting."
+    exit 1
+  fi
+  input_species_set=()
+  mapfile -t input_species_set < <(
+    for cds_full in "${species_cds_fasta[@]}"; do
+      gg_species_name_from_path_or_dot "$(basename "${cds_full}")"
+    done | sort -u
+  )
+  if ! resolve_busco_lineage_for_species_set "${input_species_set[@]}"; then
     exit 1
   fi
   for cds_full in "${species_cds_fasta[@]}"; do
@@ -2049,11 +2108,11 @@ if [[ ${run_genome_busco} -eq 1 ]]; then
         cp_out "${dir_sp_cds}"/"${cds}" ./tmp.busco_input.cds.fasta
       fi
 
-      if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage}"); then
-        echo "Failed to prepare BUSCO dataset: ${busco_lineage}"
+      if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
+        echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
         exit 1
       fi
-      dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage}"
+      dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
 	      busco \
 	      --in "tmp.busco_input.cds.fasta" \
@@ -2067,7 +2126,7 @@ if [[ ${run_genome_busco} -eq 1 ]]; then
 	      --download_path "${dir_busco_db}" \
 	      --offline
 
-      if copy_busco_tables "./busco_tmp" "${busco_lineage}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
+      if copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
         rm -rf -- "./busco_tmp"
       else
         echo "Failed to locate normalized BUSCO outputs for ${sp_ub}. Exiting."

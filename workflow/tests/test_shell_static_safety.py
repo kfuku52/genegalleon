@@ -1322,6 +1322,12 @@ def test_common_params_define_annotation_species_auto_only_once():
     assert "GG_COMMON_TREEVIS_CLADE_ORTHOLOG_PREFIX" not in text
 
 
+def test_common_params_do_not_define_genome_evolution_specific_grampa_or_go_target():
+    text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+    assert "GG_COMMON_GRAMPA_H1" not in text
+    assert "GG_COMMON_TARGET_BRANCH_GO" not in text
+
+
 def test_core_scripts_resolve_busco_lineage_through_shared_helper():
     genome_annotation = _read_text(CORE_DIR / "gg_genome_annotation_core.sh")
     transcriptome = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
@@ -1333,6 +1339,25 @@ def test_core_scripts_resolve_busco_lineage_through_shared_helper():
     assert 'gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "${sp_ub}"' in genome_annotation
     assert 'gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "${sp_ub}"' in transcriptome
     assert 'gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "$@"' in genome_evolution
+
+
+def test_genome_evolution_uses_local_optional_grampa_and_go_target_parameters():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    assert 'grampa_h1="" # Optional GRAMPA H1 hypothesis. Leave empty to skip GRAMPA steps. Example: "2" or "x,y,z".' in entrypoint
+    assert 'target_branch_go="" # Optional GO-enrichment target branch. Leave empty to skip GO enrichment. Example: "<1>" or "Arabidopsis_thaliana".' in entrypoint
+    assert "GG_COMMON_GRAMPA_H1" not in core
+    assert "GG_COMMON_TARGET_BRANCH_GO" not in core
+    assert 'grampa_h1="${grampa_h1:-}"' in core
+    assert 'target_branch_go="${target_branch_go:-}"' in core
+    assert 'Disabling GRAMPA tasks because grampa_h1 is empty. Set grampa_h1 in gg_genome_evolution_entrypoint.sh to enable them.' in core
+    assert 'Disabling run_go_enrichment because target_branch_go is empty. Set target_branch_go in gg_genome_evolution_entrypoint.sh to enable it.' in core
+    assert ': "${grampa_h1:?' not in core
+    assert ': "${target_branch_go:?' not in core
+    assert "      grampa_h1" in config_vars
+    assert "      target_branch_go" in config_vars
 
 
 def test_entrypoint_modify_block_parameters_have_inline_comments():

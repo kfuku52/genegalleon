@@ -258,6 +258,7 @@ Notable defaults:
 
 - polyploidization-related BUSCO/GRAMPA tasks are enabled,
 - `run_cafe=0`, `run_go_enrichment=0` by default,
+- `grampa_h1` and `target_branch_go` default to empty strings; leaving them empty skips GRAMPA or GO enrichment only,
 - GO target can be specified by species name or branch ID.
 
 ### `gg_gene_database_entrypoint.sh`

@@ -53,21 +53,38 @@ Important note:
 `workflow/gg_common_params.sh` currently defines:
 
 - `GG_COMMON_GENETIC_CODE` (default `1`)
-- `GG_COMMON_BUSCO_LINEAGE` (default `embryophyta_odb12`)
-- `GG_COMMON_CONTAMINATION_REMOVAL_RANK` (default `phylum`)
+- `GG_COMMON_BUSCO_LINEAGE` (default `auto`)
+- `GG_COMMON_CONTAMINATION_REMOVAL_RANK` (default `domain`)
 - `GG_COMMON_OUTGROUP_LABELS` (default `Oryza_sativa`)
-- `GG_COMMON_ANNOTATION_REPRESENTATIVE_SPECIES` (default `Arabidopsis_thaliana`)
-- `GG_COMMON_MCMCTREE_DIVERGENCE_TIME_CONSTRAINTS_STR` (default `Arabidopsis_thaliana,Oryza_sativa,130,-`)
-- `GG_COMMON_TREEVIS_CLADE_ORTHOLOG_PREFIX` (default `Arabidopsis_thaliana_`)
-- `GG_COMMON_GRAMPA_H1` (default empty)
-- `GG_COMMON_TARGET_BRANCH_GO` (default `<1>`)
+- `GG_COMMON_ANNOTATION_SPECIES` (default `auto`)
 
 These are intended for values that recur across multiple stages.
 
+For BUSCO, `GG_COMMON_BUSCO_LINEAGE=auto` resolves a dataset from species names.
+For single-species stages, GeneGalleon picks the deepest BUSCO dataset mapped to that species.
+For multi-species BUSCO stages, it picks the deepest BUSCO dataset shared across the dataset's species.
+The first auto-resolved run may need network access to initialize the ETE taxonomy DB and download
+BUSCO placement mapping files; explicit values such as `embryophyta_odb12` still bypass that logic.
+
+For contamination removal, GeneGalleon treats `domain` as the shared canonical value.
+When a downstream tool expects a different synonym, GeneGalleon normalizes it automatically
+(for example, `remove_contaminated_sequences.py` receives `superkingdom`).
+
+For annotation-driven stages, `GG_COMMON_ANNOTATION_SPECIES=auto` prefers model species detected
+in the relevant dataset and falls back to the first available species when none of the preferred
+models are present. Tree-visualization ortholog prefixes derive from that species name downstream,
+so the shared common variable no longer includes a trailing underscore.
+
+`grampa_h1` and `target_branch_go` are no longer shared `GG_COMMON_*` values.
+They are now configured directly in `workflow/gg_genome_evolution_entrypoint.sh`
+and default to empty strings there. When left empty, GeneGalleon skips only the
+GRAMPA-related steps or the GO-enrichment step, respectively.
+
 Typical examples:
 
-- one BUSCO lineage reused by transcriptome, annotation, and genome-evolution runs,
+- one auto-resolved or explicit BUSCO lineage reused by transcriptome, annotation, and genome-evolution runs,
 - one genetic code reused by annotation and gene-family stages,
+- one annotation species reused by GO-enrichment and tree-visualization steps,
 - one preferred outgroup reused by species-tree-aware analyses.
 
 ## How `GG_COMMON_*` is applied
@@ -91,8 +108,9 @@ Core scripts typically consume these values with parameter expansion such as:
 
 ```bash
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
-busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-embryophyta_odb12}}"
+busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 outgroup_labels="${outgroup_labels:-${GG_COMMON_OUTGROUP_LABELS:-Oryza_sativa}}"
+annotation_species="${annotation_species:-${GG_COMMON_ANNOTATION_SPECIES:-auto}}"
 ```
 
 ## Entry-point override patterns
