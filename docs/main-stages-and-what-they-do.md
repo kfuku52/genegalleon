@@ -199,7 +199,8 @@ Main outputs:
 Notable defaults:
 
 - species-tree substeps are enabled in the unified wrapper by default, including BUSCO extraction, ASTRAL tree inference, and the IQ2MC/mcmctree dating steps,
-- shared defaults such as `busco_lineage`, `genetic_code`, and `outgroup_labels` are loaded from `workflow/gg_common_params.sh`,
+- shared defaults such as `busco_lineage` and `genetic_code` are loaded from `workflow/gg_common_params.sh`,
+- species-tree rooting is configured locally in `workflow/gg_genome_evolution_entrypoint.sh` via `species_tree_rooting`,
 - single-copy FASTA/alignment outputs are standardized to `.fa.gz`, and legacy
   plain `.fasta` files in species-tree intermediate directories are auto-migrated.
 

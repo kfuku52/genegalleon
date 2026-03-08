@@ -210,6 +210,7 @@ run_plot_mcmctreer
 run_plot_species_trees
       run_species_busco
       run_species_get_busco_summary
+      species_tree_rooting
       strictly_single_copy_only
       target_branch_go
       timetree_constraint

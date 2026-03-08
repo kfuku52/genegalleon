@@ -1324,6 +1324,7 @@ def test_common_params_define_annotation_species_auto_only_once():
 
 def test_common_params_do_not_define_genome_evolution_specific_grampa_or_go_target():
     text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+    assert "GG_COMMON_OUTGROUP_LABELS" not in text
     assert "GG_COMMON_GRAMPA_H1" not in text
     assert "GG_COMMON_TARGET_BRANCH_GO" not in text
 
@@ -1358,6 +1359,23 @@ def test_genome_evolution_uses_local_optional_grampa_and_go_target_parameters():
     assert ': "${target_branch_go:?' not in core
     assert "      grampa_h1" in config_vars
     assert "      target_branch_go" in config_vars
+
+
+def test_genome_evolution_uses_local_species_tree_rooting_parameter():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+    common = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+
+    assert 'species_tree_rooting="taxonomy" # taxonomy[,ncbi[,opentree,timetree...]] | outgroup,GENUS_SPECIES[,GENUS_SPECIES...] | midpoint | mad | mv' in entrypoint
+    assert "GG_COMMON_OUTGROUP_LABELS" not in common
+    assert 'species_tree_rooting="${species_tree_rooting:-taxonomy}"' in core
+    assert 'parse_species_tree_rooting "${species_tree_rooting}" species_tree_rooting_method species_tree_rooting_value' in core
+    assert 'species_tree_rooting must be one of "outgroup,GENUS_SPECIES[,GENUS_SPECIES...]", "midpoint", "mad", "mv", or "taxonomy[,ncbi[,opentree,timetree...]]".' in core
+    assert 'nwkit_root_args=( --method "${root_method}" --infile "${infile}" --outfile "${outfile}" )' in core
+    assert 'nwkit_root_args+=( --outgroup "${root_value}" )' in core
+    assert 'nwkit_root_args+=( --download_dir "${dir_nwkit_download_dir}" )' in core
+    assert "      species_tree_rooting" in config_vars
 
 
 def test_entrypoint_modify_block_parameters_have_inline_comments():

@@ -22,7 +22,7 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 # Configuration variables are provided by gg_genome_evolution_entrypoint.sh.
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
-outgroup_labels="${outgroup_labels:-${GG_COMMON_OUTGROUP_LABELS:-Oryza_sativa}}"
+species_tree_rooting="${species_tree_rooting:-taxonomy}"
 annotation_species="${annotation_species:-${GG_COMMON_ANNOTATION_SPECIES:-auto}}"
 mcmctree_divergence_time_constraints_str="${mcmctree_divergence_time_constraints_str:-}"
 grampa_h1="${grampa_h1:-}"
@@ -129,6 +129,97 @@ trim_ascii_whitespace() {
   s="${s#"${s%%[![:space:]]*}"}"
   s="${s%"${s##*[![:space:]]}"}"
   printf '%s' "${s}"
+}
+
+species_tree_rooting_method=""
+species_tree_rooting_value=""
+
+parse_species_tree_rooting() {
+  local raw_config=$1
+  local -n method_ref=$2
+  local -n value_ref=$3
+  local -a fields=()
+  local -a normalized_fields=()
+  local idx
+  local method=""
+
+  IFS=',' read -r -a fields <<< "${raw_config}"
+  if [[ ${#fields[@]} -eq 0 ]]; then
+    echo "species_tree_rooting is empty."
+    echo 'Expected one of: "outgroup,GENUS_SPECIES[,GENUS_SPECIES...]", "midpoint", "mad", "mv", "taxonomy[,ncbi[,opentree,timetree...]]".'
+    return 1
+  fi
+
+  for idx in "${!fields[@]}"; do
+    normalized_fields[idx]=$(trim_ascii_whitespace "${fields[idx]}")
+  done
+  method=$(printf '%s' "${normalized_fields[0]}" | tr '[:upper:]' '[:lower:]')
+  if [[ -z "${method}" ]]; then
+    echo "species_tree_rooting is missing a rooting method: ${raw_config}"
+    return 1
+  fi
+
+  case "${method}" in
+    outgroup)
+      if [[ ${#normalized_fields[@]} -lt 2 ]]; then
+        echo "species_tree_rooting=${raw_config} is invalid."
+        echo 'Outgroup rooting requires at least one species label after "outgroup,".'
+        return 1
+      fi
+      value_ref=""
+      for (( idx=1; idx<${#normalized_fields[@]}; idx++ )); do
+        if [[ -z "${normalized_fields[idx]}" ]]; then
+          continue
+        fi
+        if [[ -n "${value_ref}" ]]; then
+          value_ref+=","
+        fi
+        value_ref+="${normalized_fields[idx]}"
+      done
+      if [[ -z "${value_ref}" ]]; then
+        echo "species_tree_rooting=${raw_config} is invalid."
+        echo 'Outgroup rooting requires one or more non-empty species labels after "outgroup,".'
+        return 1
+      fi
+      ;;
+    midpoint|mad|mv)
+      if [[ ${#normalized_fields[@]} -gt 1 ]]; then
+        echo "species_tree_rooting=${raw_config} is invalid."
+        echo "Method ${method} does not accept additional comma-separated fields."
+        return 1
+      fi
+      value_ref=""
+      ;;
+    md)
+      if [[ ${#normalized_fields[@]} -gt 1 ]]; then
+        echo "species_tree_rooting=${raw_config} is invalid."
+        echo 'Method md does not accept additional comma-separated fields.'
+        return 1
+      fi
+      method="mv"
+      value_ref=""
+      ;;
+    taxonomy)
+      value_ref=""
+      for (( idx=1; idx<${#normalized_fields[@]}; idx++ )); do
+        if [[ -z "${normalized_fields[idx]}" ]]; then
+          continue
+        fi
+        if [[ -n "${value_ref}" ]]; then
+          value_ref+=","
+        fi
+        value_ref+="${normalized_fields[idx]}"
+      done
+      ;;
+    *)
+      echo "Invalid species_tree_rooting: ${raw_config}"
+      echo 'species_tree_rooting must be one of "outgroup,GENUS_SPECIES[,GENUS_SPECIES...]", "midpoint", "mad", "mv", or "taxonomy[,ncbi[,opentree,timetree...]]".'
+      return 1
+      ;;
+  esac
+
+  method_ref="${method}"
+  return 0
 }
 
 parse_mcmctree_constraint_record() {
@@ -303,35 +394,51 @@ if [[ "${orthogroup_annotation_method}" != "blastp" && "${orthogroup_annotation_
   exit 1
 fi
 
-root_tree_with_outgroup () {
+if ! parse_species_tree_rooting "${species_tree_rooting}" species_tree_rooting_method species_tree_rooting_value; then
+  exit 1
+fi
+echo "Resolved species_tree_rooting method: ${species_tree_rooting_method}"
+if [[ -n "${species_tree_rooting_value}" ]]; then
+  echo "Resolved species_tree_rooting value: ${species_tree_rooting_value}"
+fi
+
+root_species_tree () {
   local infile=$1
   local outfile=$2
   local tree_description=$3
   local root_log="${dir_tmp}/tmp.nwkit.root.$$.log"
   local outgroup_label_list=()
+  local root_method="${species_tree_rooting_method}"
+  local root_value="${species_tree_rooting_value}"
+  local missing_outgroup=0
+  local root_exit_code=0
+  local -a nwkit_root_args=()
   ensure_parent_dir "${outfile}"
   rm -f -- "${outfile}" "${root_log}"
 
-  local missing_outgroup=0
-  mapfile -t outgroup_label_list < <(printf '%s' "${outgroup_labels}" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d')
-  for outgroup_label in "${outgroup_label_list[@]}"; do
-    if ! grep -q -F -- "${outgroup_label}" "${infile}"; then
-      missing_outgroup=1
-      break
+  nwkit_root_args=( --method "${root_method}" --infile "${infile}" --outfile "${outfile}" )
+  if [[ "${root_method}" == "outgroup" ]]; then
+    mapfile -t outgroup_label_list < <(printf '%s' "${root_value}" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d')
+    for outgroup_label in "${outgroup_label_list[@]}"; do
+      if ! grep -q -F -- "${outgroup_label}" "${infile}"; then
+        missing_outgroup=1
+        break
+      fi
+    done
+    if [[ ${missing_outgroup} -eq 1 ]]; then
+      echo "Error: Outgroup labels (${root_value}) are not present in ${tree_description}."
+      return 1
     fi
-  done
-  if [[ ${missing_outgroup} -eq 1 ]]; then
-    echo "Error: Outgroup labels (${outgroup_labels}) are not present in ${tree_description}."
-    return 1
+    nwkit_root_args+=( --outgroup "${root_value}" )
+  elif [[ "${root_method}" == "taxonomy" ]]; then
+    ensure_dir "${dir_nwkit_download_dir}"
+    nwkit_root_args+=( --download_dir "${dir_nwkit_download_dir}" )
+    if [[ -n "${root_value}" ]]; then
+      nwkit_root_args+=( --taxonomy_source "${root_value}" )
+    fi
   fi
 
-  local root_exit_code=0
-  if nwkit root \
-    --method outgroup \
-    --outgroup "${outgroup_labels}" \
-    --infile "${infile}" \
-    --outfile "${outfile}" \
-    2> "${root_log}"; then
+  if nwkit root "${nwkit_root_args[@]}" 2> "${root_log}"; then
     root_exit_code=0
   else
     root_exit_code=$?
@@ -553,7 +660,7 @@ optimize_astral_tree_branch_lengths () {
   fi
 
   local root_exit_code=0
-  if root_tree_with_outgroup \
+  if root_species_tree \
     "${iqtree_prefix}.treefile" \
     "${tmp_rooted_optimized_tree}" \
     "optimized ASTRAL ${tag} tree"; then
@@ -623,10 +730,12 @@ if [[ ${run_mcmctree1} -eq 1 || ${run_mcmctree2} -eq 1 ]]; then
   fi
   echo "Using IQ2MC binary: ${iq2mc_binary}"
   outgroup_label_list=()
-  mapfile -t outgroup_label_list < <(printf '%s' "${outgroup_labels}" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d')
-  for outgroup_label in "${outgroup_label_list[@]}"; do
-    stop_if_species_not_found_in "${dir_sp_cds}" "${outgroup_label}"
-  done
+  if [[ "${species_tree_rooting_method}" == "outgroup" ]]; then
+    mapfile -t outgroup_label_list < <(printf '%s' "${species_tree_rooting_value}" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d')
+    for outgroup_label in "${outgroup_label_list[@]}"; do
+      stop_if_species_not_found_in "${dir_sp_cds}" "${outgroup_label}"
+    done
+  fi
   if [[ ${timetree_constraint} -eq 0 ]]; then
     if [[ ${#mcmctree_divergence_time_constraints[@]} -eq 0 ]]; then
       echo "timetree_constraint=0 requires mcmctree_divergence_time_constraints_str with one or more records."
@@ -1036,7 +1145,7 @@ task="Rooting of IQ-TREE's protein tree"
 if [[ ! -s "${file_concat_iqtree_pep_root}" && ${run_concat_iqtree_protein} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  root_tree_with_outgroup \
+  root_species_tree \
   "${file_concat_iqtree_pep}" \
   "${file_concat_iqtree_pep_root}" \
   "concatenated protein tree"
@@ -1109,7 +1218,7 @@ task="Rooting of IQ-TREE's DNA tree"
 if [[ ! -s "${file_concat_iqtree_dna_root}" && ${run_concat_iqtree_dna} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  root_tree_with_outgroup \
+  root_species_tree \
   "${file_concat_iqtree_dna}" \
   "${file_concat_iqtree_dna_root}" \
   "concatenated DNA tree"
@@ -1201,7 +1310,7 @@ if [[ ( ! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}" ) && ${r
       --infile "tmp.astral.out.tree" \
       --outfile "${tmp_label_tree}" \
       --label_key "${labels[i]}"
-      root_tree_with_outgroup \
+      root_species_tree \
       "${tmp_label_tree}" \
       "single_copy.astral.pep.${labels[i]}.nwk" \
       "ASTRAL protein tree (${labels[i]})"
@@ -1326,7 +1435,7 @@ if [[ ( ! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}" ) && ${r
       --infile "tmp.astral.out.tree" \
       --outfile "${tmp_label_tree}" \
       --label_key "${labels[i]}"
-      root_tree_with_outgroup \
+      root_species_tree \
       "${tmp_label_tree}" \
       "single_copy.astral.dna.${labels[i]}.nwk" \
       "ASTRAL DNA tree (${labels[i]})"

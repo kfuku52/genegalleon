@@ -55,7 +55,6 @@ Important note:
 - `GG_COMMON_GENETIC_CODE` (default `1`)
 - `GG_COMMON_BUSCO_LINEAGE` (default `auto`)
 - `GG_COMMON_CONTAMINATION_REMOVAL_RANK` (default `domain`)
-- `GG_COMMON_OUTGROUP_LABELS` (default `Oryza_sativa`)
 - `GG_COMMON_ANNOTATION_SPECIES` (default `auto`)
 
 These are intended for values that recur across multiple stages.
@@ -77,17 +76,28 @@ in the relevant dataset and falls back to the first available species when none 
 models are present. Tree-visualization ortholog prefixes derive from that species name downstream,
 so the shared common variable no longer includes a trailing underscore.
 
-`grampa_h1` and `target_branch_go` are no longer shared `GG_COMMON_*` values.
+`species_tree_rooting`, `grampa_h1`, and `target_branch_go` are no longer shared `GG_COMMON_*` values.
 They are now configured directly in `workflow/gg_genome_evolution_entrypoint.sh`
-and default to empty strings there. When left empty, GeneGalleon skips only the
+as genome-evolution-local parameters. `species_tree_rooting` defaults to
+`taxonomy` there and accepts forms such as:
+
+- `taxonomy`
+- `taxonomy,ncbi`
+- `taxonomy,ncbi,opentree,timetree`
+- `outgroup,Oryza_sativa`
+- `outgroup,Oryza_sativa,Amborella_trichopoda`
+- `midpoint`
+- `mad`
+- `mv`
+
+When `grampa_h1` or `target_branch_go` are left empty, GeneGalleon skips only the
 GRAMPA-related steps or the GO-enrichment step, respectively.
 
 Typical examples:
 
 - one auto-resolved or explicit BUSCO lineage reused by transcriptome, annotation, and genome-evolution runs,
 - one genetic code reused by annotation and gene-family stages,
-- one annotation species reused by GO-enrichment and tree-visualization steps,
-- one preferred outgroup reused by species-tree-aware analyses.
+- one annotation species reused by GO-enrichment and tree-visualization steps.
 
 ## How `GG_COMMON_*` is applied
 
@@ -111,7 +121,6 @@ Core scripts typically consume these values with parameter expansion such as:
 ```bash
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
-outgroup_labels="${outgroup_labels:-${GG_COMMON_OUTGROUP_LABELS:-Oryza_sativa}}"
 annotation_species="${annotation_species:-${GG_COMMON_ANNOTATION_SPECIES:-auto}}"
 ```
 
@@ -158,6 +167,7 @@ Use the following split in practice:
 
 - stage-local flags in the entrypoint block,
 - cross-stage defaults in `workflow/gg_common_params.sh`,
+- species-tree rooting in `workflow/gg_genome_evolution_entrypoint.sh` via `species_tree_rooting`,
 - one-off input-generation automation via `GG_INPUT_*`,
 - path relocation via `gg_workspace_dir` / `gg_container_image_path`.
 

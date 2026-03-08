@@ -107,6 +107,7 @@ notung_jar="/usr/local/bin/Notung.jar" # Path to the Notung JAR used for rooting
 
 # Species-tree parameters
 undated_species_tree="astral_pep" # {iqtree_dna,iqtree_pep,astral_dna,astral_pep}
+species_tree_rooting="taxonomy" # taxonomy[,ncbi[,opentree,timetree...]] | outgroup,GENUS_SPECIES[,GENUS_SPECIES...] | midpoint | mad | mv
 astral_min_tips=4 # Minimum tip count required for per-gene trees used by ASTRAL.
 timetree_constraint=1 # Use TimeTree confidence intervals for species-tree dating when set to 1.
 mcmctree_divergence_time_constraints_str="" # Used only when timetree_constraint=0. Example: "Arabidopsis_thaliana,Oryza_sativa,130,-|Arabidopsis_thaliana,Amborella_trichopoda,150,200"
