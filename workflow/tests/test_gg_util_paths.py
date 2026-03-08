@@ -29,6 +29,205 @@ def test_workspace_pfam_le_dir_is_under_downloads_dedicated_folder(tmp_path):
     assert completed.stdout.strip() == str(project_dir / "downloads" / "pfam" / "Pfam_LE")
 
 
+def test_contamination_rank_normalizes_superkingdom_for_amalgkit(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "gg_normalize_contamination_removal_rank_for_amalgkit superkingdom"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "domain"
+
+
+def test_contamination_rank_normalizes_domain_for_remove_contaminated_sequences(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "gg_normalize_contamination_removal_rank_for_remove_contaminated_sequences domain"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "superkingdom"
+
+
+def test_resolve_annotation_species_prefers_known_model_species(tmp_path):
+    species_dir = tmp_path / "species_cds"
+    species_dir.mkdir()
+    (species_dir / "Cephalotus_follicularis.fa").write_text(">a\nATG\n")
+    (species_dir / "Arabidopsis_thaliana.fa").write_text(">a\nATG\n")
+    (species_dir / "Oryza_sativa.fa").write_text(">a\nATG\n")
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"set -- $(gg_species_names_from_fasta_dir {shlex.quote(str(species_dir))}); "
+        'gg_resolve_annotation_species auto "$@"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "Arabidopsis_thaliana"
+
+
+def test_resolve_annotation_species_uses_first_available_when_no_model_species_exists(tmp_path):
+    species_dir = tmp_path / "species_cds"
+    species_dir.mkdir()
+    (species_dir / "Cephalotus_follicularis.fa").write_text(">a\nATG\n")
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"set -- $(gg_species_names_from_fasta_dir {shlex.quote(str(species_dir))}); "
+        'gg_resolve_annotation_species auto "$@"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "Cephalotus_follicularis"
+
+
+def test_resolve_annotation_species_normalizes_legacy_trailing_underscore(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        'gg_resolve_annotation_species "Arabidopsis_thaliana_"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "Arabidopsis_thaliana"
+
+
+def test_resolve_busco_lineage_from_lineages_prefers_deepest_mapped_taxon(tmp_path):
+    mapping_dir = tmp_path / "busco_mappings"
+    mapping_dir.mkdir()
+    (
+        mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb12.test.txt"
+    ).write_text(
+        "2759\teukaryota_odb12\n"
+        "33090\tviridiplantae_odb12\n"
+        "3193\tembryophyta_odb12\n"
+        "3744\trosales_odb12\n"
+    )
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f'gg_resolve_busco_lineage_from_lineages auto {shlex.quote(str(mapping_dir))} '
+        '"1,131567,2759,33090,3193,3744"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "rosales_odb12"
+
+
+def test_resolve_busco_lineage_from_lineages_uses_deepest_common_taxon(tmp_path):
+    mapping_dir = tmp_path / "busco_mappings"
+    mapping_dir.mkdir()
+    (
+        mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb12.test.txt"
+    ).write_text(
+        "2759\teukaryota_odb12\n"
+        "33090\tviridiplantae_odb12\n"
+        "3193\tembryophyta_odb12\n"
+        "3700\tbrassicales_odb12\n"
+        "4530\tpoales_odb12\n"
+    )
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f'gg_resolve_busco_lineage_from_lineages auto {shlex.quote(str(mapping_dir))} '
+        '"1,131567,2759,33090,3193,3700" '
+        '"1,131567,2759,33090,3193,4530"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "embryophyta_odb12"
+
+
+def test_resolve_busco_lineage_from_lineages_passes_through_explicit_value(tmp_path):
+    mapping_dir = tmp_path / "busco_mappings"
+    mapping_dir.mkdir()
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f'gg_resolve_busco_lineage_from_lineages metazoa_odb13 {shlex.quote(str(mapping_dir))} '
+        '"1,131567,2759,33208"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "metazoa_odb13"
+
+
+def test_resolve_busco_lineage_from_lineages_prefers_latest_common_odb_version(tmp_path):
+    mapping_dir = tmp_path / "busco_mappings"
+    mapping_dir.mkdir()
+    (
+        mapping_dir / "mapping_taxids-busco_dataset_name.archaea_odb13.test.txt"
+    ).write_text("2157\tarchaea_odb13\n")
+    (
+        mapping_dir / "mapping_taxids-busco_dataset_name.bacteria_odb13.test.txt"
+    ).write_text("2\tbacteria_odb13\n")
+    (
+        mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb12.test.txt"
+    ).write_text(
+        "2759\teukaryota_odb12\n"
+        "33090\tviridiplantae_odb12\n"
+        "3193\tembryophyta_odb12\n"
+    )
+    (
+        mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb13.test.txt"
+    ).write_text(
+        "2759\teukaryota_odb13\n"
+        "33090\tviridiplantae_odb13\n"
+        "3193\tembryophyta_odb13\n"
+        "3744\trosales_odb13\n"
+    )
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f'gg_resolve_busco_lineage_from_lineages auto {shlex.quote(str(mapping_dir))} '
+        '"1,131567,2759,33090,3193,3744"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "rosales_odb13"
+
+
+def test_finalize_auto_busco_lineage_name_appends_requested_odb_suffix(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        'gg_finalize_auto_busco_lineage_name brassicales 13'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "brassicales_odb13"
+
+
+def test_finalize_auto_busco_lineage_name_preserves_existing_suffix(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        'gg_finalize_auto_busco_lineage_name embryophyta_odb12'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "embryophyta_odb12"
+
+
 def test_workspace_layout_defaults_to_split_for_empty_workspace(tmp_path):
     project_dir = tmp_path / "project"
     project_dir.mkdir()

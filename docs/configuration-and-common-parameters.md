@@ -63,8 +63,10 @@ These are intended for values that recur across multiple stages.
 For BUSCO, `GG_COMMON_BUSCO_LINEAGE=auto` resolves a dataset from species names.
 For single-species stages, GeneGalleon picks the deepest BUSCO dataset mapped to that species.
 For multi-species BUSCO stages, it picks the deepest BUSCO dataset shared across the dataset's species.
+When BUSCO publishes multiple `odbN` generations, auto-resolution now uses the latest generation
+for which placement mappings are available across archaea, bacteria, and eukaryota.
 The first auto-resolved run may need network access to initialize the ETE taxonomy DB and download
-BUSCO placement mapping files; explicit values such as `embryophyta_odb12` still bypass that logic.
+BUSCO placement mapping files; explicit values such as `embryophyta_odb13` still bypass that logic.
 
 For contamination removal, GeneGalleon treats `domain` as the shared canonical value.
 When a downstream tool expects a different synonym, GeneGalleon normalizes it automatically
