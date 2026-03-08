@@ -766,8 +766,8 @@ else
 fi
 
 task='BUSCO for cDNA isoforms (isoform.fasta)'
-disable_if_no_input_file "run_busco1" "${file_isoform}"
-if [[ ( ! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna_isoforms}" ) && ${run_busco1} -eq 1 ]]; then
+disable_if_no_input_file "run_busco_isoforms" "${file_isoform}"
+if [[ ( ! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna_isoforms}" ) && ${run_busco_isoforms} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit seq --threads "${NSLOTS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"
@@ -806,8 +806,8 @@ else
 fi
 
 task='BUSCO for longest CDS'
-disable_if_no_input_file "run_busco2" "${file_longestcds}"
-if [[ ( ! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longest_cds}" ) && ${run_busco2} -eq 1 ]]; then
+disable_if_no_input_file "run_busco_longest_cds" "${file_longestcds}"
+if [[ ( ! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longest_cds}" ) && ${run_busco_longest_cds} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit seq --threads "${NSLOTS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"
@@ -846,8 +846,8 @@ else
 fi
 
 task='BUSCO for contamination-removed longest CDS'
-disable_if_no_input_file "run_busco3" "${file_longestcds_contamination_removal_fasta}"
-if [[ ( ! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_short_longest_cds_filtered}" ) && ${run_busco3} -eq 1 ]]; then
+disable_if_no_input_file "run_busco_contamination_removed_longest_cds" "${file_longestcds_contamination_removal_fasta}"
+if [[ ( ! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_short_longest_cds_filtered}" ) && ${run_busco_contamination_removed_longest_cds} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit seq --threads "${NSLOTS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"

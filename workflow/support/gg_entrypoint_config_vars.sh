@@ -279,9 +279,9 @@ run_amalgkit_metadata_or_integrate
 run_amalgkit_quant
 run_assembly
 run_assembly_stat
-run_busco1
-run_busco2
-run_busco3
+run_busco_contamination_removed_longest_cds
+run_busco_isoforms
+run_busco_longest_cds
 run_longestcds
 run_longestcds_contamination_removal
 run_longestcds_fx2tab

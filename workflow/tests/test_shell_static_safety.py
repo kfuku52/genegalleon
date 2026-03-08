@@ -1407,6 +1407,28 @@ def test_annotation_and_transcriptome_use_local_contamination_removal_rank_param
     assert "contamination_removal_rank" in config_vars
 
 
+def test_transcriptome_entrypoint_uses_descriptive_busco_flag_names():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
+    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+
+    assert 'run_busco_isoforms=1 # BUSCO for transcriptome assembly with isoforms.' in entrypoint
+    assert 'run_busco_longest_cds=1 # BUSCO for longest CDS.' in entrypoint
+    assert 'run_busco_contamination_removed_longest_cds=0 # BUSCO for contamination-removed longest CDS.' in entrypoint
+    assert 'disable_if_no_input_file "run_busco_isoforms" "${file_isoform}"' in core
+    assert 'disable_if_no_input_file "run_busco_longest_cds" "${file_longestcds}"' in core
+    assert 'disable_if_no_input_file "run_busco_contamination_removed_longest_cds" "${file_longestcds_contamination_removal_fasta}"' in core
+    assert "run_busco1" not in entrypoint
+    assert "run_busco2" not in entrypoint
+    assert "run_busco3" not in entrypoint
+    assert "run_busco1" not in core
+    assert "run_busco2" not in core
+    assert "run_busco3" not in core
+    assert "run_busco1" not in config_vars
+    assert "run_busco2" not in config_vars
+    assert "run_busco3" not in config_vars
+
+
 def test_entrypoint_modify_block_parameters_have_inline_comments():
     scripts = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
     assert scripts, "No entrypoint scripts were found."
