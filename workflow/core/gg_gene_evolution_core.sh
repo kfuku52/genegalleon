@@ -349,12 +349,6 @@ file_og_promoter_fasta="${dir_output_active}/promoter_fasta/${og_id}_promoter.fa
 file_og_meme="${dir_output_active}/meme/${og_id}_meme.xml"
 file_og_fimo="${dir_output_active}/fimo/${og_id}_fimo.tsv"
 file_og_fimo_collapsed="${dir_output_active}/fimo_collapsed/${og_id}_fimo.collapsed.tsv"
-# OU expression modeling
-file_og_pem_rdata="${dir_output_active}/phylogeneticem_rdata/${og_id}_PhylogeneticEM.RData"
-file_og_pem_tree="${dir_output_active}/phylogeneticem_tree/${og_id}_PhylogeneticEM.tree.tsv"
-file_og_pem_regime="${dir_output_active}/phylogeneticem_regime/${og_id}_PhylogeneticEM.regime.tsv"
-file_og_pem_leaf="${dir_output_active}/phylogeneticem_leaf/${og_id}_PhylogeneticEM.leaf.tsv"
-file_og_pem_plot="${dir_output_active}/phylogeneticem_plot/${og_id}_PhylogeneticEM.pdf"
 file_og_l1ou_fit_rdata="${dir_output_active}/l1ou_fit_rdata/${og_id}_l1ou.RData"
 file_og_l1ou_fit_conv_rdata="${dir_output_active}/l1ou_fit_conv_rdata/${og_id}_l1ou.conv.RData"
 file_og_l1ou_fit_tree="${dir_output_active}/l1ou_fit_tree/${og_id}_l1ou.tree.tsv"
@@ -524,7 +518,6 @@ else
   echo '${run_get_expression_matrix}, ${run_tree_pruning}, and other options are deactivated.'
   run_tree_pruning=0
   run_get_expression_matrix=0
-  run_phylogeneticem=0
   run_l1ou=0
 fi
 if [[ -d "${dir_sp_genome}" ]] && [[ -n "$(find "${dir_sp_genome}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
@@ -2137,7 +2130,7 @@ if [[ ${run_tree_pruning} -eq 1 ]]; then
       assert_strictly_bifurcating_tree "${file_og_dated_tree_analysis}" "Dated analysis tree"
     fi
 fi
-if [[ -s "${file_og_expression}" && ( ${run_l1ou} -eq 1 || ${run_phylogeneticem} -eq 1 ) ]]; then
+if [[ -s "${file_og_expression}" && ${run_l1ou} -eq 1 ]]; then
   # This block should be run after tree pruning.
   num_gene_trait=$(( $(wc -l < "${file_og_expression}") - 1 )) # -1 for header
   num_gene_tree=$(gg_count_fasta_records "${file_og_trimmed_aln_analysis}")
@@ -2145,7 +2138,7 @@ if [[ -s "${file_og_expression}" && ( ${run_l1ou} -eq 1 || ${run_phylogeneticem}
       echo "num_gene_trait (${num_gene_trait}) and num_gene_tree (${num_gene_tree}) matched."
   else
       echo "num_gene_trait (${num_gene_trait}) and num_gene_tree (${num_gene_tree}) did not match."
-      if [[ ${run_tree_pruning} -ne 1 && ( ${run_phylogeneticem} -eq 1 || ${run_l1ou} -eq 1 ) ]]; then
+      if [[ ${run_tree_pruning} -ne 1 && ${run_l1ou} -eq 1 ]]; then
         echo "Set run_tree_pruning=1 to run phylogenetic comparative analysis. Exiting."
         exit 1
     fi
@@ -2162,11 +2155,6 @@ if [[ ${check_pruned} -eq 1 ]]; then
         "${file_og_gff_info}"
         "${file_og_scm_intron_summary}"
         "${file_og_scm_intron_plot}"
-        "${file_og_pem_rdata}"
-        "${file_og_pem_tree}"
-        "${file_og_pem_regime}"
-        "${file_og_pem_leaf}"
-        "${file_og_pem_plot}"
         "${file_og_l1ou_fit_rdata}"
         "${file_og_l1ou_fit_conv_rdata}"
         "${file_og_l1ou_fit_tree}"
@@ -2666,37 +2654,6 @@ else
 	gg_step_skip "${task}"
 fi
 
-task="PhylogeneticEM"
-disable_if_no_input_file "run_phylogeneticem" "${file_og_expression}" "${file_og_dated_tree_analysis}"
-if [[ ${run_phylogeneticem} -eq 1 && ( ! -s "${file_og_pem_rdata}" || ! -s "${file_og_pem_tree}" || ! -s "${file_og_pem_regime}" || ! -s "${file_og_pem_leaf}" ) && ${num_gene_after_maxalign:-0} -gt 3 ]]; then
-	gg_step_start "${task}"
-
-	pem_fit_file=''
-	if [[ ${phylogeneticem_use_fit_file} -eq 1 && -s "${file_og_pem_rdata}" ]]; then
-		pem_fit_file=${file_og_pem_rdata}
-	fi
-
-		Rscript "${gg_support_dir}/detect_OU_shift_PhylogeneticEM.r" \
-		--tree_file="${file_og_dated_tree_analysis}" \
-		--trait_file="${file_og_expression}" \
-		--nslots="${GG_TASK_CPUS}" \
-		--fit_file="${pem_fit_file}" \
-		--require_internal_node_labels="${require_internal_node_labels:-1}" \
-		--clade_collapse_similarity_method="${clade_collapse_similarity_method}" \
-		--clade_collapse_similarity_threshold="${clade_collapse_similarity_threshold}" \
-		--ceil_negative=0 \
-	  --replicate_sep="_"
-
-	mv_out PhylogeneticEM.tree.tsv "${file_og_pem_tree}"
-	mv_out PhylogeneticEM.regime.tsv "${file_og_pem_regime}"
-	mv_out PhylogeneticEM.leaf.tsv "${file_og_pem_leaf}"
-	mv_out PhylogeneticEM.plot.pdf "${file_og_pem_plot}"
-	mv_out PhylogeneticEM.out.RData "${file_og_pem_rdata}"
-
-else
-	gg_step_skip "${task}"
-fi
-
 task="l1ou"
 disable_if_no_input_file "run_l1ou" "${file_og_trimmed_aln_analysis}" "${file_og_expression}" "${file_og_dated_tree_analysis}"
 if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || ! -s "${file_og_l1ou_fit_regime}" || ! -s "${file_og_l1ou_fit_leaf}" ) && ${run_l1ou} -eq 1 ]]; then
@@ -2709,7 +2666,7 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
     max_nshift=0
   fi
 
-  # taskset is needed because l1ou is not good at handling multiple CPUs.
+  # Pin the OU run to an explicit CPU subset to avoid oversubscription.
   if command -v nproc >/dev/null 2>&1; then
     CPU_PER_HOST=$(nproc)
   elif command -v getconf >/dev/null 2>&1; then
@@ -2731,7 +2688,7 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
   fi
 		echo "CPU_PER_HOST: ${CPU_PER_HOST}"
 			cpu_id=$(python -c 'import sys; from numpy import random; a = random.choice(range(int(sys.argv[2])), int(sys.argv[1]), replace=False); print(",".join([str(b) for b in a]))' "${cpu_pick}" "${CPU_PER_HOST}")
-			echo "CPU IDs for l1ou: ${cpu_id}"
+			echo "CPU IDs for kfl1ou: ${cpu_id}"
 
 
 	fit_ind_file=''
@@ -2740,15 +2697,11 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
 	fi
 
 			l1ou_cmd=(
-			  Rscript "${gg_support_dir}/detect_OU_shift_l1ou.r"
+			  Rscript "${gg_support_dir}/detect_OU_shift_kfl1ou.r"
 			  --max_nshift="${max_nshift}"
 			  --tree_file="${file_og_dated_tree_analysis}"
 			  --trait_file="${file_og_expression}"
 			  --nslots="${GG_TASK_CPUS}"
-			  --require_internal_node_labels="${require_internal_node_labels:-1}"
-			  --clade_collapse_similarity_method="${clade_collapse_similarity_method}"
-			  --clade_collapse_similarity_threshold="${clade_collapse_similarity_threshold}"
-			  --ceil_negative=0
 			  --criterion="${l1ou_criterion}"
 			  --nbootstrap="${l1ou_nbootstrap}"
 			  --fit_ind_file="${fit_ind_file}"
@@ -2760,7 +2713,7 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
 			if command -v taskset >/dev/null 2>&1 && [[ -n "${cpu_id}" ]]; then
 			  taskset -c "${cpu_id}" "${l1ou_cmd[@]}"
 			else
-			  echo "taskset not available. Running l1ou without CPU pinning."
+			  echo "taskset not available. Running kfl1ou without CPU pinning."
 			  "${l1ou_cmd[@]}"
 			fi
 
@@ -3029,9 +2982,6 @@ if [[ ( ${summary_flag} -eq 1 || ! -s "${file_og_stat_branch}" || ! -s "${file_o
 		--l1ou_tree "${file_og_l1ou_fit_tree}" \
 		--l1ou_regime "${file_og_l1ou_fit_regime}" \
 		--l1ou_leaf "${file_og_l1ou_fit_leaf}" \
-		--phylogeneticem_tree "${file_og_pem_tree}" \
-		--phylogeneticem_regime "${file_og_pem_regime}" \
-		--phylogeneticem_leaf "${file_og_pem_leaf}" \
 		--expression "${file_og_expression}" \
 		--mapdnds_tree_dn "${file_og_mapdnds_dn}" \
 		--mapdnds_tree_ds "${file_og_mapdnds_ds}" \

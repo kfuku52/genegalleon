@@ -309,12 +309,13 @@ install_r_cran_packages() {
   micromamba run -n "${env_name}" Rscript -e "pkgs <- c(${pkg_expr}); missing <- pkgs[!vapply(pkgs, requireNamespace, quietly=TRUE, FUN.VALUE=logical(1))]; if (length(missing) > 0) stop(sprintf('Missing packages in env %s: %s', '${env_name}', paste(missing, collapse=', ')))"
 }
 
-install_r_l1ou() {
+install_r_kfl1ou() {
   local jobs
   jobs=$(build_jobs)
-  log "Ensuring GitHub package in '${r_env_name}' with ${jobs} job(s): l1ou"
+  log "Ensuring GitHub package in '${r_env_name}' with ${jobs} job(s): kfl1ou"
   MAKEFLAGS="-j${jobs}" CMAKE_BUILD_PARALLEL_LEVEL="${jobs}" \
-    micromamba run -n "${r_env_name}" Rscript -e "options(repos=c(CRAN='https://cloud.r-project.org')); options(Ncpus=${jobs}L); dep_levels <- c('Depends','Imports','LinkingTo'); if (!requireNamespace('l1ou', quietly=TRUE)) { if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes', dependencies=dep_levels); remotes::install_github('khabbazian/l1ou', dependencies=NA, upgrade='never'); }; if (!requireNamespace('l1ou', quietly=TRUE)) stop('Missing package in env ${r_env_name}: l1ou')"
+    micromamba run -n "${r_env_name}" Rscript -e "options(repos=c(CRAN='https://cloud.r-project.org')); options(Ncpus=${jobs}L); dep_levels <- c('Depends','Imports','LinkingTo'); if (!requireNamespace('kfl1ou', quietly=TRUE)) { if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes', dependencies=dep_levels); remotes::install_github('kfuku52/kfl1ou', dependencies=NA, upgrade='never'); }; if (!requireNamespace('kfl1ou', quietly=TRUE)) stop('Missing package in env ${r_env_name}: kfl1ou')"
+  micromamba run -n "${r_env_name}" Rscript -e "if (!requireNamespace('kfl1ou', quietly=TRUE)) stop('Missing package in env ${r_env_name}: kfl1ou')"
 }
 
 verify_plotting_packages_in_r() {
@@ -326,8 +327,8 @@ main() {
   install_cafe5
   install_mapnh
   install_astral_hybrid_wrapper
-  install_r_cran_packages "${r_env_name}" PhylogeneticEM Rphylopars
-  install_r_l1ou
+  install_r_cran_packages "${r_env_name}" Rphylopars
+  install_r_kfl1ou
   verify_plotting_packages_in_r
 }
 

@@ -639,11 +639,27 @@ def test_gene_evolution_core_clamps_l1ou_cpu_selection_to_available_cores():
     assert '"${l1ou_cmd[@]}"' in text
 
 
+def test_gene_evolution_core_uses_kfl1ou_wrapper_with_supported_args_only():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    block_start = text.index('task="l1ou"')
+    block_end = text.index('mv_out fit_ind.RData', block_start)
+    l1ou_block = text[block_start:block_end]
+
+    assert 'detect_OU_shift_l1ou.r' not in l1ou_block
+    assert 'Rscript "${gg_support_dir}/detect_OU_shift_kfl1ou.r"' in l1ou_block
+    assert '--require_internal_node_labels="${require_internal_node_labels:-1}"' not in l1ou_block
+    assert '--clade_collapse_similarity_method="${clade_collapse_similarity_method}"' not in l1ou_block
+    assert '--clade_collapse_similarity_threshold="${clade_collapse_similarity_threshold}"' not in l1ou_block
+    assert '--ceil_negative=0' not in l1ou_block
+    assert '--replicate_sep="_"' in l1ou_block
+
+
 def test_gene_evolution_core_uses_explicit_ne_and_grouped_logic_for_tree_pruning_gate():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    assert "if [[ ! ${run_tree_pruning} -eq 1 && ${run_phylogeneticem} -eq 1 || ${run_l1ou} -eq 1 ]]; then" not in text
-    assert "if [[ ${run_tree_pruning} -ne 1 && ( ${run_phylogeneticem} -eq 1 || ${run_l1ou} -eq 1 ) ]]; then" in text
+    assert "if [[ ! ${run_tree_pruning} -eq 1 && ${run_l1ou} -eq 1 ]]; then" not in text
+    assert "if [[ ${run_tree_pruning} -ne 1 && ${run_l1ou} -eq 1 ]]; then" in text
 
 
 def test_genome_evolution_core_uses_ne_for_busco_count_mismatch_checks():
@@ -874,6 +890,16 @@ def test_entrypoints_forward_cleanup_flags_defined_outside_config_block():
 def test_gene_convergence_entrypoint_does_not_define_unused_delete_tmp_dir():
     text = _read_text(WORKFLOW_DIR / "gg_gene_convergence_entrypoint.sh")
     assert "delete_tmp_dir=" not in text
+
+
+def test_gene_evolution_entrypoint_allows_debug_runner_mode_overrides():
+    text = _read_text(WORKFLOW_DIR / "gg_gene_evolution_entrypoint.sh")
+    assert 'mode_orthogroup="${mode_orthogroup:-0}"' in text
+    assert 'mode_query2family="${mode_query2family:-1}"' in text
+    assert 'run_hyphy_relax="${run_hyphy_relax:-0}"' in text
+    assert 'run_hyphy_relax_reversed="${run_hyphy_relax_reversed:-0}"' in text
+    assert "mode_orthogroup=0 # Analyze OrthoFinder orthogroups" not in text
+    assert "mode_query2family=1 # Analyze all homologs of input genelist" not in text
 
 
 def test_entrypoints_with_exit_if_running_call_duplicate_guard():
@@ -1583,9 +1609,6 @@ def test_gene_evolution_core_quotes_trait_promoter_and_summary_path_options():
         "--l1ou_tree ${file_og_l1ou_fit_tree}",
         "--l1ou_regime ${file_og_l1ou_fit_regime}",
         "--l1ou_leaf ${file_og_l1ou_fit_leaf}",
-        "--phylogeneticem_tree ${file_og_pem_tree}",
-        "--phylogeneticem_regime ${file_og_pem_regime}",
-        "--phylogeneticem_leaf ${file_og_pem_leaf}",
         "--expression ${file_og_expression}",
         "--mapdnds_tree_dn ${file_og_mapdnds_dn}",
         "--mapdnds_tree_ds ${file_og_mapdnds_ds}",
@@ -1623,9 +1646,6 @@ def test_gene_evolution_core_quotes_trait_promoter_and_summary_path_options():
         '--l1ou_tree "${file_og_l1ou_fit_tree}"',
         '--l1ou_regime "${file_og_l1ou_fit_regime}"',
         '--l1ou_leaf "${file_og_l1ou_fit_leaf}"',
-        '--phylogeneticem_tree "${file_og_pem_tree}"',
-        '--phylogeneticem_regime "${file_og_pem_regime}"',
-        '--phylogeneticem_leaf "${file_og_pem_leaf}"',
         '--expression "${file_og_expression}"',
         '--mapdnds_tree_dn "${file_og_mapdnds_dn}"',
         '--mapdnds_tree_ds "${file_og_mapdnds_ds}"',
@@ -2253,7 +2273,6 @@ def test_support_python_scalar_conditions_use_logical_and_not_bitwise_and():
         '(os.path.exists(params["unrooted_tree"]))&(os.path.exists(params["rooted_tree"]))',
         '(os.path.exists(params["dated_tree"]))&(os.path.exists(params["species_tree"]))',
         '(os.path.exists(params["l1ou_regime"]))&(os.path.exists(params["l1ou_leaf"]))',
-        '(os.path.exists(params["phylogeneticem_regime"]))&(os.path.exists(params["phylogeneticem_leaf"]))',
         '(os.path.exists(params["expression"]))&(os.path.exists(params["rooted_tree"]))',
         "(params['clade_ortholog_prefix']!='')&(os.path.exists(params[\"rooted_tree\"]))",
     ]
@@ -2409,10 +2428,9 @@ def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     banned_tokens = [
-        "if [[ -s ${file_og_expression} && ( ${run_l1ou} -eq 1 || ${run_phylogeneticem} -eq 1 ) ]]; then",
+        "if [[ -s ${file_og_expression} && ${run_l1ou} -eq 1 ]]; then",
         "if [[ ! -s ${file_og_hyphy_relax_reversed} && ${run_hyphy_relax_reversed} -eq 1 ]]; then",
         "if [[ ! -s ${file_og_scm_intron_summary} && ${run_scm_intron} -eq 1 ]]; then",
-        "if [[ ${run_phylogeneticem} -eq 1 && ( ! -s ${file_og_pem_rdata} || ! -s ${file_og_pem_tree} ||  ! -s ${file_og_pem_regime} || ! -s ${file_og_pem_leaf} ) && ${num_gene_after_maxalign:-0} -gt 3 ]]; then",
         "if [[ ( ! -s ${file_og_l1ou_fit_rdata} || ! -s ${file_og_l1ou_fit_tree} || ! -s ${file_og_l1ou_fit_regime} || ! -s ${file_og_l1ou_fit_leaf} ) && ${run_l1ou} -eq 1 ]]; then",
         "if ( [[ ${summary_flag} -eq 1 || ! -s ${file_og_tree_plot} ]] ) && [[ ${run_tree_plot} -eq 1 ]]; then",
         "if [[ -s ${file_og_stat_branch} && -s ${file_og_stat_tree} && -s ${file_og_tree_plot} && ${gg_debug_mode:-0} -eq 0 ]]; then",
@@ -2421,16 +2439,17 @@ def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
         assert token not in text
 
     expected_tokens = [
-        'if [[ -s "${file_og_expression}" && ( ${run_l1ou} -eq 1 || ${run_phylogeneticem} -eq 1 ) ]]; then',
+        'if [[ -s "${file_og_expression}" && ${run_l1ou} -eq 1 ]]; then',
         'if [[ ! -s "${file_og_hyphy_relax_reversed}" && ${run_hyphy_relax_reversed} -eq 1 ]]; then',
         'if [[ ! -s "${file_og_scm_intron_summary}" && ${run_scm_intron} -eq 1 ]]; then',
-        'if [[ ${run_phylogeneticem} -eq 1 && ( ! -s "${file_og_pem_rdata}" || ! -s "${file_og_pem_tree}" || ! -s "${file_og_pem_regime}" || ! -s "${file_og_pem_leaf}" ) && ${num_gene_after_maxalign:-0} -gt 3 ]]; then',
         'if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || ! -s "${file_og_l1ou_fit_regime}" || ! -s "${file_og_l1ou_fit_leaf}" ) && ${run_l1ou} -eq 1 ]]; then',
         'if ( [[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]] ) && [[ ${run_tree_plot} -eq 1 ]]; then',
         'if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" && ${gg_debug_mode:-0} -eq 0 ]]; then',
     ]
     for token in expected_tokens:
         assert token in text
+
+    assert "run_phylogeneticem" not in text
 
 
 def test_gene_evolution_core_guards_array_task_id_range_before_input_indexing():

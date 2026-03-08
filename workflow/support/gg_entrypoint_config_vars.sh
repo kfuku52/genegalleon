@@ -29,8 +29,6 @@ EOF
     gg_gene_evolution_entrypoint.sh)
       cat <<'EOF'
 check_pruned
-clade_collapse_similarity_method
-clade_collapse_similarity_threshold
 csubst_cutoff_stat
 csubst_exhaustive_until
 csubst_fg_exclude_wg
@@ -55,13 +53,11 @@ max_num_gene_blast_hit_retrieval
 mode_orthogroup
 mode_query2family
 pgls_use_phenocov
-phylogeneticem_use_fit_file
 promoter_bp
 query_blast_coverage
 query_blast_evalue
 query_blast_method
 radte_max_age
-require_internal_node_labels
 retain_query_in_maxalign
 retrotransposition_rate
 run_amas_cleaned
@@ -89,7 +85,6 @@ run_maxalign
 run_notung_reconcil
 run_orthogroup_extraction
 run_pgls_species_tree
-run_phylogeneticem
 run_query_blast
 run_rps_blast
 run_scm_intron

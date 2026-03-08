@@ -69,8 +69,8 @@ gg_entrypoint_name="gg_gene_evolution_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Mode
-mode_orthogroup=0 # Analyze OrthoFinder orthogroups
-mode_query2family=1 # Analyze all homologs of input genelist in ${gg_workspace_dir}/input/query_gene
+mode_orthogroup="${mode_orthogroup:-0}" # Analyze OrthoFinder orthogroups
+mode_query2family="${mode_query2family:-1}" # Analyze all homologs of input genelist in ${gg_workspace_dir}/input/query_gene
 
 # Workflow
 run_get_query_fasta=1 # Activated if mode_query2family=1. Generate amino acid fasta file for query BLAST.
@@ -102,11 +102,10 @@ run_mapdnds_parameter_estimation=0 # Parameter estimation for mapdNdS.
 run_mapdnds=0 # Stochastic substitution mapping to estimate dN/dS by mapdNdS.
 run_codeml_two_ratio=0 # Run codeml two-ratio model for dN/dS.
 run_hyphy_dnds=0 # ML dN/dS estimation by HyPhy FitMG94.bf.
-run_hyphy_relax=0 # Run HyPhy RELAX.
-run_hyphy_relax_reversed=0 # Run HyPhy RELAX with reversed foreground/background.
+run_hyphy_relax="${run_hyphy_relax:-0}" # Run HyPhy RELAX.
+run_hyphy_relax_reversed="${run_hyphy_relax_reversed:-0}" # Run HyPhy RELAX with reversed foreground/background.
 run_scm_intron=0 # Stochastic character mapping of intron traits.
-run_phylogeneticem=0 # OU modeling of gene expression by PhylogeneticEM.
-run_l1ou=0 # OU modeling of gene expression by l1ou.
+run_l1ou=0 # OU modeling of gene expression using the kfl1ou-backed l1ou-compatible outputs.
 run_pgls_species_tree=0 # PGLS with species tree.
 run_iqtree_anc=0 # Ancestral state reconstruction required for CSUBST.
 run_csubst=0 # Protein convergence analysis with CSUBST.
@@ -136,17 +135,13 @@ fimo_qvalue="0.05" # False discovery rate threshold for FIMO motif search
 jaspar_file="latest" # "latest"/"auto" or explicit JASPAR filename in ${dir_jaspardb}
 
 # Ornstein-Uhlenbeck modeling of gene expression evolution
-clade_collapse_similarity_method="pearson" # Similarity metric used when collapsing clades for OU runs.
-clade_collapse_similarity_threshold="0.99" # Similarity cutoff used when collapsing clades for OU runs.
-require_internal_node_labels=1 # BOOL. Require non-empty unique internal node labels in input trees for OU scripts.
 l1ou_criterion="AICc" # "pBIC", "mBIC", "BIC", or "AICc"
 l1ou_nbootstrap=0 # INTEGER.
 l1ou_use_fit_file=1 # BOOL.
-l1ou_alpha_upper="PhylogeneticEM" # Upper alpha bound for l1ou, or "PhylogeneticEM" to reuse that estimate.
+l1ou_alpha_upper="auto" # Numeric value or "auto"/"l1ou" to use the kfl1ou default upper bound.
 l1ou_convergence=1 # BOOL.
 large_tree_num_gene=1000 # INTEGER.
 large_tree_max_nshift=10 # INTEGER.
-phylogeneticem_use_fit_file=1 # BOOL.
 
 # CSUBST options
 csubst_max_arity=10 # Maximum foreground arity considered by CSUBST.

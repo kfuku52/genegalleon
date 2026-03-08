@@ -67,9 +67,6 @@ def build_arg_parser():
     parser.add_argument('--l1ou_tree', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--l1ou_regime', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--l1ou_leaf', metavar='PATH', default='', type=str, help='')
-    parser.add_argument('--phylogeneticem_tree', metavar='PATH', default='', type=str, help='')
-    parser.add_argument('--phylogeneticem_regime', metavar='PATH', default='', type=str, help='')
-    parser.add_argument('--phylogeneticem_leaf', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--expression', metavar='PATH', default='', type=str, help='')
     
     parser.add_argument('--mapdnds_tree_dn', metavar='PATH', default='', type=str, help='')
@@ -1048,11 +1045,6 @@ def main():
         df_tmp = ou2table(params['l1ou_regime'], params['l1ou_leaf'], params["dated_tree"])
         df_tmp.columns = [ 'l1ou_'+c if c!='branch_id' else c for c in df_tmp.columns ]
         numlabel_merge_tables.append(df_tmp)
-    if os.path.exists(params["phylogeneticem_regime"]) and os.path.exists(params["phylogeneticem_leaf"]):
-        print('processing PhylogeneticEM')
-        df_tmp = ou2table(params['phylogeneticem_regime'], params['phylogeneticem_leaf'], params["dated_tree"])
-        df_tmp.columns = [ 'phylogeneticem_'+c if c!='branch_id' else c for c in df_tmp.columns ]
-        numlabel_merge_tables.append(df_tmp)
     if os.path.exists(params["expression"]) and os.path.exists(params["rooted_tree"]):
         col = 'clade_min_expression_pearsoncor'
         df_branch.loc[:,col] = numpy.nan
@@ -1171,7 +1163,7 @@ def main():
         tmp = pandas.read_csv(params['codeml_tsv'], sep='\t', header=0, index_col=None)
         for col in tmp.columns:
             tree_info['codeml_'+col] = tmp.loc[:,col].values[0]
-    for method in ['l1ou','phylogeneticem']:
+    for method in ['l1ou']:
         if os.path.exists(params[method+"_tree"]):
             tmp = pandas.read_csv(params[method+'_tree'], sep='\t')
             num_shift = tmp['num_shift'].values[0]
