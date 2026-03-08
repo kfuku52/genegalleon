@@ -662,12 +662,12 @@ input_error_fit = align_input_error_to_tree(
 )
 if (!any(input_error_fit > 0, na.rm = TRUE)) {
     input_error_fit = NULL
-    cat("No non-zero tip-specific input_error was derived from replicate variation.\n")
+    cat("No non-zero tip-specific input_error was derived from replicate variation. Shared measurement_error will still be estimated.\n")
 } else {
     cat(
         "Using tip-specific input_error for",
         sum(colSums(input_error_fit > 0, na.rm = TRUE) > 0L),
-        "trait(s).\n"
+        "trait(s) while also estimating shared measurement_error.\n"
     )
 }
 if (ncol(trait_matrix) >= (length(adj_data$tree$tip.label) - 1L)) {
@@ -737,6 +737,7 @@ if (!ind_flag) {
             rescale = FALSE,
             alpha.upper = alpha_bounds$value,
             alpha.lower = NA,
+            measurement_error = TRUE,
             input_error = input_error_fit,
             quietly = FALSE
         ),

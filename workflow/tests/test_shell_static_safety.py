@@ -655,6 +655,13 @@ def test_gene_evolution_core_uses_kfl1ou_wrapper_with_supported_args_only():
     assert '--replicate_sep="_"' in l1ou_block
 
 
+def test_detect_ou_shift_kfl1ou_enables_measurement_error_by_default():
+    script = WORKFLOW_DIR / "support" / "detect_OU_shift_kfl1ou.r"
+    text = _read_text(script)
+    assert 'measurement_error = TRUE' in text
+    assert 'input_error = input_error_fit' in text
+
+
 def test_gene_evolution_core_uses_explicit_ne_and_grouped_logic_for_tree_pruning_gate():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
