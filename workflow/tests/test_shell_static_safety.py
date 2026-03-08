@@ -565,6 +565,8 @@ def test_gg_add_container_bind_mount_skips_duplicate_destinations():
     assert "gg_container_mount_destination()" in text
     assert "gg_container_bind_destination_exists()" in text
     assert 'if gg_container_bind_destination_exists "${mount_spec}"; then' in body
+    assert 'GG_CONTAINER_BIND_MOUNTS=$(gg_csv_prepend "${mount_spec}" "${GG_CONTAINER_BIND_MOUNTS:-}")' in body
+    assert "gg_sync_container_bind_envs" in body
 
 
 def test_ensure_latest_jaspar_file_uses_set_e_safe_assignments():

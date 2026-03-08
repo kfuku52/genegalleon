@@ -16,6 +16,7 @@ unset_singularity_envs() {
 	unset SINGULARITY_BINDPATH
 	unset APPTAINER_BIND
 	unset APPTAINER_BINDPATH
+	unset GG_CONTAINER_BIND_MOUNTS
 	unset SINGULARITYENV_GG_ARRAY_TASK_ID
 	unset SINGULARITYENV_GG_TASK_CPUS
 	unset SINGULARITYENV_GG_JOB_ID
@@ -102,6 +103,18 @@ gg_csv_prepend() {
 	fi
 }
 
+gg_csv_append() {
+	local existing=${1:-}
+	local item=${2:-}
+	if [[ -z "${item}" ]]; then
+		printf '%s' "${existing}"
+	elif [[ -z "${existing}" ]]; then
+		printf '%s' "${item}"
+	else
+		printf '%s,%s' "${existing}" "${item}"
+	fi
+}
+
 gg_container_mount_destination() {
 	local mount_spec=${1:-}
 	local remainder
@@ -142,6 +155,81 @@ gg_container_bind_destination_exists_in_csv() {
 	return 1
 }
 
+gg_container_bind_csv_normalize() {
+	local csv_mounts
+	local mount_entry
+	local entry_destination
+	local normalized=""
+
+	for csv_mounts in "$@"; do
+		[[ -n "${csv_mounts}" ]] || continue
+		IFS=',' read -r -a mount_entries <<< "${csv_mounts}"
+		for mount_entry in "${mount_entries[@]}"; do
+			[[ -n "${mount_entry}" ]] || continue
+			entry_destination=$(gg_container_mount_destination "${mount_entry}" || true)
+			if [[ -z "${entry_destination}" ]]; then
+				continue
+			fi
+			if gg_container_bind_destination_exists_in_csv "${entry_destination}" "${normalized}"; then
+				continue
+			fi
+			normalized=$(gg_csv_append "${normalized}" "${mount_entry}")
+		done
+	done
+
+	printf '%s\n' "${normalized}"
+}
+
+gg_detect_active_container_runtime() {
+	local runtime_bin=""
+
+	if [[ -n "${singularity_command:-}" ]]; then
+		runtime_bin="${singularity_command%% *}"
+	fi
+	if [[ -z "${runtime_bin}" ]]; then
+		runtime_bin=$(gg_detect_container_runtime_binary || true)
+	fi
+	printf '%s\n' "${runtime_bin}"
+}
+
+gg_sync_container_bind_envs() {
+	local runtime_bin=${1:-}
+	local bind_mounts=""
+
+	if [[ -z "${runtime_bin}" ]]; then
+		runtime_bin=$(gg_detect_active_container_runtime)
+	fi
+	bind_mounts=$(gg_container_bind_csv_normalize \
+		"${GG_CONTAINER_BIND_MOUNTS:-}" \
+		"${SINGULARITY_BIND:-}" \
+		"${SINGULARITY_BINDPATH:-}" \
+		"${APPTAINER_BIND:-}" \
+		"${APPTAINER_BINDPATH:-}")
+
+	unset SINGULARITY_BIND
+	unset SINGULARITY_BINDPATH
+	unset APPTAINER_BIND
+	unset APPTAINER_BINDPATH
+
+	GG_CONTAINER_BIND_MOUNTS="${bind_mounts}"
+	export GG_CONTAINER_BIND_MOUNTS
+
+	if [[ -z "${bind_mounts}" ]]; then
+		return 0
+	fi
+
+	case "${runtime_bin}" in
+		apptainer)
+			APPTAINER_BINDPATH="${bind_mounts}"
+			export APPTAINER_BINDPATH
+			;;
+		*)
+			SINGULARITY_BINDPATH="${bind_mounts}"
+			export SINGULARITY_BINDPATH
+			;;
+	esac
+}
+
 gg_container_bind_destination_exists() {
 	local mount_spec=${1:-}
 	local destination
@@ -150,10 +238,19 @@ gg_container_bind_destination_exists() {
 	if [[ -z "${destination}" ]]; then
 		return 1
 	fi
+	if gg_container_bind_destination_exists_in_csv "${destination}" "${GG_CONTAINER_BIND_MOUNTS:-}"; then
+		return 0
+	fi
 	if gg_container_bind_destination_exists_in_csv "${destination}" "${SINGULARITY_BIND:-}"; then
 		return 0
 	fi
 	if gg_container_bind_destination_exists_in_csv "${destination}" "${SINGULARITY_BINDPATH:-}"; then
+		return 0
+	fi
+	if gg_container_bind_destination_exists_in_csv "${destination}" "${APPTAINER_BIND:-}"; then
+		return 0
+	fi
+	if gg_container_bind_destination_exists_in_csv "${destination}" "${APPTAINER_BINDPATH:-}"; then
 		return 0
 	fi
 	return 1
@@ -164,14 +261,9 @@ gg_add_container_bind_mount() {
 	if gg_container_bind_destination_exists "${mount_spec}"; then
 		return 0
 	fi
-	SINGULARITY_BIND=$(gg_csv_prepend "${mount_spec}" "${SINGULARITY_BIND:-}")
-	SINGULARITY_BINDPATH=$(gg_csv_prepend "${mount_spec}" "${SINGULARITY_BINDPATH:-}") # For Julia SLURM with Singularity 2.5
-	APPTAINER_BIND="${SINGULARITY_BIND}"
-	APPTAINER_BINDPATH="${SINGULARITY_BINDPATH}"
-	export SINGULARITY_BIND
-	export SINGULARITY_BINDPATH
-	export APPTAINER_BIND
-	export APPTAINER_BINDPATH
+	GG_CONTAINER_BIND_MOUNTS=$(gg_csv_prepend "${mount_spec}" "${GG_CONTAINER_BIND_MOUNTS:-}")
+	export GG_CONTAINER_BIND_MOUNTS
+	gg_sync_container_bind_envs
 }
 
 gg_export_var_to_container_env_if_set() {
@@ -263,8 +355,11 @@ gg_print_container_env_summary() {
 	local echo_header="set_singularityenv: "
 	local forwarded_env_count=0
 	forwarded_env_count=$(env | awk -F= '/^(SINGULARITYENV_|APPTAINERENV_)/{n++} END{print n+0}')
+	echo "${echo_header}GG_CONTAINER_BIND_MOUNTS=${GG_CONTAINER_BIND_MOUNTS:-}"
 	echo "${echo_header}SINGULARITY_BIND=${SINGULARITY_BIND:-}"
 	echo "${echo_header}SINGULARITY_BINDPATH=${SINGULARITY_BINDPATH:-}"
+	echo "${echo_header}APPTAINER_BIND=${APPTAINER_BIND:-}"
+	echo "${echo_header}APPTAINER_BINDPATH=${APPTAINER_BINDPATH:-}"
 	echo "${echo_header}forwarded_container_env_vars=${forwarded_env_count}"
 	echo ""
 }
@@ -2082,7 +2177,8 @@ gg_trigger_versions_dump() {
     return 0
   fi
 
-  if [[ "${SINGULARITY_BIND:-}" != *":/workspace"* || "${SINGULARITY_BIND:-}" != *":/script"* ]]; then
+  if ! gg_container_bind_destination_exists "${gg_workspace_dir}:/workspace" \
+    || ! gg_container_bind_destination_exists "${gg_workflow_dir}:/script"; then
     gg_normalize_scheduler_env
     set_singularityenv
   fi

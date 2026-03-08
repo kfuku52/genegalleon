@@ -53,6 +53,52 @@ def test_contamination_rank_normalizes_domain_for_remove_contaminated_sequences(
     assert completed.stdout.strip() == "superkingdom"
 
 
+def test_add_container_bind_mount_uses_only_singularity_bindpath_for_singularity_runtime(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "singularity_command='singularity shell'; "
+        "gg_add_container_bind_mount '/host/workspace:/workspace'; "
+        "gg_add_container_bind_mount '/host/workflow:/script'; "
+        'printf "GG=%s\\nSB=%s\\nSBP=%s\\nAB=%s\\nABP=%s\\n" '
+        '"${GG_CONTAINER_BIND_MOUNTS:-}" "${SINGULARITY_BIND:-}" "${SINGULARITY_BINDPATH:-}" '
+        '"${APPTAINER_BIND:-}" "${APPTAINER_BINDPATH:-}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "GG=/host/workflow:/script,/host/workspace:/workspace",
+        "SB=",
+        "SBP=/host/workflow:/script,/host/workspace:/workspace",
+        "AB=",
+        "ABP=",
+    ]
+
+
+def test_add_container_bind_mount_uses_only_apptainer_bindpath_for_apptainer_runtime(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "singularity_command='apptainer shell'; "
+        "gg_add_container_bind_mount '/host/workspace:/workspace'; "
+        "gg_add_container_bind_mount '/host/workflow:/script'; "
+        'printf "GG=%s\\nSB=%s\\nSBP=%s\\nAB=%s\\nABP=%s\\n" '
+        '"${GG_CONTAINER_BIND_MOUNTS:-}" "${SINGULARITY_BIND:-}" "${SINGULARITY_BINDPATH:-}" '
+        '"${APPTAINER_BIND:-}" "${APPTAINER_BINDPATH:-}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "GG=/host/workflow:/script,/host/workspace:/workspace",
+        "SB=",
+        "SBP=",
+        "AB=",
+        "ABP=/host/workflow:/script,/host/workspace:/workspace",
+    ]
+
+
 def test_resolve_annotation_species_prefers_known_model_species(tmp_path):
     species_dir = tmp_path / "species_cds"
     species_dir.mkdir()
