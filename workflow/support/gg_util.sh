@@ -510,17 +510,14 @@ gg_annotation_species_priority() {
   cat <<'EOF'
 Arabidopsis_thaliana
 Oryza_sativa
-Amborella_trichopoda
-Physcomitrium_patens
-Marchantia_polymorpha
-Selaginella_moellendorffii
-Chlamydomonas_reinhardtii
 Homo_sapiens
 Mus_musculus
+Danio_rerio
 Drosophila_melanogaster
 Caenorhabditis_elegans
 Saccharomyces_cerevisiae
 Schizosaccharomyces_pombe
+Escherichia_coli
 EOF
 }
 

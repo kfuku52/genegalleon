@@ -123,6 +123,7 @@ EOF
       ;;
     gg_genome_annotation_entrypoint.sh)
       cat <<'EOF'
+contamination_removal_rank
 run_annotation
 run_busco_cds
 run_busco_genome
@@ -263,6 +264,7 @@ amalgkit_rrna_filter
 assembly_cpu_offset
 assembly_method
 assembly_ram_offset
+contamination_removal_rank
 kallisto_reference
 max_assembly_input_fastq_size
 mode_fastq

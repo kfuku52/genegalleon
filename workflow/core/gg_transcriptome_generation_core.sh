@@ -13,7 +13,7 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_transcriptome_generation_entrypoint.sh.
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
-contamination_removal_rank="${contamination_removal_rank:-${GG_COMMON_CONTAMINATION_REMOVAL_RANK:-domain}}"
+contamination_removal_rank="${contamination_removal_rank:-domain}"
 ### End: Job-supplied configuration ###
 
 ### ----------------------------------------------------------------------- ###

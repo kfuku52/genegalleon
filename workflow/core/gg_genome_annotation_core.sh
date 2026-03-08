@@ -14,7 +14,7 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 # Configuration variables are provided by gg_genome_annotation_entrypoint.sh.
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
-contamination_removal_rank="${contamination_removal_rank:-${GG_COMMON_CONTAMINATION_REMOVAL_RANK:-domain}}"
+contamination_removal_rank="${contamination_removal_rank:-domain}"
 ### End: Job-supplied configuration ###
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###

@@ -89,6 +89,25 @@ def test_resolve_annotation_species_uses_first_available_when_no_model_species_e
     assert completed.stdout.strip() == "Cephalotus_follicularis"
 
 
+def test_resolve_annotation_species_prefers_cross_clade_model_species(tmp_path):
+    species_dir = tmp_path / "species_cds"
+    species_dir.mkdir()
+    (species_dir / "Cephalotus_follicularis.fa").write_text(">a\nATG\n")
+    (species_dir / "Danio_rerio.fa").write_text(">a\nATG\n")
+    (species_dir / "Escherichia_coli.fa").write_text(">a\nATG\n")
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"set -- $(gg_species_names_from_fasta_dir {shlex.quote(str(species_dir))}); "
+        'gg_resolve_annotation_species auto "$@"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "Danio_rerio"
+
+
 def test_resolve_annotation_species_normalizes_legacy_trailing_underscore(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "

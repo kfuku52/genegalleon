@@ -54,7 +54,6 @@ Important note:
 
 - `GG_COMMON_GENETIC_CODE` (default `1`)
 - `GG_COMMON_BUSCO_LINEAGE` (default `auto`)
-- `GG_COMMON_CONTAMINATION_REMOVAL_RANK` (default `domain`)
 - `GG_COMMON_ANNOTATION_SPECIES` (default `auto`)
 
 These are intended for values that recur across multiple stages.
@@ -67,14 +66,17 @@ for which placement mappings are available across archaea, bacteria, and eukaryo
 The first auto-resolved run may need network access to initialize the ETE taxonomy DB and download
 BUSCO placement mapping files; explicit values such as `embryophyta_odb13` still bypass that logic.
 
-For contamination removal, GeneGalleon treats `domain` as the shared canonical value.
-When a downstream tool expects a different synonym, GeneGalleon normalizes it automatically
-(for example, `remove_contaminated_sequences.py` receives `superkingdom`).
+For contamination removal, `contamination_removal_rank` is now configured locally in
+`workflow/gg_genome_annotation_entrypoint.sh` and `workflow/gg_transcriptome_generation_entrypoint.sh`.
+GeneGalleon treats `domain` as the canonical user-facing value and normalizes tool-specific
+synonyms automatically (for example, `remove_contaminated_sequences.py` receives `superkingdom`).
 
 For annotation-driven stages, `GG_COMMON_ANNOTATION_SPECIES=auto` prefers model species detected
 in the relevant dataset and falls back to the first available species when none of the preferred
-models are present. Tree-visualization ortholog prefixes derive from that species name downstream,
-so the shared common variable no longer includes a trailing underscore.
+models are present. The current priority list keeps only `Arabidopsis_thaliana` and `Oryza_sativa`
+on the plant side, then checks standard cross-clade model species such as human, mouse, zebrafish,
+fly, nematode, yeasts, and `Escherichia_coli`. Tree-visualization ortholog prefixes derive from
+that species name downstream, so the shared common variable no longer includes a trailing underscore.
 
 `species_tree_rooting`, `grampa_h1`, and `target_branch_go` are no longer shared `GG_COMMON_*` values.
 They are now configured directly in `workflow/gg_genome_evolution_entrypoint.sh`

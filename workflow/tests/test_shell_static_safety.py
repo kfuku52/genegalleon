@@ -1304,9 +1304,9 @@ def test_transcriptome_core_requires_taxid_for_contam_filter():
     assert 'amalgkit_contam_filter=yes requires a taxid column in metadata: ${file_amalgkit_metadata}. Exiting.' in text
 
 
-def test_common_contamination_removal_rank_defaults_to_domain():
+def test_common_params_do_not_define_contamination_removal_rank():
     text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
-    assert ': "${GG_COMMON_CONTAMINATION_REMOVAL_RANK:=domain}"' in text
+    assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in text
 
 
 def test_common_busco_lineage_defaults_to_auto():
@@ -1376,6 +1376,24 @@ def test_genome_evolution_uses_local_species_tree_rooting_parameter():
     assert 'nwkit_root_args+=( --outgroup "${root_value}" )' in core
     assert 'nwkit_root_args+=( --download_dir "${dir_nwkit_download_dir}" )' in core
     assert "      species_tree_rooting" in config_vars
+
+
+def test_annotation_and_transcriptome_use_local_contamination_removal_rank_parameter():
+    annotation_entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_annotation_entrypoint.sh")
+    transcriptome_entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
+    annotation_core = _read_text(CORE_DIR / "gg_genome_annotation_core.sh")
+    transcriptome_core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    common = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+
+    assert 'contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.' in annotation_entrypoint
+    assert 'contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.' in transcriptome_entrypoint
+    assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in common
+    assert 'contamination_removal_rank="${contamination_removal_rank:-domain}"' in annotation_core
+    assert 'contamination_removal_rank="${contamination_removal_rank:-domain}"' in transcriptome_core
+    assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in annotation_core
+    assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in transcriptome_core
+    assert "contamination_removal_rank" in config_vars
 
 
 def test_entrypoint_modify_block_parameters_have_inline_comments():
