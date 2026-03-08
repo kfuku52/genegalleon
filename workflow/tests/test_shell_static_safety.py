@@ -436,6 +436,22 @@ def test_set_singularity_command_supports_apptainer_fallback():
     assert 'Neither singularity nor apptainer was found on PATH.' in text
 
 
+def test_site_runtime_shell_command_uses_output_parameter():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    site_runtime_path = WORKFLOW_DIR / "support" / "gg_site_runtime.sh"
+    util_text = _read_text(util_path)
+    site_body = _function_body(_read_text(site_runtime_path), "gg_site_container_shell_command")
+    assert 'local out_var=${2:-}' in site_body
+    assert 'printf -v "${out_var}" \'%s\' "${command_text}"' in site_body
+    assert 'echo "${runtime_bin} shell"' not in site_body
+    assert 'echo "${runtime_bin} shell --contain"' not in site_body
+    assert 'site profile = nig" >&2' not in site_body
+    assert 'site profile = nhr-fau" >&2' not in site_body
+    assert 'site profile = default" >&2' not in site_body
+    assert 'gg_site_container_shell_command "${runtime_bin}" singularity_command' in util_text
+    assert 'singularity_command="$(gg_site_container_shell_command "${runtime_bin}")"' not in util_text
+
+
 def test_set_singularityenv_does_not_dump_singularityenv_values():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)

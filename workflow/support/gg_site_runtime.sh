@@ -46,13 +46,15 @@ gg_site_scheduler_prelude() {
 
 gg_site_container_shell_command() {
   local runtime_bin=$1
+  local out_var=${2:-}
   local echo_header="set_singularity_command: "
   local site_profile
+  local command_text=""
 
   site_profile="$(gg_detect_site_profile)"
   case "${site_profile}" in
     nig)
-      echo "${echo_header}site profile = nig" >&2
+      echo "${echo_header}site profile = nig"
       if [[ -e /var/spool/uge ]]; then
         gg_add_container_bind_mount "/var/spool/uge:/var/spool/uge"
       fi
@@ -65,18 +67,21 @@ gg_site_container_shell_command() {
       if [[ -e /home/geadmin/UGER/uger/spool ]]; then
         gg_add_container_bind_mount "/home/geadmin/UGER/uger/spool:/home/geadmin/UGER/uger/spool"
       fi
-      echo "${runtime_bin} shell"
-      return 0
+      command_text="${runtime_bin} shell"
       ;;
     nhr-fau)
-      echo "${echo_header}site profile = nhr-fau" >&2
-      echo "${runtime_bin} shell --contain"
-      return 0
+      echo "${echo_header}site profile = nhr-fau"
+      command_text="${runtime_bin} shell --contain"
       ;;
     *)
-      echo "${echo_header}site profile = default" >&2
-      echo "${runtime_bin} shell"
-      return 0
+      echo "${echo_header}site profile = default"
+      command_text="${runtime_bin} shell"
       ;;
   esac
+
+  if [[ -z "${out_var}" ]]; then
+    echo "${echo_header}output variable name is required."
+    return 1
+  fi
+  printf -v "${out_var}" '%s' "${command_text}"
 }

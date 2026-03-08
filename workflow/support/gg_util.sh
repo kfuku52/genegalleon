@@ -1479,7 +1479,7 @@ set_singularity_command() {
   echo ${echo_header}"hostname = $(hostname)"
   echo ${echo_header}"container runtime = ${runtime_bin}"
   if declare -F gg_site_container_shell_command >/dev/null 2>&1; then
-    singularity_command="$(gg_site_container_shell_command "${runtime_bin}")"
+    gg_site_container_shell_command "${runtime_bin}" singularity_command || return 1
   else
     echo ${echo_header}"No site adapter was loaded. Using default shell."
     singularity_command="${runtime_bin} shell"
