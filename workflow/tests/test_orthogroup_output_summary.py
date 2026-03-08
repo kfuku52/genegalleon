@@ -82,6 +82,7 @@ def test_run_handles_subdir_files_with_suffixes(tmp_path):
     )
 
     out = pandas.read_csv(out_tsv, sep="\t", index_col=0)
+    assert "GG_ARRAY_TASK_ID" in out.columns
     assert out.loc["HOG0000010", "cds_fasta"] == 1
     assert out.loc["HOG0000011", "cds_fasta"] == 0
 

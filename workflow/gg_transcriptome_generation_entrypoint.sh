@@ -89,8 +89,8 @@ assembly_method="rnaSPAdes" # {Trinity,rnaSPAdes}
 protocol_rna_seq="mixed" # {same,mixed}
 kallisto_reference="longest_cds" # {species_cds,longest_transcript,longest_cds,contamination_removed_longest_cds}
 orf_aggregation_level="i" # {c,g,i,p}
-assembly_cpu_offset=0 # Number of CPU cores reserved from NSLOTS before launching the assembler.
-assembly_ram_offset=4 # Amount of RAM in GB reserved from MEM_PER_HOST before launching the assembler.
+assembly_cpu_offset=0 # Number of CPU cores reserved from GG_TASK_CPUS before launching the assembler.
+assembly_ram_offset=4 # Amount of RAM in GB reserved from GG_MEM_TOTAL_GB before launching the assembler.
 contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.
 
 ### End: Modify this block to tailor your analysis ###

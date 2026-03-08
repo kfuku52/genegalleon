@@ -380,7 +380,7 @@ file_go_enrichment_significant="${dir_cafe}/go_enrichment/enrichment_significant
 # Runtime setup
 check_species_cds "${gg_workspace_dir}"
 check_if_species_files_unique "${dir_sp_cds}"
-memory_notung=${MEM_PER_SLOT}
+memory_notung=${GG_MEM_PER_CPU_GB}
 
 ensure_dir "${dir_species_tree_summary}"
 ensure_dir "${dir_tmp}"
@@ -648,7 +648,7 @@ optimize_astral_tree_branch_lengths () {
   -te "${tmp_topology}" \
   -m "${model}" \
   -n 0 \
-  -T "${NSLOTS}" \
+  -T "${GG_TASK_CPUS}" \
   --prefix "${iqtree_prefix}" \
   --seed 12345 \
   --redo
@@ -809,7 +809,7 @@ if [[ ${run_species_busco} -eq 1 ]]; then
 
       if [[ "${cds}" == *gz ]]; then # Do not quote like "*gz"
         echo "Decompressing gzipped CDS fasta for BUSCO: ${cds}"
-        seqkit seq --threads "${NSLOTS}" "${dir_sp_cds}/${cds}" --out-file "tmp.busco_input.cds.fasta"
+        seqkit seq --threads "${GG_TASK_CPUS}" "${dir_sp_cds}/${cds}" --out-file "tmp.busco_input.cds.fasta"
       else
         cp_out "${dir_sp_cds}"/"${cds}" ./tmp.busco_input.cds.fasta
       fi
@@ -824,7 +824,7 @@ if [[ ${run_species_busco} -eq 1 ]]; then
 	      --in "tmp.busco_input.cds.fasta" \
 	      --mode "transcriptome" \
 	      --out "busco_tmp" \
-	      --cpu "${NSLOTS}" \
+	      --cpu "${GG_TASK_CPUS}" \
 	      --force \
 	      --evalue 1e-03 \
 	      --limit 20 \
@@ -861,7 +861,7 @@ if [[ ! -s "${file_species_busco_summary_table}" && ${run_species_get_busco_summ
 
   python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
   --busco_outdir "${dir_species_busco_full}" \
-  --ncpu "${NSLOTS}" \
+  --ncpu "${GG_TASK_CPUS}" \
   --outfile "tmp.busco_summary_table.tsv"
   mv_out "tmp.busco_summary_table.tsv" "${file_species_busco_summary_table}"
 
@@ -948,7 +948,7 @@ if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_individual_get_fasta
   gg_find_fasta_files "${dir_sp_cds}" 1 > species_cds_fasta_list.txt
   num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
   for (( i=2; i<=num_busco_ids+1; i++ )); do # starting from 2 because the line 1 is header.
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     generate_single_copy_fasta ${i} ${strictly_single_copy_only} &
   done
   wait_for_background_jobs
@@ -1011,7 +1011,7 @@ if [[ ${num_busco_ids} -ne ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_fasta}" "*.cds.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     run_mafft "${input_alignment_file}" &
   done
   wait_for_background_jobs
@@ -1052,7 +1052,7 @@ if [[ ${num_busco_ids} -ne ${num_trimal_fasta} && ${run_individual_trimal} -eq 1
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_mafft}" "*.cds.aln.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     run_trimal "${input_alignment_file}" &
   done
   wait_for_background_jobs
@@ -1074,19 +1074,19 @@ if [[ ( ! -s "${file_concat_cds}" || ! -s "${file_concat_pep}" ) && ${run_concat
 
   if [[ ${strictly_single_copy_only} -eq 0 ]]; then
     concat_cds_tmp="tmp.concat.cds.fa.gz"
-    seqkit concat --full --fill "-" --threads "${NSLOTS}" "${trimal_files[@]}" \
-    | seqkit sort --threads "${NSLOTS}" \
-    | seqkit seq --threads "${NSLOTS}" --out-file "${concat_cds_tmp}"
+    seqkit concat --full --fill "-" --threads "${GG_TASK_CPUS}" "${trimal_files[@]}" \
+    | seqkit sort --threads "${GG_TASK_CPUS}" \
+    | seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${concat_cds_tmp}"
   else
     concat_cds_tmp="tmp.concat.cds.fa.gz"
-    seqkit concat --threads "${NSLOTS}" "${trimal_files[@]}" \
-    | seqkit sort --threads "${NSLOTS}" \
-    | seqkit seq --threads "${NSLOTS}" --out-file "${concat_cds_tmp}"
+    seqkit concat --threads "${GG_TASK_CPUS}" "${trimal_files[@]}" \
+    | seqkit sort --threads "${GG_TASK_CPUS}" \
+    | seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${concat_cds_tmp}"
   fi
   mv_out "${concat_cds_tmp}" "${file_concat_cds}"
 
-  seqkit translate --transl-table "${genetic_code}" --threads "${NSLOTS}" "${file_concat_cds}" \
-  | seqkit seq --threads "${NSLOTS}" --out-file "tmp.concat.pep.fa.gz"
+  seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" "${file_concat_cds}" \
+  | seqkit seq --threads "${GG_TASK_CPUS}" --out-file "tmp.concat.pep.fa.gz"
   mv_out "tmp.concat.pep.fa.gz" "${file_concat_pep}"
 else
   gg_step_skip "${task}"
@@ -1103,8 +1103,8 @@ if [[ ! -s "${file_concat_iqtree_pep}" && ${run_concat_iqtree_protein} -eq 1 ]];
     bootstrap_params=()
   fi
   iqtree_mem_args=()
-  if [[ -n "${MEM_PER_HOST:-}" ]]; then
-    iqtree_mem_args=( -mem "${MEM_PER_HOST}G" )
+  if [[ -n "${GG_MEM_TOTAL_GB:-}" ]]; then
+    iqtree_mem_args=( -mem "${GG_MEM_TOTAL_GB}G" )
   fi
 
   cd "${dir_concat_iqtree_pep}"
@@ -1115,7 +1115,7 @@ if [[ ! -s "${file_concat_iqtree_pep}" && ${run_concat_iqtree_protein} -eq 1 ]];
     -st AA \
     -m "${protein_model}" \
     -pre "${concat_pep_local}" \
-    -nt "${NSLOTS}" \
+    -nt "${GG_TASK_CPUS}" \
     "${iqtree_mem_args[@]}" \
     -seed 12345 \
     "${bootstrap_params[@]}"; then
@@ -1176,8 +1176,8 @@ if [[ ! -s "${file_concat_iqtree_dna}" && ${run_concat_iqtree_dna} -eq 1 ]]; the
     bootstrap_params=()
   fi
   iqtree_mem_args=()
-  if [[ -n "${MEM_PER_HOST:-}" ]]; then
-    iqtree_mem_args=( -mem "${MEM_PER_HOST}G" )
+  if [[ -n "${GG_MEM_TOTAL_GB:-}" ]]; then
+    iqtree_mem_args=( -mem "${GG_MEM_TOTAL_GB}G" )
   fi
 
   cd "${dir_concat_iqtree_dna}"
@@ -1188,7 +1188,7 @@ if [[ ! -s "${file_concat_iqtree_dna}" && ${run_concat_iqtree_dna} -eq 1 ]]; the
     -st DNA \
     -m "${nucleotide_model}" \
     -pre "${concat_cds_local}" \
-    -nt "${NSLOTS}" \
+    -nt "${GG_TASK_CPUS}" \
     "${iqtree_mem_args[@]}" \
     -seed 12345 \
     "${bootstrap_params[@]}"; then
@@ -1275,7 +1275,7 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}" "*.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     run_iqtree_pep "${input_alignment_file}" &
   done
   wait_for_background_jobs
@@ -1300,7 +1300,7 @@ if [[ ( ! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}" ) && ${r
     --output "tmp.astral.out.tree" \
     --mode 3 \
     --support 2 \
-    --thread "${NSLOTS}" \
+    --thread "${GG_TASK_CPUS}" \
     2> "tmp.astral.log.txt"
 
     labels=("pp1" "pp2" "pp3" "f1" "f2" "f3" "q1" "q2" "q3") # https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md
@@ -1400,7 +1400,7 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}" "*.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     run_iqtree_dna "${input_alignment_file}" &
   done
   wait_for_background_jobs
@@ -1425,7 +1425,7 @@ if [[ ( ! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}" ) && ${r
     --output "tmp.astral.out.tree" \
     --mode 3 \
     --support 2 \
-    --thread "${NSLOTS}" \
+    --thread "${GG_TASK_CPUS}" \
     2> "tmp.astral.log.txt"
 
     labels=("pp1" "pp2" "pp3" "f1" "f2" "f3" "q1" "q2" "q3") # https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md
@@ -1612,7 +1612,7 @@ if [[ ( ! -s "${file_iq2mc_ctl}" || ! -s "${file_iq2mc_hessian}" || ! -s "${file
     --mcmc-bds "${mcmc_birth_death_sampling}" \
     --mcmc-clock "${mcmc_clock_model}" \
     --mcmc-iter "${mcmc_burnin},${mcmc_sampfreq},${mcmc_nsample}" \
-    -T "${NSLOTS}" \
+    -T "${GG_TASK_CPUS}" \
     --prefix iq2mc; then
     echo "Error: IQ2MC step 2 failed. Deleting generated files."
     rm -f -- "${file_iq2mc_prefix}".*
@@ -1820,9 +1820,9 @@ prepare_species_protein_tmp() {
     translated_file="${sp_ub}.fa"
     echo "Translation started: ${cds}"
 
-    seqkit seq --remove-gaps --threads "${NSLOTS}" "${cds_path}" \
-    | gg_prepare_cds_fasta_stream "${NSLOTS}" "${genetic_code}" \
-    | seqkit translate --transl-table "${genetic_code}" --threads "${NSLOTS}" \
+    seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${cds_path}" \
+    | gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${genetic_code}" \
+    | seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
     | sed -e "s/^>${sp_ub}[-_\.]/>/" -e "s/^>/>${sp_ub}_/" \
     | sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
     > "${dir_sp_protein}/${translated_file}"
@@ -1840,9 +1840,9 @@ if [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; the
   ensure_dir "${dir_orthofinder}"
   ensure_dir "${dir_orthofinder_hog2og}"
 
-  nslots_of=$((${NSLOTS}/4))
-  if [[ ${nslots_of} -eq 0 ]]; then
-      nslots_of=1
+  orthofinder_algorithm_threads=$((${GG_TASK_CPUS}/4))
+  if [[ ${orthofinder_algorithm_threads} -eq 0 ]]; then
+      orthofinder_algorithm_threads=1
   fi
   param_species_tree=()
   species_tree=""
@@ -1855,8 +1855,8 @@ if [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; the
     echo "OrthoFinder will use the species tree: ${species_tree}"
     param_species_tree=( -s "${species_tree}" )
   fi
-  echo "OrthoFinder will use ${NSLOTS} threads for diamond search."
-  echo "OrthoFinder will use ${nslots_of} threads for the OrthoFinder algorithm."
+  echo "OrthoFinder will use ${GG_TASK_CPUS} threads for diamond search."
+  echo "OrthoFinder will use ${orthofinder_algorithm_threads} threads for the OrthoFinder algorithm."
 
     protein_files=()
     mapfile -t protein_files < <(find "${dir_sp_protein}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
@@ -1941,8 +1941,8 @@ PY
       nwkit prune --invert_match yes --pattern "${core_species_regex}" --infile "${species_tree}" --outfile "${dir_orthofinder}/species_tree_core.nwk"
 
     if orthofinder \
-      -t "${NSLOTS}" \
-      -a "${nslots_of}" \
+      -t "${GG_TASK_CPUS}" \
+      -a "${orthofinder_algorithm_threads}" \
       -M "msa" \
       -S "diamond" \
       -f "${dir_sp_protein}_core" \
@@ -1960,8 +1960,8 @@ PY
     fi
 
     if orthofinder \
-      -t "${NSLOTS}" \
-      -a "${nslots_of}" \
+      -t "${GG_TASK_CPUS}" \
+      -a "${orthofinder_algorithm_threads}" \
       -M "msa" \
       -S "diamond" \
       -n "all" \
@@ -1994,14 +1994,14 @@ PY
 	    if [[ ${#orthofinder_result_dirs[@]} -gt 0 ]]; then
 	      rm -rf -- "${orthofinder_result_dirs[@]}"
 	    fi
-	    orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${NSLOTS}"
+	    orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${GG_TASK_CPUS}"
 	  else
     echo "The number of species (${num_sp}) is less than or equal to the maximum number of core species (${max_orthofinder_core_species}) for OrthoFinder."
     echo "OrthoFinder will be run for 1 round."
 
     if orthofinder \
-      -t "${NSLOTS}" \
-      -a "${nslots_of}" \
+      -t "${GG_TASK_CPUS}" \
+      -a "${orthofinder_algorithm_threads}" \
       -M "msa" \
       -S "diamond" \
       -f "${dir_sp_protein}" \
@@ -2030,7 +2030,7 @@ PY
   fi
 
   echo "OrthoFinder finished successfully."
-  orthofinder_output_directory_cleanup "${dir_orthofinder}" "${NSLOTS}"
+  orthofinder_output_directory_cleanup "${dir_orthofinder}" "${GG_TASK_CPUS}"
 
   hog_table="${dir_orthofinder}/Phylogenetic_Hierarchical_Orthogroups/N0.tsv"
   if [[ ! -s "${hog_table}" ]]; then
@@ -2097,7 +2097,7 @@ if [[ ! -s "${file_orthogroup_selection}" && ${run_og_selection} -eq 1 ]]; then
     --annotation_search_method "${orthogroup_annotation_method}" \
     --path_search_db "${uniprot_db_prefix}" \
     --evalue '1e-2' \
-    --ncpu "${NSLOTS}"; then
+    --ncpu "${GG_TASK_CPUS}"; then
     exit_code=0
   else
     exit_code=$?
@@ -2211,7 +2211,7 @@ if [[ ${run_genome_busco} -eq 1 ]]; then
 
       if [[ "${cds}" == *gz ]]; then # Do not quote like "*gz"
         echo "Decompressing gzipped CDS fasta for BUSCO: ${cds}"
-        seqkit seq --threads "${NSLOTS}" "${dir_sp_cds}/${cds}" --out-file "tmp.busco_input.cds.fasta"
+        seqkit seq --threads "${GG_TASK_CPUS}" "${dir_sp_cds}/${cds}" --out-file "tmp.busco_input.cds.fasta"
       else
         cp_out "${dir_sp_cds}"/"${cds}" ./tmp.busco_input.cds.fasta
       fi
@@ -2226,7 +2226,7 @@ if [[ ${run_genome_busco} -eq 1 ]]; then
 	      --in "tmp.busco_input.cds.fasta" \
 	      --mode "transcriptome" \
 	      --out "busco_tmp" \
-	      --cpu "${NSLOTS}" \
+	      --cpu "${GG_TASK_CPUS}" \
 	      --force \
 	      --evalue 1e-03 \
 	      --limit 20 \
@@ -2259,7 +2259,7 @@ if [[ ! -s "${file_genome_busco_summary_table}" && ${run_genome_get_busco_summar
 
   python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
   --busco_outdir "${dir_species_busco_full}" \
-  --ncpu "${NSLOTS}" \
+  --ncpu "${GG_TASK_CPUS}" \
   --outfile "tmp.busco_summary_table.tsv"
   mv_out "tmp.busco_summary_table.tsv" "${file_genome_busco_summary_table}"
 
@@ -2318,7 +2318,7 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
 
   gg_find_fasta_files "${dir_sp_cds}" 1 > species_cds_fasta_list.txt
   for (( busco_idx=0; busco_idx<num_busco_ids; busco_idx++ )); do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     generate_single_copy_fasta "${busco_idx}" &
   done
   wait_for_background_jobs
@@ -2386,7 +2386,7 @@ if [[ ${run_busco_mafft} -eq 1 ]]; then
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_fasta}" "*.busco.cds.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     run_mafft "${input_alignment_file}" &
   done
   wait_for_background_jobs
@@ -2427,7 +2427,7 @@ if [[ ${run_busco_trimal} -eq 1 ]]; then
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_mafft}" "*.busco.cds.aln.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     run_trimal "${input_alignment_file}" &
   done
   wait_for_background_jobs
@@ -2473,7 +2473,7 @@ if [[ ${run_busco_iqtree_dna} -eq 1 ]]; then
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}" "*.busco.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     busco_iqtree_dna "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_dna}" &
   done
   wait_for_background_jobs
@@ -2520,7 +2520,7 @@ if [[ ${run_busco_iqtree_pep} -eq 1 ]]; then
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}" "*.busco.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     busco_iqtree_pep "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_pep}" &
   done
   wait_for_background_jobs
@@ -2569,7 +2569,7 @@ if [[ ${run_busco_notung_root_dna} -eq 1 ]]; then
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_dna}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le $((${NSLOTS}/2))
+    wait_until_jobn_le $((${GG_TASK_CPUS}/2))
     busco_notung "${infile}" "${dir_busco_iqtree_dna}" "${dir_busco_notung_dna}" &
   done
   wait_for_background_jobs
@@ -2584,7 +2584,7 @@ if [[ ${run_busco_notung_root_pep} -eq 1 ]]; then
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_pep}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le $((${NSLOTS}/2))
+    wait_until_jobn_le $((${GG_TASK_CPUS}/2))
     busco_notung "${infile}" "${dir_busco_iqtree_pep}" "${dir_busco_notung_pep}" &
   done
   wait_for_background_jobs
@@ -2616,7 +2616,7 @@ busco_species_tree_assisted_gene_tree_rooting () {
   "--notung_root_zip=./${infile}" \
   "--in_tree=${intree}" \
   "--out_tree=${busco_id}.root.nwk" \
-  "--ncpu=${NSLOTS}" \
+  "--ncpu=${GG_TASK_CPUS}" \
   2>&1 | tee "${busco_id}.root.txt"
 
   if [[ -s "${busco_id}.root.nwk" ]]; then
@@ -2634,7 +2634,7 @@ if [[ ${run_busco_root_dna} -eq 1 ]]; then
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_dna}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_dna}" "${dir_busco_iqtree_dna}" "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}" &
   done
   wait_for_background_jobs
@@ -2649,7 +2649,7 @@ if [[ ${run_busco_root_pep} -eq 1 ]]; then
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_pep}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_pep}" "${dir_busco_iqtree_pep}" "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}" &
   done
   wait_for_background_jobs
@@ -2704,7 +2704,7 @@ busco_grampa () {
     -s "grampa_input_species_tree.nwk"
     -g "grampa_input_gene_trees.nwk"
     -o "./grampa_out"
-    -p "${NSLOTS}"
+    -p "${GG_TASK_CPUS}"
     -v -1
     --maps
   )
@@ -2762,7 +2762,7 @@ busco_grampa () {
   --grampa_out "${grampa_out_file}" \
   --gene_trees "./grampa_input_gene_trees.nwk" \
   --species_tree "./grampa_input_species_tree.nwk" \
-  --ncpu "${NSLOTS}" \
+  --ncpu "${GG_TASK_CPUS}" \
   --sorted_gene_tree_file_names "./busco_genetree_filenames.txt"
 
   if [[ -s "${grampa_checknums_file}" && -s "${grampa_det_file}" && -s "${grampa_out_file}" && -s "grampa_summary.tsv" ]]; then
@@ -2872,7 +2872,7 @@ if [[ (! -s "${file_cafe_summary_all_pdf}" || ! -s "${file_cafe_summary_signific
     --tree "${file_dated_species_tree}" \
     --n_gamma_cats "${n_gamma_cats_cafe}" \
     --pvalue 0.05 \
-    --cores "${NSLOTS}" \
+    --cores "${GG_TASK_CPUS}" \
     --output_prefix "${dir_cafe_output}"
   else
     echo "CAFE output files already exist. Skipping CAFE run."
@@ -2887,7 +2887,7 @@ if [[ (! -s "${file_cafe_summary_all_pdf}" || ! -s "${file_cafe_summary_signific
       "${dir_cafe_output}/Gamma_count.tab" \
       "${dir_cafe_output}/Gamma_change.tab" \
       "${dir_cafe}/each_family_plot" \
-      "${NSLOTS}"; then
+      "${GG_TASK_CPUS}"; then
       echo "Error in Rscript cafe_plot_each_family.r. Exiting."
       exit 1
     fi

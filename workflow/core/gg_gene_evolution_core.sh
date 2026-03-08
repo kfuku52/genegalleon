@@ -33,8 +33,8 @@ delete_tmp_dir=${delete_tmp_dir:-1}
 
 build_iqtree_mem_args() {
   IQTREE_MEM_ARGS=()
-  if [[ -n "${MEM_PER_HOST:-}" ]]; then
-    IQTREE_MEM_ARGS=(--mem "${MEM_PER_HOST}G")
+  if [[ -n "${GG_MEM_TOTAL_GB:-}" ]]; then
+    IQTREE_MEM_ARGS=(--mem "${GG_MEM_TOTAL_GB}G")
   fi
 }
 
@@ -205,8 +205,8 @@ case "${mode_orthogroup}:${mode_query2family}" in
 			  echo "Orthogroup gene-count table not found: ${file_orthogroup_genecount_selected}"
 			  exit 1
 			fi
-			if [[ ! "${SGE_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${SGE_TASK_ID} -lt 1 ]]; then
-			  echo "Invalid SGE_TASK_ID value (must be a positive integer): ${SGE_TASK_ID}"
+			if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then
+			  echo "Invalid GG_ARRAY_TASK_ID value (must be a positive integer): ${GG_ARRAY_TASK_ID}"
 			  exit 1
 			fi
 			num_orthogroups=$(awk 'END { print (NR > 0 ? NR - 1 : 0) }' "${file_orthogroup_genecount_selected}")
@@ -214,13 +214,13 @@ case "${mode_orthogroup}:${mode_query2family}" in
 			  echo "No orthogroup rows were found in: ${file_orthogroup_genecount_selected}"
 			  exit 1
 			fi
-			if [[ ${SGE_TASK_ID} -gt ${num_orthogroups} ]]; then
-			  echo "SGE_TASK_ID=${SGE_TASK_ID} is out of range for ${num_orthogroups} orthogroups in: ${file_orthogroup_genecount_selected}"
+			if [[ ${GG_ARRAY_TASK_ID} -gt ${num_orthogroups} ]]; then
+			  echo "GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID} is out of range for ${num_orthogroups} orthogroups in: ${file_orthogroup_genecount_selected}"
 			  exit 1
 			fi
-			og_id=$(awk -F'\t' -v row="${SGE_TASK_ID}" 'NR == (row + 1) { print $1; exit }' "${file_orthogroup_genecount_selected}")
+			og_id=$(awk -F'\t' -v row="${GG_ARRAY_TASK_ID}" 'NR == (row + 1) { print $1; exit }' "${file_orthogroup_genecount_selected}")
 			if [[ -z "${og_id}" ]]; then
-			  echo "Failed to read OrthoGroup ID at row ${SGE_TASK_ID} from: ${file_orthogroup_genecount_selected}"
+			  echo "Failed to read OrthoGroup ID at row ${GG_ARRAY_TASK_ID} from: ${file_orthogroup_genecount_selected}"
 			  exit 1
 			fi
 			echo "OrthoGroup ID: ${og_id}"
@@ -241,13 +241,13 @@ case "${mode_orthogroup}:${mode_query2family}" in
 			  echo "Input directory is empty: ${dir_genelist}"
 			  exit 1
 			fi
-			if [[ ! "${SGE_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${SGE_TASK_ID} -lt 1 ]]; then
-			  echo "Invalid SGE_TASK_ID value (must be a positive integer): ${SGE_TASK_ID}"
+			if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then
+			  echo "Invalid GG_ARRAY_TASK_ID value (must be a positive integer): ${GG_ARRAY_TASK_ID}"
 			  exit 1
 			fi
-			idx=$((SGE_TASK_ID-1))
+			idx=$((GG_ARRAY_TASK_ID-1))
 			if [[ ${idx} -ge ${#files[@]} ]]; then
-			  echo "Input genelist file not found, probably due to out-of-range SGE_TASK_ID=${SGE_TASK_ID}. Number of files: ${#files[@]}"
+			  echo "Input genelist file not found, probably due to out-of-range GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID}. Number of files: ${#files[@]}"
 			  exit 1
 			fi
 			file_query_gene="${files[${idx}]}"
@@ -256,7 +256,7 @@ case "${mode_orthogroup}:${mode_query2family}" in
 		echo "mode_query2family: Input genelist file = ${file_query_gene}"
 		echo "output file prefix: ${og_id}"
 		if [[ ! -f "${file_query_gene}" ]]; then
-		  echo "Input genelist file not found, probably due to out-of-range SGE_TASK_ID=${SGE_TASK_ID}: ${file_query_gene}"
+		  echo "Input genelist file not found, probably due to out-of-range GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID}: ${file_query_gene}"
 		  exit 1
 		fi
 		;;
@@ -307,7 +307,7 @@ dir_rpsblastdb="/usr/local/db/Pfam_LE"
 
 # Directory PATHs
 # Directories for temporary files
-dir_tmp="${dir_output_active}/tmp/${SGE_TASK_ID}_${og_id}" #_${RANDOM}
+dir_tmp="${dir_output_active}/tmp/${GG_ARRAY_TASK_ID}_${og_id}" #_${RANDOM}
 
 # File PATHs
 # Alignment and gene tree preparation and others
@@ -499,7 +499,7 @@ prepare_species_tree_pruned() {
 prepare_species_tree_pruned || true
 set_default_analysis_files
 
-memory_notung=$((MEM_PER_HOST/4))
+memory_notung=$((GG_MEM_TOTAL_GB/4))
 
 echo "Checking parameter conflicts..."
 if [[ ${run_trimal} -eq 1 && ${run_clipkit} -eq 1 ]]; then
@@ -539,7 +539,7 @@ echo "Checking preexisting tmp directory."
 if [[ -e "${dir_tmp}" && ${delete_preexisting_tmp_dir} -eq 1 ]]; then
 	echo "$(date): Deleting preexisting ${dir_tmp}"
 	shopt -s nullglob
-	stale_tmp_paths=( "${dir_output_active}/tmp/${SGE_TASK_ID}_"* )
+	stale_tmp_paths=( "${dir_output_active}/tmp/${GG_ARRAY_TASK_ID}_"* )
 	shopt -u nullglob
 	if [[ ${#stale_tmp_paths[@]} -gt 0 ]]; then
 		rm -rf -- "${stale_tmp_paths[@]}"
@@ -581,13 +581,13 @@ if [[ ! -s "${file_og_query_aa_fasta}" && ${run_get_query_fasta} -eq 1 ]]; then
         seqtype=$(seqkit stats --tabular "${file_query_gene}" | awk 'NR>1 {print $3}')
         if [[ ${seqtype} == "DNA" ]]; then
             echo "DNA sequences were detected. The file will be treated as in-frame CDS sequences, translated into amino acids, and used as a ${query_blast_method} query: ${file_query_gene}"
-            seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${NSLOTS}" "${file_query_gene}" > "${og_id}.query.aa.tmp.fasta"
-            seqkit seq --threads "${NSLOTS}" "${og_id}.query.aa.tmp.fasta" --out-file "${og_id}.query.aa.out.fa.gz"
+            seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" "${file_query_gene}" > "${og_id}.query.aa.tmp.fasta"
+            seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.query.aa.tmp.fasta" --out-file "${og_id}.query.aa.out.fa.gz"
             mv_out "${og_id}.query.aa.out.fa.gz" "${file_og_query_aa_fasta}"
             rm -f -- "${og_id}.query.aa.tmp.fasta"
         elif [[ ${seqtype} == "Protein" ]]; then
             echo "Amino acid sequences were detected. The file will be used as a ${query_blast_method} query: ${file_query_gene}"
-            seqkit seq --threads "${NSLOTS}" "${file_query_gene}" --out-file "${og_id}.query.aa.out.fa.gz"
+            seqkit seq --threads "${GG_TASK_CPUS}" "${file_query_gene}" --out-file "${og_id}.query.aa.out.fa.gz"
             mv_out "${og_id}.query.aa.out.fa.gz" "${file_og_query_aa_fasta}"
         else
             echo "Unsupported sequence type '${seqtype}' in '${file_query_gene}'. Only \"DNA\" or \"Protein\" are allowed. Exiting."
@@ -622,11 +622,11 @@ if [[ ! -s "${file_og_query_aa_fasta}" && ${run_get_query_fasta} -eq 1 ]]; then
 	        fi
 	        mkdir -p "${query_hits_tmp_dir}"
 	        for file_cds in "${cds_files[@]}"; do
-            wait_until_jobn_le ${NSLOTS}
+            wait_until_jobn_le ${GG_TASK_CPUS}
             (
                 sp_ub=$(gg_species_name_from_path "${file_cds}")
                 query_hits_tmp_file="${query_hits_tmp_dir}/$(basename "${file_cds}").hits.fasta"
-                seqkit grep --threads "${NSLOTS}" --ignore-case --pattern-file <(awk -v sp="${sp_ub}" '{print $0; print sp "_" $0}' pattern.txt) "${file_cds}" \
+                seqkit grep --threads "${GG_TASK_CPUS}" --ignore-case --pattern-file <(awk -v sp="${sp_ub}" '{print $0; print sp "_" $0}' pattern.txt) "${file_cds}" \
                 | sed -e "s/^>${sp_ub}_/>/" -e "s/^>${sp_ub}-/>/" -e "s/^>${sp_ub}[[:space:]]/>/" -e "s/^>${sp_ub}\./>/" -e "s/^>/>${sp_ub}_/" \
 	                > "${query_hits_tmp_file}"
 	            ) &
@@ -639,7 +639,7 @@ if [[ ! -s "${file_og_query_aa_fasta}" && ${run_get_query_fasta} -eq 1 ]]; then
 	            cat "${query_hits_tmp_file}" >> "${og_id}.query.cds.fasta"
 	        done
 	        rm -rf -- "${query_hits_tmp_dir}"
-	        gg_prepare_cds_fasta_stream "${NSLOTS}" "${genetic_code}" < "${og_id}.query.cds.fasta" \
+	        gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${genetic_code}" < "${og_id}.query.cds.fasta" \
 	        | sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
 	        > "${og_id}.query.cds.2.fasta"
         num_query=${#genes[@]}
@@ -669,8 +669,8 @@ if [[ ! -s "${file_og_query_aa_fasta}" && ${run_get_query_fasta} -eq 1 ]]; then
         fi
 		        if [[ -s "${og_id}.query.cds.2.fasta" ]]; then
 		            echo "Translating in-frame CDS sequences to amino acid sequences: ${og_id}.query.cds.2.fasta"
-		            seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${NSLOTS}" "${og_id}.query.cds.2.fasta" > "${og_id}.query.aa.tmp.fasta"
-		            seqkit seq --threads "${NSLOTS}" "${og_id}.query.aa.tmp.fasta" --out-file "${og_id}.query.aa.out.fa.gz"
+		            seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" "${og_id}.query.cds.2.fasta" > "${og_id}.query.aa.tmp.fasta"
+		            seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.query.aa.tmp.fasta" --out-file "${og_id}.query.aa.out.fa.gz"
 	            mv_out "${og_id}.query.aa.out.fa.gz" "${file_og_query_aa_fasta}"
 	            rm -f -- "${og_id}.query.aa.tmp.fasta"
 	            rm -f -- "${og_id}.query.cds.2.fasta"
@@ -763,7 +763,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
     '
   }
   for sp in "${cds_spp[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     echo "sp: ${sp}"
     sp_cds_candidates=()
     for cds_file in "${cds_files[@]}"; do
@@ -797,7 +797,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
             echo "Generating BLAST database: ${sp_cds}"
             echo "Generating BLAST database: ${sp_cds}" >&2
             if [[ ${sp_cds} =~ ".gz" ]]; then
-	              seqkit seq --threads "${NSLOTS}" "${sp_cds}" | makeblastdb -dbtype nucl -title "${sp_cds}" -out "${sp_cds_blastdb}"
+	              seqkit seq --threads "${GG_TASK_CPUS}" "${sp_cds}" | makeblastdb -dbtype nucl -title "${sp_cds}" -out "${sp_cds_blastdb}"
 	            else
 	              makeblastdb -dbtype nucl -in "${sp_cds}" -out "${sp_cds_blastdb}"
 	            fi
@@ -824,13 +824,13 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
             echo "Generating DIAMOND database: ${sp_cds}"
             echo "Generating DIAMOND database: ${sp_cds}" >&2
             if [[ ${sp_cds} =~ ".gz" ]]; then
-              seqkit seq --remove-gaps --threads "${NSLOTS}" "${sp_cds}" \
-              | seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${NSLOTS}" \
+              seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${sp_cds}" \
+              | seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
               | filter_translated_fasta_for_diamond \
               > "${sp_cds_diamond_fasta}"
             else
-              seqkit seq --remove-gaps --threads "${NSLOTS}" "${sp_cds}" \
-              | seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${NSLOTS}" \
+              seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${sp_cds}" \
+              | seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
               | filter_translated_fasta_for_diamond \
               > "${sp_cds_diamond_fasta}"
             fi
@@ -855,7 +855,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
   wait_for_background_jobs
   echo "db_files: ${db_files[*]}"
   query_aa_local="${og_id}.query.aa.tmp.for_blast.fasta"
-  seqkit seq --threads "${NSLOTS}" "${file_og_query_aa_fasta}" --out-file "${query_aa_local}"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_query_aa_fasta}" --out-file "${query_aa_local}"
 
   outfmt="qacc sacc pident length mismatch gapopen qstart qend sstart send evalue bitscore frames qlen slen"
   if [[ ${query_blast_method} == "tblastn" ]]; then
@@ -870,7 +870,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
     -evalue "${query_blast_evalue}" \
     -max_target_seqs 50000 \
     -outfmt "6 ${outfmt}" \
-    -num_threads "${NSLOTS}"; then
+    -num_threads "${GG_TASK_CPUS}"; then
       echo "tblastn failed. Exiting."
       exit 1
     fi
@@ -890,7 +890,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
       --out "${tmp_diamond_out}" \
       --evalue "${query_blast_evalue}" \
       --max-target-seqs 50000 \
-      --threads "${NSLOTS}" \
+      --threads "${GG_TASK_CPUS}" \
       --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen; then
         echo "diamond blastp failed for database: ${db_file}. Exiting."
         exit 1
@@ -905,7 +905,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
 
   python "${gg_support_dir}/annotate_blast_coverage.py" \
   --in blast_out.tsv \
-  --ncpu "${NSLOTS}" \
+  --ncpu "${GG_TASK_CPUS}" \
   --outfmt-columns "${outfmt}" \
   --frame-filter "0/1" \
   --out blast_out_inframe.tmp3.tsv
@@ -956,13 +956,13 @@ if [[ ! -s "${file_og_cds_fasta}" && ${run_get_fasta} -eq 1 ]]; then
 		touch "${og_id}.cds.fasta"
 	  for file_cds in "${cds_files[@]}"; do
 	    sp_ub=$(gg_species_name_from_path "${file_cds}")
-	    seqkit grep --threads "${NSLOTS}" --pattern-file pattern.txt "${file_cds}" \
+	    seqkit grep --threads "${GG_TASK_CPUS}" --pattern-file pattern.txt "${file_cds}" \
 	    >> "${og_id}.cds.fasta"
 	  done
 
-  seqkit replace --pattern "X" --replacement "N" --by-seq --ignore-case --threads "${NSLOTS}" "${og_id}.cds.fasta" \
-  | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${NSLOTS}" \
-	  | seqkit replace --pattern "\+" --replacement "_" --ignore-case --threads "${NSLOTS}" \
+  seqkit replace --pattern "X" --replacement "N" --by-seq --ignore-case --threads "${GG_TASK_CPUS}" "${og_id}.cds.fasta" \
+  | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${GG_TASK_CPUS}" \
+	  | seqkit replace --pattern "\+" --replacement "_" --ignore-case --threads "${GG_TASK_CPUS}" \
 	  | cdskit pad --codontable "${genetic_code}" \
 	  | sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
 	  > "${og_id}.cds.2.fasta"
@@ -975,7 +975,7 @@ if [[ ! -s "${file_og_cds_fasta}" && ${run_get_fasta} -eq 1 ]]; then
   echo "Number of sequences in the fasta: ${num_seq}"
   if [[ ${num_gene} -eq ${num_seq} ]]; then
       echo "Number of genes and sequences matched. Fasta generation completed!"
-      seqkit seq --threads "${NSLOTS}" "${og_id}.cds.2.fasta" --out-file "${og_id}.cds.out.fa.gz"
+      seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.2.fasta" --out-file "${og_id}.cds.out.fa.gz"
       mv_out "${og_id}.cds.out.fa.gz" "${file_og_cds_fasta}"
   else
       echo "Number of genes and sequences did not match."
@@ -1022,8 +1022,8 @@ if [[ ! -s "${file_og_rpsblast}" && ${run_rps_blast} -eq 1 ]]; then
 	        rm -f -- "${og_id}.rpsblast.tmp.tsv"
 	    fi
 
-    seqkit seq --remove-gaps --threads "${NSLOTS}" "${file_og_cds_fasta}" \
-    | seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${NSLOTS}" \
+    seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" \
+    | seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
     > ungapped_translated_cds.fas
 
     if [[ "$(head -c 1 ungapped_translated_cds.fas)" != '>' ]]; then
@@ -1039,7 +1039,7 @@ if [[ ! -s "${file_og_rpsblast}" && ${run_rps_blast} -eq 1 ]]; then
 	    -out "${og_id}.rpsblast.tmp.tsv" \
 	    -evalue 0.01 \
     -outfmt "6 ${outfmt}" \
-    -num_threads "${NSLOTS}"; then
+    -num_threads "${GG_TASK_CPUS}"; then
         echo "RPS-BLAST failed. Exiting."
         exit 1
     fi
@@ -1072,14 +1072,14 @@ disable_if_no_input_file "run_get_gff_info" "${file_og_cds_fasta}"
 	  if [[ -e gff2genestat.tsv ]]; then
 	    rm -f -- gff2genestat.tsv
 	  fi
-  seqkit seq --threads "${NSLOTS}" "${file_og_cds_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"
 
   python "${gg_support_dir}/gff2genestat.py" \
   --dir_gff "${dir_sp_gff}" \
   --feature "CDS" \
   --multiple_hits "longest" \
   --seqfile "${og_id}.gff2genestat_input.fasta" \
-  --ncpu "${NSLOTS}" \
+  --ncpu "${GG_TASK_CPUS}" \
   --outfile gff2genestat.tsv
   rm -f -- "${og_id}.gff2genestat_input.fasta"
 
@@ -1095,8 +1095,8 @@ disable_if_no_input_file "run_uniprot_annotation" "${file_og_cds_fasta}"
 if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]; then
     gg_step_start "${task}"
 
-    seqkit seq --remove-gaps --only-id --threads "${NSLOTS}" "${file_og_cds_fasta}" \
-    | seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${NSLOTS}" \
+    seqkit seq --remove-gaps --only-id --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" \
+    | seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
     > uniprot.query.pep.fas
 
     if [[ "${uniprot_annotation_method}" == "blastp" ]]; then
@@ -1107,7 +1107,7 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
 
       blastp \
       -query uniprot.query.pep.fas \
-      -num_threads "${NSLOTS}" \
+      -num_threads "${GG_TASK_CPUS}" \
       -db "${uniprot_db_prefix}" \
       -out uniprot.search.tsv \
       -outfmt "6 qseqid sseqid pident length evalue bitscore qlen" \
@@ -1121,12 +1121,12 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
 
       mmseqs createdb "uniprot.query.pep.fas" "uniprot.queryDB"
       mmseqs search "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "tmp_mmseqs2_uniprot" \
-      --threads "${NSLOTS}" \
+      --threads "${GG_TASK_CPUS}" \
       --max-seqs 1 \
       -e 1e-2 \
       -s 7.5
       mmseqs convertalis "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "uniprot.search.tsv" \
-      --threads "${NSLOTS}" \
+      --threads "${GG_TASK_CPUS}" \
       --format-output "query,target,pident,alnlen,evalue,bits,qlen"
       rm -f -- uniprot.queryDB* uniprot.resultDB*
       rm -rf -- "tmp_mmseqs2_uniprot"
@@ -1148,20 +1148,20 @@ disable_if_no_input_file "run_mafft" "${file_og_cds_fasta}"
 if [[ ! -s "${file_og_mafft}" && ${run_mafft} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  seqkit seq --threads "${NSLOTS}" "${file_og_cds_fasta}" --out-file tmp.cds.input.fasta
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" --out-file tmp.cds.input.fasta
   cdskit mask --seqfile tmp.cds.input.fasta --codontable "${genetic_code}" --outfile tmp.cds.fasta
 
 	seqkit translate \
 	--allow-unknown-codon \
 	--transl-table "${genetic_code}" \
-	--threads "${NSLOTS}" \
+	--threads "${GG_TASK_CPUS}" \
 	tmp.cds.fasta \
 	> tmp.pep.fasta
 
 	mafft \
 	--auto \
 	--amino \
-	--thread "${NSLOTS}" \
+	--thread "${GG_TASK_CPUS}" \
 	--quiet \
 	tmp.pep.fasta \
 	> tmp.pep.aln.fasta
@@ -1172,7 +1172,7 @@ if [[ ! -s "${file_og_mafft}" && ${run_mafft} -eq 1 ]]; then
 	--codontable "${genetic_code}" \
 	--outfile "${og_id}.cds.aln.fasta"
 
-  seqkit seq --threads "${NSLOTS}" "${og_id}.cds.aln.fasta" --out-file "${og_id}.cds.aln.out.fa.gz"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.aln.fasta" --out-file "${og_id}.cds.aln.out.fa.gz"
   mv_out "${og_id}.cds.aln.out.fa.gz" "${file_og_mafft}"
   rm -f -- tmp.cds.input.fasta
 else
@@ -1183,7 +1183,7 @@ task="AMAS for original alignment"
 disable_if_no_input_file "run_amas_original" "${file_og_untrimmed_aln_analysis}"
 if [[ ! -s "${file_og_amas_original}" && ${run_amas_original} -eq 1 ]]; then
 	gg_step_start "${task}"
-  seqkit seq --threads "${NSLOTS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.amas.original.input.fasta"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.amas.original.input.fasta"
 
 	AMAS.py summary \
 	--in-format fasta \
@@ -1201,7 +1201,7 @@ disable_if_no_input_file "run_maxalign" "${file_og_untrimmed_aln_analysis}"
 if [[ ! -s "${file_og_maxalign}" && ${run_maxalign} -eq 1 ]]; then
 	gg_step_start "${task}"
 
-	seqkit seq --threads "${NSLOTS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.cds.aln.fasta"
+	seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.cds.aln.fasta"
 	maxalign_keep_regex=""
 	if [[ ${mode_query2family} -eq 1 && ${retain_query_in_maxalign} -eq 0 ]]; then
 		echo "Query sequence(s) is NOT necessarily retained in MaxAlign."
@@ -1261,7 +1261,7 @@ PY
 	echo Number of sequences before MaxAlign: $(gg_count_fasta_records "${og_id}.cds.aln.fasta")
 	echo Number of sequences after MaxAlign: $(gg_count_fasta_records "${og_id}.maxalign.output.fasta")
 
-	seqkit seq --threads "${NSLOTS}" "${og_id}.maxalign.output.fasta" --out-file "${og_id}.maxalign.out.fa.gz"
+	seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.maxalign.output.fasta" --out-file "${og_id}.maxalign.out.fa.gz"
 	mv_out "${og_id}.maxalign.out.fa.gz" "${file_og_maxalign}"
 	rm -f -- "${og_id}.maxalign.output.fasta"
 else
@@ -1276,11 +1276,11 @@ disable_if_no_input_file "run_trimal" "${file_og_untrimmed_aln_analysis}"
 if [[ ! -s "${file_og_trimal}" && ${run_trimal} -eq 1 ]]; then
 	gg_step_start "${task}"
 
-		seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${NSLOTS}" "${file_og_untrimmed_aln_analysis}" \
+		seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" \
 		| sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
 		> untrimmed.pep.fasta
 
-		seqkit seq --remove-gaps --threads "${NSLOTS}" \
+		seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" \
 		"${file_og_untrimmed_aln_analysis}" \
 		> untrimmed.cds.degap.fasta
 
@@ -1302,7 +1302,7 @@ if [[ ! -s "${file_og_trimal}" && ${run_trimal} -eq 1 ]]; then
 
   if [[ -s "${og_id}.cds.trimal.tmp2.fasta" ]]; then
     echo "Copying. Output file detected for the task: ${task}"
-    seqkit seq --threads "${NSLOTS}" "${og_id}.cds.trimal.tmp2.fasta" --out-file "${og_id}.cds.trimal.out.fa.gz"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.trimal.tmp2.fasta" --out-file "${og_id}.cds.trimal.out.fa.gz"
     mv_out "${og_id}.cds.trimal.out.fa.gz" "${file_og_trimal}"
   fi
 else
@@ -1317,7 +1317,7 @@ disable_if_no_input_file "run_clipkit" "${file_og_untrimmed_aln_analysis}"
 if [[ ! -s "${file_og_clipkit}" && ${run_clipkit} -eq 1 ]]; then
 	gg_step_start "${task}"
 
-  seqkit seq --threads "${NSLOTS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.cds.clipkit.input.fasta"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.cds.clipkit.input.fasta"
 
 	clipkit \
 	"${og_id}.cds.clipkit.input.fasta" \
@@ -1339,7 +1339,7 @@ if [[ ! -s "${file_og_clipkit}" && ${run_clipkit} -eq 1 ]]; then
 
   if [[ -s "${og_id}.cds.clipkit.hammer.fasta" ]]; then
     echo "Copying. Output file detected for the task: ${task}"
-    seqkit seq --threads "${NSLOTS}" "${og_id}.cds.clipkit.hammer.fasta" --out-file "${og_id}.cds.clipkit.out.fa.gz"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.clipkit.hammer.fasta" --out-file "${og_id}.cds.clipkit.out.fa.gz"
     mv_out "${og_id}.cds.clipkit.out.fa.gz" "${file_og_clipkit}"
     cp_out "${og_id}.cds.clipkit.tmp.fasta.log" "${file_og_clipkit_log}"
   fi
@@ -1355,7 +1355,7 @@ task="AMAS for cleaned alignment"
 disable_if_no_input_file "run_amas_cleaned" "${file_og_trimmed_aln_analysis}"
 if [[ ! -s "${file_og_amas_cleaned}" && ${run_amas_cleaned} -eq 1 ]]; then
 	gg_step_start "${task}"
-  seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.amas.cleaned.input.fasta"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.amas.cleaned.input.fasta"
 
 	AMAS.py summary \
 	--in-format fasta \
@@ -1428,10 +1428,10 @@ if [[ ! -s "${file_og_iqtree_tree}" && ${run_iqtree} -eq 1 ]]; then
 				> iqtree_input.fa
 		else
 			echo "Specified substitution model was interpreted as a nucleotide model (base model = ${base_model})."
-			seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file iqtree_input.fa
+			seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file iqtree_input.fa
 		fi
 	else
-		seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file iqtree_input.fa
+		seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file iqtree_input.fa
 	fi
 	echo "IQ-TREE starting..."
 
@@ -1442,7 +1442,7 @@ if [[ ! -s "${file_og_iqtree_tree}" && ${run_iqtree} -eq 1 ]]; then
 	-s iqtree_input.fa \
 	-m "${iqtree_model_string}" \
 	-T AUTO \
-	--threads-max "${NSLOTS}" \
+	--threads-max "${GG_TASK_CPUS}" \
 	--prefix "${og_id}" \
 	"${IQTREE_MEM_ARGS[@]}" \
 	--seed 12345 \
@@ -1568,7 +1568,7 @@ if [[ ( ! -s "${file_og_orthogroup_extraction_nwk}" || ! -s "${file_og_orthogrou
 
   printf 'num_leaf\tfile\n' > tmp_num_leaf.tsv
   for subtree_infile in "${subtree_infiles[@]}"; do
-    wait_until_jobn_le ${NSLOTS}
+    wait_until_jobn_le ${GG_TASK_CPUS}
     run_nwkit_subtree "${subtree_infile}"
   done
 
@@ -1595,7 +1595,7 @@ if [[ ( ! -s "${file_og_orthogroup_extraction_nwk}" || ! -s "${file_og_orthogrou
 	  nwkit subtree --infile "${min_leaf_file}" --leaves "${comma_separated_genes}" --orthogroup "yes" --dup_conf_score_threshold 0 \
 	  --outfile "${og_id}.orthogroup_seed.tmp.nwk"
 
-  seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file tmp.trimmed.input.fasta
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file tmp.trimmed.input.fasta
   nwkit intersection \
   --infile "${og_id}.orthogroup_seed.tmp.nwk" \
   --outfile /dev/null \
@@ -1615,7 +1615,7 @@ if [[ ( ! -s "${file_og_orthogroup_extraction_nwk}" || ! -s "${file_og_orthogrou
 	  rm -f -- "${og_id}.orthogroup_seed.tmp.nwk"
 
 	  cdskit hammer --nail 4 -s tmp.fasta -o "${og_id}.orthogroup_extraction.tmp.fasta"
-	  seqkit seq --threads "${NSLOTS}" "${og_id}.orthogroup_extraction.tmp.fasta" --out-file "${og_id}.orthogroup_extraction.out.fa.gz"
+	  seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.orthogroup_extraction.tmp.fasta" --out-file "${og_id}.orthogroup_extraction.out.fa.gz"
 	  mv_out "${og_id}.orthogroup_extraction.out.fa.gz" "${file_og_orthogroup_extraction_fasta}"
 	  rm -f -- "${og_id}.orthogroup_extraction.tmp.fasta"
 else
@@ -1647,7 +1647,7 @@ if [[ ! -s "${file_og_generax_nhx}" && ${run_generax} -eq 1 ]]; then
 			> generax_input_alignment.fas
 	else
 		echo "Specified substitution model was interpreted as a nucleotide model (base model = ${base_model})."
-		seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file generax_input_alignment.fas
+		seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file generax_input_alignment.fas
 	fi
 
   nwkit drop --target intnode --support yes --name yes \
@@ -1676,8 +1676,8 @@ if [[ ! -s "${file_og_generax_nhx}" && ${run_generax} -eq 1 ]]; then
 		  "subst_model = ${generax_model}" \
 		  > generax_families.txt
 
-  #${host_mpiexec_path} -np ${NSLOTS} generax \
-  mpiexec_args=(mpiexec -oversubscribe -np ${NSLOTS})
+  #${host_mpiexec_path} -np ${GG_TASK_CPUS} generax \
+  mpiexec_args=(mpiexec -oversubscribe -np ${GG_TASK_CPUS})
   mpi_env_args=()
   running_under_scheduler=0
   if [[ -n "${SLURM_JOB_ID:-}" || -n "${PBS_JOBID:-}" || -n "${PE_HOSTFILE:-}" || -n "${LSB_JOBID:-}" ]]; then
@@ -1770,7 +1770,7 @@ if [[ ${run_generax} -eq 1 ]]; then
 					> "${og_id}.generax_ufboot.input.fa"
 			else
 				echo "Specified substitution model was interpreted as a nucleotide model (base model = ${base_model})."
-				seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.generax_ufboot.input.fa"
+				seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.generax_ufboot.input.fa"
 			fi
 
 			nwkit drop --target intnode --support yes --name yes --infile "${file_og_generax_nwk}" \
@@ -1787,7 +1787,7 @@ if [[ ${run_generax} -eq 1 ]]; then
 			-g "${og_id}.generax_ufboot.constraint.nwk" \
 			-m "${generax_model}" \
 			-T AUTO \
-			--threads-max "${NSLOTS}" \
+			--threads-max "${GG_TASK_CPUS}" \
 			--prefix "${og_id}.generax_ufboot" \
 			"${IQTREE_MEM_ARGS[@]}" \
 			--seed 12345 \
@@ -1921,12 +1921,12 @@ task="Expression matrix preparation"
 disable_if_no_input_file "run_get_expression_matrix" "${file_og_trimmed_aln_analysis}"
 if [[ ! -s "${file_og_expression}" && ${run_get_expression_matrix} -eq 1 ]]; then
 	gg_step_start "${task}"
-  seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.trait_matrix_input.fasta"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.trait_matrix_input.fasta"
 
 		python "${gg_support_dir}/get_trait_matrix.py" \
 		--dir_trait "${dir_sp_expression}" \
 		--seqfile "${og_id}.trait_matrix_input.fasta" \
-		--ncpu "${NSLOTS}" \
+		--ncpu "${GG_TASK_CPUS}" \
 		--outfile expression_matrix.tsv
   rm -f -- "${og_id}.trait_matrix_input.fasta"
   if [[ -s expression_matrix.tsv ]]; then
@@ -1947,9 +1947,9 @@ if [[ ! -s "${file_og_promoter_fasta}" && ${run_get_promoter_fasta} -eq 1 ]]; th
 	  --seqkit_exe "seqkit" \
 	  --outfile "${og_id}.promoter.tmp.fasta" \
 	  --promoter_bp "${promoter_bp}" \
-	  --ncpu "${NSLOTS}"
+	  --ncpu "${GG_TASK_CPUS}"
   if [[ -s "${og_id}.promoter.tmp.fasta" ]]; then
-    seqkit seq --threads "${NSLOTS}" "${og_id}.promoter.tmp.fasta" --out-file "${og_id}.promoter.out.fa.gz"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.promoter.tmp.fasta" --out-file "${og_id}.promoter.out.fa.gz"
     mv_out "${og_id}.promoter.out.fa.gz" "${file_og_promoter_fasta}"
     rm -f -- "${og_id}.promoter.tmp.fasta"
   fi
@@ -1968,7 +1968,7 @@ fi
 disable_if_no_input_file "run_fimo" "${file_og_promoter_fasta}" "${jaspar_path}"
 if [[ ! -s "${file_og_fimo}" && ${run_fimo} -eq 1 ]]; then
   gg_step_start "${task}"
-  seqkit seq --threads "${NSLOTS}" "${file_og_promoter_fasta}" --out-file "${og_id}.fimo.input.fasta"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_promoter_fasta}" --out-file "${og_id}.fimo.input.fasta"
 
   fimo \
   --oc "fimo_out" \
@@ -2010,7 +2010,7 @@ if [[ ${is_all_outputs_exist} -eq 0 && ${run_tree_pruning} -eq 1 ]]; then
 	cut -f 1 "${file_og_expression}" | tail -n +2 > target_genes.txt
 
   if [[ -s "${file_og_untrimmed_aln_analysis}" ]]; then
-    seqkit seq --threads "${NSLOTS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.untrimmed.input.fasta"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.untrimmed.input.fasta"
     awk '
     NR==FNR {
       sub(/\r$/, "", $1)
@@ -2029,13 +2029,13 @@ if [[ ${is_all_outputs_exist} -eq 0 && ${run_tree_pruning} -eq 1 ]]; then
     }
     ' target_genes.txt "${og_id}.untrimmed.input.fasta" > "${og_id}.untrimmed.pruned.tmp.fasta"
     rm -f -- "${og_id}.untrimmed.input.fasta"
-    seqkit seq --threads "${NSLOTS}" "${og_id}.untrimmed.pruned.tmp.fasta" --out-file "${og_id}.untrimmed.pruned.out.fa.gz"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.untrimmed.pruned.tmp.fasta" --out-file "${og_id}.untrimmed.pruned.out.fa.gz"
     mv_out "${og_id}.untrimmed.pruned.out.fa.gz" "${file_og_untrimmed_aln_pruned}"
     rm -f -- "${og_id}.untrimmed.pruned.tmp.fasta"
   fi
 
   if [[ -s "${file_og_trimmed_aln_analysis}" ]]; then
-    seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.trimmed.input.fasta"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.trimmed.input.fasta"
     awk '
     NR==FNR {
       sub(/\r$/, "", $1)
@@ -2054,7 +2054,7 @@ if [[ ${is_all_outputs_exist} -eq 0 && ${run_tree_pruning} -eq 1 ]]; then
     }
     ' target_genes.txt "${og_id}.trimmed.input.fasta" > "${og_id}.trimmed.pruned.tmp.fasta"
     rm -f -- "${og_id}.trimmed.input.fasta"
-    seqkit seq --threads "${NSLOTS}" "${og_id}.trimmed.pruned.tmp.fasta" --out-file "${og_id}.trimmed.pruned.out.fa.gz"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.trimmed.pruned.tmp.fasta" --out-file "${og_id}.trimmed.pruned.out.fa.gz"
     mv_out "${og_id}.trimmed.pruned.out.fa.gz" "${file_og_trimmed_aln_pruned}"
     rm -f -- "${og_id}.trimmed.pruned.tmp.fasta"
   fi
@@ -2229,7 +2229,7 @@ if [[ ! -s "${file_og_mapdnds_parameter}" && ${run_mapdnds_parameter_estimation}
   | nwkit sanitize --remove_singleton yes --resolve_polytomy no \
   > mapdnds_input.nwk
 
-	seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file ./mapdnds_input.fasta
+	seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file ./mapdnds_input.fasta
 
   # F3X4+G4 shouldn not be changed otherwise iqtree2mapnh.py has to be updated.
 	build_iqtree_mem_args
@@ -2238,7 +2238,7 @@ if [[ ! -s "${file_og_mapdnds_parameter}" && ${run_mapdnds_parameter_estimation}
 	-m "GY+F3X4+G4" \
 	-te mapdnds_input.nwk \
 	-T AUTO \
-	--threads-max "${NSLOTS}" \
+	--threads-max "${GG_TASK_CPUS}" \
 	--seqtype "CODON${genetic_code}" \
 	--prefix "${og_id}.iqtree2mapdNdS" \
 	"${IQTREE_MEM_ARGS[@]}" \
@@ -2279,7 +2279,7 @@ if [[ ( ! -s "${file_og_mapdnds_dn}" || ! -s "${file_og_mapdnds_ds}" ) && ${run_
 
 		unzip -o "${file_og_mapdnds_parameter}"
 		cd "${dir_tmp}/${og_id}.mapdnds_parameter"
-	seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file ./mapdnds_input.fasta
+	seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file ./mapdnds_input.fasta
   normalize_mapnh_params_for_mapnh_v1 "iqtree2mapnh.params" "${genetic_code}"
 
   mapnh_exit_code=0
@@ -2444,7 +2444,7 @@ if [[ ! -s "${file_og_hyphy_dnds}" && ${run_hyphy_dnds} -eq 1 ]]; then
   | nwkit sanitize --remove_singleton yes --resolve_polytomy no \
   > "hyphy_input.nwk"
 
-	seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file "hyphy_input.fasta"
+	seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "hyphy_input.fasta"
 
 	      hyphy_genetic_code=$(get_hyphy_genetic_code "${genetic_code}")
 
@@ -2457,7 +2457,7 @@ if [[ ! -s "${file_og_hyphy_dnds}" && ${run_hyphy_dnds} -eq 1 ]]; then
   --type "local" \
   --lrt "No" \
   --rooted "Yes" \
-  --CPU "${NSLOTS}"
+  --CPU "${GG_TASK_CPUS}"
 
   # --lrt "Yes" took too long time for some genes. 20 sec vs 10 min in a small tree.
 
@@ -2524,7 +2524,7 @@ run_hyphy_relax_for_all_traits() {
     > "${hyphy_tree_file}"
 
     if grep -q "{Foreground}" "${hyphy_tree_file}"; then
-      seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file "hyphy_input_${trait}${reversed_mark}.fasta"
+      seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "hyphy_input_${trait}${reversed_mark}.fasta"
 	      hyphy_genetic_code=$(get_hyphy_genetic_code "${genetic_code}")
       relax_multiple_hits_args=()
       if [[ -n "${relax_multiple_hits_value}" ]]; then
@@ -2539,7 +2539,7 @@ run_hyphy_relax_for_all_traits() {
         --models "Minimal"
         --srv "No"
         --rooted "Yes"
-        --CPU "${NSLOTS}"
+        --CPU "${GG_TASK_CPUS}"
       )
       if ! hyphy relax "${hyphy_relax_common_args[@]}" "${relax_multiple_hits_args[@]}"; then
         if [[ ${#relax_multiple_hits_args[@]} -gt 0 ]]; then
@@ -2656,7 +2656,7 @@ if [[ ! -s "${file_og_scm_intron_summary}" && ${run_scm_intron} -eq 1 ]]; then
 	  --intron_gain_rate="${intron_gain_rate}" \
 	  --retrotransposition_rate="${retrotransposition_rate}" \
 	  --nrep=1000 \
-	  --nslots="${NSLOTS}"
+	  --nslots="${GG_TASK_CPUS}"
 
   cp_out intron_evolution_summary.tsv "${file_og_scm_intron_summary}"
   if [[ -e intron_evolution_plot.pdf ]]; then
@@ -2679,7 +2679,7 @@ if [[ ${run_phylogeneticem} -eq 1 && ( ! -s "${file_og_pem_rdata}" || ! -s "${fi
 		Rscript "${gg_support_dir}/detect_OU_shift_PhylogeneticEM.r" \
 		--tree_file="${file_og_dated_tree_analysis}" \
 		--trait_file="${file_og_expression}" \
-		--nslots="${NSLOTS}" \
+		--nslots="${GG_TASK_CPUS}" \
 		--fit_file="${pem_fit_file}" \
 		--require_internal_node_labels="${require_internal_node_labels:-1}" \
 		--clade_collapse_similarity_method="${clade_collapse_similarity_method}" \
@@ -2722,7 +2722,7 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
   if [[ -z "${CPU_PER_HOST}" || "${CPU_PER_HOST}" -lt 1 ]]; then
     CPU_PER_HOST=1
   fi
-  cpu_pick="${NSLOTS}"
+  cpu_pick="${GG_TASK_CPUS}"
   if [[ "${cpu_pick}" -gt "${CPU_PER_HOST}" ]]; then
     cpu_pick="${CPU_PER_HOST}"
   fi
@@ -2744,7 +2744,7 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
 			  --max_nshift="${max_nshift}"
 			  --tree_file="${file_og_dated_tree_analysis}"
 			  --trait_file="${file_og_expression}"
-			  --nslots="${NSLOTS}"
+			  --nslots="${GG_TASK_CPUS}"
 			  --require_internal_node_labels="${require_internal_node_labels:-1}"
 			  --clade_collapse_similarity_method="${clade_collapse_similarity_method}"
 			  --clade_collapse_similarity_threshold="${clade_collapse_similarity_threshold}"
@@ -2819,7 +2819,7 @@ if [[ ! -s "${file_og_iqtree_anc}" && ${run_iqtree_anc} -eq 1 ]]; then
 		if [[ ${#csubst_cleanup_paths[@]} -gt 0 ]]; then
 			rm -rf -- "${csubst_cleanup_paths[@]}"
 		fi
-	  seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file "tmp.csubst.fasta"
+	  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "tmp.csubst.fasta"
 
   nwkit drop --target intnode --support yes --name no --infile "${file_og_rooted_tree_analysis}" \
 	| nwkit intersection --seqin tmp.csubst.fasta --seqout csubst.fasta \
@@ -2834,7 +2834,7 @@ if [[ ! -s "${file_og_iqtree_anc}" && ${run_iqtree_anc} -eq 1 ]]; then
 	-te csubst.nwk \
 	-m "${codon_model}" \
 	-T AUTO \
-	--threads-max "${NSLOTS}" \
+	--threads-max "${GG_TASK_CPUS}" \
 	--seqtype "CODON${genetic_code}" \
 	--prefix csubst \
 	--ancestral \
@@ -2933,7 +2933,7 @@ if [[ ( ! -s "${file_og_csubst_b}" || ! -s "${file_og_csubst_cb_stats}" ) && ${r
   --calc_quantile "no" \
   --omegaC_method "submodel" \
   --asrv "each" \
-  --threads "${NSLOTS}" \
+  --threads "${GG_TASK_CPUS}" \
   --calibrate_longtail "yes" \
   --float_type 32 \
   "${foreground_params[@]}"
@@ -2997,17 +2997,17 @@ if [[ ( ${summary_flag} -eq 1 || ! -s "${file_og_stat_branch}" || ! -s "${file_o
   summary_tmp_files=()
   if [[ -s "${file_og_cds_fasta}" ]]; then
     summary_unaligned_fasta="${og_id}.summary.unaligned.fasta"
-    seqkit seq --threads "${NSLOTS}" "${file_og_cds_fasta}" --out-file "${summary_unaligned_fasta}"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" --out-file "${summary_unaligned_fasta}"
     summary_tmp_files+=( "${summary_unaligned_fasta}" )
   fi
   if [[ -s "${file_og_trimmed_aln_analysis}" ]]; then
     summary_trimmed_fasta="${og_id}.summary.trimmed.fasta"
-    seqkit seq --threads "${NSLOTS}" "${file_og_trimmed_aln_analysis}" --out-file "${summary_trimmed_fasta}"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${summary_trimmed_fasta}"
     summary_tmp_files+=( "${summary_trimmed_fasta}" )
   fi
   if [[ -s "${file_og_promoter_fasta}" ]]; then
     summary_promoter_fasta="${og_id}.summary.promoter.fasta"
-    seqkit seq --threads "${NSLOTS}" "${file_og_promoter_fasta}" --out-file "${summary_promoter_fasta}"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_promoter_fasta}" --out-file "${summary_promoter_fasta}"
     summary_tmp_files+=( "${summary_promoter_fasta}" )
   fi
 
@@ -3045,7 +3045,7 @@ if [[ ( ${summary_flag} -eq 1 || ! -s "${file_og_stat_branch}" || ! -s "${file_o
 		--species_pgls_stats "${file_og_species_pgls}" \
 		--rpsblast "${file_og_rpsblast}" \
 		--uniprot "${file_og_uniprot_annotation}" \
-		--ncpu "${NSLOTS}" \
+		--ncpu "${GG_TASK_CPUS}" \
 		--clade_ortholog_prefix "${treevis_clade_ortholog_prefix}"
   if [[ ${#summary_tmp_files[@]} -gt 0 ]]; then
     rm -f -- "${summary_tmp_files[@]}"
@@ -3085,7 +3085,7 @@ if [[ ${treevis_synteny} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
         --window "${treevis_synteny_window}" \
         --evalue "${query_blast_evalue}" \
         --genetic_code "${genetic_code}" \
-        --threads "${NSLOTS}" \
+        --threads "${GG_TASK_CPUS}" \
         --outfile "${file_og_synteny}"
       if [[ ! -s "${file_og_synteny}" ]]; then
         echo "No synteny links were generated: ${file_og_synteny}"

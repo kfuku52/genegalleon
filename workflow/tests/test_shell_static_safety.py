@@ -296,7 +296,7 @@ def test_no_known_unquoted_query_gene_file_expansions():
     banned_tokens = [
         "head --bytes 1 ${file_query_gene}",
         "seqkit stats --tabular ${file_query_gene}",
-        "seqkit translate --allow-unknown-codon --transl-table ${genetic_code} --threads ${NSLOTS} ${file_query_gene}",
+        "seqkit translate --allow-unknown-codon --transl-table ${genetic_code} --threads ${GG_TASK_CPUS} ${file_query_gene}",
         "cp_out ${file_query_gene} ${dir_output_active}/query_gene/$(basename \"${file_query_gene}\")",
     ]
     for token in banned_tokens:
@@ -476,10 +476,10 @@ def test_progress_summary_entrypoint_uses_auto_forwarding_and_normalized_nslots(
     assert 'forward_config_vars_to_container_env "${gg_entrypoint_name}"' in text
     assert "unset -f forward_config_vars_to_container_env" not in text
     assert "for exported_name in mode_transcriptome_assembly ncpu_progress_summary; do" not in text
-    assert 'ncpu_progress_summary="${ncpu_progress_summary:-${NSLOTS:-1}}"' not in text
+    assert 'ncpu_progress_summary="${ncpu_progress_summary:-${GG_TASK_CPUS:-1}}"' not in text
 
     idx_variable_sgenizer = text.index("gg_entrypoint_prepare_container_runtime")
-    idx_ncpu_default = text.index(': "${ncpu_progress_summary:=${NSLOTS:-1}}"')
+    idx_ncpu_default = text.index(': "${ncpu_progress_summary:=${GG_TASK_CPUS:-1}}"')
     assert idx_ncpu_default > idx_variable_sgenizer
 
 
@@ -612,7 +612,7 @@ def test_gene_evolution_core_clamps_l1ou_cpu_selection_to_available_cores():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     assert 'CPU_PER_HOST=$(grep -c processor /proc/cpuinfo)' not in text
-    assert 'cpu_pick="${NSLOTS}"' in text
+    assert 'cpu_pick="${GG_TASK_CPUS}"' in text
     assert 'if [[ "${cpu_pick}" -gt "${CPU_PER_HOST}" ]]; then' in text
     assert 'cpu_id=$(python -c' in text
     assert '"${cpu_pick}" "${CPU_PER_HOST}"' in text
@@ -1099,7 +1099,7 @@ def test_genome_evolution_core_quotes_grampa_output_and_cafe_option_values():
     assert "--max_size_differential ${max_size_differential_cafe}" not in text
     assert "--tree ${file_dated_species_tree}" not in text
     assert "--n_gamma_cats ${n_gamma_cats_cafe}" not in text
-    assert "--cores ${NSLOTS}" not in text
+    assert "--cores ${GG_TASK_CPUS}" not in text
     assert "--output_prefix ${dir_cafe_output}" not in text
 
     assert 'busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" "${file_busco_grampa_dna}"' in text
@@ -1110,7 +1110,7 @@ def test_genome_evolution_core_quotes_grampa_output_and_cafe_option_values():
     assert '--max_size_differential "${max_size_differential_cafe}"' in text
     assert '--tree "${file_dated_species_tree}"' in text
     assert '--n_gamma_cats "${n_gamma_cats_cafe}"' in text
-    assert '--cores "${NSLOTS}"' in text
+    assert '--cores "${GG_TASK_CPUS}"' in text
     assert '--output_prefix "${dir_cafe_output}"' in text
 
 
@@ -1174,7 +1174,7 @@ def test_genome_evolution_core_quotes_orthogroup_iq2mc_and_busco_summary_options
         "--max_gene_num ${max_num_gene}",
         "--min_species_num ${min_num_species}",
         "--min_percent_species_coverage ${min_percent_species_coverage}",
-        "--ncpu ${NSLOTS}; then",
+        "--ncpu ${GG_TASK_CPUS}; then",
         "--orthofinder_hog_genecount ${dir_orthofinder_hog2og}/Orthogroups.GeneCount.tsv",
         "normalize_iq2mc_constraint_tree ${file_constrained_tree}",
         "if ! ${iq2mc_binary} \\",
@@ -1190,7 +1190,7 @@ def test_genome_evolution_core_quotes_orthogroup_iq2mc_and_busco_summary_options
         '--max_gene_num "${max_num_gene}"',
         '--min_species_num "${min_num_species}"',
         '--min_percent_species_coverage "${min_percent_species_coverage}"',
-        '--ncpu "${NSLOTS}"; then',
+        '--ncpu "${GG_TASK_CPUS}"; then',
         '--orthofinder_hog_genecount "${dir_orthofinder_hog2og}/Orthogroups.GeneCount.tsv"',
         'normalize_iq2mc_constraint_tree "${file_constrained_tree}"',
         'if ! "${iq2mc_binary}" \\',
@@ -1207,21 +1207,21 @@ def test_genome_evolution_core_quotes_orthogroup_iq2mc_and_busco_summary_options
     assert "--mcmc-bds ${mcmc_birth_death_sampling}" not in iq2mc_block
     assert "--mcmc-clock ${mcmc_clock_model}" not in iq2mc_block
     assert "--mcmc-iter ${mcmc_burnin},${mcmc_sampfreq},${mcmc_nsample}" not in iq2mc_block
-    assert "-T ${NSLOTS}" not in iq2mc_block
+    assert "-T ${GG_TASK_CPUS}" not in iq2mc_block
     assert '-m "${nucleotide_model}"' in iq2mc_block
     assert '-te "${file_constrained_tree}"' in iq2mc_block
     assert '--mcmc-bds "${mcmc_birth_death_sampling}"' in iq2mc_block
     assert '--mcmc-clock "${mcmc_clock_model}"' in iq2mc_block
     assert '--mcmc-iter "${mcmc_burnin},${mcmc_sampfreq},${mcmc_nsample}"' in iq2mc_block
-    assert '-T "${NSLOTS}"' in iq2mc_block
+    assert '-T "${GG_TASK_CPUS}"' in iq2mc_block
 
     busco_summary_start = text.index('python "${gg_support_dir}/collect_common_BUSCO_genes.py" \\')
     busco_summary_end = text.index('--outfile "tmp.busco_summary_table.tsv"', busco_summary_start) + len('--outfile "tmp.busco_summary_table.tsv"')
     busco_summary_block = text[busco_summary_start:busco_summary_end]
     assert "--busco_outdir ${dir_species_busco_full}" not in busco_summary_block
-    assert "--ncpu ${NSLOTS}" not in busco_summary_block
+    assert "--ncpu ${GG_TASK_CPUS}" not in busco_summary_block
     assert '--busco_outdir "${dir_species_busco_full}"' in busco_summary_block
-    assert '--ncpu "${NSLOTS}"' in busco_summary_block
+    assert '--ncpu "${GG_TASK_CPUS}"' in busco_summary_block
 
 
 def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
@@ -1242,9 +1242,9 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         "--fx2tab_tsv ${file_longestcds_fx2tab}",
         "--species_name ${sp_ub}",
         "--rank ${contamination_removal_rank_for_remove_contaminated_sequences}",
-        "seqkit seq --threads ${NSLOTS} ${file_isoform} --out-file \"busco_infile_cdna.fa\"",
-        "seqkit seq --threads ${NSLOTS} ${file_longestcds} --out-file \"busco_infile_cds.fa\"",
-        "seqkit seq --threads ${NSLOTS} ${file_longestcds_contamination_removal_fasta} --out-file \"busco_infile_cds.fa\"",
+        "seqkit seq --threads ${GG_TASK_CPUS} ${file_isoform} --out-file \"busco_infile_cdna.fa\"",
+        "seqkit seq --threads ${GG_TASK_CPUS} ${file_longestcds} --out-file \"busco_infile_cds.fa\"",
+        "seqkit seq --threads ${GG_TASK_CPUS} ${file_longestcds_contamination_removal_fasta} --out-file \"busco_infile_cds.fa\"",
         "--lineage_dataset ${dir_busco_lineage}",
         "--download_path ${dir_busco_db}",
         "if [[ -e ${file_kallisto_reference_fasta} ]]; then",
@@ -1271,9 +1271,9 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         '--fx2tab_tsv "${file_longestcds_fx2tab}"',
         '--species_name "${sp_ub}"',
         '--rank "${contamination_removal_rank_for_remove_contaminated_sequences}"',
-        'seqkit seq --threads "${NSLOTS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"',
-        'seqkit seq --threads "${NSLOTS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"',
-        'seqkit seq --threads "${NSLOTS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"',
+        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"',
+        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"',
+        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"',
         '--lineage_dataset "${dir_busco_lineage}"',
         '--download_path "${dir_busco_db}"',
         'if [[ -e "${file_kallisto_reference_fasta}" ]]; then',
@@ -1465,7 +1465,7 @@ def test_genome_annotation_core_quotes_known_path_sensitive_options():
     banned_tokens = [
         "--lineage_dataset ${dir_busco_lineage}",
         "--download_path ${dir_busco_db}",
-        "seqkit seq --threads ${NSLOTS} ${file_sp_genome} > \"busco_genome_input.fa\"",
+        "seqkit seq --threads ${GG_TASK_CPUS} ${file_sp_genome} > \"busco_genome_input.fa\"",
         "mmseqs createdb ${file_sp_cds} queryDB",
         "--fasta_file ${file_sp_cds}",
         "--mmseqs2taxonomy_tsv ${file_sp_cds_mmseqs2taxonomy}",
@@ -1492,7 +1492,7 @@ def test_genome_annotation_core_quotes_known_path_sensitive_options():
     expected_tokens = [
         '--lineage_dataset "${dir_busco_lineage}"',
         '--download_path "${dir_busco_db}"',
-        'seqkit seq --threads "${NSLOTS}" "${file_sp_genome}" > "busco_genome_input.fa"',
+        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_sp_genome}" > "busco_genome_input.fa"',
         'mmseqs createdb "${file_sp_cds}" queryDB',
         '--fasta_file "${file_sp_cds}"',
         '--mmseqs2taxonomy_tsv "${file_sp_cds_mmseqs2taxonomy}"',
@@ -1661,7 +1661,7 @@ def test_gene_evolution_core_quotes_orthogroup_lookup_and_makeblastdb_args():
     assert 'og_id=$(python -c "import sys,pandas; df=pandas.read_csv(sys.argv[1],sep=\'\\t\',header=0); print(df.loc[int(sys.argv[2]),:].iloc[0])" ${file_orthogroup_genecount_selected} ${ind})' not in text
     assert 'og_id=$(python -c "import sys,pandas; df=pandas.read_csv(sys.argv[1],sep=\'\\t\',header=0); print(df.loc[int(sys.argv[2]),:].iloc[0])" "${file_orthogroup_genecount_selected}" "${ind}")' not in text
     assert "df=pandas.read_csv(sys.argv[1],sep='\\t',header=0); print(df.loc[int(sys.argv[2]),:].iloc[0])" not in text
-    assert 'og_id=$(awk -F\'\\t\' -v row="${SGE_TASK_ID}" \'NR == (row + 1) { print $1; exit }\' "${file_orthogroup_genecount_selected}")' in text
+    assert 'og_id=$(awk -F\'\\t\' -v row="${GG_ARRAY_TASK_ID}" \'NR == (row + 1) { print $1; exit }\' "${file_orthogroup_genecount_selected}")' in text
     assert 'makeblastdb -dbtype nucl -title ${sp_cds} -out ${sp_cds_blastdb}' not in text
     assert 'makeblastdb -dbtype nucl -in ${sp_cds} -out ${sp_cds_blastdb}' not in text
     assert 'makeblastdb -dbtype nucl -title "${sp_cds}" -out "${sp_cds_blastdb}"' in text
@@ -1866,10 +1866,10 @@ def test_gene_evolution_core_quotes_notung_and_mapdnds_args():
 def test_genome_evolution_core_quotes_orthofinder_cleanup_calls():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    assert "orthofinder_output_directory_cleanup ${dir_orthofinder} ${NSLOTS}" not in text
-    assert "orthofinder_output_directory_cleanup ${dir_orthofinder}/core ${NSLOTS}" not in text
-    assert 'orthofinder_output_directory_cleanup "${dir_orthofinder}" "${NSLOTS}"' in text
-    assert 'orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${NSLOTS}"' in text
+    assert "orthofinder_output_directory_cleanup ${dir_orthofinder} ${GG_TASK_CPUS}" not in text
+    assert "orthofinder_output_directory_cleanup ${dir_orthofinder}/core ${GG_TASK_CPUS}" not in text
+    assert 'orthofinder_output_directory_cleanup "${dir_orthofinder}" "${GG_TASK_CPUS}"' in text
+    assert 'orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${GG_TASK_CPUS}"' in text
 
 
 def test_no_line_start_option_uses_unquoted_variable_in_core_scripts():
@@ -1988,10 +1988,10 @@ def test_transcriptome_core_guards_non_positive_assembly_resources():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
     expected_tokens = [
-        "if [[ ${nslots_assembly} -lt 1 ]]; then",
-        "nslots_assembly=1",
-        "if [[ ${memory_assembly} -lt 1 ]]; then",
-        "memory_assembly=1",
+        "if [[ ${assembly_cpus} -lt 1 ]]; then",
+        "assembly_cpus=1",
+        "if [[ ${assembly_mem_gb} -lt 1 ]]; then",
+        "assembly_mem_gb=1",
     ]
     for token in expected_tokens:
         assert token in text, f"Missing assembly resource guard token: {token}"
@@ -2035,7 +2035,7 @@ def test_genome_evolution_core_initializes_concat_iqtree_optional_args_as_arrays
     banned_tokens = [
         "bootstrap_params=''",
         "iqtree_mem_arg=''",
-        "iqtree_mem_arg=\"-mem ${MEM_PER_HOST}G\"",
+        "iqtree_mem_arg=\"-mem ${GG_MEM_TOTAL_GB}G\"",
         "${iqtree_mem_arg} \\",
         "${bootstrap_params}; then",
     ]
@@ -2046,7 +2046,7 @@ def test_genome_evolution_core_initializes_concat_iqtree_optional_args_as_arrays
         "bootstrap_params=( --ufboot 1000 --bnni )",
         "bootstrap_params=()",
         "iqtree_mem_args=()",
-        'iqtree_mem_args=( -mem "${MEM_PER_HOST}G" )',
+        'iqtree_mem_args=( -mem "${GG_MEM_TOTAL_GB}G" )',
         '"${iqtree_mem_args[@]}" \\',
         '"${bootstrap_params[@]}"; then',
     ]
@@ -2415,17 +2415,17 @@ def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
         assert token in text
 
 
-def test_gene_evolution_core_guards_sge_task_id_range_before_input_indexing():
+def test_gene_evolution_core_guards_array_task_id_range_before_input_indexing():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
 
     assert 'mapfile -t files < <(find "${dir_genelist}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
     assert 'files=( "${dir_genelist}"/* )' not in text
-    assert 'if [[ ! "${SGE_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${SGE_TASK_ID} -lt 1 ]]; then' in text
+    assert 'if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then' in text
     assert 'num_orthogroups=$(awk \'END { print (NR > 0 ? NR - 1 : 0) }\'' in text
-    assert 'if [[ ${SGE_TASK_ID} -gt ${num_orthogroups} ]]; then' in text
+    assert 'if [[ ${GG_ARRAY_TASK_ID} -gt ${num_orthogroups} ]]; then' in text
     assert "df=pandas.read_csv(sys.argv[1],sep='\\t',header=0); print(df.loc[int(sys.argv[2]),:].iloc[0])" not in text
-    assert 'og_id=$(awk -F\'\\t\' -v row="${SGE_TASK_ID}" \'NR == (row + 1) { print $1; exit }\'' in text
+    assert 'og_id=$(awk -F\'\\t\' -v row="${GG_ARRAY_TASK_ID}" \'NR == (row + 1) { print $1; exit }\'' in text
 
     idx_guard = 'if [[ ${idx} -ge ${#files[@]} ]]; then'
     idx_use = 'file_query_gene="${files[${idx}]}"'
@@ -2434,7 +2434,7 @@ def test_gene_evolution_core_guards_sge_task_id_range_before_input_indexing():
     assert text.index(idx_guard) < text.index(idx_use)
 
 
-def test_transcriptome_core_guards_sge_task_id_range_before_array_indexing():
+def test_transcriptome_core_guards_array_task_id_range_before_array_indexing():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
 
@@ -2452,7 +2452,7 @@ def test_transcriptome_core_guards_sge_task_id_range_before_array_indexing():
     assert re.search(r'^[ \t]*files=\( "\$\{dir_input_sra_list\}"/\* \)', text, re.MULTILINE) is None
     assert re.search(r'^[ \t]*files=\( "\$\{dir_input_amalgkit_metadata\}"/\* \)', text, re.MULTILINE) is None
     assert 'files_fastq=( "${dir_species_fastq}"/* )' not in text
-    assert 'if [[ ! "${SGE_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${SGE_TASK_ID} -lt 1 ]]; then' in text
+    assert 'if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then' in text
     assert 'if [[ ${#dirs[@]} -eq 0 ]]; then' in text
 
     fastq_guard = 'if [[ ${id} -ge ${#dirs[@]} ]]; then'
@@ -2537,15 +2537,15 @@ def test_gene_evolution_core_escapes_embedded_quotes_in_seqtype_error_message():
     assert 'echo "Unsupported sequence type \'${seqtype}\' in \'${file_query_gene}\'. Only \\"DNA\\" or \\"Protein\\" are allowed. Exiting."' in text
 
 
-def test_genome_annotation_core_guards_sge_task_id_before_task_index_math():
+def test_genome_annotation_core_guards_array_task_id_before_task_index_math():
     script = CORE_DIR / "gg_genome_annotation_core.sh"
     text = _read_text(script)
     assert 'if [[ ! -d "${dir_sp_cds}" ]]; then' in text
     assert 'echo "Input directory not found: ${dir_sp_cds}. Exiting."' in text
     assert 'find "${dir_sp_cds}" -maxdepth 1 -type f ! -name \'.*\'' in text
     assert 'find "${dir_sp_dnaseq}/${sp_ub}" -type f ! -name \'.*\'' in text
-    guard = 'if [[ ! "${SGE_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${SGE_TASK_ID} -lt 1 ]]; then'
-    task_index = "task_index=$((SGE_TASK_ID-1))"
+    guard = 'if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then'
+    task_index = "task_index=$((GG_ARRAY_TASK_ID-1))"
     assert guard in text
     assert task_index in text
     assert text.index(guard) < text.index(task_index)
@@ -2574,7 +2574,7 @@ def test_input_generation_core_runs_cds_gff_mapping_validation():
     assert 'validate_cds_gff_mapping.py' in text
     assert '--species-cds-dir "${species_cds_dir}"' in text
     assert '--species-gff-dir "${species_gff_dir}"' in text
-    assert '--nthreads "${NSLOTS:-1}"' in text
+    assert '--nthreads "${GG_TASK_CPUS:-1}"' in text
 
 
 def test_genome_evolution_core_does_not_include_legacy_output_migration_code():

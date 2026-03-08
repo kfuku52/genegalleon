@@ -16,11 +16,21 @@ unset_singularity_envs() {
 	unset SINGULARITY_BINDPATH
 	unset APPTAINER_BIND
 	unset APPTAINER_BINDPATH
+	unset SINGULARITYENV_GG_ARRAY_TASK_ID
+	unset SINGULARITYENV_GG_TASK_CPUS
+	unset SINGULARITYENV_GG_JOB_ID
+	unset SINGULARITYENV_GG_MEM_PER_CPU_GB
+	unset SINGULARITYENV_GG_MEM_TOTAL_GB
 	unset SINGULARITYENV_SGE_TASK_ID
 	unset SINGULARITYENV_NSLOTS
 	unset SINGULARITYENV_JOB_ID
 	unset SINGULARITYENV_MEM_PER_SLOT
 	unset SINGULARITYENV_MEM_PER_HOST
+	unset APPTAINERENV_GG_ARRAY_TASK_ID
+	unset APPTAINERENV_GG_TASK_CPUS
+	unset APPTAINERENV_GG_JOB_ID
+	unset APPTAINERENV_GG_MEM_PER_CPU_GB
+	unset APPTAINERENV_GG_MEM_TOTAL_GB
 	unset APPTAINERENV_SGE_TASK_ID
 	unset APPTAINERENV_NSLOTS
 	unset APPTAINERENV_JOB_ID
@@ -260,6 +270,7 @@ gg_print_container_env_summary() {
 }
 
 gg_detect_scheduler_kind() {
+	local normalized_job_id="${GG_JOB_ID:-${JOB_ID:-}}"
 	if [[ -n "${SLURM_JOB_ID:-}" ]]; then
 		echo slurm
 		return 0
@@ -272,7 +283,7 @@ gg_detect_scheduler_kind() {
 		echo uge
 		return 0
 	fi
-	if [[ -n "${JOB_ID:-}" && "${JOB_ID}" != "1" ]]; then
+	if [[ -n "${normalized_job_id}" && "${normalized_job_id}" != "1" ]]; then
 		echo uge
 		return 0
 	fi
@@ -280,90 +291,126 @@ gg_detect_scheduler_kind() {
 	return 0
 }
 
-variable_SGEnizer() {
-	local echo_header='variable_SGEnizer: '
+gg_sync_legacy_scheduler_aliases() {
+	NSLOTS=${GG_TASK_CPUS:-1}
+	JOB_ID=${GG_JOB_ID:-1}
+	SGE_TASK_ID=${GG_ARRAY_TASK_ID:-1}
+	MEM_PER_SLOT=${GG_MEM_PER_CPU_GB:-3}
+	MEM_PER_HOST=${GG_MEM_TOTAL_GB:-$((MEM_PER_SLOT * NSLOTS))}
+	export GG_TASK_CPUS GG_JOB_ID GG_ARRAY_TASK_ID GG_MEM_PER_CPU_GB GG_MEM_TOTAL_GB
+	export NSLOTS JOB_ID SGE_TASK_ID MEM_PER_SLOT MEM_PER_HOST
+}
+
+gg_normalize_scheduler_env() {
+	local echo_header='gg_normalize_scheduler_env: '
 	local scheduler_kind
+	local pbs_slots=""
 	scheduler_kind=$(gg_detect_scheduler_kind)
 	GG_SCHEDULER_KIND=${scheduler_kind}
-	echo ${echo_header}'SLURM environmental variables are converted to the SGE style.'
-	if [[ -z "${NSLOTS:-}" ]]; then
-		echo ${echo_header}'${NSLOTS} is undefined or empty.'
+	echo ${echo_header}'Scheduler metadata is normalized to GG_* variables.'
+	if [[ -z "${GG_TASK_CPUS:-}" ]]; then
+		if [[ -n "${NSLOTS:-}" ]]; then
+			echo ${echo_header}'GG_TASK_CPUS=${NSLOTS} (from legacy NSLOTS)'
+			GG_TASK_CPUS=${NSLOTS}
+		else
+			echo ${echo_header}'${GG_TASK_CPUS} is undefined or empty.'
+		fi
+	fi
+	if [[ -z "${GG_TASK_CPUS:-}" ]]; then
 		if [[ -n "${SLURM_CPUS_PER_TASK:-}" ]]; then
-			echo ${echo_header}'NSLOTS=${SLURM_CPUS_PER_TASK}'
-			NSLOTS=${SLURM_CPUS_PER_TASK}
+			echo ${echo_header}'GG_TASK_CPUS=${SLURM_CPUS_PER_TASK}'
+			GG_TASK_CPUS=${SLURM_CPUS_PER_TASK}
 		elif [[ -n "${PBS_NODEFILE:-}" && -f "${PBS_NODEFILE}" ]]; then
-			PBS_NSLOTS=$(wc -l < "${PBS_NODEFILE}")
-			echo ${echo_header}'NSLOTS=${PBS_NSLOTS}'
-			NSLOTS=${PBS_NSLOTS}
+			pbs_slots=$(wc -l < "${PBS_NODEFILE}")
+			echo ${echo_header}'GG_TASK_CPUS=${pbs_slots}'
+			GG_TASK_CPUS=${pbs_slots}
 		else
-			echo ${echo_header}'both ${NSLOTS}, ${PBS_NODEFILE}, and ${SLURM_NPROCS} were undefined. NSLOTS=1'
-			NSLOTS=1
+			echo ${echo_header}'No scheduler CPU metadata was detected. GG_TASK_CPUS=1'
+			GG_TASK_CPUS=1
 		fi
-	else
-		echo ${echo_header}'${NSLOTS} is defined.'
 	fi
-	if [[ -z "${JOB_ID+x}" ]]; then
-		echo ${echo_header}'${JOB_ID} is undefined.'
-		if [[ -n "${SLURM_JOB_ID+x}" ]]; then
-			echo ${echo_header}'JOB_ID=${SLURM_JOB_ID}'
-			JOB_ID=${SLURM_JOB_ID}
-		elif [[ -n "${PBS_JOBID+x}" ]]; then
-			echo ${echo_header}'JOB_ID=${PBS_JOBID}'
-			JOB_ID=${PBS_JOBID}
+	if [[ -z "${GG_JOB_ID:-}" ]]; then
+		if [[ -n "${JOB_ID:-}" ]]; then
+			echo ${echo_header}'GG_JOB_ID=${JOB_ID} (from legacy JOB_ID)'
+			GG_JOB_ID=${JOB_ID}
 		else
-			echo ${echo_header}'both ${JOB_ID} and ${SLURM_JOB_ID} were undefined. JOB_ID=1'
-			JOB_ID=1
+			echo ${echo_header}'${GG_JOB_ID} is undefined.'
 		fi
-	else
-		echo ${echo_header}'${JOB_ID} is defined.'
 	fi
-	if [[ -z "${SGE_TASK_ID+x}" ]]; then
-		echo ${echo_header}'${SGE_TASK_ID} is undefined.'
-		if [[ -n "${SLURM_ARRAY_TASK_ID+x}" ]]; then
-			echo ${echo_header}'SGE_TASK_ID=${SLURM_ARRAY_TASK_ID}'
-			SGE_TASK_ID=${SLURM_ARRAY_TASK_ID}
-		elif [[ -n "${PBS_ARRAY_INDEX+x}" ]]; then
-			echo ${echo_header}'SGE_TASK_ID=${PBS_ARRAY_INDEX}'
-			SGE_TASK_ID=${PBS_ARRAY_INDEX}
-		elif [[ -n "${PBS_ARRAYID+x}" ]]; then
-			echo ${echo_header}'SGE_TASK_ID=${PBS_ARRAYID}'
-			SGE_TASK_ID=${PBS_ARRAYID}
+	if [[ -z "${GG_JOB_ID:-}" ]]; then
+		if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+			echo ${echo_header}'GG_JOB_ID=${SLURM_JOB_ID}'
+			GG_JOB_ID=${SLURM_JOB_ID}
+		elif [[ -n "${PBS_JOBID:-}" ]]; then
+			echo ${echo_header}'GG_JOB_ID=${PBS_JOBID}'
+			GG_JOB_ID=${PBS_JOBID}
 		else
-			echo ${echo_header}'${SGE_TASK_ID}, ${SLURM_ARRAY_TASK_ID}, ${PBS_ARRAY_INDEX}, and ${PBS_ARRAYID} were undefined. SGE_TASK_ID=1'
-			SGE_TASK_ID=1
+			echo ${echo_header}'No scheduler job ID was detected. GG_JOB_ID=1'
+			GG_JOB_ID=1
 		fi
-	else
-		echo ${echo_header}'${SGE_TASK_ID} is defined.'
 	fi
-	if type qstat >/dev/null 2>&1; then
-		MEM_PER_SLOT=$(
-			{ qstat -f -j "${JOB_ID}" 2>/dev/null || true; } \
+	if [[ -z "${GG_ARRAY_TASK_ID:-}" ]]; then
+		if [[ -n "${SGE_TASK_ID:-}" ]]; then
+			echo ${echo_header}'GG_ARRAY_TASK_ID=${SGE_TASK_ID} (from legacy SGE_TASK_ID)'
+			GG_ARRAY_TASK_ID=${SGE_TASK_ID}
+		else
+			echo ${echo_header}'${GG_ARRAY_TASK_ID} is undefined.'
+		fi
+	fi
+	if [[ -z "${GG_ARRAY_TASK_ID:-}" ]]; then
+		if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+			echo ${echo_header}'GG_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID}'
+			GG_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID}
+		elif [[ -n "${PBS_ARRAY_INDEX:-}" ]]; then
+			echo ${echo_header}'GG_ARRAY_TASK_ID=${PBS_ARRAY_INDEX}'
+			GG_ARRAY_TASK_ID=${PBS_ARRAY_INDEX}
+		elif [[ -n "${PBS_ARRAYID:-}" ]]; then
+			echo ${echo_header}'GG_ARRAY_TASK_ID=${PBS_ARRAYID}'
+			GG_ARRAY_TASK_ID=${PBS_ARRAYID}
+		else
+			echo ${echo_header}'No scheduler array ID was detected. GG_ARRAY_TASK_ID=1'
+			GG_ARRAY_TASK_ID=1
+		fi
+	fi
+	if [[ -z "${GG_MEM_PER_CPU_GB:-}" && -n "${MEM_PER_SLOT:-}" ]]; then
+		echo ${echo_header}'GG_MEM_PER_CPU_GB='"${MEM_PER_SLOT}"' (from legacy MEM_PER_SLOT)'
+		GG_MEM_PER_CPU_GB=${MEM_PER_SLOT}
+	fi
+	if [[ -z "${GG_MEM_PER_CPU_GB:-}" ]] && type qstat >/dev/null 2>&1; then
+		GG_MEM_PER_CPU_GB=$(
+			{ qstat -f -j "${GG_JOB_ID}" 2>/dev/null || true; } \
 			| awk -F'mem_req=|G' '/mem_req=[0-9]+G/ { if (!seen) { print $2; seen=1 } }'
 		)
 	fi
-	if [[ -z "${MEM_PER_SLOT:-}" ]]; then
-		echo ${echo_header}'${MEM_PER_SLOT} is undefined. '
-		if [[ -n "${SLURM_MEM_PER_CPU+x}" ]]; then
-			echo ${echo_header}'MEM_PER_SLOT=$((${SLURM_MEM_PER_CPU}/1024))'
-			MEM_PER_SLOT=$((${SLURM_MEM_PER_CPU}/1024))
+	if [[ -z "${GG_MEM_PER_CPU_GB:-}" ]]; then
+		echo ${echo_header}'${GG_MEM_PER_CPU_GB} is undefined.'
+		if [[ -n "${SLURM_MEM_PER_CPU:-}" ]]; then
+			echo ${echo_header}'GG_MEM_PER_CPU_GB=$((${SLURM_MEM_PER_CPU}/1024))'
+			GG_MEM_PER_CPU_GB=$((${SLURM_MEM_PER_CPU}/1024))
 		else
-			echo ${echo_header}'both ${MEM_PER_SLOT} and ${SLURM_MEM_PER_CPU} were undefined. MEM_PER_SLOT=3'
-			MEM_PER_SLOT=3
+			echo ${echo_header}'No scheduler memory-per-CPU metadata was detected. GG_MEM_PER_CPU_GB=3'
+			GG_MEM_PER_CPU_GB=3
 		fi
 	fi
-	MEM_PER_HOST=$((${MEM_PER_SLOT}*${NSLOTS}))
-	echo ${echo_header}"NSLOTS=${NSLOTS}"
-	echo ${echo_header}"JOB_ID=${JOB_ID}"
-	echo ${echo_header}"SGE_TASK_ID=${SGE_TASK_ID}"
-	echo ${echo_header}"MEM_PER_SLOT=${MEM_PER_SLOT}"
-	echo ${echo_header}"MEM_PER_HOST=${MEM_PER_HOST}"
+	if [[ -z "${GG_MEM_TOTAL_GB:-}" && -n "${MEM_PER_HOST:-}" ]]; then
+		echo ${echo_header}'GG_MEM_TOTAL_GB='"${MEM_PER_HOST}"' (from legacy MEM_PER_HOST)'
+		GG_MEM_TOTAL_GB=${MEM_PER_HOST}
+	fi
+	if [[ -z "${GG_MEM_TOTAL_GB:-}" ]]; then
+		GG_MEM_TOTAL_GB=$((${GG_MEM_PER_CPU_GB}*${GG_TASK_CPUS}))
+	fi
+	gg_sync_legacy_scheduler_aliases
+	echo ${echo_header}"GG_TASK_CPUS=${GG_TASK_CPUS}"
+	echo ${echo_header}"GG_JOB_ID=${GG_JOB_ID}"
+	echo ${echo_header}"GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID}"
+	echo ${echo_header}"GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB}"
+	echo ${echo_header}"GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB}"
 	echo ""
-  export NSLOTS
-  export JOB_ID
-  export SGE_TASK_ID
-  export MEM_PER_SLOT
-  export MEM_PER_HOST
-  export GG_SCHEDULER_KIND
+	export GG_SCHEDULER_KIND
+}
+
+variable_SGEnizer() {
+	gg_normalize_scheduler_env "$@"
 }
 
 gg_print_scheduler_runtime_summary() {
@@ -383,10 +430,10 @@ gg_print_scheduler_runtime_summary() {
 	echo "${echo_header}scheduler=${scheduler}"
 	echo "${echo_header}requested.slurm cpus_per_task=${SLURM_CPUS_PER_TASK:-NA} mem_per_cpu_mb=${SLURM_MEM_PER_CPU:-NA} array_task_id=${SLURM_ARRAY_TASK_ID:-NA} job_id=${SLURM_JOB_ID:-NA}"
 	echo "${echo_header}requested.pbs nodefile_slots=${pbs_slots} array_index=${PBS_ARRAY_INDEX:-NA} array_id=${PBS_ARRAYID:-NA} job_id=${PBS_JOBID:-NA}"
-	echo "${echo_header}requested.uge NSLOTS=${NSLOTS:-NA} SGE_TASK_ID=${SGE_TASK_ID:-NA} JOB_ID=${JOB_ID:-NA}"
-	echo "${echo_header}detected NSLOTS=${NSLOTS:-NA} MEM_PER_SLOT=${MEM_PER_SLOT:-NA} MEM_PER_HOST=${MEM_PER_HOST:-NA} JOB_ID=${JOB_ID:-NA} SGE_TASK_ID=${SGE_TASK_ID:-NA}"
-	echo "${echo_header}forwarded SINGULARITYENV_NSLOTS=${SINGULARITYENV_NSLOTS:-unset} SINGULARITYENV_MEM_PER_SLOT=${SINGULARITYENV_MEM_PER_SLOT:-unset} SINGULARITYENV_SGE_TASK_ID=${SINGULARITYENV_SGE_TASK_ID:-unset}"
-	echo "${echo_header}forwarded APPTAINERENV_NSLOTS=${APPTAINERENV_NSLOTS:-unset} APPTAINERENV_MEM_PER_SLOT=${APPTAINERENV_MEM_PER_SLOT:-unset} APPTAINERENV_SGE_TASK_ID=${APPTAINERENV_SGE_TASK_ID:-unset}"
+	echo "${echo_header}legacy_aliases NSLOTS=${NSLOTS:-NA} SGE_TASK_ID=${SGE_TASK_ID:-NA} JOB_ID=${JOB_ID:-NA} MEM_PER_SLOT=${MEM_PER_SLOT:-NA} MEM_PER_HOST=${MEM_PER_HOST:-NA}"
+	echo "${echo_header}detected GG_TASK_CPUS=${GG_TASK_CPUS:-NA} GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-NA} GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-NA} GG_JOB_ID=${GG_JOB_ID:-NA} GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-NA}"
+	echo "${echo_header}forwarded SINGULARITYENV_GG_TASK_CPUS=${SINGULARITYENV_GG_TASK_CPUS:-unset} SINGULARITYENV_GG_MEM_PER_CPU_GB=${SINGULARITYENV_GG_MEM_PER_CPU_GB:-unset} SINGULARITYENV_GG_ARRAY_TASK_ID=${SINGULARITYENV_GG_ARRAY_TASK_ID:-unset}"
+	echo "${echo_header}forwarded APPTAINERENV_GG_TASK_CPUS=${APPTAINERENV_GG_TASK_CPUS:-unset} APPTAINERENV_GG_MEM_PER_CPU_GB=${APPTAINERENV_GG_MEM_PER_CPU_GB:-unset} APPTAINERENV_GG_ARRAY_TASK_ID=${APPTAINERENV_GG_ARRAY_TASK_ID:-unset}"
 	echo ""
 }
 
@@ -410,15 +457,25 @@ set_singularityenv() {
 	else
 		echo "OS is $(uname -s). Symlink PATHs won't be updated."
 	fi
-  gg_workspace_dir="${resolved_workspace_dir}"
-  gg_workflow_dir="${resolved_workflow_dir}"
-  gg_container_image_path="${resolved_container_image_path}"
+	gg_workspace_dir="${resolved_workspace_dir}"
+	gg_workflow_dir="${resolved_workflow_dir}"
+	gg_container_image_path="${resolved_container_image_path}"
   export gg_workspace_dir
   export gg_workflow_dir
   export gg_container_image_path
-  resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")
+	resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")
 	gg_add_container_bind_mount "${resolved_workspace_dir}:/workspace"
 	gg_add_container_bind_mount "${resolved_workflow_dir}:/script"
+	export SINGULARITYENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1}
+	export APPTAINERENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1}
+	export SINGULARITYENV_GG_TASK_CPUS=${GG_TASK_CPUS:-1}
+	export APPTAINERENV_GG_TASK_CPUS=${GG_TASK_CPUS:-1}
+	export SINGULARITYENV_GG_JOB_ID=${GG_JOB_ID:-1}
+	export APPTAINERENV_GG_JOB_ID=${GG_JOB_ID:-1}
+	export SINGULARITYENV_GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-3}
+	export APPTAINERENV_GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-3}
+	export SINGULARITYENV_GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-3}
+	export APPTAINERENV_GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-3}
 	export SINGULARITYENV_SGE_TASK_ID=${SGE_TASK_ID:-1}
 	export APPTAINERENV_SGE_TASK_ID=${SGE_TASK_ID:-1}
 	export SINGULARITYENV_NSLOTS=${NSLOTS:-1}
@@ -1441,7 +1498,7 @@ gg_entrypoint_prepare_container_runtime() {
 	if ! set_singularity_command; then
 		return 1
 	fi
-	variable_SGEnizer
+	gg_normalize_scheduler_env
 	return 0
 }
 
@@ -1483,10 +1540,10 @@ exit_if_running_qstat() {
 	local job_name
 	job_name=$(
 		printf '%s\n' "${qstat_output}" \
-		| awk -v job_id="${JOB_ID:-}" 'NR>2 && $1==job_id && !seen {print $3; seen=1}'
+		| awk -v job_id="${GG_JOB_ID:-}" 'NR>2 && $1==job_id && !seen {print $3; seen=1}'
 	)
 	if [[ -z "${job_name}" ]]; then
-		echo "Could not parse job name from qstat for JOB_ID=${JOB_ID:-NA}. Skipping duplicate job check."
+		echo "Could not parse job name from qstat for GG_JOB_ID=${GG_JOB_ID:-NA}. Skipping duplicate job check."
 		return 0
 	fi
 
@@ -1498,8 +1555,8 @@ exit_if_running_qstat() {
 		printf '%s\n' "${qstat_output}" \
 		| awk \
 		-v target_job_name="${job_name}" \
-		-v this_job_id="${JOB_ID:-}" \
-		-v this_task_id="${SGE_TASK_ID:-1}" \
+		-v this_job_id="${GG_JOB_ID:-}" \
+		-v this_task_id="${GG_ARRAY_TASK_ID:-1}" \
 		'
 		NR<=2 {next}
 		$0 ~ / dr / {next}
@@ -1517,12 +1574,12 @@ exit_if_running_qstat() {
 	local flag=1
 	local r
 	for r in "${running_id[@]}"; do
-		if [[ "${r}" =~ ^[0-9]+$ ]] && [[ "${r}" -eq "${SGE_TASK_ID:-1}" ]]; then
+		if [[ "${r}" =~ ^[0-9]+$ ]] && [[ "${r}" -eq "${GG_ARRAY_TASK_ID:-1}" ]]; then
 			flag=0
 		fi
 	done
 	if [[ ${flag} -eq 0 ]]; then
-		echo "SGE_TASK_ID=${SGE_TASK_ID:-1} is running already. Exiting."
+		echo "GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1} is running already. Exiting."
 		exit 0
 	fi
 }
@@ -1570,7 +1627,7 @@ check_species_cds() {
     exit 1
   fi
   local error_log=$(mktemp)  # Temporary file to collect errors
-  echo "$(date): Started validating the format of all species_cds files using ${NSLOTS} processes."
+  echo "$(date): Started validating the format of all species_cds files using ${GG_TASK_CPUS} processes."
 
   function check_single_species_cds () {
     local spfasta=$1
@@ -1609,7 +1666,7 @@ check_species_cds() {
 
   export -f check_single_species_cds
   export error_log
-  parallel --jobs "${NSLOTS}" check_single_species_cds ::: "${species_cds_fasta[@]}"
+  parallel --jobs "${GG_TASK_CPUS}" check_single_species_cds ::: "${species_cds_fasta[@]}"
 
   if [[ -s "${error_log}" ]]; then
     cat "${error_log}"
@@ -2026,7 +2083,7 @@ gg_trigger_versions_dump() {
   fi
 
   if [[ "${SINGULARITY_BIND:-}" != *":/workspace"* || "${SINGULARITY_BIND:-}" != *":/script"* ]]; then
-    variable_SGEnizer
+    gg_normalize_scheduler_env
     set_singularityenv
   fi
 
@@ -2219,29 +2276,33 @@ enable_all_run_flags_for_debug_mode() {
   return 0
 }
 
+ensure_gg_scheduler_defaults() {
+  local echo_header="ensure_gg_scheduler_defaults: "
+  if [[ -z "${GG_TASK_CPUS:-}" ]]; then
+    echo "${echo_header}GG_TASK_CPUS is undefined or empty. GG_TASK_CPUS=1"
+    GG_TASK_CPUS=1
+  fi
+  if [[ -z "${GG_JOB_ID:-}" ]]; then
+    echo "${echo_header}GG_JOB_ID is undefined or empty. GG_JOB_ID=1"
+    GG_JOB_ID=1
+  fi
+  if [[ -z "${GG_ARRAY_TASK_ID:-}" ]]; then
+    echo "${echo_header}GG_ARRAY_TASK_ID is undefined or empty. GG_ARRAY_TASK_ID=1"
+    GG_ARRAY_TASK_ID=1
+  fi
+  if [[ -z "${GG_MEM_PER_CPU_GB:-}" ]]; then
+    echo "${echo_header}GG_MEM_PER_CPU_GB is undefined or empty. GG_MEM_PER_CPU_GB=3"
+    GG_MEM_PER_CPU_GB=3
+  fi
+  if [[ -z "${GG_MEM_TOTAL_GB:-}" ]]; then
+    GG_MEM_TOTAL_GB=$((GG_MEM_PER_CPU_GB * GG_TASK_CPUS))
+    echo "${echo_header}GG_MEM_TOTAL_GB is undefined or empty. GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB}"
+  fi
+  gg_sync_legacy_scheduler_aliases
+}
+
 ensure_scheduler_defaults() {
-  local echo_header="ensure_scheduler_defaults: "
-  if [[ -z "${NSLOTS:-}" ]]; then
-    echo "${echo_header}NSLOTS is undefined or empty. NSLOTS=1"
-    NSLOTS=1
-  fi
-  if [[ -z "${JOB_ID:-}" ]]; then
-    echo "${echo_header}JOB_ID is undefined or empty. JOB_ID=1"
-    JOB_ID=1
-  fi
-  if [[ -z "${SGE_TASK_ID:-}" ]]; then
-    echo "${echo_header}SGE_TASK_ID is undefined or empty. SGE_TASK_ID=1"
-    SGE_TASK_ID=1
-  fi
-  if [[ -z "${MEM_PER_SLOT:-}" ]]; then
-    echo "${echo_header}MEM_PER_SLOT is undefined or empty. MEM_PER_SLOT=3"
-    MEM_PER_SLOT=3
-  fi
-  if [[ -z "${MEM_PER_HOST:-}" ]]; then
-    MEM_PER_HOST=$((MEM_PER_SLOT * NSLOTS))
-    echo "${echo_header}MEM_PER_HOST is undefined or empty. MEM_PER_HOST=${MEM_PER_HOST}"
-  fi
-  export NSLOTS JOB_ID SGE_TASK_ID MEM_PER_SLOT MEM_PER_HOST
+  ensure_gg_scheduler_defaults "$@"
 }
 
 print_gg_container_starting_message() {
@@ -2249,7 +2310,7 @@ print_gg_container_starting_message() {
   local gg_workspace_output_dir_resolved
   local gg_workspace_downloads_dir_resolved
   local gg_workspace_layout_local
-  ensure_scheduler_defaults
+  ensure_gg_scheduler_defaults
   gg_workspace_layout_local=$(gg_resolve_workspace_layout "${gg_workspace_dir}")
   gg_workspace_input_dir_resolved=$(workspace_input_root "${gg_workspace_dir}")
   gg_workspace_output_dir_resolved=$(workspace_output_root "${gg_workspace_dir}")
@@ -2262,11 +2323,11 @@ print_gg_container_starting_message() {
   echo "gg_workspace_output_dir: ${gg_workspace_output_dir_resolved}"
   echo "gg_workspace_downloads_dir: ${gg_workspace_downloads_dir_resolved}"
   echo "python: $(command -v python)"
-  echo "NSLOTS: ${NSLOTS}"
-  echo "MEM_PER_SLOT: ${MEM_PER_SLOT}"
-  echo "MEM_PER_HOST: ${MEM_PER_HOST}"
-  echo "JOB_ID: ${JOB_ID}"
-  echo "SGE_TASK_ID: ${SGE_TASK_ID}"
+  echo "GG_TASK_CPUS: ${GG_TASK_CPUS}"
+  echo "GG_MEM_PER_CPU_GB: ${GG_MEM_PER_CPU_GB}"
+  echo "GG_MEM_TOTAL_GB: ${GG_MEM_TOTAL_GB}"
+  echo "GG_JOB_ID: ${GG_JOB_ID}"
+  echo "GG_ARRAY_TASK_ID: ${GG_ARRAY_TASK_ID}"
   echo "ulimit -Hn: $(ulimit -Hn)"
   echo "ulimit -Sn: $(ulimit -Sn)"
 }
@@ -2470,7 +2531,7 @@ gg_array_download_once() {
   local done_file=$2
   local description=$3
   shift 3
-  local task_id=${SGE_TASK_ID:-1}
+  local task_id=${GG_ARRAY_TASK_ID:-1}
   local has_flock=1
   local lock_dir="${lock_file}.dlock"
 
@@ -2496,11 +2557,11 @@ gg_array_download_once() {
       return 0
     fi
 
-    echo "SGE_TASK_ID=${task_id}: starting download: ${description}" >&2
+    echo "GG_ARRAY_TASK_ID=${task_id}: starting download: ${description}" >&2
     "$@"
     local download_exit_code=$?
     if [[ ${download_exit_code} -ne 0 ]]; then
-      echo "SGE_TASK_ID=${task_id}: download failed: ${description}" >&2
+      echo "GG_ARRAY_TASK_ID=${task_id}: download failed: ${description}" >&2
       gg_remove_lock_marker "${lock_file}"
       flock -u 9
       exec 9>&-
@@ -2514,7 +2575,7 @@ gg_array_download_once() {
       return 1
     fi
 
-    echo "SGE_TASK_ID=${task_id}: download completed: ${description}" >&2
+    echo "GG_ARRAY_TASK_ID=${task_id}: download completed: ${description}" >&2
     gg_remove_lock_marker "${lock_file}"
     flock -u 9
     exec 9>&-
@@ -2526,11 +2587,11 @@ gg_array_download_once() {
     gg_release_mkdir_lock "${lock_dir}"
     return 0
   fi
-  echo "SGE_TASK_ID=${task_id}: starting download (mkdir lock fallback): ${description}" >&2
+  echo "GG_ARRAY_TASK_ID=${task_id}: starting download (mkdir lock fallback): ${description}" >&2
   "$@"
   local download_exit_code=$?
   if [[ ${download_exit_code} -ne 0 ]]; then
-    echo "SGE_TASK_ID=${task_id}: download failed (mkdir lock fallback): ${description}" >&2
+    echo "GG_ARRAY_TASK_ID=${task_id}: download failed (mkdir lock fallback): ${description}" >&2
     gg_release_mkdir_lock "${lock_dir}"
     return ${download_exit_code}
   fi
@@ -2540,7 +2601,7 @@ gg_array_download_once() {
     return 1
   fi
 
-  echo "SGE_TASK_ID=${task_id}: download completed (mkdir lock fallback): ${description}" >&2
+  echo "GG_ARRAY_TASK_ID=${task_id}: download completed (mkdir lock fallback): ${description}" >&2
   gg_release_mkdir_lock "${lock_dir}"
 }
 
@@ -2599,7 +2660,7 @@ gg_get_slurm_array_master_job_id() {
     echo "${SLURM_ARRAY_JOB_ID}"
     return 0
   fi
-  local id_candidate="${SLURM_JOB_ID:-${JOB_ID:-}}"
+  local id_candidate="${SLURM_JOB_ID:-${GG_JOB_ID:-}}"
   if [[ -z "${id_candidate}" ]]; then
     return 0
   fi

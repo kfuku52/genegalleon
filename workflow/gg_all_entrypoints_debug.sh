@@ -30,10 +30,10 @@ benchmark_enabled="${GG_BENCHMARK:-1}"         # 1 = collect runtime metrics in 
 benchmark_raw="${GG_BENCHMARK_RAW:-1}"         # 1 = keep raw /usr/bin/time outputs
 run_id="${GG_RUN_ID:-$(date -u +"%Y%m%dT%H%M%SZ")}"
 
-nslots="${NSLOTS:-2}"
-job_id="${JOB_ID:-1}"
-sge_task_id="${SGE_TASK_ID:-1}"
-mem_per_slot="${MEM_PER_SLOT:-4096}"
+gg_task_cpus="${GG_TASK_CPUS:-2}"
+gg_job_id="${GG_JOB_ID:-1}"
+gg_array_task_id="${GG_ARRAY_TASK_ID:-1}"
+gg_mem_per_cpu_gb="${GG_MEM_PER_CPU_GB:-4096}"
 gg_wrapper_image="${GG_WRAPPER_IMAGE:-local/genegalleon:dev}"
 pymol_headless="${PYMOL_HEADLESS:-1}"
 qt_qpa_platform="${QT_QPA_PLATFORM:-offscreen}"
@@ -72,7 +72,7 @@ append_summary_row() {
     "${user_sec}" \
     "${sys_sec}" \
     "${max_rss_kb}" \
-    "${nslots}" \
+    "${gg_task_cpus}" \
     "${timeout_sec}" \
     "${start_iso}" \
     "${end_iso}" \
@@ -291,10 +291,10 @@ run_one_step() {
     "PATH=${run_path}"
     "GG_WRAPPER_IMAGE=${gg_wrapper_image}"
     "gg_debug_mode=1"
-    "NSLOTS=${nslots}"
-    "JOB_ID=${job_id}"
-    "SGE_TASK_ID=${sge_task_id}"
-    "MEM_PER_SLOT=${mem_per_slot}"
+    "GG_TASK_CPUS=${gg_task_cpus}"
+    "GG_JOB_ID=${gg_job_id}"
+    "GG_ARRAY_TASK_ID=${gg_array_task_id}"
+    "GG_MEM_PER_CPU_GB=${gg_mem_per_cpu_gb}"
     "PYMOL_HEADLESS=${pymol_headless}"
     "QT_QPA_PLATFORM=${qt_qpa_platform}"
   )

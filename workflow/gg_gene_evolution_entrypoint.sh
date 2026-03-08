@@ -182,7 +182,7 @@ treevis_long_branch_max_fraction="0.1" # Maximum fraction of plot width allocate
 ### End: Modify this block to tailor your analysis ###
 
 # Misc
-exit_if_running=0 # Exit without main analysis if the same SGE_TASK_ID is already running.
+exit_if_running=0 # Exit without main analysis if the same GG_ARRAY_TASK_ID is already running.
 delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Set 0 when debugging.
 delete_preexisting_tmp_dir=1 # Before starting this job, delete tmp directory created by previous run.
 

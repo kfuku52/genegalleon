@@ -41,7 +41,7 @@ if [[ ${run_database_prep} -eq 1 ]]; then
 	      --dir_csubst_cb_prefix "$(dirname "${file_orthogroup_db}")/csubst_cb_" \
 	      --row_threshold 8000 \
 	      --cutoff_stat "OCNany2spe,0.8" \
-	      --ncpu "${NSLOTS}"
+	      --ncpu "${GG_TASK_CPUS}"
 	    fi
 	fi
 

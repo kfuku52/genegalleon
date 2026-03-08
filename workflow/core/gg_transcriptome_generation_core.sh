@@ -135,8 +135,8 @@ if [[ ${mode_fastq} -eq 0 && ${mode_sraid} -eq 0 && ${mode_metadata} -eq 0 ]]; t
   echo "No valid transcriptome input mode is available. Skipping transcriptome assembly workflow."
   exit 0
 fi
-if [[ ! "${SGE_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${SGE_TASK_ID} -lt 1 ]]; then
-  echo "Invalid SGE_TASK_ID value (must be a positive integer): ${SGE_TASK_ID}"
+if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then
+  echo "Invalid GG_ARRAY_TASK_ID value (must be a positive integer): ${GG_ARRAY_TASK_ID}"
   exit 1
 fi
 
@@ -152,7 +152,7 @@ if [[ ${mode_fastq} -eq 1 ]]; then
     echo "Input directory is empty: ${dir_input_fastq}"
     exit 1
   fi
-  id=$((SGE_TASK_ID-1))
+  id=$((GG_ARRAY_TASK_ID-1))
   if [[ ${id} -ge ${#dirs[@]} ]]; then
     echo "Input fastq directory not found, probably due to the out-of-range specification of array jobs. Exiting."
     exit 1
@@ -180,7 +180,7 @@ elif [[ ${mode_sraid} -eq 1 ]]; then
     echo "Input directory is empty: ${dir_input_sra_list}"
     exit 1
   fi
-  id=$((SGE_TASK_ID-1))
+  id=$((GG_ARRAY_TASK_ID-1))
   if [[ ${id} -ge ${#files[@]} ]]; then
     echo "Input SRA list file not found, probably due to the out-of-range specification of array jobs. Exiting."
     exit 1
@@ -213,7 +213,7 @@ elif [[ ${mode_metadata} -eq 1 ]]; then
     echo "Input directory is empty: ${dir_input_amalgkit_metadata}"
     exit 1
   fi
-  id=$((SGE_TASK_ID-1))
+  id=$((GG_ARRAY_TASK_ID-1))
   if [[ ${id} -ge ${#files[@]} ]]; then
     echo "Input metadata file not found, probably due to the out-of-range specification of array jobs. Exiting."
     exit 1
@@ -228,7 +228,7 @@ elif [[ ${mode_metadata} -eq 1 ]]; then
   fi
 fi
 
-dir_tmp="${dir_transcriptome_assembly_output}/tmp/${SGE_TASK_ID}_${sp_ub}"
+dir_tmp="${dir_transcriptome_assembly_output}/tmp/${GG_ARRAY_TASK_ID}_${sp_ub}"
 dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
 dir_amalgkit_download_dir="${gg_workspace_downloads_dir}/amalgkit_downloads"
 file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"
@@ -294,7 +294,7 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
     amalgkit integrate \
     --out_dir "./" \
     --fastq_dir "${dir_species_fastq}" \
-    --threads "${NSLOTS}" \
+    --threads "${GG_TASK_CPUS}" \
     --remove_tmp yes
 
     mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"
@@ -338,7 +338,7 @@ if [[ ( ${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1 ) &&
 				    --out_dir "${dir_tmp}" \
 				    --download_dir "${dir_amalgkit_download_dir}" \
 				    --metadata "${file_amalgkit_metadata}" \
-				    --threads "${NSLOTS}" \
+				    --threads "${GG_TASK_CPUS}" \
 				    --rrna_filter "${amalgkit_rrna_filter}" \
 				    --contam_filter "${amalgkit_contam_filter}" \
 				    --contam_filter_rank "${contamination_removal_rank_for_amalgkit}" \
@@ -464,20 +464,20 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
     assembly_input_fastq_dir=${selected_fastq_dir}
   fi
 
-  nslots_assembly=$((${NSLOTS}-${assembly_cpu_offset}))
-  memory_assembly=$((${MEM_PER_HOST}-${assembly_ram_offset}))
-  if [[ ${nslots_assembly} -lt 1 ]]; then
-    echo "Adjusted nslots_assembly from ${nslots_assembly} to 1 because it must be >=1."
-    nslots_assembly=1
+  assembly_cpus=$((${GG_TASK_CPUS}-${assembly_cpu_offset}))
+  assembly_mem_gb=$((${GG_MEM_TOTAL_GB}-${assembly_ram_offset}))
+  if [[ ${assembly_cpus} -lt 1 ]]; then
+    echo "Adjusted assembly_cpus from ${assembly_cpus} to 1 because it must be >=1."
+    assembly_cpus=1
   fi
-  if [[ ${memory_assembly} -lt 1 ]]; then
-    echo "Adjusted memory_assembly from ${memory_assembly}G to 1G because it must be >=1G."
-    memory_assembly=1
+  if [[ ${assembly_mem_gb} -lt 1 ]]; then
+    echo "Adjusted assembly_mem_gb from ${assembly_mem_gb}G to 1G because it must be >=1G."
+    assembly_mem_gb=1
   fi
-  bflyHeapSpaceMax=${MEM_PER_SLOT} # GB
+  bflyHeapSpaceMax=${GG_MEM_PER_CPU_GB} # GB
   echo "Number of offset CPUs for transcriptome assembly is ${assembly_cpu_offset}."
-  echo "${NSLOTS} CPUs and ${MEM_PER_HOST}G RAM are allocated to this job."
-  echo "${nslots_assembly} CPUs and ${memory_assembly}G RAM are used for transcriptome assembly."
+  echo "${GG_TASK_CPUS} CPUs and ${GG_MEM_TOTAL_GB}G RAM are allocated to this job."
+  echo "${assembly_cpus} CPUs and ${assembly_mem_gb}G RAM are used for transcriptome assembly."
 
   files_single=()
   files_left=()
@@ -508,8 +508,8 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
     if [[ ${lib_layout} == 'single' ]]; then
       Trinity \
       --seqType fq \
-      --CPU "${nslots_assembly}" \
-      --max_memory "${memory_assembly}G" \
+      --CPU "${assembly_cpus}" \
+      --max_memory "${assembly_mem_gb}G" \
       --min_contig_length 200 \
       --output trinity \
       --full_cleanup \
@@ -521,8 +521,8 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
     else
       Trinity \
       --seqType fq \
-      --CPU "${nslots_assembly}" \
-      --max_memory "${memory_assembly}G" \
+      --CPU "${assembly_cpus}" \
+      --max_memory "${assembly_mem_gb}G" \
       --min_contig_length 200 \
       --output trinity \
       --full_cleanup \
@@ -535,7 +535,7 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
     fi
     # For --NO_SEQTK, see https://github.com/trinityrnaseq/trinityrnaseq/issues/787
     if [[ -s "${dir_tmp}/trinity.Trinity.fasta" ]]; then
-      seqkit seq --threads "${NSLOTS}" "${dir_tmp}/trinity.Trinity.fasta" --out-file "tmp.isoform.fa.gz"
+      seqkit seq --threads "${GG_TASK_CPUS}" "${dir_tmp}/trinity.Trinity.fasta" --out-file "tmp.isoform.fa.gz"
       mv_out "tmp.isoform.fa.gz" "${file_isoform}"
     fi
   elif [[ ${assembly_method} == 'rnaSPAdes' ]]; then
@@ -571,12 +571,12 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
       rm -rf -- "${dir_tmp}/rnaspades_output"
     fi
     rnaspades.py \
-    --threads "${nslots_assembly}" \
-    --memory "${memory_assembly}" \
+    --threads "${assembly_cpus}" \
+    --memory "${assembly_mem_gb}" \
     -o rnaspades_output \
     "${rnaspades_input_args[@]}"
     if [[ -s "${dir_tmp}/rnaspades_output/transcripts.fasta" ]]; then
-      seqkit seq --threads "${NSLOTS}" "${dir_tmp}/rnaspades_output/transcripts.fasta" --out-file "tmp.isoform.fa.gz"
+      seqkit seq --threads "${GG_TASK_CPUS}" "${dir_tmp}/rnaspades_output/transcripts.fasta" --out-file "tmp.isoform.fa.gz"
       mv_out "tmp.isoform.fa.gz" "${file_isoform}"
     fi
   else
@@ -610,11 +610,11 @@ if [[ ( ! -s "${file_longestcds}" || ! -s "${file_longestcds_transcript}" ) && $
 
   echo "scientific_name: ${sp_ub}"
   if [[ ${assembly_method} == 'Trinity' ]]; then
-    seqkit sort --by-length --reverse --threads "${NSLOTS}" "${file_isoform}" \
+    seqkit sort --by-length --reverse --threads "${GG_TASK_CPUS}" "${file_isoform}" \
     | sed -e "s/_/-/g" -e "s/^>[[:space:]]*/>${sp_ub}_/" -e "s/TRINITY-//" -e "s/[[:space:]].*//" \
     > "${sp_ub}.tmp.renamed.fa"
   elif [[ ${assembly_method} == 'rnaSPAdes' ]]; then
-    seqkit sort --by-length --reverse --threads "${NSLOTS}" "${file_isoform}" \
+    seqkit sort --by-length --reverse --threads "${GG_TASK_CPUS}" "${file_isoform}" \
     | sed -e "s/^>.*_g\([0-9]\+\)_i\([0-9]\+\)$/>${sp_ub}_g\1-i\2/" \
     > "${sp_ub}.tmp.renamed.fa"
   else
@@ -629,7 +629,7 @@ if [[ ( ! -s "${file_longestcds}" || ! -s "${file_longestcds_transcript}" ) && $
     --outfile "${longestcds_tmp}" \
     --codontable 1 \
     --annotate_seqname no \
-    --threads "${NSLOTS}"; then
+    --threads "${GG_TASK_CPUS}"; then
     echo "Error: cdskit longestcds failed."
     echo "Please install a cdskit version that supports the 'longestcds' subcommand."
     exit 1
@@ -641,7 +641,7 @@ if [[ ( ! -s "${file_longestcds}" || ! -s "${file_longestcds_transcript}" ) && $
 
   seqkit rmdup --by-seq "${longestcds_tmp}" \
   | cdskit pad \
-  | seqkit sort --by-name --threads "${NSLOTS}" \
+  | seqkit sort --by-name --threads "${GG_TASK_CPUS}" \
   | cdskit aggregate -x "${aggregate_expression}" \
   > "${sp_ub}.tmp.aggregated.fa"
 
@@ -651,13 +651,13 @@ if [[ ( ! -s "${file_longestcds}" || ! -s "${file_longestcds_transcript}" ) && $
   if [[ -s "${sp_ub}.tmp.aggregated.fa" && -s "${sp_ub}.tmp.aggregated.transcript_id.txt" ]]; then
     echo "Output file detected for the task: ${task}"
     seqkit grep \
-    --threads "${NSLOTS}" \
+    --threads "${GG_TASK_CPUS}" \
     --pattern-file "${sp_ub}.tmp.aggregated.transcript_id.txt" \
     "${sp_ub}.tmp.renamed.fa" \
     --out-file "${sp_ub}.tmp.longestcds.transcript.fa.gz"
     mv_out "${sp_ub}.tmp.longestcds.transcript.fa.gz" "${file_longestcds_transcript}"
     sed -e "s/[[:space:]].*//" -e "s/${aggregate_expression}//" "${sp_ub}.tmp.aggregated.fa" \
-    | seqkit seq --threads "${NSLOTS}" --out-file "${sp_ub}.tmp.longestcds.fa.gz"
+    | seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${sp_ub}.tmp.longestcds.fa.gz"
     mv_out "${sp_ub}.tmp.longestcds.fa.gz" "${file_longestcds}"
   else
     echo "Output file not detected for the task: ${task}"
@@ -673,7 +673,7 @@ if [[ ! -s "${file_longestcds_fx2tab}" && ${run_longestcds_fx2tab} -eq 1 ]]; the
   gg_step_start "${task}"
 
   seqkit fx2tab \
-  --threads "${NSLOTS}" \
+  --threads "${GG_TASK_CPUS}" \
   --length \
   --name \
   --gc \
@@ -696,7 +696,7 @@ disable_if_no_input_file "run_longestcds_mmseqs2taxonomy" "${file_longestcds}"
 if [[ ! -s "${file_longestcds_mmseqs2taxonomy}" && ${run_longestcds_mmseqs2taxonomy} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  if ! ensure_mmseqs_uniref90_db "${gg_workspace_downloads_dir}/mmseqs2" "${NSLOTS}"; then
+  if ! ensure_mmseqs_uniref90_db "${gg_workspace_downloads_dir}/mmseqs2" "${GG_TASK_CPUS}"; then
     echo "Failed to prepare MMseqs2 UniRef90 DB. Exiting."
     exit 1
   fi
@@ -711,15 +711,15 @@ if [[ ! -s "${file_longestcds_mmseqs2taxonomy}" && ${run_longestcds_mmseqs2taxon
 
   mmseqs taxonomy "queryDB" "${gg_workspace_downloads_dir}/mmseqs2/UniRef90_DB" "output_prefix" "tmp" \
   --split-mode 2 \
-  --split-memory-limit $((${MEM_PER_HOST}*3/4))G \
+  --split-memory-limit $((${GG_MEM_TOTAL_GB}*3/4))G \
   --majority 0.5 \
   --lca-mode 3 \
   --vote-mode 1 \
   --tax-lineage 2 \
   --orf-filter 1 \
-  --threads "${NSLOTS}"
+  --threads "${GG_TASK_CPUS}"
 
-  mmseqs createtsv "queryDB" "output_prefix" "result.tsv" --threads "${NSLOTS}"
+  mmseqs createtsv "queryDB" "output_prefix" "result.tsv" --threads "${GG_TASK_CPUS}"
 
   if [[ -s "result.tsv" ]]; then
     echo "Output file detected for the task: ${task}"
@@ -749,13 +749,13 @@ if [[ ( ! -s "${file_longestcds_contamination_removal_fasta}" || ! -s "${file_lo
   --fx2tab_tsv "${file_longestcds_fx2tab}" \
   --species_name "${sp_ub}" \
   --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
-  --ncpu "${NSLOTS}" \
+  --ncpu "${GG_TASK_CPUS}" \
   --rename_seq "no" \
   --verbose "no"
 
   if [[ -s "clean_sequences.fa" && -s "lineage_compatibility.tsv" ]]; then
     echo "Output file detected for the task: ${task}"
-    seqkit seq --threads "${NSLOTS}" "clean_sequences.fa" --out-file "tmp.longestcds.clean.fa.gz"
+    seqkit seq --threads "${GG_TASK_CPUS}" "clean_sequences.fa" --out-file "tmp.longestcds.clean.fa.gz"
     mv_out "tmp.longestcds.clean.fa.gz" "${file_longestcds_contamination_removal_fasta}"
     rm -f -- "clean_sequences.fa"
     mv_out "lineage_compatibility.tsv" "${file_longestcds_contamination_removal_tsv}"
@@ -769,7 +769,7 @@ disable_if_no_input_file "run_busco_isoforms" "${file_isoform}"
 if [[ ( ! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna_isoforms}" ) && ${run_busco_isoforms} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  seqkit seq --threads "${NSLOTS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"
 
   if ! resolve_busco_lineage_for_current_species; then
     exit 1
@@ -784,7 +784,7 @@ if [[ ( ! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna
   --in "busco_infile_cdna.fa" \
   --mode transcriptome \
   --out "busco_tmp" \
-  --cpu "${NSLOTS}" \
+  --cpu "${GG_TASK_CPUS}" \
   --force \
   --evalue 1e-03 \
   --limit 20 \
@@ -809,7 +809,7 @@ disable_if_no_input_file "run_busco_longest_cds" "${file_longestcds}"
 if [[ ( ! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longest_cds}" ) && ${run_busco_longest_cds} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  seqkit seq --threads "${NSLOTS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"
 
   if ! resolve_busco_lineage_for_current_species; then
     exit 1
@@ -824,7 +824,7 @@ if [[ ( ! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longes
   --in "busco_infile_cds.fa" \
   --mode transcriptome \
   --out "busco_tmp" \
-  --cpu "${NSLOTS}" \
+  --cpu "${GG_TASK_CPUS}" \
   --force \
   --evalue 1e-03 \
   --limit 20 \
@@ -849,7 +849,7 @@ disable_if_no_input_file "run_busco_contamination_removed_longest_cds" "${file_l
 if [[ ( ! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_short_longest_cds_filtered}" ) && ${run_busco_contamination_removed_longest_cds} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  seqkit seq --threads "${NSLOTS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"
 
   if ! resolve_busco_lineage_for_current_species; then
     exit 1
@@ -864,7 +864,7 @@ if [[ ( ! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_sho
   --in "busco_infile_cds.fa" \
   --mode transcriptome \
   --out "busco_tmp" \
-  --cpu "${NSLOTS}" \
+  --cpu "${GG_TASK_CPUS}" \
   --force \
   --evalue 1e-03 \
   --limit 20 \
@@ -902,7 +902,7 @@ if [[ ! -s "${file_assembly_stat}" && ${run_assembly_stat} -eq 1 ]]; then
   seqkit stats \
   --all \
   --tabular \
-  --threads "${NSLOTS}" \
+  --threads "${GG_TASK_CPUS}" \
   --out-file assembly_stat.tsv \
   "${input_files[@]}"
 
@@ -970,7 +970,7 @@ if [[ ( ! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_coun
 
   if amalgkit quant \
     --out_dir "./" \
-    --threads "${NSLOTS}" \
+    --threads "${GG_TASK_CPUS}" \
     --metadata "${file_amalgkit_metadata}" \
     --clean_fastq no \
     --fasta_dir "./fasta" \
@@ -1047,7 +1047,7 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
 
   python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
   --busco_outdir "$(dirname "${file_busco_full_longest_cds}")" \
-  --ncpu "${NSLOTS}" \
+  --ncpu "${GG_TASK_CPUS}" \
   --outfile busco_table.tsv
 
   for dir_busco in \

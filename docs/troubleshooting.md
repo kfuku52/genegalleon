@@ -67,7 +67,7 @@ What to check:
 - `gg_gene_evolution_entrypoint.sh` expects one task per query file or per selected orthogroup row,
 - `gg_genome_annotation_entrypoint.sh` expects one task per species CDS file,
 - `gg_transcriptome_generation_entrypoint.sh` expects one task per chosen input unit,
-- the runtime summary prints the normalized `SGE_TASK_ID` and `NSLOTS`.
+- the runtime summary prints the normalized `GG_ARRAY_TASK_ID` and `GG_TASK_CPUS`.
 
 ### Stage skipped unexpectedly
 

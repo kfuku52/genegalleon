@@ -12,7 +12,7 @@ unset gg_core_bootstrap
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 
 mode_transcriptome_assembly="${mode_transcriptome_assembly:-auto}"
-ncpu_progress_summary="${ncpu_progress_summary:-${NSLOTS:-1}}"
+ncpu_progress_summary="${ncpu_progress_summary:-${GG_TASK_CPUS:-1}}"
 
 gg_workspace_output_dir=$(workspace_output_root "${gg_workspace_dir}")
 gg_workspace_input_dir=$(workspace_input_root "${gg_workspace_dir}")

@@ -137,7 +137,7 @@ def run(args):
     df = get_amas_stats(df, dir_amas, 'clean', args.ncpu)
     df.to_csv(updated_genecount, index=True, sep='\t')
 
-    df.loc[:, 'SGE_TASK_ID'] = numpy.arange(df.shape[0]) + 1
+    df.loc[:, 'GG_ARRAY_TASK_ID'] = numpy.arange(df.shape[0]) + 1
 
     subdirs = _visible_entries(args.dir_og)
     subdirs = [sd for sd in subdirs if os.path.isdir(os.path.join(args.dir_og, sd))]

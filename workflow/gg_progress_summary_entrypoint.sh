@@ -64,14 +64,14 @@ gg_entrypoint_name="gg_progress_summary_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 mode_transcriptome_assembly="auto" # {"auto", "sraid", "fastq", "metadata"}
-ncpu_progress_summary="" # Number of CPU threads used by summary scripts; empty falls back to NSLOTS.
+ncpu_progress_summary="" # Number of CPU threads used by summary scripts; empty falls back to GG_TASK_CPUS.
 ### End: Modify this block to tailor your analysis ###
 
 source "${gg_support_dir}/gg_util.sh"
 if ! gg_entrypoint_prepare_container_runtime 0; then
   exit 1
 fi
-: "${ncpu_progress_summary:=${NSLOTS:-1}}"
+: "${ncpu_progress_summary:=${GG_TASK_CPUS:-1}}"
 gg_entrypoint_activate_container_runtime
 
 forward_config_vars_to_container_env "${gg_entrypoint_name}"

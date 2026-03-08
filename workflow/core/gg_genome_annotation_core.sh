@@ -127,20 +127,20 @@ if [[ ${#infiles[@]} -eq 0 ]]; then
   echo "No input fasta files were detected in: ${dir_sp_cds}. Exiting."
   exit 1
 fi
-if [[ ! "${SGE_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${SGE_TASK_ID} -lt 1 ]]; then
-  echo "Invalid SGE_TASK_ID value (must be a positive integer): ${SGE_TASK_ID}"
+if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then
+  echo "Invalid GG_ARRAY_TASK_ID value (must be a positive integer): ${GG_ARRAY_TASK_ID}"
   exit 1
 fi
-task_index=$((SGE_TASK_ID-1))
+task_index=$((GG_ARRAY_TASK_ID-1))
 if [[ ${task_index} -lt 0 || ${task_index} -ge ${#infiles[@]} ]]; then
-  echo "SGE_TASK_ID=${SGE_TASK_ID} is out of range for ${#infiles[@]} input fasta files. Exiting."
+  echo "GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID} is out of range for ${#infiles[@]} input fasta files. Exiting."
   exit 1
 fi
 file_sp_cds="${infiles[${task_index}]}"
 sp_ub=$(gg_species_name_from_path "${file_sp_cds}")
-dir_sp_tmp="${dir_tmp}/${SGE_TASK_ID}_${sp_ub}"
+dir_sp_tmp="${dir_tmp}/${GG_ARRAY_TASK_ID}_${sp_ub}"
 echo "${#infiles[@]} input fasta files were detected in: ${dir_sp_cds}"
-echo "Processing ${SGE_TASK_ID}th file: ${file_sp_cds}"
+echo "Processing ${GG_ARRAY_TASK_ID}th file: ${file_sp_cds}"
 echo "Scientific name: ${sp_ub}"
 echo "Working directory: ${dir_sp_tmp}"
 
@@ -232,7 +232,7 @@ if [[ ! -s "${file_sp_gff_info}" && ${run_get_gff_info} -eq 1 ]]; then
   --feature 'CDS' \
   --multiple_hits 'longest' \
   --seqfile "${file_sp_cds}" \
-  --ncpu "${NSLOTS}" \
+  --ncpu "${GG_TASK_CPUS}" \
   --outfile gff2genestat.tsv
 
   if [[ -s gff2genestat.tsv ]]; then
@@ -253,7 +253,7 @@ if [[ ( ! -s "${file_sp_cds_busco_full}" || ! -s "${file_sp_cds_busco_short}" ) 
 
   if [[ "${file_sp_cds}" == *gz ]]; then
     busco_infile=$(basename "${file_sp_cds}" .gz)
-    seqkit seq --threads "${NSLOTS}" "${file_sp_cds}" --out-file "${busco_infile}"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_sp_cds}" --out-file "${busco_infile}"
   else
     busco_infile=${file_sp_cds}
   fi
@@ -271,7 +271,7 @@ if [[ ( ! -s "${file_sp_cds_busco_full}" || ! -s "${file_sp_cds_busco_short}" ) 
     --in "${busco_infile}" \
     --mode transcriptome \
     --out "busco_tmp" \
-    --cpu "${NSLOTS}" \
+    --cpu "${GG_TASK_CPUS}" \
     --force \
     --evalue 1e-03 \
     --limit 20 \
@@ -301,7 +301,7 @@ if [[ ( ! -s "${file_sp_genome_busco_full}" || ! -s "${file_sp_genome_busco_shor
   if [[ -e "./busco_tmp" ]]; then
     rm -rf -- "./busco_tmp"
   fi
-  seqkit seq --threads "${NSLOTS}" "${file_sp_genome}" > "busco_genome_input.fa"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_sp_genome}" > "busco_genome_input.fa"
   if ! resolve_busco_lineage_for_current_species; then
     exit 1
   fi
@@ -315,7 +315,7 @@ if [[ ( ! -s "${file_sp_genome_busco_full}" || ! -s "${file_sp_genome_busco_shor
     --in "busco_genome_input.fa" \
     --mode "genome" \
     --out "busco_tmp" \
-    --cpu "${NSLOTS}" \
+    --cpu "${GG_TASK_CPUS}" \
     --force \
     --evalue 1e-03 \
     --limit 20 \
@@ -343,10 +343,10 @@ disable_if_no_input_file "run_uniprot_annotation" "${file_sp_cds}"
 if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  seqkit seq --remove-gaps --only-id --threads "${NSLOTS}" "${file_sp_cds}" \
+  seqkit seq --remove-gaps --only-id --threads "${GG_TASK_CPUS}" "${file_sp_cds}" \
   | cdskit pad --codontable "${genetic_code}" \
   | cdskit mask --codontable "${genetic_code}" --stopcodon yes --ambiguouscodon yes --maskchar 'N' \
-  | seqkit translate --transl-table "${genetic_code}" --threads "${NSLOTS}" \
+  | seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
   > uniprot.query.pep.fas
 
   if [[ "${uniprot_annotation_method}" == "blastp" ]]; then
@@ -357,7 +357,7 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
 
     blastp \
     -query uniprot.query.pep.fas \
-    -num_threads "${NSLOTS}" \
+    -num_threads "${GG_TASK_CPUS}" \
     -db "${uniprot_db_prefix}" \
     -out uniprot.search.tsv \
     -outfmt "6 qseqid sseqid pident length evalue bitscore qlen" \
@@ -371,12 +371,12 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
 
     mmseqs createdb "uniprot.query.pep.fas" "uniprot.queryDB"
     mmseqs search "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "tmp_mmseqs2_uniprot" \
-    --threads "${NSLOTS}" \
+    --threads "${GG_TASK_CPUS}" \
     --max-seqs 1 \
     -e 1e-2 \
     -s 7.5
     mmseqs convertalis "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "uniprot.search.tsv" \
-    --threads "${NSLOTS}" \
+    --threads "${GG_TASK_CPUS}" \
     --format-output "query,target,pident,alnlen,evalue,bits,qlen"
     rm -f -- uniprot.queryDB* uniprot.resultDB*
     rm -rf -- "tmp_mmseqs2_uniprot"
@@ -399,7 +399,7 @@ if [[ ! -s "${file_sp_cds_fx2tab}" && ${run_cds_fx2tab} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit fx2tab \
-  --threads "${NSLOTS}" \
+  --threads "${GG_TASK_CPUS}" \
   --length \
   --name \
   --gc \
@@ -422,7 +422,7 @@ disable_if_no_input_file "run_cds_mmseqs2taxonomy" "${file_sp_cds}"
 if [[ ! -s "${file_sp_cds_mmseqs2taxonomy}" && ${run_cds_mmseqs2taxonomy} -eq 1  && ${gg_debug_mode:-0} -eq 0 ]]; then
   gg_step_start "${task}"
 
-  if ! ensure_mmseqs_uniref90_db "${dir_mmseqs2_db}" "${NSLOTS}"; then
+  if ! ensure_mmseqs_uniref90_db "${dir_mmseqs2_db}" "${GG_TASK_CPUS}"; then
     echo "Failed to prepare MMseqs2 UniRef90 DB. Exiting."
     exit 1
   fi
@@ -437,15 +437,15 @@ if [[ ! -s "${file_sp_cds_mmseqs2taxonomy}" && ${run_cds_mmseqs2taxonomy} -eq 1 
 
   mmseqs taxonomy "queryDB" "${dir_mmseqs2_db}/UniRef90_DB" "output_prefix" "tmp" \
   --split-mode 2 \
-  --split-memory-limit $((${MEM_PER_HOST}*3/4))G \
+  --split-memory-limit $((${GG_MEM_TOTAL_GB}*3/4))G \
   --majority 0.5 \
   --lca-mode 3 \
   --vote-mode 1 \
   --tax-lineage 2 \
   --orf-filter 1 \
-  --threads "${NSLOTS}"
+  --threads "${GG_TASK_CPUS}"
 
-  mmseqs createtsv "queryDB" "output_prefix" "result.tsv" --threads "${NSLOTS}"
+  mmseqs createtsv "queryDB" "output_prefix" "result.tsv" --threads "${GG_TASK_CPUS}"
 
   if [[ -s "result.tsv" ]]; then
     echo "Output file detected for the task: ${task}"
@@ -474,14 +474,14 @@ if [[ ( ! -s "${file_sp_cds_contamination_removal_fasta}" || ! -s "${file_sp_cds
   --fx2tab_tsv "${file_sp_cds_fx2tab}" \
   --species_name "${sp_ub}" \
   --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
-  --ncpu "${NSLOTS}" \
+  --ncpu "${GG_TASK_CPUS}" \
   --rename_seq "no" \
   --verbose "no"
 
   if [[ -s "clean_sequences.fa" && -s "lineage_compatibility.tsv" ]]; then
     echo "Output file detected for the task: ${task}"
     ensure_parent_dir "${file_sp_cds_contamination_removal_fasta}"
-    seqkit seq --threads "${NSLOTS}" "clean_sequences.fa" --out-file "tmp.cds.clean.fa.gz"
+    seqkit seq --threads "${GG_TASK_CPUS}" "clean_sequences.fa" --out-file "tmp.cds.clean.fa.gz"
     mv_out "tmp.cds.clean.fa.gz" "${file_sp_cds_contamination_removal_fasta}"
     rm -f -- "clean_sequences.fa"
     mv_out "lineage_compatibility.tsv" "${file_sp_cds_contamination_removal_tsv}"
@@ -513,7 +513,7 @@ if [[ ! -s "${file_sp_annotation}" ]] && [[ ${run_annotation} -eq 1 ]]; then
   --orthogroup_tsv "${file_orthogroup}" \
   --mmseqs2taxonomy_tsv "${file_sp_cds_mmseqs2taxonomy}" \
   --fx2tab "${file_sp_cds_fx2tab}" \
-  --ncpu "${NSLOTS}" \
+  --ncpu "${GG_TASK_CPUS}" \
   --out_tsv "tmp.annotation.tsv"
   if [[ -s "tmp.annotation.tsv" ]]; then
     mv_out "tmp.annotation.tsv" "${file_sp_annotation}"
@@ -527,8 +527,8 @@ disable_if_no_input_file "run_wgd_ksd" "${file_sp_cds}"
 if [[ ! -s "${file_sp_wgd_ksd}" && ${run_wgd_ksd} -eq 1 && ${gg_debug_mode:-0} -eq 0 ]]; then
   gg_step_start "${task}"
 
-  seqkit seq --remove-gaps --upper-case --threads "${NSLOTS}" "${file_sp_cds}" \
-  | gg_prepare_cds_fasta_stream "${NSLOTS}" "${genetic_code}" \
+  seqkit seq --remove-gaps --upper-case --threads "${GG_TASK_CPUS}" "${file_sp_cds}" \
+  | gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${genetic_code}" \
   | cdskit mask --codontable "${genetic_code}" --stopcodon no --ambiguouscodon yes --maskchar 'N' \
   > "tmp.${sp_ub}.nuc.fasta"
 
@@ -536,7 +536,7 @@ if [[ ! -s "${file_sp_wgd_ksd}" && ${run_wgd_ksd} -eq 1 && ${gg_debug_mode:-0} -
   wgd --verbosity debug ksd \
   --aligner 'mafft' \
   --wm 'alc' \
-  --n_threads "${NSLOTS}" \
+  --n_threads "${GG_TASK_CPUS}" \
   --max_pairwise 1000 \
   "./wgd_dmd/tmp.${sp_ub}.nuc.fasta.mcl" \
   "tmp.${sp_ub}.nuc.fasta"
@@ -557,8 +557,8 @@ if [[ ! -s "${file_sp_subphaser}" && ${run_subphaser} -eq 1 ]]; then
     -prefix "${sp_ub}." \
     -outdir "subphaser" \
     -tmpdir "tmp" \
-    -ncpu "${NSLOTS}" \
-    -max_memory "${MEM_PER_HOST}"; then
+    -ncpu "${GG_TASK_CPUS}" \
+    -max_memory "${GG_MEM_TOTAL_GB}"; then
     subphaser_exit_status=0
   else
     subphaser_exit_status=$?
@@ -582,7 +582,7 @@ if [[ ! -s "${file_sp_genome_fx2tab}" && ${run_genome_fx2tab} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit fx2tab \
-  --threads "${NSLOTS}" \
+  --threads "${GG_TASK_CPUS}" \
   --length \
   --name \
   --gc \
@@ -622,7 +622,7 @@ disable_if_no_input_file "run_genome_mmseqs2taxonomy" "${file_sp_genome}"
 if [[ ! -s "${file_sp_genome_mmseqs2taxonomy}" && ${run_genome_mmseqs2taxonomy} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  if ! ensure_mmseqs_uniref90_db "${dir_mmseqs2_db}" "${NSLOTS}"; then
+  if ! ensure_mmseqs_uniref90_db "${dir_mmseqs2_db}" "${GG_TASK_CPUS}"; then
     echo "Failed to prepare MMseqs2 UniRef90 DB. Exiting."
     exit 1
   fi
@@ -637,15 +637,15 @@ if [[ ! -s "${file_sp_genome_mmseqs2taxonomy}" && ${run_genome_mmseqs2taxonomy} 
 
   mmseqs taxonomy "queryDB" "${dir_mmseqs2_db}/UniRef90_DB" "output_prefix" "tmp" \
   --split-mode 2 \
-  --split-memory-limit $((${MEM_PER_HOST}*3/4))G \
+  --split-memory-limit $((${GG_MEM_TOTAL_GB}*3/4))G \
   --majority 0.5 \
   --lca-mode 3 \
   --vote-mode 1 \
   --tax-lineage 2 \
   --orf-filter 1 \
-  --threads "${NSLOTS}"
+  --threads "${GG_TASK_CPUS}"
 
-  mmseqs createtsv "queryDB" "output_prefix" "result.tsv" --threads "${NSLOTS}"
+  mmseqs createtsv "queryDB" "output_prefix" "result.tsv" --threads "${GG_TASK_CPUS}"
 
   if [[ -s "result.tsv" ]]; then
     echo "Output file detected for the task: ${task}"
@@ -674,7 +674,7 @@ if [[ ( ! -s "${file_sp_genome_contamination_removal_fasta}" || ! -s "${file_sp_
   --fx2tab_tsv "${file_sp_genome_fx2tab}" \
   --species_name "${sp_ub}" \
   --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
-  --ncpu "${NSLOTS}" \
+  --ncpu "${GG_TASK_CPUS}" \
   --rename_seq "yes" \
   --rename_prefix "scaffold" \
   --verbose "no"
@@ -682,7 +682,7 @@ if [[ ( ! -s "${file_sp_genome_contamination_removal_fasta}" || ! -s "${file_sp_
   if [[ -s "clean_sequences.fa" && -s "lineage_compatibility.tsv" ]]; then
     echo "Output file detected for the task: ${task}"
     ensure_parent_dir "${file_sp_genome_contamination_removal_fasta}"
-    seqkit seq --threads "${NSLOTS}" "clean_sequences.fa" --out-file "tmp.genome.clean.fa.gz"
+    seqkit seq --threads "${GG_TASK_CPUS}" "clean_sequences.fa" --out-file "tmp.genome.clean.fa.gz"
     mv_out "tmp.genome.clean.fa.gz" "${file_sp_genome_contamination_removal_fasta}"
     rm -f -- "clean_sequences.fa"
     mv_out "lineage_compatibility.tsv" "${file_sp_genome_contamination_removal_tsv}"
@@ -714,7 +714,7 @@ if [[ ! -s "${file_sp_genomescope}" && ${run_genomescope} -eq 1 ]]; then
 	    rm -rf -- ./tmp
 	  fi
 	  mkdir -p ./tmp
-	  kmc -k${klength} -t${NSLOTS} -m${MEM_PER_HOST} -ci${kmer_lower} -cs${kmer_upper} @input_fastq_files.txt tmp.reads ./tmp
+	  kmc -k${klength} -t${GG_TASK_CPUS} -m${GG_MEM_TOTAL_GB} -ci${kmer_lower} -cs${kmer_upper} @input_fastq_files.txt tmp.reads ./tmp
 	  kmc_tools transform tmp.reads histogram tmp.reads.histo -cx${kmer_upper}
 	  rm -rf -- ./tmp
 	  /usr/local/bin/genomescope2.0/genomescope.R -i "tmp.reads.histo" -o "${sp_ub}.genomescope" -k ${klength}

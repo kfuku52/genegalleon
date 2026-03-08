@@ -56,13 +56,13 @@ Before the container starts, `gg_entrypoint_prepare_container_runtime`:
 - clears stale `SINGULARITY_*` / `APPTAINER_*` bind variables,
 - optionally performs duplicate-job checks for wrappers that enable `exit_if_running`,
 - detects `apptainer` or `singularity`,
-- normalizes scheduler metadata so downstream scripts can rely on UGE-style variables.
+- normalizes scheduler metadata so downstream scripts can rely on scheduler-neutral `GG_*` variables.
 
 Inside the runtime, GeneGalleon consistently uses:
 
-- `NSLOTS`
-- `JOB_ID`
-- `SGE_TASK_ID`
+- `GG_TASK_CPUS`
+- `GG_JOB_ID`
+- `GG_ARRAY_TASK_ID`
 
 Those are populated from SLURM/PBS/UGE values when available and then forwarded into the container as both `SINGULARITYENV_*` and `APPTAINERENV_*`.
 

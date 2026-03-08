@@ -148,7 +148,7 @@ XLSX template notes:
 
 Use `--download-only` to fetch raw files and stop before formatting.
 Use `--dry-run` to preview downloads and formatting outputs without writing files.
-Use `--jobs` to set download parallelism (defaults to `NSLOTS`, fallback `1`).
+Use `--jobs` to set download parallelism (defaults to `GG_TASK_CPUS`, fallback `1`).
 Resolved manifest rows (for example URL/template/local-path auto-resolution and filename filling)
 are written to:
 - `workspace/output/input_generation/download_plan.resolved.tsv`

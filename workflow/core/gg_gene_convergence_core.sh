@@ -41,7 +41,7 @@ python "${gg_support_dir}/csubst_site_wrapper.py" \
 --min_omegaCany2spe "${min_omegaCany2spe}" \
 --min_OCNCoD "${min_OCNCoD}" \
 --max_per_K "${max_per_K}" \
---ncpu "${NSLOTS:-1}" \
+--ncpu "${GG_TASK_CPUS:-1}" \
 --file_trait "${file_trait}" \
 --dir_orthogroup "${dir_orthogroup}" \
 --dir_orthofinder "${dir_orthofinder}" \

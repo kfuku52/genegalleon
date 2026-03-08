@@ -10,6 +10,9 @@ if (is.na(n_random) || n_random < 0) n_random <- 1800L
 if (is.na(n_edge) || n_edge < 0) n_edge <- 700L
 if (is.na(seed)) seed <- 20260220L
 if (is.na(ncpu) || ncpu < 1) {
+  ncpu <- suppressWarnings(as.integer(Sys.getenv("GG_TASK_CPUS", unset = "0")))
+}
+if (is.na(ncpu) || ncpu < 1) {
   ncpu <- suppressWarnings(as.integer(Sys.getenv("NSLOTS", unset = "0")))
 }
 if (is.na(ncpu) || ncpu < 1) {

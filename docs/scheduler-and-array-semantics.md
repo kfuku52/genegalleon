@@ -28,17 +28,17 @@ qsub workflow/gg_gene_evolution_entrypoint.sh
 
 When no scheduler metadata is present, GeneGalleon falls back to local defaults such as:
 
-- `NSLOTS=1`
-- `SGE_TASK_ID=1`
-- `JOB_ID=1`
+- `GG_TASK_CPUS=1`
+- `GG_ARRAY_TASK_ID=1`
+- `GG_JOB_ID=1`
 
 ## Scheduler normalization
 
-Internally, GeneGalleon normalizes SLURM/PBS metadata to UGE-style variables:
+Internally, GeneGalleon normalizes SLURM/PBS metadata to scheduler-neutral variables:
 
-- `NSLOTS`
-- `SGE_TASK_ID`
-- `JOB_ID`
+- `GG_TASK_CPUS`
+- `GG_ARRAY_TASK_ID`
+- `GG_JOB_ID`
 
 Those normalized values are what core scripts use downstream, regardless of the original scheduler.
 

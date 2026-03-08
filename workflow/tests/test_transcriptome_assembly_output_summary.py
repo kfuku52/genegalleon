@@ -46,6 +46,7 @@ def test_summary_uses_new_fastq_input_path(tmp_path: Path):
 
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     df = pandas.read_csv(out_tsv, sep="\t", index_col=0)
+    assert "GG_ARRAY_TASK_ID" in df.columns
     assert "Arabidopsis_thaliana" in df.index
     assert int(df.loc["Arabidopsis_thaliana", "longestcds"]) == 1
 

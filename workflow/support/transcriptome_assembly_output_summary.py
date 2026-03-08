@@ -121,7 +121,7 @@ def run(args):
 
     df = pandas.DataFrame(index=input_species_list)
     df.index.name = 'species'
-    df['SGE_TASK_ID'] = numpy.arange(1, df.shape[0] + 1)
+    df['GG_ARRAY_TASK_ID'] = numpy.arange(1, df.shape[0] + 1)
 
     df = pandas.concat([df, pandas.DataFrame(data=0, index=df.index, columns=subdirs, dtype=int)], axis=1)
     species_index_set = set(df.index)
@@ -164,7 +164,7 @@ def run(args):
             )
         )
 
-    incomplete_ids = df.loc[df['safely_removed.txt'] == 0, 'SGE_TASK_ID'].astype(int).tolist()
+    incomplete_ids = df.loc[df['safely_removed.txt'] == 0, 'GG_ARRAY_TASK_ID'].astype(int).tolist()
     print('Incomplete job IDs (based on amalgkit_getfastq/*.safely_removed.txt):', ','.join(str(x) for x in sorted(incomplete_ids)))
 
     print('Writing output file:', args.out, flush=True)

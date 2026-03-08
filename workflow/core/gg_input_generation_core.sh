@@ -365,7 +365,7 @@ if [[ ${run_format_inputs} -eq 1 ]]; then
       cmd+=(--dry-run)
     fi
     cmd+=(--download-timeout "${download_timeout}")
-    cmd+=(--jobs "${NSLOTS:-1}")
+    cmd+=(--jobs "${GG_TASK_CPUS:-1}")
     if [[ -n "${auth_bearer_token_env}" ]]; then
       cmd+=(--auth-bearer-token-env "${auth_bearer_token_env}")
     fi
@@ -457,7 +457,7 @@ if [[ ${run_validate_inputs} -eq 1 && ${run_format_inputs} -eq 1 && ${download_o
       cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
       cmd+=(--species-cds-dir "${species_cds_dir}")
       cmd+=(--species-gff-dir "${species_gff_dir}")
-      cmd+=(--nthreads "${NSLOTS:-1}")
+      cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
       cmd+=(--stats-output "${mapping_stats_file}")
       echo "Running: ${cmd[*]}"
       if "${cmd[@]}"; then

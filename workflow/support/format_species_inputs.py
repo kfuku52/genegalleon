@@ -318,7 +318,7 @@ def build_arg_parser():
         default=0,
         help=(
             "Maximum parallel download workers. "
-            "If <=0, uses NSLOTS when available, otherwise 1."
+            "If <=0, uses GG_TASK_CPUS when available, otherwise legacy NSLOTS, otherwise 1."
         ),
     )
     parser.add_argument(
@@ -1233,7 +1233,9 @@ def resolve_parallel_jobs(requested_jobs):
     jobs = parse_positive_int(requested_jobs, 0)
     if jobs > 0:
         return jobs
-    env_slots = os.environ.get("NSLOTS", "").strip()
+    env_slots = os.environ.get("GG_TASK_CPUS", "").strip()
+    if env_slots == "":
+        env_slots = os.environ.get("NSLOTS", "").strip()
     if env_slots != "":
         return parse_positive_int(env_slots, DEFAULT_GLOBAL_DOWNLOAD_WORKERS)
     return DEFAULT_GLOBAL_DOWNLOAD_WORKERS
