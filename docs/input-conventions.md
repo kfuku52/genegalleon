@@ -84,6 +84,7 @@ Notes:
 
 - output filenames are normalized to start with `Genus_species_...`,
 - formatted CDS outputs are always gzipped with `.fa.gz` extension,
+- formatted GFF outputs are always gzipped with `.gff.gz` extension,
 - CDS IDs are prefixed with `Genus_species_...` and aggregated to one representative CDS per gene,
 - common historical replacements are applied to CDS/GFF text,
 - CDS are padded to codon-length multiples and transcript-level redundancies are collapsed at gene level.
@@ -203,7 +204,8 @@ Latest template distribution:
 
 - runs `gg_input_generation_core.sh` inside the container as a single entrypoint,
 - can download provider files from a manifest and format inputs in one run,
-- can validate produced `species_cds` and `species_gff` consistency,
+- can validate produced `species_cds` naming, `species_gff` consistency, and CDS-to-GFF mapping compatibility,
+- CDS-to-GFF mapping validation is species-parallel and accepts `validate_cds_gff_mapping.py --nthreads N` (`--ncpu` remains as a compatibility alias),
 - can optionally generate `workspace/input/species_trait/species_trait.tsv`
   from configured trait databases.
 

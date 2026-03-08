@@ -450,6 +450,25 @@ if [[ ${run_validate_inputs} -eq 1 && ${run_format_inputs} -eq 1 && ${download_o
       stage_validate_status="failed"
       exit 1
     fi
+    if [[ ${set_status} -eq 0 ]]; then
+      mapping_stats_file="${download_tmp_root}/gg_input_generation_mapping_stats.json"
+      ensure_parent_dir "${mapping_stats_file}"
+      rm -f -- "${mapping_stats_file}"
+      cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
+      cmd+=(--species-cds-dir "${species_cds_dir}")
+      cmd+=(--species-gff-dir "${species_gff_dir}")
+      cmd+=(--nthreads "${NSLOTS:-1}")
+      cmd+=(--stats-output "${mapping_stats_file}")
+      echo "Running: ${cmd[*]}"
+      if "${cmd[@]}"; then
+        :
+      else
+        stage_validate_status="failed"
+        echo "Failed: Validate CDS-to-GFF mapping compatibility"
+        exit 1
+      fi
+      rm -f -- "${mapping_stats_file}"
+    fi
   fi
   stage_validate_status="ok"
 else

@@ -62,18 +62,20 @@ def test_format_species_inputs_with_small_fixture_all_providers(tmp_path):
     assert ">Hydrocotyle_leucocephala_HyleuH1.06G006800" in phytozome_text
     assert "ATGATGAN" in phytozome_text
 
-    ensembl_gff = out_gff / "Ostreococcus_lucimarinus_ASM9206v1.56.gff3"
-    phytozome_gff = out_gff / "Hydrocotyle_leucocephala_HleucocephalaHAP1_768_v2.1.gene.gff3"
-    phytozome_exons = out_gff / "Hydrocotyle_leucocephala_HleucocephalaHAP1_768_v2.1.gene_exons.gff3"
+    ensembl_gff = out_gff / "Ostreococcus_lucimarinus_ASM9206v1.56.gff.gz"
+    phytozome_gff = out_gff / "Hydrocotyle_leucocephala_HleucocephalaHAP1_768_v2.1.gene.gff.gz"
+    phytozome_exons = out_gff / "Hydrocotyle_leucocephala_HleucocephalaHAP1_768_v2.1.gene_exons.gff.gz"
     assert ensembl_gff.exists()
     assert phytozome_gff.exists()
     assert not phytozome_exons.exists()
 
-    gff_text = ensembl_gff.read_text(encoding="utf-8")
+    with gzip.open(ensembl_gff, "rt", encoding="utf-8") as handle:
+        gff_text = handle.read()
     assert "evm.model." not in gff_text
     assert "Oropetium_20150105_" not in gff_text
 
-    phytozome_gff_text = phytozome_gff.read_text(encoding="utf-8")
+    with gzip.open(phytozome_gff, "rt", encoding="utf-8") as handle:
+        phytozome_gff_text = handle.read()
     assert "evm_27.model." not in phytozome_gff_text
     stats = json.loads(stats_json.read_text(encoding="utf-8"))
     assert stats["species_processed"] == 3
@@ -141,7 +143,7 @@ def test_format_species_inputs_fernbase_prefers_primary_annotation_files(tmp_pat
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
 
     formatted_cds = out_cds / "Azolla_filiculoides_CDS.highconfidence_v1.1.fa.gz"
-    formatted_gff = out_gff / "Azolla_filiculoides_gene_models.highconfidence_v1.1.gff"
+    formatted_gff = out_gff / "Azolla_filiculoides_gene_models.highconfidence_v1.1.gff.gz"
     formatted_genome = out_genome / "Azolla_filiculoides_genome_v1.2.fa.gz"
     assert formatted_cds.exists()
     assert formatted_gff.exists()

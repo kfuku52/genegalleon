@@ -2353,6 +2353,12 @@ def normalize_genome_output_basename(source_name, species_prefix):
     return stem + ".fa.gz"
 
 
+def normalize_gff_output_basename(source_name, species_prefix):
+    normalized = normalize_output_basename(source_name, species_prefix)
+    stem = strip_suffix_case_insensitive(normalized, GFF_EXTENSIONS)
+    return stem + ".gff.gz"
+
+
 def apply_common_replacements(text):
     out = text
     for old, new in COMMON_REPLACEMENTS:
@@ -2913,7 +2919,7 @@ def format_genome(task, output_dir, overwrite, dry_run):
 
 
 def format_gff(task, output_dir, overwrite, dry_run):
-    output_name = normalize_output_basename(task["gff_path"].name, task["species_prefix"])
+    output_name = normalize_gff_output_basename(task["gff_path"].name, task["species_prefix"])
     output_path = output_dir / output_name
     if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
         return {"status": "skip", "output_path": output_path, "lines": 0}

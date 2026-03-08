@@ -181,7 +181,7 @@ def test_download_manifest_then_format_ensembl(tmp_path):
     assert raw_genome.exists()
 
     formatted_cds = out_cds / "Ostreococcus_lucimarinus_ASM9206v1.cds.all.fa.gz"
-    formatted_gff = out_gff / "Ostreococcus_lucimarinus_ASM9206v1.56.gff3"
+    formatted_gff = out_gff / "Ostreococcus_lucimarinus_ASM9206v1.56.gff.gz"
     formatted_genome = out_genome / "Ostreococcus_lucimarinus_ASM9206v1.dna.toplevel.fa.gz"
     assert formatted_cds.exists()
     assert formatted_gff.exists()
@@ -191,7 +191,9 @@ def test_download_manifest_then_format_ensembl(tmp_path):
         cds_text = handle.read()
     assert ">Ostreococcus_lucimarinus_OSTLU_25062" in cds_text
     assert "ATGAAN" in cds_text
-    assert "evm.model." not in formatted_gff.read_text(encoding="utf-8")
+    with gzip.open(formatted_gff, "rt", encoding="utf-8") as handle:
+        formatted_gff_text = handle.read()
+    assert "evm.model." not in formatted_gff_text
     with gzip.open(formatted_genome, "rt", encoding="utf-8") as handle:
         genome_text = handle.read()
     assert ">chr1" in genome_text
@@ -296,7 +298,7 @@ def test_download_manifest_provider_local_uses_phytozome_local_dir(tmp_path):
     assert (raw_dir / "HleucocephalaHAP1_768_v2.1.gene.gff3").exists()
 
     formatted_cds = out_cds / "Hydrocotyle_leucocephala_HleucocephalaHAP1_768_v2.1.cds_primaryTranscriptOnly.fa.gz"
-    formatted_gff = out_gff / "Hydrocotyle_leucocephala_HleucocephalaHAP1_768_v2.1.gene.gff3"
+    formatted_gff = out_gff / "Hydrocotyle_leucocephala_HleucocephalaHAP1_768_v2.1.gene.gff.gz"
     assert formatted_cds.exists()
     assert formatted_gff.exists()
     with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
@@ -740,7 +742,7 @@ def test_download_manifest_supports_coge_and_cngb_with_id_inference(tmp_path):
         assert (raw_dir / (species_key + ".genome.fa")).exists()
 
         formatted_cds = out_cds / (species_key + "_cds.fa.gz")
-        formatted_gff = out_gff / (species_key + "_gene.gff3")
+        formatted_gff = out_gff / (species_key + "_gene.gff.gz")
         formatted_genome = out_genome / (species_key + "_genome.fa.gz")
         assert formatted_cds.exists()
         assert formatted_gff.exists()

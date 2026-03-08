@@ -3,7 +3,6 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
-from functools import lru_cache
 import gzip
 import numpy
 import os
@@ -13,6 +12,39 @@ import sys
 import time
 
 pandas.options.mode.chained_assignment = None
+
+MATCH_ATTRIBUTE_KEYS = {
+    '',
+    'ID',
+    'Parent',
+    'Name',
+    'gene',
+    'geneName',
+    'gene_id',
+    'locus_tag',
+    'protein_id',
+    'transcript',
+    'transcript_id',
+}
+
+FALLBACK_FEATURES = {
+    'mRNA',
+    'transcript',
+    'J_gene_segment',
+    'V_gene_segment',
+    'C_gene_segment',
+    'D_gene_segment',
+    'gene',
+}
+
+NAMESPACE_SUFFIX_DELIMITERS = {
+    ':',
+    '|',
+}
+
+ATTRIBUTE_KEY_ALIASES = {
+    'gene_name': 'geneName',
+}
 
 def build_arg_parser():
     parser = argparse.ArgumentParser()
@@ -27,119 +59,456 @@ def build_arg_parser():
     return parser
 
 def read_fasta_seqname(file_path):
-    raw_seqnames = []
-    if file_path.endswith('.gz'):
-        with gzip.open(file_path,'r') as f:
-            for line in f:
-                line = line.decode("utf-8")
-                if ">" in line:
-                    raw_seqnames.append(line)
-    else:
-        with open(file_path,'r') as f:
-            for line in f:
-                if ">" in line:
-                    raw_seqnames.append(line)
-    seqnames = pandas.Series(raw_seqnames)
-    seqnames = seqnames.str.replace('^>','',regex=True)
-    seqnames = seqnames.str.replace('\n$','',regex=True)
-    return seqnames
+    seqnames = []
+    opener = gzip.open if file_path.endswith('.gz') else open
+    with opener(file_path, 'rt', encoding='utf-8') as handle:
+        for line in handle:
+            if line.startswith('>'):
+                seqnames.append(line[1:].rstrip('\n'))
+    return pandas.Series(seqnames)
 
 def get_gene_names(seq_names):
-    gene_names = seq_names.str.replace('_', 'PLACEHOLDERTEXT', 2)
-    gene_names = gene_names.str.replace(r'.*PLACEHOLDERTEXT', '', regex=True)
-    return gene_names
-
-@lru_cache(maxsize=8192)
-def _get_search_regex(search_ids_tuple):
-    regexes = [
-        '[^a-zA-Z0-9]' + sid + '(?:$|[^a-zA-Z_0-9])'
-        for sid in search_ids_tuple
-    ]
-    return '|'.join(regexes)
+    return seq_names.astype(str).str.split('_', n=2).str[-1]
 
 
-def get_index_bools(gff, search_ids):
-    search_ids_tuple = tuple(
-        dict.fromkeys(
-            sid for sid in search_ids.fillna('').astype(str).tolist() if sid != ''
+def is_identifier_char(char):
+    return char.isalnum() or char == '_'
+
+
+def is_match_better(candidate, current):
+    if candidate is None:
+        return False
+    if current is None:
+        return True
+    candidate_key = (candidate[1], -candidate[2], -candidate[3])
+    current_key = (current[1], -current[2], -current[3])
+    return candidate_key > current_key
+
+
+def choose_better_match(current, candidate):
+    if is_match_better(candidate, current):
+        return candidate
+    return current
+
+
+def build_search_term_lookup(seq_names):
+    if isinstance(seq_names, pandas.Series):
+        seq_name_values = seq_names.fillna('').astype(str).tolist()
+    else:
+        seq_name_values = [str(seq_name) for seq_name in seq_names]
+    lookup = {}
+    min_len = None
+    max_len = 0
+    for order, seq_name in enumerate(seq_name_values):
+        gene_name = seq_name.split('_', 2)[-1] if seq_name != '' else ''
+        ub_gene_name = gene_name.replace('-', '_')
+        term_specs = (
+            (seq_name, 2),
+            (gene_name, 1),
+            (ub_gene_name, 0),
         )
+        for term, priority in term_specs:
+            term = str(term).strip()
+            if term == '':
+                continue
+            current = lookup.get(term)
+            candidate = (seq_name, priority, order)
+            if current is None or priority > current[1] or (priority == current[1] and order < current[2]):
+                lookup[term] = candidate
+            term_len = len(term)
+            min_len = term_len if min_len is None else min(min_len, term_len)
+            max_len = max(max_len, term_len)
+    if min_len is None:
+        min_len = 0
+    return lookup, min_len, max_len
+
+
+def normalize_attribute_value(raw_value):
+    value = raw_value if isinstance(raw_value, str) else str(raw_value)
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    if value[:1] in {'"', "'"}:
+        value = value[1:]
+    if value[-1:] in {'"', "'"}:
+        value = value[:-1]
+    return value
+
+
+def unique_values(values):
+    if len(values) <= 1:
+        return tuple(values)
+    seen = set()
+    out = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return tuple(out)
+
+
+def match_value_to_gene_id(value, lookup, min_len, max_len, value_cache):
+    if value in value_cache:
+        return value_cache[value]
+    value = str(value).strip()
+    if value == '':
+        value_cache[value] = None
+        return None
+
+    exact_hit = lookup.get(value)
+    if exact_hit is not None:
+        result = (exact_hit[0], len(value), exact_hit[1], exact_hit[2])
+        value_cache[value] = result
+        return result
+
+    delimiters = [idx for idx, char in enumerate(value) if not is_identifier_char(char)]
+    best = None
+    best_len = 0
+    seen_segments = set()
+    segments = [value]
+    segments.extend(
+        value[idx + 1:]
+        for idx in delimiters
+        if value[idx] in NAMESPACE_SUFFIX_DELIMITERS
     )
-    if len(search_ids_tuple) == 0:
-        return numpy.zeros(gff.shape[0], dtype=bool)
-    regex = _get_search_regex(search_ids_tuple)
-    conditions = gff.loc[:,'attributes'].str.contains(regex, regex=True, na=False).values
-    return conditions
 
-def get_feature_len(gff):
-    len_per_line = gff.loc[:,'end'] - gff.loc[:,'start'] + 1
-    len_feature = len_per_line.sum()
-    return len_feature
+    for segment in segments:
+        if segment == '' or segment in seen_segments:
+            continue
+        seen_segments.add(segment)
+        segment_len = len(segment)
+        if segment_len < min_len:
+            continue
+        if best_len > 0 and segment_len <= best_len:
+            continue
+        segment_delims = [idx for idx, char in enumerate(segment) if not is_identifier_char(char)]
+        candidate_ends = [segment_len]
+        candidate_ends.extend(idx for idx in reversed(segment_delims) if idx > 0)
+        for end in candidate_ends:
+            candidate_len = end
+            if candidate_len < min_len:
+                break
+            if max_len > 0 and candidate_len > max_len:
+                continue
+            if best_len > 0 and candidate_len <= best_len:
+                break
+            candidate = segment[:end]
+            hit = lookup.get(candidate)
+            if hit is None:
+                continue
+            match = (hit[0], candidate_len, hit[1], hit[2])
+            best = choose_better_match(best, match)
+            if best is not None:
+                best_len = best[1]
+            break
+    value_cache[value] = best
+    return best
 
-def select_id_from_multiple_hits(gff_feat, feat2_ids, multiple_hits):
-    if (feat2_ids.shape[0]==1):
-        return feat2_ids[0]
-    if (multiple_hits=='first'):
-        print('First feature was selected: {}'.format(feat2_ids[0]))
-        return feat2_ids[0]
-    elif (multiple_hits=='longest'):
-        longest_id = ''
-        longest_size = 0
-        for feat2_id in feat2_ids:
-            is_feat2 = get_index_bools(gff=gff_feat, search_ids=pandas.Series([feat2_id,]))
-            gff_feat2_id = gff_feat.loc[is_feat2,:]
-            len_feature = get_feature_len(gff=gff_feat2_id)
-            if (len_feature > longest_size):
-                longest_size = len_feature
-                longest_id = feat2_id
-        print('Longest feature was selected: {}'.format(longest_id))
-        return longest_id
+
+def parse_attribute_summary(attr_text, lookup, min_len, max_len, value_cache, skip_id_match_when_parent=False):
+    attr_id = ''
+    parents = []
+    values = []
+    for raw_field in str(attr_text).split(';'):
+        field = raw_field.strip()
+        if field == '':
+            continue
+        equal_pos = field.find('=')
+        space_pos = field.find(' ')
+        if equal_pos != -1 and (space_pos == -1 or equal_pos < space_pos):
+            key = field[:equal_pos]
+            raw_value = field[equal_pos + 1:]
+        elif space_pos > 0:
+            key = field[:space_pos]
+            raw_value = field[space_pos + 1:]
+        else:
+            continue
+        key = ATTRIBUTE_KEY_ALIASES.get(key, key)
+        if key not in MATCH_ATTRIBUTE_KEYS:
+            continue
+        if key == 'Parent':
+            for raw_parent in raw_value.split(','):
+                value = normalize_attribute_value(raw_parent)
+                if value != '':
+                    parents.append(value)
+                    values.append((key, value))
+            continue
+        value = normalize_attribute_value(raw_value)
+        if value == '':
+            continue
+        if key == 'ID' and attr_id == '':
+            attr_id = value
+        values.append((key, value))
+
+    best = None
+    has_parents = len(parents) > 0
+    for key, value in values:
+        if key not in MATCH_ATTRIBUTE_KEYS:
+            continue
+        if skip_id_match_when_parent and has_parents and key == 'ID':
+            continue
+        best = choose_better_match(
+            best,
+            match_value_to_gene_id(
+                value=value,
+                lookup=lookup,
+                min_len=min_len,
+                max_len=max_len,
+                value_cache=value_cache,
+            ),
+        )
+    return attr_id, tuple(parents), best
+
+
+def parse_attribute_fields(attr_text):
+    attr_id = ''
+    parents = []
+    match_values = []
+    for raw_field in str(attr_text).split(';'):
+        field = raw_field.strip()
+        if field == '':
+            continue
+        equal_pos = field.find('=')
+        space_pos = field.find(' ')
+        if equal_pos != -1 and (space_pos == -1 or equal_pos < space_pos):
+            key = field[:equal_pos]
+            raw_value = field[equal_pos + 1:]
+        elif space_pos > 0:
+            key = field[:space_pos]
+            raw_value = field[space_pos + 1:]
+        else:
+            continue
+        key = ATTRIBUTE_KEY_ALIASES.get(key, key)
+        if key not in MATCH_ATTRIBUTE_KEYS:
+            continue
+        if key == 'Parent':
+            for raw_parent in raw_value.split(','):
+                value = normalize_attribute_value(raw_parent)
+                if value != '':
+                    parents.append(value)
+            continue
+        value = normalize_attribute_value(raw_value)
+        if value == '':
+            continue
+        if key == 'ID' and attr_id == '':
+            attr_id = value
+        match_values.append(value)
+    return attr_id, unique_values(parents), unique_values(match_values)
+
+
+def match_values_to_gene_id(values, lookup, min_len, max_len, value_cache):
+    best = None
+    for value in values:
+        best = choose_better_match(
+            best,
+            match_value_to_gene_id(
+                value=value,
+                lookup=lookup,
+                min_len=min_len,
+                max_len=max_len,
+                value_cache=value_cache,
+            ),
+        )
+    return best
+
+
+def merge_id_info(existing, parents, match, values=()):
+    if existing is None:
+        return {
+            'parents': parents,
+            'match': match,
+            'values': values,
+        }
+    merged_parents = existing['parents'] if len(parents) == 0 else unique_values(existing['parents'] + parents)
+    merged_match = choose_better_match(existing['match'], match)
+    existing_values = existing.get('values', ())
+    merged_values = existing_values if len(values) == 0 else unique_values(existing_values + values)
+    return {'parents': merged_parents, 'match': merged_match, 'values': merged_values}
+
+
+def resolve_feature_match(feature_id, id_info, resolved_cache, active_stack, lookup, min_len, max_len, value_cache):
+    if feature_id == '':
+        return None
+    cached = resolved_cache.get(feature_id)
+    if cached is not None or feature_id in resolved_cache:
+        return cached
+    if feature_id in active_stack:
+        resolved_cache[feature_id] = None
+        return None
+    info = id_info.get(feature_id)
+    if info is None:
+        resolved_cache[feature_id] = None
+        return None
+    active_stack.add(feature_id)
+    best = info['match']
+    for parent_id in info['parents']:
+        parent_match = resolve_feature_match(
+            parent_id,
+            id_info,
+            resolved_cache,
+            active_stack,
+            lookup,
+            min_len,
+            max_len,
+            value_cache,
+        )
+        best = choose_better_match(best, parent_match)
+    if best is None and len(info.get('values', ())) > 0:
+        best = match_values_to_gene_id(
+            values=info['values'],
+            lookup=lookup,
+            min_len=min_len,
+            max_len=max_len,
+            value_cache=value_cache,
+        )
+    active_stack.remove(feature_id)
+    resolved_cache[feature_id] = best
+    return best
 
 def extract_by_ids(gff, seq_names, feature, multiple_hits):
     print('Extracting gene IDs: {}'.format(datetime.datetime.now()), flush=True)
-    gff_feat = gff.loc[(gff.loc[:,'feature']==feature),:]
-    gene_names = get_gene_names(seq_names)
-    ub_gene_names = gene_names.str.replace('-','_', regex=False)
-    gene_name_variants = pandas.concat([gene_names, ub_gene_names], ignore_index=True)
-    search_ids = pandas.concat([seq_names, gene_name_variants], ignore_index=True)
-    conditions = get_index_bools(gff=gff_feat, search_ids=search_ids)
-    if (conditions.sum()==0): # This block was introduced to parse Ensembl's gff3 file.
-        print('Gene IDs were not found in the feature \"{}\". Checking other features.'.format(feature), flush=True)
-        search_ids_list = search_ids.tolist()
-        for gene_name in gene_name_variants:
-            gene_search_ids = pandas.Series([sid for sid in search_ids_list if gene_name in sid])
-            for feature2 in ['mRNA','J_gene_segment','V_gene_segment','C_gene_segment','D_gene_segment','gene']:
-                gff_feat2 = gff.loc[(gff.loc[:,'feature']==feature2),:]
-                conditions = get_index_bools(gff=gff_feat2, search_ids=gene_search_ids)
-                if (conditions.sum()==0):
-                    print('Gene ID {} was not found in the feature \"{}\".'.format(gene_name, feature2))
-                else:
-                    feat2_entries = gff_feat2.loc[conditions,:]
-                    feat2_attrs = feat2_entries.loc[:,'attributes'].drop_duplicates()
-                    txt = 'Found {} gff entries for {} in the feature \"{}\".'
-                    print(txt.format(feat2_attrs.shape[0], gene_name, feature2))
-                    feat2_ids = feat2_attrs.replace('^ID=','',regex=True).replace(';.*','',regex=True).values
-                    feat2_id = select_id_from_multiple_hits(gff_feat, feat2_ids, multiple_hits)
-                    feat2_attr = [ attr for attr in feat2_attrs.values if feat2_id in attr ]
-                    is_feat2 = get_index_bools(gff=gff_feat, search_ids=pandas.Series([feat2_id,]))
-                    gff_feat.loc[is_feat2,'attributes'] = gff_feat.loc[is_feat2,'attributes'] + feat2_attr
-                    break
-        conditions = get_index_bools(gff=gff_feat, search_ids=search_ids)
-    if (conditions.sum()==0):
+    lookup, min_len, max_len = build_search_term_lookup(seq_names)
+    gff_feat = gff.loc[(gff.loc[:,'feature']==feature),:].copy()
+    if gff_feat.shape[0] == 0:
+        return gff_feat.assign(gene_id='')
+
+    value_cache = {}
+    fallback_mask = gff.loc[:, 'feature'].isin(FALLBACK_FEATURES)
+    id_info = {}
+    resolved_cache = {}
+    if fallback_mask.any():
+        for attr_text in gff.loc[fallback_mask, 'attributes'].fillna('').astype(str).tolist():
+            attr_id, parents, match_values = parse_attribute_fields(attr_text)
+            if attr_id == '' and len(parents) == 0 and len(match_values) == 0:
+                continue
+            if attr_id == '':
+                continue
+            match = None
+            if len(parents) == 0 and len(match_values) > 0:
+                match = match_values_to_gene_id(
+                    values=match_values,
+                    lookup=lookup,
+                    min_len=min_len,
+                    max_len=max_len,
+                    value_cache=value_cache,
+                )
+            existing = id_info.get(attr_id)
+            if existing is None:
+                id_info[attr_id] = {'parents': parents, 'match': match, 'values': match_values}
+            else:
+                id_info[attr_id] = merge_id_info(existing, parents, match, match_values)
+
+    gene_ids = []
+    for attr_text in gff_feat.loc[:, 'attributes'].fillna('').astype(str).tolist():
+        _, parents, match_values = parse_attribute_fields(attr_text)
+        best = None
+        for parent_id in parents:
+            parent_match = resolve_feature_match(
+                parent_id,
+                id_info,
+                resolved_cache,
+                set(),
+                lookup,
+                min_len,
+                max_len,
+                value_cache,
+            )
+            best = choose_better_match(best, parent_match)
+        if best is None and len(parents) > 0:
+            best = match_values_to_gene_id(
+                values=parents,
+                lookup=lookup,
+                min_len=min_len,
+                max_len=max_len,
+                value_cache=value_cache,
+            )
+        if best is None and len(match_values) > 0:
+            best = match_values_to_gene_id(
+                values=match_values,
+                lookup=lookup,
+                min_len=min_len,
+                max_len=max_len,
+                value_cache=value_cache,
+            )
+        gene_ids.append(best[0] if best is not None else '')
+
+    gff_feat.loc[:, 'gene_id'] = gene_ids
+    out = gff_feat.loc[gff_feat.loc[:, 'gene_id'] != '', :]
+    if (out.shape[0]==0):
         print('No match was found.')
-    out = gff_feat.loc[conditions,:]
     return out
 
 def add_id_column(gff, seq_names, new_col='gene_id'):
     print('Adding gene id column: {}'.format(datetime.datetime.now()), flush=True)
-    gff.loc[:,new_col] = ''
-    gene_names = get_gene_names(seq_names)
-    ub_gene_names = gene_names.str.replace('-','_',regex=False)
-    for i in range(seq_names.shape[0]):
-        search_ids = pandas.Series([seq_names.iloc[i], gene_names.iloc[i], ub_gene_names.iloc[i] ])
-        conditions = get_index_bools(gff, search_ids)
-        if conditions.sum():
-            gff.loc[conditions,new_col] = seq_names.iloc[i]
+    gff = gff.copy()
+    lookup, min_len, max_len = build_search_term_lookup(seq_names)
+    value_cache = {}
+    gene_ids = []
+    for attr_text in gff.loc[:, 'attributes'].fillna('').astype(str).tolist():
+        _, _, match = parse_attribute_summary(attr_text, lookup, min_len, max_len, value_cache)
+        gene_ids.append(match[0] if match is not None else '')
+    gff.loc[:,new_col] = gene_ids
     return gff
+
+
+def summarize_gene_features(gff, out_cols, id_col='gene_id'):
+    gene_ids = gff.loc[:, id_col].fillna('').astype(str).to_numpy()
+    if gene_ids.size == 0:
+        return pandas.DataFrame(columns=out_cols)
+    sequences = gff.loc[:, 'sequence'].to_numpy()
+    strands = gff.loc[:, 'strand'].to_numpy()
+    starts = gff.loc[:, 'start'].to_numpy()
+    ends = gff.loc[:, 'end'].to_numpy()
+
+    order = []
+    by_gene = {}
+    for gene_id, sequence, strand, start, end in zip(gene_ids, sequences, strands, starts, ends):
+        if gene_id == '':
+            continue
+        start = int(start)
+        end = int(end)
+        feature_len = end - start + 1
+        rec = by_gene.get(gene_id)
+        if rec is None:
+            by_gene[gene_id] = {
+                'gene_id': gene_id,
+                'feature_size': feature_len,
+                'num_intron': 0,
+                'intron_offsets': [],
+                'chromosome': sequence,
+                'start': start,
+                'end': end,
+                'strand': strand,
+            }
+            order.append(gene_id)
+            continue
+        rec['intron_offsets'].append(rec['feature_size'])
+        rec['feature_size'] += feature_len
+        rec['num_intron'] += 1
+        rec['end'] = end
+
+    if len(order) == 0:
+        return pandas.DataFrame(columns=out_cols)
+    rows = []
+    for gene_id in order:
+        rec = by_gene[gene_id]
+        intron_offsets = rec['intron_offsets']
+        max_intron_pos = int(intron_offsets[-1]) if len(intron_offsets) > 0 else 0
+        if (max_intron_pos > rec['feature_size']):
+            txt = 'Intron position cannot be greater than feature size: {}, feature_size={}, max intron position = {}'
+            raise Exception(txt.format(gene_id, rec['feature_size'], max_intron_pos))
+        rows.append({
+            'gene_id': gene_id,
+            'feature_size': int(rec['feature_size']),
+            'num_intron': int(rec['num_intron']),
+            'intron_positions': ';'.join(str(int(pos)) for pos in intron_offsets),
+            'chromosome': rec['chromosome'],
+            'start': int(rec['start']),
+            'end': int(rec['end']),
+            'strand': rec['strand'],
+        })
+    return pandas.DataFrame(rows, columns=out_cols)
 
 def add_intron_info(gff, df_all, id_col='gene_id'):
     print('Adding intron information: {}'.format(datetime.datetime.now()), flush=True)
@@ -200,11 +569,8 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
     gff_id = extract_by_ids(gff=gff, seq_names=seq_sp, feature=feature, multiple_hits=multiple_hits)
     if gff_id.shape[0] == 0:
         return pandas.DataFrame(columns=out_cols)
-    gff_id = add_id_column(gff=gff_id, seq_names=seq_sp)
-    df_tmp = pandas.DataFrame(columns=out_cols)
-    df_tmp = add_intron_info(gff=gff_id, df_all=df_tmp)
-    df_tmp = add_gene_delim(gff=gff_id, df_all=df_tmp)
-    return df_tmp
+    print('Summarizing gene features: {}'.format(datetime.datetime.now()), flush=True)
+    return summarize_gene_features(gff=gff_id, out_cols=out_cols)
 
 def main():
     parser = build_arg_parser()
@@ -280,12 +646,8 @@ def main():
     print('Number of input genes: {}'.format(num_input), flush=True)
     print('Number of output entries: {}'.format(num_output), flush=True)
     if (num_input != num_output):
-        df_all['gene_id'] = df_all['gene_id'].fillna('').astype(str)
-        for seq_name in seq_names.sort_values():
-            gene_name = get_gene_names(pandas.Series([seq_name])).iloc[0]
-            is_found = df_all.loc[:, 'gene_id'].str.contains(gene_name).any()
-            if is_found:
-                continue
+        observed_gene_ids = set(df_all['gene_id'].fillna('').astype(str).tolist())
+        for seq_name in sorted(set(seq_names.astype(str).tolist()) - observed_gene_ids):
             print('Missing in the output file: {}'.format(seq_name), flush=True)
     df_all.to_csv(args.outfile, sep='\t', header=True, index=False)
     print('gff2genestat.py completed in {:,} secs: {}'.format(int(time.time() - start_time), datetime.datetime.now()))

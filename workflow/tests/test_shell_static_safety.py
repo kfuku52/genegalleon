@@ -43,6 +43,29 @@ def _strict_mode_header(script: Path) -> str:
     return "\n".join(_read_text(script).splitlines()[:max_lines])
 
 
+def _entrypoint_modify_block_assignments(script: Path):
+    in_block = False
+    for lineno, line in enumerate(_read_text(script).splitlines(), start=1):
+        if "### Start: Modify this block to tailor your analysis ###" in line:
+            in_block = True
+            continue
+        if "### End: Modify this block to tailor your analysis ###" in line:
+            in_block = False
+            continue
+        if not in_block:
+            continue
+        stripped = line.strip()
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", stripped):
+            yield lineno, stripped
+
+
+def _common_param_assignments(script: Path):
+    for lineno, line in enumerate(_read_text(script).splitlines(), start=1):
+        stripped = line.strip()
+        if re.match(r'^: "\$\{[A-Za-z0-9_]+:=', stripped):
+            yield lineno, stripped
+
+
 def _set_e_scripts():
     scripts = []
     for script in _workflow_shell_scripts():
@@ -1212,14 +1235,14 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         "--metadata ${file_amalgkit_metadata}",
         "--rrna_filter ${amalgkit_rrna_filter}",
         "--contam_filter ${amalgkit_contam_filter}",
-        "--contam_filter_rank ${amalgkit_contam_filter_rank}",
+        "--contam_filter_rank ${contamination_removal_rank_for_amalgkit}",
         "--filter_order ${amalgkit_filter_order}",
         "ln -s ${dir_amalgkit_getfastq_sp} \"./getfastq\"",
         "--fasta_file ${file_longestcds}",
         "--mmseqs2taxonomy_tsv ${file_longestcds_mmseqs2taxonomy}",
         "--fx2tab_tsv ${file_longestcds_fx2tab}",
         "--species_name ${sp_ub}",
-        "--rank ${contamination_removal_rank}",
+        "--rank ${contamination_removal_rank_for_remove_contaminated_sequences}",
         "seqkit seq --threads ${NSLOTS} ${file_isoform} --out-file \"busco_infile_cdna.fa\"",
         "seqkit seq --threads ${NSLOTS} ${file_longestcds} --out-file \"busco_infile_cds.fa\"",
         "seqkit seq --threads ${NSLOTS} ${file_longestcds_contamination_removal_fasta} --out-file \"busco_infile_cds.fa\"",
@@ -1242,14 +1265,14 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         '--metadata "${file_amalgkit_metadata}"',
         '--rrna_filter "${amalgkit_rrna_filter}"',
         '--contam_filter "${amalgkit_contam_filter}"',
-        '--contam_filter_rank "${amalgkit_contam_filter_rank}"',
+        '--contam_filter_rank "${contamination_removal_rank_for_amalgkit}"',
         '--filter_order "${amalgkit_filter_order}"',
         'ln -s "${dir_amalgkit_getfastq_sp}" "./getfastq"',
         '--fasta_file "${file_longestcds}"',
         '--mmseqs2taxonomy_tsv "${file_longestcds_mmseqs2taxonomy}"',
         '--fx2tab_tsv "${file_longestcds_fx2tab}"',
         '--species_name "${sp_ub}"',
-        '--rank "${contamination_removal_rank}"',
+        '--rank "${contamination_removal_rank_for_remove_contaminated_sequences}"',
         'seqkit seq --threads "${NSLOTS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"',
         'seqkit seq --threads "${NSLOTS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"',
         'seqkit seq --threads "${NSLOTS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"',
@@ -1279,6 +1302,58 @@ def test_transcriptome_core_requires_taxid_for_contam_filter():
     assert 'effective_amalgkit_contam_filter=' not in text
     assert 'Continuing with effective_amalgkit_contam_filter=no.' not in text
     assert 'amalgkit_contam_filter=yes requires a taxid column in metadata: ${file_amalgkit_metadata}. Exiting.' in text
+
+
+def test_common_contamination_removal_rank_defaults_to_domain():
+    text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+    assert ': "${GG_COMMON_CONTAMINATION_REMOVAL_RANK:=domain}"' in text
+
+
+def test_common_busco_lineage_defaults_to_auto():
+    text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+    assert ': "${GG_COMMON_BUSCO_LINEAGE:=auto}"' in text
+
+
+def test_common_params_define_annotation_species_auto_only_once():
+    text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+    assert ': "${GG_COMMON_ANNOTATION_SPECIES:=auto}"' in text
+    assert "GG_COMMON_ANNOTATION_REPRESENTATIVE_SPECIES" not in text
+    assert "GG_COMMON_MCMCTREE_DIVERGENCE_TIME_CONSTRAINTS_STR" not in text
+    assert "GG_COMMON_TREEVIS_CLADE_ORTHOLOG_PREFIX" not in text
+
+
+def test_core_scripts_resolve_busco_lineage_through_shared_helper():
+    genome_annotation = _read_text(CORE_DIR / "gg_genome_annotation_core.sh")
+    transcriptome = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    genome_evolution = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    assert 'busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"' in genome_annotation
+    assert 'busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"' in transcriptome
+    assert 'busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"' in genome_evolution
+    assert 'gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "${sp_ub}"' in genome_annotation
+    assert 'gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "${sp_ub}"' in transcriptome
+    assert 'gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage}" "$@"' in genome_evolution
+
+
+def test_entrypoint_modify_block_parameters_have_inline_comments():
+    scripts = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
+    assert scripts, "No entrypoint scripts were found."
+    missing = []
+    for script in scripts:
+        for lineno, line in _entrypoint_modify_block_assignments(script):
+            if "#" not in line:
+                missing.append(f"{script}:{lineno}: {line}")
+    assert not missing, "Add inline comments to parameter assignments:\n" + "\n".join(missing)
+
+
+def test_common_parameters_have_inline_comments():
+    script = WORKFLOW_DIR / "gg_common_params.sh"
+    missing = [
+        f"{script}:{lineno}: {line}"
+        for lineno, line in _common_param_assignments(script)
+        if "#" not in line
+    ]
+    assert not missing, "Add inline comments to common parameters:\n" + "\n".join(missing)
 
 
 def test_genome_annotation_core_quotes_known_path_sensitive_options():
@@ -2383,6 +2458,15 @@ def test_input_generation_core_excludes_hidden_files_when_listing_species_inputs
     ]
     for token in expected_tokens:
         assert text.count(token) >= 2
+
+
+def test_input_generation_core_runs_cds_gff_mapping_validation():
+    script = CORE_DIR / "gg_input_generation_core.sh"
+    text = _read_text(script)
+    assert 'validate_cds_gff_mapping.py' in text
+    assert '--species-cds-dir "${species_cds_dir}"' in text
+    assert '--species-gff-dir "${species_gff_dir}"' in text
+    assert '--nthreads "${NSLOTS:-1}"' in text
 
 
 def test_genome_evolution_core_does_not_include_legacy_output_migration_code():

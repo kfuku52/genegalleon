@@ -20,7 +20,7 @@ Main scripts:
 
 Notable defaults:
 
-- `run_validate_inputs=1` validates CDS naming rules and CDS/GFF species-set consistency,
+- `run_validate_inputs=1` validates CDS naming rules, CDS/GFF species-set consistency, and CDS-to-GFF mapping compatibility, with species-level mapping checks parallelized via `validate_cds_gff_mapping.py --nthreads`,
 - formatted outputs default to `workspace/output/input_generation/species_cds`, `workspace/output/input_generation/species_gff`, and `workspace/output/input_generation/species_genome`,
 - per-run metadata defaults to `workspace/output/input_generation/gg_input_generation_runs.tsv`,
   `workspace/output/input_generation/gg_input_generation_species.tsv`, and
