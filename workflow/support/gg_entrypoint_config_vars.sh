@@ -259,7 +259,6 @@ EOF
     gg_transcriptome_generation_entrypoint.sh)
       cat <<'EOF'
 amalgkit_contam_filter
-amalgkit_filter_order
 amalgkit_rrna_filter
 assembly_cpu_offset
 assembly_method

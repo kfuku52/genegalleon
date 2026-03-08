@@ -1236,7 +1236,6 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         "--rrna_filter ${amalgkit_rrna_filter}",
         "--contam_filter ${amalgkit_contam_filter}",
         "--contam_filter_rank ${contamination_removal_rank_for_amalgkit}",
-        "--filter_order ${amalgkit_filter_order}",
         "ln -s ${dir_amalgkit_getfastq_sp} \"./getfastq\"",
         "--fasta_file ${file_longestcds}",
         "--mmseqs2taxonomy_tsv ${file_longestcds_mmseqs2taxonomy}",
@@ -1266,7 +1265,6 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         '--rrna_filter "${amalgkit_rrna_filter}"',
         '--contam_filter "${amalgkit_contam_filter}"',
         '--contam_filter_rank "${contamination_removal_rank_for_amalgkit}"',
-        '--filter_order "${amalgkit_filter_order}"',
         'ln -s "${dir_amalgkit_getfastq_sp}" "./getfastq"',
         '--fasta_file "${file_longestcds}"',
         '--mmseqs2taxonomy_tsv "${file_longestcds_mmseqs2taxonomy}"',
@@ -1427,6 +1425,16 @@ def test_transcriptome_entrypoint_uses_descriptive_busco_flag_names():
     assert "run_busco1" not in config_vars
     assert "run_busco2" not in config_vars
     assert "run_busco3" not in config_vars
+
+
+def test_transcriptome_wrapper_uses_amalgkit_default_filter_order():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
+    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+
+    assert "amalgkit_filter_order=" not in entrypoint
+    assert "--filter_order" not in core
+    assert "amalgkit_filter_order" not in config_vars
 
 
 def test_entrypoint_modify_block_parameters_have_inline_comments():

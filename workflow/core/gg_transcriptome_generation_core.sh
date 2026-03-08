@@ -334,18 +334,17 @@ if [[ ( ${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1 ) &&
     fi
   fi
 
-			  if amalgkit getfastq \
-			    --out_dir "${dir_tmp}" \
-			    --download_dir "${dir_amalgkit_download_dir}" \
-			    --metadata "${file_amalgkit_metadata}" \
-			    --threads "${NSLOTS}" \
-			    --rrna_filter "${amalgkit_rrna_filter}" \
-			    --contam_filter "${amalgkit_contam_filter}" \
-			    --contam_filter_rank "${contamination_removal_rank_for_amalgkit}" \
-			    --filter_order "${amalgkit_filter_order}" \
-	    --remove_sra yes \
-	    --remove_tmp yes \
-	    --read_name 'trinity' \
+				  if amalgkit getfastq \
+				    --out_dir "${dir_tmp}" \
+				    --download_dir "${dir_amalgkit_download_dir}" \
+				    --metadata "${file_amalgkit_metadata}" \
+				    --threads "${NSLOTS}" \
+				    --rrna_filter "${amalgkit_rrna_filter}" \
+				    --contam_filter "${amalgkit_contam_filter}" \
+				    --contam_filter_rank "${contamination_removal_rank_for_amalgkit}" \
+		    --remove_sra yes \
+		    --remove_tmp yes \
+		    --read_name 'trinity' \
     --aws yes \
 	    --ncbi yes \
 	    --redo no; then
