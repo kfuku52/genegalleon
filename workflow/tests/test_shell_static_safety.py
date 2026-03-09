@@ -632,10 +632,9 @@ def test_gene_evolution_core_clamps_l1ou_cpu_selection_to_available_cores():
     assert 'CPU_PER_HOST=$(grep -c processor /proc/cpuinfo)' not in text
     assert 'cpu_pick="${GG_TASK_CPUS}"' in text
     assert 'if [[ "${cpu_pick}" -gt "${CPU_PER_HOST}" ]]; then' in text
-    assert 'cpu_id=$(python -c' in text
-    assert '"${cpu_pick}" "${CPU_PER_HOST}"' in text
-    assert "if command -v taskset >/dev/null 2>&1 && [[ -n \"${cpu_id}\" ]]; then" in text
-    assert 'taskset -c "${cpu_id}" "${l1ou_cmd[@]}"' in text
+    assert '--nslots="${cpu_pick}"' in text
+    assert 'taskset' not in text
+    assert 'cpu_id=$(python -c' not in text
     assert '"${l1ou_cmd[@]}"' in text
 
 

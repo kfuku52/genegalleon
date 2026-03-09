@@ -2666,7 +2666,7 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
     max_nshift=0
   fi
 
-  # Pin the OU run to an explicit CPU subset to avoid oversubscription.
+  # Clamp the OU worker count to the CPUs visible on the current host.
   if command -v nproc >/dev/null 2>&1; then
     CPU_PER_HOST=$(nproc)
   elif command -v getconf >/dev/null 2>&1; then
@@ -2686,9 +2686,8 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
   if [[ "${cpu_pick}" -lt 1 ]]; then
     cpu_pick=1
   fi
-		echo "CPU_PER_HOST: ${CPU_PER_HOST}"
-			cpu_id=$(python -c 'import sys; from numpy import random; a = random.choice(range(int(sys.argv[2])), int(sys.argv[1]), replace=False); print(",".join([str(b) for b in a]))' "${cpu_pick}" "${CPU_PER_HOST}")
-			echo "CPU IDs for kfl1ou: ${cpu_id}"
+  echo "CPU_PER_HOST: ${CPU_PER_HOST}"
+  echo "Using ${cpu_pick} CPU(s) for kfl1ou."
 
 
 	fit_ind_file=''
@@ -2696,26 +2695,21 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
 		fit_ind_file=${file_og_l1ou_fit_rdata}
 	fi
 
-			l1ou_cmd=(
-			  Rscript "${gg_support_dir}/detect_OU_shift_kfl1ou.r"
-			  --max_nshift="${max_nshift}"
-			  --tree_file="${file_og_dated_tree_analysis}"
-			  --trait_file="${file_og_expression}"
-			  --nslots="${GG_TASK_CPUS}"
-			  --criterion="${l1ou_criterion}"
-			  --nbootstrap="${l1ou_nbootstrap}"
-			  --fit_ind_file="${fit_ind_file}"
-			  --fit_conv_file=''
-			  --alpha_upper="${l1ou_alpha_upper}"
-			  --detect_convergence="${l1ou_convergence}"
-			  --replicate_sep="_"
-			)
-			if command -v taskset >/dev/null 2>&1 && [[ -n "${cpu_id}" ]]; then
-			  taskset -c "${cpu_id}" "${l1ou_cmd[@]}"
-			else
-			  echo "taskset not available. Running kfl1ou without CPU pinning."
-			  "${l1ou_cmd[@]}"
-			fi
+  l1ou_cmd=(
+    Rscript "${gg_support_dir}/detect_OU_shift_kfl1ou.r"
+    --max_nshift="${max_nshift}"
+    --tree_file="${file_og_dated_tree_analysis}"
+    --trait_file="${file_og_expression}"
+    --nslots="${cpu_pick}"
+    --criterion="${l1ou_criterion}"
+    --nbootstrap="${l1ou_nbootstrap}"
+    --fit_ind_file="${fit_ind_file}"
+    --fit_conv_file=''
+    --alpha_upper="${l1ou_alpha_upper}"
+    --detect_convergence="${l1ou_convergence}"
+    --replicate_sep="_"
+  )
+  "${l1ou_cmd[@]}"
 
 	mv_out fit_ind.RData "${file_og_l1ou_fit_rdata}"
 	mv_out l1ou_tree.tsv "${file_og_l1ou_fit_tree}"
