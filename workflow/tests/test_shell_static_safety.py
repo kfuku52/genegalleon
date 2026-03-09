@@ -1353,6 +1353,15 @@ def test_transcriptome_core_requires_taxid_for_contam_filter():
     assert 'amalgkit_contam_filter=yes requires a taxid column in metadata: ${file_amalgkit_metadata}. Exiting.' in text
 
 
+def test_transcriptome_core_passes_download_dir_to_amalgkit_integrate():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    integrate_start = text.index("    amalgkit integrate \\")
+    integrate_end = text.index('    mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"', integrate_start)
+    integrate_block = text[integrate_start:integrate_end]
+    assert '--download_dir "${dir_amalgkit_download_dir}"' in integrate_block
+
+
 def test_common_params_do_not_define_contamination_removal_rank():
     text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
     assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in text

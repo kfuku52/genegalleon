@@ -293,6 +293,7 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
   elif [[ ${mode_fastq} -eq 1 ]]; then
     amalgkit integrate \
     --out_dir "./" \
+    --download_dir "${dir_amalgkit_download_dir}" \
     --fastq_dir "${dir_species_fastq}" \
     --threads "${GG_TASK_CPUS}" \
     --remove_tmp yes
