@@ -180,7 +180,9 @@ jobs:
           name: ${{ steps.vars.outputs.sif_name }}
           path: ${{ steps.vars.outputs.sif_name }}
           if-no-files-found: error
-          retention-days: 30
+          # Large SIF artifacts are short-lived convenience copies.
+          # Long-term reproducibility comes from immutable GHCR image tags.
+          retention-days: 90
 
       - name: Upload checksum and download notice to GitHub Release
         if: steps.sif_meta.outputs.upload_to_release != '1'

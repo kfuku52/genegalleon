@@ -106,12 +106,20 @@ NATIVE_BUILD_FAKEROOT=always IMAGE_SOURCE=local bash ./gg_container_build_entryp
 GitHub Actions now publishes GHCR images and release SIF assets:
 
 - `.github/workflows/container-ghcr.yml`
-  - schedule: weekly (UTC)
+  - schedule: daily at 04:00 JST
+  - runs only when the previous JST day had container-related changes on the default branch
   - tags: `YYYYMMDD-<sha7>`, `sha-<sha7>`, `latest`
 - `.github/workflows/release-sif.yml`
   - trigger: Release `published`
   - tags: `<release-tag>`, `YYYYMMDD-<sha7>`, `sha-<sha7>`
   - release assets: `<repo>_<release-tag>_amd64.sif` and `.sha256`
+  - oversized `SIF` files fall back to a 90-day workflow artifact
+
+Retention policy:
+
+- workflow `SIF` artifacts are short-lived convenience copies
+- immutable GHCR tags are the long-term source of truth
+- historical `SIF` files should be recreated from immutable GHCR tags when needed
 
 User-side reproducible pull example:
 

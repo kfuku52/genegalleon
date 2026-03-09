@@ -44,11 +44,19 @@ NATIVE_BUILD_FAKEROOT=always IMAGE_SOURCE=local bash ./gg_container_build_entryp
 This repository now includes CI workflows that publish container images to GHCR:
 
 - periodic publish: `.github/workflows/container-ghcr.yml`
+  - schedule: daily at 04:00 JST
+  - runs only when the previous JST day had container-related changes on the default branch
   - tags: `YYYYMMDD-<sha7>`, `sha-<sha7>`, `latest`
 - release publish + SIF build/upload workflow: `.github/workflows/release-sif.yml`
   - tags: `<release-tag>`, `YYYYMMDD-<sha7>`, `sha-<sha7>`
   - release assets always include `.sha256`
-  - `<repo>_<release-tag>_amd64.sif` is uploaded to the GitHub Release when it is under the release asset size limit; otherwise it is kept as a workflow artifact and the Release gets a download notice instead
+  - `<repo>_<release-tag>_amd64.sif` is uploaded to the GitHub Release when it is under the release asset size limit; otherwise it is kept as a workflow artifact for 90 days and the Release gets a download notice instead
+
+Operational retention policy:
+
+- large workflow `SIF` artifacts are short-lived convenience copies and expire after 90 days
+- long-term reproducibility comes from immutable GHCR tags such as `YYYYMMDD-<sha7>`
+- recreate a historical `SIF` from GHCR when needed instead of storing old `SIF` artifacts indefinitely
 
 For reproducible runs, use an immutable tag:
 
