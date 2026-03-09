@@ -419,7 +419,7 @@ if [[ ${run_validate_inputs} -eq 1 && ${run_format_inputs} -eq 1 && ${download_o
       exit 1
     fi
   else
-    check_species_cds "${gg_workspace_dir}"
+    check_species_cds_dir "${species_cds_dir}"
   fi
 
   if [[ ${#gff_files[@]} -eq 0 ]]; then

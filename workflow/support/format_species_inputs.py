@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -210,6 +212,30 @@ SPECIES_SUMMARY_COLUMNS = (
 )
 
 
+def output_gzip_compresslevel():
+    raw = os.environ.get("GG_INPUT_GZIP_LEVEL", "").strip()
+    if raw == "":
+        return 9
+    try:
+        level = int(raw)
+    except ValueError:
+        raise ValueError("GG_INPUT_GZIP_LEVEL must be an integer between 1 and 9.")
+    if level < 1 or level > 9:
+        raise ValueError("GG_INPUT_GZIP_LEVEL must be between 1 and 9.")
+    return level
+
+
+def output_compression_threads():
+    raw = os.environ.get("GG_TASK_CPUS", "").strip()
+    if raw == "":
+        return 1
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1
+    return max(1, value)
+
+
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -353,8 +379,150 @@ def build_arg_parser():
 
 def open_text(path, mode):
     if path.name.endswith(".gz"):
-        return gzip.open(path, mode, encoding="utf-8")
+        kwargs = {"encoding": "utf-8"}
+        if any(flag in mode for flag in ("w", "a", "x")):
+            kwargs["compresslevel"] = output_gzip_compresslevel()
+        return gzip.open(path, mode, **kwargs)
     return open(path, mode, encoding="utf-8")
+
+
+def make_temporary_output_path(output_path):
+    base_name = output_path.name
+    suffix = output_path.suffix
+    if suffix != "" and base_name.endswith(suffix):
+        base_name = base_name[: -len(suffix)]
+    return output_path.parent / ".{}.tmp.{}.{}{}".format(
+        base_name,
+        os.getpid(),
+        time.time_ns(),
+        suffix,
+    )
+
+
+def write_text_output_via_command(output_path, writer, command_builder, output_via_stdout):
+    tmp_output = make_temporary_output_path(output_path)
+    stderr_text = ""
+    proc = None
+    stdout_handle = None
+    try:
+        stdout_target = subprocess.DEVNULL
+        if output_via_stdout:
+            stdout_handle = open(tmp_output, "wb")
+            stdout_target = stdout_handle
+        command = command_builder(tmp_output)
+        proc = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=stdout_target,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+        try:
+            if proc.stdin is None:
+                raise RuntimeError("Failed to open stdin for: {}".format(" ".join(command)))
+            writer(proc.stdin)
+            proc.stdin.close()
+            proc.stdin = None
+            if proc.stderr is not None:
+                stderr_text = proc.stderr.read()
+            return_code = proc.wait()
+        except Exception:
+            if proc.stdin is not None:
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
+            proc.kill()
+            proc.wait()
+            if proc.stderr is not None:
+                try:
+                    stderr_text = proc.stderr.read()
+                except Exception:
+                    stderr_text = ""
+            raise
+        finally:
+            if stdout_handle is not None:
+                stdout_handle.close()
+                stdout_handle = None
+
+        if return_code != 0:
+            raise RuntimeError(
+                "Command failed while writing '{}': {}".format(
+                    output_path,
+                    stderr_text.strip() or "exit code {}".format(return_code),
+                )
+            )
+        if not tmp_output.exists() or tmp_output.stat().st_size == 0:
+            raise RuntimeError("Command produced no output for '{}'".format(output_path))
+        tmp_output.replace(output_path)
+    finally:
+        if proc is not None and proc.stderr is not None:
+            proc.stderr.close()
+        if stdout_handle is not None:
+            stdout_handle.close()
+        if tmp_output.exists():
+            tmp_output.unlink()
+
+
+def write_fasta_records_gzip(output_path, records):
+    seqkit_path = shutil.which("seqkit")
+    if seqkit_path is None:
+        with open_text(output_path, "wt") as handle:
+            for record_id, sequence in records:
+                write_fasta_record(handle, record_id, sequence)
+        return
+
+    def writer(handle):
+        for record_id, sequence in records:
+            write_fasta_record(handle, record_id, sequence)
+
+    write_text_output_via_command(
+        output_path,
+        writer,
+        lambda tmp_output: [
+            seqkit_path,
+            "seq",
+            "--threads",
+            str(output_compression_threads()),
+            "-o",
+            str(tmp_output),
+            "-",
+        ],
+        output_via_stdout=False,
+    )
+
+
+def write_gff_gzip(input_path, output_path):
+    pigz_path = shutil.which("pigz")
+    line_count = 0
+
+    if pigz_path is None:
+        with open_text(input_path, "rt") as fin, open_text(output_path, "wt") as fout:
+            for line in fin:
+                fout.write(apply_common_replacements(line))
+                line_count += 1
+        return line_count
+
+    def writer(handle):
+        nonlocal line_count
+        with open_text(input_path, "rt") as fin:
+            for line in fin:
+                handle.write(apply_common_replacements(line))
+                line_count += 1
+
+    write_text_output_via_command(
+        output_path,
+        writer,
+        lambda _tmp_output: [
+            pigz_path,
+            "-p",
+            str(output_compression_threads()),
+            "-c",
+        ],
+        output_via_stdout=True,
+    )
+    return line_count
 
 
 def detect_manifest_delimiter(path):
@@ -2272,6 +2440,9 @@ def is_probable_genome_filename(provider, name):
     )
     if any(marker in lower for marker in non_genome_markers):
         return False
+    if provider == "fernbase":
+        # FernBase often exposes the assembly as a plain ".fa"/".fasta" filename.
+        return True
     if provider in ("ncbi", "refseq", "genbank"):
         return "genomic" in lower
     if provider in ("ensembl", "ensemblplants"):
@@ -2289,9 +2460,13 @@ def first_token(text):
 def extract_header_tag_value(header, tag):
     pattern = r"\[{}=([^\]]+)\]".format(re.escape(tag))
     match = re.search(pattern, header)
-    if match is None:
-        return ""
-    return match.group(1).strip()
+    if match is not None:
+        return match.group(1).strip()
+    plain_pattern = r"(?:^|\s){}=([^\s]+)".format(re.escape(tag))
+    match = re.search(plain_pattern, header)
+    if match is not None:
+        return match.group(1).strip()
+    return ""
 
 
 def extract_ncbi_gene_id_from_header(header):
@@ -2475,6 +2650,7 @@ def collapse_transcript_suffix(provider, identifier):
     ):
         text = re.sub(r"[._-]t[0-9]+$", "", text, flags=re.IGNORECASE)
         text = re.sub(r"[._-](?:transcript|mrna|rna|isoform)[._-]?[0-9]+$", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"[._-]amt[0-9]+$", "", text, flags=re.IGNORECASE)
     return text
 
 
@@ -2549,9 +2725,20 @@ def build_gene_aggregate_id(task, header, transcript_id):
         else:
             gene_token = extract_provider_id(provider, header)
     else:
+        gene_symbol = extract_header_tag_value(header, "gene")
         extracted = extract_provider_id(provider, header)
         collapsed = collapse_transcript_suffix(provider, extracted)
-        gene_token = collapsed if collapsed != "" else extracted
+        if gene_symbol != "":
+            if (
+                collapsed != ""
+                and collapsed != gene_symbol
+                and re.search(r"(?:^|[._-]){}$".format(re.escape(gene_symbol)), collapsed, re.IGNORECASE)
+            ):
+                gene_token = collapsed
+            else:
+                gene_token = gene_symbol
+        else:
+            gene_token = collapsed if collapsed != "" else extracted
     prefixed = "{}_{}".format(species_prefix, sanitize_identifier(gene_token))
     return sanitize_identifier(prefixed)
 
@@ -2880,9 +3067,13 @@ def format_cds(task, output_dir, overwrite, dry_run):
         first_sequence_name = ordered_ids[0]
 
     if not dry_run:
-        with open_text(output_path, "wt") as fout:
-            for gene_id in ordered_ids:
-                write_fasta_record(fout, records_by_gene[gene_id]["id"], records_by_gene[gene_id]["sequence"])
+        write_fasta_records_gzip(
+            output_path,
+            (
+                (records_by_gene[gene_id]["id"], records_by_gene[gene_id]["sequence"])
+                for gene_id in ordered_ids
+            ),
+        )
 
     status = "dry-run" if dry_run else "write"
     return {
@@ -2909,14 +3100,17 @@ def format_genome(task, output_dir, overwrite, dry_run):
         return {"status": "dry-run", "output_path": output_path, "written": 0}
 
     written = 0
-    with open_text(output_path, "wt") as fout:
+    def iter_genome_output_records():
+        nonlocal written
         for header, sequence in iter_fasta_records(genome_path):
             record_id = first_token(apply_common_replacements(header))
             if record_id == "":
                 record_id = "unnamed"
             seq = re.sub(r"\s+", "", sequence).upper()
-            write_fasta_record(fout, record_id, seq)
             written += 1
+            yield record_id, seq
+
+    write_fasta_records_gzip(output_path, iter_genome_output_records())
     return {"status": "write", "output_path": output_path, "written": written}
 
 
@@ -2928,11 +3122,7 @@ def format_gff(task, output_dir, overwrite, dry_run):
     if dry_run:
         return {"status": "dry-run", "output_path": output_path, "lines": 0}
 
-    line_count = 0
-    with open_text(task["gff_path"], "rt") as fin, open_text(output_path, "wt") as fout:
-        for line in fin:
-            fout.write(apply_common_replacements(line))
-            line_count += 1
+    line_count = write_gff_gzip(task["gff_path"], output_path)
     return {"status": "write", "output_path": output_path, "lines": line_count}
 
 

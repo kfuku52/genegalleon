@@ -82,6 +82,25 @@ def test_add_id_column_accepts_hyphen_to_underscore_gene_name_variant():
     assert out.loc[0, "gene_id"] == "Arabidopsis_thaliana_gene-1"
 
 
+def test_add_id_column_accepts_ncbi_dbxref_geneid_namespace():
+    gff = pandas.DataFrame(
+        {
+            "attributes": [
+                "ID=cds-XP_024525354.1;Parent=rna-XM_024669586.1;Dbxref=GeneID:112340394,Genbank:XP_024525354.1;Name=XP_024525354.1;gene=LOC112340394;protein_id=XP_024525354.1;",
+            ]
+        }
+    )
+    seq_names = pandas.Series(
+        [
+            "Selaginella_moellendorffii_GeneID112340394",
+        ]
+    )
+
+    out = add_id_column(gff=gff, seq_names=seq_names)
+
+    assert out.loc[0, "gene_id"] == "Selaginella_moellendorffii_GeneID112340394"
+
+
 def test_extract_by_ids_matches_cds_parent_prefix_without_regex_scan():
     gff = pandas.DataFrame(
         {
@@ -95,6 +114,23 @@ def test_extract_by_ids_matches_cds_parent_prefix_without_regex_scan():
 
     assert out.shape[0] == 1
     assert out.iloc[0]["gene_id"] == "Arabidopsis_thaliana_gene1.1"
+
+
+def test_extract_by_ids_resolves_ncbi_cds_via_dbxref_geneid():
+    gff = pandas.DataFrame(
+        {
+            "feature": ["CDS"],
+            "attributes": [
+                "ID=cds-XP_024525354.1;Parent=rna-XM_024669586.1;Dbxref=GeneID:112340394,Genbank:XP_024525354.1;Name=XP_024525354.1;gene=LOC112340394;protein_id=XP_024525354.1;",
+            ],
+        }
+    )
+    seq_names = pandas.Series(["Selaginella_moellendorffii_GeneID112340394"])
+
+    out = extract_by_ids(gff=gff, seq_names=seq_names, feature="CDS", multiple_hits="longest")
+
+    assert out.shape[0] == 1
+    assert out.iloc[0]["gene_id"] == "Selaginella_moellendorffii_GeneID112340394"
 
 
 def test_extract_by_ids_resolves_cds_via_parent_feature_match():

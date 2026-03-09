@@ -156,6 +156,7 @@ are written to:
 Download concurrency safeguards:
 
 - per-provider caps are applied even when `--jobs` is large.
+- built-in defaults stay conservative by provider; FernBase currently defaults to `2`.
 - override per-provider cap with:
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_<PROVIDER>` (e.g. `..._NCBI=2`).
 - NCBI E-utilities calls are throttled to documented limits by default:
@@ -250,7 +251,8 @@ Alternative runtime overrides (without editing files) via env vars:
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_CNGB`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_FLYBASE`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_WORMBASE`,
-  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_VECTORBASE`.
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_VECTORBASE`,
+  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_FERNBASE`.
 
 Quick preset example (enable trait stage with GIFT starter config):
 

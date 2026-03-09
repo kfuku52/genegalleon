@@ -15,6 +15,7 @@ pandas.options.mode.chained_assignment = None
 
 MATCH_ATTRIBUTE_KEYS = {
     '',
+    'Dbxref',
     'ID',
     'Parent',
     'Name',
@@ -111,13 +112,18 @@ def build_search_term_lookup(seq_names):
             term = str(term).strip()
             if term == '':
                 continue
-            current = lookup.get(term)
-            candidate = (seq_name, priority, order)
-            if current is None or priority > current[1] or (priority == current[1] and order < current[2]):
-                lookup[term] = candidate
-            term_len = len(term)
-            min_len = term_len if min_len is None else min(min_len, term_len)
-            max_len = max(max_len, term_len)
+            candidate_terms = [term]
+            gene_id_match = re.fullmatch(r'GeneID([0-9]+)', term)
+            if gene_id_match is not None:
+                candidate_terms.append('GeneID:{}'.format(gene_id_match.group(1)))
+            for candidate_term in candidate_terms:
+                current = lookup.get(candidate_term)
+                candidate = (seq_name, priority, order)
+                if current is None or priority > current[1] or (priority == current[1] and order < current[2]):
+                    lookup[candidate_term] = candidate
+                term_len = len(candidate_term)
+                min_len = term_len if min_len is None else min(min_len, term_len)
+                max_len = max(max_len, term_len)
     if min_len is None:
         min_len = 0
     return lookup, min_len, max_len

@@ -1,3 +1,5 @@
+from importlib.util import module_from_spec, spec_from_file_location
+import io
 from pathlib import Path
 import csv
 import gzip
@@ -11,6 +13,13 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "format_species_
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"
 
 
+def load_module():
+    spec = spec_from_file_location("format_species_inputs_module", SCRIPT_PATH)
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def run_script(*args):
     return subprocess.run(
         [sys.executable, str(SCRIPT_PATH), *args],
@@ -18,6 +27,21 @@ def run_script(*args):
         text=True,
         check=False,
     )
+
+
+class FakeTextPipe:
+    def __init__(self):
+        self.parts = []
+
+    def write(self, text):
+        self.parts.append(text)
+        return len(text)
+
+    def close(self):
+        return None
+
+    def getvalue(self):
+        return "".join(self.parts)
 
 
 def test_format_species_inputs_with_small_fixture_all_providers(tmp_path):
@@ -154,6 +178,277 @@ def test_format_species_inputs_fernbase_prefers_primary_annotation_files(tmp_pat
     assert ">Azolla_filiculoides_Azfi_g1" in cds_text
     assert "ATGAAN" in cds_text
     assert "lowconfidence" not in formatted_gff.name
+
+
+def test_format_species_inputs_fernbase_accepts_markerless_genome_fasta(tmp_path):
+    input_dir = tmp_path / "FernBase" / "species_wise_original"
+    species_dir = input_dir / "Ceratopteris_richardii"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "Crichardii_676_v2.0_cds.fa").write_text(">Crich_g1.t1\nATGAA\n", encoding="utf-8")
+    (species_dir / "Crichardii_676_v2.1.gene.gff3").write_text(
+        "chr1\tsrc\tgene\t1\t5\t.\t+\t.\tID=Crich_g1\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Crichardii_676_v2.0.fa").write_text(">chr1\nATGCATGC\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "fernbase",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_genome = out_genome / "Ceratopteris_richardii_Crichardii_676_v2.0.fa.gz"
+    assert formatted_genome.exists()
+
+
+def test_format_species_inputs_fernbase_uses_plain_gene_tag_for_aggregation(tmp_path):
+    input_dir = tmp_path / "FernBase" / "species_wise_original"
+    species_dir = input_dir / "Pteridium_aquilinum"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "pt_aq.cds.fa").write_text(
+        (
+            ">pteridium_mrna-253 gene=pteridium_gene-252 seq_id=scaff1 type=cds\n"
+            "ATGAA\n"
+            ">pteridium_mrna-303 gene=pteridium_gene-295 seq_id=scaff1 type=cds\n"
+            "ATGAAA\n"
+            ">pteridium_mrna-308 gene=pteridium_gene-295 seq_id=scaff1 type=cds\n"
+            "ATGAAATAG\n"
+        ),
+        encoding="utf-8",
+    )
+    (species_dir / "pt_aq.gff3").write_text(
+        (
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=pteridium_gene-252\n"
+            "chr1\tsrc\tgene\t20\t40\t.\t+\t.\tID=pteridium_gene-295\n"
+        ),
+        encoding="utf-8",
+    )
+    (species_dir / "pt_aq_final_genome.fasta").write_text(">chr1\nATGCATGCATGC\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    species_summary = tmp_path / "gg_input_generation_species.tsv"
+    completed = run_script(
+        "--provider",
+        "fernbase",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Pteridium_aquilinum_pt_aq.cds.fa.gz"
+    assert formatted_cds.exists()
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert headers == [
+        ">Pteridium_aquilinum_pteridium_gene-252",
+        ">Pteridium_aquilinum_pteridium_gene-295",
+    ]
+
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows) == 1
+    assert rows[0]["species_prefix"] == "Pteridium_aquilinum"
+    assert rows[0]["aggregated_cds_removed"] == "1"
+    assert rows[0]["cds_sequences_before"] == "3"
+    assert rows[0]["cds_sequences_after"] == "2"
+
+
+def test_write_fasta_records_gzip_prefers_seqkit(monkeypatch, tmp_path):
+    mod = load_module()
+    output_path = tmp_path / "species.fa.gz"
+    calls = {}
+
+    class FakeSeqkitProcess:
+        def __init__(self, command, **kwargs):
+            calls["command"] = command
+            calls["kwargs"] = kwargs
+            self.command = command
+            self._stdin_pipe = FakeTextPipe()
+            self.stdin = self._stdin_pipe
+            self.stderr = io.StringIO("")
+
+        def wait(self):
+            output_arg = self.command[self.command.index("-o") + 1]
+            with gzip.open(output_arg, "wt", encoding="utf-8") as handle:
+                handle.write(self._stdin_pipe.getvalue())
+            return 0
+
+        def kill(self):
+            return None
+
+    monkeypatch.setenv("GG_TASK_CPUS", "3")
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/{}".format(name))
+    monkeypatch.setattr(mod.subprocess, "Popen", FakeSeqkitProcess)
+
+    mod.write_fasta_records_gzip(output_path, [("seq1", "ATG"), ("seq2", "ATGA")])
+
+    with gzip.open(output_path, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert ">seq1" in text
+    assert ">seq2" in text
+    assert calls["command"][:4] == ["/usr/bin/seqkit", "seq", "--threads", "3"]
+    assert calls["command"][-1] == "-"
+
+
+def test_write_gff_gzip_prefers_pigz(monkeypatch, tmp_path):
+    mod = load_module()
+    input_path = tmp_path / "input.gff3"
+    input_path.write_text("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=evm.model.g1\n", encoding="utf-8")
+    output_path = tmp_path / "output.gff.gz"
+    calls = {}
+
+    class FakePigzProcess:
+        def __init__(self, command, **kwargs):
+            calls["command"] = command
+            calls["kwargs"] = kwargs
+            self.stdout = kwargs["stdout"]
+            self._stdin_pipe = FakeTextPipe()
+            self.stdin = self._stdin_pipe
+            self.stderr = io.StringIO("")
+
+        def wait(self):
+            with gzip.GzipFile(fileobj=self.stdout, mode="wb") as handle:
+                handle.write(self._stdin_pipe.getvalue().encode("utf-8"))
+            return 0
+
+        def kill(self):
+            return None
+
+    monkeypatch.setenv("GG_TASK_CPUS", "4")
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/{}".format(name))
+    monkeypatch.setattr(mod.subprocess, "Popen", FakePigzProcess)
+
+    line_count = mod.write_gff_gzip(input_path, output_path)
+
+    with gzip.open(output_path, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert line_count == 1
+    assert "evm.model." not in text
+    assert calls["command"] == ["/usr/bin/pigz", "-p", "4", "-c"]
+
+
+def test_resolve_provider_download_limits_keeps_fernbase_default_cap_at_two(monkeypatch):
+    mod = load_module()
+    monkeypatch.delenv("GG_INPUT_MAX_CONCURRENT_DOWNLOADS_FERNBASE", raising=False)
+    limits = mod.resolve_provider_download_limits(8)
+    assert limits["fernbase"] == 2
+
+
+def test_format_species_inputs_fernbase_prefers_namespaced_transcript_gene_id_when_gene_tag_is_short(tmp_path):
+    input_dir = tmp_path / "FernBase" / "species_wise_original"
+    species_dir = input_dir / "Salvinia_molesta"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "sg2.cds").write_text(
+        (
+            ">sg2.g13251.t1 gene=g13251\n"
+            "ATGAAATAG\n"
+            ">sg2.g9.t1 gene=g9\n"
+            "ATGAAATAA\n"
+        ),
+        encoding="utf-8",
+    )
+    (species_dir / "sg2.gff3").write_text(
+        (
+            "Chr_1\tgmst\tgene\t1\t9\t.\t+\t.\tID=sg2.g13251\n"
+            "Chr_1\tgmst\tgene\t20\t28\t.\t+\t.\tID=sg2.g9\n"
+        ),
+        encoding="utf-8",
+    )
+    (species_dir / "sg2_genome.fasta").write_text(">Chr_1\nATGCATGCATGC\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "fernbase",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Salvinia_molesta_sg2.cds.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert headers == [
+        ">Salvinia_molesta_sg2.g13251",
+        ">Salvinia_molesta_sg2.g9",
+    ]
+
+
+def test_format_species_inputs_fernbase_strips_amt_suffix_when_gff_uses_base_gene_id(tmp_path):
+    input_dir = tmp_path / "FernBase" / "species_wise_original"
+    species_dir = input_dir / "Azolla_filiculoides"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta").write_text(
+        (
+            ">Azfi_s0034.g025227.AMT2\n"
+            "ATGAAATAG\n"
+            ">Azfi_s0093.g043301.AMT2\n"
+            "ATGAAATAA\n"
+        ),
+        encoding="utf-8",
+    )
+    (species_dir / "Azolla_filiculoides.gene_models.highconfidence_v1.1.gff").write_text(
+        (
+            "SCAF_1\tAUGUSTUS\tgene\t1\t9\t.\t+\t.\tID=Azfi_s0034.g025227\n"
+            "SCAF_1\tAUGUSTUS\tgene\t20\t28\t.\t+\t.\tID=Azfi_s0093.g043301\n"
+        ),
+        encoding="utf-8",
+    )
+    (species_dir / "Azolla_filiculoides.genome_v1.2.fasta").write_text(">SCAF_1\nATGCATGCATGC\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "fernbase",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Azolla_filiculoides_CDS.highconfidence_v1.1.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert headers == [
+        ">Azolla_filiculoides_Azfi_s0034.g025227",
+        ">Azolla_filiculoides_Azfi_s0093.g043301",
+    ]
 
 
 def test_species_summary_is_incremental_and_persistent_across_runs(tmp_path):

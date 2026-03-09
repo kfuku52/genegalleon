@@ -33,6 +33,15 @@ GFF_EXTENSIONS = (
     ".gtf.gz",
 )
 
+KNOWN_ALLOWED_MISSING_CDS_IDS = {
+    # FernBase Azolla_filiculoides publishes two CDS-only entries whose
+    # formatted IDs remain absent from the companion GFF.
+    "Azolla_filiculoides": {
+        "Azolla_filiculoides_Azfi_s0034.g025227",
+        "Azolla_filiculoides_Azfi_s0093.g043301",
+    },
+}
+
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(
@@ -210,17 +219,21 @@ def validate_single_species(task, missing_limit):
         mapped_id_set = set(mapped_ids)
         missing_ids = sorted(cds_id_set - mapped_id_set)
         extra_ids = sorted(mapped_id_set - cds_id_set)
+        allowed_missing_id_set = KNOWN_ALLOWED_MISSING_CDS_IDS.get(species_prefix, set())
+        allowed_missing_ids = sorted(cds_id_set.intersection(allowed_missing_id_set) - mapped_id_set)
+        unexpected_missing_ids = sorted(set(missing_ids) - set(allowed_missing_ids))
         stats = {
             "cds_ids": len(cds_ids),
             "mapped_ids": len(mapped_ids),
+            "allowed_missing_ids": len(allowed_missing_ids),
         }
 
-        if len(missing_ids) > 0 or len(extra_ids) > 0:
+        if len(unexpected_missing_ids) > 0 or len(extra_ids) > 0:
             parts = []
-            if len(missing_ids) > 0:
+            if len(unexpected_missing_ids) > 0:
                 parts.append(
                     "missing={} sample={}".format(
-                        len(missing_ids), ",".join(first_n(missing_ids, missing_limit))
+                        len(unexpected_missing_ids), ",".join(first_n(unexpected_missing_ids, missing_limit))
                     )
                 )
             if len(extra_ids) > 0:
@@ -246,8 +259,11 @@ def validate_single_species(task, missing_limit):
             "ok": True,
             "stats_ready": True,
             "stats": stats,
-            "message": "[{}] CDS-to-GFF mapping OK: {}/{} IDs".format(
-                species_prefix, len(mapped_ids), len(cds_ids)
+            "message": "[{}] CDS-to-GFF mapping OK: {}/{} IDs{}".format(
+                species_prefix,
+                len(mapped_ids),
+                len(cds_ids),
+                "" if len(allowed_missing_ids) == 0 else " (allowed_missing={})".format(len(allowed_missing_ids)),
             ),
         }
     except Exception as exc:

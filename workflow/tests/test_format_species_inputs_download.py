@@ -1305,6 +1305,70 @@ def test_download_manifest_fernbase_provider_follows_latest_version_subdir(tmp_p
     assert not (raw_dir / "Azolla_filiculoides.CDS.lowconfidence_v1.1.fasta").exists()
 
 
+def test_download_manifest_fernbase_provider_accepts_markerless_top_level_genome_fasta(tmp_path):
+    server_root = tmp_path / "server_root"
+    species_dir = server_root / "ftp" / "Ceratopteris_richardii"
+    species_dir.mkdir(parents=True, exist_ok=True)
+
+    (species_dir / "Crichardii_676_v2.0_cds.fa").write_text(">Crich_g1.t1\nATGAA\n", encoding="utf-8")
+    (species_dir / "Crichardii_676_v2.1.gene.gff3").write_text(
+        "chr1\tsrc\tgene\t1\t5\t.\t+\t.\tID=Crich_g1\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Crichardii_676_v2.0.fa").write_text(">chr1\nATGCATGC\n", encoding="utf-8")
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "fernbase",
+                    "id": "Ceratopteris_richardii",
+                    "species_key": "Ceratopteris_richardii",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_FERNBASE_ID_URL_TEMPLATE"] = "http://127.0.0.1:{}/ftp/{{id}}/".format(server.server_port)
+        download_dir = tmp_path / "download_cache"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--provider",
+                "fernbase",
+                "--download-manifest",
+                str(manifest),
+                "--download-dir",
+                str(download_dir),
+                "--download-only",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    raw_dir = download_dir / "FernBase" / "species_wise_original" / "Ceratopteris_richardii"
+    assert (raw_dir / "Crichardii_676_v2.0_cds.fa").exists()
+    assert (raw_dir / "Crichardii_676_v2.1.gene.gff3").exists()
+    assert (raw_dir / "Crichardii_676_v2.0.fa").exists()
+
+
 def test_download_manifest_ncbi_id_only_auto_resolve(tmp_path):
     ftp_root = tmp_path / "ftp_root"
     ftp_dir = ftp_root / "genomes" / "all" / "GCF" / "000" / "001" / "405" / "GCF_000001405.40_GRCh38.p14"

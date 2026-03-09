@@ -1709,9 +1709,8 @@ wait_for_background_jobs() {
   return "${status}"
 }
 
-check_species_cds() {
-  local gg_workspace_dir=$1
-  local dir_sp_cds="$(workspace_input_root "${gg_workspace_dir}")/species_cds"
+check_species_cds_dir() {
+  local dir_sp_cds=$1
   local species_cds_fasta=()
   local fasta_path
   while IFS= read -r fasta_path; do
@@ -1772,6 +1771,11 @@ check_species_cds() {
     rm -f -- "${error_log}"  # Clean up the temporary file
     echo "$(date): All per-species CDS files are valid."
   fi
+}
+
+check_species_cds() {
+  local gg_workspace_dir=$1
+  check_species_cds_dir "$(workspace_input_root "${gg_workspace_dir}")/species_cds"
 }
 
 is_output_older_than_inputs() {

@@ -88,6 +88,35 @@ def test_validate_cds_gff_mapping_fails_on_missing_ids(tmp_path):
     assert "missing=1 sample=Arabidopsis_thaliana_gene2" in completed.stderr
 
 
+def test_validate_cds_gff_mapping_allows_known_azolla_filiculoides_orphan_cds_ids(tmp_path):
+    cds_dir = tmp_path / "species_cds"
+    gff_dir = tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+
+    write_gzip_text(
+        cds_dir / "Azolla_filiculoides_demo.fa.gz",
+        (
+            ">Azolla_filiculoides_Azfi_s0001.g000001\nATGAAA\n"
+            ">Azolla_filiculoides_Azfi_s0034.g025227\nATGCCC\n"
+            ">Azolla_filiculoides_Azfi_s0093.g043301\nATGCCC\n"
+        ),
+    )
+    write_gzip_text(
+        gff_dir / "Azolla_filiculoides_demo.gff.gz",
+        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=Azfi_s0001.g000001.t1.CDS1;Parent=Azfi_s0001.g000001.t1;\n",
+    )
+
+    completed = run_script(
+        "--species-cds-dir",
+        str(cds_dir),
+        "--species-gff-dir",
+        str(gff_dir),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "[Azolla_filiculoides] CDS-to-GFF mapping OK: 1/3 IDs (allowed_missing=2)" in completed.stdout
+
+
 def test_validate_cds_gff_mapping_accepts_nthreads_and_reports_it(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"
