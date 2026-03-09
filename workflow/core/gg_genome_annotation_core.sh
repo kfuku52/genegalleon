@@ -131,7 +131,7 @@ if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]];
   echo "Invalid GG_ARRAY_TASK_ID value (must be a positive integer): ${GG_ARRAY_TASK_ID}"
   exit 1
 fi
-task_index=$((GG_ARRAY_TASK_ID-1))
+task_index=$((GG_ARRAY_TASK_ID - 1))
 if [[ ${task_index} -lt 0 || ${task_index} -ge ${#infiles[@]} ]]; then
   echo "GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID} is out of range for ${#infiles[@]} input fasta files. Exiting."
   exit 1
@@ -182,7 +182,7 @@ cd "${dir_sp_tmp}"
 ensure_dir "${dir_tmp}"
 species_cds_validation_signature=$(
   {
-    if stat --version >/dev/null 2>&1; then
+    if stat --version > /dev/null 2>&1; then
       stat -c '%n:%s:%Y' "${infiles[@]}"
     else
       stat -f '%N:%z:%m' "${infiles[@]}"
@@ -191,7 +191,7 @@ species_cds_validation_signature=$(
 )
 species_cds_validation_stamp="${dir_tmp}/species_cds_validation.${species_cds_validation_signature}.ok"
 species_cds_validation_lock="${species_cds_validation_stamp}.lock"
-if command -v flock >/dev/null 2>&1; then
+if command -v flock > /dev/null 2>&1; then
   exec 9> "${species_cds_validation_lock}"
   flock 9
   if [[ ! -s "${species_cds_validation_stamp}" ]]; then
@@ -203,7 +203,7 @@ if command -v flock >/dev/null 2>&1; then
   exec 9>&-
 else
   species_cds_validation_lock_dir="${species_cds_validation_lock}.d"
-  while ! mkdir "${species_cds_validation_lock_dir}" 2>/dev/null; do
+  while ! mkdir "${species_cds_validation_lock_dir}" 2> /dev/null; do
     sleep 1
   done
   if [[ ! -s "${species_cds_validation_stamp}" ]]; then
@@ -211,7 +211,7 @@ else
     check_if_species_files_unique "${dir_sp_cds}"
     touch "${species_cds_validation_stamp}"
   fi
-  rmdir "${species_cds_validation_lock_dir}" 2>/dev/null || true
+  rmdir "${species_cds_validation_lock_dir}" 2> /dev/null || true
 fi
 
 task="Gene trait extraction from gff files"
@@ -228,12 +228,12 @@ if [[ ! -s "${file_sp_gff_info}" && ${run_get_gff_info} -eq 1 ]]; then
   cp_out "${file_sp_gff}" ./input_gff/
 
   python "${gg_support_dir}/gff2genestat.py" \
-  --dir_gff ./input_gff \
-  --feature 'CDS' \
-  --multiple_hits 'longest' \
-  --seqfile "${file_sp_cds}" \
-  --ncpu "${GG_TASK_CPUS}" \
-  --outfile gff2genestat.tsv
+    --dir_gff ./input_gff \
+    --feature 'CDS' \
+    --multiple_hits 'longest' \
+    --seqfile "${file_sp_cds}" \
+    --ncpu "${GG_TASK_CPUS}" \
+    --outfile gff2genestat.tsv
 
   if [[ -s gff2genestat.tsv ]]; then
     mv_out gff2genestat.tsv "${file_sp_gff_info}"
@@ -244,7 +244,7 @@ fi
 
 task='BUSCO of species_cds'
 disable_if_no_input_file "run_busco_cds" "${file_sp_cds}"
-if [[ ( ! -s "${file_sp_cds_busco_full}" || ! -s "${file_sp_cds_busco_short}" ) && ${run_busco_cds} -eq 1 ]]; then
+if [[ (! -s "${file_sp_cds_busco_full}" || ! -s "${file_sp_cds_busco_short}") && ${run_busco_cds} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ -e "./busco_tmp" ]]; then
@@ -295,7 +295,7 @@ fi
 
 task='BUSCO of species_genome'
 disable_if_no_input_file "run_busco_genome" "${file_sp_genome}"
-if [[ ( ! -s "${file_sp_genome_busco_full}" || ! -s "${file_sp_genome_busco_short}" ) && ${run_busco_genome} -eq 1 ]]; then
+if [[ (! -s "${file_sp_genome_busco_full}" || ! -s "${file_sp_genome_busco_short}") && ${run_busco_genome} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ -e "./busco_tmp" ]]; then
@@ -343,11 +343,11 @@ disable_if_no_input_file "run_uniprot_annotation" "${file_sp_cds}"
 if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  seqkit seq --remove-gaps --only-id --threads "${GG_TASK_CPUS}" "${file_sp_cds}" \
-  | cdskit pad --codontable "${genetic_code}" \
-  | cdskit mask --codontable "${genetic_code}" --stopcodon yes --ambiguouscodon yes --maskchar 'N' \
-  | seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
-  > uniprot.query.pep.fas
+  seqkit seq --remove-gaps --only-id --threads "${GG_TASK_CPUS}" "${file_sp_cds}" |
+    cdskit pad --codontable "${genetic_code}" |
+    cdskit mask --codontable "${genetic_code}" --stopcodon yes --ambiguouscodon yes --maskchar 'N' |
+    seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
+      > uniprot.query.pep.fas
 
   if [[ "${uniprot_annotation_method}" == "blastp" ]]; then
     if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then
@@ -356,13 +356,13 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
     fi
 
     blastp \
-    -query uniprot.query.pep.fas \
-    -num_threads "${GG_TASK_CPUS}" \
-    -db "${uniprot_db_prefix}" \
-    -out uniprot.search.tsv \
-    -outfmt "6 qseqid sseqid pident length evalue bitscore qlen" \
-    -max_target_seqs 1 \
-    -evalue 1e-2
+      -query uniprot.query.pep.fas \
+      -num_threads "${GG_TASK_CPUS}" \
+      -db "${uniprot_db_prefix}" \
+      -out uniprot.search.tsv \
+      -outfmt "6 qseqid sseqid pident length evalue bitscore qlen" \
+      -max_target_seqs 1 \
+      -evalue 1e-2
   else
     if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${gg_workspace_dir}"); then
       echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
@@ -371,22 +371,22 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
 
     mmseqs createdb "uniprot.query.pep.fas" "uniprot.queryDB"
     mmseqs search "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "tmp_mmseqs2_uniprot" \
-    --threads "${GG_TASK_CPUS}" \
-    --max-seqs 1 \
-    -e 1e-2 \
-    -s 7.5
+      --threads "${GG_TASK_CPUS}" \
+      --max-seqs 1 \
+      -e 1e-2 \
+      -s 7.5
     mmseqs convertalis "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "uniprot.search.tsv" \
-    --threads "${GG_TASK_CPUS}" \
-    --format-output "query,target,pident,alnlen,evalue,bits,qlen"
+      --threads "${GG_TASK_CPUS}" \
+      --format-output "query,target,pident,alnlen,evalue,bits,qlen"
     rm -f -- uniprot.queryDB* uniprot.resultDB*
     rm -rf -- "tmp_mmseqs2_uniprot"
   fi
 
   python "${gg_support_dir}/reformat_uniprot_diamond.py" \
-  --diamond_tsv uniprot.search.tsv \
-  --query_fasta uniprot.query.pep.fas \
-  --uniprot_fasta "${uniprot_db_prefix}.pep" \
-  --outfile uniprot.annotation.tsv
+    --diamond_tsv uniprot.search.tsv \
+    --query_fasta uniprot.query.pep.fas \
+    --uniprot_fasta "${uniprot_db_prefix}.pep" \
+    --outfile uniprot.annotation.tsv
 
   cp_out uniprot.annotation.tsv "${file_sp_uniprot_annotation}"
 else
@@ -399,15 +399,15 @@ if [[ ! -s "${file_sp_cds_fx2tab}" && ${run_cds_fx2tab} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit fx2tab \
-  --threads "${GG_TASK_CPUS}" \
-  --length \
-  --name \
-  --gc \
-  --gc-skew \
-  --header-line \
-  --only-id \
-  "${file_sp_cds}" \
-  > "tmp.cds_length.tsv"
+    --threads "${GG_TASK_CPUS}" \
+    --length \
+    --name \
+    --gc \
+    --gc-skew \
+    --header-line \
+    --only-id \
+    "${file_sp_cds}" \
+    > "tmp.cds_length.tsv"
 
   if [[ -s "tmp.cds_length.tsv" ]]; then
     echo "Output file detected for the task: ${task}"
@@ -419,7 +419,7 @@ fi
 
 task="MMseqs2 Taxonomy of the CDS sequences"
 disable_if_no_input_file "run_cds_mmseqs2taxonomy" "${file_sp_cds}"
-if [[ ! -s "${file_sp_cds_mmseqs2taxonomy}" && ${run_cds_mmseqs2taxonomy} -eq 1  && ${gg_debug_mode:-0} -eq 0 ]]; then
+if [[ ! -s "${file_sp_cds_mmseqs2taxonomy}" && ${run_cds_mmseqs2taxonomy} -eq 1 && ${gg_debug_mode:-0} -eq 0 ]]; then
   gg_step_start "${task}"
 
   if ! ensure_mmseqs_uniref90_db "${dir_mmseqs2_db}" "${GG_TASK_CPUS}"; then
@@ -436,14 +436,14 @@ if [[ ! -s "${file_sp_cds_mmseqs2taxonomy}" && ${run_cds_mmseqs2taxonomy} -eq 1 
   fi
 
   mmseqs taxonomy "queryDB" "${dir_mmseqs2_db}/UniRef90_DB" "output_prefix" "tmp" \
-  --split-mode 2 \
-  --split-memory-limit $((${GG_MEM_TOTAL_GB}*3/4))G \
-  --majority 0.5 \
-  --lca-mode 3 \
-  --vote-mode 1 \
-  --tax-lineage 2 \
-  --orf-filter 1 \
-  --threads "${GG_TASK_CPUS}"
+    --split-mode 2 \
+    --split-memory-limit $((${GG_MEM_TOTAL_GB} * 3 / 4))G \
+    --majority 0.5 \
+    --lca-mode 3 \
+    --vote-mode 1 \
+    --tax-lineage 2 \
+    --orf-filter 1 \
+    --threads "${GG_TASK_CPUS}"
 
   mmseqs createtsv "queryDB" "output_prefix" "result.tsv" --threads "${GG_TASK_CPUS}"
 
@@ -460,7 +460,7 @@ fi
 
 task="Contaminated sequence removal from the CDS sequences"
 disable_if_no_input_file "run_cds_contamination_removal" "${file_sp_cds}" "${file_sp_cds_fx2tab}" "${file_sp_cds_mmseqs2taxonomy}"
-if [[ ( ! -s "${file_sp_cds_contamination_removal_fasta}" || ! -s "${file_sp_cds_contamination_removal_tsv}" ) && ${run_cds_contamination_removal} -eq 1 ]]; then
+if [[ (! -s "${file_sp_cds_contamination_removal_fasta}" || ! -s "${file_sp_cds_contamination_removal_tsv}") && ${run_cds_contamination_removal} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
@@ -469,14 +469,14 @@ if [[ ( ! -s "${file_sp_cds_contamination_removal_fasta}" || ! -s "${file_sp_cds
   fi
 
   python "${gg_support_dir}/remove_contaminated_sequences.py" \
-  --fasta_file "${file_sp_cds}" \
-  --mmseqs2taxonomy_tsv "${file_sp_cds_mmseqs2taxonomy}" \
-  --fx2tab_tsv "${file_sp_cds_fx2tab}" \
-  --species_name "${sp_ub}" \
-  --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
-  --ncpu "${GG_TASK_CPUS}" \
-  --rename_seq "no" \
-  --verbose "no"
+    --fasta_file "${file_sp_cds}" \
+    --mmseqs2taxonomy_tsv "${file_sp_cds_mmseqs2taxonomy}" \
+    --fx2tab_tsv "${file_sp_cds_fx2tab}" \
+    --species_name "${sp_ub}" \
+    --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
+    --ncpu "${GG_TASK_CPUS}" \
+    --rename_seq "no" \
+    --verbose "no"
 
   if [[ -s "clean_sequences.fa" && -s "lineage_compatibility.tsv" ]]; then
     echo "Output file detected for the task: ${task}"
@@ -504,17 +504,17 @@ if [[ ! -s "${file_sp_annotation}" ]] && [[ ${run_annotation} -eq 1 ]]; then
 
   ensure_parent_dir "${file_sp_annotation}"
   python "${gg_support_dir}/merge_cds_annotation.py" \
-  --scientific_name "${sp_ub}" \
-  --cds_fasta "${file_sp_cds}" \
-  --uniprot_tsv "${file_sp_uniprot_annotation}" \
-  --busco_tsv "${file_sp_cds_busco_full}" \
-  --expression_tsv "${file_sp_expression}" \
-  --gff_info "${file_sp_gff_info}" \
-  --orthogroup_tsv "${file_orthogroup}" \
-  --mmseqs2taxonomy_tsv "${file_sp_cds_mmseqs2taxonomy}" \
-  --fx2tab "${file_sp_cds_fx2tab}" \
-  --ncpu "${GG_TASK_CPUS}" \
-  --out_tsv "tmp.annotation.tsv"
+    --scientific_name "${sp_ub}" \
+    --cds_fasta "${file_sp_cds}" \
+    --uniprot_tsv "${file_sp_uniprot_annotation}" \
+    --busco_tsv "${file_sp_cds_busco_full}" \
+    --expression_tsv "${file_sp_expression}" \
+    --gff_info "${file_sp_gff_info}" \
+    --orthogroup_tsv "${file_orthogroup}" \
+    --mmseqs2taxonomy_tsv "${file_sp_cds_mmseqs2taxonomy}" \
+    --fx2tab "${file_sp_cds_fx2tab}" \
+    --ncpu "${GG_TASK_CPUS}" \
+    --out_tsv "tmp.annotation.tsv"
   if [[ -s "tmp.annotation.tsv" ]]; then
     mv_out "tmp.annotation.tsv" "${file_sp_annotation}"
   fi
@@ -527,19 +527,19 @@ disable_if_no_input_file "run_wgd_ksd" "${file_sp_cds}"
 if [[ ! -s "${file_sp_wgd_ksd}" && ${run_wgd_ksd} -eq 1 && ${gg_debug_mode:-0} -eq 0 ]]; then
   gg_step_start "${task}"
 
-  seqkit seq --remove-gaps --upper-case --threads "${GG_TASK_CPUS}" "${file_sp_cds}" \
-  | gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${genetic_code}" \
-  | cdskit mask --codontable "${genetic_code}" --stopcodon no --ambiguouscodon yes --maskchar 'N' \
-  > "tmp.${sp_ub}.nuc.fasta"
+  seqkit seq --remove-gaps --upper-case --threads "${GG_TASK_CPUS}" "${file_sp_cds}" |
+    gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${genetic_code}" |
+    cdskit mask --codontable "${genetic_code}" --stopcodon no --ambiguouscodon yes --maskchar 'N' \
+      > "tmp.${sp_ub}.nuc.fasta"
 
-  wgd dmd --ignorestop  --nostrictcds "tmp.${sp_ub}.nuc.fasta"
+  wgd dmd --ignorestop --nostrictcds "tmp.${sp_ub}.nuc.fasta"
   wgd --verbosity debug ksd \
-  --aligner 'mafft' \
-  --wm 'alc' \
-  --n_threads "${GG_TASK_CPUS}" \
-  --max_pairwise 1000 \
-  "./wgd_dmd/tmp.${sp_ub}.nuc.fasta.mcl" \
-  "tmp.${sp_ub}.nuc.fasta"
+    --aligner 'mafft' \
+    --wm 'alc' \
+    --n_threads "${GG_TASK_CPUS}" \
+    --max_pairwise 1000 \
+    "./wgd_dmd/tmp.${sp_ub}.nuc.fasta.mcl" \
+    "tmp.${sp_ub}.nuc.fasta"
 
 else
   gg_step_skip "${task}"
@@ -582,15 +582,15 @@ if [[ ! -s "${file_sp_genome_fx2tab}" && ${run_genome_fx2tab} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit fx2tab \
-  --threads "${GG_TASK_CPUS}" \
-  --length \
-  --name \
-  --gc \
-  --gc-skew \
-  --header-line \
-  --only-id \
-  "${file_sp_genome}" \
-  > "tmp.scaffold_length.tsv"
+    --threads "${GG_TASK_CPUS}" \
+    --length \
+    --name \
+    --gc \
+    --gc-skew \
+    --header-line \
+    --only-id \
+    "${file_sp_genome}" \
+    > "tmp.scaffold_length.tsv"
 
   if [[ -s "tmp.scaffold_length.tsv" ]]; then
     echo "Output file detected for the task: ${task}"
@@ -606,8 +606,8 @@ if [[ ! -s "${file_sp_scaffold_histogram}" && ${run_scaffold_histogram} -eq 1 ]]
   gg_step_start "${task}"
 
   python "${gg_support_dir}/scaffold_size_histogram.py" \
-  --min_scaffold_size 1000000 \
-  --fx2tab "${file_sp_genome_fx2tab}"
+    --min_scaffold_size 1000000 \
+    --fx2tab "${file_sp_genome_fx2tab}"
 
   if [[ -s "scaffold_size_histogram.pdf" ]]; then
     echo "Output file detected for the task: ${task}"
@@ -636,14 +636,14 @@ if [[ ! -s "${file_sp_genome_mmseqs2taxonomy}" && ${run_genome_mmseqs2taxonomy} 
   fi
 
   mmseqs taxonomy "queryDB" "${dir_mmseqs2_db}/UniRef90_DB" "output_prefix" "tmp" \
-  --split-mode 2 \
-  --split-memory-limit $((${GG_MEM_TOTAL_GB}*3/4))G \
-  --majority 0.5 \
-  --lca-mode 3 \
-  --vote-mode 1 \
-  --tax-lineage 2 \
-  --orf-filter 1 \
-  --threads "${GG_TASK_CPUS}"
+    --split-mode 2 \
+    --split-memory-limit $((${GG_MEM_TOTAL_GB} * 3 / 4))G \
+    --majority 0.5 \
+    --lca-mode 3 \
+    --vote-mode 1 \
+    --tax-lineage 2 \
+    --orf-filter 1 \
+    --threads "${GG_TASK_CPUS}"
 
   mmseqs createtsv "queryDB" "output_prefix" "result.tsv" --threads "${GG_TASK_CPUS}"
 
@@ -660,7 +660,7 @@ fi
 
 task="Contaminated sequence removal from the reference genome"
 disable_if_no_input_file "run_genome_contamination_removal" "${file_sp_genome}" "${file_sp_genome_mmseqs2taxonomy}" "${file_sp_genome_fx2tab}"
-if [[ ( ! -s "${file_sp_genome_contamination_removal_fasta}" || ! -s "${file_sp_genome_contamination_removal_tsv}" ) && ${run_genome_contamination_removal} -eq 1 ]]; then
+if [[ (! -s "${file_sp_genome_contamination_removal_fasta}" || ! -s "${file_sp_genome_contamination_removal_tsv}") && ${run_genome_contamination_removal} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
@@ -669,15 +669,15 @@ if [[ ( ! -s "${file_sp_genome_contamination_removal_fasta}" || ! -s "${file_sp_
   fi
 
   python "${gg_support_dir}/remove_contaminated_sequences.py" \
-  --fasta_file "${file_sp_genome}" \
-  --mmseqs2taxonomy_tsv "${file_sp_genome_mmseqs2taxonomy}" \
-  --fx2tab_tsv "${file_sp_genome_fx2tab}" \
-  --species_name "${sp_ub}" \
-  --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
-  --ncpu "${GG_TASK_CPUS}" \
-  --rename_seq "yes" \
-  --rename_prefix "scaffold" \
-  --verbose "no"
+    --fasta_file "${file_sp_genome}" \
+    --mmseqs2taxonomy_tsv "${file_sp_genome_mmseqs2taxonomy}" \
+    --fx2tab_tsv "${file_sp_genome_fx2tab}" \
+    --species_name "${sp_ub}" \
+    --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
+    --ncpu "${GG_TASK_CPUS}" \
+    --rename_seq "yes" \
+    --rename_prefix "scaffold" \
+    --verbose "no"
 
   if [[ -s "clean_sequences.fa" && -s "lineage_compatibility.tsv" ]]; then
     echo "Output file detected for the task: ${task}"
@@ -692,42 +692,45 @@ else
 fi
 
 task="GenomeScope"
-if [[ ! -e "${dir_sp_dnaseq}/${sp_ub}" ]]; then echo "dir_sp_dnaseq/sp not found. Skipping ${task}"; run_genomescope=0; fi
+if [[ ! -e "${dir_sp_dnaseq}/${sp_ub}" ]]; then
+  echo "dir_sp_dnaseq/sp not found. Skipping ${task}"
+  run_genomescope=0
+fi
 if [[ ! -s "${file_sp_genomescope}" && ${run_genomescope} -eq 1 ]]; then
   gg_step_start "${task}"
 
-	if [[ -e "${sp_ub}.genomescope" ]]; then
-	  rm -rf -- "${sp_ub}.genomescope"
-	fi
-		mkdir -p "${sp_ub}.genomescope"
+  if [[ -e "${sp_ub}.genomescope" ]]; then
+    rm -rf -- "${sp_ub}.genomescope"
+  fi
+  mkdir -p "${sp_ub}.genomescope"
 
-	fastq_files=()
-	mapfile -t fastq_files < <(find "${dir_sp_dnaseq}/${sp_ub}" -type f ! -name '.*' \( -name "*.fq" -o -name "*.fastq" -o -name "*.fq.gz" -o -name "*.fastq.gz" \) | sort)
-	if [[ ${#fastq_files[@]} -eq 0 ]]; then
-	  echo "No FASTQ files were found in: ${dir_sp_dnaseq}/${sp_ub}. Skipping ${task}."
-	else
-	  printf '%s\n' "${fastq_files[@]}" > input_fastq_files.txt
-	  klength=21
-	  kmer_lower=1
-	  kmer_upper=1000 # Could be automatically calculated with the file from species_genome
-	  if [[ -e ./tmp ]]; then
-	    rm -rf -- ./tmp
-	  fi
-	  mkdir -p ./tmp
-	  kmc -k${klength} -t${GG_TASK_CPUS} -m${GG_MEM_TOTAL_GB} -ci${kmer_lower} -cs${kmer_upper} @input_fastq_files.txt tmp.reads ./tmp
-	  kmc_tools transform tmp.reads histogram tmp.reads.histo -cx${kmer_upper}
-	  rm -rf -- ./tmp
-	  /usr/local/bin/genomescope2.0/genomescope.R -i "tmp.reads.histo" -o "${sp_ub}.genomescope" -k ${klength}
+  fastq_files=()
+  mapfile -t fastq_files < <(find "${dir_sp_dnaseq}/${sp_ub}" -type f ! -name '.*' \( -name "*.fq" -o -name "*.fastq" -o -name "*.fq.gz" -o -name "*.fastq.gz" \) | sort)
+  if [[ ${#fastq_files[@]} -eq 0 ]]; then
+    echo "No FASTQ files were found in: ${dir_sp_dnaseq}/${sp_ub}. Skipping ${task}."
+  else
+    printf '%s\n' "${fastq_files[@]}" > input_fastq_files.txt
+    klength=21
+    kmer_lower=1
+    kmer_upper=1000 # Could be automatically calculated with the file from species_genome
+    if [[ -e ./tmp ]]; then
+      rm -rf -- ./tmp
+    fi
+    mkdir -p ./tmp
+    kmc -k${klength} -t${GG_TASK_CPUS} -m${GG_MEM_TOTAL_GB} -ci${kmer_lower} -cs${kmer_upper} @input_fastq_files.txt tmp.reads ./tmp
+    kmc_tools transform tmp.reads histogram tmp.reads.histo -cx${kmer_upper}
+    rm -rf -- ./tmp
+    /usr/local/bin/genomescope2.0/genomescope.R -i "tmp.reads.histo" -o "${sp_ub}.genomescope" -k ${klength}
 
-	  if [[ -s "${sp_ub}.genomescope/transformed_linear_plot.png" ]]; then
-	    echo "GenomeScope output file was detected. Start compressing."
-	    mv_out "tmp.reads.histo" "${sp_ub}.genomescope/kmc.histo.tsv"
-	    zip -rq "${sp_ub}.genomescope.zip" "${sp_ub}.genomescope"
-	    mv_out "${sp_ub}.genomescope.zip" "${file_sp_genomescope}"
-	  fi
-	fi
+    if [[ -s "${sp_ub}.genomescope/transformed_linear_plot.png" ]]; then
+      echo "GenomeScope output file was detected. Start compressing."
+      mv_out "tmp.reads.histo" "${sp_ub}.genomescope/kmc.histo.tsv"
+      zip -rq "${sp_ub}.genomescope.zip" "${sp_ub}.genomescope"
+      mv_out "${sp_ub}.genomescope.zip" "${file_sp_genomescope}"
+    fi
+  fi
 else
-	gg_step_skip "${task}"
+  gg_step_skip "${task}"
 fi
 
 task="JCVI synteny dotplot"
@@ -765,7 +768,7 @@ if [[ ! -s "${file_sp_jcvi_dotplot}" && ${run_jcvi_dotplot} -eq 1 ]]; then
   selected_scaffold_list=()
   mapfile -t selected_scaffold_list < <(printf '%s' "${selected_scaffolds}" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d')
   for scaffold in "${selected_scaffold_list[@]}"; do
-      awk -v scaffold="${scaffold}" '$1 == scaffold' tmp.species1.bed >> species1.bed
+    awk -v scaffold="${scaffold}" '$1 == scaffold' tmp.species1.bed >> species1.bed
   done
   cp_out species1.bed species2.bed
   cp_out species1.cds species2.cds
@@ -829,16 +832,16 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
   cd "$(dirname "${file_multispecies_summary}")"
 
   Rscript "${gg_support_dir}/annotation_summary.r" \
-  --dir_species_tree="${gg_workspace_output_dir}/species_tree" \
-  --dir_species_cds_busco="${gg_workspace_output_dir}/species_cds_busco_full" \
-  --dir_species_genome_busco="${gg_workspace_output_dir}/species_genome_busco_full" \
-  --dir_species_annotation="${gg_workspace_output_dir}/species_cds_annotation" \
-  --dir_species_cds_fx2tab="${gg_workspace_output_dir}/species_cds_fx2tab" \
-  --dir_species_genome_fx2tab="${gg_workspace_output_dir}/species_genome_fx2tab" \
-  --file_species_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv" \
-  --file_orthogroup_gene_count="${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.tsv" \
-  --tree_annotation_dir="${gg_support_dir}/tree_annotation" \
-  --min_og_species='auto'
+    --dir_species_tree="${gg_workspace_output_dir}/species_tree" \
+    --dir_species_cds_busco="${gg_workspace_output_dir}/species_cds_busco_full" \
+    --dir_species_genome_busco="${gg_workspace_output_dir}/species_genome_busco_full" \
+    --dir_species_annotation="${gg_workspace_output_dir}/species_cds_annotation" \
+    --dir_species_cds_fx2tab="${gg_workspace_output_dir}/species_cds_fx2tab" \
+    --dir_species_genome_fx2tab="${gg_workspace_output_dir}/species_genome_fx2tab" \
+    --file_species_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv" \
+    --file_orthogroup_gene_count="${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.tsv" \
+    --tree_annotation_dir="${gg_support_dir}/tree_annotation" \
+    --min_og_species='auto'
 
   if [[ -e "Rplots.pdf" ]]; then
     rm -f -- "Rplots.pdf"
@@ -851,12 +854,12 @@ fi
 
 remove_empty_subdirs "${gg_workspace_output_dir}"
 if [[ ${delete_tmp_dir} -eq 1 ]]; then
-    echo "Deleting tmp directory: ${dir_sp_tmp}"
-    if [[ -n "${dir_sp_tmp:-}" && "${dir_sp_tmp}" != "/" ]]; then
-      rm -rf -- "${dir_sp_tmp}"
-    else
-      echo "Refusing to delete unsafe tmp directory: '${dir_sp_tmp:-}'"
-    fi
+  echo "Deleting tmp directory: ${dir_sp_tmp}"
+  if [[ -n "${dir_sp_tmp:-}" && "${dir_sp_tmp}" != "/" ]]; then
+    rm -rf -- "${dir_sp_tmp}"
+  else
+    echo "Refusing to delete unsafe tmp directory: '${dir_sp_tmp:-}'"
+  fi
 fi
 
 echo "$(date): Exiting Singularity environment"

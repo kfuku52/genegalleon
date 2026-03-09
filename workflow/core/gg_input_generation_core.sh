@@ -37,7 +37,7 @@ trait_databases="${trait_databases:-auto}"
 enable_all_run_flags_for_debug_mode
 
 case "${trait_profile}" in
-  ""|none)
+  "" | none)
     trait_profile="none"
     ;;
   gift_starter)
@@ -58,11 +58,11 @@ if [[ -n "${download_manifest}" ]]; then
 fi
 
 case "${provider}" in
-  refseq|genbank)
+  refseq | genbank)
     echo "Provider '${provider}' is treated as alias of 'ncbi'."
     provider="ncbi"
     ;;
-  all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|coge|cngb|flybase|wormbase|vectorbase|fernbase|local) ;;
+  all | ensembl | ensemblplants | phycocosm | phytozome | ncbi | coge | cngb | flybase | wormbase | vectorbase | fernbase | local) ;;
   *)
     echo "Invalid provider: ${provider} (allowed: all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|coge|cngb|flybase|wormbase|vectorbase|fernbase|local)"
     exit 1
@@ -76,8 +76,7 @@ for binary_flag_name in \
   strict \
   overwrite \
   download_only \
-  dry_run
-do
+  dry_run; do
   binary_flag_value="${!binary_flag_name}"
   if [[ "${binary_flag_value}" != "0" && "${binary_flag_value}" != "1" ]]; then
     echo "Invalid binary flag value: ${binary_flag_name}=${binary_flag_value} (expected 0 or 1)"
@@ -161,7 +160,7 @@ manifest_data_row_count() {
     return 0
   fi
   if [[ "${manifest_path##*.}" == "xlsx" ]]; then
-    python - "${manifest_path}" <<'PY'
+    python - "${manifest_path}" << 'PY'
 import sys
 from pathlib import Path
 
@@ -208,7 +207,7 @@ PY
 read_stats_json_field() {
   local stats_file="$1"
   local field_name="$2"
-  python - "${stats_file}" "${field_name}" <<'PY'
+  python - "${stats_file}" "${field_name}" << 'PY'
 import json
 import sys
 path = sys.argv[1]
@@ -234,7 +233,7 @@ write_gg_input_generation_summary_on_exit() {
   local row
 
   run_ended_iso=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-  run_duration_sec=$(( $(date +%s) - run_started_epoch ))
+  run_duration_sec=$(($(date +%s) - run_started_epoch))
 
   if [[ ${exit_code} -ne 0 ]]; then
     if [[ "${stage_format_status}" == "running" ]]; then stage_format_status="failed"; fi

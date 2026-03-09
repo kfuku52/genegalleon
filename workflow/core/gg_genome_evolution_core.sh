@@ -167,7 +167,7 @@ parse_species_tree_rooting() {
         return 1
       fi
       value_ref=""
-      for (( idx=1; idx<${#normalized_fields[@]}; idx++ )); do
+      for ((idx = 1; idx < ${#normalized_fields[@]}; idx++)); do
         if [[ -z "${normalized_fields[idx]}" ]]; then
           continue
         fi
@@ -182,7 +182,7 @@ parse_species_tree_rooting() {
         return 1
       fi
       ;;
-    midpoint|mad|mv)
+    midpoint | mad | mv)
       if [[ ${#normalized_fields[@]} -gt 1 ]]; then
         echo "species_tree_rooting=${raw_config} is invalid."
         echo "Method ${method} does not accept additional comma-separated fields."
@@ -201,7 +201,7 @@ parse_species_tree_rooting() {
       ;;
     taxonomy)
       value_ref=""
-      for (( idx=1; idx<${#normalized_fields[@]}; idx++ )); do
+      for ((idx = 1; idx < ${#normalized_fields[@]}; idx++)); do
         if [[ -z "${normalized_fields[idx]}" ]]; then
           continue
         fi
@@ -333,10 +333,10 @@ dir_cafe_output="${dir_cafe}/cafe_output"
 # Output files
 # Species tree
 file_species_busco_summary_table="${dir_species_tree}/busco_summary_table/busco_summary.tsv"
-file_astral_tree_dna_q1="${dir_astral_dna}/single_copy.astral.dna.q1.nwk" # Quartet supports for the main topology; The lengths of terminal branches are not computed.
+file_astral_tree_dna_q1="${dir_astral_dna}/single_copy.astral.dna.q1.nwk"     # Quartet supports for the main topology; The lengths of terminal branches are not computed.
 file_astral_tree_dna="${dir_astral_dna}/single_copy.astral.dna.optimized.nwk" # ASTRAL topology with branch lengths optimized by IQ-TREE.
 file_astral_log_dna="${dir_astral_dna}/single_copy.astral.dna.log"
-file_astral_tree_pep_q1="${dir_astral_pep}/single_copy.astral.pep.q1.nwk" # Quartet supports for the main topology; The lengths of terminal branches are not computed.
+file_astral_tree_pep_q1="${dir_astral_pep}/single_copy.astral.pep.q1.nwk"     # Quartet supports for the main topology; The lengths of terminal branches are not computed.
 file_astral_tree_pep="${dir_astral_pep}/single_copy.astral.pep.optimized.nwk" # ASTRAL topology with branch lengths optimized by IQ-TREE.
 file_astral_log_pep="${dir_astral_pep}/single_copy.astral.pep.log"
 file_concat_cds="${dir_concat_fasta}/concat.cds.trimal.fa.gz"
@@ -402,7 +402,7 @@ if [[ -n "${species_tree_rooting_value}" ]]; then
   echo "Resolved species_tree_rooting value: ${species_tree_rooting_value}"
 fi
 
-root_species_tree () {
+root_species_tree() {
   local infile=$1
   local outfile=$2
   local tree_description=$3
@@ -416,7 +416,7 @@ root_species_tree () {
   ensure_parent_dir "${outfile}"
   rm -f -- "${outfile}" "${root_log}"
 
-  nwkit_root_args=( --method "${root_method}" --infile "${infile}" --outfile "${outfile}" )
+  nwkit_root_args=(--method "${root_method}" --infile "${infile}" --outfile "${outfile}")
   if [[ "${root_method}" == "outgroup" ]]; then
     mapfile -t outgroup_label_list < <(printf '%s' "${root_value}" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d')
     for outgroup_label in "${outgroup_label_list[@]}"; do
@@ -429,12 +429,12 @@ root_species_tree () {
       echo "Error: Outgroup labels (${root_value}) are not present in ${tree_description}."
       return 1
     fi
-    nwkit_root_args+=( --outgroup "${root_value}" )
+    nwkit_root_args+=(--outgroup "${root_value}")
   elif [[ "${root_method}" == "taxonomy" ]]; then
     ensure_dir "${dir_nwkit_download_dir}"
-    nwkit_root_args+=( --download_dir "${dir_nwkit_download_dir}" )
+    nwkit_root_args+=(--download_dir "${dir_nwkit_download_dir}")
     if [[ -n "${root_value}" ]]; then
-      nwkit_root_args+=( --taxonomy_source "${root_value}" )
+      nwkit_root_args+=(--taxonomy_source "${root_value}")
     fi
   fi
 
@@ -455,7 +455,7 @@ root_species_tree () {
   return 1
 }
 
-normalize_iq2mc_constraint_tree () {
+normalize_iq2mc_constraint_tree() {
   local infile=$1
   local tmpfile
 
@@ -478,7 +478,7 @@ normalize_iq2mc_constraint_tree () {
   return 0
 }
 
-iq2mc_option_supported () {
+iq2mc_option_supported() {
   local candidate=$1
   local resolved_candidate
   local probe_prefix
@@ -486,14 +486,14 @@ iq2mc_option_supported () {
   local probe_tree
   local probe_rc=1
   local probe_hessian=""
-  resolved_candidate=$(command -v "${candidate}" 2>/dev/null || true)
+  resolved_candidate=$(command -v "${candidate}" 2> /dev/null || true)
 
   # Avoid pipefail+SIGPIPE false negatives from `... | grep -q`.
   if grep -q -- "--mcmc-bds" < <("${candidate}" -h 2>&1 || true); then
     return 0
   fi
-  if command -v strings >/dev/null 2>&1 && [[ -n "${resolved_candidate}" ]]; then
-    if grep -q -- "--mcmc-bds" < <(strings "${resolved_candidate}" 2>/dev/null || true); then
+  if command -v strings > /dev/null 2>&1 && [[ -n "${resolved_candidate}" ]]; then
+    if grep -q -- "--mcmc-bds" < <(strings "${resolved_candidate}" 2> /dev/null || true); then
       return 0
     fi
   fi
@@ -503,7 +503,7 @@ iq2mc_option_supported () {
   probe_aln="${probe_prefix}.fa"
   probe_tree="${probe_prefix}.nwk"
   probe_hessian="${probe_prefix}.mcmctree.hessian"
-  cat > "${probe_aln}" <<'EOF'
+  cat > "${probe_aln}" << 'EOF'
 >a
 ACGT
 >b
@@ -511,7 +511,7 @@ ACGT
 >c
 ACGT
 EOF
-  cat > "${probe_tree}" <<'EOF'
+  cat > "${probe_tree}" << 'EOF'
 ((a:0.1,b:0.1):0.1,c:0.1);
 EOF
   if [[ -s "${probe_aln}" && -s "${probe_tree}" ]]; then
@@ -524,25 +524,25 @@ EOF
       --dating mcmctree \
       --mcmc-bds 1,1,0.5 \
       --prefix "${probe_prefix}" \
-      --redo >/dev/null 2>&1; then
+      --redo > /dev/null 2>&1; then
       probe_rc=0
     else
       probe_rc=$?
     fi
   fi
   if [[ ${probe_rc} -eq 0 && -s "${probe_hessian}" ]]; then
-    rm -f -- "${probe_aln}" "${probe_tree}" "${probe_prefix}".* 2>/dev/null || true
+    rm -f -- "${probe_aln}" "${probe_tree}" "${probe_prefix}".* 2> /dev/null || true
     return 0
   fi
-  rm -f -- "${probe_aln}" "${probe_tree}" "${probe_prefix}".* 2>/dev/null || true
+  rm -f -- "${probe_aln}" "${probe_tree}" "${probe_prefix}".* 2> /dev/null || true
 
   return 1
 }
 
-resolve_iq2mc_binary () {
+resolve_iq2mc_binary() {
   local candidate
   for candidate in iqtree3 iqtree; do
-    if ! command -v "${candidate}" >/dev/null 2>&1; then
+    if ! command -v "${candidate}" > /dev/null 2>&1; then
       continue
     fi
     if iq2mc_option_supported "${candidate}"; then
@@ -553,9 +553,9 @@ resolve_iq2mc_binary () {
   return 1
 }
 
-count_newick_tips () {
+count_newick_tips() {
   local tree_file=$1
-  python - "${tree_file}" <<'PY'
+  python - "${tree_file}" << 'PY'
 import sys
 from Bio import Phylo
 try:
@@ -566,7 +566,7 @@ except Exception:
 PY
 }
 
-build_astral_input () {
+build_astral_input() {
   local tree_dir=$1
   local merged_file=$2
   local min_tips=$3
@@ -604,7 +604,7 @@ build_astral_input () {
   return 0
 }
 
-optimize_astral_tree_branch_lengths () {
+optimize_astral_tree_branch_lengths() {
   local astral_support_tree=$1
   local concat_alignment=$2
   local model=$3
@@ -644,14 +644,14 @@ optimize_astral_tree_branch_lengths () {
   fi
 
   iqtree \
-  -s "${tmp_concat_alignment}" \
-  -te "${tmp_topology}" \
-  -m "${model}" \
-  -n 0 \
-  -T "${GG_TASK_CPUS}" \
-  --prefix "${iqtree_prefix}" \
-  --seed 12345 \
-  --redo
+    -s "${tmp_concat_alignment}" \
+    -te "${tmp_topology}" \
+    -m "${model}" \
+    -n 0 \
+    -T "${GG_TASK_CPUS}" \
+    --prefix "${iqtree_prefix}" \
+    --seed 12345 \
+    --redo
 
   if [[ ! -s "${iqtree_prefix}.treefile" ]]; then
     echo "Warning: IQ-TREE optimization did not produce a tree for ${tag}."
@@ -723,7 +723,7 @@ if [[ ${run_mcmctree1} -eq 1 || ${run_mcmctree2} -eq 1 ]]; then
     echo "Warning: Could not verify --mcmc-bds support in ${iq2mc_binary} by help/strings checks."
     echo "Warning: Proceeding with ${iq2mc_binary}; IQ2MC step 2 will fail if this binary is incompatible."
   fi
-  if ! command -v mcmctree >/dev/null 2>&1; then
+  if ! command -v mcmctree > /dev/null 2>&1; then
     echo "Error: mcmctree command was not found."
     echo "Please install the IQ2MC-compatible mcmctree binary."
     exit 1
@@ -777,7 +777,7 @@ if [[ ${run_species_busco} -eq 1 ]]; then
   mapfile -t busco_output_files < <(
     find "${dir_species_busco_full}" "${dir_species_busco_short}" -maxdepth 1 -type f \
       \( -name "*.busco.full.tsv" -o -name "*.busco.short.txt" \) \
-      2>/dev/null | sort
+      2> /dev/null | sort
   )
   for busco_file in "${busco_output_files[@]}"; do
     busco_base=$(basename "${busco_file}")
@@ -820,17 +820,17 @@ if [[ ${run_species_busco} -eq 1 ]]; then
       fi
       dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-	      busco \
-	      --in "tmp.busco_input.cds.fasta" \
-	      --mode "transcriptome" \
-	      --out "busco_tmp" \
-	      --cpu "${GG_TASK_CPUS}" \
-	      --force \
-	      --evalue 1e-03 \
-	      --limit 20 \
-	      --lineage_dataset "${dir_busco_lineage}" \
-	      --download_path "${dir_busco_db}" \
-	      --offline
+      busco \
+        --in "tmp.busco_input.cds.fasta" \
+        --mode "transcriptome" \
+        --out "busco_tmp" \
+        --cpu "${GG_TASK_CPUS}" \
+        --force \
+        --evalue 1e-03 \
+        --limit 20 \
+        --lineage_dataset "${dir_busco_lineage}" \
+        --download_path "${dir_busco_db}" \
+        --offline
 
       if copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
         rm -rf -- "./busco_tmp"
@@ -860,9 +860,9 @@ if [[ ! -s "${file_species_busco_summary_table}" && ${run_species_get_busco_summ
   ensure_parent_dir "${file_species_busco_summary_table}"
 
   python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
-  --busco_outdir "${dir_species_busco_full}" \
-  --ncpu "${GG_TASK_CPUS}" \
-  --outfile "tmp.busco_summary_table.tsv"
+    --busco_outdir "${dir_species_busco_full}" \
+    --ncpu "${GG_TASK_CPUS}" \
+    --outfile "tmp.busco_summary_table.tsv"
   mv_out "tmp.busco_summary_table.tsv" "${file_species_busco_summary_table}"
 
   num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
@@ -914,15 +914,15 @@ if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_individual_get_fasta
       for gene in "${genes1[@]}"; do
         pattern_args+=(--pattern "${gene}")
       done
-      seqkit grep --threads 1 "${pattern_args[@]}" --infile-list "species_cds_fasta_list.txt" \
-      | seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads 1 \
-      | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 \
-      | cdskit pad \
-      | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/" \
-      | seqkit seq --threads 1 --out-file "${outfile1}"
+      seqkit grep --threads 1 "${pattern_args[@]}" --infile-list "species_cds_fasta_list.txt" |
+        seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads 1 |
+        seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 |
+        cdskit pad |
+        sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/" |
+        seqkit seq --threads 1 --out-file "${outfile1}"
       if [[ ! -s "${outfile1}" ]]; then
         echo "File is empty. Removing: ${outfile1}"
-	      rm -f -- "${outfile1}"
+        rm -f -- "${outfile1}"
       fi
     fi
     local fasta_genes=()
@@ -940,14 +940,14 @@ if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_individual_get_fasta
       printf '%s\n' "${fasta_genes[@]}"
       echo ""
       echo "Check duplicated sequence names in the species_cds. Exiting."
-	      rm -f -- "${outfile1}"
+      rm -f -- "${outfile1}"
       exit 1
     fi
   }
 
   gg_find_fasta_files "${dir_sp_cds}" 1 > species_cds_fasta_list.txt
   num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
-  for (( i=2; i<=num_busco_ids+1; i++ )); do # starting from 2 because the line 1 is header.
+  for ((i = 2; i <= num_busco_ids + 1; i++)); do # starting from 2 because the line 1 is header.
     wait_until_jobn_le ${GG_TASK_CPUS}
     generate_single_copy_fasta ${i} ${strictly_single_copy_only} &
   done
@@ -982,29 +982,29 @@ if [[ ${num_busco_ids} -ne ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]
     echo "$(date): start mafft: ${infile_base}"
     seqkit seq --threads 1 "${infile_path}" --out-file "tmp.${infile_base}.input.cds.fasta"
     cdskit mask \
-    --seqfile "tmp.${infile_base}.input.cds.fasta" \
-    --outfile "tmp.${infile_base}.cds.fasta"
+      --seqfile "tmp.${infile_base}.input.cds.fasta" \
+      --outfile "tmp.${infile_base}.cds.fasta"
     seqkit translate \
-    --allow-unknown-codon \
-    --transl-table "${genetic_code}" \
-    --threads 1 \
-    "tmp.${infile_base}.cds.fasta" \
-    > "tmp.${infile_base}.pep.fasta"
+      --allow-unknown-codon \
+      --transl-table "${genetic_code}" \
+      --threads 1 \
+      "tmp.${infile_base}.cds.fasta" \
+      > "tmp.${infile_base}.pep.fasta"
     mafft \
-    --auto \
-    --thread 1 \
-    "tmp.${infile_base}.pep.fasta" \
-    > "tmp.${infile_base}.pep.aln.fasta"
+      --auto \
+      --thread 1 \
+      "tmp.${infile_base}.pep.fasta" \
+      > "tmp.${infile_base}.pep.aln.fasta"
     cdskit backalign \
-    --seqfile "tmp.${infile_base}.cds.fasta" \
-    --aa_aln "tmp.${infile_base}.pep.aln.fasta" \
-    --codontable "${genetic_code}" \
-    --outfile "tmp.${infile_base}.cds.aln.fasta"
+      --seqfile "tmp.${infile_base}.cds.fasta" \
+      --aa_aln "tmp.${infile_base}.pep.aln.fasta" \
+      --codontable "${genetic_code}" \
+      --outfile "tmp.${infile_base}.cds.aln.fasta"
     if [[ -s "tmp.${infile_base}.cds.aln.fasta" ]]; then
       seqkit seq --threads 1 "tmp.${infile_base}.cds.aln.fasta" --out-file "tmp.${infile_base}.cds.aln.out.fa.gz"
       mv_out "tmp.${infile_base}.cds.aln.out.fa.gz" "${outfile}"
     fi
-	    rm -f -- "tmp.${infile_base}"*
+    rm -f -- "tmp.${infile_base}"*
   }
 
   input_alignment_files=()
@@ -1035,11 +1035,11 @@ if [[ ${num_busco_ids} -ne ${num_trimal_fasta} && ${run_individual_trimal} -eq 1
       seqkit seq --remove-gaps --threads 1 "${dir_single_copy_mafft}/${infile}" > "tmp.${infile_base}.degap.fasta"
       seqkit translate --transl-table "${genetic_code}" --threads 1 "${dir_single_copy_mafft}/${infile}" > "tmp.${infile_base}.pep.fasta"
       trimal \
-      -in tmp.${infile_base}.pep.fasta \
-      -backtrans tmp.${infile_base}.degap.fasta \
-      -out tmp.${infile_base}.trimal.fasta \
-      -ignorestopcodon \
-      -automated1
+        -in tmp.${infile_base}.pep.fasta \
+        -backtrans tmp.${infile_base}.degap.fasta \
+        -out tmp.${infile_base}.trimal.fasta \
+        -ignorestopcodon \
+        -automated1
       if [[ -s "tmp.${infile_base}.trimal.fasta" ]]; then
         seqkit seq --threads 1 "tmp.${infile_base}.trimal.fasta" --out-file "tmp.${infile_base}.trimal.out.fa.gz"
         mv_out "tmp.${infile_base}.trimal.out.fa.gz" "${outfile}"
@@ -1061,7 +1061,7 @@ else
 fi
 
 task="Concatenating single-copy CDS fasta files"
-if [[ ( ! -s "${file_concat_cds}" || ! -s "${file_concat_pep}" ) && ${run_concat_alignment} -eq 1 ]]; then
+if [[ (! -s "${file_concat_cds}" || ! -s "${file_concat_pep}") && ${run_concat_alignment} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_parent_dir "${file_concat_cds}"
   ensure_parent_dir "${file_concat_pep}"
@@ -1074,19 +1074,19 @@ if [[ ( ! -s "${file_concat_cds}" || ! -s "${file_concat_pep}" ) && ${run_concat
 
   if [[ ${strictly_single_copy_only} -eq 0 ]]; then
     concat_cds_tmp="tmp.concat.cds.fa.gz"
-    seqkit concat --full --fill "-" --threads "${GG_TASK_CPUS}" "${trimal_files[@]}" \
-    | seqkit sort --threads "${GG_TASK_CPUS}" \
-    | seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${concat_cds_tmp}"
+    seqkit concat --full --fill "-" --threads "${GG_TASK_CPUS}" "${trimal_files[@]}" |
+      seqkit sort --threads "${GG_TASK_CPUS}" |
+      seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${concat_cds_tmp}"
   else
     concat_cds_tmp="tmp.concat.cds.fa.gz"
-    seqkit concat --threads "${GG_TASK_CPUS}" "${trimal_files[@]}" \
-    | seqkit sort --threads "${GG_TASK_CPUS}" \
-    | seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${concat_cds_tmp}"
+    seqkit concat --threads "${GG_TASK_CPUS}" "${trimal_files[@]}" |
+      seqkit sort --threads "${GG_TASK_CPUS}" |
+      seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${concat_cds_tmp}"
   fi
   mv_out "${concat_cds_tmp}" "${file_concat_cds}"
 
-  seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" "${file_concat_cds}" \
-  | seqkit seq --threads "${GG_TASK_CPUS}" --out-file "tmp.concat.pep.fa.gz"
+  seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" "${file_concat_cds}" |
+    seqkit seq --threads "${GG_TASK_CPUS}" --out-file "tmp.concat.pep.fa.gz"
   mv_out "tmp.concat.pep.fa.gz" "${file_concat_pep}"
 else
   gg_step_skip "${task}"
@@ -1098,13 +1098,13 @@ if [[ ! -s "${file_concat_iqtree_pep}" && ${run_concat_iqtree_protein} -eq 1 ]];
   ensure_dir "${dir_concat_iqtree_pep}"
 
   ntaxa=$(gg_count_fasta_records "${file_concat_pep}")
-  bootstrap_params=( --ufboot 1000 --bnni )
+  bootstrap_params=(--ufboot 1000 --bnni)
   if [[ ${ntaxa} -lt 4 ]]; then
     bootstrap_params=()
   fi
   iqtree_mem_args=()
   if [[ -n "${GG_MEM_TOTAL_GB:-}" ]]; then
-    iqtree_mem_args=( -mem "${GG_MEM_TOTAL_GB}G" )
+    iqtree_mem_args=(-mem "${GG_MEM_TOTAL_GB}G")
   fi
 
   cd "${dir_concat_iqtree_pep}"
@@ -1146,9 +1146,9 @@ if [[ ! -s "${file_concat_iqtree_pep_root}" && ${run_concat_iqtree_protein} -eq 
   gg_step_start "${task}"
 
   root_species_tree \
-  "${file_concat_iqtree_pep}" \
-  "${file_concat_iqtree_pep_root}" \
-  "concatenated protein tree"
+    "${file_concat_iqtree_pep}" \
+    "${file_concat_iqtree_pep_root}" \
+    "concatenated protein tree"
 
   if [[ -s "${file_concat_iqtree_pep_root}" ]]; then
     Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_concat_iqtree_pep_root}"
@@ -1171,13 +1171,13 @@ if [[ ! -s "${file_concat_iqtree_dna}" && ${run_concat_iqtree_dna} -eq 1 ]]; the
   ensure_dir "${dir_concat_iqtree_dna}"
 
   ntaxa=$(gg_count_fasta_records "${file_concat_cds}")
-  bootstrap_params=( --ufboot 1000 --bnni )
+  bootstrap_params=(--ufboot 1000 --bnni)
   if [[ ${ntaxa} -lt 4 ]]; then
     bootstrap_params=()
   fi
   iqtree_mem_args=()
   if [[ -n "${GG_MEM_TOTAL_GB:-}" ]]; then
-    iqtree_mem_args=( -mem "${GG_MEM_TOTAL_GB}G" )
+    iqtree_mem_args=(-mem "${GG_MEM_TOTAL_GB}G")
   fi
 
   cd "${dir_concat_iqtree_dna}"
@@ -1219,9 +1219,9 @@ if [[ ! -s "${file_concat_iqtree_dna_root}" && ${run_concat_iqtree_dna} -eq 1 ]]
   gg_step_start "${task}"
 
   root_species_tree \
-  "${file_concat_iqtree_dna}" \
-  "${file_concat_iqtree_dna_root}" \
-  "concatenated DNA tree"
+    "${file_concat_iqtree_dna}" \
+    "${file_concat_iqtree_dna_root}" \
+    "concatenated DNA tree"
 
   if [[ -s "${file_concat_iqtree_dna_root}" ]]; then
     Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_concat_iqtree_dna_root}"
@@ -1259,16 +1259,16 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq
       return 0
     fi
     seqkit translate --transl-table "${genetic_code}" --threads 1 "${dir_single_copy_trimal}/${infile}" \
-    > "tmp.${infile_base}.pep.fasta"
+      > "tmp.${infile_base}.pep.fasta"
     iqtree \
-    -s "tmp.${infile_base}.pep.fasta" \
-    -m "${protein_model}" \
-    -T 1 \
-    --prefix "tmp.${infile_base}" \
-    --seed 12345 \
-    --redo
+      -s "tmp.${infile_base}.pep.fasta" \
+      -m "${protein_model}" \
+      -T 1 \
+      --prefix "tmp.${infile_base}" \
+      --seed 12345 \
+      --redo
     mv_out tmp."${infile_base}".treefile "${outfile}"
-	    rm -f -- "tmp.${infile_base}."*
+    rm -f -- "tmp.${infile_base}."*
   }
 
   input_alignment_files=()
@@ -1284,7 +1284,7 @@ else
 fi
 
 task="ASTRAL of individual single-copy protein trees"
-if [[ ( ! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}" ) && ${run_astral_pep} -eq 1 ]]; then
+if [[ (! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}") && ${run_astral_pep} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_astral_pep}"
 
@@ -1296,42 +1296,42 @@ if [[ ( ! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}" ) && ${r
     echo "Skipped. No eligible protein gene trees for ASTRAL after filtering."
   else
     astral-hybrid \
-    --input "tmp.astral.merged.iqtree.nwk" \
-    --output "tmp.astral.out.tree" \
-    --mode 3 \
-    --support 2 \
-    --thread "${GG_TASK_CPUS}" \
-    2> "tmp.astral.log.txt"
+      --input "tmp.astral.merged.iqtree.nwk" \
+      --output "tmp.astral.out.tree" \
+      --mode 3 \
+      --support 2 \
+      --thread "${GG_TASK_CPUS}" \
+      2> "tmp.astral.log.txt"
 
     labels=("pp1" "pp2" "pp3" "f1" "f2" "f3" "q1" "q2" "q3") # https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md
     for i in "${!labels[@]}"; do
       tmp_label_tree="tmp.astral.pep.${labels[i]}.tmp.nwk"
       python "${gg_support_dir}/extract_astral_support_label.py" \
-      --infile "tmp.astral.out.tree" \
-      --outfile "${tmp_label_tree}" \
-      --label_key "${labels[i]}"
+        --infile "tmp.astral.out.tree" \
+        --outfile "${tmp_label_tree}" \
+        --label_key "${labels[i]}"
       root_species_tree \
-      "${tmp_label_tree}" \
-      "single_copy.astral.pep.${labels[i]}.nwk" \
-      "ASTRAL protein tree (${labels[i]})"
+        "${tmp_label_tree}" \
+        "single_copy.astral.pep.${labels[i]}.nwk" \
+        "ASTRAL protein tree (${labels[i]})"
       if [[ -s "single_copy.astral.pep.${labels[i]}.nwk" ]]; then
         Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="single_copy.astral.pep.${labels[i]}.nwk"
       fi
       rm -f -- "${tmp_label_tree}"
     done
 
-	    if [[ -s "single_copy.astral.pep.q1.nwk" ]]; then
-	      shopt -s nullglob
-	      astral_pep_outputs=( single_copy.astral.pep.* )
-	      shopt -u nullglob
-	      if [[ ${#astral_pep_outputs[@]} -eq 0 ]]; then
-	        echo "ASTRAL protein outputs were expected but not found."
-	        exit 1
-	      fi
-	      mv_out "${astral_pep_outputs[@]}" "${dir_astral_pep}"
-	      mv_out "tmp.astral.log.txt" "${file_astral_log_pep}"
-	      echo "For more information on support values (e.g., f1, f2, pp1, q1, ...), please refer to: https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md" > "${dir_astral_pep}/README.txt"
-	    fi
+    if [[ -s "single_copy.astral.pep.q1.nwk" ]]; then
+      shopt -s nullglob
+      astral_pep_outputs=(single_copy.astral.pep.*)
+      shopt -u nullglob
+      if [[ ${#astral_pep_outputs[@]} -eq 0 ]]; then
+        echo "ASTRAL protein outputs were expected but not found."
+        exit 1
+      fi
+      mv_out "${astral_pep_outputs[@]}" "${dir_astral_pep}"
+      mv_out "tmp.astral.log.txt" "${file_astral_log_pep}"
+      echo "For more information on support values (e.g., f1, f2, pp1, q1, ...), please refer to: https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md" > "${dir_astral_pep}/README.txt"
+    fi
 
     if [[ -s "${file_astral_tree_pep_q1}" ]]; then
       if optimize_astral_tree_branch_lengths "${file_astral_tree_pep_q1}" "${file_concat_pep}" "${protein_model}" "${file_astral_tree_pep}" "pep"; then
@@ -1370,7 +1370,7 @@ iqtree_dna_tree_files=()
 mapfile -t iqtree_dna_tree_files < <(gg_find_file_basenames "${dir_single_copy_iqtree_dna}" "*.nwk")
 num_iqtree_dna=${#iqtree_dna_tree_files[@]}
 if [[ ${num_busco_ids} -ne ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq 1 ]]; then
-	gg_step_start "${task}"
+  gg_step_start "${task}"
 
   run_iqtree_dna() {
     local infile=$1
@@ -1386,12 +1386,12 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq
     fi
     cp_out "${dir_single_copy_trimal}/${infile}" "./tmp.${infile_base}.input.fasta"
     iqtree \
-    -s "./tmp.${infile_base}.input.fasta" \
-    -m "${nucleotide_model}" \
-    -T 1 \
-    --prefix "tmp.${infile_base}" \
-    --seed 12345 \
-    --redo
+      -s "./tmp.${infile_base}.input.fasta" \
+      -m "${nucleotide_model}" \
+      -T 1 \
+      --prefix "tmp.${infile_base}" \
+      --seed 12345 \
+      --redo
     mv_out tmp."${infile_base}".treefile "${outfile}"
     rm -f -- "tmp.${infile_base}."*
   }
@@ -1405,11 +1405,11 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq
   done
   wait_for_background_jobs
 else
-	gg_step_skip "${task}"
+  gg_step_skip "${task}"
 fi
 
 task="ASTRAL of individual single-copy DNA trees"
-if [[ ( ! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}" ) && ${run_astral_dna} -eq 1 ]]; then
+if [[ (! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}") && ${run_astral_dna} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_astral_dna}"
 
@@ -1421,42 +1421,42 @@ if [[ ( ! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}" ) && ${r
     echo "Skipped. No eligible DNA gene trees for ASTRAL after filtering."
   else
     astral-hybrid \
-    --input "tmp.astral.merged.iqtree.nwk" \
-    --output "tmp.astral.out.tree" \
-    --mode 3 \
-    --support 2 \
-    --thread "${GG_TASK_CPUS}" \
-    2> "tmp.astral.log.txt"
+      --input "tmp.astral.merged.iqtree.nwk" \
+      --output "tmp.astral.out.tree" \
+      --mode 3 \
+      --support 2 \
+      --thread "${GG_TASK_CPUS}" \
+      2> "tmp.astral.log.txt"
 
     labels=("pp1" "pp2" "pp3" "f1" "f2" "f3" "q1" "q2" "q3") # https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md
     for i in "${!labels[@]}"; do
       tmp_label_tree="tmp.astral.dna.${labels[i]}.tmp.nwk"
       python "${gg_support_dir}/extract_astral_support_label.py" \
-      --infile "tmp.astral.out.tree" \
-      --outfile "${tmp_label_tree}" \
-      --label_key "${labels[i]}"
+        --infile "tmp.astral.out.tree" \
+        --outfile "${tmp_label_tree}" \
+        --label_key "${labels[i]}"
       root_species_tree \
-      "${tmp_label_tree}" \
-      "single_copy.astral.dna.${labels[i]}.nwk" \
-      "ASTRAL DNA tree (${labels[i]})"
+        "${tmp_label_tree}" \
+        "single_copy.astral.dna.${labels[i]}.nwk" \
+        "ASTRAL DNA tree (${labels[i]})"
       if [[ -s "single_copy.astral.dna.${labels[i]}.nwk" ]]; then
         Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="single_copy.astral.dna.${labels[i]}.nwk"
       fi
       rm -f -- "${tmp_label_tree}"
     done
 
-	    if [[ -s "single_copy.astral.dna.q1.nwk" ]]; then
-	      shopt -s nullglob
-	      astral_dna_outputs=( single_copy.astral.dna.* )
-	      shopt -u nullglob
-	      if [[ ${#astral_dna_outputs[@]} -eq 0 ]]; then
-	        echo "ASTRAL DNA outputs were expected but not found."
-	        exit 1
-	      fi
-	      mv_out "${astral_dna_outputs[@]}" "${dir_astral_dna}"
-	      mv_out "tmp.astral.log.txt" "${file_astral_log_dna}"
-	      echo "For more information on support values (e.g., f1, f2, pp1, q1, ...), please refer to: https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md" > "${dir_astral_dna}/README.txt"
-	    fi
+    if [[ -s "single_copy.astral.dna.q1.nwk" ]]; then
+      shopt -s nullglob
+      astral_dna_outputs=(single_copy.astral.dna.*)
+      shopt -u nullglob
+      if [[ ${#astral_dna_outputs[@]} -eq 0 ]]; then
+        echo "ASTRAL DNA outputs were expected but not found."
+        exit 1
+      fi
+      mv_out "${astral_dna_outputs[@]}" "${dir_astral_dna}"
+      mv_out "tmp.astral.log.txt" "${file_astral_log_dna}"
+      echo "For more information on support values (e.g., f1, f2, pp1, q1, ...), please refer to: https://github.com/smirarab/ASTRAL/blob/master/astral-tutorial.md" > "${dir_astral_dna}/README.txt"
+    fi
 
     if [[ -s "${file_astral_tree_dna_q1}" ]]; then
       if optimize_astral_tree_branch_lengths "${file_astral_tree_dna_q1}" "${file_concat_cds}" "${nucleotide_model}" "${file_astral_tree_dna}" "dna"; then
@@ -1495,14 +1495,14 @@ if [[ ! -s "${file_plot_species_trees}" && ${run_plot_species_trees} -eq 1 ]]; t
   gg_step_start "${task}"
 
   Rscript "${gg_support_dir}/plot_species_trees.r" \
-  --iqtree_dna_nwk="${file_concat_iqtree_dna_root}" \
-  --iqtree_pep_nwk="${file_concat_iqtree_pep_root}" \
-  --iqtree_dna_log="${dir_concat_iqtree_dna}/tmp.concat.cds.input.fasta.log" \
-  --iqtree_pep_log="${dir_concat_iqtree_pep}/tmp.concat.pep.input.fasta.log" \
-  --astral_dna_nwk="${file_astral_tree_dna}" \
-  --astral_pep_nwk="${file_astral_tree_pep}" \
-  --astral_dna_log="${file_astral_log_dna}" \
-  --astral_pep_log="${file_astral_log_pep}"
+    --iqtree_dna_nwk="${file_concat_iqtree_dna_root}" \
+    --iqtree_pep_nwk="${file_concat_iqtree_pep_root}" \
+    --iqtree_dna_log="${dir_concat_iqtree_dna}/tmp.concat.cds.input.fasta.log" \
+    --iqtree_pep_log="${dir_concat_iqtree_pep}/tmp.concat.pep.input.fasta.log" \
+    --astral_dna_nwk="${file_astral_tree_dna}" \
+    --astral_pep_nwk="${file_astral_tree_pep}" \
+    --astral_dna_log="${file_astral_log_dna}" \
+    --astral_pep_log="${file_astral_log_pep}"
 
   if [[ -s "species_trees.pdf" ]]; then
     echo "Output file found for the task: ${task}"
@@ -1516,15 +1516,15 @@ task="Time-constrained tree preparation"
 disable_if_no_input_file "run_constrained_tree" "${file_undated_species_tree}"
 if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
   gg_step_start "${task}"
-    ensure_parent_dir "${file_constrained_tree}"
+  ensure_parent_dir "${file_constrained_tree}"
   ensure_dir "${dir_nwkit_download_dir}"
   if [[ ${timetree_constraint} -eq 1 ]]; then
     nwkit mcmctree \
-    --download_dir "${dir_nwkit_download_dir}" \
-    --infile "${file_undated_species_tree}" \
-    --timetree "ci" \
-    --min_clade_prop 0.2 \
-    --outfile "tmp.constrained.tree.nwk"
+      --download_dir "${dir_nwkit_download_dir}" \
+      --infile "${file_undated_species_tree}" \
+      --timetree "ci" \
+      --min_clade_prop 0.2 \
+      --outfile "tmp.constrained.tree.nwk"
     if [[ -s "tmp.constrained.tree.nwk" ]]; then
       mv_out "tmp.constrained.tree.nwk" "${file_constrained_tree}"
     fi
@@ -1547,10 +1547,10 @@ if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
         --right_species "${mcmctree_params[1]}"
       )
       if [[ "${mcmctree_params[2]}" != "-" ]]; then
-        nwkit_args+=( --lower_bound "${mcmctree_params[2]}" )
+        nwkit_args+=(--lower_bound "${mcmctree_params[2]}")
       fi
       if [[ "${mcmctree_params[3]}" != "-" ]]; then
-        nwkit_args+=( --upper_bound "${mcmctree_params[3]}" )
+        nwkit_args+=(--upper_bound "${mcmctree_params[3]}")
       fi
       echo "nwkit mcmctree params: ${nwkit_args[*]}"
       tree_string=$(printf '%s\n' "${tree_string}" | nwkit mcmctree "${nwkit_args[@]}")
@@ -1575,8 +1575,8 @@ disable_if_no_input_file "run_plot_constrained_tree" "${file_constrained_tree}"
 if [[ ! -s "${file_plot_constrained_tree}" && ${run_plot_constrained_tree} -eq 1 ]]; then
   gg_step_start "${task}"
   Rscript "${gg_support_dir}/plot_constrained_tree.r" \
-  --infile="${file_constrained_tree}" \
-  --outfile="tmp.constrained_tree_plot.pdf"
+    --infile="${file_constrained_tree}" \
+    --outfile="tmp.constrained_tree_plot.pdf"
   if [[ -s "tmp.constrained_tree_plot.pdf" ]]; then
     mv_out "tmp.constrained_tree_plot.pdf" "${file_plot_constrained_tree}"
   fi
@@ -1589,7 +1589,7 @@ fi
 
 task="IQ2MC step 2 (IQ-TREE Hessian/control generation)"
 disable_if_no_input_file "run_mcmctree1" "${file_constrained_tree}" "${file_concat_cds}"
-if [[ ( ! -s "${file_iq2mc_ctl}" || ! -s "${file_iq2mc_hessian}" || ! -s "${file_iq2mc_rooted_tree}" || ! -s "${file_iq2mc_dummy_phy}" ) && ${run_mcmctree1} -eq 1 ]]; then
+if [[ (! -s "${file_iq2mc_ctl}" || ! -s "${file_iq2mc_hessian}" || ! -s "${file_iq2mc_rooted_tree}" || ! -s "${file_iq2mc_dummy_phy}") && ${run_mcmctree1} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "$(dirname "${file_iq2mc_ctl}")"
 
@@ -1693,7 +1693,7 @@ if [[ ! -s "${file_mcmctree_dated_nwk}" && ${run_convert_tree_format} -eq 1 ]]; 
       echo "${tree_line}" > "${dir_mcmctree2}/mcmctree_95CI.nwk"
       echo "${tree_line}" |
         sed -e "s/[[:space:]]*\[&95%={[0-9.]*,[[:space:]][0-9.]*}\][[:space:]]*//g" -e "s/:[[:space:]]/:/g" \
-        > "${dir_mcmctree2}/mcmctree_no95CI.nwk"
+          > "${dir_mcmctree2}/mcmctree_no95CI.nwk"
     else
       echo "Error: Failed to detect a tree string in ${file_mcmctree_figtree_tre}"
       rm -f -- "${dir_mcmctree2}/mcmctree_95CI.nwk" "${dir_mcmctree2}/mcmctree_no95CI.nwk"
@@ -1735,8 +1735,8 @@ if [[ ! -s "${file_plot_mcmctree_pdf}" && ${run_plot_mcmctreer} -eq 1 ]]; then
   gg_step_start "${task}"
 
   Rscript "${gg_support_dir}/plot_mcmctreer.r" \
-  --infile="${file_mcmctree_dated_nwk}" \
-  --outfile="tmp.plot_mcmctreer.pdf"
+    --infile="${file_mcmctree_dated_nwk}" \
+    --outfile="tmp.plot_mcmctreer.pdf"
   if [[ -s "tmp.plot_mcmctreer.pdf" ]]; then
     mv_out "tmp.plot_mcmctreer.pdf" "${file_plot_mcmctree_pdf}"
   fi
@@ -1820,12 +1820,12 @@ prepare_species_protein_tmp() {
     translated_file="${sp_ub}.fa"
     echo "Translation started: ${cds}"
 
-    seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${cds_path}" \
-    | gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${genetic_code}" \
-    | seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
-    | sed -e "s/^>${sp_ub}[-_\.]/>/" -e "s/^>/>${sp_ub}_/" \
-    | sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
-    > "${dir_sp_protein}/${translated_file}"
+    seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${cds_path}" |
+      gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${genetic_code}" |
+      seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" |
+      sed -e "s/^>${sp_ub}[-_\.]/>/" -e "s/^>/>${sp_ub}_/" |
+      sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
+        > "${dir_sp_protein}/${translated_file}"
   done
 
   species_protein_ready=1
@@ -1840,9 +1840,9 @@ if [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; the
   ensure_dir "${dir_orthofinder}"
   ensure_dir "${dir_orthofinder_hog2og}"
 
-  orthofinder_algorithm_threads=$((${GG_TASK_CPUS}/4))
+  orthofinder_algorithm_threads=$((${GG_TASK_CPUS} / 4))
   if [[ ${orthofinder_algorithm_threads} -eq 0 ]]; then
-      orthofinder_algorithm_threads=1
+    orthofinder_algorithm_threads=1
   fi
   param_species_tree=()
   species_tree=""
@@ -1853,27 +1853,28 @@ if [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; the
   fi
   if [[ -n "${species_tree}" && -s "${species_tree}" ]]; then
     echo "OrthoFinder will use the species tree: ${species_tree}"
-    param_species_tree=( -s "${species_tree}" )
+    param_species_tree=(-s "${species_tree}")
   fi
   echo "OrthoFinder will use ${GG_TASK_CPUS} threads for diamond search."
   echo "OrthoFinder will use ${orthofinder_algorithm_threads} threads for the OrthoFinder algorithm."
 
-    protein_files=()
-    mapfile -t protein_files < <(find "${dir_sp_protein}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
-    num_sp=${#protein_files[@]}
-    if [[ ${num_sp} -eq 0 ]]; then
-      echo "No protein FASTA files were found in: ${dir_sp_protein}. Exiting."
-      exit 1
-    fi
+  protein_files=()
+  mapfile -t protein_files < <(find "${dir_sp_protein}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
+  num_sp=${#protein_files[@]}
+  if [[ ${num_sp} -eq 0 ]]; then
+    echo "No protein FASTA files were found in: ${dir_sp_protein}. Exiting."
+    exit 1
+  fi
   if [[ ${#param_species_tree[@]} -gt 0 ]]; then
     species_ids=()
     for protein_file in "${protein_files[@]}"; do
       species_base=$(basename "${protein_file}")
       species_base=${species_base%.gz}
       species_base=${species_base%.*}
-      species_ids+=( "${species_base}" )
+      species_ids+=("${species_base}")
     done
-    mapfile -t missing_species < <(python - "${species_tree}" "${species_ids[@]}" << 'PY'
+    mapfile -t missing_species < <(
+      python - "${species_tree}" "${species_ids[@]}" << 'PY'
 import re
 import sys
 
@@ -1894,13 +1895,13 @@ PY
       param_species_tree=()
     fi
   fi
-    if [[ ${num_sp} -gt ${max_orthofinder_core_species} ]]; then
+  if [[ ${num_sp} -gt ${max_orthofinder_core_species} ]]; then
     echo "The number of species (${num_sp}) is greater than the maximum number of core species (${max_orthofinder_core_species}) for OrthoFinder."
     echo "OrthoFinder will be run for 2 rounds (using --assign): For details, see https://github.com/davidemms/OrthoFinder"
 
-      species_cds_core=()
-      mapfile -t species_cds_core < <(printf "%s\n" "${protein_files[@]##*/}" | shuf -n "${max_orthofinder_core_species}")
-      echo "Core CDS files: ${species_cds_core[@]}"
+    species_cds_core=()
+    mapfile -t species_cds_core < <(printf "%s\n" "${protein_files[@]##*/}" | shuf -n "${max_orthofinder_core_species}")
+    echo "Core CDS files: ${species_cds_core[@]}"
     if [[ -e "${dir_sp_protein}_core" ]]; then
       rm -rf -- "${dir_sp_protein}_core"
     fi
@@ -1909,9 +1910,9 @@ PY
       cp_out "${dir_sp_protein}"/"${sp_cds_core}" "${dir_sp_protein}"_core
     done
 
-      species_cds_additional=()
-      mapfile -t species_cds_additional < <(printf "%s\n" "${protein_files[@]##*/}" | grep -v -F -x -f <(printf "%s\n" "${species_cds_core[@]}"))
-      echo "Additional CDS files: ${species_cds_additional[@]}"
+    species_cds_additional=()
+    mapfile -t species_cds_additional < <(printf "%s\n" "${protein_files[@]##*/}" | grep -v -F -x -f <(printf "%s\n" "${species_cds_core[@]}"))
+    echo "Additional CDS files: ${species_cds_additional[@]}"
     if [[ -e "${dir_sp_protein}_additional" ]]; then
       rm -rf -- "${dir_sp_protein}_additional"
     fi
@@ -1927,18 +1928,18 @@ PY
     if [[ -e "${dir_orthofinder}/species_tree_core.nwk" ]]; then
       rm -f -- "${dir_orthofinder}/species_tree_core.nwk"
     fi
-      core_species_names=()
-      mapfile -t core_species_names < <(
-        find "${dir_sp_protein}_core" -maxdepth 1 -type f ! -name '.*' | sort \
-        | awk '{name=$0; sub(/^.*\//, "", name); sub(/\.[^.]*$/, "", name); print name}'
-      )
-      core_species_regex=$(printf '%s|' "${core_species_names[@]}")
-      core_species_regex=${core_species_regex%|}
-      if [[ -z "${core_species_regex}" ]]; then
-        echo "Failed to build core species regex. No core protein files were detected. Exiting."
-        exit 1
-      fi
-      nwkit prune --invert_match yes --pattern "${core_species_regex}" --infile "${species_tree}" --outfile "${dir_orthofinder}/species_tree_core.nwk"
+    core_species_names=()
+    mapfile -t core_species_names < <(
+      find "${dir_sp_protein}_core" -maxdepth 1 -type f ! -name '.*' | sort |
+        awk '{name=$0; sub(/^.*\//, "", name); sub(/\.[^.]*$/, "", name); print name}'
+    )
+    core_species_regex=$(printf '%s|' "${core_species_names[@]}")
+    core_species_regex=${core_species_regex%|}
+    if [[ -z "${core_species_regex}" ]]; then
+      echo "Failed to build core species regex. No core protein files were detected. Exiting."
+      exit 1
+    fi
+    nwkit prune --invert_match yes --pattern "${core_species_regex}" --infile "${species_tree}" --outfile "${dir_orthofinder}/species_tree_core.nwk"
 
     if orthofinder \
       -t "${GG_TASK_CPUS}" \
@@ -1978,24 +1979,24 @@ PY
       exit 1
     fi
 
-		    shopt -s nullglob
-		    orthofinder_all_outputs=( "${dir_orthofinder}"/core/Results_all/* )
-		    orthofinder_core_outputs=( "${dir_orthofinder}"/core/Results_core/* )
-		    shopt -u nullglob
-		    if [[ ${#orthofinder_all_outputs[@]} -eq 0 || ${#orthofinder_core_outputs[@]} -eq 0 ]]; then
-		      echo "OrthoFinder core/main output files were expected but not found after completion."
-		      exit 1
-		    fi
-		    mv_out "${orthofinder_all_outputs[@]}" "${dir_orthofinder}"
-		    mv_out "${orthofinder_core_outputs[@]}" "${dir_orthofinder}/core"
-	    shopt -s nullglob
-	    orthofinder_result_dirs=( "${dir_orthofinder}/core/Results_"* )
-	    shopt -u nullglob
-	    if [[ ${#orthofinder_result_dirs[@]} -gt 0 ]]; then
-	      rm -rf -- "${orthofinder_result_dirs[@]}"
-	    fi
-	    orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${GG_TASK_CPUS}"
-	  else
+    shopt -s nullglob
+    orthofinder_all_outputs=("${dir_orthofinder}"/core/Results_all/*)
+    orthofinder_core_outputs=("${dir_orthofinder}"/core/Results_core/*)
+    shopt -u nullglob
+    if [[ ${#orthofinder_all_outputs[@]} -eq 0 || ${#orthofinder_core_outputs[@]} -eq 0 ]]; then
+      echo "OrthoFinder core/main output files were expected but not found after completion."
+      exit 1
+    fi
+    mv_out "${orthofinder_all_outputs[@]}" "${dir_orthofinder}"
+    mv_out "${orthofinder_core_outputs[@]}" "${dir_orthofinder}/core"
+    shopt -s nullglob
+    orthofinder_result_dirs=("${dir_orthofinder}/core/Results_"*)
+    shopt -u nullglob
+    if [[ ${#orthofinder_result_dirs[@]} -gt 0 ]]; then
+      rm -rf -- "${orthofinder_result_dirs[@]}"
+    fi
+    orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${GG_TASK_CPUS}"
+  else
     echo "The number of species (${num_sp}) is less than or equal to the maximum number of core species (${max_orthofinder_core_species}) for OrthoFinder."
     echo "OrthoFinder will be run for 1 round."
 
@@ -2018,14 +2019,14 @@ PY
       exit 1
     fi
 
-	    shopt -s nullglob
-	    orthofinder_main_outputs=( "${dir_orthofinder}"/main/Results_main/* )
-	    shopt -u nullglob
-	    if [[ ${#orthofinder_main_outputs[@]} -eq 0 ]]; then
-	      echo "OrthoFinder main output files were expected but not found after completion."
-	      exit 1
-	    fi
-	    mv_out "${orthofinder_main_outputs[@]}" "${dir_orthofinder}"
+    shopt -s nullglob
+    orthofinder_main_outputs=("${dir_orthofinder}"/main/Results_main/*)
+    shopt -u nullglob
+    if [[ ${#orthofinder_main_outputs[@]} -eq 0 ]]; then
+      echo "OrthoFinder main output files were expected but not found after completion."
+      exit 1
+    fi
+    mv_out "${orthofinder_main_outputs[@]}" "${dir_orthofinder}"
     rm -rf -- "${dir_orthofinder}/main"
   fi
 
@@ -2045,9 +2046,9 @@ PY
   fi
 
   python "${gg_support_dir}/orthogroup_table_formatter.py" \
-  --file_orthogroup_table "${hog_table}" \
-  --dir_out "${dir_orthofinder_hog2og}" \
-  --mode "hog2og"
+    --file_orthogroup_table "${hog_table}" \
+    --dir_out "${dir_orthofinder_hog2og}" \
+    --mode "hog2og"
 else
   gg_step_skip "${task}"
 fi
@@ -2139,7 +2140,6 @@ fi
 cleanup_species_protein_tmp
 trap - EXIT
 
-
 # Genome evolution
 if [[ ${run_busco_notung_root_dna} -eq 1 || ${run_busco_notung_root_pep} -eq 1 || ${run_busco_root_dna} -eq 1 || ${run_busco_root_pep} -eq 1 || ${run_busco_grampa_dna} -eq 1 || ${run_busco_grampa_pep} -eq 1 ]]; then
   if [[ ! -s "${notung_jar}" ]]; then
@@ -2222,17 +2222,17 @@ if [[ ${run_genome_busco} -eq 1 ]]; then
       fi
       dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-	      busco \
-	      --in "tmp.busco_input.cds.fasta" \
-	      --mode "transcriptome" \
-	      --out "busco_tmp" \
-	      --cpu "${GG_TASK_CPUS}" \
-	      --force \
-	      --evalue 1e-03 \
-	      --limit 20 \
-	      --lineage_dataset "${dir_busco_lineage}" \
-	      --download_path "${dir_busco_db}" \
-	      --offline
+      busco \
+        --in "tmp.busco_input.cds.fasta" \
+        --mode "transcriptome" \
+        --out "busco_tmp" \
+        --cpu "${GG_TASK_CPUS}" \
+        --force \
+        --evalue 1e-03 \
+        --limit 20 \
+        --lineage_dataset "${dir_busco_lineage}" \
+        --download_path "${dir_busco_db}" \
+        --offline
 
       if copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
         rm -rf -- "./busco_tmp"
@@ -2258,12 +2258,12 @@ if [[ ! -s "${file_genome_busco_summary_table}" && ${run_genome_get_busco_summar
   ensure_parent_dir "${file_genome_busco_summary_table}"
 
   python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
-  --busco_outdir "${dir_species_busco_full}" \
-  --ncpu "${GG_TASK_CPUS}" \
-  --outfile "tmp.busco_summary_table.tsv"
+    --busco_outdir "${dir_species_busco_full}" \
+    --ncpu "${GG_TASK_CPUS}" \
+    --outfile "tmp.busco_summary_table.tsv"
   mv_out "tmp.busco_summary_table.tsv" "${file_genome_busco_summary_table}"
 
-  num_busco_ids=$(( $(wc -l < "${file_genome_busco_summary_table}") - 1 ))
+  num_busco_ids=$(($(wc -l < "${file_genome_busco_summary_table}") - 1))
   echo "Number of BUSCO genes: ${num_busco_ids}"
   echo "$(date): End: ${task}"
 else
@@ -2293,7 +2293,7 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
       return 0
     fi
     if [[ ${#cols[@]} -gt 3 ]]; then
-      genes=( "${cols[@]:3}" )
+      genes=("${cols[@]:3}")
     fi
     outfile2="${dir_busco_fasta}/${busco_id}.busco.cds.fa.gz"
     if [[ -s "${outfile2}" ]]; then
@@ -2306,9 +2306,9 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
         echo "Skipping. ${busco_id} has no genes in the selected species."
         return 0
       fi
-      gg_seqkit_grep_by_patterns_from_infile_list 1 "species_cds_fasta_list.txt" "${genes2[@]}" \
-      | gg_prepare_cds_fasta_stream 1 \
-      | seqkit seq --threads 1 --out-file "${outfile2}"
+      gg_seqkit_grep_by_patterns_from_infile_list 1 "species_cds_fasta_list.txt" "${genes2[@]}" |
+        gg_prepare_cds_fasta_stream 1 |
+        seqkit seq --threads 1 --out-file "${outfile2}"
       if [[ ! -s "${outfile2}" ]]; then
         echo "File is empty. Removing: ${outfile2}"
         rm -f -- "${outfile2}"
@@ -2317,7 +2317,7 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
   }
 
   gg_find_fasta_files "${dir_sp_cds}" 1 > species_cds_fasta_list.txt
-  for (( busco_idx=0; busco_idx<num_busco_ids; busco_idx++ )); do
+  for ((busco_idx = 0; busco_idx < num_busco_ids; busco_idx++)); do
     wait_until_jobn_le ${GG_TASK_CPUS}
     generate_single_copy_fasta "${busco_idx}" &
   done
@@ -2341,39 +2341,39 @@ if [[ ${run_busco_mafft} -eq 1 ]]; then
     fi
     echo "$(date): start mafft: ${infile_base}"
 
-	    seqkit seq --threads 1 "${dir_busco_fasta}/${infile}" --out-file "tmp.${infile_base}.input.cds.fasta"
-	    cdskit mask \
-	    --seqfile "tmp.${infile_base}.input.cds.fasta" \
-	    --outfile "tmp.${infile_base}.cds.fasta"
+    seqkit seq --threads 1 "${dir_busco_fasta}/${infile}" --out-file "tmp.${infile_base}.input.cds.fasta"
+    cdskit mask \
+      --seqfile "tmp.${infile_base}.input.cds.fasta" \
+      --outfile "tmp.${infile_base}.cds.fasta"
 
     num_seq=$(gg_count_fasta_records "tmp.${infile_base}.cds.fasta")
     if [[ ${num_seq} -lt 2 ]]; then
       echo "Skipped MAFFT/backalign because fewer than 2 sequences were found: ${infile}"
       seqkit seq --threads 1 "tmp.${infile_base}.cds.fasta" --out-file "tmp.${infile_base}.cds.out.fa.gz"
       mv_out "tmp.${infile_base}.cds.out.fa.gz" "${outfile}"
-	      rm -f -- "tmp.${infile_base}"*
+      rm -f -- "tmp.${infile_base}"*
       return 0
     fi
 
     seqkit translate \
-    --allow-unknown-codon \
-    --transl-table "${genetic_code}" \
-    --threads 1 \
-    "tmp.${infile_base}.cds.fasta" \
-    > "tmp.${infile_base}.pep.fasta"
+      --allow-unknown-codon \
+      --transl-table "${genetic_code}" \
+      --threads 1 \
+      "tmp.${infile_base}.cds.fasta" \
+      > "tmp.${infile_base}.pep.fasta"
 
     mafft \
-    --auto \
-    --amino \
-    --thread 1 \
-    "tmp.${infile_base}.pep.fasta" \
-    > "tmp.${infile_base}.pep.aln.fasta"
+      --auto \
+      --amino \
+      --thread 1 \
+      "tmp.${infile_base}.pep.fasta" \
+      > "tmp.${infile_base}.pep.aln.fasta"
 
     cdskit backalign \
-    --seqfile "tmp.${infile_base}.cds.fasta" \
-    --aa_aln "tmp.${infile_base}.pep.aln.fasta" \
-    --codontable "${genetic_code}" \
-    --outfile "tmp.${infile_base}.cds.aln.fasta"
+      --seqfile "tmp.${infile_base}.cds.fasta" \
+      --aa_aln "tmp.${infile_base}.pep.aln.fasta" \
+      --codontable "${genetic_code}" \
+      --outfile "tmp.${infile_base}.cds.aln.fasta"
 
     if [[ -s "tmp.${infile_base}.cds.aln.fasta" ]]; then
       seqkit seq --threads 1 "tmp.${infile_base}.cds.aln.fasta" --out-file "tmp.${infile_base}.cds.aln.out.fa.gz"
@@ -2410,11 +2410,11 @@ if [[ ${run_busco_trimal} -eq 1 ]]; then
     seqkit translate --transl-table "${genetic_code}" --threads 1 "${dir_busco_mafft}/${infile}" > "tmp.${infile_base}.pep.fasta"
 
     trimal \
-    -in "tmp.${infile_base}.pep.fasta" \
-    -backtrans "tmp.${infile_base}.degap.fasta" \
-    -out "tmp.${infile_base}.trimal.fasta" \
-    -ignorestopcodon \
-    -automated1
+      -in "tmp.${infile_base}.pep.fasta" \
+      -backtrans "tmp.${infile_base}.degap.fasta" \
+      -out "tmp.${infile_base}.trimal.fasta" \
+      -ignorestopcodon \
+      -automated1
 
     if [[ -s "tmp.${infile_base}.trimal.fasta" ]]; then
       seqkit seq --threads 1 "tmp.${infile_base}.trimal.fasta" --out-file "tmp.${infile_base}.trimal.out.fa.gz"
@@ -2437,7 +2437,7 @@ fi
 
 task="IQ-TREE for duplicate-containing BUSCO DNA trees"
 if [[ ${run_busco_iqtree_dna} -eq 1 ]]; then
-    gg_step_start "${task}"
+  gg_step_start "${task}"
   ensure_dir "${dir_busco_iqtree_dna}"
 
   busco_iqtree_dna() {
@@ -2458,12 +2458,12 @@ if [[ ${run_busco_iqtree_dna} -eq 1 ]]; then
     seqkit seq --threads 1 "${indir}/${infile}" --out-file "./tmp.${infile_base}.input.fasta"
 
     iqtree \
-    -s "./tmp.${infile_base}.input.fasta" \
-    -m "${nucleotide_model}" \
-    -T 1 \
-    --prefix "tmp.${infile_base}" \
-    --seed 12345 \
-    --redo
+      -s "./tmp.${infile_base}.input.fasta" \
+      -m "${nucleotide_model}" \
+      -T 1 \
+      --prefix "tmp.${infile_base}" \
+      --seed 12345 \
+      --redo
 
     mv_out tmp."${infile_base}".treefile "${outfile}"
     rm -f -- "tmp.${infile_base}."*
@@ -2483,7 +2483,7 @@ fi
 
 task="IQ-TREE for duplicate-containing BUSCO protein trees"
 if [[ ${run_busco_iqtree_pep} -eq 1 ]]; then
-    gg_step_start "${task}"
+  gg_step_start "${task}"
   ensure_dir "${dir_busco_iqtree_pep}"
 
   busco_iqtree_pep() {
@@ -2504,13 +2504,13 @@ if [[ ${run_busco_iqtree_pep} -eq 1 ]]; then
     seqkit translate --transl-table "${genetic_code}" --threads 1 "${indir}/${infile}" > "./tmp.${infile_base}.input.fasta"
 
     iqtree \
-    -s "./tmp.${infile_base}.input.fasta" \
-    -m "${protein_model}" \
-    -st AA \
-    -T 1 \
-    --prefix "tmp.${infile_base}" \
-    --seed 12345 \
-    --redo
+      -s "./tmp.${infile_base}.input.fasta" \
+      -m "${protein_model}" \
+      -st AA \
+      -T 1 \
+      --prefix "tmp.${infile_base}" \
+      --seed 12345 \
+      --redo
 
     mv_out tmp."${infile_base}".treefile "${outfile}"
     rm -f -- "tmp.${infile_base}."*
@@ -2528,7 +2528,7 @@ else
   gg_step_skip "${task}"
 fi
 
-busco_notung () {
+busco_notung() {
   infile=$1
   indir=$2
   outdir=$3
@@ -2541,20 +2541,20 @@ busco_notung () {
     rm -rf -- "./${busco_id}.notung.root"
   fi
   java -jar -Xmx${memory_notung}g ${notung_jar} \
-  -s "${file_dated_species_tree}" \
-  -g "${indir}/${infile}" \
-  --root \
-  --infertransfers "false" \
-  --treeoutput newick \
-  --log \
-  --treestats \
-  --events \
-  --parsable \
-  --speciestag prefix \
-  --allopt \
-  --maxtrees 1000 \
-  --nolosses \
-  --outputdir "./${busco_id}.notung.root"
+    -s "${file_dated_species_tree}" \
+    -g "${indir}/${infile}" \
+    --root \
+    --infertransfers "false" \
+    --treeoutput newick \
+    --log \
+    --treestats \
+    --events \
+    --parsable \
+    --speciestag prefix \
+    --allopt \
+    --maxtrees 1000 \
+    --nolosses \
+    --outputdir "./${busco_id}.notung.root"
   if [[ -e "${busco_id}.notung.root/${busco_id}.busco.nwk.rooting.0" ]]; then
     zip -rq "${busco_id}.busco.notung.root.zip" "${busco_id}.notung.root"
     mv_out "${busco_id}.busco.notung.root.zip" "${outfile}"
@@ -2569,7 +2569,7 @@ if [[ ${run_busco_notung_root_dna} -eq 1 ]]; then
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_dna}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le $((${GG_TASK_CPUS}/2))
+    wait_until_jobn_le $((${GG_TASK_CPUS} / 2))
     busco_notung "${infile}" "${dir_busco_iqtree_dna}" "${dir_busco_notung_dna}" &
   done
   wait_for_background_jobs
@@ -2584,7 +2584,7 @@ if [[ ${run_busco_notung_root_pep} -eq 1 ]]; then
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_pep}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le $((${GG_TASK_CPUS}/2))
+    wait_until_jobn_le $((${GG_TASK_CPUS} / 2))
     busco_notung "${infile}" "${dir_busco_iqtree_pep}" "${dir_busco_notung_pep}" &
   done
   wait_for_background_jobs
@@ -2592,7 +2592,7 @@ else
   gg_step_skip "${task}"
 fi
 
-busco_species_tree_assisted_gene_tree_rooting () {
+busco_species_tree_assisted_gene_tree_rooting() {
   infile=$1
   indir=$2
   intreedir=$3
@@ -2613,23 +2613,23 @@ busco_species_tree_assisted_gene_tree_rooting () {
   unzip -q "${infile}"
 
   Rscript "${gg_support_dir}/species_tree_guided_gene_tree_rooting.r" \
-  "--notung_root_zip=./${infile}" \
-  "--in_tree=${intree}" \
-  "--out_tree=${busco_id}.root.nwk" \
-  "--ncpu=${GG_TASK_CPUS}" \
-  2>&1 | tee "${busco_id}.root.txt"
+    "--notung_root_zip=./${infile}" \
+    "--in_tree=${intree}" \
+    "--out_tree=${busco_id}.root.nwk" \
+    "--ncpu=${GG_TASK_CPUS}" \
+    2>&1 | tee "${busco_id}.root.txt"
 
   if [[ -s "${busco_id}.root.nwk" ]]; then
     mv_out "${busco_id}".root.txt "${outfile_txt}"
     mv_out "${busco_id}".root.nwk "${outfile_nwk}"
-  rm -f -- "${infile}"
-  rm -rf -- "${busco_id}.notung.root"
+    rm -f -- "${infile}"
+    rm -rf -- "${busco_id}.notung.root"
   fi
 }
 
 task="Species-tree-guided gene tree rooting of duplicate-containing BUSCO DNA trees"
 if [[ ${run_busco_root_dna} -eq 1 ]]; then
-    gg_step_start "${task}"
+  gg_step_start "${task}"
 
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_dna}")
@@ -2644,7 +2644,7 @@ fi
 
 task="Species-tree-guided gene tree rooting of duplicate-containing BUSCO protein trees"
 if [[ ${run_busco_root_pep} -eq 1 ]]; then
-    gg_step_start "${task}"
+  gg_step_start "${task}"
 
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_pep}")
@@ -2657,14 +2657,14 @@ else
   gg_step_skip "${task}"
 fi
 
-busco_grampa () {
+busco_grampa() {
   indir=$1
   outdir=$2
   outfile=$3
   ensure_dir "${outdir}"
   local nwk_files=()
   shopt -s nullglob
-  nwk_files=( "${indir}"/*.nwk )
+  nwk_files=("${indir}"/*.nwk)
   shopt -u nullglob
   if [[ ${#nwk_files[@]} -eq 0 ]]; then
     echo "Skipping Grampa because no rooted gene trees were found in: ${indir}"
@@ -2673,18 +2673,18 @@ busco_grampa () {
   if [[ -e "./grampa_out" ]]; then
     rm -rf -- "./grampa_out"
   fi
-  nwkit drop --infile "${file_dated_species_tree}" --target 'intnode' --name 'yes' \
-  | sed -e "s/_/-/g" \
-  > "grampa_input_species_tree.nwk"
+  nwkit drop --infile "${file_dated_species_tree}" --target 'intnode' --name 'yes' |
+    sed -e "s/_/-/g" \
+      > "grampa_input_species_tree.nwk"
 
   > "grampa_input_gene_trees.nwk"
   > "busco_genetree_filenames.txt"
   for nwk_file in "${nwk_files[@]}"; do
     transformed_tree=$(
-      sed -E "s/([(,])([^_)(,:]+)_([^_)(,:]+)_([^)(,:]+)([)(,:])/\1\4|||\2\-\3\5/g" "${nwk_file}" \
-      | sed -e "s/_/-/g" -e "s/|||/_/g" \
-      | sed -E 's/\)([^():;,]+):/\):/g; s/\)([^():;,]+);/\);/g' \
-      | tr -d '\r\n'
+      sed -E "s/([(,])([^_)(,:]+)_([^_)(,:]+)_([^)(,:]+)([)(,:])/\1\4|||\2\-\3\5/g" "${nwk_file}" |
+        sed -e "s/_/-/g" -e "s/|||/_/g" |
+        sed -E 's/\)([^():;,]+):/\):/g; s/\)([^():;,]+);/\);/g' |
+        tr -d '\r\n'
     )
     if [[ "${transformed_tree}" == *"("* && "${transformed_tree}" == *")"* && "${transformed_tree}" == *";"* ]]; then
       printf "%s\n" "${transformed_tree}" >> "grampa_input_gene_trees.nwk"
@@ -2711,7 +2711,7 @@ busco_grampa () {
   if [[ -n "${grampa_h1}" ]]; then
     local grampa_h1_normalized=${grampa_h1//_/-}
     grampa_h1_normalized=${grampa_h1_normalized//[[:space:]]/-}
-    grampa_args+=( -h1 "${grampa_h1_normalized}" )
+    grampa_args+=(-h1 "${grampa_h1_normalized}")
   fi
 
   grampa.py "${grampa_args[@]}"
@@ -2758,12 +2758,12 @@ busco_grampa () {
   fi
 
   python "${gg_support_dir}/parse_grampa.py" \
-  --grampa_det "${grampa_det_file}" \
-  --grampa_out "${grampa_out_file}" \
-  --gene_trees "./grampa_input_gene_trees.nwk" \
-  --species_tree "./grampa_input_species_tree.nwk" \
-  --ncpu "${GG_TASK_CPUS}" \
-  --sorted_gene_tree_file_names "./busco_genetree_filenames.txt"
+    --grampa_det "${grampa_det_file}" \
+    --grampa_out "${grampa_out_file}" \
+    --gene_trees "./grampa_input_gene_trees.nwk" \
+    --species_tree "./grampa_input_species_tree.nwk" \
+    --ncpu "${GG_TASK_CPUS}" \
+    --sorted_gene_tree_file_names "./busco_genetree_filenames.txt"
 
   if [[ -s "${grampa_checknums_file}" && -s "${grampa_det_file}" && -s "${grampa_out_file}" && -s "grampa_summary.tsv" ]]; then
     if ! awk -F'\t' '/^The MUL-tree with the minimum parsimony score/ {print $NF; found=1} END{exit(found?0:1)}' "${grampa_out_file}" > "${outdir}/best_mul_tree.nwk"; then
@@ -2859,21 +2859,21 @@ if [[ (! -s "${file_cafe_summary_all_pdf}" || ! -s "${file_cafe_summary_signific
       rm -rf -- "${dir_cafe_orthogroup_selection}"
     fi
     python "${gg_support_dir}/cafe_orthogroup_selection.py" \
-    --genecount "${file_orthogroup_genecount_selected}" \
-    --dated_species_tree "${file_dated_species_tree}" \
-    --output_dir "${dir_cafe_orthogroup_selection}" \
-    --max_size_differential "${max_size_differential_cafe}"
+      --genecount "${file_orthogroup_genecount_selected}" \
+      --dated_species_tree "${file_dated_species_tree}" \
+      --output_dir "${dir_cafe_orthogroup_selection}" \
+      --max_size_differential "${max_size_differential_cafe}"
 
     if [[ -d "${dir_cafe_output}" ]]; then
       rm -rf -- "${dir_cafe_output}"
     fi
     cafe5 \
-    --infile "${dir_cafe_orthogroup_selection}/cafe_input.tsv" \
-    --tree "${file_dated_species_tree}" \
-    --n_gamma_cats "${n_gamma_cats_cafe}" \
-    --pvalue 0.05 \
-    --cores "${GG_TASK_CPUS}" \
-    --output_prefix "${dir_cafe_output}"
+      --infile "${dir_cafe_orthogroup_selection}/cafe_input.tsv" \
+      --tree "${file_dated_species_tree}" \
+      --n_gamma_cats "${n_gamma_cats_cafe}" \
+      --pvalue 0.05 \
+      --cores "${GG_TASK_CPUS}" \
+      --output_prefix "${dir_cafe_output}"
   else
     echo "CAFE output files already exist. Skipping CAFE run."
   fi
@@ -2896,13 +2896,13 @@ if [[ (! -s "${file_cafe_summary_all_pdf}" || ! -s "${file_cafe_summary_signific
       rm -rf -- "$(dirname "${file_cafe_summary_all_pdf}")"
     fi
     Rscript "${gg_support_dir}/cafe_plot_summary.r" \
-    "${dir_cafe_output}/Gamma_asr.tre" \
-    "${dir_cafe_output}/Gamma_change.tab" \
-    "$(dirname "${file_cafe_summary_all_pdf}")"
+      "${dir_cafe_output}/Gamma_asr.tre" \
+      "${dir_cafe_output}/Gamma_change.tab" \
+      "$(dirname "${file_cafe_summary_all_pdf}")"
 
     Rscript "${gg_support_dir}/cafe_plot_branch_id.r" \
-    "${dir_cafe_output}/Gamma_asr.tre" \
-    "$(dirname "${file_cafe_summary_all_pdf}")"
+      "${dir_cafe_output}/Gamma_asr.tre" \
+      "$(dirname "${file_cafe_summary_all_pdf}")"
   else
     echo "CAFE did not finish successfully. Exiting."
     exit 1

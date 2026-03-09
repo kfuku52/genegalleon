@@ -1168,7 +1168,7 @@ def test_genome_evolution_core_builds_grampa_arguments_with_array():
     text = _read_text(script)
     assert "h1_param=\"-h1 " not in text
     assert "grampa_args=(" in text
-    assert "grampa_args+=( -h1 \"${grampa_h1_normalized}\" )" in text
+    assert 'grampa_args+=(-h1 "${grampa_h1_normalized}")' in text
     assert 'grampa.py "${grampa_args[@]}"' in text
 
 
@@ -1338,7 +1338,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
 def test_transcriptome_core_sraid_metadata_filter_handles_zero_match_explicitly():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
-    assert 'grep -F -- "${sp_space}" "./metadata/metadata.tsv" || true;' in text
+    assert 'grep -F -- "${sp_space}" "./metadata/metadata.tsv" || true' in text
     assert 'if [[ $(wc -l < "./metadata.tsv") -le 1 ]]; then' in text
     assert "No metadata rows matched species" in text
 
@@ -1439,9 +1439,9 @@ def test_genome_evolution_uses_local_species_tree_rooting_parameter():
     assert 'species_tree_rooting="${species_tree_rooting:-taxonomy}"' in core
     assert 'parse_species_tree_rooting "${species_tree_rooting}" species_tree_rooting_method species_tree_rooting_value' in core
     assert 'species_tree_rooting must be one of "outgroup,GENUS_SPECIES[,GENUS_SPECIES...]", "midpoint", "mad", "mv", or "taxonomy[,ncbi[,opentree,timetree...]]".' in core
-    assert 'nwkit_root_args=( --method "${root_method}" --infile "${infile}" --outfile "${outfile}" )' in core
-    assert 'nwkit_root_args+=( --outgroup "${root_value}" )' in core
-    assert 'nwkit_root_args+=( --download_dir "${dir_nwkit_download_dir}" )' in core
+    assert 'nwkit_root_args=(--method "${root_method}" --infile "${infile}" --outfile "${outfile}")' in core
+    assert 'nwkit_root_args+=(--outgroup "${root_value}")' in core
+    assert 'nwkit_root_args+=(--download_dir "${dir_nwkit_download_dir}")' in core
     assert "      species_tree_rooting" in config_vars
 
 
@@ -1697,7 +1697,7 @@ def test_gene_evolution_core_filters_empty_translated_records_before_diamond_mak
     assert 'gsub(/\\*/, "", $0)' in text
     assert 'if ($0 != "") {' in text
     assert 'printf("Dropped %d translated protein records with empty sequence after stop-codon removal.\\n", dropped) > "/dev/stderr"' in text
-    assert text.count('| filter_translated_fasta_for_diamond \\') >= 2
+    assert text.count('filter_translated_fasta_for_diamond \\') >= 2
 
 
 def test_transcriptome_core_quotes_mmseqs_createdb_input_path():
@@ -1725,9 +1725,9 @@ def test_transcriptome_core_avoids_direct_mv_out_glob_for_getfastq_and_quant():
     text = _read_text(script)
     assert 'mv_out "${dir_tmp}"/getfastq/* "${dir_amalgkit_getfastq_sp}"' not in text
     assert "mv_out ./quant/* \"${dir_amalgkit_quant}/${sp_ub}\"" not in text
-    assert 'getfastq_outputs=( "${dir_tmp}"/getfastq/* )' in text
+    assert 'getfastq_outputs=("${dir_tmp}"/getfastq/*)' in text
     assert 'mv_out "${getfastq_outputs[@]}" "${dir_amalgkit_getfastq_sp}"' in text
-    assert "quant_outputs=( ./quant/* )" in text
+    assert "quant_outputs=(./quant/*)" in text
     assert 'mv_out "${quant_outputs[@]}" "${dir_amalgkit_quant}/${sp_ub}"' in text
 
 
@@ -1867,7 +1867,7 @@ def test_genome_evolution_core_uses_array_for_optional_orthofinder_species_tree_
 
     expected_tokens = [
         "param_species_tree=()",
-        'param_species_tree=( -s "${species_tree}" )',
+        'param_species_tree=(-s "${species_tree}")',
         "if [[ ${#param_species_tree[@]} -gt 0 ]]; then",
         '"${param_species_tree[@]}"; then',
     ]
@@ -1966,7 +1966,7 @@ def test_gene_evolution_core_uses_nullglob_array_for_query_hits_merge():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     assert "for query_hits_tmp_file in ${query_hits_tmp_dir}/*.hits.fasta; do" not in text
-    assert 'query_hits_tmp_files=( "${query_hits_tmp_dir}"/*.hits.fasta )' in text
+    assert 'query_hits_tmp_files=("${query_hits_tmp_dir}"/*.hits.fasta)' in text
     assert 'for query_hits_tmp_file in "${query_hits_tmp_files[@]}"; do' in text
 
 
@@ -2008,9 +2008,9 @@ def test_transcriptome_core_uses_array_for_assembly_stat_input_files():
     assert 'input_files="${input_files} ${file_longestcds}"' not in text
     assert 'input_files="${input_files} ${file_longestcds_contamination_removal_fasta}"' not in text
     assert "${input_files}" not in text
-    assert 'input_files=( "${file_isoform}" )' in text
-    assert 'input_files+=( "${file_longestcds}" )' in text
-    assert 'input_files+=( "${file_longestcds_contamination_removal_fasta}" )' in text
+    assert 'input_files=("${file_isoform}")' in text
+    assert 'input_files+=("${file_longestcds}")' in text
+    assert 'input_files+=("${file_longestcds_contamination_removal_fasta}")' in text
     assert '"${input_files[@]}"' in text
 
 
@@ -2072,8 +2072,8 @@ def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
         '--download_dir "${dir_nwkit_download_dir}"',
         '--left_species "${mcmctree_params[0]}"',
         '--right_species "${mcmctree_params[1]}"',
-        'nwkit_args+=( --lower_bound "${mcmctree_params[2]}" )',
-        'nwkit_args+=( --upper_bound "${mcmctree_params[3]}" )',
+        'nwkit_args+=(--lower_bound "${mcmctree_params[2]}")',
+        'nwkit_args+=(--upper_bound "${mcmctree_params[3]}")',
         'tree_string=$(printf \'%s\\n\' "${tree_string}" | nwkit mcmctree "${nwkit_args[@]}")',
         'printf \'%s\\n\' "${tree_string}" > "tmp.constrained.tree.nwk"',
     ]
@@ -2095,10 +2095,10 @@ def test_genome_evolution_core_initializes_concat_iqtree_optional_args_as_arrays
         assert token not in text, f"Found fragile concat-IQ-TREE args token: {token}"
 
     expected_tokens = [
-        "bootstrap_params=( --ufboot 1000 --bnni )",
+        "bootstrap_params=(--ufboot 1000 --bnni)",
         "bootstrap_params=()",
         "iqtree_mem_args=()",
-        'iqtree_mem_args=( -mem "${GG_MEM_TOTAL_GB}G" )',
+        'iqtree_mem_args=(-mem "${GG_MEM_TOTAL_GB}G")',
         '"${iqtree_mem_args[@]}" \\',
         '"${bootstrap_params[@]}"; then',
     ]
@@ -2131,10 +2131,10 @@ def test_gene_evolution_core_uses_array_optional_args_for_iqtree_and_csubst():
 
     expected_tokens = [
         "other_iqtree_params=()",
-        "other_iqtree_params=( --ufboot 1000 --bnni )",
-        "other_iqtree_params+=( --fast )",
+        "other_iqtree_params=(--ufboot 1000 --bnni)",
+        "other_iqtree_params+=(--fast)",
         '"${other_iqtree_params[@]}"',
-        "foreground_params=( --foreground foreground.tsv --fg_format 2 )",
+        "foreground_params=(--foreground foreground.tsv --fg_format 2)",
         "foreground_params=()",
         '"${foreground_params[@]}"',
     ]
@@ -2150,7 +2150,7 @@ def test_gene_evolution_core_disables_initial_ufboot_when_fast_mode_is_enabled()
     assert 'Disabling IQ-TREE UFBOOT because fast mode is enabled for large alignments (${num_seq} > ${iqtree_fast_mode_gt}).' in text
     assert 'other_iqtree_params=()' in text
     assert 'file_tree="${og_id}.treefile"' in text
-    assert 'other_iqtree_params+=( --fast )' in text
+    assert 'other_iqtree_params+=(--fast)' in text
 
 
 def test_gene_evolution_core_keeps_generax_ufboot_task_free_of_fast_flag():
@@ -2435,7 +2435,7 @@ def test_transcriptome_core_busco_summary_loop_guards_missing_dir_before_find():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
     assert 'if [[ -z "$(find "${dir_busco}" -mindepth 1 -print -quit)" ]]; then' not in text
-    assert 'if [[ ! -d "${dir_busco}" || -z "$(find "${dir_busco}" -mindepth 1 -print -quit 2>/dev/null)" ]]; then' in text
+    assert 'if [[ ! -d "${dir_busco}" || -z "$(find "${dir_busco}" -mindepth 1 -print -quit 2> /dev/null)" ]]; then' in text
 
 
 def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
@@ -2456,8 +2456,8 @@ def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
         'if [[ -s "${file_og_expression}" && ${run_l1ou} -eq 1 ]]; then',
         'if [[ ! -s "${file_og_hyphy_relax_reversed}" && ${run_hyphy_relax_reversed} -eq 1 ]]; then',
         'if [[ ! -s "${file_og_scm_intron_summary}" && ${run_scm_intron} -eq 1 ]]; then',
-        'if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || ! -s "${file_og_l1ou_fit_regime}" || ! -s "${file_og_l1ou_fit_leaf}" ) && ${run_l1ou} -eq 1 ]]; then',
-        'if ( [[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]] ) && [[ ${run_tree_plot} -eq 1 ]]; then',
+        'if [[ (! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || ! -s "${file_og_l1ou_fit_regime}" || ! -s "${file_og_l1ou_fit_leaf}") && ${run_l1ou} -eq 1 ]]; then',
+        'if ([[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]]) && [[ ${run_tree_plot} -eq 1 ]]; then',
         'if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" && ${gg_debug_mode:-0} -eq 0 ]]; then',
     ]
     for token in expected_tokens:
@@ -2542,7 +2542,7 @@ def test_transcriptome_core_guards_getfastq_outputs_before_assembly_and_quant():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
     dir_guard = 'if [[ ! -d "${dir_amalgkit_getfastq_sp}" ]]; then'
-    fastq_guard = 'if [[ -z "$(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" -print -quit 2>/dev/null)" ]]; then'
+    fastq_guard = 'if [[ -z "$(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" -print -quit 2> /dev/null)" ]]; then'
     assert text.count(dir_guard) >= 2
     assert text.count(fastq_guard) >= 2
     assert "amalgkit getfastq output directory not found" in text
@@ -2596,7 +2596,7 @@ def test_genome_annotation_core_guards_array_task_id_before_task_index_math():
     assert 'find "${dir_sp_cds}" -maxdepth 1 -type f ! -name \'.*\'' in text
     assert 'find "${dir_sp_dnaseq}/${sp_ub}" -type f ! -name \'.*\'' in text
     guard = 'if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then'
-    task_index = "task_index=$((GG_ARRAY_TASK_ID-1))"
+    task_index = "task_index=$((GG_ARRAY_TASK_ID - 1))"
     assert guard in text
     assert task_index in text
     assert text.index(guard) < text.index(task_index)

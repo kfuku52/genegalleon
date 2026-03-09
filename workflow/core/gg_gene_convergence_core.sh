@@ -33,18 +33,18 @@ if [[ "${dir_out}" == "auto" ]]; then
 fi
 
 python "${gg_support_dir}/csubst_site_wrapper.py" \
---arity_range "${arity_range}" \
---trait "${trait}" \
---skip_lower_order "${skip_lower_order}" \
---min_fg_stem_ratio "${min_fg_stem_ratio}" \
---min_OCNany2spe "${min_OCNany2spe}" \
---min_omegaCany2spe "${min_omegaCany2spe}" \
---min_OCNCoD "${min_OCNCoD}" \
---max_per_K "${max_per_K}" \
---ncpu "${GG_TASK_CPUS:-1}" \
---file_trait "${file_trait}" \
---dir_orthogroup "${dir_orthogroup}" \
---dir_orthofinder "${dir_orthofinder}" \
---dir_out "${dir_out}"
+  --arity_range "${arity_range}" \
+  --trait "${trait}" \
+  --skip_lower_order "${skip_lower_order}" \
+  --min_fg_stem_ratio "${min_fg_stem_ratio}" \
+  --min_OCNany2spe "${min_OCNany2spe}" \
+  --min_omegaCany2spe "${min_omegaCany2spe}" \
+  --min_OCNCoD "${min_OCNCoD}" \
+  --max_per_K "${max_per_K}" \
+  --ncpu "${GG_TASK_CPUS:-1}" \
+  --file_trait "${file_trait}" \
+  --dir_orthogroup "${dir_orthogroup}" \
+  --dir_orthofinder "${dir_orthofinder}" \
+  --dir_out "${dir_out}"
 
 echo "$(date): Exiting Singularity environment"
