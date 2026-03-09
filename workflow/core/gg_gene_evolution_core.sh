@@ -2666,30 +2666,6 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
     max_nshift=0
   fi
 
-  # Clamp the OU worker count to the CPUs visible on the current host.
-  if command -v nproc >/dev/null 2>&1; then
-    CPU_PER_HOST=$(nproc)
-  elif command -v getconf >/dev/null 2>&1; then
-    CPU_PER_HOST=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
-  elif [[ -r /proc/cpuinfo ]]; then
-    CPU_PER_HOST=$(awk '/^processor[[:space:]]*:/ {n++} END {print n+0}' /proc/cpuinfo)
-  else
-    CPU_PER_HOST=1
-  fi
-  if [[ -z "${CPU_PER_HOST}" || "${CPU_PER_HOST}" -lt 1 ]]; then
-    CPU_PER_HOST=1
-  fi
-  cpu_pick="${GG_TASK_CPUS}"
-  if [[ "${cpu_pick}" -gt "${CPU_PER_HOST}" ]]; then
-    cpu_pick="${CPU_PER_HOST}"
-  fi
-  if [[ "${cpu_pick}" -lt 1 ]]; then
-    cpu_pick=1
-  fi
-  echo "CPU_PER_HOST: ${CPU_PER_HOST}"
-  echo "Using ${cpu_pick} CPU(s) for kfl1ou."
-
-
 	fit_ind_file=''
 	if [[ ${l1ou_use_fit_file} -eq 1 && -s "${file_og_l1ou_fit_rdata}" ]]; then
 		fit_ind_file=${file_og_l1ou_fit_rdata}
@@ -2700,7 +2676,7 @@ if [[ ( ! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || !
     --max_nshift="${max_nshift}"
     --tree_file="${file_og_dated_tree_analysis}"
     --trait_file="${file_og_expression}"
-    --nslots="${cpu_pick}"
+    --nslots="${GG_TASK_CPUS}"
     --criterion="${l1ou_criterion}"
     --nbootstrap="${l1ou_nbootstrap}"
     --fit_ind_file="${fit_ind_file}"

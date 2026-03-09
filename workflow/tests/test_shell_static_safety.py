@@ -626,13 +626,12 @@ def test_gene_evolution_scripts_do_not_use_removed_run_pgls_gene_tree_toggle():
     assert "run_pgls_gene_tree" not in entrypoint_text
 
 
-def test_gene_evolution_core_clamps_l1ou_cpu_selection_to_available_cores():
+def test_gene_evolution_core_passes_gg_task_cpus_to_kfl1ou():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    assert 'CPU_PER_HOST=$(grep -c processor /proc/cpuinfo)' not in text
-    assert 'cpu_pick="${GG_TASK_CPUS}"' in text
-    assert 'if [[ "${cpu_pick}" -gt "${CPU_PER_HOST}" ]]; then' in text
-    assert '--nslots="${cpu_pick}"' in text
+    assert 'CPU_PER_HOST=' not in text
+    assert 'cpu_pick="${GG_TASK_CPUS}"' not in text
+    assert '--nslots="${GG_TASK_CPUS}"' in text
     assert 'taskset' not in text
     assert 'cpu_id=$(python -c' not in text
     assert '"${l1ou_cmd[@]}"' in text
