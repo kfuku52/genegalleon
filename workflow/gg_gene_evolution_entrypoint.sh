@@ -191,7 +191,7 @@ gg_entrypoint_activate_container_runtime
 
 gg_entrypoint_enter_workspace
 set +e
-${singularity_command} "${gg_container_image_path}" < "${gg_core_dir}/gg_gene_evolution_core.sh"
+gg_run_container_shell_script "${gg_container_image_path}" "${gg_core_dir}/gg_gene_evolution_core.sh"
 cmd_exit_code=$?
 set -e
 if [[ ${cmd_exit_code} -eq 8 ]]; then

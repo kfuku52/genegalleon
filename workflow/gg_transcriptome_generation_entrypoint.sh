@@ -106,7 +106,7 @@ fi
 gg_entrypoint_activate_container_runtime
 
 gg_entrypoint_enter_workspace
-${singularity_command} "${gg_container_image_path}" < "${gg_core_dir}/gg_transcriptome_generation_core.sh"
+gg_run_container_shell_script "${gg_container_image_path}" "${gg_core_dir}/gg_transcriptome_generation_core.sh"
 gg_require_versions_dump "${gg_entrypoint_name}"
 
 echo "$(date): Ending"
