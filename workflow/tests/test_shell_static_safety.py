@@ -2669,6 +2669,8 @@ def test_mmseqs_uniref90_download_retries_and_reports_disk_context():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
     body = _function_body(text, "_download_mmseqs_uniref90_db")
+    assert 'local output_db="${db_dir}/${uniref_db}_DB"' in body
+    assert 'mmseqs databases "${uniref_db}" "${output_db}" "${db_dir}" --threads "${nthreads}"' in body
     assert "for attempt in 1 2 3; do" in body
     assert 'Preparing MMseqs2 UniRef90 taxonomy DB in: ${db_dir} (attempt ${attempt}/${max_attempts})' in body
     assert 'MMseqs2 UniRef90 taxonomy DB preparation failed in: ${db_dir} (attempt ${attempt}/${max_attempts})' in body

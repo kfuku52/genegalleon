@@ -3668,12 +3668,13 @@ _download_mmseqs_uniref90_db() {
   local db_dir=$1
   local nthreads=$2
   local uniref_db="UniRef90"
+  local output_db="${db_dir}/${uniref_db}_DB"
   local attempt
   local max_attempts=3
   mkdir -p "${db_dir}"
   for attempt in 1 2 3; do
     echo "Preparing MMseqs2 UniRef90 taxonomy DB in: ${db_dir} (attempt ${attempt}/${max_attempts})" >&2
-    if mmseqs databases "${uniref_db}" "${uniref_db}_DB" "${db_dir}" --threads "${nthreads}"; then
+    if mmseqs databases "${uniref_db}" "${output_db}" "${db_dir}" --threads "${nthreads}"; then
       break
     fi
     echo "MMseqs2 UniRef90 taxonomy DB preparation failed in: ${db_dir} (attempt ${attempt}/${max_attempts})" >&2
