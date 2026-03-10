@@ -1053,15 +1053,21 @@ def test_genome_annotation_core_uses_shared_lock_for_species_cds_validation_stam
     assert 'heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}' in text
 
 
-def test_ete_taxonomy_helper_precreates_ete4_cache_dirs():
+def test_ete_taxonomy_helper_uses_explicit_shared_taxdump_path():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
     set_env_body = _function_body(text, "gg_set_taxonomy_cache_env")
     locked_body = _function_body(text, "_ensure_ete_taxonomy_db_locked")
     ensure_body = _function_body(text, "ensure_ete_taxonomy_db")
+    assert 'workspace_taxonomy_taxdumpfile()' in text
     assert 'ensure_dir "${dir_taxonomy}/ete4"' in set_env_body
+    assert 'export GG_TAXONOMY_TAXDUMPFILE="${dir_taxonomy}/taxdump.tar.gz"' in set_env_body
     assert 'os.makedirs(os.path.join(cache_dir, "ete4"), exist_ok=True)' in locked_body
+    assert 'GG_TAXONOMY_TAXDUMPFILE="${taxdump_file}"' in text
+    assert 'NCBITaxa(dbfile=db_file, taxdump_file=ensure_taxdump_file(), update=True)' in locked_body
     assert 'ensure_dir "${dir_taxonomy}/ete4"' in ensure_body
+    assert 'taxdump_file=$(workspace_taxonomy_taxdumpfile "${gg_workspace_dir}")' in ensure_body
+    assert '_ensure_ete_taxonomy_db_locked "${db_file}" "${taxdump_file}"' in ensure_body
 
 
 def test_latest_jaspar_lock_uses_shared_lock_and_marker_resolution():
@@ -1384,6 +1390,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         "--rrna_filter ${amalgkit_rrna_filter}",
         "--contam_filter ${amalgkit_contam_filter}",
         "--contam_filter_rank ${contamination_removal_rank_for_amalgkit}",
+        "--contam_filter_db ${dir_mmseqs2_db}/UniRef90_DB",
         "ln -s ${dir_amalgkit_getfastq_sp} \"./getfastq\"",
         "--fasta_file ${file_longestcds}",
         "--mmseqs2taxonomy_tsv ${file_longestcds_mmseqs2taxonomy}",
@@ -1413,6 +1420,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         '--rrna_filter "${amalgkit_rrna_filter}"',
         '--contam_filter "${amalgkit_contam_filter}"',
         '--contam_filter_rank "${contamination_removal_rank_for_amalgkit}"',
+        '--contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"',
         'ln -s "${dir_amalgkit_getfastq_sp}" "./getfastq"',
         '--fasta_file "${file_longestcds}"',
         '--mmseqs2taxonomy_tsv "${file_longestcds_mmseqs2taxonomy}"',
@@ -1457,6 +1465,16 @@ def test_transcriptome_core_passes_download_dir_to_amalgkit_integrate():
     integrate_end = text.index('    mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"', integrate_start)
     integrate_block = text[integrate_start:integrate_end]
     assert '--download_dir "${dir_amalgkit_download_dir}"' in integrate_block
+
+
+def test_transcriptome_core_passes_shared_mmseqs_db_to_amalgkit_getfastq():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    getfastq_start = text.index("  if amalgkit getfastq \\")
+    getfastq_end = text.index('    echo "amalgkit getfastq safely finished."', getfastq_start)
+    getfastq_block = text[getfastq_start:getfastq_end]
+    assert 'dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"' in text
+    assert '--contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"' in getfastq_block
 
 
 def test_common_params_do_not_define_contamination_removal_rank():

@@ -1608,6 +1608,13 @@ workspace_taxonomy_dbfile() {
   echo "${dir_taxonomy}/taxa.sqlite"
 }
 
+workspace_taxonomy_taxdumpfile() {
+  local gg_workspace_dir=$1
+  local dir_taxonomy
+  dir_taxonomy=$(workspace_taxonomy_root "${gg_workspace_dir}")
+  echo "${dir_taxonomy}/taxdump.tar.gz"
+}
+
 gg_set_taxonomy_cache_env() {
   local gg_workspace_dir=$1
   local dir_taxonomy
@@ -1620,10 +1627,12 @@ gg_set_taxonomy_cache_env() {
   export XDG_DATA_HOME="${dir_taxonomy}"
   export XDG_CONFIG_HOME="${dir_taxonomy}"
   export GG_TAXONOMY_DBFILE="${dir_taxonomy}/taxa.sqlite"
+  export GG_TAXONOMY_TAXDUMPFILE="${dir_taxonomy}/taxdump.tar.gz"
 }
 
 _ensure_ete_taxonomy_db_locked() {
   local db_file=$1
+  local taxdump_file=$2
   local py_exec=""
   py_exec=$(gg_find_python_exec || true)
 
@@ -1637,15 +1646,21 @@ _ensure_ete_taxonomy_db_locked() {
     XDG_DATA_HOME="$(dirname "${db_file}")" \
     XDG_CONFIG_HOME="$(dirname "${db_file}")" \
     GG_TAXONOMY_DBFILE="${db_file}" \
+    GG_TAXONOMY_TAXDUMPFILE="${taxdump_file}" \
     "${py_exec}" - <<'PY'
 import importlib
 import os
+import urllib.request
 
 db_file = os.environ.get("GG_TAXONOMY_DBFILE", "").strip()
 if not db_file:
     raise SystemExit("GG_TAXONOMY_DBFILE is empty.")
+taxdump_file = os.environ.get("GG_TAXONOMY_TAXDUMPFILE", "").strip()
+if not taxdump_file:
+    raise SystemExit("GG_TAXONOMY_TAXDUMPFILE is empty.")
 
 os.makedirs(os.path.dirname(db_file), exist_ok=True)
+os.makedirs(os.path.dirname(taxdump_file), exist_ok=True)
 
 candidate_cache_dirs = []
 for key in ("ETE_DATA_HOME", "ETE_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"):
@@ -1662,12 +1677,25 @@ for cache_dir in dict.fromkeys(candidate_cache_dirs):
     os.makedirs(cache_dir, exist_ok=True)
     os.makedirs(os.path.join(cache_dir, "ete4"), exist_ok=True)
 
+def ensure_taxdump_file():
+    if os.path.exists(taxdump_file):
+        return taxdump_file
+    tmp_path = taxdump_file + ".tmp"
+    if os.path.lexists(tmp_path):
+        os.remove(tmp_path)
+    urllib.request.urlretrieve(
+        "https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz",
+        tmp_path,
+    )
+    os.replace(tmp_path, taxdump_file)
+    return taxdump_file
+
 def ensure_with_ete4():
     ncbiquery = importlib.import_module("ete4.ncbi_taxonomy.ncbiquery")
     if os.path.exists(db_file) and ncbiquery.is_taxadb_up_to_date(db_file):
         return "ete4:up_to_date"
     NCBITaxa = importlib.import_module("ete4").NCBITaxa
-    NCBITaxa(dbfile=db_file, update=True)
+    NCBITaxa(dbfile=db_file, taxdump_file=ensure_taxdump_file(), update=True)
     return "ete4:updated"
 
 try:
@@ -1693,11 +1721,13 @@ ensure_ete_taxonomy_db() {
   local dir_db
   local dir_taxonomy
   local db_file
+  local taxdump_file
   local lock_file
 
   dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
   dir_taxonomy=$(workspace_taxonomy_root "${gg_workspace_dir}")
   db_file=$(workspace_taxonomy_dbfile "${gg_workspace_dir}")
+  taxdump_file=$(workspace_taxonomy_taxdumpfile "${gg_workspace_dir}")
   lock_file="${dir_db}/locks/ete_taxonomy.lock"
 
   ensure_dir "${dir_db}"
@@ -1710,9 +1740,10 @@ ensure_ete_taxonomy_db() {
   export XDG_DATA_HOME="${dir_taxonomy}"
   export XDG_CONFIG_HOME="${dir_taxonomy}"
   export GG_TAXONOMY_DBFILE="${db_file}"
+  export GG_TAXONOMY_TAXDUMPFILE="${taxdump_file}"
 
   gg_array_download_once "${lock_file}" "${db_file}" "ETE taxonomy DB" \
-    _ensure_ete_taxonomy_db_locked "${db_file}" || return 1
+    _ensure_ete_taxonomy_db_locked "${db_file}" "${taxdump_file}" || return 1
   if [[ ! -s "${db_file}" ]]; then
     echo "Failed to prepare ETE taxonomy DB: ${db_file}" >&2
     return 1

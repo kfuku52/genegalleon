@@ -230,7 +230,8 @@ fi
 
 dir_tmp="${dir_transcriptome_assembly_output}/tmp/${GG_ARRAY_TASK_ID}_${sp_ub}"
 dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
-dir_amalgkit_download_dir="${gg_workspace_downloads_dir}/amalgkit_downloads"
+dir_amalgkit_download_dir="${gg_workspace_downloads_dir}"
+dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"
 file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"
 file_generated_amalgkit_metadata="${dir_generated_amalgkit_metadata}/${sp_ub}_metadata.tsv"
 if [[ ${mode_metadata} -eq 1 ]]; then
@@ -343,6 +344,7 @@ if [[ (${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1) && $
     --rrna_filter "${amalgkit_rrna_filter}" \
     --contam_filter "${amalgkit_contam_filter}" \
     --contam_filter_rank "${contamination_removal_rank_for_amalgkit}" \
+    --contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB" \
     --remove_sra yes \
     --remove_tmp yes \
     --read_name 'trinity' \
@@ -709,7 +711,7 @@ disable_if_no_input_file "run_longestcds_mmseqs2taxonomy" "${file_longestcds}"
 if [[ ! -s "${file_longestcds_mmseqs2taxonomy}" && ${run_longestcds_mmseqs2taxonomy} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  if ! ensure_mmseqs_uniref90_db "${gg_workspace_downloads_dir}/mmseqs2" "${GG_TASK_CPUS}"; then
+  if ! ensure_mmseqs_uniref90_db "${dir_mmseqs2_db}" "${GG_TASK_CPUS}"; then
     echo "Failed to prepare MMseqs2 UniRef90 DB. Exiting."
     exit 1
   fi
@@ -722,7 +724,7 @@ if [[ ! -s "${file_longestcds_mmseqs2taxonomy}" && ${run_longestcds_mmseqs2taxon
     mkdir -p "tmp_mmseqs2"
   fi
 
-  mmseqs taxonomy "queryDB" "${gg_workspace_downloads_dir}/mmseqs2/UniRef90_DB" "output_prefix" "tmp" \
+  mmseqs taxonomy "queryDB" "${dir_mmseqs2_db}/UniRef90_DB" "output_prefix" "tmp" \
     --split-mode 2 \
     --split-memory-limit $((${GG_MEM_TOTAL_GB} * 3 / 4))G \
     --majority 0.5 \
