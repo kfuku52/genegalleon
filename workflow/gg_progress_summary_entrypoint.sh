@@ -1,35 +1,45 @@
 #!/usr/bin/env bash
 
+# Scheduler header notes:
+# - Keep sections ordered as SLURM -> UGE -> PBS across entrypoints.
+# - Update job name, CPU count, memory, walltime, log paths, and array size together.
+# - Site-specific partition/queue/resource lines stay commented examples by default.
+
 # SLURM
+# Common parameters: job name, cores per task, memory per core, walltime, log files, and working directory.
 #SBATCH -J gg_progress_summary
 #SBATCH -c 4
 #SBATCH --mem-per-cpu=8G
 #SBATCH -t 2976:00:00
 #SBATCH --output=gg_progress_summary_%j.out
 #SBATCH --error=gg_progress_summary_%j.err
-#SBATCH -p epyc
 #SBATCH --chdir=.
+# Site-specific partition example.
+#SBATCH -p epyc
+# Optional notifications and single-node examples.
 ##SBATCH --mail-type=ALL
 ##SBATCH --mail-user=<aaa@bbb.com>
-##SBATCH -N 1-1 # Number of nodes
-##SBATCH -n 1 # Number of tasks
 
-## UGE in NIG supercomputer
+## UGE
+# Common parameters: shell, working directory, slot count, memory per slot, and runtime limits.
 #$ -S /bin/bash
 #$ -cwd
 #$ -pe def_slot 4
 #$ -l s_vmem=8G
 #$ -l mem_req=8G
+# Site-specific resource example.
 #$ -l epyc
 #$ -l d_rt=124:00:00:00
 #$ -l s_rt=124:00:00:00
 
-## PBS in BIAS at NIBB
-##PBS -S /bin/bash
-##PBS -l ncpus=4
-##PBS -l mem=32G
-##PBS -q small
-##PBS -V
+## PBS
+# Common parameters: shell, CPU count, total memory, and exported environment.
+#PBS -S /bin/bash
+#PBS -l ncpus=4
+#PBS -l mem=32G
+# Site-specific queue example.
+#PBS -q small
+#PBS -V
 
 # Number of parallel batch jobs ("-t 1-N" in SGE or "--array 1-N" in SLURM):
 # Fixed to 1

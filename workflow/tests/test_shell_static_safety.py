@@ -43,6 +43,13 @@ def _strict_mode_header(script: Path) -> str:
     return "\n".join(_read_text(script).splitlines()[:max_lines])
 
 
+def _entrypoint_scheduler_header(script: Path) -> str:
+    text = _read_text(script)
+    marker = "set -euo pipefail"
+    assert marker in text, f"Missing strict mode marker in {script}"
+    return text.split(marker, 1)[0]
+
+
 def _entrypoint_modify_block_assignments(script: Path):
     in_block = False
     for lineno, line in enumerate(_read_text(script).splitlines(), start=1):
@@ -596,6 +603,47 @@ def test_entrypoint_config_var_registry_covers_all_entrypoints():
     assert entrypoints
     for entrypoint_name in entrypoints:
         assert f"{entrypoint_name})" in registry_text
+
+
+def test_entrypoints_define_scheduler_sections_in_canonical_order():
+    entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
+    assert entrypoints, "No entrypoint scripts were found."
+    section_tokens = [
+        "# SLURM",
+        "## UGE",
+        "## PBS",
+        '# Number of parallel batch jobs ("-t 1-N" in SGE or "--array 1-N" in SLURM):',
+    ]
+    for script in entrypoints:
+        header = _entrypoint_scheduler_header(script)
+        positions = []
+        for token in section_tokens:
+            assert token in header, f"Missing scheduler header section {token!r} in {script}"
+            positions.append(header.index(token))
+        assert positions == sorted(positions), f"Scheduler header section order drifted in {script}"
+
+
+def test_entrypoints_use_active_scheduler_directives_in_header_template():
+    entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
+    assert entrypoints, "No entrypoint scripts were found."
+    for script in entrypoints:
+        header = _entrypoint_scheduler_header(script)
+        assert "##PBS" not in header, f"Use active #PBS directives in {script}"
+        assert "##SBATCH -N" not in header, f"Drop legacy commented node-count example from {script}"
+        assert "##SBATCH -n" not in header, f"Drop legacy commented task-count example from {script}"
+        assert "#PBS -S /bin/bash" in header, f"Missing PBS shell directive in {script}"
+        assert "#PBS -V" in header, f"Missing PBS environment export directive in {script}"
+
+
+def test_entrypoint_scheduler_directives_are_left_aligned():
+    entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
+    assert entrypoints, "No entrypoint scripts were found."
+    bad_lines = []
+    for script in entrypoints:
+        for lineno, line in enumerate(_entrypoint_scheduler_header(script).splitlines(), start=1):
+            if re.match(r"^ (?:#SBATCH|#PBS|#\$)", line):
+                bad_lines.append(f"{script}:{lineno}: {line}")
+    assert not bad_lines, "Left-align scheduler directives in entrypoint headers:\n" + "\n".join(bad_lines)
 
 
 def test_gg_util_uses_explicit_conda_shell_initialization():
