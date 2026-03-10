@@ -5,9 +5,11 @@ import io
 import json
 import os
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import socket
 import subprocess
 import sys
 import threading
+import time
 from urllib.parse import parse_qs, urlparse
 import zipfile
 
@@ -18,12 +20,13 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "format_species_
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"
 
 
-def run_script(*args):
+def run_script(*args, env=None):
     return subprocess.run(
         [sys.executable, str(SCRIPT_PATH), *args],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
@@ -71,6 +74,24 @@ def make_manifest_xlsx(path, headers, rows):
 
 def to_file_url(path):
     return path.resolve().as_uri()
+
+
+def _current_boot_id():
+    boot_id_path = Path("/proc/sys/kernel/random/boot_id")
+    try:
+        if boot_id_path.is_file():
+            return boot_id_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    completed = subprocess.run(
+        ["sysctl", "-n", "kern.bootsessionuuid"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout.strip()
 
 
 class _NcbiFixtureHandler(SimpleHTTPRequestHandler):
@@ -1058,7 +1079,19 @@ def test_download_manifest_recovers_stale_lock_file(tmp_path):
     raw_dir = download_dir / "CoGe" / "species_wise_original" / species_key
     raw_dir.mkdir(parents=True)
     stale_lock = raw_dir / (cds_name + ".lock")
-    stale_lock.write_text("999999\t0\tstale\n", encoding="utf-8")
+    stale_lock.write_text(
+        json.dumps(
+            {
+                "format": "shared-lock-v2",
+                "pid": 999999999,
+                "hostname": socket.gethostname(),
+                "boot_id": _current_boot_id(),
+                "created_at": time.time() - 3600.0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     completed = run_script(
         "--provider",
@@ -1073,6 +1106,70 @@ def test_download_manifest_recovers_stale_lock_file(tmp_path):
     assert (raw_dir / cds_name).exists()
     assert (raw_dir / gff_name).exists()
     assert "recovered stale lock" in completed.stderr.lower()
+
+
+def test_download_manifest_does_not_reclaim_fresh_foreign_lock_file(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    cds_source = source_dir / "coge_cds.fa"
+    gff_source = source_dir / "coge_gene.gff3"
+    cds_source.write_text(">AT1G01010_t1\nATG\n", encoding="utf-8")
+    gff_source.write_text("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=AT1G01010\n", encoding="utf-8")
+
+    manifest = tmp_path / "manifest.tsv"
+    species_key = "Arabidopsis_thaliana"
+    cds_name = "Arabidopsis_thaliana.cds.fa"
+    gff_name = "Arabidopsis_thaliana.gene.gff3"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "coge",
+                "id": "24739",
+                "species_key": species_key,
+                "cds_url": to_file_url(cds_source),
+                "gff_url": to_file_url(gff_source),
+                "cds_filename": cds_name,
+                "gff_filename": gff_name,
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    raw_dir = download_dir / "CoGe" / "species_wise_original" / species_key
+    raw_dir.mkdir(parents=True)
+    foreign_lock = raw_dir / (cds_name + ".lock")
+    foreign_lock.write_text(
+        json.dumps(
+            {
+                "format": "shared-lock-v2",
+                "pid": 999999999,
+                "hostname": "foreign-node",
+                "boot_id": "foreign-boot",
+                "created_at": time.time(),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["GG_DOWNLOAD_LOCK_ACQUIRE_TIMEOUT_SECONDS"] = "1"
+    env["GG_DOWNLOAD_LOCK_POLL_SECONDS"] = "0.1"
+    completed = run_script(
+        "--provider",
+        "coge",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--download-only",
+        env=env,
+    )
+    assert completed.returncode == 1, completed.stderr + "\n" + completed.stdout
+    assert not (raw_dir / cds_name).exists()
+    assert "waiting for shared lock" in completed.stderr.lower()
+    assert "timed out waiting for shared lock" in completed.stderr.lower()
 
 
 def test_download_manifest_resolves_urls_from_id_templates_for_non_ncbi(tmp_path):

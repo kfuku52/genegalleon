@@ -191,27 +191,23 @@ species_cds_validation_signature=$(
 )
 species_cds_validation_stamp="${dir_tmp}/species_cds_validation.${species_cds_validation_signature}.ok"
 species_cds_validation_lock="${species_cds_validation_stamp}.lock"
-if command -v flock > /dev/null 2>&1; then
-  exec 9> "${species_cds_validation_lock}"
-  flock 9
-  if [[ ! -s "${species_cds_validation_stamp}" ]]; then
-    check_species_cds "${gg_workspace_dir}"
-    check_if_species_files_unique "${dir_sp_cds}"
-    touch "${species_cds_validation_stamp}"
-  fi
-  flock -u 9
-  exec 9>&-
-else
-  species_cds_validation_lock_dir="${species_cds_validation_lock}.d"
-  while ! mkdir "${species_cds_validation_lock_dir}" 2> /dev/null; do
-    sleep 1
-  done
-  if [[ ! -s "${species_cds_validation_stamp}" ]]; then
-    check_species_cds "${gg_workspace_dir}"
-    check_if_species_files_unique "${dir_sp_cds}"
-    touch "${species_cds_validation_stamp}"
-  fi
-  rmdir "${species_cds_validation_lock_dir}" 2> /dev/null || true
+if [[ ! -s "${species_cds_validation_stamp}" ]]; then
+  (
+    if ! gg_shared_lock_acquire "${species_cds_validation_lock}" "species CDS validation stamp"; then
+      exit 1
+    fi
+    heartbeat_pid=$(gg_shared_lock_start_heartbeat "${species_cds_validation_lock}")
+    cleanup_species_cds_validation_lock() {
+      gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+      gg_shared_lock_release "${species_cds_validation_lock}"
+    }
+    trap cleanup_species_cds_validation_lock EXIT
+    if [[ ! -s "${species_cds_validation_stamp}" ]]; then
+      check_species_cds "${gg_workspace_dir}"
+      check_if_species_files_unique "${dir_sp_cds}"
+      touch "${species_cds_validation_stamp}"
+    fi
+  ) || exit 1
 fi
 
 task="Gene trait extraction from gff files"

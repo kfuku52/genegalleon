@@ -780,9 +780,17 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
       echo "makeblastdb input CDS file: ${sp_cds}"
       echo "makeblastdb output database file: ${sp_cds_blastdb}"
       if [[ ! -e "${sp_cds_blastdb}".nhr || ! -e "${sp_cds_blastdb}".nin || ! -e "${sp_cds_blastdb}".nsq || ! -e "${sp_cds_blastdb}".ndb ]]; then
-        db_lock_file="${sp_cds_blastdb}.tblastn.lock"
+        db_lock_file="${sp_cds_blastdb}.tblastn.build.lock"
         (
-          flock 9
+          if ! gg_shared_lock_acquire "${db_lock_file}" "TBLASTN database build (${sp})"; then
+            exit 1
+          fi
+          heartbeat_pid=$(gg_shared_lock_start_heartbeat "${db_lock_file}")
+          cleanup_tblastn_db_lock() {
+            gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+            gg_shared_lock_release "${db_lock_file}"
+          }
+          trap cleanup_tblastn_db_lock EXIT
           if [[ ! -e "${sp_cds_blastdb}".nhr || ! -e "${sp_cds_blastdb}".nin || ! -e "${sp_cds_blastdb}".nsq || ! -e "${sp_cds_blastdb}".ndb ]]; then
             if zgrep -q -e "^>.*[[:blank:]]" "${sp_cds}"; then
               echo "Space is detected. Please remove all annotation info after spaces in sequence names. Exiting: ${sp_cds}"
@@ -799,7 +807,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
               makeblastdb -dbtype nucl -in "${sp_cds}" -out "${sp_cds_blastdb}"
             fi
           fi
-        ) 9> "${db_lock_file}"
+        ) || exit 1
       fi
     elif [[ ${query_blast_method} == "diamond" ]]; then
       sp_cds_diamond_fasta="${sp_cds_blastdb}.diamond.fasta"
@@ -807,9 +815,17 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
       echo "diamond translated protein file: ${sp_cds_diamond_fasta}"
       echo "diamond database file: ${sp_cds_blastdb}.dmnd"
       if [[ ! -e "${sp_cds_blastdb}".dmnd ]]; then
-        db_lock_file="${sp_cds_blastdb}.diamond.lock"
+        db_lock_file="${sp_cds_blastdb}.diamond.build.lock"
         (
-          flock 9
+          if ! gg_shared_lock_acquire "${db_lock_file}" "DIAMOND database build (${sp})"; then
+            exit 1
+          fi
+          heartbeat_pid=$(gg_shared_lock_start_heartbeat "${db_lock_file}")
+          cleanup_diamond_db_lock() {
+            gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+            gg_shared_lock_release "${db_lock_file}"
+          }
+          trap cleanup_diamond_db_lock EXIT
           if [[ ! -e "${sp_cds_blastdb}".dmnd ]]; then
             if zgrep -q -e "^>.*[[:blank:]]" "${sp_cds}"; then
               echo "Space is detected. Please remove all annotation info after spaces in sequence names. Exiting: ${sp_cds}"
@@ -845,7 +861,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
             fi
             rm -f -- "${sp_cds_diamond_fasta}"
           fi
-        ) 9> "${db_lock_file}"
+        ) || exit 1
       fi
     fi
   done
@@ -1704,19 +1720,21 @@ if [[ ! -s "${file_og_generax_nhx}" && ${run_generax} -eq 1 ]]; then
   generax_out_sptree="./generax_${og_id}/species_trees/starting_species_tree.newick" # generax v2.0
   if [[ -s "${generax_out_sptree}" ]]; then
     lock_file="${species_tree_generax}.lock"
-    if command -v flock > /dev/null 2>&1; then
-      exec 9> "${lock_file}"
-      flock 9
+    (
+      if ! gg_shared_lock_acquire "${lock_file}" "GeneRax species tree copy"; then
+        exit 1
+      fi
+      heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")
+      cleanup_generax_tree_lock() {
+        gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+        gg_shared_lock_release "${lock_file}"
+      }
+      trap cleanup_generax_tree_lock EXIT
       if [[ ! -s "${species_tree_generax}" ]]; then
         echo "copying GeneRax output species tree (first writer only)."
         cp_out "${generax_out_sptree}" "${species_tree_generax}"
       fi
-      flock -u 9
-      exec 9>&-
-    else
-      echo "Error: flock command is required but not available."
-      exit 1
-    fi
+    ) || exit 1
   elif [[ ! -s "${species_tree_generax}" ]]; then
     echo "GeneRax species tree file was not found yet: ${generax_out_sptree}"
   fi
@@ -3146,9 +3164,16 @@ for file_from in "${file_params[@]}"; do
     continue
   fi
   lock_file="${file_to}.lock"
-  if command -v flock > /dev/null 2>&1; then
-    exec 7> "${lock_file}"
-    flock 7
+  (
+    if ! gg_shared_lock_acquire "${lock_file}" "parameter artifact copy (${file_to})"; then
+      exit 1
+    fi
+    heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")
+    cleanup_parameter_copy_lock() {
+      gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+      gg_shared_lock_release "${lock_file}"
+    }
+    trap cleanup_parameter_copy_lock EXIT
     filesize_from=$(stat -c%s "${file_from}")
     filesize_to=0
     if [[ -s "${file_to}" ]]; then
@@ -3158,12 +3183,7 @@ for file_from in "${file_params[@]}"; do
       echo "Storing important files for record: ${file_to}"
       cp_out "${file_from}" "${file_to}"
     fi
-    flock -u 7
-    exec 7>&-
-  else
-    echo "Error: flock command is required but not available."
-    exit 1
-  fi
+  ) || exit 1
 done
 
 cd "${gg_workspace_dir}"

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -108,8 +109,11 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "fernbase",
     "local",
 )
-DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 86400
-DOWNLOAD_LOCK_SLEEP_SECONDS = 1.0
+DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 900
+DEFAULT_DOWNLOAD_LOCK_HEARTBEAT_SECONDS = 60
+DEFAULT_DOWNLOAD_LOCK_ACQUIRE_TIMEOUT_SECONDS = 3600
+DEFAULT_DOWNLOAD_LOCK_POLL_SECONDS = 5.0
+SHARED_DOWNLOAD_LOCK_FORMAT = "shared-lock-v2"
 DEFAULT_NCBI_EUTILS_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_NCBI_FTP_BASE_URL = "https://ftp.ncbi.nlm.nih.gov"
 DEFAULT_NCBI_DATASETS_BASE_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2"
@@ -1654,7 +1658,7 @@ def download_ncbi_datasets_file_from_id(
         return False
 
     lock_path = Path(str(destination) + ".lock")
-    acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
+    heartbeat_state = acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
     tmp_zip = Path(str(destination) + ".datasets.tmp.{}".format(os.getpid()))
     try:
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
@@ -1724,7 +1728,7 @@ def download_ncbi_datasets_file_from_id(
             pass
         except OSError:
             pass
-        release_download_lock(lock_path)
+        release_download_lock(lock_path, heartbeat_state)
     return True
 
 
@@ -1741,6 +1745,45 @@ def resolve_download_lock_stale_seconds():
     return value
 
 
+def resolve_download_lock_heartbeat_seconds():
+    raw = os.environ.get("GG_DOWNLOAD_LOCK_HEARTBEAT_SECONDS", "").strip()
+    if raw == "":
+        return DEFAULT_DOWNLOAD_LOCK_HEARTBEAT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_DOWNLOAD_LOCK_HEARTBEAT_SECONDS
+    if value < 1:
+        return 1
+    return value
+
+
+def resolve_download_lock_acquire_timeout_seconds():
+    raw = os.environ.get("GG_DOWNLOAD_LOCK_ACQUIRE_TIMEOUT_SECONDS", "").strip()
+    if raw == "":
+        return DEFAULT_DOWNLOAD_LOCK_ACQUIRE_TIMEOUT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_DOWNLOAD_LOCK_ACQUIRE_TIMEOUT_SECONDS
+    if value < 1:
+        return 1
+    return value
+
+
+def resolve_download_lock_poll_seconds():
+    raw = os.environ.get("GG_DOWNLOAD_LOCK_POLL_SECONDS", "").strip()
+    if raw == "":
+        return DEFAULT_DOWNLOAD_LOCK_POLL_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_DOWNLOAD_LOCK_POLL_SECONDS
+    if value <= 0:
+        return 0.1
+    return value
+
+
 def lock_pid_is_alive(pid):
     try:
         os.kill(pid, 0)
@@ -1749,81 +1792,228 @@ def lock_pid_is_alive(pid):
         return False
 
 
+def lock_hostname():
+    return socket.gethostname()
+
+
+def lock_boot_id():
+    boot_id_path = Path("/proc/sys/kernel/random/boot_id")
+    try:
+        if boot_id_path.is_file():
+            return boot_id_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    try:
+        completed = subprocess.run(
+            ["sysctl", "-n", "kern.bootsessionuuid"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout.strip()
+
+
 def read_lock_metadata(lock_path):
-    pid = None
-    started = None
+    metadata = {
+        "format": "",
+        "pid": None,
+        "hostname": "",
+        "boot_id": "",
+        "created_at": "",
+    }
     try:
         raw = lock_path.read_text(encoding="utf-8").strip()
     except OSError:
-        raw = ""
-    if raw != "":
-        parts = raw.split("\t")
-        if len(parts) >= 1:
-            try:
-                pid = int(parts[0])
-            except ValueError:
-                pid = None
-        if len(parts) >= 2:
-            try:
-                started = int(parts[1])
-            except ValueError:
-                started = None
-    if started is None:
+        return metadata
+    if raw == "":
+        return metadata
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return metadata
+    if not isinstance(payload, dict):
+        return metadata
+    metadata["format"] = str(payload.get("format", "") or "")
+    pid = payload.get("pid")
+    if isinstance(pid, int):
+        metadata["pid"] = pid
+    else:
         try:
-            started = int(lock_path.stat().st_mtime)
-        except OSError:
-            started = int(time.time())
-    return pid, started
+            metadata["pid"] = int(str(pid).strip())
+        except (TypeError, ValueError):
+            metadata["pid"] = None
+    metadata["hostname"] = str(payload.get("hostname", "") or "")
+    metadata["boot_id"] = str(payload.get("boot_id", "") or "")
+    metadata["created_at"] = str(payload.get("created_at", "") or "")
+    return metadata
 
 
-def stale_lock_reason(lock_path, stale_seconds):
+def read_lock_stat(lock_path):
+    try:
+        return lock_path.stat()
+    except OSError:
+        return None
+
+
+def format_lock_owner_summary(lock_path, metadata=None, stat_result=None):
+    if metadata is None:
+        metadata = read_lock_metadata(lock_path)
+    if stat_result is None:
+        stat_result = read_lock_stat(lock_path)
+    if stat_result is None:
+        age_text = "unknown"
+    else:
+        age = int(time.time() - stat_result.st_mtime)
+        if age < 0:
+            age = 0
+        age_text = "{}s".format(age)
+    return "host={}, pid={}, created_at={}, boot_id={}, heartbeat_age={}, lock={}".format(
+        metadata.get("hostname", "") or "unknown",
+        metadata.get("pid", None) if metadata.get("pid", None) is not None else "unknown",
+        metadata.get("created_at", "") or "unknown",
+        metadata.get("boot_id", "") or "unknown",
+        age_text,
+        lock_path,
+    )
+
+
+def stale_lock_reason(lock_path, stale_seconds, metadata=None, stat_result=None):
     if not lock_path.exists():
         return ""
-    now = int(time.time())
-    pid, started = read_lock_metadata(lock_path)
-    age = now - started
+    if metadata is None:
+        metadata = read_lock_metadata(lock_path)
+    if stat_result is None:
+        stat_result = read_lock_stat(lock_path)
+    current_boot_id = lock_boot_id()
+    is_same_host_boot = (
+        metadata.get("hostname", "") != ""
+        and metadata.get("boot_id", "") != ""
+        and current_boot_id != ""
+        and metadata.get("hostname", "") == lock_hostname()
+        and metadata.get("boot_id", "") == current_boot_id
+    )
+    pid = metadata.get("pid", None)
+    if is_same_host_boot and pid is not None and not lock_pid_is_alive(pid):
+        return "same_host_same_boot_dead_pid"
+    if stat_result is None:
+        return ""
+    age = int(time.time() - stat_result.st_mtime)
     if age < 0:
         age = 0
-    if pid is not None:
-        if lock_pid_is_alive(pid):
-            return ""
-        return "owner_not_running (pid={}, age={}s)".format(pid, age)
     if age < stale_seconds:
         return ""
-    return "owner_unknown_timeout (pid=unknown, age={}s)".format(age)
+    return "heartbeat_timeout"
+
+
+def remove_lock_if_unchanged(lock_path, stat_result):
+    current_stat = read_lock_stat(lock_path)
+    if current_stat is None or stat_result is None:
+        return False
+    if current_stat.st_dev != stat_result.st_dev or current_stat.st_ino != stat_result.st_ino:
+        return False
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return True
+
+
+def start_download_lock_heartbeat(lock_path):
+    stop_event = threading.Event()
+    interval_seconds = resolve_download_lock_heartbeat_seconds()
+
+    def _heartbeat():
+        while not stop_event.wait(interval_seconds):
+            try:
+                os.utime(lock_path, None)
+            except FileNotFoundError:
+                return
+            except OSError:
+                continue
+
+    thread = threading.Thread(
+        target=_heartbeat,
+        name="download-lock-heartbeat-{}".format(lock_path.name),
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
 
 
 def acquire_download_lock(lock_path, stale_seconds, warnings, lock_context):
+    timeout_seconds = resolve_download_lock_acquire_timeout_seconds()
+    poll_seconds = resolve_download_lock_poll_seconds()
+    wait_started = time.monotonic()
+    wait_logged = False
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     while True:
-        now = int(time.time())
-        payload = "{}\t{}\t{}\n".format(os.getpid(), now, lock_context)
+        payload = {
+            "format": SHARED_DOWNLOAD_LOCK_FORMAT,
+            "pid": os.getpid(),
+            "hostname": lock_hostname(),
+            "boot_id": lock_boot_id(),
+            "created_at": time.time(),
+        }
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
-            reason = stale_lock_reason(lock_path, stale_seconds)
-            if reason == "":
-                time.sleep(DOWNLOAD_LOCK_SLEEP_SECONDS)
-                continue
-            try:
-                lock_path.unlink()
+            metadata = read_lock_metadata(lock_path)
+            stat_result = read_lock_stat(lock_path)
+            reason = stale_lock_reason(lock_path, stale_seconds, metadata, stat_result)
+            if reason != "":
+                owner_summary = format_lock_owner_summary(lock_path, metadata, stat_result)
+                if remove_lock_if_unchanged(lock_path, stat_result):
+                    warnings.append(
+                        "[download-lock] recovered stale lock for {}: {} ({}; {})".format(
+                            lock_context, lock_path, reason, owner_summary
+                        )
+                    )
+                    continue
+            owner_summary = format_lock_owner_summary(lock_path, metadata, stat_result)
+            if not wait_logged:
                 warnings.append(
-                    "[download-lock] recovered stale lock for {}: {} ({})".format(
-                        lock_context, lock_path, reason
+                    "[download-lock] waiting for shared lock for {} ({})".format(
+                        lock_context, owner_summary
                     )
                 )
-            except FileNotFoundError:
-                continue
-            except OSError:
-                time.sleep(DOWNLOAD_LOCK_SLEEP_SECONDS)
+                wait_logged = True
+            if time.monotonic() - wait_started >= float(timeout_seconds):
+                raise RuntimeError(
+                    "[download-lock] timed out waiting for shared lock for {} ({})".format(
+                        lock_context, owner_summary
+                    )
+                )
+            time.sleep(float(poll_seconds))
             continue
         try:
-            os.write(fd, payload.encode("utf-8"))
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, separators=(",", ":"))
+                handle.write("\n")
+        except Exception:
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+            raise
         finally:
-            os.close(fd)
-        return
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        return start_download_lock_heartbeat(lock_path)
 
 
-def release_download_lock(lock_path):
+def release_download_lock(lock_path, heartbeat_state=None):
+    if heartbeat_state is not None:
+        stop_event, thread = heartbeat_state
+        stop_event.set()
+        thread.join(timeout=1.0)
     try:
         lock_path.unlink()
     except FileNotFoundError:
@@ -1846,7 +2036,7 @@ def download_url_to_file(
     if dry_run:
         return False
     lock_path = Path(str(destination) + ".lock")
-    acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
+    heartbeat_state = acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
     tmp = Path(str(destination) + ".tmp.{}".format(os.getpid()))
     try:
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
@@ -1868,7 +2058,7 @@ def download_url_to_file(
             pass
         raise
     finally:
-        release_download_lock(lock_path)
+        release_download_lock(lock_path, heartbeat_state)
     return True
 
 

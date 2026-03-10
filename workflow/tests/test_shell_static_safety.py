@@ -164,11 +164,11 @@ def test_gg_versions_uses_shared_core_bootstrap_runtime():
     assert 'source "${gg_support_dir}/gg_util.sh"' not in text
 
 
-def test_busco_download_lock_is_global():
+def test_busco_download_lock_is_per_lineage_shared_artifact_lock():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
-    assert 'lock_file="${runtime_busco_db}/locks/busco_downloads.lock"' in text
-    assert '${runtime_busco_db}/${busco_lineage}.lock' not in text
+    assert 'lock_file="${runtime_busco_db}/lineages/.busco_${busco_lineage}.download.lock"' in text
+    assert 'lock_file="${runtime_busco_db}/locks/busco_downloads.lock"' not in text
 
 
 def test_no_find_exec_rm_rf_in_workflow_shell_scripts():
@@ -572,11 +572,11 @@ def test_gg_add_container_bind_mount_skips_duplicate_destinations():
 def test_ensure_latest_jaspar_file_uses_set_e_safe_assignments():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
-    body = _function_body(text, "ensure_latest_jaspar_file")
+    body = _function_body(text, "_prepare_latest_jaspar_file_locked")
 
     assert "if resolved_filename=$(_jaspar_find_latest_meme_filename_remote); then" in body
     assert "if resolved_filename=$(_jaspar_find_latest_meme_filename_local" in body
-    assert "if resolved_path=$(_ensure_jaspar_file_named" in body
+    assert "if ! resolved_path=$(_ensure_jaspar_file_named" in body
 
     unsafe_remote = re.compile(
         r"^[ \t]*resolved_filename=\$\(_jaspar_find_latest_meme_filename_remote\)\s*$",
@@ -944,15 +944,28 @@ def test_download_helpers_use_set_e_safe_command_guards():
     assert 'if ! tar -xzf "${archive_path}" -C "${tmp_dir}"; then' in pfam_body
 
 
-def test_download_lock_helper_tracks_stale_markers_and_uses_mkdir_fallback():
+def test_download_lock_helper_uses_shared_lock_metadata_and_heartbeat():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
     body = _function_body(text, "gg_array_download_once")
-    assert 'local lock_dir="${lock_file}.dlock"' in body
-    assert 'gg_maybe_recover_stale_lock_marker "${lock_file}" "${description}"' in body
-    assert 'gg_write_lock_marker "${lock_file}" "${description}"' in body
-    assert 'gg_acquire_mkdir_lock "${lock_dir}" "${description}"' in body
-    assert 'gg_release_mkdir_lock "${lock_dir}"' in body
+    assert 'if gg_artifact_ready "${artifact_path}"; then' in body
+    assert 'if ! gg_shared_lock_acquire "${lock_file}" "${description}"; then' in body
+    assert 'heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")' in body
+    assert 'gg_shared_lock_stop_heartbeat "${heartbeat_pid}"' in body
+    assert 'gg_shared_lock_release "${lock_file}"' in body
+    assert '.dlock' not in body
+
+
+def test_shared_lock_helpers_encode_owner_metadata_and_safe_heartbeat_reclaim_rules():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    assert '"format": "shared-lock-v2"' in text
+    assert "os.O_WRONLY | os.O_CREAT | os.O_EXCL" in text
+    assert 'touch -c -- "${lock_file}" 2>/dev/null || true' in text
+    assert 'stale_reason="same_host_same_boot_dead_pid"' in text
+    assert 'stale_reason="heartbeat_timeout"' in text
+    assert 'waiting for shared lock: ${description} (${owner_summary})' in text
+    assert 'timed out waiting for shared lock: ${description} (${owner_summary})' in text
 
 
 def test_download_entrypoints_use_shared_lock_helper_for_busco_and_ete():
@@ -960,8 +973,31 @@ def test_download_entrypoints_use_shared_lock_helper_for_busco_and_ete():
     text = _read_text(util_path)
     busco_body = _function_body(text, "ensure_busco_download_path")
     ete_body = _function_body(text, "ensure_ete_taxonomy_db")
-    assert 'gg_array_download_once "${lock_file}" "${runtime_busco_lineage}"' in busco_body
+    assert 'runtime_ready_marker="${runtime_busco_lineage}/.download.ready"' in busco_body
+    assert 'gg_array_download_once "${lock_file}" "${runtime_ready_marker}"' in busco_body
     assert 'gg_array_download_once "${lock_file}" "${db_file}" "ETE taxonomy DB"' in ete_body
+
+
+def test_gene_evolution_core_uses_shared_lock_helpers_for_db_builds_and_shared_copies():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    assert "command -v flock" not in text
+    assert " flock " not in text
+    assert 'db_lock_file="${sp_cds_blastdb}.tblastn.build.lock"' in text
+    assert 'db_lock_file="${sp_cds_blastdb}.diamond.build.lock"' in text
+    assert 'gg_shared_lock_acquire "${db_lock_file}" "TBLASTN database build (${sp})"' in text
+    assert 'gg_shared_lock_acquire "${db_lock_file}" "DIAMOND database build (${sp})"' in text
+    assert 'gg_shared_lock_acquire "${lock_file}" "GeneRax species tree copy"' in text
+    assert 'gg_shared_lock_acquire "${lock_file}" "parameter artifact copy (${file_to})"' in text
+
+
+def test_genome_annotation_core_uses_shared_lock_for_species_cds_validation_stamp():
+    script = CORE_DIR / "gg_genome_annotation_core.sh"
+    text = _read_text(script)
+    assert "command -v flock" not in text
+    assert "species_cds_validation_lock_dir" not in text
+    assert 'gg_shared_lock_acquire "${species_cds_validation_lock}" "species CDS validation stamp"' in text
+    assert 'gg_shared_lock_start_heartbeat "${species_cds_validation_lock}"' in text
 
 
 def test_ete_taxonomy_helper_precreates_ete4_cache_dirs():
@@ -975,14 +1011,15 @@ def test_ete_taxonomy_helper_precreates_ete4_cache_dirs():
     assert 'ensure_dir "${dir_taxonomy}/ete4"' in ensure_body
 
 
-def test_latest_jaspar_lock_uses_stale_marker_recovery_and_mkdir_fallback():
+def test_latest_jaspar_lock_uses_shared_lock_and_marker_resolution():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
     body = _function_body(text, "ensure_latest_jaspar_file")
-    assert 'local lock_dir="${lock_file}.dlock"' in body
-    assert 'gg_maybe_recover_stale_lock_marker "${lock_file}" "latest JASPAR motif file"' in body
-    assert 'gg_acquire_mkdir_lock "${lock_dir}" "latest JASPAR motif file"' in body
-    assert 'gg_release_mkdir_lock "${lock_dir}"' in body
+    assert 'if resolved_path=$(_resolve_latest_jaspar_path_from_marker "${latest_marker}" "${sys_dir}" "${runtime_dir}"); then' in body
+    assert 'if ! gg_shared_lock_acquire "${lock_file}" "latest JASPAR motif file"; then' in body
+    assert 'heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")' in body
+    assert 'gg_shared_lock_stop_heartbeat "${heartbeat_pid}"' in body
+    assert 'gg_shared_lock_release "${lock_file}"' in body
 
 
 def test_pfam_helpers_use_only_new_runtime_layout_and_function_name():
@@ -2626,6 +2663,17 @@ def test_input_generation_core_runs_cds_gff_mapping_validation():
     assert '--species-cds-dir "${species_cds_dir}"' in text
     assert '--species-gff-dir "${species_gff_dir}"' in text
     assert '--nthreads "${GG_TASK_CPUS:-1}"' in text
+
+
+def test_mmseqs_uniref90_download_retries_and_reports_disk_context():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "_download_mmseqs_uniref90_db")
+    assert "for attempt in 1 2 3; do" in body
+    assert 'Preparing MMseqs2 UniRef90 taxonomy DB in: ${db_dir} (attempt ${attempt}/${max_attempts})' in body
+    assert 'MMseqs2 UniRef90 taxonomy DB preparation failed in: ${db_dir} (attempt ${attempt}/${max_attempts})' in body
+    assert 'df -h "${db_dir}" >&2 || true' in body
+    assert "sleep 5" in body
 
 
 def test_genome_evolution_core_does_not_include_legacy_output_migration_code():

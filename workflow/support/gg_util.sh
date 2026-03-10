@@ -1256,7 +1256,9 @@ _download_busco_lineage_to_runtime() {
   local busco_lineage=$1
   local runtime_busco_db=$2
   local runtime_busco_lineage=$3
-  if [[ -e "${runtime_busco_lineage}" ]]; then
+  local runtime_ready_marker=$4
+  if gg_busco_lineage_is_ready "${runtime_busco_lineage}"; then
+    touch "${runtime_ready_marker}"
     return 0
   fi
   echo "Starting BUSCO dataset download: ${busco_lineage}" >&2
@@ -1268,11 +1270,18 @@ _download_busco_lineage_to_runtime() {
     find busco_downloads -mindepth 1 -maxdepth 1 -exec mv -f -- {} "${runtime_busco_db}"/ \;
     rm -rf -- busco_downloads
   fi
-  if [[ ! -e "${runtime_busco_lineage}" ]]; then
+  if ! gg_busco_lineage_is_ready "${runtime_busco_lineage}"; then
     echo "BUSCO lineage dataset is still missing after download: ${runtime_busco_lineage}" >&2
     return 1
   fi
+  touch "${runtime_ready_marker}"
   echo "BUSCO dataset download has been finished: ${busco_lineage}" >&2
+}
+
+gg_busco_lineage_is_ready() {
+  local lineage_dir=$1
+  [[ -d "${lineage_dir}" ]] || return 1
+  [[ -s "${lineage_dir}/dataset.cfg" || -s "${lineage_dir}/info/dataset.cfg" ]]
 }
 
 ensure_busco_download_path() {
@@ -1282,6 +1291,7 @@ ensure_busco_download_path() {
   local sys_busco_lineage="${sys_busco_db}/lineages/${busco_lineage}"
   local runtime_busco_db
   local runtime_busco_lineage
+  local runtime_ready_marker
   local lock_file
 
   if [[ -z "${busco_lineage}" ]]; then
@@ -1289,21 +1299,28 @@ ensure_busco_download_path() {
     return 1
   fi
 
-  if [[ -e "${sys_busco_lineage}" ]]; then
+  if gg_busco_lineage_is_ready "${sys_busco_lineage}"; then
     echo "${sys_busco_db}"
     return 0
   fi
 
   runtime_busco_db="$(workspace_downloads_root "${gg_workspace_dir}")/busco_downloads"
   runtime_busco_lineage="${runtime_busco_db}/lineages/${busco_lineage}"
-  lock_file="${runtime_busco_db}/locks/busco_downloads.lock"
+  runtime_ready_marker="${runtime_busco_lineage}/.download.ready"
+  lock_file="${runtime_busco_db}/lineages/.busco_${busco_lineage}.download.lock"
   ensure_dir "${runtime_busco_db}"
-  ensure_dir "${runtime_busco_db}/locks"
+  ensure_dir "${runtime_busco_db}/lineages"
 
-  gg_array_download_once "${lock_file}" "${runtime_busco_lineage}" "BUSCO dataset download (${busco_lineage})" \
-    _download_busco_lineage_to_runtime "${busco_lineage}" "${runtime_busco_db}" "${runtime_busco_lineage}" || return 1
+  if gg_busco_lineage_is_ready "${runtime_busco_lineage}"; then
+    touch "${runtime_ready_marker}"
+    echo "${runtime_busco_db}"
+    return 0
+  fi
 
-  if [[ ! -e "${runtime_busco_lineage}" ]]; then
+  gg_array_download_once "${lock_file}" "${runtime_ready_marker}" "BUSCO dataset download (${busco_lineage})" \
+    _download_busco_lineage_to_runtime "${busco_lineage}" "${runtime_busco_db}" "${runtime_busco_lineage}" "${runtime_ready_marker}" || return 1
+
+  if ! gg_busco_lineage_is_ready "${runtime_busco_lineage}"; then
     echo "Failed to prepare BUSCO lineage dataset: ${busco_lineage}" >&2
     return 1
   fi
@@ -2447,14 +2464,47 @@ recreate_dir() {
 }
 
 gg_lock_stale_seconds() {
-  local stale_seconds="${GG_LOCK_STALE_SECONDS:-86400}"
+  local stale_seconds="${GG_LOCK_STALE_SECONDS:-900}"
   if [[ ! "${stale_seconds}" =~ ^[0-9]+$ ]]; then
-    stale_seconds=86400
+    stale_seconds=900
   fi
   if (( stale_seconds < 1 )); then
     stale_seconds=1
   fi
   echo "${stale_seconds}"
+}
+
+gg_lock_heartbeat_seconds() {
+  local heartbeat_seconds="${GG_LOCK_HEARTBEAT_SECONDS:-60}"
+  if [[ ! "${heartbeat_seconds}" =~ ^[0-9]+$ ]]; then
+    heartbeat_seconds=60
+  fi
+  if (( heartbeat_seconds < 1 )); then
+    heartbeat_seconds=1
+  fi
+  echo "${heartbeat_seconds}"
+}
+
+gg_lock_acquire_timeout_seconds() {
+  local acquire_timeout_seconds="${GG_LOCK_ACQUIRE_TIMEOUT_SECONDS:-3600}"
+  if [[ ! "${acquire_timeout_seconds}" =~ ^[0-9]+$ ]]; then
+    acquire_timeout_seconds=3600
+  fi
+  if (( acquire_timeout_seconds < 1 )); then
+    acquire_timeout_seconds=1
+  fi
+  echo "${acquire_timeout_seconds}"
+}
+
+gg_lock_poll_seconds() {
+  local poll_seconds="${GG_LOCK_POLL_SECONDS:-5}"
+  if [[ ! "${poll_seconds}" =~ ^[0-9]+$ ]]; then
+    poll_seconds=5
+  fi
+  if (( poll_seconds < 1 )); then
+    poll_seconds=1
+  fi
+  echo "${poll_seconds}"
 }
 
 gg_stat_mtime_epoch() {
@@ -2470,6 +2520,288 @@ gg_stat_mtime_epoch() {
   fi
 }
 
+gg_artifact_ready() {
+  local artifact_path=$1
+  if [[ -d "${artifact_path}" ]]; then
+    return 0
+  fi
+  [[ -s "${artifact_path}" ]]
+}
+
+gg_lock_hostname() {
+  hostname 2>/dev/null || uname -n
+}
+
+gg_lock_boot_id() {
+  if [[ -r /proc/sys/kernel/random/boot_id ]]; then
+    tr -d '\r\n' < /proc/sys/kernel/random/boot_id
+    return 0
+  fi
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -n kern.bootsessionuuid 2>/dev/null | tr -d '[:space:]'
+    return 0
+  fi
+  echo ""
+}
+
+gg_shared_lock_read_metadata() {
+  local lock_file=$1
+  python - "${lock_file}" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+fmt = ""
+pid = ""
+hostname = ""
+boot_id = ""
+created_at = ""
+mtime = ""
+device = ""
+inode = ""
+try:
+    stat_result = os.stat(path)
+    mtime = str(stat_result.st_mtime)
+    device = str(stat_result.st_dev)
+    inode = str(stat_result.st_ino)
+except Exception:
+    mtime = ""
+    device = ""
+    inode = ""
+try:
+    with open(path, "rt", encoding="utf-8") as handle:
+        data = json.load(handle)
+    fmt = str(data.get("format", "") or "")
+    pid = str(data.get("pid", "") or "")
+    hostname = str(data.get("hostname", "") or "")
+    boot_id = str(data.get("boot_id", "") or "")
+    created_at = str(data.get("created_at", "") or "")
+except Exception:
+    pass
+print("\t".join((fmt, pid, hostname, boot_id, created_at, mtime, device, inode)))
+PY
+}
+
+gg_shared_lock_owner_summary() {
+  local lock_file=$1
+  local fmt=""
+  local owner_pid=""
+  local owner_host=""
+  local owner_boot_id=""
+  local created_at=""
+  local mtime=""
+  local device=""
+  local inode=""
+  IFS=$'\t' read -r fmt owner_pid owner_host owner_boot_id created_at mtime device inode < <(gg_shared_lock_read_metadata "${lock_file}")
+  local now_epoch
+  now_epoch=$(date +%s)
+  local age_text="unknown"
+  if [[ "${mtime}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    age_text=$(python - "${mtime}" "${now_epoch}" <<'PY'
+import math
+import sys
+mtime = float(sys.argv[1])
+now_epoch = float(sys.argv[2])
+age = now_epoch - mtime
+if age < 0:
+    age = 0
+print(str(int(age)))
+PY
+)
+    age_text="${age_text}s"
+  fi
+  printf 'host=%s, pid=%s, created_at=%s, boot_id=%s, heartbeat_age=%s, lock=%s' \
+    "${owner_host:-unknown}" \
+    "${owner_pid:-unknown}" \
+    "${created_at:-unknown}" \
+    "${owner_boot_id:-unknown}" \
+    "${age_text}" \
+    "${lock_file}"
+}
+
+gg_shared_lock_try_create() {
+  local lock_file=$1
+  local owner_pid=${2:-$$}
+  local owner_host
+  local owner_boot_id
+  owner_host=$(gg_lock_hostname)
+  owner_boot_id=$(gg_lock_boot_id)
+  python - "${lock_file}" "${owner_pid}" "${owner_host}" "${owner_boot_id}" <<'PY'
+import json
+import os
+import sys
+import time
+
+path, pid, hostname, boot_id = sys.argv[1:5]
+payload = {
+    "format": "shared-lock-v2",
+    "pid": int(pid),
+    "hostname": hostname,
+    "boot_id": boot_id,
+    "created_at": time.time(),
+}
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+try:
+    fd = os.open(path, flags, 0o644)
+except FileExistsError:
+    raise SystemExit(1)
+with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, separators=(",", ":"))
+    handle.write("\n")
+PY
+}
+
+gg_shared_lock_remove_if_unchanged() {
+  local lock_file=$1
+  local expected_device=$2
+  local expected_inode=$3
+  python - "${lock_file}" "${expected_device}" "${expected_inode}" <<'PY'
+import os
+import sys
+
+path, expected_device, expected_inode = sys.argv[1:4]
+try:
+    stat_result = os.stat(path)
+except FileNotFoundError:
+    raise SystemExit(1)
+except Exception:
+    raise SystemExit(1)
+if str(stat_result.st_dev) != expected_device or str(stat_result.st_ino) != expected_inode:
+    raise SystemExit(1)
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    raise SystemExit(1)
+PY
+}
+
+gg_shared_lock_reclaim_if_stale() {
+  local lock_file=$1
+  local description=$2
+  if [[ ! -e "${lock_file}" ]]; then
+    return 1
+  fi
+  local fmt=""
+  local owner_pid=""
+  local owner_host=""
+  local owner_boot_id=""
+  local created_at=""
+  local mtime=""
+  local device=""
+  local inode=""
+  IFS=$'\t' read -r fmt owner_pid owner_host owner_boot_id created_at mtime device inode < <(gg_shared_lock_read_metadata "${lock_file}")
+  local current_host
+  local current_boot_id
+  local stale_seconds
+  local now_epoch
+  current_host=$(gg_lock_hostname)
+  current_boot_id=$(gg_lock_boot_id)
+  stale_seconds=$(gg_lock_stale_seconds)
+  now_epoch=$(date +%s)
+  local is_same_host_boot=1
+  if [[ -z "${owner_host}" || -z "${owner_boot_id}" || -z "${current_boot_id}" ]]; then
+    is_same_host_boot=0
+  elif [[ "${owner_host}" != "${current_host}" || "${owner_boot_id}" != "${current_boot_id}" ]]; then
+    is_same_host_boot=0
+  fi
+  local stale_reason=""
+  if [[ ${is_same_host_boot} -eq 1 && "${owner_pid}" =~ ^[0-9]+$ ]]; then
+    if ! gg_lock_pid_is_alive "${owner_pid}"; then
+      stale_reason="same_host_same_boot_dead_pid"
+    fi
+  fi
+  if [[ -z "${stale_reason}" && "${mtime}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    local mtime_age
+    mtime_age=$(python - "${mtime}" "${now_epoch}" <<'PY'
+import sys
+mtime = float(sys.argv[1])
+now_epoch = float(sys.argv[2])
+age = now_epoch - mtime
+if age < 0:
+    age = 0
+print(str(int(age)))
+PY
+)
+    if [[ "${mtime_age}" =~ ^[0-9]+$ ]] && (( mtime_age >= stale_seconds )); then
+      stale_reason="heartbeat_timeout"
+    fi
+  fi
+  if [[ -n "${stale_reason}" ]]; then
+    local owner_summary
+    owner_summary=$(gg_shared_lock_owner_summary "${lock_file}")
+    if gg_shared_lock_remove_if_unchanged "${lock_file}" "${device}" "${inode}"; then
+      echo "Recovered stale shared lock: ${description} (${stale_reason}; ${owner_summary})" >&2
+      return 0
+    fi
+  fi
+  return 1
+}
+
+gg_shared_lock_start_heartbeat() {
+  local lock_file=$1
+  local interval_seconds
+  interval_seconds=$(gg_lock_heartbeat_seconds)
+  (
+    while [[ -e "${lock_file}" ]]; do
+      sleep "${interval_seconds}" || exit 0
+      if [[ -e "${lock_file}" ]]; then
+        touch -c -- "${lock_file}" 2>/dev/null || true
+      fi
+    done
+  ) &
+  echo $!
+}
+
+gg_shared_lock_stop_heartbeat() {
+  local heartbeat_pid=${1:-}
+  if [[ ! "${heartbeat_pid}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  kill "${heartbeat_pid}" 2>/dev/null || true
+  wait "${heartbeat_pid}" 2>/dev/null || true
+}
+
+gg_shared_lock_release() {
+  local lock_file=$1
+  rm -f -- "${lock_file}"
+}
+
+gg_shared_lock_acquire() {
+  local lock_file=$1
+  local description=$2
+  local task_id=${GG_ARRAY_TASK_ID:-1}
+  local poll_seconds
+  local timeout_seconds
+  local wait_started
+  local wait_logged=0
+  poll_seconds=$(gg_lock_poll_seconds)
+  timeout_seconds=$(gg_lock_acquire_timeout_seconds)
+  wait_started=$(date +%s)
+  mkdir -p "$(dirname "${lock_file}")"
+  while true; do
+    if gg_shared_lock_try_create "${lock_file}"; then
+      return 0
+    fi
+    if gg_shared_lock_reclaim_if_stale "${lock_file}" "${description}"; then
+      continue
+    fi
+    local owner_summary
+    owner_summary=$(gg_shared_lock_owner_summary "${lock_file}")
+    if [[ ${wait_logged} -eq 0 ]]; then
+      echo "GG_ARRAY_TASK_ID=${task_id}: waiting for shared lock: ${description} (${owner_summary})" >&2
+      wait_logged=1
+    fi
+    local now_epoch
+    now_epoch=$(date +%s)
+    if (( now_epoch - wait_started >= timeout_seconds )); then
+      echo "GG_ARRAY_TASK_ID=${task_id}: timed out waiting for shared lock: ${description} (${owner_summary})" >&2
+      return 1
+    fi
+    sleep "${poll_seconds}"
+  done
+}
+
 gg_lock_pid_is_alive() {
   local pid=$1
   if [[ ! "${pid}" =~ ^[0-9]+$ ]]; then
@@ -2478,231 +2810,50 @@ gg_lock_pid_is_alive() {
   kill -0 "${pid}" 2>/dev/null
 }
 
-gg_lock_marker_path() {
-  local lock_file=$1
-  echo "${lock_file}.owner"
-}
-
-gg_maybe_recover_stale_lock_marker() {
-  local lock_file=$1
-  local description=$2
-  local marker_file
-  marker_file=$(gg_lock_marker_path "${lock_file}")
-  if [[ ! -e "${marker_file}" ]]; then
-    return 0
-  fi
-
-  local marker_pid=""
-  local marker_start_ts=""
-  local marker_mtime=""
-  local stale_seconds
-  stale_seconds=$(gg_lock_stale_seconds)
-  local now_epoch
-  now_epoch=$(date +%s)
-
-  if [[ -s "${marker_file}" ]]; then
-    IFS=$'\t' read -r marker_pid marker_start_ts _ < "${marker_file}" || true
-  fi
-  if [[ ! "${marker_start_ts}" =~ ^[0-9]+$ ]]; then
-    marker_mtime=$(gg_stat_mtime_epoch "${marker_file}")
-    if [[ "${marker_mtime}" =~ ^[0-9]+$ ]]; then
-      marker_start_ts=${marker_mtime}
-    else
-      marker_start_ts=${now_epoch}
-    fi
-  fi
-
-  local marker_age=$(( now_epoch - marker_start_ts ))
-  if (( marker_age < 0 )); then
-    marker_age=0
-  fi
-  local stale_reason=""
-  if [[ -n "${marker_pid}" ]]; then
-    if gg_lock_pid_is_alive "${marker_pid}"; then
-      stale_reason=""
-    else
-      stale_reason="owner_not_running"
-    fi
-  else
-    if (( marker_age >= stale_seconds )); then
-      stale_reason="owner_unknown_timeout"
-    fi
-  fi
-  if [[ -n "${stale_reason}" ]]; then
-    rm -f -- "${marker_file}"
-    echo "Recovered stale lock marker: ${description} (${stale_reason}, age=${marker_age}s, marker=${marker_file})" >&2
-  fi
-}
-
-gg_write_lock_marker() {
-  local lock_file=$1
-  local description=$2
-  local marker_file
-  marker_file=$(gg_lock_marker_path "${lock_file}")
-  printf '%s\t%s\t%s\n' "$$" "$(date +%s)" "${description}" > "${marker_file}"
-}
-
-gg_remove_lock_marker() {
-  local lock_file=$1
-  local marker_file
-  marker_file=$(gg_lock_marker_path "${lock_file}")
-  rm -f -- "${marker_file}"
-}
-
-gg_safe_remove_lock_dir() {
-  local lock_dir=$1
-  if [[ ! -e "${lock_dir}" ]]; then
-    return 0
-  fi
-  if [[ -z "${lock_dir}" || "${lock_dir}" == "/" || "${lock_dir}" == "." ]]; then
-    return 1
-  fi
-  if [[ "${lock_dir}" != *.dlock ]]; then
-    return 1
-  fi
-  rm -rf -- "${lock_dir}"
-}
-
-gg_acquire_mkdir_lock() {
-  local lock_dir=$1
-  local description=$2
-  local owner_file="${lock_dir}/owner"
-  local stale_seconds
-  stale_seconds=$(gg_lock_stale_seconds)
-
-  while true; do
-    if mkdir "${lock_dir}" 2>/dev/null; then
-      printf '%s\t%s\t%s\n' "$$" "$(date +%s)" "${description}" > "${owner_file}"
-      return 0
-    fi
-
-    local marker_pid=""
-    local marker_start_ts=""
-    local marker_mtime=""
-    local now_epoch
-    now_epoch=$(date +%s)
-
-    if [[ -s "${owner_file}" ]]; then
-      IFS=$'\t' read -r marker_pid marker_start_ts _ < "${owner_file}" || true
-    fi
-    if [[ ! "${marker_start_ts}" =~ ^[0-9]+$ ]]; then
-      marker_mtime=$(gg_stat_mtime_epoch "${lock_dir}")
-      if [[ "${marker_mtime}" =~ ^[0-9]+$ ]]; then
-        marker_start_ts=${marker_mtime}
-      else
-        marker_start_ts=${now_epoch}
-      fi
-    fi
-
-    local marker_age=$(( now_epoch - marker_start_ts ))
-    if (( marker_age < 0 )); then
-      marker_age=0
-    fi
-    local stale_reason=""
-    if [[ -n "${marker_pid}" ]]; then
-      if gg_lock_pid_is_alive "${marker_pid}"; then
-        stale_reason=""
-      else
-        stale_reason="owner_not_running"
-      fi
-    else
-      if (( marker_age >= stale_seconds )); then
-        stale_reason="owner_unknown_timeout"
-      fi
-    fi
-
-    if [[ -n "${stale_reason}" ]]; then
-      if gg_safe_remove_lock_dir "${lock_dir}"; then
-        echo "Recovered stale lock directory: ${description} (${stale_reason}, age=${marker_age}s, lock=${lock_dir})" >&2
-        continue
-      fi
-    fi
-    sleep 1
-  done
-}
-
-gg_release_mkdir_lock() {
-  local lock_dir=$1
-  gg_safe_remove_lock_dir "${lock_dir}" || true
-}
-
 gg_array_download_once() {
   local lock_file=$1
-  local done_file=$2
+  local artifact_path=$2
   local description=$3
   shift 3
   local task_id=${GG_ARRAY_TASK_ID:-1}
-  local has_flock=1
-  local lock_dir="${lock_file}.dlock"
+  local heartbeat_pid=""
+  local artifact_exit_code=0
 
   mkdir -p "$(dirname "${lock_file}")"
 
-  if [[ -s "${done_file}" ]]; then
+  if gg_artifact_ready "${artifact_path}"; then
     return 0
   fi
-  if ! command -v flock >/dev/null 2>&1; then
-    has_flock=0
-    echo "flock command was not found. Proceeding without lock file synchronization: ${description}" >&2
+  if ! gg_shared_lock_acquire "${lock_file}" "${description}"; then
+    return 1
   fi
-  if [[ ${has_flock} -eq 1 ]]; then
-    exec 9> "${lock_file}"
-    flock 9
-    gg_maybe_recover_stale_lock_marker "${lock_file}" "${description}"
-    gg_write_lock_marker "${lock_file}" "${description}"
+  heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")
 
-    if [[ -s "${done_file}" ]]; then
-      gg_remove_lock_marker "${lock_file}"
-      flock -u 9
-      exec 9>&-
-      return 0
-    fi
-
-    echo "GG_ARRAY_TASK_ID=${task_id}: starting download: ${description}" >&2
-    "$@"
-    local download_exit_code=$?
-    if [[ ${download_exit_code} -ne 0 ]]; then
-      echo "GG_ARRAY_TASK_ID=${task_id}: download failed: ${description}" >&2
-      gg_remove_lock_marker "${lock_file}"
-      flock -u 9
-      exec 9>&-
-      return ${download_exit_code}
-    fi
-    if [[ ! -s "${done_file}" ]]; then
-      echo "Downloaded DB file not found after synchronization: ${done_file}" >&2
-      gg_remove_lock_marker "${lock_file}"
-      flock -u 9
-      exec 9>&-
-      return 1
-    fi
-
-    echo "GG_ARRAY_TASK_ID=${task_id}: download completed: ${description}" >&2
-    gg_remove_lock_marker "${lock_file}"
-    flock -u 9
-    exec 9>&-
+  if gg_artifact_ready "${artifact_path}"; then
+    gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+    gg_shared_lock_release "${lock_file}"
     return 0
   fi
 
-  gg_acquire_mkdir_lock "${lock_dir}" "${description}" || return 1
-  if [[ -s "${done_file}" ]]; then
-    gg_release_mkdir_lock "${lock_dir}"
-    return 0
-  fi
-  echo "GG_ARRAY_TASK_ID=${task_id}: starting download (mkdir lock fallback): ${description}" >&2
+  echo "GG_ARRAY_TASK_ID=${task_id}: starting shared artifact preparation: ${description}" >&2
   "$@"
-  local download_exit_code=$?
-  if [[ ${download_exit_code} -ne 0 ]]; then
-    echo "GG_ARRAY_TASK_ID=${task_id}: download failed (mkdir lock fallback): ${description}" >&2
-    gg_release_mkdir_lock "${lock_dir}"
-    return ${download_exit_code}
+  artifact_exit_code=$?
+  if [[ ${artifact_exit_code} -ne 0 ]]; then
+    echo "GG_ARRAY_TASK_ID=${task_id}: shared artifact preparation failed: ${description}" >&2
+    gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+    gg_shared_lock_release "${lock_file}"
+    return "${artifact_exit_code}"
   fi
-  if [[ ! -s "${done_file}" ]]; then
-    echo "Downloaded DB file not found after synchronization: ${done_file}" >&2
-    gg_release_mkdir_lock "${lock_dir}"
+  if ! gg_artifact_ready "${artifact_path}"; then
+    echo "Shared artifact was not ready after synchronization: ${artifact_path}" >&2
+    gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+    gg_shared_lock_release "${lock_file}"
     return 1
   fi
 
-  echo "GG_ARRAY_TASK_ID=${task_id}: download completed (mkdir lock fallback): ${description}" >&2
-  gg_release_mkdir_lock "${lock_dir}"
+  echo "GG_ARRAY_TASK_ID=${task_id}: shared artifact ready: ${description}" >&2
+  gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+  gg_shared_lock_release "${lock_file}"
 }
 
 gg_task_token_contains_sge_id() {
@@ -3082,6 +3233,7 @@ ensure_uniprot_sprot_blast_db() {
 
 _download_pfam_le_to_dir() {
   local output_dir=$1
+  local ready_file="${output_dir}/.pfam_le.ready"
   local parent_dir
   parent_dir=$(dirname "${output_dir}")
   local tmp_dir
@@ -3136,6 +3288,7 @@ _download_pfam_le_to_dir() {
   mv -- "${staged_dir}" "${output_dir}.tmp"
   rm -rf -- "${output_dir}"
   mv -- "${output_dir}.tmp" "${output_dir}"
+  touch "${ready_file}"
   rm -rf -- "${tmp_dir}"
 }
 
@@ -3152,6 +3305,7 @@ ensure_pfam_le_db() {
   runtime_parent=$(workspace_pfam_root "${gg_workspace_dir}")
   local runtime_dir
   runtime_dir=$(workspace_pfam_le_dir "${gg_workspace_dir}")
+  local ready_file="${runtime_dir}/.pfam_le.ready"
   local lock_file="${runtime_root}/locks/pfam_le.lock"
 
   if pfam_le_db_is_ready "${sys_dir}"; then
@@ -3160,12 +3314,13 @@ ensure_pfam_le_db() {
   fi
 
   if pfam_le_db_is_ready "${runtime_dir}"; then
+    touch "${ready_file}"
     echo "${runtime_dir}"
     return 0
   fi
 
   mkdir -p "${runtime_root}" "${runtime_parent}"
-  gg_array_download_once "${lock_file}" "${runtime_dir}/Pfam.pal" "Pfam_LE RPS-BLAST DB" \
+  gg_array_download_once "${lock_file}" "${ready_file}" "Pfam_LE RPS-BLAST DB" \
     _download_pfam_le_to_dir "${runtime_dir}" || return 1
 
   if ! pfam_le_db_is_ready "${runtime_dir}"; then
@@ -3351,84 +3506,97 @@ _ensure_jaspar_file_named() {
   echo "${runtime_file}"
 }
 
+_resolve_latest_jaspar_path_from_marker() {
+  local latest_marker=$1
+  local sys_dir=$2
+  local runtime_dir=$3
+  local resolved_filename=""
+
+  if [[ ! -s "${latest_marker}" ]]; then
+    return 1
+  fi
+  read -r resolved_filename < "${latest_marker}"
+  if ! _jaspar_is_plants_core_meme_filename "${resolved_filename}"; then
+    return 1
+  fi
+  if [[ -s "${sys_dir}/${resolved_filename}" ]]; then
+    printf '%s\n' "${sys_dir}/${resolved_filename}"
+    return 0
+  fi
+  if [[ -s "${runtime_dir}/${resolved_filename}" ]]; then
+    printf '%s\n' "${runtime_dir}/${resolved_filename}"
+    return 0
+  fi
+  return 1
+}
+
+_prepare_latest_jaspar_file_locked() {
+  local gg_workspace_dir=$1
+  local latest_marker=$2
+  local sys_dir=$3
+  local runtime_dir=$4
+  local resolved_filename=""
+  local resolved_path=""
+
+  if resolved_path=$(_resolve_latest_jaspar_path_from_marker "${latest_marker}" "${sys_dir}" "${runtime_dir}"); then
+    printf '%s\n' "${resolved_path}"
+    return 0
+  fi
+  if resolved_filename=$(_jaspar_find_latest_meme_filename_remote); then
+    :
+  else
+    resolved_filename=""
+  fi
+  if [[ -z "${resolved_filename}" ]]; then
+    if resolved_filename=$(_jaspar_find_latest_meme_filename_local "${sys_dir}" "${runtime_dir}"); then
+      :
+    else
+      resolved_filename=""
+    fi
+  fi
+  if [[ -z "${resolved_filename}" ]]; then
+    echo "Could not resolve latest JASPAR plants CORE MEME motif file." >&2
+    return 1
+  fi
+  if ! resolved_path=$(_ensure_jaspar_file_named "${gg_workspace_dir}" "${resolved_filename}"); then
+    return 1
+  fi
+  printf '%s\n' "${resolved_filename}" > "${latest_marker}.tmp"
+  mv -- "${latest_marker}.tmp" "${latest_marker}"
+  printf '%s\n' "${resolved_path}"
+}
+
 ensure_latest_jaspar_file() {
   local gg_workspace_dir=$1
   local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
   local runtime_dir="${runtime_root}/jaspar"
   local sys_dir="/usr/local/db/jaspar"
   local lock_file="${runtime_root}/locks/jaspar_latest.lock"
-  local lock_dir="${lock_file}.dlock"
   local latest_marker="${runtime_dir}/latest_core_plants_non-redundant_pfms_meme.filename"
-  local has_flock=1
-  local resolved_filename=""
   local resolved_path=""
+  local heartbeat_pid=""
   local ensure_exit_code=0
 
   mkdir -p "${runtime_root}" "${runtime_dir}" "$(dirname "${lock_file}")"
 
-  if ! command -v flock >/dev/null 2>&1; then
-    has_flock=0
-    echo "flock command was not found. Using mkdir lock fallback synchronization: latest JASPAR motif file" >&2
+  if resolved_path=$(_resolve_latest_jaspar_path_from_marker "${latest_marker}" "${sys_dir}" "${runtime_dir}"); then
+    echo "${resolved_path}"
+    return 0
   fi
-  if [[ ${has_flock} -eq 1 ]]; then
-    exec 8> "${lock_file}"
-    flock 8
-    gg_maybe_recover_stale_lock_marker "${lock_file}" "latest JASPAR motif file"
-    gg_write_lock_marker "${lock_file}" "latest JASPAR motif file"
+
+  if ! gg_shared_lock_acquire "${lock_file}" "latest JASPAR motif file"; then
+    return 1
+  fi
+  heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")
+
+  if resolved_path=$(_prepare_latest_jaspar_file_locked "${gg_workspace_dir}" "${latest_marker}" "${sys_dir}" "${runtime_dir}"); then
+    ensure_exit_code=0
   else
-    gg_acquire_mkdir_lock "${lock_dir}" "latest JASPAR motif file" || return 1
+    ensure_exit_code=$?
   fi
 
-  if [[ -s "${latest_marker}" ]]; then
-    read -r resolved_filename < "${latest_marker}"
-    if ! _jaspar_is_plants_core_meme_filename "${resolved_filename}"; then
-      resolved_filename=""
-    fi
-    if [[ -n "${resolved_filename}" ]]; then
-      if [[ -s "${sys_dir}/${resolved_filename}" ]]; then
-        resolved_path="${sys_dir}/${resolved_filename}"
-      elif [[ -s "${runtime_dir}/${resolved_filename}" ]]; then
-        resolved_path="${runtime_dir}/${resolved_filename}"
-      fi
-    fi
-  fi
-
-  if [[ -z "${resolved_path}" ]]; then
-    if resolved_filename=$(_jaspar_find_latest_meme_filename_remote); then
-      :
-    else
-      resolved_filename=""
-    fi
-    if [[ -z "${resolved_filename}" ]]; then
-      if resolved_filename=$(_jaspar_find_latest_meme_filename_local "${sys_dir}" "${runtime_dir}"); then
-        :
-      else
-        resolved_filename=""
-      fi
-    fi
-    if [[ -z "${resolved_filename}" ]]; then
-      echo "Could not resolve latest JASPAR plants CORE MEME motif file." >&2
-      ensure_exit_code=1
-    else
-      if resolved_path=$(_ensure_jaspar_file_named "${gg_workspace_dir}" "${resolved_filename}"); then
-        ensure_exit_code=0
-      else
-        ensure_exit_code=$?
-      fi
-      if [[ ${ensure_exit_code} -eq 0 ]]; then
-        printf '%s\n' "${resolved_filename}" > "${latest_marker}.tmp"
-        mv -- "${latest_marker}.tmp" "${latest_marker}"
-      fi
-    fi
-  fi
-
-  if [[ ${has_flock} -eq 1 ]]; then
-    gg_remove_lock_marker "${lock_file}"
-    flock -u 8
-    exec 8>&-
-  else
-    gg_release_mkdir_lock "${lock_dir}"
-  fi
+  gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+  gg_shared_lock_release "${lock_file}"
 
   if [[ ${ensure_exit_code} -ne 0 ]]; then
     return ${ensure_exit_code}
@@ -3500,8 +3668,24 @@ _download_mmseqs_uniref90_db() {
   local db_dir=$1
   local nthreads=$2
   local uniref_db="UniRef90"
+  local attempt
+  local max_attempts=3
   mkdir -p "${db_dir}"
-  mmseqs databases "${uniref_db}" "${uniref_db}_DB" "${db_dir}" --threads "${nthreads}" || return 1
+  for attempt in 1 2 3; do
+    echo "Preparing MMseqs2 UniRef90 taxonomy DB in: ${db_dir} (attempt ${attempt}/${max_attempts})" >&2
+    if mmseqs databases "${uniref_db}" "${uniref_db}_DB" "${db_dir}" --threads "${nthreads}"; then
+      break
+    fi
+    echo "MMseqs2 UniRef90 taxonomy DB preparation failed in: ${db_dir} (attempt ${attempt}/${max_attempts})" >&2
+    if command -v df >/dev/null 2>&1; then
+      df -h "${db_dir}" >&2 || true
+    fi
+    if [[ ${attempt} -lt ${max_attempts} ]]; then
+      sleep 5
+    else
+      return 1
+    fi
+  done
   if [[ ! -s "${db_dir}/UniRef90_DB" || ! -s "${db_dir}/UniRef90_DB.dbtype" ]]; then
     return 1
   fi
