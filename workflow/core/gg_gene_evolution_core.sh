@@ -182,8 +182,14 @@ if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
   echo "gg debug mode: csubst_cutoff_stat=${csubst_cutoff_stat}"
 fi
 query_blast_method=$(echo "${query_blast_method}" | tr '[:upper:]' '[:lower:]')
+mode_gene_evolution=$(echo "${mode_gene_evolution:-query2family}" | tr '[:upper:]' '[:lower:]')
 uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
 tree_rooting_method=$(echo "${tree_rooting_method}" | tr '[:upper:]' '[:lower:]')
+if [[ "${mode_gene_evolution}" != "orthogroup" && "${mode_gene_evolution}" != "query2family" ]]; then
+  echo "Invalid mode_gene_evolution: ${mode_gene_evolution}"
+  echo 'mode_gene_evolution must be either "orthogroup" or "query2family". Exiting.'
+  exit 1
+fi
 if [[ "${tree_rooting_method}" != "notung" && "${tree_rooting_method}" != "midpoint" && "${tree_rooting_method}" != "mad" && "${tree_rooting_method}" != "md" ]]; then
   echo "Invalid tree_rooting_method: ${tree_rooting_method}"
   echo "tree_rooting_method must be one of notung, midpoint, mad, md. Exiting."
@@ -194,15 +200,15 @@ if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method
   echo 'uniprot_annotation_method must be either "blastp" or "mmseqs2". Exiting.'
   exit 1
 fi
-if [[ ${mode_query2family} -eq 1 && ${run_query_blast} -eq 1 ]]; then
+if [[ "${mode_gene_evolution}" == "query2family" && ${run_query_blast} -eq 1 ]]; then
   if [[ "${query_blast_method}" != "tblastn" && "${query_blast_method}" != "diamond" ]]; then
     echo "Invalid query_blast_method: ${query_blast_method}"
     echo 'query_blast_method must be either "tblastn" or "diamond". Exiting.'
     exit 1
   fi
 fi
-case "${mode_orthogroup}:${mode_query2family}" in
-  "1:0")
+case "${mode_gene_evolution}" in
+  "orthogroup")
     dir_output_active="${gg_workspace_output_dir}/orthogroup"
     file_orthogroup_genecount_selected="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv"
     if [[ ! -s "${file_orthogroup_genecount_selected}" ]]; then
@@ -232,7 +238,7 @@ case "${mode_orthogroup}:${mode_query2family}" in
     run_query_blast=0
     run_orthogroup_extraction=0
     ;;
-  "0:1")
+  "query2family")
     dir_output_active="${gg_workspace_output_dir}/query2family"
     dir_genelist="${gg_workspace_input_dir}/query_gene"
     if [[ ! -d "${dir_genelist}" ]]; then
@@ -256,8 +262,8 @@ case "${mode_orthogroup}:${mode_query2family}" in
     fi
     file_query_gene="${files[${idx}]}"
     og_id="$(basename "${file_query_gene}")"
-    echo "mode_query2family: ${#files[@]} input genelist file(s) were detected in ${dir_genelist}/"
-    echo "mode_query2family: Input genelist file = ${file_query_gene}"
+    echo "mode_gene_evolution=query2family: ${#files[@]} input genelist file(s) were detected in ${dir_genelist}/"
+    echo "mode_gene_evolution=query2family: Input genelist file = ${file_query_gene}"
     echo "output file prefix: ${og_id}"
     if [[ ! -f "${file_query_gene}" ]]; then
       echo "Input genelist file not found, probably due to out-of-range GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID}: ${file_query_gene}"
@@ -265,7 +271,7 @@ case "${mode_orthogroup}:${mode_query2family}" in
     fi
     ;;
   *)
-    echo 'Exactly one of ${mode_orthogroup} or ${mode_query2family} should be set to 1. Exiting.'
+    echo "Invalid mode_gene_evolution: ${mode_gene_evolution}. Exiting."
     exit 1
     ;;
 esac
@@ -678,7 +684,7 @@ else
 fi
 
 task="In-frame query BLAST (${query_blast_method})"
-if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2family} -eq 1 ]]; then
+if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && "${mode_gene_evolution}" == "query2family" ]]; then
   gg_step_start "${task}"
 
   if [[ ${query_blast_method} == "tblastn" ]]; then
@@ -939,10 +945,10 @@ task="Fasta generation"
 if [[ ! -s "${file_og_cds_fasta}" && ${run_get_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  if [[ ${mode_orthogroup} -eq 1 ]]; then
+  if [[ "${mode_gene_evolution}" == "orthogroup" ]]; then
     genes=()
     read -r -a genes <<< "$(awk -v og="${og_id}" '$1==og {$1=""; sub(/^[[:space:]]+/, "", $0); gsub(",", "", $0); gsub(/\t/, " ", $0); sub(/[[:space:]]*$/, "", $0); gsub(/\047|"/, "", $0); print; exit}' "${file_og}")"
-  elif [[ ${mode_query2family} -eq 1 ]]; then
+  elif [[ "${mode_gene_evolution}" == "query2family" ]]; then
     python "${gg_support_dir}/extract_gene_id_from_blast_table.py" \
       --infile "${file_og_query_blast}" \
       --outfile gene_id_list.txt \
@@ -1218,9 +1224,9 @@ if [[ ! -s "${file_og_maxalign}" && ${run_maxalign} -eq 1 ]]; then
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.cds.aln.fasta"
   maxalign_keep_regex=""
-  if [[ ${mode_query2family} -eq 1 && ${retain_query_in_maxalign} -eq 0 ]]; then
+  if [[ "${mode_gene_evolution}" == "query2family" && ${retain_query_in_maxalign} -eq 0 ]]; then
     echo "Query sequence(s) is NOT necessarily retained in MaxAlign."
-  elif [[ ${mode_query2family} -eq 1 && ${retain_query_in_maxalign} -eq 1 ]]; then
+  elif [[ "${mode_gene_evolution}" == "query2family" && ${retain_query_in_maxalign} -eq 1 ]]; then
     echo "Query sequence(s) is retained in MaxAlign."
     maxalign_keep_regex=$(
       python - "${file_query_gene}" << 'PY'

@@ -94,6 +94,188 @@ MANIFEST_FIELDNAMES = (
     "local_genome_path",
 )
 
+HEADER_COMMENTS = {
+    "provider": "\n".join(
+        (
+            "Required.",
+            "",
+            "Allowed values: {}.".format(", ".join(PROVIDERS)),
+            "Use the drop-down when possible.",
+            "In XLSX templates this must remain the first column.",
+        )
+    ),
+    "id": "\n".join(
+        (
+            "Required.",
+            "",
+            "Provider-specific identifier.",
+            "Examples:",
+            "- ensembl: homo_sapiens",
+            "- ncbi: GCF_000001405.40 or GCA_000001635.9",
+            "- coge: numeric genome_id (gid), for example 24739",
+            "- cngb: CNA... or GCA/GCF accession",
+            "- local: local species directory ID or path-style ID",
+            "The drop-down is provider-specific, but any valid value can still be typed manually.",
+            "For non-local providers, labels like 'GCF_000001405.40 (Homo sapiens)' are accepted;",
+            "the parser uses the token before the first space as the actual ID.",
+            "In XLSX templates this must remain the second column.",
+        )
+    ),
+    "species_key": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Stable species label used for output directories and filename templating.",
+            "Recommended format: letters, numbers, and underscores only, for example Homo_sapiens.",
+            "If blank, it is inferred from provider metadata, local directory names, or id when possible.",
+        )
+    ),
+    "cds_url": "\n".join(
+        (
+            "Conditionally required.",
+            "",
+            "URL to the CDS FASTA file.",
+            "Accepted schemes: https://, http://, ftp://, file://.",
+            "Leave blank when provider/id auto-resolution or cds_url_template will fill it.",
+            "Typical suffixes: .fa, .fasta, .fna with optional .gz.",
+        )
+    ),
+    "gff_url": "\n".join(
+        (
+            "Conditionally required.",
+            "",
+            "URL to the annotation file.",
+            "Accepted schemes: https://, http://, ftp://, file://.",
+            "Leave blank when provider/id auto-resolution or gff_url_template will fill it.",
+            "Typical suffixes: .gff, .gff3, .gtf with optional .gz.",
+        )
+    ),
+    "genome_url": "\n".join(
+        (
+            "Optional but recommended for genome-aware workflows.",
+            "",
+            "URL to the genome FASTA file.",
+            "Accepted schemes: https://, http://, ftp://, file://.",
+            "Leave blank to skip genome download; provider/id auto-resolution or genome_url_template can fill it.",
+            "Typical suffixes: .fa, .fasta, .fna with optional .gz.",
+        )
+    ),
+    "cds_filename": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Output filename used when the CDS file is written to the raw download directory.",
+            "Use a basename only, not a directory path.",
+            "If blank, it is inferred from cds_url or provider metadata.",
+        )
+    ),
+    "gff_filename": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Output filename used when the GFF/GTF file is written to the raw download directory.",
+            "Use a basename only, not a directory path.",
+            "If blank, it is inferred from gff_url or provider metadata.",
+        )
+    ),
+    "genome_filename": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Output filename used when the genome FASTA is written to the raw download directory.",
+            "Use a basename only, not a directory path.",
+            "If blank, it is inferred from genome_url or provider metadata.",
+        )
+    ),
+    "cds_url_template": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Template used to build cds_url when cds_url is blank.",
+            "Supported placeholders: {id}, {species_key}, {provider}.",
+            "Example: https://example.org/{species_key}/{id}.cds.fa.gz",
+        )
+    ),
+    "gff_url_template": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Template used to build gff_url when gff_url is blank.",
+            "Supported placeholders: {id}, {species_key}, {provider}.",
+            "Example: https://example.org/{species_key}/{id}.gff3.gz",
+        )
+    ),
+    "genome_url_template": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Template used to build genome_url when genome_url is blank.",
+            "Supported placeholders: {id}, {species_key}, {provider}.",
+            "Example: https://example.org/{species_key}/{id}.genome.fa.gz",
+        )
+    ),
+    "local_cds_path": "\n".join(
+        (
+            "Optional; mainly for provider=local.",
+            "",
+            "Absolute path or path relative to this manifest file.",
+            "Converted to file:// at runtime.",
+            "Use this when the CDS already exists locally and you do not want to write cds_url manually.",
+        )
+    ),
+    "local_gff_path": "\n".join(
+        (
+            "Optional; mainly for provider=local.",
+            "",
+            "Absolute path or path relative to this manifest file.",
+            "Converted to file:// at runtime.",
+            "Use this when the annotation file already exists locally and you do not want to write gff_url manually.",
+        )
+    ),
+    "local_genome_path": "\n".join(
+        (
+            "Optional; mainly for provider=local.",
+            "",
+            "Absolute path or path relative to this manifest file.",
+            "Converted to file:// at runtime.",
+            "Use this when the genome FASTA already exists locally and you do not want to write genome_url manually.",
+        )
+    ),
+}
+
+HEADER_COMMENT_MIN_WIDTH_PX = 240
+HEADER_COMMENT_MAX_WIDTH_PX = 520
+HEADER_COMMENT_MIN_HEIGHT_PX = 100
+HEADER_COMMENT_CHAR_WIDTH_PX = 7
+HEADER_COMMENT_LINE_HEIGHT_PX = 18
+HEADER_COMMENT_PADDING_X_PX = 24
+HEADER_COMMENT_PADDING_Y_PX = 18
+
+
+def build_header_comment(fieldname):
+    if Comment is None:
+        return None
+    text = str(HEADER_COMMENTS.get(fieldname, "") or "").strip()
+    if text == "":
+        return None
+
+    lines = text.splitlines() or [text]
+    longest_line = max(len(line) for line in lines) if lines else 0
+    width = HEADER_COMMENT_PADDING_X_PX + (longest_line * HEADER_COMMENT_CHAR_WIDTH_PX)
+    width = max(HEADER_COMMENT_MIN_WIDTH_PX, min(HEADER_COMMENT_MAX_WIDTH_PX, width))
+    wrap_chars = max(1, (width - HEADER_COMMENT_PADDING_X_PX) // HEADER_COMMENT_CHAR_WIDTH_PX)
+
+    display_lines = 0
+    for line in lines:
+        if line == "":
+            display_lines += 1
+            continue
+        display_lines += 1 + max(0, (len(line) - 1) // wrap_chars)
+
+    height = HEADER_COMMENT_PADDING_Y_PX + (display_lines * HEADER_COMMENT_LINE_HEIGHT_PX)
+    height = max(HEADER_COMMENT_MIN_HEIGHT_PX, height)
+    return Comment(text, "genegalleon", width=width, height=height)
+
 LARGE_ID_PROVIDERS = ("ncbi",)
 SNAPSHOT_FULL_ID_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "fernbase", "local")
 EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
@@ -631,10 +813,11 @@ def write_manifest_xlsx(rows: List[Dict[str, str]], output_path: Path, id_option
     for cell in sheet[1]:
         cell.font = Font(bold=True)
     if Comment is not None:
-        sheet["B1"].comment = Comment(
-            "IDs not listed in the drop-down are still supported if they are valid in the provider database.",
-            "genegalleon",
-        )
+        for cell in sheet[1]:
+            fieldname = str(cell.value or "").strip()
+            comment = build_header_comment(fieldname)
+            if comment is not None:
+                cell.comment = comment
     sheet.freeze_panes = "A2"
 
     for row in rows:

@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 import sys
+import zipfile
 
 from openpyxl import load_workbook
 
@@ -63,6 +64,14 @@ def read_list_column_values(sheet, column):
         values.append(str(value).strip())
         row_idx += 1
     return values
+
+
+def read_comment_vml(path):
+    with zipfile.ZipFile(path) as archive:
+        for name in archive.namelist():
+            if name.endswith(".vml"):
+                return archive.read(name).decode("utf-8")
+    return ""
 
 
 def test_build_download_manifest_from_small_fixture_all(tmp_path):
@@ -268,12 +277,23 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
     )
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
 
+    vml = read_comment_vml(out)
+    assert "width:144px;height:79px" not in vml
+    assert "visibility:hidden" in vml
+
     workbook = load_workbook(out)
     try:
         sheet = workbook["download_plan"]
         headers = [cell.value for cell in sheet[1]]
         assert headers[0] == "provider"
         assert headers[1] == "id"
+        header_comments = {str(cell.value): (cell.comment.text if cell.comment else "") for cell in sheet[1]}
+        assert set(header_comments.keys()) == set(headers)
+        assert all(header_comments[name] != "" for name in headers)
+        assert "Allowed values:" in header_comments["provider"]
+        assert "Provider-specific identifier." in header_comments["id"]
+        assert "Supported placeholders: {id}, {species_key}, {provider}." in header_comments["cds_url_template"]
+        assert "provider=local" in header_comments["local_cds_path"]
 
         validations = list(sheet.data_validations.dataValidation)
         provider_validation = next(v for v in validations if str(v.sqref) == "A2:A5000")

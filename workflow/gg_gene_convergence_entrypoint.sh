@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# SLURM in NIG supercomputer
+# SLURM
 #SBATCH -J gg_gene_convergence
 #SBATCH -c 8
 #SBATCH --mem-per-cpu=32G

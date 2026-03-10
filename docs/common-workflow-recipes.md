@@ -14,7 +14,7 @@ bash gg_gene_evolution_entrypoint.sh
 
 Default behavior:
 
-- `mode_query2family=1`
+- `mode_gene_evolution=query2family`
 - queries are read from `workspace/input/query_gene`
 - outputs are written under `workspace/output/query2family`
 
@@ -57,9 +57,9 @@ Use `gg_transcriptome_generation_entrypoint.sh` when your primary starting point
 
 Choose exactly one mode in the top config block:
 
-- `mode_sraid=1` for `workspace/input/query_sra_id`
-- `mode_fastq=1` for `workspace/input/species_rnaseq`
-- `mode_metadata=1` for `workspace/input/amalgkit_metadata`
+- `mode_transcriptome_assembly="sraid"` for `workspace/input/query_sra_id`
+- `mode_transcriptome_assembly="fastq"` for `workspace/input/species_rnaseq`
+- `mode_transcriptome_assembly="metadata"` for `workspace/input/amalgkit_metadata`
 
 Then run:
 
@@ -118,8 +118,7 @@ This mode depends on prior orthogroup selection output from `gg_genome_evolution
 Edit the top block of `workflow/gg_gene_evolution_entrypoint.sh` so that:
 
 ```bash
-mode_orthogroup=1
-mode_query2family=0
+mode_gene_evolution="orthogroup"
 ```
 
 Then run:

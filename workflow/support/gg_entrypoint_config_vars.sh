@@ -50,8 +50,7 @@ l1ou_use_fit_file
 large_tree_max_nshift
 large_tree_num_gene
 max_num_gene_blast_hit_retrieval
-mode_orthogroup
-mode_query2family
+mode_gene_evolution
 pgls_use_phenocov
 promoter_bp
 query_blast_coverage
@@ -261,9 +260,7 @@ assembly_ram_offset
 contamination_removal_rank
 kallisto_reference
 max_assembly_input_fastq_size
-mode_fastq
-mode_metadata
-mode_sraid
+mode_transcriptome_assembly
 orf_aggregation_level
 protocol_rna_seq
 remove_amalgkit_fastq_after_completion

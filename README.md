@@ -23,13 +23,19 @@ The fastest way to try GeneGalleon is to run
 
 ### 1. Prepare the container image
 
+Apptainer/Singularity workflow examples (these create `./genegalleon.sif`):
+
 ```bash
 # Build repo-root ./genegalleon.sif from the published GHCR image
 IMAGE_SOURCE=public IMAGE=ghcr.io/kfuku52/genegalleon TAG=latest bash ./gg_container_build_entrypoint.sh
 
 # Build repo-root ./genegalleon.sif from this repository
 IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
+```
 
+Docker workflow examples (these do not create `./genegalleon.sif`):
+
+```bash
 # Docker image only: pull the published GHCR image (does not create ./genegalleon.sif)
 docker pull ghcr.io/kfuku52/genegalleon:latest
 

@@ -61,8 +61,8 @@ These wrappers are intended to run as one task:
 ## Array-size rules
 
 - `gg_gene_evolution_entrypoint.sh`:
-  - `mode_orthogroup=1`: number of rows in `workspace/output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv` excluding the header
-  - `mode_query2family=1`: number of files in `workspace/input/query_gene`
+  - `mode_gene_evolution=orthogroup`: number of rows in `workspace/output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv` excluding the header
+  - `mode_gene_evolution=query2family`: number of files in `workspace/input/query_gene`
 - `gg_genome_annotation_entrypoint.sh`: number of input species CDS files
 - `gg_transcriptome_generation_entrypoint.sh`: number of species input units for the selected mode
 

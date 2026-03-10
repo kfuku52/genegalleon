@@ -22,6 +22,7 @@ contamination_removal_rank="${contamination_removal_rank:-domain}"
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 delete_tmp_dir=${delete_tmp_dir:-1}
+mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-sraid}" | tr '[:upper:]' '[:lower:]')
 busco_lineage_resolved=""
 contamination_removal_rank_for_remove_contaminated_sequences="$(
   gg_normalize_contamination_removal_rank_for_remove_contaminated_sequences "${contamination_removal_rank}"
@@ -93,65 +94,91 @@ dir_input_amalgkit_metadata="${gg_workspace_input_dir}/amalgkit_metadata"
 dir_generated_amalgkit_metadata="${dir_transcriptome_assembly_output}/amalgkit_metadata"
 dir_amalgkit_quant="${dir_transcriptome_assembly_output}/amalgkit_quant"
 
-if [[ ${mode_fastq} -eq 1 && ! -d "${dir_input_fastq}" ]]; then
-  echo "Missing mode_fastq input directory: ${dir_input_fastq}"
-  mode_fastq=0
+if [[ "${mode_transcriptome_assembly}" != "auto" && "${mode_transcriptome_assembly}" != "sraid" && "${mode_transcriptome_assembly}" != "fastq" && "${mode_transcriptome_assembly}" != "metadata" ]]; then
+  echo "Invalid mode_transcriptome_assembly: ${mode_transcriptome_assembly}"
+  echo 'mode_transcriptome_assembly must be one of "auto", "sraid", "fastq", or "metadata". Exiting.'
+  exit 1
 fi
-if [[ ${mode_fastq} -eq 1 ]]; then
-  fastq_mode_dirs=()
+
+fastq_mode_dirs=()
+if [[ -d "${dir_input_fastq}" ]]; then
   mapfile -t fastq_mode_dirs < <(find "${dir_input_fastq}" -mindepth 1 -maxdepth 1 -type d ! -name '.*' | sort)
-  if [[ ${#fastq_mode_dirs[@]} -eq 0 ]]; then
-    echo "Input directory is empty for mode_fastq: ${dir_input_fastq}"
-    mode_fastq=0
-  fi
 fi
-if [[ ${mode_sraid} -eq 1 ]]; then
-  if [[ ! -d "${dir_input_sra_list}" ]]; then
-    echo "Missing mode_sraid input directory: ${dir_input_sra_list}"
-    mode_sraid=0
-  else
-    sra_mode_files=()
-    mapfile -t sra_mode_files < <(find "${dir_input_sra_list}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)
-    if [[ ${#sra_mode_files[@]} -eq 0 ]]; then
-      echo "Input directory is empty for mode_sraid: ${dir_input_sra_list}"
-      mode_sraid=0
-    fi
-  fi
+sra_mode_files=()
+if [[ -d "${dir_input_sra_list}" ]]; then
+  mapfile -t sra_mode_files < <(find "${dir_input_sra_list}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)
 fi
-if [[ ${mode_metadata} -eq 1 ]]; then
-  if [[ ! -d "${dir_input_amalgkit_metadata}" ]]; then
-    echo "Missing mode_metadata input directory: ${dir_input_amalgkit_metadata}"
-    mode_metadata=0
-  else
-    metadata_mode_files=()
-    mapfile -t metadata_mode_files < <(find "${dir_input_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)
-    if [[ ${#metadata_mode_files[@]} -eq 0 ]]; then
-      echo "Input directory is empty for mode_metadata: ${dir_input_amalgkit_metadata}"
-      mode_metadata=0
-    fi
-  fi
+metadata_mode_files=()
+if [[ -d "${dir_input_amalgkit_metadata}" ]]; then
+  mapfile -t metadata_mode_files < <(find "${dir_input_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)
 fi
-if [[ ${mode_fastq} -eq 0 && ${mode_sraid} -eq 0 && ${mode_metadata} -eq 0 ]]; then
-  echo "No valid transcriptome input mode is available. Skipping transcriptome assembly workflow."
-  exit 0
+
+available_transcriptome_modes=()
+if [[ ${#fastq_mode_dirs[@]} -gt 0 ]]; then
+  available_transcriptome_modes+=("fastq")
+fi
+if [[ ${#sra_mode_files[@]} -gt 0 ]]; then
+  available_transcriptome_modes+=("sraid")
+fi
+if [[ ${#metadata_mode_files[@]} -gt 0 ]]; then
+  available_transcriptome_modes+=("metadata")
+fi
+
+selected_transcriptome_mode="${mode_transcriptome_assembly}"
+if [[ "${mode_transcriptome_assembly}" == "auto" ]]; then
+  if [[ ${#available_transcriptome_modes[@]} -eq 0 ]]; then
+    echo "No valid transcriptome input mode is available. Skipping transcriptome assembly workflow."
+    exit 0
+  fi
+  if [[ ${#available_transcriptome_modes[@]} -gt 1 ]]; then
+    echo "mode_transcriptome_assembly=auto is ambiguous. Multiple input layouts are available: ${available_transcriptome_modes[*]}"
+    echo 'Set mode_transcriptome_assembly explicitly to one of "sraid", "fastq", or "metadata". Exiting.'
+    exit 1
+  fi
+  selected_transcriptome_mode="${available_transcriptome_modes[0]}"
+  echo "Auto-detected transcriptome input mode: ${selected_transcriptome_mode}"
+else
+  case "${selected_transcriptome_mode}" in
+    "fastq")
+      if [[ ! -d "${dir_input_fastq}" ]]; then
+        echo "Missing mode_transcriptome_assembly=fastq input directory: ${dir_input_fastq}"
+        exit 1
+      fi
+      if [[ ${#fastq_mode_dirs[@]} -eq 0 ]]; then
+        echo "Input directory is empty for mode_transcriptome_assembly=fastq: ${dir_input_fastq}"
+        exit 1
+      fi
+      ;;
+    "sraid")
+      if [[ ! -d "${dir_input_sra_list}" ]]; then
+        echo "Missing mode_transcriptome_assembly=sraid input directory: ${dir_input_sra_list}"
+        exit 1
+      fi
+      if [[ ${#sra_mode_files[@]} -eq 0 ]]; then
+        echo "Input directory is empty for mode_transcriptome_assembly=sraid: ${dir_input_sra_list}"
+        exit 1
+      fi
+      ;;
+    "metadata")
+      if [[ ! -d "${dir_input_amalgkit_metadata}" ]]; then
+        echo "Missing mode_transcriptome_assembly=metadata input directory: ${dir_input_amalgkit_metadata}"
+        exit 1
+      fi
+      if [[ ${#metadata_mode_files[@]} -eq 0 ]]; then
+        echo "Input directory is empty for mode_transcriptome_assembly=metadata: ${dir_input_amalgkit_metadata}"
+        exit 1
+      fi
+      ;;
+  esac
 fi
 if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then
   echo "Invalid GG_ARRAY_TASK_ID value (must be a positive integer): ${GG_ARRAY_TASK_ID}"
   exit 1
 fi
 
-if [[ ${mode_fastq} -eq 1 ]]; then
+if [[ "${selected_transcriptome_mode}" == "fastq" ]]; then
   echo 'Mode: fastq input'
-  if [[ ! -d "${dir_input_fastq}" ]]; then
-    echo "Input directory does not exist: ${dir_input_fastq}"
-    exit 1
-  fi
-  dirs=()
-  mapfile -t dirs < <(find "${dir_input_fastq}" -mindepth 1 -maxdepth 1 -type d ! -name '.*' | sort)
-  if [[ ${#dirs[@]} -eq 0 ]]; then
-    echo "Input directory is empty: ${dir_input_fastq}"
-    exit 1
-  fi
+  dirs=( "${fastq_mode_dirs[@]}" )
   id=$((GG_ARRAY_TASK_ID - 1))
   if [[ ${id} -ge ${#dirs[@]} ]]; then
     echo "Input fastq directory not found, probably due to the out-of-range specification of array jobs. Exiting."
@@ -168,18 +195,9 @@ if [[ ${mode_fastq} -eq 1 ]]; then
     echo "No FASTQ files were found for species ${sp_ub} in: ${dir_species_fastq}. Exiting."
     exit 1
   fi
-elif [[ ${mode_sraid} -eq 1 ]]; then
+elif [[ "${selected_transcriptome_mode}" == "sraid" ]]; then
   echo 'Mode: sraid input'
-  if [[ ! -d "${dir_input_sra_list}" ]]; then
-    echo "Input directory does not exist: ${dir_input_sra_list}"
-    exit 1
-  fi
-  files=()
-  mapfile -t files < <(find "${dir_input_sra_list}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)
-  if [[ ${#files[@]} -eq 0 ]]; then
-    echo "Input directory is empty: ${dir_input_sra_list}"
-    exit 1
-  fi
+  files=( "${sra_mode_files[@]}" )
   id=$((GG_ARRAY_TASK_ID - 1))
   if [[ ${id} -ge ${#files[@]} ]]; then
     echo "Input SRA list file not found, probably due to the out-of-range specification of array jobs. Exiting."
@@ -201,18 +219,9 @@ elif [[ ${mode_sraid} -eq 1 ]]; then
     echo "SRA IDs not found, probably due to the out-of-range specification of array jobs. Exiting."
     exit 1
   fi
-elif [[ ${mode_metadata} -eq 1 ]]; then
+elif [[ "${selected_transcriptome_mode}" == "metadata" ]]; then
   echo 'Mode: metadata input'
-  if [[ ! -d "${dir_input_amalgkit_metadata}" ]]; then
-    echo "Input directory does not exist: ${dir_input_amalgkit_metadata}"
-    exit 1
-  fi
-  files=()
-  mapfile -t files < <(find "${dir_input_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)
-  if [[ ${#files[@]} -eq 0 ]]; then
-    echo "Input directory is empty: ${dir_input_amalgkit_metadata}"
-    exit 1
-  fi
+  files=( "${metadata_mode_files[@]}" )
   id=$((GG_ARRAY_TASK_ID - 1))
   if [[ ${id} -ge ${#files[@]} ]]; then
     echo "Input metadata file not found, probably due to the out-of-range specification of array jobs. Exiting."
@@ -234,7 +243,7 @@ dir_amalgkit_download_dir="${gg_workspace_downloads_dir}"
 dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"
 file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"
 file_generated_amalgkit_metadata="${dir_generated_amalgkit_metadata}/${sp_ub}_metadata.tsv"
-if [[ ${mode_metadata} -eq 1 ]]; then
+if [[ "${selected_transcriptome_mode}" == "metadata" ]]; then
   file_amalgkit_metadata="${file_input_amalgkit_metadata}"
 else
   file_amalgkit_metadata="${file_generated_amalgkit_metadata}"
@@ -271,7 +280,7 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
     rm -rf -- "./metadata"
   fi
 
-  if [[ ${mode_sraid} -eq 1 ]]; then
+  if [[ "${selected_transcriptome_mode}" == "sraid" ]]; then
     search_string=$(tr -s "\n" < "${file_input_sra_list}" | sed ':a;N;$!ba;s/\n/ OR /g' | sed -e "s/ OR $//" -e "s/^/(/" -e "s/$/)/")
     search_string="${search_string} AND \"Illumina\"[Platform] AND (\"RNA-seq\"[Strategy] OR \"EST\"[Strategy])"
     echo "Entrez search string: ${search_string}"
@@ -291,7 +300,7 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
       exit 1
     fi
 
-  elif [[ ${mode_fastq} -eq 1 ]]; then
+  elif [[ "${selected_transcriptome_mode}" == "fastq" ]]; then
     amalgkit integrate \
       --out_dir "./" \
       --download_dir "${dir_amalgkit_download_dir}" \

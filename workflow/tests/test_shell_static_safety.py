@@ -950,8 +950,7 @@ def test_gene_convergence_entrypoint_does_not_define_unused_delete_tmp_dir():
 
 def test_gene_evolution_entrypoint_allows_debug_runner_mode_overrides():
     text = _read_text(WORKFLOW_DIR / "gg_gene_evolution_entrypoint.sh")
-    assert 'mode_orthogroup="${mode_orthogroup:-0}"' in text
-    assert 'mode_query2family="${mode_query2family:-1}"' in text
+    assert 'mode_gene_evolution="${mode_gene_evolution:-query2family}"' in text
     assert 'run_hyphy_relax="${run_hyphy_relax:-0}"' in text
     assert 'run_hyphy_relax_reversed="${run_hyphy_relax_reversed:-0}"' in text
     assert "mode_orthogroup=0 # Analyze OrthoFinder orthogroups" not in text
@@ -2611,17 +2610,19 @@ def test_transcriptome_core_guards_array_task_id_range_before_array_indexing():
     assert "Backward compatibility for legacy input layout" not in text
     assert 'mapfile -t fastq_mode_dirs < <(find "${dir_input_fastq}" -mindepth 1 -maxdepth 1 -type d ! -name \'.*\' | sort)' in text
     assert 'mapfile -t files_fastq < <(find "${dir_species_fastq}" -maxdepth 1 -type f ! -name \'.*\' \\( -name "*.fq" -o -name "*.fastq" -o -name "*.fq.gz" -o -name "*.fastq.gz" \\) | sort)' in text
-    assert 'mapfile -t dirs < <(find "${dir_input_fastq}" -mindepth 1 -maxdepth 1 -type d ! -name \'.*\' | sort)' in text
     assert 'mapfile -t sra_mode_files < <(find "${dir_input_sra_list}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
     assert 'mapfile -t metadata_mode_files < <(find "${dir_input_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
-    assert 'mapfile -t files < <(find "${dir_input_sra_list}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
-    assert 'mapfile -t files < <(find "${dir_input_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
+    assert 'dirs=( "${fastq_mode_dirs[@]}" )' in text
+    assert 'files=( "${sra_mode_files[@]}" )' in text
+    assert 'files=( "${metadata_mode_files[@]}" )' in text
     assert re.search(r'^[ \t]*dirs=\( "\$\{dir_input_fastq\}"/\* \)', text, re.MULTILINE) is None
     assert re.search(r'^[ \t]*files=\( "\$\{dir_input_sra_list\}"/\* \)', text, re.MULTILINE) is None
     assert re.search(r'^[ \t]*files=\( "\$\{dir_input_amalgkit_metadata\}"/\* \)', text, re.MULTILINE) is None
     assert 'files_fastq=( "${dir_species_fastq}"/* )' not in text
     assert 'if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then' in text
-    assert 'if [[ ${#dirs[@]} -eq 0 ]]; then' in text
+    assert 'if [[ ${#fastq_mode_dirs[@]} -eq 0 ]]; then' in text
+    assert 'if [[ ${#sra_mode_files[@]} -eq 0 ]]; then' in text
+    assert 'if [[ ${#metadata_mode_files[@]} -eq 0 ]]; then' in text
 
     fastq_guard = 'if [[ ${id} -ge ${#dirs[@]} ]]; then'
     fastq_use = 'dir_species_fastq="${dirs[${id}]}"'
@@ -2649,7 +2650,7 @@ def test_transcriptome_core_stores_generated_metadata_under_output_dir():
     assert 'dir_generated_amalgkit_metadata="${dir_transcriptome_assembly_output}/amalgkit_metadata"' in text
     assert 'file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"' in text
     assert 'file_generated_amalgkit_metadata="${dir_generated_amalgkit_metadata}/${sp_ub}_metadata.tsv"' in text
-    assert 'if [[ ${mode_metadata} -eq 1 ]]; then' in text
+    assert 'if [[ "${selected_transcriptome_mode}" == "metadata" ]]; then' in text
     assert 'file_amalgkit_metadata="${file_input_amalgkit_metadata}"' in text
     assert 'file_amalgkit_metadata="${file_generated_amalgkit_metadata}"' in text
     assert 'file_amalgkit_metadata="${dir_amalgkit_metadata}/${sp_ub}_metadata.tsv"' not in text
@@ -2717,6 +2718,17 @@ def test_genome_annotation_core_guards_array_task_id_before_task_index_math():
     assert guard in text
     assert task_index in text
     assert text.index(guard) < text.index(task_index)
+
+
+def test_genome_annotation_core_multispecies_summary_requires_real_summary_inputs():
+    script = CORE_DIR / "gg_genome_annotation_core.sh"
+    text = _read_text(script)
+    assert "summary_inputs_available=0" in text
+    assert 'No multispecies summary inputs are available yet. Skipping summary generation.' in text
+    assert 'if is_output_older_than_inputs "^file_sp_" "${file_multispecies_summary}"; then' not in text
+    assert 'if is_output_older_than_inputs "^(dir_summary_|file_summary_)" "${file_multispecies_summary}"; then' in text
+    assert 'dir_summary_species_annotation="${gg_workspace_output_dir}/species_cds_annotation"' in text
+    assert 'file_summary_species_tree_dated="${dir_summary_species_tree}/dated_species_tree.nwk"' in text
 
 
 def test_genome_evolution_core_excludes_hidden_files_when_listing_species_proteins():

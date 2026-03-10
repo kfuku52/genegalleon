@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# SLURM in NIG supercomputer
+# SLURM
 #SBATCH -J gg_input_generation
 #SBATCH -c 2
 #SBATCH --mem-per-cpu=8G

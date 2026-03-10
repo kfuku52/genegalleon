@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# SLURM in NIG supercomputer
+# SLURM
 #SBATCH -J gg_genome_evolution
 #SBATCH -c 4
 #SBATCH --mem-per-cpu=8G

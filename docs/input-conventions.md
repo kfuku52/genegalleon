@@ -21,7 +21,7 @@ Major scripts accept:
 
 ### `workspace/input/query_gene`
 
-Each file is one family-level task in `mode_query2family=1`.
+Each file is one family-level task in `mode_gene_evolution=query2family`.
 Accepted forms:
 
 - amino-acid FASTA,
@@ -36,21 +36,24 @@ Accepted forms:
 
 ### Transcriptome assembly input modes
 
-`gg_transcriptome_generation_core.sh` supports three mutually exclusive modes:
+`gg_transcriptome_generation_core.sh` supports three explicit modes plus `auto`:
 
-- `mode_sraid=1`
+- `mode_transcriptome_assembly="sraid"`
   - input: `workspace/input/query_sra_id/GENUS_SPECIES.txt`
   - one SRA/BioProject ID per line
-- `mode_fastq=1`
+- `mode_transcriptome_assembly="fastq"`
   - input: `workspace/input/species_rnaseq/GENUS_SPECIES/*.fastq.gz`
-- `mode_metadata=1`
+- `mode_transcriptome_assembly="metadata"`
   - input: `workspace/input/amalgkit_metadata/GENUS_SPECIES_metadata.tsv`
+- `mode_transcriptome_assembly="auto"`
+  - auto-selects the single available input layout
+  - exits with an error when multiple layouts are simultaneously present
 
-For `mode_sraid=1` and `mode_fastq=1`, auto-generated amalgkit metadata is written to:
+For `mode_transcriptome_assembly="sraid"` and `mode_transcriptome_assembly="fastq"`, auto-generated amalgkit metadata is written to:
 
 - `workspace/output/transcriptome_assembly/amalgkit_metadata/GENUS_SPECIES_metadata.tsv`
 
-This keeps `workspace/input/amalgkit_metadata` reserved for explicit `mode_metadata=1` inputs.
+This keeps `workspace/input/amalgkit_metadata` reserved for explicit `mode_transcriptome_assembly="metadata"` inputs.
 
 ### Automated provider formatting helper
 

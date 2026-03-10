@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# SLURM in NIG supercomputer
+# SLURM
 #SBATCH -J gg_transcriptome_generation
 #SBATCH -c 4
 #SBATCH --mem-per-cpu=32G
@@ -26,15 +26,15 @@
 #$ -t 1
 
 # Number of parallel batch jobs ("-t 1-N" in SGE or "--array 1-N" in SLURM):
-# N = Number of directories in workspace/input/species_rnaseq for mode_fastq=1
-# N = Number of files in workspace/input/query_sra_id for mode_sraid=1
+# N = Number of directories in workspace/input/species_rnaseq for mode_transcriptome_assembly=fastq
+# N = Number of files in workspace/input/query_sra_id for mode_transcriptome_assembly=sraid
+# N = Number of files in workspace/input/amalgkit_metadata for mode_transcriptome_assembly=metadata
+# In many cases, 4 cores and mem_req=16G (=64G) worked well in per-SRA Trinity assembly.
+# Increase per-core RAM to 32G if Trinity fails.
 
 set -euo pipefail
 
 echo "$(date): Starting"
-
-# In many cases, 4 cores and mem_req=16G (=64G) worked well in per-SRA Trinity assembly.
-# Increase per-core RAM to 32G if Trinity fails.
 
 # Resolve workflow paths for local and scheduler-spooled execution.
 gg_bootstrap_submit_dir="${SLURM_SUBMIT_DIR:-${PBS_O_WORKDIR:-${PWD:-}}}"
@@ -62,9 +62,7 @@ gg_entrypoint_name="gg_transcriptome_generation_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
-mode_sraid=1 # Need input at workspace/input/query_sra_id.
-mode_fastq=0 # Need input at workspace/input/species_rnaseq.
-mode_metadata=0 # Need input at workspace/input/amalgkit_metadata.
+mode_transcriptome_assembly="${mode_transcriptome_assembly:-sraid}" # {"auto", "sraid", "fastq", "metadata"}
 
 run_amalgkit_metadata_or_integrate=1 # Metadata retrieval.
 run_amalgkit_getfastq=1 # fastq generation from NCBI SRA.

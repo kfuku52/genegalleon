@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # Required chain requested by project workflow:
 #   gg_genome_evolution_entrypoint.sh
-#     -> gg_gene_evolution_entrypoint.sh (mode_orthogroup=1, mode_query2family=0)
-#     -> gg_gene_evolution_entrypoint.sh (mode_orthogroup=0, mode_query2family=1)
+#     -> gg_gene_evolution_entrypoint.sh (mode_gene_evolution=orthogroup)
+#     -> gg_gene_evolution_entrypoint.sh (mode_gene_evolution=query2family)
 #     -> gg_gene_database_entrypoint.sh
 #     -> gg_gene_convergence_entrypoint.sh
 #
@@ -196,8 +196,8 @@ ordered_steps=(
   "gg_transcriptome_generation|gg_transcriptome_generation_entrypoint.sh|"
   "gg_genome_annotation|gg_genome_annotation_entrypoint.sh|"
   "gg_genome_evolution|gg_genome_evolution_entrypoint.sh|"
-  "gg_gene_evolution_mode_orthogroup|gg_gene_evolution_entrypoint.sh|mode_orthogroup=1 mode_query2family=0 run_hyphy_relax=0 run_hyphy_relax_reversed=0"
-  "gg_gene_evolution_mode_query2family|gg_gene_evolution_entrypoint.sh|mode_orthogroup=0 mode_query2family=1 run_hyphy_relax=0 run_hyphy_relax_reversed=0"
+  "gg_gene_evolution_mode_orthogroup|gg_gene_evolution_entrypoint.sh|mode_gene_evolution=orthogroup run_hyphy_relax=0 run_hyphy_relax_reversed=0"
+  "gg_gene_evolution_mode_query2family|gg_gene_evolution_entrypoint.sh|mode_gene_evolution=query2family run_hyphy_relax=0 run_hyphy_relax_reversed=0"
   "gg_gene_database|gg_gene_database_entrypoint.sh|"
   "gg_gene_convergence|gg_gene_convergence_entrypoint.sh|"
   "gg_progress_summary|gg_progress_summary_entrypoint.sh|"

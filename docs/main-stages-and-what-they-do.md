@@ -221,8 +221,7 @@ Main outputs:
 
 Notable defaults:
 
-- `mode_orthogroup=0`
-- `mode_query2family=1`
+- `mode_gene_evolution="query2family"`
 - `run_rps_blast=1` (Pfam domain annotation is on by default),
 - `run_tree_plot=1`
 - `run_summary=1`

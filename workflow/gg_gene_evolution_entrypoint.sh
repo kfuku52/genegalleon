@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# SLURM in NIG supercomputer
+# SLURM
 #SBATCH -J gg_gene_evolution
 #SBATCH -c 4
 #SBATCH --mem-per-cpu=8G
@@ -35,8 +35,8 @@
 ##PBS -V
 
 # Number of parallel batch jobs ("-t 1-N" in SGE or "--array 1-N" in SLURM):
-# N = Number of rows (excluding the header) in workspace/output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv for mode_orthogroup=1
-# N = Number of files in workspace/input/query_gene for mode_query2family=1
+# N = Number of rows (excluding the header) in workspace/output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv for mode_gene_evolution=orthogroup
+# N = Number of files in workspace/input/query_gene for mode_gene_evolution=query2family
 
 set -euo pipefail
 
@@ -69,12 +69,11 @@ gg_entrypoint_name="gg_gene_evolution_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Mode
-mode_orthogroup="${mode_orthogroup:-0}" # Analyze OrthoFinder orthogroups
-mode_query2family="${mode_query2family:-1}" # Analyze all homologs of input genelist in ${gg_workspace_dir}/input/query_gene
+mode_gene_evolution="${mode_gene_evolution:-query2family}" # query2family|orthogroup
 
 # Workflow
-run_get_query_fasta=1 # Activated if mode_query2family=1. Generate amino acid fasta file for query BLAST.
-run_query_blast=1 # Activated if mode_query2family=1.
+run_get_query_fasta=1 # Activated if mode_gene_evolution=query2family. Generate amino acid fasta file for query BLAST.
+run_query_blast=1 # Activated if mode_gene_evolution=query2family.
 run_get_fasta=1 # Generate in-frame CDS fasta file.
 run_rps_blast=1 # RPS-BLAST protein domain search.
 run_uniprot_annotation=0 # Annotation against UniProt Swiss-Prot.
@@ -88,7 +87,7 @@ run_amas_cleaned=1 # Alignment statistics after MaxAlign and TrimAl using AMAS.
 run_iqtree=1 # Maximum-likelihood phylogenetic reconstruction.
 run_tree_root=1 # Root gene tree using tree_rooting_method.
 tree_rooting_method="mad" # notung|midpoint|mad|md; md is mapped to nwkit method "mv".
-run_orthogroup_extraction=0 # Activated if mode_query2family=1.
+run_orthogroup_extraction=0 # Activated if mode_gene_evolution=query2family.
 run_generax=0 # GeneRax off by default for local/smoke environments without MPI setup.
 run_notung_reconcil=0 # Run NOTUNG for RADTE.
 run_tree_dating=0 # Species-tree-guided divergence time estimation with RADTE.
@@ -112,7 +111,7 @@ run_csubst=0 # Protein convergence analysis with CSUBST.
 run_summary=1 # Generate summary tables.
 run_tree_plot=1 # Tree visualization pdf.
 
-# Sequence selection in mode_query2family=1
+# Sequence selection in mode_gene_evolution=query2family
 query_blast_method="diamond" # diamond|tblastn
 query_blast_evalue="0.01" # BLAST E-value threshold.
 query_blast_coverage="0.25" # BLAST coverage threshold.
