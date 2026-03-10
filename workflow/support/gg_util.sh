@@ -1489,7 +1489,7 @@ _download_busco_lineage_to_runtime() {
   local runtime_busco_lineage=$3
   local runtime_ready_marker=$4
   if gg_busco_lineage_is_ready "${runtime_busco_lineage}"; then
-    touch "${runtime_ready_marker}"
+    gg_write_ready_marker "${runtime_ready_marker}"
     return 0
   fi
   echo "Starting BUSCO dataset download: ${busco_lineage}" >&2
@@ -1505,7 +1505,7 @@ _download_busco_lineage_to_runtime() {
     echo "BUSCO lineage dataset is still missing after download: ${runtime_busco_lineage}" >&2
     return 1
   fi
-  touch "${runtime_ready_marker}"
+  gg_write_ready_marker "${runtime_ready_marker}"
   echo "BUSCO dataset download has been finished: ${busco_lineage}" >&2
 }
 
@@ -1543,7 +1543,7 @@ ensure_busco_download_path() {
   ensure_dir "${runtime_busco_db}/lineages"
 
   if gg_busco_lineage_is_ready "${runtime_busco_lineage}"; then
-    touch "${runtime_ready_marker}"
+    gg_write_ready_marker "${runtime_ready_marker}"
     echo "${runtime_busco_db}"
     return 0
   fi
@@ -2919,6 +2919,12 @@ gg_stat_mtime_epoch() {
   fi
 }
 
+gg_write_ready_marker() {
+  local marker_path=$1
+  mkdir -p "$(dirname "${marker_path}")"
+  printf 'ready\n' > "${marker_path}"
+}
+
 gg_artifact_ready() {
   local artifact_path=$1
   if [[ -d "${artifact_path}" ]]; then
@@ -3473,7 +3479,7 @@ _build_mmseqs_db_from_fasta() {
     echo "MMseqs2 DB files were not generated: ${db_prefix}" >&2
     return 1
   fi
-  touch "${done_file}"
+  gg_write_ready_marker "${done_file}"
 }
 
 _build_blast_db_from_fasta() {
@@ -3489,7 +3495,7 @@ _build_blast_db_from_fasta() {
     echo "BLASTP DB files were not generated: ${db_prefix}" >&2
     return 1
   fi
-  touch "${done_file}"
+  gg_write_ready_marker "${done_file}"
 }
 
 ensure_uniprot_sprot_db() {
@@ -3560,7 +3566,7 @@ ensure_uniprot_sprot_mmseqs_db() {
   fi
   if [[ -s "${runtime_mmseqs_db}" && -s "${runtime_mmseqs_dbtype}" && ! -s "${runtime_ready}" ]]; then
     echo "MMseqs2 UniProt Swiss-Prot DB exists without ready marker. Reusing existing DB and creating ready marker." >&2
-    touch "${runtime_ready}"
+    gg_write_ready_marker "${runtime_ready}"
     echo "${runtime_prefix}"
     return 0
   fi
@@ -3617,7 +3623,7 @@ ensure_uniprot_sprot_blast_db() {
   fi
   if [[ -s "${runtime_prefix}.pin" && -s "${runtime_prefix}.phr" && -s "${runtime_prefix}.psq" && ! -s "${runtime_blast_ready}" ]]; then
     echo "BLASTP UniProt Swiss-Prot DB exists without ready marker. Reusing existing DB and creating ready marker." >&2
-    touch "${runtime_blast_ready}"
+    gg_write_ready_marker "${runtime_blast_ready}"
     echo "${runtime_prefix}"
     return 0
   fi
@@ -3689,7 +3695,7 @@ _download_pfam_le_to_dir() {
   mv -- "${staged_dir}" "${output_dir}.tmp"
   rm -rf -- "${output_dir}"
   mv -- "${output_dir}.tmp" "${output_dir}"
-  touch "${ready_file}"
+  gg_write_ready_marker "${ready_file}"
   rm -rf -- "${tmp_dir}"
 }
 
@@ -3715,7 +3721,7 @@ ensure_pfam_le_db() {
   fi
 
   if pfam_le_db_is_ready "${runtime_dir}"; then
-    touch "${ready_file}"
+    gg_write_ready_marker "${ready_file}"
     echo "${runtime_dir}"
     return 0
   fi
@@ -4092,7 +4098,7 @@ _download_mmseqs_uniref90_db() {
   if [[ ! -s "${db_dir}/UniRef90_DB" || ! -s "${db_dir}/UniRef90_DB.dbtype" ]]; then
     return 1
   fi
-  touch "${db_dir}/UniRef90_DB.ready"
+  gg_write_ready_marker "${db_dir}/UniRef90_DB.ready"
 }
 
 ensure_mmseqs_uniref90_db() {
@@ -4110,7 +4116,7 @@ ensure_mmseqs_uniref90_db() {
   mkdir -p "${db_dir}"
   if [[ -s "${db_file}" && -s "${dbtype_file}" && ! -s "${done_file}" ]]; then
     echo "MMseqs2 UniRef90 DB file exists without ready marker. Reusing existing DB and creating ready marker." >&2
-    touch "${done_file}"
+    gg_write_ready_marker "${done_file}"
     return 0
   fi
   gg_array_download_once "${lock_file}" "${done_file}" "MMseqs2 UniRef90 taxonomy DB" \

@@ -29,6 +29,29 @@ def test_workspace_pfam_le_dir_is_under_downloads_dedicated_folder(tmp_path):
     assert completed.stdout.strip() == str(project_dir / "downloads" / "pfam" / "Pfam_LE")
 
 
+def test_gg_array_download_once_accepts_nonempty_ready_marker(tmp_path):
+    lock_file = tmp_path / "locks" / "artifact.lock"
+    marker_file = tmp_path / "runtime" / ".artifact.ready"
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"marker_file={shlex.quote(str(marker_file))}; "
+        f'gg_array_download_once {shlex.quote(str(lock_file))} "$marker_file" "marker artifact" '
+        'gg_write_ready_marker "$marker_file"; '
+        'status=$?; '
+        'printf "%s\\n" "$status"; '
+        'wc -c < "$marker_file"; '
+        'cat "$marker_file"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.strip().splitlines()
+    assert lines[0] == "0"
+    assert int(lines[1]) > 0
+    assert lines[2] == "ready"
+
+
 def test_contamination_rank_normalizes_superkingdom_for_amalgkit(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
@@ -388,6 +411,31 @@ def test_ensure_pfam_le_db_uses_new_workspace_layout_without_migrating_legacy_di
     assert completed.stdout.strip() == str(new_dir)
     assert (new_dir / "Pfam.pal").is_file()
     assert legacy_dir.is_dir()
+
+
+def test_ensure_pfam_le_db_backfills_nonempty_ready_marker(tmp_path):
+    project_dir = tmp_path / "project"
+    new_dir = project_dir / "downloads" / "pfam" / "Pfam_LE"
+    ready_file = new_dir / ".pfam_le.ready"
+    new_dir.mkdir(parents=True)
+    (new_dir / "Pfam.pal").write_text("dummy\n")
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"runtime_dir=$(ensure_pfam_le_db {shlex.quote(str(project_dir))}); "
+        'status=$?; '
+        'printf "%s\\n%s\\n" "$status" "$runtime_dir"; '
+        f"wc -c < {shlex.quote(str(ready_file))}; "
+        f"cat {shlex.quote(str(ready_file))}"
+    )
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.strip().splitlines()
+    assert lines[0] == "0"
+    assert lines[1] == str(new_dir)
+    assert int(lines[2]) > 0
+    assert lines[3] == "ready"
 
 
 def test_mv_out_accepts_pipe_input(tmp_path):
