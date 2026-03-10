@@ -3150,7 +3150,7 @@ gg_shared_lock_start_heartbeat() {
       fi
     done
   ) &
-  echo $!
+  GG_SHARED_LOCK_HEARTBEAT_PID=$!
 }
 
 gg_shared_lock_stop_heartbeat() {
@@ -3227,7 +3227,8 @@ gg_array_download_once() {
   if ! gg_shared_lock_acquire "${lock_file}" "${description}"; then
     return 1
   fi
-  heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")
+  gg_shared_lock_start_heartbeat "${lock_file}"
+  heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
 
   if gg_artifact_ready "${artifact_path}"; then
     gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
@@ -3987,7 +3988,8 @@ ensure_latest_jaspar_file() {
   if ! gg_shared_lock_acquire "${lock_file}" "latest JASPAR motif file"; then
     return 1
   fi
-  heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")
+  gg_shared_lock_start_heartbeat "${lock_file}"
+  heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
 
   if resolved_path=$(_prepare_latest_jaspar_file_locked "${gg_workspace_dir}" "${latest_marker}" "${sys_dir}" "${runtime_dir}"); then
     ensure_exit_code=0

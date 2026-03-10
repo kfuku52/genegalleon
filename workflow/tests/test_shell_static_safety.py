@@ -1001,7 +1001,8 @@ def test_download_lock_helper_uses_shared_lock_metadata_and_heartbeat():
     body = _function_body(text, "gg_array_download_once")
     assert 'if gg_artifact_ready "${artifact_path}"; then' in body
     assert 'if ! gg_shared_lock_acquire "${lock_file}" "${description}"; then' in body
-    assert 'heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")' in body
+    assert 'gg_shared_lock_start_heartbeat "${lock_file}"' in body
+    assert 'heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}' in body
     assert 'gg_shared_lock_stop_heartbeat "${heartbeat_pid}"' in body
     assert 'gg_shared_lock_release "${lock_file}"' in body
     assert '.dlock' not in body
@@ -1049,6 +1050,7 @@ def test_genome_annotation_core_uses_shared_lock_for_species_cds_validation_stam
     assert "species_cds_validation_lock_dir" not in text
     assert 'gg_shared_lock_acquire "${species_cds_validation_lock}" "species CDS validation stamp"' in text
     assert 'gg_shared_lock_start_heartbeat "${species_cds_validation_lock}"' in text
+    assert 'heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}' in text
 
 
 def test_ete_taxonomy_helper_precreates_ete4_cache_dirs():
@@ -1068,9 +1070,18 @@ def test_latest_jaspar_lock_uses_shared_lock_and_marker_resolution():
     body = _function_body(text, "ensure_latest_jaspar_file")
     assert 'if resolved_path=$(_resolve_latest_jaspar_path_from_marker "${latest_marker}" "${sys_dir}" "${runtime_dir}"); then' in body
     assert 'if ! gg_shared_lock_acquire "${lock_file}" "latest JASPAR motif file"; then' in body
-    assert 'heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")' in body
+    assert 'gg_shared_lock_start_heartbeat "${lock_file}"' in body
+    assert 'heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}' in body
     assert 'gg_shared_lock_stop_heartbeat "${heartbeat_pid}"' in body
     assert 'gg_shared_lock_release "${lock_file}"' in body
+
+
+def test_shared_lock_heartbeat_is_not_started_via_command_substitution():
+    disallowed = 'heartbeat_pid=$(gg_shared_lock_start_heartbeat'
+    for script in _workflow_shell_scripts():
+      assert disallowed not in _read_text(script), (
+          f"Do not start shared-lock heartbeat via command substitution: {script}"
+      )
 
 
 def test_pfam_helpers_use_only_new_runtime_layout_and_function_name():

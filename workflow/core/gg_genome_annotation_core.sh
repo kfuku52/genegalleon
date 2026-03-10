@@ -196,7 +196,8 @@ if [[ ! -s "${species_cds_validation_stamp}" ]]; then
     if ! gg_shared_lock_acquire "${species_cds_validation_lock}" "species CDS validation stamp"; then
       exit 1
     fi
-    heartbeat_pid=$(gg_shared_lock_start_heartbeat "${species_cds_validation_lock}")
+    gg_shared_lock_start_heartbeat "${species_cds_validation_lock}"
+    heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
     cleanup_species_cds_validation_lock() {
       gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
       gg_shared_lock_release "${species_cds_validation_lock}"

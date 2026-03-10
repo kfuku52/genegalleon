@@ -785,7 +785,8 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
           if ! gg_shared_lock_acquire "${db_lock_file}" "TBLASTN database build (${sp})"; then
             exit 1
           fi
-          heartbeat_pid=$(gg_shared_lock_start_heartbeat "${db_lock_file}")
+          gg_shared_lock_start_heartbeat "${db_lock_file}"
+          heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
           cleanup_tblastn_db_lock() {
             gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
             gg_shared_lock_release "${db_lock_file}"
@@ -820,7 +821,8 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && ${mode_query2
           if ! gg_shared_lock_acquire "${db_lock_file}" "DIAMOND database build (${sp})"; then
             exit 1
           fi
-          heartbeat_pid=$(gg_shared_lock_start_heartbeat "${db_lock_file}")
+          gg_shared_lock_start_heartbeat "${db_lock_file}"
+          heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
           cleanup_diamond_db_lock() {
             gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
             gg_shared_lock_release "${db_lock_file}"
@@ -1724,7 +1726,8 @@ if [[ ! -s "${file_og_generax_nhx}" && ${run_generax} -eq 1 ]]; then
       if ! gg_shared_lock_acquire "${lock_file}" "GeneRax species tree copy"; then
         exit 1
       fi
-      heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")
+      gg_shared_lock_start_heartbeat "${lock_file}"
+      heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
       cleanup_generax_tree_lock() {
         gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
         gg_shared_lock_release "${lock_file}"
@@ -3168,7 +3171,8 @@ for file_from in "${file_params[@]}"; do
     if ! gg_shared_lock_acquire "${lock_file}" "parameter artifact copy (${file_to})"; then
       exit 1
     fi
-    heartbeat_pid=$(gg_shared_lock_start_heartbeat "${lock_file}")
+    gg_shared_lock_start_heartbeat "${lock_file}"
+    heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
     cleanup_parameter_copy_lock() {
       gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
       gg_shared_lock_release "${lock_file}"
