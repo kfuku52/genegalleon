@@ -176,6 +176,16 @@ file_sp_genome_contamination_removal_tsv="${gg_workspace_output_dir}/species_gen
 file_sp_genomescope="${gg_workspace_output_dir}/species_dnaseq_genomescope/${sp_ub}_genomescope.zip"
 file_sp_jcvi_dotplot="${gg_workspace_output_dir}/species_jcvi_dotplot/${sp_ub}_jcvi_dotplot.zip"
 file_multispecies_summary="${gg_workspace_output_dir}/annotation_summary/annotation_summary.tsv"
+dir_summary_species_tree="${gg_workspace_output_dir}/species_tree/species_tree_summary"
+file_summary_species_tree_dated="${dir_summary_species_tree}/dated_species_tree.nwk"
+file_summary_species_tree_undated="${dir_summary_species_tree}/undated_species_tree.nwk"
+dir_summary_species_cds_busco="${gg_workspace_output_dir}/species_cds_busco_full"
+dir_summary_species_genome_busco="${gg_workspace_output_dir}/species_genome_busco_full"
+dir_summary_species_annotation="${gg_workspace_output_dir}/species_cds_annotation"
+dir_summary_species_cds_fx2tab="${gg_workspace_output_dir}/species_cds_fx2tab"
+dir_summary_species_genome_fx2tab="${gg_workspace_output_dir}/species_genome_fx2tab"
+file_summary_species_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
+file_summary_orthogroup_gene_count="${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.tsv"
 
 ensure_dir "${dir_sp_tmp}"
 cd "${dir_sp_tmp}"
@@ -818,25 +828,47 @@ fi
 # `repeat` conda environment.
 
 task="Multispecies annotation summary"
-if is_output_older_than_inputs "^file_sp_" "${file_multispecies_summary}"; then
-  summary_flag=0
-else
-  summary_flag=$?
+summary_inputs_available=0
+for summary_dir in \
+  "${dir_summary_species_cds_busco}" \
+  "${dir_summary_species_genome_busco}" \
+  "${dir_summary_species_annotation}" \
+  "${dir_summary_species_cds_fx2tab}" \
+  "${dir_summary_species_genome_fx2tab}"; do
+  if [[ -d "${summary_dir}" ]] && [[ -n "$(find "${summary_dir}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    summary_inputs_available=1
+    break
+  fi
+done
+if [[ ${summary_inputs_available} -eq 0 ]] && [[ -s "${file_summary_species_tree_dated}" || -s "${file_summary_species_tree_undated}" ]]; then
+  summary_inputs_available=1
 fi
-if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
+
+summary_flag=0
+if [[ ${summary_inputs_available} -eq 1 ]]; then
+  if is_output_older_than_inputs "^(dir_summary_|file_summary_)" "${file_multispecies_summary}"; then
+    summary_flag=0
+  else
+    summary_flag=$?
+  fi
+else
+  echo "No multispecies summary inputs are available yet. Skipping summary generation."
+fi
+
+if [[ ${run_multispecies_summary} -eq 1 && ${summary_inputs_available} -eq 1 && ${summary_flag} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "$(dirname "${file_multispecies_summary}")"
   cd "$(dirname "${file_multispecies_summary}")"
 
   Rscript "${gg_support_dir}/annotation_summary.r" \
     --dir_species_tree="${gg_workspace_output_dir}/species_tree" \
-    --dir_species_cds_busco="${gg_workspace_output_dir}/species_cds_busco_full" \
-    --dir_species_genome_busco="${gg_workspace_output_dir}/species_genome_busco_full" \
-    --dir_species_annotation="${gg_workspace_output_dir}/species_cds_annotation" \
-    --dir_species_cds_fx2tab="${gg_workspace_output_dir}/species_cds_fx2tab" \
-    --dir_species_genome_fx2tab="${gg_workspace_output_dir}/species_genome_fx2tab" \
-    --file_species_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv" \
-    --file_orthogroup_gene_count="${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.tsv" \
+    --dir_species_cds_busco="${dir_summary_species_cds_busco}" \
+    --dir_species_genome_busco="${dir_summary_species_genome_busco}" \
+    --dir_species_annotation="${dir_summary_species_annotation}" \
+    --dir_species_cds_fx2tab="${dir_summary_species_cds_fx2tab}" \
+    --dir_species_genome_fx2tab="${dir_summary_species_genome_fx2tab}" \
+    --file_species_trait="${file_summary_species_trait}" \
+    --file_orthogroup_gene_count="${file_summary_orthogroup_gene_count}" \
     --tree_annotation_dir="${gg_support_dir}/tree_annotation" \
     --min_og_species='auto'
 
