@@ -182,6 +182,99 @@ def load_fimo_hits(path):
     return df_out
 
 
+def _get_node_prop(node, key, default=None):
+    if hasattr(node, key):
+        return getattr(node, key)
+    if hasattr(node, "props"):
+        return node.props.get(key, default)
+    return default
+
+
+def _set_node_prop(node, key, value):
+    if hasattr(node, "add_prop"):
+        node.add_prop(key, value)
+        return
+    try:
+        setattr(node, key, value)
+        return
+    except (AttributeError, TypeError):
+        pass
+    if hasattr(node, "props"):
+        node.props[key] = value
+
+
+def _get_node_label(node):
+    label = _get_node_prop(node, "branch_id", None)
+    if label is None:
+        raise AttributeError("Node branch_id is unavailable.")
+    try:
+        return int(label)
+    except (TypeError, ValueError):
+        return label
+
+
+def _ensure_branch_ids(tree):
+    nodes = list(tree.traverse())
+    if len(nodes) == 0:
+        return tree
+    all_leaf_names = sorted([leaf.name for leaf in iter_leaves(tree)])
+    if len(all_leaf_names) == 0:
+        for i, node in enumerate(nodes):
+            _set_node_prop(node, "branch_id", i)
+        return tree
+    leaf_branch_ids = {leaf_name: (1 << i) for i, leaf_name in enumerate(all_leaf_names)}
+    node_label_sum = {}
+    for node in tree.traverse(strategy="postorder"):
+        if node_is_leaf(node):
+            node_label_sum[node] = leaf_branch_ids[node.name]
+        else:
+            node_mask = 0
+            for child in node.get_children():
+                node_mask |= node_label_sum[child]
+            node_label_sum[node] = node_mask
+    branch_ids = [node_label_sum[node] for node in nodes]
+    argsort_labels = numpy.argsort(branch_ids)
+    label_ranks = numpy.empty_like(argsort_labels)
+    label_ranks[argsort_labels] = numpy.arange(len(argsort_labels))
+    for i, node in enumerate(nodes):
+        _set_node_prop(node, "branch_id", int(label_ranks[i]))
+    return tree
+
+
+def load_scm_intron_branch_table(scm_intron_path, dated_tree_path):
+    df_out = pandas.read_csv(scm_intron_path, sep='\t', header=0, index_col=None)
+    if 'leaf' not in df_out.columns:
+        return df_out
+
+    df_out = df_out.rename(columns={'leaf': 'node_name'})
+    if (not dated_tree_path) or (not os.path.exists(dated_tree_path)):
+        return df_out
+
+    dated_tree = new_tree(dated_tree_path, format=1)
+    dated_tree = _ensure_branch_ids(dated_tree)
+    node_labels = [
+        {'node_name': node.name, 'branch_id': _get_node_label(node)}
+        for node in dated_tree.traverse()
+        if node.name
+    ]
+    df_labels = pandas.DataFrame(node_labels).drop_duplicates(subset=['node_name'])
+    df_out = pandas.merge(df_labels, df_out, on='node_name', how='right')
+
+    if 'branch_id' in df_out.columns:
+        is_unmapped = df_out['branch_id'].isna()
+        if is_unmapped.any():
+            unmapped_names = sorted(df_out.loc[is_unmapped, 'node_name'].astype(str).unique())
+            print(
+                'Warning: dropping {} scm_intron row(s) that do not map to dated_tree branch IDs: {}'.format(
+                    is_unmapped.sum(),
+                    ', '.join(unmapped_names[:10]),
+                )
+            )
+            df_out = df_out.loc[~is_unmapped].copy()
+            df_out['branch_id'] = df_out['branch_id'].astype(int)
+    return df_out
+
+
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
@@ -992,9 +1085,12 @@ def main():
         df_tmp = df_tmp.rename(columns={'feature_size':'intron_feature_size'})
         df_branch = pandas.merge(df_branch, df_tmp, on='node_name', how='left')
     if (all([ os.path.exists(params[key]) for key in ['scm_intron'] ])):
-        df_tmp = pandas.read_csv(params['scm_intron'], sep='\t',  header=0, index_col=None)
-        df_tmp.columns = [ c.replace('leaf','node_name') for c in df_tmp.columns ]
-        df_branch = pandas.merge(df_branch, df_tmp, on='node_name', how='outer')
+        df_tmp = load_scm_intron_branch_table(params['scm_intron'], params['dated_tree'])
+        if 'branch_id' in df_tmp.columns:
+            df_tmp = df_tmp.drop(columns=['node_name'], errors='ignore')
+            df_branch = pandas.merge(df_branch, df_tmp, on='branch_id', how='outer')
+        else:
+            df_branch = pandas.merge(df_branch, df_tmp, on='node_name', how='outer')
         df_branch = df_branch.drop('intron_absent', axis=1)
         df_branch = compute_delta(df_branch, 'intron_present')
     if (os.path.exists(params["targetp"])):

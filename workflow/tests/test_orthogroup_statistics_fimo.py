@@ -67,3 +67,51 @@ def test_load_fimo_hits_parses_legacy_fimo_txt_header(tmp_path):
     assert set(df["sequence_name"].tolist()) == {"geneC", "geneD"}
     # legacy format has no alt id; should be mirrored from motif_id.
     assert df.loc[df["sequence_name"] == "geneC", "motif_alt_id"].iloc[0] == "MA0123.1"
+
+
+def test_load_scm_intron_branch_table_maps_dated_tree_labels_to_branch_ids(tmp_path):
+    mod = load_module()
+    rooted_tree = tmp_path / "rooted.nwk"
+    dated_tree = tmp_path / "dated.nwk"
+    scm_intron = tmp_path / "scm.tsv"
+
+    rooted_tree.write_text("((A:1,B:1)n1:1,(C:1,D:1)n2:1)n0;\n", encoding="utf-8")
+    dated_tree.write_text("((A:1,B:1)n11:1,(C:1,D:1)n12:1)n99;\n", encoding="utf-8")
+    scm_intron.write_text(
+        (
+            "leaf\tnum_intron\tintron_present\tintron_absent\n"
+            "n99\t2\t1\t0\n"
+            "n11\t1\t0.7\t0.3\n"
+            "n12\t0\t0.2\t0.8\n"
+            "A\t3\t1\t0\n"
+            "B\t0\t0\t1\n"
+            "C\t4\t1\t0\n"
+            "D\t0\t0\t1\n"
+            "n404\t9\t1\t0\n"
+        ),
+        encoding="utf-8",
+    )
+
+    df_scm = mod.load_scm_intron_branch_table(str(scm_intron), str(dated_tree))
+    assert "branch_id" in df_scm.columns
+    assert df_scm["branch_id"].isna().sum() == 0
+    assert "n404" not in set(df_scm["node_name"].tolist())
+
+    rooted = mod._ensure_branch_ids(mod.new_tree(str(rooted_tree), format=1))
+    df_branch = mod.pandas.DataFrame(
+        {
+            "branch_id": [mod._get_node_label(node) for node in rooted.traverse()],
+            "node_name": [node.name for node in rooted.traverse()],
+        }
+    )
+    merged = mod.pandas.merge(
+        df_branch,
+        df_scm.drop(columns=["node_name"]),
+        on="branch_id",
+        how="outer",
+    )
+
+    assert merged["branch_id"].isna().sum() == 0
+    assert merged.loc[merged["node_name"] == "n0", "num_intron"].iloc[0] == 2
+    assert merged.loc[merged["node_name"] == "n1", "num_intron"].iloc[0] == 1
+    assert merged.loc[merged["node_name"] == "n2", "num_intron"].iloc[0] == 0
