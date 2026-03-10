@@ -102,6 +102,39 @@ Wrappers expect the SIF at repo root by default:
 
 - `workflow/../genegalleon.sif`
 
+### Run wrappers against a Docker image directly
+
+This opt-in mode keeps the existing `gg_*_entrypoint.sh` interface but swaps the
+container launcher for a Docker-backed shim. It is intended for local/dev hosts
+that have Docker but no usable Apptainer/Singularity installation.
+
+Published image example:
+
+```bash
+docker pull ghcr.io/kfuku52/genegalleon:latest
+GG_CONTAINER_RUNTIME=docker \
+GG_CONTAINER_DOCKER_IMAGE=ghcr.io/kfuku52/genegalleon:latest \
+bash workflow/gg_gene_evolution_entrypoint.sh
+```
+
+Local image example:
+
+```bash
+IMAGE_SOURCE=local BUILD_SIF=0 IMAGE=local/genegalleon TAG=dev MODE=load \
+bash ./gg_container_build_entrypoint.sh
+
+GG_CONTAINER_RUNTIME=docker \
+GG_CONTAINER_DOCKER_IMAGE=local/genegalleon:dev \
+bash workflow/gg_gene_evolution_entrypoint.sh
+```
+
+Runtime notes:
+
+- `GG_CONTAINER_RUNTIME=docker` enables Docker-backed wrapper mode.
+- `GG_CONTAINER_DOCKER_IMAGE=<image:tag>` selects the image passed to `docker run`.
+- `gg_container_image_path` remains the SIF path knob; do not point it at a Docker image reference.
+- The wrapper still binds the workspace to `/workspace` and the workflow tree to `/script`.
+
 Runtime profile highlights in the current container scaffold:
 
 - single conda runtime env: `base` (`biotools`/`r` split envs are obsolete),

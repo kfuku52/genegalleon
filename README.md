@@ -2,8 +2,6 @@
 
 ![GeneGalleon logo](logo/logo.png)
 
-**Navigating the Ocean of Genomic Histories**
-
 GeneGalleon is a container-first comparative genomics and phylogenomics workflow suite.
 It provides shell-based staged pipelines for:
 
@@ -43,6 +41,16 @@ The quick start in Step 2 expects `./genegalleon.sif`, so use one of the first
 two wrapper commands above. Bare `apptainer build genegalleon.sif docker://...`
 follows your current working directory; `gg_container_build_entrypoint.sh`
 pins the default output to the repository root.
+
+If you only have a Docker image and want to run the workflow wrappers without a
+local `./genegalleon.sif`, opt in to Docker-backed wrapper mode:
+
+```bash
+docker pull ghcr.io/kfuku52/genegalleon:latest
+GG_CONTAINER_RUNTIME=docker \
+GG_CONTAINER_DOCKER_IMAGE=ghcr.io/kfuku52/genegalleon:latest \
+bash workflow/gg_gene_evolution_entrypoint.sh
+```
 
 ### 2. Run the bundled quick start
 

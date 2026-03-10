@@ -105,6 +105,26 @@ If your site requires explicit rootless escalation for definition-file builds, r
 NATIVE_BUILD_FAKEROOT=always IMAGE_SOURCE=local bash ./gg_container_build_entrypoint.sh
 ```
 
+## Run wrappers against a Docker image directly
+
+You can keep the existing `gg_*_entrypoint.sh` interface and opt into a
+Docker-backed launcher instead of requiring `genegalleon.sif`.
+
+```bash
+docker pull ghcr.io/kfuku52/genegalleon:latest
+GG_CONTAINER_RUNTIME=docker \
+GG_CONTAINER_DOCKER_IMAGE=ghcr.io/kfuku52/genegalleon:latest \
+bash workflow/gg_gene_evolution_entrypoint.sh
+```
+
+For a local image built with `MODE=load`:
+
+```bash
+GG_CONTAINER_RUNTIME=docker \
+GG_CONTAINER_DOCKER_IMAGE=local/genegalleon:dev \
+bash workflow/gg_gene_evolution_entrypoint.sh
+```
+
 ## CI publishing and reproducible tags
 
 GitHub Actions now publishes GHCR images and release SIF assets:

@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+subcommand="${1:-}"
+if [[ -z "${subcommand}" ]]; then
+	echo "Usage: singularity <exec|shell|inspect|version> ..." >&2
+	exit 1
+fi
+shift || true
+
+image_ref="${GG_CONTAINER_DOCKER_IMAGE:-${GG_WRAPPER_IMAGE:-}}"
+
+run_container_command() {
+	local docker_home="${GG_CONTAINER_DOCKER_HOME:-/workspace}"
+	local mounts_csv="${GG_CONTAINER_BIND_MOUNTS:-${SINGULARITY_BINDPATH:-${APPTAINER_BINDPATH:-}}}"
+	local forwarded_names=""
+	local workspace_mount_found=0
+	local var_name=""
+	local bare_name=""
+	local mount_spec=""
+	local -a docker_args=()
+	local -a mount_specs=()
+	local -a container_cmd=()
+
+	if [[ -z "${image_ref}" ]]; then
+		echo "GG_CONTAINER_DOCKER_IMAGE or GG_WRAPPER_IMAGE is required for Docker-backed runtime." >&2
+		exit 1
+	fi
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+			--*)
+				shift
+				;;
+			-*)
+				shift
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+
+	if [[ $# -gt 0 ]]; then
+		shift
+	fi
+
+	if [[ $# -gt 0 ]]; then
+		container_cmd=("$@")
+	else
+		container_cmd=(bash -s --)
+	fi
+
+	docker_args+=(run --rm -i --user "$(id -u):$(id -g)")
+
+	if [[ -n "${mounts_csv}" ]]; then
+		IFS=',' read -r -a mount_specs <<< "${mounts_csv}"
+		for mount_spec in "${mount_specs[@]}"; do
+			[[ -n "${mount_spec}" ]] || continue
+			docker_args+=(-v "${mount_spec}")
+			if [[ "${mount_spec}" == *":/workspace" || "${mount_spec}" == *":/workspace:"* ]]; then
+				workspace_mount_found=1
+			fi
+		done
+	fi
+
+	while IFS= read -r var_name; do
+		[[ -n "${var_name}" ]] || continue
+		bare_name="${var_name#APPTAINERENV_}"
+		docker_args+=(-e "${bare_name}=${!var_name}")
+		if [[ -z "${forwarded_names}" ]]; then
+			forwarded_names="${bare_name}"
+		else
+			forwarded_names="${forwarded_names},${bare_name}"
+		fi
+	done < <(compgen -A variable "APPTAINERENV_" | LC_ALL=C sort || true)
+
+	while IFS= read -r var_name; do
+		[[ -n "${var_name}" ]] || continue
+		bare_name="${var_name#SINGULARITYENV_}"
+		if [[ ",${forwarded_names}," == *",${bare_name},"* ]]; then
+			continue
+		fi
+		docker_args+=(-e "${bare_name}=${!var_name}")
+		if [[ -z "${forwarded_names}" ]]; then
+			forwarded_names="${bare_name}"
+		else
+			forwarded_names="${forwarded_names},${bare_name}"
+		fi
+	done < <(compgen -A variable "SINGULARITYENV_" | LC_ALL=C sort || true)
+
+	if [[ ",${forwarded_names}," != *",HOME,"* ]]; then
+		docker_args+=(-e "HOME=${docker_home}")
+	fi
+
+	if [[ "${workspace_mount_found}" -eq 1 ]]; then
+		docker_args+=(-w /workspace)
+	fi
+
+	docker_args+=("${image_ref}")
+	docker_args+=("${container_cmd[@]}")
+
+	docker "${docker_args[@]}"
+}
+
+run_inspect() {
+	if [[ -z "${image_ref}" ]]; then
+		echo "GG_CONTAINER_DOCKER_IMAGE or GG_WRAPPER_IMAGE is required for Docker-backed runtime." >&2
+		exit 1
+	fi
+	printf 'docker-image=%s\n' "${image_ref}"
+}
+
+run_version() {
+	echo "docker-backed singularity shim"
+}
+
+case "${subcommand}" in
+	exec|shell)
+		run_container_command "$@"
+		;;
+	inspect)
+		run_inspect "$@"
+		;;
+	version)
+		run_version "$@"
+		;;
+	*)
+		echo "Unsupported singularity subcommand for Docker-backed runtime: ${subcommand}" >&2
+		exit 1
+		;;
+esac

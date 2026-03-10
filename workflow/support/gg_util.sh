@@ -180,11 +180,119 @@ gg_container_bind_csv_normalize() {
 	printf '%s\n' "${normalized}"
 }
 
+gg_container_shell_command_is_set() {
+	if ! declare -p singularity_command >/dev/null 2>&1; then
+		return 1
+	fi
+	case "$(declare -p singularity_command 2>/dev/null)" in
+		declare\ -a*)
+			[[ ${#singularity_command[@]} -gt 0 ]]
+			;;
+		*)
+			[[ -n "${singularity_command:-}" ]]
+			;;
+	esac
+}
+
+gg_container_shell_command_runtime_bin() {
+	if ! gg_container_shell_command_is_set; then
+		return 1
+	fi
+	case "$(declare -p singularity_command 2>/dev/null)" in
+		declare\ -a*)
+			printf '%s\n' "${singularity_command[0]}"
+			;;
+		*)
+			printf '%s\n' "${singularity_command%% *}"
+			;;
+	esac
+}
+
+gg_container_shell_command_subcommand() {
+	if ! gg_container_shell_command_is_set; then
+		return 1
+	fi
+	case "$(declare -p singularity_command 2>/dev/null)" in
+		declare\ -a*)
+			if [[ ${#singularity_command[@]} -lt 2 ]]; then
+				return 1
+			fi
+			printf '%s\n' "${singularity_command[1]}"
+			;;
+		*)
+			local runtime_bin=""
+			local subcommand=""
+			read -r runtime_bin subcommand _ <<< "${singularity_command}"
+			if [[ -z "${subcommand}" ]]; then
+				return 1
+			fi
+			printf '%s\n' "${subcommand}"
+			;;
+	esac
+}
+
+gg_container_shell_command_display() {
+	if ! gg_container_shell_command_is_set; then
+		return 1
+	fi
+	case "$(declare -p singularity_command 2>/dev/null)" in
+		declare\ -a*)
+			local display=""
+			local arg
+			local quoted_arg=""
+			for arg in "${singularity_command[@]}"; do
+				printf -v quoted_arg '%q' "${arg}"
+				if [[ -n "${display}" ]]; then
+					display="${display} "
+				fi
+				display="${display}${quoted_arg}"
+			done
+			printf '%s\n' "${display}"
+			;;
+		*)
+			printf '%s\n' "${singularity_command}"
+			;;
+	esac
+}
+
+gg_run_container_shell_script() {
+	local image_path=$1
+	local script_path=$2
+	local subcommand=""
+
+	if ! gg_container_shell_command_is_set; then
+		echo "gg_run_container_shell_script: container shell command is not initialized." >&2
+		return 1
+	fi
+	if [[ ! -s "${script_path}" ]]; then
+		echo "gg_run_container_shell_script: script not found: ${script_path}" >&2
+		return 1
+	fi
+	subcommand=$(gg_container_shell_command_subcommand || true)
+	case "$(declare -p singularity_command 2>/dev/null)" in
+		declare\ -a*)
+			if [[ "${subcommand}" == "exec" ]]; then
+				"${singularity_command[@]}" "${image_path}" bash -s -- < "${script_path}"
+			else
+				"${singularity_command[@]}" "${image_path}" < "${script_path}"
+			fi
+			;;
+		*)
+			# Backward compatibility for external site adapters that still set a string command.
+			if [[ "${subcommand}" == "exec" ]]; then
+				${singularity_command} "${image_path}" bash -s -- < "${script_path}"
+			else
+				${singularity_command} "${image_path}" < "${script_path}"
+			fi
+			;;
+	esac
+}
+
 gg_detect_active_container_runtime() {
 	local runtime_bin=""
 
-	if [[ -n "${singularity_command:-}" ]]; then
-		runtime_bin="${singularity_command%% *}"
+	if runtime_bin=$(gg_container_shell_command_runtime_bin 2>/dev/null); then
+		:
 	fi
 	if [[ -z "${runtime_bin}" ]]; then
 		runtime_bin=$(gg_detect_container_runtime_binary || true)
@@ -292,6 +400,54 @@ gg_forward_env_vars_with_prefix_to_container_env() {
 	done < <(compgen -A variable "${prefix}" | LC_ALL=C sort || true)
 }
 
+gg_requested_container_runtime() {
+	local requested_runtime="${GG_CONTAINER_RUNTIME:-auto}"
+
+	requested_runtime=$(printf '%s' "${requested_runtime}" | tr '[:upper:]' '[:lower:]')
+	case "${requested_runtime}" in
+		""|auto)
+			printf '%s\n' "auto"
+			;;
+		docker)
+			printf '%s\n' "docker"
+			;;
+		*)
+			echo "Unsupported GG_CONTAINER_RUNTIME=${GG_CONTAINER_RUNTIME:-}. Use auto or docker." >&2
+			return 1
+			;;
+	esac
+}
+
+gg_docker_singularity_shim_source_path() {
+	local support_dir="${gg_support_dir:-}"
+
+	if [[ -z "${support_dir}" ]]; then
+		support_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+	fi
+	printf '%s\n' "${support_dir}/gg_wrapper_bin/singularity"
+}
+
+gg_docker_singularity_shim_path() {
+	local wrapper_bin="${GG_WRAPPER_BIN:-/tmp/gg_wrapper_bin}"
+	local source_shim=""
+	local target_shim=""
+
+	source_shim="$(gg_docker_singularity_shim_source_path)"
+	if [[ ! -x "${source_shim}" ]]; then
+		echo "Docker runtime shim source is missing or not executable: ${source_shim}" >&2
+		return 1
+	fi
+
+	target_shim="${wrapper_bin}/singularity"
+	mkdir -p "${wrapper_bin}"
+	if ! ln -sf "${source_shim}" "${target_shim}" 2>/dev/null; then
+		cp -- "${source_shim}" "${target_shim}"
+		chmod +x "${target_shim}"
+	fi
+
+	printf '%s\n' "${target_shim}"
+}
+
 gg_apply_named_env_overrides() {
 	local var_name
 	local env_name
@@ -340,6 +496,19 @@ forward_config_vars_to_container_env() {
 }
 
 gg_detect_container_runtime_binary() {
+	local requested_runtime
+	local shim_path
+
+	requested_runtime="$(gg_requested_container_runtime)" || return 1
+	if [[ "${requested_runtime}" == "docker" ]]; then
+		shim_path="$(gg_docker_singularity_shim_path)"
+		if [[ ! -x "${shim_path}" ]]; then
+			echo "Docker runtime shim not found or not executable: ${shim_path}" >&2
+			return 1
+		fi
+		echo "${shim_path}"
+		return 0
+	fi
 	if command -v singularity >/dev/null 2>&1; then
 		echo singularity
 		return 0
@@ -1584,8 +1753,13 @@ remove_empty_subdirs() {
 set_singularity_command() {
   local echo_header="set_singularity_command: "
   local runtime_bin
+  local command_display=""
   if ! runtime_bin=$(gg_detect_container_runtime_binary); then
-    echo "${echo_header}Neither singularity nor apptainer was found on PATH."
+    if [[ "${GG_CONTAINER_RUNTIME:-auto}" == "docker" ]]; then
+      echo "${echo_header}Docker-backed runtime is unavailable."
+    else
+      echo "${echo_header}Neither singularity nor apptainer was found on PATH."
+    fi
     return 1
   fi
   echo ${echo_header}"hostname = $(hostname)"
@@ -1593,10 +1767,11 @@ set_singularity_command() {
   if declare -F gg_site_container_shell_command >/dev/null 2>&1; then
     gg_site_container_shell_command "${runtime_bin}" singularity_command || return 1
   else
-    echo ${echo_header}"No site adapter was loaded. Using default shell."
-    singularity_command="${runtime_bin} shell"
+    echo ${echo_header}"No site adapter was loaded. Using default exec command."
+    singularity_command=( "${runtime_bin}" exec )
   fi
-  echo ${echo_header}'${singularity_command}' = \"${singularity_command}\"
+  command_display=$(gg_container_shell_command_display || true)
+  echo ${echo_header}'${singularity_command[@]}' = \"${command_display}\"
   echo ""
 }
 
@@ -1617,6 +1792,7 @@ gg_entrypoint_prepare_container_runtime() {
 gg_entrypoint_activate_container_runtime() {
 	set_singularityenv
 	gg_print_scheduler_runtime_summary
+	gg_entrypoint_print_version_summary
 }
 
 gg_entrypoint_enter_workspace() {
@@ -2141,6 +2317,153 @@ gg_read_repo_version() {
   echo "${version}"
 }
 
+gg_trim_text() {
+  printf '%s' "${1:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+gg_unquote_text() {
+  local value=""
+
+  value="$(gg_trim_text "${1:-}")"
+  case "${value}" in
+    \"*\")
+      value="${value#\"}"
+      value="${value%\"}"
+      ;;
+    \'*\')
+      value="${value#\'}"
+      value="${value%\'}"
+      ;;
+  esac
+  printf '%s\n' "${value}"
+}
+
+gg_extract_inspect_value() {
+  local inspect_text=${1:-}
+  local key=${2:-}
+  local line=""
+
+  if [[ -z "${inspect_text}" || -z "${key}" ]]; then
+    return 1
+  fi
+
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    line="$(gg_trim_text "${line}")"
+    case "${line}" in
+      "${key}:"*)
+        gg_unquote_text "${line#*:}"
+        return 0
+        ;;
+      "${key}="*)
+        gg_unquote_text "${line#*=}"
+        return 0
+        ;;
+      "${key} "*)
+        gg_unquote_text "${line#"${key}"}"
+        return 0
+        ;;
+    esac
+  done <<EOF
+${inspect_text}
+EOF
+
+  return 1
+}
+
+gg_guess_container_tag_from_ref() {
+  local image_ref=${1:-}
+  local last_component=""
+
+  if [[ -z "${image_ref}" ]]; then
+    return 1
+  fi
+  last_component="${image_ref##*/}"
+  if [[ "${last_component}" == *@* ]]; then
+    return 1
+  fi
+  if [[ "${last_component}" != *:* ]]; then
+    return 1
+  fi
+  printf '%s\n' "${last_component##*:}"
+}
+
+gg_print_version_summary() {
+  local section_title=${1:-}
+  local container_runtime_bin=${2:-}
+  local inspect_text=${3:-}
+  local version_file=""
+  local gg_version=""
+  local container_image_path=""
+  local image_version=""
+  local image_revision=""
+  local image_ref=""
+  local image_tag=""
+
+  if [[ -n "${gg_workflow_dir:-}" ]]; then
+    version_file="${gg_workflow_dir}/../VERSION"
+  fi
+  gg_version="${SINGULARITYENV_GG_VERSION:-${APPTAINERENV_GG_VERSION:-}}"
+  if [[ -z "${gg_version}" ]]; then
+    gg_version="$(gg_read_repo_version "${version_file}")"
+  fi
+
+  container_image_path="${gg_container_image_path:-unknown}"
+  if [[ -z "${inspect_text}" && -n "${container_runtime_bin}" && -n "${gg_container_image_path:-}" ]]; then
+    if command -v "${container_runtime_bin}" >/dev/null 2>&1; then
+      inspect_text=$("${container_runtime_bin}" inspect "${gg_container_image_path}" 2>/dev/null || true)
+    fi
+  fi
+
+  image_version="$(gg_extract_inspect_value "${inspect_text}" "org.opencontainers.image.version" || true)"
+  image_revision="$(gg_extract_inspect_value "${inspect_text}" "org.opencontainers.image.revision" || true)"
+  image_ref="$(gg_extract_inspect_value "${inspect_text}" "io.genegalleon.local_image_ref" || true)"
+  if [[ -z "${image_ref}" ]]; then
+    image_ref="$(gg_extract_inspect_value "${inspect_text}" "docker-image" || true)"
+  fi
+  image_tag="$(gg_extract_inspect_value "${inspect_text}" "io.genegalleon.local_image_tag" || true)"
+  if [[ -z "${image_tag}" && -n "${image_ref}" ]]; then
+    image_tag="$(gg_guess_container_tag_from_ref "${image_ref}" || true)"
+  fi
+  if [[ -z "${image_version}" && -n "${image_tag}" ]]; then
+    image_version="${image_tag}"
+  fi
+  if [[ -z "${image_version}" && -n "${image_revision}" ]]; then
+    image_version="revision:${image_revision}"
+  fi
+  if [[ -z "${image_version}" ]]; then
+    image_version="unknown"
+  fi
+
+  if [[ -n "${section_title}" ]]; then
+    gg_print_section "${section_title}"
+  fi
+  echo "genegalleon version: ${gg_version}"
+  echo "genegalleon.sif path: ${container_image_path}"
+  echo "genegalleon.sif version: ${image_version}"
+  if [[ -n "${image_ref}" ]]; then
+    echo "genegalleon.sif image ref: ${image_ref}"
+  fi
+  if [[ -n "${image_tag}" ]]; then
+    echo "genegalleon.sif image tag: ${image_tag}"
+  fi
+  if [[ -n "${image_revision}" ]]; then
+    echo "genegalleon.sif revision: ${image_revision}"
+  fi
+  if [[ -n "${section_title}" ]]; then
+    gg_print_spacer
+  fi
+  return 0
+}
+
+gg_entrypoint_print_version_summary() {
+  local container_runtime_bin=""
+
+  container_runtime_bin="$(gg_container_shell_command_runtime_bin || true)"
+  gg_print_version_summary "genegalleon startup versions" "${container_runtime_bin}" || true
+  return 0
+}
+
 gg_trigger_versions_dump() {
   local trigger_name=${1:-unknown_job}
   local versions_script
@@ -2183,10 +2506,10 @@ gg_trigger_versions_dump() {
     return 1
   fi
 
-  if [[ -z "${singularity_command:-}" ]]; then
+  if ! gg_container_shell_command_is_set; then
     set_singularity_command
   fi
-  container_runtime_bin="${singularity_command%% *}"
+  container_runtime_bin="$(gg_container_shell_command_runtime_bin || true)"
   if [[ -z "${container_runtime_bin}" ]]; then
     if ! container_runtime_bin=$(gg_detect_container_runtime_binary); then
       echo "gg_trigger_versions_dump: container runtime command not found. Skipping version dump." >&2
@@ -2275,11 +2598,9 @@ gg_trigger_versions_dump() {
     set +e
   fi
   {
-    echo "### genegalleon version ###"
-    echo "${gg_version}"
-    echo ""
+    gg_print_version_summary "genegalleon versions" "${container_runtime_bin}" "${inspect_snapshot}"
     echo "$(date): Triggered gg_versions by ${trigger_name}"
-    ${singularity_command} "${gg_container_image_path}" < "${versions_script}" || {
+    gg_run_container_shell_script "${gg_container_image_path}" "${versions_script}" || {
       cmd_rc=$?
       if [[ ${versions_exit_code} -eq 0 ]]; then
         versions_exit_code=${cmd_rc}

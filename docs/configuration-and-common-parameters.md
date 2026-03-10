@@ -156,12 +156,26 @@ Advanced path knobs are handled outside the per-entrypoint config registry:
 
 - `gg_workspace_dir`
 - `gg_container_image_path`
+- `GG_CONTAINER_RUNTIME`
+- `GG_CONTAINER_DOCKER_IMAGE`
 
 These are resolved before the container starts and are useful when:
 
 - you want to keep a workspace outside the repository,
 - the SIF lives in a different location,
-- multiple workspaces share the same checked-out code.
+- multiple workspaces share the same checked-out code,
+- or you want to run wrappers directly against a Docker image instead of a SIF.
+
+Docker-backed wrapper mode is opt-in:
+
+```bash
+GG_CONTAINER_RUNTIME=docker \
+GG_CONTAINER_DOCKER_IMAGE=ghcr.io/kfuku52/genegalleon:latest \
+bash workflow/gg_gene_evolution_entrypoint.sh
+```
+
+When `GG_CONTAINER_RUNTIME=docker` is set, keep `gg_container_image_path`
+reserved for SIF-based runs; use `GG_CONTAINER_DOCKER_IMAGE` for the Docker image reference.
 
 ## Recommended configuration strategy
 
@@ -171,6 +185,7 @@ Use the following split in practice:
 - cross-stage defaults in `workflow/gg_common_params.sh`,
 - species-tree rooting in `workflow/gg_genome_evolution_entrypoint.sh` via `species_tree_rooting`,
 - one-off input-generation automation via `GG_INPUT_*`,
-- path relocation via `gg_workspace_dir` / `gg_container_image_path`.
+- path relocation via `gg_workspace_dir` / `gg_container_image_path`,
+- direct Docker wrapper runs via `GG_CONTAINER_RUNTIME=docker` plus `GG_CONTAINER_DOCKER_IMAGE`.
 
 That keeps routine runs reproducible without forcing edits in the core implementation files.

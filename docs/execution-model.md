@@ -17,7 +17,7 @@ Typical execution path:
 1. Launch `workflow/gg_*_entrypoint.sh`.
 2. The wrapper locates `workflow/support/gg_entrypoint_bootstrap.sh`.
 3. Bootstrap resolves the workflow root and default paths such as `workspace/` and `genegalleon.sif`.
-4. The wrapper loads `workflow/support/gg_util.sh`, chooses `apptainer` or `singularity`, and normalizes scheduler variables.
+4. The wrapper loads `workflow/support/gg_util.sh`, chooses `apptainer` or `singularity` (or a Docker-backed shim when requested), and normalizes scheduler variables.
 5. The workspace is bind-mounted to `/workspace` and the workflow tree is bind-mounted to `/script`.
 6. The wrapper changes into the workspace root and pipes the matching core script into the container shell.
 7. The core script bootstraps runtime helpers from `/script/support`, resolves `workspace/input`, `workspace/output`, and `workspace/downloads`, then runs stage logic.
@@ -47,6 +47,8 @@ Advanced path overrides that can be exported before launch:
 
 - `gg_workspace_dir=/path/to/workspace`
 - `gg_container_image_path=/path/to/genegalleon.sif`
+- `GG_CONTAINER_RUNTIME=docker`
+- `GG_CONTAINER_DOCKER_IMAGE=ghcr.io/kfuku52/genegalleon:latest`
 
 ## Scheduler normalization
 

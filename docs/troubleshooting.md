@@ -42,6 +42,7 @@ What to do:
 
 - build or pull the image with `bash ./gg_container_build_entrypoint.sh`,
 - or export `gg_container_image_path=/path/to/genegalleon.sif` before launching the wrapper.
+- or switch the wrapper to Docker mode with `GG_CONTAINER_RUNTIME=docker` and `GG_CONTAINER_DOCKER_IMAGE=<image:tag>`.
 
 ### Wrong workspace is being used
 
