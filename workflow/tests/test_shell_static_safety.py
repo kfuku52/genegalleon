@@ -285,7 +285,7 @@ def test_support_python_shebangs_use_python3():
 def test_progress_summary_entrypoint_runs_core_script_in_container():
     entrypoint = WORKFLOW_DIR / "gg_progress_summary_entrypoint.sh"
     text = _read_text(entrypoint)
-    assert '< "${gg_core_dir}/gg_progress_summary_core.sh"' in text
+    assert 'gg_run_container_shell_script "${gg_container_image_path}" "${gg_core_dir}/gg_progress_summary_core.sh"' in text
     assert "orthogroup_output_summary.py" not in text
     assert "transcriptome_assembly_output_summary.py" not in text
 
@@ -436,20 +436,29 @@ def test_set_singularity_command_supports_apptainer_fallback():
     assert 'Neither singularity nor apptainer was found on PATH.' in text
 
 
-def test_site_runtime_shell_command_uses_output_parameter():
+def test_site_runtime_exec_command_uses_output_parameter():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     site_runtime_path = WORKFLOW_DIR / "support" / "gg_site_runtime.sh"
     util_text = _read_text(util_path)
-    site_body = _function_body(_read_text(site_runtime_path), "gg_site_container_shell_command")
+    site_text = _read_text(site_runtime_path)
+    site_body = _function_body(site_text, "gg_site_container_shell_command")
+    helper_body = _function_body(site_text, "gg_set_command_array")
     assert 'local out_var=${2:-}' in site_body
-    assert 'printf -v "${out_var}" \'%s\' "${command_text}"' in site_body
+    assert 'gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1' in site_body
+    assert 'gg_set_command_array "${out_var}" "${runtime_bin}" exec --contain || return 1' in site_body
+    assert 'printf -v "${out_var}" \'%s\' "${command_text}"' not in site_body
     assert 'echo "${runtime_bin} shell"' not in site_body
     assert 'echo "${runtime_bin} shell --contain"' not in site_body
+    assert 'echo "${runtime_bin} exec"' not in site_body
+    assert 'echo "${runtime_bin} exec --contain"' not in site_body
     assert 'site profile = nig" >&2' not in site_body
     assert 'site profile = nhr-fau" >&2' not in site_body
     assert 'site profile = default" >&2' not in site_body
+    assert 'eval "${out_var}=()"' in helper_body
+    assert 'eval "${out_var}+=( ${quoted_arg} )"' in helper_body
     assert 'gg_site_container_shell_command "${runtime_bin}" singularity_command' in util_text
     assert 'singularity_command="$(gg_site_container_shell_command "${runtime_bin}")"' not in util_text
+    assert 'singularity_command=( "${runtime_bin}" exec )' in util_text
 
 
 def test_set_singularityenv_does_not_dump_singularityenv_values():
@@ -477,10 +486,52 @@ def test_gg_trigger_versions_dump_is_runtime_agnostic():
     assert 'export SINGULARITYENV_GG_VERSION="${gg_version}"' in body
     assert 'export APPTAINERENV_GG_VERSION="${gg_version}"' in body
     assert 'command -v "${container_runtime_bin}"' in body
+    assert 'container_runtime_bin="$(gg_container_shell_command_runtime_bin || true)"' in body
+    assert 'gg_run_container_shell_script "${gg_container_image_path}" "${versions_script}"' in body
     assert '"${container_runtime_bin}" inspect "${gg_container_image_path}"' in body
     assert '"${container_runtime_bin}" version || {' in body
     assert 'singularity inspect "${gg_container_image_path}"' not in body
     assert 'singularity version || {' not in body
+
+
+def test_entrypoint_activate_container_runtime_prints_version_summary():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "gg_entrypoint_activate_container_runtime")
+    assert "gg_entrypoint_print_version_summary" in body
+
+
+def test_container_build_metadata_includes_repo_version_label():
+    dockerfile = _read_text(REPO_ROOT / "container" / "Dockerfile")
+    buildx = _read_text(REPO_ROOT / "container" / "buildx.sh")
+    local_build = _read_text(REPO_ROOT / "container" / "apptainer_local_build.sh")
+    definition_template = _read_text(REPO_ROOT / "container" / "apptainer_local_build.def.template")
+
+    assert 'org.opencontainers.image.version="${GG_VERSION}"' in dockerfile
+    assert '--build-arg GG_VERSION="${gg_version}"' in buildx
+    assert 's|@@GG_VERSION@@|' in local_build
+    assert "org.opencontainers.image.version @@GG_VERSION@@" in definition_template
+
+
+def test_run_container_shell_script_uses_exec_with_bash_stdin_bridge():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "gg_run_container_shell_script")
+    assert 'subcommand=$(gg_container_shell_command_subcommand || true)' in body
+    assert '"${singularity_command[@]}" "${image_path}" bash -s -- < "${script_path}"' in body
+    assert '${singularity_command} "${image_path}" bash -s -- < "${script_path}"' in body
+    assert '"${singularity_command[@]}" "${image_path}" < "${script_path}"' in body
+
+
+def test_entrypoints_stream_core_scripts_via_container_shell_helper():
+    entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
+    assert entrypoints, "No entrypoint scripts were found."
+    for script in entrypoints:
+        text = _read_text(script)
+        if 'gg_core_dir=' not in text:
+            continue
+        assert 'gg_run_container_shell_script "${gg_container_image_path}"' in text
+        assert '${singularity_command} "${gg_container_image_path}" <' not in text
 
 
 def test_progress_summary_entrypoint_uses_auto_forwarding_and_normalized_nslots():

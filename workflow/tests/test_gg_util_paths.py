@@ -56,7 +56,7 @@ def test_contamination_rank_normalizes_domain_for_remove_contaminated_sequences(
 def test_add_container_bind_mount_uses_only_singularity_bindpath_for_singularity_runtime(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        "singularity_command='singularity shell'; "
+        "singularity_command='singularity exec'; "
         "gg_add_container_bind_mount '/host/workspace:/workspace'; "
         "gg_add_container_bind_mount '/host/workflow:/script'; "
         'printf "GG=%s\\nSB=%s\\nSBP=%s\\nAB=%s\\nABP=%s\\n" '
@@ -79,7 +79,7 @@ def test_add_container_bind_mount_uses_only_singularity_bindpath_for_singularity
 def test_add_container_bind_mount_uses_only_apptainer_bindpath_for_apptainer_runtime(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        "singularity_command='apptainer shell'; "
+        "singularity_command='apptainer exec'; "
         "gg_add_container_bind_mount '/host/workspace:/workspace'; "
         "gg_add_container_bind_mount '/host/workflow:/script'; "
         'printf "GG=%s\\nSB=%s\\nSBP=%s\\nAB=%s\\nABP=%s\\n" '

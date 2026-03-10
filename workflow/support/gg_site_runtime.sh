@@ -44,12 +44,33 @@ gg_site_scheduler_prelude() {
   esac
 }
 
+gg_set_command_array() {
+  local out_var=${1:-}
+  shift || true
+
+  if [[ -z "${out_var}" ]]; then
+    echo "gg_set_command_array: output variable name is required." >&2
+    return 1
+  fi
+  if [[ ! "${out_var}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "gg_set_command_array: invalid output variable name: ${out_var}" >&2
+    return 1
+  fi
+
+  local arg
+  local quoted_arg=""
+  eval "${out_var}=()"
+  for arg in "$@"; do
+    printf -v quoted_arg '%q' "${arg}"
+    eval "${out_var}+=( ${quoted_arg} )"
+  done
+}
+
 gg_site_container_shell_command() {
   local runtime_bin=$1
   local out_var=${2:-}
   local echo_header="set_singularity_command: "
   local site_profile
-  local command_text=""
 
   site_profile="$(gg_detect_site_profile)"
   case "${site_profile}" in
@@ -67,21 +88,15 @@ gg_site_container_shell_command() {
       if [[ -e /home/geadmin/UGER/uger/spool ]]; then
         gg_add_container_bind_mount "/home/geadmin/UGER/uger/spool:/home/geadmin/UGER/uger/spool"
       fi
-      command_text="${runtime_bin} shell"
+      gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1
       ;;
     nhr-fau)
       echo "${echo_header}site profile = nhr-fau"
-      command_text="${runtime_bin} shell --contain"
+      gg_set_command_array "${out_var}" "${runtime_bin}" exec --contain || return 1
       ;;
     *)
       echo "${echo_header}site profile = default"
-      command_text="${runtime_bin} shell"
+      gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1
       ;;
   esac
-
-  if [[ -z "${out_var}" ]]; then
-    echo "${echo_header}output variable name is required."
-    return 1
-  fi
-  printf -v "${out_var}" '%s' "${command_text}"
 }
