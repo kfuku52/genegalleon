@@ -137,6 +137,7 @@ echo "[gg_container_build] platforms=${PLATFORMS} mode=${MODE}"
 did_buildx=0
 did_native_local_build=0
 resolved_image_source="${IMAGE_SOURCE}"
+sif_source="docker"
 case "${IMAGE_SOURCE}" in
   local)
     if docker_buildx_available; then
@@ -147,6 +148,9 @@ case "${IMAGE_SOURCE}" in
           bash "${buildx_script}"
       )
       did_buildx=1
+      if [[ "${MODE}" == "load" ]]; then
+        sif_source="docker-daemon"
+      fi
     elif [[ "${BUILD_SIF}" == "1" ]]; then
       resolved_engine="$(resolve_container_engine)"
       echo "[gg_container_build] docker buildx not found; using ${resolved_engine} for native local build."
@@ -190,6 +194,9 @@ case "${IMAGE_SOURCE}" in
       )
       did_buildx=1
       resolved_image_source="local"
+      if [[ "${MODE}" == "load" ]]; then
+        sif_source="docker-daemon"
+      fi
     elif [[ "${BUILD_SIF}" == "1" ]]; then
       if image_looks_remote "${IMAGE}"; then
         resolved_image_source="public"
@@ -226,6 +233,7 @@ if [[ "${BUILD_SIF}" == "1" ]]; then
   fi
   resolved_engine="$(resolve_container_engine)"
   echo "[gg_container_build] engine=${resolved_engine}"
+  echo "[gg_container_build] sif_source=${sif_source}"
   mkdir -p "$(dirname "${OUT}")"
   if [[ "${did_buildx}" == "1" ]]; then
     echo "[gg_container_build] step 2/2: convert docker image to SIF"
@@ -234,7 +242,7 @@ if [[ "${BUILD_SIF}" == "1" ]]; then
   fi
   (
     cd "${repo_root}"
-    IMAGE="${IMAGE}" TAG="${TAG}" ENGINE="${resolved_engine}" OUT="${OUT}" \
+    IMAGE="${IMAGE}" TAG="${TAG}" ENGINE="${resolved_engine}" OUT="${OUT}" SOURCE="${sif_source}" \
       bash "${apptainer_script}"
   )
   echo "[gg_container_build] done: ${OUT}"

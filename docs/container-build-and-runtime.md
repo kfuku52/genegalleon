@@ -21,6 +21,10 @@ Useful overrides:
 - `ENGINE=singularity` to force Singularity instead of automatic runtime detection
 - `NATIVE_BUILD_FAKEROOT=always` to force `--fakeroot` for native local builds on sites that support it
 
+Use `gg_container_build_entrypoint.sh` when you want the default SIF path pinned
+to `<repo-root>/genegalleon.sif`. Bare `apptainer build ...` writes to the
+current working directory unless you pass an explicit output path.
+
 Public image example:
 
 ```bash
@@ -61,15 +65,15 @@ Operational retention policy:
 For reproducible runs, use an immutable tag:
 
 ```bash
-apptainer build genegalleon_20260304_abcd123.sif \
-  docker://ghcr.io/kfuku52/genegalleon:20260304-abcd123
+IMAGE_SOURCE=public IMAGE=ghcr.io/kfuku52/genegalleon TAG=20260304-abcd123 \
+bash ./gg_container_build_entrypoint.sh
 ```
 
 You can also use release tags:
 
 ```bash
-apptainer build genegalleon_v1.2.3.sif \
-  docker://ghcr.io/kfuku52/genegalleon:v1.2.3
+IMAGE_SOURCE=public IMAGE=ghcr.io/kfuku52/genegalleon TAG=v1.2.3 \
+bash ./gg_container_build_entrypoint.sh
 ```
 
 ### Build Docker image (multi-arch)
@@ -84,10 +88,14 @@ Single-platform local load example:
 IMAGE=local/genegalleon TAG=dev PLATFORMS=linux/arm64 MODE=load ./container/buildx.sh
 ```
 
-### Convert Docker image to SIF
+### Convert registry or Docker-daemon image to SIF
 
 ```bash
-IMAGE=ghcr.io/<your-org>/genegalleon TAG=dev OUT=genegalleon_20260217_amd.sif ./container/apptainer_from_docker.sh
+# From a registry image
+IMAGE=ghcr.io/<your-org>/genegalleon TAG=dev ./container/apptainer_from_docker.sh
+
+# From an image already loaded in the Docker daemon
+SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_docker.sh
 ```
 
 Wrappers expect the SIF at repo root by default:

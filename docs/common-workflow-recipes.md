@@ -7,7 +7,7 @@ This page collects practical stage combinations that are not obvious from the pe
 Use this when you want to confirm the container and default workspace are working.
 
 ```bash
-apptainer build genegalleon.sif docker://ghcr.io/kfuku52/genegalleon:latest
+IMAGE_SOURCE=public IMAGE=ghcr.io/kfuku52/genegalleon TAG=latest bash ./gg_container_build_entrypoint.sh
 cd workflow
 bash gg_gene_evolution_entrypoint.sh
 ```

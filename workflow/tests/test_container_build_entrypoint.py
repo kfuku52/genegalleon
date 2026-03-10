@@ -223,6 +223,27 @@ def test_container_build_entrypoint_uses_native_local_build_without_docker(tmp_p
     assert runtime_log_lines[0].endswith(".def")
 
 
+def test_container_build_entrypoint_uses_docker_daemon_for_local_buildx_image(tmp_path: Path):
+    completed, runtime_log, docker_log, out_path = _run_entrypoint_with_buildx(
+        tmp_path,
+        "apptainer",
+        {
+            "IMAGE_SOURCE": "local",
+            "IMAGE": "local/genegalleon",
+            "TAG": "dev",
+            "MODE": "load",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert out_path.is_file()
+    assert "[gg_container_build] sif_source=docker-daemon" in completed.stdout
+    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
+        f"build {out_path} docker-daemon:local/genegalleon:dev"
+    ]
+    assert "buildx build" in docker_log.read_text(encoding="utf-8")
+
+
 def test_container_build_entrypoint_rejects_non_registry_image_for_public_source(tmp_path: Path):
     completed, runtime_log, out_path = _run_entrypoint(
         tmp_path,

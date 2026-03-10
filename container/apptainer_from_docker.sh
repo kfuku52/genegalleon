@@ -5,26 +5,17 @@ set -euo pipefail
 # Run this on a host that has apptainer/singularity installed.
 #
 # Example:
-#   IMAGE=ghcr.io/your-org/genegalleon TAG=20260211 OUT=genegalleon_20260211_amd.sif ./container/apptainer_from_docker.sh
+#   IMAGE=ghcr.io/your-org/genegalleon TAG=20260211 ./container/apptainer_from_docker.sh
+#   SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_docker.sh
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
 
 IMAGE=${IMAGE:-ghcr.io/example/genegalleon}
 TAG=${TAG:-dev}
 ENGINE=${ENGINE:-auto} # auto | apptainer | singularity
-
-build_date="$(date '+%Y%m%d')"
-host_arch="$(uname -m)"
-case "${host_arch}" in
-  aarch64|arm64)
-    arch_tag="arm"
-    ;;
-  x86_64|amd64)
-    arch_tag="amd"
-    ;;
-  *)
-    arch_tag="$(echo "${host_arch}" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_-')"
-    ;;
-esac
-OUT=${OUT:-genegalleon_${build_date}_${arch_tag}.sif}
+SOURCE=${SOURCE:-docker} # docker | docker-daemon
+OUT=${OUT:-${repo_root}/genegalleon.sif}
 
 resolve_container_engine() {
   if [[ "${ENGINE}" == "apptainer" || "${ENGINE}" == "singularity" ]]; then
@@ -48,5 +39,18 @@ resolve_container_engine() {
 }
 
 resolved_engine="$(resolve_container_engine)"
-"${resolved_engine}" build "${OUT}" "docker://${IMAGE}:${TAG}"
+case "${SOURCE}" in
+  docker)
+    source_uri="docker://${IMAGE}:${TAG}"
+    ;;
+  docker-daemon)
+    source_uri="docker-daemon:${IMAGE}:${TAG}"
+    ;;
+  *)
+    echo "SOURCE must be one of: docker, docker-daemon" >&2
+    exit 1
+    ;;
+esac
+
+"${resolved_engine}" build "${OUT}" "${source_uri}"
 echo "Generated ${OUT}"
