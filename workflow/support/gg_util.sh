@@ -2951,6 +2951,7 @@ import os
 import sys
 
 path = sys.argv[1]
+sep = "\x1f"
 fmt = ""
 pid = ""
 hostname = ""
@@ -2978,7 +2979,7 @@ try:
     created_at = str(data.get("created_at", "") or "")
 except Exception:
     pass
-print("\t".join((fmt, pid, hostname, boot_id, created_at, mtime, device, inode)))
+print(sep.join((fmt, pid, hostname, boot_id, created_at, mtime, device, inode)))
 PY
 }
 
@@ -2992,7 +2993,7 @@ gg_shared_lock_owner_summary() {
   local mtime=""
   local device=""
   local inode=""
-  IFS=$'\t' read -r fmt owner_pid owner_host owner_boot_id created_at mtime device inode < <(gg_shared_lock_read_metadata "${lock_file}")
+  IFS=$'\037' read -r fmt owner_pid owner_host owner_boot_id created_at mtime device inode < <(gg_shared_lock_read_metadata "${lock_file}")
   local now_epoch
   now_epoch=$(date +%s)
   local age_text="unknown"
@@ -3089,7 +3090,7 @@ gg_shared_lock_reclaim_if_stale() {
   local mtime=""
   local device=""
   local inode=""
-  IFS=$'\t' read -r fmt owner_pid owner_host owner_boot_id created_at mtime device inode < <(gg_shared_lock_read_metadata "${lock_file}")
+  IFS=$'\037' read -r fmt owner_pid owner_host owner_boot_id created_at mtime device inode < <(gg_shared_lock_read_metadata "${lock_file}")
   local current_host
   local current_boot_id
   local stale_seconds
