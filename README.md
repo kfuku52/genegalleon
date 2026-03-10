@@ -26,12 +26,21 @@ The fastest way to try GeneGalleon is to run
 ### 1. Prepare the container image
 
 ```bash
-# Recommended: build a local SIF from a published GHCR image
+# Apptainer + GHCR: build a local SIF from the published GHCR image
 apptainer build genegalleon.sif docker://ghcr.io/kfuku52/genegalleon:latest
 
-# Alternative: build a SIF locally from this repository
+# Apptainer + local: build a local SIF from this repository
 IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
+
+# Docker + GHCR: pull the published GHCR image
+docker pull ghcr.io/kfuku52/genegalleon:latest
+
+# Docker + local: build a local Docker image from this repository
+IMAGE_SOURCE=local BUILD_SIF=0 IMAGE=local/genegalleon TAG=dev MODE=load bash ./gg_container_build_entrypoint.sh
 ```
+
+The quick start in Step 2 expects `./genegalleon.sif`, so use one of the
+Apptainer commands above for the workflow wrappers.
 
 ### 2. Run the bundled quick start
 
