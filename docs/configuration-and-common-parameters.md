@@ -166,13 +166,17 @@ These are resolved before the container starts and are useful when:
 - multiple workspaces share the same checked-out code,
 - or you want to run wrappers directly against a Docker image instead of a SIF.
 
-Docker-backed wrapper mode is opt-in:
+Docker-backed wrapper mode can still be enabled explicitly:
 
 ```bash
 GG_CONTAINER_RUNTIME=docker \
 GG_CONTAINER_DOCKER_IMAGE=ghcr.io/kfuku52/genegalleon:latest \
 bash workflow/gg_gene_evolution_entrypoint.sh
 ```
+
+When the default repo-root `genegalleon.sif` is missing, wrappers also
+auto-fallback to a pulled Docker image if available. Current fallback priority
+is `ghcr.io/kfuku52/genegalleon:latest`, then `local/genegalleon:dev`.
 
 When `GG_CONTAINER_RUNTIME=docker` is set, keep `gg_container_image_path`
 reserved for SIF-based runs; use `GG_CONTAINER_DOCKER_IMAGE` for the Docker image reference.

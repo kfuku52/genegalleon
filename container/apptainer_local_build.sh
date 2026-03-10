@@ -66,6 +66,7 @@ render_definition() {
     -e "s|@@TARGET_ARCH@@|$(escape_sed_replacement "${target_arch}")|g" \
     -e "s|@@BUILD_DATE@@|$(escape_sed_replacement "${build_date}")|g" \
     -e "s|@@VCS_REF@@|$(escape_sed_replacement "${vcs_ref}")|g" \
+    -e "s|@@GG_VERSION@@|$(escape_sed_replacement "${gg_version}")|g" \
     -e "s|@@LOCAL_IMAGE_REF@@|$(escape_sed_replacement "${IMAGE}")|g" \
     -e "s|@@LOCAL_IMAGE_TAG@@|$(escape_sed_replacement "${TAG}")|g" \
     -e "s|@@NOTUNG_DOWNLOAD_PAGE@@|$(escape_sed_replacement "${NOTUNG_DOWNLOAD_PAGE}")|g" \
@@ -126,6 +127,10 @@ fi
 resolved_engine="$(resolve_container_engine)"
 build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 vcs_ref="$(git -C "${repo_root}" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+gg_version="$(sed -n '1p' "${repo_root}/VERSION" 2>/dev/null | tr -d '\r' || true)"
+if [[ -z "${gg_version}" ]]; then
+  gg_version="unknown"
+fi
 
 work_dir="$(mktemp -d)"
 staging_root="${work_dir}/context"

@@ -19,6 +19,7 @@ From: mambaorg/micromamba:noble
     org.opencontainers.image.source https://github.com/kfuku52/genegalleon
     org.opencontainers.image.created @@BUILD_DATE@@
     org.opencontainers.image.revision @@VCS_REF@@
+    org.opencontainers.image.version @@GG_VERSION@@
     io.genegalleon.local_image_ref @@LOCAL_IMAGE_REF@@
     io.genegalleon.local_image_tag @@LOCAL_IMAGE_TAG@@
 

@@ -178,12 +178,14 @@ RUN notung_url="$(/opt/pg/scripts/resolve_notung_latest.sh "${NOTUNG_DOWNLOAD_PA
 
 ARG BUILD_DATE=""
 ARG VCS_REF="unknown"
+ARG GG_VERSION="unknown"
 
 LABEL org.opencontainers.image.title="GeneGalleon multi-arch candidate container" \
       org.opencontainers.image.description="Reproducible multi-arch build scaffold for GeneGalleon (amd64 + arm64)" \
       org.opencontainers.image.source="https://github.com/kfuku52/genegalleon" \
       org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.revision="${VCS_REF}"
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${GG_VERSION}"
 
 WORKDIR /workspace
 ENTRYPOINT ["/usr/bin/tini", "--"]

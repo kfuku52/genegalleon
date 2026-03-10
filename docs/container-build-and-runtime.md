@@ -112,10 +112,13 @@ Published image example:
 
 ```bash
 docker pull ghcr.io/kfuku52/genegalleon:latest
-GG_CONTAINER_RUNTIME=docker \
-GG_CONTAINER_DOCKER_IMAGE=ghcr.io/kfuku52/genegalleon:latest \
 bash workflow/gg_gene_evolution_entrypoint.sh
 ```
+
+When the default repo-root `genegalleon.sif` is missing, wrappers auto-fallback
+to `ghcr.io/kfuku52/genegalleon:latest` if that image has already been pulled.
+Explicit `GG_CONTAINER_RUNTIME=docker` / `GG_CONTAINER_DOCKER_IMAGE=...` still
+override auto-detection.
 
 Local image example:
 
@@ -130,8 +133,11 @@ bash workflow/gg_gene_evolution_entrypoint.sh
 
 Runtime notes:
 
-- `GG_CONTAINER_RUNTIME=docker` enables Docker-backed wrapper mode.
-- `GG_CONTAINER_DOCKER_IMAGE=<image:tag>` selects the image passed to `docker run`.
+- missing repo-root `genegalleon.sif` triggers Docker auto-fallback when a
+  pulled Docker image is available; current fallback priority is
+  `ghcr.io/kfuku52/genegalleon:latest`, then `local/genegalleon:dev`
+- `GG_CONTAINER_RUNTIME=docker` forces Docker-backed wrapper mode
+- `GG_CONTAINER_DOCKER_IMAGE=<image:tag>` selects the image passed to `docker run`
 - `gg_container_image_path` remains the SIF path knob; do not point it at a Docker image reference.
 - The wrapper still binds the workspace to `/workspace` and the workflow tree to `/script`.
 

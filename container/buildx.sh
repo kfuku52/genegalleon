@@ -61,6 +61,10 @@ fi
 
 build_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 vcs_ref=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+gg_version="$(sed -n '1p' VERSION 2>/dev/null | tr -d '\r' || true)"
+if [[ -z "${gg_version}" ]]; then
+  gg_version="unknown"
+fi
 
 cache_args=()
 cache_dir_new=""
@@ -91,6 +95,7 @@ if [[ ${#cache_args[@]} -gt 0 ]]; then
     --file container/Dockerfile \
     --build-arg BUILD_DATE="${build_date}" \
     --build-arg VCS_REF="${vcs_ref}" \
+    --build-arg GG_VERSION="${gg_version}" \
     --build-arg NOTUNG_DOWNLOAD_PAGE="${NOTUNG_DOWNLOAD_PAGE}" \
     --build-arg KFU52_REPO_REF="${KFU52_REPO_REF}" \
     --build-arg KFU52_AMALGKIT_AUTO_SELECT_REF="${KFU52_AMALGKIT_AUTO_SELECT_REF}" \
@@ -112,6 +117,7 @@ else
     --file container/Dockerfile \
     --build-arg BUILD_DATE="${build_date}" \
     --build-arg VCS_REF="${vcs_ref}" \
+    --build-arg GG_VERSION="${gg_version}" \
     --build-arg NOTUNG_DOWNLOAD_PAGE="${NOTUNG_DOWNLOAD_PAGE}" \
     --build-arg KFU52_REPO_REF="${KFU52_REPO_REF}" \
     --build-arg KFU52_AMALGKIT_AUTO_SELECT_REF="${KFU52_AMALGKIT_AUTO_SELECT_REF}" \

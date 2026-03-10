@@ -7,6 +7,7 @@ import subprocess
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT = REPO_ROOT / "gg_container_build_entrypoint.sh"
 CHECK_ENV_COVERAGE = REPO_ROOT / "container" / "scripts" / "check_env_coverage.sh"
+REPO_VERSION = REPO_ROOT.joinpath("VERSION").read_text(encoding="utf-8").splitlines()[0].strip()
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -223,6 +224,30 @@ def test_container_build_entrypoint_uses_native_local_build_without_docker(tmp_p
     assert runtime_log_lines[0].endswith(".def")
 
 
+def test_container_build_entrypoint_native_local_build_renders_repo_version_label(tmp_path: Path):
+    completed, runtime_log, out_path = _run_entrypoint(
+        tmp_path,
+        "apptainer",
+        {
+            "IMAGE_SOURCE": "local",
+            "IMAGE": "local/genegalleon",
+            "TAG": "dev",
+            "NATIVE_BUILD_KEEP_WORKDIR": "1",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert out_path.is_file()
+    assert runtime_log.exists()
+    definition_line = next(
+        line for line in completed.stdout.splitlines()
+        if line.startswith("[apptainer_local_build] definition=")
+    )
+    definition_path = Path(definition_line.split("=", 1)[1].strip())
+    definition_text = definition_path.read_text(encoding="utf-8")
+    assert f"org.opencontainers.image.version {REPO_VERSION}" in definition_text
+
+
 def test_container_build_entrypoint_uses_docker_daemon_for_local_buildx_image(tmp_path: Path):
     completed, runtime_log, docker_log, out_path = _run_entrypoint_with_buildx(
         tmp_path,
@@ -241,7 +266,9 @@ def test_container_build_entrypoint_uses_docker_daemon_for_local_buildx_image(tm
     assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
         f"build {out_path} docker-daemon:local/genegalleon:dev"
     ]
-    assert "buildx build" in docker_log.read_text(encoding="utf-8")
+    docker_log_text = docker_log.read_text(encoding="utf-8")
+    assert "buildx build" in docker_log_text
+    assert f"--build-arg GG_VERSION={REPO_VERSION}" in docker_log_text
 
 
 def test_container_build_entrypoint_rejects_non_registry_image_for_public_source(tmp_path: Path):

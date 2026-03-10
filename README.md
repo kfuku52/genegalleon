@@ -43,14 +43,17 @@ follows your current working directory; `gg_container_build_entrypoint.sh`
 pins the default output to the repository root.
 
 If you only have a Docker image and want to run the workflow wrappers without a
-local `./genegalleon.sif`, opt in to Docker-backed wrapper mode:
+local `./genegalleon.sif`, pull the published image and launch the wrapper.
+When `./genegalleon.sif` is missing, wrappers now auto-fallback to the pulled
+Docker image:
 
 ```bash
 docker pull ghcr.io/kfuku52/genegalleon:latest
-GG_CONTAINER_RUNTIME=docker \
-GG_CONTAINER_DOCKER_IMAGE=ghcr.io/kfuku52/genegalleon:latest \
 bash workflow/gg_gene_evolution_entrypoint.sh
 ```
+
+You can still force Docker-backed wrapper mode explicitly with
+`GG_CONTAINER_RUNTIME=docker` and `GG_CONTAINER_DOCKER_IMAGE=<image:tag>`.
 
 ### 2. Run the bundled quick start
 

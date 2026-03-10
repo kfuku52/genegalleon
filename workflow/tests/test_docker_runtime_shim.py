@@ -55,6 +55,36 @@ cat > "${{base_dir}}/call_${{count}}.stdin"
     return bin_dir
 
 
+def _prepare_stub_docker_with_known_images(tmp_path: Path, known_images: list[str]) -> Path:
+    bin_dir = tmp_path / "bin"
+    known_cases = "\n".join(
+        f"    {shlex.quote(image)}) exit 0 ;;" for image in known_images
+    )
+    _write_executable(
+        bin_dir / "docker",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+base_dir={shlex.quote(str(tmp_path))}
+counter_file="${{base_dir}}/docker.counter"
+count=0
+if [[ -f "${{counter_file}}" ]]; then
+  count=$(cat "${{counter_file}}")
+fi
+count=$((count + 1))
+printf '%s' "${{count}}" > "${{counter_file}}"
+printf '%s\\n' "$@" > "${{base_dir}}/call_${{count}}.args"
+if [[ "${{1:-}}" == "image" && "${{2:-}}" == "inspect" ]]; then
+  case "${{3:-}}" in
+{known_cases}
+    *) exit 1 ;;
+  esac
+fi
+cat > "${{base_dir}}/call_${{count}}.stdin"
+""",
+    )
+    return bin_dir
+
+
 def test_detect_container_runtime_binary_returns_docker_shim(tmp_path: Path):
     wrapper_bin = tmp_path / "gg_wrapper_bin"
     command = (
@@ -69,6 +99,37 @@ def test_detect_container_runtime_binary_returns_docker_shim(tmp_path: Path):
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == str(wrapper_bin / "singularity")
+
+
+def test_set_singularity_command_auto_falls_back_to_pulled_public_image_when_sif_is_missing(tmp_path: Path):
+    wrapper_bin = tmp_path / "gg_wrapper_bin"
+    bin_dir = _prepare_stub_docker_with_known_images(
+        tmp_path, ["ghcr.io/kfuku52/genegalleon:latest"]
+    )
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"gg_support_dir={shlex.quote(str(SUPPORT_DIR))}; "
+        f"gg_workflow_dir={shlex.quote(str(WORKFLOW_DIR))}; "
+        f"gg_container_image_path={shlex.quote(str(tmp_path / 'missing.sif'))}; "
+        f"GG_WRAPPER_BIN={shlex.quote(str(wrapper_bin))}; "
+        "set_singularity_command; "
+        'runtime_bin="$(gg_container_shell_command_runtime_bin)"; '
+        'printf "runtime=%s\\nimage=%s\\n" "${runtime_bin}" "${GG_CONTAINER_DOCKER_IMAGE:-}"'
+    )
+
+    completed = _run_bash(
+        command,
+        cwd=REPO_ROOT,
+        env={
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "GG_CONTAINER_DOCKER_IMAGE": "",
+            "GG_WRAPPER_IMAGE": "",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"runtime={wrapper_bin / 'singularity'}" in completed.stdout
+    assert "image=ghcr.io/kfuku52/genegalleon:latest" in completed.stdout
 
 
 def test_docker_singularity_shim_translates_bind_mounts_and_envs(tmp_path: Path):
@@ -107,6 +168,46 @@ def test_docker_singularity_shim_translates_bind_mounts_and_envs(tmp_path: Path)
     assert (tmp_path / "call_1.stdin").read_text(encoding="utf-8") == "echo shim-test\n"
 
 
+def test_print_version_summary_formats_container_version_with_tag_when_distinct():
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"gg_workflow_dir={shlex.quote(str(WORKFLOW_DIR))}; "
+        "gg_container_image_path=/tmp/genegalleon.sif; "
+        "inspect_text=$(printf '%s\\n' "
+        "'org.opencontainers.image.version: 0.4.7' "
+        "'io.genegalleon.local_image_tag: 20260304-abcd123'); "
+        'gg_print_version_summary "" "" "$inspect_text"'
+    )
+
+    completed = _run_bash(command, cwd=REPO_ROOT)
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"genegalleon version: {REPO_VERSION}" in completed.stdout
+    assert "container version: 0.4.7 (20260304-abcd123)" in completed.stdout
+
+
+def test_print_version_summary_warns_when_repo_and_container_versions_mismatch():
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"gg_workflow_dir={shlex.quote(str(WORKFLOW_DIR))}; "
+        "gg_container_image_path=/tmp/genegalleon.sif; "
+        "inspect_text=$(printf '%s\\n' "
+        "'org.opencontainers.image.version: 0.4.6' "
+        "'io.genegalleon.local_image_tag: 20260304-abcd123'); "
+        'gg_print_version_summary "" "" "$inspect_text"'
+    )
+
+    completed = _run_bash(command, cwd=REPO_ROOT)
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"genegalleon version: {REPO_VERSION}" in completed.stdout
+    assert "container version: 0.4.6 (20260304-abcd123)" in completed.stdout
+    assert (
+        f"WARNING: genegalleon version ({REPO_VERSION}) does not match container version (0.4.6)."
+        in completed.stdout
+    )
+
+
 def test_progress_summary_entrypoint_dispatches_to_docker_shim(tmp_path: Path):
     workspace_dir = tmp_path / "workspace"
     wrapper_bin = tmp_path / "gg_wrapper_bin"
@@ -141,10 +242,49 @@ def test_progress_summary_entrypoint_dispatches_to_docker_shim(tmp_path: Path):
     assert (tmp_path / "call_1.stdin").read_text(encoding="utf-8")
     assert (tmp_path / "call_2.stdin").read_text(encoding="utf-8")
     assert f"genegalleon version: {REPO_VERSION}" in completed.stdout
-    assert "genegalleon.sif version: dev" in completed.stdout
+    assert "container version: dev" in completed.stdout
+    assert "WARNING: genegalleon version" not in completed.stdout
 
     version_logs = sorted((workspace_dir / "output" / "versions").glob("*.log"))
     assert len(version_logs) == 1
     version_log_text = version_logs[0].read_text(encoding="utf-8")
     assert f"genegalleon version: {REPO_VERSION}" in version_log_text
-    assert "genegalleon.sif version: dev" in version_log_text
+    assert "container version: dev" in version_log_text
+    assert "WARNING: genegalleon version" not in version_log_text
+
+
+def test_progress_summary_entrypoint_auto_detects_pulled_public_image_without_runtime_envs(tmp_path: Path):
+    workspace_dir = tmp_path / "workspace"
+    wrapper_bin = tmp_path / "gg_wrapper_bin"
+    workspace_dir.mkdir()
+    bin_dir = _prepare_stub_docker_with_known_images(
+        tmp_path, ["ghcr.io/kfuku52/genegalleon:latest"]
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    env["GG_WRAPPER_BIN"] = str(wrapper_bin)
+    env["GG_SITE_PROFILE"] = "default"
+    env["gg_workspace_dir"] = str(workspace_dir)
+    env.pop("GG_CONTAINER_RUNTIME", None)
+    env.pop("GG_CONTAINER_DOCKER_IMAGE", None)
+
+    completed = subprocess.run(
+        ["bash", str(PROGRESS_ENTRYPOINT)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "container image ref: ghcr.io/kfuku52/genegalleon:latest" in completed.stdout
+    run_call_files = sorted(tmp_path.glob("call_*.args"))
+    assert run_call_files
+    run_calls = [
+        path.read_text(encoding="utf-8").splitlines()
+        for path in run_call_files
+        if path.read_text(encoding="utf-8").splitlines()[:1] == ["run"]
+    ]
+    assert len(run_calls) == 2
+    assert all("ghcr.io/kfuku52/genegalleon:latest" in call for call in run_calls)

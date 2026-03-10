@@ -448,6 +448,59 @@ gg_docker_singularity_shim_path() {
 	printf '%s\n' "${target_shim}"
 }
 
+gg_default_docker_image_candidates() {
+	printf '%s\n' "ghcr.io/kfuku52/genegalleon:latest"
+	printf '%s\n' "local/genegalleon:dev"
+}
+
+gg_docker_image_exists() {
+	local image_ref=${1:-}
+
+	if [[ -z "${image_ref}" ]]; then
+		return 1
+	fi
+	if ! command -v docker >/dev/null 2>&1; then
+		return 1
+	fi
+	docker image inspect "${image_ref}" >/dev/null 2>&1
+}
+
+gg_resolve_docker_image_ref() {
+	local image_ref="${GG_CONTAINER_DOCKER_IMAGE:-${GG_WRAPPER_IMAGE:-}}"
+	local candidate=""
+
+	if [[ -n "${image_ref}" ]]; then
+		printf '%s\n' "${image_ref}"
+		return 0
+	fi
+
+	while IFS= read -r candidate; do
+		[[ -n "${candidate}" ]] || continue
+		if gg_docker_image_exists "${candidate}"; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	done < <(gg_default_docker_image_candidates)
+
+	return 1
+}
+
+gg_auto_enable_docker_runtime_if_available() {
+	local resolved_image_ref=""
+
+	if [[ -z "${GG_CONTAINER_DOCKER_IMAGE:-}" && -z "${GG_WRAPPER_IMAGE:-}" ]]; then
+		if [[ -n "${gg_container_image_path:-}" && -s "${gg_container_image_path}" ]]; then
+			return 1
+		fi
+	fi
+	if ! resolved_image_ref="$(gg_resolve_docker_image_ref)"; then
+		return 1
+	fi
+	export GG_CONTAINER_DOCKER_IMAGE="${resolved_image_ref}"
+	export GG_WRAPPER_IMAGE="${resolved_image_ref}"
+	return 0
+}
+
 gg_apply_named_env_overrides() {
 	local var_name
 	local env_name
@@ -501,6 +554,15 @@ gg_detect_container_runtime_binary() {
 
 	requested_runtime="$(gg_requested_container_runtime)" || return 1
 	if [[ "${requested_runtime}" == "docker" ]]; then
+		shim_path="$(gg_docker_singularity_shim_path)"
+		if [[ ! -x "${shim_path}" ]]; then
+			echo "Docker runtime shim not found or not executable: ${shim_path}" >&2
+			return 1
+		fi
+		echo "${shim_path}"
+		return 0
+	fi
+	if [[ "${requested_runtime}" == "auto" ]] && gg_auto_enable_docker_runtime_if_available; then
 		shim_path="$(gg_docker_singularity_shim_path)"
 		if [[ ! -x "${shim_path}" ]]; then
 			echo "Docker runtime shim not found or not executable: ${shim_path}" >&2
@@ -1752,8 +1814,13 @@ remove_empty_subdirs() {
 
 set_singularity_command() {
   local echo_header="set_singularity_command: "
+  local requested_runtime=""
   local runtime_bin
   local command_display=""
+  requested_runtime="$(gg_requested_container_runtime)" || return 1
+  if [[ "${requested_runtime}" == "docker" || "${requested_runtime}" == "auto" ]]; then
+    gg_auto_enable_docker_runtime_if_available || true
+  fi
   if ! runtime_bin=$(gg_detect_container_runtime_binary); then
     if [[ "${GG_CONTAINER_RUNTIME:-auto}" == "docker" ]]; then
       echo "${echo_header}Docker-backed runtime is unavailable."
@@ -2395,7 +2462,9 @@ gg_print_version_summary() {
   local version_file=""
   local gg_version=""
   local container_image_path=""
+  local container_version_display=""
   local image_version=""
+  local image_version_source="unknown"
   local image_revision=""
   local image_ref=""
   local image_tag=""
@@ -2416,6 +2485,9 @@ gg_print_version_summary() {
   fi
 
   image_version="$(gg_extract_inspect_value "${inspect_text}" "org.opencontainers.image.version" || true)"
+  if [[ -n "${image_version}" ]]; then
+    image_version_source="label"
+  fi
   image_revision="$(gg_extract_inspect_value "${inspect_text}" "org.opencontainers.image.revision" || true)"
   image_ref="$(gg_extract_inspect_value "${inspect_text}" "io.genegalleon.local_image_ref" || true)"
   if [[ -z "${image_ref}" ]]; then
@@ -2427,28 +2499,34 @@ gg_print_version_summary() {
   fi
   if [[ -z "${image_version}" && -n "${image_tag}" ]]; then
     image_version="${image_tag}"
+    image_version_source="tag"
   fi
   if [[ -z "${image_version}" && -n "${image_revision}" ]]; then
     image_version="revision:${image_revision}"
+    image_version_source="revision"
   fi
   if [[ -z "${image_version}" ]]; then
     image_version="unknown"
+  fi
+  container_version_display="${image_version}"
+  if [[ -n "${image_tag}" && "${image_tag}" != "${image_version}" ]]; then
+    container_version_display="${container_version_display} (${image_tag})"
   fi
 
   if [[ -n "${section_title}" ]]; then
     gg_print_section "${section_title}"
   fi
   echo "genegalleon version: ${gg_version}"
-  echo "genegalleon.sif path: ${container_image_path}"
-  echo "genegalleon.sif version: ${image_version}"
-  if [[ -n "${image_ref}" ]]; then
-    echo "genegalleon.sif image ref: ${image_ref}"
+  echo "container version: ${container_version_display}"
+  if [[ "${image_version_source}" == "label" && "${gg_version}" != "unknown" && "${image_version}" != "unknown" && "${gg_version}" != "${image_version}" ]]; then
+    echo "WARNING: genegalleon version (${gg_version}) does not match container version (${image_version})."
   fi
-  if [[ -n "${image_tag}" ]]; then
-    echo "genegalleon.sif image tag: ${image_tag}"
+  echo "container path: ${container_image_path}"
+  if [[ -n "${image_ref}" ]]; then
+    echo "container image ref: ${image_ref}"
   fi
   if [[ -n "${image_revision}" ]]; then
-    echo "genegalleon.sif revision: ${image_revision}"
+    echo "container revision: ${image_revision}"
   fi
   if [[ -n "${section_title}" ]]; then
     gg_print_spacer
