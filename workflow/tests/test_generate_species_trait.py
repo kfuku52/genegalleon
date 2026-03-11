@@ -1,3 +1,4 @@
+import importlib.util
 from pathlib import Path
 import zipfile
 import json
@@ -11,6 +12,15 @@ import pandas
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "generate_species_trait.py"
+
+
+def load_script_module():
+    spec = importlib.util.spec_from_file_location("generate_species_trait_module", SCRIPT_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def run_script(*args):
@@ -692,3 +702,53 @@ def test_generate_species_trait_print_supported_databases():
     assert "database\tacquisition_mode\tretrieval_scope\tnotes" in completed.stdout
     assert "eltontraits\tbulk\tall_species_snapshot" in completed.stdout
     assert "gift\tgift_api\ttrait_subset_api" in completed.stdout
+
+
+def test_aggregate_trait_column_mode_prefers_sorted_value_on_tie():
+    module = load_script_module()
+    plan_row = module.TraitPlanRow(
+        database="gift",
+        source_column="trait_value",
+        output_trait="woodiness",
+        value_type="categorical",
+        aggregation="mode",
+        positive_values=set(),
+        trait_key="1.1.1",
+        trait_key_column="trait_ID",
+    )
+    db_df = pandas.DataFrame(
+        {
+            "__species_norm": ["Homo_sapiens", "Homo_sapiens", "Homo_sapiens", "Mus_musculus"],
+            "trait_value": ["woody", "non-woody", "woody", "non-woody"],
+        }
+    )
+    aggregated = module.aggregate_trait_column(db_df=db_df, plan_row=plan_row)
+    assert aggregated.to_dict() == {
+        "Homo_sapiens": "woody",
+        "Mus_musculus": "non-woody",
+    }
+
+
+def test_aggregate_trait_column_binary_positive_values():
+    module = load_script_module()
+    plan_row = module.TraitPlanRow(
+        database="gift",
+        source_column="is_carnivorous",
+        output_trait="is_carnivorous",
+        value_type="binary",
+        aggregation="any",
+        positive_values={"yes", "present"},
+        trait_key="",
+        trait_key_column="",
+    )
+    db_df = pandas.DataFrame(
+        {
+            "__species_norm": ["Homo_sapiens", "Homo_sapiens", "Mus_musculus", "Mus_musculus"],
+            "is_carnivorous": ["", "yes", "absent", "0"],
+        }
+    )
+    aggregated = module.aggregate_trait_column(db_df=db_df, plan_row=plan_row)
+    assert aggregated.to_dict() == {
+        "Homo_sapiens": 1,
+        "Mus_musculus": 0,
+    }

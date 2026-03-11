@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
-from typing import Dict, List, Optional, Sequence, Set
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 import zipfile
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
@@ -765,6 +765,40 @@ def parse_float_or_default(value: object, default: float) -> float:
         return default
 
 
+def strip_string_series(series: pandas.Series, lower: bool = False) -> pandas.Series:
+    stripped = series.fillna("").astype(str).str.strip()
+    if lower:
+        stripped = stripped.str.lower()
+    return stripped
+
+
+def aggregate_categorical_mode(
+    values: pandas.Series,
+    group_keys: pandas.Series,
+) -> pandas.Series:
+    valid_mask = values != ""
+    if not valid_mask.any():
+        return pandas.Series(dtype=object)
+    counts = (
+        pandas.DataFrame(
+            {
+                "__species_norm": group_keys.loc[valid_mask].to_numpy(),
+                "__value": values.loc[valid_mask].to_numpy(),
+            }
+        )
+        .groupby(["__species_norm", "__value"], observed=True, sort=False)
+        .size()
+        .rename("__count")
+        .reset_index()
+    )
+    counts = counts.sort_values(
+        ["__species_norm", "__count", "__value"],
+        ascending=[True, False, True],
+        kind="mergesort",
+    )
+    return counts.drop_duplicates(subset="__species_norm", keep="first").set_index("__species_norm")["__value"]
+
+
 def fetch_gift_traits_meta_rows(index_url: str, timeout: float) -> List[Dict[str, object]]:
     traits_meta_url = "{}?query=traits_meta".format(index_url)
     rows = json_payload_to_rows(fetch_json_payload(url=traits_meta_url, timeout=timeout))
@@ -987,6 +1021,17 @@ def fetch_gift_api_table(
     if species_map.shape[0] == 0:
         return pandas.DataFrame(columns=["species", "work_ID", "work_species", "trait_ID", "trait_value"])
     work_ids = set(species_map["work_ID"].astype(str).tolist())
+    required_columns: Set[str] = {"agreement"}
+    default_trait_key_column = str(config.get("trait_key_column", "") or "").strip()
+    for plan_row in plan_rows:
+        if plan_row.database != database:
+            continue
+        required_columns.add(plan_row.source_column)
+        if plan_row.trait_key == "":
+            continue
+        trait_key_column = plan_row.trait_key_column or default_trait_key_column or "trait_name"
+        if trait_key_column not in ("trait_ID", "trait_token"):
+            required_columns.add(trait_key_column)
 
     frames: List[pandas.DataFrame] = []
     for trait_token in trait_tokens:
@@ -1006,16 +1051,21 @@ def fetch_gift_api_table(
             rows = json_payload_to_rows(fetch_json_payload(url=traits_url, timeout=timeout))
             if len(rows) == 0:
                 break
-            page_df = pandas.DataFrame(rows)
-            if "work_ID" not in page_df.columns:
+            if not any(isinstance(row, dict) and "work_ID" in row for row in rows):
                 break
-            page_df = page_df.copy()
-            page_df["work_ID"] = page_df["work_ID"].astype(str).str.strip()
-            matched_df = page_df.loc[page_df["work_ID"].isin(work_ids), :].copy()
-            if matched_df.shape[0] > 0:
-                matched_df["trait_ID"] = trait_id
-                matched_df["trait_token"] = trait_token
-                frames.append(matched_df)
+            matched_rows: List[Dict[str, object]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                work_id = str(row.get("work_ID", "") or "").strip()
+                if work_id == "" or work_id not in work_ids:
+                    continue
+                matched_row: Dict[str, object] = {"work_ID": work_id, "trait_ID": trait_id, "trait_token": trait_token}
+                for column in required_columns:
+                    matched_row[column] = row.get(column, "")
+                matched_rows.append(matched_row)
+            if len(matched_rows) > 0:
+                frames.append(pandas.DataFrame.from_records(matched_rows))
             page_index += 1
             if max_pages > 0 and page_index >= max_pages:
                 _log(
@@ -1032,10 +1082,14 @@ def fetch_gift_api_table(
         return pandas.DataFrame(columns=["species", "work_ID", "work_species", "trait_ID", "trait_value"])
 
     merged = pandas.concat(frames, ignore_index=True)
-    species_map = species_map.copy()
-    species_map["work_ID"] = species_map["work_ID"].astype(str)
-    species_map = species_map.loc[:, ["work_ID", "species", "work_species"]].drop_duplicates(subset=["work_ID"])
-    merged = merged.merge(species_map, how="left", on="work_ID")
+    species_lookup = (
+        species_map.loc[:, ["work_ID", "species", "work_species"]]
+        .drop_duplicates(subset=["work_ID"])
+        .assign(work_ID=lambda df: df["work_ID"].astype(str))
+        .set_index("work_ID")
+    )
+    merged["species"] = merged["work_ID"].map(species_lookup["species"])
+    merged["work_species"] = merged["work_ID"].map(species_lookup["work_species"])
 
     if agreement_min is not None and "agreement" in merged.columns:
         agreement_numeric = pandas.to_numeric(merged["agreement"], errors="coerce")
@@ -1151,30 +1205,40 @@ def aggregate_trait_column(
     db_df: pandas.DataFrame,
     plan_row: TraitPlanRow,
 ) -> pandas.Series:
-    grouped = db_df.groupby("__species_norm", observed=True)[plan_row.source_column]
+    group_keys = db_df["__species_norm"]
+    values = db_df[plan_row.source_column]
     if plan_row.value_type == "binary":
-        aggregated = grouped.apply(
-            lambda s: aggregate_binary(
-                values=s,
-                aggregation=plan_row.aggregation,
-                positive_values=plan_row.positive_values,
-            )
-        )
-    elif plan_row.value_type == "categorical":
-        aggregated = grouped.apply(
-            lambda s: aggregate_categorical(
-                values=s,
-                aggregation=plan_row.aggregation,
-            )
-        )
-    else:
-        aggregated = grouped.apply(
-            lambda s: aggregate_numeric(
-                values=s,
-                aggregation=plan_row.aggregation,
-            )
-        )
-    return aggregated
+        if plan_row.positive_values:
+            mapped = strip_string_series(values, lower=True).isin(plan_row.positive_values).astype("int8")
+        else:
+            mapped = (pandas.to_numeric(values, errors="coerce").fillna(0) > 0).astype("int8")
+        grouped = mapped.groupby(group_keys, observed=True, sort=False)
+        if plan_row.aggregation in ("all", "min"):
+            return grouped.min()
+        if plan_row.aggregation == "sum":
+            return grouped.sum()
+        if plan_row.aggregation == "mean":
+            return grouped.mean()
+        return grouped.max()
+
+    if plan_row.value_type == "categorical":
+        normalized = strip_string_series(values)
+        if plan_row.aggregation == "first":
+            valid_mask = normalized != ""
+            if not valid_mask.any():
+                return pandas.Series(dtype=object)
+            return normalized.loc[valid_mask].groupby(group_keys.loc[valid_mask], observed=True, sort=False).first()
+        return aggregate_categorical_mode(values=normalized, group_keys=group_keys)
+
+    numeric = pandas.to_numeric(values, errors="coerce")
+    grouped = numeric.groupby(group_keys, observed=True, sort=False)
+    if plan_row.aggregation == "mean":
+        return grouped.mean()
+    if plan_row.aggregation == "min":
+        return grouped.min()
+    if plan_row.aggregation == "max":
+        return grouped.max()
+    return grouped.median()
 
 
 def validate_species_source(
@@ -1395,6 +1459,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     result = pandas.DataFrame({"species": species_sorted}).set_index("species")
     db_frames: Dict[str, pandas.DataFrame] = {}
     db_configs: Dict[str, Dict[str, str]] = {}
+    trait_key_series_cache: Dict[Tuple[str, str], pandas.Series] = {}
 
     for database in requested_databases:
         config = source_rows.get(database, {})
@@ -1465,10 +1530,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 else:
                     warnings.append(message)
                 continue
-            db_filtered = db_filtered.loc[
-                db_filtered[trait_key_column].astype(str).str.strip() == plan_row.trait_key,
-                :,
-            ]
+            cache_key = (plan_row.database, trait_key_column)
+            trait_key_values = trait_key_series_cache.get(cache_key)
+            if trait_key_values is None:
+                trait_key_values = strip_string_series(db_df[trait_key_column])
+                trait_key_series_cache[cache_key] = trait_key_values
+            db_filtered = db_filtered.loc[trait_key_values == plan_row.trait_key, :]
             if (
                 db_filtered.shape[0] == 0
                 and plan_row.database == "gift"
@@ -1476,10 +1543,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 and "trait_token" in db_df.columns
             ):
                 # Allow GIFT plan rows to use trait names in trait_key while source uses resolved trait_ID.
-                db_filtered = db_df.loc[
-                    db_df["trait_token"].astype(str).str.strip() == plan_row.trait_key,
-                    :,
-                ]
+                cache_key = (plan_row.database, "trait_token")
+                trait_token_values = trait_key_series_cache.get(cache_key)
+                if trait_token_values is None:
+                    trait_token_values = strip_string_series(db_df["trait_token"])
+                    trait_key_series_cache[cache_key] = trait_token_values
+                db_filtered = db_df.loc[trait_token_values == plan_row.trait_key, :]
             if db_filtered.shape[0] == 0:
                 message = "[{}] no rows matched trait_key '{}' in '{}'.".format(
                     plan_row.database,
@@ -1504,15 +1573,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         colname = plan_row.output_trait
         if colname not in result.columns:
             result[colname] = ""
-        for species_name, value in aggregated.items():
-            if species_name not in result.index:
-                continue
-            formatted = format_output_value(value)
-            if formatted == "":
-                continue
-            existing = str(result.at[species_name, colname] or "").strip()
-            if existing == "":
-                result.at[species_name, colname] = formatted
+        formatted = aggregated.map(format_output_value)
+        formatted = formatted.loc[formatted != ""]
+        if formatted.shape[0] > 0:
+            empty_mask = result[colname] == ""
+            if empty_mask.any():
+                result.loc[empty_mask, colname] = formatted.reindex(result.index[empty_mask], fill_value="")
 
     if len(errors) > 0:
         for message in errors:
@@ -1523,10 +1589,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     trait_columns = [col for col in output_df.columns if col != "species"]
     num_species_with_any_trait = 0
     if len(trait_columns) > 0:
-        has_any = output_df.loc[:, trait_columns].astype(str).apply(
-            lambda row: any(value.strip() != "" for value in row.tolist()),
-            axis=1,
-        )
+        has_any = output_df.loc[:, trait_columns].ne("").any(axis=1)
         num_species_with_any_trait = int(has_any.sum())
 
     if args.strict and len(trait_columns) == 0:
