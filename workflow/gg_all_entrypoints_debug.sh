@@ -8,7 +8,7 @@ set -euo pipefail
 #     -> gg_gene_evolution_entrypoint.sh (mode_gene_evolution=orthogroup)
 #     -> gg_gene_evolution_entrypoint.sh (mode_gene_evolution=query2family)
 #     -> gg_gene_database_entrypoint.sh
-#     -> gg_gene_convergence_entrypoint.sh
+#     -> gg_convergent_sites_entrypoint.sh
 #
 # Other entrypoints are executed around this chain so all entrypoints are covered.
 
@@ -108,7 +108,7 @@ check_step_prerequisites() {
         return 1
       fi
       ;;
-    gg_gene_convergence)
+    gg_convergent_sites)
       if [[ ! -s "${file_orthogroup_db}" ]]; then
         prereq_fail_reason="missing required database: ${file_orthogroup_db}"
         return 1
@@ -199,7 +199,7 @@ ordered_steps=(
   "gg_gene_evolution_mode_orthogroup|gg_gene_evolution_entrypoint.sh|mode_gene_evolution=orthogroup run_hyphy_relax=0 run_hyphy_relax_reversed=0"
   "gg_gene_evolution_mode_query2family|gg_gene_evolution_entrypoint.sh|mode_gene_evolution=query2family run_hyphy_relax=0 run_hyphy_relax_reversed=0"
   "gg_gene_database|gg_gene_database_entrypoint.sh|"
-  "gg_gene_convergence|gg_gene_convergence_entrypoint.sh|"
+  "gg_convergent_sites|gg_convergent_sites_entrypoint.sh|"
   "gg_progress_summary|gg_progress_summary_entrypoint.sh|"
 )
 

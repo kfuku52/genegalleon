@@ -57,7 +57,7 @@ The startup log prints a runtime summary that shows:
 These wrappers are intended to run as one task:
 
 - `gg_input_generation_entrypoint.sh`
-- `gg_gene_convergence_entrypoint.sh`
+- `gg_convergent_sites_entrypoint.sh`
 - `gg_gene_database_entrypoint.sh`
 - `gg_genome_evolution_entrypoint.sh`
 - `gg_progress_summary_entrypoint.sh`

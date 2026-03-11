@@ -5,7 +5,7 @@ gg_print_entrypoint_config_vars() {
   local entrypoint_name=${1:-}
 
   case "${entrypoint_name}" in
-    gg_gene_convergence_entrypoint.sh)
+    gg_convergent_sites_entrypoint.sh)
       cat <<'EOF'
 arity_range
 dir_orthofinder

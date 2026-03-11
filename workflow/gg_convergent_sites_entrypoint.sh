@@ -7,12 +7,12 @@
 
 # SLURM
 # Common parameters: job name, cores per task, memory per core, walltime, log files, and working directory.
-#SBATCH -J gg_gene_convergence
+#SBATCH -J gg_convergent_sites
 #SBATCH -c 8
 #SBATCH --mem-per-cpu=32G
 #SBATCH -t 60-00:00:00
-#SBATCH --output=gg_gene_convergence_entrypoint.sh_%j.out
-#SBATCH --error=gg_gene_convergence_entrypoint.sh_%j.err
+#SBATCH --output=gg_convergent_sites_entrypoint.sh_%j.out
+#SBATCH --error=gg_convergent_sites_entrypoint.sh_%j.err
 #SBATCH --chdir=.
 #SBATCH --ignore-pbs
 # Site-specific partition example.
@@ -71,7 +71,7 @@ fi
 if ! gg_entrypoint_initialize "${BASH_SOURCE[0]}" 0; then
   exit 1
 fi
-gg_entrypoint_name="gg_gene_convergence_entrypoint.sh"
+gg_entrypoint_name="gg_convergent_sites_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
@@ -107,7 +107,7 @@ fi
 gg_entrypoint_activate_container_runtime
 
 gg_entrypoint_enter_workspace
-gg_run_container_shell_script "${gg_container_image_path}" "${gg_core_dir}/gg_gene_convergence_core.sh"
+gg_run_container_shell_script "${gg_container_image_path}" "${gg_core_dir}/gg_convergent_sites_core.sh"
 gg_require_versions_dump "${gg_entrypoint_name}"
 
 echo "$(date): Ending"

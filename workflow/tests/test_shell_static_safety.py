@@ -718,8 +718,8 @@ def test_ensure_latest_jaspar_file_uses_set_e_safe_assignments():
     assert unsafe_ensure.search(body) is None
 
 
-def test_gene_convergence_entrypoint_forwards_plot_runtime_envs():
-    entrypoint = WORKFLOW_DIR / "gg_gene_convergence_entrypoint.sh"
+def test_convergent_sites_entrypoint_forwards_plot_runtime_envs():
+    entrypoint = WORKFLOW_DIR / "gg_convergent_sites_entrypoint.sh"
     text = _read_text(entrypoint)
 
     assert 'gg_export_var_to_container_env_if_set "PYMOL_HEADLESS"' in text
@@ -1016,8 +1016,8 @@ def test_entrypoints_forward_cleanup_flags_defined_outside_config_block():
         assert token in text, f"Missing cleanup var forwarding in {script_name}: {token}"
 
 
-def test_gene_convergence_entrypoint_does_not_define_unused_delete_tmp_dir():
-    text = _read_text(WORKFLOW_DIR / "gg_gene_convergence_entrypoint.sh")
+def test_convergent_sites_entrypoint_does_not_define_unused_delete_tmp_dir():
+    text = _read_text(WORKFLOW_DIR / "gg_convergent_sites_entrypoint.sh")
     assert "delete_tmp_dir=" not in text
 
 
@@ -1040,7 +1040,7 @@ def test_genome_evolution_core_prints_effective_config_summary():
 
 def test_entrypoints_with_exit_if_running_call_duplicate_guard():
     scripts = [
-        "gg_gene_convergence_entrypoint.sh",
+        "gg_convergent_sites_entrypoint.sh",
         "gg_genome_annotation_entrypoint.sh",
         "gg_gene_evolution_entrypoint.sh",
     ]

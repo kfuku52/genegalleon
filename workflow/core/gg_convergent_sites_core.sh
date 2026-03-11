@@ -10,7 +10,7 @@ source "${gg_core_bootstrap}"
 unset gg_core_bootstrap
 
 ### Start: Job-supplied configuration ###
-# Configuration variables are provided by gg_gene_convergence_entrypoint.sh.
+# Configuration variables are provided by gg_convergent_sites_entrypoint.sh.
 ### End: Job-supplied configuration ###
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1

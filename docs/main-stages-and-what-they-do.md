@@ -300,7 +300,7 @@ Note:
 - this stage runs `workflow/core/gg_progress_summary_core.sh` inside the container.
 - orthogroup summary generation is skipped when the selected gene-count table or AMAS directories are absent.
 
-### `gg_gene_convergence_entrypoint.sh`
+### `gg_convergent_sites_entrypoint.sh`
 
 Purpose:
 

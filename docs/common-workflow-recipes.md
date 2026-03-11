@@ -172,7 +172,7 @@ After orthogroup outputs and the database are available:
 
 ```bash
 cd workflow
-bash gg_gene_convergence_entrypoint.sh
+bash gg_convergent_sites_entrypoint.sh
 ```
 
 Default prerequisites:
@@ -211,7 +211,7 @@ Not every project needs every step, but the common broad order is:
 6. run `gg_genome_evolution_entrypoint.sh`
 7. run `gg_gene_evolution_entrypoint.sh` in the mode you need
 8. optionally run `gg_gene_database_entrypoint.sh`
-9. optionally run `gg_gene_convergence_entrypoint.sh`
+9. optionally run `gg_convergent_sites_entrypoint.sh`
 10. optionally run `gg_progress_summary_entrypoint.sh`
 
 ## 11. Dry-run and debug the full wrapper chain
