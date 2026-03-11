@@ -2765,7 +2765,7 @@ if [[ ! -s "${file_og_iqtree_anc}" && ${run_iqtree_anc} -eq 1 ]]; then
   gg_step_start "${task}"
 
   shopt -s nullglob
-  csubst_cleanup_paths=(csubst.*)
+  csubst_cleanup_paths=(csubst.* csubst_search)
   shopt -u nullglob
   if [[ ${#csubst_cleanup_paths[@]} -gt 0 ]]; then
     rm -rf -- "${csubst_cleanup_paths[@]}"
@@ -2853,10 +2853,10 @@ if [[ (! -s "${file_og_csubst_b}" || ! -s "${file_og_csubst_cb_stats}") && ${run
   fi
   unzip -q "${file_og_iqtree_anc}"
   csubst_input_base="./${og_id}.iqtree.anc/csubst"
+  csubst_search_dir="csubst_search"
 
-  csubst analyze \
+  csubst search \
     --genetic_code "${genetic_code}" \
-    --infile_type "iqtree" \
     --alignment_file "${csubst_input_base}.fasta" \
     --rooted_tree_file "${csubst_input_base}.nwk" \
     --iqtree_treefile "${csubst_input_base}.treefile" \
@@ -2865,39 +2865,49 @@ if [[ (! -s "${file_og_csubst_b}" || ! -s "${file_og_csubst_cb_stats}") && ${run
     --iqtree_iqtree "${csubst_input_base}.iqtree" \
     --iqtree_log "${csubst_input_base}.log" \
     --iqtree_model "${codon_model}" \
-    --iqtree_redo "no" \
     --max_arity "${csubst_max_arity}" \
     --exhaustive_until "${csubst_exhaustive_until}" \
     --cutoff_stat "${csubst_cutoff_stat}" \
     --max_combination "${csubst_max_combination}" \
     --fg_exclude_wg "${csubst_fg_exclude_wg}" \
     --fg_stem_only "${csubst_fg_stem_only}" \
-    --mg_sister "no" \
-    --exclude_sister_pair "yes" \
-    --ml_anc "no" \
-    --b "yes" \
-    --s "no" \
-    --cs "no" \
-    --cb "yes" \
-    --bs "no" \
-    --cbs "no" \
     --calc_quantile "no" \
     --omegaC_method "submodel" \
-    --asrv "each" \
     --threads "${GG_TASK_CPUS}" \
-    --calibrate_longtail "yes" \
     --float_type 32 \
     "${foreground_params[@]}"
 
-  if [[ -s csubst_cb_stats.tsv ]]; then
+  csubst_b_src=""
+  csubst_cb_stats_src=""
+  for candidate in "${csubst_search_dir}/csubst_b.tsv" "csubst_b.tsv"; do
+    if [[ -s "${candidate}" ]]; then
+      csubst_b_src="${candidate}"
+      break
+    fi
+  done
+  for candidate in "${csubst_search_dir}/csubst_cb_stats.tsv" "csubst_cb_stats.tsv"; do
+    if [[ -s "${candidate}" ]]; then
+      csubst_cb_stats_src="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -n "${csubst_b_src}" && -n "${csubst_cb_stats_src}" ]]; then
     echo "CSUBST was successful."
-    mv_out csubst_b.tsv "${file_og_csubst_b}"
-    mv_out csubst_cb_stats.tsv "${file_og_csubst_cb_stats}"
+    mv_out "${csubst_b_src}" "${file_og_csubst_b}"
+    mv_out "${csubst_cb_stats_src}" "${file_og_csubst_cb_stats}"
     if [[ ${csubst_max_arity} -gt 2 ]]; then
       for ((i = 2; i <= csubst_max_arity; i++)); do
-        if [[ -e "csubst_cb_${i}.tsv" ]]; then
+        csubst_cb_src=""
+        for candidate in "${csubst_search_dir}/csubst_cb_${i}.tsv" "csubst_cb_${i}.tsv"; do
+          if [[ -e "${candidate}" ]]; then
+            csubst_cb_src="${candidate}"
+            break
+          fi
+        done
+        if [[ -n "${csubst_cb_src}" ]]; then
           my_csubst_file=file_og_csubst_cb_${i}
-          mv_out csubst_cb_"${i}".tsv "${!my_csubst_file}"
+          mv_out "${csubst_cb_src}" "${!my_csubst_file}"
         fi
       done
     fi

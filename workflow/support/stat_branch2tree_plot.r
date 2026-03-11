@@ -117,7 +117,7 @@ for (Rfile in Rfiles) {
 # FOREGROUND_ONLY: 'yes' or 'no'. If 'yes', limit the visualization to the foreground taxa.
 # ARITY: Minimum-Maximum arity (K) to visualize. e.g. 3-10.
 # CB_PATH: PATH to the csubst_cb_?.tsv. If arity is specified as "ARITY", this script automatically finds the cb files for higher-order convergence.
-# CUTOFF_STAT: Minimum convergence statistics to visualize. See csubst analyze --cutoff_stat.
+# CUTOFF_STAT: Minimum convergence statistics to visualize. See csubst search --cutoff_stat.
 
 # --show_branch_id: 'yes' or 'no'. Whether to show branch_id (a.k.a., 'branch_id') on depicted branches.
 

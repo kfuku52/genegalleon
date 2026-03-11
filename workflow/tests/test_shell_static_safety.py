@@ -2479,6 +2479,38 @@ def test_support_python_scalar_conditions_use_logical_and_not_bitwise_and():
     assert "os.path.exists(dir_out) and (not os.path.exists(out_zip))" in csubst_wrapper
 
 
+def test_gene_evolution_core_uses_csubst_search_namespace():
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    assert "csubst analyze \\" not in core
+    assert 'csubst search \\' in core
+    assert 'csubst_search_dir="csubst_search"' in core
+    assert '"${csubst_search_dir}/csubst_cb_stats.tsv"' in core
+    for redundant_flag in [
+        '--infile_type "iqtree"',
+        '--iqtree_redo "no"',
+        '--mg_sister "no"',
+        '--exclude_sister_pair "yes"',
+        '--ml_anc "no"',
+        '--b "yes"',
+        '--s "no"',
+        '--cs "no"',
+        '--cb "yes"',
+        '--bs "no"',
+        '--cbs "no"',
+        '--asrv "each"',
+        '--calibrate_longtail "yes"',
+        '--outdir "${csubst_search_dir}"',
+    ]:
+        assert redundant_flag not in core
+
+
+def test_csubst_site_wrapper_omits_redundant_sites_defaults():
+    wrapper = _read_text(WORKFLOW_DIR / "support" / "csubst_site_wrapper.py")
+    assert "cmd = ['csubst', 'sites']" in wrapper
+    assert "cmd += ['--ml_anc', 'no']" not in wrapper
+    assert "cmd += ['--mafft_exe', 'mafft']" not in wrapper
+
+
 def test_is_fastq_requiring_downstream_analysis_done_quotes_path_checks():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)

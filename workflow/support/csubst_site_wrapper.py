@@ -144,7 +144,7 @@ def combine_pdfs(pdf_file_paths, output_path):
     return None
 
 def extract_pdb_id(indir):
-    pattern = re.compile(r'^csubst_site\.([^.]+)\.fa$')
+    pattern = re.compile(r'^csubst_sites?\.([^.]+)\.fa$')
     if not os.path.isdir(indir):
         print(f"PDB ID search directory not found: {indir}", flush=True)
         return None
@@ -156,6 +156,174 @@ def extract_pdb_id(indir):
             return pdb_id
     print(f"PDB ID not found in: {indir}", flush=True)
     return None
+
+
+def get_site_dir_candidates(dir_out_og, branch_id_str):
+    return [
+        os.path.join(dir_out_og, 'csubst_sites.branch_id' + branch_id_str),
+        os.path.join(dir_out_og, 'csubst_site.branch_id' + branch_id_str),
+    ]
+
+
+def resolve_site_output_dir(dir_out_og, branch_id_str):
+    candidates = get_site_dir_candidates(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            return candidate
+    return candidates[0]
+
+
+def load_site_output_manifest(site_dir):
+    manifest_candidates = [
+        os.path.join(site_dir, 'csubst_sites.outputs.tsv'),
+        os.path.join(site_dir, 'csubst_site.outputs.tsv'),
+    ]
+    manifest_path = resolve_existing_path(manifest_candidates)
+    if manifest_path is None:
+        return None
+    return pandas.read_csv(manifest_path, sep='\t', header=0, index_col=None)
+
+
+def resolve_manifest_output_path(site_dir, row):
+    output_path = str(row.get('output_path', '')).strip()
+    if output_path not in ('', 'nan'):
+        if os.path.isabs(output_path):
+            return output_path
+        return os.path.join(site_dir, output_path)
+    output_file = str(row.get('output_file', '')).strip()
+    if output_file not in ('', 'nan'):
+        return os.path.join(site_dir, output_file)
+    return None
+
+
+def find_site_output_from_manifest(manifest_df, site_dir, output_kinds):
+    if manifest_df is None:
+        return None
+    if 'output_kind' not in manifest_df.columns:
+        return None
+    if isinstance(output_kinds, str):
+        output_kinds = [output_kinds]
+    manifest_df = manifest_df.copy()
+    if 'file_exists' in manifest_df.columns:
+        is_existing = manifest_df['file_exists'].astype(str).str.upper().isin({'Y', 'YES', 'TRUE', '1'})
+        manifest_df = manifest_df.loc[is_existing, :].reset_index(drop=True)
+    for output_kind in output_kinds:
+        rows = manifest_df.loc[manifest_df['output_kind'].astype(str) == str(output_kind), :]
+        for _, row in rows.iterrows():
+            output_path = resolve_manifest_output_path(site_dir=site_dir, row=row)
+            if (output_path is not None) and os.path.exists(output_path):
+                return output_path
+    return None
+
+
+def find_first_matching_file(site_dir, glob_patterns, exclude_predicate=None):
+    for glob_pattern in glob_patterns:
+        for candidate in sorted(glob.glob(os.path.join(site_dir, glob_pattern))):
+            if exclude_predicate is not None and exclude_predicate(candidate):
+                continue
+            if os.path.isfile(candidate):
+                return candidate
+    return None
+
+
+def is_auxiliary_site_tsv(path):
+    basename = os.path.basename(path)
+    return (
+        basename.endswith('.outputs.tsv')
+        or basename.endswith('.state_N.tsv')
+        or basename.endswith('.state_S.tsv')
+        or '.tree_site.' in basename
+    )
+
+
+def is_auxiliary_site_pdf(path):
+    basename = os.path.basename(path)
+    return (
+        basename.endswith('.pymol.pdf')
+        or basename.endswith('.state.pdf')
+        or '.tree_site.' in basename
+    )
+
+
+def resolve_site_artifacts(dir_out_og, branch_id_str):
+    site_dir = resolve_site_output_dir(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
+    manifest_df = load_site_output_manifest(site_dir=site_dir)
+    pdb_id = extract_pdb_id(indir=site_dir)
+
+    site_table_candidates = []
+    site_summary_pdf_candidates = []
+    pymol_pdf_candidates = []
+    if pdb_id is not None:
+        site_table_candidates.extend([
+            os.path.join(site_dir, f'csubst_sites.{pdb_id}.tsv'),
+            os.path.join(site_dir, f'csubst_site.{pdb_id}.tsv'),
+        ])
+        site_summary_pdf_candidates.extend([
+            os.path.join(site_dir, f'csubst_sites.{pdb_id}.pdf'),
+            os.path.join(site_dir, f'csubst_site.{pdb_id}.pdf'),
+        ])
+        pymol_pdf_candidates.extend([
+            os.path.join(site_dir, f'csubst_sites.{pdb_id}.pymol.pdf'),
+            os.path.join(site_dir, f'csubst_site.{pdb_id}.pymol.pdf'),
+        ])
+    site_table_candidates.extend([
+        os.path.join(site_dir, 'csubst_sites.tsv'),
+        os.path.join(site_dir, 'csubst_site.tsv'),
+    ])
+    site_summary_pdf_candidates.extend([
+        os.path.join(site_dir, 'csubst_sites.pdf'),
+        os.path.join(site_dir, 'csubst_site.pdf'),
+    ])
+
+    site_table_tsv = find_site_output_from_manifest(
+        manifest_df=manifest_df,
+        site_dir=site_dir,
+        output_kinds=['site_table_tsv'],
+    )
+    if site_table_tsv is None:
+        site_table_tsv = resolve_existing_path(site_table_candidates)
+    if site_table_tsv is None:
+        site_table_tsv = find_first_matching_file(
+            site_dir=site_dir,
+            glob_patterns=['csubst_sites*.tsv', 'csubst_site*.tsv'],
+            exclude_predicate=is_auxiliary_site_tsv,
+        )
+
+    site_summary_pdf = find_site_output_from_manifest(
+        manifest_df=manifest_df,
+        site_dir=site_dir,
+        output_kinds=['site_summary_pdf'],
+    )
+    if site_summary_pdf is None:
+        site_summary_pdf = resolve_existing_path(site_summary_pdf_candidates)
+    if site_summary_pdf is None:
+        site_summary_pdf = find_first_matching_file(
+            site_dir=site_dir,
+            glob_patterns=['csubst_sites*.pdf', 'csubst_site*.pdf'],
+            exclude_predicate=is_auxiliary_site_pdf,
+        )
+
+    pymol_summary_pdf = find_site_output_from_manifest(
+        manifest_df=manifest_df,
+        site_dir=site_dir,
+        output_kinds=['pymol_summary_pdf'],
+    )
+    if pymol_summary_pdf is None:
+        pymol_summary_pdf = resolve_existing_path(pymol_pdf_candidates)
+    if pymol_summary_pdf is None:
+        pymol_summary_pdf = find_first_matching_file(
+            site_dir=site_dir,
+            glob_patterns=['csubst_sites*.pymol.pdf', 'csubst_site*.pymol.pdf'],
+        )
+
+    return {
+        'site_dir': site_dir,
+        'manifest_df': manifest_df,
+        'pdb_id': pdb_id,
+        'site_table_tsv': site_table_tsv,
+        'site_summary_pdf': site_summary_pdf,
+        'pymol_summary_pdf': pymol_summary_pdf,
+    }
 
 def get_annotation_text(og, arity, branch_id_str, trait, min_OCNany2spe, min_omegaCany2spe, min_OCNCoD, besthit_values):
     if besthit_values is None:
@@ -213,36 +381,29 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, an
         print(f'Skipped. Outfile already exists: {file_summary}', flush=True)
         return og, None
     try:
-        # Find csubst_site output tsv: csubst_site.tsv or csubst_site.<pdb_id>.tsv
-        dir_csubst_site = os.path.join(dir_out_og, 'csubst_site.branch_id'+branch_id_str)
-        file_csubst_out_candidates = glob.glob(os.path.join(dir_csubst_site, 'csubst_site*.tsv'))
-        # Exclude known fixed filenames
-        exclude_files = {'csubst_site.state_N.tsv', 'csubst_site.state_S.tsv'}
-        file_csubst_out_list = [f for f in file_csubst_out_candidates if os.path.basename(f) not in exclude_files]
-        file_csubst_out = file_csubst_out_list[0] if file_csubst_out_list else None
+        artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
+        file_csubst_out = artifacts['site_table_tsv']
         if file_csubst_out is not None and os.path.exists(file_csubst_out):
-            print(f'Skipped csubst site. Outfile already exists: {file_csubst_out}', flush=True)
+            print(f'Skipped csubst sites. Outfile already exists: {file_csubst_out}', flush=True)
         else:
-            print(f'Running csubst site. Output file not found: {file_csubst_out}', flush=True)
+            print(f'Running csubst sites. Output file not found: {file_csubst_out}', flush=True)
             path_iqtree_zip = os.path.join(dir_iqtree_anc, og+'.iqtree.anc.zip')
             with zipfile.ZipFile(path_iqtree_zip, "r") as zip_ref:
                 zip_ref.extractall(dir_out_og)
-            cmd = ['csubst', 'site']
+            cmd = ['csubst', 'sites']
             cmd += ['--alignment_file', os.path.join(og+'.iqtree.anc', 'csubst.fasta')]
             cmd += ['--rooted_tree_file', os.path.join(og+'.iqtree.anc', 'csubst.nwk')]
             cmd += ['--branch_id', branch_id_str]
-            cmd += ['--ml_anc', 'no']
             cmd += ['--threads', str(max(1, int(ncpu)))]
             cmd += ['--iqtree_treefile', iqtree_tree_file]
             cmd += ['--iqtree_state', iqtree_state_file]
             cmd += ['--iqtree_rate', iqtree_rate_file]
             cmd += ['--iqtree_iqtree', iqtree_iqtree_file]
             cmd += ['--iqtree_log', iqtree_log_file]
-            cmd += ['--mafft_exe', 'mafft']
             cmd += ['--pdb', 'besthit']
             print('COMMAND: {}'.format(' '.join(cmd)), flush=True)
             subprocess.run(cmd, check=True)
-        print(f'{datetime.datetime.now()}: csubst site done: {og}', flush=True)
+        print(f'{datetime.datetime.now()}: csubst sites done: {og}', flush=True)
         file_tree_plot = os.path.join(dir_out_og, og+'.tree_plot.pdf')
         if os.path.exists(file_tree_plot):
             print(f'Tree plot skipped: outfile already exists: {file_tree_plot}', flush=True)
@@ -262,27 +423,15 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, an
         else:
             print(f'Generating annotation text: annotation_text.pdf for {og}', flush=True)
             create_pdf(annotation_text, 'annotation_text.pdf')
-        pdb_id = extract_pdb_id(indir=os.path.join(dir_out_og, 'csubst_site.branch_id'+branch_id_str))
-        path_pymol_pdf = os.path.join(dir_out_og, 'csubst_site.branch_id'+branch_id_str, f'csubst_site.{pdb_id}.pymol.pdf') if pdb_id is not None else None
-        if pdb_id is None:
-            pdf_file_paths = [
-                os.path.join(dir_out_og, 'csubst_site.branch_id'+branch_id_str, f'csubst_site.pdf'),
-                file_tree_plot,
-                'annotation_text.pdf',
-            ]
-        elif not os.path.exists(path_pymol_pdf):
-            pdf_file_paths = [
-                os.path.join(dir_out_og, 'csubst_site.branch_id'+branch_id_str, f'csubst_site.{pdb_id}.pdf'),
-                file_tree_plot,
-                'annotation_text.pdf',
-            ]
-        else:
-            pdf_file_paths = [
-                os.path.join(dir_out_og, 'csubst_site.branch_id'+branch_id_str, f'csubst_site.{pdb_id}.pdf'),
-                os.path.join(dir_out_og, 'csubst_site.branch_id'+branch_id_str, f'csubst_site.{pdb_id}.pymol.pdf'),
-                file_tree_plot,
-                'annotation_text.pdf',
-            ]
+        artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
+        if artifacts['site_summary_pdf'] is None:
+            raise FileNotFoundError(
+                f'CSUBST site-summary PDF was not found in {artifacts["site_dir"]}.'
+            )
+        pdf_file_paths = [artifacts['site_summary_pdf']]
+        if artifacts['pymol_summary_pdf'] is not None and os.path.exists(artifacts['pymol_summary_pdf']):
+            pdf_file_paths.append(artifacts['pymol_summary_pdf'])
+        pdf_file_paths.extend([file_tree_plot, 'annotation_text.pdf'])
         combine_pdfs(pdf_file_paths, output_path=file_summary)
         remove_files = [
             'tmp.csubst.sub_tensor.S.mmap',
@@ -404,11 +553,12 @@ def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, d
     file_og_rpsblast = os.path.join(dir_og, 'rpsblast', og+'.rpsblast.tsv')
     file_og_alignment = get_alignment_for_tree_plot(dir_og=dir_og, og=og, dir_out_og=dir_out_og)
     file_csubst_input_fasta = os.path.join(dir_out_og, og+'.iqtree.anc', 'csubst.fasta')
-    pdb_id = extract_pdb_id(indir=os.path.join(dir_out_og, 'csubst_site.branch_id'+branch_id_str))
-    if pdb_id is None:
-        file_csubst_site_tsv = os.path.join(dir_out_og, 'csubst_site.branch_id'+branch_id_str, f'csubst_site.tsv')
-    else:
-        file_csubst_site_tsv = os.path.join(dir_out_og, 'csubst_site.branch_id'+branch_id_str, f'csubst_site.{pdb_id}.tsv')
+    artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
+    file_csubst_site_tsv = artifacts['site_table_tsv']
+    if file_csubst_site_tsv is None:
+        raise FileNotFoundError(
+            f'CSUBST site table was not found in {artifacts["site_dir"]}.'
+        )
     df_csubst_site = pandas.read_csv(file_csubst_site_tsv, sep='\t', header=0, index_col=None)
     convergent_sites = df_csubst_site.loc[(df_csubst_site['OCNany2spe'] > 0.5), 'codon_site_alignment'].tolist()
     convergent_site_str = ':'.join([ str(cs) for cs in convergent_sites ])
