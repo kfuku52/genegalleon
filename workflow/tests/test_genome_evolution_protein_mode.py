@@ -5,6 +5,7 @@ import shlex
 import stat
 import subprocess
 
+import pandas
 import pytest
 
 
@@ -342,6 +343,112 @@ PY
 """,
     )
 
+    _write_executable(
+        bin_dir / "omamer",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+capture_dir={shlex.quote(str(capture_dir))}
+subcommand="${{1:-}}"
+if [[ "${{subcommand}}" != "search" ]]; then
+  echo "Unsupported omamer subcommand: ${{subcommand}}" >&2
+  exit 1
+fi
+shift
+db=""
+query=""
+outfile=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --db)
+      db="$2"
+      shift 2
+      ;;
+    --query)
+      query="$2"
+      shift 2
+      ;;
+    --out)
+      outfile="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [[ -z "${{db}}" || -z "${{query}}" || -z "${{outfile}}" ]]; then
+  echo "omamer search stub requires --db, --query, and --out" >&2
+  exit 1
+fi
+if [[ ! -s "${{db}}" ]]; then
+  echo "OMAmer DB not found: ${{db}}" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "${{outfile}}")"
+printf '%s\\n' "${{db}}" >> "${{capture_dir}}/omamer_db_paths.txt"
+printf '%s\\n' "${{query}}" >> "${{capture_dir}}/omamer_queries.txt"
+printf '# query\\thog\\tscore\\n%s\\tHOG:0000001\\t100\\n' "$(basename "${{query}}")" > "${{outfile}}"
+""",
+    )
+
+    _write_executable(
+        bin_dir / "omark",
+        """#!/usr/bin/env python3
+import pathlib
+import sys
+
+
+def main():
+    args = sys.argv[1:]
+    omamer_file = ""
+    db = ""
+    outdir = ""
+    idx = 0
+    while idx < len(args):
+        arg = args[idx]
+        if arg == "-f":
+            omamer_file = args[idx + 1]
+            idx += 2
+        elif arg == "-d":
+            db = args[idx + 1]
+            idx += 2
+        elif arg == "-o":
+            outdir = args[idx + 1]
+            idx += 2
+        else:
+            idx += 1
+    if not omamer_file or not db or not outdir:
+        raise SystemExit("omark stub requires -f, -d, and -o")
+    if not pathlib.Path(db).exists():
+        raise SystemExit(f"OMArk DB not found: {db}")
+
+    outdir_path = pathlib.Path(outdir)
+    outdir_path.mkdir(parents=True, exist_ok=True)
+    base = pathlib.Path(omamer_file).stem
+    (outdir_path / f"{base}.sum").write_text(
+        "#The selected clade was Viridiplantae\\n"
+        "#Number of conserved HOGs is: 100\\n"
+        "#Results on conserved HOGs is:\\n"
+        "#S:Single:S, D:Duplicated[U:Unexpected,E:Expected],M:Missing\\n"
+        "S:95,D:3[U:1,E:2],M:2\\n"
+        "S:95.00%,D:3.00%[U:1.00%,E:2.00%],M:2.00%\\n"
+        "#On the whole proteome, there are 1000 proteins\\n"
+        "#Of which:\\n"
+        "#A:Consistent (taxonomically)[P:Partial hits,F:Fragmented], I: Inconsistent (taxonomically)[P:Partial hits,F:Fragmented], C: Likely Contamination[P:Partial hits,F:Fragmented], U: Unknown \\n"
+        "A:900[P:10,F:5],I:50[P:3,F:2],C:20[P:1,F:1],U:30\\n"
+        "A:90.00%[P:1.00%,F:0.50%],I:5.00%[P:0.30%,F:0.20%],C:2.00%[P:0.10%,F:0.10%],U:3.00%\\n"
+        "#From HOG placement, the detected species are:\\n"
+        "#Clade\\tNCBI taxid\\tNumber of associated proteins\\tPercentage of proteome's total\\n"
+        "Arabidopsis thaliana\\t3702\\t800\\t80.0%\\n",
+        encoding="utf-8",
+    )
+
+
+if __name__ == "__main__":
+    main()
+""",
+    )
+
     return bin_dir
 
 
@@ -369,7 +476,7 @@ def _load_entrypoint_defaults() -> dict[str, str]:
     return defaults
 
 
-def _run_core(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def _run_core(tmp_path: Path, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     bin_dir = _prepare_stub_binaries(tmp_path)
@@ -391,6 +498,8 @@ def _run_core(tmp_path: Path) -> subprocess.CompletedProcess[str]:
             "input_sequence_mode": "protein",
             "run_species_busco": "0",
             "run_species_get_busco_summary": "0",
+            "run_species_omark": "0",
+            "run_species_get_omark_summary": "1",
             "run_individual_get_fasta": "0",
             "run_individual_mafft": "0",
             "run_individual_trimal": "0",
@@ -429,6 +538,8 @@ def _run_core(tmp_path: Path) -> subprocess.CompletedProcess[str]:
             "target_branch_go": "",
         }
     )
+    if extra_env:
+        env.update(extra_env)
 
     command = (
         "set -euo pipefail; "
@@ -517,3 +628,42 @@ def test_genome_evolution_protein_mode_translates_species_cds_with_species_speci
     assert ">Arabidopsis_thaliana_gene1" in proteins
     assert "MQ" in proteins
     assert "M*" in proteins
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_omark_auto_downloads_database_and_summarizes_results(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_protein_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEPTIDE\n",
+        encoding="utf-8",
+    )
+
+    fake_db_source = tmp_path / "LUCA.h5"
+    fake_db_source.write_text("fake omamer database\n", encoding="utf-8")
+
+    completed = _run_core(
+        tmp_path,
+        extra_env={
+            "run_species_omark": "1",
+            "run_species_get_omark_summary": "1",
+            "run_orthofinder": "0",
+            "GG_OMARK_DB_URL": fake_db_source.resolve().as_uri(),
+        },
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    runtime_db = workspace / "downloads" / "omark" / "LUCA.h5"
+    assert runtime_db.exists()
+    assert runtime_db.read_text(encoding="utf-8") == "fake omamer database\n"
+
+    omark_summary = workspace / "output" / "genome_evolution" / "omark_summary_table" / "omark_summary.tsv"
+    assert omark_summary.exists()
+    summary_df = pandas.read_csv(omark_summary, sep="\t")
+    assert summary_df.shape[0] == 1
+    assert summary_df.loc[0, "species"] == "Arabidopsis_thaliana"
+    assert summary_df.loc[0, "top_detected_taxid"] == 3702
+
+    omamer_db_paths = (tmp_path / "capture" / "omamer_db_paths.txt").read_text(encoding="utf-8").splitlines()
+    assert omamer_db_paths == [str(runtime_db)]

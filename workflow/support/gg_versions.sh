@@ -95,6 +95,22 @@ else
 fi
 gg_print_spacer
 
+echo 'OMAmer'
+if command -v omamer >/dev/null 2>&1; then
+  omamer --version || omamer --help | sed -n '1,2p'
+else
+  echo "omamer: not found"
+fi
+gg_print_spacer
+
+echo 'OMArk'
+if command -v omark >/dev/null 2>&1; then
+  omark --help | sed -n '1,2p'
+else
+  echo "omark: not found"
+fi
+gg_print_spacer
+
 gg_print_section "In-house scripts in: ${gg_support_dir}"
 ls -la "${gg_support_dir}"
 gg_print_spacer

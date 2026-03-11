@@ -25,6 +25,7 @@ input_sequence_mode="${input_sequence_mode:-cds}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 species_tree_rooting="${species_tree_rooting:-taxonomy}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
+omark_db_path="${omark_db_path:-auto}"
 mcmctree_divergence_time_constraints_str="${mcmctree_divergence_time_constraints_str:-}"
 grampa_h1="${grampa_h1:-}"
 target_branch_go="${target_branch_go:-}"
@@ -42,6 +43,7 @@ fi
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 delete_tmp_dir=${delete_tmp_dir:-1}
 busco_lineage_resolved=""
+omark_db_resolved=""
 
 copy_busco_tables() {
   local busco_root_dir="$1"
@@ -475,6 +477,8 @@ dir_orthofinder_hog2og="${dir_orthofinder}/hog2og"
 
 # Genome evolution
 dir_genome_evolution="${gg_workspace_output_dir}/genome_evolution"
+dir_species_omamer="${dir_genome_evolution}/omamer_search"
+dir_species_omark="${dir_genome_evolution}/omark"
 dir_busco_fasta="${dir_genome_evolution}/busco_cds_fasta"
 dir_busco_mafft="${dir_genome_evolution}/busco_mafft"
 dir_busco_trimal="${dir_genome_evolution}/busco_trimal"
@@ -529,6 +533,7 @@ file_orthogroup_method_comparison="${dir_orthofinder}/orthogroup_method_comparis
 # Genome evolution
 file_orthogroup_genecount_selected="${dir_orthofinder_filtered}/Orthogroups.GeneCount.selected.tsv"
 file_genome_busco_summary_table="${dir_genome_evolution}/busco_summary_table/busco_summary.tsv"
+file_species_omark_summary_table="${dir_genome_evolution}/omark_summary_table/omark_summary.tsv"
 file_busco_grampa_dna="${dir_genome_evolution}/grampa_busco_dna/grampa_summary.tsv"
 file_busco_grampa_pep="${dir_genome_evolution}/grampa_busco_pep/grampa_summary.tsv"
 file_orthogroup_grampa="${dir_genome_evolution}/grampa_orthogroup/grampa_summary.tsv"
@@ -540,6 +545,8 @@ file_go_enrichment_significant="${dir_cafe}/go_enrichment/enrichment_significant
 # Runtime helpers
 shared_species_busco_stage_done=0
 shared_busco_summary_stage_done=0
+shared_species_omark_stage_done=0
+shared_omark_summary_stage_done=0
 
 sync_genome_busco_summary_table_from_shared() {
   if [[ "${file_genome_busco_summary_table}" == "${file_species_busco_summary_table}" ]]; then
@@ -696,6 +703,130 @@ run_shared_busco_summary_stage() {
   sync_genome_busco_summary_table_from_shared || true
 }
 
+run_shared_species_omark_stage() {
+  local task="OMArk analysis of species-wise protein input files"
+  local -a species_input_fasta=()
+  local -a input_species_set=()
+  local -a existing_species_dirs=()
+  local protein_full protein_file sp_ub omamer_out omark_outdir sum_file
+  local input_species existing_dir existing_species existing_found
+  local omark_db_file=""
+
+  if [[ ${shared_species_omark_stage_done} -eq 1 ]]; then
+    return 0
+  fi
+  shared_species_omark_stage_done=1
+
+  if [[ ${run_species_omark} -ne 1 ]]; then
+    gg_step_skip "${task}"
+    return 0
+  fi
+
+  prepare_species_protein_tmp
+  ensure_dir "${dir_species_omamer}"
+  ensure_dir "${dir_species_omark}"
+  mapfile -t species_input_fasta < <(gg_find_fasta_files "${dir_sp_protein}" 1)
+  echo "Number of protein files for OMArk: ${#species_input_fasta[@]}"
+  if [[ ${#species_input_fasta[@]} -eq 0 ]]; then
+    echo "No protein file found for OMArk. Exiting."
+    exit 1
+  fi
+
+  mapfile -t input_species_set < <(
+    for protein_full in "${species_input_fasta[@]}"; do
+      gg_species_name_from_path_or_dot "$(basename "${protein_full}")"
+    done | sort -u
+  )
+
+  if ! omark_db_file=$(ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}"); then
+    echo "Failed to prepare OMArk database: ${omark_db_path}"
+    exit 1
+  fi
+  omark_db_resolved="${omark_db_file}"
+
+  mapfile -t existing_species_dirs < <(find "${dir_species_omark}" -maxdepth 1 -mindepth 1 -type d ! -name '.*' | sort)
+  for existing_dir in "${existing_species_dirs[@]}"; do
+    existing_species=$(basename "${existing_dir}")
+    existing_found=0
+    for input_species in "${input_species_set[@]}"; do
+      if [[ "${input_species}" == "${existing_species}" ]]; then
+        existing_found=1
+        break
+      fi
+    done
+    if [[ ${existing_found} -eq 0 ]]; then
+      echo "Removing stale OMArk output for species not in current input: ${existing_dir}"
+      rm -rf -- "${existing_dir}"
+      rm -f -- "${dir_species_omamer}/${existing_species}.omamer"
+    fi
+  done
+
+  for protein_full in "${species_input_fasta[@]}"; do
+    protein_file=$(basename "${protein_full}")
+    sp_ub=$(gg_species_name_from_path "${protein_file}")
+    omamer_out="${dir_species_omamer}/${sp_ub}.omamer"
+    omark_outdir="${dir_species_omark}/${sp_ub}"
+    sum_file="${omark_outdir}/${sp_ub}.sum"
+
+    if [[ -s "${omamer_out}" && -s "${sum_file}" ]]; then
+      echo "Skipped OMArk: ${protein_file}"
+      continue
+    fi
+
+    gg_step_start "${task}: ${protein_file}"
+    ensure_dir "${omark_outdir}"
+    if [[ ! -s "${omamer_out}" ]]; then
+      omamer search \
+        --db "${omark_db_file}" \
+        --query "${protein_full}" \
+        --out "${omamer_out}"
+    fi
+    if [[ ! -s "${omamer_out}" ]]; then
+      echo "OMAmer search output was not created: ${omamer_out}"
+      exit 1
+    fi
+
+    if [[ ! -s "${sum_file}" ]]; then
+      omark \
+        -f "${omamer_out}" \
+        -d "${omark_db_file}" \
+        -o "${omark_outdir}"
+    fi
+    if [[ ! -s "${sum_file}" ]]; then
+      echo "OMArk summary output was not created: ${sum_file}"
+      exit 1
+    fi
+  done
+  echo "$(date): End: ${task}"
+}
+
+run_shared_omark_summary_stage() {
+  local task="Summarizing OMArk species quality results"
+
+  if [[ ${shared_omark_summary_stage_done} -eq 1 ]]; then
+    return 0
+  fi
+  shared_omark_summary_stage_done=1
+
+  if [[ ${run_species_get_omark_summary} -ne 1 ]]; then
+    gg_step_skip "${task}"
+    return 0
+  fi
+
+  if [[ ! -s "${file_species_omark_summary_table}" ]]; then
+    gg_step_start "${task}"
+    ensure_parent_dir "${file_species_omark_summary_table}"
+
+    python "${gg_support_dir}/summarize_omark.py" \
+      --omark_outdir "${dir_species_omark}" \
+      --outfile "tmp.omark_summary.tsv"
+    mv_out "tmp.omark_summary.tsv" "${file_species_omark_summary_table}"
+    echo "$(date): End: ${task}"
+  else
+    gg_step_skip "${task}"
+  fi
+}
+
 species_protein_input_has_files() {
   local protein_files=()
   mapfile -t protein_files < <(gg_find_fasta_files "${dir_sp_protein_input}" 1)
@@ -766,6 +897,8 @@ print_effective_genome_evolution_config_summary() {
     busco_lineage \
     annotation_species \
     annotation_species_resolved \
+    omark_db_path \
+    omark_db_resolved \
     species_tree_rooting_method \
     species_tree_rooting_value \
     species_tree_busco_mode \
@@ -1310,6 +1443,12 @@ run_shared_species_busco_stage
 
 task="Collecting IDs of common BUSCO genes"
 run_shared_busco_summary_stage
+
+task="OMArk analysis of species-wise protein input files"
+run_shared_species_omark_stage
+
+task="Summarizing OMArk species quality results"
+run_shared_omark_summary_stage
 
 task="Generating fasta files for individual single-copy genes"
 ensure_dir "${dir_single_copy_fasta}"

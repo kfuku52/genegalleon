@@ -1205,6 +1205,57 @@ print(max(eligible))
 PY
 }
 
+gg_resolve_omark_database_url() {
+  local py_exec=""
+  local current_release_url="${GG_OMARK_CURRENT_RELEASE_URL:-https://omabrowser.org/oma/current/}"
+  local fallback_url="https://omabrowser.org/All/LUCA.h5"
+
+  if [[ -n "${GG_OMARK_DB_URL:-}" ]]; then
+    printf '%s\n' "${GG_OMARK_DB_URL}"
+    return 0
+  fi
+
+  py_exec=$(gg_find_python_exec || true)
+  if [[ -z "${py_exec}" ]]; then
+    printf '%s\n' "${fallback_url}"
+    return 0
+  fi
+
+  GG_OMARK_CURRENT_RELEASE_URL="${current_release_url}" \
+  GG_OMARK_FALLBACK_URL="${fallback_url}" \
+  "${py_exec}" - <<'PY'
+import re
+import os
+import urllib.parse
+import urllib.request
+
+current_release_url = os.environ.get("GG_OMARK_CURRENT_RELEASE_URL", "").strip()
+fallback_url = os.environ.get("GG_OMARK_FALLBACK_URL", "").strip()
+if not current_release_url:
+    print(fallback_url or "https://omabrowser.org/All/LUCA.h5")
+    raise SystemExit(0)
+if not fallback_url:
+    fallback_url = "https://omabrowser.org/All/LUCA.h5"
+
+request = urllib.request.Request(
+    current_release_url,
+    headers={"User-Agent": "Mozilla/5.0 (compatible; GeneGalleon OMArk downloader)"},
+)
+try:
+    html = urllib.request.urlopen(request, timeout=120).read().decode("utf-8", "replace")
+except Exception:
+    print(fallback_url)
+    raise SystemExit(0)
+
+matches = re.findall(r'href="([^"]*LUCA\.h5)"', html, flags=re.IGNORECASE)
+if not matches:
+    print(fallback_url)
+    raise SystemExit(0)
+
+print(urllib.parse.urljoin(current_release_url, matches[-1]))
+PY
+}
+
 _download_busco_dataset_mapping_files_locked() {
   local mapping_dir=$1
   local stamp_file=$2
@@ -1744,6 +1795,20 @@ workspace_pfam_root() {
   echo "${dir_db}/pfam"
 }
 
+workspace_omark_root() {
+  local gg_workspace_dir=$1
+  local dir_db
+  dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
+  echo "${dir_db}/omark"
+}
+
+workspace_omark_dbfile() {
+  local gg_workspace_dir=$1
+  local dir_omark
+  dir_omark=$(workspace_omark_root "${gg_workspace_dir}")
+  echo "${dir_omark}/LUCA.h5"
+}
+
 workspace_pfam_le_dir() {
   local gg_workspace_dir=$1
   local dir_pfam
@@ -1899,6 +1964,80 @@ ensure_ete_taxonomy_db() {
     return 1
   fi
   return 0
+}
+
+_download_omark_database_locked() {
+  local target_file=$1
+  local ready_file=$2
+  local url=$3
+  local tmp_file="${target_file}.part"
+
+  ensure_parent_dir "${target_file}"
+  rm -f -- "${ready_file}"
+  if [[ -f "${tmp_file}" && ! -s "${tmp_file}" ]]; then
+    rm -f -- "${tmp_file}"
+  fi
+
+  echo "Starting OMArk database download: ${url}" >&2
+  if ! curl -fL --retry 5 --retry-all-errors --retry-delay 2 --continue-at - "${url}" -o "${tmp_file}"; then
+    echo "OMArk database download failed: ${url}" >&2
+    return 1
+  fi
+  mv -- "${tmp_file}" "${target_file}" || return 1
+  if [[ ! -s "${target_file}" ]]; then
+    echo "Downloaded OMArk database is empty: ${target_file}" >&2
+    return 1
+  fi
+  gg_write_ready_marker "${ready_file}"
+  echo "OMArk database download has been finished: ${target_file}" >&2
+}
+
+ensure_omark_database() {
+  local gg_workspace_dir=$1
+  local requested=${2:-auto}
+  local normalized_requested=""
+  local requested_lc=""
+  local target_file=""
+  local ready_file=""
+  local lock_file=""
+  local resolved_url=""
+
+  normalized_requested=$(printf '%s' "${requested}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  requested_lc=$(printf '%s' "${normalized_requested}" | tr '[:upper:]' '[:lower:]')
+  if [[ -n "${normalized_requested}" && "${requested_lc}" != "auto" ]]; then
+    target_file="${normalized_requested}"
+  else
+    target_file=$(workspace_omark_dbfile "${gg_workspace_dir}")
+  fi
+
+  if [[ -n "${normalized_requested}" && "${requested_lc}" != "auto" && -s "${target_file}" ]]; then
+    printf '%s\n' "${target_file}"
+    return 0
+  fi
+
+  ready_file="${target_file}.download.ready"
+  lock_file="$(dirname "${target_file}")/.LUCA.h5.download.lock"
+  ensure_parent_dir "${target_file}"
+
+  if [[ -s "${target_file}" && -s "${ready_file}" ]]; then
+    printf '%s\n' "${target_file}"
+    return 0
+  fi
+
+  if ! resolved_url=$(gg_resolve_omark_database_url); then
+    echo "Failed to resolve OMArk database download URL." >&2
+    return 1
+  fi
+
+  gg_array_download_once "${lock_file}" "${ready_file}" "OMArk OMAmer database (LUCA.h5)" \
+    _download_omark_database_locked "${target_file}" "${ready_file}" "${resolved_url}" || return 1
+
+  if [[ ! -s "${target_file}" ]]; then
+    echo "Failed to prepare OMArk database: ${target_file}" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${target_file}"
 }
 
 gg_initialize_data_layout() {

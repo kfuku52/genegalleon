@@ -32,6 +32,8 @@ jellyfish
 mafft
 meme
 mmseqs2
+omamer
+omark
 orthofinder
 astral-tree
 paml

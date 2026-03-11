@@ -25,6 +25,7 @@ Major scripts accept:
 - one protein FASTA per species,
 - accepted extensions follow the same FASTA list as `species_cds`,
 - sequence IDs should stay consistent with downstream orthogroup and annotation joins,
+- one gene per protein is strongly recommended when using OMArk quality assessment,
 - species prefix on IDs (`Genus_species_...`) is strongly recommended.
 
 Important behavior:

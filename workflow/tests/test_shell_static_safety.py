@@ -1711,21 +1711,46 @@ def test_genome_evolution_places_run_cds_translation_before_dependent_run_flags(
 
     entrypoint_translation_index = entrypoint.index('run_cds_translation=1')
     entrypoint_species_busco_index = entrypoint.index('run_species_busco=1')
+    entrypoint_species_omark_index = entrypoint.index('run_species_omark=0')
     entrypoint_orthofinder_index = entrypoint.index('run_orthofinder=1')
     entrypoint_busco_getfasta_index = entrypoint.index('run_busco_getfasta=1')
 
     assert entrypoint_translation_index < entrypoint_species_busco_index
+    assert entrypoint_translation_index < entrypoint_species_omark_index
     assert entrypoint_translation_index < entrypoint_orthofinder_index
     assert entrypoint_translation_index < entrypoint_busco_getfasta_index
 
     config_translation_index = config_vars.index('run_cds_translation')
     config_species_busco_index = config_vars.index('run_species_busco')
+    config_species_omark_index = config_vars.index('run_species_omark')
     config_orthofinder_index = config_vars.index('run_orthofinder')
     config_busco_getfasta_index = config_vars.index('run_busco_getfasta')
 
     assert config_translation_index < config_species_busco_index
+    assert config_translation_index < config_species_omark_index
     assert config_translation_index < config_orthofinder_index
     assert config_translation_index < config_busco_getfasta_index
+
+
+def test_genome_evolution_exposes_omark_controls_and_summary_stage():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    assert 'run_species_omark=0 # Run OMArk proteome quality assessment for each species using shared protein inputs.' in entrypoint
+    assert 'run_species_get_omark_summary=1 # Build the shared OMArk summary table for species-wise proteome quality assessment.' in entrypoint
+    assert 'omark_db_path="auto" # Path to the OMArk OMAmer LUCA.h5 database, or "auto" to download it under workspace/downloads/omark/.' in entrypoint
+    assert "run_species_omark" in config_vars
+    assert "run_species_get_omark_summary" in config_vars
+    assert "omark_db_path" in config_vars
+    assert 'omark_db_path="${omark_db_path:-auto}"' in core
+    assert 'dir_species_omamer="${dir_genome_evolution}/omamer_search"' in core
+    assert 'dir_species_omark="${dir_genome_evolution}/omark"' in core
+    assert 'file_species_omark_summary_table="${dir_genome_evolution}/omark_summary_table/omark_summary.tsv"' in core
+    assert 'ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}"' in core
+    assert 'omamer search \\' in core
+    assert 'omark \\' in core
+    assert 'python "${gg_support_dir}/summarize_omark.py" \\' in core
 
 
 def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps():

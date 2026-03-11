@@ -165,6 +165,7 @@ min_percent_species_coverage
 n_gamma_cats_cafe
 notung_jar
 nucleotide_model
+omark_db_path
 orthogroup_annotation_method
 orthogroup_table
 protein_model
@@ -205,6 +206,8 @@ run_plot_mcmctreer
 run_plot_species_trees
 run_species_busco
 run_species_get_busco_summary
+run_species_get_omark_summary
+run_species_omark
 species_tree_rooting
 strictly_single_copy_only
 target_branch_go

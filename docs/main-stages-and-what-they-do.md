@@ -160,6 +160,12 @@ Main output roots:
 - `workspace/output/orthofinder`
 - `workspace/output/genome_evolution`
 
+Additional optional QC outputs:
+
+- `workspace/output/genome_evolution/omamer_search`
+- `workspace/output/genome_evolution/omark`
+- `workspace/output/genome_evolution/omark_summary_table/omark_summary.tsv`
+
 ### Inlined Stage: Orthofinder
 
 Purpose:
@@ -187,6 +193,7 @@ Notable defaults:
 Purpose:
 
 - BUSCO-based single-copy extraction,
+- optional OMArk proteome quality assessment using shared protein inputs,
 - per-gene alignments and trees,
 - concatenated and ASTRAL species trees,
 - IQ2MC/mcmctree dating pipeline,
