@@ -81,6 +81,30 @@ resolve_busco_lineage_for_current_species() {
   echo "Resolved BUSCO lineage for ${sp_ub}: ${busco_lineage_resolved}"
 }
 
+invalidate_cached_query_table_if_prefix_mismatch() {
+  local table_file=$1
+  local expected_prefix=$2
+  local label=$3
+  local header_lines=${4:-0}
+  local first_query=""
+  local stale_file=""
+
+  if [[ ! -s "${table_file}" ]]; then
+    return 0
+  fi
+  first_query=$(awk -F '\t' -v skip="${header_lines}" 'NR > skip && $1 != "" { print $1; exit }' "${table_file}")
+  if [[ -z "${first_query}" ]]; then
+    return 0
+  fi
+  if [[ "${first_query}" != ${expected_prefix}* ]]; then
+    stale_file="${table_file}.stale.$(date +%Y%m%d%H%M%S)"
+    mv -f -- "${table_file}" "${stale_file}"
+    echo "Cached ${label} is inconsistent with the current species prefix ${expected_prefix}."
+    echo "First query ID: ${first_query}"
+    echo "Archived stale file to: ${stale_file}"
+  fi
+}
+
 # Setting modes
 if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
   enable_all_run_flags_for_debug_mode
@@ -693,6 +717,7 @@ else
 fi
 
 task="seqkit fx2tab for the longest CDS sequences"
+invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_fx2tab}" "${sp_ub}_" "${task}" 1
 disable_if_no_input_file "run_longestcds_fx2tab" "${file_longestcds}"
 if [[ ! -s "${file_longestcds_fx2tab}" && ${run_longestcds_fx2tab} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -717,6 +742,7 @@ else
 fi
 
 task="MMseqs2 Taxonomy of the CDS sequences"
+invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_mmseqs2taxonomy}" "${sp_ub}_" "${task}" 0
 disable_if_no_input_file "run_longestcds_mmseqs2taxonomy" "${file_longestcds}"
 if [[ ! -s "${file_longestcds_mmseqs2taxonomy}" && ${run_longestcds_mmseqs2taxonomy} -eq 1 ]]; then
   gg_step_start "${task}"

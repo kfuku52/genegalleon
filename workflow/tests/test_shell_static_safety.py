@@ -1525,6 +1525,20 @@ def test_transcriptome_core_passes_shared_mmseqs_db_to_amalgkit_getfastq():
     assert '--contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"' in getfastq_block
 
 
+def test_transcriptome_core_invalidates_stale_cached_query_tables_on_species_prefix_change():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    body = _function_body(text, "invalidate_cached_query_table_if_prefix_mismatch")
+
+    assert "first_query=$(awk -F '\\t' -v skip=\"${header_lines}\" 'NR > skip && $1 != \"\" { print $1; exit }' \"${table_file}\")" in body
+    assert 'if [[ "${first_query}" != ${expected_prefix}* ]]; then' in body
+    assert 'stale_file="${table_file}.stale.$(date +%Y%m%d%H%M%S)"' in body
+    assert 'mv -f -- "${table_file}" "${stale_file}"' in body
+    assert 'Archived stale file to: ${stale_file}' in body
+    assert 'invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_fx2tab}" "${sp_ub}_" "${task}" 1' in text
+    assert 'invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_mmseqs2taxonomy}" "${sp_ub}_" "${task}" 0' in text
+
+
 def test_common_params_do_not_define_contamination_removal_rank():
     text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
     assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in text
