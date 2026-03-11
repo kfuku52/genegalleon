@@ -109,12 +109,24 @@ def read_uniprot_descriptions(path):
 def read_uniprot_metadata(path):
     if (path == '') or (not os.path.exists(path)):
         return pandas.DataFrame(columns=['accession'] + METADATA_COLUMNS)
-    df = pandas.read_csv(path, sep='\t', dtype=str, low_memory=False, keep_default_na=False)
-    if 'accession' not in df.columns:
-        if 'sprot_best' in df.columns:
-            df = df.rename(columns={'sprot_best': 'accession'})
-        else:
-            return pandas.DataFrame(columns=['accession'] + METADATA_COLUMNS)
+    header = pandas.read_csv(path, sep='\t', dtype=str, low_memory=False, keep_default_na=False, nrows=0)
+    if 'accession' in header.columns:
+        accession_col = 'accession'
+    elif 'sprot_best' in header.columns:
+        accession_col = 'sprot_best'
+    else:
+        return pandas.DataFrame(columns=['accession'] + METADATA_COLUMNS)
+    usecols = [accession_col] + [col for col in METADATA_COLUMNS if col in header.columns]
+    df = pandas.read_csv(
+        path,
+        sep='\t',
+        dtype=str,
+        low_memory=False,
+        keep_default_na=False,
+        usecols=usecols,
+    )
+    if accession_col != 'accession':
+        df = df.rename(columns={accession_col: 'accession'})
     keep_cols = ['accession']
     for col in METADATA_COLUMNS:
         if col not in df.columns:
@@ -185,25 +197,16 @@ def main():
     if len(query_ids) == 0:
         query_ids = hits['qseqid'].dropna().drop_duplicates().tolist()
 
-    out = init_output_frame(query_ids)
+    out = pandas.DataFrame(index=pandas.Index(query_ids, name='gene_id'))
 
     if hits.shape[0] > 0:
-        tmp = hits.loc[:, ['qseqid', 'sseqid', 'coverage', 'pident', 'evalue']].copy()
-        tmp = tmp.rename(columns={'qseqid': 'gene_id', 'sseqid': 'sprot_best'})
-
-        tmp['sprot_alias'] = tmp['sprot_best']
-        tmp['sprot_coverage'] = tmp['coverage'].map(lambda x: fmt_float(x, precision=2))
-        tmp['sprot_identity'] = tmp['pident'].map(lambda x: fmt_float(x, precision=2))
-        tmp['sprot_evalue'] = tmp['evalue'].map(fmt_evalue)
-
-        tmp = tmp.loc[:, ['gene_id', 'sprot_best', 'sprot_alias', 'sprot_coverage', 'sprot_identity', 'sprot_evalue']]
-        out = pandas.merge(out, tmp, how='left', on='gene_id', suffixes=('', '_new'))
-
-        for col in ['sprot_best', 'sprot_alias', 'sprot_coverage', 'sprot_identity', 'sprot_evalue']:
-            new_col = f'{col}_new'
-            if new_col in out.columns:
-                out[col] = out[new_col].fillna(out[col])
-                out = out.drop(columns=[new_col])
+        hit_map = hits.loc[:, ['qseqid', 'sseqid', 'coverage', 'pident', 'evalue']].set_index('qseqid')
+        gene_index = out.index.to_series()
+        out['sprot_best'] = gene_index.map(hit_map['sseqid'])
+        out['sprot_alias'] = out['sprot_best']
+        out['sprot_coverage'] = gene_index.map(hit_map['coverage']).map(lambda x: fmt_float(x, precision=2))
+        out['sprot_identity'] = gene_index.map(hit_map['pident']).map(lambda x: fmt_float(x, precision=2))
+        out['sprot_evalue'] = gene_index.map(hit_map['evalue']).map(fmt_evalue)
 
     uniprot_desc = read_uniprot_descriptions(args.uniprot_fasta)
     if len(uniprot_desc) > 0:
@@ -211,14 +214,9 @@ def main():
 
     metadata = read_uniprot_metadata(args.uniprot_meta_tsv)
     if metadata.shape[0] > 0:
-        tmp_meta = metadata.rename(columns={'accession': 'sprot_best'})
-        out = pandas.merge(out, tmp_meta, how='left', on='sprot_best', suffixes=('', '_meta'))
-        for col in METADATA_COLUMNS:
-            new_col = f'{col}_meta'
-            if new_col in out.columns:
-                out[col] = out[new_col].fillna(out[col])
-                out = out.drop(columns=[new_col])
+        out = out.join(metadata.set_index('accession'), on='sprot_best')
 
+    out = out.reset_index()
     for col in OUTPUT_COLUMNS:
         if col not in out.columns:
             out[col] = ''

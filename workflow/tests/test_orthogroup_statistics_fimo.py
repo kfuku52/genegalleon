@@ -115,3 +115,22 @@ def test_load_scm_intron_branch_table_maps_dated_tree_labels_to_branch_ids(tmp_p
     assert merged.loc[merged["node_name"] == "n0", "num_intron"].iloc[0] == 2
     assert merged.loc[merged["node_name"] == "n1", "num_intron"].iloc[0] == 1
     assert merged.loc[merged["node_name"] == "n2", "num_intron"].iloc[0] == 0
+
+
+def test_flatten_trait_variable_stats_builds_tree_info_keys():
+    mod = load_module()
+    df = mod.pandas.DataFrame(
+        [
+            {"trait": "salt", "variable": "omega", "coef": 1.5, "pvalue": 0.01},
+            {"trait": "cold", "variable": "omega", "coef": -0.5, "pvalue": 0.20},
+        ]
+    )
+
+    out = mod.flatten_trait_variable_stats(df, "pgls_geneTree_")
+
+    assert out == {
+        "pgls_geneTree_coef_salt_omega": 1.5,
+        "pgls_geneTree_coef_cold_omega": -0.5,
+        "pgls_geneTree_pvalue_salt_omega": 0.01,
+        "pgls_geneTree_pvalue_cold_omega": 0.20,
+    }

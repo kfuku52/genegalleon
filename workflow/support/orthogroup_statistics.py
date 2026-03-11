@@ -306,6 +306,20 @@ def load_scm_intron_branch_table(scm_intron_path, dated_tree_path):
     return df_out
 
 
+def flatten_trait_variable_stats(df, key_prefix):
+    if df.empty:
+        return {}
+    stat_cols = [col for col in df.columns if col not in ['trait', 'variable']]
+    if len(stat_cols) == 0:
+        return {}
+    trait_var = '_' + df['trait'].astype(str) + '_' + df['variable'].astype(str)
+    out = {}
+    for stat_col in stat_cols:
+        keys = key_prefix + stat_col + trait_var
+        out.update(zip(keys.tolist(), df[stat_col].tolist()))
+    return out
+
+
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
@@ -730,10 +744,12 @@ def main():
         is_mu = (df_leaf['param'] == 'mu')
         regime_cols = [c for c in df_leaf.columns if c not in ['node_name', 'param']]
         df_leaf_unique = df_leaf.loc[is_mu, regime_cols].copy()
-        for col in df_leaf_unique.columns:
-            if col != 'regime':
-                df_leaf_unique[col] = pandas.to_numeric(df_leaf_unique[col], errors='coerce')
-        df_leaf_unique = df_leaf_unique.drop_duplicates()
+        numeric_cols = [col for col in df_leaf_unique.columns if col != 'regime']
+        if len(numeric_cols) > 0:
+            df_leaf_unique.loc[:, numeric_cols] = df_leaf_unique.loc[:, numeric_cols].apply(
+                pandas.to_numeric,
+                errors='coerce',
+            )
         if df_leaf_unique.shape[0] == 0:
             df_leaf_unique = pandas.DataFrame({'regime': [0]})
         else:
@@ -1130,14 +1146,28 @@ def main():
         df_branch = df_branch.drop('intron_absent', axis=1)
         df_branch = compute_delta(df_branch, 'intron_present')
     if (os.path.exists(params["targetp"])):
-        df_tmp = pandas.read_csv(params['targetp'], sep='\t',  header=None, index_col=None, comment='#')
-        df_tmp.columns = ['node_name', 'targetp_prediction', 'targetp_noTP', 'targetp_SP', 'targetp_mTP', 'targetp_cTP', 'targetp_luTP', 'targetp_CS_position']
+        df_tmp = pandas.read_csv(
+            params['targetp'],
+            sep='\t',
+            header=None,
+            index_col=None,
+            comment='#',
+            usecols=range(8),
+            names=[
+                'node_name',
+                'targetp_prediction',
+                'targetp_noTP',
+                'targetp_SP',
+                'targetp_mTP',
+                'targetp_cTP',
+                'targetp_luTP',
+                'targetp_CS_position',
+            ],
+        )
         node_left_merge_tables.append(df_tmp)
     if (os.path.exists(params["uniprot"])):
-        df_tmp = pandas.read_csv(params['uniprot'], sep='\t',  header=0, index_col=None)
-        df_tmp.index = df_tmp['gene_id']
-        df_tmp = df_tmp.drop('gene_id', axis=1)
-        df_tmp = df_tmp.reset_index().rename(columns={'index': 'node_name'})
+        df_tmp = pandas.read_csv(params['uniprot'], sep='\t',  header=0, index_col=None, low_memory=False)
+        df_tmp = df_tmp.rename(columns={'gene_id': 'node_name'})
         node_left_merge_tables.append(df_tmp)
     if (os.path.exists(params['rpsblast'])):
         df_tmp = pandas.read_csv(
@@ -1332,31 +1362,21 @@ def main():
         for col in df_tmp.columns:
             tree_info['csubst_'+col] = df_tmp.loc[:,col].values[0]
     if os.path.exists(params['gene_pgls_stats']):
-        df_tmp = pandas.read_csv(params['gene_pgls_stats'], sep='\t',  header=0, index_col=None)
+        df_tmp = pandas.read_csv(params['gene_pgls_stats'], sep='\t',  header=0, index_col=None, low_memory=False)
         is_all_na = df_tmp.isnull().all().all()
         if is_all_na:
             print('Results of gene tree PGLS are all NA.', flush=True)
         else:
-            df_tmp = df_tmp.loc[~df_tmp.isna().all(axis=1),:]
-            stat_cols = df_tmp.columns.values.tolist()
-            stat_cols.remove('trait')
-            stat_cols.remove('variable')
-            df_tmp['trait_var'] = '_' + df_tmp['trait'] + '_' + df_tmp['variable']
-            for i in range(len(df_tmp)):
-                for stat_col in stat_cols:
-                    key = 'pgls_geneTree_'+stat_col+df_tmp['trait_var'][i]
-                    tree_info[key] = df_tmp[stat_col][i]
+            df_tmp = df_tmp.loc[~df_tmp.isna().all(axis=1), ['trait', 'variable'] + [
+                col for col in df_tmp.columns if col not in ['trait', 'variable']
+            ]]
+            tree_info.update(flatten_trait_variable_stats(df_tmp, 'pgls_geneTree_'))
     if os.path.exists(params['species_pgls_stats']):
-        df_tmp = pandas.read_csv(params['species_pgls_stats'], sep='\t',  header=0, index_col=None)
-        df_tmp = df_tmp.loc[~df_tmp.isna().all(axis=1),:]
-        stat_cols = df_tmp.columns.values.tolist()
-        stat_cols.remove('trait')
-        stat_cols.remove('variable')
-        df_tmp['trait_var'] = '_' + df_tmp['trait'] + '_' + df_tmp['variable']
-        for i in range(len(df_tmp)):
-            for stat_col in stat_cols:
-                key = 'pgls_speciesTree_'+stat_col+df_tmp['trait_var'][i]
-                tree_info[key] = df_tmp[stat_col][i]
+        df_tmp = pandas.read_csv(params['species_pgls_stats'], sep='\t',  header=0, index_col=None, low_memory=False)
+        df_tmp = df_tmp.loc[~df_tmp.isna().all(axis=1), ['trait', 'variable'] + [
+            col for col in df_tmp.columns if col not in ['trait', 'variable']
+        ]]
+        tree_info.update(flatten_trait_variable_stats(df_tmp, 'pgls_speciesTree_'))
     if (all([ os.path.exists(params[key]) for key in ['hyphy_relax_json'] ])):
         if hyphy_relax_json_data is None:
             with open(params['hyphy_relax_json'], 'r') as json_file:
