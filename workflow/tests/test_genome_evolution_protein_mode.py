@@ -36,7 +36,7 @@ def _prepare_stub_binaries(tmp_path: Path) -> Path:
 
     _write_executable(
         bin_dir / "parallel",
-        """#!/usr/bin/env bash
+        r"""#!/usr/bin/env bash
 set -euo pipefail
 func=""
 while [[ $# -gt 0 ]]; do
@@ -57,7 +57,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 for item in "$@"; do
-  bash -lc "${func} \"${1}\"" _ "${item}"
+  bash -c "${func} \"\$1\"" _ "${item}"
 done
 """,
     )
@@ -75,6 +75,207 @@ EOF
   exit 0
 fi
 exit 0
+""",
+    )
+
+    _write_executable(
+        bin_dir / "seqkit",
+        r"""#!/usr/bin/env python3
+import re
+import sys
+
+
+STANDARD_CODE = {
+    "TTT": "F", "TTC": "F", "TTA": "L", "TTG": "L",
+    "TCT": "S", "TCC": "S", "TCA": "S", "TCG": "S",
+    "TAT": "Y", "TAC": "Y", "TAA": "*", "TAG": "*",
+    "TGT": "C", "TGC": "C", "TGA": "*", "TGG": "W",
+    "CTT": "L", "CTC": "L", "CTA": "L", "CTG": "L",
+    "CCT": "P", "CCC": "P", "CCA": "P", "CCG": "P",
+    "CAT": "H", "CAC": "H", "CAA": "Q", "CAG": "Q",
+    "CGT": "R", "CGC": "R", "CGA": "R", "CGG": "R",
+    "ATT": "I", "ATC": "I", "ATA": "I", "ATG": "M",
+    "ACT": "T", "ACC": "T", "ACA": "T", "ACG": "T",
+    "AAT": "N", "AAC": "N", "AAA": "K", "AAG": "K",
+    "AGT": "S", "AGC": "S", "AGA": "R", "AGG": "R",
+    "GTT": "V", "GTC": "V", "GTA": "V", "GTG": "V",
+    "GCT": "A", "GCC": "A", "GCA": "A", "GCG": "A",
+    "GAT": "D", "GAC": "D", "GAA": "E", "GAG": "E",
+    "GGT": "G", "GGC": "G", "GGA": "G", "GGG": "G",
+}
+
+
+def parse_fasta(lines):
+    records = []
+    header = None
+    seq_chunks = []
+    for raw_line in lines:
+        line = raw_line.rstrip("\n")
+        if not line:
+            continue
+        if line.startswith(">"):
+            if header is not None:
+                records.append((header, "".join(seq_chunks)))
+            header = line[1:]
+            seq_chunks = []
+            continue
+        seq_chunks.append(line.strip())
+    if header is not None:
+        records.append((header, "".join(seq_chunks)))
+    return records
+
+
+def load_records(path):
+    if path:
+        with open(path, "r", encoding="utf-8") as handle:
+            return parse_fasta(handle)
+    return parse_fasta(sys.stdin)
+
+
+def write_records(records, handle):
+    for header, sequence in records:
+        handle.write(f">{header}\n{sequence}\n")
+
+
+def apply_translation(records, transl_table):
+    code = dict(STANDARD_CODE)
+    if transl_table == "6":
+        code["TAA"] = "Q"
+        code["TAG"] = "Q"
+    translated = []
+    for header, sequence in records:
+        sequence = sequence.upper()
+        residues = []
+        for idx in range(0, len(sequence) - len(sequence) % 3, 3):
+            codon = sequence[idx:idx + 3]
+            residues.append(code.get(codon, "X"))
+        translated.append((header, "".join(residues)))
+    return translated
+
+
+def main():
+    if len(sys.argv) < 2:
+        raise SystemExit("seqkit stub requires a subcommand")
+    subcommand = sys.argv[1]
+    args = sys.argv[2:]
+
+    if subcommand == "seq":
+        input_path = None
+        out_path = None
+        remove_gaps = False
+        name_only = False
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if arg == "--threads":
+                idx += 2
+            elif arg == "--out-file":
+                out_path = args[idx + 1]
+                idx += 2
+            elif arg == "--remove-gaps":
+                remove_gaps = True
+                idx += 1
+            elif arg == "--name":
+                name_only = True
+                idx += 1
+            elif arg.startswith("-"):
+                raise SystemExit(f"Unsupported seqkit seq option: {arg}")
+            else:
+                input_path = arg
+                idx += 1
+        records = load_records(input_path)
+        if remove_gaps:
+            records = [(header, sequence.replace("-", "")) for header, sequence in records]
+        output_handle = open(out_path, "w", encoding="utf-8") if out_path else sys.stdout
+        try:
+            if name_only:
+                for header, _sequence in records:
+                    output_handle.write(f"{header.split()[0]}\n")
+            else:
+                write_records(records, output_handle)
+        finally:
+            if out_path:
+                output_handle.close()
+        return
+
+    if subcommand == "replace":
+        input_path = None
+        pattern = None
+        replacement = ""
+        by_seq = False
+        ignore_case = False
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if arg == "--threads":
+                idx += 2
+            elif arg == "--pattern":
+                pattern = args[idx + 1]
+                idx += 2
+            elif arg == "--replacement":
+                replacement = args[idx + 1]
+                idx += 2
+            elif arg == "--by-seq":
+                by_seq = True
+                idx += 1
+            elif arg == "--ignore-case":
+                ignore_case = True
+                idx += 1
+            elif arg.startswith("-"):
+                raise SystemExit(f"Unsupported seqkit replace option: {arg}")
+            else:
+                input_path = arg
+                idx += 1
+        flags = re.IGNORECASE if ignore_case else 0
+        records = load_records(input_path)
+        updated = []
+        for header, sequence in records:
+            if by_seq:
+                sequence = re.sub(pattern, replacement, sequence, flags=flags)
+            else:
+                header = re.sub(pattern, replacement, header, flags=flags)
+            updated.append((header, sequence))
+        write_records(updated, sys.stdout)
+        return
+
+    if subcommand == "translate":
+        input_path = None
+        transl_table = "1"
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if arg == "--threads":
+                idx += 2
+            elif arg == "--transl-table":
+                transl_table = args[idx + 1]
+                idx += 2
+            elif arg == "--allow-unknown-codon":
+                idx += 1
+            elif arg.startswith("-"):
+                raise SystemExit(f"Unsupported seqkit translate option: {arg}")
+            else:
+                input_path = arg
+                idx += 1
+        write_records(apply_translation(load_records(input_path), transl_table), sys.stdout)
+        return
+
+    raise SystemExit(f"Unsupported seqkit subcommand: {subcommand}")
+
+
+if __name__ == "__main__":
+    main()
+""",
+    )
+
+    _write_executable(
+        bin_dir / "cdskit",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" != "pad" ]]; then
+  echo "Unsupported cdskit subcommand: ${1:-}" >&2
+  exit 1
+fi
+cat
 """,
     )
 
