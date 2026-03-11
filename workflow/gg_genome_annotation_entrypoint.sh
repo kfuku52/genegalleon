@@ -110,8 +110,8 @@ run_multispecies_summary=1 # Multi-species summary plots and tables
 uniprot_annotation_method="mmseqs2" # blastp|mmseqs2 for UniProt Swiss-Prot annotation search engine.
 
 # Contamination-removal parameters
-contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.
-contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).
+contamination_removal_rank="${contamination_removal_rank:-${GG_COMMON_CONTAMINATION_REMOVAL_RANK:-domain}}" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.
+contamination_removal_target_taxon="${contamination_removal_target_taxon:-${GG_COMMON_CONTAMINATION_REMOVAL_TARGET_TAXON:-}}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).
 
 ### End: Modify this block to tailor your analysis ###
 
