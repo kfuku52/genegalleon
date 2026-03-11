@@ -95,3 +95,14 @@ gg_entrypoint_initialize() {
   fi
   gg_configure_python_pycacheprefix
 }
+
+gg_entrypoint_print_config_summary_if_available() {
+  local entrypoint_name=${1:-entrypoint}
+  shift || true
+
+  if declare -F gg_print_entrypoint_config_summary >/dev/null 2>&1; then
+    gg_print_entrypoint_config_summary "${entrypoint_name}" "$@"
+  else
+    echo "Config summary helper is unavailable in gg_util.sh; skipping entrypoint config summary for ${entrypoint_name}."
+  fi
+}

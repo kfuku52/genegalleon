@@ -1019,18 +1019,25 @@ def test_entrypoints_forward_cleanup_flags_defined_outside_config_block():
 
 def test_entrypoints_print_config_summary_near_startup():
     expected_tokens = {
-        "gg_gene_convergence_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}"',
-        "gg_gene_database_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}"',
-        "gg_gene_evolution_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}" "delete_tmp_dir" "delete_preexisting_tmp_dir"',
-        "gg_genome_annotation_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}" "delete_tmp_dir"',
-        "gg_genome_evolution_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}"',
-        "gg_input_generation_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}"',
-        "gg_progress_summary_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}"',
-        "gg_transcriptome_generation_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}" "delete_tmp_dir"',
+        "gg_gene_convergence_entrypoint.sh": 'gg_entrypoint_print_config_summary_if_available "${gg_entrypoint_name}"',
+        "gg_gene_database_entrypoint.sh": 'gg_entrypoint_print_config_summary_if_available "${gg_entrypoint_name}"',
+        "gg_gene_evolution_entrypoint.sh": 'gg_entrypoint_print_config_summary_if_available "${gg_entrypoint_name}" "delete_tmp_dir" "delete_preexisting_tmp_dir"',
+        "gg_genome_annotation_entrypoint.sh": 'gg_entrypoint_print_config_summary_if_available "${gg_entrypoint_name}" "delete_tmp_dir"',
+        "gg_genome_evolution_entrypoint.sh": 'gg_entrypoint_print_config_summary_if_available "${gg_entrypoint_name}"',
+        "gg_input_generation_entrypoint.sh": 'gg_entrypoint_print_config_summary_if_available "${gg_entrypoint_name}"',
+        "gg_progress_summary_entrypoint.sh": 'gg_entrypoint_print_config_summary_if_available "${gg_entrypoint_name}"',
+        "gg_transcriptome_generation_entrypoint.sh": 'gg_entrypoint_print_config_summary_if_available "${gg_entrypoint_name}" "delete_tmp_dir"',
     }
     for script_name, token in expected_tokens.items():
         text = _read_text(WORKFLOW_DIR / script_name)
         assert token in text, f"Missing config summary print in {script_name}: {token}"
+
+
+def test_entrypoint_bootstrap_provides_config_summary_fallback_helper():
+    text = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_bootstrap.sh")
+    assert "gg_entrypoint_print_config_summary_if_available() {" in text
+    assert 'declare -F gg_print_entrypoint_config_summary >/dev/null 2>&1' in text
+    assert 'Config summary helper is unavailable in gg_util.sh; skipping entrypoint config summary for ${entrypoint_name}.' in text
 
 
 def test_gene_convergence_entrypoint_does_not_define_unused_delete_tmp_dir():

@@ -88,7 +88,7 @@ if ! gg_entrypoint_prepare_container_runtime 0; then
   exit 1
 fi
 : "${ncpu_progress_summary:=${GG_TASK_CPUS:-1}}"
-gg_print_entrypoint_config_summary "${gg_entrypoint_name}"
+gg_entrypoint_print_config_summary_if_available "${gg_entrypoint_name}"
 gg_entrypoint_activate_container_runtime
 
 forward_config_vars_to_container_env "${gg_entrypoint_name}"

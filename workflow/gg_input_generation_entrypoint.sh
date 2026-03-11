@@ -146,7 +146,7 @@ gg_apply_named_env_overrides \
   trait_species_source GG_INPUT_TRAIT_SPECIES_SOURCE \
   trait_databases GG_INPUT_TRAIT_DATABASES
 
-gg_print_entrypoint_config_summary "${gg_entrypoint_name}"
+gg_entrypoint_print_config_summary_if_available "${gg_entrypoint_name}"
 # Forward canonical config variables into the container environment.
 forward_config_vars_to_container_env "${gg_entrypoint_name}"
 
