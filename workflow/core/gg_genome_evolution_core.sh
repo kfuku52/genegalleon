@@ -430,11 +430,11 @@ annotation_species_resolved=""
 annotation_species_candidates=()
 file_go_annotation=""
 mapfile -t annotation_species_candidates < <(gg_species_names_from_annotation_dir "${gg_workspace_output_dir}/species_cds_annotation")
-if [[ ${#annotation_species_candidates[@]} -eq 0 ]]; then
-  mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_cds}")
-fi
 if [[ ${#annotation_species_candidates[@]} -eq 0 && "${input_sequence_mode}" == "protein" ]]; then
   mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_protein_input}")
+fi
+if [[ ${#annotation_species_candidates[@]} -eq 0 ]]; then
+  mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_cds}")
 fi
 if annotation_species_resolved=$(gg_resolve_annotation_species "${annotation_species}" "${annotation_species_candidates[@]}"); then
   if [[ -n "${annotation_species_resolved}" ]]; then
@@ -738,6 +738,7 @@ fi
 shared_protein_input_signature=$(compute_shared_protein_input_signature)
 refresh_dir_for_shared_protein_input_signature "${dir_species_tree}" "species_tree" "${shared_protein_input_signature}"
 refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}"
+refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}"
 memory_notung=${GG_MEM_PER_CPU_GB}
 
 ensure_dir "${dir_species_tree_summary}"

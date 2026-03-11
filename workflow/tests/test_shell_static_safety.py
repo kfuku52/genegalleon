@@ -1647,6 +1647,11 @@ def test_genome_evolution_supports_protein_input_mode_and_species_code_overrides
     assert 'species_genetic_code.tsv is ignored because species_protein inputs are provided' in core
     assert 'run_cds_translation must be 1 when species proteins need to be generated from species_cds.' in core
     assert 'Translation started: ${cds} (genetic_code=${species_code})' in core
+    assert 'refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}"' in core
+    assert 'mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_protein_input}")' in core
+    protein_candidates_index = core.index('if [[ ${#annotation_species_candidates[@]} -eq 0 && "${input_sequence_mode}" == "protein" ]]; then')
+    cds_candidates_index = core.index('if [[ ${#annotation_species_candidates[@]} -eq 0 ]]; then\n  mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_cds}")\nfi')
+    assert protein_candidates_index < cds_candidates_index
 
 
 def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps():
