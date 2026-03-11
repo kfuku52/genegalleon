@@ -96,39 +96,37 @@ def load_fimo_hits(path):
     base_cols = ['motif_id', 'motif_alt_id', 'sequence_name', 'start', 'stop', 'strand', 'q-value']
     if (not path) or (not os.path.exists(path)) or (os.path.getsize(path) == 0):
         return pandas.DataFrame(columns=base_cols)
+
+    def normalize_col(name):
+        name = str(name).strip()
+        if name.startswith('#'):
+            name = name.lstrip('#').strip()
+        return name.lower().replace(' ', '_').replace('-', '_')
+
+    def pick_col(colmap, candidates):
+        for candidate in candidates:
+            col = colmap.get(candidate)
+            if col is not None:
+                return col
+        return None
+
     try:
-        df = pandas.read_csv(path, sep='\t', header=0, index_col=None, dtype=str)
+        header = pandas.read_csv(path, sep='\t', header=0, index_col=None, nrows=0)
     except Exception as exc:
         print('Failed to parse FIMO table {}: {}'.format(path, exc))
         return pandas.DataFrame(columns=base_cols)
-    if df.empty:
-        return pandas.DataFrame(columns=base_cols)
+    normalized_cols = {normalize_col(col): col for col in header.columns}
 
-    colmap = {}
-    for c in df.columns:
-        c_norm = str(c).strip()
-        if c_norm.startswith('#'):
-            c_norm = c_norm.lstrip('#').strip()
-        c_norm = c_norm.lower().replace(' ', '_').replace('-', '_')
-        colmap[c] = c_norm
-    df = df.rename(columns=colmap)
-
-    def pick_col(candidates):
-        for c in candidates:
-            if c in df.columns:
-                return c
-        return None
-
-    motif_col = pick_col(['motif_id', 'pattern_name'])
-    motif_alt_col = pick_col(['motif_alt_id', 'motif_altid', 'alt_id'])
-    seq_col = pick_col(['sequence_name'])
-    start_col = pick_col(['start'])
-    stop_col = pick_col(['stop', 'end'])
-    strand_col = pick_col(['strand'])
-    qvalue_col = pick_col(['q_value', 'qvalue'])
+    motif_col = pick_col(normalized_cols, ['motif_id', 'pattern_name'])
+    motif_alt_col = pick_col(normalized_cols, ['motif_alt_id', 'motif_altid', 'alt_id'])
+    seq_col = pick_col(normalized_cols, ['sequence_name'])
+    start_col = pick_col(normalized_cols, ['start'])
+    stop_col = pick_col(normalized_cols, ['stop', 'end'])
+    strand_col = pick_col(normalized_cols, ['strand'])
+    qvalue_col = pick_col(normalized_cols, ['q_value', 'qvalue'])
     if qvalue_col is None:
         # Legacy FIMO output can miss q-values when disabled; fall back to p-values.
-        qvalue_col = pick_col(['p_value', 'pvalue'])
+        qvalue_col = pick_col(normalized_cols, ['p_value', 'pvalue'])
 
     required_missing = []
     if motif_col is None:
@@ -148,6 +146,40 @@ def load_fimo_hits(path):
             )
         )
         return pandas.DataFrame(columns=base_cols)
+
+    usecols = [motif_col, seq_col, start_col, stop_col, qvalue_col]
+    if motif_alt_col is not None:
+        usecols.append(motif_alt_col)
+    if strand_col is not None:
+        usecols.append(strand_col)
+    usecols = list(dict.fromkeys(usecols))
+
+    try:
+        df = pandas.read_csv(
+            path,
+            sep='\t',
+            header=0,
+            index_col=None,
+            dtype=str,
+            usecols=usecols,
+            keep_default_na=False,
+        )
+    except Exception as exc:
+        print('Failed to parse FIMO table {}: {}'.format(path, exc))
+        return pandas.DataFrame(columns=base_cols)
+    if df.empty:
+        return pandas.DataFrame(columns=base_cols)
+
+    df = df.rename(columns={col: normalize_col(col) for col in df.columns})
+    motif_col = normalize_col(motif_col)
+    if motif_alt_col is not None:
+        motif_alt_col = normalize_col(motif_alt_col)
+    seq_col = normalize_col(seq_col)
+    start_col = normalize_col(start_col)
+    stop_col = normalize_col(stop_col)
+    if strand_col is not None:
+        strand_col = normalize_col(strand_col)
+    qvalue_col = normalize_col(qvalue_col)
 
     df_out = pandas.DataFrame(index=df.index.copy())
     df_out['motif_id'] = df[motif_col].astype(str).str.strip()
@@ -252,13 +284,12 @@ def load_scm_intron_branch_table(scm_intron_path, dated_tree_path):
 
     dated_tree = new_tree(dated_tree_path, format=1)
     dated_tree = _ensure_branch_ids(dated_tree)
-    node_labels = [
-        {'node_name': node.name, 'branch_id': _get_node_label(node)}
-        for node in dated_tree.traverse()
-        if node.name
-    ]
-    df_labels = pandas.DataFrame(node_labels).drop_duplicates(subset=['node_name'])
-    df_out = pandas.merge(df_labels, df_out, on='node_name', how='right')
+    branch_id_by_name = {}
+    for node in dated_tree.traverse():
+        if node.name and (node.name not in branch_id_by_name):
+            branch_id_by_name[node.name] = _get_node_label(node)
+    df_out = df_out.copy()
+    df_out.loc[:, 'branch_id'] = df_out['node_name'].map(branch_id_by_name)
 
     if 'branch_id' in df_out.columns:
         is_unmapped = df_out['branch_id'].isna()
@@ -1079,8 +1110,13 @@ def main():
         if relax_merged is not None:
             numlabel_merge_tables.append(relax_merged)
     if (all([ os.path.exists(params[key]) for key in ['character_gff'] ])):
-        df_tmp = pandas.read_csv(params['character_gff'], sep='\t',  header=0, index_col=None)
-        df_tmp = df_tmp.drop(labels='num_intron', axis=1)
+        df_tmp = pandas.read_csv(
+            params['character_gff'],
+            sep='\t',
+            header=0,
+            index_col=None,
+            usecols=lambda col: col != 'num_intron',
+        )
         df_tmp = df_tmp.rename(columns={'gene_id':'node_name'})
         df_tmp = df_tmp.rename(columns={'feature_size':'intron_feature_size'})
         df_branch = pandas.merge(df_branch, df_tmp, on='node_name', how='left')
@@ -1104,7 +1140,14 @@ def main():
         df_tmp = df_tmp.reset_index().rename(columns={'index': 'node_name'})
         node_left_merge_tables.append(df_tmp)
     if (os.path.exists(params['rpsblast'])):
-        df_tmp = pandas.read_csv(params['rpsblast'], sep='\t',  header=0, index_col=None, dtype = {'stitle':'object'})
+        df_tmp = pandas.read_csv(
+            params['rpsblast'],
+            sep='\t',
+            header=0,
+            index_col=None,
+            usecols=['qacc', 'stitle', 'evalue'],
+            dtype={'stitle': 'object'},
+        )
         df_tmp = df_tmp.loc[(df_tmp['evalue']<=0.05),:]
         df_tmp = df_tmp.loc[:,['qacc','stitle']]
         df_tmp.loc[:,'stitle'] = df_tmp.loc[:,'stitle'].str.replace(',','|', 1, regex=False)
@@ -1162,8 +1205,13 @@ def main():
         df_exp.columns = 'expression_'+df_exp.columns
         node_left_merge_tables.append(df_exp.reset_index().rename(columns={'index': 'node_name'}))
     if (os.path.exists(params['csubst_b'])):
-        df_tmp = pandas.read_csv(params['csubst_b'], sep='\t',  header=0, index_col=None)
-        df_tmp = df_tmp.drop('branch_name', axis=1)
+        df_tmp = pandas.read_csv(
+            params['csubst_b'],
+            sep='\t',
+            header=0,
+            index_col=None,
+            usecols=lambda col: col != 'branch_name',
+        )
         df_tmp.columns = 'csubst_'+df_tmp.columns
         df_tmp.columns = df_tmp.columns.str.replace('csubst_branch_id','branch_id', regex=False)
         numlabel_merge_tables.append(df_tmp)
@@ -1256,12 +1304,12 @@ def main():
         tree_tmp = get_iqtree_model_stats(params['iqtree_model'])
         tree_info.update(tree_tmp)
     if os.path.exists(params["codeml_tsv"]):
-        tmp = pandas.read_csv(params['codeml_tsv'], sep='\t', header=0, index_col=None)
+        tmp = pandas.read_csv(params['codeml_tsv'], sep='\t', header=0, index_col=None, nrows=1)
         for col in tmp.columns:
             tree_info['codeml_'+col] = tmp.loc[:,col].values[0]
     for method in ['l1ou']:
         if os.path.exists(params[method+"_tree"]):
-            tmp = pandas.read_csv(params[method+'_tree'], sep='\t')
+            tmp = pandas.read_csv(params[method+'_tree'], sep='\t', usecols=['num_shift'], nrows=1)
             num_shift = tmp['num_shift'].values[0]
             tree_tmp = {method+'_num_shift':num_shift,}
             tree_info.update(tree_tmp)

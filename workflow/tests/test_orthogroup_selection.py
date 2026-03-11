@@ -178,3 +178,21 @@ def test_annotation_search_handles_empty_existing_output(tmp_path, monkeypatch):
     out = mod.annotate_representative_genes(df_gc, args)
     assert "besthit_0.5" in out.columns
     assert out["besthit_0.5"].iloc[0] == ""
+
+
+def test_load_besthit_table_reads_only_first_two_columns(tmp_path):
+    mod = load_module()
+    infile = tmp_path / "tmp.mmseqs2.out.tsv"
+    infile.write_text(
+        "geneA\thitA\t1e-50\t200\n"
+        "geneB\thitB\t1e-20\t150\n",
+        encoding="utf-8",
+    )
+
+    out = mod._load_besthit_table(str(infile))
+
+    assert out.columns.tolist() == ["qseqid", "stitle"]
+    assert out.to_dict("records") == [
+        {"qseqid": "geneA", "stitle": "hitA"},
+        {"qseqid": "geneB", "stitle": "hitB"},
+    ]

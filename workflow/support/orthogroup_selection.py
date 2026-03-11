@@ -220,13 +220,18 @@ def _load_besthit_table(path_out):
         return pandas.DataFrame(columns=['qseqid', 'stitle'])
     print('Loading {}'.format(path_out))
     try:
-        df_hits = pandas.read_csv(path_out, sep='\t', header=None, low_memory=False)
-    except pandas.errors.EmptyDataError:
+        df_hits = pandas.read_csv(
+            path_out,
+            sep='\t',
+            header=None,
+            low_memory=False,
+            usecols=[0, 1],
+            names=['qseqid', 'stitle'],
+        )
+    except (pandas.errors.EmptyDataError, ValueError):
         return pandas.DataFrame(columns=['qseqid', 'stitle'])
-    if df_hits.empty or df_hits.shape[1] < 2:
+    if df_hits.empty:
         return pandas.DataFrame(columns=['qseqid', 'stitle'])
-    df_hits = df_hits.iloc[:, :2].copy()
-    df_hits.columns = ['qseqid', 'stitle']
     return df_hits
 
 

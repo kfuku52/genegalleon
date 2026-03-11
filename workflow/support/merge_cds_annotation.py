@@ -22,6 +22,14 @@ def read_fasta_ids(path):
     return ids
 
 
+def dedupe_gene_id_index(tmp):
+    if tmp is None:
+        return None
+    if 'gene_id' not in tmp.columns:
+        return tmp
+    return tmp.drop_duplicates(subset=['gene_id'], keep='first').set_index('gene_id')
+
+
 def load_orthogroup_map(path, species_col):
     if not os.path.exists(path):
         print('File not found: {}'.format(path), flush=True)
@@ -51,7 +59,7 @@ def load_uniprot(path):
         print('File not found: {}'.format(path), flush=True)
         return None
     print('{}: Processing: {}'.format(datetime.datetime.now(), path), flush=True)
-    return pandas.read_csv(path, sep='\t', header=0, index_col=None, low_memory=False)
+    return dedupe_gene_id_index(pandas.read_csv(path, sep='\t', header=0, index_col=None, low_memory=False))
 
 
 def load_busco(path):
@@ -68,7 +76,7 @@ def load_busco(path):
     agg_cols = [c for c in tmp.columns if c != 'gene_id']
     tmp_agg = tmp.loc[:, ['gene_id'] + agg_cols].astype(str)
     tmp_agg = tmp_agg.groupby('gene_id', as_index=False, sort=False)[agg_cols].agg('; '.join)
-    return tmp_agg
+    return dedupe_gene_id_index(tmp_agg)
 
 
 def load_fx2tab(path):
@@ -79,7 +87,7 @@ def load_fx2tab(path):
     tmp = pandas.read_csv(path, sep='\t', header=0, index_col=None, low_memory=False)
     tmp.columns = tmp.columns.str.replace('length', 'cds_length')
     tmp.columns = tmp.columns.str.replace('#id', 'gene_id')
-    return tmp
+    return dedupe_gene_id_index(tmp)
 
 
 def load_gff_info(path):
@@ -87,7 +95,7 @@ def load_gff_info(path):
         print('File not found: {}'.format(path), flush=True)
         return None
     print('{}: Processing: {}'.format(datetime.datetime.now(), path), flush=True)
-    return pandas.read_csv(path, sep='\t', header=0, index_col=None, low_memory=False)
+    return dedupe_gene_id_index(pandas.read_csv(path, sep='\t', header=0, index_col=None, low_memory=False))
 
 
 def load_expression(path):
@@ -100,7 +108,7 @@ def load_expression(path):
         tmp.columns = tmp.columns.str.replace('Unnamed: 0', 'gene_id')
     else:
         tmp.columns = tmp.columns.str.replace(tmp.columns[0], 'gene_id')
-    return tmp
+    return dedupe_gene_id_index(tmp)
 
 
 def load_mmseqs(path):
@@ -115,16 +123,19 @@ def load_mmseqs(path):
         'num_taxid_supporting_protein_fragment', 'fraction_evalue_support',
         'lineage_taxids',
     ]  # https://github.com/soedinglab/MMseqs2/wiki#taxonomy-format
-    return tmp
+    return dedupe_gene_id_index(tmp)
 
 
 def join_if_available(df, tmp):
     if tmp is None:
         return df
-    if ('gene_id' not in tmp.columns):
-        return df
-    tmp_indexed = tmp.drop_duplicates(subset=['gene_id'], keep='first').set_index('gene_id')
-    return df.join(tmp_indexed, how='left')
+    if isinstance(tmp, pandas.Series):
+        return df.join(tmp, how='left')
+    if getattr(tmp.index, 'name', None) != 'gene_id':
+        if 'gene_id' not in tmp.columns:
+            return df
+        tmp = dedupe_gene_id_index(tmp)
+    return df.join(tmp, how='left')
 
 
 def main():
