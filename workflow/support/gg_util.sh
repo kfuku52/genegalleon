@@ -379,6 +379,10 @@ gg_export_var_to_container_env_if_set() {
 	if [[ -z "${var_name}" ]]; then
 		return 0
 	fi
+	if [[ ! "${var_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+		echo "gg_export_var_to_container_env_if_set: ignoring invalid variable name: ${var_name}" >&2
+		return 0
+	fi
 	if [[ -n "${!var_name+x}" ]]; then
 		export "${var_name}"
 		export "SINGULARITYENV_${var_name}=${!var_name}"
@@ -533,7 +537,9 @@ forward_config_vars_to_container_env() {
 		return 1
 	fi
 	while IFS= read -r var_name; do
-		if [[ -z "${var_name}" ]]; then
+		var_name=${var_name#"${var_name%%[![:space:]]*}"}
+		var_name=${var_name%"${var_name##*[![:space:]]}"}
+		if [[ -z "${var_name}" || "${var_name}" == \#* ]]; then
 			continue
 		fi
 		gg_export_var_to_container_env_if_set "${var_name}"

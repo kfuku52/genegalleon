@@ -16,6 +16,39 @@ def run_bash(cmd: str, cwd: Path):
     )
 
 
+def test_forward_config_vars_trims_registry_whitespace_for_genome_evolution_entrypoint(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "astral_min_tips=7; "
+        "run_species_busco=1; "
+        "forward_config_vars_to_container_env gg_genome_evolution_entrypoint.sh; "
+        'printf "astral=%s\\nrun_species_busco=%s\\n" '
+        '"${SINGULARITYENV_astral_min_tips:-}" "${SINGULARITYENV_run_species_busco:-}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "astral=7",
+        "run_species_busco=1",
+    ]
+
+
+def test_export_var_to_container_env_ignores_invalid_variable_name(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "gg_export_var_to_container_env_if_set ' invalid variable'; "
+        'printf "%s\\n" ok'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "ok"
+    assert "ignoring invalid variable name" in completed.stderr
+
+
 def test_workspace_pfam_le_dir_is_under_downloads_dedicated_folder(tmp_path):
     project_dir = tmp_path / "project"
     project_dir.mkdir()

@@ -141,17 +141,17 @@ EOF
       ;;
     gg_genome_evolution_entrypoint.sh)
       cat <<'EOF'
-      astral_min_tips
-      bootstrap_params
-      change_direction_go
-      delete_tmp_dir
-      grampa_h1
-      go_category
-      input_sequence_mode
-      max_gene_orthogroup_grampa
-      max_num_gene
-      max_orthofinder_core_species
-      max_size_differential_cafe
+astral_min_tips
+bootstrap_params
+change_direction_go
+delete_tmp_dir
+grampa_h1
+go_category
+input_sequence_mode
+max_gene_orthogroup_grampa
+max_num_gene
+max_orthofinder_core_species
+max_size_differential_cafe
 mcmctree_divergence_time_constraints_str
 mcmc_birth_death_sampling
 mcmc_burnin
@@ -205,13 +205,13 @@ run_orthogroup_method_comparison
 run_plot_constrained_tree
 run_plot_mcmctreer
 run_plot_species_trees
-      run_species_busco
-      run_species_get_busco_summary
-      species_tree_rooting
-      strictly_single_copy_only
-      target_branch_go
-      timetree_constraint
-      undated_species_tree
+run_species_busco
+run_species_get_busco_summary
+species_tree_rooting
+strictly_single_copy_only
+target_branch_go
+timetree_constraint
+undated_species_tree
 EOF
       ;;
     gg_input_generation_entrypoint.sh)
