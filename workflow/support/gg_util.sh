@@ -115,6 +115,139 @@ gg_csv_append() {
 	fi
 }
 
+gg_trim_ascii_whitespace() {
+	local value=${1:-}
+	value="${value#"${value%%[![:space:]]*}"}"
+	value="${value%"${value##*[![:space:]]}"}"
+	printf '%s' "${value}"
+}
+
+gg_is_valid_shell_var_name() {
+	local var_name=${1:-}
+	[[ "${var_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
+}
+
+gg_normalize_config_var_name() {
+	local var_name=${1:-}
+	var_name=$(gg_trim_ascii_whitespace "${var_name}")
+	if [[ -z "${var_name}" || "${var_name}" == \#* ]]; then
+		return 1
+	fi
+	printf '%s\n' "${var_name}"
+}
+
+gg_should_mask_config_var_name() {
+	local var_name=${1:-}
+	local var_name_upper=""
+
+	var_name_upper=$(printf '%s' "${var_name}" | tr '[:lower:]' '[:upper:]')
+	case "${var_name_upper}" in
+		*TOKEN*|*SECRET*|*PASSWORD*|*PASSWD*|*API_KEY*|*HTTP_HEADER*|*AUTH_HEADER*|*PRIVATE_KEY*|*ACCESS_KEY*)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+gg_print_named_config_summary() {
+	local title=${1:-}
+	shift || true
+	local raw_var_name=""
+	local var_name=""
+	local value=""
+
+	if [[ -z "${title}" ]]; then
+		title="config summary"
+	fi
+
+	echo "### ${title} ###"
+	for raw_var_name in "$@"; do
+		var_name=$(gg_normalize_config_var_name "${raw_var_name}" || true)
+		if [[ -z "${var_name}" ]]; then
+			continue
+		fi
+		if ! gg_is_valid_shell_var_name "${var_name}"; then
+			echo "${var_name}=<invalid-var-name>"
+			continue
+		fi
+		if [[ -z "${!var_name+x}" ]]; then
+			echo "${var_name}=<unset>"
+			continue
+		fi
+		if gg_should_mask_config_var_name "${var_name}"; then
+			echo "${var_name}=<masked>"
+			continue
+		fi
+		value=${!var_name}
+		if [[ -z "${value}" ]]; then
+			value="<empty>"
+		fi
+		printf '%s=%s\n' "${var_name}" "${value}"
+	done
+	echo ""
+}
+
+gg_print_registered_config_summary() {
+	local entrypoint_name=${1:-}
+	local title=${2:-}
+	shift 2 || true
+	local raw_var_name=""
+	local var_name=""
+	local -a summary_vars=()
+
+	if [[ -z "${entrypoint_name}" ]]; then
+		return 0
+	fi
+	if ! declare -F gg_print_entrypoint_config_vars >/dev/null 2>&1; then
+		echo "gg_print_registered_config_summary: config var registry helper is unavailable." >&2
+		return 0
+	fi
+
+	while IFS= read -r raw_var_name; do
+		var_name=$(gg_normalize_config_var_name "${raw_var_name}" || true)
+		if [[ -z "${var_name}" ]]; then
+			continue
+		fi
+		summary_vars+=( "${var_name}" )
+	done < <(gg_print_entrypoint_config_vars "${entrypoint_name}")
+
+	while [[ $# -gt 0 ]]; do
+		var_name=$(gg_normalize_config_var_name "$1" || true)
+		if [[ -n "${var_name}" ]]; then
+			summary_vars+=( "${var_name}" )
+		fi
+		shift
+	done
+
+	if [[ ${#summary_vars[@]} -eq 0 ]]; then
+		return 0
+	fi
+	gg_print_named_config_summary "${title}" "${summary_vars[@]}"
+}
+
+gg_print_entrypoint_config_summary() {
+	local job_script=${1:-}
+	shift || true
+	local entrypoint_name=""
+	local -a common_vars=()
+	local gg_common_var_name
+
+	if [[ -z "${job_script}" ]]; then
+		return 0
+	fi
+	entrypoint_name="$(basename "${job_script}")"
+	gg_print_registered_config_summary "${entrypoint_name}" "entrypoint config summary (${entrypoint_name})" "$@"
+
+	for gg_common_var_name in GG_COMMON_GENETIC_CODE GG_COMMON_BUSCO_LINEAGE GG_COMMON_REFERENCE_SPECIES; do
+		if [[ -n "${!gg_common_var_name+x}" ]]; then
+			common_vars+=( "${gg_common_var_name}" )
+		fi
+	done
+	if [[ ${#common_vars[@]} -gt 0 ]]; then
+		gg_print_named_config_summary "shared common summary (${entrypoint_name})" "${common_vars[@]}"
+	fi
+}
+
 gg_container_mount_destination() {
 	local mount_spec=${1:-}
 	local remainder
@@ -376,10 +509,11 @@ gg_add_container_bind_mount() {
 
 gg_export_var_to_container_env_if_set() {
 	local var_name=$1
+	var_name=$(gg_normalize_config_var_name "${var_name}" || true)
 	if [[ -z "${var_name}" ]]; then
 		return 0
 	fi
-	if [[ ! "${var_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+	if ! gg_is_valid_shell_var_name "${var_name}"; then
 		echo "gg_export_var_to_container_env_if_set: ignoring invalid variable name: ${var_name}" >&2
 		return 0
 	fi
@@ -537,9 +671,8 @@ forward_config_vars_to_container_env() {
 		return 1
 	fi
 	while IFS= read -r var_name; do
-		var_name=${var_name#"${var_name%%[![:space:]]*}"}
-		var_name=${var_name%"${var_name##*[![:space:]]}"}
-		if [[ -z "${var_name}" || "${var_name}" == \#* ]]; then
+		var_name=$(gg_normalize_config_var_name "${var_name}" || true)
+		if [[ -z "${var_name}" ]]; then
 			continue
 		fi
 		gg_export_var_to_container_env_if_set "${var_name}"

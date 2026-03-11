@@ -97,6 +97,7 @@ dir_out="auto" # Output directory for convergence results, or "auto" to use the 
 exit_if_running=0
 
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
+gg_print_entrypoint_config_summary "${gg_entrypoint_name}"
 # Forward config variables (including external overrides) into container environment.
 forward_config_vars_to_container_env "${gg_entrypoint_name}"
 gg_export_var_to_container_env_if_set "PYMOL_HEADLESS"

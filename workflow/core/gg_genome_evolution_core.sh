@@ -586,6 +586,37 @@ compute_shared_protein_input_signature() {
   } | cksum | awk '{print $1}'
 }
 
+print_effective_genome_evolution_config_summary() {
+  local species_protein_input_available=0
+  local species_cds_input_available=0
+  local species_genetic_code_table_present=0
+
+  if species_protein_input_has_files; then
+    species_protein_input_available=1
+  fi
+  if species_cds_input_has_files; then
+    species_cds_input_available=1
+  fi
+  if [[ -s "${file_species_genetic_code}" ]]; then
+    species_genetic_code_table_present=1
+  fi
+
+  gg_print_registered_config_summary \
+    "gg_genome_evolution_entrypoint.sh" \
+    "effective config summary (gg_genome_evolution_core.sh)" \
+    genetic_code \
+    busco_lineage \
+    annotation_species \
+    annotation_species_resolved \
+    species_tree_rooting_method \
+    species_tree_rooting_value \
+    species_tree_busco_mode \
+    species_tree_sequence_label \
+    species_protein_input_available \
+    species_cds_input_available \
+    species_genetic_code_table_present
+}
+
 refresh_dir_for_shared_protein_input_signature() {
   local target_dir=$1
   local description=$2
@@ -764,6 +795,7 @@ echo "Resolved species_tree_rooting method: ${species_tree_rooting_method}"
 if [[ -n "${species_tree_rooting_value}" ]]; then
   echo "Resolved species_tree_rooting value: ${species_tree_rooting_value}"
 fi
+print_effective_genome_evolution_config_summary
 
 root_species_tree() {
   local infile=$1

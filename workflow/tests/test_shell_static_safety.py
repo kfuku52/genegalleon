@@ -610,6 +610,9 @@ def test_gg_util_has_common_forward_config_export_helpers():
     assert "gg_export_var_to_container_env_if_set()" in text
     assert "gg_apply_named_env_overrides()" in text
     assert "gg_forward_env_vars_with_prefix_to_container_env()" in text
+    assert "gg_print_named_config_summary()" in text
+    assert "gg_print_registered_config_summary()" in text
+    assert "gg_print_entrypoint_config_summary()" in text
     assert "gg_require_versions_dump()" in text
     assert "gg_resolve_physical_path()" in text
     body = _function_body(text, "forward_config_vars_to_container_env")
@@ -1014,6 +1017,22 @@ def test_entrypoints_forward_cleanup_flags_defined_outside_config_block():
         assert token in text, f"Missing cleanup var forwarding in {script_name}: {token}"
 
 
+def test_entrypoints_print_config_summary_near_startup():
+    expected_tokens = {
+        "gg_gene_convergence_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}"',
+        "gg_gene_database_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}"',
+        "gg_gene_evolution_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}" "delete_tmp_dir" "delete_preexisting_tmp_dir"',
+        "gg_genome_annotation_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}" "delete_tmp_dir"',
+        "gg_genome_evolution_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}"',
+        "gg_input_generation_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}"',
+        "gg_progress_summary_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}"',
+        "gg_transcriptome_generation_entrypoint.sh": 'gg_print_entrypoint_config_summary "${gg_entrypoint_name}" "delete_tmp_dir"',
+    }
+    for script_name, token in expected_tokens.items():
+        text = _read_text(WORKFLOW_DIR / script_name)
+        assert token in text, f"Missing config summary print in {script_name}: {token}"
+
+
 def test_gene_convergence_entrypoint_does_not_define_unused_delete_tmp_dir():
     text = _read_text(WORKFLOW_DIR / "gg_gene_convergence_entrypoint.sh")
     assert "delete_tmp_dir=" not in text
@@ -1026,6 +1045,14 @@ def test_gene_evolution_entrypoint_allows_debug_runner_mode_overrides():
     assert 'run_hyphy_relax_reversed="${run_hyphy_relax_reversed:-0}"' in text
     assert "mode_orthogroup=0 # Analyze OrthoFinder orthogroups" not in text
     assert "mode_query2family=1 # Analyze all homologs of input genelist" not in text
+
+
+def test_genome_evolution_core_prints_effective_config_summary():
+    text = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+    assert "print_effective_genome_evolution_config_summary()" in text
+    assert 'gg_print_registered_config_summary \\' in text
+    assert '"effective config summary (gg_genome_evolution_core.sh)" \\' in text
+    assert "print_effective_genome_evolution_config_summary" in text.split("root_species_tree()", 1)[0]
 
 
 def test_entrypoints_with_exit_if_running_call_duplicate_guard():
@@ -1631,8 +1658,8 @@ def test_genome_evolution_uses_local_optional_grampa_and_go_target_parameters():
     assert 'Disabling run_go_enrichment because target_branch_go is empty. Set target_branch_go in gg_genome_evolution_entrypoint.sh to enable it.' in core
     assert ': "${grampa_h1:?' not in core
     assert ': "${target_branch_go:?' not in core
-    assert "      grampa_h1" in config_vars
-    assert "      target_branch_go" in config_vars
+    assert "grampa_h1" in config_vars
+    assert "target_branch_go" in config_vars
 
 
 def test_genome_evolution_uses_local_species_tree_rooting_parameter():
@@ -1649,7 +1676,7 @@ def test_genome_evolution_uses_local_species_tree_rooting_parameter():
     assert 'nwkit_root_args=(--method "${root_method}" --infile "${infile}" --outfile "${outfile}")' in core
     assert 'nwkit_root_args+=(--outgroup "${root_value}")' in core
     assert 'nwkit_root_args+=(--download_dir "${dir_nwkit_download_dir}")' in core
-    assert "      species_tree_rooting" in config_vars
+    assert "species_tree_rooting" in config_vars
 
 
 def test_genome_evolution_supports_protein_input_mode_and_species_code_overrides():
@@ -1658,7 +1685,7 @@ def test_genome_evolution_supports_protein_input_mode_and_species_code_overrides
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
     assert 'input_sequence_mode="cds" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.' in entrypoint
-    assert "      input_sequence_mode" in config_vars
+    assert "input_sequence_mode" in config_vars
     assert 'input_sequence_mode="${input_sequence_mode:-cds}"' in core
     assert 'species_genetic_code_table_path() {' in core
     assert 'echo "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv"' in core

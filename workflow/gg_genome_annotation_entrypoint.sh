@@ -120,6 +120,7 @@ exit_if_running=0 # Exit without main analysis if the same GG_ARRAY_TASK_ID is a
 delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Set 0 when debugging.
 
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
+gg_print_entrypoint_config_summary "${gg_entrypoint_name}" "delete_tmp_dir"
 # Forward config variables (including external overrides) into container environment.
 forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir"
 if ! gg_entrypoint_prepare_container_runtime 1; then

@@ -49,6 +49,26 @@ def test_export_var_to_container_env_ignores_invalid_variable_name(tmp_path):
     assert "ignoring invalid variable name" in completed.stderr
 
 
+def test_print_entrypoint_config_summary_masks_sensitive_values(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "provider=ncbi; "
+        "dry_run=1; "
+        "auth_bearer_token_env=GG_SECRET_TOKEN; "
+        "http_header='Authorization: Bearer secret'; "
+        "gg_print_entrypoint_config_summary gg_input_generation_entrypoint.sh"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "### entrypoint config summary (gg_input_generation_entrypoint.sh) ###" in completed.stdout
+    assert "provider=ncbi" in completed.stdout
+    assert "dry_run=1" in completed.stdout
+    assert "auth_bearer_token_env=<masked>" in completed.stdout
+    assert "http_header=<masked>" in completed.stdout
+
+
 def test_workspace_pfam_le_dir_is_under_downloads_dedicated_folder(tmp_path):
     project_dir = tmp_path / "project"
     project_dir.mkdir()
