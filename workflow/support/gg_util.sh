@@ -1498,7 +1498,7 @@ _download_busco_lineage_to_runtime() {
     return 1
   fi
   if [[ -d busco_downloads ]]; then
-    find busco_downloads -mindepth 1 -maxdepth 1 -exec mv -f -- {} "${runtime_busco_db}"/ \;
+    gg_merge_directory_contents "busco_downloads" "${runtime_busco_db}" || return 1
     rm -rf -- busco_downloads
   fi
   if ! gg_busco_lineage_is_ready "${runtime_busco_lineage}"; then
@@ -1507,6 +1507,35 @@ _download_busco_lineage_to_runtime() {
   fi
   gg_write_ready_marker "${runtime_ready_marker}"
   echo "BUSCO dataset download has been finished: ${busco_lineage}" >&2
+}
+
+gg_merge_directory_contents() {
+  local staged_dir=$1
+  local runtime_dir=$2
+  local staged_entries=()
+  local staged_entry=""
+  local runtime_entry=""
+
+  [[ -d "${staged_dir}" ]] || return 0
+  ensure_dir "${runtime_dir}"
+
+  shopt -s nullglob dotglob
+  staged_entries=("${staged_dir}"/*)
+  shopt -u nullglob dotglob
+
+  if [[ ${#staged_entries[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  for staged_entry in "${staged_entries[@]}"; do
+    runtime_entry="${runtime_dir}/$(basename "${staged_entry}")"
+    if [[ -d "${staged_entry}" && -d "${runtime_entry}" ]]; then
+      gg_merge_directory_contents "${staged_entry}" "${runtime_entry}" || return 1
+      rm -rf -- "${staged_entry}"
+    else
+      mv -f -- "${staged_entry}" "${runtime_entry}" || return 1
+    fi
+  done
 }
 
 gg_busco_lineage_is_ready() {

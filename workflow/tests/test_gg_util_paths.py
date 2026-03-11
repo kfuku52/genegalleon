@@ -52,6 +52,54 @@ def test_gg_array_download_once_accepts_nonempty_ready_marker(tmp_path):
     assert lines[2] == "ready"
 
 
+def test_download_busco_lineage_to_runtime_merges_into_existing_runtime_db(tmp_path):
+    runtime_db = tmp_path / "workspace" / "downloads" / "busco_downloads"
+    existing_lineage = runtime_db / "lineages" / "existing_odb12"
+    existing_lineage.mkdir(parents=True)
+    (existing_lineage / "dataset.cfg").write_text("existing\n", encoding="utf-8")
+    placement_dir = runtime_db / "placement_files"
+    placement_dir.mkdir(parents=True)
+    (placement_dir / "mapping.txt").write_text("mapping\n", encoding="utf-8")
+    ready_marker = runtime_db / "lineages" / "eukaryota_odb12" / ".download.ready"
+    runtime_lineage = runtime_db / "lineages" / "eukaryota_odb12"
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "busco() { "
+        "mkdir -p busco_downloads/lineages/eukaryota_odb12/info; "
+        "mkdir -p busco_downloads/placement_files; "
+        "printf 'new\\n' > busco_downloads/lineages/eukaryota_odb12/dataset.cfg; "
+        "printf 'placement\\n' > busco_downloads/placement_files/new_mapping.txt; "
+        "printf 'versions\\n' > busco_downloads/file_versions.tsv; "
+        "}; "
+        f'_download_busco_lineage_to_runtime "eukaryota_odb12" '
+        f'{shlex.quote(str(runtime_db))} '
+        f'{shlex.quote(str(runtime_lineage))} '
+        f'{shlex.quote(str(ready_marker))}; '
+        'status=$?; '
+        'printf "%s\\n" "$status"; '
+        f'test -s {shlex.quote(str(runtime_lineage / "dataset.cfg"))}; printf "new=%s\\n" "$?"; '
+        f'test -s {shlex.quote(str(existing_lineage / "dataset.cfg"))}; printf "existing=%s\\n" "$?"; '
+        f'test -s {shlex.quote(str(placement_dir / "mapping.txt"))}; printf "mapping=%s\\n" "$?"; '
+        f'test -s {shlex.quote(str(placement_dir / "new_mapping.txt"))}; printf "new_mapping=%s\\n" "$?"; '
+        f'test -s {shlex.quote(str(ready_marker))}; printf "ready=%s\\n" "$?"; '
+        'test ! -e busco_downloads; printf "staging_removed=%s\\n" "$?"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "0",
+        "new=0",
+        "existing=0",
+        "mapping=0",
+        "new_mapping=0",
+        "ready=0",
+        "staging_removed=0",
+    ]
+
+
 def test_contamination_rank_normalizes_superkingdom_for_amalgkit(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "

@@ -121,7 +121,7 @@ def main():
         names=MMSEQS_TAXONOMY_COLUMNS,
         dtype={'query': str, 'lca_sciname': str, 'lineage_taxids': str},
     )  # https://github.com/soedinglab/MMseqs2/wiki#taxonomy-format
-    df['lca_taxid'] = pandas.to_numeric(df['lca_taxid'], errors='coerce').fillna(0).astype('int64', copy=False)
+    df['lca_taxid'] = pandas.to_numeric(df['lca_taxid'], errors='coerce').fillna(0).astype('int64')
 
     taxonomy_dbfile = os.environ.get('GG_TAXONOMY_DBFILE', '').strip()
     if taxonomy_dbfile:
@@ -139,6 +139,10 @@ def main():
         dtype={'#id': str, 'length': 'int64', 'GC': 'float64'},
     ).rename(columns={'#id': 'query'})
     df = pandas.merge(df, fx, on='query')
+    if df.empty:
+        print('Exiting. No query IDs overlapped between MMseqs2 taxonomy TSV and fx2tab TSV.')
+        print('This usually means one of the cached inputs belongs to a different sample or an older run.')
+        sys.exit(1)
     df.sort_values(by='length', ascending=False, inplace=True, ignore_index=True)
 
     lineage_series = df['lineage_taxids'].astype(str)

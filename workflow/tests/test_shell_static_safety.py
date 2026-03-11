@@ -1166,12 +1166,12 @@ def test_gg_util_avoids_mapfile_for_host_bash_compatibility():
     assert "mapfile" not in text
 
 
-def test_busco_dataset_move_uses_mv_option_separator():
+def test_busco_dataset_download_merges_staged_directory_contents():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
     body = _function_body(text, "_download_busco_lineage_to_runtime")
-    assert "-exec mv -f -- {}" in body
-    assert "-exec mv -f {}" not in body
+    assert 'gg_merge_directory_contents "busco_downloads" "${runtime_busco_db}"' in body
+    assert "-exec mv -f -- {}" not in body
 
 
 def test_species_busco_set_check_is_gated_by_run_flag():
