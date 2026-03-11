@@ -24,6 +24,8 @@ gg_workspace_dir=/path/to/workspace bash workflow/gg_genome_evolution_entrypoint
 workspace/
   input/
     species_cds/
+    species_protein/
+    species_genetic_code/
     species_expression/
     species_gff/
     species_genome/
@@ -49,6 +51,8 @@ This is the user-managed side of the workspace.
 Typical contents:
 
 - `species_cds/`: CDS FASTA inputs for comparative/genome-evolution workflows
+- `species_protein/`: optional per-species protein FASTA inputs for `gg_genome_evolution` protein mode
+- `species_genetic_code/`: optional `species_genetic_code.tsv` table for per-species CDS translation overrides
 - `species_gff/` and `species_genome/`: optional annotation/genome companions
 - `species_expression/`: expression matrices used by gene-family downstream analyses
 - `species_trait/`: trait tables such as `species_trait.tsv`

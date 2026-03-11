@@ -1645,6 +1645,7 @@ def test_genome_evolution_supports_protein_input_mode_and_species_code_overrides
     assert 'lookup_species_genetic_code() {' in core
     assert 'check_species_protein_dir "${dir_sp_protein_input}"' in core
     assert 'species_genetic_code.tsv is ignored because species_protein inputs are provided' in core
+    assert 'run_cds_translation must be 1 when species proteins need to be generated from species_cds.' in core
     assert 'Translation started: ${cds} (genetic_code=${species_code})' in core
 
 

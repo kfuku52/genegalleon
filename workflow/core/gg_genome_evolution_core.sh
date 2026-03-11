@@ -655,6 +655,10 @@ prepare_species_protein_tmp() {
     echo "Checked: ${dir_sp_protein_input} and ${dir_sp_cds}"
     exit 1
   fi
+  if [[ ${run_cds_translation} -ne 1 ]]; then
+    echo "run_cds_translation must be 1 when species proteins need to be generated from species_cds."
+    exit 1
+  fi
 
   check_species_cds "${gg_workspace_dir}"
   check_if_species_files_unique "${dir_sp_cds}"
