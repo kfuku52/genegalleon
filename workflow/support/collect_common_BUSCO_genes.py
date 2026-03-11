@@ -8,14 +8,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
+BUSCO_TABLE_COLUMNS = ['busco_id', 'sequence', 'orthodb_url', 'description']
 
-def read_busco_table(path_to_table, col_names):
+
+def read_busco_table(path_to_table):
     table = pd.read_table(
         path_to_table,
         sep='\t',
         header=None,
         comment='#',
-        names=col_names,
+        usecols=[0, 2, 5, 6],
+        names=BUSCO_TABLE_COLUMNS,
+        dtype='string',
     )
     table.loc[:, 'sequence'] = table.loc[:, 'sequence'].str.replace(':[-\\.0-9]*$', '', regex=True)
     for col in ['sequence', 'orthodb_url', 'description']:
@@ -23,15 +27,15 @@ def read_busco_table(path_to_table, col_names):
     return table
 
 
-def process_species_table(path_to_table, species_infile, col_names):
-    tmp_table = read_busco_table(path_to_table, col_names)
+def process_species_table(path_to_table, species_infile):
+    tmp_table = read_busco_table(path_to_table)
 
     tmp_metadata = tmp_table.loc[:, ['busco_id', 'orthodb_url', 'description']]
-    tmp_metadata = tmp_metadata.drop_duplicates(keep='first', inplace=False, ignore_index=True)
+    tmp_metadata = tmp_metadata.drop_duplicates(subset=['busco_id'], keep='first', ignore_index=True)
 
     tmp_sequence = (
         tmp_table.loc[:, ['busco_id', 'sequence']]
-        .groupby('busco_id', as_index=False)
+        .groupby('busco_id', as_index=False, sort=False)
         .agg(sequence=('sequence', ','.join))
         .rename(columns={'sequence': species_infile})
     )
@@ -52,7 +56,6 @@ def main():
     args.ncpu = max(1, int(args.ncpu))
     print("Starting collect_common_BUSCO_gene.py")
 
-    col_names = ['busco_id', 'status', 'sequence', 'score', 'length', 'orthodb_url', 'description']
     species_infiles = sorted(
         [
             f
@@ -82,14 +85,14 @@ def main():
     if args.ncpu == 1:
         for species_infile, path_to_table in tasks:
             print(f'Working on {species_infile}', flush=True)
-            species, tmp_sequence, tmp_metadata = process_species_table(path_to_table, species_infile, col_names)
+            species, tmp_sequence, tmp_metadata = process_species_table(path_to_table, species_infile)
             sequence_tables[species] = tmp_sequence
             metadata_tables[species] = tmp_metadata
     else:
         max_workers = min(args.ncpu, len(tasks))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(process_species_table, path_to_table, species_infile, col_names): species_infile
+                executor.submit(process_species_table, path_to_table, species_infile): species_infile
                 for species_infile, path_to_table in tasks
             }
             for future in as_completed(futures):

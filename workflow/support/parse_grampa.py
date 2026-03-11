@@ -18,21 +18,60 @@ def load_tree(newick_or_path, parser=0):
     return ete4.PhyloTree(newick_or_path, parser=parser)
 
 _WORKER_SPECIES_NAMES = None
+_WORKER_SPECIES_SET = None
+_WORKER_SPECIES_SUFFIXES = None
+
+LEGACY_DET_COLUMNS = {'# GT/MT combo', 'GT/MT combo', 'dups', 'losses', 'Total score', 'Maps'}
+MODERN_DET_COLUMNS = {'mul.tree', 'gene.tree', 'dups', 'losses', 'total.score', 'maps'}
+MODERN_OUT_COLUMNS = ['mul.tree', 'h1.node', 'h2.node', 'score', 'labeled.tree']
+
+
+def build_species_matcher(species_names):
+    ordered_species = tuple(species_names)
+    species_set = set(ordered_species)
+    species_suffixes = tuple(
+        sorted(
+            ((f'_{species_name}', species_name) for species_name in ordered_species),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        )
+    )
+    return ordered_species, species_set, species_suffixes
+
+
+def read_grampa_det(path):
+    det_header = pandas.read_csv(path, sep='\t', header=0, nrows=0)
+    det_columns = set(det_header.columns.tolist())
+    if ('# GT/MT combo' in det_columns) or ('GT/MT combo' in det_columns):
+        return pandas.read_csv(path, sep='\t', header=0, low_memory=False, usecols=lambda c: c in LEGACY_DET_COLUMNS)
+    if MODERN_DET_COLUMNS.issubset(det_columns):
+        return pandas.read_csv(path, sep='\t', header=0, low_memory=False, usecols=MODERN_DET_COLUMNS)
+    return pandas.read_csv(path, sep='\t', header=0, low_memory=False)
+
+
+def read_grampa_out(path):
+    out_header = pandas.read_csv(path, sep='\t', header=0, nrows=0, low_memory=False, comment='#')
+    if set(MODERN_OUT_COLUMNS).issubset(out_header.columns.tolist()):
+        return pandas.read_csv(path, sep='\t', header=0, low_memory=False, comment='#', usecols=MODERN_OUT_COLUMNS)
+    return None
 
 
 def _init_worker(species_names):
-    global _WORKER_SPECIES_NAMES
-    _WORKER_SPECIES_NAMES = species_names
+    global _WORKER_SPECIES_NAMES, _WORKER_SPECIES_SET, _WORKER_SPECIES_SUFFIXES
+    _WORKER_SPECIES_NAMES, _WORKER_SPECIES_SET, _WORKER_SPECIES_SUFFIXES = build_species_matcher(species_names)
 
 
-def summarize_gene_tree(task, species_names=None):
+def summarize_gene_tree(task, species_names=None, species_set=None, species_suffixes=None):
     idx, gt_txt = task
     if species_names is None:
         species_names = _WORKER_SPECIES_NAMES
+    if species_set is None:
+        species_set = _WORKER_SPECIES_SET
+    if species_suffixes is None:
+        species_suffixes = _WORKER_SPECIES_SUFFIXES
     gt_id = 'GT-' + str(idx + 1)
     gt = load_tree(newick_or_path=gt_txt, parser=0)
     gene_names = list(gt.leaf_names())
-    species_set = set(species_names)
     species_gene_lists = {species_name: [] for species_name in species_names}
     for gene_name in gene_names:
         matched_species = None
@@ -44,8 +83,7 @@ def summarize_gene_tree(task, species_names=None):
                 matched_species = candidate_species
                 gene_id = gene_name[:-(len(candidate_species) + 1)]
         if matched_species is None:
-            for species_name in species_names:
-                suffix = '_' + species_name
+            for suffix, species_name in species_suffixes:
                 if gene_name.endswith(suffix):
                     matched_species = species_name
                     gene_id = gene_name[:-len(suffix)]
@@ -78,7 +116,7 @@ def main():
 
     print('Processing grampa det file')
     # Keep legacy "# GT/MT combo" header line as actual columns.
-    det = pandas.read_csv(args.grampa_det, sep='\t', header=0, low_memory=False)
+    det = read_grampa_det(args.grampa_det)
     det.columns = det.columns.str.replace('^# ', '', regex=True)
     det.columns = det.columns.str.replace('Total score', 'total_score', regex=False)
     det.columns = det.columns.str.replace('Maps', 'maps', regex=False)
@@ -114,12 +152,13 @@ def main():
     print('Processing grampa input species trees')
     st = load_tree(newick_or_path=args.species_tree, parser=0)
     species_names = sorted(list(st.leaf_names()))
+    species_names, species_set, species_suffixes = build_species_matcher(species_names)
     det.loc[:, species_names] = ''
     print('{} species were found.'.format(len(species_names)))
 
     print('Processing grampa input gene trees')
     with open(args.gene_trees, 'r') as f:
-        gt_txts = f.readlines()
+        gt_txts = f.read().splitlines()
 
     row_indices_by_gt = det.groupby('gene_tree').indices
     tasks = [(i, gt_txt) for i, gt_txt in enumerate(gt_txts)]
@@ -134,12 +173,17 @@ def main():
                 update_det_with_species_genes(det, gt_id, species_names, species_gene_map, row_indices_by_gt)
     else:
         for task in tasks:
-            gt_id, species_gene_map = summarize_gene_tree(task, species_names=species_names)
+            gt_id, species_gene_map = summarize_gene_tree(
+                task,
+                species_names=species_names,
+                species_set=species_set,
+                species_suffixes=species_suffixes,
+            )
             update_det_with_species_genes(det, gt_id, species_names, species_gene_map, row_indices_by_gt)
 
     print('Processing grampa out file')
-    out = pandas.read_csv(args.grampa_out, sep='\t', header=0, low_memory=False, comment='#')
-    if {'mul.tree', 'h1.node', 'h2.node', 'score', 'labeled.tree'}.issubset(out.columns):
+    out = read_grampa_out(args.grampa_out)
+    if out is not None:
         # Grampa 1.4.4+ output format.
         out = out.rename(
             columns={
@@ -164,8 +208,7 @@ def main():
     print('{} MUL trees were found.'.format(out.shape[0]))
 
     print('Adding the original file names of gene trees')
-    gtname = pandas.read_csv(args.sorted_gene_tree_file_names, sep='\t', header=None)
-    gtname.columns = ['file_name']
+    gtname = pandas.read_csv(args.sorted_gene_tree_file_names, sep='\t', header=None, names=['file_name'], dtype=str)
     gtname['gene_tree'] = 'GT-' + pandas.Series([str(i + 1) for i in range(gtname.shape[0])])
 
     print('Writing output table')
