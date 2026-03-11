@@ -75,10 +75,12 @@ gg_entrypoint_name="gg_input_generation_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
+# Workflow flags
 run_format_inputs=1 # Format local inputs or download-manifest targets into workspace layout.
 run_validate_inputs=1 # Validate formatted inputs before downstream workflows use them.
 run_generate_species_trait=0 # Generate species_trait.tsv from downloaded or local metadata sources.
 
+# Shared parameters
 provider="all" # all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|local
 trait_profile="none" # none|gift_starter
 strict=0 # Treat input formatting and validation warnings as errors.
@@ -89,11 +91,11 @@ download_timeout=120 # Per-request timeout in seconds for remote downloads.
 trait_species_source="download_manifest" # download_manifest|species_cds
 trait_databases="auto" # auto|all|comma-separated IDs
 
-# Optional download request settings.
+# Request parameters
 auth_bearer_token_env="" # e.g., GFE_DOWNLOAD_BEARER_TOKEN
 http_header="" # e.g., "User-Agent: genegalleon-input-generation"
 
-# Optional local raw input directory and manifest.
+# Path and output parameters
 input_dir="" # Local raw input directory to ingest instead of downloading.
 download_manifest="" # Path to the download manifest file.
 download_dir="" # Directory for downloaded raw files.

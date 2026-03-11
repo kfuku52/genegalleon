@@ -85,8 +85,10 @@ gg_entrypoint_name="gg_transcriptome_generation_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
+# Mode
 mode_transcriptome_assembly="${mode_transcriptome_assembly:-sraid}" # {"auto", "sraid", "fastq", "metadata"}
 
+# Workflow flags
 run_amalgkit_metadata_or_integrate=1 # Metadata retrieval.
 run_amalgkit_getfastq=1 # fastq generation from NCBI SRA.
 run_assembly=1 # Transcriptome assembly with Trinity or rnaSPAdes.
@@ -102,9 +104,12 @@ run_amalgkit_quant=1 # Expression quantification.
 run_amalgkit_merge=1 # Expression merge.
 run_multispecies_summary=1 # Multi-species summary.
 
+# Input-download parameters
 amalgkit_rrna_filter="yes" # read-level rRNA removal in amalgkit getfastq. Observed to finish for ~4.2 Gbp total / ~14 million reads within a 350G job before contamination filtering; exact peak RAM and elapsed time for this step alone were not logged.
 amalgkit_contam_filter="no" # read-level contamination removal in amalgkit getfastq. Rank follows contamination_removal_rank below. Setting yes may require >350G RAM for large private FASTQ inputs (for example, ~4.2 Gbp total, ~14 million reads).
 remove_amalgkit_fastq_after_completion=1 # Delete per-species amalgkit FASTQ files after downstream completion.
+
+# Assembly and quantification parameters
 max_assembly_input_fastq_size="30,000,000,000" # Maximum total FASTQ length in bp used for transcriptome assembly.
 assembly_method="rnaSPAdes" # {Trinity,rnaSPAdes}
 protocol_rna_seq="mixed" # {same,mixed}
@@ -112,6 +117,8 @@ kallisto_reference="longest_cds" # {species_cds,longest_transcript,longest_cds,c
 orf_aggregation_level="i" # {c,g,i,p}
 assembly_cpu_offset=0 # Number of CPU cores reserved from GG_TASK_CPUS before launching the assembler.
 assembly_ram_offset=4 # Amount of RAM in GB reserved from GG_MEM_TOTAL_GB before launching the assembler.
+
+# Contamination-removal parameters
 contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.
 contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).
 

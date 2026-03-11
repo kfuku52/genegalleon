@@ -75,6 +75,7 @@ gg_entrypoint_name="gg_gene_convergence_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
+# Analysis parameters
 arity_range="2-10" # Branch-combination arity range to scan.
 trait="all" # Trait column name(s) to analyze, or "all".
 skip_lower_order="yes" # Skip lower-order combinations once higher-order hits are retained.
@@ -83,6 +84,8 @@ min_OCNany2spe="1.8" # Minimum OCNany2spe cutoff for candidate combinations.
 min_omegaCany2spe="3.0" # Minimum omegaCany2spe cutoff for candidate combinations.
 min_OCNCoD=0 # Minimum OCNCoD cutoff for candidate combinations.
 max_per_K=100 # Maximum number of combinations retained per arity K.
+
+# Input/output parameters
 file_trait="auto" # Trait table path, or "auto" to use the workspace default.
 dir_orthogroup="auto" # Orthogroup result directory, or "auto" to detect it from the workspace.
 dir_orthofinder="auto" # OrthoFinder result directory, or "auto" to detect it from the workspace.

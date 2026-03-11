@@ -157,9 +157,11 @@ n_gamma_cats_cafe=4 # Number of gamma categories used by CAFE.
 target_branch_go="" # Optional GO-enrichment target branch. Leave empty to skip GO enrichment. Example: "<1>" or "Arabidopsis_thaliana".
 change_direction_go="increase" # "increase" or "decrease"
 go_category="BP,MF,CC" # BP, MF, CC
-delete_tmp_dir=1 # After normal completion, delete tmp directories. Set 0 when debugging.
 
 ### End: Modify this block to tailor your analysis ###
+
+# Misc
+delete_tmp_dir=1 # After normal completion, delete tmp directories. Set 0 when debugging.
 
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
 # Forward config variables (including external overrides) into container environment.

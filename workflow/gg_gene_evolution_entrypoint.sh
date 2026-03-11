@@ -85,13 +85,14 @@ gg_entrypoint_name="gg_gene_evolution_entrypoint.sh"
 # Mode
 mode_gene_evolution="${mode_gene_evolution:-query2family}" # query2family|orthogroup
 
-# Workflow
+# Query2family workflow flags
 run_get_query_fasta=1 # Activated if mode_gene_evolution=query2family. Generate amino acid fasta file for query BLAST.
 run_query_blast=1 # Activated if mode_gene_evolution=query2family.
 run_get_fasta=1 # Generate in-frame CDS fasta file.
 run_rps_blast=1 # RPS-BLAST protein domain search.
 run_uniprot_annotation=0 # Annotation against UniProt Swiss-Prot.
-uniprot_annotation_method="mmseqs2" # blastp|mmseqs2 for UniProt Swiss-Prot annotation search engine.
+
+# Alignment and tree workflow flags
 run_mafft=1 # In-frame nucleotide alignment using MAFFT.
 run_amas_original=1 # Alignment statistics before MaxAlign and TrimAl using AMAS.
 run_maxalign=0 # Remove anomalous sequences by cdskit maxalign.
@@ -100,23 +101,32 @@ run_clipkit=1 # Remove less-alignable codon sites.
 run_amas_cleaned=1 # Alignment statistics after MaxAlign and TrimAl using AMAS.
 run_iqtree=1 # Maximum-likelihood phylogenetic reconstruction.
 run_tree_root=1 # Root gene tree using tree_rooting_method.
-tree_rooting_method="mad" # notung|midpoint|mad|md; md is mapped to nwkit method "mv".
+
+# Reconciliation and dating workflow flags
 run_orthogroup_extraction=0 # Activated if mode_gene_evolution=query2family.
 run_generax=0 # GeneRax off by default for local/smoke environments without MPI setup.
 run_notung_reconcil=0 # Run NOTUNG for RADTE.
 run_tree_dating=0 # Species-tree-guided divergence time estimation with RADTE.
+
+# Trait and promoter workflow flags
 run_get_expression_matrix=0 # Generate trait matrix of gene expression level.
 run_get_gff_info=0 # Generate trait matrix on introns and gene positions.
 run_get_promoter_fasta=0 # Generate a promoter fasta file from reference genomes.
 run_fimo=0 # Identify promoter motif sequences.
 run_tree_pruning=0 # If 1, discard genes without expression data.
+
+# Workflow control flags
 check_pruned=0 # Delete downstream outputs if inconsistent to run_tree_pruning.
+
+# dN/dS workflow flags
 run_mapdnds_parameter_estimation=0 # Parameter estimation for mapdNdS.
 run_mapdnds=0 # Stochastic substitution mapping to estimate dN/dS by mapdNdS.
 run_codeml_two_ratio=0 # Run codeml two-ratio model for dN/dS.
 run_hyphy_dnds=0 # ML dN/dS estimation by HyPhy FitMG94.bf.
 run_hyphy_relax="${run_hyphy_relax:-0}" # Run HyPhy RELAX.
 run_hyphy_relax_reversed="${run_hyphy_relax_reversed:-0}" # Run HyPhy RELAX with reversed foreground/background.
+
+# Comparative-analysis workflow flags
 run_scm_intron=0 # Stochastic character mapping of intron traits.
 run_l1ou=0 # OU modeling of gene expression using the kfl1ou-backed l1ou-compatible outputs.
 run_pgls_species_tree=0 # PGLS with species tree.
@@ -125,15 +135,19 @@ run_csubst=0 # Protein convergence analysis with CSUBST.
 run_summary=1 # Generate summary tables.
 run_tree_plot=1 # Tree visualization pdf.
 
-# Sequence selection in mode_gene_evolution=query2family
+# Query2family parameters
 query_blast_method="diamond" # diamond|tblastn
 query_blast_evalue="0.01" # BLAST E-value threshold.
 query_blast_coverage="0.25" # BLAST coverage threshold.
 max_num_gene_blast_hit_retrieval=5000 # Maximum number of genes to retrieve.
 retain_query_in_maxalign=1 # BOOL.
 
-# Phylogeny reconstruction and reconciliation
+# Annotation parameters
+uniprot_annotation_method="mmseqs2" # blastp|mmseqs2 for UniProt Swiss-Prot annotation search engine.
+
+# Phylogeny reconstruction and reconciliation parameters
 iqtree_fast_mode_gt=2000 # INTEGER.
+tree_rooting_method="mad" # notung|midpoint|mad|md; md is mapped to nwkit method "mv".
 generax_model="GTR+G4" # GeneRax substitution model.
 generax_rec_model="UndatedDL" # "UndatedDTL" or "UndatedDL"
 radte_max_age=1000 # Upper limit of estimated divergence time in MY.

@@ -81,18 +81,17 @@ gg_entrypoint_name="gg_genome_annotation_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
-# CDS analysis
+# CDS workflow flags
 run_get_gff_info=0 # Collect gene information from workspace/input/species_gff
 run_busco_cds=0 # Gene set completeness analysis
 run_uniprot_annotation=0 # CDS annotation against UniProt Swiss-Prot.
-uniprot_annotation_method="mmseqs2" # blastp|mmseqs2 for UniProt Swiss-Prot annotation search engine.
 run_cds_fx2tab=0 # Sequence stats of CDS sequences
 run_cds_mmseqs2taxonomy=0 # Taxonomic assignment of CDS sequences
 run_cds_contamination_removal=0 # Removal of contaminated sequences
 run_annotation=0 # Per-gene annotation summary
 run_wgd_ksd=0 # WGD inference by dS distribution
 
-# Genome analysis
+# Genome workflow flags
 run_busco_genome=0 # Gene set completeness analysis
 run_subphaser=0 # Subgenome structure inference
 run_genome_fx2tab=0 # Sequence stats of reference genome
@@ -101,17 +100,22 @@ run_genome_mmseqs2taxonomy=0 # Taxonomic assignment of genome assembly
 run_genome_contamination_removal=0 # Removal of contaminated sequences
 run_jcvi_dotplot=0 # Self-self synteny dotplot
 
-# DNA-seq analysis
+# DNA-seq workflow flags
 run_genomescope=0 # GenomeScope
 
-# Summary
+# Summary workflow flags
 run_multispecies_summary=1 # Multi-species summary plots and tables
+
+# Annotation parameters
+uniprot_annotation_method="mmseqs2" # blastp|mmseqs2 for UniProt Swiss-Prot annotation search engine.
+
+# Contamination-removal parameters
+contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.
+contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).
 
 ### End: Modify this block to tailor your analysis ###
 
 # Misc
-contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.
-contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).
 exit_if_running=0 # Exit without main analysis if the same GG_ARRAY_TASK_ID is already running.
 delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Set 0 when debugging.
 

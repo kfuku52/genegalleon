@@ -74,8 +74,13 @@ fi
 gg_entrypoint_name="gg_progress_summary_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
+
+# Mode
 mode_transcriptome_assembly="auto" # {"auto", "sraid", "fastq", "metadata"}
+
+# Runtime parameters
 ncpu_progress_summary="" # Number of CPU threads used by summary scripts; empty falls back to GG_TASK_CPUS.
+
 ### End: Modify this block to tailor your analysis ###
 
 source "${gg_support_dir}/gg_util.sh"
