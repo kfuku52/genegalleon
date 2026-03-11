@@ -11,8 +11,8 @@
 #SBATCH -c 8
 #SBATCH --mem-per-cpu=32G
 #SBATCH -t 60-00:00:00
-#SBATCH --output=gg_gene_convergence_%j.out
-#SBATCH --error=gg_gene_convergence_%j.err
+#SBATCH --output=gg_gene_convergence_entrypoint.sh_%j.out
+#SBATCH --error=gg_gene_convergence_entrypoint.sh_%j.err
 #SBATCH --chdir=.
 # Site-specific partition example.
 #SBATCH -p epyc

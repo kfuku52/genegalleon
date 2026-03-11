@@ -11,8 +11,8 @@
 #SBATCH -c 1
 #SBATCH --mem-per-cpu=64G
 #SBATCH -t 2976:00:00
-#SBATCH --output=gg_gene_database_%j.out
-#SBATCH --error=gg_gene_database_%j.err
+#SBATCH --output=gg_gene_database_entrypoint.sh_%j.out
+#SBATCH --error=gg_gene_database_entrypoint.sh_%j.err
 #SBATCH --chdir=.
 # Site-specific partition example.
 #SBATCH -p epyc

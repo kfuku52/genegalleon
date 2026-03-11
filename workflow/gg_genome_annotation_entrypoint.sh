@@ -11,8 +11,8 @@
 #SBATCH -c 4
 #SBATCH --mem-per-cpu=8G
 #SBATCH -t 2976:00:00
-#SBATCH --output=gg_genome_annotation_%A_%a.out
-#SBATCH --error=gg_genome_annotation_%A_%a.err
+#SBATCH --output=gg_genome_annotation_entrypoint.sh_%A_%a.out
+#SBATCH --error=gg_genome_annotation_entrypoint.sh_%A_%a.err
 #SBATCH --chdir=.
 # Array example for array-aware entrypoints.
 #SBATCH -a 1

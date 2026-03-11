@@ -11,8 +11,8 @@
 #SBATCH -c 4
 #SBATCH --mem-per-cpu=32G
 #SBATCH -t 2976:00:00
-#SBATCH --output=gg_transcriptome_generation_%A_%a.out
-#SBATCH --error=gg_transcriptome_generation_%A_%a.err
+#SBATCH --output=gg_transcriptome_generation_entrypoint.sh_%A_%a.out
+#SBATCH --error=gg_transcriptome_generation_entrypoint.sh_%A_%a.err
 #SBATCH --chdir=.
 # Array example for array-aware entrypoints.
 #SBATCH -a 1
