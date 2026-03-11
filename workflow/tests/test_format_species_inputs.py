@@ -4,9 +4,12 @@ from pathlib import Path
 import csv
 import gzip
 import json
+import os
+import sqlite3
 import shutil
 import subprocess
 import sys
+import tarfile
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "format_species_inputs.py"
@@ -20,12 +23,13 @@ def load_module():
     return module
 
 
-def run_script(*args):
+def run_script(*args, env=None):
     return subprocess.run(
         [sys.executable, str(SCRIPT_PATH), *args],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
@@ -42,6 +46,62 @@ class FakeTextPipe:
 
     def getvalue(self):
         return "".join(self.parts)
+
+
+def write_test_taxonomy_fixture(tmp_path):
+    db_path = tmp_path / "taxa.sqlite"
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE species (taxid INT PRIMARY KEY, parent INT, spname VARCHAR(50) COLLATE NOCASE, common VARCHAR(50) COLLATE NOCASE, rank VARCHAR(50), track TEXT)")
+    cur.execute("CREATE TABLE synonym (taxid INT,spname VARCHAR(50) COLLATE NOCASE, PRIMARY KEY (spname, taxid))")
+    species_rows = [
+        (1, 1, "root", "", "no rank", "1"),
+        (131567, 1, "cellular organisms", "", "cellular root", "131567,1"),
+        (2759, 131567, "Eukaryota", "", "domain", "2759,131567,1"),
+        (33090, 2759, "Viridiplantae", "", "kingdom", "33090,2759,131567,1"),
+        (242159, 33090, "Ostreococcus lucimarinus", "", "species", "242159,33090,2759,131567,1"),
+        (5911, 2759, "Tetrahymena thermophila", "", "species", "5911,2759,131567,1"),
+    ]
+    cur.executemany("INSERT INTO species (taxid, parent, spname, common, rank, track) VALUES (?, ?, ?, ?, ?, ?)", species_rows)
+    cur.execute("INSERT INTO synonym (taxid, spname) VALUES (?, ?)", (242159, "Ostreococcus_lucimarinus"))
+    conn.commit()
+    conn.close()
+
+    def nodes_line(taxid, parent, rank, gc_id, mito_gc_id):
+        return "{}\t|\t{}\t|\t{}\t|\t\t|\t0\t|\t0\t|\t{}\t|\t0\t|\t{}\t|\t0\t|\t0\t|\t0\t|\t\t|\n".format(
+            taxid, parent, rank, gc_id, mito_gc_id
+        )
+
+    gencode_text = (
+        "1\t|\tSGC0\t|\tStandard\t|\t\t|\t\t|\n"
+        "4\t|\tSGC4\t|\tMold Mitochondrial; Protozoan Mitochondrial; Coelenterate Mitochondrial; Mycoplasma; Spiroplasma\t|\t\t|\t\t|\n"
+        "6\t|\tSGC6\t|\tCiliate Nuclear; Dasycladacean Nuclear; Hexamita Nuclear\t|\t\t|\t\t|\n"
+        "11\t|\tSGC11\t|\tBacterial, Archaeal and Plant Plastid\t|\t\t|\t\t|\n"
+    )
+    nodes_text = "".join(
+        [
+            nodes_line(1, 1, "no rank", 1, 0),
+            nodes_line(131567, 1, "cellular root", 1, 0),
+            nodes_line(2759, 131567, "domain", 1, 0),
+            nodes_line(33090, 2759, "kingdom", 1, 0),
+            nodes_line(242159, 33090, "species", 1, 1),
+            nodes_line(5911, 2759, "species", 6, 4),
+        ]
+    )
+
+    taxdump_path = tmp_path / "taxdump.tar.gz"
+    with tarfile.open(taxdump_path, "w:gz") as archive:
+        for name, text in {
+            "gencode.dmp": gencode_text,
+            "nodes.dmp": nodes_text,
+            "readme.txt": "test fixture\n",
+        }.items():
+            payload = text.encode("utf-8")
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+
+    return db_path, taxdump_path
 
 
 def test_format_species_inputs_with_small_fixture_all_providers(tmp_path):
@@ -107,6 +167,60 @@ def test_format_species_inputs_with_small_fixture_all_providers(tmp_path):
     assert stats["num_species_gff_files"] == 3
     assert stats["cds_sequences_before"] >= stats["cds_sequences_after"]
     assert stats["cds_first_sequence_name"] != ""
+
+
+def test_species_taxonomy_metadata_resolver_supports_nonstandard_nuclear_codes(tmp_path):
+    mod = load_module()
+    db_path, taxdump_path = write_test_taxonomy_fixture(tmp_path)
+    resolver = mod.SpeciesTaxonomyMetadataResolver(str(db_path), str(taxdump_path))
+
+    tetrahymena = resolver.resolve("Tetrahymena thermophila")
+    assert tetrahymena["taxid"] == "5911"
+    assert tetrahymena["nuclear_genetic_code_id"] == "6"
+    assert tetrahymena["nuclear_genetic_code_name"] == "Ciliate Nuclear; Dasycladacean Nuclear; Hexamita Nuclear"
+    assert tetrahymena["mitochondrial_genetic_code_id"] == "4"
+    assert tetrahymena["plastid_genetic_code_id"] == ""
+
+
+def test_species_summary_includes_taxid_and_genetic_codes_when_taxonomy_cache_is_available(tmp_path):
+    db_path, taxdump_path = write_test_taxonomy_fixture(tmp_path)
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    species_summary = tmp_path / "gg_input_generation_species.tsv"
+    env = dict(os.environ)
+    env["GG_TAXONOMY_DBFILE"] = str(db_path)
+    env["GG_TAXONOMY_TAXDUMPFILE"] = str(taxdump_path)
+
+    completed = run_script(
+        "--provider",
+        "ensemblplants",
+        "--input-dir",
+        str(SMALL_DATASET_ROOT / "20230216_EnsemblPlants" / "original_files"),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["species_prefix"] == "Ostreococcus_lucimarinus"
+    assert row["taxid"] == "242159"
+    assert row["nuclear_genetic_code_id"] == "1"
+    assert row["nuclear_genetic_code_name"] == "Standard"
+    assert row["mitochondrial_genetic_code_id"] == "1"
+    assert row["mitochondrial_genetic_code_name"] == "Standard"
+    assert row["plastid_genetic_code_id"] == "11"
+    assert row["plastid_genetic_code_name"] == "Bacterial, Archaeal and Plant Plastid"
 
 
 def test_format_species_inputs_strict_mode_fails_on_missing_pair(tmp_path):

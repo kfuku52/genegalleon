@@ -10,9 +10,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import socket
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import zipfile
@@ -198,6 +200,13 @@ SPECIES_SUMMARY_COLUMNS = (
     "provider",
     "species_key",
     "species_prefix",
+    "taxid",
+    "nuclear_genetic_code_id",
+    "nuclear_genetic_code_name",
+    "mitochondrial_genetic_code_id",
+    "mitochondrial_genetic_code_name",
+    "plastid_genetic_code_id",
+    "plastid_genetic_code_name",
     "cds_input_path",
     "gff_input_path",
     "genome_input_path",
@@ -214,6 +223,154 @@ SPECIES_SUMMARY_COLUMNS = (
     "overwrite",
     "dry_run",
 )
+PLASTID_GENETIC_CODE_LINEAGE_DEFAULTS = {
+    # NCBI taxonomy/taxdump exposes nuclear and mitochondrial codes directly, but
+    # not plastid codes. Use the standard plastid code for well-established
+    # plastid-bearing clades as a conservative best-effort fallback.
+    "33090": "11",    # Viridiplantae
+    "2763": "11",     # Rhodophyta
+    "2830": "11",     # Haptophyta
+    "3027": "11",     # Cryptophyceae
+    "2696291": "11",  # Ochrophyta
+}
+
+
+def blank_species_taxonomy_metadata():
+    return {
+        "taxid": "",
+        "nuclear_genetic_code_id": "",
+        "nuclear_genetic_code_name": "",
+        "mitochondrial_genetic_code_id": "",
+        "mitochondrial_genetic_code_name": "",
+        "plastid_genetic_code_id": "",
+        "plastid_genetic_code_name": "",
+    }
+
+
+class SpeciesTaxonomyMetadataResolver:
+    def __init__(self, taxonomy_dbfile="", taxonomy_taxdumpfile=""):
+        self.taxonomy_dbfile = str(taxonomy_dbfile or "").strip()
+        self.taxonomy_taxdumpfile = str(taxonomy_taxdumpfile or "").strip()
+        self._conn = None
+        self._nodes = None
+        self._genetic_codes = None
+        self._cache = {}
+
+    @classmethod
+    def from_environment(cls):
+        return cls(
+            taxonomy_dbfile=os.environ.get("GG_TAXONOMY_DBFILE", ""),
+            taxonomy_taxdumpfile=os.environ.get("GG_TAXONOMY_TAXDUMPFILE", ""),
+        )
+
+    def _ensure_conn(self):
+        if self._conn is not None:
+            return self._conn
+        if self.taxonomy_dbfile == "":
+            return None
+        db_path = Path(self.taxonomy_dbfile).expanduser()
+        if not db_path.exists():
+            return None
+        self._conn = sqlite3.connect(str(db_path))
+        return self._conn
+
+    def _ensure_taxdump(self):
+        if self._nodes is not None and self._genetic_codes is not None:
+            return
+        self._nodes = {}
+        self._genetic_codes = {}
+        if self.taxonomy_taxdumpfile == "":
+            return
+        taxdump_path = Path(self.taxonomy_taxdumpfile).expanduser()
+        if not taxdump_path.exists():
+            return
+        with tarfile.open(taxdump_path, "r:gz") as archive:
+            with archive.extractfile("gencode.dmp") as handle:
+                for raw in handle:
+                    parts = [part.strip() for part in raw.decode("utf-8").split("|")]
+                    if len(parts) < 3 or parts[0] == "":
+                        continue
+                    self._genetic_codes[parts[0]] = {
+                        "abbr": parts[1],
+                        "name": parts[2],
+                    }
+            with archive.extractfile("nodes.dmp") as handle:
+                for raw in handle:
+                    parts = [part.strip() for part in raw.decode("utf-8").split("|")]
+                    if len(parts) < 9 or parts[0] == "":
+                        continue
+                    self._nodes[parts[0]] = {
+                        "genetic_code_id": parts[6],
+                        "mitochondrial_genetic_code_id": parts[8],
+                    }
+
+    def _lookup_species_row(self, species_name):
+        conn = self._ensure_conn()
+        if conn is None:
+            return None
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT taxid, spname, rank, track FROM species WHERE spname = ? COLLATE NOCASE",
+            (species_name,),
+        ).fetchone()
+        if row is None:
+            row = cur.execute(
+                """
+                SELECT s.taxid, s.spname, s.rank, s.track
+                FROM synonym sy
+                JOIN species s ON sy.taxid = s.taxid
+                WHERE sy.spname = ? COLLATE NOCASE
+                """,
+                (species_name,),
+            ).fetchone()
+        return row
+
+    def _code_name(self, code_id):
+        if code_id == "":
+            return ""
+        self._ensure_taxdump()
+        return str(self._genetic_codes.get(str(code_id), {}).get("name", ""))
+
+    def _infer_plastid_code_id(self, lineage_taxids):
+        lineage_taxid_set = {str(taxid).strip() for taxid in lineage_taxids if str(taxid).strip() != ""}
+        for lineage_taxid, code_id in PLASTID_GENETIC_CODE_LINEAGE_DEFAULTS.items():
+            if lineage_taxid in lineage_taxid_set:
+                return code_id
+        return ""
+
+    def resolve(self, species_name):
+        normalized_name = str(species_name or "").strip().replace("_", " ")
+        if normalized_name == "":
+            return blank_species_taxonomy_metadata()
+        if normalized_name in self._cache:
+            return dict(self._cache[normalized_name])
+
+        metadata = blank_species_taxonomy_metadata()
+        row = self._lookup_species_row(normalized_name)
+        if row is None:
+            self._cache[normalized_name] = dict(metadata)
+            return metadata
+
+        taxid, _spname, _rank, track = row
+        taxid_str = str(taxid)
+        metadata["taxid"] = taxid_str
+
+        self._ensure_taxdump()
+        node = self._nodes.get(taxid_str, {})
+        nuclear_code_id = str(node.get("genetic_code_id", "") or "")
+        mitochondrial_code_id = str(node.get("mitochondrial_genetic_code_id", "") or "")
+        metadata["nuclear_genetic_code_id"] = nuclear_code_id
+        metadata["nuclear_genetic_code_name"] = self._code_name(nuclear_code_id)
+        metadata["mitochondrial_genetic_code_id"] = mitochondrial_code_id
+        metadata["mitochondrial_genetic_code_name"] = self._code_name(mitochondrial_code_id)
+
+        lineage_taxids = [part.strip() for part in str(track or "").split(",") if part.strip() != ""]
+        plastid_code_id = self._infer_plastid_code_id(lineage_taxids)
+        metadata["plastid_genetic_code_id"] = plastid_code_id
+        metadata["plastid_genetic_code_name"] = self._code_name(plastid_code_id)
+
+        self._cache[normalized_name] = dict(metadata)
+        return metadata
 
 
 def output_gzip_compresslevel():
@@ -3418,13 +3575,32 @@ def format_task_succeeded(cds_result, gff_result, genome_result, dry_run):
     return True
 
 
-def build_species_summary_row(task, cds_result, gff_result, genome_result, run_started_utc, overwrite, dry_run):
+def build_species_summary_row(
+    task,
+    cds_result,
+    gff_result,
+    genome_result,
+    run_started_utc,
+    overwrite,
+    dry_run,
+    taxonomy_metadata=None,
+):
+    metadata = blank_species_taxonomy_metadata()
+    if taxonomy_metadata is not None:
+        metadata.update({key: str(value or "") for key, value in taxonomy_metadata.items()})
     return {
         "updated_utc": utc_now_iso(),
         "run_started_utc": run_started_utc,
         "provider": task["provider"],
         "species_key": task["species_key"],
         "species_prefix": task["species_prefix"],
+        "taxid": metadata["taxid"],
+        "nuclear_genetic_code_id": metadata["nuclear_genetic_code_id"],
+        "nuclear_genetic_code_name": metadata["nuclear_genetic_code_name"],
+        "mitochondrial_genetic_code_id": metadata["mitochondrial_genetic_code_id"],
+        "mitochondrial_genetic_code_name": metadata["mitochondrial_genetic_code_name"],
+        "plastid_genetic_code_id": metadata["plastid_genetic_code_id"],
+        "plastid_genetic_code_name": metadata["plastid_genetic_code_name"],
         "cds_input_path": str(task["cds_path"]),
         "gff_input_path": str(task["gff_path"]),
         "genome_input_path": str(task["genome_path"]) if task.get("genome_path") is not None else "",
@@ -3521,6 +3697,7 @@ def main():
     output_genome_dir.mkdir(parents=True, exist_ok=True)
     species_summary_rows = retain_existing_species_summary_rows(read_species_summary_rows(species_summary_path))
     write_species_summary_rows(species_summary_path, species_summary_rows)
+    taxonomy_resolver = SpeciesTaxonomyMetadataResolver.from_environment()
 
     all_tasks = []
     all_warnings = []
@@ -3562,6 +3739,7 @@ def main():
         genome_result = format_genome(task, output_genome_dir, args.overwrite, args.dry_run)
         if format_task_succeeded(cds_result, gff_result, genome_result, args.dry_run):
             key = species_row_key(task["provider"], task["species_key"], task["species_prefix"])
+            taxonomy_metadata = taxonomy_resolver.resolve(task["species_prefix"])
             species_summary_rows[key] = build_species_summary_row(
                 task,
                 cds_result,
@@ -3570,6 +3748,7 @@ def main():
                 run_started_utc=run_started_utc,
                 overwrite=args.overwrite,
                 dry_run=args.dry_run,
+                taxonomy_metadata=taxonomy_metadata,
             )
             # Persist each successful species incrementally.
             write_species_summary_rows(species_summary_path, species_summary_rows)

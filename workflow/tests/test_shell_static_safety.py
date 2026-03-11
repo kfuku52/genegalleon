@@ -2859,6 +2859,14 @@ def test_input_generation_core_runs_cds_gff_mapping_validation():
     assert '--nthreads "${GG_TASK_CPUS:-1}"' in text
 
 
+def test_input_generation_core_populates_species_summary_taxonomy_metadata_nonfatally():
+    script = CORE_DIR / "gg_input_generation_core.sh"
+    text = _read_text(script)
+    assert 'if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then' in text
+    assert "species_summary taxonomy metadata" in text
+    assert "Continuing without taxid/genetic code annotation." in text
+
+
 def test_mmseqs_uniref90_download_retries_and_reports_disk_context():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)

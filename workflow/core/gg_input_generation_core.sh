@@ -333,6 +333,9 @@ if [[ ${run_format_inputs} -eq 1 ]]; then
   fi
 
   if [[ "${stage_format_status}" == "running" ]]; then
+    if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+      echo "Warning: Failed to prepare ETE taxonomy DB for species_summary taxonomy metadata. Continuing without taxid/genetic code annotation." >&2
+    fi
     format_stats_file="${download_tmp_root}/gg_input_generation_stats.json"
     ensure_parent_dir "${format_stats_file}"
     rm -f -- "${format_stats_file}"
