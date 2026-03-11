@@ -75,6 +75,10 @@ This is the main results area. Major stage roots include:
 - `workspace/output/csubst_site`
 - `workspace/output/versions`
 
+`workspace/output/input_generation/gg_input_generation_species.tsv` is the rolling species summary table
+from `gg_input_generation_entrypoint.sh`. When taxonomy metadata is available, it includes per-species
+`taxid` plus nuclear, mitochondrial, and plastid genetic-code columns.
+
 ### `workspace/downloads/`
 
 This is the reusable runtime cache area.
@@ -109,6 +113,12 @@ As a rule of thumb:
 - treat `workspace/input/` as human-curated inputs,
 - treat `workspace/output/` as reproducible stage results,
 - treat `workspace/downloads/` as disposable-but-reusable cache/state.
+
+For the newer protein-mode workflow, this distinction matters:
+
+- `workspace/input/species_protein/` is curated input that you provide on purpose,
+- `workspace/downloads/tmp/species_protein/` is temporary derived state created from `species_cds`,
+- the temporary directory is regenerated when GeneGalleon detects input-sequence-mode or genetic-code changes.
 
 That means:
 

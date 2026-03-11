@@ -50,6 +50,18 @@ gg_source_common_params_from_core() {
   return 0
 }
 
+gg_configure_python_pycacheprefix_from_core() {
+  local default_pycache_prefix=""
+
+  if [[ -n "${PYTHONPYCACHEPREFIX:-}" ]]; then
+    return 0
+  fi
+
+  default_pycache_prefix="/tmp/genegalleon_pycache"
+  mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true
+  export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"
+}
+
 gg_bootstrap_core_runtime() {
   local core_script_path=${1:-${BASH_SOURCE[1]:-}}
   local conda_env=${2:-}
@@ -70,6 +82,7 @@ gg_bootstrap_core_runtime() {
   gg_workflow_dir="$(cd "${gg_support_dir}/.." && pwd -P)"
   gg_core_dir="${gg_workflow_dir}/core"
   : "${gg_workspace_dir:=/workspace}"
+  gg_configure_python_pycacheprefix_from_core
 
   # shellcheck disable=SC1090
   source "${gg_support_dir}/gg_util.sh"

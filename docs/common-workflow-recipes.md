@@ -98,6 +98,18 @@ Main output roots:
 - `workspace/output/orthofinder`
 - `workspace/output/genome_evolution`
 
+Mixed-code example:
+
+```bash
+cat > workspace/input/species_genetic_code/species_genetic_code.tsv <<'EOF'
+species	genetic_code
+Tetrahymena_thermophila	6
+EOF
+```
+
+Then set `input_sequence_mode="protein"` in `workflow/gg_genome_evolution_entrypoint.sh` and run the wrapper normally.
+Species missing from `species_genetic_code.tsv` still use the configured default `genetic_code`.
+
 ## 5. Run gene-family analyses in query2family mode
 
 This is the default mode of `gg_gene_evolution_entrypoint.sh`.

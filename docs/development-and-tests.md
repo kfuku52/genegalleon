@@ -12,6 +12,15 @@ Typical setup:
 python -m pip install -r workflow/tests/requirements.txt
 ```
 
+To keep `.pyc` files out of the repository during direct local Python runs,
+set a temporary pycache prefix first:
+
+```bash
+export PYTHONPYCACHEPREFIX="${TMPDIR:-/tmp}/genegalleon_pycache"
+```
+
+GeneGalleon entrypoints and core bootstraps now do this automatically for wrapper-driven runs.
+
 ## Run the full Python test suite
 
 ```bash

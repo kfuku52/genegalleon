@@ -105,6 +105,31 @@ Typical examples:
 - one genetic code reused by annotation and gene-family stages,
 - one annotation species reused by GO-enrichment and tree-visualization steps.
 
+## Mixed genetic code datasets
+
+`GG_COMMON_GENETIC_CODE` and the local `genetic_code` parameter still act as a single default code.
+That default is used when:
+
+- a stage only accepts one code for the whole run,
+- `gg_genome_evolution` is translating `species_cds` and no per-species override is present,
+- a species is missing from `workspace/input/species_genetic_code/species_genetic_code.tsv`.
+
+`gg_genome_evolution_entrypoint.sh` now adds a separate switch:
+
+- `input_sequence_mode="cds"`: normal CDS-first behavior
+- `input_sequence_mode="protein"`: run species-tree and orthogroup stages from protein inputs
+
+For mixed-code projects, the intended setup is:
+
+1. keep `GG_COMMON_GENETIC_CODE` or local `genetic_code` as the fallback default,
+2. optionally provide `workspace/input/species_genetic_code/species_genetic_code.tsv`,
+3. run `gg_genome_evolution_entrypoint.sh` with `input_sequence_mode="protein"`.
+
+In that mode, GeneGalleon prefers `workspace/input/species_protein` when present.
+If `species_protein` is absent, it translates `workspace/input/species_cds` to temporary proteins,
+applying per-species overrides from `species_genetic_code.tsv` first and the global default code second.
+DNA-tree and dating steps that still require CDS-only assumptions are disabled automatically in protein mode.
+
 ## How `GG_COMMON_*` is applied
 
 Shared defaults are loaded in two places:
@@ -129,6 +154,14 @@ genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 ```
+
+For `gg_genome_evolution`, remember that this fallback is only part of the final translation rule.
+The effective CDS-to-protein code priority there is:
+
+1. `workspace/input/species_genetic_code/species_genetic_code.tsv` for matching species
+2. local `genetic_code=...` in `workflow/gg_genome_evolution_entrypoint.sh`
+3. `GG_COMMON_GENETIC_CODE`
+4. core fallback `1`
 
 ## Entry-point override patterns
 

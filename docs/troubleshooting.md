@@ -119,6 +119,47 @@ What to do:
 - remove stale lock files only when you are sure no active job is using the cache,
 - rerun after cleaning only the specific broken cache subtree rather than the whole workspace.
 
+### `gg_genome_evolution` protein mode does not behave as expected
+
+Symptoms:
+
+- protein mode exits before OrthoFinder starts,
+- DNA species-tree steps seem to disappear,
+- changing `species_genetic_code.tsv` appears to have no effect.
+
+What to check:
+
+- `input_sequence_mode` is actually set to `protein` in `workflow/gg_genome_evolution_entrypoint.sh`,
+- either `workspace/input/species_protein/` or `workspace/input/species_cds/` exists,
+- if both exist, protein mode prefers `species_protein` and ignores `species_genetic_code.tsv`,
+- if you want per-species translation overrides to matter, remove or relocate `species_protein` and let the run translate from `species_cds`,
+- protein mode intentionally disables DNA-only species-tree and dating steps such as DNA IQ-TREE, IQ2MC, and MCMCtree.
+
+Useful log messages:
+
+- `species_genetic_code.tsv is ignored because species_protein inputs are provided`
+- `Ignoring species_protein inputs in cds mode`
+- `Shared protein input signature changed for ...`
+
+Those messages indicate GeneGalleon is applying the current mode rules and invalidating stale derived proteins when the effective inputs change.
+
+### Input-generation summary lacks `taxid` or genetic-code metadata
+
+Symptom:
+
+- `gg_input_generation_species.tsv` or `species_summary.tsv` exists, but taxonomy columns are blank.
+
+What to check:
+
+- species names must match an NCBI scientific name or synonym closely enough for taxonomy lookup,
+- the shared ETE taxonomy DB under `workspace/downloads/ete_taxonomy/` must be readable,
+- the wrapper logs a warning and continues when taxonomy cache preparation fails, so blank metadata is not fatal by itself.
+
+Current behavior:
+
+- nuclear and mitochondrial genetic codes come from NCBI taxonomy metadata,
+- plastid genetic code is a lineage-based best-effort default, not a direct species-specific NCBI field.
+
 ### Optional analyses never run
 
 Symptom:

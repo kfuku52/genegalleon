@@ -19,6 +19,43 @@ Major scripts accept:
 - avoid spaces and `|` in IDs when possible,
 - species prefix on IDs (`Genus_species_...`) is strongly recommended.
 
+### `workspace/input/species_protein`
+
+- optional input used by `gg_genome_evolution_entrypoint.sh` only when `input_sequence_mode="protein"`,
+- one protein FASTA per species,
+- accepted extensions follow the same FASTA list as `species_cds`,
+- sequence IDs should stay consistent with downstream orthogroup and annotation joins,
+- species prefix on IDs (`Genus_species_...`) is strongly recommended.
+
+Important behavior:
+
+- in `input_sequence_mode="protein"`, GeneGalleon uses `species_protein` directly when files are present,
+- in `input_sequence_mode="cds"`, GeneGalleon ignores `species_protein` and always generates temporary proteins from `species_cds`.
+
+### `workspace/input/species_genetic_code/species_genetic_code.tsv`
+
+This file is optional and is consulted only when GeneGalleon translates CDS to proteins.
+The current intended use is mixed-code `gg_genome_evolution` runs with `input_sequence_mode="protein"` and no prebuilt `species_protein`.
+
+Expected columns:
+
+- `species`
+- `genetic_code`
+
+Rules:
+
+- `species` must match the species filename prefix such as `Tetrahymena_thermophila`,
+- `genetic_code` must be an NCBI translation-table integer such as `1` or `6`,
+- species absent from the table fall back to the run's default `genetic_code`,
+- rows for species not present in `species_cds` are ignored with a warning.
+
+Minimal example:
+
+```tsv
+species	genetic_code
+Tetrahymena_thermophila	6
+```
+
 ### `workspace/input/query_gene`
 
 Each file is one family-level task in `mode_gene_evolution=query2family`.
@@ -91,6 +128,11 @@ Notes:
 - CDS IDs are prefixed with `Genus_species_...` and aggregated to one representative CDS per gene,
 - common historical replacements are applied to CDS/GFF text,
 - CDS are padded to codon-length multiples and transcript-level redundancies are collapsed at gene level.
+- when taxonomy cache preparation succeeds, the generated `species_summary.tsv` also includes:
+  - `taxid`
+  - `nuclear_genetic_code_id` / `nuclear_genetic_code_name`
+  - `mitochondrial_genetic_code_id` / `mitochondrial_genetic_code_name`
+  - `plastid_genetic_code_id` / `plastid_genetic_code_name`
 
 Download-first workflow (manifest driven):
 

@@ -812,6 +812,8 @@ set_singularityenv() {
 	export APPTAINERENV_MEM_PER_SLOT=${MEM_PER_SLOT:-3}
 	export SINGULARITYENV_MEM_PER_HOST=${MEM_PER_HOST:-3}
 	export APPTAINERENV_MEM_PER_HOST=${MEM_PER_HOST:-3}
+	export SINGULARITYENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache
+	export APPTAINERENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache
   local gg_common_var_name
   for gg_common_var_name in ${!GG_COMMON_@}; do
     if [[ -n "${!gg_common_var_name+x}" ]]; then

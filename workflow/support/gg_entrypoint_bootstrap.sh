@@ -69,6 +69,18 @@ gg_source_common_params_if_available() {
   fi
 }
 
+gg_configure_python_pycacheprefix() {
+  local default_pycache_prefix=""
+
+  if [[ -n "${PYTHONPYCACHEPREFIX:-}" ]]; then
+    return 0
+  fi
+
+  default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache"
+  mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true
+  export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"
+}
+
 gg_entrypoint_initialize() {
   local entrypoint_path=${1:-${BASH_SOURCE[1]:-}}
   local load_common_params=${2:-0}
@@ -81,4 +93,5 @@ gg_entrypoint_initialize() {
   if [[ "${load_common_params}" -eq 1 ]]; then
     gg_source_common_params_if_available "${gg_workflow_dir}"
   fi
+  gg_configure_python_pycacheprefix
 }

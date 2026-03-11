@@ -171,6 +171,26 @@ def test_gg_versions_uses_shared_core_bootstrap_runtime():
     assert 'source "${gg_support_dir}/gg_util.sh"' not in text
 
 
+def test_entrypoint_bootstrap_sets_python_pycacheprefix_outside_repo():
+    text = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_bootstrap.sh")
+    body = _function_body(text, "gg_configure_python_pycacheprefix")
+    assert 'default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache"' in body
+    assert 'mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true' in body
+    assert 'export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"' in body
+    init_body = _function_body(text, "gg_entrypoint_initialize")
+    assert "gg_configure_python_pycacheprefix" in init_body
+
+
+def test_core_bootstrap_sets_python_pycacheprefix_under_tmp():
+    text = _read_text(WORKFLOW_DIR / "support" / "gg_core_bootstrap.sh")
+    body = _function_body(text, "gg_configure_python_pycacheprefix_from_core")
+    assert 'default_pycache_prefix="/tmp/genegalleon_pycache"' in body
+    assert 'mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true' in body
+    assert 'export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"' in body
+    runtime_body = _function_body(text, "gg_bootstrap_core_runtime")
+    assert "gg_configure_python_pycacheprefix_from_core" in runtime_body
+
+
 def test_busco_download_lock_is_per_lineage_shared_artifact_lock():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
@@ -802,6 +822,8 @@ def test_set_singularityenv_forwards_gg_common_variables():
     assert 'gg_workflow_dir="${resolved_workflow_dir}"' in body
     assert 'gg_container_image_path="${resolved_container_image_path}"' in body
     assert 'resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")' in body
+    assert "export SINGULARITYENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache" in body
+    assert "export APPTAINERENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache" in body
     assert "for gg_common_var_name in ${!GG_COMMON_@}; do" in body
     assert 'export "SINGULARITYENV_${gg_common_var_name}=${!gg_common_var_name}"' in body
     assert 'export "APPTAINERENV_${gg_common_var_name}=${!gg_common_var_name}"' in body
