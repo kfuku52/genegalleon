@@ -47,8 +47,8 @@ def _visible_entries(path):
 
 
 def _read_amas_file(file_path, og_id, amas_cols):
-    tmp = pandas.read_csv(file_path, sep='\t', header=0)
-    return og_id, tmp.loc[0, amas_cols].values
+    tmp = pandas.read_csv(file_path, sep='\t', header=0, usecols=amas_cols, nrows=1, low_memory=False)
+    return og_id, tmp.iloc[0].to_list()
 
 
 def get_amas_stats(df, dir_amas, extension, ncpu):
@@ -85,6 +85,7 @@ def get_amas_stats(df, dir_amas, extension, ncpu):
         queued.append((file, og_id))
 
     counter = 0
+    result_rows = []
     if ncpu > 1 and len(queued) > 1:
         max_workers = min(ncpu, len(queued))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -94,14 +95,22 @@ def get_amas_stats(df, dir_amas, extension, ncpu):
             ]
             for future in as_completed(futures):
                 og_id, values = future.result()
-                df.loc[og_id, amas_new_cols] = values
+                result_rows.append((og_id, values))
                 counter += 1
     else:
         for file, og_id in queued:
             file_path = os.path.join(dir_amas, file)
             og_id, values = _read_amas_file(file_path, og_id, amas_cols)
-            df.loc[og_id, amas_new_cols] = values
+            result_rows.append((og_id, values))
             counter += 1
+
+    if result_rows:
+        result_df = pandas.DataFrame.from_records(
+            [values for _, values in result_rows],
+            index=[og_id for og_id, _ in result_rows],
+            columns=amas_new_cols,
+        )
+        df.loc[result_df.index, amas_new_cols] = result_df
 
     idx_total = numpy.where(df.columns == 'Total')[0][0]
     idx_added = numpy.arange(idx_total + 1, df.columns.shape[0])
