@@ -741,7 +741,7 @@ if [[ ! -s "${file_longestcds_mmseqs2taxonomy}" && ${run_longestcds_mmseqs2taxon
     --lca-mode 3 \
     --vote-mode 1 \
     --tax-lineage 2 \
-    --orf-filter 1 \
+    --orf-filter 0 \
     --threads "${GG_TASK_CPUS}"
 
   mmseqs createtsv "queryDB" "output_prefix" "result.tsv" --threads "${GG_TASK_CPUS}"

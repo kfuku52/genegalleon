@@ -450,7 +450,7 @@ if [[ ! -s "${file_sp_cds_mmseqs2taxonomy}" && ${run_cds_mmseqs2taxonomy} -eq 1 
     --lca-mode 3 \
     --vote-mode 1 \
     --tax-lineage 2 \
-    --orf-filter 1 \
+    --orf-filter 0 \
     --threads "${GG_TASK_CPUS}"
 
   mmseqs createtsv "queryDB" "output_prefix" "result.tsv" --threads "${GG_TASK_CPUS}"
@@ -650,7 +650,7 @@ if [[ ! -s "${file_sp_genome_mmseqs2taxonomy}" && ${run_genome_mmseqs2taxonomy} 
     --lca-mode 3 \
     --vote-mode 1 \
     --tax-lineage 2 \
-    --orf-filter 1 \
+    --orf-filter 0 \
     --threads "${GG_TASK_CPUS}"
 
   mmseqs createtsv "queryDB" "output_prefix" "result.tsv" --threads "${GG_TASK_CPUS}"
