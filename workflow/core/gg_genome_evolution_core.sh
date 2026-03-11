@@ -149,6 +149,12 @@ single_copy_trimal_glob="*.trimal.fa.gz"
 single_copy_fasta_suffix=".cds.fa.gz"
 single_copy_aln_suffix=".cds.aln.fa.gz"
 single_copy_trimal_suffix=".trimal.fa.gz"
+genome_busco_fasta_glob="*.busco.cds.fa.gz"
+genome_busco_aln_glob="*.busco.cds.aln.fa.gz"
+genome_busco_trimal_glob="*.busco.trimal.fa.gz"
+genome_busco_fasta_suffix=".busco.cds.fa.gz"
+genome_busco_aln_suffix=".busco.cds.aln.fa.gz"
+genome_busco_trimal_suffix=".busco.trimal.fa.gz"
 if [[ "${input_sequence_mode}" == "protein" ]]; then
   species_tree_sequence_label="pep"
   species_tree_busco_mode="proteins"
@@ -158,6 +164,12 @@ if [[ "${input_sequence_mode}" == "protein" ]]; then
   single_copy_fasta_suffix=".pep.fa.gz"
   single_copy_aln_suffix=".pep.aln.fa.gz"
   single_copy_trimal_suffix=".pep.trimal.fa.gz"
+  genome_busco_fasta_glob="*.busco.pep.fa.gz"
+  genome_busco_aln_glob="*.busco.pep.aln.fa.gz"
+  genome_busco_trimal_glob="*.busco.pep.trimal.fa.gz"
+  genome_busco_fasta_suffix=".busco.pep.fa.gz"
+  genome_busco_aln_suffix=".busco.pep.aln.fa.gz"
+  genome_busco_trimal_suffix=".busco.pep.trimal.fa.gz"
 fi
 
 species_genetic_code_table_path() {
@@ -708,21 +720,12 @@ if [[ "${input_sequence_mode}" == "protein" ]]; then
     run_convert_tree_format=0
     run_plot_mcmctreer=0
   fi
-  if [[ ${run_genome_busco} -eq 1 || ${run_genome_get_busco_summary} -eq 1 || ${run_busco_getfasta} -eq 1 || ${run_busco_mafft} -eq 1 || ${run_busco_trimal} -eq 1 || ${run_busco_iqtree_dna} -eq 1 || ${run_busco_iqtree_pep} -eq 1 || ${run_busco_notung_root_dna} -eq 1 || ${run_busco_notung_root_pep} -eq 1 || ${run_busco_root_dna} -eq 1 || ${run_busco_root_pep} -eq 1 || ${run_busco_grampa_dna} -eq 1 || ${run_busco_grampa_pep} -eq 1 ]]; then
-    echo "Disabling BUSCO-based genome-evolution steps in protein mode: run_genome_busco, run_genome_get_busco_summary, run_busco_getfasta, run_busco_mafft, run_busco_trimal, run_busco_iqtree_dna, run_busco_iqtree_pep, run_busco_notung_root_dna, run_busco_notung_root_pep, run_busco_root_dna, run_busco_root_pep, run_busco_grampa_dna, run_busco_grampa_pep"
-    run_genome_busco=0
-    run_genome_get_busco_summary=0
-    run_busco_getfasta=0
-    run_busco_mafft=0
-    run_busco_trimal=0
+  if [[ ${run_busco_iqtree_dna} -eq 1 || ${run_busco_notung_root_dna} -eq 1 || ${run_busco_root_dna} -eq 1 || ${run_busco_grampa_dna} -eq 1 ]]; then
+    echo "Disabling DNA-only BUSCO genome-evolution steps in protein mode: run_busco_iqtree_dna, run_busco_notung_root_dna, run_busco_root_dna, run_busco_grampa_dna"
     run_busco_iqtree_dna=0
-    run_busco_iqtree_pep=0
     run_busco_notung_root_dna=0
-    run_busco_notung_root_pep=0
     run_busco_root_dna=0
-    run_busco_root_pep=0
     run_busco_grampa_dna=0
-    run_busco_grampa_pep=0
   fi
 else
   check_species_cds "${gg_workspace_dir}"
@@ -2530,40 +2533,35 @@ fi
 ensure_dir "${dir_tmp}"
 cd "${dir_tmp}"
 
-task="BUSCO analysis of species-wise CDS files"
+task="BUSCO analysis of species-wise input files"
 if [[ ${run_genome_busco} -eq 1 ]]; then
+  prepare_species_tree_input_dir
   ensure_dir "${dir_species_busco_full}"
   ensure_dir "${dir_species_busco_short}"
-  species_cds_fasta=()
-  mapfile -t species_cds_fasta < <(gg_find_fasta_files "${dir_sp_cds}" 1)
-  echo "Number of CDS files for BUSCO: ${#species_cds_fasta[@]}"
-  if [[ ${#species_cds_fasta[@]} -eq 0 ]]; then
-    echo "No CDS file found. Exiting."
+  species_input_fasta=()
+  mapfile -t species_input_fasta < <(gg_find_fasta_files "${species_tree_input_dir}" 1)
+  echo "Number of ${input_sequence_mode} files for BUSCO: ${#species_input_fasta[@]}"
+  if [[ ${#species_input_fasta[@]} -eq 0 ]]; then
+    echo "No ${input_sequence_mode} file found. Exiting."
     exit 1
   fi
   input_species_set=()
   mapfile -t input_species_set < <(
-    for cds_full in "${species_cds_fasta[@]}"; do
-      gg_species_name_from_path_or_dot "$(basename "${cds_full}")"
+    for seq_full in "${species_input_fasta[@]}"; do
+      gg_species_name_from_path_or_dot "$(basename "${seq_full}")"
     done | sort -u
   )
   if ! resolve_busco_lineage_for_species_set "${input_species_set[@]}"; then
     exit 1
   fi
-  for cds_full in "${species_cds_fasta[@]}"; do
-    cds=$(basename "${cds_full}")
-    sp_ub=$(gg_species_name_from_path "${cds}")
+  for seq_full in "${species_input_fasta[@]}"; do
+    seq_file=$(basename "${seq_full}")
+    sp_ub=$(gg_species_name_from_path "${seq_file}")
     file_sp_busco_full="${dir_species_busco_full}/${sp_ub}.busco.full.tsv"
     file_sp_busco_short="${dir_species_busco_short}/${sp_ub}.busco.short.txt"
     if [[ ! -s "${file_sp_busco_full}" || ! -s "${file_sp_busco_short}" ]]; then
-      gg_step_start "${task}: ${cds}"
-
-      if [[ "${cds}" == *gz ]]; then # Do not quote like "*gz"
-        echo "Decompressing gzipped CDS fasta for BUSCO: ${cds}"
-        seqkit seq --threads "${GG_TASK_CPUS}" "${dir_sp_cds}/${cds}" --out-file "tmp.busco_input.cds.fasta"
-      else
-        cp_out "${dir_sp_cds}"/"${cds}" ./tmp.busco_input.cds.fasta
-      fi
+      gg_step_start "${task}: ${seq_file}"
+      seqkit seq --threads "${GG_TASK_CPUS}" "${species_tree_input_dir}/${seq_file}" --out-file "tmp.busco_input.fasta"
 
       if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
         echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
@@ -2572,8 +2570,8 @@ if [[ ${run_genome_busco} -eq 1 ]]; then
       dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
       busco \
-        --in "tmp.busco_input.cds.fasta" \
-        --mode "transcriptome" \
+        --in "tmp.busco_input.fasta" \
+        --mode "${species_tree_busco_mode}" \
         --out "busco_tmp" \
         --cpu "${GG_TASK_CPUS}" \
         --force \
@@ -2590,7 +2588,7 @@ if [[ ${run_genome_busco} -eq 1 ]]; then
         exit 1
       fi
     else
-      echo "Skipped BUSCO: ${cds}"
+      echo "Skipped BUSCO: ${seq_file}"
     fi
   done
   echo "$(date): End: ${task}"
@@ -2622,6 +2620,7 @@ fi
 task="Generating fasta files for individual single-copy genes"
 disable_if_no_input_file "run_busco_getfasta" "${file_genome_busco_summary_table}"
 if [[ ${run_busco_getfasta} -eq 1 ]]; then
+  prepare_species_tree_input_dir
   gg_step_start "${task}"
   ensure_dir "${dir_busco_fasta}"
   busco_rows=()
@@ -2644,7 +2643,7 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
     if [[ ${#cols[@]} -gt 3 ]]; then
       genes=("${cols[@]:3}")
     fi
-    outfile2="${dir_busco_fasta}/${busco_id}.busco.cds.fa.gz"
+    outfile2="${dir_busco_fasta}/${busco_id}${genome_busco_fasta_suffix}"
     if [[ -s "${outfile2}" ]]; then
       return 0
     fi
@@ -2655,9 +2654,15 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
         echo "Skipping. ${busco_id} has no genes in the selected species."
         return 0
       fi
-      gg_seqkit_grep_by_patterns_from_infile_list 1 "species_cds_fasta_list.txt" "${genes2[@]}" |
-        gg_prepare_cds_fasta_stream 1 |
-        seqkit seq --threads 1 --out-file "${outfile2}"
+      if [[ "${input_sequence_mode}" == "protein" ]]; then
+        gg_seqkit_grep_by_patterns_from_infile_list 1 "species_tree_input_fasta_list.txt" "${genes2[@]}" |
+          seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 |
+          seqkit seq --threads 1 --out-file "${outfile2}"
+      else
+        gg_seqkit_grep_by_patterns_from_infile_list 1 "species_tree_input_fasta_list.txt" "${genes2[@]}" |
+          gg_prepare_cds_fasta_stream 1 |
+          seqkit seq --threads 1 --out-file "${outfile2}"
+      fi
       if [[ ! -s "${outfile2}" ]]; then
         echo "File is empty. Removing: ${outfile2}"
         rm -f -- "${outfile2}"
@@ -2665,12 +2670,13 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
     fi
   }
 
-  gg_find_fasta_files "${dir_sp_cds}" 1 > species_cds_fasta_list.txt
+  gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
   for ((busco_idx = 0; busco_idx < num_busco_ids; busco_idx++)); do
     wait_until_jobn_le ${GG_TASK_CPUS}
     generate_single_copy_fasta "${busco_idx}" &
   done
   wait_for_background_jobs
+  rm -f -- species_tree_input_fasta_list.txt
   find . -maxdepth 1 -type f -name 'tmp.*' -delete
 else
   gg_step_skip "${task}"
@@ -2684,55 +2690,77 @@ if [[ ${run_busco_mafft} -eq 1 ]]; then
   run_mafft() {
     infile=$1
     infile_base=${infile%%.*}
-    outfile=${dir_busco_mafft}/${infile_base}.busco.cds.aln.fa.gz
+    outfile=${dir_busco_mafft}/${infile_base}${genome_busco_aln_suffix}
     if [[ -s "${outfile}" ]]; then
       return 0
     fi
     echo "$(date): start mafft: ${infile_base}"
 
-    seqkit seq --threads 1 "${dir_busco_fasta}/${infile}" --out-file "tmp.${infile_base}.input.cds.fasta"
-    cdskit mask \
-      --seqfile "tmp.${infile_base}.input.cds.fasta" \
-      --outfile "tmp.${infile_base}.cds.fasta"
+    if [[ "${input_sequence_mode}" == "protein" ]]; then
+      seqkit seq --threads 1 "${dir_busco_fasta}/${infile}" --out-file "tmp.${infile_base}.input.pep.fasta"
+      num_seq=$(gg_count_fasta_records "tmp.${infile_base}.input.pep.fasta")
+      if [[ ${num_seq} -lt 2 ]]; then
+        echo "Skipped MAFFT because fewer than 2 sequences were found: ${infile}"
+        seqkit seq --threads 1 "tmp.${infile_base}.input.pep.fasta" --out-file "tmp.${infile_base}.pep.out.fa.gz"
+        mv_out "tmp.${infile_base}.pep.out.fa.gz" "${outfile}"
+        rm -f -- "tmp.${infile_base}"*
+        return 0
+      fi
+      mafft \
+        --auto \
+        --amino \
+        --thread 1 \
+        "tmp.${infile_base}.input.pep.fasta" \
+        > "tmp.${infile_base}.pep.aln.fasta"
+      if [[ -s "tmp.${infile_base}.pep.aln.fasta" ]]; then
+        seqkit seq --threads 1 "tmp.${infile_base}.pep.aln.fasta" --out-file "tmp.${infile_base}.pep.aln.out.fa.gz"
+        mv_out "tmp.${infile_base}.pep.aln.out.fa.gz" "${outfile}"
+      fi
+    else
+      seqkit seq --threads 1 "${dir_busco_fasta}/${infile}" --out-file "tmp.${infile_base}.input.cds.fasta"
+      cdskit mask \
+        --seqfile "tmp.${infile_base}.input.cds.fasta" \
+        --outfile "tmp.${infile_base}.cds.fasta"
 
-    num_seq=$(gg_count_fasta_records "tmp.${infile_base}.cds.fasta")
-    if [[ ${num_seq} -lt 2 ]]; then
-      echo "Skipped MAFFT/backalign because fewer than 2 sequences were found: ${infile}"
-      seqkit seq --threads 1 "tmp.${infile_base}.cds.fasta" --out-file "tmp.${infile_base}.cds.out.fa.gz"
-      mv_out "tmp.${infile_base}.cds.out.fa.gz" "${outfile}"
-      rm -f -- "tmp.${infile_base}"*
-      return 0
-    fi
+      num_seq=$(gg_count_fasta_records "tmp.${infile_base}.cds.fasta")
+      if [[ ${num_seq} -lt 2 ]]; then
+        echo "Skipped MAFFT/backalign because fewer than 2 sequences were found: ${infile}"
+        seqkit seq --threads 1 "tmp.${infile_base}.cds.fasta" --out-file "tmp.${infile_base}.cds.out.fa.gz"
+        mv_out "tmp.${infile_base}.cds.out.fa.gz" "${outfile}"
+        rm -f -- "tmp.${infile_base}"*
+        return 0
+      fi
 
-    seqkit translate \
-      --allow-unknown-codon \
-      --transl-table "${genetic_code}" \
-      --threads 1 \
-      "tmp.${infile_base}.cds.fasta" \
-      > "tmp.${infile_base}.pep.fasta"
+      seqkit translate \
+        --allow-unknown-codon \
+        --transl-table "${genetic_code}" \
+        --threads 1 \
+        "tmp.${infile_base}.cds.fasta" \
+        > "tmp.${infile_base}.pep.fasta"
 
-    mafft \
-      --auto \
-      --amino \
-      --thread 1 \
-      "tmp.${infile_base}.pep.fasta" \
-      > "tmp.${infile_base}.pep.aln.fasta"
+      mafft \
+        --auto \
+        --amino \
+        --thread 1 \
+        "tmp.${infile_base}.pep.fasta" \
+        > "tmp.${infile_base}.pep.aln.fasta"
 
-    cdskit backalign \
-      --seqfile "tmp.${infile_base}.cds.fasta" \
-      --aa_aln "tmp.${infile_base}.pep.aln.fasta" \
-      --codontable "${genetic_code}" \
-      --outfile "tmp.${infile_base}.cds.aln.fasta"
+      cdskit backalign \
+        --seqfile "tmp.${infile_base}.cds.fasta" \
+        --aa_aln "tmp.${infile_base}.pep.aln.fasta" \
+        --codontable "${genetic_code}" \
+        --outfile "tmp.${infile_base}.cds.aln.fasta"
 
-    if [[ -s "tmp.${infile_base}.cds.aln.fasta" ]]; then
-      seqkit seq --threads 1 "tmp.${infile_base}.cds.aln.fasta" --out-file "tmp.${infile_base}.cds.aln.out.fa.gz"
-      mv_out "tmp.${infile_base}.cds.aln.out.fa.gz" "${outfile}"
+      if [[ -s "tmp.${infile_base}.cds.aln.fasta" ]]; then
+        seqkit seq --threads 1 "tmp.${infile_base}.cds.aln.fasta" --out-file "tmp.${infile_base}.cds.aln.out.fa.gz"
+        mv_out "tmp.${infile_base}.cds.aln.out.fa.gz" "${outfile}"
+      fi
     fi
     rm -f -- "tmp.${infile_base}"*
   }
 
   input_alignment_files=()
-  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_fasta}" "*.busco.cds.fa.gz")
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_fasta}" "${genome_busco_fasta_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
@@ -2751,19 +2779,26 @@ if [[ ${run_busco_trimal} -eq 1 ]]; then
   run_trimal() {
     infile=$1
     infile_base=${infile%%.*}
-    outfile="${dir_busco_trimal}/${infile_base}.busco.trimal.fa.gz"
+    outfile="${dir_busco_trimal}/${infile_base}${genome_busco_trimal_suffix}"
     if [[ -s "${outfile}" ]]; then
       return 0
     fi
-    seqkit seq --remove-gaps --threads 1 "${dir_busco_mafft}/${infile}" > "tmp.${infile_base}.degap.fasta"
-    seqkit translate --transl-table "${genetic_code}" --threads 1 "${dir_busco_mafft}/${infile}" > "tmp.${infile_base}.pep.fasta"
+    if [[ "${input_sequence_mode}" == "protein" ]]; then
+      trimal \
+        -in "${dir_busco_mafft}/${infile}" \
+        -out "tmp.${infile_base}.trimal.fasta" \
+        -automated1
+    else
+      seqkit seq --remove-gaps --threads 1 "${dir_busco_mafft}/${infile}" > "tmp.${infile_base}.degap.fasta"
+      seqkit translate --transl-table "${genetic_code}" --threads 1 "${dir_busco_mafft}/${infile}" > "tmp.${infile_base}.pep.fasta"
 
-    trimal \
-      -in "tmp.${infile_base}.pep.fasta" \
-      -backtrans "tmp.${infile_base}.degap.fasta" \
-      -out "tmp.${infile_base}.trimal.fasta" \
-      -ignorestopcodon \
-      -automated1
+      trimal \
+        -in "tmp.${infile_base}.pep.fasta" \
+        -backtrans "tmp.${infile_base}.degap.fasta" \
+        -out "tmp.${infile_base}.trimal.fasta" \
+        -ignorestopcodon \
+        -automated1
+    fi
 
     if [[ -s "tmp.${infile_base}.trimal.fasta" ]]; then
       seqkit seq --threads 1 "tmp.${infile_base}.trimal.fasta" --out-file "tmp.${infile_base}.trimal.out.fa.gz"
@@ -2773,7 +2808,7 @@ if [[ ${run_busco_trimal} -eq 1 ]]; then
   }
 
   input_alignment_files=()
-  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_mafft}" "*.busco.cds.aln.fa.gz")
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_mafft}" "${genome_busco_aln_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
@@ -2850,7 +2885,11 @@ if [[ ${run_busco_iqtree_pep} -eq 1 ]]; then
       return 0
     fi
 
-    seqkit translate --transl-table "${genetic_code}" --threads 1 "${indir}/${infile}" > "./tmp.${infile_base}.input.fasta"
+    if [[ "${input_sequence_mode}" == "protein" ]]; then
+      seqkit seq --threads 1 "${indir}/${infile}" > "./tmp.${infile_base}.input.fasta"
+    else
+      seqkit translate --transl-table "${genetic_code}" --threads 1 "${indir}/${infile}" > "./tmp.${infile_base}.input.fasta"
+    fi
 
     iqtree \
       -s "./tmp.${infile_base}.input.fasta" \
@@ -2866,7 +2905,7 @@ if [[ ${run_busco_iqtree_pep} -eq 1 ]]; then
   }
 
   input_alignment_files=()
-  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}" "*.busco.trimal.fa.gz")
+  mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}" "${genome_busco_trimal_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
@@ -2912,6 +2951,7 @@ busco_notung() {
 }
 
 task="NOTUNG rooting of duplicate-containing BUSCO DNA trees"
+disable_if_no_input_file "run_busco_notung_root_dna" "${file_dated_species_tree}"
 if [[ ${run_busco_notung_root_dna} -eq 1 ]]; then
   gg_step_start "${task}"
 
@@ -2927,6 +2967,7 @@ else
 fi
 
 task="NOTUNG rooting of duplicate-containing BUSCO protein trees"
+disable_if_no_input_file "run_busco_notung_root_pep" "${file_dated_species_tree}"
 if [[ ${run_busco_notung_root_pep} -eq 1 ]]; then
   gg_step_start "${task}"
 
@@ -2977,6 +3018,7 @@ busco_species_tree_assisted_gene_tree_rooting() {
 }
 
 task="Species-tree-guided gene tree rooting of duplicate-containing BUSCO DNA trees"
+disable_if_no_input_file "run_busco_root_dna" "${file_dated_species_tree}"
 if [[ ${run_busco_root_dna} -eq 1 ]]; then
   gg_step_start "${task}"
 
@@ -2992,6 +3034,7 @@ else
 fi
 
 task="Species-tree-guided gene tree rooting of duplicate-containing BUSCO protein trees"
+disable_if_no_input_file "run_busco_root_pep" "${file_dated_species_tree}"
 if [[ ${run_busco_root_pep} -eq 1 ]]; then
   gg_step_start "${task}"
 
@@ -3148,6 +3191,7 @@ busco_grampa() {
 }
 
 task="BUSCO-based Grampa analysis for the polyploidization history with BUSCO DNA trees"
+disable_if_no_input_file "run_busco_grampa_dna" "${file_dated_species_tree}"
 if [[ ! -s "${file_busco_grampa_dna}" && ${run_busco_grampa_dna} -eq 1 ]]; then
   gg_step_start "${task}"
 
@@ -3157,6 +3201,7 @@ else
 fi
 
 task="BUSCO-based Grampa analysis for the polyploidization history with BUSCO protein trees"
+disable_if_no_input_file "run_busco_grampa_pep" "${file_dated_species_tree}"
 if [[ ! -s "${file_busco_grampa_pep}" && ${run_busco_grampa_pep} -eq 1 ]]; then
   gg_step_start "${task}"
 

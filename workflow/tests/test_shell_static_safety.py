@@ -1656,11 +1656,14 @@ def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps
     assert "Use iqtree_pep or astral_pep instead." in core
     assert "Disabling DNA-only species-tree steps in protein mode" in core
     assert "Disabling CDS-only dating steps in protein mode" in core
-    assert "Disabling BUSCO-based genome-evolution steps in protein mode" in core
+    assert "Disabling DNA-only BUSCO genome-evolution steps in protein mode" in core
     assert 'dir_species_busco_full="${gg_workspace_output_dir}/species_protein_busco_full"' in core
     assert 'dir_species_busco_short="${gg_workspace_output_dir}/species_protein_busco_short"' in core
     assert 'prepare_species_tree_input_dir' in core
     assert '--mode "${species_tree_busco_mode}"' in core
+    assert 'outfile2="${dir_busco_fasta}/${busco_id}${genome_busco_fasta_suffix}"' in core
+    assert 'outfile=${dir_busco_mafft}/${infile_base}${genome_busco_aln_suffix}' in core
+    assert 'outfile="${dir_busco_trimal}/${infile_base}${genome_busco_trimal_suffix}"' in core
 
 
 def test_annotation_and_transcriptome_use_local_contamination_removal_rank_parameter():

@@ -119,8 +119,8 @@ assembly_cpu_offset=0 # Number of CPU cores reserved from GG_TASK_CPUS before la
 assembly_ram_offset=4 # Amount of RAM in GB reserved from GG_MEM_TOTAL_GB before launching the assembler.
 
 # Contamination-removal parameters
-contamination_removal_rank="${contamination_removal_rank:-${GG_COMMON_CONTAMINATION_REMOVAL_RANK:-domain}}" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.
-contamination_removal_target_taxon="${contamination_removal_target_taxon:-${GG_COMMON_CONTAMINATION_REMOVAL_TARGET_TAXON:-}}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).
+contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.
+contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).
 
 ### End: Modify this block to tailor your analysis ###
 

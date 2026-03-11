@@ -1533,7 +1533,10 @@ gg_merge_directory_contents() {
       gg_merge_directory_contents "${staged_entry}" "${runtime_entry}" || return 1
       rm -rf -- "${staged_entry}"
     else
-      mv -f -- "${staged_entry}" "${runtime_entry}" || return 1
+      if [[ -e "${runtime_entry}" ]]; then
+        rm -rf -- "${runtime_entry}" || return 1
+      fi
+      mv -- "${staged_entry}" "${runtime_entry}" || return 1
     fi
   done
 }

@@ -600,23 +600,23 @@ def find_file_trait_color(trait):
     file_trait_color = os.path.join(os.getcwd(), file_name)
     return file_trait_color
 
-def filter_max_per_og(cb_passed, arity, max_per_og):
+def filter_max_per_og(cb_passed, arity, args):
     sampled_indices = []
     num_before_filtering = cb_passed.shape[0]
-    if max_per_og <= 0:
-        print(f'K = {arity}: Skipped branch combinations that are not top {max_per_og} within individual orthogroups: {num_before_filtering} -> {num_before_filtering}', flush=True)
+    if args.max_per_og <= 0:
+        print(f'K = {arity}: Skipped branch combinations that are not top {args.max_per_og} within individual orthogroups: {num_before_filtering} -> {num_before_filtering}', flush=True)
         return cb_passed
     for og, og_indices in cb_passed.groupby('orthogroup', sort=False).indices.items():
         og_indices = numpy.asarray(og_indices, dtype=int)
-        if og_indices.shape[0] > max_per_og:
-            print(f'K = {arity}, {og}: Number of branch combinations ({og_indices.shape[0]}) exceeded --max_per_og. Only {max_per_og} combinations will be analyzed.')
-            sampled_indice_positions = numpy.floor(numpy.linspace(0, og_indices.shape[0]-1, max_per_og)).astype(int)
+        if (og_indices.shape[0] > args.max_per_og) and (args.max_per_og > 0):
+            print(f'K = {arity}, {og}: Number of branch combinations ({og_indices.shape[0]}) exceeded --max_per_og. Only {args.max_per_og} combinations will be analyzed.')
+            sampled_indice_positions = numpy.floor(numpy.linspace(0, og_indices.shape[0]-1, args.max_per_og)).astype(int)
             sampled_indices += og_indices[sampled_indice_positions].tolist()
         else:
             sampled_indices += og_indices.tolist()
     cb_passed = cb_passed.loc[sampled_indices,:].reset_index(drop=True)
     num_after_filtering = cb_passed.shape[0]
-    print(f'K = {arity}: Skipped branch combinations that are not top {max_per_og} within individual orthogroups: {num_before_filtering} -> {num_after_filtering}', flush=True)
+    print(f'K = {arity}: Skipped branch combinations that are not top {args.max_per_og} within individual orthogroups: {num_before_filtering} -> {num_after_filtering}', flush=True)
     return cb_passed
 
 def filter_fg_stem_ratio(cb_passed, arity, trait, args, no_trait_name):
@@ -893,7 +893,7 @@ if __name__ == '__main__':
             if args.min_fg_stem_ratio > 0:
                 cb_passed = filter_fg_stem_ratio(cb_passed, arity, trait, args, no_trait_name)
             cb_passed = write_annotated_table(cb_passed, annot_besthits, dir_out, out_name)
-            cb_passed = filter_max_per_og(cb_passed, arity, args.max_per_og)
+            cb_passed = filter_max_per_og(cb_passed, arity, args)
             if args.max_per_K < cb_passed.shape[0]:
                 cb_passed = filter_max_per_K_1st(cb_passed, arity, trait)
             if args.max_per_K < cb_passed.shape[0]:
