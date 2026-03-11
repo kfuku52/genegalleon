@@ -78,6 +78,7 @@ Main outputs:
 Use `gg_genome_evolution_entrypoint.sh` when you already have multispecies CDS inputs and want the core comparative scaffold.
 It also supports `input_sequence_mode=protein` when you want the species-tree and orthogroup stages to run from protein sequences only.
 In protein mode, place per-species protein FASTA files under `workspace/input/species_protein`, or let GeneGalleon translate `workspace/input/species_cds` with the optional per-species override table `workspace/input/species_genetic_code/species_genetic_code.tsv`.
+When `input_sequence_mode=cds`, GeneGalleon ignores `workspace/input/species_protein` and always builds temporary proteins from `workspace/input/species_cds`.
 Protein mode automatically disables DNA-tree, IQ2MC/MCMCtree, and BUSCO-based genome-evolution steps that still require CDS inputs.
 
 ```bash

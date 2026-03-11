@@ -632,7 +632,7 @@ prepare_species_protein_tmp() {
   cleanup_species_protein_tmp
   ensure_dir "${dir_sp_protein}"
 
-  if species_protein_input_has_files; then
+  if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
     check_species_protein_dir "${dir_sp_protein_input}"
     check_if_species_files_unique "${dir_sp_protein_input}"
     mapfile -t protein_files < <(gg_find_fasta_files "${dir_sp_protein_input}" 1)
@@ -648,6 +648,10 @@ prepare_species_protein_tmp() {
     species_protein_source="species_protein"
     species_protein_ready=1
     return 0
+  fi
+  if [[ "${input_sequence_mode}" != "protein" ]] && species_protein_input_has_files; then
+    echo "Ignoring species_protein inputs in cds mode: ${dir_sp_protein_input}"
+    echo "cds mode always generates temporary species_protein FASTA files from species_cds."
   fi
 
   if ! species_cds_input_has_files; then
