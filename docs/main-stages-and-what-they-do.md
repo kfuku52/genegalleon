@@ -152,6 +152,7 @@ Purpose:
   - inlined orthofinder stage (formerly `gg_orthofinder_core.sh`)
   - inlined genome-evolution stage (formerly `gg_genomeEvolution_core.sh`)
 - preserves output-exists skip behavior at step level and aborts on real failures.
+- accepts either CDS-first input (`input_sequence_mode=cds`) or protein-only input (`input_sequence_mode=protein`).
 
 Main output roots:
 
@@ -163,7 +164,7 @@ Main output roots:
 
 Purpose:
 
-- translate CDS to species proteins,
+- translate CDS to species proteins, or reuse `workspace/input/species_protein` in protein mode,
 - run OrthoFinder,
 - select orthogroups for downstream analysis,
 - compare orthogroup methods.
@@ -173,6 +174,7 @@ Main outputs:
 - `workspace/output/orthofinder`
 
 Temporary protein FASTA files are created under `workspace/downloads/tmp/` and removed automatically after orthogroup-related steps finish.
+When `workspace/input/species_genetic_code/species_genetic_code.tsv` is present, it overrides the global `genetic_code` on a per-species basis during CDS-to-protein translation; species missing from the table still use the default `genetic_code`.
 
 Notable defaults:
 

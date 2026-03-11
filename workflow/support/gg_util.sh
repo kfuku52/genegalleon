@@ -2098,6 +2098,76 @@ check_species_cds() {
   check_species_cds_dir "$(workspace_input_root "${gg_workspace_dir}")/species_cds"
 }
 
+check_species_protein_dir() {
+  local dir_sp_protein=$1
+  local species_protein_fasta=()
+  local fasta_path
+  while IFS= read -r fasta_path; do
+    species_protein_fasta+=( "${fasta_path}" )
+  done < <(gg_find_fasta_files "${dir_sp_protein}" 1)
+  if [[ ${#species_protein_fasta[@]} -eq 0 ]]; then
+    echo "No species_protein fasta files were found in: ${dir_sp_protein}"
+    exit 1
+  fi
+  local error_log
+  error_log=$(mktemp)
+  echo "$(date): Started validating the format of all species_protein files using ${GG_TASK_CPUS} processes."
+
+  function check_single_species_protein () {
+    local spfasta=$1
+    local sp_ub
+    local first_header
+    local first_header_no_gt
+    local first_header_sp
+    local spfasta_startswith
+    local seq_names
+    sp_ub=$(basename "${spfasta}" | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/")
+    seq_names=$(seqkit seq "${spfasta}" | awk '/^>/ {print}')
+    first_header=${seq_names%%$'\n'*}
+    first_header=${first_header%%[[:space:]]*}
+    first_header_no_gt=${first_header#>}
+    first_header_sp=$(printf '%s' "${first_header_no_gt}" | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/")
+    spfasta_startswith=">${first_header_sp}"
+
+    if [[ ${spfasta_startswith} != ">${sp_ub}" ]]; then
+      echo "Sequence names start with ${spfasta_startswith} but this is not consistent with the species name (${sp_ub}) parsed from the file name of ${spfasta}" >> "${error_log}"
+    fi
+
+    local num_all_seq
+    local num_uniq_seq
+    num_all_seq=$(printf '%s\n' "${seq_names}" | grep -c '^>')
+    num_uniq_seq=$(printf '%s\n' "${seq_names}" | sort -u | grep -c '^>')
+    if [[ ${num_all_seq} -ne ${num_uniq_seq} ]]; then
+      echo "Sequence names are not unique. # all seqs = ${num_all_seq} and # unique seqs = ${num_uniq_seq}" >> "${error_log}"
+    fi
+
+    for prohibited_character in "%" "/" "+" ":" ";" "&" "^" "$" "#" "@" "!" "~" "=" "\'" "\"" "\`" "*" "(" ")" "{" "}" "[" "]" "|" "?" " " "\t"; do
+      if [[ "${seq_names}" == *"${prohibited_character}"* ]]; then
+        echo "Sequence names contain '${prohibited_character}': ${spfasta}" >> "${error_log}"
+      fi
+    done
+  }
+
+  export -f check_single_species_protein
+  export error_log
+  parallel --jobs "${GG_TASK_CPUS}" check_single_species_protein ::: "${species_protein_fasta[@]}"
+
+  if [[ -s "${error_log}" ]]; then
+    cat "${error_log}"
+    rm -f -- "${error_log}"
+    echo "Exiting due to errors."
+    exit 1
+  else
+    rm -f -- "${error_log}"
+    echo "$(date): All per-species protein files are valid."
+  fi
+}
+
+check_species_protein() {
+  local gg_workspace_dir=$1
+  check_species_protein_dir "$(workspace_input_root "${gg_workspace_dir}")/species_protein"
+}
+
 is_output_older_than_inputs() {
   local input_file_variable_regex=$1
   local output_file=$2

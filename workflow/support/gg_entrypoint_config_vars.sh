@@ -147,6 +147,7 @@ EOF
       delete_tmp_dir
       grampa_h1
       go_category
+      input_sequence_mode
       max_gene_orthogroup_grampa
       max_num_gene
       max_orthofinder_core_species

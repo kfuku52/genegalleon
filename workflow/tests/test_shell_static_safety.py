@@ -1178,12 +1178,18 @@ def test_species_busco_set_check_is_gated_by_run_flag():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
     gate = "if [[ ${run_species_get_busco_summary} -eq 1 ]]; then"
+    prepare = "prepare_species_tree_input_dir"
     normalize = 'normalize_busco_table_naming "${dir_species_busco_full}" "${dir_species_busco_short}"'
-    check = 'if ! is_species_set_identical "${dir_sp_cds}" "${dir_species_busco_full}"; then'
+    check = 'if ! is_species_set_identical "${species_tree_input_dir}" "${dir_species_busco_full}"; then'
     assert gate in text
+    assert prepare in text
     assert normalize in text
     assert check in text
-    assert text.index(gate) < text.index(normalize) < text.index(check)
+    gate_idx = text.index(gate)
+    prepare_idx = text.index(prepare, gate_idx)
+    normalize_idx = text.index(normalize, prepare_idx)
+    check_idx = text.index(check, normalize_idx)
+    assert gate_idx < prepare_idx < normalize_idx < check_idx
 
 
 def test_genome_busco_summary_normalizes_legacy_table_names_before_collect_common():
@@ -1622,6 +1628,39 @@ def test_genome_evolution_uses_local_species_tree_rooting_parameter():
     assert 'nwkit_root_args+=(--outgroup "${root_value}")' in core
     assert 'nwkit_root_args+=(--download_dir "${dir_nwkit_download_dir}")' in core
     assert "      species_tree_rooting" in config_vars
+
+
+def test_genome_evolution_supports_protein_input_mode_and_species_code_overrides():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    assert 'input_sequence_mode="cds" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.' in entrypoint
+    assert "      input_sequence_mode" in config_vars
+    assert 'input_sequence_mode="${input_sequence_mode:-cds}"' in core
+    assert 'species_genetic_code_table_path() {' in core
+    assert 'echo "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv"' in core
+    assert 'echo "${gg_workspace_input_dir}/species_protein"' in core
+    assert 'prepare_species_genetic_code_table() {' in core
+    assert 'lookup_species_genetic_code() {' in core
+    assert 'check_species_protein_dir "${dir_sp_protein_input}"' in core
+    assert 'species_genetic_code.tsv is ignored because species_protein inputs are provided' in core
+    assert 'Translation started: ${cds} (genetic_code=${species_code})' in core
+
+
+def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps():
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    assert 'if [[ "${input_sequence_mode}" == "protein" ]]; then' in core
+    assert 'protein mode does not support undated_species_tree=${undated_species_tree}.' in core
+    assert "Use iqtree_pep or astral_pep instead." in core
+    assert "Disabling DNA-only species-tree steps in protein mode" in core
+    assert "Disabling CDS-only dating steps in protein mode" in core
+    assert "Disabling BUSCO-based genome-evolution steps in protein mode" in core
+    assert 'dir_species_busco_full="${gg_workspace_output_dir}/species_protein_busco_full"' in core
+    assert 'dir_species_busco_short="${gg_workspace_output_dir}/species_protein_busco_short"' in core
+    assert 'prepare_species_tree_input_dir' in core
+    assert '--mode "${species_tree_busco_mode}"' in core
 
 
 def test_annotation_and_transcriptome_use_local_contamination_removal_rank_parameter():
