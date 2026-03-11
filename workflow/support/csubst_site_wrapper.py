@@ -14,6 +14,7 @@ import subprocess
 import textwrap
 import zipfile
 from concurrent.futures import ProcessPoolExecutor
+from itertools import repeat
 try:
     import sqlalchemy
 except ImportError:
@@ -307,34 +308,27 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, an
     finally:
         os.chdir(previous_cwd)
 
-def skip_lower_order(cb_passed, trait, already_analyzed_in_greater_K):
+def skip_lower_order(cb_passed, arity, trait, already_analyzed_in_greater_K):
     num_before_filtering = cb_passed.shape[0]
-    bid_cols = cb_passed.columns[cb_passed.columns.str.startswith('branch_id_')]
-    is_already_analyzed = numpy.zeros(cb_passed.shape[0], dtype=bool)
-    for i in cb_passed.index:
-        flag_analyzed = False
-        og = cb_passed.at[i,'orthogroup']
-        branch_id_set = set(cb_passed.loc[i, bid_cols].tolist())
-        if not og in already_analyzed_in_greater_K[trait].keys():
-            flag_analyzed = False
-            already_analyzed_in_greater_K[trait][og] = list()
-        else:
-            for already_analyzed_set in already_analyzed_in_greater_K[trait][og]:
-                if branch_id_set.issubset(already_analyzed_set):
-                    flag_analyzed = True
-                    break
-        if flag_analyzed:
-            is_already_analyzed[i] = True
+    bid_cols = cb_passed.columns[cb_passed.columns.str.startswith('branch_id_')].tolist()
+    keep_indices = []
+    analyzed_by_og = already_analyzed_in_greater_K[trait]
+    for row in cb_passed.loc[:, ['orthogroup'] + bid_cols].itertuples(index=True, name=None):
+        row_index = row[0]
+        og = row[1]
+        branch_id_set = frozenset(row[2:])
+        analyzed_sets = analyzed_by_og.setdefault(og, [])
+        if any(branch_id_set.issubset(analyzed_set) for analyzed_set in analyzed_sets):
             print(f'Skipped. Subset of already analyzed higher order convergence: {og} {branch_id_set}', flush=True)
-        else:
-            already_analyzed_in_greater_K[trait][og].append(branch_id_set)
-    cb_passed = cb_passed.loc[~is_already_analyzed,:].reset_index(drop=True)
+            continue
+        analyzed_sets.append(branch_id_set)
+        keep_indices.append(row_index)
+    cb_passed = cb_passed.loc[keep_indices, :].reset_index(drop=True)
     num_after_filtering = cb_passed.shape[0]
     print(f'K = {arity}: Skipped branch combinations that are subsets of already analyzed higher-order convergence: {num_before_filtering} -> {num_after_filtering}', flush=True)
     return cb_passed, already_analyzed_in_greater_K
 
-def generate_trait_colors(file_trait, trait_names):
-    df_trait = pandas.read_csv(file_trait, sep='\t', header=0, index_col=None)
+def generate_trait_colors(df_trait, trait_names):
     for trait_name in trait_names:
         df_trait_color = df_trait.loc[:,['species', trait_name]]
         is_foreground = (df_trait_color[trait_name]==1)
@@ -343,6 +337,40 @@ def generate_trait_colors(file_trait, trait_names):
         df_trait_color.loc[is_foreground,'color'] = 'firebrick'
         df_trait_color.to_csv(f'trait_{trait_name}.color.tsv', sep='\t', index=False)
     return None
+
+
+def load_annotation_besthits(dir_of):
+    path_annot = os.path.join(dir_of, 'Orthogroups', 'Orthogroups.GeneCount.annotated.tsv')
+    annot = pandas.read_csv(path_annot, sep='\t', header=0, low_memory=False)
+    annot.columns = annot.columns.str.replace('Orthogroup', 'orthogroup')
+    cols = ['orthogroup'] + annot.columns[annot.columns.str.startswith('besthit_')].tolist()
+    return annot.loc[:, cols]
+
+
+def get_cb_required_columns(cb_columns, trait_names):
+    required = {
+        'orthogroup',
+        'OCNany2spe',
+        'ECNany2spe',
+        'OCSany2spe',
+        'ECSany2spe',
+        'omegaCany2spe',
+        'OCNCoD',
+    }
+    required.update(col for col in cb_columns if col.startswith('branch_id_'))
+    if 'is_fg' in cb_columns:
+        required.add('is_fg')
+    else:
+        required.update(f'is_fg_{trait}' for trait in trait_names if f'is_fg_{trait}' in cb_columns)
+    if 'branch_num_fg_stem' in cb_columns:
+        required.add('branch_num_fg_stem')
+    else:
+        required.update(
+            f'branch_num_fg_stem_{trait}'
+            for trait in trait_names
+            if f'branch_num_fg_stem_{trait}' in cb_columns
+        )
+    return [col for col in cb_columns if col in required]
 
 def resolve_existing_path(candidates):
     for candidate in candidates:
@@ -422,23 +450,26 @@ def find_file_trait_color(trait):
     file_trait_color = os.path.join(os.getcwd(), file_name)
     return file_trait_color
 
-def filter_max_per_og(cb_passed, arity, trait):
+def filter_max_per_og(cb_passed, arity, max_per_og):
     sampled_indices = []
     num_before_filtering = cb_passed.shape[0]
-    for og in cb_passed['orthogroup'].drop_duplicates():
-        og_indices = cb_passed[cb_passed['orthogroup'] == og].index
-        if (og_indices.shape[0] > args.max_per_og) and (args.max_per_og > 0):
-            print(f'K = {arity}, {og}: Number of branch combinations ({og_indices.shape[0]}) exceeded --max_per_og. Only {args.max_per_og} combinations will be analyzed.')
-            sampled_indice_positions = numpy.floor(numpy.linspace(0, og_indices.shape[0]-1, args.max_per_og)).astype(int)
+    if max_per_og <= 0:
+        print(f'K = {arity}: Skipped branch combinations that are not top {max_per_og} within individual orthogroups: {num_before_filtering} -> {num_before_filtering}', flush=True)
+        return cb_passed
+    for og, og_indices in cb_passed.groupby('orthogroup', sort=False).indices.items():
+        og_indices = numpy.asarray(og_indices, dtype=int)
+        if og_indices.shape[0] > max_per_og:
+            print(f'K = {arity}, {og}: Number of branch combinations ({og_indices.shape[0]}) exceeded --max_per_og. Only {max_per_og} combinations will be analyzed.')
+            sampled_indice_positions = numpy.floor(numpy.linspace(0, og_indices.shape[0]-1, max_per_og)).astype(int)
             sampled_indices += og_indices[sampled_indice_positions].tolist()
         else:
             sampled_indices += og_indices.tolist()
     cb_passed = cb_passed.loc[sampled_indices,:].reset_index(drop=True)
     num_after_filtering = cb_passed.shape[0]
-    print(f'K = {arity}: Skipped branch combinations that are not top {args.max_per_og} within individual orthogroups: {num_before_filtering} -> {num_after_filtering}', flush=True)
+    print(f'K = {arity}: Skipped branch combinations that are not top {max_per_og} within individual orthogroups: {num_before_filtering} -> {num_after_filtering}', flush=True)
     return cb_passed
 
-def filter_fg_stem_ratio(cb_passed, arity, args, no_trait_name):
+def filter_fg_stem_ratio(cb_passed, arity, trait, args, no_trait_name):
     min_fg_stem_num = int(numpy.round(args.min_fg_stem_ratio * arity, decimals=0))
     num_before_filtering = cb_passed.shape[0]
     if no_trait_name:
@@ -450,14 +481,8 @@ def filter_fg_stem_ratio(cb_passed, arity, args, no_trait_name):
     print(f'K = {arity}: Skipped branch combinations with less than {min_fg_stem_num} foreground stem branches (prop = {args.min_fg_stem_ratio}): {num_before_filtering} -> {num_after_filtering}', flush=True)
     return cb_passed
 
-def write_annotated_table(cb_passed, dir_of, dir_out, out_name):
-    path_annot = os.path.join(dir_of, 'Orthogroups', 'Orthogroups.GeneCount.annotated.tsv')
-    annot = pandas.read_csv(path_annot, sep='\t', header=0, low_memory=False)
-    annot.columns = annot.columns.str.replace('Orthogroup', 'orthogroup')
-    cols = ['orthogroup'] + annot.columns[annot.columns.str.startswith('besthit_')].tolist()
-    annot = annot.loc[:,cols]
+def write_annotated_table(cb_passed, annot, dir_out, out_name):
     cb_passed = pandas.merge(cb_passed, annot, how='left', on='orthogroup', sort=False)
-    del annot
     outfile = os.path.join(dir_out, out_name+'.tsv')
     print(f'Writing the table to: {outfile}', flush=True)
     cb_passed.to_csv(outfile, sep='\t', index=False)
@@ -650,7 +675,8 @@ if __name__ == '__main__':
     if len(trait_names) == 0:
         raise ValueError(f'No analyzable trait columns were detected in {args.file_trait}.')
     print(f'Specified or detected traits: {",".join(trait_names)}', flush=True)
-    generate_trait_colors(file_trait=args.file_trait, trait_names=trait_names)
+    generate_trait_colors(df_trait=df_trait, trait_names=trait_names)
+    annot_besthits = load_annotation_besthits(dir_of)
     already_analyzed_in_greater_K = dict()
     for trait in trait_names:
         already_analyzed_in_greater_K[trait] = dict() # Initialize
@@ -659,7 +685,10 @@ if __name__ == '__main__':
         if 'cb'+str(arity) not in table_names:
             print(f'cb{arity} is not in the database. Skipping.', flush=True)
             continue
-        sql_cb = sqlalchemy.text(f'SELECT * from cb{arity}')
+        cb_table = 'cb'+str(arity)
+        cb_required_cols = get_cb_required_columns(column_names[cb_table], trait_names)
+        select_cols_sql = ', '.join('"{}"'.format(col) for col in cb_required_cols)
+        sql_cb = sqlalchemy.text(f'SELECT {select_cols_sql} from {cb_table}')
         cb = pandas.read_sql_query(sql=sql_cb, con=conn.connect(), index_col=None, coerce_float=True)
         sum_ocn = cb.loc[:, 'OCNany2spe'].sum()
         sum_ecn = cb.loc[:, 'ECNany2spe'].sum()
@@ -708,35 +737,41 @@ if __name__ == '__main__':
                          outbase=os.path.join(dir_out, out_name + '_OCNany2spe-OCNCoD'),
                          polygon_xmin=min_OCNany2spe, polygon_ymin=min_OCNCoD)
             if args.skip_lower_order:
-                out = skip_lower_order(cb_passed, trait, already_analyzed_in_greater_K)
+                out = skip_lower_order(cb_passed, arity, trait, already_analyzed_in_greater_K)
                 cb_passed, already_analyzed_in_greater_K = out
                 del out
             if args.min_fg_stem_ratio > 0:
-                cb_passed = filter_fg_stem_ratio(cb_passed, arity, args, no_trait_name)
-            cb_passed = write_annotated_table(cb_passed, dir_of, dir_out, out_name)
-            cb_passed = filter_max_per_og(cb_passed, arity, trait)            
+                cb_passed = filter_fg_stem_ratio(cb_passed, arity, trait, args, no_trait_name)
+            cb_passed = write_annotated_table(cb_passed, annot_besthits, dir_out, out_name)
+            cb_passed = filter_max_per_og(cb_passed, arity, args.max_per_og)
             if args.max_per_K < cb_passed.shape[0]:
                 cb_passed = filter_max_per_K_1st(cb_passed, arity, trait)
             if args.max_per_K < cb_passed.shape[0]:
                 cb_passed = filter_max_per_K_2nd(cb_passed, arity, trait)
             print('Starting analyzing individual branch combinations.', flush=True)
-            branch_id_cols = cb_passed.columns[cb_passed.columns.str.startswith('branch_id_')]
+            branch_id_cols = cb_passed.columns[cb_passed.columns.str.startswith('branch_id_')].tolist()
             og_list = cb_passed['orthogroup'].tolist()
-            branch_id_str_list = [ ','.join([ str(bid) for bid in cb_passed.loc[i,branch_id_cols].tolist() ]) for i in range(cb_passed.shape[0]) ]
+            branch_id_str_list = [
+                ','.join(str(bid) for bid in branch_ids)
+                for branch_ids in cb_passed.loc[:, branch_id_cols].itertuples(index=False, name=None)
+            ]
             besthit_cols = ['besthit_0.05', 'besthit_0.25', 'besthit_0.5', 'besthit_0.75', 'besthit_0.95']
+            besthit_frame = cb_passed.reindex(columns=besthit_cols)
             annotation_text_list = []
-            for i in range(cb_passed.shape[0]):
-                besthit_values = []
-                for col in besthit_cols:
-                    if (col in cb_passed.columns) and pandas.notna(cb_passed.at[i, col]):
-                        besthit_values.append(str(cb_passed.at[i, col]))
-                    else:
-                        besthit_values.append('NA')
+            for og, branch_id_str, besthit_values_raw in zip(
+                og_list,
+                branch_id_str_list,
+                besthit_frame.itertuples(index=False, name=None),
+            ):
+                besthit_values = [
+                    str(value) if pandas.notna(value) else 'NA'
+                    for value in besthit_values_raw
+                ]
                 annotation_text_list.append(
                     get_annotation_text(
-                        og=cb_passed.at[i, 'orthogroup'],
+                        og=og,
                         arity=arity,
-                        branch_id_str=branch_id_str_list[i],
+                        branch_id_str=branch_id_str,
                         trait=trait,
                         min_OCNany2spe=min_OCNany2spe,
                         min_omegaCany2spe=min_omegaCany2spe,
@@ -744,19 +779,15 @@ if __name__ == '__main__':
                         besthit_values=besthit_values,
                     )
                 )
-            dir_out_list = [ dir_out for i in range(cb_passed.shape[0]) ]
-            dir_og_list = [dir_og,] * cb_passed.shape[0]
-            file_trait_color_list = [file_trait_color] * cb_passed.shape[0]
-            ncpu_list = [args.ncpu] * cb_passed.shape[0]
             with ProcessPoolExecutor(max_workers=args.ncpu) as executor:
                 results = executor.map(
                     process_index,
                     og_list,
                     branch_id_str_list,
-                    dir_out_list,
-                    dir_og_list,
-                    file_trait_color_list,
-                    ncpu_list,
+                    repeat(dir_out),
+                    repeat(dir_og),
+                    repeat(file_trait_color),
+                    repeat(args.ncpu),
                     annotation_text_list,
                 )
                 for og,result in results:
