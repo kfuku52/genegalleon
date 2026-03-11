@@ -14,6 +14,7 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 # Configuration variables are provided by gg_transcriptome_generation_entrypoint.sh.
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 contamination_removal_rank="${contamination_removal_rank:-domain}"
+contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"
 ### End: Job-supplied configuration ###
 
 ### ----------------------------------------------------------------------- ###
@@ -771,7 +772,7 @@ if [[ (! -s "${file_longestcds_contamination_removal_fasta}" || ! -s "${file_lon
     --fasta_file "${file_longestcds}" \
     --mmseqs2taxonomy_tsv "${file_longestcds_mmseqs2taxonomy}" \
     --fx2tab_tsv "${file_longestcds_fx2tab}" \
-    --species_name "${sp_ub}" \
+    --species_name "${contamination_removal_target_taxon:-${sp_ub}}" \
     --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
     --ncpu "${GG_TASK_CPUS}" \
     --rename_seq "no" \

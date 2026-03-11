@@ -70,6 +70,10 @@ For contamination removal, `contamination_removal_rank` is now configured locall
 `workflow/gg_genome_annotation_entrypoint.sh` and `workflow/gg_transcriptome_generation_entrypoint.sh`.
 GeneGalleon treats `domain` as the canonical user-facing value and normalizes tool-specific
 synonyms automatically (for example, `remove_contaminated_sequences.py` receives `superkingdom`).
+When the sample species name is unknown but you still know the host clade, set the local
+`contamination_removal_target_taxon` parameter to an NCBI-recognized taxon name such as
+`Eukaryota`; the contamination-removal step will use that lineage anchor instead of the
+directory or filename-derived species label.
 
 For annotation-driven stages, `GG_COMMON_REFERENCE_SPECIES=auto` prefers model species detected
 in the relevant dataset and falls back to the first available species when none of the preferred

@@ -1472,7 +1472,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         '--fasta_file "${file_longestcds}"',
         '--mmseqs2taxonomy_tsv "${file_longestcds_mmseqs2taxonomy}"',
         '--fx2tab_tsv "${file_longestcds_fx2tab}"',
-        '--species_name "${sp_ub}"',
+        '--species_name "${contamination_removal_target_taxon:-${sp_ub}}"',
         '--rank "${contamination_removal_rank_for_remove_contaminated_sequences}"',
         'seqkit seq --threads "${GG_TASK_CPUS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"',
         'seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"',
@@ -1619,12 +1619,19 @@ def test_annotation_and_transcriptome_use_local_contamination_removal_rank_param
 
     assert 'contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.' in annotation_entrypoint
     assert 'contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.' in transcriptome_entrypoint
+    assert 'contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).' in annotation_entrypoint
+    assert 'contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).' in transcriptome_entrypoint
     assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in common
     assert 'contamination_removal_rank="${contamination_removal_rank:-domain}"' in annotation_core
     assert 'contamination_removal_rank="${contamination_removal_rank:-domain}"' in transcriptome_core
+    assert 'contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"' in annotation_core
+    assert 'contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"' in transcriptome_core
+    assert '--species_name "${contamination_removal_target_taxon:-${sp_ub}}"' in annotation_core
+    assert '--species_name "${contamination_removal_target_taxon:-${sp_ub}}"' in transcriptome_core
     assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in annotation_core
     assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in transcriptome_core
     assert "contamination_removal_rank" in config_vars
+    assert "contamination_removal_target_taxon" in config_vars
 
 
 def test_transcriptome_entrypoint_uses_descriptive_busco_flag_names():
@@ -1719,7 +1726,7 @@ def test_genome_annotation_core_quotes_known_path_sensitive_options():
         '--fasta_file "${file_sp_cds}"',
         '--mmseqs2taxonomy_tsv "${file_sp_cds_mmseqs2taxonomy}"',
         '--fx2tab_tsv "${file_sp_cds_fx2tab}"',
-        '--species_name "${sp_ub}"',
+        '--species_name "${contamination_removal_target_taxon:-${sp_ub}}"',
         '--cds_fasta "${file_sp_cds}"',
         '--uniprot_tsv "${file_sp_uniprot_annotation}"',
         '--busco_tsv "${file_sp_cds_busco_full}"',

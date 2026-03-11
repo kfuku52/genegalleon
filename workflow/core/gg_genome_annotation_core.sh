@@ -15,6 +15,7 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 contamination_removal_rank="${contamination_removal_rank:-domain}"
+contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"
 ### End: Job-supplied configuration ###
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
@@ -479,7 +480,7 @@ if [[ (! -s "${file_sp_cds_contamination_removal_fasta}" || ! -s "${file_sp_cds_
     --fasta_file "${file_sp_cds}" \
     --mmseqs2taxonomy_tsv "${file_sp_cds_mmseqs2taxonomy}" \
     --fx2tab_tsv "${file_sp_cds_fx2tab}" \
-    --species_name "${sp_ub}" \
+    --species_name "${contamination_removal_target_taxon:-${sp_ub}}" \
     --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
     --ncpu "${GG_TASK_CPUS}" \
     --rename_seq "no" \
@@ -679,7 +680,7 @@ if [[ (! -s "${file_sp_genome_contamination_removal_fasta}" || ! -s "${file_sp_g
     --fasta_file "${file_sp_genome}" \
     --mmseqs2taxonomy_tsv "${file_sp_genome_mmseqs2taxonomy}" \
     --fx2tab_tsv "${file_sp_genome_fx2tab}" \
-    --species_name "${sp_ub}" \
+    --species_name "${contamination_removal_target_taxon:-${sp_ub}}" \
     --rank "${contamination_removal_rank_for_remove_contaminated_sequences}" \
     --ncpu "${GG_TASK_CPUS}" \
     --rename_seq "yes" \

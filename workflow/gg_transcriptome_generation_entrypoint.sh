@@ -112,6 +112,7 @@ orf_aggregation_level="i" # {c,g,i,p}
 assembly_cpu_offset=0 # Number of CPU cores reserved from GG_TASK_CPUS before launching the assembler.
 assembly_ram_offset=4 # Amount of RAM in GB reserved from GG_MEM_TOTAL_GB before launching the assembler.
 contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.
+contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).
 
 ### End: Modify this block to tailor your analysis ###
 

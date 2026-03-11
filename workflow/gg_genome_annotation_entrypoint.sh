@@ -110,6 +110,7 @@ run_multispecies_summary=1 # Multi-species summary plots and tables
 
 # Misc
 contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.
+contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).
 exit_if_running=0 # Exit without main analysis if the same GG_ARRAY_TASK_ID is already running.
 delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Set 0 when debugging.
 
