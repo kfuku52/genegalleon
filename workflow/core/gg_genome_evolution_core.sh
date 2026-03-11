@@ -538,6 +538,164 @@ file_cafe_summary_significant_pdf="${dir_cafe}/summary_plot/summary_significant.
 file_go_enrichment_significant="${dir_cafe}/go_enrichment/enrichment_significant_${change_direction_go}_${target_branch_go}_significant_go.tsv"
 
 # Runtime helpers
+shared_species_busco_stage_done=0
+shared_busco_summary_stage_done=0
+
+sync_genome_busco_summary_table_from_shared() {
+  if [[ "${file_genome_busco_summary_table}" == "${file_species_busco_summary_table}" ]]; then
+    return 0
+  fi
+  if [[ ! -s "${file_species_busco_summary_table}" ]]; then
+    return 1
+  fi
+  ensure_parent_dir "${file_genome_busco_summary_table}"
+  if [[ -s "${file_genome_busco_summary_table}" ]] && cmp -s "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"; then
+    return 0
+  fi
+  cp_out "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"
+}
+
+run_shared_species_busco_stage() {
+  local task="BUSCO analysis of species-wise input files"
+  local -a species_input_fasta=()
+  local -a input_species_set=()
+  local -a busco_output_files=()
+  local seq_full seq_file sp_ub file_sp_busco_full file_sp_busco_short
+  local input_species busco_file busco_base busco_species busco_species_found
+  local dir_busco_db="" dir_busco_lineage=""
+
+  if [[ ${shared_species_busco_stage_done} -eq 1 ]]; then
+    return 0
+  fi
+  shared_species_busco_stage_done=1
+
+  if [[ ${run_species_busco} -ne 1 ]]; then
+    gg_step_skip "${task}"
+    return 0
+  fi
+
+  prepare_species_tree_input_dir
+  ensure_dir "${dir_species_busco_full}"
+  ensure_dir "${dir_species_busco_short}"
+  mapfile -t species_input_fasta < <(gg_find_fasta_files "${species_tree_input_dir}" 1)
+  echo "Number of ${input_sequence_mode} files for BUSCO: ${#species_input_fasta[@]}"
+  if [[ ${#species_input_fasta[@]} -eq 0 ]]; then
+    echo "No ${input_sequence_mode} file found. Exiting."
+    exit 1
+  fi
+  mapfile -t input_species_set < <(
+    for seq_full in "${species_input_fasta[@]}"; do
+      gg_species_name_from_path_or_dot "$(basename "${seq_full}")"
+    done | sort -u
+  )
+  if ! resolve_busco_lineage_for_species_set "${input_species_set[@]}"; then
+    exit 1
+  fi
+  mapfile -t busco_output_files < <(
+    find "${dir_species_busco_full}" "${dir_species_busco_short}" -maxdepth 1 -type f \
+      \( -name "*.busco.full.tsv" -o -name "*.busco.short.txt" \) \
+      2> /dev/null | sort
+  )
+  for busco_file in "${busco_output_files[@]}"; do
+    busco_base=$(basename "${busco_file}")
+    busco_species=${busco_base}
+    if [[ "${busco_species}" == *.busco.full.tsv ]]; then
+      busco_species=${busco_species%.busco.full.tsv}
+    elif [[ "${busco_species}" == *.busco.short.txt ]]; then
+      busco_species=${busco_species%.busco.short.txt}
+    fi
+    busco_species_found=0
+    for input_species in "${input_species_set[@]}"; do
+      if [[ "${input_species}" == "${busco_species}" ]]; then
+        busco_species_found=1
+        break
+      fi
+    done
+    if [[ ${busco_species_found} -eq 0 ]]; then
+      echo "Removing stale BUSCO output for species not in current input: ${busco_file}"
+      rm -f -- "${busco_file}"
+    fi
+  done
+  for seq_full in "${species_input_fasta[@]}"; do
+    seq_file=$(basename "${seq_full}")
+    sp_ub=$(gg_species_name_from_path "${seq_file}")
+    file_sp_busco_full="${dir_species_busco_full}/${sp_ub}.busco.full.tsv"
+    file_sp_busco_short="${dir_species_busco_short}/${sp_ub}.busco.short.txt"
+    if [[ ! -s "${file_sp_busco_full}" || ! -s "${file_sp_busco_short}" ]]; then
+      gg_step_start "${task}: ${seq_file}"
+      seqkit seq --threads "${GG_TASK_CPUS}" "${species_tree_input_dir}/${seq_file}" --out-file "tmp.busco_input.fasta"
+
+      if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
+        echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
+        exit 1
+      fi
+      dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
+
+      busco \
+        --in "tmp.busco_input.fasta" \
+        --mode "${species_tree_busco_mode}" \
+        --out "busco_tmp" \
+        --cpu "${GG_TASK_CPUS}" \
+        --force \
+        --evalue 1e-03 \
+        --limit 20 \
+        --lineage_dataset "${dir_busco_lineage}" \
+        --download_path "${dir_busco_db}" \
+        --offline
+
+      if copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
+        rm -rf -- "./busco_tmp"
+      else
+        echo "Failed to locate normalized BUSCO outputs for ${sp_ub}. Exiting."
+        exit 1
+      fi
+    else
+      echo "Skipped BUSCO: ${seq_file}"
+    fi
+  done
+  echo "$(date): End: ${task}"
+}
+
+run_shared_busco_summary_stage() {
+  local task="Collecting IDs of common BUSCO genes"
+  local num_busco_ids=0
+
+  if [[ ${shared_busco_summary_stage_done} -eq 1 ]]; then
+    sync_genome_busco_summary_table_from_shared || true
+    return 0
+  fi
+  shared_busco_summary_stage_done=1
+
+  if [[ ${run_species_get_busco_summary} -ne 1 ]]; then
+    gg_step_skip "${task}"
+    return 0
+  fi
+
+  prepare_species_tree_input_dir
+  normalize_busco_table_naming "${dir_species_busco_full}" "${dir_species_busco_short}"
+  if ! is_species_set_identical "${species_tree_input_dir}" "${dir_species_busco_full}"; then
+    echo "Exiting due to species-set mismatch between ${species_tree_input_dir} and ${dir_species_busco_full}"
+    exit 1
+  fi
+  if [[ ! -s "${file_species_busco_summary_table}" ]]; then
+    gg_step_start "${task}"
+    ensure_parent_dir "${file_species_busco_summary_table}"
+
+    python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
+      --busco_outdir "${dir_species_busco_full}" \
+      --ncpu "${GG_TASK_CPUS}" \
+      --outfile "tmp.busco_summary_table.tsv"
+    mv_out "tmp.busco_summary_table.tsv" "${file_species_busco_summary_table}"
+
+    num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
+    echo "Number of BUSCO genes: ${num_busco_ids}"
+    echo "$(date): End: ${task}"
+  else
+    gg_step_skip "${task}"
+  fi
+  sync_genome_busco_summary_table_from_shared || true
+}
+
 species_protein_input_has_files() {
   local protein_files=()
   mapfile -t protein_files < <(gg_find_fasta_files "${dir_sp_protein_input}" 1)
@@ -1148,120 +1306,10 @@ if [[ ${run_mcmctree1} -eq 1 || ${run_mcmctree2} -eq 1 ]]; then
 fi
 
 task="BUSCO analysis of species-wise input files"
-if [[ ${run_species_busco} -eq 1 ]]; then
-  prepare_species_tree_input_dir
-  ensure_dir "${dir_species_busco_full}"
-  ensure_dir "${dir_species_busco_short}"
-  species_input_fasta=()
-  mapfile -t species_input_fasta < <(gg_find_fasta_files "${species_tree_input_dir}" 1)
-  echo "Number of ${input_sequence_mode} files for BUSCO: ${#species_input_fasta[@]}"
-  if [[ ${#species_input_fasta[@]} -eq 0 ]]; then
-    echo "No ${input_sequence_mode} file found. Exiting."
-    exit 1
-  fi
-  # Remove stale BUSCO outputs from species not present in current inputs.
-  input_species_set=()
-  mapfile -t input_species_set < <(
-    for seq_full in "${species_input_fasta[@]}"; do
-      gg_species_name_from_path_or_dot "$(basename "${seq_full}")"
-    done | sort -u
-  )
-  if ! resolve_busco_lineage_for_species_set "${input_species_set[@]}"; then
-    exit 1
-  fi
-  busco_output_files=()
-  mapfile -t busco_output_files < <(
-    find "${dir_species_busco_full}" "${dir_species_busco_short}" -maxdepth 1 -type f \
-      \( -name "*.busco.full.tsv" -o -name "*.busco.short.txt" \) \
-      2> /dev/null | sort
-  )
-  for busco_file in "${busco_output_files[@]}"; do
-    busco_base=$(basename "${busco_file}")
-    busco_species=${busco_base}
-    if [[ "${busco_species}" == *.busco.full.tsv ]]; then
-      busco_species=${busco_species%.busco.full.tsv}
-    elif [[ "${busco_species}" == *.busco.short.txt ]]; then
-      busco_species=${busco_species%.busco.short.txt}
-    fi
-    busco_species_found=0
-    for input_species in "${input_species_set[@]}"; do
-      if [[ "${input_species}" == "${busco_species}" ]]; then
-        busco_species_found=1
-        break
-      fi
-    done
-    if [[ ${busco_species_found} -eq 0 ]]; then
-      echo "Removing stale BUSCO output for species not in current input: ${busco_file}"
-      rm -f -- "${busco_file}"
-    fi
-  done
-  for seq_full in "${species_input_fasta[@]}"; do
-    seq_file=$(basename "${seq_full}")
-    sp_ub=$(gg_species_name_from_path "${seq_file}")
-    file_sp_busco_full="${dir_species_busco_full}/${sp_ub}.busco.full.tsv"
-    file_sp_busco_short="${dir_species_busco_short}/${sp_ub}.busco.short.txt"
-    if [[ ! -s "${file_sp_busco_full}" || ! -s "${file_sp_busco_short}" ]]; then
-      gg_step_start "${task}: ${seq_file}"
-      seqkit seq --threads "${GG_TASK_CPUS}" "${species_tree_input_dir}/${seq_file}" --out-file "tmp.busco_input.fasta"
-
-      if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
-        echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
-        exit 1
-      fi
-      dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
-
-      busco \
-        --in "tmp.busco_input.fasta" \
-        --mode "${species_tree_busco_mode}" \
-        --out "busco_tmp" \
-        --cpu "${GG_TASK_CPUS}" \
-        --force \
-        --evalue 1e-03 \
-        --limit 20 \
-        --lineage_dataset "${dir_busco_lineage}" \
-        --download_path "${dir_busco_db}" \
-        --offline
-
-      if copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
-        rm -rf -- "./busco_tmp"
-      else
-        echo "Failed to locate normalized BUSCO outputs for ${sp_ub}. Exiting."
-        exit 1
-      fi
-    else
-      echo "Skipped BUSCO: ${cds}"
-    fi
-  done
-  echo "$(date): End: ${task}"
-else
-  gg_step_skip "${task}"
-fi
+run_shared_species_busco_stage
 
 task="Collecting IDs of common BUSCO genes"
-if [[ ${run_species_get_busco_summary} -eq 1 ]]; then
-  prepare_species_tree_input_dir
-  normalize_busco_table_naming "${dir_species_busco_full}" "${dir_species_busco_short}"
-  if ! is_species_set_identical "${species_tree_input_dir}" "${dir_species_busco_full}"; then
-    echo "Exiting due to species-set mismatch between ${species_tree_input_dir} and ${dir_species_busco_full}"
-    exit 1
-  fi
-fi
-if [[ ! -s "${file_species_busco_summary_table}" && ${run_species_get_busco_summary} -eq 1 ]]; then
-  gg_step_start "${task}"
-  ensure_parent_dir "${file_species_busco_summary_table}"
-
-  python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
-    --busco_outdir "${dir_species_busco_full}" \
-    --ncpu "${GG_TASK_CPUS}" \
-    --outfile "tmp.busco_summary_table.tsv"
-  mv_out "tmp.busco_summary_table.tsv" "${file_species_busco_summary_table}"
-
-  num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
-  echo "Number of BUSCO genes: ${num_busco_ids}"
-  echo "$(date): End: ${task}"
-else
-  gg_step_skip "${task}"
-fi
+run_shared_busco_summary_stage
 
 task="Generating fasta files for individual single-copy genes"
 ensure_dir "${dir_single_copy_fasta}"
@@ -1447,8 +1495,9 @@ if [[ ${num_busco_ids} -ne ${num_trimal_fasta} && ${run_individual_trimal} -eq 1
     local outfile="${dir_single_copy_trimal}/${infile_base}${single_copy_trimal_suffix}"
     if [[ ! -s "${outfile}" ]]; then
       if [[ "${input_sequence_mode}" == "protein" ]]; then
+        seqkit seq --threads 1 "${dir_single_copy_mafft}/${infile}" --out-file "tmp.${infile_base}.pep.aln.fasta"
         trimal \
-          -in "${dir_single_copy_mafft}/${infile}" \
+          -in "tmp.${infile_base}.pep.aln.fasta" \
           -out "tmp.${infile_base}.trimal.fasta" \
           -automated1
       else
@@ -2574,91 +2623,8 @@ fi
 ensure_dir "${dir_tmp}"
 cd "${dir_tmp}"
 
-task="BUSCO analysis of species-wise input files"
-if [[ ${run_genome_busco} -eq 1 ]]; then
-  prepare_species_tree_input_dir
-  ensure_dir "${dir_species_busco_full}"
-  ensure_dir "${dir_species_busco_short}"
-  species_input_fasta=()
-  mapfile -t species_input_fasta < <(gg_find_fasta_files "${species_tree_input_dir}" 1)
-  echo "Number of ${input_sequence_mode} files for BUSCO: ${#species_input_fasta[@]}"
-  if [[ ${#species_input_fasta[@]} -eq 0 ]]; then
-    echo "No ${input_sequence_mode} file found. Exiting."
-    exit 1
-  fi
-  input_species_set=()
-  mapfile -t input_species_set < <(
-    for seq_full in "${species_input_fasta[@]}"; do
-      gg_species_name_from_path_or_dot "$(basename "${seq_full}")"
-    done | sort -u
-  )
-  if ! resolve_busco_lineage_for_species_set "${input_species_set[@]}"; then
-    exit 1
-  fi
-  for seq_full in "${species_input_fasta[@]}"; do
-    seq_file=$(basename "${seq_full}")
-    sp_ub=$(gg_species_name_from_path "${seq_file}")
-    file_sp_busco_full="${dir_species_busco_full}/${sp_ub}.busco.full.tsv"
-    file_sp_busco_short="${dir_species_busco_short}/${sp_ub}.busco.short.txt"
-    if [[ ! -s "${file_sp_busco_full}" || ! -s "${file_sp_busco_short}" ]]; then
-      gg_step_start "${task}: ${seq_file}"
-      seqkit seq --threads "${GG_TASK_CPUS}" "${species_tree_input_dir}/${seq_file}" --out-file "tmp.busco_input.fasta"
-
-      if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
-        echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
-        exit 1
-      fi
-      dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
-
-      busco \
-        --in "tmp.busco_input.fasta" \
-        --mode "${species_tree_busco_mode}" \
-        --out "busco_tmp" \
-        --cpu "${GG_TASK_CPUS}" \
-        --force \
-        --evalue 1e-03 \
-        --limit 20 \
-        --lineage_dataset "${dir_busco_lineage}" \
-        --download_path "${dir_busco_db}" \
-        --offline
-
-      if copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
-        rm -rf -- "./busco_tmp"
-      else
-        echo "Failed to locate normalized BUSCO outputs for ${sp_ub}. Exiting."
-        exit 1
-      fi
-    else
-      echo "Skipped BUSCO: ${seq_file}"
-    fi
-  done
-  echo "$(date): End: ${task}"
-else
-  gg_step_skip "${task}"
-fi
-
-task="Collecting IDs of common BUSCO genes"
-if [[ ${run_genome_get_busco_summary} -eq 1 ]]; then
-  normalize_busco_table_naming "${dir_species_busco_full}" "${dir_species_busco_short}"
-fi
-if [[ ! -s "${file_genome_busco_summary_table}" && ${run_genome_get_busco_summary} -eq 1 ]]; then
-  gg_step_start "${task}"
-  ensure_parent_dir "${file_genome_busco_summary_table}"
-
-  python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
-    --busco_outdir "${dir_species_busco_full}" \
-    --ncpu "${GG_TASK_CPUS}" \
-    --outfile "tmp.busco_summary_table.tsv"
-  mv_out "tmp.busco_summary_table.tsv" "${file_genome_busco_summary_table}"
-
-  num_busco_ids=$(($(wc -l < "${file_genome_busco_summary_table}") - 1))
-  echo "Number of BUSCO genes: ${num_busco_ids}"
-  echo "$(date): End: ${task}"
-else
-  gg_step_skip "${task}"
-fi
-
 task="Generating fasta files for individual single-copy genes"
+sync_genome_busco_summary_table_from_shared || true
 disable_if_no_input_file "run_busco_getfasta" "${file_genome_busco_summary_table}"
 if [[ ${run_busco_getfasta} -eq 1 ]]; then
   prepare_species_tree_input_dir
@@ -2825,8 +2791,9 @@ if [[ ${run_busco_trimal} -eq 1 ]]; then
       return 0
     fi
     if [[ "${input_sequence_mode}" == "protein" ]]; then
+      seqkit seq --threads 1 "${dir_busco_mafft}/${infile}" --out-file "tmp.${infile_base}.pep.aln.fasta"
       trimal \
-        -in "${dir_busco_mafft}/${infile}" \
+        -in "tmp.${infile_base}.pep.aln.fasta" \
         -out "tmp.${infile_base}.trimal.fasta" \
         -automated1
     else

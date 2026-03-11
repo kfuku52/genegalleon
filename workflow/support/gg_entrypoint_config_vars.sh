@@ -188,8 +188,6 @@ run_concat_iqtree_dna
 run_concat_iqtree_protein
 run_constrained_tree
 run_convert_tree_format
-run_genome_busco
-run_genome_get_busco_summary
 run_go_enrichment
 run_individual_get_fasta
 run_individual_iqtree_dna

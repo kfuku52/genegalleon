@@ -61,6 +61,10 @@ These are intended for values that recur across multiple stages.
 For BUSCO, `GG_COMMON_BUSCO_LINEAGE=auto` resolves a dataset from species names.
 For single-species stages, GeneGalleon picks the deepest BUSCO dataset mapped to that species.
 For multi-species BUSCO stages, it picks the deepest BUSCO dataset shared across the dataset's species.
+In `gg_genome_evolution`, the multi-species BUSCO run and BUSCO summary are shared between the
+species-tree branch and the BUSCO-based genome-evolution branch. Those shared stages are controlled
+by `run_species_busco` and `run_species_get_busco_summary`; the genome-evolution BUSCO steps reuse
+their outputs rather than starting a second BUSCO run.
 When BUSCO publishes multiple `odbN` generations, auto-resolution now uses the latest generation
 for which placement mappings are available across archaea, bacteria, and eukaryota.
 The first auto-resolved run may need network access to initialize the ETE taxonomy DB and download

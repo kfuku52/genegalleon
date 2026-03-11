@@ -1223,37 +1223,53 @@ def test_busco_dataset_download_merges_staged_directory_contents():
     assert "-exec mv -f -- {}" not in body
 
 
-def test_species_busco_set_check_is_gated_by_run_flag():
+def test_shared_busco_summary_stage_normalizes_and_checks_species_set_before_collect():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    gate = "if [[ ${run_species_get_busco_summary} -eq 1 ]]; then"
+    gate = "if [[ ${run_species_get_busco_summary} -ne 1 ]]; then"
     prepare = "prepare_species_tree_input_dir"
     normalize = 'normalize_busco_table_naming "${dir_species_busco_full}" "${dir_species_busco_short}"'
     check = 'if ! is_species_set_identical "${species_tree_input_dir}" "${dir_species_busco_full}"; then'
+    collect = 'python "${gg_support_dir}/collect_common_BUSCO_genes.py" \\'
+    assert "run_shared_busco_summary_stage() {" in text
     assert gate in text
     assert prepare in text
     assert normalize in text
     assert check in text
+    assert collect in text
     gate_idx = text.index(gate)
     prepare_idx = text.index(prepare, gate_idx)
     normalize_idx = text.index(normalize, prepare_idx)
     check_idx = text.index(check, normalize_idx)
-    assert gate_idx < prepare_idx < normalize_idx < check_idx
+    collect_idx = text.index(collect, check_idx)
+    assert gate_idx < prepare_idx < normalize_idx < check_idx < collect_idx
 
 
-def test_genome_busco_summary_normalizes_legacy_table_names_before_collect_common():
+def test_genome_busco_summary_syncs_from_shared_summary_and_gates_busco_getfasta():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    gate = "if [[ ${run_genome_get_busco_summary} -eq 1 ]]; then"
-    normalize = 'normalize_busco_table_naming "${dir_species_busco_full}" "${dir_species_busco_short}"'
-    collect = 'python "${gg_support_dir}/collect_common_BUSCO_genes.py" \\'
+    sync_fn = "sync_genome_busco_summary_table_from_shared() {"
+    cmp_stmt = 'cmp -s "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"'
+    copy_stmt = 'cp_out "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"'
+    sync_call = "sync_genome_busco_summary_table_from_shared || true"
+    gate = 'disable_if_no_input_file "run_busco_getfasta" "${file_genome_busco_summary_table}"'
+    assert sync_fn in text
+    assert cmp_stmt in text
+    assert copy_stmt in text
+    assert sync_call in text
     assert gate in text
-    assert normalize in text
-    assert collect in text
-    gate_idx = text.index(gate)
-    normalize_idx = text.index(normalize, gate_idx)
-    collect_idx = text.index(collect, normalize_idx)
-    assert gate_idx < normalize_idx < collect_idx
+    assert text.index(sync_call) < text.index(gate)
+
+
+def test_shared_species_busco_stage_runs_for_species_or_genome_busco_flags():
+    script = CORE_DIR / "gg_genome_evolution_core.sh"
+    text = _read_text(script)
+    stage_fn = "run_shared_species_busco_stage() {"
+    gate = "if [[ ${run_species_busco} -ne 1 ]]; then"
+    species_call = "run_shared_species_busco_stage"
+    assert stage_fn in text
+    assert gate in text
+    assert text.count(species_call) >= 2
 
 
 def test_busco_getfasta_step_is_gated_by_summary_table_presence():
@@ -1872,6 +1888,8 @@ def test_genome_evolution_core_quotes_busco_lineage_and_trimal_input_paths():
         "seqkit translate --transl-table ${genetic_code} --threads 1 ${dir_single_copy_mafft}/${infile}",
         "seqkit seq --remove-gaps --threads 1 ${dir_busco_mafft}/${infile}",
         "seqkit translate --transl-table ${genetic_code} --threads 1 ${dir_busco_mafft}/${infile}",
+        'trimal -in ${dir_single_copy_mafft}/${infile}',
+        'trimal -in ${dir_busco_mafft}/${infile}',
     ]
     for token in banned_tokens:
         assert token not in text, f"Found unquoted genome-evolution token: {token}"
@@ -1883,6 +1901,9 @@ def test_genome_evolution_core_quotes_busco_lineage_and_trimal_input_paths():
         'seqkit translate --transl-table "${genetic_code}" --threads 1 "${dir_single_copy_mafft}/${infile}"',
         'seqkit seq --remove-gaps --threads 1 "${dir_busco_mafft}/${infile}"',
         'seqkit translate --transl-table "${genetic_code}" --threads 1 "${dir_busco_mafft}/${infile}"',
+        'seqkit seq --threads 1 "${dir_single_copy_mafft}/${infile}" --out-file "tmp.${infile_base}.pep.aln.fasta"',
+        'seqkit seq --threads 1 "${dir_busco_mafft}/${infile}" --out-file "tmp.${infile_base}.pep.aln.fasta"',
+        '-in "tmp.${infile_base}.pep.aln.fasta"',
     ]
     for token in expected_tokens:
         assert token in text, f"Missing quoted genome-evolution token: {token}"

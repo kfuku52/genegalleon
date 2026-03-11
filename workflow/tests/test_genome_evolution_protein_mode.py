@@ -411,8 +411,6 @@ def _run_core(tmp_path: Path) -> subprocess.CompletedProcess[str]:
             "run_orthofinder": "1",
             "run_og_selection": "0",
             "run_orthogroup_method_comparison": "0",
-            "run_genome_busco": "0",
-            "run_genome_get_busco_summary": "0",
             "run_busco_getfasta": "0",
             "run_busco_mafft": "0",
             "run_busco_trimal": "0",

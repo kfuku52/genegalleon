@@ -76,8 +76,8 @@ gg_entrypoint_name="gg_genome_evolution_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Species-tree workflow flags
-run_species_busco=1 # Run BUSCO on species inputs for species-tree marker discovery.
-run_species_get_busco_summary=1 # Summarize BUSCO results across species-tree inputs.
+run_species_busco=1 # Run the shared multi-species BUSCO stage used for species-tree marker discovery and BUSCO-based genome-evolution analyses.
+run_species_get_busco_summary=1 # Build the shared BUSCO summary table used by species-tree and BUSCO-based genome-evolution stages.
 run_individual_get_fasta=1 # Extract per-ortholog FASTA files for species-tree reconstruction.
 run_individual_mafft=1 # Align individual species-tree ortholog sets with MAFFT.
 run_individual_trimal=1 # Trim individual species-tree ortholog alignments.
@@ -103,8 +103,6 @@ run_og_selection=1 # Selecting orthogroups for downstream analyses
 run_orthogroup_method_comparison=1 # Method comparison plot
 
 # Genome-evolution workflow flags
-run_genome_busco=1 # Run BUSCO on genome-derived CDS sets for genome-evolution analyses.
-run_genome_get_busco_summary=1 # Summarize BUSCO results across genome-derived CDS sets.
 run_busco_getfasta=1 # Extract BUSCO ortholog FASTA files from genome annotations.
 run_busco_mafft=1 # Align BUSCO ortholog FASTA files with MAFFT.
 run_busco_trimal=1 # Trim BUSCO ortholog alignments.
