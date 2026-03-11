@@ -1,6 +1,11 @@
 import numpy
+import pandas
 
-from workflow.support.remove_contaminated_sequences import resolve_rank_taxid_from_lineage
+from workflow.support.remove_contaminated_sequences import (
+    build_taxid_rank_lookup,
+    resolve_lineage_rank_index,
+    resolve_rank_taxid_from_lineage,
+)
 
 
 class FakeNcbi:
@@ -25,6 +30,44 @@ def test_resolve_rank_taxid_from_lineage_returns_rank_taxid_when_present():
 def test_resolve_rank_taxid_from_lineage_returns_zero_when_rank_absent():
     ncbi = FakeNcbi({2: "superkingdom", 1224: "phylum"})
     assert resolve_rank_taxid_from_lineage(ncbi, "class", "2;1224;1236") == 0
+
+
+def test_resolve_rank_taxid_from_lineage_treats_domain_and_superkingdom_as_aliases():
+    ncbi = FakeNcbi({2: "domain", 33090: "kingdom"})
+    assert resolve_rank_taxid_from_lineage(ncbi, "superkingdom", "1;2;33090") == 2
+
+
+def test_build_taxid_rank_lookup_and_bulk_rank_resolution():
+    ncbi = FakeNcbi({2: "superkingdom", 1224: "phylum", 28211: "class"})
+    taxid_to_rank = build_taxid_rank_lookup(ncbi, ["2;1224;28211", "2;1224"])
+    assert resolve_rank_taxid_from_lineage(ncbi, "class", "2;1224;28211", taxid_to_rank=taxid_to_rank) == 28211
+
+
+def test_resolve_lineage_rank_index_treats_domain_and_superkingdom_as_aliases():
+    df_lineage = pandas.DataFrame(
+        {
+            "rank": ["no rank", "domain", "kingdom", "species"],
+            "name": ["root", "Eukaryota", "Viridiplantae", "Arabidopsis thaliana"],
+            "taxid": [1, 2759, 33090, 3702],
+        }
+    )
+    assert resolve_lineage_rank_index(df_lineage, "superkingdom") == 1
+
+
+def test_resolve_lineage_rank_index_raises_clear_error_when_rank_absent():
+    df_lineage = pandas.DataFrame(
+        {
+            "rank": ["no rank", "domain", "kingdom", "species"],
+            "name": ["root", "Eukaryota", "Viridiplantae", "Arabidopsis thaliana"],
+            "taxid": [1, 2759, 33090, 3702],
+        }
+    )
+    try:
+        resolve_lineage_rank_index(df_lineage, "class")
+    except ValueError as exc:
+        assert "Requested rank 'class' was not found" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for missing rank")
 
 
 def test_aligned_taxid_fallback_logic_matches_expected():
