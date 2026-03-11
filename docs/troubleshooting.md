@@ -71,6 +71,19 @@ What to check:
 - `gg_transcriptome_generation_entrypoint.sh` expects one task per chosen input unit,
 - the runtime summary prints the normalized `GG_ARRAY_TASK_ID` and `GG_TASK_CPUS`.
 
+### `sbatch` rejects mutually exclusive memory options
+
+Symptom:
+
+- `sbatch` fails before the job starts with an error such as
+  `--mem, --mem-per-cpu, and --mem-per-gpu are mutually exclusive`.
+
+What to check:
+
+- do not combine `sbatch --mem=...` with entrypoints that already request `#SBATCH --mem-per-cpu=...`,
+- unset inherited `SBATCH_MEM`, `SBATCH_MEM_PER_CPU`, or `SBATCH_MEM_PER_GPU` variables before submission if your shell profile exports them,
+- current entrypoints include `#SBATCH --ignore-pbs` because some Slurm builds also parse embedded `#PBS` lines unless told not to.
+
 ### Stage skipped unexpectedly
 
 Symptom:

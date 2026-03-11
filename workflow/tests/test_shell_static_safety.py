@@ -633,6 +633,7 @@ def test_entrypoints_use_active_scheduler_directives_in_header_template():
         assert "##SBATCH -n" not in header, f"Drop legacy commented task-count example from {script}"
         assert "#PBS -S /bin/bash" in header, f"Missing PBS shell directive in {script}"
         assert "#PBS -V" in header, f"Missing PBS environment export directive in {script}"
+        assert "#SBATCH --ignore-pbs" in header, f"Missing Slurm PBS-ignore guard in {script}"
 
 
 def test_entrypoint_scheduler_directives_are_left_aligned():

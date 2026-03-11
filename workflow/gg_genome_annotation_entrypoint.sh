@@ -14,6 +14,7 @@
 #SBATCH --output=gg_genome_annotation_entrypoint.sh_%A_%a.out
 #SBATCH --error=gg_genome_annotation_entrypoint.sh_%A_%a.err
 #SBATCH --chdir=.
+#SBATCH --ignore-pbs
 # Array example for array-aware entrypoints.
 #SBATCH -a 1
 # Site-specific partition example.

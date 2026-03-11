@@ -6,6 +6,10 @@ Wrappers include scheduler headers for:
 - UGE
 - PBS
 
+On current Slurm, `sbatch` can also read `#PBS` directives unless `--ignore-pbs` is set.
+GeneGalleon entrypoints therefore include `#SBATCH --ignore-pbs` so the embedded PBS header
+remains available for `qsub` without conflicting with Slurm resource flags.
+
 You can submit wrappers with scheduler commands such as `sbatch` or `qsub`, or invoke them directly with `bash`.
 
 ## Direct execution vs scheduler execution

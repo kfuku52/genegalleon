@@ -14,6 +14,7 @@
 #SBATCH --output=gg_progress_summary_entrypoint.sh_%j.out
 #SBATCH --error=gg_progress_summary_entrypoint.sh_%j.err
 #SBATCH --chdir=.
+#SBATCH --ignore-pbs
 # Site-specific partition example.
 #SBATCH -p epyc
 # Optional notifications and single-node examples.
