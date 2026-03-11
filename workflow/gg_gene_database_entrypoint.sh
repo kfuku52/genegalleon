@@ -81,7 +81,6 @@ run_database_prep=1 # Prepare or refresh the local gene database assets.
 ### End: Modify this block to tailor your analysis ###
 
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
-gg_entrypoint_print_config_summary_if_available "${gg_entrypoint_name}"
 # Forward config variables (including external overrides) into container environment.
 forward_config_vars_to_container_env "${gg_entrypoint_name}"
 if ! gg_entrypoint_prepare_container_runtime 0; then

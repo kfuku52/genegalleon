@@ -225,29 +225,6 @@ gg_print_registered_config_summary() {
 	gg_print_named_config_summary "${title}" "${summary_vars[@]}"
 }
 
-gg_print_entrypoint_config_summary() {
-	local job_script=${1:-}
-	shift || true
-	local entrypoint_name=""
-	local -a common_vars=()
-	local gg_common_var_name
-
-	if [[ -z "${job_script}" ]]; then
-		return 0
-	fi
-	entrypoint_name="$(basename "${job_script}")"
-	gg_print_registered_config_summary "${entrypoint_name}" "entrypoint config summary (${entrypoint_name})" "$@"
-
-	for gg_common_var_name in GG_COMMON_GENETIC_CODE GG_COMMON_BUSCO_LINEAGE GG_COMMON_REFERENCE_SPECIES; do
-		if [[ -n "${!gg_common_var_name+x}" ]]; then
-			common_vars+=( "${gg_common_var_name}" )
-		fi
-	done
-	if [[ ${#common_vars[@]} -gt 0 ]]; then
-		gg_print_named_config_summary "shared common summary (${entrypoint_name})" "${common_vars[@]}"
-	fi
-}
-
 gg_container_mount_destination() {
 	local mount_spec=${1:-}
 	local remainder
