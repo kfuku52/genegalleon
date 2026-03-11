@@ -168,6 +168,7 @@ nucleotide_model
 orthogroup_annotation_method
 orthogroup_table
 protein_model
+run_cds_translation
 run_astral_dna
 run_astral_pep
 run_busco_getfasta
@@ -182,7 +183,6 @@ run_busco_root_dna
 run_busco_root_pep
 run_busco_trimal
 run_cafe
-run_cds_translation
 run_concat_alignment
 run_concat_iqtree_dna
 run_concat_iqtree_protein

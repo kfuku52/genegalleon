@@ -1705,6 +1705,29 @@ def test_genome_evolution_supports_protein_input_mode_and_species_code_overrides
     assert protein_candidates_index < cds_candidates_index
 
 
+def test_genome_evolution_places_run_cds_translation_before_dependent_run_flags():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+
+    entrypoint_translation_index = entrypoint.index('run_cds_translation=1')
+    entrypoint_species_busco_index = entrypoint.index('run_species_busco=1')
+    entrypoint_orthofinder_index = entrypoint.index('run_orthofinder=1')
+    entrypoint_busco_getfasta_index = entrypoint.index('run_busco_getfasta=1')
+
+    assert entrypoint_translation_index < entrypoint_species_busco_index
+    assert entrypoint_translation_index < entrypoint_orthofinder_index
+    assert entrypoint_translation_index < entrypoint_busco_getfasta_index
+
+    config_translation_index = config_vars.index('run_cds_translation')
+    config_species_busco_index = config_vars.index('run_species_busco')
+    config_orthofinder_index = config_vars.index('run_orthofinder')
+    config_busco_getfasta_index = config_vars.index('run_busco_getfasta')
+
+    assert config_translation_index < config_species_busco_index
+    assert config_translation_index < config_orthofinder_index
+    assert config_translation_index < config_busco_getfasta_index
+
+
 def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 

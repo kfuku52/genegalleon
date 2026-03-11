@@ -75,6 +75,9 @@ gg_entrypoint_name="gg_genome_evolution_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
+# Input-preparation workflow flags
+run_cds_translation=1 # Internal helper for temporary protein FASTA generation when protein mode falls back to species_cds.
+
 # Species-tree workflow flags
 run_species_busco=1 # Run the shared multi-species BUSCO stage used for species-tree marker discovery and BUSCO-based genome-evolution analyses.
 run_species_get_busco_summary=1 # Build the shared BUSCO summary table used by species-tree and BUSCO-based genome-evolution stages.
@@ -85,8 +88,8 @@ run_concat_alignment=1 # Concatenate selected species-tree ortholog alignments.
 run_concat_iqtree_protein=1 # Build a concatenated protein species tree with IQ-TREE.
 run_concat_iqtree_dna=1 # Build a concatenated DNA species tree with IQ-TREE.
 run_individual_iqtree_pep=1 # Build per-ortholog protein trees for ASTRAL input.
-run_astral_pep=1 # Infer a protein species tree with ASTRAL.
 run_individual_iqtree_dna=1 # Build per-ortholog DNA trees for ASTRAL input.
+run_astral_pep=1 # Infer a protein species tree with ASTRAL.
 run_astral_dna=1 # Infer a DNA species tree with ASTRAL.
 run_plot_species_trees=1 # Plotting 4 species trees
 run_constrained_tree=1 # Introduce divergence time constraints for IQ2MC input
@@ -97,7 +100,6 @@ run_convert_tree_format=1 # Convert dated species trees into downstream exchange
 run_plot_mcmctreer=1 # Plot dated species tree
 
 # Orthogroup workflow flags
-run_cds_translation=1 # Internal helper for temporary protein FASTA generation.
 run_orthofinder=1 # OrthoFinder run
 run_og_selection=1 # Selecting orthogroups for downstream analyses
 run_orthogroup_method_comparison=1 # Method comparison plot
