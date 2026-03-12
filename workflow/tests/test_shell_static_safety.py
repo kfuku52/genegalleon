@@ -1275,6 +1275,19 @@ def test_shared_species_busco_stage_runs_for_species_or_genome_busco_flags():
     assert text.count(species_call) >= 2
 
 
+def test_shared_species_busco_stage_matches_existing_outputs_by_species_name():
+    script = CORE_DIR / "gg_genome_evolution_core.sh"
+    text = _read_text(script)
+    body = _function_body(text, "run_shared_species_busco_stage")
+
+    assert 'sp_ub=$(gg_species_name_from_path_or_dot "${seq_file}")' in body
+    assert '-name "*busco.full.tsv"' in body
+    assert '-name "*busco.short.txt"' in body
+    assert 'busco_species=$(gg_species_name_from_path_or_dot "${busco_base}")' in body
+    assert 'busco_output_exists_for_species "${dir_species_busco_full}" "${sp_ub}" "*busco.full.tsv"' in body
+    assert 'busco_output_exists_for_species "${dir_species_busco_short}" "${sp_ub}" "*busco.short.txt"' in body
+
+
 def test_busco_getfasta_step_is_gated_by_summary_table_presence():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)

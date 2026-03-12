@@ -668,6 +668,44 @@ def test_is_species_set_identical_ignores_hidden_files(tmp_path):
     assert "NG" not in completed.stdout
 
 
+def test_gg_species_name_from_path_strips_terminal_extensions(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        'printf "%s\\n" '
+        '"$(gg_species_name_from_path Acanthamoeba_castellanii.fa)" '
+        '"$(gg_species_name_from_path Arabidopsis_thaliana.fa.gz)" '
+        '"$(gg_species_name_from_path Arabidopsis_thaliana_Athaliana_447_Araport11.cds_primaryTranscriptOnly.fa)"'
+    )
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "Acanthamoeba_castellanii",
+        "Arabidopsis_thaliana",
+        "Arabidopsis_thaliana",
+    ]
+
+
+def test_is_species_set_identical_ignores_duplicate_busco_name_variants(tmp_path):
+    dir1 = tmp_path / "inputs"
+    dir2 = tmp_path / "busco"
+    dir1.mkdir()
+    dir2.mkdir()
+    (dir1 / "Acanthamoeba_castellanii.fa").write_text(">a\nATG\n")
+    (dir2 / "Acanthamoeba_castellanii_busco.full.tsv").write_text("BUSCO1\tComplete\n")
+    (dir2 / "Acanthamoeba_castellanii.fa.busco.full.tsv").write_text("BUSCO1\tComplete\n")
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"if is_species_set_identical {shlex.quote(str(dir1))} {shlex.quote(str(dir2))}; then echo OK; else echo NG; fi"
+    )
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "OK" in completed.stdout
+    assert "NG" not in completed.stdout
+
+
 def test_is_species_set_identical_returns_nonzero_when_directory_is_missing(tmp_path):
     dir1 = tmp_path / "d1"
     dir2 = tmp_path / "d2"

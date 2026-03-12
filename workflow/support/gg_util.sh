@@ -997,7 +997,7 @@ gg_species_name_from_path() {
   local path=$1
   local basename_path
   basename_path=$(basename "${path}")
-  echo "${basename_path}" | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/"
+  echo "${basename_path}" | sed -e "s/_/|/" -e "s/[_\\.].*//" -e "s/|/_/"
 }
 
 gg_species_name_from_path_or_dot() {
@@ -4620,12 +4620,6 @@ is_species_set_identical() {
     files2+=( "${f}" )
   done
   shopt -u nullglob dotglob
-  local num_sp1=${#files1[@]}
-  local num_sp2=${#files2[@]}
-  if [[ ${num_sp1} -ne ${num_sp2} ]]; then
-    echo "Number of species in ${dir1} and ${dir2} are different."
-    return_flag=1
-  fi
   local sp1=()
   local sp2=()
   for f in "${files1[@]}"; do
@@ -4645,6 +4639,12 @@ is_species_set_identical() {
   done < <(printf '%s\n' "${sp2[@]}" | sort -u)
   sp1=( "${sp1_unique[@]}" )
   sp2=( "${sp2_unique[@]}" )
+  local num_sp1=${#sp1[@]}
+  local num_sp2=${#sp2[@]}
+  if [[ ${num_sp1} -ne ${num_sp2} ]]; then
+    echo "Number of unique species in ${dir1} and ${dir2} are different."
+    return_flag=1
+  fi
   if [[ "${sp1[*]}" != "${sp2[*]}" ]]; then
     echo "Species names are different between ${dir1} and ${dir2}"
     echo "dir1 (${dir1}): ${sp1[*]}"

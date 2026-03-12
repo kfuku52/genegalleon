@@ -127,6 +127,46 @@ normalize_busco_table_naming() {
   fi
 }
 
+busco_output_exists_for_species() {
+  local search_dir=$1
+  local species_name=$2
+  local name_glob=$3
+  local busco_file busco_base busco_species
+
+  if [[ -z "${search_dir}" || ! -d "${search_dir}" ]]; then
+    return 1
+  fi
+
+  while IFS= read -r busco_file; do
+    busco_base=$(basename "${busco_file}")
+    busco_species=$(gg_species_name_from_path_or_dot "${busco_base}")
+    if [[ "${busco_species}" == "${species_name}" ]]; then
+      return 0
+    fi
+  done < <(find "${search_dir}" -maxdepth 1 -type f ! -name '.*' -name "${name_glob}" 2> /dev/null | sort)
+
+  return 1
+}
+
+remove_busco_outputs_for_species() {
+  local search_dir=$1
+  local species_name=$2
+  local name_glob=$3
+  local busco_file busco_base busco_species
+
+  if [[ -z "${search_dir}" || ! -d "${search_dir}" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r busco_file; do
+    busco_base=$(basename "${busco_file}")
+    busco_species=$(gg_species_name_from_path_or_dot "${busco_base}")
+    if [[ "${busco_species}" == "${species_name}" ]]; then
+      rm -f -- "${busco_file}"
+    fi
+  done < <(find "${search_dir}" -maxdepth 1 -type f ! -name '.*' -name "${name_glob}" 2> /dev/null | sort)
+}
+
 trim_ascii_whitespace() {
   local s=$1
   s="${s#"${s%%[![:space:]]*}"}"
@@ -570,6 +610,7 @@ run_shared_species_busco_stage() {
   local seq_full seq_file sp_ub file_sp_busco_full file_sp_busco_short
   local input_species busco_file busco_base busco_species busco_species_found
   local dir_busco_db="" dir_busco_lineage=""
+  local full_found=0 short_found=0
 
   if [[ ${shared_species_busco_stage_done} -eq 1 ]]; then
     return 0
@@ -600,17 +641,12 @@ run_shared_species_busco_stage() {
   fi
   mapfile -t busco_output_files < <(
     find "${dir_species_busco_full}" "${dir_species_busco_short}" -maxdepth 1 -type f \
-      \( -name "*.busco.full.tsv" -o -name "*.busco.short.txt" \) \
+      \( -name "*busco.full.tsv" -o -name "*busco.short.txt" \) \
       2> /dev/null | sort
   )
   for busco_file in "${busco_output_files[@]}"; do
     busco_base=$(basename "${busco_file}")
-    busco_species=${busco_base}
-    if [[ "${busco_species}" == *.busco.full.tsv ]]; then
-      busco_species=${busco_species%.busco.full.tsv}
-    elif [[ "${busco_species}" == *.busco.short.txt ]]; then
-      busco_species=${busco_species%.busco.short.txt}
-    fi
+    busco_species=$(gg_species_name_from_path_or_dot "${busco_base}")
     busco_species_found=0
     for input_species in "${input_species_set[@]}"; do
       if [[ "${input_species}" == "${busco_species}" ]]; then
@@ -625,11 +661,23 @@ run_shared_species_busco_stage() {
   done
   for seq_full in "${species_input_fasta[@]}"; do
     seq_file=$(basename "${seq_full}")
-    sp_ub=$(gg_species_name_from_path "${seq_file}")
+    sp_ub=$(gg_species_name_from_path_or_dot "${seq_file}")
     file_sp_busco_full="${dir_species_busco_full}/${sp_ub}.busco.full.tsv"
     file_sp_busco_short="${dir_species_busco_short}/${sp_ub}.busco.short.txt"
-    if [[ ! -s "${file_sp_busco_full}" || ! -s "${file_sp_busco_short}" ]]; then
+    if busco_output_exists_for_species "${dir_species_busco_full}" "${sp_ub}" "*busco.full.tsv"; then
+      full_found=1
+    else
+      full_found=0
+    fi
+    if busco_output_exists_for_species "${dir_species_busco_short}" "${sp_ub}" "*busco.short.txt"; then
+      short_found=1
+    else
+      short_found=0
+    fi
+    if [[ ${full_found} -ne 1 || ${short_found} -ne 1 ]]; then
       gg_step_start "${task}: ${seq_file}"
+      remove_busco_outputs_for_species "${dir_species_busco_full}" "${sp_ub}" "*busco.full.tsv"
+      remove_busco_outputs_for_species "${dir_species_busco_short}" "${sp_ub}" "*busco.short.txt"
       seqkit seq --threads "${GG_TASK_CPUS}" "${species_tree_input_dir}/${seq_file}" --out-file "tmp.busco_input.fasta"
 
       if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
