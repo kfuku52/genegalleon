@@ -634,6 +634,35 @@ def test_genome_evolution_protein_mode_translates_species_cds_with_species_speci
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_accepts_legacy_species_tree_rooting_outgroup_lists(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_protein_dir.mkdir(parents=True)
+
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+    (species_protein_dir / "Oryza_sativa_pep.fa").write_text(
+        ">Oryza_sativa_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_core(
+        tmp_path,
+        {"species_tree_rooting": "Arabidopsis_thaliana,Oryza_sativa"},
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert (
+        "species_tree_rooting=Arabidopsis_thaliana,Oryza_sativa uses legacy outgroup-label syntax; "
+        "interpreting it as outgroup,Arabidopsis_thaliana,Oryza_sativa."
+    ) in completed.stdout
+    assert "Resolved species_tree_rooting method: outgroup" in completed.stdout
+    assert "Resolved species_tree_rooting value: Arabidopsis_thaliana,Oryza_sativa" in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
 def test_genome_evolution_omark_auto_downloads_database_and_summarizes_results(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"

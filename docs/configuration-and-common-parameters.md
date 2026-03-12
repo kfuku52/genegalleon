@@ -100,6 +100,11 @@ as genome-evolution-local parameters. `species_tree_rooting` defaults to
 - `mad`
 - `mv`
 
+For backward compatibility, a bare species-label list such as
+`Oryza_sativa,Amborella_trichopoda` is still interpreted as
+`outgroup,Oryza_sativa,Amborella_trichopoda`, but the explicit `outgroup,...`
+form is preferred for new configs.
+
 When `grampa_h1` or `target_branch_go` are left empty, GeneGalleon skips only the
 GRAMPA-related steps or the GO-enrichment step, respectively.
 

@@ -174,6 +174,22 @@ trim_ascii_whitespace() {
   printf '%s' "${s}"
 }
 
+species_tree_rooting_looks_like_label_list() {
+  local token=""
+  if [[ $# -eq 0 ]]; then
+    return 1
+  fi
+  for token in "$@"; do
+    if [[ -z "${token}" ]]; then
+      continue
+    fi
+    if [[ ! "${token}" =~ ^[[:alnum:].-]+_[[:alnum:]_.-]+$ ]]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
 input_sequence_mode=$(printf '%s' "${input_sequence_mode}" | tr '[:upper:]' '[:lower:]')
 if [[ "${input_sequence_mode}" != "cds" && "${input_sequence_mode}" != "protein" ]]; then
   echo "Invalid input_sequence_mode: ${input_sequence_mode}"
@@ -403,9 +419,24 @@ parse_species_tree_rooting() {
       done
       ;;
     *)
-      echo "Invalid species_tree_rooting: ${raw_config}"
-      echo 'species_tree_rooting must be one of "outgroup,GENUS_SPECIES[,GENUS_SPECIES...]", "midpoint", "mad", "mv", or "taxonomy[,ncbi[,opentree,timetree...]]".'
-      return 1
+      if species_tree_rooting_looks_like_label_list "${normalized_fields[@]}"; then
+        method="outgroup"
+        value_ref=""
+        for ((idx = 0; idx < ${#normalized_fields[@]}; idx++)); do
+          if [[ -z "${normalized_fields[idx]}" ]]; then
+            continue
+          fi
+          if [[ -n "${value_ref}" ]]; then
+            value_ref+=","
+          fi
+          value_ref+="${normalized_fields[idx]}"
+        done
+        echo "species_tree_rooting=${raw_config} uses legacy outgroup-label syntax; interpreting it as outgroup,${value_ref}."
+      else
+        echo "Invalid species_tree_rooting: ${raw_config}"
+        echo 'species_tree_rooting must be one of "outgroup,GENUS_SPECIES[,GENUS_SPECIES...]", "midpoint", "mad", "mv", or "taxonomy[,ncbi[,opentree,timetree...]]".'
+        return 1
+      fi
       ;;
   esac
 
