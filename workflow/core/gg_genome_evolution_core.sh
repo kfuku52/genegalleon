@@ -26,6 +26,10 @@ busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 species_tree_rooting="${species_tree_rooting:-taxonomy}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 omark_db_path="${omark_db_path:-auto}"
+# Backward-compatible defaults for launchers that predate the shared protein/OMArk flags.
+run_cds_translation="${run_cds_translation:-1}"
+run_species_omark="${run_species_omark:-0}"
+run_species_get_omark_summary="${run_species_get_omark_summary:-1}"
 mcmctree_divergence_time_constraints_str="${mcmctree_divergence_time_constraints_str:-}"
 grampa_h1="${grampa_h1:-}"
 target_branch_go="${target_branch_go:-}"
@@ -635,6 +639,8 @@ sync_genome_busco_summary_table_from_shared() {
 
 run_shared_species_busco_stage() {
   local task="BUSCO analysis of species-wise input files"
+  local source_species_input_dir=""
+  local -a source_species_input_fasta=()
   local -a species_input_fasta=()
   local -a input_species_set=()
   local -a busco_output_files=()
@@ -642,6 +648,7 @@ run_shared_species_busco_stage() {
   local input_species busco_file busco_base busco_species busco_species_found
   local dir_busco_db="" dir_busco_lineage=""
   local full_found=0 short_found=0
+  local missing_busco_outputs=0
 
   if [[ ${shared_species_busco_stage_done} -eq 1 ]]; then
     return 0
@@ -653,20 +660,16 @@ run_shared_species_busco_stage() {
     return 0
   fi
 
-  prepare_species_tree_input_dir
+  source_species_input_dir=$(effective_species_input_source_dir_path)
   ensure_dir "${dir_species_busco_full}"
   ensure_dir "${dir_species_busco_short}"
-  mapfile -t species_input_fasta < <(gg_find_fasta_files "${species_tree_input_dir}" 1)
-  echo "Number of ${input_sequence_mode} files for BUSCO: ${#species_input_fasta[@]}"
-  if [[ ${#species_input_fasta[@]} -eq 0 ]]; then
+  mapfile -t source_species_input_fasta < <(gg_find_fasta_files "${source_species_input_dir}" 1)
+  echo "Number of ${input_sequence_mode} files for BUSCO: ${#source_species_input_fasta[@]}"
+  if [[ ${#source_species_input_fasta[@]} -eq 0 ]]; then
     echo "No ${input_sequence_mode} file found. Exiting."
     exit 1
   fi
-  mapfile -t input_species_set < <(
-    for seq_full in "${species_input_fasta[@]}"; do
-      gg_species_name_from_path_or_dot "$(basename "${seq_full}")"
-    done | sort -u
-  )
+  mapfile -t input_species_set < <(gg_species_names_from_fasta_dir "${source_species_input_dir}")
   if ! resolve_busco_lineage_for_species_set "${input_species_set[@]}"; then
     exit 1
   fi
@@ -690,6 +693,32 @@ run_shared_species_busco_stage() {
       rm -f -- "${busco_file}"
     fi
   done
+  for input_species in "${input_species_set[@]}"; do
+    if busco_output_exists_for_species "${dir_species_busco_full}" "${input_species}" "*busco.full.tsv"; then
+      full_found=1
+    else
+      full_found=0
+    fi
+    if busco_output_exists_for_species "${dir_species_busco_short}" "${input_species}" "*busco.short.txt"; then
+      short_found=1
+    else
+      short_found=0
+    fi
+    if [[ ${full_found} -ne 1 || ${short_found} -ne 1 ]]; then
+      missing_busco_outputs=1
+      break
+    fi
+  done
+  if [[ ${missing_busco_outputs} -ne 1 ]]; then
+    for seq_full in "${source_species_input_fasta[@]}"; do
+      echo "Skipped BUSCO: $(basename "${seq_full}")"
+    done
+    echo "$(date): End: ${task}"
+    return 0
+  fi
+
+  prepare_species_tree_input_dir
+  mapfile -t species_input_fasta < <(gg_find_fasta_files "${species_tree_input_dir}" 1)
   for seq_full in "${species_input_fasta[@]}"; do
     seq_file=$(basename "${seq_full}")
     sp_ub=$(gg_species_name_from_path_or_dot "${seq_file}")
@@ -745,6 +774,7 @@ run_shared_species_busco_stage() {
 run_shared_busco_summary_stage() {
   local task="Collecting IDs of common BUSCO genes"
   local num_busco_ids=0
+  local source_species_input_dir=""
 
   if [[ ${shared_busco_summary_stage_done} -eq 1 ]]; then
     sync_genome_busco_summary_table_from_shared || true
@@ -757,10 +787,10 @@ run_shared_busco_summary_stage() {
     return 0
   fi
 
-  prepare_species_tree_input_dir
+  source_species_input_dir=$(effective_species_input_source_dir_path)
   normalize_busco_table_naming "${dir_species_busco_full}" "${dir_species_busco_short}"
-  if ! is_species_set_identical "${species_tree_input_dir}" "${dir_species_busco_full}"; then
-    echo "Exiting due to species-set mismatch between ${species_tree_input_dir} and ${dir_species_busco_full}"
+  if ! is_species_set_identical "${source_species_input_dir}" "${dir_species_busco_full}"; then
+    echo "Exiting due to species-set mismatch between ${source_species_input_dir} and ${dir_species_busco_full}"
     exit 1
   fi
   if [[ ! -s "${file_species_busco_summary_table}" ]]; then
@@ -784,12 +814,15 @@ run_shared_busco_summary_stage() {
 
 run_shared_species_omark_stage() {
   local task="OMArk analysis of species-wise protein input files"
+  local source_species_input_dir=""
+  local -a source_species_input_fasta=()
   local -a species_input_fasta=()
   local -a input_species_set=()
   local -a existing_species_dirs=()
   local protein_full protein_file sp_ub omamer_out omark_outdir sum_file omamer_query
   local input_species existing_dir existing_species existing_found
   local omark_db_file=""
+  local missing_omark_outputs=0
 
   if [[ ${shared_species_omark_stage_done} -eq 1 ]]; then
     return 0
@@ -801,27 +834,17 @@ run_shared_species_omark_stage() {
     return 0
   fi
 
-  prepare_species_protein_tmp
   ensure_dir "${dir_species_omamer}"
   ensure_dir "${dir_species_omark}"
-  mapfile -t species_input_fasta < <(gg_find_fasta_files "${dir_sp_protein}" 1)
-  echo "Number of protein files for OMArk: ${#species_input_fasta[@]}"
-  if [[ ${#species_input_fasta[@]} -eq 0 ]]; then
+  source_species_input_dir=$(effective_species_input_source_dir_path)
+  mapfile -t source_species_input_fasta < <(gg_find_fasta_files "${source_species_input_dir}" 1)
+  echo "Number of protein files for OMArk: ${#source_species_input_fasta[@]}"
+  if [[ ${#source_species_input_fasta[@]} -eq 0 ]]; then
     echo "No protein file found for OMArk. Exiting."
     exit 1
   fi
 
-  mapfile -t input_species_set < <(
-    for protein_full in "${species_input_fasta[@]}"; do
-      gg_species_name_from_path_or_dot "$(basename "${protein_full}")"
-    done | sort -u
-  )
-
-  if ! omark_db_file=$(ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}"); then
-    echo "Failed to prepare OMArk database: ${omark_db_path}"
-    exit 1
-  fi
-  omark_db_resolved="${omark_db_file}"
+  mapfile -t input_species_set < <(gg_species_names_from_fasta_dir "${source_species_input_dir}")
 
   mapfile -t existing_species_dirs < <(find "${dir_species_omark}" -maxdepth 1 -mindepth 1 -type d ! -name '.*' | sort)
   for existing_dir in "${existing_species_dirs[@]}"; do
@@ -839,6 +862,29 @@ run_shared_species_omark_stage() {
       rm -f -- "${dir_species_omamer}/${existing_species}.omamer"
     fi
   done
+  for input_species in "${input_species_set[@]}"; do
+    omamer_out="${dir_species_omamer}/${input_species}.omamer"
+    sum_file="${dir_species_omark}/${input_species}/${input_species}.sum"
+    if [[ ! -s "${omamer_out}" || ! -s "${sum_file}" ]]; then
+      missing_omark_outputs=1
+      break
+    fi
+  done
+  if [[ ${missing_omark_outputs} -ne 1 ]]; then
+    for protein_full in "${source_species_input_fasta[@]}"; do
+      echo "Skipped OMArk: $(basename "${protein_full}")"
+    done
+    echo "$(date): End: ${task}"
+    return 0
+  fi
+
+  if ! omark_db_file=$(ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}"); then
+    echo "Failed to prepare OMArk database: ${omark_db_path}"
+    exit 1
+  fi
+  omark_db_resolved="${omark_db_file}"
+  prepare_species_protein_tmp
+  mapfile -t species_input_fasta < <(gg_find_fasta_files "${dir_sp_protein}" 1)
 
   for protein_full in "${species_input_fasta[@]}"; do
     protein_file=$(basename "${protein_full}")
@@ -918,6 +964,14 @@ species_cds_input_has_files() {
   local cds_files=()
   mapfile -t cds_files < <(gg_find_fasta_files "${dir_sp_cds}" 1)
   [[ ${#cds_files[@]} -gt 0 ]]
+}
+
+effective_species_input_source_dir_path() {
+  if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
+    echo "${dir_sp_protein_input}"
+  else
+    echo "${dir_sp_cds}"
+  fi
 }
 
 compute_shared_protein_input_signature() {

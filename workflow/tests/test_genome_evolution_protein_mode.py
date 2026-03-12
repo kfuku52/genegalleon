@@ -4,6 +4,7 @@ import re
 import shlex
 import stat
 import subprocess
+from typing import Optional
 
 import pandas
 import pytest
@@ -476,7 +477,12 @@ def _load_entrypoint_defaults() -> dict[str, str]:
     return defaults
 
 
-def _run_core(tmp_path: Path, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run_core(
+    tmp_path: Path,
+    extra_env: Optional[dict[str, str]] = None,
+    *,
+    missing_flags: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess[str]:
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     bin_dir = _prepare_stub_binaries(tmp_path)
@@ -538,6 +544,8 @@ def _run_core(tmp_path: Path, extra_env: dict[str, str] | None = None) -> subpro
             "target_branch_go": "",
         }
     )
+    for flag in missing_flags:
+        env.pop(flag, None)
     if extra_env:
         env.update(extra_env)
 
@@ -634,6 +642,30 @@ def test_genome_evolution_protein_mode_translates_species_cds_with_species_speci
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launchers(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_cds_dir = workspace / "input" / "species_cds"
+    species_cds_dir.mkdir(parents=True)
+
+    (species_cds_dir / "Tetrahymena_thermophila_cds.fa").write_text(
+        ">Tetrahymena_thermophila_gene1\nATGTAA\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_core(
+        tmp_path,
+        missing_flags=("run_cds_translation", "run_species_omark", "run_species_get_omark_summary"),
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "Tetrahymena_thermophila.fa.gz" in completed.stdout
+    proteins = (tmp_path / "capture" / "proteins.fasta").read_text(encoding="utf-8")
+    assert ">Tetrahymena_thermophila_gene1" in proteins
+    assert "MQ" in proteins
+    assert "unbound variable" not in completed.stderr
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
 def test_genome_evolution_accepts_legacy_species_tree_rooting_outgroup_lists(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -660,6 +692,97 @@ def test_genome_evolution_accepts_legacy_species_tree_rooting_outgroup_lists(tmp
     ) in completed.stdout
     assert "Resolved species_tree_rooting method: outgroup" in completed.stdout
     assert "Resolved species_tree_rooting value: Arabidopsis_thaliana,Oryza_sativa" in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_reuses_existing_busco_outputs_without_retranslation(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_cds_dir = workspace / "input" / "species_cds"
+    busco_full_dir = workspace / "output" / "species_protein_busco_full"
+    busco_short_dir = workspace / "output" / "species_protein_busco_short"
+    species_cds_dir.mkdir(parents=True)
+    busco_full_dir.mkdir(parents=True)
+    busco_short_dir.mkdir(parents=True)
+
+    (species_cds_dir / "Arabidopsis_thaliana_cds.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nATGTAA\n",
+        encoding="utf-8",
+    )
+    (species_cds_dir / "Oryza_sativa_cds.fa").write_text(
+        ">Oryza_sativa_gene1\nATGTAA\n",
+        encoding="utf-8",
+    )
+    (busco_full_dir / "Arabidopsis_thaliana.busco.full.tsv").write_text(
+        "# BUSCO version is: test\nbusco1\tComplete\tArabidopsis_thaliana_gene1\t1\t1\t100\n",
+        encoding="utf-8",
+    )
+    (busco_full_dir / "Oryza_sativa.busco.full.tsv").write_text(
+        "# BUSCO version is: test\nbusco1\tComplete\tOryza_sativa_gene1\t1\t1\t100\n",
+        encoding="utf-8",
+    )
+    (busco_short_dir / "Arabidopsis_thaliana.busco.short.txt").write_text(
+        "C:100.0%[S:100.0%,D:0.0%],F:0.0%,M:0.0%,n:1\n",
+        encoding="utf-8",
+    )
+    (busco_short_dir / "Oryza_sativa.busco.short.txt").write_text(
+        "C:100.0%[S:100.0%,D:0.0%],F:0.0%,M:0.0%,n:1\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_core(
+        tmp_path,
+        {
+            "run_species_busco": "1",
+            "run_species_get_busco_summary": "0",
+            "run_species_get_omark_summary": "0",
+            "run_orthofinder": "0",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "Number of protein files for BUSCO: 2" in completed.stdout
+    assert "Skipped BUSCO: Arabidopsis_thaliana_cds.fa" in completed.stdout
+    assert "Skipped BUSCO: Oryza_sativa_cds.fa" in completed.stdout
+    assert "Translation started:" not in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_reuses_existing_omark_outputs_without_retranslation(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_cds_dir = workspace / "input" / "species_cds"
+    omamer_dir = workspace / "output" / "genome_evolution" / "omamer_search"
+    omark_species_dir = workspace / "output" / "genome_evolution" / "omark" / "Arabidopsis_thaliana"
+    species_cds_dir.mkdir(parents=True)
+    omamer_dir.mkdir(parents=True)
+    omark_species_dir.mkdir(parents=True)
+
+    (species_cds_dir / "Arabidopsis_thaliana_cds.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nATGTAA\n",
+        encoding="utf-8",
+    )
+    (omamer_dir / "Arabidopsis_thaliana.omamer").write_text(
+        "# query\thog\tscore\nArabidopsis_thaliana.query.fa\tHOG:0000001\t100\n",
+        encoding="utf-8",
+    )
+    (omark_species_dir / "Arabidopsis_thaliana.sum").write_text(
+        "#The selected clade was Viridiplantae\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_core(
+        tmp_path,
+        {
+            "run_species_busco": "0",
+            "run_species_omark": "1",
+            "run_species_get_omark_summary": "0",
+            "run_orthofinder": "0",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "Number of protein files for OMArk: 1" in completed.stdout
+    assert "Skipped OMArk: Arabidopsis_thaliana_cds.fa" in completed.stdout
+    assert "Translation started:" not in completed.stdout
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")

@@ -1791,6 +1791,14 @@ def test_genome_evolution_exposes_omark_controls_and_summary_stage():
     assert 'python "${gg_support_dir}/summarize_omark.py" \\' in core
 
 
+def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launchers():
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    assert 'run_cds_translation="${run_cds_translation:-1}"' in core
+    assert 'run_species_omark="${run_species_omark:-0}"' in core
+    assert 'run_species_get_omark_summary="${run_species_get_omark_summary:-1}"' in core
+
+
 def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
