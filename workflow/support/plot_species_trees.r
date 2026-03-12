@@ -11,8 +11,26 @@ args = rkftools::get_parsed_args(args, print = TRUE)
 font_size = 8
 font_size_factor = 0.352777778 # https://stackoverflow.com/questions/17311917/ggplot2-the-unit-of-size
 
+has_nonempty_file <- function(file_path) {
+  if (is.null(file_path) || length(file_path) == 0 || is.na(file_path) || !nzchar(file_path)) {
+    return(FALSE)
+  }
+  if (!file.exists(file_path)) {
+    return(FALSE)
+  }
+  file_info <- file.info(file_path)
+  !is.na(file_info$size[[1]]) && file_info$size[[1]] > 0
+}
+
+has_value <- function(x) {
+  !(is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x)))
+}
+
 
 extract_param_from_iqtree_log <- function(file_path) {
+  if (!has_nonempty_file(file_path)) {
+    return(list(model = NA_character_, nsite = NA_integer_, loglik = NA_real_, version = NA_character_))
+  }
   # Read the contents of the file
   log_text <- readLines(file_path, warn = FALSE)
   full_text <- paste(log_text, collapse = "\n")
@@ -55,6 +73,9 @@ extract_first_group <- function(full_text, patterns) {
 }
 
 extract_param_from_astral_log <- function(file_path) {
+  if (!has_nonempty_file(file_path)) {
+    return(list(ntree = NA_integer_, version = NA_character_))
+  }
   log_text <- readLines(file_path, warn = FALSE)
   full_text <- paste(log_text, collapse = "\n")
   ntree_str <- extract_first_group(full_text, c(
@@ -76,57 +97,60 @@ fmt_num <- function(x, digits = 0) {
   formatC(as.numeric(x), format = "f", digits = digits, big.mark = ",")
 }
 
+build_iqtree_label <- function(sequence_label, params) {
+  if (has_value(params[['version']]) && has_value(params[['nsite']]) && has_value(params[['model']]) && has_value(params[['loglik']])) {
+    return(sprintf(
+      'IQ-TREE v%s with concatenated %s alignment\n(%s sites, %s model, loglik = %s)',
+      params[['version']],
+      sequence_label,
+      fmt_num(params[['nsite']], digits = 0),
+      params[['model']],
+      fmt_num(params[['loglik']], digits = 1)
+    ))
+  }
+  sprintf('IQ-TREE concatenated %s alignment', sequence_label)
+}
+
+build_astral_label <- function(sequence_label, astral_params, iqtree_params) {
+  if (has_value(astral_params[['version']]) && has_value(astral_params[['ntree']]) && has_value(iqtree_params[['model']])) {
+    return(sprintf(
+      'ASTRAL v%s with %s %s ML gene trees (%s)',
+      astral_params[['version']],
+      fmt_num(astral_params[['ntree']], digits = 0),
+      sequence_label,
+      iqtree_params[['model']]
+    ))
+  }
+  sprintf('ASTRAL %s gene trees', sequence_label)
+}
+
 iqtree_dna_params = extract_param_from_iqtree_log(file_path = args[['iqtree_dna_log']])
 iqtree_pep_params = extract_param_from_iqtree_log(file_path = args[['iqtree_pep_log']])
 astral_dna_params = extract_param_from_astral_log(file_path = args[['astral_dna_log']])
 astral_pep_params = extract_param_from_astral_log(file_path = args[['astral_pep_log']])
 
+tree_specs = list(
+  list(label = build_iqtree_label('DNA', iqtree_dna_params), nwk = args[['iqtree_dna_nwk']]),
+  list(label = build_iqtree_label('protein', iqtree_pep_params), nwk = args[['iqtree_pep_nwk']]),
+  list(label = build_astral_label('DNA', astral_dna_params, iqtree_dna_params), nwk = args[['astral_dna_nwk']]),
+  list(label = build_astral_label('protein', astral_pep_params, iqtree_pep_params), nwk = args[['astral_pep_nwk']])
+)
+tree_specs = Filter(function(spec) has_nonempty_file(spec[['nwk']]), tree_specs)
 
-ml_txt = 'IQ-TREE v%s with concatenated %s alignment\n(%s sites, %s model, loglik = %s)'
-label_ml_dna = sprintf(
-  ml_txt,
-  iqtree_dna_params[['version']],
-  'DNA',
-  fmt_num(iqtree_dna_params[['nsite']], digits = 0),
-  iqtree_dna_params[['model']],
-  fmt_num(iqtree_dna_params[['loglik']], digits = 1)
-)
-label_ml_pep = sprintf(
-  ml_txt,
-  iqtree_pep_params[['version']],
-  'protein',
-  fmt_num(iqtree_pep_params[['nsite']], digits = 0),
-  iqtree_pep_params[['model']],
-  fmt_num(iqtree_pep_params[['loglik']], digits = 1)
-)
-astral_txt = 'ASTRAL v%s with %s %s ML gene trees (%s)'
-label_astral_dna = sprintf(
-  astral_txt, astral_dna_params[['version']],
-  fmt_num(astral_dna_params[['ntree']], digits = 0),
-  'DNA',
-  iqtree_dna_params[['model']]
-)
-label_astral_pep = sprintf(
-  astral_txt, astral_pep_params[['version']],
-  fmt_num(astral_pep_params[['ntree']], digits = 0),
-  'protein',
-  iqtree_pep_params[['model']]
-)
-
-nwk_files = list()
-nwk_files[[label_ml_dna]] = args[['iqtree_dna_nwk']]
-nwk_files[[label_ml_pep]] = args[['iqtree_pep_nwk']]
-nwk_files[[label_astral_dna]] = args[['astral_dna_nwk']]
-nwk_files[[label_astral_pep]] = args[['astral_pep_nwk']]
+if (length(tree_specs) == 0) {
+  stop('No species tree files were provided.')
+}
 
 trees = list()
-for (key in names(nwk_files)) {
-  trees[[key]] = read.tree(nwk_files[[key]])
+for (spec in tree_specs) {
+  key = spec[['label']]
+  trees[[key]] = read.tree(spec[['nwk']])
   trees[[key]] = ladderize(trees[[key]])
 }
 
 plots = list()
-for (key in names(trees)) {
+for (spec in tree_specs) {
+  key = spec[['label']]
   cat('Processing:', key, '\n')
   plots[[key]] = ggtree(trees[[key]])
   isTip = plots[[key]][['data']][['isTip']]
@@ -162,7 +186,8 @@ for (key in names(trees)) {
   )
 }
 
-pdf_height = 3 + length(trees[[key]][['tip.label']]) * font_size / 72
-out = plot_list(gglist = plots, ncol = 2)
+max_tip_count = max(vapply(trees, function(tree) length(tree[['tip.label']]), integer(1)))
+pdf_height = 3 + max_tip_count * font_size / 72
+out = plot_list(gglist = plots, ncol = min(2, length(plots)))
 ggsave('species_trees.pdf', plot = out, width = 7.2, height = pdf_height, units = 'in')
 out

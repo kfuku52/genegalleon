@@ -1812,6 +1812,22 @@ def test_genome_evolution_runs_omark_after_orthofinder_and_before_og_selection()
     assert omark_summary_index < og_selection_index
 
 
+def test_genome_evolution_protein_mode_allows_species_tree_plotting_with_pep_trees_only():
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    assert 'if [[ "${input_sequence_mode}" == "protein" ]]; then\n    disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_pep_root}" "${file_astral_tree_pep}"' in core
+    assert 'disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"' in core
+
+
+def test_plot_species_trees_r_filters_missing_tree_inputs():
+    script = _read_text(WORKFLOW_DIR / "support" / "plot_species_trees.r")
+
+    assert "has_nonempty_file <- function(file_path)" in script
+    assert "tree_specs = Filter(function(spec) has_nonempty_file(spec[['nwk']]), tree_specs)" in script
+    assert "if (length(tree_specs) == 0) {" in script
+    assert "out = plot_list(gglist = plots, ncol = min(2, length(plots)))" in script
+
+
 def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 

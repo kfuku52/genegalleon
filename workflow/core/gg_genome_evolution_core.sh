@@ -2286,7 +2286,13 @@ else
 fi
 
 task="Species tree plotting"
-disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"
+if [[ ${run_plot_species_trees} -eq 1 ]]; then
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_pep_root}" "${file_astral_tree_pep}"
+  else
+    disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"
+  fi
+fi
 if [[ ! -s "${file_plot_species_trees}" && ${run_plot_species_trees} -eq 1 ]]; then
   gg_step_start "${task}"
 
