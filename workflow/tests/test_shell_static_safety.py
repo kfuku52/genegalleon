@@ -1751,7 +1751,7 @@ def test_genome_evolution_places_run_cds_translation_before_dependent_run_flags(
     entrypoint_species_busco_index = entrypoint.index('run_species_busco=1')
     entrypoint_species_omark_index = entrypoint.index('run_species_omark=0')
     entrypoint_orthofinder_index = entrypoint.index('run_orthofinder=1')
-    entrypoint_busco_getfasta_index = entrypoint.index('run_busco_getfasta=1')
+    entrypoint_busco_getfasta_index = entrypoint.index('run_busco_getfasta=0')
 
     assert entrypoint_translation_index < entrypoint_species_busco_index
     assert entrypoint_translation_index < entrypoint_species_omark_index
