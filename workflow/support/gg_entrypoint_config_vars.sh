@@ -172,6 +172,18 @@ protein_model
 run_cds_translation
 run_astral_dna
 run_astral_pep
+run_busco_dupaware_getfasta
+run_busco_dupaware_grampa_dna
+run_busco_dupaware_grampa_pep
+run_busco_dupaware_iqtree_dna
+run_busco_dupaware_iqtree_pep
+run_busco_dupaware_mafft
+run_busco_dupaware_notung_root_dna
+run_busco_dupaware_notung_root_pep
+run_busco_dupaware_root_dna
+run_busco_dupaware_root_pep
+run_busco_dupaware_trimal
+# Legacy aliases for duplicate-aware BUSCO workflow flags
 run_busco_getfasta
 run_busco_grampa_dna
 run_busco_grampa_pep

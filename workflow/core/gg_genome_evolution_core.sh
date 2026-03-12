@@ -30,6 +30,18 @@ omark_db_path="${omark_db_path:-auto}"
 run_cds_translation="${run_cds_translation:-1}"
 run_species_omark="${run_species_omark:-0}"
 run_species_get_omark_summary="${run_species_get_omark_summary:-1}"
+# Backward-compatible aliases for the duplicate-aware BUSCO workflow flags.
+run_busco_dupaware_getfasta="${run_busco_dupaware_getfasta:-${run_busco_getfasta:-0}}"
+run_busco_dupaware_mafft="${run_busco_dupaware_mafft:-${run_busco_mafft:-0}}"
+run_busco_dupaware_trimal="${run_busco_dupaware_trimal:-${run_busco_trimal:-0}}"
+run_busco_dupaware_iqtree_dna="${run_busco_dupaware_iqtree_dna:-${run_busco_iqtree_dna:-0}}"
+run_busco_dupaware_iqtree_pep="${run_busco_dupaware_iqtree_pep:-${run_busco_iqtree_pep:-0}}"
+run_busco_dupaware_notung_root_dna="${run_busco_dupaware_notung_root_dna:-${run_busco_notung_root_dna:-0}}"
+run_busco_dupaware_notung_root_pep="${run_busco_dupaware_notung_root_pep:-${run_busco_notung_root_pep:-0}}"
+run_busco_dupaware_root_dna="${run_busco_dupaware_root_dna:-${run_busco_root_dna:-0}}"
+run_busco_dupaware_root_pep="${run_busco_dupaware_root_pep:-${run_busco_root_pep:-0}}"
+run_busco_dupaware_grampa_dna="${run_busco_dupaware_grampa_dna:-${run_busco_grampa_dna:-0}}"
+run_busco_dupaware_grampa_pep="${run_busco_dupaware_grampa_pep:-${run_busco_grampa_pep:-0}}"
 mcmctree_divergence_time_constraints_str="${mcmctree_divergence_time_constraints_str:-}"
 grampa_h1="${grampa_h1:-}"
 target_branch_go="${target_branch_go:-}"
@@ -1213,12 +1225,12 @@ if [[ "${input_sequence_mode}" == "protein" ]]; then
     run_convert_tree_format=0
     run_plot_mcmctreer=0
   fi
-  if [[ ${run_busco_iqtree_dna} -eq 1 || ${run_busco_notung_root_dna} -eq 1 || ${run_busco_root_dna} -eq 1 || ${run_busco_grampa_dna} -eq 1 ]]; then
-    echo "Disabling DNA-only BUSCO genome-evolution steps in protein mode: run_busco_iqtree_dna, run_busco_notung_root_dna, run_busco_root_dna, run_busco_grampa_dna"
-    run_busco_iqtree_dna=0
-    run_busco_notung_root_dna=0
-    run_busco_root_dna=0
-    run_busco_grampa_dna=0
+  if [[ ${run_busco_dupaware_iqtree_dna} -eq 1 || ${run_busco_dupaware_notung_root_dna} -eq 1 || ${run_busco_dupaware_root_dna} -eq 1 || ${run_busco_dupaware_grampa_dna} -eq 1 ]]; then
+    echo "Disabling DNA-only duplicate-aware BUSCO genome-evolution steps in protein mode: run_busco_dupaware_iqtree_dna, run_busco_dupaware_notung_root_dna, run_busco_dupaware_root_dna, run_busco_dupaware_grampa_dna"
+    run_busco_dupaware_iqtree_dna=0
+    run_busco_dupaware_notung_root_dna=0
+    run_busco_dupaware_root_dna=0
+    run_busco_dupaware_grampa_dna=0
   fi
 else
   check_species_cds "${gg_workspace_dir}"
@@ -1607,7 +1619,7 @@ run_shared_species_busco_stage
 task="Collecting IDs of common BUSCO genes"
 run_shared_busco_summary_stage
 
-task="Generating fasta files for individual single-copy genes"
+task="Generating FASTA files for duplicate-aware BUSCO genes"
 ensure_dir "${dir_single_copy_fasta}"
 num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
 singlecopy_fasta_files=()
@@ -1617,7 +1629,7 @@ if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_individual_get_fasta
   prepare_species_tree_input_dir
   gg_step_start "${task}"
 
-  generate_single_copy_fasta() {
+  generate_dupaware_busco_fasta() {
     local busco_id
     busco_id=$(awk -v row="$1" 'NR==row {print $1; exit}' "${file_species_busco_summary_table}")
     local remove_nonsingle=$2
@@ -2893,16 +2905,16 @@ cleanup_species_protein_tmp
 trap - EXIT
 
 # Genome evolution
-if [[ ${run_busco_notung_root_dna} -eq 1 || ${run_busco_notung_root_pep} -eq 1 || ${run_busco_root_dna} -eq 1 || ${run_busco_root_pep} -eq 1 || ${run_busco_grampa_dna} -eq 1 || ${run_busco_grampa_pep} -eq 1 ]]; then
+if [[ ${run_busco_dupaware_notung_root_dna} -eq 1 || ${run_busco_dupaware_notung_root_pep} -eq 1 || ${run_busco_dupaware_root_dna} -eq 1 || ${run_busco_dupaware_root_pep} -eq 1 || ${run_busco_dupaware_grampa_dna} -eq 1 || ${run_busco_dupaware_grampa_pep} -eq 1 ]]; then
   if [[ ! -s "${notung_jar}" ]]; then
     echo "Notung jar was not found: ${notung_jar}"
-    echo "Disabling NOTUNG-dependent BUSCO tasks: run_busco_notung_root_dna, run_busco_notung_root_pep, run_busco_root_dna, run_busco_root_pep, run_busco_grampa_dna, run_busco_grampa_pep"
-    run_busco_notung_root_dna=0
-    run_busco_notung_root_pep=0
-    run_busco_root_dna=0
-    run_busco_root_pep=0
-    run_busco_grampa_dna=0
-    run_busco_grampa_pep=0
+    echo "Disabling NOTUNG-dependent duplicate-aware BUSCO tasks: run_busco_dupaware_notung_root_dna, run_busco_dupaware_notung_root_pep, run_busco_dupaware_root_dna, run_busco_dupaware_root_pep, run_busco_dupaware_grampa_dna, run_busco_dupaware_grampa_pep"
+    run_busco_dupaware_notung_root_dna=0
+    run_busco_dupaware_notung_root_pep=0
+    run_busco_dupaware_root_dna=0
+    run_busco_dupaware_root_pep=0
+    run_busco_dupaware_grampa_dna=0
+    run_busco_dupaware_grampa_pep=0
   fi
 fi
 
@@ -2917,11 +2929,11 @@ if [[ ${run_orthogroup_grampa} -eq 1 ]]; then
 fi
 
 if [[ -z "${grampa_h1}" ]]; then
-  if [[ ${run_busco_grampa_dna} -eq 1 || ${run_busco_grampa_pep} -eq 1 || ${run_orthogroup_grampa} -eq 1 ]]; then
+  if [[ ${run_busco_dupaware_grampa_dna} -eq 1 || ${run_busco_dupaware_grampa_pep} -eq 1 || ${run_orthogroup_grampa} -eq 1 ]]; then
     echo "Disabling GRAMPA tasks because grampa_h1 is empty. Set grampa_h1 in gg_genome_evolution_entrypoint.sh to enable them."
   fi
-  run_busco_grampa_dna=0
-  run_busco_grampa_pep=0
+  run_busco_dupaware_grampa_dna=0
+  run_busco_dupaware_grampa_pep=0
   run_orthogroup_grampa=0
 fi
 
@@ -2935,8 +2947,8 @@ cd "${dir_tmp}"
 
 task="Generating fasta files for individual single-copy genes"
 sync_genome_busco_summary_table_from_shared || true
-disable_if_no_input_file "run_busco_getfasta" "${file_genome_busco_summary_table}"
-if [[ ${run_busco_getfasta} -eq 1 ]]; then
+disable_if_no_input_file "run_busco_dupaware_getfasta" "${file_genome_busco_summary_table}"
+if [[ ${run_busco_dupaware_getfasta} -eq 1 ]]; then
   prepare_species_tree_input_dir
   gg_step_start "${task}"
   ensure_dir "${dir_busco_fasta}"
@@ -2990,7 +3002,7 @@ if [[ ${run_busco_getfasta} -eq 1 ]]; then
   gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
   for ((busco_idx = 0; busco_idx < num_busco_ids; busco_idx++)); do
     wait_until_jobn_le ${GG_TASK_CPUS}
-    generate_single_copy_fasta "${busco_idx}" &
+    generate_dupaware_busco_fasta "${busco_idx}" &
   done
   wait_for_background_jobs
   rm -f -- species_tree_input_fasta_list.txt
@@ -3000,7 +3012,7 @@ else
 fi
 
 task="In-frame mafft alignment of duplicate-containing BUSCO genes"
-if [[ ${run_busco_mafft} -eq 1 ]]; then
+if [[ ${run_busco_dupaware_mafft} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_busco_mafft}"
 
@@ -3089,7 +3101,7 @@ else
 fi
 
 task="TrimAl of duplicate-containing BUSCO genes"
-if [[ ${run_busco_trimal} -eq 1 ]]; then
+if [[ ${run_busco_dupaware_trimal} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_busco_trimal}"
 
@@ -3138,7 +3150,7 @@ else
 fi
 
 task="IQ-TREE for duplicate-containing BUSCO DNA trees"
-if [[ ${run_busco_iqtree_dna} -eq 1 ]]; then
+if [[ ${run_busco_dupaware_iqtree_dna} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_busco_iqtree_dna}"
 
@@ -3184,7 +3196,7 @@ else
 fi
 
 task="IQ-TREE for duplicate-containing BUSCO protein trees"
-if [[ ${run_busco_iqtree_pep} -eq 1 ]]; then
+if [[ ${run_busco_dupaware_iqtree_pep} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_busco_iqtree_pep}"
 
@@ -3269,8 +3281,8 @@ busco_notung() {
 }
 
 task="NOTUNG rooting of duplicate-containing BUSCO DNA trees"
-disable_if_no_input_file "run_busco_notung_root_dna" "${file_dated_species_tree}"
-if [[ ${run_busco_notung_root_dna} -eq 1 ]]; then
+disable_if_no_input_file "run_busco_dupaware_notung_root_dna" "${file_dated_species_tree}"
+if [[ ${run_busco_dupaware_notung_root_dna} -eq 1 ]]; then
   gg_step_start "${task}"
 
   infiles=()
@@ -3285,8 +3297,8 @@ else
 fi
 
 task="NOTUNG rooting of duplicate-containing BUSCO protein trees"
-disable_if_no_input_file "run_busco_notung_root_pep" "${file_dated_species_tree}"
-if [[ ${run_busco_notung_root_pep} -eq 1 ]]; then
+disable_if_no_input_file "run_busco_dupaware_notung_root_pep" "${file_dated_species_tree}"
+if [[ ${run_busco_dupaware_notung_root_pep} -eq 1 ]]; then
   gg_step_start "${task}"
 
   infiles=()
@@ -3336,8 +3348,8 @@ busco_species_tree_assisted_gene_tree_rooting() {
 }
 
 task="Species-tree-guided gene tree rooting of duplicate-containing BUSCO DNA trees"
-disable_if_no_input_file "run_busco_root_dna" "${file_dated_species_tree}"
-if [[ ${run_busco_root_dna} -eq 1 ]]; then
+disable_if_no_input_file "run_busco_dupaware_root_dna" "${file_dated_species_tree}"
+if [[ ${run_busco_dupaware_root_dna} -eq 1 ]]; then
   gg_step_start "${task}"
 
   infiles=()
@@ -3352,8 +3364,8 @@ else
 fi
 
 task="Species-tree-guided gene tree rooting of duplicate-containing BUSCO protein trees"
-disable_if_no_input_file "run_busco_root_pep" "${file_dated_species_tree}"
-if [[ ${run_busco_root_pep} -eq 1 ]]; then
+disable_if_no_input_file "run_busco_dupaware_root_pep" "${file_dated_species_tree}"
+if [[ ${run_busco_dupaware_root_pep} -eq 1 ]]; then
   gg_step_start "${task}"
 
   infiles=()
@@ -3509,8 +3521,8 @@ busco_grampa() {
 }
 
 task="BUSCO-based Grampa analysis for the polyploidization history with BUSCO DNA trees"
-disable_if_no_input_file "run_busco_grampa_dna" "${file_dated_species_tree}"
-if [[ ! -s "${file_busco_grampa_dna}" && ${run_busco_grampa_dna} -eq 1 ]]; then
+disable_if_no_input_file "run_busco_dupaware_grampa_dna" "${file_dated_species_tree}"
+if [[ ! -s "${file_busco_grampa_dna}" && ${run_busco_dupaware_grampa_dna} -eq 1 ]]; then
   gg_step_start "${task}"
 
   busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" "${file_busco_grampa_dna}"
@@ -3519,8 +3531,8 @@ else
 fi
 
 task="BUSCO-based Grampa analysis for the polyploidization history with BUSCO protein trees"
-disable_if_no_input_file "run_busco_grampa_pep" "${file_dated_species_tree}"
-if [[ ! -s "${file_busco_grampa_pep}" && ${run_busco_grampa_pep} -eq 1 ]]; then
+disable_if_no_input_file "run_busco_dupaware_grampa_pep" "${file_dated_species_tree}"
+if [[ ! -s "${file_busco_grampa_pep}" && ${run_busco_dupaware_grampa_pep} -eq 1 ]]; then
   gg_step_start "${task}"
 
   busco_grampa "${dir_busco_rooted_nwk_pep}" "$(dirname "${file_busco_grampa_pep}")" "${file_busco_grampa_pep}"
