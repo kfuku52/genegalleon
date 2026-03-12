@@ -2945,7 +2945,7 @@ fi
 ensure_dir "${dir_tmp}"
 cd "${dir_tmp}"
 
-task="Generating fasta files for individual single-copy genes"
+task="Generating FASTA files for duplicate-aware BUSCO genes"
 sync_genome_busco_summary_table_from_shared || true
 disable_if_no_input_file "run_busco_dupaware_getfasta" "${file_genome_busco_summary_table}"
 if [[ ${run_busco_dupaware_getfasta} -eq 1 ]]; then
@@ -2956,7 +2956,7 @@ if [[ ${run_busco_dupaware_getfasta} -eq 1 ]]; then
   mapfile -t busco_rows < <(tail -n +2 "${file_genome_busco_summary_table}")
   num_busco_ids=${#busco_rows[@]}
 
-  generate_single_copy_fasta() {
+  generate_genome_dupaware_busco_fasta() {
     local busco_idx=$1
     local busco_row="${busco_rows[${busco_idx}]}"
     local busco_id
@@ -3002,7 +3002,7 @@ if [[ ${run_busco_dupaware_getfasta} -eq 1 ]]; then
   gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
   for ((busco_idx = 0; busco_idx < num_busco_ids; busco_idx++)); do
     wait_until_jobn_le ${GG_TASK_CPUS}
-    generate_dupaware_busco_fasta "${busco_idx}" &
+    generate_genome_dupaware_busco_fasta "${busco_idx}" &
   done
   wait_for_background_jobs
   rm -f -- species_tree_input_fasta_list.txt
