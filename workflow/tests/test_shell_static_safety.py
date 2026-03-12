@@ -1075,6 +1075,26 @@ def test_download_helpers_use_set_e_safe_command_guards():
     assert 'if ! tar -xzf "${archive_path}" -C "${tmp_dir}"; then' in pfam_body
 
 
+def test_nonconda_download_helpers_use_archive_files_and_wget_fallback():
+    script_path = REPO_ROOT / "container" / "scripts" / "install_nonconda_fallbacks.sh"
+    text = _read_text(script_path)
+
+    download_body = _function_body(text, "download_url_to_file")
+    assert 'curl -fL --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 600 \\' in download_body
+    assert 'if wget --tries=8 --waitretry=5 -O "${dest}" "${url}"; then' in download_body
+    assert 'rm -f "${dest}"' in download_body
+
+    tag_body = _function_body(text, "download_github_tag_tarball")
+    assert 'archive_path=$(mktemp)' in tag_body
+    assert 'if ! download_url_to_file "${url}" "${archive_path}"; then' in tag_body
+    assert 'if ! tar -xzf "${archive_path}" -C "${dest}" --strip-components=1; then' in tag_body
+
+    cafe_body = _function_body(text, "install_cafe5")
+    assert 'archive_path="${workdir}/CAFE5-5.1.0.tar.gz"' in cafe_body
+    assert 'if ! download_url_to_file \\' in cafe_body
+    assert 'if ! tar -xzf "${archive_path}" -C "${workdir}"; then' in cafe_body
+
+
 def test_download_lock_helper_uses_shared_lock_metadata_and_heartbeat():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)

@@ -19,16 +19,47 @@ log() {
   echo "[install_nonconda_fallbacks] $*"
 }
 
+download_url_to_file() {
+  local url=$1
+  local dest=$2
+
+  rm -f "${dest}"
+  if curl -fL --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 600 \
+    "${url}" -o "${dest}"; then
+    return 0
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    rm -f "${dest}"
+    if wget --tries=8 --waitretry=5 -O "${dest}" "${url}"; then
+      return 0
+    fi
+  fi
+
+  rm -f "${dest}"
+  return 1
+}
+
 download_github_tag_tarball() {
   local owner=$1
   local repo=$2
   local tag=$3
   local dest=$4
   local url="https://codeload.github.com/${owner}/${repo}/tar.gz/refs/tags/${tag}"
+  local archive_path
 
   mkdir -p "${dest}"
-  curl -fL --retry 5 --retry-all-errors --retry-delay 2 "${url}" \
-    | tar -xzf - -C "${dest}" --strip-components=1
+  archive_path=$(mktemp)
+
+  if ! download_url_to_file "${url}" "${archive_path}"; then
+    rm -f "${archive_path}"
+    return 1
+  fi
+  if ! tar -xzf "${archive_path}" -C "${dest}" --strip-components=1; then
+    rm -f "${archive_path}"
+    return 1
+  fi
+  rm -f "${archive_path}"
 }
 
 build_jobs() {
@@ -248,13 +279,22 @@ install_cafe5() {
 
   local workdir
   local jobs
+  local archive_path
   workdir=$(mktemp -d)
   jobs=$(build_jobs)
+  archive_path="${workdir}/CAFE5-5.1.0.tar.gz"
   log "Building CAFE5 v5.1 in ${workdir}"
 
-  curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
+  if ! download_url_to_file \
     "https://github.com/hahnlab/CAFE5/releases/download/v5.1/CAFE5-5.1.0.tar.gz" \
-    | tar -xzf - -C "${workdir}"
+    "${archive_path}"; then
+    log "ERROR: Failed to download the CAFE5 v5.1 release archive."
+    exit 1
+  fi
+  if ! tar -xzf "${archive_path}" -C "${workdir}"; then
+    log "ERROR: Failed to extract the CAFE5 v5.1 release archive."
+    exit 1
+  fi
 
   local src_dir="${workdir}/CAFE5"
   if [[ ! -d "${src_dir}" ]]; then
