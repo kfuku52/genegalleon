@@ -1607,12 +1607,6 @@ run_shared_species_busco_stage
 task="Collecting IDs of common BUSCO genes"
 run_shared_busco_summary_stage
 
-task="OMArk analysis of species-wise protein input files"
-run_shared_species_omark_stage
-
-task="Summarizing OMArk species quality results"
-run_shared_omark_summary_stage
-
 task="Generating fasta files for individual single-copy genes"
 ensure_dir "${dir_single_copy_fasta}"
 num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
@@ -2798,6 +2792,12 @@ PY
 else
   gg_step_skip "${task}"
 fi
+
+task="OMArk analysis of species-wise protein input files"
+run_shared_species_omark_stage
+
+task="Summarizing OMArk species quality results"
+run_shared_omark_summary_stage
 
 task="Selecting orthogroups based on gene and species numbers"
 if [[ ! -s "${file_orthogroup_selection}" && ${run_og_selection} -eq 1 ]]; then

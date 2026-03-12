@@ -1799,6 +1799,19 @@ def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launcher
     assert 'run_species_get_omark_summary="${run_species_get_omark_summary:-1}"' in core
 
 
+def test_genome_evolution_runs_omark_after_orthofinder_and_before_og_selection():
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    orthofinder_index = core.index('task="OrthoFinder"\nif [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; then')
+    omark_index = core.index('task="OMArk analysis of species-wise protein input files"\nrun_shared_species_omark_stage')
+    omark_summary_index = core.index('task="Summarizing OMArk species quality results"\nrun_shared_omark_summary_stage')
+    og_selection_index = core.index('task="Selecting orthogroups based on gene and species numbers"')
+
+    assert orthofinder_index < omark_index
+    assert omark_index < omark_summary_index
+    assert omark_summary_index < og_selection_index
+
+
 def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
