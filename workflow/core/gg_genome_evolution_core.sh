@@ -708,7 +708,7 @@ run_shared_species_omark_stage() {
   local -a species_input_fasta=()
   local -a input_species_set=()
   local -a existing_species_dirs=()
-  local protein_full protein_file sp_ub omamer_out omark_outdir sum_file
+  local protein_full protein_file sp_ub omamer_out omark_outdir sum_file omamer_query
   local input_species existing_dir existing_species existing_found
   local omark_db_file=""
 
@@ -763,7 +763,7 @@ run_shared_species_omark_stage() {
 
   for protein_full in "${species_input_fasta[@]}"; do
     protein_file=$(basename "${protein_full}")
-    sp_ub=$(gg_species_name_from_path "${protein_file}")
+    sp_ub=$(gg_species_name_from_path_or_dot "${protein_file}")
     omamer_out="${dir_species_omamer}/${sp_ub}.omamer"
     omark_outdir="${dir_species_omark}/${sp_ub}"
     sum_file="${omark_outdir}/${sp_ub}.sum"
@@ -776,9 +776,11 @@ run_shared_species_omark_stage() {
     gg_step_start "${task}: ${protein_file}"
     ensure_dir "${omark_outdir}"
     if [[ ! -s "${omamer_out}" ]]; then
+      omamer_query="${omark_outdir}/${sp_ub}.query.fa"
+      stage_species_protein_fasta "${protein_full}" "${omamer_query}"
       omamer search \
         --db "${omark_db_file}" \
-        --query "${protein_full}" \
+        --query "${omamer_query}" \
         --out "${omamer_out}"
     fi
     if [[ ! -s "${omamer_out}" ]]; then
@@ -932,13 +934,41 @@ refresh_dir_for_shared_protein_input_signature() {
 
 cleanup_species_protein_tmp() {
   local cleanup_target
-  for cleanup_target in "${dir_sp_protein}" "${dir_sp_protein}_core" "${dir_sp_protein}_additional"; do
+  for cleanup_target in "${dir_sp_protein}" "${dir_sp_protein}_orthofinder" "${dir_sp_protein}_core" "${dir_sp_protein}_additional"; do
     if [[ -d "${cleanup_target}" ]]; then
       echo "Removing temporary species_protein directory: ${cleanup_target}"
       rm -rf -- "${cleanup_target}"
     fi
   done
   species_protein_ready=0
+}
+
+stage_species_protein_fasta() {
+  local source_fasta=$1
+  local staged_fasta=$2
+  ensure_parent_dir "${staged_fasta}"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${source_fasta}" --out-file "${staged_fasta}"
+  if [[ ! -s "${staged_fasta}" ]]; then
+    echo "Temporary species_protein FASTA was not created: ${staged_fasta}"
+    exit 1
+  fi
+}
+
+prepare_species_protein_orthofinder_dir() {
+  local source_dir=$1
+  local target_dir=$2
+  local source_fasta source_name source_stem staged_fasta
+  if [[ -e "${target_dir}" ]]; then
+    rm -rf -- "${target_dir}"
+  fi
+  ensure_dir "${target_dir}"
+  while IFS= read -r source_fasta; do
+    source_name=$(basename "${source_fasta}")
+    source_stem=${source_name%.gz}
+    source_stem=${source_stem%.*}
+    staged_fasta="${target_dir}/${source_stem}.fa"
+    stage_species_protein_fasta "${source_fasta}" "${staged_fasta}"
+  done < <(gg_find_fasta_files "${source_dir}" 1)
 }
 
 prepare_species_protein_tmp() {
@@ -960,8 +990,8 @@ prepare_species_protein_tmp() {
     mapfile -t protein_files < <(gg_find_fasta_files "${dir_sp_protein_input}" 1)
     for protein_path in "${protein_files[@]}"; do
       sp_ub=$(gg_species_name_from_path "$(basename "${protein_path}")")
-      translated_file="${sp_ub}.fa"
-      echo "Copying protein FASTA: $(basename "${protein_path}")"
+      translated_file="${sp_ub}.fa.gz"
+      echo "Copying protein FASTA: $(basename "${protein_path}") -> ${translated_file}"
       seqkit seq --threads "${GG_TASK_CPUS}" "${protein_path}" --out-file "${dir_sp_protein}/${translated_file}"
     done
     if [[ -s "${file_species_genetic_code}" ]]; then
@@ -997,16 +1027,16 @@ prepare_species_protein_tmp() {
       exit 1
     fi
     sp_ub=$(gg_species_name_from_path "${cds}")
-    translated_file="${sp_ub}.fa"
+    translated_file="${sp_ub}.fa.gz"
     species_code=$(lookup_species_genetic_code "${sp_ub}" "${file_species_genetic_code_resolved}")
-    echo "Translation started: ${cds} (genetic_code=${species_code})"
+    echo "Translation started: ${cds} (genetic_code=${species_code}) -> ${translated_file}"
 
     seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${cds_path}" |
       gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" |
       seqkit translate --transl-table "${species_code}" --threads "${GG_TASK_CPUS}" |
       sed -e "s/^>${sp_ub}[-_\.]/>/" -e "s/^>/>${sp_ub}_/" |
-      sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
-        > "${dir_sp_protein}/${translated_file}"
+      sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' |
+      seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${dir_sp_protein}/${translated_file}"
   done
   species_protein_source="species_cds"
   species_protein_ready=1
@@ -2416,8 +2446,10 @@ cd "${dir_tmp}"
 
 task="OrthoFinder"
 if [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; then
+  dir_sp_protein_orthofinder="${dir_sp_protein}_orthofinder"
   gg_step_start "${task}"
   prepare_species_protein_tmp
+  prepare_species_protein_orthofinder_dir "${dir_sp_protein}" "${dir_sp_protein_orthofinder}"
   ensure_dir "${dir_orthofinder}"
   ensure_dir "${dir_orthofinder_hog2og}"
 
@@ -2440,10 +2472,10 @@ if [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; the
   echo "OrthoFinder will use ${orthofinder_algorithm_threads} threads for the OrthoFinder algorithm."
 
   protein_files=()
-  mapfile -t protein_files < <(find "${dir_sp_protein}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
+  mapfile -t protein_files < <(find "${dir_sp_protein_orthofinder}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
   num_sp=${#protein_files[@]}
   if [[ ${num_sp} -eq 0 ]]; then
-    echo "No protein FASTA files were found in: ${dir_sp_protein}. Exiting."
+    echo "No protein FASTA files were found in: ${dir_sp_protein_orthofinder}. Exiting."
     exit 1
   fi
   if [[ ${#param_species_tree[@]} -gt 0 ]]; then
@@ -2488,7 +2520,7 @@ PY
     fi
     mkdir -p "${dir_sp_protein}_core"
     for sp_cds_core in "${species_cds_core[@]}"; do
-      cp_out "${dir_sp_protein}"/"${sp_cds_core}" "${dir_sp_protein}"_core
+      cp_out "${dir_sp_protein_orthofinder}"/"${sp_cds_core}" "${dir_sp_protein}"_core
     done
 
     species_cds_additional=()
@@ -2499,7 +2531,7 @@ PY
     fi
     mkdir -p "${dir_sp_protein}_additional"
     for sp_cds_additional in "${species_cds_additional[@]}"; do
-      cp_out "${dir_sp_protein}"/"${sp_cds_additional}" "${dir_sp_protein}"_additional
+      cp_out "${dir_sp_protein_orthofinder}"/"${sp_cds_additional}" "${dir_sp_protein}"_additional
     done
 
     if [[ -e "${dir_orthofinder}"/core ]]; then
@@ -2586,7 +2618,7 @@ PY
       -a "${orthofinder_algorithm_threads}" \
       -M "msa" \
       -S "diamond" \
-      -f "${dir_sp_protein}" \
+      -f "${dir_sp_protein_orthofinder}" \
       -n "main" \
       -o "${dir_orthofinder}/main" \
       "${param_species_tree[@]}"; then

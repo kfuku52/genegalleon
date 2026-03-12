@@ -1698,6 +1698,11 @@ def test_genome_evolution_supports_protein_input_mode_and_species_code_overrides
     assert 'cds mode always generates temporary species_protein FASTA files from species_cds.' in core
     assert 'run_cds_translation must be 1 when species proteins need to be generated from species_cds.' in core
     assert 'Translation started: ${cds} (genetic_code=${species_code})' in core
+    assert 'translated_file="${sp_ub}.fa.gz"' in core
+    assert 'Copying protein FASTA: $(basename "${protein_path}") -> ${translated_file}' in core
+    assert 'stage_species_protein_fasta() {' in core
+    assert 'prepare_species_protein_orthofinder_dir() {' in core
+    assert 'prepare_species_protein_orthofinder_dir "${dir_sp_protein}" "${dir_sp_protein_orthofinder}"' in core
     assert 'refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}"' in core
     assert 'mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_protein_input}")' in core
     protein_candidates_index = core.index('if [[ ${#annotation_species_candidates[@]} -eq 0 && "${input_sequence_mode}" == "protein" ]]; then')
@@ -2988,7 +2993,7 @@ def test_genome_annotation_core_multispecies_summary_requires_real_summary_input
 def test_genome_evolution_core_excludes_hidden_files_when_listing_species_proteins():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    assert 'find "${dir_sp_protein}" -maxdepth 1 -type f ! -name \'.*\'' in text
+    assert 'find "${dir_sp_protein_orthofinder}" -maxdepth 1 -type f ! -name \'.*\'' in text
 
 
 def test_input_generation_core_excludes_hidden_files_when_listing_species_inputs():

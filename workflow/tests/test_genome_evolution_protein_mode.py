@@ -592,6 +592,7 @@ def test_genome_evolution_protein_mode_prefers_species_protein_inputs(tmp_path: 
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "species_genetic_code.tsv is ignored because species_protein inputs are provided" in completed.stdout
+    assert "Tetrahymena_thermophila.fa.gz" in completed.stdout
     proteins = (tmp_path / "capture" / "proteins.fasta").read_text(encoding="utf-8")
     assert ">Tetrahymena_thermophila_gene1" in proteins
     assert "MPEP" in proteins
@@ -623,6 +624,8 @@ def test_genome_evolution_protein_mode_translates_species_cds_with_species_speci
     completed = _run_core(tmp_path)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "Tetrahymena_thermophila.fa.gz" in completed.stdout
+    assert "Arabidopsis_thaliana.fa.gz" in completed.stdout
     proteins = (tmp_path / "capture" / "proteins.fasta").read_text(encoding="utf-8")
     assert ">Tetrahymena_thermophila_gene1" in proteins
     assert ">Arabidopsis_thaliana_gene1" in proteins

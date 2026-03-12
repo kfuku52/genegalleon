@@ -31,8 +31,6 @@ kallisto
 mafft
 meme
 mmseqs2
-omamer
-omark
 orthofinder
 astral-tree
 paml
@@ -47,6 +45,8 @@ trimal
 # - Trinity is not reliably solvable in the strict channel profile.
 # - The available arm64 "jellyfish" package is Python-only and does not
 #   provide the required jellyfish CLI binary.
+# - OMArk/OMAmer are not currently solvable because bioconda omamer depends
+#   on pysais, which is unavailable in this arm64 solver profile.
 # BUSCO itself is installed from upstream git tag 6.0.0 via pip
 # to avoid conda sepp/gsl solver conflicts.
 hmmer
