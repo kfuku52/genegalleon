@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fetch_git_repo_script="${script_dir}/fetch_git_repo.sh"
+
 env_name=${1:-base}
 if [[ "${env_name}" == "base" ]]; then
   env_bin="/opt/conda/bin"
@@ -11,6 +14,9 @@ jobs=${GG_BUILD_JOBS:-$(nproc)}
 if [[ "${jobs}" -lt 1 ]]; then
   jobs=1
 fi
+paml_repo_url=${PAML_REPO_URL:-https://github.com/iqtree/paml.git}
+paml_repo_ref=${PAML_REPO_REF:-master}
+paml_repo_sha=${PAML_REPO_SHA:-}
 
 log() {
   echo "[ensure_iq2mc_toolchain] $*"
@@ -78,31 +84,15 @@ ensure_iqtree_commands() {
   return 0
 }
 
-clone_branch() {
-  local repo_url=$1
-  local dest_dir=$2
-  shift 2
-  local branch
-  for branch in "$@"; do
-    if git clone --depth 1 --recursive --branch "${branch}" "${repo_url}" "${dest_dir}"; then
-      log "Cloned ${repo_url} branch '${branch}'"
-      return 0
-    fi
-    rm -rf -- "${dest_dir}"
-  done
-  return 1
-}
-
 build_mcmctree_iq2mc() {
   local tmpdir paml_src mcmctree_bin
+  local source_ref
   tmpdir=$(mktemp -d)
   paml_src="${tmpdir}/paml"
+  source_ref="${paml_repo_sha:-${paml_repo_ref}}"
 
-  if ! clone_branch \
-    "https://github.com/iqtree/paml.git" \
-    "${paml_src}" \
-    "master"; then
-    log "ERROR: Failed to clone IQ2MC-compatible paml source branch."
+  if ! bash "${fetch_git_repo_script}" "${paml_repo_url}" "${source_ref}" "${paml_src}"; then
+    log "ERROR: Failed to fetch IQ2MC-compatible paml source."
     rm -rf -- "${tmpdir}"
     exit 1
   fi

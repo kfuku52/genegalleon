@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+download_url_script="${script_dir}/download_url.sh"
+verify_sha256_script="${script_dir}/verify_sha256.sh"
+fetch_git_repo_script="${script_dir}/fetch_git_repo.sh"
+
 tool_env_name=${GG_TOOL_ENV_NAME:-base}
 r_env_name=${GG_R_ENV_NAME:-base}
+testnh_tarball_sha256=${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}
+cafe5_tarball_sha256=${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}
+kfl1ou_repo_url=${KFL1OU_REPO_URL:-https://github.com/kfuku52/kfl1ou.git}
+kfl1ou_repo_ref=${KFL1OU_REPO_REF:-}
+kfl1ou_repo_sha=${KFL1OU_REPO_SHA:-1bf3028f204a6d58e697f58461c82ecfc7c29802}
 
 env_prefix() {
   local env_name=$1
@@ -23,21 +33,18 @@ download_url_to_file() {
   local url=$1
   local dest=$2
 
-  rm -f "${dest}"
-  if curl -fL --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 600 \
-    "${url}" -o "${dest}"; then
-    return 0
-  fi
+  bash "${download_url_script}" "${url}" "${dest}"
+}
 
-  if command -v wget >/dev/null 2>&1; then
-    rm -f "${dest}"
-    if wget --tries=8 --waitretry=5 -O "${dest}" "${url}"; then
-      return 0
-    fi
-  fi
+download_checked_url_to_file() {
+  local url=$1
+  local dest=$2
+  local expected_sha256=$3
 
-  rm -f "${dest}"
-  return 1
+  download_url_to_file "${url}" "${dest}"
+  if [[ -n "${expected_sha256}" ]]; then
+    bash "${verify_sha256_script}" "${dest}" "${expected_sha256}"
+  fi
 }
 
 download_github_tag_tarball() {
@@ -45,13 +52,14 @@ download_github_tag_tarball() {
   local repo=$2
   local tag=$3
   local dest=$4
+  local expected_sha256=${5:-}
   local url="https://codeload.github.com/${owner}/${repo}/tar.gz/refs/tags/${tag}"
   local archive_path
 
   mkdir -p "${dest}"
   archive_path=$(mktemp)
 
-  if ! download_url_to_file "${url}" "${archive_path}"; then
+  if ! download_checked_url_to_file "${url}" "${archive_path}" "${expected_sha256}"; then
     rm -f "${archive_path}"
     return 1
   fi
@@ -149,7 +157,7 @@ install_mapnh() {
   local workdir
   workdir=$(mktemp -d)
   log "Building mapnh from BioPP/testnh v2.3.2 in ${workdir}"
-  download_github_tag_tarball "BioPP" "testnh" "v2.3.2" "${workdir}/testnh"
+  download_github_tag_tarball "BioPP" "testnh" "v2.3.2" "${workdir}/testnh" "${testnh_tarball_sha256}"
 
   local cmake_file="${workdir}/testnh/CMakeLists.txt"
   sed -i -E 's/find_package[[:space:]]*\([[:space:]]*bpp-phyl[[:space:]]+[0-9.]+[[:space:]]+REQUIRED[[:space:]]*\)/find_package(bpp-phyl REQUIRED)/' "${cmake_file}"
@@ -285,9 +293,10 @@ install_cafe5() {
   archive_path="${workdir}/CAFE5-5.1.0.tar.gz"
   log "Building CAFE5 v5.1 in ${workdir}"
 
-  if ! download_url_to_file \
+  if ! download_checked_url_to_file \
     "https://github.com/hahnlab/CAFE5/releases/download/v5.1/CAFE5-5.1.0.tar.gz" \
-    "${archive_path}"; then
+    "${archive_path}" \
+    "${cafe5_tarball_sha256}"; then
     log "ERROR: Failed to download the CAFE5 v5.1 release archive."
     exit 1
   fi
@@ -351,10 +360,22 @@ install_r_cran_packages() {
 
 install_r_kfl1ou() {
   local jobs
+  local source_ref
+  local source_dir
   jobs=$(build_jobs)
+  source_ref="${kfl1ou_repo_sha:-${kfl1ou_repo_ref}}"
+  source_dir=$(mktemp -d "/tmp/kfl1ou.XXXXXX")
   log "Ensuring GitHub package in '${r_env_name}' with ${jobs} job(s): kfl1ou"
+  if ! bash "${fetch_git_repo_script}" "${kfl1ou_repo_url}" "${source_ref}" "${source_dir}"; then
+    rm -rf -- "${source_dir}"
+    log "ERROR: Failed to fetch kfl1ou source."
+    exit 1
+  fi
   MAKEFLAGS="-j${jobs}" CMAKE_BUILD_PARALLEL_LEVEL="${jobs}" \
-    micromamba run -n "${r_env_name}" Rscript -e "options(repos=c(CRAN='https://cloud.r-project.org')); options(Ncpus=${jobs}L); dep_levels <- c('Depends','Imports','LinkingTo'); if (!requireNamespace('kfl1ou', quietly=TRUE)) { if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes', dependencies=dep_levels); remotes::install_github('kfuku52/kfl1ou', dependencies=NA, upgrade='never'); }; if (!requireNamespace('kfl1ou', quietly=TRUE)) stop('Missing package in env ${r_env_name}: kfl1ou')"
+    micromamba run -n "${r_env_name}" Rscript -e "options(repos=c(CRAN='https://cloud.r-project.org')); options(Ncpus=${jobs}L); dep_levels <- c('Depends','Imports','LinkingTo'); required <- c('remotes'); missing <- required[!vapply(required, requireNamespace, quietly=TRUE, FUN.VALUE=logical(1))]; if (length(missing) > 0) install.packages(missing, dependencies=dep_levels)"
+  MAKEFLAGS="-j${jobs}" CMAKE_BUILD_PARALLEL_LEVEL="${jobs}" \
+    micromamba run -n "${r_env_name}" Rscript -e "options(repos=c(CRAN='https://cloud.r-project.org')); options(Ncpus=${jobs}L); remotes::install_local('${source_dir}', dependencies=NA, upgrade='never', force=TRUE)"
+  rm -rf -- "${source_dir}"
   micromamba run -n "${r_env_name}" Rscript -e "if (!requireNamespace('kfl1ou', quietly=TRUE)) stop('Missing package in env ${r_env_name}: kfl1ou')"
 }
 

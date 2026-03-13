@@ -108,6 +108,21 @@ form is preferred for new configs.
 When `grampa_h1` or `target_branch_go` are left empty, GeneGalleon skips only the
 GRAMPA-related steps or the GO-enrichment step, respectively.
 
+For duplicate-aware BUSCO genome-evolution steps, the canonical config names are
+the `run_busco_dupaware_*` flags exposed in
+`workflow/gg_genome_evolution_entrypoint.sh`, for example:
+
+- `run_busco_dupaware_getfasta`
+- `run_busco_dupaware_iqtree_dna`
+- `run_busco_dupaware_notung_root_pep`
+- `run_busco_dupaware_grampa_dna`
+
+Legacy aliases such as `run_busco_getfasta` and `run_busco_grampa_dna` are still
+accepted for backward compatibility, but new configs should use the
+`run_busco_dupaware_*` names. All duplicate-aware BUSCO substeps default to `0`.
+`run_orthogroup_grampa` defaults to `1`, but it is still auto-disabled unless
+rooted orthogroup trees are present and `grampa_h1` is non-empty.
+
 Typical examples:
 
 - one auto-resolved or explicit BUSCO lineage reused by transcriptome, annotation, and genome-evolution runs,

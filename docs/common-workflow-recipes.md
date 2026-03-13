@@ -80,6 +80,10 @@ It also supports `input_sequence_mode=protein` when you want the species-tree an
 In protein mode, place per-species protein FASTA files under `workspace/input/species_protein`, or let GeneGalleon translate `workspace/input/species_cds` with the optional per-species override table `workspace/input/species_genetic_code/species_genetic_code.tsv`.
 When `input_sequence_mode=cds`, GeneGalleon ignores `workspace/input/species_protein` and always builds temporary proteins from `workspace/input/species_cds`.
 Protein mode automatically disables DNA-tree, IQ2MC/MCMCtree, and BUSCO-based genome-evolution steps that still require CDS inputs.
+If you also want OMArk quality assessment, set `run_species_omark=1`; OMArk
+uses the same effective protein set as the unified workflow, namely
+`workspace/input/species_protein` in protein mode when present, otherwise
+temporary proteins translated from `workspace/input/species_cds`.
 
 ```bash
 cd workflow

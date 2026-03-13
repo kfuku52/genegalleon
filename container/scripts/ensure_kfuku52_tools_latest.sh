@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fetch_git_repo_script="${script_dir}/fetch_git_repo.sh"
+
 env_name=${1:-base}
 repo_owner=${KFU52_REPO_OWNER:-kfuku52}
 tools_csv=${KFU52_TOOLS:-amalgkit,cdskit,csubst,nwkit}
@@ -30,17 +33,82 @@ except Exception:
 PY
 }
 
+resolve_tool_repo_sha() {
+  local tool="$1"
+  case "${tool}" in
+    amalgkit)
+      echo "${KFU52_AMALGKIT_REPO_SHA:-}"
+      ;;
+    cdskit)
+      echo "${KFU52_CDSKIT_REPO_SHA:-}"
+      ;;
+    csubst)
+      echo "${KFU52_CSUBST_REPO_SHA:-}"
+      ;;
+    nwkit)
+      echo "${KFU52_NWKIT_REPO_SHA:-}"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+resolve_tool_repo_ref() {
+  local tool="$1"
+
+  local pinned_sha
+  pinned_sha=$(resolve_tool_repo_sha "${tool}")
+  if [[ -n "${pinned_sha}" ]]; then
+    log "Using pinned ${tool} commit from environment: ${pinned_sha}" >&2
+    echo "${pinned_sha}"
+    return 0
+  fi
+
+  if [[ "${tool}" != "amalgkit" ]]; then
+    echo "${repo_ref}"
+    return 0
+  fi
+
+  if [[ -n "${amalgkit_repo_ref_override}" ]]; then
+    log "Using amalgkit ref override from KFU52_AMALGKIT_REPO_REF: ${amalgkit_repo_ref_override}" >&2
+    echo "${amalgkit_repo_ref_override}"
+    return 0
+  fi
+
+  if [[ "${amalgkit_auto_select_ref}" != "1" ]]; then
+    log "amalgkit auto-ref selection disabled; using KFU52_REPO_REF=${repo_ref}" >&2
+    echo "${repo_ref}"
+    return 0
+  fi
+
+  local selected_ref
+  selected_ref=$(resolve_amalgkit_ref_by_latest_commit)
+  if [[ -n "${selected_ref}" ]]; then
+    log "Selected amalgkit branch by latest commit: ${selected_ref}" >&2
+    echo "${selected_ref}"
+    return 0
+  fi
+
+  log "Falling back to KFU52_REPO_REF for amalgkit: ${repo_ref}" >&2
+  echo "${repo_ref}"
+}
+
 install_latest_from_github() {
   local tool="$1"
   local tool_ref="$2"
-  local spec
-  spec="git+https://github.com/${repo_owner}/${tool}.git@${tool_ref}"
-  log "Installing ${tool} from GitHub ${tool_ref}: ${spec}"
+  local repo_url="https://github.com/${repo_owner}/${tool}.git"
+  local source_dir
+  source_dir=$(mktemp -d "/tmp/${tool}.XXXXXX")
+  log "Installing ${tool} from GitHub ${tool_ref}: ${repo_url}"
 
   local attempt
   for (( attempt=1; attempt<=max_attempts; attempt++ )); do
-    if micromamba run -n "${env_name}" \
-      pip install --no-cache-dir --upgrade --force-reinstall --no-deps --no-build-isolation "${spec}"; then
+    rm -rf -- "${source_dir}"
+    if bash "${fetch_git_repo_script}" "${repo_url}" "${tool_ref}" "${source_dir}" \
+      && micromamba run -n "${env_name}" \
+        pip install --no-cache-dir --upgrade --force-reinstall --no-deps --no-build-isolation "${source_dir}"; then
+      rm -rf -- "${source_dir}"
       return 0
     fi
     if [[ "${attempt}" -lt "${max_attempts}" ]]; then
@@ -49,6 +117,7 @@ install_latest_from_github() {
     fi
   done
 
+  rm -rf -- "${source_dir}"
   return 1
 }
 
@@ -105,38 +174,6 @@ resolve_amalgkit_ref_by_latest_commit() {
   done
 
   echo "${best_ref}"
-}
-
-resolve_tool_repo_ref() {
-  local tool="$1"
-
-  if [[ "${tool}" != "amalgkit" ]]; then
-    echo "${repo_ref}"
-    return 0
-  fi
-
-  if [[ -n "${amalgkit_repo_ref_override}" ]]; then
-    log "Using amalgkit ref override from KFU52_AMALGKIT_REPO_REF: ${amalgkit_repo_ref_override}" >&2
-    echo "${amalgkit_repo_ref_override}"
-    return 0
-  fi
-
-  if [[ "${amalgkit_auto_select_ref}" != "1" ]]; then
-    log "amalgkit auto-ref selection disabled; using KFU52_REPO_REF=${repo_ref}" >&2
-    echo "${repo_ref}"
-    return 0
-  fi
-
-  local selected_ref
-  selected_ref=$(resolve_amalgkit_ref_by_latest_commit)
-  if [[ -n "${selected_ref}" ]]; then
-    log "Selected amalgkit branch by latest commit: ${selected_ref}" >&2
-    echo "${selected_ref}"
-    return 0
-  fi
-
-  log "Falling back to KFU52_REPO_REF for amalgkit: ${repo_ref}" >&2
-  echo "${repo_ref}"
 }
 
 ensure_tool_available() {

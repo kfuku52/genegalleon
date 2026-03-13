@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-download_page_url="${1:-https://amberjack.compbio.cs.cmu.edu/Notung/download29.html}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+download_source_url="${1:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}"
 
-if [[ -z "${download_page_url}" ]]; then
-  echo "download page URL is empty" >&2
+if [[ -z "${download_source_url}" ]]; then
+  echo "Notung download source URL is empty" >&2
   exit 1
 fi
 
-base_url="${download_page_url%/*}/"
+if [[ "${download_source_url}" == *.zip || "${download_source_url}" == *.zip\?* ]]; then
+  printf '%s\n' "${download_source_url}"
+  exit 0
+fi
 
-html="$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "${download_page_url}")"
+base_url="${download_source_url%/*}/"
+
+html="$(bash "${script_dir}/download_url_with_fallback.sh" "${download_source_url}")"
 
 latest_zip="$(
   printf '%s\n' "${html}" \
@@ -24,7 +30,7 @@ latest_zip="$(
 )"
 
 if [[ -z "${latest_zip}" ]]; then
-  echo "failed to resolve stable Notung 2.9 zip from ${download_page_url}" >&2
+  echo "failed to resolve stable Notung 2.9 zip from ${download_source_url}" >&2
   exit 1
 fi
 

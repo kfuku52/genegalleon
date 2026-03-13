@@ -82,6 +82,15 @@ bash ./gg_container_build_entrypoint.sh
 IMAGE=ghcr.io/<your-org>/genegalleon TAG=dev MODE=push ./container/buildx.sh
 ```
 
+By default, the container build now hard-pins upstream source installs to validated
+commit SHAs (`amalgkit`, `cdskit`, `csubst`, `nwkit`, `BUSCO`, `paml`,
+`kfl1ou`, `kftools`, `rkftools`, `RADTE`) and verifies SHA-256 checksums for the
+downloaded `BioPP/testnh` and `CAFE5` tarballs.
+
+If you need to follow a floating ref again, clear the matching `*_REPO_SHA` and
+set the corresponding `*_REPO_REF`. When overriding a repo URL to a fork, also
+update or clear the matching `*_REPO_SHA`.
+
 Single-platform local load example:
 
 ```bash
@@ -146,5 +155,11 @@ Runtime profile highlights in the current container scaffold:
 - single conda runtime env: `base` (`biotools`/`r` split envs are obsolete),
 - `iqtree` is conda-pinned to `3.*`,
 - `pigz` is included for fast compression/decompression,
-- `Notung.jar` is installed during image build,
-- BUSCO is installed from source (`v6.0.0`) during image build.
+- `Notung.jar` is installed during image build from the pinned official Notung 2.9 ZIP by default,
+- `NOTUNG_DOWNLOAD_PAGE` can still point at the legacy Notung HTML download
+  page when you want build-time ZIP auto-resolution, and
+  `NOTUNG_DOWNLOAD_HOST_IP` can be used to override the fallback IP for the
+  official `amberjack.compbio.cs.cmu.edu` host,
+- `BUSCO`, `paml`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` are installed from pinned upstream source snapshots during image build,
+- GitHub/GitLab source fetches prefer tarball/archive downloads and fall back to `git` retry logic when archive fetches fail,
+- downloaded `BioPP/testnh` and `CAFE5` tarballs are SHA-256 verified before extraction.

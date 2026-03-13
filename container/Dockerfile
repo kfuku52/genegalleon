@@ -4,17 +4,37 @@ FROM mambaorg/micromamba:noble
 
 ARG TARGETARCH
 ARG TARGETPLATFORM
-ARG NOTUNG_DOWNLOAD_PAGE="https://amberjack.compbio.cs.cmu.edu/Notung/download29.html"
+ARG NOTUNG_DOWNLOAD_PAGE="https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip"
+ARG NOTUNG_DOWNLOAD_HOST_IP="128.2.205.60"
 ARG KFU52_REPO_REF="master"
 ARG KFU52_AMALGKIT_AUTO_SELECT_REF="1"
 ARG KFU52_AMALGKIT_BRANCH_CANDIDATES="master,kfdevel,devel"
 ARG KFU52_AMALGKIT_REPO_REF=""
+ARG KFU52_AMALGKIT_REPO_SHA="1ce96e3148cace8f96a67fdb46df99400a9e3f19"
+ARG KFU52_CDSKIT_REPO_SHA="9cd69c01c9736dec2a1eea63e63d994fbc4c812c"
+ARG KFU52_CSUBST_REPO_SHA="613771ce6d19d583a7adee0bcc63abed312cdad4"
+ARG KFU52_NWKIT_REPO_SHA="106a8cfd97cad993772aa4c28e7d9a87d667ff86"
+ARG BUSCO_REPO_URL="https://gitlab.com/ezlab/busco.git"
+ARG BUSCO_MIRROR_REPO_URL=""
+ARG BUSCO_REPO_REF="6.0.0"
+ARG BUSCO_REPO_SHA="6278721a1916f6da310e03ec9674099028c927a4"
+ARG PAML_REPO_URL="https://github.com/iqtree/paml.git"
+ARG PAML_REPO_REF="master"
+ARG PAML_REPO_SHA="8daeead6b55523f375d9ac56dcfac38373ef8a2e"
+ARG KFL1OU_REPO_URL="https://github.com/kfuku52/kfl1ou.git"
+ARG KFL1OU_REPO_REF=""
+ARG KFL1OU_REPO_SHA="1bf3028f204a6d58e697f58461c82ecfc7c29802"
 ARG KFTOOLS_REPO_URL="https://github.com/kfuku52/kftools.git"
 ARG RKFTOOLS_REPO_URL="https://github.com/kfuku52/rkftools.git"
 ARG RADTE_REPO_URL="https://github.com/kfuku52/RADTE.git"
 ARG KFTOOLS_REPO_REF=""
 ARG RKFTOOLS_REPO_REF=""
 ARG RADTE_REPO_REF=""
+ARG KFTOOLS_REPO_SHA="4918fed6146b9cef1df66b5ce33de70b74454547"
+ARG RKFTOOLS_REPO_SHA="cf16e570300ec32909d8cd458119712d40bcf06f"
+ARG RADTE_REPO_SHA="873c4acb22d3decedf417bb95e3d292abccbb386"
+ARG TESTNH_TARBALL_SHA256="598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2"
+ARG CAFE5_TARBALL_SHA256="71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8"
 
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -65,6 +85,10 @@ COPY container/scripts/ensure_generax_stable.sh /opt/pg/scripts/ensure_generax_s
 COPY container/scripts/ensure_kfuku52_tools_latest.sh /opt/pg/scripts/ensure_kfuku52_tools_latest.sh
 COPY container/scripts/ensure_iq2mc_toolchain.sh /opt/pg/scripts/ensure_iq2mc_toolchain.sh
 COPY container/scripts/resolve_notung_latest.sh /opt/pg/scripts/resolve_notung_latest.sh
+COPY container/scripts/download_url.sh /opt/pg/scripts/download_url.sh
+COPY container/scripts/download_url_with_fallback.sh /opt/pg/scripts/download_url_with_fallback.sh
+COPY container/scripts/verify_sha256.sh /opt/pg/scripts/verify_sha256.sh
+COPY container/scripts/fetch_git_repo.sh /opt/pg/scripts/fetch_git_repo.sh
 COPY container/scripts/install_helvetica_compat_font.sh /opt/pg/scripts/install_helvetica_compat_font.sh
 COPY container/scripts/install_nonconda_fallbacks.sh /opt/pg/scripts/install_nonconda_fallbacks.sh
 COPY container/scripts/validate_runtime.sh /opt/pg/scripts/validate_runtime.sh
@@ -87,9 +111,17 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && micromamba install -y --retry-clean-cache --repodata-ttl 3600 -n base -c conda-forge -c bioconda pymol-open-source \
  && micromamba run -n base pip install --no-cache-dir ete4 \
  && micromamba run -n base python -c "import ete4" \
- && /opt/pg/scripts/ensure_iq2mc_toolchain.sh base \
+ && PAML_REPO_URL="${PAML_REPO_URL}" \
+    PAML_REPO_REF="${PAML_REPO_REF}" \
+    PAML_REPO_SHA="${PAML_REPO_SHA}" \
+    /opt/pg/scripts/ensure_iq2mc_toolchain.sh base \
  && /opt/pg/scripts/install_env.sh base "${reconciled_required}" /opt/pg/env/base.r.optional.txt r-base \
- && /opt/pg/scripts/install_nonconda_fallbacks.sh \
+ && TESTNH_TARBALL_SHA256="${TESTNH_TARBALL_SHA256}" \
+    CAFE5_TARBALL_SHA256="${CAFE5_TARBALL_SHA256}" \
+    KFL1OU_REPO_URL="${KFL1OU_REPO_URL}" \
+    KFL1OU_REPO_REF="${KFL1OU_REPO_REF}" \
+    KFL1OU_REPO_SHA="${KFL1OU_REPO_SHA}" \
+    /opt/pg/scripts/install_nonconda_fallbacks.sh \
  && rm -f "${reconciled_required}"
 
 # Keep fast-changing GitHub-derived installs separate to reduce rebuild scope.
@@ -102,42 +134,34 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && if [[ -f "/opt/pg/spec/required_commands.${TARGETARCH}.tsv" ]]; then runtime_required="/opt/pg/spec/required_commands.${TARGETARCH}.tsv"; fi \
  && kftools_repo_ref="${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
  && rkftools_repo_ref="${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
+ && busco_source_ref="${BUSCO_REPO_SHA:-${BUSCO_REPO_REF}}" \
+ && kftools_source_ref="${KFTOOLS_REPO_SHA:-${kftools_repo_ref}}" \
+ && rkftools_source_ref="${RKFTOOLS_REPO_SHA:-${rkftools_repo_ref}}" \
+ && radte_source_ref="${RADTE_REPO_SHA:-${RADTE_REPO_REF}}" \
  && KFU52_REPO_REF="${KFU52_REPO_REF}" \
     KFU52_AMALGKIT_AUTO_SELECT_REF="${KFU52_AMALGKIT_AUTO_SELECT_REF}" \
     KFU52_AMALGKIT_BRANCH_CANDIDATES="${KFU52_AMALGKIT_BRANCH_CANDIDATES}" \
     KFU52_AMALGKIT_REPO_REF="${KFU52_AMALGKIT_REPO_REF}" \
+    KFU52_AMALGKIT_REPO_SHA="${KFU52_AMALGKIT_REPO_SHA}" \
+    KFU52_CDSKIT_REPO_SHA="${KFU52_CDSKIT_REPO_SHA}" \
+    KFU52_CSUBST_REPO_SHA="${KFU52_CSUBST_REPO_SHA}" \
+    KFU52_NWKIT_REPO_SHA="${KFU52_NWKIT_REPO_SHA}" \
     /opt/pg/scripts/ensure_kfuku52_tools_latest.sh base \
- && busco_installed=0 \
- && for attempt in 1 2 3 4 5; do \
-      if micromamba run -n base pip install "git+https://gitlab.com/ezlab/busco.git@6.0.0"; then \
-        busco_installed=1; \
-        break; \
-      fi; \
-      echo "BUSCO install attempt ${attempt} from GitLab failed; retrying in 15s..."; \
-      sleep 15; \
-    done \
- && if [[ "${busco_installed}" -ne 1 ]]; then \
-      echo "BUSCO GitLab install failed after retries; trying GitHub mirror"; \
-      if micromamba run -n base pip install "git+https://github.com/ezlab/busco.git@6.0.0"; then \
-        busco_installed=1; \
-      fi; \
-    fi \
- && if [[ "${busco_installed}" -ne 1 ]]; then \
-      echo "BUSCO installation failed from both GitLab and GitHub"; \
-      exit 1; \
-    fi \
- && micromamba run -n base pip install --upgrade --force-reinstall --no-deps --no-build-isolation "git+${KFTOOLS_REPO_URL}@${kftools_repo_ref}" \
+ && rm -rf /tmp/busco \
+ && /opt/pg/scripts/fetch_git_repo.sh "${BUSCO_REPO_URL}" "${busco_source_ref}" /tmp/busco "${BUSCO_MIRROR_REPO_URL}" \
+ && micromamba run -n base pip install --no-cache-dir --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/busco \
+ && rm -rf /tmp/busco \
+ && rm -rf /tmp/kftools \
+ && /opt/pg/scripts/fetch_git_repo.sh "${KFTOOLS_REPO_URL}" "${kftools_source_ref}" /tmp/kftools \
+ && micromamba run -n base pip install --no-cache-dir --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/kftools \
+ && rm -rf /tmp/kftools \
  && /opt/pg/scripts/install_helvetica_compat_font.sh base \
  && rm -rf /tmp/rkftools \
- && git clone --depth 1 --branch "${rkftools_repo_ref}" "${RKFTOOLS_REPO_URL}" /tmp/rkftools \
+ && /opt/pg/scripts/fetch_git_repo.sh "${RKFTOOLS_REPO_URL}" "${rkftools_source_ref}" /tmp/rkftools \
  && micromamba run -n base R CMD INSTALL /tmp/rkftools \
  && rm -rf /tmp/rkftools \
  && rm -rf /tmp/radte \
- && if [[ -n "${RADTE_REPO_REF}" ]]; then \
-      git clone --depth 1 --branch "${RADTE_REPO_REF}" "${RADTE_REPO_URL}" /tmp/radte; \
-    else \
-      git clone --depth 1 "${RADTE_REPO_URL}" /tmp/radte; \
-    fi \
+ && /opt/pg/scripts/fetch_git_repo.sh "${RADTE_REPO_URL}" "${radte_source_ref}" /tmp/radte \
  && if [[ ! -s /tmp/radte/radte.r ]]; then \
       echo "RADTE script was not found in ${RADTE_REPO_URL}"; \
       exit 1; \
@@ -166,7 +190,7 @@ RUN mkdir -p /home /usr/local/db/Pfam_LE /usr/local/db/jaspar /opt/pg/logs /opt/
 RUN notung_url="$(/opt/pg/scripts/resolve_notung_latest.sh "${NOTUNG_DOWNLOAD_PAGE}")" \
  && tmp_zip="$(mktemp /tmp/notung.XXXXXX.zip)" \
  && tmp_dir="$(mktemp -d /tmp/notung.XXXXXX)" \
- && curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "${notung_url}" -o "${tmp_zip}" \
+ && NOTUNG_DOWNLOAD_HOST_IP="${NOTUNG_DOWNLOAD_HOST_IP}" /opt/pg/scripts/download_url_with_fallback.sh "${notung_url}" "${tmp_zip}" \
  && unzip -q "${tmp_zip}" -d "${tmp_dir}" \
  && notung_jar="$(find "${tmp_dir}" -type f -name 'Notung-2.9*.jar' | sort -V | tail -n 1)" \
  && if [[ -z "${notung_jar}" ]]; then echo "Notung jar was not found in ${notung_url}"; exit 1; fi \

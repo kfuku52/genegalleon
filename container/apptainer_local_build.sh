@@ -14,17 +14,37 @@ OUT=${OUT:-${repo_root}/genegalleon.sif}
 NATIVE_BUILD_FAKEROOT=${NATIVE_BUILD_FAKEROOT:-auto} # auto | always | never
 NATIVE_BUILD_KEEP_WORKDIR=${NATIVE_BUILD_KEEP_WORKDIR:-0} # 0 | 1
 
-NOTUNG_DOWNLOAD_PAGE=${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/download29.html}
+NOTUNG_DOWNLOAD_PAGE=${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}
+NOTUNG_DOWNLOAD_HOST_IP=${NOTUNG_DOWNLOAD_HOST_IP:-128.2.205.60}
 KFU52_REPO_REF=${KFU52_REPO_REF:-master}
 KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-1}
 KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
 KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF:-}
+KFU52_AMALGKIT_REPO_SHA=${KFU52_AMALGKIT_REPO_SHA:-1ce96e3148cace8f96a67fdb46df99400a9e3f19}
+KFU52_CDSKIT_REPO_SHA=${KFU52_CDSKIT_REPO_SHA:-9cd69c01c9736dec2a1eea63e63d994fbc4c812c}
+KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-613771ce6d19d583a7adee0bcc63abed312cdad4}
+KFU52_NWKIT_REPO_SHA=${KFU52_NWKIT_REPO_SHA:-106a8cfd97cad993772aa4c28e7d9a87d667ff86}
+BUSCO_REPO_URL=${BUSCO_REPO_URL:-https://gitlab.com/ezlab/busco.git}
+BUSCO_MIRROR_REPO_URL=${BUSCO_MIRROR_REPO_URL:-}
+BUSCO_REPO_REF=${BUSCO_REPO_REF:-6.0.0}
+BUSCO_REPO_SHA=${BUSCO_REPO_SHA:-6278721a1916f6da310e03ec9674099028c927a4}
+PAML_REPO_URL=${PAML_REPO_URL:-https://github.com/iqtree/paml.git}
+PAML_REPO_REF=${PAML_REPO_REF:-master}
+PAML_REPO_SHA=${PAML_REPO_SHA:-8daeead6b55523f375d9ac56dcfac38373ef8a2e}
+KFL1OU_REPO_URL=${KFL1OU_REPO_URL:-https://github.com/kfuku52/kfl1ou.git}
+KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-}
+KFL1OU_REPO_SHA=${KFL1OU_REPO_SHA:-1bf3028f204a6d58e697f58461c82ecfc7c29802}
 KFTOOLS_REPO_URL=${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}
 RKFTOOLS_REPO_URL=${RKFTOOLS_REPO_URL:-https://github.com/kfuku52/rkftools.git}
 RADTE_REPO_URL=${RADTE_REPO_URL:-https://github.com/kfuku52/RADTE.git}
 KFTOOLS_REPO_REF=${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}
 RKFTOOLS_REPO_REF=${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}
 RADTE_REPO_REF=${RADTE_REPO_REF:-}
+KFTOOLS_REPO_SHA=${KFTOOLS_REPO_SHA:-4918fed6146b9cef1df66b5ce33de70b74454547}
+RKFTOOLS_REPO_SHA=${RKFTOOLS_REPO_SHA:-cf16e570300ec32909d8cd458119712d40bcf06f}
+RADTE_REPO_SHA=${RADTE_REPO_SHA:-873c4acb22d3decedf417bb95e3d292abccbb386}
+TESTNH_TARBALL_SHA256=${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}
+CAFE5_TARBALL_SHA256=${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}
 
 if [[ ! -f "${template_path}" ]]; then
   echo "Definition template not found: ${template_path}"
@@ -70,16 +90,36 @@ render_definition() {
     -e "s|@@LOCAL_IMAGE_REF@@|$(escape_sed_replacement "${IMAGE}")|g" \
     -e "s|@@LOCAL_IMAGE_TAG@@|$(escape_sed_replacement "${TAG}")|g" \
     -e "s|@@NOTUNG_DOWNLOAD_PAGE@@|$(escape_sed_replacement "${NOTUNG_DOWNLOAD_PAGE}")|g" \
+    -e "s|@@NOTUNG_DOWNLOAD_HOST_IP@@|$(escape_sed_replacement "${NOTUNG_DOWNLOAD_HOST_IP}")|g" \
     -e "s|@@KFU52_REPO_REF@@|$(escape_sed_replacement "${KFU52_REPO_REF}")|g" \
     -e "s|@@KFU52_AMALGKIT_AUTO_SELECT_REF@@|$(escape_sed_replacement "${KFU52_AMALGKIT_AUTO_SELECT_REF}")|g" \
     -e "s|@@KFU52_AMALGKIT_BRANCH_CANDIDATES@@|$(escape_sed_replacement "${KFU52_AMALGKIT_BRANCH_CANDIDATES}")|g" \
     -e "s|@@KFU52_AMALGKIT_REPO_REF@@|$(escape_sed_replacement "${KFU52_AMALGKIT_REPO_REF}")|g" \
+    -e "s|@@KFU52_AMALGKIT_REPO_SHA@@|$(escape_sed_replacement "${KFU52_AMALGKIT_REPO_SHA}")|g" \
+    -e "s|@@KFU52_CDSKIT_REPO_SHA@@|$(escape_sed_replacement "${KFU52_CDSKIT_REPO_SHA}")|g" \
+    -e "s|@@KFU52_CSUBST_REPO_SHA@@|$(escape_sed_replacement "${KFU52_CSUBST_REPO_SHA}")|g" \
+    -e "s|@@KFU52_NWKIT_REPO_SHA@@|$(escape_sed_replacement "${KFU52_NWKIT_REPO_SHA}")|g" \
+    -e "s|@@BUSCO_REPO_URL@@|$(escape_sed_replacement "${BUSCO_REPO_URL}")|g" \
+    -e "s|@@BUSCO_MIRROR_REPO_URL@@|$(escape_sed_replacement "${BUSCO_MIRROR_REPO_URL}")|g" \
+    -e "s|@@BUSCO_REPO_REF@@|$(escape_sed_replacement "${BUSCO_REPO_REF}")|g" \
+    -e "s|@@BUSCO_REPO_SHA@@|$(escape_sed_replacement "${BUSCO_REPO_SHA}")|g" \
+    -e "s|@@PAML_REPO_URL@@|$(escape_sed_replacement "${PAML_REPO_URL}")|g" \
+    -e "s|@@PAML_REPO_REF@@|$(escape_sed_replacement "${PAML_REPO_REF}")|g" \
+    -e "s|@@PAML_REPO_SHA@@|$(escape_sed_replacement "${PAML_REPO_SHA}")|g" \
+    -e "s|@@KFL1OU_REPO_URL@@|$(escape_sed_replacement "${KFL1OU_REPO_URL}")|g" \
+    -e "s|@@KFL1OU_REPO_REF@@|$(escape_sed_replacement "${KFL1OU_REPO_REF}")|g" \
+    -e "s|@@KFL1OU_REPO_SHA@@|$(escape_sed_replacement "${KFL1OU_REPO_SHA}")|g" \
     -e "s|@@KFTOOLS_REPO_URL@@|$(escape_sed_replacement "${KFTOOLS_REPO_URL}")|g" \
     -e "s|@@RKFTOOLS_REPO_URL@@|$(escape_sed_replacement "${RKFTOOLS_REPO_URL}")|g" \
     -e "s|@@RADTE_REPO_URL@@|$(escape_sed_replacement "${RADTE_REPO_URL}")|g" \
     -e "s|@@KFTOOLS_REPO_REF@@|$(escape_sed_replacement "${KFTOOLS_REPO_REF}")|g" \
     -e "s|@@RKFTOOLS_REPO_REF@@|$(escape_sed_replacement "${RKFTOOLS_REPO_REF}")|g" \
     -e "s|@@RADTE_REPO_REF@@|$(escape_sed_replacement "${RADTE_REPO_REF}")|g" \
+    -e "s|@@KFTOOLS_REPO_SHA@@|$(escape_sed_replacement "${KFTOOLS_REPO_SHA}")|g" \
+    -e "s|@@RKFTOOLS_REPO_SHA@@|$(escape_sed_replacement "${RKFTOOLS_REPO_SHA}")|g" \
+    -e "s|@@RADTE_REPO_SHA@@|$(escape_sed_replacement "${RADTE_REPO_SHA}")|g" \
+    -e "s|@@TESTNH_TARBALL_SHA256@@|$(escape_sed_replacement "${TESTNH_TARBALL_SHA256}")|g" \
+    -e "s|@@CAFE5_TARBALL_SHA256@@|$(escape_sed_replacement "${CAFE5_TARBALL_SHA256}")|g" \
     "${template_path}" > "${definition_path}"
 }
 

@@ -33,16 +33,36 @@ From: mambaorg/micromamba:noble
 
     target_arch="@@TARGET_ARCH@@"
     notung_download_page="@@NOTUNG_DOWNLOAD_PAGE@@"
+    notung_download_host_ip="@@NOTUNG_DOWNLOAD_HOST_IP@@"
     kfu52_repo_ref="@@KFU52_REPO_REF@@"
     kfu52_amalgkit_auto_select_ref="@@KFU52_AMALGKIT_AUTO_SELECT_REF@@"
     kfu52_amalgkit_branch_candidates="@@KFU52_AMALGKIT_BRANCH_CANDIDATES@@"
     kfu52_amalgkit_repo_ref="@@KFU52_AMALGKIT_REPO_REF@@"
+    kfu52_amalgkit_repo_sha="@@KFU52_AMALGKIT_REPO_SHA@@"
+    kfu52_cdskit_repo_sha="@@KFU52_CDSKIT_REPO_SHA@@"
+    kfu52_csubst_repo_sha="@@KFU52_CSUBST_REPO_SHA@@"
+    kfu52_nwkit_repo_sha="@@KFU52_NWKIT_REPO_SHA@@"
+    busco_repo_url="@@BUSCO_REPO_URL@@"
+    busco_mirror_repo_url="@@BUSCO_MIRROR_REPO_URL@@"
+    busco_repo_ref="@@BUSCO_REPO_REF@@"
+    busco_repo_sha="@@BUSCO_REPO_SHA@@"
+    paml_repo_url="@@PAML_REPO_URL@@"
+    paml_repo_ref="@@PAML_REPO_REF@@"
+    paml_repo_sha="@@PAML_REPO_SHA@@"
+    kfl1ou_repo_url="@@KFL1OU_REPO_URL@@"
+    kfl1ou_repo_ref="@@KFL1OU_REPO_REF@@"
+    kfl1ou_repo_sha="@@KFL1OU_REPO_SHA@@"
     kftools_repo_url="@@KFTOOLS_REPO_URL@@"
     rkftools_repo_url="@@RKFTOOLS_REPO_URL@@"
     radte_repo_url="@@RADTE_REPO_URL@@"
     kftools_repo_ref_override="@@KFTOOLS_REPO_REF@@"
     rkftools_repo_ref_override="@@RKFTOOLS_REPO_REF@@"
     radte_repo_ref="@@RADTE_REPO_REF@@"
+    kftools_repo_sha="@@KFTOOLS_REPO_SHA@@"
+    rkftools_repo_sha="@@RKFTOOLS_REPO_SHA@@"
+    radte_repo_sha="@@RADTE_REPO_SHA@@"
+    testnh_tarball_sha256="@@TESTNH_TARBALL_SHA256@@"
+    cafe5_tarball_sha256="@@CAFE5_TARBALL_SHA256@@"
 
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archives/partial/*
     apt-get update
@@ -98,9 +118,17 @@ From: mambaorg/micromamba:noble
     micromamba install -y --retry-clean-cache --repodata-ttl 3600 -n base -c conda-forge -c bioconda pymol-open-source
     micromamba run -n base pip install --no-cache-dir ete4
     micromamba run -n base python -c "import ete4"
-    /opt/pg/scripts/ensure_iq2mc_toolchain.sh base
+    PAML_REPO_URL="${paml_repo_url}" \
+    PAML_REPO_REF="${paml_repo_ref}" \
+    PAML_REPO_SHA="${paml_repo_sha}" \
+        /opt/pg/scripts/ensure_iq2mc_toolchain.sh base
     /opt/pg/scripts/install_env.sh base "${reconciled_required}" /opt/pg/env/base.r.optional.txt r-base
-    /opt/pg/scripts/install_nonconda_fallbacks.sh
+    TESTNH_TARBALL_SHA256="${testnh_tarball_sha256}" \
+    CAFE5_TARBALL_SHA256="${cafe5_tarball_sha256}" \
+    KFL1OU_REPO_URL="${kfl1ou_repo_url}" \
+    KFL1OU_REPO_REF="${kfl1ou_repo_ref}" \
+    KFL1OU_REPO_SHA="${kfl1ou_repo_sha}" \
+        /opt/pg/scripts/install_nonconda_fallbacks.sh
     rm -f "${reconciled_required}"
 
     runtime_required="/opt/pg/spec/required_commands.tsv"
@@ -114,47 +142,39 @@ From: mambaorg/micromamba:noble
 
     kftools_repo_ref="${kftools_repo_ref_override:-${kfu52_repo_ref}}"
     rkftools_repo_ref="${rkftools_repo_ref_override:-${kfu52_repo_ref}}"
+    busco_source_ref="${busco_repo_sha:-${busco_repo_ref}}"
+    kftools_source_ref="${kftools_repo_sha:-${kftools_repo_ref}}"
+    rkftools_source_ref="${rkftools_repo_sha:-${rkftools_repo_ref}}"
+    radte_source_ref="${radte_repo_sha:-${radte_repo_ref}}"
 
     KFU52_REPO_REF="${kfu52_repo_ref}" \
     KFU52_AMALGKIT_AUTO_SELECT_REF="${kfu52_amalgkit_auto_select_ref}" \
     KFU52_AMALGKIT_BRANCH_CANDIDATES="${kfu52_amalgkit_branch_candidates}" \
     KFU52_AMALGKIT_REPO_REF="${kfu52_amalgkit_repo_ref}" \
+    KFU52_AMALGKIT_REPO_SHA="${kfu52_amalgkit_repo_sha}" \
+    KFU52_CDSKIT_REPO_SHA="${kfu52_cdskit_repo_sha}" \
+    KFU52_CSUBST_REPO_SHA="${kfu52_csubst_repo_sha}" \
+    KFU52_NWKIT_REPO_SHA="${kfu52_nwkit_repo_sha}" \
         /opt/pg/scripts/ensure_kfuku52_tools_latest.sh base
 
-    busco_installed=0
-    for attempt in 1 2 3 4 5; do
-        if micromamba run -n base pip install "git+https://gitlab.com/ezlab/busco.git@6.0.0"; then
-            busco_installed=1
-            break
-        fi
-        echo "BUSCO install attempt ${attempt} from GitLab failed; retrying in 15s..."
-        sleep 15
-    done
-    if [[ "${busco_installed}" -ne 1 ]]; then
-        echo "BUSCO GitLab install failed after retries; trying GitHub mirror"
-        if micromamba run -n base pip install "git+https://github.com/ezlab/busco.git@6.0.0"; then
-            busco_installed=1
-        fi
-    fi
-    if [[ "${busco_installed}" -ne 1 ]]; then
-        echo "BUSCO installation failed from both GitLab and GitHub"
-        exit 1
-    fi
+    rm -rf /tmp/busco
+    /opt/pg/scripts/fetch_git_repo.sh "${busco_repo_url}" "${busco_source_ref}" /tmp/busco "${busco_mirror_repo_url}"
+    micromamba run -n base pip install --no-cache-dir --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/busco
+    rm -rf /tmp/busco
 
-    micromamba run -n base pip install --upgrade --force-reinstall --no-deps --no-build-isolation "git+${kftools_repo_url}@${kftools_repo_ref}"
+    rm -rf /tmp/kftools
+    /opt/pg/scripts/fetch_git_repo.sh "${kftools_repo_url}" "${kftools_source_ref}" /tmp/kftools
+    micromamba run -n base pip install --no-cache-dir --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/kftools
+    rm -rf /tmp/kftools
     /opt/pg/scripts/install_helvetica_compat_font.sh base
 
     rm -rf /tmp/rkftools
-    git clone --depth 1 --branch "${rkftools_repo_ref}" "${rkftools_repo_url}" /tmp/rkftools
+    /opt/pg/scripts/fetch_git_repo.sh "${rkftools_repo_url}" "${rkftools_source_ref}" /tmp/rkftools
     micromamba run -n base R CMD INSTALL /tmp/rkftools
     rm -rf /tmp/rkftools
 
     rm -rf /tmp/radte
-    if [[ -n "${radte_repo_ref}" ]]; then
-        git clone --depth 1 --branch "${radte_repo_ref}" "${radte_repo_url}" /tmp/radte
-    else
-        git clone --depth 1 "${radte_repo_url}" /tmp/radte
-    fi
+    /opt/pg/scripts/fetch_git_repo.sh "${radte_repo_url}" "${radte_source_ref}" /tmp/radte
     if [[ ! -s /tmp/radte/radte.r ]]; then
         echo "RADTE script was not found in ${radte_repo_url}"
         exit 1
@@ -181,7 +201,7 @@ EOF_BASHRC
     notung_url="$("/opt/pg/scripts/resolve_notung_latest.sh" "${notung_download_page}")"
     tmp_zip="$(mktemp /tmp/notung.XXXXXX.zip)"
     tmp_dir="$(mktemp -d /tmp/notung.XXXXXX)"
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "${notung_url}" -o "${tmp_zip}"
+    NOTUNG_DOWNLOAD_HOST_IP="${notung_download_host_ip}" /opt/pg/scripts/download_url_with_fallback.sh "${notung_url}" "${tmp_zip}"
     unzip -q "${tmp_zip}" -d "${tmp_dir}"
     notung_jar="$(find "${tmp_dir}" -type f -name 'Notung-2.9*.jar' | sort -V | tail -n 1)"
     if [[ -z "${notung_jar}" ]]; then

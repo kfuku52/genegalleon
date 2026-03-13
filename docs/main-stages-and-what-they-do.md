@@ -193,7 +193,9 @@ Notable defaults:
 Purpose:
 
 - BUSCO-based single-copy extraction,
-- optional OMArk proteome quality assessment using shared protein inputs,
+- optional OMArk proteome quality assessment using the effective protein set
+  (provided `species_protein` inputs in protein mode, otherwise temporary
+  proteins translated from `species_cds`),
 - per-gene alignments and trees,
 - concatenated and ASTRAL species trees,
 - IQ2MC/mcmctree dating pipeline,
@@ -209,6 +211,8 @@ Notable defaults:
 
 - species-tree substeps are enabled in the unified wrapper by default, including BUSCO extraction, ASTRAL tree inference, and the IQ2MC/mcmctree dating steps,
 - the same multi-species BUSCO run also feeds the BUSCO-based genome-evolution branch; BUSCO-based genome-evolution steps reuse the BUSCO outputs driven by `run_species_busco` and `run_species_get_busco_summary`,
+- OMArk is optional (`run_species_omark=0` by default) and runs after
+  OrthoFinder so it can reuse the current effective protein inputs,
 - shared defaults such as `busco_lineage` and `genetic_code` are loaded from `workflow/gg_common_params.sh`,
 - species-tree rooting is configured locally in `workflow/gg_genome_evolution_entrypoint.sh` via `species_tree_rooting`,
 - single-copy FASTA/alignment outputs are standardized to `.fa.gz`, and legacy
@@ -266,7 +270,9 @@ Main outputs:
 
 Notable defaults:
 
-- polyploidization-related BUSCO/GRAMPA tasks are enabled,
+- duplicate-aware BUSCO genome-evolution substeps default to `0`,
+- `run_orthogroup_grampa=1`, but GRAMPA is auto-disabled unless rooted
+  orthogroup trees exist and `grampa_h1` is set,
 - `run_cafe=0`, `run_go_enrichment=0` by default,
 - `grampa_h1` and `target_branch_go` default to empty strings; leaving them empty skips GRAMPA or GO enrichment only,
 - GO target can be specified by species name or branch ID.

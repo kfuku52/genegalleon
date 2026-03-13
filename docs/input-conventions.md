@@ -32,6 +32,8 @@ Important behavior:
 
 - in `input_sequence_mode="protein"`, GeneGalleon uses `species_protein` directly when files are present,
 - in `input_sequence_mode="cds"`, GeneGalleon ignores `species_protein` and always generates temporary proteins from `species_cds`.
+- OMArk always runs against the effective protein set; in CDS mode that means
+  temporary proteins translated from `species_cds`, not the raw CDS files.
 
 ### `workspace/input/species_genetic_code/species_genetic_code.tsv`
 
@@ -129,7 +131,8 @@ Notes:
 - CDS IDs are prefixed with `Genus_species_...` and aggregated to one representative CDS per gene,
 - common historical replacements are applied to CDS/GFF text,
 - CDS are padded to codon-length multiples and transcript-level redundancies are collapsed at gene level.
-- when taxonomy cache preparation succeeds, the generated `species_summary.tsv` also includes:
+- when taxonomy cache preparation succeeds, the generated
+  `gg_input_generation_species.tsv` also includes:
   - `taxid`
   - `nuclear_genetic_code_id` / `nuclear_genetic_code_name`
   - `mitochondrial_genetic_code_id` / `mitochondrial_genetic_code_name`

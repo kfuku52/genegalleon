@@ -147,7 +147,14 @@ Those messages indicate GeneGalleon is applying the current mode rules and inval
 
 Symptom:
 
-- `gg_input_generation_species.tsv` or `species_summary.tsv` exists, but taxonomy columns are blank.
+- `gg_input_generation_species.tsv` exists, but taxonomy columns are blank.
+
+Current summary file:
+
+- `workspace/output/input_generation/gg_input_generation_species.tsv`
+
+Older one-off exports or ad hoc copies may still be named `species_summary.tsv`,
+but that is no longer the canonical filename written by the wrapper.
 
 What to check:
 
