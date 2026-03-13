@@ -1825,6 +1825,16 @@ def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launcher
     assert 'run_species_get_omark_summary="${run_species_get_omark_summary:-1}"' in core
 
 
+def test_genome_evolution_reuse_check_precedes_busco_lineage_resolution():
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    missing_outputs_index = core.index('if [[ ${missing_busco_outputs} -ne 1 ]]; then')
+    reuse_return_index = core.index('    return 0\n  fi', missing_outputs_index)
+    resolve_lineage_index = core.index('if ! resolve_busco_lineage_for_species_set "${input_species_set[@]}"; then')
+
+    assert reuse_return_index < resolve_lineage_index
+
+
 def test_genome_evolution_core_accepts_legacy_duplicate_aware_busco_flag_names():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")

@@ -682,9 +682,6 @@ run_shared_species_busco_stage() {
     exit 1
   fi
   mapfile -t input_species_set < <(gg_species_names_from_fasta_dir "${source_species_input_dir}")
-  if ! resolve_busco_lineage_for_species_set "${input_species_set[@]}"; then
-    exit 1
-  fi
   mapfile -t busco_output_files < <(
     find "${dir_species_busco_full}" "${dir_species_busco_short}" -maxdepth 1 -type f \
       \( -name "*busco.full.tsv" -o -name "*busco.short.txt" \) \
@@ -727,6 +724,9 @@ run_shared_species_busco_stage() {
     done
     echo "$(date): End: ${task}"
     return 0
+  fi
+  if ! resolve_busco_lineage_for_species_set "${input_species_set[@]}"; then
+    exit 1
   fi
 
   prepare_species_tree_input_dir

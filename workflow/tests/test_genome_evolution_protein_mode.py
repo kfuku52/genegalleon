@@ -743,6 +743,7 @@ def test_genome_evolution_reuses_existing_busco_outputs_without_retranslation(tm
     assert "Number of protein files for BUSCO: 2" in completed.stdout
     assert "Skipped BUSCO: Arabidopsis_thaliana_cds.fa" in completed.stdout
     assert "Skipped BUSCO: Oryza_sativa_cds.fa" in completed.stdout
+    assert "Resolved BUSCO lineage for species set" not in completed.stdout
     assert "Translation started:" not in completed.stdout
 
 
