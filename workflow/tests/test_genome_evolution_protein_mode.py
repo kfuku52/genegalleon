@@ -661,7 +661,7 @@ def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launcher
     assert "Tetrahymena_thermophila.fa.gz" in completed.stdout
     proteins = (tmp_path / "capture" / "proteins.fasta").read_text(encoding="utf-8")
     assert ">Tetrahymena_thermophila_gene1" in proteins
-    assert "MQ" in proteins
+    assert "M*" in proteins
     assert "unbound variable" not in completed.stderr
 
 

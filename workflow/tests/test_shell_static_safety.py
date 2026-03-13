@@ -1078,20 +1078,34 @@ def test_download_helpers_use_set_e_safe_command_guards():
 def test_nonconda_download_helpers_use_archive_files_and_wget_fallback():
     script_path = REPO_ROOT / "container" / "scripts" / "install_nonconda_fallbacks.sh"
     text = _read_text(script_path)
+    download_script_path = REPO_ROOT / "container" / "scripts" / "download_url.sh"
+    download_script = _read_text(download_script_path)
 
     download_body = _function_body(text, "download_url_to_file")
-    assert 'curl -fL --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 600 \\' in download_body
-    assert 'if wget --tries=8 --waitretry=5 -O "${dest}" "${url}"; then' in download_body
-    assert 'rm -f "${dest}"' in download_body
+    assert 'bash "${download_url_script}" "${url}" "${dest}"' in download_body
+
+    assert 'max_attempts=${DOWNLOAD_URL_MAX_ATTEMPTS:-8}' in download_script
+    assert 'retry_delay_sec=${DOWNLOAD_URL_RETRY_DELAY_SEC:-5}' in download_script
+    assert 'connect_timeout_sec=${DOWNLOAD_URL_CONNECT_TIMEOUT_SEC:-30}' in download_script
+    assert 'max_time_sec=${DOWNLOAD_URL_MAX_TIME_SEC:-600}' in download_script
+    assert '--retry "${max_attempts}" \\' in download_script
+    assert '--retry-all-errors \\' in download_script
+    assert '--retry-delay "${retry_delay_sec}" \\' in download_script
+    assert '--connect-timeout "${connect_timeout_sec}" \\' in download_script
+    assert '--max-time "${max_time_sec}" \\' in download_script
+    assert '--tries="${max_attempts}" \\' in download_script
+    assert '--waitretry="${retry_delay_sec}" \\' in download_script
+    assert '-O "${output_path}" \\' in download_script
+    assert 'rm -f -- "${output_path}"' in download_script
 
     tag_body = _function_body(text, "download_github_tag_tarball")
     assert 'archive_path=$(mktemp)' in tag_body
-    assert 'if ! download_url_to_file "${url}" "${archive_path}"; then' in tag_body
+    assert 'if ! download_checked_url_to_file "${url}" "${archive_path}" "${expected_sha256}"; then' in tag_body
     assert 'if ! tar -xzf "${archive_path}" -C "${dest}" --strip-components=1; then' in tag_body
 
     cafe_body = _function_body(text, "install_cafe5")
     assert 'archive_path="${workdir}/CAFE5-5.1.0.tar.gz"' in cafe_body
-    assert 'if ! download_url_to_file \\' in cafe_body
+    assert 'if ! download_checked_url_to_file \\' in cafe_body
     assert 'if ! tar -xzf "${archive_path}" -C "${workdir}"; then' in cafe_body
 
 
