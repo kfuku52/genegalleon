@@ -61,6 +61,8 @@ COGE_ID_HINT_PATTERN = re.compile(r"^coge[:_].+", re.IGNORECASE)
 CNGB_ID_HINT_PATTERN = re.compile(r"^cngb[:_].+", re.IGNORECASE)
 ENSEMBL_ID_HINT_PATTERN = re.compile(r"^ensembl[:_].+", re.IGNORECASE)
 FERNBASE_ID_HINT_PATTERN = re.compile(r"^fernbase[:_].+", re.IGNORECASE)
+VEUPATHDB_ID_HINT_PATTERN = re.compile(r"^veupathdb[:_].+", re.IGNORECASE)
+DICTYBASE_ID_HINT_PATTERN = re.compile(r"^dictybase[:_].+", re.IGNORECASE)
 COGE_GID_PATTERN = re.compile(r"^[0-9]+$")
 CNGB_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^(?:CNA[0-9]+|GWH[A-Z0-9]+)$", re.IGNORECASE)
 
@@ -78,6 +80,8 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "wormbase": Path("WormBase") / "species_wise_original",
     "vectorbase": Path("VectorBase") / "species_wise_original",
     "fernbase": Path("FernBase") / "species_wise_original",
+    "veupathdb": Path("VEuPathDB") / "species_wise_original",
+    "dictybase": Path("dictyBase") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
 
@@ -95,6 +99,8 @@ PROVIDERS = (
     "wormbase",
     "vectorbase",
     "fernbase",
+    "veupathdb",
+    "dictybase",
     "local",
 )
 DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
@@ -109,6 +115,8 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "wormbase",
     "vectorbase",
     "fernbase",
+    "veupathdb",
+    "dictybase",
     "local",
 )
 DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 900
@@ -122,6 +130,7 @@ DEFAULT_NCBI_DATASETS_BASE_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2"
 DEFAULT_COGE_API_BASE_URL = "https://genomevolution.org/coge/api/v1"
 DEFAULT_COGE_WEB_BASE_URL = "https://genomevolution.org/coge"
 DEFAULT_CNGB_CNSA_BASE_URL = "https://db.cngb.org/cnsa/ajax"
+DEFAULT_VEUPATHDB_SERVICE_BASE_URL = "https://veupathdb.org/veupathdb/service"
 NCBI_DATASETS_INCLUDE_BY_LABEL = {
     "CDS": "CDS_FASTA",
     "GFF": "GENOME_GFF",
@@ -167,6 +176,13 @@ PROVIDER_DEFAULT_ID_PAGE_URL_TEMPLATES = {
     "fernbase": (
         "https://fernbase.org/ftp/{id}/",
     ),
+    "veupathdb": (
+        "https://veupathdb.org/",
+    ),
+    "dictybase": (
+        "https://dictybase.org/Downloads/",
+        "https://dictybase.org/download/",
+    ),
 }
 PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     # NCBI E-utilities explicitly documents request-rate limits.
@@ -187,6 +203,8 @@ PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     "wormbase": 2,
     "vectorbase": 2,
     "fernbase": 2,
+    "veupathdb": 1,
+    "dictybase": 1,
     "local": 1,
 }
 DEFAULT_GLOBAL_DOWNLOAD_WORKERS = 1
@@ -415,7 +433,7 @@ def build_arg_parser():
         default="",
         help=(
             "Provider input directory. For ensembl/ensemblplants: original_files/. "
-            "For phycocosm/phytozome/ncbi/coge/cngb/flybase/wormbase/vectorbase/fernbase/local: species_wise_original/. "
+            "For phycocosm/phytozome/ncbi/coge/cngb/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/local: species_wise_original/. "
             "Legacy aliases refseq/genbank are treated as ncbi. "
             "For --provider all, this must be the shared root containing all provider subdirectories."
         ),
@@ -451,7 +469,7 @@ def build_arg_parser():
             "(ncbi supports GCF/GCA/NCBI-URL auto-resolution; "
             "other supported providers support id-based template/index inference). "
             "Supported providers for --download-manifest: "
-            "ensembl, ensemblplants, ncbi, coge, cngb, flybase, wormbase, vectorbase, fernbase, local "
+            "ensembl, ensemblplants, ncbi, coge, cngb, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, local "
             "(legacy aliases refseq/genbank are treated as ncbi). "
             "provider=local reads local files/directories (for example local phytozome files). "
             "Use --input-dir for direct local phycocosm/phytozome formatting. "
@@ -806,6 +824,8 @@ def provider_raw_dir(provider, download_root, species_key):
         "wormbase",
         "vectorbase",
         "fernbase",
+        "veupathdb",
+        "dictybase",
         "local",
     ):
         return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider] / species_key
@@ -824,6 +844,10 @@ def infer_provider_from_id(source_id):
         return "ensembl"
     if FERNBASE_ID_HINT_PATTERN.match(source_id):
         return "fernbase"
+    if VEUPATHDB_ID_HINT_PATTERN.match(source_id):
+        return "veupathdb"
+    if DICTYBASE_ID_HINT_PATTERN.match(source_id):
+        return "dictybase"
     if "ftp.ensembl.org" in lowered or "ensembl.org/pub/current_" in lowered:
         return "ensembl"
     if COGE_ID_HINT_PATTERN.match(source_id):
@@ -844,6 +868,10 @@ def infer_provider_from_id(source_id):
         return "vectorbase"
     if "fernbase.org" in lowered:
         return "fernbase"
+    if "veupathdb.org" in lowered:
+        return "veupathdb"
+    if "dictybase.org" in lowered:
+        return "dictybase"
     return ""
 
 
@@ -1035,6 +1063,10 @@ def resolve_coge_web_base_url():
 
 def resolve_cngb_cnsa_base_url():
     return os.environ.get("GG_CNGB_CNSA_BASE_URL", DEFAULT_CNGB_CNSA_BASE_URL).rstrip("/")
+
+
+def resolve_veupathdb_service_base_url():
+    return os.environ.get("GG_VEUPATHDB_SERVICE_BASE_URL", DEFAULT_VEUPATHDB_SERVICE_BASE_URL).rstrip("/")
 
 
 def parse_species_key_candidate(text):
@@ -1258,6 +1290,155 @@ def resolve_cngb_download_urls_from_id(source_id, timeout, headers):
     return resolved
 
 
+_veupathdb_records_cache = {}
+_veupathdb_records_lock = threading.Lock()
+
+
+def veupathdb_source_id_from_url(url):
+    path = urlparse(str(url or "")).path
+    parts = [unquote(part) for part in path.split("/") if part]
+    for idx, token in enumerate(parts[:-1]):
+        if token == "Current_Release" and idx + 1 < len(parts):
+            return parts[idx + 1]
+    return ""
+
+
+def infer_veupathdb_cds_url(attributes):
+    protein_url = str(attributes.get("URLproteinFasta", "") or "").strip()
+    if protein_url != "":
+        return re.sub(
+            r"_AnnotatedProteins[.]fasta$",
+            "_AnnotatedCDSs.fasta",
+            protein_url,
+            flags=re.IGNORECASE,
+        )
+    genome_url = str(attributes.get("URLGenomeFasta", "") or "").strip()
+    if genome_url == "":
+        return ""
+    parsed = urlparse(genome_url)
+    directory = parsed.path.rsplit("/", 1)[0]
+    basename = parsed.path.rsplit("/", 1)[-1]
+    stem = re.sub(r"_Genome[.]fasta$", "", basename, flags=re.IGNORECASE)
+    if stem == basename:
+        return ""
+    return parsed._replace(path="{}/{}_AnnotatedCDSs.fasta".format(directory, stem)).geturl()
+
+
+def fetch_veupathdb_records(timeout, headers):
+    service_base = resolve_veupathdb_service_base_url()
+    with _veupathdb_records_lock:
+        cached = _veupathdb_records_cache.get(service_base)
+    if cached is not None:
+        return cached
+    config = {
+        "attributes": ["primary_key", "species", "URLGenomeFasta", "URLgff", "URLproteinFasta", "project_id"],
+        "tables": [],
+        "attributeFormat": "text",
+    }
+    service_url = (
+        "{}/record-types/organism/searches/GenomeDataTypes/reports/standard?reportConfig={}".format(
+            service_base,
+            quote(json.dumps(config, separators=(",", ":")), safe=""),
+        )
+    )
+    payload = fetch_json_with_headers(service_url, timeout, headers)
+    records = list(payload.get("records", []))
+    with _veupathdb_records_lock:
+        _veupathdb_records_cache[service_base] = records
+    return records
+
+
+def resolve_veupathdb_download_urls_from_id(source_id, species_key, timeout, headers):
+    candidates = source_id_candidates("veupathdb", source_id, species_key)
+    if len(candidates) == 0:
+        candidates = [str(source_id or "").strip()]
+    candidate_keys = [normalize_lookup_text(value) for value in candidates if normalize_lookup_text(value) != ""]
+    if len(candidate_keys) == 0:
+        raise ValueError("VEuPathDB id is empty")
+
+    best_record = None
+    best_rank = None
+    for record in fetch_veupathdb_records(timeout, headers):
+        attributes = record.get("attributes", {})
+        genome_url = str(attributes.get("URLGenomeFasta", "") or "").strip()
+        gff_url = str(attributes.get("URLgff", "") or "").strip()
+        cds_url = infer_veupathdb_cds_url(attributes)
+        derived_source_id = veupathdb_source_id_from_url(genome_url) or veupathdb_source_id_from_url(gff_url)
+        normalized_source_id = normalize_lookup_text(derived_source_id)
+        normalized_primary = normalize_lookup_text(attributes.get("primary_key", ""))
+        normalized_species = normalize_lookup_text(attributes.get("species", ""))
+        normalized_project = normalize_lookup_text(attributes.get("project_id", ""))
+        source_id_exact = any(candidate == normalized_source_id for candidate in candidate_keys if normalized_source_id != "")
+        primary_exact = any(candidate == normalized_primary for candidate in candidate_keys if normalized_primary != "")
+        species_exact = any(candidate == normalized_species for candidate in candidate_keys if normalized_species != "")
+        project_exact = any(candidate == normalized_project for candidate in candidate_keys if normalized_project != "")
+        source_id_contains = any(
+            candidate in normalized_source_id or normalized_source_id in candidate
+            for candidate in candidate_keys
+            if normalized_source_id != ""
+        )
+        primary_contains = any(
+            candidate in normalized_primary or normalized_primary in candidate
+            for candidate in candidate_keys
+            if normalized_primary != ""
+        )
+        species_contains = any(
+            candidate in normalized_species or normalized_species in candidate
+            for candidate in candidate_keys
+            if normalized_species != ""
+        )
+        rank = (
+            1 if genome_url != "" else 0,
+            1 if gff_url != "" else 0,
+            1 if cds_url != "" else 0,
+            1 if source_id_exact else 0,
+            1 if primary_exact else 0,
+            1 if species_exact else 0,
+            1 if project_exact else 0,
+            1 if source_id_contains else 0,
+            1 if primary_contains else 0,
+            1 if species_contains else 0,
+            -len(normalized_source_id),
+            normalized_source_id,
+        )
+        if best_record is None or rank > best_rank:
+            best_record = {
+                "record": record,
+                "derived_source_id": derived_source_id,
+                "cds_url": cds_url,
+            }
+            best_rank = rank
+
+    if best_record is None or max(best_rank[3:10]) == 0:
+        raise ValueError("VEuPathDB id '{}' was not found in GenomeDataTypes".format(source_id))
+
+    attributes = best_record["record"].get("attributes", {})
+    genome_url = str(attributes.get("URLGenomeFasta", "") or "").strip()
+    gff_url = str(attributes.get("URLgff", "") or "").strip()
+    cds_url = str(best_record.get("cds_url", "") or "").strip()
+    if genome_url == "" or gff_url == "" or cds_url == "":
+        raise ValueError("VEuPathDB id '{}' did not resolve to CDS/GFF/genome URLs".format(source_id))
+
+    inferred_species_key = parse_species_key_candidate(attributes.get("species", ""))
+    if inferred_species_key == "":
+        inferred_species_key = str(species_key or "").strip()
+    if inferred_species_key == "":
+        inferred_species_key = sanitize_identifier(best_record.get("derived_source_id", "") or str(source_id or ""))
+    prefix = sanitize_identifier(inferred_species_key)
+    source_token = best_record.get("derived_source_id", "") or strip_provider_prefix(source_id, "veupathdb")
+    source_token = sanitize_identifier(source_token)
+
+    return {
+        "species_key": inferred_species_key,
+        "cds_url": cds_url,
+        "gff_url": gff_url,
+        "genome_url": genome_url,
+        "cds_filename": "{}.veupathdb.{}.cds.fa".format(prefix, source_token),
+        "gff_filename": "{}.veupathdb.{}.gene.gff3".format(prefix, source_token),
+        "genome_filename": "{}.veupathdb.{}.genome.fa".format(prefix, source_token),
+    }
+
+
 def fernbase_release_sort_key(name):
     lower = str(name or "").lower()
     version_tokens = tuple(int(token) for token in re.findall(r"[0-9]+", lower))
@@ -1373,6 +1554,8 @@ def resolve_provider_specific_download_urls_from_id(provider, source_id, species
         return resolve_cngb_download_urls_from_id(source_id, timeout, headers)
     if provider == "fernbase":
         return resolve_fernbase_download_urls_from_id(source_id, species_key, timeout, headers)
+    if provider == "veupathdb":
+        return resolve_veupathdb_download_urls_from_id(source_id, species_key, timeout, headers)
     return None
 
 
@@ -3343,7 +3526,7 @@ def discover_tasks(provider, input_dir):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "cngb":
         return discover_generic_species_dir_tasks(provider, input_dir)
-    if provider in ("flybase", "wormbase", "vectorbase", "fernbase"):
+    if provider in ("flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase"):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "local":
         return discover_generic_species_dir_tasks(provider, input_dir)

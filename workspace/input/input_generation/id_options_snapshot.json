@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_utc": "2026-03-05T08:58:54Z",
+  "generated_utc": "2026-03-16T11:26:56Z",
   "providers": {
     "ensembl": [
       {
@@ -2542,7 +2542,7 @@
         "species": "Drosophila grimshawi"
       },
       {
-        "id": "dmel_r6.66",
+        "id": "dmel_r6.67",
         "species": "Drosophila melanogaster"
       },
       {
@@ -4096,6 +4096,3200 @@
       {
         "id": "TinfestansFIOC_28",
         "species": "T. infestans"
+      }
+    ],
+    "fernbase": [
+      {
+        "id": "Adiantum_capillus-veneris",
+        "species": "Adiantum capillus-veneris"
+      },
+      {
+        "id": "Alsophila_spinulosa",
+        "species": "Alsophila spinulosa"
+      },
+      {
+        "id": "Azolla_caroliniana",
+        "species": "Azolla caroliniana"
+      },
+      {
+        "id": "Azolla_filiculoides",
+        "species": "Azolla filiculoides"
+      },
+      {
+        "id": "Ceratopteris_richardii",
+        "species": "Ceratopteris richardii"
+      },
+      {
+        "id": "Lygodium_microphyllum",
+        "species": "Lygodium microphyllum"
+      },
+      {
+        "id": "Marsilea_vestita",
+        "species": "Marsilea vestita"
+      },
+      {
+        "id": "Pteridium_aquilinum",
+        "species": "Pteridium aquilinum"
+      },
+      {
+        "id": "Salvinia_cucullata",
+        "species": "Salvinia cucullata"
+      },
+      {
+        "id": "Salvinia_cucullata_v2",
+        "species": "Salvinia cucullata v2"
+      },
+      {
+        "id": "Salvinia_molesta",
+        "species": "Salvinia molesta"
+      }
+    ],
+    "veupathdb": [
+      {
+        "id": "AaculeatusATCC16872",
+        "species": "Aspergillus aculeatus"
+      },
+      {
+        "id": "AaegyptiAag2",
+        "species": "Aedes aegypti"
+      },
+      {
+        "id": "AaegyptiLVP_AGWG",
+        "species": "Aedes aegypti"
+      },
+      {
+        "id": "AalbimanusSTECLA",
+        "species": "Anopheles albimanus"
+      },
+      {
+        "id": "AalbimanusSTECLA2020",
+        "species": "Anopheles albimanus"
+      },
+      {
+        "id": "AalbopictusC6-36",
+        "species": "Aedes albopictus"
+      },
+      {
+        "id": "AalbopictusFoshan",
+        "species": "Aedes albopictus"
+      },
+      {
+        "id": "AalbopictusFoshanFPA",
+        "species": "Aedes albopictus"
+      },
+      {
+        "id": "AalgeraePRA109",
+        "species": "Anncaliia algerae"
+      },
+      {
+        "id": "AalgeraePRA339",
+        "species": "Anncaliia algerae"
+      },
+      {
+        "id": "AalgeraeUndeen",
+        "species": "Anncaliia algerae"
+      },
+      {
+        "id": "AalternataSRC1lrK2f",
+        "species": "Alternaria alternata"
+      },
+      {
+        "id": "AapisARSEF7405",
+        "species": "Ascosphaera apis"
+      },
+      {
+        "id": "AaquasalisAaquGF1",
+        "species": "Anopheles aquasalis"
+      },
+      {
+        "id": "AarabiensisDongola",
+        "species": "Anopheles arabiensis"
+      },
+      {
+        "id": "AarabiensisDONGOLA2021",
+        "species": "Anopheles arabiensis"
+      },
+      {
+        "id": "AastaciAPO3",
+        "species": "Aphanomyces astaci"
+      },
+      {
+        "id": "AastronyxisUnknown",
+        "species": "Acanthamoeba astronyxis"
+      },
+      {
+        "id": "AatroparvusEBRO",
+        "species": "Anopheles atroparvus"
+      },
+      {
+        "id": "AbellatorAbelBR1",
+        "species": "Anopheles bellator"
+      },
+      {
+        "id": "AbrasiliensisCBS101740",
+        "species": "Aspergillus brasiliensis"
+      },
+      {
+        "id": "AcampestrisIBT28561",
+        "species": "Aspergillus campestris"
+      },
+      {
+        "id": "Acandida2VRR",
+        "species": "Albugo candida"
+      },
+      {
+        "id": "AcarbonariusITEM5010",
+        "species": "Aspergillus carbonarius"
+      },
+      {
+        "id": "AcastellaniiC3",
+        "species": "Acanthamoeba castellanii"
+      },
+      {
+        "id": "AcastellaniiMa",
+        "species": "Acanthamoeba castellanii"
+      },
+      {
+        "id": "AcastellaniiNeff",
+        "species": "Acanthamoeba castellanii"
+      },
+      {
+        "id": "AcastellaniiNeff2021",
+        "species": "Acanthamoeba castellanii"
+      },
+      {
+        "id": "AchristyiACHKN1017",
+        "species": "Anopheles christyi"
+      },
+      {
+        "id": "AclavatusNRRL1",
+        "species": "Aspergillus clavatus"
+      },
+      {
+        "id": "AcoluzziiAcolN3",
+        "species": "Anopheles coluzzii"
+      },
+      {
+        "id": "AcoluzziiMali-NIH",
+        "species": "Anopheles coluzzii"
+      },
+      {
+        "id": "AcoluzziiMOPTI",
+        "species": "Anopheles coluzzii"
+      },
+      {
+        "id": "AcoluzziiNgousso",
+        "species": "Anopheles coluzzii"
+      },
+      {
+        "id": "AcoustaniAcouGA1",
+        "species": "Anopheles coustani"
+      },
+      {
+        "id": "AcristatusGZAAS20.1005",
+        "species": "Aspergillus cristatus"
+      },
+      {
+        "id": "AcruziiAcruBR1",
+        "species": "Anopheles cruzii"
+      },
+      {
+        "id": "AculbertsoniA1",
+        "species": "Acanthamoeba culbertsoni"
+      },
+      {
+        "id": "AculicifaciesA-37",
+        "species": "Anopheles culicifacies"
+      },
+      {
+        "id": "AdarlingiAdarGF1",
+        "species": "Anopheles darlingi"
+      },
+      {
+        "id": "AdarlingiCoari",
+        "species": "Anopheles darlingi"
+      },
+      {
+        "id": "AdeanaiCavalhoATCCPRA-265",
+        "species": "Angomonas deanei"
+      },
+      {
+        "id": "AdirusWRAIR2",
+        "species": "Anopheles dirus"
+      },
+      {
+        "id": "AellipticusCBS707.79",
+        "species": "Aspergillus ellipticus"
+      },
+      {
+        "id": "AepiroticusEpiroticus2",
+        "species": "Anopheles epiroticus"
+      },
+      {
+        "id": "AeucalypticolaCBS122712",
+        "species": "Aspergillus eucalypticola"
+      },
+      {
+        "id": "AeuteichesMF1",
+        "species": "Aphanomyces euteiches"
+      },
+      {
+        "id": "AfarautiFAR1",
+        "species": "Anopheles farauti"
+      },
+      {
+        "id": "AfijiensisCBS313.89",
+        "species": "Aspergillus fijiensis"
+      },
+      {
+        "id": "AfischeriNRRL181",
+        "species": "Aspergillus fischeri"
+      },
+      {
+        "id": "AflagransCBSH-5679",
+        "species": "Arthrobotrys flagrans"
+      },
+      {
+        "id": "AflavusNRRL3357",
+        "species": "Aspergillus flavus"
+      },
+      {
+        "id": "AflavusNRRL3357_2020",
+        "species": "Aspergillus flavus"
+      },
+      {
+        "id": "AfumigatusA1163",
+        "species": "Aspergillus fumigatus"
+      },
+      {
+        "id": "AfumigatusAf293",
+        "species": "Aspergillus fumigatus"
+      },
+      {
+        "id": "AfunestusAfunGA1",
+        "species": "Anopheles funestus"
+      },
+      {
+        "id": "AfunestusFUMOZ",
+        "species": "Anopheles funestus"
+      },
+      {
+        "id": "AgambiaeIfakara",
+        "species": "Anopheles gambiae"
+      },
+      {
+        "id": "AgambiaePEST",
+        "species": "Anopheles gambiae"
+      },
+      {
+        "id": "AgambiaePimperena",
+        "species": "Anopheles gambiae"
+      },
+      {
+        "id": "AglaucusCBS516.65",
+        "species": "Aspergillus glaucus"
+      },
+      {
+        "id": "AheteromorphusCBS117.55",
+        "species": "Aspergillus heteromorphus"
+      },
+      {
+        "id": "AhomomorphusCBS101889",
+        "species": "Aspergillus homomorphus"
+      },
+      {
+        "id": "AibericusCBS121593",
+        "species": "Aspergillus ibericus"
+      },
+      {
+        "id": "AinvadansNJM9701",
+        "species": "Aphanomyces invadans"
+      },
+      {
+        "id": "AlaibachiiNc14",
+        "species": "Albugo laibachii"
+      },
+      {
+        "id": "AlenticulataPD2S",
+        "species": "Acanthamoeba lenticulata"
+      },
+      {
+        "id": "AlentulusIFM54703",
+        "species": "Aspergillus lentulus"
+      },
+      {
+        "id": "AlocustaeCLX",
+        "species": "Antonospora locustae"
+      },
+      {
+        "id": "AluchuensisCBS106.47",
+        "species": "Aspergillus luchuensis"
+      },
+      {
+        "id": "AluchuensisIFO4308",
+        "species": "Aspergillus luchuensis"
+      },
+      {
+        "id": "AlugdunensisL3a",
+        "species": "Acanthamoeba lugdunensis"
+      },
+      {
+        "id": "AmacrogynusATCC38327",
+        "species": "Allomyces macrogynus"
+      },
+      {
+        "id": "AmaculatumSK-2019",
+        "species": "Amblyomma maculatum"
+      },
+      {
+        "id": "Amaculatusmaculatus3",
+        "species": "Anopheles maculatus"
+      },
+      {
+        "id": "AmaculipalpisAmacGA1",
+        "species": "Anopheles maculipalpis"
+      },
+      {
+        "id": "AmarshalliiAmarGA1",
+        "species": "Anopheles marshallii"
+      },
+      {
+        "id": "Amauritaniensis1652",
+        "species": "Acanthamoeba mauritaniensis"
+      },
+      {
+        "id": "AmelasCM1001059_A",
+        "species": "Anopheles melas"
+      },
+      {
+        "id": "AmerusMAF",
+        "species": "Anopheles merus"
+      },
+      {
+        "id": "AmerusMAF2021",
+        "species": "Anopheles merus"
+      },
+      {
+        "id": "AminimusMINIMUS1",
+        "species": "Anopheles minimus"
+      },
+      {
+        "id": "AmnigerUAMH3544",
+        "species": "Amauroascus niger"
+      },
+      {
+        "id": "AmontevideenseJCM9937",
+        "species": "Apiotrichum montevideense"
+      },
+      {
+        "id": "AmouchetiAmouCM1",
+        "species": "Anopheles moucheti"
+      },
+      {
+        "id": "AmutatusUAMH3576",
+        "species": "Amauroascus mutatus"
+      },
+      {
+        "id": "AnidulansFGSCA4",
+        "species": "Aspergillus nidulans"
+      },
+      {
+        "id": "AnigerATCC1015",
+        "species": "Aspergillus niger"
+      },
+      {
+        "id": "AnigerATCC13496",
+        "species": "Aspergillus niger"
+      },
+      {
+        "id": "AnigerCBS513-88",
+        "species": "Aspergillus niger"
+      },
+      {
+        "id": "AnigerLDM3",
+        "species": "Aspergillus niger"
+      },
+      {
+        "id": "AnigerN402ATCC64974",
+        "species": "Aspergillus niger"
+      },
+      {
+        "id": "AniliAnilCM1",
+        "species": "Anopheles nili"
+      },
+      {
+        "id": "AnovofumigatusIBT16806",
+        "species": "Aspergillus novofumigatus"
+      },
+      {
+        "id": "AochraceoroseusIBT24754",
+        "species": "Aspergillus ochraceoroseus"
+      },
+      {
+        "id": "AoryzaeRIB40",
+        "species": "Aspergillus oryzae"
+      },
+      {
+        "id": "ApalestinensisReich",
+        "species": "Acanthamoeba palestinensis"
+      },
+      {
+        "id": "AparasiticusCBS117618",
+        "species": "Aspergillus parasiticus"
+      },
+      {
+        "id": "AquadriannulatusSANGWE",
+        "species": "Anopheles quadriannulatus"
+      },
+      {
+        "id": "AquinaVil3",
+        "species": "Acanthamoeba quina"
+      },
+      {
+        "id": "ArhysodesSingh",
+        "species": "Acanthamoeba rhysodes"
+      },
+      {
+        "id": "AsclerotiicarbonariusCBS121057",
+        "species": "Aspergillus sclerotiicarbonarius"
+      },
+      {
+        "id": "AsinensisChina",
+        "species": "Anopheles sinensis"
+      },
+      {
+        "id": "AsinensisSINENSIS",
+        "species": "Anopheles sinensis"
+      },
+      {
+        "id": "AspGalka",
+        "species": "Acanthamoeba sp."
+      },
+      {
+        "id": "AspIncertaesedis",
+        "species": "Acanthamoeba sp."
+      },
+      {
+        "id": "AspSK_2022a",
+        "species": "Acanthamoeba sp."
+      },
+      {
+        "id": "AspSK_2022b",
+        "species": "Acanthamoeba sp."
+      },
+      {
+        "id": "AspSK_2022c",
+        "species": "Acanthamoeba sp."
+      },
+      {
+        "id": "AspT4b-type",
+        "species": "Acanthamoeba sp."
+      },
+      {
+        "id": "AspWSBS2006",
+        "species": "unclassified Amphiamblys"
+      },
+      {
+        "id": "AstephensiIndian",
+        "species": "Anopheles stephensi"
+      },
+      {
+        "id": "AstephensiSDA-500",
+        "species": "Anopheles stephensi"
+      },
+      {
+        "id": "AstephensiUCISS2018",
+        "species": "Anopheles stephensi"
+      },
+      {
+        "id": "AsteyniiIBT23096",
+        "species": "Aspergillus steynii"
+      },
+      {
+        "id": "AsydowiiCBS593.65",
+        "species": "Aspergillus sydowii"
+      },
+      {
+        "id": "AtanneriNIH1004",
+        "species": "Aspergillus tanneri"
+      },
+      {
+        "id": "AterreusNIH2624",
+        "species": "Aspergillus terreus"
+      },
+      {
+        "id": "AthermomutatusHMRAF39",
+        "species": "Aspergillus thermomutatus"
+      },
+      {
+        "id": "AtriangularisSH621",
+        "species": "Acanthamoeba triangularis"
+      },
+      {
+        "id": "AtubingensisCBS134.48",
+        "species": "Aspergillus tubingensis"
+      },
+      {
+        "id": "AuvarumCBS121591",
+        "species": "Aspergillus uvarum"
+      },
+      {
+        "id": "AvariabilisNCCPF102052",
+        "species": "Apophysomyces variabilis"
+      },
+      {
+        "id": "AversicolorCBS583.65",
+        "species": "Aspergillus versicolor"
+      },
+      {
+        "id": "AwentiiDTO134E9",
+        "species": "Aspergillus wentii"
+      },
+      {
+        "id": "AziemanniAzieGA1",
+        "species": "Anopheles ziemanni"
+      },
+      {
+        "id": "BayalaiB08-376",
+        "species": "Blechomonas ayalai"
+      },
+      {
+        "id": "BbassianaHN6",
+        "species": "Beauveria bassiana"
+      },
+      {
+        "id": "BbesnoitiBbGer1",
+        "species": "Besnoitia besnoiti"
+      },
+      {
+        "id": "BbigeminaBOND",
+        "species": "Babesia bigemina"
+      },
+      {
+        "id": "BbovisT2Bo",
+        "species": "Babesia bovis"
+      },
+      {
+        "id": "BcaballiUSDA-D6B2",
+        "species": "Babesia caballi"
+      },
+      {
+        "id": "BceratinophilaUAMH5669",
+        "species": "Byssoonygena ceratinophila"
+      },
+      {
+        "id": "BcinereaB05-10",
+        "species": "Botrytis cinerea"
+      },
+      {
+        "id": "BdendrobatidisJEL423",
+        "species": "Batrachochytrium dendrobatidis"
+      },
+      {
+        "id": "BdermatitidisATCC26199",
+        "species": "Blastomyces dermatitidis"
+      },
+      {
+        "id": "BdermatitidisER-3",
+        "species": "Blastomyces dermatitidis"
+      },
+      {
+        "id": "Bdivergens1802A",
+        "species": "Babesia divergens"
+      },
+      {
+        "id": "BdivergensRouen1987",
+        "species": "Babesia divergens"
+      },
+      {
+        "id": "BduncaniWA1",
+        "species": "Babesia duncani"
+      },
+      {
+        "id": "BduncaniWA12023",
+        "species": "Babesia duncani"
+      },
+      {
+        "id": "BgilchristiiSLH14081",
+        "species": "Blastomyces gilchristii"
+      },
+      {
+        "id": "BglabrataBB02",
+        "species": "Biomphalaria glabrata"
+      },
+      {
+        "id": "BglabrataXG47",
+        "species": "Biomphalaria glabrata"
+      },
+      {
+        "id": "BgraministriticaleTHUN-12",
+        "species": "Blumeria graminis"
+      },
+      {
+        "id": "BgraminisTritici96224",
+        "species": "Blumeria graminis"
+      },
+      {
+        "id": "BhordeiRACE1",
+        "species": "Blumeria hordei"
+      },
+      {
+        "id": "BlactucaeSF5",
+        "species": "Bremia lactucae"
+      },
+      {
+        "id": "Bmandrillaris2046",
+        "species": "Balamuthia mandrillaris"
+      },
+      {
+        "id": "BmandrillarisCDCV039",
+        "species": "Balamuthia mandrillaris"
+      },
+      {
+        "id": "BmicrotiATCC30222",
+        "species": "Babesia microti"
+      },
+      {
+        "id": "BmicrotiATCCPRA99",
+        "species": "Babesia microti"
+      },
+      {
+        "id": "BmicrotiGI",
+        "species": "Babesia microti"
+      },
+      {
+        "id": "BmicrotiGreenwichYaleLab1",
+        "species": "Babesia microti"
+      },
+      {
+        "id": "BmicrotiNanHs2011N11-50",
+        "species": "Babesia microti"
+      },
+      {
+        "id": "BmicrotiNaushon",
+        "species": "Babesia microti"
+      },
+      {
+        "id": "BmicrotiRI",
+        "species": "Babesia microti"
+      },
+      {
+        "id": "BnonstopP57",
+        "species": "Blastocrithidia nonstop"
+      },
+      {
+        "id": "BovataMiyake",
+        "species": "Babesia ovata"
+      },
+      {
+        "id": "BovisSelcuk",
+        "species": "Babesia ovis"
+      },
+      {
+        "id": "BpercursusEI222",
+        "species": "Blastomyces percursus"
+      },
+      {
+        "id": "BsalamandrivoransBS",
+        "species": "Batrachochytrium salamandrivorans"
+      },
+      {
+        "id": "BsaltansLakeKonstanz",
+        "species": "Bodo saltans"
+      },
+      {
+        "id": "BspXinjiang",
+        "species": "Babesia sp. Xinjiang"
+      },
+      {
+        "id": "BtaurusHereford",
+        "species": "Bos taurus"
+      },
+      {
+        "id": "CalbicansSC5314",
+        "species": "Candida albicans"
+      },
+      {
+        "id": "CalbicansSC5314_B",
+        "species": "Candida albicans"
+      },
+      {
+        "id": "CalbicansWO1",
+        "species": "Candida albicans"
+      },
+      {
+        "id": "Candersoni30847",
+        "species": "Cryptosporidium andersoni"
+      },
+      {
+        "id": "Cauris6684",
+        "species": "[Candida] auris"
+      },
+      {
+        "id": "CaurisB11220",
+        "species": "[Candida] auris"
+      },
+      {
+        "id": "CaurisB11221",
+        "species": "[Candida] auris"
+      },
+      {
+        "id": "CaurisB11243",
+        "species": "[Candida] auris"
+      },
+      {
+        "id": "CaurisB11245",
+        "species": "[Candida] auris"
+      },
+      {
+        "id": "CaurisB8441",
+        "species": "[Candida] auris"
+      },
+      {
+        "id": "CbaileyiTAMU-09Q1",
+        "species": "Cryptosporidium baileyi"
+      },
+      {
+        "id": "CbantianaCBS173.52",
+        "species": "Cladophialophora bantiana"
+      },
+      {
+        "id": "Cbovis45015",
+        "species": "Cryptosporidium bovis"
+      },
+      {
+        "id": "CcarrioniiCBS160.54",
+        "species": "Cladophialophora carrionii"
+      },
+      {
+        "id": "CcarrioniiKSF",
+        "species": "Cladophialophora carrionii"
+      },
+      {
+        "id": "CcayetanensisCHN_HEN01",
+        "species": "Cyclospora cayetanensis"
+      },
+      {
+        "id": "CcayetanensisNF1_C8",
+        "species": "Cyclospora cayetanensis"
+      },
+      {
+        "id": "Ccf.gattiiMF34",
+        "species": "Cryptococcus cf. gattii"
+      },
+      {
+        "id": "Ccinerea326",
+        "species": "Coprinopsis cinerea"
+      },
+      {
+        "id": "Ccinereaokay7-130",
+        "species": "Coprinopsis cinerea"
+      },
+      {
+        "id": "Cclavatayc1106",
+        "species": "Curvularia clavata"
+      },
+      {
+        "id": "CdepauperatusCBS7841",
+        "species": "Cryptococcus depauperatus"
+      },
+      {
+        "id": "CdepauperatusCBS7855",
+        "species": "Cryptococcus depauperatus"
+      },
+      {
+        "id": "CdikerogammariDv6",
+        "species": "Cucumispora dikerogammari"
+      },
+      {
+        "id": "CdubliniensisCD36",
+        "species": "Candida dubliniensis"
+      },
+      {
+        "id": "CduobushaemulonisB09383",
+        "species": "[Candida] duobushaemulonis"
+      },
+      {
+        "id": "CeuropaeaCBS101466",
+        "species": "Cyphellophora europaea"
+      },
+      {
+        "id": "Cfabianii65",
+        "species": "Cyberlindnera fabianii"
+      },
+      {
+        "id": "CfasciculataCfCl",
+        "species": "Crithidia fasciculata"
+      },
+      {
+        "id": "CfelisWinnie",
+        "species": "Cytauxzoon felis"
+      },
+      {
+        "id": "CgattiiCA1873",
+        "species": "Cryptococcus gattii VGIII"
+      },
+      {
+        "id": "CgattiiEJB2",
+        "species": "Cryptococcus gattii VGI"
+      },
+      {
+        "id": "CgattiiIND107",
+        "species": "Cryptococcus gattii VGIV"
+      },
+      {
+        "id": "CgattiiNT10",
+        "species": "Cryptococcus gattii VGI"
+      },
+      {
+        "id": "CgattiiVGIIR265",
+        "species": "Cryptococcus gattii VGII"
+      },
+      {
+        "id": "CgattiiWM276",
+        "species": "Cryptococcus gattii VGI"
+      },
+      {
+        "id": "Cgeophilum1.58",
+        "species": "Cenococcum geophilum"
+      },
+      {
+        "id": "CglobosumCBS148.51",
+        "species": "Chaetomium globosum"
+      },
+      {
+        "id": "CgraminicolaM1-001",
+        "species": "Colletotrichum graminicola"
+      },
+      {
+        "id": "ChaemulonisB11899",
+        "species": "[Candida] haemuloni"
+      },
+      {
+        "id": "ChigginsianumIMI349063",
+        "species": "Colletotrichum higginsianum"
+      },
+      {
+        "id": "Chominis30976",
+        "species": "Cryptosporidium hominis"
+      },
+      {
+        "id": "Chominis37999",
+        "species": "Cryptosporidium hominis"
+      },
+      {
+        "id": "ChominisTU502",
+        "species": "Cryptosporidium hominis"
+      },
+      {
+        "id": "ChominisTU502_2012",
+        "species": "Cryptosporidium hominis"
+      },
+      {
+        "id": "ChominisUdeA01",
+        "species": "Cryptosporidium hominis"
+      },
+      {
+        "id": "ChominisUKH1",
+        "species": "Cryptosporidium hominis"
+      },
+      {
+        "id": "CimmitisH538-4",
+        "species": "Coccidioides immitis"
+      },
+      {
+        "id": "CimmitisRMSCC2394",
+        "species": "Coccidioides immitis"
+      },
+      {
+        "id": "CimmitisRMSCC3703",
+        "species": "Coccidioides immitis"
+      },
+      {
+        "id": "CimmitisRS",
+        "species": "Coccidioides immitis"
+      },
+      {
+        "id": "CimmitisWA_211",
+        "species": "Coccidioides immitis"
+      },
+      {
+        "id": "CimmundaCBS83496",
+        "species": "Cladophialophora immunda"
+      },
+      {
+        "id": "ClectulariusHarlan",
+        "species": "Cimex lectularius"
+      },
+      {
+        "id": "ClupusfamiliarisSID07034",
+        "species": "Canis lupus"
+      },
+      {
+        "id": "ClusitaniaeATCC42720",
+        "species": "Clavispora lusitaniae"
+      },
+      {
+        "id": "CmeleagridisUKMEL1",
+        "species": "Cryptosporidium meleagridis"
+      },
+      {
+        "id": "CmetapsilosisBP57",
+        "species": "Candida metapsilosis"
+      },
+      {
+        "id": "CmilitarisATCC34164",
+        "species": "Cordyceps militaris"
+      },
+      {
+        "id": "CmilitarisCM01",
+        "species": "Cordyceps militaris"
+      },
+      {
+        "id": "CmurisRN66",
+        "species": "Cryptosporidium muris"
+      },
+      {
+        "id": "CneoformansB-3501A",
+        "species": "Cryptococcus neoformans"
+      },
+      {
+        "id": "CneoformansH99",
+        "species": "Cryptococcus neoformans"
+      },
+      {
+        "id": "CneoformansH992018",
+        "species": "Cryptococcus neoformans"
+      },
+      {
+        "id": "CneoformansJEC21",
+        "species": "Cryptococcus neoformans"
+      },
+      {
+        "id": "CneoformansKN99",
+        "species": "Cryptococcus neoformans"
+      },
+      {
+        "id": "CneoformansVNII",
+        "species": "Cryptococcus neoformans"
+      },
+      {
+        "id": "CneoformansXL280",
+        "species": "Cryptococcus neoformans"
+      },
+      {
+        "id": "CparapsilosisCDC317",
+        "species": "Candida parapsilosis"
+      },
+      {
+        "id": "Cparvum2022",
+        "species": "Cryptosporidium parvum"
+      },
+      {
+        "id": "CparvumIOWA-ATCC",
+        "species": "Cryptosporidium parvum"
+      },
+      {
+        "id": "CparvumIowaII",
+        "species": "Cryptosporidium parvum"
+      },
+      {
+        "id": "Cporcellus2N",
+        "species": "Cavia porcellus"
+      },
+      {
+        "id": "CposadasiiC735deltSOWgp",
+        "species": "Coccidioides posadasii"
+      },
+      {
+        "id": "CposadasiiCPA0001",
+        "species": "Coccidioides posadasii"
+      },
+      {
+        "id": "CposadasiiCPA0020",
+        "species": "Coccidioides posadasii"
+      },
+      {
+        "id": "CposadasiiCPA0066",
+        "species": "Coccidioides posadasii"
+      },
+      {
+        "id": "CposadasiiRMSCC1037",
+        "species": "Coccidioides posadasii"
+      },
+      {
+        "id": "CposadasiiRMSCC1038",
+        "species": "Coccidioides posadasii"
+      },
+      {
+        "id": "CposadasiiRMSCC2133",
+        "species": "Coccidioides posadasii"
+      },
+      {
+        "id": "CposadasiiRMSCC3488",
+        "species": "Coccidioides posadasii"
+      },
+      {
+        "id": "CposadasiiRMSCC3700",
+        "species": "Coccidioides posadasii"
+      },
+      {
+        "id": "CposadasiiSilveira",
+        "species": "Coccidioides posadasii"
+      },
+      {
+        "id": "CposadasiiSilveira2022",
+        "species": "Coccidioides posadasii"
+      },
+      {
+        "id": "CpsammophilaCBS110553",
+        "species": "Cladophialophora psammophila"
+      },
+      {
+        "id": "CpseudohaemuloniiB12108",
+        "species": "[Candida] pseudohaemulonis"
+      },
+      {
+        "id": "Cpurpurea20.1",
+        "species": "Claviceps purpurea"
+      },
+      {
+        "id": "CqueenslandicumCBS280.77",
+        "species": "Chrysosporium queenslandicum"
+      },
+      {
+        "id": "CquinquefasciatusJHB2020",
+        "species": "Culex quinquefasciatus"
+      },
+      {
+        "id": "CquinquefasciatusJohannesburg",
+        "species": "Culex quinquefasciatus"
+      },
+      {
+        "id": "Cryanae45019",
+        "species": "Cryptosporidium ryanae"
+      },
+      {
+        "id": "CsonorensisPIR-s-3",
+        "species": "Culicoides sonorensis"
+      },
+      {
+        "id": "CspCBS132003",
+        "species": "Chaetothyriales sp."
+      },
+      {
+        "id": "Cspchipmunk37763",
+        "species": "Cryptosporidium sp. chipmunk genotype I"
+      },
+      {
+        "id": "CspchipmunkLX2015",
+        "species": "Cryptosporidium sp."
+      },
+      {
+        "id": "CsuisWienI",
+        "species": "Cystoisospora suis"
+      },
+      {
+        "id": "CtropicalisMYA3404",
+        "species": "Candida tropicalis"
+      },
+      {
+        "id": "CtropicalisMYA3404-2020",
+        "species": "Candida tropicalis"
+      },
+      {
+        "id": "CtyzzeriUGA55",
+        "species": "Cryptosporidium tyzzeri"
+      },
+      {
+        "id": "Cubiquitum39726",
+        "species": "Cryptosporidium ubiquitum"
+      },
+      {
+        "id": "CveliaCCMP2878",
+        "species": "Chromera velia"
+      },
+      {
+        "id": "CyegresiiCBS114405",
+        "species": "Cladophialophora yegresii"
+      },
+      {
+        "id": "DandersoniqqDerAnde1.1",
+        "species": "Dermacentor andersoni"
+      },
+      {
+        "id": "DandersoniqqDerAnde1.2",
+        "species": "Dermacentor andersoni"
+      },
+      {
+        "id": "DdiscoideumAX4",
+        "species": "Dictyostelium discoideum"
+      },
+      {
+        "id": "DfabryiCBS789",
+        "species": "Debaryomyces fabryi"
+      },
+      {
+        "id": "DhanseniiCBS767",
+        "species": "Debaryomyces hansenii"
+      },
+      {
+        "id": "Dmelanogasteriso-1",
+        "species": "Drosophila melanogaster"
+      },
+      {
+        "id": "DmuelleriOu54",
+        "species": "Dictyocoela muelleri"
+      },
+      {
+        "id": "DpurpureumQSDP1",
+        "species": "Dictyostelium purpureum"
+      },
+      {
+        "id": "DroeselumOu19",
+        "species": "Dictyocoela roeselum"
+      },
+      {
+        "id": "DrugosaCBS613",
+        "species": "Diutina rugosa"
+      },
+      {
+        "id": "DsilvarumDsil-2018",
+        "species": "Dermacentor silvarum"
+      },
+      {
+        "id": "EacervulinaHoughton",
+        "species": "Eimeria acervulina"
+      },
+      {
+        "id": "EaedisUSNM41457",
+        "species": "Edhazardia aedis"
+      },
+      {
+        "id": "EafricanusCBS136260",
+        "species": "Emergomyces africanus"
+      },
+      {
+        "id": "EaquamarinaCBS119918",
+        "species": "Exophiala aquamarina"
+      },
+      {
+        "id": "EbieneusiH348",
+        "species": "Enterocytozoon bieneusi"
+      },
+      {
+        "id": "EbrunettiHoughton",
+        "species": "Eimeria brunetti"
+      },
+      {
+        "id": "EcanceriGB1",
+        "species": "Enterospora canceri"
+      },
+      {
+        "id": "EcrescensUAMH3008",
+        "species": "Emmonsia crescens"
+      },
+      {
+        "id": "EcuniculiEC1",
+        "species": "Encephalitozoon cuniculi"
+      },
+      {
+        "id": "EcuniculiEC2",
+        "species": "Encephalitozoon cuniculi"
+      },
+      {
+        "id": "EcuniculiEC3",
+        "species": "Encephalitozoon cuniculi"
+      },
+      {
+        "id": "EcuniculiEcunIII-L",
+        "species": "Encephalitozoon cuniculi"
+      },
+      {
+        "id": "EcuniculiGBM1",
+        "species": "Encephalitozoon cuniculi"
+      },
+      {
+        "id": "EdermatitidisNIHUT8656",
+        "species": "Exophiala dermatitidis"
+      },
+      {
+        "id": "EdisparSAW760",
+        "species": "Entamoeba dispar"
+      },
+      {
+        "id": "EfalciformisBayerHaberkorn1970",
+        "species": "Eimeria falciformis"
+      },
+      {
+        "id": "EfestucaeFl1",
+        "species": "Epichloe festucae"
+      },
+      {
+        "id": "EglyceriaeE277",
+        "species": "Epichloe glyceriae"
+      },
+      {
+        "id": "EhellemATCC50504",
+        "species": "Encephalitozoon hellem"
+      },
+      {
+        "id": "EhellemSwiss",
+        "species": "Encephalitozoon hellem"
+      },
+      {
+        "id": "EhepatopenaeiEHPID16",
+        "species": "Enterocytozoon hepatopenaei"
+      },
+      {
+        "id": "EhepatopenaeiTH1",
+        "species": "Enterocytozoon hepatopenaei"
+      },
+      {
+        "id": "EhistolyticaDS4-868",
+        "species": "Entamoeba histolytica"
+      },
+      {
+        "id": "EhistolyticaHM1IMSS",
+        "species": "Entamoeba histolytica"
+      },
+      {
+        "id": "EhistolyticaHM1IMSS-A",
+        "species": "Entamoeba histolytica"
+      },
+      {
+        "id": "EhistolyticaHM1IMSS-B",
+        "species": "Entamoeba histolytica"
+      },
+      {
+        "id": "EhistolyticaHM3IMSS",
+        "species": "Entamoeba histolytica"
+      },
+      {
+        "id": "EhistolyticaKU27",
+        "species": "Entamoeba histolytica"
+      },
+      {
+        "id": "EhistolyticaKU48",
+        "species": "Entamoeba histolytica"
+      },
+      {
+        "id": "EhistolyticaKU50",
+        "species": "Entamoeba histolytica"
+      },
+      {
+        "id": "EhistolyticaRahman",
+        "species": "Entamoeba histolytica"
+      },
+      {
+        "id": "EintestinalisATCC50506",
+        "species": "Encephalitozoon intestinalis"
+      },
+      {
+        "id": "EinvadensIP1",
+        "species": "Entamoeba invadens"
+      },
+      {
+        "id": "EmaximaWeybridge",
+        "species": "Eimeria maxima"
+      },
+      {
+        "id": "EmesophilaCBS40295",
+        "species": "Exophiala mesophila"
+      },
+      {
+        "id": "EmitisHoughton",
+        "species": "Eimeria mitis"
+      },
+      {
+        "id": "EmonterogeiiLV88",
+        "species": "Endotrypanum monterogeii"
+      },
+      {
+        "id": "EmoshkovskiiLaredo",
+        "species": "Entamoeba moshkovskii"
+      },
+      {
+        "id": "EnecatrixHoughton",
+        "species": "Eimeria necatrix"
+      },
+      {
+        "id": "EnuttalliP19",
+        "species": "Entamoeba nuttalli"
+      },
+      {
+        "id": "EoligospermaCBS72588",
+        "species": "Exophiala oligosperma"
+      },
+      {
+        "id": "Eorientalis5z489",
+        "species": "Emergomyces orientalis"
+      },
+      {
+        "id": "EpasteurianusEp9510",
+        "species": "Emergomyces pasteurianus"
+      },
+      {
+        "id": "EpraecoxHoughton",
+        "species": "Eimeria praecox"
+      },
+      {
+        "id": "EromaleaeSJ2008",
+        "species": "Encephalitozoon romaleae"
+      },
+      {
+        "id": "EspiniferaCBS89968",
+        "species": "Exophiala spinifera"
+      },
+      {
+        "id": "EtenellaHoughton",
+        "species": "Eimeria tenella"
+      },
+      {
+        "id": "EtenellaHoughton2021",
+        "species": "Eimeria tenella"
+      },
+      {
+        "id": "FcircinatumNRRL25331",
+        "species": "Fusarium circinatum"
+      },
+      {
+        "id": "FfujikuroiIMI58289",
+        "species": "Fusarium fujikuroi"
+      },
+      {
+        "id": "Fgraminearum233423",
+        "species": "Fusarium graminearum"
+      },
+      {
+        "id": "FgraminearumPH-1",
+        "species": "Fusarium graminearum"
+      },
+      {
+        "id": "FmangiferaeMRC7560",
+        "species": "Fusarium mangiferae"
+      },
+      {
+        "id": "FmultimorphosaCBS102226",
+        "species": "Fonsecaea multimorphosa"
+      },
+      {
+        "id": "FodoratissimumNRRL54006",
+        "species": "Fusarium odoratissimum"
+      },
+      {
+        "id": "Fodoratissimumrace4",
+        "species": "Fusarium odoratissimum"
+      },
+      {
+        "id": "Foxysporum26406",
+        "species": "Fusarium oxysporum"
+      },
+      {
+        "id": "Foxysporum4287",
+        "species": "Fusarium oxysporum"
+      },
+      {
+        "id": "FoxysporumFo47",
+        "species": "Fusarium oxysporum"
+      },
+      {
+        "id": "FoxysporumFo5176",
+        "species": "Fusarium oxysporum"
+      },
+      {
+        "id": "FoxysporumNRRL32931",
+        "species": "Fusarium oxysporum"
+      },
+      {
+        "id": "Foxysporumrace1",
+        "species": "Fusarium oxysporum"
+      },
+      {
+        "id": "FpedrosoiCBS271-37",
+        "species": "Fonsecaea pedrosoi"
+      },
+      {
+        "id": "FproliferatumET1",
+        "species": "Fusarium proliferatum"
+      },
+      {
+        "id": "FproliferatumNRRL62905",
+        "species": "Fusarium proliferatum"
+      },
+      {
+        "id": "FsolaniFSSC5MPISDFRAT0091",
+        "species": "Fusarium solani"
+      },
+      {
+        "id": "Fvanettenii77134",
+        "species": "Fusarium vanettenii"
+      },
+      {
+        "id": "Fverticillioides7600",
+        "species": "Fusarium verticillioides"
+      },
+      {
+        "id": "GausteniTTRI",
+        "species": "Glossina austeni"
+      },
+      {
+        "id": "GbrevipalpisIAEA",
+        "species": "Glossina brevipalpis"
+      },
+      {
+        "id": "GfuscipesIAEA",
+        "species": "Glossina fuscipes"
+      },
+      {
+        "id": "GfuscipesIAEA2018",
+        "species": "Glossina fuscipes"
+      },
+      {
+        "id": "GgallusbGalGal1",
+        "species": "Gallus gallus"
+      },
+      {
+        "id": "GintestinalisAssemblageAAS175",
+        "species": "Giardia Assemblage A"
+      },
+      {
+        "id": "GintestinalisAssemblageACIA",
+        "species": "Giardia Assemblage A"
+      },
+      {
+        "id": "GintestinalisAssemblageADH",
+        "species": "Giardia Assemblage A"
+      },
+      {
+        "id": "GintestinalisAssemblageAWB",
+        "species": "Giardia Assemblage A"
+      },
+      {
+        "id": "GintestinalisAssemblageAWB2019",
+        "species": "Giardia Assemblage A"
+      },
+      {
+        "id": "GintestinalisAssemblageAWBCalgary",
+        "species": "Giardia Assemblage A"
+      },
+      {
+        "id": "GintestinalisAssemblageBBAH15c1",
+        "species": "Giardia Assemblage B"
+      },
+      {
+        "id": "GintestinalisAssemblageBGS",
+        "species": "Giardia Assemblage B"
+      },
+      {
+        "id": "GintestinalisAssemblageBGS_B",
+        "species": "Giardia Assemblage B"
+      },
+      {
+        "id": "GintestinalisAssemblageBGSCalgary",
+        "species": "Giardia Assemblage B"
+      },
+      {
+        "id": "GintestinalisAssemblageDDID",
+        "species": "Giardia Assemblage D"
+      },
+      {
+        "id": "GintestinalisAssemblageEP15",
+        "species": "Giardia Assemblage E"
+      },
+      {
+        "id": "GintestinalisBeaver",
+        "species": "Giardia Assemblage A"
+      },
+      {
+        "id": "GirregulareDAOMBR486",
+        "species": "Globisporangium irregulare"
+      },
+      {
+        "id": "GiwayamaeDAOMBR242034",
+        "species": "Globisporangium iwayamae"
+      },
+      {
+        "id": "GmorsitansYale",
+        "species": "Glossina morsitans"
+      },
+      {
+        "id": "GmurisRobertsThomson",
+        "species": "Giardia muris"
+      },
+      {
+        "id": "GniphandrodesUnknown",
+        "species": "Gregarina niphandrodes"
+      },
+      {
+        "id": "GpallidipesIAEA",
+        "species": "Glossina pallidipes"
+      },
+      {
+        "id": "GpalpalisIAEA",
+        "species": "Glossina palpalis"
+      },
+      {
+        "id": "GtriticiR3-111a-1",
+        "species": "Gaeumannomyces tritici"
+      },
+      {
+        "id": "GultimumBR650",
+        "species": "Globisporangium ultimum"
+      },
+      {
+        "id": "GultimumDAOMBR144",
+        "species": "Globisporangium ultimum"
+      },
+      {
+        "id": "HarabidopsidisEmoy2",
+        "species": "Hyaloperonospora arabidopsidis"
+      },
+      {
+        "id": "HasiaticumHyas2018",
+        "species": "Hyalomma asiaticum"
+      },
+      {
+        "id": "HcapsulatumG184AR",
+        "species": "Histoplasma capsulatum"
+      },
+      {
+        "id": "HcapsulatumG186AR",
+        "species": "Histoplasma capsulatum"
+      },
+      {
+        "id": "HcapsulatumG217B",
+        "species": "Histoplasma capsulatum"
+      },
+      {
+        "id": "HcapsulatumH143",
+        "species": "Histoplasma capsulatum"
+      },
+      {
+        "id": "HcapsulatumH88",
+        "species": "Histoplasma capsulatum"
+      },
+      {
+        "id": "HcapsulatumNAm1",
+        "species": "Histoplasma capsulatum"
+      },
+      {
+        "id": "HcapsulatumWU24",
+        "species": "Histoplasma capsulatum"
+      },
+      {
+        "id": "Heriocheircanceri",
+        "species": "Hepatospora eriocheir"
+      },
+      {
+        "id": "HeriocheirGB1",
+        "species": "Hepatospora eriocheir"
+      },
+      {
+        "id": "HguilliermondiiUTAD222",
+        "species": "Hanseniaspora guilliermondii"
+      },
+      {
+        "id": "HhammondiHH34",
+        "species": "Hammondia hammondi"
+      },
+      {
+        "id": "HlongicornisHaeL2018",
+        "species": "Haemaphysalis longicornis"
+      },
+      {
+        "id": "HmagnivoraBEOM2",
+        "species": "Hamiltosporidium magnivora"
+      },
+      {
+        "id": "HmagnivoraILBN2",
+        "species": "Hamiltosporidium magnivora"
+      },
+      {
+        "id": "Hmeleagridis2922-C604-10x",
+        "species": "Histomonas meleagridis"
+      },
+      {
+        "id": "Hmeleagridis2922-C604-290x",
+        "species": "Histomonas meleagridis"
+      },
+      {
+        "id": "Hpiliocolobus2019",
+        "species": "Hepatocystis sp. ex Piliocolobus tephrosceles"
+      },
+      {
+        "id": "HsapiensREF",
+        "species": "Homo sapiens"
+      },
+      {
+        "id": "HtartakovskyiSISKIN1",
+        "species": "Haemoproteus tartakovskyi"
+      },
+      {
+        "id": "HtvaerminnensisFIOER33",
+        "species": "Hamiltosporidium tvaerminnensis"
+      },
+      {
+        "id": "HtvaerminnensisILG3",
+        "species": "Hamiltosporidium tvaerminnensis"
+      },
+      {
+        "id": "HtvaerminnensisOER-3-3",
+        "species": "Hamiltosporidium tvaerminnensis"
+      },
+      {
+        "id": "HuvarumAWRI3580",
+        "species": "Hanseniaspora uvarum"
+      },
+      {
+        "id": "HvastatrixRaceXXXIII",
+        "species": "Hemileia vastatrix"
+      },
+      {
+        "id": "HwerneckiiEXF-2000",
+        "species": "Hortaea werneckii"
+      },
+      {
+        "id": "IpersulcatusIper2018",
+        "species": "Ixodes persulcatus"
+      },
+      {
+        "id": "IricinusCharlesRiver",
+        "species": "Ixodes ricinus"
+      },
+      {
+        "id": "IscapularisISE6",
+        "species": "Ixodes scapularis"
+      },
+      {
+        "id": "IscapularisPalLabHiFi",
+        "species": "Ixodes scapularis"
+      },
+      {
+        "id": "IscapularisWikel",
+        "species": "Ixodes scapularis"
+      },
+      {
+        "id": "KbestiolaeCBS10118",
+        "species": "Kwoniella bestiolae"
+      },
+      {
+        "id": "KdejecticolaCBS10117",
+        "species": "Kwoniella dejecticola"
+      },
+      {
+        "id": "KheveanensisCBS569",
+        "species": "Kwoniella heveanensis"
+      },
+      {
+        "id": "KlactisNRRLY-1140",
+        "species": "Kluyveromyces lactis"
+      },
+      {
+        "id": "KmangroviensisCBS8507",
+        "species": "Kwoniella mangrovensis"
+      },
+      {
+        "id": "KmarxianusDMKU3-1042",
+        "species": "Kluyveromyces marxianus"
+      },
+      {
+        "id": "LaethiopicaL147",
+        "species": "Leishmania aethiopica"
+      },
+      {
+        "id": "LamazonensisMHOMBR71973M2269",
+        "species": "Leishmania amazonensis"
+      },
+      {
+        "id": "LamazonensisPH8",
+        "species": "Leishmania amazonensis"
+      },
+      {
+        "id": "LarabicaLEM1108",
+        "species": "Leishmania arabica"
+      },
+      {
+        "id": "LbraziliensisMHOMBR75M2903",
+        "species": "Leishmania braziliensis"
+      },
+      {
+        "id": "LbraziliensisMHOMBR75M2904",
+        "species": "Leishmania braziliensis"
+      },
+      {
+        "id": "LbraziliensisMHOMBR75M2904_2019",
+        "species": "Leishmania braziliensis"
+      },
+      {
+        "id": "LcorymbiferaJMRCFSU9682",
+        "species": "Lichtheimia corymbifera"
+      },
+      {
+        "id": "LdelienseUoL-UT",
+        "species": "Leptotrombidium deliense"
+      },
+      {
+        "id": "LdonovaniBHU1220",
+        "species": "Leishmania donovani"
+      },
+      {
+        "id": "LdonovaniBPK282A1",
+        "species": "Leishmania donovani"
+      },
+      {
+        "id": "LdonovaniCL-SL",
+        "species": "Leishmania donovani"
+      },
+      {
+        "id": "LdonovaniHU3",
+        "species": "Leishmania donovani"
+      },
+      {
+        "id": "LdonovaniLV9",
+        "species": "Leishmania donovani"
+      },
+      {
+        "id": "LelongisporusNRRLYB-4239",
+        "species": "Lodderomyces elongisporus"
+      },
+      {
+        "id": "LenriettiiLEM3045",
+        "species": "Leishmania enriettii"
+      },
+      {
+        "id": "LenriettiMCAVBR2001CUR178",
+        "species": "Leishmania enriettii"
+      },
+      {
+        "id": "LgerbilliLEM452",
+        "species": "Leishmania gerbilli"
+      },
+      {
+        "id": "LinfantumJPCM5",
+        "species": "Leishmania infantum"
+      },
+      {
+        "id": "LlongipalpisJacobina",
+        "species": "Lutzomyia longipalpis"
+      },
+      {
+        "id": "LlongipalpisM1",
+        "species": "Lutzomyia longipalpis"
+      },
+      {
+        "id": "LmajorFriedlin",
+        "species": "Leishmania major"
+      },
+      {
+        "id": "LmajorFriedlin2021",
+        "species": "Leishmania major"
+      },
+      {
+        "id": "LmajorLV39c5",
+        "species": "Leishmania major"
+      },
+      {
+        "id": "LmajorSD75.1",
+        "species": "Leishmania major"
+      },
+      {
+        "id": "LmartiniquensisLEM2494",
+        "species": "Leishmania martiniquensis"
+      },
+      {
+        "id": "LmartiniquensisMHOMTH2012LSCM1",
+        "species": "Leishmania martiniquensis"
+      },
+      {
+        "id": "LmexicanaMHOMGT2001U1103",
+        "species": "Leishmania mexicana"
+      },
+      {
+        "id": "LorientalisMHOMTH2014LSCM4",
+        "species": "Leishmania orientalis"
+      },
+      {
+        "id": "LpanamensisMHOMCOL81L13",
+        "species": "Leishmania panamensis"
+      },
+      {
+        "id": "LpanamensisMHOMPA94PSC1",
+        "species": "Leishmania panamensis"
+      },
+      {
+        "id": "LprolificansJHH5317",
+        "species": "Lomentospora prolificans"
+      },
+      {
+        "id": "LpyrrhocorisH10",
+        "species": "Leptomonas pyrrhocoris"
+      },
+      {
+        "id": "LramosaKPH11",
+        "species": "Lichtheimia ramosa"
+      },
+      {
+        "id": "LseymouriATCC30220",
+        "species": "Leptomonas seymouri"
+      },
+      {
+        "id": "Lsp.GhanaMHOMGH2012GH5",
+        "species": "Leishmania sp. Ghana"
+      },
+      {
+        "id": "Lsp.NamibiaMPRONA1975252LV425",
+        "species": "Leishmania sp. Namibia"
+      },
+      {
+        "id": "LtarentolaeParrotTarII",
+        "species": "Leishmania tarentolae"
+      },
+      {
+        "id": "LtarentolaeParrotTarII2019",
+        "species": "Leishmania tarentolae"
+      },
+      {
+        "id": "LtigrinusALCF2SS1-7",
+        "species": "Lentinus tigrinus"
+      },
+      {
+        "id": "LtropicaL590",
+        "species": "Leishmania tropica"
+      },
+      {
+        "id": "LturanicaLEM423",
+        "species": "Leishmania turanica"
+      },
+      {
+        "id": "ManisopliaeARSEF549",
+        "species": "Metarhizium anisopliae"
+      },
+      {
+        "id": "MbalamuthiATCC30984",
+        "species": "Mastigamoeba balamuthi"
+      },
+      {
+        "id": "McanisCBS113480",
+        "species": "Microsporum canis"
+      },
+      {
+        "id": "Mcircinelloides1006PhL",
+        "species": "Mucor circinelloides"
+      },
+      {
+        "id": "MdaphniaeUGP3",
+        "species": "Mitosporidium daphniae"
+      },
+      {
+        "id": "Mdomesticaaabys",
+        "species": "Musca domestica"
+      },
+      {
+        "id": "Mdomesticaaabys2023",
+        "species": "Musca domestica"
+      },
+      {
+        "id": "MexilisPA203",
+        "species": "Monocercomonoides exilis"
+      },
+      {
+        "id": "MfascicularisREF",
+        "species": "Macaca fascicularis"
+      },
+      {
+        "id": "MfructicolaCPMC6",
+        "species": "Monilinia fructicola"
+      },
+      {
+        "id": "MglobosaCBS7966",
+        "species": "Malassezia globosa"
+      },
+      {
+        "id": "MguilliermondiiATCC6260",
+        "species": "Meyerozyma guilliermondii"
+      },
+      {
+        "id": "Mlarici-populina98AG31",
+        "species": "Melampsora larici-populina"
+      },
+      {
+        "id": "MlusitanicusCBS277-49",
+        "species": "Mucor lusitanicus"
+      },
+      {
+        "id": "MmulattaAG07107",
+        "species": "Macaca mulatta"
+      },
+      {
+        "id": "MmusculusC57BL6J",
+        "species": "Mus musculus"
+      },
+      {
+        "id": "Mmycetomatismm55",
+        "species": "Madurella mycetomatis"
+      },
+      {
+        "id": "MmyotismMyoMyo1",
+        "species": "Myotis myotis"
+      },
+      {
+        "id": "MpachydermatisCBS1879",
+        "species": "Malassezia pachydermatis"
+      },
+      {
+        "id": "MphaseolinaMS6",
+        "species": "Macrophomina phaseolina"
+      },
+      {
+        "id": "MpoaeATCC64411",
+        "species": "Magnaporthiopsis poae"
+      },
+      {
+        "id": "MrestrictaCBS7877",
+        "species": "Malassezia restricta"
+      },
+      {
+        "id": "MrestrictaKCTC27527",
+        "species": "Malassezia restricta"
+      },
+      {
+        "id": "Msp.FI-F-10",
+        "species": "Microsporidium sp."
+      },
+      {
+        "id": "MsympodialisATCC42132",
+        "species": "Malassezia sympodialis"
+      },
+      {
+        "id": "NalbidaJCM2334",
+        "species": "Naganishia albida"
+      },
+      {
+        "id": "NalbidaNRRLY1402",
+        "species": "Naganishia albida"
+      },
+      {
+        "id": "NapisBRL01",
+        "species": "Nosema apis"
+      },
+      {
+        "id": "NausubeliERTm2",
+        "species": "Nematocida ausubeli"
+      },
+      {
+        "id": "NausubeliERTm6",
+        "species": "Nematocida ausubeli"
+      },
+      {
+        "id": "NbombycisCQ1",
+        "species": "Nosema bombycis"
+      },
+      {
+        "id": "NcaninumLIV",
+        "species": "Neospora caninum"
+      },
+      {
+        "id": "NcaninumLiverpool2019",
+        "species": "Neospora caninum"
+      },
+      {
+        "id": "NceranaeBRL",
+        "species": "Nosema ceranae"
+      },
+      {
+        "id": "NceranaeBRL01",
+        "species": "Nosema ceranae"
+      },
+      {
+        "id": "NceranaePA08_1199",
+        "species": "Nosema ceranae"
+      },
+      {
+        "id": "NcrassaOR74A",
+        "species": "Neurospora crassa"
+      },
+      {
+        "id": "NdiscretaFGSC8579",
+        "species": "Neurospora discreta"
+      },
+      {
+        "id": "NdisplodereJUm2807",
+        "species": "Nematocida displodere"
+      },
+      {
+        "id": "NfowleriATCC30863",
+        "species": "Naegleria fowleri"
+      },
+      {
+        "id": "NfowleriATCC30894",
+        "species": "Naegleria fowleri"
+      },
+      {
+        "id": "NfowleriTy",
+        "species": "Naegleria fowleri"
+      },
+      {
+        "id": "NglabratusBG2",
+        "species": "Nakaseomyces glabratus"
+      },
+      {
+        "id": "NglabratusBG3993",
+        "species": "Nakaseomyces glabratus"
+      },
+      {
+        "id": "NglabratusCBS138",
+        "species": "Nakaseomyces glabratus"
+      },
+      {
+        "id": "NglabratusCBS1382020",
+        "species": "Nakaseomyces glabratus"
+      },
+      {
+        "id": "NglabratusDSY562",
+        "species": "Nakaseomyces glabratus"
+      },
+      {
+        "id": "NgranulosisOu3-Ou53",
+        "species": "Nosema granulosis"
+      },
+      {
+        "id": "NgruberiNEG-M",
+        "species": "Naegleria gruberi"
+      },
+      {
+        "id": "NgypseaCBS118893",
+        "species": "Nannizzia gypsea"
+      },
+      {
+        "id": "NironsiiERTm5",
+        "species": "Nematocida ironsii"
+      },
+      {
+        "id": "NlovaniensisATCC30569",
+        "species": "Naegleria lovaniensis"
+      },
+      {
+        "id": "NlovaniensisNL_76_15_250",
+        "species": "Naegleria lovaniensis"
+      },
+      {
+        "id": "NmajorJUm2507",
+        "species": "Nematocida major"
+      },
+      {
+        "id": "NparisiiERTm1",
+        "species": "Nematocida parisii"
+      },
+      {
+        "id": "NparisiiERTm3",
+        "species": "Nematocida parisii"
+      },
+      {
+        "id": "NtetraspermaFGSC2508",
+        "species": "Neurospora tetrasperma"
+      },
+      {
+        "id": "OcolligataFI-SK-17-1",
+        "species": "Ordospora colligata"
+      },
+      {
+        "id": "OcolligataGB-EP-1",
+        "species": "Ordospora colligata"
+      },
+      {
+        "id": "OcolligataNO-V-7",
+        "species": "Ordospora colligata"
+      },
+      {
+        "id": "OcolligataOC4",
+        "species": "Ordospora colligata"
+      },
+      {
+        "id": "OpiceaeUAMH11346",
+        "species": "Ophiostoma piceae"
+      },
+      {
+        "id": "PadleriG01",
+        "species": "Plasmodium adleri"
+      },
+      {
+        "id": "PanserinaSmat",
+        "species": "Podospora anserina"
+      },
+      {
+        "id": "PaphanidermatumDAOMBR444",
+        "species": "Pythium aphanidermatum"
+      },
+      {
+        "id": "PaphanisDRCT72020",
+        "species": "Podosphaera aphanis"
+      },
+      {
+        "id": "PargentipesIndia",
+        "species": "Phlebotomus argentipes"
+      },
+      {
+        "id": "ParrhenomanesATCC12531",
+        "species": "Pythium arrhenomanes"
+      },
+      {
+        "id": "PattinorumCBS131958",
+        "species": "Phialophora attinorum"
+      },
+      {
+        "id": "PbergheiANKA",
+        "species": "Plasmodium berghei"
+      },
+      {
+        "id": "PbillcollinsiG01",
+        "species": "Plasmodium billcollinsi"
+      },
+      {
+        "id": "PblacklockiG01",
+        "species": "Plasmodium blacklocki"
+      },
+      {
+        "id": "PblakesleeanusNRRL1555",
+        "species": "Phycomyces blakesleeanus"
+      },
+      {
+        "id": "PbrasilianumBolivianI",
+        "species": "Plasmodium brasilianum"
+      },
+      {
+        "id": "PbrasiliensisPb03",
+        "species": "Paracoccidioides brasiliensis"
+      },
+      {
+        "id": "PbrasiliensisPb18",
+        "species": "Paracoccidioides brasiliensis"
+      },
+      {
+        "id": "Pcactorum10300",
+        "species": "Phytophthora cactorum"
+      },
+      {
+        "id": "PcanisCanA",
+        "species": "Pneumocystis canis"
+      },
+      {
+        "id": "PcapsiciLT1534",
+        "species": "Phytophthora capsici"
+      },
+      {
+        "id": "PcariniiB80",
+        "species": "Pneumocystis carinii"
+      },
+      {
+        "id": "Pchabaudichabaudi",
+        "species": "Plasmodium chabaudi"
+      },
+      {
+        "id": "PchrysosporiumRP-78",
+        "species": "Phanerochaete chrysosporium"
+      },
+      {
+        "id": "PcinnamomiGKB4",
+        "species": "Phytophthora cinnamomi"
+      },
+      {
+        "id": "PcoatneyiHackeri",
+        "species": "Plasmodium coatneyi"
+      },
+      {
+        "id": "PcomataTmat",
+        "species": "Podospora comata"
+      },
+      {
+        "id": "PconfusumCUL13",
+        "species": "Paratrypanosoma confusum"
+      },
+      {
+        "id": "PcynomolgiB",
+        "species": "Plasmodium cynomolgi"
+      },
+      {
+        "id": "PcynomolgiM",
+        "species": "Plasmodium cynomolgi"
+      },
+      {
+        "id": "Pdestructans20631-21",
+        "species": "Pseudogymnoascus destructans"
+      },
+      {
+        "id": "PdigitatumPd1",
+        "species": "Penicillium digitatum"
+      },
+      {
+        "id": "PeffusaR13",
+        "species": "Peronospora effusa"
+      },
+      {
+        "id": "Pexpansumd1",
+        "species": "Penicillium expansum"
+      },
+      {
+        "id": "Pfalciparum3D7",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "Pfalciparum7G8",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "Pfalciparum7G8-2019",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumCD01",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumDd2",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumGA01",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumGB4",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumGN01",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumHB3",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumIT",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumKE01",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumKH01",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumKH02",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumML01",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumNF135C10",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumNF166",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumNF54",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumSD01",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumSN01",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfalciparumTG01",
+        "species": "Plasmodium falciparum"
+      },
+      {
+        "id": "PfijiensisCIRAD86",
+        "species": "Pseudocercospora fijiensis"
+      },
+      {
+        "id": "PfragileNilgiri",
+        "species": "Plasmodium fragile"
+      },
+      {
+        "id": "PgaboniG01",
+        "species": "Plasmodium gaboni"
+      },
+      {
+        "id": "PgaboniSY75",
+        "species": "Plasmodium gaboni"
+      },
+      {
+        "id": "Pgallinaceum8A",
+        "species": "Plasmodium gallinaceum"
+      },
+      {
+        "id": "PgiganteaA",
+        "species": "Porospora gigantea"
+      },
+      {
+        "id": "PgiganteaB",
+        "species": "Porospora gigantea"
+      },
+      {
+        "id": "PgraminisCRL75-36-700-3",
+        "species": "Puccinia graminis"
+      },
+      {
+        "id": "PhertigiMCOEPA1965C119",
+        "species": "Porcisia hertigi"
+      },
+      {
+        "id": "PhumanusUSDA",
+        "species": "Pediculus humanus"
+      },
+      {
+        "id": "PinfestansT30-4",
+        "species": "Phytophthora infestans"
+      },
+      {
+        "id": "PinsidiosumPi-s",
+        "species": "Pythium insidiosum"
+      },
+      {
+        "id": "PinuiSanAntonio1",
+        "species": "Plasmodium inui"
+      },
+      {
+        "id": "PjiroveciiRU7",
+        "species": "Pneumocystis jirovecii"
+      },
+      {
+        "id": "PjiroveciiSE8",
+        "species": "Pneumocystis jirovecii"
+      },
+      {
+        "id": "PknowlesiA1H1",
+        "species": "Plasmodium knowlesi"
+      },
+      {
+        "id": "PknowlesiH",
+        "species": "Plasmodium knowlesi"
+      },
+      {
+        "id": "PknowlesiMalayanPk1A",
+        "species": "Plasmodium knowlesi"
+      },
+      {
+        "id": "PkudriavzeviiCBS5147",
+        "species": "Pichia kudriavzevii"
+      },
+      {
+        "id": "PkudriavzeviiCBS573",
+        "species": "Pichia kudriavzevii"
+      },
+      {
+        "id": "PlingamJN3",
+        "species": "Plenodomus lingam"
+      },
+      {
+        "id": "PlutziiPb01",
+        "species": "Paracoccidioides lutzii"
+      },
+      {
+        "id": "PmacacaeP2C",
+        "species": "Pneumocystis sp. 'macacae'"
+      },
+      {
+        "id": "PmalariaeUG01",
+        "species": "Plasmodium malariae"
+      },
+      {
+        "id": "PmurinaB123",
+        "species": "Pneumocystis murina"
+      },
+      {
+        "id": "PneurophiliaMK1",
+        "species": "Pseudoloma neurophilia"
+      },
+      {
+        "id": "PnodorumSN15",
+        "species": "Parastagonospora nodorum"
+      },
+      {
+        "id": "PomphalodesCBS100304",
+        "species": "Pyronema omphalodes"
+      },
+      {
+        "id": "PoryctolagiCS1",
+        "species": "Pneumocystis oryctolagi"
+      },
+      {
+        "id": "Poryzae70-15",
+        "species": "Pyricularia oryzae"
+      },
+      {
+        "id": "PoryzaeBR32",
+        "species": "Pyricularia oryzae"
+      },
+      {
+        "id": "PostreatusPC15",
+        "species": "Pleurotus ostreatus"
+      },
+      {
+        "id": "PostreatusPC9",
+        "species": "Pleurotus ostreatus"
+      },
+      {
+        "id": "PovalecurtisiGH01",
+        "species": "Plasmodium ovale"
+      },
+      {
+        "id": "PovalewallikeriPowCR01",
+        "species": "Plasmodium ovale"
+      },
+      {
+        "id": "Ppalmivorasbr112.9",
+        "species": "Phytophthora palmivora"
+      },
+      {
+        "id": "PpapatasiIsrael",
+        "species": "Phlebotomus papatasi"
+      },
+      {
+        "id": "PpapatasiM1",
+        "species": "Phlebotomus papatasi"
+      },
+      {
+        "id": "PparasiticaINRA-310",
+        "species": "Phytophthora parasitica"
+      },
+      {
+        "id": "PpennisetigenaBr36",
+        "species": "Pyricularia pennisetigena"
+      },
+      {
+        "id": "PplurivoraAV1007",
+        "species": "Phytophthora plurivora"
+      },
+      {
+        "id": "PpraefalciparumG01",
+        "species": "Plasmodium praefalciparum"
+      },
+      {
+        "id": "Pramorum14567",
+        "species": "Phytophthora ramorum"
+      },
+      {
+        "id": "PramorumPr-102",
+        "species": "Phytophthora ramorum"
+      },
+      {
+        "id": "PreichenowiCDC",
+        "species": "Plasmodium reichenowi"
+      },
+      {
+        "id": "PreichenowiG01",
+        "species": "Plasmodium reichenowi"
+      },
+      {
+        "id": "PrelictumSGS1-like",
+        "species": "Plasmodium relictum"
+      },
+      {
+        "id": "PrubensWisconsin54-1255",
+        "species": "Penicillium rubens"
+      },
+      {
+        "id": "PsojaeP6497",
+        "species": "Phytophthora sojae"
+      },
+      {
+        "id": "PsorghiRO10H11247",
+        "species": "Puccinia sorghi"
+      },
+      {
+        "id": "Pstriiformis93-210",
+        "species": "Puccinia striiformis"
+      },
+      {
+        "id": "Pstriiformis93TX-2",
+        "species": "Puccinia striiformis"
+      },
+      {
+        "id": "Ptriticina1-1BBBDRace1",
+        "species": "Puccinia triticina"
+      },
+      {
+        "id": "PvariotiiCBS101075",
+        "species": "Paecilomyces variotii"
+      },
+      {
+        "id": "PvexansDAOMBR484",
+        "species": "Phytopythium vexans"
+      },
+      {
+        "id": "PvinckeibrucechwattiDA",
+        "species": "Plasmodium vinckei"
+      },
+      {
+        "id": "PvinckeiCameroonEL",
+        "species": "Plasmodium vinckei"
+      },
+      {
+        "id": "PvinckeilentumDE",
+        "species": "Plasmodium vinckei"
+      },
+      {
+        "id": "PvinckeipetteriCR",
+        "species": "Plasmodium vinckei"
+      },
+      {
+        "id": "PvinckeipetteriCR2020",
+        "species": "Plasmodium vinckei"
+      },
+      {
+        "id": "PvinckeivinckeiCY",
+        "species": "Plasmodium vinckei"
+      },
+      {
+        "id": "Pvinckeivinckeivinckei",
+        "species": "Plasmodium vinckei"
+      },
+      {
+        "id": "Pvivax-likePvl01",
+        "species": "Plasmodium vivax-like sp."
+      },
+      {
+        "id": "PvivaxP01",
+        "species": "Plasmodium vivax"
+      },
+      {
+        "id": "PvivaxPAM",
+        "species": "Plasmodium vivax"
+      },
+      {
+        "id": "PvivaxPvSY56",
+        "species": "Plasmodium vivax"
+      },
+      {
+        "id": "PvivaxPvW1",
+        "species": "Plasmodium vivax"
+      },
+      {
+        "id": "PvivaxSal1",
+        "species": "Plasmodium vivax"
+      },
+      {
+        "id": "Pwakefieldiae2A",
+        "species": "Pneumocystis wakefieldiae"
+      },
+      {
+        "id": "Pyoeliiyoelii17X",
+        "species": "Plasmodium yoelii"
+      },
+      {
+        "id": "Pyoeliiyoelii17XNL",
+        "species": "Plasmodium yoelii"
+      },
+      {
+        "id": "Pyoeliiyoelii17XNL2023",
+        "species": "Plasmodium yoelii"
+      },
+      {
+        "id": "PyoeliiyoeliiYM",
+        "species": "Plasmodium yoelii"
+      },
+      {
+        "id": "PzonataCBS506.65",
+        "species": "Penicilliopsis zonata"
+      },
+      {
+        "id": "RannulatusKleinGrass",
+        "species": "Rhipicephalus annulatus"
+      },
+      {
+        "id": "RdelemarRA99-880",
+        "species": "Rhizopus delemar"
+      },
+      {
+        "id": "RirregularisA1DAOM664342",
+        "species": "Rhizophagus irregularis"
+      },
+      {
+        "id": "RirregularisC2",
+        "species": "Rhizophagus irregularis"
+      },
+      {
+        "id": "RirregularisDAOM181602",
+        "species": "Rhizophagus irregularis"
+      },
+      {
+        "id": "RlauricolaRL4",
+        "species": "Raffaelea lauricola"
+      },
+      {
+        "id": "RmackenzieiCBS650.93",
+        "species": "Rhinocladiella mackenziei"
+      },
+      {
+        "id": "RmelleaRicmel1",
+        "species": "Rickenella mellea"
+      },
+      {
+        "id": "RmicroplusRmic-2018",
+        "species": "Rhipicephalus microplus"
+      },
+      {
+        "id": "RmicrosporusATCC52814",
+        "species": "Rhizopus microsporus"
+      },
+      {
+        "id": "RnorvegicusBNNHsdMcwi",
+        "species": "Rattus norvegicus"
+      },
+      {
+        "id": "RprolixusCDC",
+        "species": "Rhodnius prolixus"
+      },
+      {
+        "id": "RsanguineusRsan-2018",
+        "species": "Rhipicephalus sanguineus"
+      },
+      {
+        "id": "SapiospermumIHEM14462",
+        "species": "Scedosporium apiospermum"
+      },
+      {
+        "id": "Sbrasiliensis5110",
+        "species": "Sporothrix brasiliensis"
+      },
+      {
+        "id": "ScalcitransUSDA",
+        "species": "Stomoxys calcitrans"
+      },
+      {
+        "id": "ScerevisiaeS288C",
+        "species": "Saccharomyces cerevisiae"
+      },
+      {
+        "id": "SchartarumIBT40293",
+        "species": "Stachybotrys chartarum"
+      },
+      {
+        "id": "ScommuneH4-8",
+        "species": "Schizophyllum commune"
+      },
+      {
+        "id": "ScyaneusScyaPA1",
+        "species": "Sabethes cyaneus"
+      },
+      {
+        "id": "SdiclinaVS20",
+        "species": "Saprolegnia diclina"
+      },
+      {
+        "id": "SendobioticumMB42",
+        "species": "Synchytrium endobioticum"
+      },
+      {
+        "id": "SjaponicusyFS275",
+        "species": "Schizosaccharomyces japonicus"
+      },
+      {
+        "id": "Slophii42_110",
+        "species": "Spraguea lophii"
+      },
+      {
+        "id": "SludwigiiUTAD17",
+        "species": "Saccharomycodes ludwigii"
+      },
+      {
+        "id": "Smacrosporak-hell",
+        "species": "Sordaria macrospora"
+      },
+      {
+        "id": "SneuronaSN3",
+        "species": "Sarcocystis neurona"
+      },
+      {
+        "id": "SneuronaSOSN1",
+        "species": "Sarcocystis neurona"
+      },
+      {
+        "id": "SoctosporusyFS286",
+        "species": "Schizosaccharomyces octosporus"
+      },
+      {
+        "id": "SparadoxusCBS432",
+        "species": "Saccharomyces paradoxus"
+      },
+      {
+        "id": "SparasiticaCBS223-65",
+        "species": "Saprolegnia parasitica"
+      },
+      {
+        "id": "Spombe972h",
+        "species": "Schizosaccharomyces pombe"
+      },
+      {
+        "id": "SpunctatusDAOMBR117",
+        "species": "Spizellomyces punctatus"
+      },
+      {
+        "id": "SreilianumSRZ2",
+        "species": "Sporisorium reilianum"
+      },
+      {
+        "id": "SsalmonicidaATCC50377",
+        "species": "Spironucleus salmonicida"
+      },
+      {
+        "id": "SscabieiArlian",
+        "species": "Sarcoptes scabiei"
+      },
+      {
+        "id": "Sschenckii1099-18",
+        "species": "Sporothrix schenckii"
+      },
+      {
+        "id": "Ssclerotiorum1980UF-70",
+        "species": "Sclerotinia sclerotiorum"
+      },
+      {
+        "id": "TannulataAnkara",
+        "species": "Theileria annulata"
+      },
+      {
+        "id": "TasahiiCBS2479",
+        "species": "Trichosporon asahii"
+      },
+      {
+        "id": "TatrovirideJCM9410",
+        "species": "Trichoderma atroviride"
+      },
+      {
+        "id": "TbruceiEATRO1125",
+        "species": "Trypanosoma brucei"
+      },
+      {
+        "id": "TbruceigambienseDAL972",
+        "species": "Trypanosoma brucei"
+      },
+      {
+        "id": "TbruceiLister427",
+        "species": "Trypanosoma brucei"
+      },
+      {
+        "id": "TbruceiLister427_2018",
+        "species": "Trypanosoma brucei"
+      },
+      {
+        "id": "TbruceiTREU927",
+        "species": "Trypanosoma brucei"
+      },
+      {
+        "id": "TciferriiCBS4856",
+        "species": "Trichomonascus ciferrii"
+      },
+      {
+        "id": "TcongolenseIL3000",
+        "species": "Trypanosoma congolense"
+      },
+      {
+        "id": "TcongolenseIL3000_2019",
+        "species": "Trypanosoma congolense"
+      },
+      {
+        "id": "TcongolenseTc1_148",
+        "species": "Trypanosoma congolense"
+      },
+      {
+        "id": "TcontejeaniT1",
+        "species": "Thelohania contejeani"
+      },
+      {
+        "id": "Tcruzi231",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziBerenice",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziBrazilA4",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziBug2148",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziCL",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziCLBrener",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziCLBrenerEsmeraldo-like",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziCLBrenerNon-Esmeraldo-like",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziDm28c2014",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziDm28c2017",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziDm28c2018",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziEsmeraldo",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziG",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziJRcl4",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruzimarinkelleiB7",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziS11",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziS15",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziS154a",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziS162a",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziS23b",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziS44a",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziS92a",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziSylvioX10-1",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziSylvioX10-1-2012",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziTCC",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziTulacl2",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziY",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziYC6",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziYcl2",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziYcl4",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TcruziYcl6",
+        "species": "Trypanosoma cruzi"
+      },
+      {
+        "id": "TdeformansPYCC5710",
+        "species": "Taphrina deformans"
+      },
+      {
+        "id": "TequinumCBS127.97",
+        "species": "Trichophyton equinum"
+      },
+      {
+        "id": "TequiperdumOVI",
+        "species": "Trypanosoma equiperdum"
+      },
+      {
+        "id": "TequiWA",
+        "species": "Theileria equi"
+      },
+      {
+        "id": "TevansiSTIB805",
+        "species": "Trypanosoma evansi"
+      },
+      {
+        "id": "TfoetusK",
+        "species": "Tritrichomonas foetus"
+      },
+      {
+        "id": "TgondiiARI",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiCAST",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiCOUG",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiCtCo5",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiFOU",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiGAB2-2007-GAL-DOM2",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiGT1",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiMAS",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiME49",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiME49xCTGF1S27",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "Tgondiip89",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiRH2016",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiRH88",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiRUB",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiTgCATBr5",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiTgCATBr9",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiTgCatPRC2",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiVAND",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgondiiVEG",
+        "species": "Toxoplasma gondii"
+      },
+      {
+        "id": "TgrayiANR4",
+        "species": "Trypanosoma grayi"
+      },
+      {
+        "id": "ThominisUnknown",
+        "species": "Trachipleistophora hominis"
+      },
+      {
+        "id": "TinfestansFIOC_28",
+        "species": "Triatoma infestans"
+      },
+      {
+        "id": "TmarneffeiATCC18224",
+        "species": "Talaromyces marneffei"
+      },
+      {
+        "id": "TmarneffeiTM4",
+        "species": "Talaromyces marneffei"
+      },
+      {
+        "id": "TmelophagiumStKilda",
+        "species": "Trypanosoma melophagium"
+      },
+      {
+        "id": "TmentagrophytesTIMM2789",
+        "species": "Trichophyton mentagrophytes"
+      },
+      {
+        "id": "TmesentericaDSM1558",
+        "species": "Tremella mesenterica"
+      },
+      {
+        "id": "TorientalisFishCreek",
+        "species": "Theileria orientalis"
+      },
+      {
+        "id": "TorientalisGoonNure",
+        "species": "Theileria orientalis"
+      },
+      {
+        "id": "TorientalisShintoku",
+        "species": "Theileria orientalis"
+      },
+      {
+        "id": "TparvaMuguga",
+        "species": "Theileria parva"
+      },
+      {
+        "id": "TrangeliSC58",
+        "species": "Trypanosoma rangeli"
+      },
+      {
+        "id": "TratisbonensisFranzen",
+        "species": "Tubulinosema ratisbonensis"
+      },
+      {
+        "id": "TreeseiQM6a",
+        "species": "Trichoderma reesei"
+      },
+      {
+        "id": "TreeseiQM6a2017",
+        "species": "Trichoderma reesei"
+      },
+      {
+        "id": "TrubrumCBS118892",
+        "species": "Trichophyton rubrum"
+      },
+      {
+        "id": "TstipitatusATCC10500",
+        "species": "Talaromyces stipitatus"
+      },
+      {
+        "id": "TtenaxNIH4ATCC30207",
+        "species": "Trichomonas tenax"
+      },
+      {
+        "id": "TtheileriEdinburgh",
+        "species": "Trypanosoma theileri"
+      },
+      {
+        "id": "TthermophilusATCC42464",
+        "species": "Thermothelomyces thermophilus"
+      },
+      {
+        "id": "TtonsuransCBS112818",
+        "species": "Trichophyton tonsurans"
+      },
+      {
+        "id": "TvaginalisG3",
+        "species": "Trichomonas vaginalis"
+      },
+      {
+        "id": "TvaginalisG32022",
+        "species": "Trichomonas vaginalis"
+      },
+      {
+        "id": "TvirensGv29-8",
+        "species": "Trichoderma virens"
+      },
+      {
+        "id": "TvivaxY486",
+        "species": "Trypanosoma vivax"
+      },
+      {
+        "id": "Umaydis521",
+        "species": "Ustilago maydis"
+      },
+      {
+        "id": "Ureesii1704",
+        "species": "Uncinocarpus reesii"
+      },
+      {
+        "id": "VbrassicaformisCCMP3155",
+        "species": "Vitrella brassicaformis"
+      },
+      {
+        "id": "VcorneaeATCC50505",
+        "species": "Vittaforma corneae"
+      },
+      {
+        "id": "Vculicisfloridensis",
+        "species": "Vavraia culicis"
+      },
+      {
+        "id": "VdahliaeJR2",
+        "species": "Verticillium dahliae"
+      },
+      {
+        "id": "VgallopavaCBS43764",
+        "species": "Verruconis gallopava"
+      },
+      {
+        "id": "XarbusculaCBS124340",
+        "species": "Xylaria arbuscula"
+      },
+      {
+        "id": "YlipolyticaCLIB122",
+        "species": "Yarrowia lipolytica"
+      },
+      {
+        "id": "YlipolyticaCLIB89W29",
+        "species": "Yarrowia lipolytica"
+      },
+      {
+        "id": "ZtriticiIPO323",
+        "species": "Zymoseptoria tritici"
+      },
+      {
+        "id": "ZtriticiST99CH3D1",
+        "species": "Zymoseptoria tritici"
+      }
+    ],
+    "dictybase": [
+      {
+        "id": "Dictyostelium_discoideum",
+        "species": "Dictyostelium discoideum"
       }
     ],
     "local": [

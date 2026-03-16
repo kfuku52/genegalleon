@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -21,10 +21,12 @@ PROVIDERS = (
     "wormbase",
     "vectorbase",
     "fernbase",
+    "veupathdb",
+    "dictybase",
     "local",
 )
 
-FETCH_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "fernbase", "local")
+FETCH_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "local")
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "local": Path("Local") / "species_wise_original",
@@ -58,6 +60,8 @@ ID_EXAMPLES_BY_PROVIDER = {
     "wormbase": (("celegans_prjna13758_ws290", "Caenorhabditis elegans"),),
     "vectorbase": (("anopheles_gambiae_pest", "Anopheles gambiae"),),
     "fernbase": (("Azolla_filiculoides", "Azolla filiculoides"), ("Salvinia_cucullata_v2", "Salvinia cucullata v2")),
+    "veupathdb": (("EnuttalliP19", "Entamoeba nuttalli"),),
+    "dictybase": (("Dictyostelium_discoideum", "Dictyostelium discoideum"),),
     "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
 }
 
@@ -368,6 +372,41 @@ def fetch_fernbase_options(timeout):
     return sorted(out, key=lambda x: x[0].lower())
 
 
+def fetch_veupathdb_options(timeout):
+    config = {
+        "attributes": ["primary_key", "species", "URLGenomeFasta"],
+        "tables": [],
+        "attributeFormat": "text",
+    }
+    base_url = "https://veupathdb.org/veupathdb/service"
+    query = json.dumps(config, separators=(",", ":"))
+    service_url = (
+        "{}/record-types/organism/searches/GenomeDataTypes/reports/standard?reportConfig={}".format(
+            base_url,
+            quote(query, safe=""),
+        )
+    )
+    payload = fetch_json(service_url, timeout)
+    out = []
+    for record in payload.get("records", []):
+        attributes = record.get("attributes", {})
+        genome_url = str(attributes.get("URLGenomeFasta", "") or "").strip()
+        if genome_url == "":
+            continue
+        parts = [part for part in urlparse(genome_url).path.split("/") if part]
+        source_id = ""
+        for idx, token in enumerate(parts[:-1]):
+            if token == "Current_Release" and idx + 1 < len(parts):
+                source_id = parts[idx + 1].strip()
+                break
+        if source_id == "":
+            continue
+        species_label = str(attributes.get("species", "") or "").strip()
+        out.append((source_id, species_label))
+    out = dedupe_options(out)
+    return sorted(out, key=lambda x: x[0].lower())
+
+
 def fetch_local_options(input_root):
     if input_root is None:
         return []
@@ -398,6 +437,8 @@ def fetch_provider_options(provider, timeout, input_root):
         return fetch_vectorbase_options(timeout)
     if provider == "fernbase":
         return fetch_fernbase_options(timeout)
+    if provider == "veupathdb":
+        return fetch_veupathdb_options(timeout)
     if provider == "local":
         return fetch_local_options(input_root)
     raise ValueError("unexpected fetch provider: {}".format(provider))

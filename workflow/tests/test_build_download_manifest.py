@@ -302,7 +302,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
 
         list_sheet = workbook["_lists"]
-        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 11)]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 13)]
         assert provider_values == [
             "ensembl",
             "ensemblplants",
@@ -313,12 +313,16 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
             "wormbase",
             "vectorbase",
             "fernbase",
+            "veupathdb",
+            "dictybase",
             "local",
         ]
         assert "id_opts_ensembl" in workbook.defined_names
         assert "id_opts_ncbi" in workbook.defined_names
         assert "id_opts_coge" in workbook.defined_names
         assert "id_opts_fernbase" in workbook.defined_names
+        assert "id_opts_veupathdb" in workbook.defined_names
+        assert "id_opts_dictybase" in workbook.defined_names
         assert "id_opts_local" in workbook.defined_names
     finally:
         workbook.close()

@@ -54,6 +54,8 @@ PROVIDERS = (
     "wormbase",
     "vectorbase",
     "fernbase",
+    "veupathdb",
+    "dictybase",
     "local",
 )
 LEGACY_NCBI_PROVIDER_ALIASES = ("refseq", "genbank")
@@ -68,6 +70,8 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "wormbase": Path("WormBase") / "species_wise_original",
     "vectorbase": Path("VectorBase") / "species_wise_original",
     "fernbase": Path("FernBase") / "species_wise_original",
+    "veupathdb": Path("VEuPathDB") / "species_wise_original",
+    "dictybase": Path("dictyBase") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
 NCBI_MERGED_INPUT_RELATIVE_DIRS = (
@@ -114,6 +118,8 @@ HEADER_COMMENTS = {
             "- ncbi: GCF_000001405.40 or GCA_000001635.9",
             "- coge: numeric genome_id (gid), for example 24739",
             "- cngb: CNA... or GCA/GCF accession",
+            "- veupathdb: EnuttalliP19",
+            "- dictybase: Dictyostelium_discoideum",
             "- local: local species directory ID or path-style ID",
             "The drop-down is provider-specific, but any valid value can still be typed manually.",
             "For non-local providers, labels like 'GCF_000001405.40 (Homo sapiens)' are accepted;",
@@ -278,7 +284,7 @@ def build_header_comment(fieldname):
 
 LARGE_ID_PROVIDERS = ("ncbi",)
 SNAPSHOT_FULL_ID_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "fernbase", "local")
-EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
+EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb", "veupathdb", "dictybase")
 
 ID_EXAMPLES_BY_PROVIDER = {
     "ensembl": (("homo_sapiens", "Homo sapiens"), ("mus_musculus", "Mus musculus")),
@@ -308,6 +314,8 @@ ID_EXAMPLES_BY_PROVIDER = {
     "wormbase": (("celegans_prjna13758_ws290", "Caenorhabditis elegans"),),
     "vectorbase": (("anopheles_gambiae_pest", "Anopheles gambiae"),),
     "fernbase": (("Azolla_filiculoides", "Azolla filiculoides"), ("Salvinia_cucullata_v2", "Salvinia cucullata v2")),
+    "veupathdb": (("EnuttalliP19", "Entamoeba nuttalli"),),
+    "dictybase": (("Dictyostelium_discoideum", "Dictyostelium discoideum"),),
     "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
 }
 
@@ -496,7 +504,7 @@ def build_arg_parser():
         default="",
         help=(
             "Optional JSON snapshot for provider-specific id dropdown values. "
-            "When set, non-large providers (ensembl/ensemblplants/flybase/wormbase/vectorbase/fernbase/local) "
+            "When set, non-large providers (ensembl/ensemblplants/flybase/wormbase/vectorbase/fernbase/veupathdb/local) "
             "prefer snapshot IDs over locally discovered IDs."
         ),
     )

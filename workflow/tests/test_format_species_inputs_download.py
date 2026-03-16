@@ -134,6 +134,54 @@ class _NcbiFixtureHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
 
+class _VEuPathDbFixtureHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, root_dir=None, **kwargs):
+        self._root_dir = root_dir
+        super().__init__(*args, directory=str(root_dir), **kwargs)
+
+    def _send_json(self, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path.startswith("/veupathdb/service/record-types/organism/searches/GenomeDataTypes/reports/standard"):
+            base = "http://127.0.0.1:{}".format(self.server.server_port)
+            self._send_json(
+                {
+                    "records": [
+                        {
+                            "attributes": {
+                                "primary_key": "Entamoeba nuttalli P19",
+                                "species": "Entamoeba nuttalli",
+                                "project_id": "AmoebaDB",
+                                "URLGenomeFasta": (
+                                    base
+                                    + "/common/downloads/Current_Release/EnuttalliP19/fasta/data/"
+                                    "AmoebaDB-68_EnuttalliP19_Genome.fasta"
+                                ),
+                                "URLgff": (
+                                    base
+                                    + "/common/downloads/Current_Release/EnuttalliP19/gff/data/"
+                                    "AmoebaDB-68_EnuttalliP19.gff"
+                                ),
+                                "URLproteinFasta": (
+                                    base
+                                    + "/common/downloads/Current_Release/EnuttalliP19/fasta/data/"
+                                    "AmoebaDB-68_EnuttalliP19_AnnotatedProteins.fasta"
+                                ),
+                            }
+                        }
+                    ]
+                }
+            )
+            return
+        super().do_GET()
+
+
 def test_download_manifest_then_format_ensembl(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()
@@ -1229,6 +1277,8 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
         "wormbase": "Caenorhabditis_elegans",
         "vectorbase": "Anopheles_gambiae",
         "fernbase": "Azolla_filiculoides",
+        "veupathdb": "Entamoeba_nuttalli",
+        "dictybase": "Dictyostelium_discoideum",
     }
     provider_ids = {
         "ensembl": "homo_sapiens",
@@ -1239,6 +1289,8 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
         "wormbase": "celegans_prjna13758_ws290",
         "vectorbase": "anopheles_gambiae_pest",
         "fernbase": "Azolla_filiculoides",
+        "veupathdb": "veupathdb:EnuttalliP19",
+        "dictybase": "dictybase:Dictyostelium_discoideum",
     }
 
     for provider, source_id in provider_ids.items():
@@ -1279,6 +1331,8 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
         "wormbase": "GG_WORMBASE",
         "vectorbase": "GG_VECTORBASE",
         "fernbase": "GG_FERNBASE",
+        "veupathdb": "GG_VEUPATHDB",
+        "dictybase": "GG_DICTYBASE",
     }
     for provider, env_prefix in provider_to_env.items():
         env[env_prefix + "_CDS_URL_TEMPLATE"] = source_dir.resolve().as_uri() + "/{id}.cds.fa"
@@ -1314,6 +1368,8 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
         "wormbase": download_dir / "WormBase" / "species_wise_original" / provider_species["wormbase"],
         "vectorbase": download_dir / "VectorBase" / "species_wise_original" / provider_species["vectorbase"],
         "fernbase": download_dir / "FernBase" / "species_wise_original" / provider_species["fernbase"],
+        "veupathdb": download_dir / "VEuPathDB" / "species_wise_original" / provider_species["veupathdb"],
+        "dictybase": download_dir / "dictyBase" / "species_wise_original" / provider_species["dictybase"],
     }
     for provider, root in expected_roots.items():
         assert root.exists(), provider
@@ -1464,6 +1520,74 @@ def test_download_manifest_fernbase_provider_accepts_markerless_top_level_genome
     assert (raw_dir / "Crichardii_676_v2.0_cds.fa").exists()
     assert (raw_dir / "Crichardii_676_v2.1.gene.gff3").exists()
     assert (raw_dir / "Crichardii_676_v2.0.fa").exists()
+
+
+def test_download_manifest_veupathdb_provider_resolves_from_service(tmp_path):
+    server_root = tmp_path / "server_root"
+    data_dir = server_root / "common" / "downloads" / "Current_Release" / "EnuttalliP19"
+    fasta_dir = data_dir / "fasta" / "data"
+    gff_dir = data_dir / "gff" / "data"
+    fasta_dir.mkdir(parents=True, exist_ok=True)
+    gff_dir.mkdir(parents=True, exist_ok=True)
+
+    (fasta_dir / "AmoebaDB-68_EnuttalliP19_AnnotatedCDSs.fasta").write_text(">gene1.t1\nATGAA\n", encoding="utf-8")
+    (fasta_dir / "AmoebaDB-68_EnuttalliP19_Genome.fasta").write_text(">chr1\nATGCATGC\n", encoding="utf-8")
+    (fasta_dir / "AmoebaDB-68_EnuttalliP19_AnnotatedProteins.fasta").write_text(">gene1.p1\nMKK\n", encoding="utf-8")
+    (gff_dir / "AmoebaDB-68_EnuttalliP19.gff").write_text(
+        "chr1\tsrc\tgene\t1\t5\t.\t+\t.\tID=gene1\n",
+        encoding="utf-8",
+    )
+
+    handler = lambda *args, **kwargs: _VEuPathDbFixtureHandler(*args, root_dir=server_root, **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "veupathdb",
+                    "id": "EnuttalliP19",
+                    "species_key": "",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_VEUPATHDB_SERVICE_BASE_URL"] = "http://127.0.0.1:{}/veupathdb/service".format(server.server_port)
+        download_dir = tmp_path / "download_cache"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--provider",
+                "veupathdb",
+                "--download-manifest",
+                str(manifest),
+                "--download-dir",
+                str(download_dir),
+                "--download-only",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    raw_dir = download_dir / "VEuPathDB" / "species_wise_original" / "Entamoeba_nuttalli"
+    assert (raw_dir / "Entamoeba_nuttalli.veupathdb.EnuttalliP19.cds.fa").exists()
+    assert (raw_dir / "Entamoeba_nuttalli.veupathdb.EnuttalliP19.gene.gff3").exists()
+    assert (raw_dir / "Entamoeba_nuttalli.veupathdb.EnuttalliP19.genome.fa").exists()
 
 
 def test_download_manifest_ncbi_id_only_auto_resolve(tmp_path):
