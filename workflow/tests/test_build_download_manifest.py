@@ -368,7 +368,9 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         coge_values = read_list_column_values(list_sheet, 5)
         cngb_values = read_list_column_values(list_sheet, 6)
         fernbase_values = read_list_column_values(list_sheet, 10)
-        local_values = read_list_column_values(list_sheet, 11)
+        veupathdb_values = read_list_column_values(list_sheet, 11)
+        dictybase_values = read_list_column_values(list_sheet, 12)
+        local_values = read_list_column_values(list_sheet, 13)
         ncbi_values = read_list_column_values(list_sheet, 4)
 
         assert coge_values == [
@@ -388,6 +390,12 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         assert fernbase_values == [
             "Azolla_filiculoides (Azolla filiculoides)",
             "Salvinia_cucullata_v2 (Salvinia cucullata v2)",
+        ]
+        assert veupathdb_values == [
+            "EnuttalliP19 (Entamoeba nuttalli)",
+        ]
+        assert dictybase_values == [
+            "Dictyostelium_discoideum (Dictyostelium discoideum)",
         ]
         assert local_values == [
             "Hydrocotyle_leucocephala_HAP1v2.1",
@@ -431,6 +439,12 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
                     "fernbase": [
                         {"id": "Ceratopteris_richardii", "species": "Ceratopteris richardii"},
                     ],
+                    "veupathdb": [
+                        {"id": "EhistolyticaHM1IMSS", "species": "Entamoeba histolytica"},
+                    ],
+                    "dictybase": [
+                        {"id": "Dictyostelium_discoideum", "species": "Dictyostelium discoideum"},
+                    ],
                     "local": [
                         {"id": "/data/local_species_1", "species": "Local species 1"},
                         {"id": "/data/local_species_2", "species": "Local species 2"},
@@ -472,7 +486,9 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         wormbase_values = read_list_column_values(list_sheet, 8)
         vectorbase_values = read_list_column_values(list_sheet, 9)
         fernbase_values = read_list_column_values(list_sheet, 10)
-        local_values = read_list_column_values(list_sheet, 11)
+        veupathdb_values = read_list_column_values(list_sheet, 11)
+        dictybase_values = read_list_column_values(list_sheet, 12)
+        local_values = read_list_column_values(list_sheet, 13)
 
         assert ensembl_values == [
             "homo_sapiens (Homo sapiens)",
@@ -507,6 +523,8 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         assert wormbase_values == ["caenorhabditis_elegans_prjna13758 (Caenorhabditis elegans)"]
         assert vectorbase_values == ["AgambiaePEST (Anopheles gambiae)"]
         assert fernbase_values == ["Ceratopteris_richardii (Ceratopteris richardii)"]
+        assert veupathdb_values == ["EhistolyticaHM1IMSS (Entamoeba histolytica)"]
+        assert dictybase_values == ["Dictyostelium_discoideum (Dictyostelium discoideum)"]
         assert local_values == ["/data/local_species_1", "/data/local_species_2"]
     finally:
         workbook.close()

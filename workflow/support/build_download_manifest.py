@@ -283,8 +283,18 @@ def build_header_comment(fieldname):
     return Comment(text, "genegalleon", width=width, height=height)
 
 LARGE_ID_PROVIDERS = ("ncbi",)
-SNAPSHOT_FULL_ID_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "fernbase", "local")
-EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb", "veupathdb", "dictybase")
+SNAPSHOT_FULL_ID_PROVIDERS = (
+    "ensembl",
+    "ensemblplants",
+    "flybase",
+    "wormbase",
+    "vectorbase",
+    "fernbase",
+    "veupathdb",
+    "dictybase",
+    "local",
+)
+EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
 
 ID_EXAMPLES_BY_PROVIDER = {
     "ensembl": (("homo_sapiens", "Homo sapiens"), ("mus_musculus", "Mus musculus")),
