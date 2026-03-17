@@ -63,6 +63,7 @@ def build_arg_parser():
     parser.add_argument('--targetp', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--rpsblast', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--uniprot', metavar='PATH', default='', type=str, help='')
+    parser.add_argument('--synteny', metavar='PATH', default='', type=str, help='')
     
     parser.add_argument('--l1ou_tree', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--l1ou_regime', metavar='PATH', default='', type=str, help='')
@@ -212,6 +213,117 @@ def load_fimo_hits(path):
     df_out['start'] = df_out['start'].astype(int)
     df_out['stop'] = df_out['stop'].astype(int)
     return df_out
+
+
+def load_synteny_summary(path):
+    base_cols = [
+        'node_name',
+        'synteny_edge_count',
+        'synteny_group_count',
+        'synteny_shared_group_count',
+        'synteny_shared_edge_count',
+        'synteny_shared_upstream_edge_count',
+        'synteny_shared_downstream_edge_count',
+        'synteny_min_abs_offset_shared',
+        'synteny_max_group_size',
+        'synteny_max_shared_group_tip_count',
+        'synteny_support_score',
+    ]
+    if (not path) or (not os.path.exists(path)) or (os.path.getsize(path) == 0):
+        return pandas.DataFrame(columns=base_cols)
+
+    try:
+        df = pandas.read_csv(path, sep='\t', header=0, index_col=None, low_memory=False)
+    except Exception as exc:
+        print('Failed to parse synteny table {}: {}'.format(path, exc))
+        return pandas.DataFrame(columns=base_cols)
+    if df.empty:
+        return pandas.DataFrame(columns=base_cols)
+
+    required_cols = {'node_name', 'group_id', 'offset'}
+    if not required_cols.issubset(set(df.columns)):
+        print(
+            'Synteny table is missing required columns ({}) in {}'.format(
+                ', '.join(sorted(required_cols)),
+                path,
+            )
+        )
+        return pandas.DataFrame(columns=base_cols)
+
+    df = df.copy()
+    df['node_name'] = df['node_name'].astype(str).str.strip()
+    df['group_id'] = df['group_id'].astype(str).str.strip()
+    df['offset'] = pandas.to_numeric(df['offset'], errors='coerce')
+    keep_cols = ['node_name', 'group_id', 'offset']
+    if 'direction' in df.columns:
+        keep_cols.append('direction')
+    if 'group_size' in df.columns:
+        keep_cols.append('group_size')
+    df = df.loc[
+        (df['node_name'] != '') &
+        (df['group_id'] != '') &
+        df['offset'].notna() &
+        (df['offset'] != 0),
+        keep_cols
+    ].copy()
+    if df.empty:
+        return pandas.DataFrame(columns=base_cols)
+
+    if 'direction' in df.columns:
+        direction = df['direction'].astype(str).str.lower().str.strip()
+        known_direction = direction.isin(['upstream', 'downstream'])
+        inferred_direction = numpy.where(df['offset'] < 0, 'upstream', 'downstream')
+        df['direction'] = numpy.where(known_direction, direction, inferred_direction)
+    else:
+        df['direction'] = numpy.where(df['offset'] < 0, 'upstream', 'downstream')
+
+    df = df.drop_duplicates(subset=['node_name', 'group_id', 'offset', 'direction'], keep='first')
+
+    group_tip_count = (
+        df.groupby('group_id', sort=False)['node_name']
+        .nunique()
+        .rename('group_tip_count')
+    )
+    df = df.merge(group_tip_count, on='group_id', how='left')
+
+    if 'group_size' in df.columns:
+        group_size_num = pandas.to_numeric(df['group_size'], errors='coerce')
+        if group_size_num.notna().any():
+            df['group_size_num'] = group_size_num.fillna(0)
+        else:
+            df['group_size_num'] = df['group_tip_count']
+    else:
+        df['group_size_num'] = df['group_tip_count']
+
+    df['is_shared_group'] = df['group_tip_count'] >= 2
+    df['abs_offset'] = df['offset'].abs()
+
+    def summarize_node(group):
+        edge_count = int(group.shape[0])
+        shared = group.loc[group['is_shared_group'], :]
+        shared_edge_count = int(shared.shape[0]) if not shared.empty else 0
+        return {
+            'synteny_edge_count': edge_count,
+            'synteny_group_count': int(group['group_id'].nunique()),
+            'synteny_shared_group_count': int(shared['group_id'].nunique()) if not shared.empty else 0,
+            'synteny_shared_edge_count': shared_edge_count,
+            'synteny_shared_upstream_edge_count': int((shared['direction'] == 'upstream').sum()) if not shared.empty else 0,
+            'synteny_shared_downstream_edge_count': int((shared['direction'] == 'downstream').sum()) if not shared.empty else 0,
+            'synteny_min_abs_offset_shared': float(shared['abs_offset'].min()) if not shared.empty else numpy.nan,
+            'synteny_max_group_size': float(group['group_size_num'].max()) if edge_count > 0 else numpy.nan,
+            'synteny_max_shared_group_tip_count': float(shared['group_tip_count'].max()) if not shared.empty else numpy.nan,
+            'synteny_support_score': (shared_edge_count / edge_count) if edge_count > 0 else 0.0,
+        }
+
+    rows = []
+    for node_name, node_df in df.groupby('node_name', sort=False):
+        row = {'node_name': str(node_name)}
+        row.update(summarize_node(node_df))
+        rows.append(row)
+    if len(rows) == 0:
+        return pandas.DataFrame(columns=base_cols)
+    out = pandas.DataFrame(rows)
+    return out.loc[:, base_cols]
 
 
 def _get_node_prop(node, key, default=None):
@@ -1169,6 +1281,10 @@ def main():
         df_tmp = pandas.read_csv(params['uniprot'], sep='\t',  header=0, index_col=None, low_memory=False)
         df_tmp = df_tmp.rename(columns={'gene_id': 'node_name'})
         node_left_merge_tables.append(df_tmp)
+    if (os.path.exists(params["synteny"])):
+        df_tmp = load_synteny_summary(params['synteny'])
+        if not df_tmp.empty:
+            node_left_merge_tables.append(df_tmp)
     if (os.path.exists(params['rpsblast'])):
         df_tmp = pandas.read_csv(
             params['rpsblast'],

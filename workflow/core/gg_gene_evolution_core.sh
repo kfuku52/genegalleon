@@ -168,6 +168,41 @@ if violations:
 PY
 }
 
+set_profile_default_override() {
+  local var_name=$1
+  local default_value=$2
+  local new_value=$3
+  local current_value="${!var_name:-}"
+  if [[ "${current_value}" == "${default_value}" ]]; then
+    printf -v "${var_name}" '%s' "${new_value}"
+    echo "gene_evolution_profile=${gene_evolution_profile}: ${var_name}=${new_value}"
+  fi
+}
+
+apply_gene_evolution_profile() {
+  case "${gene_evolution_profile}" in
+    ""|default)
+      gene_evolution_profile="default"
+      ;;
+    hgt)
+      mode_gene_evolution="orthogroup"
+      echo "gene_evolution_profile=hgt: mode_gene_evolution=${mode_gene_evolution}"
+      set_profile_default_override run_uniprot_annotation "0" "1"
+      set_profile_default_override run_generax "0" "1"
+      set_profile_default_override generax_rec_model "UndatedDL" "UndatedDTL"
+      set_profile_default_override run_get_gff_info "0" "1"
+      set_profile_default_override run_get_expression_matrix "0" "1"
+      set_profile_default_override run_scm_intron "0" "1"
+      set_profile_default_override treevis_event_method "species_overlap" "auto"
+      ;;
+    *)
+      echo "Invalid gene_evolution_profile: ${gene_evolution_profile}"
+      echo 'gene_evolution_profile must be either "default" or "hgt". Exiting.'
+      exit 1
+      ;;
+  esac
+}
+
 # Setting modes
 if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
   enable_all_run_flags_for_debug_mode "gg debug mode: All run_* variables are forced to set 1, except for too-time-consuming tasks."
@@ -183,8 +218,10 @@ if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
 fi
 query_blast_method=$(echo "${query_blast_method}" | tr '[:upper:]' '[:lower:]')
 mode_gene_evolution=$(echo "${mode_gene_evolution:-query2family}" | tr '[:upper:]' '[:lower:]')
+gene_evolution_profile=$(echo "${gene_evolution_profile:-default}" | tr '[:upper:]' '[:lower:]')
 uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
 tree_rooting_method=$(echo "${tree_rooting_method}" | tr '[:upper:]' '[:lower:]')
+apply_gene_evolution_profile
 if [[ "${mode_gene_evolution}" != "orthogroup" && "${mode_gene_evolution}" != "query2family" ]]; then
   echo "Invalid mode_gene_evolution: ${mode_gene_evolution}"
   echo 'mode_gene_evolution must be either "orthogroup" or "query2family". Exiting.'
@@ -1153,10 +1190,17 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
     rm -rf -- "tmp_mmseqs2_uniprot"
   fi
 
+  uniprot_meta_tsv=""
+  if ! uniprot_meta_tsv=$(ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${uniprot_db_prefix}" 2>/dev/null); then
+    echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${uniprot_db_prefix}" >&2
+    uniprot_meta_tsv=""
+  fi
+
   python "${gg_support_dir}/reformat_uniprot_diamond.py" \
     --diamond_tsv uniprot.search.tsv \
     --query_fasta uniprot.query.pep.fas \
     --uniprot_fasta "${uniprot_db_prefix}.pep" \
+    --uniprot_meta_tsv "${uniprot_meta_tsv}" \
     --outfile uniprot.annotation.tsv
 
   cp_out uniprot.annotation.tsv "${file_og_uniprot_annotation}"
@@ -2924,6 +2968,44 @@ if is_output_older_than_inputs "^file_og_" "${file_og_tree_plot}"; then
 else
   summary_flag=$?
 fi
+task="Synteny neighborhood grouping"
+if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then
+  synteny_needs_update=0
+  if [[ ! -s "${file_og_synteny}" || "${file_og_cds_fasta}" -nt "${file_og_synteny}" ]]; then
+    synteny_needs_update=1
+  fi
+  if [[ ${synteny_needs_update} -eq 1 ]]; then
+    gg_step_start "${task}"
+    if [[ ! -d "${dir_sp_cds}" ]]; then
+      echo "species_cds directory not found. Skipping synteny panel input generation: ${dir_sp_cds}"
+    elif [[ ! -d "${dir_sp_gff}" ]]; then
+      echo "species_gff directory not found. Skipping synteny panel input generation: ${dir_sp_gff}"
+    elif [[ ! -s "${file_og_cds_fasta}" ]]; then
+      echo "Focal CDS fasta file not found. Skipping synteny panel input generation: ${file_og_cds_fasta}"
+    else
+      python "${gg_support_dir}/synteny_neighbors.py" \
+        --focal_cds_fasta "${file_og_cds_fasta}" \
+        --dir_sp_cds "${dir_sp_cds}" \
+        --dir_sp_gff "${dir_sp_gff}" \
+        --cache_dir "${gg_workspace_output_dir}/species_gff_info" \
+        --lock_dir "${file_og_parameters_dir}/synteny_locks" \
+        --gff2genestat_script "${gg_support_dir}/gff2genestat.py" \
+        --window "${treevis_synteny_window}" \
+        --evalue "${query_blast_evalue}" \
+        --genetic_code "${genetic_code}" \
+        --threads "${GG_TASK_CPUS}" \
+        --outfile "${file_og_synteny}"
+      if [[ ! -s "${file_og_synteny}" ]]; then
+        echo "No synteny links were generated: ${file_og_synteny}"
+      fi
+    fi
+  else
+    gg_step_skip "${task}"
+  fi
+else
+  gg_step_skip "${task}"
+fi
+task="summary statistics"
 disable_if_no_input_file "run_summary" "${file_og_rooted_tree_analysis}"
 if [[ (${summary_flag} -eq 1 || ! -s "${file_og_stat_branch}" || ! -s "${file_og_stat_tree}") && ${run_summary} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -3003,6 +3085,7 @@ if [[ (${summary_flag} -eq 1 || ! -s "${file_og_stat_branch}" || ! -s "${file_og
     --species_pgls_stats "${file_og_species_pgls}" \
     --rpsblast "${file_og_rpsblast}" \
     --uniprot "${file_og_uniprot_annotation}" \
+    --synteny "${file_og_synteny}" \
     --ncpu "${GG_TASK_CPUS}" \
     --clade_ortholog_prefix "${treevis_clade_ortholog_prefix}"
   if [[ ${#summary_tmp_files[@]} -gt 0 ]]; then
@@ -3014,44 +3097,6 @@ if [[ (${summary_flag} -eq 1 || ! -s "${file_og_stat_branch}" || ! -s "${file_og
   cp_out orthogroup.branch.tsv "${file_og_stat_branch}"
   cp_out orthogroup.tree.tsv "${file_og_stat_tree}"
 
-else
-  gg_step_skip "${task}"
-fi
-
-task="Synteny neighborhood grouping"
-if [[ ${treevis_synteny} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
-  synteny_needs_update=0
-  if [[ ! -s "${file_og_synteny}" || "${file_og_cds_fasta}" -nt "${file_og_synteny}" ]]; then
-    synteny_needs_update=1
-  fi
-  if [[ ${synteny_needs_update} -eq 1 ]]; then
-    gg_step_start "${task}"
-    if [[ ! -d "${dir_sp_cds}" ]]; then
-      echo "species_cds directory not found. Skipping synteny panel input generation: ${dir_sp_cds}"
-    elif [[ ! -d "${dir_sp_gff}" ]]; then
-      echo "species_gff directory not found. Skipping synteny panel input generation: ${dir_sp_gff}"
-    elif [[ ! -s "${file_og_cds_fasta}" ]]; then
-      echo "Focal CDS fasta file not found. Skipping synteny panel input generation: ${file_og_cds_fasta}"
-    else
-      python "${gg_support_dir}/synteny_neighbors.py" \
-        --focal_cds_fasta "${file_og_cds_fasta}" \
-        --dir_sp_cds "${dir_sp_cds}" \
-        --dir_sp_gff "${dir_sp_gff}" \
-        --cache_dir "${gg_workspace_output_dir}/species_gff_info" \
-        --lock_dir "${file_og_parameters_dir}/synteny_locks" \
-        --gff2genestat_script "${gg_support_dir}/gff2genestat.py" \
-        --window "${treevis_synteny_window}" \
-        --evalue "${query_blast_evalue}" \
-        --genetic_code "${genetic_code}" \
-        --threads "${GG_TASK_CPUS}" \
-        --outfile "${file_og_synteny}"
-      if [[ ! -s "${file_og_synteny}" ]]; then
-        echo "No synteny links were generated: ${file_og_synteny}"
-      fi
-    fi
-  else
-    gg_step_skip "${task}"
-  fi
 else
   gg_step_skip "${task}"
 fi

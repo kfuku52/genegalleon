@@ -390,10 +390,17 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
     rm -rf -- "tmp_mmseqs2_uniprot"
   fi
 
+  uniprot_meta_tsv=""
+  if ! uniprot_meta_tsv=$(ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${uniprot_db_prefix}" 2>/dev/null); then
+    echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${uniprot_db_prefix}" >&2
+    uniprot_meta_tsv=""
+  fi
+
   python "${gg_support_dir}/reformat_uniprot_diamond.py" \
     --diamond_tsv uniprot.search.tsv \
     --query_fasta uniprot.query.pep.fas \
     --uniprot_fasta "${uniprot_db_prefix}.pep" \
+    --uniprot_meta_tsv "${uniprot_meta_tsv}" \
     --outfile uniprot.annotation.tsv
 
   cp_out uniprot.annotation.tsv "${file_sp_uniprot_annotation}"

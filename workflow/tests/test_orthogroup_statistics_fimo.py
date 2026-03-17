@@ -134,3 +134,61 @@ def test_flatten_trait_variable_stats_builds_tree_info_keys():
         "pgls_geneTree_pvalue_salt_omega": 0.01,
         "pgls_geneTree_pvalue_cold_omega": 0.20,
     }
+
+
+def test_load_synteny_summary_aggregates_per_node_metrics(tmp_path):
+    mod = load_module()
+    infile = tmp_path / "synteny.tsv"
+    infile.write_text(
+        (
+            "node_name\tspecies\tdirection\toffset\tneighbor_gene\tgroup_id\tgroup_size\n"
+            "geneA\tsp1\tupstream\t-1\tn1\tG1\t5\n"
+            "geneA\tsp1\tdownstream\t2\tn2\tG2\t2\n"
+            "geneB\tsp2\tupstream\t-3\tn3\tG1\t5\n"
+            "geneB\tsp2\tdownstream\t1\tn4\tG3\t1\n"
+            # duplicate row should not inflate counts
+            "geneA\tsp1\tupstream\t-1\tn1\tG1\t5\n"
+        ),
+        encoding="utf-8",
+    )
+
+    out = mod.load_synteny_summary(str(infile))
+    assert set(out["node_name"].tolist()) == {"geneA", "geneB"}
+    row_a = out.loc[out["node_name"] == "geneA"].iloc[0]
+    row_b = out.loc[out["node_name"] == "geneB"].iloc[0]
+
+    assert row_a["synteny_edge_count"] == 2
+    assert row_a["synteny_group_count"] == 2
+    assert row_a["synteny_shared_group_count"] == 1
+    assert row_a["synteny_shared_edge_count"] == 1
+    assert row_a["synteny_shared_upstream_edge_count"] == 1
+    assert row_a["synteny_shared_downstream_edge_count"] == 0
+    assert row_a["synteny_min_abs_offset_shared"] == 1
+    assert row_a["synteny_max_group_size"] == 5
+    assert row_a["synteny_max_shared_group_tip_count"] == 2
+    assert row_a["synteny_support_score"] == 0.5
+
+    assert row_b["synteny_edge_count"] == 2
+    assert row_b["synteny_group_count"] == 2
+    assert row_b["synteny_shared_group_count"] == 1
+    assert row_b["synteny_shared_edge_count"] == 1
+    assert row_b["synteny_shared_upstream_edge_count"] == 1
+    assert row_b["synteny_shared_downstream_edge_count"] == 0
+    assert row_b["synteny_min_abs_offset_shared"] == 3
+    assert row_b["synteny_max_group_size"] == 5
+    assert row_b["synteny_max_shared_group_tip_count"] == 2
+    assert row_b["synteny_support_score"] == 0.5
+
+
+def test_load_synteny_summary_returns_empty_for_missing_required_columns(tmp_path):
+    mod = load_module()
+    infile = tmp_path / "synteny_missing.tsv"
+    infile.write_text(
+        (
+            "node_name\toffset\tneighbor_gene\n"
+            "geneA\t-1\tn1\n"
+        ),
+        encoding="utf-8",
+    )
+    out = mod.load_synteny_summary(str(infile))
+    assert out.empty

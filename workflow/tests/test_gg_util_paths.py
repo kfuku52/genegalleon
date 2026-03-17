@@ -62,6 +62,61 @@ def test_workspace_pfam_le_dir_is_under_downloads_dedicated_folder(tmp_path):
     assert completed.stdout.strip() == str(project_dir / "downloads" / "pfam" / "Pfam_LE")
 
 
+def test_ensure_uniprot_sprot_metadata_tsv_builds_runtime_meta_from_runtime_dat(tmp_path):
+    workspace_dir = tmp_path / "workspace"
+    runtime_prefix = workspace_dir / "downloads" / "uniprot_sprot" / "uniprot_sprot"
+    runtime_dat = runtime_prefix.with_suffix(".dat.gz")
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"workspace_dir={shlex.quote(str(workspace_dir))}; "
+        f"runtime_prefix={shlex.quote(str(runtime_prefix))}; "
+        f"runtime_dat={shlex.quote(str(runtime_dat))}; "
+        'mkdir -p "$(dirname "${runtime_prefix}")" "$(dirname "${workspace_dir}/downloads/locks/.x")"; '
+        "printf 'ID   TEST1_HUMAN              Reviewed;         100 AA.\\nAC   P12345;\\nOS   Homo sapiens (Human).\\nOX   NCBI_TaxID=9606;\\n//\\n' "
+        '| gzip -c > "${runtime_dat}"; '
+        'meta_path=$(ensure_uniprot_sprot_metadata_tsv "${workspace_dir}" "${runtime_prefix}"); '
+        'printf "meta=%s\\n" "${meta_path}"; '
+        'test -s "${meta_path}"; printf "size=%s\\n" "$?"; '
+        'python -c "import gzip,sys; t=gzip.open(sys.argv[1],\'rt\',encoding=\'utf-8\').read(); '
+        'print(\'has_taxid=\' + (\'1\' if \'taxid\' in t else \'0\')); '
+        'print(\'has_accession=\' + (\'1\' if \'P12345\' in t else \'0\'))" "${meta_path}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.strip().splitlines()
+    assert lines[0] == f"meta={runtime_prefix}.meta.tsv.gz"
+    assert lines[1] == "size=0"
+    assert lines[2] == "has_taxid=1"
+    assert lines[3] == "has_accession=1"
+
+
+def test_ensure_uniprot_sprot_metadata_tsv_falls_back_to_runtime_path_for_sys_prefix(tmp_path):
+    workspace_dir = tmp_path / "workspace"
+    runtime_prefix = workspace_dir / "downloads" / "uniprot_sprot" / "uniprot_sprot"
+    runtime_dat = runtime_prefix.with_suffix(".dat.gz")
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"workspace_dir={shlex.quote(str(workspace_dir))}; "
+        f"runtime_prefix={shlex.quote(str(runtime_prefix))}; "
+        f"runtime_dat={shlex.quote(str(runtime_dat))}; "
+        'mkdir -p "$(dirname "${runtime_prefix}")" "$(dirname "${workspace_dir}/downloads/locks/.x")"; '
+        "printf 'ID   TEST2_HUMAN              Reviewed;         100 AA.\\nAC   Q99999;\\nOS   Homo sapiens (Human).\\nOX   NCBI_TaxID=9606;\\n//\\n' "
+        '| gzip -c > "${runtime_dat}"; '
+        'meta_path=$(ensure_uniprot_sprot_metadata_tsv "${workspace_dir}" "/usr/local/db/uniprot_sprot"); '
+        'printf "meta=%s\\n" "${meta_path}"; '
+        'test -s "${meta_path}"; printf "size=%s\\n" "$?"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.strip().splitlines()
+    assert lines[0] == f"meta={runtime_prefix}.meta.tsv.gz"
+    assert lines[1] == "size=0"
+
+
 def test_gg_array_download_once_accepts_nonempty_ready_marker(tmp_path):
     lock_file = tmp_path / "locks" / "artifact.lock"
     marker_file = tmp_path / "runtime" / ".artifact.ready"

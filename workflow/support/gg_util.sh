@@ -3856,6 +3856,144 @@ _download_uniprot_sprot_pep_to_file() {
   rm -rf -- "${tmp_dir}"
 }
 
+_download_uniprot_sprot_dat_to_file() {
+  local output_file=$1
+  local output_dir
+  output_dir=$(dirname "${output_file}")
+  local tmp_dir
+  tmp_dir=$(mktemp -d "${output_dir}/tmp.uniprot_sprot_dat.XXXXXX")
+  local dat_tmp="${tmp_dir}/uniprot_sprot.dat.gz"
+  local uniprot_dat_url="${GG_UNIPROT_SPROT_DAT_URL:-https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz}"
+
+  if ! curl -fsSL "${uniprot_dat_url}" -o "${dat_tmp}"; then
+    echo "Failed to download UniProt Swiss-Prot DAT from: ${uniprot_dat_url}" >&2
+    rm -rf -- "${tmp_dir}"
+    return 1
+  fi
+  if [[ ! -s "${dat_tmp}" ]]; then
+    echo "Downloaded UniProt Swiss-Prot DAT is empty: ${uniprot_dat_url}" >&2
+    rm -rf -- "${tmp_dir}"
+    return 1
+  fi
+
+  mv -- "${dat_tmp}" "${output_file}"
+  rm -rf -- "${tmp_dir}"
+}
+
+_build_uniprot_sprot_metadata_from_dat() {
+  local dat_path=$1
+  local out_path=$2
+  local py_exec=""
+  py_exec=$(gg_find_python_exec || true)
+  if [[ -z "${py_exec}" ]]; then
+    echo "python/python3 command was not found. Cannot build UniProt metadata." >&2
+    return 1
+  fi
+  local util_source="${BASH_SOURCE[0]:-$0}"
+  local util_dir
+  util_dir="$(cd "$(dirname "${util_source}")" && pwd)"
+  local script_path="${util_dir}/build_uniprot_metadata_from_dat.py"
+  if [[ ! -s "${script_path}" ]]; then
+    echo "UniProt metadata builder script was not found: ${script_path}" >&2
+    return 1
+  fi
+  local out_tmp="${out_path}.tmp.$$"
+  if [[ "${out_path}" == *.gz ]]; then
+    out_tmp="${out_tmp}.gz"
+  fi
+  if ! "${py_exec}" "${script_path}" --uniprot_dat "${dat_path}" --outfile "${out_tmp}"; then
+    rm -f -- "${out_tmp}"
+    return 1
+  fi
+  if [[ ! -s "${out_tmp}" ]]; then
+    echo "UniProt metadata builder produced an empty file: ${out_tmp}" >&2
+    rm -f -- "${out_tmp}"
+    return 1
+  fi
+  mv -- "${out_tmp}" "${out_path}"
+}
+
+_prepare_uniprot_sprot_meta_to_file() {
+  local output_meta=$1
+  local sys_prefix=$2
+  local runtime_prefix=$3
+
+  if [[ -s "${output_meta}" ]]; then
+    return 0
+  fi
+  if [[ -s "${sys_prefix}.meta.tsv.gz" ]]; then
+    cp -- "${sys_prefix}.meta.tsv.gz" "${output_meta}"
+    return 0
+  fi
+  if [[ -s "${runtime_prefix}.meta.tsv.gz" && "${runtime_prefix}.meta.tsv.gz" != "${output_meta}" ]]; then
+    cp -- "${runtime_prefix}.meta.tsv.gz" "${output_meta}"
+    return 0
+  fi
+
+  local tmp_dir=""
+  tmp_dir=$(mktemp -d "$(dirname "${output_meta}")/tmp.uniprot_sprot_meta.XXXXXX")
+  local dat_source=""
+
+  if [[ -s "${runtime_prefix}.dat.gz" ]]; then
+    dat_source="${runtime_prefix}.dat.gz"
+  elif [[ -s "${sys_prefix}.dat.gz" ]]; then
+    dat_source="${sys_prefix}.dat.gz"
+  else
+    dat_source="${tmp_dir}/uniprot_sprot.dat.gz"
+    if ! _download_uniprot_sprot_dat_to_file "${dat_source}"; then
+      rm -rf -- "${tmp_dir}"
+      return 1
+    fi
+    if [[ ! -s "${runtime_prefix}.dat.gz" ]]; then
+      cp -- "${dat_source}" "${runtime_prefix}.dat.gz" || true
+    fi
+  fi
+
+  if ! _build_uniprot_sprot_metadata_from_dat "${dat_source}" "${output_meta}"; then
+    rm -rf -- "${tmp_dir}"
+    return 1
+  fi
+  rm -rf -- "${tmp_dir}"
+}
+
+ensure_uniprot_sprot_metadata_tsv() {
+  local gg_workspace_dir=$1
+  local db_prefix="${2:-}"
+  local sys_prefix="/usr/local/db/uniprot_sprot"
+  local runtime_root
+  runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
+  local runtime_prefix="${runtime_root}/uniprot_sprot/uniprot_sprot"
+  local runtime_meta="${runtime_prefix}.meta.tsv.gz"
+  local lock_file="${runtime_root}/locks/uniprot_sprot.meta.lock"
+  local target_meta="${runtime_meta}"
+
+  if [[ -n "${db_prefix}" && -s "${db_prefix}.meta.tsv.gz" ]]; then
+    echo "${db_prefix}.meta.tsv.gz"
+    return 0
+  fi
+  if [[ -n "${db_prefix}" && "${db_prefix}" == "${sys_prefix}" && -s "${sys_prefix}.meta.tsv.gz" ]]; then
+    echo "${sys_prefix}.meta.tsv.gz"
+    return 0
+  fi
+  if [[ -n "${db_prefix}" && "${db_prefix}" == "${runtime_prefix}" ]]; then
+    target_meta="${runtime_meta}"
+  fi
+  if [[ -s "${target_meta}" ]]; then
+    echo "${target_meta}"
+    return 0
+  fi
+
+  mkdir -p "${runtime_root}" "$(dirname "${runtime_meta}")"
+  gg_array_download_once "${lock_file}" "${target_meta}" "UniProt Swiss-Prot metadata TSV" \
+    _prepare_uniprot_sprot_meta_to_file "${target_meta}" "${sys_prefix}" "${runtime_prefix}" || return 1
+
+  if [[ ! -s "${target_meta}" ]]; then
+    echo "UniProt Swiss-Prot metadata generation failed: ${target_meta}" >&2
+    return 1
+  fi
+  echo "${target_meta}"
+}
+
 _build_mmseqs_db_from_fasta() {
   local fasta_file=$1
   local db_prefix=$2
@@ -3897,10 +4035,16 @@ ensure_uniprot_sprot_db() {
   local lock_file="${runtime_root}/locks/uniprot_sprot.lock"
 
   if [[ -s "${sys_prefix}.pep" && -s "${sys_prefix}.dmnd" ]]; then
+    if ! ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${sys_prefix}" >/dev/null; then
+      echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${sys_prefix}" >&2
+    fi
     echo "${sys_prefix}"
     return 0
   fi
   if [[ -s "${runtime_prefix}.pep" && -s "${runtime_prefix}.dmnd" ]]; then
+    if ! ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${runtime_prefix}" >/dev/null; then
+      echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${runtime_prefix}" >&2
+    fi
     echo "${runtime_prefix}"
     return 0
   fi
@@ -3912,6 +4056,9 @@ ensure_uniprot_sprot_db() {
   if [[ ! -s "${runtime_prefix}.pep" || ! -s "${runtime_prefix}.dmnd" ]]; then
     echo "UniProt DB download/build failed." >&2
     return 1
+  fi
+  if ! ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${runtime_prefix}" >/dev/null; then
+    echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${runtime_prefix}" >&2
   fi
   echo "${runtime_prefix}"
 }
@@ -3930,6 +4077,9 @@ ensure_uniprot_sprot_mmseqs_db() {
   local lock_file_mmseqs="${runtime_root}/locks/uniprot_sprot.mmseqs.lock"
 
   if [[ -s "${sys_prefix}.pep" && -s "${sys_prefix}.mmseqs" && -s "${sys_prefix}.mmseqs.dbtype" ]]; then
+    if ! ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${sys_prefix}" >/dev/null; then
+      echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${sys_prefix}" >&2
+    fi
     echo "${sys_prefix}"
     return 0
   fi
@@ -3968,6 +4118,9 @@ ensure_uniprot_sprot_mmseqs_db() {
     echo "MMseqs2 UniProt Swiss-Prot DB download/build failed." >&2
     return 1
   fi
+  if ! ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${runtime_prefix}" >/dev/null; then
+    echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${runtime_prefix}" >&2
+  fi
   echo "${runtime_prefix}"
 }
 
@@ -3983,10 +4136,16 @@ ensure_uniprot_sprot_blast_db() {
   local lock_file_blast="${runtime_root}/locks/uniprot_sprot.blast.lock"
 
   if [[ -s "${sys_prefix}.pep" && -s "${sys_prefix}.pin" && -s "${sys_prefix}.phr" && -s "${sys_prefix}.psq" ]]; then
+    if ! ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${sys_prefix}" >/dev/null; then
+      echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${sys_prefix}" >&2
+    fi
     echo "${sys_prefix}"
     return 0
   fi
   if [[ -s "${runtime_pep}" && -s "${runtime_prefix}.pin" && -s "${runtime_prefix}.phr" && -s "${runtime_prefix}.psq" ]]; then
+    if ! ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${runtime_prefix}" >/dev/null; then
+      echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${runtime_prefix}" >&2
+    fi
     echo "${runtime_prefix}"
     return 0
   fi
@@ -4024,6 +4183,9 @@ ensure_uniprot_sprot_blast_db() {
   if [[ ! -s "${runtime_prefix}.pin" || ! -s "${runtime_prefix}.phr" || ! -s "${runtime_prefix}.psq" || ! -s "${runtime_blast_ready}" ]]; then
     echo "BLASTP UniProt Swiss-Prot DB download/build failed." >&2
     return 1
+  fi
+  if ! ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${runtime_prefix}" >/dev/null; then
+    echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${runtime_prefix}" >&2
   fi
   echo "${runtime_prefix}"
 }

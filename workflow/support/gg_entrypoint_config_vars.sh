@@ -39,6 +39,7 @@ exp_value_type
 fimo_qvalue
 generax_model
 generax_rec_model
+gene_evolution_profile
 intron_gain_rate
 iqtree_fast_mode_gt
 jaspar_file
@@ -113,6 +114,14 @@ treevis_support_value
 treevis_synteny
 treevis_synteny_window
 uniprot_annotation_method
+EOF
+      ;;
+    gg_hgt_entrypoint.sh)
+      cat <<'EOF'
+hgt_contamination_dir
+hgt_min_branch_score
+hgt_use_taxonomy_db
+run_hgt_eval
 EOF
       ;;
     gg_genome_annotation_entrypoint.sh)
