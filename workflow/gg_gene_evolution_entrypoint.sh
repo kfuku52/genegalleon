@@ -85,6 +85,7 @@ gg_entrypoint_name="gg_gene_evolution_entrypoint.sh"
 # Mode
 mode_gene_evolution="${mode_gene_evolution:-query2family}" # query2family|orthogroup
 gene_evolution_profile="${gene_evolution_profile:-default}" # default|hgt
+input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode is partial and deactivates CDS-only analyses.
 
 # Query2family workflow flags
 run_get_query_fasta=1 # Activated if mode_gene_evolution=query2family. Generate amino acid fasta file for query BLAST.

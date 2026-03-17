@@ -14,6 +14,7 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 # Configuration variables are provided by gg_gene_evolution_entrypoint.sh.
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
+input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"
 
 # Substitution model in CSUBST and mapdNdS
 if [[ ${genetic_code} -eq 1 ]]; then
@@ -203,6 +204,58 @@ apply_gene_evolution_profile() {
   esac
 }
 
+gene_evolution_model_is_aa() {
+  local model_name=${1:-}
+  local base_model=${model_name%%+*}
+  case "${base_model}" in
+    Blosum62|cpREV|Dayhoff|DCMut|DEN|FLU|HIVb|HIVw|JTT|JTT-DCMut|LG|mtART|mtMAM|mtREV|mtZOA|PMB|rtREV|stmtREV|VT|WAG|LG4M|LG4X|PROTGTR)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+assert_gene_evolution_aa_model_for_protein_mode() {
+  local task_name=${1:-task}
+  if [[ "${input_sequence_mode}" != "protein" ]]; then
+    return 0
+  fi
+  if ! gene_evolution_model_is_aa "${generax_model}"; then
+    echo "input_sequence_mode=protein requires an amino-acid substitution model for ${task_name}: ${generax_model}"
+    echo 'Set generax_model to an amino-acid model such as LG+G4.'
+    exit 1
+  fi
+}
+
+apply_gene_evolution_input_sequence_mode() {
+  if [[ "${input_sequence_mode}" != "protein" ]]; then
+    return 0
+  fi
+
+  echo "input_sequence_mode=protein: gg_gene_evolution will keep only protein-compatible or output-only stages."
+
+  if [[ "${mode_gene_evolution}" == "query2family" ]]; then
+    echo 'input_sequence_mode=protein is not supported with mode_gene_evolution=query2family.'
+    echo 'query2family currently requires species_cds-backed search and CDS extraction.'
+    exit 1
+  fi
+
+  if [[ "${generax_model}" == "GTR+G4" ]]; then
+    generax_model="LG+G4"
+    echo "input_sequence_mode=protein: generax_model=${generax_model}"
+  fi
+
+  disable_flag_with_reason "run_maxalign" "input_sequence_mode=protein: the current MaxAlign path expects codon alignments."
+  disable_flag_with_reason "run_mapdnds_parameter_estimation" "input_sequence_mode=protein: mapdNdS parameter estimation requires codon alignments."
+  disable_flag_with_reason "run_mapdnds" "input_sequence_mode=protein: mapdNdS requires codon alignments."
+  disable_flag_with_reason "run_codeml_two_ratio" "input_sequence_mode=protein: codeml two-ratio requires codon alignments."
+  disable_flag_with_reason "run_hyphy_dnds" "input_sequence_mode=protein: HyPhy dN/dS requires codon alignments."
+  disable_flag_with_reason "run_hyphy_relax" "input_sequence_mode=protein: HyPhy RELAX requires codon alignments."
+  disable_flag_with_reason "run_hyphy_relax_reversed" "input_sequence_mode=protein: reversed HyPhy RELAX requires codon alignments."
+  disable_flag_with_reason "run_iqtree_anc" "input_sequence_mode=protein: ancestral reconstruction for CSUBST runs in codon mode."
+  disable_flag_with_reason "run_csubst" "input_sequence_mode=protein: CSUBST currently depends on codon-mode ancestral reconstruction."
+}
+
 # Setting modes
 if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
   enable_all_run_flags_for_debug_mode "gg debug mode: All run_* variables are forced to set 1, except for too-time-consuming tasks."
@@ -219,6 +272,7 @@ fi
 query_blast_method=$(echo "${query_blast_method}" | tr '[:upper:]' '[:lower:]')
 mode_gene_evolution=$(echo "${mode_gene_evolution:-query2family}" | tr '[:upper:]' '[:lower:]')
 gene_evolution_profile=$(echo "${gene_evolution_profile:-default}" | tr '[:upper:]' '[:lower:]')
+input_sequence_mode=$(gg_normalize_input_sequence_mode "${input_sequence_mode}")
 uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
 tree_rooting_method=$(echo "${tree_rooting_method}" | tr '[:upper:]' '[:lower:]')
 apply_gene_evolution_profile
@@ -237,6 +291,7 @@ if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method
   echo 'uniprot_annotation_method must be either "blastp" or "mmseqs2". Exiting.'
   exit 1
 fi
+apply_gene_evolution_input_sequence_mode
 if [[ "${mode_gene_evolution}" == "query2family" && ${run_query_blast} -eq 1 ]]; then
   if [[ "${query_blast_method}" != "tblastn" && "${query_blast_method}" != "diamond" ]]; then
     echo "Invalid query_blast_method: ${query_blast_method}"
@@ -321,11 +376,19 @@ dir_sp_genome="${gg_workspace_input_dir}/species_genome"
 dir_sp_gff="${gg_workspace_input_dir}/species_gff"
 dir_sp_expression="${gg_workspace_input_dir}/species_expression"
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
+dir_sp_protein_input="$(gg_species_protein_input_dir_path "${gg_workspace_input_dir}")"
 dir_sp_blastdb="${gg_workspace_output_dir}/species_cds_blastdb"
+file_species_genetic_code="$(gg_species_genetic_code_table_path "${gg_workspace_input_dir}")"
+file_species_genetic_code_resolved="${dir_output_active}/parameters/${og_id}_species_genetic_code.resolved.tsv"
 annotation_species_resolved=""
 treevis_clade_ortholog_prefix=""
 annotation_species_candidates=()
-mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_cds}")
+if [[ "${input_sequence_mode}" == "protein" ]]; then
+  mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_protein_input}")
+fi
+if [[ ${#annotation_species_candidates[@]} -eq 0 ]]; then
+  mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_cds}")
+fi
 if annotation_species_resolved=$(gg_resolve_annotation_species "${annotation_species}" "${annotation_species_candidates[@]}"); then
   if [[ -n "${annotation_species_resolved}" ]]; then
     treevis_clade_ortholog_prefix="${annotation_species_resolved}_"
@@ -361,6 +424,7 @@ dir_tmp="${dir_output_active}/tmp/${GG_ARRAY_TASK_ID}_${og_id}" #_${RANDOM}
 file_og_query_aa_fasta="${dir_output_active}/query_aa_fasta/${og_id}_query.aa.fa.gz"
 file_og_query_blast="${dir_output_active}/query_blast/${og_id}_query_blast.tsv"
 file_og_cds_fasta="${dir_output_active}/cds_fasta/${og_id}_cds.fa.gz"
+file_og_pep_fasta="${dir_output_active}/protein_fasta/${og_id}_pep.fa.gz"
 file_og_rpsblast="${dir_output_active}/rpsblast/${og_id}_rpsblast.tsv"
 file_og_uniprot_annotation="${dir_output_active}/uniprot_annotation/${og_id}_uniprot.tsv"
 file_og_mafft="${dir_output_active}/mafft/${og_id}_cds.aln.fa.gz"
@@ -430,6 +494,12 @@ file_og_trimmed_aln_pruned="${dir_output_active}/pruned_trimmed_alignment/${og_i
 file_og_unrooted_tree_pruned="${dir_output_active}/pruned_unrooted_tree/${og_id}_unrooted.pruned.nwk"
 file_og_rooted_tree_pruned="${dir_output_active}/pruned_rooted_tree/${og_id}_rooted.pruned.nwk"
 file_og_dated_tree_pruned="${dir_output_active}/pruned_dated_tree/${og_id}_dated.pruned.nwk"
+file_og_primary_fasta="${file_og_cds_fasta}"
+amas_data_type="dna"
+if [[ "${input_sequence_mode}" == "protein" ]]; then
+  file_og_primary_fasta="${file_og_pep_fasta}"
+  amas_data_type="aa"
+fi
 
 # Define intermediate files for downstream analysis.
 # These variables are updated via helper functions to keep routing logic explicit.
@@ -471,8 +541,69 @@ switch_alignment_analysis_source() {
   set_analysis_file trimmed_aln "${infile}"
 }
 
+species_protein_input_has_files() {
+  local protein_files=()
+  mapfile -t protein_files < <(gg_find_fasta_files "${dir_sp_protein_input}" 1)
+  [[ ${#protein_files[@]} -gt 0 ]]
+}
+
+translate_orthogroup_cds_to_protein_fasta() {
+  local cds_fasta=$1
+  local protein_out=$2
+  local table_path=$3
+  local translated_tmp="${og_id}.translated.pep.tmp.fasta"
+  local species_code=""
+  local sp_ub=""
+  local num_cds=0
+  local num_protein=0
+  local -a species_names=()
+
+  rm -f -- "${translated_tmp}"
+  touch "${translated_tmp}"
+  mapfile -t species_names < <(
+    seqkit seq --threads "${GG_TASK_CPUS}" "${cds_fasta}" |
+      awk '
+        /^>/ {
+          header=$0
+          sub(/^>/, "", header)
+          sub(/[[:space:]].*$/, "", header)
+          gsub(/\r/, "", header)
+          split(header, parts, /[_.]/)
+          if (length(parts) >= 2) {
+            print parts[1] "_" parts[2]
+          }
+        }
+      ' | sort -u
+  )
+  if [[ ${#species_names[@]} -eq 0 ]]; then
+    echo "No species prefixes were detected in the focal CDS FASTA: ${cds_fasta}"
+    exit 1
+  fi
+
+  for sp_ub in "${species_names[@]}"; do
+    species_code=$(gg_lookup_species_genetic_code "${sp_ub}" "${table_path}" "${genetic_code}")
+    echo "Translation started: ${sp_ub} (genetic_code=${species_code}) -> $(basename "${protein_out}")"
+    seqkit grep --threads "${GG_TASK_CPUS}" --use-regexp --pattern "^${sp_ub}([_.-])" "${cds_fasta}" |
+      seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" |
+      gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" |
+      seqkit translate --allow-unknown-codon --transl-table "${species_code}" --threads "${GG_TASK_CPUS}" |
+      sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
+        >> "${translated_tmp}"
+  done
+  num_cds=$(gg_count_fasta_records "${cds_fasta}")
+  num_protein=$(gg_count_fasta_records "${translated_tmp}")
+  if [[ ${num_cds} -ne ${num_protein} ]]; then
+    echo "Protein translation produced a different number of sequences (${num_protein}) than the source CDS FASTA (${num_cds})."
+    echo "Exiting."
+    exit 1
+  fi
+  seqkit seq --threads "${GG_TASK_CPUS}" "${translated_tmp}" --out-file "${protein_out}"
+  rm -f -- "${translated_tmp}"
+}
+
 prepare_species_tree_pruned() {
   local task_local="Species tree pruning"
+  local species_sequence_dir="${dir_sp_cds}"
   if [[ ! -s "${species_tree}" ]]; then
     echo "$(date): Warning: ${task_local}: source species tree was not found."
     echo "Missing: ${species_tree}"
@@ -485,18 +616,22 @@ prepare_species_tree_pruned() {
 
   ensure_parent_dir "${species_tree_pruned}"
 
-  local cds_files=()
-  mapfile -t cds_files < <(gg_find_fasta_files "${dir_sp_cds}" 1)
-  if [[ ${#cds_files[@]} -eq 0 ]]; then
-    echo "$(date): ${task_local}: no species CDS files detected. Copying source species tree as-is."
+  if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
+    species_sequence_dir="${dir_sp_protein_input}"
+  fi
+
+  local sequence_files=()
+  mapfile -t sequence_files < <(gg_find_fasta_files "${species_sequence_dir}" 1)
+  if [[ ${#sequence_files[@]} -eq 0 ]]; then
+    echo "$(date): ${task_local}: no species sequence files detected in ${species_sequence_dir}. Copying source species tree as-is."
     cp_out "${species_tree}" "${species_tree_pruned}"
     return 0
   fi
 
   local cds_spp=()
-  local cds_file
-  for cds_file in "${cds_files[@]}"; do
-    cds_spp+=("$(gg_species_name_from_path "${cds_file}")")
+  local sequence_file
+  for sequence_file in "${sequence_files[@]}"; do
+    cds_spp+=("$(gg_species_name_from_path "${sequence_file}")")
   done
   mapfile -t cds_spp < <(printf '%s\n' "${cds_spp[@]}" | sed -e '/^[[:space:]]*$/d' | sort -u)
   if [[ ${#cds_spp[@]} -eq 0 ]]; then
@@ -979,7 +1114,7 @@ else
 fi
 
 task="Fasta generation"
-if [[ ! -s "${file_og_cds_fasta}" && ${run_get_fasta} -eq 1 ]]; then
+if [[ ! -s "${file_og_primary_fasta}" && ${run_get_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ "${mode_gene_evolution}" == "orthogroup" ]]; then
@@ -993,14 +1128,6 @@ if [[ ! -s "${file_og_cds_fasta}" && ${run_get_fasta} -eq 1 ]]; then
       --max_num_gene_blast_hit_retrieval "${max_num_gene_blast_hit_retrieval}"
     mapfile -t genes < gene_id_list.txt
   fi
-  cds_files=()
-  mapfile -t cds_files < <(gg_find_fasta_files "${dir_sp_cds}" 1)
-  echo "Number of CDS files in ${dir_sp_cds}: ${#cds_files[@]}"
-  spp=()
-  for file_cds in "${cds_files[@]}"; do
-    sp_ub=$(gg_species_name_from_path "${file_cds}")
-    spp+=("${sp_ub}")
-  done
   if [[ -e pattern.txt ]]; then
     rm -f -- pattern.txt
   fi
@@ -1008,52 +1135,107 @@ if [[ ! -s "${file_og_cds_fasta}" && ${run_get_fasta} -eq 1 ]]; then
   for gene in "${genes[@]}"; do
     echo "${gene}" >> pattern.txt
   done
-  if [[ -e "${og_id}.cds.fasta" ]]; then
-    rm -f -- "${og_id}.cds.fasta"
-  fi
-  touch "${og_id}.cds.fasta"
-  for file_cds in "${cds_files[@]}"; do
-    sp_ub=$(gg_species_name_from_path "${file_cds}")
-    seqkit grep --threads "${GG_TASK_CPUS}" --pattern-file pattern.txt "${file_cds}" \
-      >> "${og_id}.cds.fasta"
-  done
-
-  seqkit replace --pattern "X" --replacement "N" --by-seq --ignore-case --threads "${GG_TASK_CPUS}" "${og_id}.cds.fasta" |
-    seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${GG_TASK_CPUS}" |
-    seqkit replace --pattern "\+" --replacement "_" --ignore-case --threads "${GG_TASK_CPUS}" |
-    cdskit pad --codontable "${genetic_code}" |
-    sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
-      > "${og_id}.cds.2.fasta"
 
   num_gene=${#genes[@]}
-  fasta_genes=()
-  mapfile -t fasta_genes < <(awk '/^>/ {sub(/^>/, "", $0); print}' "${og_id}.cds.2.fasta")
-  num_seq=${#fasta_genes[@]}
-  echo "Number of genes in the orthogroup or BLAST hit: ${num_gene}"
-  echo "Number of sequences in the fasta: ${num_seq}"
-  if [[ ${num_gene} -eq ${num_seq} ]]; then
-    echo "Number of genes and sequences matched. Fasta generation completed!"
-    seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.2.fasta" --out-file "${og_id}.cds.out.fa.gz"
-    mv_out "${og_id}.cds.out.fa.gz" "${file_og_cds_fasta}"
+  if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
+    protein_files=()
+    check_species_protein_dir "${dir_sp_protein_input}"
+    check_if_species_files_unique "${dir_sp_protein_input}"
+    mapfile -t protein_files < <(gg_find_fasta_files "${dir_sp_protein_input}" 1)
+    echo "Number of protein files in ${dir_sp_protein_input}: ${#protein_files[@]}"
+    if [[ -s "${file_species_genetic_code}" ]]; then
+      echo "species_genetic_code.tsv is ignored because species_protein inputs are provided: ${file_species_genetic_code}"
+    fi
+    rm -f -- "${og_id}.pep.fasta"
+    touch "${og_id}.pep.fasta"
+    for protein_path in "${protein_files[@]}"; do
+      seqkit grep --threads "${GG_TASK_CPUS}" --pattern-file pattern.txt "${protein_path}" \
+        >> "${og_id}.pep.fasta"
+    done
+    seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${GG_TASK_CPUS}" "${og_id}.pep.fasta" |
+      seqkit replace --pattern "\+" --replacement "_" --ignore-case --threads "${GG_TASK_CPUS}" |
+      sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
+        > "${og_id}.pep.2.fasta"
+    fasta_genes=()
+    mapfile -t fasta_genes < <(awk '/^>/ {sub(/^>/, "", $0); print}' "${og_id}.pep.2.fasta")
+    num_seq=${#fasta_genes[@]}
+    echo "Number of genes in the orthogroup or BLAST hit: ${num_gene}"
+    echo "Number of sequences in the protein fasta: ${num_seq}"
+    if [[ ${num_gene} -eq ${num_seq} ]]; then
+      echo "Number of genes and sequences matched. Protein fasta generation completed!"
+      seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.pep.2.fasta" --out-file "${og_id}.pep.out.fa.gz"
+      mv_out "${og_id}.pep.out.fa.gz" "${file_og_pep_fasta}"
+    else
+      echo "Number of genes and sequences did not match."
+      echo "Genes in the orthogroup or BLAST hit:"
+      printf '%s\n' "${genes[@]}"
+      echo ""
+      echo "Genes in the generated protein FASTA:"
+      printf '%s\n' "${fasta_genes[@]}" | sort | tr '\n' ' '
+      echo ""
+      echo "There may be duplicated or missing sequences."
+      echo "Exiting."
+      exit 1
+    fi
   else
-    echo "Number of genes and sequences did not match."
-    echo "Genes in the orthogroup or BLAST hit:"
-    printf '%s\n' "${genes[@]}"
-    echo ""
-    echo "Genes in the generated FASTA:"
-    printf '%s\n' "${fasta_genes[@]}" | sort | tr '\n' ' '
-    echo ""
-    echo "There may be duplicated or missing sequences."
-    echo "If you have recently replaced species_cds files, please make sure to remove species_cds_blastdb before rerunning."
-    echo "Exiting."
-    exit 1
+    if [[ ! -s "${file_og_cds_fasta}" ]]; then
+      cds_files=()
+      mapfile -t cds_files < <(gg_find_fasta_files "${dir_sp_cds}" 1)
+      echo "Number of CDS files in ${dir_sp_cds}: ${#cds_files[@]}"
+      if [[ ${#cds_files[@]} -eq 0 ]]; then
+        echo "No species_cds FASTA files were found for focal fasta generation: ${dir_sp_cds}"
+        exit 1
+      fi
+      if [[ -e "${og_id}.cds.fasta" ]]; then
+        rm -f -- "${og_id}.cds.fasta"
+      fi
+      touch "${og_id}.cds.fasta"
+      for file_cds in "${cds_files[@]}"; do
+        seqkit grep --threads "${GG_TASK_CPUS}" --pattern-file pattern.txt "${file_cds}" \
+          >> "${og_id}.cds.fasta"
+      done
+
+      seqkit replace --pattern "X" --replacement "N" --by-seq --ignore-case --threads "${GG_TASK_CPUS}" "${og_id}.cds.fasta" |
+        seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${GG_TASK_CPUS}" |
+        seqkit replace --pattern "\+" --replacement "_" --ignore-case --threads "${GG_TASK_CPUS}" |
+        cdskit pad --codontable "${genetic_code}" |
+        sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
+          > "${og_id}.cds.2.fasta"
+
+      fasta_genes=()
+      mapfile -t fasta_genes < <(awk '/^>/ {sub(/^>/, "", $0); print}' "${og_id}.cds.2.fasta")
+      num_seq=${#fasta_genes[@]}
+      echo "Number of genes in the orthogroup or BLAST hit: ${num_gene}"
+      echo "Number of sequences in the fasta: ${num_seq}"
+      if [[ ${num_gene} -eq ${num_seq} ]]; then
+        echo "Number of genes and sequences matched. Fasta generation completed!"
+        seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.2.fasta" --out-file "${og_id}.cds.out.fa.gz"
+        mv_out "${og_id}.cds.out.fa.gz" "${file_og_cds_fasta}"
+      else
+        echo "Number of genes and sequences did not match."
+        echo "Genes in the orthogroup or BLAST hit:"
+        printf '%s\n' "${genes[@]}"
+        echo ""
+        echo "Genes in the generated FASTA:"
+        printf '%s\n' "${fasta_genes[@]}" | sort | tr '\n' ' '
+        echo ""
+        echo "There may be duplicated or missing sequences."
+        echo "If you have recently replaced species_cds files, please make sure to remove species_cds_blastdb before rerunning."
+        echo "Exiting."
+        exit 1
+      fi
+    fi
+    if [[ "${input_sequence_mode}" == "protein" ]]; then
+      gg_prepare_species_genetic_code_table "${dir_sp_cds}" "${genetic_code}" "${file_species_genetic_code_resolved}" "${file_species_genetic_code}"
+      translate_orthogroup_cds_to_protein_fasta "${file_og_cds_fasta}" "${file_og_pep_fasta}" "${file_species_genetic_code_resolved}"
+    fi
   fi
 else
   gg_step_skip "${task}"
 fi
 
 task="Protein RPS-BLAST"
-disable_if_no_input_file "run_rps_blast" "${file_og_cds_fasta}"
+disable_if_no_input_file "run_rps_blast" "${file_og_primary_fasta}"
 if [[ ! -s "${file_og_rpsblast}" && ${run_rps_blast} -eq 1 ]]; then
   gg_step_start "${task}"
   if ! dir_rpsblastdb=$(ensure_pfam_le_db "${gg_workspace_dir}"); then
@@ -1080,9 +1262,13 @@ if [[ ! -s "${file_og_rpsblast}" && ${run_rps_blast} -eq 1 ]]; then
     rm -f -- "${og_id}.rpsblast.tmp.tsv"
   fi
 
-  seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" |
-    seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
-      > ungapped_translated_cds.fas
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${file_og_pep_fasta}" > ungapped_translated_cds.fas
+  else
+    seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" |
+      seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
+        > ungapped_translated_cds.fas
+  fi
 
   if [[ "$(head -c 1 ungapped_translated_cds.fas)" != '>' ]]; then
     sed -e "1d" ungapped_translated_cds.fas > ungapped_translated_cds2.fas
@@ -1124,13 +1310,13 @@ else
 fi
 
 task="Gene trait extraction from gff files"
-disable_if_no_input_file "run_get_gff_info" "${file_og_cds_fasta}"
+disable_if_no_input_file "run_get_gff_info" "${file_og_primary_fasta}"
 if [[ ! -s "${file_og_gff_info}" && ${run_get_gff_info} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ -e gff2genestat.tsv ]]; then
     rm -f -- gff2genestat.tsv
   fi
-  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"
 
   python "${gg_support_dir}/gff2genestat.py" \
     --dir_gff "${dir_sp_gff}" \
@@ -1149,13 +1335,17 @@ else
 fi
 
 task="UniProt annotation (${uniprot_annotation_method})"
-disable_if_no_input_file "run_uniprot_annotation" "${file_og_cds_fasta}"
+disable_if_no_input_file "run_uniprot_annotation" "${file_og_primary_fasta}"
 if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  seqkit seq --remove-gaps --only-id --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" |
-    seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
-      > uniprot.query.pep.fas
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    seqkit seq --remove-gaps --only-id --threads "${GG_TASK_CPUS}" "${file_og_pep_fasta}" > uniprot.query.pep.fas
+  else
+    seqkit seq --remove-gaps --only-id --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" |
+      seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
+        > uniprot.query.pep.fas
+  fi
 
   if [[ "${uniprot_annotation_method}" == "blastp" ]]; then
     if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then
@@ -1209,37 +1399,48 @@ else
 fi
 
 task="In-frame mafft alignment"
-disable_if_no_input_file "run_mafft" "${file_og_cds_fasta}"
+disable_if_no_input_file "run_mafft" "${file_og_primary_fasta}"
 if [[ ! -s "${file_og_mafft}" && ${run_mafft} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" --out-file tmp.cds.input.fasta
-  cdskit mask --seqfile tmp.cds.input.fasta --codontable "${genetic_code}" --outfile tmp.cds.fasta
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_pep_fasta}" --out-file tmp.pep.input.fasta
+    mafft \
+      --auto \
+      --amino \
+      --thread "${GG_TASK_CPUS}" \
+      --quiet \
+      tmp.pep.input.fasta \
+      > "${og_id}.cds.aln.fasta"
+  else
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" --out-file tmp.cds.input.fasta
+    cdskit mask --seqfile tmp.cds.input.fasta --codontable "${genetic_code}" --outfile tmp.cds.fasta
 
-  seqkit translate \
-    --allow-unknown-codon \
-    --transl-table "${genetic_code}" \
-    --threads "${GG_TASK_CPUS}" \
-    tmp.cds.fasta \
-    > tmp.pep.fasta
+    seqkit translate \
+      --allow-unknown-codon \
+      --transl-table "${genetic_code}" \
+      --threads "${GG_TASK_CPUS}" \
+      tmp.cds.fasta \
+      > tmp.pep.fasta
 
-  mafft \
-    --auto \
-    --amino \
-    --thread "${GG_TASK_CPUS}" \
-    --quiet \
-    tmp.pep.fasta \
-    > tmp.pep.aln.fasta
+    mafft \
+      --auto \
+      --amino \
+      --thread "${GG_TASK_CPUS}" \
+      --quiet \
+      tmp.pep.fasta \
+      > tmp.pep.aln.fasta
 
-  cdskit backalign \
-    --seqfile tmp.cds.fasta \
-    --aa_aln tmp.pep.aln.fasta \
-    --codontable "${genetic_code}" \
-    --outfile "${og_id}.cds.aln.fasta"
+    cdskit backalign \
+      --seqfile tmp.cds.fasta \
+      --aa_aln tmp.pep.aln.fasta \
+      --codontable "${genetic_code}" \
+      --outfile "${og_id}.cds.aln.fasta"
+  fi
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.aln.fasta" --out-file "${og_id}.cds.aln.out.fa.gz"
   mv_out "${og_id}.cds.aln.out.fa.gz" "${file_og_mafft}"
-  rm -f -- tmp.cds.input.fasta
+  rm -f -- tmp.cds.input.fasta tmp.cds.fasta tmp.pep.fasta tmp.pep.aln.fasta tmp.pep.input.fasta
 else
   gg_step_skip "${task}"
 fi
@@ -1252,7 +1453,7 @@ if [[ ! -s "${file_og_amas_original}" && ${run_amas_original} -eq 1 ]]; then
 
   AMAS.py summary \
     --in-format fasta \
-    --data-type dna \
+    --data-type "${amas_data_type}" \
     --in-files "${og_id}.amas.original.input.fasta"
 
   mv_out summary.txt "${file_og_amas_original}"
@@ -1342,29 +1543,37 @@ disable_if_no_input_file "run_trimal" "${file_og_untrimmed_aln_analysis}"
 if [[ ! -s "${file_og_trimal}" && ${run_trimal} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" |
-    sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
-      > untrimmed.pep.fasta
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file untrimmed.pep.fasta
+    trimal \
+      -in untrimmed.pep.fasta \
+      -out "${og_id}.cds.trimal.tmp2.fasta" \
+      -automated1
+  else
+    seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" |
+      sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
+        > untrimmed.pep.fasta
 
-  seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" \
-    "${file_og_untrimmed_aln_analysis}" \
-    > untrimmed.cds.degap.fasta
+    seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" \
+      "${file_og_untrimmed_aln_analysis}" \
+      > untrimmed.cds.degap.fasta
 
-  trimal \
-    -in untrimmed.pep.fasta \
-    -backtrans untrimmed.cds.degap.fasta \
-    -out "${og_id}.cds.trimal.tmp1.fasta" \
-    -ignorestopcodon \
-    -automated1
+    trimal \
+      -in untrimmed.pep.fasta \
+      -backtrans untrimmed.cds.degap.fasta \
+      -out "${og_id}.cds.trimal.tmp1.fasta" \
+      -ignorestopcodon \
+      -automated1
 
-  cdskit rmseq \
-    --seqfile "${og_id}.cds.trimal.tmp1.fasta" \
-    --problematic_percent 100 |
-    cdskit hammer \
-      --seqfile "-" \
-      --codontable "${genetic_code}" \
-      --nail 4 \
-      --outfile "${og_id}.cds.trimal.tmp2.fasta"
+    cdskit rmseq \
+      --seqfile "${og_id}.cds.trimal.tmp1.fasta" \
+      --problematic_percent 100 |
+      cdskit hammer \
+        --seqfile "-" \
+        --codontable "${genetic_code}" \
+        --nail 4 \
+        --outfile "${og_id}.cds.trimal.tmp2.fasta"
+  fi
 
   if [[ -s "${og_id}.cds.trimal.tmp2.fasta" ]]; then
     echo "Copying. Output file detected for the task: ${task}"
@@ -1385,29 +1594,44 @@ if [[ ! -s "${file_og_clipkit}" && ${run_clipkit} -eq 1 ]]; then
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.cds.clipkit.input.fasta"
 
-  clipkit \
-    "${og_id}.cds.clipkit.input.fasta" \
-    --mode smart-gap \
-    --sequence_type nt \
-    --codon \
-    --input_file_format "fasta" \
-    --output_file_format "fasta" \
-    --output "${og_id}.cds.clipkit.tmp.fasta" \
-    --log
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    clipkit \
+      "${og_id}.cds.clipkit.input.fasta" \
+      --mode smart-gap \
+      --sequence_type aa \
+      --input_file_format "fasta" \
+      --output_file_format "fasta" \
+      --output "${og_id}.cds.clipkit.hammer.fasta" \
+      --log
+  else
+    clipkit \
+      "${og_id}.cds.clipkit.input.fasta" \
+      --mode smart-gap \
+      --sequence_type nt \
+      --codon \
+      --input_file_format "fasta" \
+      --output_file_format "fasta" \
+      --output "${og_id}.cds.clipkit.tmp.fasta" \
+      --log
 
-  cdskit hammer \
-    --codontable "${genetic_code}" \
-    --nail 4 \
-    --seqfile "${og_id}.cds.clipkit.tmp.fasta" |
-    cdskit rmseq \
-      --problematic_percent 100 \
-      --outfile "${og_id}.cds.clipkit.hammer.fasta"
+    cdskit hammer \
+      --codontable "${genetic_code}" \
+      --nail 4 \
+      --seqfile "${og_id}.cds.clipkit.tmp.fasta" |
+      cdskit rmseq \
+        --problematic_percent 100 \
+        --outfile "${og_id}.cds.clipkit.hammer.fasta"
+  fi
 
   if [[ -s "${og_id}.cds.clipkit.hammer.fasta" ]]; then
     echo "Copying. Output file detected for the task: ${task}"
     seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.clipkit.hammer.fasta" --out-file "${og_id}.cds.clipkit.out.fa.gz"
     mv_out "${og_id}.cds.clipkit.out.fa.gz" "${file_og_clipkit}"
-    cp_out "${og_id}.cds.clipkit.tmp.fasta.log" "${file_og_clipkit_log}"
+    if [[ -s "${og_id}.cds.clipkit.tmp.fasta.log" ]]; then
+      cp_out "${og_id}.cds.clipkit.tmp.fasta.log" "${file_og_clipkit_log}"
+    elif [[ -s "${og_id}.cds.clipkit.hammer.fasta.log" ]]; then
+      cp_out "${og_id}.cds.clipkit.hammer.fasta.log" "${file_og_clipkit_log}"
+    fi
   fi
   rm -f -- "${og_id}.cds.clipkit.input.fasta"
 else
@@ -1425,7 +1649,7 @@ if [[ ! -s "${file_og_amas_cleaned}" && ${run_amas_cleaned} -eq 1 ]]; then
 
   AMAS.py summary \
     --in-format fasta \
-    --data-type dna \
+    --data-type "${amas_data_type}" \
     --in-files "${og_id}.amas.cleaned.input.fasta"
 
   mv_out summary.txt "${file_og_amas_cleaned}"
@@ -1477,23 +1701,17 @@ if [[ ! -s "${file_og_iqtree_tree}" && ${run_iqtree} -eq 1 ]]; then
     other_iqtree_params+=(--fast)
   fi
 
-  if [[ ${run_generax} -eq 1 ]]; then
-    base_model=${generax_model%%+*}
-    aa_models=(Blosum62 cpREV Dayhoff DCMut DEN FLU HIVb HIVw JTT JTT-DCMut LG mtART mtMAM mtREV mtZOA PMB rtREV stmtREV VT WAG LG4M LG4X PROTGTR)
-    is_aa_model=0
-    for aa_model in "${aa_models[@]}"; do
-      if [[ "${aa_model}" == "${base_model}" ]]; then
-        is_aa_model=1
-        break
-      fi
-    done
-    if [[ ${is_aa_model} -eq 1 ]]; then
-      echo "Specified substitution model was interpreted as an amino acid model (base model = ${base_model})."
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    assert_gene_evolution_aa_model_for_protein_mode "${task}"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file iqtree_input.fa
+  elif [[ ${run_generax} -eq 1 ]]; then
+    if gene_evolution_model_is_aa "${generax_model}"; then
+      echo "Specified substitution model was interpreted as an amino acid model (base model = ${generax_model%%+*})."
       seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" "${file_og_trimmed_aln_analysis}" |
         sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
           > iqtree_input.fa
     else
-      echo "Specified substitution model was interpreted as a nucleotide model (base model = ${base_model})."
+      echo "Specified substitution model was interpreted as a nucleotide model (base model = ${generax_model%%+*})."
       seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file iqtree_input.fa
     fi
   else
@@ -1680,7 +1898,11 @@ if [[ (! -s "${file_og_orthogroup_extraction_nwk}" || ! -s "${file_og_orthogroup
   mv_out "${og_id}.orthogroup_extraction.tmp.nwk" "${file_og_orthogroup_extraction_nwk}"
   rm -f -- "${og_id}.orthogroup_seed.tmp.nwk"
 
-  cdskit hammer --nail 4 -s tmp.fasta -o "${og_id}.orthogroup_extraction.tmp.fasta"
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    seqkit seq --threads "${GG_TASK_CPUS}" tmp.fasta --out-file "${og_id}.orthogroup_extraction.tmp.fasta"
+  else
+    cdskit hammer --nail 4 -s tmp.fasta -o "${og_id}.orthogroup_extraction.tmp.fasta"
+  fi
   seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.orthogroup_extraction.tmp.fasta" --out-file "${og_id}.orthogroup_extraction.out.fa.gz"
   mv_out "${og_id}.orthogroup_extraction.out.fa.gz" "${file_og_orthogroup_extraction_fasta}"
   rm -f -- "${og_id}.orthogroup_extraction.tmp.fasta"
@@ -1697,22 +1919,16 @@ disable_if_no_input_file "run_generax" "${file_og_trimmed_aln_analysis}" "${file
 if [[ ! -s "${file_og_generax_nhx}" && ${run_generax} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  base_model=${generax_model%%+*}
-  aa_models=(Blosum62 cpREV Dayhoff DCMut DEN FLU HIVb HIVw JTT JTT-DCMut LG mtART mtMAM mtREV mtZOA PMB rtREV stmtREV VT WAG LG4M LG4X PROTGTR)
-  is_aa_model=0
-  for aa_model in "${aa_models[@]}"; do
-    if [[ "${aa_model}" == "${base_model}" ]]; then
-      is_aa_model=1
-      break
-    fi
-  done
-  if [[ ${is_aa_model} -eq 1 ]]; then
-    echo "Specified substitution model was interpreted as an amino acid model (base model = ${base_model})."
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    assert_gene_evolution_aa_model_for_protein_mode "${task}"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file generax_input_alignment.fas
+  elif gene_evolution_model_is_aa "${generax_model}"; then
+    echo "Specified substitution model was interpreted as an amino acid model (base model = ${generax_model%%+*})."
     seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" "${file_og_trimmed_aln_analysis}" |
       sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
         > generax_input_alignment.fas
   else
-    echo "Specified substitution model was interpreted as a nucleotide model (base model = ${base_model})."
+    echo "Specified substitution model was interpreted as a nucleotide model (base model = ${generax_model%%+*})."
     seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file generax_input_alignment.fas
   fi
 
@@ -1823,22 +2039,16 @@ if [[ ${run_generax} -eq 1 ]]; then
       nwkit drop --target root --length yes --infile "${file_og_generax_nwk}" --outfile "${og_id}.generax_ufboot.tmp.nwk"
       mv_out "${og_id}.generax_ufboot.tmp.nwk" "${file_og_iqtree_generax_ufboot}"
     else
-      base_model=${generax_model%%+*}
-      aa_models=(Blosum62 cpREV Dayhoff DCMut DEN FLU HIVb HIVw JTT JTT-DCMut LG mtART mtMAM mtREV mtZOA PMB rtREV stmtREV VT WAG LG4M LG4X PROTGTR)
-      is_aa_model=0
-      for aa_model in "${aa_models[@]}"; do
-        if [[ "${aa_model}" == "${base_model}" ]]; then
-          is_aa_model=1
-          break
-        fi
-      done
-      if [[ ${is_aa_model} -eq 1 ]]; then
-        echo "Specified substitution model was interpreted as an amino acid model (base model = ${base_model})."
+      if [[ "${input_sequence_mode}" == "protein" ]]; then
+        assert_gene_evolution_aa_model_for_protein_mode "${task}"
+        seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.generax_ufboot.input.fa"
+      elif gene_evolution_model_is_aa "${generax_model}"; then
+        echo "Specified substitution model was interpreted as an amino acid model (base model = ${generax_model%%+*})."
         seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" "${file_og_trimmed_aln_analysis}" |
           sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
             > "${og_id}.generax_ufboot.input.fa"
       else
-        echo "Specified substitution model was interpreted as a nucleotide model (base model = ${base_model})."
+        echo "Specified substitution model was interpreted as a nucleotide model (base model = ${generax_model%%+*})."
         seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.generax_ufboot.input.fa"
       fi
 
@@ -2970,26 +3180,33 @@ else
 fi
 task="Synteny neighborhood grouping"
 if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then
+  synteny_source_dir="${dir_sp_cds}"
+  synteny_sequence_mode="cds"
+  if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
+    synteny_source_dir="${dir_sp_protein_input}"
+    synteny_sequence_mode="protein"
+  fi
   synteny_needs_update=0
-  if [[ ! -s "${file_og_synteny}" || "${file_og_cds_fasta}" -nt "${file_og_synteny}" ]]; then
+  if [[ ! -s "${file_og_synteny}" || "${file_og_primary_fasta}" -nt "${file_og_synteny}" ]]; then
     synteny_needs_update=1
   fi
   if [[ ${synteny_needs_update} -eq 1 ]]; then
     gg_step_start "${task}"
-    if [[ ! -d "${dir_sp_cds}" ]]; then
-      echo "species_cds directory not found. Skipping synteny panel input generation: ${dir_sp_cds}"
+    if [[ ! -d "${synteny_source_dir}" ]]; then
+      echo "Sequence directory not found. Skipping synteny panel input generation: ${synteny_source_dir}"
     elif [[ ! -d "${dir_sp_gff}" ]]; then
       echo "species_gff directory not found. Skipping synteny panel input generation: ${dir_sp_gff}"
-    elif [[ ! -s "${file_og_cds_fasta}" ]]; then
-      echo "Focal CDS fasta file not found. Skipping synteny panel input generation: ${file_og_cds_fasta}"
+    elif [[ ! -s "${file_og_primary_fasta}" ]]; then
+      echo "Focal sequence fasta file not found. Skipping synteny panel input generation: ${file_og_primary_fasta}"
     else
       python "${gg_support_dir}/synteny_neighbors.py" \
-        --focal_cds_fasta "${file_og_cds_fasta}" \
-        --dir_sp_cds "${dir_sp_cds}" \
+        --focal_cds_fasta "${file_og_primary_fasta}" \
+        --dir_sp_cds "${synteny_source_dir}" \
         --dir_sp_gff "${dir_sp_gff}" \
         --cache_dir "${gg_workspace_output_dir}/species_gff_info" \
         --lock_dir "${file_og_parameters_dir}/synteny_locks" \
         --gff2genestat_script "${gg_support_dir}/gff2genestat.py" \
+        --input_sequence_mode "${synteny_sequence_mode}" \
         --window "${treevis_synteny_window}" \
         --evalue "${query_blast_evalue}" \
         --genetic_code "${genetic_code}" \
@@ -3038,9 +3255,9 @@ if [[ (${summary_flag} -eq 1 || ! -s "${file_og_stat_branch}" || ! -s "${file_og
   summary_trimmed_fasta="PLACEHOLDER"
   summary_promoter_fasta="PLACEHOLDER"
   summary_tmp_files=()
-  if [[ -s "${file_og_cds_fasta}" ]]; then
+  if [[ -s "${file_og_primary_fasta}" ]]; then
     summary_unaligned_fasta="${og_id}.summary.unaligned.fasta"
-    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" --out-file "${summary_unaligned_fasta}"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${summary_unaligned_fasta}"
     summary_tmp_files+=("${summary_unaligned_fasta}")
   fi
   if [[ -s "${file_og_trimmed_aln_analysis}" ]]; then
@@ -3142,7 +3359,7 @@ if ([[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]]) && [[ ${run_tree
       "${file_og_orthogroup_extraction_fasta}" \
       "${file_og_maxalign}" \
       "${file_og_mafft}" \
-      "${file_og_cds_fasta}"; do
+      "${file_og_primary_fasta}"; do
       candidate_n=$(gg_count_fasta_records "${candidate}")
       if [[ ${candidate_n} -ge ${num_tip_treeplot} ]]; then
         panel11_trimmed_aln="${candidate}"
@@ -3157,7 +3374,7 @@ if ([[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]]) && [[ ${run_tree
     for candidate in \
       "${file_og_orthogroup_extraction_fasta}" \
       "${file_og_mafft}" \
-      "${file_og_cds_fasta}"; do
+      "${file_og_primary_fasta}"; do
       candidate_n=$(gg_count_fasta_records "${candidate}")
       if [[ ${candidate_n} -ge ${num_tip_treeplot} ]]; then
         panel11_untrimmed_aln="${candidate}"

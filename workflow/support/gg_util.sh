@@ -2501,6 +2501,137 @@ print_softmasked_percentage() {
   python -c 'import sys; num=int(sys.argv[1]); den=int(sys.argv[2]); print("{:,.1f}% masked ({:,}/{:,} bp)".format(num/den*100, num, den))' "${num_masked_bp}" "${num_total_bp}"
 }
 
+gg_normalize_input_sequence_mode() {
+  local input_mode="${1:-cds}"
+  input_mode=$(printf '%s' "${input_mode}" | tr '[:upper:]' '[:lower:]')
+  if [[ "${input_mode}" != "cds" && "${input_mode}" != "protein" ]]; then
+    echo "Invalid input_sequence_mode: ${input_mode}" >&2
+    echo 'input_sequence_mode must be either "cds" or "protein".' >&2
+    return 1
+  fi
+  printf '%s\n' "${input_mode}"
+}
+
+gg_species_genetic_code_table_path() {
+  local input_root=${1:-}
+  echo "${input_root}/species_genetic_code/species_genetic_code.tsv"
+}
+
+gg_species_protein_input_dir_path() {
+  local input_root=${1:-}
+  echo "${input_root}/species_protein"
+}
+
+gg_prepare_species_genetic_code_table() {
+  local cds_dir=$1
+  local default_code=$2
+  local outfile=$3
+  local input_table=${4:-}
+  python - "${cds_dir}" "${default_code}" "${outfile}" "${input_table}" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+
+def species_from_filename(path: Path) -> str:
+    name = path.name
+    if "_" not in name:
+        return path.stem
+    return name.split("_", 2)[0] + "_" + name.split("_", 2)[1]
+
+
+cds_dir = Path(sys.argv[1])
+default_code = sys.argv[2].strip()
+outfile = Path(sys.argv[3])
+input_table_raw = sys.argv[4].strip()
+input_table = Path(input_table_raw) if input_table_raw else None
+fasta_suffixes = (".fa", ".fa.gz", ".fas", ".fas.gz", ".fasta", ".fasta.gz", ".fna", ".fna.gz")
+
+species = sorted(
+    species_from_filename(path)
+    for path in cds_dir.iterdir()
+    if path.is_file() and not path.name.startswith(".") and path.name.endswith(fasta_suffixes)
+)
+if not species:
+    sys.stderr.write(f"No species CDS files were found in: {cds_dir}\n")
+    sys.exit(1)
+
+overrides = {}
+if input_table is not None and input_table.exists():
+    with input_table.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(
+            (line for line in handle if line.strip() and not line.lstrip().startswith("#")),
+            delimiter="\t",
+        )
+        if reader.fieldnames is None or "species" not in reader.fieldnames or "genetic_code" not in reader.fieldnames:
+            sys.stderr.write(
+                f"{input_table} must be a tab-delimited file with at least species and genetic_code columns.\n"
+            )
+            sys.exit(1)
+        for row in reader:
+            sp = (row.get("species") or "").strip().replace(" ", "_")
+            code = (row.get("genetic_code") or "").strip()
+            if not sp or not code:
+                sys.stderr.write(f"Empty species or genetic_code entry was detected in {input_table}.\n")
+                sys.exit(1)
+            try:
+                code_int = int(code)
+            except ValueError:
+                sys.stderr.write(f"Invalid genetic_code for {sp}: {code}\n")
+                sys.exit(1)
+            if code_int <= 0:
+                sys.stderr.write(f"genetic_code must be a positive integer for {sp}: {code}\n")
+                sys.exit(1)
+            if sp in overrides:
+                sys.stderr.write(f"Duplicate species entry in {input_table}: {sp}\n")
+                sys.exit(1)
+            overrides[sp] = str(code_int)
+
+outfile.parent.mkdir(parents=True, exist_ok=True)
+with outfile.open("w", encoding="utf-8", newline="") as handle:
+    writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+    writer.writerow(["species", "genetic_code", "source"])
+    for sp in species:
+        if sp in overrides:
+            writer.writerow([sp, overrides[sp], "species_genetic_code.tsv"])
+        else:
+            writer.writerow([sp, default_code, "default"])
+
+unknown = sorted(sp for sp in overrides if sp not in set(species))
+if unknown:
+    sys.stderr.write(
+        "Warning: species_genetic_code.tsv entries were ignored because no matching species_cds file was found: "
+        + ", ".join(unknown)
+        + "\n"
+    )
+PY
+}
+
+gg_lookup_species_genetic_code() {
+  local species_name=$1
+  local table_path=$2
+  local default_code=${3:-1}
+  local code=""
+  if [[ -s "${table_path}" ]]; then
+    code=$(awk -F'\t' -v sp="${species_name}" 'NR>1 && $1==sp {print $2; exit}' "${table_path}")
+  fi
+  if [[ -z "${code}" ]]; then
+    code="${default_code}"
+  fi
+  printf '%s' "${code}"
+}
+
+disable_flag_with_reason() {
+  local variable_name=$1
+  local reason=$2
+  local variable_value="${!variable_name:-0}"
+  if [[ "${variable_value}" == "0" ]]; then
+    return 0
+  fi
+  printf -v "${variable_name}" '%s' 0
+  echo "Disabled ${variable_name}: ${reason}"
+}
+
 disable_if_no_input_file() {
   local run_variable_txt=$1
   shift

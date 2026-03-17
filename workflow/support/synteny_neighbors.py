@@ -49,6 +49,7 @@ def build_arg_parser():
     parser.add_argument("--cache_dir", required=True, type=str)
     parser.add_argument("--lock_dir", default="", type=str)
     parser.add_argument("--gff2genestat_script", required=True, type=str)
+    parser.add_argument("--input_sequence_mode", default="cds", choices=["cds", "protein"], type=str)
     parser.add_argument("--window", default=5, type=int)
     parser.add_argument("--evalue", default=0.01, type=float)
     parser.add_argument("--genetic_code", default=1, type=int)
@@ -264,8 +265,8 @@ class UnionFind:
             self.rank[rx] += 1
 
 
-def cluster_neighbors_by_similarity(cds_fasta, evalue_cutoff, genetic_code, threads, tmpdir):
-    genes = read_fasta_ids(cds_fasta)
+def cluster_neighbors_by_similarity(seq_fasta, input_sequence_mode, evalue_cutoff, genetic_code, threads, tmpdir):
+    genes = read_fasta_ids(seq_fasta)
     genes = sorted(set(genes))
     if len(genes) == 0:
         return {}, {}
@@ -275,20 +276,23 @@ def cluster_neighbors_by_similarity(cds_fasta, evalue_cutoff, genetic_code, thre
     pep_fasta = os.path.join(tmpdir, "neighbors.pep.fasta")
     db_prefix = os.path.join(tmpdir, "neighbors.pep")
     blast_out = os.path.join(tmpdir, "neighbors.blast.tsv")
-    run_cmd(
-        [
-            "seqkit",
-            "translate",
-            "--allow-unknown-codon",
-            "--transl-table",
-            str(genetic_code),
-            "--threads",
-            str(max(1, int(threads))),
-            cds_fasta,
-            "--out-file",
-            pep_fasta,
-        ]
-    )
+    if input_sequence_mode == "protein":
+        shutil.copyfile(seq_fasta, pep_fasta)
+    else:
+        run_cmd(
+            [
+                "seqkit",
+                "translate",
+                "--allow-unknown-codon",
+                "--transl-table",
+                str(genetic_code),
+                "--threads",
+                str(max(1, int(threads))),
+                seq_fasta,
+                "--out-file",
+                pep_fasta,
+            ]
+        )
     if (not os.path.exists(pep_fasta)) or os.path.getsize(pep_fasta) == 0:
         gene_to_group = {}
         group_size = {}
@@ -477,10 +481,11 @@ def main():
         return
     tmpdir = tempfile.mkdtemp(prefix="gg_synteny_neighbors_")
     try:
-        cds_fasta = os.path.join(tmpdir, "neighbors.cds.fasta")
-        write_fasta(neighbor_seqs, cds_fasta)
+        seq_fasta = os.path.join(tmpdir, "neighbors.input.fasta")
+        write_fasta(neighbor_seqs, seq_fasta)
         gene_to_group, group_size = cluster_neighbors_by_similarity(
-            cds_fasta=cds_fasta,
+            seq_fasta=seq_fasta,
+            input_sequence_mode=args.input_sequence_mode,
             evalue_cutoff=args.evalue,
             genetic_code=args.genetic_code,
             threads=args.threads,

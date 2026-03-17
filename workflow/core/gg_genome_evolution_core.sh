@@ -21,7 +21,7 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 # Configuration variables are provided by gg_genome_evolution_entrypoint.sh.
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
-input_sequence_mode="${input_sequence_mode:-cds}"
+input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 species_tree_rooting="${species_tree_rooting:-taxonomy}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
@@ -206,12 +206,7 @@ species_tree_rooting_looks_like_label_list() {
   return 0
 }
 
-input_sequence_mode=$(printf '%s' "${input_sequence_mode}" | tr '[:upper:]' '[:lower:]')
-if [[ "${input_sequence_mode}" != "cds" && "${input_sequence_mode}" != "protein" ]]; then
-  echo "Invalid input_sequence_mode: ${input_sequence_mode}"
-  echo 'input_sequence_mode must be either "cds" or "protein".'
-  exit 1
-fi
+input_sequence_mode=$(gg_normalize_input_sequence_mode "${input_sequence_mode}")
 
 species_protein_ready=0
 species_protein_source=""

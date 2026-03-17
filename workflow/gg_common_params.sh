@@ -8,3 +8,4 @@
 : "${GG_COMMON_GENETIC_CODE:=1}" # NCBI genetic code table ID used for translation/ORF-related steps.
 : "${GG_COMMON_BUSCO_LINEAGE:=auto}" # BUSCO lineage dataset name, or "auto" to infer a shared dataset from species names.
 : "${GG_COMMON_REFERENCE_SPECIES:=auto}" # Reference species, or "auto" to detect a model species from the dataset.
+: "${GG_COMMON_INPUT_SEQUENCE_MODE:=cds}" # Shared default input sequence mode for workflows that consume CDS/protein inputs.

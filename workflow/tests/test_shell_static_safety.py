@@ -1662,6 +1662,11 @@ def test_common_busco_lineage_defaults_to_auto():
     assert ': "${GG_COMMON_BUSCO_LINEAGE:=auto}"' in text
 
 
+def test_common_input_sequence_mode_defaults_to_cds():
+    text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+    assert ': "${GG_COMMON_INPUT_SEQUENCE_MODE:=cds}"' in text
+
+
 def test_common_params_define_reference_species_auto_only_once():
     text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
     assert ': "${GG_COMMON_REFERENCE_SPECIES:=auto}"' in text
@@ -1741,10 +1746,13 @@ def test_genome_evolution_supports_protein_input_mode_and_species_code_overrides
     entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+    util = _read_text(WORKFLOW_DIR / "support" / "gg_util.sh")
 
-    assert 'input_sequence_mode="cds" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.' in entrypoint
+    assert 'input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.' in entrypoint
     assert "input_sequence_mode" in config_vars
-    assert 'input_sequence_mode="${input_sequence_mode:-cds}"' in core
+    assert 'input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"' in core
+    assert 'input_sequence_mode=$(gg_normalize_input_sequence_mode "${input_sequence_mode}")' in core
+    assert "gg_normalize_input_sequence_mode() {" in util
     assert 'species_genetic_code_table_path() {' in core
     assert 'echo "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv"' in core
     assert 'echo "${gg_workspace_input_dir}/species_protein"' in core
@@ -1767,6 +1775,56 @@ def test_genome_evolution_supports_protein_input_mode_and_species_code_overrides
     protein_candidates_index = core.index('if [[ ${#annotation_species_candidates[@]} -eq 0 && "${input_sequence_mode}" == "protein" ]]; then')
     cds_candidates_index = core.index('if [[ ${#annotation_species_candidates[@]} -eq 0 ]]; then\n  mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_cds}")\nfi')
     assert protein_candidates_index < cds_candidates_index
+
+
+def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_supported_stages():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_gene_evolution_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    util = _read_text(WORKFLOW_DIR / "support" / "gg_util.sh")
+
+    gene_block_start = config_vars.index("gg_gene_evolution_entrypoint.sh)")
+    gene_block_end = config_vars.index("gg_hgt_entrypoint.sh)")
+    gene_block = config_vars[gene_block_start:gene_block_end]
+
+    assert 'input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode is partial and deactivates CDS-only analyses.' in entrypoint
+    assert "\ninput_sequence_mode\n" in gene_block
+    assert 'input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"' in core
+    assert 'input_sequence_mode=$(gg_normalize_input_sequence_mode "${input_sequence_mode}")' in core
+    assert "disable_flag_with_reason() {" in util
+    assert "gg_species_genetic_code_table_path() {" in util
+    assert "gg_species_protein_input_dir_path() {" in util
+    assert "gg_prepare_species_genetic_code_table() {" in util
+    assert "gg_lookup_species_genetic_code() {" in util
+    assert "apply_gene_evolution_input_sequence_mode() {" in core
+    assert "gene_evolution_model_is_aa() {" in core
+    assert "assert_gene_evolution_aa_model_for_protein_mode() {" in core
+    assert 'if [[ "${input_sequence_mode}" != "protein" ]]; then' in core
+    assert 'if [[ "${mode_gene_evolution}" == "query2family" ]]; then' in core
+    assert 'query2family currently requires species_cds-backed search and CDS extraction.' in core
+    assert 'dir_sp_protein_input="$(gg_species_protein_input_dir_path "${gg_workspace_input_dir}")"' in core
+    assert 'file_species_genetic_code="$(gg_species_genetic_code_table_path "${gg_workspace_input_dir}")"' in core
+    assert 'file_og_pep_fasta="${dir_output_active}/protein_fasta/${og_id}_pep.fa.gz"' in core
+    assert 'if [[ "${input_sequence_mode}" == "protein" ]]; then\n  file_og_primary_fasta="${file_og_pep_fasta}"' in core
+    assert 'if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then' in core
+    assert 'check_species_protein_dir "${dir_sp_protein_input}"' in core
+    assert 'gg_prepare_species_genetic_code_table "${dir_sp_cds}" "${genetic_code}" "${file_species_genetic_code_resolved}" "${file_species_genetic_code}"' in core
+    assert 'translate_orthogroup_cds_to_protein_fasta "${file_og_cds_fasta}" "${file_og_pep_fasta}" "${file_species_genetic_code_resolved}"' in core
+    assert 'assert_gene_evolution_aa_model_for_protein_mode "${task}"' in core
+    assert 'disable_if_no_input_file "run_get_gff_info" "${file_og_primary_fasta}"' in core
+    assert 'seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"' in core
+    assert 'disable_if_no_input_file "run_get_promoter_fasta" "${file_og_gff_info}"' in core
+    assert 'disable_if_no_input_file "run_fimo" "${file_og_promoter_fasta}" "${jaspar_path}"' in core
+    assert 'disable_flag_with_reason "run_mapdnds_parameter_estimation" "input_sequence_mode=protein: mapdNdS parameter estimation requires codon alignments."' in core
+    assert 'disable_flag_with_reason "run_get_gff_info"' not in core
+    assert 'disable_flag_with_reason "run_scm_intron"' not in core
+    assert 'disable_flag_with_reason "run_get_promoter_fasta"' not in core
+    assert 'disable_flag_with_reason "run_fimo"' not in core
+    assert 'disable_flag_with_reason "treevis_synteny"' not in core
+    assert 'synteny_source_dir="${dir_sp_cds}"' in core
+    assert 'if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then\n    synteny_source_dir="${dir_sp_protein_input}"' in core
+    assert '--input_sequence_mode "${synteny_sequence_mode}"' in core
+    assert "apply_gene_evolution_input_sequence_mode\nif [[ \"${mode_gene_evolution}\" == \"query2family\" && ${run_query_blast} -eq 1 ]]; then" in core
 
 
 def test_genome_evolution_places_run_cds_translation_before_dependent_run_flags():

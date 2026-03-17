@@ -40,6 +40,7 @@ fimo_qvalue
 generax_model
 generax_rec_model
 gene_evolution_profile
+input_sequence_mode
 intron_gain_rate
 iqtree_fast_mode_gt
 jaspar_file

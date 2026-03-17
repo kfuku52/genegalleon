@@ -123,7 +123,7 @@ run_cafe=0 # Run CAFE family-size evolution analysis.
 run_go_enrichment=0 # Run GO enrichment on selected orthogroups or shifts.
 
 # Shared parameters
-input_sequence_mode="cds" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.
+input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.
 strictly_single_copy_only=0 # Restrict marker selection to strictly single-copy orthologs only.
 bootstrap_params="-bb 1000 -bnni" # Extra IQ-TREE bootstrap parameters.
 nucleotide_model="GTR+R4" # IQ-TREE nucleotide substitution model.
