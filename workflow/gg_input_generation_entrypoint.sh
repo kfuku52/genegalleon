@@ -81,7 +81,7 @@ run_validate_inputs=1 # Validate formatted inputs before downstream workflows us
 run_generate_species_trait=0 # Generate species_trait.tsv from downloaded or local metadata sources.
 
 # Shared parameters
-provider="all" # all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|local
+provider="all" # all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local
 trait_profile="none" # none|gift_starter
 strict=0 # Treat input formatting and validation warnings as errors.
 overwrite=0 # Overwrite existing formatted or downloaded outputs.

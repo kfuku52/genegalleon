@@ -1,4 +1,5 @@
 from pathlib import Path
+import bz2
 import csv
 import gzip
 import io
@@ -8,6 +9,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import socket
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 from urllib.parse import parse_qs, urlparse
@@ -180,6 +182,40 @@ class _VEuPathDbFixtureHandler(SimpleHTTPRequestHandler):
             )
             return
         super().do_GET()
+
+
+class _InsectBaseFixtureHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, root_dir=None, **kwargs):
+        self._root_dir = root_dir
+        super().__init__(*args, directory=str(root_dir), **kwargs)
+
+    def _send_json(self, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path.startswith("/api/genome/genomes/IBG_00001/"):
+            self._send_json(
+                {
+                    "ibg_id": "IBG_00001",
+                    "species": "Abrostola tripartita",
+                }
+            )
+            return
+        super().do_GET()
+
+
+def write_tar_bz2(path, members):
+    with tarfile.open(path, "w:bz2") as archive:
+        for name, content in members.items():
+            payload = str(content).encode("utf-8")
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
 
 
 def test_download_manifest_then_format_ensembl(tmp_path):
@@ -1588,6 +1624,99 @@ def test_download_manifest_veupathdb_provider_resolves_from_service(tmp_path):
     assert (raw_dir / "Entamoeba_nuttalli.veupathdb.EnuttalliP19.cds.fa").exists()
     assert (raw_dir / "Entamoeba_nuttalli.veupathdb.EnuttalliP19.gene.gff3").exists()
     assert (raw_dir / "Entamoeba_nuttalli.veupathdb.EnuttalliP19.genome.fa").exists()
+
+
+def test_download_manifest_insectbase_provider_resolves_from_api_and_formats_archived_genome(tmp_path):
+    server_root = tmp_path / "server_root"
+    species_token = "Abrostola_tripartita"
+    data_dir = server_root / "data" / "genome" / species_token
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    (data_dir / (species_token + ".cds.fa")).write_text(
+        ">gene1.t1\nATGAA\n>gene1.t2\nATGAAATGA\n",
+        encoding="utf-8",
+    )
+    (data_dir / (species_token + ".gff3")).write_text(
+        "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n",
+        encoding="utf-8",
+    )
+    write_tar_bz2(
+        data_dir / (species_token + ".genome.fa.tar.bz2"),
+        {
+            "nested/" + species_token + ".genome.fa": ">chr1 insectbase\nATGCATGC\n",
+            "README.txt": "fixture\n",
+        },
+    )
+
+    handler = lambda *args, **kwargs: _InsectBaseFixtureHandler(*args, root_dir=server_root, **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "insectbase",
+                    "id": "IBG_00001",
+                    "species_key": "",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                }
+            ],
+        )
+
+        download_dir = tmp_path / "download_cache"
+        out_cds = tmp_path / "out_cds"
+        out_gff = tmp_path / "out_gff"
+        out_genome = tmp_path / "out_genome"
+        env = dict(os.environ)
+        env["GG_INSECTBASE_API_BASE_URL"] = "http://127.0.0.1:{}/api/genome".format(server.server_port)
+        completed = run_script(
+            "--provider",
+            "insectbase",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(download_dir),
+            "--species-cds-dir",
+            str(out_cds),
+            "--species-gff-dir",
+            str(out_gff),
+            "--species-genome-dir",
+            str(out_genome),
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    raw_dir = download_dir / "InsectBase" / "species_wise_original" / species_token
+    assert (raw_dir / (species_token + ".cds.fa")).exists()
+    assert (raw_dir / (species_token + ".gff3")).exists()
+    archive_path = raw_dir / (species_token + ".genome.fa.tar.bz2")
+    assert archive_path.exists()
+
+    formatted_cds = list(out_cds.glob("Abrostola_tripartita*.fa.gz"))
+    formatted_gff = list(out_gff.glob("Abrostola_tripartita*.gff.gz"))
+    formatted_genome = list(out_genome.glob("Abrostola_tripartita*.fa.gz"))
+    assert len(formatted_cds) == 1
+    assert len(formatted_gff) == 1
+    assert len(formatted_genome) == 1
+
+    with gzip.open(formatted_cds[0], "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert ">Abrostola_tripartita_gene1" in cds_text
+    with gzip.open(formatted_genome[0], "rt", encoding="utf-8") as handle:
+        genome_text = handle.read()
+    assert ">chr1" in genome_text
+    assert "ATGCATGC" in genome_text
+    with bz2.open(archive_path, "rb") as handle:
+        assert handle.read(4) != b""
 
 
 def test_download_manifest_ncbi_id_only_auto_resolve(tmp_path):

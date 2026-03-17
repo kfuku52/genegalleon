@@ -29,10 +29,22 @@ FASTA_EXTENSIONS = (
     ".fas",
     ".fasta",
     ".fna",
+    ".fa.bz2",
+    ".fas.bz2",
+    ".fasta.bz2",
+    ".fna.bz2",
     ".fa.gz",
     ".fas.gz",
     ".fasta.gz",
     ".fna.gz",
+    ".fa.tar.gz",
+    ".fas.tar.gz",
+    ".fasta.tar.gz",
+    ".fna.tar.gz",
+    ".fa.tar.bz2",
+    ".fas.tar.bz2",
+    ".fasta.tar.bz2",
+    ".fna.tar.bz2",
 )
 
 GFF_EXTENSIONS = (
@@ -56,6 +68,7 @@ PROVIDERS = (
     "fernbase",
     "veupathdb",
     "dictybase",
+    "insectbase",
     "local",
 )
 LEGACY_NCBI_PROVIDER_ALIASES = ("refseq", "genbank")
@@ -72,6 +85,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "fernbase": Path("FernBase") / "species_wise_original",
     "veupathdb": Path("VEuPathDB") / "species_wise_original",
     "dictybase": Path("dictyBase") / "species_wise_original",
+    "insectbase": Path("InsectBase") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
 NCBI_MERGED_INPUT_RELATIVE_DIRS = (
@@ -120,6 +134,7 @@ HEADER_COMMENTS = {
             "- cngb: CNA... or GCA/GCF accession",
             "- veupathdb: EnuttalliP19",
             "- dictybase: Dictyostelium_discoideum",
+            "- insectbase: IBG_00001",
             "- local: local species directory ID or path-style ID",
             "The drop-down is provider-specific, but any valid value can still be typed manually.",
             "For non-local providers, labels like 'GCF_000001405.40 (Homo sapiens)' are accepted;",
@@ -292,6 +307,7 @@ SNAPSHOT_FULL_ID_PROVIDERS = (
     "fernbase",
     "veupathdb",
     "dictybase",
+    "insectbase",
     "local",
 )
 EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
@@ -326,6 +342,7 @@ ID_EXAMPLES_BY_PROVIDER = {
     "fernbase": (("Azolla_filiculoides", "Azolla filiculoides"), ("Salvinia_cucullata_v2", "Salvinia cucullata v2")),
     "veupathdb": (("EnuttalliP19", "Entamoeba nuttalli"),),
     "dictybase": (("Dictyostelium_discoideum", "Dictyostelium discoideum"),),
+    "insectbase": (("IBG_00001", "Abrostola tripartita"),),
     "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
 }
 

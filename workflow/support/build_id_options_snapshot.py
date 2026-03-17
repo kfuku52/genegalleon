@@ -23,10 +23,11 @@ PROVIDERS = (
     "fernbase",
     "veupathdb",
     "dictybase",
+    "insectbase",
     "local",
 )
 
-FETCH_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "local")
+FETCH_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "insectbase", "local")
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "local": Path("Local") / "species_wise_original",
@@ -62,6 +63,7 @@ ID_EXAMPLES_BY_PROVIDER = {
     "fernbase": (("Azolla_filiculoides", "Azolla filiculoides"), ("Salvinia_cucullata_v2", "Salvinia cucullata v2")),
     "veupathdb": (("EnuttalliP19", "Entamoeba nuttalli"),),
     "dictybase": (("Dictyostelium_discoideum", "Dictyostelium discoideum"),),
+    "insectbase": (("IBG_00001", "Abrostola tripartita"),),
     "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
 }
 
@@ -407,6 +409,24 @@ def fetch_veupathdb_options(timeout):
     return sorted(out, key=lambda x: x[0].lower())
 
 
+def fetch_insectbase_options(timeout):
+    next_url = "https://www.insect-genome.com/api/genome/genomes/?page=1&page_size=5000"
+    out = []
+    seen = set()
+    while next_url:
+        payload = fetch_json(next_url, timeout)
+        for record in payload.get("results", []):
+            source_id = str(record.get("ibg_id", "") or "").strip()
+            species_label = str(record.get("species", "") or "").strip()
+            if source_id == "" or source_id in seen:
+                continue
+            seen.add(source_id)
+            out.append((source_id, species_label))
+        next_url = str(payload.get("next", "") or "").strip()
+    out = dedupe_options(out)
+    return sorted(out, key=lambda x: x[0].lower())
+
+
 def fetch_local_options(input_root):
     if input_root is None:
         return []
@@ -439,6 +459,8 @@ def fetch_provider_options(provider, timeout, input_root):
         return fetch_fernbase_options(timeout)
     if provider == "veupathdb":
         return fetch_veupathdb_options(timeout)
+    if provider == "insectbase":
+        return fetch_insectbase_options(timeout)
     if provider == "local":
         return fetch_local_options(input_root)
     raise ValueError("unexpected fetch provider: {}".format(provider))

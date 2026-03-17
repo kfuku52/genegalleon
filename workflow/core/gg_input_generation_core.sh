@@ -62,9 +62,9 @@ case "${provider}" in
     echo "Provider '${provider}' is treated as alias of 'ncbi'."
     provider="ncbi"
     ;;
-  all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|coge|cngb|flybase|wormbase|vectorbase|fernbase|local) ;;
+  all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local) ;;
   *)
-    echo "Invalid provider: ${provider} (allowed: all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|coge|cngb|flybase|wormbase|vectorbase|fernbase|local)"
+    echo "Invalid provider: ${provider} (allowed: all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local)"
     exit 1
     ;;
 esac

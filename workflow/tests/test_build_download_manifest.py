@@ -302,7 +302,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
 
         list_sheet = workbook["_lists"]
-        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 13)]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 14)]
         assert provider_values == [
             "ensembl",
             "ensemblplants",
@@ -315,6 +315,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
             "fernbase",
             "veupathdb",
             "dictybase",
+            "insectbase",
             "local",
         ]
         assert "id_opts_ensembl" in workbook.defined_names
@@ -323,6 +324,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert "id_opts_fernbase" in workbook.defined_names
         assert "id_opts_veupathdb" in workbook.defined_names
         assert "id_opts_dictybase" in workbook.defined_names
+        assert "id_opts_insectbase" in workbook.defined_names
         assert "id_opts_local" in workbook.defined_names
     finally:
         workbook.close()
@@ -370,7 +372,8 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         fernbase_values = read_list_column_values(list_sheet, 10)
         veupathdb_values = read_list_column_values(list_sheet, 11)
         dictybase_values = read_list_column_values(list_sheet, 12)
-        local_values = read_list_column_values(list_sheet, 13)
+        insectbase_values = read_list_column_values(list_sheet, 13)
+        local_values = read_list_column_values(list_sheet, 14)
         ncbi_values = read_list_column_values(list_sheet, 4)
 
         assert coge_values == [
@@ -396,6 +399,9 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         ]
         assert dictybase_values == [
             "Dictyostelium_discoideum (Dictyostelium discoideum)",
+        ]
+        assert insectbase_values == [
+            "IBG_00001 (Abrostola tripartita)",
         ]
         assert local_values == [
             "Hydrocotyle_leucocephala_HAP1v2.1",
@@ -445,6 +451,9 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
                     "dictybase": [
                         {"id": "Dictyostelium_discoideum", "species": "Dictyostelium discoideum"},
                     ],
+                    "insectbase": [
+                        {"id": "IBG_99999", "species": "Bombyx mori"},
+                    ],
                     "local": [
                         {"id": "/data/local_species_1", "species": "Local species 1"},
                         {"id": "/data/local_species_2", "species": "Local species 2"},
@@ -488,7 +497,8 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         fernbase_values = read_list_column_values(list_sheet, 10)
         veupathdb_values = read_list_column_values(list_sheet, 11)
         dictybase_values = read_list_column_values(list_sheet, 12)
-        local_values = read_list_column_values(list_sheet, 13)
+        insectbase_values = read_list_column_values(list_sheet, 13)
+        local_values = read_list_column_values(list_sheet, 14)
 
         assert ensembl_values == [
             "homo_sapiens (Homo sapiens)",
@@ -525,6 +535,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         assert fernbase_values == ["Ceratopteris_richardii (Ceratopteris richardii)"]
         assert veupathdb_values == ["EhistolyticaHM1IMSS (Entamoeba histolytica)"]
         assert dictybase_values == ["Dictyostelium_discoideum (Dictyostelium discoideum)"]
+        assert insectbase_values == ["IBG_99999 (Bombyx mori)"]
         assert local_values == ["/data/local_species_1", "/data/local_species_2"]
     finally:
         workbook.close()

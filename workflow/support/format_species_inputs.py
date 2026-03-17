@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
+import bz2
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import gzip
+import io
 import json
 import os
 from pathlib import Path
@@ -38,10 +40,33 @@ FASTA_EXTENSIONS = (
     ".fas",
     ".fasta",
     ".fna",
+    ".fa.bz2",
+    ".fas.bz2",
+    ".fasta.bz2",
+    ".fna.bz2",
     ".fa.gz",
     ".fas.gz",
     ".fasta.gz",
     ".fna.gz",
+    ".fa.tar.gz",
+    ".fas.tar.gz",
+    ".fasta.tar.gz",
+    ".fna.tar.gz",
+    ".fa.tar.bz2",
+    ".fas.tar.bz2",
+    ".fasta.tar.bz2",
+    ".fna.tar.bz2",
+)
+
+FASTA_ARCHIVE_EXTENSIONS = (
+    ".fa.tar.gz",
+    ".fas.tar.gz",
+    ".fasta.tar.gz",
+    ".fna.tar.gz",
+    ".fa.tar.bz2",
+    ".fas.tar.bz2",
+    ".fasta.tar.bz2",
+    ".fna.tar.bz2",
 )
 
 GFF_EXTENSIONS = (
@@ -63,6 +88,8 @@ ENSEMBL_ID_HINT_PATTERN = re.compile(r"^ensembl[:_].+", re.IGNORECASE)
 FERNBASE_ID_HINT_PATTERN = re.compile(r"^fernbase[:_].+", re.IGNORECASE)
 VEUPATHDB_ID_HINT_PATTERN = re.compile(r"^veupathdb[:_].+", re.IGNORECASE)
 DICTYBASE_ID_HINT_PATTERN = re.compile(r"^dictybase[:_].+", re.IGNORECASE)
+INSECTBASE_ID_HINT_PATTERN = re.compile(r"^insectbase[:_].+", re.IGNORECASE)
+INSECTBASE_IBG_ID_PATTERN = re.compile(r"^IBG_[0-9]+$", re.IGNORECASE)
 COGE_GID_PATTERN = re.compile(r"^[0-9]+$")
 CNGB_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^(?:CNA[0-9]+|GWH[A-Z0-9]+)$", re.IGNORECASE)
 
@@ -82,6 +109,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "fernbase": Path("FernBase") / "species_wise_original",
     "veupathdb": Path("VEuPathDB") / "species_wise_original",
     "dictybase": Path("dictyBase") / "species_wise_original",
+    "insectbase": Path("InsectBase") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
 
@@ -101,6 +129,7 @@ PROVIDERS = (
     "fernbase",
     "veupathdb",
     "dictybase",
+    "insectbase",
     "local",
 )
 DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
@@ -117,6 +146,7 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "fernbase",
     "veupathdb",
     "dictybase",
+    "insectbase",
     "local",
 )
 DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 900
@@ -131,6 +161,7 @@ DEFAULT_COGE_API_BASE_URL = "https://genomevolution.org/coge/api/v1"
 DEFAULT_COGE_WEB_BASE_URL = "https://genomevolution.org/coge"
 DEFAULT_CNGB_CNSA_BASE_URL = "https://db.cngb.org/cnsa/ajax"
 DEFAULT_VEUPATHDB_SERVICE_BASE_URL = "https://veupathdb.org/veupathdb/service"
+DEFAULT_INSECTBASE_API_BASE_URL = "https://www.insect-genome.com/api/genome"
 NCBI_DATASETS_INCLUDE_BY_LABEL = {
     "CDS": "CDS_FASTA",
     "GFF": "GENOME_GFF",
@@ -183,6 +214,9 @@ PROVIDER_DEFAULT_ID_PAGE_URL_TEMPLATES = {
         "https://dictybase.org/Downloads/",
         "https://dictybase.org/download/",
     ),
+    "insectbase": (
+        "https://www.insect-genome.com/genome/{id}",
+    ),
 }
 PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     # NCBI E-utilities explicitly documents request-rate limits.
@@ -205,6 +239,7 @@ PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     "fernbase": 2,
     "veupathdb": 1,
     "dictybase": 1,
+    "insectbase": 2,
     "local": 1,
 }
 DEFAULT_GLOBAL_DOWNLOAD_WORKERS = 1
@@ -433,7 +468,7 @@ def build_arg_parser():
         default="",
         help=(
             "Provider input directory. For ensembl/ensemblplants: original_files/. "
-            "For phycocosm/phytozome/ncbi/coge/cngb/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/local: species_wise_original/. "
+            "For phycocosm/phytozome/ncbi/coge/cngb/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/local: species_wise_original/. "
             "Legacy aliases refseq/genbank are treated as ncbi. "
             "For --provider all, this must be the shared root containing all provider subdirectories."
         ),
@@ -469,7 +504,7 @@ def build_arg_parser():
             "(ncbi supports GCF/GCA/NCBI-URL auto-resolution; "
             "other supported providers support id-based template/index inference). "
             "Supported providers for --download-manifest: "
-            "ensembl, ensemblplants, ncbi, coge, cngb, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, local "
+            "ensembl, ensemblplants, ncbi, coge, cngb, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, local "
             "(legacy aliases refseq/genbank are treated as ncbi). "
             "provider=local reads local files/directories (for example local phytozome files). "
             "Use --input-dir for direct local phycocosm/phytozome formatting. "
@@ -562,6 +597,8 @@ def open_text(path, mode):
         if any(flag in mode for flag in ("w", "a", "x")):
             kwargs["compresslevel"] = output_gzip_compresslevel()
         return gzip.open(path, mode, **kwargs)
+    if path.name.endswith(".bz2"):
+        return bz2.open(path, mode, encoding="utf-8")
     return open(path, mode, encoding="utf-8")
 
 
@@ -826,6 +863,7 @@ def provider_raw_dir(provider, download_root, species_key):
         "fernbase",
         "veupathdb",
         "dictybase",
+        "insectbase",
         "local",
     ):
         return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider] / species_key
@@ -848,6 +886,10 @@ def infer_provider_from_id(source_id):
         return "veupathdb"
     if DICTYBASE_ID_HINT_PATTERN.match(source_id):
         return "dictybase"
+    if INSECTBASE_ID_HINT_PATTERN.match(source_id):
+        return "insectbase"
+    if INSECTBASE_IBG_ID_PATTERN.match(source_id):
+        return "insectbase"
     if "ftp.ensembl.org" in lowered or "ensembl.org/pub/current_" in lowered:
         return "ensembl"
     if COGE_ID_HINT_PATTERN.match(source_id):
@@ -872,6 +914,8 @@ def infer_provider_from_id(source_id):
         return "veupathdb"
     if "dictybase.org" in lowered:
         return "dictybase"
+    if "insect-genome.com" in lowered:
+        return "insectbase"
     return ""
 
 
@@ -1069,6 +1113,10 @@ def resolve_veupathdb_service_base_url():
     return os.environ.get("GG_VEUPATHDB_SERVICE_BASE_URL", DEFAULT_VEUPATHDB_SERVICE_BASE_URL).rstrip("/")
 
 
+def resolve_insectbase_api_base_url():
+    return os.environ.get("GG_INSECTBASE_API_BASE_URL", DEFAULT_INSECTBASE_API_BASE_URL).rstrip("/")
+
+
 def parse_species_key_candidate(text):
     cleaned = re.sub(r"\s*\(.*?\)\s*", " ", str(text or "")).strip()
     tokens = re.findall(r"[A-Za-z0-9]+", cleaned)
@@ -1136,6 +1184,25 @@ def normalize_manifest_source_id(provider, source_id):
     if match is not None:
         return match.group(1)
     return text
+
+
+def extract_insectbase_ibg_id_candidate(source_id):
+    text = str(source_id or "").strip()
+    if text == "":
+        return ""
+    stripped = strip_provider_prefix(text, "insectbase")
+    for candidate in (text, stripped):
+        if INSECTBASE_IBG_ID_PATTERN.match(candidate):
+            return candidate.upper()
+        match = re.search(r"(IBG_[0-9]+)", candidate, flags=re.IGNORECASE)
+        if match is not None:
+            return match.group(1).upper()
+    if is_url_like(stripped):
+        parts = [unquote(part) for part in urlparse(stripped).path.split("/") if part]
+        for part in reversed(parts):
+            if INSECTBASE_IBG_ID_PATTERN.match(part):
+                return part.upper()
+    return ""
 
 
 def extract_coge_gid_candidate(source_id):
@@ -1439,6 +1506,46 @@ def resolve_veupathdb_download_urls_from_id(source_id, species_key, timeout, hea
     }
 
 
+def resolve_insectbase_download_urls_from_id(source_id, species_key, timeout, headers):
+    ibg_id = extract_insectbase_ibg_id_candidate(source_id)
+    if ibg_id == "":
+        raise ValueError(
+            "InsectBase id '{}' did not contain an IBG_* genome identifier".format(source_id)
+        )
+
+    api_base = resolve_insectbase_api_base_url()
+    detail_url = "{}/genomes/{}/".format(api_base, quote(ibg_id, safe=""))
+    record = fetch_json_with_headers(detail_url, timeout, headers)
+    species_name = str(record.get("species", "") or "").strip()
+    if species_name == "":
+        raise ValueError("InsectBase id '{}' did not resolve to a species name".format(source_id))
+
+    species_token = re.sub(r"\s+", "_", species_name)
+    inferred_species_key = str(species_key or "").strip()
+    if inferred_species_key == "":
+        inferred_species_key = parse_species_key_candidate(species_name)
+    if inferred_species_key == "":
+        inferred_species_key = species_token
+
+    api_parts = urlparse(api_base)
+    site_root = "{}://{}".format(api_parts.scheme, api_parts.netloc)
+    base_data_url = "{}/data/genome/{}/{}".format(
+        site_root.rstrip("/"),
+        quote(species_token, safe="._-"),
+        quote(species_token, safe="._-"),
+    )
+
+    return {
+        "species_key": inferred_species_key,
+        "cds_url": base_data_url + ".cds.fa",
+        "gff_url": base_data_url + ".gff3",
+        "genome_url": base_data_url + ".genome.fa.tar.bz2",
+        "cds_filename": species_token + ".cds.fa",
+        "gff_filename": species_token + ".gff3",
+        "genome_filename": species_token + ".genome.fa.tar.bz2",
+    }
+
+
 def fernbase_release_sort_key(name):
     lower = str(name or "").lower()
     version_tokens = tuple(int(token) for token in re.findall(r"[0-9]+", lower))
@@ -1556,6 +1663,8 @@ def resolve_provider_specific_download_urls_from_id(provider, source_id, species
         return resolve_fernbase_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "veupathdb":
         return resolve_veupathdb_download_urls_from_id(source_id, species_key, timeout, headers)
+    if provider == "insectbase":
+        return resolve_insectbase_download_urls_from_id(source_id, species_key, timeout, headers)
     return None
 
 
@@ -3091,23 +3200,45 @@ def pad_to_codon_length(seq):
     return seq + ("N" * (3 - remainder))
 
 
-def iter_fasta_records(path):
+def _iter_fasta_records_from_handle(handle):
     header = None
     chunks = []
-    with open_text(path, "rt") as handle:
-        for raw_line in handle:
-            line = raw_line.rstrip("\n\r")
-            if line == "":
-                continue
-            if line.startswith(">"):
-                if header is not None:
-                    yield header, "".join(chunks)
-                header = line[1:]
-                chunks = []
-                continue
-            chunks.append(re.sub(r"\s+", "", line))
+    for raw_line in handle:
+        line = raw_line.rstrip("\n\r")
+        if line == "":
+            continue
+        if line.startswith(">"):
+            if header is not None:
+                yield header, "".join(chunks)
+            header = line[1:]
+            chunks = []
+            continue
+        chunks.append(re.sub(r"\s+", "", line))
     if header is not None:
         yield header, "".join(chunks)
+
+
+def iter_fasta_records(path):
+    path_lower = path.name.lower()
+    if any(path_lower.endswith(suffix) for suffix in FASTA_ARCHIVE_EXTENSIONS):
+        with tarfile.open(path, "r:*") as archive:
+            members = [member for member in archive.getmembers() if member.isfile()]
+            fasta_members = [
+                member for member in members
+                if is_fasta_filename(Path(member.name).name)
+            ]
+            if len(fasta_members) == 0 and len(members) == 1:
+                fasta_members = members
+            for member in fasta_members:
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    continue
+                with io.TextIOWrapper(extracted, encoding="utf-8") as handle:
+                    yield from _iter_fasta_records_from_handle(handle)
+        return
+
+    with open_text(path, "rt") as handle:
+        yield from _iter_fasta_records_from_handle(handle)
 
 
 def count_fasta_records(path):
@@ -3176,6 +3307,7 @@ def collapse_transcript_suffix(provider, identifier):
         "wormbase",
         "vectorbase",
         "fernbase",
+        "insectbase",
         "local",
     ):
         text = re.sub(r"[._-]t[0-9]+$", "", text, flags=re.IGNORECASE)
@@ -3526,7 +3658,7 @@ def discover_tasks(provider, input_dir):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "cngb":
         return discover_generic_species_dir_tasks(provider, input_dir)
-    if provider in ("flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase"):
+    if provider in ("flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase", "insectbase"):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "local":
         return discover_generic_species_dir_tasks(provider, input_dir)

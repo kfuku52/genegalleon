@@ -462,11 +462,30 @@ def test_write_gff_gzip_prefers_pigz(monkeypatch, tmp_path):
     assert calls["command"] == ["/usr/bin/pigz", "-p", "4", "-c"]
 
 
-def test_resolve_provider_download_limits_keeps_fernbase_default_cap_at_two(monkeypatch):
+def test_resolve_provider_download_limits_keeps_fernbase_and_insectbase_default_caps_at_two(monkeypatch):
     mod = load_module()
     monkeypatch.delenv("GG_INPUT_MAX_CONCURRENT_DOWNLOADS_FERNBASE", raising=False)
+    monkeypatch.delenv("GG_INPUT_MAX_CONCURRENT_DOWNLOADS_INSECTBASE", raising=False)
     limits = mod.resolve_provider_download_limits(8)
     assert limits["fernbase"] == 2
+    assert limits["insectbase"] == 2
+
+
+def test_iter_fasta_records_reads_tar_bz2_archive(tmp_path):
+    mod = load_module()
+    archive_path = tmp_path / "example.genome.fa.tar.bz2"
+    payload = ">chr1 description\nATGC\nATGC\n".encode("utf-8")
+    with tarfile.open(archive_path, "w:bz2") as archive:
+        info = tarfile.TarInfo(name="nested/example.genome.fa")
+        info.size = len(payload)
+        archive.addfile(info, io.BytesIO(payload))
+        note = tarfile.TarInfo(name="README.txt")
+        note_payload = b"fixture\n"
+        note.size = len(note_payload)
+        archive.addfile(note, io.BytesIO(note_payload))
+
+    records = list(mod.iter_fasta_records(archive_path))
+    assert records == [("chr1 description", "ATGCATGC")]
 
 
 def test_format_species_inputs_fernbase_prefers_namespaced_transcript_gene_id_when_gene_tag_is_short(tmp_path):
