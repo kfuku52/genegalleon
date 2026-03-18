@@ -62,6 +62,7 @@ PROVIDERS = (
     "ncbi",
     "coge",
     "cngb",
+    "gwh",
     "flybase",
     "wormbase",
     "vectorbase",
@@ -69,6 +70,7 @@ PROVIDERS = (
     "veupathdb",
     "dictybase",
     "insectbase",
+    "direct",
     "local",
 )
 LEGACY_NCBI_PROVIDER_ALIASES = ("refseq", "genbank")
@@ -79,6 +81,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "ncbi": Path("NCBI_Genome") / "species_wise_original",
     "coge": Path("CoGe") / "species_wise_original",
     "cngb": Path("CNGB") / "species_wise_original",
+    "gwh": Path("GWH") / "species_wise_original",
     "flybase": Path("FlyBase") / "species_wise_original",
     "wormbase": Path("WormBase") / "species_wise_original",
     "vectorbase": Path("VectorBase") / "species_wise_original",
@@ -86,6 +89,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "veupathdb": Path("VEuPathDB") / "species_wise_original",
     "dictybase": Path("dictyBase") / "species_wise_original",
     "insectbase": Path("InsectBase") / "species_wise_original",
+    "direct": Path("Direct") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
 NCBI_MERGED_INPUT_RELATIVE_DIRS = (
@@ -132,9 +136,11 @@ HEADER_COMMENTS = {
             "- ncbi: GCF_000001405.40 or GCA_000001635.9",
             "- coge: numeric genome_id (gid), for example 24739",
             "- cngb: CNA... or GCA/GCF accession",
+            "- gwh: GWH... accession, for example GWHIGRM00000000.1",
             "- veupathdb: EnuttalliP19",
             "- dictybase: Dictyostelium_discoideum",
             "- insectbase: IBG_00001",
+            "- direct: stable label or index URL token for explicit URLs",
             "- local: local species directory ID or path-style ID",
             "The drop-down is provider-specific, but any valid value can still be typed manually.",
             "For non-local providers, labels like 'GCF_000001405.40 (Homo sapiens)' are accepted;",
@@ -301,6 +307,7 @@ LARGE_ID_PROVIDERS = ("ncbi",)
 SNAPSHOT_FULL_ID_PROVIDERS = (
     "ensembl",
     "ensemblplants",
+    "gwh",
     "flybase",
     "wormbase",
     "vectorbase",
@@ -308,6 +315,7 @@ SNAPSHOT_FULL_ID_PROVIDERS = (
     "veupathdb",
     "dictybase",
     "insectbase",
+    "direct",
     "local",
 )
 EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
@@ -336,6 +344,10 @@ ID_EXAMPLES_BY_PROVIDER = {
         ("GCF_049306965.1", "Danio rerio"),
         ("GCA_000001215.4", "Drosophila melanogaster"),
     ),
+    "gwh": (
+        ("GWHIGRM00000000.1", "Medicago sativa"),
+        ("GWHCBHY00000000", "Allium sativum"),
+    ),
     "flybase": (("dmel_r6.61", "Drosophila melanogaster"),),
     "wormbase": (("celegans_prjna13758_ws290", "Caenorhabditis elegans"),),
     "vectorbase": (("anopheles_gambiae_pest", "Anopheles gambiae"),),
@@ -343,6 +355,7 @@ ID_EXAMPLES_BY_PROVIDER = {
     "veupathdb": (("EnuttalliP19", "Entamoeba nuttalli"),),
     "dictybase": (("Dictyostelium_discoideum", "Dictyostelium discoideum"),),
     "insectbase": (("IBG_00001", "Abrostola tripartita"),),
+    "direct": (("direct_example_species", "Direct URL manifest row"),),
     "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
 }
 
@@ -446,6 +459,23 @@ def infer_coge_genome_id_from_files(species_key: str, files: List[Path], warning
     return ordered[0]
 
 
+def infer_gwh_accession_from_files(species_key: str, files: List[Path], warnings: List[str]) -> str:
+    matches = set()
+    for text in [species_key] + [path.name for path in files]:
+        for match in re.finditer(r"(GWH[A-Z0-9]+(?:\.[0-9]+)?)", text, flags=re.IGNORECASE):
+            matches.add(match.group(1).upper())
+    if len(matches) == 0:
+        return ""
+    ordered = sorted(matches)
+    if len(ordered) > 1:
+        warnings.append(
+            "[gwh] {}: multiple GWH accession candidates detected {}. Using '{}'".format(
+                species_key, ",".join(ordered), ordered[0]
+            )
+        )
+    return ordered[0]
+
+
 def build_provider_id_options(rows: List[Dict[str, str]], snapshot_options=None):
     if snapshot_options is None:
         snapshot_options = {}
@@ -531,7 +561,7 @@ def build_arg_parser():
         default="",
         help=(
             "Optional JSON snapshot for provider-specific id dropdown values. "
-            "When set, non-large providers (ensembl/ensemblplants/flybase/wormbase/vectorbase/fernbase/veupathdb/local) "
+            "When set, non-large providers (ensembl/ensemblplants/gwh/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/direct/local) "
             "prefer snapshot IDs over locally discovered IDs."
         ),
     )
@@ -747,6 +777,14 @@ def discover_species_dir_based(provider, input_dir):
                 errors.append(
                     "[coge] {}: genome_id (gid) was not detected from file names. "
                     "Include 'gid<NUM>' in at least one input filename.".format(species_key)
+                )
+                continue
+        if provider == "gwh":
+            source_id = infer_gwh_accession_from_files(species_key, files, warnings)
+            if source_id == "":
+                errors.append(
+                    "[gwh] {}: GWH accession was not detected from file names. "
+                    "Include 'GWH...' in at least one input filename.".format(species_key)
                 )
                 continue
         rows.append(

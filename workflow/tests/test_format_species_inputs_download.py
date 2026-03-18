@@ -859,6 +859,66 @@ def test_download_manifest_supports_coge_and_cngb_with_id_inference(tmp_path):
         assert "ATGAAATTT" in cds_text
 
 
+def test_download_manifest_supports_direct_with_explicit_urls(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Medicago_sativa"
+    cds_source = source_dir / "medicago_sativa.cds.fa"
+    gff_source = source_dir / "medicago_sativa.gene.gff3"
+    genome_source = source_dir / "medicago_sativa.genome.fa"
+    cds_source.write_text(">MsG1.t1\nATGAA\n>MsG1.t2\nATGAAATTT\n", encoding="utf-8")
+    gff_source.write_text("chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=MsG1\n", encoding="utf-8")
+    genome_source.write_text(">chr1\nATGCATGC\n", encoding="utf-8")
+
+    manifest = tmp_path / "manifest.tsv"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "direct",
+                "id": "medicago_sativa_direct",
+                "species_key": species_key,
+                "cds_url": to_file_url(cds_source),
+                "gff_url": to_file_url(gff_source),
+                "genome_url": to_file_url(genome_source),
+                "cds_filename": species_key + ".direct.cds.fa",
+                "gff_filename": species_key + ".direct.gene.gff3",
+                "genome_filename": species_key + ".direct.genome.fa",
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    out_cds = tmp_path / "out_cds"
+    out_gff = tmp_path / "out_gff"
+    out_genome = tmp_path / "out_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
+    assert (raw_dir / (species_key + ".direct.cds.fa")).exists()
+    assert (raw_dir / (species_key + ".direct.gene.gff3")).exists()
+    assert (raw_dir / (species_key + ".direct.genome.fa")).exists()
+
+    formatted_cds = out_cds / (species_key + "_direct.cds.fa.gz")
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert cds_text.count(">Medicago_sativa_MsG1") == 1
+
+
 def test_download_manifest_resolves_coge_urls_from_id_without_templates(tmp_path):
     class _CoGeFixtureHandler(SimpleHTTPRequestHandler):
         def _send_json(self, payload):
@@ -1127,6 +1187,86 @@ def test_download_manifest_resolves_cngb_id_via_cnsa_then_ncbi(tmp_path):
         assert (raw_dir / "GCF_000001405.40_GRCh38.p14_cds_from_genomic.fna.gz").exists()
         assert (raw_dir / "GCF_000001405.40_GRCh38.p14_genomic.gff.gz").exists()
         assert (raw_dir / "GCF_000001405.40_GRCh38.p14_genomic.fna.gz").exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_download_manifest_resolves_gwh_id_via_public_index(tmp_path):
+    server_root = tmp_path / "server_root"
+    folder = server_root / "gwh" / "Plants" / "Medicago_sativa_Zhongmu3_GWHIGRM00000000.1"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    with gzip.open(folder / "GWHIGRM00000000.1.CDS.fasta.gz", "wt", encoding="utf-8") as handle:
+        handle.write(
+            ">GWHTIGRM000001.1 Protein=GWHPIGRM000001.1 Gene=GWHGIGRM000001.1 OriGeneID=MsaZM3G010000001\nATGAAATTT\n"
+        )
+    with gzip.open(folder / "GWHIGRM00000000.1.gff.gz", "wt", encoding="utf-8") as handle:
+        handle.write("chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n")
+    with gzip.open(folder / "GWHIGRM00000000.1.genome.fasta.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGCATGC\n")
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "gwh",
+                    "id": "GWHIGRM00000000.1",
+                    "species_key": "",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        download_dir = tmp_path / "download_cache"
+        out_cds = tmp_path / "out_cds"
+        env = dict(os.environ)
+        env["GG_GWH_DOWNLOAD_BASE_URL"] = "http://127.0.0.1:{}/gwh".format(server.server_port)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--provider",
+                "gwh",
+                "--download-manifest",
+                str(manifest),
+                "--download-dir",
+                str(download_dir),
+                "--species-cds-dir",
+                str(out_cds),
+                "--species-gff-dir",
+                str(tmp_path / "out_gff"),
+                "--species-genome-dir",
+                str(tmp_path / "out_genome"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+        raw_dir = download_dir / "GWH" / "species_wise_original" / "Medicago_sativa"
+        assert (raw_dir / "GWHIGRM00000000.1.CDS.fasta.gz").exists()
+        assert (raw_dir / "GWHIGRM00000000.1.gff.gz").exists()
+        assert (raw_dir / "GWHIGRM00000000.1.genome.fasta.gz").exists()
+
+        formatted_cds = out_cds / "Medicago_sativa_GWHIGRM00000000.1.CDS.fa.gz"
+        with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+            cds_text = handle.read()
+        assert ">Medicago_sativa_GWHGIGRM000001.1" in cds_text
     finally:
         server.shutdown()
         server.server_close()

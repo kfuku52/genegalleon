@@ -17,6 +17,7 @@ PROVIDERS = (
     "ncbi",
     "coge",
     "cngb",
+    "gwh",
     "flybase",
     "wormbase",
     "vectorbase",
@@ -24,6 +25,7 @@ PROVIDERS = (
     "veupathdb",
     "dictybase",
     "insectbase",
+    "direct",
     "local",
 )
 
@@ -57,6 +59,10 @@ ID_EXAMPLES_BY_PROVIDER = {
         ("GCF_049306965.1", "Danio rerio"),
         ("GCA_000001215.4", "Drosophila melanogaster"),
     ),
+    "gwh": (
+        ("GWHIGRM00000000.1", "Medicago sativa"),
+        ("GWHCBHY00000000", "Allium sativum"),
+    ),
     "flybase": (("dmel_r6.61", "Drosophila melanogaster"),),
     "wormbase": (("celegans_prjna13758_ws290", "Caenorhabditis elegans"),),
     "vectorbase": (("anopheles_gambiae_pest", "Anopheles gambiae"),),
@@ -64,6 +70,7 @@ ID_EXAMPLES_BY_PROVIDER = {
     "veupathdb": (("EnuttalliP19", "Entamoeba nuttalli"),),
     "dictybase": (("Dictyostelium_discoideum", "Dictyostelium discoideum"),),
     "insectbase": (("IBG_00001", "Abrostola tripartita"),),
+    "direct": (("direct_example_species", "Direct URL manifest row"),),
     "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
 }
 

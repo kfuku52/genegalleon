@@ -184,18 +184,22 @@ def test_build_download_manifest_ensembl_provider_from_flat_fixture(tmp_path):
     assert rows[0]["genome_filename"] == "homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"
 
 
-def test_build_download_manifest_coge_and_cngb_provider_from_species_dir_fixture(tmp_path):
+def test_build_download_manifest_coge_cngb_and_gwh_provider_from_species_dir_fixture(tmp_path):
     input_root = tmp_path / "dataset"
     species_key = "Arabidopsis_thaliana"
-    provider_dir_name = {"coge": "CoGe", "cngb": "CNGB"}
+    provider_dir_name = {"coge": "CoGe", "cngb": "CNGB", "gwh": "GWH"}
 
-    for provider in ("coge", "cngb"):
+    for provider in ("coge", "cngb", "gwh"):
         species_dir = input_root / provider_dir_name[provider] / "species_wise_original" / species_key
         species_dir.mkdir(parents=True, exist_ok=True)
         if provider == "coge":
             cds_name = "Arabidopsis_thaliana.coge.gid24739.cds.fa"
             gff_name = "Arabidopsis_thaliana.gid24739.gff3"
             genome_name = "Arabidopsis_thaliana.coge.gid24739.genome.fa"
+        elif provider == "gwh":
+            cds_name = "Arabidopsis_thaliana.GWHABCD00000000.1.CDS.fasta.gz"
+            gff_name = "Arabidopsis_thaliana.GWHABCD00000000.1.gff.gz"
+            genome_name = "Arabidopsis_thaliana.GWHABCD00000000.1.genome.fasta.gz"
         else:
             cds_name = species_key + ".cds.fa"
             gff_name = species_key + ".gene.gff3"
@@ -220,7 +224,7 @@ def test_build_download_manifest_coge_and_cngb_provider_from_species_dir_fixture
         rows = read_manifest(out)
         assert len(rows) == 1
         assert rows[0]["provider"] == provider
-        expected_id = "24739" if provider == "coge" else species_key
+        expected_id = "24739" if provider == "coge" else ("GWHABCD00000000.1" if provider == "gwh" else species_key)
         assert rows[0]["id"] == expected_id
         assert rows[0]["species_key"] == species_key
         assert rows[0]["cds_filename"] == cds_name
@@ -302,13 +306,14 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
 
         list_sheet = workbook["_lists"]
-        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 14)]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 16)]
         assert provider_values == [
             "ensembl",
             "ensemblplants",
             "ncbi",
             "coge",
             "cngb",
+            "gwh",
             "flybase",
             "wormbase",
             "vectorbase",
@@ -316,15 +321,18 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
             "veupathdb",
             "dictybase",
             "insectbase",
+            "direct",
             "local",
         ]
         assert "id_opts_ensembl" in workbook.defined_names
         assert "id_opts_ncbi" in workbook.defined_names
         assert "id_opts_coge" in workbook.defined_names
+        assert "id_opts_gwh" in workbook.defined_names
         assert "id_opts_fernbase" in workbook.defined_names
         assert "id_opts_veupathdb" in workbook.defined_names
         assert "id_opts_dictybase" in workbook.defined_names
         assert "id_opts_insectbase" in workbook.defined_names
+        assert "id_opts_direct" in workbook.defined_names
         assert "id_opts_local" in workbook.defined_names
     finally:
         workbook.close()
@@ -367,14 +375,34 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
     workbook = load_workbook(out)
     try:
         list_sheet = workbook["_lists"]
-        coge_values = read_list_column_values(list_sheet, 5)
-        cngb_values = read_list_column_values(list_sheet, 6)
-        fernbase_values = read_list_column_values(list_sheet, 10)
-        veupathdb_values = read_list_column_values(list_sheet, 11)
-        dictybase_values = read_list_column_values(list_sheet, 12)
-        insectbase_values = read_list_column_values(list_sheet, 13)
-        local_values = read_list_column_values(list_sheet, 14)
-        ncbi_values = read_list_column_values(list_sheet, 4)
+        provider_order = [
+            "ensembl",
+            "ensemblplants",
+            "ncbi",
+            "coge",
+            "cngb",
+            "gwh",
+            "flybase",
+            "wormbase",
+            "vectorbase",
+            "fernbase",
+            "veupathdb",
+            "dictybase",
+            "insectbase",
+            "direct",
+            "local",
+        ]
+        provider_col = {provider: idx + 2 for idx, provider in enumerate(provider_order)}
+        coge_values = read_list_column_values(list_sheet, provider_col["coge"])
+        cngb_values = read_list_column_values(list_sheet, provider_col["cngb"])
+        gwh_values = read_list_column_values(list_sheet, provider_col["gwh"])
+        fernbase_values = read_list_column_values(list_sheet, provider_col["fernbase"])
+        veupathdb_values = read_list_column_values(list_sheet, provider_col["veupathdb"])
+        dictybase_values = read_list_column_values(list_sheet, provider_col["dictybase"])
+        insectbase_values = read_list_column_values(list_sheet, provider_col["insectbase"])
+        direct_values = read_list_column_values(list_sheet, provider_col["direct"])
+        local_values = read_list_column_values(list_sheet, provider_col["local"])
+        ncbi_values = read_list_column_values(list_sheet, provider_col["ncbi"])
 
         assert coge_values == [
             "24739 (Arabidopsis thaliana)",
@@ -390,6 +418,10 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
             "GCF_049306965.1 (Danio rerio)",
             "GCA_000001215.4 (Drosophila melanogaster)",
         ]
+        assert gwh_values == [
+            "GWHIGRM00000000.1 (Medicago sativa)",
+            "GWHCBHY00000000 (Allium sativum)",
+        ]
         assert fernbase_values == [
             "Azolla_filiculoides (Azolla filiculoides)",
             "Salvinia_cucullata_v2 (Salvinia cucullata v2)",
@@ -402,6 +434,9 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         ]
         assert insectbase_values == [
             "IBG_00001 (Abrostola tripartita)",
+        ]
+        assert direct_values == [
+            "direct_example_species (Direct URL manifest row)",
         ]
         assert local_values == [
             "Hydrocotyle_leucocephala_HAP1v2.1",
@@ -454,6 +489,12 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
                     "insectbase": [
                         {"id": "IBG_99999", "species": "Bombyx mori"},
                     ],
+                    "gwh": [
+                        {"id": "GWHZZZZ00000000.1", "species": "Fake gwh species"},
+                    ],
+                    "direct": [
+                        {"id": "snapshot_direct_species", "species": "Snapshot direct"},
+                    ],
                     "local": [
                         {"id": "/data/local_species_1", "species": "Local species 1"},
                         {"id": "/data/local_species_2", "species": "Local species 2"},
@@ -486,19 +527,39 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
     workbook = load_workbook(out)
     try:
         list_sheet = workbook["_lists"]
-        ensembl_values = read_list_column_values(list_sheet, 2)
-        ensemblplants_values = read_list_column_values(list_sheet, 3)
-        ncbi_values = read_list_column_values(list_sheet, 4)
-        coge_values = read_list_column_values(list_sheet, 5)
-        cngb_values = read_list_column_values(list_sheet, 6)
-        flybase_values = read_list_column_values(list_sheet, 7)
-        wormbase_values = read_list_column_values(list_sheet, 8)
-        vectorbase_values = read_list_column_values(list_sheet, 9)
-        fernbase_values = read_list_column_values(list_sheet, 10)
-        veupathdb_values = read_list_column_values(list_sheet, 11)
-        dictybase_values = read_list_column_values(list_sheet, 12)
-        insectbase_values = read_list_column_values(list_sheet, 13)
-        local_values = read_list_column_values(list_sheet, 14)
+        provider_order = [
+            "ensembl",
+            "ensemblplants",
+            "ncbi",
+            "coge",
+            "cngb",
+            "gwh",
+            "flybase",
+            "wormbase",
+            "vectorbase",
+            "fernbase",
+            "veupathdb",
+            "dictybase",
+            "insectbase",
+            "direct",
+            "local",
+        ]
+        provider_col = {provider: idx + 2 for idx, provider in enumerate(provider_order)}
+        ensembl_values = read_list_column_values(list_sheet, provider_col["ensembl"])
+        ensemblplants_values = read_list_column_values(list_sheet, provider_col["ensemblplants"])
+        ncbi_values = read_list_column_values(list_sheet, provider_col["ncbi"])
+        coge_values = read_list_column_values(list_sheet, provider_col["coge"])
+        cngb_values = read_list_column_values(list_sheet, provider_col["cngb"])
+        gwh_values = read_list_column_values(list_sheet, provider_col["gwh"])
+        flybase_values = read_list_column_values(list_sheet, provider_col["flybase"])
+        wormbase_values = read_list_column_values(list_sheet, provider_col["wormbase"])
+        vectorbase_values = read_list_column_values(list_sheet, provider_col["vectorbase"])
+        fernbase_values = read_list_column_values(list_sheet, provider_col["fernbase"])
+        veupathdb_values = read_list_column_values(list_sheet, provider_col["veupathdb"])
+        dictybase_values = read_list_column_values(list_sheet, provider_col["dictybase"])
+        insectbase_values = read_list_column_values(list_sheet, provider_col["insectbase"])
+        direct_values = read_list_column_values(list_sheet, provider_col["direct"])
+        local_values = read_list_column_values(list_sheet, provider_col["local"])
 
         assert ensembl_values == [
             "homo_sapiens (Homo sapiens)",
@@ -529,6 +590,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
             "GCF_049306965.1 (Danio rerio)",
             "GCA_000001215.4 (Drosophila melanogaster)",
         ]
+        assert gwh_values == ["GWHZZZZ00000000.1 (Fake gwh species)"]
         assert flybase_values == ["dmel_r6.66 (Drosophila melanogaster)"]
         assert wormbase_values == ["caenorhabditis_elegans_prjna13758 (Caenorhabditis elegans)"]
         assert vectorbase_values == ["AgambiaePEST (Anopheles gambiae)"]
@@ -536,6 +598,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         assert veupathdb_values == ["EhistolyticaHM1IMSS (Entamoeba histolytica)"]
         assert dictybase_values == ["Dictyostelium_discoideum (Dictyostelium discoideum)"]
         assert insectbase_values == ["IBG_99999 (Bombyx mori)"]
+        assert direct_values == ["snapshot_direct_species (Snapshot direct)"]
         assert local_values == ["/data/local_species_1", "/data/local_species_2"]
     finally:
         workbook.close()

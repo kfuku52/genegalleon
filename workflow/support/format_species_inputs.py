@@ -84,6 +84,7 @@ NCBI_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^GC[AF]_[0-9]+\.[0-9]+$", re.IGNO
 ENSEMBL_GENE_ID_PATTERN = re.compile(r"^ENS[A-Z0-9]*G[0-9]+(?:\.[0-9]+)?$", re.IGNORECASE)
 COGE_ID_HINT_PATTERN = re.compile(r"^coge[:_].+", re.IGNORECASE)
 CNGB_ID_HINT_PATTERN = re.compile(r"^cngb[:_].+", re.IGNORECASE)
+GWH_ID_HINT_PATTERN = re.compile(r"^gwh[:_].+", re.IGNORECASE)
 ENSEMBL_ID_HINT_PATTERN = re.compile(r"^ensembl[:_].+", re.IGNORECASE)
 FERNBASE_ID_HINT_PATTERN = re.compile(r"^fernbase[:_].+", re.IGNORECASE)
 VEUPATHDB_ID_HINT_PATTERN = re.compile(r"^veupathdb[:_].+", re.IGNORECASE)
@@ -91,7 +92,9 @@ DICTYBASE_ID_HINT_PATTERN = re.compile(r"^dictybase[:_].+", re.IGNORECASE)
 INSECTBASE_ID_HINT_PATTERN = re.compile(r"^insectbase[:_].+", re.IGNORECASE)
 INSECTBASE_IBG_ID_PATTERN = re.compile(r"^IBG_[0-9]+$", re.IGNORECASE)
 COGE_GID_PATTERN = re.compile(r"^[0-9]+$")
-CNGB_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^(?:CNA[0-9]+|GWH[A-Z0-9]+)$", re.IGNORECASE)
+CNGB_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^CNA[0-9]+$", re.IGNORECASE)
+GWH_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^GWH[A-Z0-9]+(?:\.[0-9]+)?$", re.IGNORECASE)
+GWH_ASSEMBLY_ACCESSION_SEARCH_PATTERN = re.compile(r"(GWH[A-Z0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "ensembl": Path("Ensembl") / "original_files",
@@ -103,6 +106,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "genbank": Path("NCBI_GenBank") / "species_wise_original",
     "coge": Path("CoGe") / "species_wise_original",
     "cngb": Path("CNGB") / "species_wise_original",
+    "gwh": Path("GWH") / "species_wise_original",
     "flybase": Path("FlyBase") / "species_wise_original",
     "wormbase": Path("WormBase") / "species_wise_original",
     "vectorbase": Path("VectorBase") / "species_wise_original",
@@ -110,6 +114,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "veupathdb": Path("VEuPathDB") / "species_wise_original",
     "dictybase": Path("dictyBase") / "species_wise_original",
     "insectbase": Path("InsectBase") / "species_wise_original",
+    "direct": Path("Direct") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
 
@@ -123,6 +128,7 @@ PROVIDERS = (
     "genbank",
     "coge",
     "cngb",
+    "gwh",
     "flybase",
     "wormbase",
     "vectorbase",
@@ -130,6 +136,7 @@ PROVIDERS = (
     "veupathdb",
     "dictybase",
     "insectbase",
+    "direct",
     "local",
 )
 DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
@@ -140,6 +147,7 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "genbank",
     "coge",
     "cngb",
+    "gwh",
     "flybase",
     "wormbase",
     "vectorbase",
@@ -147,6 +155,7 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "veupathdb",
     "dictybase",
     "insectbase",
+    "direct",
     "local",
 )
 DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 900
@@ -160,6 +169,7 @@ DEFAULT_NCBI_DATASETS_BASE_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2"
 DEFAULT_COGE_API_BASE_URL = "https://genomevolution.org/coge/api/v1"
 DEFAULT_COGE_WEB_BASE_URL = "https://genomevolution.org/coge"
 DEFAULT_CNGB_CNSA_BASE_URL = "https://db.cngb.org/cnsa/ajax"
+DEFAULT_GWH_DOWNLOAD_BASE_URL = "https://download.cncb.ac.cn/gwh"
 DEFAULT_VEUPATHDB_SERVICE_BASE_URL = "https://veupathdb.org/veupathdb/service"
 DEFAULT_INSECTBASE_API_BASE_URL = "https://www.insect-genome.com/api/genome"
 NCBI_DATASETS_INCLUDE_BY_LABEL = {
@@ -204,6 +214,9 @@ PROVIDER_DEFAULT_ID_PAGE_URL_TEMPLATES = {
     "cngb": (
         "https://db.cngb.org/data_resources/project/{id}",
     ),
+    "gwh": (
+        "https://download.cncb.ac.cn/gwh/",
+    ),
     "fernbase": (
         "https://fernbase.org/ftp/{id}/",
     ),
@@ -233,6 +246,7 @@ PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     "phytozome": 1,
     "coge": 1,
     "cngb": 1,
+    "gwh": 1,
     "flybase": 2,
     "wormbase": 2,
     "vectorbase": 2,
@@ -240,6 +254,7 @@ PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     "veupathdb": 1,
     "dictybase": 1,
     "insectbase": 2,
+    "direct": 2,
     "local": 1,
 }
 DEFAULT_GLOBAL_DOWNLOAD_WORKERS = 1
@@ -468,7 +483,7 @@ def build_arg_parser():
         default="",
         help=(
             "Provider input directory. For ensembl/ensemblplants: original_files/. "
-            "For phycocosm/phytozome/ncbi/coge/cngb/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/local: species_wise_original/. "
+            "For phycocosm/phytozome/ncbi/coge/cngb/gwh/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/direct/local: species_wise_original/. "
             "Legacy aliases refseq/genbank are treated as ncbi. "
             "For --provider all, this must be the shared root containing all provider subdirectories."
         ),
@@ -504,8 +519,9 @@ def build_arg_parser():
             "(ncbi supports GCF/GCA/NCBI-URL auto-resolution; "
             "other supported providers support id-based template/index inference). "
             "Supported providers for --download-manifest: "
-            "ensembl, ensemblplants, ncbi, coge, cngb, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, local "
+            "ensembl, ensemblplants, ncbi, coge, cngb, gwh, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, direct, local "
             "(legacy aliases refseq/genbank are treated as ncbi). "
+            "provider=direct requires explicit urls or an index-style id URL. "
             "provider=local reads local files/directories (for example local phytozome files). "
             "Use --input-dir for direct local phycocosm/phytozome formatting. "
             "Optional columns: species_key,cds_filename,gff_filename,genome_filename,"
@@ -857,6 +873,7 @@ def provider_raw_dir(provider, download_root, species_key):
         "genbank",
         "coge",
         "cngb",
+        "gwh",
         "flybase",
         "wormbase",
         "vectorbase",
@@ -864,6 +881,7 @@ def provider_raw_dir(provider, download_root, species_key):
         "veupathdb",
         "dictybase",
         "insectbase",
+        "direct",
         "local",
     ):
         return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider] / species_key
@@ -894,12 +912,18 @@ def infer_provider_from_id(source_id):
         return "ensembl"
     if COGE_ID_HINT_PATTERN.match(source_id):
         return "coge"
+    if GWH_ID_HINT_PATTERN.match(source_id):
+        return "gwh"
     if CNGB_ID_HINT_PATTERN.match(source_id):
         return "cngb"
+    if GWH_ASSEMBLY_ACCESSION_PATTERN.match(source_id):
+        return "gwh"
     if CNGB_ASSEMBLY_ACCESSION_PATTERN.match(source_id):
         return "cngb"
     if "genomevolution.org" in lowered:
         return "coge"
+    if "/gwh/" in lowered:
+        return "gwh"
     if "cngb.org" in lowered or "cncb.ac.cn" in lowered:
         return "cngb"
     if "flybase.org" in lowered:
@@ -1109,6 +1133,10 @@ def resolve_cngb_cnsa_base_url():
     return os.environ.get("GG_CNGB_CNSA_BASE_URL", DEFAULT_CNGB_CNSA_BASE_URL).rstrip("/")
 
 
+def resolve_gwh_download_base_url():
+    return os.environ.get("GG_GWH_DOWNLOAD_BASE_URL", DEFAULT_GWH_DOWNLOAD_BASE_URL).rstrip("/")
+
+
 def resolve_veupathdb_service_base_url():
     return os.environ.get("GG_VEUPATHDB_SERVICE_BASE_URL", DEFAULT_VEUPATHDB_SERVICE_BASE_URL).rstrip("/")
 
@@ -1163,11 +1191,22 @@ def source_id_candidates(provider, source_id, species_key):
             for idx, token in enumerate(parts[:-1]):
                 if token.lower() == "assembly":
                     add(parts[idx + 1])
+        if provider == "gwh":
+            for qvals in query.values():
+                for qval in qvals:
+                    for match in GWH_ASSEMBLY_ACCESSION_SEARCH_PATTERN.findall(qval):
+                        add(match)
+            for part in parsed.path.split("/"):
+                for match in GWH_ASSEMBLY_ACCESSION_SEARCH_PATTERN.findall(unquote(part)):
+                    add(match)
 
     if provider == "phytozome":
         match = re.search(r"_([0-9]+)_", stripped)
         if match is not None:
             add(match.group(1))
+    if provider == "gwh":
+        for match in GWH_ASSEMBLY_ACCESSION_SEARCH_PATTERN.findall(stripped):
+            add(match)
 
     return candidates
 
@@ -1176,7 +1215,7 @@ def normalize_manifest_source_id(provider, source_id):
     text = str(source_id or "").strip()
     if text == "":
         return ""
-    if provider == "local":
+    if provider in ("local", "direct"):
         return text
     if is_url_like(text):
         return text
@@ -1546,6 +1585,127 @@ def resolve_insectbase_download_urls_from_id(source_id, species_key, timeout, he
     }
 
 
+def extract_gwh_accession_candidate(source_id):
+    candidates = source_id_candidates("gwh", source_id, species_key="")
+    for candidate in candidates:
+        stripped = strip_provider_prefix(candidate, "gwh")
+        match = GWH_ASSEMBLY_ACCESSION_SEARCH_PATTERN.search(stripped)
+        if match is None:
+            continue
+        accession = match.group(1).upper()
+        if GWH_ASSEMBLY_ACCESSION_PATTERN.match(accession):
+            return accession
+    return ""
+
+
+def gwh_accession_stem(accession):
+    return str(accession or "").strip().upper().split(".", 1)[0]
+
+
+def parse_last_path_token(url):
+    path = urlparse(str(url or "")).path.rstrip("/")
+    if path == "":
+        return ""
+    return unquote(path.split("/")[-1])
+
+
+def resolve_gwh_folder_url_from_id(source_id, timeout, headers):
+    source_clean = str(source_id or "").strip()
+    accession = extract_gwh_accession_candidate(source_clean)
+    if accession == "":
+        raise ValueError("GWH id '{}' did not contain a GWH accession".format(source_id))
+
+    if is_url_like(source_clean) and "/gwh/" in source_clean.lower():
+        parsed = urlparse(source_clean)
+        if parsed.path.endswith("/"):
+            return source_clean, accession
+        return parsed._replace(path=parsed.path.rsplit("/", 1)[0] + "/").geturl(), accession
+
+    root_url = resolve_gwh_download_base_url().rstrip("/") + "/"
+    root_text = fetch_text_with_headers(root_url, timeout, headers)
+    category_urls = []
+    for link in parse_links_from_document(root_url, root_text):
+        if not urlparse(link).path.endswith("/"):
+            continue
+        token = parse_last_path_token(link)
+        if token == "":
+            continue
+        category_urls.append(link)
+    if len(category_urls) == 0:
+        raise ValueError("GWH root '{}' did not expose category directories".format(root_url))
+
+    accession_stem = gwh_accession_stem(accession)
+    best_url = ""
+    best_rank = None
+    last_error = None
+    for category_url in sorted(
+        set(category_urls),
+        key=lambda url: (0 if parse_last_path_token(url).lower() == "plants" else 1, parse_last_path_token(url).lower()),
+    ):
+        try:
+            category_text = fetch_text_with_headers(category_url, timeout, headers)
+        except Exception as exc:
+            last_error = exc
+            continue
+        for link in parse_links_from_document(category_url, category_text):
+            if not urlparse(link).path.endswith("/"):
+                continue
+            folder_name = parse_last_path_token(link)
+            if folder_name == "":
+                continue
+            folder_lower = folder_name.lower()
+            has_full = accession.lower() in folder_lower
+            has_stem = accession_stem.lower() in folder_lower
+            if not has_full and not has_stem:
+                continue
+            rank = (
+                1 if has_full else 0,
+                1 if folder_lower.endswith(accession.lower()) else 0,
+                1 if parse_last_path_token(category_url).lower() == "plants" else 0,
+                -len(folder_name),
+                folder_lower,
+            )
+            if best_url == "" or rank > best_rank:
+                best_url = link
+                best_rank = rank
+    if best_url != "":
+        return best_url, accession
+    if last_error is not None:
+        raise ValueError("GWH accession '{}' did not resolve: {}".format(accession, last_error))
+    raise ValueError("GWH accession '{}' was not found under {}".format(accession, root_url))
+
+
+def resolve_gwh_download_urls_from_id(source_id, species_key, timeout, headers):
+    folder_url, accession = resolve_gwh_folder_url_from_id(source_id, timeout, headers)
+    resolved = resolve_urls_from_index_url("gwh", folder_url, timeout, headers)
+    if (
+        resolved.get("cds_url", "") == ""
+        or resolved.get("gff_url", "") == ""
+        or resolved.get("genome_url", "") == ""
+    ):
+        raise ValueError(
+            "GWH accession '{}' did not resolve to downloadable CDS/GFF/genome URLs from {}".format(
+                accession, folder_url
+            )
+        )
+
+    folder_name = parse_last_path_token(folder_url)
+    inferred_species_key = str(species_key or "").strip()
+    if inferred_species_key == "":
+        inferred_species_key = parse_species_key_candidate(folder_name.replace("_", " "))
+    if inferred_species_key == "":
+        inferred_species_key = sanitize_identifier(accession)
+    return {
+        "species_key": inferred_species_key,
+        "cds_url": resolved["cds_url"],
+        "gff_url": resolved["gff_url"],
+        "genome_url": resolved["genome_url"],
+        "cds_filename": Path(urlparse(resolved["cds_url"]).path).name,
+        "gff_filename": Path(urlparse(resolved["gff_url"]).path).name,
+        "genome_filename": Path(urlparse(resolved["genome_url"]).path).name,
+    }
+
+
 def fernbase_release_sort_key(name):
     lower = str(name or "").lower()
     version_tokens = tuple(int(token) for token in re.findall(r"[0-9]+", lower))
@@ -1659,6 +1819,8 @@ def resolve_provider_specific_download_urls_from_id(provider, source_id, species
         return resolve_coge_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "cngb":
         return resolve_cngb_download_urls_from_id(source_id, timeout, headers)
+    if provider == "gwh":
+        return resolve_gwh_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "fernbase":
         return resolve_fernbase_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "veupathdb":
@@ -3279,11 +3441,21 @@ def extract_phytozome_id(header):
     return first_token(header)
 
 
+def extract_gwh_id(header):
+    for tag in ("Gene", "OriGeneID"):
+        candidate = extract_header_tag_value(header, tag)
+        if candidate != "":
+            return candidate
+    return first_token(header)
+
+
 def extract_provider_id(provider, header):
     if provider in ("ensembl", "ensemblplants"):
         return extract_ensembl_id(header)
     if provider == "phycocosm":
         return extract_phycocosm_id(header)
+    if provider == "gwh":
+        return extract_gwh_id(header)
     if provider in ("ncbi", "refseq", "genbank"):
         return first_token(header)
     return extract_phytozome_id(header)
@@ -3303,11 +3475,13 @@ def collapse_transcript_suffix(provider, identifier):
         "genbank",
         "coge",
         "cngb",
+        "gwh",
         "flybase",
         "wormbase",
         "vectorbase",
         "fernbase",
         "insectbase",
+        "direct",
         "local",
     ):
         text = re.sub(r"[._-]t[0-9]+$", "", text, flags=re.IGNORECASE)
@@ -3658,7 +3832,7 @@ def discover_tasks(provider, input_dir):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "cngb":
         return discover_generic_species_dir_tasks(provider, input_dir)
-    if provider in ("flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase", "insectbase"):
+    if provider in ("gwh", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase", "insectbase", "direct"):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "local":
         return discover_generic_species_dir_tasks(provider, input_dir)

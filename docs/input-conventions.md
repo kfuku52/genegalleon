@@ -159,8 +159,10 @@ Manifest required columns:
   - `provider=ncbi` accepts both `GCF_*` and `GCA_*` assembly accessions and auto-resolves NCBI assembly URLs.
   - for `provider=coge`, `id` must be CoGe `genome_id` (numeric `gid`), and CDS/GFF/Genome URLs are auto-built.
   - for `provider=cngb`, built-in inference resolves CNGB assembly IDs (`CNA...`, `cngb:...`) or linked `GCA/GCF` accessions and maps to downloadable assembly files.
+  - for `provider=gwh`, `id` can be a `GWH...` accession (for example `GWHIGRM00000000.1`) or a GWH folder/index URL, and the resolver discovers CDS/GFF/genome files from the public GWH download tree.
   - for `provider=flybase`, `provider=wormbase`, `provider=vectorbase`, `provider=fernbase`, `provider=veupathdb`, and `provider=dictybase`, `id` can be resolved via explicit URL columns or `GG_<PROVIDER>_*_URL_TEMPLATE`.
   - for `provider=insectbase`, `id` can be an `IBG_*` genome identifier (for example `IBG_00001`), and the resolver uses the InsectBase genome detail API to derive CDS/GFF/genome downloads.
+  - for `provider=direct`, set explicit `cds_url`/`gff_url` (and optionally `genome_url`), or provide an index-style URL in `id` that exposes downloadable files.
   - for `provider=ensembl` and `provider=ensemblplants`, `id`-only URL inference is supported via:
     - provider defaults (for example, Ensembl/EnsemblPlants index discovery),
     - or env templates: `GG_<PROVIDER>_CDS_URL_TEMPLATE`, `GG_<PROVIDER>_GFF_URL_TEMPLATE`, `GG_<PROVIDER>_GENOME_URL_TEMPLATE`,
@@ -189,8 +191,8 @@ XLSX template notes:
 - `id` drop-down values are provider-specific.
 - provider drop-down order is fixed, and `local` is always listed last.
 - for large provider (`ncbi`), five model-organism IDs are shown as examples (mixed `GCF_*`/`GCA_*` formats).
-- for `coge` and `cngb`, IDs are also example-based by default (both show five model-organism examples).
-- for `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, and `local`,
+- for `coge` and `cngb`, IDs are example-based by default.
+- for `gwh`, `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, `direct`, and `local`,
   IDs can be supplied from a prebuilt `id_options_snapshot.json`.
 - when no snapshot is supplied, non-large providers fall back to IDs discovered from `--input-dir`.
 - drop-down IDs are shown as `ID (Species name)` for non-`local` providers.
