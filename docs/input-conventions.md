@@ -154,7 +154,7 @@ Manifest required columns:
 - `provider` (required; first column in XLSX templates)
 - `id` (required; second column in XLSX templates)
 - `species_key` is optional
-- `cds_url` and `gff_url` (or `id` to auto-resolve provider-specific URLs when supported)
+- `gff_url` and either `cds_url` or `genome_url` (or `id` to auto-resolve provider-specific URLs when supported)
   - for `provider=ncbi`, when `species_key` is omitted and `id` is given, `species_key` is inferred from NCBI species metadata (e.g. `Homo_sapiens`).
   - `provider=ncbi` accepts both `GCF_*` and `GCA_*` assembly accessions and auto-resolves NCBI assembly URLs.
   - for `provider=coge`, `id` must be CoGe `genome_id` (numeric `gid`), and CDS/GFF/Genome URLs are auto-built.
@@ -162,7 +162,7 @@ Manifest required columns:
   - for `provider=gwh`, `id` can be a `GWH...` accession (for example `GWHIGRM00000000.1`) or a GWH folder/index URL, and the resolver discovers CDS/GFF/genome files from the public GWH download tree.
   - for `provider=flybase`, `provider=wormbase`, `provider=vectorbase`, `provider=fernbase`, `provider=veupathdb`, and `provider=dictybase`, `id` can be resolved via explicit URL columns or `GG_<PROVIDER>_*_URL_TEMPLATE`.
   - for `provider=insectbase`, `id` can be an `IBG_*` genome identifier (for example `IBG_00001`), and the resolver uses the InsectBase genome detail API to derive CDS/GFF/genome downloads.
-  - for `provider=direct`, set explicit `cds_url`/`gff_url` (and optionally `genome_url`), or provide an index-style URL in `id` that exposes downloadable files.
+  - for `provider=direct`, set explicit `gff_url` plus either `cds_url` or `genome_url`, or provide an index-style URL in `id` that exposes downloadable files.
   - for `provider=ensembl` and `provider=ensemblplants`, `id`-only URL inference is supported via:
     - provider defaults (for example, Ensembl/EnsemblPlants index discovery),
     - or env templates: `GG_<PROVIDER>_CDS_URL_TEMPLATE`, `GG_<PROVIDER>_GFF_URL_TEMPLATE`, `GG_<PROVIDER>_GENOME_URL_TEMPLATE`,
@@ -171,6 +171,7 @@ Manifest required columns:
   - for `provider=veupathdb`, `id`-only URL inference resolves from the VEuPathDB `GenomeDataTypes` service and derives CDS from the corresponding `AnnotatedCDSs.fasta` download.
   - for `provider=dictybase`, `id`-only resolution can use `GG_DICTYBASE_*_URL_TEMPLATE`; explicit URL columns are also supported.
   - for `provider=local`, `id` can point to a local species directory (or set explicit local file paths) and formatting starts from local files.
+  - when `cds_url` is blank but both `gff_url` and `genome_url` are available, `format_species_inputs.py` derives CDS sequences from the annotation and genome FASTA during formatting.
   - `provider=phycocosm` and `provider=phytozome` are not supported in `--download-manifest`.
     Use `--input-dir` for local raw-file formatting only.
 

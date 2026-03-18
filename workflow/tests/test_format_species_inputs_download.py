@@ -919,6 +919,76 @@ def test_download_manifest_supports_direct_with_explicit_urls(tmp_path):
     assert cds_text.count(">Medicago_sativa_MsG1") == 1
 
 
+def test_download_manifest_derives_cds_when_manifest_has_only_gff_and_genome(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Arabidopsis_thaliana"
+    gff_source = source_dir / "arabidopsis_thaliana.gene.gff3"
+    genome_source = source_dir / "arabidopsis_thaliana.genome.fa"
+    gff_source.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+                "chr1\tsrc\tCDS\t7\t9\t.\t+\t0\tID=cds2;Parent=gene1.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_source.write_text(">chr1\nATGAAATTT\n", encoding="utf-8")
+
+    manifest = tmp_path / "manifest.tsv"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "direct",
+                "id": "arabidopsis_thaliana_direct",
+                "species_key": species_key,
+                "cds_url": "",
+                "gff_url": to_file_url(gff_source),
+                "genome_url": to_file_url(genome_source),
+                "cds_filename": "",
+                "gff_filename": species_key + ".direct.gene.gff3",
+                "genome_filename": species_key + ".direct.genome.fa",
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    out_cds = tmp_path / "out_cds"
+    out_gff = tmp_path / "out_gff"
+    out_genome = tmp_path / "out_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
+    assert not any(path.name.endswith(".cds.fa") for path in raw_dir.iterdir())
+    assert (raw_dir / (species_key + ".direct.gene.gff3")).exists()
+    assert (raw_dir / (species_key + ".direct.genome.fa")).exists()
+
+    formatted_cds = out_cds / (species_key + "_direct.gene.derived.cds.fa.gz")
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert cds_text.count(">Arabidopsis_thaliana_gene1") == 1
+    assert "ATGTTT" in cds_text
+
+
 def test_download_manifest_resolves_coge_urls_from_id_without_templates(tmp_path):
     class _CoGeFixtureHandler(SimpleHTTPRequestHandler):
         def _send_json(self, payload):

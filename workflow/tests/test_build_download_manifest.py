@@ -269,6 +269,37 @@ def test_build_download_manifest_fernbase_provider_prefers_primary_annotation_fi
     assert rows[0]["genome_filename"] == "Azolla_filiculoides.genome_v1.2.fasta"
 
 
+def test_build_download_manifest_allows_gff_and_genome_without_cds(tmp_path):
+    input_root = tmp_path / "dataset"
+    species_dir = input_root / "Direct" / "species_wise_original" / "Arabidopsis_thaliana"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "Arabidopsis_thaliana.gene.gff3").write_text(
+        "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Arabidopsis_thaliana.genome.fa").write_text(">chr1\nATGAAATTT\n", encoding="utf-8")
+
+    out = tmp_path / "download_manifest_direct.xlsx"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    rows = read_manifest(out)
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "direct"
+    assert rows[0]["id"] == "Arabidopsis_thaliana"
+    assert rows[0]["species_key"] == "Arabidopsis_thaliana"
+    assert rows[0]["cds_url"] == ""
+    assert rows[0]["cds_filename"] == ""
+    assert rows[0]["gff_filename"] == "Arabidopsis_thaliana.gene.gff3"
+    assert rows[0]["genome_filename"] == "Arabidopsis_thaliana.genome.fa"
+
+
 def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
     out = tmp_path / "download_manifest.xlsx"
     completed = run_script(

@@ -246,6 +246,197 @@ def test_format_species_inputs_strict_mode_fails_on_missing_pair(tmp_path):
     assert "missing GFF" in completed.stderr
 
 
+def test_format_species_inputs_derives_cds_from_gff_and_genome_when_cds_is_missing(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Arabidopsis_thaliana"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    gff_path = species_dir / "Arabidopsis_thaliana.annotation.gff3"
+    genome_path = species_dir / "Arabidopsis_thaliana.genome.fa"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+                "chr1\tsrc\tCDS\t7\t9\t.\t+\t0\tID=cds2;Parent=gene1.t1",
+                "chr2\tsrc\tgene\t1\t9\t.\t-\t.\tID=gene2",
+                "chr2\tsrc\tmRNA\t1\t9\t.\t-\t.\tID=gene2.t1;Parent=gene2",
+                "chr2\tsrc\tCDS\t1\t3\t.\t-\t0\tID=cds3;Parent=gene2.t1",
+                "chr2\tsrc\tCDS\t7\t9\t.\t-\t0\tID=cds4;Parent=gene2.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_path.write_text(
+        ">chr1\nATGAAATTT\n>chr2\nTTTAAACAT\n",
+        encoding="utf-8",
+    )
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    species_summary = tmp_path / "gg_input_generation_species.tsv"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Arabidopsis_thaliana_annotation.derived.cds.fa.gz"
+    assert formatted_cds.exists()
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert text.count(">Arabidopsis_thaliana_gene1") == 1
+    assert text.count(">Arabidopsis_thaliana_gene2") == 1
+    assert "ATGTTT" in text
+    assert "ATGAAA" in text
+
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert str(gff_path) in row["cds_input_path"]
+    assert str(genome_path) in row["cds_input_path"]
+    assert "derived CDS" in row["cds_input_path"]
+    assert row["gff_input_path"] == str(gff_path)
+    assert row["genome_input_path"] == str(genome_path)
+
+
+def test_format_species_inputs_derives_cds_without_trimming_nonzero_phase(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Arabidopsis_thaliana"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    gff_path = species_dir / "Arabidopsis_thaliana.annotation.gff3"
+    genome_path = species_dir / "Arabidopsis_thaliana.genome.fa"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t15\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t15\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+                "chr1\tsrc\tCDS\t10\t15\t.\t+\t2\tID=cds2;Parent=gene1.t1",
+                "chr2\tsrc\tgene\t1\t15\t.\t-\t.\tID=gene2",
+                "chr2\tsrc\tmRNA\t1\t15\t.\t-\t.\tID=gene2.t1;Parent=gene2",
+                "chr2\tsrc\tCDS\t1\t6\t.\t-\t1\tID=cds3;Parent=gene2.t1",
+                "chr2\tsrc\tCDS\t10\t15\t.\t-\t0\tID=cds4;Parent=gene2.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_path.write_text(
+        ">chr1\nATGAAACCCGGGTTT\n>chr2\nAAACCCGGGTTTCAT\n",
+        encoding="utf-8",
+    )
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Arabidopsis_thaliana_annotation.derived.cds.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert ">Arabidopsis_thaliana_gene1" in text
+    assert ">Arabidopsis_thaliana_gene2" in text
+    assert "ATGAAAGGGTTT" in text
+    assert "ATGAAATTT" not in text
+
+
+def test_build_formatted_cds_id_ensembl_uses_transcript_token_for_tie_breaks():
+    module = load_module()
+    task = {
+        "provider": "ensemblplants",
+        "species_prefix": "Arabidopsis_thaliana",
+    }
+    raw_header = (
+        "AT1G01520.5 cds chromosome:TAIR10:1:190478:192436:1 "
+        "gene:AT1G01520 gene_symbol:ASG4"
+    )
+    derived_header = "transcript:AT1G01520.1 gene=AT1G01520"
+
+    assert module.build_formatted_cds_id(task, raw_header) == "Arabidopsis_thaliana_AT1G01520.5"
+    assert module.build_formatted_cds_id(task, derived_header) == "Arabidopsis_thaliana_AT1G01520.1"
+    assert module.build_gene_aggregate_id(task, raw_header, "Arabidopsis_thaliana_AT1G01520.5") == "Arabidopsis_thaliana_AT1G01520"
+    assert module.build_gene_aggregate_id(task, derived_header, "Arabidopsis_thaliana_AT1G01520.1") == "Arabidopsis_thaliana_AT1G01520"
+
+
+def test_format_species_inputs_derives_cds_excluding_overlapping_utrs(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Arabidopsis_thaliana"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    gff_path = species_dir / "Arabidopsis_thaliana.annotation.gff3"
+    genome_path = species_dir / "Arabidopsis_thaliana.genome.fa"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t15\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t15\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tfive_prime_UTR\t1\t6\t.\t+\t.\tParent=gene1.t1",
+                "chr1\tsrc\tCDS\t1\t15\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+                "chr2\tsrc\tgene\t1\t15\t.\t-\t.\tID=gene2",
+                "chr2\tsrc\tmRNA\t1\t15\t.\t-\t.\tID=gene2.t1;Parent=gene2",
+                "chr2\tsrc\tfive_prime_UTR\t10\t15\t.\t-\t.\tParent=gene2.t1",
+                "chr2\tsrc\tCDS\t1\t15\t.\t-\t0\tID=cds2;Parent=gene2.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_path.write_text(
+        ">chr1\nATGAAACCCGGGTTT\n>chr2\nAAACCCGGGTTTCAT\n",
+        encoding="utf-8",
+    )
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Arabidopsis_thaliana_annotation.derived.cds.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert ">Arabidopsis_thaliana_gene1" in text
+    assert ">Arabidopsis_thaliana_gene2" in text
+    assert "CCCGGGTTT" in text
+    assert "ATGAAACCCGGGTTT" not in text
+
+
 def test_format_species_inputs_fernbase_prefers_primary_annotation_files(tmp_path):
     input_dir = tmp_path / "FernBase" / "species_wise_original"
     species_dir = input_dir / "Azolla_filiculoides"

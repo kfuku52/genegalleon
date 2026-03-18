@@ -164,6 +164,7 @@ HEADER_COMMENTS = {
             "URL to the CDS FASTA file.",
             "Accepted schemes: https://, http://, ftp://, file://.",
             "Leave blank when provider/id auto-resolution or cds_url_template will fill it.",
+            "May also remain blank when both gff_url and genome_url are available; CDS can be derived later.",
             "Typical suffixes: .fa, .fasta, .fna with optional .gz.",
         )
     ),
@@ -179,11 +180,11 @@ HEADER_COMMENTS = {
     ),
     "genome_url": "\n".join(
         (
-            "Optional but recommended for genome-aware workflows.",
+            "Conditionally required when cds_url is blank.",
             "",
             "URL to the genome FASTA file.",
             "Accepted schemes: https://, http://, ftp://, file://.",
-            "Leave blank to skip genome download; provider/id auto-resolution or genome_url_template can fill it.",
+            "Leave blank to skip genome download when CDS is already available; provider/id auto-resolution or genome_url_template can fill it.",
             "Typical suffixes: .fa, .fasta, .fna with optional .gz.",
         )
     ),
@@ -269,6 +270,14 @@ HEADER_COMMENTS = {
         )
     ),
 }
+
+
+def missing_annotation_label(cds_path, gff_path, genome_path):
+    if gff_path is None:
+        return "GFF"
+    if cds_path is None and genome_path is None:
+        return "CDS-or-genome"
+    return ""
 
 HEADER_COMMENT_MIN_WIDTH_PX = 240
 HEADER_COMMENT_MAX_WIDTH_PX = 520
@@ -554,7 +563,7 @@ def build_arg_parser():
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Exit with error when a species is missing CDS or GFF.",
+        help="Exit with error when a species is missing GFF or is missing both CDS and genome.",
     )
     parser.add_argument(
         "--id-options-snapshot",
@@ -687,11 +696,12 @@ def discover_ensembl_like(input_dir, provider):
         genome_path = pick_single_file(
             species_to_genome.get(species_key, []), provider, species_key, "genome", warnings
         )
-        if cds_path is None or gff_path is None:
+        missing_label = missing_annotation_label(cds_path, gff_path, genome_path)
+        if missing_label != "":
             errors.append(
                 "[{}] {}: missing {}".format(
                     provider,
-                    species_key, "CDS" if cds_path is None else "GFF"
+                    species_key, missing_label
                 )
             )
             continue
@@ -700,10 +710,10 @@ def discover_ensembl_like(input_dir, provider):
                 "provider": provider,
                 "id": species_key,
                 "species_key": species_key,
-                "cds_url": cds_path.resolve().as_uri(),
+                "cds_url": cds_path.resolve().as_uri() if cds_path is not None else "",
                 "gff_url": gff_path.resolve().as_uri(),
                 "genome_url": genome_path.resolve().as_uri() if genome_path is not None else "",
-                "cds_filename": cds_path.name,
+                "cds_filename": cds_path.name if cds_path is not None else "",
                 "gff_filename": gff_path.name,
                 "genome_filename": genome_path.name if genome_path is not None else "",
             }
@@ -763,10 +773,11 @@ def discover_species_dir_based(provider, input_dir):
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
         genome_path = pick_single_file(genome_matches, provider, species_key, "genome", warnings)
-        if cds_path is None or gff_path is None:
+        missing_label = missing_annotation_label(cds_path, gff_path, genome_path)
+        if missing_label != "":
             errors.append(
                 "[{}] {}: missing {}".format(
-                    provider, species_key, "CDS" if cds_path is None else "GFF"
+                    provider, species_key, missing_label
                 )
             )
             continue
@@ -792,10 +803,10 @@ def discover_species_dir_based(provider, input_dir):
                 "provider": provider,
                 "id": source_id,
                 "species_key": species_key,
-                "cds_url": cds_path.resolve().as_uri(),
+                "cds_url": cds_path.resolve().as_uri() if cds_path is not None else "",
                 "gff_url": gff_path.resolve().as_uri(),
                 "genome_url": genome_path.resolve().as_uri() if genome_path is not None else "",
-                "cds_filename": cds_path.name,
+                "cds_filename": cds_path.name if cds_path is not None else "",
                 "gff_filename": gff_path.name,
                 "genome_filename": genome_path.name if genome_path is not None else "",
             }
