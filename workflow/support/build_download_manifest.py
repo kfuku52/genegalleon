@@ -105,6 +105,9 @@ MANIFEST_FIELDNAMES = (
     "cds_url",
     "gff_url",
     "genome_url",
+    "cds_archive_member",
+    "gff_archive_member",
+    "genome_archive_member",
     "cds_filename",
     "gff_filename",
     "genome_filename",
@@ -188,13 +191,40 @@ HEADER_COMMENTS = {
             "Typical suffixes: .fa, .fasta, .fna with optional .gz.",
         )
     ),
+    "cds_archive_member": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Path to the CDS file inside an archive referenced by cds_url.",
+            "Use this when cds_url points to a .zip or .tar.* bundle instead of a plain FASTA.",
+            "Example: SpeciesA/SpeciesA.cds.fasta",
+        )
+    ),
+    "gff_archive_member": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Path to the GFF/GTF file inside an archive referenced by gff_url.",
+            "Use this when gff_url points to a .zip or .tar.* bundle instead of a plain annotation file.",
+            "Example: SpeciesA/SpeciesA.genes.gff3",
+        )
+    ),
+    "genome_archive_member": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Path to the genome FASTA inside an archive referenced by genome_url.",
+            "Use this when genome_url points to a .zip or .tar.* bundle instead of a plain FASTA.",
+            "Example: SpeciesA/SpeciesA.fasta",
+        )
+    ),
     "cds_filename": "\n".join(
         (
             "Optional.",
             "",
             "Output filename used when the CDS file is written to the raw download directory.",
             "Use a basename only, not a directory path.",
-            "If blank, it is inferred from cds_url or provider metadata.",
+            "If blank, it is inferred from cds_archive_member, cds_url, or provider metadata.",
         )
     ),
     "gff_filename": "\n".join(
@@ -203,7 +233,7 @@ HEADER_COMMENTS = {
             "",
             "Output filename used when the GFF/GTF file is written to the raw download directory.",
             "Use a basename only, not a directory path.",
-            "If blank, it is inferred from gff_url or provider metadata.",
+            "If blank, it is inferred from gff_archive_member, gff_url, or provider metadata.",
         )
     ),
     "genome_filename": "\n".join(
@@ -212,7 +242,7 @@ HEADER_COMMENTS = {
             "",
             "Output filename used when the genome FASTA is written to the raw download directory.",
             "Use a basename only, not a directory path.",
-            "If blank, it is inferred from genome_url or provider metadata.",
+            "If blank, it is inferred from genome_archive_member, genome_url, or provider metadata.",
         )
     ),
     "cds_url_template": "\n".join(

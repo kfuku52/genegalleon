@@ -43,6 +43,9 @@ def make_manifest(path, rows):
                 "cds_url",
                 "gff_url",
                 "genome_url",
+                "cds_archive_member",
+                "gff_archive_member",
+                "genome_archive_member",
                 "cds_filename",
                 "gff_filename",
                 "genome_filename",
@@ -917,6 +920,78 @@ def test_download_manifest_supports_direct_with_explicit_urls(tmp_path):
     with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
         cds_text = handle.read()
     assert cds_text.count(">Medicago_sativa_MsG1") == 1
+
+
+def test_download_manifest_supports_direct_archive_members(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Lens_culinaris"
+    archive_path = source_dir / "Lcu.2RBY.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "Lcu.2RBY/Lcu.2RBY.cds.fasta",
+            ">LcG1.t1\nATGAA\n>LcG1.t2\nATGAAATTT\n",
+        )
+        archive.writestr(
+            "Lcu.2RBY/Lcu.2RBY.hc_genes.gff3",
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=LcG1\n",
+        )
+        archive.writestr(
+            "Lcu.2RBY/Lcu.2RBY.fasta",
+            ">chr1\nATGCATGC\n",
+        )
+
+    manifest = tmp_path / "manifest.tsv"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "direct",
+                "id": "lens_culinaris_direct_archive",
+                "species_key": species_key,
+                "cds_url": to_file_url(archive_path),
+                "gff_url": to_file_url(archive_path),
+                "genome_url": to_file_url(archive_path),
+                "cds_archive_member": "Lcu.2RBY/Lcu.2RBY.cds.fasta",
+                "gff_archive_member": "Lcu.2RBY/Lcu.2RBY.hc_genes.gff3",
+                "genome_archive_member": "Lcu.2RBY/Lcu.2RBY.fasta",
+                "cds_filename": "",
+                "gff_filename": "",
+                "genome_filename": "",
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    out_cds = tmp_path / "out_cds"
+    out_gff = tmp_path / "out_gff"
+    out_genome = tmp_path / "out_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
+    assert (raw_dir / "Lcu.2RBY.cds.fasta").exists()
+    assert (raw_dir / "Lcu.2RBY.hc_genes.gff3").exists()
+    assert (raw_dir / "Lcu.2RBY.fasta").exists()
+
+    formatted_files = list(out_cds.glob("*.cds.fa.gz"))
+    assert len(formatted_files) == 1
+    with gzip.open(formatted_files[0], "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert cds_text.count(">Lens_culinaris_LcG1") == 1
 
 
 def test_download_manifest_derives_cds_when_manifest_has_only_gff_and_genome(tmp_path):

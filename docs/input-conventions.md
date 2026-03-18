@@ -163,6 +163,7 @@ Manifest required columns:
   - for `provider=flybase`, `provider=wormbase`, `provider=vectorbase`, `provider=fernbase`, `provider=veupathdb`, and `provider=dictybase`, `id` can be resolved via explicit URL columns or `GG_<PROVIDER>_*_URL_TEMPLATE`.
   - for `provider=insectbase`, `id` can be an `IBG_*` genome identifier (for example `IBG_00001`), and the resolver uses the InsectBase genome detail API to derive CDS/GFF/genome downloads.
   - for `provider=direct`, set explicit `gff_url` plus either `cds_url` or `genome_url`, or provide an index-style URL in `id` that exposes downloadable files.
+    When a URL points to a shared archive, use `cds_archive_member`, `gff_archive_member`, and/or `genome_archive_member` to name the member to extract.
   - for `provider=ensembl` and `provider=ensemblplants`, `id`-only URL inference is supported via:
     - provider defaults (for example, Ensembl/EnsemblPlants index discovery),
     - or env templates: `GG_<PROVIDER>_CDS_URL_TEMPLATE`, `GG_<PROVIDER>_GFF_URL_TEMPLATE`, `GG_<PROVIDER>_GENOME_URL_TEMPLATE`,
@@ -178,6 +179,8 @@ Manifest required columns:
 Optional columns:
 
 - `species_key`
+- `cds_archive_member`, `gff_archive_member`, `genome_archive_member`
+  (optional paths inside `.zip` or `.tar.*` archives referenced by the corresponding `*_url`)
 - `cds_filename`
 - `gff_filename`
 - `genome_filename`

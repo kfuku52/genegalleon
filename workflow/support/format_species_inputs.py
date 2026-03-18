@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -185,6 +186,9 @@ RESOLVED_MANIFEST_PREFERRED_COLUMNS = (
     "cds_url",
     "gff_url",
     "genome_url",
+    "cds_archive_member",
+    "gff_archive_member",
+    "genome_archive_member",
     "cds_filename",
     "gff_filename",
     "genome_filename",
@@ -1943,9 +1947,13 @@ def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, tim
     return resolved
 
 
-def default_download_filename(provider, species_key, label, url):
-    parsed = urlparse(url)
-    base = Path(parsed.path).name
+def default_download_filename(provider, species_key, label, url, archive_member=""):
+    archive_member_text = str(archive_member or "").strip()
+    if archive_member_text != "":
+        base = Path(archive_member_text).name
+    else:
+        parsed = urlparse(url)
+        base = Path(parsed.path).name
     if base == "":
         if label in ("cds", "genome"):
             ext = ".fa.gz"
@@ -2625,23 +2633,61 @@ def download_url_to_file(
     lock_stale_seconds,
     warnings,
     lock_context,
+    archive_member="",
 ):
     if dry_run:
         return False
-    lock_path = Path(str(destination) + ".lock")
+    archive_member_text = str(archive_member or "").strip()
+    archive_cache_path = None
+    archive_tmp = None
+    if archive_member_text == "":
+        lock_path = Path(str(destination) + ".lock")
+    else:
+        archive_name = Path(unquote(urlparse(url).path)).name
+        if archive_name == "":
+            archive_name = "archive.bin"
+        archive_hash = hashlib.sha256(str(url).encode("utf-8")).hexdigest()[:16]
+        archive_cache_dir = destination.parent / ".archive_cache"
+        archive_cache_dir.mkdir(parents=True, exist_ok=True)
+        archive_cache_path = archive_cache_dir / "{}__{}".format(archive_hash, archive_name)
+        lock_path = Path(str(archive_cache_path) + ".lock")
     heartbeat_state = acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
     tmp = Path(str(destination) + ".tmp.{}".format(os.getpid()))
     try:
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
             return False
-        request = Request(url, headers=headers)
-        with urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
-        tmp.replace(destination)
+        if archive_member_text == "":
+            request = Request(url, headers=headers)
+            with urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+            tmp.replace(destination)
+        else:
+            archive_tmp = Path(str(archive_cache_path) + ".tmp.{}".format(os.getpid()))
+            if overwrite or not archive_cache_path.exists() or archive_cache_path.stat().st_size == 0:
+                request = Request(url, headers=headers)
+                with urlopen(request, timeout=timeout) as response, open(archive_tmp, "wb") as out:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                archive_tmp.replace(archive_cache_path)
+            if zipfile.is_zipfile(archive_cache_path):
+                with zipfile.ZipFile(archive_cache_path) as archive:
+                    payload = archive.read(archive_member_text)
+            else:
+                with tarfile.open(archive_cache_path, "r:*") as archive:
+                    extracted = archive.extractfile(archive_member_text)
+                    if extracted is None:
+                        raise KeyError(archive_member_text)
+                    payload = extracted.read()
+            with open(tmp, "wb") as out:
+                out.write(payload)
+            tmp.replace(destination)
     except Exception:
         try:
             tmp.unlink()
@@ -2649,6 +2695,13 @@ def download_url_to_file(
             pass
         except OSError:
             pass
+        if archive_tmp is not None:
+            try:
+                archive_tmp.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
         raise
     finally:
         release_download_lock(lock_path, heartbeat_state)
@@ -2816,6 +2869,7 @@ def execute_download_target_job(
     label = job["label"]
     url = job["url"]
     target = job["target"]
+    archive_member = str(job.get("archive_member") or "").strip()
     local_warnings = []
     local_errors = []
     downloaded = 0
@@ -2842,6 +2896,7 @@ def execute_download_target_job(
                 lock_stale_seconds=lock_stale_seconds,
                 warnings=local_warnings,
                 lock_context="[download:{}] {} {}".format(provider, species_key, label),
+                archive_member=archive_member,
             )
             if did_download:
                 downloaded += 1
@@ -2943,6 +2998,9 @@ def download_from_manifest(
         cds_url = (row.get("cds_url") or "").strip()
         gff_url = (row.get("gff_url") or "").strip()
         genome_url = (row.get("genome_url") or "").strip()
+        cds_archive_member = (row.get("cds_archive_member") or "").strip()
+        gff_archive_member = (row.get("gff_archive_member") or "").strip()
+        genome_archive_member = (row.get("genome_archive_member") or "").strip()
         cds_filename = (row.get("cds_filename") or "").strip()
         gff_filename = (row.get("gff_filename") or "").strip()
         genome_filename = (row.get("genome_filename") or "").strip()
@@ -3092,11 +3150,17 @@ def download_from_manifest(
         raw_dir.mkdir(parents=True, exist_ok=True)
 
         if cds_filename == "":
-            cds_filename = default_download_filename(provider, species_key, "cds", cds_url)
+            cds_filename = default_download_filename(provider, species_key, "cds", cds_url, cds_archive_member)
         if gff_filename == "":
-            gff_filename = default_download_filename(provider, species_key, "gff", gff_url)
+            gff_filename = default_download_filename(provider, species_key, "gff", gff_url, gff_archive_member)
         if genome_url != "" and genome_filename == "":
-            genome_filename = default_download_filename(provider, species_key, "genome", genome_url)
+            genome_filename = default_download_filename(
+                provider,
+                species_key,
+                "genome",
+                genome_url,
+                genome_archive_member,
+            )
 
         resolved_rows.append(
             build_resolved_manifest_row(
@@ -3116,11 +3180,11 @@ def download_from_manifest(
 
         targets = []
         if cds_url != "":
-            targets.append(("CDS", cds_url, raw_dir / cds_filename))
-        targets.append(("GFF", gff_url, raw_dir / gff_filename))
+            targets.append(("CDS", cds_url, raw_dir / cds_filename, cds_archive_member))
+        targets.append(("GFF", gff_url, raw_dir / gff_filename, gff_archive_member))
         if genome_url != "":
-            targets.append(("GENOME", genome_url, raw_dir / genome_filename))
-        for label, url, target in targets:
+            targets.append(("GENOME", genome_url, raw_dir / genome_filename, genome_archive_member))
+        for label, url, target, archive_member in targets:
             if target.exists() and target.stat().st_size > 0 and not overwrite:
                 warnings.append(
                     "[download:{}] {} {} already exists. Skipping: {}".format(
@@ -3139,6 +3203,7 @@ def download_from_manifest(
                     "label": label,
                     "url": url,
                     "target": target,
+                    "archive_member": archive_member,
                 }
             )
 
