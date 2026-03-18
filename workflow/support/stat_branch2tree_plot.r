@@ -6,12 +6,10 @@ suppressPackageStartupMessages(library(ape, quietly = TRUE))
 suppressPackageStartupMessages(library(cowplot, quietly = TRUE))
 suppressPackageStartupMessages(library(ggmsa, quietly = TRUE))
 suppressPackageStartupMessages(library(ggplot2, quietly = TRUE))
-suppressPackageStartupMessages(library(ggrepel, quietly = TRUE))
 suppressPackageStartupMessages(library(ggtree, quietly = TRUE))
 suppressPackageStartupMessages(library(grid, quietly = TRUE))
 suppressPackageStartupMessages(library(viridis, quietly = TRUE))
 suppressPackageStartupMessages(library(xml2, quietly = TRUE))
-suppressPackageStartupMessages(library(svglite, quietly = TRUE))
 suppressPackageStartupMessages(library(rkftools, quietly = TRUE))
 options(stringsAsFactors = FALSE)
 script_file_arg = grep('^--file=', commandArgs(), value = TRUE)
@@ -30,6 +28,41 @@ set_default_arg = function(args, key, value) {
     args[[key]] = value
   }
   return(args)
+}
+
+ensure_plot_topology_columns = function(b) {
+  if (!('numerical_label' %in% colnames(b))) {
+    numerical_label = suppressWarnings(as.integer(as.character(b[['branch_id']])))
+    if (any(is.na(numerical_label))) {
+      stop('stat_branch is missing numerical_label and branch_id is not integer-coercible.')
+    }
+    b[['numerical_label']] = numerical_label
+  }
+  if (!('sister' %in% colnames(b))) {
+    b[['sister']] = -999
+    child_cols = intersect(c('child1', 'child2'), colnames(b))
+    if (length(child_cols) == 2 && ('parent' %in% colnames(b))) {
+      for (i in seq_len(nrow(b))) {
+        parent_id = b[['parent']][i]
+        if (is.na(parent_id) || identical(parent_id, '') || (as.character(parent_id) == '-999')) {
+          next
+        }
+        parent_idx = match(parent_id, b[['branch_id']])
+        if (is.na(parent_idx)) {
+          next
+        }
+        child1 = b[['child1']][parent_idx]
+        child2 = b[['child2']][parent_idx]
+        current_id = b[['branch_id']][i]
+        if (!is.na(child1) && as.character(child1) == as.character(current_id)) {
+          b[['sister']][i] = child2
+        } else if (!is.na(child2) && as.character(child2) == as.character(current_id)) {
+          b[['sister']][i] = child1
+        }
+      }
+    }
+  }
+  return(b)
 }
 
 args = set_default_arg(args, 'long_branch_display', 'auto')
@@ -65,11 +98,12 @@ for (Rfile in Rfiles) {
 # BRANCH_COLOR: the column name for branch colors. e.g., "species", "mapdnds_omega", "l1ou_regime", "no"
 # ORIENTATION: tree orientation. "L" for left-to-right time flow, or "R" in reverse.
 
-# heatmap: trait heatmap. format = heatmap,TRANSFORM,GENEWISE_SCALE,REPLICATE_SEPARATOR,INFILE
+# heatmap: trait heatmap. format = heatmap,TRANSFORM,GENEWISE_SCALE,REPLICATE_SEPARATOR,INFILE[,LABEL]
 # TRANSFORM: value transformation. "no", "log2", "log2p1", "log10", "log10p1"
 # GENEWISE_SCALE: whether trait values are scaled in each gene. "abs" for no-scaling and "rel" for scaling
 # REPLICATE_SEPARATOR: separator between the experiment name and the replication number in column names. e.g. "_"
 # TRAIT_PREFIX: Prefix string specifying the trait columns in the --stat_branch file.
+# LABEL: Optional legend title.
 
 # pointplot: trait point plot. format = pointplot,TRANSFORM,GENEWISE_SCALE,REPLICATE_SEPARATOR,INFILE
 # TRANSFORM: value transformation. "no", "log2", "log2p1", "log10", "log10p1"
@@ -88,6 +122,16 @@ for (Rfile in Rfiles) {
 
 # tiplabel: gene names. format = tiplabel
 
+# categorical: single-column categorical tile. format = categorical,COLUMN,XLABEL[,MISSING_LABEL]
+# COLUMN: the column name in --stat_branch to render for tip rows.
+# XLABEL: x-axis label for the panel.
+# MISSING_LABEL: optional label shown when values are empty.
+
+# text: tip-aligned text column. format = text,COLUMN,XLABEL[,MAXCHAR]
+# COLUMN: the column name in --stat_branch to render for tip rows.
+# XLABEL: x-axis label for the panel.
+# MAXCHAR: optional maximum number of characters retained before truncation.
+
 # domain: protein domains. format = domain,INFILE
 # INFILE: rpsblast output tsv. When running rpsblast, please specify -outfmt "6 std qlen slen stitle"
 
@@ -97,6 +141,9 @@ for (Rfile in Rfiles) {
 # fimo: promoter cis-element plot. format = fimo,PROMOTER_BP,QVALUE
 # PROMOTER_BP: the size of examined promoters
 # QVALUE: q-value cutoff for predicted cis-regulatory motifs
+
+# meme: MEME motif summary. format = meme,INFILE
+# INFILE: MEME XML file path.
 
 # amino_acid_site: Amino acid site plot. format = amino_acid_site,GENETIC_CODE,SITES,ALIGNMENT_PATH
 # GENETIC_CODE: genetic code number. 1 for standard, 4 for mold, 11 for the echinoderm mitochondrial code, etc.
@@ -138,6 +185,7 @@ for (Rfile in Rfiles) {
 # %%
 cat(as.character(Sys.time()), 'Loading infiles.\n')
 b = read.table(args[['stat_branch']], header = TRUE, sep = '\t', quote = '', stringsAsFactors = FALSE, fill = TRUE, check.name = FALSE)
+b = ensure_plot_topology_columns(b)
 b = enhance_branch_table(b, args, event_method = args[['event_method']])
 
 # %%
@@ -209,10 +257,11 @@ for (col in unlist(args[grep("^panel", names(args))])) {
     scale = strsplit(col, ',')[[1]][3]
     replicate_sep = strsplit(col, ',')[[1]][4]
     trait_prefix = strsplit(col, ',')[[1]][5]
+    trait_label = ifelse(length(strsplit(col, ',')[[1]]) >= 6, strsplit(col, ',')[[1]][6], 'Expression')
     df_trait = get_df_trait(b, transform, scale, trait_prefix)
     df_trait = merge_replicates(trait_table = df_trait, replicate_sep = replicate_sep)
     args[['trait_colors']] = get_trait_colors(ncol(df_trait), method = 'continuous')
-    g = add_heatmap_column(g, args, df_trait)
+    g = add_heatmap_column(g, args, df_trait, fill_label = trait_label)
   } else if (grepl('^pointplot', col)) {
     transform = strsplit(col, ',')[[1]][2]
     scale = strsplit(col, ',')[[1]][3]
@@ -224,6 +273,18 @@ for (col in unlist(args[grep("^panel", names(args))])) {
     g = add_pointplot_column(g, args, df_trait, replicate_sep)
   } else if (grepl('^tiplabel', col)) {
     g = add_tiplabel_column(g, args)
+  } else if (grepl('^categorical', col)) {
+    categorical_params = strsplit(col, ',')[[1]]
+    categorical_col = categorical_params[2]
+    categorical_xlab = categorical_params[3]
+    categorical_missing_label = ifelse(length(categorical_params) >= 4, categorical_params[4], '-')
+    g = add_categorical_column(g, args, gname = paste('categorical', categorical_col, categorical_xlab, sep=','), col = categorical_col, xlab = categorical_xlab, missing_label = categorical_missing_label)
+  } else if (grepl('^text', col)) {
+    text_params = strsplit(col, ',')[[1]]
+    text_col = text_params[2]
+    text_xlab = text_params[3]
+    text_max_nchar = ifelse(length(text_params) >= 4, as.integer(text_params[4]), 18)
+    g = add_text_column(g, args, gname = paste('text', text_col, text_xlab, sep=','), col = text_col, xlab = text_xlab, max_nchar = text_max_nchar)
   } else if (grepl('^signal_peptide', col)) {
     g = add_signal_peptide_column(g, args)
   } else if (grepl('^transmembrane_domain', col)) {
@@ -260,6 +321,9 @@ for (col in unlist(args[grep("^panel", names(args))])) {
     xmax = as.integer(strsplit(col, ',')[[1]][2])
     qvalue = as.numeric(strsplit(col, ',')[[1]][3])
     g = add_fimo_column(g, args, qname = 'fimo', xmax = xmax, qvalue, multiple_connection = 'align_from_tss')
+  } else if (grepl('^meme', col)) {
+    path_meme = strsplit(col, ',')[[1]][2]
+    g = add_meme_column(g, args, path_meme = path_meme)
   } else if (grepl('^amino_acid_site', col)) {
       genetic_code = as.integer(strsplit(col, ',')[[1]][2])
       selected_amino_acid_sites = as.integer(strsplit(strsplit(col, ',')[[1]][3], ':')[[1]])

@@ -191,6 +191,26 @@ def test_core_bootstrap_sets_python_pycacheprefix_under_tmp():
     assert "gg_configure_python_pycacheprefix_from_core" in runtime_body
 
 
+def test_conda_activation_temporarily_disables_nounset():
+    text = _read_text(WORKFLOW_DIR / "support" / "gg_util.sh")
+    activate_body = _function_body(text, "gg_activate_conda_env")
+    deactivate_body = _function_body(text, "gg_deactivate_conda_env")
+    assert 'if [[ $- == *u* ]]; then' in activate_body
+    assert 'set +u' in activate_body
+    assert 'conda activate "${conda_env}"' in activate_body
+    assert 'set -u' in activate_body
+    assert 'if [[ $- == *u* ]]; then' in deactivate_body
+    assert 'set +u' in deactivate_body
+    assert 'conda deactivate >/dev/null 2>&1 || true' in deactivate_body
+    assert 'set -u' in deactivate_body
+
+
+def test_prepare_cmd_runtime_makes_ulimit_best_effort():
+    text = _read_text(WORKFLOW_DIR / "support" / "gg_util.sh")
+    body = _function_body(text, "gg_prepare_cmd_runtime")
+    assert 'ulimit -s unlimited 2>/dev/null || true' in body
+
+
 def test_busco_download_lock_is_per_lineage_shared_artifact_lock():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)

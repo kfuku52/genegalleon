@@ -197,6 +197,10 @@ get_rel_widths = function(g, args_rel_widths) {
             rel_widths[gname] = 0.5
         } else if (grepl('^pointplot$', gname)) {
             rel_widths[gname] = 0.5
+        } else if (grepl('^categorical,', gname)) {
+            rel_widths[gname] = 0.55
+        } else if (grepl('^text,', gname)) {
+            rel_widths[gname] = 0.7
         } else if (grepl('^signal_peptide$', gname)) {
             rel_widths[gname] = 0.1
         } else if (grepl('^tm$', gname)) {
@@ -211,6 +215,8 @@ get_rel_widths = function(g, args_rel_widths) {
             rel_widths[gname] = 1.0
         } else if (grepl('^fimo$', gname)) {
             rel_widths[gname] = 1.0
+        } else if (grepl('^meme$', gname)) {
+            rel_widths[gname] = 0.9
         } else if (grepl('^amino_acid_site$', gname)) {
             built_plot <- ggplot_build(g[["amino_acid_site"]])
             xmax = built_plot$layout$panel_scales_x[[1]]$range$range[2]
@@ -869,7 +875,7 @@ get_df_trait = function(b, transform, scale, trait_prefix, negative2zero=TRUE) {
     return(df_trait)
 }
 
-add_heatmap_column = function(g, args, df_trait) {
+add_heatmap_column = function(g, args, df_trait, fill_label='Expression') {
     cat(as.character(Sys.time()), 'Adding heatmap column.\n')
     if ((is.null(ncol(df_trait)))|(ncol(df_trait)==0)) {
         cat('df_trait is emply. Heatmap panel will not be added.\n')
@@ -896,7 +902,7 @@ add_heatmap_column = function(g, args, df_trait) {
     }
     grid_color = ifelse(any(is.na(df_tip_tidy[['value']])), rgb(0,0,0,0), rgb(0,0,0,1))
     g[['heatmap']] = ggplot(data=df_tip_tidy)
-    if (any(apply(df_tip[,colnames(df_trait)], 1, function(x){all(is.na(x))}))) {
+    if (any(apply(df_tip[, colnames(df_trait), drop = FALSE], 1, function(x){all(is.na(x))}))) {
         df_tip_tidy_seg = unique(df_tip_tidy[,c('label','y')])
         df_tip_tidy_seg[,'xmin'] = df_tip_tidy[which.min(df_tip_tidy[['group']]),'group']
         df_tip_tidy_seg[,'xmax'] = df_tip_tidy[which.max(df_tip_tidy[['group']]),'group']
@@ -918,7 +924,7 @@ add_heatmap_column = function(g, args, df_trait) {
             limits=c(0, max_val), 
             na.value=rgb(1,1,1,0)
         ) +
-        ggplot2::labs(fill="Expression") +
+        ggplot2::labs(fill=fill_label) +
         theme_classic(base_size=font_size) +
         theme(
             axis.title=element_blank(), 
@@ -956,6 +962,212 @@ add_tiplabel_column = function(g, args) {
         theme_void() +
         theme(
             plot.margin=unit(args[['margins']], "cm")
+        )
+    return(g)
+}
+
+truncate_panel_text = function(values, max_nchar = 18) {
+    max_nchar = suppressWarnings(as.integer(max_nchar))
+    if (is.na(max_nchar)) {
+        max_nchar = 18
+    }
+    values = as.character(values)
+    values[is.na(values)] = ''
+    values = trimws(values)
+    values = gsub('[[:space:]]+', ' ', values)
+    if (max_nchar < 1) {
+        return(values)
+    }
+    too_long = (nchar(values, type = 'width') > max_nchar)
+    if (max_nchar <= 3) {
+        values[too_long] = substr(values[too_long], 1, max_nchar)
+    } else {
+        values[too_long] = paste0(substr(values[too_long], 1, max_nchar - 3), '...')
+    }
+    return(values)
+}
+
+add_text_column = function(g, args, gname, col, xlab, max_nchar = 18) {
+    cat(as.character(Sys.time()), 'Adding text column.\n')
+    df_tip = get_df_tip(g[['tree']])
+    if (! col %in% colnames(df_tip)) {
+        cat('Column not found: ', col, '. ', gname, ' will not be displayed.\n')
+        return(g)
+    }
+    values = truncate_panel_text(df_tip[[col]], max_nchar = max_nchar)
+    if (all(values == '')) {
+        cat('All values were empty in column: ', col, '. ', gname, ' will not be displayed.\n')
+        return(g)
+    }
+    df_tip[['x_dummy']] = 0
+    df_tip[['hjust']] = 0
+    df_tip[['plot_value']] = values
+    text_margins = args[['margins']] / 4
+    text_margins[2] = text_margins[2] + 0.12
+    g[[gname]] = ggplot(df_tip, aes(x=x_dummy, y=label, label=plot_value, hjust=hjust)) +
+        geom_text(size=args[['font_size']] * args[['font_size_factor']], colour=df_tip[['tiplab_color']], lineheight=0.92) +
+        coord_cartesian(xlim = c(0, 1), clip = 'off') +
+        xlab(xlab) +
+        theme_void() +
+        theme(
+            axis.title.x=element_text(size=args[['font_size']]),
+            plot.margin=unit(text_margins, "cm")
+        )
+    return(g)
+}
+
+normalize_category_text = function(values, missing_label = '-') {
+    values = as.character(values)
+    values[is.na(values)] = ''
+    values = trimws(values)
+    values = gsub('_', ' ', values, fixed = TRUE)
+    values = gsub('[[:space:]]+', ' ', values)
+    values[values == ''] = missing_label
+    return(values)
+}
+
+get_categorical_levels = function(values, missing_label = '-') {
+    values = unique(as.character(values))
+    values = values[values != missing_label]
+    preferred = c(
+        'species',
+        'genus',
+        'family',
+        'order',
+        'class',
+        'phylum',
+        'kingdom',
+        'superkingdom',
+        'domain',
+        'genus mismatch'
+    )
+    preferred_present = preferred[preferred %in% values]
+    other_values = sort(setdiff(values, preferred_present))
+    c(preferred_present, other_values, missing_label)
+}
+
+add_categorical_column = function(g, args, gname, col, xlab, missing_label = '-') {
+    cat(as.character(Sys.time()), 'Adding categorical column.\n')
+    df_tip = get_df_tip(g[['tree']])
+    if (! col %in% colnames(df_tip)) {
+        cat('Column not found: ', col, '. ', gname, ' will not be displayed.\n')
+        return(g)
+    }
+    values = normalize_category_text(df_tip[[col]], missing_label = missing_label)
+    levels = get_categorical_levels(values, missing_label = missing_label)
+    palette = grDevices::hcl.colors(max(1, length(levels) - 1), palette = 'Dark 3')
+    names(palette) = levels[seq_len(max(1, length(levels) - 1))]
+    if (missing_label %in% levels) {
+        palette[missing_label] = '#e6e6e6'
+    }
+    df_tip[['plot_value']] = factor(values, levels = levels)
+    df_tip[['panel_x']] = 1
+    g[[gname]] = ggplot(df_tip, aes(x = panel_x, y = label, fill = plot_value)) +
+        geom_tile(width = 0.9, height = 0.9, color = 'white', linewidth = 0.2) +
+        scale_fill_manual(values = palette, drop = FALSE) +
+        coord_cartesian(xlim = c(0.5, 1.5), clip = 'off') +
+        xlab(xlab) +
+        theme_classic(base_size = args[['font_size']]) +
+        theme(
+            axis.title.y = element_blank(),
+            axis.title.x = element_text(size = args[['font_size']]),
+            axis.text.y = element_blank(),
+            axis.text.x = element_blank(),
+            axis.ticks = element_blank(),
+            axis.line = element_blank(),
+            legend.position = 'bottom',
+            legend.title = element_blank(),
+            legend.text = element_text(size = args[['font_size']]),
+            legend.key.size = unit(0.35, 'lines'),
+            rect = element_rect(fill = 'transparent'),
+            plot.margin = unit(args[['margins']] / 4, 'cm')
+        ) +
+        guides(fill = guide_legend(nrow = min(4, length(levels)), byrow = TRUE))
+    return(g)
+}
+
+extract_xml_attr = function(tag, candidates) {
+    for (attr in candidates) {
+        pattern = paste0(attr, '="([^"]*)"')
+        hit = regexec(pattern, tag, perl = TRUE)
+        regmatch = regmatches(tag, hit)[[1]]
+        if (length(regmatch) >= 2) {
+            return(regmatch[2])
+        }
+    }
+    return('')
+}
+
+read_meme_motifs = function(path_meme, max_motif = 8) {
+    if (is.na(path_meme) || !nzchar(path_meme) || !file.exists(path_meme)) {
+        return(data.frame())
+    }
+    xml_lines = tryCatch(readLines(path_meme, warn = FALSE), error = function(e) character(0))
+    if (length(xml_lines) == 0) {
+        return(data.frame())
+    }
+    xml_text = paste(xml_lines, collapse = ' ')
+    motif_match = gregexpr('<motif\\b[^>]*>', xml_text, perl = TRUE)
+    motif_tags = regmatches(xml_text, motif_match)[[1]]
+    if (length(motif_tags) == 0) {
+        return(data.frame())
+    }
+    motif_tags = motif_tags[seq_len(min(length(motif_tags), max_motif))]
+    motif_rows = lapply(seq_along(motif_tags), function(i) {
+        tag = motif_tags[[i]]
+        motif_id = extract_xml_attr(tag, c('alt', 'name', 'id'))
+        if (!nzchar(motif_id)) {
+            motif_id = paste0('motif_', i)
+        }
+        width = extract_xml_attr(tag, c('width', 'w'))
+        sites = extract_xml_attr(tag, c('sites', 'nsites'))
+        evalue = extract_xml_attr(tag, c('e_value', 'evalue'))
+        data.frame(
+            motif_id = motif_id,
+            width = width,
+            sites = sites,
+            evalue = evalue,
+            stringsAsFactors = FALSE
+        )
+    })
+    out = do.call(rbind, motif_rows)
+    rownames(out) = NULL
+    return(out)
+}
+
+add_meme_column = function(g, args, path_meme, max_motif = 8) {
+    cat(as.character(Sys.time()), 'Adding meme column.\n')
+    df_meme = read_meme_motifs(path_meme, max_motif = max_motif)
+    if (nrow(df_meme) == 0) {
+        cat('No MEME motifs were detected. MEME panel will not be added.\n')
+        return(g)
+    }
+    motif_text = ifelse(
+        nzchar(df_meme[['width']]) | nzchar(df_meme[['sites']]) | nzchar(df_meme[['evalue']]),
+        paste0(
+            truncate_panel_text(df_meme[['motif_id']], 14),
+            ' (w=', ifelse(nzchar(df_meme[['width']]), df_meme[['width']], '?'),
+            ', n=', ifelse(nzchar(df_meme[['sites']]), df_meme[['sites']], '?'),
+            ', E=', ifelse(nzchar(df_meme[['evalue']]), df_meme[['evalue']], '?'),
+            ')'
+        ),
+        truncate_panel_text(df_meme[['motif_id']], 24)
+    )
+    df_plot = data.frame(
+        x = 0,
+        y = rev(seq_len(nrow(df_meme))),
+        label = truncate_panel_text(motif_text, 32),
+        stringsAsFactors = FALSE
+    )
+    g[['meme']] = ggplot(df_plot, aes(x = x, y = y, label = label)) +
+        geom_text(hjust = 0, size = args[['font_size']] * args[['font_size_factor']], colour = 'black') +
+        xlim(0, 1) +
+        ylim(0.5, nrow(df_plot) + 0.5) +
+        xlab('MEME motif') +
+        theme_void() +
+        theme(
+            axis.title.x = element_text(size = args[['font_size']]),
+            plot.margin = unit(args[['margins']]/4, "cm")
         )
     return(g)
 }

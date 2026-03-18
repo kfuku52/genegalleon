@@ -3,7 +3,6 @@
 import argparse
 from collections import Counter
 import gzip
-import math
 import os
 import re
 import sqlite3
@@ -22,9 +21,6 @@ BRANCH_OUTPUT_COLUMNS = [
     "orthogroup",
     "branch_id",
     "node_name",
-    "hgt_score",
-    "hgt_confidence",
-    "hgt_reason",
     "generax_event",
     "generax_transfer",
     "generax_event_parent",
@@ -36,8 +32,6 @@ BRANCH_OUTPUT_COLUMNS = [
     "besthit_gene_count",
     "besthit_taxid_count",
     "besthit_taxonomy_method",
-    "besthit_conflict_mean",
-    "besthit_deep_conflict_fraction",
     "besthit_same_superkingdom_fraction",
     "besthit_lca_rank_mode",
     "intron_measured_gene_count",
@@ -62,15 +56,14 @@ GENE_OUTPUT_COLUMNS = [
     "orthogroup",
     "gene_id",
     "gene_taxon",
-    "top_hgt_branch_id",
-    "top_hgt_score",
-    "top_hgt_confidence",
     "candidate_branch_count",
     "candidate_branch_ids",
     "besthit_accession",
     "besthit_organism",
     "besthit_taxid",
-    "besthit_conflict_score",
+    "besthit_taxonomy_method",
+    "besthit_lca_rank",
+    "besthit_same_superkingdom",
     "intron_supported",
     "expression_measured",
     "synteny_support_score",
@@ -83,29 +76,20 @@ ORTHOGROUP_OUTPUT_COLUMNS = [
     "orthogroup",
     "hgt_branch_count",
     "hgt_gene_count",
-    "top_hgt_branch_id",
-    "top_hgt_score",
-    "top_hgt_confidence",
-    "mean_hgt_score",
     "candidate_branch_ids",
-    "top_hgt_reason",
 ]
-
-DEEP_RANKS = {"superkingdom", "kingdom", "phylum", "subphylum", "clade", "no_rank", "none"}
-MID_RANKS = {"class", "order"}
 
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(
-        description="Score GeneRax-first HGT candidates from the gg_orthogroup SQLite database."
+        description="Summarize GeneRax-first HGT candidate evidence from the gg_orthogroup SQLite database."
     )
     parser.add_argument("--dbpath", metavar="PATH", required=True, type=str)
     parser.add_argument("--branch_out", metavar="PATH", required=True, type=str)
     parser.add_argument("--gene_out", metavar="PATH", required=True, type=str)
     parser.add_argument("--orthogroup_out", metavar="PATH", required=True, type=str)
     parser.add_argument("--dir_contamination_tsv", metavar="PATH", default="", type=str)
-    parser.add_argument("--taxonomy_dbfile", metavar="PATH", default="", type=str)
-    parser.add_argument("--min_branch_score", metavar="FLOAT", default=0.45, type=float)
+    parser.add_argument("--taxonomy_dbfile", metavar="PATH", default=None, type=str)
     return parser
 
 
@@ -238,10 +222,6 @@ def safe_float(value, default=numpy.nan):
         return default
 
 
-def clamp01(value: float) -> float:
-    return max(0.0, min(1.0, float(value)))
-
-
 class TaxonomyResolver:
     def __init__(self, dbfile: str = ""):
         self.dbfile = str(dbfile).strip()
@@ -250,10 +230,10 @@ class TaxonomyResolver:
         self.name_cache: Dict[str, int] = {}
         self.lineage_cache: Dict[int, List[int]] = {}
         self.rank_cache: Dict[int, str] = {}
-        if NCBITaxa is None:
+        if NCBITaxa is None or self.dbfile == "":
             return
         try:
-            self.ncbi = NCBITaxa(dbfile=self.dbfile) if self.dbfile else NCBITaxa()
+            self.ncbi = NCBITaxa(dbfile=self.dbfile)
             self.enabled = True
         except Exception:
             self.ncbi = None
@@ -344,34 +324,18 @@ class TaxonomyResolver:
                 "hit_taxid": hit_taxid_val,
                 "lca_rank": "none",
                 "same_superkingdom": 0,
-                "conflict_score": 1.0,
             }
         lca_taxid = int(common[-1])
         lca_rank = self.rank(lca_taxid).strip().lower() or "no_rank"
         query_super = self.rank_taxid_from_lineage(query_lineage, ["superkingdom", "domain"])
         hit_super = self.rank_taxid_from_lineage(hit_lineage, ["superkingdom", "domain"])
         same_superkingdom = int(query_super > 0 and query_super == hit_super)
-        if same_superkingdom == 0:
-            conflict = 1.0
-        elif lca_rank == "species":
-            conflict = 0.0
-        elif lca_rank == "genus":
-            conflict = 0.15
-        elif lca_rank == "family":
-            conflict = 0.35
-        elif lca_rank in MID_RANKS:
-            conflict = 0.55
-        elif lca_rank in DEEP_RANKS:
-            conflict = 0.8
-        else:
-            conflict = 0.7
         return {
             "method": "taxonomy_db",
             "query_taxid": query_taxid,
             "hit_taxid": hit_taxid_val,
             "lca_rank": lca_rank,
             "same_superkingdom": same_superkingdom,
-            "conflict_score": conflict,
         }
 
 
@@ -387,20 +351,17 @@ def compare_species_name_heuristic(query_name: str, hit_name: str) -> Optional[D
             "method": "name_heuristic",
             "lca_rank": "species",
             "same_superkingdom": pandas.NA,
-            "conflict_score": 0.0,
         }
     if len(qparts) >= 1 and len(hparts) >= 1 and qparts[0] == hparts[0]:
         return {
             "method": "name_heuristic",
             "lca_rank": "genus",
             "same_superkingdom": pandas.NA,
-            "conflict_score": 0.15,
         }
     return {
         "method": "name_heuristic",
         "lca_rank": "genus_mismatch",
         "same_superkingdom": pandas.NA,
-        "conflict_score": 0.75,
     }
 
 
@@ -536,8 +497,6 @@ def besthit_support_from_leaf_rows(
         "gene_count": 0,
         "taxid_count": 0,
         "method": "",
-        "conflict_mean": numpy.nan,
-        "deep_conflict_fraction": numpy.nan,
         "same_superkingdom_fraction": numpy.nan,
         "lca_rank_mode": "",
         "per_gene": {},
@@ -549,6 +508,7 @@ def besthit_support_from_leaf_rows(
     hit_acc_col = first_present(leaf_rows.columns, ["sprot_best"])
     taxon_col = first_present(leaf_rows.columns, ["taxon"])
     comparisons = []
+    methods = []
     per_gene = {}
     for row in leaf_rows.itertuples(index=False):
         row_dict = row._asdict()
@@ -570,24 +530,22 @@ def besthit_support_from_leaf_rows(
         if hit_taxid_col and str(hit_taxid).strip() not in {"", "nan"}:
             result["taxid_count"] += 1
         comparisons.append(comparison)
+        methods.append(str(comparison.get("method", "")).strip())
         per_gene[gene_id] = {
             "besthit_accession": hit_acc,
             "besthit_organism": hit_org,
             "besthit_taxid": "" if pandas.isna(hit_taxid) else str(hit_taxid),
-            "besthit_conflict_score": comparison.get("conflict_score", numpy.nan),
             "besthit_taxonomy_method": comparison.get("method", ""),
             "besthit_lca_rank": comparison.get("lca_rank", ""),
+            "besthit_same_superkingdom": comparison.get("same_superkingdom", pandas.NA),
         }
     result["per_gene"] = per_gene
     if len(comparisons) == 0:
         return result
-    conflict_scores = [safe_float(c.get("conflict_score", numpy.nan)) for c in comparisons]
     lca_ranks = [str(c.get("lca_rank", "")).strip() for c in comparisons if str(c.get("lca_rank", "")).strip() != ""]
     same_super = [safe_float(c.get("same_superkingdom", numpy.nan)) for c in comparisons if not pandas.isna(c.get("same_superkingdom", numpy.nan))]
-    result["method"] = str(comparisons[0].get("method", ""))
-    result["conflict_mean"] = float(numpy.nanmean(conflict_scores))
-    deep_flags = [1.0 if (str(c.get("lca_rank", "")).strip().lower() in DEEP_RANKS or safe_float(c.get("conflict_score", 0.0), 0.0) >= 0.8) else 0.0 for c in comparisons]
-    result["deep_conflict_fraction"] = float(numpy.nanmean(deep_flags))
+    if len(methods) > 0:
+        result["method"] = Counter(methods).most_common(1)[0][0]
     if len(same_super) > 0:
         result["same_superkingdom_fraction"] = float(numpy.nanmean(same_super))
     if len(lca_ranks) > 0:
@@ -653,83 +611,6 @@ def contamination_support_for_genes(
     return result
 
 
-def score_candidate(evidence: Dict[str, object]) -> Tuple[float, str, List[str]]:
-    score = 0.55
-    reasons = ["generax_transfer"]
-
-    conflict_mean = safe_float(evidence["besthit"].get("conflict_mean", numpy.nan))
-    deep_fraction = safe_float(evidence["besthit"].get("deep_conflict_fraction", numpy.nan))
-    if not math.isnan(conflict_mean):
-        if deep_fraction >= 0.75 or conflict_mean >= 0.75:
-            score += 0.25
-            reasons.append("besthit_taxonomy_deep_conflict")
-        elif deep_fraction >= 0.50 or conflict_mean >= 0.55:
-            score += 0.18
-            reasons.append("besthit_taxonomy_conflict")
-        elif conflict_mean >= 0.30:
-            score += 0.10
-            reasons.append("besthit_taxonomy_moderate_conflict")
-
-    intron_fraction = safe_float(evidence["intron"].get("support_fraction", numpy.nan))
-    if not math.isnan(intron_fraction):
-        if intron_fraction >= 0.50:
-            score += 0.08
-            reasons.append("intron_supported")
-        elif intron_fraction > 0:
-            score += 0.04
-            reasons.append("intron_present")
-
-    expr_fraction = safe_float(evidence["expression"].get("measured_fraction", numpy.nan))
-    expr_corr = safe_float(evidence["expression"].get("clade_corr", numpy.nan))
-    if not math.isnan(expr_fraction):
-        if expr_fraction >= 0.50:
-            score += 0.04
-            reasons.append("expression_detected")
-        elif expr_fraction > 0:
-            score += 0.02
-            reasons.append("expression_partial")
-    if not math.isnan(expr_corr):
-        if expr_corr >= 0.50:
-            score += 0.04
-            reasons.append("expression_conserved")
-        elif expr_corr >= 0.20:
-            score += 0.02
-            reasons.append("expression_weakly_conserved")
-
-    synteny_fraction = safe_float(evidence["synteny"].get("support_fraction", numpy.nan))
-    synteny_mean = safe_float(evidence["synteny"].get("mean_support_score", numpy.nan))
-    if not math.isnan(synteny_fraction):
-        if synteny_fraction >= 0.50 or synteny_mean >= 0.50:
-            score += 0.05
-            reasons.append("synteny_supported")
-        elif synteny_fraction > 0:
-            score += 0.02
-            reasons.append("synteny_partial")
-
-    contamination_fraction = safe_float(evidence["contamination"].get("incompatible_fraction", numpy.nan))
-    if not math.isnan(contamination_fraction):
-        if contamination_fraction >= 0.50:
-            score -= 0.35
-            reasons.append("contamination_conflict")
-        elif contamination_fraction > 0:
-            score -= 0.20
-            reasons.append("contamination_warning")
-        else:
-            score += 0.03
-            reasons.append("contamination_clear")
-
-    score = clamp01(score)
-    if score >= 0.80:
-        confidence = "high"
-    elif score >= 0.65:
-        confidence = "medium"
-    elif score >= 0.45:
-        confidence = "low"
-    else:
-        confidence = "tentative"
-    return score, confidence, reasons
-
-
 def summarize_candidate_branch(
     branch_row: pandas.Series,
     leaf_rows: pandas.DataFrame,
@@ -752,15 +633,11 @@ def summarize_candidate_branch(
         "synteny": synteny_support_from_leaf_rows(matched_leaf_rows),
         "contamination": contamination_support_for_genes(candidate_genes, contamination_by_gene),
     }
-    score, confidence, reasons = score_candidate(evidence)
 
     branch_record = {
         "orthogroup": branch_row.get("orthogroup", ""),
         "branch_id": branch_row.get("branch_id", ""),
         "node_name": branch_row.get("node_name", ""),
-        "hgt_score": score,
-        "hgt_confidence": confidence,
-        "hgt_reason": ";".join(reasons),
         "generax_event": branch_row.get("generax_event", ""),
         "generax_transfer": branch_row.get("generax_transfer", ""),
         "generax_event_parent": branch_row.get("generax_event_parent", ""),
@@ -772,8 +649,6 @@ def summarize_candidate_branch(
         "besthit_gene_count": evidence["besthit"]["gene_count"],
         "besthit_taxid_count": evidence["besthit"]["taxid_count"],
         "besthit_taxonomy_method": evidence["besthit"]["method"],
-        "besthit_conflict_mean": evidence["besthit"]["conflict_mean"],
-        "besthit_deep_conflict_fraction": evidence["besthit"]["deep_conflict_fraction"],
         "besthit_same_superkingdom_fraction": evidence["besthit"]["same_superkingdom_fraction"],
         "besthit_lca_rank_mode": evidence["besthit"]["lca_rank_mode"],
         "intron_measured_gene_count": evidence["intron"]["measured_count"],
@@ -831,15 +706,13 @@ def summarize_candidate_branch(
                 "orthogroup": branch_row.get("orthogroup", ""),
                 "gene_id": gene_id,
                 "gene_taxon": gene_taxon,
-                "top_hgt_branch_id": branch_row.get("branch_id", ""),
-                "top_hgt_score": score,
-                "top_hgt_confidence": confidence,
-                "candidate_branch_count": 1,
-                "candidate_branch_ids": str(branch_row.get("branch_id", "")),
+                "candidate_branch_id": branch_row.get("branch_id", ""),
                 "besthit_accession": besthit_info.get("besthit_accession", ""),
                 "besthit_organism": besthit_info.get("besthit_organism", ""),
                 "besthit_taxid": besthit_info.get("besthit_taxid", ""),
-                "besthit_conflict_score": besthit_info.get("besthit_conflict_score", numpy.nan),
+                "besthit_taxonomy_method": besthit_info.get("besthit_taxonomy_method", ""),
+                "besthit_lca_rank": besthit_info.get("besthit_lca_rank", ""),
+                "besthit_same_superkingdom": besthit_info.get("besthit_same_superkingdom", pandas.NA),
                 "intron_supported": bool(intron_supported.get(gene_id, False)),
                 "expression_measured": bool(expression_measured.get(gene_id, False)),
                 "synteny_support_score": synteny_by_gene.get(gene_id, numpy.nan),
@@ -855,8 +728,8 @@ def aggregate_gene_records(gene_records: pandas.DataFrame) -> pandas.DataFrame:
     if gene_records.empty:
         return empty_frame(GENE_OUTPUT_COLUMNS)
     gene_records = gene_records.sort_values(
-        ["orthogroup", "gene_id", "top_hgt_score", "top_hgt_branch_id"],
-        ascending=[True, True, False, True],
+        ["orthogroup", "gene_id", "candidate_branch_id"],
+        ascending=[True, True, True],
         kind="mergesort",
     ).reset_index(drop=True)
 
@@ -868,15 +741,14 @@ def aggregate_gene_records(gene_records: pandas.DataFrame) -> pandas.DataFrame:
                 "orthogroup": top["orthogroup"],
                 "gene_id": top["gene_id"],
                 "gene_taxon": top.get("gene_taxon", ""),
-                "top_hgt_branch_id": top["top_hgt_branch_id"],
-                "top_hgt_score": top["top_hgt_score"],
-                "top_hgt_confidence": top["top_hgt_confidence"],
-                "candidate_branch_count": int(group["top_hgt_branch_id"].nunique()),
-                "candidate_branch_ids": "; ".join(dict.fromkeys(group["top_hgt_branch_id"].astype(str).tolist())),
+                "candidate_branch_count": int(group["candidate_branch_id"].nunique()),
+                "candidate_branch_ids": "; ".join(dict.fromkeys(group["candidate_branch_id"].astype(str).tolist())),
                 "besthit_accession": top.get("besthit_accession", ""),
                 "besthit_organism": top.get("besthit_organism", ""),
                 "besthit_taxid": top.get("besthit_taxid", ""),
-                "besthit_conflict_score": top.get("besthit_conflict_score", numpy.nan),
+                "besthit_taxonomy_method": top.get("besthit_taxonomy_method", ""),
+                "besthit_lca_rank": top.get("besthit_lca_rank", ""),
+                "besthit_same_superkingdom": top.get("besthit_same_superkingdom", pandas.NA),
                 "intron_supported": top.get("intron_supported", False),
                 "expression_measured": top.get("expression_measured", False),
                 "synteny_support_score": top.get("synteny_support_score", numpy.nan),
@@ -891,28 +763,18 @@ def aggregate_gene_records(gene_records: pandas.DataFrame) -> pandas.DataFrame:
 def aggregate_orthogroup_records(branch_records: pandas.DataFrame, gene_records: pandas.DataFrame) -> pandas.DataFrame:
     if branch_records.empty:
         return empty_frame(ORTHOGROUP_OUTPUT_COLUMNS)
-    sorted_branch = branch_records.sort_values(
-        ["orthogroup", "hgt_score", "branch_id"],
-        ascending=[True, False, True],
-        kind="mergesort",
-    )
+    sorted_branch = branch_records.sort_values(["orthogroup", "branch_id"], ascending=[True, True], kind="mergesort")
     gene_count_by_orthogroup = {}
     if not gene_records.empty:
         gene_count_by_orthogroup = gene_records.groupby("orthogroup")["gene_id"].nunique().to_dict()
     rows = []
     for orthogroup, group in sorted_branch.groupby("orthogroup", sort=False):
-        top = group.iloc[0]
         rows.append(
             {
                 "orthogroup": orthogroup,
                 "hgt_branch_count": int(group["branch_id"].nunique()),
                 "hgt_gene_count": int(gene_count_by_orthogroup.get(orthogroup, 0)),
-                "top_hgt_branch_id": top["branch_id"],
-                "top_hgt_score": float(group["hgt_score"].max()),
-                "top_hgt_confidence": top["hgt_confidence"],
-                "mean_hgt_score": float(group["hgt_score"].mean()),
                 "candidate_branch_ids": "; ".join(dict.fromkeys(group["branch_id"].astype(str).tolist())),
-                "top_hgt_reason": top["hgt_reason"],
             }
         )
     return pandas.DataFrame(rows, columns=ORTHOGROUP_OUTPUT_COLUMNS)
@@ -922,7 +784,9 @@ def main():
     parser = build_arg_parser()
     args = parser.parse_args()
 
-    taxonomy_dbfile = args.taxonomy_dbfile or os.environ.get("GG_TAXONOMY_DBFILE", "")
+    taxonomy_dbfile = os.environ.get("GG_TAXONOMY_DBFILE", "")
+    if args.taxonomy_dbfile is not None:
+        taxonomy_dbfile = args.taxonomy_dbfile
     taxonomy_resolver = TaxonomyResolver(taxonomy_dbfile)
 
     if not os.path.exists(args.dbpath):
@@ -1000,29 +864,23 @@ def main():
                 expression_cols=expression_cols,
                 taxonomy_resolver=taxonomy_resolver,
             )
-            if branch_record["hgt_score"] < args.min_branch_score:
-                continue
             branch_records.append(branch_record)
             gene_records.extend(branch_gene_records)
 
     branch_out = pandas.DataFrame(branch_records, columns=BRANCH_OUTPUT_COLUMNS)
     if not branch_out.empty:
         branch_out = branch_out.sort_values(
-            ["orthogroup", "hgt_score", "branch_id"],
-            ascending=[True, False, True],
+            ["orthogroup", "branch_id"],
+            ascending=[True, True],
             kind="mergesort",
         ).reset_index(drop=True)
-        branch_out["candidate_rank"] = branch_out.groupby("orthogroup").cumcount() + 1
-        branch_out = branch_out.loc[:, ["candidate_rank"] + [col for col in BRANCH_OUTPUT_COLUMNS if col in branch_out.columns]]
-        ordered_cols = ["candidate_rank"] + BRANCH_OUTPUT_COLUMNS
     else:
-        ordered_cols = ["candidate_rank"] + BRANCH_OUTPUT_COLUMNS
-        branch_out = empty_frame(ordered_cols)
+        branch_out = empty_frame(BRANCH_OUTPUT_COLUMNS)
 
     gene_out = aggregate_gene_records(pandas.DataFrame(gene_records))
     orthogroup_out = aggregate_orthogroup_records(branch_out, gene_out)
 
-    write_tsv(branch_out, args.branch_out, ordered_cols)
+    write_tsv(branch_out, args.branch_out, BRANCH_OUTPUT_COLUMNS)
     write_tsv(gene_out, args.gene_out, GENE_OUTPUT_COLUMNS)
     write_tsv(orthogroup_out, args.orthogroup_out, ORTHOGROUP_OUTPUT_COLUMNS)
 

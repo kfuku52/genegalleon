@@ -248,6 +248,81 @@ g_fimo_poly_empty_in <- list(
 g_fimo_poly_empty_out <- add_fimo_column(g_fimo_poly_empty_in, list(font_size = 6, margins = c(0, 0, 0, 0)), qname = "fimo", xmax = 100, qvalue = 0.01)
 if (!("fimo" %in% names(g_fimo_poly_empty_out))) stop("add_fimo_column should create panel even when polygon data are empty.")
 
+# 8e) add_heatmap_column: optional fill label is retained.
+g_heatmap_in <- list(
+  tree = list(
+    data = data.frame(
+      isTip = c(TRUE, TRUE),
+      label = c("g1", "g2"),
+      y = c(1, 2),
+      tiplab_color = c("black", "black"),
+      stringsAsFactors = FALSE
+    )
+  )
+)
+args_heat <- list(font_size = 6, margins = c(0, 0, 0, 0))
+df_trait_heat <- data.frame(hgt_Cand = c(1, 0), row.names = c("g1", "g2"))
+g_heatmap_out <- add_heatmap_column(g_heatmap_in, args_heat, df_trait_heat, fill_label = "HGT evidence")
+if (g_heatmap_out$heatmap$labels$fill != "HGT evidence") stop("add_heatmap_column should retain the requested fill label.")
+
+# 8f) add_text_column: values are truncated and panel is created.
+g_text_in <- list(
+  tree = list(
+    data = data.frame(
+      isTip = c(TRUE, TRUE),
+      label = c("g1", "g2"),
+      y = c(1, 2),
+      tiplab_color = c("black", "black"),
+      besthit = c("Escherichia coli strain K12", "Bacillus subtilis"),
+      stringsAsFactors = FALSE
+    )
+  )
+)
+args_text <- list(font_size = 6, font_size_factor = 0.352777778, margins = c(0, 0, 0, 0))
+g_text_out <- add_text_column(g_text_in, args_text, "text,besthit,Best hit", "besthit", "Best hit", 12)
+if (!("text,besthit,Best hit" %in% names(g_text_out))) stop("add_text_column should create a text panel.")
+if (!any(grepl("\\.\\.\\.$", g_text_out[["text,besthit,Best hit"]]$data$plot_value))) stop("add_text_column should truncate long values.")
+
+# 8f2) add_categorical_column: categorical tiles should render missing values with fallback labels.
+g_cat_in <- list(
+  tree = list(
+    data = data.frame(
+      isTip = c(TRUE, TRUE),
+      label = c("g1", "g2"),
+      y = c(1, 2),
+      tiplab_color = c("black", "black"),
+      besthit_lca_rank_display = c("species", ""),
+      stringsAsFactors = FALSE
+    )
+  )
+)
+g_cat_out <- add_categorical_column(
+  g_cat_in,
+  list(font_size = 6, margins = c(0, 0, 0, 0)),
+  "categorical,besthit_lca_rank_display,Hit LCA",
+  "besthit_lca_rank_display",
+  "Hit LCA",
+  "-"
+)
+if (!("categorical,besthit_lca_rank_display,Hit LCA" %in% names(g_cat_out))) stop("add_categorical_column should create a categorical panel.")
+
+# 8g) add_meme_column: MEME XML motifs are parsed into a summary panel.
+meme_xml <- tempfile(fileext = ".xml")
+writeLines(
+  c(
+    "<MEME>",
+    "  <motifs>",
+    "    <motif id=\"motif_1\" name=\"MotifAlpha\" alt=\"TF_ALPHA\" width=\"10\" sites=\"5\" e_value=\"1e-6\"/>",
+    "    <motif id=\"motif_2\" name=\"MotifBeta\" width=\"8\" sites=\"3\" e_value=\"2e-4\"/>",
+    "  </motifs>",
+    "</MEME>"
+  ),
+  meme_xml
+)
+g_meme_out <- add_meme_column(g_in, args_text, path_meme = meme_xml, max_motif = 8)
+if (!("meme" %in% names(g_meme_out))) stop("add_meme_column should create a MEME panel when motifs are present.")
+if (!any(grepl("TF_ALPHA", g_meme_out[["meme"]]$data$label, fixed = TRUE))) stop("add_meme_column should prefer motif alt/name labels from MEME XML.")
+
 # 8d) add_fimo_column: ncpu path should be equivalent to serial output.
 g_fimo_parallel_in <- list(
   tree = list(

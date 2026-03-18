@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import sqlite3
 import subprocess
 import sys
@@ -81,7 +82,7 @@ def write_branch_db(db_path: Path) -> None:
         branch.to_sql("branch", conn, index=False)
 
 
-def run_script(tmp_path: Path, contamination_dir: Path | None = None, min_branch_score: float = 0.45):
+def run_script(tmp_path: Path, contamination_dir: Path | None = None):
     db_path = tmp_path / "gg_orthogroup.db"
     write_branch_db(db_path)
     branch_out = tmp_path / "hgt_branch_candidates.tsv"
@@ -98,8 +99,6 @@ def run_script(tmp_path: Path, contamination_dir: Path | None = None, min_branch
         str(gene_out),
         "--orthogroup_out",
         str(orthogroup_out),
-        "--min_branch_score",
-        str(min_branch_score),
     ]
     if contamination_dir is not None:
         cmd.extend(["--dir_contamination_tsv", str(contamination_dir)])
@@ -112,24 +111,57 @@ def run_script(tmp_path: Path, contamination_dir: Path | None = None, min_branch
     )
 
 
+def run_script_with_env(tmp_path: Path, extra_args: list[str], env_overrides: dict[str, str]):
+    db_path = tmp_path / "gg_orthogroup.db"
+    write_branch_db(db_path)
+    branch_out = tmp_path / "hgt_branch_candidates.tsv"
+    gene_out = tmp_path / "hgt_gene_candidates.tsv"
+    orthogroup_out = tmp_path / "hgt_orthogroup_summary.tsv"
+    cmd = [
+        sys.executable,
+        str(SCRIPT_PATH),
+        "--dbpath",
+        str(db_path),
+        "--branch_out",
+        str(branch_out),
+        "--gene_out",
+        str(gene_out),
+        "--orthogroup_out",
+        str(orthogroup_out),
+        *extra_args,
+    ]
+    env = os.environ.copy()
+    env.update(env_overrides)
+    completed = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
+    assert completed.returncode == 0, completed.stderr
+    return pandas.read_csv(branch_out, sep="\t")
+
+
 def test_score_hgt_candidates_emits_branch_gene_and_orthogroup_outputs(tmp_path):
     branch_out, gene_out, orthogroup_out = run_script(tmp_path)
 
     assert branch_out.shape[0] == 1
     row = branch_out.iloc[0]
-    assert row["candidate_rank"] == 1
     assert row["orthogroup"] == "OG0001"
     assert row["branch_id"] == 3
     assert row["matched_leaf_count"] == 2
     assert row["besthit_taxonomy_method"] in {"taxonomy_db", "name_heuristic"}
-    assert row["hgt_score"] > 0.9
-    assert row["hgt_confidence"] == "high"
+    assert isinstance(row["besthit_lca_rank_mode"], str)
+    assert row["besthit_lca_rank_mode"] != ""
+    assert "hgt_score" not in branch_out.columns
+    assert "hgt_confidence" not in branch_out.columns
+    assert "hgt_reason" not in branch_out.columns
 
     assert set(gene_out["gene_id"].tolist()) == {"geneA", "geneB"}
-    assert set(gene_out["top_hgt_branch_id"].tolist()) == {3}
+    assert gene_out["candidate_branch_count"].eq(1).all()
+    assert set(gene_out["candidate_branch_ids"].astype(str).tolist()) == {"3"}
+    assert "besthit_conflict_score" not in gene_out.columns
     assert orthogroup_out.loc[0, "orthogroup"] == "OG0001"
     assert orthogroup_out.loc[0, "hgt_branch_count"] == 1
     assert orthogroup_out.loc[0, "hgt_gene_count"] == 2
+    assert str(orthogroup_out.loc[0, "candidate_branch_ids"]) == "3"
+    assert "top_hgt_score" not in orthogroup_out.columns
+    assert "top_hgt_confidence" not in orthogroup_out.columns
 
 
 def test_score_hgt_candidates_applies_contamination_penalty(tmp_path):
@@ -143,14 +175,24 @@ def test_score_hgt_candidates_applies_contamination_penalty(tmp_path):
         encoding="utf-8",
     )
 
-    branch_out, gene_out, _ = run_script(tmp_path, contamination_dir=contamination_dir, min_branch_score=0.0)
+    branch_out, gene_out, _ = run_script(tmp_path, contamination_dir=contamination_dir)
 
     assert branch_out.shape[0] == 1
     row = branch_out.iloc[0]
     assert row["contamination_incompatible_fraction"] == 1.0
-    assert "contamination_conflict" in row["hgt_reason"]
-    assert row["hgt_score"] < 0.7
     assert str(row["contamination_top_lca_taxid"]) == "562"
     assert row["contamination_top_lca_sciname"] == "Escherichia coli"
     assert gene_out["contamination_is_compatible_lineage"].eq(False).all()
     assert set(gene_out["contamination_lca_sciname"].tolist()) == {"Escherichia coli"}
+
+
+def test_score_hgt_candidates_explicit_empty_taxonomy_dbfile_overrides_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("GG_TAXONOMY_DBFILE", "/nonexistent/taxa.sqlite")
+    branch_out = run_script_with_env(
+        tmp_path,
+        extra_args=["--taxonomy_dbfile", ""],
+        env_overrides={"GG_TAXONOMY_DBFILE": "/nonexistent/taxa.sqlite"},
+    )
+
+    assert branch_out.shape[0] == 1
+    assert branch_out.loc[0, "besthit_taxonomy_method"] == "name_heuristic"

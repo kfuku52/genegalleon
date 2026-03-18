@@ -44,8 +44,24 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     entrypoint_text = HGT_ENTRYPOINT.read_text(encoding="utf-8")
     core_text = HGT_CORE.read_text(encoding="utf-8")
 
+    assert 'run_hgt_plot=1' in entrypoint_text
     assert 'hgt_contamination_dir=""' in entrypoint_text
+    assert 'hgt_taxonomy_flow_rank="phylum"' in entrypoint_text
+    assert 'hgt_tree_plot_width="24"' in entrypoint_text
+    assert "hgt_min_branch_score" not in entrypoint_text
+    assert 'run_hgt_plot="${run_hgt_plot:-1}"' in core_text
+    assert 'hgt_tree_plot_width="${hgt_tree_plot_width:-24}"' in core_text
     assert 'hgt_contamination_dir="${hgt_contamination_dir:-}"' in core_text
     assert 'default_hgt_contamination_dir="${gg_workspace_output_dir}/species_cds_contamination_removal_tsv"' in core_text
     assert 'if [[ -n "${hgt_contamination_dir}" ]]; then' in core_text
     assert '--dir_contamination_tsv "${contamination_arg}"' in core_text
+    assert "--min_branch_score" not in core_text
+    assert 'python "${gg_support_dir}/plot_hgt_summary.py"' in core_text
+    assert 'python "${gg_support_dir}/annotate_hgt_tree_plot.py"' in core_text
+    assert "mapfile -t hgt_orthogroups" not in core_text
+    assert 'while IFS= read -r og_id; do' in core_text
+    assert '--panel4="heatmap,no,abs,_,hgt_,HGT evidence"' in core_text
+    assert '--panel15="meme,${file_og_meme}"' in core_text
+    assert '--panel8="categorical,besthit_lca_rank_display,Hit LCA,-"' in core_text
+    assert '--panel9="signal_peptide"' in core_text
+    assert '--panel10="transmembrane_domain"' in core_text

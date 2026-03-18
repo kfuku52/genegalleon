@@ -75,10 +75,15 @@ gg_entrypoint_name="gg_hgt_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
-run_hgt_eval=1 # Score GeneRax-first HGT candidates from gg_orthogroup.db.
-hgt_min_branch_score="0.45" # Minimum composite HGT score retained in the branch candidate table.
+run_hgt_eval=1 # Summarize GeneRax-first HGT candidate evidence from gg_orthogroup.db.
+run_hgt_plot=1 # Generate HGT overview, taxonomy-flow, and per-orthogroup HGT tree plots.
 hgt_use_taxonomy_db=1 # Resolve UniProt best-hit taxonomic distances with the local ETE taxonomy DB when available.
 hgt_contamination_dir="" # Optional directory containing species_cds_contamination_removal_tsv files; empty auto-detects the workspace default.
+hgt_taxonomy_flow_rank="phylum" # Taxonomic rank used to collapse recipient/best-hit lineages in the flow plot.
+hgt_taxonomy_flow_max_categories=12 # Maximum recipient and best-hit categories retained before collapsing to Other.
+hgt_tree_plot_width="24" # Width in inches for HGT-specific tree plot PDFs.
+hgt_promoter_bp=2000 # Promoter length used when re-rendering FIMO panels in HGT tree plots.
+hgt_fimo_qvalue="0.05" # FIMO q-value threshold used when re-rendering HGT tree plots.
 
 ### End: Modify this block to tailor your analysis ###
 

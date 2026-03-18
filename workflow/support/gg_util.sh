@@ -2752,7 +2752,7 @@ gg_prepare_cmd_runtime() {
 		gg_activate_conda_env "${conda_env}"
 	fi
 	if [[ "${set_unlimited_stack}" -eq 1 ]]; then
-		ulimit -s unlimited
+		ulimit -s unlimited 2>/dev/null || true
 	fi
 	if [[ "${print_start_message}" -eq 1 ]]; then
 		print_gg_container_starting_message
@@ -2793,6 +2793,8 @@ gg_initialize_conda_shell() {
 
 gg_activate_conda_env() {
 	local conda_env=${1:-}
+	local had_nounset=0
+	local activate_status=0
 	if [[ -z "${conda_env}" ]]; then
 		return 0
 	fi
@@ -2804,15 +2806,32 @@ gg_activate_conda_env() {
 		echo "gg_activate_conda_env: conda command is unavailable after initialization." >&2
 		return 1
 	fi
+	if [[ $- == *u* ]]; then
+		had_nounset=1
+		set +u
+	fi
 	conda activate "${conda_env}"
+	activate_status=$?
+	if [[ ${had_nounset} -eq 1 ]]; then
+		set -u
+	fi
+	return "${activate_status}"
 }
 
 gg_deactivate_conda_env() {
+	local had_nounset=0
 	if [[ "${GG_CONDA_SHELL_INITIALIZED:-0}" -ne 1 ]]; then
 		return 0
 	fi
 	if declare -F conda >/dev/null 2>&1; then
+		if [[ $- == *u* ]]; then
+			had_nounset=1
+			set +u
+		fi
 		conda deactivate >/dev/null 2>&1 || true
+		if [[ ${had_nounset} -eq 1 ]]; then
+			set -u
+		fi
 	fi
 }
 

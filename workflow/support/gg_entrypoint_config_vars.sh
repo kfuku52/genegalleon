@@ -120,9 +120,14 @@ EOF
     gg_hgt_entrypoint.sh)
       cat <<'EOF'
 hgt_contamination_dir
-hgt_min_branch_score
+hgt_fimo_qvalue
+hgt_promoter_bp
+hgt_taxonomy_flow_max_categories
+hgt_taxonomy_flow_rank
+hgt_tree_plot_width
 hgt_use_taxonomy_db
 run_hgt_eval
+run_hgt_plot
 EOF
       ;;
     gg_genome_annotation_entrypoint.sh)
