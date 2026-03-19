@@ -189,6 +189,13 @@ fi
 if [[ -z "${trait_download_dir}" ]]; then
   trait_download_dir="${gg_workspace_downloads_dir}/trait_datasets"
 fi
+if [[ -z "${download_manifest}" ]]; then
+  default_download_manifest="${gg_workspace_input_dir}/input_generation/download_plan.xlsx"
+  if [[ -s "${default_download_manifest}" ]]; then
+    download_manifest="${default_download_manifest}"
+    echo "Auto-selected download_manifest: ${download_manifest}"
+  fi
+fi
 
 file_multispecies_summary="${input_generation_root}/annotation_summary/annotation_summary.tsv"
 
@@ -268,6 +275,25 @@ PY
     {n++}
     END {print n+0}
   ' "${manifest_path}"
+}
+
+ensure_selected_download_manifest_has_rows() {
+  local manifest_rows=""
+  if [[ -z "${download_manifest}" ]]; then
+    return 0
+  fi
+  manifest_rows="$(manifest_data_row_count "${download_manifest}")"
+  if [[ ${manifest_rows} -gt 0 ]]; then
+    return 0
+  fi
+  echo "Download manifest has no data rows: ${download_manifest}"
+  if [[ ${download_manifest_explicit} -eq 1 ]]; then
+    echo "Explicitly provided download_manifest is empty."
+    return 1
+  fi
+  echo "Ignoring empty auto-selected download_manifest."
+  download_manifest=""
+  return 0
 }
 
 read_stats_json_field() {
@@ -367,6 +393,15 @@ count_nonhidden_matching_files() {
     return 0
   fi
   find "${search_dir}" -maxdepth 1 -type f ! -name '.*' -name "${pattern}" | wc -l | awk '{print $1}'
+}
+
+list_nonhidden_matching_files() {
+  local search_dir=$1
+  shift
+  if [[ ! -d "${search_dir}" ]]; then
+    return 0
+  fi
+  find "${search_dir}" -maxdepth 1 -type f ! -name '.*' \( "$@" \) | sort
 }
 
 task_plan_task_count() {
@@ -549,7 +584,6 @@ clean_input_generation_shards() {
 
 run_format_stage_single() {
   local task="Format species inputs"
-  local manifest_rows=""
   local format_stats_file=""
   local cmd=()
   local cmd_status=0
@@ -566,33 +600,24 @@ run_format_stage_single() {
   gg_step_start "${task}"
   stage_format_status="running"
 
-  if [[ -n "${download_manifest}" ]]; then
-    manifest_rows="$(manifest_data_row_count "${download_manifest}")"
-    if [[ ${manifest_rows} -eq 0 ]]; then
-      echo "Download manifest has no data rows: ${download_manifest}"
-      if [[ ${download_manifest_explicit} -eq 1 ]]; then
-        echo "Explicitly provided download_manifest is empty."
-        stage_format_status="failed"
-        exit 1
-      fi
-      echo "Ignoring empty auto-selected download_manifest."
-      download_manifest=""
-    fi
+  if ! ensure_selected_download_manifest_has_rows; then
+    stage_format_status="failed"
+    exit 1
   fi
 
   if [[ -z "${download_manifest}" && -z "${input_dir}" ]]; then
     while IFS= read -r path; do
       [[ -n "${path}" ]] || continue
       existing_cds+=( "${path}" )
-    done < <(find "${species_cds_dir}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
+    done < <(list_nonhidden_matching_files "${species_cds_dir}" -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz")
     while IFS= read -r path; do
       [[ -n "${path}" ]] || continue
       existing_gff+=( "${path}" )
-    done < <(find "${species_gff_dir}" -maxdepth 1 -type f ! -name '.*' \( -name "*.gff" -o -name "*.gff.gz" -o -name "*.gff3" -o -name "*.gff3.gz" -o -name "*.gtf" -o -name "*.gtf.gz" \) | sort)
+    done < <(list_nonhidden_matching_files "${species_gff_dir}" -name "*.gff" -o -name "*.gff.gz" -o -name "*.gff3" -o -name "*.gff3.gz" -o -name "*.gtf" -o -name "*.gtf.gz")
     while IFS= read -r path; do
       [[ -n "${path}" ]] || continue
       existing_genome+=( "${path}" )
-    done < <(find "${species_genome_dir}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
+    done < <(list_nonhidden_matching_files "${species_genome_dir}" -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz")
     if [[ ${#existing_cds[@]} -gt 0 || ${#existing_gff[@]} -gt 0 || ${#existing_genome[@]} -gt 0 ]]; then
       echo "Skipping ${task} because no input source was provided and existing species inputs were detected."
       stage_format_status="skipped"
@@ -694,15 +719,15 @@ run_validate_stage() {
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
     cds_files+=( "${path}" )
-  done < <(find "${species_cds_dir}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
+  done < <(list_nonhidden_matching_files "${species_cds_dir}" -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz")
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
     gff_files+=( "${path}" )
-  done < <(find "${species_gff_dir}" -maxdepth 1 -type f ! -name '.*' \( -name "*.gff" -o -name "*.gff.gz" -o -name "*.gff3" -o -name "*.gff3.gz" -o -name "*.gtf" -o -name "*.gtf.gz" \) | sort)
+  done < <(list_nonhidden_matching_files "${species_gff_dir}" -name "*.gff" -o -name "*.gff.gz" -o -name "*.gff3" -o -name "*.gff3.gz" -o -name "*.gtf" -o -name "*.gtf.gz")
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
     genome_files+=( "${path}" )
-  done < <(find "${species_genome_dir}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
+  done < <(list_nonhidden_matching_files "${species_genome_dir}" -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz")
   num_species_cds=${#cds_files[@]}
   num_species_gff=${#gff_files[@]}
   num_species_genome=${#genome_files[@]}
@@ -1090,7 +1115,6 @@ run_trait_stage() {
 run_array_prepare_mode() {
   local task="Prepare input-generation array task plan"
   local effective_input_dir=""
-  local manifest_rows=""
   local cmd=()
   local cmd_status=0
   local expected_tasks=0
@@ -1102,13 +1126,12 @@ run_array_prepare_mode() {
   gg_step_start "${task}"
   stage_format_status="running"
 
+  if ! ensure_selected_download_manifest_has_rows; then
+    stage_format_status="failed"
+    exit 1
+  fi
+
   if [[ -n "${download_manifest}" ]]; then
-    manifest_rows="$(manifest_data_row_count "${download_manifest}")"
-    if [[ ${manifest_rows} -eq 0 ]]; then
-      echo "Download manifest has no data rows: ${download_manifest}"
-      stage_format_status="failed"
-      exit 1
-    fi
     cmd=(python "${gg_support_dir}/format_species_inputs.py")
     cmd+=(--provider "${provider}")
     cmd+=(--download-manifest "${download_manifest}")

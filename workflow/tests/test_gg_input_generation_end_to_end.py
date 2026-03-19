@@ -6,6 +6,8 @@ import subprocess
 import sys
 import textwrap
 
+from openpyxl import Workbook
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORE_PATH = REPO_ROOT / "workflow" / "core" / "gg_input_generation_core.sh"
@@ -37,6 +39,49 @@ def _write_direct_species_fixture(root: Path) -> Path:
         )
         _write_text(species_dir / f"{species}.genome.fa", ">chr1\nATGAAATTT\n")
     return input_dir
+
+
+def _to_file_url(path: Path) -> str:
+    return path.resolve().as_uri()
+
+
+def _write_default_download_manifest(workspace: Path, input_dir: Path) -> Path:
+    manifest_path = workspace / "input" / "input_generation" / "download_plan.xlsx"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "download_plan"
+    headers = (
+        "provider",
+        "id",
+        "species_key",
+        "cds_url",
+        "gff_url",
+        "genome_url",
+        "cds_filename",
+        "gff_filename",
+        "genome_filename",
+    )
+    sheet.append(list(headers))
+    for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+        species_dir = input_dir / species
+        sheet.append(
+            [
+                "direct",
+                f"{species.lower()}_direct",
+                species,
+                _to_file_url(species_dir / f"{species}.cds.fa"),
+                _to_file_url(species_dir / f"{species}.gff"),
+                _to_file_url(species_dir / f"{species}.genome.fa"),
+                f"{species}.direct.cds.fa",
+                f"{species}.direct.gff",
+                f"{species}.direct.genome.fa",
+            ]
+        )
+    workbook.save(manifest_path)
+    workbook.close()
+    return manifest_path
 
 
 def _write_minimal_ete_taxonomy_db(workspace: Path) -> None:
@@ -228,7 +273,7 @@ def _install_fake_toolchain(root: Path) -> Path:
     return bin_dir
 
 
-def _core_env(workspace: Path, input_dir: Path, fake_bin: Path, mode: str, task_id: int | None = None) -> dict[str, str]:
+def _core_env(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None) -> dict[str, str]:
     env = {
         "HOME": os.environ["HOME"],
         "PATH": os.pathsep.join([str(fake_bin), str(Path(sys.executable).parent), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
@@ -236,7 +281,7 @@ def _core_env(workspace: Path, input_dir: Path, fake_bin: Path, mode: str, task_
         "GG_TASK_CPUS": "1",
         "gg_workspace_dir": str(workspace),
         "provider": "direct",
-        "input_dir": str(input_dir),
+        "input_dir": str(input_dir) if input_dir is not None else "",
         "input_generation_mode": mode,
         "run_format_inputs": "1",
         "run_validate_inputs": "1",
@@ -276,7 +321,7 @@ def _core_env(workspace: Path, input_dir: Path, fake_bin: Path, mode: str, task_
     return env
 
 
-def _run_core(workspace: Path, input_dir: Path, fake_bin: Path, mode: str, task_id: int | None = None) -> subprocess.CompletedProcess[str]:
+def _run_core(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None) -> subprocess.CompletedProcess[str]:
     completed = subprocess.run(
         ["bash", str(CORE_PATH)],
         cwd=REPO_ROOT,
@@ -290,7 +335,7 @@ def _run_core(workspace: Path, input_dir: Path, fake_bin: Path, mode: str, task_
     return completed
 
 
-def _run_core_async(workspace: Path, input_dir: Path, fake_bin: Path, mode: str, task_id: int) -> subprocess.Popen[str]:
+def _run_core_async(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int) -> subprocess.Popen[str]:
     return subprocess.Popen(
         ["bash", str(CORE_PATH)],
         cwd=REPO_ROOT,
@@ -355,6 +400,38 @@ def test_gg_input_generation_single_mode_end_to_end(tmp_path: Path):
     _assert_expected_outputs(workspace / "output" / "input_generation", expected_last_mode="single")
 
 
+def test_gg_input_generation_single_mode_auto_selects_default_manifest(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "manifest_workspace"
+    manifest_path = _write_default_download_manifest(workspace, input_dir)
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    completed = _run_core(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="single")
+
+    assert "Auto-selected download_manifest:" in completed.stdout
+    output_root = workspace / "output" / "input_generation"
+    summary_dir = output_root / "annotation_summary"
+    assert (output_root / "species_cds" / "Arabidopsis_thaliana_direct.cds.fa.gz").exists()
+    assert (output_root / "species_cds" / "Oryza_sativa_direct.cds.fa.gz").exists()
+    assert (output_root / "species_gff" / "Arabidopsis_thaliana_direct.gff.gz").exists()
+    assert (output_root / "species_gff" / "Oryza_sativa_direct.gff.gz").exists()
+    assert (output_root / "species_genome" / "Arabidopsis_thaliana_direct.genome.fa.gz").exists()
+    assert (output_root / "species_genome" / "Oryza_sativa_direct.genome.fa.gz").exists()
+    assert (output_root / "species_cds_busco_full" / "Arabidopsis_thaliana.busco.full.tsv").exists()
+    assert (output_root / "species_cds_busco_full" / "Oryza_sativa.busco.full.tsv").exists()
+    assert (summary_dir / "annotation_summary.tsv").exists()
+    assert (summary_dir / "busco_cds.pdf").exists()
+    assert (summary_dir / "busco_cds.svg").exists()
+
+    runs = _read_tsv_rows(output_root / "gg_input_generation_runs.tsv")
+    assert runs[-1]["input_generation_mode"] == "single"
+    assert runs[-1]["stage_species_busco_status"] == "ok"
+    assert runs[-1]["stage_multispecies_summary_status"] == "ok"
+    assert runs[-1]["download_manifest"] == str(manifest_path)
+
+
 def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_path: Path):
     input_dir = _write_direct_species_fixture(tmp_path)
     workspace = tmp_path / "array_workspace"
@@ -374,3 +451,24 @@ def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_pat
     _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_finalize")
 
     _assert_expected_outputs(workspace / "output" / "input_generation", expected_last_mode="array_finalize")
+
+
+def test_gg_input_generation_missing_input_dirs_do_not_emit_find_errors(tmp_path: Path):
+    workspace = tmp_path / "missing_inputs_workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    completed = subprocess.run(
+        ["bash", str(CORE_PATH)],
+        cwd=REPO_ROOT,
+        env=_core_env(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="single"),
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "No such file or directory" not in completed.stderr
+    assert "No input source was specified for formatting." in completed.stdout
+    assert "Set one of input_dir / download_manifest." in completed.stdout
