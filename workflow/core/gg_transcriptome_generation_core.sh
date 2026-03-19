@@ -322,6 +322,8 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
     } | sed -e "s/\t\t\tno\t/\tyes\tyes\tno\t/g" > "./metadata.tsv"
     if [[ $(wc -l < "./metadata.tsv") -le 1 ]]; then
       echo "No metadata rows matched species '${sp_space}' in ./metadata/metadata.tsv. Exiting."
+      echo "If the accession exists in SRA but was excluded by the Entrez strategy clause, relax amalgkit_sra_strategy_query or set it empty to disable strategy filtering."
+      echo 'If the run is small-RNA/miRNA rather than transcriptome assembly input, prefer a different accession or provide explicit metadata/FASTQ inputs instead of mode_transcriptome_assembly="sraid".'
       exit 1
     fi
 

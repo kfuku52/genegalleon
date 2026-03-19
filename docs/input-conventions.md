@@ -81,6 +81,7 @@ Accepted forms:
 - `mode_transcriptome_assembly="sraid"`
   - input: `workspace/input/query_sra_id/GENUS_SPECIES.txt`
   - one SRA/BioProject ID per line
+  - by default, GeneGalleon appends `amalgkit_sra_strategy_query` to keep transcriptome-oriented SRA strategies (`RNA-seq`, `EST`, `CLONE`); set that variable empty or broaden it if you intentionally need other strategies
 - `mode_transcriptome_assembly="fastq"`
   - input: `workspace/input/species_rnaseq/GENUS_SPECIES/*.fastq.gz`
 - `mode_transcriptome_assembly="metadata"`
