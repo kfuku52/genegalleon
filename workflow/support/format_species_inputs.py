@@ -192,6 +192,7 @@ DEFAULT_INSECTBASE_API_BASE_URL = "https://www.insect-genome.com/api/genome"
 NCBI_DATASETS_INCLUDE_BY_LABEL = {
     "CDS": "CDS_FASTA",
     "GFF": "GENOME_GFF",
+    "GBFF": "GENOME_GBFF",
     "GENOME": "GENOME_FASTA",
 }
 DOWNLOAD_LABELS = ("CDS", "GFF", "GENOME")
@@ -2252,15 +2253,18 @@ def resolve_ncbi_download_urls_from_id(source_id, timeout, ncbi_source="auto"):
 
     cds_filename = "{}_cds_from_genomic.fna.gz".format(assembly_dir_name)
     gff_filename = "{}_genomic.gff.gz".format(assembly_dir_name)
+    gbff_filename = "{}_genomic.gbff.gz".format(assembly_dir_name)
     genome_filename = "{}_genomic.fna.gz".format(assembly_dir_name)
     species_key = infer_ncbi_species_key_from_doc(doc, accession)
     return {
         "species_key": species_key,
         "cds_url": "{}/{}".format(normalized_ftp_dir, cds_filename),
         "gff_url": "{}/{}".format(normalized_ftp_dir, gff_filename),
+        "gbff_url": "{}/{}".format(normalized_ftp_dir, gbff_filename),
         "genome_url": "{}/{}".format(normalized_ftp_dir, genome_filename),
         "cds_filename": cds_filename,
         "gff_filename": gff_filename,
+        "gbff_filename": gbff_filename,
         "genome_filename": genome_filename,
         "ncbi_source_db": selected_source,
     }
@@ -2291,6 +2295,8 @@ def pick_ncbi_datasets_member_name(member_names, label):
         suffixes = ("/cds_from_genomic.fna", "_cds_from_genomic.fna")
     elif label == "GFF":
         suffixes = ("/genomic.gff", "_genomic.gff", "/genomic.gff3", "_genomic.gff3")
+    elif label == "GBFF":
+        suffixes = ("/genomic.gbff", "_genomic.gbff", "/genomic.gbff3", "_genomic.gbff3")
     elif label == "GENOME":
         suffixes = ("/genomic.fna", "_genomic.fna", "/genomic.fa", "_genomic.fa")
     else:
@@ -2968,6 +2974,7 @@ def execute_download_target_job(
     local_warnings = []
     local_errors = []
     downloaded = 0
+    failed = []
 
     sem = provider_semaphores.get(provider)
     if sem is None:
@@ -2978,7 +2985,7 @@ def execute_download_target_job(
             local_warnings.append(
                 "[download:{}] {} {} already exists. Skipping: {}".format(provider, species_key, label, target)
             )
-            return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded}
+            return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded, "failed": failed}
 
         try:
             did_download = download_url_to_file(
@@ -3024,22 +3031,28 @@ def execute_download_target_job(
                                 provider, species_key, label, source_id
                             )
                         )
-                        return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded}
+                        return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded, "failed": failed}
                 except Exception as fallback_error:
                     fallback_exc = fallback_error
             if fallback_exc is None:
-                local_errors.append(
-                    "[download:{}] failed {} {} from {} -> {} ({})".format(
-                        provider, species_key, label, url, target, exc
-                    )
+                failed.append(
+                    {
+                        "row_id": job.get("row_id"),
+                        "message": "[download:{}] failed {} {} from {} -> {} ({})".format(
+                            provider, species_key, label, url, target, exc
+                        ),
+                    }
                 )
             else:
-                local_errors.append(
-                    "[download:{}] failed {} {} from {} -> {} ({}) ; fallback datasets failed ({})".format(
-                        provider, species_key, label, url, target, exc, fallback_exc
-                    )
+                failed.append(
+                    {
+                        "row_id": job.get("row_id"),
+                        "message": "[download:{}] failed {} {} from {} -> {} ({}) ; fallback datasets failed ({})".format(
+                            provider, species_key, label, url, target, exc, fallback_exc
+                        ),
+                    }
                 )
-    return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded}
+    return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded, "failed": failed}
 
 
 def download_from_manifest(
@@ -3063,6 +3076,8 @@ def download_from_manifest(
     resolved_fieldnames = resolved_manifest_fieldnames(rows)
     lock_stale_seconds = resolve_download_lock_stale_seconds()
     download_jobs = []
+    failed_downloads = []
+    row_target_paths = {}
 
     if len(rows) == 0:
         errors.append("Download manifest is empty: {}".format(manifest_path))
@@ -3304,6 +3319,11 @@ def download_from_manifest(
             targets.append(("GBFF", gbff_url, raw_dir / gbff_filename, gbff_archive_member))
         if genome_url != "":
             targets.append(("GENOME", genome_url, raw_dir / genome_filename, genome_archive_member))
+        row_target_paths[i] = {
+            "provider": provider,
+            "species_key": species_key,
+            "paths": {label: target for label, _url, target, _archive_member in targets},
+        }
         for label, url, target, archive_member in targets:
             if target.exists() and target.stat().st_size > 0 and not overwrite:
                 warnings.append(
@@ -3317,6 +3337,7 @@ def download_from_manifest(
                 continue
             download_jobs.append(
                 {
+                    "row_id": i,
                     "provider": provider,
                     "source_id": source_id,
                     "species_key": species_key,
@@ -3357,6 +3378,23 @@ def download_from_manifest(
                 warnings.extend(result.get("warnings", []))
                 errors.extend(result.get("errors", []))
                 downloaded += int(result.get("downloaded", 0))
+                failed_downloads.extend(result.get("failed", []))
+
+    for failure in failed_downloads:
+        row_info = row_target_paths.get(failure.get("row_id"), {})
+        paths = row_info.get("paths", {})
+        cds_ok = paths.get("CDS") is not None and paths["CDS"].exists() and paths["CDS"].stat().st_size > 0
+        gff_ok = paths.get("GFF") is not None and paths["GFF"].exists() and paths["GFF"].stat().st_size > 0
+        gbff_ok = paths.get("GBFF") is not None and paths["GBFF"].exists() and paths["GBFF"].stat().st_size > 0
+        genome_ok = paths.get("GENOME") is not None and paths["GENOME"].exists() and paths["GENOME"].stat().st_size > 0
+        if cds_ok or gbff_ok or (gff_ok and genome_ok):
+            warnings.append(
+                "{} ; continuing because a usable source bundle is available".format(
+                    failure.get("message", "")
+                )
+            )
+        else:
+            errors.append(failure.get("message", "download failed"))
 
     if processed == 0:
         warnings.append("No manifest rows matched --provider {}.".format(provider_filter))

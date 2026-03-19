@@ -2490,6 +2490,29 @@ def test_download_manifest_ncbi_falls_back_to_datasets_api_when_ftp_files_missin
                     files = {"ncbi_dataset/data/GCA_002102555.1/cds_from_genomic.fna": cds_content}
                 elif include_type == "GENOME_GFF":
                     files = {"ncbi_dataset/data/GCA_002102555.1/genomic.gff": gff_content}
+                elif include_type == "GENOME_GBFF":
+                    files = {
+                        "ncbi_dataset/data/GCA_002102555.1/genomic.gbff": "\n".join(
+                            [
+                                "LOCUS       ctg1               8 bp    DNA     linear   PLN 01-JAN-2000",
+                                "DEFINITION  test.",
+                                "ACCESSION   ctg1",
+                                "VERSION     ctg1",
+                                "FEATURES             Location/Qualifiers",
+                                "     gene            1..8",
+                                "                     /locus_tag=\"catA\"",
+                                "                     /gene=\"catA\"",
+                                "     CDS             1..8",
+                                "                     /locus_tag=\"catA\"",
+                                "                     /gene=\"catA\"",
+                                "                     /protein_id=\"catA.t1\"",
+                                "ORIGIN",
+                                "        1 atgcatgc",
+                                "//",
+                                "",
+                            ]
+                        )
+                    }
                 elif include_type == "GENOME_FASTA":
                     files = {"ncbi_dataset/data/GCA_002102555.1/GCA_002102555.1_Catan2_genomic.fna": genome_content}
                 else:
@@ -2551,9 +2574,11 @@ def test_download_manifest_ncbi_falls_back_to_datasets_api_when_ftp_files_missin
         raw_dir = download_dir / "NCBI_Genome" / "species_wise_original" / "Catenaria_anguillulae"
         cds_path = raw_dir / "GCA_002102555.1_Catan2_cds_from_genomic.fna.gz"
         gff_path = raw_dir / "GCA_002102555.1_Catan2_genomic.gff.gz"
+        gbff_path = raw_dir / "GCA_002102555.1_Catan2_genomic.gbff.gz"
         genome_path = raw_dir / "GCA_002102555.1_Catan2_genomic.fna.gz"
         assert cds_path.exists()
         assert gff_path.exists()
+        assert gbff_path.exists()
         assert genome_path.exists()
 
         with gzip.open(cds_path, "rt", encoding="utf-8") as handle:
@@ -2562,6 +2587,185 @@ def test_download_manifest_ncbi_falls_back_to_datasets_api_when_ftp_files_missin
             assert "ID=gene1" in handle.read()
         with gzip.open(genome_path, "rt", encoding="utf-8") as handle:
             assert ">ctg1" in handle.read()
+        assert "fallback via NCBI Datasets API" in completed.stderr
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_download_manifest_ncbi_uses_gbff_when_cds_and_gff_are_missing(tmp_path):
+    ftp_root = tmp_path / "ftp_root"
+    ftp_root.mkdir()
+
+    gbff_content = "\n".join(
+        [
+            "LOCUS       ctg1               9 bp    DNA     linear   PLN 01-JAN-2000",
+            "DEFINITION  test.",
+            "ACCESSION   ctg1",
+            "VERSION     ctg1",
+            "FEATURES             Location/Qualifiers",
+            "     gene            1..9",
+            "                     /locus_tag=\"gene1\"",
+            "                     /gene=\"gene1\"",
+            "     CDS             join(1..3,7..9)",
+            "                     /locus_tag=\"gene1\"",
+            "                     /gene=\"gene1\"",
+            "                     /protein_id=\"gene1.t1\"",
+            "ORIGIN",
+            "        1 atgaaattt",
+            "//",
+            "",
+        ]
+    )
+    genome_content = ">ctg1\nATGAAATTT\n"
+
+    class _NcbiGbffFallbackHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, root_dir=None, **kwargs):
+            self._root_dir = root_dir
+            super().__init__(*args, directory=str(root_dir), **kwargs)
+
+        def _send_json(self, payload):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_zip(self, files):
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("README.md", "fixture\n")
+                archive.writestr("ncbi_dataset/data/assembly_data_report.jsonl", "{}\n")
+                archive.writestr("ncbi_dataset/data/dataset_catalog.json", "{}\n")
+                for name, text in files.items():
+                    archive.writestr(name, text)
+            payload = buf.getvalue()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_GET(self):
+            if self.path.startswith("/eutils/esearch.fcgi"):
+                self._send_json(
+                    {
+                        "header": {"type": "esearch", "version": "0.3"},
+                        "esearchresult": {"idlist": ["40086895"]},
+                    }
+                )
+                return
+            if self.path.startswith("/eutils/esummary.fcgi"):
+                self._send_json(
+                    {
+                        "header": {"type": "esummary", "version": "0.3"},
+                        "result": {
+                            "uids": ["40086895"],
+                            "40086895": {
+                                "ftppath_genbank": "ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/040/086/895/GCA_040086895.1_UAZ_Capgrnd_2",
+                                "organism": "Capsella grandiflora",
+                                "speciesname": "Capsella grandiflora",
+                            },
+                        },
+                    }
+                )
+                return
+            if self.path.startswith("/datasets/genome/accession/GCA_040086895.1/download"):
+                query = parse_qs(urlparse(self.path).query)
+                include_type = query.get("include_annotation_type", [""])[0]
+                if include_type == "GENOME_GBFF":
+                    files = {"ncbi_dataset/data/GCA_040086895.1/genomic.gbff": gbff_content}
+                elif include_type == "GENOME_FASTA":
+                    files = {"ncbi_dataset/data/GCA_040086895.1/GCA_040086895.1_UAZ_Capgrnd_2_genomic.fna": genome_content}
+                else:
+                    self.send_error(404, "not available")
+                    return
+                self._send_zip(files)
+                return
+            super().do_GET()
+
+    handler = lambda *args, **kwargs: _NcbiGbffFallbackHandler(*args, root_dir=ftp_root, **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "ncbi",
+                    "id": "GCA_040086895.1",
+                    "species_key": "",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "gbff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "gbff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        download_dir = tmp_path / "download_cache"
+        out_cds = tmp_path / "out_cds"
+        out_gff = tmp_path / "out_gff"
+        out_genome = tmp_path / "out_genome"
+        species_summary = tmp_path / "gg_input_generation_species.tsv"
+        env = dict(os.environ)
+        env["GG_NCBI_EUTILS_BASE_URL"] = "http://127.0.0.1:{}/eutils".format(server.server_port)
+        env["GG_NCBI_FTP_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+        env["GG_NCBI_DATASETS_BASE_URL"] = "http://127.0.0.1:{}/datasets".format(server.server_port)
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--provider",
+                "ncbi",
+                "--download-manifest",
+                str(manifest),
+                "--download-dir",
+                str(download_dir),
+                "--species-cds-dir",
+                str(out_cds),
+                "--species-gff-dir",
+                str(out_gff),
+                "--species-genome-dir",
+                str(out_genome),
+                "--species-summary-output",
+                str(species_summary),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+        raw_dir = download_dir / "NCBI_Genome" / "species_wise_original" / "Capsella_grandiflora"
+        assert (raw_dir / "GCA_040086895.1_UAZ_Capgrnd_2_genomic.gbff.gz").exists()
+        assert (raw_dir / "GCA_040086895.1_UAZ_Capgrnd_2_genomic.fna.gz").exists()
+
+        formatted_cds = out_cds / "Capsella_grandiflora_GCA_040086895.1_UAZ_Capgrnd_2_genomic.derived.cds.fa.gz"
+        formatted_gff = out_gff / "Capsella_grandiflora_GCA_040086895.1_UAZ_Capgrnd_2_genomic.derived.gff.gz"
+        formatted_genome = out_genome / "Capsella_grandiflora_GCA_040086895.1_UAZ_Capgrnd_2_genomic.fa.gz"
+        assert formatted_cds.exists()
+        assert formatted_gff.exists()
+        assert formatted_genome.exists()
+
+        with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+            assert ">Capsella_grandiflora_gene1" in handle.read()
+        with gzip.open(formatted_gff, "rt", encoding="utf-8") as handle:
+            assert "\tCDS\t" in handle.read()
+        with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+        assert len(rows) == 1
+        assert "derived CDS" in rows[0]["cds_input_path"]
         assert "fallback via NCBI Datasets API" in completed.stderr
     finally:
         server.shutdown()
