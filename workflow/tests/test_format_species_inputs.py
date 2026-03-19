@@ -223,7 +223,7 @@ def test_species_summary_includes_taxid_and_genetic_codes_when_taxonomy_cache_is
     assert row["plastid_genetic_code_name"] == "Bacterial, Archaeal and Plant Plastid"
 
 
-def test_format_species_inputs_strict_mode_fails_on_missing_pair(tmp_path):
+def test_format_species_inputs_strict_mode_accepts_cds_only_inputs(tmp_path):
     dataset_copy = tmp_path / "small_gfe_dataset_copy"
     shutil.copytree(SMALL_DATASET_ROOT, dataset_copy)
     missing_gff = dataset_copy / "20230216_EnsemblPlants" / "original_files" / "Ostreococcus_lucimarinus.ASM9206v1.56.gff3"
@@ -231,6 +231,7 @@ def test_format_species_inputs_strict_mode_fails_on_missing_pair(tmp_path):
 
     out_cds = tmp_path / "species_cds"
     out_gff = tmp_path / "species_gff"
+    species_summary = tmp_path / "gg_input_generation_species.tsv"
     completed = run_script(
         "--provider",
         "ensemblplants",
@@ -240,10 +241,18 @@ def test_format_species_inputs_strict_mode_fails_on_missing_pair(tmp_path):
         str(out_cds),
         "--species-gff-dir",
         str(out_gff),
+        "--species-summary-output",
+        str(species_summary),
         "--strict",
     )
-    assert completed.returncode == 1, completed.stderr + "\n" + completed.stdout
-    assert "missing GFF" in completed.stderr
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert any(path.name.endswith(".fa.gz") for path in out_cds.iterdir())
+    assert not any(out_gff.iterdir())
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows) == 1
+    assert rows[0]["gff_status"] == "missing"
+    assert rows[0]["genome_status"] == "missing"
 
 
 def test_format_species_inputs_derives_cds_from_gff_and_genome_when_cds_is_missing(tmp_path):
@@ -826,3 +835,83 @@ def test_species_summary_is_incremental_and_persistent_across_runs(tmp_path):
     assert ("ensemblplants", "Ostreococcus_lucimarinus") in by_key
     assert ("phycocosm", "Microglena_spYARC") in by_key
     assert by_key[("phycocosm", "Microglena_spYARC")]["cds_first_sequence_name"] != ""
+
+
+def test_format_species_inputs_derives_from_gbff_and_genome_when_gff_and_cds_are_missing(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Arabidopsis_thaliana"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    gbff_path = species_dir / "Arabidopsis_thaliana.genomic.gbff"
+    genome_path = species_dir / "Arabidopsis_thaliana.genome.fa"
+    gbff_path.write_text(
+        "\n".join(
+            [
+                "LOCUS       chr1               9 bp    DNA     linear   PLN 01-JAN-2000",
+                "DEFINITION  test.",
+                "ACCESSION   chr1",
+                "VERSION     chr1",
+                "FEATURES             Location/Qualifiers",
+                "     gene            1..9",
+                "                     /locus_tag=\"gene1\"",
+                "                     /gene=\"gene1\"",
+                "     CDS             join(1..3,7..9)",
+                "                     /locus_tag=\"gene1\"",
+                "                     /gene=\"gene1\"",
+                "                     /protein_id=\"gene1.t1\"",
+                "ORIGIN",
+                "        1 atgaaattt",
+                "//",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_path.write_text(">chr1\nATGAAATTT\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    species_summary = tmp_path / "gg_input_generation_species.tsv"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Arabidopsis_thaliana_genomic.derived.cds.fa.gz"
+    formatted_gff = out_gff / "Arabidopsis_thaliana_genomic.derived.gff.gz"
+    formatted_genome = out_genome / "Arabidopsis_thaliana_genome.fa.gz"
+    assert formatted_cds.exists()
+    assert formatted_gff.exists()
+    assert formatted_genome.exists()
+
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert cds_text.count(">Arabidopsis_thaliana_gene1") == 1
+    assert "ATGTTT" in cds_text
+
+    with gzip.open(formatted_gff, "rt", encoding="utf-8") as handle:
+        gff_text = handle.read()
+    assert "##gff-version 3" in gff_text
+    assert "\tgene\t" in gff_text
+    assert "\tmRNA\t" in gff_text
+    assert "\tCDS\t" in gff_text
+
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert str(gbff_path) in row["cds_input_path"]
+    assert "derived CDS" in row["cds_input_path"]
+    assert str(gbff_path) in row["gff_input_path"]
+    assert "derived GFF" in row["gff_input_path"]

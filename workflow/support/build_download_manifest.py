@@ -56,6 +56,17 @@ GFF_EXTENSIONS = (
     ".gtf.gz",
 )
 
+GENBANK_EXTENSIONS = (
+    ".gb",
+    ".gbk",
+    ".gbff",
+    ".genbank",
+    ".gb.gz",
+    ".gbk.gz",
+    ".gbff.gz",
+    ".genbank.gz",
+)
+
 PROVIDERS = (
     "ensembl",
     "ensemblplants",
@@ -104,18 +115,22 @@ MANIFEST_FIELDNAMES = (
     "species_key",
     "cds_url",
     "gff_url",
+    "gbff_url",
     "genome_url",
     "cds_archive_member",
     "gff_archive_member",
+    "gbff_archive_member",
     "genome_archive_member",
     "cds_filename",
     "gff_filename",
+    "gbff_filename",
     "genome_filename",
     "cds_url_template",
     "gff_url_template",
     "genome_url_template",
     "local_cds_path",
     "local_gff_path",
+    "local_gbff_path",
     "local_genome_path",
 )
 
@@ -181,6 +196,16 @@ HEADER_COMMENTS = {
             "Typical suffixes: .gff, .gff3, .gtf with optional .gz.",
         )
     ),
+    "gbff_url": "\n".join(
+        (
+            "Optional fallback annotation source.",
+            "",
+            "URL to a GenBank/GBFF annotation file.",
+            "Accepted schemes: https://, http://, ftp://, file://.",
+            "Use this when GFF is unavailable but GBFF plus genome (or GBFF alone) can drive CDS/GFF derivation.",
+            "Typical suffixes: .gbff, .gbk, .gb with optional .gz.",
+        )
+    ),
     "genome_url": "\n".join(
         (
             "Conditionally required when cds_url is blank.",
@@ -209,6 +234,15 @@ HEADER_COMMENTS = {
             "Example: SpeciesA/SpeciesA.genes.gff3",
         )
     ),
+    "gbff_archive_member": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Path to the GBFF/GenBank file inside an archive referenced by gbff_url.",
+            "Use this when gbff_url points to a .zip or .tar.* bundle instead of a plain annotation file.",
+            "Example: SpeciesA/SpeciesA.genomic.gbff",
+        )
+    ),
     "genome_archive_member": "\n".join(
         (
             "Optional.",
@@ -234,6 +268,15 @@ HEADER_COMMENTS = {
             "Output filename used when the GFF/GTF file is written to the raw download directory.",
             "Use a basename only, not a directory path.",
             "If blank, it is inferred from gff_archive_member, gff_url, or provider metadata.",
+        )
+    ),
+    "gbff_filename": "\n".join(
+        (
+            "Optional.",
+            "",
+            "Output filename used when the GBFF/GenBank file is written to the raw download directory.",
+            "Use a basename only, not a directory path.",
+            "If blank, it is inferred from gbff_archive_member, gbff_url, or provider metadata.",
         )
     ),
     "genome_filename": "\n".join(
@@ -290,6 +333,15 @@ HEADER_COMMENTS = {
             "Use this when the annotation file already exists locally and you do not want to write gff_url manually.",
         )
     ),
+    "local_gbff_path": "\n".join(
+        (
+            "Optional; mainly for provider=local.",
+            "",
+            "Absolute path or path relative to this manifest file.",
+            "Converted to file:// at runtime.",
+            "Use this when only a GBFF/GenBank annotation file exists locally and you do not want to write gbff_url manually.",
+        )
+    ),
     "local_genome_path": "\n".join(
         (
             "Optional; mainly for provider=local.",
@@ -302,11 +354,17 @@ HEADER_COMMENTS = {
 }
 
 
-def missing_annotation_label(cds_path, gff_path, genome_path):
-    if gff_path is None:
-        return "GFF"
-    if cds_path is None and genome_path is None:
-        return "CDS-or-genome"
+def missing_annotation_label(cds_path, gff_path, gbff_path, genome_path):
+    if cds_path is not None or gbff_path is not None or (gff_path is not None and genome_path is not None):
+        return ""
+    if cds_path is None and gff_path is None and gbff_path is None and genome_path is None:
+        return "CDS-or-GBFF-or-(GFF+genome)"
+    if gff_path is not None and genome_path is None:
+        return "CDS-or-GBFF-or-genome"
+    if genome_path is not None and gff_path is None and gbff_path is None:
+        return "CDS-or-GBFF-or-GFF"
+    if gbff_path is None:
+        return "CDS-or-GBFF-or-(GFF+genome)"
     return ""
 
 HEADER_COMMENT_MIN_WIDTH_PX = 240
@@ -593,7 +651,7 @@ def build_arg_parser():
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Exit with error when a species is missing GFF or is missing both CDS and genome.",
+        help="Exit with error when a species lacks a usable source bundle (CDS, GBFF, or GFF plus genome).",
     )
     parser.add_argument(
         "--id-options-snapshot",
@@ -615,6 +673,11 @@ def is_fasta_filename(name):
 def is_gff_filename(name):
     lower = name.lower()
     return any(lower.endswith(ext) for ext in GFF_EXTENSIONS)
+
+
+def is_gbff_filename(name):
+    lower = name.lower()
+    return any(lower.endswith(ext) for ext in GENBANK_EXTENSIONS)
 
 
 def is_probable_genome_filename(provider, name):
@@ -706,6 +769,7 @@ def discover_ensembl_like(input_dir, provider):
 
     species_to_cds = {}
     species_to_gff = {}
+    species_to_gbff = {}
     species_to_genome = {}
     for path in sorted(input_dir.iterdir()):
         if not path.is_file():
@@ -717,16 +781,21 @@ def discover_ensembl_like(input_dir, provider):
             species_to_cds.setdefault(species_key, []).append(path)
         elif is_gff_filename(path.name):
             species_to_gff.setdefault(species_key, []).append(path)
+        elif is_gbff_filename(path.name):
+            species_to_gbff.setdefault(species_key, []).append(path)
         elif is_probable_genome_filename(provider, path.name):
             species_to_genome.setdefault(species_key, []).append(path)
 
-    for species_key in sorted(set(species_to_cds.keys()) | set(species_to_gff.keys()) | set(species_to_genome.keys())):
+    for species_key in sorted(
+        set(species_to_cds.keys()) | set(species_to_gff.keys()) | set(species_to_gbff.keys()) | set(species_to_genome.keys())
+    ):
         cds_path = pick_single_file(species_to_cds.get(species_key, []), provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(species_to_gff.get(species_key, []), provider, species_key, "GFF", warnings)
+        gbff_path = pick_single_file(species_to_gbff.get(species_key, []), provider, species_key, "GBFF", warnings)
         genome_path = pick_single_file(
             species_to_genome.get(species_key, []), provider, species_key, "genome", warnings
         )
-        missing_label = missing_annotation_label(cds_path, gff_path, genome_path)
+        missing_label = missing_annotation_label(cds_path, gff_path, gbff_path, genome_path)
         if missing_label != "":
             errors.append(
                 "[{}] {}: missing {}".format(
@@ -741,10 +810,12 @@ def discover_ensembl_like(input_dir, provider):
                 "id": species_key,
                 "species_key": species_key,
                 "cds_url": cds_path.resolve().as_uri() if cds_path is not None else "",
-                "gff_url": gff_path.resolve().as_uri(),
+                "gff_url": gff_path.resolve().as_uri() if gff_path is not None else "",
+                "gbff_url": gbff_path.resolve().as_uri() if gbff_path is not None else "",
                 "genome_url": genome_path.resolve().as_uri() if genome_path is not None else "",
                 "cds_filename": cds_path.name if cds_path is not None else "",
-                "gff_filename": gff_path.name,
+                "gff_filename": gff_path.name if gff_path is not None else "",
+                "gbff_filename": gbff_path.name if gbff_path is not None else "",
                 "genome_filename": genome_path.name if genome_path is not None else "",
             }
         )
@@ -764,6 +835,7 @@ def discover_species_dir_based(provider, input_dir):
         if provider == "phycocosm":
             cds_matches = [path for path in files if "fasta" in path.name.lower() and is_fasta_filename(path.name)]
             gff_matches = [path for path in files if "gff" in path.name.lower() and is_gff_filename(path.name)]
+            gbff_matches = [path for path in files if is_gbff_filename(path.name)]
             genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
         elif provider == "phytozome":
             cds_matches = [
@@ -772,6 +844,7 @@ def discover_species_dir_based(provider, input_dir):
                 if ("cds_" in path.name.lower() or ".cds." in path.name.lower()) and is_fasta_filename(path.name)
             ]
             gff_matches = [path for path in files if "gene.gff3" in path.name.lower() and is_gff_filename(path.name)]
+            gbff_matches = [path for path in files if is_gbff_filename(path.name)]
             genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
         elif provider == "ncbi":
             cds_matches = [
@@ -783,6 +856,11 @@ def discover_species_dir_based(provider, input_dir):
                 path
                 for path in files
                 if "genomic.gff" in path.name.lower() and is_gff_filename(path.name)
+            ]
+            gbff_matches = [
+                path
+                for path in files
+                if "genomic.gbff" in path.name.lower() and is_gbff_filename(path.name)
             ]
             genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
         else:
@@ -798,12 +876,14 @@ def discover_species_dir_based(provider, input_dir):
                     if is_fasta_filename(path.name) and not is_probable_genome_filename(provider, path.name)
                 ]
             gff_matches = [path for path in files if is_gff_filename(path.name)]
+            gbff_matches = [path for path in files if is_gbff_filename(path.name)]
             genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
 
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
+        gbff_path = pick_single_file(gbff_matches, provider, species_key, "GBFF", warnings)
         genome_path = pick_single_file(genome_matches, provider, species_key, "genome", warnings)
-        missing_label = missing_annotation_label(cds_path, gff_path, genome_path)
+        missing_label = missing_annotation_label(cds_path, gff_path, gbff_path, genome_path)
         if missing_label != "":
             errors.append(
                 "[{}] {}: missing {}".format(
@@ -834,10 +914,12 @@ def discover_species_dir_based(provider, input_dir):
                 "id": source_id,
                 "species_key": species_key,
                 "cds_url": cds_path.resolve().as_uri() if cds_path is not None else "",
-                "gff_url": gff_path.resolve().as_uri(),
+                "gff_url": gff_path.resolve().as_uri() if gff_path is not None else "",
+                "gbff_url": gbff_path.resolve().as_uri() if gbff_path is not None else "",
                 "genome_url": genome_path.resolve().as_uri() if genome_path is not None else "",
                 "cds_filename": cds_path.name if cds_path is not None else "",
-                "gff_filename": gff_path.name,
+                "gff_filename": gff_path.name if gff_path is not None else "",
+                "gbff_filename": gbff_path.name if gbff_path is not None else "",
                 "genome_filename": genome_path.name if genome_path is not None else "",
             }
         )

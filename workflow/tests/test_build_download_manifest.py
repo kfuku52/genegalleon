@@ -101,7 +101,7 @@ def test_build_download_manifest_from_small_fixture_all(tmp_path):
         assert "genome_filename" in row
 
 
-def test_build_download_manifest_strict_fails_on_missing_pair(tmp_path):
+def test_build_download_manifest_strict_allows_cds_only_inputs(tmp_path):
     dataset_copy = tmp_path / "small_dataset_copy"
     shutil.copytree(SMALL_DATASET_ROOT, dataset_copy)
     missing_gff = dataset_copy / "20230216_EnsemblPlants" / "original_files" / "Ostreococcus_lucimarinus.ASM9206v1.56.gff3"
@@ -117,9 +117,12 @@ def test_build_download_manifest_strict_fails_on_missing_pair(tmp_path):
         str(out),
         "--strict",
     )
-    assert completed.returncode == 1, completed.stderr + "\n" + completed.stdout
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     rows = read_manifest(out)
-    assert len(rows) == 0
+    assert len(rows) == 1
+    assert rows[0]["cds_url"].startswith("file://")
+    assert rows[0]["gff_url"] == ""
+    assert rows[0]["genome_url"] == ""
 
 
 def test_build_download_manifest_ncbi_like_provider_from_species_dir_fixture(tmp_path):
@@ -298,6 +301,64 @@ def test_build_download_manifest_allows_gff_and_genome_without_cds(tmp_path):
     assert rows[0]["cds_filename"] == ""
     assert rows[0]["gff_filename"] == "Arabidopsis_thaliana.gene.gff3"
     assert rows[0]["genome_filename"] == "Arabidopsis_thaliana.genome.fa"
+
+
+def test_build_download_manifest_allows_cds_only(tmp_path):
+    input_root = tmp_path / "dataset"
+    species_dir = input_root / "Direct" / "species_wise_original" / "Croton_tiglium"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "Croton_tiglium.cds.fa").write_text(">ctg1.t1\nATGAAATTT\n", encoding="utf-8")
+
+    out = tmp_path / "download_manifest_direct_cds_only.xlsx"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    rows = read_manifest(out)
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "direct"
+    assert rows[0]["id"] == "Croton_tiglium"
+    assert rows[0]["species_key"] == "Croton_tiglium"
+    assert rows[0]["cds_filename"] == "Croton_tiglium.cds.fa"
+    assert rows[0]["gff_url"] == ""
+    assert rows[0]["gbff_url"] == ""
+    assert rows[0]["genome_url"] == ""
+
+
+def test_build_download_manifest_allows_gbff_and_genome_without_gff_or_cds(tmp_path):
+    input_root = tmp_path / "dataset"
+    species_dir = input_root / "Direct" / "species_wise_original" / "Moringa_oleifera"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "Moringa_oleifera.genomic.gbff").write_text(
+        "LOCUS       chr1               9 bp    DNA     linear   PLN 01-JAN-2000\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Moringa_oleifera.genome.fa").write_text(">chr1\nATGAAATTT\n", encoding="utf-8")
+
+    out = tmp_path / "download_manifest_direct_gbff.xlsx"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    rows = read_manifest(out)
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "direct"
+    assert rows[0]["id"] == "Moringa_oleifera"
+    assert rows[0]["species_key"] == "Moringa_oleifera"
+    assert rows[0]["cds_url"] == ""
+    assert rows[0]["gff_url"] == ""
+    assert rows[0]["gbff_filename"] == "Moringa_oleifera.genomic.gbff"
+    assert rows[0]["genome_filename"] == "Moringa_oleifera.genome.fa"
 
 
 def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):

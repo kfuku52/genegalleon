@@ -42,18 +42,22 @@ def make_manifest(path, rows):
                 "species_key",
                 "cds_url",
                 "gff_url",
+                "gbff_url",
                 "genome_url",
                 "cds_archive_member",
                 "gff_archive_member",
+                "gbff_archive_member",
                 "genome_archive_member",
                 "cds_filename",
                 "gff_filename",
+                "gbff_filename",
                 "genome_filename",
                 "cds_url_template",
                 "gff_url_template",
                 "genome_url_template",
                 "local_cds_path",
                 "local_gff_path",
+                "local_gbff_path",
                 "local_genome_path",
             ],
             delimiter="\t",
@@ -922,6 +926,68 @@ def test_download_manifest_supports_direct_with_explicit_urls(tmp_path):
     assert cds_text.count(">Medicago_sativa_MsG1") == 1
 
 
+def test_download_manifest_supports_direct_with_cds_only(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Croton_tiglium"
+    cds_source = source_dir / "VVPY-SOAPdenovo-Trans-assembly.fa.gz"
+    with gzip.open(cds_source, "wt", encoding="utf-8") as handle:
+        handle.write(">ctg1.t1\nATGAA\n>ctg1.t2\nATGAAATTT\n")
+
+    manifest = tmp_path / "manifest.tsv"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "direct",
+                "id": "VVPY-Croton_tiglium",
+                "species_key": species_key,
+                "cds_url": to_file_url(cds_source),
+                "cds_filename": species_key + ".cds.fa.gz",
+                "gff_filename": "",
+                "genome_filename": "",
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    out_cds = tmp_path / "out_cds"
+    out_gff = tmp_path / "out_gff"
+    out_genome = tmp_path / "out_genome"
+    species_summary = tmp_path / "gg_input_generation_species.tsv"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
+    assert (raw_dir / (species_key + ".cds.fa.gz")).exists()
+
+    formatted_cds = out_cds / (species_key + "_cds.fa.gz")
+    assert formatted_cds.exists()
+    assert not any(out_gff.iterdir())
+    assert not any(out_genome.iterdir())
+
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows) == 1
+    assert rows[0]["gff_status"] == "missing"
+    assert rows[0]["genome_status"] == "missing"
+
+
 def test_download_manifest_supports_direct_archive_members(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()
@@ -1062,6 +1128,93 @@ def test_download_manifest_derives_cds_when_manifest_has_only_gff_and_genome(tmp
         cds_text = handle.read()
     assert cds_text.count(">Arabidopsis_thaliana_gene1") == 1
     assert "ATGTTT" in cds_text
+
+
+def test_download_manifest_derives_from_gbff_and_genome(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Moringa_oleifera"
+    gbff_source = source_dir / "moringa_oleifera.genomic.gbff"
+    genome_source = source_dir / "moringa_oleifera.genome.fa"
+    gbff_source.write_text(
+        "\n".join(
+            [
+                "LOCUS       chr1               9 bp    DNA     linear   PLN 01-JAN-2000",
+                "DEFINITION  test.",
+                "ACCESSION   chr1",
+                "VERSION     chr1",
+                "FEATURES             Location/Qualifiers",
+                "     gene            1..9",
+                "                     /locus_tag=\"MoG1\"",
+                "                     /gene=\"MoG1\"",
+                "     CDS             join(1..3,7..9)",
+                "                     /locus_tag=\"MoG1\"",
+                "                     /gene=\"MoG1\"",
+                "                     /protein_id=\"MoG1.t1\"",
+                "ORIGIN",
+                "        1 atgaaattt",
+                "//",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_source.write_text(">chr1\nATGAAATTT\n", encoding="utf-8")
+
+    manifest = tmp_path / "manifest.tsv"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "direct",
+                "id": "moringa_oleifera_direct",
+                "species_key": species_key,
+                "cds_url": "",
+                "gff_url": "",
+                "gbff_url": to_file_url(gbff_source),
+                "genome_url": to_file_url(genome_source),
+                "cds_filename": "",
+                "gff_filename": "",
+                "gbff_filename": species_key + ".direct.genomic.gbff",
+                "genome_filename": species_key + ".direct.genome.fa",
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    out_cds = tmp_path / "out_cds"
+    out_gff = tmp_path / "out_gff"
+    out_genome = tmp_path / "out_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
+    assert (raw_dir / (species_key + ".direct.genomic.gbff")).exists()
+    assert (raw_dir / (species_key + ".direct.genome.fa")).exists()
+
+    formatted_cds = out_cds / (species_key + "_direct.genomic.derived.cds.fa.gz")
+    formatted_gff = out_gff / (species_key + "_direct.genomic.derived.gff.gz")
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert cds_text.count(">Moringa_oleifera_MoG1") == 1
+    assert "ATGTTT" in cds_text
+    with gzip.open(formatted_gff, "rt", encoding="utf-8") as handle:
+        gff_text = handle.read()
+    assert "\tgene\t" in gff_text
+    assert "\tCDS\t" in gff_text
 
 
 def test_download_manifest_resolves_coge_urls_from_id_without_templates(tmp_path):

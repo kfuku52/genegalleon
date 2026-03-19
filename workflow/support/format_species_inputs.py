@@ -29,6 +29,11 @@ try:
 except Exception:  # pragma: no cover - exercised in runtime environments without openpyxl
     load_workbook = None
 
+try:
+    from Bio import SeqIO
+except Exception:  # pragma: no cover - exercised in runtime environments without biopython
+    SeqIO = None
+
 
 COMMON_REPLACEMENTS = (
     ("evm_27.model.", ""),
@@ -77,6 +82,17 @@ GFF_EXTENSIONS = (
     ".gff.gz",
     ".gff3.gz",
     ".gtf.gz",
+)
+
+GENBANK_EXTENSIONS = (
+    ".gb",
+    ".gbk",
+    ".gbff",
+    ".genbank",
+    ".gb.gz",
+    ".gbk.gz",
+    ".gbff.gz",
+    ".genbank.gz",
 )
 
 ENSEMBL_CDS_PATTERN = re.compile(r"(?:^|[._-])cds(?:[._-]|$)", re.IGNORECASE)
@@ -185,12 +201,15 @@ RESOLVED_MANIFEST_PREFERRED_COLUMNS = (
     "species_key",
     "cds_url",
     "gff_url",
+    "gbff_url",
     "genome_url",
     "cds_archive_member",
     "gff_archive_member",
+    "gbff_archive_member",
     "genome_archive_member",
     "cds_filename",
     "gff_filename",
+    "gbff_filename",
     "genome_filename",
 )
 ENSEMBL_DEFAULT_ID_URL_TEMPLATES = {
@@ -473,6 +492,7 @@ def build_arg_parser():
     parser = argparse.ArgumentParser(
         description=(
             "Format CDS/GFF inputs for genegalleon from provider-specific raw files. "
+            "Accepts CDS-only inputs, GBFF inputs, or GFF plus genome FASTA inputs. "
             "When CDS is missing but both GFF and genome FASTA are present, CDS is derived automatically. "
             "Current targets are based on legacy data_formatting*.sh scripts."
         )
@@ -527,7 +547,7 @@ def build_arg_parser():
             "ensembl, ensemblplants, ncbi, coge, cngb, gwh, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, direct, local "
             "(legacy aliases refseq/genbank are treated as ncbi). "
             "provider=direct requires explicit urls or an index-style id URL. "
-            "cds_url may be empty when both gff_url and genome_url are available; "
+            "cds_url may be provided by itself, or may be empty when both gff_url and genome_url are available; "
             "genegalleon will derive CDS during formatting. "
             "provider=local reads local files/directories (for example local phytozome files). "
             "Use --input-dir for direct local phycocosm/phytozome formatting. "
@@ -592,7 +612,7 @@ def build_arg_parser():
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Exit with error if any species is missing GFF or is missing both CDS and genome.",
+        help="Exit with error if any species lacks a usable source bundle (CDS, GBFF, or GFF plus genome).",
     )
     parser.add_argument(
         "--stats-output",
@@ -764,6 +784,37 @@ def write_gff_gzip(input_path, output_path):
     return line_count
 
 
+def write_gff_lines_gzip(output_path, lines):
+    pigz_path = shutil.which("pigz")
+    line_count = 0
+
+    if pigz_path is None:
+        with open_text(output_path, "wt") as fout:
+            for line in lines:
+                fout.write(apply_common_replacements(line))
+                line_count += 1
+        return line_count
+
+    def writer(handle):
+        nonlocal line_count
+        for line in lines:
+            handle.write(apply_common_replacements(line))
+            line_count += 1
+
+    write_text_output_via_command(
+        output_path,
+        writer,
+        lambda _tmp_output: [
+            pigz_path,
+            "-p",
+            str(output_compression_threads()),
+            "-c",
+        ],
+        output_via_stdout=True,
+    )
+    return line_count
+
+
 def detect_manifest_delimiter(path):
     with open(path, "rt", encoding="utf-8") as handle:
         first_line = handle.readline()
@@ -840,9 +891,15 @@ def build_resolved_manifest_row(
     species_key,
     cds_url,
     gff_url,
+    gbff_url,
     genome_url,
+    cds_archive_member,
+    gff_archive_member,
+    gbff_archive_member,
+    genome_archive_member,
     cds_filename,
     gff_filename,
+    gbff_filename,
     genome_filename,
 ):
     row = {}
@@ -853,9 +910,15 @@ def build_resolved_manifest_row(
     row["species_key"] = species_key
     row["cds_url"] = cds_url
     row["gff_url"] = gff_url
+    row["gbff_url"] = gbff_url
     row["genome_url"] = genome_url
+    row["cds_archive_member"] = cds_archive_member
+    row["gff_archive_member"] = gff_archive_member
+    row["gbff_archive_member"] = gbff_archive_member
+    row["genome_archive_member"] = genome_archive_member
     row["cds_filename"] = cds_filename
     row["gff_filename"] = gff_filename
+    row["gbff_filename"] = gbff_filename
     row["genome_filename"] = genome_filename
     return row
 
@@ -1867,8 +1930,11 @@ def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, tim
                 resolved[label_to_key[label]] = url
                 break
 
-    if resolved.get("gff_url", "") != "" and (
-        resolved.get("cds_url", "") != "" or resolved.get("genome_url", "") != ""
+    if manifest_has_usable_source_bundle(
+        resolved.get("cds_url", ""),
+        resolved.get("gff_url", ""),
+        resolved.get("gbff_url", ""),
+        resolved.get("genome_url", ""),
     ):
         return resolved
 
@@ -1887,23 +1953,28 @@ def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, tim
         for key in (
             "cds_url",
             "gff_url",
+            "gbff_url",
             "genome_url",
             "cds_filename",
             "gff_filename",
+            "gbff_filename",
             "genome_filename",
             "species_key",
         ):
             if resolved.get(key, "") == "" and str(provider_specific.get(key, "") or "").strip() != "":
                 resolved[key] = str(provider_specific[key]).strip()
-        if resolved.get("gff_url", "") != "" and (
-            resolved.get("cds_url", "") != "" or resolved.get("genome_url", "") != ""
+        if manifest_has_usable_source_bundle(
+            resolved.get("cds_url", ""),
+            resolved.get("gff_url", ""),
+            resolved.get("gbff_url", ""),
+            resolved.get("genome_url", ""),
         ):
             return resolved
 
     source_clean = str(source_id or "").strip()
     if is_url_like(source_clean):
         discovered = resolve_urls_from_index_url(provider, source_clean, timeout, headers)
-        for key in ("cds_url", "gff_url", "genome_url"):
+        for key in ("cds_url", "gff_url", "gbff_url", "genome_url"):
             if resolved.get(key, "") == "" and discovered.get(key, "") != "":
                 resolved[key] = discovered[key]
 
@@ -1921,26 +1992,35 @@ def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, tim
                 discovered = resolve_urls_from_index_url(provider, page_url, timeout, headers)
             except Exception:
                 continue
-            for key in ("cds_url", "gff_url", "genome_url"):
+            for key in ("cds_url", "gff_url", "gbff_url", "genome_url"):
                 if resolved.get(key, "") == "" and discovered.get(key, "") != "":
                     resolved[key] = discovered[key]
-            if resolved.get("gff_url", "") != "" and (
-                resolved.get("cds_url", "") != "" or resolved.get("genome_url", "") != ""
+            if manifest_has_usable_source_bundle(
+                resolved.get("cds_url", ""),
+                resolved.get("gff_url", ""),
+                resolved.get("gbff_url", ""),
+                resolved.get("genome_url", ""),
             ):
                 break
-        if resolved.get("gff_url", "") != "" and (
-            resolved.get("cds_url", "") != "" or resolved.get("genome_url", "") != ""
+        if manifest_has_usable_source_bundle(
+            resolved.get("cds_url", ""),
+            resolved.get("gff_url", ""),
+            resolved.get("gbff_url", ""),
+            resolved.get("genome_url", ""),
         ):
             break
 
-    if resolved.get("gff_url", "") == "" or (
-        resolved.get("cds_url", "") == "" and resolved.get("genome_url", "") == ""
+    if not manifest_has_usable_source_bundle(
+        resolved.get("cds_url", ""),
+        resolved.get("gff_url", ""),
+        resolved.get("gbff_url", ""),
+        resolved.get("genome_url", ""),
     ):
         detail = ""
         if provider_specific_error is not None:
             detail = " (provider-specific resolver: {})".format(provider_specific_error)
         raise ValueError(
-            "could not infer gff plus either cds or genome urls from id '{}' for provider '{}'{}".format(
+            "could not infer a usable source bundle (CDS, GBFF, or GFF plus genome) from id '{}' for provider '{}'{}".format(
                 source_id, provider, detail
             )
         )
@@ -1957,6 +2037,8 @@ def default_download_filename(provider, species_key, label, url, archive_member=
     if base == "":
         if label in ("cds", "genome"):
             ext = ".fa.gz"
+        elif label == "gbff":
+            ext = ".gbff.gz"
         else:
             ext = ".gff3.gz"
         base = "{}.{}{}".format(species_key, label, ext)
@@ -2775,18 +2857,23 @@ def local_reference_to_file_url(reference, manifest_parent_dir):
 def resolve_local_manifest_row(provider, source_id, species_key, row, manifest_parent_dir, warnings, line_number):
     cds_url = local_reference_to_file_url(row.get("cds_url", ""), manifest_parent_dir)
     gff_url = local_reference_to_file_url(row.get("gff_url", ""), manifest_parent_dir)
+    gbff_url = local_reference_to_file_url(row.get("gbff_url", ""), manifest_parent_dir)
     genome_url = local_reference_to_file_url(row.get("genome_url", ""), manifest_parent_dir)
     cds_filename = str(row.get("cds_filename") or "").strip()
     gff_filename = str(row.get("gff_filename") or "").strip()
+    gbff_filename = str(row.get("gbff_filename") or "").strip()
     genome_filename = str(row.get("genome_filename") or "").strip()
 
     local_cds_path = str(row.get("local_cds_path") or "").strip()
     local_gff_path = str(row.get("local_gff_path") or "").strip()
+    local_gbff_path = str(row.get("local_gbff_path") or "").strip()
     local_genome_path = str(row.get("local_genome_path") or "").strip()
     if cds_url == "" and local_cds_path != "":
         cds_url = local_reference_to_file_url(local_cds_path, manifest_parent_dir)
     if gff_url == "" and local_gff_path != "":
         gff_url = local_reference_to_file_url(local_gff_path, manifest_parent_dir)
+    if gbff_url == "" and local_gbff_path != "":
+        gbff_url = local_reference_to_file_url(local_gbff_path, manifest_parent_dir)
     if genome_url == "" and local_genome_path != "":
         genome_url = local_reference_to_file_url(local_genome_path, manifest_parent_dir)
 
@@ -2804,7 +2891,7 @@ def resolve_local_manifest_row(provider, source_id, species_key, row, manifest_p
         else:
             species_key = source_id_resolved
 
-    if (gff_url == "" or (cds_url == "" and genome_url == "")) and source_dir is not None and source_dir.exists() and source_dir.is_dir():
+    if (not manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url)) and source_dir is not None and source_dir.exists() and source_dir.is_dir():
         files = [path for path in source_dir.iterdir() if path.is_file()]
         cds_matches = [
             path
@@ -2819,10 +2906,12 @@ def resolve_local_manifest_row(provider, source_id, species_key, row, manifest_p
                 if is_fasta_filename(path.name) and not is_probable_genome_filename(provider, path.name)
             ]
         gff_matches = [path for path in files if is_gff_filename(path.name)]
+        gbff_matches = [path for path in files if is_gbff_filename(path.name)]
         genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
 
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
+        gbff_path = pick_single_file(gbff_matches, provider, species_key, "GBFF", warnings)
         genome_path = pick_single_file(genome_matches, provider, species_key, "genome", warnings)
 
         if cds_url == "" and cds_path is not None:
@@ -2833,14 +2922,18 @@ def resolve_local_manifest_row(provider, source_id, species_key, row, manifest_p
             gff_url = gff_path.resolve().as_uri()
             if gff_filename == "":
                 gff_filename = gff_path.name
+        if gbff_url == "" and gbff_path is not None:
+            gbff_url = gbff_path.resolve().as_uri()
+            if gbff_filename == "":
+                gbff_filename = gbff_path.name
         if genome_url == "" and genome_path is not None:
             genome_url = genome_path.resolve().as_uri()
             if genome_filename == "":
                 genome_filename = genome_path.name
 
-    if gff_url == "" or (cds_url == "" and genome_url == ""):
+    if not manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url):
         raise ValueError(
-            "provider=local requires GFF plus either CDS or genome paths/URLs, or a species directory id. "
+            "provider=local requires CDS, GBFF, or GFF plus genome paths/URLs, or a species directory id. "
             "line {} id='{}'".format(line_number, source_id_resolved)
         )
 
@@ -2848,9 +2941,11 @@ def resolve_local_manifest_row(provider, source_id, species_key, row, manifest_p
         "species_key": species_key,
         "cds_url": cds_url,
         "gff_url": gff_url,
+        "gbff_url": gbff_url,
         "genome_url": genome_url,
         "cds_filename": cds_filename,
         "gff_filename": gff_filename,
+        "gbff_filename": gbff_filename,
         "genome_filename": genome_filename,
     }
 
@@ -2997,12 +3092,15 @@ def download_from_manifest(
         species_key = (row.get("species_key") or "").strip()
         cds_url = (row.get("cds_url") or "").strip()
         gff_url = (row.get("gff_url") or "").strip()
+        gbff_url = (row.get("gbff_url") or "").strip()
         genome_url = (row.get("genome_url") or "").strip()
         cds_archive_member = (row.get("cds_archive_member") or "").strip()
         gff_archive_member = (row.get("gff_archive_member") or "").strip()
+        gbff_archive_member = (row.get("gbff_archive_member") or "").strip()
         genome_archive_member = (row.get("genome_archive_member") or "").strip()
         cds_filename = (row.get("cds_filename") or "").strip()
         gff_filename = (row.get("gff_filename") or "").strip()
+        gbff_filename = (row.get("gbff_filename") or "").strip()
         genome_filename = (row.get("genome_filename") or "").strip()
         resolved_ncbi = None
 
@@ -3048,11 +3146,14 @@ def download_from_manifest(
                 species_key = str(resolved_local.get("species_key") or "").strip()
                 cds_url = str(resolved_local.get("cds_url") or "").strip()
                 gff_url = str(resolved_local.get("gff_url") or "").strip()
+                gbff_url = str(resolved_local.get("gbff_url") or "").strip()
                 genome_url = str(resolved_local.get("genome_url") or "").strip()
                 if cds_filename == "":
                     cds_filename = str(resolved_local.get("cds_filename") or "").strip()
                 if gff_filename == "":
                     gff_filename = str(resolved_local.get("gff_filename") or "").strip()
+                if gbff_filename == "":
+                    gbff_filename = str(resolved_local.get("gbff_filename") or "").strip()
                 if genome_filename == "":
                     genome_filename = str(resolved_local.get("genome_filename") or "").strip()
             except Exception as exc:
@@ -3064,7 +3165,7 @@ def download_from_manifest(
                 continue
         elif provider in ("ncbi", "refseq", "genbank"):
             accession_candidate = extract_ncbi_accession_from_source_id(source_id)
-            requires_ncbi_resolution = (gff_url == "" or (cds_url == "" and genome_url == ""))
+            requires_ncbi_resolution = not manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url)
             should_enrich_from_ncbi = accession_candidate != "" and (species_key == "" or genome_url == "")
             if requires_ncbi_resolution or should_enrich_from_ncbi:
                 try:
@@ -3093,14 +3194,18 @@ def download_from_manifest(
         if species_key == "" and resolved_ncbi is not None:
             species_key = (resolved_ncbi.get("species_key") or "").strip()
 
-        if provider != "local" and (gff_url == "" or cds_url == "" or genome_url == ""):
+        if provider != "local" and (
+            not manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url)
+        ):
             try:
                 resolved_urls = None
                 if provider in ("ncbi", "refseq", "genbank"):
                     resolved_urls = resolved_ncbi
                 else:
                     resolved_urls = resolve_download_urls_from_templates(provider, source_id, species_key, row)
-                    if resolved_urls is None and (gff_url == "" or (cds_url == "" and genome_url == "")):
+                    if resolved_urls is None and (
+                        not manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url)
+                    ):
                         resolved_urls = resolve_non_ncbi_download_urls_from_id(
                             provider=provider,
                             source_id=source_id,
@@ -3113,12 +3218,16 @@ def download_from_manifest(
                         cds_url = (resolved_urls.get("cds_url") or "").strip()
                     if gff_url == "":
                         gff_url = (resolved_urls.get("gff_url") or "").strip()
+                    if gbff_url == "":
+                        gbff_url = (resolved_urls.get("gbff_url") or "").strip()
                     if genome_url == "":
                         genome_url = (resolved_urls.get("genome_url") or "").strip()
                     if cds_filename == "":
                         cds_filename = (resolved_urls.get("cds_filename") or "").strip()
                     if gff_filename == "":
                         gff_filename = (resolved_urls.get("gff_filename") or "").strip()
+                    if gbff_filename == "":
+                        gbff_filename = (resolved_urls.get("gbff_filename") or "").strip()
                     if genome_filename == "":
                         genome_filename = (resolved_urls.get("genome_filename") or "").strip()
                     if species_key == "":
@@ -3137,9 +3246,9 @@ def download_from_manifest(
             errors.append("Manifest line {}: species_key/id is empty".format(i))
             continue
 
-        if gff_url == "" or (cds_url == "" and genome_url == ""):
+        if not manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url):
             errors.append(
-                "Manifest line {}: gff_url and either cds_url or genome_url are required for {} "
+                "Manifest line {}: CDS, GBFF, or GFF plus genome are required for {} "
                 "(set urls directly or provide resolvable id)".format(
                     i, species_key
                 )
@@ -3151,8 +3260,10 @@ def download_from_manifest(
 
         if cds_filename == "":
             cds_filename = default_download_filename(provider, species_key, "cds", cds_url, cds_archive_member)
-        if gff_filename == "":
+        if gff_url != "" and gff_filename == "":
             gff_filename = default_download_filename(provider, species_key, "gff", gff_url, gff_archive_member)
+        if gbff_url != "" and gbff_filename == "":
+            gbff_filename = default_download_filename(provider, species_key, "gbff", gbff_url, gbff_archive_member)
         if genome_url != "" and genome_filename == "":
             genome_filename = default_download_filename(
                 provider,
@@ -3171,9 +3282,15 @@ def download_from_manifest(
                 species_key=species_key,
                 cds_url=cds_url,
                 gff_url=gff_url,
+                gbff_url=gbff_url,
                 genome_url=genome_url,
+                cds_archive_member=cds_archive_member,
+                gff_archive_member=gff_archive_member,
+                gbff_archive_member=gbff_archive_member,
+                genome_archive_member=genome_archive_member,
                 cds_filename=cds_filename,
                 gff_filename=gff_filename,
+                gbff_filename=gbff_filename,
                 genome_filename=genome_filename,
             )
         )
@@ -3181,7 +3298,10 @@ def download_from_manifest(
         targets = []
         if cds_url != "":
             targets.append(("CDS", cds_url, raw_dir / cds_filename, cds_archive_member))
-        targets.append(("GFF", gff_url, raw_dir / gff_filename, gff_archive_member))
+        if gff_url != "":
+            targets.append(("GFF", gff_url, raw_dir / gff_filename, gff_archive_member))
+        if gbff_url != "":
+            targets.append(("GBFF", gbff_url, raw_dir / gbff_filename, gbff_archive_member))
         if genome_url != "":
             targets.append(("GENOME", genome_url, raw_dir / genome_filename, genome_archive_member))
         for label, url, target, archive_member in targets:
@@ -3269,6 +3389,35 @@ def is_fasta_filename(name):
 def is_gff_filename(name):
     lower = name.lower()
     return any(lower.endswith(ext) for ext in GFF_EXTENSIONS)
+
+
+def is_gbff_filename(name):
+    lower = name.lower()
+    return any(lower.endswith(ext) for ext in GENBANK_EXTENSIONS)
+
+
+def manifest_has_annotation_source(gff_url, gbff_url):
+    return str(gff_url or "").strip() != "" or str(gbff_url or "").strip() != ""
+
+
+def manifest_has_cds_source(cds_url, genome_url, gbff_url):
+    return (
+        str(cds_url or "").strip() != ""
+        or str(genome_url or "").strip() != ""
+        or str(gbff_url or "").strip() != ""
+    )
+
+
+def manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url):
+    if str(cds_url or "").strip() != "":
+        return True
+    if str(gbff_url or "").strip() != "":
+        return True
+    return str(gff_url or "").strip() != "" and str(genome_url or "").strip() != ""
+
+
+def task_has_usable_source_bundle(cds_path, gff_path, gbff_path, genome_path):
+    return cds_path is not None or gbff_path is not None or (gff_path is not None and genome_path is not None)
 
 
 def is_probable_genome_filename(provider, name):
@@ -3472,6 +3621,15 @@ def load_genome_sequences(path):
     return sequences
 
 
+def iter_genome_records_from_gbff(path):
+    for record in iter_genbank_records(path):
+        record_id = extract_seqrecord_id(record)
+        sequence = re.sub(r"\s+", "", str(record.seq or "")).upper()
+        if sequence == "":
+            continue
+        yield record_id, sequence
+
+
 def resolve_feature_gene_token(feature_id, feature_records, provider, cache, active):
     feature_text = str(feature_id or "").strip()
     if feature_text == "":
@@ -3507,6 +3665,239 @@ def resolve_feature_gene_token(feature_id, feature_records, provider, cache, act
     active.remove(feature_text)
     cache[feature_text] = str(direct or "").strip()
     return cache[feature_text]
+
+
+def require_biopython_for_gbff(path):
+    if SeqIO is None:
+        raise RuntimeError(
+            "Biopython is required to process GBFF/GenBank inputs: {}".format(path)
+        )
+
+
+def iter_genbank_records(path):
+    require_biopython_for_gbff(path)
+    with open_text(path, "rt") as handle:
+        for record in SeqIO.parse(handle, "genbank"):
+            yield record
+
+
+def choose_first_feature_qualifier(feature, keys):
+    qualifiers = getattr(feature, "qualifiers", {}) or {}
+    for key in keys:
+        values = qualifiers.get(key, ())
+        if isinstance(values, str):
+            values = (values,)
+        for value in values:
+            text = str(value or "").strip()
+            if text != "":
+                return text
+    return ""
+
+
+def extract_genbank_gene_id_from_dbxref(feature):
+    qualifiers = getattr(feature, "qualifiers", {}) or {}
+    values = qualifiers.get("db_xref", ())
+    if isinstance(values, str):
+        values = (values,)
+    for raw in values:
+        text = str(raw or "").strip()
+        if text.startswith("GeneID:"):
+            candidate = text.split(":", 1)[1].strip()
+            if candidate != "":
+                return "GeneID{}".format(candidate)
+    return ""
+
+
+def normalize_genbank_feature_location(feature):
+    location = getattr(feature, "location", None)
+    if location is None:
+        return []
+    if hasattr(location, "parts") and len(getattr(location, "parts", ())) > 0:
+        parts = list(location.parts)
+    else:
+        parts = [location]
+    normalized = []
+    for part in parts:
+        try:
+            start = int(part.start) + 1
+            end = int(part.end)
+        except Exception:
+            continue
+        if start > end:
+            start, end = end, start
+        normalized.append((start, end))
+    return normalized
+
+
+def get_genbank_feature_strand(feature):
+    strand = getattr(getattr(feature, "location", None), "strand", None)
+    return "-" if strand == -1 else "+"
+
+
+def infer_genbank_gene_token(feature, fallback_prefix, fallback_index):
+    gene_token = choose_first_feature_qualifier(
+        feature,
+        ("locus_tag", "gene", "gene_synonym", "Name", "ID"),
+    )
+    if gene_token == "":
+        gene_token = extract_genbank_gene_id_from_dbxref(feature)
+    if gene_token == "":
+        gene_token = "{}_gene{}".format(fallback_prefix, fallback_index)
+    return sanitize_identifier(gene_token)
+
+
+def infer_genbank_transcript_token(feature, gene_token, fallback_index):
+    transcript_token = choose_first_feature_qualifier(
+        feature,
+        ("protein_id", "transcript_id", "mrna", "rna_id"),
+    )
+    if transcript_token == "":
+        transcript_token = "{}.t{}".format(gene_token, fallback_index)
+    return sanitize_identifier(transcript_token)
+
+
+def parse_genbank_codon_start(feature):
+    raw = choose_first_feature_qualifier(feature, ("codon_start",))
+    if raw == "":
+        return 1
+    try:
+        value = int(raw)
+    except Exception:
+        return 1
+    if value not in (1, 2, 3):
+        return 1
+    return value
+
+
+def extract_seqrecord_id(record):
+    candidate = first_token(apply_common_replacements(str(getattr(record, "id", "") or "").strip()))
+    if candidate != "":
+        return candidate
+    candidate = first_token(apply_common_replacements(str(getattr(record, "name", "") or "").strip()))
+    if candidate != "":
+        return candidate
+    return "unnamed_record"
+
+
+def format_gff_attributes(attributes):
+    fields = []
+    for key, value in attributes:
+        text = str(value or "").strip()
+        if text == "":
+            continue
+        fields.append("{}={}".format(key, quote(text, safe="._:-|")))
+    return ";".join(fields) if len(fields) > 0 else "."
+
+
+def compute_gff_phases(parts, strand, codon_start):
+    if len(parts) == 0:
+        return []
+    transcript_order = list(parts)
+    if strand == "-":
+        transcript_order = list(reversed(transcript_order))
+    phases_by_part = {}
+    effective_bases = 0
+    for index, part in enumerate(transcript_order):
+        length = part["end"] - part["start"] + 1
+        phase = codon_start - 1 if index == 0 else (3 - (effective_bases % 3)) % 3
+        phases_by_part[(part["start"], part["end"])] = str(phase)
+        effective_bases += max(0, length - phase)
+    return [phases_by_part[(part["start"], part["end"])] for part in parts]
+
+
+def iter_gbff_coding_entries(path):
+    gene_entries = {}
+    transcripts_by_gene = defaultdict(list)
+    fallback_gene_index = 0
+    transcript_counts_by_gene = defaultdict(int)
+
+    for record in iter_genbank_records(path):
+        seqid = extract_seqrecord_id(record)
+        for feature in getattr(record, "features", ()):
+            feature_type = str(getattr(feature, "type", "") or "").lower()
+            parts = normalize_genbank_feature_location(feature)
+            if len(parts) == 0:
+                continue
+            strand = get_genbank_feature_strand(feature)
+            if feature_type == "gene":
+                fallback_gene_index += 1
+                gene_token = infer_genbank_gene_token(feature, seqid, fallback_gene_index)
+                gene_key = (seqid, gene_token)
+                gene_name = choose_first_feature_qualifier(feature, ("gene", "locus_tag"))
+                start = min(start for start, _end in parts)
+                end = max(end for _start, end in parts)
+                existing = gene_entries.get(gene_key)
+                if existing is None:
+                    gene_entries[gene_key] = {
+                        "seqid": seqid,
+                        "gene_token": gene_token,
+                        "gene_name": gene_name,
+                        "start": start,
+                        "end": end,
+                        "strand": strand,
+                    }
+                else:
+                    existing["start"] = min(existing["start"], start)
+                    existing["end"] = max(existing["end"], end)
+                    if existing["gene_name"] == "" and gene_name != "":
+                        existing["gene_name"] = gene_name
+                continue
+            if feature_type != "cds":
+                continue
+            fallback_gene_index += 1
+            gene_token = infer_genbank_gene_token(feature, seqid, fallback_gene_index)
+            gene_key = (seqid, gene_token)
+            gene_name = choose_first_feature_qualifier(feature, ("gene", "locus_tag"))
+            transcript_counts_by_gene[gene_key] += 1
+            transcript_token = infer_genbank_transcript_token(
+                feature,
+                gene_token,
+                transcript_counts_by_gene[gene_key],
+            )
+            sequence = str(feature.extract(record.seq)).upper()
+            codon_start = parse_genbank_codon_start(feature)
+            if codon_start > 1:
+                sequence = sequence[codon_start - 1 :]
+            if sequence == "":
+                continue
+            start = min(start for start, _end in parts)
+            end = max(end for _start, end in parts)
+            existing = gene_entries.get(gene_key)
+            if existing is None:
+                gene_entries[gene_key] = {
+                    "seqid": seqid,
+                    "gene_token": gene_token,
+                    "gene_name": gene_name,
+                    "start": start,
+                    "end": end,
+                    "strand": strand,
+                }
+            else:
+                existing["start"] = min(existing["start"], start)
+                existing["end"] = max(existing["end"], end)
+                if existing["gene_name"] == "" and gene_name != "":
+                    existing["gene_name"] = gene_name
+            transcript_entry = {
+                "seqid": seqid,
+                "gene_key": gene_key,
+                "gene_token": gene_token,
+                "gene_name": gene_name,
+                "transcript_token": transcript_token,
+                "start": start,
+                "end": end,
+                "strand": strand,
+                "parts": [{"start": part_start, "end": part_end} for part_start, part_end in parts],
+                "codon_start": codon_start,
+                "sequence": sequence,
+            }
+            transcripts_by_gene[gene_key].append(transcript_entry)
+
+    for gene_key, gene_entry in gene_entries.items():
+        transcripts = transcripts_by_gene.get(gene_key, [])
+        yield gene_entry, sorted(
+            transcripts,
+            key=lambda item: (item["start"], item["end"], item["transcript_token"]),
+        )
 
 
 def derive_cds_records_from_gff_and_genome(task):
@@ -3684,6 +4075,86 @@ def derive_cds_records_from_gff_and_genome(task):
         yield header, sequence
 
 
+def derive_cds_records_from_gbff(task):
+    gbff_path = task.get("gbff_path")
+    if gbff_path is None:
+        raise ValueError("GBFF input is required to derive CDS for {}".format(task.get("species_key", "")))
+    for _gene_entry, transcripts in iter_gbff_coding_entries(gbff_path):
+        for transcript in transcripts:
+            header = transcript["transcript_token"]
+            if transcript["gene_token"] != "":
+                header = "{} gene={}".format(header, transcript["gene_token"])
+            yield header, transcript["sequence"]
+
+
+def iter_gff_lines_from_gbff(task):
+    gbff_path = task.get("gbff_path")
+    if gbff_path is None:
+        raise ValueError("GBFF input is required to derive GFF for {}".format(task.get("species_key", "")))
+    yield "##gff-version 3\n"
+    for gene_entry, transcripts in sorted(
+        iter_gbff_coding_entries(gbff_path),
+        key=lambda item: (item[0]["seqid"], item[0]["start"], item[0]["gene_token"]),
+    ):
+        seqid = gene_entry["seqid"]
+        strand = gene_entry["strand"]
+        gene_id = "gene:{}".format(gene_entry["gene_token"])
+        gene_attrs = [("ID", gene_id), ("Name", gene_entry["gene_name"] or gene_entry["gene_token"])]
+        yield "\t".join(
+            [
+                seqid,
+                "genbank_derived",
+                "gene",
+                str(gene_entry["start"]),
+                str(gene_entry["end"]),
+                ".",
+                strand,
+                ".",
+                format_gff_attributes(gene_attrs),
+            ]
+        ) + "\n"
+        for transcript in transcripts:
+            transcript_id = "transcript:{}".format(transcript["transcript_token"])
+            transcript_attrs = [
+                ("ID", transcript_id),
+                ("Parent", gene_id),
+                ("Name", transcript["transcript_token"]),
+            ]
+            yield "\t".join(
+                [
+                    seqid,
+                    "genbank_derived",
+                    "mRNA",
+                    str(transcript["start"]),
+                    str(transcript["end"]),
+                    ".",
+                    transcript["strand"],
+                    ".",
+                    format_gff_attributes(transcript_attrs),
+                ]
+            ) + "\n"
+            ordered_parts = sorted(transcript["parts"], key=lambda item: item["start"])
+            phases = compute_gff_phases(ordered_parts, transcript["strand"], transcript["codon_start"])
+            for index, part in enumerate(ordered_parts, start=1):
+                cds_attrs = [
+                    ("ID", "cds:{}.{}".format(transcript["transcript_token"], index)),
+                    ("Parent", transcript_id),
+                ]
+                yield "\t".join(
+                    [
+                        seqid,
+                        "genbank_derived",
+                        "CDS",
+                        str(part["start"]),
+                        str(part["end"]),
+                        ".",
+                        transcript["strand"],
+                        phases[index - 1],
+                        format_gff_attributes(cds_attrs),
+                    ]
+                ) + "\n"
+
+
 def _iter_fasta_records_from_handle(handle):
     header = None
     chunks = []
@@ -3824,11 +4295,17 @@ def collapse_transcript_suffix(provider, identifier):
     return text
 
 
-def task_missing_annotation_label(cds_path, gff_path, genome_path):
-    if gff_path is None:
-        return "GFF"
-    if cds_path is None and genome_path is None:
-        return "CDS-or-genome"
+def task_missing_annotation_label(cds_path, gff_path, gbff_path, genome_path):
+    if task_has_usable_source_bundle(cds_path, gff_path, gbff_path, genome_path):
+        return ""
+    if cds_path is None and gff_path is None and gbff_path is None and genome_path is None:
+        return "CDS-or-GBFF-or-(GFF+genome)"
+    if gff_path is not None and genome_path is None:
+        return "CDS-or-GBFF-or-genome"
+    if genome_path is not None and gff_path is None and gbff_path is None:
+        return "CDS-or-GBFF-or-GFF"
+    if gbff_path is None:
+        return "CDS-or-GBFF-or-(GFF+genome)"
     return ""
 
 
@@ -3837,9 +4314,34 @@ def describe_task_cds_input(task):
     if cds_path is not None:
         return cds_path
     gff_path = task.get("gff_path")
+    gbff_path = task.get("gbff_path")
     genome_path = task.get("genome_path")
     if gff_path is not None and genome_path is not None:
         return "{} + {} (derived CDS)".format(gff_path, genome_path)
+    if gbff_path is not None and genome_path is not None:
+        return "{} + {} (derived CDS)".format(gbff_path, genome_path)
+    if gbff_path is not None:
+        return "{} (derived CDS)".format(gbff_path)
+    return ""
+
+
+def describe_task_gff_input(task):
+    gff_path = task.get("gff_path")
+    if gff_path is not None:
+        return gff_path
+    gbff_path = task.get("gbff_path")
+    if gbff_path is not None:
+        return "{} (derived GFF)".format(gbff_path)
+    return ""
+
+
+def describe_task_genome_input(task):
+    genome_path = task.get("genome_path")
+    if genome_path is not None:
+        return genome_path
+    gbff_path = task.get("gbff_path")
+    if gbff_path is not None:
+        return "{} (derived genome)".format(gbff_path)
     return ""
 
 
@@ -3850,6 +4352,11 @@ def build_derived_cds_output_basename(task):
         normalized = normalize_output_basename(gff_path.name, species_prefix)
         stem = strip_suffix_case_insensitive(normalized, GFF_EXTENSIONS)
         return stem + ".derived.cds.fa.gz"
+    gbff_path = task.get("gbff_path")
+    if gbff_path is not None:
+        normalized = normalize_output_basename(gbff_path.name, species_prefix)
+        stem = strip_suffix_case_insensitive(normalized, GENBANK_EXTENSIONS)
+        return stem + ".derived.cds.fa.gz"
     genome_path = task.get("genome_path")
     if genome_path is not None:
         normalized = normalize_output_basename(genome_path.name, species_prefix)
@@ -3858,12 +4365,41 @@ def build_derived_cds_output_basename(task):
     return species_prefix + ".derived.cds.fa.gz"
 
 
+def build_derived_gff_output_basename(task):
+    gbff_path = task.get("gbff_path")
+    species_prefix = task["species_prefix"]
+    if gbff_path is not None:
+        normalized = normalize_output_basename(gbff_path.name, species_prefix)
+        stem = strip_suffix_case_insensitive(normalized, GENBANK_EXTENSIONS)
+        return stem + ".derived.gff.gz"
+    return species_prefix + ".derived.gff.gz"
+
+
+def build_derived_genome_output_basename(task):
+    gbff_path = task.get("gbff_path")
+    species_prefix = task["species_prefix"]
+    if gbff_path is not None:
+        normalized = normalize_output_basename(gbff_path.name, species_prefix)
+        stem = strip_suffix_case_insensitive(normalized, GENBANK_EXTENSIONS)
+        return stem + ".derived.genome.fa.gz"
+    return species_prefix + ".derived.genome.fa.gz"
+
+
 def iter_task_cds_records(task):
     cds_path = task.get("cds_path")
     if cds_path is not None:
         yield from iter_fasta_records(cds_path)
         return
-    yield from derive_cds_records_from_gff_and_genome(task)
+    gff_path = task.get("gff_path")
+    genome_path = task.get("genome_path")
+    gbff_path = task.get("gbff_path")
+    if gff_path is not None and genome_path is not None:
+        yield from derive_cds_records_from_gff_and_genome(task)
+        return
+    if gbff_path is not None:
+        yield from derive_cds_records_from_gbff(task)
+        return
+    raise ValueError("No CDS source is available for {}".format(task.get("species_key", "")))
 
 
 def discover_generic_species_dir_tasks(provider, input_dir):
@@ -3895,13 +4431,15 @@ def discover_generic_species_dir_tasks(provider, input_dir):
                 if is_fasta_filename(path.name) and not is_probable_genome_filename(provider, path.name)
             ]
         gff_matches = [path for path in files if is_gff_filename(path.name)]
+        gbff_matches = [path for path in files if is_gbff_filename(path.name)]
         genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
 
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
+        gbff_path = pick_single_file(gbff_matches, provider, species_key, "GBFF", warnings)
         genome_path = pick_single_file(genome_matches, provider, species_key, "genome", warnings)
 
-        missing_label = task_missing_annotation_label(cds_path, gff_path, genome_path)
+        missing_label = task_missing_annotation_label(cds_path, gff_path, gbff_path, genome_path)
         if missing_label != "":
             errors.append(
                 "[{}] {}: missing {}".format(
@@ -3916,6 +4454,7 @@ def discover_generic_species_dir_tasks(provider, input_dir):
                 "species_prefix": species_prefix,
                 "cds_path": cds_path,
                 "gff_path": gff_path,
+                "gbff_path": gbff_path,
                 "genome_path": genome_path,
             }
         )
@@ -3976,6 +4515,7 @@ def discover_ensembl_like_tasks(input_dir, provider):
 
     cds_by_species = defaultdict(list)
     gff_by_species = defaultdict(list)
+    gbff_by_species = defaultdict(list)
     genome_by_species = defaultdict(list)
 
     for path in sorted(input_dir.iterdir()):
@@ -3991,10 +4531,18 @@ def discover_ensembl_like_tasks(input_dir, provider):
         if is_gff_filename(name):
             gff_by_species[species_key].append(path)
             continue
+        if is_gbff_filename(name):
+            gbff_by_species[species_key].append(path)
+            continue
         if is_probable_genome_filename(provider, name):
             genome_by_species[species_key].append(path)
 
-    for species_key in sorted(set(cds_by_species.keys()) | set(gff_by_species.keys()) | set(genome_by_species.keys())):
+    for species_key in sorted(
+        set(cds_by_species.keys())
+        | set(gff_by_species.keys())
+        | set(gbff_by_species.keys())
+        | set(genome_by_species.keys())
+    ):
         species_prefix = species_prefix_from_value(species_key)
         if species_prefix == "":
             warnings.append(
@@ -4016,6 +4564,13 @@ def discover_ensembl_like_tasks(input_dir, provider):
             "GFF",
             warnings,
         )
+        gbff_path = pick_single_file(
+            gbff_by_species.get(species_key, []),
+            provider,
+            species_key,
+            "GBFF",
+            warnings,
+        )
         genome_path = pick_single_file(
             genome_by_species.get(species_key, []),
             provider,
@@ -4023,7 +4578,7 @@ def discover_ensembl_like_tasks(input_dir, provider):
             "genome",
             warnings,
         )
-        missing_label = task_missing_annotation_label(cds_path, gff_path, genome_path)
+        missing_label = task_missing_annotation_label(cds_path, gff_path, gbff_path, genome_path)
         if missing_label != "":
             errors.append(
                 "[{}] {}: missing {}".format(
@@ -4039,6 +4594,7 @@ def discover_ensembl_like_tasks(input_dir, provider):
                 "species_prefix": species_prefix,
                 "cds_path": cds_path,
                 "gff_path": gff_path,
+                "gbff_path": gbff_path,
                 "genome_path": genome_path,
             }
         )
@@ -4065,13 +4621,15 @@ def discover_phycocosm_tasks(input_dir):
         files = [path for path in species_dir.iterdir() if path.is_file()]
         cds_matches = [path for path in files if "fasta" in path.name.lower() and is_fasta_filename(path.name)]
         gff_matches = [path for path in files if "gff" in path.name.lower() and is_gff_filename(path.name)]
+        gbff_matches = [path for path in files if is_gbff_filename(path.name)]
         genome_matches = [path for path in files if is_probable_genome_filename("phycocosm", path.name)]
 
         cds_path = pick_single_file(cds_matches, "phycocosm", species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, "phycocosm", species_key, "GFF", warnings)
+        gbff_path = pick_single_file(gbff_matches, "phycocosm", species_key, "GBFF", warnings)
         genome_path = pick_single_file(genome_matches, "phycocosm", species_key, "genome", warnings)
 
-        missing_label = task_missing_annotation_label(cds_path, gff_path, genome_path)
+        missing_label = task_missing_annotation_label(cds_path, gff_path, gbff_path, genome_path)
         if missing_label != "":
             errors.append(
                 "[phycocosm] {}: missing {}".format(
@@ -4086,6 +4644,7 @@ def discover_phycocosm_tasks(input_dir):
                 "species_prefix": species_prefix,
                 "cds_path": cds_path,
                 "gff_path": gff_path,
+                "gbff_path": gbff_path,
                 "genome_path": genome_path,
             }
         )
@@ -4116,13 +4675,15 @@ def discover_phytozome_tasks(input_dir):
             if ("cds_" in path.name.lower() or ".cds." in path.name.lower()) and is_fasta_filename(path.name)
         ]
         gff_matches = [path for path in files if "gene.gff3" in path.name.lower() and is_gff_filename(path.name)]
+        gbff_matches = [path for path in files if is_gbff_filename(path.name)]
         genome_matches = [path for path in files if is_probable_genome_filename("phytozome", path.name)]
 
         cds_path = pick_single_file(cds_matches, "phytozome", species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, "phytozome", species_key, "GFF", warnings)
+        gbff_path = pick_single_file(gbff_matches, "phytozome", species_key, "GBFF", warnings)
         genome_path = pick_single_file(genome_matches, "phytozome", species_key, "genome", warnings)
 
-        missing_label = task_missing_annotation_label(cds_path, gff_path, genome_path)
+        missing_label = task_missing_annotation_label(cds_path, gff_path, gbff_path, genome_path)
         if missing_label != "":
             errors.append(
                 "[phytozome] {}: missing {}".format(
@@ -4137,6 +4698,7 @@ def discover_phytozome_tasks(input_dir):
                 "species_prefix": species_prefix,
                 "cds_path": cds_path,
                 "gff_path": gff_path,
+                "gbff_path": gbff_path,
                 "genome_path": genome_path,
             }
         )
@@ -4171,13 +4733,19 @@ def discover_ncbi_like_tasks(input_dir, provider):
             for path in files
             if "genomic.gff" in path.name.lower() and is_gff_filename(path.name)
         ]
+        gbff_matches = [
+            path
+            for path in files
+            if "genomic.gbff" in path.name.lower() and is_gbff_filename(path.name)
+        ]
         genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
 
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
+        gbff_path = pick_single_file(gbff_matches, provider, species_key, "GBFF", warnings)
         genome_path = pick_single_file(genome_matches, provider, species_key, "genome", warnings)
 
-        missing_label = task_missing_annotation_label(cds_path, gff_path, genome_path)
+        missing_label = task_missing_annotation_label(cds_path, gff_path, gbff_path, genome_path)
         if missing_label != "":
             errors.append(
                 "[{}] {}: missing {}".format(
@@ -4193,6 +4761,7 @@ def discover_ncbi_like_tasks(input_dir, provider):
                 "species_prefix": species_prefix,
                 "cds_path": cds_path,
                 "gff_path": gff_path,
+                "gbff_path": gbff_path,
                 "genome_path": genome_path,
             }
         )
@@ -4314,10 +4883,14 @@ def format_cds(task, output_dir, overwrite, dry_run):
 
 def format_genome(task, output_dir, overwrite, dry_run):
     genome_path = task.get("genome_path")
-    if genome_path is None:
+    gbff_path = task.get("gbff_path")
+    if genome_path is None and gbff_path is None:
         return {"status": "missing", "output_path": None, "written": 0}
 
-    output_name = normalize_genome_output_basename(genome_path.name, task["species_prefix"])
+    if genome_path is not None:
+        output_name = normalize_genome_output_basename(genome_path.name, task["species_prefix"])
+    else:
+        output_name = build_derived_genome_output_basename(task)
     output_path = output_dir / output_name
     if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
         return {"status": "skip", "output_path": output_path, "written": 0}
@@ -4327,27 +4900,42 @@ def format_genome(task, output_dir, overwrite, dry_run):
     written = 0
     def iter_genome_output_records():
         nonlocal written
-        for header, sequence in iter_fasta_records(genome_path):
-            record_id = first_token(apply_common_replacements(header))
-            if record_id == "":
-                record_id = "unnamed"
-            seq = re.sub(r"\s+", "", sequence).upper()
+        if genome_path is not None:
+            for header, sequence in iter_fasta_records(genome_path):
+                record_id = first_token(apply_common_replacements(header))
+                if record_id == "":
+                    record_id = "unnamed"
+                seq = re.sub(r"\s+", "", sequence).upper()
+                written += 1
+                yield record_id, seq
+            return
+        for record_id, sequence in iter_genome_records_from_gbff(gbff_path):
             written += 1
-            yield record_id, seq
+            yield record_id, sequence
 
     write_fasta_records_gzip(output_path, iter_genome_output_records())
     return {"status": "write", "output_path": output_path, "written": written}
 
 
 def format_gff(task, output_dir, overwrite, dry_run):
-    output_name = normalize_gff_output_basename(task["gff_path"].name, task["species_prefix"])
+    gff_path = task.get("gff_path")
+    gbff_path = task.get("gbff_path")
+    if gff_path is not None:
+        output_name = normalize_gff_output_basename(gff_path.name, task["species_prefix"])
+    elif gbff_path is not None:
+        output_name = build_derived_gff_output_basename(task)
+    else:
+        return {"status": "missing", "output_path": None, "lines": 0}
     output_path = output_dir / output_name
     if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
         return {"status": "skip", "output_path": output_path, "lines": 0}
     if dry_run:
         return {"status": "dry-run", "output_path": output_path, "lines": 0}
 
-    line_count = write_gff_gzip(task["gff_path"], output_path)
+    if gff_path is not None:
+        line_count = write_gff_gzip(gff_path, output_path)
+    else:
+        line_count = write_gff_lines_gzip(output_path, iter_gff_lines_from_gbff(task))
     return {"status": "write", "output_path": output_path, "lines": line_count}
 
 
@@ -4397,14 +4985,18 @@ def species_summary_row_has_existing_outputs(row):
     cds_output = (row.get("cds_output_path") or "").strip()
     gff_output = (row.get("gff_output_path") or "").strip()
     genome_output = (row.get("genome_output_path") or "").strip()
+    gff_status = (row.get("gff_status") or "").strip()
     genome_status = (row.get("genome_status") or "").strip()
 
-    if cds_output == "" or gff_output == "":
+    if cds_output == "":
         return False
     if not Path(cds_output).expanduser().exists():
         return False
-    if not Path(gff_output).expanduser().exists():
-        return False
+    if gff_status != "missing":
+        if gff_output == "":
+            return False
+        if not Path(gff_output).expanduser().exists():
+            return False
     if genome_output != "" and genome_status != "missing" and not Path(genome_output).expanduser().exists():
         return False
     return True
@@ -4446,7 +5038,7 @@ def format_task_succeeded(cds_result, gff_result, genome_result, dry_run):
         return False
     if cds_result["status"] not in ("write", "skip"):
         return False
-    if gff_result["status"] not in ("write", "skip"):
+    if gff_result["status"] not in ("write", "skip", "missing"):
         return False
     if genome_result["status"] not in ("write", "skip", "missing"):
         return False
@@ -4480,8 +5072,8 @@ def build_species_summary_row(
         "plastid_genetic_code_id": metadata["plastid_genetic_code_id"],
         "plastid_genetic_code_name": metadata["plastid_genetic_code_name"],
         "cds_input_path": str(cds_result.get("input_path") or ""),
-        "gff_input_path": str(task["gff_path"]),
-        "genome_input_path": str(task["genome_path"]) if task.get("genome_path") is not None else "",
+        "gff_input_path": str(describe_task_gff_input(task) or ""),
+        "genome_input_path": str(describe_task_genome_input(task) or ""),
         "cds_output_path": str(cds_result["output_path"]) if cds_result.get("output_path") is not None else "",
         "gff_output_path": str(gff_result["output_path"]) if gff_result.get("output_path") is not None else "",
         "genome_output_path": str(genome_result["output_path"]) if genome_result.get("output_path") is not None else "",
@@ -4602,7 +5194,7 @@ def main():
     if args.strict and len(all_errors) > 0:
         return 1
     if len(all_tasks) == 0:
-        sys.stderr.write("No species inputs with GFF plus either CDS or genome were discovered.\n")
+        sys.stderr.write("No species inputs with CDS, GBFF, or GFF plus genome were discovered.\n")
         return 1
 
     processed = 0
@@ -4642,16 +5234,16 @@ def main():
             "[{}] {}: CDS={} ({}, {}, aggregated_away={}, before={}, after={}), GFF={} ({}, lines={}), GENOME={} ({})".format(
                 task["provider"],
                 task["species_prefix"],
-                task["cds_path"].name if task.get("cds_path") is not None else "DERIVED_FROM_GFF_GENOME",
+                task["cds_path"].name if task.get("cds_path") is not None else Path(str(describe_task_cds_input(task) or "derived_cds")).name,
                 cds_result["status"],
                 cds_result["output_path"].name,
                 cds_result["duplicates"],
                 cds_result["before_count"],
                 cds_result["after_count"],
-                task["gff_path"].name,
+                Path(str(describe_task_gff_input(task) or "derived_gff")).name,
                 gff_result["status"],
                 gff_result["lines"],
-                task["genome_path"].name if task.get("genome_path") is not None else "NA",
+                Path(str(describe_task_genome_input(task) or "NA")).name,
                 genome_result["status"],
             )
         )
