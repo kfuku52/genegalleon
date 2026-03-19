@@ -44,6 +44,7 @@ trait_download_dir="${trait_download_dir:-}"
 trait_download_timeout="${trait_download_timeout:-120}"
 trait_species_source="${trait_species_source:-download_manifest}"
 trait_databases="${trait_databases:-auto}"
+gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
 
 enable_all_run_flags_for_debug_mode
 
@@ -118,6 +119,13 @@ if [[ "${trait_species_source}" != "download_manifest" && "${trait_species_sourc
   echo "Invalid trait_species_source: ${trait_species_source} (allowed: download_manifest|species_cds)"
   exit 1
 fi
+case "${gene_grouping_mode}" in
+  strict|rescue_overlap) ;;
+  *)
+    echo "Invalid gene_grouping_mode: ${gene_grouping_mode} (allowed: strict|rescue_overlap)"
+    exit 1
+    ;;
+esac
 if [[ "${input_generation_mode}" != "single" && ${dry_run} -eq 1 ]]; then
   echo "dry_run=1 is not supported with input_generation_mode=${input_generation_mode}"
   exit 1
@@ -615,6 +623,7 @@ run_format_stage_single() {
   cmd+=(--species-genome-dir "${species_genome_dir}")
   cmd+=(--species-summary-output "${species_summary_output}")
   cmd+=(--stats-output "${format_stats_file}")
+  cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
 
   if [[ -n "${download_manifest}" ]]; then
     cmd+=(--download-manifest "${download_manifest}")
@@ -742,8 +751,10 @@ run_validate_stage() {
     fi
     if [[ ${set_status} -eq 0 ]]; then
       mapping_stats_file="${download_tmp_root}/gg_input_generation_mapping_stats.json"
+      longest_cds_stats_file="${download_tmp_root}/gg_input_generation_longest_cds_stats.json"
       ensure_parent_dir "${mapping_stats_file}"
       rm -f -- "${mapping_stats_file}"
+      rm -f -- "${longest_cds_stats_file}"
       cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
       cmd+=(--species-cds-dir "${species_cds_dir}")
       cmd+=(--species-gff-dir "${species_gff_dir}")
@@ -757,7 +768,26 @@ run_validate_stage() {
         echo "Failed: Validate CDS-to-GFF mapping compatibility"
         exit 1
       fi
+      if [[ ! -s "${species_summary_output}" ]]; then
+        stage_validate_status="failed"
+        echo "Species summary not found for longest CDS validation: ${species_summary_output}"
+        exit 1
+      fi
+      cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
+      cmd+=(--species-cds-dir "${species_cds_dir}")
+      cmd+=(--species-summary "${species_summary_output}")
+      cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
+      cmd+=(--stats-output "${longest_cds_stats_file}")
+      echo "Running: ${cmd[*]}"
+      if "${cmd[@]}"; then
+        :
+      else
+        stage_validate_status="failed"
+        echo "Failed: Validate longest CDS representative selection"
+        exit 1
+      fi
       rm -f -- "${mapping_stats_file}"
+      rm -f -- "${longest_cds_stats_file}"
     fi
   fi
   stage_validate_status="ok"
@@ -1069,6 +1099,7 @@ run_array_prepare_mode() {
     cmd+=(--download-only)
     cmd+=(--download-timeout "${download_timeout}")
     cmd+=(--jobs "${GG_TASK_CPUS:-1}")
+    cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
     if [[ ${overwrite} -eq 1 ]]; then
       cmd+=(--overwrite)
     fi
@@ -1105,6 +1136,7 @@ run_array_prepare_mode() {
   cmd+=(--provider "${provider}")
   cmd+=(--input-dir "${effective_input_dir}")
   cmd+=(--outfile "${task_plan_output}")
+  cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
   if [[ ${strict} -eq 1 ]]; then
     cmd+=(--strict)
   fi

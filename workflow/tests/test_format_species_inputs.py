@@ -446,6 +446,114 @@ def test_format_species_inputs_derives_cds_excluding_overlapping_utrs(tmp_path):
     assert "ATGAAACCCGGGTTT" not in text
 
 
+def test_format_species_inputs_rescue_overlap_merges_misassigned_gene_ids(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Arabidopsis_thaliana"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    gff_path = species_dir / "Arabidopsis_thaliana.annotation.gff3"
+    genome_path = species_dir / "Arabidopsis_thaliana.genome.fa"
+    species_summary = tmp_path / "gg_input_generation_species.tsv"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=badGeneA",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=locusX.t1;Parent=badGeneA",
+                "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=cds1;Parent=locusX.t1",
+                "chr1\tsrc\tCDS\t13\t18\t.\t+\t0\tID=cds2;Parent=locusX.t1",
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=badGeneB",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=locusX.t2;Parent=badGeneB",
+                "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds3;Parent=locusX.t2",
+                "chr1\tsrc\tCDS\t13\t18\t.\t+\t0\tID=cds4;Parent=locusX.t2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_path.write_text(">chr1\nATGAAACCCGGGTTTCCC\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Arabidopsis_thaliana_annotation.derived.cds.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert headers == [">Arabidopsis_thaliana_locusX"]
+
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows) == 1
+    assert rows[0]["gene_grouping_mode"] == "rescue_overlap"
+    assert rows[0]["aggregated_cds_removed"] == "1"
+
+
+def test_format_species_inputs_strict_gene_grouping_keeps_misassigned_gene_ids_separate(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Arabidopsis_thaliana"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    gff_path = species_dir / "Arabidopsis_thaliana.annotation.gff3"
+    genome_path = species_dir / "Arabidopsis_thaliana.genome.fa"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=badGeneA",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=locusX.t1;Parent=badGeneA",
+                "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=cds1;Parent=locusX.t1",
+                "chr1\tsrc\tCDS\t13\t18\t.\t+\t0\tID=cds2;Parent=locusX.t1",
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=badGeneB",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=locusX.t2;Parent=badGeneB",
+                "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds3;Parent=locusX.t2",
+                "chr1\tsrc\tCDS\t13\t18\t.\t+\t0\tID=cds4;Parent=locusX.t2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_path.write_text(">chr1\nATGAAACCCGGGTTTCCC\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--gene-grouping-mode",
+        "strict",
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Arabidopsis_thaliana_annotation.derived.cds.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert headers == [
+        ">Arabidopsis_thaliana_badGeneA",
+        ">Arabidopsis_thaliana_badGeneB",
+    ]
+
+
 def test_format_species_inputs_fernbase_prefers_primary_annotation_files(tmp_path):
     input_dir = tmp_path / "FernBase" / "species_wise_original"
     species_dir = input_dir / "Azolla_filiculoides"

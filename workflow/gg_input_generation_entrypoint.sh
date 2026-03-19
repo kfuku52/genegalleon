@@ -98,6 +98,7 @@ overwrite=0 # Overwrite existing formatted or downloaded outputs.
 download_only=0 # Stop after download/format steps without validation-only downstream work.
 dry_run=0 # Print planned actions without downloading or writing outputs.
 download_timeout=120 # Per-request timeout in seconds for remote downloads.
+gene_grouping_mode="rescue_overlap" # strict|rescue_overlap
 trait_species_source="download_manifest" # download_manifest|species_cds
 trait_databases="auto" # auto|all|comma-separated IDs
 
@@ -138,6 +139,7 @@ gg_apply_named_env_overrides \
   download_only GG_INPUT_DOWNLOAD_ONLY \
   dry_run GG_INPUT_DRY_RUN \
   download_timeout GG_INPUT_DOWNLOAD_TIMEOUT \
+  gene_grouping_mode GG_INPUT_GENE_GROUPING_MODE \
   busco_lineage GG_INPUT_BUSCO_LINEAGE \
   input_dir GG_INPUT_INPUT_DIR \
   download_manifest GG_INPUT_DOWNLOAD_MANIFEST \

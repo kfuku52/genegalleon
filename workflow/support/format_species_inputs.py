@@ -40,6 +40,11 @@ COMMON_REPLACEMENTS = (
     ("evm.model.", ""),
     ("Oropetium_20150105_", ""),
 )
+GENE_GROUPING_MODES = ("strict", "rescue_overlap")
+RESCUE_SHARED_JUNCTION_MIN_SHORTER_OVERLAP = 0.70
+RESCUE_SHARED_JUNCTION_MIN_LONGER_OVERLAP = 0.40
+RESCUE_SAME_TERMINAL_MIN_SHORTER_OVERLAP = 0.90
+RESCUE_SAME_TERMINAL_MIN_LONGER_OVERLAP = 0.60
 
 FASTA_EXTENSIONS = (
     ".fa",
@@ -312,6 +317,7 @@ SPECIES_SUMMARY_COLUMNS = (
     "cds_sequences_after",
     "cds_first_sequence_name",
     "aggregated_cds_removed",
+    "gene_grouping_mode",
     "overwrite",
     "dry_run",
 )
@@ -614,6 +620,17 @@ def build_arg_parser():
         "--strict",
         action="store_true",
         help="Exit with error if any species lacks a usable source bundle (CDS, GBFF, or GFF plus genome).",
+    )
+    parser.add_argument(
+        "--gene-grouping-mode",
+        choices=GENE_GROUPING_MODES,
+        default="rescue_overlap",
+        help=(
+            "How to group transcript/CDS records into gene-level representatives. "
+            "'strict' uses annotation hierarchy and identifier normalization only. "
+            "'rescue_overlap' also merges highly similar overlapping GFF-derived transcripts "
+            "when annotation gene IDs appear inconsistent."
+        ),
     )
     parser.add_argument(
         "--stats-output",
@@ -3705,6 +3722,235 @@ def resolve_feature_gene_token(feature_id, feature_records, provider, cache, act
     return cache[feature_text]
 
 
+def merge_coordinate_intervals(intervals):
+    ordered = sorted(
+        (int(start), int(end))
+        for start, end in intervals
+        if int(start) <= int(end)
+    )
+    merged = []
+    for start, end in ordered:
+        if len(merged) == 0 or start > merged[-1][1] + 1:
+            merged.append([start, end])
+            continue
+        if end > merged[-1][1]:
+            merged[-1][1] = end
+    return [(start, end) for start, end in merged]
+
+
+def compute_interval_overlap_bases(left_intervals, right_intervals):
+    overlap = 0
+    left_index = 0
+    right_index = 0
+    while left_index < len(left_intervals) and right_index < len(right_intervals):
+        left_start, left_end = left_intervals[left_index]
+        right_start, right_end = right_intervals[right_index]
+        start = max(left_start, right_start)
+        end = min(left_end, right_end)
+        if start <= end:
+            overlap += end - start + 1
+        if left_end <= right_end:
+            left_index += 1
+        else:
+            right_index += 1
+    return overlap
+
+
+def transcript_feature_gene_token(features):
+    counts = defaultdict(int)
+    for feature in features:
+        token = str(feature.get("gene_token", "") or "").strip()
+        if token != "":
+            counts[token] += 1
+    if len(counts) == 0:
+        return ""
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def build_transcript_grouping_entry(provider, transcript_id, features):
+    if len(features) == 0:
+        return {
+            "transcript_id": transcript_id,
+            "gene_token": "",
+            "seqid": "",
+            "strand": "+",
+            "merged_parts": (),
+            "junctions": frozenset(),
+            "cds_length": 0,
+            "span_start": 0,
+            "span_end": 0,
+            "terminal_coord": 0,
+            "rescue_ineligible": True,
+            "collapsed_transcript_id": collapse_transcript_suffix(provider, transcript_id),
+        }
+    seqid = str(features[0].get("seqid", "") or "").strip()
+    strand = str(features[0].get("strand", "") or "").strip() or "+"
+    rescue_ineligible = False
+    intervals = []
+    for feature in features:
+        feature_seqid = str(feature.get("seqid", "") or "").strip()
+        feature_strand = str(feature.get("strand", "") or "").strip() or "+"
+        if feature_seqid != seqid or feature_strand != strand:
+            rescue_ineligible = True
+        intervals.append((int(feature["start"]), int(feature["end"])))
+    merged_parts = merge_coordinate_intervals(intervals)
+    if len(merged_parts) == 0:
+        rescue_ineligible = True
+        span_start = 0
+        span_end = 0
+        terminal_coord = 0
+        cds_length = 0
+        junctions = frozenset()
+    else:
+        span_start = merged_parts[0][0]
+        span_end = merged_parts[-1][1]
+        terminal_coord = span_end if strand == "+" else span_start
+        cds_length = sum(end - start + 1 for start, end in merged_parts)
+        junctions = frozenset(
+            (merged_parts[index][1], merged_parts[index + 1][0])
+            for index in range(len(merged_parts) - 1)
+        )
+    return {
+        "transcript_id": transcript_id,
+        "gene_token": transcript_feature_gene_token(features),
+        "seqid": seqid,
+        "strand": strand,
+        "merged_parts": tuple(merged_parts),
+        "junctions": junctions,
+        "cds_length": cds_length,
+        "span_start": span_start,
+        "span_end": span_end,
+        "terminal_coord": terminal_coord,
+        "rescue_ineligible": rescue_ineligible,
+        "collapsed_transcript_id": collapse_transcript_suffix(provider, transcript_id),
+    }
+
+
+def should_rescue_overlapping_transcripts(left, right):
+    if left["rescue_ineligible"] or right["rescue_ineligible"]:
+        return False
+    if left["seqid"] != right["seqid"] or left["strand"] != right["strand"]:
+        return False
+    if left["cds_length"] <= 0 or right["cds_length"] <= 0:
+        return False
+    if left["span_end"] < right["span_start"] or right["span_end"] < left["span_start"]:
+        return False
+    overlap_bases = compute_interval_overlap_bases(left["merged_parts"], right["merged_parts"])
+    if overlap_bases <= 0:
+        return False
+    shorter_overlap = overlap_bases / float(min(left["cds_length"], right["cds_length"]))
+    longer_overlap = overlap_bases / float(max(left["cds_length"], right["cds_length"]))
+    shared_junctions = len(left["junctions"].intersection(right["junctions"]))
+    if (
+        shared_junctions > 0
+        and shorter_overlap >= RESCUE_SHARED_JUNCTION_MIN_SHORTER_OVERLAP
+        and longer_overlap >= RESCUE_SHARED_JUNCTION_MIN_LONGER_OVERLAP
+    ):
+        return True
+    if (
+        left["terminal_coord"] == right["terminal_coord"]
+        and shorter_overlap >= RESCUE_SAME_TERMINAL_MIN_SHORTER_OVERLAP
+        and longer_overlap >= RESCUE_SAME_TERMINAL_MIN_LONGER_OVERLAP
+    ):
+        return True
+    return False
+
+
+def choose_rescue_cluster_gene_token(provider, entries):
+    collapsed_transcript_ids = sorted(
+        {
+            str(entry.get("collapsed_transcript_id", "") or "").strip()
+            for entry in entries
+            if str(entry.get("collapsed_transcript_id", "") or "").strip() != ""
+        }
+    )
+    if len(collapsed_transcript_ids) == 1:
+        return collapsed_transcript_ids[0]
+    gene_tokens = sorted(
+        {
+            str(entry.get("gene_token", "") or "").strip()
+            for entry in entries
+            if str(entry.get("gene_token", "") or "").strip() != ""
+        }
+    )
+    if len(gene_tokens) > 0:
+        return gene_tokens[0]
+    if len(collapsed_transcript_ids) > 0:
+        return collapsed_transcript_ids[0]
+    transcript_ids = sorted(
+        str(entry.get("transcript_id", "") or "").strip()
+        for entry in entries
+        if str(entry.get("transcript_id", "") or "").strip() != ""
+    )
+    if len(transcript_ids) > 0:
+        fallback = collapse_transcript_suffix(provider, transcript_ids[0])
+        return fallback if fallback != "" else transcript_ids[0]
+    return ""
+
+
+def build_rescued_gene_tokens_for_transcripts(task, cds_features_by_transcript):
+    resolved = {
+        transcript_id: transcript_feature_gene_token(features)
+        for transcript_id, features in cds_features_by_transcript.items()
+    }
+    if gene_grouping_mode_for_task(task) != "rescue_overlap":
+        return resolved
+
+    provider = task["provider"]
+    entries_by_id = {}
+    buckets = defaultdict(list)
+    for transcript_id, features in cds_features_by_transcript.items():
+        entry = build_transcript_grouping_entry(provider, transcript_id, features)
+        entries_by_id[transcript_id] = entry
+        buckets[(entry["seqid"], entry["strand"])].append(entry)
+
+    adjacency = defaultdict(set)
+    for bucket_entries in buckets.values():
+        ordered = sorted(
+            bucket_entries,
+            key=lambda item: (item["span_start"], item["span_end"], item["transcript_id"]),
+        )
+        for index, left in enumerate(ordered):
+            for right in ordered[index + 1 :]:
+                if right["span_start"] > left["span_end"]:
+                    break
+                if left["gene_token"] == right["gene_token"]:
+                    continue
+                if should_rescue_overlapping_transcripts(left, right):
+                    adjacency[left["transcript_id"]].add(right["transcript_id"])
+                    adjacency[right["transcript_id"]].add(left["transcript_id"])
+
+    visited = set()
+    for transcript_id in sorted(entries_by_id.keys()):
+        if transcript_id in visited:
+            continue
+        stack = [transcript_id]
+        component_ids = []
+        while len(stack) > 0:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            component_ids.append(current)
+            for neighbor in sorted(adjacency.get(current, ())):
+                if neighbor not in visited:
+                    stack.append(neighbor)
+        if len(component_ids) <= 1:
+            continue
+        component_entries = [entries_by_id[current_id] for current_id in sorted(component_ids)]
+        cluster_gene_token = choose_rescue_cluster_gene_token(provider, component_entries)
+        if cluster_gene_token == "":
+            continue
+        if not any(
+            str(entry.get("gene_token", "") or "").strip() != cluster_gene_token
+            for entry in component_entries
+        ):
+            continue
+        for entry in component_entries:
+            resolved[entry["transcript_id"]] = cluster_gene_token
+    return resolved
+
+
 def require_biopython_for_gbff(path):
     if SeqIO is None:
         raise RuntimeError(
@@ -4033,12 +4279,14 @@ def derive_cds_records_from_gff_and_genome(task):
                     }
                 )
 
+    rescued_gene_tokens = build_rescued_gene_tokens_for_transcripts(task, cds_features_by_transcript)
     for transcript_id in sorted(cds_features_by_transcript.keys()):
         features = cds_features_by_transcript[transcript_id]
         if len(features) == 0:
             continue
         utr_features = utr_features_by_transcript.get(transcript_id, ())
         strand = features[0]["strand"]
+        transcript_gene_token = rescued_gene_tokens.get(transcript_id, "") or transcript_feature_gene_token(features)
         trimmed_features = []
         for feature in features:
             segments = [(feature["start"], feature["end"])]
@@ -4069,7 +4317,7 @@ def derive_cds_records_from_gff_and_genome(task):
                         "start": seg_start,
                         "end": seg_end,
                         "strand": feature["strand"],
-                        "gene_token": feature["gene_token"],
+                        "gene_token": transcript_gene_token,
                     }
                 )
         ordered = sorted(trimmed_features, key=lambda item: item["start"], reverse=(strand == "-"))
@@ -4331,6 +4579,24 @@ def collapse_transcript_suffix(provider, identifier):
         text = re.sub(r"[._-](?:transcript|mrna|rna|isoform)[._-]?[0-9]+$", "", text, flags=re.IGNORECASE)
         text = re.sub(r"[._-]amt[0-9]+$", "", text, flags=re.IGNORECASE)
     return text
+
+
+def normalize_gene_grouping_mode(value):
+    text = str(value or "").strip().lower()
+    if text == "":
+        return "strict"
+    if text not in GENE_GROUPING_MODES:
+        raise ValueError(
+            "Unknown gene_grouping_mode: {} (allowed: {})".format(
+                text,
+                ",".join(GENE_GROUPING_MODES),
+            )
+        )
+    return text
+
+
+def gene_grouping_mode_for_task(task):
+    return normalize_gene_grouping_mode(task.get("gene_grouping_mode", "strict"))
 
 
 def task_missing_annotation_label(cds_path, gff_path, gbff_path, genome_path):
@@ -5122,6 +5388,7 @@ def build_species_summary_row(
         "cds_sequences_after": str(cds_result.get("after_count", "")),
         "cds_first_sequence_name": cds_result.get("first_sequence_name", "") or "NA",
         "aggregated_cds_removed": str(cds_result.get("duplicates", "")),
+        "gene_grouping_mode": gene_grouping_mode_for_task(task),
         "overwrite": str(int(bool(overwrite))),
         "dry_run": str(int(bool(dry_run))),
     }
@@ -5220,6 +5487,8 @@ def main():
                 all_errors.append(message)
             continue
         tasks, warnings, errors = discover_tasks(provider, input_dir)
+        for task in tasks:
+            task["gene_grouping_mode"] = args.gene_grouping_mode
         all_tasks.extend(tasks)
         all_warnings.extend(warnings)
         all_errors.extend(errors)

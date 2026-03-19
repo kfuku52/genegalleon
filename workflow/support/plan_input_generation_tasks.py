@@ -33,6 +33,12 @@ def build_arg_parser():
         action="store_true",
         help="Exit with error if task discovery reports any species-level errors.",
     )
+    parser.add_argument(
+        "--gene-grouping-mode",
+        choices=fsi.GENE_GROUPING_MODES,
+        default="rescue_overlap",
+        help="Gene grouping mode to embed in each planned task.",
+    )
     return parser
 
 
@@ -72,6 +78,8 @@ def main():
                 all_errors.append(message)
             continue
         tasks, warnings, errors = fsi.discover_tasks(provider, input_dir)
+        for task in tasks:
+            task["gene_grouping_mode"] = args.gene_grouping_mode
         all_tasks.extend(tasks)
         all_warnings.extend(warnings)
         all_errors.extend(errors)

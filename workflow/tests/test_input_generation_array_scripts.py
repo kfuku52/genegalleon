@@ -67,6 +67,7 @@ def test_plan_input_generation_tasks_discovers_direct_species(tmp_path: Path):
     assert payload["task_count"] == 2
     assert payload["species"] == ["Arabidopsis_thaliana", "Oryza_sativa"]
     assert payload["tasks"][0]["provider"] == "direct"
+    assert payload["tasks"][0]["gene_grouping_mode"] == "rescue_overlap"
 
 
 def test_run_input_generation_task_and_merge_shards(tmp_path: Path):

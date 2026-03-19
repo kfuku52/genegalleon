@@ -251,6 +251,7 @@ download_manifest
 download_only
 download_timeout
 dry_run
+gene_grouping_mode
 http_header
 input_dir
 input_generation_mode
