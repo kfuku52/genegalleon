@@ -23,6 +23,15 @@ if (length(script_file_arg) > 0) {
 cat('arguments:\n')
 args = rkftools::get_parsed_args(args, print = TRUE)
 
+resolve_treevis_dir = function(args) {
+  for (key in c('treevis_dir', 'tree_annotation_dir')) {
+    if (key %in% names(args) && !is.null(args[[key]]) && nzchar(as.character(args[[key]]))) {
+      return(as.character(args[[key]]))
+    }
+  }
+  stop('Neither --treevis_dir nor --tree_annotation_dir was provided.')
+}
+
 set_default_arg = function(args, key, value) {
   if (!(key %in% names(args)) || is.null(args[[key]]) || !nzchar(as.character(args[[key]]))) {
     args[[key]] = value
@@ -85,10 +94,8 @@ cat('long_branch_display settings:',
     ),
     '\n')
 
-Rfiles = list.files(file.path(args[['tree_annotation_dir']], 'R'))
-for (Rfile in Rfiles) {
-  source(file.path(args[['tree_annotation_dir']], 'R', Rfile))
-}
+treevis_dir = resolve_treevis_dir(args)
+source(file.path(treevis_dir, 'R', 'main.R'), local = TRUE)
 
 # --panelINT: order-sensitive comma-delimited parameters for plotting panels (INT=1, leftmost). e.g., "--panel1 tree,FOO --panel2 heatmap,BAR --panel3 tiplabel"
 
@@ -177,7 +184,8 @@ for (Rfile in Rfiles) {
 # --long_branch_tail_shrink: Shrink ratio applied to (edge_length - display_cap) for outlier-long branches.
 # --long_branch_max_fraction: Skip compression when outlier-long branch fraction exceeds this value.
 
-# --tree_annotation_dir: Directory PATH for the associated local R package
+# --treevis_dir: Directory PATH for the associated local R package.
+# --tree_annotation_dir is accepted as a backward-compatible alias.
 
 # --pie_chart_value_transformation: 'identity|delog2|delog2p1|delog10|delog10p1'. 
 

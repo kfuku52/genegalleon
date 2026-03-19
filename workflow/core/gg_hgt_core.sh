@@ -270,7 +270,7 @@ if [[ ${run_hgt_plot} -eq 1 ]]; then
       rm -f -- stat_branch2tree_plot.pdf
       Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
         --stat_branch="${file_hgt_stat_branch}" \
-        --tree_annotation_dir="${gg_support_dir}/tree_annotation" \
+        --treevis_dir="${gg_support_dir}/treevis" \
         --max_delta_intron_present="-0.5" \
         --width="${hgt_tree_plot_width}" \
         --rel_widths="tree,2.2,heatmap,0.65,pointplot,0.55,cluster_membership,0.55,synteny,0.9,tiplabel,0.45,categorical,0.8,signal_peptide,0.12,tm,0.12,intron,0.12,domain,1.0,alignment,1.2,meme,0.95,ortholog,0.8" \

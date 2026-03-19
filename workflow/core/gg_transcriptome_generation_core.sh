@@ -1111,7 +1111,7 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
     fi
     Rscript "${gg_support_dir}/annotation_summary.r" \
       --dir_species_cds_busco="${dir_busco}" \
-      --tree_annotation_dir="${gg_support_dir}/tree_annotation" \
+      --treevis_dir="${gg_support_dir}/treevis" \
       --min_og_species='auto'
     mv_out "annotation_summary.tsv" "$(basename "${dir_busco}").tsv"
     mv_out "busco_cds.svg" "$(basename "${dir_busco}").svg"

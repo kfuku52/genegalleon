@@ -3394,7 +3394,7 @@ if ([[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]]) && [[ ${run_tree
 
   Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
     --stat_branch="${file_og_stat_branch}" \
-    --tree_annotation_dir="${gg_support_dir}/tree_annotation" \
+    --treevis_dir="${gg_support_dir}/treevis" \
     --max_delta_intron_present="${treevis_retrotransposition_delta_intron}" \
     --width="7.2" \
     --rel_widths="" \

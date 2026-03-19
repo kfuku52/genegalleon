@@ -21,10 +21,18 @@ if (length(script_file_arg) > 0) {
 
 cat('arguments:\n')
 args = rkftools::get_parsed_args(args, print=TRUE)
-Rfiles = list.files(file.path(args[['tree_annotation_dir']], 'R'))
-for (Rfile in Rfiles) {
-    source(file.path(args[['tree_annotation_dir']], 'R', Rfile))
+
+resolve_treevis_dir = function(args) {
+    for (key in c('treevis_dir', 'tree_annotation_dir')) {
+        if (key %in% names(args) && !is.null(args[[key]]) && nzchar(as.character(args[[key]]))) {
+            return(as.character(args[[key]]))
+        }
+    }
+    stop('Neither --treevis_dir nor --tree_annotation_dir was provided.')
 }
+
+treevis_dir = resolve_treevis_dir(args)
+source(file.path(treevis_dir, 'R', 'main.R'), local = TRUE)
 
 font_size = 8
 args[['font_size']] = font_size

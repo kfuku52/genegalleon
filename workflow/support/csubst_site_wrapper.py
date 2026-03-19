@@ -548,7 +548,7 @@ def get_alignment_for_tree_plot(dir_og, og, dir_out_og):
 
 def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, dir_og, ncpu=1):
     dir_myscript = os.path.realpath(os.path.dirname(__file__))
-    dir_tree_annotation = os.path.join(dir_myscript, 'tree_annotation')
+    dir_treevis = os.path.join(dir_myscript, 'treevis')
     file_stat_branch = os.path.join(dir_og, 'stat_branch', og+'.stat.branch.tsv')
     file_og_rpsblast = os.path.join(dir_og, 'rpsblast', og+'.rpsblast.tsv')
     file_og_alignment = get_alignment_for_tree_plot(dir_og=dir_og, og=og, dir_out_og=dir_out_og)
@@ -569,7 +569,7 @@ def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, d
         return None
     cmd = ['Rscript', os.path.join(dir_myscript, 'stat_branch2tree_plot.r')]
     cmd.append('--stat_branch='+file_stat_branch)
-    cmd.append('--tree_annotation_dir='+dir_tree_annotation)
+    cmd.append('--treevis_dir='+dir_treevis)
     cmd.append('--max_delta_intron_present=-0.5')
     cmd.append('--width=7.2')
     cmd.append('--rel_widths=')

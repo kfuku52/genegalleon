@@ -877,7 +877,7 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_inputs_available} -eq 1 && 
     --dir_species_genome_fx2tab="${dir_summary_species_genome_fx2tab}" \
     --file_species_trait="${file_summary_species_trait}" \
     --file_orthogroup_gene_count="${file_summary_orthogroup_gene_count}" \
-    --tree_annotation_dir="${gg_support_dir}/tree_annotation" \
+    --treevis_dir="${gg_support_dir}/treevis" \
     --min_og_species='auto'
 
   if [[ -e "Rplots.pdf" ]]; then
