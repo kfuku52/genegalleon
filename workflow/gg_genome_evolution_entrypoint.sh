@@ -80,10 +80,10 @@ run_cds_translation=1 # Internal helper for temporary protein FASTA generation w
 
 # Species-tree workflow flags
 run_species_busco=1 # Run the shared multi-species BUSCO stage used for species-tree marker discovery and BUSCO-based genome-evolution analyses.
-run_species_get_busco_summary=1 # Build the shared BUSCO summary table used by species-tree and BUSCO-based genome-evolution stages.
+run_build_species_busco_summary=1 # Build the shared BUSCO summary table used by species-tree and BUSCO-based genome-evolution stages.
 run_species_omark=0 # Run OMArk proteome quality assessment for each species using shared protein inputs.
-run_species_get_omark_summary=1 # Build the shared OMArk summary table for species-wise proteome quality assessment.
-run_individual_get_fasta=1 # Extract per-ortholog FASTA files for species-tree reconstruction.
+run_build_species_omark_summary=1 # Build the shared OMArk summary table for species-wise proteome quality assessment.
+run_extract_species_tree_fasta=1 # Extract per-ortholog FASTA files for species-tree reconstruction.
 run_individual_mafft=1 # Align individual species-tree ortholog sets with MAFFT.
 run_individual_trimal=1 # Trim individual species-tree ortholog alignments.
 run_concat_alignment=1 # Concatenate selected species-tree ortholog alignments.
@@ -107,7 +107,7 @@ run_og_selection=1 # Selecting orthogroups for downstream analyses
 run_orthogroup_method_comparison=1 # Method comparison plot
 
 # Genome-evolution workflow flags
-run_busco_dupaware_getfasta=0 # Extract duplicate-aware BUSCO ortholog FASTA files from genome annotations.
+run_busco_dupaware_extract_fasta=0 # Extract duplicate-aware BUSCO ortholog FASTA files from genome annotations.
 run_busco_dupaware_mafft=0 # Align duplicate-aware BUSCO ortholog FASTA files with MAFFT.
 run_busco_dupaware_trimal=0 # Trim duplicate-aware BUSCO ortholog alignments.
 run_busco_dupaware_iqtree_dna=0 # Build duplicate-aware BUSCO DNA gene trees with IQ-TREE.

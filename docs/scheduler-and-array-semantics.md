@@ -56,14 +56,23 @@ The startup log prints a runtime summary that shows:
 
 These wrappers are intended to run as one task:
 
-- `gg_input_generation_entrypoint.sh`
 - `gg_convergent_sites_entrypoint.sh`
 - `gg_gene_database_entrypoint.sh`
 - `gg_genome_evolution_entrypoint.sh`
 - `gg_progress_summary_entrypoint.sh`
 
+`gg_input_generation_entrypoint.sh` is not fixed single-task only. It has staged modes controlled by `input_generation_mode`:
+
+- `single`: run the whole wrapper in one process
+- `array_prepare`: create `workspace/output/input_generation/tmp/task_plan.json`
+- `array_worker`: run one task-plan row per scheduler array index
+- `array_finalize`: merge worker shards and run shared validation and summary steps
+
 ## Array-size rules
 
+- `gg_input_generation_entrypoint.sh`:
+  - `input_generation_mode=array_worker`: set the scheduler array range to the number of species tasks recorded in `workspace/output/input_generation/tmp/task_plan.json`
+  - `input_generation_mode=array_prepare` and `array_finalize`: run once, not as an array
 - `gg_gene_evolution_entrypoint.sh`:
   - `mode_gene_evolution=orthogroup`: number of rows in `workspace/output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv` excluding the header
   - `mode_gene_evolution=query2family`: number of files in `workspace/input/query_gene`

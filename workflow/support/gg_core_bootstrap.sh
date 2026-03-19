@@ -57,7 +57,7 @@ gg_configure_python_pycacheprefix_from_core() {
     return 0
   fi
 
-  default_pycache_prefix="/tmp/genegalleon_pycache"
+  default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache"
   mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true
   export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"
 }

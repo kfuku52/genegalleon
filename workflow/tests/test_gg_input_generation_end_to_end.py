@@ -191,6 +191,40 @@ def _install_fake_toolchain(root: Path) -> Path:
         ),
         mode=0o755,
     )
+    _write_text(
+        bin_dir / "Rscript",
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env python3
+            import sys
+            from pathlib import Path
+
+            def parse(flag, default=""):
+                for arg in sys.argv[1:]:
+                    if arg.startswith(flag + "="):
+                        return arg.split("=", 1)[1]
+                return default
+
+            outdir = Path.cwd()
+            busco_dir = Path(parse("--dir_species_cds_busco"))
+            species = []
+            if busco_dir.exists():
+                for path in sorted(busco_dir.glob("*.busco.full.tsv")):
+                    species.append(path.name.replace(".busco.full.tsv", ""))
+
+            (outdir / "annotation_summary.tsv").write_text(
+                "Species\\tbusco_cds_summary\\n"
+                + "\\n".join(f"{sp}\\tC:100.0%[S:100.0%,D:0.0%],F:0.0%,M:0.0%,n:1" for sp in species)
+                + ("\\n" if species else ""),
+                encoding="utf-8",
+            )
+            (outdir / "busco_cds.pdf").write_text("fake pdf\\n", encoding="utf-8")
+            (outdir / "busco_cds.svg").write_text("<svg/>\\n", encoding="utf-8")
+            raise SystemExit(0)
+            """
+        ),
+        mode=0o755,
+    )
     return bin_dir
 
 
@@ -207,7 +241,7 @@ def _core_env(workspace: Path, input_dir: Path, fake_bin: Path, mode: str, task_
         "run_format_inputs": "1",
         "run_validate_inputs": "1",
         "run_species_busco": "1",
-        "run_species_get_busco_summary": "1",
+        "run_multispecies_summary": "1",
         "run_generate_species_trait": "0",
         "busco_lineage": "eukaryota_odb12",
         "trait_profile": "none",
@@ -224,7 +258,6 @@ def _core_env(workspace: Path, input_dir: Path, fake_bin: Path, mode: str, task_
         "species_cds_dir": "",
         "species_busco_full_dir": "",
         "species_busco_short_dir": "",
-        "species_busco_summary_output": "",
         "species_gff_dir": "",
         "species_genome_dir": "",
         "species_summary_output": "",
@@ -274,7 +307,8 @@ def _read_tsv_rows(path: Path) -> list[dict[str, str]]:
 
 
 def _assert_expected_outputs(output_root: Path, expected_last_mode: str) -> None:
-    summary = output_root / "busco_summary_table" / "busco_summary.tsv"
+    summary_dir = output_root / "annotation_summary"
+    summary = summary_dir / "annotation_summary.tsv"
     full_dir = output_root / "species_cds_busco_full"
     short_dir = output_root / "species_cds_busco_short"
     runs_path = output_root / "gg_input_generation_runs.tsv"
@@ -295,17 +329,18 @@ def _assert_expected_outputs(output_root: Path, expected_last_mode: str) -> None
     assert "Arabidopsis_thaliana_gene1" in arabidopsis_busco
     assert "Oryza_sativa_gene1" in oryza_busco
 
+    assert (summary_dir / "busco_cds.pdf").exists()
+    assert (summary_dir / "busco_cds.svg").exists()
     summary_text = summary.read_text(encoding="utf-8")
-    assert "Arabidopsis_thaliana_gene1" in summary_text
-    assert "Oryza_sativa_gene1" in summary_text
+    assert "Arabidopsis_thaliana" in summary_text
+    assert "Oryza_sativa" in summary_text
 
     runs = _read_tsv_rows(runs_path)
     assert runs[-1]["input_generation_mode"] == expected_last_mode
     assert runs[-1]["stage_species_busco_status"] == "ok"
-    assert runs[-1]["stage_busco_summary_status"] == "ok"
+    assert runs[-1]["stage_multispecies_summary_status"] == "ok"
     assert runs[-1]["num_species_busco_full"] == "2"
     assert runs[-1]["num_species_busco_short"] == "2"
-    assert runs[-1]["num_busco_ids"] == "1"
 
 
 def test_gg_input_generation_single_mode_end_to_end(tmp_path: Path):

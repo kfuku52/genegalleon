@@ -503,10 +503,10 @@ def _run_core(
         {
             "input_sequence_mode": "protein",
             "run_species_busco": "0",
-            "run_species_get_busco_summary": "0",
+            "run_build_species_busco_summary": "0",
             "run_species_omark": "0",
-            "run_species_get_omark_summary": "1",
-            "run_individual_get_fasta": "0",
+            "run_build_species_omark_summary": "1",
+            "run_extract_species_tree_fasta": "0",
             "run_individual_mafft": "0",
             "run_individual_trimal": "0",
             "run_concat_alignment": "0",
@@ -526,7 +526,7 @@ def _run_core(
             "run_orthofinder": "1",
             "run_og_selection": "0",
             "run_orthogroup_method_comparison": "0",
-            "run_busco_dupaware_getfasta": "0",
+            "run_busco_dupaware_extract_fasta": "0",
             "run_busco_dupaware_mafft": "0",
             "run_busco_dupaware_trimal": "0",
             "run_busco_dupaware_iqtree_dna": "0",
@@ -654,7 +654,7 @@ def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launcher
 
     completed = _run_core(
         tmp_path,
-        missing_flags=("run_cds_translation", "run_species_omark", "run_species_get_omark_summary"),
+        missing_flags=("run_cds_translation", "run_species_omark", "run_build_species_omark_summary"),
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
@@ -733,8 +733,8 @@ def test_genome_evolution_reuses_existing_busco_outputs_without_retranslation(tm
         tmp_path,
         {
             "run_species_busco": "1",
-            "run_species_get_busco_summary": "0",
-            "run_species_get_omark_summary": "0",
+            "run_build_species_busco_summary": "0",
+            "run_build_species_omark_summary": "0",
             "run_orthofinder": "0",
         },
     )
@@ -775,7 +775,7 @@ def test_genome_evolution_reuses_existing_omark_outputs_without_retranslation(tm
         {
             "run_species_busco": "0",
             "run_species_omark": "1",
-            "run_species_get_omark_summary": "0",
+            "run_build_species_omark_summary": "0",
             "run_orthofinder": "0",
         },
     )
@@ -803,7 +803,7 @@ def test_genome_evolution_omark_auto_downloads_database_and_summarizes_results(t
         tmp_path,
         extra_env={
             "run_species_omark": "1",
-            "run_species_get_omark_summary": "1",
+            "run_build_species_omark_summary": "1",
             "run_orthofinder": "0",
             "GG_OMARK_DB_URL": fake_db_source.resolve().as_uri(),
         },

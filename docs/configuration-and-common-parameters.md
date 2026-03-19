@@ -63,7 +63,7 @@ For single-species stages, GeneGalleon picks the deepest BUSCO dataset mapped to
 For multi-species BUSCO stages, it picks the deepest BUSCO dataset shared across the dataset's species.
 In `gg_genome_evolution`, the multi-species BUSCO run and BUSCO summary are shared between the
 species-tree branch and the BUSCO-based genome-evolution branch. Those shared stages are controlled
-by `run_species_busco` and `run_species_get_busco_summary`; the genome-evolution BUSCO steps reuse
+by `run_species_busco` and `run_build_species_busco_summary`; the genome-evolution BUSCO steps reuse
 their outputs rather than starting a second BUSCO run.
 When BUSCO publishes multiple `odbN` generations, auto-resolution now uses the latest generation
 for which placement mappings are available across archaea, bacteria, and eukaryota.
@@ -112,15 +112,13 @@ For duplicate-aware BUSCO genome-evolution steps, the canonical config names are
 the `run_busco_dupaware_*` flags exposed in
 `workflow/gg_genome_evolution_entrypoint.sh`, for example:
 
-- `run_busco_dupaware_getfasta`
+- `run_busco_dupaware_extract_fasta`
 - `run_busco_dupaware_iqtree_dna`
 - `run_busco_dupaware_notung_root_pep`
 - `run_busco_dupaware_grampa_dna`
 
-Legacy aliases such as `run_busco_getfasta` and `run_busco_grampa_dna` are still
-accepted for backward compatibility, but new configs should use the
-`run_busco_dupaware_*` names. All duplicate-aware BUSCO substeps default to `0`.
-`run_orthogroup_grampa` defaults to `1`, but it is still auto-disabled unless
+All duplicate-aware BUSCO substeps default to `0`. `run_orthogroup_grampa`
+defaults to `1`, but it is still auto-disabled unless
 rooted orthogroup trees are present and `grampa_h1` is non-empty.
 
 Typical examples:
@@ -196,6 +194,7 @@ The effective CDS-to-protein code priority there is:
 - `GG_INPUT_PROVIDER`
 - `GG_INPUT_DOWNLOAD_MANIFEST`
 - `GG_INPUT_INPUT_DIR`
+- `GG_INPUT_RUN_MULTISPECIES_SUMMARY`
 - `GG_INPUT_RUN_GENERATE_SPECIES_TRAIT`
 - `GG_INPUT_TRAIT_PROFILE`
 - `GG_INPUT_SPECIES_CDS_DIR`

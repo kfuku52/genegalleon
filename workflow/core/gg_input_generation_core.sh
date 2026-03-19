@@ -21,8 +21,8 @@ source "${gg_support_dir}/gg_busco.sh"
 
 config_file="${config_file:-gg_input_generation_entrypoint.sh}"
 input_generation_mode="${input_generation_mode:-single}"
-run_species_busco="${run_species_busco:-0}"
-run_species_get_busco_summary="${run_species_get_busco_summary:-0}"
+run_species_busco="${run_species_busco:-1}"
+run_multispecies_summary="${run_multispecies_summary:-1}"
 run_generate_species_trait="${run_generate_species_trait:-0}"
 trait_profile="${trait_profile:-none}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
@@ -31,7 +31,6 @@ busco_lineage_resolved=""
 species_cds_dir="${species_cds_dir:-}"
 species_busco_full_dir="${species_busco_full_dir:-}"
 species_busco_short_dir="${species_busco_short_dir:-}"
-species_busco_summary_output="${species_busco_summary_output:-}"
 species_gff_dir="${species_gff_dir:-}"
 species_genome_dir="${species_genome_dir:-}"
 species_summary_output="${species_summary_output:-}"
@@ -93,7 +92,7 @@ for binary_flag_name in \
   run_format_inputs \
   run_validate_inputs \
   run_species_busco \
-  run_species_get_busco_summary \
+  run_multispecies_summary \
   run_generate_species_trait \
   strict \
   overwrite \
@@ -163,9 +162,6 @@ fi
 if [[ -z "${species_busco_short_dir}" ]]; then
   species_busco_short_dir="${input_generation_root}/species_cds_busco_short"
 fi
-if [[ -z "${species_busco_summary_output}" ]]; then
-  species_busco_summary_output="${input_generation_root}/busco_summary_table/busco_summary.tsv"
-fi
 if [[ -z "${species_gff_dir}" ]]; then
   species_gff_dir="${input_generation_root}/species_gff"
 fi
@@ -194,12 +190,13 @@ if [[ -z "${trait_download_dir}" ]]; then
   trait_download_dir="${gg_workspace_downloads_dir}/trait_datasets"
 fi
 
+file_multispecies_summary="${input_generation_root}/annotation_summary/annotation_summary.tsv"
+
 num_species_cds=""
 num_species_gff=""
 num_species_genome=""
 num_species_busco_full=""
 num_species_busco_short=""
-num_busco_ids=""
 num_species_trait=""
 num_trait_columns=""
 cds_sequences_before=""
@@ -208,7 +205,7 @@ cds_first_sequence_name=""
 stage_format_status="not_run"
 stage_validate_status="not_run"
 stage_species_busco_status="not_run"
-stage_busco_summary_status="not_run"
+stage_multispecies_summary_status="not_run"
 stage_trait_status="not_run"
 write_run_summary_on_exit=1
 cleanup_input_generation_tmp=0
@@ -462,12 +459,12 @@ write_gg_input_generation_summary_on_exit() {
     if [[ "${stage_format_status}" == "running" ]]; then stage_format_status="failed"; fi
     if [[ "${stage_validate_status}" == "running" ]]; then stage_validate_status="failed"; fi
     if [[ "${stage_species_busco_status}" == "running" ]]; then stage_species_busco_status="failed"; fi
-    if [[ "${stage_busco_summary_status}" == "running" ]]; then stage_busco_summary_status="failed"; fi
+    if [[ "${stage_multispecies_summary_status}" == "running" ]]; then stage_multispecies_summary_status="failed"; fi
     if [[ "${stage_trait_status}" == "running" ]]; then stage_trait_status="failed"; fi
   fi
 
   ensure_parent_dir "${summary_output}"
-  header="started_utc\tended_utc\tduration_sec\texit_code\tprovider\tinput_generation_mode\trun_format_inputs\trun_validate_inputs\trun_species_busco\trun_species_get_busco_summary\trun_generate_species_trait\tbusco_lineage\tbusco_lineage_resolved\tstrict\toverwrite\tdownload_only\tdry_run\tdownload_timeout\tinput_dir\tdownload_manifest\tdownload_dir\ttask_plan_output\tspecies_cds_dir\tspecies_busco_full_dir\tspecies_busco_short_dir\tspecies_busco_summary_output\tspecies_gff_dir\tspecies_genome_dir\tspecies_trait_output\tnum_species_cds\tnum_species_gff\tnum_species_genome\tnum_species_busco_full\tnum_species_busco_short\tnum_busco_ids\tnum_species_trait\tnum_trait_columns\tcds_sequences_before\tcds_sequences_after\tcds_first_sequence_name\tstage_format_status\tstage_validate_status\tstage_species_busco_status\tstage_busco_summary_status\tstage_trait_status\tconfig_file"
+  header="started_utc\tended_utc\tduration_sec\texit_code\tprovider\tinput_generation_mode\trun_format_inputs\trun_validate_inputs\trun_species_busco\trun_multispecies_summary\trun_generate_species_trait\tbusco_lineage\tbusco_lineage_resolved\tstrict\toverwrite\tdownload_only\tdry_run\tdownload_timeout\tinput_dir\tdownload_manifest\tdownload_dir\ttask_plan_output\tspecies_cds_dir\tspecies_busco_full_dir\tspecies_busco_short_dir\tspecies_gff_dir\tspecies_genome_dir\tspecies_trait_output\tfile_multispecies_summary\tnum_species_cds\tnum_species_gff\tnum_species_genome\tnum_species_busco_full\tnum_species_busco_short\tnum_species_trait\tnum_trait_columns\tcds_sequences_before\tcds_sequences_after\tcds_first_sequence_name\tstage_format_status\tstage_validate_status\tstage_species_busco_status\tstage_multispecies_summary_status\tstage_trait_status\tconfig_file"
   expected_header_line=$(printf '%b' "${header}")
   if [[ -s "${summary_output}" ]]; then
     existing_header_line=$(head -n 1 "${summary_output}" || true)
@@ -493,7 +490,7 @@ write_gg_input_generation_summary_on_exit() {
   row="${row}\t$(sanitize_tsv_value "${run_format_inputs}")"
   row="${row}\t$(sanitize_tsv_value "${run_validate_inputs}")"
   row="${row}\t$(sanitize_tsv_value "${run_species_busco}")"
-  row="${row}\t$(sanitize_tsv_value "${run_species_get_busco_summary}")"
+  row="${row}\t$(sanitize_tsv_value "${run_multispecies_summary}")"
   row="${row}\t$(sanitize_tsv_value "${run_generate_species_trait}")"
   row="${row}\t$(sanitize_tsv_value "${busco_lineage}")"
   row="${row}\t$(sanitize_tsv_value "${busco_lineage_resolved}")"
@@ -509,16 +506,15 @@ write_gg_input_generation_summary_on_exit() {
   row="${row}\t$(sanitize_tsv_value "${species_cds_dir}")"
   row="${row}\t$(sanitize_tsv_value "${species_busco_full_dir}")"
   row="${row}\t$(sanitize_tsv_value "${species_busco_short_dir}")"
-  row="${row}\t$(sanitize_tsv_value "${species_busco_summary_output}")"
   row="${row}\t$(sanitize_tsv_value "${species_gff_dir}")"
   row="${row}\t$(sanitize_tsv_value "${species_genome_dir}")"
   row="${row}\t$(sanitize_tsv_value "${species_trait_output}")"
+  row="${row}\t$(sanitize_tsv_value "${file_multispecies_summary}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_cds}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_gff}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_genome}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_busco_full}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_busco_short}")"
-  row="${row}\t$(sanitize_tsv_value "${num_busco_ids}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_trait}")"
   row="${row}\t$(sanitize_tsv_value "${num_trait_columns}")"
   row="${row}\t$(sanitize_tsv_value "${cds_sequences_before}")"
@@ -527,7 +523,7 @@ write_gg_input_generation_summary_on_exit() {
   row="${row}\t$(sanitize_tsv_value "${stage_format_status}")"
   row="${row}\t$(sanitize_tsv_value "${stage_validate_status}")"
   row="${row}\t$(sanitize_tsv_value "${stage_species_busco_status}")"
-  row="${row}\t$(sanitize_tsv_value "${stage_busco_summary_status}")"
+  row="${row}\t$(sanitize_tsv_value "${stage_multispecies_summary_status}")"
   row="${row}\t$(sanitize_tsv_value "${stage_trait_status}")"
   row="${row}\t$(sanitize_tsv_value "${config_file}")"
   printf '%b\n' "${row}" >> "${summary_output}"
@@ -966,39 +962,61 @@ run_species_busco_stage_one_worker() {
   stage_species_busco_status="ok"
 }
 
-run_busco_summary_stage() {
-  local task="Collecting IDs of common BUSCO genes"
-  local source_species_input_dir="${species_cds_dir}"
+run_multispecies_summary_stage() {
+  local task="Generate multispecies BUSCO summary"
+  local cmd=()
+  local cmd_status=0
 
-  if [[ ${run_species_get_busco_summary} -ne 1 ]]; then
+  if [[ ${run_multispecies_summary} -ne 1 ]]; then
     gg_step_skip "${task}"
-    stage_busco_summary_status="skipped"
+    stage_multispecies_summary_status="skipped"
     return 0
   fi
-  gg_step_start "${task}"
-  stage_busco_summary_status="running"
 
   normalize_busco_table_naming "${species_busco_full_dir}" "${species_busco_short_dir}"
-  if ! is_species_set_identical "${source_species_input_dir}" "${species_busco_full_dir}"; then
-    echo "Exiting due to species-set mismatch between ${source_species_input_dir} and ${species_busco_full_dir}"
-    stage_busco_summary_status="failed"
-    exit 1
-  fi
-  if [[ ! -s "${species_busco_summary_output}" || ${overwrite} -eq 1 ]]; then
-    gg_step_start "${task}"
-    ensure_parent_dir "${species_busco_summary_output}"
-    python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
-      --busco_outdir "${species_busco_full_dir}" \
-      --ncpu "${GG_TASK_CPUS}" \
-      --outfile "tmp.busco_summary_table.tsv"
-    mv_out "tmp.busco_summary_table.tsv" "${species_busco_summary_output}"
-  else
-    gg_step_skip "${task}"
-  fi
-  num_busco_ids=$(get_busco_summary_gene_count "${species_busco_summary_output}")
   num_species_busco_full=$(count_nonhidden_matching_files "${species_busco_full_dir}" "*busco.full.tsv")
   num_species_busco_short=$(count_nonhidden_matching_files "${species_busco_short_dir}" "*busco.short.txt")
-  stage_busco_summary_status="ok"
+  if [[ "${num_species_busco_full}" == "0" ]]; then
+    echo "No species BUSCO full tables were found. Skipping multispecies summary generation."
+    gg_step_skip "${task}"
+    stage_multispecies_summary_status="skipped"
+    return 0
+  fi
+  if ! is_species_set_identical "${species_cds_dir}" "${species_busco_full_dir}"; then
+    echo "Exiting due to species-set mismatch between ${species_cds_dir} and ${species_busco_full_dir}"
+    stage_multispecies_summary_status="failed"
+    exit 1
+  fi
+
+  gg_step_start "${task}"
+  stage_multispecies_summary_status="running"
+  ensure_dir "$(dirname "${file_multispecies_summary}")"
+  cd "$(dirname "${file_multispecies_summary}")"
+
+  cmd=(Rscript "${gg_support_dir}/annotation_summary.r")
+  cmd+=(--dir_species_tree="${gg_workspace_output_dir}/species_tree")
+  cmd+=(--dir_species_cds_busco="${species_busco_full_dir}")
+  if [[ -s "${species_trait_output}" ]]; then
+    cmd+=(--file_species_trait="${species_trait_output}")
+  fi
+  cmd+=(--treevis_dir="${gg_support_dir}/treevis")
+  cmd+=(--min_og_species=auto)
+  echo "Running: ${cmd[*]}"
+  if "${cmd[@]}"; then
+    cmd_status=0
+  else
+    cmd_status=$?
+  fi
+  if [[ ${cmd_status} -ne 0 ]]; then
+    stage_multispecies_summary_status="failed"
+    echo "Failed: ${task} (exit=${cmd_status})"
+    exit "${cmd_status}"
+  fi
+  if [[ -e "Rplots.pdf" ]]; then
+    rm -f -- "Rplots.pdf"
+  fi
+  cd "${gg_workspace_dir}"
+  stage_multispecies_summary_status="ok"
 }
 
 run_trait_stage() {
@@ -1157,7 +1175,7 @@ run_array_prepare_mode() {
   num_species_gff="${expected_tasks}"
   num_species_genome=""
 
-  if [[ ${run_species_busco} -eq 1 || ${run_species_get_busco_summary} -eq 1 ]]; then
+  if [[ ${run_species_busco} -eq 1 ]]; then
     ensure_parent_dir "${file_busco_lineage_resolved}"
     resolve_busco_lineage_from_task_plan "${task_plan_output}"
   fi
@@ -1231,7 +1249,7 @@ run_array_worker_mode() {
 
   run_species_busco_stage_one_worker
   stage_validate_status="skipped"
-  stage_busco_summary_status="skipped"
+  stage_multispecies_summary_status="skipped"
   stage_trait_status="skipped"
 }
 
@@ -1308,8 +1326,8 @@ run_array_finalize_mode() {
   else
     stage_species_busco_status="skipped"
   fi
-  run_busco_summary_stage
   run_trait_stage
+  run_multispecies_summary_stage
   cleanup_input_generation_tmp=1
 }
 
@@ -1318,8 +1336,8 @@ case "${input_generation_mode}" in
     run_format_stage_single
     run_validate_stage
     run_species_busco_stage_all
-    run_busco_summary_stage
     run_trait_stage
+    run_multispecies_summary_stage
     cleanup_input_generation_tmp=1
     ;;
   array_prepare)

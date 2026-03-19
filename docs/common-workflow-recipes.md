@@ -46,10 +46,35 @@ Useful outputs to inspect afterward:
 - `workspace/output/input_generation/download_plan.resolved.tsv`
 - `workspace/output/input_generation/gg_input_generation_runs.tsv`
 - `workspace/output/input_generation/gg_input_generation_species.tsv`
+- `workspace/output/input_generation/annotation_summary/annotation_summary.tsv`
 
 Wrapper note:
 
 - `provider=refseq` and `provider=genbank` are accepted by the wrapper as aliases of `ncbi`.
+
+If `input_generation_mode` is unclear, treat it as follows:
+
+- `single`: the normal mode; one run does everything.
+- `array_prepare`: generate `task_plan.json` before launching array workers.
+- `array_worker`: one scheduler task handles one species indexed by `GG_ARRAY_TASK_ID`.
+- `array_finalize`: merge worker outputs and run shared checks and summaries once.
+
+Typical array sequence:
+
+```bash
+GG_INPUT_INPUT_GENERATION_MODE=array_prepare \
+bash workflow/gg_input_generation_entrypoint.sh
+```
+
+```bash
+GG_INPUT_INPUT_GENERATION_MODE=array_worker \
+sbatch workflow/gg_input_generation_entrypoint.sh
+```
+
+```bash
+GG_INPUT_INPUT_GENERATION_MODE=array_finalize \
+bash workflow/gg_input_generation_entrypoint.sh
+```
 
 ## 3. Start from transcriptome-oriented inputs
 

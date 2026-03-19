@@ -26,22 +26,22 @@ busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 species_tree_rooting="${species_tree_rooting:-taxonomy}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 omark_db_path="${omark_db_path:-auto}"
-# Backward-compatible defaults for launchers that predate the shared protein/OMArk flags.
 run_cds_translation="${run_cds_translation:-1}"
 run_species_omark="${run_species_omark:-0}"
-run_species_get_omark_summary="${run_species_get_omark_summary:-1}"
-# Backward-compatible aliases for the duplicate-aware BUSCO workflow flags.
-run_busco_dupaware_getfasta="${run_busco_dupaware_getfasta:-${run_busco_getfasta:-0}}"
-run_busco_dupaware_mafft="${run_busco_dupaware_mafft:-${run_busco_mafft:-0}}"
-run_busco_dupaware_trimal="${run_busco_dupaware_trimal:-${run_busco_trimal:-0}}"
-run_busco_dupaware_iqtree_dna="${run_busco_dupaware_iqtree_dna:-${run_busco_iqtree_dna:-0}}"
-run_busco_dupaware_iqtree_pep="${run_busco_dupaware_iqtree_pep:-${run_busco_iqtree_pep:-0}}"
-run_busco_dupaware_notung_root_dna="${run_busco_dupaware_notung_root_dna:-${run_busco_notung_root_dna:-0}}"
-run_busco_dupaware_notung_root_pep="${run_busco_dupaware_notung_root_pep:-${run_busco_notung_root_pep:-0}}"
-run_busco_dupaware_root_dna="${run_busco_dupaware_root_dna:-${run_busco_root_dna:-0}}"
-run_busco_dupaware_root_pep="${run_busco_dupaware_root_pep:-${run_busco_root_pep:-0}}"
-run_busco_dupaware_grampa_dna="${run_busco_dupaware_grampa_dna:-${run_busco_grampa_dna:-0}}"
-run_busco_dupaware_grampa_pep="${run_busco_dupaware_grampa_pep:-${run_busco_grampa_pep:-0}}"
+run_build_species_busco_summary="${run_build_species_busco_summary:-1}"
+run_build_species_omark_summary="${run_build_species_omark_summary:-1}"
+run_extract_species_tree_fasta="${run_extract_species_tree_fasta:-1}"
+run_busco_dupaware_extract_fasta="${run_busco_dupaware_extract_fasta:-0}"
+run_busco_dupaware_mafft="${run_busco_dupaware_mafft:-0}"
+run_busco_dupaware_trimal="${run_busco_dupaware_trimal:-0}"
+run_busco_dupaware_iqtree_dna="${run_busco_dupaware_iqtree_dna:-0}"
+run_busco_dupaware_iqtree_pep="${run_busco_dupaware_iqtree_pep:-0}"
+run_busco_dupaware_notung_root_dna="${run_busco_dupaware_notung_root_dna:-0}"
+run_busco_dupaware_notung_root_pep="${run_busco_dupaware_notung_root_pep:-0}"
+run_busco_dupaware_root_dna="${run_busco_dupaware_root_dna:-0}"
+run_busco_dupaware_root_pep="${run_busco_dupaware_root_pep:-0}"
+run_busco_dupaware_grampa_dna="${run_busco_dupaware_grampa_dna:-0}"
+run_busco_dupaware_grampa_pep="${run_busco_dupaware_grampa_pep:-0}"
 mcmctree_divergence_time_constraints_str="${mcmctree_divergence_time_constraints_str:-}"
 grampa_h1="${grampa_h1:-}"
 target_branch_go="${target_branch_go:-}"
@@ -789,7 +789,7 @@ run_shared_busco_summary_stage() {
   fi
   shared_busco_summary_stage_done=1
 
-  if [[ ${run_species_get_busco_summary} -ne 1 ]]; then
+  if [[ ${run_build_species_busco_summary} -ne 1 ]]; then
     gg_step_skip "${task}"
     return 0
   fi
@@ -942,7 +942,7 @@ run_shared_omark_summary_stage() {
   fi
   shared_omark_summary_stage_done=1
 
-  if [[ ${run_species_get_omark_summary} -ne 1 ]]; then
+  if [[ ${run_build_species_omark_summary} -ne 1 ]]; then
     gg_step_skip "${task}"
     return 0
   fi
@@ -1620,7 +1620,7 @@ num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table
 singlecopy_fasta_files=()
 mapfile -t singlecopy_fasta_files < <(gg_find_file_basenames "${dir_single_copy_fasta}" "${single_copy_fasta_glob}")
 num_singlecopy_fasta=${#singlecopy_fasta_files[@]}
-if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_individual_get_fasta} -eq 1 ]]; then
+if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree_fasta} -eq 1 ]]; then
   prepare_species_tree_input_dir
   gg_step_start "${task}"
 
@@ -2942,8 +2942,8 @@ cd "${dir_tmp}"
 
 task="Generating FASTA files for duplicate-aware BUSCO genes"
 sync_genome_busco_summary_table_from_shared || true
-disable_if_no_input_file "run_busco_dupaware_getfasta" "${file_genome_busco_summary_table}"
-if [[ ${run_busco_dupaware_getfasta} -eq 1 ]]; then
+disable_if_no_input_file "run_busco_dupaware_extract_fasta" "${file_genome_busco_summary_table}"
+if [[ ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then
   prepare_species_tree_input_dir
   gg_step_start "${task}"
   ensure_dir "${dir_busco_fasta}"

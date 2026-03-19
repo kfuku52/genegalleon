@@ -15,6 +15,11 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"
+run_extract_query_fasta="${run_extract_query_fasta:-1}"
+run_extract_primary_fasta="${run_extract_primary_fasta:-1}"
+run_generate_expression_matrix="${run_generate_expression_matrix:-0}"
+run_collect_gff_info="${run_collect_gff_info:-0}"
+run_extract_promoter_fasta="${run_extract_promoter_fasta:-0}"
 
 # Substitution model in CSUBST and mapdNdS
 if [[ ${genetic_code} -eq 1 ]]; then
@@ -191,8 +196,8 @@ apply_gene_evolution_profile() {
       set_profile_default_override run_uniprot_annotation "0" "1"
       set_profile_default_override run_generax "0" "1"
       set_profile_default_override generax_rec_model "UndatedDL" "UndatedDTL"
-      set_profile_default_override run_get_gff_info "0" "1"
-      set_profile_default_override run_get_expression_matrix "0" "1"
+      set_profile_default_override run_collect_gff_info "0" "1"
+      set_profile_default_override run_generate_expression_matrix "0" "1"
       set_profile_default_override run_scm_intron "0" "1"
       set_profile_default_override treevis_event_method "species_overlap" "auto"
       ;;
@@ -326,7 +331,7 @@ case "${mode_gene_evolution}" in
       exit 1
     fi
     echo "OrthoGroup ID: ${og_id}"
-    run_get_query_fasta=0
+    run_extract_query_fasta=0
     run_query_blast=0
     run_orthogroup_extraction=0
     ;;
@@ -684,9 +689,9 @@ if [[ ${run_trimal} -eq 1 && ${run_clipkit} -eq 1 ]]; then
   run_trimal=0
 fi
 if [[ ! -d "${dir_sp_gff}" ]] || [[ -z "$(find "${dir_sp_gff}" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null)" ]]; then
-  if [[ ${run_get_gff_info} -eq 1 ]]; then
-    echo "\${run_get_gff_info} is deactivated. Empty input: ${dir_sp_gff}"
-    run_get_gff_info=0
+  if [[ ${run_collect_gff_info} -eq 1 ]]; then
+    echo "\${run_collect_gff_info} is deactivated. Empty input: ${dir_sp_gff}"
+    run_collect_gff_info=0
   fi
   if [[ ${run_scm_intron} -eq 1 ]]; then
     echo "\${run_scm_intron} is deactivated. Empty input: ${dir_sp_gff}"
@@ -697,17 +702,17 @@ if [[ -d "${dir_sp_expression}" ]] && [[ -n "$(find "${dir_sp_expression}" -mind
   echo "\${dir_sp_expression} is not empty. Continued: ${dir_sp_expression}"
 else
   echo "\${dir_sp_expression} is empty: ${dir_sp_expression}"
-  echo '${run_get_expression_matrix}, ${run_tree_pruning}, and other options are deactivated.'
+  echo '${run_generate_expression_matrix}, ${run_tree_pruning}, and other options are deactivated.'
   run_tree_pruning=0
-  run_get_expression_matrix=0
+  run_generate_expression_matrix=0
   run_l1ou=0
 fi
 if [[ -d "${dir_sp_genome}" ]] && [[ -n "$(find "${dir_sp_genome}" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null)" ]]; then
   echo "\${dir_sp_genome} is not empty. Continued: ${dir_sp_genome}"
 else
   echo "\${dir_sp_genome} is empty: ${dir_sp_genome}"
-  echo '${run_get_promoter_fasta} and ${run_fimo} are deactivated.'
-  run_get_promoter_fasta=0
+  echo '${run_extract_promoter_fasta} and ${run_fimo} are deactivated.'
+  run_extract_promoter_fasta=0
   run_fimo=0
 fi
 echo "Checking preexisting tmp directory."
@@ -750,7 +755,7 @@ else
 fi
 
 task="Query fasta generation"
-if [[ ! -s "${file_og_query_aa_fasta}" && ${run_get_query_fasta} -eq 1 ]]; then
+if [[ ! -s "${file_og_query_aa_fasta}" && ${run_extract_query_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ "$(head -c 1 "${file_query_gene}")" == ">" ]]; then
     seqtype=$(seqkit stats --tabular "${file_query_gene}" | awk 'NR>1 {print $3}')
@@ -1114,7 +1119,7 @@ else
 fi
 
 task="Fasta generation"
-if [[ ! -s "${file_og_primary_fasta}" && ${run_get_fasta} -eq 1 ]]; then
+if [[ ! -s "${file_og_primary_fasta}" && ${run_extract_primary_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ "${mode_gene_evolution}" == "orthogroup" ]]; then
@@ -1310,8 +1315,8 @@ else
 fi
 
 task="Gene trait extraction from gff files"
-disable_if_no_input_file "run_get_gff_info" "${file_og_primary_fasta}"
-if [[ ! -s "${file_og_gff_info}" && ${run_get_gff_info} -eq 1 ]]; then
+disable_if_no_input_file "run_collect_gff_info" "${file_og_primary_fasta}"
+if [[ ! -s "${file_og_gff_info}" && ${run_collect_gff_info} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ -e gff2genestat.tsv ]]; then
     rm -f -- gff2genestat.tsv
@@ -2197,8 +2202,8 @@ else
 fi
 
 task="Expression matrix preparation"
-disable_if_no_input_file "run_get_expression_matrix" "${file_og_trimmed_aln_analysis}"
-if [[ ! -s "${file_og_expression}" && ${run_get_expression_matrix} -eq 1 ]]; then
+disable_if_no_input_file "run_generate_expression_matrix" "${file_og_trimmed_aln_analysis}"
+if [[ ! -s "${file_og_expression}" && ${run_generate_expression_matrix} -eq 1 ]]; then
   gg_step_start "${task}"
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.trait_matrix_input.fasta"
 
@@ -2216,8 +2221,8 @@ else
 fi
 
 task="Promoter fasta generation"
-disable_if_no_input_file "run_get_promoter_fasta" "${file_og_gff_info}"
-if [[ ! -s "${file_og_promoter_fasta}" && ${run_get_promoter_fasta} -eq 1 ]]; then
+disable_if_no_input_file "run_extract_promoter_fasta" "${file_og_gff_info}"
+if [[ ! -s "${file_og_promoter_fasta}" && ${run_extract_promoter_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
 
   python "${gg_support_dir}/get_promoter_fasta.py" \

@@ -184,7 +184,7 @@ def test_entrypoint_bootstrap_sets_python_pycacheprefix_outside_repo():
 def test_core_bootstrap_sets_python_pycacheprefix_under_tmp():
     text = _read_text(WORKFLOW_DIR / "support" / "gg_core_bootstrap.sh")
     body = _function_body(text, "gg_configure_python_pycacheprefix_from_core")
-    assert 'default_pycache_prefix="/tmp/genegalleon_pycache"' in body
+    assert 'default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache"' in body
     assert 'mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true' in body
     assert 'export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"' in body
     runtime_body = _function_body(text, "gg_bootstrap_core_runtime")
@@ -606,7 +606,7 @@ def test_input_generation_entrypoint_forwards_env_driven_overrides():
     assert "input_generation_mode GG_INPUT_INPUT_GENERATION_MODE" in text
     assert "busco_lineage GG_INPUT_BUSCO_LINEAGE" in text
     assert "run_species_busco GG_INPUT_RUN_SPECIES_BUSCO" in text
-    assert "run_species_get_busco_summary GG_INPUT_RUN_SPECIES_GET_BUSCO_SUMMARY" in text
+    assert "run_multispecies_summary GG_INPUT_RUN_MULTISPECIES_SUMMARY" in text
     assert "trait_profile GG_INPUT_TRAIT_PROFILE" in text
     assert "for gg_input_var_name in ${!GG_INPUT_@}; do" not in text
     assert 'gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_MAX_CONCURRENT_DOWNLOADS_"' in text
@@ -633,6 +633,8 @@ def test_input_generation_trait_profile_preset_is_wired():
     core_text = _read_text(core)
 
     assert 'trait_profile="none"' in entry_text
+    assert 'run_species_busco=1' in entry_text
+    assert 'run_multispecies_summary=1' in entry_text
     assert "trait_profile GG_INPUT_TRAIT_PROFILE" in entry_text
     assert "GG_INPUT_" not in core_text
     assert "apply_env_override()" not in core_text
@@ -829,14 +831,14 @@ def test_genome_evolution_core_uses_ne_for_busco_count_mismatch_checks():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
     banned_tokens = [
-        "if [[ ! ${num_busco_ids} -eq ${num_singlecopy_fasta} && ${run_individual_get_fasta} -eq 1 ]]; then",
+        "if [[ ! ${num_busco_ids} -eq ${num_singlecopy_fasta} && ${run_extract_species_tree_fasta} -eq 1 ]]; then",
         "if [[ ! ${num_busco_ids} -eq ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]]; then",
         "if [[ ! ${num_busco_ids} -eq ${num_trimal_fasta} && ${run_individual_trimal} -eq 1 ]]; then",
         "if [[ ! ${num_busco_ids} -eq ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq 1 ]]; then",
         "if [[ ! ${num_busco_ids} -eq ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq 1 ]]; then",
     ]
     expected_tokens = [
-        "if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_individual_get_fasta} -eq 1 ]]; then",
+        "if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree_fasta} -eq 1 ]]; then",
         "if [[ ${num_busco_ids} -ne ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]]; then",
         "if [[ ${num_busco_ids} -ne ${num_trimal_fasta} && ${run_individual_trimal} -eq 1 ]]; then",
         "if [[ ${num_busco_ids} -ne ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq 1 ]]; then",
@@ -1279,7 +1281,7 @@ def test_busco_dataset_download_merges_staged_directory_contents():
 def test_shared_busco_summary_stage_normalizes_and_checks_species_set_before_collect():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    gate = "if [[ ${run_species_get_busco_summary} -ne 1 ]]; then"
+    gate = "if [[ ${run_build_species_busco_summary} -ne 1 ]]; then"
     source_dir = 'source_species_input_dir=$(effective_species_input_source_dir_path)'
     normalize = 'normalize_busco_table_naming "${dir_species_busco_full}" "${dir_species_busco_short}"'
     check = 'if ! is_species_set_identical "${source_species_input_dir}" "${dir_species_busco_full}"; then'
@@ -1305,7 +1307,7 @@ def test_genome_busco_summary_syncs_from_shared_summary_and_gates_busco_getfasta
     cmp_stmt = 'cmp -s "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"'
     copy_stmt = 'cp_out "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"'
     sync_call = "sync_genome_busco_summary_table_from_shared || true"
-    gate = 'disable_if_no_input_file "run_busco_dupaware_getfasta" "${file_genome_busco_summary_table}"'
+    gate = 'disable_if_no_input_file "run_busco_dupaware_extract_fasta" "${file_genome_busco_summary_table}"'
     assert sync_fn in text
     assert cmp_stmt in text
     assert copy_stmt in text
@@ -1341,8 +1343,8 @@ def test_shared_species_busco_stage_matches_existing_outputs_by_species_name():
 def test_busco_getfasta_step_is_gated_by_summary_table_presence():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    gate = 'disable_if_no_input_file "run_busco_dupaware_getfasta" "${file_genome_busco_summary_table}"'
-    step = "if [[ ${run_busco_dupaware_getfasta} -eq 1 ]]; then"
+    gate = 'disable_if_no_input_file "run_busco_dupaware_extract_fasta" "${file_genome_busco_summary_table}"'
+    step = "if [[ ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then"
     assert gate in text
     assert step in text
     assert text.index(gate) < text.index(step)
@@ -1351,7 +1353,7 @@ def test_busco_getfasta_step_is_gated_by_summary_table_presence():
 def test_busco_getfasta_step_defines_and_uses_its_duplicate_aware_helper():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    step = "if [[ ${run_busco_dupaware_getfasta} -eq 1 ]]; then"
+    step = "if [[ ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then"
     helper = "generate_genome_dupaware_busco_fasta() {"
     invoke = 'generate_genome_dupaware_busco_fasta "${busco_idx}" &'
     step_idx = text.index(step)
@@ -1847,14 +1849,14 @@ def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_suppor
     assert 'gg_prepare_species_genetic_code_table "${dir_sp_cds}" "${genetic_code}" "${file_species_genetic_code_resolved}" "${file_species_genetic_code}"' in core
     assert 'translate_orthogroup_cds_to_protein_fasta "${file_og_cds_fasta}" "${file_og_pep_fasta}" "${file_species_genetic_code_resolved}"' in core
     assert 'assert_gene_evolution_aa_model_for_protein_mode "${task}"' in core
-    assert 'disable_if_no_input_file "run_get_gff_info" "${file_og_primary_fasta}"' in core
+    assert 'disable_if_no_input_file "run_collect_gff_info" "${file_og_primary_fasta}"' in core
     assert 'seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"' in core
-    assert 'disable_if_no_input_file "run_get_promoter_fasta" "${file_og_gff_info}"' in core
+    assert 'disable_if_no_input_file "run_extract_promoter_fasta" "${file_og_gff_info}"' in core
     assert 'disable_if_no_input_file "run_fimo" "${file_og_promoter_fasta}" "${jaspar_path}"' in core
     assert 'disable_flag_with_reason "run_mapdnds_parameter_estimation" "input_sequence_mode=protein: mapdNdS parameter estimation requires codon alignments."' in core
-    assert 'disable_flag_with_reason "run_get_gff_info"' not in core
+    assert 'disable_flag_with_reason "run_collect_gff_info"' not in core
     assert 'disable_flag_with_reason "run_scm_intron"' not in core
-    assert 'disable_flag_with_reason "run_get_promoter_fasta"' not in core
+    assert 'disable_flag_with_reason "run_extract_promoter_fasta"' not in core
     assert 'disable_flag_with_reason "run_fimo"' not in core
     assert 'disable_flag_with_reason "treevis_synteny"' not in core
     assert 'synteny_source_dir="${dir_sp_cds}"' in core
@@ -1871,7 +1873,7 @@ def test_genome_evolution_places_run_cds_translation_before_dependent_run_flags(
     entrypoint_species_busco_index = entrypoint.index('run_species_busco=1')
     entrypoint_species_omark_index = entrypoint.index('run_species_omark=0')
     entrypoint_orthofinder_index = entrypoint.index('run_orthofinder=1')
-    entrypoint_busco_getfasta_index = entrypoint.index('run_busco_dupaware_getfasta=0')
+    entrypoint_busco_getfasta_index = entrypoint.index('run_busco_dupaware_extract_fasta=')
 
     assert entrypoint_translation_index < entrypoint_species_busco_index
     assert entrypoint_translation_index < entrypoint_species_omark_index
@@ -1882,7 +1884,7 @@ def test_genome_evolution_places_run_cds_translation_before_dependent_run_flags(
     config_species_busco_index = config_vars.index('run_species_busco')
     config_species_omark_index = config_vars.index('run_species_omark')
     config_orthofinder_index = config_vars.index('run_orthofinder')
-    config_busco_getfasta_index = config_vars.index('run_busco_dupaware_getfasta')
+    config_busco_getfasta_index = config_vars.index('run_busco_dupaware_extract_fasta')
 
     assert config_translation_index < config_species_busco_index
     assert config_translation_index < config_species_omark_index
@@ -1896,10 +1898,10 @@ def test_genome_evolution_exposes_omark_controls_and_summary_stage():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
     assert 'run_species_omark=0 # Run OMArk proteome quality assessment for each species using shared protein inputs.' in entrypoint
-    assert 'run_species_get_omark_summary=1 # Build the shared OMArk summary table for species-wise proteome quality assessment.' in entrypoint
+    assert 'run_build_species_omark_summary=1 # Build the shared OMArk summary table for species-wise proteome quality assessment.' in entrypoint
     assert 'omark_db_path="auto" # Path to the OMArk OMAmer LUCA.h5 database, or "auto" to download it under workspace/downloads/omark/.' in entrypoint
     assert "run_species_omark" in config_vars
-    assert "run_species_get_omark_summary" in config_vars
+    assert "run_build_species_omark_summary" in config_vars
     assert "omark_db_path" in config_vars
     assert 'omark_db_path="${omark_db_path:-auto}"' in core
     assert 'dir_species_omamer="${dir_genome_evolution}/omamer_search"' in core
@@ -1916,7 +1918,9 @@ def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launcher
 
     assert 'run_cds_translation="${run_cds_translation:-1}"' in core
     assert 'run_species_omark="${run_species_omark:-0}"' in core
-    assert 'run_species_get_omark_summary="${run_species_get_omark_summary:-1}"' in core
+    assert 'run_build_species_busco_summary="${run_build_species_busco_summary:-1}"' in core
+    assert 'run_build_species_omark_summary="${run_build_species_omark_summary:-1}"' in core
+    assert 'run_extract_species_tree_fasta="${run_extract_species_tree_fasta:-1}"' in core
 
 
 def test_genome_evolution_reuse_check_precedes_busco_lineage_resolution():
@@ -1929,14 +1933,13 @@ def test_genome_evolution_reuse_check_precedes_busco_lineage_resolution():
     assert reuse_return_index < resolve_lineage_index
 
 
-def test_genome_evolution_core_accepts_legacy_duplicate_aware_busco_flag_names():
+def test_genome_evolution_core_uses_canonical_duplicate_aware_busco_flag_names():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
 
-    assert 'run_busco_dupaware_getfasta="${run_busco_dupaware_getfasta:-${run_busco_getfasta:-0}}"' in core
-    assert 'run_busco_dupaware_grampa_pep="${run_busco_dupaware_grampa_pep:-${run_busco_grampa_pep:-0}}"' in core
-    assert "run_busco_dupaware_getfasta" in config_vars
-    assert "run_busco_getfasta" in config_vars
+    assert 'run_busco_dupaware_extract_fasta="${run_busco_dupaware_extract_fasta:-0}"' in core
+    assert 'run_busco_dupaware_grampa_pep="${run_busco_dupaware_grampa_pep:-0}"' in core
+    assert "run_busco_dupaware_extract_fasta" in config_vars
 
 
 def test_genome_evolution_runs_omark_after_orthofinder_and_before_og_selection():
@@ -2972,7 +2975,7 @@ def test_gene_evolution_core_quotes_path_in_deactivation_messages():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     banned_tokens = [
-        "echo '${run_get_gff_info} is deactivated. Empty input:' ${dir_sp_gff}",
+        "echo '${run_collect_gff_info} is deactivated. Empty input:' ${dir_sp_gff}",
         "echo '${run_scm_intron} is deactivated. Empty input:' ${dir_sp_gff}",
         "echo '${dir_sp_expression} is not empty. Continued:' ${dir_sp_expression}",
         "echo '${dir_sp_expression} is empty:' ${dir_sp_expression}",
@@ -2982,7 +2985,7 @@ def test_gene_evolution_core_quotes_path_in_deactivation_messages():
     for token in banned_tokens:
         assert token not in text
     expected_tokens = [
-        'echo "\\${run_get_gff_info} is deactivated. Empty input: ${dir_sp_gff}"',
+        'echo "\\${run_collect_gff_info} is deactivated. Empty input: ${dir_sp_gff}"',
         'echo "\\${run_scm_intron} is deactivated. Empty input: ${dir_sp_gff}"',
         'echo "\\${dir_sp_expression} is not empty. Continued: ${dir_sp_expression}"',
         'echo "\\${dir_sp_expression} is empty: ${dir_sp_expression}"',
@@ -3239,9 +3242,12 @@ def test_input_generation_core_wires_array_modes_and_busco_outputs_under_input_g
     text = _read_text(script)
     assert 'input_generation_mode="${input_generation_mode:-single}"' in text
     assert 'single|array_prepare|array_worker|array_finalize' in text
+    assert 'run_species_busco="${run_species_busco:-1}"' in text
+    assert 'run_multispecies_summary="${run_multispecies_summary:-1}"' in text
     assert 'species_busco_full_dir="${input_generation_root}/species_cds_busco_full"' in text
     assert 'species_busco_short_dir="${input_generation_root}/species_cds_busco_short"' in text
-    assert 'species_busco_summary_output="${input_generation_root}/busco_summary_table/busco_summary.tsv"' in text
+    assert 'file_multispecies_summary="${input_generation_root}/annotation_summary/annotation_summary.tsv"' in text
+    assert 'cmd=(Rscript "${gg_support_dir}/annotation_summary.r")' in text
     assert 'python "${gg_support_dir}/plan_input_generation_tasks.py"' in text
     assert 'python "${gg_support_dir}/run_input_generation_task.py"' in text
     assert 'python "${gg_support_dir}/merge_input_generation_shards.py"' in text

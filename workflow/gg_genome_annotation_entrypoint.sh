@@ -82,7 +82,7 @@ gg_entrypoint_name="gg_genome_annotation_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # CDS workflow flags
-run_get_gff_info=0 # Collect gene information from workspace/input/species_gff
+run_collect_gff_info=0 # Collect gene information from workspace/input/species_gff
 run_busco_cds=0 # Gene set completeness analysis
 run_uniprot_annotation=0 # CDS annotation against UniProt Swiss-Prot.
 run_cds_fx2tab=0 # Sequence stats of CDS sequences

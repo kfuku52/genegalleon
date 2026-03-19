@@ -21,6 +21,8 @@ Main scripts:
 Notable defaults:
 
 - `run_validate_inputs=1` validates CDS naming rules, CDS/GFF species-set consistency, and CDS-to-GFF mapping compatibility, with species-level mapping checks parallelized via `validate_cds_gff_mapping.py --nthreads`,
+- `run_species_busco=1` runs BUSCO on formatted CDS inputs by default,
+- `run_multispecies_summary=1` generates BUSCO plots and `annotation_summary.tsv` under `workspace/output/input_generation/annotation_summary/`,
 - formatted outputs default to `workspace/output/input_generation/species_cds`, `workspace/output/input_generation/species_gff`, and `workspace/output/input_generation/species_genome`,
 - per-run metadata defaults to `workspace/output/input_generation/gg_input_generation_runs.tsv`,
   `workspace/output/input_generation/gg_input_generation_species.tsv`, and
@@ -38,6 +40,17 @@ Wrapper-specific notes:
 - the wrapper accepts dedicated host-side overrides such as `GG_INPUT_DOWNLOAD_MANIFEST`,
   `GG_INPUT_PROVIDER`, `GG_INPUT_TRAIT_PROFILE`, and `GG_INPUT_SPECIES_*`,
 - `provider=refseq` and `provider=genbank` are accepted by the wrapper as aliases of `ncbi`.
+
+`input_generation_mode` semantics:
+
+- `single`: one process runs formatting, validation, per-species BUSCO, optional trait generation, and the final multi-species BUSCO summary.
+- `array_prepare`: prepares downloads if needed, discovers species tasks, and writes `workspace/output/input_generation/tmp/task_plan.json`; this is the setup step before scheduler array workers run.
+- `array_worker`: each array task reads one row from `task_plan.json` using `GG_ARRAY_TASK_ID`, formats one species, and optionally runs BUSCO for that species; outputs are written as shard files under `workspace/output/input_generation/tmp/`.
+- `array_finalize`: a single follow-up run merges shard outputs, validates the merged species set, checks BUSCO counts, then runs the shared post-processing steps such as trait generation and `run_multispecies_summary`.
+
+Practical rule:
+
+- use `single` unless you explicitly want scheduler array parallelism across species.
 
 Trait generation inputs:
 
@@ -210,7 +223,7 @@ Main outputs:
 Notable defaults:
 
 - species-tree substeps are enabled in the unified wrapper by default, including BUSCO extraction, ASTRAL tree inference, and the IQ2MC/mcmctree dating steps,
-- the same multi-species BUSCO run also feeds the BUSCO-based genome-evolution branch; BUSCO-based genome-evolution steps reuse the BUSCO outputs driven by `run_species_busco` and `run_species_get_busco_summary`,
+- the same multi-species BUSCO run also feeds the BUSCO-based genome-evolution branch; BUSCO-based genome-evolution steps reuse the BUSCO outputs driven by `run_species_busco` and `run_build_species_busco_summary`,
 - OMArk is optional (`run_species_omark=0` by default) and runs after
   OrthoFinder so it can reuse the current effective protein inputs,
 - shared defaults such as `busco_lineage` and `genetic_code` are loaded from `workflow/gg_common_params.sh`,

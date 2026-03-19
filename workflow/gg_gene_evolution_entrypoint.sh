@@ -88,9 +88,9 @@ gene_evolution_profile="${gene_evolution_profile:-default}" # default|hgt
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode is partial and deactivates CDS-only analyses.
 
 # Query2family workflow flags
-run_get_query_fasta=1 # Activated if mode_gene_evolution=query2family. Generate amino acid fasta file for query BLAST.
+run_extract_query_fasta=1 # Activated if mode_gene_evolution=query2family. Generate amino acid fasta file for query BLAST.
 run_query_blast=1 # Activated if mode_gene_evolution=query2family.
-run_get_fasta=1 # Generate in-frame CDS fasta file.
+run_extract_primary_fasta=1 # Generate in-frame CDS fasta file.
 run_rps_blast=1 # RPS-BLAST protein domain search.
 run_uniprot_annotation=0 # Annotation against UniProt Swiss-Prot.
 
@@ -111,9 +111,9 @@ run_notung_reconcil=0 # Run NOTUNG for RADTE.
 run_tree_dating=0 # Species-tree-guided divergence time estimation with RADTE.
 
 # Trait and promoter workflow flags
-run_get_expression_matrix=0 # Generate trait matrix of gene expression level.
-run_get_gff_info=0 # Generate trait matrix on introns and gene positions.
-run_get_promoter_fasta=0 # Generate a promoter fasta file from reference genomes.
+run_generate_expression_matrix=0 # Generate trait matrix of gene expression level.
+run_collect_gff_info=0 # Generate trait matrix on introns and gene positions.
+run_extract_promoter_fasta=0 # Generate a promoter fasta file from reference genomes.
 run_fimo=0 # Identify promoter motif sequences.
 run_tree_pruning=0 # If 1, discard genes without expression data.
 

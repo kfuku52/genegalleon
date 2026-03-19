@@ -16,6 +16,7 @@ busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 contamination_removal_rank="${contamination_removal_rank:-domain}"
 contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"
+run_collect_gff_info="${run_collect_gff_info:-0}"
 ### End: Job-supplied configuration ###
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
@@ -223,8 +224,8 @@ if [[ ! -s "${species_cds_validation_stamp}" ]]; then
 fi
 
 task="Gene trait extraction from gff files"
-disable_if_no_input_file "run_get_gff_info" "${file_sp_gff}"
-if [[ ! -s "${file_sp_gff_info}" && ${run_get_gff_info} -eq 1 ]]; then
+disable_if_no_input_file "run_collect_gff_info" "${file_sp_gff}"
+if [[ ! -s "${file_sp_gff_info}" && ${run_collect_gff_info} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ -e gff2genestat.tsv ]]; then
     rm -f -- gff2genestat.tsv
