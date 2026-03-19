@@ -134,6 +134,9 @@ MANIFEST_FIELDNAMES = (
     "local_genome_path",
 )
 
+DIRECT_CATALOG_FIELDS = tuple(field for field in MANIFEST_FIELDNAMES if field not in ("provider", "id"))
+DIRECT_CATALOG_SNAPSHOT_FIELDS = ("id", "species") + DIRECT_CATALOG_FIELDS
+
 HEADER_COMMENTS = {
     "provider": "\n".join(
         (
@@ -521,16 +524,113 @@ def parse_snapshot_entries(raw_entries):
     return dedupe_preserve_order(out)
 
 
-def load_id_options_snapshot(path: Path):
+def parse_direct_catalog_entries(raw_entries):
+    out = []
+    entries = raw_entries
+    if isinstance(entries, dict):
+        entries = [entries]
+    if not isinstance(entries, list):
+        return out
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        source_id = str(entry.get("id") or entry.get("source_id") or "").strip()
+        species_label = str(entry.get("species") or entry.get("species_label") or entry.get("label") or "").strip()
+        if source_id == "":
+            continue
+        key = (source_id, species_label)
+        if key in seen:
+            continue
+        seen.add(key)
+        record = {"id": source_id, "species": species_label}
+        for field in DIRECT_CATALOG_FIELDS:
+            record[field] = str(entry.get(field) or "").strip()
+        out.append(record)
+    return out
+
+
+def load_snapshot_payload(path: Path):
     with open(path, "rt", encoding="utf-8") as handle:
         payload = json.load(handle)
     providers_blob = payload.get("providers", payload)
     if not isinstance(providers_blob, dict):
         raise ValueError("id options snapshot must contain object key 'providers'")
+    return providers_blob
+
+
+def load_id_options_snapshot(path: Path):
+    providers_blob = load_snapshot_payload(path)
     options = {}
     for provider in PROVIDERS:
         options[provider] = parse_snapshot_entries(providers_blob.get(provider, []))
     return options
+
+
+def load_direct_catalog_snapshot(path: Path):
+    providers_blob = load_snapshot_payload(path)
+    return parse_direct_catalog_entries(providers_blob.get("direct", []))
+
+
+def load_manifest_rows(path: Path):
+    suffix = str(path.suffix or "").lower()
+    if suffix == ".xlsx":
+        if Workbook is None:
+            raise RuntimeError("openpyxl is required to read .xlsx direct catalog manifests")
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(path, read_only=True, data_only=False)
+        try:
+            sheet = workbook.active
+            values = list(sheet.iter_rows(values_only=True))
+        finally:
+            workbook.close()
+        if len(values) == 0:
+            return []
+        headers = [str(value or "").strip() for value in values[0]]
+        rows = []
+        for row_values in values[1:]:
+            if row_values is None:
+                continue
+            record = {}
+            nonempty = False
+            for idx, field in enumerate(headers):
+                if field == "":
+                    continue
+                value = row_values[idx] if idx < len(row_values) else ""
+                text = str(value or "").strip()
+                if text != "":
+                    nonempty = True
+                record[field] = text
+            if nonempty:
+                rows.append(record)
+        return rows
+    delimiter = "\t" if suffix == ".tsv" else ","
+    with open(path, "rt", encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle, delimiter=delimiter))
+
+
+def build_direct_catalog_from_manifest_rows(rows):
+    out = []
+    seen = set()
+    for row in rows:
+        provider = str(row.get("provider", "") or "").strip().lower()
+        if provider != "direct":
+            continue
+        source_id = str(row.get("id", "") or "").strip()
+        if source_id == "":
+            continue
+        species_key = str(row.get("species_key", "") or "").strip()
+        species_label = species_label_from_species_key(species_key)
+        key = (source_id, species_key, species_label)
+        if key in seen:
+            continue
+        seen.add(key)
+        record = {"id": source_id, "species": species_label}
+        for field in DIRECT_CATALOG_FIELDS:
+            record[field] = str(row.get(field, "") or "").strip()
+        out.append(record)
+    return sorted(out, key=lambda record: (str(record.get("id", "")).lower(), str(record.get("species_key", "")).lower()))
 
 
 def infer_coge_genome_id_from_files(species_key: str, files: List[Path], warnings: List[str]) -> str:
@@ -625,6 +725,32 @@ def build_provider_id_options(rows: List[Dict[str, str]], snapshot_options=None)
     return options
 
 
+def build_direct_catalog_choice(entry):
+    source_id = str(entry.get("id", "") or "").strip()
+    species_label = str(entry.get("species", "") or "").strip()
+    if species_label == "":
+        species_label = species_label_from_species_key(str(entry.get("species_key", "") or ""))
+    if species_label == "":
+        species_label = species_label_from_species_key(source_id)
+    return format_id_choice(source_id, species_label)
+
+
+def direct_catalog_formula(catalog_column_letter, catalog_row_end, sheet_row):
+    choice_range = "_direct_catalog!$A$2:$A${}".format(catalog_row_end)
+    id_range = "_direct_catalog!$B$2:$B${}".format(catalog_row_end)
+    value_range = "_direct_catalog!${}$2:${}${}".format(catalog_column_letter, catalog_column_letter, catalog_row_end)
+    return (
+        '=IF($A{row}<>"direct","",'
+        'IFERROR(INDEX({value_range},MATCH($B{row},{choice_range},0)),'
+        'IFERROR(INDEX({value_range},MATCH($B{row},{id_range},0)),"")))'
+    ).format(
+        row=sheet_row,
+        value_range=value_range,
+        choice_range=choice_range,
+        id_range=id_range,
+    )
+
+
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -660,6 +786,14 @@ def build_arg_parser():
             "Optional JSON snapshot for provider-specific id dropdown values. "
             "When set, non-large providers (ensembl/ensemblplants/gwh/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/direct/local) "
             "prefer snapshot IDs over locally discovered IDs."
+        ),
+    )
+    parser.add_argument(
+        "--direct-catalog-manifest",
+        default="",
+        help=(
+            "Optional TSV/CSV/XLSX manifest containing provider=direct rows. "
+            "When set, direct dropdown candidates and direct auto-fill catalog are read from this manifest."
         ),
     )
     return parser
@@ -989,7 +1123,7 @@ def write_manifest_tsv(rows: Iterable[Dict[str, str]], output_path: Path):
             writer.writerow({key: str(row.get(key, "") or "") for key in MANIFEST_FIELDNAMES})
 
 
-def write_manifest_xlsx(rows: List[Dict[str, str]], output_path: Path, id_options_snapshot=None):
+def write_manifest_xlsx(rows: List[Dict[str, str]], output_path: Path, id_options_snapshot=None, direct_catalog_entries=None):
     if (
         Workbook is None
         or get_column_letter is None
@@ -1036,6 +1170,40 @@ def write_manifest_xlsx(rows: List[Dict[str, str]], output_path: Path, id_option
         )
     list_sheet.sheet_state = "hidden"
 
+    direct_catalog_entries = list(direct_catalog_entries or [])
+    if len(direct_catalog_entries) > 0:
+        direct_sheet = workbook.create_sheet("_direct_catalog")
+        direct_headers = ["choice", "id", "species"] + list(DIRECT_CATALOG_FIELDS)
+        direct_sheet.append(direct_headers)
+        catalog_column_by_field = {}
+        for idx, field in enumerate(direct_headers, start=1):
+            catalog_column_by_field[field] = get_column_letter(idx)
+        for entry in direct_catalog_entries:
+            direct_sheet.append(
+                [
+                    build_direct_catalog_choice(entry),
+                    str(entry.get("id", "") or "").strip(),
+                    str(entry.get("species", "") or "").strip(),
+                ]
+                + [str(entry.get(field, "") or "").strip() for field in DIRECT_CATALOG_FIELDS]
+            )
+        direct_sheet.sheet_state = "hidden"
+
+        sheet_column_by_field = {}
+        for idx, field in enumerate(MANIFEST_FIELDNAMES, start=1):
+            sheet_column_by_field[field] = idx
+        catalog_row_end = len(direct_catalog_entries) + 1
+        for row_idx in range(2, 5001):
+            for field in DIRECT_CATALOG_FIELDS:
+                cell = sheet.cell(row=row_idx, column=sheet_column_by_field[field])
+                if str(cell.value or "").strip() != "":
+                    continue
+                cell.value = direct_catalog_formula(
+                    catalog_column_by_field[field],
+                    catalog_row_end,
+                    row_idx,
+                )
+
     provider_validation = DataValidation(
         type="list",
         formula1="=_lists!$A$1:$A${}".format(len(PROVIDERS)),
@@ -1063,10 +1231,15 @@ def write_manifest_xlsx(rows: List[Dict[str, str]], output_path: Path, id_option
     workbook.save(output_path)
 
 
-def write_manifest(rows: List[Dict[str, str]], output_path: Path, id_options_snapshot=None):
+def write_manifest(rows: List[Dict[str, str]], output_path: Path, id_options_snapshot=None, direct_catalog_entries=None):
     suffix = output_path.suffix.lower()
     if suffix == ".xlsx":
-        write_manifest_xlsx(rows, output_path, id_options_snapshot=id_options_snapshot)
+        write_manifest_xlsx(
+            rows,
+            output_path,
+            id_options_snapshot=id_options_snapshot,
+            direct_catalog_entries=direct_catalog_entries,
+        )
         return
     write_manifest_tsv(rows, output_path)
 
@@ -1077,6 +1250,7 @@ def main():
     input_root = Path(args.input_dir).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve()
     id_options_snapshot = {}
+    direct_catalog_entries = []
     if str(args.id_options_snapshot or "").strip() != "":
         snapshot_path = Path(args.id_options_snapshot).expanduser().resolve()
         if not snapshot_path.exists():
@@ -1084,9 +1258,28 @@ def main():
         else:
             try:
                 id_options_snapshot = load_id_options_snapshot(snapshot_path)
+                direct_catalog_entries = load_direct_catalog_snapshot(snapshot_path)
             except Exception as exc:
                 sys.stderr.write("Error: failed to read id options snapshot '{}': {}\n".format(snapshot_path, exc))
                 return 1
+    direct_catalog_text = str(args.direct_catalog_manifest or "").strip()
+    if direct_catalog_text != "":
+        direct_catalog_path = Path(direct_catalog_text).expanduser().resolve()
+        if not direct_catalog_path.exists():
+            sys.stderr.write("Error: direct catalog manifest was not found: {}\n".format(direct_catalog_path))
+            return 1
+        try:
+            manifest_rows = load_manifest_rows(direct_catalog_path)
+            direct_catalog_entries = build_direct_catalog_from_manifest_rows(manifest_rows)
+        except Exception as exc:
+            sys.stderr.write("Error: failed to read direct catalog manifest '{}': {}\n".format(direct_catalog_path, exc))
+            return 1
+        if len(direct_catalog_entries) > 0:
+            id_options_snapshot = dict(id_options_snapshot)
+            id_options_snapshot["direct"] = [
+                (str(entry.get("id", "") or "").strip(), str(entry.get("species", "") or "").strip())
+                for entry in direct_catalog_entries
+            ]
 
     requested_provider = str(args.provider or "").strip().lower()
     if requested_provider in LEGACY_NCBI_PROVIDER_ALIASES:
@@ -1115,12 +1308,19 @@ def main():
             str(x.get("species_key", "")),
         ),
     )
-    write_manifest(all_rows, output_path, id_options_snapshot=id_options_snapshot)
+    write_manifest(
+        all_rows,
+        output_path,
+        id_options_snapshot=id_options_snapshot,
+        direct_catalog_entries=direct_catalog_entries,
+    )
     print("Manifest written: {} (rows={})".format(output_path, len(all_rows)))
 
     if args.strict and len(all_errors) > 0:
         return 1
     if len(all_rows) == 0:
+        if output_path.suffix.lower() == ".xlsx" and (len(direct_catalog_entries) > 0 or len(id_options_snapshot) > 0):
+            return 0
         return 1
     return 0
 

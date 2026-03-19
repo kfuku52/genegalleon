@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import csv
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -9,6 +10,11 @@ import subprocess
 import sys
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request, urlopen
+
+try:
+    from openpyxl import load_workbook
+except Exception:  # pragma: no cover
+    load_workbook = None
 
 
 PROVIDERS = (
@@ -34,6 +40,32 @@ FETCH_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbas
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "local": Path("Local") / "species_wise_original",
 }
+
+MANIFEST_FIELDNAMES = (
+    "provider",
+    "id",
+    "species_key",
+    "cds_url",
+    "gff_url",
+    "gbff_url",
+    "genome_url",
+    "cds_archive_member",
+    "gff_archive_member",
+    "gbff_archive_member",
+    "genome_archive_member",
+    "cds_filename",
+    "gff_filename",
+    "gbff_filename",
+    "genome_filename",
+    "cds_url_template",
+    "gff_url_template",
+    "genome_url_template",
+    "local_cds_path",
+    "local_gff_path",
+    "local_gbff_path",
+    "local_genome_path",
+)
+DIRECT_CATALOG_FIELDS = tuple(field for field in MANIFEST_FIELDNAMES if field not in ("provider", "id"))
 
 ID_EXAMPLES_BY_PROVIDER = {
     "ensembl": (("homo_sapiens", "Homo sapiens"), ("mus_musculus", "Mus musculus")),
@@ -135,16 +167,112 @@ def parse_snapshot_entries(raw_entries):
     return dedupe_options(out)
 
 
-def load_snapshot_provider_options(path):
+def parse_direct_catalog_entries(raw_entries):
+    entries = raw_entries
+    if isinstance(entries, dict):
+        entries = [entries]
+    if not isinstance(entries, list):
+        return []
+    out = []
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        source_id = str(entry.get("id") or entry.get("source_id") or "").strip()
+        if source_id == "":
+            continue
+        species_label = str(entry.get("species") or entry.get("species_label") or entry.get("label") or "").strip()
+        species_key = str(entry.get("species_key") or "").strip()
+        key = (source_id, species_key, species_label)
+        if key in seen:
+            continue
+        seen.add(key)
+        record = {"id": source_id, "species": species_label}
+        for field in DIRECT_CATALOG_FIELDS:
+            record[field] = str(entry.get(field) or "").strip()
+        out.append(record)
+    return out
+
+
+def load_snapshot_payload(path):
     with open(path, "rt", encoding="utf-8") as handle:
         payload = json.load(handle)
     providers_blob = payload.get("providers", payload)
     if not isinstance(providers_blob, dict):
         raise ValueError("snapshot must contain object key 'providers'")
+    return providers_blob
+
+
+def load_snapshot_provider_options(path):
+    providers_blob = load_snapshot_payload(path)
     out = {}
     for provider in PROVIDERS:
         out[provider] = parse_snapshot_entries(providers_blob.get(provider, []))
     return out
+
+
+def load_snapshot_direct_catalog(path):
+    providers_blob = load_snapshot_payload(path)
+    return parse_direct_catalog_entries(providers_blob.get("direct", []))
+
+
+def load_manifest_rows(path):
+    suffix = str(path.suffix or "").lower()
+    if suffix == ".xlsx":
+        if load_workbook is None:
+            raise RuntimeError("openpyxl is required to read .xlsx direct catalog manifests")
+        workbook = load_workbook(path, read_only=True, data_only=False)
+        try:
+            sheet = workbook.active
+            values = list(sheet.iter_rows(values_only=True))
+        finally:
+            workbook.close()
+        if len(values) == 0:
+            return []
+        headers = [str(value or "").strip() for value in values[0]]
+        rows = []
+        for row_values in values[1:]:
+            if row_values is None:
+                continue
+            record = {}
+            nonempty = False
+            for idx, field in enumerate(headers):
+                if field == "":
+                    continue
+                value = row_values[idx] if idx < len(row_values) else ""
+                text = str(value or "").strip()
+                if text != "":
+                    nonempty = True
+                record[field] = text
+            if nonempty:
+                rows.append(record)
+        return rows
+    delimiter = "\t" if suffix == ".tsv" else ","
+    with open(path, "rt", encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle, delimiter=delimiter))
+
+
+def build_direct_catalog_from_manifest_rows(rows):
+    out = []
+    seen = set()
+    for row in rows:
+        provider = str(row.get("provider", "") or "").strip().lower()
+        if provider != "direct":
+            continue
+        source_id = str(row.get("id", "") or "").strip()
+        if source_id == "":
+            continue
+        species_key = str(row.get("species_key", "") or "").strip()
+        species_label = species_label_from_species_key(species_key)
+        key = (source_id, species_key, species_label)
+        if key in seen:
+            continue
+        seen.add(key)
+        record = {"id": source_id, "species": species_label}
+        for field in DIRECT_CATALOG_FIELDS:
+            record[field] = str(row.get(field, "") or "").strip()
+        out.append(record)
+    return sorted(out, key=lambda record: (str(record.get("id", "")).lower(), str(record.get("species_key", "")).lower()))
 
 
 def fetch_text(url, timeout):
@@ -477,11 +605,23 @@ def example_options(provider):
     return [(source_id, species_label) for source_id, species_label in ID_EXAMPLES_BY_PROVIDER.get(provider, ())]
 
 
-def build_snapshot(timeout, input_root, fallback_options):
+def build_snapshot(timeout, input_root, fallback_options, fallback_direct_catalog, direct_catalog_entries):
     warnings = []
     providers = {}
 
     for provider in PROVIDERS:
+        if provider == "direct":
+            resolved_catalog = list(direct_catalog_entries)
+            if len(resolved_catalog) == 0:
+                resolved_catalog = list(fallback_direct_catalog)
+            if len(resolved_catalog) == 0:
+                resolved_catalog = [
+                    {"id": source_id, "species": species_label}
+                    for source_id, species_label in example_options(provider)
+                ]
+            providers[provider] = resolved_catalog
+            continue
+
         resolved = []
         if provider in FETCH_PROVIDERS:
             try:
@@ -542,6 +682,14 @@ def build_arg_parser():
         help="Optional previous id_options_snapshot.json used as per-provider fallback.",
     )
     parser.add_argument(
+        "--direct-catalog-manifest",
+        default="",
+        help=(
+            "Optional TSV/CSV/XLSX manifest containing provider=direct rows. "
+            "When set, direct entries in the snapshot preserve direct URL and filename fields."
+        ),
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT_SECONDS,
@@ -562,18 +710,39 @@ def main():
         input_root = Path(args.input_dir).expanduser().resolve()
 
     fallback_options = {}
+    fallback_direct_catalog = []
     fallback_text = str(args.fallback_snapshot or "").strip()
     if fallback_text != "":
         fallback_path = Path(fallback_text).expanduser().resolve()
         if fallback_path.exists():
             try:
                 fallback_options = load_snapshot_provider_options(fallback_path)
+                fallback_direct_catalog = load_snapshot_direct_catalog(fallback_path)
             except Exception as exc:
                 sys.stderr.write("Warning: failed to read fallback snapshot '{}': {}\n".format(fallback_path, exc))
         else:
             sys.stderr.write("Warning: fallback snapshot not found: {}\n".format(fallback_path))
 
-    snapshot, warnings = build_snapshot(timeout=float(args.timeout), input_root=input_root, fallback_options=fallback_options)
+    direct_catalog_entries = []
+    direct_catalog_text = str(args.direct_catalog_manifest or "").strip()
+    if direct_catalog_text != "":
+        direct_catalog_path = Path(direct_catalog_text).expanduser().resolve()
+        if not direct_catalog_path.exists():
+            sys.stderr.write("Warning: direct catalog manifest not found: {}\n".format(direct_catalog_path))
+        else:
+            try:
+                manifest_rows = load_manifest_rows(direct_catalog_path)
+                direct_catalog_entries = build_direct_catalog_from_manifest_rows(manifest_rows)
+            except Exception as exc:
+                sys.stderr.write("Warning: failed to read direct catalog manifest '{}': {}\n".format(direct_catalog_path, exc))
+
+    snapshot, warnings = build_snapshot(
+        timeout=float(args.timeout),
+        input_root=input_root,
+        fallback_options=fallback_options,
+        fallback_direct_catalog=fallback_direct_catalog,
+        direct_catalog_entries=direct_catalog_entries,
+    )
     for warning in warnings:
         sys.stderr.write("Warning: {}\n".format(warning))
 

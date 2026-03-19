@@ -585,7 +585,17 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
                         {"id": "GWHZZZZ00000000.1", "species": "Fake gwh species"},
                     ],
                     "direct": [
-                        {"id": "snapshot_direct_species", "species": "Snapshot direct"},
+                        {
+                            "id": "snapshot_direct_species",
+                            "species": "Snapshot direct",
+                            "species_key": "Snapshot_direct_species",
+                            "cds_url": "https://example.org/snapshot_direct_species.cds.fa.gz",
+                            "gff_url": "https://example.org/snapshot_direct_species.gff3.gz",
+                            "genome_url": "https://example.org/snapshot_direct_species.genome.fa.gz",
+                            "cds_filename": "snapshot_direct_species.cds.fa.gz",
+                            "gff_filename": "snapshot_direct_species.gff3.gz",
+                            "genome_filename": "snapshot_direct_species.genome.fa.gz",
+                        },
                     ],
                     "local": [
                         {"id": "/data/local_species_1", "species": "Local species 1"},
@@ -692,6 +702,240 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         assert insectbase_values == ["IBG_99999 (Bombyx mori)"]
         assert direct_values == ["snapshot_direct_species (Snapshot direct)"]
         assert local_values == ["/data/local_species_1", "/data/local_species_2"]
+    finally:
+        workbook.close()
+
+
+def test_build_download_manifest_xlsx_adds_direct_catalog_sheet_and_formulas(tmp_path):
+    out = tmp_path / "download_manifest.xlsx"
+    snapshot = tmp_path / "id_options_snapshot.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "providers": {
+                    "direct": [
+                        {
+                            "id": "snapshot_direct_species",
+                            "species": "Snapshot direct",
+                            "species_key": "Snapshot_direct_species",
+                            "cds_url": "https://example.org/snapshot_direct_species.cds.fa.gz",
+                            "gff_url": "https://example.org/snapshot_direct_species.gff3.gz",
+                            "genome_url": "https://example.org/snapshot_direct_species.genome.fa.gz",
+                            "cds_filename": "snapshot_direct_species.cds.fa.gz",
+                            "gff_filename": "snapshot_direct_species.gff3.gz",
+                            "genome_filename": "snapshot_direct_species.genome.fa.gz",
+                        },
+                    ],
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = run_script(
+        "--provider",
+        "all",
+        "--input-dir",
+        str(SMALL_DATASET_ROOT),
+        "--output",
+        str(out),
+        "--id-options-snapshot",
+        str(snapshot),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    workbook = load_workbook(out, data_only=False)
+    try:
+        sheet = workbook["download_plan"]
+        direct_sheet = workbook["_direct_catalog"]
+
+        assert direct_sheet.sheet_state == "hidden"
+        assert direct_sheet["A2"].value == "snapshot_direct_species (Snapshot direct)"
+        assert direct_sheet["B2"].value == "snapshot_direct_species"
+        assert direct_sheet["D2"].value == "Snapshot_direct_species"
+        assert direct_sheet["E2"].value == "https://example.org/snapshot_direct_species.cds.fa.gz"
+        assert direct_sheet["F2"].value == "https://example.org/snapshot_direct_species.gff3.gz"
+        assert direct_sheet["H2"].value == "https://example.org/snapshot_direct_species.genome.fa.gz"
+
+        assert sheet["C2"].value == "Ostreococcus_lucimarinus"
+        assert isinstance(sheet["C3"].value, str)
+        assert sheet["C3"].value.startswith('=IF($A3<>"direct"')
+        assert "_direct_catalog" in sheet["C3"].value
+        assert "_direct_catalog" in str(sheet["D3"].value)
+        assert "_direct_catalog" in str(sheet["F3"].value)
+        assert "_direct_catalog" in str(sheet["M3"].value)
+    finally:
+        workbook.close()
+
+
+def test_build_download_manifest_xlsx_reads_direct_catalog_manifest(tmp_path):
+    direct_manifest = tmp_path / "direct_manifest.xlsx"
+    from openpyxl import Workbook
+
+    manifest_wb = Workbook()
+    manifest_ws = manifest_wb.active
+    manifest_ws.append(
+        [
+            "provider",
+            "id",
+            "species_key",
+            "cds_url",
+            "gff_url",
+            "gbff_url",
+            "genome_url",
+            "cds_archive_member",
+            "gff_archive_member",
+            "gbff_archive_member",
+            "genome_archive_member",
+            "cds_filename",
+            "gff_filename",
+            "gbff_filename",
+            "genome_filename",
+            "cds_url_template",
+            "gff_url_template",
+            "genome_url_template",
+            "local_cds_path",
+            "local_gff_path",
+            "local_gbff_path",
+            "local_genome_path",
+        ]
+    )
+    manifest_ws.append(
+        [
+            "direct",
+            "Fragaria_ananassa_FAN_r2.3",
+            "Fragaria_ananassa",
+            "https://example.org/fragaria.cds.fa.gz",
+            "https://example.org/fragaria.gff3.gz",
+            "",
+            "https://example.org/fragaria.genome.fa.gz",
+            "",
+            "",
+            "",
+            "",
+            "fragaria.cds.fa.gz",
+            "fragaria.gff3.gz",
+            "",
+            "fragaria.genome.fa.gz",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ]
+    )
+    manifest_wb.save(direct_manifest)
+
+    out = tmp_path / "download_manifest.xlsx"
+    completed = run_script(
+        "--provider",
+        "all",
+        "--input-dir",
+        str(SMALL_DATASET_ROOT),
+        "--output",
+        str(out),
+        "--direct-catalog-manifest",
+        str(direct_manifest),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    workbook = load_workbook(out, data_only=False)
+    try:
+        sheet = workbook["download_plan"]
+        list_sheet = workbook["_lists"]
+        direct_sheet = workbook["_direct_catalog"]
+        assert direct_sheet["A2"].value == "Fragaria_ananassa_FAN_r2.3 (Fragaria ananassa)"
+        assert direct_sheet["D2"].value == "Fragaria_ananassa"
+        assert direct_sheet["E2"].value == "https://example.org/fragaria.cds.fa.gz"
+        assert list_sheet["O1"].value == "Fragaria_ananassa_FAN_r2.3 (Fragaria ananassa)"
+        assert "_direct_catalog" in str(sheet["C3"].value)
+        assert "_direct_catalog" in str(sheet["D3"].value)
+    finally:
+        workbook.close()
+
+
+def test_build_download_manifest_xlsx_direct_catalog_manifest_allows_template_only_output(tmp_path):
+    direct_manifest = tmp_path / "direct_manifest.tsv"
+    direct_manifest.write_text(
+        "\t".join(
+            [
+                "provider",
+                "id",
+                "species_key",
+                "cds_url",
+                "gff_url",
+                "gbff_url",
+                "genome_url",
+                "cds_archive_member",
+                "gff_archive_member",
+                "gbff_archive_member",
+                "genome_archive_member",
+                "cds_filename",
+                "gff_filename",
+                "gbff_filename",
+                "genome_filename",
+                "cds_url_template",
+                "gff_url_template",
+                "genome_url_template",
+                "local_cds_path",
+                "local_gff_path",
+                "local_gbff_path",
+                "local_genome_path",
+            ]
+        )
+        + "\n"
+        + "\t".join(
+            [
+                "direct",
+                "Allium_cepa_PlantGARDEN_v1.2",
+                "Allium_cepa",
+                "https://example.org/allium.cds.fa.gz",
+                "https://example.org/allium.gff3.gz",
+                "",
+                "https://example.org/allium.genome.fa.gz",
+                "",
+                "",
+                "",
+                "",
+                "allium.cds.fa.gz",
+                "allium.gff3.gz",
+                "",
+                "allium.genome.fa.gz",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    empty_input = tmp_path / "empty_input"
+    empty_input.mkdir()
+    out = tmp_path / "download_manifest.xlsx"
+    completed = run_script(
+        "--provider",
+        "all",
+        "--input-dir",
+        str(empty_input),
+        "--output",
+        str(out),
+        "--direct-catalog-manifest",
+        str(direct_manifest),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    workbook = load_workbook(out, data_only=False)
+    try:
+        assert "_direct_catalog" in workbook.sheetnames
+        assert workbook["_direct_catalog"]["A2"].value == "Allium_cepa_PlantGARDEN_v1.2 (Allium cepa)"
     finally:
         workbook.close()
 
