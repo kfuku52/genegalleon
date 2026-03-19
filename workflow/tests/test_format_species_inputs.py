@@ -1,4 +1,5 @@
 from importlib.util import module_from_spec, spec_from_file_location
+from http.client import RemoteDisconnected
 import io
 from pathlib import Path
 import csv
@@ -13,6 +14,7 @@ import tarfile
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "format_species_inputs.py"
+VALIDATE_MAPPING_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_cds_gff_mapping.py"
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"
 
 
@@ -33,6 +35,15 @@ def run_script(*args, env=None):
     )
 
 
+def run_validate_mapping_script(*args):
+    return subprocess.run(
+        [sys.executable, str(VALIDATE_MAPPING_SCRIPT_PATH), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 class FakeTextPipe:
     def __init__(self):
         self.parts = []
@@ -46,6 +57,20 @@ class FakeTextPipe:
 
     def getvalue(self):
         return "".join(self.parts)
+
+
+class FakeBinaryResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return self._payload
 
 
 def write_test_taxonomy_fixture(tmp_path):
@@ -502,6 +527,156 @@ def test_format_species_inputs_rescue_overlap_merges_misassigned_gene_ids(tmp_pa
     assert rows[0]["aggregated_cds_removed"] == "1"
 
 
+def test_format_species_inputs_uses_locus_tag_for_genbank_style_ncbi_cds(tmp_path):
+    input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
+    species_dir = input_dir / "Dictyostelium_cf"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    cds_path = species_dir / "GCA_054859205.1_ASM5485920v1_cds_from_genomic.fna.gz"
+    gff_path = species_dir / "GCA_054859205.1_ASM5485920v1_genomic.gff.gz"
+    genome_path = species_dir / "GCA_054859205.1_ASM5485920v1_genomic.fna.gz"
+    with gzip.open(cds_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            (
+                ">lcl|JBTAPH010000036.1_cds_KAM9986187.1_1 [locus_tag=ACTFIY_010592] [protein=hypothetical protein] [protein_id=KAM9986187.1] [location=complement(join(9..158,229..966))] [gbkey=CDS]\n"
+                "ATGTCTACCACTGTTAACAATAATGATGCCTCTAGTAGTAGTAGCTCTGCCTCTAATAACGATGAATCCTTTGATTTAAGAATGAAATCAATGGAGGATCAAATCAATAACCTTTCATTAGCCTTTACCAGATTCATGAAAGAACCTATGTTCTCTTCTAATACCAAATCACGTAGCCAACCTTCTCATGATAACTCTGACACTGAGAATGAACAAAGTGATGACGAATCAAGTAACAAT\n"
+                ">lcl|JBTAPH010000036.1_cds_KAM9986188.1_2 [locus_tag=ACTFIY_010593] [protein=hypothetical protein] [protein_id=KAM9986188.1] [location=complement(join(2114..2192,2246..2381,2478..2691))] [gbkey=CDS]\n"
+                "ATGGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATC\n"
+            )
+        )
+    with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "\n".join(
+                [
+                    "##gff-version 3",
+                    "JBTAPH010000036.1\tGenbank\tgene\t9\t966\t.\t-\t.\tID=gene-ACTFIY_010592;Name=ACTFIY_010592;gbkey=Gene;gene_biotype=protein_coding;locus_tag=ACTFIY_010592",
+                    "JBTAPH010000036.1\tGenbank\tmRNA\t9\t966\t.\t-\t.\tID=rna-mrna.DD_M4_00007442-RA:cds;Parent=gene-ACTFIY_010592;gbkey=mRNA;locus_tag=ACTFIY_010592;orig_protein_id=gnl|WGS:JBTAPH|DD_M4_00007442-RA:cds;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007442-RA:cds;product=hypothetical protein",
+                    "JBTAPH010000036.1\tGenbank\tCDS\t229\t966\t.\t-\t0\tID=cds-KAM9986187.1;Parent=rna-mrna.DD_M4_00007442-RA:cds;Dbxref=NCBI_GP:KAM9986187.1;Name=KAM9986187.1;gbkey=CDS;locus_tag=ACTFIY_010592;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007442-RA:cds;product=hypothetical protein;protein_id=KAM9986187.1",
+                    "JBTAPH010000036.1\tGenbank\tCDS\t9\t158\t.\t-\t0\tID=cds-KAM9986187.1;Parent=rna-mrna.DD_M4_00007442-RA:cds;Dbxref=NCBI_GP:KAM9986187.1;Name=KAM9986187.1;gbkey=CDS;locus_tag=ACTFIY_010592;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007442-RA:cds;product=hypothetical protein;protein_id=KAM9986187.1",
+                    "JBTAPH010000036.1\tGenbank\tgene\t2114\t2691\t.\t-\t.\tID=gene-ACTFIY_010593;Name=ACTFIY_010593;gbkey=Gene;gene_biotype=protein_coding;locus_tag=ACTFIY_010593",
+                    "JBTAPH010000036.1\tGenbank\tmRNA\t2114\t2691\t.\t-\t.\tID=rna-mrna.DD_M4_00007443-RA:cds;Parent=gene-ACTFIY_010593;gbkey=mRNA;locus_tag=ACTFIY_010593;orig_protein_id=gnl|WGS:JBTAPH|DD_M4_00007443-RA:cds;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007443-RA:cds;product=hypothetical protein",
+                    "JBTAPH010000036.1\tGenbank\tCDS\t2478\t2691\t.\t-\t0\tID=cds-KAM9986188.1;Parent=rna-mrna.DD_M4_00007443-RA:cds;Dbxref=NCBI_GP:KAM9986188.1;Name=KAM9986188.1;gbkey=CDS;locus_tag=ACTFIY_010593;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007443-RA:cds;product=hypothetical protein;protein_id=KAM9986188.1",
+                    "JBTAPH010000036.1\tGenbank\tCDS\t2246\t2381\t.\t-\t0\tID=cds-KAM9986188.1;Parent=rna-mrna.DD_M4_00007443-RA:cds;Dbxref=NCBI_GP:KAM9986188.1;Name=KAM9986188.1;gbkey=CDS;locus_tag=ACTFIY_010593;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007443-RA:cds;product=hypothetical protein;protein_id=KAM9986188.1",
+                    "JBTAPH010000036.1\tGenbank\tCDS\t2114\t2192\t.\t-\t0\tID=cds-KAM9986188.1;Parent=rna-mrna.DD_M4_00007443-RA:cds;Dbxref=NCBI_GP:KAM9986188.1;Name=KAM9986188.1;gbkey=CDS;locus_tag=ACTFIY_010593;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007443-RA:cds;product=hypothetical protein;protein_id=KAM9986188.1",
+                    "",
+                ]
+            )
+        )
+    with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            ">JBTAPH010000036.1\n"
+            + ("A" * 3000)
+            + "\n"
+        )
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "ncbi",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Dictyostelium_cf_GCA_054859205.1_ASM5485920v1_cds_from_genomic.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert headers == [
+        ">Dictyostelium_cf_ACTFIY_010592",
+        ">Dictyostelium_cf_ACTFIY_010593",
+    ]
+
+    mapping = run_validate_mapping_script(
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+    )
+    assert mapping.returncode == 0, mapping.stderr + "\n" + mapping.stdout
+    assert "[Dictyostelium_cf] CDS-to-GFF mapping OK: 2/2 IDs" in mapping.stdout
+
+
+def test_format_species_inputs_uses_protein_id_when_ncbi_header_lacks_gene_tags(tmp_path):
+    input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
+    species_dir = input_dir / "Dictyostelium_firmibasis"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    cds_path = species_dir / "GCA_036169595.1_ASM3616959v1_cds_from_genomic.fna.gz"
+    gff_path = species_dir / "GCA_036169595.1_ASM3616959v1_genomic.gff.gz"
+    genome_path = species_dir / "GCA_036169595.1_ASM3616959v1_genomic.fna.gz"
+    with gzip.open(cds_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            (
+                ">lcl|CM069765.1_cds_KAK5581746.1_1 [protein=hypothetical protein] [protein_id=KAK5581746.1] [location=join(5022..5093,5192..5424)] [gbkey=CDS]\n"
+                "ATGCAAACAAATACATTTAGCAATGTACCTGGCTCACTTAATATTGAAGACCTATTAAATAAAATAGAAACTGTAGTATT\n"
+                ">lcl|CM069765.1_cds_KAK5581747.1_2 [protein=hypothetical protein] [protein_id=KAK5581747.1] [location=8575..9000] [gbkey=CDS]\n"
+                "ATGGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAA\n"
+            )
+        )
+    with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "\n".join(
+                [
+                    "##gff-version 3",
+                    "CM069765.1\tGenbank\tgene\t5010\t5424\t.\t+\t.\tID=gene-RB653_003324;Name=RB653_003324;gbkey=Gene;gene_biotype=protein_coding;locus_tag=RB653_003324",
+                    "CM069765.1\tGenbank\tmRNA\t5010\t5424\t.\t+\t.\tID=rna-DFI_00002-RA;Parent=gene-RB653_003324;gbkey=mRNA;locus_tag=RB653_003324;orig_protein_id=gnl|WGS:JAVFKY|DFI_00002-RA:cds;orig_transcript_id=gnl|WGS:JAVFKY|DFI_00002-RA;product=hypothetical protein",
+                    "CM069765.1\tGenbank\tCDS\t5022\t5093\t.\t+\t0\tID=cds-KAK5581746.1;Parent=rna-DFI_00002-RA;Dbxref=NCBI_GP:KAK5581746.1;Name=KAK5581746.1;gbkey=CDS;locus_tag=RB653_003324;orig_transcript_id=gnl|WGS:JAVFKY|DFI_00002-RA;product=hypothetical protein;protein_id=KAK5581746.1",
+                    "CM069765.1\tGenbank\tCDS\t5192\t5424\t.\t+\t0\tID=cds-KAK5581746.1;Parent=rna-DFI_00002-RA;Dbxref=NCBI_GP:KAK5581746.1;Name=KAK5581746.1;gbkey=CDS;locus_tag=RB653_003324;orig_transcript_id=gnl|WGS:JAVFKY|DFI_00002-RA;product=hypothetical protein;protein_id=KAK5581746.1",
+                    "CM069765.1\tGenbank\tgene\t8575\t9000\t.\t+\t.\tID=gene-RB653_003325;Name=RB653_003325;gbkey=Gene;gene_biotype=protein_coding;locus_tag=RB653_003325",
+                    "CM069765.1\tGenbank\tmRNA\t8575\t9000\t.\t+\t.\tID=rna-DFI_00003-RA;Parent=gene-RB653_003325;gbkey=mRNA;locus_tag=RB653_003325;orig_protein_id=gnl|WGS:JAVFKY|DFI_00003-RA:cds;orig_transcript_id=gnl|WGS:JAVFKY|DFI_00003-RA;product=hypothetical protein",
+                    "CM069765.1\tGenbank\tCDS\t8575\t9000\t.\t+\t0\tID=cds-KAK5581747.1;Parent=rna-DFI_00003-RA;Dbxref=NCBI_GP:KAK5581747.1;Name=KAK5581747.1;gbkey=CDS;locus_tag=RB653_003325;orig_transcript_id=gnl|WGS:JAVFKY|DFI_00003-RA;product=hypothetical protein;protein_id=KAK5581747.1",
+                    "",
+                ]
+            )
+        )
+    with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            ">CM069765.1\n"
+            + ("A" * 12000)
+            + "\n"
+        )
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "ncbi",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Dictyostelium_firmibasis_GCA_036169595.1_ASM3616959v1_cds_from_genomic.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert headers == [
+        ">Dictyostelium_firmibasis_KAK5581746.1",
+        ">Dictyostelium_firmibasis_KAK5581747.1",
+    ]
+
+    mapping = run_validate_mapping_script(
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+    )
+    assert mapping.returncode == 0, mapping.stderr + "\n" + mapping.stdout
+    assert "[Dictyostelium_firmibasis] CDS-to-GFF mapping OK: 2/2 IDs" in mapping.stdout
+
+
 def test_format_species_inputs_strict_gene_grouping_keeps_misassigned_gene_ids_separate(tmp_path):
     input_dir = tmp_path / "Direct" / "species_wise_original"
     species_dir = input_dir / "Arabidopsis_thaliana"
@@ -777,6 +952,52 @@ def test_resolve_provider_download_limits_keeps_fernbase_and_insectbase_default_
     limits = mod.resolve_provider_download_limits(8)
     assert limits["fernbase"] == 2
     assert limits["insectbase"] == 2
+
+
+def test_resolve_ncbi_download_urls_from_id_retries_transient_remote_disconnect(monkeypatch):
+    mod = load_module()
+    calls = {"esearch": 0, "esummary": 0}
+
+    def fake_urlopen(request, timeout):
+        url = request.full_url
+        if "esearch.fcgi" in url:
+            calls["esearch"] += 1
+            if calls["esearch"] == 1:
+                raise RemoteDisconnected("Remote end closed connection without response")
+            payload = {
+                "header": {"type": "esearch", "version": "0.3"},
+                "esearchresult": {"idlist": ["12345"]},
+            }
+            return FakeBinaryResponse(json.dumps(payload).encode("utf-8"))
+        if "esummary.fcgi" in url:
+            calls["esummary"] += 1
+            payload = {
+                "header": {"type": "esummary", "version": "0.3"},
+                "result": {
+                    "uids": ["12345"],
+                    "12345": {
+                        "ftppath_genbank": (
+                            "ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/036/169/595/"
+                            "GCA_036169595.1_ASM3616959v1"
+                        ),
+                        "organism": "Dictyostelium firmibasis",
+                        "speciesname": "Dictyostelium firmibasis",
+                    },
+                },
+            }
+            return FakeBinaryResponse(json.dumps(payload).encode("utf-8"))
+        raise AssertionError(url)
+
+    monkeypatch.setattr(mod, "urlopen", fake_urlopen)
+    monkeypatch.setattr(mod, "throttle_ncbi_eutils_request", lambda: None)
+    monkeypatch.setattr(mod.time, "sleep", lambda _seconds: None)
+
+    resolved = mod.resolve_ncbi_download_urls_from_id("GCA_036169595.1", timeout=1.0)
+    assert calls["esearch"] == 2
+    assert calls["esummary"] == 1
+    assert resolved["species_key"] == "Dictyostelium_firmibasis"
+    assert resolved["cds_filename"] == "GCA_036169595.1_ASM3616959v1_cds_from_genomic.fna.gz"
+    assert resolved["ncbi_source_db"] == "genbank"
 
 
 def test_iter_fasta_records_reads_tar_bz2_archive(tmp_path):

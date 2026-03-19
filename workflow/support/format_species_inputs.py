@@ -5,6 +5,7 @@ import bz2
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
+from http.client import IncompleteRead, RemoteDisconnected
 import gzip
 import hashlib
 import io
@@ -22,6 +23,7 @@ import threading
 import time
 import zipfile
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 try:
@@ -188,6 +190,7 @@ SHARED_DOWNLOAD_LOCK_FORMAT = "shared-lock-v2"
 DEFAULT_NCBI_EUTILS_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_NCBI_FTP_BASE_URL = "https://ftp.ncbi.nlm.nih.gov"
 DEFAULT_NCBI_DATASETS_BASE_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2"
+TRANSIENT_HTTP_STATUS_CODES = frozenset((408, 425, 429, 500, 502, 503, 504))
 DEFAULT_COGE_API_BASE_URL = "https://genomevolution.org/coge/api/v1"
 DEFAULT_COGE_WEB_BASE_URL = "https://genomevolution.org/coge"
 DEFAULT_CNGB_CNSA_BASE_URL = "https://db.cngb.org/cnsa/ajax"
@@ -2157,11 +2160,79 @@ def throttle_ncbi_eutils_request():
         time.sleep(sleep_seconds)
 
 
+def is_transient_network_error(exc):
+    pending = [exc]
+    seen = set()
+    while len(pending) > 0:
+        current = pending.pop()
+        if current is None:
+            continue
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+
+        if isinstance(current, HTTPError):
+            if int(getattr(current, "code", 0)) in TRANSIENT_HTTP_STATUS_CODES:
+                return True
+            continue
+
+        if isinstance(
+            current,
+            (
+                RemoteDisconnected,
+                IncompleteRead,
+                TimeoutError,
+                socket.timeout,
+                ConnectionResetError,
+                ConnectionAbortedError,
+                BrokenPipeError,
+                EOFError,
+            ),
+        ):
+            return True
+
+        if isinstance(current, OSError):
+            if getattr(current, "errno", None) in (104, 110, 111, 113):
+                return True
+
+        if isinstance(current, URLError):
+            reason = getattr(current, "reason", None)
+            if isinstance(reason, str):
+                lowered = reason.lower()
+                if (
+                    "timed out" in lowered
+                    or "temporarily unavailable" in lowered
+                    or "connection reset" in lowered
+                    or "remote end closed connection" in lowered
+                ):
+                    return True
+            elif isinstance(reason, BaseException):
+                pending.append(reason)
+
+        cause = getattr(current, "__cause__", None)
+        context = getattr(current, "__context__", None)
+        if isinstance(cause, BaseException):
+            pending.append(cause)
+        if isinstance(context, BaseException):
+            pending.append(context)
+    return False
+
+
 def fetch_json(url, timeout):
     request = Request(url, headers={"User-Agent": "genegalleon-input-generation"})
-    with urlopen(request, timeout=timeout) as response:
-        payload = response.read()
-    return json.loads(payload.decode("utf-8"))
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                payload = response.read()
+            return json.loads(payload.decode("utf-8"))
+        except Exception as exc:
+            last_error = exc
+            if attempt >= 3 or not is_transient_network_error(exc):
+                raise
+            time.sleep(float(attempt))
+    raise last_error
 
 
 def resolve_ncbi_eutils_base_url():
@@ -4772,12 +4843,18 @@ def build_gene_aggregate_id(task, header, transcript_id):
         ensembl_gene_id = extract_ncbi_ensembl_gene_id_from_header(header)
         gene_symbol = extract_header_tag_value(header, "gene")
         gene_id = extract_ncbi_gene_id_from_header(header)
+        locus_tag = extract_header_tag_value(header, "locus_tag")
+        protein_id = extract_header_tag_value(header, "protein_id")
         if ensembl_gene_id != "":
             gene_token = ensembl_gene_id
         elif gene_id != "":
             gene_token = "GeneID{}".format(gene_id)
         elif gene_symbol != "":
             gene_token = gene_symbol
+        elif locus_tag != "":
+            gene_token = locus_tag
+        elif protein_id != "":
+            gene_token = protein_id
         else:
             gene_token = extract_provider_id(provider, header)
     else:
