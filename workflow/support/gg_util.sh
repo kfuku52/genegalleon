@@ -951,7 +951,46 @@ set_singularityenv() {
 		export SINGULARITYENV_delete_tmp_dir=1
 		export APPTAINERENV_delete_tmp_dir=1
 	fi
-	gg_print_container_env_summary
+gg_print_container_env_summary
+}
+
+gg_tmp_root() {
+	local candidate
+	for candidate in "${TMPDIR:-}" "/tmp" "."; do
+		if [[ -n "${candidate}" && -d "${candidate}" && -w "${candidate}" ]]; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	done
+	printf '.\n'
+}
+
+gg_mktemp() {
+	local make_dir=0
+	local template=${1:-}
+	local tmp_root=""
+
+	if [[ "${template}" == "-d" ]]; then
+		make_dir=1
+		template=${2:-}
+	fi
+
+	if [[ -n "${template}" ]]; then
+		tmp_root=$(dirname "${template}")
+		if [[ ! -d "${tmp_root}" || ! -w "${tmp_root}" ]]; then
+			tmp_root=$(gg_tmp_root)
+			template="${tmp_root%/}/$(basename "${template}")"
+		fi
+	else
+		tmp_root=$(gg_tmp_root)
+		template="${tmp_root%/}/gg.tmp.XXXXXX"
+	fi
+
+	if [[ ${make_dir} -eq 1 ]]; then
+		command mktemp -d "${template}"
+	else
+		command mktemp "${template}"
+	fi
 }
 
 ensure_dir() {
@@ -965,7 +1004,7 @@ ensure_dir() {
 
 	local attempt
 	local mkdir_err
-	mkdir_err=$(mktemp)
+	mkdir_err=$(gg_mktemp)
 	for attempt in 1 2 3 4 5; do
 		if mkdir -p "${d}" 2>"${mkdir_err}"; then
 			rm -f -- "${mkdir_err}"
@@ -2300,7 +2339,8 @@ check_species_cds_dir() {
     echo "No species_cds fasta files were found in: ${dir_sp_cds}"
     exit 1
   fi
-  local error_log=$(mktemp)  # Temporary file to collect errors
+  local error_log
+  error_log=$(gg_mktemp)  # Temporary file to collect errors
   echo "$(date): Started validating the format of all species_cds files using ${GG_TASK_CPUS} processes."
 
   function check_single_species_cds () {
@@ -2376,7 +2416,7 @@ check_species_protein_dir() {
     exit 1
   fi
   local error_log
-  error_log=$(mktemp)
+  error_log=$(gg_mktemp)
   echo "$(date): Started validating the format of all species_protein files using ${GG_TASK_CPUS} processes."
 
   function check_single_species_protein () {

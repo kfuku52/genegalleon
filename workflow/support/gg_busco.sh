@@ -15,7 +15,7 @@ copy_busco_tables() {
   if [[ -s "${run_dir}/full_table.tsv" ]]; then
     full_src="${run_dir}/full_table.tsv"
   elif [[ -s "${run_dir}/full_table.tsv.gz" ]]; then
-    tmp_full_src=$(mktemp "${TMPDIR:-/tmp}/gg_busco.full_table.XXXXXX.tsv")
+    tmp_full_src=$(gg_mktemp "${TMPDIR:-/tmp}/gg_busco.full_table.XXXXXX.tsv")
     gzip -cd "${run_dir}/full_table.tsv.gz" > "${tmp_full_src}"
     full_src="${tmp_full_src}"
   fi

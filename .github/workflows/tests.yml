@@ -82,4 +82,4 @@ jobs:
       - name: Run lightweight R unit tests
         run: |
           Rscript workflow/tests/test_pgls_common_rphylopars.R
-          Rscript workflow/tests/test_tree_annotation_main.R
+          Rscript workflow/tests/test_treevis_main.R
