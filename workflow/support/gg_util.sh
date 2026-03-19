@@ -2340,7 +2340,13 @@ check_species_cds_dir() {
 
   export -f check_single_species_cds
   export error_log
-  parallel --jobs "${GG_TASK_CPUS}" check_single_species_cds ::: "${species_cds_fasta[@]}"
+  if command -v parallel >/dev/null 2>&1; then
+    parallel --jobs "${GG_TASK_CPUS}" check_single_species_cds ::: "${species_cds_fasta[@]}"
+  else
+    for spfasta in "${species_cds_fasta[@]}"; do
+      check_single_species_cds "${spfasta}"
+    done
+  fi
 
   if [[ -s "${error_log}" ]]; then
     cat "${error_log}"
@@ -2410,7 +2416,13 @@ check_species_protein_dir() {
 
   export -f check_single_species_protein
   export error_log
-  parallel --jobs "${GG_TASK_CPUS}" check_single_species_protein ::: "${species_protein_fasta[@]}"
+  if command -v parallel >/dev/null 2>&1; then
+    parallel --jobs "${GG_TASK_CPUS}" check_single_species_protein ::: "${species_protein_fasta[@]}"
+  else
+    for spfasta in "${species_protein_fasta[@]}"; do
+      check_single_species_protein "${spfasta}"
+    done
+  fi
 
   if [[ -s "${error_log}" ]]; then
     cat "${error_log}"

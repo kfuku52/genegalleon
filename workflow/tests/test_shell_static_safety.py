@@ -603,11 +603,27 @@ def test_input_generation_entrypoint_forwards_env_driven_overrides():
 
     assert "gg_apply_named_env_overrides \\" in text
     assert "provider GG_INPUT_PROVIDER" in text
+    assert "input_generation_mode GG_INPUT_INPUT_GENERATION_MODE" in text
+    assert "busco_lineage GG_INPUT_BUSCO_LINEAGE" in text
+    assert "run_species_busco GG_INPUT_RUN_SPECIES_BUSCO" in text
+    assert "run_species_get_busco_summary GG_INPUT_RUN_SPECIES_GET_BUSCO_SUMMARY" in text
     assert "trait_profile GG_INPUT_TRAIT_PROFILE" in text
     assert "for gg_input_var_name in ${!GG_INPUT_@}; do" not in text
     assert 'gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_MAX_CONCURRENT_DOWNLOADS_"' in text
     assert 'export "SINGULARITYENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
     assert 'export "APPTAINERENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
+
+
+def test_input_generation_entrypoint_is_array_ready():
+    entrypoint = WORKFLOW_DIR / "gg_input_generation_entrypoint.sh"
+    text = _read_text(entrypoint)
+
+    assert "#SBATCH -a 1" in text
+    assert "#$ -t 1" in text
+    assert "#PBS -J 1" in text
+    assert "gg_input_generation_entrypoint.sh_%A_%a.out" in text
+    assert "gg_input_generation_entrypoint.sh_%A_%a.err" in text
+    assert "task_plan.json" in text
 
 
 def test_input_generation_trait_profile_preset_is_wired():
@@ -3216,6 +3232,19 @@ def test_input_generation_core_populates_species_summary_taxonomy_metadata_nonfa
     assert 'if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then' in text
     assert "species_summary taxonomy metadata" in text
     assert "Continuing without taxid/genetic code annotation." in text
+
+
+def test_input_generation_core_wires_array_modes_and_busco_outputs_under_input_generation():
+    script = CORE_DIR / "gg_input_generation_core.sh"
+    text = _read_text(script)
+    assert 'input_generation_mode="${input_generation_mode:-single}"' in text
+    assert 'single|array_prepare|array_worker|array_finalize' in text
+    assert 'species_busco_full_dir="${input_generation_root}/species_cds_busco_full"' in text
+    assert 'species_busco_short_dir="${input_generation_root}/species_cds_busco_short"' in text
+    assert 'species_busco_summary_output="${input_generation_root}/busco_summary_table/busco_summary.tsv"' in text
+    assert 'python "${gg_support_dir}/plan_input_generation_tasks.py"' in text
+    assert 'python "${gg_support_dir}/run_input_generation_task.py"' in text
+    assert 'python "${gg_support_dir}/merge_input_generation_shards.py"' in text
 
 
 def test_mmseqs_uniref90_download_retries_and_reports_disk_context():

@@ -10,12 +10,18 @@ DEFAULT_COLUMNS = [
     "started_utc",
     "exit_code",
     "provider",
+    "input_generation_mode",
     "stage_format_status",
     "stage_validate_status",
+    "stage_species_busco_status",
+    "stage_busco_summary_status",
     "stage_trait_status",
     "num_species_cds",
     "num_species_gff",
     "num_species_genome",
+    "num_species_busco_full",
+    "num_species_busco_short",
+    "num_busco_ids",
     "num_species_trait",
     "num_trait_columns",
     "cds_sequences_before",
@@ -88,9 +94,11 @@ def format_summary(rows, last_n):
     lines.append("latest_exit_code\t{}".format(latest.get("exit_code", "")))
     lines.append("latest_provider\t{}".format(latest.get("provider", "")))
     lines.append(
-        "latest_stage_status\tformat={};validate={};trait={}".format(
+        "latest_stage_status\tformat={};validate={};species_busco={};busco_summary={};trait={}".format(
             latest.get("stage_format_status", ""),
             latest.get("stage_validate_status", ""),
+            latest.get("stage_species_busco_status", ""),
+            latest.get("stage_busco_summary_status", ""),
             latest.get("stage_trait_status", ""),
         )
     )

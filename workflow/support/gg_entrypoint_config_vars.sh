@@ -245,6 +245,7 @@ EOF
     gg_input_generation_entrypoint.sh)
       cat <<'EOF'
 auth_bearer_token_env
+busco_lineage
 download_dir
 download_manifest
 download_only
@@ -252,19 +253,26 @@ download_timeout
 dry_run
 http_header
 input_dir
+input_generation_mode
 overwrite
 provider
 resolved_manifest_output
 run_format_inputs
 run_generate_species_trait
+run_species_busco
+run_species_get_busco_summary
 run_validate_inputs
 species_cds_dir
+species_busco_full_dir
+species_busco_short_dir
+species_busco_summary_output
 species_genome_dir
 species_gff_dir
 species_summary_output
 species_trait_output
 strict
 summary_output
+task_plan_output
 trait_database_sources
 trait_databases
 trait_download_dir

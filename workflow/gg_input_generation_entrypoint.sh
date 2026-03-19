@@ -11,10 +11,12 @@
 #SBATCH -c 2
 #SBATCH --mem-per-cpu=8G
 #SBATCH -t 2976:00:00
-#SBATCH --output=gg_input_generation_entrypoint.sh_%j.out
-#SBATCH --error=gg_input_generation_entrypoint.sh_%j.err
+#SBATCH --output=gg_input_generation_entrypoint.sh_%A_%a.out
+#SBATCH --error=gg_input_generation_entrypoint.sh_%A_%a.err
 #SBATCH --chdir=.
 #SBATCH --ignore-pbs
+# Array example for array-aware entrypoints.
+#SBATCH -a 1
 # Site-specific partition example.
 #SBATCH -p epyc
 # Optional notifications and single-node examples.
@@ -32,18 +34,22 @@
 #$ -l epyc
 #$ -l d_rt=124:00:00:00
 #$ -l s_rt=124:00:00:00
+# Array example for array-aware entrypoints.
+#$ -t 1
 
 ## PBS
 # Common parameters: shell, CPU count, total memory, and exported environment.
 #PBS -S /bin/bash
 #PBS -l ncpus=2
 #PBS -l mem=16G
+# Array example for array-aware entrypoints.
+#PBS -J 1
 # Site-specific queue example.
 #PBS -q small
 #PBS -V
 
 # Number of parallel batch jobs ("-t 1-N" in SGE or "--array 1-N" in SLURM):
-# Fixed to 1
+# N = Number of species tasks in workspace/output/input_generation/tmp/task_plan.json when input_generation_mode=array_worker
 
 set -euo pipefail
 
@@ -68,7 +74,7 @@ if ! declare -F gg_entrypoint_initialize >/dev/null 2>&1; then
   echo "Failed to locate gg_entrypoint_bootstrap.sh from BASH_SOURCE[0]=${BASH_SOURCE[0]}" >&2
   exit 1
 fi
-if ! gg_entrypoint_initialize "${BASH_SOURCE[0]}" 0; then
+if ! gg_entrypoint_initialize "${BASH_SOURCE[0]}" 1; then
   exit 1
 fi
 gg_entrypoint_name="gg_input_generation_entrypoint.sh"
@@ -78,11 +84,15 @@ gg_entrypoint_name="gg_input_generation_entrypoint.sh"
 # Workflow flags
 run_format_inputs=1 # Format local inputs or download-manifest targets into workspace layout.
 run_validate_inputs=1 # Validate formatted inputs before downstream workflows use them.
+run_species_busco=0 # Run BUSCO for formatted species CDS files. In array mode, workers run per-species BUSCO and finalize builds the shared BUSCO summary.
+run_species_get_busco_summary=0 # Build a common BUSCO ID summary table from species BUSCO full tables.
 run_generate_species_trait=0 # Generate species_trait.tsv from downloaded or local metadata sources.
 
 # Shared parameters
 provider="all" # all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local
+input_generation_mode="single" # single|array_prepare|array_worker|array_finalize
 trait_profile="none" # none|gift_starter
+busco_lineage="${GG_COMMON_BUSCO_LINEAGE:-auto}" # BUSCO lineage dataset name, or auto to infer a shared dataset from the discovered species set.
 strict=0 # Treat input formatting and validation warnings as errors.
 overwrite=0 # Overwrite existing formatted or downloaded outputs.
 download_only=0 # Stop after download/format steps without validation-only downstream work.
@@ -101,11 +111,15 @@ download_manifest="" # Path to the download manifest file.
 download_dir="" # Directory for downloaded raw files.
 summary_output="" # Output path for the run summary table.
 species_cds_dir="" # Output directory for formatted CDS FASTA files.
+species_busco_full_dir="" # Output directory for BUSCO full tables under output/input_generation/.
+species_busco_short_dir="" # Output directory for BUSCO short summaries under output/input_generation/.
+species_busco_summary_output="" # Output path for the merged BUSCO summary table.
 species_gff_dir="" # Output directory for formatted GFF files.
 species_genome_dir="" # Output directory for formatted genome FASTA files.
 species_summary_output="" # Output path for the species-level summary table.
 resolved_manifest_output="" # Output path for the resolved download-manifest TSV.
 species_trait_output="" # Output path for the generated species trait table.
+task_plan_output="" # Output path for the discovered array task-plan JSON.
 trait_plan="" # Optional trait plan file describing requested traits.
 trait_database_sources="" # Optional mapping file that defines trait database sources.
 trait_download_dir="" # Directory for cached or raw trait database downloads.
@@ -118,11 +132,13 @@ source "${gg_support_dir}/gg_util.sh" # loading utility functions
 # Apply documented GG_INPUT_* overrides before forwarding canonical config vars.
 gg_apply_named_env_overrides \
   provider GG_INPUT_PROVIDER \
+  input_generation_mode GG_INPUT_INPUT_GENERATION_MODE \
   strict GG_INPUT_STRICT \
   overwrite GG_INPUT_OVERWRITE \
   download_only GG_INPUT_DOWNLOAD_ONLY \
   dry_run GG_INPUT_DRY_RUN \
   download_timeout GG_INPUT_DOWNLOAD_TIMEOUT \
+  busco_lineage GG_INPUT_BUSCO_LINEAGE \
   input_dir GG_INPUT_INPUT_DIR \
   download_manifest GG_INPUT_DOWNLOAD_MANIFEST \
   download_dir GG_INPUT_DOWNLOAD_DIR \
@@ -131,14 +147,20 @@ gg_apply_named_env_overrides \
   http_header GG_INPUT_HTTP_HEADER \
   run_format_inputs GG_INPUT_RUN_FORMAT_INPUTS \
   run_validate_inputs GG_INPUT_RUN_VALIDATE_INPUTS \
+  run_species_busco GG_INPUT_RUN_SPECIES_BUSCO \
+  run_species_get_busco_summary GG_INPUT_RUN_SPECIES_GET_BUSCO_SUMMARY \
   run_generate_species_trait GG_INPUT_RUN_GENERATE_SPECIES_TRAIT \
   trait_profile GG_INPUT_TRAIT_PROFILE \
   species_cds_dir GG_INPUT_SPECIES_CDS_DIR \
+  species_busco_full_dir GG_INPUT_SPECIES_BUSCO_FULL_DIR \
+  species_busco_short_dir GG_INPUT_SPECIES_BUSCO_SHORT_DIR \
+  species_busco_summary_output GG_INPUT_SPECIES_BUSCO_SUMMARY_OUTPUT \
   species_gff_dir GG_INPUT_SPECIES_GFF_DIR \
   species_genome_dir GG_INPUT_SPECIES_GENOME_DIR \
   species_summary_output GG_INPUT_SPECIES_SUMMARY_OUTPUT \
   resolved_manifest_output GG_INPUT_RESOLVED_MANIFEST_OUTPUT \
   species_trait_output GG_INPUT_SPECIES_TRAIT_OUTPUT \
+  task_plan_output GG_INPUT_TASK_PLAN_OUTPUT \
   trait_plan GG_INPUT_TRAIT_PLAN \
   trait_database_sources GG_INPUT_TRAIT_DATABASE_SOURCES \
   trait_download_dir GG_INPUT_TRAIT_DOWNLOAD_DIR \
