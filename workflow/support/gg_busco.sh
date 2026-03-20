@@ -7,34 +7,54 @@ copy_busco_tables() {
   local file_full="$3"
   local file_short="$4"
   local run_dir="${busco_root_dir}/run_${lineage}"
+  local candidate_dir=""
   local full_src=""
   local short_src=""
   local tmp_full_src=""
   local -a short_candidates=()
+  local -a candidate_dirs=()
 
-  if [[ -s "${run_dir}/full_table.tsv" ]]; then
-    full_src="${run_dir}/full_table.tsv"
-  elif [[ -s "${run_dir}/full_table.tsv.gz" ]]; then
-    tmp_full_src=$(gg_mktemp "${TMPDIR:-/tmp}/gg_busco.full_table.XXXXXX.tsv")
-    gzip -cd "${run_dir}/full_table.tsv.gz" > "${tmp_full_src}"
-    full_src="${tmp_full_src}"
+  if [[ -d "${run_dir}" ]]; then
+    candidate_dirs+=( "${run_dir}" )
+  fi
+  if [[ -d "${busco_root_dir}" ]]; then
+    candidate_dirs+=( "${busco_root_dir}" )
   fi
 
-  if [[ -s "${run_dir}/short_summary.txt" ]]; then
-    short_src="${run_dir}/short_summary.txt"
-  else
-    while IFS= read -r short_candidate; do
-      [[ -n "${short_candidate}" ]] || continue
-      short_candidates+=( "${short_candidate}" )
-    done < <(find "${run_dir}" -maxdepth 1 -type f -name "short_summary*.txt" | sort)
-    if [[ ${#short_candidates[@]} -gt 0 ]]; then
-      short_src="${short_candidates[0]}"
+  for candidate_dir in "${candidate_dirs[@]}"; do
+    if [[ -z "${full_src}" ]]; then
+      if [[ -s "${candidate_dir}/full_table.tsv" ]]; then
+        full_src="${candidate_dir}/full_table.tsv"
+      elif [[ -s "${candidate_dir}/full_table.tsv.gz" ]]; then
+        tmp_full_src=$(gg_mktemp "${TMPDIR:-/tmp}/gg_busco.full_table.XXXXXX.tsv")
+        gzip -cd "${candidate_dir}/full_table.tsv.gz" > "${tmp_full_src}"
+        full_src="${tmp_full_src}"
+      fi
     fi
-  fi
+
+    if [[ -z "${short_src}" ]]; then
+      if [[ -s "${candidate_dir}/short_summary.txt" ]]; then
+        short_src="${candidate_dir}/short_summary.txt"
+      else
+        short_candidates=()
+        while IFS= read -r short_candidate; do
+          [[ -n "${short_candidate}" ]] || continue
+          short_candidates+=( "${short_candidate}" )
+        done < <(find "${candidate_dir}" -maxdepth 1 -type f -name "short_summary*.txt" 2> /dev/null | sort)
+        if [[ ${#short_candidates[@]} -gt 0 ]]; then
+          short_src="${short_candidates[0]}"
+        fi
+      fi
+    fi
+
+    if [[ -n "${full_src}" && -n "${short_src}" ]]; then
+      break
+    fi
+  done
 
   if [[ -z "${full_src}" || -z "${short_src}" ]]; then
-    echo "BUSCO outputs were not found under ${run_dir}."
-    echo "Expected full_table.tsv(.gz) and short_summary*.txt."
+    echo "BUSCO outputs were not found under ${busco_root_dir}."
+    echo "Expected full_table.tsv(.gz) and short_summary*.txt under ${run_dir} or ${busco_root_dir}."
     rm -f -- "${tmp_full_src}"
     return 1
   fi

@@ -192,6 +192,7 @@ def _install_fake_toolchain(root: Path) -> Path:
         textwrap.dedent(
             """\
             #!/usr/bin/env python3
+            import os
             import sys
             from pathlib import Path
 
@@ -212,8 +213,9 @@ def _install_fake_toolchain(root: Path) -> Path:
             lineage_path = Path(parse("--lineage_dataset"))
             lineage = lineage_path.name if str(lineage_path) else "unknown_odb12"
             outdir = Path(parse("--out", "busco_tmp"))
-            run_dir = outdir / f"run_{lineage}"
-            run_dir.mkdir(parents=True, exist_ok=True)
+            layout = os.environ.get("BUSCO_STUB_LAYOUT", "nested")
+            result_dir = outdir if layout == "flat" else outdir / f"run_{lineage}"
+            result_dir.mkdir(parents=True, exist_ok=True)
             infile = Path(parse("--in"))
             header = "unknown_gene"
             if infile.exists():
@@ -222,12 +224,12 @@ def _install_fake_toolchain(root: Path) -> Path:
                         if line.startswith(">"):
                             header = line[1:].strip().split()[0]
                             break
-            (run_dir / "full_table.tsv").write_text(
+            (result_dir / "full_table.tsv").write_text(
                 "# BUSCO version is: fixture\\n"
                 f"BUSCO1\\tComplete\\t{header}\\t1\\t100\\thttps://example.org/BUSCO1\\tfixture description\\n",
                 encoding="utf-8",
             )
-            (run_dir / "short_summary.txt").write_text(
+            (result_dir / "short_summary.txt").write_text(
                 "C:100.0%[S:100.0%,D:0.0%],F:0.0%,M:0.0%,n:1\\n",
                 encoding="utf-8",
             )
@@ -322,10 +324,11 @@ def _core_env(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str
 
 
 def _run_core(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None) -> subprocess.CompletedProcess[str]:
+    env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode, task_id=task_id)
     completed = subprocess.run(
         ["bash", str(CORE_PATH)],
         cwd=REPO_ROOT,
-        env=_core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode, task_id=task_id),
+        env=env,
         capture_output=True,
         text=True,
         timeout=180,
@@ -397,6 +400,31 @@ def test_gg_input_generation_single_mode_end_to_end(tmp_path: Path):
 
     _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="single")
 
+    _assert_expected_outputs(workspace / "output" / "input_generation", expected_last_mode="single")
+
+
+def test_gg_input_generation_single_mode_accepts_flat_busco_v6_layout(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "single_flat_busco_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="single")
+    env["BUSCO_STUB_LAYOUT"] = "flat"
+    completed = subprocess.run(
+        ["bash", str(CORE_PATH)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+    assert "No such file or directory" not in completed.stdout
+    assert "No such file or directory" not in completed.stderr
     _assert_expected_outputs(workspace / "output" / "input_generation", expected_last_mode="single")
 
 
