@@ -3800,6 +3800,172 @@ gg_shared_lock_acquire() {
   done
 }
 
+gg_shared_semaphore_max_slots() {
+  local max_slots="${1:-1}"
+  if [[ ! "${max_slots}" =~ ^[0-9]+$ ]]; then
+    max_slots=1
+  fi
+  if (( max_slots < 0 )); then
+    max_slots=1
+  fi
+  echo "${max_slots}"
+}
+
+gg_shared_semaphore_acquire() {
+  local semaphore_dir=$1
+  local requested_slots=$2
+  local description=$3
+  local max_slots
+  local task_id=${GG_ARRAY_TASK_ID:-1}
+  local poll_seconds
+  local timeout_seconds
+  local wait_started
+  local wait_logged=0
+  local slot_idx=0
+  local slot_lock=""
+
+  max_slots=$(gg_shared_semaphore_max_slots "${requested_slots}")
+  if (( max_slots < 1 )); then
+    GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE=""
+    GG_SHARED_SEMAPHORE_SLOT_INDEX=""
+    GG_SHARED_SEMAPHORE_MAX_SLOTS="${max_slots}"
+    return 0
+  fi
+
+  poll_seconds=$(gg_lock_poll_seconds)
+  timeout_seconds=$(gg_lock_acquire_timeout_seconds)
+  wait_started=$(date +%s)
+  mkdir -p "${semaphore_dir}"
+  while true; do
+    for (( slot_idx=1; slot_idx<=max_slots; slot_idx++ )); do
+      slot_lock="${semaphore_dir}/slot.${slot_idx}.lock"
+      if gg_shared_lock_try_create "${slot_lock}"; then
+        GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE="${slot_lock}"
+        GG_SHARED_SEMAPHORE_SLOT_INDEX="${slot_idx}"
+        GG_SHARED_SEMAPHORE_MAX_SLOTS="${max_slots}"
+        return 0
+      fi
+      if gg_shared_lock_reclaim_if_stale "${slot_lock}" "${description} slot ${slot_idx}/${max_slots}"; then
+        if gg_shared_lock_try_create "${slot_lock}"; then
+          GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE="${slot_lock}"
+          GG_SHARED_SEMAPHORE_SLOT_INDEX="${slot_idx}"
+          GG_SHARED_SEMAPHORE_MAX_SLOTS="${max_slots}"
+          return 0
+        fi
+      fi
+    done
+    if [[ ${wait_logged} -eq 0 ]]; then
+      echo "GG_ARRAY_TASK_ID=${task_id}: waiting for shared semaphore slot: ${description} (max_concurrent=${max_slots}; lock_dir=${semaphore_dir})" >&2
+      wait_logged=1
+    fi
+    local now_epoch
+    now_epoch=$(date +%s)
+    if (( now_epoch - wait_started >= timeout_seconds )); then
+      echo "GG_ARRAY_TASK_ID=${task_id}: timed out waiting for shared semaphore slot: ${description} (max_concurrent=${max_slots}; lock_dir=${semaphore_dir})" >&2
+      return 1
+    fi
+    sleep "${poll_seconds}"
+  done
+}
+
+gg_shared_semaphore_release() {
+  local slot_lock="${1:-${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}}"
+  if [[ -z "${slot_lock}" ]]; then
+    return 0
+  fi
+  gg_shared_lock_release "${slot_lock}"
+  if [[ "${slot_lock}" == "${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}" ]]; then
+    GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE=""
+    GG_SHARED_SEMAPHORE_SLOT_INDEX=""
+    GG_SHARED_SEMAPHORE_MAX_SLOTS=""
+  fi
+}
+
+gg_run_with_shared_semaphore() {
+  local semaphore_dir=$1
+  local requested_slots=$2
+  local description=$3
+  shift 3
+  local task_id=${GG_ARRAY_TASK_ID:-1}
+  local max_slots
+  local slot_lock=""
+  local heartbeat_pid=""
+  local command_exit_code=0
+  local saved_exit_trap=""
+  local saved_hup_trap=""
+  local saved_int_trap=""
+  local saved_term_trap=""
+
+  max_slots=$(gg_shared_semaphore_max_slots "${requested_slots}")
+  if (( max_slots < 1 )); then
+    if "$@"; then
+      return 0
+    fi
+    return $?
+  fi
+
+  if ! gg_shared_semaphore_acquire "${semaphore_dir}" "${max_slots}" "${description}"; then
+    return 1
+  fi
+  slot_lock="${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}"
+  if [[ -z "${slot_lock}" ]]; then
+    echo "Failed to resolve shared semaphore slot after acquire: ${description}" >&2
+    return 1
+  fi
+
+  cleanup_shared_semaphore() {
+    gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+    gg_shared_semaphore_release "${slot_lock}"
+  }
+
+  restore_shared_semaphore_traps() {
+    trap - EXIT
+    trap - HUP
+    trap - INT
+    trap - TERM
+    if [[ -n "${saved_exit_trap}" ]]; then
+      eval "${saved_exit_trap}"
+    fi
+    if [[ -n "${saved_hup_trap}" ]]; then
+      eval "${saved_hup_trap}"
+    fi
+    if [[ -n "${saved_int_trap}" ]]; then
+      eval "${saved_int_trap}"
+    fi
+    if [[ -n "${saved_term_trap}" ]]; then
+      eval "${saved_term_trap}"
+    fi
+  }
+
+  shared_semaphore_signal_handler() {
+    local signal_name=$1
+    cleanup_shared_semaphore
+    restore_shared_semaphore_traps
+    kill "-${signal_name}" "${BASHPID:-$$}"
+  }
+
+  saved_exit_trap=$(trap -p EXIT || true)
+  saved_hup_trap=$(trap -p HUP || true)
+  saved_int_trap=$(trap -p INT || true)
+  saved_term_trap=$(trap -p TERM || true)
+  trap 'cleanup_shared_semaphore; restore_shared_semaphore_traps' EXIT
+  trap 'shared_semaphore_signal_handler HUP' HUP
+  trap 'shared_semaphore_signal_handler INT' INT
+  trap 'shared_semaphore_signal_handler TERM' TERM
+
+  gg_shared_lock_start_heartbeat "${slot_lock}"
+  heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
+  echo "GG_ARRAY_TASK_ID=${task_id}: acquired shared semaphore slot ${GG_SHARED_SEMAPHORE_SLOT_INDEX:-?}/${GG_SHARED_SEMAPHORE_MAX_SLOTS:-${max_slots}}: ${description}" >&2
+  if "$@"; then
+    command_exit_code=0
+  else
+    command_exit_code=$?
+  fi
+  cleanup_shared_semaphore
+  restore_shared_semaphore_traps
+  return "${command_exit_code}"
+}
+
 gg_lock_pid_is_alive() {
   local pid=$1
   if [[ ! "${pid}" =~ ^[0-9]+$ ]]; then

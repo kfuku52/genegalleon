@@ -24,6 +24,10 @@ contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 delete_tmp_dir=${delete_tmp_dir:-1}
 mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-sraid}" | tr '[:upper:]' '[:lower:]')
+amalgkit_metadata_max_concurrent_jobs="${amalgkit_metadata_max_concurrent_jobs:-10}"
+amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-10}"
+amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\"RNA-seq\"[Strategy] OR \"EST\"[Strategy] OR \"CLONE\"[Strategy]}"
+amalgkit_long_read_instrument_pattern="${amalgkit_long_read_instrument_pattern:-pacbio|smrt|nanopore|minion|gridion|promethion|flongle|sequel|revio}"
 busco_lineage_resolved=""
 contamination_removal_rank_for_remove_contaminated_sequences="$(
   gg_normalize_contamination_removal_rank_for_remove_contaminated_sequences "${contamination_removal_rank}"
@@ -103,6 +107,205 @@ invalidate_cached_query_table_if_prefix_mismatch() {
     echo "First query ID: ${first_query}"
     echo "Archived stale file to: ${stale_file}"
   fi
+}
+
+filter_long_read_amalgkit_metadata_rows() {
+  local metadata_in="$1"
+  local metadata_out="$2"
+  local exclusion_pattern="$3"
+  python - "${metadata_in}" "${metadata_out}" "${exclusion_pattern}" <<'PY'
+import csv
+import re
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+pattern = str(sys.argv[3] or "").strip()
+regex = re.compile(pattern, re.IGNORECASE) if pattern else None
+
+with src.open("rt", encoding="utf-8", newline="") as handle_in:
+    reader = csv.DictReader(handle_in, delimiter="\t")
+    fieldnames = list(reader.fieldnames or [])
+    instrument_field = "instrument" if "instrument" in fieldnames else "platform" if "platform" in fieldnames else ""
+    with dst.open("wt", encoding="utf-8", newline="") as handle_out:
+        if not fieldnames:
+            handle_out.write("")
+        else:
+            writer = csv.DictWriter(handle_out, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
+            writer.writeheader()
+            kept = 0
+            excluded = 0
+            for row in reader:
+                instrument = str(row.get(instrument_field, "") or "")
+                if regex is not None and instrument_field and regex.search(instrument):
+                    excluded += 1
+                    continue
+                writer.writerow({field: str(row.get(field, "") or "") for field in fieldnames})
+                kept += 1
+            print(
+                "Filtered amalgkit metadata rows: kept={} excluded_long_read={} instrument_column={}".format(
+                    kept,
+                    excluded,
+                    instrument_field or "none",
+                )
+            )
+PY
+}
+
+download_public_original_fastqs_for_metadata() {
+  local metadata_tsv="$1"
+  local output_dir="$2"
+  python - "${metadata_tsv}" "${output_dir}" <<'PY'
+import csv
+import gzip
+import shutil
+import sys
+import time
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+metadata_path = Path(sys.argv[1])
+output_root = Path(sys.argv[2])
+
+
+def fetch_bytes(url: str) -> bytes:
+    last_exc = None
+    for attempt in range(1, 6):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response:
+                return response.read()
+        except Exception as exc:  # pragma: no cover - exercised via shell integration
+            last_exc = exc
+            if attempt == 5:
+                raise
+            time.sleep(2)
+    raise last_exc  # pragma: no cover
+
+
+def fetch_text(url: str) -> str:
+    return fetch_bytes(url).decode("utf-8", "replace")
+
+
+def sort_key(item):
+    name = item[0].lower()
+    if "forward" in name or "_1" in name or "r1" in name:
+        return (0, name)
+    if "reverse" in name or "_2" in name or "r2" in name:
+        return (1, name)
+    return (2, name)
+
+
+with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
+    reader = csv.DictReader(handle, delimiter="\t")
+    fieldnames = list(reader.fieldnames or [])
+    if "run" not in fieldnames:
+        raise SystemExit("Metadata is missing required 'run' column: {}".format(metadata_path))
+    runs = []
+    seen = set()
+    for row in reader:
+        run = str(row.get("run", "") or "").strip()
+        if not run or run in seen:
+            continue
+        seen.add(run)
+        runs.append(run)
+
+if not runs:
+    raise SystemExit("No run accessions were found in metadata: {}".format(metadata_path))
+
+output_root.mkdir(parents=True, exist_ok=True)
+
+for run in runs:
+    xml_url = "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}".format(
+        urllib.parse.quote(run, safe="")
+    )
+    root = ET.fromstring(fetch_text(xml_url))
+    fastq_files = []
+    for node in root.iter("SRAFile"):
+        if node.attrib.get("semantic_name") != "fastq":
+            continue
+        if node.attrib.get("supertype") != "Original":
+            continue
+        url = str(node.attrib.get("url", "") or "").strip()
+        filename = str(node.attrib.get("filename", "") or "").strip()
+        if not url.startswith("https://"):
+            for alt in node.findall("Alternatives"):
+                alt_url = str(alt.attrib.get("url", "") or "").strip()
+                if alt_url.startswith("https://"):
+                    url = alt_url
+                    break
+        if url.startswith("https://"):
+            fastq_files.append((filename, url))
+
+    if not fastq_files:
+        raise SystemExit("No public original FASTQ URLs were found for run: {}".format(run))
+    if len(fastq_files) > 2:
+        raise SystemExit("Unexpected number of original FASTQ files for run {}: {}".format(run, len(fastq_files)))
+
+    run_dir = output_root / run
+    if run_dir.exists():
+        shutil.rmtree(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    fastq_files.sort(key=sort_key)
+
+    for idx, (filename, url) in enumerate(fastq_files, start=1):
+        if len(fastq_files) == 1:
+            dest = run_dir / "{}.amalgkit.fastq.gz".format(run)
+        else:
+            dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)
+        payload = fetch_bytes(url)
+        if payload[:2] == b"\x1f\x8b":
+            dest.write_bytes(payload)
+        else:
+            with gzip.open(dest, "wb") as handle_out:
+                handle_out.write(payload)
+        print("Recovered original FASTQ for {}: {} -> {}".format(run, filename or url, dest))
+PY
+}
+
+run_amalgkit_getfastq_or_fallback() {
+  local getfastq_outputs=()
+  if amalgkit getfastq \
+    --out_dir "${dir_tmp}" \
+    --download_dir "${dir_amalgkit_download_dir}" \
+    --metadata "${file_amalgkit_metadata}" \
+    --threads "${GG_TASK_CPUS}" \
+    --rrna_filter "${amalgkit_rrna_filter}" \
+    --contam_filter "${amalgkit_contam_filter}" \
+    --contam_filter_rank "${contamination_removal_rank_for_amalgkit}" \
+    --contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB" \
+    --remove_sra yes \
+    --remove_tmp yes \
+    --read_name 'trinity' \
+    --aws yes \
+    --ncbi yes \
+    --redo no; then
+    echo "amalgkit getfastq safely finished."
+    shopt -s nullglob
+    getfastq_outputs=("${dir_tmp}"/getfastq/*)
+    shopt -u nullglob
+    if [[ ${#getfastq_outputs[@]} -eq 0 ]]; then
+      echo "amalgkit getfastq finished but no output files were found under: ${dir_tmp}/getfastq"
+      return 1
+    fi
+    mv_out "${getfastq_outputs[@]}" "${dir_amalgkit_getfastq_sp}"
+    rm -rf -- "${dir_tmp}/getfastq"
+    return 0
+  else
+    local status_amalgkit=$?
+    echo "amalgkit getfastq exit code: ${status_amalgkit}"
+  fi
+  echo "amalgkit getfastq did not safely finish. Attempting fallback download of public original FASTQ files."
+  rm -rf -- "${dir_amalgkit_getfastq_sp}"
+  ensure_dir "${dir_amalgkit_getfastq_sp}"
+  if download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_amalgkit_getfastq_sp}"; then
+    echo "Fallback download of public original FASTQ files succeeded."
+    return 0
+  fi
+  echo "Fallback direct FASTQ recovery also failed. Exiting."
+  return 1
 }
 
 # Setting modes
@@ -265,9 +468,12 @@ fi
 dir_tmp="${dir_transcriptome_assembly_output}/tmp/${GG_ARRAY_TASK_ID}_${sp_ub}"
 dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
 dir_amalgkit_download_dir="${gg_workspace_downloads_dir}"
+dir_amalgkit_metadata_semaphore="${dir_amalgkit_download_dir}/locks/ncbi/amalgkit_metadata"
+dir_amalgkit_getfastq_semaphore="${dir_amalgkit_download_dir}/locks/ncbi/amalgkit_getfastq"
 dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"
 file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"
 file_generated_amalgkit_metadata="${dir_generated_amalgkit_metadata}/${sp_ub}_metadata.tsv"
+file_amalgkit_metadata_filtered="${dir_tmp}/metadata/metadata.short_read.tsv"
 if [[ "${selected_transcriptome_mode}" == "metadata" ]]; then
   file_amalgkit_metadata="${file_input_amalgkit_metadata}"
 else
@@ -307,21 +513,32 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
 
   if [[ "${selected_transcriptome_mode}" == "sraid" ]]; then
     search_string=$(tr -s "\n" < "${file_input_sra_list}" | sed ':a;N;$!ba;s/\n/ OR /g' | sed -e "s/ OR $//" -e "s/^/(/" -e "s/$/)/")
-    search_string="${search_string} AND \"Illumina\"[Platform] AND (\"RNA-seq\"[Strategy] OR \"EST\"[Strategy])"
+    if [[ -n "${amalgkit_sra_strategy_query}" ]]; then
+      search_string="${search_string} AND (${amalgkit_sra_strategy_query})"
+    fi
     echo "Entrez search string: ${search_string}"
+    echo "Entrez strategy filter: ${amalgkit_sra_strategy_query:-disabled}"
+    echo "Long-read instrument exclusion regex: ${amalgkit_long_read_instrument_pattern:-disabled}"
+    echo "amalgkit metadata max concurrent jobs: ${amalgkit_metadata_max_concurrent_jobs}"
 
-    amalgkit metadata \
-      --out_dir "./" \
-      --download_dir "${dir_amalgkit_download_dir}" \
-      --search_string "${search_string}"
+    if ! gg_run_with_shared_semaphore "${dir_amalgkit_metadata_semaphore}" "${amalgkit_metadata_max_concurrent_jobs}" "amalgkit metadata NCBI access (${sp_ub})" \
+      amalgkit metadata \
+        --out_dir "./" \
+        --download_dir "${dir_amalgkit_download_dir}" \
+        --search_string "${search_string}"; then
+      echo "amalgkit metadata did not safely finish. Exiting."
+      exit 1
+    fi
+
+    filter_long_read_amalgkit_metadata_rows "./metadata/metadata.tsv" "${file_amalgkit_metadata_filtered}" "${amalgkit_long_read_instrument_pattern}"
 
     sp_space="${sp_ub//_/ }"
     {
-      head -n 1 "./metadata/metadata.tsv"
-      grep -F -- "${sp_space}" "./metadata/metadata.tsv" || true
+      head -n 1 "${file_amalgkit_metadata_filtered}"
+      grep -F -- "${sp_space}" "${file_amalgkit_metadata_filtered}" || true
     } | sed -e "s/\t\t\tno\t/\tyes\tyes\tno\t/g" > "./metadata.tsv"
     if [[ $(wc -l < "./metadata.tsv") -le 1 ]]; then
-      echo "No metadata rows matched species '${sp_space}' in ./metadata/metadata.tsv. Exiting."
+      echo "No short-read metadata rows matched species '${sp_space}' in ${file_amalgkit_metadata_filtered}. Exiting."
       echo "If the accession exists in SRA but was excluded by the Entrez strategy clause, relax amalgkit_sra_strategy_query or set it empty to disable strategy filtering."
       echo 'If the run is small-RNA/miRNA rather than transcriptome assembly input, prefer a different accession or provide explicit metadata/FASTQ inputs instead of mode_transcriptome_assembly="sraid".'
       exit 1
@@ -371,36 +588,8 @@ if [[ (${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1) && $
       exit 1
     fi
   fi
-
-  if amalgkit getfastq \
-    --out_dir "${dir_tmp}" \
-    --download_dir "${dir_amalgkit_download_dir}" \
-    --metadata "${file_amalgkit_metadata}" \
-    --threads "${GG_TASK_CPUS}" \
-    --rrna_filter "${amalgkit_rrna_filter}" \
-    --contam_filter "${amalgkit_contam_filter}" \
-    --contam_filter_rank "${contamination_removal_rank_for_amalgkit}" \
-    --contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB" \
-    --remove_sra yes \
-    --remove_tmp yes \
-    --read_name 'trinity' \
-    --aws yes \
-    --ncbi yes \
-    --redo no; then
-    echo "amalgkit getfastq safely finished."
-    shopt -s nullglob
-    getfastq_outputs=("${dir_tmp}"/getfastq/*)
-    shopt -u nullglob
-    if [[ ${#getfastq_outputs[@]} -eq 0 ]]; then
-      echo "amalgkit getfastq finished but no output files were found under: ${dir_tmp}/getfastq"
-      exit 1
-    fi
-    mv_out "${getfastq_outputs[@]}" "${dir_amalgkit_getfastq_sp}"
-    rm -rf -- "${dir_tmp}/getfastq"
-  else
-    status_amalgkit=$?
-    echo "amalgkit getfastq did not safely finish. Exiting."
-    echo "amalgkit getfastq exit code: ${status_amalgkit}"
+  echo "amalgkit getfastq max concurrent jobs: ${amalgkit_getfastq_max_concurrent_jobs}"
+  if ! gg_run_with_shared_semaphore "${dir_amalgkit_getfastq_semaphore}" "${amalgkit_getfastq_max_concurrent_jobs}" "amalgkit getfastq NCBI access (${sp_ub})" run_amalgkit_getfastq_or_fallback; then
     exit 1
   fi
   echo "$(date): End: ${task}"

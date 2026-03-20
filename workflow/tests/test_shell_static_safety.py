@@ -1172,6 +1172,25 @@ def test_shared_lock_helpers_encode_owner_metadata_and_safe_heartbeat_reclaim_ru
     assert 'timed out waiting for shared lock: ${description} (${owner_summary})' in text
 
 
+def test_shared_semaphore_helpers_reuse_shared_lock_primitives():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    acquire_body = _function_body(text, "gg_shared_semaphore_acquire")
+
+    assert 'slot_lock="${semaphore_dir}/slot.${slot_idx}.lock"' in acquire_body
+    assert 'if gg_shared_lock_try_create "${slot_lock}"; then' in acquire_body
+    assert 'if gg_shared_lock_reclaim_if_stale "${slot_lock}" "${description} slot ${slot_idx}/${max_slots}"; then' in acquire_body
+    assert 'GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE="${slot_lock}"' in acquire_body
+    assert 'waiting for shared semaphore slot: ${description} (max_concurrent=${max_slots}; lock_dir=${semaphore_dir})' in acquire_body
+    assert 'timed out waiting for shared semaphore slot: ${description} (max_concurrent=${max_slots}; lock_dir=${semaphore_dir})' in acquire_body
+    assert 'gg_shared_lock_start_heartbeat "${slot_lock}"' in text
+    assert "trap 'cleanup_shared_semaphore; restore_shared_semaphore_traps' EXIT" in text
+    assert "trap 'shared_semaphore_signal_handler INT' INT" in text
+    assert "trap 'shared_semaphore_signal_handler TERM' TERM" in text
+    assert 'gg_shared_lock_stop_heartbeat "${heartbeat_pid}"' in text
+    assert 'gg_shared_semaphore_release "${slot_lock}"' in text
+
+
 def test_download_entrypoints_use_shared_lock_helper_for_busco_and_ete():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
@@ -1634,7 +1653,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         'if [[ -e "${file_kallisto_reference_fasta}" ]]; then',
         'ln -s "${file_kallisto_reference_fasta}" "${file_reference_fasta_link}"',
         'ln -s "${dir_amalgkit_quant}/${sp_ub}" "./quant"',
-        'grep -F -- "${sp_space}" "./metadata/metadata.tsv"',
+        'grep -F -- "${sp_space}" "${file_amalgkit_metadata_filtered}"',
         'mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"',
     ]
     for token in expected_tokens:
@@ -1644,9 +1663,73 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
 def test_transcriptome_core_sraid_metadata_filter_handles_zero_match_explicitly():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
-    assert 'grep -F -- "${sp_space}" "./metadata/metadata.tsv" || true' in text
+    assert 'grep -F -- "${sp_space}" "${file_amalgkit_metadata_filtered}" || true' in text
     assert 'if [[ $(wc -l < "./metadata.tsv") -le 1 ]]; then' in text
-    assert "No metadata rows matched species" in text
+    assert "No short-read metadata rows matched species" in text
+
+
+def test_transcriptome_core_sraid_metadata_search_accepts_non_illumina_short_reads():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}"' in text
+    assert 'search_string="${search_string} AND (${amalgkit_sra_strategy_query})"' in text
+    assert '\\"Illumina\\"[Platform]' not in text
+    assert '\\"CLONE\\"[Strategy]' in text
+
+
+def test_transcriptome_core_filters_long_read_instruments_after_metadata_fetch():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    body = _function_body(text, "filter_long_read_amalgkit_metadata_rows")
+
+    assert 'amalgkit_long_read_instrument_pattern="${amalgkit_long_read_instrument_pattern:-pacbio|smrt|nanopore|minion|gridion|promethion|flongle|sequel|revio}"' in text
+    assert 'file_amalgkit_metadata_filtered="${dir_tmp}/metadata/metadata.short_read.tsv"' in text
+    assert 'filter_long_read_amalgkit_metadata_rows "./metadata/metadata.tsv" "${file_amalgkit_metadata_filtered}" "${amalgkit_long_read_instrument_pattern}"' in text
+    assert 'instrument_field = "instrument" if "instrument" in fieldnames else "platform" if "platform" in fieldnames else ""' in body
+    assert 'regex = re.compile(pattern, re.IGNORECASE) if pattern else None' in body
+    assert 'if regex is not None and instrument_field and regex.search(instrument):' in body
+
+
+def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_failure():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    body = _function_body(text, "download_public_original_fastqs_for_metadata")
+
+    assert 'download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_amalgkit_getfastq_sp}"' in text
+    assert "amalgkit getfastq did not safely finish. Attempting fallback download of public original FASTQ files." in text
+    assert "Fallback download of public original FASTQ files succeeded." in text
+    assert "Fallback direct FASTQ recovery also failed. Exiting." in text
+    assert 'xml_url = "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}".format(' in body
+    assert 'if node.attrib.get("semantic_name") != "fastq":' in body
+    assert 'if node.attrib.get("supertype") != "Original":' in body
+    assert 'if payload[:2] == b"\\x1f\\x8b":' in body
+    assert 'dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)' in body
+
+
+def test_transcriptome_entrypoint_exposes_long_read_metadata_exclusion_pattern():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
+    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+
+    assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Set empty to disable strategy filtering.' in entrypoint
+    assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}"' in core
+    assert "amalgkit_sra_strategy_query" in config_vars
+    assert 'amalgkit_long_read_instrument_pattern="${amalgkit_long_read_instrument_pattern:-pacbio|smrt|nanopore|minion|gridion|promethion|flongle|sequel|revio}" # Case-insensitive regex used to exclude long-read instruments after amalgkit metadata retrieval; leave empty to disable post-filtering.' in entrypoint
+    assert 'amalgkit_long_read_instrument_pattern="${amalgkit_long_read_instrument_pattern:-pacbio|smrt|nanopore|minion|gridion|promethion|flongle|sequel|revio}"' in core
+    assert "amalgkit_long_read_instrument_pattern" in config_vars
+
+
+def test_transcriptome_entrypoint_exposes_amalgkit_ncbi_concurrency_limits():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
+    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+
+    assert 'amalgkit_metadata_max_concurrent_jobs="${amalgkit_metadata_max_concurrent_jobs:-10}" # Maximum number of concurrent array tasks allowed to call NCBI-backed amalgkit metadata; set 0 to disable gg-side throttling.' in entrypoint
+    assert 'amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-10}" # Maximum number of concurrent array tasks allowed to call NCBI-backed amalgkit getfastq or fallback FASTQ recovery; set 0 to disable gg-side throttling.' in entrypoint
+    assert 'amalgkit_metadata_max_concurrent_jobs="${amalgkit_metadata_max_concurrent_jobs:-10}"' in core
+    assert 'amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-10}"' in core
+    assert "amalgkit_metadata_max_concurrent_jobs" in config_vars
+    assert "amalgkit_getfastq_max_concurrent_jobs" in config_vars
 
 
 def test_transcriptome_core_requires_taxid_for_contam_filter():
@@ -1674,6 +1757,15 @@ def test_transcriptome_core_passes_shared_mmseqs_db_to_amalgkit_getfastq():
     getfastq_block = text[getfastq_start:getfastq_end]
     assert 'dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"' in text
     assert '--contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"' in getfastq_block
+
+
+def test_transcriptome_core_limits_ncbi_access_via_shared_semaphore():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    assert 'dir_amalgkit_metadata_semaphore="${dir_amalgkit_download_dir}/locks/ncbi/amalgkit_metadata"' in text
+    assert 'dir_amalgkit_getfastq_semaphore="${dir_amalgkit_download_dir}/locks/ncbi/amalgkit_getfastq"' in text
+    assert 'gg_run_with_shared_semaphore "${dir_amalgkit_metadata_semaphore}" "${amalgkit_metadata_max_concurrent_jobs}" "amalgkit metadata NCBI access (${sp_ub})"' in text
+    assert 'gg_run_with_shared_semaphore "${dir_amalgkit_getfastq_semaphore}" "${amalgkit_getfastq_max_concurrent_jobs}" "amalgkit getfastq NCBI access (${sp_ub})" run_amalgkit_getfastq_or_fallback' in text
 
 
 def test_transcriptome_core_invalidates_stale_cached_query_tables_on_species_prefix_change():

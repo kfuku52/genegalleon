@@ -107,6 +107,10 @@ run_multispecies_summary=1 # Multi-species summary.
 # Input-download parameters
 amalgkit_rrna_filter="yes" # read-level rRNA removal in amalgkit getfastq. Observed to finish for ~4.2 Gbp total / ~14 million reads within a 350G job before contamination filtering; exact peak RAM and elapsed time for this step alone were not logged.
 amalgkit_contam_filter="no" # read-level contamination removal in amalgkit getfastq. Rank follows contamination_removal_rank below. Setting yes may require >350G RAM for large private FASTQ inputs (for example, ~4.2 Gbp total, ~14 million reads).
+amalgkit_metadata_max_concurrent_jobs="${amalgkit_metadata_max_concurrent_jobs:-10}" # Maximum number of concurrent array tasks allowed to call NCBI-backed amalgkit metadata; set 0 to disable gg-side throttling.
+amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-10}" # Maximum number of concurrent array tasks allowed to call NCBI-backed amalgkit getfastq or fallback FASTQ recovery; set 0 to disable gg-side throttling.
+amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\"RNA-seq\"[Strategy] OR \"EST\"[Strategy] OR \"CLONE\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Set empty to disable strategy filtering.
+amalgkit_long_read_instrument_pattern="${amalgkit_long_read_instrument_pattern:-pacbio|smrt|nanopore|minion|gridion|promethion|flongle|sequel|revio}" # Case-insensitive regex used to exclude long-read instruments after amalgkit metadata retrieval; leave empty to disable post-filtering.
 remove_amalgkit_fastq_after_completion=1 # Delete per-species amalgkit FASTQ files after downstream completion.
 
 # Assembly and quantification parameters

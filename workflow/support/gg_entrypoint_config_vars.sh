@@ -279,7 +279,11 @@ EOF
     gg_transcriptome_generation_entrypoint.sh)
       cat <<'EOF'
 amalgkit_contam_filter
+amalgkit_getfastq_max_concurrent_jobs
+amalgkit_long_read_instrument_pattern
+amalgkit_metadata_max_concurrent_jobs
 amalgkit_rrna_filter
+amalgkit_sra_strategy_query
 assembly_cpu_offset
 assembly_method
 assembly_ram_offset
