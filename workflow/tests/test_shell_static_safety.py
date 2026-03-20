@@ -3304,9 +3304,10 @@ def test_genome_evolution_core_excludes_hidden_files_when_listing_species_protei
 def test_input_generation_core_excludes_hidden_files_when_listing_species_inputs():
     script = CORE_DIR / "gg_input_generation_core.sh"
     text = _read_text(script)
+    assert 'find "${search_dir}" -maxdepth 1 -type f ! -name \'.*\'' in text
     expected_tokens = [
-        'find "${species_cds_dir}" -maxdepth 1 -type f ! -name \'.*\'',
-        'find "${species_gff_dir}" -maxdepth 1 -type f ! -name \'.*\'',
+        'list_nonhidden_matching_files "${species_cds_dir}"',
+        'list_nonhidden_matching_files "${species_gff_dir}"',
     ]
     for token in expected_tokens:
         assert text.count(token) >= 2
