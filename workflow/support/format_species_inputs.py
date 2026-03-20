@@ -2894,6 +2894,22 @@ def read_download_manifest(path):
     return rows
 
 
+def manifest_declared_providers(rows, provider_filter="all"):
+    normalized_filter = str(provider_filter or "all").strip().lower()
+    if normalized_filter != "all":
+        return [normalized_filter]
+
+    providers = []
+    seen = set()
+    for row in rows:
+        provider = str((row or {}).get("provider", "") or "").strip().lower()
+        if provider == "" or provider not in PROVIDERS or provider in seen:
+            continue
+        seen.add(provider)
+        providers.append(provider)
+    return providers
+
+
 def resolve_local_reference_path(reference, manifest_parent_dir):
     text = str(reference or "").strip()
     if text == "":
@@ -5320,14 +5336,19 @@ def format_gff(task, output_dir, overwrite, dry_run):
     return {"status": "write", "output_path": output_path, "lines": line_count}
 
 
-def resolve_provider_inputs(args):
+def resolve_provider_inputs(args, manifest_rows=None):
     if args.provider == "all":
         if args.input_dir == "":
             raise ValueError("--input-dir is required when --provider all is used.")
         input_root = Path(args.input_dir).expanduser().resolve()
+        provider_names = list(PROVIDERS)
+        if manifest_rows is not None:
+            manifest_providers = manifest_declared_providers(manifest_rows, args.provider)
+            if len(manifest_providers) > 0:
+                provider_names = manifest_providers
         return [
             (provider, (input_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]).resolve())
-            for provider in PROVIDERS
+            for provider in provider_names
         ]
 
     provider = args.provider
@@ -5535,8 +5556,15 @@ def main():
         else:
             args.input_dir = str((download_input_root / DEFAULT_INPUT_RELATIVE_DIRS[args.provider]).resolve())
 
+    manifest_rows_for_provider_inputs = None
+    if args.download_manifest != "" and args.provider == "all":
+        try:
+            manifest_rows_for_provider_inputs = read_download_manifest(Path(args.download_manifest).expanduser().resolve())
+        except Exception as exc:
+            parser.error(str(exc))
+
     try:
-        provider_inputs = resolve_provider_inputs(args)
+        provider_inputs = resolve_provider_inputs(args, manifest_rows=manifest_rows_for_provider_inputs)
     except ValueError as exc:
         parser.error(str(exc))
 

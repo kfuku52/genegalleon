@@ -207,6 +207,24 @@ def test_species_taxonomy_metadata_resolver_supports_nonstandard_nuclear_codes(t
     assert tetrahymena["plastid_genetic_code_id"] == ""
 
 
+def test_manifest_declared_providers_preserves_manifest_order_and_skips_unlisted_rows():
+    mod = load_module()
+
+    providers = mod.manifest_declared_providers(
+        [
+            {"provider": "ncbi", "id": "GCA_000000001.1"},
+            {"provider": "direct", "id": "sample_direct"},
+            {"provider": "NCBI", "id": "GCA_000000002.1"},
+            {"provider": "", "id": "missing_provider"},
+            {"provider": "unsupported", "id": "unsupported_provider"},
+            {"provider": "local", "id": "sample_local"},
+        ],
+        provider_filter="all",
+    )
+
+    assert providers == ["ncbi", "direct", "local"]
+
+
 def test_species_summary_includes_taxid_and_genetic_codes_when_taxonomy_cache_is_available(tmp_path):
     db_path, taxdump_path = write_test_taxonomy_fixture(tmp_path)
     out_cds = tmp_path / "species_cds"

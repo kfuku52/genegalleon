@@ -1787,9 +1787,9 @@ def test_common_params_do_not_define_contamination_removal_rank():
     assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in text
 
 
-def test_common_busco_lineage_defaults_to_auto():
+def test_common_busco_lineage_defaults_to_eukaryota_odb12():
     text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
-    assert ': "${GG_COMMON_BUSCO_LINEAGE:=auto}"' in text
+    assert ': "${GG_COMMON_BUSCO_LINEAGE:=eukaryota_odb12}"' in text
 
 
 def test_common_input_sequence_mode_defaults_to_cds():

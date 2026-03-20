@@ -926,6 +926,74 @@ def test_download_manifest_supports_direct_with_explicit_urls(tmp_path):
     assert cds_text.count(">Medicago_sativa_MsG1") == 1
 
 
+def test_download_manifest_all_provider_only_scans_providers_declared_in_manifest_xlsx(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Medicago_sativa"
+    cds_source = source_dir / "medicago_sativa.cds.fa"
+    gff_source = source_dir / "medicago_sativa.gene.gff3"
+    genome_source = source_dir / "medicago_sativa.genome.fa"
+    cds_source.write_text(">MsG1.t1\nATGAA\n>MsG1.t2\nATGAAATTT\n", encoding="utf-8")
+    gff_source.write_text("chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=MsG1\n", encoding="utf-8")
+    genome_source.write_text(">chr1\nATGCATGC\n", encoding="utf-8")
+
+    manifest = tmp_path / "manifest.xlsx"
+    headers = [
+        "provider",
+        "id",
+        "species_key",
+        "cds_url",
+        "gff_url",
+        "genome_url",
+        "cds_filename",
+        "gff_filename",
+        "genome_filename",
+    ]
+    make_manifest_xlsx(
+        manifest,
+        headers,
+        [
+            {
+                "provider": "direct",
+                "id": "medicago_sativa_direct",
+                "species_key": species_key,
+                "cds_url": to_file_url(cds_source),
+                "gff_url": to_file_url(gff_source),
+                "genome_url": to_file_url(genome_source),
+                "cds_filename": species_key + ".direct.cds.fa",
+                "gff_filename": species_key + ".direct.gene.gff3",
+                "genome_filename": species_key + ".direct.genome.fa",
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    out_cds = tmp_path / "out_cds"
+    out_gff = tmp_path / "out_gff"
+    out_genome = tmp_path / "out_genome"
+    completed = run_script(
+        "--provider",
+        "all",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "input directory not found" not in completed.stderr
+
+    raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
+    assert (raw_dir / (species_key + ".direct.cds.fa")).exists()
+    assert (raw_dir / (species_key + ".direct.gene.gff3")).exists()
+    assert (raw_dir / (species_key + ".direct.genome.fa")).exists()
+
+
 def test_download_manifest_supports_direct_with_cds_only(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()
