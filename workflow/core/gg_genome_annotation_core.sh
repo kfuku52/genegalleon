@@ -22,70 +22,13 @@ run_collect_gff_info="${run_collect_gff_info:-0}"
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 0 1
+# shellcheck disable=SC1090
+source "${gg_support_dir}/gg_busco.sh"
 delete_tmp_dir=${delete_tmp_dir:-1}
 busco_lineage_resolved=""
 contamination_removal_rank_for_remove_contaminated_sequences="$(
   gg_normalize_contamination_removal_rank_for_remove_contaminated_sequences "${contamination_removal_rank}"
 )"
-
-copy_busco_tables() {
-  local busco_root_dir="$1"
-  local lineage="$2"
-  local file_full="$3"
-  local file_short="$4"
-  local run_dir="${busco_root_dir}/run_${lineage}"
-  local candidate_dir=""
-  local full_src=""
-  local short_src=""
-  local tmp_full_src=""
-  local -a short_candidates=()
-  local -a candidate_dirs=()
-
-  if [[ -d "${run_dir}" ]]; then
-    candidate_dirs+=( "${run_dir}" )
-  fi
-  if [[ -d "${busco_root_dir}" ]]; then
-    candidate_dirs+=( "${busco_root_dir}" )
-  fi
-
-  for candidate_dir in "${candidate_dirs[@]}"; do
-    if [[ -z "${full_src}" ]]; then
-      if [[ -s "${candidate_dir}/full_table.tsv" ]]; then
-        full_src="${candidate_dir}/full_table.tsv"
-      elif [[ -s "${candidate_dir}/full_table.tsv.gz" ]]; then
-        tmp_full_src="./tmp.busco.full_table.tsv"
-        gzip -cd "${candidate_dir}/full_table.tsv.gz" > "${tmp_full_src}"
-        full_src="${tmp_full_src}"
-      fi
-    fi
-
-    if [[ -z "${short_src}" ]]; then
-      if [[ -s "${candidate_dir}/short_summary.txt" ]]; then
-        short_src="${candidate_dir}/short_summary.txt"
-      else
-        mapfile -t short_candidates < <(find "${candidate_dir}" -maxdepth 1 -type f -name "short_summary*.txt" 2> /dev/null | sort)
-        if [[ ${#short_candidates[@]} -gt 0 ]]; then
-          short_src="${short_candidates[0]}"
-        fi
-      fi
-    fi
-
-    if [[ -n "${full_src}" && -n "${short_src}" ]]; then
-      break
-    fi
-  done
-
-  if [[ -z "${full_src}" || -z "${short_src}" ]]; then
-    echo "BUSCO outputs were not found under ${busco_root_dir}."
-    echo "Expected full_table.tsv(.gz) and short_summary*.txt under ${run_dir} or ${busco_root_dir}."
-    rm -f -- "${tmp_full_src}"
-    return 1
-  fi
-
-  cp_out "${full_src}" "${file_full}"
-  cp_out "${short_src}" "${file_short}"
-  rm -f -- "${tmp_full_src}"
-}
 
 resolve_busco_lineage_for_current_species() {
   if [[ -n "${busco_lineage_resolved}" ]]; then
