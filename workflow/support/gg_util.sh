@@ -3477,9 +3477,9 @@ gg_lock_heartbeat_seconds() {
 }
 
 gg_lock_acquire_timeout_seconds() {
-  local acquire_timeout_seconds="${GG_LOCK_ACQUIRE_TIMEOUT_SECONDS:-3600}"
+  local acquire_timeout_seconds="${GG_LOCK_ACQUIRE_TIMEOUT_SECONDS:-86400}"
   if [[ ! "${acquire_timeout_seconds}" =~ ^[0-9]+$ ]]; then
-    acquire_timeout_seconds=3600
+    acquire_timeout_seconds=86400
   fi
   if (( acquire_timeout_seconds < 1 )); then
     acquire_timeout_seconds=1

@@ -109,6 +109,8 @@ amalgkit_rrna_filter="yes" # read-level rRNA removal in amalgkit getfastq. Obser
 amalgkit_contam_filter="no" # read-level contamination removal in amalgkit getfastq. Rank follows contamination_removal_rank below. Setting yes may require >350G RAM for large private FASTQ inputs (for example, ~4.2 Gbp total, ~14 million reads).
 amalgkit_metadata_max_concurrent_jobs="${amalgkit_metadata_max_concurrent_jobs:-10}" # Maximum number of concurrent array tasks allowed to call NCBI-backed amalgkit metadata; set 0 to disable gg-side throttling.
 amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-10}" # Maximum number of concurrent array tasks allowed to call NCBI-backed amalgkit getfastq or fallback FASTQ recovery; set 0 to disable gg-side throttling.
+GG_LOCK_ACQUIRE_TIMEOUT_SECONDS="${GG_LOCK_ACQUIRE_TIMEOUT_SECONDS:-86400}" # Shared lock/semaphore acquire timeout in seconds. Raise this when array tasks can legitimately queue behind long-running getfastq jobs.
+GG_LOCK_POLL_SECONDS="${GG_LOCK_POLL_SECONDS:-10}" # Shared lock/semaphore polling interval in seconds while waiting for a slot.
 amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\"RNA-seq\"[Strategy] OR \"EST\"[Strategy] OR \"CLONE\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Set empty to disable strategy filtering.
 amalgkit_long_read_instrument_pattern="${amalgkit_long_read_instrument_pattern:-pacbio|smrt|nanopore|minion|gridion|promethion|flongle|sequel|revio}" # Case-insensitive regex used to exclude long-read instruments after amalgkit metadata retrieval; leave empty to disable post-filtering.
 remove_amalgkit_fastq_after_completion=1 # Delete per-species amalgkit FASTQ files after downstream completion.
@@ -132,7 +134,7 @@ delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Se
 
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
 # Forward config variables (including external overrides) into container environment.
-forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir"
+forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir" "GG_LOCK_ACQUIRE_TIMEOUT_SECONDS" "GG_LOCK_POLL_SECONDS"
 if ! gg_entrypoint_prepare_container_runtime 0; then
   exit 1
 fi
