@@ -325,6 +325,43 @@ def test_resolve_annotation_species_normalizes_legacy_trailing_underscore(tmp_pa
     assert completed.stdout.strip() == "Arabidopsis_thaliana"
 
 
+def test_species_name_from_path_or_dot_preserves_taxonomic_qualifiers(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        'printf "%s\\n%s\\n%s\\n" '
+        '"$(gg_species_name_from_path_or_dot "Dictyostelium_discoideum_cf_GCA_054859205.1.fa.gz")" '
+        '"$(gg_species_name_from_path_or_dot "Bacillus_subtilis_subsp_subtilis_demo.fa.gz")" '
+        '"$(gg_species_name_from_path_or_dot "Amoeba_sp_JDSRuffled.tsv")"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "Dictyostelium_discoideum_cf",
+        "Bacillus_subtilis_subsp_subtilis",
+        "Amoeba_sp_JDSRuffled",
+    ]
+
+
+def test_fasta_relabel_headers_to_species_preserves_taxonomic_qualifiers(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "printf '>Dictyostelium_discoideum_cf_gene1\\nATG\\n>Bacillus_subtilis_subsp_subtilis_gene2\\nATG\\n' "
+        '| gg_fasta_relabel_headers_to_species'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        ">Dictyostelium_discoideum_cf",
+        "ATG",
+        ">Bacillus_subtilis_subsp_subtilis",
+        "ATG",
+    ]
+
+
 def test_resolve_busco_lineage_from_lineages_prefers_deepest_mapped_taxon(tmp_path):
     mapping_dir = tmp_path / "busco_mappings"
     mapping_dir.mkdir()

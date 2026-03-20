@@ -4,6 +4,7 @@ import argparse
 import gzip
 import hashlib
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,12 @@ try:
     HAS_FCNTL = True
 except ImportError:
     HAS_FCNTL = False
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from species_labeling import extract_species_label
 
 
 FASTA_EXTENSIONS = (
@@ -94,10 +101,7 @@ def read_fasta_ids(path):
 
 
 def guess_species_name(gene_id):
-    parts = gene_id.split("_")
-    if len(parts) < 2:
-        return ""
-    return parts[0] + "_" + parts[1]
+    return extract_species_label(gene_id)
 
 
 def find_species_file(directory, species_name, extensions):

@@ -10,6 +10,15 @@ suppressPackageStartupMessages({
   library(ggplot2)
 })
 
+script_args <- commandArgs(trailingOnly = FALSE)
+script_path_arg <- grep("^--file=", script_args, value = TRUE)
+script_dir <- if (length(script_path_arg) > 0) {
+  dirname(normalizePath(sub("^--file=", "", script_path_arg[[1]]), winslash = "/", mustWork = TRUE))
+} else {
+  getwd()
+}
+source(file.path(script_dir, "pgls_common.R"))
+
 # Input
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 5) {
@@ -42,15 +51,27 @@ read_tsv_base <- function(path, na = character()) {
 # - drop "_{copynumber}"
 # - strip "*"
 norm_key <- function(lbl) {
-  x <- sub("_[^_]+$", "", lbl)
-  gsub("\\*", "", x)
+  x <- gsub("\\*", "", lbl)
+  if (grepl("^[A-Za-z][A-Za-z0-9]*_", x)) {
+    species_label <- extract_species_label(x)
+    if (nzchar(species_label)) {
+      return(species_label)
+    }
+  }
+  sub("_[^_]+$", "", x)
 }
 
 # Extract species name for tip labels: remove "*" and "_{copynumber}", then drop "<...>"
 get_species <- function(lbl) {
   x <- gsub("\\*", "", lbl)
-  x <- sub("_[^_]+$", "", x)
   x <- sub("<.*$", "", x)
+  if (grepl("^[A-Za-z][A-Za-z0-9]*_", x)) {
+    species_label <- extract_species_label(x)
+    if (nzchar(species_label)) {
+      return(scientific_name_from_label(species_label))
+    }
+  }
+  x <- sub("_[^_]+$", "", x)
   gsub("_", " ", x)
 }
 

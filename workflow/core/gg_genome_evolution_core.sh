@@ -160,9 +160,24 @@ from pathlib import Path
 
 def species_from_filename(path: Path) -> str:
     name = path.name
-    if "_" not in name:
+    if "." in name:
+        name = name.split(".", 1)[0]
+    parts = [part for part in name.split("_") if part]
+    if len(parts) < 2:
         return path.stem
-    return name.split("_", 2)[0] + "_" + name.split("_", 2)[1]
+    second = parts[1].lower()
+    third = parts[2].lower() if len(parts) >= 3 else ""
+    if second == "sp":
+        count = 3 if len(parts) >= 3 else 2
+    elif second in {"cf", "aff", "nr"}:
+        count = 3 if len(parts) >= 3 else 2
+    elif third in {"cf", "aff", "nr"}:
+        count = 3
+    elif third in {"subsp", "ssp", "var", "forma", "f"}:
+        count = 4 if len(parts) >= 4 else 3
+    else:
+        count = 2
+    return "_".join(parts[:count])
 
 
 cds_dir = Path(sys.argv[1])

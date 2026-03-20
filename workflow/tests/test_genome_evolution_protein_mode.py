@@ -642,6 +642,32 @@ def test_genome_evolution_protein_mode_translates_species_cds_with_species_speci
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_protein_mode_preserves_qualified_species_labels_in_genetic_code_lookup(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_cds_dir = workspace / "input" / "species_cds"
+    species_code_dir = workspace / "input" / "species_genetic_code"
+    species_cds_dir.mkdir(parents=True)
+    species_code_dir.mkdir(parents=True)
+
+    (species_cds_dir / "Tetrahymena_thermophila_cf_cds.fa").write_text(
+        ">Tetrahymena_thermophila_cf_gene1\nATGTAA\n",
+        encoding="utf-8",
+    )
+    (species_code_dir / "species_genetic_code.tsv").write_text(
+        "species\tgenetic_code\nTetrahymena_thermophila_cf\t6\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_core(tmp_path)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "Tetrahymena_thermophila_cf.fa.gz" in completed.stdout
+    proteins = (tmp_path / "capture" / "proteins.fasta").read_text(encoding="utf-8")
+    assert ">Tetrahymena_thermophila_cf_gene1" in proteins
+    assert "MQ" in proteins
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
 def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launchers(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_cds_dir = workspace / "input" / "species_cds"

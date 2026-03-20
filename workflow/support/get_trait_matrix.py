@@ -4,9 +4,17 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
 import os
+from pathlib import Path
 import pandas
+import sys
 
 pandas.options.mode.chained_assignment = None
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from species_labeling import extract_species_label, strip_species_label
 
 def read_fasta_seqname(file_path):
     seqnames = []
@@ -24,27 +32,21 @@ def read_fasta_seqname(file_path):
 
 
 def get_gene_name(seq_name):
-    parts = seq_name.split('_', 2)
-    if len(parts) >= 3:
-        return parts[2]
-    return seq_name
+    return strip_species_label(seq_name)
 
 
 def get_species_name(seq_name):
-    parts = seq_name.split('_', 2)
-    if len(parts) >= 2:
-        return parts[0] + '_' + parts[1]
+    species_name = extract_species_label(seq_name)
+    if species_name != '':
+        return species_name
     return seq_name
 
 
 def trait_filename_to_species_name(trait_file):
-    name = trait_file
-    if '.' in name:
-        name = name.split('.', 1)[0]
-    parts = name.split('_', 2)
-    if len(parts) >= 2:
-        return parts[0] + '_' + parts[1]
-    return name
+    species_name = extract_species_label(trait_file, strip_extension=True)
+    if species_name != '':
+        return species_name
+    return trait_file.split('.', 1)[0] if '.' in trait_file else trait_file
 
 
 def process_trait_file(trait_path, search_ids, id_map):

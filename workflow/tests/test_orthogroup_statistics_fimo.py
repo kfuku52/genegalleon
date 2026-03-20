@@ -50,6 +50,14 @@ def test_load_fimo_hits_parses_modern_fimo_tsv(tmp_path):
     assert df.loc[1, "motif_alt_id"] == "M2"
 
 
+def test_orthogroup_statistics_preserves_qualified_species_prefixes():
+    mod = load_module()
+
+    assert mod.extract_species_label("Dictyostelium_discoideum_cf_geneA") == "Dictyostelium_discoideum_cf"
+    assert mod.extract_species_label("Bacillus_subtilis_subsp_subtilis_geneB") == "Bacillus_subtilis_subsp_subtilis"
+    assert mod.scientific_name_from_label("Dictyostelium_discoideum_cf_geneA") == "Dictyostelium cf. discoideum"
+
+
 def test_load_fimo_hits_parses_legacy_fimo_txt_header(tmp_path):
     mod = load_module()
     infile = tmp_path / "fimo.txt"

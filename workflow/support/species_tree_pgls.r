@@ -17,7 +17,7 @@ args = rkftools::get_parsed_args(args, print = TRUE)
 
 
 sum_per_species = function(exp, value_type) {
-  my_fun = function(x) { paste(strsplit(x, '_')[[1]][1:2], collapse = '_') }
+  my_fun = function(x) { extract_species_label(x) }
   exp_sci_name = sapply(exp[['gene_id']], my_fun)
   exp[, 'gene_id'] = exp_sci_name
   nongeneid_cols = colnames(exp)[(colnames(exp) != 'gene_id')]
@@ -147,7 +147,7 @@ trait_cols = colnames(trait[2:length(trait)])
 output_cols = c("R2", "R2adj", "sigma", "Fstat", "pval", "logLik", "AIC", "BIC", "PCC", "p.adj", "trait", "variable", "fit_mode", 'num_foreground_lineage')
 
 exp = read.table(args[['file_exp']], header = TRUE, sep = '\t')
-expression_spp = unique(leaf2species(leaf_names = exp[['gene_id']], use_underbar = TRUE))
+expression_spp = unique(sapply(exp[['gene_id']], extract_species_label))
 remove_tips = tree[['tip.label']][!tree[['tip.label']] %in% expression_spp]
 tree = ape::drop.tip(tree, remove_tips)
 if (length(expression_spp) == 1) {

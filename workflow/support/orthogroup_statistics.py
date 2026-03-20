@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
 import json
 import os
+from pathlib import Path
 import re
 import sys
 
@@ -15,6 +16,12 @@ import pandas
 import ete4
 from kftools.kfog import *
 from kftools.kfphylo import *
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from species_labeling import extract_species_label, scientific_name_from_label
 
 
 def new_tree(newick_or_path, format=1, quoted_node_names=False):
@@ -631,9 +638,9 @@ def main():
         gene_tree2 = copy.deepcopy(gene_tree)
         gene_tree2 = ensure_branch_ids(gene_tree2)
         for leaf in iter_leaves(gene_tree2):
-            leaf_name_split = leaf.name.split("_", 2)
-            if len(leaf_name_split) >= 2:
-                leaf.name = leaf_name_split[0] + "_" + leaf_name_split[1]
+            species_label = extract_species_label(leaf.name)
+            if species_label != '':
+                leaf.name = species_label
         tip_set_diff = set(get_leaf_names_compat(gene_tree2)) - set(get_leaf_names_compat(species_tree))
         if tip_set_diff:
             sys.stderr.write(f"Warning. A total of {len(tip_set_diff)} species are missing in the species tree: {str(tip_set_diff)}\n")
@@ -746,11 +753,7 @@ def main():
         for node in nodes:
             taxid_by_node[node] = -999
             if node_is_leaf(node):
-                name_split = node.name.split('_', 2)
-                if len(name_split) >= 2:
-                    sci_name_by_node[node] = name_split[0] + ' ' + name_split[1]
-                else:
-                    sci_name_by_node[node] = node.name
+                sci_name_by_node[node] = scientific_name_from_label(node.name)
             else:
                 sci_name_by_node[node] = ''
         species_index = {}

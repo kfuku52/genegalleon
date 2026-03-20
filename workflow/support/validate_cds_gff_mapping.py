@@ -41,6 +41,8 @@ KNOWN_ALLOWED_MISSING_CDS_IDS = {
         "Azolla_filiculoides_Azfi_s0093.g043301",
     },
 }
+TAXONOMIC_PROXIMITY_QUALIFIERS = frozenset(("cf", "aff", "nr"))
+TAXONOMIC_INFRASPECIFIC_RANKS = frozenset(("subsp", "ssp", "var", "forma", "f"))
 
 
 def build_arg_parser():
@@ -96,10 +98,21 @@ def list_nonhidden_files(directory, suffixes):
 
 
 def species_prefix_from_name(name):
-    parts = Path(name).name.split("_")
+    parts = [part for part in Path(name).name.split("_") if part != ""]
     if len(parts) < 2:
         return ""
-    return "{}_{}".format(parts[0], parts[1])
+    second = parts[1].lower()
+    third = parts[2].lower() if len(parts) >= 3 else ""
+    count = 2
+    if second == "sp":
+        count = 3 if len(parts) >= 3 else 2
+    elif second in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        count = 3 if len(parts) >= 3 else 2
+    elif third in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        count = 3
+    elif third in TAXONOMIC_INFRASPECIFIC_RANKS:
+        count = 4 if len(parts) >= 4 else 3
+    return "_".join(parts[:count]).split(".", 1)[0]
 
 
 def read_fasta_ids(path):

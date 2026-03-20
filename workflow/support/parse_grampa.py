@@ -5,10 +5,17 @@ import argparse
 import datetime
 from concurrent.futures import ProcessPoolExecutor
 import pandas
+from pathlib import Path
 import re
 import sys
 import os
 import ete4
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from species_labeling import extract_species_label, strip_species_label
 
 
 def load_tree(newick_or_path, parser=0):
@@ -76,12 +83,10 @@ def summarize_gene_tree(task, species_names=None, species_set=None, species_suff
     for gene_name in gene_names:
         matched_species = None
         gene_id = None
-        parts = gene_name.rsplit('_', 2)
-        if len(parts) >= 3:
-            candidate_species = parts[-2] + '_' + parts[-1]
-            if candidate_species in species_set:
-                matched_species = candidate_species
-                gene_id = gene_name[:-(len(candidate_species) + 1)]
+        candidate_species = extract_species_label(gene_name)
+        if candidate_species in species_set:
+            matched_species = candidate_species
+            gene_id = strip_species_label(gene_name)
         if matched_species is None:
             for suffix, species_name in species_suffixes:
                 if gene_name.endswith(suffix):

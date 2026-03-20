@@ -566,19 +566,10 @@ translate_orthogroup_cds_to_protein_fasta() {
   rm -f -- "${translated_tmp}"
   touch "${translated_tmp}"
   mapfile -t species_names < <(
-    seqkit seq --threads "${GG_TASK_CPUS}" "${cds_fasta}" |
-      awk '
-        /^>/ {
-          header=$0
-          sub(/^>/, "", header)
-          sub(/[[:space:]].*$/, "", header)
-          gsub(/\r/, "", header)
-          split(header, parts, /[_.]/)
-          if (length(parts) >= 2) {
-            print parts[1] "_" parts[2]
-          }
-        }
-      ' | sort -u
+    seqkit seq --threads "${GG_TASK_CPUS}" --name "${cds_fasta}" |
+      while IFS= read -r header; do
+        gg_species_name_from_path_or_dot "${header}"
+      done | sed -e '/^$/d' | sort -u
   )
   if [[ ${#species_names[@]} -eq 0 ]]; then
     echo "No species prefixes were detected in the focal CDS FASTA: ${cds_fasta}"

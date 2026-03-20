@@ -204,6 +204,14 @@ NCBI_DATASETS_INCLUDE_BY_LABEL = {
     "GENOME": "GENOME_FASTA",
 }
 DOWNLOAD_LABELS = ("CDS", "GFF", "GENOME")
+TAXONOMIC_PROXIMITY_QUALIFIERS = frozenset(("cf", "aff", "nr"))
+TAXONOMIC_INFRASPECIFIC_RANK_ALIASES = {
+    "subsp": "subsp",
+    "ssp": "subsp",
+    "var": "var",
+    "forma": "forma",
+    "f": "f",
+}
 RESOLVED_MANIFEST_PREFERRED_COLUMNS = (
     "provider",
     "id",
@@ -348,6 +356,128 @@ def blank_species_taxonomy_metadata():
     }
 
 
+def normalize_taxonomic_name_text(text):
+    return re.sub(r"\s*\(.*?\)\s*", " ", str(text or "")).strip()
+
+
+def tokenize_taxonomic_name(text):
+    return re.findall(r"[A-Za-z0-9]+", normalize_taxonomic_name_text(text))
+
+
+def canonical_taxonomic_token(token):
+    cleaned = str(token or "").strip()
+    lowered = cleaned.lower()
+    if lowered == "sp":
+        return "sp"
+    if lowered in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return lowered
+    if lowered in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
+        return TAXONOMIC_INFRASPECIFIC_RANK_ALIASES[lowered]
+    return cleaned
+
+
+def build_species_key_from_tokens(tokens):
+    normalized = [canonical_taxonomic_token(token) for token in tokens if str(token or "").strip() != ""]
+    if len(normalized) == 0:
+        return ""
+    if len(normalized) == 1:
+        return normalized[0]
+
+    genus = normalized[0]
+    second = normalized[1].lower()
+    if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        if len(normalized) >= 3:
+            return "{}_{}_{}".format(genus, normalized[2], second)
+        return "{}_{}".format(genus, normalized[1])
+    if second == "sp":
+        label = "".join(normalized[2:]).strip()
+        if label != "":
+            return "{}_sp_{}".format(genus, label)
+        return "{}_sp".format(genus)
+
+    species = normalized[1]
+    if len(normalized) >= 3:
+        third = normalized[2].lower()
+        if third in TAXONOMIC_PROXIMITY_QUALIFIERS:
+            return "{}_{}_{}".format(genus, species, third)
+        if third in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
+            rank = TAXONOMIC_INFRASPECIFIC_RANK_ALIASES[third]
+            if len(normalized) >= 4:
+                return "{}_{}_{}_{}".format(genus, species, rank, normalized[3])
+            return "{}_{}_{}".format(genus, species, rank)
+    return "{}_{}".format(genus, species)
+
+
+def taxonomic_name_rank_variants(rank):
+    if rank == "subsp":
+        return ("subsp.", "subsp", "ssp.", "ssp")
+    if rank == "var":
+        return ("var.", "var")
+    if rank == "forma":
+        return ("forma", "forma.", "f.", "f")
+    if rank == "f":
+        return ("f.", "f", "forma", "forma.")
+    return (rank,)
+
+
+def taxonomic_name_lookup_candidates(text):
+    species_key = build_species_key_from_tokens(tokenize_taxonomic_name(str(text or "").replace("_", " ")))
+    if species_key == "":
+        return []
+
+    parts = [part for part in species_key.split("_") if part != ""]
+    candidates = []
+
+    def add(value):
+        candidate = str(value or "").strip()
+        if candidate == "":
+            return
+        if candidate in candidates:
+            return
+        candidates.append(candidate)
+
+    add(" ".join(parts))
+    if len(parts) >= 3 and parts[2].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        add("{} {}. {}".format(parts[0], parts[2], parts[1]))
+        add("{} {} {}".format(parts[0], parts[2], parts[1]))
+        add("{} {}".format(parts[0], parts[1]))
+        return candidates
+    if len(parts) >= 3 and parts[1].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        add("{} {}. {}".format(parts[0], parts[1], parts[2]))
+        add("{} {} {}".format(parts[0], parts[1], parts[2]))
+        add("{} {}".format(parts[0], parts[2]))
+        return candidates
+    if len(parts) >= 3 and parts[1].lower() == "sp":
+        add("{} sp. {}".format(parts[0], parts[2]))
+        add("{} sp {}".format(parts[0], parts[2]))
+        add(parts[0])
+        return candidates
+    if len(parts) >= 4 and parts[2].lower() in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
+        for rank_variant in taxonomic_name_rank_variants(parts[2].lower()):
+            add("{} {} {} {}".format(parts[0], parts[1], rank_variant, parts[3]))
+        add("{} {}".format(parts[0], parts[1]))
+        return candidates
+    if len(parts) >= 2:
+        add("{} {}".format(parts[0], parts[1]))
+    return candidates
+
+
+def species_prefix_token_count(tokens):
+    if len(tokens) < 2:
+        return 0
+    second = tokens[1].lower()
+    third = tokens[2].lower() if len(tokens) >= 3 else ""
+    if second == "sp":
+        return 3 if len(tokens) >= 3 else 2
+    if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return 3 if len(tokens) >= 3 else 2
+    if third in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return 3
+    if third in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
+        return 4 if len(tokens) >= 4 else 3
+    return 2
+
+
 class SpeciesTaxonomyMetadataResolver:
     def __init__(self, taxonomy_dbfile="", taxonomy_taxdumpfile=""):
         self.taxonomy_dbfile = str(taxonomy_dbfile or "").strip()
@@ -410,11 +540,13 @@ class SpeciesTaxonomyMetadataResolver:
         if conn is None:
             return None
         cur = conn.cursor()
-        row = cur.execute(
-            "SELECT taxid, spname, rank, track FROM species WHERE spname = ? COLLATE NOCASE",
-            (species_name,),
-        ).fetchone()
-        if row is None:
+        for candidate in taxonomic_name_lookup_candidates(species_name):
+            row = cur.execute(
+                "SELECT taxid, spname, rank, track FROM species WHERE spname = ? COLLATE NOCASE",
+                (candidate,),
+            ).fetchone()
+            if row is not None:
+                return row
             row = cur.execute(
                 """
                 SELECT s.taxid, s.spname, s.rank, s.track
@@ -422,9 +554,11 @@ class SpeciesTaxonomyMetadataResolver:
                 JOIN species s ON sy.taxid = s.taxid
                 WHERE sy.spname = ? COLLATE NOCASE
                 """,
-                (species_name,),
+                (candidate,),
             ).fetchone()
-        return row
+            if row is not None:
+                return row
+        return None
 
     def _code_name(self, code_id):
         if code_id == "":
@@ -1237,13 +1371,7 @@ def resolve_insectbase_api_base_url():
 
 
 def parse_species_key_candidate(text):
-    cleaned = re.sub(r"\s*\(.*?\)\s*", " ", str(text or "")).strip()
-    tokens = re.findall(r"[A-Za-z0-9]+", cleaned)
-    if len(tokens) >= 2:
-        return "{}_{}".format(tokens[0], tokens[1])
-    if len(tokens) == 1:
-        return tokens[0]
-    return ""
+    return build_species_key_from_tokens(tokenize_taxonomic_name(text))
 
 
 def source_id_candidates(provider, source_id, species_key):
@@ -2271,12 +2399,9 @@ def infer_ncbi_species_key_from_doc(doc, fallback):
     if organism != "":
         candidates.append(organism)
     for raw in candidates:
-        text = re.sub(r"\s*\(.*?\)\s*", " ", raw).strip()
-        tokens = re.findall(r"[A-Za-z0-9]+", text)
-        if len(tokens) >= 2:
-            return "{}_{}".format(tokens[0], tokens[1])
-        if len(tokens) == 1:
-            return tokens[0]
+        inferred = parse_species_key_candidate(raw)
+        if inferred != "":
+            return inferred
     return fallback
 
 
@@ -3635,10 +3760,13 @@ def extract_ncbi_ensembl_gene_id_from_header(header):
 
 
 def species_prefix_from_value(value):
-    tokens = value.split("_")
-    if len(tokens) < 2:
+    name = Path(str(value or "")).name
+    tokens = [token for token in name.split("_") if token != ""]
+    count = species_prefix_token_count(tokens)
+    if count == 0:
         return ""
-    return "{}_{}".format(tokens[0], tokens[1])
+    prefix = "_".join(tokens[:count])
+    return prefix.split(".", 1)[0]
 
 
 def normalize_output_basename(source_name, species_prefix):

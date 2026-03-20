@@ -22,6 +22,23 @@ def write_gzip_text(path, text):
         handle.write(text)
 
 
+def load_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("validate_cds_gff_mapping_module", SCRIPT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_species_prefix_from_name_preserves_taxonomic_qualifiers():
+    mod = load_module()
+
+    assert mod.species_prefix_from_name("Dictyostelium_discoideum_cf_demo.fa.gz") == "Dictyostelium_discoideum_cf"
+    assert mod.species_prefix_from_name("Bacillus_subtilis_subsp_subtilis_demo.gff.gz") == "Bacillus_subtilis_subsp_subtilis"
+    assert mod.species_prefix_from_name("Amoeba_sp_JDSRuffled_demo.fa.gz") == "Amoeba_sp_JDSRuffled"
+
+
 def test_validate_cds_gff_mapping_passes_on_matching_ids(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"

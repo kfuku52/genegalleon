@@ -46,6 +46,8 @@ NAMESPACE_SUFFIX_DELIMITERS = {
 ATTRIBUTE_KEY_ALIASES = {
     'gene_name': 'geneName',
 }
+TAXONOMIC_PROXIMITY_QUALIFIERS = frozenset(('cf', 'aff', 'nr'))
+TAXONOMIC_INFRASPECIFIC_RANKS = frozenset(('subsp', 'ssp', 'var', 'forma', 'f'))
 
 def build_arg_parser():
     parser = argparse.ArgumentParser()
@@ -68,8 +70,34 @@ def read_fasta_seqname(file_path):
                 seqnames.append(line[1:].rstrip('\n'))
     return pandas.Series(seqnames)
 
+
+def species_prefix_token_count(parts):
+    if len(parts) < 2:
+        return 0
+    second = parts[1].lower()
+    third = parts[2].lower() if len(parts) >= 3 else ''
+    if second == 'sp':
+        return 3 if len(parts) >= 3 else 2
+    if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return 3 if len(parts) >= 3 else 2
+    if third in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return 3
+    if third in TAXONOMIC_INFRASPECIFIC_RANKS:
+        return 4 if len(parts) >= 4 else 3
+    return 2
+
+
+def trim_species_prefix(seq_name):
+    text = str(seq_name or '')
+    parts = [part for part in text.split('_') if part != '']
+    prefix_count = species_prefix_token_count(parts)
+    if prefix_count == 0 or prefix_count >= len(parts):
+        return text
+    return '_'.join(parts[prefix_count:])
+
+
 def get_gene_names(seq_names):
-    return seq_names.astype(str).str.split('_', n=2).str[-1]
+    return seq_names.astype(str).map(trim_species_prefix)
 
 
 def is_identifier_char(char):
@@ -101,7 +129,7 @@ def build_search_term_lookup(seq_names):
     min_len = None
     max_len = 0
     for order, seq_name in enumerate(seq_name_values):
-        gene_name = seq_name.split('_', 2)[-1] if seq_name != '' else ''
+        gene_name = trim_species_prefix(seq_name) if seq_name != '' else ''
         ub_gene_name = gene_name.replace('-', '_')
         term_specs = (
             (seq_name, 2),

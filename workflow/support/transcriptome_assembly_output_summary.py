@@ -4,10 +4,18 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
+from pathlib import Path
+import sys
 import time
 
 import numpy
 import pandas
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from species_labeling import extract_species_label
 
 
 def build_arg_parser():
@@ -89,14 +97,18 @@ def collect_species_ids_for_subdir(base_dir, subdir):
         species_ids_in_files = set()
         for f in files:
             if f.endswith('.safely_removed.txt'):
-                species_id = f.split('.')[0]
+                species_id = extract_species_label(f, strip_extension=True)
                 species_ids_in_files.add(species_id)
             else:
                 path = os.path.join(subdir_path, f)
                 if os.path.isdir(path) and os.listdir(path):
                     species_ids_in_files.add(f)
         return species_ids_in_files
-    return {f'_'.join(f.split('.', 1)[0].split('_')[:2]) for f in files}
+    return {
+        species_id
+        for species_id in (extract_species_label(f, strip_extension=True) for f in files)
+        if species_id != ''
+    }
 
 
 def run(args):
@@ -154,7 +166,7 @@ def run(args):
     flagdir_path = os.path.realpath(os.path.join(base_dir, 'amalgkit_getfastq'))
     if os.path.isdir(flagdir_path):
         flag_files = [f for f in sorted_entries(flagdir_path) if f.endswith('.safely_removed.txt')]
-        flag_species_ids = {f.split('.')[0] for f in flag_files}
+        flag_species_ids = {extract_species_label(f, strip_extension=True) for f in flag_files}
         flag_species_ids_with_file = list(flag_species_ids & set(df.index))
         df.loc[flag_species_ids_with_file, 'safely_removed.txt'] = 1
         num_missing = (df['safely_removed.txt'] == 0).sum()

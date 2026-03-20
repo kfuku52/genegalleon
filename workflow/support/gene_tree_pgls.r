@@ -41,10 +41,7 @@ trait_cols = colnames(trait[2:length(trait)])
 exp = add_expression_mean_cols(exp, expression_bases)
 
 #prepare species column from the gene_id column
-exp[,'species'] = exp[,'gene_id']
-exp[,'species'] = sub('_', '|', exp[,'species'])
-exp[,'species'] = sub('_.*', '', exp[,'species'])
-exp[,'species'] = sub('\\|', '_', exp[,'species'])
+exp[,'species'] = sapply(exp[,'gene_id'], extract_species_label)
 exp = sort_exp(exp, tree)
 #merge expression and trait matrices and rename the first column to species
 df_trait_exp = merge(exp, trait, all.x=TRUE)

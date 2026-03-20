@@ -1034,16 +1034,83 @@ ensure_parent_dir() {
 
 gg_species_name_from_path() {
   local path=$1
-  local basename_path
-  basename_path=$(basename "${path}")
-  echo "${basename_path}" | sed -e "s/_/|/" -e "s/[_\\.].*//" -e "s/|/_/"
+  gg_species_name_from_path_or_dot "${path}"
+}
+
+_gg_species_prefix_token_count() {
+  local -a parts=("$@")
+  local second=""
+  local third=""
+
+  if [[ ${#parts[@]} -lt 2 ]]; then
+    printf '0\n'
+    return 0
+  fi
+
+  second=$(printf '%s' "${parts[1]}" | tr '[:upper:]' '[:lower:]')
+  if [[ ${#parts[@]} -ge 3 ]]; then
+    third=$(printf '%s' "${parts[2]}" | tr '[:upper:]' '[:lower:]')
+  fi
+
+  if [[ "${second}" == "sp" ]]; then
+    if [[ ${#parts[@]} -ge 3 ]]; then
+      printf '3\n'
+    else
+      printf '2\n'
+    fi
+    return 0
+  fi
+  if [[ "${second}" == "cf" || "${second}" == "aff" || "${second}" == "nr" ]]; then
+    if [[ ${#parts[@]} -ge 3 ]]; then
+      printf '3\n'
+    else
+      printf '2\n'
+    fi
+    return 0
+  fi
+  if [[ "${third}" == "cf" || "${third}" == "aff" || "${third}" == "nr" ]]; then
+    printf '3\n'
+    return 0
+  fi
+  if [[ "${third}" == "subsp" || "${third}" == "ssp" || "${third}" == "var" || "${third}" == "forma" || "${third}" == "f" ]]; then
+    if [[ ${#parts[@]} -ge 4 ]]; then
+      printf '4\n'
+    else
+      printf '3\n'
+    fi
+    return 0
+  fi
+  printf '2\n'
 }
 
 gg_species_name_from_path_or_dot() {
   local path=$1
   local basename_path
+  local stem
+  local prefix_count
+  local -a parts=()
+  local -a selected=()
+  local species_name=""
+  local part=""
+
   basename_path=$(basename "${path}")
-  echo "${basename_path}" | sed -e "s/_/|/" -e "s/[_\\.].*//" -e "s/|/_/"
+  stem=${basename_path%%.*}
+  IFS='_' read -r -a parts <<< "${stem}"
+  prefix_count=$(_gg_species_prefix_token_count "${parts[@]}")
+  if [[ "${prefix_count}" -eq 0 ]]; then
+    printf '%s\n' ""
+    return 0
+  fi
+
+  selected=("${parts[@]:0:${prefix_count}}")
+  for part in "${selected[@]}"; do
+    [[ -n "${part}" ]] || continue
+    if [[ -n "${species_name}" ]]; then
+      species_name+="_"
+    fi
+    species_name+="${part}"
+  done
+  printf '%s\n' "${species_name}"
 }
 
 gg_annotation_species_priority() {
@@ -1550,10 +1617,62 @@ ncbi = NCBITaxa(dbfile=db_file)
 def resolve_species_taxid(species_name: str) -> int:
     candidates = []
     normalized = species_name.replace("_", " ").strip()
+    tokens = normalized.split()
     if normalized:
         candidates.append(normalized)
-    tokens = normalized.split()
-    if len(tokens) >= 2:
+    if len(tokens) >= 3 and tokens[2].lower() in {"cf", "aff", "nr"}:
+        candidates.extend(
+            [
+                f"{tokens[0]} {tokens[2]}. {tokens[1]}",
+                f"{tokens[0]} {tokens[2]} {tokens[1]}",
+                " ".join(tokens[:2]),
+            ]
+        )
+    elif len(tokens) >= 3 and tokens[1].lower() in {"cf", "aff", "nr"}:
+        candidates.extend(
+            [
+                f"{tokens[0]} {tokens[1]}. {tokens[2]}",
+                f"{tokens[0]} {tokens[1]} {tokens[2]}",
+                f"{tokens[0]} {tokens[2]}",
+            ]
+        )
+    elif len(tokens) >= 4 and tokens[2].lower() in {"subsp", "ssp", "var", "forma", "f"}:
+        rank = tokens[2].lower()
+        if rank in {"subsp", "ssp"}:
+            candidates.extend(
+                [
+                    f"{tokens[0]} {tokens[1]} subsp. {tokens[3]}",
+                    f"{tokens[0]} {tokens[1]} subsp {tokens[3]}",
+                    f"{tokens[0]} {tokens[1]} ssp. {tokens[3]}",
+                    f"{tokens[0]} {tokens[1]} ssp {tokens[3]}",
+                ]
+            )
+        elif rank == "var":
+            candidates.extend(
+                [
+                    f"{tokens[0]} {tokens[1]} var. {tokens[3]}",
+                    f"{tokens[0]} {tokens[1]} var {tokens[3]}",
+                ]
+            )
+        else:
+            candidates.extend(
+                [
+                    f"{tokens[0]} {tokens[1]} forma {tokens[3]}",
+                    f"{tokens[0]} {tokens[1]} forma. {tokens[3]}",
+                    f"{tokens[0]} {tokens[1]} f. {tokens[3]}",
+                    f"{tokens[0]} {tokens[1]} f {tokens[3]}",
+                ]
+            )
+        candidates.append(" ".join(tokens[:2]))
+    elif len(tokens) >= 3 and tokens[1].lower() == "sp":
+        candidates.extend(
+            [
+                f"{tokens[0]} sp. {tokens[2]}",
+                f"{tokens[0]} sp {tokens[2]}",
+                tokens[0],
+            ]
+        )
+    elif len(tokens) >= 2:
         genus_species = " ".join(tokens[:2])
         if genus_species not in candidates:
             candidates.append(genus_species)
@@ -1619,20 +1738,23 @@ gg_resolve_busco_lineage() {
 }
 
 gg_fasta_relabel_headers_to_species() {
-  awk '
-    /^>/ {
-      header = substr($0, 2)
-      sub("^.*/", "", header)
-      n = split(header, a, "_")
-      if (n >= 2) {
-        print ">" a[1] "_" a[2]
-      } else {
-        print ">" header
-      }
-      next
-    }
-    { print }
-  '
+  local line=""
+  local header=""
+  local species_name=""
+  while IFS= read -r line; do
+    if [[ "${line}" == ">"* ]]; then
+      header=${line#>}
+      header=${header##*/}
+      header=${header%%[[:space:]]*}
+      species_name=$(gg_species_name_from_path_or_dot "${header}")
+      if [[ -z "${species_name}" ]]; then
+        species_name="${header}"
+      fi
+      printf '>%s\n' "${species_name}"
+      continue
+    fi
+    printf '%s\n' "${line}"
+  done
 }
 
 gg_busco_gene_tokens() {
@@ -2587,9 +2709,24 @@ from pathlib import Path
 
 def species_from_filename(path: Path) -> str:
     name = path.name
-    if "_" not in name:
+    if "." in name:
+        name = name.split(".", 1)[0]
+    parts = [part for part in name.split("_") if part]
+    if len(parts) < 2:
         return path.stem
-    return name.split("_", 2)[0] + "_" + name.split("_", 2)[1]
+    second = parts[1].lower()
+    third = parts[2].lower() if len(parts) >= 3 else ""
+    if second == "sp":
+        count = 3 if len(parts) >= 3 else 2
+    elif second in {"cf", "aff", "nr"}:
+        count = 3 if len(parts) >= 3 else 2
+    elif third in {"cf", "aff", "nr"}:
+        count = 3
+    elif third in {"subsp", "ssp", "var", "forma", "f"}:
+        count = 4 if len(parts) >= 4 else 3
+    else:
+        count = 2
+    return "_".join(parts[:count])
 
 
 cds_dir = Path(sys.argv[1])

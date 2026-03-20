@@ -1,3 +1,75 @@
+species_prefix_token_count <- function(parts) {
+  parts <- parts[nzchar(parts)]
+  if (length(parts) < 2) {
+    return(0L)
+  }
+  second <- tolower(parts[[2]])
+  third <- if (length(parts) >= 3) tolower(parts[[3]]) else ""
+  if (second == "sp") {
+    return(if (length(parts) >= 3) 3L else 2L)
+  }
+  if (second %in% c("cf", "aff", "nr")) {
+    return(if (length(parts) >= 3) 3L else 2L)
+  }
+  if (third %in% c("cf", "aff", "nr")) {
+    return(3L)
+  }
+  if (third %in% c("subsp", "ssp", "var", "forma", "f")) {
+    return(if (length(parts) >= 4) 4L else 3L)
+  }
+  return(2L)
+}
+
+extract_species_label <- function(x) {
+  text <- as.character(x)
+  if (!nzchar(text)) {
+    return("")
+  }
+  parts <- strsplit(text, "_", fixed = TRUE)[[1]]
+  parts <- parts[nzchar(parts)]
+  prefix_count <- species_prefix_token_count(parts)
+  if (prefix_count == 0) {
+    return("")
+  }
+  paste(parts[seq_len(prefix_count)], collapse = "_")
+}
+
+strip_species_label <- function(x) {
+  text <- as.character(x)
+  species_label <- extract_species_label(text)
+  prefix <- paste0(species_label, "_")
+  if (nzchar(species_label) && startsWith(text, prefix)) {
+    return(substr(text, nchar(prefix) + 1, nchar(text)))
+  }
+  text
+}
+
+scientific_name_from_label <- function(x) {
+  species_label <- extract_species_label(x)
+  if (!nzchar(species_label)) {
+    species_label <- as.character(x)
+  }
+  parts <- strsplit(species_label, "_", fixed = TRUE)[[1]]
+  parts <- parts[nzchar(parts)]
+  if (length(parts) >= 3 && tolower(parts[[3]]) %in% c("cf", "aff", "nr")) {
+    return(sprintf("%s %s. %s", parts[[1]], tolower(parts[[3]]), parts[[2]]))
+  }
+  if (length(parts) >= 3 && tolower(parts[[2]]) == "sp") {
+    return(sprintf("%s sp. %s", parts[[1]], parts[[3]]))
+  }
+  if (length(parts) >= 4 && tolower(parts[[3]]) %in% c("subsp", "ssp", "var", "forma", "f")) {
+    rank <- tolower(parts[[3]])
+    if (rank %in% c("subsp", "ssp")) {
+      return(sprintf("%s %s subsp. %s", parts[[1]], parts[[2]], parts[[4]]))
+    }
+    if (rank == "var") {
+      return(sprintf("%s %s var. %s", parts[[1]], parts[[2]], parts[[4]]))
+    }
+    return(sprintf("%s %s f. %s", parts[[1]], parts[[2]], parts[[4]]))
+  }
+  gsub("_", " ", species_label)
+}
+
 extract_try_error_message = function(try_obj) {
   cond = attr(try_obj, "condition")
   if (!is.null(cond)) {

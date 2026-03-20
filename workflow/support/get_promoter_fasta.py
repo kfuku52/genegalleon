@@ -2,6 +2,7 @@
 
 import argparse
 import os
+from pathlib import Path
 import re
 import shlex
 import subprocess
@@ -9,6 +10,12 @@ import sys
 
 import numpy
 import pandas
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from species_labeling import extract_species_label
 
 
 def build_arg_parser():
@@ -142,7 +149,7 @@ def main():
     print('get_promoter_fasta.py started.')
 
     df = pandas.read_csv(args.geneinfo_tsv, sep='\t', header=0)
-    species_key = df.loc[:, 'gene_id'].astype(str).str.extract(r'^([^_]+_[^_]+)', expand=False)
+    species_key = df.loc[:, 'gene_id'].astype(str).map(extract_species_label)
     df.loc[:, '_species_key'] = species_key.fillna('')
     spp = sorted([sp for sp in df.loc[:, '_species_key'].unique() if sp != ''])
     species_indices = df.groupby('_species_key', sort=False).indices

@@ -107,6 +107,30 @@ def test_summary_falls_back_to_output_derived_species_when_input_is_missing(tmp_
     assert int(df.loc["Mus_musculus", "longestcds"]) == 1
 
 
+def test_summary_preserves_qualified_species_labels_when_inferred_from_outputs(tmp_path: Path):
+    output_dir = tmp_path / "workspace" / "output" / "transcriptome_assembly"
+    (output_dir / "longestcds").mkdir(parents=True)
+    (output_dir / "longestcds" / "Dictyostelium_discoideum_cf.fa.gz").write_text("", encoding="utf-8")
+
+    out_tsv = tmp_path / "summary.tsv"
+    proc = run_summary(
+        [
+            "--dir_transcriptome_assembly",
+            str(output_dir),
+            "--mode",
+            "auto",
+            "--out",
+            str(out_tsv),
+        ],
+        cwd=tmp_path,
+    )
+
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    df = pandas.read_csv(out_tsv, sep="\t", index_col=0)
+    assert "Dictyostelium_discoideum_cf" in df.index
+    assert int(df.loc["Dictyostelium_discoideum_cf", "longestcds"]) == 1
+
+
 def test_summary_ignores_hidden_entries_in_input_and_output_dirs(tmp_path: Path):
     workspace = tmp_path / "workspace"
     input_root = workspace / "input"

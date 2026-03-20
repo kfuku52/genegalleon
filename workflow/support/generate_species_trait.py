@@ -17,6 +17,12 @@ from urllib.request import Request, urlopen
 
 import pandas
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from species_labeling import base_species_label, species_label_from_taxonomic_text
+
 try:
     from openpyxl import load_workbook
 except Exception:  # pragma: no cover - exercised when openpyxl is unavailable
@@ -135,20 +141,7 @@ def normalize_species_name(value: object) -> str:
     raw = str(value or "").strip()
     if raw == "":
         return ""
-    raw = raw.replace("−", "-")
-    raw = re.sub(r"\([^)]*\)", " ", raw)
-    raw = raw.replace("-", "_").replace("/", "_")
-    raw = re.sub(r"[^A-Za-z0-9_]+", "_", raw)
-    tokens = [token for token in raw.split("_") if token]
-    if len(tokens) < 2:
-        return ""
-    genus = tokens[0]
-    species = tokens[1]
-    if genus == "":
-        return ""
-    genus_norm = genus[:1].upper() + genus[1:].lower()
-    species_norm = species.lower()
-    return f"{genus_norm}_{species_norm}"
+    return species_label_from_taxonomic_text(raw)
 
 
 def parse_species_from_id_label(value: str) -> str:
@@ -643,10 +636,32 @@ def build_gift_index_url(data_api_base: str, version: str) -> str:
 
 
 def split_genus_epithet(species_name: str) -> Optional[Sequence[str]]:
-    tokens = [token for token in str(species_name or "").strip().split("_") if token]
+    base_label = base_species_label(species_name)
+    tokens = [token for token in str(base_label or "").strip().split("_") if token]
     if len(tokens) < 2:
         return None
+    if tokens[1].lower() == "sp":
+        return None
     return (tokens[0], tokens[1])
+
+
+def remap_species_name_to_target(
+    species_name: str,
+    target_species: Set[str],
+    target_species_by_base: Dict[str, Set[str]],
+) -> str:
+    normalized = str(species_name or "").strip()
+    if normalized == "":
+        return ""
+    if normalized in target_species:
+        return normalized
+    base_label = base_species_label(normalized)
+    if "_" not in base_label:
+        return ""
+    candidates = target_species_by_base.get(base_label, set())
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return ""
 
 
 def score_gift_species_match(row: Dict[str, object], target_species: str) -> Sequence[float]:
@@ -1456,6 +1471,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         requested_databases = sorted({row.database for row in plan_rows})
 
     species_sorted = sorted(target_species)
+    target_species_by_base: Dict[str, Set[str]] = {}
+    for species_name in species_sorted:
+        base_label = base_species_label(species_name)
+        if "_" not in base_label:
+            continue
+        target_species_by_base.setdefault(base_label, set()).add(species_name)
     result = pandas.DataFrame({"species": species_sorted}).set_index("species")
     db_frames: Dict[str, pandas.DataFrame] = {}
     db_configs: Dict[str, Dict[str, str]] = {}
@@ -1496,7 +1517,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         species_column = detect_species_column(db_table, config.get("species_column", ""))
         db_table = db_table.copy()
         db_table["__species_norm"] = db_table[species_column].map(normalize_species_name)
-        db_table = db_table.loc[db_table["__species_norm"].isin(target_species), :]
+        db_table["__species_norm"] = db_table["__species_norm"].map(
+            lambda value: remap_species_name_to_target(
+                species_name=value,
+                target_species=target_species,
+                target_species_by_base=target_species_by_base,
+            )
+        )
+        db_table = db_table.loc[db_table["__species_norm"] != "", :]
         if db_table.shape[0] == 0:
             warnings.append("[{}] no rows matched target species.".format(database))
             continue

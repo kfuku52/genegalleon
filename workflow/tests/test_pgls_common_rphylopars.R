@@ -54,6 +54,15 @@ if (is.na(repo_root)) {
 
 source(file.path(repo_root, "workflow", "support", "pgls_common.R"))
 
+stopifnot(identical(
+  scientific_name_from_label("Dictyostelium_discoideum_cf_gene1"),
+  "Dictyostelium cf. discoideum"
+))
+stopifnot(identical(
+  scientific_name_from_label("Bacillus_subtilis_subsp_subtilis_gene2"),
+  "Bacillus subtilis subsp. subtilis"
+))
+
 # build_phenocov_input: no within-species variation
 df_no_var <- data.frame(
   species = c("sp1", "sp2"),
