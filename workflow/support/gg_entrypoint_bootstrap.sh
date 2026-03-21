@@ -1,48 +1,52 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-gg_find_workflow_dir() {
-  local entrypoint_path=${1:-}
+gg_search_workflow_dir_from_base() {
+  local base_dir=${1:-}
   local search_dir=""
   local parent_dir=""
 
-  if [[ -n "${entrypoint_path}" ]]; then
-    search_dir="$(cd "$(dirname "${entrypoint_path}")" && pwd 2>/dev/null || true)"
-    while [[ -n "${search_dir}" ]]; do
-      if [[ -f "${search_dir}/support/gg_util.sh" ]]; then
-        (cd "${search_dir}" && pwd -P)
-        return 0
-      fi
-      if [[ -f "${search_dir}/workflow/support/gg_util.sh" ]]; then
-        (cd "${search_dir}/workflow" && pwd -P)
-        return 0
-      fi
-      parent_dir="$(dirname "${search_dir}")"
-      if [[ "${parent_dir}" == "${search_dir}" ]]; then
-        break
-      fi
-      search_dir="${parent_dir}"
-    done
+  [[ -n "${base_dir}" ]] || return 1
+  search_dir="$(cd "$(dirname "${base_dir}")" 2>/dev/null && pwd -P || true)"
+  if [[ -d "${base_dir}" ]]; then
+    search_dir="$(cd "${base_dir}" 2>/dev/null && pwd -P || true)"
   fi
+
+  while [[ -n "${search_dir}" ]]; do
+    if [[ -f "${search_dir}/support/gg_util.sh" ]]; then
+      (cd "${search_dir}" && pwd -P)
+      return 0
+    fi
+    if [[ -f "${search_dir}/workflow/support/gg_util.sh" ]]; then
+      (cd "${search_dir}/workflow" && pwd -P)
+      return 0
+    fi
+    parent_dir="$(dirname "${search_dir}")"
+    if [[ "${parent_dir}" == "${search_dir}" ]]; then
+      break
+    fi
+    search_dir="${parent_dir}"
+  done
+
+  return 1
+}
+
+gg_find_workflow_dir() {
+  local entrypoint_path=${1:-}
+  local bootstrap_path=${2:-${BASH_SOURCE[0]:-}}
+  local base_dir=""
+
+  for base_dir in "${entrypoint_path}" "${bootstrap_path}"; do
+    if gg_search_workflow_dir_from_base "${base_dir}"; then
+      return 0
+    fi
+  done
 
   for base_dir in "${SLURM_SUBMIT_DIR:-}" "${PBS_O_WORKDIR:-}" "${PWD:-}"; do
     [[ -n "${base_dir}" ]] || continue
-    search_dir="${base_dir}"
-    while true; do
-      if [[ -f "${search_dir}/support/gg_util.sh" ]]; then
-        (cd "${search_dir}" && pwd -P)
-        return 0
-      fi
-      if [[ -f "${search_dir}/workflow/support/gg_util.sh" ]]; then
-        (cd "${search_dir}/workflow" && pwd -P)
-        return 0
-      fi
-      parent_dir="$(dirname "${search_dir}")"
-      if [[ "${parent_dir}" == "${search_dir}" ]]; then
-        break
-      fi
-      search_dir="${parent_dir}"
-    done
+    if gg_search_workflow_dir_from_base "${base_dir}"; then
+      return 0
+    fi
   done
 
   return 1
@@ -50,9 +54,10 @@ gg_find_workflow_dir() {
 
 gg_set_workflow_dir() {
   local entrypoint_path=${1:-${BASH_SOURCE[1]:-}}
+  local bootstrap_path=${2:-${BASH_SOURCE[0]:-}}
   local resolved_workflow_dir=""
 
-  resolved_workflow_dir="$(gg_find_workflow_dir "${entrypoint_path}")" || {
+  resolved_workflow_dir="$(gg_find_workflow_dir "${entrypoint_path}" "${bootstrap_path}")" || {
     echo "Failed to resolve workflow directory from entrypoint_path=${entrypoint_path:-unset}" >&2
     return 1
   }

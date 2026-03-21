@@ -39,7 +39,7 @@ Bootstrap then loads:
 
 Default path assumptions are:
 
-- workflow root: auto-detected from the entrypoint location
+- workflow root: auto-detected from the entrypoint location, or from the sourced bootstrap path when the scheduler rewrites the entrypoint to a spool file such as Slurm `slurm_script`
 - workspace root: `workflow/../workspace`
 - container image: `workflow/../genegalleon.sif`
 

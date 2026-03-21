@@ -4,6 +4,7 @@ import subprocess
 
 
 GG_UTIL_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_util.sh"
+GG_ENTRYPOINT_BOOTSTRAP_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_entrypoint_bootstrap.sh"
 
 
 def run_bash(cmd: str, cwd: Path):
@@ -210,6 +211,26 @@ def test_contamination_rank_normalizes_domain_for_remove_contaminated_sequences(
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "superkingdom"
+
+
+def test_entrypoint_bootstrap_resolves_workflow_dir_from_sourced_bootstrap_when_entrypoint_is_spooled(tmp_path):
+    unrelated_submit_dir = tmp_path / "submit"
+    unrelated_submit_dir.mkdir()
+    expected_workflow_dir = GG_ENTRYPOINT_BOOTSTRAP_PATH.parents[1]
+
+    command = (
+        f"source {shlex.quote(str(GG_ENTRYPOINT_BOOTSTRAP_PATH))}; "
+        f"export SLURM_SUBMIT_DIR={shlex.quote(str(unrelated_submit_dir))}; "
+        f"export PBS_O_WORKDIR={shlex.quote(str(unrelated_submit_dir))}; "
+        f"cd {shlex.quote(str(unrelated_submit_dir))}; "
+        "gg_set_workflow_dir /var/spool/slurm/d/job15582515/slurm_script; "
+        'printf "%s\\n" "${gg_workflow_dir}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == str(expected_workflow_dir)
 
 
 def test_add_container_bind_mount_uses_only_singularity_bindpath_for_singularity_runtime(tmp_path):
