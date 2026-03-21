@@ -37,7 +37,7 @@ paml
 spades
 pymol-open-source
 seqkit
-sra-tools
+sra-tools>=3
 trimal
 
 # Merged from former BUSCO-specific environment.
