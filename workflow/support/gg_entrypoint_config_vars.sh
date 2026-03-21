@@ -96,6 +96,9 @@ run_tree_pruning
 run_tree_root
 run_trimal
 run_uniprot_annotation
+species_label_parser
+species_label_regex
+species_label_map_tsv
 tree_rooting_method
 treevis_branch_color
 treevis_branch_length
@@ -223,6 +226,9 @@ run_species_busco
 run_build_species_busco_summary
 run_build_species_omark_summary
 run_species_omark
+species_label_parser
+species_label_regex
+species_label_map_tsv
 species_tree_rooting
 strictly_single_copy_only
 target_branch_go

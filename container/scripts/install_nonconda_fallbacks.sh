@@ -11,8 +11,8 @@ r_env_name=${GG_R_ENV_NAME:-base}
 testnh_tarball_sha256=${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}
 cafe5_tarball_sha256=${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}
 kfl1ou_repo_url=${KFL1OU_REPO_URL:-https://github.com/kfuku52/kfl1ou.git}
-kfl1ou_repo_ref=${KFL1OU_REPO_REF:-}
-kfl1ou_repo_sha=${KFL1OU_REPO_SHA:-1bf3028f204a6d58e697f58461c82ecfc7c29802}
+kfl1ou_repo_ref=${KFL1OU_REPO_REF:-${KFU52_REPO_REF:-master}}
+kfl1ou_repo_sha=${KFL1OU_REPO_SHA:-}
 
 env_prefix() {
   local env_name=$1

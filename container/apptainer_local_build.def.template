@@ -123,8 +123,10 @@ From: mambaorg/micromamba:noble
     PAML_REPO_SHA="${paml_repo_sha}" \
         /opt/pg/scripts/ensure_iq2mc_toolchain.sh base
     /opt/pg/scripts/install_env.sh base "${reconciled_required}" /opt/pg/env/base.r.optional.txt r-base
+    kfl1ou_repo_ref="${kfl1ou_repo_ref:-${kfu52_repo_ref}}"
     TESTNH_TARBALL_SHA256="${testnh_tarball_sha256}" \
     CAFE5_TARBALL_SHA256="${cafe5_tarball_sha256}" \
+    KFU52_REPO_REF="${kfu52_repo_ref}" \
     KFL1OU_REPO_URL="${kfl1ou_repo_url}" \
     KFL1OU_REPO_REF="${kfl1ou_repo_ref}" \
     KFL1OU_REPO_SHA="${kfl1ou_repo_sha}" \
@@ -142,6 +144,7 @@ From: mambaorg/micromamba:noble
 
     kftools_repo_ref="${kftools_repo_ref_override:-${kfu52_repo_ref}}"
     rkftools_repo_ref="${rkftools_repo_ref_override:-${kfu52_repo_ref}}"
+    radte_repo_ref="${radte_repo_ref:-${kfu52_repo_ref}}"
     busco_source_ref="${busco_repo_sha:-${busco_repo_ref}}"
     kftools_source_ref="${kftools_repo_sha:-${kftools_repo_ref}}"
     rkftools_source_ref="${rkftools_repo_sha:-${rkftools_repo_ref}}"

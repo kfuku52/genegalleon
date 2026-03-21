@@ -2015,6 +2015,60 @@ def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launcher
     assert 'run_extract_species_tree_fasta="${run_extract_species_tree_fasta:-1}"' in core
 
 
+def test_common_params_and_rooting_helpers_expose_shared_species_label_parser():
+    common = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    genome_core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+    gene_core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    rooting_helper = _read_text(WORKFLOW_DIR / "support" / "species_tree_guided_gene_tree_rooting.r")
+    treevis_core = _read_text(WORKFLOW_DIR / "support" / "treevis" / "R" / "00_core.R")
+
+    assert ': "${GG_COMMON_SPECIES_LABEL_PARSER:=taxonomic}"' in common
+    assert ': "${GG_COMMON_SPECIES_LABEL_REGEX:=}"' in common
+    assert ': "${GG_COMMON_SPECIES_LABEL_MAP_TSV:=}"' in common
+    assert "species_label_parser" in config_vars
+    assert config_vars.count("species_label_regex") >= 2
+    assert config_vars.count("species_label_map_tsv") >= 2
+    assert 'species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"' in genome_core
+    assert 'species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"' in genome_core
+    assert 'species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"' in genome_core
+    assert '"--species_parser=${species_label_parser}" \\' in genome_core
+    assert "species_parser = args[['species_parser']]" in rooting_helper
+    assert "species_parser = 'taxonomic'" in rooting_helper
+    assert 'get_species_overlap_score(phy=rt, dc_cutoff=0, species_parser=species_parser)' in rooting_helper
+    assert 'species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"' in gene_core
+    assert 'species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"' in gene_core
+    assert 'species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"' in gene_core
+    assert 'TREEVIS_SPECIES_PARSER="${species_label_parser}" \\' in gene_core
+    assert "treevis_species_parser = Sys.getenv('TREEVIS_SPECIES_PARSER', unset='taxonomic')" in treevis_core
+    assert "get_species_name(spp, species_parser=treevis_species_parser)" in treevis_core
+
+
+def test_gene_evolution_core_passes_species_label_parser_options_to_radte():
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+
+    assert 'radte_args+=("--species-parser=${species_label_parser}")' in core
+    assert 'if [[ -n "${species_label_regex}" ]]; then' in core
+    assert 'radte_args+=("--species-regex=${species_label_regex}")' in core
+    assert 'if [[ -n "${species_label_map_tsv}" ]]; then' in core
+    assert 'radte_args+=("--species-map-tsv=${species_label_map_tsv}")' in core
+
+
+def test_nwkit_call_sites_receive_species_label_parser_options():
+    gene_core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    genome_core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    assert 'nwkit_root_args+=(--species-parser "${species_label_parser}")' in gene_core
+    assert 'nwkit_root_args+=(--species-regex "${species_label_regex}")' in gene_core
+    assert 'nwkit_root_args+=(--species-map-tsv "${species_label_map_tsv}")' in gene_core
+    assert 'nwkit_root_args+=(--species-parser "${species_label_parser}")' in genome_core
+    assert 'nwkit_root_args+=(--species-regex "${species_label_regex}")' in genome_core
+    assert 'nwkit_root_args+=(--species-map-tsv "${species_label_map_tsv}")' in genome_core
+    assert '--species-parser "${species_label_parser}"' in genome_core
+    assert 'nwkit_args+=(--species-regex "${species_label_regex}")' in genome_core
+    assert 'nwkit_args+=(--species-map-tsv "${species_label_map_tsv}")' in genome_core
+
+
 def test_genome_evolution_reuse_check_precedes_busco_lineage_resolution():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 

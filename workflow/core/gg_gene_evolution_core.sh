@@ -15,6 +15,9 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"
+species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"
+species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"
+species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"
 run_extract_query_fasta="${run_extract_query_fasta:-1}"
 run_extract_primary_fasta="${run_extract_primary_fasta:-1}"
 run_generate_expression_matrix="${run_generate_expression_matrix:-0}"
@@ -1791,7 +1794,17 @@ if [[ (! -s "${file_og_rooted_tree}" || ! -s "${file_og_rooted_log}") && ${run_t
     if [[ "${nwkit_root_method}" == "md" ]]; then
       nwkit_root_method="mv"
     fi
-    nwkit root --method "${nwkit_root_method}" --infile "${file_og_unrooted_tree_analysis}" |
+    nwkit_root_args=(root --method "${nwkit_root_method}" --infile "${file_og_unrooted_tree_analysis}")
+    if [[ "${nwkit_root_method}" == "taxonomy" ]]; then
+      nwkit_root_args+=(--species-parser "${species_label_parser}")
+      if [[ -n "${species_label_regex}" ]]; then
+        nwkit_root_args+=(--species-regex "${species_label_regex}")
+      fi
+      if [[ -n "${species_label_map_tsv}" ]]; then
+        nwkit_root_args+=(--species-map-tsv "${species_label_map_tsv}")
+      fi
+    fi
+    nwkit "${nwkit_root_args[@]}" |
       nwkit label --target intnode --force yes --outfile "${og_id}.root.tmp.nwk"
     mv_out "${og_id}.root.tmp.nwk" "${file_og_rooted_tree}"
     {
@@ -2152,6 +2165,13 @@ if [[ (! -s "${file_og_dated_tree}" || ! -s "${file_og_dated_tree_log}") && ${ru
     radte_args+=("--species_tree=${species_tree_pruned}")
     radte_args+=("--gene_tree=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled")
     radte_args+=("--notung_parsable=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.parsable.txt")
+  fi
+  radte_args+=("--species-parser=${species_label_parser}")
+  if [[ -n "${species_label_regex}" ]]; then
+    radte_args+=("--species-regex=${species_label_regex}")
+  fi
+  if [[ -n "${species_label_map_tsv}" ]]; then
+    radte_args+=("--species-map-tsv=${species_label_map_tsv}")
   fi
 
   radte.r \
@@ -3388,6 +3408,7 @@ if ([[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]]) && [[ ${run_tree
   fi
   cb_path=${file_og_csubst_cb_2/cb_2/cb_ARITY}
 
+  TREEVIS_SPECIES_PARSER="${species_label_parser}" \
   Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
     --stat_branch="${file_og_stat_branch}" \
     --treevis_dir="${gg_support_dir}/treevis" \

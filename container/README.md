@@ -9,12 +9,11 @@ that can target both:
 
 From the project README and Wiki (`gg_versions`):
 - `GeneGalleon` was originally assembled interactively from a miniconda3 Singularity sandbox.
-- The runtime now uses a single conda `base` env, with selected tools installed from pinned upstream source snapshots at build time
+- The runtime now uses a single conda `base` env, with selected tools installed from upstream refs at build time
   (`kfuku52/amalgkit`, `kfuku52/cdskit`, `kfuku52/csubst`, `kfuku52/nwkit`,
   `kfuku52/kftools`, `kfuku52/rkftools`, `kfuku52/RADTE`).
-  The default container build pins validated commit SHAs for these source installs;
-  ref-based selection remains available as an override when you explicitly clear the
-  corresponding `*_REPO_SHA`.
+  User-authored tools follow their configured refs by default, while explicit
+  `*_REPO_SHA` pins remain available as an override when needed.
 
 So this Dockerfile is designed as:
 1. reproducible base build,
@@ -31,7 +30,7 @@ chmod +x container/buildx.sh
 IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.sh
 ```
 
-Source pins and checksums can be overridden at build time:
+Source refs, optional pins, and checksums can be overridden at build time:
 
 ```bash
 KFU52_AMALGKIT_REPO_SHA= \
@@ -39,27 +38,32 @@ KFU52_AMALGKIT_REPO_REF=kfdevel \
 KFU52_REPO_REF=master \
 BUSCO_REPO_SHA=6278721a1916f6da310e03ec9674099028c927a4 \
 PAML_REPO_SHA=8daeead6b55523f375d9ac56dcfac38373ef8a2e \
-KFL1OU_REPO_SHA=1bf3028f204a6d58e697f58461c82ecfc7c29802 \
+KFL1OU_REPO_REF=master \
+KFL1OU_REPO_SHA= \
 KFTOOLS_REPO_URL=https://github.com/kfuku52/kftools.git \
-KFTOOLS_REPO_SHA=4918fed6146b9cef1df66b5ce33de70b74454547 \
+KFTOOLS_REPO_REF=master \
+KFTOOLS_REPO_SHA= \
 RKFTOOLS_REPO_URL=https://github.com/kfuku52/rkftools.git \
-RKFTOOLS_REPO_SHA=cf16e570300ec32909d8cd458119712d40bcf06f \
+RKFTOOLS_REPO_REF=master \
+RKFTOOLS_REPO_SHA= \
 RADTE_REPO_URL=https://github.com/kfuku52/RADTE.git \
-RADTE_REPO_SHA=873c4acb22d3decedf417bb95e3d292abccbb386 \
+RADTE_REPO_REF=master \
+RADTE_REPO_SHA= \
 TESTNH_TARBALL_SHA256=598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2 \
 CAFE5_TARBALL_SHA256=71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8 \
 IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.sh
 ```
 
 Default hardening behavior:
-- source installs use pinned commit SHAs for `amalgkit`, `cdskit`, `csubst`, `nwkit`, `BUSCO`, `paml`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE`
+- user-authored source installs follow their configured refs by default for `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE`
+- `BUSCO` and `paml` remain pinned by default
 - `BioPP/testnh` and `CAFE5` release tarballs are verified with SHA-256 before extraction
 - GitHub/GitLab source fetches prefer release/archive downloads and fall back to `git` retry logic only when needed
 
 Override rules:
 - `KFU52_REPO_REF` applies to `cdskit`, `csubst`, and `nwkit` only when the corresponding `KFU52_*_REPO_SHA` is empty.
+- `KFL1OU_REPO_REF` and `RADTE_REPO_REF` default to `KFU52_REPO_REF` and are used when the corresponding `*_REPO_SHA` is empty.
 - `KFTOOLS_REPO_REF`/`RKFTOOLS_REPO_REF` override only `kftools`/`rkftools` and default to `KFU52_REPO_REF` when set and the corresponding `*_REPO_SHA` is empty.
-- `RADTE_REPO_REF` controls the RADTE fallback ref only when `RADTE_REPO_SHA` is empty.
 - `BUSCO_MIRROR_REPO_URL` is optional and is only used as a secondary source if the primary `BUSCO_REPO_URL` fetch fails.
 - If you override a repo URL to a fork, also update the matching `*_REPO_SHA` or clear it to fall back to the ref/default branch.
 
@@ -201,7 +205,8 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
 - `Notung` is downloaded at build time from the official Notung 2.9 source
   and installed as:
   - `/usr/local/bin/Notung.jar`
-- `BUSCO`, `paml`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` are fetched from pinned upstream source snapshots by default.
+- `BUSCO` and `paml` are fetched from pinned upstream source snapshots by default.
+- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` follow their configured refs by default.
 - `BioPP/testnh` and `CAFE5` tarballs are checksum-verified during build.
 - The default source is the pinned stable ZIP:
   - `NOTUNG_DOWNLOAD_PAGE=https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip`

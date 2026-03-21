@@ -11,15 +11,19 @@ options(expressions=20000)
 cat('arguments:\n')
 args = rkftools::get_parsed_args(args, print = TRUE)
 args[['ncpu']] = as.integer(args[['ncpu']])
+species_parser = args[['species_parser']]
+if (is.null(species_parser) || length(species_parser) != 1 || is.na(species_parser) || species_parser == '') {
+    species_parser = 'taxonomic'
+}
 
-get_root_position_dependent_species_overlap_scores = function(phy, nslots) {
+get_root_position_dependent_species_overlap_scores = function(phy, nslots, species_parser) {
     num_parallel = max(1L, min(as.integer(nslots), nrow(phy$edge)))
     cluster = parallel::makeCluster(num_parallel, type='PSOCK', outfile='')
     on.exit(parallel::stopCluster(cluster), add=TRUE)
-    parallel::clusterExport(cluster, varlist = c('phy', 'reroot', 'get_species_overlap_score'), envir = environment())
+    parallel::clusterExport(cluster, varlist = c('phy', 'reroot', 'get_species_overlap_score', 'species_parser'), envir = environment())
     so_score = parallel::parLapply(cluster, seq_len(nrow(phy$edge)), function(i) {
         rt = reroot(tree=phy, node.number=phy$edge[i,2])
-        get_species_overlap_score(phy=rt, dc_cutoff=0)
+        get_species_overlap_score(phy=rt, dc_cutoff=0, species_parser=species_parser)
     })
     species_overlap_scores = unlist(so_score, use.names = FALSE)
     return(species_overlap_scores)
@@ -47,13 +51,17 @@ cat('Starting species overlap search.\n')
 start = proc.time()
 check_species_overlap_score = FALSE
 if (check_species_overlap_score) {
-    species_overlap_scores = get_root_position_dependent_species_overlap_scores(phy=unrooted_tree, nslots=nslots)
+    species_overlap_scores = get_root_position_dependent_species_overlap_scores(
+        phy=unrooted_tree,
+        nslots=args[['ncpu']],
+        species_parser=species_parser
+    )
     cat('Number of root positions with the minimum species overlap score:', sum(species_overlap_scores==min(species_overlap_scores)), '/', length(species_overlap_scores), '\n')
     ind_min_so = c(1:length(species_overlap_scores))[species_overlap_scores==min(species_overlap_scores)]
     cat('Root positions with the minimum species overlap score:', ind_min_so, '\n')
     cat('Species overlap score: minimum:', min(species_overlap_scores), '\n')
     cat('Species overlap score: MAD:', species_overlap_scores[res[[4]]], '\n')
-    midpoint_so_score = get_species_overlap_score(midpoint_tree)
+    midpoint_so_score = get_species_overlap_score(midpoint_tree, species_parser=species_parser)
     cat('Species overlap score: midpoint:', midpoint_so_score, '\n')
 }
 if (is.null(res[[5]])) {

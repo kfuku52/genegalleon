@@ -212,9 +212,11 @@ def test_species_taxonomy_metadata_resolver_supports_nonstandard_nuclear_codes(t
 def test_parse_species_key_candidate_preserves_taxonomic_qualifiers():
     mod = load_module()
 
-    assert mod.parse_species_key_candidate("Dictyostelium cf. discoideum") == "Dictyostelium_discoideum_cf"
+    assert mod.parse_species_key_candidate("Dictyostelium cf. discoideum") == "Dictyostelium_cf_discoideum"
     assert mod.parse_species_key_candidate("Bacillus subtilis subsp. subtilis") == "Bacillus_subtilis_subsp_subtilis"
     assert mod.parse_species_key_candidate("Amoeba sp. JDS-Ruffled") == "Amoeba_sp_JDSRuffled"
+    assert mod.parse_species_key_candidate("Solanum lycopersicum cultivar Heinz 1706") == "Solanum_lycopersicum_cultivar_Heinz1706"
+    assert mod.parse_species_key_candidate("Escherichia coli serovar O157") == "Escherichia_coli_serovar_O157"
 
 
 def test_species_taxonomy_metadata_resolver_falls_back_from_qualified_name_to_base_species(tmp_path):
@@ -222,7 +224,7 @@ def test_species_taxonomy_metadata_resolver_falls_back_from_qualified_name_to_ba
     db_path, taxdump_path = write_test_taxonomy_fixture(tmp_path)
     resolver = mod.SpeciesTaxonomyMetadataResolver(str(db_path), str(taxdump_path))
 
-    dicty = resolver.resolve("Dictyostelium_discoideum_cf")
+    dicty = resolver.resolve("Dictyostelium_cf_discoideum")
     assert dicty["taxid"] == "5786"
     assert dicty["nuclear_genetic_code_id"] == "1"
     assert dicty["mitochondrial_genetic_code_id"] == "4"
@@ -568,7 +570,7 @@ def test_format_species_inputs_rescue_overlap_merges_misassigned_gene_ids(tmp_pa
 
 def test_format_species_inputs_uses_locus_tag_for_genbank_style_ncbi_cds(tmp_path):
     input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
-    species_dir = input_dir / "Dictyostelium_discoideum_cf"
+    species_dir = input_dir / "Dictyostelium_cf_discoideum"
     species_dir.mkdir(parents=True, exist_ok=True)
     cds_path = species_dir / "GCA_054859205.1_ASM5485920v1_cds_from_genomic.fna.gz"
     gff_path = species_dir / "GCA_054859205.1_ASM5485920v1_genomic.gff.gz"
@@ -624,12 +626,12 @@ def test_format_species_inputs_uses_locus_tag_for_genbank_style_ncbi_cds(tmp_pat
     )
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
 
-    formatted_cds = out_cds / "Dictyostelium_discoideum_cf_GCA_054859205.1_ASM5485920v1_cds_from_genomic.fa.gz"
+    formatted_cds = out_cds / "Dictyostelium_cf_discoideum_GCA_054859205.1_ASM5485920v1_cds_from_genomic.fa.gz"
     with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
         headers = [line.strip() for line in handle if line.startswith(">")]
     assert headers == [
-        ">Dictyostelium_discoideum_cf_ACTFIY_010592",
-        ">Dictyostelium_discoideum_cf_ACTFIY_010593",
+        ">Dictyostelium_cf_discoideum_ACTFIY_010592",
+        ">Dictyostelium_cf_discoideum_ACTFIY_010593",
     ]
 
     mapping = run_validate_mapping_script(
@@ -639,7 +641,7 @@ def test_format_species_inputs_uses_locus_tag_for_genbank_style_ncbi_cds(tmp_pat
         str(out_gff),
     )
     assert mapping.returncode == 0, mapping.stderr + "\n" + mapping.stdout
-    assert "[Dictyostelium_discoideum_cf] CDS-to-GFF mapping OK: 2/2 IDs" in mapping.stdout
+    assert "[Dictyostelium_cf_discoideum] CDS-to-GFF mapping OK: 2/2 IDs" in mapping.stdout
 
 
 def test_format_species_inputs_uses_protein_id_when_ncbi_header_lacks_gene_tags(tmp_path):

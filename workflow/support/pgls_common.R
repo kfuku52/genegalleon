@@ -1,3 +1,65 @@
+taxonomic_genus_only_placeholders <- c("sp", "spp")
+taxonomic_proximity_qualifiers <- c("cf", "aff", "nr")
+taxonomic_rank_aliases <- c(
+  "subsp" = "subsp",
+  "ssp" = "subsp",
+  "subspecies" = "subsp",
+  "var" = "var",
+  "variety" = "var",
+  "forma" = "forma",
+  "form" = "forma",
+  "f" = "forma",
+  "strain" = "strain",
+  "substrain" = "substrain",
+  "serovar" = "serovar",
+  "serotype" = "serotype",
+  "serogroup" = "serogroup",
+  "pathovar" = "pathovar",
+  "pv" = "pathovar",
+  "biovar" = "biovar",
+  "biotype" = "biotype",
+  "chemovar" = "chemovar",
+  "morphovar" = "morphovar",
+  "cultivar" = "cultivar",
+  "cv" = "cultivar",
+  "isolate" = "isolate",
+  "group" = "group",
+  "subgroup" = "subgroup",
+  "complex" = "complex",
+  "clade" = "clade",
+  "lineage" = "lineage",
+  "section" = "section",
+  "series" = "series",
+  "ecotype" = "ecotype",
+  "breed" = "breed"
+)
+taxonomic_display_ranks <- c(
+  "subsp" = "subsp.",
+  "var" = "var.",
+  "forma" = "f.",
+  "strain" = "strain",
+  "substrain" = "substrain",
+  "serovar" = "serovar",
+  "serotype" = "serotype",
+  "serogroup" = "serogroup",
+  "pathovar" = "pathovar",
+  "biovar" = "biovar",
+  "biotype" = "biotype",
+  "chemovar" = "chemovar",
+  "morphovar" = "morphovar",
+  "cultivar" = "cultivar",
+  "isolate" = "isolate",
+  "group" = "group",
+  "subgroup" = "subgroup",
+  "complex" = "complex",
+  "clade" = "clade",
+  "lineage" = "lineage",
+  "section" = "section",
+  "series" = "series",
+  "ecotype" = "ecotype",
+  "breed" = "breed"
+)
+
 species_prefix_token_count <- function(parts) {
   parts <- parts[nzchar(parts)]
   if (length(parts) < 2) {
@@ -5,16 +67,16 @@ species_prefix_token_count <- function(parts) {
   }
   second <- tolower(parts[[2]])
   third <- if (length(parts) >= 3) tolower(parts[[3]]) else ""
-  if (second == "sp") {
+  if (second %in% taxonomic_genus_only_placeholders) {
     return(if (length(parts) >= 3) 3L else 2L)
   }
-  if (second %in% c("cf", "aff", "nr")) {
+  if (second %in% taxonomic_proximity_qualifiers) {
     return(if (length(parts) >= 3) 3L else 2L)
   }
-  if (third %in% c("cf", "aff", "nr")) {
+  if (third %in% taxonomic_proximity_qualifiers) {
     return(3L)
   }
-  if (third %in% c("subsp", "ssp", "var", "forma", "f")) {
+  if (third %in% unname(taxonomic_rank_aliases)) {
     return(if (length(parts) >= 4) 4L else 3L)
   }
   return(2L)
@@ -51,21 +113,18 @@ scientific_name_from_label <- function(x) {
   }
   parts <- strsplit(species_label, "_", fixed = TRUE)[[1]]
   parts <- parts[nzchar(parts)]
-  if (length(parts) >= 3 && tolower(parts[[3]]) %in% c("cf", "aff", "nr")) {
+  if (length(parts) >= 3 && tolower(parts[[2]]) %in% taxonomic_proximity_qualifiers) {
+    return(sprintf("%s %s. %s", parts[[1]], tolower(parts[[2]]), parts[[3]]))
+  }
+  if (length(parts) >= 3 && tolower(parts[[3]]) %in% taxonomic_proximity_qualifiers) {
     return(sprintf("%s %s. %s", parts[[1]], tolower(parts[[3]]), parts[[2]]))
   }
   if (length(parts) >= 3 && tolower(parts[[2]]) == "sp") {
     return(sprintf("%s sp. %s", parts[[1]], parts[[3]]))
   }
-  if (length(parts) >= 4 && tolower(parts[[3]]) %in% c("subsp", "ssp", "var", "forma", "f")) {
+  if (length(parts) >= 4 && tolower(parts[[3]]) %in% unname(taxonomic_rank_aliases)) {
     rank <- tolower(parts[[3]])
-    if (rank %in% c("subsp", "ssp")) {
-      return(sprintf("%s %s subsp. %s", parts[[1]], parts[[2]], parts[[4]]))
-    }
-    if (rank == "var") {
-      return(sprintf("%s %s var. %s", parts[[1]], parts[[2]], parts[[4]]))
-    }
-    return(sprintf("%s %s f. %s", parts[[1]], parts[[2]], parts[[4]]))
+    return(sprintf("%s %s %s %s", parts[[1]], parts[[2]], taxonomic_display_ranks[[rank]], parts[[4]]))
   }
   gsub("_", " ", species_label)
 }

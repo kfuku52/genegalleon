@@ -25,6 +25,9 @@ input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 species_tree_rooting="${species_tree_rooting:-taxonomy}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
+species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"
+species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"
+species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"
 omark_db_path="${omark_db_path:-auto}"
 run_cds_translation="${run_cds_translation:-1}"
 run_species_omark="${run_species_omark:-0}"
@@ -1199,6 +1202,13 @@ root_species_tree() {
   elif [[ "${root_method}" == "taxonomy" ]]; then
     ensure_dir "${dir_nwkit_download_dir}"
     nwkit_root_args+=(--download_dir "${dir_nwkit_download_dir}")
+    nwkit_root_args+=(--species-parser "${species_label_parser}")
+    if [[ -n "${species_label_regex}" ]]; then
+      nwkit_root_args+=(--species-regex "${species_label_regex}")
+    fi
+    if [[ -n "${species_label_map_tsv}" ]]; then
+      nwkit_root_args+=(--species-map-tsv "${species_label_map_tsv}")
+    fi
     if [[ -n "${root_value}" ]]; then
       nwkit_root_args+=(--taxonomy_source "${root_value}")
     fi
@@ -2238,12 +2248,21 @@ if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
   ensure_parent_dir "${file_constrained_tree}"
   ensure_dir "${dir_nwkit_download_dir}"
   if [[ ${timetree_constraint} -eq 1 ]]; then
-    nwkit mcmctree \
-      --download_dir "${dir_nwkit_download_dir}" \
-      --infile "${file_undated_species_tree}" \
-      --timetree "ci" \
-      --min_clade_prop 0.2 \
+    nwkit_args=(
+      --download_dir "${dir_nwkit_download_dir}"
+      --infile "${file_undated_species_tree}"
+      --timetree "ci"
+      --min_clade_prop 0.2
       --outfile "tmp.constrained.tree.nwk"
+      --species-parser "${species_label_parser}"
+    )
+    if [[ -n "${species_label_regex}" ]]; then
+      nwkit_args+=(--species-regex "${species_label_regex}")
+    fi
+    if [[ -n "${species_label_map_tsv}" ]]; then
+      nwkit_args+=(--species-map-tsv "${species_label_map_tsv}")
+    fi
+    nwkit mcmctree "${nwkit_args[@]}"
     if [[ -s "tmp.constrained.tree.nwk" ]]; then
       mv_out "tmp.constrained.tree.nwk" "${file_constrained_tree}"
     fi
@@ -2264,7 +2283,14 @@ if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
         --download_dir "${dir_nwkit_download_dir}"
         --left_species "${mcmctree_params[0]}"
         --right_species "${mcmctree_params[1]}"
+        --species-parser "${species_label_parser}"
       )
+      if [[ -n "${species_label_regex}" ]]; then
+        nwkit_args+=(--species-regex "${species_label_regex}")
+      fi
+      if [[ -n "${species_label_map_tsv}" ]]; then
+        nwkit_args+=(--species-map-tsv "${species_label_map_tsv}")
+      fi
       if [[ "${mcmctree_params[2]}" != "-" ]]; then
         nwkit_args+=(--lower_bound "${mcmctree_params[2]}")
       fi
@@ -3241,6 +3267,7 @@ busco_species_tree_assisted_gene_tree_rooting() {
     "--notung_root_zip=./${infile}" \
     "--in_tree=${intree}" \
     "--out_tree=${busco_id}.root.nwk" \
+    "--species_parser=${species_label_parser}" \
     "--ncpu=${GG_TASK_CPUS}" \
     2>&1 | tee "${busco_id}.root.txt"
 

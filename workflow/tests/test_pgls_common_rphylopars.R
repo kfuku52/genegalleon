@@ -55,12 +55,20 @@ if (is.na(repo_root)) {
 source(file.path(repo_root, "workflow", "support", "pgls_common.R"))
 
 stopifnot(identical(
-  scientific_name_from_label("Dictyostelium_discoideum_cf_gene1"),
+  scientific_name_from_label("Dictyostelium_cf_discoideum_gene1"),
   "Dictyostelium cf. discoideum"
 ))
 stopifnot(identical(
   scientific_name_from_label("Bacillus_subtilis_subsp_subtilis_gene2"),
   "Bacillus subtilis subsp. subtilis"
+))
+stopifnot(identical(
+  scientific_name_from_label("Solanum_lycopersicum_cultivar_Heinz1706_gene3"),
+  "Solanum lycopersicum cultivar Heinz1706"
+))
+stopifnot(identical(
+  scientific_name_from_label("Escherichia_coli_serovar_O157_gene4"),
+  "Escherichia coli serovar O157"
 ))
 
 # build_phenocov_input: no within-species variation

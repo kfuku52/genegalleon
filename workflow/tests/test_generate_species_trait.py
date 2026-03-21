@@ -221,17 +221,17 @@ def test_generate_species_trait_species_api_mode_downloads_target_species_only(t
 def test_generate_species_trait_normalizes_taxonomic_qualifiers_for_matching():
     mod = load_script_module()
 
-    assert mod.normalize_species_name("Dictyostelium cf. discoideum") == "Dictyostelium_discoideum_cf"
+    assert mod.normalize_species_name("Dictyostelium cf. discoideum") == "Dictyostelium_cf_discoideum"
     assert mod.normalize_species_name("Bacillus subtilis subsp. subtilis") == "Bacillus_subtilis_subsp_subtilis"
     assert mod.normalize_species_name("Amoeba sp. JDS-Ruffled") == "Amoeba_sp_JDSRuffled"
-    assert mod.split_genus_epithet("Dictyostelium_discoideum_cf") == ("Dictyostelium", "discoideum")
+    assert mod.split_genus_epithet("Dictyostelium_cf_discoideum") == ("Dictyostelium", "discoideum")
     assert mod.split_genus_epithet("Amoeba_sp_JDSRuffled") is None
 
 
 def test_generate_species_trait_maps_base_species_rows_to_unique_qualified_target(tmp_path):
     species_cds = tmp_path / "output" / "input_generation" / "species_cds"
     species_cds.mkdir(parents=True, exist_ok=True)
-    (species_cds / "Dictyostelium_discoideum_cf.fa").write_text(">a\nATG\n", encoding="utf-8")
+    (species_cds / "Dictyostelium_cf_discoideum.fa").write_text(">a\nATG\n", encoding="utf-8")
 
     trait_source = tmp_path / "downloads" / "trait_datasets" / "animaltraits" / "animaltraits.tsv"
     write_text(
@@ -279,7 +279,7 @@ def test_generate_species_trait_maps_base_species_rows_to_unique_qualified_targe
 
     df = pandas.read_csv(output, sep="\t")
     assert df.shape[0] == 1
-    assert df.loc[0, "species"] == "Dictyostelium_discoideum_cf"
+    assert df.loc[0, "species"] == "Dictyostelium_cf_discoideum"
     assert df.loc[0, "lifespan_years"] == 7
 
 
@@ -287,7 +287,7 @@ def test_generate_species_trait_does_not_duplicate_base_rows_when_exact_target_e
     species_cds = tmp_path / "output" / "input_generation" / "species_cds"
     species_cds.mkdir(parents=True, exist_ok=True)
     (species_cds / "Dictyostelium_discoideum.fa").write_text(">a\nATG\n", encoding="utf-8")
-    (species_cds / "Dictyostelium_discoideum_cf.fa").write_text(">b\nATG\n", encoding="utf-8")
+    (species_cds / "Dictyostelium_cf_discoideum.fa").write_text(">b\nATG\n", encoding="utf-8")
 
     trait_source = tmp_path / "downloads" / "trait_datasets" / "animaltraits" / "animaltraits.tsv"
     write_text(
@@ -336,7 +336,7 @@ def test_generate_species_trait_does_not_duplicate_base_rows_when_exact_target_e
     df = pandas.read_csv(output, sep="\t")
     value_map = dict(zip(df["species"], df["lifespan_years"]))
     assert value_map["Dictyostelium_discoideum"] == 7
-    assert pandas.isna(value_map["Dictyostelium_discoideum_cf"])
+    assert pandas.isna(value_map["Dictyostelium_cf_discoideum"])
 
 
 def test_generate_species_trait_strict_fails_when_source_column_missing(tmp_path):

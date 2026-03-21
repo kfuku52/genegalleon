@@ -329,7 +329,7 @@ def test_species_name_from_path_or_dot_preserves_taxonomic_qualifiers(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
         'printf "%s\\n%s\\n%s\\n" '
-        '"$(gg_species_name_from_path_or_dot "Dictyostelium_discoideum_cf_GCA_054859205.1.fa.gz")" '
+        '"$(gg_species_name_from_path_or_dot "Dictyostelium_cf_discoideum_GCA_054859205.1.fa.gz")" '
         '"$(gg_species_name_from_path_or_dot "Bacillus_subtilis_subsp_subtilis_demo.fa.gz")" '
         '"$(gg_species_name_from_path_or_dot "Amoeba_sp_JDSRuffled.tsv")"'
     )
@@ -338,7 +338,7 @@ def test_species_name_from_path_or_dot_preserves_taxonomic_qualifiers(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip().splitlines() == [
-        "Dictyostelium_discoideum_cf",
+        "Dictyostelium_cf_discoideum",
         "Bacillus_subtilis_subsp_subtilis",
         "Amoeba_sp_JDSRuffled",
     ]
@@ -347,7 +347,7 @@ def test_species_name_from_path_or_dot_preserves_taxonomic_qualifiers(tmp_path):
 def test_fasta_relabel_headers_to_species_preserves_taxonomic_qualifiers(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        "printf '>Dictyostelium_discoideum_cf_gene1\\nATG\\n>Bacillus_subtilis_subsp_subtilis_gene2\\nATG\\n' "
+        "printf '>Dictyostelium_cf_discoideum_gene1\\nATG\\n>Bacillus_subtilis_subsp_subtilis_gene2\\nATG\\n' "
         '| gg_fasta_relabel_headers_to_species'
     )
 
@@ -355,7 +355,7 @@ def test_fasta_relabel_headers_to_species_preserves_taxonomic_qualifiers(tmp_pat
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip().splitlines() == [
-        ">Dictyostelium_discoideum_cf",
+        ">Dictyostelium_cf_discoideum",
         "ATG",
         ">Bacillus_subtilis_subsp_subtilis",
         "ATG",

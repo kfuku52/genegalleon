@@ -10,10 +10,10 @@ ARG KFU52_REPO_REF="master"
 ARG KFU52_AMALGKIT_AUTO_SELECT_REF="1"
 ARG KFU52_AMALGKIT_BRANCH_CANDIDATES="master,kfdevel,devel"
 ARG KFU52_AMALGKIT_REPO_REF=""
-ARG KFU52_AMALGKIT_REPO_SHA="1ce96e3148cace8f96a67fdb46df99400a9e3f19"
-ARG KFU52_CDSKIT_REPO_SHA="9cd69c01c9736dec2a1eea63e63d994fbc4c812c"
-ARG KFU52_CSUBST_REPO_SHA="613771ce6d19d583a7adee0bcc63abed312cdad4"
-ARG KFU52_NWKIT_REPO_SHA="106a8cfd97cad993772aa4c28e7d9a87d667ff86"
+ARG KFU52_AMALGKIT_REPO_SHA=""
+ARG KFU52_CDSKIT_REPO_SHA=""
+ARG KFU52_CSUBST_REPO_SHA=""
+ARG KFU52_NWKIT_REPO_SHA=""
 ARG BUSCO_REPO_URL="https://gitlab.com/ezlab/busco.git"
 ARG BUSCO_MIRROR_REPO_URL=""
 ARG BUSCO_REPO_REF="6.0.0"
@@ -23,16 +23,16 @@ ARG PAML_REPO_REF="master"
 ARG PAML_REPO_SHA="8daeead6b55523f375d9ac56dcfac38373ef8a2e"
 ARG KFL1OU_REPO_URL="https://github.com/kfuku52/kfl1ou.git"
 ARG KFL1OU_REPO_REF=""
-ARG KFL1OU_REPO_SHA="1bf3028f204a6d58e697f58461c82ecfc7c29802"
+ARG KFL1OU_REPO_SHA=""
 ARG KFTOOLS_REPO_URL="https://github.com/kfuku52/kftools.git"
 ARG RKFTOOLS_REPO_URL="https://github.com/kfuku52/rkftools.git"
 ARG RADTE_REPO_URL="https://github.com/kfuku52/RADTE.git"
 ARG KFTOOLS_REPO_REF=""
 ARG RKFTOOLS_REPO_REF=""
 ARG RADTE_REPO_REF=""
-ARG KFTOOLS_REPO_SHA="4918fed6146b9cef1df66b5ce33de70b74454547"
-ARG RKFTOOLS_REPO_SHA="cf16e570300ec32909d8cd458119712d40bcf06f"
-ARG RADTE_REPO_SHA="873c4acb22d3decedf417bb95e3d292abccbb386"
+ARG KFTOOLS_REPO_SHA=""
+ARG RKFTOOLS_REPO_SHA=""
+ARG RADTE_REPO_SHA=""
 ARG TESTNH_TARBALL_SHA256="598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2"
 ARG CAFE5_TARBALL_SHA256="71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8"
 
@@ -116,10 +116,12 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
     PAML_REPO_SHA="${PAML_REPO_SHA}" \
     /opt/pg/scripts/ensure_iq2mc_toolchain.sh base \
  && /opt/pg/scripts/install_env.sh base "${reconciled_required}" /opt/pg/env/base.r.optional.txt r-base \
+ && kfl1ou_repo_ref="${KFL1OU_REPO_REF:-${KFU52_REPO_REF}}" \
  && TESTNH_TARBALL_SHA256="${TESTNH_TARBALL_SHA256}" \
     CAFE5_TARBALL_SHA256="${CAFE5_TARBALL_SHA256}" \
+    KFU52_REPO_REF="${KFU52_REPO_REF}" \
     KFL1OU_REPO_URL="${KFL1OU_REPO_URL}" \
-    KFL1OU_REPO_REF="${KFL1OU_REPO_REF}" \
+    KFL1OU_REPO_REF="${kfl1ou_repo_ref}" \
     KFL1OU_REPO_SHA="${KFL1OU_REPO_SHA}" \
     /opt/pg/scripts/install_nonconda_fallbacks.sh \
  && rm -f "${reconciled_required}"
@@ -134,10 +136,11 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && if [[ -f "/opt/pg/spec/required_commands.${TARGETARCH}.tsv" ]]; then runtime_required="/opt/pg/spec/required_commands.${TARGETARCH}.tsv"; fi \
  && kftools_repo_ref="${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
  && rkftools_repo_ref="${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
+ && radte_repo_ref="${RADTE_REPO_REF:-${KFU52_REPO_REF}}" \
  && busco_source_ref="${BUSCO_REPO_SHA:-${BUSCO_REPO_REF}}" \
  && kftools_source_ref="${KFTOOLS_REPO_SHA:-${kftools_repo_ref}}" \
  && rkftools_source_ref="${RKFTOOLS_REPO_SHA:-${rkftools_repo_ref}}" \
- && radte_source_ref="${RADTE_REPO_SHA:-${RADTE_REPO_REF}}" \
+ && radte_source_ref="${RADTE_REPO_SHA:-${radte_repo_ref}}" \
  && KFU52_REPO_REF="${KFU52_REPO_REF}" \
     KFU52_AMALGKIT_AUTO_SELECT_REF="${KFU52_AMALGKIT_AUTO_SELECT_REF}" \
     KFU52_AMALGKIT_BRANCH_CANDIDATES="${KFU52_AMALGKIT_BRANCH_CANDIDATES}" \

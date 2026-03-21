@@ -358,6 +358,10 @@ add_pie_charts = function(gtree, args, tree, branch_color, pie_chart_value_trans
 }
 
 append_branch_tiplab_colors = function(g, branch_color, path_species_color_table) {
+    treevis_species_parser = Sys.getenv('TREEVIS_SPECIES_PARSER', unset='taxonomic')
+    if (!nzchar(treevis_species_parser)) {
+        treevis_species_parser = 'taxonomic'
+    }
     tiplab_colors = 'black'
     branch_colors = 'black'
     if (grepl('_regime$', branch_color)) {
@@ -382,7 +386,7 @@ append_branch_tiplab_colors = function(g, branch_color, path_species_color_table
             cat('Generating species color. File was not found at:', path_species_color_table, '\n')
             has_ubar = grepl('_',g[['data']][['label']])
             spp = g[['data']][['label']][has_ubar]
-            spp = sort(unique(get_species_name(spp)))
+            spp = sort(unique(get_species_name(spp, species_parser=treevis_species_parser)))
             num_spp = length(spp)
             # https://stackoverflow.com/questions/15282580/how-to-generate-a-number-of-most-distinctive-colors-in-r
             #qual_col_pals = RColorBrewer::brewer.pal.info[RColorBrewer::brewer.pal.info[['category']] == 'qual',]
@@ -597,4 +601,3 @@ map_trimmed_to_untrimmed_nongap_index = function(seq_trim, seq_untrim, gap_code=
   }
   return(out)
 }
-

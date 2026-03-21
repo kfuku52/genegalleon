@@ -5,13 +5,91 @@ import re
 
 
 TAXONOMIC_PROXIMITY_QUALIFIERS = frozenset(("cf", "aff", "nr"))
-TAXONOMIC_INFRASPECIFIC_RANKS = frozenset(("subsp", "ssp", "var", "forma", "f"))
+TAXONOMIC_GENUS_ONLY_PLACEHOLDERS = frozenset(("sp", "spp"))
+TAXONOMIC_INFRASPECIFIC_RANKS = frozenset((
+    "subsp",
+    "var",
+    "forma",
+    "strain",
+    "substrain",
+    "serovar",
+    "serotype",
+    "serogroup",
+    "pathovar",
+    "biovar",
+    "biotype",
+    "chemovar",
+    "morphovar",
+    "cultivar",
+    "isolate",
+    "group",
+    "subgroup",
+    "complex",
+    "clade",
+    "lineage",
+    "section",
+    "series",
+    "ecotype",
+    "breed",
+))
 TAXONOMIC_INFRASPECIFIC_RANK_ALIASES = {
     "subsp": "subsp",
     "ssp": "subsp",
+    "subspecies": "subsp",
     "var": "var",
+    "variety": "var",
     "forma": "forma",
-    "f": "f",
+    "form": "forma",
+    "f": "forma",
+    "strain": "strain",
+    "substrain": "substrain",
+    "serovar": "serovar",
+    "serotype": "serotype",
+    "serogroup": "serogroup",
+    "pathovar": "pathovar",
+    "pv": "pathovar",
+    "biovar": "biovar",
+    "biotype": "biotype",
+    "chemovar": "chemovar",
+    "morphovar": "morphovar",
+    "cultivar": "cultivar",
+    "cv": "cultivar",
+    "isolate": "isolate",
+    "group": "group",
+    "subgroup": "subgroup",
+    "complex": "complex",
+    "clade": "clade",
+    "lineage": "lineage",
+    "section": "section",
+    "series": "series",
+    "ecotype": "ecotype",
+    "breed": "breed",
+}
+TAXONOMIC_DISPLAY_RANKS = {
+    "subsp": "subsp.",
+    "var": "var.",
+    "forma": "f.",
+    "strain": "strain",
+    "substrain": "substrain",
+    "serovar": "serovar",
+    "serotype": "serotype",
+    "serogroup": "serogroup",
+    "pathovar": "pathovar",
+    "biovar": "biovar",
+    "biotype": "biotype",
+    "chemovar": "chemovar",
+    "morphovar": "morphovar",
+    "cultivar": "cultivar",
+    "isolate": "isolate",
+    "group": "group",
+    "subgroup": "subgroup",
+    "complex": "complex",
+    "clade": "clade",
+    "lineage": "lineage",
+    "section": "section",
+    "series": "series",
+    "ecotype": "ecotype",
+    "breed": "breed",
 }
 
 
@@ -30,7 +108,7 @@ def tokenize_taxonomic_name(text):
 def canonical_taxonomic_token(token):
     cleaned = str(token or "").strip()
     lowered = cleaned.lower()
-    if lowered == "sp":
+    if lowered in TAXONOMIC_GENUS_ONLY_PLACEHOLDERS:
         return "sp"
     if lowered in TAXONOMIC_PROXIMITY_QUALIFIERS:
         return lowered
@@ -48,7 +126,7 @@ def species_label_from_taxonomic_text(text):
     second = normalized[1].lower()
     if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
         if len(normalized) >= 3:
-            return "{}_{}_{}".format(genus, normalized[2].lower(), second)
+            return "{}_{}_{}".format(genus, second, normalized[2].lower())
         return "{}_{}".format(genus, second)
     if second == "sp":
         label = "".join(normalized[2:]).strip()
@@ -63,8 +141,9 @@ def species_label_from_taxonomic_text(text):
             return "{}_{}_{}".format(genus, species, third)
         if third in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
             rank = TAXONOMIC_INFRASPECIFIC_RANK_ALIASES[third]
-            if len(normalized) >= 4:
-                return "{}_{}_{}_{}".format(genus, species, rank, normalized[3].lower())
+            value = "".join(normalized[3:]).strip()
+            if value != "":
+                return "{}_{}_{}_{}".format(genus, species, rank, value)
             return "{}_{}_{}".format(genus, species, rank)
     return "{}_{}".format(genus, species)
 
@@ -110,17 +189,15 @@ def scientific_name_from_label(value):
     if species_label == "":
         species_label = str(value or "").strip()
     parts = [part for part in species_label.split("_") if part != ""]
+    if len(parts) >= 3 and parts[1].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return "{} {}. {}".format(parts[0], parts[1].lower(), parts[2])
     if len(parts) >= 3 and parts[2].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
         return "{} {}. {}".format(parts[0], parts[2].lower(), parts[1])
     if len(parts) >= 3 and parts[1].lower() == "sp":
         return "{} sp. {}".format(parts[0], parts[2])
     if len(parts) >= 4 and parts[2].lower() in TAXONOMIC_INFRASPECIFIC_RANKS:
         rank = parts[2].lower()
-        if rank in ("subsp", "ssp"):
-            return "{} {} subsp. {}".format(parts[0], parts[1], parts[3])
-        if rank == "var":
-            return "{} {} var. {}".format(parts[0], parts[1], parts[3])
-        return "{} {} f. {}".format(parts[0], parts[1], parts[3])
+        return "{} {} {} {}".format(parts[0], parts[1], TAXONOMIC_DISPLAY_RANKS.get(rank, rank), parts[3])
     return species_label.replace("_", " ")
 
 
@@ -131,6 +208,10 @@ def base_species_label(value):
     parts = [part for part in species_label.split("_") if part != ""]
     if len(parts) >= 3 and parts[1].lower() == "sp":
         return parts[0]
+    if len(parts) >= 3 and parts[1].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return "{}_{}".format(parts[0], parts[2])
+    if len(parts) >= 3 and parts[2].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return "{}_{}".format(parts[0], parts[1])
     if len(parts) >= 2:
         return "{}_{}".format(parts[0], parts[1])
     return species_label

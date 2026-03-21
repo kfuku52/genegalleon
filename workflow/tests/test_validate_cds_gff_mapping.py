@@ -34,7 +34,7 @@ def load_module():
 def test_species_prefix_from_name_preserves_taxonomic_qualifiers():
     mod = load_module()
 
-    assert mod.species_prefix_from_name("Dictyostelium_discoideum_cf_demo.fa.gz") == "Dictyostelium_discoideum_cf"
+    assert mod.species_prefix_from_name("Dictyostelium_cf_discoideum_demo.fa.gz") == "Dictyostelium_cf_discoideum"
     assert mod.species_prefix_from_name("Bacillus_subtilis_subsp_subtilis_demo.gff.gz") == "Bacillus_subtilis_subsp_subtilis"
     assert mod.species_prefix_from_name("Amoeba_sp_JDSRuffled_demo.fa.gz") == "Amoeba_sp_JDSRuffled"
 

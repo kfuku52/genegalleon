@@ -649,21 +649,21 @@ def test_genome_evolution_protein_mode_preserves_qualified_species_labels_in_gen
     species_cds_dir.mkdir(parents=True)
     species_code_dir.mkdir(parents=True)
 
-    (species_cds_dir / "Tetrahymena_thermophila_cf_cds.fa").write_text(
-        ">Tetrahymena_thermophila_cf_gene1\nATGTAA\n",
+    (species_cds_dir / "Tetrahymena_cf_thermophila_cds.fa").write_text(
+        ">Tetrahymena_cf_thermophila_gene1\nATGTAA\n",
         encoding="utf-8",
     )
     (species_code_dir / "species_genetic_code.tsv").write_text(
-        "species\tgenetic_code\nTetrahymena_thermophila_cf\t6\n",
+        "species\tgenetic_code\nTetrahymena_cf_thermophila\t6\n",
         encoding="utf-8",
     )
 
     completed = _run_core(tmp_path)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "Tetrahymena_thermophila_cf.fa.gz" in completed.stdout
+    assert "Tetrahymena_cf_thermophila.fa.gz" in completed.stdout
     proteins = (tmp_path / "capture" / "proteins.fasta").read_text(encoding="utf-8")
-    assert ">Tetrahymena_thermophila_cf_gene1" in proteins
+    assert ">Tetrahymena_cf_thermophila_gene1" in proteins
     assert "MQ" in proteins
 
 

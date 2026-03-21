@@ -205,12 +205,39 @@ NCBI_DATASETS_INCLUDE_BY_LABEL = {
 }
 DOWNLOAD_LABELS = ("CDS", "GFF", "GENOME")
 TAXONOMIC_PROXIMITY_QUALIFIERS = frozenset(("cf", "aff", "nr"))
+TAXONOMIC_GENUS_ONLY_PLACEHOLDERS = frozenset(("sp", "spp"))
 TAXONOMIC_INFRASPECIFIC_RANK_ALIASES = {
     "subsp": "subsp",
     "ssp": "subsp",
+    "subspecies": "subsp",
     "var": "var",
+    "variety": "var",
     "forma": "forma",
-    "f": "f",
+    "form": "forma",
+    "f": "forma",
+    "strain": "strain",
+    "substrain": "substrain",
+    "serovar": "serovar",
+    "serotype": "serotype",
+    "serogroup": "serogroup",
+    "pathovar": "pathovar",
+    "pv": "pathovar",
+    "biovar": "biovar",
+    "biotype": "biotype",
+    "chemovar": "chemovar",
+    "morphovar": "morphovar",
+    "cultivar": "cultivar",
+    "cv": "cultivar",
+    "isolate": "isolate",
+    "group": "group",
+    "subgroup": "subgroup",
+    "complex": "complex",
+    "clade": "clade",
+    "lineage": "lineage",
+    "section": "section",
+    "series": "series",
+    "ecotype": "ecotype",
+    "breed": "breed",
 }
 RESOLVED_MANIFEST_PREFERRED_COLUMNS = (
     "provider",
@@ -367,7 +394,7 @@ def tokenize_taxonomic_name(text):
 def canonical_taxonomic_token(token):
     cleaned = str(token or "").strip()
     lowered = cleaned.lower()
-    if lowered == "sp":
+    if lowered in TAXONOMIC_GENUS_ONLY_PLACEHOLDERS:
         return "sp"
     if lowered in TAXONOMIC_PROXIMITY_QUALIFIERS:
         return lowered
@@ -387,7 +414,7 @@ def build_species_key_from_tokens(tokens):
     second = normalized[1].lower()
     if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
         if len(normalized) >= 3:
-            return "{}_{}_{}".format(genus, normalized[2], second)
+            return "{}_{}_{}".format(genus, second, normalized[2])
         return "{}_{}".format(genus, normalized[1])
     if second == "sp":
         label = "".join(normalized[2:]).strip()
@@ -402,19 +429,24 @@ def build_species_key_from_tokens(tokens):
             return "{}_{}_{}".format(genus, species, third)
         if third in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
             rank = TAXONOMIC_INFRASPECIFIC_RANK_ALIASES[third]
-            if len(normalized) >= 4:
-                return "{}_{}_{}_{}".format(genus, species, rank, normalized[3])
+            value = "".join(normalized[3:]).strip()
+            if value != "":
+                return "{}_{}_{}_{}".format(genus, species, rank, value)
             return "{}_{}_{}".format(genus, species, rank)
     return "{}_{}".format(genus, species)
 
 
 def taxonomic_name_rank_variants(rank):
     if rank == "subsp":
-        return ("subsp.", "subsp", "ssp.", "ssp")
+        return ("subsp.", "subsp", "ssp.", "ssp", "subspecies")
     if rank == "var":
-        return ("var.", "var")
+        return ("var.", "var", "variety")
     if rank == "forma":
-        return ("forma", "forma.", "f.", "f")
+        return ("forma", "forma.", "f.", "f", "form")
+    if rank == "pathovar":
+        return ("pathovar", "pv.", "pv")
+    if rank == "cultivar":
+        return ("cultivar", "cv.", "cv")
     if rank == "f":
         return ("f.", "f", "forma", "forma.")
     return (rank,)
@@ -437,6 +469,11 @@ def taxonomic_name_lookup_candidates(text):
         candidates.append(candidate)
 
     add(" ".join(parts))
+    if len(parts) >= 3 and parts[1].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        add("{} {}. {}".format(parts[0], parts[1], parts[2]))
+        add("{} {} {}".format(parts[0], parts[1], parts[2]))
+        add("{} {}".format(parts[0], parts[2]))
+        return candidates
     if len(parts) >= 3 and parts[2].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
         add("{} {}. {}".format(parts[0], parts[2], parts[1]))
         add("{} {} {}".format(parts[0], parts[2], parts[1]))
