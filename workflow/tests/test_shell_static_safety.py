@@ -1655,7 +1655,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         'if [[ -e "${file_kallisto_reference_fasta}" ]]; then',
         'ln -s "${file_kallisto_reference_fasta}" "${file_reference_fasta_link}"',
         'ln -s "${dir_amalgkit_quant}/${sp_ub}" "./quant"',
-        'grep -F -- "${sp_space}" "${file_amalgkit_metadata_filtered}"',
+        'grep -F -- "${sp_space}" "./metadata/metadata.tsv"',
         'mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"',
     ]
     for token in expected_tokens:
@@ -1665,9 +1665,9 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
 def test_transcriptome_core_sraid_metadata_filter_handles_zero_match_explicitly():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
-    assert 'grep -F -- "${sp_space}" "${file_amalgkit_metadata_filtered}" || true' in text
+    assert 'grep -F -- "${sp_space}" "./metadata/metadata.tsv" || true' in text
     assert 'if [[ $(wc -l < "./metadata.tsv") -le 1 ]]; then' in text
-    assert "No short-read metadata rows matched species" in text
+    assert "No metadata rows matched species" in text
 
 
 def test_transcriptome_core_sraid_metadata_search_accepts_non_illumina_short_reads():
@@ -1679,17 +1679,26 @@ def test_transcriptome_core_sraid_metadata_search_accepts_non_illumina_short_rea
     assert '\\"CLONE\\"[Strategy]' in text
 
 
-def test_transcriptome_core_filters_long_read_instruments_after_metadata_fetch():
+def test_transcriptome_core_detects_long_read_platforms_from_metadata():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
-    body = _function_body(text, "filter_long_read_amalgkit_metadata_rows")
+    body = _function_body(text, "detect_transcriptome_read_technology_from_metadata")
+    configure_body = _function_body(text, "configure_transcriptome_runtime_from_detected_metadata")
 
-    assert 'amalgkit_long_read_instrument_pattern="${amalgkit_long_read_instrument_pattern:-pacbio|smrt|nanopore|minion|gridion|promethion|flongle|sequel|revio}"' in text
-    assert 'file_amalgkit_metadata_filtered="${dir_tmp}/metadata/metadata.short_read.tsv"' in text
-    assert 'filter_long_read_amalgkit_metadata_rows "./metadata/metadata.tsv" "${file_amalgkit_metadata_filtered}" "${amalgkit_long_read_instrument_pattern}"' in text
-    assert 'instrument_field = "instrument" if "instrument" in fieldnames else "platform" if "platform" in fieldnames else ""' in body
-    assert 'regex = re.compile(pattern, re.IGNORECASE) if pattern else None' in body
-    assert 'if regex is not None and instrument_field and regex.search(instrument):' in body
+    assert 'file_amalgkit_read_technology="${dir_transcriptome_assembly_output}/amalgkit_read_technology/${sp_ub}_read_technology.tsv"' in text
+    assert 'file_amalgkit_read_technology_summary_sh="${dir_tmp}/metadata/read_technology.summary.sh"' in text
+    assert 'python "${gg_support_dir}/detect_amalgkit_read_technology.py" \\' in body
+    assert '--metadata "${metadata_tsv}"' in body
+    assert '--classification-out "${classification_tsv}"' in body
+    assert '--summary-sh "${summary_sh}"' in body
+    assert 'detect_transcriptome_read_technology_from_metadata "${file_amalgkit_metadata}" "${file_amalgkit_read_technology}" "${file_amalgkit_read_technology_summary_sh}"' in text
+    assert 'source "${summary_sh}"' in body
+    assert 'effective_assembly_method="rna-bloom2"' in configure_body
+    assert 'effective_assembly_method="rnaspades"' in configure_body
+    assert 'Mixed PacBio and ONT long-read runs were detected in metadata' in configure_body
+    assert 'Mixed ONT cDNA and direct-RNA runs were detected in metadata' in configure_body
+    assert 'Detected long-read platforms in metadata. Disabling run_amalgkit_quant' in configure_body
+    assert 'Detected long-read platforms in metadata. Disabling run_amalgkit_merge' in configure_body
 
 
 def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_failure():
@@ -1708,7 +1717,7 @@ def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_fa
     assert 'dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)' in body
 
 
-def test_transcriptome_entrypoint_exposes_long_read_metadata_exclusion_pattern():
+def test_transcriptome_entrypoint_exposes_auto_assembly_and_metadata_detection():
     entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
     core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
@@ -1716,9 +1725,30 @@ def test_transcriptome_entrypoint_exposes_long_read_metadata_exclusion_pattern()
     assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Set empty to disable strategy filtering.' in entrypoint
     assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}"' in core
     assert "amalgkit_sra_strategy_query" in config_vars
-    assert 'amalgkit_long_read_instrument_pattern="${amalgkit_long_read_instrument_pattern:-pacbio|smrt|nanopore|minion|gridion|promethion|flongle|sequel|revio}" # Case-insensitive regex used to exclude long-read instruments after amalgkit metadata retrieval; leave empty to disable post-filtering.' in entrypoint
-    assert 'amalgkit_long_read_instrument_pattern="${amalgkit_long_read_instrument_pattern:-pacbio|smrt|nanopore|minion|gridion|promethion|flongle|sequel|revio}"' in core
-    assert "amalgkit_long_read_instrument_pattern" in config_vars
+    assert 'assembly_method="auto" # {auto,Trinity,rnaSPAdes,RNA-Bloom2}; auto picks rnaSPAdes for short-read metadata and RNA-Bloom2 for detected PacBio/ONT metadata.' in entrypoint
+    assert 'requested_assembly_method=$(printf \'%s\' "${assembly_method:-auto}" | tr \'[:upper:]\' \'[:lower:]\' | tr \'_\' \'-\')' in core
+    assert "assembly_method" in config_vars
+    assert "amalgkit_long_read_instrument_pattern" not in entrypoint
+    assert "amalgkit_long_read_instrument_pattern" not in core
+    assert "amalgkit_long_read_instrument_pattern" not in config_vars
+
+
+def test_transcriptome_core_long_read_branch_uses_rnabloom2_and_corset():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+
+    assert 'if [[ "${effective_assembly_method}" == \'rna-bloom2\' ]]; then' in text
+    assert 'rnabloom_input_args=(-long)' in text
+    assert 'rnabloom_extra_args+=(-lrpb)' in text
+    assert 'rnabloom_extra_args+=(-stranded)' in text
+    assert 'rnabloom.transcripts.fa' in text
+    assert "task='Corset clustering of long-read transcripts'" in text
+    assert 'corset_minimap2_preset="map-pb"' in text
+    assert 'corset_minimap2_preset="map-ont"' in text
+    assert 'corset \\' in text
+    assert 'file_corset_clusters="${dir_transcriptome_assembly_output}/corset_clusters/${sp_ub}_corset.clusters.tsv"' in text
+    assert 'python "${gg_support_dir}/rename_rnabloom_transcripts.py" \\' in text
+    assert 'aggregate_expression="\\-i[0-9].*"' in text
 
 
 def test_transcriptome_entrypoint_exposes_amalgkit_ncbi_concurrency_limits():

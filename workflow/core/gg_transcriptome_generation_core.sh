@@ -26,10 +26,10 @@ gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 source "${gg_support_dir}/gg_busco.sh"
 delete_tmp_dir=${delete_tmp_dir:-1}
 mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-sraid}" | tr '[:upper:]' '[:lower:]')
+requested_assembly_method=$(printf '%s' "${assembly_method:-auto}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 amalgkit_metadata_max_concurrent_jobs="${amalgkit_metadata_max_concurrent_jobs:-10}"
 amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-10}"
 amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\"RNA-seq\"[Strategy] OR \"EST\"[Strategy] OR \"CLONE\"[Strategy]}"
-amalgkit_long_read_instrument_pattern="${amalgkit_long_read_instrument_pattern:-pacbio|smrt|nanopore|minion|gridion|promethion|flongle|sequel|revio}"
 busco_lineage_resolved=""
 contamination_removal_rank_for_remove_contaminated_sequences="$(
   gg_normalize_contamination_removal_rank_for_remove_contaminated_sequences "${contamination_removal_rank}"
@@ -37,6 +37,26 @@ contamination_removal_rank_for_remove_contaminated_sequences="$(
 contamination_removal_rank_for_amalgkit="$(
   gg_normalize_contamination_removal_rank_for_amalgkit "${contamination_removal_rank}"
 )"
+effective_assembly_method=""
+detected_metadata_run_count=0
+detected_short_read_run_count=0
+detected_pacbio_run_count=0
+detected_ont_cdna_run_count=0
+detected_ont_direct_rna_run_count=0
+detected_has_long_reads=0
+detected_has_short_reads=0
+detected_has_pacbio=0
+detected_has_ont=0
+detected_has_ont_cdna=0
+detected_has_ont_direct_rna=0
+detected_input_class="unknown"
+detected_metadata_instrument_field="none"
+classified_short_single_fastq_files=()
+classified_short_left_fastq_files=()
+classified_short_right_fastq_files=()
+classified_long_fastq_files=()
+classified_pacbio_fastq_files=()
+classified_ont_fastq_files=()
 
 resolve_busco_lineage_for_current_species() {
   if [[ -n "${busco_lineage_resolved}" ]]; then
@@ -73,48 +93,206 @@ invalidate_cached_query_table_if_prefix_mismatch() {
   fi
 }
 
-filter_long_read_amalgkit_metadata_rows() {
-  local metadata_in="$1"
-  local metadata_out="$2"
-  local exclusion_pattern="$3"
-  python - "${metadata_in}" "${metadata_out}" "${exclusion_pattern}" <<'PY'
-import csv
-import re
-import sys
-from pathlib import Path
+get_total_fastq_len_from_files() {
+  if [[ $# -eq 0 ]]; then
+    echo 0
+    return 0
+  fi
 
-src = Path(sys.argv[1])
-dst = Path(sys.argv[2])
-pattern = str(sys.argv[3] or "").strip()
-regex = re.compile(pattern, re.IGNORECASE) if pattern else None
+  local sum_len
+  sum_len=$(seqkit stats --tabular "$@" \
+    | awk -F '\t' '
+      NR == 1 {
+        for (i = 1; i <= NF; i++) {
+          if ($i == "sum_len") {
+            col = i
+          }
+        }
+        next
+      }
+      NR > 1 && col > 0 {
+        gsub(/,/, "", $col)
+        sum += $col
+      }
+      END {
+        printf "%.0f\n", sum + 0
+      }
+    ')
+  echo "${sum_len}"
+}
 
-with src.open("rt", encoding="utf-8", newline="") as handle_in:
-    reader = csv.DictReader(handle_in, delimiter="\t")
-    fieldnames = list(reader.fieldnames or [])
-    instrument_field = "instrument" if "instrument" in fieldnames else "platform" if "platform" in fieldnames else ""
-    with dst.open("wt", encoding="utf-8", newline="") as handle_out:
-        if not fieldnames:
-            handle_out.write("")
-        else:
-            writer = csv.DictWriter(handle_out, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
-            writer.writeheader()
-            kept = 0
-            excluded = 0
-            for row in reader:
-                instrument = str(row.get(instrument_field, "") or "")
-                if regex is not None and instrument_field and regex.search(instrument):
-                    excluded += 1
-                    continue
-                writer.writerow({field: str(row.get(field, "") or "") for field in fieldnames})
-                kept += 1
-            print(
-                "Filtered amalgkit metadata rows: kept={} excluded_long_read={} instrument_column={}".format(
-                    kept,
-                    excluded,
-                    instrument_field or "none",
-                )
-            )
-PY
+csv_join_from_array() {
+  local out=""
+  local item=""
+  for item in "$@"; do
+    if [[ -n "${out}" ]]; then
+      out="${out},"
+    fi
+    out="${out}${item}"
+  done
+  printf '%s\n' "${out}"
+}
+
+detect_transcriptome_read_technology_from_metadata() {
+  local metadata_tsv="$1"
+  local classification_tsv="$2"
+  local summary_sh="$3"
+
+  python "${gg_support_dir}/detect_amalgkit_read_technology.py" \
+    --metadata "${metadata_tsv}" \
+    --classification-out "${classification_tsv}" \
+    --summary-sh "${summary_sh}"
+
+  # shellcheck disable=SC1090
+  source "${summary_sh}"
+}
+
+load_classified_getfastq_files() {
+  local classification_tsv="$1"
+  local run=""
+  local read_class=""
+  local _platform_family=""
+  local _long_read=""
+  local _ont_direct_rna=""
+  local _lib_layout=""
+  local _instrument_value=""
+
+  classified_short_single_fastq_files=()
+  classified_short_left_fastq_files=()
+  classified_short_right_fastq_files=()
+  classified_long_fastq_files=()
+  classified_pacbio_fastq_files=()
+  classified_ont_fastq_files=()
+
+  while IFS=$'\t' read -r run read_class _platform_family _long_read _ont_direct_rna _lib_layout _instrument_value; do
+    local run_matches=()
+    local match=""
+    local single_fastq=""
+    local left_fastq=""
+    local right_fastq=""
+
+    if [[ "${run}" == "run" || -z "${run}" ]]; then
+      continue
+    fi
+
+    while IFS= read -r match; do
+      run_matches+=( "${match}" )
+    done < <(
+      find "${dir_amalgkit_getfastq_sp}" -type f \
+        \( -name "${run}.amalgkit.fastq.gz" -o -name "${run}_1.amalgkit.fastq.gz" -o -name "${run}_2.amalgkit.fastq.gz" \) \
+        | sort
+    )
+
+    if [[ ${#run_matches[@]} -eq 0 ]]; then
+      continue
+    fi
+
+    for match in "${run_matches[@]}"; do
+      case "$(basename "${match}")" in
+        "${run}.amalgkit.fastq.gz")
+          single_fastq="${match}"
+          ;;
+        "${run}_1.amalgkit.fastq.gz")
+          left_fastq="${match}"
+          ;;
+        "${run}_2.amalgkit.fastq.gz")
+          right_fastq="${match}"
+          ;;
+      esac
+    done
+
+    case "${read_class}" in
+      short_read)
+        if [[ -n "${left_fastq}" && -n "${right_fastq}" ]]; then
+          classified_short_left_fastq_files+=( "${left_fastq}" )
+          classified_short_right_fastq_files+=( "${right_fastq}" )
+        elif [[ -n "${single_fastq}" ]]; then
+          classified_short_single_fastq_files+=( "${single_fastq}" )
+        fi
+        ;;
+      pacbio|ont_cdna|ont_direct_rna)
+        if [[ -n "${single_fastq}" ]]; then
+          classified_long_fastq_files+=( "${single_fastq}" )
+          if [[ "${read_class}" == "pacbio" ]]; then
+            classified_pacbio_fastq_files+=( "${single_fastq}" )
+          else
+            classified_ont_fastq_files+=( "${single_fastq}" )
+          fi
+        else
+          echo "Warning: long-read run ${run} did not produce a single-end FASTQ. Passing all matching files through RNA-Bloom2/Corset."
+          for match in "${run_matches[@]}"; do
+            classified_long_fastq_files+=( "${match}" )
+            if [[ "${read_class}" == "pacbio" ]]; then
+              classified_pacbio_fastq_files+=( "${match}" )
+            else
+              classified_ont_fastq_files+=( "${match}" )
+            fi
+          done
+        fi
+        ;;
+    esac
+  done < "${classification_tsv}"
+}
+
+configure_transcriptome_runtime_from_detected_metadata() {
+  case "${requested_assembly_method}" in
+    auto)
+      if [[ ${detected_has_long_reads} -eq 1 ]]; then
+        effective_assembly_method="rna-bloom2"
+      else
+        effective_assembly_method="rnaspades"
+      fi
+      ;;
+    trinity|rnaspades)
+      effective_assembly_method="${requested_assembly_method}"
+      ;;
+    rna-bloom2|rnabloom2)
+      effective_assembly_method="rna-bloom2"
+      ;;
+    *)
+      echo "Invalid value for 'assembly_method'. Please specify one of auto, Trinity, rnaSPAdes, or RNA-Bloom2."
+      exit 1
+      ;;
+  esac
+
+  echo "Detected metadata instrument column: ${detected_metadata_instrument_field}"
+  echo "Detected transcriptome input class: ${detected_input_class}"
+  echo "Detected run counts: total=${detected_metadata_run_count} short=${detected_short_read_run_count} pacbio=${detected_pacbio_run_count} ont_cdna=${detected_ont_cdna_run_count} ont_direct_rna=${detected_ont_direct_rna_run_count}"
+
+  if [[ ${detected_has_pacbio} -eq 1 && ${detected_has_ont} -eq 1 ]]; then
+    echo "Mixed PacBio and ONT long-read runs were detected in metadata: ${file_amalgkit_metadata}. Split these technologies into separate transcriptome-generation tasks. Exiting."
+    exit 1
+  fi
+  if [[ ${detected_has_ont_cdna} -eq 1 && ${detected_has_ont_direct_rna} -eq 1 ]]; then
+    echo "Mixed ONT cDNA and direct-RNA runs were detected in metadata: ${file_amalgkit_metadata}. Split these protocols into separate transcriptome-generation tasks. Exiting."
+    exit 1
+  fi
+
+  if [[ ${detected_has_long_reads} -eq 1 ]]; then
+    if [[ "${effective_assembly_method}" != "rna-bloom2" ]]; then
+      echo "Long-read platforms were detected from metadata, but assembly_method=${assembly_method:-auto} resolves to ${effective_assembly_method}."
+      echo "Use assembly_method=auto or assembly_method=RNA-Bloom2 for PacBio/ONT transcriptome assembly. Exiting."
+      exit 1
+    fi
+    if [[ ${detected_has_short_reads} -eq 1 ]]; then
+      echo "Mixed short-read and long-read runs were detected. RNA-Bloom2 assembly will use the long-read FASTQ files only."
+    fi
+    if [[ ${run_amalgkit_quant} -eq 1 ]]; then
+      echo "Detected long-read platforms in metadata. Disabling run_amalgkit_quant because the current quantification path is short-read kallisto-based."
+      run_amalgkit_quant=0
+    fi
+    if [[ ${run_amalgkit_merge} -eq 1 ]]; then
+      echo "Detected long-read platforms in metadata. Disabling run_amalgkit_merge because the current merge path depends on kallisto quant outputs."
+      run_amalgkit_merge=0
+    fi
+  else
+    if [[ "${effective_assembly_method}" == "rna-bloom2" ]]; then
+      echo "assembly_method=RNA-Bloom2 is currently reserved for long-read metadata-detected inputs. The metadata for ${sp_ub} did not indicate PacBio/ONT runs. Exiting."
+      exit 1
+    fi
+  fi
+
+  echo "Effective assembly method: ${effective_assembly_method}"
 }
 
 download_public_original_fastqs_for_metadata() {
@@ -438,14 +616,17 @@ dir_amalgkit_getfastq_semaphore="${dir_amalgkit_download_dir}/locks/ncbi/amalgki
 dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"
 file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"
 file_generated_amalgkit_metadata="${dir_generated_amalgkit_metadata}/${sp_ub}_metadata.tsv"
-file_amalgkit_metadata_filtered="${dir_tmp}/metadata/metadata.short_read.tsv"
 if [[ "${selected_transcriptome_mode}" == "metadata" ]]; then
   file_amalgkit_metadata="${file_input_amalgkit_metadata}"
 else
   file_amalgkit_metadata="${file_generated_amalgkit_metadata}"
 fi
+file_amalgkit_read_technology="${dir_transcriptome_assembly_output}/amalgkit_read_technology/${sp_ub}_read_technology.tsv"
+file_amalgkit_read_technology_summary_sh="${dir_tmp}/metadata/read_technology.summary.sh"
 file_amalgkit_getfastq_safely_removed_flag=${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}_safely_removed.txt
 file_isoform="${dir_transcriptome_assembly_output}/assembled_transcripts_with_isoforms/${sp_ub}_isoform.fa.gz"
+file_corset_clusters="${dir_transcriptome_assembly_output}/corset_clusters/${sp_ub}_corset.clusters.tsv"
+file_corset_counts="${dir_transcriptome_assembly_output}/corset_counts/${sp_ub}_corset.counts.tsv"
 file_longestcds="${dir_transcriptome_assembly_output}/longest_cds/${sp_ub}_longestCDS.fa.gz"
 file_longestcds_transcript="${dir_transcriptome_assembly_output}/longest_cds_transcript/${sp_ub}_longestCDS.transcript.fa.gz"
 file_longestcds_fx2tab="${dir_transcriptome_assembly_output}/longest_cds_fx2tab/${sp_ub}_longestCDS.fx2tab_cds.tsv"
@@ -483,7 +664,6 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
     fi
     echo "Entrez search string: ${search_string}"
     echo "Entrez strategy filter: ${amalgkit_sra_strategy_query:-disabled}"
-    echo "Long-read instrument exclusion regex: ${amalgkit_long_read_instrument_pattern:-disabled}"
     echo "amalgkit metadata max concurrent jobs: ${amalgkit_metadata_max_concurrent_jobs}"
 
     if ! gg_run_with_shared_semaphore "${dir_amalgkit_metadata_semaphore}" "${amalgkit_metadata_max_concurrent_jobs}" "amalgkit metadata NCBI access (${sp_ub})" \
@@ -495,15 +675,13 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
       exit 1
     fi
 
-    filter_long_read_amalgkit_metadata_rows "./metadata/metadata.tsv" "${file_amalgkit_metadata_filtered}" "${amalgkit_long_read_instrument_pattern}"
-
     sp_space="${sp_ub//_/ }"
     {
-      head -n 1 "${file_amalgkit_metadata_filtered}"
-      grep -F -- "${sp_space}" "${file_amalgkit_metadata_filtered}" || true
+      head -n 1 "./metadata/metadata.tsv"
+      grep -F -- "${sp_space}" "./metadata/metadata.tsv" || true
     } | sed -e "s/\t\t\tno\t/\tyes\tyes\tno\t/g" > "./metadata.tsv"
     if [[ $(wc -l < "./metadata.tsv") -le 1 ]]; then
-      echo "No short-read metadata rows matched species '${sp_space}' in ${file_amalgkit_metadata_filtered}. Exiting."
+      echo "No metadata rows matched species '${sp_space}' in ./metadata/metadata.tsv. Exiting."
       echo "If the accession exists in SRA but was excluded by the Entrez strategy clause, relax amalgkit_sra_strategy_query or set it empty to disable strategy filtering."
       echo 'If the run is small-RNA/miRNA rather than transcriptome assembly input, prefer a different accession or provide explicit metadata/FASTQ inputs instead of mode_transcriptome_assembly="sraid".'
       exit 1
@@ -531,6 +709,14 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
 else
   gg_step_skip "${task}"
 fi
+
+ensure_parent_dir "${file_amalgkit_read_technology}"
+ensure_parent_dir "${file_amalgkit_read_technology_summary_sh}"
+if [[ -e "${file_amalgkit_read_technology_summary_sh}" ]]; then
+  rm -f -- "${file_amalgkit_read_technology_summary_sh}"
+fi
+detect_transcriptome_read_technology_from_metadata "${file_amalgkit_metadata}" "${file_amalgkit_read_technology}" "${file_amalgkit_read_technology_summary_sh}"
+configure_transcriptome_runtime_from_detected_metadata
 
 task="amalgkit getfastq"
 amalgkit_fastq_files=()
@@ -575,91 +761,6 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
     exit 1
   fi
 
-  mapfile -t files_right < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*_2.amalgkit.fastq.gz" | sort)
-  if [[ ${#files_right[@]} -eq 0 ]]; then
-    echo "Paired-end samples were not detected. SE reads will be used for transcriptome assembly."
-    lib_layout='single'
-  else
-    echo "Paired-end samples were detected. PE reads will be used for transcriptome assembly and SE reads, if any, will not be used."
-    lib_layout='paired'
-  fi
-
-  selected_fastq_dir="./tmp_selected_fastq"
-  if [[ -e "${selected_fastq_dir}" ]]; then
-    rm -rf -- "${selected_fastq_dir}"
-  fi
-  mkdir -p "${selected_fastq_dir}"
-  if [[ ${assembly_method} == "rnaSPAdes" && ${protocol_rna_seq} == "mixed" ]]; then
-    if [[ ${lib_layout} == 'single' ]]; then
-      mapfile -t candidate_fastq_files < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" | sort)
-    elif [[ ${lib_layout} == 'paired' ]]; then
-      mapfile -t candidate_fastq_files < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*_1.amalgkit.fastq.gz" | sort)
-    fi
-    n_pair=${#candidate_fastq_files[@]}
-    if [[ ${n_pair} -ge 10 ]]; then
-      echo "Selecting top 9 ${lib_layout}-end fastq files by size, as rnaSPAdes accepts fewer than 10 libraries with different protocols."
-      echo "For details, please refer to the rnaSPAdes manual: https://ablab.github.io/spades/rna.html"
-      echo "Selected fastq files:"
-      if [[ ${lib_layout} == 'single' ]]; then
-        find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" -exec du -b {} + |
-          sort -nr | head -n 9 | cut -f2 | while read -r file; do
-          cp_out "${file}" "${selected_fastq_dir}"
-          echo "${file}"
-        done
-      elif [[ ${lib_layout} == 'paired' ]]; then
-        find "${dir_amalgkit_getfastq_sp}" -type f -name "*_1.amalgkit.fastq.gz" -exec du -b {} + |
-          sort -nr | head -n 9 | cut -f2 | while read -r file1; do
-          file2="${file1/_1.amalgkit.fastq.gz/_2.amalgkit.fastq.gz}"
-          cp_out "${file1}" "${selected_fastq_dir}"
-          echo "${file1}"
-          cp_out "${file2}" "${selected_fastq_dir}"
-          echo "${file2}"
-        done
-      fi
-    else
-      echo "All ${lib_layout}-end fastq files will be used for transcriptome assembly."
-      selected_fastq_dir=${dir_amalgkit_getfastq_sp}
-    fi
-  else
-    echo "All ${lib_layout}-end fastq files will be used for transcriptome assembly."
-    selected_fastq_dir=${dir_amalgkit_getfastq_sp}
-  fi
-
-  if [[ ${lib_layout} == 'single' ]]; then
-    total_fastq_len=$(get_total_fastq_len "${selected_fastq_dir}" "*.amalgkit.fastq.gz")
-  elif [[ ${lib_layout} == 'paired' ]]; then
-    total_fastq_len1=$(get_total_fastq_len "${selected_fastq_dir}" "*_1.amalgkit.fastq.gz")
-    total_fastq_len2=$(get_total_fastq_len "${selected_fastq_dir}" "*_2.amalgkit.fastq.gz")
-    total_fastq_len=$((${total_fastq_len1} + ${total_fastq_len2}))
-  fi
-  max_assembly_input_fastq_size="${max_assembly_input_fastq_size//,/}"
-  if [[ ${total_fastq_len} -gt ${max_assembly_input_fastq_size} ]]; then
-    echo "Total ${lib_layout} fastq length is ${total_fastq_len} bp, which is greater than ${max_assembly_input_fastq_size} bp."
-    echo "Only ${max_assembly_input_fastq_size} bp will be used."
-    assembly_input_fastq_dir="./tmp_assembly_input_fastq"
-    if [[ -e "${assembly_input_fastq_dir}" ]]; then
-      rm -rf -- "${assembly_input_fastq_dir}"
-    fi
-    mkdir -p "${assembly_input_fastq_dir}"
-    proportion=$(awk -v max="${max_assembly_input_fastq_size}" -v total="${total_fastq_len}" 'BEGIN {printf "%.3f\n", max/total}')
-    echo "Proportion of fastq reads to be used: ${proportion} (${max_assembly_input_fastq_size}/${total_fastq_len})"
-    files=()
-    if [[ ${lib_layout} == 'single' ]]; then
-      mapfile -t files < <(find "${selected_fastq_dir}" -type f -name "*.amalgkit.fastq.gz" | sort)
-    elif [[ ${lib_layout} == 'paired' ]]; then
-      mapfile -t files1 < <(find "${selected_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz" | sort)
-      mapfile -t files2 < <(find "${selected_fastq_dir}" -type f -name "*_2.amalgkit.fastq.gz" | sort)
-      files=("${files1[@]}" "${files2[@]}")
-    fi
-    for file in "${files[@]}"; do
-      seqkit sample --proportion "${proportion}" --rand-seed 11 --out-file "${assembly_input_fastq_dir}/$(basename "${file}")" "${file}"
-    done
-    echo "Total fastq length of the subsampled fastq files: $(get_total_fastq_len "${assembly_input_fastq_dir}" "*.amalgkit.fastq.gz") bp"
-  else
-    echo "Total fastq length is ${total_fastq_len} bp, which is less than ${max_assembly_input_fastq_size} bp. All fastq reads will be used."
-    assembly_input_fastq_dir=${selected_fastq_dir}
-  fi
-
   assembly_cpus=$((${GG_TASK_CPUS} - ${assembly_cpu_offset}))
   assembly_mem_gb=$((${GG_MEM_TOTAL_GB} - ${assembly_ram_offset}))
   if [[ ${assembly_cpus} -lt 1 ]]; then
@@ -675,121 +776,329 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
   echo "${GG_TASK_CPUS} CPUs and ${GG_MEM_TOTAL_GB}G RAM are allocated to this job."
   echo "${assembly_cpus} CPUs and ${assembly_mem_gb}G RAM are used for transcriptome assembly."
 
-  files_single=()
-  files_left=()
-  files_right=()
-  mapfile -t files_single < <(find "${assembly_input_fastq_dir}" -type f -name "*.amalgkit.fastq.gz" | sort)
-  mapfile -t files_left < <(find "${assembly_input_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz" | sort)
-  mapfile -t files_right < <(find "${assembly_input_fastq_dir}" -type f -name "*_2.amalgkit.fastq.gz" | sort)
-
-  if [[ ${lib_layout} == 'single' && ${#files_single[@]} -eq 0 ]]; then
-    echo "No single-end fastq files were found for transcriptome assembly. Exiting."
-    exit 1
-  fi
-  if [[ ${lib_layout} == 'paired' ]]; then
-    if [[ ${#files_left[@]} -eq 0 || ${#files_right[@]} -eq 0 || ${#files_left[@]} -ne ${#files_right[@]} ]]; then
-      echo "Paired-end input files were not detected correctly in ${assembly_input_fastq_dir}."
-      echo "Detected left/right counts: ${#files_left[@]}/${#files_right[@]}. Exiting."
+  if [[ "${effective_assembly_method}" == 'rna-bloom2' ]]; then
+    files_long=()
+    load_classified_getfastq_files "${file_amalgkit_read_technology}"
+    files_long=("${classified_long_fastq_files[@]}")
+    if [[ ${#files_long[@]} -eq 0 ]]; then
+      echo "No long-read FASTQ files were detected for RNA-Bloom2 assembly. Exiting."
       exit 1
     fi
-  fi
 
-  if [[ ${assembly_method} == 'Trinity' ]]; then
-    if [[ ${lib_layout} == 'single' ]]; then
-      in_single="$(
-        IFS=","
-        echo "${files_single[*]}"
-      )"
-    elif [[ ${lib_layout} == 'paired' ]]; then
-      in_left="$(
-        IFS=","
-        echo "${files_left[*]}"
-      )"
-      in_right="$(
-        IFS=","
-        echo "${files_right[*]}"
-      )"
-    fi
-    if [[ ${lib_layout} == 'single' ]]; then
-      Trinity \
-        --seqType fq \
-        --CPU "${assembly_cpus}" \
-        --max_memory "${assembly_mem_gb}G" \
-        --min_contig_length 200 \
-        --output trinity \
-        --full_cleanup \
-        --NO_SEQTK \
-        --bflyHeapSpaceMax "${bflyHeapSpaceMax}G" \
-        --bflyGCThreads 1 \
-        --bflyCalculateCPU \
-        --single "${in_single}"
+    total_fastq_len=$(get_total_fastq_len_from_files "${files_long[@]}")
+    max_assembly_input_fastq_size="${max_assembly_input_fastq_size//,/}"
+    if [[ ${total_fastq_len} -gt ${max_assembly_input_fastq_size} ]]; then
+      echo "Total long-read fastq length is ${total_fastq_len} bp, which is greater than ${max_assembly_input_fastq_size} bp."
+      echo "Only ${max_assembly_input_fastq_size} bp will be used."
+      assembly_input_fastq_dir="./tmp_assembly_input_fastq"
+      if [[ -e "${assembly_input_fastq_dir}" ]]; then
+        rm -rf -- "${assembly_input_fastq_dir}"
+      fi
+      mkdir -p "${assembly_input_fastq_dir}"
+      proportion=$(awk -v max="${max_assembly_input_fastq_size}" -v total="${total_fastq_len}" 'BEGIN {printf "%.3f\n", max/total}')
+      echo "Proportion of long-read fastq reads to be used: ${proportion} (${max_assembly_input_fastq_size}/${total_fastq_len})"
+      for file in "${files_long[@]}"; do
+        seqkit sample --proportion "${proportion}" --rand-seed 11 --out-file "${assembly_input_fastq_dir}/$(basename "${file}")" "${file}"
+      done
+      mapfile -t files_long < <(find "${assembly_input_fastq_dir}" -type f -name "*.amalgkit.fastq.gz" | sort)
+      echo "Total fastq length of the subsampled long-read fastq files: $(get_total_fastq_len_from_files "${files_long[@]}") bp"
     else
-      Trinity \
-        --seqType fq \
-        --CPU "${assembly_cpus}" \
-        --max_memory "${assembly_mem_gb}G" \
-        --min_contig_length 200 \
-        --output trinity \
-        --full_cleanup \
-        --NO_SEQTK \
-        --bflyHeapSpaceMax "${bflyHeapSpaceMax}G" \
-        --bflyGCThreads 1 \
-        --bflyCalculateCPU \
-        --left "${in_left}" \
-        --right "${in_right}"
+      echo "Total long-read fastq length is ${total_fastq_len} bp, which is less than ${max_assembly_input_fastq_size} bp. All long-read fastq reads will be used."
     fi
-    # For --NO_SEQTK, see https://github.com/trinityrnaseq/trinityrnaseq/issues/787
-    if [[ -s "${dir_tmp}/trinity.Trinity.fasta" ]]; then
-      seqkit seq --threads "${GG_TASK_CPUS}" "${dir_tmp}/trinity.Trinity.fasta" --out-file "tmp.isoform.fa.gz"
+
+    rnabloom_input_args=(-long)
+    rnabloom_input_args+=("${files_long[@]}")
+    rnabloom_extra_args=()
+    if [[ ${detected_has_pacbio} -eq 1 ]]; then
+      rnabloom_extra_args+=(-lrpb)
+    fi
+    if [[ ${detected_has_ont_direct_rna} -eq 1 ]]; then
+      rnabloom_extra_args+=(-stranded)
+    fi
+    if [[ -d "${dir_tmp}/rnabloom_output" ]]; then
+      rm -rf -- "${dir_tmp}/rnabloom_output"
+    fi
+    rnabloom \
+      "${rnabloom_extra_args[@]}" \
+      "${rnabloom_input_args[@]}" \
+      -t "${assembly_cpus}" \
+      -outdir rnabloom_output
+    if [[ -s "${dir_tmp}/rnabloom_output/rnabloom.transcripts.fa" ]]; then
+      seqkit seq --threads "${GG_TASK_CPUS}" "${dir_tmp}/rnabloom_output/rnabloom.transcripts.fa" --out-file "tmp.isoform.fa.gz"
       mv_out "tmp.isoform.fa.gz" "${file_isoform}"
-    fi
-  elif [[ ${assembly_method} == 'rnaSPAdes' ]]; then
-    rnaspades_input_args=()
-    if [[ ${protocol_rna_seq} == "same" ]]; then
-      if [[ ${lib_layout} == 'single' ]]; then
-        for i in "${!files_single[@]}"; do
-          rnaspades_input_args+=(--s1 "${files_single[i]}")
-        done
-      elif [[ ${lib_layout} == 'paired' ]]; then
-        for i in "${!files_left[@]}"; do
-          rnaspades_input_args+=(--pe1-1 "${files_left[i]}" --pe1-2 "${files_right[i]}")
-        done
-      fi
-    elif [[ ${protocol_rna_seq} == "mixed" ]]; then
-      if [[ ${lib_layout} == 'single' ]]; then
-        for i in "${!files_single[@]}"; do
-          j=$((i + 1))
-          rnaspades_input_args+=("--s${j}" "${files_single[i]}")
-        done
-      elif [[ ${lib_layout} == 'paired' ]]; then
-        for i in "${!files_left[@]}"; do
-          j=$((i + 1))
-          rnaspades_input_args+=("--pe${j}-1" "${files_left[i]}" "--pe${j}-2" "${files_right[i]}")
-        done
-      fi
     else
-      echo "Invalid value for 'protocol_rna_seq'. Please specify either 'same' or 'mixed'."
-      echo "Exiting."
+      echo "RNA-Bloom2 did not produce rnabloom.transcripts.fa in: ${dir_tmp}/rnabloom_output. Exiting."
       exit 1
-    fi
-    if [[ -d "${dir_tmp}/rnaspades_output" ]]; then
-      rm -rf -- "${dir_tmp}/rnaspades_output"
-    fi
-    rnaspades.py \
-      --threads "${assembly_cpus}" \
-      --memory "${assembly_mem_gb}" \
-      -o rnaspades_output \
-      "${rnaspades_input_args[@]}"
-    if [[ -s "${dir_tmp}/rnaspades_output/transcripts.fasta" ]]; then
-      seqkit seq --threads "${GG_TASK_CPUS}" "${dir_tmp}/rnaspades_output/transcripts.fasta" --out-file "tmp.isoform.fa.gz"
-      mv_out "tmp.isoform.fa.gz" "${file_isoform}"
     fi
   else
-    echo "Invalid value for 'assembly_method'. Please specify either 'Trinity' or 'rnaSPAdes'."
-    echo "Exiting."
+    mapfile -t files_right < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*_2.amalgkit.fastq.gz" | sort)
+    if [[ ${#files_right[@]} -eq 0 ]]; then
+      echo "Paired-end samples were not detected. SE reads will be used for transcriptome assembly."
+      lib_layout='single'
+    else
+      echo "Paired-end samples were detected. PE reads will be used for transcriptome assembly and SE reads, if any, will not be used."
+      lib_layout='paired'
+    fi
+
+    selected_fastq_dir="./tmp_selected_fastq"
+    if [[ -e "${selected_fastq_dir}" ]]; then
+      rm -rf -- "${selected_fastq_dir}"
+    fi
+    mkdir -p "${selected_fastq_dir}"
+    if [[ "${effective_assembly_method}" == "rnaspades" && ${protocol_rna_seq} == "mixed" ]]; then
+      if [[ ${lib_layout} == 'single' ]]; then
+        mapfile -t candidate_fastq_files < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" | sort)
+      elif [[ ${lib_layout} == 'paired' ]]; then
+        mapfile -t candidate_fastq_files < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*_1.amalgkit.fastq.gz" | sort)
+      fi
+      n_pair=${#candidate_fastq_files[@]}
+      if [[ ${n_pair} -ge 10 ]]; then
+        echo "Selecting top 9 ${lib_layout}-end fastq files by size, as rnaSPAdes accepts fewer than 10 libraries with different protocols."
+        echo "For details, please refer to the rnaSPAdes manual: https://ablab.github.io/spades/rna.html"
+        echo "Selected fastq files:"
+        if [[ ${lib_layout} == 'single' ]]; then
+          find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" -exec du -b {} + |
+            sort -nr | head -n 9 | cut -f2 | while read -r file; do
+            cp_out "${file}" "${selected_fastq_dir}"
+            echo "${file}"
+          done
+        elif [[ ${lib_layout} == 'paired' ]]; then
+          find "${dir_amalgkit_getfastq_sp}" -type f -name "*_1.amalgkit.fastq.gz" -exec du -b {} + |
+            sort -nr | head -n 9 | cut -f2 | while read -r file1; do
+            file2="${file1/_1.amalgkit.fastq.gz/_2.amalgkit.fastq.gz}"
+            cp_out "${file1}" "${selected_fastq_dir}"
+            echo "${file1}"
+            cp_out "${file2}" "${selected_fastq_dir}"
+            echo "${file2}"
+          done
+        fi
+      else
+        echo "All ${lib_layout}-end fastq files will be used for transcriptome assembly."
+        selected_fastq_dir=${dir_amalgkit_getfastq_sp}
+      fi
+    else
+      echo "All ${lib_layout}-end fastq files will be used for transcriptome assembly."
+      selected_fastq_dir=${dir_amalgkit_getfastq_sp}
+    fi
+
+    if [[ ${lib_layout} == 'single' ]]; then
+      total_fastq_len=$(get_total_fastq_len "${selected_fastq_dir}" "*.amalgkit.fastq.gz")
+    elif [[ ${lib_layout} == 'paired' ]]; then
+      total_fastq_len1=$(get_total_fastq_len "${selected_fastq_dir}" "*_1.amalgkit.fastq.gz")
+      total_fastq_len2=$(get_total_fastq_len "${selected_fastq_dir}" "*_2.amalgkit.fastq.gz")
+      total_fastq_len=$((${total_fastq_len1} + ${total_fastq_len2}))
+    fi
+    max_assembly_input_fastq_size="${max_assembly_input_fastq_size//,/}"
+    if [[ ${total_fastq_len} -gt ${max_assembly_input_fastq_size} ]]; then
+      echo "Total ${lib_layout} fastq length is ${total_fastq_len} bp, which is greater than ${max_assembly_input_fastq_size} bp."
+      echo "Only ${max_assembly_input_fastq_size} bp will be used."
+      assembly_input_fastq_dir="./tmp_assembly_input_fastq"
+      if [[ -e "${assembly_input_fastq_dir}" ]]; then
+        rm -rf -- "${assembly_input_fastq_dir}"
+      fi
+      mkdir -p "${assembly_input_fastq_dir}"
+      proportion=$(awk -v max="${max_assembly_input_fastq_size}" -v total="${total_fastq_len}" 'BEGIN {printf "%.3f\n", max/total}')
+      echo "Proportion of fastq reads to be used: ${proportion} (${max_assembly_input_fastq_size}/${total_fastq_len})"
+      files=()
+      if [[ ${lib_layout} == 'single' ]]; then
+        mapfile -t files < <(find "${selected_fastq_dir}" -type f -name "*.amalgkit.fastq.gz" | sort)
+      elif [[ ${lib_layout} == 'paired' ]]; then
+        mapfile -t files1 < <(find "${selected_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz" | sort)
+        mapfile -t files2 < <(find "${selected_fastq_dir}" -type f -name "*_2.amalgkit.fastq.gz" | sort)
+        files=("${files1[@]}" "${files2[@]}")
+      fi
+      for file in "${files[@]}"; do
+        seqkit sample --proportion "${proportion}" --rand-seed 11 --out-file "${assembly_input_fastq_dir}/$(basename "${file}")" "${file}"
+      done
+      echo "Total fastq length of the subsampled fastq files: $(get_total_fastq_len "${assembly_input_fastq_dir}" "*.amalgkit.fastq.gz") bp"
+    else
+      echo "Total fastq length is ${total_fastq_len} bp, which is less than ${max_assembly_input_fastq_size} bp. All fastq reads will be used."
+      assembly_input_fastq_dir=${selected_fastq_dir}
+    fi
+
+    files_single=()
+    files_left=()
+    files_right=()
+    mapfile -t files_single < <(find "${assembly_input_fastq_dir}" -type f -name "*.amalgkit.fastq.gz" | sort)
+    mapfile -t files_left < <(find "${assembly_input_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz" | sort)
+    mapfile -t files_right < <(find "${assembly_input_fastq_dir}" -type f -name "*_2.amalgkit.fastq.gz" | sort)
+
+    if [[ ${lib_layout} == 'single' && ${#files_single[@]} -eq 0 ]]; then
+      echo "No single-end fastq files were found for transcriptome assembly. Exiting."
+      exit 1
+    fi
+    if [[ ${lib_layout} == 'paired' ]]; then
+      if [[ ${#files_left[@]} -eq 0 || ${#files_right[@]} -eq 0 || ${#files_left[@]} -ne ${#files_right[@]} ]]; then
+        echo "Paired-end input files were not detected correctly in ${assembly_input_fastq_dir}."
+        echo "Detected left/right counts: ${#files_left[@]}/${#files_right[@]}. Exiting."
+        exit 1
+      fi
+    fi
+
+    if [[ "${effective_assembly_method}" == 'trinity' ]]; then
+      if [[ ${lib_layout} == 'single' ]]; then
+        in_single="$(
+          IFS=","
+          echo "${files_single[*]}"
+        )"
+      elif [[ ${lib_layout} == 'paired' ]]; then
+        in_left="$(
+          IFS=","
+          echo "${files_left[*]}"
+        )"
+        in_right="$(
+          IFS=","
+          echo "${files_right[*]}"
+        )"
+      fi
+      if [[ ${lib_layout} == 'single' ]]; then
+        Trinity \
+          --seqType fq \
+          --CPU "${assembly_cpus}" \
+          --max_memory "${assembly_mem_gb}G" \
+          --min_contig_length 200 \
+          --output trinity \
+          --full_cleanup \
+          --NO_SEQTK \
+          --bflyHeapSpaceMax "${bflyHeapSpaceMax}G" \
+          --bflyGCThreads 1 \
+          --bflyCalculateCPU \
+          --single "${in_single}"
+      else
+        Trinity \
+          --seqType fq \
+          --CPU "${assembly_cpus}" \
+          --max_memory "${assembly_mem_gb}G" \
+          --min_contig_length 200 \
+          --output trinity \
+          --full_cleanup \
+          --NO_SEQTK \
+          --bflyHeapSpaceMax "${bflyHeapSpaceMax}G" \
+          --bflyGCThreads 1 \
+          --bflyCalculateCPU \
+          --left "${in_left}" \
+          --right "${in_right}"
+      fi
+      # For --NO_SEQTK, see https://github.com/trinityrnaseq/trinityrnaseq/issues/787
+      if [[ -s "${dir_tmp}/trinity.Trinity.fasta" ]]; then
+        seqkit seq --threads "${GG_TASK_CPUS}" "${dir_tmp}/trinity.Trinity.fasta" --out-file "tmp.isoform.fa.gz"
+        mv_out "tmp.isoform.fa.gz" "${file_isoform}"
+      fi
+    elif [[ "${effective_assembly_method}" == 'rnaspades' ]]; then
+      rnaspades_input_args=()
+      if [[ ${protocol_rna_seq} == "same" ]]; then
+        if [[ ${lib_layout} == 'single' ]]; then
+          for i in "${!files_single[@]}"; do
+            rnaspades_input_args+=(--s1 "${files_single[i]}")
+          done
+        elif [[ ${lib_layout} == 'paired' ]]; then
+          for i in "${!files_left[@]}"; do
+            rnaspades_input_args+=(--pe1-1 "${files_left[i]}" --pe1-2 "${files_right[i]}")
+          done
+        fi
+      elif [[ ${protocol_rna_seq} == "mixed" ]]; then
+        if [[ ${lib_layout} == 'single' ]]; then
+          for i in "${!files_single[@]}"; do
+            j=$((i + 1))
+            rnaspades_input_args+=("--s${j}" "${files_single[i]}")
+          done
+        elif [[ ${lib_layout} == 'paired' ]]; then
+          for i in "${!files_left[@]}"; do
+            j=$((i + 1))
+            rnaspades_input_args+=("--pe${j}-1" "${files_left[i]}" "--pe${j}-2" "${files_right[i]}")
+          done
+        fi
+      else
+        echo "Invalid value for 'protocol_rna_seq'. Please specify either 'same' or 'mixed'."
+        echo "Exiting."
+        exit 1
+      fi
+      if [[ -d "${dir_tmp}/rnaspades_output" ]]; then
+        rm -rf -- "${dir_tmp}/rnaspades_output"
+      fi
+      rnaspades.py \
+        --threads "${assembly_cpus}" \
+        --memory "${assembly_mem_gb}" \
+        -o rnaspades_output \
+        "${rnaspades_input_args[@]}"
+      if [[ -s "${dir_tmp}/rnaspades_output/transcripts.fasta" ]]; then
+        seqkit seq --threads "${GG_TASK_CPUS}" "${dir_tmp}/rnaspades_output/transcripts.fasta" --out-file "tmp.isoform.fa.gz"
+        mv_out "tmp.isoform.fa.gz" "${file_isoform}"
+      fi
+    fi
+  fi
+
+  if [[ ! -s "${file_isoform}" ]]; then
+    echo "Transcriptome assembly did not generate: ${file_isoform}. Exiting."
     exit 1
   fi
 
+  echo "$(date): End: ${task}"
+else
+  gg_step_skip "${task}"
+fi
+
+task='Corset clustering of long-read transcripts'
+if [[ "${effective_assembly_method}" == 'rna-bloom2' && -s "${file_isoform}" && ! -s "${file_corset_clusters}" && ${run_longestcds} -eq 1 ]]; then
+  gg_step_start "${task}"
+  ensure_parent_dir "${file_corset_clusters}"
+  ensure_parent_dir "${file_corset_counts}"
+  load_classified_getfastq_files "${file_amalgkit_read_technology}"
+  if [[ ${#classified_long_fastq_files[@]} -eq 0 ]]; then
+    echo "No long-read FASTQ files were detected for Corset clustering. Exiting."
+    exit 1
+  fi
+
+  recreate_dir "./corset_work"
+  cd "./corset_work"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_isoform}" --out-file "assembly.fa"
+
+  corset_bams=()
+  corset_names=()
+  corset_groups=()
+  corset_minimap2_preset="map-ont"
+  if [[ ${detected_has_pacbio} -eq 1 ]]; then
+    corset_minimap2_preset="map-pb"
+  fi
+  for long_fastq in "${classified_long_fastq_files[@]}"; do
+    sample_name="$(basename "${long_fastq}")"
+    sample_name="${sample_name%.amalgkit.fastq.gz}"
+    bam_file="${sample_name}.bam"
+    minimap2 \
+      -a \
+      -x "${corset_minimap2_preset}" \
+      -N 50 \
+      --secondary=yes \
+      -t "${GG_TASK_CPUS}" \
+      "assembly.fa" \
+      "${long_fastq}" \
+      | samtools view -@ "${GG_TASK_CPUS}" -b -o "${bam_file}" -
+    corset_bams+=( "${bam_file}" )
+    corset_names+=( "${sample_name}" )
+    corset_groups+=( "1" )
+  done
+
+  if [[ ${#corset_bams[@]} -eq 0 ]]; then
+    echo "No BAM files were generated for Corset clustering. Exiting."
+    exit 1
+  fi
+
+  corset \
+    -D 99999999999 \
+    -g "$(csv_join_from_array "${corset_groups[@]}")" \
+    -n "$(csv_join_from_array "${corset_names[@]}")" \
+    "${corset_bams[@]}"
+
+  if [[ -s "clusters.txt" ]]; then
+    mv_out "clusters.txt" "${file_corset_clusters}"
+  else
+    echo "Corset did not produce clusters.txt. Exiting."
+    exit 1
+  fi
+  if [[ -s "counts.txt" ]]; then
+    mv_out "counts.txt" "${file_corset_counts}"
+  fi
+  cd "${dir_tmp}"
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
@@ -802,28 +1111,41 @@ if [[ (! -s "${file_longestcds}" || ! -s "${file_longestcds_transcript}") && ${r
   ensure_parent_dir "${file_longestcds}"
   ensure_parent_dir "${file_longestcds_transcript}"
 
-  if [[ ${orf_aggregation_level} = "p" ]]; then
-    aggregate_expression="\.${orf_aggregation_level}[0-9].*"
+  echo "scientific_name: ${sp_ub}"
+  if [[ "${effective_assembly_method}" == 'rna-bloom2' ]]; then
+    aggregate_expression="\-i[0-9].*"
+    if [[ ! -s "${file_corset_clusters}" ]]; then
+      echo "Corset cluster assignments were not found for long-read longest CDS extraction: ${file_corset_clusters}. Exiting."
+      exit 1
+    fi
+    python "${gg_support_dir}/rename_rnabloom_transcripts.py" \
+      --input-fasta "${file_isoform}" \
+      --clusters "${file_corset_clusters}" \
+      --species-prefix "${sp_ub}" \
+      --output-fasta "${sp_ub}.tmp.renamed.fa"
   else
-    aggregate_expression="\-${orf_aggregation_level}[0-9].*"
+    if [[ ${orf_aggregation_level} = "p" ]]; then
+      aggregate_expression="\.${orf_aggregation_level}[0-9].*"
+    else
+      aggregate_expression="\-${orf_aggregation_level}[0-9].*"
+    fi
   fi
-  if [[ ${orf_aggregation_level} == "c" && ${assembly_method} == "rnaSPAdes" ]]; then
+  if [[ ${orf_aggregation_level} == "c" && "${effective_assembly_method}" == "rnaspades" ]]; then
     echo "The aggregation level 'c' is not supported for rnaSPAdes assemblies. Please set 'orf_aggregation_level' to either 'i' or 'g'."
     echo "Exiting"
     exit 1
   fi
 
-  echo "scientific_name: ${sp_ub}"
-  if [[ ${assembly_method} == 'Trinity' ]]; then
+  if [[ "${effective_assembly_method}" == 'trinity' ]]; then
     seqkit sort --by-length --reverse --threads "${GG_TASK_CPUS}" "${file_isoform}" |
       sed -e "s/_/-/g" -e "s/^>[[:space:]]*/>${sp_ub}_/" -e "s/TRINITY-//" -e "s/[[:space:]].*//" \
         > "${sp_ub}.tmp.renamed.fa"
-  elif [[ ${assembly_method} == 'rnaSPAdes' ]]; then
+  elif [[ "${effective_assembly_method}" == 'rnaspades' ]]; then
     seqkit sort --by-length --reverse --threads "${GG_TASK_CPUS}" "${file_isoform}" |
       sed -e "s/^>.*_g\([0-9]\+\)_i\([0-9]\+\)$/>${sp_ub}_g\1-i\2/" \
         > "${sp_ub}.tmp.renamed.fa"
-  else
-    echo "Invalid value for 'assembly_method'. Please specify either 'Trinity' or 'rnaSPAdes'."
+  elif [[ "${effective_assembly_method}" != 'rna-bloom2' ]]; then
+    echo "Invalid value for 'assembly_method'. Please specify one of auto, Trinity, rnaSPAdes, or RNA-Bloom2."
     echo "Exiting."
     exit 1
   fi
@@ -832,7 +1154,7 @@ if [[ (! -s "${file_longestcds}" || ! -s "${file_longestcds_transcript}") && ${r
   if ! cdskit longestcds \
     --seqfile "${sp_ub}.tmp.renamed.fa" \
     --outfile "${longestcds_tmp}" \
-    --codontable 1 \
+    --codontable "${genetic_code}" \
     --annotate_seqname no \
     --threads "${GG_TASK_CPUS}"; then
     echo "Error: cdskit longestcds failed."
@@ -845,7 +1167,7 @@ if [[ (! -s "${file_longestcds}" || ! -s "${file_longestcds_transcript}") && ${r
   fi
 
   seqkit rmdup --by-seq "${longestcds_tmp}" |
-    cdskit pad |
+    cdskit pad --codontable "${genetic_code}" |
     seqkit sort --by-name --threads "${GG_TASK_CPUS}" |
     cdskit aggregate -x "${aggregate_expression}" \
       > "${sp_ub}.tmp.aggregated.fa"

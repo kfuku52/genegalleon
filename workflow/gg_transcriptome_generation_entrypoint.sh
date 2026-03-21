@@ -91,7 +91,7 @@ mode_transcriptome_assembly="${mode_transcriptome_assembly:-sraid}" # {"auto", "
 # Workflow flags
 run_amalgkit_metadata_or_integrate=1 # Metadata retrieval.
 run_amalgkit_getfastq=1 # fastq generation from NCBI SRA.
-run_assembly=1 # Transcriptome assembly with Trinity or rnaSPAdes.
+run_assembly=1 # Transcriptome assembly with Trinity, rnaSPAdes, or RNA-Bloom2.
 run_longestcds=1 # Longest CDS extraction.
 run_longestcds_fx2tab=1 # Sequence stats for longest CDS.
 run_longestcds_mmseqs2taxonomy=0 # MMseqs2 taxonomy.
@@ -100,8 +100,8 @@ run_busco_isoforms=1 # BUSCO for transcriptome assembly with isoforms.
 run_busco_longest_cds=1 # BUSCO for longest CDS.
 run_busco_contamination_removed_longest_cds=0 # BUSCO for contamination-removed longest CDS.
 run_assembly_stat=1 # seqkit stat for assembly and CDS files.
-run_amalgkit_quant=1 # Expression quantification.
-run_amalgkit_merge=1 # Expression merge.
+run_amalgkit_quant=1 # Expression quantification. Auto-disabled when long-read platforms are detected from metadata.
+run_amalgkit_merge=1 # Expression merge. Auto-disabled when long-read platforms are detected from metadata.
 run_multispecies_summary=1 # Multi-species summary.
 
 # Input-download parameters
@@ -112,12 +112,11 @@ amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-
 GG_LOCK_ACQUIRE_TIMEOUT_SECONDS="${GG_LOCK_ACQUIRE_TIMEOUT_SECONDS:-86400}" # Shared lock/semaphore acquire timeout in seconds. Raise this when array tasks can legitimately queue behind long-running getfastq jobs.
 GG_LOCK_POLL_SECONDS="${GG_LOCK_POLL_SECONDS:-10}" # Shared lock/semaphore polling interval in seconds while waiting for a slot.
 amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\"RNA-seq\"[Strategy] OR \"EST\"[Strategy] OR \"CLONE\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Set empty to disable strategy filtering.
-amalgkit_long_read_instrument_pattern="${amalgkit_long_read_instrument_pattern:-pacbio|smrt|nanopore|minion|gridion|promethion|flongle|sequel|revio}" # Case-insensitive regex used to exclude long-read instruments after amalgkit metadata retrieval; leave empty to disable post-filtering.
 remove_amalgkit_fastq_after_completion=1 # Delete per-species amalgkit FASTQ files after downstream completion.
 
 # Assembly and quantification parameters
 max_assembly_input_fastq_size="30,000,000,000" # Maximum total FASTQ length in bp used for transcriptome assembly.
-assembly_method="rnaSPAdes" # {Trinity,rnaSPAdes}
+assembly_method="auto" # {auto,Trinity,rnaSPAdes,RNA-Bloom2}; auto picks rnaSPAdes for short-read metadata and RNA-Bloom2 for detected PacBio/ONT metadata.
 protocol_rna_seq="mixed" # {same,mixed}
 kallisto_reference="longest_cds" # {species_cds,longest_transcript,longest_cds,contamination_removed_longest_cds}
 orf_aggregation_level="i" # {c,g,i,p}
