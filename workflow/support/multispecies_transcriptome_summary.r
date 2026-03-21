@@ -24,24 +24,45 @@ dir_amalgkit_merge = args[['dir_amalgkit_merge']]
 dir_busco_isoform = args[['dir_busco_isoform']]
 dir_busco_longest_cds = args[['dir_busco_longest_cds']]
 
+normalize_busco_species_colname = function(x) {
+    x = sub('\\.tsv$', '', x)
+    x = sub('([._]busco([._]full)?)$', '', x, perl=TRUE)
+    x = sub('([._]full)$', '', x, perl=TRUE)
+    x
+}
 
 # %%
 cat('Starting transcriptome dimensionality reduction plot.\n')
 
+cat('Generating busco_table.tsv\n')
+my_command = paste('python', shQuote(file.path(args[['dir_myscript']], 'collect_common_BUSCO_genes.py')))
+my_command = paste(my_command, '--busco_outdir', shQuote(dir_busco_longest_cds))
+my_command = paste(my_command, '--outfile', 'busco_table.tsv')
+cat(paste0('Command: ', my_command, '\n'))
 if (file.exists('busco_table.tsv')) {
-    cat('busco_table.tsv found. Loading.\n')
-} else {
-    cat('Generating busco_table.tsv\n')
-    my_command = paste('python', shQuote(file.path(args[['dir_myscript']], 'collect_common_BUSCO_genes.py')))
-    my_command = paste(my_command, '--busco_outdir', shQuote(dir_busco_longest_cds))
-    my_command = paste(my_command, '--outfile', 'busco_table.tsv')
-    cat(paste0('Command: ', my_command, '\n'))
-    system(my_command)
+    file.remove('busco_table.tsv')
+}
+busco_status = system(my_command)
+if (busco_status != 0) {
+    stop(sprintf('collect_common_BUSCO_genes.py failed with exit code %s', busco_status))
 }
 df_busco = read.table('busco_table.tsv', header=TRUE, sep='\t', quote='')
-colnames(df_busco) = sub('\\..*', '', colnames(df_busco))
+if (ncol(df_busco) >= 4) {
+    original_busco_cols = colnames(df_busco)[4:ncol(df_busco)]
+    normalized_busco_cols = vapply(original_busco_cols, normalize_busco_species_colname, character(1))
+    normalized_busco_cols = make.unique(normalized_busco_cols, sep='__dup')
+    for (i in seq_along(original_busco_cols)) {
+        if (original_busco_cols[i] != normalized_busco_cols[i]) {
+            cat(sprintf('Normalized BUSCO column: %s -> %s\n', original_busco_cols[i], normalized_busco_cols[i]))
+        }
+    }
+    colnames(df_busco)[4:ncol(df_busco)] = normalized_busco_cols
+}
 
 cat('Generating expression.tsv\n')
+if (file.exists('expression.tsv')) {
+    file.remove('expression.tsv')
+}
 tpm_files = list.files(path=dir_amalgkit_merge, pattern="_tpm\\.tsv$", recursive=TRUE, full.names=TRUE)
 if (length(tpm_files)==0) {
     cat(paste0('Skipping. No tsv file found in: ', dir_amalgkit_merge, '\n'))
@@ -58,6 +79,10 @@ if (length(tpm_files)==0) {
         #sp_ub = sub('_.*', '', sp_ub)
         #sp_ub = sub('PLACEHOLDER', '_', sp_ub)
         cat('Species unique base:', sp_ub, '\n')
+        if (!(sp_ub %in% colnames(df_busco))) {
+            cat('Skipping TPM file because BUSCO column is missing for species:', sp_ub, '\n')
+            next
+        }
         tpm = read.table(file_path, header=TRUE, sep='\t')
         tpm[,'target_id'] = sub('-i[0-9]+$', '', tpm[['target_id']])
         colnames(tpm) = sub('target_id', sp_ub, colnames(tpm))
@@ -69,12 +94,16 @@ if (length(tpm_files)==0) {
         tpm = tpm[order(tpm[['row_index']]),]
         tpm = data.frame(tpm[,retained_cols])
         colnames(tpm) = retained_cols
-        tpm_list[[i]] = tpm
+        tpm_list[[length(tpm_list) + 1]] = tpm
     }
     cat('\n')
-    df_expression = do.call(cbind, tpm_list)
-    df_expression = cbind(df_busco[,c('busco_id','orthodb_url', 'description')], df_expression)
-    write.table(df_expression, 'expression.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+    if (length(tpm_list) == 0) {
+        cat('Skipping. No TPM files matched BUSCO species columns.\n')
+    } else {
+        df_expression = do.call(cbind, tpm_list)
+        df_expression = cbind(df_busco[,c('busco_id','orthodb_url', 'description')], df_expression)
+        write.table(df_expression, 'expression.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+    }
 }
 min_species = 4
 min_gene = 4

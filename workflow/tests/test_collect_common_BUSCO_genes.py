@@ -56,18 +56,18 @@ def test_collect_common_busco_filters_all_missing_and_merges_metadata_by_busco_i
     assert completed.returncode == 0, completed.stderr
 
     out = pandas.read_csv(outfile, sep="\t")
-    assert out.columns.tolist() == ["busco_id", "orthodb_url", "description", "speciesA.tsv", "speciesB.tsv"]
+    assert out.columns.tolist() == ["busco_id", "orthodb_url", "description", "speciesA", "speciesB"]
     assert out["busco_id"].tolist() == ["b1", "b4"]
 
     row_b1 = out.loc[out["busco_id"] == "b1", :].iloc[0]
     assert row_b1["orthodb_url"] == "url1"
     assert row_b1["description"] == "desc1"
-    assert row_b1["speciesA.tsv"] == "a_gene1"
-    assert row_b1["speciesB.tsv"] == "b_gene1"
+    assert row_b1["speciesA"] == "a_gene1"
+    assert row_b1["speciesB"] == "b_gene1"
 
     row_b4 = out.loc[out["busco_id"] == "b4", :].iloc[0]
-    assert row_b4["speciesA.tsv"] == "a_gene4_1,a_gene4_2"
-    assert row_b4["speciesB.tsv"] == "-"
+    assert row_b4["speciesA"] == "a_gene4_1,a_gene4_2"
+    assert row_b4["speciesB"] == "-"
 
 
 def test_collect_common_busco_ignores_hidden_and_non_file_tsv_entries(tmp_path):
@@ -106,5 +106,30 @@ def test_collect_common_busco_ignores_hidden_and_non_file_tsv_entries(tmp_path):
     assert completed.returncode == 0, completed.stderr
 
     out = pandas.read_csv(outfile, sep="\t")
-    assert out.columns.tolist() == ["busco_id", "orthodb_url", "description", "speciesA.tsv"]
-    assert out.loc[0, "speciesA.tsv"] == "a_gene1"
+    assert out.columns.tolist() == ["busco_id", "orthodb_url", "description", "speciesA"]
+    assert out.loc[0, "speciesA"] == "a_gene1"
+
+
+def test_collect_common_busco_returns_header_only_when_busco_dir_is_missing(tmp_path):
+    outfile = tmp_path / "busco_summary.tsv"
+    missing_dir = tmp_path / "missing_busco_full"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--busco_outdir",
+            str(missing_dir),
+            "--outfile",
+            str(outfile),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+    out = pandas.read_csv(outfile, sep="\t")
+    assert out.columns.tolist() == ["busco_id", "orthodb_url", "description"]
+    assert out.empty

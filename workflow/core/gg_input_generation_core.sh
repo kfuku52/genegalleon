@@ -852,17 +852,20 @@ run_species_busco_for_one_file() {
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  busco \
-    --in "${busco_input_fasta}" \
-    --mode "transcriptome" \
-    --out "${busco_output_dir}" \
-    --cpu "${GG_TASK_CPUS}" \
-    --force \
-    --evalue 1e-03 \
-    --limit 20 \
-    --lineage_dataset "${dir_busco_lineage}" \
-    --download_path "${dir_busco_db}" \
-    --offline
+  (
+    cd "${busco_work_root}"
+    busco \
+      --in "input.fasta" \
+      --mode "transcriptome" \
+      --out "busco_tmp" \
+      --cpu "${GG_TASK_CPUS}" \
+      --force \
+      --evalue 1e-03 \
+      --limit 20 \
+      --lineage_dataset "${dir_busco_lineage}" \
+      --download_path "${dir_busco_db}" \
+      --offline
+  )
 
   if copy_busco_tables "${busco_output_dir}" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
     rm -rf -- "${busco_work_root}"

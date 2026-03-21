@@ -242,6 +242,7 @@ run_amalgkit_getfastq_or_fallback() {
     --contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB" \
     --remove_sra yes \
     --remove_tmp yes \
+    --dump_print yes \
     --read_name 'trinity' \
     --aws yes \
     --ncbi yes \

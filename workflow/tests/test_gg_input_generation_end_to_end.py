@@ -213,6 +213,8 @@ def _install_fake_toolchain(root: Path) -> Path:
             lineage_path = Path(parse("--lineage_dataset"))
             lineage = lineage_path.name if str(lineage_path) else "unknown_odb12"
             outdir = Path(parse("--out", "busco_tmp"))
+            if os.environ.get("BUSCO_STUB_STRIP_ABSOLUTE_OUT") == "1" and outdir.is_absolute():
+                outdir = Path(str(outdir).lstrip("/"))
             layout = os.environ.get("BUSCO_STUB_LAYOUT", "nested")
             result_dir = outdir if layout == "flat" else outdir / f"run_{lineage}"
             result_dir.mkdir(parents=True, exist_ok=True)
@@ -425,6 +427,29 @@ def test_gg_input_generation_single_mode_accepts_flat_busco_v6_layout(tmp_path: 
     assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
     assert "No such file or directory" not in completed.stdout
     assert "No such file or directory" not in completed.stderr
+    _assert_expected_outputs(workspace / "output" / "input_generation", expected_last_mode="single")
+
+
+def test_gg_input_generation_single_mode_uses_relative_busco_output_path(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "single_relative_busco_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="single")
+    env["BUSCO_STUB_STRIP_ABSOLUTE_OUT"] = "1"
+    completed = subprocess.run(
+        ["bash", str(CORE_PATH)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
     _assert_expected_outputs(workspace / "output" / "input_generation", expected_last_mode="single")
 
 

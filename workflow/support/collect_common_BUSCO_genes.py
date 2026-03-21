@@ -3,12 +3,25 @@
 
 import argparse
 import os
+import re
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
 BUSCO_TABLE_COLUMNS = ['busco_id', 'sequence', 'orthodb_url', 'description']
+
+
+def normalize_species_label(path_label):
+    normalized = str(path_label)
+    if normalized.endswith('.tsv'):
+        normalized = normalized[:-4]
+    for suffix in ('.busco.full', '_busco.full', '.busco', '_busco', '.full', '_full'):
+        if normalized.endswith(suffix):
+            normalized = normalized[:-len(suffix)]
+            break
+    normalized = re.sub(r'\s+', '_', normalized.strip())
+    return normalized or str(path_label)
 
 
 def read_busco_table(path_to_table):
@@ -56,6 +69,12 @@ def main():
     args.ncpu = max(1, int(args.ncpu))
     print("Starting collect_common_BUSCO_gene.py")
 
+    if not os.path.isdir(args.busco_outdir):
+        warnings.warn(f'BUSCO output directory does not exist. Skipping: {args.busco_outdir}')
+        pd.DataFrame(columns=['busco_id', 'orthodb_url', 'description']).to_csv(args.outfile, sep='\t', index=None)
+        print("Ending collect_common_BUSCO_gene.py")
+        raise SystemExit(0)
+
     species_infiles = sorted(
         [
             f
@@ -70,12 +89,17 @@ def main():
     metadata_tables = {}
 
     tasks = []
+    seen_species_labels = set()
     for species_infile in species_infiles:
         path_to_table = os.path.join(args.busco_outdir, species_infile)
         if not os.path.exists(path_to_table):
             warnings.warn(f'full_table.tsv does not exist. Skipping: {species_infile}')
             continue
-        tasks.append((species_infile, path_to_table))
+        species_label = normalize_species_label(species_infile)
+        if species_label in seen_species_labels:
+            species_label = species_infile
+        seen_species_labels.add(species_label)
+        tasks.append((species_infile, species_label, path_to_table))
 
     if len(tasks) == 0:
         pd.DataFrame(columns=['busco_id', 'orthodb_url', 'description']).to_csv(args.outfile, sep='\t', index=None)
@@ -83,17 +107,17 @@ def main():
         raise SystemExit(0)
 
     if args.ncpu == 1:
-        for species_infile, path_to_table in tasks:
+        for species_infile, species_label, path_to_table in tasks:
             print(f'Working on {species_infile}', flush=True)
-            species, tmp_sequence, tmp_metadata = process_species_table(path_to_table, species_infile)
+            species, tmp_sequence, tmp_metadata = process_species_table(path_to_table, species_label)
             sequence_tables[species] = tmp_sequence
             metadata_tables[species] = tmp_metadata
     else:
         max_workers = min(args.ncpu, len(tasks))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(process_species_table, path_to_table, species_infile): species_infile
-                for species_infile, path_to_table in tasks
+                executor.submit(process_species_table, path_to_table, species_label): species_infile
+                for species_infile, species_label, path_to_table in tasks
             }
             for future in as_completed(futures):
                 species_infile = futures[future]
@@ -107,7 +131,7 @@ def main():
         print("Ending collect_common_BUSCO_gene.py")
         raise SystemExit(0)
 
-    ordered_species = [s for s in species_infiles if s in sequence_tables]
+    ordered_species = [species_label for _species_infile, species_label, _path_to_table in tasks if species_label in sequence_tables]
     merged_sequence = (
         pd.concat(
             [sequence_tables[species].set_index('busco_id') for species in ordered_species],
@@ -133,14 +157,14 @@ def main():
         merged_metadata = pd.DataFrame(columns=['busco_id', 'orthodb_url', 'description'])
 
     merged_table = merged_metadata.merge(merged_sequence, on='busco_id', how='outer')
-    species_columns = [c for c in species_infiles if c in merged_table.columns]
+    species_columns = [c for c in ordered_species if c in merged_table.columns]
 
-    for species_col in species_infiles:
+    for species_col in ordered_species:
         if species_col not in merged_table.columns:
             merged_table[species_col] = '-'
     if len(species_columns) > 0:
-        merged_table.loc[:, species_infiles] = merged_table.loc[:, species_infiles].fillna('-').astype('string')
-        keep_rows = (merged_table.loc[:, species_infiles] != '-').any(axis=1)
+        merged_table.loc[:, ordered_species] = merged_table.loc[:, ordered_species].fillna('-').astype('string')
+        keep_rows = (merged_table.loc[:, ordered_species] != '-').any(axis=1)
         dropped_rows = int((~keep_rows).sum())
         if dropped_rows > 0:
             print(f'Dropping {dropped_rows} BUSCO rows with no genes in any species.', flush=True)
@@ -151,7 +175,7 @@ def main():
             merged_table[col] = '-'
     merged_table.loc[:, ['orthodb_url', 'description']] = merged_table.loc[:, ['orthodb_url', 'description']].fillna('-').astype('string')
 
-    column_order = ['busco_id', 'orthodb_url', 'description'] + species_infiles
+    column_order = ['busco_id', 'orthodb_url', 'description'] + ordered_species
     merged_table = merged_table.loc[:, column_order]
     merged_table = merged_table.sort_values('busco_id', kind='mergesort').reset_index(drop=True)
 
