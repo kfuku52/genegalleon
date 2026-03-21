@@ -132,7 +132,7 @@ def species_label_from_taxonomic_text(text):
         label = "".join(normalized[2:]).strip()
         if label != "":
             return "{}_sp_{}".format(genus, label)
-        return "{}_sp".format(genus)
+        return "{}_sp_unknown".format(genus)
 
     species = normalized[1].lower()
     if len(normalized) >= 3:

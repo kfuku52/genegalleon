@@ -126,6 +126,14 @@ def read_fasta_ids(path):
     return ids
 
 
+def first_nonmatching_prefix(cds_ids, species_prefix):
+    expected_prefix = "{}_".format(species_prefix)
+    for cds_id in cds_ids:
+        if not cds_id.startswith(expected_prefix):
+            return cds_id
+    return ""
+
+
 def read_gene_ids_from_tsv(path):
     if not path.exists() or path.stat().st_size == 0:
         return []
@@ -209,6 +217,20 @@ def validate_single_species(task, missing_limit):
                 "ok": False,
                 "stats_ready": False,
                 "error": "[{}] No CDS IDs were found in {}".format(species_prefix, cds_file),
+            }
+        first_bad_prefix = first_nonmatching_prefix(cds_ids, species_prefix)
+        if first_bad_prefix != "":
+            return {
+                "index": task["index"],
+                "species_prefix": species_prefix,
+                "ok": False,
+                "stats_ready": False,
+                "error": (
+                    "[{}] CDS file name prefix is inconsistent with CDS IDs for {}: "
+                    "expected IDs to start with '{}_', sample='{}'. "
+                    "This usually means the species label in the file name is incomplete "
+                    "(for example 'Genus_cf' or 'Genus_species_subsp')."
+                ).format(species_prefix, cds_file.name, species_prefix, first_bad_prefix),
             }
 
         completed, mapped_ids = run_gff2genestat(cds_file=cds_file, gff_file=gff_file)

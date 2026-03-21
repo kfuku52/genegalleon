@@ -420,7 +420,7 @@ def build_species_key_from_tokens(tokens):
         label = "".join(normalized[2:]).strip()
         if label != "":
             return "{}_sp_{}".format(genus, label)
-        return "{}_sp".format(genus)
+        return "{}_sp_unknown".format(genus)
 
     species = normalized[1]
     if len(normalized) >= 3:
@@ -513,6 +513,41 @@ def species_prefix_token_count(tokens):
     if third in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
         return 4 if len(tokens) >= 4 else 3
     return 2
+
+
+def invalid_species_key_reason(value):
+    name = Path(str(value or "")).name
+    tokens = [token for token in name.split("_") if token != ""]
+    if len(tokens) < 2:
+        return ""
+
+    second = tokens[1].lower()
+    third = tokens[2].lower() if len(tokens) >= 3 else ""
+    if second in TAXONOMIC_PROXIMITY_QUALIFIERS and len(tokens) < 3:
+        return "taxonomic qualifier '{}' requires a following epithet in species key '{}'".format(second, value)
+    if third in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES and len(tokens) < 4:
+        return "infraspecific rank '{}' requires a following value in species key '{}'".format(third, value)
+    return ""
+
+
+def normalize_species_key_for_runtime(value):
+    species_key = str(value or "").strip()
+    if species_key == "":
+        return ""
+    tokens = [token for token in Path(species_key).name.split("_") if token != ""]
+    if len(tokens) >= 2 and tokens[1].lower() == "sp" and len(tokens) < 3:
+        return "{}_sp_unknown".format(tokens[0])
+    return species_key
+
+
+def invalid_species_key_error(provider, species_key):
+    reason = invalid_species_key_reason(species_key)
+    if reason == "":
+        return ""
+    return (
+        "[{}] {}. Incomplete species labels break downstream file naming; "
+        "use a concrete key such as 'Dictyostelium_cf_discoideum' or 'Amoeba_sp_sample1'."
+    ).format(provider, reason)
 
 
 class SpeciesTaxonomyMetadataResolver:
@@ -3526,6 +3561,11 @@ def download_from_manifest(
         if species_key == "":
             errors.append("Manifest line {}: species_key/id is empty".format(i))
             continue
+        species_key = normalize_species_key_for_runtime(species_key)
+        invalid_species_key = invalid_species_key_error(provider, species_key)
+        if invalid_species_key != "":
+            errors.append("Manifest line {}: {}".format(i, invalid_species_key))
+            continue
 
         if not manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url):
             errors.append(
@@ -4966,7 +5006,11 @@ def discover_generic_species_dir_tasks(provider, input_dir):
     for species_dir in sorted(input_dir.iterdir()):
         if not species_dir.is_dir():
             continue
-        species_key = species_dir.name
+        species_key = normalize_species_key_for_runtime(species_dir.name)
+        invalid_species_key = invalid_species_key_error(provider, species_key)
+        if invalid_species_key != "":
+            errors.append(invalid_species_key)
+            continue
         species_prefix = species_prefix_from_value(species_key)
         if species_prefix == "":
             warnings.append(
@@ -5084,7 +5128,7 @@ def discover_ensembl_like_tasks(input_dir, provider):
         if not path.is_file():
             continue
         name = path.name
-        species_key = name.split(".", 1)[0]
+        species_key = normalize_species_key_for_runtime(name.split(".", 1)[0])
         if species_key == "":
             continue
         if is_fasta_filename(name) and ENSEMBL_CDS_PATTERN.search(name):
@@ -5105,6 +5149,10 @@ def discover_ensembl_like_tasks(input_dir, provider):
         | set(gbff_by_species.keys())
         | set(genome_by_species.keys())
     ):
+        invalid_species_key = invalid_species_key_error(provider, species_key)
+        if invalid_species_key != "":
+            errors.append(invalid_species_key)
+            continue
         species_prefix = species_prefix_from_value(species_key)
         if species_prefix == "":
             warnings.append(
@@ -5172,7 +5220,11 @@ def discover_phycocosm_tasks(input_dir):
     for species_dir in sorted(input_dir.iterdir()):
         if not species_dir.is_dir():
             continue
-        species_key = species_dir.name
+        species_key = normalize_species_key_for_runtime(species_dir.name)
+        invalid_species_key = invalid_species_key_error("phycocosm", species_key)
+        if invalid_species_key != "":
+            errors.append(invalid_species_key)
+            continue
         species_prefix = species_prefix_from_value(species_key)
         if species_prefix == "":
             warnings.append(
@@ -5222,7 +5274,11 @@ def discover_phytozome_tasks(input_dir):
     for species_dir in sorted(input_dir.iterdir()):
         if not species_dir.is_dir():
             continue
-        species_key = species_dir.name
+        species_key = normalize_species_key_for_runtime(species_dir.name)
+        invalid_species_key = invalid_species_key_error("phytozome", species_key)
+        if invalid_species_key != "":
+            errors.append(invalid_species_key)
+            continue
         species_prefix = species_prefix_from_value(species_key)
         if species_prefix == "":
             warnings.append(
@@ -5276,7 +5332,11 @@ def discover_ncbi_like_tasks(input_dir, provider):
     for species_dir in sorted(input_dir.iterdir()):
         if not species_dir.is_dir():
             continue
-        species_key = species_dir.name
+        species_key = normalize_species_key_for_runtime(species_dir.name)
+        invalid_species_key = invalid_species_key_error(provider, species_key)
+        if invalid_species_key != "":
+            errors.append(invalid_species_key)
+            continue
         species_prefix = species_prefix_from_value(species_key)
         if species_prefix == "":
             warnings.append(

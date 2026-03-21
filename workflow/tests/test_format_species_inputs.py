@@ -215,8 +215,45 @@ def test_parse_species_key_candidate_preserves_taxonomic_qualifiers():
     assert mod.parse_species_key_candidate("Dictyostelium cf. discoideum") == "Dictyostelium_cf_discoideum"
     assert mod.parse_species_key_candidate("Bacillus subtilis subsp. subtilis") == "Bacillus_subtilis_subsp_subtilis"
     assert mod.parse_species_key_candidate("Amoeba sp. JDS-Ruffled") == "Amoeba_sp_JDSRuffled"
+    assert mod.parse_species_key_candidate("Amoeba sp.") == "Amoeba_sp_unknown"
     assert mod.parse_species_key_candidate("Solanum lycopersicum cultivar Heinz 1706") == "Solanum_lycopersicum_cultivar_Heinz1706"
     assert mod.parse_species_key_candidate("Escherichia coli serovar O157") == "Escherichia_coli_serovar_O157"
+
+
+def test_discover_ncbi_like_tasks_normalizes_bare_sp_species_key(tmp_path):
+    mod = load_module()
+    input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
+    species_dir = input_dir / "Amoeba_sp"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "GCA_000000001.1_demo_cds_from_genomic.fna.gz").write_text("", encoding="utf-8")
+    (species_dir / "GCA_000000001.1_demo_genomic.gff.gz").write_text("", encoding="utf-8")
+    (species_dir / "GCA_000000001.1_demo_genomic.fna.gz").write_text("", encoding="utf-8")
+
+    tasks, warnings, errors = mod.discover_ncbi_like_tasks(input_dir, "ncbi")
+
+    assert warnings == []
+    assert errors == []
+    assert len(tasks) == 1
+    assert tasks[0]["species_key"] == "Amoeba_sp_unknown"
+    assert tasks[0]["species_prefix"] == "Amoeba_sp_unknown"
+
+
+def test_discover_ncbi_like_tasks_rejects_incomplete_taxonomic_qualifier_species_key(tmp_path):
+    mod = load_module()
+    input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
+    species_dir = input_dir / "Dictyostelium_cf"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "GCA_054859205.1_ASM5485920v1_cds_from_genomic.fna.gz").write_text("", encoding="utf-8")
+    (species_dir / "GCA_054859205.1_ASM5485920v1_genomic.gff.gz").write_text("", encoding="utf-8")
+    (species_dir / "GCA_054859205.1_ASM5485920v1_genomic.fna.gz").write_text("", encoding="utf-8")
+
+    tasks, warnings, errors = mod.discover_ncbi_like_tasks(input_dir, "ncbi")
+
+    assert tasks == []
+    assert warnings == []
+    assert len(errors) == 1
+    assert "requires a following epithet" in errors[0]
+    assert "Dictyostelium_cf" in errors[0]
 
 
 def test_species_taxonomy_metadata_resolver_falls_back_from_qualified_name_to_base_species(tmp_path):

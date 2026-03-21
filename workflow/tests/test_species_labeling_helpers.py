@@ -58,5 +58,6 @@ def test_species_labeling_builds_qualified_labels_from_scientific_text():
     assert mod.species_label_from_taxonomic_text("Dictyostelium cf. discoideum") == "Dictyostelium_cf_discoideum"
     assert mod.species_label_from_taxonomic_text("Bacillus subtilis subsp. subtilis") == "Bacillus_subtilis_subsp_subtilis"
     assert mod.species_label_from_taxonomic_text("Amoeba sp. JDS-Ruffled") == "Amoeba_sp_JDSRuffled"
+    assert mod.species_label_from_taxonomic_text("Amoeba sp.") == "Amoeba_sp_unknown"
     assert mod.species_label_from_taxonomic_text("Solanum lycopersicum cultivar Heinz 1706") == "Solanum_lycopersicum_cultivar_Heinz1706"
     assert mod.species_label_from_taxonomic_text("Escherichia coli serovar O157") == "Escherichia_coli_serovar_O157"

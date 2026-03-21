@@ -105,6 +105,39 @@ def test_validate_cds_gff_mapping_fails_on_missing_ids(tmp_path):
     assert "missing=1 sample=Arabidopsis_thaliana_gene2" in completed.stderr
 
 
+def test_validate_cds_gff_mapping_reports_incomplete_species_label_in_filename(tmp_path):
+    cds_dir = tmp_path / "species_cds"
+    gff_dir = tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+
+    cds_path = cds_dir / "Dictyostelium_cf_GCA_054859205.1_ASM5485920v1_cds_from_genomic.fa.gz"
+    gff_path = gff_dir / "Dictyostelium_cf_GCA_054859205.1_ASM5485920v1_genomic.gff.gz"
+    write_gzip_text(
+        cds_path,
+        ">Dictyostelium_cf_ACTFIY_000002\nATGAAA\n",
+    )
+    write_gzip_text(
+        gff_path,
+        (
+            "chr1\tsrc\tgene\t1\t6\t.\t+\t.\tID=gene-ACTFIY_000002;Name=ACTFIY_000002;locus_tag=ACTFIY_000002\n"
+            "chr1\tsrc\tmRNA\t1\t6\t.\t+\t.\tID=rna-1;Parent=gene-ACTFIY_000002;locus_tag=ACTFIY_000002\n"
+            "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=cds-1;Parent=rna-1;locus_tag=ACTFIY_000002;protein_id=P1\n"
+        ),
+    )
+
+    completed = run_script(
+        "--species-cds-dir",
+        str(cds_dir),
+        "--species-gff-dir",
+        str(gff_dir),
+    )
+    assert completed.returncode == 1
+    assert "CDS file name prefix is inconsistent with CDS IDs" in completed.stderr
+    assert "incomplete" in completed.stderr
+    assert "Dictyostelium_cf_GCA" in completed.stderr
+
+
 def test_validate_cds_gff_mapping_allows_known_azolla_filiculoides_orphan_cds_ids(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"
