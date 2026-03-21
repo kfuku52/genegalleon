@@ -1022,7 +1022,6 @@ run_multispecies_summary_stage() {
   cd "$(dirname "${file_multispecies_summary}")"
 
   cmd=(Rscript "${gg_support_dir}/annotation_summary.r")
-  cmd+=(--dir_species_tree="${gg_workspace_output_dir}/species_tree")
   cmd+=(--dir_species_cds_busco="${species_busco_full_dir}")
   if [[ -s "${species_trait_output}" ]]; then
     cmd+=(--file_species_trait="${species_trait_output}")

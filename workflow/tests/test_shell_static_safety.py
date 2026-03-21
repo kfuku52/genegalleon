@@ -3395,6 +3395,7 @@ def test_input_generation_core_wires_array_modes_and_busco_outputs_under_input_g
     assert 'species_busco_short_dir="${input_generation_root}/species_cds_busco_short"' in text
     assert 'file_multispecies_summary="${input_generation_root}/annotation_summary/annotation_summary.tsv"' in text
     assert 'cmd=(Rscript "${gg_support_dir}/annotation_summary.r")' in text
+    assert '--dir_species_tree="${gg_workspace_output_dir}/species_tree"' not in text
     assert 'python "${gg_support_dir}/plan_input_generation_tasks.py"' in text
     assert 'python "${gg_support_dir}/run_input_generation_task.py"' in text
     assert 'python "${gg_support_dir}/merge_input_generation_shards.py"' in text
