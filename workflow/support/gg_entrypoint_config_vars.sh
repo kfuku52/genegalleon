@@ -252,12 +252,14 @@ input_generation_mode
 overwrite
 provider
 resolved_manifest_output
+run_cds_fx2tab
 run_format_inputs
 run_generate_species_trait
 run_multispecies_summary
 run_species_busco
 run_validate_inputs
 species_cds_dir
+species_cds_fx2tab_dir
 species_busco_full_dir
 species_busco_short_dir
 species_genome_dir

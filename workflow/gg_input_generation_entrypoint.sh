@@ -84,6 +84,7 @@ gg_entrypoint_name="gg_input_generation_entrypoint.sh"
 # Workflow flags
 run_format_inputs=1 # Format local inputs or download-manifest targets into workspace layout.
 run_validate_inputs=1 # Validate formatted inputs before downstream workflows use them.
+run_cds_fx2tab=1 # Run seqkit fx2tab for formatted species CDS files.
 run_species_busco=1 # Run BUSCO for formatted species CDS files.
 run_multispecies_summary=1 # Generate multi-species BUSCO summary plots and tables from species BUSCO outputs.
 run_generate_species_trait=0 # Generate species_trait.tsv from downloaded or local metadata sources.
@@ -112,6 +113,7 @@ download_manifest="" # Path to the download manifest file.
 download_dir="" # Directory for downloaded raw files.
 summary_output="" # Output path for the run summary table.
 species_cds_dir="" # Output directory for formatted CDS FASTA files.
+species_cds_fx2tab_dir="" # Output directory for CDS fx2tab TSV files.
 species_busco_full_dir="" # Output directory for BUSCO full tables under output/input_generation/.
 species_busco_short_dir="" # Output directory for BUSCO short summaries under output/input_generation/.
 species_gff_dir="" # Output directory for formatted GFF files.
@@ -148,11 +150,13 @@ gg_apply_named_env_overrides \
   http_header GG_INPUT_HTTP_HEADER \
   run_format_inputs GG_INPUT_RUN_FORMAT_INPUTS \
   run_validate_inputs GG_INPUT_RUN_VALIDATE_INPUTS \
+  run_cds_fx2tab GG_INPUT_RUN_CDS_FX2TAB \
   run_species_busco GG_INPUT_RUN_SPECIES_BUSCO \
   run_multispecies_summary GG_INPUT_RUN_MULTISPECIES_SUMMARY \
   run_generate_species_trait GG_INPUT_RUN_GENERATE_SPECIES_TRAIT \
   trait_profile GG_INPUT_TRAIT_PROFILE \
   species_cds_dir GG_INPUT_SPECIES_CDS_DIR \
+  species_cds_fx2tab_dir GG_INPUT_SPECIES_CDS_FX2TAB_DIR \
   species_busco_full_dir GG_INPUT_SPECIES_BUSCO_FULL_DIR \
   species_busco_short_dir GG_INPUT_SPECIES_BUSCO_SHORT_DIR \
   species_gff_dir GG_INPUT_SPECIES_GFF_DIR \

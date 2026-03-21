@@ -605,6 +605,7 @@ def test_input_generation_entrypoint_forwards_env_driven_overrides():
     assert "provider GG_INPUT_PROVIDER" in text
     assert "input_generation_mode GG_INPUT_INPUT_GENERATION_MODE" in text
     assert "busco_lineage GG_INPUT_BUSCO_LINEAGE" in text
+    assert "run_cds_fx2tab GG_INPUT_RUN_CDS_FX2TAB" in text
     assert "run_species_busco GG_INPUT_RUN_SPECIES_BUSCO" in text
     assert "run_multispecies_summary GG_INPUT_RUN_MULTISPECIES_SUMMARY" in text
     assert "trait_profile GG_INPUT_TRAIT_PROFILE" in text
@@ -633,6 +634,7 @@ def test_input_generation_trait_profile_preset_is_wired():
     core_text = _read_text(core)
 
     assert 'trait_profile="none"' in entry_text
+    assert 'run_cds_fx2tab=1' in entry_text
     assert 'run_species_busco=1' in entry_text
     assert 'run_multispecies_summary=1' in entry_text
     assert "trait_profile GG_INPUT_TRAIT_PROFILE" in entry_text
@@ -3390,11 +3392,14 @@ def test_input_generation_core_wires_array_modes_and_busco_outputs_under_input_g
     assert 'input_generation_mode="${input_generation_mode:-single}"' in text
     assert 'single|array_prepare|array_worker|array_finalize' in text
     assert 'run_species_busco="${run_species_busco:-1}"' in text
+    assert 'run_cds_fx2tab="${run_cds_fx2tab:-1}"' in text
     assert 'run_multispecies_summary="${run_multispecies_summary:-1}"' in text
+    assert 'species_cds_fx2tab_dir="${input_generation_root}/species_cds_fx2tab"' in text
     assert 'species_busco_full_dir="${input_generation_root}/species_cds_busco_full"' in text
     assert 'species_busco_short_dir="${input_generation_root}/species_cds_busco_short"' in text
     assert 'file_multispecies_summary="${input_generation_root}/annotation_summary/annotation_summary.tsv"' in text
     assert 'cmd=(Rscript "${gg_support_dir}/annotation_summary.r")' in text
+    assert 'cmd+=(--dir_species_cds_fx2tab="${species_cds_fx2tab_dir}")' in text
     assert '--dir_species_tree="${gg_workspace_output_dir}/species_tree"' not in text
     assert 'python "${gg_support_dir}/plan_input_generation_tasks.py"' in text
     assert 'python "${gg_support_dir}/run_input_generation_task.py"' in text

@@ -143,12 +143,38 @@ def _install_fake_toolchain(root: Path) -> Path:
             """\
             #!/usr/bin/env python3
             import gzip
+            import io
             import sys
 
-            args = sys.argv[1:]
-            if not args or args[0] != "seq":
-                raise SystemExit(f"Unsupported seqkit invocation: {' '.join(sys.argv[1:])}")
+            def read_text(path):
+                if path == "-":
+                    return sys.stdin.read()
+                opener = gzip.open if path.endswith(".gz") else open
+                with opener(path, "rt", encoding="utf-8") as src:
+                    return src.read()
 
+            def iter_fasta_records(text):
+                header = None
+                seq_parts = []
+                for raw_line in io.StringIO(text):
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    if line.startswith(">"):
+                        if header is not None:
+                            yield header, "".join(seq_parts)
+                        header = line[1:].strip()
+                        seq_parts = []
+                    else:
+                        seq_parts.append(line)
+                if header is not None:
+                    yield header, "".join(seq_parts)
+
+            args = sys.argv[1:]
+            if not args:
+                raise SystemExit("Unsupported seqkit invocation:")
+
+            subcommand = args[0]
             input_path = ""
             output_path = ""
             i = 1
@@ -159,6 +185,8 @@ def _install_fake_toolchain(root: Path) -> Path:
                 elif arg in ("--out-file", "-o"):
                     output_path = args[i + 1]
                     i += 2
+                elif arg in ("--length", "--name", "--gc", "--gc-skew", "--header-line", "--only-id"):
+                    i += 1
                 elif arg == "-":
                     input_path = arg
                     i += 1
@@ -168,21 +196,29 @@ def _install_fake_toolchain(root: Path) -> Path:
                     input_path = arg
                     i += 1
 
-            if input_path == "-":
-                content = sys.stdin.read()
-            elif input_path:
-                opener = gzip.open if input_path.endswith(".gz") else open
-                with opener(input_path, "rt", encoding="utf-8") as src:
-                    content = src.read()
+            if subcommand == "seq":
+                content = read_text(input_path) if input_path else sys.stdin.read()
+                if output_path:
+                    opener = gzip.open if output_path.endswith(".gz") else open
+                    with opener(output_path, "wt", encoding="utf-8") as dst:
+                        dst.write(content)
+                else:
+                    sys.stdout.write(content)
+            elif subcommand == "fx2tab":
+                content = read_text(input_path) if input_path else sys.stdin.read()
+                rows = ["#id\\tname\\tlength\\tGC\\tGC.Skew"]
+                for header, sequence in iter_fasta_records(content):
+                    seq_id = header.split()[0]
+                    length = len(sequence)
+                    gc_count = sum(1 for base in sequence.upper() if base in ("G", "C"))
+                    g_count = sequence.upper().count("G")
+                    c_count = sequence.upper().count("C")
+                    gc_percent = 0.0 if length == 0 else (gc_count / length) * 100.0
+                    gc_skew = 0.0 if (g_count + c_count) == 0 else (g_count - c_count) / (g_count + c_count)
+                    rows.append(f"{seq_id}\\t{seq_id}\\t{length}\\t{gc_percent:.1f}\\t{gc_skew:.3f}")
+                sys.stdout.write("\\n".join(rows) + "\\n")
             else:
-                content = sys.stdin.read()
-
-            if output_path:
-                opener = gzip.open if output_path.endswith(".gz") else open
-                with opener(output_path, "wt", encoding="utf-8") as dst:
-                    dst.write(content)
-            else:
-                sys.stdout.write(content)
+                raise SystemExit(f"Unsupported seqkit invocation: {' '.join(sys.argv[1:])}")
             """
         ),
         mode=0o755,
@@ -256,6 +292,7 @@ def _install_fake_toolchain(root: Path) -> Path:
 
             outdir = Path.cwd()
             busco_dir = Path(parse("--dir_species_cds_busco"))
+            fx2tab_dir = Path(parse("--dir_species_cds_fx2tab"))
             species = []
             if busco_dir.exists():
                 for path in sorted(busco_dir.glob("*.busco.full.tsv")):
@@ -269,6 +306,9 @@ def _install_fake_toolchain(root: Path) -> Path:
             )
             (outdir / "busco_cds.pdf").write_text("fake pdf\\n", encoding="utf-8")
             (outdir / "busco_cds.svg").write_text("<svg/>\\n", encoding="utf-8")
+            if fx2tab_dir.exists() and any(fx2tab_dir.glob("*_fx2tab_cds.tsv")):
+                (outdir / "fx2tab_cds.pdf").write_text("fake pdf\\n", encoding="utf-8")
+                (outdir / "fx2tab_cds.svg").write_text("<svg/>\\n", encoding="utf-8")
             raise SystemExit(0)
             """
         ),
@@ -289,6 +329,7 @@ def _core_env(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str
         "input_generation_mode": mode,
         "run_format_inputs": "1",
         "run_validate_inputs": "1",
+        "run_cds_fx2tab": "1",
         "run_species_busco": "1",
         "run_multispecies_summary": "1",
         "run_generate_species_trait": "0",
@@ -305,6 +346,7 @@ def _core_env(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str
         "auth_bearer_token_env": "",
         "http_header": "",
         "species_cds_dir": "",
+        "species_cds_fx2tab_dir": "",
         "species_busco_full_dir": "",
         "species_busco_short_dir": "",
         "species_gff_dir": "",
@@ -360,6 +402,7 @@ def _assert_expected_outputs(output_root: Path, expected_last_mode: str) -> None
     summary_dir = output_root / "annotation_summary"
     summary = summary_dir / "annotation_summary.tsv"
     full_dir = output_root / "species_cds_busco_full"
+    fx2tab_dir = output_root / "species_cds_fx2tab"
     short_dir = output_root / "species_cds_busco_short"
     runs_path = output_root / "gg_input_generation_runs.tsv"
 
@@ -371,6 +414,8 @@ def _assert_expected_outputs(output_root: Path, expected_last_mode: str) -> None
     assert (output_root / "species_genome" / "Oryza_sativa_genome.fa.gz").exists()
     assert (full_dir / "Arabidopsis_thaliana.busco.full.tsv").exists()
     assert (full_dir / "Oryza_sativa.busco.full.tsv").exists()
+    assert (fx2tab_dir / "Arabidopsis_thaliana_fx2tab_cds.tsv").exists()
+    assert (fx2tab_dir / "Oryza_sativa_fx2tab_cds.tsv").exists()
     assert (short_dir / "Arabidopsis_thaliana.busco.short.txt").exists()
     assert (short_dir / "Oryza_sativa.busco.short.txt").exists()
 
@@ -381,14 +426,18 @@ def _assert_expected_outputs(output_root: Path, expected_last_mode: str) -> None
 
     assert (summary_dir / "busco_cds.pdf").exists()
     assert (summary_dir / "busco_cds.svg").exists()
+    assert (summary_dir / "fx2tab_cds.pdf").exists()
+    assert (summary_dir / "fx2tab_cds.svg").exists()
     summary_text = summary.read_text(encoding="utf-8")
     assert "Arabidopsis_thaliana" in summary_text
     assert "Oryza_sativa" in summary_text
 
     runs = _read_tsv_rows(runs_path)
     assert runs[-1]["input_generation_mode"] == expected_last_mode
+    assert runs[-1]["stage_cds_fx2tab_status"] == "ok"
     assert runs[-1]["stage_species_busco_status"] == "ok"
     assert runs[-1]["stage_multispecies_summary_status"] == "ok"
+    assert runs[-1]["num_species_cds_fx2tab"] == "2"
     assert runs[-1]["num_species_busco_full"] == "2"
     assert runs[-1]["num_species_busco_short"] == "2"
 

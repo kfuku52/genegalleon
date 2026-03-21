@@ -22,6 +22,7 @@ source "${gg_support_dir}/gg_busco.sh"
 config_file="${config_file:-gg_input_generation_entrypoint.sh}"
 input_generation_mode="${input_generation_mode:-single}"
 run_species_busco="${run_species_busco:-1}"
+run_cds_fx2tab="${run_cds_fx2tab:-1}"
 run_multispecies_summary="${run_multispecies_summary:-1}"
 run_generate_species_trait="${run_generate_species_trait:-0}"
 trait_profile="${trait_profile:-none}"
@@ -29,6 +30,7 @@ busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 busco_lineage_resolved=""
 
 species_cds_dir="${species_cds_dir:-}"
+species_cds_fx2tab_dir="${species_cds_fx2tab_dir:-}"
 species_busco_full_dir="${species_busco_full_dir:-}"
 species_busco_short_dir="${species_busco_short_dir:-}"
 species_gff_dir="${species_gff_dir:-}"
@@ -91,6 +93,7 @@ esac
 for binary_flag_name in \
   run_format_inputs \
   run_validate_inputs \
+  run_cds_fx2tab \
   run_species_busco \
   run_multispecies_summary \
   run_generate_species_trait \
@@ -156,6 +159,9 @@ fi
 if [[ -z "${species_cds_dir}" ]]; then
   species_cds_dir="${input_generation_root}/species_cds"
 fi
+if [[ -z "${species_cds_fx2tab_dir}" ]]; then
+  species_cds_fx2tab_dir="${input_generation_root}/species_cds_fx2tab"
+fi
 if [[ -z "${species_busco_full_dir}" ]]; then
   species_busco_full_dir="${input_generation_root}/species_cds_busco_full"
 fi
@@ -200,6 +206,7 @@ fi
 file_multispecies_summary="${input_generation_root}/annotation_summary/annotation_summary.tsv"
 
 num_species_cds=""
+num_species_cds_fx2tab=""
 num_species_gff=""
 num_species_genome=""
 num_species_busco_full=""
@@ -211,6 +218,7 @@ cds_sequences_after=""
 cds_first_sequence_name=""
 stage_format_status="not_run"
 stage_validate_status="not_run"
+stage_cds_fx2tab_status="not_run"
 stage_species_busco_status="not_run"
 stage_multispecies_summary_status="not_run"
 stage_trait_status="not_run"
@@ -493,13 +501,14 @@ write_gg_input_generation_summary_on_exit() {
   if [[ ${exit_code} -ne 0 ]]; then
     if [[ "${stage_format_status}" == "running" ]]; then stage_format_status="failed"; fi
     if [[ "${stage_validate_status}" == "running" ]]; then stage_validate_status="failed"; fi
+    if [[ "${stage_cds_fx2tab_status}" == "running" ]]; then stage_cds_fx2tab_status="failed"; fi
     if [[ "${stage_species_busco_status}" == "running" ]]; then stage_species_busco_status="failed"; fi
     if [[ "${stage_multispecies_summary_status}" == "running" ]]; then stage_multispecies_summary_status="failed"; fi
     if [[ "${stage_trait_status}" == "running" ]]; then stage_trait_status="failed"; fi
   fi
 
   ensure_parent_dir "${summary_output}"
-  header="started_utc\tended_utc\tduration_sec\texit_code\tprovider\tinput_generation_mode\trun_format_inputs\trun_validate_inputs\trun_species_busco\trun_multispecies_summary\trun_generate_species_trait\tbusco_lineage\tbusco_lineage_resolved\tstrict\toverwrite\tdownload_only\tdry_run\tdownload_timeout\tinput_dir\tdownload_manifest\tdownload_dir\ttask_plan_output\tspecies_cds_dir\tspecies_busco_full_dir\tspecies_busco_short_dir\tspecies_gff_dir\tspecies_genome_dir\tspecies_trait_output\tfile_multispecies_summary\tnum_species_cds\tnum_species_gff\tnum_species_genome\tnum_species_busco_full\tnum_species_busco_short\tnum_species_trait\tnum_trait_columns\tcds_sequences_before\tcds_sequences_after\tcds_first_sequence_name\tstage_format_status\tstage_validate_status\tstage_species_busco_status\tstage_multispecies_summary_status\tstage_trait_status\tconfig_file"
+  header="started_utc\tended_utc\tduration_sec\texit_code\tprovider\tinput_generation_mode\trun_format_inputs\trun_validate_inputs\trun_cds_fx2tab\trun_species_busco\trun_multispecies_summary\trun_generate_species_trait\tbusco_lineage\tbusco_lineage_resolved\tstrict\toverwrite\tdownload_only\tdry_run\tdownload_timeout\tinput_dir\tdownload_manifest\tdownload_dir\ttask_plan_output\tspecies_cds_dir\tspecies_cds_fx2tab_dir\tspecies_busco_full_dir\tspecies_busco_short_dir\tspecies_gff_dir\tspecies_genome_dir\tspecies_trait_output\tfile_multispecies_summary\tnum_species_cds\tnum_species_cds_fx2tab\tnum_species_gff\tnum_species_genome\tnum_species_busco_full\tnum_species_busco_short\tnum_species_trait\tnum_trait_columns\tcds_sequences_before\tcds_sequences_after\tcds_first_sequence_name\tstage_format_status\tstage_validate_status\tstage_cds_fx2tab_status\tstage_species_busco_status\tstage_multispecies_summary_status\tstage_trait_status\tconfig_file"
   expected_header_line=$(printf '%b' "${header}")
   if [[ -s "${summary_output}" ]]; then
     existing_header_line=$(head -n 1 "${summary_output}" || true)
@@ -524,6 +533,7 @@ write_gg_input_generation_summary_on_exit() {
   row="${row}\t$(sanitize_tsv_value "${input_generation_mode}")"
   row="${row}\t$(sanitize_tsv_value "${run_format_inputs}")"
   row="${row}\t$(sanitize_tsv_value "${run_validate_inputs}")"
+  row="${row}\t$(sanitize_tsv_value "${run_cds_fx2tab}")"
   row="${row}\t$(sanitize_tsv_value "${run_species_busco}")"
   row="${row}\t$(sanitize_tsv_value "${run_multispecies_summary}")"
   row="${row}\t$(sanitize_tsv_value "${run_generate_species_trait}")"
@@ -539,6 +549,7 @@ write_gg_input_generation_summary_on_exit() {
   row="${row}\t$(sanitize_tsv_value "${download_dir}")"
   row="${row}\t$(sanitize_tsv_value "${task_plan_output}")"
   row="${row}\t$(sanitize_tsv_value "${species_cds_dir}")"
+  row="${row}\t$(sanitize_tsv_value "${species_cds_fx2tab_dir}")"
   row="${row}\t$(sanitize_tsv_value "${species_busco_full_dir}")"
   row="${row}\t$(sanitize_tsv_value "${species_busco_short_dir}")"
   row="${row}\t$(sanitize_tsv_value "${species_gff_dir}")"
@@ -546,6 +557,7 @@ write_gg_input_generation_summary_on_exit() {
   row="${row}\t$(sanitize_tsv_value "${species_trait_output}")"
   row="${row}\t$(sanitize_tsv_value "${file_multispecies_summary}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_cds}")"
+  row="${row}\t$(sanitize_tsv_value "${num_species_cds_fx2tab}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_gff}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_genome}")"
   row="${row}\t$(sanitize_tsv_value "${num_species_busco_full}")"
@@ -557,6 +569,7 @@ write_gg_input_generation_summary_on_exit() {
   row="${row}\t$(sanitize_tsv_value "${cds_first_sequence_name}")"
   row="${row}\t$(sanitize_tsv_value "${stage_format_status}")"
   row="${row}\t$(sanitize_tsv_value "${stage_validate_status}")"
+  row="${row}\t$(sanitize_tsv_value "${stage_cds_fx2tab_status}")"
   row="${row}\t$(sanitize_tsv_value "${stage_species_busco_status}")"
   row="${row}\t$(sanitize_tsv_value "${stage_multispecies_summary_status}")"
   row="${row}\t$(sanitize_tsv_value "${stage_trait_status}")"
@@ -814,6 +827,144 @@ run_validate_stage() {
   stage_validate_status="ok"
 }
 
+run_cds_fx2tab_for_one_file() {
+  local seq_full=$1
+  local species_name=$2
+  local seq_file=""
+  local file_sp_cds_fx2tab=""
+  local tmp_fx2tab_tsv=""
+
+  seq_file=$(basename "${seq_full}")
+  file_sp_cds_fx2tab="${species_cds_fx2tab_dir}/${species_name}_fx2tab_cds.tsv"
+
+  if [[ ${overwrite} -ne 1 && -s "${file_sp_cds_fx2tab}" ]]; then
+    echo "Skipped fx2tab: ${seq_file}"
+    return 0
+  fi
+
+  ensure_dir "${species_cds_fx2tab_dir}"
+  rm -f -- "${file_sp_cds_fx2tab}"
+  tmp_fx2tab_tsv=$(mktemp "${input_generation_tmp_root}/fx2tab.${species_name}.XXXXXX.tsv")
+  if seqkit fx2tab \
+    --threads "${GG_TASK_CPUS:-1}" \
+    --length \
+    --name \
+    --gc \
+    --gc-skew \
+    --header-line \
+    --only-id \
+    "${seq_full}" \
+    > "${tmp_fx2tab_tsv}"; then
+    :
+  else
+    echo "Failed: seqkit fx2tab for ${seq_full}"
+    rm -f -- "${tmp_fx2tab_tsv}"
+    exit 1
+  fi
+
+  if [[ ! -s "${tmp_fx2tab_tsv}" ]]; then
+    echo "seqkit fx2tab produced no output for: ${seq_full}"
+    rm -f -- "${tmp_fx2tab_tsv}"
+    exit 1
+  fi
+
+  mv -- "${tmp_fx2tab_tsv}" "${file_sp_cds_fx2tab}"
+}
+
+run_cds_fx2tab_stage_all() {
+  local task="seqkit fx2tab for species CDS files"
+  local source_species_input_fasta=()
+  local input_species_set=()
+  local fx2tab_output_files=()
+  local fx2tab_file fx2tab_base fx2tab_species fx2tab_species_found input_species
+  local seq_full seq_file sp_ub
+
+  if [[ ${run_cds_fx2tab} -ne 1 || ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
+    gg_step_skip "${task}"
+    stage_cds_fx2tab_status="skipped"
+    return 0
+  fi
+
+  gg_step_start "${task}"
+  stage_cds_fx2tab_status="running"
+  ensure_dir "${species_cds_fx2tab_dir}"
+  while IFS= read -r path; do
+    [[ -n "${path}" ]] || continue
+    source_species_input_fasta+=( "${path}" )
+  done < <(gg_find_fasta_files "${species_cds_dir}" 1)
+  echo "Number of CDS files for fx2tab: ${#source_species_input_fasta[@]}"
+  if [[ ${#source_species_input_fasta[@]} -eq 0 ]]; then
+    echo "No CDS file found. Exiting."
+    stage_cds_fx2tab_status="failed"
+    exit 1
+  fi
+  while IFS= read -r species_name; do
+    [[ -n "${species_name}" ]] || continue
+    input_species_set+=( "${species_name}" )
+  done < <(gg_species_names_from_fasta_dir "${species_cds_dir}")
+  while IFS= read -r path; do
+    [[ -n "${path}" ]] || continue
+    fx2tab_output_files+=( "${path}" )
+  done < <(find "${species_cds_fx2tab_dir}" -maxdepth 1 -type f -name "*_fx2tab_cds.tsv" 2> /dev/null | sort)
+  if [[ ${#fx2tab_output_files[@]} -gt 0 ]]; then
+    for fx2tab_file in "${fx2tab_output_files[@]}"; do
+      fx2tab_base=$(basename "${fx2tab_file}")
+      fx2tab_species=$(gg_species_name_from_path_or_dot "${fx2tab_base}")
+      fx2tab_species_found=0
+      for input_species in "${input_species_set[@]}"; do
+        if [[ "${input_species}" == "${fx2tab_species}" ]]; then
+          fx2tab_species_found=1
+          break
+        fi
+      done
+      if [[ ${fx2tab_species_found} -eq 0 ]]; then
+        echo "Removing stale fx2tab output for species not in current input: ${fx2tab_file}"
+        rm -f -- "${fx2tab_file}"
+      fi
+    done
+  fi
+
+  for seq_full in "${source_species_input_fasta[@]}"; do
+    seq_file=$(basename "${seq_full}")
+    sp_ub=$(gg_species_name_from_path_or_dot "${seq_file}")
+    gg_step_start "${task}: ${seq_file}"
+    run_cds_fx2tab_for_one_file "${seq_full}" "${sp_ub}"
+  done
+  num_species_cds_fx2tab=$(count_nonhidden_matching_files "${species_cds_fx2tab_dir}" "*_fx2tab_cds.tsv")
+  stage_cds_fx2tab_status="ok"
+}
+
+run_cds_fx2tab_stage_one_worker() {
+  local task="seqkit fx2tab for species CDS files"
+  local task_meta_file="${dir_task_meta_shards}/${GG_ARRAY_TASK_ID}.json"
+  local species_prefix=""
+  local cds_output_path=""
+
+  if [[ ${run_cds_fx2tab} -ne 1 || ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
+    gg_step_skip "${task}"
+    stage_cds_fx2tab_status="skipped"
+    return 0
+  fi
+
+  gg_step_start "${task}"
+  stage_cds_fx2tab_status="running"
+  if [[ ! -s "${task_meta_file}" ]]; then
+    echo "Missing task metadata shard for fx2tab worker: ${task_meta_file}"
+    stage_cds_fx2tab_status="failed"
+    exit 1
+  fi
+  species_prefix=$(read_stats_json_field "${task_meta_file}" "species_prefix")
+  cds_output_path=$(read_stats_json_field "${task_meta_file}" "cds_output_path")
+  if [[ -z "${species_prefix}" || -z "${cds_output_path}" ]]; then
+    echo "Task metadata shard is missing fx2tab fields: ${task_meta_file}"
+    stage_cds_fx2tab_status="failed"
+    exit 1
+  fi
+
+  run_cds_fx2tab_for_one_file "${cds_output_path}" "${species_prefix}"
+  stage_cds_fx2tab_status="ok"
+}
+
 run_species_busco_for_one_file() {
   local seq_full=$1
   local species_name=$2
@@ -1015,6 +1166,14 @@ run_multispecies_summary_stage() {
     stage_multispecies_summary_status="failed"
     exit 1
   fi
+  if [[ ${run_cds_fx2tab} -eq 1 && -d "${species_cds_fx2tab_dir}" ]]; then
+    num_species_cds_fx2tab=$(count_nonhidden_matching_files "${species_cds_fx2tab_dir}" "*_fx2tab_cds.tsv")
+    if [[ "${num_species_cds_fx2tab}" != "0" ]] && ! is_species_set_identical "${species_cds_dir}" "${species_cds_fx2tab_dir}"; then
+      echo "Exiting due to species-set mismatch between ${species_cds_dir} and ${species_cds_fx2tab_dir}"
+      stage_multispecies_summary_status="failed"
+      exit 1
+    fi
+  fi
 
   gg_step_start "${task}"
   stage_multispecies_summary_status="running"
@@ -1023,6 +1182,9 @@ run_multispecies_summary_stage() {
 
   cmd=(Rscript "${gg_support_dir}/annotation_summary.r")
   cmd+=(--dir_species_cds_busco="${species_busco_full_dir}")
+  if [[ ${run_cds_fx2tab} -eq 1 ]]; then
+    cmd+=(--dir_species_cds_fx2tab="${species_cds_fx2tab_dir}")
+  fi
   if [[ -s "${species_trait_output}" ]]; then
     cmd+=(--file_species_trait="${species_trait_output}")
   fi
@@ -1272,6 +1434,7 @@ run_array_worker_mode() {
   fi
   stage_format_status="ok"
 
+  run_cds_fx2tab_stage_one_worker
   run_species_busco_stage_one_worker
   stage_validate_status="skipped"
   stage_multispecies_summary_status="skipped"
@@ -1339,6 +1502,22 @@ run_array_finalize_mode() {
   stage_format_status="ok"
 
   run_validate_stage
+  if [[ ${run_cds_fx2tab} -eq 1 ]]; then
+    num_species_cds_fx2tab=$(count_nonhidden_matching_files "${species_cds_fx2tab_dir}" "*_fx2tab_cds.tsv")
+    if [[ "${num_species_cds_fx2tab}" != "${expected_tasks}" ]]; then
+      echo "fx2tab output count mismatch after array workers: cds=${num_species_cds_fx2tab}, expected=${expected_tasks}"
+      stage_cds_fx2tab_status="failed"
+      exit 1
+    fi
+    if ! is_species_set_identical "${species_cds_dir}" "${species_cds_fx2tab_dir}"; then
+      echo "Exiting due to species-set mismatch between ${species_cds_dir} and ${species_cds_fx2tab_dir}"
+      stage_cds_fx2tab_status="failed"
+      exit 1
+    fi
+    stage_cds_fx2tab_status="ok"
+  else
+    stage_cds_fx2tab_status="skipped"
+  fi
   if [[ ${run_species_busco} -eq 1 ]]; then
     num_species_busco_full=$(count_nonhidden_matching_files "${species_busco_full_dir}" "*busco.full.tsv")
     num_species_busco_short=$(count_nonhidden_matching_files "${species_busco_short_dir}" "*busco.short.txt")
@@ -1360,6 +1539,7 @@ case "${input_generation_mode}" in
   single)
     run_format_stage_single
     run_validate_stage
+    run_cds_fx2tab_stage_all
     run_species_busco_stage_all
     run_trait_stage
     run_multispecies_summary_stage
