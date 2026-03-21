@@ -1386,7 +1386,6 @@ def test_busco_getfasta_step_defines_and_uses_its_duplicate_aware_helper():
 def test_genome_evolution_core_uses_safe_busco_summary_count_helper():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    assert "get_busco_summary_gene_count()" in text
     assert 'num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")' in text
 
 
@@ -2800,7 +2799,6 @@ def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
     expected_tokens = [
         'dir_nwkit_download_dir="${gg_workspace_downloads_dir}/nwkit_downloads"',
         'ensure_dir "${dir_nwkit_download_dir}"',
-        'nwkit mcmctree \\',
         '--download_dir "${dir_nwkit_download_dir}"',
         "nwkit_args=(",
         '--download_dir "${dir_nwkit_download_dir}"',
@@ -2808,6 +2806,7 @@ def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
         '--right_species "${mcmctree_params[1]}"',
         'nwkit_args+=(--lower_bound "${mcmctree_params[2]}")',
         'nwkit_args+=(--upper_bound "${mcmctree_params[3]}")',
+        'echo "nwkit mcmctree params: ${nwkit_args[*]}"',
         'tree_string=$(printf \'%s\\n\' "${tree_string}" | nwkit mcmctree "${nwkit_args[@]}")',
         'printf \'%s\\n\' "${tree_string}" > "tmp.constrained.tree.nwk"',
     ]

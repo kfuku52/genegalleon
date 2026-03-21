@@ -25,7 +25,7 @@ def _run_bash(command: str, cwd: Path, env: dict[str, str] | None = None):
     if env:
         run_env.update(env)
     return subprocess.run(
-        ["bash", "-lc", command],
+        ["bash", "-c", command],
         cwd=cwd,
         capture_output=True,
         text=True,
