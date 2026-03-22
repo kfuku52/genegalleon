@@ -10,6 +10,7 @@ library(missMDA, quietly=TRUE)
 library(svglite, quietly=TRUE)
 library(rkftools, quietly=TRUE)
 #library(readxl, quietly=TRUE)
+has_rtsne = requireNamespace("Rtsne", quietly=TRUE)
 
 options(stringsAsFactors=FALSE)
 
@@ -29,6 +30,74 @@ normalize_busco_species_colname = function(x) {
     x = sub('([._]busco([._]full)?)$', '', x, perl=TRUE)
     x = sub('([._]full)$', '', x, perl=TRUE)
     x
+}
+
+coerce_numeric_data_frame = function(df_in) {
+    df_out = as.data.frame(lapply(df_in, function(x) {
+        if (is.numeric(x)) {
+            return(as.numeric(x))
+        }
+        suppressWarnings(as.numeric(as.character(x)))
+    }), check.names=FALSE, stringsAsFactors=FALSE)
+    rownames(df_out) = rownames(df_in)
+    df_out
+}
+
+is_zero_variance_vector = function(x) {
+    x = x[!is.na(x)]
+    if (length(x) <= 1) {
+        return(FALSE)
+    }
+    stats::var(x) == 0
+}
+
+filter_expression_for_dimensional_reduction = function(df_in) {
+    df_out = coerce_numeric_data_frame(df_in)
+    mat = as.matrix(df_out)
+    inf_mask = is.infinite(mat)
+    num_infinite = sum(inf_mask)
+    if (num_infinite > 0) {
+        cat(sprintf('Converting %d Inf/-Inf value(s) to NA before dimensional reduction.\n', num_infinite))
+        mat[inf_mask] = NA_real_
+        df_out = as.data.frame(mat, check.names=FALSE, stringsAsFactors=FALSE)
+        rownames(df_out) = rownames(df_in)
+    }
+
+    repeat {
+        if (nrow(df_out) == 0 || ncol(df_out) == 0) {
+            break
+        }
+        row_all_na = apply(df_out, 1, function(x) all(is.na(x)))
+        col_all_na = vapply(df_out, function(x) all(is.na(x)), logical(1))
+        row_zero_var = apply(df_out, 1, is_zero_variance_vector)
+        col_zero_var = vapply(df_out, is_zero_variance_vector, logical(1))
+        if (!(any(row_all_na) || any(col_all_na) || any(row_zero_var) || any(col_zero_var))) {
+            break
+        }
+        if (any(row_all_na)) {
+            cat(sprintf('Removing %d all-NA gene row(s) before dimensional reduction.\n', sum(row_all_na)))
+        }
+        if (any(col_all_na)) {
+            cat(sprintf('Removing %d all-NA species column(s) before dimensional reduction.\n', sum(col_all_na)))
+        }
+        if (any(row_zero_var)) {
+            cat(sprintf('Removing %d zero-variance gene row(s) before dimensional reduction.\n', sum(row_zero_var)))
+        }
+        if (any(col_zero_var)) {
+            cat(sprintf('Removing %d zero-variance species column(s) before dimensional reduction.\n', sum(col_zero_var)))
+        }
+        if (any(row_all_na) || any(row_zero_var)) {
+            df_out = df_out[!(row_all_na | row_zero_var), , drop=FALSE]
+        }
+        if (nrow(df_out) == 0 || ncol(df_out) == 0) {
+            break
+        }
+        if (any(col_all_na) || any(col_zero_var)) {
+            df_out = df_out[, !(col_all_na | col_zero_var), drop=FALSE]
+        }
+    }
+
+    df_out
 }
 
 # %%
@@ -119,25 +188,54 @@ if (file.exists('expression.tsv')) {
     if (is_no_enough_data) {
         cat('Expecting at least', min_gene, 'analyzable genes. Skipping.\n')
     } else {
-        cat('Generating expression.imputed.tsv\n')
-        print(paste('Starting the expression level imputation:', Sys.time()))
-        nb = missMDA::estim_ncpPCA(df_exp, method.cv="Kfold", nbsim=100, threshold=1e-2, verbose=TRUE)
-        cat(paste0('Number of components for expression data imputations: ', nb[['ncp']], '\n'))
-        res_comp = missMDA::imputePCA(df_exp, ncp=nb[['ncp']])
-        imp = res_comp[['completeObs']]
-        write.table(imp, 'expression.imputed.tsv', row.names=FALSE, sep='\t', quote=FALSE)
-        print(paste('Ending the expression level imputation:', Sys.time()))    
-        df_imp = read.table('expression.imputed.tsv', header=TRUE, sep='\t', quote='')
+        df_exp_filtered = filter_expression_for_dimensional_reduction(df_exp)
+        cat(sprintf(
+            'Expression matrix retained %d gene row(s) and %d species column(s) after filtering.\n',
+            nrow(df_exp_filtered), ncol(df_exp_filtered)
+        ))
+        if (nrow(df_exp_filtered) < 2 || ncol(df_exp_filtered) < 2) {
+            cat(sprintf(
+                'Skipping dimensional reduction because too few rows/columns remain after filtering: %d gene row(s), %d species column(s).\n',
+                nrow(df_exp_filtered), ncol(df_exp_filtered)
+            ))
+        } else {
+            cat('Generating expression.imputed.tsv\n')
+            print(paste('Starting the expression level imputation:', Sys.time()))
+            nb = missMDA::estim_ncpPCA(df_exp_filtered, method.cv="Kfold", nbsim=100, threshold=1e-2, verbose=TRUE)
+            cat(paste0('Number of components for expression data imputations: ', nb[['ncp']], '\n'))
+            res_comp = missMDA::imputePCA(df_exp_filtered, ncp=nb[['ncp']])
+            imp = res_comp[['completeObs']]
+            df_imp = as.data.frame(imp, check.names=FALSE, stringsAsFactors=FALSE)
+            write.table(df_imp, 'expression.imputed.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+            print(paste('Ending the expression level imputation:', Sys.time()))
 
-        for (method in c('pca', 'tsne', 'mds')) {
+            for (method in c('pca', 'tsne', 'mds')) {
             cat(paste0('Starting dimensionality reduction: ', method, '\n'))
             input_data = df_imp
             if (method=='pca') {
+                if (nrow(input_data) < 2 || ncol(input_data) < 3) {
+                    cat(sprintf(
+                        'Skipping PCA plot because at least 2 gene rows and 3 species columns are required after filtering; observed %d gene row(s) and %d species column(s).\n',
+                        nrow(input_data), ncol(input_data)
+                    ))
+                    next
+                }
                 pca_res = prcomp(t(input_data), scale.=FALSE)
+                if (ncol(pca_res[['x']]) < 2) {
+                    cat(sprintf('Skipping PCA plot because only %d principal component(s) are available.\n', ncol(pca_res[['x']])))
+                    next
+                }
                 df = data.frame(pca_res[['x']][,c(1,2)])
                 xlabel = paste0("PC 1 (", round(summary(pca_res)$importance[2,1]*100, digits=1), "%)")
                 ylabel = paste0("PC 2 (", round(summary(pca_res)$importance[2,2]*100, digits=1), "%)")
             } else if (method=='mds') {
+                if (ncol(input_data) < 3) {
+                    cat(sprintf(
+                        'Skipping MDS plot because at least 3 species columns are required after filtering; observed %d.\n',
+                        ncol(input_data)
+                    ))
+                    next
+                }
                 corr_matrix = stats::cor(t(input_data), method = 'pearson', use = 'pairwise.complete.obs')
                 corr_matrix[is.na(corr_matrix)] = 0
                 diag(corr_matrix) = 1
@@ -147,7 +245,18 @@ if (file.exists('expression.tsv')) {
                 xlabel = 'MDS 1'
                 ylabel = 'MDS 2'
             } else if (method=='tsne') {
-                perplexity = min(30, floor(ncol(input_data)/4))
+                if (!has_rtsne) {
+                    cat('Skipping tSNE plot because Rtsne is unavailable.\n')
+                    next
+                }
+                perplexity = min(30, floor((ncol(input_data) - 1) / 3))
+                if (perplexity < 1) {
+                    cat(sprintf(
+                        'Skipping tSNE plot because at least 4 species columns are required after filtering; observed %d.\n',
+                        ncol(input_data)
+                    ))
+                    next
+                }
                 out_tsne = Rtsne::Rtsne(as.matrix(t(input_data)), theta=0, check_duplicates=FALSE, 
                                         verbose=FALSE, dims=2, perplexity=perplexity)
                 df = data.frame(out_tsne[['Y']])
@@ -187,6 +296,7 @@ if (file.exists('expression.tsv')) {
                 ggsave(file_name, width = 7.2, height = 7.2)
             }
             g
+            }
         }
     }
 }

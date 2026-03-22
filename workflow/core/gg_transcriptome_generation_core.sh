@@ -138,6 +138,282 @@ csv_join_from_array() {
   printf '%s\n' "${out}"
 }
 
+build_entrez_or_search_string_from_file() {
+  local input_file=$1
+  local joined_terms=""
+
+  joined_terms=$(awk '
+    {
+      line = $0
+      gsub(/\r/, "", line)
+      gsub(/^[[:space:]]+/, "", line)
+      gsub(/[[:space:]]+$/, "", line)
+      if (line != "") {
+        if (!first) {
+          printf " OR "
+        }
+        printf "%s", line
+        first = 0
+      }
+    }
+    END {
+      if (first == 0) {
+        printf "\n"
+      } else {
+        exit 1
+      }
+    }
+  ' "${input_file}") || return 1
+
+  printf '(%s)\n' "${joined_terms}"
+}
+
+metadata_table_has_data_rows() {
+  local table_file=$1
+
+  if [[ ! -s "${table_file}" ]]; then
+    return 1
+  fi
+  [[ $(wc -l < "${table_file}") -gt 1 ]]
+}
+
+extract_sraid_metadata_rows_for_species() {
+  local metadata_source=$1
+  local species_name=$2
+  local output_file=$3
+
+  {
+    head -n 1 "${metadata_source}"
+    grep -F -- "${species_name}" "${metadata_source}" || true
+  } | sed -e "s/\t\t\tno\t/\tyes\tyes\tno\t/g" > "${output_file}"
+}
+
+extract_requested_accessions_missing_from_metadata() {
+  local metadata_table=$1
+  local accession_file=$2
+
+  python - "${metadata_table}" "${accession_file}" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+metadata_path = Path(sys.argv[1])
+accession_path = Path(sys.argv[2])
+
+requested = []
+seen = set()
+with accession_path.open("rt", encoding="utf-8") as handle:
+    for raw_line in handle:
+        accession = raw_line.strip()
+        if not accession or accession in seen:
+            continue
+        seen.add(accession)
+        requested.append(accession)
+
+found = set()
+if metadata_path.exists() and metadata_path.stat().st_size > 0:
+    with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        fieldnames = reader.fieldnames or []
+        if "run" in fieldnames:
+            for row in reader:
+                run = str(row.get("run", "") or "").strip()
+                if run:
+                    found.add(run)
+
+for accession in requested:
+    if accession not in found:
+        print(accession)
+PY
+}
+
+extract_transcriptomic_rows_for_requested_accessions() {
+  local metadata_source=$1
+  local accession_file=$2
+  local output_file=$3
+  local raw_output_file="${output_file}.raw.$$"
+
+  python - "${metadata_source}" "${accession_file}" "${raw_output_file}" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+metadata_path = Path(sys.argv[1])
+accession_path = Path(sys.argv[2])
+output_path = Path(sys.argv[3])
+
+requested = []
+requested_set = set()
+with accession_path.open("rt", encoding="utf-8") as handle:
+    for raw_line in handle:
+        accession = raw_line.strip()
+        if not accession or accession in requested_set:
+            continue
+        requested.append(accession)
+        requested_set.add(accession)
+
+with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
+    reader = csv.DictReader(handle, delimiter="\t")
+    fieldnames = reader.fieldnames
+    if not fieldnames:
+        raise SystemExit("Metadata table is missing a header: {}".format(metadata_path))
+    if "run" not in fieldnames:
+        raise SystemExit("Metadata table is missing required 'run' column: {}".format(metadata_path))
+
+    rows = []
+    for row in reader:
+        run = str(row.get("run", "") or "").strip()
+        lib_source = str(row.get("lib_source", "") or "").strip().lower()
+        lib_strategy = str(row.get("lib_strategy", "") or "").strip().lower()
+        is_transcriptomic = (
+            lib_source == "transcriptomic"
+            or lib_strategy in {"rna-seq", "est", "clone"}
+        )
+        if run in requested_set and is_transcriptomic:
+            rows.append(row)
+
+output_path.parent.mkdir(parents=True, exist_ok=True)
+with output_path.open("wt", encoding="utf-8", newline="") as handle:
+    writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+PY
+
+  mv_out < <(sed -e "s/\t\t\tno\t/\tyes\tyes\tno\t/g" "${raw_output_file}") "${output_file}"
+  rm -f -- "${raw_output_file}"
+}
+
+merge_metadata_tables_by_run() {
+  local primary_table=$1
+  local extra_table=$2
+  local output_file=$3
+
+  python - "${primary_table}" "${extra_table}" "${output_file}" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+primary_path = Path(sys.argv[1])
+extra_path = Path(sys.argv[2])
+output_path = Path(sys.argv[3])
+
+fieldnames = None
+rows = []
+seen_runs = set()
+
+for path in (primary_path, extra_path):
+    if not path.exists() or path.stat().st_size == 0:
+        continue
+    with path.open("rt", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if not reader.fieldnames:
+            continue
+        if fieldnames is None:
+            fieldnames = reader.fieldnames
+        for row in reader:
+            run = str(row.get("run", "") or "").strip()
+            dedupe_key = run or tuple((name, row.get(name, "")) for name in reader.fieldnames)
+            if dedupe_key in seen_runs:
+                continue
+            seen_runs.add(dedupe_key)
+            rows.append(row)
+
+if fieldnames is None:
+    raise SystemExit("Could not determine metadata header from {} or {}".format(primary_path, extra_path))
+
+output_path.parent.mkdir(parents=True, exist_ok=True)
+with output_path.open("wt", encoding="utf-8", newline="") as handle:
+    writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+PY
+}
+
+run_amalgkit_metadata_query() {
+  local search_string=$1
+
+  echo "Entrez search string: ${search_string}"
+  echo "amalgkit metadata max concurrent jobs: ${amalgkit_metadata_max_concurrent_jobs}"
+  gg_run_with_shared_semaphore "${dir_amalgkit_metadata_semaphore}" "${amalgkit_metadata_max_concurrent_jobs}" "amalgkit metadata NCBI access (${sp_ub})" \
+    amalgkit metadata \
+      --out_dir "./" \
+      --download_dir "${dir_amalgkit_download_dir}" \
+      --search_string "${search_string}"
+}
+
+cleanup_partial_getfastq_outputs() {
+  rm -rf -- "${dir_tmp}/getfastq"
+  rm -rf -- "${dir_amalgkit_getfastq_sp}"
+  ensure_dir "${dir_amalgkit_getfastq_sp}"
+}
+
+amalgkit_getfastq_log_has_fatal_message() {
+  local log_file=$1
+  [[ -s "${log_file}" ]] || return 1
+  grep -Eq '^ERROR: ' "${log_file}"
+}
+
+run_amalgkit_getfastq_attempt() {
+  local rrna_filter_value=$1
+  local attempt_label=$2
+  local log_file="${dir_tmp}/amalgkit_getfastq.${attempt_label}.log"
+  local getfastq_outputs=()
+
+  rm -f -- "${log_file}"
+  echo "Running amalgkit getfastq attempt '${attempt_label}' with --rrna_filter ${rrna_filter_value}"
+  if amalgkit getfastq \
+    --out_dir "${dir_tmp}" \
+    --download_dir "${dir_amalgkit_download_dir}" \
+    --metadata "${file_amalgkit_metadata}" \
+    --threads "${GG_TASK_CPUS}" \
+    --rrna_filter "${rrna_filter_value}" \
+    --contam_filter "${amalgkit_contam_filter}" \
+    --contam_filter_rank "${contamination_removal_rank_for_amalgkit}" \
+    --contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB" \
+    --remove_sra yes \
+    --remove_tmp yes \
+    --dump_print yes \
+    --read_name 'trinity' \
+    --aws yes \
+    --ncbi yes \
+    --redo no > "${log_file}" 2>&1; then
+    if amalgkit_getfastq_log_has_fatal_message "${log_file}"; then
+      echo "Detected fatal message in amalgkit getfastq log despite a zero exit code: ${log_file}"
+      grep -E '^ERROR: ' "${log_file}" || true
+      cleanup_partial_getfastq_outputs
+      return 2
+    fi
+    echo "amalgkit getfastq safely finished."
+    echo "amalgkit getfastq log: ${log_file}"
+    shopt -s nullglob
+    getfastq_outputs=("${dir_tmp}"/getfastq/*)
+    shopt -u nullglob
+    if [[ ${#getfastq_outputs[@]} -eq 0 ]]; then
+      echo "amalgkit getfastq finished but no output files were found under: ${dir_tmp}/getfastq"
+      cleanup_partial_getfastq_outputs
+      return 1
+    fi
+    mv_out "${getfastq_outputs[@]}" "${dir_amalgkit_getfastq_sp}"
+    rm -rf -- "${dir_tmp}/getfastq"
+    return 0
+  fi
+
+  local status_amalgkit_attempt=$?
+  echo "amalgkit getfastq exit code: ${status_amalgkit_attempt}"
+  echo "amalgkit getfastq log: ${log_file}"
+  if amalgkit_getfastq_log_has_fatal_message "${log_file}"; then
+    echo "Detected fatal message in amalgkit getfastq log."
+    grep -E '^ERROR: ' "${log_file}" || true
+    cleanup_partial_getfastq_outputs
+    return 2
+  fi
+  tail -n 50 "${log_file}" || true
+  cleanup_partial_getfastq_outputs
+  return 1
+}
+
 detect_transcriptome_read_technology_from_metadata() {
   local metadata_tsv="$1"
   local classification_tsv="$2"
@@ -422,41 +698,32 @@ PY
 }
 
 run_amalgkit_getfastq_or_fallback() {
-  local getfastq_outputs=()
-  if amalgkit getfastq \
-    --out_dir "${dir_tmp}" \
-    --download_dir "${dir_amalgkit_download_dir}" \
-    --metadata "${file_amalgkit_metadata}" \
-    --threads "${GG_TASK_CPUS}" \
-    --rrna_filter "${amalgkit_rrna_filter}" \
-    --contam_filter "${amalgkit_contam_filter}" \
-    --contam_filter_rank "${contamination_removal_rank_for_amalgkit}" \
-    --contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB" \
-    --remove_sra yes \
-    --remove_tmp yes \
-    --dump_print yes \
-    --read_name 'trinity' \
-    --aws yes \
-    --ncbi yes \
-    --redo no; then
-    echo "amalgkit getfastq safely finished."
-    shopt -s nullglob
-    getfastq_outputs=("${dir_tmp}"/getfastq/*)
-    shopt -u nullglob
-    if [[ ${#getfastq_outputs[@]} -eq 0 ]]; then
-      echo "amalgkit getfastq finished but no output files were found under: ${dir_tmp}/getfastq"
-      return 1
-    fi
-    mv_out "${getfastq_outputs[@]}" "${dir_amalgkit_getfastq_sp}"
-    rm -rf -- "${dir_tmp}/getfastq"
+  local status_amalgkit=0
+  local fatal_retry_suffix=""
+
+  if run_amalgkit_getfastq_attempt "${amalgkit_rrna_filter}" "initial"; then
     return 0
   else
-    local status_amalgkit=$?
-    echo "amalgkit getfastq exit code: ${status_amalgkit}"
+    status_amalgkit=$?
   fi
+
+  if [[ ${status_amalgkit} -eq 2 ]]; then
+    if [[ "${amalgkit_rrna_filter}" != "no" ]]; then
+      echo "Retrying amalgkit getfastq once with --rrna_filter no because the previous attempt logged a fatal error."
+      fatal_retry_suffix=" after retrying with --rrna_filter no"
+      if run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"; then
+        return 0
+      else
+        status_amalgkit=$?
+      fi
+    fi
+    echo "amalgkit getfastq encountered a fatal error${fatal_retry_suffix}. Exiting without fallback download so partial outputs do not reach downstream steps."
+    cleanup_partial_getfastq_outputs
+    return 1
+  fi
+
   echo "amalgkit getfastq did not safely finish. Attempting fallback download of public original FASTQ files."
-  rm -rf -- "${dir_amalgkit_getfastq_sp}"
-  ensure_dir "${dir_amalgkit_getfastq_sp}"
+  cleanup_partial_getfastq_outputs
   if download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_amalgkit_getfastq_sp}"; then
     echo "Fallback download of public original FASTQ files succeeded."
     return 0
@@ -672,29 +939,43 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
   fi
 
   if [[ "${selected_transcriptome_mode}" == "sraid" ]]; then
-    search_string=$(tr -s "\n" < "${file_input_sra_list}" | sed ':a;N;$!ba;s/\n/ OR /g' | sed -e "s/ OR $//" -e "s/^/(/" -e "s/$/)/")
+    search_string=$(build_entrez_or_search_string_from_file "${file_input_sra_list}")
     if [[ -n "${amalgkit_sra_strategy_query}" ]]; then
       search_string="${search_string} AND (${amalgkit_sra_strategy_query})"
     fi
-    echo "Entrez search string: ${search_string}"
     echo "Entrez strategy filter: ${amalgkit_sra_strategy_query:-disabled}"
-    echo "amalgkit metadata max concurrent jobs: ${amalgkit_metadata_max_concurrent_jobs}"
-
-    if ! gg_run_with_shared_semaphore "${dir_amalgkit_metadata_semaphore}" "${amalgkit_metadata_max_concurrent_jobs}" "amalgkit metadata NCBI access (${sp_ub})" \
-      amalgkit metadata \
-        --out_dir "./" \
-        --download_dir "${dir_amalgkit_download_dir}" \
-        --search_string "${search_string}"; then
+    if ! run_amalgkit_metadata_query "${search_string}"; then
       echo "amalgkit metadata did not safely finish. Exiting."
       exit 1
     fi
 
     sp_space="${sp_ub//_/ }"
-    {
-      head -n 1 "./metadata/metadata.tsv"
-      grep -F -- "${sp_space}" "./metadata/metadata.tsv" || true
-    } | sed -e "s/\t\t\tno\t/\tyes\tyes\tno\t/g" > "./metadata.tsv"
-    if [[ $(wc -l < "./metadata.tsv") -le 1 ]]; then
+    extract_sraid_metadata_rows_for_species "./metadata/metadata.tsv" "${sp_space}" "./metadata.tsv"
+    if [[ -n "${amalgkit_sra_strategy_query}" ]]; then
+      missing_requested_sra_ids=()
+      mapfile -t missing_requested_sra_ids < <(extract_requested_accessions_missing_from_metadata "./metadata.tsv" "${file_input_sra_list}")
+      if [[ ${#missing_requested_sra_ids[@]} -gt 0 ]]; then
+        missing_accessions_csv=$(csv_join_from_array "${missing_requested_sra_ids[@]}")
+        echo "Strategy-filtered metadata lookup is missing ${#missing_requested_sra_ids[@]} requested accession(s): ${missing_accessions_csv}"
+        echo "Retrying the missing accessions without the Entrez strategy filter and keeping transcriptomic rows such as lib_source=TRANSCRIPTOMIC even when lib_strategy=OTHER."
+        printf '%s\n' "${missing_requested_sra_ids[@]}" > "./metadata_missing_accessions.txt"
+        relaxed_search_string=$(build_entrez_or_search_string_from_file "./metadata_missing_accessions.txt")
+        rm -rf -- "./metadata"
+        if ! run_amalgkit_metadata_query "${relaxed_search_string}"; then
+          echo "Relaxed accession-driven amalgkit metadata retry did not safely finish. Exiting."
+          exit 1
+        fi
+        extract_transcriptomic_rows_for_requested_accessions "./metadata/metadata.tsv" "./metadata_missing_accessions.txt" "./metadata.relaxed.tsv"
+        if metadata_table_has_data_rows "./metadata.relaxed.tsv"; then
+          merge_metadata_tables_by_run "./metadata.tsv" "./metadata.relaxed.tsv" "./metadata.merged.tsv"
+          mv_out "./metadata.merged.tsv" "./metadata.tsv"
+          echo "Relaxed accession-driven metadata fallback retained $(($(wc -l < "./metadata.relaxed.tsv") - 1)) transcriptomic run(s)."
+        else
+          echo "Relaxed accession-driven metadata fallback did not recover transcriptomic metadata for the missing accessions."
+        fi
+      fi
+    fi
+    if ! metadata_table_has_data_rows "./metadata.tsv"; then
       echo "No metadata rows matched species '${sp_space}' in ./metadata/metadata.tsv. Exiting."
       echo "If the accession exists in SRA but was excluded by the Entrez strategy clause, relax amalgkit_sra_strategy_query or set it empty to disable strategy filtering."
       echo 'If the run is small-RNA/miRNA rather than transcriptome assembly input, prefer a different accession or provide explicit metadata/FASTQ inputs instead of mode_transcriptome_assembly="sraid".'

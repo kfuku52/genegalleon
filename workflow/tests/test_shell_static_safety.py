@@ -1146,6 +1146,8 @@ def test_nonconda_download_helpers_use_archive_files_and_wget_fallback():
     cafe_body = _function_body(text, "install_cafe5")
     assert 'archive_path="${workdir}/CAFE5-5.1.0.tar.gz"' in cafe_body
     assert 'if ! download_checked_url_to_file \\' in cafe_body
+    assert 'install_r_cran_packages "${r_env_name}" Rphylopars Rtsne' in text
+    assert "pkgs <- c('Rphylopars','Rtsne'" in text
     assert 'if ! tar -xzf "${archive_path}" -C "${workdir}"; then' in cafe_body
 
 
@@ -1636,7 +1638,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         '--out_dir "${dir_tmp}"',
         '--download_dir "${dir_amalgkit_download_dir}"',
         '--metadata "${file_amalgkit_metadata}"',
-        '--rrna_filter "${amalgkit_rrna_filter}"',
+        '--rrna_filter "${rrna_filter_value}"',
         '--contam_filter "${amalgkit_contam_filter}"',
         '--contam_filter_rank "${contamination_removal_rank_for_amalgkit}"',
         '--contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"',
@@ -1654,7 +1656,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         'if [[ -e "${file_kallisto_reference_fasta}" ]]; then',
         'ln -s "${file_kallisto_reference_fasta}" "${file_reference_fasta_link}"',
         'ln -s "${dir_amalgkit_quant}/${sp_ub}" "./quant"',
-        'grep -F -- "${sp_space}" "./metadata/metadata.tsv"',
+        'grep -F -- "${species_name}" "${metadata_source}"',
         'mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"',
     ]
     for token in expected_tokens:
@@ -1664,8 +1666,9 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
 def test_transcriptome_core_sraid_metadata_filter_handles_zero_match_explicitly():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
-    assert 'grep -F -- "${sp_space}" "./metadata/metadata.tsv" || true' in text
-    assert 'if [[ $(wc -l < "./metadata.tsv") -le 1 ]]; then' in text
+    extract_body = _function_body(text, "extract_sraid_metadata_rows_for_species")
+    assert 'grep -F -- "${species_name}" "${metadata_source}" || true' in extract_body
+    assert 'if ! metadata_table_has_data_rows "./metadata.tsv"; then' in text
     assert "No metadata rows matched species" in text
 
 
@@ -1676,6 +1679,26 @@ def test_transcriptome_core_sraid_metadata_search_accepts_non_illumina_short_rea
     assert 'search_string="${search_string} AND (${amalgkit_sra_strategy_query})"' in text
     assert '\\"Illumina\\"[Platform]' not in text
     assert '\\"CLONE\\"[Strategy]' in text
+
+
+def test_transcriptome_core_relaxes_sraid_strategy_filter_for_missing_explicit_accessions():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    build_body = _function_body(text, "build_entrez_or_search_string_from_file")
+    missing_body = _function_body(text, "extract_requested_accessions_missing_from_metadata")
+    relaxed_body = _function_body(text, "extract_transcriptomic_rows_for_requested_accessions")
+    merge_body = _function_body(text, "merge_metadata_tables_by_run")
+
+    assert "printf '(%s)\\n' \"${joined_terms}\"" in build_body
+    assert 'mapfile -t missing_requested_sra_ids < <(extract_requested_accessions_missing_from_metadata "./metadata.tsv" "${file_input_sra_list}")' in text
+    assert "Retrying the missing accessions without the Entrez strategy filter" in text
+    assert "lib_source == \"transcriptomic\"" in relaxed_body
+    assert 'or lib_strategy in {"rna-seq", "est", "clone"}' in relaxed_body
+    assert 'extract_transcriptomic_rows_for_requested_accessions "./metadata/metadata.tsv" "./metadata_missing_accessions.txt" "./metadata.relaxed.tsv"' in text
+    assert 'merge_metadata_tables_by_run "./metadata.tsv" "./metadata.relaxed.tsv" "./metadata.merged.tsv"' in text
+    assert "Relaxed accession-driven metadata fallback retained" in text
+    assert "Could not determine metadata header" in merge_body
+    assert 'if "run" in fieldnames:' in missing_body
 
 
 def test_transcriptome_core_detects_long_read_platforms_from_metadata():
@@ -1717,12 +1740,27 @@ def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_fa
     assert 'dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)' in body
 
 
+def test_transcriptome_core_detects_fatal_getfastq_logs_and_retries_without_rrna():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    cleanup_body = _function_body(text, "cleanup_partial_getfastq_outputs")
+    detect_body = _function_body(text, "amalgkit_getfastq_log_has_fatal_message")
+    attempt_body = _function_body(text, "run_amalgkit_getfastq_attempt")
+
+    assert 'rm -rf -- "${dir_tmp}/getfastq"' in cleanup_body
+    assert 'rm -rf -- "${dir_amalgkit_getfastq_sp}"' in cleanup_body
+    assert "grep -Eq '^ERROR: '" in detect_body
+    assert "Detected fatal message in amalgkit getfastq log despite a zero exit code" in attempt_body
+    assert 'run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"' in text
+    assert "Exiting without fallback download so partial outputs do not reach downstream steps." in text
+
+
 def test_transcriptome_entrypoint_exposes_auto_assembly_and_metadata_detection():
     entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
     core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
 
-    assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Set empty to disable strategy filtering.' in entrypoint
+    assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Explicit-accession fallback automatically retries without this clause when transcriptomic runs are missed. Set empty to disable strategy filtering.' in entrypoint
     assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}"' in core
     assert "amalgkit_sra_strategy_query" in config_vars
     assert 'assembly_method="auto" # {auto,Trinity,rnaSPAdes,RNA-Bloom2}; auto picks rnaSPAdes for short-read metadata and RNA-Bloom2 for detected PacBio/ONT metadata.' in entrypoint

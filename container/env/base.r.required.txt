@@ -15,6 +15,7 @@ r-nlme
 r-phangorn
 r-phytools
 r-rcpp
+r-rtsne
 r-svglite
 bioconductor-treeio
 r-viridis

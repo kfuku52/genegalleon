@@ -111,7 +111,7 @@ amalgkit_metadata_max_concurrent_jobs="${amalgkit_metadata_max_concurrent_jobs:-
 amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-10}" # Maximum number of concurrent array tasks allowed to call NCBI-backed amalgkit getfastq or fallback FASTQ recovery; set 0 to disable gg-side throttling.
 GG_LOCK_ACQUIRE_TIMEOUT_SECONDS="${GG_LOCK_ACQUIRE_TIMEOUT_SECONDS:-86400}" # Shared lock/semaphore acquire timeout in seconds. Raise this when array tasks can legitimately queue behind long-running getfastq jobs.
 GG_LOCK_POLL_SECONDS="${GG_LOCK_POLL_SECONDS:-10}" # Shared lock/semaphore polling interval in seconds while waiting for a slot.
-amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\"RNA-seq\"[Strategy] OR \"EST\"[Strategy] OR \"CLONE\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Set empty to disable strategy filtering.
+amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\"RNA-seq\"[Strategy] OR \"EST\"[Strategy] OR \"CLONE\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Explicit-accession fallback automatically retries without this clause when transcriptomic runs are missed. Set empty to disable strategy filtering.
 remove_amalgkit_fastq_after_completion=1 # Delete per-species amalgkit FASTQ files after downstream completion.
 
 # Assembly and quantification parameters
