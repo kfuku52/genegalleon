@@ -22,6 +22,7 @@ contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
+genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 # shellcheck disable=SC1090
 source "${gg_support_dir}/gg_busco.sh"
 delete_tmp_dir=${delete_tmp_dir:-1}
