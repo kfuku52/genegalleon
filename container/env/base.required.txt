@@ -37,6 +37,7 @@ ntcard
 omamer
 omark
 orthofinder
+oarfish
 astral-tree
 paml
 pigz

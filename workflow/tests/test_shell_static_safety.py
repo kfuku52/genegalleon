@@ -1696,8 +1696,9 @@ def test_transcriptome_core_detects_long_read_platforms_from_metadata():
     assert 'effective_assembly_method="rnaspades"' in configure_body
     assert 'Mixed PacBio and ONT long-read runs were detected in metadata' in configure_body
     assert 'Mixed ONT cDNA and direct-RNA runs were detected in metadata' in configure_body
-    assert 'Detected long-read platforms in metadata. Disabling run_amalgkit_quant' in configure_body
-    assert 'Detected long-read platforms in metadata. Disabling run_amalgkit_merge' in configure_body
+    assert 'run_amalgkit_quant remains enabled; amalgkit quant will use quant_backend=${amalgkit_quant_backend}.' in configure_body
+    assert 'run_amalgkit_merge remains enabled because amalgkit merge accepts normalized abundance tables from long-read quant.' in configure_body
+    assert 'amalgkit quant cannot auto-resolve oarfish sequencing technology for these runs.' in configure_body
 
 
 def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_failure():
@@ -1727,6 +1728,15 @@ def test_transcriptome_entrypoint_exposes_auto_assembly_and_metadata_detection()
     assert 'assembly_method="auto" # {auto,Trinity,rnaSPAdes,RNA-Bloom2}; auto picks rnaSPAdes for short-read metadata and RNA-Bloom2 for detected PacBio/ONT metadata.' in entrypoint
     assert 'requested_assembly_method=$(printf \'%s\' "${assembly_method:-auto}" | tr \'[:upper:]\' \'[:lower:]\' | tr \'_\' \'-\')' in core
     assert "assembly_method" in config_vars
+    assert 'amalgkit_quant_backend="${amalgkit_quant_backend:-auto}" # {auto,kallisto,oarfish}; auto selects kallisto for short-read runs and oarfish for long-read runs.' in entrypoint
+    assert 'amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}" # {auto,ont-cdna,ont-drna,pac-bio,pac-bio-hifi}; auto infers long-read subtype from metadata for oarfish.' in entrypoint
+    assert 'amalgkit_oarfish_options="${amalgkit_oarfish_options:-}" # Optional extra shell-style option string forwarded to amalgkit quant --oarfish_options.' in entrypoint
+    assert 'amalgkit_quant_backend="${amalgkit_quant_backend:-auto}"' in core
+    assert 'amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}"' in core
+    assert 'amalgkit_oarfish_options="${amalgkit_oarfish_options:-}"' in core
+    assert "amalgkit_quant_backend" in config_vars
+    assert "amalgkit_oarfish_seq_tech" in config_vars
+    assert "amalgkit_oarfish_options" in config_vars
     assert "amalgkit_long_read_instrument_pattern" not in entrypoint
     assert "amalgkit_long_read_instrument_pattern" not in core
     assert "amalgkit_long_read_instrument_pattern" not in config_vars

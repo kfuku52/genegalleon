@@ -62,12 +62,56 @@ def test_detect_amalgkit_read_technology_classifies_runs_and_summary(tmp_path: P
     assert "detected_pacbio_run_count=1" in summary
     assert "detected_ont_cdna_run_count=1" in summary
     assert "detected_ont_direct_rna_run_count=1" in summary
+    assert "detected_long_read_unknown_run_count=0" in summary
     assert "detected_has_long_reads=1" in summary
     assert "detected_has_short_reads=1" in summary
     assert "detected_has_pacbio=1" in summary
     assert "detected_has_ont=1" in summary
+    assert "detected_has_long_read_unknown=0" in summary
     assert "detected_input_class=mixed_long_platforms" in summary
     assert "detected_metadata_instrument_field=instrument" in summary
+
+
+def test_detect_amalgkit_read_technology_uses_metadata_heuristics_for_unlabeled_long_reads(tmp_path: Path):
+    metadata_path = tmp_path / "metadata.tsv"
+    classification_path = tmp_path / "classification.tsv"
+    summary_path = tmp_path / "summary.sh"
+
+    metadata_path.write_text(
+        "\n".join(
+            [
+                "run\tplatform\tlib_layout\ttotal_spots\ttotal_bases\tsample_description",
+                "SRR1\t\tpaired\t100\t15000\tbulk RNA-seq",
+                "SRR2\t\tsingle\t10\t25000\tfull-length transcriptome",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_python(
+        DETECT_SCRIPT,
+        "--metadata",
+        str(metadata_path),
+        "--classification-out",
+        str(classification_path),
+        "--summary-sh",
+        str(summary_path),
+        cwd=tmp_path,
+    )
+
+    assert completed.returncode == 0, f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+
+    classification = classification_path.read_text(encoding="utf-8")
+    assert "SRR1\tshort_read\tillumina\t0\t0\tpaired\t" in classification
+    assert "SRR2\tlong_read_unknown\tlong_read_unknown\t1\t0\tsingle\t" in classification
+
+    summary = summary_path.read_text(encoding="utf-8")
+    assert "detected_short_read_run_count=1" in summary
+    assert "detected_long_read_unknown_run_count=1" in summary
+    assert "detected_has_long_reads=1" in summary
+    assert "detected_has_long_read_unknown=1" in summary
+    assert "detected_input_class=hybrid_long_short" in summary
 
 
 def test_rename_rnabloom_transcripts_uses_corset_clusters(tmp_path: Path):

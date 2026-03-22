@@ -29,6 +29,9 @@ mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-sraid}" | tr 
 requested_assembly_method=$(printf '%s' "${assembly_method:-auto}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 amalgkit_metadata_max_concurrent_jobs="${amalgkit_metadata_max_concurrent_jobs:-10}"
 amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-10}"
+amalgkit_quant_backend="${amalgkit_quant_backend:-auto}"
+amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}"
+amalgkit_oarfish_options="${amalgkit_oarfish_options:-}"
 amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\"RNA-seq\"[Strategy] OR \"EST\"[Strategy] OR \"CLONE\"[Strategy]}"
 busco_lineage_resolved=""
 contamination_removal_rank_for_remove_contaminated_sequences="$(
@@ -43,12 +46,14 @@ detected_short_read_run_count=0
 detected_pacbio_run_count=0
 detected_ont_cdna_run_count=0
 detected_ont_direct_rna_run_count=0
+detected_long_read_unknown_run_count=0
 detected_has_long_reads=0
 detected_has_short_reads=0
 detected_has_pacbio=0
 detected_has_ont=0
 detected_has_ont_cdna=0
 detected_has_ont_direct_rna=0
+detected_has_long_read_unknown=0
 detected_input_class="unknown"
 detected_metadata_instrument_field="none"
 classified_short_single_fastq_files=()
@@ -210,12 +215,12 @@ load_classified_getfastq_files() {
           classified_short_single_fastq_files+=( "${single_fastq}" )
         fi
         ;;
-      pacbio|ont_cdna|ont_direct_rna)
+      pacbio|ont_cdna|ont_direct_rna|long_read_unknown)
         if [[ -n "${single_fastq}" ]]; then
           classified_long_fastq_files+=( "${single_fastq}" )
           if [[ "${read_class}" == "pacbio" ]]; then
             classified_pacbio_fastq_files+=( "${single_fastq}" )
-          else
+          elif [[ "${read_class}" == "ont_cdna" || "${read_class}" == "ont_direct_rna" ]]; then
             classified_ont_fastq_files+=( "${single_fastq}" )
           fi
         else
@@ -224,7 +229,7 @@ load_classified_getfastq_files() {
             classified_long_fastq_files+=( "${match}" )
             if [[ "${read_class}" == "pacbio" ]]; then
               classified_pacbio_fastq_files+=( "${match}" )
-            else
+            elif [[ "${read_class}" == "ont_cdna" || "${read_class}" == "ont_direct_rna" ]]; then
               classified_ont_fastq_files+=( "${match}" )
             fi
           done
@@ -257,7 +262,7 @@ configure_transcriptome_runtime_from_detected_metadata() {
 
   echo "Detected metadata instrument column: ${detected_metadata_instrument_field}"
   echo "Detected transcriptome input class: ${detected_input_class}"
-  echo "Detected run counts: total=${detected_metadata_run_count} short=${detected_short_read_run_count} pacbio=${detected_pacbio_run_count} ont_cdna=${detected_ont_cdna_run_count} ont_direct_rna=${detected_ont_direct_rna_run_count}"
+  echo "Detected run counts: total=${detected_metadata_run_count} short=${detected_short_read_run_count} pacbio=${detected_pacbio_run_count} ont_cdna=${detected_ont_cdna_run_count} ont_direct_rna=${detected_ont_direct_rna_run_count} long_read_unknown=${detected_long_read_unknown_run_count}"
 
   if [[ ${detected_has_pacbio} -eq 1 && ${detected_has_ont} -eq 1 ]]; then
     echo "Mixed PacBio and ONT long-read runs were detected in metadata: ${file_amalgkit_metadata}. Split these technologies into separate transcriptome-generation tasks. Exiting."
@@ -265,6 +270,10 @@ configure_transcriptome_runtime_from_detected_metadata() {
   fi
   if [[ ${detected_has_ont_cdna} -eq 1 && ${detected_has_ont_direct_rna} -eq 1 ]]; then
     echo "Mixed ONT cDNA and direct-RNA runs were detected in metadata: ${file_amalgkit_metadata}. Split these protocols into separate transcriptome-generation tasks. Exiting."
+    exit 1
+  fi
+  if [[ ${detected_long_read_unknown_run_count} -gt 0 && ( ${detected_has_pacbio} -eq 1 || ${detected_has_ont} -eq 1 ) ]]; then
+    echo "Metadata contains long-read runs whose platform could not be resolved to PacBio or ONT alongside explicitly classified long-read runs: ${file_amalgkit_metadata}. Split or relabel these runs before continuing. Exiting."
     exit 1
   fi
 
@@ -277,13 +286,18 @@ configure_transcriptome_runtime_from_detected_metadata() {
     if [[ ${detected_has_short_reads} -eq 1 ]]; then
       echo "Mixed short-read and long-read runs were detected. RNA-Bloom2 assembly will use the long-read FASTQ files only."
     fi
+    if [[ ${detected_long_read_unknown_run_count} -gt 0 ]]; then
+      echo "Long-read runs with unresolved PacBio/ONT platform were inferred from metadata length heuristics."
+      if [[ ${run_amalgkit_quant} -eq 1 && "${amalgkit_oarfish_seq_tech}" == "auto" ]]; then
+        echo "amalgkit quant cannot auto-resolve oarfish sequencing technology for these runs. Set amalgkit_oarfish_seq_tech explicitly or disable run_amalgkit_quant. Exiting."
+        exit 1
+      fi
+    fi
     if [[ ${run_amalgkit_quant} -eq 1 ]]; then
-      echo "Detected long-read platforms in metadata. Disabling run_amalgkit_quant because the current quantification path is short-read kallisto-based."
-      run_amalgkit_quant=0
+      echo "Detected long-read platforms in metadata. run_amalgkit_quant remains enabled; amalgkit quant will use quant_backend=${amalgkit_quant_backend}."
     fi
     if [[ ${run_amalgkit_merge} -eq 1 ]]; then
-      echo "Detected long-read platforms in metadata. Disabling run_amalgkit_merge because the current merge path depends on kallisto quant outputs."
-      run_amalgkit_merge=0
+      echo "Detected long-read platforms in metadata. run_amalgkit_merge remains enabled because amalgkit merge accepts normalized abundance tables from long-read quant."
     fi
   else
     if [[ "${effective_assembly_method}" == "rna-bloom2" ]]; then
@@ -1497,13 +1511,22 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
     exit 1
   fi
 
-  if amalgkit quant \
-    --out_dir "./" \
-    --threads "${GG_TASK_CPUS}" \
-    --metadata "${file_amalgkit_metadata}" \
-    --clean_fastq no \
-    --fasta_dir "./fasta" \
-    --build_index yes; then
+  amalgkit_quant_cmd=(
+    amalgkit quant
+    --out_dir "./"
+    --threads "${GG_TASK_CPUS}"
+    --metadata "${file_amalgkit_metadata}"
+    --clean_fastq no
+    --fasta_dir "./fasta"
+    --build_index yes
+    --quant_backend "${amalgkit_quant_backend}"
+    --oarfish_seq_tech "${amalgkit_oarfish_seq_tech}"
+  )
+  if [[ -n "${amalgkit_oarfish_options}" ]]; then
+    amalgkit_quant_cmd+=(--oarfish_options "${amalgkit_oarfish_options}")
+  fi
+
+  if "${amalgkit_quant_cmd[@]}"; then
     exit_code_amalgkit_quant=0
   else
     exit_code_amalgkit_quant=$?

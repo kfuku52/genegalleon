@@ -289,6 +289,9 @@ EOF
 amalgkit_contam_filter
 amalgkit_getfastq_max_concurrent_jobs
 amalgkit_metadata_max_concurrent_jobs
+amalgkit_oarfish_options
+amalgkit_oarfish_seq_tech
+amalgkit_quant_backend
 amalgkit_rrna_filter
 amalgkit_sra_strategy_query
 assembly_cpu_offset
