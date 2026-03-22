@@ -27,8 +27,10 @@ source "${gg_support_dir}/gg_busco.sh"
 delete_tmp_dir=${delete_tmp_dir:-1}
 mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-sraid}" | tr '[:upper:]' '[:lower:]')
 requested_assembly_method=$(printf '%s' "${assembly_method:-auto}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
-amalgkit_metadata_max_concurrent_jobs="${amalgkit_metadata_max_concurrent_jobs:-10}"
-amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-10}"
+amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency:-20}"
+amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}"
+amalgkit_aws_download_max_concurrency="${amalgkit_aws_download_max_concurrency:-20}"
+amalgkit_gcp_download_max_concurrency="${amalgkit_gcp_download_max_concurrency:-20}"
 amalgkit_quant_backend="${amalgkit_quant_backend:-auto}"
 amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}"
 amalgkit_oarfish_options="${amalgkit_oarfish_options:-}"
@@ -136,6 +138,48 @@ csv_join_from_array() {
     out="${out}${item}"
   done
   printf '%s\n' "${out}"
+}
+
+normalize_amalgkit_download_limit_value() {
+  local raw_value=$1
+  local option_label=$2
+  local normalized_value=""
+
+  normalized_value=$(printf '%s' "${raw_value}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+  if [[ -z "${normalized_value}" || "${normalized_value}" == "auto" ]]; then
+    printf 'auto\n'
+    return 0
+  fi
+  if [[ ! "${normalized_value}" =~ ^[0-9]+$ ]]; then
+    echo "Invalid ${option_label}: ${raw_value}. Use a non-negative integer or auto. Exiting." >&2
+    exit 1
+  fi
+  if (( 10#${normalized_value} == 0 )); then
+    printf '0\n'
+    return 0
+  fi
+  printf '%d\n' "$((10#${normalized_value}))"
+}
+
+amalgkit_command_supports_option() {
+  local subcommand=$1
+  local option_name=$2
+  local help_text=""
+  help_text=$(amalgkit "${subcommand}" --help 2>&1 || true)
+  grep -Fq -- "${option_name}" <<< "${help_text}"
+}
+
+require_amalgkit_supported_options() {
+  local subcommand=$1
+  shift
+  local option_name=""
+
+  for option_name in "$@"; do
+    if ! amalgkit_command_supports_option "${subcommand}" "${option_name}"; then
+      echo "Installed amalgkit ${subcommand} does not support ${option_name}. Update amalgkit to a build with shared download throttling. Exiting." >&2
+      exit 1
+    fi
+  done
 }
 
 build_entrez_or_search_string_from_file() {
@@ -333,14 +377,21 @@ PY
 
 run_amalgkit_metadata_query() {
   local search_string=$1
+  local metadata_cmd=()
 
   echo "Entrez search string: ${search_string}"
-  echo "amalgkit metadata max concurrent jobs: ${amalgkit_metadata_max_concurrent_jobs}"
-  gg_run_with_shared_semaphore "${dir_amalgkit_metadata_semaphore}" "${amalgkit_metadata_max_concurrent_jobs}" "amalgkit metadata NCBI access (${sp_ub})" \
-    amalgkit metadata \
-      --out_dir "./" \
-      --download_dir "${dir_amalgkit_download_dir}" \
-      --search_string "${search_string}"
+  echo "amalgkit metadata NCBI metadata max concurrency: ${amalgkit_ncbi_metadata_max_concurrency}"
+  require_amalgkit_supported_options "metadata" "--download_lock_dir" "--ncbi_metadata_max_concurrency"
+
+  metadata_cmd=(
+    amalgkit metadata
+    --out_dir "./"
+    --download_dir "${dir_amalgkit_download_dir}"
+    --download_lock_dir "${dir_amalgkit_download_lock_dir}"
+    --search_string "${search_string}"
+    --ncbi_metadata_max_concurrency "${amalgkit_ncbi_metadata_max_concurrency}"
+  )
+  "${metadata_cmd[@]}"
 }
 
 cleanup_partial_getfastq_outputs() {
@@ -360,25 +411,46 @@ run_amalgkit_getfastq_attempt() {
   local attempt_label=$2
   local log_file="${dir_tmp}/amalgkit_getfastq.${attempt_label}.log"
   local getfastq_outputs=()
+  local getfastq_cmd=()
 
   rm -f -- "${log_file}"
   echo "Running amalgkit getfastq attempt '${attempt_label}' with --rrna_filter ${rrna_filter_value}"
-  if amalgkit getfastq \
-    --out_dir "${dir_tmp}" \
-    --download_dir "${dir_amalgkit_download_dir}" \
-    --metadata "${file_amalgkit_metadata}" \
-    --threads "${GG_TASK_CPUS}" \
-    --rrna_filter "${rrna_filter_value}" \
-    --contam_filter "${amalgkit_contam_filter}" \
-    --contam_filter_rank "${contamination_removal_rank_for_amalgkit}" \
-    --contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB" \
-    --remove_sra yes \
-    --remove_tmp yes \
-    --dump_print yes \
-    --read_name 'trinity' \
-    --aws yes \
-    --ncbi yes \
-    --redo no > "${log_file}" 2>&1; then
+  echo "amalgkit getfastq NCBI metadata max concurrency: ${amalgkit_ncbi_metadata_max_concurrency}"
+  echo "amalgkit getfastq NCBI download max concurrency: ${amalgkit_ncbi_download_max_concurrency}"
+  echo "amalgkit getfastq AWS download max concurrency: ${amalgkit_aws_download_max_concurrency}"
+  echo "amalgkit getfastq GCP download max concurrency: ${amalgkit_gcp_download_max_concurrency}"
+  require_amalgkit_supported_options "getfastq" \
+    "--download_lock_dir" \
+    "--ncbi_metadata_max_concurrency" \
+    "--ncbi_download_max_concurrency" \
+    "--aws_download_max_concurrency" \
+    "--gcp_download_max_concurrency"
+
+  getfastq_cmd=(
+    amalgkit getfastq
+    --out_dir "${dir_tmp}"
+    --download_dir "${dir_amalgkit_download_dir}"
+    --download_lock_dir "${dir_amalgkit_download_lock_dir}"
+    --metadata "${file_amalgkit_metadata}"
+    --threads "${GG_TASK_CPUS}"
+    --ncbi_metadata_max_concurrency "${amalgkit_ncbi_metadata_max_concurrency}"
+    --ncbi_download_max_concurrency "${amalgkit_ncbi_download_max_concurrency}"
+    --aws_download_max_concurrency "${amalgkit_aws_download_max_concurrency}"
+    --gcp_download_max_concurrency "${amalgkit_gcp_download_max_concurrency}"
+    --rrna_filter "${rrna_filter_value}"
+    --contam_filter "${amalgkit_contam_filter}"
+    --contam_filter_rank "${contamination_removal_rank_for_amalgkit}"
+    --contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"
+    --remove_sra yes
+    --remove_tmp yes
+    --dump_print yes
+    --read_name 'trinity'
+    --aws yes
+    --ncbi yes
+    --redo no
+  )
+
+  if "${getfastq_cmd[@]}" > "${log_file}" 2>&1; then
     if amalgkit_getfastq_log_has_fatal_message "${log_file}"; then
       echo "Detected fatal message in amalgkit getfastq log despite a zero exit code: ${log_file}"
       grep -E '^ERROR: ' "${log_file}" || true
@@ -892,8 +964,7 @@ fi
 dir_tmp="${dir_transcriptome_assembly_output}/tmp/${GG_ARRAY_TASK_ID}_${sp_ub}"
 dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
 dir_amalgkit_download_dir="${gg_workspace_downloads_dir}"
-dir_amalgkit_metadata_semaphore="${dir_amalgkit_download_dir}/locks/ncbi/amalgkit_metadata"
-dir_amalgkit_getfastq_semaphore="${dir_amalgkit_download_dir}/locks/ncbi/amalgkit_getfastq"
+dir_amalgkit_download_lock_dir="${dir_amalgkit_download_dir}/locks"
 dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"
 file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"
 file_generated_amalgkit_metadata="${dir_generated_amalgkit_metadata}/${sp_ub}_metadata.tsv"
@@ -929,7 +1000,12 @@ file_multispecies_summary="${dir_transcriptome_assembly_output}/annotation_summa
 
 ensure_dir "${dir_tmp}"
 ensure_dir "${dir_amalgkit_download_dir}"
+ensure_dir "${dir_amalgkit_download_lock_dir}"
 cd "${dir_tmp}"
+amalgkit_ncbi_metadata_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_ncbi_metadata_max_concurrency}" "amalgkit_ncbi_metadata_max_concurrency")"
+amalgkit_ncbi_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_ncbi_download_max_concurrency}" "amalgkit_ncbi_download_max_concurrency")"
+amalgkit_aws_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_aws_download_max_concurrency}" "amalgkit_aws_download_max_concurrency")"
+amalgkit_gcp_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_gcp_download_max_concurrency}" "amalgkit_gcp_download_max_concurrency")"
 
 task="amalgkit metadata/integrate"
 if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} -eq 1 ]]; then
@@ -1034,8 +1110,7 @@ if [[ (${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1) && $
       exit 1
     fi
   fi
-  echo "amalgkit getfastq max concurrent jobs: ${amalgkit_getfastq_max_concurrent_jobs}"
-  if ! gg_run_with_shared_semaphore "${dir_amalgkit_getfastq_semaphore}" "${amalgkit_getfastq_max_concurrent_jobs}" "amalgkit getfastq NCBI access (${sp_ub})" run_amalgkit_getfastq_or_fallback; then
+  if ! run_amalgkit_getfastq_or_fallback; then
     exit 1
   fi
   echo "$(date): End: ${task}"

@@ -1607,6 +1607,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         "--fastq_dir ${dir_species_fastq}",
         "--out_dir ${dir_tmp}",
         "--download_dir ${dir_amalgkit_download_dir}",
+        "--download_lock_dir ${dir_amalgkit_download_lock_dir}",
         "--metadata ${file_amalgkit_metadata}",
         "--rrna_filter ${amalgkit_rrna_filter}",
         "--contam_filter ${amalgkit_contam_filter}",
@@ -1637,6 +1638,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         '--fastq_dir "${dir_species_fastq}"',
         '--out_dir "${dir_tmp}"',
         '--download_dir "${dir_amalgkit_download_dir}"',
+        '--download_lock_dir "${dir_amalgkit_download_lock_dir}"',
         '--metadata "${file_amalgkit_metadata}"',
         '--rrna_filter "${rrna_filter_value}"',
         '--contam_filter "${amalgkit_contam_filter}"',
@@ -1751,6 +1753,10 @@ def test_transcriptome_core_detects_fatal_getfastq_logs_and_retries_without_rrna
     assert 'rm -rf -- "${dir_amalgkit_getfastq_sp}"' in cleanup_body
     assert "grep -Eq '^ERROR: '" in detect_body
     assert "Detected fatal message in amalgkit getfastq log despite a zero exit code" in attempt_body
+    assert '--download_lock_dir "${dir_amalgkit_download_lock_dir}"' in attempt_body
+    assert '--ncbi_download_max_concurrency "${amalgkit_ncbi_download_max_concurrency}"' in attempt_body
+    assert '--aws_download_max_concurrency "${amalgkit_aws_download_max_concurrency}"' in attempt_body
+    assert '--gcp_download_max_concurrency "${amalgkit_gcp_download_max_concurrency}"' in attempt_body
     assert 'run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"' in text
     assert "Exiting without fallback download so partial outputs do not reach downstream steps." in text
 
@@ -1803,12 +1809,20 @@ def test_transcriptome_entrypoint_exposes_amalgkit_ncbi_concurrency_limits():
     core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
 
-    assert 'amalgkit_metadata_max_concurrent_jobs="${amalgkit_metadata_max_concurrent_jobs:-10}" # Maximum number of concurrent array tasks allowed to call NCBI-backed amalgkit metadata; set 0 to disable gg-side throttling.' in entrypoint
-    assert 'amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-10}" # Maximum number of concurrent array tasks allowed to call NCBI-backed amalgkit getfastq or fallback FASTQ recovery; set 0 to disable gg-side throttling.' in entrypoint
-    assert 'amalgkit_metadata_max_concurrent_jobs="${amalgkit_metadata_max_concurrent_jobs:-10}"' in core
-    assert 'amalgkit_getfastq_max_concurrent_jobs="${amalgkit_getfastq_max_concurrent_jobs:-10}"' in core
-    assert "amalgkit_metadata_max_concurrent_jobs" in config_vars
-    assert "amalgkit_getfastq_max_concurrent_jobs" in config_vars
+    assert 'amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency:-20}" # Maximum concurrent NCBI Entrez metadata requests across array tasks. Forwarded to amalgkit metadata/getfastq --ncbi_metadata_max_concurrency. Set 0 or auto to disable throttling.' in entrypoint
+    assert 'amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}" # Maximum concurrent NCBI cloud-object downloads across array tasks. Forwarded to amalgkit getfastq --ncbi_download_max_concurrency. Set 0 or auto to disable throttling.' in entrypoint
+    assert 'amalgkit_aws_download_max_concurrency="${amalgkit_aws_download_max_concurrency:-20}" # Maximum concurrent AWS cloud-object downloads across array tasks. Forwarded to amalgkit getfastq --aws_download_max_concurrency. Set 0 or auto to disable throttling.' in entrypoint
+    assert 'amalgkit_gcp_download_max_concurrency="${amalgkit_gcp_download_max_concurrency:-20}" # Maximum concurrent GCP cloud-object downloads across array tasks. Forwarded to amalgkit getfastq --gcp_download_max_concurrency. Set 0 or auto to disable throttling.' in entrypoint
+    assert 'amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency:-20}"' in core
+    assert 'amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}"' in core
+    assert 'amalgkit_aws_download_max_concurrency="${amalgkit_aws_download_max_concurrency:-20}"' in core
+    assert 'amalgkit_gcp_download_max_concurrency="${amalgkit_gcp_download_max_concurrency:-20}"' in core
+    assert "amalgkit_ncbi_metadata_max_concurrency" in config_vars
+    assert "amalgkit_ncbi_download_max_concurrency" in config_vars
+    assert "amalgkit_aws_download_max_concurrency" in config_vars
+    assert "amalgkit_gcp_download_max_concurrency" in config_vars
+    assert "amalgkit_metadata_max_concurrent_jobs" not in config_vars
+    assert "amalgkit_getfastq_max_concurrent_jobs" not in config_vars
 
 
 def test_transcriptome_core_requires_taxid_for_contam_filter():
@@ -1831,20 +1845,38 @@ def test_transcriptome_core_passes_download_dir_to_amalgkit_integrate():
 def test_transcriptome_core_passes_shared_mmseqs_db_to_amalgkit_getfastq():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
-    getfastq_start = text.index("  if amalgkit getfastq \\")
-    getfastq_end = text.index('    echo "amalgkit getfastq safely finished."', getfastq_start)
-    getfastq_block = text[getfastq_start:getfastq_end]
+    getfastq_block = _function_body(text, "run_amalgkit_getfastq_attempt")
     assert 'dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"' in text
     assert '--contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"' in getfastq_block
 
 
-def test_transcriptome_core_limits_ncbi_access_via_shared_semaphore():
+def test_transcriptome_core_delegates_ncbi_parallelism_to_amalgkit():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
-    assert 'dir_amalgkit_metadata_semaphore="${dir_amalgkit_download_dir}/locks/ncbi/amalgkit_metadata"' in text
-    assert 'dir_amalgkit_getfastq_semaphore="${dir_amalgkit_download_dir}/locks/ncbi/amalgkit_getfastq"' in text
-    assert 'gg_run_with_shared_semaphore "${dir_amalgkit_metadata_semaphore}" "${amalgkit_metadata_max_concurrent_jobs}" "amalgkit metadata NCBI access (${sp_ub})"' in text
-    assert 'gg_run_with_shared_semaphore "${dir_amalgkit_getfastq_semaphore}" "${amalgkit_getfastq_max_concurrent_jobs}" "amalgkit getfastq NCBI access (${sp_ub})" run_amalgkit_getfastq_or_fallback' in text
+    normalize_body = _function_body(text, "normalize_amalgkit_download_limit_value")
+    require_body = _function_body(text, "require_amalgkit_supported_options")
+    metadata_body = _function_body(text, "run_amalgkit_metadata_query")
+    getfastq_body = _function_body(text, "run_amalgkit_getfastq_attempt")
+
+    assert 'gg_run_with_shared_semaphore' not in text
+    assert 'dir_amalgkit_metadata_semaphore=' not in text
+    assert 'dir_amalgkit_getfastq_semaphore=' not in text
+    assert 'dir_amalgkit_download_lock_dir="${dir_amalgkit_download_dir}/locks"' in text
+    assert 'amalgkit_ncbi_metadata_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_ncbi_metadata_max_concurrency}" "amalgkit_ncbi_metadata_max_concurrency")"' in text
+    assert 'amalgkit_ncbi_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_ncbi_download_max_concurrency}" "amalgkit_ncbi_download_max_concurrency")"' in text
+    assert 'amalgkit_aws_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_aws_download_max_concurrency}" "amalgkit_aws_download_max_concurrency")"' in text
+    assert 'amalgkit_gcp_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_gcp_download_max_concurrency}" "amalgkit_gcp_download_max_concurrency")"' in text
+    assert 'if (( 10#${normalized_value} == 0 )); then' in normalize_body
+    assert 'printf \'0\\n\'' in normalize_body
+    assert 'Use a non-negative integer or auto' in normalize_body
+    assert 'Installed amalgkit ${subcommand} does not support ${option_name}. Update amalgkit to a build with shared download throttling. Exiting.' in require_body
+    assert 'require_amalgkit_supported_options "metadata" "--download_lock_dir" "--ncbi_metadata_max_concurrency"' in metadata_body
+    assert '--download_lock_dir "${dir_amalgkit_download_lock_dir}"' in metadata_body
+    assert '--ncbi_metadata_max_concurrency "${amalgkit_ncbi_metadata_max_concurrency}"' in metadata_body
+    assert 'require_amalgkit_supported_options "getfastq" \\' in getfastq_body
+    assert '--ncbi_download_max_concurrency "${amalgkit_ncbi_download_max_concurrency}"' in getfastq_body
+    assert '--aws_download_max_concurrency "${amalgkit_aws_download_max_concurrency}"' in getfastq_body
+    assert '--gcp_download_max_concurrency "${amalgkit_gcp_download_max_concurrency}"' in getfastq_body
 
 
 def test_transcriptome_core_invalidates_stale_cached_query_tables_on_species_prefix_change():

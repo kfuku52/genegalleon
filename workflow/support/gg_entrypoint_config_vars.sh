@@ -287,8 +287,10 @@ EOF
     gg_transcriptome_generation_entrypoint.sh)
       cat <<'EOF'
 amalgkit_contam_filter
-amalgkit_getfastq_max_concurrent_jobs
-amalgkit_metadata_max_concurrent_jobs
+amalgkit_aws_download_max_concurrency
+amalgkit_gcp_download_max_concurrency
+amalgkit_ncbi_download_max_concurrency
+amalgkit_ncbi_metadata_max_concurrency
 amalgkit_oarfish_options
 amalgkit_oarfish_seq_tech
 amalgkit_quant_backend
