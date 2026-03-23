@@ -241,6 +241,17 @@ Optional download authentication:
     `--http-header "Cookie: <copied_session_cookie>"`.
   - local redirect tests confirmed custom headers are preserved by the current downloader across HTTP redirects.
 
+Practical notes for JGI Genome Portal:
+
+- if you use `--auth-cookie-env`, set the environment variable to the cookie value only.
+  - do not include the literal `Cookie:` prefix.
+- copied cookies should be treated as short-lived session artifacts.
+  - lifetime depends on JGI server-side session policy and may be affected by idle timeout or re-login.
+- copied cookies may not be reusable across different machines or browser contexts.
+  - server-side session binding can depend on more than the raw cookie value.
+- before launching a large download, run a small probe first.
+  - use `--download-only --dry-run` when URL resolution is enough, or a single small direct URL when you need to validate authenticated download itself.
+
 Build a manifest automatically from an existing local dataset tree:
 
 ```bash
