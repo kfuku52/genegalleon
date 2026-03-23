@@ -74,6 +74,7 @@ PROVIDERS = (
     "coge",
     "cngb",
     "gwh",
+    "plantaedb",
     "flybase",
     "wormbase",
     "vectorbase",
@@ -93,6 +94,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "coge": Path("CoGe") / "species_wise_original",
     "cngb": Path("CNGB") / "species_wise_original",
     "gwh": Path("GWH") / "species_wise_original",
+    "plantaedb": Path("PlantaeDB") / "species_wise_original",
     "flybase": Path("FlyBase") / "species_wise_original",
     "wormbase": Path("WormBase") / "species_wise_original",
     "vectorbase": Path("VectorBase") / "species_wise_original",
@@ -158,6 +160,7 @@ HEADER_COMMENTS = {
             "- coge: numeric genome_id (gid), for example 24739",
             "- cngb: CNA... or GCA/GCF accession",
             "- gwh: GWH... accession, for example GWHIGRM00000000.1",
+            "- plantaedb: PlantaeDB species page URL or /taxa/... path",
             "- veupathdb: EnuttalliP19",
             "- dictybase: Dictyostelium_discoideum",
             "- insectbase: IBG_00001",
@@ -408,6 +411,7 @@ SNAPSHOT_FULL_ID_PROVIDERS = (
     "ensembl",
     "ensemblplants",
     "gwh",
+    "plantaedb",
     "flybase",
     "wormbase",
     "vectorbase",
@@ -447,6 +451,16 @@ ID_EXAMPLES_BY_PROVIDER = {
     "gwh": (
         ("GWHIGRM00000000.1", "Medicago sativa"),
         ("GWHCBHY00000000", "Allium sativum"),
+    ),
+    "plantaedb": (
+        (
+            "https://plantaedb.com/taxa/phylum/angiosperms/order/asterales/family/asteraceae/subfamily/asteroideae/tribe/astereae/subtribe/conyzinae/genus/erigeron/species/erigeron-breviscapus",
+            "Erigeron breviscapus (PlantaeDB page)",
+        ),
+        (
+            "https://plantaedb.com/taxa/phylum/angiosperms/order/ranunculales/family/berberidaceae/genus/berberis/species/berberis-thunbergii",
+            "Berberis thunbergii (PlantaeDB page)",
+        ),
     ),
     "flybase": (("dmel_r6.61", "Drosophila melanogaster"),),
     "wormbase": (("celegans_prjna13758_ws290", "Caenorhabditis elegans"),),

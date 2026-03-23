@@ -161,6 +161,7 @@ Manifest required columns:
   - for `provider=coge`, `id` must be CoGe `genome_id` (numeric `gid`), and CDS/GFF/Genome URLs are auto-built.
   - for `provider=cngb`, built-in inference resolves CNGB assembly IDs (`CNA...`, `cngb:...`) or linked `GCA/GCF` accessions and maps to downloadable assembly files.
   - for `provider=gwh`, `id` can be a `GWH...` accession (for example `GWHIGRM00000000.1`) or a GWH folder/index URL, and the resolver discovers CDS/GFF/genome files from the public GWH download tree.
+  - for `provider=plantaedb`, `id` can be a PlantaeDB species page URL (or a relative PlantaeDB `/taxa/...` path); the resolver extracts the linked NCBI `GCA/GCF` assembly accession and delegates to the NCBI resolver.
   - for `provider=flybase`, `provider=wormbase`, `provider=vectorbase`, `provider=fernbase`, `provider=veupathdb`, and `provider=dictybase`, `id` can be resolved via explicit URL columns or `GG_<PROVIDER>_*_URL_TEMPLATE`.
   - for `provider=insectbase`, `id` can be an `IBG_*` genome identifier (for example `IBG_00001`), and the resolver uses the InsectBase genome detail API to derive CDS/GFF/genome downloads.
   - for `provider=direct`, set explicit `cds_url`, `gbff_url`, or `gff_url` plus `genome_url`, or provide an index-style URL in `id` that exposes downloadable files.
@@ -228,8 +229,17 @@ Optional download authentication:
 
 - `--auth-bearer-token-env ENV_NAME`
   - adds `Authorization: Bearer <token>` from an environment variable.
+- `--auth-cookie-env ENV_NAME`
+  - adds `Cookie: <value>` from an environment variable.
+  - use this when you already have a copied session cookie for a portal.
+- `--jgi-login-env ENV_NAME --jgi-password-env ENV_NAME`
+  - logs into JGI Genome Portal via the public sign-on form and derives a session cookie automatically.
+  - this is suitable for non-interactive Genome Portal downloads when direct anonymous access is not available.
 - `--http-header "Key: Value"` (repeatable)
   - add arbitrary request headers (for provider-specific requirements).
+  - this can be used for session-cookie based portals such as JGI Genome Portal, for example
+    `--http-header "Cookie: <copied_session_cookie>"`.
+  - local redirect tests confirmed custom headers are preserved by the current downloader across HTTP redirects.
 
 Build a manifest automatically from an existing local dataset tree:
 

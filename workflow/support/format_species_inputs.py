@@ -5,6 +5,7 @@ import bz2
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
+from http.cookiejar import CookieJar
 from http.client import IncompleteRead, RemoteDisconnected
 import gzip
 import hashlib
@@ -22,9 +23,9 @@ import tarfile
 import threading
 import time
 import zipfile
-from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 try:
     from openpyxl import load_workbook
@@ -114,6 +115,7 @@ FERNBASE_ID_HINT_PATTERN = re.compile(r"^fernbase[:_].+", re.IGNORECASE)
 VEUPATHDB_ID_HINT_PATTERN = re.compile(r"^veupathdb[:_].+", re.IGNORECASE)
 DICTYBASE_ID_HINT_PATTERN = re.compile(r"^dictybase[:_].+", re.IGNORECASE)
 INSECTBASE_ID_HINT_PATTERN = re.compile(r"^insectbase[:_].+", re.IGNORECASE)
+PLANTAEDB_ID_HINT_PATTERN = re.compile(r"^plantaedb[:_].+", re.IGNORECASE)
 INSECTBASE_IBG_ID_PATTERN = re.compile(r"^IBG_[0-9]+$", re.IGNORECASE)
 COGE_GID_PATTERN = re.compile(r"^[0-9]+$")
 CNGB_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^CNA[0-9]+$", re.IGNORECASE)
@@ -131,6 +133,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "coge": Path("CoGe") / "species_wise_original",
     "cngb": Path("CNGB") / "species_wise_original",
     "gwh": Path("GWH") / "species_wise_original",
+    "plantaedb": Path("PlantaeDB") / "species_wise_original",
     "flybase": Path("FlyBase") / "species_wise_original",
     "wormbase": Path("WormBase") / "species_wise_original",
     "vectorbase": Path("VectorBase") / "species_wise_original",
@@ -153,6 +156,7 @@ PROVIDERS = (
     "coge",
     "cngb",
     "gwh",
+    "plantaedb",
     "flybase",
     "wormbase",
     "vectorbase",
@@ -172,6 +176,7 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "coge",
     "cngb",
     "gwh",
+    "plantaedb",
     "flybase",
     "wormbase",
     "vectorbase",
@@ -195,6 +200,8 @@ DEFAULT_COGE_API_BASE_URL = "https://genomevolution.org/coge/api/v1"
 DEFAULT_COGE_WEB_BASE_URL = "https://genomevolution.org/coge"
 DEFAULT_CNGB_CNSA_BASE_URL = "https://db.cngb.org/cnsa/ajax"
 DEFAULT_GWH_DOWNLOAD_BASE_URL = "https://download.cncb.ac.cn/gwh"
+DEFAULT_JGI_SIGNON_BASE_URL = "https://signon.jgi.doe.gov"
+DEFAULT_PLANTAEDB_WEB_BASE_URL = "https://plantaedb.com"
 DEFAULT_VEUPATHDB_SERVICE_BASE_URL = "https://veupathdb.org/veupathdb/service"
 DEFAULT_INSECTBASE_API_BASE_URL = "https://www.insect-genome.com/api/genome"
 NCBI_DATASETS_INCLUDE_BY_LABEL = {
@@ -284,6 +291,9 @@ PROVIDER_DEFAULT_ID_PAGE_URL_TEMPLATES = {
     "gwh": (
         "https://download.cncb.ac.cn/gwh/",
     ),
+    "plantaedb": (
+        "https://plantaedb.com/",
+    ),
     "fernbase": (
         "https://fernbase.org/ftp/{id}/",
     ),
@@ -314,6 +324,7 @@ PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     "coge": 1,
     "cngb": 1,
     "gwh": 1,
+    "plantaedb": 2,
     "flybase": 2,
     "wormbase": 2,
     "vectorbase": 2,
@@ -760,7 +771,7 @@ def build_arg_parser():
             "(ncbi supports GCF/GCA/NCBI-URL auto-resolution; "
             "other supported providers support id-based template/index inference). "
             "Supported providers for --download-manifest: "
-            "ensembl, ensemblplants, ncbi, coge, cngb, gwh, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, direct, local "
+            "ensembl, ensemblplants, ncbi, coge, cngb, gwh, plantaedb, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, direct, local "
             "(legacy aliases refseq/genbank are treated as ncbi). "
             "provider=direct requires explicit urls or an index-style id URL. "
             "cds_url may be provided by itself, or may be empty when both gff_url and genome_url are available; "
@@ -804,6 +815,21 @@ def build_arg_parser():
         "--auth-bearer-token-env",
         default="",
         help="Environment variable name containing bearer token for download Authorization header.",
+    )
+    parser.add_argument(
+        "--auth-cookie-env",
+        default="",
+        help="Environment variable name containing raw Cookie header for download requests.",
+    )
+    parser.add_argument(
+        "--jgi-login-env",
+        default="",
+        help="Environment variable name containing JGI login/email for Genome Portal sign-on.",
+    )
+    parser.add_argument(
+        "--jgi-password-env",
+        default="",
+        help="Environment variable name containing JGI password for Genome Portal sign-on.",
     )
     parser.add_argument(
         "--download-timeout",
@@ -1171,6 +1197,7 @@ def provider_raw_dir(provider, download_root, species_key):
         "coge",
         "cngb",
         "gwh",
+        "plantaedb",
         "flybase",
         "wormbase",
         "vectorbase",
@@ -1211,6 +1238,8 @@ def infer_provider_from_id(source_id):
         return "coge"
     if GWH_ID_HINT_PATTERN.match(source_id):
         return "gwh"
+    if PLANTAEDB_ID_HINT_PATTERN.match(source_id):
+        return "plantaedb"
     if CNGB_ID_HINT_PATTERN.match(source_id):
         return "cngb"
     if GWH_ASSEMBLY_ACCESSION_PATTERN.match(source_id):
@@ -1221,6 +1250,8 @@ def infer_provider_from_id(source_id):
         return "coge"
     if "/gwh/" in lowered:
         return "gwh"
+    if "plantaedb.com/" in lowered:
+        return "plantaedb"
     if "cngb.org" in lowered or "cncb.ac.cn" in lowered:
         return "cngb"
     if "flybase.org" in lowered:
@@ -1294,6 +1325,80 @@ def fetch_text_with_headers(url, timeout, headers):
         return payload.decode("utf-8")
     except UnicodeDecodeError:
         return payload.decode("utf-8", errors="replace")
+
+
+def append_cookie_header(existing_cookie_header, added_cookie_header):
+    existing = str(existing_cookie_header or "").strip()
+    added = str(added_cookie_header or "").strip()
+    if existing == "":
+        return added
+    if added == "":
+        return existing
+    return "{}; {}".format(existing, added)
+
+
+def extract_hidden_input_value(html_text, input_name):
+    pattern = (
+        r"""<input[^>]*name=["']{name}["'][^>]*value=["']([^"']*)["'][^>]*>"""
+    ).format(name=re.escape(str(input_name or "").strip()))
+    match = re.search(pattern, html_text, flags=re.IGNORECASE)
+    if match is None:
+        return ""
+    return str(match.group(1) or "").strip()
+
+
+def fetch_jgi_session_cookie(login, password, timeout, headers):
+    login_text = str(login or "").strip()
+    password_text = str(password or "").strip()
+    if login_text == "" or password_text == "":
+        raise ValueError("JGI credentials are empty")
+    signon_url = urljoin(resolve_jgi_signon_base_url().rstrip("/") + "/", "signon")
+    cookie_jar = CookieJar()
+    opener = build_opener(HTTPCookieProcessor(cookie_jar))
+    req_headers = dict(headers)
+    if "User-Agent" not in req_headers:
+        req_headers["User-Agent"] = "genegalleon-input-generation"
+    with opener.open(Request(signon_url, headers=req_headers), timeout=timeout) as response:
+        login_html = response.read().decode("utf-8", errors="replace")
+    form_match = re.search(
+        r"""<form[^>]*action=["']([^"']+)["'][^>]*>(.*?)</form>""",
+        login_html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if form_match is None:
+        raise ValueError("JGI sign-on page did not expose a login form")
+    action_url = urljoin(signon_url, str(form_match.group(1) or "").strip())
+    form_html = str(form_match.group(2) or "")
+    authenticity_token = extract_hidden_input_value(form_html, "authenticity_token")
+    if authenticity_token == "":
+        raise ValueError("JGI sign-on page did not expose authenticity_token")
+    utf8_value = extract_hidden_input_value(form_html, "utf8") or "✓"
+    commit_value = extract_hidden_input_value(form_html, "commit") or "Sign In"
+    post_body = urlencode(
+        {
+            "utf8": utf8_value,
+            "authenticity_token": authenticity_token,
+            "login": login_text,
+            "password": password_text,
+            "commit": commit_value,
+        }
+    ).encode("utf-8")
+    post_headers = dict(req_headers)
+    post_headers["Content-Type"] = "application/x-www-form-urlencoded"
+    with opener.open(Request(action_url, data=post_body, headers=post_headers), timeout=timeout) as response:
+        final_url = response.geturl()
+        final_html = response.read().decode("utf-8", errors="replace")
+    cookie_header = "; ".join(
+        "{}={}".format(cookie.name, cookie.value)
+        for cookie in cookie_jar
+        if str(cookie.name or "").strip() != ""
+    )
+    if cookie_header == "":
+        raise ValueError("JGI sign-on did not yield session cookies")
+    final_url_lower = str(final_url or "").lower()
+    if "/signon" in final_url_lower and re.search(r"""name=["']password["']""", final_html, flags=re.IGNORECASE):
+        raise ValueError("JGI sign-on did not complete; credentials may be invalid")
+    return cookie_header
 
 
 def parse_links_from_document(base_url, text):
@@ -1424,6 +1529,14 @@ def resolve_coge_api_base_url():
 
 def resolve_coge_web_base_url():
     return os.environ.get("GG_COGE_WEB_BASE_URL", DEFAULT_COGE_WEB_BASE_URL).rstrip("/")
+
+
+def resolve_jgi_signon_base_url():
+    return os.environ.get("GG_JGI_SIGNON_BASE_URL", DEFAULT_JGI_SIGNON_BASE_URL).rstrip("/")
+
+
+def resolve_plantaedb_web_base_url():
+    return os.environ.get("GG_PLANTAEDB_WEB_BASE_URL", DEFAULT_PLANTAEDB_WEB_BASE_URL).rstrip("/")
 
 
 def resolve_cngb_cnsa_base_url():
@@ -1684,6 +1797,51 @@ def resolve_cngb_download_urls_from_id(source_id, timeout, headers):
         species_candidate = parse_species_key_candidate(organism_name)
         if species_candidate != "":
             resolved["species_key"] = species_candidate
+    return resolved
+
+
+def resolve_plantaedb_source_page_url(source_id):
+    source_clean = str(source_id or "").strip()
+    stripped = strip_provider_prefix(source_clean, "plantaedb").strip()
+    if stripped == "":
+        raise ValueError("PlantaeDB id is empty")
+    if is_url_like(stripped):
+        return stripped
+    base = resolve_plantaedb_web_base_url().rstrip("/") + "/"
+    if stripped.startswith("/"):
+        stripped = stripped[1:]
+    return urljoin(base, stripped)
+
+
+def extract_plantaedb_ncbi_accession(page_url, page_text):
+    links = parse_links_from_document(page_url, page_text)
+    preferred_links = []
+    fallback_links = []
+    for link in links:
+        if "ncbi.nlm.nih.gov" not in link.lower():
+            continue
+        accession = extract_ncbi_accession_from_source_id(link)
+        if accession == "":
+            continue
+        if "/data-hub/genome/" in link or "/datasets/genome/" in link:
+            preferred_links.append(accession)
+        else:
+            fallback_links.append(accession)
+    for accession in preferred_links + fallback_links:
+        if accession != "":
+            return accession
+    return extract_ncbi_accession_from_source_id(page_text)
+
+
+def resolve_plantaedb_download_urls_from_id(source_id, species_key, timeout, headers):
+    page_url = resolve_plantaedb_source_page_url(source_id)
+    page_text = fetch_text_with_headers(page_url, timeout, headers)
+    accession = extract_plantaedb_ncbi_accession(page_url, page_text)
+    if accession == "":
+        raise ValueError("PlantaeDB page did not expose an NCBI assembly accession: {}".format(page_url))
+    resolved = resolve_ncbi_download_urls_from_id(accession, timeout, ncbi_source="auto")
+    if str(resolved.get("species_key", "") or "").strip() == "" and species_key != "":
+        resolved["species_key"] = species_key
     return resolved
 
 
@@ -2100,6 +2258,8 @@ def resolve_provider_specific_download_urls_from_id(provider, source_id, species
         return resolve_cngb_download_urls_from_id(source_id, timeout, headers)
     if provider == "gwh":
         return resolve_gwh_download_urls_from_id(source_id, species_key, timeout, headers)
+    if provider == "plantaedb":
+        return resolve_plantaedb_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "fernbase":
         return resolve_fernbase_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "veupathdb":
@@ -2269,7 +2429,14 @@ def default_download_filename(provider, species_key, label, url, archive_member=
     return base
 
 
-def parse_http_headers(http_header_values, auth_bearer_token_env):
+def parse_http_headers(
+    http_header_values,
+    auth_bearer_token_env,
+    auth_cookie_env="",
+    jgi_login_env="",
+    jgi_password_env="",
+    timeout=120.0,
+):
     headers = {}
     for raw in http_header_values:
         text = raw.strip()
@@ -2292,6 +2459,35 @@ def parse_http_headers(http_header_values, auth_bearer_token_env):
                 )
             )
         headers["Authorization"] = "Bearer {}".format(token)
+    if auth_cookie_env != "":
+        cookie_value = os.environ.get(auth_cookie_env, "").strip()
+        if cookie_value == "":
+            raise ValueError(
+                "Environment variable for cookie header is empty or undefined: {}".format(
+                    auth_cookie_env
+                )
+            )
+        headers["Cookie"] = append_cookie_header(headers.get("Cookie", ""), cookie_value)
+    if jgi_login_env != "" or jgi_password_env != "":
+        if jgi_login_env == "" or jgi_password_env == "":
+            raise ValueError("--jgi-login-env and --jgi-password-env must be provided together")
+        login_value = os.environ.get(jgi_login_env, "").strip()
+        password_value = os.environ.get(jgi_password_env, "").strip()
+        if login_value == "":
+            raise ValueError("Environment variable for JGI login is empty or undefined: {}".format(jgi_login_env))
+        if password_value == "":
+            raise ValueError(
+                "Environment variable for JGI password is empty or undefined: {}".format(
+                    jgi_password_env
+                )
+            )
+        jgi_cookie = fetch_jgi_session_cookie(
+            login=login_value,
+            password=password_value,
+            timeout=float(timeout),
+            headers=headers,
+        )
+        headers["Cookie"] = append_cookie_header(headers.get("Cookie", ""), jgi_cookie)
     return headers
 
 
@@ -3785,7 +3981,7 @@ def is_probable_genome_filename(provider, name):
     if provider == "fernbase":
         # FernBase often exposes the assembly as a plain ".fa"/".fasta" filename.
         return True
-    if provider in ("ncbi", "refseq", "genbank"):
+    if provider in ("ncbi", "refseq", "genbank", "plantaedb"):
         return "genomic" in lower
     if provider in ("ensembl", "ensemblplants"):
         return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
@@ -4827,7 +5023,7 @@ def extract_provider_id(provider, header):
         return extract_phycocosm_id(header)
     if provider == "gwh":
         return extract_gwh_id(header)
-    if provider in ("ncbi", "refseq", "genbank"):
+    if provider in ("ncbi", "refseq", "genbank", "plantaedb"):
         return first_token(header)
     return extract_phytozome_id(header)
 
@@ -5064,7 +5260,7 @@ def discover_generic_species_dir_tasks(provider, input_dir):
 def build_gene_aggregate_id(task, header, transcript_id):
     provider = task["provider"]
     species_prefix = task["species_prefix"]
-    if provider in ("ncbi", "refseq", "genbank"):
+    if provider in ("ncbi", "refseq", "genbank", "plantaedb"):
         ensembl_gene_id = extract_ncbi_ensembl_gene_id_from_header(header)
         gene_symbol = extract_header_tag_value(header, "gene")
         gene_id = extract_ncbi_gene_id_from_header(header)
@@ -5398,7 +5594,7 @@ def discover_tasks(provider, input_dir):
         return discover_phycocosm_tasks(input_dir)
     if provider == "phytozome":
         return discover_phytozome_tasks(input_dir)
-    if provider in ("ncbi", "refseq", "genbank"):
+    if provider in ("ncbi", "refseq", "genbank", "plantaedb"):
         return discover_ncbi_like_tasks(input_dir, provider)
     if provider == "coge":
         return discover_generic_species_dir_tasks(provider, input_dir)
@@ -5732,7 +5928,14 @@ def main():
         )
 
     try:
-        http_headers = parse_http_headers(args.http_header, args.auth_bearer_token_env)
+        http_headers = parse_http_headers(
+            args.http_header,
+            args.auth_bearer_token_env,
+            auth_cookie_env=args.auth_cookie_env,
+            jgi_login_env=args.jgi_login_env,
+            jgi_password_env=args.jgi_password_env,
+            timeout=args.download_timeout,
+        )
     except ValueError as exc:
         parser.error(str(exc))
 

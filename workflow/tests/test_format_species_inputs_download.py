@@ -1431,6 +1431,417 @@ def test_download_manifest_coge_requires_numeric_genome_id(tmp_path):
     assert "requires numeric genome_id (gid)" in completed.stderr
 
 
+def test_download_manifest_resolves_plantaedb_page_to_ncbi_bundle(tmp_path):
+    server_root = tmp_path / "server_root"
+    plantae_page = server_root / "taxa" / "species" / "erigeron-breviscapus"
+    plantae_page.parent.mkdir(parents=True, exist_ok=True)
+
+    ftp_dir = (
+        server_root
+        / "genomes"
+        / "all"
+        / "GCA"
+        / "999"
+        / "999"
+        / "999"
+        / "GCA_999999999.1_ASM999999v1"
+    )
+    ftp_dir.mkdir(parents=True, exist_ok=True)
+    with gzip.open(ftp_dir / "GCA_999999999.1_ASM999999v1_cds_from_genomic.fna.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">gene1.t1\nATGAAATTT\n")
+    with gzip.open(ftp_dir / "GCA_999999999.1_ASM999999v1_genomic.gff.gz", "wt", encoding="utf-8") as handle:
+        handle.write("chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n")
+    with gzip.open(ftp_dir / "GCA_999999999.1_ASM999999v1_genomic.fna.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGAAATTT\n")
+
+    class _PlantaeDbFixtureHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, directory=None, **kwargs):
+            super().__init__(*args, directory=str(server_root), **kwargs)
+
+        def _send_json(self, payload):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path.startswith("/eutils/esearch.fcgi"):
+                self._send_json(
+                    {
+                        "header": {"type": "esearch", "version": "0.3"},
+                        "esearchresult": {"idlist": ["99999"]},
+                    }
+                )
+                return
+            if self.path.startswith("/eutils/esummary.fcgi"):
+                self._send_json(
+                    {
+                        "header": {"type": "esummary", "version": "0.3"},
+                        "result": {
+                            "uids": ["99999"],
+                            "99999": {
+                                "ftppath_genbank": "ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/999/999/999/GCA_999999999.1_ASM999999v1",
+                                "organism": "Erigeron breviscapus",
+                                "speciesname": "Erigeron breviscapus",
+                            },
+                        },
+                    }
+                )
+                return
+            super().do_GET()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _PlantaeDbFixtureHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        plantae_page.write_text(
+            (
+                "<html><body>"
+                '<a href="http://127.0.0.1:{port}/data-hub/genome/GCA_999999999.1/">NCBI genome</a>'
+                "</body></html>"
+            ).format(port=server.server_port),
+            encoding="utf-8",
+        )
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "plantaedb",
+                    "id": "http://127.0.0.1:{}/taxa/species/erigeron-breviscapus".format(server.server_port),
+                    "species_key": "",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_NCBI_EUTILS_BASE_URL"] = "http://127.0.0.1:{}/eutils".format(server.server_port)
+        env["GG_NCBI_FTP_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+        env["GG_PLANTAEDB_WEB_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+
+        download_dir = tmp_path / "download_cache"
+        completed = run_script(
+            "--provider",
+            "plantaedb",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(download_dir),
+            "--download-only",
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    raw_dir = download_dir / "PlantaeDB" / "species_wise_original" / "Erigeron_breviscapus"
+    assert (raw_dir / "GCA_999999999.1_ASM999999v1_cds_from_genomic.fna.gz").exists()
+    assert (raw_dir / "GCA_999999999.1_ASM999999v1_genomic.gff.gz").exists()
+    assert (raw_dir / "GCA_999999999.1_ASM999999v1_genomic.fna.gz").exists()
+
+
+def test_download_manifest_plantaedb_formats_after_download(tmp_path):
+    server_root = tmp_path / "server_root"
+    plantae_page = server_root / "taxa" / "species" / "berberis-thunbergii"
+    plantae_page.parent.mkdir(parents=True, exist_ok=True)
+
+    ftp_dir = (
+        server_root
+        / "genomes"
+        / "all"
+        / "GCA"
+        / "999"
+        / "999"
+        / "998"
+        / "GCA_999999998.1_ASM999998v1"
+    )
+    ftp_dir.mkdir(parents=True, exist_ok=True)
+    with gzip.open(ftp_dir / "GCA_999999998.1_ASM999998v1_genomic.gbff.gz", "wt", encoding="utf-8") as handle:
+        handle.write(
+            """LOCUS       chr1                      9 bp    DNA     linear   PLN 01-JAN-2000\n"""
+            """DEFINITION  synthetic test record.\n"""
+            """ACCESSION   chr1\n"""
+            """VERSION     chr1\n"""
+            """FEATURES             Location/Qualifiers\n"""
+            """     source          1..9\n"""
+            """                     /organism=\"Berberis thunbergii\"\n"""
+            """     gene            1..9\n"""
+            """                     /gene=\"gene1\"\n"""
+            """                     /locus_tag=\"LOC1\"\n"""
+            """     mRNA            1..9\n"""
+            """                     /gene=\"gene1\"\n"""
+            """                     /locus_tag=\"LOC1\"\n"""
+            """                     /transcript_id=\"rna-LOC1\"\n"""
+            """     CDS             1..9\n"""
+            """                     /gene=\"gene1\"\n"""
+            """                     /locus_tag=\"LOC1\"\n"""
+            """                     /protein_id=\"prot-LOC1\"\n"""
+            """                     /codon_start=1\n"""
+            """                     /translation=\"MKF\"\n"""
+            """ORIGIN\n"""
+            """        1 atgaaattt\n"""
+            """//\n"""
+        )
+    with gzip.open(ftp_dir / "GCA_999999998.1_ASM999998v1_genomic.fna.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGAAATTT\n")
+
+    class _PlantaeDbFormatFixtureHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, directory=None, **kwargs):
+            super().__init__(*args, directory=str(server_root), **kwargs)
+
+        def _send_json(self, payload):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path.startswith("/eutils/esearch.fcgi"):
+                self._send_json(
+                    {
+                        "header": {"type": "esearch", "version": "0.3"},
+                        "esearchresult": {"idlist": ["99998"]},
+                    }
+                )
+                return
+            if self.path.startswith("/eutils/esummary.fcgi"):
+                self._send_json(
+                    {
+                        "header": {"type": "esummary", "version": "0.3"},
+                        "result": {
+                            "uids": ["99998"],
+                            "99998": {
+                                "ftppath_genbank": "ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/999/999/998/GCA_999999998.1_ASM999998v1",
+                                "organism": "Berberis thunbergii",
+                                "speciesname": "Berberis thunbergii",
+                            },
+                        },
+                    }
+                )
+                return
+            super().do_GET()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _PlantaeDbFormatFixtureHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        plantae_page.write_text(
+            (
+                "<html><body>"
+                '<a href="http://127.0.0.1:{port}/data-hub/genome/GCA_999999998.1/">NCBI genome</a>'
+                "</body></html>"
+            ).format(port=server.server_port),
+            encoding="utf-8",
+        )
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "plantaedb",
+                    "id": "http://127.0.0.1:{}/taxa/species/berberis-thunbergii".format(server.server_port),
+                    "species_key": "",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_NCBI_EUTILS_BASE_URL"] = "http://127.0.0.1:{}/eutils".format(server.server_port)
+        env["GG_NCBI_FTP_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+        env["GG_PLANTAEDB_WEB_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+
+        download_dir = tmp_path / "download_cache"
+        cds_dir = tmp_path / "out_cds"
+        gff_dir = tmp_path / "out_gff"
+        genome_dir = tmp_path / "out_genome"
+        summary_path = tmp_path / "species_summary.tsv"
+        stats_path = tmp_path / "stats.json"
+        completed = run_script(
+            "--provider",
+            "plantaedb",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(download_dir),
+            "--species-cds-dir",
+            str(cds_dir),
+            "--species-gff-dir",
+            str(gff_dir),
+            "--species-genome-dir",
+            str(genome_dir),
+            "--species-summary-output",
+            str(summary_path),
+            "--stats-output",
+            str(stats_path),
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert sorted(path.name for path in cds_dir.glob("*.fa.gz")) == [
+        "Berberis_thunbergii_GCA_999999998.1_ASM999998v1_genomic.derived.cds.fa.gz"
+    ]
+    assert sorted(path.name for path in gff_dir.glob("*.gz")) == [
+        "Berberis_thunbergii_GCA_999999998.1_ASM999998v1_genomic.derived.gff.gz"
+    ]
+    assert sorted(path.name for path in genome_dir.glob("*.fa.gz")) == [
+        "Berberis_thunbergii_GCA_999999998.1_ASM999998v1_genomic.fa.gz"
+    ]
+    summary_text = summary_path.read_text(encoding="utf-8")
+    assert "Berberis_thunbergii" in summary_text
+    stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    assert stats["cds_sequences_before"] == 1
+    assert stats["cds_sequences_after"] == 1
+    assert stats["aggregated_cds_removed"] == 0
+
+
+def test_download_manifest_jgi_credentials_enable_protected_direct_download(tmp_path):
+    server_root = tmp_path / "server_root"
+    protected_dir = server_root / "protected"
+    protected_dir.mkdir(parents=True, exist_ok=True)
+    with gzip.open(protected_dir / "test.cds.fa.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">gene1\nATGAAATTT\n")
+
+    expected_login = "user@example.org"
+    expected_password = "secret-password"
+    expected_token = "csrf-token-123"
+
+    class _JgiFixtureHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, directory=None, **kwargs):
+            super().__init__(*args, directory=str(server_root), **kwargs)
+
+        def do_GET(self):
+            if self.path == "/signon":
+                body = (
+                    '<html><body><form action="/signon/create" method="post">'
+                    '<input type="hidden" name="utf8" value="&#x2713;" />'
+                    f'<input type="hidden" name="authenticity_token" value="{expected_token}" />'
+                    '<input type="text" name="login" />'
+                    '<input type="password" name="password" />'
+                    '<input type="submit" name="commit" value="Sign In" />'
+                    "</form></body></html>"
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Set-Cookie", "anon=1; Path=/")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/welcome":
+                body = b"welcome"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/protected/test.cds.fa.gz":
+                cookie = self.headers.get("Cookie", "")
+                if "jgi_session=ok" not in cookie:
+                    self.send_error(403, "Forbidden")
+                    return
+            super().do_GET()
+
+        def do_POST(self):
+            if self.path != "/signon/create":
+                self.send_error(404)
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = self.rfile.read(length).decode("utf-8")
+            parsed = parse_qs(payload)
+            if (
+                parsed.get("login", [""])[0] != expected_login
+                or parsed.get("password", [""])[0] != expected_password
+                or parsed.get("authenticity_token", [""])[0] != expected_token
+            ):
+                self.send_error(403, "Invalid credentials")
+                return
+            self.send_response(302)
+            self.send_header("Location", "/welcome")
+            self.send_header("Set-Cookie", "jgi_session=ok; Path=/")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _JgiFixtureHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "direct",
+                    "id": "jgi_protected_test",
+                    "species_key": "Jgi_cookie_test",
+                    "cds_url": "http://127.0.0.1:{}/protected/test.cds.fa.gz".format(server.server_port),
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "test.cds.fa.gz",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+        download_dir = tmp_path / "download_cache"
+        env = dict(os.environ)
+        env["GG_JGI_SIGNON_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+        env["GG_TEST_JGI_LOGIN"] = expected_login
+        env["GG_TEST_JGI_PASSWORD"] = expected_password
+        completed = run_script(
+            "--provider",
+            "direct",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(download_dir),
+            "--download-only",
+            "--jgi-login-env",
+            "GG_TEST_JGI_LOGIN",
+            "--jgi-password-env",
+            "GG_TEST_JGI_PASSWORD",
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    raw_dir = download_dir / "Direct" / "species_wise_original" / "Jgi_cookie_test"
+    assert (raw_dir / "test.cds.fa.gz").exists()
+
+
 def test_download_manifest_resolves_cngb_id_via_cnsa_then_ncbi(tmp_path):
     ftp_root = tmp_path / "ftp_root"
     ftp_dir = ftp_root / "genomes" / "all" / "GCF" / "000" / "001" / "405" / "GCF_000001405.40_GRCh38.p14"

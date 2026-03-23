@@ -398,7 +398,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
 
         list_sheet = workbook["_lists"]
-        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 16)]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 17)]
         assert provider_values == [
             "ensembl",
             "ensemblplants",
@@ -406,6 +406,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
             "coge",
             "cngb",
             "gwh",
+            "plantaedb",
             "flybase",
             "wormbase",
             "vectorbase",
@@ -420,6 +421,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert "id_opts_ncbi" in workbook.defined_names
         assert "id_opts_coge" in workbook.defined_names
         assert "id_opts_gwh" in workbook.defined_names
+        assert "id_opts_plantaedb" in workbook.defined_names
         assert "id_opts_fernbase" in workbook.defined_names
         assert "id_opts_veupathdb" in workbook.defined_names
         assert "id_opts_dictybase" in workbook.defined_names
@@ -474,6 +476,7 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
             "coge",
             "cngb",
             "gwh",
+            "plantaedb",
             "flybase",
             "wormbase",
             "vectorbase",
@@ -488,6 +491,7 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         coge_values = read_list_column_values(list_sheet, provider_col["coge"])
         cngb_values = read_list_column_values(list_sheet, provider_col["cngb"])
         gwh_values = read_list_column_values(list_sheet, provider_col["gwh"])
+        plantaedb_values = read_list_column_values(list_sheet, provider_col["plantaedb"])
         fernbase_values = read_list_column_values(list_sheet, provider_col["fernbase"])
         veupathdb_values = read_list_column_values(list_sheet, provider_col["veupathdb"])
         dictybase_values = read_list_column_values(list_sheet, provider_col["dictybase"])
@@ -513,6 +517,10 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         assert gwh_values == [
             "GWHIGRM00000000.1 (Medicago sativa)",
             "GWHCBHY00000000 (Allium sativum)",
+        ]
+        assert plantaedb_values == [
+            "https://plantaedb.com/taxa/phylum/angiosperms/order/asterales/family/asteraceae/subfamily/asteroideae/tribe/astereae/subtribe/conyzinae/genus/erigeron/species/erigeron-breviscapus (Erigeron breviscapus (PlantaeDB page))",
+            "https://plantaedb.com/taxa/phylum/angiosperms/order/ranunculales/family/berberidaceae/genus/berberis/species/berberis-thunbergii (Berberis thunbergii (PlantaeDB page))",
         ]
         assert fernbase_values == [
             "Azolla_filiculoides (Azolla filiculoides)",
@@ -584,6 +592,12 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
                     "gwh": [
                         {"id": "GWHZZZZ00000000.1", "species": "Fake gwh species"},
                     ],
+                    "plantaedb": [
+                        {
+                            "id": "https://plantaedb.example/species/example",
+                            "species": "Fake PlantaeDB species",
+                        },
+                    ],
                     "direct": [
                         {
                             "id": "snapshot_direct_species",
@@ -636,6 +650,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
             "coge",
             "cngb",
             "gwh",
+            "plantaedb",
             "flybase",
             "wormbase",
             "vectorbase",
@@ -653,6 +668,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         coge_values = read_list_column_values(list_sheet, provider_col["coge"])
         cngb_values = read_list_column_values(list_sheet, provider_col["cngb"])
         gwh_values = read_list_column_values(list_sheet, provider_col["gwh"])
+        plantaedb_values = read_list_column_values(list_sheet, provider_col["plantaedb"])
         flybase_values = read_list_column_values(list_sheet, provider_col["flybase"])
         wormbase_values = read_list_column_values(list_sheet, provider_col["wormbase"])
         vectorbase_values = read_list_column_values(list_sheet, provider_col["vectorbase"])
@@ -693,6 +709,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
             "GCA_000001215.4 (Drosophila melanogaster)",
         ]
         assert gwh_values == ["GWHZZZZ00000000.1 (Fake gwh species)"]
+        assert plantaedb_values == ["https://plantaedb.example/species/example (Fake PlantaeDB species)"]
         assert flybase_values == ["dmel_r6.66 (Drosophila melanogaster)"]
         assert wormbase_values == ["caenorhabditis_elegans_prjna13758 (Caenorhabditis elegans)"]
         assert vectorbase_values == ["AgambiaePEST (Anopheles gambiae)"]
@@ -848,10 +865,13 @@ def test_build_download_manifest_xlsx_reads_direct_catalog_manifest(tmp_path):
         sheet = workbook["download_plan"]
         list_sheet = workbook["_lists"]
         direct_sheet = workbook["_direct_catalog"]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 32)]
+        provider_values = [value for value in provider_values if value]
+        provider_col = {provider: idx + 2 for idx, provider in enumerate(provider_values)}
         assert direct_sheet["A2"].value == "Fragaria_ananassa_FAN_r2.3 (Fragaria ananassa)"
         assert direct_sheet["D2"].value == "Fragaria_ananassa"
         assert direct_sheet["E2"].value == "https://example.org/fragaria.cds.fa.gz"
-        assert list_sheet["O1"].value == "Fragaria_ananassa_FAN_r2.3 (Fragaria ananassa)"
+        assert list_sheet.cell(row=1, column=provider_col["direct"]).value == "Fragaria_ananassa_FAN_r2.3 (Fragaria ananassa)"
         assert "_direct_catalog" in str(sheet["C3"].value)
         assert "_direct_catalog" in str(sheet["D3"].value)
     finally:
