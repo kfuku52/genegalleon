@@ -86,7 +86,7 @@ gg_entrypoint_name="gg_transcriptome_generation_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Mode
-mode_transcriptome_assembly="${mode_transcriptome_assembly:-sraid}" # {"auto", "sraid", "fastq", "metadata"}
+mode_transcriptome_assembly="${mode_transcriptome_assembly:-auto}" # {"auto", "sraid", "fastq", "metadata"}
 
 # Workflow flags
 run_amalgkit_metadata_or_integrate=1 # Metadata retrieval.

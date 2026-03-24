@@ -26,7 +26,7 @@ genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 # shellcheck disable=SC1090
 source "${gg_support_dir}/gg_busco.sh"
 delete_tmp_dir=${delete_tmp_dir:-1}
-mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-sraid}" | tr '[:upper:]' '[:lower:]')
+mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-auto}" | tr '[:upper:]' '[:lower:]')
 requested_assembly_method=$(printf '%s' "${assembly_method:-auto}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency:-20}"
 amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}"

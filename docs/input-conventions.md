@@ -76,7 +76,7 @@ Accepted forms:
 
 ### Transcriptome assembly input modes
 
-`gg_transcriptome_generation_core.sh` supports three explicit modes plus `auto`:
+`gg_transcriptome_generation_core.sh` defaults to `mode_transcriptome_assembly="auto"` and supports three explicit modes:
 
 - `mode_transcriptome_assembly="sraid"`
   - input: `workspace/input/query_sra_id/GENUS_SPECIES.txt`
@@ -86,7 +86,7 @@ Accepted forms:
   - input: `workspace/input/species_rnaseq/GENUS_SPECIES/*.fastq.gz`
 - `mode_transcriptome_assembly="metadata"`
   - input: `workspace/input/amalgkit_metadata/GENUS_SPECIES_metadata.tsv`
-- `mode_transcriptome_assembly="auto"`
+- `mode_transcriptome_assembly="auto"` (default)
   - auto-selects the single available input layout
   - exits with an error when multiple layouts are simultaneously present
 

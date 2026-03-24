@@ -1766,6 +1766,8 @@ def test_transcriptome_entrypoint_exposes_auto_assembly_and_metadata_detection()
     core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
 
+    assert 'mode_transcriptome_assembly="${mode_transcriptome_assembly:-auto}" # {"auto", "sraid", "fastq", "metadata"}' in entrypoint
+    assert 'mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-auto}" | tr \'[:upper:]\' \'[:lower:]\')' in core
     assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Explicit-accession fallback automatically retries without this clause when transcriptomic runs are missed. Set empty to disable strategy filtering.' in entrypoint
     assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}"' in core
     assert "amalgkit_sra_strategy_query" in config_vars

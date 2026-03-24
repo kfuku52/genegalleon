@@ -80,7 +80,7 @@ bash workflow/gg_input_generation_entrypoint.sh
 
 Use `gg_transcriptome_generation_entrypoint.sh` when your primary starting point is RNA-seq.
 
-Choose exactly one mode in the top config block:
+The top config block defaults to `mode_transcriptome_assembly="auto"` when exactly one input layout is present. Set the mode explicitly when multiple layouts exist:
 
 - `mode_transcriptome_assembly="sraid"` for `workspace/input/query_sra_id`
 - `mode_transcriptome_assembly="fastq"` for `workspace/input/species_rnaseq`
