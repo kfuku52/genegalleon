@@ -80,6 +80,7 @@ Detailed guides are split by topic:
 - [Repository Layout](docs/repository-layout.md)
 - [Execution Model](docs/execution-model.md)
 - [Common Workflow Recipes](docs/common-workflow-recipes.md)
+- [Gene-Family Outputs and Progress Monitoring](docs/gene-family-outputs-and-progress-monitoring.md)
 - [Container Build and Runtime](docs/container-build-and-runtime.md)
 - [Workspace Layout and Data Model](docs/workspace-layout-and-data-model.md)
 - [Input Conventions](docs/input-conventions.md)

@@ -5,6 +5,17 @@
 Species IDs are inferred from filename prefixes such as `Genus_species`.
 Many joins/merges across pipeline stages rely on this convention.
 
+For most species-wise inputs, use either:
+
+- a filename that starts with `Genus_species_...`
+- or a directory named `Genus_species`
+
+Typical examples:
+
+- `Arabidopsis_thaliana_Araport11.fa.gz`
+- `Capsella_rubella_annotation.tsv`
+- `Utricularia_gibba/`
+
 ### FASTA file extensions
 
 Major scripts accept:
@@ -73,6 +84,70 @@ Accepted forms:
 - FASTA with DNA sequences: translated to AA query,
 - FASTA with protein sequences: used directly,
 - non-FASTA text: treated as gene IDs to extract CDS then translate.
+
+Practical notes:
+
+- the file basename becomes the family/task ID under `workspace/output/query2family`,
+- one file should correspond to one intended family-level analysis unit,
+- in query2family array runs, the number of files here is the scheduler array size.
+
+Gene-list example:
+
+```text
+Arabidopsis_thaliana_AT1G08465.1
+AT4G00180.1
+AT1G23420.2
+```
+
+CDS FASTA example:
+
+```fasta
+>Arabidopsis_thaliana_AT1G08465.1
+ATGGAGAGAAATCTTCTCTCT...
+>Arabidopsis_thaliana_AT4G00180.1
+ATGGCGAAGAAGATCAAGAA...
+```
+
+Protein FASTA example:
+
+```fasta
+>Arabidopsis_thaliana_AT1G08465.1
+MERNLLS...
+>Arabidopsis_thaliana_AT4G00180.1
+MAKKIK...
+```
+
+When using gene IDs rather than FASTA, keep the identifiers consistent with
+the headers in `workspace/input/species_cds`.
+
+### `workspace/input/species_expression`
+
+These files are optional, but they enable expression-aware downstream analyses
+such as expression matrix generation, expression panels in `tree_plot`, and
+expression-evolution models in `gg_gene_evolution_entrypoint.sh`.
+
+Expected layout:
+
+- one TSV/TSV.GZ per species,
+- filename starts with the species label such as `Arabidopsis_thaliana_...`,
+- first column is gene ID,
+- remaining columns are tissues, stages, treatments, or other conditions,
+- pre-aggregated values are recommended when you want one value per condition.
+
+Minimal example:
+
+```tsv
+gene-id	root	leaf	flower
+Arabidopsis_thaliana_AT1G08465.1	0.0000	5.3219	1.2741
+Arabidopsis_thaliana_AT4G00180.1	3.1920	0.0000	0.0000
+Arabidopsis_thaliana_AT1G23420.2	0.2124	2.9133	4.1170
+```
+
+Related runtime setting:
+
+- `exp_value_type` in `workflow/gg_gene_evolution_entrypoint.sh` tells
+  downstream plots and models how to interpret the input scale
+  (`log2p1` by default).
 
 ### Transcriptome assembly input modes
 

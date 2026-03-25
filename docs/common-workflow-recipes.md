@@ -146,6 +146,7 @@ This is the default mode of `gg_gene_evolution_entrypoint.sh`.
 Preparation:
 
 - place one query file per family under `workspace/input/query_gene`
+- the file basename becomes the family/task ID under `workspace/output/query2family`
 
 Run:
 
@@ -155,6 +156,8 @@ bash gg_gene_evolution_entrypoint.sh
 ```
 
 Use this mode when you want to start from hand-picked genes or families rather than all selected orthogroups.
+For concrete query-file examples and the resulting per-family output layout, see
+[Gene-Family Outputs and Progress Monitoring](gene-family-outputs-and-progress-monitoring.md).
 
 ## 6. Run gene-family analyses in orthogroup mode
 
@@ -227,6 +230,16 @@ Outputs are written to the workspace root:
 
 - `workspace/orthogroup_summary.tsv`
 - `workspace/transcriptome_assembly_summary.tsv`
+
+Current scope:
+
+- orthogroup summary is generated only when `workspace/output/orthogroup`
+  exists and the selected gene-count table plus AMAS directories are present,
+- transcriptome summary is generated when
+  `workspace/output/transcriptome_assembly` exists,
+- query2family runs do not currently have a dedicated auto-summary TSV; for
+  manual completion-audit commands, see
+  [Gene-Family Outputs and Progress Monitoring](gene-family-outputs-and-progress-monitoring.md).
 
 ## 10. Full end-to-end order
 

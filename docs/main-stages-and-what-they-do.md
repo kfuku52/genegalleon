@@ -325,6 +325,10 @@ Note:
 
 - this stage runs `workflow/core/gg_progress_summary_core.sh` inside the container.
 - orthogroup summary generation is skipped when the selected gene-count table or AMAS directories are absent.
+- there is currently no dedicated query2family summary TSV; use the manual
+  completion-audit approach described in
+  [Gene-Family Outputs and Progress Monitoring](gene-family-outputs-and-progress-monitoring.md)
+  when you need to review large query2family runs.
 
 ### `gg_convergent_sites_entrypoint.sh`
 
