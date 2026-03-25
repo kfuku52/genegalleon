@@ -2,6 +2,7 @@
 # coding: utf-8
 
 import argparse
+import csv
 import os
 import re
 import warnings
@@ -24,16 +25,31 @@ def normalize_species_label(path_label):
     return normalized or str(path_label)
 
 
+def empty_busco_table():
+    return pd.DataFrame({col: pd.Series(dtype='string') for col in BUSCO_TABLE_COLUMNS})
+
+
 def read_busco_table(path_to_table):
-    table = pd.read_table(
-        path_to_table,
-        sep='\t',
-        header=None,
-        comment='#',
-        usecols=[0, 2, 5, 6],
-        names=BUSCO_TABLE_COLUMNS,
-        dtype='string',
-    )
+    rows = []
+    with open(path_to_table, encoding='utf-8', newline='') as handle:
+        reader = csv.reader(handle, delimiter='\t')
+        for fields in reader:
+            if (len(fields) == 0) or (not any(fields)):
+                continue
+            if fields[0].startswith('#'):
+                continue
+            description = '\t'.join(fields[6:]).strip() if len(fields) > 6 else '-'
+            rows.append(
+                {
+                    'busco_id': fields[0],
+                    'sequence': fields[2] if (len(fields) > 2 and fields[2]) else '-',
+                    'orthodb_url': fields[5] if (len(fields) > 5 and fields[5]) else '-',
+                    'description': description if description else '-',
+                }
+            )
+    if len(rows) == 0:
+        return empty_busco_table()
+    table = pd.DataFrame(rows, columns=BUSCO_TABLE_COLUMNS, dtype='string')
     table.loc[:, 'sequence'] = table.loc[:, 'sequence'].str.replace(':[-\\.0-9]*$', '', regex=True)
     for col in ['sequence', 'orthodb_url', 'description']:
         table[col] = table[col].fillna('-').astype('string')
@@ -53,6 +69,13 @@ def process_species_table(path_to_table, species_infile):
         .rename(columns={'sequence': species_infile})
     )
     return species_infile, tmp_sequence, tmp_metadata
+
+
+def first_non_missing(series):
+    non_missing = series.dropna()
+    if len(non_missing) == 0:
+        return '-'
+    return non_missing.iloc[0]
 
 
 def build_arg_parser():
@@ -149,9 +172,11 @@ def main():
         )
         merged_metadata = (
             merged_metadata
-            .groupby('busco_id', as_index=False, sort=False)[['orthodb_url', 'description']]
-            .first()
-            .fillna('-')
+            .groupby('busco_id', as_index=False, sort=False)
+            .agg(
+                orthodb_url=('orthodb_url', first_non_missing),
+                description=('description', first_non_missing),
+            )
         )
     else:
         merged_metadata = pd.DataFrame(columns=['busco_id', 'orthodb_url', 'description'])

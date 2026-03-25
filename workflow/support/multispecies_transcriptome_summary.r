@@ -51,8 +51,9 @@ is_zero_variance_vector = function(x) {
     stats::var(x) == 0
 }
 
-filter_expression_for_dimensional_reduction = function(df_in) {
+filter_expression_for_dimensional_reduction = function(df_in, min_non_missing = 2) {
     df_out = coerce_numeric_data_frame(df_in)
+    min_non_missing = max(2L, as.integer(min_non_missing))
     mat = as.matrix(df_out)
     inf_mask = is.infinite(mat)
     num_infinite = sum(inf_mask)
@@ -71,7 +72,9 @@ filter_expression_for_dimensional_reduction = function(df_in) {
         col_all_na = vapply(df_out, function(x) all(is.na(x)), logical(1))
         row_zero_var = apply(df_out, 1, is_zero_variance_vector)
         col_zero_var = vapply(df_out, is_zero_variance_vector, logical(1))
-        if (!(any(row_all_na) || any(col_all_na) || any(row_zero_var) || any(col_zero_var))) {
+        row_too_sparse = apply(df_out, 1, function(x) sum(!is.na(x)) < min_non_missing)
+        col_too_sparse = vapply(df_out, function(x) sum(!is.na(x)) < min_non_missing, logical(1))
+        if (!(any(row_all_na) || any(col_all_na) || any(row_zero_var) || any(col_zero_var) || any(row_too_sparse) || any(col_too_sparse))) {
             break
         }
         if (any(row_all_na)) {
@@ -86,14 +89,20 @@ filter_expression_for_dimensional_reduction = function(df_in) {
         if (any(col_zero_var)) {
             cat(sprintf('Removing %d zero-variance species column(s) before dimensional reduction.\n', sum(col_zero_var)))
         }
-        if (any(row_all_na) || any(row_zero_var)) {
-            df_out = df_out[!(row_all_na | row_zero_var), , drop=FALSE]
+        if (any(row_too_sparse)) {
+            cat(sprintf('Removing %d gene row(s) with <%d observed species before dimensional reduction.\n', sum(row_too_sparse), min_non_missing))
+        }
+        if (any(col_too_sparse)) {
+            cat(sprintf('Removing %d species column(s) with <%d observed genes before dimensional reduction.\n', sum(col_too_sparse), min_non_missing))
+        }
+        if (any(row_all_na) || any(row_zero_var) || any(row_too_sparse)) {
+            df_out = df_out[!(row_all_na | row_zero_var | row_too_sparse), , drop=FALSE]
         }
         if (nrow(df_out) == 0 || ncol(df_out) == 0) {
             break
         }
-        if (any(col_all_na) || any(col_zero_var)) {
-            df_out = df_out[, !(col_all_na | col_zero_var), drop=FALSE]
+        if (any(col_all_na) || any(col_zero_var) || any(col_too_sparse)) {
+            df_out = df_out[, !(col_all_na | col_zero_var | col_too_sparse), drop=FALSE]
         }
     }
 
@@ -188,7 +197,7 @@ if (file.exists('expression.tsv')) {
     if (is_no_enough_data) {
         cat('Expecting at least', min_gene, 'analyzable genes. Skipping.\n')
     } else {
-        df_exp_filtered = filter_expression_for_dimensional_reduction(df_exp)
+        df_exp_filtered = filter_expression_for_dimensional_reduction(df_exp, min_non_missing=min_species)
         cat(sprintf(
             'Expression matrix retained %d gene row(s) and %d species column(s) after filtering.\n',
             nrow(df_exp_filtered), ncol(df_exp_filtered)
@@ -236,12 +245,13 @@ if (file.exists('expression.tsv')) {
                     ))
                     next
                 }
-                corr_matrix = stats::cor(t(input_data), method = 'pearson', use = 'pairwise.complete.obs')
+                corr_matrix = stats::cor(input_data, method = 'pearson', use = 'pairwise.complete.obs')
                 corr_matrix[is.na(corr_matrix)] = 0
                 diag(corr_matrix) = 1
                 tc_dist_dist = as.dist(1 - corr_matrix + 1e-09)
                 mds = stats::cmdscale(tc_dist_dist, k = 2)
                 df = data.frame(mds[, c(1,2)])
+                rownames(df) = colnames(input_data)
                 xlabel = 'MDS 1'
                 ylabel = 'MDS 2'
             } else if (method=='tsne') {
@@ -265,7 +275,7 @@ if (file.exists('expression.tsv')) {
                 ylabel = 'tSNE 2'
             }
             colnames(df) = c('x','y')
-            df[,'label'] = colnames(input_data)
+            df[,'label'] = rownames(df)
 
             g = ggplot() +
                 geom_text(data=df, mapping=aes(x=x, y=y, label=label), size=font_size*font_size_factor) +

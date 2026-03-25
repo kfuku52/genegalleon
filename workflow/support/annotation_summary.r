@@ -186,20 +186,33 @@ generate_busco_summary = function(dir_busco, outbase, df_out, tr = NA, font_size
         cat('Skipping the analysis of BUSCO tables.\n')
         return(df_out)
     }
-    df = data.frame()
+    df = data.frame(busco_id=character(), status=character(), label=character(), stringsAsFactors=FALSE)
     for (file in files) {
         file_path = file.path(dir_busco, file)
         sp = sub('_busco.*', '', sub('\\.busco.*', '', sub('_', ' ', file)))
         all_lines <- readLines(file_path)
         header_line <- grep("^# Busco id", all_lines, value = TRUE)
-        header <- unlist(strsplit(header_line, "\t"))
-        header = tolower(header)
-        header = sub('# ', '', header)
-        header = sub(' ', '_', header)
+        if (length(header_line) == 0) {
+            cat('Skipping BUSCO file without a # Busco id header:', file_path, '\n')
+            next
+        }
         data_lines <- grep("^[^#]", all_lines, value = TRUE)
-        tmp = read.table(text=data_lines, sep='\t', header=FALSE, comment.char='#', col.names=header, fill=TRUE, quote='')
-        tmp[,'label'] = sp
-        df = rbind(df, tmp)
+        if (length(data_lines) == 0) {
+            next
+        }
+        split_lines <- strsplit(data_lines, "\t", fixed=TRUE)
+        tmp = data.frame(
+            busco_id=vapply(split_lines, function(x) if (length(x) >= 1) x[[1]] else NA_character_, character(1)),
+            status=vapply(split_lines, function(x) if (length(x) >= 2) x[[2]] else NA_character_, character(1)),
+            label=sp,
+            stringsAsFactors=FALSE
+        )
+        tmp = tmp[!(is.na(tmp[['busco_id']]) | is.na(tmp[['status']]) | tmp[['busco_id']]=='' | tmp[['status']]==''), , drop=FALSE]
+        df = rbind(df, tmp[,c('busco_id','status','label'), drop=FALSE])
+    }
+    if (nrow(df) == 0) {
+        cat('Skipping the analysis of BUSCO tables because no BUSCO records were parsed.\n')
+        return(df_out)
     }
     df2 = unique(df[,c('status','label','busco_id')])
     df2 = aggregate(df2, by=df2[,c('status','label')], FUN=length)

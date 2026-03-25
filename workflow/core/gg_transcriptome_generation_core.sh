@@ -26,7 +26,7 @@ genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 # shellcheck disable=SC1090
 source "${gg_support_dir}/gg_busco.sh"
 delete_tmp_dir=${delete_tmp_dir:-1}
-mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-auto}" | tr '[:upper:]' '[:lower:]')
+mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-sraid}" | tr '[:upper:]' '[:lower:]')
 requested_assembly_method=$(printf '%s' "${assembly_method:-auto}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency:-20}"
 amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}"
@@ -272,6 +272,9 @@ for accession in requested:
 PY
 }
 
+# TODO(kfuku, 2026-04+): Remove this genegalleon-side metadata retry wrapper
+# once the bundled amalgkit release natively preserves recovered transcriptomic
+# accessions without requiring shell-side filtering and merge repair.
 extract_transcriptomic_rows_for_requested_accessions() {
   local metadata_source=$1
   local accession_file=$2
@@ -343,7 +346,8 @@ primary_path = Path(sys.argv[1])
 extra_path = Path(sys.argv[2])
 output_path = Path(sys.argv[3])
 
-fieldnames = None
+fieldnames = []
+seen_fieldnames = set()
 rows = []
 seen_runs = set()
 
@@ -354,8 +358,10 @@ for path in (primary_path, extra_path):
         reader = csv.DictReader(handle, delimiter="\t")
         if not reader.fieldnames:
             continue
-        if fieldnames is None:
-            fieldnames = reader.fieldnames
+        for fieldname in reader.fieldnames:
+            if fieldname not in seen_fieldnames:
+                fieldnames.append(fieldname)
+                seen_fieldnames.add(fieldname)
         for row in reader:
             run = str(row.get("run", "") or "").strip()
             dedupe_key = run or tuple((name, row.get(name, "")) for name in reader.fieldnames)
@@ -364,15 +370,91 @@ for path in (primary_path, extra_path):
             seen_runs.add(dedupe_key)
             rows.append(row)
 
-if fieldnames is None:
+if len(fieldnames) == 0:
     raise SystemExit("Could not determine metadata header from {} or {}".format(primary_path, extra_path))
 
 output_path.parent.mkdir(parents=True, exist_ok=True)
 with output_path.open("wt", encoding="utf-8", newline="") as handle:
-    writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
+    writer = csv.DictWriter(
+        handle,
+        fieldnames=fieldnames,
+        delimiter="\t",
+        lineterminator="\n",
+        extrasaction="ignore",
+    )
     writer.writeheader()
     for row in rows:
-        writer.writerow(row)
+        writer.writerow({name: row.get(name, "") or "" for name in fieldnames})
+PY
+}
+
+# TODO(kfuku, 2026-04+): Remove this genegalleon-side fasta alias staging
+# once the bundled amalgkit release includes the upstream quant-side reference
+# fasta fallback fix and no longer needs wrapper-provided alias names.
+stage_quant_reference_fasta_aliases() {
+  local metadata_file=$1
+  local reference_fasta=$2
+  local output_dir=$3
+  local canonical_prefix=$4
+
+  python - "${metadata_file}" "${reference_fasta}" "${output_dir}" "${canonical_prefix}" <<'PY'
+import csv
+import os
+import re
+import sys
+from pathlib import Path
+
+metadata_path = Path(sys.argv[1])
+reference_path = Path(sys.argv[2])
+output_dir = Path(sys.argv[3])
+canonical_prefix = sys.argv[4]
+
+if not reference_path.exists():
+    raise SystemExit("Reference fasta file was not found: {}".format(reference_path))
+if output_dir.exists() and (not output_dir.is_dir()):
+    raise SystemExit("Quant fasta staging path is not a directory: {}".format(output_dir))
+
+def normalize_prefix(raw_value):
+    text = str(raw_value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", "_", text)
+    text = text.replace("/", "_").replace("\\", "_")
+    return text
+
+prefixes = []
+seen_prefixes = set()
+
+def add_prefix(raw_value):
+    prefix = normalize_prefix(raw_value)
+    if (not prefix) or (prefix in seen_prefixes):
+        return
+    seen_prefixes.add(prefix)
+    prefixes.append(prefix)
+
+canonical_prefix_normalized = normalize_prefix(canonical_prefix)
+add_prefix(canonical_prefix)
+
+if metadata_path.exists() and metadata_path.stat().st_size > 0:
+    with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        fieldnames = reader.fieldnames or []
+        candidate_fields = [
+            fieldname for fieldname in ("scientific_name", "scientific_name_original")
+            if fieldname in fieldnames
+        ]
+        for row in reader:
+            for fieldname in candidate_fields:
+                add_prefix(row.get(fieldname, ""))
+
+output_dir.mkdir(parents=True, exist_ok=True)
+for prefix in prefixes:
+    alias_path = output_dir / "{}_for_kallisto_index.fasta".format(prefix)
+    if alias_path.exists() or alias_path.is_symlink():
+        continue
+    os.symlink(reference_path, alias_path)
+    if prefix != canonical_prefix_normalized:
+        print(alias_path.name)
 PY
 }
 
@@ -1836,8 +1918,6 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
   recreate_dir "./fasta"
   recreate_dir "./index"
   recreate_dir "./quant"
-
-  file_reference_fasta_link="./fasta/${sp_ub}_for_kallisto_index.fasta"
   if [[ ${kallisto_reference} == 'species_cds' ]]; then
     kallisto_ref_candidates=()
     mapfile -t kallisto_ref_candidates < <(find "${gg_workspace_input_dir}/species_cds" -maxdepth 1 -type f -name "${sp_ub}_*" | sort)
@@ -1862,7 +1942,16 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
 
   echo "kallisto reference = ${kallisto_reference}: ${file_kallisto_reference_fasta}"
   if [[ -e "${file_kallisto_reference_fasta}" ]]; then
-    ln -s "${file_kallisto_reference_fasta}" "${file_reference_fasta_link}"
+    while IFS= read -r alias_name; do
+      [[ -n "${alias_name}" ]] || continue
+      echo "Staged quant reference alias from metadata: ./fasta/${alias_name}"
+    done < <(
+      stage_quant_reference_fasta_aliases \
+        "${file_amalgkit_metadata}" \
+        "${file_kallisto_reference_fasta}" \
+        "./fasta" \
+        "${sp_ub}"
+    )
   else
     echo "kallisto reference fasta file was not found in: ${file_kallisto_reference_fasta}"
     exit 1

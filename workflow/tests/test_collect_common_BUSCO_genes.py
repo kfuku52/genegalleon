@@ -133,3 +133,60 @@ def test_collect_common_busco_returns_header_only_when_busco_dir_is_missing(tmp_
     out = pandas.read_csv(outfile, sep="\t")
     assert out.columns.tolist() == ["busco_id", "orthodb_url", "description"]
     assert out.empty
+
+
+def test_collect_common_busco_accepts_short_missing_rows_with_parallel_workers(tmp_path):
+    busco_dir = tmp_path / "busco_full"
+    busco_dir.mkdir()
+    outfile = tmp_path / "busco_summary.tsv"
+
+    write_busco_full_table(
+        busco_dir / "speciesA.tsv",
+        [
+            ("b1", "Complete", "a_gene1:1-10", "100", "10", "url1", "desc1"),
+            ("b2", "Missing"),
+            ("b3", "Missing"),
+        ],
+    )
+    write_busco_full_table(
+        busco_dir / "speciesB.tsv",
+        [
+            ("b1", "Missing"),
+            ("b2", "Missing"),
+            ("b3", "Complete", "b_gene3:1-7", "90", "7", "url3", "desc3"),
+        ],
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--busco_outdir",
+            str(busco_dir),
+            "--outfile",
+            str(outfile),
+            "--ncpu",
+            "2",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+    out = pandas.read_csv(outfile, sep="\t")
+    assert out.columns.tolist() == ["busco_id", "orthodb_url", "description", "speciesA", "speciesB"]
+    assert out["busco_id"].tolist() == ["b1", "b3"]
+
+    row_b1 = out.loc[out["busco_id"] == "b1", :].iloc[0]
+    assert row_b1["orthodb_url"] == "url1"
+    assert row_b1["description"] == "desc1"
+    assert row_b1["speciesA"] == "a_gene1"
+    assert row_b1["speciesB"] == "-"
+
+    row_b3 = out.loc[out["busco_id"] == "b3", :].iloc[0]
+    assert row_b3["orthodb_url"] == "url3"
+    assert row_b3["description"] == "desc3"
+    assert row_b3["speciesA"] == "-"
+    assert row_b3["speciesB"] == "b_gene3"

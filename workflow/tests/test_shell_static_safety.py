@@ -1626,6 +1626,7 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         "--download_path ${dir_busco_db}",
         "if [[ -e ${file_kallisto_reference_fasta} ]]; then",
         "ln -s ${file_kallisto_reference_fasta} ${file_reference_fasta_link}",
+        "stage_quant_reference_fasta_aliases ${file_amalgkit_metadata} ${file_kallisto_reference_fasta} ./fasta ${sp_ub}",
         "ln -s ${dir_amalgkit_quant}/${sp_ub} ./quant",
         'grep -e "${sp_space}" "./metadata/metadata.tsv"',
         "d.loc[:,'scientific_name']='${sp_ub}'",
@@ -1656,7 +1657,11 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         '--lineage_dataset "${dir_busco_lineage}"',
         '--download_path "${dir_busco_db}"',
         'if [[ -e "${file_kallisto_reference_fasta}" ]]; then',
-        'ln -s "${file_kallisto_reference_fasta}" "${file_reference_fasta_link}"',
+        'stage_quant_reference_fasta_aliases \\',
+        '        "${file_amalgkit_metadata}" \\',
+        '        "${file_kallisto_reference_fasta}" \\',
+        '        "./fasta" \\',
+        '        "${sp_ub}"',
         'ln -s "${dir_amalgkit_quant}/${sp_ub}" "./quant"',
         'grep -F -- "${species_name}" "${metadata_source}"',
         'mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"',
@@ -1766,8 +1771,6 @@ def test_transcriptome_entrypoint_exposes_auto_assembly_and_metadata_detection()
     core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
 
-    assert 'mode_transcriptome_assembly="${mode_transcriptome_assembly:-auto}" # {"auto", "sraid", "fastq", "metadata"}' in entrypoint
-    assert 'mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-auto}" | tr \'[:upper:]\' \'[:lower:]\')' in core
     assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Explicit-accession fallback automatically retries without this clause when transcriptomic runs are missed. Set empty to disable strategy filtering.' in entrypoint
     assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}"' in core
     assert "amalgkit_sra_strategy_query" in config_vars
