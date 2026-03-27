@@ -262,6 +262,9 @@ Optional columns:
 - `cds_filename`
 - `gff_filename`
 - `genome_filename`
+- `fernbase_confidence_mode`
+  (`high-confidence only` or `high-low combined`; only used for legacy FernBase releases
+  that publish separate `highconfidence` and `lowconfidence` CDS/GFF files)
 - `cds_url_template`, `gff_url_template`, `genome_url_template`
   (`{id}`, `{species_key}`, `{provider}` placeholders)
 - `local_cds_path`, `local_gff_path`, `local_genome_path`

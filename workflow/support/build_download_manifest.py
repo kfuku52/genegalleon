@@ -86,6 +86,14 @@ PROVIDERS = (
     "local",
 )
 LEGACY_NCBI_PROVIDER_ALIASES = ("refseq", "genbank")
+FERNBASE_CONFIDENCE_MODE_FIELD = "fernbase_confidence_mode"
+FERNBASE_CONFIDENCE_MODE_HIGH_ONLY = "high-confidence only"
+FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED = "high-low combined"
+FERNBASE_CONFIDENCE_MODE_CHOICES = (
+    FERNBASE_CONFIDENCE_MODE_HIGH_ONLY,
+    FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED,
+)
+FERNBASE_COMBINED_FILENAME_MARKER = "highlowcombined"
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "ensembl": Path("Ensembl") / "original_files",
@@ -134,6 +142,7 @@ MANIFEST_FIELDNAMES = (
     "local_gff_path",
     "local_gbff_path",
     "local_genome_path",
+    FERNBASE_CONFIDENCE_MODE_FIELD,
 )
 
 DIRECT_CATALOG_FIELDS = tuple(field for field in MANIFEST_FIELDNAMES if field not in ("provider", "id"))
@@ -355,6 +364,18 @@ HEADER_COMMENTS = {
             "Absolute path or path relative to this manifest file.",
             "Converted to file:// at runtime.",
             "Use this when the genome FASTA already exists locally and you do not want to write genome_url manually.",
+        )
+    ),
+    FERNBASE_CONFIDENCE_MODE_FIELD: "\n".join(
+        (
+            "Optional; only used for legacy FernBase releases with separate highconfidence/lowconfidence files.",
+            "",
+            "Allowed values: {} ; {}.".format(
+                FERNBASE_CONFIDENCE_MODE_HIGH_ONLY,
+                FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED,
+            ),
+            "Blank defaults to high-confidence only.",
+            "Ignored for non-FernBase rows and for newer single-annotation FernBase releases.",
         )
     ),
 }
@@ -868,6 +889,22 @@ def is_probable_cds_filename(provider, name):
     return any(marker in lower for marker in ("cds", "transcript", "mrna", "cdna"))
 
 
+def infer_fernbase_confidence_mode_from_files(files, cds_path, gff_path):
+    if cds_path is None or gff_path is None:
+        return ""
+    cds_lower = cds_path.name.lower()
+    gff_lower = gff_path.name.lower()
+    if FERNBASE_COMBINED_FILENAME_MARKER in cds_lower or FERNBASE_COMBINED_FILENAME_MARKER in gff_lower:
+        return FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED
+    has_high_cds = any("highconfidence" in path.name.lower() and is_probable_cds_filename("fernbase", path.name) for path in files)
+    has_low_cds = any("lowconfidence" in path.name.lower() and is_probable_cds_filename("fernbase", path.name) for path in files)
+    has_high_gff = any("highconfidence" in path.name.lower() and is_gff_filename(path.name) for path in files)
+    has_low_gff = any("lowconfidence" in path.name.lower() and is_gff_filename(path.name) for path in files)
+    if has_high_cds and has_low_cds and has_high_gff and has_low_gff:
+        return FERNBASE_CONFIDENCE_MODE_HIGH_ONLY
+    return ""
+
+
 def provider_candidate_sort_key(provider, label, name):
     lower = str(name or "").lower()
     label_upper = str(label or "").upper()
@@ -875,6 +912,7 @@ def provider_candidate_sort_key(provider, label, name):
         return (lower,)
     if label_upper == "CDS":
         return (
+            0 if FERNBASE_COMBINED_FILENAME_MARKER in lower else 1,
             0 if "highconfidence" in lower else 1,
             1 if "lowconfidence" in lower else 0,
             0 if "cds" in lower else 1,
@@ -884,6 +922,7 @@ def provider_candidate_sort_key(provider, label, name):
     if label_upper == "GFF":
         return (
             1 if FERNBASE_GFF_EXCLUDE_PATTERN.search(lower) else 0,
+            0 if FERNBASE_COMBINED_FILENAME_MARKER in lower else 1,
             0 if "highconfidence" in lower else 1,
             1 if "lowconfidence" in lower else 0,
             lower,
@@ -965,6 +1004,7 @@ def discover_ensembl_like(input_dir, provider):
                 "gff_filename": gff_path.name if gff_path is not None else "",
                 "gbff_filename": gbff_path.name if gbff_path is not None else "",
                 "genome_filename": genome_path.name if genome_path is not None else "",
+                FERNBASE_CONFIDENCE_MODE_FIELD: "",
             }
         )
 
@@ -1069,6 +1109,9 @@ def discover_species_dir_based(provider, input_dir):
                 "gff_filename": gff_path.name if gff_path is not None else "",
                 "gbff_filename": gbff_path.name if gbff_path is not None else "",
                 "genome_filename": genome_path.name if genome_path is not None else "",
+                FERNBASE_CONFIDENCE_MODE_FIELD: infer_fernbase_confidence_mode_from_files(files, cds_path, gff_path)
+                if provider == "fernbase"
+                else "",
             }
         )
     return rows, warnings, errors
@@ -1241,6 +1284,18 @@ def write_manifest_xlsx(rows: List[Dict[str, str]], output_path: Path, id_option
     id_validation.showErrorMessage = False
     sheet.add_data_validation(id_validation)
     id_validation.add("B2:B5000")
+
+    fernbase_mode_col = get_column_letter(MANIFEST_FIELDNAMES.index(FERNBASE_CONFIDENCE_MODE_FIELD) + 1)
+    fernbase_mode_validation = DataValidation(
+        type="list",
+        formula1='"{},{}"'.format(
+            FERNBASE_CONFIDENCE_MODE_HIGH_ONLY,
+            FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED,
+        ),
+        allow_blank=True,
+    )
+    sheet.add_data_validation(fernbase_mode_validation)
+    fernbase_mode_validation.add("{}2:{}5000".format(fernbase_mode_col, fernbase_mode_col))
 
     workbook.save(output_path)
 

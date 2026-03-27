@@ -270,6 +270,7 @@ def test_build_download_manifest_fernbase_provider_prefers_primary_annotation_fi
     assert rows[0]["cds_filename"] == "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta"
     assert rows[0]["gff_filename"] == "Azolla_filiculoides.gene_models.highconfidence_v1.1.gff"
     assert rows[0]["genome_filename"] == "Azolla_filiculoides.genome_v1.2.fasta"
+    assert rows[0]["fernbase_confidence_mode"] == "high-confidence only"
 
 
 def test_build_download_manifest_allows_gff_and_genome_without_cds(tmp_path):

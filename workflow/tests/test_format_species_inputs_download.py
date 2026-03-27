@@ -59,6 +59,7 @@ def make_manifest(path, rows):
                 "local_gff_path",
                 "local_gbff_path",
                 "local_genome_path",
+                "fernbase_confidence_mode",
             ],
             delimiter="\t",
         )
@@ -2409,6 +2410,129 @@ def test_download_manifest_fernbase_provider_follows_latest_version_subdir(tmp_p
     assert (raw_dir / "Azolla_filiculoides.gene_models.highconfidence_v1.1.gff").exists()
     assert (raw_dir / "Azolla_filiculoides.genome_v1.2.fasta").exists()
     assert not (raw_dir / "Azolla_filiculoides.CDS.lowconfidence_v1.1.fasta").exists()
+
+
+def test_download_manifest_fernbase_combined_mode_merges_non_overlapping_low_confidence_genes(tmp_path):
+    server_root = tmp_path / "server_root"
+    v1_dir = server_root / "ftp" / "Azolla_filiculoides" / "Azolla_asm_v1.1"
+    v1_dir.mkdir(parents=True, exist_ok=True)
+
+    (v1_dir / "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta").write_text(
+        ">Azfi_high1.t1 gene=Azfi_high1\nATGAAATTT\n",
+        encoding="utf-8",
+    )
+    (v1_dir / "Azolla_filiculoides.CDS.lowconfidence_v1.1.fasta").write_text(
+        ">Azfi_low_overlap.t1 gene=Azfi_low_overlap\nATGAAATTT\n>Azfi_low_keep.t1 gene=Azfi_low_keep\nATGAAATTT\n",
+        encoding="utf-8",
+    )
+    (v1_dir / "Azolla_filiculoides.gene_models.highconfidence_v1.1.gff").write_text(
+        "\n".join(
+            [
+                "##gff-version 3",
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=Azfi_high1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=Azfi_high1.t1;Parent=Azfi_high1",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=Azfi_high1.t1.cds;Parent=Azfi_high1.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (v1_dir / "Azolla_filiculoides.gene_models.lowconfidence_v1.1.gff").write_text(
+        "\n".join(
+            [
+                "##gff-version 3",
+                "chr1\tsrc\tgene\t5\t12\t.\t-\t.\tID=Azfi_low_overlap",
+                "chr1\tsrc\tmRNA\t5\t12\t.\t-\t.\tID=Azfi_low_overlap.t1;Parent=Azfi_low_overlap",
+                "chr1\tsrc\tCDS\t5\t12\t.\t-\t0\tID=Azfi_low_overlap.t1.cds;Parent=Azfi_low_overlap.t1",
+                "chr1\tsrc\tgene\t20\t28\t.\t+\t.\tID=Azfi_low_keep",
+                "chr1\tsrc\tmRNA\t20\t28\t.\t+\t.\tID=Azfi_low_keep.t1;Parent=Azfi_low_keep",
+                "chr1\tsrc\tCDS\t20\t28\t.\t+\t0\tID=Azfi_low_keep.t1.cds;Parent=Azfi_low_keep.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (v1_dir / "Azolla_filiculoides.genome_v1.2.fasta").write_text(
+        ">chr1\nATGAAATTTCCCAAAGGGATGAAATTTCCCAAAGGG\n",
+        encoding="utf-8",
+    )
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "fernbase",
+                    "id": "Azolla_filiculoides",
+                    "species_key": "Azolla_filiculoides",
+                    "fernbase_confidence_mode": "high-low combined",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_FERNBASE_ID_URL_TEMPLATE"] = "http://127.0.0.1:{}/ftp/{{id}}/".format(server.server_port)
+        download_dir = tmp_path / "download_cache"
+        out_cds = tmp_path / "species_cds"
+        out_gff = tmp_path / "species_gff"
+        out_genome = tmp_path / "species_genome"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--provider",
+                "fernbase",
+                "--download-manifest",
+                str(manifest),
+                "--download-dir",
+                str(download_dir),
+                "--species-cds-dir",
+                str(out_cds),
+                "--species-gff-dir",
+                str(out_gff),
+                "--species-genome-dir",
+                str(out_genome),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    raw_dir = download_dir / "FernBase" / "species_wise_original" / "Azolla_filiculoides"
+    combined_raw_cds = raw_dir / "Azolla_filiculoides.CDS.highlowcombined_v1.1.fasta"
+    combined_raw_gff = raw_dir / "Azolla_filiculoides.gene_models.highlowcombined_v1.1.gff"
+    assert (raw_dir / "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta").exists()
+    assert (raw_dir / "Azolla_filiculoides.CDS.lowconfidence_v1.1.fasta").exists()
+    assert combined_raw_cds.exists()
+    assert combined_raw_gff.exists()
+
+    formatted_cds = out_cds / "Azolla_filiculoides_CDS.highlowcombined_v1.1.fa.gz"
+    formatted_gff = out_gff / "Azolla_filiculoides_gene_models.highlowcombined_v1.1.gff.gz"
+    assert formatted_cds.exists()
+    assert formatted_gff.exists()
+
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert ">Azolla_filiculoides_Azfi_high1" in cds_text
+    assert ">Azolla_filiculoides_Azfi_low_keep" in cds_text
+    assert "Azfi_low_overlap" not in cds_text
+
+    with gzip.open(formatted_gff, "rt", encoding="utf-8") as handle:
+        gff_text = handle.read()
+    assert "ID=Azfi_high1" in gff_text
+    assert "ID=Azfi_low_keep" in gff_text
+    assert "ID=Azfi_low_overlap" not in gff_text
 
 
 def test_download_manifest_fernbase_provider_accepts_markerless_top_level_genome_fasta(tmp_path):

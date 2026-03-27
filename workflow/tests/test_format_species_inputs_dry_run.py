@@ -36,6 +36,7 @@ def make_manifest(path, rows):
                 "local_cds_path",
                 "local_gff_path",
                 "local_genome_path",
+                "fernbase_confidence_mode",
             ],
             delimiter="\t",
         )

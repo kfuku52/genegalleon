@@ -43,6 +43,14 @@ COMMON_REPLACEMENTS = (
     ("evm.model.", ""),
     ("Oropetium_20150105_", ""),
 )
+FERNBASE_CONFIDENCE_MODE_FIELD = "fernbase_confidence_mode"
+FERNBASE_CONFIDENCE_MODE_HIGH_ONLY = "high-confidence only"
+FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED = "high-low combined"
+FERNBASE_CONFIDENCE_MODE_CHOICES = (
+    FERNBASE_CONFIDENCE_MODE_HIGH_ONLY,
+    FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED,
+)
+FERNBASE_COMBINED_FILENAME_MARKER = "highlowcombined"
 GENE_GROUPING_MODES = ("strict", "rescue_overlap")
 RESCUE_SHARED_JUNCTION_MIN_SHORTER_OVERLAP = 0.70
 RESCUE_SHARED_JUNCTION_MIN_LONGER_OVERLAP = 0.40
@@ -262,6 +270,7 @@ RESOLVED_MANIFEST_PREFERRED_COLUMNS = (
     "gff_filename",
     "gbff_filename",
     "genome_filename",
+    FERNBASE_CONFIDENCE_MODE_FIELD,
 )
 ENSEMBL_DEFAULT_ID_URL_TEMPLATES = {
     "CDS": "https://ftp.ensembl.org/pub/current_fasta/{id_lower}/cds/",
@@ -780,7 +789,8 @@ def build_arg_parser():
             "Use --input-dir for direct local phycocosm/phytozome formatting. "
             "Optional columns: species_key,cds_filename,gff_filename,genome_filename,"
             "cds_url_template,gff_url_template,genome_url_template,"
-            "local_cds_path,local_gff_path,local_genome_path."
+            "local_cds_path,local_gff_path,local_genome_path,"
+            "fernbase_confidence_mode."
         ),
     )
     parser.add_argument(
@@ -1459,6 +1469,7 @@ def provider_candidate_sort_key(provider, label, name):
         return (lower,)
     if label_upper == "CDS":
         return (
+            0 if FERNBASE_COMBINED_FILENAME_MARKER in lower else 1,
             0 if "highconfidence" in lower else 1,
             1 if "lowconfidence" in lower else 0,
             0 if "cds" in lower else 1,
@@ -1468,6 +1479,7 @@ def provider_candidate_sort_key(provider, label, name):
     if label_upper == "GFF":
         return (
             1 if FERNBASE_GFF_EXCLUDE_PATTERN.search(lower) else 0,
+            0 if FERNBASE_COMBINED_FILENAME_MARKER in lower else 1,
             0 if "highconfidence" in lower else 1,
             1 if "lowconfidence" in lower else 0,
             lower,
@@ -1508,6 +1520,175 @@ def select_best_url_for_label(provider, label, candidates):
     return preferred[0]
 
 
+def parse_fernbase_confidence_mode(raw_value):
+    text = str(raw_value or "").strip()
+    if text == "":
+        return ""
+    normalized = re.sub(r"[_-]+", " ", text.lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if normalized in ("high confidence only", "high only", "high"):
+        return FERNBASE_CONFIDENCE_MODE_HIGH_ONLY
+    if normalized in ("high low combined", "combined", "merge", "merged"):
+        return FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED
+    raise ValueError(
+        "invalid {} '{}'; expected one of: {}, {}".format(
+            FERNBASE_CONFIDENCE_MODE_FIELD,
+            raw_value,
+            FERNBASE_CONFIDENCE_MODE_HIGH_ONLY,
+            FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED,
+        )
+    )
+
+
+def effective_fernbase_confidence_mode(raw_value):
+    parsed = parse_fernbase_confidence_mode(raw_value)
+    if parsed != "":
+        return parsed
+    return FERNBASE_CONFIDENCE_MODE_HIGH_ONLY
+
+
+def build_fernbase_combined_filename(name):
+    text = str(name or "").strip()
+    if text == "":
+        return text
+    if FERNBASE_COMBINED_FILENAME_MARKER in text.lower():
+        return text
+    replaced = re.sub(r"highconfidence", FERNBASE_COMBINED_FILENAME_MARKER, text, count=1, flags=re.IGNORECASE)
+    if replaced != text:
+        return replaced
+    replaced = re.sub(r"lowconfidence", FERNBASE_COMBINED_FILENAME_MARKER, text, count=1, flags=re.IGNORECASE)
+    if replaced != text:
+        return replaced
+    suffixes = FASTA_EXTENSIONS + GFF_EXTENSIONS + GENBANK_EXTENSIONS
+    stem = strip_suffix_case_insensitive(text, suffixes)
+    if stem != text:
+        return stem + "." + FERNBASE_COMBINED_FILENAME_MARKER + text[len(stem):]
+    return text + "." + FERNBASE_COMBINED_FILENAME_MARKER
+
+
+def fernbase_feature_gene_token_from_header(header):
+    gene_symbol = extract_header_tag_value(header, "gene")
+    extracted = extract_provider_id("fernbase", header)
+    collapsed = collapse_transcript_suffix("fernbase", extracted)
+    if gene_symbol != "":
+        if (
+            collapsed != ""
+            and collapsed != gene_symbol
+            and re.search(r"(?:^|[._-]){}$".format(re.escape(gene_symbol)), collapsed, re.IGNORECASE)
+        ):
+            return collapsed
+        return gene_symbol
+    if collapsed != "":
+        return collapsed
+    return extracted
+
+
+def list_directory_file_urls(reference, timeout, headers):
+    text = str(reference or "").strip()
+    if text == "":
+        return []
+    parsed = urlparse(text)
+    scheme = parsed.scheme.lower()
+    if scheme == "file":
+        path = Path(unquote(parsed.path)).expanduser().resolve()
+        directory = path if path.is_dir() else path.parent
+        return [child.resolve().as_uri() for child in sorted(directory.iterdir()) if child.is_file()]
+
+    index_url = text
+    if not index_url.endswith("/"):
+        index_url = index_url.rsplit("/", 1)[0] + "/"
+    index_text = fetch_text_with_headers(index_url, timeout, headers)
+    links = parse_links_from_document(index_url, index_text)
+    out = []
+    seen = set()
+    for link in links:
+        path = urlparse(link).path
+        if path.endswith("/"):
+            continue
+        if link in seen:
+            continue
+        seen.add(link)
+        out.append(link)
+    return out
+
+
+def select_fernbase_confidence_candidate(label, candidates, confidence):
+    desired = str(confidence or "").strip().lower()
+    filtered = []
+    for candidate in candidates:
+        path_lower = urlparse(candidate).path.lower()
+        if label == "CDS":
+            if not is_probable_cds_url("fernbase", path_lower):
+                continue
+        elif label == "GFF":
+            if not is_probable_gff_url(path_lower):
+                continue
+            if FERNBASE_GFF_EXCLUDE_PATTERN.search(path_lower):
+                continue
+        else:
+            continue
+        if desired == "high" and "highconfidence" not in path_lower:
+            continue
+        if desired == "low" and "lowconfidence" not in path_lower:
+            continue
+        filtered.append(candidate)
+    if len(filtered) == 0:
+        return ""
+    return sorted(
+        filtered,
+        key=lambda x: provider_candidate_sort_key("fernbase", label, urlparse(x).path.split("/")[-1]),
+    )[0]
+
+
+def resolve_fernbase_split_bundle(cds_url, gff_url, genome_url, timeout, headers):
+    references = [gff_url, cds_url, genome_url]
+    candidates = []
+    last_error = None
+    for reference in references:
+        text = str(reference or "").strip()
+        if text == "":
+            continue
+        try:
+            candidates = list_directory_file_urls(text, timeout, headers)
+        except Exception as exc:
+            last_error = exc
+            continue
+        if len(candidates) > 0:
+            break
+    if len(candidates) == 0:
+        if last_error is not None:
+            raise ValueError(last_error)
+        return {"is_split": False}
+
+    high_cds_url = select_fernbase_confidence_candidate("CDS", candidates, "high")
+    low_cds_url = select_fernbase_confidence_candidate("CDS", candidates, "low")
+    high_gff_url = select_fernbase_confidence_candidate("GFF", candidates, "high")
+    low_gff_url = select_fernbase_confidence_candidate("GFF", candidates, "low")
+    resolved_genome_url = str(genome_url or "").strip()
+    if resolved_genome_url == "":
+        resolved_genome_url = select_best_url_for_label("fernbase", "GENOME", candidates)
+    return {
+        "is_split": all(
+            value != ""
+            for value in (
+                high_cds_url,
+                low_cds_url,
+                high_gff_url,
+                low_gff_url,
+            )
+        ),
+        "high_cds_url": high_cds_url,
+        "low_cds_url": low_cds_url,
+        "high_gff_url": high_gff_url,
+        "low_gff_url": low_gff_url,
+        "genome_url": resolved_genome_url,
+        "high_cds_filename": Path(urlparse(high_cds_url).path).name if high_cds_url != "" else "",
+        "low_cds_filename": Path(urlparse(low_cds_url).path).name if low_cds_url != "" else "",
+        "high_gff_filename": Path(urlparse(high_gff_url).path).name if high_gff_url != "" else "",
+        "low_gff_filename": Path(urlparse(low_gff_url).path).name if low_gff_url != "" else "",
+    }
+
+
 def resolve_urls_from_index_url(provider, index_url, timeout, headers):
     text = fetch_text_with_headers(index_url, timeout, headers)
     links = parse_links_from_document(index_url, text)
@@ -1515,6 +1696,241 @@ def resolve_urls_from_index_url(provider, index_url, timeout, headers):
         "cds_url": select_best_url_for_label(provider, "CDS", links),
         "gff_url": select_best_url_for_label(provider, "GFF", links),
         "genome_url": select_best_url_for_label(provider, "GENOME", links),
+    }
+
+
+def interval_overlaps_merged_intervals(intervals, start, end):
+    lo = 0
+    hi = len(intervals)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if intervals[mid][1] < start:
+            lo = mid + 1
+        else:
+            hi = mid
+    if lo >= len(intervals):
+        return False
+    return intervals[lo][0] <= end
+
+
+def load_fernbase_high_gene_intervals(gff_path):
+    intervals_by_seqid = defaultdict(list)
+    with open_text(gff_path, "rt") as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip("\n\r")
+            if line == "":
+                continue
+            if line.startswith("##FASTA"):
+                break
+            if line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 9 or str(parts[2] or "").strip().lower() != "gene":
+                continue
+            try:
+                start = int(parts[3])
+                end = int(parts[4])
+            except Exception:
+                continue
+            if start > end:
+                start, end = end, start
+            intervals_by_seqid[str(parts[0] or "").strip()].append((start, end))
+    return {
+        seqid: merge_coordinate_intervals(intervals)
+        for seqid, intervals in intervals_by_seqid.items()
+    }
+
+
+def select_low_confidence_gene_ids_without_high_overlap(low_gff_path, high_gene_intervals):
+    kept_gene_ids = set()
+    total_low_genes = 0
+    with open_text(low_gff_path, "rt") as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip("\n\r")
+            if line == "":
+                continue
+            if line.startswith("##FASTA"):
+                break
+            if line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 9 or str(parts[2] or "").strip().lower() != "gene":
+                continue
+            try:
+                start = int(parts[3])
+                end = int(parts[4])
+            except Exception:
+                continue
+            if start > end:
+                start, end = end, start
+            attrs = parse_gff_attributes(parts[8])
+            gene_id = choose_first_gff_attribute(attrs, ("ID", "gene_id", "locus_tag", "gene", "Name"))
+            if gene_id == "":
+                continue
+            total_low_genes += 1
+            intervals = high_gene_intervals.get(str(parts[0] or "").strip(), ())
+            if interval_overlaps_merged_intervals(intervals, start, end):
+                continue
+            kept_gene_ids.add(gene_id)
+    return kept_gene_ids, total_low_genes
+
+
+def record_matches_fernbase_gene_ids(record, kept_gene_ids, feature_records, gene_cache):
+    attrs = record.get("attrs", {})
+    tokens = set()
+    explicit = choose_first_gff_attribute(attrs, ("gene", "gene_id", "locus_tag", "geneName"))
+    if explicit != "":
+        tokens.add(explicit)
+    feature_type = str(record.get("feature_type", "") or "").strip().lower()
+    if feature_type == "gene":
+        direct = choose_first_gff_attribute(attrs, ("ID", "Name"))
+        if direct != "":
+            tokens.add(direct)
+    feature_id = str(record.get("feature_id", "") or "").strip()
+    if feature_id != "":
+        tokens.add(resolve_feature_gene_token(feature_id, feature_records, "fernbase", gene_cache, set()))
+    for parent_id in record.get("parents", ()):
+        parent_token = resolve_feature_gene_token(parent_id, feature_records, "fernbase", gene_cache, set())
+        if parent_token != "":
+            tokens.add(parent_token)
+    return any(str(token or "").strip() in kept_gene_ids for token in tokens)
+
+
+def iter_fernbase_filtered_low_gff_lines(low_gff_path, kept_gene_ids):
+    records = []
+    feature_records = {}
+    with open_text(low_gff_path, "rt") as handle:
+        for raw_line in handle:
+            if raw_line.startswith("##FASTA"):
+                break
+            line = raw_line.rstrip("\n\r")
+            if line == "" or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 9:
+                continue
+            attrs = parse_gff_attributes(parts[8])
+            feature_id = choose_first_gff_attribute(attrs, ("ID", "transcript_id", "protein_id", "Name"))
+            parents = attrs.get("Parent", ())
+            record = {
+                "line": raw_line if raw_line.endswith("\n") else raw_line + "\n",
+                "feature_type": str(parts[2] or "").strip().lower(),
+                "attrs": attrs,
+                "feature_id": feature_id,
+                "parents": parents,
+            }
+            records.append(record)
+            if feature_id != "":
+                feature_records[feature_id] = {
+                    "feature_type": record["feature_type"],
+                    "parents": parents,
+                    "attrs": attrs,
+                }
+    gene_cache = {}
+    for record in records:
+        if record_matches_fernbase_gene_ids(record, kept_gene_ids, feature_records, gene_cache):
+            yield record["line"]
+
+
+def iter_fernbase_combined_gff_lines(high_gff_path, low_gff_path, kept_gene_ids):
+    with open_text(high_gff_path, "rt") as handle:
+        for raw_line in handle:
+            if raw_line.startswith("##FASTA"):
+                break
+            yield raw_line if raw_line.endswith("\n") else raw_line + "\n"
+    yield from iter_fernbase_filtered_low_gff_lines(low_gff_path, kept_gene_ids)
+
+
+def iter_fernbase_combined_cds_records(high_cds_path, low_cds_path, kept_gene_ids):
+    yield from iter_fasta_records(high_cds_path)
+    for header, sequence in iter_fasta_records(low_cds_path):
+        gene_token = fernbase_feature_gene_token_from_header(header)
+        if gene_token in kept_gene_ids:
+            yield header, sequence
+
+
+def write_text_lines(output_path, lines):
+    tmp_output = make_temporary_output_path(output_path)
+    try:
+        with open_text(tmp_output, "wt") as handle:
+            for line in lines:
+                handle.write(str(line))
+        tmp_output.replace(output_path)
+    except Exception:
+        try:
+            tmp_output.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        raise
+
+
+def write_fasta_records(output_path, records):
+    tmp_output = make_temporary_output_path(output_path)
+    try:
+        with open_text(tmp_output, "wt") as handle:
+            for header, sequence in records:
+                handle.write(">{}\n{}\n".format(str(header or "").strip(), re.sub(r"\s+", "", str(sequence or ""))))
+        tmp_output.replace(output_path)
+    except Exception:
+        try:
+            tmp_output.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        raise
+
+
+def merge_fernbase_confidence_bundle(
+    species_key,
+    high_cds_path,
+    low_cds_path,
+    high_gff_path,
+    low_gff_path,
+    combined_cds_path,
+    combined_gff_path,
+    overwrite,
+):
+    if (
+        combined_cds_path.exists()
+        and combined_cds_path.stat().st_size > 0
+        and combined_gff_path.exists()
+        and combined_gff_path.stat().st_size > 0
+        and not overwrite
+    ):
+        return {
+            "warnings": [
+                "[download:fernbase] {} combined confidence bundle already exists. Skipping merge.".format(
+                    species_key
+                )
+            ],
+            "errors": [],
+        }
+
+    high_gene_intervals = load_fernbase_high_gene_intervals(high_gff_path)
+    kept_low_gene_ids, total_low_genes = select_low_confidence_gene_ids_without_high_overlap(
+        low_gff_path,
+        high_gene_intervals,
+    )
+    write_text_lines(
+        combined_gff_path,
+        iter_fernbase_combined_gff_lines(high_gff_path, low_gff_path, kept_low_gene_ids),
+    )
+    write_fasta_records(
+        combined_cds_path,
+        iter_fernbase_combined_cds_records(high_cds_path, low_cds_path, kept_low_gene_ids),
+    )
+    return {
+        "warnings": [
+            "[download:fernbase] {} merged FernBase confidence bundle: kept {} of {} low-confidence genes".format(
+                species_key,
+                len(kept_low_gene_ids),
+                total_low_genes,
+            )
+        ],
+        "errors": [],
     }
 
 
@@ -3573,6 +3989,8 @@ def download_from_manifest(
     resolved_fieldnames = resolved_manifest_fieldnames(rows)
     lock_stale_seconds = resolve_download_lock_stale_seconds()
     download_jobs = []
+    merge_jobs = []
+    cleanup_paths = []
     failed_downloads = []
     row_target_paths = {}
 
@@ -3614,6 +4032,7 @@ def download_from_manifest(
         gff_filename = (row.get("gff_filename") or "").strip()
         gbff_filename = (row.get("gbff_filename") or "").strip()
         genome_filename = (row.get("genome_filename") or "").strip()
+        fernbase_confidence_mode_raw = (row.get(FERNBASE_CONFIDENCE_MODE_FIELD) or "").strip()
         resolved_ncbi = None
 
         if provider_filter != "all" and provider != provider_filter:
@@ -3629,6 +4048,19 @@ def download_from_manifest(
         if provider not in PROVIDERS:
             errors.append("Manifest line {}: unsupported provider '{}'".format(i, provider))
             continue
+        try:
+            fernbase_confidence_mode = parse_fernbase_confidence_mode(fernbase_confidence_mode_raw)
+        except ValueError as exc:
+            errors.append("Manifest line {}: {}".format(i, exc))
+            continue
+        if provider != "fernbase" and fernbase_confidence_mode != "":
+            warnings.append(
+                "Manifest line {}: {} is ignored for provider '{}'".format(
+                    i,
+                    FERNBASE_CONFIDENCE_MODE_FIELD,
+                    provider,
+                )
+            )
         if provider == "coge":
             coge_gid = extract_coge_gid_candidate(source_id)
             if coge_gid == "":
@@ -3790,43 +4222,127 @@ def download_from_manifest(
                 genome_archive_member,
             )
 
-        resolved_rows.append(
-            build_resolved_manifest_row(
-                raw_row=row,
-                fieldnames=resolved_fieldnames,
-                provider=provider,
-                source_id=source_id,
-                species_key=species_key,
-                cds_url=cds_url,
-                gff_url=gff_url,
-                gbff_url=gbff_url,
-                genome_url=genome_url,
-                cds_archive_member=cds_archive_member,
-                gff_archive_member=gff_archive_member,
-                gbff_archive_member=gbff_archive_member,
-                genome_archive_member=genome_archive_member,
-                cds_filename=cds_filename,
-                gff_filename=gff_filename,
-                gbff_filename=gbff_filename,
-                genome_filename=genome_filename,
-            )
-        )
-
-        targets = []
+        resolved_cds_filename = cds_filename
+        resolved_gff_filename = gff_filename
+        download_targets = []
         if cds_url != "":
-            targets.append(("CDS", cds_url, raw_dir / cds_filename, cds_archive_member))
+            download_targets.append(("CDS", cds_url, raw_dir / cds_filename, cds_archive_member))
         if gff_url != "":
-            targets.append(("GFF", gff_url, raw_dir / gff_filename, gff_archive_member))
+            download_targets.append(("GFF", gff_url, raw_dir / gff_filename, gff_archive_member))
         if gbff_url != "":
-            targets.append(("GBFF", gbff_url, raw_dir / gbff_filename, gbff_archive_member))
+            download_targets.append(("GBFF", gbff_url, raw_dir / gbff_filename, gbff_archive_member))
         if genome_url != "":
-            targets.append(("GENOME", genome_url, raw_dir / genome_filename, genome_archive_member))
+            download_targets.append(("GENOME", genome_url, raw_dir / genome_filename, genome_archive_member))
+
+        if provider == "fernbase":
+            effective_mode = effective_fernbase_confidence_mode(fernbase_confidence_mode)
+            if effective_mode == FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED:
+                try:
+                    split_bundle = resolve_fernbase_split_bundle(
+                        cds_url=cds_url,
+                        gff_url=gff_url,
+                        genome_url=genome_url,
+                        timeout=float(timeout),
+                        headers=headers,
+                    )
+                except Exception as exc:
+                    errors.append(
+                        "Manifest line {}: failed to resolve FernBase high/low confidence bundle for '{}': {}".format(
+                            i,
+                            species_key,
+                            exc,
+                        )
+                    )
+                    continue
+                if split_bundle.get("is_split"):
+                    high_cds_filename = str(split_bundle.get("high_cds_filename") or cds_filename).strip()
+                    low_cds_filename = str(split_bundle.get("low_cds_filename") or "").strip()
+                    high_gff_filename = str(split_bundle.get("high_gff_filename") or gff_filename).strip()
+                    low_gff_filename = str(split_bundle.get("low_gff_filename") or "").strip()
+                    if high_cds_filename != "":
+                        cds_filename = high_cds_filename
+                    if high_gff_filename != "":
+                        gff_filename = high_gff_filename
+                    resolved_cds_filename = build_fernbase_combined_filename(cds_filename)
+                    resolved_gff_filename = build_fernbase_combined_filename(gff_filename)
+                    download_targets = []
+                    if split_bundle.get("high_cds_url", "") != "":
+                        download_targets.append(
+                            ("CDS", split_bundle["high_cds_url"], raw_dir / cds_filename, cds_archive_member)
+                        )
+                    if split_bundle.get("high_gff_url", "") != "":
+                        download_targets.append(
+                            ("GFF", split_bundle["high_gff_url"], raw_dir / gff_filename, gff_archive_member)
+                        )
+                    if split_bundle.get("low_cds_url", "") != "":
+                        download_targets.append(
+                            ("CDS_LOW", split_bundle["low_cds_url"], raw_dir / low_cds_filename, "")
+                        )
+                    if split_bundle.get("low_gff_url", "") != "":
+                        download_targets.append(
+                            ("GFF_LOW", split_bundle["low_gff_url"], raw_dir / low_gff_filename, "")
+                        )
+                    if genome_url != "":
+                        download_targets.append(("GENOME", genome_url, raw_dir / genome_filename, genome_archive_member))
+                    merge_jobs.append(
+                        {
+                            "row_id": i,
+                            "species_key": species_key,
+                            "high_cds_path": raw_dir / cds_filename,
+                            "low_cds_path": raw_dir / low_cds_filename,
+                            "high_gff_path": raw_dir / gff_filename,
+                            "low_gff_path": raw_dir / low_gff_filename,
+                            "combined_cds_path": raw_dir / resolved_cds_filename,
+                            "combined_gff_path": raw_dir / resolved_gff_filename,
+                        }
+                    )
+                else:
+                    warnings.append(
+                        "Manifest line {}: {}='{}' ignored for FernBase row '{}' because no legacy split high/low bundle was found".format(
+                            i,
+                            FERNBASE_CONFIDENCE_MODE_FIELD,
+                            effective_mode,
+                            species_key,
+                        )
+                    )
+            elif (
+                ("highconfidence" in cds_filename.lower() or "lowconfidence" in cds_filename.lower())
+                and ("highconfidence" in gff_filename.lower() or "lowconfidence" in gff_filename.lower())
+            ):
+                stale_combined_cds = raw_dir / build_fernbase_combined_filename(cds_filename)
+                stale_combined_gff = raw_dir / build_fernbase_combined_filename(gff_filename)
+                if stale_combined_cds != raw_dir / cds_filename:
+                    cleanup_paths.append(stale_combined_cds)
+                if stale_combined_gff != raw_dir / gff_filename:
+                    cleanup_paths.append(stale_combined_gff)
+
+        resolved_row = build_resolved_manifest_row(
+            raw_row=row,
+            fieldnames=resolved_fieldnames,
+            provider=provider,
+            source_id=source_id,
+            species_key=species_key,
+            cds_url=cds_url,
+            gff_url=gff_url,
+            gbff_url=gbff_url,
+            genome_url=genome_url,
+            cds_archive_member=cds_archive_member,
+            gff_archive_member=gff_archive_member,
+            gbff_archive_member=gbff_archive_member,
+            genome_archive_member=genome_archive_member,
+            cds_filename=resolved_cds_filename,
+            gff_filename=resolved_gff_filename,
+            gbff_filename=gbff_filename,
+            genome_filename=genome_filename,
+        )
+        resolved_row[FERNBASE_CONFIDENCE_MODE_FIELD] = fernbase_confidence_mode
+        resolved_rows.append(resolved_row)
         row_target_paths[i] = {
             "provider": provider,
             "species_key": species_key,
-            "paths": {label: target for label, _url, target, _archive_member in targets},
+            "paths": {label: target for label, _url, target, _archive_member in download_targets},
         }
-        for label, url, target, archive_member in targets:
+        for label, url, target, archive_member in download_targets:
             if target.exists() and target.stat().st_size > 0 and not overwrite:
                 warnings.append(
                     "[download:{}] {} {} already exists. Skipping: {}".format(
@@ -3881,6 +4397,37 @@ def download_from_manifest(
                 errors.extend(result.get("errors", []))
                 downloaded += int(result.get("downloaded", 0))
                 failed_downloads.extend(result.get("failed", []))
+
+    if not dry_run:
+        for cleanup_path in cleanup_paths:
+            try:
+                if cleanup_path.exists() and cleanup_path.is_file():
+                    cleanup_path.unlink()
+            except OSError as exc:
+                warnings.append("Failed to remove stale FernBase combined file '{}': {}".format(cleanup_path, exc))
+
+        for merge_job in merge_jobs:
+            try:
+                result = merge_fernbase_confidence_bundle(
+                    species_key=merge_job["species_key"],
+                    high_cds_path=merge_job["high_cds_path"],
+                    low_cds_path=merge_job["low_cds_path"],
+                    high_gff_path=merge_job["high_gff_path"],
+                    low_gff_path=merge_job["low_gff_path"],
+                    combined_cds_path=merge_job["combined_cds_path"],
+                    combined_gff_path=merge_job["combined_gff_path"],
+                    overwrite=overwrite,
+                )
+            except Exception as exc:
+                errors.append(
+                    "[download:fernbase] {} failed to merge high/low confidence bundle ({})".format(
+                        merge_job["species_key"],
+                        exc,
+                    )
+                )
+                continue
+            warnings.extend(result.get("warnings", []))
+            errors.extend(result.get("errors", []))
 
     for failure in failed_downloads:
         row_info = row_target_paths.get(failure.get("row_id"), {})
