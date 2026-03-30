@@ -82,6 +82,7 @@ PROVIDERS = (
     "veupathdb",
     "dictybase",
     "insectbase",
+    "oryza_minuta",
     "direct",
     "local",
 )
@@ -110,6 +111,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "veupathdb": Path("VEuPathDB") / "species_wise_original",
     "dictybase": Path("dictyBase") / "species_wise_original",
     "insectbase": Path("InsectBase") / "species_wise_original",
+    "oryza_minuta": Path("OryzaMinuta") / "species_wise_original",
     "direct": Path("Direct") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
@@ -173,6 +175,7 @@ HEADER_COMMENTS = {
             "- veupathdb: EnuttalliP19",
             "- dictybase: Dictyostelium_discoideum",
             "- insectbase: IBG_00001",
+            "- oryza_minuta: gramene_tetraploids",
             "- direct: stable label or index URL token for explicit URLs",
             "- local: local species directory ID or path-style ID",
             "The drop-down is provider-specific, but any valid value can still be typed manually.",
@@ -440,6 +443,7 @@ SNAPSHOT_FULL_ID_PROVIDERS = (
     "veupathdb",
     "dictybase",
     "insectbase",
+    "oryza_minuta",
     "direct",
     "local",
 )
@@ -490,6 +494,7 @@ ID_EXAMPLES_BY_PROVIDER = {
     "veupathdb": (("EnuttalliP19", "Entamoeba nuttalli"),),
     "dictybase": (("Dictyostelium_discoideum", "Dictyostelium discoideum"),),
     "insectbase": (("IBG_00001", "Abrostola tripartita"),),
+    "oryza_minuta": (("gramene_tetraploids", "Oryza minuta Gramene tetraploids"),),
     "direct": (("direct_example_species", "Direct URL manifest row"),),
     "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
 }

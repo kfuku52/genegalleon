@@ -32,6 +32,7 @@ PROVIDERS = (
     "veupathdb",
     "dictybase",
     "insectbase",
+    "oryza_minuta",
     "direct",
     "local",
 )
@@ -113,6 +114,7 @@ ID_EXAMPLES_BY_PROVIDER = {
     "veupathdb": (("EnuttalliP19", "Entamoeba nuttalli"),),
     "dictybase": (("Dictyostelium_discoideum", "Dictyostelium discoideum"),),
     "insectbase": (("IBG_00001", "Abrostola tripartita"),),
+    "oryza_minuta": (("gramene_tetraploids", "Oryza minuta Gramene tetraploids"),),
     "direct": (("direct_example_species", "Direct URL manifest row"),),
     "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
 }

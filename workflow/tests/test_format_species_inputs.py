@@ -275,6 +275,7 @@ def test_manifest_declared_providers_preserves_manifest_order_and_skips_unlisted
             {"provider": "ncbi", "id": "GCA_000000001.1"},
             {"provider": "direct", "id": "sample_direct"},
             {"provider": "NCBI", "id": "GCA_000000002.1"},
+            {"provider": "oryza_minuta", "id": "gramene_tetraploids"},
             {"provider": "", "id": "missing_provider"},
             {"provider": "unsupported", "id": "unsupported_provider"},
             {"provider": "local", "id": "sample_local"},
@@ -282,7 +283,7 @@ def test_manifest_declared_providers_preserves_manifest_order_and_skips_unlisted
         provider_filter="all",
     )
 
-    assert providers == ["ncbi", "direct", "local"]
+    assert providers == ["ncbi", "direct", "oryza_minuta", "local"]
 
 
 def test_species_summary_includes_taxid_and_genetic_codes_when_taxonomy_cache_is_available(tmp_path):

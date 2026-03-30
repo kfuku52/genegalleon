@@ -51,6 +51,35 @@ FERNBASE_CONFIDENCE_MODE_CHOICES = (
     FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED,
 )
 FERNBASE_COMBINED_FILENAME_MARKER = "highlowcombined"
+ORYZA_MINUTA_PROVIDER = "oryza_minuta"
+ORYZA_MINUTA_DEFAULT_SPECIES_KEY = "Oryza_minuta"
+ORYZA_MINUTA_CANONICAL_SOURCE_ID = "gramene_tetraploids"
+ORYZA_MINUTA_SOURCE_ID_ALIASES = frozenset(
+    (
+        "",
+        "oryza_minuta",
+        "gramene",
+        "tetraploids",
+        "gramene_tetraploids",
+        "oryza_minuta_gramene_tetraploids",
+    )
+)
+ORYZA_MINUTA_SUBGENOME_BUNDLES = (
+    {
+        "label": "BB",
+        "token": "oryza_minutabb",
+        "cds_filename": "Oryza_minutabb.oryza_minutabb.cds.all.fa.gz",
+        "gff_filename": "Oryza_minutabb.oryza_minutabb.gff3.gz",
+        "genome_filename": "Oryza_minutabb.oryza_minutabb.dna.toplevel.fa.gz",
+    },
+    {
+        "label": "CC",
+        "token": "oryza_minutacc",
+        "cds_filename": "Oryza_minutacc.oryza_minutacc.cds.all.fa.gz",
+        "gff_filename": "Oryza_minutacc.oryza_minutacc.gff3.gz",
+        "genome_filename": "Oryza_minutacc.oryza_minutacc.dna.toplevel.fa.gz",
+    },
+)
 GENE_GROUPING_MODES = ("strict", "rescue_overlap")
 RESCUE_SHARED_JUNCTION_MIN_SHORTER_OVERLAP = 0.70
 RESCUE_SHARED_JUNCTION_MIN_LONGER_OVERLAP = 0.40
@@ -124,6 +153,7 @@ VEUPATHDB_ID_HINT_PATTERN = re.compile(r"^veupathdb[:_].+", re.IGNORECASE)
 DICTYBASE_ID_HINT_PATTERN = re.compile(r"^dictybase[:_].+", re.IGNORECASE)
 INSECTBASE_ID_HINT_PATTERN = re.compile(r"^insectbase[:_].+", re.IGNORECASE)
 PLANTAEDB_ID_HINT_PATTERN = re.compile(r"^plantaedb[:_].+", re.IGNORECASE)
+ORYZA_MINUTA_ID_HINT_PATTERN = re.compile(r"^oryza_minuta[:_].+", re.IGNORECASE)
 INSECTBASE_IBG_ID_PATTERN = re.compile(r"^IBG_[0-9]+$", re.IGNORECASE)
 COGE_GID_PATTERN = re.compile(r"^[0-9]+$")
 CNGB_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^CNA[0-9]+$", re.IGNORECASE)
@@ -149,6 +179,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "veupathdb": Path("VEuPathDB") / "species_wise_original",
     "dictybase": Path("dictyBase") / "species_wise_original",
     "insectbase": Path("InsectBase") / "species_wise_original",
+    ORYZA_MINUTA_PROVIDER: Path("OryzaMinuta") / "species_wise_original",
     "direct": Path("Direct") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
@@ -172,6 +203,7 @@ PROVIDERS = (
     "veupathdb",
     "dictybase",
     "insectbase",
+    ORYZA_MINUTA_PROVIDER,
     "direct",
     "local",
 )
@@ -192,6 +224,7 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "veupathdb",
     "dictybase",
     "insectbase",
+    ORYZA_MINUTA_PROVIDER,
     "direct",
     "local",
 )
@@ -212,6 +245,7 @@ DEFAULT_JGI_SIGNON_BASE_URL = "https://signon.jgi.doe.gov"
 DEFAULT_PLANTAEDB_WEB_BASE_URL = "https://plantaedb.com"
 DEFAULT_VEUPATHDB_SERVICE_BASE_URL = "https://veupathdb.org/veupathdb/service"
 DEFAULT_INSECTBASE_API_BASE_URL = "https://www.insect-genome.com/api/genome"
+DEFAULT_ORYZA_MINUTA_GRAMENE_BASE_URL = "https://ftp.gramene.org/oryza/tetraploids"
 NCBI_DATASETS_INCLUDE_BY_LABEL = {
     "CDS": "CDS_FASTA",
     "GFF": "GENOME_GFF",
@@ -341,6 +375,7 @@ PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     "veupathdb": 1,
     "dictybase": 1,
     "insectbase": 2,
+    ORYZA_MINUTA_PROVIDER: 2,
     "direct": 2,
     "local": 1,
 }
@@ -744,7 +779,7 @@ def build_arg_parser():
         default="",
         help=(
             "Provider input directory. For ensembl/ensemblplants: original_files/. "
-            "For phycocosm/phytozome/ncbi/coge/cngb/gwh/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/direct/local: species_wise_original/. "
+            "For phycocosm/phytozome/ncbi/coge/cngb/gwh/plantaedb/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/oryza_minuta/direct/local: species_wise_original/. "
             "Legacy aliases refseq/genbank are treated as ncbi. "
             "For --provider all, this must be the shared root containing all provider subdirectories."
         ),
@@ -780,8 +815,9 @@ def build_arg_parser():
             "(ncbi supports GCF/GCA/NCBI-URL auto-resolution; "
             "other supported providers support id-based template/index inference). "
             "Supported providers for --download-manifest: "
-            "ensembl, ensemblplants, ncbi, coge, cngb, gwh, plantaedb, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, direct, local "
+            "ensembl, ensemblplants, ncbi, coge, cngb, gwh, plantaedb, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, oryza_minuta, direct, local "
             "(legacy aliases refseq/genbank are treated as ncbi). "
+            "provider=oryza_minuta downloads the public Gramene BB+CC tetraploid bundles and merges them into one species bundle. "
             "provider=direct requires explicit urls or an index-style id URL. "
             "cds_url may be provided by itself, or may be empty when both gff_url and genome_url are available; "
             "genegalleon will derive CDS during formatting. "
@@ -1215,6 +1251,7 @@ def provider_raw_dir(provider, download_root, species_key):
         "veupathdb",
         "dictybase",
         "insectbase",
+        ORYZA_MINUTA_PROVIDER,
         "direct",
         "local",
     ):
@@ -1240,6 +1277,8 @@ def infer_provider_from_id(source_id):
         return "dictybase"
     if INSECTBASE_ID_HINT_PATTERN.match(source_id):
         return "insectbase"
+    if ORYZA_MINUTA_ID_HINT_PATTERN.match(source_id):
+        return ORYZA_MINUTA_PROVIDER
     if INSECTBASE_IBG_ID_PATTERN.match(source_id):
         return "insectbase"
     if "ftp.ensembl.org" in lowered or "ensembl.org/pub/current_" in lowered:
@@ -1463,6 +1502,24 @@ def is_probable_genome_url(provider, url):
 def provider_candidate_sort_key(provider, label, name):
     lower = str(name or "").lower()
     label_upper = str(label or "").upper()
+    if provider == ORYZA_MINUTA_PROVIDER:
+        if label_upper == "CDS":
+            return (
+                0 if ".merged." in lower else 1,
+                0 if "cds" in lower else 1,
+                lower,
+            )
+        if label_upper == "GFF":
+            return (
+                0 if ".merged." in lower else 1,
+                lower,
+            )
+        if label_upper == "GENOME":
+            return (
+                0 if ".merged." in lower else 1,
+                0 if any(marker in lower for marker in ("dna", "genome", "toplevel")) else 1,
+                lower,
+            )
     if provider != "fernbase":
         if label_upper == "GENOME":
             return (".chromosome." in lower, lower)
@@ -1932,6 +1989,156 @@ def merge_fernbase_confidence_bundle(
         ],
         "errors": [],
     }
+
+
+def resolve_oryza_minuta_gramene_base_url():
+    return os.environ.get("GG_ORYZA_MINUTA_GRAMENE_BASE_URL", DEFAULT_ORYZA_MINUTA_GRAMENE_BASE_URL).rstrip("/")
+
+
+def normalize_oryza_minuta_source_id(source_id):
+    text = strip_provider_prefix(source_id, ORYZA_MINUTA_PROVIDER)
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", str(text or "").strip().lower()).strip("_")
+    if normalized in ORYZA_MINUTA_SOURCE_ID_ALIASES:
+        return ORYZA_MINUTA_CANONICAL_SOURCE_ID
+    raise ValueError(
+        "unsupported id '{}' for provider={}; expected one of: {}".format(
+            source_id,
+            ORYZA_MINUTA_PROVIDER,
+            ", ".join(sorted(value for value in ORYZA_MINUTA_SOURCE_ID_ALIASES if value != "")),
+        )
+    )
+
+
+def build_oryza_minuta_merged_filename(label):
+    normalized = str(label or "").strip().lower()
+    if normalized == "cds":
+        return "Oryza_minuta.gramene_tetraploids.merged.cds.all.fa.gz"
+    if normalized == "gff":
+        return "Oryza_minuta.gramene_tetraploids.merged.gff3.gz"
+    if normalized == "genome":
+        return "Oryza_minuta.gramene_tetraploids.merged.dna.toplevel.fa.gz"
+    raise ValueError("unknown Oryza minuta merged bundle label: {}".format(label))
+
+
+def resolve_oryza_minuta_download_bundle_from_id(source_id, species_key):
+    canonical_id = normalize_oryza_minuta_source_id(source_id)
+    resolved_species_key = normalize_species_key_for_runtime(species_key or ORYZA_MINUTA_DEFAULT_SPECIES_KEY)
+    base_url = resolve_oryza_minuta_gramene_base_url()
+    download_targets = []
+    representative = {"cds_url": "", "gff_url": "", "genome_url": ""}
+
+    for bundle in ORYZA_MINUTA_SUBGENOME_BUNDLES:
+        token = bundle["token"]
+        cds_url = "{}/fasta/{}/cds/{}".format(base_url, token, bundle["cds_filename"])
+        gff_url = "{}/gff3/{}/{}".format(base_url, token, bundle["gff_filename"])
+        genome_url = "{}/fasta/{}/dna/{}".format(base_url, token, bundle["genome_filename"])
+        if representative["cds_url"] == "":
+            representative["cds_url"] = cds_url
+            representative["gff_url"] = gff_url
+            representative["genome_url"] = genome_url
+        download_targets.extend(
+            (
+                {
+                    "label": "CDS_{}".format(bundle["label"]),
+                    "url": cds_url,
+                    "filename": bundle["cds_filename"],
+                },
+                {
+                    "label": "GFF_{}".format(bundle["label"]),
+                    "url": gff_url,
+                    "filename": bundle["gff_filename"],
+                },
+                {
+                    "label": "GENOME_{}".format(bundle["label"]),
+                    "url": genome_url,
+                    "filename": bundle["genome_filename"],
+                },
+            )
+        )
+
+    return {
+        "canonical_id": canonical_id,
+        "species_key": resolved_species_key,
+        "cds_url": representative["cds_url"],
+        "gff_url": representative["gff_url"],
+        "genome_url": representative["genome_url"],
+        "cds_filename": build_oryza_minuta_merged_filename("cds"),
+        "gff_filename": build_oryza_minuta_merged_filename("gff"),
+        "genome_filename": build_oryza_minuta_merged_filename("genome"),
+        "download_targets": tuple(download_targets),
+    }
+
+
+def iter_oryza_minuta_combined_gff_lines(gff_paths):
+    emitted_version = False
+    for path in gff_paths:
+        with open_text(path, "rt") as handle:
+            for raw_line in handle:
+                line = raw_line.rstrip("\n\r")
+                if line == "":
+                    continue
+                if line.startswith("##FASTA"):
+                    break
+                if line.startswith("##gff-version"):
+                    if emitted_version:
+                        continue
+                    emitted_version = True
+                    yield "##gff-version 3\n"
+                    continue
+                yield raw_line if raw_line.endswith("\n") else raw_line + "\n"
+    if not emitted_version:
+        yield "##gff-version 3\n"
+
+
+def iter_oryza_minuta_combined_fasta_records(paths):
+    for path in paths:
+        yield from iter_fasta_records(path)
+
+
+def merge_oryza_minuta_multisource_bundle(
+    species_key,
+    cds_paths,
+    gff_paths,
+    genome_paths,
+    combined_cds_path,
+    combined_gff_path,
+    combined_genome_path,
+    overwrite,
+):
+    combined_outputs = (combined_cds_path, combined_gff_path, combined_genome_path)
+    if (
+        all(path.exists() and path.stat().st_size > 0 for path in combined_outputs)
+        and not overwrite
+    ):
+        return {
+            "warnings": [
+                "[download:{}] {} merged Gramene tetraploid bundle already exists. Skipping merge.".format(
+                    ORYZA_MINUTA_PROVIDER,
+                    species_key,
+                )
+            ],
+            "errors": [],
+        }
+
+    write_fasta_records(combined_cds_path, iter_oryza_minuta_combined_fasta_records(cds_paths))
+    write_text_lines(combined_gff_path, iter_oryza_minuta_combined_gff_lines(gff_paths))
+    write_fasta_records(combined_genome_path, iter_oryza_minuta_combined_fasta_records(genome_paths))
+    return {
+        "warnings": [
+            "[download:{}] {} merged {} public Gramene tetraploid subgenome bundles".format(
+                ORYZA_MINUTA_PROVIDER,
+                species_key,
+                len(tuple(ORYZA_MINUTA_SUBGENOME_BUNDLES)),
+            )
+        ],
+        "errors": [],
+    }
+
+
+def resolve_oryza_minuta_download_urls_from_id(source_id, species_key, timeout, headers):
+    del timeout
+    del headers
+    return resolve_oryza_minuta_download_bundle_from_id(source_id, species_key)
 
 
 def fetch_json_with_headers(url, timeout, headers):
@@ -2682,6 +2889,8 @@ def resolve_provider_specific_download_urls_from_id(provider, source_id, species
         return resolve_veupathdb_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "insectbase":
         return resolve_insectbase_download_urls_from_id(source_id, species_key, timeout, headers)
+    if provider == ORYZA_MINUTA_PROVIDER:
+        return resolve_oryza_minuta_download_urls_from_id(source_id, species_key, timeout, headers)
     return None
 
 
@@ -4034,6 +4243,7 @@ def download_from_manifest(
         genome_filename = (row.get("genome_filename") or "").strip()
         fernbase_confidence_mode_raw = (row.get(FERNBASE_CONFIDENCE_MODE_FIELD) or "").strip()
         resolved_ncbi = None
+        oryza_minuta_bundle = None
 
         if provider_filter != "all" and provider != provider_filter:
             continue
@@ -4076,7 +4286,25 @@ def download_from_manifest(
             )
             continue
 
-        if provider == "local":
+        if provider == ORYZA_MINUTA_PROVIDER:
+            try:
+                oryza_minuta_bundle = resolve_oryza_minuta_download_bundle_from_id(source_id, species_key)
+                source_id = str(oryza_minuta_bundle.get("canonical_id") or source_id).strip()
+                species_key = str(oryza_minuta_bundle.get("species_key") or species_key).strip()
+                if cds_filename == "":
+                    cds_filename = str(oryza_minuta_bundle.get("cds_filename") or "").strip()
+                if gff_filename == "":
+                    gff_filename = str(oryza_minuta_bundle.get("gff_filename") or "").strip()
+                if genome_filename == "":
+                    genome_filename = str(oryza_minuta_bundle.get("genome_filename") or "").strip()
+            except Exception as exc:
+                errors.append(
+                    "Manifest line {}: failed to resolve id '{}' (provider={}): {}".format(
+                        i, source_id, provider, exc
+                    )
+                )
+                continue
+        elif provider == "local":
             try:
                 resolved_local = resolve_local_manifest_row(
                     provider=provider,
@@ -4138,7 +4366,7 @@ def download_from_manifest(
         if species_key == "" and resolved_ncbi is not None:
             species_key = (resolved_ncbi.get("species_key") or "").strip()
 
-        if provider != "local" and (
+        if provider not in ("local", ORYZA_MINUTA_PROVIDER) and (
             not manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url)
         ):
             try:
@@ -4195,7 +4423,7 @@ def download_from_manifest(
             errors.append("Manifest line {}: {}".format(i, invalid_species_key))
             continue
 
-        if not manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url):
+        if provider != ORYZA_MINUTA_PROVIDER and not manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url):
             errors.append(
                 "Manifest line {}: CDS, GBFF, or GFF plus genome are required for {} "
                 "(set urls directly or provide resolvable id)".format(
@@ -4225,14 +4453,61 @@ def download_from_manifest(
         resolved_cds_filename = cds_filename
         resolved_gff_filename = gff_filename
         download_targets = []
-        if cds_url != "":
-            download_targets.append(("CDS", cds_url, raw_dir / cds_filename, cds_archive_member))
-        if gff_url != "":
-            download_targets.append(("GFF", gff_url, raw_dir / gff_filename, gff_archive_member))
-        if gbff_url != "":
-            download_targets.append(("GBFF", gbff_url, raw_dir / gbff_filename, gbff_archive_member))
-        if genome_url != "":
-            download_targets.append(("GENOME", genome_url, raw_dir / genome_filename, genome_archive_member))
+        if provider == ORYZA_MINUTA_PROVIDER:
+            representative_urls = (
+                str(oryza_minuta_bundle.get("cds_url") or "").strip(),
+                str(oryza_minuta_bundle.get("gff_url") or "").strip(),
+                str(oryza_minuta_bundle.get("genome_url") or "").strip(),
+            )
+            if cds_url == "":
+                cds_url = representative_urls[0]
+            if gff_url == "":
+                gff_url = representative_urls[1]
+            if genome_url == "":
+                genome_url = representative_urls[2]
+            download_targets = [
+                (
+                    target["label"],
+                    target["url"],
+                    raw_dir / target["filename"],
+                    "",
+                )
+                for target in oryza_minuta_bundle.get("download_targets", ())
+            ]
+            merge_jobs.append(
+                {
+                    "provider": ORYZA_MINUTA_PROVIDER,
+                    "row_id": i,
+                    "species_key": species_key,
+                    "cds_paths": tuple(
+                        raw_dir / target["filename"]
+                        for target in oryza_minuta_bundle.get("download_targets", ())
+                        if str(target.get("label") or "").startswith("CDS_")
+                    ),
+                    "gff_paths": tuple(
+                        raw_dir / target["filename"]
+                        for target in oryza_minuta_bundle.get("download_targets", ())
+                        if str(target.get("label") or "").startswith("GFF_")
+                    ),
+                    "genome_paths": tuple(
+                        raw_dir / target["filename"]
+                        for target in oryza_minuta_bundle.get("download_targets", ())
+                        if str(target.get("label") or "").startswith("GENOME_")
+                    ),
+                    "combined_cds_path": raw_dir / cds_filename,
+                    "combined_gff_path": raw_dir / gff_filename,
+                    "combined_genome_path": raw_dir / genome_filename,
+                }
+            )
+        else:
+            if cds_url != "":
+                download_targets.append(("CDS", cds_url, raw_dir / cds_filename, cds_archive_member))
+            if gff_url != "":
+                download_targets.append(("GFF", gff_url, raw_dir / gff_filename, gff_archive_member))
+            if gbff_url != "":
+                download_targets.append(("GBFF", gbff_url, raw_dir / gbff_filename, gbff_archive_member))
+            if genome_url != "":
+                download_targets.append(("GENOME", genome_url, raw_dir / genome_filename, genome_archive_member))
 
         if provider == "fernbase":
             effective_mode = effective_fernbase_confidence_mode(fernbase_confidence_mode)
@@ -4408,23 +4683,48 @@ def download_from_manifest(
 
         for merge_job in merge_jobs:
             try:
-                result = merge_fernbase_confidence_bundle(
-                    species_key=merge_job["species_key"],
-                    high_cds_path=merge_job["high_cds_path"],
-                    low_cds_path=merge_job["low_cds_path"],
-                    high_gff_path=merge_job["high_gff_path"],
-                    low_gff_path=merge_job["low_gff_path"],
-                    combined_cds_path=merge_job["combined_cds_path"],
-                    combined_gff_path=merge_job["combined_gff_path"],
-                    overwrite=overwrite,
-                )
-            except Exception as exc:
-                errors.append(
-                    "[download:fernbase] {} failed to merge high/low confidence bundle ({})".format(
-                        merge_job["species_key"],
-                        exc,
+                merge_provider = str(merge_job.get("provider") or "fernbase").strip().lower()
+                if merge_provider == "fernbase":
+                    result = merge_fernbase_confidence_bundle(
+                        species_key=merge_job["species_key"],
+                        high_cds_path=merge_job["high_cds_path"],
+                        low_cds_path=merge_job["low_cds_path"],
+                        high_gff_path=merge_job["high_gff_path"],
+                        low_gff_path=merge_job["low_gff_path"],
+                        combined_cds_path=merge_job["combined_cds_path"],
+                        combined_gff_path=merge_job["combined_gff_path"],
+                        overwrite=overwrite,
                     )
-                )
+                elif merge_provider == ORYZA_MINUTA_PROVIDER:
+                    result = merge_oryza_minuta_multisource_bundle(
+                        species_key=merge_job["species_key"],
+                        cds_paths=merge_job["cds_paths"],
+                        gff_paths=merge_job["gff_paths"],
+                        genome_paths=merge_job["genome_paths"],
+                        combined_cds_path=merge_job["combined_cds_path"],
+                        combined_gff_path=merge_job["combined_gff_path"],
+                        combined_genome_path=merge_job["combined_genome_path"],
+                        overwrite=overwrite,
+                    )
+                else:
+                    warnings.append("Unknown merge job provider '{}'. Skipping.".format(merge_provider))
+                    continue
+            except Exception as exc:
+                if str(merge_job.get("provider") or "") == ORYZA_MINUTA_PROVIDER:
+                    errors.append(
+                        "[download:{}] {} failed to merge public multi-source bundle ({})".format(
+                            ORYZA_MINUTA_PROVIDER,
+                            merge_job["species_key"],
+                            exc,
+                        )
+                    )
+                else:
+                    errors.append(
+                        "[download:fernbase] {} failed to merge high/low confidence bundle ({})".format(
+                            merge_job["species_key"],
+                            exc,
+                        )
+                    )
                 continue
             warnings.extend(result.get("warnings", []))
             errors.extend(result.get("errors", []))
@@ -5607,6 +5907,7 @@ def collapse_transcript_suffix(provider, identifier):
         "vectorbase",
         "fernbase",
         "insectbase",
+        ORYZA_MINUTA_PROVIDER,
         "direct",
         "local",
     ):
@@ -6147,7 +6448,7 @@ def discover_tasks(provider, input_dir):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "cngb":
         return discover_generic_species_dir_tasks(provider, input_dir)
-    if provider in ("gwh", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase", "insectbase", "direct"):
+    if provider in ("gwh", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase", "insectbase", ORYZA_MINUTA_PROVIDER, "direct"):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "local":
         return discover_generic_species_dir_tasks(provider, input_dir)

@@ -399,7 +399,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
 
         list_sheet = workbook["_lists"]
-        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 17)]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 18)]
         assert provider_values == [
             "ensembl",
             "ensemblplants",
@@ -415,6 +415,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
             "veupathdb",
             "dictybase",
             "insectbase",
+            "oryza_minuta",
             "direct",
             "local",
         ]
@@ -427,6 +428,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert "id_opts_veupathdb" in workbook.defined_names
         assert "id_opts_dictybase" in workbook.defined_names
         assert "id_opts_insectbase" in workbook.defined_names
+        assert "id_opts_oryza_minuta" in workbook.defined_names
         assert "id_opts_direct" in workbook.defined_names
         assert "id_opts_local" in workbook.defined_names
     finally:
@@ -485,6 +487,7 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
             "veupathdb",
             "dictybase",
             "insectbase",
+            "oryza_minuta",
             "direct",
             "local",
         ]
@@ -497,6 +500,7 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         veupathdb_values = read_list_column_values(list_sheet, provider_col["veupathdb"])
         dictybase_values = read_list_column_values(list_sheet, provider_col["dictybase"])
         insectbase_values = read_list_column_values(list_sheet, provider_col["insectbase"])
+        oryza_minuta_values = read_list_column_values(list_sheet, provider_col["oryza_minuta"])
         direct_values = read_list_column_values(list_sheet, provider_col["direct"])
         local_values = read_list_column_values(list_sheet, provider_col["local"])
         ncbi_values = read_list_column_values(list_sheet, provider_col["ncbi"])
@@ -535,6 +539,9 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         ]
         assert insectbase_values == [
             "IBG_00001 (Abrostola tripartita)",
+        ]
+        assert oryza_minuta_values == [
+            "gramene_tetraploids (Oryza minuta Gramene tetraploids)",
         ]
         assert direct_values == [
             "direct_example_species (Direct URL manifest row)",
@@ -659,6 +666,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
             "veupathdb",
             "dictybase",
             "insectbase",
+            "oryza_minuta",
             "direct",
             "local",
         ]
@@ -677,6 +685,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         veupathdb_values = read_list_column_values(list_sheet, provider_col["veupathdb"])
         dictybase_values = read_list_column_values(list_sheet, provider_col["dictybase"])
         insectbase_values = read_list_column_values(list_sheet, provider_col["insectbase"])
+        oryza_minuta_values = read_list_column_values(list_sheet, provider_col["oryza_minuta"])
         direct_values = read_list_column_values(list_sheet, provider_col["direct"])
         local_values = read_list_column_values(list_sheet, provider_col["local"])
 
@@ -718,6 +727,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         assert veupathdb_values == ["EhistolyticaHM1IMSS (Entamoeba histolytica)"]
         assert dictybase_values == ["Dictyostelium_discoideum (Dictyostelium discoideum)"]
         assert insectbase_values == ["IBG_99999 (Bombyx mori)"]
+        assert oryza_minuta_values == ["gramene_tetraploids (Oryza minuta Gramene tetraploids)"]
         assert direct_values == ["snapshot_direct_species (Snapshot direct)"]
         assert local_values == ["/data/local_species_1", "/data/local_species_2"]
     finally:

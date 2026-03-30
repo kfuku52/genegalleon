@@ -239,6 +239,7 @@ Manifest required columns:
   - for `provider=plantaedb`, `id` can be a PlantaeDB species page URL (or a relative PlantaeDB `/taxa/...` path); the resolver extracts the linked NCBI `GCA/GCF` assembly accession and delegates to the NCBI resolver.
   - for `provider=flybase`, `provider=wormbase`, `provider=vectorbase`, `provider=fernbase`, `provider=veupathdb`, and `provider=dictybase`, `id` can be resolved via explicit URL columns or `GG_<PROVIDER>_*_URL_TEMPLATE`.
   - for `provider=insectbase`, `id` can be an `IBG_*` genome identifier (for example `IBG_00001`), and the resolver uses the InsectBase genome detail API to derive CDS/GFF/genome downloads.
+  - for `provider=oryza_minuta`, set `id=gramene_tetraploids`; the resolver downloads the public Gramene `oryza_minutabb` and `oryza_minutacc` CDS/GFF/genome bundles and merges them into one species-level bundle automatically.
   - for `provider=direct`, set explicit `cds_url`, `gbff_url`, or `gff_url` plus `genome_url`, or provide an index-style URL in `id` that exposes downloadable files.
     When a URL points to a shared archive, use `cds_archive_member`, `gff_archive_member`, and/or `genome_archive_member` to name the member to extract.
   - for `provider=ensembl` and `provider=ensemblplants`, `id`-only URL inference is supported via:
@@ -277,7 +278,7 @@ XLSX template notes:
 - provider drop-down order is fixed, and `local` is always listed last.
 - for large provider (`ncbi`), five model-organism IDs are shown as examples (mixed `GCF_*`/`GCA_*` formats).
 - for `coge` and `cngb`, IDs are example-based by default.
-- for `gwh`, `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, `direct`, and `local`,
+- for `gwh`, `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, `oryza_minuta`, `direct`, and `local`,
   IDs can be supplied from a prebuilt `id_options_snapshot.json`.
 - when no snapshot is supplied, non-large providers fall back to IDs discovered from `--input-dir`.
 - drop-down IDs are shown as `ID (Species name)` for non-`local` providers.

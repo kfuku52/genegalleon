@@ -3498,3 +3498,119 @@ def test_download_manifest_ncbi_gene_level_aggregate_prefers_ensembl_gene_id(tmp
     assert text.count(">Homo_sapiens_ENSG00000111111") == 1
     assert ">Homo_sapiens_GeneID111" not in text
     assert "ATGAAATTT" in text
+
+
+def test_download_manifest_oryza_minuta_merges_public_gramene_subgenomes(tmp_path):
+    server_root = tmp_path / "server_root"
+    for token, seqid, gene_id, seq in (
+        ("oryza_minutabb", "chrBB", "bb_gene1", "ATGAAATTT"),
+        ("oryza_minutacc", "chrCC", "cc_gene1", "ATGCCCTTT"),
+    ):
+        cds_path = server_root / "oryza" / "tetraploids" / "fasta" / token / "cds" / "{}.{}.cds.all.fa.gz".format(
+            "Oryza_minutabb" if token.endswith("bb") else "Oryza_minutacc",
+            token,
+        )
+        gff_path = server_root / "oryza" / "tetraploids" / "gff3" / token / "{}.{}.gff3.gz".format(
+            "Oryza_minutabb" if token.endswith("bb") else "Oryza_minutacc",
+            token,
+        )
+        genome_path = server_root / "oryza" / "tetraploids" / "fasta" / token / "dna" / "{}.{}.dna.toplevel.fa.gz".format(
+            "Oryza_minutabb" if token.endswith("bb") else "Oryza_minutacc",
+            token,
+        )
+        cds_path.parent.mkdir(parents=True, exist_ok=True)
+        gff_path.parent.mkdir(parents=True, exist_ok=True)
+        genome_path.parent.mkdir(parents=True, exist_ok=True)
+        with gzip.open(cds_path, "wt", encoding="utf-8") as handle:
+            handle.write(">{}.t1\n{}\n".format(gene_id, seq))
+        with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
+            handle.write(
+                "##gff-version 3\n"
+                "{seqid}\tsrc\tgene\t1\t9\t.\t+\t.\tID={gene}\n"
+                "{seqid}\tsrc\tmRNA\t1\t9\t.\t+\t.\tID={gene}.t1;Parent={gene}\n"
+                "{seqid}\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds_{gene}.t1;Parent={gene}.t1\n".format(
+                    seqid=seqid,
+                    gene=gene_id,
+                )
+            )
+        with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
+            handle.write(">{}\n{}\n".format(seqid, seq))
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "oryza_minuta",
+                    "id": "gramene_tetraploids",
+                    "species_key": "",
+                }
+            ],
+        )
+
+        download_dir = tmp_path / "download_cache"
+        out_cds = tmp_path / "out_cds"
+        out_gff = tmp_path / "out_gff"
+        out_genome = tmp_path / "out_genome"
+        resolved_manifest = tmp_path / "resolved.tsv"
+        env = dict(os.environ)
+        env["GG_ORYZA_MINUTA_GRAMENE_BASE_URL"] = "http://127.0.0.1:{}/oryza/tetraploids".format(server.server_port)
+
+        completed = run_script(
+            "--provider",
+            "oryza_minuta",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(download_dir),
+            "--species-cds-dir",
+            str(out_cds),
+            "--species-gff-dir",
+            str(out_gff),
+            "--species-genome-dir",
+            str(out_genome),
+            "--resolved-manifest-output",
+            str(resolved_manifest),
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+        raw_dir = download_dir / "OryzaMinuta" / "species_wise_original" / "Oryza_minuta"
+        assert (raw_dir / "Oryza_minuta.gramene_tetraploids.merged.cds.all.fa.gz").exists()
+        assert (raw_dir / "Oryza_minuta.gramene_tetraploids.merged.gff3.gz").exists()
+        assert (raw_dir / "Oryza_minuta.gramene_tetraploids.merged.dna.toplevel.fa.gz").exists()
+
+        with gzip.open(raw_dir / "Oryza_minuta.gramene_tetraploids.merged.cds.all.fa.gz", "rt", encoding="utf-8") as handle:
+            merged_cds = handle.read()
+        assert ">bb_gene1.t1" in merged_cds
+        assert ">cc_gene1.t1" in merged_cds
+
+        formatted_cds_candidates = sorted(out_cds.glob("*.gz"))
+        formatted_gff_candidates = sorted(out_gff.glob("*.gz"))
+        formatted_genome_candidates = sorted(out_genome.glob("*.gz"))
+        assert len(formatted_cds_candidates) == 1
+        assert len(formatted_gff_candidates) == 1
+        assert len(formatted_genome_candidates) == 1
+
+        with gzip.open(formatted_cds_candidates[0], "rt", encoding="utf-8") as handle:
+            formatted_cds = handle.read()
+        assert ">Oryza_minuta_bb_gene1" in formatted_cds
+        assert ">Oryza_minuta_cc_gene1" in formatted_cds
+
+        resolved_rows = list(csv.DictReader(resolved_manifest.open("rt", encoding="utf-8"), delimiter="\t"))
+        assert len(resolved_rows) == 1
+        assert resolved_rows[0]["provider"] == "oryza_minuta"
+        assert resolved_rows[0]["id"] == "gramene_tetraploids"
+        assert resolved_rows[0]["species_key"] == "Oryza_minuta"
+        assert resolved_rows[0]["cds_filename"] == "Oryza_minuta.gramene_tetraploids.merged.cds.all.fa.gz"
+        assert resolved_rows[0]["gff_filename"] == "Oryza_minuta.gramene_tetraploids.merged.gff3.gz"
+        assert resolved_rows[0]["genome_filename"] == "Oryza_minuta.gramene_tetraploids.merged.dna.toplevel.fa.gz"
+    finally:
+        server.shutdown()
+        server.server_close()
