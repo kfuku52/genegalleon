@@ -74,6 +74,9 @@ PROVIDERS = (
     "coge",
     "cngb",
     "gwh",
+    "citrusgenomedb",
+    "figshare",
+    "plantgarden",
     "plantaedb",
     "flybase",
     "wormbase",
@@ -103,6 +106,9 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "coge": Path("CoGe") / "species_wise_original",
     "cngb": Path("CNGB") / "species_wise_original",
     "gwh": Path("GWH") / "species_wise_original",
+    "citrusgenomedb": Path("CitrusGenomeDB") / "species_wise_original",
+    "figshare": Path("Figshare") / "species_wise_original",
+    "plantgarden": Path("PlantGARDEN") / "species_wise_original",
     "plantaedb": Path("PlantaeDB") / "species_wise_original",
     "flybase": Path("FlyBase") / "species_wise_original",
     "wormbase": Path("WormBase") / "species_wise_original",
@@ -171,6 +177,9 @@ HEADER_COMMENTS = {
             "- coge: numeric genome_id (gid), for example 24739",
             "- cngb: CNA... or GCA/GCF accession",
             "- gwh: GWH... accession, for example GWHIGRM00000000.1",
+            "- citrusgenomedb: Citrus Genome Database organism or analysis URL",
+            "- figshare: article URL or article id, optionally combined with *_filename columns",
+            "- plantgarden: PlantGARDEN species/genome/download URL or taxon/genome ID",
             "- plantaedb: PlantaeDB species page URL or /taxa/... path",
             "- veupathdb: EnuttalliP19",
             "- dictybase: Dictyostelium_discoideum",
@@ -435,6 +444,9 @@ SNAPSHOT_FULL_ID_PROVIDERS = (
     "ensembl",
     "ensemblplants",
     "gwh",
+    "citrusgenomedb",
+    "figshare",
+    "plantgarden",
     "plantaedb",
     "flybase",
     "wormbase",
@@ -476,6 +488,20 @@ ID_EXAMPLES_BY_PROVIDER = {
     "gwh": (
         ("GWHIGRM00000000.1", "Medicago sativa"),
         ("GWHCBHY00000000", "Allium sativum"),
+    ),
+    "citrusgenomedb": (
+        ("https://www.citrusgenomedb.org/organism/5799", "Citrus australasica (CGD organism page)"),
+        ("https://www.citrusgenomedb.org/Analysis/2530647", "Citrus australasica cv. AZM genome v1.0 (CGD analysis)"),
+    ),
+    "figshare": (
+        (
+            "https://figshare.com/articles/dataset/Construction_of_the_super_pan-genome_for_the_genus_Actinidia_reveals_structural_variations_linked_to_phenotypic_diversity/28759280",
+            "Actinidia super pan-genome (figshare article)",
+        ),
+    ),
+    "plantgarden": (
+        ("https://plantgarden.jp/en/list/t64480/genome/t64480.G001", "Actinidia polygama (PlantGARDEN assembly page)"),
+        ("https://plantgarden.jp/en/list/t385388/genome/t385388.G001", "Camellia oleifera (PlantGARDEN assembly page)"),
     ),
     "plantaedb": (
         (

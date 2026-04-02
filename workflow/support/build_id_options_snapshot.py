@@ -24,6 +24,9 @@ PROVIDERS = (
     "coge",
     "cngb",
     "gwh",
+    "citrusgenomedb",
+    "figshare",
+    "plantgarden",
     "plantaedb",
     "flybase",
     "wormbase",
@@ -96,6 +99,20 @@ ID_EXAMPLES_BY_PROVIDER = {
     "gwh": (
         ("GWHIGRM00000000.1", "Medicago sativa"),
         ("GWHCBHY00000000", "Allium sativum"),
+    ),
+    "citrusgenomedb": (
+        ("https://www.citrusgenomedb.org/organism/5799", "Citrus australasica (CGD organism page)"),
+        ("https://www.citrusgenomedb.org/Analysis/2530647", "Citrus australasica cv. AZM genome v1.0 (CGD analysis)"),
+    ),
+    "figshare": (
+        (
+            "https://figshare.com/articles/dataset/Construction_of_the_super_pan-genome_for_the_genus_Actinidia_reveals_structural_variations_linked_to_phenotypic_diversity/28759280",
+            "Actinidia super pan-genome (figshare article)",
+        ),
+    ),
+    "plantgarden": (
+        ("https://plantgarden.jp/en/list/t64480/genome/t64480.G001", "Actinidia polygama (PlantGARDEN assembly page)"),
+        ("https://plantgarden.jp/en/list/t385388/genome/t385388.G001", "Camellia oleifera (PlantGARDEN assembly page)"),
     ),
     "plantaedb": (
         (

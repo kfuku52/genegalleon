@@ -235,7 +235,12 @@ Manifest required columns:
   - `provider=ncbi` accepts both `GCF_*` and `GCA_*` assembly accessions and auto-resolves NCBI assembly URLs.
   - for `provider=coge`, `id` must be CoGe `genome_id` (numeric `gid`), and CDS/GFF/Genome URLs are auto-built.
   - for `provider=cngb`, built-in inference resolves CNGB assembly IDs (`CNA...`, `cngb:...`) or linked `GCA/GCF` accessions and maps to downloadable assembly files.
-  - for `provider=gwh`, `id` can be a `GWH...` accession (for example `GWHIGRM00000000.1`) or a GWH folder/index URL, and the resolver discovers CDS/GFF/genome files from the public GWH download tree.
+  - for `provider=gwh`, `id` can be a `GWH...` accession (for example `GWHIGRM00000000.1`), a GWH assembly show URL, or a GWH folder/index URL.
+    - accession-only inputs first try the public GWH download tree and then fall back to `gwhSearch/api -> /Assembly/.../show` when directory listing is unavailable.
+  - for `provider=citrusgenomedb`, `id` can be a Citrus Genome Database organism page URL (for example `/organism/5799`) or an analysis page URL (for example `/Analysis/2530647`); the resolver discovers public genome/GFF/CDS downloads from the selected page.
+  - for `provider=figshare`, `id` can be a public figshare article URL or numeric article id; the resolver uses the figshare article API to discover file downloads.
+    - for multi-file articles, set one or more of `cds_filename`, `gff_filename`, or `genome_filename` to select the exact files within the article.
+  - for `provider=plantgarden`, `id` can be a PlantGARDEN species/genome/download URL (for example `/en/list/t64480/genome/t64480.G001`); the resolver follows the PlantGARDEN assembly page to the public download index and discovers CDS or transcript FASTA together with GFF/genome files when available.
   - for `provider=plantaedb`, `id` can be a PlantaeDB species page URL (or a relative PlantaeDB `/taxa/...` path); the resolver extracts the linked NCBI `GCA/GCF` assembly accession and delegates to the NCBI resolver.
   - for `provider=flybase`, `provider=wormbase`, `provider=vectorbase`, `provider=fernbase`, `provider=veupathdb`, and `provider=dictybase`, `id` can be resolved via explicit URL columns or `GG_<PROVIDER>_*_URL_TEMPLATE`.
   - for `provider=insectbase`, `id` can be an `IBG_*` genome identifier (for example `IBG_00001`), and the resolver uses the InsectBase genome detail API to derive CDS/GFF/genome downloads.
@@ -278,7 +283,7 @@ XLSX template notes:
 - provider drop-down order is fixed, and `local` is always listed last.
 - for large provider (`ncbi`), five model-organism IDs are shown as examples (mixed `GCF_*`/`GCA_*` formats).
 - for `coge` and `cngb`, IDs are example-based by default.
-- for `gwh`, `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, `oryza_minuta`, `direct`, and `local`,
+- for `gwh`, `citrusgenomedb`, `figshare`, `plantgarden`, `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, `oryza_minuta`, `direct`, and `local`,
   IDs can be supplied from a prebuilt `id_options_snapshot.json`.
 - when no snapshot is supplied, non-large providers fall back to IDs discovered from `--input-dir`.
 - drop-down IDs are shown as `ID (Species name)` for non-`local` providers.

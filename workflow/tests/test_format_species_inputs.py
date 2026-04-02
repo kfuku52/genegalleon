@@ -220,6 +220,32 @@ def test_parse_species_key_candidate_preserves_taxonomic_qualifiers():
     assert mod.parse_species_key_candidate("Escherichia coli serovar O157") == "Escherichia_coli_serovar_O157"
 
 
+def test_source_id_candidates_add_ensemblplants_species_and_accession_variants():
+    mod = load_module()
+
+    candidates = mod.source_id_candidates(
+        "ensemblplants",
+        "GCA_910589775.1",
+        "Avena_eriantha",
+    )
+    assert "Avena_eriantha" in candidates
+    assert "Avena_eriantha_gca910589775v1cm" in candidates
+
+    candidates = mod.source_id_candidates(
+        "ensemblplants",
+        "GCA_000695525.1",
+        "Brassica_oleracea_var._oleracea",
+    )
+    assert "Brassica_oleracea" in candidates
+
+    candidates = mod.source_id_candidates(
+        "ensemblplants",
+        "GCA_001952365.2",
+        "Oryza_sativa_aus_subgroup",
+    )
+    assert "Oryza_sativa_aus" in candidates
+
+
 def test_discover_ncbi_like_tasks_normalizes_bare_sp_species_key(tmp_path):
     mod = load_module()
     input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
@@ -236,6 +262,12 @@ def test_discover_ncbi_like_tasks_normalizes_bare_sp_species_key(tmp_path):
     assert len(tasks) == 1
     assert tasks[0]["species_key"] == "Amoeba_sp_unknown"
     assert tasks[0]["species_prefix"] == "Amoeba_sp_unknown"
+
+
+def test_species_prefix_keeps_hybrid_marker_with_following_epithet():
+    mod = load_module()
+    assert mod.species_prefix_from_value("Citrus_x_limon") == "Citrus_x_limon"
+    assert mod.species_prefix_from_value("Petunia_x_hybrida") == "Petunia_x_hybrida"
 
 
 def test_discover_ncbi_like_tasks_rejects_incomplete_taxonomic_qualifier_species_key(tmp_path):

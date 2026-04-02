@@ -399,7 +399,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
 
         list_sheet = workbook["_lists"]
-        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 18)]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 21)]
         assert provider_values == [
             "ensembl",
             "ensemblplants",
@@ -407,6 +407,9 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
             "coge",
             "cngb",
             "gwh",
+            "citrusgenomedb",
+            "figshare",
+            "plantgarden",
             "plantaedb",
             "flybase",
             "wormbase",
@@ -423,6 +426,9 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert "id_opts_ncbi" in workbook.defined_names
         assert "id_opts_coge" in workbook.defined_names
         assert "id_opts_gwh" in workbook.defined_names
+        assert "id_opts_citrusgenomedb" in workbook.defined_names
+        assert "id_opts_figshare" in workbook.defined_names
+        assert "id_opts_plantgarden" in workbook.defined_names
         assert "id_opts_plantaedb" in workbook.defined_names
         assert "id_opts_fernbase" in workbook.defined_names
         assert "id_opts_veupathdb" in workbook.defined_names
@@ -479,6 +485,9 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
             "coge",
             "cngb",
             "gwh",
+            "citrusgenomedb",
+            "figshare",
+            "plantgarden",
             "plantaedb",
             "flybase",
             "wormbase",
@@ -495,6 +504,9 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         coge_values = read_list_column_values(list_sheet, provider_col["coge"])
         cngb_values = read_list_column_values(list_sheet, provider_col["cngb"])
         gwh_values = read_list_column_values(list_sheet, provider_col["gwh"])
+        citrusgenomedb_values = read_list_column_values(list_sheet, provider_col["citrusgenomedb"])
+        figshare_values = read_list_column_values(list_sheet, provider_col["figshare"])
+        plantgarden_values = read_list_column_values(list_sheet, provider_col["plantgarden"])
         plantaedb_values = read_list_column_values(list_sheet, provider_col["plantaedb"])
         fernbase_values = read_list_column_values(list_sheet, provider_col["fernbase"])
         veupathdb_values = read_list_column_values(list_sheet, provider_col["veupathdb"])
@@ -522,6 +534,17 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         assert gwh_values == [
             "GWHIGRM00000000.1 (Medicago sativa)",
             "GWHCBHY00000000 (Allium sativum)",
+        ]
+        assert citrusgenomedb_values == [
+            "https://www.citrusgenomedb.org/organism/5799 (Citrus australasica (CGD organism page))",
+            "https://www.citrusgenomedb.org/Analysis/2530647 (Citrus australasica cv. AZM genome v1.0 (CGD analysis))",
+        ]
+        assert figshare_values == [
+            "https://figshare.com/articles/dataset/Construction_of_the_super_pan-genome_for_the_genus_Actinidia_reveals_structural_variations_linked_to_phenotypic_diversity/28759280 (Actinidia super pan-genome (figshare article))",
+        ]
+        assert plantgarden_values == [
+            "https://plantgarden.jp/en/list/t64480/genome/t64480.G001 (Actinidia polygama (PlantGARDEN assembly page))",
+            "https://plantgarden.jp/en/list/t385388/genome/t385388.G001 (Camellia oleifera (PlantGARDEN assembly page))",
         ]
         assert plantaedb_values == [
             "https://plantaedb.com/taxa/phylum/angiosperms/order/asterales/family/asteraceae/subfamily/asteroideae/tribe/astereae/subtribe/conyzinae/genus/erigeron/species/erigeron-breviscapus (Erigeron breviscapus (PlantaeDB page))",
@@ -600,6 +623,18 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
                     "gwh": [
                         {"id": "GWHZZZZ00000000.1", "species": "Fake gwh species"},
                     ],
+                    "figshare": [
+                        {
+                            "id": "https://figshare.example/articles/dataset/fake_bundle/999",
+                            "species": "Fake figshare species",
+                        },
+                    ],
+                    "plantgarden": [
+                        {
+                            "id": "https://plantgarden.example/en/list/t999/genome/t999.G001",
+                            "species": "Fake PlantGARDEN species",
+                        },
+                    ],
                     "plantaedb": [
                         {
                             "id": "https://plantaedb.example/species/example",
@@ -658,6 +693,9 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
             "coge",
             "cngb",
             "gwh",
+            "citrusgenomedb",
+            "figshare",
+            "plantgarden",
             "plantaedb",
             "flybase",
             "wormbase",
@@ -677,6 +715,9 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         coge_values = read_list_column_values(list_sheet, provider_col["coge"])
         cngb_values = read_list_column_values(list_sheet, provider_col["cngb"])
         gwh_values = read_list_column_values(list_sheet, provider_col["gwh"])
+        citrusgenomedb_values = read_list_column_values(list_sheet, provider_col["citrusgenomedb"])
+        figshare_values = read_list_column_values(list_sheet, provider_col["figshare"])
+        plantgarden_values = read_list_column_values(list_sheet, provider_col["plantgarden"])
         plantaedb_values = read_list_column_values(list_sheet, provider_col["plantaedb"])
         flybase_values = read_list_column_values(list_sheet, provider_col["flybase"])
         wormbase_values = read_list_column_values(list_sheet, provider_col["wormbase"])
@@ -719,6 +760,12 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
             "GCA_000001215.4 (Drosophila melanogaster)",
         ]
         assert gwh_values == ["GWHZZZZ00000000.1 (Fake gwh species)"]
+        assert citrusgenomedb_values == [
+            "https://www.citrusgenomedb.org/organism/5799 (Citrus australasica (CGD organism page))",
+            "https://www.citrusgenomedb.org/Analysis/2530647 (Citrus australasica cv. AZM genome v1.0 (CGD analysis))",
+        ]
+        assert figshare_values == ["https://figshare.example/articles/dataset/fake_bundle/999 (Fake figshare species)"]
+        assert plantgarden_values == ["https://plantgarden.example/en/list/t999/genome/t999.G001 (Fake PlantGARDEN species)"]
         assert plantaedb_values == ["https://plantaedb.example/species/example (Fake PlantaeDB species)"]
         assert flybase_values == ["dmel_r6.66 (Drosophila melanogaster)"]
         assert wormbase_values == ["caenorhabditis_elegans_prjna13758 (Caenorhabditis elegans)"]

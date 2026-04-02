@@ -9,6 +9,7 @@ from http.cookiejar import CookieJar
 from http.client import IncompleteRead, RemoteDisconnected
 import gzip
 import hashlib
+import html
 import io
 import json
 import os
@@ -147,6 +148,9 @@ ENSEMBL_GENE_ID_PATTERN = re.compile(r"^ENS[A-Z0-9]*G[0-9]+(?:\.[0-9]+)?$", re.I
 COGE_ID_HINT_PATTERN = re.compile(r"^coge[:_].+", re.IGNORECASE)
 CNGB_ID_HINT_PATTERN = re.compile(r"^cngb[:_].+", re.IGNORECASE)
 GWH_ID_HINT_PATTERN = re.compile(r"^gwh[:_].+", re.IGNORECASE)
+CITRUSGENOMEDB_ID_HINT_PATTERN = re.compile(r"^citrusgenomedb[:_].+", re.IGNORECASE)
+FIGSHARE_ID_HINT_PATTERN = re.compile(r"^figshare[:_].+", re.IGNORECASE)
+PLANTGARDEN_ID_HINT_PATTERN = re.compile(r"^plantgarden[:_].+", re.IGNORECASE)
 ENSEMBL_ID_HINT_PATTERN = re.compile(r"^ensembl[:_].+", re.IGNORECASE)
 FERNBASE_ID_HINT_PATTERN = re.compile(r"^fernbase[:_].+", re.IGNORECASE)
 VEUPATHDB_ID_HINT_PATTERN = re.compile(r"^veupathdb[:_].+", re.IGNORECASE)
@@ -159,6 +163,10 @@ COGE_GID_PATTERN = re.compile(r"^[0-9]+$")
 CNGB_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^CNA[0-9]+$", re.IGNORECASE)
 GWH_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^GWH[A-Z0-9]+(?:\.[0-9]+)?$", re.IGNORECASE)
 GWH_ASSEMBLY_ACCESSION_SEARCH_PATTERN = re.compile(r"(GWH[A-Z0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+CITRUSGENOMEDB_BINOMIAL_PATTERN = re.compile(r"\b([A-Z][a-z]+)\s+((?:x\s+)?[a-z][a-z-]+)\b")
+FIGSHARE_ARTICLE_ID_PATTERN = re.compile(r"/articles(?:/[^/?#]+)*/([0-9]+)(?:$|[/?#])", re.IGNORECASE)
+PLANTGARDEN_TAXID_PATTERN = re.compile(r"^t[0-9]+$", re.IGNORECASE)
+PLANTGARDEN_GENOME_ID_PATTERN = re.compile(r"^(t[0-9]+)[.]G[0-9]+$", re.IGNORECASE)
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "ensembl": Path("Ensembl") / "original_files",
@@ -171,6 +179,9 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "coge": Path("CoGe") / "species_wise_original",
     "cngb": Path("CNGB") / "species_wise_original",
     "gwh": Path("GWH") / "species_wise_original",
+    "citrusgenomedb": Path("CitrusGenomeDB") / "species_wise_original",
+    "figshare": Path("Figshare") / "species_wise_original",
+    "plantgarden": Path("PlantGARDEN") / "species_wise_original",
     "plantaedb": Path("PlantaeDB") / "species_wise_original",
     "flybase": Path("FlyBase") / "species_wise_original",
     "wormbase": Path("WormBase") / "species_wise_original",
@@ -195,6 +206,9 @@ PROVIDERS = (
     "coge",
     "cngb",
     "gwh",
+    "citrusgenomedb",
+    "figshare",
+    "plantgarden",
     "plantaedb",
     "flybase",
     "wormbase",
@@ -216,6 +230,9 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "coge",
     "cngb",
     "gwh",
+    "citrusgenomedb",
+    "figshare",
+    "plantgarden",
     "plantaedb",
     "flybase",
     "wormbase",
@@ -241,6 +258,10 @@ DEFAULT_COGE_API_BASE_URL = "https://genomevolution.org/coge/api/v1"
 DEFAULT_COGE_WEB_BASE_URL = "https://genomevolution.org/coge"
 DEFAULT_CNGB_CNSA_BASE_URL = "https://db.cngb.org/cnsa/ajax"
 DEFAULT_GWH_DOWNLOAD_BASE_URL = "https://download.cncb.ac.cn/gwh"
+DEFAULT_GWH_WEB_BASE_URL = "https://ngdc.cncb.ac.cn/gwh"
+DEFAULT_CITRUSGENOMEDB_WEB_BASE_URL = "https://www.citrusgenomedb.org"
+DEFAULT_FIGSHARE_API_BASE_URL = "https://api.figshare.com/v2"
+DEFAULT_PLANTGARDEN_WEB_BASE_URL = "https://plantgarden.jp"
 DEFAULT_JGI_SIGNON_BASE_URL = "https://signon.jgi.doe.gov"
 DEFAULT_PLANTAEDB_WEB_BASE_URL = "https://plantaedb.com"
 DEFAULT_VEUPATHDB_SERVICE_BASE_URL = "https://veupathdb.org/veupathdb/service"
@@ -334,6 +355,17 @@ PROVIDER_DEFAULT_ID_PAGE_URL_TEMPLATES = {
     "gwh": (
         "https://download.cncb.ac.cn/gwh/",
     ),
+    "citrusgenomedb": (
+        "https://www.citrusgenomedb.org/Analysis/{id}",
+        "https://www.citrusgenomedb.org/organism/{id}",
+    ),
+    "figshare": (
+        "https://figshare.com/articles/dataset/{id}",
+    ),
+    "plantgarden": (
+        "https://plantgarden.jp/en/list/{id}/genome",
+        "https://plantgarden.jp/en/list/{id}/genome/{id}",
+    ),
     "plantaedb": (
         "https://plantaedb.com/",
     ),
@@ -367,6 +399,9 @@ PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     "coge": 1,
     "cngb": 1,
     "gwh": 1,
+    "citrusgenomedb": 2,
+    "figshare": 2,
+    "plantgarden": 2,
     "plantaedb": 2,
     "flybase": 2,
     "wormbase": 2,
@@ -559,6 +594,8 @@ def species_prefix_token_count(tokens):
         return 0
     second = tokens[1].lower()
     third = tokens[2].lower() if len(tokens) >= 3 else ""
+    if second == "x":
+        return 3 if len(tokens) >= 3 else 2
     if second == "sp":
         return 3 if len(tokens) >= 3 else 2
     if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
@@ -779,7 +816,7 @@ def build_arg_parser():
         default="",
         help=(
             "Provider input directory. For ensembl/ensemblplants: original_files/. "
-            "For phycocosm/phytozome/ncbi/coge/cngb/gwh/plantaedb/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/oryza_minuta/direct/local: species_wise_original/. "
+            "For phycocosm/phytozome/ncbi/coge/cngb/gwh/citrusgenomedb/figshare/plantgarden/plantaedb/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/oryza_minuta/direct/local: species_wise_original/. "
             "Legacy aliases refseq/genbank are treated as ncbi. "
             "For --provider all, this must be the shared root containing all provider subdirectories."
         ),
@@ -815,8 +852,11 @@ def build_arg_parser():
             "(ncbi supports GCF/GCA/NCBI-URL auto-resolution; "
             "other supported providers support id-based template/index inference). "
             "Supported providers for --download-manifest: "
-            "ensembl, ensemblplants, ncbi, coge, cngb, gwh, plantaedb, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, oryza_minuta, direct, local "
+            "ensembl, ensemblplants, ncbi, coge, cngb, gwh, citrusgenomedb, figshare, plantgarden, plantaedb, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, oryza_minuta, direct, local "
             "(legacy aliases refseq/genbank are treated as ncbi). "
+            "provider=citrusgenomedb accepts Citrus Genome Database organism or analysis URLs and resolves public genome/GFF/CDS downloads when available. "
+            "provider=figshare accepts public article URLs or numeric article ids and can resolve file downloads from the figshare article API; use *_filename columns to disambiguate multi-file articles. "
+            "provider=plantgarden accepts PlantGARDEN species/genome/download URLs and resolves public genome/GFF/CDS-or-transcript downloads when available. "
             "provider=oryza_minuta downloads the public Gramene BB+CC tetraploid bundles and merges them into one species bundle. "
             "provider=direct requires explicit urls or an index-style id URL. "
             "cds_url may be provided by itself, or may be empty when both gff_url and genome_url are available; "
@@ -1243,6 +1283,9 @@ def provider_raw_dir(provider, download_root, species_key):
         "coge",
         "cngb",
         "gwh",
+        "citrusgenomedb",
+        "figshare",
+        "plantgarden",
         "plantaedb",
         "flybase",
         "wormbase",
@@ -1287,6 +1330,12 @@ def infer_provider_from_id(source_id):
         return "coge"
     if GWH_ID_HINT_PATTERN.match(source_id):
         return "gwh"
+    if CITRUSGENOMEDB_ID_HINT_PATTERN.match(source_id):
+        return "citrusgenomedb"
+    if FIGSHARE_ID_HINT_PATTERN.match(source_id):
+        return "figshare"
+    if PLANTGARDEN_ID_HINT_PATTERN.match(source_id):
+        return "plantgarden"
     if PLANTAEDB_ID_HINT_PATTERN.match(source_id):
         return "plantaedb"
     if CNGB_ID_HINT_PATTERN.match(source_id):
@@ -1299,6 +1348,12 @@ def infer_provider_from_id(source_id):
         return "coge"
     if "/gwh/" in lowered:
         return "gwh"
+    if "citrusgenomedb.org/" in lowered:
+        return "citrusgenomedb"
+    if "figshare.com/articles/" in lowered or "api.figshare.com/" in lowered:
+        return "figshare"
+    if "plantgarden.jp/" in lowered:
+        return "plantgarden"
     if "plantaedb.com/" in lowered:
         return "plantaedb"
     if "cngb.org" in lowered or "cncb.ac.cn" in lowered:
@@ -1496,7 +1551,18 @@ def is_probable_gff_url(url):
 
 
 def is_probable_genome_url(provider, url):
-    return is_probable_genome_filename(provider, urlparse(url).path.lower())
+    path_lower = urlparse(url).path.lower()
+    if provider == "citrusgenomedb":
+        filename_lower = Path(path_lower).name
+        if "/assembly/" in path_lower and is_fasta_filename(path_lower):
+            return True
+        if (
+            any(marker in path_lower for marker in ("/genes/", "/annotation/"))
+            and is_fasta_filename(path_lower)
+            and any(marker in filename_lower for marker in ("gene", "genes", "mrna", "rna", "cdna", "cds", "protein", "pep", "transcript"))
+        ):
+            return False
+    return is_probable_genome_filename(provider, path_lower)
 
 
 def provider_candidate_sort_key(provider, label, name):
@@ -1518,6 +1584,42 @@ def provider_candidate_sort_key(provider, label, name):
             return (
                 0 if ".merged." in lower else 1,
                 0 if any(marker in lower for marker in ("dna", "genome", "toplevel")) else 1,
+                lower,
+            )
+    if provider == "citrusgenomedb":
+        if label_upper == "CDS":
+            return (
+                0 if "cds" in lower else 1,
+                1 if any(marker in lower for marker in ("cdna", "mrna", "transcript")) else 0,
+                1 if any(marker in lower for marker in ("protein", "pep")) else 0,
+                lower,
+            )
+        if label_upper == "GFF":
+            return (
+                1 if any(marker in lower for marker in ("repeat", "interpro", "go", "ipr")) else 0,
+                lower,
+            )
+        if label_upper == "GENOME":
+            return (
+                0 if any(marker in lower for marker in ("genome", "assembly", "hap", "chr", "chrom")) else 1,
+                lower,
+            )
+    if provider == "figshare":
+        if label_upper == "CDS":
+            return (
+                0 if "cds" in lower else 1,
+                1 if any(marker in lower for marker in ("cdna", "mrna", "transcript")) else 0,
+                1 if any(marker in lower for marker in ("protein", "pep")) else 0,
+                lower,
+            )
+        if label_upper == "GFF":
+            return (
+                0 if any(marker in lower for marker in ("gff", "gff3", "gtf")) else 1,
+                lower,
+            )
+        if label_upper == "GENOME":
+            return (
+                0 if any(marker in lower for marker in ("genome", "assembly", "genomic", "chromosome", "_chr", ".chr", "hap")) else 1,
                 lower,
             )
     if provider != "fernbase":
@@ -2162,12 +2264,33 @@ def resolve_plantaedb_web_base_url():
     return os.environ.get("GG_PLANTAEDB_WEB_BASE_URL", DEFAULT_PLANTAEDB_WEB_BASE_URL).rstrip("/")
 
 
+def resolve_plantgarden_web_base_url():
+    return os.environ.get("GG_PLANTGARDEN_WEB_BASE_URL", DEFAULT_PLANTGARDEN_WEB_BASE_URL).rstrip("/")
+
+
 def resolve_cngb_cnsa_base_url():
     return os.environ.get("GG_CNGB_CNSA_BASE_URL", DEFAULT_CNGB_CNSA_BASE_URL).rstrip("/")
 
 
 def resolve_gwh_download_base_url():
     return os.environ.get("GG_GWH_DOWNLOAD_BASE_URL", DEFAULT_GWH_DOWNLOAD_BASE_URL).rstrip("/")
+
+
+def resolve_gwh_web_base_url():
+    return os.environ.get("GG_GWH_WEB_BASE_URL", DEFAULT_GWH_WEB_BASE_URL).rstrip("/")
+
+
+def resolve_gwh_search_api_url():
+    default = resolve_gwh_web_base_url().rstrip("/") + "/gwhSearch/api"
+    return os.environ.get("GG_GWH_SEARCH_API_URL", default).rstrip("/")
+
+
+def resolve_citrusgenomedb_web_base_url():
+    return os.environ.get("GG_CITRUSGENOMEDB_WEB_BASE_URL", DEFAULT_CITRUSGENOMEDB_WEB_BASE_URL).rstrip("/")
+
+
+def resolve_figshare_api_base_url():
+    return os.environ.get("GG_FIGSHARE_API_BASE_URL", DEFAULT_FIGSHARE_API_BASE_URL).rstrip("/")
 
 
 def resolve_veupathdb_service_base_url():
@@ -2231,9 +2354,30 @@ def source_id_candidates(provider, source_id, species_key):
         match = re.search(r"_([0-9]+)_", stripped)
         if match is not None:
             add(match.group(1))
+    if provider in ("ensembl", "ensemblplants"):
+        species_tokens = [token for token in str(species_key or "").split("_") if token != ""]
+        if len(species_tokens) >= 2:
+            add("{}_{}".format(species_tokens[0], species_tokens[1]))
+        if len(species_tokens) >= 3 and species_tokens[1].lower() == "x":
+            add("{}_{}_{}".format(species_tokens[0], species_tokens[1], species_tokens[2]))
+        if len(species_tokens) >= 4 and species_tokens[2].lower() in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
+            add("{}_{}".format(species_tokens[0], species_tokens[1]))
+        if len(species_tokens) >= 4 and species_tokens[3].lower() in ("group", "subgroup"):
+            add("{}_{}_{}".format(species_tokens[0], species_tokens[1], species_tokens[2]))
+        if NCBI_ASSEMBLY_ACCESSION_PATTERN.match(source_clean):
+            accession_candidate = source_clean.lower().replace("_", "").replace(".", "v")
+            for base_candidate in list(candidates):
+                if re.search(r"[A-Za-z]", base_candidate) is None:
+                    continue
+                add("{}_{}".format(base_candidate, accession_candidate))
+                add("{}_{}cm".format(base_candidate, accession_candidate))
     if provider == "gwh":
         for match in GWH_ASSEMBLY_ACCESSION_SEARCH_PATTERN.findall(stripped):
             add(match)
+    if provider == "figshare":
+        article_id = extract_figshare_article_id_candidate(stripped)
+        if article_id != "":
+            add(article_id)
 
     return candidates
 
@@ -2468,6 +2612,497 @@ def resolve_plantaedb_download_urls_from_id(source_id, species_key, timeout, hea
     return resolved
 
 
+def normalize_citrusgenomedb_source_page_url(source_id):
+    source_clean = strip_provider_prefix(source_id, "citrusgenomedb").strip()
+    if source_clean == "":
+        raise ValueError("Citrus Genome Database id is empty")
+    base = resolve_citrusgenomedb_web_base_url().rstrip("/") + "/"
+    if is_url_like(source_clean):
+        return source_clean
+    lowered = source_clean.lower()
+    if source_clean.startswith("/"):
+        return urljoin(base, source_clean.lstrip("/"))
+    if lowered.startswith("analysis/") or lowered.startswith("organism/"):
+        return urljoin(base, source_clean)
+    if source_clean.isdigit():
+        return urljoin(base, "Analysis/{}".format(source_clean))
+    return urljoin(base, source_clean)
+
+
+def infer_citrusgenomedb_species_key(page_text, links, fallback):
+    text = str(page_text or "")
+    match = CITRUSGENOMEDB_BINOMIAL_PATTERN.search(text)
+    if match is not None:
+        genus = match.group(1).strip()
+        epithet = re.sub(r"\s+", "_", match.group(2).strip())
+        candidate = "{}_{}".format(genus, epithet)
+        if candidate != "":
+            return candidate
+    for link in links:
+        parts = [part for part in urlparse(link).path.split("/") if part]
+        if "citrus_downloads" not in parts:
+            continue
+        try:
+            species_part = parts[parts.index("citrus_downloads") + 1]
+        except Exception:
+            continue
+        species_key = sanitize_identifier(species_part)
+        if species_key != "":
+            return species_key
+    return str(fallback or "").strip()
+
+
+def merge_resolved_manifest_bundle_fields(base_resolved, candidate_resolved):
+    merged = dict(base_resolved or {})
+    candidate = dict(candidate_resolved or {})
+    for key in ("cds_url", "gff_url", "genome_url"):
+        if str(merged.get(key, "") or "").strip() == "" and str(candidate.get(key, "") or "").strip() != "":
+            merged[key] = candidate[key]
+    return merged
+
+
+def citrusgenomedb_repository_request_headers(headers):
+    req_headers = dict(headers or {})
+    if "User-Agent" not in req_headers:
+        req_headers["User-Agent"] = "Mozilla/5.0 (compatible; genegalleon-input-generation)"
+    return req_headers
+
+
+def resolve_citrusgenomedb_repository_bundle(index_url, timeout, headers):
+    normalized_index_url = str(index_url).rstrip("/") + "/"
+    repo_headers = citrusgenomedb_repository_request_headers(headers)
+    resolved = resolve_urls_from_index_url("citrusgenomedb", index_url, timeout, repo_headers)
+    if manifest_has_usable_source_bundle(
+        resolved.get("cds_url", ""),
+        resolved.get("gff_url", ""),
+        "",
+        resolved.get("genome_url", ""),
+    ):
+        return resolved
+    page_text = fetch_text_with_headers(index_url, timeout, repo_headers)
+    links = parse_links_from_document(index_url, page_text)
+    merged = dict(resolved)
+    for link in links:
+        lower = link.lower()
+        if "/citrus_downloads/" not in lower:
+            continue
+        if link.rstrip("/") == str(index_url).rstrip("/"):
+            continue
+        if not link.startswith(normalized_index_url):
+            continue
+        candidate = resolve_urls_from_index_url("citrusgenomedb", link, timeout, repo_headers)
+        merged = merge_resolved_manifest_bundle_fields(merged, candidate)
+    return merged
+
+
+def resolve_citrusgenomedb_bundle_from_page(page_url, species_key, timeout, headers):
+    page_text = fetch_text_with_headers(page_url, timeout, headers)
+    if "Bulk download of the assembly files will become available once the data is published" in page_text:
+        return None
+    links = parse_links_from_document(page_url, page_text)
+    resolved = resolve_urls_from_index_url("citrusgenomedb", page_url, timeout, headers)
+    if not manifest_has_usable_source_bundle(
+        resolved.get("cds_url", ""),
+        resolved.get("gff_url", ""),
+        "",
+        resolved.get("genome_url", ""),
+    ):
+        for link in links:
+            if "/citrus_downloads/" not in link.lower():
+                continue
+            candidate = resolve_citrusgenomedb_repository_bundle(link, timeout, headers)
+            resolved = merge_resolved_manifest_bundle_fields(resolved, candidate)
+    if not manifest_has_usable_source_bundle(
+        resolved.get("cds_url", ""),
+        resolved.get("gff_url", ""),
+        "",
+        resolved.get("genome_url", ""),
+    ):
+        return None
+    resolved["species_key"] = str(species_key or "").strip() or infer_citrusgenomedb_species_key(page_text, links, species_key)
+    resolved["cds_filename"] = Path(urlparse(resolved["cds_url"]).path).name if resolved.get("cds_url", "") else ""
+    resolved["gff_filename"] = Path(urlparse(resolved["gff_url"]).path).name if resolved.get("gff_url", "") else ""
+    resolved["genome_filename"] = Path(urlparse(resolved["genome_url"]).path).name if resolved.get("genome_url", "") else ""
+    return resolved
+
+
+def resolve_citrusgenomedb_download_urls_from_id(source_id, species_key, timeout, headers):
+    page_url = normalize_citrusgenomedb_source_page_url(source_id)
+    if "/analysis/" in urlparse(page_url).path.lower():
+        resolved = resolve_citrusgenomedb_bundle_from_page(page_url, species_key, timeout, headers)
+        if resolved is None:
+            raise ValueError(
+                "Citrus Genome Database analysis page '{}' did not expose downloadable genome/GFF bundle".format(
+                    page_url
+                )
+            )
+        return resolved
+
+    page_text = fetch_text_with_headers(page_url, timeout, headers)
+    links = parse_links_from_document(page_url, page_text)
+
+    best = None
+    best_rank = None
+    direct_bundle = resolve_citrusgenomedb_bundle_from_page(page_url, species_key, timeout, headers)
+    if direct_bundle is not None:
+        genome_url = str(direct_bundle.get("genome_url", "") or "").strip().lower()
+        best = direct_bundle
+        best_rank = (
+            1 if "/assembly/" in genome_url else 0,
+            1 if direct_bundle.get("gff_url", "") and direct_bundle.get("genome_url", "") else 0,
+            1 if direct_bundle.get("cds_url", "") else 0,
+            0,
+        )
+
+    seen = set()
+    for order, link in enumerate(links, start=1):
+        if "/analysis/" not in link.lower():
+            continue
+        if link in seen:
+            continue
+        seen.add(link)
+        try:
+            resolved = resolve_citrusgenomedb_bundle_from_page(link, species_key, timeout, headers)
+        except Exception:
+            continue
+        if resolved is None:
+            continue
+        genome_url = str(resolved.get("genome_url", "") or "").strip().lower()
+        rank = (
+            1 if "/assembly/" in genome_url else 0,
+            1 if resolved.get("gff_url", "") and resolved.get("genome_url", "") else 0,
+            1 if resolved.get("cds_url", "") else 0,
+            -order,
+        )
+        if best is None or rank > best_rank:
+            best = resolved
+            best_rank = rank
+    if best is None:
+        raise ValueError(
+            "Citrus Genome Database id '{}' did not resolve to downloadable GFF/genome URLs".format(source_id)
+        )
+    return best
+
+
+def extract_figshare_article_id_candidate(source_id):
+    text = str(source_id or "").strip()
+    if text == "":
+        return ""
+    stripped = strip_provider_prefix(text, "figshare").strip()
+    for candidate in (text, stripped):
+        if str(candidate).isdigit():
+            return str(candidate)
+        match = FIGSHARE_ARTICLE_ID_PATTERN.search(str(candidate))
+        if match is not None:
+            return str(match.group(1) or "").strip()
+        if is_url_like(candidate):
+            parts = [unquote(part) for part in urlparse(candidate).path.split("/") if part]
+            lowered_parts = [part.lower() for part in parts]
+            if "articles" in lowered_parts:
+                for part in reversed(parts):
+                    if str(part).isdigit():
+                        return str(part)
+    return ""
+
+
+def strip_html_tags(text):
+    return re.sub(r"<[^>]+>", " ", str(text or ""))
+
+
+def infer_figshare_species_key(article_payload, fallback):
+    fallback_text = str(fallback or "").strip()
+    if fallback_text != "":
+        return fallback_text
+    title = strip_html_tags(html.unescape(str((article_payload or {}).get("title", "") or "")))
+    match = re.fullmatch(r"\s*([A-Z][a-z]+)\s+([a-z][a-z-]+)\s*", title)
+    if match is None:
+        return ""
+    return "{}_{}".format(match.group(1), match.group(2))
+
+
+def figshare_file_download_url(file_record):
+    direct = str((file_record or {}).get("download_url", "") or "").strip()
+    if direct != "":
+        return direct
+    file_id = str((file_record or {}).get("id", "") or "").strip()
+    if file_id == "":
+        return ""
+    return "https://ndownloader.figshare.com/files/{}".format(file_id)
+
+
+def figshare_candidate_name(file_record):
+    return Path(str((file_record or {}).get("name", "") or "").strip()).name
+
+
+def normalize_figshare_filename_hint(value):
+    return Path(str(value or "").strip()).name.lower()
+
+
+def filter_figshare_files_by_requested_name(files, requested_name):
+    hint = normalize_figshare_filename_hint(requested_name)
+    if hint == "":
+        return list(files)
+    return [file_record for file_record in files if figshare_candidate_name(file_record).lower() == hint]
+
+
+def filter_figshare_files_by_species_key(files, species_key):
+    text = str(species_key or "").strip().lower()
+    if text == "":
+        return list(files)
+    tokens = [token for token in re.split(r"[_\s]+", text) if token]
+    patterns = []
+    if len(tokens) >= 2:
+        patterns.extend(
+            (
+                "_".join(tokens),
+                "-".join(tokens),
+                "".join(tokens),
+                "{} {}".format(tokens[0], tokens[1]),
+                "{}_{}".format(tokens[0], tokens[-1]),
+                "{} {}".format(tokens[0], tokens[-1]),
+            )
+        )
+    patterns.extend(tokens)
+    unique_patterns = []
+    for pattern in patterns:
+        if pattern and pattern not in unique_patterns:
+            unique_patterns.append(pattern)
+    out = []
+    for file_record in files:
+        lowered = figshare_candidate_name(file_record).lower()
+        if any(pattern in lowered for pattern in unique_patterns):
+            out.append(file_record)
+    return out
+
+
+def select_figshare_file_record(files, provider_label, requested_name, species_key, article_id):
+    if str(requested_name or "").strip() != "":
+        requested_candidates = filter_figshare_files_by_requested_name(files, requested_name)
+        if len(requested_candidates) == 0:
+            raise ValueError(
+                "figshare article '{}' did not contain requested {} file '{}'".format(
+                    article_id,
+                    provider_label.lower(),
+                    requested_name,
+                )
+            )
+        ordered = sorted(
+            requested_candidates,
+            key=lambda record: provider_candidate_sort_key("figshare", provider_label, figshare_candidate_name(record)),
+        )
+        return ordered[0]
+
+    filtered = []
+    for file_record in files:
+        name = figshare_candidate_name(file_record)
+        if provider_label == "CDS" and is_probable_cds_filename("figshare", name):
+            filtered.append(file_record)
+        elif provider_label == "GFF" and is_probable_gff_url(name):
+            filtered.append(file_record)
+        elif provider_label == "GENOME" and is_probable_genome_filename("figshare", name):
+            filtered.append(file_record)
+    if len(filtered) == 0:
+        return None
+    species_filtered = filter_figshare_files_by_species_key(filtered, species_key)
+    if len(species_filtered) == 1:
+        return species_filtered[0]
+    if len(filtered) == 1:
+        return filtered[0]
+    raise ValueError(
+        "figshare article '{}' exposed multiple {} candidates; set {}_filename to disambiguate".format(
+            article_id,
+            provider_label.lower(),
+            provider_label.lower(),
+        )
+    )
+
+
+def resolve_figshare_download_urls_from_id(source_id, species_key, timeout, headers, row=None):
+    article_id = extract_figshare_article_id_candidate(source_id)
+    if article_id == "":
+        raise ValueError("figshare id '{}' did not contain a public article id".format(source_id))
+    article_url = "{}/articles/{}".format(resolve_figshare_api_base_url(), article_id)
+    payload = fetch_json_with_headers(article_url, timeout, headers)
+    files = payload.get("files", [])
+    if not isinstance(files, list) or len(files) == 0:
+        files = fetch_json_with_headers(article_url + "/files?page_size=1000", timeout, headers)
+    if not isinstance(files, list) or len(files) == 0:
+        raise ValueError("figshare article '{}' did not expose downloadable files".format(article_id))
+    row = dict(row or {})
+    resolved = {}
+    for label, field_prefix in (("CDS", "cds"), ("GFF", "gff"), ("GENOME", "genome")):
+        selected = select_figshare_file_record(
+            files=files,
+            provider_label=label,
+            requested_name=row.get("{}_filename".format(field_prefix), ""),
+            species_key=species_key,
+            article_id=article_id,
+        )
+        if selected is None:
+            continue
+        resolved["{}_url".format(field_prefix)] = figshare_file_download_url(selected)
+        archive_member = str(row.get("{}_archive_member".format(field_prefix), "") or "").strip()
+        if archive_member != "":
+            resolved["{}_archive_member".format(field_prefix)] = archive_member
+            resolved["{}_filename".format(field_prefix)] = Path(archive_member).name
+        else:
+            resolved["{}_filename".format(field_prefix)] = figshare_candidate_name(selected)
+    inferred_species_key = infer_figshare_species_key(payload, species_key)
+    if inferred_species_key != "":
+        resolved["species_key"] = inferred_species_key
+    if not manifest_has_usable_source_bundle(
+        resolved.get("cds_url", ""),
+        resolved.get("gff_url", ""),
+        "",
+        resolved.get("genome_url", ""),
+    ):
+        raise ValueError("figshare article '{}' did not expose CDS, GBFF, or GFF plus genome".format(article_id))
+    return resolved
+
+
+def normalize_plantgarden_source_page_url(source_id):
+    source_clean = strip_provider_prefix(source_id, "plantgarden").strip()
+    if source_clean == "":
+        raise ValueError("PlantGARDEN id is empty")
+    base = resolve_plantgarden_web_base_url().rstrip("/") + "/"
+    if is_url_like(source_clean):
+        return source_clean
+    if source_clean.startswith("/"):
+        return urljoin(base, source_clean.lstrip("/"))
+    genome_match = PLANTGARDEN_GENOME_ID_PATTERN.match(source_clean)
+    if genome_match is not None:
+        return urljoin(base, "en/list/{}/genome/{}".format(genome_match.group(1), source_clean))
+    if PLANTGARDEN_TAXID_PATTERN.match(source_clean):
+        return urljoin(base, "en/list/{}/genome".format(source_clean))
+    lowered = source_clean.lower()
+    if lowered.startswith(("en/", "ja/", "list/", "download/")):
+        return urljoin(base, source_clean)
+    return urljoin(base, source_clean)
+
+
+def extract_plantgarden_page_metadata(page_text):
+    metadata = {}
+    for key, value in re.findall(r'data-pgtag-([a-z_]+)="([^"]*)"', str(page_text or "")):
+        metadata[str(key or "").strip()] = str(value or "").strip()
+    return metadata
+
+
+def infer_plantgarden_species_key(metadata, fallback):
+    species_name = str((metadata or {}).get("species_name", "") or "").strip()
+    inferred = parse_species_key_candidate(species_name)
+    if inferred != "":
+        return inferred
+    return str(fallback or "").strip()
+
+
+def select_best_plantgarden_candidate(links, label):
+    best_url = ""
+    best_rank = None
+    for link in links:
+        parsed = urlparse(link)
+        filename = Path(parsed.path).name
+        lower = filename.lower()
+        if lower in ("", ".", ".."):
+            continue
+        if label == "CDS":
+            if not is_fasta_filename(lower):
+                continue
+            if any(marker in lower for marker in ("protein", "pep")):
+                continue
+            if "cds" in lower:
+                rank = (0, 0, lower)
+            elif any(marker in lower for marker in ("transcript", "mrna", "cdna")):
+                rank = (0, 1, lower)
+            else:
+                continue
+        elif label == "GFF":
+            if not is_gff_filename(lower):
+                continue
+            if any(marker in lower for marker in ("repeat", "repeatmask")):
+                continue
+            rank = (0, lower)
+        elif label == "GENOME":
+            if not is_fasta_filename(lower):
+                continue
+            if any(marker in lower for marker in ("cds", "transcript", "mrna", "cdna", "protein", "pep", "repeat")):
+                continue
+            preferred = any(
+                marker in lower
+                for marker in ("genome", "assembly", ".chr", "chr.", "chrom", "scaffold", "pmol", "pseudomol")
+            )
+            rank = (0 if preferred else 1, lower)
+        else:
+            continue
+        if best_url == "" or rank < best_rank:
+            best_url = link
+            best_rank = rank
+    return best_url
+
+
+def resolve_plantgarden_download_page_url(source_id, timeout, headers):
+    page_url = normalize_plantgarden_source_page_url(source_id)
+    parsed = urlparse(page_url)
+    locale = "ja" if "/ja/" in parsed.path.lower() else "en"
+    direct_match = re.search(r"/download/(t[0-9]+)/(t[0-9]+[.]G[0-9]+)/?$", parsed.path, flags=re.IGNORECASE)
+    if direct_match is not None:
+        return page_url.rstrip("/") + "/"
+
+    page_text = fetch_text_with_headers(page_url, timeout, headers)
+    metadata = extract_plantgarden_page_metadata(page_text)
+    species_id = str(metadata.get("species_id", "") or "").strip()
+    genome_id = str(metadata.get("genome_assembly_id", "") or "").strip()
+    if species_id != "" and genome_id != "":
+        return urljoin(
+            resolve_plantgarden_web_base_url().rstrip("/") + "/",
+            "{}/download/{}/{}/".format(locale, species_id, genome_id),
+        )
+
+    links = parse_links_from_document(page_url, page_text)
+    for link in links:
+        link_path = urlparse(link).path
+        if re.search(r"/download/(t[0-9]+)/(t[0-9]+[.]G[0-9]+)/?$", link_path, flags=re.IGNORECASE):
+            return link.rstrip("/") + "/"
+    for link in links:
+        link_path = urlparse(link).path
+        genome_match = re.search(r"/list/(t[0-9]+)/genome/(t[0-9]+[.]G[0-9]+)/?$", link_path, flags=re.IGNORECASE)
+        if genome_match is not None:
+            return urljoin(
+                resolve_plantgarden_web_base_url().rstrip("/") + "/",
+                "{}/download/{}/{}/".format(locale, genome_match.group(1), genome_match.group(2)),
+            )
+    for link in links:
+        link_path = urlparse(link).path
+        if re.search(r"/list/t[0-9]+/genome/?$", link_path, flags=re.IGNORECASE) and link.rstrip("/") != page_url.rstrip("/"):
+            return resolve_plantgarden_download_page_url(link, timeout, headers)
+    raise ValueError("PlantGARDEN page did not expose a downloadable assembly page: {}".format(page_url))
+
+
+def resolve_plantgarden_download_urls_from_id(source_id, species_key, timeout, headers):
+    page_url = normalize_plantgarden_source_page_url(source_id)
+    page_text = fetch_text_with_headers(page_url, timeout, headers)
+    metadata = extract_plantgarden_page_metadata(page_text)
+    download_page_url = resolve_plantgarden_download_page_url(page_url, timeout, headers)
+    download_text = fetch_text_with_headers(download_page_url, timeout, headers)
+    links = parse_links_from_document(download_page_url, download_text)
+    cds_url = select_best_plantgarden_candidate(links, "CDS")
+    gff_url = select_best_plantgarden_candidate(links, "GFF")
+    genome_url = select_best_plantgarden_candidate(links, "GENOME")
+    if not manifest_has_usable_source_bundle(cds_url, gff_url, "", genome_url):
+        raise ValueError(
+            "PlantGARDEN id '{}' did not resolve to a usable CDS-or-(GFF+genome) bundle".format(source_id)
+        )
+    inferred_species_key = str(species_key or "").strip() or infer_plantgarden_species_key(metadata, species_key)
+    return {
+        "species_key": inferred_species_key,
+        "cds_url": cds_url,
+        "gff_url": gff_url,
+        "genome_url": genome_url,
+        "cds_filename": Path(urlparse(cds_url).path).name if cds_url != "" else "",
+        "gff_filename": Path(urlparse(gff_url).path).name if gff_url != "" else "",
+        "genome_filename": Path(urlparse(genome_url).path).name if genome_url != "" else "",
+    }
+
+
 _veupathdb_records_cache = {}
 _veupathdb_records_lock = threading.Lock()
 
@@ -2681,6 +3316,97 @@ def parse_last_path_token(url):
     return unquote(path.split("/")[-1])
 
 
+def strip_html_to_text(text):
+    unescaped = html.unescape(str(text or ""))
+    unescaped = re.sub(r"<[^>]+>", " ", unescaped)
+    return re.sub(r"\s+", " ", unescaped).strip()
+
+
+def infer_gwh_species_key_from_show_page(page_text, fallback):
+    clean = strip_html_to_text(page_text)
+    match = re.search(r"Scientific Name\s+(.+?)\s+Common Names", clean, flags=re.IGNORECASE)
+    if match is not None:
+        inferred = parse_species_key_candidate(match.group(1))
+        if inferred != "":
+            return inferred
+    return str(fallback or "").strip()
+
+
+def resolve_gwh_bundle_from_show_page(page_url, species_key, timeout, headers):
+    page_text = fetch_text_with_headers(page_url, timeout, headers)
+    resolved = resolve_urls_from_index_url("gwh", page_url, timeout, headers)
+    if not manifest_has_usable_source_bundle(
+        resolved.get("cds_url", ""),
+        resolved.get("gff_url", ""),
+        "",
+        resolved.get("genome_url", ""),
+    ):
+        raise ValueError("GWH show page '{}' did not expose a usable bundle".format(page_url))
+    resolved["species_key"] = str(species_key or "").strip() or infer_gwh_species_key_from_show_page(page_text, species_key)
+    resolved["cds_filename"] = Path(urlparse(resolved["cds_url"]).path).name if resolved.get("cds_url", "") else ""
+    resolved["gff_filename"] = Path(urlparse(resolved["gff_url"]).path).name if resolved.get("gff_url", "") else ""
+    resolved["genome_filename"] = Path(urlparse(resolved["genome_url"]).path).name if resolved.get("genome_url", "") else ""
+    return resolved
+
+
+def resolve_gwh_show_page_url_from_id(source_id, timeout, headers):
+    source_clean = str(source_id or "").strip()
+    accession = extract_gwh_accession_candidate(source_clean)
+    if accession == "":
+        raise ValueError("GWH id '{}' did not contain a GWH accession".format(source_id))
+    if is_url_like(source_clean) and "/gwh/" in source_clean.lower() and source_clean.rstrip("/").lower().endswith("/show"):
+        return source_clean, accession
+
+    search_url = resolve_gwh_search_api_url()
+    query_url = search_url + "?" + urlencode({"term": gwh_accession_stem(accession)})
+    payload = fetch_json_with_headers(query_url, timeout, headers)
+    hits = payload.get("data", [])
+    if not isinstance(hits, list) or len(hits) == 0:
+        raise ValueError("GWH accession '{}' returned no search hits from {}".format(accession, search_url))
+
+    normalized_accession = accession.lower()
+    accession_stem = gwh_accession_stem(accession).lower()
+    candidates = []
+    for hit in hits:
+        url = str(hit.get("url", "") or "").strip()
+        if url == "":
+            continue
+        if not is_url_like(url):
+            url = urljoin(resolve_gwh_web_base_url().rstrip("/") + "/", url.lstrip("/"))
+        attrs = hit.get("attrs", {}) or {}
+        url_lower = url.lower()
+        score = (
+            1 if str(attrs.get("has_annotation", "")).lower() == "yes" else 0,
+            1 if str(attrs.get("source", "")).lower() == "direct submission" else 0,
+            1 if "/assembly/" in url_lower else 0,
+            1 if "/ncbi_assembly/" not in url_lower else 0,
+            url_lower,
+        )
+        candidates.append((score, url))
+    if len(candidates) == 0:
+        raise ValueError("GWH accession '{}' returned search hits without usable show page URLs".format(accession))
+
+    last_error = None
+    for _, page_url in sorted(candidates, reverse=True):
+        try:
+            resolved = resolve_gwh_bundle_from_show_page(page_url, species_key="", timeout=timeout, headers=headers)
+        except Exception as exc:
+            last_error = exc
+            continue
+        bundle_urls = " ".join(
+            [
+                str(resolved.get("cds_url", "") or ""),
+                str(resolved.get("gff_url", "") or ""),
+                str(resolved.get("genome_url", "") or ""),
+            ]
+        ).lower()
+        if normalized_accession in bundle_urls or accession_stem in bundle_urls:
+            return page_url, accession
+    if last_error is not None:
+        raise ValueError("GWH accession '{}' did not resolve via show-page fallback: {}".format(accession, last_error))
+    raise ValueError("GWH accession '{}' did not match any show-page download bundle".format(accession))
+
+
 def resolve_gwh_folder_url_from_id(source_id, timeout, headers):
     source_clean = str(source_id or "").strip()
     accession = extract_gwh_accession_candidate(source_clean)
@@ -2748,30 +3474,59 @@ def resolve_gwh_folder_url_from_id(source_id, timeout, headers):
 
 
 def resolve_gwh_download_urls_from_id(source_id, species_key, timeout, headers):
-    folder_url, accession = resolve_gwh_folder_url_from_id(source_id, timeout, headers)
-    resolved = resolve_urls_from_index_url("gwh", folder_url, timeout, headers)
-    if resolved.get("gff_url", "") == "" or resolved.get("genome_url", "") == "":
-        raise ValueError(
-            "GWH accession '{}' did not resolve to downloadable GFF/genome URLs from {}".format(
-                accession, folder_url
-            )
-        )
+    source_clean = str(source_id or "").strip()
+    accession = extract_gwh_accession_candidate(source_clean)
+    errors = []
 
-    folder_name = parse_last_path_token(folder_url)
-    inferred_species_key = str(species_key or "").strip()
-    if inferred_species_key == "":
-        inferred_species_key = parse_species_key_candidate(folder_name.replace("_", " "))
-    if inferred_species_key == "":
-        inferred_species_key = sanitize_identifier(accession)
-    return {
-        "species_key": inferred_species_key,
-        "cds_url": resolved["cds_url"],
-        "gff_url": resolved["gff_url"],
-        "genome_url": resolved["genome_url"],
-        "cds_filename": Path(urlparse(resolved["cds_url"]).path).name,
-        "gff_filename": Path(urlparse(resolved["gff_url"]).path).name,
-        "genome_filename": Path(urlparse(resolved["genome_url"]).path).name,
-    }
+    if is_url_like(source_clean) and "/gwh/" in source_clean.lower() and source_clean.rstrip("/").lower().endswith("/show"):
+        try:
+            return resolve_gwh_bundle_from_show_page(source_clean, species_key, timeout, headers)
+        except Exception as exc:
+            errors.append("show page: {}".format(exc))
+
+    try:
+        folder_url, accession = resolve_gwh_folder_url_from_id(source_id, timeout, headers)
+        resolved = resolve_urls_from_index_url("gwh", folder_url, timeout, headers)
+        if resolved.get("gff_url", "") == "" or resolved.get("genome_url", "") == "":
+            raise ValueError(
+                "GWH accession '{}' did not resolve to downloadable GFF/genome URLs from {}".format(
+                    accession, folder_url
+                )
+            )
+
+        folder_name = parse_last_path_token(folder_url)
+        inferred_species_key = str(species_key or "").strip()
+        if inferred_species_key == "":
+            inferred_species_key = parse_species_key_candidate(folder_name.replace("_", " "))
+        if inferred_species_key == "":
+            inferred_species_key = sanitize_identifier(accession)
+        return {
+            "species_key": inferred_species_key,
+            "cds_url": resolved["cds_url"],
+            "gff_url": resolved["gff_url"],
+            "genome_url": resolved["genome_url"],
+            "cds_filename": Path(urlparse(resolved["cds_url"]).path).name,
+            "gff_filename": Path(urlparse(resolved["gff_url"]).path).name,
+            "genome_filename": Path(urlparse(resolved["genome_url"]).path).name,
+        }
+    except Exception as exc:
+        errors.append("public index: {}".format(exc))
+
+    try:
+        page_url, accession = resolve_gwh_show_page_url_from_id(source_id, timeout, headers)
+        resolved = resolve_gwh_bundle_from_show_page(page_url, species_key, timeout, headers)
+        if str(resolved.get("species_key", "")).strip() == "":
+            resolved["species_key"] = sanitize_identifier(accession)
+        return resolved
+    except Exception as exc:
+        errors.append("show fallback: {}".format(exc))
+
+    raise ValueError(
+        "GWH accession '{}' did not resolve via public index or show-page fallback ({})".format(
+            accession or source_id,
+            "; ".join(errors),
+        )
+    )
 
 
 def fernbase_release_sort_key(name):
@@ -2874,13 +3629,19 @@ def resolve_fernbase_download_urls_from_id(source_id, species_key, timeout, head
     raise ValueError("FernBase id '{}' did not resolve to downloadable GFF/genome URLs".format(source_id))
 
 
-def resolve_provider_specific_download_urls_from_id(provider, source_id, species_key, timeout, headers):
+def resolve_provider_specific_download_urls_from_id(provider, source_id, species_key, timeout, headers, row=None):
     if provider == "coge":
         return resolve_coge_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "cngb":
         return resolve_cngb_download_urls_from_id(source_id, timeout, headers)
     if provider == "gwh":
         return resolve_gwh_download_urls_from_id(source_id, species_key, timeout, headers)
+    if provider == "citrusgenomedb":
+        return resolve_citrusgenomedb_download_urls_from_id(source_id, species_key, timeout, headers)
+    if provider == "figshare":
+        return resolve_figshare_download_urls_from_id(source_id, species_key, timeout, headers, row=row)
+    if provider == "plantgarden":
+        return resolve_plantgarden_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "plantaedb":
         return resolve_plantaedb_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "fernbase":
@@ -2894,7 +3655,7 @@ def resolve_provider_specific_download_urls_from_id(provider, source_id, species
     return None
 
 
-def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, timeout, headers):
+def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, timeout, headers, row=None):
     if provider not in DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS:
         raise ValueError(
             "provider '{}' is not supported for --download-manifest (use --input-dir for local formatting)".format(
@@ -2951,6 +3712,7 @@ def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, tim
             species_key=species_key,
             timeout=timeout,
             headers=headers,
+            row=row,
         )
     except Exception as exc:
         provider_specific = None
@@ -2961,6 +3723,10 @@ def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, tim
             "gff_url",
             "gbff_url",
             "genome_url",
+            "cds_archive_member",
+            "gff_archive_member",
+            "gbff_archive_member",
+            "genome_archive_member",
             "cds_filename",
             "gff_filename",
             "gbff_filename",
@@ -4384,6 +5150,7 @@ def download_from_manifest(
                             species_key=species_key,
                             timeout=float(timeout),
                             headers=headers,
+                            row=row,
                         )
                 if resolved_urls is not None:
                     if cds_url == "":
@@ -4394,14 +5161,34 @@ def download_from_manifest(
                         gbff_url = (resolved_urls.get("gbff_url") or "").strip()
                     if genome_url == "":
                         genome_url = (resolved_urls.get("genome_url") or "").strip()
-                    if cds_filename == "":
-                        cds_filename = (resolved_urls.get("cds_filename") or "").strip()
-                    if gff_filename == "":
-                        gff_filename = (resolved_urls.get("gff_filename") or "").strip()
-                    if gbff_filename == "":
-                        gbff_filename = (resolved_urls.get("gbff_filename") or "").strip()
-                    if genome_filename == "":
-                        genome_filename = (resolved_urls.get("genome_filename") or "").strip()
+                    if cds_archive_member == "":
+                        cds_archive_member = (resolved_urls.get("cds_archive_member") or "").strip()
+                    if gff_archive_member == "":
+                        gff_archive_member = (resolved_urls.get("gff_archive_member") or "").strip()
+                    if gbff_archive_member == "":
+                        gbff_archive_member = (resolved_urls.get("gbff_archive_member") or "").strip()
+                    if genome_archive_member == "":
+                        genome_archive_member = (resolved_urls.get("genome_archive_member") or "").strip()
+                    resolved_cds_filename = (resolved_urls.get("cds_filename") or "").strip()
+                    resolved_gff_filename = (resolved_urls.get("gff_filename") or "").strip()
+                    resolved_gbff_filename = (resolved_urls.get("gbff_filename") or "").strip()
+                    resolved_genome_filename = (resolved_urls.get("genome_filename") or "").strip()
+                    if cds_filename == "" or (
+                        cds_archive_member != "" and cds_filename == (row.get("cds_filename") or "").strip()
+                    ):
+                        cds_filename = resolved_cds_filename or cds_filename
+                    if gff_filename == "" or (
+                        gff_archive_member != "" and gff_filename == (row.get("gff_filename") or "").strip()
+                    ):
+                        gff_filename = resolved_gff_filename or gff_filename
+                    if gbff_filename == "" or (
+                        gbff_archive_member != "" and gbff_filename == (row.get("gbff_filename") or "").strip()
+                    ):
+                        gbff_filename = resolved_gbff_filename or gbff_filename
+                    if genome_filename == "" or (
+                        genome_archive_member != "" and genome_filename == (row.get("genome_filename") or "").strip()
+                    ):
+                        genome_filename = resolved_genome_filename or genome_filename
                     if species_key == "":
                         species_key = (resolved_urls.get("species_key") or "").strip()
             except Exception as exc:
@@ -4828,8 +5615,10 @@ def is_probable_genome_filename(provider, name):
     if provider == "fernbase":
         # FernBase often exposes the assembly as a plain ".fa"/".fasta" filename.
         return True
-    if provider in ("ncbi", "refseq", "genbank", "plantaedb"):
+    if provider in ("ncbi", "refseq", "genbank", "plantgarden", "plantaedb"):
         return "genomic" in lower
+    if provider == "figshare":
+        return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "_chr", ".chr", "hap"))
     if provider in ("ensembl", "ensemblplants"):
         return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
     return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold"))
@@ -5870,7 +6659,7 @@ def extract_provider_id(provider, header):
         return extract_phycocosm_id(header)
     if provider == "gwh":
         return extract_gwh_id(header)
-    if provider in ("ncbi", "refseq", "genbank", "plantaedb"):
+    if provider in ("ncbi", "refseq", "genbank", "plantgarden", "plantaedb"):
         return first_token(header)
     return extract_phytozome_id(header)
 
@@ -6442,13 +7231,13 @@ def discover_tasks(provider, input_dir):
         return discover_phycocosm_tasks(input_dir)
     if provider == "phytozome":
         return discover_phytozome_tasks(input_dir)
-    if provider in ("ncbi", "refseq", "genbank", "plantaedb"):
+    if provider in ("ncbi", "refseq", "genbank", "plantgarden", "plantaedb"):
         return discover_ncbi_like_tasks(input_dir, provider)
     if provider == "coge":
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "cngb":
         return discover_generic_species_dir_tasks(provider, input_dir)
-    if provider in ("gwh", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase", "insectbase", ORYZA_MINUTA_PROVIDER, "direct"):
+    if provider in ("gwh", "citrusgenomedb", "plantgarden", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase", "insectbase", ORYZA_MINUTA_PROVIDER, "direct"):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "local":
         return discover_generic_species_dir_tasks(provider, input_dir)

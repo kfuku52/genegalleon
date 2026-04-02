@@ -1723,6 +1723,895 @@ def test_download_manifest_plantaedb_formats_after_download(tmp_path):
     assert stats["aggregated_cds_removed"] == 0
 
 
+def test_download_manifest_resolves_citrusgenomedb_organism_page_to_public_bundle(tmp_path):
+    server_root = tmp_path / "server_root"
+    organism_page = server_root / "organism" / "5799"
+    published_analysis = server_root / "Analysis" / "2530647"
+    unpublished_analysis = server_root / "Analysis" / "9999999"
+    organism_page.parent.mkdir(parents=True, exist_ok=True)
+    published_analysis.parent.mkdir(parents=True, exist_ok=True)
+
+    cds_path = server_root / "citrus_downloads" / "Citrus_australasica" / "Cau_AZM_v1.0" / "genes" / "AZM.v1.0.CDS.fa.gz"
+    gff_path = server_root / "citrus_downloads" / "Citrus_australasica" / "Cau_AZM_v1.0" / "genes" / "AZM.v1.0.gene.model.gff3.gz"
+    genome_path = server_root / "citrus_downloads" / "Citrus_australasica" / "Cau_AZM_v1.0" / "assembly" / "AZM.v1.0.genome.fa.gz"
+    cds_path.parent.mkdir(parents=True, exist_ok=True)
+    genome_path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(cds_path, "wt", encoding="utf-8") as handle:
+        handle.write(">AZM_gene1.t1\nATGAAATTT\n")
+    with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "##gff-version 3\n"
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=AZM_gene1\n"
+            "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=AZM_gene1.t1;Parent=AZM_gene1\n"
+            "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds_AZM_gene1.t1;Parent=AZM_gene1.t1\n"
+        )
+    with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGAAATTT\n")
+
+    organism_page.write_text(
+        (
+            "<html><head><title>Citrus australasica | Citrus Genome Database</title></head><body>"
+            '<a href="/Analysis/9999999">draft assembly</a>'
+            '<a href="/Analysis/2530647">Citrus australasica cv. AZM genome v1.0</a>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+    unpublished_analysis.write_text(
+        (
+            "<html><head><title>Draft citrus analysis</title></head><body>"
+            "Bulk download of the assembly files will become available once the data is published"
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+    published_analysis.write_text(
+        (
+            "<html><head><title>Citrus australasica cv. AZM genome v1.0 | Citrus Genome Database</title></head><body>"
+            '<a href="/citrus_downloads/Citrus_australasica/Cau_AZM_v1.0/assembly/AZM.v1.0.genome.fa.gz">genome</a>'
+            '<a href="/citrus_downloads/Citrus_australasica/Cau_AZM_v1.0/genes/AZM.v1.0.CDS.fa.gz">CDS</a>'
+            '<a href="/citrus_downloads/Citrus_australasica/Cau_AZM_v1.0/genes/AZM.v1.0.gene.model.gff3.gz">GFF3</a>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "citrusgenomedb",
+                    "id": "http://127.0.0.1:{}/organism/5799".format(server.server_port),
+                    "species_key": "",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_CITRUSGENOMEDB_WEB_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+        download_dir = tmp_path / "download_cache"
+        completed = run_script(
+            "--provider",
+            "citrusgenomedb",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(download_dir),
+            "--download-only",
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    raw_dir = download_dir / "CitrusGenomeDB" / "species_wise_original" / "Citrus_australasica"
+    assert (raw_dir / "AZM.v1.0.CDS.fa.gz").exists()
+    assert (raw_dir / "AZM.v1.0.gene.model.gff3.gz").exists()
+    assert (raw_dir / "AZM.v1.0.genome.fa.gz").exists()
+
+
+def test_download_manifest_citrusgenomedb_analysis_page_derives_cds_from_gff_and_genome(tmp_path):
+    server_root = tmp_path / "server_root"
+    analysis_page = server_root / "Analysis" / "3267147"
+    analysis_page.parent.mkdir(parents=True, exist_ok=True)
+
+    gff_path = server_root / "citrus_downloads" / "Citrus_limon" / "Cl_Xiangshui_v1" / "genes" / "GWHCBFU00000000.cgd_gene.gff.gz"
+    genome_path = server_root / "citrus_downloads" / "Citrus_limon" / "Cl_Xiangshui_v1" / "assembly" / "GWHCBFU00000000.genome.fasta_NewID.fasta.gz"
+    protein_path = server_root / "citrus_downloads" / "Citrus_limon" / "Cl_Xiangshui_v1" / "genes" / "GWHCBFU00000000.Protein_editIDFinial.faa.gz"
+    rna_path = server_root / "citrus_downloads" / "Citrus_limon" / "Cl_Xiangshui_v1" / "genes" / "GWHCBFU00000000.RNA_editIDFinial.faa.gz"
+    gff_path.parent.mkdir(parents=True, exist_ok=True)
+    genome_path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "#OriSeqID=CTG_101\tAccession=GWHCBFU00000054\n"
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=limon_gene1\n"
+            "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=limon_gene1.t1;Parent=limon_gene1\n"
+            "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds_limon_gene1.t1a;Parent=limon_gene1.t1\n"
+            "chr1\tsrc\tCDS\t7\t9\t.\t+\t0\tID=cds_limon_gene1.t1b;Parent=limon_gene1.t1\n"
+        )
+    with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGAAATTT\n")
+    with gzip.open(protein_path, "wt", encoding="utf-8") as handle:
+        handle.write(">protein1\nMKF\n")
+    with gzip.open(rna_path, "wt", encoding="utf-8") as handle:
+        handle.write(">rna1\nMKF\n")
+
+    analysis_page.write_text(
+        (
+            "<html><head><title>Citrus limon genome v1.0 | Citrus Genome Database</title></head><body>"
+            '<a href="/citrus_downloads/Citrus_limon/Cl_Xiangshui_v1/assembly/GWHCBFU00000000.genome.fasta_NewID.fasta.gz">genome</a>'
+            '<a href="/citrus_downloads/Citrus_limon/Cl_Xiangshui_v1/genes/GWHCBFU00000000.cgd_gene.gff.gz">GFF3</a>'
+            '<a href="/citrus_downloads/Citrus_limon/Cl_Xiangshui_v1/genes/GWHCBFU00000000.Protein_editIDFinial.faa.gz">protein</a>'
+            '<a href="/citrus_downloads/Citrus_limon/Cl_Xiangshui_v1/genes/GWHCBFU00000000.RNA_editIDFinial.faa.gz">RNA</a>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "citrusgenomedb",
+                    "id": "http://127.0.0.1:{}/Analysis/3267147".format(server.server_port),
+                    "species_key": "Citrus_x_limon",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_CITRUSGENOMEDB_WEB_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+        download_dir = tmp_path / "download_cache"
+        out_cds = tmp_path / "out_cds"
+        out_gff = tmp_path / "out_gff"
+        out_genome = tmp_path / "out_genome"
+        completed = run_script(
+            "--provider",
+            "citrusgenomedb",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(download_dir),
+            "--species-cds-dir",
+            str(out_cds),
+            "--species-gff-dir",
+            str(out_gff),
+            "--species-genome-dir",
+            str(out_genome),
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    raw_dir = download_dir / "CitrusGenomeDB" / "species_wise_original" / "Citrus_x_limon"
+    assert not any("cds" in path.name.lower() for path in raw_dir.iterdir())
+    assert (raw_dir / "GWHCBFU00000000.cgd_gene.gff.gz").exists()
+    assert (raw_dir / "GWHCBFU00000000.genome.fasta_NewID.fasta.gz").exists()
+
+    formatted_cds_candidates = sorted(out_cds.glob("Citrus_x_limon*.fa.gz"))
+    assert len(formatted_cds_candidates) == 1
+    with gzip.open(formatted_cds_candidates[0], "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert ">Citrus_x_limon_limon_gene1" in cds_text
+    assert "ATGTTT" in cds_text
+
+
+def test_download_manifest_citrusgenomedb_analysis_page_prefers_cds_over_cdna(tmp_path):
+    server_root = tmp_path / "server_root"
+    analysis_page = server_root / "Analysis" / "6981406"
+    analysis_page.parent.mkdir(parents=True, exist_ok=True)
+
+    cds_path = server_root / "citrus_downloads" / "Citrus_aurantium" / "Ca_ZGSC_v1.0" / "genes" / "CGD_ZGSC-M.CDS.fa.gz"
+    cdna_path = server_root / "citrus_downloads" / "Citrus_aurantium" / "Ca_ZGSC_v1.0" / "genes" / "CGD_ZGSC-M.cDNA.fa.gz"
+    gff_path = server_root / "citrus_downloads" / "Citrus_aurantium" / "Ca_ZGSC_v1.0" / "genes" / "CGD_ZGSC-M.gene.model.gff3.gz"
+    genome_path = server_root / "citrus_downloads" / "Citrus_aurantium" / "Ca_ZGSC_v1.0" / "assembly" / "ZGSC-M.genome.fa.gz"
+    cds_path.parent.mkdir(parents=True, exist_ok=True)
+    genome_path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(cds_path, "wt", encoding="utf-8") as handle:
+        handle.write(">citrus_gene1.t1\nATGAAATTT\n")
+    with gzip.open(cdna_path, "wt", encoding="utf-8") as handle:
+        handle.write(">citrus_gene1.t1\nATGAAATTTAAA\n")
+    with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "##gff-version 3\n"
+            "chr1\tsrc\tgene\t1\t12\t.\t+\t.\tID=citrus_gene1\n"
+            "chr1\tsrc\tmRNA\t1\t12\t.\t+\t.\tID=citrus_gene1.t1;Parent=citrus_gene1\n"
+            "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds_citrus_gene1.t1;Parent=citrus_gene1.t1\n"
+        )
+    with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGAAATTTAAA\n")
+
+    analysis_page.write_text(
+        (
+            "<html><head><title>Citrus aurantium cv. ZGSC genome v1.0 | Citrus Genome Database</title></head><body>"
+            '<a href="/citrus_downloads/Citrus_aurantium/Ca_ZGSC_v1.0/assembly/ZGSC-M.genome.fa.gz">genome</a>'
+            '<a href="/citrus_downloads/Citrus_aurantium/Ca_ZGSC_v1.0/genes/CGD_ZGSC-M.gene.model.gff3.gz">GFF3</a>'
+            '<a href="/citrus_downloads/Citrus_aurantium/Ca_ZGSC_v1.0/genes/CGD_ZGSC-M.cDNA.fa.gz">cDNA</a>'
+            '<a href="/citrus_downloads/Citrus_aurantium/Ca_ZGSC_v1.0/genes/CGD_ZGSC-M.CDS.fa.gz">CDS</a>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "citrusgenomedb",
+                    "id": "http://127.0.0.1:{}/Analysis/6981406".format(server.server_port),
+                    "species_key": "Citrus_x_aurantium",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+        env = dict(os.environ)
+        env["GG_CITRUSGENOMEDB_WEB_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+        resolved_manifest = tmp_path / "resolved.tsv"
+        completed = run_script(
+            "--provider",
+            "all",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(tmp_path / "download_cache"),
+            "--resolved-manifest-output",
+            str(resolved_manifest),
+            "--download-only",
+            "--dry-run",
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    rows = list(csv.DictReader(resolved_manifest.open(encoding="utf-8"), delimiter="\t"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["cds_url"].endswith("/genes/CGD_ZGSC-M.CDS.fa.gz")
+
+
+def test_download_manifest_citrusgenomedb_organism_page_prefers_assembly_bundle_over_gene_fasta(tmp_path):
+    server_root = tmp_path / "server_root"
+    organism_page = server_root / "organism" / "5753"
+    analysis_page = server_root / "Analysis" / "3267147"
+    organism_page.parent.mkdir(parents=True, exist_ok=True)
+    analysis_page.parent.mkdir(parents=True, exist_ok=True)
+
+    gff_path = server_root / "citrus_downloads" / "Citrus_limon" / "Cl_Xiangshui_v1" / "genes" / "GWHCBFU00000000.cgd_gene.gff.gz"
+    genome_path = server_root / "citrus_downloads" / "Citrus_limon" / "Cl_Xiangshui_v1" / "assembly" / "GWHCBFU00000000.genome.fasta_NewID.fasta.gz"
+    gff_path.parent.mkdir(parents=True, exist_ok=True)
+    genome_path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "##gff-version 3\n"
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=limon_gene1\n"
+            "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=limon_gene1.t1;Parent=limon_gene1\n"
+            "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds_limon_gene1.t1;Parent=limon_gene1.t1\n"
+        )
+    with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGAAATTT\n")
+
+    organism_page.write_text(
+        (
+            "<html><head><title>Citrus limon | Citrus Genome Database</title></head><body>"
+            '<a href="/citrus_downloads/Citrus_limon/C.limon_EMF-UC_v1-Primary_genome/annotation/Climon_v1_primary-mRNA.fa">mRNA</a>'
+            '<a href="/citrus_downloads/Citrus_limon/C.limon_EMF-UC_v1-Primary_genome/annotation/Climon_v1_primary-annotation.gff">GFF</a>'
+            '<a href="/citrus_downloads/Citrus_limon/C.limon_EMF-UC_v1-Primary_genome/annotation/Climon_v1_primary-genes.fa">genes</a>'
+            '<a href="/Analysis/3267147">Citrus limon genome v1.0</a>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+    analysis_page.write_text(
+        (
+            "<html><head><title>Citrus limon genome v1.0 | Citrus Genome Database</title></head><body>"
+            '<a href="/citrus_downloads/Citrus_limon/Cl_Xiangshui_v1/assembly/GWHCBFU00000000.genome.fasta_NewID.fasta.gz">genome</a>'
+            '<a href="/citrus_downloads/Citrus_limon/Cl_Xiangshui_v1/genes/GWHCBFU00000000.cgd_gene.gff.gz">GFF3</a>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "citrusgenomedb",
+                    "id": "http://127.0.0.1:{}/organism/5753".format(server.server_port),
+                    "species_key": "Citrus_x_limon",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_CITRUSGENOMEDB_WEB_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+        resolved_manifest = tmp_path / "resolved.tsv"
+        completed = run_script(
+            "--provider",
+            "all",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(tmp_path / "download_cache"),
+            "--resolved-manifest-output",
+            str(resolved_manifest),
+            "--download-only",
+            "--dry-run",
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    rows = list(csv.DictReader(resolved_manifest.open(encoding="utf-8"), delimiter="\t"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["species_key"] == "Citrus_x_limon"
+    assert row["gff_url"].endswith("/genes/GWHCBFU00000000.cgd_gene.gff.gz")
+    assert row["genome_url"].endswith("/assembly/GWHCBFU00000000.genome.fasta_NewID.fasta.gz")
+    assert row["cds_url"] == ""
+
+
+def test_download_manifest_citrusgenomedb_analysis_page_follows_repository_index(tmp_path):
+    server_root = tmp_path / "server_root"
+    analysis_page = server_root / "analysis" / "189"
+    repository_index = server_root / "citrus_downloads" / "Citrus_medica" / "C.medica_Hzau_v1_genome" / "index.html"
+    annotation_index = server_root / "citrus_downloads" / "Citrus_medica" / "C.medica_Hzau_v1_genome" / "annotation" / "index.html"
+    assembly_index = server_root / "citrus_downloads" / "Citrus_medica" / "C.medica_Hzau_v1_genome" / "assembly" / "index.html"
+    analysis_page.parent.mkdir(parents=True, exist_ok=True)
+    repository_index.parent.mkdir(parents=True, exist_ok=True)
+    annotation_index.parent.mkdir(parents=True, exist_ok=True)
+    assembly_index.parent.mkdir(parents=True, exist_ok=True)
+
+    cds_path = server_root / "citrus_downloads" / "Citrus_medica" / "C.medica_Hzau_v1_genome" / "annotation" / "C.medica_Hzau_v1.cds.fa.gz"
+    gff_path = server_root / "citrus_downloads" / "Citrus_medica" / "C.medica_Hzau_v1_genome" / "annotation" / "C.medica_Hzau_v1.gff3.gz"
+    genome_path = server_root / "citrus_downloads" / "Citrus_medica" / "C.medica_Hzau_v1_genome" / "assembly" / "C.medica_Hzau_v1.genome.fa.gz"
+    with gzip.open(cds_path, "wt", encoding="utf-8") as handle:
+        handle.write(">medica_gene1.t1\nATGAAATTT\n")
+    with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "##gff-version 3\n"
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=medica_gene1\n"
+            "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=medica_gene1.t1;Parent=medica_gene1\n"
+            "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds_medica_gene1.t1;Parent=medica_gene1.t1\n"
+        )
+    with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGAAATTT\n")
+
+    analysis_page.write_text(
+        (
+            "<html><head><title>Citrus medica genome v1.0 | Citrus Genome Database</title></head><body>"
+            '<a href="/citrus_downloads/Citrus_medica/C.medica_Hzau_v1_genome/">CGD data repository</a>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+    repository_index.write_text(
+        (
+            "<html><body>"
+            '<a href="/citrus_downloads/Citrus_medica/C.medica_Hzau_v1_genome/annotation/">annotation/</a>'
+            '<a href="/citrus_downloads/Citrus_medica/C.medica_Hzau_v1_genome/assembly/">assembly/</a>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+    annotation_index.write_text(
+        (
+            "<html><body>"
+            '<a href="/citrus_downloads/Citrus_medica/C.medica_Hzau_v1_genome/annotation/C.medica_Hzau_v1.cds.fa.gz">CDS</a>'
+            '<a href="/citrus_downloads/Citrus_medica/C.medica_Hzau_v1_genome/annotation/C.medica_Hzau_v1.gff3.gz">GFF3</a>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+    assembly_index.write_text(
+        (
+            "<html><body>"
+            '<a href="/citrus_downloads/Citrus_medica/C.medica_Hzau_v1_genome/assembly/C.medica_Hzau_v1.genome.fa.gz">genome</a>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "citrusgenomedb",
+                    "id": "http://127.0.0.1:{}/analysis/189".format(server.server_port),
+                    "species_key": "Citrus_medica",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_CITRUSGENOMEDB_WEB_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+        resolved_manifest = tmp_path / "resolved.tsv"
+        completed = run_script(
+            "--provider",
+            "all",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(tmp_path / "download_cache"),
+            "--resolved-manifest-output",
+            str(resolved_manifest),
+            "--download-only",
+            "--dry-run",
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    rows = list(csv.DictReader(resolved_manifest.open(encoding="utf-8"), delimiter="\t"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["species_key"] == "Citrus_medica"
+    assert row["cds_url"].endswith("/annotation/C.medica_Hzau_v1.cds.fa.gz")
+    assert row["gff_url"].endswith("/annotation/C.medica_Hzau_v1.gff3.gz")
+    assert row["genome_url"].endswith("/assembly/C.medica_Hzau_v1.genome.fa.gz")
+
+
+def test_download_manifest_figshare_article_resolves_requested_filenames(tmp_path):
+    server_root = tmp_path / "server_root"
+    api_dir = server_root / "v2" / "articles"
+    api_dir.mkdir(parents=True, exist_ok=True)
+
+    article_payload = {
+        "id": 28759280,
+        "title": "Construction of the super pan-genome for the genus <i>Actinidia</i>",
+        "files": [
+            {
+                "id": 53524346,
+                "name": "MW_GeneModels.gff3",
+                "download_url": "http://127.0.0.1:9/files/53524346",
+            },
+            {
+                "id": 53524460,
+                "name": "MW_chr.fasta",
+                "download_url": "http://127.0.0.1:9/files/53524460",
+            },
+            {
+                "id": 58581835,
+                "name": "MW.CDS.fasta",
+                "download_url": "http://127.0.0.1:9/files/58581835",
+            },
+            {
+                "id": 58581799,
+                "name": "KY.CDS.fasta",
+                "download_url": "http://127.0.0.1:9/files/58581799",
+            },
+        ],
+    }
+    (api_dir / "28759280").write_text(json.dumps(article_payload), encoding="utf-8")
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "figshare",
+                    "id": "https://figshare.com/articles/dataset/example_bundle/28759280",
+                    "species_key": "Actinidia_deliciosa",
+                    "cds_filename": "MW.CDS.fasta",
+                    "gff_filename": "MW_GeneModels.gff3",
+                    "genome_filename": "MW_chr.fasta",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_FIGSHARE_API_BASE_URL"] = "http://127.0.0.1:{}/v2".format(server.server_port)
+        resolved_manifest = tmp_path / "resolved.tsv"
+        completed = run_script(
+            "--provider",
+            "all",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(tmp_path / "download_cache"),
+            "--resolved-manifest-output",
+            str(resolved_manifest),
+            "--download-only",
+            "--dry-run",
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    rows = list(csv.DictReader(resolved_manifest.open(encoding="utf-8"), delimiter="\t"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["species_key"] == "Actinidia_deliciosa"
+    assert row["cds_url"] == "http://127.0.0.1:9/files/58581835"
+    assert row["gff_url"] == "http://127.0.0.1:9/files/53524346"
+    assert row["genome_url"] == "http://127.0.0.1:9/files/53524460"
+    assert row["cds_filename"] == "MW.CDS.fasta"
+    assert row["gff_filename"] == "MW_GeneModels.gff3"
+    assert row["genome_filename"] == "MW_chr.fasta"
+
+
+def test_download_manifest_figshare_article_supports_archive_members(tmp_path):
+    server_root = tmp_path / "server_root"
+    api_dir = server_root / "v2" / "articles"
+    files_dir = server_root / "files"
+    api_dir.mkdir(parents=True, exist_ok=True)
+    files_dir.mkdir(parents=True, exist_ok=True)
+
+    bundle_path = files_dir / "YouCha.annotation.tar.gz"
+    with tarfile.open(bundle_path, "w:gz") as archive:
+        for name, content in {
+            "YouCha.annotation/A/camellia_meiocarpa.gene.cds.fa": ">gene1\nATGAAATTT\n",
+            "YouCha.annotation/A/camellia_meiocarpa.gene.gff": "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n",
+        }.items():
+            payload = content.encode("utf-8")
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+
+    genome_path = files_dir / "youcha.Changed.A.fasta.gz"
+    with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGAAATTT\n")
+
+    article_payload = {
+        "id": 26926918,
+        "title": "Haplotype-resolved genome assembly of the tetraploid Youcha tree Camellia meiocarpa Hu",
+        "files": [
+            {
+                "id": 48978784,
+                "name": "YouCha.annotation.tar.gz",
+                "download_url": "http://127.0.0.1:0/files/YouCha.annotation.tar.gz",
+            },
+            {
+                "id": 48976912,
+                "name": "youcha.Changed.A.fasta.gz",
+                "download_url": "http://127.0.0.1:0/files/youcha.Changed.A.fasta.gz",
+            },
+        ],
+    }
+
+    class _FigshareFixtureHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, root_dir=None, **kwargs):
+            self._root_dir = root_dir
+            super().__init__(*args, directory=str(root_dir), **kwargs)
+
+        def do_GET(self):
+            if self.path == "/v2/articles/26926918":
+                payload = json.dumps(article_payload).replace(":0/", ":{}".format(self.server.server_port) + "/").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            super().do_GET()
+
+    handler = lambda *args, **kwargs: _FigshareFixtureHandler(*args, root_dir=server_root, **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "figshare",
+                    "id": "https://figshare.com/articles/dataset/camellia_meiocarpa_bundle/26926918",
+                    "species_key": "Camellia_meiocarpa",
+                    "cds_filename": "YouCha.annotation.tar.gz",
+                    "gff_filename": "YouCha.annotation.tar.gz",
+                    "genome_filename": "youcha.Changed.A.fasta.gz",
+                    "cds_archive_member": "YouCha.annotation/A/camellia_meiocarpa.gene.cds.fa",
+                    "gff_archive_member": "YouCha.annotation/A/camellia_meiocarpa.gene.gff",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_FIGSHARE_API_BASE_URL"] = "http://127.0.0.1:{}/v2".format(server.server_port)
+        resolved_manifest = tmp_path / "resolved.tsv"
+        completed = run_script(
+            "--provider",
+            "all",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(tmp_path / "download_cache"),
+            "--resolved-manifest-output",
+            str(resolved_manifest),
+            "--download-only",
+            "--dry-run",
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    rows = list(csv.DictReader(resolved_manifest.open(encoding="utf-8"), delimiter="\t"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["species_key"] == "Camellia_meiocarpa"
+    assert row["cds_url"].endswith("/files/YouCha.annotation.tar.gz")
+    assert row["gff_url"].endswith("/files/YouCha.annotation.tar.gz")
+    assert row["genome_url"].endswith("/files/youcha.Changed.A.fasta.gz")
+    assert row["cds_archive_member"] == "YouCha.annotation/A/camellia_meiocarpa.gene.cds.fa"
+    assert row["gff_archive_member"] == "YouCha.annotation/A/camellia_meiocarpa.gene.gff"
+    assert row["cds_filename"] == "camellia_meiocarpa.gene.cds.fa"
+    assert row["gff_filename"] == "camellia_meiocarpa.gene.gff"
+    assert row["genome_filename"] == "youcha.Changed.A.fasta.gz"
+
+
+def test_download_manifest_resolves_plantgarden_assembly_page_to_public_bundle(tmp_path):
+    server_root = tmp_path / "server_root"
+    assembly_page = server_root / "en" / "list" / "t64480" / "genome" / "t64480.G001"
+    download_dir = server_root / "en" / "download" / "t64480" / "t64480.G001"
+    assembly_page.parent.mkdir(parents=True, exist_ok=True)
+    download_dir.mkdir(parents=True, exist_ok=True)
+
+    with gzip.open(download_dir / "APO1.1.cds.fasta.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">Apo1.1ch29g20170.1\nATGAAATTT\n")
+    with gzip.open(download_dir / "APO1.1.genes.gff.gz", "wt", encoding="utf-8") as handle:
+        handle.write(
+            "##gff-version 3\n"
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=Apo1.1ch29g20170\n"
+            "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=Apo1.1ch29g20170.1;Parent=Apo1.1ch29g20170\n"
+            "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds_Apo1.1ch29g20170.1;Parent=Apo1.1ch29g20170.1\n"
+        )
+    with gzip.open(download_dir / "APO_r1.1.pmol.fasta.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">APO1.1ch01\nATGAAATTT\n")
+
+    assembly_page.write_text(
+        (
+            "<html><body>"
+            "<div id='k_contents' "
+            'data-pgtag-genome_assembly_id="t64480.G001" '
+            'data-pgtag-species_id="t64480" '
+            'data-pgtag-species_name="Actinidia polygama" '
+            'data-pgtag-assembly_version="APO_r1.1"></div>'
+            '<div class="_download" onClick="k_vexDownloadModal(\'en\',\'t64480.G001\',\'gid\')"></div>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "plantgarden",
+                    "id": "http://127.0.0.1:{}/en/list/t64480/genome/t64480.G001".format(server.server_port),
+                    "species_key": "",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_PLANTGARDEN_WEB_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+        resolved_manifest = tmp_path / "resolved.tsv"
+        completed = run_script(
+            "--provider",
+            "all",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(tmp_path / "download_cache"),
+            "--resolved-manifest-output",
+            str(resolved_manifest),
+            "--download-only",
+            "--dry-run",
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    rows = list(csv.DictReader(resolved_manifest.open(encoding="utf-8"), delimiter="\t"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["species_key"] == "Actinidia_polygama"
+    assert row["cds_url"].endswith("/en/download/t64480/t64480.G001/APO1.1.cds.fasta.gz")
+    assert row["gff_url"].endswith("/en/download/t64480/t64480.G001/APO1.1.genes.gff.gz")
+    assert row["genome_url"].endswith("/en/download/t64480/t64480.G001/APO_r1.1.pmol.fasta.gz")
+
+
+def test_download_manifest_plantgarden_genome_list_page_falls_back_to_transcripts_when_cds_is_absent(tmp_path):
+    server_root = tmp_path / "server_root"
+    genome_list_dir = server_root / "en" / "list" / "t385388" / "genome"
+    genome_list_page = genome_list_dir / "index.html"
+    assembly_page = genome_list_dir / "t385388.G001"
+    download_dir = server_root / "en" / "download" / "t385388" / "t385388.G001"
+    genome_list_dir.mkdir(parents=True, exist_ok=True)
+    assembly_page.parent.mkdir(parents=True, exist_ok=True)
+    download_dir.mkdir(parents=True, exist_ok=True)
+
+    with gzip.open(download_dir / "CON_genome_assembly_v1.0_final.fa.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGAAATTT\n")
+    with gzip.open(download_dir / "Chrall.genes.gff.gz", "wt", encoding="utf-8") as handle:
+        handle.write(
+            "##gff-version 3\n"
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=CON_gene1\n"
+            "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=CON_gene1.t1;Parent=CON_gene1\n"
+            "chr1\tsrc\texon\t1\t9\t.\t+\t.\tID=exon_CON_gene1.t1;Parent=CON_gene1.t1\n"
+        )
+    with gzip.open(download_dir / "Chrall.transcripts.fasta.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">CON_gene1.t1\nATGAAATTT\n")
+    with gzip.open(download_dir / "Chrall.proteins.fasta.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">CON_gene1.p1\nMKF\n")
+
+    genome_list_page.write_text(
+        (
+            "<html><body>"
+            '<a href="/en/list/t385388/genome/t385388.G001">CON_genome_v1.0</a>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+    assembly_page.write_text(
+        (
+            "<html><body>"
+            "<div id='k_contents' "
+            'data-pgtag-genome_assembly_id="t385388.G001" '
+            'data-pgtag-species_id="t385388" '
+            'data-pgtag-species_name="Camellia oleifera" '
+            'data-pgtag-sub_rank="var." '
+            'data-pgtag-sub_name="Nanyongensis" '
+            'data-pgtag-assembly_version="CON_genome_v1.0"></div>'
+            "</body></html>"
+        ),
+        encoding="utf-8",
+    )
+
+    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "plantgarden",
+                    "id": "http://127.0.0.1:{}/en/list/t385388/genome".format(server.server_port),
+                    "species_key": "Camellia_oleifera",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_PLANTGARDEN_WEB_BASE_URL"] = "http://127.0.0.1:{}".format(server.server_port)
+        resolved_manifest = tmp_path / "resolved.tsv"
+        completed = run_script(
+            "--provider",
+            "all",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(tmp_path / "download_cache"),
+            "--resolved-manifest-output",
+            str(resolved_manifest),
+            "--download-only",
+            "--dry-run",
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    rows = list(csv.DictReader(resolved_manifest.open(encoding="utf-8"), delimiter="\t"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["species_key"] == "Camellia_oleifera"
+    assert row["cds_url"].endswith("/en/download/t385388/t385388.G001/Chrall.transcripts.fasta.gz")
+    assert row["gff_url"].endswith("/en/download/t385388/t385388.G001/Chrall.genes.gff.gz")
+    assert row["genome_url"].endswith("/en/download/t385388/t385388.G001/CON_genome_assembly_v1.0_final.fa.gz")
+
+
 def test_download_manifest_jgi_credentials_enable_protected_direct_download(tmp_path):
     server_root = tmp_path / "server_root"
     protected_dir = server_root / "protected"
@@ -2048,6 +2937,135 @@ def test_download_manifest_resolves_gwh_id_via_public_index(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_download_manifest_resolves_gwh_id_via_show_page_fallback(tmp_path):
+    server_root = tmp_path / "server_root"
+    download_folder = server_root / "downloads" / "Aegle_marmelos_GWHBKHK01000000"
+    download_folder.mkdir(parents=True, exist_ok=True)
+
+    with gzip.open(download_folder / "GWHBKHK01000000.CDS.fasta.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">gene1\nATGAAATTT\n")
+    with gzip.open(download_folder / "GWHBKHK01000000.gff.gz", "wt", encoding="utf-8") as handle:
+        handle.write("chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n")
+    with gzip.open(download_folder / "GWHBKHK01000000.genome.fasta.gz", "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGCATGC\n")
+
+    class _GwhShowHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, root_dir=None, **kwargs):
+            self._root_dir = root_dir
+            super().__init__(*args, directory=str(root_dir), **kwargs)
+
+        def _send_json(self, payload):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path == "/gwh/gwhSearch/api":
+                query = parse_qs(parsed.query)
+                term = (query.get("term") or [""])[0]
+                payload = {"totalHits": 0, "data": []}
+                if term == "GWHBKHK01000000":
+                    payload = {
+                        "totalHits": 1,
+                        "data": [
+                            {
+                                "title": "Aegle marmelos",
+                                "url": "http://127.0.0.1:{}/gwh/Assembly/26289/show".format(self.server.server_port),
+                                "attrs": {"source": "Direct submission", "has_annotation": "Yes"},
+                            }
+                        ],
+                    }
+                self._send_json(payload)
+                return
+            if parsed.path == "/gwh/Assembly/26289/show":
+                body = (
+                    "<html><body>"
+                    "<div>Aegle marmelos</div>"
+                    "<div>Scientific Name Aegle marmelos Common Names bael</div>"
+                    '<a href="http://127.0.0.1:{}/downloads/Aegle_marmelos_GWHBKHK01000000/'
+                    'GWHBKHK01000000.genome.fasta.gz">DNA</a>'
+                    '<a href="http://127.0.0.1:{}/downloads/Aegle_marmelos_GWHBKHK01000000/'
+                    'GWHBKHK01000000.gff.gz">GFF</a>'
+                    '<a href="http://127.0.0.1:{}/downloads/Aegle_marmelos_GWHBKHK01000000/'
+                    'GWHBKHK01000000.CDS.fasta.gz">CDS</a>'
+                    "</body></html>"
+                ).format(self.server.server_port, self.server.server_port, self.server.server_port)
+                encoded = body.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+                return
+            super().do_GET()
+
+    handler = lambda *args, **kwargs: _GwhShowHandler(*args, root_dir=server_root, **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "gwh",
+                    "id": "GWHBKHK01000000",
+                    "species_key": "Aegle_marmelos",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        download_dir = tmp_path / "download_cache"
+        out_cds = tmp_path / "out_cds"
+        env = dict(os.environ)
+        env["GG_GWH_DOWNLOAD_BASE_URL"] = "http://127.0.0.1:{}/missing_index".format(server.server_port)
+        env["GG_GWH_WEB_BASE_URL"] = "http://127.0.0.1:{}/gwh".format(server.server_port)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--provider",
+                "gwh",
+                "--download-manifest",
+                str(manifest),
+                "--download-dir",
+                str(download_dir),
+                "--species-cds-dir",
+                str(out_cds),
+                "--species-gff-dir",
+                str(tmp_path / "out_gff"),
+                "--species-genome-dir",
+                str(tmp_path / "out_genome"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+        raw_dir = download_dir / "GWH" / "species_wise_original" / "Aegle_marmelos"
+        assert (raw_dir / "GWHBKHK01000000.CDS.fasta.gz").exists()
+        assert (raw_dir / "GWHBKHK01000000.gff.gz").exists()
+        assert (raw_dir / "GWHBKHK01000000.genome.fasta.gz").exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def test_download_manifest_recovers_stale_lock_file(tmp_path):
