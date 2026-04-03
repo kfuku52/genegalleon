@@ -2271,6 +2271,76 @@ mv_out() {
 	mv -- "$@"
 }
 
+mv_out_replace_dir() {
+	if [[ $# -ne 2 ]]; then
+		echo "mv_out_replace_dir: exactly 2 arguments are required."
+		return 1
+	fi
+	local staged_dir=$1
+	local dest_dir=$2
+	if [[ ! -d "${staged_dir}" ]]; then
+		echo "mv_out_replace_dir: source directory not found: ${staged_dir}"
+		return 1
+	fi
+	if [[ -e "${dest_dir}" || -L "${dest_dir}" ]]; then
+		rm -rf -- "${dest_dir}" || return 1
+	fi
+	ensure_parent_dir "${dest_dir}"
+	mv -- "${staged_dir}" "${dest_dir}"
+}
+
+resolve_rnaspades_transcript_fasta() {
+	if [[ $# -ne 1 ]]; then
+		echo "resolve_rnaspades_transcript_fasta: exactly 1 argument is required."
+		return 1
+	fi
+	local output_dir=$1
+	local candidate=""
+	local candidate_files=(
+		"transcripts.fasta"
+		"soft_filtered_transcripts.fasta"
+		"hard_filtered_transcripts.fasta"
+	)
+	for candidate in "${candidate_files[@]}"; do
+		if [[ -s "${output_dir%/}/${candidate}" ]]; then
+			printf '%s\n' "${output_dir%/}/${candidate}"
+			return 0
+		fi
+	done
+	return 1
+}
+
+capture_busco_repro_artifacts() {
+	if [[ $# -lt 3 || $# -gt 6 ]]; then
+		echo "capture_busco_repro_artifacts: expected 3 to 6 arguments: repro_dir input_fasta busco_tmp_dir [lineage] [stage_key] [stderr_log]"
+		return 1
+	fi
+	local repro_dir=$1
+	local input_fasta=$2
+	local busco_tmp_dir=$3
+	local lineage=${4:-}
+	local stage_key=${5:-}
+	local stderr_log=${6:-}
+
+	recreate_dir "${repro_dir}" || return 1
+	if [[ -s "${input_fasta}" ]]; then
+		cp -- "${input_fasta}" "${repro_dir}/" || return 1
+	fi
+	if [[ -d "${busco_tmp_dir}" ]]; then
+		cp --archive -- "${busco_tmp_dir}" "${repro_dir}/busco_tmp" || return 1
+	fi
+	if [[ -s "${stderr_log}" ]]; then
+		cp -- "${stderr_log}" "${repro_dir}/busco.stderr.log" || return 1
+	fi
+	{
+		printf 'stage_key\t%s\n' "${stage_key}"
+		printf 'lineage\t%s\n' "${lineage}"
+		printf 'input_fasta\t%s\n' "${input_fasta}"
+		printf 'busco_tmp_dir\t%s\n' "${busco_tmp_dir}"
+		printf 'stderr_log\t%s\n' "${stderr_log}"
+	} > "${repro_dir}/capture_info.tsv"
+}
+
 remove_empty_subdirs() {
   local dir_main=$1
   local echo_header="remove_empty_subdirs: "
