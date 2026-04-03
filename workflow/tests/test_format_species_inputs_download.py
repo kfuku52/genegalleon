@@ -1199,6 +1199,79 @@ def test_download_manifest_derives_cds_when_manifest_has_only_gff_and_genome(tmp
     assert "ATGTTT" in cds_text
 
 
+def test_download_manifest_derives_cds_when_direct_urls_need_explicit_target_filenames(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Populus_tremula_x_Populus_alba"
+    gff_source = source_dir / "sPta717_v1.1.gene.gff3.gz"
+    genome_source = source_dir / "sPta717_v1.1.fa.gz"
+    with gzip.open(gff_source, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "\n".join(
+                [
+                    "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
+                    "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                    "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+                    "chr1\tsrc\tCDS\t7\t9\t.\t+\t0\tID=cds2;Parent=gene1.t1",
+                    "",
+                ]
+            )
+        )
+    with gzip.open(genome_source, "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGAAATTT\n")
+
+    manifest = tmp_path / "manifest.tsv"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "direct",
+                "id": "Populus_tremula_x_Populus_alba_AspenDB_sPta717_v1.1",
+                "species_key": species_key,
+                "cds_url": "",
+                "gff_url": to_file_url(gff_source),
+                "genome_url": to_file_url(genome_source),
+                "cds_filename": "",
+                "gff_filename": species_key + ".AspenDB.gene.gff3.gz",
+                "genome_filename": species_key + ".AspenDB.genome.fa.gz",
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    out_cds = tmp_path / "out_cds"
+    out_gff = tmp_path / "out_gff"
+    out_genome = tmp_path / "out_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
+    assert (raw_dir / (species_key + ".AspenDB.gene.gff3.gz")).exists()
+    assert (raw_dir / (species_key + ".AspenDB.genome.fa.gz")).exists()
+    assert not (raw_dir / "sPta717_v1.1.fa.gz").exists()
+
+    matches = list(out_cds.glob("*.derived.cds.fa.gz"))
+    assert len(matches) == 1
+    formatted_cds = matches[0]
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert cds_text.count(">Populus_tremula_gene1") == 1
+    assert "ATGTTT" in cds_text
+
+
 def test_download_manifest_derives_from_gbff_and_genome(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()

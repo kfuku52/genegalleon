@@ -147,6 +147,7 @@ jobs:
           mkdir -p dist dist/prev
 
           tag="download-plan-latest"
+          direct_catalog_manifest="workspace/input/input_generation/direct_catalog_curated.tsv"
           if gh release view "${tag}" >/dev/null 2>&1; then
             gh release download "${tag}" --pattern "id_options_snapshot.json" --dir dist/prev || true
           fi
@@ -156,19 +157,31 @@ jobs:
             fallback_args+=(--fallback-snapshot dist/prev/id_options_snapshot.json)
           fi
 
+          direct_catalog_args=()
+          if [[ -s "${direct_catalog_manifest}" ]]; then
+            direct_catalog_args+=(--direct-catalog-manifest "${direct_catalog_manifest}")
+          fi
+
           python workflow/support/build_id_options_snapshot.py \
             --output dist/id_options_snapshot.json \
             --input-dir "${seed_root}" \
+            "${direct_catalog_args[@]}" \
             "${fallback_args[@]}"
 
       - name: Build latest download plan XLSX
         shell: bash
         run: |
           set -euo pipefail
+          direct_catalog_manifest="workspace/input/input_generation/direct_catalog_curated.tsv"
+          direct_catalog_args=()
+          if [[ -s "${direct_catalog_manifest}" ]]; then
+            direct_catalog_args+=(--direct-catalog-manifest "${direct_catalog_manifest}")
+          fi
           python workflow/support/build_download_manifest.py \
             --provider all \
             --input-dir "${seed_root}" \
             --id-options-snapshot dist/id_options_snapshot.json \
+            "${direct_catalog_args[@]}" \
             --output dist/download_plan.xlsx
 
       - name: Upload workflow artifact

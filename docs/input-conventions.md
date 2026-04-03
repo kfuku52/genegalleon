@@ -281,6 +281,10 @@ XLSX template notes:
 - `download_plan.xlsx` includes drop-downs for `provider` and `id`.
 - `id` drop-down values are provider-specific.
 - provider drop-down order is fixed, and `local` is always listed last.
+- repo-curated public `provider=direct` entries can be versioned in
+  `workspace/input/input_generation/direct_catalog_curated.tsv`.
+- use curated direct entries for public bundles that still need explicit filenames
+  or hand-vetted URLs, instead of falling back to `provider=local`.
 - for large provider (`ncbi`), five model-organism IDs are shown as examples (mixed `GCF_*`/`GCA_*` formats).
 - for `coge` and `cngb`, IDs are example-based by default.
 - for `gwh`, `citrusgenomedb`, `figshare`, `plantgarden`, `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, `oryza_minuta`, `direct`, and `local`,
@@ -343,6 +347,7 @@ python workflow/support/build_download_manifest.py \
   --provider all \
   --input-dir "/path/to/raw_genomes" \
   --id-options-snapshot /path/to/id_options_snapshot.json \
+  --direct-catalog-manifest workspace/input/input_generation/direct_catalog_curated.tsv \
   --output workspace/input/input_generation/download_plan.xlsx
 ```
 
@@ -356,7 +361,8 @@ Latest template distribution:
 - On each push to the default branch, GitHub Actions runs `build_download_manifest.py`
   and publishes the latest `download_plan.xlsx`.
 - The workflow first builds `id_options_snapshot.json` (remote provider ID choices),
-  then generates `download_plan.xlsx` from that snapshot.
+  then generates `download_plan.xlsx` from that snapshot plus
+  `workspace/input/input_generation/direct_catalog_curated.tsv` when present.
 - If remote ID fetch fails for some providers, the workflow reuses provider entries
   from the previous `id_options_snapshot.json` release asset.
 - Release asset URL (rolling latest):
