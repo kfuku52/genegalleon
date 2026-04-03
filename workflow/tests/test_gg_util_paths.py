@@ -707,6 +707,95 @@ def test_mv_out_creates_destination_dir_for_multi_source_move(tmp_path):
     assert (dest_dir / "b.txt").read_text() == "b\n"
 
 
+def test_mv_out_replace_dir_replaces_existing_nonempty_directory(tmp_path):
+    staged_dir = tmp_path / "staged" / "SRR000001"
+    dest_dir = tmp_path / "runtime" / "SRR000001"
+    (staged_dir / "nested").mkdir(parents=True)
+    (staged_dir / "nested" / "new.tsv").write_text("new\n")
+    (dest_dir / "nested").mkdir(parents=True)
+    (dest_dir / "nested" / "old.tsv").write_text("old\n")
+    (dest_dir / "stale.txt").write_text("stale\n")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"mv_out_replace_dir {shlex.quote(str(staged_dir))} {shlex.quote(str(dest_dir))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert not staged_dir.exists()
+    assert not (dest_dir / "stale.txt").exists()
+    assert not (dest_dir / "nested" / "old.tsv").exists()
+    assert (dest_dir / "nested" / "new.tsv").read_text() == "new\n"
+
+
+def test_resolve_rnaspades_transcript_fasta_prefers_primary_output(tmp_path):
+    output_dir = tmp_path / "rnaspades_output"
+    output_dir.mkdir()
+    (output_dir / "transcripts.fasta").write_text(">primary\nAAAA\n")
+    (output_dir / "soft_filtered_transcripts.fasta").write_text(">soft\nCCCC\n")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"resolve_rnaspades_transcript_fasta {shlex.quote(str(output_dir))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == str(output_dir / "transcripts.fasta")
+
+
+def test_resolve_rnaspades_transcript_fasta_falls_back_to_soft_then_hard(tmp_path):
+    output_dir = tmp_path / "rnaspades_output"
+    output_dir.mkdir()
+    (output_dir / "soft_filtered_transcripts.fasta").write_text(">soft\nCCCC\n")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"resolve_rnaspades_transcript_fasta {shlex.quote(str(output_dir))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == str(output_dir / "soft_filtered_transcripts.fasta")
+
+    (output_dir / "soft_filtered_transcripts.fasta").unlink()
+    (output_dir / "hard_filtered_transcripts.fasta").write_text(">hard\nGGGG\n")
+    completed = run_bash(command, cwd=tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == str(output_dir / "hard_filtered_transcripts.fasta")
+
+
+def test_capture_busco_repro_artifacts_saves_input_workdir_and_stderr(tmp_path):
+    repro_dir = tmp_path / "repro"
+    input_fasta = tmp_path / "busco_infile_cdna.fa"
+    busco_tmp = tmp_path / "busco_tmp" / "run_eukaryota_odb12"
+    stderr_log = tmp_path / "busco.stderr.log"
+    input_fasta.write_text(">seq1\nAAAA\n")
+    busco_tmp.mkdir(parents=True)
+    (busco_tmp / "marker.txt").write_text("marker\n")
+    stderr_log.write_text("Failed to open sequence file\n")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"capture_busco_repro_artifacts "
+        f"{shlex.quote(str(repro_dir))} "
+        f"{shlex.quote(str(input_fasta))} "
+        f"{shlex.quote(str(tmp_path / 'busco_tmp'))} "
+        f"eukaryota_odb12 cdna_isoforms "
+        f"{shlex.quote(str(stderr_log))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert (repro_dir / "busco_infile_cdna.fa").read_text() == ">seq1\nAAAA\n"
+    assert (repro_dir / "busco_tmp" / "run_eukaryota_odb12" / "marker.txt").read_text() == "marker\n"
+    assert (repro_dir / "busco.stderr.log").read_text() == "Failed to open sequence file\n"
+    info = (repro_dir / "capture_info.tsv").read_text()
+    assert "stage_key\tcdna_isoforms\n" in info
+    assert "lineage\teukaryota_odb12\n" in info
+
+
 def test_ensure_jaspar_file_latest_prefers_highest_local_release(tmp_path):
     project_dir = tmp_path / "project"
     jaspar_dir = project_dir / "downloads" / "jaspar"

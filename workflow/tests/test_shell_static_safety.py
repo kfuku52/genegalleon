@@ -896,6 +896,35 @@ def test_cp_out_and_mv_out_prepare_destination_dir_for_multisource_or_trailing_s
     assert 'ensure_parent_dir "${dest}"' in mv_body
 
 
+def test_mv_out_replace_dir_replaces_existing_destination_tree_safely():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "mv_out_replace_dir")
+    assert 'rm -rf -- "${dest_dir}"' in body
+    assert 'ensure_parent_dir "${dest_dir}"' in body
+    assert 'mv -- "${staged_dir}" "${dest_dir}"' in body
+    assert 'mv "${staged_dir}" "${dest_dir}"' not in body
+
+
+def test_resolve_rnaspades_transcript_fasta_checks_supported_output_names():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "resolve_rnaspades_transcript_fasta")
+    assert '"transcripts.fasta"' in body
+    assert '"soft_filtered_transcripts.fasta"' in body
+    assert '"hard_filtered_transcripts.fasta"' in body
+
+
+def test_capture_busco_repro_artifacts_recreates_dir_and_copies_artifacts_safely():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    text = _read_text(util_path)
+    body = _function_body(text, "capture_busco_repro_artifacts")
+    assert 'recreate_dir "${repro_dir}"' in body
+    assert 'cp -- "${input_fasta}" "${repro_dir}/"' in body
+    assert 'cp --archive -- "${busco_tmp_dir}" "${repro_dir}/busco_tmp"' in body
+    assert 'cp -- "${stderr_log}" "${repro_dir}/busco.stderr.log"' in body
+
+
 def test_no_if_bracket_dollar_question_nonzero_checks():
     pattern = re.compile(r"if[ \t]+\[\[[^\n]*\$\?[^\n]*\]\]", re.MULTILINE)
     for script in _workflow_shell_scripts():
@@ -2538,15 +2567,17 @@ def test_gene_evolution_core_quotes_orthogroup_lookup_and_makeblastdb_args():
     assert 'makeblastdb -dbtype nucl -in "${sp_cds}" -out "${sp_cds_blastdb}"' in text
 
 
-def test_transcriptome_core_avoids_direct_mv_out_glob_for_getfastq_and_quant():
+def test_transcriptome_core_uses_rerun_safe_directory_replacement_for_staged_outputs():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
     assert 'mv_out "${dir_tmp}"/getfastq/* "${dir_amalgkit_getfastq_sp}"' not in text
     assert "mv_out ./quant/* \"${dir_amalgkit_quant}/${sp_ub}\"" not in text
+    assert 'mv_out "./merge/${sp_ub}" "$(dirname "$(dirname "${file_amalgkit_merge_tpm}")")"' not in text
     assert 'getfastq_outputs=("${dir_tmp}"/getfastq/*)' in text
-    assert 'mv_out "${getfastq_outputs[@]}" "${dir_amalgkit_getfastq_sp}"' in text
+    assert 'mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"' in text
     assert "quant_outputs=(./quant/*)" in text
-    assert 'mv_out "${quant_outputs[@]}" "${dir_amalgkit_quant}/${sp_ub}"' in text
+    assert 'mv_out_replace_dir "./quant" "${dir_amalgkit_quant}/${sp_ub}"' in text
+    assert 'mv_out_replace_dir "./merge/${sp_ub}" "$(dirname "${file_amalgkit_merge_tpm}")"' in text
 
 
 def test_no_cp_out_or_mv_out_glob_arguments_in_core_scripts():
@@ -2817,6 +2848,22 @@ def test_transcriptome_core_uses_array_args_for_trinity_and_rnaspades_inputs():
     assert "rnaspades_input=$(for i in" not in text
     assert "rnaspades_input_args=()" in text
     assert '"${rnaspades_input_args[@]}"' in text
+    assert 'rnaspades_transcript_fasta=$(resolve_rnaspades_transcript_fasta "${dir_tmp}/rnaspades_output")' in text
+    assert 'echo "Using rnaSPAdes transcript fasta: ${rnaspades_transcript_fasta}"' in text
+    assert 'Checked: transcripts.fasta, soft_filtered_transcripts.fasta, hard_filtered_transcripts.fasta' in text
+
+
+def test_transcriptome_core_captures_busco_repro_artifacts_on_failure_paths():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    assert 'capture_busco_failure_context() {' in text
+    assert 'run_busco_with_capture() {' in text
+    assert 'capture_busco_repro_artifacts \\' in text
+    assert '2> >(tee "${stderr_log}" >&2)' in text
+    assert 'if ! run_busco_with_capture "cdna_isoforms" "busco_infile_cdna.fa"; then' in text
+    assert 'if ! run_busco_with_capture "longest_cds" "busco_infile_cds.fa"; then' in text
+    assert 'if ! run_busco_with_capture "contamination_removed_longest_cds" "busco_infile_cds.fa"; then' in text
+    assert 'capture_busco_failure_context "cdna_isoforms" "busco_infile_cdna.fa" "./busco_tmp.stderr.log"' in text
 
 
 def test_transcriptome_core_uses_array_for_assembly_stat_input_files():

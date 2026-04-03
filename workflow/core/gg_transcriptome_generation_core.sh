@@ -77,6 +77,55 @@ resolve_busco_lineage_for_current_species() {
   echo "Resolved BUSCO lineage for ${sp_ub}: ${busco_lineage_resolved}"
 }
 
+capture_busco_failure_context() {
+  local stage_key=$1
+  local input_fasta=$2
+  local stderr_log=$3
+  local repro_dir=""
+
+  repro_dir="${dir_transcriptome_assembly_output}/busco_repro/${sp_ub}/${stage_key}"
+  echo "Capturing BUSCO repro artifacts to: ${repro_dir}"
+  capture_busco_repro_artifacts \
+    "${repro_dir}" \
+    "${input_fasta}" \
+    "./busco_tmp" \
+    "${busco_lineage_resolved}" \
+    "${stage_key}" \
+    "${stderr_log}"
+}
+
+run_busco_with_capture() {
+  local stage_key=$1
+  local input_fasta=$2
+  local stderr_log="./busco_tmp.stderr.log"
+
+  if [[ -e "./busco_tmp" ]]; then
+    rm -rf -- "./busco_tmp"
+  fi
+  if [[ -e "${stderr_log}" ]]; then
+    rm -f -- "${stderr_log}"
+  fi
+
+  if ! busco \
+    --in "${input_fasta}" \
+    --mode transcriptome \
+    --out "busco_tmp" \
+    --cpu "${GG_TASK_CPUS}" \
+    --force \
+    --evalue 1e-03 \
+    --limit 20 \
+    --lineage_dataset "${dir_busco_lineage}" \
+    --download_path "${dir_busco_db}" \
+    --offline \
+    2> >(tee "${stderr_log}" >&2); then
+    echo "BUSCO failed for ${stage_key}. Capturing repro artifacts."
+    capture_busco_failure_context "${stage_key}" "${input_fasta}" "${stderr_log}" || return 1
+    return 1
+  fi
+
+  return 0
+}
+
 invalidate_cached_query_table_if_prefix_mismatch() {
   local table_file=$1
   local expected_prefix=$2
@@ -550,7 +599,7 @@ run_amalgkit_getfastq_attempt() {
       cleanup_partial_getfastq_outputs
       return 1
     fi
-    mv_out "${getfastq_outputs[@]}" "${dir_amalgkit_getfastq_sp}"
+    mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"
     rm -rf -- "${dir_tmp}/getfastq"
     return 0
   fi
@@ -1438,6 +1487,7 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
         mv_out "tmp.isoform.fa.gz" "${file_isoform}"
       fi
     elif [[ "${effective_assembly_method}" == 'rnaspades' ]]; then
+      rnaspades_transcript_fasta=""
       rnaspades_input_args=()
       if [[ ${protocol_rna_seq} == "same" ]]; then
         if [[ ${lib_layout} == 'single' ]]; then
@@ -1474,9 +1524,18 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
         --memory "${assembly_mem_gb}" \
         -o rnaspades_output \
         "${rnaspades_input_args[@]}"
-      if [[ -s "${dir_tmp}/rnaspades_output/transcripts.fasta" ]]; then
-        seqkit seq --threads "${GG_TASK_CPUS}" "${dir_tmp}/rnaspades_output/transcripts.fasta" --out-file "tmp.isoform.fa.gz"
+      if rnaspades_transcript_fasta=$(resolve_rnaspades_transcript_fasta "${dir_tmp}/rnaspades_output"); then
+        echo "Using rnaSPAdes transcript fasta: ${rnaspades_transcript_fasta}"
+        seqkit seq --threads "${GG_TASK_CPUS}" "${rnaspades_transcript_fasta}" --out-file "tmp.isoform.fa.gz"
+        if [[ ! -s "tmp.isoform.fa.gz" ]]; then
+          echo "Failed to generate tmp.isoform.fa.gz from rnaSPAdes output: ${rnaspades_transcript_fasta}. Exiting."
+          exit 1
+        fi
         mv_out "tmp.isoform.fa.gz" "${file_isoform}"
+      else
+        echo "rnaSPAdes did not produce a supported transcript fasta under: ${dir_tmp}/rnaspades_output."
+        echo "Checked: transcripts.fasta, soft_filtered_transcripts.fasta, hard_filtered_transcripts.fasta"
+        exit 1
       fi
     fi
   fi
@@ -1762,24 +1821,19 @@ if [[ (! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna_
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  busco \
-    --in "busco_infile_cdna.fa" \
-    --mode transcriptome \
-    --out "busco_tmp" \
-    --cpu "${GG_TASK_CPUS}" \
-    --force \
-    --evalue 1e-03 \
-    --limit 20 \
-    --lineage_dataset "${dir_busco_lineage}" \
-    --download_path "${dir_busco_db}" \
-    --offline
+  if ! run_busco_with_capture "cdna_isoforms" "busco_infile_cdna.fa"; then
+    exit 1
+  fi
 
   if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_cdna_isoforms}" "${file_busco_short_cdna_isoforms}"; then
+    echo "Failed to locate normalized BUSCO outputs for cDNA isoforms. Capturing repro artifacts."
+    capture_busco_failure_context "cdna_isoforms" "busco_infile_cdna.fa" "./busco_tmp.stderr.log" || true
     echo "Failed to locate normalized BUSCO outputs for cDNA isoforms. Exiting."
     exit 1
   fi
   rm -rf -- "./busco_tmp"
   rm -f -- "busco_infile_cdna.fa"
+  rm -f -- "./busco_tmp.stderr.log"
 
   echo "$(date): End: ${task}"
 else
@@ -1802,24 +1856,19 @@ if [[ (! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longest
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  busco \
-    --in "busco_infile_cds.fa" \
-    --mode transcriptome \
-    --out "busco_tmp" \
-    --cpu "${GG_TASK_CPUS}" \
-    --force \
-    --evalue 1e-03 \
-    --limit 20 \
-    --lineage_dataset "${dir_busco_lineage}" \
-    --download_path "${dir_busco_db}" \
-    --offline
+  if ! run_busco_with_capture "longest_cds" "busco_infile_cds.fa"; then
+    exit 1
+  fi
 
   if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_longest_cds}" "${file_busco_short_longest_cds}"; then
+    echo "Failed to locate normalized BUSCO outputs for longest CDS. Capturing repro artifacts."
+    capture_busco_failure_context "longest_cds" "busco_infile_cds.fa" "./busco_tmp.stderr.log" || true
     echo "Failed to locate normalized BUSCO outputs for longest CDS. Exiting."
     exit 1
   fi
   rm -rf -- "./busco_tmp"
   rm -f -- "busco_infile_cds.fa"
+  rm -f -- "./busco_tmp.stderr.log"
 
   echo "$(date): End: ${task}"
 else
@@ -1842,24 +1891,19 @@ if [[ (! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_shor
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  busco \
-    --in "busco_infile_cds.fa" \
-    --mode transcriptome \
-    --out "busco_tmp" \
-    --cpu "${GG_TASK_CPUS}" \
-    --force \
-    --evalue 1e-03 \
-    --limit 20 \
-    --lineage_dataset "${dir_busco_lineage}" \
-    --download_path "${dir_busco_db}" \
-    --offline
+  if ! run_busco_with_capture "contamination_removed_longest_cds" "busco_infile_cds.fa"; then
+    exit 1
+  fi
 
   if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_longest_cds_filtered}" "${file_busco_short_longest_cds_filtered}"; then
+    echo "Failed to locate normalized BUSCO outputs for contamination-removed longest CDS. Capturing repro artifacts."
+    capture_busco_failure_context "contamination_removed_longest_cds" "busco_infile_cds.fa" "./busco_tmp.stderr.log" || true
     echo "Failed to locate normalized BUSCO outputs for contamination-removed longest CDS. Exiting."
     exit 1
   fi
   rm -rf -- "./busco_tmp"
   rm -f -- "busco_infile_cds.fa"
+  rm -f -- "./busco_tmp.stderr.log"
 
   echo "$(date): End: ${task}"
 else
@@ -1983,9 +2027,6 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
     exit 1
   else
     echo "amalgkit quant finished successfully"
-    if [[ ! -e "${dir_amalgkit_quant}/${sp_ub}" ]]; then
-      mkdir -p "${dir_amalgkit_quant}/${sp_ub}"
-    fi
     shopt -s nullglob
     quant_outputs=(./quant/*)
     shopt -u nullglob
@@ -1993,7 +2034,7 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
       echo "amalgkit quant finished but no files were found in ./quant."
       exit 1
     fi
-    mv_out "${quant_outputs[@]}" "${dir_amalgkit_quant}/${sp_ub}"
+    mv_out_replace_dir "./quant" "${dir_amalgkit_quant}/${sp_ub}"
     rm -rf -- "./quant"
     rm -f -- "./getfastq" # Do not put -r, otherwise the original getfastq files will be deleted.
   fi
@@ -2020,7 +2061,7 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
   #sp_metadata=$(python -c "import pandas; d=pandas.read_csv('${file_amalgkit_metadata}',sep='\t',header=0); print(d.at[0,'scientific_name'].replace(' ','_'))")
   if [[ -s "./merge/${sp_ub}/${sp_ub}_eff_length.tsv" ]]; then
     echo "Copying amalgkit merge outputs from: ./merge/${sp_ub}"
-    mv_out "./merge/${sp_ub}" "$(dirname "$(dirname "${file_amalgkit_merge_tpm}")")"
+    mv_out_replace_dir "./merge/${sp_ub}" "$(dirname "${file_amalgkit_merge_tpm}")"
     mv_out "./merge/metadata.tsv" "${file_amalgkit_merge_metadata}"
     rm -rf -- "./merge"
     rm -f -- "./quant" # Do not put -r, otherwise the original quant files will be deleted.
