@@ -1619,7 +1619,7 @@ if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree
   num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
   for ((i = 2; i <= num_busco_ids + 1; i++)); do # starting from 2 because the line 1 is header.
     wait_until_jobn_le ${GG_TASK_CPUS}
-    generate_dupaware_copy_fasta ${i} ${strictly_single_copy_only} &
+    generate_dupaware_busco_fasta ${i} ${strictly_single_copy_only} &
   done
   wait_for_background_jobs
   rm -f -- species_tree_input_fasta_list.txt
