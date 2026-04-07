@@ -147,6 +147,7 @@ NCBI_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^GC[AF]_[0-9]+\.[0-9]+$", re.IGNO
 ENSEMBL_GENE_ID_PATTERN = re.compile(r"^ENS[A-Z0-9]*G[0-9]+(?:\.[0-9]+)?$", re.IGNORECASE)
 COGE_ID_HINT_PATTERN = re.compile(r"^coge[:_].+", re.IGNORECASE)
 CNGB_ID_HINT_PATTERN = re.compile(r"^cngb[:_].+", re.IGNORECASE)
+DDBJ_ID_HINT_PATTERN = re.compile(r"^ddbj[:_].+", re.IGNORECASE)
 GWH_ID_HINT_PATTERN = re.compile(r"^gwh[:_].+", re.IGNORECASE)
 CITRUSGENOMEDB_ID_HINT_PATTERN = re.compile(r"^citrusgenomedb[:_].+", re.IGNORECASE)
 FIGSHARE_ID_HINT_PATTERN = re.compile(r"^figshare[:_].+", re.IGNORECASE)
@@ -161,6 +162,10 @@ ORYZA_MINUTA_ID_HINT_PATTERN = re.compile(r"^oryza_minuta[:_].+", re.IGNORECASE)
 INSECTBASE_IBG_ID_PATTERN = re.compile(r"^IBG_[0-9]+$", re.IGNORECASE)
 COGE_GID_PATTERN = re.compile(r"^[0-9]+$")
 CNGB_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^CNA[0-9]+$", re.IGNORECASE)
+DDBJ_BIOPROJECT_PATTERN = re.compile(r"(PRJDB[0-9]+)", re.IGNORECASE)
+DDBJ_WGS_MASTER_ACCESSION_PATTERN = re.compile(r"^([A-Z]{4,6})0{8,9}(?:\.[0-9]+)?$", re.IGNORECASE)
+DDBJ_WGS_ACCESSION_PATTERN = re.compile(r"^([A-Z]{4,6})[0-9]{8,9}(?:\.[0-9]+)?$", re.IGNORECASE)
+DDBJ_WGS_PROJECT_PREFIX_PATTERN = re.compile(r"^[A-Z]{4,6}$", re.IGNORECASE)
 GWH_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^GWH[A-Z0-9]+(?:\.[0-9]+)?$", re.IGNORECASE)
 GWH_ASSEMBLY_ACCESSION_SEARCH_PATTERN = re.compile(r"(GWH[A-Z0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 CITRUSGENOMEDB_BINOMIAL_PATTERN = re.compile(r"\b([A-Z][a-z]+)\s+((?:x\s+)?[a-z][a-z-]+)\b")
@@ -174,6 +179,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "phycocosm": Path("PhycoCosm") / "species_wise_original",
     "phytozome": Path("Phytozome") / "species_wise_original",
     "ncbi": Path("NCBI_Genome") / "species_wise_original",
+    "ddbj": Path("DDBJ") / "species_wise_original",
     "refseq": Path("NCBI_RefSeq") / "species_wise_original",
     "genbank": Path("NCBI_GenBank") / "species_wise_original",
     "coge": Path("CoGe") / "species_wise_original",
@@ -201,6 +207,7 @@ PROVIDERS = (
     "phycocosm",
     "phytozome",
     "ncbi",
+    "ddbj",
     "refseq",
     "genbank",
     "coge",
@@ -225,6 +232,7 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "ensembl",
     "ensemblplants",
     "ncbi",
+    "ddbj",
     "refseq",
     "genbank",
     "coge",
@@ -253,6 +261,8 @@ SHARED_DOWNLOAD_LOCK_FORMAT = "shared-lock-v2"
 DEFAULT_NCBI_EUTILS_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_NCBI_FTP_BASE_URL = "https://ftp.ncbi.nlm.nih.gov"
 DEFAULT_NCBI_DATASETS_BASE_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2"
+DEFAULT_DDBJ_SEARCH_API_BASE_URL = "https://ddbj.nig.ac.jp/search/api"
+DEFAULT_DDBJ_PUBLIC_WGS_BASE_URL = "https://ddbj.nig.ac.jp/public/ddbj_database/wgs"
 TRANSIENT_HTTP_STATUS_CODES = frozenset((408, 425, 429, 500, 502, 503, 504))
 DEFAULT_COGE_API_BASE_URL = "https://genomevolution.org/coge/api/v1"
 DEFAULT_COGE_WEB_BASE_URL = "https://genomevolution.org/coge"
@@ -388,6 +398,7 @@ PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     # We keep concurrent file downloads conservative and separately enforce
     # E-utilities request throttling below.
     "ncbi": 2,
+    "ddbj": 1,
     "refseq": 2,
     "genbank": 2,
     # No explicit numeric concurrency guidance was found for these sources;
@@ -1278,6 +1289,7 @@ def provider_raw_dir(provider, download_root, species_key):
         "phycocosm",
         "phytozome",
         "ncbi",
+        "ddbj",
         "refseq",
         "genbank",
         "coge",
@@ -1310,6 +1322,8 @@ def infer_provider_from_id(source_id):
         return "ncbi"
     if "ncbi.nlm.nih.gov/datasets/genome/" in lowered:
         return "ncbi"
+    if DDBJ_ID_HINT_PATTERN.match(source_id):
+        return "ddbj"
     if ENSEMBL_ID_HINT_PATTERN.match(source_id):
         return "ensembl"
     if FERNBASE_ID_HINT_PATTERN.match(source_id):
@@ -1340,6 +1354,10 @@ def infer_provider_from_id(source_id):
         return "plantaedb"
     if CNGB_ID_HINT_PATTERN.match(source_id):
         return "cngb"
+    if extract_ddbj_bioproject_id(source_id) != "":
+        return "ddbj"
+    if extract_ddbj_wgs_prefix(source_id) != "":
+        return "ddbj"
     if GWH_ASSEMBLY_ACCESSION_PATTERN.match(source_id):
         return "gwh"
     if CNGB_ASSEMBLY_ACCESSION_PATTERN.match(source_id):
@@ -1358,6 +1376,8 @@ def infer_provider_from_id(source_id):
         return "plantaedb"
     if "cngb.org" in lowered or "cncb.ac.cn" in lowered:
         return "cngb"
+    if "ddbj.nig.ac.jp/" in lowered or "getentry.ddbj.nig.ac.jp/" in lowered:
+        return "ddbj"
     if "flybase.org" in lowered:
         return "flybase"
     if "wormbase.org" in lowered:
@@ -2246,6 +2266,184 @@ def resolve_oryza_minuta_download_urls_from_id(source_id, species_key, timeout, 
 def fetch_json_with_headers(url, timeout, headers):
     text = fetch_text_with_headers(url, timeout, headers)
     return json.loads(text)
+
+
+def resolve_ddbj_search_api_base_url():
+    return os.environ.get("GG_DDBJ_SEARCH_API_BASE_URL", DEFAULT_DDBJ_SEARCH_API_BASE_URL).rstrip("/")
+
+
+def resolve_ddbj_public_wgs_base_url():
+    return os.environ.get("GG_DDBJ_PUBLIC_WGS_BASE_URL", DEFAULT_DDBJ_PUBLIC_WGS_BASE_URL).rstrip("/")
+
+
+def ddbj_entry_organism_name(entry):
+    organism = entry.get("organism")
+    if isinstance(organism, dict):
+        return str(organism.get("name") or "").strip()
+    return str(organism or "").strip()
+
+
+def extract_ddbj_bioproject_id(source_id):
+    text = str(source_id or "").strip()
+    if text == "":
+        return ""
+    match = DDBJ_BIOPROJECT_PATTERN.search(text)
+    if match is None:
+        return ""
+    return str(match.group(1) or "").upper()
+
+
+def extract_ddbj_wgs_prefix(source_id):
+    text = str(source_id or "").strip()
+    if text == "":
+        return ""
+    stripped = strip_provider_prefix(text, "ddbj").strip()
+    if stripped == "":
+        stripped = text
+    if is_url_like(stripped):
+        parsed = urlparse(stripped)
+        for key in ("accession_number", "id"):
+            for value in parse_qs(parsed.query).get(key, []):
+                prefix = extract_ddbj_wgs_prefix(value)
+                if prefix != "":
+                    return prefix
+        for part in parsed.path.split("/"):
+            prefix = extract_ddbj_wgs_prefix(unquote(part))
+            if prefix != "":
+                return prefix
+        return ""
+
+    candidate = re.sub(r"(?:[.]gz|[.]gbff|[.]gbk|[.]gb|[.]genbank)+$", "", stripped, flags=re.IGNORECASE)
+    candidate = candidate.split()[0].strip().upper()
+    if candidate == "":
+        return ""
+    if DDBJ_WGS_PROJECT_PREFIX_PATTERN.fullmatch(candidate):
+        return candidate
+    for pattern in (DDBJ_WGS_MASTER_ACCESSION_PATTERN, DDBJ_WGS_ACCESSION_PATTERN):
+        match = pattern.match(candidate)
+        if match is not None:
+            return str(match.group(1) or "").upper()
+    search = re.search(r"\b([A-Z]{4,6})(?:0{8,9}|[0-9]{8,9})(?:\.[0-9]+)?\b", candidate, flags=re.IGNORECASE)
+    if search is None:
+        return ""
+    return str(search.group(1) or "").upper()
+
+
+def remote_resource_exists(url, timeout, headers):
+    req_headers = dict(headers)
+    if "User-Agent" not in req_headers:
+        req_headers["User-Agent"] = "genegalleon-input-generation"
+    try:
+        request = Request(url, headers=req_headers, method="HEAD")
+        with urlopen(request, timeout=timeout):
+            return True
+    except HTTPError as exc:
+        if exc.code == 404:
+            return False
+        if exc.code not in (405, 501):
+            raise
+    fallback_headers = dict(req_headers)
+    if "Range" not in fallback_headers:
+        fallback_headers["Range"] = "bytes=0-0"
+    try:
+        request = Request(url, headers=fallback_headers)
+        with urlopen(request, timeout=timeout):
+            return True
+    except HTTPError as exc:
+        if exc.code == 404:
+            return False
+        raise
+
+
+def ddbj_wgs_candidate_urls(prefix):
+    normalized_prefix = str(prefix or "").strip().upper()
+    if normalized_prefix == "":
+        return []
+    base = resolve_ddbj_public_wgs_base_url().rstrip("/")
+    candidates = []
+
+    def add(url):
+        if url not in candidates:
+            candidates.append(url)
+
+    if len(normalized_prefix) >= 4:
+        add(
+            "{}/{}/{}/{}.gz".format(
+                base,
+                quote(normalized_prefix[:2], safe=""),
+                quote(normalized_prefix[2:4], safe=""),
+                quote(normalized_prefix, safe=""),
+            )
+        )
+    if len(normalized_prefix) >= 2:
+        add(
+            "{}/{}/{}.gz".format(
+                base,
+                quote(normalized_prefix[:2], safe=""),
+                quote(normalized_prefix, safe=""),
+            )
+        )
+    return candidates
+
+
+def collect_ddbj_wgs_prefixes_from_bioproject_entry(entry):
+    prefixes = []
+    for item in entry.get("dbXrefs", ()):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("type") or "").strip().lower() != "insdc-master":
+            continue
+        prefix = extract_ddbj_wgs_prefix(str(item.get("identifier") or "").strip())
+        if prefix == "" or prefix in prefixes:
+            continue
+        prefixes.append(prefix)
+    return prefixes
+
+
+def resolve_ddbj_download_urls_from_id(source_id, species_key, timeout, headers):
+    inferred_species_key = str(species_key or "").strip()
+    prefix_candidates = []
+    bioproject_id = extract_ddbj_bioproject_id(source_id)
+    entry_url = ""
+    if bioproject_id != "":
+        entry_url = "{}/entries/bioproject/{}".format(
+            resolve_ddbj_search_api_base_url(),
+            quote(bioproject_id, safe=""),
+        )
+        entry = fetch_json_with_headers(entry_url, timeout, headers)
+        if inferred_species_key == "":
+            inferred_species_key = parse_species_key_candidate(ddbj_entry_organism_name(entry))
+        prefix_candidates.extend(collect_ddbj_wgs_prefixes_from_bioproject_entry(entry))
+        if len(prefix_candidates) == 0:
+            dbxrefs_entry = fetch_json_with_headers(entry_url + "/dbxrefs.json", timeout, headers)
+            prefix_candidates.extend(collect_ddbj_wgs_prefixes_from_bioproject_entry(dbxrefs_entry))
+
+    direct_prefix = extract_ddbj_wgs_prefix(source_id)
+    if direct_prefix != "" and direct_prefix not in prefix_candidates:
+        prefix_candidates.append(direct_prefix)
+    if len(prefix_candidates) == 0:
+        raise ValueError(
+            "DDBJ id '{}' did not resolve to a public WGS BioProject or master accession".format(source_id)
+        )
+
+    attempted_urls = []
+    for prefix in prefix_candidates:
+        for candidate_url in ddbj_wgs_candidate_urls(prefix):
+            attempted_urls.append(candidate_url)
+            if remote_resource_exists(candidate_url, timeout, headers):
+                return {
+                    "species_key": inferred_species_key,
+                    "gbff_url": candidate_url,
+                    "gbff_filename": "{}.gbff.gz".format(prefix),
+                }
+
+    raise ValueError(
+        "DDBJ id '{}' resolved to WGS prefix(es) {} but no public GBFF was found at {}".format(
+            source_id,
+            ",".join(prefix_candidates),
+            ", ".join(attempted_urls),
+        )
+    )
 
 
 def resolve_coge_api_base_url():
@@ -3634,6 +3832,8 @@ def resolve_provider_specific_download_urls_from_id(provider, source_id, species
         return resolve_coge_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "cngb":
         return resolve_cngb_download_urls_from_id(source_id, timeout, headers)
+    if provider == "ddbj":
+        return resolve_ddbj_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "gwh":
         return resolve_gwh_download_urls_from_id(source_id, species_key, timeout, headers)
     if provider == "citrusgenomedb":
@@ -7237,7 +7437,7 @@ def discover_tasks(provider, input_dir):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "cngb":
         return discover_generic_species_dir_tasks(provider, input_dir)
-    if provider in ("gwh", "citrusgenomedb", "plantgarden", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase", "insectbase", ORYZA_MINUTA_PROVIDER, "direct"):
+    if provider in ("ddbj", "gwh", "citrusgenomedb", "plantgarden", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase", "insectbase", ORYZA_MINUTA_PROVIDER, "direct"):
         return discover_generic_species_dir_tasks(provider, input_dir)
     if provider == "local":
         return discover_generic_species_dir_tasks(provider, input_dir)

@@ -399,11 +399,12 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
 
         list_sheet = workbook["_lists"]
-        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 21)]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 22)]
         assert provider_values == [
             "ensembl",
             "ensemblplants",
             "ncbi",
+            "ddbj",
             "coge",
             "cngb",
             "gwh",
@@ -482,6 +483,7 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
             "ensembl",
             "ensemblplants",
             "ncbi",
+            "ddbj",
             "coge",
             "cngb",
             "gwh",
@@ -503,6 +505,7 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         provider_col = {provider: idx + 2 for idx, provider in enumerate(provider_order)}
         coge_values = read_list_column_values(list_sheet, provider_col["coge"])
         cngb_values = read_list_column_values(list_sheet, provider_col["cngb"])
+        ddbj_values = read_list_column_values(list_sheet, provider_col["ddbj"])
         gwh_values = read_list_column_values(list_sheet, provider_col["gwh"])
         citrusgenomedb_values = read_list_column_values(list_sheet, provider_col["citrusgenomedb"])
         figshare_values = read_list_column_values(list_sheet, provider_col["figshare"])
@@ -517,6 +520,10 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         local_values = read_list_column_values(list_sheet, provider_col["local"])
         ncbi_values = read_list_column_values(list_sheet, provider_col["ncbi"])
 
+        assert ddbj_values == [
+            "PRJDB15739 (Triphyophyllum peltatum)",
+            "BAAHMP000000000 (Triphyophyllum peltatum WGS master)",
+        ]
         assert coge_values == [
             "24739 (Arabidopsis thaliana)",
             "29177 (Oryza sativa)",
@@ -690,6 +697,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
             "ensembl",
             "ensemblplants",
             "ncbi",
+            "ddbj",
             "coge",
             "cngb",
             "gwh",
@@ -712,6 +720,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         ensembl_values = read_list_column_values(list_sheet, provider_col["ensembl"])
         ensemblplants_values = read_list_column_values(list_sheet, provider_col["ensemblplants"])
         ncbi_values = read_list_column_values(list_sheet, provider_col["ncbi"])
+        ddbj_values = read_list_column_values(list_sheet, provider_col["ddbj"])
         coge_values = read_list_column_values(list_sheet, provider_col["coge"])
         cngb_values = read_list_column_values(list_sheet, provider_col["cngb"])
         gwh_values = read_list_column_values(list_sheet, provider_col["gwh"])
@@ -738,6 +747,10 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
             "arabidopsis_thaliana (Arabidopsis thaliana)",
         ]
         assert "FAKE_NCBI_ID (Fake species)" not in ncbi_values
+        assert ddbj_values == [
+            "PRJDB15739 (Triphyophyllum peltatum)",
+            "BAAHMP000000000 (Triphyophyllum peltatum WGS master)",
+        ]
         assert ncbi_values == [
             "GCF_000001405.40 (Homo sapiens)",
             "GCA_000001635.9 (Mus musculus)",

@@ -90,7 +90,7 @@ run_multispecies_summary=1 # Generate multi-species BUSCO summary plots and tabl
 run_generate_species_trait=0 # Generate species_trait.tsv from downloaded or local metadata sources.
 
 # Shared parameters
-provider="all" # all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local
+provider="all" # all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|ddbj|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local
 input_generation_mode="single" # single=all stages in one run | array_prepare=build task plan | array_worker=run one species task per GG_ARRAY_TASK_ID | array_finalize=merge shards and run shared validation/summaries
 trait_profile="none" # none|gift_starter
 busco_lineage="${GG_COMMON_BUSCO_LINEAGE:-auto}" # BUSCO lineage dataset name, or auto to infer a shared dataset from the discovered species set.

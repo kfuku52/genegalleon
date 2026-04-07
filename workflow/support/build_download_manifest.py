@@ -71,6 +71,7 @@ PROVIDERS = (
     "ensembl",
     "ensemblplants",
     "ncbi",
+    "ddbj",
     "coge",
     "cngb",
     "gwh",
@@ -103,6 +104,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "ensembl": Path("Ensembl") / "original_files",
     "ensemblplants": Path("20230216_EnsemblPlants") / "original_files",
     "ncbi": Path("NCBI_Genome") / "species_wise_original",
+    "ddbj": Path("DDBJ") / "species_wise_original",
     "coge": Path("CoGe") / "species_wise_original",
     "cngb": Path("CNGB") / "species_wise_original",
     "gwh": Path("GWH") / "species_wise_original",
@@ -174,6 +176,7 @@ HEADER_COMMENTS = {
             "Examples:",
             "- ensembl: homo_sapiens",
             "- ncbi: GCF_000001405.40 or GCA_000001635.9",
+            "- ddbj: PRJDB15739 or BAAHMP000000000",
             "- coge: numeric genome_id (gid), for example 24739",
             "- cngb: CNA... or GCA/GCF accession",
             "- gwh: GWH... accession, for example GWHIGRM00000000.1",
@@ -443,6 +446,7 @@ LARGE_ID_PROVIDERS = ("ncbi",)
 SNAPSHOT_FULL_ID_PROVIDERS = (
     "ensembl",
     "ensemblplants",
+    "ddbj",
     "gwh",
     "citrusgenomedb",
     "figshare",
@@ -460,6 +464,7 @@ SNAPSHOT_FULL_ID_PROVIDERS = (
     "local",
 )
 EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
+DDBJ_WGS_MASTER_ACCESSION_PATTERN = re.compile(r"([A-Z]{4,6})0{8,9}(?:\.[0-9]+)?", re.IGNORECASE)
 
 ID_EXAMPLES_BY_PROVIDER = {
     "ensembl": (("homo_sapiens", "Homo sapiens"), ("mus_musculus", "Mus musculus")),
@@ -470,6 +475,10 @@ ID_EXAMPLES_BY_PROVIDER = {
         ("GCF_049306965.1", "Danio rerio"),
         ("GCA_000001215.4", "Drosophila melanogaster"),
         ("GCF_000002985.6", "Caenorhabditis elegans"),
+    ),
+    "ddbj": (
+        ("PRJDB15739", "Triphyophyllum peltatum"),
+        ("BAAHMP000000000", "Triphyophyllum peltatum WGS master"),
     ),
     "coge": (
         ("24739", "Arabidopsis thaliana"),
@@ -733,6 +742,32 @@ def infer_gwh_accession_from_files(species_key: str, files: List[Path], warnings
     if len(ordered) > 1:
         warnings.append(
             "[gwh] {}: multiple GWH accession candidates detected {}. Using '{}'".format(
+                species_key, ",".join(ordered), ordered[0]
+            )
+        )
+    return ordered[0]
+
+
+def infer_ddbj_wgs_id_from_files(species_key: str, files: List[Path], warnings: List[str]) -> str:
+    def build_master(prefix: str) -> str:
+        zero_count = 9 if len(prefix) > 4 else 8
+        return prefix + ("0" * zero_count)
+
+    matches = set()
+    for text in [species_key] + [path.name for path in files]:
+        for match in DDBJ_WGS_MASTER_ACCESSION_PATTERN.finditer(str(text or "").upper()):
+            prefix = str(match.group(1) or "").upper()
+            if prefix != "":
+                matches.add(build_master(prefix))
+        for token in re.split(r"[^A-Za-z0-9]+", str(text or "").upper()):
+            if re.fullmatch(r"[A-Z]{4,6}", token):
+                matches.add(build_master(token))
+    if len(matches) == 0:
+        return ""
+    ordered = sorted(matches)
+    if len(ordered) > 1:
+        warnings.append(
+            "[ddbj] {}: multiple WGS master candidates detected {}. Using '{}'".format(
                 species_key, ",".join(ordered), ordered[0]
             )
         )
@@ -1125,6 +1160,16 @@ def discover_species_dir_based(provider, input_dir):
                 errors.append(
                     "[gwh] {}: GWH accession was not detected from file names. "
                     "Include 'GWH...' in at least one input filename.".format(species_key)
+                )
+                continue
+        if provider == "ddbj":
+            source_id = infer_ddbj_wgs_id_from_files(species_key, files, warnings)
+            if source_id == "":
+                errors.append(
+                    "[ddbj] {}: WGS master accession was not detected from file names. "
+                    "Include 'PRJDB...' in the manifest or a 'BAAHMP000000000'-style token in at least one input filename.".format(
+                        species_key
+                    )
                 )
                 continue
         rows.append(

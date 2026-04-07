@@ -3141,6 +3141,156 @@ def test_download_manifest_resolves_gwh_id_via_show_page_fallback(tmp_path):
         thread.join(timeout=5)
 
 
+def test_download_manifest_resolves_ddbj_bioproject_to_public_wgs_gbff(tmp_path):
+    server_root = tmp_path / "server_root"
+    gbff_dir = server_root / "public" / "ddbj_database" / "wgs" / "BA" / "AH"
+    gbff_dir.mkdir(parents=True, exist_ok=True)
+
+    gbff_text = (
+        "LOCUS       BAAHMP010000001         9 bp    DNA     linear   PLN 08-JUL-2025\n"
+        "DEFINITION  Triphyophyllum peltatum test sequence.\n"
+        "ACCESSION   BAAHMP010000001 BAAHMP010000000\n"
+        "VERSION     BAAHMP010000001.1\n"
+        "DBLINK      BioProject:PRJDB15739\n"
+        "SOURCE      Triphyophyllum peltatum\n"
+        "  ORGANISM  Triphyophyllum peltatum\n"
+        "            Eukaryota; Viridiplantae.\n"
+        "FEATURES             Location/Qualifiers\n"
+        "     source          1..9\n"
+        "                     /mol_type=\"genomic DNA\"\n"
+        "                     /organism=\"Triphyophyllum peltatum\"\n"
+        "     CDS             1..9\n"
+        "                     /codon_start=1\n"
+        "                     /locus_tag=\"Tripe_000001\"\n"
+        "                     /product=\"hypothetical protein\"\n"
+        "                     /protein_id=\"GAB0000001.1\"\n"
+        "                     /translation=\"MK\"\n"
+        "ORIGIN\n"
+        "        1 atgaaataa\n"
+        "//\n"
+    )
+    with gzip.open(gbff_dir / "BAAHMP.gz", "wt", encoding="utf-8") as handle:
+        handle.write(gbff_text)
+
+    class _DdbjFixtureHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, root_dir=None, **kwargs):
+            self._root_dir = root_dir
+            super().__init__(*args, directory=str(root_dir), **kwargs)
+
+        def _send_json(self, payload):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path == "/search/api/entries/bioproject/PRJDB15739":
+                self._send_json(
+                    {
+                        "identifier": "PRJDB15739",
+                        "organism": {"identifier": "63090", "name": "Triphyophyllum peltatum"},
+                        "dbXrefs": [
+                            {
+                                "identifier": "BAAHMP000000000",
+                                "type": "insdc-master",
+                                "url": "https://ddbj.nig.ac.jp/search/entry/ddbj/BAAHMP000000000",
+                            }
+                        ],
+                    }
+                )
+                return
+            super().do_GET()
+
+    handler = lambda *args, **kwargs: _DdbjFixtureHandler(*args, root_dir=server_root, **kwargs)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "ddbj",
+                    "id": "PRJDB15739",
+                    "species_key": "",
+                    "cds_url": "",
+                    "gff_url": "",
+                    "gbff_url": "",
+                    "genome_url": "",
+                    "cds_filename": "",
+                    "gff_filename": "",
+                    "gbff_filename": "",
+                    "genome_filename": "",
+                }
+            ],
+        )
+
+        download_dir = tmp_path / "download_cache"
+        out_cds = tmp_path / "out_cds"
+        out_gff = tmp_path / "out_gff"
+        out_genome = tmp_path / "out_genome"
+        env = dict(os.environ)
+        env["GG_DDBJ_SEARCH_API_BASE_URL"] = "http://127.0.0.1:{}/search/api".format(server.server_port)
+        env["GG_DDBJ_PUBLIC_WGS_BASE_URL"] = "http://127.0.0.1:{}/public/ddbj_database/wgs".format(
+            server.server_port
+        )
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--provider",
+                "ddbj",
+                "--download-manifest",
+                str(manifest),
+                "--download-dir",
+                str(download_dir),
+                "--species-cds-dir",
+                str(out_cds),
+                "--species-gff-dir",
+                str(out_gff),
+                "--species-genome-dir",
+                str(out_genome),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+        raw_dir = download_dir / "DDBJ" / "species_wise_original" / "Triphyophyllum_peltatum"
+        assert (raw_dir / "BAAHMP.gbff.gz").exists()
+
+        cds_outputs = list(out_cds.glob("*.gz"))
+        gff_outputs = list(out_gff.glob("*.gz"))
+        genome_outputs = list(out_genome.glob("*.gz"))
+        assert len(cds_outputs) == 1
+        assert len(gff_outputs) == 1
+        assert len(genome_outputs) == 1
+
+        with gzip.open(cds_outputs[0], "rt", encoding="utf-8") as handle:
+            cds_text = handle.read()
+        assert "Triphyophyllum_peltatum_" in cds_text
+
+        with gzip.open(gff_outputs[0], "rt", encoding="utf-8") as handle:
+            gff_text = handle.read()
+        assert "gene:Tripe_000001" in gff_text
+
+        with gzip.open(genome_outputs[0], "rt", encoding="utf-8") as handle:
+            genome_text = handle.read()
+        assert ">BAAHMP010000001" in genome_text
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_download_manifest_recovers_stale_lock_file(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()

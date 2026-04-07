@@ -21,6 +21,7 @@ PROVIDERS = (
     "ensembl",
     "ensemblplants",
     "ncbi",
+    "ddbj",
     "coge",
     "cngb",
     "gwh",
@@ -81,6 +82,10 @@ ID_EXAMPLES_BY_PROVIDER = {
         ("GCF_049306965.1", "Danio rerio"),
         ("GCA_000001215.4", "Drosophila melanogaster"),
         ("GCF_000002985.6", "Caenorhabditis elegans"),
+    ),
+    "ddbj": (
+        ("PRJDB15739", "Triphyophyllum peltatum"),
+        ("BAAHMP000000000", "Triphyophyllum peltatum WGS master"),
     ),
     "coge": (
         ("24739", "Arabidopsis thaliana"),

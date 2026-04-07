@@ -233,6 +233,8 @@ Manifest required columns:
 - either `cds_url`, `gbff_url`, or the pair `gff_url` + `genome_url` (or `id` to auto-resolve provider-specific URLs when supported)
   - for `provider=ncbi`, when `species_key` is omitted and `id` is given, `species_key` is inferred from NCBI species metadata (e.g. `Homo_sapiens`).
   - `provider=ncbi` accepts both `GCF_*` and `GCA_*` assembly accessions and auto-resolves NCBI assembly URLs.
+  - for `provider=ddbj`, `id` can be a DDBJ BioProject accession (for example `PRJDB15739`), a WGS master accession (for example `BAAHMP000000000`), or a DDBJ BioProject URL.
+    - the resolver follows the public DDBJ Search API to find the `insdc-master` accession, then downloads the anonymous-FTP WGS flatfile (`GBFF`) and derives genome/GFF/CDS from it.
   - for `provider=coge`, `id` must be CoGe `genome_id` (numeric `gid`), and CDS/GFF/Genome URLs are auto-built.
   - for `provider=cngb`, built-in inference resolves CNGB assembly IDs (`CNA...`, `cngb:...`) or linked `GCA/GCF` accessions and maps to downloadable assembly files.
   - for `provider=gwh`, `id` can be a `GWH...` accession (for example `GWHIGRM00000000.1`), a GWH assembly show URL, or a GWH folder/index URL.
@@ -263,17 +265,18 @@ Manifest required columns:
 Optional columns:
 
 - `species_key`
-- `cds_archive_member`, `gff_archive_member`, `genome_archive_member`
+- `cds_archive_member`, `gff_archive_member`, `gbff_archive_member`, `genome_archive_member`
   (optional paths inside `.zip` or `.tar.*` archives referenced by the corresponding `*_url`)
 - `cds_filename`
 - `gff_filename`
+- `gbff_filename`
 - `genome_filename`
 - `fernbase_confidence_mode`
   (`high-confidence only` or `high-low combined`; only used for legacy FernBase releases
   that publish separate `highconfidence` and `lowconfidence` CDS/GFF files)
 - `cds_url_template`, `gff_url_template`, `genome_url_template`
   (`{id}`, `{species_key}`, `{provider}` placeholders)
-- `local_cds_path`, `local_gff_path`, `local_genome_path`
+- `local_cds_path`, `local_gff_path`, `local_gbff_path`, `local_genome_path`
   (for `provider=local`)
 
 XLSX template notes:
@@ -286,8 +289,8 @@ XLSX template notes:
 - use curated direct entries for public bundles that still need explicit filenames
   or hand-vetted URLs, instead of falling back to `provider=local`.
 - for large provider (`ncbi`), five model-organism IDs are shown as examples (mixed `GCF_*`/`GCA_*` formats).
-- for `coge` and `cngb`, IDs are example-based by default.
-- for `gwh`, `citrusgenomedb`, `figshare`, `plantgarden`, `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, `oryza_minuta`, `direct`, and `local`,
+- for `ddbj`, `coge`, and `cngb`, IDs are example-based by default.
+- for `ddbj`, `gwh`, `citrusgenomedb`, `figshare`, `plantgarden`, `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, `oryza_minuta`, `direct`, and `local`,
   IDs can be supplied from a prebuilt `id_options_snapshot.json`.
 - when no snapshot is supplied, non-large providers fall back to IDs discovered from `--input-dir`.
 - drop-down IDs are shown as `ID (Species name)` for non-`local` providers.
