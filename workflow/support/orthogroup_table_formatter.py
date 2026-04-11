@@ -7,7 +7,6 @@ import os
 import sys
 import time
 
-import numpy
 import pandas
 
 
@@ -17,6 +16,26 @@ def build_arg_parser():
     parser.add_argument('--mode', metavar='STR', default='hog2og', choices=['hog2og', 'sp2og'], type=str, help='', required=True)
     parser.add_argument('--dir_out', metavar='PATH', default='', type=str, help='', required=True)
     return parser
+
+
+def build_gene_count_table(df, sp_cols):
+    gc = pandas.DataFrame({'Orthogroup': df['Orthogroup']})
+    if len(sp_cols) == 0:
+        gc['Total'] = 0
+        return gc
+
+    gene_counts = {}
+    for sp_col in sp_cols:
+        # Count one column at a time so giant cells do not force a single
+        # fixed-width NumPy Unicode array for the full orthogroup table.
+        series = df.loc[:, sp_col]
+        comma_counts = series.str.count(',')
+        gene_counts[sp_col] = (comma_counts + series.ne('')).astype(int)
+
+    gene_counts = pandas.DataFrame(gene_counts, index=df.index)
+    gc.loc[:, sp_cols] = gene_counts
+    gc['Total'] = gene_counts.sum(axis=1)
+    return gc
 
 
 def run(args):
@@ -50,15 +69,7 @@ def run(args):
     df.to_csv(outpath_og, sep='\t', index=False)
 
     sp_cols = df.columns[df.columns != 'Orthogroup']
-    gc = pandas.DataFrame({'Orthogroup': df['Orthogroup']})
-    if len(sp_cols) > 0:
-        values = df.loc[:, sp_cols].to_numpy(dtype=str, copy=False)
-        comma_counts = numpy.char.count(values, ',')
-        gene_counts = numpy.where(values == '', 0, comma_counts + 1).astype(int, copy=False)
-        gc.loc[:, sp_cols] = gene_counts
-        gc['Total'] = gene_counts.sum(axis=1)
-    else:
-        gc['Total'] = 0
+    gc = build_gene_count_table(df, sp_cols)
     print('Number of Orthogroups: {:,}'.format(gc.shape[0]), flush=True)
     print('Largest Orthogroup size: {:,}'.format(gc['Total'].max()), flush=True)
     print('Smallest Orthogroup size: {:,}'.format(gc['Total'].min()), flush=True)
