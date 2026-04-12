@@ -532,6 +532,39 @@ cleanup_partial_getfastq_outputs() {
   ensure_dir "${dir_amalgkit_getfastq_sp}"
 }
 
+clear_getfastq_safely_removed_markers() {
+  local safely_removed_files=()
+  if [[ -e "${file_amalgkit_getfastq_legacy_safely_removed_flag}" ]]; then
+    rm -f -- "${file_amalgkit_getfastq_legacy_safely_removed_flag}"
+  fi
+  if [[ -d "${dir_amalgkit_getfastq_sp}" ]]; then
+    mapfile -t safely_removed_files < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.safely_removed" | sort)
+    if [[ ${#safely_removed_files[@]} -gt 0 ]]; then
+      rm -f -- "${safely_removed_files[@]}"
+    fi
+  fi
+}
+
+safe_delete_getfastq_fastq_files() {
+  local fastq_files=()
+  local fastq_file
+  if [[ -e "${file_amalgkit_getfastq_legacy_safely_removed_flag}" ]]; then
+    rm -f -- "${file_amalgkit_getfastq_legacy_safely_removed_flag}"
+  fi
+  if [[ ! -d "${dir_amalgkit_getfastq_sp}" ]]; then
+    return 0
+  fi
+  mapfile -t fastq_files < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" | sort)
+  if [[ ${#fastq_files[@]} -eq 0 ]]; then
+    echo "No amalgkit getfastq FASTQ files were found to safe-delete in: ${dir_amalgkit_getfastq_sp}"
+    return 0
+  fi
+  for fastq_file in "${fastq_files[@]}"; do
+    rm -f -- "${fastq_file}"
+    printf '%s\n' "This fastq file was safely removed after downstream completion in gg_transcriptome_generation." > "${fastq_file}.safely_removed"
+  done
+}
+
 amalgkit_getfastq_log_has_fatal_message() {
   local log_file=$1
   [[ -s "${log_file}" ]] || return 1
@@ -1107,7 +1140,7 @@ else
 fi
 file_amalgkit_read_technology="${dir_transcriptome_assembly_output}/amalgkit_read_technology/${sp_ub}_read_technology.tsv"
 file_amalgkit_read_technology_summary_sh="${dir_tmp}/metadata/read_technology.summary.sh"
-file_amalgkit_getfastq_safely_removed_flag=${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}_safely_removed.txt
+file_amalgkit_getfastq_legacy_safely_removed_flag=${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}_safely_removed.txt
 file_isoform="${dir_transcriptome_assembly_output}/assembled_transcripts_with_isoforms/${sp_ub}_isoform.fa.gz"
 file_corset_clusters="${dir_transcriptome_assembly_output}/corset_clusters/${sp_ub}_corset.clusters.tsv"
 file_corset_counts="${dir_transcriptome_assembly_output}/corset_counts/${sp_ub}_corset.counts.tsv"
@@ -1232,9 +1265,7 @@ if [[ (${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1) && $
   gg_step_start "${task}"
   ensure_dir "${dir_amalgkit_getfastq_sp}"
 
-  if [[ -e "${file_amalgkit_getfastq_safely_removed_flag}" ]]; then
-    rm -f -- "${file_amalgkit_getfastq_safely_removed_flag}"
-  fi
+  clear_getfastq_safely_removed_markers
 
   if [[ "${amalgkit_contam_filter}" == "yes" ]]; then
     if ! awk -F '\t' 'NR==1 {found=0; for (i=1; i<=NF; i++) if ($i=="taxid") found=1; exit(found ? 0 : 1)}' "${file_amalgkit_metadata}"; then
@@ -2127,10 +2158,7 @@ fi
 if [[ ${remove_amalgkit_fastq_after_completion} -eq 1 && $(is_fastq_requiring_downstream_analysis_done) -eq 1 ]]; then
   echo "remove_amalgkit_fastq_after_completion=1: All necessary output files were detected. amalgkit getfastq outputs will be removed."
   if [[ -e "${dir_amalgkit_getfastq_sp}" ]]; then
-    rm -rf -- "${dir_amalgkit_getfastq_sp}"
-    ensure_parent_dir "${file_amalgkit_getfastq_safely_removed_flag}"
-    echo "Fastq files for this species have been safely removed." > "tmp.amalgkit_getfastq_removed.flag.txt"
-    mv_out "tmp.amalgkit_getfastq_removed.flag.txt" "${file_amalgkit_getfastq_safely_removed_flag}"
+    safe_delete_getfastq_fastq_files
   fi
 else
   echo "fastp fastq files will not be removed."

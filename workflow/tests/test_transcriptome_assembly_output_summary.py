@@ -7,6 +7,7 @@ import pandas
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "workflow" / "support" / "transcriptome_assembly_output_summary.py"
+CORE_SCRIPT = REPO_ROOT / "workflow" / "core" / "gg_transcriptome_generation_core.sh"
 
 
 def run_summary(args, cwd: Path):
@@ -81,6 +82,80 @@ def test_summary_uses_new_metadata_file_suffix(tmp_path: Path):
     df = pandas.read_csv(out_tsv, sep="\t", index_col=0)
     assert "Homo_sapiens" in df.index
     assert int(df.loc["Homo_sapiens", "isoform"]) == 1
+
+
+def test_summary_detects_amalgkit_safely_removed_markers(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    input_root = workspace / "input"
+    output_dir = workspace / "output" / "transcriptome_assembly"
+
+    query_dir = input_root / "query_sra_id"
+    query_dir.mkdir(parents=True)
+    (query_dir / "Arabidopsis_thaliana.txt").write_text("SRR000001\n", encoding="utf-8")
+    species_dir = output_dir / "amalgkit_getfastq" / "Arabidopsis_thaliana"
+    species_dir.mkdir(parents=True)
+    (species_dir / "SRR000001.amalgkit.fastq.gz.safely_removed").write_text("", encoding="utf-8")
+
+    out_tsv = tmp_path / "summary.tsv"
+    proc = run_summary(
+        [
+            "--dir_transcriptome_assembly",
+            str(output_dir),
+            "--gg_workspace_input_dir",
+            str(input_root),
+            "--mode",
+            "sraid",
+            "--out",
+            str(out_tsv),
+        ],
+        cwd=tmp_path,
+    )
+
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    df = pandas.read_csv(out_tsv, sep="\t", index_col=0)
+    assert int(df.loc["Arabidopsis_thaliana", "amalgkit_getfastq"]) == 1
+    assert int(df.loc["Arabidopsis_thaliana", "safely_removed"]) == 1
+    assert "amalgkit_getfastq/<species>/*.safely_removed: 0 / 1 files are missing." in proc.stdout
+
+
+def test_summary_detects_legacy_species_safely_removed_markers(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    input_root = workspace / "input"
+    output_dir = workspace / "output" / "transcriptome_assembly"
+
+    query_dir = input_root / "query_sra_id"
+    query_dir.mkdir(parents=True)
+    (query_dir / "Arabidopsis_thaliana.txt").write_text("SRR000001\n", encoding="utf-8")
+    (output_dir / "amalgkit_getfastq").mkdir(parents=True)
+    (output_dir / "amalgkit_getfastq" / "Arabidopsis_thaliana_safely_removed.txt").write_text("", encoding="utf-8")
+
+    out_tsv = tmp_path / "summary.tsv"
+    proc = run_summary(
+        [
+            "--dir_transcriptome_assembly",
+            str(output_dir),
+            "--gg_workspace_input_dir",
+            str(input_root),
+            "--mode",
+            "sraid",
+            "--out",
+            str(out_tsv),
+        ],
+        cwd=tmp_path,
+    )
+
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    df = pandas.read_csv(out_tsv, sep="\t", index_col=0)
+    assert int(df.loc["Arabidopsis_thaliana", "amalgkit_getfastq"]) == 1
+    assert int(df.loc["Arabidopsis_thaliana", "safely_removed"]) == 1
+
+
+def test_transcriptome_core_safe_delete_matches_amalgkit_format():
+    text = CORE_SCRIPT.read_text(encoding="utf-8")
+
+    assert '${fastq_file}.safely_removed' in text
+    assert 'tmp.amalgkit_getfastq_removed.flag.txt' not in text
+    assert 'mv_out "tmp.amalgkit_getfastq_removed.flag.txt"' not in text
 
 
 def test_summary_falls_back_to_output_derived_species_when_input_is_missing(tmp_path: Path):
