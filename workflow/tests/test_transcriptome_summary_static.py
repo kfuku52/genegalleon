@@ -25,6 +25,7 @@ def test_multispecies_transcriptome_summary_filters_before_imputation_and_skips_
 
     assert 'has_rtsne = requireNamespace("Rtsne", quietly=TRUE)' in text
     assert "filter_expression_for_dimensional_reduction = function(df_in, min_non_missing = 2)" in text
+    assert "run_expression_imputation = function(df_in)" in text
     assert "Converting %d Inf/-Inf value(s) to NA before dimensional reduction." in text
     assert "Removing %d all-NA gene row(s) before dimensional reduction." in text
     assert "Removing %d all-NA species column(s) before dimensional reduction." in text
@@ -33,9 +34,12 @@ def test_multispecies_transcriptome_summary_filters_before_imputation_and_skips_
     assert "Removing %d gene row(s) with <%d observed species before dimensional reduction." in text
     assert "Removing %d species column(s) with <%d observed genes before dimensional reduction." in text
     assert "df_exp_filtered = filter_expression_for_dimensional_reduction(df_exp, min_non_missing=min_species)" in text
-    assert "missMDA::estim_ncpPCA(df_exp_filtered" in text
-    assert "missMDA::imputePCA(df_exp_filtered" in text
+    assert "res_comp = run_expression_imputation(df_exp_filtered)" in text
+    assert "if (!is.null(res_comp)) {" in text
+    assert "missMDA::estim_ncpPCA(df_in" in text
+    assert "missMDA::imputePCA(df_in" in text
     assert "Skipping dimensional reduction because too few rows/columns remain after filtering" in text
+    assert "Skipping transcriptome dimensionality reduction because missMDA failed on the filtered expression matrix" in text
     assert "Skipping PCA plot because at least 2 gene rows and 3 species columns are required after filtering" in text
     assert "Skipping MDS plot because at least 3 species columns are required after filtering" in text
     assert "Skipping tSNE plot because Rtsne is unavailable." in text

@@ -109,6 +109,20 @@ filter_expression_for_dimensional_reduction = function(df_in, min_non_missing = 
     df_out
 }
 
+run_expression_imputation = function(df_in) {
+    tryCatch({
+        nb = missMDA::estim_ncpPCA(df_in, method.cv="Kfold", nbsim=100, threshold=1e-2, verbose=TRUE)
+        cat(paste0('Number of components for expression data imputations: ', nb[['ncp']], '\n'))
+        missMDA::imputePCA(df_in, ncp=nb[['ncp']])
+    }, error=function(e) {
+        cat(sprintf(
+            'Skipping transcriptome dimensionality reduction because missMDA failed on the filtered expression matrix: %s\n',
+            conditionMessage(e)
+        ))
+        NULL
+    })
+}
+
 # %%
 cat('Starting transcriptome dimensionality reduction plot.\n')
 
@@ -210,102 +224,102 @@ if (file.exists('expression.tsv')) {
         } else {
             cat('Generating expression.imputed.tsv\n')
             print(paste('Starting the expression level imputation:', Sys.time()))
-            nb = missMDA::estim_ncpPCA(df_exp_filtered, method.cv="Kfold", nbsim=100, threshold=1e-2, verbose=TRUE)
-            cat(paste0('Number of components for expression data imputations: ', nb[['ncp']], '\n'))
-            res_comp = missMDA::imputePCA(df_exp_filtered, ncp=nb[['ncp']])
-            imp = res_comp[['completeObs']]
-            df_imp = as.data.frame(imp, check.names=FALSE, stringsAsFactors=FALSE)
-            write.table(df_imp, 'expression.imputed.tsv', row.names=FALSE, sep='\t', quote=FALSE)
-            print(paste('Ending the expression level imputation:', Sys.time()))
+            res_comp = run_expression_imputation(df_exp_filtered)
+            if (!is.null(res_comp)) {
+                imp = res_comp[['completeObs']]
+                df_imp = as.data.frame(imp, check.names=FALSE, stringsAsFactors=FALSE)
+                write.table(df_imp, 'expression.imputed.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+                print(paste('Ending the expression level imputation:', Sys.time()))
 
-            for (method in c('pca', 'tsne', 'mds')) {
-            cat(paste0('Starting dimensionality reduction: ', method, '\n'))
-            input_data = df_imp
-            if (method=='pca') {
-                if (nrow(input_data) < 2 || ncol(input_data) < 3) {
-                    cat(sprintf(
-                        'Skipping PCA plot because at least 2 gene rows and 3 species columns are required after filtering; observed %d gene row(s) and %d species column(s).\n',
-                        nrow(input_data), ncol(input_data)
-                    ))
-                    next
+                for (method in c('pca', 'tsne', 'mds')) {
+                cat(paste0('Starting dimensionality reduction: ', method, '\n'))
+                input_data = df_imp
+                if (method=='pca') {
+                    if (nrow(input_data) < 2 || ncol(input_data) < 3) {
+                        cat(sprintf(
+                            'Skipping PCA plot because at least 2 gene rows and 3 species columns are required after filtering; observed %d gene row(s) and %d species column(s).\n',
+                            nrow(input_data), ncol(input_data)
+                        ))
+                        next
+                    }
+                    pca_res = prcomp(t(input_data), scale.=FALSE)
+                    if (ncol(pca_res[['x']]) < 2) {
+                        cat(sprintf('Skipping PCA plot because only %d principal component(s) are available.\n', ncol(pca_res[['x']])))
+                        next
+                    }
+                    df = data.frame(pca_res[['x']][,c(1,2)])
+                    xlabel = paste0("PC 1 (", round(summary(pca_res)$importance[2,1]*100, digits=1), "%)")
+                    ylabel = paste0("PC 2 (", round(summary(pca_res)$importance[2,2]*100, digits=1), "%)")
+                } else if (method=='mds') {
+                    if (ncol(input_data) < 3) {
+                        cat(sprintf(
+                            'Skipping MDS plot because at least 3 species columns are required after filtering; observed %d.\n',
+                            ncol(input_data)
+                        ))
+                        next
+                    }
+                    corr_matrix = stats::cor(input_data, method = 'pearson', use = 'pairwise.complete.obs')
+                    corr_matrix[is.na(corr_matrix)] = 0
+                    diag(corr_matrix) = 1
+                    tc_dist_dist = as.dist(1 - corr_matrix + 1e-09)
+                    mds = stats::cmdscale(tc_dist_dist, k = 2)
+                    df = data.frame(mds[, c(1,2)])
+                    rownames(df) = colnames(input_data)
+                    xlabel = 'MDS 1'
+                    ylabel = 'MDS 2'
+                } else if (method=='tsne') {
+                    if (!has_rtsne) {
+                        cat('Skipping tSNE plot because Rtsne is unavailable.\n')
+                        next
+                    }
+                    perplexity = min(30, floor((ncol(input_data) - 1) / 3))
+                    if (perplexity < 1) {
+                        cat(sprintf(
+                            'Skipping tSNE plot because at least 4 species columns are required after filtering; observed %d.\n',
+                            ncol(input_data)
+                        ))
+                        next
+                    }
+                    out_tsne = Rtsne::Rtsne(as.matrix(t(input_data)), theta=0, check_duplicates=FALSE, 
+                                            verbose=FALSE, dims=2, perplexity=perplexity)
+                    df = data.frame(out_tsne[['Y']])
+                    rownames(df) = colnames(input_data)
+                    xlabel = 'tSNE 1'
+                    ylabel = 'tSNE 2'
                 }
-                pca_res = prcomp(t(input_data), scale.=FALSE)
-                if (ncol(pca_res[['x']]) < 2) {
-                    cat(sprintf('Skipping PCA plot because only %d principal component(s) are available.\n', ncol(pca_res[['x']])))
-                    next
-                }
-                df = data.frame(pca_res[['x']][,c(1,2)])
-                xlabel = paste0("PC 1 (", round(summary(pca_res)$importance[2,1]*100, digits=1), "%)")
-                ylabel = paste0("PC 2 (", round(summary(pca_res)$importance[2,2]*100, digits=1), "%)")
-            } else if (method=='mds') {
-                if (ncol(input_data) < 3) {
-                    cat(sprintf(
-                        'Skipping MDS plot because at least 3 species columns are required after filtering; observed %d.\n',
-                        ncol(input_data)
-                    ))
-                    next
-                }
-                corr_matrix = stats::cor(input_data, method = 'pearson', use = 'pairwise.complete.obs')
-                corr_matrix[is.na(corr_matrix)] = 0
-                diag(corr_matrix) = 1
-                tc_dist_dist = as.dist(1 - corr_matrix + 1e-09)
-                mds = stats::cmdscale(tc_dist_dist, k = 2)
-                df = data.frame(mds[, c(1,2)])
-                rownames(df) = colnames(input_data)
-                xlabel = 'MDS 1'
-                ylabel = 'MDS 2'
-            } else if (method=='tsne') {
-                if (!has_rtsne) {
-                    cat('Skipping tSNE plot because Rtsne is unavailable.\n')
-                    next
-                }
-                perplexity = min(30, floor((ncol(input_data) - 1) / 3))
-                if (perplexity < 1) {
-                    cat(sprintf(
-                        'Skipping tSNE plot because at least 4 species columns are required after filtering; observed %d.\n',
-                        ncol(input_data)
-                    ))
-                    next
-                }
-                out_tsne = Rtsne::Rtsne(as.matrix(t(input_data)), theta=0, check_duplicates=FALSE, 
-                                        verbose=FALSE, dims=2, perplexity=perplexity)
-                df = data.frame(out_tsne[['Y']])
-                rownames(df) = colnames(input_data)
-                xlabel = 'tSNE 1'
-                ylabel = 'tSNE 2'
-            }
-            colnames(df) = c('x','y')
-            df[,'label'] = rownames(df)
+                colnames(df) = c('x','y')
+                df[,'label'] = rownames(df)
 
-            g = ggplot() +
-                geom_text(data=df, mapping=aes(x=x, y=y, label=label), size=font_size*font_size_factor) +
-                xlab(xlabel) +
-                ylab(ylabel) +
-                theme_bw() +
-                theme(
-                    axis.text=element_text(size=font_size),
-                    axis.title=element_text(size=font_size),
-                    panel.grid.major.y=element_blank(),
-                    panel.grid.major.x=element_blank(),
-                    panel.grid.minor.y=element_blank(),
-                    panel.grid.minor.x=element_blank(),
-                    #axis.title.y=element_blank(), 
-                    #axis.text.y=element_blank(), 
-                    #axis.ticks.y=element_blank(),
-                    legend.title=element_blank(),
-                    legend.text=element_text(size=font_size),
-                    legend.position="inside",
-                    legend.position.inside=c(0.1,0.9),
-                    #legend.key.size=unit(0.4, 'lines'), 
-                    #legend.box.just=0.5,
-                    rect=element_rect(fill="transparent"),
-                    plot.margin=unit(rep(0.1, 4), "cm")
-                )
-            for (ext in c('pdf','svg')) {
-                file_name = paste0("multisp_", method, '.', ext)
-                ggsave(file_name, width = 7.2, height = 7.2)
-            }
-            g
+                g = ggplot() +
+                    geom_text(data=df, mapping=aes(x=x, y=y, label=label), size=font_size*font_size_factor) +
+                    xlab(xlabel) +
+                    ylab(ylabel) +
+                    theme_bw() +
+                    theme(
+                        axis.text=element_text(size=font_size),
+                        axis.title=element_text(size=font_size),
+                        panel.grid.major.y=element_blank(),
+                        panel.grid.major.x=element_blank(),
+                        panel.grid.minor.y=element_blank(),
+                        panel.grid.minor.x=element_blank(),
+                        #axis.title.y=element_blank(), 
+                        #axis.text.y=element_blank(), 
+                        #axis.ticks.y=element_blank(),
+                        legend.title=element_blank(),
+                        legend.text=element_text(size=font_size),
+                        legend.position="inside",
+                        legend.position.inside=c(0.1,0.9),
+                        #legend.key.size=unit(0.4, 'lines'), 
+                        #legend.box.just=0.5,
+                        rect=element_rect(fill="transparent"),
+                        plot.margin=unit(rep(0.1, 4), "cm")
+                    )
+                for (ext in c('pdf','svg')) {
+                    file_name = paste0("multisp_", method, '.', ext)
+                    ggsave(file_name, width = 7.2, height = 7.2)
+                }
+                g
+                }
             }
         }
     }
