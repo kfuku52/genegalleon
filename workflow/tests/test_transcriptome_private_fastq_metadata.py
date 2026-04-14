@@ -72,7 +72,7 @@ def test_repair_private_fastq_metadata_fills_placeholder_from_species_label(tmp_
     ]
 
 
-def test_repair_private_fastq_metadata_canonicalizes_species_label_suffixes(tmp_path: Path):
+def test_repair_private_fastq_metadata_preserves_species_label_suffixes(tmp_path: Path):
     metadata_path = tmp_path / "metadata_private_fastq.tsv"
     output_path = tmp_path / "metadata_private_fastq.fixed.tsv"
     metadata_path.write_text(
@@ -90,7 +90,7 @@ def test_repair_private_fastq_metadata_canonicalizes_species_label_suffixes(tmp_
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     rows = _read_rows(output_path)
-    assert rows[0]["scientific_name"] == "Burmannia cryptopetala"
+    assert rows[0]["scientific_name"] == "Burmannia cryptopetala-previous"
 
 
 def test_repair_private_fastq_metadata_preserves_existing_scientific_names(tmp_path: Path):
@@ -115,6 +115,6 @@ def test_repair_private_fastq_metadata_preserves_existing_scientific_names(tmp_p
     rows = _read_rows(output_path)
     assert [row["scientific_name"] for row in rows] == [
         "Petrosavia sakuraii",
-        "Petrosavia sakuraii",
-        "Petrosavia sakuraii",
+        "Petrosavia sakuraii-previous",
+        "Petrosavia sakuraii-previous",
     ]

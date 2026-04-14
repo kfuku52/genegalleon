@@ -463,12 +463,9 @@ if not support_dir.exists():
     raise SystemExit("Support directory was not found: {}".format(support_dir))
 
 sys.path.insert(0, str(support_dir))
-from species_labeling import scientific_name_from_label, species_label_from_taxonomic_text
+from species_labeling import scientific_name_from_label
 
 fallback_name = scientific_name_from_label(species_label)
-canonical_label = species_label_from_taxonomic_text(fallback_name)
-if canonical_label:
-    fallback_name = scientific_name_from_label(canonical_label)
 fallback_name = str(fallback_name or "").strip()
 if fallback_name == "":
     fallback_name = species_label.replace("_", " ").strip()
