@@ -1874,6 +1874,10 @@ def test_transcriptome_core_passes_download_dir_to_amalgkit_integrate():
     integrate_end = text.index('    mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"', integrate_start)
     integrate_block = text[integrate_start:integrate_end]
     assert '--download_dir "${dir_amalgkit_download_dir}"' in integrate_block
+    assert 'repair_private_fastq_metadata_scientific_names \\' in integrate_block
+    assert '      "./metadata_private_fastq.tsv" \\' in integrate_block
+    assert '      "${sp_ub}" \\' in integrate_block
+    assert '      "${gg_support_dir}"' in integrate_block
 
 
 def test_transcriptome_core_passes_shared_mmseqs_db_to_amalgkit_getfastq():

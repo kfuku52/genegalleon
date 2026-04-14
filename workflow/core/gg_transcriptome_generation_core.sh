@@ -437,6 +437,89 @@ with output_path.open("wt", encoding="utf-8", newline="") as handle:
 PY
 }
 
+repair_private_fastq_metadata_scientific_names() {
+  local metadata_file=$1
+  local species_label=$2
+  local support_dir=$3
+  local output_file="${metadata_file}.resolved.$$"
+
+  python - "${metadata_file}" "${species_label}" "${support_dir}" "${output_file}" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+PLACEHOLDER = "Please add in format: Genus species"
+
+metadata_path = Path(sys.argv[1])
+species_label = str(sys.argv[2] or "").strip()
+support_dir = Path(sys.argv[3])
+output_path = Path(sys.argv[4])
+
+if not metadata_path.exists():
+    raise SystemExit("Metadata file was not found: {}".format(metadata_path))
+if species_label == "":
+    raise SystemExit("Species label is empty; cannot repair private fastq metadata scientific_name values.")
+if not support_dir.exists():
+    raise SystemExit("Support directory was not found: {}".format(support_dir))
+
+sys.path.insert(0, str(support_dir))
+from species_labeling import scientific_name_from_label, species_label_from_taxonomic_text
+
+fallback_name = scientific_name_from_label(species_label)
+canonical_label = species_label_from_taxonomic_text(fallback_name)
+if canonical_label:
+    fallback_name = scientific_name_from_label(canonical_label)
+fallback_name = str(fallback_name or "").strip()
+if fallback_name == "":
+    fallback_name = species_label.replace("_", " ").strip()
+if fallback_name == "" or fallback_name.lower() == PLACEHOLDER.lower():
+    raise SystemExit(
+        "Could not derive a fallback scientific_name from species label: {}".format(species_label)
+    )
+
+with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
+    reader = csv.DictReader(handle, delimiter="\t")
+    fieldnames = reader.fieldnames
+    if not fieldnames:
+        raise SystemExit("Metadata table is missing a header: {}".format(metadata_path))
+    if "scientific_name" not in fieldnames:
+        raise SystemExit("Metadata table is missing required 'scientific_name' column: {}".format(metadata_path))
+    rows = list(reader)
+
+replaced_rows = 0
+for row in rows:
+    scientific_name = str(row.get("scientific_name", "") or "").strip()
+    if scientific_name == "" or scientific_name.lower() == PLACEHOLDER.lower():
+        row["scientific_name"] = fallback_name
+        replaced_rows += 1
+
+output_path.parent.mkdir(parents=True, exist_ok=True)
+with output_path.open("wt", encoding="utf-8", newline="") as handle:
+    writer = csv.DictWriter(
+        handle,
+        fieldnames=fieldnames,
+        delimiter="\t",
+        lineterminator="\n",
+        extrasaction="ignore",
+    )
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({name: row.get(name, "") or "" for name in fieldnames})
+
+if replaced_rows > 0:
+    print(
+        "Filled {} private fastq metadata row(s) with fallback scientific_name: {}".format(
+            replaced_rows,
+            fallback_name,
+        )
+    )
+else:
+    print("Private fastq metadata already had non-placeholder scientific_name values.")
+PY
+
+  mv_out "${output_file}" "${metadata_file}"
+}
+
 # TODO(kfuku, 2026-04+): Remove this genegalleon-side fasta alias staging
 # once the bundled amalgkit release includes the upstream quant-side reference
 # fasta fallback fix and no longer needs wrapper-provided alias names.
@@ -1198,6 +1281,10 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
       --threads "${GG_TASK_CPUS}" \
       --remove_tmp yes
 
+    repair_private_fastq_metadata_scientific_names \
+      "./metadata_private_fastq.tsv" \
+      "${sp_ub}" \
+      "${gg_support_dir}"
     mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"
   fi
 
