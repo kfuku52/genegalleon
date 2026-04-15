@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+real_hmmsearch="${GG_REAL_HMMSEARCH:-}"
+compat_enabled="${GG_BUSCO_METAEUK_MODIFIED_FAS_COMPAT:-0}"
+expected_input=""
+fallback_input=""
+self_path=""
+resolved_real_hmmsearch=""
+
+if [[ -z "${real_hmmsearch}" ]]; then
+  echo "GG_REAL_HMMSEARCH is required for the GeneGalleon hmmsearch wrapper." >&2
+  exit 1
+fi
+if [[ ! -x "${real_hmmsearch}" ]]; then
+  echo "Resolved real hmmsearch is missing or not executable: ${real_hmmsearch}" >&2
+  exit 1
+fi
+
+self_path="$(readlink -f -- "${BASH_SOURCE[0]:-$0}" 2>/dev/null || true)"
+resolved_real_hmmsearch="$(readlink -f -- "${real_hmmsearch}" 2>/dev/null || true)"
+if [[ -n "${self_path}" && -n "${resolved_real_hmmsearch}" && "${self_path}" == "${resolved_real_hmmsearch}" ]]; then
+  echo "GG_REAL_HMMSEARCH resolves to the GeneGalleon wrapper itself: ${real_hmmsearch}" >&2
+  exit 1
+fi
+
+if [[ $# -gt 0 ]]; then
+  expected_input="${!#}"
+fi
+
+if [[ "${compat_enabled}" == "1" && -n "${expected_input}" && "${expected_input}" == *.modified.fas && ! -e "${expected_input}" ]]; then
+  fallback_input="${expected_input%.modified.fas}.fas"
+  if [[ -f "${fallback_input}" ]]; then
+    if ln -s -- "${fallback_input}" "${expected_input}" 2>/dev/null; then
+      echo "GeneGalleon BUSCO compatibility: created ${expected_input} -> ${fallback_input}" >&2
+    fi
+  fi
+fi
+
+exec "${real_hmmsearch}" "$@"

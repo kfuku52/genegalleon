@@ -94,6 +94,13 @@ capture_busco_failure_context() {
     "${stderr_log}"
 }
 
+cleanup_busco_stage_temp_artifacts() {
+  local input_fasta=$1
+  rm -rf -- "./busco_tmp"
+  rm -f -- "${input_fasta}"
+  rm -f -- "./busco_tmp.stderr.log"
+}
+
 run_busco_with_capture() {
   local stage_key=$1
   local input_fasta=$2
@@ -106,7 +113,7 @@ run_busco_with_capture() {
     rm -f -- "${stderr_log}"
   fi
 
-  if ! busco \
+  if ! gg_run_busco_with_metaeuk_modified_fas_compat \
     --in "${input_fasta}" \
     --mode transcriptome \
     --out "busco_tmp" \
@@ -118,6 +125,11 @@ run_busco_with_capture() {
     --download_path "${dir_busco_db}" \
     --offline \
     2> >(tee "${stderr_log}" >&2); then
+    if gg_busco_stderr_matches_known_metaeuk_modified_fas_bug "${stderr_log}"; then
+      echo "BUSCO hit the known MetaEuk transcriptome bug for ${stage_key}. Capturing repro artifacts and continuing without BUSCO outputs."
+      capture_busco_failure_context "${stage_key}" "${input_fasta}" "${stderr_log}" || return 1
+      return 10
+    fi
     echo "BUSCO failed for ${stage_key}. Capturing repro artifacts."
     capture_busco_failure_context "${stage_key}" "${input_fasta}" "${stderr_log}" || return 1
     return 1
@@ -1893,6 +1905,7 @@ task='BUSCO for cDNA isoforms (isoform.fasta)'
 disable_if_no_input_file "run_busco_isoforms" "${file_isoform}"
 if [[ (! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna_isoforms}") && ${run_busco_isoforms} -eq 1 ]]; then
   gg_step_start "${task}"
+  busco_stage_status=0
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"
 
@@ -1905,21 +1918,26 @@ if [[ (! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna_
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  if ! run_busco_with_capture "cdna_isoforms" "busco_infile_cdna.fa"; then
+  set +e
+  run_busco_with_capture "cdna_isoforms" "busco_infile_cdna.fa"
+  busco_stage_status=$?
+  set -e
+  if [[ ${busco_stage_status} -eq 10 ]]; then
+    echo "Skipping BUSCO outputs for cDNA isoforms because BUSCO hit the known MetaEuk transcriptome bug."
+    cleanup_busco_stage_temp_artifacts "busco_infile_cdna.fa"
+    echo "$(date): End: ${task}"
+  elif [[ ${busco_stage_status} -ne 0 ]]; then
     exit 1
+  else
+    if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_cdna_isoforms}" "${file_busco_short_cdna_isoforms}"; then
+      echo "Failed to locate normalized BUSCO outputs for cDNA isoforms. Capturing repro artifacts."
+      capture_busco_failure_context "cdna_isoforms" "busco_infile_cdna.fa" "./busco_tmp.stderr.log" || true
+      echo "Failed to locate normalized BUSCO outputs for cDNA isoforms. Exiting."
+      exit 1
+    fi
+    cleanup_busco_stage_temp_artifacts "busco_infile_cdna.fa"
+    echo "$(date): End: ${task}"
   fi
-
-  if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_cdna_isoforms}" "${file_busco_short_cdna_isoforms}"; then
-    echo "Failed to locate normalized BUSCO outputs for cDNA isoforms. Capturing repro artifacts."
-    capture_busco_failure_context "cdna_isoforms" "busco_infile_cdna.fa" "./busco_tmp.stderr.log" || true
-    echo "Failed to locate normalized BUSCO outputs for cDNA isoforms. Exiting."
-    exit 1
-  fi
-  rm -rf -- "./busco_tmp"
-  rm -f -- "busco_infile_cdna.fa"
-  rm -f -- "./busco_tmp.stderr.log"
-
-  echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
 fi
@@ -1928,6 +1946,7 @@ task='BUSCO for longest CDS'
 disable_if_no_input_file "run_busco_longest_cds" "${file_longestcds}"
 if [[ (! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longest_cds}") && ${run_busco_longest_cds} -eq 1 ]]; then
   gg_step_start "${task}"
+  busco_stage_status=0
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"
 
@@ -1940,21 +1959,26 @@ if [[ (! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longest
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  if ! run_busco_with_capture "longest_cds" "busco_infile_cds.fa"; then
+  set +e
+  run_busco_with_capture "longest_cds" "busco_infile_cds.fa"
+  busco_stage_status=$?
+  set -e
+  if [[ ${busco_stage_status} -eq 10 ]]; then
+    echo "Skipping BUSCO outputs for longest CDS because BUSCO hit the known MetaEuk transcriptome bug."
+    cleanup_busco_stage_temp_artifacts "busco_infile_cds.fa"
+    echo "$(date): End: ${task}"
+  elif [[ ${busco_stage_status} -ne 0 ]]; then
     exit 1
+  else
+    if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_longest_cds}" "${file_busco_short_longest_cds}"; then
+      echo "Failed to locate normalized BUSCO outputs for longest CDS. Capturing repro artifacts."
+      capture_busco_failure_context "longest_cds" "busco_infile_cds.fa" "./busco_tmp.stderr.log" || true
+      echo "Failed to locate normalized BUSCO outputs for longest CDS. Exiting."
+      exit 1
+    fi
+    cleanup_busco_stage_temp_artifacts "busco_infile_cds.fa"
+    echo "$(date): End: ${task}"
   fi
-
-  if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_longest_cds}" "${file_busco_short_longest_cds}"; then
-    echo "Failed to locate normalized BUSCO outputs for longest CDS. Capturing repro artifacts."
-    capture_busco_failure_context "longest_cds" "busco_infile_cds.fa" "./busco_tmp.stderr.log" || true
-    echo "Failed to locate normalized BUSCO outputs for longest CDS. Exiting."
-    exit 1
-  fi
-  rm -rf -- "./busco_tmp"
-  rm -f -- "busco_infile_cds.fa"
-  rm -f -- "./busco_tmp.stderr.log"
-
-  echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
 fi
@@ -1963,6 +1987,7 @@ task='BUSCO for contamination-removed longest CDS'
 disable_if_no_input_file "run_busco_contamination_removed_longest_cds" "${file_longestcds_contamination_removal_fasta}"
 if [[ (! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_short_longest_cds_filtered}") && ${run_busco_contamination_removed_longest_cds} -eq 1 ]]; then
   gg_step_start "${task}"
+  busco_stage_status=0
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"
 
@@ -1975,21 +2000,26 @@ if [[ (! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_shor
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  if ! run_busco_with_capture "contamination_removed_longest_cds" "busco_infile_cds.fa"; then
+  set +e
+  run_busco_with_capture "contamination_removed_longest_cds" "busco_infile_cds.fa"
+  busco_stage_status=$?
+  set -e
+  if [[ ${busco_stage_status} -eq 10 ]]; then
+    echo "Skipping BUSCO outputs for contamination-removed longest CDS because BUSCO hit the known MetaEuk transcriptome bug."
+    cleanup_busco_stage_temp_artifacts "busco_infile_cds.fa"
+    echo "$(date): End: ${task}"
+  elif [[ ${busco_stage_status} -ne 0 ]]; then
     exit 1
+  else
+    if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_longest_cds_filtered}" "${file_busco_short_longest_cds_filtered}"; then
+      echo "Failed to locate normalized BUSCO outputs for contamination-removed longest CDS. Capturing repro artifacts."
+      capture_busco_failure_context "contamination_removed_longest_cds" "busco_infile_cds.fa" "./busco_tmp.stderr.log" || true
+      echo "Failed to locate normalized BUSCO outputs for contamination-removed longest CDS. Exiting."
+      exit 1
+    fi
+    cleanup_busco_stage_temp_artifacts "busco_infile_cds.fa"
+    echo "$(date): End: ${task}"
   fi
-
-  if ! copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_busco_full_longest_cds_filtered}" "${file_busco_short_longest_cds_filtered}"; then
-    echo "Failed to locate normalized BUSCO outputs for contamination-removed longest CDS. Capturing repro artifacts."
-    capture_busco_failure_context "contamination_removed_longest_cds" "busco_infile_cds.fa" "./busco_tmp.stderr.log" || true
-    echo "Failed to locate normalized BUSCO outputs for contamination-removed longest CDS. Exiting."
-    exit 1
-  fi
-  rm -rf -- "./busco_tmp"
-  rm -f -- "busco_infile_cds.fa"
-  rm -f -- "./busco_tmp.stderr.log"
-
-  echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
 fi

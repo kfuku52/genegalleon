@@ -1005,7 +1005,7 @@ run_species_busco_for_one_file() {
 
   (
     cd "${busco_work_root}"
-    busco \
+    gg_run_busco_with_metaeuk_modified_fas_compat \
       --in "input.fasta" \
       --mode "transcriptome" \
       --out "busco_tmp" \

@@ -64,6 +64,76 @@ copy_busco_tables() {
   rm -f -- "${tmp_full_src}"
 }
 
+gg_busco_hmmsearch_wrapper_path() {
+  local support_dir="${gg_support_dir:-}"
+  if [[ -z "${support_dir}" ]]; then
+    support_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  fi
+  printf '%s\n' "${support_dir}/gg_wrapper_bin/hmmsearch"
+}
+
+gg_run_busco_with_metaeuk_modified_fas_compat() {
+  local wrapper_path=""
+  local wrapper_dir=""
+  local real_hmmsearch=""
+  local wrapped_path=""
+
+  wrapper_path="$(gg_busco_hmmsearch_wrapper_path)"
+  if [[ ! -x "${wrapper_path}" ]]; then
+    echo "BUSCO hmmsearch compatibility wrapper is missing or not executable: ${wrapper_path}" >&2
+    return 1
+  fi
+
+  real_hmmsearch="$(command -v hmmsearch || true)"
+  if [[ -z "${real_hmmsearch}" ]]; then
+    echo "hmmsearch command not found while preparing BUSCO compatibility wrapper." >&2
+    return 1
+  fi
+  if [[ "${real_hmmsearch}" == "${wrapper_path}" ]]; then
+    if [[ -z "${GG_REAL_HMMSEARCH:-}" || "${GG_REAL_HMMSEARCH}" == "${wrapper_path}" ]]; then
+      echo "Resolved hmmsearch points to the GeneGalleon wrapper itself: ${real_hmmsearch}" >&2
+      return 1
+    fi
+    real_hmmsearch="${GG_REAL_HMMSEARCH}"
+  fi
+
+  wrapper_dir="$(dirname "${wrapper_path}")"
+  wrapped_path="${PATH:-}"
+  case ":${wrapped_path}:" in
+    *":${wrapper_dir}:"*)
+      ;;
+    *)
+      wrapped_path="${wrapper_dir}${wrapped_path:+:${wrapped_path}}"
+      ;;
+  esac
+
+  PATH="${wrapped_path}" \
+    GG_REAL_HMMSEARCH="${real_hmmsearch}" \
+    GG_BUSCO_METAEUK_MODIFIED_FAS_COMPAT=1 \
+    busco "$@"
+}
+
+gg_busco_stderr_matches_known_metaeuk_modified_fas_bug() {
+  local stderr_log=$1
+
+  if [[ ! -s "${stderr_log}" ]]; then
+    return 1
+  fi
+  if ! grep -Fq 'metaeuk_output/initial_results/' "${stderr_log}"; then
+    return 1
+  fi
+  if ! grep -Fq '.modified.fas' "${stderr_log}"; then
+    return 1
+  fi
+  if grep -Fq 'Failed to open sequence file' "${stderr_log}"; then
+    return 0
+  fi
+  if grep -Fq 'is empty or misformatted' "${stderr_log}"; then
+    return 0
+  fi
+  return 1
+}
+
 get_busco_summary_gene_count() {
   local summary_table=$1
   local line_count=0

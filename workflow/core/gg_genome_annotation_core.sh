@@ -240,7 +240,7 @@ if [[ (! -s "${file_sp_cds_busco_full}" || ! -s "${file_sp_cds_busco_short}") &&
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  if busco \
+  if gg_run_busco_with_metaeuk_modified_fas_compat \
     --in "${busco_infile}" \
     --mode transcriptome \
     --out "busco_tmp" \
@@ -284,7 +284,7 @@ if [[ (! -s "${file_sp_genome_busco_full}" || ! -s "${file_sp_genome_busco_short
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  if busco \
+  if gg_run_busco_with_metaeuk_modified_fas_compat \
     --in "busco_genome_input.fa" \
     --mode "genome" \
     --out "busco_tmp" \

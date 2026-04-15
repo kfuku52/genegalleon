@@ -2861,13 +2861,39 @@ def test_transcriptome_core_captures_busco_repro_artifacts_on_failure_paths():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
     assert 'capture_busco_failure_context() {' in text
+    assert 'cleanup_busco_stage_temp_artifacts() {' in text
     assert 'run_busco_with_capture() {' in text
     assert 'capture_busco_repro_artifacts \\' in text
     assert '2> >(tee "${stderr_log}" >&2)' in text
-    assert 'if ! run_busco_with_capture "cdna_isoforms" "busco_infile_cdna.fa"; then' in text
-    assert 'if ! run_busco_with_capture "longest_cds" "busco_infile_cds.fa"; then' in text
-    assert 'if ! run_busco_with_capture "contamination_removed_longest_cds" "busco_infile_cds.fa"; then' in text
+    assert 'if ! gg_run_busco_with_metaeuk_modified_fas_compat \\' in text
+    assert 'if gg_busco_stderr_matches_known_metaeuk_modified_fas_bug "${stderr_log}"; then' in text
+    assert 'return 10' in text
+    assert 'Skipping BUSCO outputs for longest CDS because BUSCO hit the known MetaEuk transcriptome bug.' in text
+    assert 'run_busco_with_capture "cdna_isoforms" "busco_infile_cdna.fa"' in text
+    assert 'run_busco_with_capture "longest_cds" "busco_infile_cds.fa"' in text
+    assert 'run_busco_with_capture "contamination_removed_longest_cds" "busco_infile_cds.fa"' in text
     assert 'capture_busco_failure_context "cdna_isoforms" "busco_infile_cdna.fa" "./busco_tmp.stderr.log"' in text
+
+
+def test_busco_support_script_uses_shared_hmmsearch_compat_wrapper():
+    script = WORKFLOW_DIR / "support" / "gg_busco.sh"
+    text = _read_text(script)
+    assert 'gg_busco_hmmsearch_wrapper_path() {' in text
+    assert 'gg_run_busco_with_metaeuk_modified_fas_compat() {' in text
+    assert 'gg_busco_stderr_matches_known_metaeuk_modified_fas_bug() {' in text
+    assert 'GG_REAL_HMMSEARCH="${real_hmmsearch}" \\' in text
+    assert 'GG_BUSCO_METAEUK_MODIFIED_FAS_COMPAT=1 \\' in text
+
+
+def test_busco_call_sites_use_shared_hmmsearch_compat_helper():
+    transcriptome = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    annotation = _read_text(CORE_DIR / "gg_genome_annotation_core.sh")
+    input_generation = _read_text(CORE_DIR / "gg_input_generation_core.sh")
+    genome_evolution = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+    assert 'gg_run_busco_with_metaeuk_modified_fas_compat \\' in transcriptome
+    assert 'gg_run_busco_with_metaeuk_modified_fas_compat \\' in annotation
+    assert 'gg_run_busco_with_metaeuk_modified_fas_compat \\' in input_generation
+    assert 'gg_run_busco_with_metaeuk_modified_fas_compat \\' in genome_evolution
 
 
 def test_transcriptome_core_uses_array_for_assembly_stat_input_files():

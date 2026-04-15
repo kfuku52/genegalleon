@@ -666,7 +666,7 @@ run_shared_species_busco_stage() {
       fi
       dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-      busco \
+      gg_run_busco_with_metaeuk_modified_fas_compat \
         --in "tmp.busco_input.fasta" \
         --mode "${species_tree_busco_mode}" \
         --out "busco_tmp" \
