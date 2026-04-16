@@ -17,6 +17,19 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from species_labeling import extract_species_label
 
+AMALGKIT_SAFELY_REMOVED_SUFFIX = ".safely_removed"
+LEGACY_SAFELY_REMOVED_SUFFIX = "_safely_removed.txt"
+SAFELY_REMOVED_SUMMARY_COLUMN = "safely_removed"
+SAFELY_REMOVED_DISPLAY_GLOB = "amalgkit_getfastq/<species>/*.safely_removed"
+
+
+def is_amalgkit_safely_removed_flag(filename):
+    return filename.endswith(AMALGKIT_SAFELY_REMOVED_SUFFIX)
+
+
+def is_legacy_safely_removed_flag(filename):
+    return filename.endswith(LEGACY_SAFELY_REMOVED_SUFFIX)
+
 
 def build_arg_parser():
     parser = argparse.ArgumentParser()
@@ -96,12 +109,12 @@ def collect_species_ids_for_subdir(base_dir, subdir):
     if subdir == 'amalgkit_getfastq':
         species_ids_in_files = set()
         for f in files:
-            if f.endswith('.safely_removed.txt'):
+            if is_legacy_safely_removed_flag(f):
                 species_id = extract_species_label(f, strip_extension=True)
                 species_ids_in_files.add(species_id)
             else:
                 path = os.path.join(subdir_path, f)
-                if os.path.isdir(path) and os.listdir(path):
+                if os.path.isdir(path) and sorted_entries(path):
                     species_ids_in_files.add(f)
         return species_ids_in_files
     return {
@@ -109,6 +122,27 @@ def collect_species_ids_for_subdir(base_dir, subdir):
         for species_id in (extract_species_label(f, strip_extension=True) for f in files)
         if species_id != ''
     }
+
+
+def collect_safely_removed_species_ids(base_dir):
+    flagdir_path = os.path.realpath(os.path.join(base_dir, 'amalgkit_getfastq'))
+    if not os.path.isdir(flagdir_path):
+        return set()
+
+    safely_removed_species_ids = set()
+    for entry in sorted_entries(flagdir_path):
+        entry_path = os.path.join(flagdir_path, entry)
+        if is_legacy_safely_removed_flag(entry):
+            species_id = extract_species_label(entry, strip_extension=True)
+            if species_id != '':
+                safely_removed_species_ids.add(species_id)
+            continue
+        if not os.path.isdir(entry_path):
+            continue
+        nested_files = sorted_entries(entry_path)
+        if any(is_amalgkit_safely_removed_flag(name) for name in nested_files):
+            safely_removed_species_ids.add(entry)
+    return safely_removed_species_ids
 
 
 def run(args):
@@ -162,22 +196,23 @@ def run(args):
         txt = 'Subdirectory {}: {:,} / {:,} files are missing.'
         print(txt.format(subdir, num_missing, df.shape[0]))
 
-    df = pandas.concat([df, pandas.DataFrame(data=0, index=df.index, columns=['safely_removed.txt'], dtype=int)], axis=1)
-    flagdir_path = os.path.realpath(os.path.join(base_dir, 'amalgkit_getfastq'))
-    if os.path.isdir(flagdir_path):
-        flag_files = [f for f in sorted_entries(flagdir_path) if f.endswith('.safely_removed.txt')]
-        flag_species_ids = {extract_species_label(f, strip_extension=True) for f in flag_files}
-        flag_species_ids_with_file = list(flag_species_ids & set(df.index))
-        df.loc[flag_species_ids_with_file, 'safely_removed.txt'] = 1
-        num_missing = (df['safely_removed.txt'] == 0).sum()
-        print(
-            'amalgkit_getfastq/*.safely_removed.txt: {:,} / {:,} files are missing.'.format(
-                num_missing, df.shape[0]
-            )
-        )
+    df = pandas.concat(
+        [df, pandas.DataFrame(data=0, index=df.index, columns=[SAFELY_REMOVED_SUMMARY_COLUMN], dtype=int)],
+        axis=1,
+    )
+    safely_removed_species_ids = collect_safely_removed_species_ids(base_dir)
+    safely_removed_species_ids_with_file = list(safely_removed_species_ids & set(df.index))
+    df.loc[safely_removed_species_ids_with_file, SAFELY_REMOVED_SUMMARY_COLUMN] = 1
+    num_missing = (df[SAFELY_REMOVED_SUMMARY_COLUMN] == 0).sum()
+    print(
+        '{}: {:,} / {:,} files are missing.'.format(SAFELY_REMOVED_DISPLAY_GLOB, num_missing, df.shape[0])
+    )
 
-    incomplete_ids = df.loc[df['safely_removed.txt'] == 0, 'GG_ARRAY_TASK_ID'].astype(int).tolist()
-    print('Incomplete job IDs (based on amalgkit_getfastq/*.safely_removed.txt):', ','.join(str(x) for x in sorted(incomplete_ids)))
+    incomplete_ids = df.loc[df[SAFELY_REMOVED_SUMMARY_COLUMN] == 0, 'GG_ARRAY_TASK_ID'].astype(int).tolist()
+    print(
+        'Incomplete job IDs (based on {}):'.format(SAFELY_REMOVED_DISPLAY_GLOB),
+        ','.join(str(x) for x in sorted(incomplete_ids)),
+    )
 
     print('Writing output file:', args.out, flush=True)
     df.to_csv(args.out, index=True, sep='\t')

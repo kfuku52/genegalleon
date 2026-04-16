@@ -106,7 +106,7 @@ Practical reading tips:
 
 Transcriptome summary rows are species based rather than orthogroup based.
 The wrapper also prints incomplete species IDs inferred from missing
-`amalgkit_getfastq/*.safely_removed.txt` markers.
+`amalgkit_getfastq/<species>/*.safely_removed` markers.
 
 ## Query2family completion audit
 
