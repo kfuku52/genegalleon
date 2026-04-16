@@ -224,6 +224,21 @@ def _install_fake_toolchain(root: Path) -> Path:
         mode=0o755,
     )
     _write_text(
+        bin_dir / "hmmsearch",
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+
+            if [[ $# -gt 0 ]]; then
+              last_arg="${!#}"
+              [[ -e "${last_arg}" ]]
+            fi
+            """
+        ),
+        mode=0o755,
+    )
+    _write_text(
         bin_dir / "busco",
         textwrap.dedent(
             """\
