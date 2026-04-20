@@ -50,7 +50,9 @@ This is the user-managed side of the workspace.
 
 Typical contents:
 
-- `species_cds/`: CDS FASTA inputs for comparative/genome-evolution workflows
+- `species_cds/`: CDS FASTA inputs for comparative/genome-evolution workflows;
+  sequence IDs must follow `GENUS_SPECIES_GENEID` as described in
+  [Input Conventions](input-conventions.md)
 - `species_protein/`: optional per-species protein FASTA inputs for `gg_genome_evolution` protein mode
 - `species_genetic_code/`: optional `species_genetic_code.tsv` table for per-species CDS translation overrides
 - `species_gff/` and `species_genome/`: optional annotation/genome companions

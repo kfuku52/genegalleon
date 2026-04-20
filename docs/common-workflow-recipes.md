@@ -100,11 +100,27 @@ Main outputs:
 
 ## 4. Build the species tree, orthogroups, and genome-evolution outputs
 
-Use `gg_genome_evolution_entrypoint.sh` when you already have multispecies CDS inputs and want the core comparative scaffold.
-It also supports `input_sequence_mode=protein` when you want the species-tree and orthogroup stages to run from protein sequences only.
-In protein mode, place per-species protein FASTA files under `workspace/input/species_protein`, or let GeneGalleon translate `workspace/input/species_cds` with the optional per-species override table `workspace/input/species_genetic_code/species_genetic_code.tsv`.
-When `input_sequence_mode=cds`, GeneGalleon ignores `workspace/input/species_protein` and always builds temporary proteins from `workspace/input/species_cds`.
-Protein mode automatically disables DNA-tree, IQ2MC/MCMCtree, and BUSCO-based genome-evolution steps that still require CDS inputs.
+Use `gg_genome_evolution_entrypoint.sh` when you already have multispecies CDS
+inputs and want the core comparative scaffold.
+CDS FASTA sequence IDs must already follow the `GENUS_SPECIES_GENEID`
+convention documented in [Input Conventions](input-conventions.md).
+It also supports `input_sequence_mode=protein` when you want the species-tree
+and orthogroup stages to run from protein sequences only.
+Most CDS-first runs do not need `workspace/input/species_protein`; GeneGalleon
+can translate `workspace/input/species_cds` into temporary proteins when
+needed. In protein mode, place per-species protein FASTA files under
+`workspace/input/species_protein` only when curated/native proteins should be
+used directly, or let GeneGalleon translate `workspace/input/species_cds` with
+the optional per-species override table
+`workspace/input/species_genetic_code/species_genetic_code.tsv`.
+Providing correctly translated `species_protein` files can also include
+lineages with different genetic codes, but codon-sequence-based analyses are
+not available from protein-only inputs.
+When `input_sequence_mode=cds`, GeneGalleon ignores
+`workspace/input/species_protein` and always builds temporary proteins from
+`workspace/input/species_cds`.
+Protein mode automatically disables DNA-tree, IQ2MC/MCMCtree, and BUSCO-based
+genome-evolution steps that still require CDS inputs.
 If you also want OMArk quality assessment, set `run_species_omark=1`; OMArk
 uses the same effective protein set as the unified workflow, namely
 `workspace/input/species_protein` in protein mode when present, otherwise

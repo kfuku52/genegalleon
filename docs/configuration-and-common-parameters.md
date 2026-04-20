@@ -148,9 +148,17 @@ For mixed-code projects, the intended setup is:
 3. run `gg_genome_evolution_entrypoint.sh` with `input_sequence_mode="protein"`.
 
 In that mode, GeneGalleon prefers `workspace/input/species_protein` when present.
-If `species_protein` is absent, it translates `workspace/input/species_cds` to temporary proteins,
-applying per-species overrides from `species_genetic_code.tsv` first and the global default code second.
-DNA-tree and dating steps that still require CDS-only assumptions are disabled automatically in protein mode.
+Most projects should leave `species_protein` absent unless curated or native
+protein FASTA files should be used directly. If `species_protein` is absent, it
+translates `workspace/input/species_cds` to temporary proteins, applying
+per-species overrides from `species_genetic_code.tsv` first and the global
+default code second.
+Providing correctly translated `species_protein` files is another way to include
+lineages with different genetic codes, because GeneGalleon does not translate
+CDS in that path. The trade-off is that codon-sequence-based analyses are not
+available from protein-only inputs.
+DNA-tree and dating steps that still require CDS-only assumptions are disabled
+automatically in protein mode.
 
 ## How `GG_COMMON_*` is applied
 

@@ -2,13 +2,15 @@
 
 ### Species naming
 
-Species IDs are inferred from filename prefixes such as `Genus_species`.
+Species IDs are inferred from filename prefixes such as `GENUS_SPECIES`.
 Many joins/merges across pipeline stages rely on this convention.
+`GENUS_SPECIES` is a placeholder for the actual species label, for example
+`Arabidopsis_thaliana` or `Oryza_sativa`.
 
 For most species-wise inputs, use either:
 
-- a filename that starts with `Genus_species_...`
-- or a directory named `Genus_species`
+- a filename that starts with `GENUS_SPECIES_...`
+- or a directory named `GENUS_SPECIES`
 
 Typical examples:
 
@@ -26,25 +28,79 @@ Major scripts accept:
 ### `workspace/input/species_cds`
 
 - one CDS FASTA per species,
-- sequence IDs should be unique,
-- avoid spaces and `|` in IDs when possible,
-- species prefix on IDs (`Genus_species_...`) is strongly recommended.
+- accepted extensions follow the FASTA list above,
+- filenames must start with the species label, such as `GENUS_SPECIES_...`,
+- sequence IDs must be unique,
+- every sequence ID must use the required `GENUS_SPECIES_GENEID` format:
+  `GENUS_SPECIES_` followed by the gene identifier.
+
+Examples of valid `species_cds` FASTA headers:
+
+```fasta
+>Arabidopsis_thaliana_AT1G08465.1
+ATGGAGAGAAATCTTCTCTCT...
+>Oryza_sativa_Os01g0100100
+ATGGCGTCGACGATCGAGAT...
+>Selaginella_moellendorffii_GeneID112340394
+ATGGCAGCTGCTGATCGTAA...
+```
+
+The `GENUS_SPECIES` prefix in each sequence ID must match the species prefix
+parsed from that FASTA filename. Avoid whitespace and special punctuation in
+IDs; use letters, numbers, `_`, `.`, or `-` for portable downstream joins.
+
+Examples that fail validation:
+
+- `>AT1G08465.1`: missing the required species prefix,
+- `>Arabidopsis_thaliana|AT1G08465.1`: contains the prohibited `|` character,
+- `>Arabidopsis_thaliana_AT1G08465.1` in `Oryza_sativa_IRGSP.fa.gz`:
+  sequence prefix does not match the FASTA filename prefix.
 
 ### `workspace/input/species_protein`
 
-- optional input used by `gg_genome_evolution_entrypoint.sh` only when `input_sequence_mode="protein"`,
+This directory is usually not needed for CDS-first runs. When `species_cds`
+inputs are available, GeneGalleon can translate them into temporary protein
+FASTA files for species-tree, orthogroup, and OMArk steps.
+
+- optional curated input used by `gg_genome_evolution_entrypoint.sh` only when
+  `input_sequence_mode="protein"`,
 - one protein FASTA per species,
 - accepted extensions follow the same FASTA list as `species_cds`,
 - sequence IDs should stay consistent with downstream orthogroup and annotation joins,
 - one gene per protein is strongly recommended when using OMArk quality assessment,
-- species prefix on IDs (`Genus_species_...`) is strongly recommended.
+- species prefix on IDs (`GENUS_SPECIES_...`) is strongly recommended.
+
+Provide `species_protein` only when you want GeneGalleon to use a protein set
+directly instead of translating `species_cds`. Common cases:
+
+- you have curated or official protein FASTA files that should define the
+  species-tree and orthogroup inputs,
+- CDS files are unavailable, incomplete, or not trustworthy enough for
+  translation,
+- you want OMArk or other protein-based checks to evaluate the provided
+  protein products rather than CDS-derived translations,
+- you need to include lineages with different genetic codes and provide
+  proteins that were already translated with the correct code upstream,
+- you intentionally want a protein-only genome-evolution run and accept that
+  CDS-only and codon-sequence-based downstream analyses are disabled.
+
+Unlike `species_cds`, protein-mode inputs may come from external protein sets,
+so the `GENUS_SPECIES_GENEID` pattern is recommended for join compatibility but
+is not enforced as a CDS validation rule.
 
 Important behavior:
 
-- in `input_sequence_mode="protein"`, GeneGalleon uses `species_protein` directly when files are present,
-- in `input_sequence_mode="cds"`, GeneGalleon ignores `species_protein` and always generates temporary proteins from `species_cds`.
+- in `input_sequence_mode="protein"`, GeneGalleon uses `species_protein`
+  directly when files are present,
+- in `input_sequence_mode="cds"`, GeneGalleon ignores `species_protein` and
+  always generates temporary proteins from `species_cds`.
 - OMArk always runs against the effective protein set; in CDS mode that means
   temporary proteins translated from `species_cds`, not the raw CDS files.
+- if you want `species_genetic_code.tsv` to affect translation, leave
+  `species_protein` absent so GeneGalleon translates from `species_cds`.
+- using `species_protein` can include species with different genetic codes
+  because GeneGalleon does not translate CDS in that path; the trade-off is
+  that codon-sequence-based analyses are unavailable.
 
 ### `workspace/input/species_genetic_code/species_genetic_code.tsv`
 
@@ -201,10 +257,11 @@ python workflow/support/format_species_inputs.py \
 
 Notes:
 
-- output filenames are normalized to start with `Genus_species_...`,
+- output filenames are normalized to start with `GENUS_SPECIES_...`,
 - formatted CDS outputs are always gzipped with `.fa.gz` extension,
 - formatted GFF outputs are always gzipped with `.gff.gz` extension,
-- CDS IDs are prefixed with `Genus_species_...` and aggregated to one representative CDS per gene,
+- CDS IDs are normalized into the required `GENUS_SPECIES_GENEID` pattern and
+  aggregated to one representative CDS per gene,
 - common historical replacements are applied to CDS/GFF text,
 - CDS are padded to codon-length multiples and transcript-level redundancies are collapsed at gene level.
 - when taxonomy cache preparation succeeds, the generated

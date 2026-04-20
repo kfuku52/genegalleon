@@ -20,7 +20,10 @@ Main scripts:
 
 Notable defaults:
 
-- `run_validate_inputs=1` validates CDS naming rules, CDS/GFF species-set consistency, and CDS-to-GFF mapping compatibility, with species-level mapping checks parallelized via `validate_cds_gff_mapping.py --nthreads`,
+- `run_validate_inputs=1` validates CDS naming rules, including the required
+  `GENUS_SPECIES_GENEID` sequence-ID pattern, CDS/GFF species-set consistency,
+  and CDS-to-GFF mapping compatibility, with species-level mapping checks
+  parallelized via `validate_cds_gff_mapping.py --nthreads`,
 - `run_species_busco=1` runs BUSCO on formatted CDS inputs by default,
 - `run_multispecies_summary=1` generates BUSCO plots and `annotation_summary.tsv` under `workspace/output/input_generation/annotation_summary/`,
 - formatted outputs default to `workspace/output/input_generation/species_cds`, `workspace/output/input_generation/species_gff`, and `workspace/output/input_generation/species_genome`,
@@ -165,7 +168,10 @@ Purpose:
   - inlined orthofinder stage (formerly `gg_orthofinder_core.sh`)
   - inlined genome-evolution stage (formerly `gg_genomeEvolution_core.sh`)
 - preserves output-exists skip behavior at step level and aborts on real failures.
-- accepts either CDS-first input (`input_sequence_mode=cds`) or protein-only input (`input_sequence_mode=protein`).
+- accepts either CDS-first input (`input_sequence_mode=cds`) or protein-only
+  input (`input_sequence_mode=protein`); protein-only input can include
+  correctly translated proteins from lineages with different genetic codes, but
+  codon-sequence-based analyses are unavailable.
 
 Main output roots:
 
