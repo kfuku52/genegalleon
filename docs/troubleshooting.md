@@ -133,7 +133,10 @@ What to check:
 - either `workspace/input/species_protein/` or `workspace/input/species_cds/` exists,
 - if both exist, protein mode prefers `species_protein` and ignores `species_genetic_code.tsv`,
 - if you want per-species translation overrides to matter, remove or relocate `species_protein` and let the run translate from `species_cds`,
-- protein mode intentionally disables DNA-only species-tree and dating steps such as DNA IQ-TREE, IQ2MC, and MCMCtree.
+- protein mode can include correctly translated proteins from lineages with
+  different genetic codes,
+- protein mode intentionally disables DNA-only and codon-sequence-based steps
+  such as DNA IQ-TREE, IQ2MC, and MCMCtree.
 
 Useful log messages:
 
@@ -142,6 +145,28 @@ Useful log messages:
 - `Shared protein input signature changed for ...`
 
 Those messages indicate GeneGalleon is applying the current mode rules and invalidating stale derived proteins when the effective inputs change.
+
+### `species_cds` validation fails
+
+Symptoms:
+
+- a genome annotation, genome evolution, or input-generation run exits during CDS validation,
+- the log reports that sequence names are inconsistent with the species name parsed from the FASTA filename,
+- the log reports duplicate sequence names or prohibited characters.
+
+What to check:
+
+- every `workspace/input/species_cds` FASTA filename starts with the species label, such as `GENUS_SPECIES_...`,
+- every FASTA header follows the required `GENUS_SPECIES_GENEID` pattern,
+- the `GENUS_SPECIES` prefix in each sequence ID matches the prefix parsed from that file's name,
+- sequence IDs are unique within each FASTA,
+- sequence IDs do not contain whitespace or special punctuation such as `|`.
+
+Common invalid examples:
+
+- `>AT1G08465.1`: missing the required species prefix,
+- `>Arabidopsis_thaliana|AT1G08465.1`: contains the prohibited `|` character,
+- `>Arabidopsis_thaliana_AT1G08465.1` inside `Oryza_sativa_IRGSP.fa.gz`: sequence prefix and filename prefix do not match.
 
 ### Input-generation summary lacks `taxid` or genetic-code metadata
 
