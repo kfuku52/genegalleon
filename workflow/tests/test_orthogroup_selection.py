@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import numpy
 import pandas
+import pytest
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "orthogroup_selection.py"
@@ -105,6 +106,14 @@ def test_get_species_protein_files_returns_sorted_file_names(tmp_path):
     assert files == ["spA.fa", "spB.fa"]
 
 
+def test_format_command_for_log_escapes_control_characters():
+    mod = load_module()
+    command_log = mod._format_command_for_log(["mmseqs", "search", "clean", "bad\npath"])
+
+    assert "\\n" in command_log
+    assert "bad\npath" not in command_log
+
+
 def test_get_concatenated_fx2tab_runs_single_seqkit_call(monkeypatch, tmp_path):
     mod = load_module()
     file_a = tmp_path / "spA.fa"
@@ -196,3 +205,39 @@ def test_load_besthit_table_reads_only_first_two_columns(tmp_path):
         {"qseqid": "geneA", "stitle": "hitA"},
         {"qseqid": "geneB", "stitle": "hitB"},
     ]
+
+
+def test_resolve_mmseqs_db_prefix_rejects_multiline_path():
+    mod = load_module()
+
+    with pytest.raises(ValueError, match="contains control characters"):
+        mod._resolve_mmseqs_db_prefix("createdb /tmp/uniprot.pep\n/tmp/uniprot.mmseqs")
+
+
+def test_resolve_mmseqs_db_prefix_requires_existing_db_files(tmp_path):
+    mod = load_module()
+    prefix = tmp_path / "uniprot_sprot"
+
+    with pytest.raises(FileNotFoundError, match="MMseqs2 search DB files were not found"):
+        mod._resolve_mmseqs_db_prefix(str(prefix))
+
+    mmseqs_prefix = tmp_path / "uniprot_sprot.mmseqs"
+    mmseqs_prefix.write_text("db\n", encoding="utf-8")
+    (tmp_path / "uniprot_sprot.mmseqs.dbtype").write_text("0\n", encoding="utf-8")
+
+    assert mod._resolve_mmseqs_db_prefix(str(prefix)) == str(mmseqs_prefix)
+
+
+def test_resolve_blast_db_prefix_allows_spaces_but_rejects_control_characters(tmp_path):
+    mod = load_module()
+    prefix = tmp_path / "uniprot sprot"
+
+    with pytest.raises(ValueError, match="contains control characters"):
+        mod._resolve_blast_db_prefix(str(prefix) + "\nlog")
+    with pytest.raises(FileNotFoundError, match="BLASTP search DB files were not found"):
+        mod._resolve_blast_db_prefix(str(prefix))
+
+    for ext in (".pin", ".phr", ".psq"):
+        (tmp_path / ("uniprot sprot" + ext)).write_text("db\n", encoding="utf-8")
+
+    assert mod._resolve_blast_db_prefix(str(prefix)) == str(prefix)

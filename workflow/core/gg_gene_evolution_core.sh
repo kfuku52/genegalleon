@@ -1351,6 +1351,10 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
       echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
       exit 1
     fi
+    if ! validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "blastp"; then
+      echo "Invalid UniProt Swiss-Prot BLASTP DB prefix. Exiting."
+      exit 1
+    fi
 
     blastp \
       -query uniprot.query.pep.fas \
@@ -1363,6 +1367,10 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
   else
     if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${gg_workspace_dir}"); then
       echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
+      exit 1
+    fi
+    if ! validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "mmseqs2"; then
+      echo "Invalid UniProt Swiss-Prot MMseqs2 DB prefix. Exiting."
       exit 1
     fi
 

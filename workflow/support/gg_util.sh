@@ -4208,7 +4208,9 @@ gg_array_download_once() {
   fi
 
   echo "GG_ARRAY_TASK_ID=${task_id}: starting shared artifact preparation: ${description}" >&2
-  "$@"
+  # Artifact builders may run tools that log to stdout; keep caller-captured
+  # return values, such as DB prefixes, clean.
+  "$@" >&2
   artifact_exit_code=$?
   if [[ ${artifact_exit_code} -ne 0 ]]; then
     echo "GG_ARRAY_TASK_ID=${task_id}: shared artifact preparation failed: ${description}" >&2
@@ -4599,6 +4601,39 @@ _build_blast_db_from_fasta() {
     return 1
   fi
   gg_write_ready_marker "${done_file}"
+}
+
+validate_uniprot_sprot_db_prefix() {
+  local db_prefix=$1
+  local db_kind=$2
+
+  if [[ -z "${db_prefix}" ]]; then
+    echo "UniProt Swiss-Prot ${db_kind} DB prefix is empty." >&2
+    return 1
+  fi
+  if [[ "${db_prefix}" == *$'\n'* || "${db_prefix}" == *$'\r'* || "${db_prefix}" == *$'\t'* ]]; then
+    printf 'UniProt Swiss-Prot %s DB prefix is malformed: %q\n' "${db_kind}" "${db_prefix}" >&2
+    return 1
+  fi
+
+  case "${db_kind}" in
+    blastp)
+      if [[ ! -s "${db_prefix}.pin" || ! -s "${db_prefix}.phr" || ! -s "${db_prefix}.psq" ]]; then
+        echo "UniProt Swiss-Prot BLASTP DB files were not found for prefix: ${db_prefix}" >&2
+        return 1
+      fi
+      ;;
+    mmseqs2)
+      if [[ ! -s "${db_prefix}.mmseqs" || ! -s "${db_prefix}.mmseqs.dbtype" ]]; then
+        echo "UniProt Swiss-Prot MMseqs2 DB files were not found for prefix: ${db_prefix}" >&2
+        return 1
+      fi
+      ;;
+    *)
+      echo "Unsupported UniProt Swiss-Prot DB kind: ${db_kind}" >&2
+      return 1
+      ;;
+  esac
 }
 
 ensure_uniprot_sprot_db() {

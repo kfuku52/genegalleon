@@ -27,6 +27,17 @@ import numpy
 import pandas
 
 
+def _format_command_arg_for_log(arg):
+    value = str(arg)
+    if any(ch in value for ch in ('\n', '\r', '\t')):
+        return repr(value)
+    return shlex.quote(value)
+
+
+def _format_command_for_log(command):
+    return ' '.join(_format_command_arg_for_log(x) for x in command)
+
+
 def build_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--remove_unannotated', metavar='yes|no', default='yes', type=strtobool, help='')
@@ -54,7 +65,7 @@ def get_pyplot():
 
 
 def run_command(command, stdout_file=None, append=False, tool_name='tool', capture_output=False):
-    print('Command:', ' '.join(shlex.quote(str(x)) for x in command))
+    print('Command:', _format_command_for_log(command))
     stdout_handle = None
     stdout_stream = None
     if stdout_file is not None:
@@ -245,10 +256,45 @@ def _cleanup_mmseqs_tmp(tmp_query_db, tmp_result_db, tmp_mmseqs_dir):
         shutil.rmtree(tmp_mmseqs_dir)
 
 
+def _reject_malformed_search_db_path(path_search_db, method):
+    if path_search_db == '':
+        raise ValueError('--path_search_db is empty for {} annotation search.'.format(method))
+    if any(ch in path_search_db for ch in ('\n', '\r', '\t', '\x00')):
+        raise ValueError(
+            '--path_search_db for {} annotation search contains control characters: {!r}'.format(
+                method, path_search_db
+            )
+        )
+
+
+def _resolve_blast_db_prefix(path_search_db):
+    _reject_malformed_search_db_path(path_search_db, 'blastp')
+    missing = [
+        path_search_db + ext
+        for ext in ('.pin', '.phr', '.psq')
+        if not os.path.exists(path_search_db + ext)
+    ]
+    if len(missing) > 0:
+        raise FileNotFoundError(
+            'BLASTP search DB files were not found for --path_search_db {!r}; missing: {}'.format(
+                path_search_db, ', '.join(missing)
+            )
+        )
+    return path_search_db
+
+
 def _resolve_mmseqs_db_prefix(path_search_db):
-    if os.path.exists(path_search_db + '.dbtype'):
+    _reject_malformed_search_db_path(path_search_db, 'mmseqs2')
+    if os.path.exists(path_search_db) and os.path.exists(path_search_db + '.dbtype'):
         return path_search_db
-    return path_search_db + '.mmseqs'
+    mmseqs_db = path_search_db + '.mmseqs'
+    if os.path.exists(mmseqs_db) and os.path.exists(mmseqs_db + '.dbtype'):
+        return mmseqs_db
+    raise FileNotFoundError(
+        'MMseqs2 search DB files were not found for --path_search_db {!r}; expected {} + .dbtype or {} + .dbtype'.format(
+            path_search_db, path_search_db, mmseqs_db
+        )
+    )
 
 
 def annotate_representative_genes(df_gc_original_quartile, args):
@@ -274,9 +320,10 @@ def annotate_representative_genes(df_gc_original_quartile, args):
             ]
             run_command(command_seqkit, stdout_file=tmp_query_fasta, append=True, tool_name='seqkit')
         if method == 'blastp':
+            blast_db = _resolve_blast_db_prefix(args.path_search_db)
             command_blastp = [
                 'blastp', '-query', tmp_query_fasta, '-num_threads', str(args.ncpu),
-                '-db', args.path_search_db, '-outfmt', '6 qseqid stitle evalue bitscore',
+                '-db', blast_db, '-outfmt', '6 qseqid stitle evalue bitscore',
                 '-max_target_seqs', '1', '-evalue', args.evalue, '-out', tmp_search_out
             ]
             run_command(command_blastp, tool_name='blastp')

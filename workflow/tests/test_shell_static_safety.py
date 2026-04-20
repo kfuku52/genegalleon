@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import subprocess
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1188,9 +1189,177 @@ def test_download_lock_helper_uses_shared_lock_metadata_and_heartbeat():
     assert 'if ! gg_shared_lock_acquire "${lock_file}" "${description}"; then' in body
     assert 'gg_shared_lock_start_heartbeat "${lock_file}"' in body
     assert 'heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}' in body
+    assert '"$@" >&2' in body
     assert 'gg_shared_lock_stop_heartbeat "${heartbeat_pid}"' in body
     assert 'gg_shared_lock_release "${lock_file}"' in body
     assert '.dlock' not in body
+
+
+def test_download_lock_helper_redirects_artifact_stdout(tmp_path):
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    artifact_path = tmp_path / "artifact.ready"
+    lock_path = tmp_path / "artifact.lock"
+    script = f"""
+set -euo pipefail
+source "{util_path}"
+GG_ARRAY_TASK_ID=1
+GG_LOCK_HEARTBEAT_SECONDS=1
+fake_builder() {{
+  echo noisy-tool-stdout
+  gg_write_ready_marker "{artifact_path}"
+}}
+gg_array_download_once "{lock_path}" "{artifact_path}" "fake artifact" fake_builder
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert "noisy-tool-stdout" in result.stderr
+
+
+def test_uniprot_mmseqs_helper_stdout_is_only_db_prefix(tmp_path):
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    workspace = tmp_path / "workspace"
+    runtime_prefix = workspace / "downloads" / "uniprot_sprot" / "uniprot_sprot"
+    runtime_prefix.parent.mkdir(parents=True)
+    (runtime_prefix.with_suffix(".pep")).write_text(">sp|P1\nMA\n", encoding="utf-8")
+    (runtime_prefix.with_suffix(".meta.tsv.gz")).write_text("metadata\n", encoding="utf-8")
+    script = f"""
+set -euo pipefail
+source "{util_path}"
+GG_ARRAY_TASK_ID=1
+GG_LOCK_HEARTBEAT_SECONDS=1
+mmseqs() {{
+  if [[ "$1" == "createdb" ]]; then
+    echo "createdb $2 $3"
+    printf 'db\\n' > "$3"
+    printf '0\\n' > "$3.dbtype"
+    return 0
+  fi
+  return 1
+}}
+ensure_uniprot_sprot_mmseqs_db "{workspace}"
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == str(runtime_prefix) + "\n"
+    assert "createdb" in result.stderr
+
+
+def test_uniprot_blast_helper_stdout_is_only_db_prefix(tmp_path):
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    workspace = tmp_path / "workspace"
+    runtime_prefix = workspace / "downloads" / "uniprot_sprot" / "uniprot_sprot"
+    runtime_prefix.parent.mkdir(parents=True)
+    (runtime_prefix.with_suffix(".pep")).write_text(">sp|P1\nMA\n", encoding="utf-8")
+    (runtime_prefix.with_suffix(".meta.tsv.gz")).write_text("metadata\n", encoding="utf-8")
+    script = f"""
+set -euo pipefail
+source "{util_path}"
+GG_ARRAY_TASK_ID=1
+GG_LOCK_HEARTBEAT_SECONDS=1
+makeblastdb() {{
+  local out_prefix=""
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "-out" ]]; then
+      out_prefix="$2"
+      shift 2
+    else
+      shift
+    fi
+  done
+  echo "makeblastdb $out_prefix"
+  printf 'pin\\n' > "$out_prefix.pin"
+  printf 'phr\\n' > "$out_prefix.phr"
+  printf 'psq\\n' > "$out_prefix.psq"
+}}
+ensure_uniprot_sprot_blast_db "{workspace}"
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == str(runtime_prefix) + "\n"
+    assert "makeblastdb" in result.stderr
+
+
+def test_uniprot_db_prefix_validator_rejects_contaminated_values(tmp_path):
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    script = f"""
+set -euo pipefail
+source "{util_path}"
+validate_uniprot_sprot_db_prefix $'createdb /tmp/uniprot.pep\\n/tmp/uniprot.mmseqs' mmseqs2
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "DB prefix is malformed" in result.stderr
+
+
+def test_uniprot_db_prefix_validator_allows_spaces_in_paths(tmp_path):
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    db_prefix = tmp_path / "uniprot sprot"
+    (tmp_path / "uniprot sprot.mmseqs").write_text("db\n", encoding="utf-8")
+    (tmp_path / "uniprot sprot.mmseqs.dbtype").write_text("0\n", encoding="utf-8")
+    script = f"""
+set -euo pipefail
+source "{util_path}"
+validate_uniprot_sprot_db_prefix "{db_prefix}" mmseqs2
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_uniprot_db_prefixes_are_validated_after_capture():
+    for script in [
+        CORE_DIR / "gg_genome_annotation_core.sh",
+        CORE_DIR / "gg_gene_evolution_core.sh",
+        CORE_DIR / "gg_genome_evolution_core.sh",
+    ]:
+        text = _read_text(script)
+        assert 'validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "blastp"' in text
+        assert 'validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "mmseqs2"' in text
 
 
 def test_shared_lock_helpers_encode_owner_metadata_and_safe_heartbeat_reclaim_rules():
