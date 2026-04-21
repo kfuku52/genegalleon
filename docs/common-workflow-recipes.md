@@ -163,6 +163,9 @@ Preparation:
 
 - place one query file per family under `workspace/input/query_gene`
 - the file basename becomes the family/task ID under `workspace/output/query2family`
+- keep unrelated gene families in separate files; if query genes from different
+  families are combined in one file, their homologs and phylogenetic trees can
+  be artificially merged into a single unnatural family tree.
 
 Run:
 

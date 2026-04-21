@@ -144,8 +144,15 @@ Accepted forms:
 Practical notes:
 
 - the file basename becomes the family/task ID under `workspace/output/query2family`,
-- one file should correspond to one intended family-level analysis unit,
+- one file must correspond to one intended gene family or family-level analysis unit,
+- do not put query genes from unrelated families into the same file; otherwise,
+  homolog search and tree-building steps can merge different families into one
+  artificial, biologically unnatural phylogeny,
 - in query2family array runs, the number of files here is the scheduler array size.
+
+If you want to analyze multiple families, create separate input files, for
+example `WOX`, `MADS`, and `YABBY`, each containing only the query genes for
+that family.
 
 Gene-list example:
 

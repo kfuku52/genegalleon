@@ -12,6 +12,11 @@ In `mode_gene_evolution=query2family`:
 - the file basename becomes the family/task ID,
 - the scheduler array size is the number of files in that directory.
 
+Each input file should contain query genes for one gene family only. If genes
+from different families are combined in one file, GeneGalleon treats them as one
+family-level task, which can artificially merge unrelated family phylogenies into
+one unnatural tree and PDF output.
+
 Accepted query-file forms are:
 
 - plain gene ID list,
