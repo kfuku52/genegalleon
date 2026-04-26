@@ -1797,6 +1797,34 @@ def test_genome_evolution_core_quotes_orthogroup_iq2mc_and_busco_summary_options
     assert '--ncpu "${GG_TASK_CPUS}"' in busco_summary_block
 
 
+def test_genome_evolution_core_does_not_fallback_to_nonroot_hog_table():
+    script = CORE_DIR / "gg_genome_evolution_core.sh"
+    text = _read_text(script)
+    start = text.index('hog_table="${dir_orthofinder}/Phylogenetic_Hierarchical_Orthogroups/N0.tsv"')
+    end = text.index('task="OMArk analysis of species-wise protein input files"', start)
+    hog_block = text[start:end]
+
+    assert "Falling back" not in hog_block
+    assert 'hog_table="${hog_candidates[0]}"' not in hog_block
+    assert "Required root-level HOG table was not found" in hog_block
+    assert "will not be selected automatically" in hog_block
+    assert 'orthogroup_table="OG"' in hog_block
+
+
+def test_genome_evolution_core_treats_v31_orthogroups_as_root_hog_equivalent():
+    script = CORE_DIR / "gg_genome_evolution_core.sh"
+    text = _read_text(script)
+
+    assert "detect_orthofinder_version() {" in text
+    assert "orthofinder_supports_root_hog_equivalent() {" in text
+    assert "copy_root_hog_equivalent_from_orthogroups() {" in text
+    assert 'if orthofinder_supports_root_hog_equivalent "${orthofinder_version}"; then' in text
+    assert "OrthoFinder version >= 3.1" in text
+    assert "Orthogroups/Orthogroups.tsv is treated as the root-level HOG equivalent" in text
+    assert 'cp_out "${source_og}" "${target_dir}/Orthogroups.tsv"' in text
+    assert 'cp_out "${source_genecount}" "${target_dir}/Orthogroups.GeneCount.tsv"' in text
+
+
 def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)

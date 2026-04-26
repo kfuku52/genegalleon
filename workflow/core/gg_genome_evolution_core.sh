@@ -2517,6 +2517,67 @@ orthofinder_output_directory_cleanup() {
   fi
 }
 
+detect_orthofinder_version() {
+  local version_output version
+  version_output=$(orthofinder -v 2>&1 || true)
+  version=$(printf '%s\n' "${version_output}" | awk '
+    match($0, /[Oo]rtho[Ff]inder:?v?[[:space:]]*[0-9]+([.][0-9]+)*/) {
+      version = substr($0, RSTART, RLENGTH)
+      sub(/^.*[Oo]rtho[Ff]inder:?v?[[:space:]]*/, "", version)
+      print version
+      exit
+    }
+    match($0, /[Vv]ersion[[:space:]:]*v?[0-9]+([.][0-9]+)*/) {
+      version = substr($0, RSTART, RLENGTH)
+      sub(/^.*[Vv]ersion[[:space:]:]*v?/, "", version)
+      print version
+      exit
+    }
+  ')
+  printf '%s\n' "${version}"
+}
+
+orthofinder_supports_root_hog_equivalent() {
+  local version=$1
+  local major minor
+  if [[ ! "${version}" =~ ^([0-9]+)(\.([0-9]+))? ]]; then
+    return 1
+  fi
+
+  major=${BASH_REMATCH[1]}
+  minor=${BASH_REMATCH[3]:-0}
+  [[ ${major} -gt 3 || ( ${major} -eq 3 && ${minor} -ge 1 ) ]]
+}
+
+copy_root_hog_equivalent_from_orthogroups() {
+  local source_dir=$1
+  local target_dir=$2
+  local orthofinder_version=$3
+  local source_og="${source_dir}/Orthogroups/Orthogroups.tsv"
+  local source_genecount="${source_dir}/Orthogroups/Orthogroups.GeneCount.tsv"
+  local target_readme="${target_dir}/README.txt"
+
+  if [[ ! -s "${source_og}" || ! -s "${source_genecount}" ]]; then
+    echo "OrthoFinder v3.1+ root-HOG-equivalent source files were not found."
+    echo "Expected: ${source_og}"
+    echo "Expected: ${source_genecount}"
+    return 1
+  fi
+
+  ensure_dir "${target_dir}"
+  echo "Treating OrthoFinder Orthogroups.tsv as the root-level HOG equivalent for OrthoFinder ${orthofinder_version}."
+  cp_out "${source_og}" "${target_dir}/Orthogroups.tsv" || return 1
+  cp_out "${source_genecount}" "${target_dir}/Orthogroups.GeneCount.tsv" || return 1
+  {
+    printf 'The files in this directory were created by gg_genome_evolution_core.sh.\n'
+    printf 'Detected OrthoFinder version: %s\n' "${orthofinder_version}"
+    printf 'For OrthoFinder version >= 3.1, Orthogroups/Orthogroups.tsv is treated as the root-level HOG equivalent.\n'
+    printf 'OrthoFinder v3.1+ writes root-level HOG content into Orthogroups/Orthogroups.tsv and may omit Phylogenetic_Hierarchical_Orthogroups/N0.tsv from the final output.\n'
+    printf 'Source Orthogroups.tsv: %s\n' "${source_og}"
+    printf 'Source Orthogroups.GeneCount.tsv: %s\n' "${source_genecount}"
+  } > "${target_readme}" || return 1
+}
+
 ensure_dir "${dir_tmp}"
 cd "${dir_tmp}"
 
@@ -2722,22 +2783,46 @@ PY
   echo "OrthoFinder finished successfully."
   orthofinder_output_directory_cleanup "${dir_orthofinder}" "${GG_TASK_CPUS}"
 
-  hog_table="${dir_orthofinder}/Phylogenetic_Hierarchical_Orthogroups/N0.tsv"
-  if [[ ! -s "${hog_table}" ]]; then
-    hog_candidates=()
-    mapfile -t hog_candidates < <(find "${dir_orthofinder}/Phylogenetic_Hierarchical_Orthogroups" -maxdepth 1 -type f -name 'N*.tsv' | sort -V)
-    if [[ ${#hog_candidates[@]} -eq 0 ]]; then
-      echo "No HOG tables were found in ${dir_orthofinder}/Phylogenetic_Hierarchical_Orthogroups. Exiting."
-      exit 1
-    fi
-    hog_table="${hog_candidates[0]}"
-    echo "N0.tsv was not found. Falling back to HOG table: ${hog_table}"
+  orthofinder_version=$(detect_orthofinder_version)
+  if [[ -n "${orthofinder_version}" ]]; then
+    echo "Detected OrthoFinder version: ${orthofinder_version}"
+  else
+    echo "Could not detect OrthoFinder version from orthofinder -v."
   fi
 
-  python "${gg_support_dir}/orthogroup_table_formatter.py" \
-    --file_orthogroup_table "${hog_table}" \
-    --dir_out "${dir_orthofinder_hog2og}" \
-    --mode "hog2og"
+  hog_table="${dir_orthofinder}/Phylogenetic_Hierarchical_Orthogroups/N0.tsv"
+  if orthofinder_supports_root_hog_equivalent "${orthofinder_version}"; then
+    if ! copy_root_hog_equivalent_from_orthogroups "${dir_orthofinder}" "${dir_orthofinder_hog2og}" "${orthofinder_version}"; then
+      if [[ -s "${hog_table}" ]]; then
+        echo "Using detected N0.tsv because OrthoFinder v3.1+ Orthogroups.tsv files were incomplete: ${hog_table}"
+        python "${gg_support_dir}/orthogroup_table_formatter.py" \
+          --file_orthogroup_table "${hog_table}" \
+          --dir_out "${dir_orthofinder_hog2og}" \
+          --mode "hog2og"
+      else
+        echo "Neither OrthoFinder v3.1+ Orthogroups.tsv nor root-level HOG table N0.tsv was available. Exiting."
+        exit 1
+      fi
+    fi
+  elif [[ -s "${hog_table}" ]]; then
+    python "${gg_support_dir}/orthogroup_table_formatter.py" \
+      --file_orthogroup_table "${hog_table}" \
+      --dir_out "${dir_orthofinder_hog2og}" \
+      --mode "hog2og"
+  else
+    hog_candidates=()
+    mapfile -t hog_candidates < <(find "${dir_orthofinder}/Phylogenetic_Hierarchical_Orthogroups" -maxdepth 1 -type f -name 'N*.tsv' | sort -V)
+    echo "Required root-level HOG table was not found: ${hog_table}"
+    echo "For OrthoFinder versions earlier than v3.1, genegalleon requires Phylogenetic_Hierarchical_Orthogroups/N0.tsv for whole-dataset HOG selection."
+    if [[ ${#hog_candidates[@]} -gt 0 ]]; then
+      echo "Other HOG tables were found, but they correspond to individual species-tree clades and will not be selected automatically:"
+      printf '  %s\n' "${hog_candidates[@]}"
+      printf '%s\n' 'Use OrthoFinder species-tree node labels to choose a clade-specific N*.tsv manually, upgrade to OrthoFinder v3.1-compatible root-HOG handling, or set orthogroup_table="OG" to use standard OrthoFinder orthogroups.'
+    else
+      echo "No N*.tsv HOG tables were found in ${dir_orthofinder}/Phylogenetic_Hierarchical_Orthogroups."
+    fi
+    exit 1
+  fi
 else
   gg_step_skip "${task}"
 fi

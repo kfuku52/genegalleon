@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import re
+import shutil
 import shlex
 import stat
 import subprocess
@@ -14,9 +15,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / "workflow"
 CORE_PATH = WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh"
 ENTRYPOINT_PATH = WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh"
+BASH_FOR_TESTS = shutil.which("bash") or "/bin/bash"
 SYSTEM_BASH_MAJOR = int(
     subprocess.run(
-        ["/bin/bash", "-c", "printf '%s' \"${BASH_VERSINFO[0]}\""],
+        [BASH_FOR_TESTS, "-c", "printf '%s' \"${BASH_VERSINFO[0]}\""],
         capture_output=True,
         text=True,
         check=False,
@@ -292,6 +294,10 @@ exit 0
         bin_dir / "orthofinder",
         f"""#!/usr/bin/env bash
 set -euo pipefail
+if [[ "${{1:-}}" == "-v" ]]; then
+  echo "OrthoFinder:v2.5.5"
+  exit 0
+fi
 capture_dir={shlex.quote(str(capture_dir))}
 input_dir=""
 output_dir=""
@@ -564,7 +570,7 @@ def _run_core(
         f"source {shlex.quote(str(CORE_PATH))}"
     )
     return subprocess.run(
-        ["bash", "-c", command],
+        [BASH_FOR_TESTS, "-c", command],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
