@@ -4678,6 +4678,71 @@ def test_download_manifest_ncbi_gene_level_aggregate_keeps_one_longest_per_gene(
     assert "ATGAAATTT" in text
 
 
+def test_download_manifest_ncbi_gene_level_aggregate_prefers_locus_tag_over_geneid(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    cds_source = source_dir / "ncbi_cds.fna.gz"
+    gff_source = source_dir / "ncbi_genomic.gff.gz"
+    genome_source = source_dir / "ncbi_genomic.fna.gz"
+    with gzip.open(cds_source, "wt", encoding="utf-8") as handle:
+        handle.write(
+            ">lcl|NC_003070.9_cds_NP_171609.1_1 [gene=NAC001] [locus_tag=AT1G01010] [db_xref=Araport:AT1G01010,TAIR:AT1G01010,GeneID:839580] [protein_id=NP_171609.1]\n"
+            "ATGAA\n"
+            ">lcl|NC_003070.9_cds_NP_001000000.1_2 [gene=NAC001] [locus_tag=AT1G01010] [db_xref=Araport:AT1G01010,GeneID:839580] [protein_id=NP_001000000.1]\n"
+            "ATGAAATTT\n"
+        )
+    with gzip.open(gff_source, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-AT1G01010;Dbxref=Araport:AT1G01010,TAIR:AT1G01010,GeneID:839580;gene=NAC001;locus_tag=AT1G01010\n"
+        )
+    with gzip.open(genome_source, "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGCATGC\n")
+
+    manifest = tmp_path / "manifest.tsv"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "ncbi",
+                "species_key": "Arabidopsis_thaliana",
+                "id": "GCF_000001735.4",
+                "cds_url": to_file_url(cds_source),
+                "gff_url": to_file_url(gff_source),
+                "genome_url": to_file_url(genome_source),
+                "cds_filename": "GCF_000001735.4_TAIR10.1_cds_from_genomic.fna.gz",
+                "gff_filename": "GCF_000001735.4_TAIR10.1_genomic.gff.gz",
+                "genome_filename": "GCF_000001735.4_TAIR10.1_genomic.fna.gz",
+            }
+        ],
+    )
+
+    out_cds = tmp_path / "out_cds"
+    out_gff = tmp_path / "out_gff"
+    out_genome = tmp_path / "out_genome"
+    completed = run_script(
+        "--provider",
+        "ncbi",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(tmp_path / "download_cache"),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Arabidopsis_thaliana_GCF_000001735.4_TAIR10.1_cds_from_genomic.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert text.count(">Arabidopsis_thaliana_AT1G01010") == 1
+    assert ">Arabidopsis_thaliana_GeneID839580" not in text
+    assert "ATGAAATTT" in text
+
+
 def test_download_manifest_ncbi_gene_level_aggregate_prefers_ensembl_gene_id(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()

@@ -7105,12 +7105,12 @@ def build_gene_aggregate_id(task, header, transcript_id):
         protein_id = extract_header_tag_value(header, "protein_id")
         if ensembl_gene_id != "":
             gene_token = ensembl_gene_id
+        elif locus_tag != "":
+            gene_token = locus_tag
         elif gene_id != "":
             gene_token = "GeneID{}".format(gene_id)
         elif gene_symbol != "":
             gene_token = gene_symbol
-        elif locus_tag != "":
-            gene_token = locus_tag
         elif protein_id != "":
             gene_token = protein_id
         else:
