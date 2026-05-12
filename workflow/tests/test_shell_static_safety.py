@@ -1889,6 +1889,13 @@ def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
         '        "./fasta" \\',
         '        "${sp_ub}"',
         'ln -s "${dir_amalgkit_quant}/${sp_ub}" "./quant"',
+        'merge_output_prefix=$(resolve_amalgkit_merge_output_prefix \\',
+        '    "${file_amalgkit_metadata}" \\',
+        '    "./merge" \\',
+        '    "${sp_ub}")',
+        'mv_out "${merge_output_dir}/${merge_output_prefix}_eff_length.tsv" "${file_amalgkit_merge_efflen}"',
+        'mv_out "${merge_output_dir}/${merge_output_prefix}_est_counts.tsv" "${file_amalgkit_merge_count}"',
+        'mv_out "${merge_output_dir}/${merge_output_prefix}_tpm.tsv" "${file_amalgkit_merge_tpm}"',
         'grep -F -- "${species_name}" "${metadata_source}"',
         'mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"',
     ]
@@ -2774,11 +2781,15 @@ def test_transcriptome_core_uses_rerun_safe_directory_replacement_for_staged_out
     assert 'mv_out "${dir_tmp}"/getfastq/* "${dir_amalgkit_getfastq_sp}"' not in text
     assert "mv_out ./quant/* \"${dir_amalgkit_quant}/${sp_ub}\"" not in text
     assert 'mv_out "./merge/${sp_ub}" "$(dirname "$(dirname "${file_amalgkit_merge_tpm}")")"' not in text
+    assert 'mv_out_replace_dir "./merge/${sp_ub}" "$(dirname "${file_amalgkit_merge_tpm}")"' not in text
     assert 'getfastq_outputs=("${dir_tmp}"/getfastq/*)' in text
     assert 'mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"' in text
     assert "quant_outputs=(./quant/*)" in text
     assert 'mv_out_replace_dir "./quant" "${dir_amalgkit_quant}/${sp_ub}"' in text
-    assert 'mv_out_replace_dir "./merge/${sp_ub}" "$(dirname "${file_amalgkit_merge_tpm}")"' in text
+    assert 'resolve_amalgkit_merge_output_prefix' in text
+    assert 'mv_out "${merge_output_dir}/${merge_output_prefix}_eff_length.tsv" "${file_amalgkit_merge_efflen}"' in text
+    assert 'mv_out "${merge_output_dir}/${merge_output_prefix}_est_counts.tsv" "${file_amalgkit_merge_count}"' in text
+    assert 'mv_out "${merge_output_dir}/${merge_output_prefix}_tpm.tsv" "${file_amalgkit_merge_tpm}"' in text
 
 
 def test_no_cp_out_or_mv_out_glob_arguments_in_core_scripts():

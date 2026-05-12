@@ -1,4 +1,5 @@
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,11 @@ def _embedded_python(function_name: str) -> str:
     if match is None:
         raise AssertionError(f"Embedded Python not found in function: {function_name}")
     return match.group(1)
+
+
+def _function_script(function_name: str) -> str:
+    text = CORE_SCRIPT.read_text(encoding="utf-8")
+    return _function_body(text, function_name)
 
 
 def test_stage_quant_reference_fasta_aliases_uses_metadata_scientific_name_columns(tmp_path):
@@ -95,3 +101,80 @@ def test_stage_quant_reference_fasta_aliases_still_stages_canonical_prefix_witho
     canonical_alias = output_dir / "Species_one_for_kallisto_index.fasta"
     assert canonical_alias.is_symlink()
     assert canonical_alias.resolve() == reference_path.resolve()
+
+
+def test_resolve_amalgkit_merge_output_prefix_falls_back_to_metadata_scientific_name(tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    merge_dir = tmp_path / "merge"
+    metadata_path.write_text(
+        "\n".join(
+            [
+                "run\tscientific_name\tscientific_name_original",
+                "SRR1\tSpecies one strain X\tSpecies one/original",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    alias_dir = merge_dir / "Species_one_strain_X"
+    alias_dir.mkdir(parents=True)
+    (alias_dir / "Species_one_strain_X_eff_length.tsv").write_text("target_id\tSRR1\nx\t1\n", encoding="utf-8")
+
+    command = "\n".join(
+        [
+            _function_script("resolve_amalgkit_merge_output_prefix"),
+            "resolve_amalgkit_merge_output_prefix "
+            f"{shlex.quote(str(metadata_path))} "
+            f"{shlex.quote(str(merge_dir))} "
+            "Species_one",
+        ]
+    )
+    completed = subprocess.run(
+        ["bash", "-lc", command],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert completed.stdout.strip() == "Species_one_strain_X"
+
+
+def test_resolve_amalgkit_merge_output_prefix_prefers_canonical_prefix(tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    merge_dir = tmp_path / "merge"
+    metadata_path.write_text(
+        "\n".join(
+            [
+                "run\tscientific_name",
+                "SRR1\tSpecies one strain X",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    canonical_dir = merge_dir / "Species_one"
+    canonical_dir.mkdir(parents=True)
+    (canonical_dir / "Species_one_eff_length.tsv").write_text("target_id\tSRR1\nx\t1\n", encoding="utf-8")
+    alias_dir = merge_dir / "Species_one_strain_X"
+    alias_dir.mkdir(parents=True)
+    (alias_dir / "Species_one_strain_X_eff_length.tsv").write_text("target_id\tSRR1\nx\t1\n", encoding="utf-8")
+
+    command = "\n".join(
+        [
+            _function_script("resolve_amalgkit_merge_output_prefix"),
+            "resolve_amalgkit_merge_output_prefix "
+            f"{shlex.quote(str(metadata_path))} "
+            f"{shlex.quote(str(merge_dir))} "
+            "Species_one",
+        ]
+    )
+    completed = subprocess.run(
+        ["bash", "-lc", command],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert completed.stdout.strip() == "Species_one"

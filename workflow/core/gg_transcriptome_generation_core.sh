@@ -599,6 +599,63 @@ for prefix in prefixes:
 PY
 }
 
+resolve_amalgkit_merge_output_prefix() {
+  local metadata_file=$1
+  local merge_dir=$2
+  local canonical_prefix=$3
+
+  python - "${metadata_file}" "${merge_dir}" "${canonical_prefix}" <<'PY'
+import csv
+import re
+import sys
+from pathlib import Path
+
+metadata_path = Path(sys.argv[1])
+merge_dir = Path(sys.argv[2])
+canonical_prefix = sys.argv[3]
+
+def normalize_prefix(raw_value):
+    text = str(raw_value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", "_", text)
+    text = text.replace("/", "_").replace("\\", "_")
+    return text
+
+prefixes = []
+seen_prefixes = set()
+
+def add_prefix(raw_value):
+    prefix = normalize_prefix(raw_value)
+    if (not prefix) or (prefix in seen_prefixes):
+        return
+    seen_prefixes.add(prefix)
+    prefixes.append(prefix)
+
+add_prefix(canonical_prefix)
+
+if metadata_path.exists() and metadata_path.stat().st_size > 0:
+    with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        fieldnames = reader.fieldnames or []
+        candidate_fields = [
+            fieldname for fieldname in ("scientific_name", "scientific_name_original")
+            if fieldname in fieldnames
+        ]
+        for row in reader:
+            for fieldname in candidate_fields:
+                add_prefix(row.get(fieldname, ""))
+
+for prefix in prefixes:
+    candidate = merge_dir / prefix / f"{prefix}_eff_length.tsv"
+    if candidate.is_file() and candidate.stat().st_size > 0:
+        print(prefix)
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
 run_amalgkit_metadata_query() {
   local search_string=$1
   local metadata_cmd=()
@@ -2193,6 +2250,8 @@ task='amalgkit merge'
 disable_if_no_input_file "run_amalgkit_merge" "${file_amalgkit_metadata}"
 if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count}" || ! -s "${file_amalgkit_merge_tpm}" || ! -s "${file_amalgkit_merge_metadata}") && ${run_amalgkit_merge} -eq 1 ]]; then
   gg_step_start "${task}"
+  merge_output_prefix=""
+  merge_output_dir=""
 
   if [[ -e ./quant ]]; then
     rm -rf -- ./quant
@@ -2203,15 +2262,20 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
     --out_dir "./" \
     --metadata "${file_amalgkit_metadata}"
 
-  #sp_metadata=$(python -c "import pandas; d=pandas.read_csv('${file_amalgkit_metadata}',sep='\t',header=0); print(d.at[0,'scientific_name'].replace(' ','_'))")
-  if [[ -s "./merge/${sp_ub}/${sp_ub}_eff_length.tsv" ]]; then
-    echo "Copying amalgkit merge outputs from: ./merge/${sp_ub}"
-    mv_out_replace_dir "./merge/${sp_ub}" "$(dirname "${file_amalgkit_merge_tpm}")"
+  if merge_output_prefix=$(resolve_amalgkit_merge_output_prefix \
+    "${file_amalgkit_metadata}" \
+    "./merge" \
+    "${sp_ub}"); then
+    merge_output_dir="./merge/${merge_output_prefix}"
+    echo "Copying amalgkit merge outputs from: ${merge_output_dir}"
+    mv_out "${merge_output_dir}/${merge_output_prefix}_eff_length.tsv" "${file_amalgkit_merge_efflen}"
+    mv_out "${merge_output_dir}/${merge_output_prefix}_est_counts.tsv" "${file_amalgkit_merge_count}"
+    mv_out "${merge_output_dir}/${merge_output_prefix}_tpm.tsv" "${file_amalgkit_merge_tpm}"
     mv_out "./merge/metadata.tsv" "${file_amalgkit_merge_metadata}"
     rm -rf -- "./merge"
     rm -f -- "./quant" # Do not put -r, otherwise the original quant files will be deleted.
   else
-    echo "amalgkit merge outputs were not found in: ./merge/${sp_ub}"
+    echo "amalgkit merge outputs were not found for canonical or metadata-derived species prefixes under: ./merge"
   fi
   echo "$(date): End: ${task}"
 else
