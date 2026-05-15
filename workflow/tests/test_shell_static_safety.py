@@ -699,6 +699,14 @@ def test_entrypoints_use_active_scheduler_directives_in_header_template():
         assert "#SBATCH --ignore-pbs" in header, f"Missing Slurm PBS-ignore guard in {script}"
 
 
+def test_entrypoints_use_shared_slurm_partition_fallbacks():
+    entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
+    assert entrypoints, "No entrypoint scripts were found."
+    for script in entrypoints:
+        header = _entrypoint_scheduler_header(script)
+        assert "#SBATCH -p epyc,rome,medium" in header, f"Missing shared Slurm partitions in {script}"
+
+
 def test_entrypoint_scheduler_directives_are_left_aligned():
     entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
     assert entrypoints, "No entrypoint scripts were found."

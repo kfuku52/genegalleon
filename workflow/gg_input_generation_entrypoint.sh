@@ -18,7 +18,7 @@
 # Array example for array-aware entrypoints.
 #SBATCH -a 1
 # Site-specific partition example.
-#SBATCH -p epyc
+#SBATCH -p epyc,rome,medium
 # Optional notifications and single-node examples.
 ##SBATCH --mail-type=ALL
 ##SBATCH --mail-user=<aaa@bbb.com>
