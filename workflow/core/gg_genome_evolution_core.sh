@@ -2520,6 +2520,7 @@ orthofinder_output_directory_cleanup() {
 detect_orthofinder_version() {
   local version_output version
   version_output=$(orthofinder -v 2>&1 || true)
+  version_output=$(printf '%s\n' "${version_output}" | sed -E $'s/\x1B\\[[0-9;?]*[ -/]*[@-~]//g')
   version=$(printf '%s\n' "${version_output}" | awk '
     match($0, /[Oo]rtho[Ff]inder:?v?[[:space:]]*[0-9]+([.][0-9]+)*/) {
       version = substr($0, RSTART, RLENGTH)
