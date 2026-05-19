@@ -281,6 +281,7 @@ query_blast_method=$(echo "${query_blast_method}" | tr '[:upper:]' '[:lower:]')
 mode_gene_evolution=$(echo "${mode_gene_evolution:-query2family}" | tr '[:upper:]' '[:lower:]')
 gene_evolution_profile=$(echo "${gene_evolution_profile:-default}" | tr '[:upper:]' '[:lower:]')
 input_sequence_mode=$(gg_normalize_input_sequence_mode "${input_sequence_mode}")
+csubst_nonsyn_recode=$(echo "${csubst_nonsyn_recode:-no}" | tr '[:upper:]' '[:lower:]')
 uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
 tree_rooting_method=$(echo "${tree_rooting_method}" | tr '[:upper:]' '[:lower:]')
 apply_gene_evolution_profile
@@ -299,6 +300,15 @@ if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method
   echo 'uniprot_annotation_method must be either "blastp" or "mmseqs2". Exiting.'
   exit 1
 fi
+case "${csubst_nonsyn_recode}" in
+  no|3di20|dayhoff6|sr6|kgb6|sr4|dayhoff9|dayhoff12|dayhoff15|dayhoff18|srchisq6|kgbauto6)
+    ;;
+  *)
+    echo "Invalid csubst_nonsyn_recode: ${csubst_nonsyn_recode}"
+    echo 'csubst_nonsyn_recode must be one of no, 3di20, dayhoff6, sr6, kgb6, sr4, dayhoff9, dayhoff12, dayhoff15, dayhoff18, srchisq6, kgbauto6. Exiting.'
+    exit 1
+    ;;
+esac
 apply_gene_evolution_input_sequence_mode
 if [[ "${mode_gene_evolution}" == "query2family" && ${run_query_blast} -eq 1 ]]; then
   if [[ "${query_blast_method}" != "tblastn" && "${query_blast_method}" != "diamond" ]]; then
@@ -3149,6 +3159,7 @@ if [[ (! -s "${file_og_csubst_b}" || ! -s "${file_og_csubst_cb_stats}") && ${run
     --max_combination "${csubst_max_combination}" \
     --fg_exclude_wg "${csubst_fg_exclude_wg}" \
     --fg_stem_only "${csubst_fg_stem_only}" \
+    --nonsyn_recode "${csubst_nonsyn_recode}" \
     --calc_quantile "no" \
     --omegaC_method "submodel" \
     --threads "${GG_TASK_CPUS}" \

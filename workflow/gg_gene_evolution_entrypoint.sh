@@ -179,6 +179,7 @@ csubst_cutoff_stat="OCNany2spe,2.0|omegaCany2spe,5.0" # CSUBST branch-statistic 
 csubst_max_combination=10000 # Maximum number of CSUBST combinations retained after filtering.
 csubst_fg_exclude_wg="no" # Exclude whole-genome duplication branches from CSUBST foregrounds.
 csubst_fg_stem_only="yes" # Restrict CSUBST foreground candidates to stem branches only.
+csubst_nonsyn_recode="no" # no|3di20|dayhoff6|sr6|kgb6|sr4|dayhoff9|dayhoff12|dayhoff15|dayhoff18|srchisq6|kgbauto6.
 
 # Intron and chromosomal character evolution
 intron_gain_rate="0.0001" # FLOAT.

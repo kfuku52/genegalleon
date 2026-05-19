@@ -261,3 +261,16 @@ Use the following split in practice:
 - direct Docker wrapper runs via `GG_CONTAINER_RUNTIME=docker` plus `GG_CONTAINER_DOCKER_IMAGE`.
 
 That keeps routine runs reproducible without forcing edits in the core implementation files.
+
+## CSUBST nonsynonymous-state recoding
+
+`workflow/gg_gene_evolution_entrypoint.sh` exposes `csubst_nonsyn_recode` for
+`csubst search --nonsyn_recode`. The default is:
+
+```bash
+csubst_nonsyn_recode="no"
+```
+
+Set it to one of `no`, `3di20`, `dayhoff6`, `sr6`, `kgb6`, `sr4`,
+`dayhoff9`, `dayhoff12`, `dayhoff15`, `dayhoff18`, `srchisq6`, or
+`kgbauto6` in the entrypoint config block before running gene-family analyses.

@@ -35,6 +35,7 @@ csubst_fg_exclude_wg
 csubst_fg_stem_only
 csubst_max_arity
 csubst_max_combination
+csubst_nonsyn_recode
 exp_value_type
 fimo_qvalue
 generax_model

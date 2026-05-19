@@ -3441,6 +3441,7 @@ def test_gene_evolution_core_uses_csubst_search_namespace():
     assert "csubst analyze \\" not in core
     assert 'csubst search \\' in core
     assert 'csubst_search_dir="csubst_search"' in core
+    assert '--nonsyn_recode "${csubst_nonsyn_recode}"' in core
     assert '"${csubst_search_dir}/csubst_cb_stats.tsv"' in core
     for redundant_flag in [
         '--infile_type "iqtree"',

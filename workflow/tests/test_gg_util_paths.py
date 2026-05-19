@@ -36,6 +36,21 @@ def test_forward_config_vars_trims_registry_whitespace_for_genome_evolution_entr
     ]
 
 
+def test_forward_config_vars_includes_gene_evolution_csubst_nonsyn_recode(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "csubst_nonsyn_recode=dayhoff6; "
+        "forward_config_vars_to_container_env gg_gene_evolution_entrypoint.sh; "
+        'printf "csubst_nonsyn_recode=%s\\n" '
+        '"${SINGULARITYENV_csubst_nonsyn_recode:-}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "csubst_nonsyn_recode=dayhoff6"
+
+
 def test_export_var_to_container_env_ignores_invalid_variable_name(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
