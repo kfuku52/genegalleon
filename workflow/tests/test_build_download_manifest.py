@@ -399,10 +399,12 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
 
         list_sheet = workbook["_lists"]
-        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 22)]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 24)]
         assert provider_values == [
             "ensembl",
             "ensemblplants",
+            "ensemblmetazoa",
+            "ensemblprotists",
             "ncbi",
             "ddbj",
             "coge",
@@ -424,6 +426,8 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
             "local",
         ]
         assert "id_opts_ensembl" in workbook.defined_names
+        assert "id_opts_ensemblmetazoa" in workbook.defined_names
+        assert "id_opts_ensemblprotists" in workbook.defined_names
         assert "id_opts_ncbi" in workbook.defined_names
         assert "id_opts_coge" in workbook.defined_names
         assert "id_opts_gwh" in workbook.defined_names
@@ -482,6 +486,8 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
         provider_order = [
             "ensembl",
             "ensemblplants",
+            "ensemblmetazoa",
+            "ensemblprotists",
             "ncbi",
             "ddbj",
             "coge",
@@ -606,6 +612,12 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
                     "ensemblplants": [
                         {"id": "arabidopsis_thaliana", "species": "Arabidopsis thaliana"},
                     ],
+                    "ensemblmetazoa": [
+                        {"id": "anopheles_gambiae", "species": "Anopheles gambiae"},
+                    ],
+                    "ensemblprotists": [
+                        {"id": "phytophthora_parasitica", "species": "Phytophthora parasitica"},
+                    ],
                     "flybase": [
                         {"id": "dmel_r6.66", "species": "Drosophila melanogaster"},
                     ],
@@ -696,6 +708,8 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         provider_order = [
             "ensembl",
             "ensemblplants",
+            "ensemblmetazoa",
+            "ensemblprotists",
             "ncbi",
             "ddbj",
             "coge",
@@ -719,6 +733,8 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         provider_col = {provider: idx + 2 for idx, provider in enumerate(provider_order)}
         ensembl_values = read_list_column_values(list_sheet, provider_col["ensembl"])
         ensemblplants_values = read_list_column_values(list_sheet, provider_col["ensemblplants"])
+        ensemblmetazoa_values = read_list_column_values(list_sheet, provider_col["ensemblmetazoa"])
+        ensemblprotists_values = read_list_column_values(list_sheet, provider_col["ensemblprotists"])
         ncbi_values = read_list_column_values(list_sheet, provider_col["ncbi"])
         ddbj_values = read_list_column_values(list_sheet, provider_col["ddbj"])
         coge_values = read_list_column_values(list_sheet, provider_col["coge"])
@@ -745,6 +761,12 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
         ]
         assert ensemblplants_values == [
             "arabidopsis_thaliana (Arabidopsis thaliana)",
+        ]
+        assert ensemblmetazoa_values == [
+            "anopheles_gambiae (Anopheles gambiae)",
+        ]
+        assert ensemblprotists_values == [
+            "phytophthora_parasitica (Phytophthora parasitica)",
         ]
         assert "FAKE_NCBI_ID (Fake species)" not in ncbi_values
         assert ddbj_values == [

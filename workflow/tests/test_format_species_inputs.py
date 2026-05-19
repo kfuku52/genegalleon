@@ -246,6 +246,58 @@ def test_source_id_candidates_add_ensemblplants_species_and_accession_variants()
     assert "Oryza_sativa_aus" in candidates
 
 
+def test_source_id_candidates_add_ensemblmetazoa_accession_suffix_variants():
+    mod = load_module()
+
+    candidates = mod.source_id_candidates(
+        "ensemblmetazoa",
+        "GCA_003676215.3",
+        "Rhopalosiphum_maidis",
+    )
+
+    assert "Rhopalosiphum_maidis" in candidates
+    assert "Rhopalosiphum_maidis_gca003676215v3" in candidates
+
+
+def test_expand_ensemblgenomes_id_candidates_prefers_matching_directory_suffix(monkeypatch):
+    mod = load_module()
+
+    monkeypatch.setattr(
+        mod,
+        "fetch_ensemblgenomes_dir_ids",
+        lambda provider, timeout, headers: ["rhopalosiphum_maidis_gca003676215v3"],
+    )
+
+    candidates = mod.expand_ensemblgenomes_id_candidates(
+        "ensemblmetazoa",
+        ["Rhopalosiphum_maidis"],
+        timeout=1,
+        headers={},
+    )
+
+    assert candidates[0] == "rhopalosiphum_maidis_gca003676215v3"
+    assert "Rhopalosiphum_maidis" in candidates
+
+
+def test_infer_provider_from_ensemblgenomes_prefix_and_url():
+    mod = load_module()
+
+    assert mod.infer_provider_from_id("ensemblmetazoa:anopheles_gambiae") == "ensemblmetazoa"
+    assert mod.infer_provider_from_id("ensemblprotists:phytophthora_parasitica") == "ensemblprotists"
+    assert (
+        mod.infer_provider_from_id(
+            "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/metazoa/fasta/anopheles_gambiae/cds/"
+        )
+        == "ensemblmetazoa"
+    )
+    assert (
+        mod.infer_provider_from_id(
+            "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/protists/gff3/phytophthora_parasitica/"
+        )
+        == "ensemblprotists"
+    )
+
+
 def test_discover_ncbi_like_tasks_normalizes_bare_sp_species_key(tmp_path):
     mod = load_module()
     input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"

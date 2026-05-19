@@ -153,6 +153,8 @@ CITRUSGENOMEDB_ID_HINT_PATTERN = re.compile(r"^citrusgenomedb[:_].+", re.IGNOREC
 FIGSHARE_ID_HINT_PATTERN = re.compile(r"^figshare[:_].+", re.IGNORECASE)
 PLANTGARDEN_ID_HINT_PATTERN = re.compile(r"^plantgarden[:_].+", re.IGNORECASE)
 ENSEMBL_ID_HINT_PATTERN = re.compile(r"^ensembl[:_].+", re.IGNORECASE)
+ENSEMBLMETAZOA_ID_HINT_PATTERN = re.compile(r"^ensemblmetazoa[:_].+", re.IGNORECASE)
+ENSEMBLPROTISTS_ID_HINT_PATTERN = re.compile(r"^ensemblprotists[:_].+", re.IGNORECASE)
 FERNBASE_ID_HINT_PATTERN = re.compile(r"^fernbase[:_].+", re.IGNORECASE)
 VEUPATHDB_ID_HINT_PATTERN = re.compile(r"^veupathdb[:_].+", re.IGNORECASE)
 DICTYBASE_ID_HINT_PATTERN = re.compile(r"^dictybase[:_].+", re.IGNORECASE)
@@ -176,6 +178,8 @@ PLANTGARDEN_GENOME_ID_PATTERN = re.compile(r"^(t[0-9]+)[.]G[0-9]+$", re.IGNORECA
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "ensembl": Path("Ensembl") / "original_files",
     "ensemblplants": Path("20230216_EnsemblPlants") / "original_files",
+    "ensemblmetazoa": Path("EnsemblMetazoa") / "original_files",
+    "ensemblprotists": Path("EnsemblProtists") / "original_files",
     "phycocosm": Path("PhycoCosm") / "species_wise_original",
     "phytozome": Path("Phytozome") / "species_wise_original",
     "ncbi": Path("NCBI_Genome") / "species_wise_original",
@@ -204,6 +208,8 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
 PROVIDERS = (
     "ensembl",
     "ensemblplants",
+    "ensemblmetazoa",
+    "ensemblprotists",
     "phycocosm",
     "phytozome",
     "ncbi",
@@ -231,6 +237,8 @@ PROVIDERS = (
 DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "ensembl",
     "ensemblplants",
+    "ensemblmetazoa",
+    "ensemblprotists",
     "ncbi",
     "ddbj",
     "refseq",
@@ -252,6 +260,12 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     ORYZA_MINUTA_PROVIDER,
     "direct",
     "local",
+)
+ENSEMBL_LIKE_PROVIDERS = (
+    "ensembl",
+    "ensemblplants",
+    "ensemblmetazoa",
+    "ensemblprotists",
 )
 DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 900
 DEFAULT_DOWNLOAD_LOCK_HEARTBEAT_SECONDS = 60
@@ -347,6 +361,26 @@ ENSEMBLPLANTS_DEFAULT_ID_URL_TEMPLATES = {
     "GFF": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/gff3/{id_lower}/",
     "GENOME": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/fasta/{id_lower}/dna/",
 }
+ENSEMBLMETAZOA_DEFAULT_ID_URL_TEMPLATES = {
+    "CDS": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/metazoa/fasta/{id_lower}/cds/",
+    "GFF": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/metazoa/gff3/{id_lower}/",
+    "GENOME": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/metazoa/fasta/{id_lower}/dna/",
+}
+ENSEMBLPROTISTS_DEFAULT_ID_URL_TEMPLATES = {
+    "CDS": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/protists/fasta/{id_lower}/cds/",
+    "GFF": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/protists/gff3/{id_lower}/",
+    "GENOME": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/protists/fasta/{id_lower}/dna/",
+}
+ENSEMBLGENOMES_DEFAULT_ID_URL_TEMPLATES = {
+    "ensemblplants": ENSEMBLPLANTS_DEFAULT_ID_URL_TEMPLATES,
+    "ensemblmetazoa": ENSEMBLMETAZOA_DEFAULT_ID_URL_TEMPLATES,
+    "ensemblprotists": ENSEMBLPROTISTS_DEFAULT_ID_URL_TEMPLATES,
+}
+ENSEMBLGENOMES_FASTA_INDEX_URLS = {
+    "ensemblplants": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/fasta/",
+    "ensemblmetazoa": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/metazoa/fasta/",
+    "ensemblprotists": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/protists/fasta/",
+}
 PROVIDER_DEFAULT_ID_PAGE_URL_TEMPLATES = {
     "phycocosm": (
         "https://genome.jgi.doe.gov/portal/pages/dynamicOrganismDownload.jsf?organism={id}",
@@ -405,6 +439,8 @@ PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS = {
     # keep defaults conservative to reduce ban/abuse risk.
     "ensembl": 2,
     "ensemblplants": 2,
+    "ensemblmetazoa": 2,
+    "ensemblprotists": 2,
     "phycocosm": 1,
     "phytozome": 1,
     "coge": 1,
@@ -826,7 +862,7 @@ def build_arg_parser():
         "--input-dir",
         default="",
         help=(
-            "Provider input directory. For ensembl/ensemblplants: original_files/. "
+            "Provider input directory. For ensembl/ensemblplants/ensemblmetazoa/ensemblprotists: original_files/. "
             "For phycocosm/phytozome/ncbi/coge/cngb/gwh/citrusgenomedb/figshare/plantgarden/plantaedb/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/oryza_minuta/direct/local: species_wise_original/. "
             "Legacy aliases refseq/genbank are treated as ncbi. "
             "For --provider all, this must be the shared root containing all provider subdirectories."
@@ -863,7 +899,7 @@ def build_arg_parser():
             "(ncbi supports GCF/GCA/NCBI-URL auto-resolution; "
             "other supported providers support id-based template/index inference). "
             "Supported providers for --download-manifest: "
-            "ensembl, ensemblplants, ncbi, coge, cngb, gwh, citrusgenomedb, figshare, plantgarden, plantaedb, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, oryza_minuta, direct, local "
+            "ensembl, ensemblplants, ensemblmetazoa, ensemblprotists, ncbi, coge, cngb, gwh, citrusgenomedb, figshare, plantgarden, plantaedb, flybase, wormbase, vectorbase, fernbase, veupathdb, dictybase, insectbase, oryza_minuta, direct, local "
             "(legacy aliases refseq/genbank are treated as ncbi). "
             "provider=citrusgenomedb accepts Citrus Genome Database organism or analysis URLs and resolves public genome/GFF/CDS downloads when available. "
             "provider=figshare accepts public article URLs or numeric article ids and can resolve file downloads from the figshare article API; use *_filename columns to disambiguate multi-file articles. "
@@ -1283,7 +1319,7 @@ def write_resolved_manifest_tsv(output_path, fieldnames, rows):
 
 
 def provider_raw_dir(provider, download_root, species_key):
-    if provider in ("ensembl", "ensemblplants"):
+    if provider in ENSEMBL_LIKE_PROVIDERS:
         return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]
     if provider in (
         "phycocosm",
@@ -1326,6 +1362,10 @@ def infer_provider_from_id(source_id):
         return "ddbj"
     if ENSEMBL_ID_HINT_PATTERN.match(source_id):
         return "ensembl"
+    if ENSEMBLMETAZOA_ID_HINT_PATTERN.match(source_id):
+        return "ensemblmetazoa"
+    if ENSEMBLPROTISTS_ID_HINT_PATTERN.match(source_id):
+        return "ensemblprotists"
     if FERNBASE_ID_HINT_PATTERN.match(source_id):
         return "fernbase"
     if VEUPATHDB_ID_HINT_PATTERN.match(source_id):
@@ -1340,6 +1380,12 @@ def infer_provider_from_id(source_id):
         return "insectbase"
     if "ftp.ensembl.org" in lowered or "ensembl.org/pub/current_" in lowered:
         return "ensembl"
+    if "ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/" in lowered or "ftp.ensemblgenomes.ebi.ac.uk/pub/current/plants/" in lowered:
+        return "ensemblplants"
+    if "ftp.ensemblgenomes.ebi.ac.uk/pub/current/metazoa/" in lowered:
+        return "ensemblmetazoa"
+    if "ftp.ensemblgenomes.ebi.ac.uk/pub/current/protists/" in lowered:
+        return "ensemblprotists"
     if COGE_ID_HINT_PATTERN.match(source_id):
         return "coge"
     if GWH_ID_HINT_PATTERN.match(source_id):
@@ -1544,6 +1590,75 @@ def parse_links_from_document(base_url, text):
         seen.add(candidate)
         links.append(candidate)
     return links
+
+
+def parse_dirname_from_index_link(url):
+    path = urlparse(url).path
+    if path.endswith("/"):
+        return path.rstrip("/").split("/")[-1]
+    if path.endswith("/index.html"):
+        return path[: -len("/index.html")].rstrip("/").split("/")[-1]
+    return ""
+
+
+def ensembl_like_default_id_url_templates(provider):
+    if provider == "ensembl":
+        return ENSEMBL_DEFAULT_ID_URL_TEMPLATES
+    return ENSEMBLGENOMES_DEFAULT_ID_URL_TEMPLATES.get(provider, {})
+
+
+def fetch_ensemblgenomes_dir_ids(provider, timeout, headers):
+    index_url = ENSEMBLGENOMES_FASTA_INDEX_URLS.get(provider, "")
+    if index_url == "":
+        return []
+    html_text = fetch_text_with_headers(index_url, timeout, headers)
+    out = []
+    for link in parse_links_from_document(index_url, html_text):
+        source_id = parse_dirname_from_index_link(link)
+        if source_id in ("", "current", "fasta", "pub", "plants", "metazoa", "protists"):
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", source_id):
+            continue
+        out.append(source_id)
+    return sorted(set(out), key=lambda value: (value.lower(), len(value)))
+
+
+def expand_ensemblgenomes_id_candidates(provider, id_candidates, timeout, headers):
+    available_ids = fetch_ensemblgenomes_dir_ids(provider, timeout, headers)
+    if not available_ids:
+        return list(id_candidates)
+
+    available_lookup = {value.lower(): value for value in available_ids}
+    expanded = []
+    seen = set()
+
+    def add(value):
+        text = str(value or "").strip()
+        if text == "":
+            return
+        lowered = text.lower()
+        if lowered in seen:
+            return
+        seen.add(lowered)
+        expanded.append(text)
+
+    for candidate in id_candidates:
+        stripped = str(candidate or "").strip()
+        if stripped == "":
+            continue
+        exact = available_lookup.get(stripped.lower())
+        if exact is not None:
+            add(exact)
+        else:
+            prefix_matches = [
+                value
+                for value in available_ids
+                if value.lower().startswith(stripped.lower() + "_")
+            ]
+            if prefix_matches:
+                add(sorted(prefix_matches, key=lambda value: (len(value), value.lower()))[0])
+        add(stripped)
+    return expanded
 
 
 FERNBASE_GFF_EXCLUDE_PATTERN = re.compile(
@@ -2552,7 +2667,7 @@ def source_id_candidates(provider, source_id, species_key):
         match = re.search(r"_([0-9]+)_", stripped)
         if match is not None:
             add(match.group(1))
-    if provider in ("ensembl", "ensemblplants"):
+    if provider in ENSEMBL_LIKE_PROVIDERS:
         species_tokens = [token for token in str(species_key or "").split("_") if token != ""]
         if len(species_tokens) >= 2:
             add("{}_{}".format(species_tokens[0], species_tokens[1]))
@@ -3871,18 +3986,21 @@ def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, tim
     id_candidates = source_id_candidates(provider, source_id, species_key)
     if len(id_candidates) == 0:
         id_candidates = [str(source_id or "").strip()]
+    effective_candidates = id_candidates
+    if provider in ENSEMBLGENOMES_DEFAULT_ID_URL_TEMPLATES:
+        try:
+            effective_candidates = expand_ensemblgenomes_id_candidates(provider, id_candidates, timeout, headers)
+        except Exception:
+            effective_candidates = id_candidates
 
     for label in DOWNLOAD_LABELS:
         template_env = "{}_{}_URL_TEMPLATE".format(env_prefix, label)
         template = os.environ.get(template_env, "").strip()
         if template == "":
-            if provider == "ensembl":
-                template = ENSEMBL_DEFAULT_ID_URL_TEMPLATES.get(label, "")
-            if provider == "ensemblplants":
-                template = ENSEMBLPLANTS_DEFAULT_ID_URL_TEMPLATES.get(label, "")
+            template = ensembl_like_default_id_url_templates(provider).get(label, "")
         if template == "":
             continue
-        for candidate in id_candidates:
+        for candidate in effective_candidates:
             url = render_id_url_template(template, provider, candidate, species_key)
             if url.endswith("/"):
                 try:
@@ -4014,7 +4132,7 @@ def default_download_filename(provider, species_key, label, url, archive_member=
         else:
             ext = ".gff3.gz"
         base = "{}.{}{}".format(species_key, label, ext)
-    if provider in ("ensembl", "ensemblplants"):
+    if provider in ENSEMBL_LIKE_PROVIDERS:
         if not base.startswith(species_key + "."):
             base = "{}.{}".format(species_key, base)
     return base
@@ -5819,7 +5937,7 @@ def is_probable_genome_filename(provider, name):
         return "genomic" in lower
     if provider == "figshare":
         return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "_chr", ".chr", "hap"))
-    if provider in ("ensembl", "ensemblplants"):
+    if provider in ENSEMBL_LIKE_PROVIDERS:
         return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
     return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold"))
 
@@ -6853,7 +6971,7 @@ def extract_gwh_id(header):
 
 
 def extract_provider_id(provider, header):
-    if provider in ("ensembl", "ensemblplants"):
+    if provider in ENSEMBL_LIKE_PROVIDERS:
         return extract_ensembl_id(header)
     if provider == "phycocosm":
         return extract_phycocosm_id(header)
@@ -6866,7 +6984,7 @@ def extract_provider_id(provider, header):
 
 def extract_provider_transcript_id(provider, header):
     token = first_token(header)
-    if provider in ("ensembl", "ensemblplants"):
+    if provider in ENSEMBL_LIKE_PROVIDERS:
         token = re.sub(r"^(?:transcript|mrna|rna):", "", token, flags=re.IGNORECASE)
         if token != "":
             return token
@@ -6885,6 +7003,8 @@ def collapse_transcript_suffix(provider, identifier):
         "phytozome",
         "ensembl",
         "ensemblplants",
+        "ensemblmetazoa",
+        "ensemblprotists",
         "ncbi",
         "refseq",
         "genbank",
@@ -7425,7 +7545,7 @@ def discover_ncbi_like_tasks(input_dir, provider):
 
 
 def discover_tasks(provider, input_dir):
-    if provider in ("ensembl", "ensemblplants"):
+    if provider in ENSEMBL_LIKE_PROVIDERS:
         return discover_ensembl_like_tasks(input_dir, provider)
     if provider == "phycocosm":
         return discover_phycocosm_tasks(input_dir)

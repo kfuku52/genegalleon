@@ -3466,6 +3466,8 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
     provider_species = {
         "ensembl": "Homo_sapiens",
         "ensemblplants": "Ostreococcus_lucimarinus",
+        "ensemblmetazoa": "Anopheles_gambiae",
+        "ensemblprotists": "Phytophthora_parasitica",
         "coge": "Arabidopsis_thaliana",
         "cngb": "Arabidopsis_thaliana",
         "flybase": "Drosophila_melanogaster",
@@ -3478,6 +3480,8 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
     provider_ids = {
         "ensembl": "homo_sapiens",
         "ensemblplants": "Ostreococcus_lucimarinus",
+        "ensemblmetazoa": "anopheles_gambiae",
+        "ensemblprotists": "phytophthora_parasitica",
         "coge": "24739",
         "cngb": "cngb:arabidopsis_thaliana_v1",
         "flybase": "dmel_r6.61",
@@ -3520,6 +3524,8 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
     provider_to_env = {
         "ensembl": "GG_ENSEMBL",
         "ensemblplants": "GG_ENSEMBLPLANTS",
+        "ensemblmetazoa": "GG_ENSEMBLMETAZOA",
+        "ensemblprotists": "GG_ENSEMBLPROTISTS",
         "coge": "GG_COGE",
         "cngb": "GG_CNGB",
         "flybase": "GG_FLYBASE",
@@ -3557,6 +3563,8 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
     expected_roots = {
         "ensembl": download_dir / "Ensembl" / "original_files",
         "ensemblplants": download_dir / "20230216_EnsemblPlants" / "original_files",
+        "ensemblmetazoa": download_dir / "EnsemblMetazoa" / "original_files",
+        "ensemblprotists": download_dir / "EnsemblProtists" / "original_files",
         "coge": download_dir / "CoGe" / "species_wise_original" / provider_species["coge"],
         "cngb": download_dir / "CNGB" / "species_wise_original" / provider_species["cngb"],
         "flybase": download_dir / "FlyBase" / "species_wise_original" / provider_species["flybase"],

@@ -135,3 +135,35 @@ def test_load_snapshot_direct_catalog_preserves_direct_fields(tmp_path):
     assert catalog[0]["id"] == "Zoysia_matrella_kazusa"
     assert catalog[0]["species_key"] == "Zoysia_matrella"
     assert catalog[0]["cds_url"] == "https://example.org/zoysia.cds.fa.gz"
+
+
+def test_fetch_ensemblmetazoa_options_preserves_exact_ids_and_cleans_labels(monkeypatch):
+    module = load_module()
+
+    monkeypatch.setattr(
+        module,
+        "fetch_text",
+        lambda url, timeout: """
+        <html>
+          <a href="anopheles_gambiae/">anopheles_gambiae/</a>
+          <a href="rhopalosiphum_maidis_gca003676215v3/">rhopalosiphum_maidis_gca003676215v3/</a>
+        </html>
+        """,
+    )
+
+    options = module.fetch_ensemblmetazoa_options(1)
+
+    assert options == [
+        ("anopheles_gambiae", "Anopheles gambiae"),
+        ("rhopalosiphum_maidis_gca003676215v3", "Rhopalosiphum maidis"),
+    ]
+
+
+def test_fetch_provider_options_dispatches_new_ensemblgenomes_providers(monkeypatch):
+    module = load_module()
+
+    monkeypatch.setattr(module, "fetch_ensemblmetazoa_options", lambda timeout: [("m1", "Metazoa species")])
+    monkeypatch.setattr(module, "fetch_ensemblprotists_options", lambda timeout: [("p1", "Protist species")])
+
+    assert module.fetch_provider_options("ensemblmetazoa", 1, None) == [("m1", "Metazoa species")]
+    assert module.fetch_provider_options("ensemblprotists", 1, None) == [("p1", "Protist species")]

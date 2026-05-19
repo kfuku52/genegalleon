@@ -20,6 +20,8 @@ except Exception:  # pragma: no cover
 PROVIDERS = (
     "ensembl",
     "ensemblplants",
+    "ensemblmetazoa",
+    "ensemblprotists",
     "ncbi",
     "ddbj",
     "coge",
@@ -41,7 +43,19 @@ PROVIDERS = (
     "local",
 )
 
-FETCH_PROVIDERS = ("ensembl", "ensemblplants", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "insectbase", "local")
+FETCH_PROVIDERS = (
+    "ensembl",
+    "ensemblplants",
+    "ensemblmetazoa",
+    "ensemblprotists",
+    "flybase",
+    "wormbase",
+    "vectorbase",
+    "fernbase",
+    "veupathdb",
+    "insectbase",
+    "local",
+)
 
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "local": Path("Local") / "species_wise_original",
@@ -76,6 +90,8 @@ DIRECT_CATALOG_FIELDS = tuple(field for field in MANIFEST_FIELDNAMES if field no
 ID_EXAMPLES_BY_PROVIDER = {
     "ensembl": (("homo_sapiens", "Homo sapiens"), ("mus_musculus", "Mus musculus")),
     "ensemblplants": (("Ostreococcus_lucimarinus", "Ostreococcus lucimarinus"),),
+    "ensemblmetazoa": (("anopheles_gambiae", "Anopheles gambiae"),),
+    "ensemblprotists": (("phytophthora_parasitica", "Phytophthora parasitica"),),
     "ncbi": (
         ("GCF_000001405.40", "Homo sapiens"),
         ("GCA_000001635.9", "Mus musculus"),
@@ -365,6 +381,13 @@ def parse_dirname_from_index_link(url):
     return ""
 
 
+def ensemblgenomes_species_label(source_id):
+    tokens = [token for token in str(source_id or "").split("_") if token != ""]
+    if len(tokens) >= 3 and re.fullmatch(r"(?:gca|gcf)[0-9][a-z0-9.]*", tokens[-1], flags=re.IGNORECASE):
+        tokens = tokens[:-1]
+    return species_label_from_species_key("_".join(tokens))
+
+
 def fetch_ensembl_options(timeout):
     data = fetch_json("https://rest.ensembl.org/info/species?content-type=application/json", timeout)
     out = []
@@ -381,16 +404,36 @@ def fetch_ensembl_options(timeout):
 
 
 def fetch_ensemblplants_options(timeout):
-    index_url = "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/fasta/"
+    return fetch_ensemblgenomes_options(
+        "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/fasta/",
+        timeout,
+    )
+
+
+def fetch_ensemblmetazoa_options(timeout):
+    return fetch_ensemblgenomes_options(
+        "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/metazoa/fasta/",
+        timeout,
+    )
+
+
+def fetch_ensemblprotists_options(timeout):
+    return fetch_ensemblgenomes_options(
+        "https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/protists/fasta/",
+        timeout,
+    )
+
+
+def fetch_ensemblgenomes_options(index_url, timeout):
     html_text = fetch_text(index_url, timeout)
     out = []
     for link in parse_links(html_text, index_url):
         source_id = parse_dirname_from_index_link(link)
-        if source_id in ("", "current", "fasta", "pub", "plants"):
+        if source_id in ("", "current", "fasta", "pub", "plants", "metazoa", "protists"):
             continue
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", source_id):
             continue
-        species_label = species_label_from_species_key(source_id)
+        species_label = ensemblgenomes_species_label(source_id)
         out.append((source_id, species_label))
     out = dedupe_options(out)
     return sorted(out, key=lambda x: x[0].lower())
@@ -619,6 +662,10 @@ def fetch_provider_options(provider, timeout, input_root):
         return fetch_ensembl_options(timeout)
     if provider == "ensemblplants":
         return fetch_ensemblplants_options(timeout)
+    if provider == "ensemblmetazoa":
+        return fetch_ensemblmetazoa_options(timeout)
+    if provider == "ensemblprotists":
+        return fetch_ensemblprotists_options(timeout)
     if provider == "flybase":
         return fetch_flybase_options(timeout)
     if provider == "wormbase":

@@ -70,6 +70,8 @@ GENBANK_EXTENSIONS = (
 PROVIDERS = (
     "ensembl",
     "ensemblplants",
+    "ensemblmetazoa",
+    "ensemblprotists",
     "ncbi",
     "ddbj",
     "coge",
@@ -103,6 +105,8 @@ FERNBASE_COMBINED_FILENAME_MARKER = "highlowcombined"
 DEFAULT_INPUT_RELATIVE_DIRS = {
     "ensembl": Path("Ensembl") / "original_files",
     "ensemblplants": Path("20230216_EnsemblPlants") / "original_files",
+    "ensemblmetazoa": Path("EnsemblMetazoa") / "original_files",
+    "ensemblprotists": Path("EnsemblProtists") / "original_files",
     "ncbi": Path("NCBI_Genome") / "species_wise_original",
     "ddbj": Path("DDBJ") / "species_wise_original",
     "coge": Path("CoGe") / "species_wise_original",
@@ -123,6 +127,12 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "direct": Path("Direct") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
+ENSEMBL_LIKE_PROVIDERS = (
+    "ensembl",
+    "ensemblplants",
+    "ensemblmetazoa",
+    "ensemblprotists",
+)
 NCBI_MERGED_INPUT_RELATIVE_DIRS = (
     Path("NCBI_Genome") / "species_wise_original",
     Path("NCBI_RefSeq") / "species_wise_original",
@@ -446,6 +456,8 @@ LARGE_ID_PROVIDERS = ("ncbi",)
 SNAPSHOT_FULL_ID_PROVIDERS = (
     "ensembl",
     "ensemblplants",
+    "ensemblmetazoa",
+    "ensemblprotists",
     "ddbj",
     "gwh",
     "citrusgenomedb",
@@ -469,6 +481,8 @@ DDBJ_WGS_MASTER_ACCESSION_PATTERN = re.compile(r"([A-Z]{4,6})0{8,9}(?:\.[0-9]+)?
 ID_EXAMPLES_BY_PROVIDER = {
     "ensembl": (("homo_sapiens", "Homo sapiens"), ("mus_musculus", "Mus musculus")),
     "ensemblplants": (("Ostreococcus_lucimarinus", "Ostreococcus lucimarinus"),),
+    "ensemblmetazoa": (("anopheles_gambiae", "Anopheles gambiae"),),
+    "ensemblprotists": (("phytophthora_parasitica", "Phytophthora parasitica"),),
     "ncbi": (
         ("GCF_000001405.40", "Homo sapiens"),
         ("GCA_000001635.9", "Mus musculus"),
@@ -885,7 +899,7 @@ def build_arg_parser():
         default="",
         help=(
             "Optional JSON snapshot for provider-specific id dropdown values. "
-            "When set, non-large providers (ensembl/ensemblplants/gwh/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/direct/local) "
+            "When set, non-large providers (ensembl/ensemblplants/ensemblmetazoa/ensemblprotists/gwh/flybase/wormbase/vectorbase/fernbase/veupathdb/dictybase/insectbase/direct/local) "
             "prefer snapshot IDs over locally discovered IDs."
         ),
     )
@@ -935,7 +949,7 @@ def is_probable_genome_filename(provider, name):
         return False
     if provider == "ncbi":
         return "genomic" in lower
-    if provider in ("ensembl", "ensemblplants"):
+    if provider in ENSEMBL_LIKE_PROVIDERS:
         return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
     return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold"))
 
@@ -1237,7 +1251,7 @@ def discover(provider, input_root, allow_missing=False):
         if allow_missing:
             return [], [message], []
         return [], [], [message]
-    if provider in ("ensembl", "ensemblplants"):
+    if provider in ENSEMBL_LIKE_PROVIDERS:
         return discover_ensembl_like(input_dir, provider)
     return discover_species_dir_based(provider, input_dir)
 

@@ -83,9 +83,9 @@ case "${provider}" in
     echo "Provider '${provider}' is treated as alias of 'ncbi'."
     provider="ncbi"
     ;;
-  all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|coge|cngb|gwh|flybase|wormbase|vectorbase|fernbase|veupathdb|dictybase|insectbase|direct|local) ;;
+  all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|coge|cngb|gwh|flybase|wormbase|vectorbase|fernbase|veupathdb|dictybase|insectbase|direct|local) ;;
   *)
-    echo "Invalid provider: ${provider} (allowed: all|ensembl|ensemblplants|phycocosm|phytozome|ncbi|coge|cngb|gwh|flybase|wormbase|vectorbase|fernbase|veupathdb|dictybase|insectbase|direct|local)"
+    echo "Invalid provider: ${provider} (allowed: all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|coge|cngb|gwh|flybase|wormbase|vectorbase|fernbase|veupathdb|dictybase|insectbase|direct|local)"
     exit 1
     ;;
 esac
@@ -341,6 +341,12 @@ input_generation_effective_input_dir_path() {
       ;;
     ensemblplants)
       printf '%s\n' "${download_dir}/20230216_EnsemblPlants/original_files"
+      ;;
+    ensemblmetazoa)
+      printf '%s\n' "${download_dir}/EnsemblMetazoa/original_files"
+      ;;
+    ensemblprotists)
+      printf '%s\n' "${download_dir}/EnsemblProtists/original_files"
       ;;
     phycocosm)
       printf '%s\n' "${download_dir}/PhycoCosm/species_wise_original"

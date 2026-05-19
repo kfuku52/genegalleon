@@ -313,8 +313,8 @@ Manifest required columns:
   - for `provider=oryza_minuta`, set `id=gramene_tetraploids`; the resolver downloads the public Gramene `oryza_minutabb` and `oryza_minutacc` CDS/GFF/genome bundles and merges them into one species-level bundle automatically.
   - for `provider=direct`, set explicit `cds_url`, `gbff_url`, or `gff_url` plus `genome_url`, or provide an index-style URL in `id` that exposes downloadable files.
     When a URL points to a shared archive, use `cds_archive_member`, `gff_archive_member`, and/or `genome_archive_member` to name the member to extract.
-  - for `provider=ensembl` and `provider=ensemblplants`, `id`-only URL inference is supported via:
-    - provider defaults (for example, Ensembl/EnsemblPlants index discovery),
+  - for `provider=ensembl`, `provider=ensemblplants`, `provider=ensemblmetazoa`, and `provider=ensemblprotists`, `id`-only URL inference is supported via:
+    - provider defaults (for example, Ensembl or division-specific EnsemblGenomes index discovery),
     - or env templates: `GG_<PROVIDER>_CDS_URL_TEMPLATE`, `GG_<PROVIDER>_GFF_URL_TEMPLATE`, `GG_<PROVIDER>_GENOME_URL_TEMPLATE`,
     - and optional page template: `GG_<PROVIDER>_ID_URL_TEMPLATE`.
   - for `provider=fernbase`, `id`-only URL inference can also resolve from FernBase FTP directory discovery.
@@ -354,7 +354,7 @@ XLSX template notes:
   or hand-vetted URLs, instead of falling back to `provider=local`.
 - for large provider (`ncbi`), five model-organism IDs are shown as examples (mixed `GCF_*`/`GCA_*` formats).
 - for `ddbj`, `coge`, and `cngb`, IDs are example-based by default.
-- for `ddbj`, `gwh`, `citrusgenomedb`, `figshare`, `plantgarden`, `ensembl`, `ensemblplants`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, `oryza_minuta`, `direct`, and `local`,
+- for `ddbj`, `gwh`, `citrusgenomedb`, `figshare`, `plantgarden`, `ensembl`, `ensemblplants`, `ensemblmetazoa`, `ensemblprotists`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, `oryza_minuta`, `direct`, and `local`,
   IDs can be supplied from a prebuilt `id_options_snapshot.json`.
 - when no snapshot is supplied, non-large providers fall back to IDs discovered from `--input-dir`.
 - drop-down IDs are shown as `ID (Species name)` for non-`local` providers.
