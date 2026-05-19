@@ -1254,6 +1254,162 @@ normalize_iq2mc_constraint_tree() {
   return 0
 }
 
+mcmctree_time_scale_factor_cache=""
+
+resolve_mcmctree_time_scale_factor() {
+  local scale_source=""
+  if [[ -n "${mcmctree_time_scale_factor_cache}" ]]; then
+    printf '%s\n' "${mcmctree_time_scale_factor_cache}"
+    return 0
+  fi
+  if [[ -s "${file_constrained_tree}" ]]; then
+    scale_source="${file_constrained_tree}"
+  elif [[ -s "${file_iq2mc_rooted_tree:-}" ]]; then
+    scale_source="${file_iq2mc_rooted_tree}"
+  fi
+  if [[ -z "${scale_source}" ]]; then
+    mcmctree_time_scale_factor_cache="1"
+    printf '%s\n' "${mcmctree_time_scale_factor_cache}"
+    return 0
+  fi
+  mcmctree_time_scale_factor_cache=$(python "${gg_support_dir}/mcmctree_time_scale.py" \
+    factor \
+    --infile "${scale_source}" \
+    --target-max "10")
+  if [[ -z "${mcmctree_time_scale_factor_cache}" ]]; then
+    echo "Error: Failed to resolve MCMCTree time scale factor." >&2
+    return 1
+  fi
+  printf '%s\n' "${mcmctree_time_scale_factor_cache}"
+}
+
+scale_mcmctree_calibrations_file() {
+  local infile=$1
+  local outfile=$2
+  local scale_factor=$3
+  local direction=$4
+  python "${gg_support_dir}/mcmctree_time_scale.py" \
+    scale-calibrations \
+    --infile "${infile}" \
+    --outfile "${outfile}" \
+    --scale "${scale_factor}" \
+    --direction "${direction}"
+}
+
+scale_mcmctree_ctl_rootage_file() {
+  local infile=$1
+  local outfile=$2
+  local scale_factor=$3
+  local direction=$4
+  python "${gg_support_dir}/mcmctree_time_scale.py" \
+    scale-ctl-rootage \
+    --infile "${infile}" \
+    --outfile "${outfile}" \
+    --scale "${scale_factor}" \
+    --direction "${direction}"
+}
+
+extract_scaled_mcmctree_figtree() {
+  local infile=$1
+  local outfile=$2
+  local scale_factor=$3
+  python "${gg_support_dir}/mcmctree_time_scale.py" \
+    extract-figtree \
+    --infile "${infile}" \
+    --outfile "${outfile}" \
+    --scale "${scale_factor}" \
+    --direction "up"
+}
+
+mcmctree_requires_bdparas_flag() {
+  local probe_dir
+  local probe_stdout
+  local probe_stderr
+  local rc
+  probe_dir=$(mktemp -d "${dir_tmp}/tmp.mcmctree.bdparas_probe.XXXXXX")
+  probe_stdout="${probe_dir}/stdout.txt"
+  probe_stderr="${probe_dir}/stderr.txt"
+  printf '%s\n' "3 1" "((a,b)'B(0.1,0.2,0.025,0.025)',c);" > "${probe_dir}/tree.nwk"
+  cat > "${probe_dir}/dummy.phy" << 'EOF'
+3 4
+a    ACGT
+b    ACGT
+c    ACGT
+EOF
+  cat > "${probe_dir}/mcmctree.ctl" << 'EOF'
+seed = 1
+seqfile = dummy.phy
+treefile = tree.nwk
+outfile = mcmctree.out
+mcmcfile = mcmc.txt
+ndata = 1
+seqtype = 0
+usedata = 0
+clock = 2
+RootAge = <0.3
+model = 4
+alpha = 0.5
+ncatG = 5
+cleandata = 1
+BDparas = 1 1 0.5
+kappa_gamma = 6 2
+alpha_gamma = 1 1
+rgene_gamma = 2 20 1
+sigma2_gamma = 1 10 1
+burnin = 1
+sampfreq = 1
+nsample = 1
+EOF
+  if (
+    cd "${probe_dir}"
+    mcmctree mcmctree.ctl > "${probe_stdout}" 2> "${probe_stderr}"
+  ); then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [[ ${rc} -ne 0 ]] && grep -q "BDparas: expect flag" "${probe_stderr}"; then
+    rm -rf -- "${probe_dir}"
+    return 0
+  fi
+  rm -rf -- "${probe_dir}"
+  return 1
+}
+
+normalize_mcmctree_ctl_for_installed_paml() {
+  local ctl_file=$1
+  if [[ ! -s "${ctl_file}" ]]; then
+    return 0
+  fi
+  if ! mcmctree_requires_bdparas_flag; then
+    return 0
+  fi
+  python - "${ctl_file}" << 'PY'
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+lines = path.read_text(encoding="utf-8").splitlines()
+updated = []
+pattern = re.compile(
+    r"^(\s*BDparas\s*=\s*)"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+    r"(\s+[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+    r"(\s+[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+    r"(\s*(?:#.*)?)$"
+)
+for line in lines:
+    match = pattern.match(line)
+    if match:
+        line = "".join(match.groups()[:-1]) + " M" + match.group(5)
+    updated.append(line)
+path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+PY
+}
+
 iq2mc_option_supported() {
   local candidate=$1
   local resolved_candidate
@@ -2346,13 +2502,23 @@ if [[ (! -s "${file_iq2mc_ctl}" || ! -s "${file_iq2mc_hessian}" || ! -s "${file_
     echo "Error: Failed to clear IQ2MC working directory safely."
     exit 1
   fi
-  cd "$(dirname "${file_iq2mc_ctl}")"
+  mcmctree_time_scale_factor=$(resolve_mcmctree_time_scale_factor)
+  if [[ "${mcmctree_time_scale_factor}" != "1" ]]; then
+    echo "MCMCTree calibration ages will be divided by ${mcmctree_time_scale_factor} for internal IQ2MC/MCMCTree execution."
+    echo "Public GeneGalleon tree outputs remain in the original time unit."
+  fi
+
+  iq2mc_work_dir=$(mktemp -d "${dir_tmp}/tmp.iq2mc.work.XXXXXX")
+  iq2mc_scaled_constraint_tree="${iq2mc_work_dir}/iq2mc.scaled.constraint.nwk"
+  scale_mcmctree_calibrations_file "${file_constrained_tree}" "${iq2mc_scaled_constraint_tree}" "${mcmctree_time_scale_factor}" "down"
+
+  cd "${iq2mc_work_dir}"
   seqkit seq --threads 1 "${file_concat_cds}" --out-file "./tmp.iq2mc.concat.cds.fasta"
 
   if ! "${iq2mc_binary}" \
     -s "./tmp.iq2mc.concat.cds.fasta" \
     -m "${nucleotide_model}" \
-    -te "${file_constrained_tree}" \
+    -te "${iq2mc_scaled_constraint_tree}" \
     --dating mcmctree \
     --mcmc-bds "${mcmc_birth_death_sampling}" \
     --mcmc-clock "${mcmc_clock_model}" \
@@ -2361,19 +2527,32 @@ if [[ (! -s "${file_iq2mc_ctl}" || ! -s "${file_iq2mc_hessian}" || ! -s "${file_
     --prefix iq2mc; then
     echo "Error: IQ2MC step 2 failed. Deleting generated files."
     rm -f -- "${file_iq2mc_prefix}".*
-  elif [[ ! -s "${file_iq2mc_ctl}" || ! -s "${file_iq2mc_hessian}" || ! -s "${file_iq2mc_rooted_tree}" || ! -s "${file_iq2mc_dummy_phy}" ]]; then
+  elif [[ ! -s "${iq2mc_work_dir}/iq2mc.mcmctree.ctl" || ! -s "${iq2mc_work_dir}/iq2mc.mcmctree.hessian" || ! -s "${iq2mc_work_dir}/iq2mc.rooted.nwk" || ! -s "${iq2mc_work_dir}/iq2mc.dummy.phy" ]]; then
     echo "Error: IQ2MC step 2 did not generate all expected files."
+  else
+    scale_mcmctree_ctl_rootage_file "${iq2mc_work_dir}/iq2mc.mcmctree.ctl" "${file_iq2mc_ctl}" "${mcmctree_time_scale_factor}" "up"
+    cp_out "${iq2mc_work_dir}/iq2mc.mcmctree.hessian" "${file_iq2mc_hessian}"
+    cp_out "${iq2mc_work_dir}/iq2mc.dummy.phy" "${file_iq2mc_dummy_phy}"
+    scale_mcmctree_calibrations_file "${iq2mc_work_dir}/iq2mc.rooted.nwk" "${file_iq2mc_rooted_tree}" "${mcmctree_time_scale_factor}" "up"
+  fi
+  if [[ ! -s "${file_iq2mc_ctl}" || ! -s "${file_iq2mc_hessian}" || ! -s "${file_iq2mc_rooted_tree}" || ! -s "${file_iq2mc_dummy_phy}" ]]; then
     rm -f -- "${file_iq2mc_prefix}".*
   fi
   rm -f -- "./tmp.iq2mc.concat.cds.fasta"
   cd "${dir_tmp}"
+  if [[ "${GG_KEEP_MCMCTREE_RAW_DEBUG:-0}" == "1" ]]; then
+    echo "Keeping internal scaled IQ2MC debug directory until tmp cleanup: ${iq2mc_work_dir}"
+    echo "Set delete_tmp_dir=0 to preserve it after the workflow."
+  else
+    rm -rf -- "${iq2mc_work_dir}"
+  fi
 else
   gg_step_skip "${task}"
 fi
 
 task="IQ2MC step 3 (MCMCtree dating run)"
 disable_if_no_input_file "run_mcmctree2" "${file_iq2mc_ctl}" "${file_iq2mc_hessian}" "${file_iq2mc_rooted_tree}" "${file_iq2mc_dummy_phy}"
-if [[ ! -s "${file_mcmctree_raw_output}" && ${run_mcmctree2} -eq 1 ]]; then
+if [[ ! -s "${file_mcmctree_figtree_tre}" && ${run_mcmctree2} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_mcmctree2}"
 
@@ -2381,11 +2560,19 @@ if [[ ! -s "${file_mcmctree_raw_output}" && ${run_mcmctree2} -eq 1 ]]; then
     echo "Error: Failed to clear MCMCtree working directory safely."
     exit 1
   fi
+  mcmctree_time_scale_factor=$(resolve_mcmctree_time_scale_factor)
   cd "${dir_mcmctree2}"
   cp_out "${file_iq2mc_ctl}" ./
   cp_out "${file_iq2mc_hessian}" ./
   cp_out "${file_iq2mc_rooted_tree}" ./
   cp_out "${file_iq2mc_dummy_phy}" ./
+
+  mcmctree_work_dir=$(mktemp -d "${dir_tmp}/tmp.mcmctree.work.XXXXXX")
+  scale_mcmctree_ctl_rootage_file "${file_iq2mc_ctl}" "${mcmctree_work_dir}/$(basename "${file_iq2mc_ctl}")" "${mcmctree_time_scale_factor}" "down"
+  cp_out "${file_iq2mc_hessian}" "${mcmctree_work_dir}/"
+  cp_out "${file_iq2mc_dummy_phy}" "${mcmctree_work_dir}/"
+  scale_mcmctree_calibrations_file "${file_iq2mc_rooted_tree}" "${mcmctree_work_dir}/$(basename "${file_iq2mc_rooted_tree}")" "${mcmctree_time_scale_factor}" "down"
+  cd "${mcmctree_work_dir}"
 
   # Ensure MCMCtree emits CI-rich summaries (including 95% HPD annotations in FigTree output).
   ctl_basename="$(basename "${file_iq2mc_ctl}")"
@@ -2393,12 +2580,32 @@ if [[ ! -s "${file_mcmctree_raw_output}" && ${run_mcmctree2} -eq 1 ]]; then
   if ! grep -q "^print[[:space:]]*=" "${ctl_basename}"; then
     echo "print = 1" >> "${ctl_basename}"
   fi
+  normalize_mcmctree_ctl_for_installed_paml "${ctl_basename}"
 
   if ! mcmctree "${ctl_basename}"; then
     echo "Error: IQ2MC step 3 failed."
     rm -f -- "${file_mcmctree_raw_output}"
+  elif [[ ! -s "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" ]]; then
+    echo "Error: IQ2MC step 3 did not generate $(basename "${file_mcmctree_raw_output}")."
+    rm -f -- "${file_mcmctree_raw_output}" "${file_mcmctree_figtree_tre}"
+  elif extract_scaled_mcmctree_figtree "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" "${file_mcmctree_figtree_tre}" "${mcmctree_time_scale_factor}"; then
+    {
+      echo "GeneGalleon ran MCMCTree in an internal scaled time unit."
+      echo "Raw scaled MCMCTree output is not retained by default."
+      echo "The FigTree block below is converted back to the original public time unit."
+      cat "${file_mcmctree_figtree_tre}"
+    } > "${file_mcmctree_raw_output}"
+  else
+    echo "Error: Failed to extract an original-unit FigTree tree block from MCMCTree output."
+    rm -f -- "${file_mcmctree_raw_output}" "${file_mcmctree_figtree_tre}"
   fi
   cd "${dir_tmp}"
+  if [[ "${GG_KEEP_MCMCTREE_RAW_DEBUG:-0}" == "1" ]]; then
+    echo "Keeping internal scaled MCMCTree debug directory until tmp cleanup: ${mcmctree_work_dir}"
+    echo "Set delete_tmp_dir=0 to preserve it after the workflow."
+  else
+    rm -rf -- "${mcmctree_work_dir}"
+  fi
 else
   gg_step_skip "${task}"
 fi

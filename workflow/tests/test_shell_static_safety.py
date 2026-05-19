@@ -1661,6 +1661,24 @@ def test_genome_evolution_core_parses_mcmctree_constraints_with_validation_helpe
     assert "mcmctree_params=(${mdtc//,/ })" not in text
 
 
+def test_genome_evolution_core_runs_mcmctree_time_scaling_in_scratch():
+    script = CORE_DIR / "gg_genome_evolution_core.sh"
+    text = _read_text(script)
+
+    expected_tokens = [
+        'mcmctree_time_scale.py"',
+        'iq2mc_work_dir=$(mktemp -d "${dir_tmp}/tmp.iq2mc.work.XXXXXX")',
+        'scale_mcmctree_calibrations_file "${file_constrained_tree}" "${iq2mc_scaled_constraint_tree}" "${mcmctree_time_scale_factor}" "down"',
+        '-te "${iq2mc_scaled_constraint_tree}"',
+        'scale_mcmctree_calibrations_file "${iq2mc_work_dir}/iq2mc.rooted.nwk" "${file_iq2mc_rooted_tree}" "${mcmctree_time_scale_factor}" "up"',
+        'mcmctree_work_dir=$(mktemp -d "${dir_tmp}/tmp.mcmctree.work.XXXXXX")',
+        'extract_scaled_mcmctree_figtree "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" "${file_mcmctree_figtree_tre}" "${mcmctree_time_scale_factor}"',
+        'Raw scaled MCMCTree output is not retained by default.',
+    ]
+    for token in expected_tokens:
+        assert token in text, f"Missing MCMCTree scaling token: {token}"
+
+
 def test_genome_evolution_core_uses_rerun_safe_mkdir_for_orthogroup_grampa_tmp_input():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
@@ -1790,7 +1808,7 @@ def test_genome_evolution_core_quotes_orthogroup_iq2mc_and_busco_summary_options
     assert "--mcmc-iter ${mcmc_burnin},${mcmc_sampfreq},${mcmc_nsample}" not in iq2mc_block
     assert "-T ${GG_TASK_CPUS}" not in iq2mc_block
     assert '-m "${nucleotide_model}"' in iq2mc_block
-    assert '-te "${file_constrained_tree}"' in iq2mc_block
+    assert '-te "${iq2mc_scaled_constraint_tree}"' in iq2mc_block
     assert '--mcmc-bds "${mcmc_birth_death_sampling}"' in iq2mc_block
     assert '--mcmc-clock "${mcmc_clock_model}"' in iq2mc_block
     assert '--mcmc-iter "${mcmc_burnin},${mcmc_sampfreq},${mcmc_nsample}"' in iq2mc_block
