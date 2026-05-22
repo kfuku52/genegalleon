@@ -351,6 +351,8 @@ RESOLVED_MANIFEST_PREFERRED_COLUMNS = (
     "genome_filename",
     FERNBASE_CONFIDENCE_MODE_FIELD,
 )
+DIRECT_CATALOG_XLSX_SHEET = "_direct_catalog"
+DIRECT_CATALOG_IGNORED_FIELDS = frozenset(("choice", "species", "provider"))
 ENSEMBL_DEFAULT_ID_URL_TEMPLATES = {
     "CDS": "https://ftp.ensembl.org/pub/current_fasta/{id_lower}/cds/",
     "GFF": "https://ftp.ensembl.org/pub/current_gff3/{id_lower}/",
@@ -1209,22 +1211,89 @@ def detect_manifest_delimiter(path):
     return ","
 
 
+def read_xlsx_table(sheet):
+    row_iter = sheet.iter_rows(values_only=True)
+    header_row = next(row_iter, None)
+    if header_row is None:
+        return [], []
+    headers = []
+    for value in header_row:
+        text = str(value).strip() if value is not None else ""
+        headers.append(text)
+    while len(headers) > 0 and headers[-1] == "":
+        headers.pop()
+    if len(headers) == 0:
+        return [], []
+
+    rows = []
+    for raw_values in row_iter:
+        values = list(raw_values or ())
+        if len(values) < len(headers):
+            values.extend([None] * (len(headers) - len(values)))
+        row = {}
+        has_nonempty = False
+        for idx, key in enumerate(headers):
+            if key == "":
+                continue
+            cell = values[idx] if idx < len(values) else None
+            text = str(cell).strip() if cell is not None else ""
+            if text != "":
+                has_nonempty = True
+            row[key] = text
+        if has_nonempty:
+            rows.append(row)
+    return headers, rows
+
+
+def build_direct_catalog_lookup_from_xlsx(records):
+    lookup = {}
+    for record in records:
+        for key in ("choice", "id"):
+            value = str(record.get(key, "") or "").strip()
+            if value != "" and value not in lookup:
+                lookup[value] = record
+    return lookup
+
+
+def apply_direct_catalog_xlsx_defaults(rows, catalog_lookup):
+    if len(catalog_lookup) == 0:
+        return rows
+    out = []
+    for row in rows:
+        updated = dict(row)
+        provider = str(updated.get("provider", "") or "").strip().lower()
+        source_id = str(updated.get("id", "") or "").strip()
+        record = catalog_lookup.get(source_id)
+        if (
+            provider == "direct"
+            and record is not None
+            and not manifest_has_usable_source_bundle(
+                updated.get("cds_url", ""),
+                updated.get("gff_url", ""),
+                updated.get("gbff_url", ""),
+                updated.get("genome_url", ""),
+            )
+        ):
+            catalog_id = str(record.get("id", "") or "").strip()
+            if catalog_id != "":
+                updated["id"] = catalog_id
+            for key, value in record.items():
+                if key in DIRECT_CATALOG_IGNORED_FIELDS:
+                    continue
+                text = str(value or "").strip()
+                if text != "" and str(updated.get(key, "") or "").strip() == "":
+                    updated[key] = text
+        out.append(updated)
+    return out
+
+
 def read_download_manifest_xlsx(path):
     if load_workbook is None:
         raise ValueError("openpyxl is required to read .xlsx download manifests.")
     workbook = load_workbook(path, read_only=True, data_only=True)
     try:
         sheet = workbook.active
-        row_iter = sheet.iter_rows(values_only=True)
-        header_row = next(row_iter, None)
-        if header_row is None:
-            return []
-        headers = []
-        for value in header_row:
-            text = str(value).strip() if value is not None else ""
-            headers.append(text)
-        while len(headers) > 0 and headers[-1] == "":
-            headers.pop()
+        headers, rows = read_xlsx_table(sheet)
         if len(headers) == 0:
             return []
         if len(headers) < 2 or headers[0] != "provider" or headers[1] != "id":
@@ -1232,23 +1301,12 @@ def read_download_manifest_xlsx(path):
                 "XLSX download manifest must have 'provider' and 'id' as the first two columns."
             )
 
-        rows = []
-        for raw_values in row_iter:
-            values = list(raw_values or ())
-            if len(values) < len(headers):
-                values.extend([None] * (len(headers) - len(values)))
-            row = {}
-            has_nonempty = False
-            for idx, key in enumerate(headers):
-                if key == "":
-                    continue
-                cell = values[idx] if idx < len(values) else None
-                text = str(cell).strip() if cell is not None else ""
-                if text != "":
-                    has_nonempty = True
-                row[key] = text
-            if has_nonempty:
-                rows.append(row)
+        if DIRECT_CATALOG_XLSX_SHEET in workbook.sheetnames:
+            _catalog_headers, catalog_rows = read_xlsx_table(workbook[DIRECT_CATALOG_XLSX_SHEET])
+            rows = apply_direct_catalog_xlsx_defaults(
+                rows,
+                build_direct_catalog_lookup_from_xlsx(catalog_rows),
+            )
         return rows
     finally:
         workbook.close()

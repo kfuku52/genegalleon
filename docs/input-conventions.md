@@ -352,6 +352,9 @@ XLSX template notes:
   `workspace/input/input_generation/direct_catalog_curated.tsv`.
 - use curated direct entries for public bundles that still need explicit filenames
   or hand-vetted URLs, instead of falling back to `provider=local`.
+- when a generated XLSX contains a `_direct_catalog` sheet, `format_species_inputs.py`
+  can fill `provider=direct` rows from that catalog at runtime even if Excel has not
+  cached the formula results.
 - for large provider (`ncbi`), five model-organism IDs are shown as examples (mixed `GCF_*`/`GCA_*` formats).
 - for `ddbj`, `coge`, and `cngb`, IDs are example-based by default.
 - for `ddbj`, `gwh`, `citrusgenomedb`, `figshare`, `plantgarden`, `ensembl`, `ensemblplants`, `ensemblmetazoa`, `ensemblprotists`, `flybase`, `wormbase`, `vectorbase`, `fernbase`, `veupathdb`, `dictybase`, `insectbase`, `oryza_minuta`, `direct`, and `local`,

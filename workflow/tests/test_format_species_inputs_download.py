@@ -82,6 +82,23 @@ def make_manifest_xlsx(path, headers, rows):
     workbook.close()
 
 
+def make_manifest_xlsx_with_direct_catalog(path, manifest_headers, manifest_rows, catalog_headers, catalog_rows):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "download_plan"
+    sheet.append(list(manifest_headers))
+    for row in manifest_rows:
+        sheet.append([row.get(key, "") for key in manifest_headers])
+
+    catalog_sheet = workbook.create_sheet("_direct_catalog")
+    catalog_sheet.append(list(catalog_headers))
+    for row in catalog_rows:
+        catalog_sheet.append([row.get(key, "") for key in catalog_headers])
+
+    workbook.save(path)
+    workbook.close()
+
+
 def to_file_url(path):
     return path.resolve().as_uri()
 
@@ -993,6 +1010,102 @@ def test_download_manifest_all_provider_only_scans_providers_declared_in_manifes
     assert (raw_dir / (species_key + ".direct.cds.fa")).exists()
     assert (raw_dir / (species_key + ".direct.gene.gff3")).exists()
     assert (raw_dir / (species_key + ".direct.genome.fa")).exists()
+
+
+def test_download_manifest_xlsx_direct_catalog_sheet_fills_runtime_urls(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Catalog_species"
+    gff_source = source_dir / "catalog_species.gene.gff3"
+    genome_source = source_dir / "catalog_species.genome.fa"
+    gff_source.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+                "chr1\tsrc\tCDS\t7\t9\t.\t+\t0\tID=cds2;Parent=gene1.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_source.write_text(">chr1\nATGAAATTT\n", encoding="utf-8")
+
+    manifest = tmp_path / "manifest.xlsx"
+    manifest_headers = [
+        "provider",
+        "id",
+        "species_key",
+        "cds_url",
+        "gff_url",
+        "genome_url",
+        "cds_filename",
+        "gff_filename",
+        "genome_filename",
+    ]
+    catalog_headers = [
+        "choice",
+        "id",
+        "species",
+        "species_key",
+        "cds_url",
+        "gff_url",
+        "gbff_url",
+        "genome_url",
+        "cds_filename",
+        "gff_filename",
+        "gbff_filename",
+        "genome_filename",
+    ]
+    make_manifest_xlsx_with_direct_catalog(
+        manifest,
+        manifest_headers,
+        [{"provider": "direct", "id": "catalog_direct (Catalog species)"}],
+        catalog_headers,
+        [
+            {
+                "choice": "catalog_direct (Catalog species)",
+                "id": "catalog_direct",
+                "species": "Catalog species",
+                "species_key": species_key,
+                "gff_url": to_file_url(gff_source),
+                "genome_url": to_file_url(genome_source),
+                "gff_filename": species_key + ".catalog.gene.gff3",
+                "genome_filename": species_key + ".catalog.genome.fa",
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    out_cds = tmp_path / "out_cds"
+    out_gff = tmp_path / "out_gff"
+    out_genome = tmp_path / "out_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
+    assert (raw_dir / (species_key + ".catalog.gene.gff3")).exists()
+    assert (raw_dir / (species_key + ".catalog.genome.fa")).exists()
+
+    formatted_cds = out_cds / (species_key + "_catalog.gene.derived.cds.fa.gz")
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert cds_text.count(">Catalog_species_gene1") == 1
+    assert "ATGTTT" in cds_text
 
 
 def test_download_manifest_supports_direct_with_cds_only(tmp_path):
