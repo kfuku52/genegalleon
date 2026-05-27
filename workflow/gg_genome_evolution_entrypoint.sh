@@ -149,6 +149,9 @@ orthogroup_annotation_method="mmseqs2" # blastp|mmseqs2 for representative-gene 
 min_num_gene=4 # Minimum total gene count required for an orthogroup.
 min_num_species=2 # Minimum number of species required for an orthogroup.
 max_orthofinder_core_species=50 # Maximum number of species retained in the core OrthoFinder set.
+orthofinder_core_filters="busco_complete_pct:ge:80,num_seq:le:100000" # Comma-separated nwkit sample filters for two-round OrthoFinder core selection.
+orthofinder_core_rank="num_seq:asc,busco_complete_pct:desc" # Comma-separated nwkit sample rank keys used after filtering.
+orthofinder_core_method="max-pd" # nwkit sample method for tree-aware OrthoFinder core selection.
 min_percent_species_coverage=50 # Minimum percent species coverage required for orthogroup selection.
 max_num_gene=1000 # Maximum total gene count allowed for an orthogroup.
 

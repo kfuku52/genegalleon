@@ -185,6 +185,9 @@ n_gamma_cats_cafe
 notung_jar
 nucleotide_model
 omark_db_path
+orthofinder_core_filters
+orthofinder_core_method
+orthofinder_core_rank
 orthogroup_annotation_method
 orthogroup_table
 protein_model

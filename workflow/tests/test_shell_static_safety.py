@@ -2976,20 +2976,21 @@ def test_genome_evolution_core_requires_requested_species_tree_before_orthofinde
     assert "Refusing to run OrthoFinder without species tree constraints because a species tree was found but does not match the current OrthoFinder species set." in text
 
 
-def test_genome_evolution_core_only_prunes_orthofinder_core_tree_when_species_tree_is_available():
+def test_genome_evolution_core_only_uses_orthofinder_core_tree_when_species_tree_is_available():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
 
     assert "orthofinder_core_species_tree_args=()" in text
-    prune_guard = "if [[ ${#param_species_tree[@]} -gt 0 ]]; then"
-    prune_call = 'nwkit prune --invert_match yes --pattern "${core_species_regex}" --infile "${species_tree}" --outfile "${dir_orthofinder}/species_tree_core.nwk"'
-    core_arg = 'orthofinder_core_species_tree_args=(-s "${dir_orthofinder}/species_tree_core.nwk")'
+    species_tree_arg = 'select_orthofinder_core_args+=(--species-tree "${species_tree}")'
+    core_tree_check = 'if [[ ! -s "${file_orthofinder_core_species_tree}" ]]; then'
+    core_arg = 'orthofinder_core_species_tree_args=(-s "${file_orthofinder_core_species_tree}")'
     orthofinder_call_arg = '"${orthofinder_core_species_tree_args[@]}"; then'
-    assert prune_guard in text
-    assert prune_call in text
+    assert "nwkit prune --invert_match yes" not in text
+    assert species_tree_arg in text
+    assert core_tree_check in text
     assert core_arg in text
     assert orthofinder_call_arg in text
-    assert text.index(prune_guard) < text.index(prune_call) < text.index(core_arg) < text.index(orthofinder_call_arg)
+    assert text.index(species_tree_arg) < text.index(core_tree_check) < text.index(core_arg) < text.index(orthofinder_call_arg)
 
 
 def test_gene_evolution_core_quotes_notung_and_mapdnds_args():
@@ -3600,11 +3601,15 @@ def test_gene_evolution_core_quotes_path_in_deactivation_messages():
         assert token in text
 
 
-def test_genome_evolution_core_quotes_shuf_count_for_orthofinder_core_sampling():
+def test_genome_evolution_core_uses_filtered_orthofinder_core_sampling():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    assert 'shuf -n ${max_orthofinder_core_species}' not in text
-    assert 'shuf -n "${max_orthofinder_core_species}"' in text
+    assert "shuf -n" not in text
+    assert "select_orthofinder_core_species.py" in text
+    assert 'orthofinder_core_filters="${orthofinder_core_filters:-busco_complete_pct:ge:80,num_seq:le:100000}"' in text
+    assert '--filters "${orthofinder_core_filters}"' in text
+    assert '--rank "${orthofinder_core_rank}"' in text
+    assert '--method "${orthofinder_core_method}"' in text
 
 
 def test_transcriptome_gene_and_genome_evolution_core_guard_tmp_delete_against_root_path():

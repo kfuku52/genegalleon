@@ -339,12 +339,17 @@ if [[ -z "${{input_dir}}" || -z "${{output_dir}}" || -z "${{run_name}}" ]]; then
 fi
 results_dir="${{output_dir}}/Results_${{run_name}}"
 mkdir -p "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups"
-find "${{input_dir}}" -maxdepth 1 -type f ! -name '.*' | sort > "${{capture_dir}}/input_files.txt"
+input_capture="${{capture_dir}}/input_files_${{run_name}}.txt"
+proteins_capture="${{capture_dir}}/proteins_${{run_name}}.fasta"
+find "${{input_dir}}" -maxdepth 1 -type f ! -name '.*' | sort > "${{input_capture}}"
+cat "${{input_capture}}" > "${{capture_dir}}/input_files.txt"
+>"${{proteins_capture}}"
 >"${{capture_dir}}/proteins.fasta"
 while IFS= read -r fasta; do
+  cat "${{fasta}}" >> "${{proteins_capture}}"
   cat "${{fasta}}" >> "${{capture_dir}}/proteins.fasta"
-done < "${{capture_dir}}/input_files.txt"
-python - "${{capture_dir}}/input_files.txt" "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups/N0.tsv" <<'PY'
+done < "${{input_capture}}"
+python - "${{input_capture}}" "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups/N0.tsv" <<'PY'
 import pathlib
 import sys
 
@@ -363,6 +368,135 @@ with outfile.open("w", encoding="utf-8", newline="") as handle:
     genes = [f"{{sp}}_gene1" for sp in species]
     handle.write("\\t".join(["N0.HOG0000001", "OG0000001", "n0", *genes]) + "\\n")
 PY
+""",
+    )
+
+    _write_executable(
+        bin_dir / "nwkit",
+        f"""#!/usr/bin/env python3
+import csv
+from functools import cmp_to_key
+from pathlib import Path
+import sys
+
+capture_dir = {str(capture_dir)!r}
+
+
+def parse_specs(value):
+    return [part for part in value.split(",") if part]
+
+
+def as_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def row_passes(row, spec):
+    column, op, value = spec.split(":", 2)
+    left = row.get(column, "")
+    left_num = as_float(left)
+    right_num = as_float(value)
+    if op in {{"ge", "gt", "le", "lt"}}:
+        if left_num is None or right_num is None:
+            return False
+        if op == "ge":
+            return left_num >= right_num
+        if op == "gt":
+            return left_num > right_num
+        if op == "le":
+            return left_num <= right_num
+        if op == "lt":
+            return left_num < right_num
+    if op == "eq":
+        return left == value
+    if op == "ne":
+        return left != value
+    return False
+
+
+def compare_rows(rank_specs):
+    parsed = [spec.split(":", 1) for spec in rank_specs]
+
+    def compare(left, right):
+        for column, direction in parsed:
+            left_value = left.get(column, "")
+            right_value = right.get(column, "")
+            left_num = as_float(left_value)
+            right_num = as_float(right_value)
+            if left_num is not None and right_num is not None:
+                if left_num == right_num:
+                    continue
+                result = -1 if left_num < right_num else 1
+            else:
+                if left_value == right_value:
+                    continue
+                result = -1 if left_value < right_value else 1
+            return result if direction == "asc" else -result
+        return -1 if left.get("leaf_name", "") < right.get("leaf_name", "") else 1
+
+    return compare
+
+
+def sample(args):
+    Path(capture_dir, "nwkit_args.txt").write_text(" ".join(sys.argv[1:]) + "\\n", encoding="utf-8")
+    trait = ""
+    output_table = ""
+    outfile = ""
+    n = 0
+    filters = []
+    ranks = []
+    idx = 0
+    while idx < len(args):
+        arg = args[idx]
+        if arg == "--trait":
+            trait = args[idx + 1]
+            idx += 2
+        elif arg == "--output-table":
+            output_table = args[idx + 1]
+            idx += 2
+        elif arg == "--outfile":
+            outfile = args[idx + 1]
+            idx += 2
+        elif arg == "--n":
+            n = int(args[idx + 1])
+            idx += 2
+        elif arg == "--filter":
+            filters.append(args[idx + 1])
+            idx += 2
+        elif arg == "--rank":
+            ranks.append(args[idx + 1])
+            idx += 2
+        elif arg in {{"--infile", "--method", "--allow-fewer"}}:
+            idx += 2
+        else:
+            idx += 1
+    with open(trait, encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\\t"))
+    selected = [row for row in rows if all(row_passes(row, spec) for spec in filters)]
+    if ranks:
+        selected = sorted(selected, key=cmp_to_key(compare_rows(ranks)))
+    selected = selected[:n]
+    with open(output_table, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()), delimiter="\\t", lineterminator="\\n")
+        writer.writeheader()
+        writer.writerows(selected)
+    leaves = ",".join(row["leaf_name"] + ":0.1" for row in selected)
+    Path(outfile).write_text("(" + leaves + ");\\n", encoding="utf-8")
+
+
+def main():
+    if len(sys.argv) < 2:
+        raise SystemExit("nwkit stub requires a subcommand")
+    if sys.argv[1] == "sample":
+        sample(sys.argv[2:])
+        return
+    raise SystemExit("Unsupported nwkit subcommand: " + sys.argv[1])
+
+
+if __name__ == "__main__":
+    main()
 """,
     )
 
@@ -831,6 +965,60 @@ def test_genome_evolution_two_round_orthofinder_can_run_without_species_tree_whe
     args = (tmp_path / "capture" / "orthofinder_args.txt").read_text(encoding="utf-8")
     assert "species_tree_core.nwk" not in args
     assert "No species tree summary was found. Species-tree generation flags are disabled" in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_two_round_orthofinder_uses_nwkit_sample_default_filters(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_tree_summary_dir = workspace / "output" / "species_tree" / "species_tree_summary"
+    busco_short_dir = workspace / "output" / "species_protein_busco_short"
+    species_protein_dir.mkdir(parents=True)
+    species_tree_summary_dir.mkdir(parents=True)
+    busco_short_dir.mkdir(parents=True)
+
+    def write_protein(species: str, count: int) -> None:
+        records = [f">{species}_gene{i}\nMPEP\n" for i in range(1, count + 1)]
+        (species_protein_dir / f"{species}_pep.fa").write_text("".join(records), encoding="utf-8")
+
+    def write_busco(species: str, complete_pct: float) -> None:
+        (busco_short_dir / f"{species}.busco.short.txt").write_text(
+            f"C:{complete_pct}%[S:{complete_pct}%,D:0.0%],F:0.0%,M:0.0%,n:100\n",
+            encoding="utf-8",
+        )
+
+    write_protein("Arabidopsis_thaliana", 2)
+    write_protein("Oryza_sativa", 1)
+    write_protein("Nepenthes_gracilis", 1)
+    write_protein("Dionaea_muscipula", 3)
+    write_busco("Arabidopsis_thaliana", 95.0)
+    write_busco("Oryza_sativa", 90.0)
+    write_busco("Nepenthes_gracilis", 70.0)
+    write_busco("Dionaea_muscipula", 99.0)
+    (species_tree_summary_dir / "undated_species_tree.nwk").write_text(
+        "((Arabidopsis_thaliana:0.1,Oryza_sativa:0.1):0.1,"
+        "(Nepenthes_gracilis:0.1,Dionaea_muscipula:0.1):0.1);\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_core(tmp_path, {"max_orthofinder_core_species": "2"})
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    nwkit_args = (tmp_path / "capture" / "nwkit_args.txt").read_text(encoding="utf-8")
+    assert "sample" in nwkit_args
+    assert "--filter busco_complete_pct:ge:80" in nwkit_args
+    assert "--filter num_seq:le:100000" in nwkit_args
+    assert "--method max-pd" in nwkit_args
+    core_inputs = (tmp_path / "capture" / "input_files_core.txt").read_text(encoding="utf-8")
+    assert "Arabidopsis_thaliana.fa" in core_inputs
+    assert "Oryza_sativa.fa" in core_inputs
+    assert "Nepenthes_gracilis.fa" not in core_inputs
+    assert "Dionaea_muscipula.fa" not in core_inputs
+    all_inputs = (tmp_path / "capture" / "input_files_all.txt").read_text(encoding="utf-8")
+    assert "Nepenthes_gracilis.fa" in all_inputs
+    assert "Dionaea_muscipula.fa" in all_inputs
+    args = (tmp_path / "capture" / "orthofinder_args.txt").read_text(encoding="utf-8")
+    assert "species_tree_core.nwk" in args
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")

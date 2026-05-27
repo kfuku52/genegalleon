@@ -34,6 +34,9 @@ run_species_omark="${run_species_omark:-0}"
 run_build_species_busco_summary="${run_build_species_busco_summary:-1}"
 run_build_species_omark_summary="${run_build_species_omark_summary:-1}"
 run_extract_species_tree_fasta="${run_extract_species_tree_fasta:-1}"
+orthofinder_core_filters="${orthofinder_core_filters:-busco_complete_pct:ge:80,num_seq:le:100000}"
+orthofinder_core_rank="${orthofinder_core_rank:-num_seq:asc,busco_complete_pct:desc}"
+orthofinder_core_method="${orthofinder_core_method:-max-pd}"
 run_busco_dupaware_extract_fasta="${run_busco_dupaware_extract_fasta:-0}"
 run_busco_dupaware_mafft="${run_busco_dupaware_mafft:-0}"
 run_busco_dupaware_trimal="${run_busco_dupaware_trimal:-0}"
@@ -522,6 +525,10 @@ file_undated_species_tree="${dir_species_tree_summary}/undated_species_tree.nwk"
 
 # Orthogroup
 file_orthofinder_done_marker="${dir_orthofinder_hog2og}/README.txt"
+file_orthofinder_core_candidates="${dir_orthofinder}/orthofinder_core_species.candidates.tsv"
+file_orthofinder_core_selected="${dir_orthofinder}/orthofinder_core_species.selected.tsv"
+file_orthofinder_core_selected_list="${dir_orthofinder}/orthofinder_core_species.selected_files.txt"
+file_orthofinder_core_species_tree="${dir_orthofinder}/species_tree_core.nwk"
 file_orthogroup_selection="${dir_orthofinder_filtered}/Orthogroups.selected.tsv"
 file_orthogroup_method_comparison="${dir_orthofinder}/orthogroup_method_comparison/orthogroup_method_comparison.pdf"
 
@@ -2905,10 +2912,36 @@ PY
   if [[ ${num_sp} -gt ${max_orthofinder_core_species} ]]; then
     echo "The number of species (${num_sp}) is greater than the maximum number of core species (${max_orthofinder_core_species}) for OrthoFinder."
     echo "OrthoFinder will be run for 2 rounds (using --assign): For details, see https://github.com/davidemms/OrthoFinder"
+    echo "OrthoFinder core-species filters: ${orthofinder_core_filters}"
+    echo "OrthoFinder core-species rank keys: ${orthofinder_core_rank}"
+    echo "OrthoFinder core-species sampling method: ${orthofinder_core_method}"
 
     species_cds_core=()
-    mapfile -t species_cds_core < <(printf "%s\n" "${protein_files[@]##*/}" | shuf -n "${max_orthofinder_core_species}")
+    select_orthofinder_core_args=(
+      --protein-dir "${dir_sp_protein_orthofinder}"
+      --busco-short-dir "${dir_species_busco_short}"
+      --max-core-species "${max_orthofinder_core_species}"
+      --filters "${orthofinder_core_filters}"
+      --rank "${orthofinder_core_rank}"
+      --method "${orthofinder_core_method}"
+      --candidates-table "${file_orthofinder_core_candidates}"
+      --selected-table "${file_orthofinder_core_selected}"
+      --selected-list "${file_orthofinder_core_selected_list}"
+      --core-tree "${file_orthofinder_core_species_tree}"
+    )
+    if [[ ${#param_species_tree[@]} -gt 0 ]]; then
+      select_orthofinder_core_args+=(--species-tree "${species_tree}")
+    fi
+    if ! python "${gg_support_dir}/select_orthofinder_core_species.py" "${select_orthofinder_core_args[@]}"; then
+      echo "Failed to select OrthoFinder core species. Exiting."
+      exit 1
+    fi
+    mapfile -t species_cds_core < "${file_orthofinder_core_selected_list}"
     echo "Core CDS files: ${species_cds_core[@]}"
+    if [[ ${#species_cds_core[@]} -eq 0 ]]; then
+      echo "No OrthoFinder core species were selected. Exiting."
+      exit 1
+    fi
     if [[ -e "${dir_sp_protein}_core" ]]; then
       rm -rf -- "${dir_sp_protein}_core"
     fi
@@ -2918,7 +2951,7 @@ PY
     done
 
     species_cds_additional=()
-    mapfile -t species_cds_additional < <(printf "%s\n" "${protein_files[@]##*/}" | grep -v -F -x -f <(printf "%s\n" "${species_cds_core[@]}"))
+    mapfile -t species_cds_additional < <(comm -23 <(printf "%s\n" "${protein_files[@]##*/}" | sort) <(printf "%s\n" "${species_cds_core[@]}" | sort))
     echo "Additional CDS files: ${species_cds_additional[@]}"
     if [[ -e "${dir_sp_protein}_additional" ]]; then
       rm -rf -- "${dir_sp_protein}_additional"
@@ -2934,29 +2967,11 @@ PY
 
     orthofinder_core_species_tree_args=()
     if [[ ${#param_species_tree[@]} -gt 0 ]]; then
-      if [[ -e "${dir_orthofinder}/species_tree_core.nwk" ]]; then
-        rm -f -- "${dir_orthofinder}/species_tree_core.nwk"
-      fi
-      core_species_names=()
-      mapfile -t core_species_names < <(
-        find "${dir_sp_protein}_core" -maxdepth 1 -type f ! -name '.*' | sort |
-          awk '{name=$0; sub(/^.*\//, "", name); sub(/\.[^.]*$/, "", name); print name}'
-      )
-      core_species_regex=$(printf '%s|' "${core_species_names[@]}")
-      core_species_regex=${core_species_regex%|}
-      if [[ -z "${core_species_regex}" ]]; then
-        echo "Failed to build core species regex. No core protein files were detected. Exiting."
+      if [[ ! -s "${file_orthofinder_core_species_tree}" ]]; then
+        echo "Core-species tree was not created: ${file_orthofinder_core_species_tree}"
         exit 1
       fi
-      if ! nwkit prune --invert_match yes --pattern "${core_species_regex}" --infile "${species_tree}" --outfile "${dir_orthofinder}/species_tree_core.nwk"; then
-        echo "Failed to prune species tree for the core OrthoFinder species set. Exiting."
-        exit 1
-      fi
-      if [[ ! -s "${dir_orthofinder}/species_tree_core.nwk" ]]; then
-        echo "Pruned core-species tree was not created: ${dir_orthofinder}/species_tree_core.nwk"
-        exit 1
-      fi
-      orthofinder_core_species_tree_args=(-s "${dir_orthofinder}/species_tree_core.nwk")
+      orthofinder_core_species_tree_args=(-s "${file_orthofinder_core_species_tree}")
     fi
 
     if orthofinder \
