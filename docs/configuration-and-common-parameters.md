@@ -65,6 +65,13 @@ In `gg_genome_evolution`, the multi-species BUSCO run and BUSCO summary are shar
 species-tree branch and the BUSCO-based genome-evolution branch. Those shared stages are controlled
 by `run_species_busco` and `run_build_species_busco_summary`; the genome-evolution BUSCO steps reuse
 their outputs rather than starting a second BUSCO run.
+The same per-species BUSCO short summaries are also used by the two-round
+OrthoFinder core selector. By default, core species candidates must satisfy
+`busco_complete_pct:ge:80` and `num_seq:le:100000`; these rules are configured
+with `orthofinder_core_filters` in `workflow/gg_genome_evolution_entrypoint.sh`.
+When BUSCO completeness values are unavailable because the BUSCO stage was
+intentionally disabled, GeneGalleon keeps the size filter and logs a fallback
+message instead of failing solely on missing BUSCO metadata.
 When BUSCO publishes multiple `odbN` generations, auto-resolution now uses the latest generation
 for which placement mappings are available across archaea, bacteria, and eukaryota.
 The first auto-resolved run may need network access to initialize the ETE taxonomy DB and download

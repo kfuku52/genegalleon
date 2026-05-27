@@ -206,6 +206,12 @@ Notable defaults:
 - `orthogroup_table="HOG"`
 - `orthogroup_annotation_method="mmseqs2"` (set `blastp` to use NCBI BLASTP for representative-gene UniProt annotation)
 - species-tree-aware OrthoFinder is used when species tree exists.
+- when the species count exceeds `max_orthofinder_core_species`, the core
+  species set is selected with size and BUSCO filters by default:
+  `orthofinder_core_filters="busco_complete_pct:ge:80,num_seq:le:100000"`.
+  If a species tree is available, GeneGalleon calls `nwkit sample` with
+  `orthofinder_core_method="max-pd"` to keep phylogenetic diversity in the
+  OrthoFinder core run; otherwise it falls back to ranked selection.
 
 ### Inlined Stage: Species Tree
 
