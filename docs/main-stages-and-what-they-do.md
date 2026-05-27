@@ -192,11 +192,14 @@ Purpose:
 - translate CDS to species proteins, or reuse `workspace/input/species_protein` in protein mode,
 - run OrthoFinder,
 - select orthogroups for downstream analysis,
-- compare orthogroup methods.
+- compare orthogroup methods,
+- plot single-copy ortholog decay as line plots with SD across random species subsamples.
 
 Main outputs:
 
 - `workspace/output/orthofinder`
+- `workspace/output/orthofinder/single_copy_ortholog_decay/single_copy_ortholog_decay_plot.pdf`
+- `workspace/output/orthofinder/single_copy_ortholog_decay/single_copy_ortholog_decay_summary.tsv`
 
 Temporary protein FASTA files are created under `workspace/downloads/tmp/` and removed automatically after orthogroup-related steps finish.
 When `workspace/input/species_genetic_code/species_genetic_code.tsv` is present, it overrides the global `genetic_code` on a per-species basis during CDS-to-protein translation; species missing from the table still use the default `genetic_code`.
@@ -205,6 +208,8 @@ Notable defaults:
 
 - `orthogroup_table="HOG"`
 - `orthogroup_annotation_method="mmseqs2"` (set `blastp` to use NCBI BLASTP for representative-gene UniProt annotation)
+- `run_single_copy_ortholog_decay_plot=1`
+- `orthogroup_decay_replicates=1000`
 - species-tree-aware OrthoFinder is used when species tree exists.
 - when the species count exceeds `max_orthofinder_core_species`, the core
   species set is selected with size and BUSCO filters by default:

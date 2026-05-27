@@ -2467,6 +2467,28 @@ def test_genome_evolution_core_uses_canonical_duplicate_aware_busco_flag_names()
     assert "run_busco_dupaware_extract_fasta" in config_vars
 
 
+def test_genome_evolution_exposes_single_copy_ortholog_decay_plot():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+
+    assert "run_single_copy_ortholog_decay_plot=1" in entrypoint
+    assert "orthogroup_decay_replicates=1000" in entrypoint
+    assert 'orthogroup_decay_species_counts="auto"' in entrypoint
+    assert "orthogroup_decay_seed=1" in entrypoint
+    assert "run_single_copy_ortholog_decay_plot" in config_vars
+    assert "orthogroup_decay_replicates" in config_vars
+    assert "orthogroup_decay_species_counts" in config_vars
+    assert "orthogroup_decay_seed" in config_vars
+    assert 'run_single_copy_ortholog_decay_plot="${run_single_copy_ortholog_decay_plot:-1}"' in core
+    assert 'task="Single-copy ortholog decay plot"' in core
+    assert 'python "${gg_support_dir}/single_copy_ortholog_decay_plot.py" \\' in core
+    assert '--orthogroup-genecount "${orthogroup_decay_genecount}"' in core
+    assert '--replicates "${orthogroup_decay_replicates}"' in core
+    assert '--species-counts "${orthogroup_decay_species_counts}"' in core
+    assert '--seed "${orthogroup_decay_seed}"' in core
+
+
 def test_genome_evolution_runs_omark_after_orthofinder_and_before_og_selection():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 

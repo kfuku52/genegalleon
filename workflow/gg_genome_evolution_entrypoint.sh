@@ -105,6 +105,7 @@ run_plot_mcmctreer=1 # Plot dated species tree
 run_orthofinder=1 # OrthoFinder run
 run_og_selection=1 # Selecting orthogroups for downstream analyses
 run_orthogroup_method_comparison=1 # Method comparison plot
+run_single_copy_ortholog_decay_plot=1 # Line plot with SD of orthogroup retention when randomly subsampling species.
 
 # Genome-evolution workflow flags
 run_busco_dupaware_extract_fasta=0 # Extract duplicate-aware BUSCO ortholog FASTA files from genome annotations.
@@ -154,6 +155,9 @@ orthofinder_core_rank="num_seq:asc,busco_complete_pct:desc" # Comma-separated nw
 orthofinder_core_method="max-pd" # nwkit sample method for tree-aware OrthoFinder core selection.
 min_percent_species_coverage=50 # Minimum percent species coverage required for orthogroup selection.
 max_num_gene=1000 # Maximum total gene count allowed for an orthogroup.
+orthogroup_decay_replicates=1000 # Random species subsets per species-count value for single-copy ortholog decay plotting.
+orthogroup_decay_species_counts="auto" # Species-count values for single-copy ortholog decay plotting: auto, comma list, or ranges such as 1-50:5.
+orthogroup_decay_seed=1 # Random seed for single-copy ortholog decay plotting.
 
 # Genome-evolution parameters
 min_gene_orthogroup_grampa=5 # Minimum gene count required for GRAMPA-ready orthogroups.

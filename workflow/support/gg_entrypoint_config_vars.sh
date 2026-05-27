@@ -188,6 +188,9 @@ omark_db_path
 orthofinder_core_filters
 orthofinder_core_method
 orthofinder_core_rank
+orthogroup_decay_replicates
+orthogroup_decay_seed
+orthogroup_decay_species_counts
 orthogroup_annotation_method
 orthogroup_table
 protein_model
@@ -223,6 +226,7 @@ run_og_selection
 run_orthofinder
 run_orthogroup_grampa
 run_orthogroup_method_comparison
+run_single_copy_ortholog_decay_plot
 run_plot_constrained_tree
 run_plot_mcmctreer
 run_plot_species_trees

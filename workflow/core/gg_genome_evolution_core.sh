@@ -34,6 +34,10 @@ run_species_omark="${run_species_omark:-0}"
 run_build_species_busco_summary="${run_build_species_busco_summary:-1}"
 run_build_species_omark_summary="${run_build_species_omark_summary:-1}"
 run_extract_species_tree_fasta="${run_extract_species_tree_fasta:-1}"
+run_single_copy_ortholog_decay_plot="${run_single_copy_ortholog_decay_plot:-1}"
+orthogroup_decay_replicates="${orthogroup_decay_replicates:-1000}"
+orthogroup_decay_species_counts="${orthogroup_decay_species_counts:-auto}"
+orthogroup_decay_seed="${orthogroup_decay_seed:-1}"
 orthofinder_core_filters="${orthofinder_core_filters:-busco_complete_pct:ge:80,num_seq:le:100000}"
 orthofinder_core_rank="${orthofinder_core_rank:-num_seq:asc,busco_complete_pct:desc}"
 orthofinder_core_method="${orthofinder_core_method:-max-pd}"
@@ -472,6 +476,7 @@ dir_orthofinder="${gg_workspace_output_dir}/orthofinder"
 dir_orthofinder_og="${dir_orthofinder}/Orthogroups"
 dir_orthofinder_filtered="${dir_orthofinder}/Orthogroups_filtered"
 dir_orthofinder_hog2og="${dir_orthofinder}/hog2og"
+dir_orthogroup_decay="${dir_orthofinder}/single_copy_ortholog_decay"
 
 # Genome evolution
 dir_genome_evolution="${gg_workspace_output_dir}/genome_evolution"
@@ -531,6 +536,8 @@ file_orthofinder_core_selected_list="${dir_orthofinder}/orthofinder_core_species
 file_orthofinder_core_species_tree="${dir_orthofinder}/species_tree_core.nwk"
 file_orthogroup_selection="${dir_orthofinder_filtered}/Orthogroups.selected.tsv"
 file_orthogroup_method_comparison="${dir_orthofinder}/orthogroup_method_comparison/orthogroup_method_comparison.pdf"
+file_single_copy_ortholog_decay_plot="${dir_orthogroup_decay}/single_copy_ortholog_decay_plot.pdf"
+file_single_copy_ortholog_decay_summary="${dir_orthogroup_decay}/single_copy_ortholog_decay_summary.tsv"
 
 # Genome evolution
 file_orthogroup_genecount_selected="${dir_orthofinder_filtered}/Orthogroups.GeneCount.selected.tsv"
@@ -3202,6 +3209,42 @@ if [[ ! -s "${file_orthogroup_method_comparison}" && ${run_orthogroup_method_com
     mv_out orthogroup_histogram.pdf "${file_orthogroup_method_comparison}"
   else
     echo "Orthogroup method comparison failed. Exiting."
+    exit 1
+  fi
+else
+  gg_step_skip "${task}"
+fi
+
+task="Single-copy ortholog decay plot"
+orthogroup_decay_genecount=""
+if [[ "${orthogroup_table}" == "OG" ]]; then
+  orthogroup_decay_genecount="${dir_orthofinder_og}/Orthogroups.GeneCount.tsv"
+elif [[ "${orthogroup_table}" == "HOG" ]]; then
+  orthogroup_decay_genecount="${dir_orthofinder_hog2og}/Orthogroups.GeneCount.tsv"
+elif [[ ${run_single_copy_ortholog_decay_plot} -eq 1 ]]; then
+  echo "Unsupported orthogroup_table for single-copy ortholog decay plot: ${orthogroup_table}. Allowed values are OG or HOG."
+  exit 1
+fi
+disable_if_no_input_file "run_single_copy_ortholog_decay_plot" "${orthogroup_decay_genecount}"
+if [[ (! -s "${file_single_copy_ortholog_decay_plot}" || ! -s "${file_single_copy_ortholog_decay_summary}") && ${run_single_copy_ortholog_decay_plot} -eq 1 ]]; then
+  gg_step_start "${task}"
+  ensure_dir "${dir_orthogroup_decay}"
+
+  if python "${gg_support_dir}/single_copy_ortholog_decay_plot.py" \
+    --orthogroup-genecount "${orthogroup_decay_genecount}" \
+    --outdir "${dir_orthogroup_decay}" \
+    --replicates "${orthogroup_decay_replicates}" \
+    --species-counts "${orthogroup_decay_species_counts}" \
+    --seed "${orthogroup_decay_seed}" \
+    --formats "pdf,svg"; then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
+  if [[ ${exit_code} -eq 0 ]]; then
+    echo "Single-copy ortholog decay plot finished successfully."
+  else
+    echo "Single-copy ortholog decay plot failed. Exiting."
     exit 1
   fi
 else

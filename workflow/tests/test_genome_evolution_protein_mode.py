@@ -682,6 +682,7 @@ def _run_core(
             "run_orthofinder": "1",
             "run_og_selection": "0",
             "run_orthogroup_method_comparison": "0",
+            "run_single_copy_ortholog_decay_plot": "0",
             "run_busco_dupaware_extract_fasta": "0",
             "run_busco_dupaware_mafft": "0",
             "run_busco_dupaware_trimal": "0",
