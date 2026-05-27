@@ -2962,6 +2962,36 @@ def test_genome_evolution_core_uses_array_for_optional_orthofinder_species_tree_
         assert token in text, f"Missing robust optional species-tree arg token: {token}"
 
 
+def test_genome_evolution_core_requires_requested_species_tree_before_orthofinder():
+    script = CORE_DIR / "gg_genome_evolution_core.sh"
+    text = _read_text(script)
+
+    assert "species_tree_summary_generation_requested() {" in text
+    assert "species_tree_requested_for_orthofinder=0" in text
+    assert "if species_tree_summary_generation_requested; then" in text
+    assert 'refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}"' in text
+    assert "Refusing to run OrthoFinder without a species tree." in text
+    assert "Species-tree generation was requested, but no summary tree is available." in text
+    assert "Running OrthoFinder without species tree constraints." not in text
+    assert "Refusing to run OrthoFinder without species tree constraints because a species tree was found but does not match the current OrthoFinder species set." in text
+
+
+def test_genome_evolution_core_only_prunes_orthofinder_core_tree_when_species_tree_is_available():
+    script = CORE_DIR / "gg_genome_evolution_core.sh"
+    text = _read_text(script)
+
+    assert "orthofinder_core_species_tree_args=()" in text
+    prune_guard = "if [[ ${#param_species_tree[@]} -gt 0 ]]; then"
+    prune_call = 'nwkit prune --invert_match yes --pattern "${core_species_regex}" --infile "${species_tree}" --outfile "${dir_orthofinder}/species_tree_core.nwk"'
+    core_arg = 'orthofinder_core_species_tree_args=(-s "${dir_orthofinder}/species_tree_core.nwk")'
+    orthofinder_call_arg = '"${orthofinder_core_species_tree_args[@]}"; then'
+    assert prune_guard in text
+    assert prune_call in text
+    assert core_arg in text
+    assert orthofinder_call_arg in text
+    assert text.index(prune_guard) < text.index(prune_call) < text.index(core_arg) < text.index(orthofinder_call_arg)
+
+
 def test_gene_evolution_core_quotes_notung_and_mapdnds_args():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)

@@ -299,6 +299,7 @@ if [[ "${{1:-}}" == "-v" ]]; then
   exit 0
 fi
 capture_dir={shlex.quote(str(capture_dir))}
+printf '%s\n' "$*" >> "${{capture_dir}}/orthofinder_args.txt"
 input_dir=""
 output_dir=""
 run_name=""
@@ -316,11 +317,26 @@ while [[ $# -gt 0 ]]; do
       run_name="$2"
       shift 2
       ;;
+    --assign)
+      input_dir="$2"
+      shift 2
+      ;;
+    --core)
+      output_dir="$(dirname "$2")"
+      shift 2
+      ;;
+    -s)
+      shift 2
+      ;;
     *)
       shift
       ;;
   esac
 done
+if [[ -z "${{input_dir}}" || -z "${{output_dir}}" || -z "${{run_name}}" ]]; then
+  echo "orthofinder stub requires input_dir, output_dir, and run_name" >&2
+  exit 1
+fi
 results_dir="${{output_dir}}/Results_${{run_name}}"
 mkdir -p "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups"
 find "${{input_dir}}" -maxdepth 1 -type f ! -name '.*' | sort > "${{capture_dir}}/input_files.txt"
@@ -724,6 +740,97 @@ def test_genome_evolution_accepts_legacy_species_tree_rooting_outgroup_lists(tmp
     ) in completed.stdout
     assert "Resolved species_tree_rooting method: outgroup" in completed.stdout
     assert "Resolved species_tree_rooting value: Arabidopsis_thaliana,Oryza_sativa" in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_refuses_orthofinder_when_requested_species_tree_is_missing(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_protein_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_core(tmp_path, {"run_astral_pep": "1"})
+
+    assert completed.returncode != 0
+    assert "Refusing to run OrthoFinder without a species tree." in completed.stdout
+    assert "Species-tree generation was requested, but no summary tree is available." in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_refuses_orthofinder_when_species_tree_lacks_input_species(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_tree_summary_dir = workspace / "output" / "species_tree" / "species_tree_summary"
+    species_protein_dir.mkdir(parents=True)
+    species_tree_summary_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+    (species_protein_dir / "Oryza_sativa_pep.fa").write_text(
+        ">Oryza_sativa_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+    (species_tree_summary_dir / "undated_species_tree.nwk").write_text(
+        "(Arabidopsis_thaliana:0.1);\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_core(tmp_path)
+
+    assert completed.returncode != 0
+    assert "Species tree is missing 1 species: Oryza_sativa" in completed.stdout
+    assert "Refusing to run OrthoFinder without species tree constraints" in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_keeps_species_tree_outputs_when_generation_disabled_and_signature_changes(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_tree_dir = workspace / "output" / "species_tree"
+    species_tree_summary_dir = species_tree_dir / "species_tree_summary"
+    species_protein_dir.mkdir(parents=True)
+    species_tree_summary_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+    existing_tree = species_tree_summary_dir / "undated_species_tree.nwk"
+    existing_tree.write_text("(Arabidopsis_thaliana:0.1);\n", encoding="utf-8")
+    stamp = species_tree_dir / ".shared_protein_input_signature"
+    stamp.write_text("old-signature\n", encoding="utf-8")
+
+    completed = _run_core(tmp_path)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert existing_tree.read_text(encoding="utf-8") == "(Arabidopsis_thaliana:0.1);\n"
+    assert stamp.read_text(encoding="utf-8") == "old-signature\n"
+    assert "Keeping existing species_tree outputs for reuse" in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_two_round_orthofinder_can_run_without_species_tree_when_generation_disabled(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_protein_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+    (species_protein_dir / "Oryza_sativa_pep.fa").write_text(
+        ">Oryza_sativa_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_core(tmp_path, {"max_orthofinder_core_species": "1"})
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    args = (tmp_path / "capture" / "orthofinder_args.txt").read_text(encoding="utf-8")
+    assert "species_tree_core.nwk" not in args
+    assert "No species tree summary was found. Species-tree generation flags are disabled" in completed.stdout
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")

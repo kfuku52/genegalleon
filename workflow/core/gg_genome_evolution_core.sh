@@ -985,6 +985,40 @@ refresh_dir_for_shared_protein_input_signature() {
   printf '%s\n' "${signature}" > "${stamp_file}"
 }
 
+species_tree_summary_generation_requested() {
+  [[ ${run_concat_iqtree_protein} -eq 1 ||
+    ${run_concat_iqtree_dna} -eq 1 ||
+    ${run_astral_pep} -eq 1 ||
+    ${run_astral_dna} -eq 1 ||
+    ${run_convert_tree_format} -eq 1 ]]
+}
+
+refresh_species_tree_for_shared_protein_input_signature() {
+  local signature=$1
+  local stamp_file="${dir_species_tree}/.shared_protein_input_signature"
+  local previous_signature=""
+
+  ensure_dir "${dir_species_tree}"
+  if [[ -s "${stamp_file}" ]]; then
+    previous_signature=$(< "${stamp_file}")
+  fi
+  if [[ -n "${previous_signature}" && "${previous_signature}" != "${signature}" ]]; then
+    if [[ ${species_tree_requested_for_orthofinder} -eq 0 ]]; then
+      echo "Shared protein input signature changed for species_tree, but species-tree generation flags are disabled."
+      echo "Keeping existing species_tree outputs for reuse: ${dir_species_tree}"
+      echo "The species_tree signature stamp will be updated next time species-tree generation is enabled."
+      return 0
+    fi
+    echo "Shared protein input signature changed for species_tree. Clearing derived outputs in ${dir_species_tree}"
+    if ! clear_directory_contents_safe "${dir_species_tree}"; then
+      echo "Failed to clear species_tree directory after input signature change: ${dir_species_tree}"
+      exit 1
+    fi
+  fi
+  ensure_dir "${dir_species_tree}"
+  printf '%s\n' "${signature}" > "${stamp_file}"
+}
+
 cleanup_species_protein_tmp() {
   local cleanup_target
   for cleanup_target in "${dir_sp_protein}" "${dir_sp_protein}_orthofinder" "${dir_sp_protein}_core" "${dir_sp_protein}_additional"; do
@@ -1145,7 +1179,11 @@ else
   check_if_species_files_unique "${dir_sp_cds}"
 fi
 shared_protein_input_signature=$(compute_shared_protein_input_signature)
-refresh_dir_for_shared_protein_input_signature "${dir_species_tree}" "species_tree" "${shared_protein_input_signature}"
+species_tree_requested_for_orthofinder=0
+if species_tree_summary_generation_requested; then
+  species_tree_requested_for_orthofinder=1
+fi
+refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}"
 refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}"
 refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}"
 memory_notung=${GG_MEM_PER_CPU_GB}
@@ -2812,6 +2850,16 @@ if [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; the
   if [[ -n "${species_tree}" && -s "${species_tree}" ]]; then
     echo "OrthoFinder will use the species tree: ${species_tree}"
     param_species_tree=(-s "${species_tree}")
+  elif [[ ${species_tree_requested_for_orthofinder} -eq 1 ]]; then
+    echo "Refusing to run OrthoFinder without a species tree."
+    echo "Species-tree generation was requested, but no summary tree is available."
+    echo "Expected one of:"
+    echo "  ${dir_species_tree_summary}/dated_species_tree.nwk"
+    echo "  ${dir_species_tree_summary}/undated_species_tree.nwk"
+    echo "Please check the species-tree stage logs or disable species-tree generation flags intentionally before running OrthoFinder without a species tree."
+    exit 1
+  else
+    echo "No species tree summary was found. Species-tree generation flags are disabled, so OrthoFinder will run without species tree constraints."
   fi
   echo "OrthoFinder will use ${GG_TASK_CPUS} threads for diamond search."
   echo "OrthoFinder will use ${orthofinder_algorithm_threads} threads for the OrthoFinder algorithm."
@@ -2849,8 +2897,9 @@ PY
     )
     if [[ ${#missing_species[@]} -gt 0 ]]; then
       echo "Species tree is missing ${#missing_species[@]} species: ${missing_species[*]}"
-      echo "Running OrthoFinder without species tree constraints."
-      param_species_tree=()
+      echo "Refusing to run OrthoFinder without species tree constraints because a species tree was found but does not match the current OrthoFinder species set."
+      echo "Please regenerate workspace/output/species_tree for the current inputs or update the species inputs to match the existing tree."
+      exit 1
     fi
   fi
   if [[ ${num_sp} -gt ${max_orthofinder_core_species} ]]; then
@@ -2883,21 +2932,32 @@ PY
       rm -rf -- "${dir_orthofinder}/core"
     fi
 
-    if [[ -e "${dir_orthofinder}/species_tree_core.nwk" ]]; then
-      rm -f -- "${dir_orthofinder}/species_tree_core.nwk"
+    orthofinder_core_species_tree_args=()
+    if [[ ${#param_species_tree[@]} -gt 0 ]]; then
+      if [[ -e "${dir_orthofinder}/species_tree_core.nwk" ]]; then
+        rm -f -- "${dir_orthofinder}/species_tree_core.nwk"
+      fi
+      core_species_names=()
+      mapfile -t core_species_names < <(
+        find "${dir_sp_protein}_core" -maxdepth 1 -type f ! -name '.*' | sort |
+          awk '{name=$0; sub(/^.*\//, "", name); sub(/\.[^.]*$/, "", name); print name}'
+      )
+      core_species_regex=$(printf '%s|' "${core_species_names[@]}")
+      core_species_regex=${core_species_regex%|}
+      if [[ -z "${core_species_regex}" ]]; then
+        echo "Failed to build core species regex. No core protein files were detected. Exiting."
+        exit 1
+      fi
+      if ! nwkit prune --invert_match yes --pattern "${core_species_regex}" --infile "${species_tree}" --outfile "${dir_orthofinder}/species_tree_core.nwk"; then
+        echo "Failed to prune species tree for the core OrthoFinder species set. Exiting."
+        exit 1
+      fi
+      if [[ ! -s "${dir_orthofinder}/species_tree_core.nwk" ]]; then
+        echo "Pruned core-species tree was not created: ${dir_orthofinder}/species_tree_core.nwk"
+        exit 1
+      fi
+      orthofinder_core_species_tree_args=(-s "${dir_orthofinder}/species_tree_core.nwk")
     fi
-    core_species_names=()
-    mapfile -t core_species_names < <(
-      find "${dir_sp_protein}_core" -maxdepth 1 -type f ! -name '.*' | sort |
-        awk '{name=$0; sub(/^.*\//, "", name); sub(/\.[^.]*$/, "", name); print name}'
-    )
-    core_species_regex=$(printf '%s|' "${core_species_names[@]}")
-    core_species_regex=${core_species_regex%|}
-    if [[ -z "${core_species_regex}" ]]; then
-      echo "Failed to build core species regex. No core protein files were detected. Exiting."
-      exit 1
-    fi
-    nwkit prune --invert_match yes --pattern "${core_species_regex}" --infile "${species_tree}" --outfile "${dir_orthofinder}/species_tree_core.nwk"
 
     if orthofinder \
       -t "${GG_TASK_CPUS}" \
@@ -2907,7 +2967,7 @@ PY
       -f "${dir_sp_protein}_core" \
       -n "core" \
       -o "${dir_orthofinder}/core" \
-      -s "${dir_orthofinder}/species_tree_core.nwk"; then
+      "${orthofinder_core_species_tree_args[@]}"; then
       orthofinder_core_exit_code=0
     else
       orthofinder_core_exit_code=$?
