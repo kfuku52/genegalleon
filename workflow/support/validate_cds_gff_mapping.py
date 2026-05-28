@@ -7,6 +7,7 @@ import gzip
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -95,6 +96,16 @@ def list_nonhidden_files(directory, suffixes):
         if has_known_suffix(path.name, suffixes):
             out.append(path)
     return out
+
+
+def gff_candidate_sort_key(path):
+    lower = Path(path).name.lower()
+    return (
+        1 if "abinitio" in lower else 0,
+        1 if re.search(r"(?:^|[._-])(?:chr|chromosome)(?:[._-])", lower) else 0,
+        1 if ".primary_assembly." in lower else 0,
+        lower,
+    )
 
 
 def species_prefix_from_name(name):
@@ -201,6 +212,8 @@ def index_gff_files_by_species(gff_files):
         if species_prefix == "":
             continue
         out.setdefault(species_prefix, []).append(path)
+    for species_prefix in out:
+        out[species_prefix] = sorted(out[species_prefix], key=gff_candidate_sort_key)
     return out
 
 

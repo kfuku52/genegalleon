@@ -39,6 +39,17 @@ def test_species_prefix_from_name_preserves_taxonomic_qualifiers():
     assert mod.species_prefix_from_name("Amoeba_sp_JDSRuffled_demo.fa.gz") == "Amoeba_sp_JDSRuffled"
 
 
+def test_index_gff_files_prefers_full_annotation_over_partial_files(tmp_path):
+    mod = load_module()
+    files = [
+        tmp_path / "Saccharomyces_cerevisiae_R64-1-1.115.abinitio.gff.gz",
+        tmp_path / "Saccharomyces_cerevisiae_R64-1-1.115.chromosome.I.gff.gz",
+        tmp_path / "Saccharomyces_cerevisiae_R64-1-1.115.gff.gz",
+    ]
+    indexed = mod.index_gff_files_by_species(files)
+    assert indexed["Saccharomyces_cerevisiae"][0].name == "Saccharomyces_cerevisiae_R64-1-1.115.gff.gz"
+
+
 def test_validate_cds_gff_mapping_passes_on_matching_ids(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"

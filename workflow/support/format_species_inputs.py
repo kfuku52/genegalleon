@@ -1913,6 +1913,26 @@ def resolve_preferred_ensembl_like_gff_url(provider, gff_url, timeout, headers):
     return gff_url
 
 
+def remove_stale_ensembl_like_partial_gff_outputs(provider, species_prefix, output_dir, keep_path):
+    if provider not in ENSEMBL_LIKE_PROVIDERS or keep_path is None:
+        return []
+    keep_path = Path(keep_path)
+    if ensembl_like_gff_url_is_disfavored(keep_path.name):
+        return []
+    prefix = "{}_".format(species_prefix)
+    removed = []
+    for path in sorted(output_dir.glob("{}*".format(prefix))):
+        if path == keep_path or not path.is_file():
+            continue
+        if not is_gff_filename(path.name):
+            continue
+        if not ensembl_like_gff_url_is_disfavored(path.name):
+            continue
+        path.unlink()
+        removed.append(path.name)
+    return removed
+
+
 def parse_fernbase_confidence_mode(raw_value):
     text = str(raw_value or "").strip()
     if text == "":
@@ -8159,6 +8179,22 @@ def main():
         cds_result = format_cds(task, output_cds_dir, args.overwrite, args.dry_run)
         gff_result = format_gff(task, output_gff_dir, args.overwrite, args.dry_run)
         genome_result = format_genome(task, output_genome_dir, args.overwrite, args.dry_run)
+        stale_gff_outputs = []
+        if gff_result["status"] == "write":
+            stale_gff_outputs = remove_stale_ensembl_like_partial_gff_outputs(
+                task["provider"],
+                task["species_prefix"],
+                output_gff_dir,
+                gff_result.get("output_path"),
+            )
+            for stale_name in stale_gff_outputs:
+                sys.stderr.write(
+                    "Warning: [{}] {}: removed stale partial GFF output '{}'.\n".format(
+                        task["provider"],
+                        task["species_prefix"],
+                        stale_name,
+                    )
+                )
         if cds_result["status"] == "empty":
             failed_format_tasks += 1
             sys.stderr.write(

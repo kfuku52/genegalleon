@@ -1498,3 +1498,28 @@ def test_ensembl_like_explicit_partial_gff_url_is_replaced_with_full_annotation(
     monkeypatch.setattr(module, "resolve_urls_from_index_url", fake_resolve_urls_from_index_url)
 
     assert module.resolve_preferred_ensembl_like_gff_url("ensembl", partial_url, 1, {}) == full_url
+
+
+def test_remove_stale_ensembl_like_partial_gff_outputs_keeps_full_annotation(tmp_path):
+    module = load_module()
+    gff_dir = tmp_path / "species_gff"
+    gff_dir.mkdir()
+    full = gff_dir / "Saccharomyces_cerevisiae_R64-1-1.115.gff.gz"
+    abinitio = gff_dir / "Saccharomyces_cerevisiae_R64-1-1.115.abinitio.gff.gz"
+    chromosome = gff_dir / "Saccharomyces_cerevisiae_R64-1-1.115.chromosome.I.gff.gz"
+    unrelated = gff_dir / "Drosophila_melanogaster_BDGP6.54.115.abinitio.gff.gz"
+    for path in (full, abinitio, chromosome, unrelated):
+        path.write_bytes(b"dummy")
+
+    removed = module.remove_stale_ensembl_like_partial_gff_outputs(
+        "ensembl",
+        "Saccharomyces_cerevisiae",
+        gff_dir,
+        full,
+    )
+
+    assert sorted(removed) == sorted([abinitio.name, chromosome.name])
+    assert full.exists()
+    assert unrelated.exists()
+    assert not abinitio.exists()
+    assert not chromosome.exists()
