@@ -6160,7 +6160,22 @@ def is_probable_genome_filename(provider, name):
         return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "_chr", ".chr", "hap"))
     if provider in ENSEMBL_LIKE_PROVIDERS:
         return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
-    return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold"))
+    return any(
+        marker in lower
+        for marker in (
+            "genome",
+            "assembly",
+            "genomic",
+            "dna",
+            "chromosome",
+            "chrm",
+            "scaffold",
+            "asm",
+            "softmasked",
+            "hardmasked",
+            "masked",
+        )
+    )
 
 
 def first_token(text):

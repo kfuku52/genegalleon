@@ -510,6 +510,52 @@ def test_format_species_inputs_derives_cds_from_gff_and_genome_when_cds_is_missi
     assert row["genome_input_path"] == str(genome_path)
 
 
+def test_format_species_inputs_treats_softmasked_direct_fasta_as_genome(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Arabidopsis_thaliana"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    gff_path = species_dir / "Arabidopsis_thaliana.genes.gff3"
+    genome_path = species_dir / "Arabidopsis_thaliana.softmasked.fa"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_path.write_text(">chr1\nATGAAATTT\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Arabidopsis_thaliana_genes.derived.cds.fa.gz"
+    formatted_genome = out_genome / "Arabidopsis_thaliana_softmasked.fa.gz"
+    assert formatted_cds.exists()
+    assert formatted_genome.exists()
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert ">Arabidopsis_thaliana_gene1" in text
+    assert "ATGAAATTT" in text
+
+
 def test_format_species_inputs_derives_cds_without_trimming_nonzero_phase(tmp_path):
     input_dir = tmp_path / "Direct" / "species_wise_original"
     species_dir = input_dir / "Arabidopsis_thaliana"
