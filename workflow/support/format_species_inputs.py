@@ -8180,7 +8180,7 @@ def main():
         gff_result = format_gff(task, output_gff_dir, args.overwrite, args.dry_run)
         genome_result = format_genome(task, output_genome_dir, args.overwrite, args.dry_run)
         stale_gff_outputs = []
-        if gff_result["status"] == "write":
+        if gff_result["status"] in ("write", "skip"):
             stale_gff_outputs = remove_stale_ensembl_like_partial_gff_outputs(
                 task["provider"],
                 task["species_prefix"],
