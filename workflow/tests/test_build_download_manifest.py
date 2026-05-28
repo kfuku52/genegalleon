@@ -164,6 +164,9 @@ def test_build_download_manifest_ensembl_provider_from_flat_fixture(tmp_path):
     ensembl_dir = input_root / "Ensembl" / "original_files"
     ensembl_dir.mkdir(parents=True)
     (ensembl_dir / "homo_sapiens.GRCh38.cds.all.fa.gz").write_bytes(b"dummy")
+    (ensembl_dir / "homo_sapiens.GRCh38.112.abinitio.gff3.gz").write_bytes(b"dummy")
+    (ensembl_dir / "homo_sapiens.GRCh38.112.chr.gff3.gz").write_bytes(b"dummy")
+    (ensembl_dir / "homo_sapiens.GRCh38.112.primary_assembly.1.gff3.gz").write_bytes(b"dummy")
     (ensembl_dir / "homo_sapiens.GRCh38.112.gff3.gz").write_bytes(b"dummy")
     (ensembl_dir / "homo_sapiens.GRCh38.dna.primary_assembly.fa.gz").write_bytes(b"dummy")
 

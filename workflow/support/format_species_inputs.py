@@ -1886,6 +1886,33 @@ def select_best_url_for_label(provider, label, candidates):
     return preferred[0]
 
 
+def ensembl_like_gff_url_is_disfavored(url):
+    name = urlparse(str(url or "")).path.split("/")[-1].lower()
+    if name == "":
+        return False
+    return (
+        "abinitio" in name
+        or re.search(r"(?:^|[._-])(?:chr|chromosome)(?:[._-])", name) is not None
+        or ".primary_assembly." in name
+    )
+
+
+def resolve_preferred_ensembl_like_gff_url(provider, gff_url, timeout, headers):
+    if provider not in ENSEMBL_LIKE_PROVIDERS or gff_url == "":
+        return gff_url
+    if not ensembl_like_gff_url_is_disfavored(gff_url):
+        return gff_url
+    parsed = urlparse(gff_url)
+    if parsed.scheme not in ("http", "https", "ftp"):
+        return gff_url
+    parent_url = gff_url.rsplit("/", 1)[0] + "/"
+    discovered = resolve_urls_from_index_url(provider, parent_url, timeout, headers)
+    preferred = str(discovered.get("gff_url") or "").strip()
+    if preferred != "" and preferred != gff_url:
+        return preferred
+    return gff_url
+
+
 def parse_fernbase_confidence_mode(raw_value):
     text = str(raw_value or "").strip()
     if text == "":
@@ -5608,6 +5635,33 @@ def download_from_manifest(
                 )
             )
             continue
+
+        if provider in ENSEMBL_LIKE_PROVIDERS and gff_archive_member == "":
+            try:
+                preferred_gff_url = resolve_preferred_ensembl_like_gff_url(
+                    provider,
+                    gff_url,
+                    float(timeout),
+                    headers,
+                )
+                if preferred_gff_url != gff_url:
+                    warnings.append(
+                        "Manifest line {}: replaced partial Ensembl-like GFF '{}' with '{}'".format(
+                            i,
+                            Path(urlparse(gff_url).path).name,
+                            Path(urlparse(preferred_gff_url).path).name,
+                        )
+                    )
+                    gff_url = preferred_gff_url
+                    gff_filename = ""
+            except Exception as exc:
+                warnings.append(
+                    "Manifest line {}: could not check Ensembl-like GFF alternatives for '{}': {}".format(
+                        i,
+                        Path(urlparse(gff_url).path).name if gff_url != "" else "",
+                        exc,
+                    )
+                )
 
         raw_dir = provider_raw_dir(provider, download_root, species_key)
         raw_dir.mkdir(parents=True, exist_ok=True)

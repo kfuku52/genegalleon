@@ -988,6 +988,13 @@ def infer_fernbase_confidence_mode_from_files(files, cds_path, gff_path):
 def provider_candidate_sort_key(provider, label, name):
     lower = str(name or "").lower()
     label_upper = str(label or "").upper()
+    if provider in ENSEMBL_LIKE_PROVIDERS and label_upper == "GFF":
+        return (
+            1 if "abinitio" in lower else 0,
+            1 if re.search(r"(?:^|[._-])(?:chr|chromosome)(?:[._-])", lower) else 0,
+            1 if ".primary_assembly." in lower else 0,
+            lower,
+        )
     if provider != "fernbase":
         return (lower,)
     if label_upper == "CDS":

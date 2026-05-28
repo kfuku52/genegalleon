@@ -1482,3 +1482,19 @@ def test_ensembl_like_gff_selection_prefers_full_annotation_over_partial_files()
         "https://ftp.example/Penaeus_japonicus_gca017312705v1.Mj_TUMSAT_v1.0.62.gff3.gz",
     ]
     assert module.select_best_url_for_label("ensemblmetazoa", "GFF", candidates).endswith(".62.gff3.gz")
+
+
+def test_ensembl_like_explicit_partial_gff_url_is_replaced_with_full_annotation(monkeypatch):
+    module = load_module()
+
+    partial_url = "https://ftp.example/current_gff3/saccharomyces_cerevisiae/Saccharomyces_cerevisiae.R64-1-1.115.abinitio.gff3.gz"
+    full_url = "https://ftp.example/current_gff3/saccharomyces_cerevisiae/Saccharomyces_cerevisiae.R64-1-1.115.gff3.gz"
+
+    def fake_resolve_urls_from_index_url(provider, index_url, timeout, headers):
+        assert provider == "ensembl"
+        assert index_url == "https://ftp.example/current_gff3/saccharomyces_cerevisiae/"
+        return {"gff_url": full_url}
+
+    monkeypatch.setattr(module, "resolve_urls_from_index_url", fake_resolve_urls_from_index_url)
+
+    assert module.resolve_preferred_ensembl_like_gff_url("ensembl", partial_url, 1, {}) == full_url
