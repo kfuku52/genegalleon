@@ -1170,6 +1170,59 @@ def test_download_manifest_supports_direct_with_cds_only(tmp_path):
     assert rows[0]["genome_status"] == "missing"
 
 
+def test_download_manifest_redownloads_corrupt_gzip_cache(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Croton_tiglium"
+    cds_source = source_dir / "Croton_tiglium.cds.fa.gz"
+    with gzip.open(cds_source, "wt", encoding="utf-8") as handle:
+        handle.write(">ctg1.t1\nATGAA\n>ctg1.t2\nATGAAATTT\n")
+
+    manifest = tmp_path / "manifest.tsv"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "direct",
+                "id": "VVPY-Croton_tiglium",
+                "species_key": species_key,
+                "cds_url": to_file_url(cds_source),
+                "cds_filename": species_key + ".cds.fa.gz",
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
+    raw_dir.mkdir(parents=True)
+    cached_cds = raw_dir / (species_key + ".cds.fa.gz")
+    cached_cds.write_bytes(b"\x1f\x8b\x08\x00partial")
+
+    out_cds = tmp_path / "out_cds"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(tmp_path / "out_gff"),
+        "--species-genome-dir",
+        str(tmp_path / "out_genome"),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "found corrupt gzip cache" in completed.stderr
+    assert list(raw_dir.glob("*.corrupt.*"))
+    with gzip.open(cached_cds, "rt", encoding="utf-8") as handle:
+        assert "ATGAAATTT" in handle.read()
+
+    formatted_cds = out_cds / (species_key + "_cds.fa.gz")
+    assert formatted_cds.exists()
+
+
 def test_download_manifest_supports_direct_archive_members(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()

@@ -5052,16 +5052,37 @@ def download_url_to_file(
     tmp = Path(str(destination) + ".tmp.{}".format(os.getpid()))
     try:
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
+            if quarantine_corrupt_gzip(destination, warnings, lock_context):
+                pass
+            else:
+                return False
+        if destination.exists() and destination.stat().st_size > 0 and not overwrite:
             return False
         if archive_member_text == "":
-            request = Request(url, headers=headers)
-            with urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
-                while True:
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    out.write(chunk)
-            tmp.replace(destination)
+            last_validation_error = None
+            for attempt in range(2):
+                request = Request(url, headers=headers)
+                with urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                tmp.replace(destination)
+                validation_error = gzip_integrity_error(destination)
+                if validation_error is None:
+                    last_validation_error = None
+                    break
+                last_validation_error = validation_error
+                quarantined = quarantine_existing_file(destination, warnings, lock_context, validation_error)
+                if attempt == 0:
+                    warnings.append(
+                        "{} downloaded corrupt gzip to {}; retrying once ({})".format(
+                            lock_context, quarantined, validation_error
+                        )
+                    )
+            if last_validation_error is not None:
+                raise OSError("downloaded gzip failed integrity check: {}".format(last_validation_error))
         else:
             archive_tmp = Path(str(archive_cache_path) + ".tmp.{}".format(os.getpid()))
             if overwrite or not archive_cache_path.exists() or archive_cache_path.stat().st_size == 0:
@@ -5085,6 +5106,10 @@ def download_url_to_file(
             with open(tmp, "wb") as out:
                 out.write(payload)
             tmp.replace(destination)
+            validation_error = gzip_integrity_error(destination)
+            if validation_error is not None:
+                quarantine_existing_file(destination, warnings, lock_context, validation_error)
+                raise OSError("downloaded archive member gzip failed integrity check: {}".format(validation_error))
     except Exception:
         try:
             tmp.unlink()
@@ -5102,6 +5127,42 @@ def download_url_to_file(
         raise
     finally:
         release_download_lock(lock_path, heartbeat_state)
+    return True
+
+
+def is_gzip_path(path):
+    return str(path).lower().endswith(".gz")
+
+
+def gzip_integrity_error(path):
+    if not is_gzip_path(path):
+        return None
+    try:
+        with gzip.open(path, "rb") as handle:
+            while handle.read(1024 * 1024):
+                pass
+    except Exception as exc:
+        return exc
+    return None
+
+
+def quarantine_existing_file(path, warnings, context, reason):
+    suffix = ".corrupt.{}.{}".format(time.strftime("%Y%m%d%H%M%S"), os.getpid())
+    quarantine_path = Path(str(path) + suffix)
+    counter = 1
+    while quarantine_path.exists():
+        counter += 1
+        quarantine_path = Path(str(path) + suffix + ".{}".format(counter))
+    path.replace(quarantine_path)
+    warnings.append("{} found corrupt gzip cache {}; moved to {} ({})".format(context, path, quarantine_path, reason))
+    return quarantine_path
+
+
+def quarantine_corrupt_gzip(path, warnings, context):
+    validation_error = gzip_integrity_error(path)
+    if validation_error is None:
+        return False
+    quarantine_existing_file(path, warnings, context, validation_error)
     return True
 
 
@@ -5307,10 +5368,17 @@ def execute_download_target_job(
 
     with sem:
         if target.exists() and target.stat().st_size > 0 and not overwrite:
-            local_warnings.append(
-                "[download:{}] {} {} already exists. Skipping: {}".format(provider, species_key, label, target)
-            )
-            return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded, "failed": failed}
+            if quarantine_corrupt_gzip(
+                target,
+                local_warnings,
+                "[download:{}] {} {}".format(provider, species_key, label),
+            ):
+                pass
+            else:
+                local_warnings.append(
+                    "[download:{}] {} {} already exists. Skipping: {}".format(provider, species_key, label, target)
+                )
+                return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded, "failed": failed}
 
         try:
             did_download = download_url_to_file(
@@ -5870,12 +5938,19 @@ def download_from_manifest(
         }
         for label, url, target, archive_member in download_targets:
             if target.exists() and target.stat().st_size > 0 and not overwrite:
-                warnings.append(
-                    "[download:{}] {} {} already exists. Skipping: {}".format(
-                        provider, species_key, label, target
+                if (not dry_run) and quarantine_corrupt_gzip(
+                    target,
+                    warnings,
+                    "[download:{}] {} {}".format(provider, species_key, label),
+                ):
+                    pass
+                else:
+                    warnings.append(
+                        "[download:{}] {} {} already exists. Skipping: {}".format(
+                            provider, species_key, label, target
+                        )
                     )
-                )
-                continue
+                    continue
             if dry_run:
                 planned += 1
                 continue
