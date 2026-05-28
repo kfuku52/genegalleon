@@ -1283,6 +1283,63 @@ root_species_tree() {
   return 1
 }
 
+save_astral_label_tree() {
+  local infile=$1
+  local outfile=$2
+  local tree_description=$3
+
+  if [[ "${species_tree_rooting_method}" == "mad" || "${species_tree_rooting_method}" == "mv" ]]; then
+    echo "Saving unrooted ${tree_description}; ${species_tree_rooting_method} rooting will be applied after IQ-TREE branch-length optimization."
+    cp_out "${infile}" "${outfile}"
+  else
+    root_species_tree "${infile}" "${outfile}" "${tree_description}"
+  fi
+}
+
+astral_label_tree_rooting_is_deferred() {
+  [[ "${species_tree_rooting_method}" == "mad" || "${species_tree_rooting_method}" == "mv" ]]
+}
+
+transfer_deferred_astral_label_tree_roots() {
+  local rooted_reference_tree=$1
+  local tree_dir=$2
+  local file_prefix=$3
+  local tree_description=$4
+  local label_tree=""
+  local tmp_transfer_tree=""
+  local -a label_trees=()
+
+  if ! astral_label_tree_rooting_is_deferred; then
+    return 0
+  fi
+  if [[ ! -s "${rooted_reference_tree}" ]]; then
+    echo "Warning: Cannot transfer ${species_tree_rooting_method} root to ${tree_description}. Missing rooted reference tree: ${rooted_reference_tree}"
+    return 1
+  fi
+
+  shopt -s nullglob
+  label_trees=("${tree_dir}/${file_prefix}".*.nwk)
+  shopt -u nullglob
+  for label_tree in "${label_trees[@]}"; do
+    if [[ "$(basename "${label_tree}")" == "${file_prefix}.optimized.nwk" ]]; then
+      continue
+    fi
+    tmp_transfer_tree="${tree_dir}/tmp.$(basename "${label_tree}").transfer.$$"
+    rm -f -- "${tmp_transfer_tree}"
+    if nwkit root \
+      --method transfer \
+      --infile "${label_tree}" \
+      --infile2 "${rooted_reference_tree}" \
+      --outfile "${tmp_transfer_tree}"; then
+      mv_out "${tmp_transfer_tree}" "${label_tree}"
+      Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${label_tree}"
+    else
+      echo "Warning: Failed to transfer ${species_tree_rooting_method} root to ${label_tree}."
+      rm -f -- "${tmp_transfer_tree}"
+    fi
+  done
+}
+
 normalize_iq2mc_constraint_tree() {
   local infile=$1
   local tmpfile
@@ -1610,12 +1667,10 @@ optimize_astral_tree_branch_lengths() {
   fi
 
   rm -f -- "${tmp_topology}" "${iqtree_prefix}".* "${tmp_concat_alignment}" "${tmp_rooted_optimized_tree}" "${tmp_optimized_tree_with_support}"
-  if ! nwkit drop \
+  if ! python "${gg_support_dir}/write_newick_topology.py" \
     --infile "${astral_support_tree}" \
     --outfile "${tmp_topology}" \
-    --target intnode \
-    --name yes \
-    --support yes; then
+    --parser 0; then
     echo "Warning: Failed to sanitize ASTRAL topology for IQ-TREE branch-length optimization."
     rm -f -- "${tmp_topology}" "${iqtree_prefix}".* "${tmp_concat_alignment}" "${tmp_rooted_optimized_tree}" "${tmp_optimized_tree_with_support}"
     return 1
@@ -2241,11 +2296,11 @@ if [[ (! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}") && ${run
         --infile "tmp.astral.out.tree" \
         --outfile "${tmp_label_tree}" \
         --label_key "${labels[i]}"
-      root_species_tree \
+      save_astral_label_tree \
         "${tmp_label_tree}" \
         "single_copy.astral.pep.${labels[i]}.nwk" \
         "ASTRAL protein tree (${labels[i]})"
-      if [[ -s "single_copy.astral.pep.${labels[i]}.nwk" ]]; then
+      if [[ -s "single_copy.astral.pep.${labels[i]}.nwk" ]] && ! astral_label_tree_rooting_is_deferred; then
         Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="single_copy.astral.pep.${labels[i]}.nwk"
       fi
       rm -f -- "${tmp_label_tree}"
@@ -2266,6 +2321,7 @@ if [[ (! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}") && ${run
 
     if [[ -s "${file_astral_tree_pep_q1}" ]]; then
       if optimize_astral_tree_branch_lengths "${file_astral_tree_pep_q1}" "${file_concat_pep}" "${protein_model}" "${file_astral_tree_pep}" "pep"; then
+        transfer_deferred_astral_label_tree_roots "${file_astral_tree_pep}" "${dir_astral_pep}" "single_copy.astral.pep" "ASTRAL protein support trees"
         Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_astral_tree_pep}"
       else
         echo "Warning: Falling back to unoptimized ASTRAL protein tree."
@@ -2366,11 +2422,11 @@ if [[ (! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}") && ${run
         --infile "tmp.astral.out.tree" \
         --outfile "${tmp_label_tree}" \
         --label_key "${labels[i]}"
-      root_species_tree \
+      save_astral_label_tree \
         "${tmp_label_tree}" \
         "single_copy.astral.dna.${labels[i]}.nwk" \
         "ASTRAL DNA tree (${labels[i]})"
-      if [[ -s "single_copy.astral.dna.${labels[i]}.nwk" ]]; then
+      if [[ -s "single_copy.astral.dna.${labels[i]}.nwk" ]] && ! astral_label_tree_rooting_is_deferred; then
         Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="single_copy.astral.dna.${labels[i]}.nwk"
       fi
       rm -f -- "${tmp_label_tree}"
@@ -2391,6 +2447,7 @@ if [[ (! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}") && ${run
 
     if [[ -s "${file_astral_tree_dna_q1}" ]]; then
       if optimize_astral_tree_branch_lengths "${file_astral_tree_dna_q1}" "${file_concat_cds}" "${nucleotide_model}" "${file_astral_tree_dna}" "dna"; then
+        transfer_deferred_astral_label_tree_roots "${file_astral_tree_dna}" "${dir_astral_dna}" "single_copy.astral.dna" "ASTRAL DNA support trees"
         Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_astral_tree_dna}"
       else
         echo "Warning: Falling back to unoptimized ASTRAL DNA tree."
