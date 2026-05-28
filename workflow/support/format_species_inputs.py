@@ -1175,19 +1175,26 @@ def write_gff_gzip(input_path, output_path):
 def write_gff_lines_gzip(output_path, lines):
     pigz_path = shutil.which("pigz")
     line_count = 0
+    feature_count = 0
 
     if pigz_path is None:
         with open_text(output_path, "wt") as fout:
             for line in lines:
-                fout.write(apply_common_replacements(line))
+                normalized = apply_common_replacements(line)
+                fout.write(normalized)
                 line_count += 1
-        return line_count
+                if normalized.strip() != "" and not normalized.startswith("#"):
+                    feature_count += 1
+        return line_count, feature_count
 
     def writer(handle):
-        nonlocal line_count
+        nonlocal line_count, feature_count
         for line in lines:
-            handle.write(apply_common_replacements(line))
+            normalized = apply_common_replacements(line)
+            handle.write(normalized)
             line_count += 1
+            if normalized.strip() != "" and not normalized.startswith("#"):
+                feature_count += 1
 
     write_text_output_via_command(
         output_path,
@@ -1200,7 +1207,7 @@ def write_gff_lines_gzip(output_path, lines):
         ],
         output_via_stdout=True,
     )
-    return line_count
+    return line_count, feature_count
 
 
 def detect_manifest_delimiter(path):
@@ -1816,6 +1823,13 @@ def provider_candidate_sort_key(provider, label, name):
                 lower,
             )
     if provider != "fernbase":
+        if provider in ENSEMBL_LIKE_PROVIDERS and label_upper == "GFF":
+            return (
+                1 if "abinitio" in lower else 0,
+                1 if re.search(r"(?:^|[._-])(?:chr|chromosome)(?:[._-])", lower) else 0,
+                1 if ".primary_assembly." in lower else 0,
+                lower,
+            )
         if label_upper == "GENOME":
             return (".chromosome." in lower, lower)
         return (lower,)
@@ -6678,6 +6692,8 @@ def iter_gbff_coding_entries(path):
 
     for gene_key, gene_entry in gene_entries.items():
         transcripts = transcripts_by_gene.get(gene_key, [])
+        if len(transcripts) == 0:
+            continue
         yield gene_entry, sorted(
             transcripts,
             key=lambda item: (item["start"], item["end"], item["transcript_token"]),
@@ -7692,6 +7708,20 @@ def format_cds(task, output_dir, overwrite, dry_run):
     if len(ordered_ids) > 0:
         first_sequence_name = ordered_ids[0]
 
+    if task.get("cds_path") is None and after_count == 0:
+        if output_path.exists():
+            output_path.unlink()
+        return {
+            "status": "empty",
+            "output_path": None,
+            "input_path": describe_task_cds_input(task),
+            "written": 0,
+            "duplicates": aggregated_away,
+            "before_count": before_count,
+            "after_count": after_count,
+            "first_sequence_name": first_sequence_name,
+        }
+
     if not dry_run:
         write_fasta_records_gzip(
             output_path,
@@ -7765,10 +7795,15 @@ def format_gff(task, output_dir, overwrite, dry_run):
     if dry_run:
         return {"status": "dry-run", "output_path": output_path, "lines": 0}
 
+    feature_count = 0
     if gff_path is not None:
         line_count = write_gff_gzip(gff_path, output_path)
     else:
-        line_count = write_gff_lines_gzip(output_path, iter_gff_lines_from_gbff(task))
+        line_count, feature_count = write_gff_lines_gzip(output_path, iter_gff_lines_from_gbff(task))
+        if feature_count == 0:
+            if output_path.exists():
+                output_path.unlink()
+            return {"status": "empty", "output_path": None, "lines": line_count}
     return {"status": "write", "output_path": output_path, "lines": line_count}
 
 
@@ -7881,6 +7916,13 @@ def format_task_succeeded(cds_result, gff_result, genome_result, dry_run):
     if genome_result["status"] not in ("write", "skip", "missing"):
         return False
     return True
+
+
+def result_output_name(result, fallback="NA"):
+    output_path = result.get("output_path")
+    if output_path is None:
+        return fallback
+    return output_path.name
 
 
 def build_species_summary_row(
@@ -8058,10 +8100,27 @@ def main():
     total_cds_after = 0
     first_cds_sequence_name = ""
     species_with_genome = 0
+    failed_format_tasks = 0
     for task in all_tasks:
         cds_result = format_cds(task, output_cds_dir, args.overwrite, args.dry_run)
         gff_result = format_gff(task, output_gff_dir, args.overwrite, args.dry_run)
         genome_result = format_genome(task, output_genome_dir, args.overwrite, args.dry_run)
+        if cds_result["status"] == "empty":
+            failed_format_tasks += 1
+            sys.stderr.write(
+                "Warning: [{}] {}: derived CDS contained no records; no CDS output was written.\n".format(
+                    task["provider"],
+                    task["species_prefix"],
+                )
+            )
+        if gff_result["status"] == "empty":
+            failed_format_tasks += 1
+            sys.stderr.write(
+                "Warning: [{}] {}: derived GFF contained no feature rows; no GFF output was written.\n".format(
+                    task["provider"],
+                    task["species_prefix"],
+                )
+            )
         if format_task_succeeded(cds_result, gff_result, genome_result, args.dry_run):
             key = species_row_key(task["provider"], task["species_key"], task["species_prefix"])
             taxonomy_metadata = taxonomy_resolver.resolve(task["species_prefix"])
@@ -8091,7 +8150,7 @@ def main():
                 task["species_prefix"],
                 task["cds_path"].name if task.get("cds_path") is not None else Path(str(describe_task_cds_input(task) or "derived_cds")).name,
                 cds_result["status"],
-                cds_result["output_path"].name,
+                result_output_name(cds_result),
                 cds_result["duplicates"],
                 cds_result["before_count"],
                 cds_result["after_count"],
@@ -8136,6 +8195,8 @@ def main():
         )
     )
     if len(all_errors) > 0:
+        return 2
+    if failed_format_tasks > 0:
         return 2
     return 0
 

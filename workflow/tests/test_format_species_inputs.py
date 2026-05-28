@@ -1407,3 +1407,78 @@ def test_format_species_inputs_derives_from_gbff_and_genome_when_gff_and_cds_are
     assert "derived CDS" in row["cds_input_path"]
     assert str(gbff_path) in row["gff_input_path"]
     assert "derived GFF" in row["gff_input_path"]
+
+
+def test_format_species_inputs_does_not_write_empty_gbff_derived_outputs(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Fakus_emptyus"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    gbff_path = species_dir / "Fakus_emptyus.genomic.gbff"
+    genome_path = species_dir / "Fakus_emptyus.genome.fa"
+    gbff_path.write_text(
+        "\n".join(
+            [
+                "LOCUS       chr1               9 bp    DNA     linear   PLN 01-JAN-2000",
+                "DEFINITION  test.",
+                "ACCESSION   chr1",
+                "VERSION     chr1",
+                "FEATURES             Location/Qualifiers",
+                "     gene            1..9",
+                "                     /locus_tag=\"gene1\"",
+                "                     /gene=\"gene1\"",
+                "ORIGIN",
+                "        1 atgaaattt",
+                "//",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_path.write_text(">chr1\nATGAAATTT\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    species_summary = tmp_path / "gg_input_generation_species.tsv"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert completed.returncode == 2
+    assert "derived CDS contained no records" in completed.stderr
+    assert "derived GFF contained no feature rows" in completed.stderr
+    assert "CDS=Fakus_emptyus.genome.fa (derived CDS) (empty, NA" in completed.stdout
+    assert "GFF=Fakus_emptyus.genomic.gbff (derived GFF) (empty, lines=1)" in completed.stdout
+    assert not (out_cds / "Fakus_emptyus_genomic.derived.cds.fa.gz").exists()
+    assert not (out_gff / "Fakus_emptyus_genomic.derived.gff.gz").exists()
+    assert (out_genome / "Fakus_emptyus_genome.fa.gz").exists()
+    assert species_summary.exists()
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        assert len(list(csv.DictReader(handle, delimiter="\t"))) == 0
+
+
+def test_ensembl_like_gff_selection_prefers_full_annotation_over_partial_files():
+    module = load_module()
+    candidates = [
+        "https://ftp.example/Saccharomyces_cerevisiae.R64-1-1.115.abinitio.gff3.gz",
+        "https://ftp.example/Saccharomyces_cerevisiae.R64-1-1.115.chromosome.I.gff3.gz",
+        "https://ftp.example/Saccharomyces_cerevisiae.R64-1-1.115.gff3.gz",
+    ]
+    assert module.select_best_url_for_label("ensembl", "GFF", candidates).endswith(".115.gff3.gz")
+
+    candidates = [
+        "https://ftp.example/Penaeus_japonicus_gca017312705v1.Mj_TUMSAT_v1.0.62.chr.gff3.gz",
+        "https://ftp.example/Penaeus_japonicus_gca017312705v1.Mj_TUMSAT_v1.0.62.primary_assembly.NC_007010.1.gff3.gz",
+        "https://ftp.example/Penaeus_japonicus_gca017312705v1.Mj_TUMSAT_v1.0.62.gff3.gz",
+    ]
+    assert module.select_best_url_for_label("ensemblmetazoa", "GFF", candidates).endswith(".62.gff3.gz")
