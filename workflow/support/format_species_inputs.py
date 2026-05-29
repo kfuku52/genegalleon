@@ -88,10 +88,12 @@ RESCUE_SAME_TERMINAL_MIN_SHORTER_OVERLAP = 0.90
 RESCUE_SAME_TERMINAL_MIN_LONGER_OVERLAP = 0.60
 
 FASTA_EXTENSIONS = (
+    ".cds",
     ".fa",
     ".fas",
     ".fasta",
     ".fna",
+    ".cds.gz",
     ".fa.bz2",
     ".fas.bz2",
     ".fasta.bz2",

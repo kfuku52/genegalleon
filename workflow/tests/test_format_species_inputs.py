@@ -44,6 +44,14 @@ def run_validate_mapping_script(*args):
     )
 
 
+def test_cds_extension_is_treated_as_fasta():
+    module = load_module()
+
+    assert module.is_fasta_filename("GZX_Primary.cds")
+    assert module.is_fasta_filename("GZX_Primary.cds.gz")
+    assert not module.is_fasta_filename("GZX_Primary.gff")
+
+
 class FakeTextPipe:
     def __init__(self):
         self.parts = []
