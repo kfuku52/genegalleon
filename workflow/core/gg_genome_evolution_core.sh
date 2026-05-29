@@ -523,6 +523,9 @@ file_mcmctree_raw_output="${dir_mcmctree2}/iq2mc.mcmctree.out"
 file_mcmctree_figtree_tre="${dir_mcmctree2}/FigTree.tre"
 file_mcmctree_dated_nwk="${dir_mcmctree2}/dated_species_tree.nwk"
 file_plot_species_trees="${dir_species_tree_summary}/species_trees.pdf"
+file_species_tree_busco_cds_pdf="${dir_species_tree_summary}/busco_cds.pdf"
+file_species_tree_busco_cds_svg="${dir_species_tree_summary}/busco_cds.svg"
+file_species_tree_busco_summary="${dir_species_tree_summary}/annotation_summary.tsv"
 file_plot_mcmctree_pdf="${file_mcmctree_dated_nwk%.*}.pdf"
 file_dated_species_tree="${dir_species_tree_summary}/dated_species_tree.nwk"
 file_dated_species_tree_pdf="${dir_species_tree_summary}/dated_species_tree.pdf"
@@ -2501,6 +2504,37 @@ if [[ ! -s "${file_plot_species_trees}" && ${run_plot_species_trees} -eq 1 ]]; t
   if [[ -s "species_trees.pdf" ]]; then
     echo "Output file found for the task: ${task}"
     mv_out "species_trees.pdf" "${file_plot_species_trees}"
+  fi
+else
+  gg_step_skip "${task}"
+fi
+
+task="BUSCO stacked bar species tree plotting"
+disable_if_no_input_file "run_plot_species_trees" "${file_undated_species_tree}" "${dir_species_busco_full}"
+if [[ (! -s "${file_species_tree_busco_cds_pdf}" || ! -s "${file_species_tree_busco_cds_svg}" || ! -s "${file_species_tree_busco_summary}") && ${run_plot_species_trees} -eq 1 ]]; then
+  gg_step_start "${task}"
+  ensure_dir "${dir_species_tree_summary}"
+  cd "${dir_species_tree_summary}"
+
+  Rscript "${gg_support_dir}/annotation_summary.r" \
+    --dir_species_tree="${dir_species_tree}" \
+    --dir_species_cds_busco="${dir_species_busco_full}" \
+    --dir_species_genome_busco="" \
+    --dir_species_annotation="" \
+    --dir_species_cds_fx2tab="" \
+    --dir_species_genome_fx2tab="" \
+    --file_species_trait="" \
+    --file_orthogroup_gene_count="" \
+    --treevis_dir="${gg_support_dir}/treevis" \
+    --min_og_species='auto'
+
+  if [[ -e "Rplots.pdf" ]]; then
+    rm -f -- "Rplots.pdf"
+  fi
+  cd "${dir_tmp}"
+
+  if [[ -s "${file_species_tree_busco_cds_pdf}" && -s "${file_species_tree_busco_cds_svg}" ]]; then
+    echo "Output file found for the task: ${task}"
   fi
 else
   gg_step_skip "${task}"

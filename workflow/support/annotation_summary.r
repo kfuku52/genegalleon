@@ -51,6 +51,13 @@ path_exists_or_null <- function(path) {
   }
 }
 
+normalize_species_label <- function(x) {
+    x = sub('([._-]?longestCDS)$', '', x)
+    x = sub('_sp_[^._-]+$', '_sp', x)
+    x = sub('_', ' ', x)
+    return(x)
+}
+
 # %%
 cat('Reading species tree.\n')
 dir_species_tree_summary = file.path(args[['dir_species_tree']], 'species_tree_summary')
@@ -64,7 +71,7 @@ if (path_exists_or_null(dated_sptree_path)|path_exists_or_null(undated_sptree_pa
         cat(paste0('Reading: ', undated_sptree_path, '\n'))
         tree = read.tree(undated_sptree_path)        
     }
-    tree[['tip.label']] = sub('_', ' ', tree[['tip.label']])
+    tree[['tip.label']] = normalize_species_label(tree[['tip.label']])
     tree = ladderize(tree)
     df_out = data.frame(Species=tree[['tip.label']])
     cat(paste0('Number of species in the tree: ', length(tree[['tip.label']]), '\n'))
@@ -189,7 +196,7 @@ generate_busco_summary = function(dir_busco, outbase, df_out, tr = NA, font_size
     df = data.frame(busco_id=character(), status=character(), label=character(), stringsAsFactors=FALSE)
     for (file in files) {
         file_path = file.path(dir_busco, file)
-        sp = sub('_busco.*', '', sub('\\.busco.*', '', sub('_', ' ', file)))
+        sp = normalize_species_label(sub('_busco.*', '', sub('\\.busco.*', '', file)))
         all_lines <- readLines(file_path)
         header_line <- grep("^# Busco id", all_lines, value = TRUE)
         if (length(header_line) == 0) {
@@ -219,7 +226,7 @@ generate_busco_summary = function(dir_busco, outbase, df_out, tr = NA, font_size
     df2 = df2[,c('status','label','busco_id')]
     df2[(df2[['status']]=='Complete'),'status'] = 'Single'
     colnames(df2) = c('status','label','count')
-    num_busco_gene = aggregate(df2[,'count'], by=list(df2[['label']]), FUN=sum)[1,2]
+    num_busco_gene = max(aggregate(df2[,'count'], by=list(df2[['label']]), FUN=sum)[,2], na.rm=TRUE)
     
     df3 = reshape(df2, v.names='count', timevar='status', idvar='label', direction='wide')
     df3[is.na(df3)] = 0
