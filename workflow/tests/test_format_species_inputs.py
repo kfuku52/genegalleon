@@ -560,6 +560,54 @@ def test_format_species_inputs_derives_cds_from_gff_and_genome_when_cds_is_missi
     assert row["genome_input_path"] == str(genome_path)
 
 
+def test_format_species_inputs_skips_mixed_strand_transcript_when_deriving_cds(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Ophrys_sphegodes"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    gff_path = species_dir / "Ophrys_sphegodes.annotation.gff3"
+    genome_path = species_dir / "Ophrys_sphegodes.genome.fa"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t12\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t12\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+                "chr1\tsrc\tCDS\t10\t12\t.\t-\t0\tID=cds2;Parent=gene1.t1",
+                "chr1\tsrc\tgene\t20\t25\t.\t+\t.\tID=gene2",
+                "chr1\tsrc\tmRNA\t20\t25\t.\t+\t.\tID=gene2.t1;Parent=gene2",
+                "chr1\tsrc\tCDS\t20\t25\t.\t+\t0\tID=cds3;Parent=gene2.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_path.write_text(">chr1\nATGAAATTTCCCGGGAAATGAAATAA\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "skipping transcript 'gene1.t1'" in completed.stderr
+
+    formatted_cds = out_cds / "Ophrys_sphegodes_annotation.derived.cds.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert ">Ophrys_sphegodes_gene1" not in text
+    assert ">Ophrys_sphegodes_gene2" in text
+
+
 def test_format_species_inputs_treats_softmasked_direct_fasta_as_genome(tmp_path):
     input_dir = tmp_path / "Direct" / "species_wise_original"
     species_dir = input_dir / "Arabidopsis_thaliana"

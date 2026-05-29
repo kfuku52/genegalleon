@@ -7014,6 +7014,16 @@ def derive_cds_records_from_gff_and_genome(task):
                         "gene_token": transcript_gene_token,
                     }
                 )
+        strands = sorted({feature["strand"] for feature in trimmed_features})
+        if len(strands) > 1:
+            sys.stderr.write(
+                "Warning: skipping transcript '{}' in {} because CDS features use mixed strands: {}\n".format(
+                    transcript_id,
+                    gff_path,
+                    ",".join(strands),
+                )
+            )
+            continue
         ordered = sorted(trimmed_features, key=lambda item: item["start"], reverse=(strand == "-"))
         pieces = []
         gene_token = ""
