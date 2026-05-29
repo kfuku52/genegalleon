@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
 import gzip
@@ -22,7 +23,10 @@ MATCH_ATTRIBUTE_KEYS = {
     'gene',
     'geneName',
     'gene_id',
+    'Accession',
     'locus_tag',
+    'Parent_Accession',
+    'Protein_Accession',
     'protein_id',
     'transcript',
     'transcript_id',
@@ -597,7 +601,25 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
     if os.stat(gff_path).st_size == 0:
         sys.stderr.write('Empty file: {}\n'.format(gff_path))
         return pandas.DataFrame(columns=out_cols)
-    gff = pandas.read_csv(gff_path, sep='\t', header=None, comment='#', low_memory=False, quoting=3)
+    try:
+        csv.field_size_limit(sys.maxsize)
+    except OverflowError:
+        csv.field_size_limit(2147483647)
+    try:
+        gff = pandas.read_csv(
+            gff_path,
+            sep='\t',
+            header=None,
+            comment='#',
+            low_memory=False,
+            quoting=3,
+            usecols=list(range(9)),
+        )
+    except pandas.errors.EmptyDataError:
+        return pandas.DataFrame(columns=out_cols)
+    if gff.shape[1] < len(gff_cols):
+        sys.stderr.write('Skipping malformed GFF with fewer than 9 columns: {}\n'.format(gff_path))
+        return pandas.DataFrame(columns=out_cols)
     gff.columns = gff_cols
     seq_sp = pandas.Series(seq_sp_values)
     gff_id = extract_by_ids(gff=gff, seq_names=seq_sp, feature=feature, multiple_hits=multiple_hits)

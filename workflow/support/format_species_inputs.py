@@ -6170,6 +6170,9 @@ def is_probable_genome_filename(provider, name):
             "genomic",
             "dna",
             "chromosome",
+            "_chr",
+            ".chr",
+            "chr.",
             "chrm",
             "scaffold",
             "asm",
@@ -6253,7 +6256,10 @@ def strip_suffix_case_insensitive(text, suffixes):
 
 def normalize_cds_output_basename(source_name, species_prefix):
     normalized = normalize_output_basename(source_name, species_prefix)
-    stem = strip_suffix_case_insensitive(normalized, FASTA_EXTENSIONS)
+    stem = strip_suffix_case_insensitive(
+        normalized,
+        tuple(ext for ext in FASTA_EXTENSIONS if ext not in (".cds", ".cds.gz")),
+    )
     return stem + ".fa.gz"
 
 
@@ -6384,7 +6390,10 @@ def resolve_feature_gene_token(feature_id, feature_records, provider, cache, act
 
     active.add(feature_text)
     attrs = record.get("attrs", {})
-    direct = choose_first_gff_attribute(attrs, ("gene", "gene_id", "locus_tag", "geneName"))
+    direct = choose_first_gff_attribute(
+        attrs,
+        ("gene", "gene_id", "locus_tag", "geneName", "Accession", "Parent_Accession"),
+    )
     if direct == "":
         if record.get("feature_type") == "gene":
             direct = choose_first_gff_attribute(attrs, ("Name", "ID"))
@@ -6938,7 +6947,10 @@ def derive_cds_records_from_gff_and_genome(task):
                 if fallback_id == "":
                     fallback_id = "{}:{}-{}".format(seqid, start, end)
                 transcript_ids = [fallback_id]
-            explicit_gene = choose_first_gff_attribute(attrs, ("gene", "gene_id", "locus_tag", "geneName"))
+            explicit_gene = choose_first_gff_attribute(
+                attrs,
+                ("gene", "gene_id", "locus_tag", "geneName", "Parent_Accession", "Accession"),
+            )
             for transcript_id in transcript_ids:
                 gene_token = explicit_gene
                 if gene_token == "":
@@ -7412,20 +7424,33 @@ def discover_generic_species_dir_tasks(provider, input_dir):
             continue
 
         files = [path for path in species_dir.iterdir() if path.is_file()]
+        gff_matches = [path for path in files if is_gff_filename(path.name)]
+        gbff_matches = [path for path in files if is_gbff_filename(path.name)]
         cds_matches = [
             path
             for path in files
             if is_probable_cds_filename(provider, path.name)
         ]
+        genome_matches = [
+            path
+            for path in files
+            if path not in cds_matches and is_probable_genome_filename(provider, path.name)
+        ]
         if len(cds_matches) == 0:
-            cds_matches = [
+            unclassified_fasta = [
                 path
                 for path in files
-                if is_fasta_filename(path.name) and not is_probable_genome_filename(provider, path.name)
+                if is_fasta_filename(path.name) and path not in genome_matches
             ]
-        gff_matches = [path for path in files if is_gff_filename(path.name)]
-        gbff_matches = [path for path in files if is_gbff_filename(path.name)]
-        genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+            if provider == "direct" and len(genome_matches) == 0 and len(unclassified_fasta) == 1 and (
+                len(gff_matches) > 0 or len(gbff_matches) > 0
+            ):
+                genome_matches = unclassified_fasta
+                unclassified_fasta = []
+            cds_matches = [
+                path
+                for path in unclassified_fasta
+            ]
 
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
@@ -7457,6 +7482,27 @@ def discover_generic_species_dir_tasks(provider, input_dir):
 def build_gene_aggregate_id(task, header, transcript_id):
     provider = task["provider"]
     species_prefix = task["species_prefix"]
+    if provider in ("direct", "local"):
+        ensembl_gene_id = extract_ncbi_ensembl_gene_id_from_header(header)
+        gene_symbol = extract_header_tag_value(header, "gene")
+        gene_id = extract_ncbi_gene_id_from_header(header)
+        locus_tag = extract_header_tag_value(header, "locus_tag")
+        protein_id = extract_header_tag_value(header, "protein_id")
+        if ensembl_gene_id != "":
+            gene_token = ensembl_gene_id
+        elif locus_tag != "":
+            gene_token = locus_tag
+        elif gene_id != "":
+            gene_token = "GeneID{}".format(gene_id)
+        elif gene_symbol != "":
+            gene_token = gene_symbol
+        elif protein_id != "":
+            gene_token = protein_id
+        else:
+            gene_token = ""
+        if gene_token != "":
+            prefixed = "{}_{}".format(species_prefix, sanitize_identifier(gene_token))
+            return sanitize_identifier(prefixed)
     if provider in ("ncbi", "refseq", "genbank", "plantaedb"):
         ensembl_gene_id = extract_ncbi_ensembl_gene_id_from_header(header)
         gene_symbol = extract_header_tag_value(header, "gene")

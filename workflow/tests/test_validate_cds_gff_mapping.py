@@ -178,6 +178,64 @@ def test_validate_cds_gff_mapping_allows_known_azolla_filiculoides_orphan_cds_id
     assert "[Azolla_filiculoides] CDS-to-GFF mapping OK: 1/3 IDs (allowed_missing=2)" in completed.stdout
 
 
+def test_validate_cds_gff_mapping_accepts_gwh_accession_attributes(tmp_path):
+    cds_dir = tmp_path / "species_cds"
+    gff_dir = tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+
+    write_gzip_text(
+        cds_dir / "Artemisia_argyi_demo.fa.gz",
+        ">Artemisia_argyi_GWHTBRAE000001\nATGAAA\n",
+    )
+    write_gzip_text(
+        gff_dir / "Artemisia_argyi_demo.gff.gz",
+        (
+            "chr1\tsrc\tgene\t1\t6\t.\t+\t.\tID=Aarg01G000010;Accession=GWHGBRAE000001\n"
+            "chr1\tsrc\tmRNA\t1\t6\t.\t+\t.\tID=Aarg01G000010.1;Accession=GWHTBRAE000001;Parent=Aarg01G000010;Parent_Accession=GWHGBRAE000001\n"
+            "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=CDS:Aarg01G000010.1:1;Parent=Aarg01G000010.1;Parent_Accession=GWHTBRAE000001;Protein_Accession=GWHPBRAE000001\n"
+        ),
+    )
+
+    completed = run_script(
+        "--species-cds-dir",
+        str(cds_dir),
+        "--species-gff-dir",
+        str(gff_dir),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "[Artemisia_argyi] CDS-to-GFF mapping OK: 1/1 IDs" in completed.stdout
+
+
+def test_validate_cds_gff_mapping_ignores_extra_trailing_gff_columns(tmp_path):
+    cds_dir = tmp_path / "species_cds"
+    gff_dir = tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+
+    write_gzip_text(
+        cds_dir / "Japonolirion_osense_demo.fa.gz",
+        ">Japonolirion_osense_Jos1.2ch01g00001.1\nATGAAA\n",
+    )
+    write_gzip_text(
+        gff_dir / "Japonolirion_osense_demo.gff.gz",
+        (
+            "Jos1.2ch01\tAUGUSTUS\tgene\t1\t6\t.\t+\t.\tID=Jos1.2ch01g00001\t\n"
+            "Jos1.2ch01\tAUGUSTUS\tmRNA\t1\t6\t.\t+\t.\tID=Jos1.2ch01g00001.1;Parent=Jos1.2ch01g00001\t\n"
+            "Jos1.2ch01\tAUGUSTUS\tCDS\t1\t6\t.\t+\t0\tID=Jos1.2ch01g00001.1.CDS1;Parent=Jos1.2ch01g00001.1\t\n"
+        ),
+    )
+
+    completed = run_script(
+        "--species-cds-dir",
+        str(cds_dir),
+        "--species-gff-dir",
+        str(gff_dir),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "[Japonolirion_osense] CDS-to-GFF mapping OK: 1/1 IDs" in completed.stdout
+
+
 def test_validate_cds_gff_mapping_accepts_nthreads_and_reports_it(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"

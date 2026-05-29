@@ -35,11 +35,23 @@ GFF_EXTENSIONS = (
 )
 
 KNOWN_ALLOWED_MISSING_CDS_IDS = {
+    # NCBI cds_from_genomic bundles can retain a small number of organellar or
+    # otherwise annotation-only CDS entries that are absent from the companion
+    # nuclear genomic GFF.
+    "Ananas_comosus": {
+        "Ananas_comosus_YP_009116321.1",
+    },
     # FernBase Azolla_filiculoides publishes two CDS-only entries whose
     # formatted IDs remain absent from the companion GFF.
     "Azolla_filiculoides": {
         "Azolla_filiculoides_Azfi_s0034.g025227",
         "Azolla_filiculoides_Azfi_s0093.g043301",
+    },
+    "Glycine_max": {
+        "Glycine_max_GeneID100500117",
+    },
+    "Solanum_lycopersicum": {
+        "Solanum_lycopersicum_GeneID100736503",
     },
 }
 TAXONOMIC_PROXIMITY_QUALIFIERS = frozenset(("cf", "aff", "nr"))

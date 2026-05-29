@@ -52,6 +52,48 @@ def test_cds_extension_is_treated_as_fasta():
     assert not module.is_fasta_filename("GZX_Primary.gff")
 
 
+def test_direct_ncbi_like_cds_header_uses_locus_tag_for_gene_grouping():
+    module = load_module()
+    task = {
+        "provider": "direct",
+        "species_prefix": "Vanilla_planifolia",
+    }
+    header = (
+        "lcl|CM028150.1_cds_KAG0495310.1_1 "
+        "[locus_tag=HPP92_000001] [protein_id=KAG0495310.1] [db_xref=NCBI_GP:KAG0495310.1]"
+    )
+
+    gene_id = module.build_gene_aggregate_id(
+        task,
+        header,
+        "Vanilla_planifolia_lcl_CM028150.1_cds_KAG0495310.1_1",
+    )
+
+    assert gene_id == "Vanilla_planifolia_HPP92_000001"
+
+
+def test_direct_species_discovery_treats_lone_chr_fasta_as_genome_when_gff_exists(tmp_path):
+    module = load_module()
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Santalum_album"
+    species_dir.mkdir(parents=True)
+    (species_dir / "tanxiang.FINAL.chr.fa").write_text(">Chr01\nATGAAATTT\n", encoding="utf-8")
+    (species_dir / "tanxiang.FINAL.chr_modified.gff").write_text(
+        "Chr01\tGnomon\tmRNA\t1\t9\t.\t+\t.\tID=SA1G00001\n"
+        "Chr01\tGnomon\tCDS\t1\t9\t.\t+\t0\tID=SA1G00001.cds1;Parent=SA1G00001\n",
+        encoding="utf-8",
+    )
+
+    tasks, warnings, errors = module.discover_tasks("direct", input_dir)
+
+    assert errors == []
+    assert warnings == []
+    assert len(tasks) == 1
+    assert tasks[0]["cds_path"] is None
+    assert tasks[0]["genome_path"].name == "tanxiang.FINAL.chr.fa"
+    assert tasks[0]["gff_path"].name == "tanxiang.FINAL.chr_modified.gff"
+
+
 class FakeTextPipe:
     def __init__(self):
         self.parts = []
