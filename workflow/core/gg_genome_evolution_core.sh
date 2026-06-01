@@ -1822,14 +1822,17 @@ if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree
     IFS=$'\t' read -r -a genes <<< "$(sed -n "${1}P" "${file_species_busco_summary_table}" | cut -f 4-)"
     echo "busco_id: ${busco_id}"
     if [[ ${strictly_single_copy_only} -eq 1 ]]; then
-      if [[ "${genes[@]}" == *" -"* || "${genes[@]}" == *"- "* ]]; then
-        echo "Skipping. ${busco_id} has missing gene(s)."
-        return 0
-      fi
-      if [[ "${genes[@]}" == *","* ]]; then
-        echo "Skipping. ${busco_id} has duplicated gene(s)."
-        return 0
-      fi
+      local gene_token
+      for gene_token in "${genes[@]}"; do
+        if [[ "${gene_token}" == "-" ]]; then
+          echo "Skipping. ${busco_id} has missing gene(s)."
+          return 0
+        fi
+        if [[ "${gene_token}" == *","* ]]; then
+          echo "Skipping. ${busco_id} has duplicated gene(s)."
+          return 0
+        fi
+      done
     fi
     local genes1=()
     read -r -a genes1 <<< "$(printf "%s " "${genes[@]}" | sed -e "s/[[:space:]]-[[:space:]]/ /g" -e "s/[^[[:space:]]]*,[^[[:space:]]]*//g" -e "s/[[:space:]]+/ /g")"
@@ -3035,7 +3038,7 @@ PY
       exit 1
     fi
     mapfile -t species_cds_core < "${file_orthofinder_core_selected_list}"
-    echo "Core CDS files: ${species_cds_core[@]}"
+    printf 'Core CDS files: %s\n' "${species_cds_core[*]}"
     if [[ ${#species_cds_core[@]} -eq 0 ]]; then
       echo "No OrthoFinder core species were selected. Exiting."
       exit 1
@@ -3050,7 +3053,7 @@ PY
 
     species_cds_additional=()
     mapfile -t species_cds_additional < <(comm -23 <(printf "%s\n" "${protein_files[@]##*/}" | sort) <(printf "%s\n" "${species_cds_core[@]}" | sort))
-    echo "Additional CDS files: ${species_cds_additional[@]}"
+    printf 'Additional CDS files: %s\n' "${species_cds_additional[*]}"
     if [[ -e "${dir_sp_protein}_additional" ]]; then
       rm -rf -- "${dir_sp_protein}_additional"
     fi

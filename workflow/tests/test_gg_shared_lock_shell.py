@@ -109,7 +109,7 @@ def test_shared_semaphore_releases_slot_immediately_on_term(tmp_path):
         """
     )
     completed = subprocess.Popen(
-        ["bash", "-lc", script],
+        ["bash", "-c", script],
         cwd=REPO_ROOT,
         env={**os.environ, "GG_LOCK_STALE_SECONDS": "900"},
         text=True,

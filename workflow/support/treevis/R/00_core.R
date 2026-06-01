@@ -399,7 +399,7 @@ append_branch_tiplab_colors = function(g, branch_color, path_species_color_table
         }
         g[['data']][,'species_color'] = '#000000'
         for (i in 1:nrow(df_spcolor)) {
-            species_ub = sub(' ', '_', df_spcolor[i,'species'])
+            species_ub = gsub(' ', '_', df_spcolor[i,'species'], fixed = TRUE)
             conditions = (g[['data']][['spnode_coverage']]==species_ub)
             g[['data']][conditions,'species_color'] = df_spcolor[i,'color']
         }

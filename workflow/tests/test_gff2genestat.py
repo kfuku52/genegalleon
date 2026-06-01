@@ -3,6 +3,7 @@ import pandas
 from workflow.support.gff2genestat import add_id_column
 from workflow.support.gff2genestat import add_intron_info
 from workflow.support.gff2genestat import extract_by_ids
+from workflow.support.gff2genestat import process_single_gff
 from workflow.support.gff2genestat import summarize_gene_features
 
 
@@ -229,3 +230,25 @@ def test_summarize_gene_features_handles_interleaved_gene_rows():
     assert row2["feature_size"] == 21
     assert row2["num_intron"] == 0
     assert row2["intron_positions"] == ""
+
+
+def test_process_single_gff_skips_file_with_fewer_than_nine_columns(tmp_path, capsys):
+    gff_dir = tmp_path / "gff"
+    gff_dir.mkdir()
+    (gff_dir / "Arabidopsis_thaliana.bad.gff3").write_text("chr1\tsrc\tCDS\n", encoding="utf-8")
+    out_cols = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand"]
+    gff_cols = ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
+
+    out = process_single_gff(
+        gff_file="Arabidopsis_thaliana.bad.gff3",
+        dir_gff=str(gff_dir),
+        seq_sp_values=["Arabidopsis_thaliana_gene1"],
+        feature="CDS",
+        multiple_hits="longest",
+        gff_cols=gff_cols,
+        out_cols=out_cols,
+    )
+
+    captured = capsys.readouterr()
+    assert out.empty
+    assert "Skipping malformed GFF with fewer than 9 columns" in captured.err

@@ -595,6 +595,32 @@ def filename2sciname(file_name):
     return sci_name
 
 
+def read_gff_table(gff_path):
+    try:
+        return pandas.read_csv(
+            gff_path,
+            sep='\t',
+            header=None,
+            comment='#',
+            low_memory=False,
+            quoting=3,
+        )
+    except pandas.errors.EmptyDataError:
+        return pandas.DataFrame()
+    except (pandas.errors.ParserError, ValueError):
+        opener = gzip.open if gff_path.endswith('.gz') else open
+        rows = []
+        with opener(gff_path, 'rt', encoding='utf-8') as handle:
+            for raw_line in handle:
+                if raw_line.startswith('#') or raw_line.strip() == '':
+                    continue
+                parts = raw_line.rstrip('\n\r').split('\t')
+                if len(parts) < 9:
+                    continue
+                rows.append(parts[:9])
+        return pandas.DataFrame(rows)
+
+
 def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols):
     print("{}: Started processing: {}".format(datetime.datetime.now(), gff_file), flush=True)
     gff_path = os.path.join(dir_gff, gff_file)
@@ -605,21 +631,12 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
         csv.field_size_limit(sys.maxsize)
     except OverflowError:
         csv.field_size_limit(2147483647)
-    try:
-        gff = pandas.read_csv(
-            gff_path,
-            sep='\t',
-            header=None,
-            comment='#',
-            low_memory=False,
-            quoting=3,
-            usecols=list(range(9)),
-        )
-    except pandas.errors.EmptyDataError:
-        return pandas.DataFrame(columns=out_cols)
+    gff = read_gff_table(gff_path)
     if gff.shape[1] < len(gff_cols):
         sys.stderr.write('Skipping malformed GFF with fewer than 9 columns: {}\n'.format(gff_path))
         return pandas.DataFrame(columns=out_cols)
+    if gff.shape[1] > len(gff_cols):
+        gff = gff.iloc[:, :len(gff_cols)]
     gff.columns = gff_cols
     seq_sp = pandas.Series(seq_sp_values)
     gff_id = extract_by_ids(gff=gff, seq_names=seq_sp, feature=feature, multiple_hits=multiple_hits)

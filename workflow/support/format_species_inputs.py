@@ -6183,6 +6183,41 @@ def is_probable_genome_filename(provider, name):
     )
 
 
+def gff_seqids(path):
+    seqids = set()
+    with open_text(path, "rt") as handle:
+        for raw_line in handle:
+            if raw_line.startswith("#") or raw_line.strip() == "":
+                continue
+            parts = raw_line.rstrip("\n\r").split("\t")
+            if len(parts) < 9:
+                continue
+            seqid = str(parts[0] or "").strip()
+            if seqid != "":
+                seqids.add(seqid)
+    return seqids
+
+
+def fasta_headers_overlap_gff_seqids(fasta_path, gff_path):
+    seqids = gff_seqids(gff_path)
+    if len(seqids) == 0:
+        return False
+    for header, _sequence in iter_fasta_records(fasta_path):
+        if first_token(header) in seqids:
+            return True
+    return False
+
+
+def fasta_looks_like_gff_genome(fasta_path, gff_paths):
+    for gff_path in gff_paths:
+        try:
+            if fasta_headers_overlap_gff_seqids(fasta_path, gff_path):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def first_token(text):
     parts = text.split()
     if len(parts) == 0:
@@ -6256,6 +6291,8 @@ def strip_suffix_case_insensitive(text, suffixes):
 
 def normalize_cds_output_basename(source_name, species_prefix):
     normalized = normalize_output_basename(source_name, species_prefix)
+    if normalized.lower().endswith(".cds.gz"):
+        return normalized[: -len(".gz")] + ".fa.gz"
     stem = strip_suffix_case_insensitive(
         normalized,
         tuple(ext for ext in FASTA_EXTENSIONS if ext not in (".cds", ".cds.gz")),
@@ -6978,8 +7015,18 @@ def derive_cds_records_from_gff_and_genome(task):
         features = cds_features_by_transcript[transcript_id]
         if len(features) == 0:
             continue
+        strands = sorted({feature["strand"] for feature in features})
+        if len(strands) > 1:
+            sys.stderr.write(
+                "Warning: skipping transcript '{}' in {} because CDS features use mixed strands: {}\n".format(
+                    transcript_id,
+                    gff_path,
+                    ",".join(strands),
+                )
+            )
+            continue
         utr_features = utr_features_by_transcript.get(transcript_id, ())
-        strand = features[0]["strand"]
+        strand = strands[0]
         transcript_gene_token = rescued_gene_tokens.get(transcript_id, "") or transcript_feature_gene_token(features)
         trimmed_features = []
         for feature in features:
@@ -7014,13 +7061,15 @@ def derive_cds_records_from_gff_and_genome(task):
                         "gene_token": transcript_gene_token,
                     }
                 )
-        strands = sorted({feature["strand"] for feature in trimmed_features})
-        if len(strands) > 1:
+        if len(trimmed_features) == 0:
+            continue
+        trimmed_strands = sorted({feature["strand"] for feature in trimmed_features})
+        if len(trimmed_strands) > 1:
             sys.stderr.write(
                 "Warning: skipping transcript '{}' in {} because CDS features use mixed strands: {}\n".format(
                     transcript_id,
                     gff_path,
-                    ",".join(strands),
+                    ",".join(trimmed_strands),
                 )
             )
             continue
@@ -7452,8 +7501,12 @@ def discover_generic_species_dir_tasks(provider, input_dir):
                 for path in files
                 if is_fasta_filename(path.name) and path not in genome_matches
             ]
-            if provider == "direct" and len(genome_matches) == 0 and len(unclassified_fasta) == 1 and (
-                len(gff_matches) > 0 or len(gbff_matches) > 0
+            if (
+                provider == "direct"
+                and len(genome_matches) == 0
+                and len(unclassified_fasta) == 1
+                and len(gff_matches) > 0
+                and fasta_looks_like_gff_genome(unclassified_fasta[0], gff_matches)
             ):
                 genome_matches = unclassified_fasta
                 unclassified_fasta = []

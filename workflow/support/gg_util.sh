@@ -2215,6 +2215,54 @@ gg_initialize_data_layout() {
   gg_set_taxonomy_cache_env "${gg_workspace_dir}"
 }
 
+gg_copy_file_portable() {
+	if [[ $# -ne 2 ]]; then
+		echo "gg_copy_file_portable: exactly 2 arguments are required."
+		return 1
+	fi
+	local source_path=$1
+	local dest_path=$2
+	local python_exec
+	python_exec=$(gg_find_python_exec) || return 1
+	"${python_exec}" - "${source_path}" "${dest_path}" <<'PY'
+import os
+import shutil
+import sys
+
+source_path, dest_path = sys.argv[1:3]
+if dest_path.endswith(os.sep) or os.path.isdir(dest_path):
+    os.makedirs(dest_path, exist_ok=True)
+    dest_path = os.path.join(dest_path, os.path.basename(source_path))
+else:
+    parent = os.path.dirname(dest_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+shutil.copy2(source_path, dest_path)
+PY
+}
+
+gg_copy_dir_portable() {
+	if [[ $# -ne 2 ]]; then
+		echo "gg_copy_dir_portable: exactly 2 arguments are required."
+		return 1
+	fi
+	local source_dir=$1
+	local dest_dir=$2
+	local python_exec
+	python_exec=$(gg_find_python_exec) || return 1
+	"${python_exec}" - "${source_dir}" "${dest_dir}" <<'PY'
+import os
+import shutil
+import sys
+
+source_dir, dest_dir = sys.argv[1:3]
+parent = os.path.dirname(dest_dir)
+if parent:
+    os.makedirs(parent, exist_ok=True)
+shutil.copytree(source_dir, dest_dir, dirs_exist_ok=True)
+PY
+}
+
 cp_out() {
 	if [[ $# -eq 1 ]]; then
 		if [[ -p /dev/stdin ]]; then
@@ -2324,13 +2372,13 @@ capture_busco_repro_artifacts() {
 
 	recreate_dir "${repro_dir}" || return 1
 	if [[ -s "${input_fasta}" ]]; then
-		cp -- "${input_fasta}" "${repro_dir}/" || return 1
+		gg_copy_file_portable "${input_fasta}" "${repro_dir}/" || return 1
 	fi
 	if [[ -d "${busco_tmp_dir}" ]]; then
-		cp --archive -- "${busco_tmp_dir}" "${repro_dir}/busco_tmp" || return 1
+		gg_copy_dir_portable "${busco_tmp_dir}" "${repro_dir}/busco_tmp" || return 1
 	fi
 	if [[ -s "${stderr_log}" ]]; then
-		cp -- "${stderr_log}" "${repro_dir}/busco.stderr.log" || return 1
+		gg_copy_file_portable "${stderr_log}" "${repro_dir}/busco.stderr.log" || return 1
 	fi
 	{
 		printf 'stage_key\t%s\n' "${stage_key}"
@@ -2935,11 +2983,11 @@ check_if_species_files_unique() {
   echo "Number of species files and its scientific name unique: ${num_sp} and ${num_sp_uniq}"
   if [[ ${num_sp} -ne ${num_sp_uniq} ]]; then
     echo "Exiting. Species files are not unique in: ${species_dir}"
-    echo "Species names: ${sp_names[@]}"
+    printf 'Species names: %s\n' "${sp_names[*]}"
     exit 1
   else
     echo "Species files are unique in: ${species_dir}"
-    echo "Species names: ${sp_names[@]}"
+    printf 'Species names: %s\n' "${sp_names[*]}"
   fi
 }
 

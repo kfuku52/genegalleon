@@ -1228,7 +1228,7 @@ if [[ "${selected_transcriptome_mode}" == "fastq" ]]; then
   mapfile -t files_fastq < <(find "${dir_species_fastq}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fq" -o -name "*.fastq" -o -name "*.fq.gz" -o -name "*.fastq.gz" \) | sort)
   echo "Input fastq directory: ${dir_species_fastq}"
   echo "Species: ${sp_ub}"
-  echo "Input fastq files: ${files_fastq[@]}"
+  printf 'Input fastq files: %s\n' "${files_fastq[*]}"
   if [[ ! -d "${dir_species_fastq}" || ${#files_fastq[@]} -eq 0 ]]; then
     echo "No FASTQ files were found for species ${sp_ub} in: ${dir_species_fastq}. Exiting."
     exit 1
@@ -1252,7 +1252,7 @@ elif [[ "${selected_transcriptome_mode}" == "sraid" ]]; then
   echo "Input SRA list file: ${file_input_sra_list}"
   echo "Species: ${sp_ub}"
   echo "Number of input SRA IDs: ${#sra_ids[@]}"
-  echo "Input SRA IDs: ${sra_ids[@]}"
+  printf 'Input SRA IDs: %s\n' "${sra_ids[*]}"
   if [[ ${#sra_ids[@]} -eq 0 ]]; then
     echo "SRA IDs not found, probably due to the out-of-range specification of array jobs. Exiting."
     exit 1

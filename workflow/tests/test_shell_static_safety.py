@@ -929,9 +929,9 @@ def test_capture_busco_repro_artifacts_recreates_dir_and_copies_artifacts_safely
     text = _read_text(util_path)
     body = _function_body(text, "capture_busco_repro_artifacts")
     assert 'recreate_dir "${repro_dir}"' in body
-    assert 'cp -- "${input_fasta}" "${repro_dir}/"' in body
-    assert 'cp --archive -- "${busco_tmp_dir}" "${repro_dir}/busco_tmp"' in body
-    assert 'cp -- "${stderr_log}" "${repro_dir}/busco.stderr.log"' in body
+    assert 'gg_copy_file_portable "${input_fasta}" "${repro_dir}/"' in body
+    assert 'gg_copy_dir_portable "${busco_tmp_dir}" "${repro_dir}/busco_tmp"' in body
+    assert 'gg_copy_file_portable "${stderr_log}" "${repro_dir}/busco.stderr.log"' in body
 
 
 def test_no_if_bracket_dollar_question_nonzero_checks():

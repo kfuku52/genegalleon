@@ -50,6 +50,8 @@ def test_cds_extension_is_treated_as_fasta():
     assert module.is_fasta_filename("GZX_Primary.cds")
     assert module.is_fasta_filename("GZX_Primary.cds.gz")
     assert not module.is_fasta_filename("GZX_Primary.gff")
+    assert module.normalize_cds_output_basename("GZX_Primary.cds", "Fakus_species") == "Fakus_species_GZX_Primary.cds.fa.gz"
+    assert module.normalize_cds_output_basename("GZX_Primary.cds.gz", "Fakus_species") == "Fakus_species_GZX_Primary.cds.fa.gz"
 
 
 def test_direct_ncbi_like_cds_header_uses_locus_tag_for_gene_grouping():
@@ -92,6 +94,27 @@ def test_direct_species_discovery_treats_lone_chr_fasta_as_genome_when_gff_exist
     assert tasks[0]["cds_path"] is None
     assert tasks[0]["genome_path"].name == "tanxiang.FINAL.chr.fa"
     assert tasks[0]["gff_path"].name == "tanxiang.FINAL.chr_modified.gff"
+
+
+def test_direct_species_discovery_keeps_lone_nonmatching_fasta_as_cds_when_gff_exists(tmp_path):
+    module = load_module()
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Fakus_species"
+    species_dir.mkdir(parents=True)
+    (species_dir / "sequences.fa").write_text(">gene1\nATGAAA\n", encoding="utf-8")
+    (species_dir / "annotation.gff3").write_text(
+        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=cds1;Parent=gene1\n",
+        encoding="utf-8",
+    )
+
+    tasks, warnings, errors = module.discover_tasks("direct", input_dir)
+
+    assert errors == []
+    assert warnings == []
+    assert len(tasks) == 1
+    assert tasks[0]["cds_path"].name == "sequences.fa"
+    assert tasks[0]["genome_path"] is None
+    assert tasks[0]["gff_path"].name == "annotation.gff3"
 
 
 class FakeTextPipe:
@@ -571,6 +594,55 @@ def test_format_species_inputs_skips_mixed_strand_transcript_when_deriving_cds(t
             [
                 "chr1\tsrc\tgene\t1\t12\t.\t+\t.\tID=gene1",
                 "chr1\tsrc\tmRNA\t1\t12\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+                "chr1\tsrc\tCDS\t10\t12\t.\t-\t0\tID=cds2;Parent=gene1.t1",
+                "chr1\tsrc\tgene\t20\t25\t.\t+\t.\tID=gene2",
+                "chr1\tsrc\tmRNA\t20\t25\t.\t+\t.\tID=gene2.t1;Parent=gene2",
+                "chr1\tsrc\tCDS\t20\t25\t.\t+\t0\tID=cds3;Parent=gene2.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    genome_path.write_text(">chr1\nATGAAATTTCCCGGGAAATGAAATAA\n", encoding="utf-8")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "skipping transcript 'gene1.t1'" in completed.stderr
+
+    formatted_cds = out_cds / "Ophrys_sphegodes_annotation.derived.cds.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert ">Ophrys_sphegodes_gene1" not in text
+    assert ">Ophrys_sphegodes_gene2" in text
+
+
+def test_format_species_inputs_skips_mixed_strand_transcript_before_utr_trimming(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Ophrys_sphegodes"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    gff_path = species_dir / "Ophrys_sphegodes.annotation.gff3"
+    genome_path = species_dir / "Ophrys_sphegodes.genome.fa"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t12\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t12\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tfive_prime_UTR\t1\t3\t.\t+\t.\tParent=gene1.t1",
                 "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds1;Parent=gene1.t1",
                 "chr1\tsrc\tCDS\t10\t12\t.\t-\t0\tID=cds2;Parent=gene1.t1",
                 "chr1\tsrc\tgene\t20\t25\t.\t+\t.\tID=gene2",
