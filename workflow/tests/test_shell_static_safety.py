@@ -3346,6 +3346,18 @@ def test_gene_evolution_core_keeps_generax_ufboot_task_free_of_fast_flag():
     assert 'other_iqtree_params+=( --fast )' not in ufboot_block
 
 
+def test_gene_evolution_core_uses_container_safe_generax_mpi_launcher():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    generax_block_start = text.index('task="GeneRax"')
+    generax_block_end = text.index('task="IQ-TREE UFBOOT on GeneRax topology"', generax_block_start)
+    generax_block = text[generax_block_start:generax_block_end]
+
+    assert 'mpiexec_args=(mpiexec -oversubscribe -np "${GG_TASK_CPUS}")' in generax_block
+    assert 'mpi_env_args=(env OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)' in generax_block
+    assert "running_under_scheduler" not in generax_block
+
+
 def test_no_pipe_to_grep_q_in_core_and_support_scripts():
     scripts = sorted(CORE_DIR.glob("*.sh")) + sorted((WORKFLOW_DIR / "support").glob("*.sh"))
     pattern = re.compile(r"\|\s*(?:z?grep)\s+-q|\|\s*grep\s+-Fq|\|\s*grep\s+-Fxq")

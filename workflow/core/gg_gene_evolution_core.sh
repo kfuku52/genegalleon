@@ -1985,17 +1985,9 @@ if [[ ! -s "${file_og_generax_nhx}" && ${run_generax} -eq 1 ]]; then
     "subst_model = ${generax_model}" \
     > generax_families.txt
 
-  #${host_mpiexec_path} -np ${GG_TASK_CPUS} generax \
-  mpiexec_args=(mpiexec -oversubscribe -np ${GG_TASK_CPUS})
-  mpi_env_args=()
-  running_under_scheduler=0
-  if [[ -n "${SLURM_JOB_ID:-}" || -n "${PBS_JOBID:-}" || -n "${PE_HOSTFILE:-}" || -n "${LSB_JOBID:-}" ]]; then
-    running_under_scheduler=1
-  fi
-  if [[ ${running_under_scheduler} -eq 0 ]]; then
-    # Local/container runs may not have ssh/rsh and often probe unavailable OpenIB transports.
-    mpi_env_args=(env OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)
-  fi
+  # GeneRax runs within one scheduler task; keep OpenMPI from probing ssh/rsh inside containers.
+  mpiexec_args=(mpiexec -oversubscribe -np "${GG_TASK_CPUS}")
+  mpi_env_args=(env OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)
   if [[ "$(id -u)" -eq 0 ]]; then
     mpiexec_args+=(--allow-run-as-root)
   fi
