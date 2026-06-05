@@ -1703,6 +1703,8 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
       if [[ -d "${dir_tmp}/rnaspades_output" ]]; then
         rm -rf -- "${dir_tmp}/rnaspades_output"
       fi
+      OMP_NUM_THREADS="${assembly_cpus}" \
+      OMP_THREAD_LIMIT="${assembly_cpus}" \
       rnaspades.py \
         --threads "${assembly_cpus}" \
         --memory "${assembly_mem_gb}" \

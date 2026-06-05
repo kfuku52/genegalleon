@@ -3139,6 +3139,8 @@ def test_transcriptome_core_uses_array_args_for_trinity_and_rnaspades_inputs():
     assert "rnaspades_input=$(for i in" not in text
     assert "rnaspades_input_args=()" in text
     assert '"${rnaspades_input_args[@]}"' in text
+    assert 'OMP_NUM_THREADS="${assembly_cpus}" \\' in text
+    assert 'OMP_THREAD_LIMIT="${assembly_cpus}" \\' in text
     assert 'rnaspades_transcript_fasta=$(resolve_rnaspades_transcript_fasta "${dir_tmp}/rnaspades_output")' in text
     assert 'echo "Using rnaSPAdes transcript fasta: ${rnaspades_transcript_fasta}"' in text
     assert 'Checked: transcripts.fasta, soft_filtered_transcripts.fasta, hard_filtered_transcripts.fasta' in text
