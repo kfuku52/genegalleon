@@ -2072,7 +2072,7 @@ if [[ ${run_generax} -eq 1 ]]; then
       fi
 
       nwkit drop --target intnode --support yes --name yes --infile "${file_og_generax_nwk}" |
-        nwkit drop --target root --length yes --outfile "${og_id}.generax_ufboot.constraint.nwk"
+        nwkit drop --target all --length yes --outformat 9 --outfile "${og_id}.generax_ufboot.constraint.nwk"
 
       other_iqtree_params=(--ufboot 1000 --bnni)
       if [[ ${num_seq} -gt ${iqtree_fast_mode_gt} ]]; then

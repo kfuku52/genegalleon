@@ -3367,6 +3367,17 @@ def test_gene_evolution_core_keeps_generax_ufboot_task_free_of_fast_flag():
     assert 'other_iqtree_params+=( --fast )' not in ufboot_block
 
 
+def test_gene_evolution_core_drops_all_branch_lengths_from_generax_constraint_tree():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    ufboot_block_start = text.index('task="IQ-TREE UFBOOT on GeneRax topology"')
+    ufboot_block_end = text.index('build_iqtree_mem_args', ufboot_block_start)
+    ufboot_block = text[ufboot_block_start:ufboot_block_end]
+
+    assert 'nwkit drop --target all --length yes --outformat 9 --outfile "${og_id}.generax_ufboot.constraint.nwk"' in ufboot_block
+    assert 'nwkit drop --target root --length yes --outfile "${og_id}.generax_ufboot.constraint.nwk"' not in ufboot_block
+
+
 def test_gene_evolution_core_uses_container_safe_generax_mpi_launcher():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
