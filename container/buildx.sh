@@ -4,7 +4,7 @@ set -euo pipefail
 # Example:
 #   IMAGE=ghcr.io/your-org/genegalleon TAG=20260211 MODE=push ./container/buildx.sh
 #   IMAGE=local/genegalleon TAG=dev PLATFORMS=linux/arm64 MODE=load ./container/buildx.sh
-#   KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel,devel MODE=push ./container/buildx.sh
+#   KFU52_AMALGKIT_REPO_REF=kfdevel MODE=push ./container/buildx.sh
 
 IMAGE=${IMAGE:-ghcr.io/example/genegalleon}
 TAG=${TAG:-dev}
@@ -13,9 +13,9 @@ MODE=${MODE:-push} # push | load
 NOTUNG_DOWNLOAD_PAGE=${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}
 NOTUNG_DOWNLOAD_HOST_IP=${NOTUNG_DOWNLOAD_HOST_IP:-128.2.205.60}
 KFU52_REPO_REF=${KFU52_REPO_REF:-master}
-KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-1}
+KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}
 KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
-KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF:-}
+KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF-master}
 KFU52_AMALGKIT_REPO_SHA=${KFU52_AMALGKIT_REPO_SHA:-}
 KFU52_CDSKIT_REPO_SHA=${KFU52_CDSKIT_REPO_SHA:-}
 KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-}

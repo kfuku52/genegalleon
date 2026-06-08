@@ -561,6 +561,25 @@ def test_container_build_metadata_includes_repo_version_label():
     assert "org.opencontainers.image.version @@GG_VERSION@@" in definition_template
 
 
+def test_container_defaults_pin_amalgkit_to_master():
+    dockerfile = _read_text(REPO_ROOT / "container" / "Dockerfile")
+    buildx = _read_text(REPO_ROOT / "container" / "buildx.sh")
+    local_build = _read_text(REPO_ROOT / "container" / "apptainer_local_build.sh")
+    ensure_latest = _read_text(REPO_ROOT / "container" / "scripts" / "ensure_kfuku52_tools_latest.sh")
+    capability_matrix = _read_text(REPO_ROOT / "container" / "CAPABILITY_MATRIX.md")
+
+    assert 'ARG KFU52_AMALGKIT_AUTO_SELECT_REF="0"' in dockerfile
+    assert 'ARG KFU52_AMALGKIT_REPO_REF="master"' in dockerfile
+    assert "KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}" in buildx
+    assert "KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF-master}" in buildx
+    assert "KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}" in local_build
+    assert "KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF-master}" in local_build
+    assert "amalgkit_auto_select_ref=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}" in ensure_latest
+    assert "amalgkit_repo_ref_override=${KFU52_AMALGKIT_REPO_REF-master}" in ensure_latest
+    assert "`amalgkit` installs from `master` by default" in capability_matrix
+    assert "auto-selects newer commit among `master`, `kfdevel`, and `devel`" not in capability_matrix
+
+
 def test_run_container_shell_script_uses_exec_with_bash_stdin_bridge():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)

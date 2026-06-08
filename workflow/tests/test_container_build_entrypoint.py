@@ -246,6 +246,8 @@ def test_container_build_entrypoint_native_local_build_renders_repo_version_labe
     definition_path = Path(definition_line.split("=", 1)[1].strip())
     definition_text = definition_path.read_text(encoding="utf-8")
     assert f"org.opencontainers.image.version {REPO_VERSION}" in definition_text
+    assert 'kfu52_amalgkit_auto_select_ref="0"' in definition_text
+    assert 'kfu52_amalgkit_repo_ref="master"' in definition_text
 
 
 def test_container_build_entrypoint_uses_docker_daemon_for_local_buildx_image(tmp_path: Path):

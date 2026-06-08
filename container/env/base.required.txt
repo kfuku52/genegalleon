@@ -60,4 +60,4 @@ prodigal
 
 # Installed from GitHub refs by
 # container/scripts/ensure_kfuku52_tools_latest.sh
-# (amalgkit auto-selects newer commit among master, kfdevel, and devel by default)
+# (amalgkit installs from master by default)

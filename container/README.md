@@ -34,7 +34,7 @@ Source refs, optional pins, and checksums can be overridden at build time:
 
 ```bash
 KFU52_AMALGKIT_REPO_SHA= \
-KFU52_AMALGKIT_REPO_REF=kfdevel \
+KFU52_AMALGKIT_REPO_REF=master \
 KFU52_REPO_REF=master \
 BUSCO_REPO_SHA=6278721a1916f6da310e03ec9674099028c927a4 \
 PAML_REPO_SHA=8daeead6b55523f375d9ac56dcfac38373ef8a2e \
@@ -55,7 +55,8 @@ IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.s
 ```
 
 Default hardening behavior:
-- user-authored source installs follow their configured refs by default for `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE`
+- `amalgkit` installs from `master` by default unless explicitly overridden or pinned
+- user-authored source installs follow their configured refs by default for `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE`
 - `BUSCO` and `paml` remain pinned by default
 - `BioPP/testnh` and `CAFE5` release tarballs are verified with SHA-256 before extraction
 - GitHub/GitLab source fetches prefer release/archive downloads and fall back to `git` retry logic only when needed
@@ -67,11 +68,12 @@ Override rules:
 - `BUSCO_MIRROR_REPO_URL` is optional and is only used as a secondary source if the primary `BUSCO_REPO_URL` fetch fails.
 - If you override a repo URL to a fork, also update the matching `*_REPO_SHA` or clear it to fall back to the ref/default branch.
 
-For `amalgkit`, branch auto-selection can still be controlled with:
-- `KFU52_AMALGKIT_AUTO_SELECT_REF=1` (default)
-- `KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel,devel` (default)
-- `KFU52_AMALGKIT_REPO_REF=<branch>` (hard override)
-This logic only takes effect when `KFU52_AMALGKIT_REPO_SHA` is empty.
+For `amalgkit`, the default source ref is fixed to `master`:
+- `KFU52_AMALGKIT_REPO_REF=master` (default)
+- `KFU52_AMALGKIT_REPO_SHA=<commit>` pins an exact commit and takes precedence over refs
+- `KFU52_AMALGKIT_AUTO_SELECT_REF=0` (default)
+- `KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel,devel` is only used if branch auto-selection is explicitly re-enabled
+To restore branch auto-selection, set `KFU52_AMALGKIT_REPO_REF=` and `KFU52_AMALGKIT_AUTO_SELECT_REF=1`. This logic only takes effect when `KFU52_AMALGKIT_REPO_SHA` is empty.
 
 `buildx.sh` runs a preflight check to ensure the conda env set used in
 `workflow/core/gg_*_core.sh` is covered by env installs in `container/Dockerfile`.
@@ -206,7 +208,7 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
   and installed as:
   - `/usr/local/bin/Notung.jar`
 - `BUSCO` and `paml` are fetched from pinned upstream source snapshots by default.
-- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` follow their configured refs by default.
+- `amalgkit` installs from `master` by default; `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` follow their configured refs by default.
 - `BioPP/testnh` and `CAFE5` tarballs are checksum-verified during build.
 - The default source is the pinned stable ZIP:
   - `NOTUNG_DOWNLOAD_PAGE=https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip`

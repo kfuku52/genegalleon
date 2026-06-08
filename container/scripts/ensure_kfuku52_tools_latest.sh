@@ -9,8 +9,8 @@ repo_owner=${KFU52_REPO_OWNER:-kfuku52}
 tools_csv=${KFU52_TOOLS:-amalgkit,cdskit,csubst,nwkit}
 repo_ref=${KFU52_REPO_REF:-master}
 amalgkit_branch_candidates=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
-amalgkit_auto_select_ref=${KFU52_AMALGKIT_AUTO_SELECT_REF:-1}
-amalgkit_repo_ref_override=${KFU52_AMALGKIT_REPO_REF:-}
+amalgkit_auto_select_ref=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}
+amalgkit_repo_ref_override=${KFU52_AMALGKIT_REPO_REF-master}
 max_attempts=${KFU52_MAX_ATTEMPTS:-5}
 retry_sleep_sec=${KFU52_RETRY_SLEEP_SEC:-15}
 
