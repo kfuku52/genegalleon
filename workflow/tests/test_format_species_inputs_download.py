@@ -1223,6 +1223,80 @@ def test_download_manifest_redownloads_corrupt_gzip_cache(tmp_path):
     assert formatted_cds.exists()
 
 
+def test_download_manifest_retries_transient_http_errors(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Croton_tiglium"
+    cds_source = source_dir / "Croton_tiglium.cds.fa.gz"
+    with gzip.open(cds_source, "wt", encoding="utf-8") as handle:
+        handle.write(">ctg1.t1\nATGAA\n")
+
+    class FlakyHandler(SimpleHTTPRequestHandler):
+        attempts = 0
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(source_dir), **kwargs)
+
+        def log_message(self, format, *args):
+            return
+
+        def do_GET(self):
+            if self.path.endswith("/Croton_tiglium.cds.fa.gz"):
+                type(self).attempts += 1
+                if type(self).attempts == 1:
+                    self.send_response(502)
+                    self.end_headers()
+                    self.wfile.write(b"temporary upstream error")
+                    return
+            super().do_GET()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FlakyHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "direct",
+                    "id": "VVPY-Croton_tiglium",
+                    "species_key": species_key,
+                    "cds_url": "http://127.0.0.1:{}/Croton_tiglium.cds.fa.gz".format(server.server_port),
+                    "cds_filename": species_key + ".cds.fa.gz",
+                }
+            ],
+        )
+
+        env = dict(os.environ)
+        env["GG_DOWNLOAD_RETRY_BASE_SECONDS"] = "0"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--provider",
+                "direct",
+                "--download-manifest",
+                str(manifest),
+                "--download-dir",
+                str(tmp_path / "download_cache"),
+                "--download-only",
+            ],
+            cwd=str(source_dir),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "download attempt 1/4 failed transiently; retrying" in completed.stderr
+    assert FlakyHandler.attempts == 2
+
+
 def test_download_manifest_supports_direct_archive_members(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()

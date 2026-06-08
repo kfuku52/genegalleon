@@ -8,7 +8,7 @@
 # SLURM
 # Common parameters: job name, cores per task, memory per core, walltime, log files, and working directory.
 #SBATCH -J gg_input_generation
-#SBATCH -c 2
+#SBATCH -c 4
 #SBATCH --mem-per-cpu=8G
 #SBATCH -t 2976:00:00
 #SBATCH --output=gg_input_generation_entrypoint.sh_%A_%a.out
@@ -27,7 +27,7 @@
 # Common parameters: shell, working directory, slot count, memory per slot, and runtime limits.
 #$ -S /bin/bash
 #$ -cwd
-#$ -pe def_slot 2
+#$ -pe def_slot 4
 #$ -l s_vmem=8G
 #$ -l mem_req=8G
 # Site-specific resource example.
@@ -40,7 +40,7 @@
 ## PBS
 # Common parameters: shell, CPU count, total memory, and exported environment.
 #PBS -S /bin/bash
-#PBS -l ncpus=2
+#PBS -l ncpus=4
 #PBS -l mem=16G
 # Array example for array-aware entrypoints.
 #PBS -J 1
@@ -174,6 +174,17 @@ gg_apply_named_env_overrides \
 
 # Forward canonical config variables into the container environment.
 forward_config_vars_to_container_env "${gg_entrypoint_name}"
+
+# Keep per-provider input downloads modest by default; callers can override these
+# environment variables for sites with different network limits.
+: "${GG_INPUT_MAX_CONCURRENT_DOWNLOADS_COGE:=2}"
+: "${GG_INPUT_MAX_CONCURRENT_DOWNLOADS_GWH:=2}"
+: "${GG_INPUT_MAX_CONCURRENT_DOWNLOADS_CNGB:=2}"
+: "${GG_INPUT_MAX_CONCURRENT_DOWNLOADS_DIRECT:=2}"
+export GG_INPUT_MAX_CONCURRENT_DOWNLOADS_COGE
+export GG_INPUT_MAX_CONCURRENT_DOWNLOADS_GWH
+export GG_INPUT_MAX_CONCURRENT_DOWNLOADS_CNGB
+export GG_INPUT_MAX_CONCURRENT_DOWNLOADS_DIRECT
 
 # Provider-specific download caps are consumed directly downstream.
 gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_MAX_CONCURRENT_DOWNLOADS_"

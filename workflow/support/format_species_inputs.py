@@ -273,6 +273,8 @@ DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 900
 DEFAULT_DOWNLOAD_LOCK_HEARTBEAT_SECONDS = 60
 DEFAULT_DOWNLOAD_LOCK_ACQUIRE_TIMEOUT_SECONDS = 3600
 DEFAULT_DOWNLOAD_LOCK_POLL_SECONDS = 5.0
+DEFAULT_DOWNLOAD_ATTEMPTS = 4
+DEFAULT_DOWNLOAD_RETRY_BASE_SECONDS = 5.0
 SHARED_DOWNLOAD_LOCK_FORMAT = "shared-lock-v2"
 DEFAULT_NCBI_EUTILS_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_NCBI_FTP_BASE_URL = "https://ftp.ncbi.nlm.nih.gov"
@@ -3095,6 +3097,23 @@ def merge_resolved_manifest_bundle_fields(base_resolved, candidate_resolved):
     return merged
 
 
+def resolved_manifest_bundle_urls_available(resolved, timeout, headers):
+    urls = [
+        str(resolved.get(key, "") or "").strip()
+        for key in ("cds_url", "gff_url", "gbff_url", "genome_url")
+        if str(resolved.get(key, "") or "").strip() != ""
+    ]
+    for url in urls:
+        try:
+            if not remote_resource_exists(url, timeout, headers):
+                return False
+        except Exception as exc:
+            if is_transient_network_error(exc):
+                continue
+            raise
+    return True
+
+
 def citrusgenomedb_repository_request_headers(headers):
     req_headers = dict(headers or {})
     if "User-Agent" not in req_headers:
@@ -3152,6 +3171,9 @@ def resolve_citrusgenomedb_bundle_from_page(page_url, species_key, timeout, head
         "",
         resolved.get("genome_url", ""),
     ):
+        return None
+    repo_headers = citrusgenomedb_repository_request_headers(headers)
+    if not resolved_manifest_bundle_urls_available(resolved, timeout, repo_headers):
         return None
     resolved["species_key"] = str(species_key or "").strip() or infer_citrusgenomedb_species_key(page_text, links, species_key)
     resolved["cds_filename"] = Path(urlparse(resolved["cds_url"]).path).name if resolved.get("cds_url", "") else ""
@@ -4758,6 +4780,38 @@ def resolve_download_lock_heartbeat_seconds():
     return value
 
 
+def resolve_download_attempts():
+    raw = os.environ.get("GG_DOWNLOAD_ATTEMPTS", "").strip()
+    if raw == "":
+        return DEFAULT_DOWNLOAD_ATTEMPTS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_DOWNLOAD_ATTEMPTS
+    if value < 1:
+        return 1
+    return value
+
+
+def resolve_download_retry_base_seconds():
+    raw = os.environ.get("GG_DOWNLOAD_RETRY_BASE_SECONDS", "").strip()
+    if raw == "":
+        return DEFAULT_DOWNLOAD_RETRY_BASE_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_DOWNLOAD_RETRY_BASE_SECONDS
+    if value < 0:
+        return 0.0
+    return value
+
+
+def sleep_before_download_retry(attempt, base_seconds):
+    delay = float(base_seconds) * float(attempt)
+    if delay > 0:
+        time.sleep(delay)
+
+
 def resolve_download_lock_acquire_timeout_seconds():
     raw = os.environ.get("GG_DOWNLOAD_LOCK_ACQUIRE_TIMEOUT_SECONDS", "").strip()
     if raw == "":
@@ -5060,42 +5114,93 @@ def download_url_to_file(
                 return False
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
             return False
+        attempts = resolve_download_attempts()
+        retry_base_seconds = resolve_download_retry_base_seconds()
         if archive_member_text == "":
             last_validation_error = None
-            for attempt in range(2):
-                request = Request(url, headers=headers)
-                with urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
-                    while True:
-                        chunk = response.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        out.write(chunk)
-                tmp.replace(destination)
-                validation_error = gzip_integrity_error(destination)
-                if validation_error is None:
-                    last_validation_error = None
-                    break
-                last_validation_error = validation_error
-                quarantined = quarantine_existing_file(destination, warnings, lock_context, validation_error)
-                if attempt == 0:
-                    warnings.append(
-                        "{} downloaded corrupt gzip to {}; retrying once ({})".format(
-                            lock_context, quarantined, validation_error
+            for attempt in range(1, attempts + 1):
+                try:
+                    request = Request(url, headers=headers)
+                    with urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
+                        while True:
+                            chunk = response.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            out.write(chunk)
+                    tmp.replace(destination)
+                    validation_error = gzip_integrity_error(destination)
+                    if validation_error is None:
+                        last_validation_error = None
+                        break
+                    last_validation_error = validation_error
+                    quarantined = quarantine_existing_file(destination, warnings, lock_context, validation_error)
+                    if attempt < attempts:
+                        warnings.append(
+                            "{} downloaded corrupt gzip to {}; retrying attempt {}/{} ({})".format(
+                                lock_context,
+                                quarantined,
+                                attempt + 1,
+                                attempts,
+                                validation_error,
+                            )
                         )
-                    )
+                        sleep_before_download_retry(attempt, retry_base_seconds)
+                        continue
+                    raise OSError("downloaded gzip failed integrity check: {}".format(validation_error))
+                except Exception as exc:
+                    try:
+                        tmp.unlink()
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        pass
+                    if attempt < attempts and is_transient_network_error(exc):
+                        warnings.append(
+                            "{} download attempt {}/{} failed transiently; retrying ({})".format(
+                                lock_context,
+                                attempt,
+                                attempts,
+                                exc,
+                            )
+                        )
+                        sleep_before_download_retry(attempt, retry_base_seconds)
+                        continue
+                    raise
             if last_validation_error is not None:
                 raise OSError("downloaded gzip failed integrity check: {}".format(last_validation_error))
         else:
             archive_tmp = Path(str(archive_cache_path) + ".tmp.{}".format(os.getpid()))
             if overwrite or not archive_cache_path.exists() or archive_cache_path.stat().st_size == 0:
-                request = Request(url, headers=headers)
-                with urlopen(request, timeout=timeout) as response, open(archive_tmp, "wb") as out:
-                    while True:
-                        chunk = response.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        out.write(chunk)
-                archive_tmp.replace(archive_cache_path)
+                for attempt in range(1, attempts + 1):
+                    try:
+                        request = Request(url, headers=headers)
+                        with urlopen(request, timeout=timeout) as response, open(archive_tmp, "wb") as out:
+                            while True:
+                                chunk = response.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                out.write(chunk)
+                        archive_tmp.replace(archive_cache_path)
+                        break
+                    except Exception as exc:
+                        try:
+                            archive_tmp.unlink()
+                        except FileNotFoundError:
+                            pass
+                        except OSError:
+                            pass
+                        if attempt < attempts and is_transient_network_error(exc):
+                            warnings.append(
+                                "{} archive download attempt {}/{} failed transiently; retrying ({})".format(
+                                    lock_context,
+                                    attempt,
+                                    attempts,
+                                    exc,
+                                )
+                            )
+                            sleep_before_download_retry(attempt, retry_base_seconds)
+                            continue
+                        raise
             if zipfile.is_zipfile(archive_cache_path):
                 with zipfile.ZipFile(archive_cache_path) as archive:
                     payload = archive.read(archive_member_text)
