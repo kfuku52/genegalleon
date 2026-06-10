@@ -1286,6 +1286,51 @@ root_species_tree() {
   return 1
 }
 
+restore_rooted_tree_internal_support() {
+  local rooted_tree=$1
+  local support_source_tree=$2
+  local tree_description=$3
+  local tmp_with_support="${dir_tmp}/tmp.nwkit.transfer_support.$$.nwk"
+  local transfer_log="${dir_tmp}/tmp.nwkit.transfer_support.$$.log"
+  local transfer_exit_code=0
+
+  if [[ ! -s "${rooted_tree}" ]]; then
+    echo "Warning: Cannot restore ${tree_description} support values. Missing rooted tree: ${rooted_tree}"
+    return 1
+  fi
+  if [[ ! -s "${support_source_tree}" ]]; then
+    echo "Warning: Cannot restore ${tree_description} support values. Missing support source tree: ${support_source_tree}"
+    return 1
+  fi
+
+  rm -f -- "${tmp_with_support}" "${transfer_log}"
+  if nwkit transfer \
+    --infile "${rooted_tree}" \
+    --infile2 "${support_source_tree}" \
+    --target intnode \
+    --support yes \
+    --name no \
+    --length no \
+    --outfile "${tmp_with_support}" \
+    2> "${transfer_log}"; then
+    transfer_exit_code=0
+  else
+    transfer_exit_code=$?
+  fi
+
+  if [[ ${transfer_exit_code} -eq 0 && -s "${tmp_with_support}" ]]; then
+    echo "Restored internal support values for ${tree_description} with nwkit transfer."
+    cp_out "${tmp_with_support}" "${rooted_tree}"
+    rm -f -- "${tmp_with_support}" "${transfer_log}"
+    return 0
+  fi
+
+  echo "Warning: Failed to restore internal support values for ${tree_description}. Keeping rooted tree as-is."
+  [[ -s "${transfer_log}" ]] && cat "${transfer_log}"
+  rm -f -- "${tmp_with_support}" "${transfer_log}"
+  return 1
+}
+
 save_astral_label_tree() {
   local infile=$1
   local outfile=$2
@@ -2137,6 +2182,10 @@ if [[ ! -s "${file_concat_iqtree_pep_root}" && ${run_concat_iqtree_protein} -eq 
     "${file_concat_iqtree_pep}" \
     "${file_concat_iqtree_pep_root}" \
     "concatenated protein tree"
+  restore_rooted_tree_internal_support \
+    "${file_concat_iqtree_pep_root}" \
+    "${file_concat_iqtree_pep}" \
+    "concatenated protein tree"
 
   if [[ -s "${file_concat_iqtree_pep_root}" ]]; then
     Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_concat_iqtree_pep_root}"
@@ -2209,6 +2258,10 @@ if [[ ! -s "${file_concat_iqtree_dna_root}" && ${run_concat_iqtree_dna} -eq 1 ]]
   root_species_tree \
     "${file_concat_iqtree_dna}" \
     "${file_concat_iqtree_dna_root}" \
+    "concatenated DNA tree"
+  restore_rooted_tree_internal_support \
+    "${file_concat_iqtree_dna_root}" \
+    "${file_concat_iqtree_dna}" \
     "concatenated DNA tree"
 
   if [[ -s "${file_concat_iqtree_dna_root}" ]]; then
