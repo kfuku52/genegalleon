@@ -79,10 +79,10 @@ Practical interpretation:
 `stat.branch.tsv` is the master table that collects per-branch and per-tip
 annotations for plotting. `stat.tree.tsv` is the paired tree-level summary.
 
-## Orthogroup-scale progress summaries
+## Gene-family progress summaries
 
 GeneGalleon provides a built-in summary wrapper for orthogroup and
-transcriptome-scale runs:
+query2family runs, plus transcriptome-scale runs:
 
 ```bash
 cd workflow
@@ -92,6 +92,7 @@ bash gg_progress_summary_entrypoint.sh
 This writes:
 
 - `workspace/orthogroup_summary.tsv`
+- `workspace/query2family_summary.tsv`
 - `workspace/transcriptome_assembly_summary.tsv`
 
 For orthogroup runs, `orthogroup_summary.tsv` is useful because:
@@ -115,11 +116,19 @@ The wrapper also prints incomplete species IDs inferred from missing
 
 ## Query2family completion audit
 
-There is currently no dedicated `query2family_summary.tsv`.
-For large query2family runs, compare the input basenames with a downstream
-completion marker such as `tree_plot` or `stat_branch`.
+For query2family runs, `query2family_summary.tsv` is generated when
+`workspace/output/query2family` and `workspace/input/query_gene` exist.
+Rows follow the same sorted input-file order used for query2family array
+tasks, so `GG_ARRAY_TASK_ID` can be used directly for resubmission.
 
-Example using `tree_plot` as the completion marker:
+The summary adds one `1/0` completion column per visible output subdirectory
+under `workspace/output/query2family/`. It also appends AMAS-derived alignment
+statistics when `amas_original` or `amas_cleaned` outputs are present.
+
+For large query2family runs, inspect late-stage completion markers such as
+`tree_plot`, `stat_branch`, or `stat_tree`.
+
+Manual equivalent using `tree_plot` as the completion marker:
 
 ```bash
 python - <<'PY'

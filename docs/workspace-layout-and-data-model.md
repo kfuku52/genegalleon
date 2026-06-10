@@ -135,6 +135,7 @@ Some wrappers intentionally write reports at the workspace root rather than unde
 Current examples:
 
 - `workspace/orthogroup_summary.tsv`
+- `workspace/query2family_summary.tsv`
 - `workspace/transcriptome_assembly_summary.tsv`
 
 Those are produced by `gg_progress_summary_entrypoint.sh`.

@@ -245,7 +245,8 @@ Main output root:
 
 ## 9. Generate summary TSVs
 
-To create summary tables for completed transcriptome or orthogroup runs:
+To create summary tables for completed transcriptome, orthogroup, or
+query2family runs:
 
 ```bash
 cd workflow
@@ -255,17 +256,17 @@ bash gg_progress_summary_entrypoint.sh
 Outputs are written to the workspace root:
 
 - `workspace/orthogroup_summary.tsv`
+- `workspace/query2family_summary.tsv`
 - `workspace/transcriptome_assembly_summary.tsv`
 
 Current scope:
 
 - orthogroup summary is generated only when `workspace/output/orthogroup`
   exists and the selected gene-count table plus AMAS directories are present,
+- query2family summary is generated when `workspace/output/query2family`
+  and `workspace/input/query_gene` exist,
 - transcriptome summary is generated when
-  `workspace/output/transcriptome_assembly` exists,
-- query2family runs do not currently have a dedicated auto-summary TSV; for
-  manual completion-audit commands, see
-  [Gene-Family Outputs and Progress Monitoring](gene-family-outputs-and-progress-monitoring.md).
+  `workspace/output/transcriptome_assembly` exists.
 
 ## 10. Full end-to-end order
 

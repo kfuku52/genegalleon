@@ -17,7 +17,9 @@ ncpu_progress_summary="${ncpu_progress_summary:-${GG_TASK_CPUS:-1}}"
 gg_workspace_output_dir=$(workspace_output_root "${gg_workspace_dir}")
 gg_workspace_input_dir=$(workspace_input_root "${gg_workspace_dir}")
 dir_orthogroup="${gg_workspace_output_dir}/orthogroup"
+dir_query2family="${gg_workspace_output_dir}/query2family"
 dir_transcriptome_assembly="${gg_workspace_output_dir}/transcriptome_assembly"
+dir_query_gene="${gg_workspace_input_dir}/query_gene"
 file_orthogroup_genecount_selected="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv"
 
 if [[ -d "${dir_orthogroup}" ]]; then
@@ -33,6 +35,22 @@ if [[ -d "${dir_orthogroup}" ]]; then
       --genecount "${file_orthogroup_genecount_selected}" \
       --ncpu "${ncpu_progress_summary}" \
       --out orthogroup_summary.tsv
+  fi
+fi
+
+if [[ -d "${dir_query2family}" ]]; then
+  echo ""
+  echo "Checking directory: ${dir_query2family}"
+  if [[ ! -d "${dir_query_gene}" ]]; then
+    echo "Skipping query2family summary because the query_gene input directory was not found: ${dir_query_gene}"
+  elif [[ -z "$(find "${dir_query_gene}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' -print -quit 2>/dev/null)" ]]; then
+    echo "Skipping query2family summary because the query_gene input directory has no visible files: ${dir_query_gene}"
+  else
+    python "${gg_support_dir}/query2family_output_summary.py" \
+      --dir_query2family "${dir_query2family}" \
+      --dir_query_gene "${dir_query_gene}" \
+      --ncpu "${ncpu_progress_summary}" \
+      --out query2family_summary.tsv
   fi
 fi
 
