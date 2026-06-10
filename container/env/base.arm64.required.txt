@@ -1,6 +1,7 @@
 # Core Python stack
 python
 pip
+pytest
 biopython
 cython
 matplotlib

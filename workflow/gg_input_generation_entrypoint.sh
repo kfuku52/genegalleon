@@ -92,7 +92,7 @@ run_generate_species_trait=0 # Generate species_trait.tsv from downloaded or loc
 # Shared parameters
 provider="all" # all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|ddbj|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local
 input_generation_mode="single" # single=all stages in one run | array_prepare=build task plan | array_worker=run one species task per GG_ARRAY_TASK_ID | array_finalize=merge shards and run shared validation/summaries
-trait_profile="none" # none|gift_starter
+trait_profile="none" # none|gift_starter|gbif_distribution
 busco_lineage="${GG_COMMON_BUSCO_LINEAGE:-auto}" # BUSCO lineage dataset name, or auto to infer a shared dataset from the discovered species set.
 strict=0 # Treat input formatting and validation warnings as errors.
 overwrite=0 # Overwrite existing formatted or downloaded outputs.
@@ -126,6 +126,13 @@ trait_plan="" # Optional trait plan file describing requested traits.
 trait_database_sources="" # Optional mapping file that defines trait database sources.
 trait_download_dir="" # Directory for cached or raw trait database downloads.
 trait_download_timeout=120 # Per-request timeout in seconds for trait database downloads.
+gbif_api="" # Optional GBIF API base URI override for trait_profile=gbif_distribution.
+gbif_page_size="" # Occurrence search page size for GBIF distribution traits.
+gbif_max_occurrences_per_species="" # Max no-login occurrence-search records fetched per species.
+gbif_grid_degrees="" # Grid size in degrees for GBIF occupied area.
+gbif_min_match_confidence="" # Minimum GBIF species-match confidence.
+gbif_max_coordinate_uncertainty_m="" # Optional maximum GBIF coordinate uncertainty in meters.
+gbif_max_distance_from_centroid_m="" # Optional maximum GBIF distance-from-centroid in meters.
 
 ### End: Modify this block to tailor your analysis ###
 
@@ -170,7 +177,14 @@ gg_apply_named_env_overrides \
   trait_download_dir GG_INPUT_TRAIT_DOWNLOAD_DIR \
   trait_download_timeout GG_INPUT_TRAIT_DOWNLOAD_TIMEOUT \
   trait_species_source GG_INPUT_TRAIT_SPECIES_SOURCE \
-  trait_databases GG_INPUT_TRAIT_DATABASES
+  trait_databases GG_INPUT_TRAIT_DATABASES \
+  gbif_api GG_INPUT_GBIF_API \
+  gbif_page_size GG_INPUT_GBIF_PAGE_SIZE \
+  gbif_max_occurrences_per_species GG_INPUT_GBIF_MAX_OCCURRENCES_PER_SPECIES \
+  gbif_grid_degrees GG_INPUT_GBIF_GRID_DEGREES \
+  gbif_min_match_confidence GG_INPUT_GBIF_MIN_MATCH_CONFIDENCE \
+  gbif_max_coordinate_uncertainty_m GG_INPUT_GBIF_MAX_COORDINATE_UNCERTAINTY_M \
+  gbif_max_distance_from_centroid_m GG_INPUT_GBIF_MAX_DISTANCE_FROM_CENTROID_M
 
 # Forward canonical config variables into the container environment.
 forward_config_vars_to_container_env "${gg_entrypoint_name}"

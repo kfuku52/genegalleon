@@ -41,6 +41,13 @@ GG_INPUT_TRAIT_PROFILE=gift_starter \
 bash workflow/gg_input_generation_entrypoint.sh
 ```
 
+For no-login GBIF distribution traits:
+
+```bash
+GG_INPUT_TRAIT_PROFILE=gbif_distribution \
+bash workflow/gg_input_generation_entrypoint.sh
+```
+
 Useful outputs to inspect afterward:
 
 - `workspace/output/input_generation/download_plan.resolved.tsv`

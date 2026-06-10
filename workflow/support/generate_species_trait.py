@@ -3,6 +3,7 @@
 import argparse
 import csv
 from dataclasses import dataclass
+import hashlib
 from io import BytesIO, StringIO
 import json
 import math
@@ -12,7 +13,7 @@ import shutil
 import sys
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 import zipfile
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 import pandas
@@ -39,6 +40,11 @@ SUPPORTED_DATABASES = {
         "acquisition_mode": "gift_api",
         "scope": "trait_subset_api",
         "notes": "Resolve target work_IDs via species lookup, then fetch requested trait IDs.",
+    },
+    "gbif": {
+        "acquisition_mode": "gbif_distribution",
+        "scope": "target_species_occurrence_search",
+        "notes": "Resolve species in the GBIF backbone and summarize no-login occurrence-search coordinates.",
     },
     "bien": {
         "acquisition_mode": "species_api",
@@ -119,6 +125,29 @@ DEFAULT_OUTPUT_PATH = Path("workspace/input/species_trait/species_trait.tsv")
 DEFAULT_GIFT_API = "https://gift.uni-goettingen.de/api/extended/"
 DEFAULT_GIFT_PAGE_SIZE = 10000
 GIFT_TRAIT_ID_PATTERN = re.compile(r"^\d+(?:\.\d+)+$")
+DEFAULT_GBIF_API = "https://api.gbif.org/v1/"
+DEFAULT_GBIF_PAGE_SIZE = 300
+DEFAULT_GBIF_MAX_OCCURRENCES_PER_SPECIES = 100000
+GBIF_SEARCH_HARD_LIMIT = 100000
+DEFAULT_GBIF_GRID_DEGREES = 1.0
+DEFAULT_GBIF_MIN_MATCH_CONFIDENCE = 90.0
+EARTH_RADIUS_KM = 6371.0088
+DEFAULT_GBIF_DISTRIBUTION_TRAITS = (
+    ("gbif_occurrence_count", "numeric"),
+    ("gbif_occurrence_used", "numeric"),
+    ("gbif_occurrence_truncated", "binary"),
+    ("gbif_northern_limit_lat", "numeric"),
+    ("gbif_southern_limit_lat", "numeric"),
+    ("gbif_latitudinal_breadth_deg", "numeric"),
+    ("gbif_western_limit_lon", "numeric"),
+    ("gbif_eastern_limit_lon", "numeric"),
+    ("gbif_longitudinal_breadth_deg", "numeric"),
+    ("gbif_occupied_grid_area_km2", "numeric"),
+    ("gbif_convex_hull_area_km2", "numeric"),
+    ("gbif_centroid_lat", "numeric"),
+    ("gbif_centroid_lon", "numeric"),
+    ("gbif_country_count", "numeric"),
+)
 
 
 @dataclass
@@ -135,6 +164,33 @@ class TraitPlanRow:
 
 def _log(message: str) -> None:
     print(message, flush=True)
+
+
+def builtin_gbif_trait_plan_rows() -> List[TraitPlanRow]:
+    return [
+        TraitPlanRow(
+            database="gbif",
+            source_column=source_column,
+            output_trait=source_column,
+            value_type=value_type,
+            aggregation="median",
+            positive_values={"1"} if value_type == "binary" else set(),
+            trait_key="",
+            trait_key_column="",
+        )
+        for source_column, value_type in DEFAULT_GBIF_DISTRIBUTION_TRAITS
+    ]
+
+
+def add_builtin_trait_plan_rows(
+    plan_rows: Sequence[TraitPlanRow],
+    requested_databases: Sequence[str],
+) -> List[TraitPlanRow]:
+    out = list(plan_rows)
+    requested = {database.strip().lower() for database in requested_databases}
+    if "gbif" in requested and not any(row.database == "gbif" for row in out):
+        out.extend(builtin_gbif_trait_plan_rows())
+    return out
 
 
 def normalize_species_name(value: object) -> str:
@@ -559,6 +615,20 @@ def parse_positive_int_option(value: object, key_name: str, default: int) -> int
     if parsed <= 0:
         raise ValueError("{} must be a positive integer: {}".format(key_name, value))
     return parsed
+
+
+def parse_optional_float_option(value: object, key_name: str) -> Optional[float]:
+    text = str(value or "").strip()
+    if text == "":
+        return None
+    parsed = float(text)
+    if math.isnan(parsed):
+        raise ValueError("{} must not be NaN.".format(key_name))
+    return parsed
+
+
+def split_csv_tokens(value: object) -> List[str]:
+    return [token.strip() for token in str(value or "").split(",") if token.strip() != ""]
 
 
 def normalize_base_uri(uri: str, fallback: str) -> str:
@@ -1112,6 +1182,456 @@ def fetch_gift_api_table(
     return merged
 
 
+def gbif_config_float(config: Dict[str, str], key_name: str, default: float) -> float:
+    value = parse_optional_float_option(config.get(key_name, ""), key_name=key_name)
+    return default if value is None else value
+
+
+def gbif_config_optional_float(config: Dict[str, str], key_name: str) -> Optional[float]:
+    return parse_optional_float_option(config.get(key_name, ""), key_name=key_name)
+
+
+def gbif_config_positive_int(config: Dict[str, str], key_name: str, default: int) -> int:
+    return parse_positive_int_option(config.get(key_name, ""), key_name=key_name, default=default)
+
+
+def normalize_longitude(value: float) -> float:
+    normalized = ((float(value) + 180.0) % 360.0) - 180.0
+    if normalized == -180.0 and float(value) > 0:
+        return 180.0
+    return normalized
+
+
+def circular_mean_longitude(longitudes: Sequence[float]) -> object:
+    if len(longitudes) == 0:
+        return pandas.NA
+    angles = [math.radians(lon) for lon in longitudes]
+    mean_sin = sum(math.sin(angle) for angle in angles) / len(angles)
+    mean_cos = sum(math.cos(angle) for angle in angles) / len(angles)
+    if mean_sin == 0 and mean_cos == 0:
+        return 0.0
+    return normalize_longitude(math.degrees(math.atan2(mean_sin, mean_cos)))
+
+
+def minimal_longitude_interval(longitudes: Sequence[float]) -> Tuple[object, object, object]:
+    if len(longitudes) == 0:
+        return (pandas.NA, pandas.NA, pandas.NA)
+    longitudes_360 = sorted((float(lon) + 360.0) % 360.0 for lon in longitudes)
+    if len(longitudes_360) == 1:
+        lon = normalize_longitude(longitudes_360[0])
+        return (lon, lon, 0.0)
+    gaps = [
+        longitudes_360[index + 1] - longitudes_360[index]
+        for index in range(len(longitudes_360) - 1)
+    ]
+    gaps.append(longitudes_360[0] + 360.0 - longitudes_360[-1])
+    largest_gap_index = max(range(len(gaps)), key=lambda index: gaps[index])
+    west_360 = longitudes_360[(largest_gap_index + 1) % len(longitudes_360)]
+    east_360 = longitudes_360[largest_gap_index]
+    breadth = 360.0 - gaps[largest_gap_index]
+    return (normalize_longitude(west_360), normalize_longitude(east_360), breadth)
+
+
+def unwrap_longitudes_around_center(longitudes: Sequence[float], center_longitude: float) -> List[float]:
+    return [
+        center_longitude + ((float(lon) - center_longitude + 180.0) % 360.0) - 180.0
+        for lon in longitudes
+    ]
+
+
+def occupied_grid_area_km2(points: Sequence[Tuple[float, float, str]], grid_degrees: float) -> object:
+    if len(points) == 0:
+        return pandas.NA
+    if grid_degrees <= 0:
+        raise ValueError("gbif_grid_degrees must be positive: {}".format(grid_degrees))
+    occupied_cells: Set[Tuple[int, int]] = set()
+    for lat, lon, _country in points:
+        lat_clamped = min(max(float(lat), -90.0), 90.0 - 1e-12)
+        lon_normalized = normalize_longitude(float(lon))
+        lat_index = int(math.floor((lat_clamped + 90.0) / grid_degrees))
+        lon_index = int(math.floor((lon_normalized + 180.0) / grid_degrees))
+        occupied_cells.add((lat_index, lon_index))
+
+    area = 0.0
+    lon_width_rad = math.radians(grid_degrees)
+    for lat_index, _lon_index in occupied_cells:
+        lat_min = -90.0 + lat_index * grid_degrees
+        lat_max = min(lat_min + grid_degrees, 90.0)
+        area += (
+            EARTH_RADIUS_KM
+            * EARTH_RADIUS_KM
+            * lon_width_rad
+            * abs(math.sin(math.radians(lat_max)) - math.sin(math.radians(lat_min)))
+        )
+    return area
+
+
+def monotonic_chain_convex_hull(points: Sequence[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    unique_points = sorted(set(points))
+    if len(unique_points) <= 1:
+        return unique_points
+
+    def cross(origin: Tuple[float, float], point_a: Tuple[float, float], point_b: Tuple[float, float]) -> float:
+        return (
+            (point_a[0] - origin[0]) * (point_b[1] - origin[1])
+            - (point_a[1] - origin[1]) * (point_b[0] - origin[0])
+        )
+
+    lower: List[Tuple[float, float]] = []
+    for point in unique_points:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+            lower.pop()
+        lower.append(point)
+
+    upper: List[Tuple[float, float]] = []
+    for point in reversed(unique_points):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+            upper.pop()
+        upper.append(point)
+
+    return lower[:-1] + upper[:-1]
+
+
+def polygon_area_km2(points: Sequence[Tuple[float, float]]) -> float:
+    if len(points) < 3:
+        return 0.0
+    area = 0.0
+    for index, point in enumerate(points):
+        next_point = points[(index + 1) % len(points)]
+        area += point[0] * next_point[1] - next_point[0] * point[1]
+    return abs(area) / 2.0
+
+
+def convex_hull_area_km2(points: Sequence[Tuple[float, float, str]]) -> object:
+    if len(points) == 0:
+        return pandas.NA
+    if len(points) < 3:
+        return 0.0
+    latitudes = [float(point[0]) for point in points]
+    longitudes = [float(point[1]) for point in points]
+    center_lat = sum(latitudes) / len(latitudes)
+    center_lon = circular_mean_longitude(longitudes)
+    if center_lon is pandas.NA:
+        return pandas.NA
+    unwrapped_longitudes = unwrap_longitudes_around_center(longitudes, float(center_lon))
+    projected_points = [
+        (
+            EARTH_RADIUS_KM
+            * math.radians(lon - float(center_lon))
+            * math.cos(math.radians(center_lat)),
+            EARTH_RADIUS_KM * math.radians(lat - center_lat),
+        )
+        for lat, lon in zip(latitudes, unwrapped_longitudes)
+    ]
+    hull = monotonic_chain_convex_hull(projected_points)
+    return polygon_area_km2(hull)
+
+
+def build_gbif_distribution_metrics(
+    reported_count: int,
+    points: Sequence[Tuple[float, float, str]],
+    truncated: bool,
+    grid_degrees: float,
+) -> Dict[str, object]:
+    metrics: Dict[str, object] = {
+        "gbif_occurrence_count": int(reported_count),
+        "gbif_occurrence_used": int(len(points)),
+        "gbif_occurrence_truncated": int(bool(truncated)),
+    }
+    if len(points) == 0:
+        for key_name, _value_type in DEFAULT_GBIF_DISTRIBUTION_TRAITS:
+            metrics.setdefault(key_name, pandas.NA)
+        metrics["gbif_occurrence_count"] = int(reported_count)
+        metrics["gbif_occurrence_used"] = 0
+        metrics["gbif_occurrence_truncated"] = int(bool(truncated))
+        return metrics
+
+    latitudes = [float(point[0]) for point in points]
+    longitudes = [float(point[1]) for point in points]
+    west_lon, east_lon, lon_breadth = minimal_longitude_interval(longitudes)
+    countries = {str(point[2]).strip() for point in points if str(point[2]).strip() != ""}
+    metrics.update(
+        {
+            "gbif_northern_limit_lat": max(latitudes),
+            "gbif_southern_limit_lat": min(latitudes),
+            "gbif_latitudinal_breadth_deg": max(latitudes) - min(latitudes),
+            "gbif_western_limit_lon": west_lon,
+            "gbif_eastern_limit_lon": east_lon,
+            "gbif_longitudinal_breadth_deg": lon_breadth,
+            "gbif_occupied_grid_area_km2": occupied_grid_area_km2(points, grid_degrees=grid_degrees),
+            "gbif_convex_hull_area_km2": convex_hull_area_km2(points),
+            "gbif_centroid_lat": sum(latitudes) / len(latitudes),
+            "gbif_centroid_lon": circular_mean_longitude(longitudes),
+            "gbif_country_count": len(countries),
+        }
+    )
+    return metrics
+
+
+def empty_gbif_distribution_metrics() -> Dict[str, object]:
+    return {key_name: pandas.NA for key_name, _value_type in DEFAULT_GBIF_DISTRIBUTION_TRAITS}
+
+
+def gbif_query_url(api_base: str, resource: str, params: Dict[str, object]) -> str:
+    return "{}{}?{}".format(api_base, resource.lstrip("/"), urlencode(params, doseq=True))
+
+
+def fetch_gbif_species_match(api_base: str, species_name: str, timeout: float) -> Dict[str, object]:
+    url = gbif_query_url(
+        api_base=api_base,
+        resource="species/match",
+        params={"name": species_name.replace("_", " "), "verbose": "false"},
+    )
+    payload = fetch_json_payload(url=url, timeout=timeout)
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
+def gbif_match_taxon_key(match_row: Dict[str, object]) -> str:
+    for key_name in ("speciesKey", "usageKey", "acceptedUsageKey"):
+        value = str(match_row.get(key_name, "") or "").strip()
+        if value != "":
+            return value
+    return ""
+
+
+def gbif_parse_float(value: object) -> Optional[float]:
+    try:
+        parsed = float(str(value or "").strip())
+    except Exception:
+        return None
+    if math.isnan(parsed):
+        return None
+    return parsed
+
+
+def gbif_occurrence_query_params(
+    taxon_key: str,
+    limit: int,
+    offset: int,
+    config: Dict[str, str],
+) -> Dict[str, object]:
+    params: Dict[str, object] = {
+        "taxonKey": taxon_key,
+        "hasCoordinate": "true",
+        "hasGeospatialIssue": "false",
+        "occurrenceStatus": "PRESENT",
+        "limit": int(limit),
+        "offset": int(offset),
+    }
+    include_basis = split_csv_tokens(config.get("gbif_include_basis_of_record", ""))
+    if include_basis:
+        params["basisOfRecord"] = include_basis
+    return params
+
+
+def gbif_row_passes_local_filters(row: Dict[str, object], config: Dict[str, str]) -> bool:
+    basis = str(row.get("basisOfRecord", "") or "").strip().upper()
+    include_basis = {token.upper() for token in split_csv_tokens(config.get("gbif_include_basis_of_record", ""))}
+    exclude_basis = {token.upper() for token in split_csv_tokens(config.get("gbif_exclude_basis_of_record", ""))}
+    if include_basis and basis not in include_basis:
+        return False
+    if exclude_basis and basis in exclude_basis:
+        return False
+
+    max_uncertainty = gbif_config_optional_float(config, "gbif_max_coordinate_uncertainty_m")
+    if max_uncertainty is not None:
+        uncertainty = gbif_parse_float(row.get("coordinateUncertaintyInMeters", ""))
+        if uncertainty is not None and uncertainty > max_uncertainty:
+            return False
+
+    max_centroid_distance = gbif_config_optional_float(config, "gbif_max_distance_from_centroid_m")
+    if max_centroid_distance is not None:
+        centroid_distance = gbif_parse_float(row.get("distanceFromCentroidInMeters", ""))
+        if centroid_distance is not None and centroid_distance > max_centroid_distance:
+            return False
+
+    return True
+
+
+def gbif_row_to_point(row: Dict[str, object], config: Dict[str, str]) -> Optional[Tuple[float, float, str]]:
+    if not gbif_row_passes_local_filters(row=row, config=config):
+        return None
+    lat = gbif_parse_float(row.get("decimalLatitude", ""))
+    lon = gbif_parse_float(row.get("decimalLongitude", ""))
+    if lat is None or lon is None:
+        return None
+    if lat < -90.0 or lat > 90.0 or lon < -180.0 or lon > 180.0:
+        return None
+    return (lat, normalize_longitude(lon), str(row.get("countryCode", "") or "").strip())
+
+
+def fetch_gbif_occurrence_points(
+    api_base: str,
+    taxon_key: str,
+    config: Dict[str, str],
+    timeout: float,
+) -> Tuple[int, List[Tuple[float, float, str]], bool]:
+    page_size = gbif_config_positive_int(config, "gbif_page_size", DEFAULT_GBIF_PAGE_SIZE)
+    page_size = min(page_size, DEFAULT_GBIF_PAGE_SIZE)
+    requested_max = gbif_config_positive_int(
+        config,
+        "gbif_max_occurrences_per_species",
+        DEFAULT_GBIF_MAX_OCCURRENCES_PER_SPECIES,
+    )
+    fetch_limit = min(requested_max, GBIF_SEARCH_HARD_LIMIT)
+    count_url = gbif_query_url(
+        api_base=api_base,
+        resource="occurrence/search",
+        params=gbif_occurrence_query_params(taxon_key=taxon_key, limit=0, offset=0, config=config),
+    )
+    count_payload = fetch_json_payload(url=count_url, timeout=timeout)
+    reported_count = int(count_payload.get("count", 0) if isinstance(count_payload, dict) else 0)
+    target_records = min(reported_count, fetch_limit)
+    truncated = reported_count > target_records
+    points: List[Tuple[float, float, str]] = []
+    offset = 0
+    while offset < target_records:
+        limit = min(page_size, target_records - offset)
+        page_url = gbif_query_url(
+            api_base=api_base,
+            resource="occurrence/search",
+            params=gbif_occurrence_query_params(taxon_key=taxon_key, limit=limit, offset=offset, config=config),
+        )
+        page_payload = fetch_json_payload(url=page_url, timeout=timeout)
+        if not isinstance(page_payload, dict):
+            break
+        rows = page_payload.get("results", [])
+        if not isinstance(rows, list) or len(rows) == 0:
+            break
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            point = gbif_row_to_point(row=row, config=config)
+            if point is not None:
+                points.append(point)
+        offset += len(rows)
+        if len(rows) < limit:
+            break
+    return reported_count, points, truncated
+
+
+def gbif_cache_key(
+    species: Sequence[str],
+    config: Dict[str, str],
+) -> str:
+    cache_config_keys = [
+        "uri",
+        "gbif_page_size",
+        "gbif_max_occurrences_per_species",
+        "gbif_grid_degrees",
+        "gbif_min_match_confidence",
+        "gbif_max_coordinate_uncertainty_m",
+        "gbif_max_distance_from_centroid_m",
+        "gbif_include_basis_of_record",
+        "gbif_exclude_basis_of_record",
+    ]
+    payload = {
+        "species": sorted(species),
+        "config": {key: str(config.get(key, "") or "") for key in cache_config_keys},
+        "version": 1,
+    }
+    digest = hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
+def gbif_cache_path(downloads_dir: Path, species: Sequence[str], config: Dict[str, str]) -> Path:
+    return downloads_dir / "gbif" / "gbif_distribution_{}.tsv".format(gbif_cache_key(species, config))
+
+
+def fetch_gbif_distribution_table(
+    database: str,
+    config: Dict[str, str],
+    species: Sequence[str],
+    downloads_dir: Path,
+    timeout: float,
+    dry_run: bool,
+) -> Optional[pandas.DataFrame]:
+    api_base = normalize_base_uri(config.get("uri", ""), DEFAULT_GBIF_API)
+    grid_degrees = gbif_config_float(config, "gbif_grid_degrees", DEFAULT_GBIF_GRID_DEGREES)
+    min_match_confidence = gbif_config_float(
+        config,
+        "gbif_min_match_confidence",
+        DEFAULT_GBIF_MIN_MATCH_CONFIDENCE,
+    )
+    use_cache = parse_bool_option(config.get("gbif_use_cache", ""), key_name="gbif_use_cache", default=True)
+    effective_config = dict(config)
+    effective_config["uri"] = api_base
+    cache_path = gbif_cache_path(downloads_dir=downloads_dir, species=species, config=effective_config)
+    if use_cache and cache_path.exists() and not dry_run:
+        _log("[{}] using cached GBIF distribution table: {}".format(database, cache_path))
+        return read_table(cache_path, delimiter="\t")
+
+    records: List[Dict[str, object]] = []
+    for species_name in species:
+        if dry_run:
+            match_url = gbif_query_url(
+                api_base=api_base,
+                resource="species/match",
+                params={"name": species_name.replace("_", " "), "verbose": "false"},
+            )
+            _log("[dry-run] {} request: {}".format(database, match_url))
+            continue
+        match_row = fetch_gbif_species_match(api_base=api_base, species_name=species_name, timeout=timeout)
+        match_confidence = gbif_parse_float(match_row.get("confidence", ""))
+        taxon_key = gbif_match_taxon_key(match_row)
+        record: Dict[str, object] = {
+            "species": species_name,
+            "gbif_taxon_key": taxon_key,
+            "gbif_match_confidence": match_confidence if match_confidence is not None else pandas.NA,
+            "gbif_match_type": str(match_row.get("matchType", "") or "").strip(),
+        }
+        if taxon_key == "":
+            _log("WARNING: [gbif] no taxon key resolved for '{}'.".format(species_name))
+            record.update(empty_gbif_distribution_metrics())
+            records.append(record)
+            continue
+        if match_confidence is not None and match_confidence < min_match_confidence:
+            _log(
+                "WARNING: [gbif] low-confidence match for '{}': confidence={} taxonKey={}".format(
+                    species_name,
+                    match_confidence,
+                    taxon_key,
+                )
+            )
+            record.update(empty_gbif_distribution_metrics())
+            records.append(record)
+            continue
+        reported_count, points, truncated = fetch_gbif_occurrence_points(
+            api_base=api_base,
+            taxon_key=taxon_key,
+            config=effective_config,
+            timeout=timeout,
+        )
+        record.update(
+            build_gbif_distribution_metrics(
+                reported_count=reported_count,
+                points=points,
+                truncated=truncated,
+                grid_degrees=grid_degrees,
+            )
+        )
+        records.append(record)
+        _log(
+            "[gbif] {}: occurrence_count={} used={} truncated={}".format(
+                species_name,
+                reported_count,
+                len(points),
+                int(bool(truncated)),
+            )
+        )
+
+    if dry_run:
+        return None
+    out = pandas.DataFrame.from_records(records)
+    if use_cache:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        out.to_csv(cache_path, sep="\t", index=False)
+        _log("[{}] cached GBIF distribution table: {}".format(database, cache_path))
+    return out
+
+
 def load_database_table(
     database: str,
     config: Dict[str, str],
@@ -1145,6 +1665,15 @@ def load_database_table(
             config=config,
             plan_rows=plan_rows,
             species=species,
+            timeout=timeout,
+            dry_run=dry_run,
+        )
+    if acquisition_mode == "gbif_distribution":
+        return fetch_gbif_distribution_table(
+            database=database,
+            config=config,
+            species=species,
+            downloads_dir=downloads_dir,
             timeout=timeout,
             dry_run=dry_run,
         )
@@ -1397,7 +1926,71 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0,
         help="Max rows for --print-gift-traits (0 means no limit).",
     )
+    parser.add_argument(
+        "--gbif-api",
+        default=DEFAULT_GBIF_API,
+        help="Base URI for the GBIF API used by gbif_distribution.",
+    )
+    parser.add_argument(
+        "--gbif-page-size",
+        type=int,
+        default=DEFAULT_GBIF_PAGE_SIZE,
+        help="Occurrence search page size for gbif_distribution.",
+    )
+    parser.add_argument(
+        "--gbif-max-occurrences-per-species",
+        type=int,
+        default=DEFAULT_GBIF_MAX_OCCURRENCES_PER_SPECIES,
+        help="Maximum occurrence-search records to fetch per species without GBIF login.",
+    )
+    parser.add_argument(
+        "--gbif-grid-degrees",
+        type=float,
+        default=DEFAULT_GBIF_GRID_DEGREES,
+        help="Grid size in degrees for gbif_occupied_grid_area_km2.",
+    )
+    parser.add_argument(
+        "--gbif-min-match-confidence",
+        type=float,
+        default=DEFAULT_GBIF_MIN_MATCH_CONFIDENCE,
+        help="Minimum GBIF species-match confidence used for occurrence retrieval.",
+    )
+    parser.add_argument(
+        "--gbif-max-coordinate-uncertainty-m",
+        default="",
+        help="Optional maximum coordinateUncertaintyInMeters for GBIF occurrence points.",
+    )
+    parser.add_argument(
+        "--gbif-max-distance-from-centroid-m",
+        default="",
+        help="Optional maximum distanceFromCentroidInMeters for GBIF occurrence points.",
+    )
     return parser
+
+
+def apply_gbif_cli_overrides(config: Dict[str, str], args: argparse.Namespace) -> Dict[str, str]:
+    merged = dict(config)
+    if str(args.gbif_api).strip() != DEFAULT_GBIF_API:
+        merged["uri"] = str(args.gbif_api).strip()
+    cli_defaults = {
+        "gbif_page_size": DEFAULT_GBIF_PAGE_SIZE,
+        "gbif_max_occurrences_per_species": DEFAULT_GBIF_MAX_OCCURRENCES_PER_SPECIES,
+        "gbif_grid_degrees": DEFAULT_GBIF_GRID_DEGREES,
+        "gbif_min_match_confidence": DEFAULT_GBIF_MIN_MATCH_CONFIDENCE,
+    }
+    for key_name, default_value in cli_defaults.items():
+        arg_value = getattr(args, key_name)
+        if str(arg_value) != str(default_value):
+            merged[key_name] = str(arg_value)
+    optional_args = [
+        "gbif_max_coordinate_uncertainty_m",
+        "gbif_max_distance_from_centroid_m",
+    ]
+    for arg_name in optional_args:
+        arg_value = str(getattr(args, arg_name) or "").strip()
+        if arg_value != "":
+            merged[arg_name] = arg_value
+    return merged
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -1447,10 +2040,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     _log("Target species source: {}".format(args.species_source))
     _log("Resolved target species: {}".format(len(target_species)))
 
-    if not trait_plan_path.exists():
+    trait_plan_missing = not trait_plan_path.exists()
+    if trait_plan_missing:
         message = "Trait plan not found: {}".format(trait_plan_path)
-        if args.strict:
-            parser.error(message)
         warnings.append(message)
         plan_rows: List[TraitPlanRow] = []
     else:
@@ -1469,6 +2061,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     if len(requested_databases) == 0 and len(plan_rows) > 0:
         requested_databases = sorted({row.database for row in plan_rows})
+    plan_rows = add_builtin_trait_plan_rows(plan_rows=plan_rows, requested_databases=requested_databases)
+    if trait_plan_missing and args.strict and len(plan_rows) == 0:
+        parser.error("Trait plan not found: {}".format(trait_plan_path))
 
     species_sorted = sorted(target_species)
     target_species_by_base: Dict[str, Set[str]] = {}
@@ -1488,6 +2083,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if "acquisition_mode" not in config:
             config = dict(config)
             config["acquisition_mode"] = default_mode
+        if database == "gbif":
+            config = apply_gbif_cli_overrides(config=config, args=args)
         try:
             db_table = load_database_table(
                 database=database,

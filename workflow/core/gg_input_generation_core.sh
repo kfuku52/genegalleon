@@ -45,6 +45,13 @@ trait_download_dir="${trait_download_dir:-}"
 trait_download_timeout="${trait_download_timeout:-120}"
 trait_species_source="${trait_species_source:-download_manifest}"
 trait_databases="${trait_databases:-auto}"
+gbif_api="${gbif_api:-}"
+gbif_page_size="${gbif_page_size:-}"
+gbif_max_occurrences_per_species="${gbif_max_occurrences_per_species:-}"
+gbif_grid_degrees="${gbif_grid_degrees:-}"
+gbif_min_match_confidence="${gbif_min_match_confidence:-}"
+gbif_max_coordinate_uncertainty_m="${gbif_max_coordinate_uncertainty_m:-}"
+gbif_max_distance_from_centroid_m="${gbif_max_distance_from_centroid_m:-}"
 gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
 
 enable_all_run_flags_for_debug_mode
@@ -59,8 +66,14 @@ case "${trait_profile}" in
       trait_databases="gift"
     fi
     ;;
+  gbif_distribution)
+    run_generate_species_trait=1
+    if [[ -z "${trait_databases}" || "${trait_databases}" == "auto" ]]; then
+      trait_databases="gbif"
+    fi
+    ;;
   *)
-    echo "Invalid trait_profile: ${trait_profile} (allowed: none|gift_starter)"
+    echo "Invalid trait_profile: ${trait_profile} (allowed: none|gift_starter|gbif_distribution)"
     exit 1
     ;;
 esac
@@ -1252,6 +1265,27 @@ run_trait_stage() {
   cmd+=(--output "${species_trait_output}")
   cmd+=(--download-timeout "${trait_download_timeout}")
   cmd+=(--stats-output "${trait_stats_file}")
+  if [[ -n "${gbif_api}" ]]; then
+    cmd+=(--gbif-api "${gbif_api}")
+  fi
+  if [[ -n "${gbif_page_size}" ]]; then
+    cmd+=(--gbif-page-size "${gbif_page_size}")
+  fi
+  if [[ -n "${gbif_max_occurrences_per_species}" ]]; then
+    cmd+=(--gbif-max-occurrences-per-species "${gbif_max_occurrences_per_species}")
+  fi
+  if [[ -n "${gbif_grid_degrees}" ]]; then
+    cmd+=(--gbif-grid-degrees "${gbif_grid_degrees}")
+  fi
+  if [[ -n "${gbif_min_match_confidence}" ]]; then
+    cmd+=(--gbif-min-match-confidence "${gbif_min_match_confidence}")
+  fi
+  if [[ -n "${gbif_max_coordinate_uncertainty_m}" ]]; then
+    cmd+=(--gbif-max-coordinate-uncertainty-m "${gbif_max_coordinate_uncertainty_m}")
+  fi
+  if [[ -n "${gbif_max_distance_from_centroid_m}" ]]; then
+    cmd+=(--gbif-max-distance-from-centroid-m "${gbif_max_distance_from_centroid_m}")
+  fi
   if [[ -n "${trait_manifest_path}" ]]; then
     cmd+=(--download-manifest "${trait_manifest_path}")
   fi

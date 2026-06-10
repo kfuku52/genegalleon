@@ -253,6 +253,13 @@ download_manifest
 download_only
 download_timeout
 dry_run
+gbif_api
+gbif_grid_degrees
+gbif_max_coordinate_uncertainty_m
+gbif_max_distance_from_centroid_m
+gbif_max_occurrences_per_species
+gbif_min_match_confidence
+gbif_page_size
 gene_grouping_mode
 http_header
 input_dir

@@ -662,6 +662,7 @@ def test_input_generation_trait_profile_preset_is_wired():
     assert "apply_env_override()" not in core_text
     assert 'case "${trait_profile}" in' in core_text
     assert "gift_starter" in core_text
+    assert "gbif_distribution" in core_text
 
 
 def test_gg_util_has_common_forward_config_export_helpers():
@@ -2534,7 +2535,8 @@ def test_plot_species_trees_r_filters_missing_tree_inputs():
     assert "has_nonempty_file <- function(file_path)" in script
     assert "tree_specs = Filter(function(spec) has_nonempty_file(spec[['nwk']]), tree_specs)" in script
     assert "if (length(tree_specs) == 0) {" in script
-    assert "out = plot_list(gglist = plots, ncol = min(2, length(plots)))" in script
+    assert "plot_ncol = min(2, length(plots))" in script
+    assert "out = plot_list(gglist = plots, ncol = plot_ncol)" in script
 
 
 def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps():

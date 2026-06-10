@@ -221,11 +221,11 @@ def test_generate_species_trait_species_api_mode_downloads_target_species_only(t
 def test_generate_species_trait_normalizes_taxonomic_qualifiers_for_matching():
     mod = load_script_module()
 
-    assert mod.normalize_species_name("Dictyostelium cf. discoideum") == "Dictyostelium_cf_discoideum"
-    assert mod.normalize_species_name("Bacillus subtilis subsp. subtilis") == "Bacillus_subtilis_subsp_subtilis"
-    assert mod.normalize_species_name("Amoeba sp. JDS-Ruffled") == "Amoeba_sp_JDSRuffled"
-    assert mod.split_genus_epithet("Dictyostelium_cf_discoideum") == ("Dictyostelium", "discoideum")
-    assert mod.split_genus_epithet("Amoeba_sp_JDSRuffled") is None
+    assert mod.normalize_species_name("Dictyostelium cf. discoideum") == "Dictyostelium_cf._discoideum"
+    assert mod.normalize_species_name("Bacillus subtilis subsp. subtilis") == "Bacillus_subtilis_subsp._subtilis"
+    assert mod.normalize_species_name("Amoeba sp. JDS-Ruffled") == "Amoeba_sp._JDS-Ruffled"
+    assert mod.split_genus_epithet("Dictyostelium_cf._discoideum") == ("Dictyostelium", "discoideum")
+    assert mod.split_genus_epithet("Amoeba_sp._JDS-Ruffled") is None
 
 
 def test_generate_species_trait_maps_base_species_rows_to_unique_qualified_target(tmp_path):
@@ -279,7 +279,7 @@ def test_generate_species_trait_maps_base_species_rows_to_unique_qualified_targe
 
     df = pandas.read_csv(output, sep="\t")
     assert df.shape[0] == 1
-    assert df.loc[0, "species"] == "Dictyostelium_cf_discoideum"
+    assert df.loc[0, "species"] == "Dictyostelium_cf._discoideum"
     assert df.loc[0, "lifespan_years"] == 7
 
 
@@ -336,7 +336,7 @@ def test_generate_species_trait_does_not_duplicate_base_rows_when_exact_target_e
     df = pandas.read_csv(output, sep="\t")
     value_map = dict(zip(df["species"], df["lifespan_years"]))
     assert value_map["Dictyostelium_discoideum"] == 7
-    assert pandas.isna(value_map["Dictyostelium_cf_discoideum"])
+    assert pandas.isna(value_map["Dictyostelium_cf._discoideum"])
 
 
 def test_generate_species_trait_strict_fails_when_source_column_missing(tmp_path):
@@ -823,6 +823,144 @@ def test_generate_species_trait_print_supported_databases():
     assert "database\tacquisition_mode\tretrieval_scope\tnotes" in completed.stdout
     assert "eltontraits\tbulk\tall_species_snapshot" in completed.stdout
     assert "gift\tgift_api\ttrait_subset_api" in completed.stdout
+    assert "gbif\tgbif_distribution\ttarget_species_occurrence_search" in completed.stdout
+
+
+def test_generate_species_trait_gbif_distribution_preset_without_trait_files(tmp_path):
+    manifest = tmp_path / "download_plan.tsv"
+    write_text(
+        manifest,
+        (
+            "provider\tid\tspecies_key\n"
+            "local\ta\tHomo_sapiens\n"
+            "local\tb\tMus_musculus\n"
+        ),
+    )
+    request_log = []
+    occurrences = {
+        "100": [
+            {"decimalLatitude": 10, "decimalLongitude": 100, "countryCode": "US", "basisOfRecord": "HUMAN_OBSERVATION"},
+            {"decimalLatitude": 10, "decimalLongitude": 110, "countryCode": "US", "basisOfRecord": "HUMAN_OBSERVATION"},
+            {"decimalLatitude": 20, "decimalLongitude": 100, "countryCode": "JP", "basisOfRecord": "HUMAN_OBSERVATION"},
+        ],
+        "200": [],
+    }
+
+    class GbifHandler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            parsed = urlparse(self.path)
+            query_map = parse_qs(parsed.query)
+            request_log.append((parsed.path, query_map))
+            if parsed.path == "/v1/species/match":
+                name = query_map.get("name", [""])[0]
+                if name == "Homo sapiens":
+                    payload = {
+                        "usageKey": 100,
+                        "speciesKey": 100,
+                        "matchType": "EXACT",
+                        "confidence": 99,
+                    }
+                elif name == "Mus musculus":
+                    payload = {
+                        "usageKey": 200,
+                        "speciesKey": 200,
+                        "matchType": "EXACT",
+                        "confidence": 99,
+                    }
+                else:
+                    payload = {"matchType": "NONE", "confidence": 0}
+            elif parsed.path == "/v1/occurrence/search":
+                taxon_key = query_map.get("taxonKey", [""])[0]
+                rows = occurrences.get(taxon_key, [])
+                limit = int(query_map.get("limit", ["20"])[0] or "20")
+                offset = int(query_map.get("offset", ["0"])[0] or "0")
+                payload = {
+                    "offset": offset,
+                    "limit": limit,
+                    "count": len(rows),
+                    "endOfRecords": offset + limit >= len(rows),
+                    "results": rows[offset : offset + limit] if limit > 0 else [],
+                }
+            else:
+                payload = {}
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt, *args):  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), GbifHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    completed = None
+    output = tmp_path / "species_trait.tsv"
+    try:
+        completed = run_script(
+            "--download-manifest",
+            str(manifest),
+            "--trait-plan",
+            str(tmp_path / "missing_trait_plan.tsv"),
+            "--database-sources",
+            str(tmp_path / "missing_trait_database_sources.tsv"),
+            "--databases",
+            "gbif",
+            "--downloads-dir",
+            str(tmp_path / "downloads"),
+            "--output",
+            str(output),
+            "--gbif-api",
+            f"http://127.0.0.1:{server.server_port}/v1/",
+            "--gbif-page-size",
+            "2",
+            "--gbif-grid-degrees",
+            "10",
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+        server.server_close()
+
+    assert completed is not None
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    df = pandas.read_csv(output, sep="\t")
+    assert "gbif_northern_limit_lat" in df.columns
+    assert "gbif_occupied_grid_area_km2" in df.columns
+
+    rows = {row["species"]: row for row in df.to_dict(orient="records")}
+    homo = rows["Homo_sapiens"]
+    assert homo["gbif_occurrence_count"] == 3
+    assert homo["gbif_occurrence_used"] == 3
+    assert homo["gbif_occurrence_truncated"] == 0
+    assert homo["gbif_northern_limit_lat"] == 20
+    assert homo["gbif_southern_limit_lat"] == 10
+    assert homo["gbif_latitudinal_breadth_deg"] == 10
+    assert homo["gbif_western_limit_lon"] == 100
+    assert homo["gbif_eastern_limit_lon"] == 110
+    assert homo["gbif_longitudinal_breadth_deg"] == 10
+    assert homo["gbif_country_count"] == 2
+    assert homo["gbif_occupied_grid_area_km2"] > 0
+    assert homo["gbif_convex_hull_area_km2"] > 0
+    assert 100 <= homo["gbif_centroid_lon"] <= 110
+
+    mus = rows["Mus_musculus"]
+    assert mus["gbif_occurrence_count"] == 0
+    assert mus["gbif_occurrence_used"] == 0
+    assert pandas.isna(mus["gbif_northern_limit_lat"])
+    search_calls = [query for path, query in request_log if path == "/v1/occurrence/search"]
+    assert any(query.get("limit") == ["0"] and query.get("taxonKey") == ["100"] for query in search_calls)
+    assert any(query.get("offset") == ["2"] and query.get("taxonKey") == ["100"] for query in search_calls)
+
+
+def test_gbif_longitude_interval_handles_antimeridian():
+    module = load_script_module()
+    west, east, breadth = module.minimal_longitude_interval([179.0, -179.0])
+    assert west == 179.0
+    assert east == -179.0
+    assert breadth == 2.0
 
 
 def test_aggregate_trait_column_mode_prefers_sorted_value_on_tie():

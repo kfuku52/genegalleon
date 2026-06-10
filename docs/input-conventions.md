@@ -471,7 +471,7 @@ Alternative runtime overrides (without editing files) via env vars:
 - `GG_INPUT_SUMMARY_OUTPUT`,
 - `GG_INPUT_RUN_FORMAT_INPUTS`, `GG_INPUT_RUN_VALIDATE_INPUTS`,
 - trait generation:
-  `GG_INPUT_TRAIT_PROFILE` (`none` or `gift_starter`; default `none`),
+  `GG_INPUT_TRAIT_PROFILE` (`none`, `gift_starter`, or `gbif_distribution`; default `none`),
   `GG_INPUT_RUN_GENERATE_SPECIES_TRAIT`,
   `GG_INPUT_TRAIT_SPECIES_SOURCE` (`download_manifest` or `species_cds`; default `download_manifest`),
   `GG_INPUT_SPECIES_TRAIT_OUTPUT`,
@@ -479,7 +479,15 @@ Alternative runtime overrides (without editing files) via env vars:
   `GG_INPUT_TRAIT_DATABASE_SOURCES`,
   `GG_INPUT_TRAIT_DATABASES`,
   `GG_INPUT_TRAIT_DOWNLOAD_DIR`,
-  `GG_INPUT_TRAIT_DOWNLOAD_TIMEOUT`.
+  `GG_INPUT_TRAIT_DOWNLOAD_TIMEOUT`,
+  GBIF distribution preset knobs:
+  `GG_INPUT_GBIF_API`,
+  `GG_INPUT_GBIF_PAGE_SIZE`,
+  `GG_INPUT_GBIF_MAX_OCCURRENCES_PER_SPECIES`,
+  `GG_INPUT_GBIF_GRID_DEGREES`,
+  `GG_INPUT_GBIF_MIN_MATCH_CONFIDENCE`,
+  `GG_INPUT_GBIF_MAX_COORDINATE_UNCERTAINTY_M`,
+  `GG_INPUT_GBIF_MAX_DISTANCE_FROM_CENTROID_M`.
 - per-provider download caps:
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBL`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBLPLANTS`,
@@ -499,4 +507,10 @@ Quick preset example (enable trait stage with GIFT starter config):
 
 ```bash
 GG_INPUT_TRAIT_PROFILE=gift_starter bash workflow/gg_input_generation_entrypoint.sh
+```
+
+Quick GBIF distribution-trait preset (no trait-plan file or GBIF login required):
+
+```bash
+GG_INPUT_TRAIT_PROFILE=gbif_distribution bash workflow/gg_input_generation_entrypoint.sh
 ```
