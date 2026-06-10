@@ -364,10 +364,12 @@ def test_resolve_annotation_species_normalizes_legacy_trailing_underscore(tmp_pa
 def test_species_name_from_path_or_dot_preserves_taxonomic_qualifiers(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        'printf "%s\\n%s\\n%s\\n" '
+        'printf "%s\\n%s\\n%s\\n%s\\n%s\\n" '
         '"$(gg_species_name_from_path_or_dot "Dictyostelium_cf_discoideum_GCA_054859205.1.fa.gz")" '
-        '"$(gg_species_name_from_path_or_dot "Bacillus_subtilis_subsp_subtilis_demo.fa.gz")" '
-        '"$(gg_species_name_from_path_or_dot "Amoeba_sp_JDSRuffled.tsv")"'
+        '"$(gg_species_name_from_path_or_dot "Bacillus_subtilis_subsp._subtilis_demo.fa.gz")" '
+        '"$(gg_species_name_from_path_or_dot "Amoeba_sp._JDS-Ruffled.tsv")" '
+        '"$(gg_species_name_from_path_or_dot "Arisaema_sp._aooni_longestCDS.fa.gz")" '
+        '"$(gg_species_name_from_path_or_dot "Asimitellaria_furusei_var._subramosa_busco.full.tsv")"'
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -375,8 +377,10 @@ def test_species_name_from_path_or_dot_preserves_taxonomic_qualifiers(tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip().splitlines() == [
         "Dictyostelium_cf_discoideum",
-        "Bacillus_subtilis_subsp_subtilis",
-        "Amoeba_sp_JDSRuffled",
+        "Bacillus_subtilis_subsp._subtilis",
+        "Amoeba_sp._JDS-Ruffled",
+        "Arisaema_sp._aooni",
+        "Asimitellaria_furusei_var._subramosa",
     ]
 
 

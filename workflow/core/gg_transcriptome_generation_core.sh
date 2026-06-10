@@ -529,9 +529,6 @@ PY
   mv_out "${output_file}" "${metadata_file}"
 }
 
-# TODO(kfuku, 2026-04+): Remove this genegalleon-side fasta alias staging
-# once the bundled amalgkit release includes the upstream quant-side reference
-# fasta fallback fix and no longer needs wrapper-provided alias names.
 stage_quant_reference_fasta_aliases() {
   local metadata_file=$1
   local reference_fasta=$2
@@ -563,39 +560,46 @@ def normalize_prefix(raw_value):
     text = text.replace("/", "_").replace("\\", "_")
     return text
 
-prefixes = []
+canonical_prefix_normalized = normalize_prefix(canonical_prefix)
+metadata_prefixes = []
 seen_prefixes = set()
 
-def add_prefix(raw_value):
+def add_metadata_prefix(raw_value):
     prefix = normalize_prefix(raw_value)
     if (not prefix) or (prefix in seen_prefixes):
         return
     seen_prefixes.add(prefix)
-    prefixes.append(prefix)
-
-canonical_prefix_normalized = normalize_prefix(canonical_prefix)
-add_prefix(canonical_prefix)
+    metadata_prefixes.append(prefix)
 
 if metadata_path.exists() and metadata_path.stat().st_size > 0:
     with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         fieldnames = reader.fieldnames or []
-        candidate_fields = [
-            fieldname for fieldname in ("scientific_name", "scientific_name_original")
-            if fieldname in fieldnames
-        ]
+        candidate_fields = ["scientific_name"] if "scientific_name" in fieldnames else []
         for row in reader:
             for fieldname in candidate_fields:
-                add_prefix(row.get(fieldname, ""))
+                add_metadata_prefix(row.get(fieldname, ""))
+
+if len(metadata_prefixes) > 1:
+    raise SystemExit(
+        "Metadata contains multiple scientific_name prefixes for one GeneGalleon species_key '{}': {}".format(
+            canonical_prefix_normalized,
+            ", ".join(metadata_prefixes),
+        )
+    )
+
+prefix = metadata_prefixes[0] if metadata_prefixes else canonical_prefix_normalized
+if prefix == "":
+    raise SystemExit("Could not determine quant reference prefix for species_key: {}".format(canonical_prefix))
 
 output_dir.mkdir(parents=True, exist_ok=True)
-for prefix in prefixes:
-    alias_path = output_dir / "{}_for_kallisto_index.fasta".format(prefix)
-    if alias_path.exists() or alias_path.is_symlink():
-        continue
+alias_path = output_dir / "{}_for_kallisto_index.fasta".format(prefix)
+if alias_path.exists() or alias_path.is_symlink():
+    if alias_path.resolve() != reference_path.resolve():
+        raise SystemExit("Quant reference path already exists for a different target: {}".format(alias_path))
+else:
     os.symlink(reference_path, alias_path)
-    if prefix != canonical_prefix_normalized:
-        print(alias_path.name)
+print(alias_path.name)
 PY
 }
 
@@ -622,35 +626,39 @@ def normalize_prefix(raw_value):
     text = text.replace("/", "_").replace("\\", "_")
     return text
 
-prefixes = []
+canonical_prefix_normalized = normalize_prefix(canonical_prefix)
+metadata_prefixes = []
 seen_prefixes = set()
 
-def add_prefix(raw_value):
+def add_metadata_prefix(raw_value):
     prefix = normalize_prefix(raw_value)
     if (not prefix) or (prefix in seen_prefixes):
         return
     seen_prefixes.add(prefix)
-    prefixes.append(prefix)
-
-add_prefix(canonical_prefix)
+    metadata_prefixes.append(prefix)
 
 if metadata_path.exists() and metadata_path.stat().st_size > 0:
     with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         fieldnames = reader.fieldnames or []
-        candidate_fields = [
-            fieldname for fieldname in ("scientific_name", "scientific_name_original")
-            if fieldname in fieldnames
-        ]
+        candidate_fields = ["scientific_name"] if "scientific_name" in fieldnames else []
         for row in reader:
             for fieldname in candidate_fields:
-                add_prefix(row.get(fieldname, ""))
+                add_metadata_prefix(row.get(fieldname, ""))
 
-for prefix in prefixes:
-    candidate = merge_dir / prefix / f"{prefix}_eff_length.tsv"
-    if candidate.is_file() and candidate.stat().st_size > 0:
-        print(prefix)
-        raise SystemExit(0)
+if len(metadata_prefixes) > 1:
+    raise SystemExit(
+        "Metadata contains multiple scientific_name prefixes for one GeneGalleon species_key '{}': {}".format(
+            canonical_prefix_normalized,
+            ", ".join(metadata_prefixes),
+        )
+    )
+
+prefix = metadata_prefixes[0] if metadata_prefixes else canonical_prefix_normalized
+candidate = merge_dir / prefix / f"{prefix}_eff_length.tsv"
+if candidate.is_file() and candidate.stat().st_size > 0:
+    print(prefix)
+    raise SystemExit(0)
 
 raise SystemExit(1)
 PY
@@ -2192,7 +2200,7 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
   if [[ -e "${file_kallisto_reference_fasta}" ]]; then
     while IFS= read -r alias_name; do
       [[ -n "${alias_name}" ]] || continue
-      echo "Staged quant reference alias from metadata: ./fasta/${alias_name}"
+      echo "Staged exact quant reference from metadata scientific_name: ./fasta/${alias_name}"
     done < <(
       stage_quant_reference_fasta_aliases \
         "${file_amalgkit_metadata}" \
@@ -2277,7 +2285,7 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
     rm -rf -- "./merge"
     rm -f -- "./quant" # Do not put -r, otherwise the original quant files will be deleted.
   else
-    echo "amalgkit merge outputs were not found for canonical or metadata-derived species prefixes under: ./merge"
+    echo "amalgkit merge outputs were not found for the metadata scientific_name prefix under: ./merge"
   fi
   echo "$(date): End: ${task}"
 else

@@ -118,3 +118,24 @@ def test_repair_private_fastq_metadata_preserves_existing_scientific_names(tmp_p
         "Petrosavia sakuraii-previous",
         "Petrosavia sakuraii-previous",
     ]
+
+
+def test_repair_private_fastq_metadata_fills_dotted_rank_species_label(tmp_path: Path):
+    metadata_path = tmp_path / "metadata_private_fastq.tsv"
+    output_path = tmp_path / "metadata_private_fastq.fixed.tsv"
+    metadata_path.write_text(
+        "\n".join(
+            [
+                "run\tscientific_name\tlib_layout",
+                "SRR1\tPlease add in format: Genus species\tpaired",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_repair_helper(metadata_path, "Asimitellaria_furusei_var._furusei", output_path)
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    rows = _read_rows(output_path)
+    assert rows[0]["scientific_name"] == "Asimitellaria furusei var. furusei"

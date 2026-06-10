@@ -1047,6 +1047,29 @@ gg_species_name_from_path() {
   gg_species_name_from_path_or_dot "${path}"
 }
 
+_gg_species_rank_token_key() {
+  local token=${1:-}
+  token=${token%.}
+  token=$(printf '%s' "${token}" | tr '[:upper:]' '[:lower:]')
+  case "${token}" in
+    spp)
+      printf '%s\n' "sp"
+      ;;
+    ssp|subspecies)
+      printf '%s\n' "subsp"
+      ;;
+    variety)
+      printf '%s\n' "var"
+      ;;
+    form)
+      printf '%s\n' "forma"
+      ;;
+    *)
+      printf '%s\n' "${token}"
+      ;;
+  esac
+}
+
 _gg_species_prefix_token_count() {
   local -a parts=("$@")
   local second=""
@@ -1057,9 +1080,9 @@ _gg_species_prefix_token_count() {
     return 0
   fi
 
-  second=$(printf '%s' "${parts[1]}" | tr '[:upper:]' '[:lower:]')
+  second=$(_gg_species_rank_token_key "${parts[1]}")
   if [[ ${#parts[@]} -ge 3 ]]; then
-    third=$(printf '%s' "${parts[2]}" | tr '[:upper:]' '[:lower:]')
+    third=$(_gg_species_rank_token_key "${parts[2]}")
   fi
 
   if [[ "${second}" == "sp" ]]; then
@@ -1082,7 +1105,7 @@ _gg_species_prefix_token_count() {
     printf '3\n'
     return 0
   fi
-  if [[ "${third}" == "subsp" || "${third}" == "ssp" || "${third}" == "var" || "${third}" == "forma" || "${third}" == "f" ]]; then
+  if [[ "${third}" == "subsp" || "${third}" == "var" || "${third}" == "forma" || "${third}" == "f" ]]; then
     if [[ ${#parts[@]} -ge 4 ]]; then
       printf '4\n'
     else
@@ -1091,6 +1114,31 @@ _gg_species_prefix_token_count() {
     return 0
   fi
   printf '2\n'
+}
+
+_gg_strip_species_terminal_suffixes() {
+  local stem=${1:-}
+  local stem_lc
+  local suffix
+  local -a suffixes=(
+    ".fasta.busco.full.tsv" ".fa.busco.full.tsv" ".faa.busco.full.tsv" ".fna.busco.full.tsv" ".ffn.busco.full.tsv"
+    ".fasta.busco.short.txt" ".fa.busco.short.txt" ".faa.busco.short.txt" ".fna.busco.short.txt" ".ffn.busco.short.txt"
+    ".busco.full.tsv" "_busco.full.tsv" ".busco.short.txt" "_busco.short.txt"
+    ".busco.full" "_busco.full" ".busco.short" "_busco.short" ".busco" "_busco"
+    ".fastq.gz" ".fq.gz" ".fasta.gz" ".fa.gz" ".faa.gz" ".fna.gz" ".ffn.gz"
+    ".gff3.gz" ".gff.gz" ".gtf.gz" ".tsv.gz" ".txt.gz" ".csv.gz"
+    ".fastq" ".fq" ".fasta" ".fa" ".faa" ".fna" ".ffn"
+    ".gff3" ".gff" ".gtf" ".tsv" ".txt" ".csv"
+  )
+
+  stem_lc=$(printf '%s' "${stem}" | tr '[:upper:]' '[:lower:]')
+  for suffix in "${suffixes[@]}"; do
+    if [[ "${stem_lc}" == *"${suffix}" ]]; then
+      stem="${stem:0:${#stem}-${#suffix}}"
+      break
+    fi
+  done
+  printf '%s\n' "${stem}"
 }
 
 gg_species_name_from_path_or_dot() {
@@ -1104,7 +1152,7 @@ gg_species_name_from_path_or_dot() {
   local part=""
 
   basename_path=$(basename "${path}")
-  stem=${basename_path%%.*}
+  stem=$(_gg_strip_species_terminal_suffixes "${basename_path}")
   IFS='_' read -r -a parts <<< "${stem}"
   prefix_count=$(_gg_species_prefix_token_count "${parts[@]}")
   if [[ "${prefix_count}" -eq 0 ]]; then

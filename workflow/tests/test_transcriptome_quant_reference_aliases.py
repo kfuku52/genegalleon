@@ -35,7 +35,7 @@ def _function_script(function_name: str) -> str:
     return _function_body(text, function_name)
 
 
-def test_stage_quant_reference_fasta_aliases_uses_metadata_scientific_name_columns(tmp_path):
+def test_stage_quant_reference_fasta_aliases_uses_exact_metadata_scientific_name(tmp_path):
     metadata_path = tmp_path / "metadata.tsv"
     reference_path = tmp_path / "Species_one_longestCDS.fa.gz"
     output_dir = tmp_path / "fasta"
@@ -44,8 +44,8 @@ def test_stage_quant_reference_fasta_aliases_uses_metadata_scientific_name_colum
         "\n".join(
             [
                 "run\tscientific_name\tscientific_name_original",
-                "SRR1\tSpecies one strain X\tSpecies one/original",
-                "SRR2\tSpecies one strain X\tSpecies one/original",
+                "SRR1\tAsimitellaria furusei var. furusei\tSpecies one/original",
+                "SRR2\tAsimitellaria furusei var. furusei\tSpecies one/original",
             ]
         )
         + "\n",
@@ -63,13 +63,14 @@ def test_stage_quant_reference_fasta_aliases_uses_metadata_scientific_name_colum
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
 
+    exact_scientific_name_path = output_dir / "Asimitellaria_furusei_var._furusei_for_kallisto_index.fasta"
     canonical_alias = output_dir / "Species_one_for_kallisto_index.fasta"
-    scientific_name_alias = output_dir / "Species_one_strain_X_for_kallisto_index.fasta"
     original_name_alias = output_dir / "Species_one_original_for_kallisto_index.fasta"
 
-    for alias_path in (canonical_alias, scientific_name_alias, original_name_alias):
-        assert alias_path.is_symlink(), f"Expected symlink alias to exist: {alias_path}"
-        assert alias_path.resolve() == reference_path.resolve()
+    assert exact_scientific_name_path.is_symlink()
+    assert exact_scientific_name_path.resolve() == reference_path.resolve()
+    assert not canonical_alias.exists()
+    assert not original_name_alias.exists()
 
 
 def test_stage_quant_reference_fasta_aliases_still_stages_canonical_prefix_without_metadata_columns(tmp_path):
@@ -103,22 +104,52 @@ def test_stage_quant_reference_fasta_aliases_still_stages_canonical_prefix_witho
     assert canonical_alias.resolve() == reference_path.resolve()
 
 
-def test_resolve_amalgkit_merge_output_prefix_falls_back_to_metadata_scientific_name(tmp_path):
+def test_stage_quant_reference_fasta_aliases_rejects_multiple_scientific_names(tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    reference_path = tmp_path / "Species_one_longestCDS.fa.gz"
+    output_dir = tmp_path / "fasta"
+
+    metadata_path.write_text(
+        "\n".join(
+            [
+                "run\tscientific_name",
+                "SRR1\tSpecies one",
+                "SRR2\tSpecies two",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    reference_path.write_text(">seq\nAAAA\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "-", str(metadata_path), str(reference_path), str(output_dir), "Species_one"],
+        input=_embedded_python("stage_quant_reference_fasta_aliases"),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "multiple scientific_name prefixes" in completed.stderr
+
+
+def test_resolve_amalgkit_merge_output_prefix_uses_exact_metadata_scientific_name(tmp_path):
     metadata_path = tmp_path / "metadata.tsv"
     merge_dir = tmp_path / "merge"
     metadata_path.write_text(
         "\n".join(
             [
                 "run\tscientific_name\tscientific_name_original",
-                "SRR1\tSpecies one strain X\tSpecies one/original",
+                "SRR1\tAsimitellaria furusei var. furusei\tSpecies one/original",
             ]
         )
         + "\n",
         encoding="utf-8",
     )
-    alias_dir = merge_dir / "Species_one_strain_X"
+    alias_dir = merge_dir / "Asimitellaria_furusei_var._furusei"
     alias_dir.mkdir(parents=True)
-    (alias_dir / "Species_one_strain_X_eff_length.tsv").write_text("target_id\tSRR1\nx\t1\n", encoding="utf-8")
+    (alias_dir / "Asimitellaria_furusei_var._furusei_eff_length.tsv").write_text("target_id\tSRR1\nx\t1\n", encoding="utf-8")
 
     command = "\n".join(
         [
@@ -137,10 +168,10 @@ def test_resolve_amalgkit_merge_output_prefix_falls_back_to_metadata_scientific_
     )
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    assert completed.stdout.strip() == "Species_one_strain_X"
+    assert completed.stdout.strip() == "Asimitellaria_furusei_var._furusei"
 
 
-def test_resolve_amalgkit_merge_output_prefix_prefers_canonical_prefix(tmp_path):
+def test_resolve_amalgkit_merge_output_prefix_does_not_fall_back_to_canonical_prefix(tmp_path):
     metadata_path = tmp_path / "metadata.tsv"
     merge_dir = tmp_path / "merge"
     metadata_path.write_text(
@@ -156,9 +187,6 @@ def test_resolve_amalgkit_merge_output_prefix_prefers_canonical_prefix(tmp_path)
     canonical_dir = merge_dir / "Species_one"
     canonical_dir.mkdir(parents=True)
     (canonical_dir / "Species_one_eff_length.tsv").write_text("target_id\tSRR1\nx\t1\n", encoding="utf-8")
-    alias_dir = merge_dir / "Species_one_strain_X"
-    alias_dir.mkdir(parents=True)
-    (alias_dir / "Species_one_strain_X_eff_length.tsv").write_text("target_id\tSRR1\nx\t1\n", encoding="utf-8")
 
     command = "\n".join(
         [
@@ -176,5 +204,4 @@ def test_resolve_amalgkit_merge_output_prefix_prefers_canonical_prefix(tmp_path)
         check=False,
     )
 
-    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    assert completed.stdout.strip() == "Species_one"
+    assert completed.returncode != 0

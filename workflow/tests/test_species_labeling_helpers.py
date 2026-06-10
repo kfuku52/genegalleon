@@ -55,9 +55,25 @@ def test_parse_grampa_matches_prefix_labeled_qualified_species_gene_names():
 def test_species_labeling_builds_qualified_labels_from_scientific_text():
     mod = load_module("species_labeling.py", "species_labeling_module")
 
-    assert mod.species_label_from_taxonomic_text("Dictyostelium cf. discoideum") == "Dictyostelium_cf_discoideum"
-    assert mod.species_label_from_taxonomic_text("Bacillus subtilis subsp. subtilis") == "Bacillus_subtilis_subsp_subtilis"
-    assert mod.species_label_from_taxonomic_text("Amoeba sp. JDS-Ruffled") == "Amoeba_sp_JDSRuffled"
-    assert mod.species_label_from_taxonomic_text("Amoeba sp.") == "Amoeba_sp_unknown"
+    assert mod.species_label_from_taxonomic_text("Dictyostelium cf. discoideum") == "Dictyostelium_cf._discoideum"
+    assert mod.species_label_from_taxonomic_text("Bacillus subtilis subsp. subtilis") == "Bacillus_subtilis_subsp._subtilis"
+    assert mod.species_label_from_taxonomic_text("Amoeba sp. JDS-Ruffled") == "Amoeba_sp._JDS-Ruffled"
+    assert mod.species_label_from_taxonomic_text("Amoeba sp.") == "Amoeba_sp."
+    assert mod.species_label_from_taxonomic_text("Asimitellaria furusei var. furusei") == "Asimitellaria_furusei_var._furusei"
     assert mod.species_label_from_taxonomic_text("Solanum lycopersicum cultivar Heinz 1706") == "Solanum_lycopersicum_cultivar_Heinz1706"
     assert mod.species_label_from_taxonomic_text("Escherichia coli serovar O157") == "Escherichia_coli_serovar_O157"
+
+
+def test_species_labeling_extracts_dotted_rank_labels_from_filenames():
+    mod = load_module("species_labeling.py", "species_labeling_module")
+
+    assert mod.extract_species_label("Arisaema_sp._aooni_longestCDS.fa.gz", strip_extension=True) == "Arisaema_sp._aooni"
+    assert (
+        mod.extract_species_label("Asimitellaria_furusei_var._subramosa_busco.full.tsv", strip_extension=True)
+        == "Asimitellaria_furusei_var._subramosa"
+    )
+    assert (
+        mod.extract_species_label("Asimitellaria_furusei_var._subramosa.fa.busco.full.tsv", strip_extension=True)
+        == "Asimitellaria_furusei_var._subramosa"
+    )
+    assert mod.scientific_name_from_label("Asimitellaria_furusei_var._furusei") == "Asimitellaria furusei var. furusei"

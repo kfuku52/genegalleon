@@ -60,13 +60,24 @@ taxonomic_display_ranks <- c(
   "breed" = "breed"
 )
 
+taxonomic_token_key <- function(token) {
+  key <- tolower(sub("[.]$", "", as.character(token)))
+  if (key %in% taxonomic_genus_only_placeholders) {
+    return("sp")
+  }
+  if (key %in% names(taxonomic_rank_aliases)) {
+    return(unname(taxonomic_rank_aliases[[key]]))
+  }
+  key
+}
+
 species_prefix_token_count <- function(parts) {
   parts <- parts[nzchar(parts)]
   if (length(parts) < 2) {
     return(0L)
   }
-  second <- tolower(parts[[2]])
-  third <- if (length(parts) >= 3) tolower(parts[[3]]) else ""
+  second <- taxonomic_token_key(parts[[2]])
+  third <- if (length(parts) >= 3) taxonomic_token_key(parts[[3]]) else ""
   if (second %in% taxonomic_genus_only_placeholders) {
     return(if (length(parts) >= 3) 3L else 2L)
   }
@@ -113,17 +124,17 @@ scientific_name_from_label <- function(x) {
   }
   parts <- strsplit(species_label, "_", fixed = TRUE)[[1]]
   parts <- parts[nzchar(parts)]
-  if (length(parts) >= 3 && tolower(parts[[2]]) %in% taxonomic_proximity_qualifiers) {
-    return(sprintf("%s %s. %s", parts[[1]], tolower(parts[[2]]), parts[[3]]))
+  if (length(parts) >= 3 && taxonomic_token_key(parts[[2]]) %in% taxonomic_proximity_qualifiers) {
+    return(sprintf("%s %s. %s", parts[[1]], taxonomic_token_key(parts[[2]]), parts[[3]]))
   }
-  if (length(parts) >= 3 && tolower(parts[[3]]) %in% taxonomic_proximity_qualifiers) {
-    return(sprintf("%s %s. %s", parts[[1]], tolower(parts[[3]]), parts[[2]]))
+  if (length(parts) >= 3 && taxonomic_token_key(parts[[3]]) %in% taxonomic_proximity_qualifiers) {
+    return(sprintf("%s %s. %s", parts[[1]], taxonomic_token_key(parts[[3]]), parts[[2]]))
   }
-  if (length(parts) >= 3 && tolower(parts[[2]]) == "sp") {
+  if (length(parts) >= 3 && taxonomic_token_key(parts[[2]]) == "sp") {
     return(sprintf("%s sp. %s", parts[[1]], parts[[3]]))
   }
-  if (length(parts) >= 4 && tolower(parts[[3]]) %in% unname(taxonomic_rank_aliases)) {
-    rank <- tolower(parts[[3]])
+  if (length(parts) >= 4 && taxonomic_token_key(parts[[3]]) %in% unname(taxonomic_rank_aliases)) {
+    rank <- taxonomic_token_key(parts[[3]])
     return(sprintf("%s %s %s %s", parts[[1]], parts[[2]], taxonomic_display_ranks[[rank]], parts[[4]]))
   }
   gsub("_", " ", species_label)

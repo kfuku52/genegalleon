@@ -92,6 +92,55 @@ TAXONOMIC_DISPLAY_RANKS = {
     "breed": "breed",
 }
 
+SPECIES_LABEL_TERMINAL_SUFFIXES = (
+    ".fasta.busco.full.tsv",
+    ".fa.busco.full.tsv",
+    ".faa.busco.full.tsv",
+    ".fna.busco.full.tsv",
+    ".ffn.busco.full.tsv",
+    ".fasta.busco.short.txt",
+    ".fa.busco.short.txt",
+    ".faa.busco.short.txt",
+    ".fna.busco.short.txt",
+    ".ffn.busco.short.txt",
+    ".busco.full.tsv",
+    "_busco.full.tsv",
+    ".busco.short.txt",
+    "_busco.short.txt",
+    ".busco.full",
+    "_busco.full",
+    ".busco.short",
+    "_busco.short",
+    ".busco",
+    "_busco",
+    ".fastq.gz",
+    ".fq.gz",
+    ".fasta.gz",
+    ".fa.gz",
+    ".faa.gz",
+    ".fna.gz",
+    ".ffn.gz",
+    ".gff3.gz",
+    ".gff.gz",
+    ".gtf.gz",
+    ".tsv.gz",
+    ".txt.gz",
+    ".csv.gz",
+    ".fastq",
+    ".fq",
+    ".fasta",
+    ".fa",
+    ".faa",
+    ".fna",
+    ".ffn",
+    ".gff3",
+    ".gff",
+    ".gtf",
+    ".tsv",
+    ".txt",
+    ".csv",
+)
+
 
 def normalize_taxonomic_name_text(text):
     raw = str(text or "").strip()
@@ -102,49 +151,74 @@ def normalize_taxonomic_name_text(text):
 
 
 def tokenize_taxonomic_name(text):
-    return re.findall(r"[A-Za-z0-9]+", normalize_taxonomic_name_text(text))
+    return [token for token in normalize_taxonomic_name_text(text).split(" ") if token]
 
 
-def canonical_taxonomic_token(token):
-    cleaned = str(token or "").strip()
-    lowered = cleaned.lower()
+def taxonomic_token_key(token):
+    lowered = str(token or "").strip().rstrip(".").lower()
     if lowered in TAXONOMIC_GENUS_ONLY_PLACEHOLDERS:
         return "sp"
     if lowered in TAXONOMIC_PROXIMITY_QUALIFIERS:
         return lowered
     if lowered in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
         return TAXONOMIC_INFRASPECIFIC_RANK_ALIASES[lowered]
+    return lowered
+
+
+def canonical_taxonomic_token(token):
+    cleaned = str(token or "").strip()
+    key = taxonomic_token_key(cleaned)
+    if key == "sp":
+        return "sp"
+    if key in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return key
+    if key in TAXONOMIC_INFRASPECIFIC_RANKS:
+        return key
     return cleaned
 
 
+def species_key_token(token):
+    text = str(token or "").strip()
+    text = text.replace("/", "_").replace("\\", "_")
+    return re.sub(r"\s+", "_", text)
+
+
+def display_rank_token(rank):
+    if rank == "sp":
+        return "sp."
+    if rank in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return "{}.".format(rank)
+    return TAXONOMIC_DISPLAY_RANKS.get(rank, rank)
+
+
 def species_label_from_taxonomic_text(text):
-    normalized = [canonical_taxonomic_token(token) for token in tokenize_taxonomic_name(text) if str(token or "").strip() != ""]
-    if len(normalized) < 2:
+    tokens = [token for token in tokenize_taxonomic_name(text) if str(token or "").strip() != ""]
+    if len(tokens) < 2:
         return ""
 
-    genus = normalized[0][:1].upper() + normalized[0][1:].lower()
-    second = normalized[1].lower()
-    if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
-        if len(normalized) >= 3:
-            return "{}_{}_{}".format(genus, second, normalized[2].lower())
-        return "{}_{}".format(genus, second)
-    if second == "sp":
-        label = "".join(normalized[2:]).strip()
+    genus = tokens[0][:1].upper() + tokens[0][1:].lower()
+    second_key = taxonomic_token_key(tokens[1])
+    if second_key in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        if len(tokens) >= 3:
+            return "{}_{}_{}".format(genus, display_rank_token(second_key), species_key_token(tokens[2].lower()))
+        return "{}_{}".format(genus, display_rank_token(second_key))
+    if second_key == "sp":
+        label = "".join(species_key_token(token) for token in tokens[2:]).strip()
         if label != "":
-            return "{}_sp_{}".format(genus, label)
-        return "{}_sp_unknown".format(genus)
+            return "{}_{}_{}".format(genus, display_rank_token("sp"), label)
+        return "{}_{}".format(genus, display_rank_token("sp"))
 
-    species = normalized[1].lower()
-    if len(normalized) >= 3:
-        third = normalized[2].lower()
-        if third in TAXONOMIC_PROXIMITY_QUALIFIERS:
-            return "{}_{}_{}".format(genus, species, third)
-        if third in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
-            rank = TAXONOMIC_INFRASPECIFIC_RANK_ALIASES[third]
-            value = "".join(normalized[3:]).strip()
+    species = species_key_token(tokens[1].lower())
+    if len(tokens) >= 3:
+        third_key = taxonomic_token_key(tokens[2])
+        if third_key in TAXONOMIC_PROXIMITY_QUALIFIERS:
+            return "{}_{}_{}".format(genus, species, display_rank_token(third_key))
+        if third_key in TAXONOMIC_INFRASPECIFIC_RANKS:
+            rank = third_key
+            value = "".join(species_key_token(token) for token in tokens[3:]).strip()
             if value != "":
-                return "{}_{}_{}_{}".format(genus, species, rank, value)
-            return "{}_{}_{}".format(genus, species, rank)
+                return "{}_{}_{}_{}".format(genus, species, display_rank_token(rank), value)
+            return "{}_{}_{}".format(genus, species, display_rank_token(rank))
     return "{}_{}".format(genus, species)
 
 
@@ -152,8 +226,8 @@ def species_prefix_token_count(parts):
     normalized = [str(part or "").strip() for part in parts if str(part or "").strip() != ""]
     if len(normalized) < 2:
         return 0
-    second = normalized[1].lower()
-    third = normalized[2].lower() if len(normalized) >= 3 else ""
+    second = taxonomic_token_key(normalized[1])
+    third = taxonomic_token_key(normalized[2]) if len(normalized) >= 3 else ""
     if second == "sp":
         return 3 if len(normalized) >= 3 else 2
     if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
@@ -165,10 +239,19 @@ def species_prefix_token_count(parts):
     return 2
 
 
+def strip_species_label_terminal_suffixes(name):
+    stem = str(name or "")
+    stem_lower = stem.lower()
+    for suffix in SPECIES_LABEL_TERMINAL_SUFFIXES:
+        if stem_lower.endswith(suffix):
+            return stem[:-len(suffix)]
+    return stem
+
+
 def extract_species_label(value, strip_extension=False):
     name = Path(str(value or "")).name
-    if strip_extension and "." in name:
-        name = name.split(".", 1)[0]
+    if strip_extension:
+        name = strip_species_label_terminal_suffixes(name)
     parts = [part for part in name.split("_") if part != ""]
     count = species_prefix_token_count(parts)
     if count == 0:
@@ -189,14 +272,14 @@ def scientific_name_from_label(value):
     if species_label == "":
         species_label = str(value or "").strip()
     parts = [part for part in species_label.split("_") if part != ""]
-    if len(parts) >= 3 and parts[1].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
-        return "{} {}. {}".format(parts[0], parts[1].lower(), parts[2])
-    if len(parts) >= 3 and parts[2].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
-        return "{} {}. {}".format(parts[0], parts[2].lower(), parts[1])
-    if len(parts) >= 3 and parts[1].lower() == "sp":
+    if len(parts) >= 3 and taxonomic_token_key(parts[1]) in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return "{} {}. {}".format(parts[0], taxonomic_token_key(parts[1]), parts[2])
+    if len(parts) >= 3 and taxonomic_token_key(parts[2]) in TAXONOMIC_PROXIMITY_QUALIFIERS:
+        return "{} {}. {}".format(parts[0], taxonomic_token_key(parts[2]), parts[1])
+    if len(parts) >= 3 and taxonomic_token_key(parts[1]) == "sp":
         return "{} sp. {}".format(parts[0], parts[2])
-    if len(parts) >= 4 and parts[2].lower() in TAXONOMIC_INFRASPECIFIC_RANKS:
-        rank = parts[2].lower()
+    if len(parts) >= 4 and taxonomic_token_key(parts[2]) in TAXONOMIC_INFRASPECIFIC_RANKS:
+        rank = taxonomic_token_key(parts[2])
         return "{} {} {} {}".format(parts[0], parts[1], TAXONOMIC_DISPLAY_RANKS.get(rank, rank), parts[3])
     return species_label.replace("_", " ")
 
@@ -206,11 +289,11 @@ def base_species_label(value):
     if species_label == "":
         species_label = str(value or "").strip()
     parts = [part for part in species_label.split("_") if part != ""]
-    if len(parts) >= 3 and parts[1].lower() == "sp":
+    if len(parts) >= 3 and taxonomic_token_key(parts[1]) == "sp":
         return parts[0]
-    if len(parts) >= 3 and parts[1].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
+    if len(parts) >= 3 and taxonomic_token_key(parts[1]) in TAXONOMIC_PROXIMITY_QUALIFIERS:
         return "{}_{}".format(parts[0], parts[2])
-    if len(parts) >= 3 and parts[2].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
+    if len(parts) >= 3 and taxonomic_token_key(parts[2]) in TAXONOMIC_PROXIMITY_QUALIFIERS:
         return "{}_{}".format(parts[0], parts[1])
     if len(parts) >= 2:
         return "{}_{}".format(parts[0], parts[1])
