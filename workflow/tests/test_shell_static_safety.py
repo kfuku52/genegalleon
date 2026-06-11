@@ -3392,6 +3392,16 @@ def test_gene_evolution_core_uses_container_safe_generax_mpi_launcher():
     assert "running_under_scheduler" not in generax_block
 
 
+def test_generax_container_smoke_test_uses_runtime_mpi_launcher():
+    script = CONTAINER_SCRIPTS_DIR / "ensure_generax_stable.sh"
+    body = _function_body(_read_text(script), "run_smoke_test")
+
+    assert 'mpi_env_args=(env OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)' in body
+    assert 'mpiexec_args=(mpiexec --allow-run-as-root -oversubscribe -np 1)' in body
+    assert '"${mpi_env_args[@]}" "${mpiexec_args[@]}"' in body
+    assert "env OMPI_MCA_plm=isolated \\" not in body
+
+
 def test_no_pipe_to_grep_q_in_core_and_support_scripts():
     scripts = sorted(CORE_DIR.glob("*.sh")) + sorted((WORKFLOW_DIR / "support").glob("*.sh"))
     pattern = re.compile(r"\|\s*(?:z?grep)\s+-q|\|\s*grep\s+-Fq|\|\s*grep\s+-Fxq")
