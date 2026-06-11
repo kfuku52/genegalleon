@@ -183,16 +183,27 @@ jobs:
               )
           PY
 
-  build-and-push:
+  prepare-build:
     needs: check-trigger
     if: |
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
       needs.check-trigger.outputs.should_build == '1'
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+      immutable_tag: ${{ steps.vars.outputs.immutable_tag }}
+      sha_tag: ${{ steps.vars.outputs.sha_tag }}
+      build_date: ${{ steps.vars.outputs.build_date }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Preflight env coverage check
+        shell: bash
+        run: |
+          set -euo pipefail
+          container/scripts/check_env_coverage.sh .
 
       - name: Resolve image tags
         id: vars
@@ -207,12 +218,38 @@ jobs:
           immutable_tag="${date_tag}-${short_sha}"
           build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          echo "image=${image}" >> "${GITHUB_OUTPUT}"
-          echo "immutable_tag=${immutable_tag}" >> "${GITHUB_OUTPUT}"
-          echo "sha_tag=sha-${short_sha}" >> "${GITHUB_OUTPUT}"
-          echo "build_date=${build_date}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "image=${image}"
+            echo "immutable_tag=${immutable_tag}"
+            echo "sha_tag=sha-${short_sha}"
+            echo "build_date=${build_date}"
+          } >> "${GITHUB_OUTPUT}"
+
+  build-and-push:
+    needs: prepare-build
+    if: needs.prepare-build.result == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve platform
+        id: platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform="${{ matrix.platform }}"
+          echo "pair=${platform//\//-}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up QEMU
+        if: matrix.platform != 'linux/amd64'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -225,31 +262,96 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Preflight env coverage check
-        shell: bash
-        run: |
-          set -euo pipefail
-          container/scripts/check_env_coverage.sh .
-
-      - name: Build and push multi-arch image
+      - name: Build and push platform image by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: container/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.immutable_tag }}
-            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha_tag }}
-            ${{ steps.vars.outputs.image }}:latest
+          platforms: ${{ matrix.platform }}
+          outputs: >-
+            type=image,name=${{ needs.prepare-build.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
           build-args: |
-            BUILD_DATE=${{ steps.vars.outputs.build_date }}
+            BUILD_DATE=${{ needs.prepare-build.outputs.build_date }}
             VCS_REF=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=container-${{ steps.platform.outputs.pair }}
+          cache-to: type=gha,mode=max,scope=container-${{ steps.platform.outputs.pair }}
+
+      - name: Export digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="${{ steps.build.outputs.digest }}"
+          if [[ -z "${digest}" ]]; then
+            echo "docker/build-push-action did not return an image digest."
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ steps.platform.outputs.pair }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-manifest:
+    needs:
+      - check-trigger
+      - prepare-build
+      - build-and-push
+    if: |
+      needs.prepare-build.result == 'success' &&
+      needs.build-and-push.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifest
+        shell: bash
+        env:
+          IMAGE: ${{ needs.prepare-build.outputs.image }}
+          IMMUTABLE_TAG: ${{ needs.prepare-build.outputs.immutable_tag }}
+          SHA_TAG: ${{ needs.prepare-build.outputs.sha_tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t digests < <(find "${RUNNER_TEMP}/digests" -maxdepth 1 -type f -printf '%f\n' | sort)
+          if [[ "${#digests[@]}" -eq 0 ]]; then
+            echo "No platform digests were downloaded."
+            exit 1
+          fi
+
+          refs=()
+          for digest in "${digests[@]}"; do
+            refs+=("${IMAGE}@sha256:${digest}")
+          done
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${IMMUTABLE_TAG}" \
+            --tag "${IMAGE}:${SHA_TAG}" \
+            --tag "${IMAGE}:latest" \
+            "${refs[@]}"
 
       - name: Summary
         shell: bash
@@ -262,7 +364,11 @@ jobs:
             echo "- matched paths: ${{ needs.check-trigger.outputs.matched_files }}"
             echo ""
             echo "Pushed image tags:"
-            echo "- ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.immutable_tag }}"
-            echo "- ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha_tag }}"
-            echo "- ${{ steps.vars.outputs.image }}:latest"
+            echo "- ${{ needs.prepare-build.outputs.image }}:${{ needs.prepare-build.outputs.immutable_tag }}"
+            echo "- ${{ needs.prepare-build.outputs.image }}:${{ needs.prepare-build.outputs.sha_tag }}"
+            echo "- ${{ needs.prepare-build.outputs.image }}:latest"
+            echo ""
+            echo "Platforms:"
+            echo "- linux/amd64"
+            echo "- linux/arm64"
           } >> "${GITHUB_STEP_SUMMARY}"
