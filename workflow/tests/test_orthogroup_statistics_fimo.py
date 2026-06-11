@@ -58,6 +58,27 @@ def test_orthogroup_statistics_preserves_qualified_species_prefixes():
     assert mod.scientific_name_from_label("Dictyostelium_cf_discoideum_geneA") == "Dictyostelium cf. discoideum"
 
 
+def test_new_unrooted_tree_preserves_numeric_iqtree_support():
+    mod = load_module()
+
+    tree = mod.new_unrooted_tree("((A:1,B:1)95:2,C:3);")
+    internal = [node for node in tree.traverse() if sorted(leaf.name for leaf in mod.iter_leaves(node)) == ["A", "B"]][0]
+
+    assert internal.support == 95.0
+    assert internal.dist == 2.0
+
+
+def test_new_unrooted_tree_accepts_internal_node_names_without_support():
+    mod = load_module()
+
+    tree = mod.new_unrooted_tree("((A:1,B:1)n3:2,C:3);")
+    internal = [node for node in tree.traverse() if sorted(leaf.name for leaf in mod.iter_leaves(node)) == ["A", "B"]][0]
+
+    assert internal.name == "n3"
+    assert getattr(internal, "support", None) is None
+    assert internal.dist == 2.0
+
+
 def test_load_fimo_hits_parses_legacy_fimo_txt_header(tmp_path):
     mod = load_module()
     infile = tmp_path / "fimo.txt"

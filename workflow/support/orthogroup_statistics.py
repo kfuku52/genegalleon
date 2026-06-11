@@ -14,6 +14,7 @@ import sys
 import numpy
 import pandas
 import ete4
+from ete4.parser.newick import NewickError
 from kftools.kfog import *
 from kftools.kfphylo import *
 
@@ -30,6 +31,15 @@ def new_tree(newick_or_path, format=1, quoted_node_names=False):
         with open(newick_or_path, 'r', encoding='utf-8') as handle:
             newick_or_path = handle.read().strip()
     return ete4.PhyloTree(newick_or_path, parser=format)
+
+
+def new_unrooted_tree(newick_or_path):
+    try:
+        return new_tree(newick_or_path, format=0)
+    except NewickError as exc:
+        if "could not convert string to float" not in str(exc):
+            raise
+        return new_tree(newick_or_path, format=1)
 
 
 def iter_ancestors(node):
@@ -1158,7 +1168,7 @@ def main():
         df_tmp = pandas.DataFrame({'branch_id':nlabels})
         df_tmp.loc[:,'support_unrooted'] = numpy.nan
         df_tmp.loc[:,'bl_unrooted'] = numpy.nan
-        unrooted = new_tree(params['unrooted_tree'], format=0)
+        unrooted = new_unrooted_tree(params['unrooted_tree'])
         unrooted = transfer_root(tree_to=unrooted, tree_from=rooted_tree)
         unrooted = annotate_clade_signatures(unrooted)
         unrooted_by_clade = {unode.props.get('clade_sig'): unode for unode in unrooted.traverse()}
@@ -1166,8 +1176,9 @@ def main():
             unode = unrooted_by_clade.get(rnode.props.get('clade_sig'))
             if unode is not None:
                 df_tmp.at[get_node_label(rnode), 'bl_unrooted'] = unode.dist
-                if unode.support != 1.0:
-                    df_tmp.at[get_node_label(rnode), 'support_unrooted'] = unode.support
+                support = getattr(unode, "support", None)
+                if support is not None and support != 1.0:
+                    df_tmp.at[get_node_label(rnode), 'support_unrooted'] = support
         subroot_nodes = rooted_tree.get_children()
         subroot_nlabels = [get_node_label(n) for n in subroot_nodes]
         is_subroot_support = ~df_tmp.loc[subroot_nlabels,'support_unrooted'].isna()
