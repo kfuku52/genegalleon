@@ -3520,6 +3520,8 @@ def test_orthogroup_statistics_handles_ete4_root_support_assertion_on_reroot():
     text = _read_text(script)
     assert "root has branch property: support" in text
     assert "clear_root_branch_property_compat(tree, 'support')" in text
+    assert "root has a distance" in text
+    assert "clear_root_branch_property_compat(tree, 'dist')" in text
 
 
 def test_orthogroup_statistics_skips_invalid_regime2tree_summary_instead_of_aborting():

@@ -79,6 +79,26 @@ def test_new_unrooted_tree_accepts_internal_node_names_without_support():
     assert internal.dist == 2.0
 
 
+def test_set_outgroup_compat_clears_root_distance_before_reroot():
+    mod = load_module()
+
+    tree = mod.new_tree("((A:1,B:1)n1:2,C:3)n0:1;", format=1)
+
+    mod.set_outgroup_compat(tree, "A")
+
+    assert sorted(leaf.name for leaf in mod.iter_leaves(tree)) == ["A", "B", "C"]
+
+
+def test_set_outgroup_compat_handles_multiple_ete4_root_assertions():
+    mod = load_module()
+
+    tree = mod.new_tree("((A:1,B:1)95:2,C:3)100:1;", format=0)
+
+    mod.set_outgroup_compat(tree, "A")
+
+    assert sorted(leaf.name for leaf in mod.iter_leaves(tree)) == ["A", "B", "C"]
+
+
 def test_load_fimo_hits_parses_legacy_fimo_txt_header(tmp_path):
     mod = load_module()
     infile = tmp_path / "fimo.txt"

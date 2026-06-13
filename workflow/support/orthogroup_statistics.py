@@ -42,6 +42,43 @@ def new_unrooted_tree(newick_or_path):
         return new_tree(newick_or_path, format=1)
 
 
+def clear_root_branch_property_compat(tree, prop_name):
+    # ETE4 rejects rerooting when the root itself carries branch properties.
+    # Keep behavior local to the root only; descendant branches are preserved.
+    if hasattr(tree, "props"):
+        tree.props.pop(prop_name, None)
+    try:
+        setattr(tree, prop_name, None)
+    except Exception:
+        pass
+
+
+def set_outgroup_compat(tree, outgroup):
+    last_exc = None
+    for _ in range(5):
+        try:
+            tree.set_outgroup(outgroup)
+            return
+        except AssertionError as exc:
+            last_exc = exc
+            msg = str(exc)
+            # IQ-TREE can keep different support labels on both root children in unrooted trees.
+            # ETE rejects rerooting in that case, so normalize only root-adjacent supports and retry.
+            if 'inconsistent support at the root' in msg:
+                for child in tree.get_children():
+                    child.support = 1.0
+                continue
+            if 'root has branch property: support' in msg:
+                clear_root_branch_property_compat(tree, 'support')
+                continue
+            if 'root has a distance' in msg:
+                clear_root_branch_property_compat(tree, 'dist')
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+
+
 def iter_ancestors(node):
     return node.ancestors()
 
@@ -537,35 +574,6 @@ def main():
         raise AttributeError("Tree object does not provide a common ancestor API.")
 
     def transfer_root(tree_to, tree_from, verbose=False):
-        def clear_root_branch_property_compat(tree, prop_name):
-            # ETE4 rejects reroot when the root branch itself has branch properties.
-            # Keep behavior local to the root only; do not modify descendant branches.
-            if hasattr(tree, "props"):
-                tree.props.pop(prop_name, None)
-            try:
-                setattr(tree, prop_name, None)
-            except Exception:
-                pass
-
-        def set_outgroup_compat(tree, outgroup):
-            try:
-                tree.set_outgroup(outgroup)
-            except AssertionError as exc:
-                msg = str(exc)
-                # IQ-TREE can keep different support labels on both root children in unrooted trees.
-                # ETE rejects rerooting in that case, so normalize only root-adjacent supports and retry.
-                if 'inconsistent support at the root' in msg:
-                    for child in tree.get_children():
-                        child.support = 1.0
-                    tree.set_outgroup(outgroup)
-                    return
-                # Newer ETE4 may also reject rerooting when the current root branch has support.
-                if 'root has branch property: support' in msg:
-                    clear_root_branch_property_compat(tree, 'support')
-                    tree.set_outgroup(outgroup)
-                    return
-                raise
-
         tip_set_diff = set(get_leaf_names_compat(tree_to)) - set(get_leaf_names_compat(tree_from))
         if tip_set_diff:
             raise Exception('tree_to has more tips than tree_from. tip_set_diff = ' + str(tip_set_diff))
