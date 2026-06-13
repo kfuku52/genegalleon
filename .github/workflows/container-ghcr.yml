@@ -228,13 +228,16 @@ jobs:
   build-and-push:
     needs: prepare-build
     if: needs.prepare-build.result == 'success'
-    runs-on: ubuntu-latest
+    name: build-and-push (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - linux/amd64
-          - linux/arm64
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
@@ -247,10 +250,6 @@ jobs:
           set -euo pipefail
           platform="${{ matrix.platform }}"
           echo "pair=${platform//\//-}" >> "${GITHUB_OUTPUT}"
-
-      - name: Set up QEMU
-        if: matrix.platform != 'linux/amd64'
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

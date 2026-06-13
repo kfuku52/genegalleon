@@ -7,6 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / "workflow"
 CORE_DIR = WORKFLOW_DIR / "core"
 CONTAINER_SCRIPTS_DIR = REPO_ROOT / "container" / "scripts"
+GITHUB_WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 
 
 def _read_text(path: Path) -> str:
@@ -3400,6 +3401,18 @@ def test_generax_container_smoke_test_uses_runtime_mpi_launcher():
     assert 'mpiexec_args=(mpiexec --allow-run-as-root -oversubscribe -np 1)' in body
     assert '"${mpi_env_args[@]}" "${mpiexec_args[@]}"' in body
     assert "env OMPI_MCA_plm=isolated \\" not in body
+
+
+def test_container_ghcr_builds_arm64_on_native_runner_without_qemu():
+    workflow = _read_text(GITHUB_WORKFLOWS_DIR / "container-ghcr.yml")
+    build_start = workflow.index("  build-and-push:")
+    publish_start = workflow.index("  publish-manifest:", build_start)
+    build_block = workflow[build_start:publish_start]
+
+    assert "runs-on: ${{ matrix.runner }}" in build_block
+    assert "- platform: linux/amd64\n            runner: ubuntu-latest" in build_block
+    assert "- platform: linux/arm64\n            runner: ubuntu-24.04-arm" in build_block
+    assert "docker/setup-qemu-action" not in build_block
 
 
 def test_no_pipe_to_grep_q_in_core_and_support_scripts():
