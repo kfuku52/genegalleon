@@ -190,6 +190,105 @@ get_total_fastq_len_from_files() {
   echo "${sum_len}"
 }
 
+fastq_num_seqs_from_file() {
+  local fastq_path=$1
+  local num_seqs=""
+
+  if ! num_seqs=$(seqkit stats --tabular "${fastq_path}" \
+    | awk -F '\t' '
+      NR == 1 {
+        for (i = 1; i <= NF; i++) {
+          if ($i == "num_seqs") {
+            col = i
+          }
+        }
+        next
+      }
+      NR > 1 && col > 0 {
+        gsub(/,/, "", $col)
+        print $col
+        exit
+      }
+    '); then
+    echo "Failed to count FASTQ reads with seqkit stats: ${fastq_path}" >&2
+    return 1
+  fi
+
+  if [[ -z "${num_seqs}" ]]; then
+    echo "Failed to parse num_seqs from seqkit stats output: ${fastq_path}" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${num_seqs}"
+}
+
+filter_valid_paired_fastq_files() {
+  local report_file=$1
+  local left_file=""
+  local right_file=""
+  local expected_left=""
+  local left_count=""
+  local right_count=""
+  local skipped_count=0
+  local -a valid_left=()
+  local -a valid_right=()
+
+  printf 'left_fastq\tright_fastq\tleft_reads\tright_reads\treason\n' > "${report_file}"
+
+  for left_file in "${files_left[@]}"; do
+    right_file="${left_file%_1.amalgkit.fastq.gz}_2.amalgkit.fastq.gz"
+    if [[ ! -f "${right_file}" ]]; then
+      printf '%s\t%s\tNA\tNA\tmissing_right\n' "${left_file}" "${right_file}" >> "${report_file}"
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+
+    if ! left_count=$(fastq_num_seqs_from_file "${left_file}"); then
+      printf '%s\t%s\tNA\tNA\tleft_count_failed\n' "${left_file}" "${right_file}" >> "${report_file}"
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+    if ! right_count=$(fastq_num_seqs_from_file "${right_file}"); then
+      printf '%s\t%s\t%s\tNA\tright_count_failed\n' "${left_file}" "${right_file}" "${left_count}" >> "${report_file}"
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+    if [[ "${left_count}" != "${right_count}" ]]; then
+      printf '%s\t%s\t%s\t%s\tread_count_mismatch\n' "${left_file}" "${right_file}" "${left_count}" "${right_count}" >> "${report_file}"
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+
+    valid_left+=("${left_file}")
+    valid_right+=("${right_file}")
+  done
+
+  for right_file in "${files_right[@]}"; do
+    expected_left="${right_file%_2.amalgkit.fastq.gz}_1.amalgkit.fastq.gz"
+    if [[ ! -f "${expected_left}" ]]; then
+      printf '%s\t%s\tNA\tNA\tmissing_left\n' "${expected_left}" "${right_file}" >> "${report_file}"
+      skipped_count=$((skipped_count + 1))
+    fi
+  done
+
+  files_left=("${valid_left[@]}")
+  files_right=("${valid_right[@]}")
+
+  if [[ ${skipped_count} -gt 0 ]]; then
+    echo "Excluded ${skipped_count} invalid or orphan paired-end FASTQ file set(s) before transcriptome assembly."
+    echo "Paired-end FASTQ validation report: ${report_file}"
+  else
+    echo "Paired-end FASTQ validation passed for ${#files_left[@]} pair(s)."
+  fi
+
+  if [[ ${#files_left[@]} -eq 0 ]]; then
+    echo "No valid paired-end FASTQ pairs remain for transcriptome assembly. Exiting."
+    return 1
+  fi
+
+  return 0
+}
+
 csv_join_from_array() {
   local out=""
   local item=""
@@ -1622,9 +1721,12 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
       exit 1
     fi
     if [[ ${lib_layout} == 'paired' ]]; then
-      if [[ ${#files_left[@]} -eq 0 || ${#files_right[@]} -eq 0 || ${#files_left[@]} -ne ${#files_right[@]} ]]; then
+      if [[ ${#files_left[@]} -eq 0 || ${#files_right[@]} -eq 0 ]]; then
         echo "Paired-end input files were not detected correctly in ${assembly_input_fastq_dir}."
         echo "Detected left/right counts: ${#files_left[@]}/${#files_right[@]}. Exiting."
+        exit 1
+      fi
+      if ! filter_valid_paired_fastq_files "${dir_tmp}/paired_fastq_validation.tsv"; then
         exit 1
       fi
     fi

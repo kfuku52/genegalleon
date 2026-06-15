@@ -3168,6 +3168,22 @@ def test_transcriptome_core_uses_array_args_for_trinity_and_rnaspades_inputs():
     assert 'Checked: transcripts.fasta, soft_filtered_transcripts.fasta, hard_filtered_transcripts.fasta' in text
 
 
+def test_transcriptome_core_filters_invalid_paired_fastq_before_assembly():
+    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
+    text = _read_text(script)
+    count_body = _function_body(text, "fastq_num_seqs_from_file")
+    filter_body = _function_body(text, "filter_valid_paired_fastq_files")
+
+    assert 'seqkit stats --tabular "${fastq_path}"' in count_body
+    assert '$i == "num_seqs"' in count_body
+    assert 'right_file="${left_file%_1.amalgkit.fastq.gz}_2.amalgkit.fastq.gz"' in filter_body
+    assert 'expected_left="${right_file%_2.amalgkit.fastq.gz}_1.amalgkit.fastq.gz"' in filter_body
+    assert 'read_count_mismatch' in filter_body
+    assert 'files_left=("${valid_left[@]}")' in filter_body
+    assert 'files_right=("${valid_right[@]}")' in filter_body
+    assert 'if ! filter_valid_paired_fastq_files "${dir_tmp}/paired_fastq_validation.tsv"; then' in text
+
+
 def test_transcriptome_core_captures_busco_repro_artifacts_on_failure_paths():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
