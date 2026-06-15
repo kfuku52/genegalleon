@@ -3152,8 +3152,7 @@ if [[ (! -s "${file_og_csubst_b}" || ! -s "${file_og_csubst_cb_stats}") && ${run
     --fg_exclude_wg "${csubst_fg_exclude_wg}" \
     --fg_stem_only "${csubst_fg_stem_only}" \
     --nonsyn_recode "${csubst_nonsyn_recode}" \
-    --calc_quantile "no" \
-    --omegaC_method "submodel" \
+    --expectation_method "codon_model" \
     --threads "${GG_TASK_CPUS}" \
     --float_type 32 \
     "${foreground_params[@]}"
