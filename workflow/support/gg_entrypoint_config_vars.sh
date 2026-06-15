@@ -26,6 +26,47 @@ EOF
 run_database_prep
 EOF
       ;;
+    gg_gene_summary_entrypoint.sh)
+      cat <<'EOF'
+arity_range
+dir_convergent_sites
+dir_gene_summary
+dir_hgt
+dir_orthofinder
+file_trait
+gene_summary_busco_table
+gene_summary_family_file
+gene_summary_family_ids
+gene_summary_heatmap_value
+gene_summary_include_incomplete
+gene_summary_max_families
+gene_summary_plot_width
+gene_summary_species_tree
+gene_summary_species_tree_ci
+gene_summary_species_tree_support
+hgt_contamination_dir
+hgt_fimo_qvalue
+hgt_promoter_bp
+hgt_taxonomy_flow_max_categories
+hgt_taxonomy_flow_rank
+hgt_tree_plot_width
+hgt_use_taxonomy_db
+max_per_K
+min_OCNCoD
+min_OCNany2spe
+min_fg_stem_ratio
+min_omegaCany2spe
+mode_gene_summary
+run_convergent_sites
+run_database_prep
+run_gene_completion_summary
+run_gene_presence_absence
+run_hgt_eval
+run_hgt_plot
+skip_lower_order
+trait
+EOF
+      ;;
     gg_gene_evolution_entrypoint.sh)
       cat <<'EOF'
 check_pruned

@@ -331,6 +331,47 @@ Notable defaults:
 - `run_database_prep=1`
 - the stage skips database generation if the required `stat_tree/` or `stat_branch/` directories are missing.
 
+### `gg_gene_summary_entrypoint.sh`
+
+Purpose:
+
+- run mode-aware cross-family summaries for `query2family` or `orthogroup` outputs,
+- generate species-tree presence/absence and copy-number matrices for `query2family` or `orthogroup`,
+- optionally build the selected mode's `gg_orthogroup.db`,
+- optionally run HGT and convergent-site summaries against the selected mode.
+
+Main mode switch:
+
+- `mode_gene_summary="query2family"` or `mode_gene_summary="orthogroup"`
+
+Main presence/absence outputs:
+
+- `workspace/output/gene_summary/query2family/query2family_presence_absence.tsv`
+- `workspace/output/gene_summary/query2family/query2family_copy_number.tsv`
+- `workspace/output/gene_summary/query2family/query2family_presence_absence.pdf`
+- `workspace/output/gene_summary/*/*_presence_absence.plot_selection.tsv`
+- `workspace/output/gene_summary/*/*_presence_absence.plot.long.tsv`
+
+Notable defaults:
+
+- `run_gene_presence_absence=1`
+- query-gene names in the presence/absence plot come from
+  `workspace/input/query_gene` file basenames
+- `gene_summary_max_families=auto` plots all query2family queries but only the first 100 orthogroups by default
+- `gene_summary_family_ids` and `gene_summary_family_file` select an explicit plotted subset for either mode
+- `gene_summary_species_tree=auto` prefers query2family-pruned dated species
+  trees when available
+- `gene_summary_species_tree_ci=auto` adds MCMCtree 95% HPD node-age bars for
+  dated species trees when `mcmctree_95CI.nwk` is available
+- `gene_summary_species_tree_support=auto` transfers numeric branch-support
+  labels from matching species-tree support files
+- `gene_summary_busco_table=auto` adds per-species BUSCO stacked bars when
+  BUSCO full tables or `workspace/output/species_tree/busco_summary_table/busco_summary.tsv`
+  are available; full tables include Fragmented counts
+- `gene_summary_plot_width=7.2`; the plotter caps figure width at 7.2 inches
+- `run_database_prep=0`, `run_hgt_eval=0`, `run_hgt_plot=0`, and `run_convergent_sites=0`
+- database, HGT, and convergent-site flags are valid for both summary modes and use the selected mode's gene-family output directory.
+
 ### `gg_progress_summary_entrypoint.sh`
 
 Purpose:

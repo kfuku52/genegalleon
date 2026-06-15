@@ -134,11 +134,21 @@ Some wrappers intentionally write reports at the workspace root rather than unde
 
 Current examples:
 
+- `workspace/output/gene_summary/query2family/query2family_presence_absence.tsv`
+- `workspace/output/gene_summary/query2family/query2family_presence_absence.pdf`
+- `workspace/output/gene_summary/query2family/query2family_presence_absence.svg`
 - `workspace/orthogroup_summary.tsv`
 - `workspace/query2family_summary.tsv`
 - `workspace/transcriptome_assembly_summary.tsv`
 
-Those are produced by `gg_progress_summary_entrypoint.sh`.
+The `workspace/output/gene_summary/*` reports are produced by
+`gg_gene_summary_entrypoint.sh`; gene-family figures combine a species tree,
+branch support/dated-tree uncertainty when available, a detected/undetected
+gene-family matrix, and per-species BUSCO stacked bars when BUSCO full tables
+or a BUSCO summary table are available. For large orthogroup sets, full TSV
+matrices are retained while `.plot.*` files record the default or user-selected
+subset used for the PDF/SVG. The workspace-root summary TSVs are produced by
+`gg_progress_summary_entrypoint.sh`.
 
 ## Common relocation scenario
 

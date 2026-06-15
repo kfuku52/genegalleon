@@ -7,6 +7,7 @@ set -euo pipefail
 #   gg_genome_evolution_entrypoint.sh
 #     -> gg_gene_evolution_entrypoint.sh (mode_gene_evolution=orthogroup)
 #     -> gg_gene_evolution_entrypoint.sh (mode_gene_evolution=query2family)
+#     -> gg_gene_summary_entrypoint.sh
 #     -> gg_gene_database_entrypoint.sh
 #     -> gg_convergent_sites_entrypoint.sh
 #
@@ -198,6 +199,7 @@ ordered_steps=(
   "gg_genome_evolution|gg_genome_evolution_entrypoint.sh|"
   "gg_gene_evolution_mode_orthogroup|gg_gene_evolution_entrypoint.sh|mode_gene_evolution=orthogroup run_hyphy_relax=0 run_hyphy_relax_reversed=0"
   "gg_gene_evolution_mode_query2family|gg_gene_evolution_entrypoint.sh|mode_gene_evolution=query2family run_hyphy_relax=0 run_hyphy_relax_reversed=0"
+  "gg_gene_summary|gg_gene_summary_entrypoint.sh|run_database_prep=0 run_hgt_eval=0 run_hgt_plot=0 run_convergent_sites=0"
   "gg_gene_database|gg_gene_database_entrypoint.sh|"
   "gg_convergent_sites|gg_convergent_sites_entrypoint.sh|"
   "gg_progress_summary|gg_progress_summary_entrypoint.sh|"

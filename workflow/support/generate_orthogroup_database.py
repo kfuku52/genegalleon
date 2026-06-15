@@ -147,8 +147,10 @@ def process_files(file_path, columns_to_read, available_cols_set=None):
     If any required columns are missing, return an empty DataFrame.
     """
     try:
-        # Derive orthogroup name from the file name.
-        og = os.path.splitext(os.path.basename(file_path))[0].split('.')[0]
+        # Derive the gene-family ID from the file name. This script is used for
+        # both orthogroup and query2family outputs, so strip GeneGalleon suffixes
+        # before falling back to the legacy dot-delimited convention.
+        og = gene_family_id_from_path(file_path)
 
         # Define the desired columns to read (exclude 'orthogroup' because it isn’t in the file)
         desired_cols = [col for col in columns_to_read if col != 'orthogroup']
@@ -201,6 +203,24 @@ def process_files(file_path, columns_to_read, available_cols_set=None):
     except Exception as e:
         logger.error(f"Error processing file {file_path}: {e}")
         raise
+
+
+def gene_family_id_from_path(file_path):
+    stem = os.path.splitext(os.path.basename(file_path))[0]
+    for suffix in (
+        '_stat.branch',
+        '_stat.tree',
+        '_csubst_cb_stats',
+    ):
+        if stem.endswith(suffix):
+            return stem[:-len(suffix)]
+    for marker in (
+        '.csubst_cb_',
+        '_csubst_cb_',
+    ):
+        if marker in stem:
+            return stem.split(marker, 1)[0]
+    return stem.split('.')[0]
 
 def parse_cutoff_stat(cutoff_stat):
     parsed = []

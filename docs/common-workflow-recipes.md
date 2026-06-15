@@ -224,6 +224,21 @@ Main output:
 
 - `workspace/output/orthogroup/gg_orthogroup.db`
 
+The same database build can also be run through the mode-aware summary
+entrypoint:
+
+```bash
+cd workflow
+mode_gene_summary=orthogroup run_database_prep=1 bash gg_gene_summary_entrypoint.sh
+```
+
+For query2family outputs, switch the mode:
+
+```bash
+cd workflow
+mode_gene_summary=query2family run_database_prep=1 bash gg_gene_summary_entrypoint.sh
+```
+
 ## 8. Run site-level convergence analysis
 
 After orthogroup outputs and the database are available:
@@ -243,7 +258,49 @@ Main output root:
 
 - `workspace/output/csubst_site`
 
-## 9. Generate summary TSVs
+`gg_gene_summary_entrypoint.sh` can run the same post-analysis for either
+gene-family mode by setting `mode_gene_summary` and `run_convergent_sites=1`.
+
+## 9. Generate gene-family summary figures
+
+To combine query2family outputs into a species-tree presence/absence summary:
+
+```bash
+cd workflow
+mode_gene_summary=query2family bash gg_gene_summary_entrypoint.sh
+```
+
+Main output root:
+
+- `workspace/output/gene_summary/query2family`
+
+For orthogroups, switch the mode:
+
+```bash
+cd workflow
+mode_gene_summary=orthogroup bash gg_gene_summary_entrypoint.sh
+```
+
+The PDF/SVG figure combines the species tree with the gene-family
+detected/undetected matrix. The full TSV matrices are written for all detected
+families, while `.plot.*` files record the subset used for the figure. By
+default, query2family plots all query files and orthogroup plots the first
+100 orthogroups. Use `gene_summary_max_families=0` or `all` to remove the cap,
+or set `gene_summary_family_ids=OG0000001,OG0000042` /
+`gene_summary_family_file=selected_ogs.txt` to plot an explicit subset in the
+requested order.
+
+If the selected species tree is dated and
+`workspace/output/species_tree/mcmctree_main/mcmctree_95CI.nwk` exists, the
+figure adds node-age 95% HPD bars. Numeric branch-support labels are
+transferred from available species-tree support files when their splits match
+the plotted tree. When BUSCO full tables or a BUSCO summary table are
+available, the figure also adds right-side per-species BUSCO stacked bars;
+full tables include Fragmented counts. Override the auto-selected
+files with `gene_summary_species_tree`, `gene_summary_species_tree_ci`,
+`gene_summary_species_tree_support`, or `gene_summary_busco_table` when needed.
+
+## 10. Generate summary TSVs
 
 To create summary tables for completed transcriptome, orthogroup, or
 query2family runs:
@@ -268,7 +325,7 @@ Current scope:
 - transcriptome summary is generated when
   `workspace/output/transcriptome_assembly` exists.
 
-## 10. Full end-to-end order
+## 11. Full end-to-end order
 
 Not every project needs every step, but the common broad order is:
 
@@ -279,11 +336,12 @@ Not every project needs every step, but the common broad order is:
 5. optionally run `gg_genome_annotation_entrypoint.sh`
 6. run `gg_genome_evolution_entrypoint.sh`
 7. run `gg_gene_evolution_entrypoint.sh` in the mode you need
-8. optionally run `gg_gene_database_entrypoint.sh`
-9. optionally run `gg_convergent_sites_entrypoint.sh`
-10. optionally run `gg_progress_summary_entrypoint.sh`
+8. optionally run `gg_gene_summary_entrypoint.sh`
+9. optionally run `gg_gene_database_entrypoint.sh`
+10. optionally run `gg_convergent_sites_entrypoint.sh`
+11. optionally run `gg_progress_summary_entrypoint.sh`
 
-## 11. Dry-run and debug the full wrapper chain
+## 12. Dry-run and debug the full wrapper chain
 
 For a dependency-aware wrapper sanity check:
 
