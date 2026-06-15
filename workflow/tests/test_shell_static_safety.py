@@ -896,6 +896,8 @@ def test_set_singularityenv_forwards_gg_common_variables():
     assert 'resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")' in body
     assert "export SINGULARITYENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache" in body
     assert "export APPTAINERENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache" in body
+    assert "export SINGULARITYENV_PYTHONNOUSERSITE=1" in body
+    assert "export APPTAINERENV_PYTHONNOUSERSITE=1" in body
     assert "for gg_common_var_name in ${!GG_COMMON_@}; do" in body
     assert 'export "SINGULARITYENV_${gg_common_var_name}=${!gg_common_var_name}"' in body
     assert 'export "APPTAINERENV_${gg_common_var_name}=${!gg_common_var_name}"' in body
