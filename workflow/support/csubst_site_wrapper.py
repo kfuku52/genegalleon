@@ -489,7 +489,7 @@ def generate_trait_colors(df_trait, trait_names):
 
 
 def load_annotation_besthits(dir_of):
-    path_annot = os.path.join(dir_of, 'Orthogroups', 'Orthogroups.GeneCount.annotated.tsv')
+    path_annot = os.path.join(dir_of, 'Orthogroups_filtered', 'Orthogroups.GeneCount.annotated.tsv')
     annot = pandas.read_csv(path_annot, sep='\t', header=0, low_memory=False)
     annot.columns = annot.columns.str.replace('Orthogroup', 'orthogroup')
     cols = ['orthogroup'] + annot.columns[annot.columns.str.startswith('besthit_')].tolist()

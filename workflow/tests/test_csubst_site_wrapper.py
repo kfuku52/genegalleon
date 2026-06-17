@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pandas
+import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "csubst_site_wrapper.py"
 
@@ -184,7 +185,7 @@ def test_skip_lower_order_filters_subset_rows_per_orthogroup():
 
 def test_load_annotation_besthits_reads_besthit_columns_only(tmp_path):
     mod = load_module()
-    annot_dir = tmp_path / "Orthogroups"
+    annot_dir = tmp_path / "Orthogroups_filtered"
     annot_dir.mkdir(parents=True)
     infile = annot_dir / "Orthogroups.GeneCount.annotated.tsv"
     infile.write_text(
@@ -197,6 +198,23 @@ def test_load_annotation_besthits_reads_besthit_columns_only(tmp_path):
 
     assert out.columns.tolist() == ["orthogroup", "besthit_0.5", "besthit_0.95"]
     assert out.loc[0, "orthogroup"] == "OG1"
+
+
+def test_load_annotation_besthits_requires_filtered_directory(tmp_path):
+    mod = load_module()
+    legacy_dir = tmp_path / "Orthogroups"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "Orthogroups.GeneCount.annotated.tsv").write_text(
+        "Orthogroup\tTotal\tbesthit_0.5\n"
+        "OG1\t4\tlegacy_hit\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        mod.load_annotation_besthits(str(tmp_path))
+
+    expected = tmp_path / "Orthogroups_filtered" / "Orthogroups.GeneCount.annotated.tsv"
+    assert Path(excinfo.value.filename) == expected
 
 
 def test_help_has_no_side_effect_files(tmp_path):
