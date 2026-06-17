@@ -1,4 +1,5 @@
 import ast
+import gzip
 from importlib.util import module_from_spec, spec_from_file_location
 import os
 import re
@@ -34,6 +35,15 @@ def load_extract_pdb_id():
     namespace = {"os": os, "re": re}
     exec(code, namespace)
     return namespace["extract_pdb_id"]
+
+
+def test_get_matplotlib_imports_plotting_submodules():
+    mod = load_module()
+
+    matplotlib = mod._get_matplotlib()
+
+    assert hasattr(matplotlib, "pyplot")
+    assert hasattr(matplotlib, "patches")
 
 
 def test_extract_pdb_id_returns_none_for_missing_directory(tmp_path):
@@ -215,6 +225,55 @@ def test_load_annotation_besthits_requires_filtered_directory(tmp_path):
 
     expected = tmp_path / "Orthogroups_filtered" / "Orthogroups.GeneCount.annotated.tsv"
     assert Path(excinfo.value.filename) == expected
+
+
+def test_gene_evolution_artifact_paths_use_current_underscore_names(tmp_path):
+    mod = load_module()
+
+    dir_og = tmp_path / "orthogroup"
+    dir_out_og = tmp_path / "csubst_site" / "OG0001_1_2"
+
+    assert mod.get_iqtree_anc_zip_path(str(dir_og), "OG0001") == str(
+        dir_og / "iqtree_anc" / "OG0001_iqtree.anc.zip"
+    )
+    assert mod.get_iqtree_anc_dir(str(dir_out_og), "OG0001") == str(
+        dir_out_og / "OG0001.iqtree.anc"
+    )
+    assert mod.get_stat_branch_path(str(dir_og), "OG0001") == str(
+        dir_og / "stat_branch" / "OG0001_stat.branch.tsv"
+    )
+    assert mod.get_rpsblast_path(str(dir_og), "OG0001") == str(
+        dir_og / "rpsblast" / "OG0001_rpsblast.tsv"
+    )
+
+
+def test_get_alignment_for_tree_plot_reads_current_clipkit_name(tmp_path):
+    mod = load_module()
+    dir_og = tmp_path / "orthogroup"
+    dir_out_og = tmp_path / "csubst_site" / "OG0001_1_2"
+    clipkit_dir = dir_og / "clipkit"
+    clipkit_dir.mkdir(parents=True)
+    dir_out_og.mkdir(parents=True)
+    alignment = clipkit_dir / "OG0001_cds.clipkit.fa.gz"
+    with gzip.open(alignment, "wt") as handle:
+        handle.write(">gene1\nATG\n")
+
+    out = mod.get_alignment_for_tree_plot(str(dir_og), "OG0001", str(dir_out_og))
+
+    assert out == str(dir_out_og / "OG0001_cds.clipkit.plot.fasta")
+    assert Path(out).read_text(encoding="utf-8") == ">gene1\nATG\n"
+
+
+def test_get_alignment_for_tree_plot_rejects_legacy_dot_clipkit_name(tmp_path):
+    mod = load_module()
+    dir_og = tmp_path / "orthogroup"
+    dir_out_og = tmp_path / "csubst_site" / "OG0001_1_2"
+    clipkit_dir = dir_og / "clipkit"
+    clipkit_dir.mkdir(parents=True)
+    (clipkit_dir / "OG0001.cds.clipkit.fa").write_text(">gene1\nATG\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError):
+        mod.get_alignment_for_tree_plot(str(dir_og), "OG0001", str(dir_out_og))
 
 
 def test_help_has_no_side_effect_files(tmp_path):

@@ -51,6 +51,8 @@ pandas.set_option("display.max_columns", None)
 
 def _get_matplotlib():
     import matplotlib
+    import matplotlib.patches
+    import matplotlib.pyplot
 
     matplotlib.rcParams['font.size'] = 8
     matplotlib.rcParams['font.family'] = 'Helvetica'
@@ -362,20 +364,19 @@ Annotation of the gene as being in the 5th, 25th, 50th, 75th, or 95th percentile
 
 def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, annotation_text):
     previous_cwd = os.getcwd()
-    dir_iqtree_anc = os.path.join(dir_og, "iqtree_anc")
-    dir_tree_plot = os.path.join(dir_og, "tree_plot")
-    dir_stat_branch = os.path.join(dir_og, "stat_branch")
     dir_out_og = os.path.join(dir_out, og+'_'+branch_id_str.replace(',', '_'))
     print('{}, --branch_ids {}: wd: {}'.format(og, branch_id_str, dir_out_og), flush=True)
     if not os.path.exists(dir_out_og):
         os.makedirs(dir_out_og)
     os.chdir(dir_out_og)
-    iqtree_tree_file = os.path.join(dir_out_og, og+'.iqtree.anc', 'csubst.treefile')
-    iqtree_state_file = os.path.join(dir_out_og, og+'.iqtree.anc', 'csubst.state')
-    iqtree_rate_file = os.path.join(dir_out_og, og+'.iqtree.anc', 'csubst.rate')
-    iqtree_iqtree_file = os.path.join(dir_out_og, og+'.iqtree.anc', 'csubst.iqtree')
-    iqtree_log_file = os.path.join(dir_out_og, og+'.iqtree.anc', 'csubst.log')
-    iqtree_ckp_file = os.path.join(dir_out_og, og+'.iqtree.anc', 'csubst.ckp.gz')
+    iqtree_anc_dir = get_iqtree_anc_dir(dir_out_og=dir_out_og, og=og)
+    iqtree_anc_rel_dir = os.path.basename(iqtree_anc_dir)
+    iqtree_tree_file = os.path.join(iqtree_anc_dir, 'csubst.treefile')
+    iqtree_state_file = os.path.join(iqtree_anc_dir, 'csubst.state')
+    iqtree_rate_file = os.path.join(iqtree_anc_dir, 'csubst.rate')
+    iqtree_iqtree_file = os.path.join(iqtree_anc_dir, 'csubst.iqtree')
+    iqtree_log_file = os.path.join(iqtree_anc_dir, 'csubst.log')
+    iqtree_ckp_file = os.path.join(iqtree_anc_dir, 'csubst.ckp.gz')
     file_summary = os.path.join(dir_out_og, f'summary.{og}_branch_id{branch_id_str}.pdf')
     if os.path.exists(file_summary):
         print(f'Skipped. Outfile already exists: {file_summary}', flush=True)
@@ -387,12 +388,12 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, an
             print(f'Skipped csubst sites. Outfile already exists: {file_csubst_out}', flush=True)
         else:
             print(f'Running csubst sites. Output file not found: {file_csubst_out}', flush=True)
-            path_iqtree_zip = os.path.join(dir_iqtree_anc, og+'.iqtree.anc.zip')
+            path_iqtree_zip = get_iqtree_anc_zip_path(dir_og=dir_og, og=og)
             with zipfile.ZipFile(path_iqtree_zip, "r") as zip_ref:
                 zip_ref.extractall(dir_out_og)
             cmd = ['csubst', 'sites']
-            cmd += ['--alignment_file', os.path.join(og+'.iqtree.anc', 'csubst.fasta')]
-            cmd += ['--rooted_tree_file', os.path.join(og+'.iqtree.anc', 'csubst.nwk')]
+            cmd += ['--alignment_file', os.path.join(iqtree_anc_rel_dir, 'csubst.fasta')]
+            cmd += ['--rooted_tree_file', os.path.join(iqtree_anc_rel_dir, 'csubst.nwk')]
             cmd += ['--branch_id', branch_id_str]
             cmd += ['--threads', str(max(1, int(ncpu)))]
             cmd += ['--iqtree_treefile', iqtree_tree_file]
@@ -527,11 +528,23 @@ def resolve_existing_path(candidates):
             return candidate
     return None
 
+def get_iqtree_anc_zip_path(dir_og, og):
+    return os.path.join(dir_og, 'iqtree_anc', og + '_iqtree.anc.zip')
+
+def get_iqtree_anc_dir(dir_out_og, og):
+    return os.path.join(dir_out_og, og + '.iqtree.anc')
+
+def get_stat_branch_path(dir_og, og):
+    return os.path.join(dir_og, 'stat_branch', og + '_stat.branch.tsv')
+
+def get_rpsblast_path(dir_og, og):
+    return os.path.join(dir_og, 'rpsblast', og + '_rpsblast.tsv')
+
 def get_alignment_for_tree_plot(dir_og, og, dir_out_og):
     alignment_candidates = [
-        os.path.join(dir_og, 'clipkit', og + '.cds.clipkit.fa.gz'),
-        os.path.join(dir_og, 'clipkit', og + '.cds.clipkit.fasta'),
-        os.path.join(dir_og, 'clipkit', og + '.cds.clipkit.fa'),
+        os.path.join(dir_og, 'clipkit', og + '_cds.clipkit.fa.gz'),
+        os.path.join(dir_og, 'clipkit', og + '_cds.clipkit.fasta'),
+        os.path.join(dir_og, 'clipkit', og + '_cds.clipkit.fa'),
     ]
     alignment_path = resolve_existing_path(alignment_candidates)
     if alignment_path is None:
@@ -539,7 +552,7 @@ def get_alignment_for_tree_plot(dir_og, og, dir_out_og):
             f'Alignment file was not found for tree plotting. Checked: {alignment_candidates}'
         )
     if alignment_path.endswith('.gz'):
-        plain_path = os.path.join(dir_out_og, og + '.cds.clipkit.plot.fasta')
+        plain_path = os.path.join(dir_out_og, og + '_cds.clipkit.plot.fasta')
         if (not os.path.exists(plain_path)) or (os.path.getmtime(plain_path) < os.path.getmtime(alignment_path)):
             with gzip.open(alignment_path, 'rt') as fin, open(plain_path, 'w') as fout:
                 shutil.copyfileobj(fin, fout)
@@ -549,10 +562,10 @@ def get_alignment_for_tree_plot(dir_og, og, dir_out_og):
 def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, dir_og, ncpu=1):
     dir_myscript = os.path.realpath(os.path.dirname(__file__))
     dir_treevis = os.path.join(dir_myscript, 'treevis')
-    file_stat_branch = os.path.join(dir_og, 'stat_branch', og+'.stat.branch.tsv')
-    file_og_rpsblast = os.path.join(dir_og, 'rpsblast', og+'.rpsblast.tsv')
+    file_stat_branch = get_stat_branch_path(dir_og=dir_og, og=og)
+    file_og_rpsblast = get_rpsblast_path(dir_og=dir_og, og=og)
     file_og_alignment = get_alignment_for_tree_plot(dir_og=dir_og, og=og, dir_out_og=dir_out_og)
-    file_csubst_input_fasta = os.path.join(dir_out_og, og+'.iqtree.anc', 'csubst.fasta')
+    file_csubst_input_fasta = os.path.join(get_iqtree_anc_dir(dir_out_og=dir_out_og, og=og), 'csubst.fasta')
     artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
     file_csubst_site_tsv = artifacts['site_table_tsv']
     if file_csubst_site_tsv is None:
