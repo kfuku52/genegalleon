@@ -109,6 +109,48 @@ filter_expression_for_dimensional_reduction = function(df_in, min_non_missing = 
     df_out
 }
 
+impute_expression_for_dimensional_reduction = function(df_exp_filtered) {
+    nb = tryCatch(
+        missMDA::estim_ncpPCA(df_exp_filtered, method.cv="Kfold", nbsim=100, threshold=1e-2, verbose=TRUE),
+        error = function(e) {
+            cat(sprintf('missMDA estim_ncpPCA failed: %s\n', conditionMessage(e)))
+            NULL
+        }
+    )
+    if (!is.null(nb) && !is.null(nb[['ncp']]) && is.finite(nb[['ncp']]) && nb[['ncp']] >= 1) {
+        cat(paste0('Number of components for expression data imputations: ', nb[['ncp']], '\n'))
+        res_comp = tryCatch(
+            missMDA::imputePCA(df_exp_filtered, ncp=nb[['ncp']]),
+            error = function(e) {
+                cat(sprintf('missMDA imputePCA failed: %s\n', conditionMessage(e)))
+                NULL
+            }
+        )
+        if (!is.null(res_comp) && !is.null(res_comp[['completeObs']])) {
+            imp = res_comp[['completeObs']]
+            if (all(dim(imp) == dim(df_exp_filtered)) && all(is.finite(as.matrix(imp)))) {
+                return(as.data.frame(imp, check.names=FALSE, stringsAsFactors=FALSE))
+            }
+            cat('missMDA imputePCA returned invalid values or dimensions.\n')
+        }
+    } else {
+        cat('missMDA estim_ncpPCA did not return a usable component count.\n')
+    }
+
+    cat('Falling back to column median imputation for expression data.\n')
+    mat = as.matrix(coerce_numeric_data_frame(df_exp_filtered))
+    for (col_idx in seq_len(ncol(mat))) {
+        col_values = mat[,col_idx]
+        replacement = suppressWarnings(stats::median(col_values[is.finite(col_values)], na.rm=TRUE))
+        if (!is.finite(replacement)) {
+            replacement = 0
+        }
+        col_values[!is.finite(col_values)] = replacement
+        mat[,col_idx] = col_values
+    }
+    as.data.frame(mat, check.names=FALSE, stringsAsFactors=FALSE)
+}
+
 # %%
 cat('Starting transcriptome dimensionality reduction plot.\n')
 
@@ -210,11 +252,7 @@ if (file.exists('expression.tsv')) {
         } else {
             cat('Generating expression.imputed.tsv\n')
             print(paste('Starting the expression level imputation:', Sys.time()))
-            nb = missMDA::estim_ncpPCA(df_exp_filtered, method.cv="Kfold", nbsim=100, threshold=1e-2, verbose=TRUE)
-            cat(paste0('Number of components for expression data imputations: ', nb[['ncp']], '\n'))
-            res_comp = missMDA::imputePCA(df_exp_filtered, ncp=nb[['ncp']])
-            imp = res_comp[['completeObs']]
-            df_imp = as.data.frame(imp, check.names=FALSE, stringsAsFactors=FALSE)
+            df_imp = impute_expression_for_dimensional_reduction(df_exp_filtered)
             write.table(df_imp, 'expression.imputed.tsv', row.names=FALSE, sep='\t', quote=FALSE)
             print(paste('Ending the expression level imputation:', Sys.time()))
 

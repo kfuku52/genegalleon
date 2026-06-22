@@ -35,6 +35,10 @@ def test_multispecies_transcriptome_summary_filters_before_imputation_and_skips_
     assert "df_exp_filtered = filter_expression_for_dimensional_reduction(df_exp, min_non_missing=min_species)" in text
     assert "missMDA::estim_ncpPCA(df_exp_filtered" in text
     assert "missMDA::imputePCA(df_exp_filtered" in text
+    assert "impute_expression_for_dimensional_reduction = function(df_exp_filtered)" in text
+    assert "missMDA estim_ncpPCA failed:" in text
+    assert "missMDA imputePCA failed:" in text
+    assert "Falling back to column median imputation for expression data." in text
     assert "Skipping dimensional reduction because too few rows/columns remain after filtering" in text
     assert "Skipping PCA plot because at least 2 gene rows and 3 species columns are required after filtering" in text
     assert "Skipping MDS plot because at least 3 species columns are required after filtering" in text
