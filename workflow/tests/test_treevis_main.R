@@ -248,6 +248,13 @@ g_fimo_poly_empty_in <- list(
 g_fimo_poly_empty_out <- add_fimo_column(g_fimo_poly_empty_in, list(font_size = 6, margins = c(0, 0, 0, 0)), qname = "fimo", xmax = 100, qvalue = 0.01)
 if (!("fimo" %in% names(g_fimo_poly_empty_out))) stop("add_fimo_column should create panel even when polygon data are empty.")
 
+# 8d) add_amino_acid_site_column: empty site lists should be a no-op.
+g_amino_empty_in <- list(tree = "unchanged")
+g_amino_empty_out <- add_amino_acid_site_column(g_amino_empty_in, list(font_size = 6, margins = c(0, 0, 0, 0)), data.frame(), integer(0))
+if (!identical(g_amino_empty_out, g_amino_empty_in)) stop("add_amino_acid_site_column should no-op on empty site lists.")
+g_amino_na_out <- add_amino_acid_site_column(g_amino_empty_in, list(font_size = 6, margins = c(0, 0, 0, 0)), data.frame(), NA_integer_)
+if (!identical(g_amino_na_out, g_amino_empty_in)) stop("add_amino_acid_site_column should no-op on NA-only site lists.")
+
 # 8e) add_heatmap_column: optional fill label is retained.
 g_heatmap_in <- list(
   tree = list(

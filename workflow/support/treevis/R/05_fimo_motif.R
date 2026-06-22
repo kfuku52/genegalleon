@@ -1130,6 +1130,11 @@ extract_alignment_sites <- function(tidy_aln, selected_amino_acid_sites) {
 
 add_amino_acid_site_column <- function(g, args, tidy_aln, selected_amino_acid_sites) {
   cat(as.character(Sys.time()), "Adding amino acid site column.\n")
+  selected_amino_acid_sites <- selected_amino_acid_sites[!is.na(selected_amino_acid_sites)]
+  if (length(selected_amino_acid_sites) == 0) {
+    cat("Amino acid site list is empty. amino_acid_site column will not be added.\n")
+    return(g)
+  }
   df_tip <- get_df_tip(g[["tree"]])[,c('label','branch_id')]
   tidy_site <- extract_alignment_sites(tidy_aln, selected_amino_acid_sites)
   tidy_site <- merge(tidy_site, df_tip, by.x = "name", by.y = "label", all.x = TRUE)

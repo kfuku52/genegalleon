@@ -39,6 +39,15 @@ set_default_arg = function(args, key, value) {
   return(args)
 }
 
+parse_amino_acid_site_list = function(site_text) {
+  if (is.null(site_text) || is.na(site_text) || !nzchar(trimws(as.character(site_text)))) {
+    return(integer(0))
+  }
+  selected_amino_acid_sites = suppressWarnings(as.integer(strsplit(as.character(site_text), ':', fixed = TRUE)[[1]]))
+  selected_amino_acid_sites = selected_amino_acid_sites[!is.na(selected_amino_acid_sites)]
+  return(selected_amino_acid_sites)
+}
+
 ensure_plot_topology_columns = function(b) {
   if (!('numerical_label' %in% colnames(b))) {
     numerical_label = suppressWarnings(as.integer(as.character(b[['branch_id']])))
@@ -333,10 +342,13 @@ for (col in unlist(args[grep("^panel", names(args))])) {
     path_meme = strsplit(col, ',')[[1]][2]
     g = add_meme_column(g, args, path_meme = path_meme)
   } else if (grepl('^amino_acid_site', col)) {
-      genetic_code = as.integer(strsplit(col, ',')[[1]][2])
-      selected_amino_acid_sites = as.integer(strsplit(strsplit(col, ',')[[1]][3], ':')[[1]])
-      cds_aln_file = strsplit(col, ',')[[1]][4]
-      if (file.exists(cds_aln_file)) {
+      amino_acid_site_params = strsplit(col, ',', fixed = TRUE)[[1]]
+      genetic_code = as.integer(amino_acid_site_params[2])
+      selected_amino_acid_sites = parse_amino_acid_site_list(amino_acid_site_params[3])
+      cds_aln_file = ifelse(length(amino_acid_site_params) >= 4, amino_acid_site_params[4], '')
+      if (length(selected_amino_acid_sites) == 0) {
+          cat('Amino acid site list is empty. amino_acid_site column will not be added.\n')
+      } else if (file.exists(cds_aln_file)) {
           cds_aln = ape::read.FASTA(cds_aln_file, type = 'DNA')
           aa_aln = ape::trans(x = cds_aln, code = genetic_code, codonstart = 1)
           tidy_aln = ggmsa::tidy_msa(aa_aln)
