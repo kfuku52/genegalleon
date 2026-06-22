@@ -929,6 +929,11 @@ def is_gbff_filename(name):
     return any(lower.endswith(ext) for ext in GENBANK_EXTENSIONS)
 
 
+def has_haplotype_assembly_marker(name):
+    lower = str(name or "").lower()
+    return re.search(r"(?:^|[._-])(?:hap[0-9][0-9a-z]*|haplotype[0-9a-z]*)(?:[._-]|$)", lower) is not None
+
+
 def is_probable_genome_filename(provider, name):
     if not is_fasta_filename(name):
         return False
@@ -951,7 +956,7 @@ def is_probable_genome_filename(provider, name):
         return "genomic" in lower
     if provider in ENSEMBL_LIKE_PROVIDERS:
         return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
-    return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold"))
+    return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold")) or has_haplotype_assembly_marker(lower)
 
 
 FERNBASE_GFF_EXCLUDE_PATTERN = re.compile(

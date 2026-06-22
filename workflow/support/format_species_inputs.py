@@ -6240,6 +6240,11 @@ def task_has_usable_source_bundle(cds_path, gff_path, gbff_path, genome_path):
     return cds_path is not None or gbff_path is not None or (gff_path is not None and genome_path is not None)
 
 
+def has_haplotype_assembly_marker(name):
+    lower = str(name or "").lower()
+    return re.search(r"(?:^|[._-])(?:hap[0-9][0-9a-z]*|haplotype[0-9a-z]*)(?:[._-]|$)", lower) is not None
+
+
 def is_probable_genome_filename(provider, name):
     if not is_fasta_filename(name):
         return False
@@ -6285,7 +6290,7 @@ def is_probable_genome_filename(provider, name):
             "hardmasked",
             "masked",
         )
-    )
+    ) or has_haplotype_assembly_marker(lower)
 
 
 def gff_seqids(path):

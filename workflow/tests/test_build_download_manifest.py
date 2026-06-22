@@ -1086,6 +1086,36 @@ def test_build_download_manifest_local_provider_from_phytozome_like_fixture(tmp_
     assert rows[0]["gff_filename"].endswith(".gene.gff3")
 
 
+def test_build_download_manifest_direct_recognizes_haplotype_genome_filename(tmp_path):
+    input_root = tmp_path / "dataset"
+    species_dir = input_root / "Direct" / "species_wise_original" / "Fagopyrum_esculentum"
+    species_dir.mkdir(parents=True)
+    (species_dir / "Fagopyrum_esculentum_hap1.cds.long.fa.gz").write_text(">g1\nATG\n", encoding="utf-8")
+    (species_dir / "Fagopyrum_esculentum_hap1.gff3.gz").write_text(
+        "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=g1\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Fagopyrum_esculentum_hap1.fasta.gz").write_text(">chr1\nATG\n", encoding="utf-8")
+
+    out = tmp_path / "download_manifest.tsv"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    rows = read_manifest(out)
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "direct"
+    assert rows[0]["species_key"] == "Fagopyrum_esculentum"
+    assert rows[0]["cds_filename"] == "Fagopyrum_esculentum_hap1.cds.long.fa.gz"
+    assert rows[0]["gff_filename"] == "Fagopyrum_esculentum_hap1.gff3.gz"
+    assert rows[0]["genome_filename"] == "Fagopyrum_esculentum_hap1.fasta.gz"
+
+
 def test_build_download_manifest_all_rows_keep_local_last(tmp_path):
     input_root = tmp_path / "dataset"
 

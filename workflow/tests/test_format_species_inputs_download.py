@@ -1108,6 +1108,79 @@ def test_download_manifest_xlsx_direct_catalog_sheet_fills_runtime_urls(tmp_path
     assert "ATGTTT" in cds_text
 
 
+def test_download_manifest_direct_recognizes_haplotype_genome_filename(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Fagopyrum_esculentum"
+    cds_source = source_dir / "Fagopyrum_esculentum_hap1.cds.long.fa.gz"
+    gff_source = source_dir / "Fagopyrum_esculentum_hap1.gff3.gz"
+    genome_source = source_dir / "Fagopyrum_esculentum_hap1.fasta.gz"
+    with gzip.open(cds_source, "wt", encoding="utf-8") as handle:
+        handle.write(">gene1.t1\nATGTTTAAA\n")
+    with gzip.open(gff_source, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "\n".join(
+                [
+                    "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
+                    "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                    "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+                    "",
+                ]
+            )
+        )
+    with gzip.open(genome_source, "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGTTTAAA\n")
+
+    manifest = tmp_path / "manifest.tsv"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "direct",
+                "id": "Fagopyrum_esculentum_Figshare_hap1",
+                "species_key": species_key,
+                "cds_url": to_file_url(cds_source),
+                "gff_url": to_file_url(gff_source),
+                "genome_url": to_file_url(genome_source),
+                "cds_filename": cds_source.name,
+                "gff_filename": gff_source.name,
+                "genome_filename": genome_source.name,
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    out_cds = tmp_path / "out_cds"
+    out_gff = tmp_path / "out_gff"
+    out_genome = tmp_path / "out_genome"
+    species_summary = tmp_path / "gg_input_generation_species.tsv"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_genome = out_genome / "Fagopyrum_esculentum_hap1.fa.gz"
+    assert formatted_genome.exists()
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows) == 1
+    assert rows[0]["genome_status"] == "write"
+    assert rows[0]["genome_output_path"] == str(formatted_genome)
+
+
 def test_download_manifest_supports_direct_with_cds_only(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()
