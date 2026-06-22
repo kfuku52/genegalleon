@@ -90,10 +90,12 @@ fi
 : "${ncpu_progress_summary:=${GG_TASK_CPUS:-1}}"
 gg_entrypoint_activate_container_runtime
 
+gg_apply_registered_env_overrides "${gg_entrypoint_name}"
 forward_config_vars_to_container_env "${gg_entrypoint_name}"
 
 gg_entrypoint_enter_workspace
-gg_run_container_shell_script "${gg_container_image_path}" "${gg_core_dir}/gg_progress_summary_core.sh"
+gg_runtime_core_script="$(gg_prepare_entrypoint_runtime_snapshot "${gg_entrypoint_name}" "${gg_core_dir}/gg_progress_summary_core.sh")"
+gg_run_container_shell_script "${gg_container_image_path}" "${gg_runtime_core_script}"
 gg_require_versions_dump "${gg_entrypoint_name}"
 
 echo "$(date): Ending"

@@ -138,55 +138,8 @@ gbif_max_distance_from_centroid_m="" # Optional maximum GBIF distance-from-centr
 
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
 
-# Apply documented GG_INPUT_* overrides before forwarding canonical config vars.
-gg_apply_named_env_overrides \
-  provider GG_INPUT_PROVIDER \
-  input_generation_mode GG_INPUT_INPUT_GENERATION_MODE \
-  strict GG_INPUT_STRICT \
-  overwrite GG_INPUT_OVERWRITE \
-  download_only GG_INPUT_DOWNLOAD_ONLY \
-  dry_run GG_INPUT_DRY_RUN \
-  download_timeout GG_INPUT_DOWNLOAD_TIMEOUT \
-  gene_grouping_mode GG_INPUT_GENE_GROUPING_MODE \
-  busco_lineage GG_INPUT_BUSCO_LINEAGE \
-  input_dir GG_INPUT_INPUT_DIR \
-  download_manifest GG_INPUT_DOWNLOAD_MANIFEST \
-  download_dir GG_INPUT_DOWNLOAD_DIR \
-  summary_output GG_INPUT_SUMMARY_OUTPUT \
-  auth_bearer_token_env GG_INPUT_AUTH_BEARER_TOKEN_ENV \
-  http_header GG_INPUT_HTTP_HEADER \
-  run_format_inputs GG_INPUT_RUN_FORMAT_INPUTS \
-  run_validate_inputs GG_INPUT_RUN_VALIDATE_INPUTS \
-  run_cds_fx2tab GG_INPUT_RUN_CDS_FX2TAB \
-  run_species_busco GG_INPUT_RUN_SPECIES_BUSCO \
-  run_multispecies_summary GG_INPUT_RUN_MULTISPECIES_SUMMARY \
-  run_generate_species_trait GG_INPUT_RUN_GENERATE_SPECIES_TRAIT \
-  trait_profile GG_INPUT_TRAIT_PROFILE \
-  species_cds_dir GG_INPUT_SPECIES_CDS_DIR \
-  species_cds_fx2tab_dir GG_INPUT_SPECIES_CDS_FX2TAB_DIR \
-  species_busco_full_dir GG_INPUT_SPECIES_BUSCO_FULL_DIR \
-  species_busco_short_dir GG_INPUT_SPECIES_BUSCO_SHORT_DIR \
-  species_gff_dir GG_INPUT_SPECIES_GFF_DIR \
-  species_genome_dir GG_INPUT_SPECIES_GENOME_DIR \
-  species_summary_output GG_INPUT_SPECIES_SUMMARY_OUTPUT \
-  resolved_manifest_output GG_INPUT_RESOLVED_MANIFEST_OUTPUT \
-  species_trait_output GG_INPUT_SPECIES_TRAIT_OUTPUT \
-  task_plan_output GG_INPUT_TASK_PLAN_OUTPUT \
-  trait_plan GG_INPUT_TRAIT_PLAN \
-  trait_database_sources GG_INPUT_TRAIT_DATABASE_SOURCES \
-  trait_download_dir GG_INPUT_TRAIT_DOWNLOAD_DIR \
-  trait_download_timeout GG_INPUT_TRAIT_DOWNLOAD_TIMEOUT \
-  trait_species_source GG_INPUT_TRAIT_SPECIES_SOURCE \
-  trait_databases GG_INPUT_TRAIT_DATABASES \
-  gbif_api GG_INPUT_GBIF_API \
-  gbif_page_size GG_INPUT_GBIF_PAGE_SIZE \
-  gbif_max_occurrences_per_species GG_INPUT_GBIF_MAX_OCCURRENCES_PER_SPECIES \
-  gbif_grid_degrees GG_INPUT_GBIF_GRID_DEGREES \
-  gbif_min_match_confidence GG_INPUT_GBIF_MIN_MATCH_CONFIDENCE \
-  gbif_max_coordinate_uncertainty_m GG_INPUT_GBIF_MAX_COORDINATE_UNCERTAINTY_M \
-  gbif_max_distance_from_centroid_m GG_INPUT_GBIF_MAX_DISTANCE_FROM_CENTROID_M
-
-# Forward canonical config variables into the container environment.
+# Apply documented GG_INPUT_* overrides, then forward canonical config variables.
+gg_apply_registered_env_overrides "${gg_entrypoint_name}"
 forward_config_vars_to_container_env "${gg_entrypoint_name}"
 
 # Keep per-provider input downloads modest by default; callers can override these
@@ -209,7 +162,8 @@ fi
 gg_entrypoint_activate_container_runtime
 
 gg_entrypoint_enter_workspace
-gg_run_container_shell_script "${gg_container_image_path}" "${gg_core_dir}/gg_input_generation_core.sh"
+gg_runtime_core_script="$(gg_prepare_entrypoint_runtime_snapshot "${gg_entrypoint_name}" "${gg_core_dir}/gg_input_generation_core.sh")"
+gg_run_container_shell_script "${gg_container_image_path}" "${gg_runtime_core_script}"
 gg_require_versions_dump "${gg_entrypoint_name}"
 
 echo "$(date): Ending"

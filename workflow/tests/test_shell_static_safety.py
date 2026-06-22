@@ -334,7 +334,8 @@ def test_support_python_shebangs_use_python3():
 def test_progress_summary_entrypoint_runs_core_script_in_container():
     entrypoint = WORKFLOW_DIR / "gg_progress_summary_entrypoint.sh"
     text = _read_text(entrypoint)
-    assert 'gg_run_container_shell_script "${gg_container_image_path}" "${gg_core_dir}/gg_progress_summary_core.sh"' in text
+    assert 'gg_runtime_core_script="$(gg_prepare_entrypoint_runtime_snapshot "${gg_entrypoint_name}" "${gg_core_dir}/gg_progress_summary_core.sh")"' in text
+    assert 'gg_run_container_shell_script "${gg_container_image_path}" "${gg_runtime_core_script}"' in text
     assert "orthogroup_output_summary.py" not in text
     assert "transcriptome_assembly_output_summary.py" not in text
 
@@ -622,14 +623,8 @@ def test_input_generation_entrypoint_forwards_env_driven_overrides():
     entrypoint = WORKFLOW_DIR / "gg_input_generation_entrypoint.sh"
     text = _read_text(entrypoint)
 
-    assert "gg_apply_named_env_overrides \\" in text
-    assert "provider GG_INPUT_PROVIDER" in text
-    assert "input_generation_mode GG_INPUT_INPUT_GENERATION_MODE" in text
-    assert "busco_lineage GG_INPUT_BUSCO_LINEAGE" in text
-    assert "run_cds_fx2tab GG_INPUT_RUN_CDS_FX2TAB" in text
-    assert "run_species_busco GG_INPUT_RUN_SPECIES_BUSCO" in text
-    assert "run_multispecies_summary GG_INPUT_RUN_MULTISPECIES_SUMMARY" in text
-    assert "trait_profile GG_INPUT_TRAIT_PROFILE" in text
+    assert 'gg_apply_registered_env_overrides "${gg_entrypoint_name}"' in text
+    assert "gg_apply_named_env_overrides \\" not in text
     assert "for gg_input_var_name in ${!GG_INPUT_@}; do" not in text
     assert 'gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_MAX_CONCURRENT_DOWNLOADS_"' in text
     assert 'export "SINGULARITYENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
@@ -658,7 +653,8 @@ def test_input_generation_trait_profile_preset_is_wired():
     assert 'run_cds_fx2tab=1' in entry_text
     assert 'run_species_busco=1' in entry_text
     assert 'run_multispecies_summary=1' in entry_text
-    assert "trait_profile GG_INPUT_TRAIT_PROFILE" in entry_text
+    assert "gg_apply_registered_env_overrides" in entry_text
+    assert "trait_profile" in _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
     assert "GG_INPUT_" not in core_text
     assert "apply_env_override()" not in core_text
     assert 'case "${trait_profile}" in' in core_text
@@ -671,14 +667,21 @@ def test_gg_util_has_common_forward_config_export_helpers():
     text = _read_text(util_path)
     assert "gg_export_var_to_container_env_if_set()" in text
     assert "gg_apply_named_env_overrides()" in text
+    assert "gg_apply_registered_env_overrides()" in text
+    assert "gg_entrypoint_env_override_prefix()" in text
     assert "gg_forward_env_vars_with_prefix_to_container_env()" in text
     assert "gg_print_named_config_summary()" in text
     assert "gg_print_registered_config_summary()" in text
     assert "gg_require_versions_dump()" in text
+    assert "gg_prepare_entrypoint_runtime_snapshot()" in text
+    assert "gg_entrypoint_runtime_snapshot_dir()" in text
     assert "gg_resolve_physical_path()" in text
     body = _function_body(text, "forward_config_vars_to_container_env")
     assert "gg_print_entrypoint_config_vars" in body
     assert 'gg_export_var_to_container_env_if_set "gg_debug_mode"' in body
+    body = _function_body(text, "gg_apply_registered_env_overrides")
+    assert "gg_print_entrypoint_config_vars" in body
+    assert "gg_entrypoint_env_override_prefix" in body
 
 
 def test_entrypoint_config_var_registry_covers_all_entrypoints():
@@ -1115,6 +1118,23 @@ def test_entrypoints_forward_cleanup_flags_defined_outside_config_block():
         script_name = key.split("#")[0]
         text = _read_text(WORKFLOW_DIR / script_name)
         assert token in text, f"Missing cleanup var forwarding in {script_name}: {token}"
+
+
+def test_entrypoints_apply_registered_env_overrides_before_forwarding_config():
+    expected_tokens = {
+        "gg_genome_annotation_entrypoint.sh": 'gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir"',
+        "gg_transcriptome_generation_entrypoint.sh": 'gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir"',
+        "gg_gene_evolution_entrypoint.sh": 'gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir" "delete_preexisting_tmp_dir"',
+    }
+    entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
+    assert entrypoints
+    for script in entrypoints:
+        text = _read_text(script)
+        if script.name in expected_tokens:
+            token = expected_tokens[script.name]
+        else:
+            token = 'gg_apply_registered_env_overrides "${gg_entrypoint_name}"'
+        assert token in text, f"Missing registered env override call in {script.name}: {token}"
 
 
 def test_convergent_sites_entrypoint_does_not_define_unused_delete_tmp_dir():

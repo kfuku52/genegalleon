@@ -4,6 +4,7 @@ import subprocess
 
 
 GG_UTIL_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_util.sh"
+GG_ENTRYPOINT_CONFIG_VARS_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_entrypoint_config_vars.sh"
 GG_ENTRYPOINT_BOOTSTRAP_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_entrypoint_bootstrap.sh"
 
 
@@ -63,6 +64,90 @@ def test_export_var_to_container_env_ignores_invalid_variable_name(tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "ok"
     assert "ignoring invalid variable name" in completed.stderr
+
+
+def test_apply_registered_env_overrides_uses_entrypoint_prefixes_and_empty_values(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"source {shlex.quote(str(GG_ENTRYPOINT_CONFIG_VARS_PATH))}; "
+        "run_assembly=1; "
+        "delete_tmp_dir=1; "
+        "amalgkit_sra_strategy_query=default; "
+        "GG_TRANSCRIPTOME_RUN_ASSEMBLY=0; "
+        "GG_TRANSCRIPTOME_DELETE_TMP_DIR=0; "
+        "GG_TRANSCRIPTOME_AMALGKIT_SRA_STRATEGY_QUERY=; "
+        "gg_apply_registered_env_overrides gg_transcriptome_generation_entrypoint.sh delete_tmp_dir; "
+        'printf "run_assembly=%s\\ndelete_tmp_dir=%s\\nstrategy=%s\\n" '
+        '"${run_assembly}" "${delete_tmp_dir}" "${amalgkit_sra_strategy_query}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [
+        "run_assembly=0",
+        "delete_tmp_dir=0",
+        "strategy=",
+    ]
+
+
+def test_apply_registered_env_overrides_keeps_gg_input_prefix(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"source {shlex.quote(str(GG_ENTRYPOINT_CONFIG_VARS_PATH))}; "
+        "provider=NCBI; "
+        "trait_profile=none; "
+        "GG_INPUT_PROVIDER=direct; "
+        "GG_INPUT_TRAIT_PROFILE=gift_starter; "
+        "gg_apply_registered_env_overrides gg_input_generation_entrypoint.sh; "
+        'printf "provider=%s\\ntrait_profile=%s\\n" "${provider}" "${trait_profile}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [
+        "provider=direct",
+        "trait_profile=gift_starter",
+    ]
+
+
+def test_prepare_entrypoint_runtime_snapshot_copies_core_script_to_job_task_dir(tmp_path):
+    workflow_dir = tmp_path / "workflow"
+    workspace_dir = tmp_path / "workspace"
+    workflow_dir.mkdir()
+    (workspace_dir / "output").mkdir(parents=True)
+    core_script = workflow_dir / "gg_test_core.sh"
+    entrypoint_script = workflow_dir / "gg_test_entrypoint.sh"
+    core_script.write_text("echo core\\n", encoding="utf-8")
+    entrypoint_script.write_text("echo entrypoint\\n", encoding="utf-8")
+    (tmp_path / "VERSION").write_text("0.0.0\\n", encoding="utf-8")
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"gg_workflow_dir={shlex.quote(str(workflow_dir))}; "
+        f"gg_workspace_dir={shlex.quote(str(workspace_dir))}; "
+        f"gg_workspace_output_dir={shlex.quote(str(workspace_dir / 'output'))}; "
+        "GG_JOB_ID='job:42'; "
+        "GG_ARRAY_TASK_ID='task/7'; "
+        f"snapshot=$(gg_prepare_entrypoint_runtime_snapshot gg_test_entrypoint.sh {shlex.quote(str(core_script))}); "
+        'snapshot_dir="$(dirname "${snapshot}")"; '
+        'printf "snapshot=%s\\n" "${snapshot}"; '
+        'printf "core=%s\\n" "$([[ -s "${snapshot}" ]] && echo 1 || echo 0)"; '
+        'printf "entrypoint=%s\\n" "$([[ -s "${snapshot_dir}/gg_test_entrypoint.sh" ]] && echo 1 || echo 0)"; '
+        'printf "version=%s\\n" "$([[ -s "${snapshot_dir}/VERSION" ]] && echo 1 || echo 0)"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.splitlines()
+    assert lines[0].endswith("/runtime/gg_test_entrypoint/job_42_task_7/gg_test_core.sh")
+    assert lines[1:] == [
+        "core=1",
+        "entrypoint=1",
+        "version=1",
+    ]
 
 
 def test_workspace_pfam_le_dir_is_under_downloads_dedicated_folder(tmp_path):

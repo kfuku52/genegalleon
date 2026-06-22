@@ -402,6 +402,80 @@ gg_run_container_shell_script() {
 	esac
 }
 
+gg_sanitize_runtime_path_component() {
+	local value=${1:-}
+	value="${value//[^[:alnum:]._-]/_}"
+	if [[ -z "${value}" ]]; then
+		value="unknown"
+	fi
+	printf '%s\n' "${value}"
+}
+
+gg_entrypoint_runtime_snapshot_dir() {
+	local entrypoint_name=${1:-}
+	local entrypoint_stem=""
+	local job_id=""
+	local task_id=""
+	local output_root=""
+
+	entrypoint_stem="$(basename "${entrypoint_name}")"
+	entrypoint_stem="${entrypoint_stem%.sh}"
+	job_id="${GG_JOB_ID:-${SLURM_JOB_ID:-${PBS_JOBID:-${JOB_ID:-local_$$}}}}"
+	task_id="${GG_ARRAY_TASK_ID:-${SLURM_ARRAY_TASK_ID:-${PBS_ARRAY_INDEX:-${PBS_ARRAYID:-${SGE_TASK_ID:-1}}}}}"
+
+	output_root="${gg_workspace_output_dir:-}"
+	if [[ -z "${output_root}" && -n "${gg_workspace_dir:-}" ]]; then
+		output_root="$(workspace_output_root "${gg_workspace_dir}")"
+	fi
+	if [[ -z "${output_root}" ]]; then
+		output_root="${PWD}/workspace/output"
+	fi
+
+	printf '%s\n' \
+		"${output_root}/runtime/$(gg_sanitize_runtime_path_component "${entrypoint_stem}")/$(gg_sanitize_runtime_path_component "${job_id}")_$(gg_sanitize_runtime_path_component "${task_id}")"
+}
+
+gg_prepare_entrypoint_runtime_snapshot() {
+	local entrypoint_name=${1:-}
+	local script_path=${2:-}
+	local runtime_dir=""
+	local snapshot_script=""
+	local entrypoint_path=""
+	local metadata_path=""
+
+	if [[ -z "${entrypoint_name}" ]]; then
+		echo "gg_prepare_entrypoint_runtime_snapshot: entrypoint name is required." >&2
+		return 1
+	fi
+	if [[ ! -s "${script_path}" ]]; then
+		echo "gg_prepare_entrypoint_runtime_snapshot: script not found: ${script_path}" >&2
+		return 1
+	fi
+
+	runtime_dir="$(gg_entrypoint_runtime_snapshot_dir "${entrypoint_name}")"
+	mkdir -p -- "${runtime_dir}"
+
+	snapshot_script="${runtime_dir}/$(basename "${script_path}")"
+	cp -- "${script_path}" "${snapshot_script}"
+	chmod --reference="${script_path}" "${snapshot_script}" 2>/dev/null || chmod a+r "${snapshot_script}" 2>/dev/null || true
+
+	if [[ -n "${gg_workflow_dir:-}" ]]; then
+		entrypoint_path="${gg_workflow_dir}/$(basename "${entrypoint_name}")"
+		if [[ -s "${entrypoint_path}" ]]; then
+			cp -- "${entrypoint_path}" "${runtime_dir}/$(basename "${entrypoint_path}")"
+		fi
+		for metadata_path in "${gg_workflow_dir}/gg_common_params.sh" "${gg_workflow_dir}/../VERSION"; do
+			if [[ -s "${metadata_path}" ]]; then
+				cp -- "${metadata_path}" "${runtime_dir}/$(basename "${metadata_path}")"
+			fi
+		done
+	fi
+
+	echo "Runtime snapshot directory: ${runtime_dir}" >&2
+	echo "Runtime snapshot core script: ${snapshot_script}" >&2
+	printf '%s\n' "${snapshot_script}"
+}
+
 gg_detect_active_container_runtime() {
 	local runtime_bin=""
 
@@ -638,6 +712,122 @@ gg_apply_named_env_overrides() {
 		if [[ -n "${env_value}" ]]; then
 			printf -v "${var_name}" '%s' "${env_value}"
 		fi
+	done
+}
+
+gg_entrypoint_env_override_prefix() {
+	local entrypoint_name=${1:-}
+	local entrypoint_base=""
+	local entrypoint_stem=""
+
+	entrypoint_base="$(basename "${entrypoint_name}")"
+	case "${entrypoint_base}" in
+		gg_input_generation_entrypoint.sh)
+			printf '%s\n' "GG_INPUT_"
+			return 0
+			;;
+		gg_transcriptome_generation_entrypoint.sh)
+			printf '%s\n' "GG_TRANSCRIPTOME_"
+			return 0
+			;;
+		gg_genome_annotation_entrypoint.sh)
+			printf '%s\n' "GG_GENOME_ANNOTATION_"
+			return 0
+			;;
+		gg_genome_evolution_entrypoint.sh)
+			printf '%s\n' "GG_GENOME_EVOLUTION_"
+			return 0
+			;;
+		gg_gene_evolution_entrypoint.sh)
+			printf '%s\n' "GG_GENE_EVOLUTION_"
+			return 0
+			;;
+		gg_gene_database_entrypoint.sh)
+			printf '%s\n' "GG_GENE_DATABASE_"
+			return 0
+			;;
+		gg_gene_summary_entrypoint.sh)
+			printf '%s\n' "GG_GENE_SUMMARY_"
+			return 0
+			;;
+		gg_hgt_entrypoint.sh)
+			printf '%s\n' "GG_HGT_"
+			return 0
+			;;
+		gg_convergent_sites_entrypoint.sh)
+			printf '%s\n' "GG_CONVERGENT_SITES_"
+			return 0
+			;;
+		gg_progress_summary_entrypoint.sh)
+			printf '%s\n' "GG_PROGRESS_SUMMARY_"
+			return 0
+			;;
+	esac
+
+	entrypoint_stem="${entrypoint_base%.sh}"
+	entrypoint_stem="${entrypoint_stem#gg_}"
+	entrypoint_stem="${entrypoint_stem%_entrypoint}"
+	entrypoint_stem="$(printf '%s' "${entrypoint_stem}" | tr '[:lower:]' '[:upper:]')"
+	if [[ -z "${entrypoint_stem}" ]]; then
+		return 1
+	fi
+	printf 'GG_%s_\n' "${entrypoint_stem}"
+}
+
+gg_config_var_env_override_name() {
+	local env_prefix=${1:-}
+	local var_name=${2:-}
+	local upper_var_name=""
+
+	if [[ -z "${env_prefix}" || -z "${var_name}" ]]; then
+		return 1
+	fi
+	upper_var_name="$(printf '%s' "${var_name}" | tr '[:lower:]' '[:upper:]')"
+	printf '%s%s\n' "${env_prefix}" "${upper_var_name}"
+}
+
+gg_apply_env_override_to_config_var() {
+	local env_prefix=${1:-}
+	local raw_var_name=${2:-}
+	local var_name=""
+	local env_name=""
+	local env_value=""
+
+	var_name=$(gg_normalize_config_var_name "${raw_var_name}" || true)
+	if [[ -z "${var_name}" ]]; then
+		return 0
+	fi
+	env_name=$(gg_config_var_env_override_name "${env_prefix}" "${var_name}") || return 1
+	if [[ -n "${!env_name+x}" ]]; then
+		env_value="${!env_name}"
+		printf -v "${var_name}" '%s' "${env_value}"
+	fi
+}
+
+gg_apply_registered_env_overrides() {
+	local job_script=$1
+	shift || true
+	local entrypoint_name=""
+	local env_prefix=""
+	local raw_var_name=""
+
+	entrypoint_name="$(basename "${job_script}")"
+	env_prefix="$(gg_entrypoint_env_override_prefix "${entrypoint_name}")" || {
+		echo "gg_apply_registered_env_overrides: failed to derive environment prefix for ${entrypoint_name}" >&2
+		return 1
+	}
+	if ! declare -F gg_print_entrypoint_config_vars >/dev/null 2>&1; then
+		echo "gg_apply_registered_env_overrides: config var registry helper is unavailable." >&2
+		return 1
+	fi
+
+	while IFS= read -r raw_var_name; do
+		gg_apply_env_override_to_config_var "${env_prefix}" "${raw_var_name}"
+	done < <(gg_print_entrypoint_config_vars "${entrypoint_name}")
+
+	while [[ $# -gt 0 ]]; do
+		gg_apply_env_override_to_config_var "${env_prefix}" "$1"
+		shift
 	done
 }
 
