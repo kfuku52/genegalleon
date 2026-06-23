@@ -10,7 +10,7 @@
 #SBATCH -J gg_progress_summary
 #SBATCH -c 4
 #SBATCH --mem-per-cpu=8G
-#SBATCH -t 2976:00:00
+#SBATCH -t 3:00:00
 #SBATCH --output=gg_progress_summary_entrypoint.sh_%j.out
 #SBATCH --error=gg_progress_summary_entrypoint.sh_%j.err
 #SBATCH --chdir=.

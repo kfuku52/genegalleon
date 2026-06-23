@@ -10,7 +10,7 @@
 #SBATCH -J gg_gene_database
 #SBATCH -c 1
 #SBATCH --mem-per-cpu=64G
-#SBATCH -t 2976:00:00
+#SBATCH -t 3-00:00:00
 #SBATCH --output=gg_gene_database_entrypoint.sh_%j.out
 #SBATCH --error=gg_gene_database_entrypoint.sh_%j.err
 #SBATCH --chdir=.

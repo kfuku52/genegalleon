@@ -10,7 +10,7 @@
 #SBATCH -J gg_hgt
 #SBATCH -c 1
 #SBATCH --mem-per-cpu=32G
-#SBATCH -t 2976:00:00
+#SBATCH -t 3-00:00:00
 #SBATCH --output=gg_hgt_entrypoint.sh_%j.out
 #SBATCH --error=gg_hgt_entrypoint.sh_%j.err
 #SBATCH --chdir=.

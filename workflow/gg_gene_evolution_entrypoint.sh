@@ -10,7 +10,7 @@
 #SBATCH -J gg_gene_evolution
 #SBATCH -c 4
 #SBATCH --mem-per-cpu=8G
-#SBATCH -t 2976:00:00
+#SBATCH -t 7-00:00:00
 #SBATCH --output=gg_gene_evolution_entrypoint.sh_%A_%a.out
 #SBATCH --error=gg_gene_evolution_entrypoint.sh_%A_%a.err
 #SBATCH --chdir=.

@@ -10,7 +10,7 @@
 #SBATCH -J gg_input_generation
 #SBATCH -c 4
 #SBATCH --mem-per-cpu=8G
-#SBATCH -t 2976:00:00
+#SBATCH -t 3-00:00:00
 #SBATCH --output=gg_input_generation_entrypoint.sh_%A_%a.out
 #SBATCH --error=gg_input_generation_entrypoint.sh_%A_%a.err
 #SBATCH --chdir=.

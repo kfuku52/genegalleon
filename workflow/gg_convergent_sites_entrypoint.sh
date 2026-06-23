@@ -10,7 +10,7 @@
 #SBATCH -J gg_convergent_sites
 #SBATCH -c 8
 #SBATCH --mem-per-cpu=32G
-#SBATCH -t 60-00:00:00
+#SBATCH -t 7-00:00:00
 #SBATCH --output=gg_convergent_sites_entrypoint.sh_%j.out
 #SBATCH --error=gg_convergent_sites_entrypoint.sh_%j.err
 #SBATCH --chdir=.
