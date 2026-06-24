@@ -276,6 +276,21 @@ DEFAULT_DOWNLOAD_LOCK_POLL_SECONDS = 5.0
 DEFAULT_DOWNLOAD_ATTEMPTS = 4
 DEFAULT_DOWNLOAD_RETRY_BASE_SECONDS = 5.0
 SHARED_DOWNLOAD_LOCK_FORMAT = "shared-lock-v2"
+DOWNLOAD_DIAGNOSTIC_KEYS = (
+    "cache_preexisting_partial_tmp",
+    "cache_preexisting_corrupt",
+    "cache_preexisting_locks",
+    "cache_final_partial_tmp",
+    "cache_final_corrupt",
+    "cache_final_locks",
+    "download_jobs",
+    "failed_downloads",
+    "transient_retries",
+    "corrupt_download_retries",
+    "corrupt_cache_recoveries",
+    "stale_locks_recovered",
+    "lock_waits",
+)
 DEFAULT_NCBI_EUTILS_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_NCBI_FTP_BASE_URL = "https://ftp.ncbi.nlm.nih.gov"
 DEFAULT_NCBI_DATASETS_BASE_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2"
@@ -4812,6 +4827,79 @@ def sleep_before_download_retry(attempt, base_seconds):
         time.sleep(delay)
 
 
+def empty_download_diagnostics():
+    return {key: 0 for key in DOWNLOAD_DIAGNOSTIC_KEYS}
+
+
+def scan_download_cache_diagnostics(download_root):
+    counts = {
+        "partial_tmp": 0,
+        "corrupt": 0,
+        "locks": 0,
+    }
+    root = Path(download_root)
+    if not root.exists():
+        return counts
+    try:
+        iterator = root.rglob("*")
+        for path in iterator:
+            try:
+                if not path.is_file():
+                    continue
+            except OSError:
+                continue
+            name = path.name
+            if ".tmp." in name:
+                counts["partial_tmp"] += 1
+            if ".corrupt." in name:
+                counts["corrupt"] += 1
+            if name.endswith(".lock"):
+                counts["locks"] += 1
+    except OSError:
+        return counts
+    return counts
+
+
+def summarize_download_diagnostics(preexisting_cache, final_cache, warnings, download_jobs_count, failed_downloads_count):
+    diagnostics = empty_download_diagnostics()
+    diagnostics["cache_preexisting_partial_tmp"] = int(preexisting_cache.get("partial_tmp", 0))
+    diagnostics["cache_preexisting_corrupt"] = int(preexisting_cache.get("corrupt", 0))
+    diagnostics["cache_preexisting_locks"] = int(preexisting_cache.get("locks", 0))
+    diagnostics["cache_final_partial_tmp"] = int(final_cache.get("partial_tmp", 0))
+    diagnostics["cache_final_corrupt"] = int(final_cache.get("corrupt", 0))
+    diagnostics["cache_final_locks"] = int(final_cache.get("locks", 0))
+    diagnostics["download_jobs"] = int(download_jobs_count)
+    diagnostics["failed_downloads"] = int(failed_downloads_count)
+    for warning in warnings:
+        text = str(warning or "").lower()
+        if "failed transiently; retrying" in text:
+            diagnostics["transient_retries"] += 1
+        if "downloaded corrupt gzip" in text and "retrying" in text:
+            diagnostics["corrupt_download_retries"] += 1
+        if "found corrupt gzip cache" in text:
+            diagnostics["corrupt_cache_recoveries"] += 1
+        if "[download-lock] recovered stale lock" in text:
+            diagnostics["stale_locks_recovered"] += 1
+        if "[download-lock] waiting for shared lock" in text:
+            diagnostics["lock_waits"] += 1
+    return diagnostics
+
+
+def format_download_diagnostics_line(diagnostics):
+    values = empty_download_diagnostics()
+    values.update(diagnostics or {})
+    return (
+        "Download diagnostics: "
+        "cache_preexisting partial_tmp={cache_preexisting_partial_tmp},corrupt={cache_preexisting_corrupt},locks={cache_preexisting_locks}; "
+        "cache_final partial_tmp={cache_final_partial_tmp},corrupt={cache_final_corrupt},locks={cache_final_locks}; "
+        "download_jobs={download_jobs}; "
+        "failed_downloads={failed_downloads}; "
+        "retries transient={transient_retries},corrupt_gzip={corrupt_download_retries}; "
+        "corrupt_cache_recoveries={corrupt_cache_recoveries}; "
+        "stale_locks recovered={stale_locks_recovered},waits={lock_waits}"
+    ).format(**values)
+
+
 def resolve_download_lock_acquire_timeout_seconds():
     raw = os.environ.get("GG_DOWNLOAD_LOCK_ACQUIRE_TIMEOUT_SECONDS", "").strip()
     if raw == "":
@@ -5580,26 +5668,43 @@ def download_from_manifest(
     cleanup_paths = []
     failed_downloads = []
     row_target_paths = {}
+    preexisting_cache_diagnostics = scan_download_cache_diagnostics(download_root)
 
     if len(rows) == 0:
         errors.append("Download manifest is empty: {}".format(manifest_path))
+        final_cache_diagnostics = scan_download_cache_diagnostics(download_root)
         return {
             "warnings": warnings,
             "errors": errors,
             "processed": processed,
             "downloaded": downloaded,
             "planned": planned,
+            "download_diagnostics": summarize_download_diagnostics(
+                preexisting_cache_diagnostics,
+                final_cache_diagnostics,
+                warnings,
+                len(download_jobs),
+                len(failed_downloads),
+            ),
         }
     manifest_parent_dir = manifest_path.parent
     header_cols = set(rows[0].keys())
     if "provider" not in header_cols or "id" not in header_cols:
         errors.append("Download manifest must contain required columns provider,id: {}".format(manifest_path))
+        final_cache_diagnostics = scan_download_cache_diagnostics(download_root)
         return {
             "warnings": warnings,
             "errors": errors,
             "processed": processed,
             "downloaded": downloaded,
             "planned": planned,
+            "download_diagnostics": summarize_download_diagnostics(
+                preexisting_cache_diagnostics,
+                final_cache_diagnostics,
+                warnings,
+                len(download_jobs),
+                len(failed_downloads),
+            ),
         }
 
     for i, row in enumerate(rows, start=2):
@@ -6191,12 +6296,20 @@ def download_from_manifest(
                 )
             )
 
+    final_cache_diagnostics = scan_download_cache_diagnostics(download_root)
     return {
         "warnings": warnings,
         "errors": errors,
         "processed": processed,
         "downloaded": downloaded,
         "planned": planned,
+        "download_diagnostics": summarize_download_diagnostics(
+            preexisting_cache_diagnostics,
+            final_cache_diagnostics,
+            warnings,
+            len(download_jobs),
+            len(failed_downloads),
+        ),
         "resolved_manifest_output": str(resolved_manifest_output_path) if resolved_manifest_output_path is not None else "",
     }
 
@@ -8414,6 +8527,7 @@ def main():
                 parallel_jobs,
             )
         )
+        print(format_download_diagnostics_line(report.get("download_diagnostics", {})))
         if args.download_only:
             return 0 if len(report["errors"]) == 0 else 1
         if len(report["errors"]) > 0 and args.strict:

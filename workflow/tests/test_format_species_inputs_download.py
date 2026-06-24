@@ -1288,6 +1288,8 @@ def test_download_manifest_redownloads_corrupt_gzip_cache(tmp_path):
     )
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     assert "found corrupt gzip cache" in completed.stderr
+    assert "Download diagnostics:" in completed.stdout
+    assert "corrupt_cache_recoveries=1" in completed.stdout
     assert list(raw_dir.glob("*.corrupt.*"))
     with gzip.open(cached_cds, "rt", encoding="utf-8") as handle:
         assert "ATGAAATTT" in handle.read()
@@ -1367,6 +1369,8 @@ def test_download_manifest_retries_transient_http_errors(tmp_path):
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     assert "download attempt 1/4 failed transiently; retrying" in completed.stderr
+    assert "Download diagnostics:" in completed.stdout
+    assert "retries transient=1,corrupt_gzip=0" in completed.stdout
     assert FlakyHandler.attempts == 2
 
 
@@ -3662,6 +3666,8 @@ def test_download_manifest_recovers_stale_lock_file(tmp_path):
     assert (raw_dir / cds_name).exists()
     assert (raw_dir / gff_name).exists()
     assert "recovered stale lock" in completed.stderr.lower()
+    assert "Download diagnostics:" in completed.stdout
+    assert "stale_locks recovered=1" in completed.stdout
 
 
 def test_download_manifest_does_not_reclaim_fresh_foreign_lock_file(tmp_path):
