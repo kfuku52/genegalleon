@@ -118,6 +118,28 @@ GG_SPECIES_LABEL_TERMINAL_SUFFIXES <- c(
     ".longestCDS.fa.gz",
     "_isoform.fa.gz",
     ".isoform.fa.gz",
+    "_derived.cds.fa.gz",
+    ".derived.cds.fa.gz",
+    "_derived.genome.fa.gz",
+    ".derived.genome.fa.gz",
+    "_derived.gff.gz",
+    ".derived.gff.gz",
+    "_cds.all.fa.gz",
+    ".cds.all.fa.gz",
+    "_cds.fa.gz",
+    ".cds.fa.gz",
+    "_cds.fna.gz",
+    ".cds.fna.gz",
+    "_genome.fa.gz",
+    ".genome.fa.gz",
+    "_genomic.fna.gz",
+    ".genomic.fna.gz",
+    ".dna.primary_assembly.fa.gz",
+    ".dna.toplevel.fa.gz",
+    "_pep.fa.gz",
+    ".pep.fa.gz",
+    "_protein.fa.gz",
+    ".protein.fa.gz",
     "_fx2tab_cds.tsv",
     ".fx2tab_cds.tsv",
     "_fx2tab_genome.tsv",
@@ -209,6 +231,19 @@ gg_species_prefix_token_count <- function(parts) {
     return(2)
 }
 
+gg_species_is_rank_or_qualifier_token <- function(token) {
+    key <- gg_taxonomic_token_key(token)
+    key == "sp" || key %in% GG_TAXONOMIC_PROXIMITY_QUALIFIERS || key %in% GG_TAXONOMIC_INFRASPECIFIC_RANKS
+}
+
+gg_species_prefix_token <- function(token) {
+    text <- trimws(as.character(token))
+    if (gg_species_is_rank_or_qualifier_token(text)) {
+        return(text)
+    }
+    strsplit(text, ".", fixed = TRUE)[[1]][[1]]
+}
+
 gg_species_label_from_value_one <- function(value, strip_extension = FALSE) {
     text <- as.character(value)
     if (is.na(text) || !nzchar(text)) {
@@ -225,7 +260,9 @@ gg_species_label_from_value_one <- function(value, strip_extension = FALSE) {
     if (count == 0) {
         return("")
     }
-    return(paste(parts[seq_len(count)], collapse = "_"))
+    selected <- vapply(parts[seq_len(count)], gg_species_prefix_token, character(1), USE.NAMES = FALSE)
+    selected <- selected[nzchar(selected)]
+    return(paste(selected, collapse = "_"))
 }
 
 gg_species_label_from_text <- function(values) {

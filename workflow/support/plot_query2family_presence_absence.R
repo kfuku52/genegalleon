@@ -7,6 +7,14 @@ suppressPackageStartupMessages(library(ggtree, quietly = TRUE))
 
 options(stringsAsFactors = FALSE)
 
+script_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(script_arg) > 0) {
+  dirname(normalizePath(sub("^--file=", "", script_arg[[1]]), winslash = "/", mustWork = FALSE))
+} else {
+  getwd()
+}
+source(file.path(script_dir, "species_label_utils.r"), local = TRUE)
+
 font_size_pt <- 8
 font_size_mm <- font_size_pt * 0.352777778
 support_color <- "#8c2d04"
@@ -306,24 +314,18 @@ format_ruler_labels <- function(x) {
 }
 
 normalize_busco_species_id <- function(x) {
-  x <- basename(x)
-  x <- sub("\\.busco\\.full\\.tsv$", "", x)
-  x <- sub("_busco\\.full\\.tsv$", "", x)
-  x <- sub("\\.busco\\.short\\.txt$", "", x)
-  x <- sub("_busco\\.short\\.txt$", "", x)
-  x <- sub("\\.busco.*$", "", x)
-  x <- sub("_busco.*$", "", x)
-  x <- sub("([._-]?longestCDS)$", "", x)
-  x <- sub("_sp_[^._-]+$", "_sp", x)
-  x
+  gg_species_label_from_filename(x)
 }
 
 match_busco_species <- function(species, tip_y_by_species) {
   species <- normalize_busco_species_id(species)
+  display_species <- gg_species_display_from_key(species)
   candidates <- unique(c(
     species,
+    display_species,
     gsub(" ", "_", species, fixed = TRUE),
-    gsub("_", " ", species, fixed = TRUE)
+    gsub("_", " ", species, fixed = TRUE),
+    gsub(" ", "_", display_species, fixed = TRUE)
   ))
   matched <- candidates[candidates %in% names(tip_y_by_species)]
   if (length(matched) > 0) {

@@ -23,6 +23,12 @@ except Exception:  # pragma: no cover - exercised in runtime environments withou
     Comment = None
     DataValidation = None
 
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+
+from species_labeling import extract_species_label
+
 
 FASTA_EXTENSIONS = (
     ".fa",
@@ -1053,7 +1059,7 @@ def discover_ensembl_like(input_dir, provider):
     for path in sorted(input_dir.iterdir()):
         if not path.is_file():
             continue
-        species_key = path.name.split(".", 1)[0]
+        species_key = extract_species_label(path.name, strip_extension=True)
         if species_key == "":
             continue
         if ".cds." in path.name.lower() and is_fasta_filename(path.name):

@@ -12,6 +12,11 @@ import re
 import sys
 import time
 
+try:
+    from species_labeling import strip_species_label
+except ImportError:  # pragma: no cover - package import path used in tests
+    from .species_labeling import strip_species_label
+
 pandas.options.mode.chained_assignment = None
 
 MATCH_ATTRIBUTE_KEYS = {
@@ -93,11 +98,7 @@ def species_prefix_token_count(parts):
 
 def trim_species_prefix(seq_name):
     text = str(seq_name or '')
-    parts = [part for part in text.split('_') if part != '']
-    prefix_count = species_prefix_token_count(parts)
-    if prefix_count == 0 or prefix_count >= len(parts):
-        return text
-    return '_'.join(parts[prefix_count:])
+    return strip_species_label(text)
 
 
 def get_gene_names(seq_names):

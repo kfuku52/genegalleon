@@ -170,24 +170,79 @@ from pathlib import Path
 
 def species_from_filename(path: Path) -> str:
     name = path.name
-    if "." in name:
-        name = name.split(".", 1)[0]
+    suffixes = (
+        ".derived.cds.fa.gz",
+        "_derived.cds.fa.gz",
+        ".cds.all.fa.gz",
+        "_cds.all.fa.gz",
+        ".cds.fa.gz",
+        "_cds.fa.gz",
+        ".cds.fna.gz",
+        "_cds.fna.gz",
+        ".genome.fa.gz",
+        "_genome.fa.gz",
+        ".genomic.fna.gz",
+        "_genomic.fna.gz",
+        ".pep.fa.gz",
+        "_pep.fa.gz",
+        ".protein.fa.gz",
+        "_protein.fa.gz",
+        ".fa.gz",
+        ".fas.gz",
+        ".fasta.gz",
+        ".fna.gz",
+        ".fa",
+        ".fas",
+        ".fasta",
+        ".fna",
+    )
+    lowered = name.lower()
+    for suffix in sorted(suffixes, key=len, reverse=True):
+        if lowered.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
     parts = [part for part in name.split("_") if part]
     if len(parts) < 2:
         return path.stem
-    second = parts[1].lower()
-    third = parts[2].lower() if len(parts) >= 3 else ""
+    def token_key(token):
+        lowered_token = token.rstrip(".").lower()
+        return {
+            "spp": "sp",
+            "ssp": "subsp",
+            "subspecies": "subsp",
+            "variety": "var",
+            "form": "forma",
+        }.get(lowered_token, lowered_token)
+    def prefix_part(token):
+        key = token_key(token)
+        if key in {
+            "sp", "cf", "aff", "nr", "subsp", "var", "forma", "f",
+            "strain", "substrain", "serovar", "serotype", "serogroup",
+            "pathovar", "pv", "biovar", "biotype", "chemovar", "morphovar",
+            "cultivar", "cv", "isolate", "group", "subgroup", "complex",
+            "clade", "lineage", "section", "series", "ecotype", "breed",
+        }:
+            return token
+        return token.split(".", 1)[0]
+    second = token_key(parts[1])
+    third = token_key(parts[2]) if len(parts) >= 3 else ""
     if second == "sp":
         count = 3 if len(parts) >= 3 else 2
     elif second in {"cf", "aff", "nr"}:
         count = 3 if len(parts) >= 3 else 2
     elif third in {"cf", "aff", "nr"}:
         count = 3
-    elif third in {"subsp", "ssp", "var", "forma", "f"}:
+    elif third in {
+        "subsp", "var", "forma", "f", "strain", "substrain", "serovar",
+        "serotype", "serogroup", "pathovar", "pv", "biovar", "biotype",
+        "chemovar", "morphovar", "cultivar", "cv", "isolate", "group",
+        "subgroup", "complex", "clade", "lineage", "section", "series",
+        "ecotype", "breed",
+    }:
         count = 4 if len(parts) >= 4 else 3
     else:
         count = 2
-    return "_".join(parts[:count])
+    return "_".join(prefix_part(part) for part in parts[:count] if prefix_part(part))
 
 
 cds_dir = Path(sys.argv[1])
@@ -1890,7 +1945,7 @@ if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree
       if [[ "${input_sequence_mode}" == "protein" ]]; then
         gg_seqkit_grep_by_patterns_from_infile_list 1 "species_tree_input_fasta_list.txt" "${genes1[@]}" |
           seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 |
-          sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/" |
+          gg_fasta_relabel_headers_to_species |
           seqkit seq --threads 1 --out-file "${outfile1}"
       else
         local pattern_args=()
@@ -1901,7 +1956,7 @@ if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree
           seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads 1 |
           seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 |
           cdskit pad |
-          sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/" |
+          gg_fasta_relabel_headers_to_species |
           seqkit seq --threads 1 --out-file "${outfile1}"
       fi
       if [[ ! -s "${outfile1}" ]]; then

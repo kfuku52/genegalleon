@@ -81,4 +81,16 @@ def test_species_labeling_extracts_dotted_rank_labels_from_filenames():
         mod.extract_species_label("Asimitellaria_furusei_var._subramosa.fa.busco.full.tsv", strip_extension=True)
         == "Asimitellaria_furusei_var._subramosa"
     )
+    assert (
+        mod.extract_species_label("Asimitellaria_furusei_var._furusei.cds.fa.gz", strip_extension=True)
+        == "Asimitellaria_furusei_var._furusei"
+    )
+    assert (
+        mod.extract_species_label("homo_sapiens.GRCh38.cds.all.fa.gz", strip_extension=True)
+        == "homo_sapiens"
+    )
+    assert (
+        mod.extract_species_label("Arisaema_sp._aooni.dna.primary_assembly.fa.gz", strip_extension=True)
+        == "Arisaema_sp._aooni"
+    )
     assert mod.scientific_name_from_label("Asimitellaria_furusei_var._furusei") == "Asimitellaria furusei var. furusei"

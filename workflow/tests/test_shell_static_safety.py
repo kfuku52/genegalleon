@@ -4060,3 +4060,14 @@ def test_genome_evolution_core_does_not_generate_unused_partitions_txt():
     ]
     for token in banned_tokens:
         assert token not in text
+
+
+def test_species_label_parsing_does_not_use_legacy_two_token_sed():
+    util = _read_text(WORKFLOW_DIR / "support" / "gg_util.sh")
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+    legacy_sed = 'sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/"'
+
+    assert legacy_sed not in util
+    assert legacy_sed not in core
+    assert 'gg_fasta_relabel_headers_to_species |' in core
+    assert 'export -f gg_species_name_from_path_or_dot _gg_strip_species_terminal_suffixes' in util

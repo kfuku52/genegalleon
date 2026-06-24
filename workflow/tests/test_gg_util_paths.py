@@ -454,7 +454,9 @@ def test_species_name_from_path_or_dot_preserves_taxonomic_qualifiers(tmp_path):
         '"$(gg_species_name_from_path_or_dot "Bacillus_subtilis_subsp._subtilis_demo.fa.gz")" '
         '"$(gg_species_name_from_path_or_dot "Amoeba_sp._JDS-Ruffled.tsv")" '
         '"$(gg_species_name_from_path_or_dot "Arisaema_sp._aooni_longestCDS.fa.gz")" '
-        '"$(gg_species_name_from_path_or_dot "Asimitellaria_furusei_var._subramosa_busco.full.tsv")"'
+        '"$(gg_species_name_from_path_or_dot "Asimitellaria_furusei_var._subramosa_busco.full.tsv")" '
+        '"$(gg_species_name_from_path_or_dot "Asimitellaria_furusei_var._furusei.cds.fa.gz")" '
+        '"$(gg_species_name_from_path_or_dot "homo_sapiens.GRCh38.cds.all.fa.gz")"'
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -466,13 +468,15 @@ def test_species_name_from_path_or_dot_preserves_taxonomic_qualifiers(tmp_path):
         "Amoeba_sp._JDS-Ruffled",
         "Arisaema_sp._aooni",
         "Asimitellaria_furusei_var._subramosa",
+        "Asimitellaria_furusei_var._furusei",
+        "homo_sapiens",
     ]
 
 
 def test_fasta_relabel_headers_to_species_preserves_taxonomic_qualifiers(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        "printf '>Dictyostelium_cf_discoideum_gene1\\nATG\\n>Bacillus_subtilis_subsp_subtilis_gene2\\nATG\\n' "
+        "printf '>Dictyostelium_cf_discoideum_gene1\\nATG\\n>Bacillus_subtilis_subsp_subtilis_gene2\\nATG\\n>Asimitellaria_furusei_var._subramosa_gene3\\nATG\\n>Arisaema_sp._aooni_gene4\\nATG\\n' "
         '| gg_fasta_relabel_headers_to_species'
     )
 
@@ -483,6 +487,10 @@ def test_fasta_relabel_headers_to_species_preserves_taxonomic_qualifiers(tmp_pat
         ">Dictyostelium_cf_discoideum",
         "ATG",
         ">Bacillus_subtilis_subsp_subtilis",
+        "ATG",
+        ">Asimitellaria_furusei_var._subramosa",
+        "ATG",
+        ">Arisaema_sp._aooni",
         "ATG",
     ]
 

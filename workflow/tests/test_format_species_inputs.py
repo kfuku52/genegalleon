@@ -395,6 +395,51 @@ def test_species_prefix_keeps_hybrid_marker_with_following_epithet():
     assert mod.species_prefix_from_value("Petunia_x_hybrida") == "Petunia_x_hybrida"
 
 
+def test_species_prefix_preserves_dotted_taxonomic_qualifiers():
+    mod = load_module()
+
+    assert (
+        mod.species_prefix_from_value("Asimitellaria_furusei_var._furusei_demo.fa.gz")
+        == "Asimitellaria_furusei_var._furusei"
+    )
+    assert (
+        mod.species_prefix_from_value("Asimitellaria_furusei_var._subramosa.cds.fa.gz")
+        == "Asimitellaria_furusei_var._subramosa"
+    )
+    assert mod.species_prefix_from_value("Arisaema_sp._aooni_demo.fa.gz") == "Arisaema_sp._aooni"
+    assert (
+        mod.species_prefix_from_value("Bacillus_subtilis_subsp._subtilis_demo.gff.gz")
+        == "Bacillus_subtilis_subsp._subtilis"
+    )
+    assert mod.species_prefix_from_value("homo_sapiens.GRCh38.cds.all.fa.gz") == "homo_sapiens"
+
+
+def test_discover_ensembl_like_tasks_preserves_dotted_taxonomic_qualifiers(tmp_path):
+    mod = load_module()
+    input_dir = tmp_path / "Ensembl" / "original_files"
+    input_dir.mkdir(parents=True)
+    for species_key in (
+        "Asimitellaria_furusei_var._furusei",
+        "Asimitellaria_furusei_var._subramosa",
+    ):
+        (input_dir / f"{species_key}.ASM.cds.all.fa.gz").write_text("", encoding="utf-8")
+        (input_dir / f"{species_key}.ASM.1.gff3.gz").write_text("", encoding="utf-8")
+        (input_dir / f"{species_key}.ASM.dna.primary_assembly.fa.gz").write_text("", encoding="utf-8")
+
+    tasks, warnings, errors = mod.discover_ensembl_like_tasks(input_dir, "ensembl")
+
+    assert warnings == []
+    assert errors == []
+    assert [task["species_key"] for task in tasks] == [
+        "Asimitellaria_furusei_var._furusei",
+        "Asimitellaria_furusei_var._subramosa",
+    ]
+    assert [task["species_prefix"] for task in tasks] == [
+        "Asimitellaria_furusei_var._furusei",
+        "Asimitellaria_furusei_var._subramosa",
+    ]
+
+
 def test_discover_ncbi_like_tasks_rejects_incomplete_taxonomic_qualifier_species_key(tmp_path):
     mod = load_module()
     input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"

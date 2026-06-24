@@ -142,6 +142,30 @@ GENBANK_EXTENSIONS = (
     ".gbff.gz",
     ".genbank.gz",
 )
+SPECIES_KEY_FILENAME_SUFFIXES = (
+    ".derived.cds.fa.gz",
+    "_derived.cds.fa.gz",
+    ".derived.genome.fa.gz",
+    "_derived.genome.fa.gz",
+    ".derived.gff.gz",
+    "_derived.gff.gz",
+    ".cds.all.fa.gz",
+    "_cds.all.fa.gz",
+    ".cds.fa.gz",
+    "_cds.fa.gz",
+    ".cds.fna.gz",
+    "_cds.fna.gz",
+    ".genome.fa.gz",
+    "_genome.fa.gz",
+    ".genomic.fna.gz",
+    "_genomic.fna.gz",
+    ".dna.primary_assembly.fa.gz",
+    ".dna.toplevel.fa.gz",
+    ".pep.fa.gz",
+    "_pep.fa.gz",
+    ".protein.fa.gz",
+    "_protein.fa.gz",
+) + FASTA_EXTENSIONS + GFF_EXTENSIONS + GENBANK_EXTENSIONS
 
 ENSEMBL_CDS_PATTERN = re.compile(r"(?:^|[._-])cds(?:[._-]|$)", re.IGNORECASE)
 INVALID_ID_CHARS = re.compile(r"[%/\+:;&\^\$#@!~=\'\"`*\(\)\{\}\[\]\|\?\s]+")
@@ -551,7 +575,8 @@ def tokenize_taxonomic_name(text):
 
 def canonical_taxonomic_token(token):
     cleaned = str(token or "").strip()
-    lowered = cleaned.lower()
+    stripped = cleaned.rstrip(".")
+    lowered = stripped.lower()
     if lowered in TAXONOMIC_GENUS_ONLY_PLACEHOLDERS:
         return "sp"
     if lowered in TAXONOMIC_PROXIMITY_QUALIFIERS:
@@ -559,6 +584,10 @@ def canonical_taxonomic_token(token):
     if lowered in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
         return TAXONOMIC_INFRASPECIFIC_RANK_ALIASES[lowered]
     return cleaned
+
+
+def taxonomic_token_key(token):
+    return str(canonical_taxonomic_token(token)).lower()
 
 
 def build_species_key_from_tokens(tokens):
@@ -660,8 +689,8 @@ def taxonomic_name_lookup_candidates(text):
 def species_prefix_token_count(tokens):
     if len(tokens) < 2:
         return 0
-    second = tokens[1].lower()
-    third = tokens[2].lower() if len(tokens) >= 3 else ""
+    second = taxonomic_token_key(tokens[1])
+    third = taxonomic_token_key(tokens[2]) if len(tokens) >= 3 else ""
     if second == "x":
         return 3 if len(tokens) >= 3 else 2
     if second == "sp":
@@ -681,8 +710,8 @@ def invalid_species_key_reason(value):
     if len(tokens) < 2:
         return ""
 
-    second = tokens[1].lower()
-    third = tokens[2].lower() if len(tokens) >= 3 else ""
+    second = taxonomic_token_key(tokens[1])
+    third = taxonomic_token_key(tokens[2]) if len(tokens) >= 3 else ""
     if second in TAXONOMIC_PROXIMITY_QUALIFIERS and len(tokens) < 3:
         return "taxonomic qualifier '{}' requires a following epithet in species key '{}'".format(second, value)
     if third in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES and len(tokens) < 4:
@@ -6485,14 +6514,36 @@ def extract_ncbi_ensembl_gene_id_from_header(header):
     return ""
 
 
-def species_prefix_from_value(value):
+def strip_species_key_filename_suffixes(value):
     name = Path(str(value or "")).name
+    lower = name.lower()
+    for suffix in sorted(SPECIES_KEY_FILENAME_SUFFIXES, key=len, reverse=True):
+        if lower.endswith(suffix):
+            return name[: len(name) - len(suffix)]
+    return name
+
+
+def species_prefix_filename_token(token):
+    text = str(token or "").strip()
+    key = taxonomic_token_key(text)
+    if (
+        key == "sp"
+        or key in TAXONOMIC_PROXIMITY_QUALIFIERS
+        or key in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES.values()
+    ):
+        return text
+    return text.split(".", 1)[0]
+
+
+def species_prefix_from_value(value):
+    name = strip_species_key_filename_suffixes(value)
     tokens = [token for token in name.split("_") if token != ""]
     count = species_prefix_token_count(tokens)
     if count == 0:
         return ""
-    prefix = "_".join(tokens[:count])
-    return prefix.split(".", 1)[0]
+    prefix_tokens = [species_prefix_filename_token(token) for token in tokens[:count]]
+    prefix_tokens = [token for token in prefix_tokens if token != ""]
+    return "_".join(prefix_tokens)
 
 
 def normalize_output_basename(source_name, species_prefix):
@@ -7853,7 +7904,7 @@ def discover_ensembl_like_tasks(input_dir, provider):
         if not path.is_file():
             continue
         name = path.name
-        species_key = normalize_species_key_for_runtime(name.split(".", 1)[0])
+        species_key = normalize_species_key_for_runtime(species_prefix_from_value(name))
         if species_key == "":
             continue
         if is_fasta_filename(name) and ENSEMBL_CDS_PATTERN.search(name):

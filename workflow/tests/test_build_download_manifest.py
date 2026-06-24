@@ -190,6 +190,35 @@ def test_build_download_manifest_ensembl_provider_from_flat_fixture(tmp_path):
     assert rows[0]["genome_filename"] == "homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"
 
 
+def test_build_download_manifest_ensembl_flat_fixture_preserves_dotted_taxonomic_qualifiers(tmp_path):
+    input_root = tmp_path / "dataset"
+    ensembl_dir = input_root / "Ensembl" / "original_files"
+    ensembl_dir.mkdir(parents=True)
+    species_keys = (
+        "Asimitellaria_furusei_var._furusei",
+        "Asimitellaria_furusei_var._subramosa",
+    )
+    for species_key in species_keys:
+        (ensembl_dir / f"{species_key}.ASM.cds.all.fa.gz").write_bytes(b"dummy")
+        (ensembl_dir / f"{species_key}.ASM.1.gff3.gz").write_bytes(b"dummy")
+        (ensembl_dir / f"{species_key}.ASM.dna.primary_assembly.fa.gz").write_bytes(b"dummy")
+
+    out = tmp_path / "download_manifest_ensembl.tsv"
+    completed = run_script(
+        "--provider",
+        "ensembl",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    rows = read_manifest(out)
+    assert [row["species_key"] for row in rows] == list(species_keys)
+    assert [row["id"] for row in rows] == list(species_keys)
+
+
 def test_build_download_manifest_coge_cngb_and_gwh_provider_from_species_dir_fixture(tmp_path):
     input_root = tmp_path / "dataset"
     species_key = "Arabidopsis_thaliana"

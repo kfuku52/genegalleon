@@ -19,7 +19,10 @@ labels <- c(
   "Arisaema_sp._aooni_tpm.tsv",
   "/workspace/output/transcriptome_assembly/assembled_transcripts_with_isoforms/Arisaema_iyoanum_isoform.fa.gz",
   "/workspace/output/transcriptome_assembly/longest_cds/Asimitellaria_furusei_var._furusei_longestCDS.fa.gz",
-  "Dictyostelium_cf._discoideum.longestCDS.fa.gz"
+  "Dictyostelium_cf._discoideum.longestCDS.fa.gz",
+  "Asimitellaria_furusei_var._furusei.cds.fa.gz",
+  "homo_sapiens.GRCh38.cds.all.fa.gz",
+  "Arisaema_sp._aooni.dna.primary_assembly.fa.gz"
 )
 expected_keys <- c(
   "Asimitellaria_furusei_var._furusei",
@@ -28,7 +31,10 @@ expected_keys <- c(
   "Arisaema_sp._aooni",
   "Arisaema_iyoanum",
   "Asimitellaria_furusei_var._furusei",
-  "Dictyostelium_cf._discoideum"
+  "Dictyostelium_cf._discoideum",
+  "Asimitellaria_furusei_var._furusei",
+  "homo_sapiens",
+  "Arisaema_sp._aooni"
 )
 actual_keys <- gg_species_label_from_filename(labels)
 if (!identical(actual_keys, expected_keys)) {{

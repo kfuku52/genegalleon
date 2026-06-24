@@ -31,3 +31,11 @@ def test_amino_acid_site_panel_noops_on_empty_site_list():
     assert "if (length(selected_amino_acid_sites) == 0)" in stat_branch2tree
     assert "amino_acid_site column will not be added" in stat_branch2tree
     assert "return(g)" in fimo_motif
+
+
+def test_query2family_busco_plot_uses_shared_species_label_parser():
+    text = (SUPPORT_DIR / "plot_query2family_presence_absence.R").read_text(encoding="utf-8")
+
+    assert 'source(file.path(script_dir, "species_label_utils.r"), local = TRUE)' in text
+    assert "gg_species_label_from_filename(x)" in text
+    assert 'sub("_sp_[^._-]+$", "_sp", x)' not in text

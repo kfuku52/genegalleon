@@ -5,6 +5,7 @@ from workflow.support.gff2genestat import add_intron_info
 from workflow.support.gff2genestat import extract_by_ids
 from workflow.support.gff2genestat import process_single_gff
 from workflow.support.gff2genestat import summarize_gene_features
+from workflow.support.gff2genestat import trim_species_prefix
 
 
 def test_add_intron_info_uses_semicolon_delimiter():
@@ -23,6 +24,13 @@ def test_add_intron_info_uses_semicolon_delimiter():
     assert row["num_intron"] == 2
     assert row["intron_positions"] == "10;20"
     assert "," not in row["intron_positions"]
+
+
+def test_trim_species_prefix_preserves_dotted_taxonomic_qualifier_boundaries():
+    assert trim_species_prefix("Asimitellaria_furusei_var._furusei_gene1") == "gene1"
+    assert trim_species_prefix("Asimitellaria_furusei_var._subramosa_gene1") == "gene1"
+    assert trim_species_prefix("Arisaema_sp._aooni_gene1") == "gene1"
+    assert trim_species_prefix("Bacillus_subtilis_subsp._subtilis_gene1") == "gene1"
 
 
 def test_add_intron_info_keeps_empty_when_no_intron():

@@ -13,6 +13,12 @@ import subprocess
 import sys
 import tempfile
 
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+
+from species_labeling import extract_species_label
+
 
 FASTA_EXTENSIONS = (
     ".fa",
@@ -121,21 +127,7 @@ def gff_candidate_sort_key(path):
 
 
 def species_prefix_from_name(name):
-    parts = [part for part in Path(name).name.split("_") if part != ""]
-    if len(parts) < 2:
-        return ""
-    second = parts[1].lower()
-    third = parts[2].lower() if len(parts) >= 3 else ""
-    count = 2
-    if second == "sp":
-        count = 3 if len(parts) >= 3 else 2
-    elif second in TAXONOMIC_PROXIMITY_QUALIFIERS:
-        count = 3 if len(parts) >= 3 else 2
-    elif third in TAXONOMIC_PROXIMITY_QUALIFIERS:
-        count = 3
-    elif third in TAXONOMIC_INFRASPECIFIC_RANKS:
-        count = 4 if len(parts) >= 4 else 3
-    return "_".join(parts[:count]).split(".", 1)[0]
+    return extract_species_label(name, strip_extension=True)
 
 
 def read_fasta_ids(path):

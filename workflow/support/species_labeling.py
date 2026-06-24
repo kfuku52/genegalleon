@@ -119,6 +119,28 @@ SPECIES_LABEL_TERMINAL_SUFFIXES = (
     ".longestcds.mmseqs2taxonomy.tsv",
     ".longestcds.fa.gz",
     ".isoform.fa.gz",
+    ".derived.cds.fa.gz",
+    "_derived.cds.fa.gz",
+    ".derived.genome.fa.gz",
+    "_derived.genome.fa.gz",
+    ".derived.gff.gz",
+    "_derived.gff.gz",
+    ".cds.all.fa.gz",
+    "_cds.all.fa.gz",
+    ".cds.fa.gz",
+    "_cds.fa.gz",
+    ".cds.fna.gz",
+    "_cds.fna.gz",
+    ".genome.fa.gz",
+    "_genome.fa.gz",
+    ".genomic.fna.gz",
+    "_genomic.fna.gz",
+    ".dna.primary_assembly.fa.gz",
+    ".dna.toplevel.fa.gz",
+    ".pep.fa.gz",
+    "_pep.fa.gz",
+    ".protein.fa.gz",
+    "_protein.fa.gz",
     ".fastq.gz",
     ".fq.gz",
     ".fasta.gz",
@@ -245,6 +267,22 @@ def species_prefix_token_count(parts):
     return 2
 
 
+def is_species_rank_or_qualifier_token(token):
+    key = taxonomic_token_key(token)
+    return (
+        key == "sp"
+        or key in TAXONOMIC_PROXIMITY_QUALIFIERS
+        or key in TAXONOMIC_INFRASPECIFIC_RANKS
+    )
+
+
+def species_label_prefix_token(token):
+    text = str(token or "").strip()
+    if is_species_rank_or_qualifier_token(text):
+        return text
+    return text.split(".", 1)[0]
+
+
 def strip_species_label_terminal_suffixes(name):
     stem = str(name or "")
     stem_lower = stem.lower()
@@ -262,7 +300,9 @@ def extract_species_label(value, strip_extension=False):
     count = species_prefix_token_count(parts)
     if count == 0:
         return ""
-    return "_".join(parts[:count])
+    prefix_parts = [species_label_prefix_token(part) for part in parts[:count]]
+    prefix_parts = [part for part in prefix_parts if part != ""]
+    return "_".join(prefix_parts)
 
 
 def strip_species_label(value):

@@ -1297,15 +1297,37 @@ _gg_species_prefix_token_count() {
     printf '3\n'
     return 0
   fi
-  if [[ "${third}" == "subsp" || "${third}" == "var" || "${third}" == "forma" || "${third}" == "f" ]]; then
+  case "${third}" in
+    subsp|var|forma|f|strain|substrain|serovar|serotype|serogroup|pathovar|pv|biovar|biotype|chemovar|morphovar|cultivar|cv|isolate|group|subgroup|complex|clade|lineage|section|series|ecotype|breed)
     if [[ ${#parts[@]} -ge 4 ]]; then
       printf '4\n'
     else
       printf '3\n'
     fi
     return 0
-  fi
+      ;;
+  esac
   printf '2\n'
+}
+
+_gg_species_is_rank_or_qualifier_token() {
+  local key
+  key=$(_gg_species_rank_token_key "${1:-}")
+  case "${key}" in
+    sp|cf|aff|nr|subsp|var|forma|f|strain|substrain|serovar|serotype|serogroup|pathovar|pv|biovar|biotype|chemovar|morphovar|cultivar|cv|isolate|group|subgroup|complex|clade|lineage|section|series|ecotype|breed)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+_gg_species_label_prefix_part() {
+  local part=${1:-}
+  if _gg_species_is_rank_or_qualifier_token "${part}"; then
+    printf '%s\n' "${part}"
+    return 0
+  fi
+  printf '%s\n' "${part%%.*}"
 }
 
 _gg_strip_species_terminal_suffixes() {
@@ -1317,6 +1339,10 @@ _gg_strip_species_terminal_suffixes() {
     ".fasta.busco.short.txt" ".fa.busco.short.txt" ".faa.busco.short.txt" ".fna.busco.short.txt" ".ffn.busco.short.txt"
     ".busco.full.tsv" "_busco.full.tsv" ".busco.short.txt" "_busco.short.txt"
     ".busco.full" "_busco.full" ".busco.short" "_busco.short" ".busco" "_busco"
+    ".derived.cds.fa.gz" "_derived.cds.fa.gz" ".derived.genome.fa.gz" "_derived.genome.fa.gz" ".derived.gff.gz" "_derived.gff.gz"
+    ".cds.all.fa.gz" "_cds.all.fa.gz" ".cds.fa.gz" "_cds.fa.gz" ".cds.fna.gz" "_cds.fna.gz"
+    ".genome.fa.gz" "_genome.fa.gz" ".genomic.fna.gz" "_genomic.fna.gz" ".dna.primary_assembly.fa.gz" ".dna.toplevel.fa.gz"
+    ".pep.fa.gz" "_pep.fa.gz" ".protein.fa.gz" "_protein.fa.gz"
     ".fastq.gz" ".fq.gz" ".fasta.gz" ".fa.gz" ".faa.gz" ".fna.gz" ".ffn.gz"
     ".gff3.gz" ".gff.gz" ".gtf.gz" ".tsv.gz" ".txt.gz" ".csv.gz"
     ".fastq" ".fq" ".fasta" ".fa" ".faa" ".fna" ".ffn"
@@ -1354,6 +1380,8 @@ gg_species_name_from_path_or_dot() {
 
   selected=("${parts[@]:0:${prefix_count}}")
   for part in "${selected[@]}"; do
+    [[ -n "${part}" ]] || continue
+    part=$(_gg_species_label_prefix_part "${part}")
     [[ -n "${part}" ]] || continue
     if [[ -n "${species_name}" ]]; then
       species_name+="_"
@@ -2840,13 +2868,13 @@ check_species_cds_dir() {
     local first_header_no_gt
     local first_header_sp
     local spfasta_startswith
-    sp_ub=$(basename "${spfasta}" | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/")
+    sp_ub=$(gg_species_name_from_path_or_dot "${spfasta}")
     local seq_names
     seq_names=$(seqkit seq "${spfasta}" | awk '/^>/ {print}')
     first_header=${seq_names%%$'\n'*}
     first_header=${first_header%%[[:space:]]*}
     first_header_no_gt=${first_header#>}
-    first_header_sp=$(printf '%s' "${first_header_no_gt}" | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/")
+    first_header_sp=$(gg_species_name_from_path_or_dot "${first_header_no_gt}")
     spfasta_startswith=">${first_header_sp}"
 
     if [[ ${spfasta_startswith} != ">${sp_ub}" ]]; then
@@ -2869,6 +2897,7 @@ check_species_cds_dir() {
   }
 
   export -f check_single_species_cds
+  export -f gg_species_name_from_path_or_dot _gg_strip_species_terminal_suffixes _gg_species_prefix_token_count _gg_species_rank_token_key _gg_species_is_rank_or_qualifier_token _gg_species_label_prefix_part
   export error_log
   if command -v parallel >/dev/null 2>&1; then
     parallel --jobs "${GG_TASK_CPUS}" check_single_species_cds ::: "${species_cds_fasta[@]}"
@@ -2917,12 +2946,12 @@ check_species_protein_dir() {
     local first_header_sp
     local spfasta_startswith
     local seq_names
-    sp_ub=$(basename "${spfasta}" | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/")
+    sp_ub=$(gg_species_name_from_path_or_dot "${spfasta}")
     seq_names=$(seqkit seq "${spfasta}" | awk '/^>/ {print}')
     first_header=${seq_names%%$'\n'*}
     first_header=${first_header%%[[:space:]]*}
     first_header_no_gt=${first_header#>}
-    first_header_sp=$(printf '%s' "${first_header_no_gt}" | sed -e "s/_/|/" -e "s/_.*//" -e "s/|/_/")
+    first_header_sp=$(gg_species_name_from_path_or_dot "${first_header_no_gt}")
     spfasta_startswith=">${first_header_sp}"
 
     if [[ ${spfasta_startswith} != ">${sp_ub}" ]]; then
@@ -2945,6 +2974,7 @@ check_species_protein_dir() {
   }
 
   export -f check_single_species_protein
+  export -f gg_species_name_from_path_or_dot _gg_strip_species_terminal_suffixes _gg_species_prefix_token_count _gg_species_rank_token_key _gg_species_is_rank_or_qualifier_token _gg_species_label_prefix_part
   export error_log
   if command -v parallel >/dev/null 2>&1; then
     parallel --jobs "${GG_TASK_CPUS}" check_single_species_protein ::: "${species_protein_fasta[@]}"
@@ -3076,25 +3106,80 @@ from pathlib import Path
 
 
 def species_from_filename(path: Path) -> str:
+    suffixes = (
+        ".derived.cds.fa.gz",
+        "_derived.cds.fa.gz",
+        ".cds.all.fa.gz",
+        "_cds.all.fa.gz",
+        ".cds.fa.gz",
+        "_cds.fa.gz",
+        ".cds.fna.gz",
+        "_cds.fna.gz",
+        ".genome.fa.gz",
+        "_genome.fa.gz",
+        ".genomic.fna.gz",
+        "_genomic.fna.gz",
+        ".pep.fa.gz",
+        "_pep.fa.gz",
+        ".protein.fa.gz",
+        "_protein.fa.gz",
+        ".fa.gz",
+        ".fas.gz",
+        ".fasta.gz",
+        ".fna.gz",
+        ".fa",
+        ".fas",
+        ".fasta",
+        ".fna",
+    )
     name = path.name
-    if "." in name:
-        name = name.split(".", 1)[0]
+    lowered = name.lower()
+    for suffix in sorted(suffixes, key=len, reverse=True):
+        if lowered.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
     parts = [part for part in name.split("_") if part]
     if len(parts) < 2:
         return path.stem
-    second = parts[1].lower()
-    third = parts[2].lower() if len(parts) >= 3 else ""
+    def token_key(token):
+        lowered_token = token.rstrip(".").lower()
+        return {
+            "spp": "sp",
+            "ssp": "subsp",
+            "subspecies": "subsp",
+            "variety": "var",
+            "form": "forma",
+        }.get(lowered_token, lowered_token)
+    def prefix_part(token):
+        key = token_key(token)
+        if key in {
+            "sp", "cf", "aff", "nr", "subsp", "var", "forma", "f",
+            "strain", "substrain", "serovar", "serotype", "serogroup",
+            "pathovar", "pv", "biovar", "biotype", "chemovar", "morphovar",
+            "cultivar", "cv", "isolate", "group", "subgroup", "complex",
+            "clade", "lineage", "section", "series", "ecotype", "breed",
+        }:
+            return token
+        return token.split(".", 1)[0]
+    second = token_key(parts[1])
+    third = token_key(parts[2]) if len(parts) >= 3 else ""
     if second == "sp":
         count = 3 if len(parts) >= 3 else 2
     elif second in {"cf", "aff", "nr"}:
         count = 3 if len(parts) >= 3 else 2
     elif third in {"cf", "aff", "nr"}:
         count = 3
-    elif third in {"subsp", "ssp", "var", "forma", "f"}:
+    elif third in {
+        "subsp", "var", "forma", "f", "strain", "substrain", "serovar",
+        "serotype", "serogroup", "pathovar", "pv", "biovar", "biotype",
+        "chemovar", "morphovar", "cultivar", "cv", "isolate", "group",
+        "subgroup", "complex", "clade", "lineage", "section", "series",
+        "ecotype", "breed",
+    }:
         count = 4 if len(parts) >= 4 else 3
     else:
         count = 2
-    return "_".join(parts[:count])
+    return "_".join(prefix_part(part) for part in parts[:count] if prefix_part(part))
 
 
 cds_dir = Path(sys.argv[1])

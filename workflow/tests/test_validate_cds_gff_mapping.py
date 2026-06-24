@@ -37,6 +37,15 @@ def test_species_prefix_from_name_preserves_taxonomic_qualifiers():
     assert mod.species_prefix_from_name("Dictyostelium_cf_discoideum_demo.fa.gz") == "Dictyostelium_cf_discoideum"
     assert mod.species_prefix_from_name("Bacillus_subtilis_subsp_subtilis_demo.gff.gz") == "Bacillus_subtilis_subsp_subtilis"
     assert mod.species_prefix_from_name("Amoeba_sp_JDSRuffled_demo.fa.gz") == "Amoeba_sp_JDSRuffled"
+    assert (
+        mod.species_prefix_from_name("Asimitellaria_furusei_var._furusei_demo.fa.gz")
+        == "Asimitellaria_furusei_var._furusei"
+    )
+    assert mod.species_prefix_from_name("Arisaema_sp._aooni_demo.fa.gz") == "Arisaema_sp._aooni"
+    assert (
+        mod.species_prefix_from_name("Bacillus_subtilis_subsp._subtilis_demo.gff.gz")
+        == "Bacillus_subtilis_subsp._subtilis"
+    )
 
 
 def test_index_gff_files_prefers_full_annotation_over_partial_files(tmp_path):
@@ -82,6 +91,33 @@ def test_validate_cds_gff_mapping_passes_on_matching_ids(tmp_path):
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     assert "[Arabidopsis_thaliana] CDS-to-GFF mapping OK: 2/2 IDs" in completed.stdout
     assert "species_checked=1, species_passed=1" in completed.stdout
+
+
+def test_validate_cds_gff_mapping_keeps_dotted_taxonomic_qualifier_species_distinct(tmp_path):
+    cds_dir = tmp_path / "species_cds"
+    gff_dir = tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+
+    for suffix in ("furusei", "subramosa"):
+        species = f"Asimitellaria_furusei_var._{suffix}"
+        write_gzip_text(cds_dir / f"{species}_demo.fa.gz", f">{species}_gene1\nATGAAA\n")
+        write_gzip_text(
+            gff_dir / f"{species}_demo.gff.gz",
+            "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=gene1.CDS1;Parent=gene1;\n",
+        )
+
+    completed = run_script(
+        "--species-cds-dir",
+        str(cds_dir),
+        "--species-gff-dir",
+        str(gff_dir),
+    )
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "[Asimitellaria_furusei_var._furusei] CDS-to-GFF mapping OK: 1/1 IDs" in completed.stdout
+    assert "[Asimitellaria_furusei_var._subramosa] CDS-to-GFF mapping OK: 1/1 IDs" in completed.stdout
+    assert "species_checked=2, species_passed=2" in completed.stdout
 
 
 def test_validate_cds_gff_mapping_fails_on_missing_ids(tmp_path):
