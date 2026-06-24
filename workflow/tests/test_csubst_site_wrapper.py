@@ -143,6 +143,8 @@ def test_get_cb_required_columns_keeps_needed_columns_only():
         "OCSany2spe",
         "ECSany2spe",
         "omegaCany2spe",
+        "omegaCany2any",
+        "omegaCdif2spe",
         "OCNCoD",
         "branch_id_1",
         "branch_id_2",
@@ -160,12 +162,64 @@ def test_get_cb_required_columns_keeps_needed_columns_only():
         "OCSany2spe",
         "ECSany2spe",
         "omegaCany2spe",
+        "omegaCany2any",
+        "omegaCdif2spe",
         "OCNCoD",
         "branch_id_1",
         "branch_id_2",
         "is_fg_traitA",
         "branch_num_fg_stem_traitA",
     ]
+
+
+def test_get_annotation_text_includes_observed_branch_statistics():
+    mod = load_module()
+
+    text = mod.get_annotation_text(
+        og="OG0001",
+        arity=2,
+        branch_id_str="1,2",
+        trait="traitA",
+        min_OCNany2spe=1.8,
+        min_omegaCany2spe=3.0,
+        min_OCNCoD=0.0,
+        besthit_values=["a", "b", "c", "d", "e"],
+        observed_values={
+            "OCNany2spe": 2.4,
+            "ECNany2spe": 0.8,
+            "OCSany2spe": 1.0,
+            "ECSany2spe": 0.5,
+            "omegaCany2spe": 5.6,
+            "omegaCany2any": 4.7,
+            "omegaCdif2spe": 2.3,
+            "OCNCoD": 1.2,
+        },
+    )
+
+    assert "Threshold\n\nOCNany2spe: 1.8" in text
+    assert "omegaCany2spe: 3.0" in text
+    assert "OCNCoD: 0.0" in text
+    assert "Observed\n\nOCNany2spe: 2.4" in text
+    assert "ECNany2spe: 0.8" in text
+    assert "OCSany2spe: 1.0" in text
+    assert "ECSany2spe: 0.5" in text
+    assert "omegaCany2spe: 5.6" in text
+    assert "omegaCany2any: 4.7" in text
+    assert "omegaCdif2spe: 2.3" in text
+    assert "OCNCoD: 1.2" in text
+
+
+def test_append_csubst_sites_command_quotes_command_in_annotation_text():
+    mod = load_module()
+
+    text = mod.append_csubst_sites_command(
+        "Annotation body",
+        ["csubst", "sites", "--branch_id", "1,2", "--alignment_file", "dir with spaces/csubst.fasta"],
+    )
+
+    assert "Annotation body" in text
+    assert "CSUBST sites command" in text
+    assert "csubst sites --branch_id 1,2 --alignment_file 'dir with spaces/csubst.fasta'" in text
 
 
 def test_skip_lower_order_filters_subset_rows_per_orthogroup():

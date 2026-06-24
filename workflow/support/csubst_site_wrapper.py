@@ -10,6 +10,7 @@ import os
 import pandas
 import re
 import shutil
+import shlex
 import subprocess
 import textwrap
 import zipfile
@@ -80,6 +81,9 @@ def build_csubst_sites_command(iqtree_anc_rel_dir, iqtree_anc_dir, branch_id_str
         cmd += ['--nonsyn_recode', recode]
     cmd += ['--pdb', 'besthit']
     return cmd
+
+def shell_join_command(cmd):
+    return ' '.join(shlex.quote(str(token)) for token in cmd)
 
 pandas.set_option("display.max_columns", None)
 
@@ -362,11 +366,52 @@ def resolve_site_artifacts(dir_out_og, branch_id_str):
         'pymol_summary_pdf': pymol_summary_pdf,
     }
 
-def get_annotation_text(og, arity, branch_id_str, trait, min_OCNany2spe, min_omegaCany2spe, min_OCNCoD, besthit_values):
+def format_annotation_value(value):
+    if value is None:
+        return 'NA'
+    try:
+        if pandas.isna(value):
+            return 'NA'
+    except TypeError:
+        pass
+    return str(value)
+
+def normalize_observed_branch_stats(observed_values):
+    keys = [
+        'OCNany2spe',
+        'ECNany2spe',
+        'OCSany2spe',
+        'ECSany2spe',
+        'omegaCany2spe',
+        'omegaCany2any',
+        'omegaCdif2spe',
+        'OCNCoD',
+    ]
+    observed = {key: 'NA' for key in keys}
+    if isinstance(observed_values, dict):
+        for key in keys:
+            observed[key] = format_annotation_value(observed_values.get(key))
+    elif observed_values is not None:
+        for key, value in zip(keys, observed_values):
+            observed[key] = format_annotation_value(value)
+    return observed
+
+def append_csubst_sites_command(annotation_text, cmd):
+    if not cmd:
+        return annotation_text
+    return f"""{annotation_text}
+
+CSUBST sites command
+
+{shell_join_command(cmd)}
+"""
+
+def get_annotation_text(og, arity, branch_id_str, trait, min_OCNany2spe, min_omegaCany2spe, min_OCNCoD, besthit_values, observed_values=None):
     if besthit_values is None:
         besthit_values = ["NA", "NA", "NA", "NA", "NA"]
     if len(besthit_values) < 5:
         besthit_values = list(besthit_values) + (["NA"] * (5 - len(besthit_values)))
+    observed = normalize_observed_branch_stats(observed_values)
     annotation_text = f"""Orthogroup: {og}
 
 K: {arity}
@@ -375,11 +420,31 @@ Branch ID: {branch_id_str}
 
 Trait: {trait}
 
-Minimum OCNany2spe: {min_OCNany2spe}
+Threshold
 
-Minimum omegaCany2spe: {min_omegaCany2spe}
+OCNany2spe: {min_OCNany2spe}
 
-Minimum OCNCoD: {min_OCNCoD}
+omegaCany2spe: {min_omegaCany2spe}
+
+OCNCoD: {min_OCNCoD}
+
+Observed
+
+OCNany2spe: {observed['OCNany2spe']}
+
+ECNany2spe: {observed['ECNany2spe']}
+
+OCSany2spe: {observed['OCSany2spe']}
+
+ECSany2spe: {observed['ECSany2spe']}
+
+omegaCany2spe: {observed['omegaCany2spe']}
+
+omegaCany2any: {observed['omegaCany2any']}
+
+omegaCdif2spe: {observed['omegaCdif2spe']}
+
+OCNCoD: {observed['OCNCoD']}
 
 Time: {datetime.datetime.now()}
 
@@ -406,6 +471,13 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
     os.chdir(dir_out_og)
     iqtree_anc_dir = get_iqtree_anc_dir(dir_out_og=dir_out_og, og=og)
     iqtree_anc_rel_dir = os.path.basename(iqtree_anc_dir)
+    csubst_sites_cmd = build_csubst_sites_command(
+        iqtree_anc_rel_dir=iqtree_anc_rel_dir,
+        iqtree_anc_dir=iqtree_anc_dir,
+        branch_id_str=branch_id_str,
+        ncpu=ncpu,
+        csubst_nonsyn_recode=csubst_nonsyn_recode,
+    )
     iqtree_tree_file = os.path.join(iqtree_anc_dir, 'csubst.treefile')
     iqtree_state_file = os.path.join(iqtree_anc_dir, 'csubst.state')
     iqtree_rate_file = os.path.join(iqtree_anc_dir, 'csubst.rate')
@@ -426,13 +498,7 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
             path_iqtree_zip = get_iqtree_anc_zip_path(dir_og=dir_og, og=og)
             with zipfile.ZipFile(path_iqtree_zip, "r") as zip_ref:
                 zip_ref.extractall(dir_out_og)
-            cmd = build_csubst_sites_command(
-                iqtree_anc_rel_dir=iqtree_anc_rel_dir,
-                iqtree_anc_dir=iqtree_anc_dir,
-                branch_id_str=branch_id_str,
-                ncpu=ncpu,
-                csubst_nonsyn_recode=csubst_nonsyn_recode,
-            )
+            cmd = csubst_sites_cmd
             print('COMMAND: {}'.format(' '.join(cmd)), flush=True)
             subprocess.run(cmd, check=True)
         print(f'{datetime.datetime.now()}: csubst sites done: {og}', flush=True)
@@ -454,7 +520,7 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
             print(f'Annotation text generation skipped: outfile already exists: annotation_text.pdf for {og}', flush=True)
         else:
             print(f'Generating annotation text: annotation_text.pdf for {og}', flush=True)
-            create_pdf(annotation_text, 'annotation_text.pdf')
+            create_pdf(append_csubst_sites_command(annotation_text, csubst_sites_cmd), 'annotation_text.pdf')
         artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
         if artifacts['site_summary_pdf'] is None:
             raise FileNotFoundError(
@@ -538,6 +604,7 @@ def get_cb_required_columns(cb_columns, trait_names):
         'omegaCany2spe',
         'OCNCoD',
     }
+    required.update(col for col in ['omegaCany2any', 'omegaCdif2spe'] if col in cb_columns)
     required.update(col for col in cb_columns if col.startswith('branch_id_'))
     if 'is_fg' in cb_columns:
         required.add('is_fg')
@@ -993,16 +1060,29 @@ if __name__ == '__main__':
             ]
             besthit_cols = ['besthit_0.05', 'besthit_0.25', 'besthit_0.5', 'besthit_0.75', 'besthit_0.95']
             besthit_frame = cb_passed.reindex(columns=besthit_cols)
+            observed_cols = [
+                'OCNany2spe',
+                'ECNany2spe',
+                'OCSany2spe',
+                'ECSany2spe',
+                'omegaCany2spe',
+                'omegaCany2any',
+                'omegaCdif2spe',
+                'OCNCoD',
+            ]
+            observed_frame = cb_passed.reindex(columns=observed_cols)
             annotation_text_list = []
-            for og, branch_id_str, besthit_values_raw in zip(
+            for og, branch_id_str, besthit_values_raw, observed_values_raw in zip(
                 og_list,
                 branch_id_str_list,
                 besthit_frame.itertuples(index=False, name=None),
+                observed_frame.itertuples(index=False, name=None),
             ):
                 besthit_values = [
                     str(value) if pandas.notna(value) else 'NA'
                     for value in besthit_values_raw
                 ]
+                observed_values = dict(zip(observed_cols, observed_values_raw))
                 annotation_text_list.append(
                     get_annotation_text(
                         og=og,
@@ -1013,6 +1093,7 @@ if __name__ == '__main__':
                         min_omegaCany2spe=min_omegaCany2spe,
                         min_OCNCoD=min_OCNCoD,
                         besthit_values=besthit_values,
+                        observed_values=observed_values,
                     )
                 )
             with ProcessPoolExecutor(max_workers=args.ncpu) as executor:
