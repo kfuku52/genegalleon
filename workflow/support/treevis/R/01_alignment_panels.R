@@ -17,10 +17,13 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
     cat('Alignment is missing', length(missing_labels), 'tip sequence(s). Displaying backbone only. Examples:', preview, '\n')
   }
   df_rps = prepare_df_rps_for_plot(df_rpsblast, df_tip)
+  has_untrimmed_alignment = !is.null(seqs_untrim) && length(seqs_untrim) > 0
   domain_fill_colors = c()
-  if (nrow(df_rps) > 0) {
+  if (nrow(df_rps) > 0 && has_untrimmed_alignment) {
     df_domain = get_df_domain(df_rps)
     domain_fill_colors = get_domain_fill_colors(df_domain)
+  } else if (nrow(df_rps) > 0) {
+    cat('Untrimmed alignment was not provided. Domain coloring in the alignment panel will be disabled.\n')
   }
   non_domain_fill = '__non_domain__'
   fill_colors = c(setNames('gray30', non_domain_fill), domain_fill_colors)
@@ -53,7 +56,7 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
     }
 
     active_domains <- vector("list", length(seq_vec))
-    if (nrow(df_rps) > 0) {
+    if (nrow(df_rps) > 0 && has_untrimmed_alignment) {
       df_seq_rps <- df_rps[(df_rps[['qacc']] == seqname), c('sacc', 'qstart', 'qend', 'qlen'), drop = FALSE]
       if (nrow(df_seq_rps) > 0) {
         nt_pos_trim = cumsum(is_atgc)
@@ -81,7 +84,7 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
             if (has_untrim_map) {
               is_domain_pos <- is_atgc & !is.na(mapped_untrim_nt) & (mapped_untrim_nt >= nt_start) & (mapped_untrim_nt <= nt_end)
             } else {
-              is_domain_pos <- is_atgc & (nt_pos_trim >= nt_start) & (nt_pos_trim <= nt_end)
+              is_domain_pos <- rep(FALSE, length(seq_vec))
             }
             hit_idx <- which(is_domain_pos)
             if (length(hit_idx) > 0) {
@@ -571,4 +574,3 @@ add_meme_column = function(g, args, path_meme, max_motif = 8) {
         )
     return(g)
 }
-

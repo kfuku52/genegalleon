@@ -747,7 +747,7 @@ if (!all(is.finite(df_rps_ready$qstart) & is.finite(df_rps_ready$qend))) {
   stop("prepare_df_rps_for_plot should coerce qstart/qend to numeric.")
 }
 
-# 31) add_alignment_column: alignment blocks should be colored by domain when rpsblast is available.
+# 31) add_alignment_column: alignment blocks should be colored by domain when untrimmed mapping is available.
 g_align_in <- list(
   tree = list(
     data = data.frame(
@@ -767,7 +767,7 @@ seqs_align <- list(
   g1 = c("01", "01", "01", "01", "01", "01", "01", "01", "01"),
   g2 = c("01", "04", "01", "01", "01", "01", "01", "01", "01")
 )
-g_align_out <- add_alignment_column(g_align_in, args_align, seqs_align, df_rpsblast = df_rps_raw)
+g_align_out <- add_alignment_column(g_align_in, args_align, seqs_align, df_rpsblast = df_rps_raw, seqs_untrim = seqs_align)
 if (!("alignment" %in% names(g_align_out))) {
   stop("add_alignment_column should add alignment panel.")
 }
@@ -814,8 +814,8 @@ if (!all(is.na(mapped_idx[1:3])) || !all(mapped_idx[4:9] == 7:12)) {
 }
 g_no_map <- add_alignment_column(g_align_map_in, args_align, seqs_trim_map, df_rpsblast = df_rps_map)
 fills_no_map <- as.character(g_no_map$alignment$layers[[2]]$data$fill)
-if (!any(fills_no_map == "Domain_X")) {
-  stop("add_alignment_column (without seqs_untrim) should color the first retained codon as domain in this fixture.")
+if (any(fills_no_map == "Domain_X")) {
+  stop("add_alignment_column should not color domains when seqs_untrim is unavailable.")
 }
 g_with_map <- add_alignment_column(g_align_map_in, args_align, seqs_trim_map, df_rpsblast = df_rps_map, seqs_untrim = seqs_untrim_map)
 fills_with_map <- as.character(g_with_map$alignment$layers[[2]]$data$fill)
@@ -837,7 +837,7 @@ df_rps_overlap <- data.frame(
   qend = c("2", "3"),
   stringsAsFactors = FALSE
 )
-g_overlap <- add_alignment_column(g_align_map_in, args_align, seqs_overlap, df_rpsblast = df_rps_overlap)
+g_overlap <- add_alignment_column(g_align_map_in, args_align, seqs_overlap, df_rpsblast = df_rps_overlap, seqs_untrim = seqs_overlap)
 rect_overlap <- g_overlap$alignment$layers[[2]]$data
 overlap_block <- rect_overlap[rect_overlap$xmin == 3 & rect_overlap$xmax == 5, , drop = FALSE]
 if (nrow(overlap_block) != 2) {

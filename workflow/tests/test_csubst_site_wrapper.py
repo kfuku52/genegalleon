@@ -264,6 +264,40 @@ def test_get_alignment_for_tree_plot_reads_current_clipkit_name(tmp_path):
     assert Path(out).read_text(encoding="utf-8") == ">gene1\nATG\n"
 
 
+def test_get_untrimmed_alignment_for_tree_plot_reads_current_mafft_name(tmp_path):
+    mod = load_module()
+    dir_og = tmp_path / "orthogroup"
+    dir_out_og = tmp_path / "csubst_site" / "OG0001_1_2"
+    mafft_dir = dir_og / "mafft"
+    mafft_dir.mkdir(parents=True)
+    dir_out_og.mkdir(parents=True)
+    alignment = mafft_dir / "OG0001_cds.aln.fa.gz"
+    with gzip.open(alignment, "wt") as handle:
+        handle.write(">gene1\nATG---AAA\n")
+
+    out = mod.get_untrimmed_alignment_for_tree_plot(str(dir_og), "OG0001", str(dir_out_og))
+
+    assert out == str(dir_out_og / "OG0001_cds.untrimmed.plot.fasta")
+    assert Path(out).read_text(encoding="utf-8") == ">gene1\nATG---AAA\n"
+
+
+def test_get_untrimmed_alignment_for_tree_plot_returns_none_when_missing(tmp_path):
+    mod = load_module()
+    dir_og = tmp_path / "orthogroup"
+    dir_out_og = tmp_path / "csubst_site" / "OG0001_1_2"
+    dir_og.mkdir(parents=True)
+    dir_out_og.mkdir(parents=True)
+
+    assert mod.get_untrimmed_alignment_for_tree_plot(str(dir_og), "OG0001", str(dir_out_og)) is None
+
+
+def test_build_alignment_panel_arg_includes_untrimmed_when_available():
+    mod = load_module()
+
+    assert mod.build_alignment_panel_arg("trim.fa", "untrim.fa") == "--panel11=alignment,trim.fa,untrim.fa"
+    assert mod.build_alignment_panel_arg("trim.fa", None) == "--panel11=alignment,trim.fa"
+
+
 def test_get_alignment_for_tree_plot_rejects_legacy_dot_clipkit_name(tmp_path):
     mod = load_module()
     dir_og = tmp_path / "orthogroup"

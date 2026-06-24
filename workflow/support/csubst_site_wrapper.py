@@ -540,6 +540,14 @@ def get_stat_branch_path(dir_og, og):
 def get_rpsblast_path(dir_og, og):
     return os.path.join(dir_og, 'rpsblast', og + '_rpsblast.tsv')
 
+def materialize_tree_plot_alignment(alignment_path, plain_path):
+    if alignment_path.endswith('.gz'):
+        if (not os.path.exists(plain_path)) or (os.path.getmtime(plain_path) < os.path.getmtime(alignment_path)):
+            with gzip.open(alignment_path, 'rt') as fin, open(plain_path, 'w') as fout:
+                shutil.copyfileobj(fin, fout)
+        return plain_path
+    return alignment_path
+
 def get_alignment_for_tree_plot(dir_og, og, dir_out_og):
     alignment_candidates = [
         os.path.join(dir_og, 'clipkit', og + '_cds.clipkit.fa.gz'),
@@ -551,13 +559,40 @@ def get_alignment_for_tree_plot(dir_og, og, dir_out_og):
         raise FileNotFoundError(
             f'Alignment file was not found for tree plotting. Checked: {alignment_candidates}'
         )
-    if alignment_path.endswith('.gz'):
-        plain_path = os.path.join(dir_out_og, og + '_cds.clipkit.plot.fasta')
-        if (not os.path.exists(plain_path)) or (os.path.getmtime(plain_path) < os.path.getmtime(alignment_path)):
-            with gzip.open(alignment_path, 'rt') as fin, open(plain_path, 'w') as fout:
-                shutil.copyfileobj(fin, fout)
-        return plain_path
-    return alignment_path
+    return materialize_tree_plot_alignment(
+        alignment_path,
+        os.path.join(dir_out_og, og + '_cds.clipkit.plot.fasta'),
+    )
+
+def get_untrimmed_alignment_for_tree_plot(dir_og, og, dir_out_og):
+    alignment_candidates = [
+        os.path.join(dir_og, 'mafft', og + '_cds.aln.fa.gz'),
+        os.path.join(dir_og, 'mafft', og + '_cds.aln.fasta'),
+        os.path.join(dir_og, 'mafft', og + '_cds.aln.fa'),
+        os.path.join(dir_og, 'orthogroup_extraction_fasta', og + '_orthogroup_extraction.fa.gz'),
+        os.path.join(dir_og, 'orthogroup_extraction_fasta', og + '_orthogroup_extraction.fasta'),
+        os.path.join(dir_og, 'orthogroup_extraction_fasta', og + '_orthogroup_extraction.fa'),
+        os.path.join(dir_og, 'cds_fasta', og + '_cds.fa.gz'),
+        os.path.join(dir_og, 'cds_fasta', og + '_cds.fasta'),
+        os.path.join(dir_og, 'cds_fasta', og + '_cds.fa'),
+    ]
+    alignment_path = resolve_existing_path(alignment_candidates)
+    if alignment_path is None:
+        print(
+            f'Untrimmed alignment file was not found for tree plotting. '
+            f'Domain coloring in the alignment panel will be disabled. Checked: {alignment_candidates}',
+            flush=True,
+        )
+        return None
+    return materialize_tree_plot_alignment(
+        alignment_path,
+        os.path.join(dir_out_og, og + '_cds.untrimmed.plot.fasta'),
+    )
+
+def build_alignment_panel_arg(trimmed_alignment, untrimmed_alignment=None):
+    if untrimmed_alignment is not None:
+        return '--panel11=alignment,' + trimmed_alignment + ',' + untrimmed_alignment
+    return '--panel11=alignment,' + trimmed_alignment
 
 def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, dir_og, ncpu=1):
     dir_myscript = os.path.realpath(os.path.dirname(__file__))
@@ -565,6 +600,7 @@ def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, d
     file_stat_branch = get_stat_branch_path(dir_og=dir_og, og=og)
     file_og_rpsblast = get_rpsblast_path(dir_og=dir_og, og=og)
     file_og_alignment = get_alignment_for_tree_plot(dir_og=dir_og, og=og, dir_out_og=dir_out_og)
+    file_og_untrimmed_alignment = get_untrimmed_alignment_for_tree_plot(dir_og=dir_og, og=og, dir_out_og=dir_out_og)
     file_csubst_input_fasta = os.path.join(get_iqtree_anc_dir(dir_out_og=dir_out_og, og=og), 'csubst.fasta')
     artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
     file_csubst_site_tsv = artifacts['site_table_tsv']
@@ -596,7 +632,7 @@ def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, d
     cmd.append('--panel8=intron_number')
     cmd.append('--panel9=domain,'+file_og_rpsblast)
     cmd.append(f'--panel10=amino_acid_site,1,{convergent_site_str},{file_csubst_input_fasta}')
-    cmd.append('--panel11=alignment,'+file_og_alignment)
+    cmd.append(build_alignment_panel_arg(file_og_alignment, file_og_untrimmed_alignment))
     cmd.append('--panel12=fimo,2000,0.05')
     cmd.append('--show_branch_id=yes')
     cmd.append('--event_method=species_overlap')
