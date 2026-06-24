@@ -352,6 +352,89 @@ def test_build_alignment_panel_arg_includes_untrimmed_when_available():
     assert mod.build_alignment_panel_arg("trim.fa", None) == "--panel11=alignment,trim.fa"
 
 
+def test_write_recoded_site_alignment_uses_csubst_state_symbols(tmp_path):
+    mod = load_module()
+    recoding_table = tmp_path / "csubst_nonsyn_recoding.tsv"
+    rows = [
+        ("1", "AGPST", "A"),
+        ("1", "AGPST", "G"),
+        ("1", "AGPST", "P"),
+        ("1", "AGPST", "S"),
+        ("1", "AGPST", "T"),
+        ("2", "DENQ", "D"),
+        ("2", "DENQ", "E"),
+        ("2", "DENQ", "N"),
+        ("2", "DENQ", "Q"),
+        ("3", "HKR", "H"),
+        ("3", "HKR", "K"),
+        ("3", "HKR", "R"),
+        ("4", "ILMV", "I"),
+        ("4", "ILMV", "L"),
+        ("4", "ILMV", "M"),
+        ("4", "ILMV", "V"),
+        ("5", "FWY", "F"),
+        ("5", "FWY", "W"),
+        ("5", "FWY", "Y"),
+        ("6", "C", "C"),
+    ]
+    recoding_table.write_text(
+        "state_id\tstate_label\tamino_acid\n"
+        + "\n".join("\t".join(row) for row in rows)
+        + "\n",
+        encoding="utf-8",
+    )
+    codon_alignment = tmp_path / "csubst.fasta"
+    codon_alignment.write_text(
+        ">gene1\nGCTGATAAAATTTTTTGT\n"
+        ">gene2\nTCTGAACATGTGTATTGC\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "recoded.fasta"
+
+    result = mod.write_recoded_site_alignment(str(codon_alignment), str(recoding_table), str(out))
+
+    assert result == str(out)
+    assert out.read_text(encoding="utf-8") == ">gene1\nABCDEF\n>gene2\nABCDEF\n"
+
+
+def test_build_tree_plot_panel_args_adds_recoded_state_panel_when_available():
+    mod = load_module()
+
+    out = mod.build_tree_plot_panel_args(
+        file_og_rpsblast="rps.tsv",
+        file_csubst_input_fasta="csubst.fasta",
+        convergent_site_str="2:5",
+        file_og_alignment="trim.fa",
+        file_og_untrimmed_alignment="untrim.fa",
+        recoded_site_alignment="dayhoff6.fa",
+        csubst_nonsyn_recode="dayhoff6",
+    )
+
+    assert "--panel10=amino_acid_site,1,2:5,csubst.fasta" in out
+    assert "--panel11=site_state,site_state_dayhoff6,2:5,dayhoff6.fa,Recoded state (dayhoff6)" in out
+    assert "--panel12=alignment,trim.fa,untrim.fa" in out
+    assert "--panel13=fimo,2000,0.05" in out
+
+
+def test_build_tree_plot_panel_args_keeps_existing_numbering_without_recoded_panel():
+    mod = load_module()
+
+    out = mod.build_tree_plot_panel_args(
+        file_og_rpsblast="rps.tsv",
+        file_csubst_input_fasta="csubst.fasta",
+        convergent_site_str="2:5",
+        file_og_alignment="trim.fa",
+        file_og_untrimmed_alignment=None,
+        recoded_site_alignment=None,
+        csubst_nonsyn_recode="no",
+    )
+
+    assert "--panel10=amino_acid_site,1,2:5,csubst.fasta" in out
+    assert "--panel11=alignment,trim.fa" in out
+    assert "--panel12=fimo,2000,0.05" in out
+    assert not any(arg.startswith("--panel11=site_state") for arg in out)
+
+
 def test_csubst_nonsyn_recode_output_suffix_preserves_default_name():
     mod = load_module()
 

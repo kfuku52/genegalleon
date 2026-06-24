@@ -1128,8 +1128,54 @@ extract_alignment_sites <- function(tidy_aln, selected_amino_acid_sites) {
   tidy_aln
 }
 
-add_amino_acid_site_column <- function(g, args, tidy_aln, selected_amino_acid_sites) {
-  cat(as.character(Sys.time()), "Adding amino acid site column.\n")
+read_site_state_alignment <- function(path) {
+  lines <- readLines(path, warn = FALSE)
+  lines <- trimws(lines)
+  lines <- lines[nzchar(lines)]
+  record_names <- character(0)
+  record_seqs <- character(0)
+  current_name <- NA_character_
+  current_seq <- character(0)
+  flush_record <- function() {
+    if (!is.na(current_name)) {
+      record_names <<- c(record_names, current_name)
+      record_seqs <<- c(record_seqs, paste(current_seq, collapse = ""))
+    }
+  }
+  for (line in lines) {
+    if (startsWith(line, ">")) {
+      flush_record()
+      current_name <- trimws(sub("^>", "", line))
+      current_seq <- character(0)
+    } else {
+      current_seq <- c(current_seq, line)
+    }
+  }
+  flush_record()
+  if (length(record_names) == 0) {
+    return(data.frame(name = factor(), position = numeric(), character = character(), stringsAsFactors = FALSE))
+  }
+  rows <- lapply(seq_along(record_names), function(i) {
+    chars <- strsplit(record_seqs[[i]], "", fixed = TRUE)[[1]]
+    data.frame(
+      name = record_names[[i]],
+      position = seq_along(chars),
+      character = chars,
+      stringsAsFactors = FALSE
+    )
+  })
+  out <- do.call(rbind, rows)
+  out[["name"]] <- factor(out[["name"]], levels = rev(record_names))
+  rownames(out) <- NULL
+  out
+}
+
+add_amino_acid_site_column <- function(g, args, tidy_aln, selected_amino_acid_sites, qname = "amino_acid_site", xlab = "Amino acid position (aa)") {
+  cat(as.character(Sys.time()), "Adding amino acid site column:", qname, "\n")
+  qname <- as.character(qname)
+  if (is.na(qname) || !nzchar(qname)) {
+    qname <- "amino_acid_site"
+  }
   selected_amino_acid_sites <- selected_amino_acid_sites[!is.na(selected_amino_acid_sites)]
   if (length(selected_amino_acid_sites) == 0) {
     cat("Amino acid site list is empty. amino_acid_site column will not be added.\n")
@@ -1139,7 +1185,6 @@ add_amino_acid_site_column <- function(g, args, tidy_aln, selected_amino_acid_si
   tidy_site <- extract_alignment_sites(tidy_aln, selected_amino_acid_sites)
   tidy_site <- merge(tidy_site, df_tip, by.x = "name", by.y = "label", all.x = TRUE)
   tidy_site[["name"]] <- factor(tidy_site[["name"]], levels = df_tip[["label"]])
-  qname <- "amino_acid_site"
     g[[qname]] <- ggplot() + 
     geom_blank(data = df_tip, aes(y = label)) + 
     ggmsa::geom_msa(data = tidy_site, color = "LETTER") +
@@ -1147,7 +1192,7 @@ add_amino_acid_site_column <- function(g, args, tidy_aln, selected_amino_acid_si
         breaks = 1:length(selected_amino_acid_sites),
         labels = selected_amino_acid_sites
     ) +
-    xlab("Amino acid position (aa)") +
+    xlab(xlab) +
     theme(
         axis.title.y        = element_blank(),
         axis.title.x        = element_text(size = args[["font_size"]]),
@@ -1162,5 +1207,57 @@ add_amino_acid_site_column <- function(g, args, tidy_aln, selected_amino_acid_si
         plot.margin         = unit(args[["margins"]] / 4, "cm")
     )
   
+  g
+}
+
+add_site_state_column <- function(g, args, tidy_aln, selected_sites, qname = "site_state", xlab = "Site state") {
+  cat(as.character(Sys.time()), "Adding site-state column:", qname, "\n")
+  qname <- as.character(qname)
+  if (is.na(qname) || !nzchar(qname)) {
+    qname <- "site_state"
+  }
+  selected_sites <- selected_sites[!is.na(selected_sites)]
+  if (length(selected_sites) == 0) {
+    cat("Site-state list is empty. site_state column will not be added.\n")
+    return(g)
+  }
+  df_tip <- get_df_tip(g[["tree"]])[,c("label", "branch_id")]
+  tidy_site <- extract_alignment_sites(tidy_aln, selected_sites)
+  tidy_site <- merge(tidy_site, df_tip, by.x = "name", by.y = "label", all.x = TRUE)
+  tidy_site[["name"]] <- factor(tidy_site[["name"]], levels = df_tip[["label"]])
+  site_state_text_size <- args[["font_size"]] * 0.9
+  g[[qname]] <- ggplot() +
+    geom_blank(data = df_tip, aes(y = label)) +
+    geom_tile(
+      data = tidy_site,
+      aes(x = position, y = name, fill = character),
+      color = "grey80",
+      linewidth = 0.1
+    ) +
+    geom_text(
+      data = tidy_site,
+      aes(x = position, y = name, label = character),
+      size = site_state_text_size,
+      color = "black"
+    ) +
+    scale_fill_discrete(na.value = "white", guide = "none") +
+    scale_x_continuous(
+      breaks = seq_along(selected_sites),
+      labels = selected_sites
+    ) +
+    xlab(xlab) +
+    theme(
+      axis.title.y        = element_blank(),
+      axis.title.x        = element_text(size = args[["font_size"]]),
+      axis.text.x         = element_text(angle = 90, hjust = 1, vjust = 0.5, color = "black", size = args[["font_size"]]),
+      axis.ticks.x        = element_blank(),
+      axis.line.x         = element_blank(),
+      axis.text.y         = element_blank(),
+      axis.ticks.y        = element_blank(),
+      axis.line.y         = element_blank(),
+      panel.grid.major.y  = element_blank(),
+      rect                = element_blank(),
+      plot.margin         = unit(args[["margins"]] / 4, "cm")
+    )
   g
 }

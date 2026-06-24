@@ -217,8 +217,8 @@ get_rel_widths = function(g, args_rel_widths) {
             rel_widths[gname] = 1.0
         } else if (grepl('^meme$', gname)) {
             rel_widths[gname] = 0.9
-        } else if (grepl('^amino_acid_site$', gname)) {
-            built_plot <- ggplot_build(g[["amino_acid_site"]])
+        } else if (grepl('^(amino_acid_site|site_state)', gname)) {
+            built_plot <- ggplot_build(g[[gname]])
             xmax = built_plot$layout$panel_scales_x[[1]]$range$range[2]
             num_amino_acid_site = floor(xmax) - 1
             rel_widths[gname] = 0.09 * num_amino_acid_site

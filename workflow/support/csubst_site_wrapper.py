@@ -51,6 +51,25 @@ CSUBST_NONSYN_RECODE_CHOICES = (
     'no', '3di20', 'dayhoff6', 'sr6', 'kgb6', 'sr4', 'dayhoff9',
     'dayhoff12', 'dayhoff15', 'dayhoff18', 'srchisq6', 'kgbauto6',
 )
+NSY_ALIGNMENT_SYMBOLS = tuple('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz')
+STANDARD_GENETIC_CODE = {
+    'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L',
+    'TCT': 'S', 'TCC': 'S', 'TCA': 'S', 'TCG': 'S',
+    'TAT': 'Y', 'TAC': 'Y', 'TAA': '*', 'TAG': '*',
+    'TGT': 'C', 'TGC': 'C', 'TGA': '*', 'TGG': 'W',
+    'CTT': 'L', 'CTC': 'L', 'CTA': 'L', 'CTG': 'L',
+    'CCT': 'P', 'CCC': 'P', 'CCA': 'P', 'CCG': 'P',
+    'CAT': 'H', 'CAC': 'H', 'CAA': 'Q', 'CAG': 'Q',
+    'CGT': 'R', 'CGC': 'R', 'CGA': 'R', 'CGG': 'R',
+    'ATT': 'I', 'ATC': 'I', 'ATA': 'I', 'ATG': 'M',
+    'ACT': 'T', 'ACC': 'T', 'ACA': 'T', 'ACG': 'T',
+    'AAT': 'N', 'AAC': 'N', 'AAA': 'K', 'AAG': 'K',
+    'AGT': 'S', 'AGC': 'S', 'AGA': 'R', 'AGG': 'R',
+    'GTT': 'V', 'GTC': 'V', 'GTA': 'V', 'GTG': 'V',
+    'GCT': 'A', 'GCC': 'A', 'GCA': 'A', 'GCG': 'A',
+    'GAT': 'D', 'GAC': 'D', 'GAA': 'E', 'GAG': 'E',
+    'GGT': 'G', 'GGC': 'G', 'GGA': 'G', 'GGG': 'G',
+}
 
 def normalize_csubst_nonsyn_recode(value):
     normalized = str(value or 'no').strip().lower()
@@ -514,6 +533,7 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
                 dir_out_og=dir_out_og,
                 dir_og=dir_og,
                 ncpu=ncpu,
+                csubst_nonsyn_recode=csubst_nonsyn_recode,
             )
             print(f'{datetime.datetime.now()}: stat_branch2tree_plot done: {og}', flush=True)
         if os.path.exists('annotation_text.pdf'):
@@ -646,6 +666,127 @@ def materialize_tree_plot_alignment(alignment_path, plain_path):
         return plain_path
     return alignment_path
 
+def open_text_maybe_gzip(path, mode='rt'):
+    if path.endswith('.gz'):
+        return gzip.open(path, mode)
+    return open(path, mode)
+
+def read_fasta_records(path):
+    records = []
+    name = None
+    seq_lines = []
+    with open_text_maybe_gzip(path, 'rt') as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if line == '':
+                continue
+            if line.startswith('>'):
+                if name is not None:
+                    records.append((name, ''.join(seq_lines)))
+                name = line[1:].strip()
+                seq_lines = []
+            else:
+                seq_lines.append(line)
+    if name is not None:
+        records.append((name, ''.join(seq_lines)))
+    return records
+
+def write_fasta_records(records, path):
+    with open(path, 'w') as handle:
+        for name, seq in records:
+            handle.write(f'>{name}\n')
+            for start in range(0, len(seq), 80):
+                handle.write(seq[start:start + 80] + '\n')
+
+def translate_codon_to_aa(codon):
+    codon = str(codon).upper().replace('U', 'T')
+    if len(codon) != 3 or any(base not in {'A', 'C', 'G', 'T'} for base in codon):
+        return '-'
+    aa = STANDARD_GENETIC_CODE.get(codon, '-')
+    if aa == '*':
+        return '-'
+    return aa
+
+def load_nonsyn_recoding_symbol_map(recoding_table_path):
+    recoding_df = pandas.read_csv(recoding_table_path, sep='\t', header=0, index_col=None, dtype=str)
+    required_columns = {'amino_acid', 'state_id', 'state_label'}
+    missing_columns = required_columns.difference(recoding_df.columns)
+    if len(missing_columns) > 0:
+        missing_text = ', '.join(sorted(missing_columns))
+        raise ValueError(f'Nonsynonymous recoding table is missing required column(s): {missing_text}')
+    recoding_df = recoding_df.dropna(subset=['amino_acid', 'state_id', 'state_label']).copy()
+    recoding_df['state_id_sort'] = pandas.to_numeric(recoding_df['state_id'], errors='coerce')
+    states = recoding_df.loc[:, ['state_id_sort', 'state_id', 'state_label']].drop_duplicates()
+    if states['state_id_sort'].notna().all():
+        states = states.sort_values(['state_id_sort', 'state_label'], kind='stable')
+    else:
+        states = states.drop_duplicates(subset=['state_label'], keep='first')
+    state_labels = states['state_label'].astype(str).tolist()
+    if len(state_labels) > len(NSY_ALIGNMENT_SYMBOLS):
+        raise ValueError(f'Too many recoded nonsynonymous states to plot: {len(state_labels)}')
+    state_to_symbol = {
+        state_label: NSY_ALIGNMENT_SYMBOLS[state_index]
+        for state_index, state_label in enumerate(state_labels)
+    }
+    aa_to_symbol = {}
+    for _, row in recoding_df.iterrows():
+        aa = str(row['amino_acid']).strip().upper()
+        state_label = str(row['state_label'])
+        if len(aa) == 1:
+            aa_to_symbol[aa] = state_to_symbol[state_label]
+    return aa_to_symbol
+
+def recode_codon_alignment_records(records, aa_to_symbol):
+    recoded_records = []
+    for name, seq in records:
+        seq = str(seq).upper().replace('U', 'T')
+        if (len(seq) % 3) != 0:
+            raise ValueError(f'CDS alignment sequence length is not a multiple of 3: {name}')
+        recoded_seq = []
+        for start in range(0, len(seq), 3):
+            aa = translate_codon_to_aa(seq[start:start + 3])
+            recoded_seq.append(aa_to_symbol.get(aa, '-'))
+        recoded_records.append((name, ''.join(recoded_seq)))
+    return recoded_records
+
+def write_recoded_site_alignment(codon_alignment_path, recoding_table_path, output_path):
+    aa_to_symbol = load_nonsyn_recoding_symbol_map(recoding_table_path)
+    records = read_fasta_records(codon_alignment_path)
+    if len(records) == 0:
+        raise ValueError(f'CDS alignment FASTA contains no records: {codon_alignment_path}')
+    recoded_records = recode_codon_alignment_records(records=records, aa_to_symbol=aa_to_symbol)
+    write_fasta_records(records=recoded_records, path=output_path)
+    return output_path
+
+def resolve_nonsyn_recoding_table(dir_out_og, site_dir=None):
+    candidates = [os.path.join(dir_out_og, 'csubst_nonsyn_recoding.tsv')]
+    if site_dir is not None:
+        candidates.append(os.path.join(site_dir, 'csubst_nonsyn_recoding.tsv'))
+    return resolve_existing_path(candidates)
+
+def prepare_recoded_site_alignment(dir_out_og, og, site_dir, codon_alignment_path, csubst_nonsyn_recode):
+    recode = normalize_csubst_nonsyn_recode(csubst_nonsyn_recode)
+    if recode == 'no':
+        return None
+    if recode == '3di20':
+        print('Recoded site panel skipped: 3di20 states cannot be derived from the 20-aa CDS alignment.', flush=True)
+        return None
+    recoding_table_path = resolve_nonsyn_recoding_table(dir_out_og=dir_out_og, site_dir=site_dir)
+    if recoding_table_path is None:
+        print(
+            f'Recoded site panel skipped: csubst_nonsyn_recoding.tsv was not found for --nonsyn_recode {recode}.',
+            flush=True,
+        )
+        return None
+    output_path = os.path.join(dir_out_og, f'{og}_csubst_sites.{recode}.plot.fasta')
+    write_recoded_site_alignment(
+        codon_alignment_path=codon_alignment_path,
+        recoding_table_path=recoding_table_path,
+        output_path=output_path,
+    )
+    print(f'Recoded site alignment written: {output_path}', flush=True)
+    return output_path
+
 def get_alignment_for_tree_plot(dir_og, og, dir_out_og):
     alignment_candidates = [
         os.path.join(dir_og, 'clipkit', og + '_cds.clipkit.fa.gz'),
@@ -687,12 +828,53 @@ def get_untrimmed_alignment_for_tree_plot(dir_og, og, dir_out_og):
         os.path.join(dir_out_og, og + '_cds.untrimmed.plot.fasta'),
     )
 
-def build_alignment_panel_arg(trimmed_alignment, untrimmed_alignment=None):
+def build_alignment_panel_spec(trimmed_alignment, untrimmed_alignment=None):
     if untrimmed_alignment is not None:
-        return '--panel11=alignment,' + trimmed_alignment + ',' + untrimmed_alignment
-    return '--panel11=alignment,' + trimmed_alignment
+        return 'alignment,' + trimmed_alignment + ',' + untrimmed_alignment
+    return 'alignment,' + trimmed_alignment
 
-def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, dir_og, ncpu=1):
+def build_alignment_panel_arg(trimmed_alignment, untrimmed_alignment=None):
+    return '--panel11=' + build_alignment_panel_spec(trimmed_alignment, untrimmed_alignment)
+
+def sanitize_panel_name(value):
+    sanitized = re.sub(r'[^A-Za-z0-9_]+', '_', str(value)).strip('_')
+    if sanitized == '':
+        return 'state'
+    return sanitized
+
+def build_site_state_panel_spec(recode, convergent_site_str, recoded_site_alignment):
+    recode = normalize_csubst_nonsyn_recode(recode)
+    qname = 'site_state_' + sanitize_panel_name(recode)
+    return f'site_state,{qname},{convergent_site_str},{recoded_site_alignment},Recoded state ({recode})'
+
+def build_tree_plot_panel_args(file_og_rpsblast, file_csubst_input_fasta, convergent_site_str, file_og_alignment, file_og_untrimmed_alignment=None, recoded_site_alignment=None, csubst_nonsyn_recode='no'):
+    panel_args = [
+        '--panel1=tree,bl_rooted,support_unrooted,species,L',
+        '--panel2=heatmap,no,abs,_,expression_',
+        '--panel4=cluster_membership,100000',
+        '--panel5=tiplabel',
+        '--panel6=signal_peptide',
+        '--panel7=transmembrane_domain',
+        '--panel8=intron_number',
+        '--panel9=domain,' + file_og_rpsblast,
+        f'--panel10=amino_acid_site,1,{convergent_site_str},{file_csubst_input_fasta}',
+    ]
+    panel_index = 11
+    if recoded_site_alignment is not None:
+        panel_args.append(
+            f'--panel{panel_index}=' + build_site_state_panel_spec(
+                recode=csubst_nonsyn_recode,
+                convergent_site_str=convergent_site_str,
+                recoded_site_alignment=recoded_site_alignment,
+            )
+        )
+        panel_index += 1
+    panel_args.append(f'--panel{panel_index}=' + build_alignment_panel_spec(file_og_alignment, file_og_untrimmed_alignment))
+    panel_index += 1
+    panel_args.append(f'--panel{panel_index}=fimo,2000,0.05')
+    return panel_args
+
+def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, dir_og, ncpu=1, csubst_nonsyn_recode='no'):
     dir_myscript = os.path.realpath(os.path.dirname(__file__))
     dir_treevis = os.path.join(dir_myscript, 'treevis')
     file_stat_branch = get_stat_branch_path(dir_og=dir_og, og=og)
@@ -710,6 +892,13 @@ def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, d
     convergent_sites = df_csubst_site.loc[(df_csubst_site['OCNany2spe'] > 0.5), 'codon_site_alignment'].tolist()
     convergent_site_str = ':'.join([ str(cs) for cs in convergent_sites ])
     print(f'Convergent sites extracted from {file_csubst_site_tsv}: {convergent_site_str}', flush=True)
+    recoded_site_alignment = prepare_recoded_site_alignment(
+        dir_out_og=dir_out_og,
+        og=og,
+        site_dir=artifacts['site_dir'],
+        codon_alignment_path=file_csubst_input_fasta,
+        csubst_nonsyn_recode=csubst_nonsyn_recode,
+    )
     file_tree_plot_out = og+'.tree_plot.pdf'
     if os.path.exists(file_tree_plot_out):
         print(f'Tree plot skipped: outfile already exists: {file_tree_plot_out}', flush=True)
@@ -720,18 +909,15 @@ def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, d
     cmd.append('--max_delta_intron_present=-0.5')
     cmd.append('--width=7.2')
     cmd.append('--rel_widths=')
-    cmd.append('--panel1=tree,bl_rooted,support_unrooted,species,L')
-    cmd.append('--panel2=heatmap,no,abs,_,expression_')
-    #cmd.append('--panel3=pointplot,no,rel,_,expression_')
-    cmd.append('--panel4=cluster_membership,100000')
-    cmd.append('--panel5=tiplabel')
-    cmd.append('--panel6=signal_peptide')
-    cmd.append('--panel7=transmembrane_domain')
-    cmd.append('--panel8=intron_number')
-    cmd.append('--panel9=domain,'+file_og_rpsblast)
-    cmd.append(f'--panel10=amino_acid_site,1,{convergent_site_str},{file_csubst_input_fasta}')
-    cmd.append(build_alignment_panel_arg(file_og_alignment, file_og_untrimmed_alignment))
-    cmd.append('--panel12=fimo,2000,0.05')
+    cmd.extend(build_tree_plot_panel_args(
+        file_og_rpsblast=file_og_rpsblast,
+        file_csubst_input_fasta=file_csubst_input_fasta,
+        convergent_site_str=convergent_site_str,
+        file_og_alignment=file_og_alignment,
+        file_og_untrimmed_alignment=file_og_untrimmed_alignment,
+        recoded_site_alignment=recoded_site_alignment,
+        csubst_nonsyn_recode=csubst_nonsyn_recode,
+    ))
     cmd.append('--show_branch_id=yes')
     cmd.append('--event_method=species_overlap')
     cmd.append('--species_color_table='+file_trait_color)

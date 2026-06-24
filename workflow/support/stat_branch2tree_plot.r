@@ -166,6 +166,12 @@ source(file.path(treevis_dir, 'R', 'main.R'), local = TRUE)
 # SITES: colon-delimited amino acid site numbers to plot.
 # ALIGNMENT_PATH: path to the alignment file. This can be trimmed or untrimmed alignment.
 
+# site_state: One-character site-state plot. format = site_state,NAME,SITES,ALIGNMENT_PATH[,XLAB]
+# NAME: internal panel name. Use a unique value when multiple site-state panels are plotted.
+# SITES: colon-delimited site numbers to plot.
+# ALIGNMENT_PATH: path to a one-character-per-site FASTA alignment.
+# XLAB: optional x-axis label.
+
 # ortholog: clade orthologs. format = ortholog,ORTHOLOG_PREFIX,INFILE
 # ORTHOLOG_PREFIX: gene label prefix to identify species to show orthologs. This string is removed from the clade labels. e.g., "Arabidopsis_thaliana_", "Oryza_sativa_"
 # INFILE: "no" or a newick file path. A larger tree can be specified. Number of genes can be different, but the topology can be mergeable to the tree generated from the stat_branch file.
@@ -355,6 +361,20 @@ for (col in unlist(args[grep("^panel", names(args))])) {
           g = add_amino_acid_site_column(g, args, tidy_aln, selected_amino_acid_sites)
       } else {
           cat('CDS alignment file not found. Skipping.\n')
+      }
+  } else if (grepl('^site_state', col)) {
+      site_state_params = strsplit(col, ',', fixed = TRUE)[[1]]
+      qname = ifelse(length(site_state_params) >= 2, site_state_params[2], 'site_state')
+      selected_state_sites = parse_amino_acid_site_list(site_state_params[3])
+      state_aln_file = ifelse(length(site_state_params) >= 4, site_state_params[4], '')
+      xlab = ifelse(length(site_state_params) >= 5, site_state_params[5], 'Site state')
+      if (length(selected_state_sites) == 0) {
+          cat('Site-state list is empty. site_state column will not be added.\n')
+      } else if (file.exists(state_aln_file)) {
+          tidy_aln = read_site_state_alignment(state_aln_file)
+          g = add_site_state_column(g, args, tidy_aln, selected_state_sites, qname = qname, xlab = xlab)
+      } else {
+          cat('Site-state alignment file not found. Skipping.\n')
       }
   } else if (grepl('^ortholog', col)) {
     ortholog_prefix = strsplit(col, ',')[[1]][2]

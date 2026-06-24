@@ -86,6 +86,44 @@ if (!("tree" %in% names(w) && "tiplabel" %in% names(w))) stop("get_rel_widths mi
 if (abs(unname(w["tree"]) - 2) > 1e-9) stop("get_rel_widths did not apply tree override.")
 if (abs(unname(w["tiplabel"]) - 1) > 1e-9) stop("get_rel_widths did not apply tiplabel override.")
 
+# 2b) get_rel_widths: dynamically named recoded site-state panels use site-panel sizing.
+dummy_site_state_plot <- ggplot(data.frame(x = c(1, 2, 3), y = c(1, 1, 1))) +
+  geom_blank(aes(x = x, y = y)) +
+  scale_x_continuous(limits = c(0.5, 3.5))
+g_state <- list(tree = ggplot(), site_state_dayhoff6 = dummy_site_state_plot)
+w_state <- get_rel_widths(g_state, "")
+if (!("site_state_dayhoff6" %in% names(w_state))) stop("get_rel_widths missing recoded site-state key.")
+expected_site_state_width <- 0.18 / (1.5 + 0.18)
+if (abs(unname(w_state["site_state_dayhoff6"]) - expected_site_state_width) > 1e-9) stop("get_rel_widths did not size recoded site-state panel.")
+
+# 2c) read_site_state_alignment: recoded symbols are preserved as plain characters.
+site_state_fasta <- tempfile(fileext = ".fa")
+writeLines(c(">g1", "ABZ09", ">g2", "CFY18"), site_state_fasta)
+site_state_tidy <- read_site_state_alignment(site_state_fasta)
+if (!all(colnames(site_state_tidy) == c("name", "position", "character"))) stop("read_site_state_alignment returned unexpected columns.")
+if (!all(c("B", "Z", "0", "9") %in% site_state_tidy$character)) stop("read_site_state_alignment should preserve recoded symbols.")
+g_site_state_in <- list(
+  tree = list(
+    data = data.frame(
+      isTip = c(TRUE, TRUE),
+      label = c("g1", "g2"),
+      branch_id = c(1, 2),
+      y = c(1, 2),
+      stringsAsFactors = FALSE
+    )
+  )
+)
+g_site_state_out <- add_site_state_column(
+  g_site_state_in,
+  list(font_size = 6, margins = c(0, 0, 0, 0)),
+  site_state_tidy,
+  c(1, 3, 5),
+  qname = "site_state_dayhoff6",
+  xlab = "Recoded state (dayhoff6)"
+)
+if (!("site_state_dayhoff6" %in% names(g_site_state_out))) stop("add_site_state_column should add named recoded site-state panel.")
+invisible(ggplot_build(g_site_state_out[["site_state_dayhoff6"]]))
+
 # 3) get_df_trait: relative scaling should not produce Inf/NaN for all-zero rows.
 b <- data.frame(
   so_event = c("L", "L"),
