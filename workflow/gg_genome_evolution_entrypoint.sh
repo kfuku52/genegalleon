@@ -81,8 +81,6 @@ run_cds_translation=1 # Internal helper for temporary protein FASTA generation w
 # Species-tree workflow flags
 run_species_busco=1 # Run the shared multi-species BUSCO stage used for species-tree marker discovery and BUSCO-based genome-evolution analyses.
 run_build_species_busco_summary=1 # Build the shared BUSCO summary table used by species-tree and BUSCO-based genome-evolution stages.
-run_species_omark=0 # Run OMArk proteome quality assessment for each species using shared protein inputs.
-run_build_species_omark_summary=1 # Build the shared OMArk summary table for species-wise proteome quality assessment.
 run_extract_species_tree_fasta=1 # Extract per-ortholog FASTA files for species-tree reconstruction.
 run_individual_mafft=1 # Align individual species-tree ortholog sets with MAFFT.
 run_individual_trimal=1 # Trim individual species-tree ortholog alignments.
@@ -101,8 +99,10 @@ run_mcmctree2=1 # IQ2MC step 3
 run_convert_tree_format=1 # Convert dated species trees into downstream exchange formats.
 run_plot_mcmctreer=1 # Plot dated species tree
 
-# Orthogroup workflow flags
+# Orthogroup and species-protein QC workflow flags
 run_orthofinder=1 # OrthoFinder run
+run_species_omark=0 # Run OMArk proteome quality assessment for each species using shared protein inputs.
+run_build_species_omark_summary=1 # Build the shared OMArk summary table for species-wise proteome quality assessment.
 run_og_selection=1 # Selecting orthogroups for downstream analyses
 run_orthogroup_method_comparison=1 # Method comparison plot
 run_single_copy_ortholog_decay_plot=1 # Line plot with SD of orthogroup retention when randomly subsampling species.
@@ -130,7 +130,6 @@ bootstrap_params="-bb 1000 -bnni" # Extra IQ-TREE bootstrap parameters.
 nucleotide_model="GTR+R4" # IQ-TREE nucleotide substitution model.
 protein_model="LG+R4" # IQ-TREE protein substitution model.
 notung_jar="/usr/local/bin/Notung.jar" # Path to the Notung JAR used for rooting.
-omark_db_path="auto" # Path to the OMArk OMAmer LUCA.h5 database, or "auto" to download it under workspace/downloads/omark/.
 
 # Species-tree parameters
 undated_species_tree="astral_pep" # {iqtree_dna,iqtree_pep,astral_dna,astral_pep}
@@ -144,7 +143,8 @@ mcmc_nsample=20000 # Number of posterior samples retained by MCMCTree.
 mcmc_birth_death_sampling="1,1,0.5" # birth,death,sampling_fraction
 mcmc_clock_model="IND" # {EQUAL, IND, CORR}
 
-# Orthogroup parameters
+# Orthogroup and species-protein QC parameters
+omark_db_path="auto" # Path to the OMArk OMAmer LUCA.h5 database, or "auto" to download it under workspace/downloads/omark/.
 orthogroup_table="HOG" # "OG" or "HOG"
 orthogroup_annotation_method="mmseqs2" # blastp|mmseqs2 for representative-gene UniProt annotation in orthogroup selection.
 min_num_gene=4 # Minimum total gene count required for an orthogroup.

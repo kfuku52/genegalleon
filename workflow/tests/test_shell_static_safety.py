@@ -2397,13 +2397,16 @@ def test_genome_evolution_places_run_cds_translation_before_dependent_run_flags(
     config_translation_index = config_vars.index('run_cds_translation')
     config_species_busco_index = config_vars.index('run_species_busco')
     config_species_omark_index = config_vars.index('run_species_omark')
+    config_species_omark_summary_index = config_vars.index('run_build_species_omark_summary')
     config_orthofinder_index = config_vars.index('run_orthofinder')
+    config_og_selection_index = config_vars.index('run_og_selection')
     config_busco_getfasta_index = config_vars.index('run_busco_dupaware_extract_fasta')
 
     assert config_translation_index < config_species_busco_index
     assert config_translation_index < config_species_omark_index
     assert config_translation_index < config_orthofinder_index
     assert config_translation_index < config_busco_getfasta_index
+    assert config_orthofinder_index < config_species_omark_index < config_species_omark_summary_index < config_og_selection_index
 
 
 def test_genome_evolution_exposes_omark_controls_and_summary_stage():
@@ -2425,6 +2428,22 @@ def test_genome_evolution_exposes_omark_controls_and_summary_stage():
     assert 'omamer search \\' in core
     assert 'omark \\' in core
     assert 'python "${gg_support_dir}/summarize_omark.py" \\' in core
+
+
+def test_genome_evolution_entrypoint_groups_omark_with_orthofinder_stage():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
+
+    species_tree_heading_index = entrypoint.index("# Species-tree workflow flags")
+    species_tree_fasta_index = entrypoint.index("run_extract_species_tree_fasta=1")
+    orthogroup_heading_index = entrypoint.index("# Orthogroup and species-protein QC workflow flags")
+    orthofinder_index = entrypoint.index("run_orthofinder=1")
+    omark_index = entrypoint.index("run_species_omark=0")
+    omark_summary_index = entrypoint.index("run_build_species_omark_summary=1")
+    og_selection_index = entrypoint.index("run_og_selection=1")
+
+    assert species_tree_heading_index < species_tree_fasta_index < orthogroup_heading_index
+    assert orthogroup_heading_index < orthofinder_index
+    assert orthofinder_index < omark_index < omark_summary_index < og_selection_index
 
 
 def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launchers():
