@@ -13,6 +13,13 @@ library(rkftools, quietly=TRUE)
 has_rtsne = requireNamespace("Rtsne", quietly=TRUE)
 
 options(stringsAsFactors=FALSE)
+script_file_arg = grep('^--file=', commandArgs(), value=TRUE)
+if (length(script_file_arg) > 0) {
+    script_dir = dirname(normalizePath(sub('^--file=', '', script_file_arg[[1]]), winslash='/', mustWork=FALSE))
+} else {
+    script_dir = getwd()
+}
+source(file.path(script_dir, 'species_label_utils.r'), local = TRUE)
 
 cat('arguments:\n')
 args = rkftools::get_parsed_args(args, print=TRUE)
@@ -26,10 +33,7 @@ dir_busco_isoform = args[['dir_busco_isoform']]
 dir_busco_longest_cds = args[['dir_busco_longest_cds']]
 
 normalize_busco_species_colname = function(x) {
-    x = sub('\\.tsv$', '', x)
-    x = sub('([._]busco([._]full)?)$', '', x, perl=TRUE)
-    x = sub('([._]full)$', '', x, perl=TRUE)
-    x
+    gg_species_label_from_filename(x)
 }
 
 coerce_numeric_data_frame = function(df_in) {
@@ -170,7 +174,7 @@ df_busco = read.table('busco_table.tsv', header=TRUE, sep='\t', quote='')
 if (ncol(df_busco) >= 4) {
     original_busco_cols = colnames(df_busco)[4:ncol(df_busco)]
     normalized_busco_cols = vapply(original_busco_cols, normalize_busco_species_colname, character(1))
-    normalized_busco_cols = make.unique(normalized_busco_cols, sep='__dup')
+    gg_stop_on_duplicate_species_keys(normalized_busco_cols, original_busco_cols, 'BUSCO table species columns')
     for (i in seq_along(original_busco_cols)) {
         if (original_busco_cols[i] != normalized_busco_cols[i]) {
             cat(sprintf('Normalized BUSCO column: %s -> %s\n', original_busco_cols[i], normalized_busco_cols[i]))
@@ -188,13 +192,13 @@ if (length(tpm_files)==0) {
     cat(paste0('Skipping. No tsv file found in: ', dir_amalgkit_merge, '\n'))
 } else {
     tpm_list = list()
+    tpm_species = gg_species_label_from_filename(tpm_files)
+    gg_stop_on_duplicate_species_keys(tpm_species, tpm_files, 'TPM expression files')
     cat(paste('Processing', length(tpm_files), 'TPM files.\n'))
     for (i in 1:length(tpm_files)) {
         file_path = tpm_files[i]
         cat('Processing file', i, 'of', length(tpm_files), 'TPM files:', file_path, '\n')
-        sp_ub = tpm_files[i]
-        sp_ub = sub('^.*/', '', sp_ub)
-        sp_ub = sub('_tpm.tsv$', '', sp_ub)
+        sp_ub = tpm_species[i]
         #sp_ub = sub('_', 'PLACEHOLDER', sp_ub)
         #sp_ub = sub('_.*', '', sp_ub)
         #sp_ub = sub('PLACEHOLDER', '_', sp_ub)
@@ -367,12 +371,12 @@ if (length(stat_files)==0) {
     }
     df = do.call(rbind, df_list)
     original_cols = colnames(df)
-    df[,'species'] = sub('\\..*', '', sub('.*/', '', df[['file']]))
-    df[,'species'] = sub('_longestCDS', '', df[['species']])
-    df[,'species'] = sub('_', ' ', df[['species']])
+    df[,'SpeciesKey'] = gg_species_label_from_filename(df[['file']])
+    df[,'species'] = gg_species_display_from_key(df[['SpeciesKey']])
     df[,'assembly_type'] = ''
     df[grepl('isoform', df[['file']]),'assembly_type'] = 'isoform'
     df[grepl('longestCDS', df[['file']]),'assembly_type'] = 'longestCDS'
+    gg_stop_on_duplicate_species_keys(paste(df[['SpeciesKey']], df[['assembly_type']], sep='|'), df[['file']], 'assembly stat rows')
     ordered_cols = c('species', 'assembly_type', original_cols[3:length(original_cols)], original_cols[1:2])
     df = df[,ordered_cols]
     df = df[order(df[['assembly_type']], df[['species']]),]

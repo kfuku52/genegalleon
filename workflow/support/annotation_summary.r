@@ -33,6 +33,7 @@ resolve_treevis_dir = function(args) {
 
 treevis_dir = resolve_treevis_dir(args)
 source(file.path(treevis_dir, 'R', 'main.R'), local = TRUE)
+source(file.path(script_dir, 'species_label_utils.r'), local = TRUE)
 
 font_size = 8
 args[['font_size']] = font_size
@@ -52,10 +53,7 @@ path_exists_or_null <- function(path) {
 }
 
 normalize_species_label <- function(x) {
-    x = sub('([._-]?longestCDS)$', '', x)
-    x = sub('_sp_[^._-]+$', '_sp', x)
-    x = sub('_', ' ', x)
-    return(x)
+    gg_species_display_from_label(x, strip_extension=FALSE)
 }
 
 # %%
@@ -71,7 +69,9 @@ if (path_exists_or_null(dated_sptree_path)|path_exists_or_null(undated_sptree_pa
         cat(paste0('Reading: ', undated_sptree_path, '\n'))
         tree = read.tree(undated_sptree_path)        
     }
-    tree[['tip.label']] = normalize_species_label(tree[['tip.label']])
+    tree_species_keys = gg_species_label_from_text(tree[['tip.label']])
+    gg_stop_on_duplicate_species_keys(tree_species_keys, tree[['tip.label']], 'species tree tips')
+    tree[['tip.label']] = gg_species_display_from_key(tree_species_keys)
     tree = ladderize(tree)
     df_out = data.frame(Species=tree[['tip.label']])
     cat(paste0('Number of species in the tree: ', length(tree[['tip.label']]), '\n'))
@@ -133,7 +133,7 @@ if (!path_exists_or_null(args[['file_species_trait']])) {
     g = tr
     rel_widths = c(1.0 ,0.7, 0.5)
     df_tip = get_df_tip(g[['tree']])
-    trait_tidy[['label']] = factor(sub('_', ' ', trait_tidy[['label']]), levels=levels(df_tip[['label']]))
+    trait_tidy[['label']] = factor(gg_species_display_from_label(trait_tidy[['label']], strip_extension=FALSE), levels=levels(df_tip[['label']]))
     df_tip = merge(df_tip, trait_tidy, all.x=TRUE, by='label', sort=FALSE)
     p = ggplot(df_tip)
     p = p + theme(axis.text.y=element_blank())
@@ -194,9 +194,12 @@ generate_busco_summary = function(dir_busco, outbase, df_out, tr = NA, font_size
         return(df_out)
     }
     df = data.frame(busco_id=character(), status=character(), label=character(), stringsAsFactors=FALSE)
+    species_keys = gg_species_label_from_filename(files)
+    gg_stop_on_duplicate_species_keys(species_keys, files, paste(outbase, 'BUSCO files'))
+    species_labels = setNames(gg_species_display_from_key(species_keys), files)
     for (file in files) {
         file_path = file.path(dir_busco, file)
-        sp = normalize_species_label(sub('_busco.*', '', sub('\\.busco.*', '', file)))
+        sp = species_labels[[file]]
         all_lines <- readLines(file_path)
         header_line <- grep("^# Busco id", all_lines, value = TRUE)
         if (length(header_line) == 0) {
@@ -371,9 +374,12 @@ generate_fx2tab_summary <- function(dir_fx2tab, outbase, df_out, tr = NA, font_s
     }
     cat('Starting the analysis of fx2tab tables.\n')
     df <- data.frame()
+    species_keys <- gg_species_label_from_filename(files)
+    gg_stop_on_duplicate_species_keys(species_keys, files, paste(outbase, 'fx2tab files'))
+    species_labels <- setNames(gg_species_display_from_key(species_keys), files)
     for (file in files) {
         file_path <- file.path(dir_fx2tab, file)
-        sp <- sub('_.*', '', sub('\\..*', '', sub('_', ' ', file)))
+        sp <- species_labels[[file]]
         tmp <- read.table(file_path, sep = '\t', header = TRUE, comment.char = '', fill = TRUE, quote = '')
         
         # Calculate weighted GC %
@@ -515,10 +521,13 @@ generate_annotation_summary <- function(dir_species_annotation, outbase, tr = NA
     df <- data.frame()
     old_cols <- c('gene_id', 'orthogroup', 'sprot_best', 'busco_id')
     new_cols <- c('num_gene', 'num_orthogroup', 'num_sprot', 'num_busco')
+    species_keys <- gg_species_label_from_filename(files)
+    gg_stop_on_duplicate_species_keys(species_keys, files, paste(outbase, 'annotation files'))
+    species_labels <- setNames(gg_species_display_from_key(species_keys), files)
     
     for (file in files) {
         file_path <- file.path(dir_species_annotation, file)
-        sp <- sub('_.*', '', sub('\\..*', '', sub('_', ' ', file)))
+        sp <- species_labels[[file]]
         tmp <- read.table(file_path, sep = '\t', header = TRUE, comment.char = '#', fill = TRUE, quote = '')
         tmp2 <- apply(tmp, 2, function(x) { sum((!is.na(x)) & (x != '')) })
         tmp2 <- tmp2[old_cols]
@@ -721,7 +730,7 @@ if ((!any(is.na(tr)))&(path_exists_or_null(args[['file_orthogroup_gene_count']])
     if (ncol(gc)<min_og_species) {
         cat(paste('There are only ', ncol(gc), 'species in the genecount table. ', min_og_species, 'species are required for NMDS. Skipping.\n'))
     } else {
-        colnames(gc) = sub('_', ' ', colnames(gc))
+        colnames(gc) = gg_species_display_from_label(colnames(gc), strip_extension=FALSE)
         gc[,] = (gc[,] > 0)
         gc = gc[(apply(gc, 1, function(x){sum(x) >= min_og_species})), , drop=FALSE] # Remove single-species orthogroups
         cat(paste0('Number of analyzed orthogroups: ', nrow(gc), '\n'))
