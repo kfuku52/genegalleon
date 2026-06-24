@@ -15,6 +15,17 @@ unset gg_core_bootstrap
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 
+csubst_nonsyn_recode=$(echo "${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
+case "${csubst_nonsyn_recode}" in
+  no|3di20|dayhoff6|sr6|kgb6|sr4|dayhoff9|dayhoff12|dayhoff15|dayhoff18|srchisq6|kgbauto6)
+    ;;
+  *)
+    echo "Invalid csubst_nonsyn_recode: ${csubst_nonsyn_recode}"
+    echo 'csubst_nonsyn_recode must be one of no, 3di20, dayhoff6, sr6, kgb6, sr4, dayhoff9, dayhoff12, dayhoff15, dayhoff18, srchisq6, kgbauto6. Exiting.'
+    exit 1
+    ;;
+esac
+
 # Ensure pymol/csubst plotting works in headless scheduler environments.
 export PYMOL_HEADLESS="${PYMOL_HEADLESS:-1}"
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
@@ -42,6 +53,7 @@ python "${gg_support_dir}/csubst_site_wrapper.py" \
 --min_OCNCoD "${min_OCNCoD}" \
 --max_per_K "${max_per_K}" \
 --ncpu "${GG_TASK_CPUS:-1}" \
+--csubst_nonsyn_recode "${csubst_nonsyn_recode}" \
 --file_trait "${file_trait}" \
 --dir_orthogroup "${dir_orthogroup}" \
 --dir_orthofinder "${dir_orthofinder}" \

@@ -120,6 +120,7 @@ min_OCNany2spe="${min_OCNany2spe:-1.8}" # Minimum OCNany2spe cutoff for candidat
 min_omegaCany2spe="${min_omegaCany2spe:-3.0}" # Minimum omegaCany2spe cutoff for candidate combinations.
 min_OCNCoD="${min_OCNCoD:-0}" # Minimum OCNCoD cutoff for candidate combinations.
 max_per_K="${max_per_K:-100}" # Maximum number of combinations retained per arity K.
+csubst_nonsyn_recode="${csubst_nonsyn_recode:-}" # Optional CSUBST recoding override; empty uses GG_COMMON_CSUBST_NONSYN_RECODE.
 file_trait="${file_trait:-auto}" # Trait table path, or auto to use the workspace default.
 dir_orthofinder="${dir_orthofinder:-auto}" # OrthoFinder result directory, or auto to detect it from the workspace.
 dir_convergent_sites="${dir_convergent_sites:-auto}" # Output directory for convergence results; auto is mode-specific.

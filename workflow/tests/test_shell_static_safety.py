@@ -2219,6 +2219,11 @@ def test_common_input_sequence_mode_defaults_to_cds():
     assert ': "${GG_COMMON_INPUT_SEQUENCE_MODE:=cds}"' in text
 
 
+def test_common_csubst_nonsyn_recode_defaults_to_no():
+    text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+    assert ': "${GG_COMMON_CSUBST_NONSYN_RECODE:=no}"' in text
+
+
 def test_common_params_define_reference_species_auto_only_once():
     text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
     assert ': "${GG_COMMON_REFERENCE_SPECIES:=auto}"' in text
@@ -3622,6 +3627,7 @@ def test_gene_evolution_core_uses_csubst_search_namespace():
     assert "csubst analyze \\" not in core
     assert 'csubst search \\' in core
     assert 'csubst_search_dir="csubst_search"' in core
+    assert 'csubst_nonsyn_recode=$(echo "${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr' in core
     assert '--nonsyn_recode "${csubst_nonsyn_recode}"' in core
     assert '"${csubst_search_dir}/csubst_cb_stats.tsv"' in core
     for redundant_flag in [
@@ -3648,6 +3654,8 @@ def test_csubst_site_wrapper_omits_redundant_sites_defaults():
     assert "cmd = ['csubst', 'sites']" in wrapper
     assert "cmd += ['--ml_anc', 'no']" not in wrapper
     assert "cmd += ['--mafft_exe', 'mafft']" not in wrapper
+    assert "if recode != 'no':" in wrapper
+    assert "cmd += ['--nonsyn_recode', recode]" in wrapper
 
 
 def test_is_fastq_requiring_downstream_analysis_done_quotes_path_checks():

@@ -298,6 +298,23 @@ def test_build_alignment_panel_arg_includes_untrimmed_when_available():
     assert mod.build_alignment_panel_arg("trim.fa", None) == "--panel11=alignment,trim.fa"
 
 
+def test_csubst_nonsyn_recode_output_suffix_preserves_default_name():
+    mod = load_module()
+
+    assert mod.csubst_nonsyn_recode_output_suffix("no") == ""
+    assert mod.csubst_nonsyn_recode_output_suffix("Dayhoff6") == "_nonsynRecode-dayhoff6"
+
+
+def test_build_csubst_sites_command_passes_nondefault_nonsyn_recode_only():
+    mod = load_module()
+
+    default_cmd = mod.build_csubst_sites_command("OG0001.iqtree.anc", "/tmp/OG0001.iqtree.anc", "1,2", 2, "no")
+    recoded_cmd = mod.build_csubst_sites_command("OG0001.iqtree.anc", "/tmp/OG0001.iqtree.anc", "1,2", 2, "dayhoff6")
+
+    assert "--nonsyn_recode" not in default_cmd
+    assert recoded_cmd[recoded_cmd.index("--nonsyn_recode") + 1] == "dayhoff6"
+
+
 def test_get_alignment_for_tree_plot_rejects_legacy_dot_clipkit_name(tmp_path):
     mod = load_module()
     dir_og = tmp_path / "orthogroup"

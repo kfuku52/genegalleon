@@ -55,6 +55,11 @@ Important note:
 - `GG_COMMON_GENETIC_CODE` (default `1`)
 - `GG_COMMON_BUSCO_LINEAGE` (default `auto`)
 - `GG_COMMON_REFERENCE_SPECIES` (default `auto`)
+- `GG_COMMON_INPUT_SEQUENCE_MODE` (default `cds`)
+- `GG_COMMON_CSUBST_NONSYN_RECODE` (default `no`)
+- `GG_COMMON_SPECIES_LABEL_PARSER` (default `taxonomic`)
+- `GG_COMMON_SPECIES_LABEL_REGEX` (default empty)
+- `GG_COMMON_SPECIES_LABEL_MAP_TSV` (default empty)
 
 These are intended for values that recur across multiple stages.
 
@@ -272,12 +277,16 @@ That keeps routine runs reproducible without forcing edits in the core implement
 ## CSUBST nonsynonymous-state recoding
 
 `workflow/gg_gene_evolution_entrypoint.sh` exposes `csubst_nonsyn_recode` for
-`csubst search --nonsyn_recode`. The default is:
+`csubst search --nonsyn_recode`. `gg_convergent_sites_entrypoint.sh` and
+`gg_gene_summary_entrypoint.sh` reuse the same value for
+`csubst sites --nonsyn_recode`. The shared default is:
 
 ```bash
-csubst_nonsyn_recode="no"
+GG_COMMON_CSUBST_NONSYN_RECODE="no"
 ```
 
 Set it to one of `no`, `3di20`, `dayhoff6`, `sr6`, `kgb6`, `sr4`,
 `dayhoff9`, `dayhoff12`, `dayhoff15`, `dayhoff18`, `srchisq6`, or
-`kgbauto6` in the entrypoint config block before running gene-family analyses.
+`kgbauto6` in `workflow/gg_common_params.sh` before running gene-family
+analyses. Stage-specific `csubst_nonsyn_recode` overrides still take priority
+when supplied for a single entrypoint run.

@@ -281,7 +281,7 @@ query_blast_method=$(echo "${query_blast_method}" | tr '[:upper:]' '[:lower:]')
 mode_gene_evolution=$(echo "${mode_gene_evolution:-query2family}" | tr '[:upper:]' '[:lower:]')
 gene_evolution_profile=$(echo "${gene_evolution_profile:-default}" | tr '[:upper:]' '[:lower:]')
 input_sequence_mode=$(gg_normalize_input_sequence_mode "${input_sequence_mode}")
-csubst_nonsyn_recode=$(echo "${csubst_nonsyn_recode:-no}" | tr '[:upper:]' '[:lower:]')
+csubst_nonsyn_recode=$(echo "${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
 uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
 tree_rooting_method=$(echo "${tree_rooting_method}" | tr '[:upper:]' '[:lower:]')
 apply_gene_evolution_profile

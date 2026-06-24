@@ -46,6 +46,41 @@ except ImportError:
     pdfmetrics = None
     TTFont = None
 
+CSUBST_NONSYN_RECODE_CHOICES = (
+    'no', '3di20', 'dayhoff6', 'sr6', 'kgb6', 'sr4', 'dayhoff9',
+    'dayhoff12', 'dayhoff15', 'dayhoff18', 'srchisq6', 'kgbauto6',
+)
+
+def normalize_csubst_nonsyn_recode(value):
+    normalized = str(value or 'no').strip().lower()
+    if normalized not in CSUBST_NONSYN_RECODE_CHOICES:
+        allowed = ', '.join(CSUBST_NONSYN_RECODE_CHOICES)
+        raise ValueError(f'Invalid csubst_nonsyn_recode: {value}. Expected one of: {allowed}')
+    return normalized
+
+def csubst_nonsyn_recode_output_suffix(value):
+    recode = normalize_csubst_nonsyn_recode(value)
+    if recode == 'no':
+        return ''
+    return f'_nonsynRecode-{recode}'
+
+def build_csubst_sites_command(iqtree_anc_rel_dir, iqtree_anc_dir, branch_id_str, ncpu, csubst_nonsyn_recode):
+    recode = normalize_csubst_nonsyn_recode(csubst_nonsyn_recode)
+    cmd = ['csubst', 'sites']
+    cmd += ['--alignment_file', os.path.join(iqtree_anc_rel_dir, 'csubst.fasta')]
+    cmd += ['--rooted_tree_file', os.path.join(iqtree_anc_rel_dir, 'csubst.nwk')]
+    cmd += ['--branch_id', branch_id_str]
+    cmd += ['--threads', str(max(1, int(ncpu)))]
+    cmd += ['--iqtree_treefile', os.path.join(iqtree_anc_dir, 'csubst.treefile')]
+    cmd += ['--iqtree_state', os.path.join(iqtree_anc_dir, 'csubst.state')]
+    cmd += ['--iqtree_rate', os.path.join(iqtree_anc_dir, 'csubst.rate')]
+    cmd += ['--iqtree_iqtree', os.path.join(iqtree_anc_dir, 'csubst.iqtree')]
+    cmd += ['--iqtree_log', os.path.join(iqtree_anc_dir, 'csubst.log')]
+    if recode != 'no':
+        cmd += ['--nonsyn_recode', recode]
+    cmd += ['--pdb', 'besthit']
+    return cmd
+
 pandas.set_option("display.max_columns", None)
 
 
@@ -362,7 +397,7 @@ Annotation of the gene as being in the 5th, 25th, 50th, 75th, or 95th percentile
 """
     return annotation_text
 
-def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, annotation_text):
+def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, csubst_nonsyn_recode, annotation_text):
     previous_cwd = os.getcwd()
     dir_out_og = os.path.join(dir_out, og+'_'+branch_id_str.replace(',', '_'))
     print('{}, --branch_ids {}: wd: {}'.format(og, branch_id_str, dir_out_og), flush=True)
@@ -391,17 +426,13 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, an
             path_iqtree_zip = get_iqtree_anc_zip_path(dir_og=dir_og, og=og)
             with zipfile.ZipFile(path_iqtree_zip, "r") as zip_ref:
                 zip_ref.extractall(dir_out_og)
-            cmd = ['csubst', 'sites']
-            cmd += ['--alignment_file', os.path.join(iqtree_anc_rel_dir, 'csubst.fasta')]
-            cmd += ['--rooted_tree_file', os.path.join(iqtree_anc_rel_dir, 'csubst.nwk')]
-            cmd += ['--branch_id', branch_id_str]
-            cmd += ['--threads', str(max(1, int(ncpu)))]
-            cmd += ['--iqtree_treefile', iqtree_tree_file]
-            cmd += ['--iqtree_state', iqtree_state_file]
-            cmd += ['--iqtree_rate', iqtree_rate_file]
-            cmd += ['--iqtree_iqtree', iqtree_iqtree_file]
-            cmd += ['--iqtree_log', iqtree_log_file]
-            cmd += ['--pdb', 'besthit']
+            cmd = build_csubst_sites_command(
+                iqtree_anc_rel_dir=iqtree_anc_rel_dir,
+                iqtree_anc_dir=iqtree_anc_dir,
+                branch_id_str=branch_id_str,
+                ncpu=ncpu,
+                csubst_nonsyn_recode=csubst_nonsyn_recode,
+            )
             print('COMMAND: {}'.format(' '.join(cmd)), flush=True)
             subprocess.run(cmd, check=True)
         print(f'{datetime.datetime.now()}: csubst sites done: {og}', flush=True)
@@ -813,6 +844,8 @@ if __name__ == '__main__':
                         help='Maximum number of branch combinations to analyze per K per trait. '
                              'If exceeded, only one branch combinations per orthogroup will be analyzed. '
                              'If still exceeded, the K will be skipped.')
+    parser.add_argument('--csubst_nonsyn_recode', metavar='STR', default='no', type=normalize_csubst_nonsyn_recode,
+                        help='CSUBST nonsynonymous-state recoding scheme used for csubst sites.')
     args = parser.parse_args()
     args.ncpu = max(1, int(args.ncpu))
 
@@ -897,7 +930,11 @@ if __name__ == '__main__':
         print(f'Total observed/expected synonymous convergence at K = {arity}: {int(sum_ocs):,} / {int(sum_ecs):,}')
         for trait in trait_names:
             flag_zip = True
-            out_name = f'csubst_site_{trait}_K{arity}_minOCN{min_OCNany2spe}_minomegaC{min_omegaCany2spe}_minOCNCoD{min_OCNCoD}'
+            out_name = (
+                f'csubst_site_{trait}_K{arity}_minOCN{min_OCNany2spe}'
+                f'_minomegaC{min_omegaCany2spe}_minOCNCoD{min_OCNCoD}'
+                f'{csubst_nonsyn_recode_output_suffix(args.csubst_nonsyn_recode)}'
+            )
             print(f'{datetime.datetime.now()}: Started processing: {out_name}', flush=True)
             file_trait_color = find_file_trait_color(trait)
             dir_out = os.path.realpath(os.path.join(args.dir_out, out_name))
@@ -987,6 +1024,7 @@ if __name__ == '__main__':
                     repeat(dir_og),
                     repeat(file_trait_color),
                     repeat(args.ncpu),
+                    repeat(args.csubst_nonsyn_recode),
                     annotation_text_list,
                 )
                 for og,result in results:

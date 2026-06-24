@@ -22,6 +22,7 @@ run_database_prep="${run_database_prep:-0}"
 run_hgt_eval="${run_hgt_eval:-0}"
 run_hgt_plot="${run_hgt_plot:-0}"
 run_convergent_sites="${run_convergent_sites:-0}"
+csubst_nonsyn_recode=$(echo "${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
 gene_summary_include_incomplete="${gene_summary_include_incomplete:-0}"
 gene_summary_heatmap_value=$(echo "${gene_summary_heatmap_value:-presence}" | tr '[:upper:]' '[:lower:]')
 gene_summary_species_tree="${gene_summary_species_tree:-auto}"
@@ -484,6 +485,7 @@ run_convergent_site_summary_for_mode() {
   min_omegaCany2spe="${min_omegaCany2spe:-3.0}" \
   min_OCNCoD="${min_OCNCoD:-0}" \
   max_per_K="${max_per_K:-100}" \
+  csubst_nonsyn_recode="${csubst_nonsyn_recode}" \
     bash "${gg_core_dir}/gg_convergent_sites_core.sh"
 }
 

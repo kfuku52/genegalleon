@@ -84,6 +84,7 @@ min_OCNany2spe="1.8" # Minimum OCNany2spe cutoff for candidate combinations.
 min_omegaCany2spe="3.0" # Minimum omegaCany2spe cutoff for candidate combinations.
 min_OCNCoD=0 # Minimum OCNCoD cutoff for candidate combinations.
 max_per_K=100 # Maximum number of combinations retained per arity K.
+csubst_nonsyn_recode="${csubst_nonsyn_recode:-}" # Optional CSUBST recoding override; empty uses GG_COMMON_CSUBST_NONSYN_RECODE.
 
 # Input/output parameters
 file_trait="auto" # Trait table path, or "auto" to use the workspace default.

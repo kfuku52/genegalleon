@@ -12,6 +12,7 @@ dir_orthofinder
 dir_orthogroup
 dir_out
 file_trait
+csubst_nonsyn_recode
 max_per_K
 min_OCNCoD
 min_OCNany2spe
@@ -29,6 +30,7 @@ EOF
     gg_gene_summary_entrypoint.sh)
       cat <<'EOF'
 arity_range
+csubst_nonsyn_recode
 dir_convergent_sites
 dir_gene_summary
 dir_hgt
