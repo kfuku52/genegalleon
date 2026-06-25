@@ -23,6 +23,7 @@ run_extract_primary_fasta="${run_extract_primary_fasta:-1}"
 run_generate_expression_matrix="${run_generate_expression_matrix:-0}"
 run_collect_gff_info="${run_collect_gff_info:-0}"
 run_extract_promoter_fasta="${run_extract_promoter_fasta:-0}"
+treevis_query_marker="${treevis_query_marker:-1}"
 
 # Substitution model in CSUBST and mapdNdS
 if [[ ${genetic_code} -eq 1 ]]; then
@@ -3344,6 +3345,36 @@ else
   gg_step_skip "${task}"
 fi
 
+task="Query marker annotation"
+if [[ "${mode_gene_evolution}" == "query2family" && ${treevis_query_marker} -eq 1 && -s "${file_og_stat_branch}" ]]; then
+  query_marker_needs_update=0
+  if ! awk -F $'\t' 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "query_marker") found = 1; exit(found ? 0 : 1) }' "${file_og_stat_branch}"; then
+    query_marker_needs_update=1
+  elif [[ -s "${file_query_gene}" && "${file_query_gene}" -nt "${file_og_stat_branch}" ]]; then
+    query_marker_needs_update=1
+  elif [[ -s "${file_og_query_aa_fasta}" && "${file_og_query_aa_fasta}" -nt "${file_og_stat_branch}" ]]; then
+    query_marker_needs_update=1
+  elif [[ -s "${file_og_query_blast}" && "${file_og_query_blast}" -nt "${file_og_stat_branch}" ]]; then
+    query_marker_needs_update=1
+  fi
+  if [[ ${query_marker_needs_update} -eq 1 ]]; then
+    gg_step_start "${task}"
+    python "${gg_support_dir}/annotate_stat_branch_query_markers.py" \
+      --stat_branch "${file_og_stat_branch}" \
+      --query_gene "${file_query_gene}" \
+      --query_aa_fasta "${file_og_query_aa_fasta}" \
+      --query_blast "${file_og_query_blast}" \
+      --min_query_blast_coverage "${query_blast_coverage}" \
+      --outfile "orthogroup.branch.query_marker.tsv"
+    cp_out "orthogroup.branch.query_marker.tsv" "${file_og_stat_branch}"
+    summary_flag=1
+  else
+    gg_step_skip "${task}"
+  fi
+else
+  gg_step_skip "${task}"
+fi
+
 if [[ ${treevis_synteny} -eq 1 && -s "${file_og_synteny}" ]]; then
   if [[ ! -s "${file_og_tree_plot}" || "${file_og_synteny}" -nt "${file_og_tree_plot}" ]]; then
     summary_flag=1
@@ -3418,6 +3449,51 @@ if ([[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]]) && [[ ${run_tree
   fi
   cb_path=${file_og_csubst_cb_2/cb_2/cb_ARITY}
 
+  tree_plot_panel_args=(
+    "--panel1=tree,${treevis_branch_length},${treevis_support_value},${treevis_branch_color},L"
+    "--panel2=heatmap,${treevis_heatmap_transform},abs,_,expression_"
+    "--panel3=pointplot,no,rel,_,expression_"
+    "--panel4=cluster_membership,${treevis_max_intergenic_dist}"
+    "--panel5=synteny,${file_og_synteny},${treevis_synteny_window}"
+    "--panel6=tiplabel"
+  )
+  panel_index=7
+  if [[ "${mode_gene_evolution}" == "query2family" && ${treevis_query_marker} -eq 1 ]]; then
+    tree_plot_panel_args+=("--panel${panel_index}=categorical,query_marker,Query,-")
+    panel_index=$((panel_index + 1))
+  fi
+  tree_plot_panel_args+=(
+    "--panel${panel_index}=signal_peptide"
+  )
+  panel_index=$((panel_index + 1))
+  tree_plot_panel_args+=(
+    "--panel${panel_index}=transmembrane_domain"
+  )
+  panel_index=$((panel_index + 1))
+  tree_plot_panel_args+=(
+    "--panel${panel_index}=intron_number"
+  )
+  panel_index=$((panel_index + 1))
+  tree_plot_panel_args+=(
+    "--panel${panel_index}=domain,${file_og_rpsblast}"
+  )
+  panel_index=$((panel_index + 1))
+  tree_plot_panel_args+=(
+    "--panel${panel_index}=alignment,${panel11_trimmed_aln},${panel11_untrimmed_aln}"
+  )
+  panel_index=$((panel_index + 1))
+  tree_plot_panel_args+=(
+    "--panel${panel_index}=fimo,${promoter_bp},${fimo_qvalue}"
+  )
+  panel_index=$((panel_index + 1))
+  tree_plot_panel_args+=(
+    "--panel${panel_index}=meme,${file_og_meme}"
+  )
+  panel_index=$((panel_index + 1))
+  tree_plot_panel_args+=(
+    "--panel${panel_index}=ortholog,${ortholog_prefix},${file_og_dated_tree}"
+  )
+
   TREEVIS_SPECIES_PARSER="${species_label_parser}" \
   Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
     --stat_branch="${file_og_stat_branch}" \
@@ -3425,20 +3501,7 @@ if ([[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]]) && [[ ${run_tree
     --max_delta_intron_present="${treevis_retrotransposition_delta_intron}" \
     --width="7.2" \
     --rel_widths="" \
-    --panel1="tree,${treevis_branch_length},${treevis_support_value},${treevis_branch_color},L" \
-    --panel2="heatmap,${treevis_heatmap_transform},abs,_,expression_" \
-    --panel3="pointplot,no,rel,_,expression_" \
-    --panel4="cluster_membership,${treevis_max_intergenic_dist}" \
-    --panel5="synteny,${file_og_synteny},${treevis_synteny_window}" \
-    --panel6="tiplabel" \
-    --panel7="signal_peptide" \
-    --panel8="transmembrane_domain" \
-    --panel9="intron_number" \
-    --panel10="domain,${file_og_rpsblast}" \
-    --panel11="alignment,${panel11_trimmed_aln},${panel11_untrimmed_aln}" \
-    --panel12="fimo,${promoter_bp},${fimo_qvalue}" \
-    --panel13="meme,${file_og_meme}" \
-    --panel14="ortholog,${ortholog_prefix},${file_og_dated_tree}" \
+    "${tree_plot_panel_args[@]}" \
     --show_branch_id="yes" \
     --event_method="${treevis_event_method}" \
     --species_color_table="PLACEHOLDER" \

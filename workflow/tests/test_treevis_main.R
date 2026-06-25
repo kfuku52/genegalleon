@@ -336,7 +336,7 @@ g_cat_in <- list(
       label = c("g1", "g2"),
       y = c(1, 2),
       tiplab_color = c("black", "black"),
-      besthit_lca_rank_display = c("species", ""),
+      besthit_lca_rank_display = c("best_blast_hit", ""),
       stringsAsFactors = FALSE
     )
   )
@@ -350,6 +350,7 @@ g_cat_out <- add_categorical_column(
   "-"
 )
 if (!("categorical,besthit_lca_rank_display,Hit LCA" %in% names(g_cat_out))) stop("add_categorical_column should create a categorical panel.")
+if (!("Best hit" %in% levels(g_cat_out[["categorical,besthit_lca_rank_display,Hit LCA"]]$data$plot_value))) stop("add_categorical_column should label legacy best_blast_hit values as Best hit.")
 
 # 8g) add_meme_column: MEME XML motifs are parsed into a summary panel.
 meme_xml <- tempfile(fileext = ".xml")

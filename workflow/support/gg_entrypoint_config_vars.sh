@@ -157,6 +157,7 @@ treevis_long_branch_ref_quantile
 treevis_long_branch_tail_shrink
 treevis_max_intergenic_dist
 treevis_pie_chart_value_transformation
+treevis_query_marker
 treevis_retrotransposition_delta_intron
 treevis_support_value
 treevis_synteny

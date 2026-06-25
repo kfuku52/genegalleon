@@ -425,6 +425,7 @@ normalize_category_text = function(values, missing_label = '-') {
     values = trimws(values)
     values = gsub('_', ' ', values, fixed = TRUE)
     values = gsub('[[:space:]]+', ' ', values)
+    values[values == 'best blast hit'] = 'Best hit'
     values[values == ''] = missing_label
     return(values)
 }

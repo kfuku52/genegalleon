@@ -197,6 +197,7 @@ treevis_pie_chart_value_transformation="identity" # identity|delog2|delog2p1|del
 treevis_max_intergenic_dist=100000 # Maximum distance between genes in bp.
 treevis_synteny=1 # Generate and display local synteny evidence around orthogroup genes when genome/GFF inputs are available.
 treevis_synteny_window=5 # Number of neighboring genes on each side used for the treevis synteny panel.
+treevis_query_marker=1 # In query2family mode, display query best-hit markers as a treevis categorical panel.
 treevis_long_branch_display="auto" # "auto" or "no"; auto detects unusually long branches and compresses their displayed length using the long-branch thresholds below.
 treevis_long_branch_ref_quantile="0.95" # Reference branch-length quantile used for long-branch detection.
 treevis_long_branch_detect_ratio=5 # Ratio above the reference used to flag long branches.
