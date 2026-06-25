@@ -91,20 +91,20 @@ run_individual_iqtree_pep=1 # Build per-ortholog protein trees for ASTRAL input.
 run_individual_iqtree_dna=1 # Build per-ortholog DNA trees for ASTRAL input.
 run_astral_pep=1 # Infer a protein species tree with ASTRAL.
 run_astral_dna=1 # Infer a DNA species tree with ASTRAL.
-run_plot_species_trees=1 # Plotting 4 species trees
-run_constrained_tree=1 # Introduce divergence time constraints for IQ2MC input
-run_plot_constrained_tree=1 # Plot node-wise constrained ranges in constrained.nwk
-run_mcmctree1=1 # IQ2MC step 2
-run_mcmctree2=1 # IQ2MC step 3
+run_plot_species_trees=1 # Plot the four candidate species trees: concatenated protein, concatenated DNA, ASTRAL protein, and ASTRAL DNA.
+run_constrained_tree=1 # Add divergence-time calibration constraints to the selected undated species tree for IQ2MC/MCMCTree.
+run_plot_constrained_tree=1 # Plot node-wise divergence-time constraint ranges in constrained.nwk.
+run_mcmctree1=1 # Run IQ2MC parameter-estimation/MCMCTree preparation step.
+run_mcmctree2=1 # Run the main MCMCTree dating step and export dated species-tree outputs.
 run_convert_tree_format=1 # Convert dated species trees into downstream exchange formats.
-run_plot_mcmctreer=1 # Plot dated species tree
+run_plot_mcmctreer=1 # Plot the MCMCTree dated species tree as a publication-style summary figure.
 
 # Orthogroup and species-protein QC workflow flags
-run_orthofinder=1 # OrthoFinder run
+run_orthofinder=1 # Run OrthoFinder to infer orthogroups from the configured species CDS/protein inputs.
 run_species_omark=0 # Run OMArk proteome quality assessment for each species using shared protein inputs.
 run_build_species_omark_summary=1 # Build the shared OMArk summary table for species-wise proteome quality assessment.
-run_og_selection=1 # Selecting orthogroups for downstream analyses
-run_orthogroup_method_comparison=1 # Method comparison plot
+run_og_selection=1 # Select orthogroups that pass gene-count, alignment, and annotation filters for downstream analyses.
+run_orthogroup_method_comparison=1 # Plot comparison among orthogroup/species-tree inference methods.
 run_single_copy_ortholog_decay_plot=1 # Line plot with SD of orthogroup retention when randomly subsampling species.
 
 # Genome-evolution workflow flags
@@ -119,9 +119,9 @@ run_busco_dupaware_root_dna=0 # Run standard rooting on duplicate-aware BUSCO DN
 run_busco_dupaware_root_pep=0 # Run standard rooting on duplicate-aware BUSCO protein trees.
 run_busco_dupaware_grampa_dna=0 # Run GRAMPA on rooted duplicate-aware BUSCO DNA trees.
 run_busco_dupaware_grampa_pep=0 # Run GRAMPA on rooted duplicate-aware BUSCO protein trees.
-run_orthogroup_grampa=1 # Requires gg_gene_evolution rooted trees
-run_cafe=0 # Run CAFE family-size evolution analysis.
-run_go_enrichment=0 # Run GO enrichment on selected orthogroups or shifts.
+run_orthogroup_grampa=1 # Run GRAMPA on orthogroup gene trees; requires rooted trees produced by gg_gene_evolution.
+run_cafe=0 # Run CAFE family-size evolution analysis on selected orthogroup gene-count tables and the dated species tree.
+run_go_enrichment=0 # Run GO enrichment for branches or orthogroups selected by family-size change tests.
 
 # Shared parameters
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.
@@ -132,20 +132,20 @@ protein_model="LG+R4" # IQ-TREE protein substitution model.
 notung_jar="/usr/local/bin/Notung.jar" # Path to the Notung JAR used for rooting.
 
 # Species-tree parameters
-undated_species_tree="astral_pep" # {iqtree_dna,iqtree_pep,astral_dna,astral_pep}
-species_tree_rooting="taxonomy" # taxonomy[,ncbi[,opentree,timetree...]] | outgroup,GENUS_SPECIES[,GENUS_SPECIES...] | midpoint | mad | mv
+undated_species_tree="astral_pep" # {iqtree_dna,iqtree_pep,astral_dna,astral_pep}; species-tree source copied to undated_species_tree.nwk for dating and downstream summaries.
+species_tree_rooting="taxonomy" # taxonomy[,ncbi[,opentree,timetree...]] | outgroup,GENUS_SPECIES[,GENUS_SPECIES...] | midpoint | mad | mv; selects how species trees are rooted before dating, using taxonomy providers, explicit outgroups, or topology/branch-length rooting methods.
 astral_min_tips=4 # Minimum tip count required for per-gene trees used by ASTRAL.
 timetree_constraint=1 # Use TimeTree confidence intervals for species-tree dating when set to 1.
 mcmctree_divergence_time_constraints_str="" # Used only when timetree_constraint=0. Example: "Arabidopsis_thaliana,Oryza_sativa,130,-|Arabidopsis_thaliana,Amborella_trichopoda,150,200"
 mcmc_burnin=20000 # Burn-in iterations for MCMCTree.
 mcmc_sampfreq=100 # Sampling frequency for MCMCTree.
 mcmc_nsample=20000 # Number of posterior samples retained by MCMCTree.
-mcmc_birth_death_sampling="1,1,0.5" # birth,death,sampling_fraction
-mcmc_clock_model="IND" # {EQUAL, IND, CORR}
+mcmc_birth_death_sampling="1,1,0.5" # MCMCTree birth-death-sampling prior as birth,death,sampling_fraction.
+mcmc_clock_model="IND" # {EQUAL, IND, CORR}; MCMCTree clock model, where EQUAL is strict-clock, IND uses independent rates, and CORR uses autocorrelated rates.
 
 # Orthogroup and species-protein QC parameters
 omark_db_path="auto" # Path to the OMArk OMAmer LUCA.h5 database, or "auto" to download it under workspace/downloads/omark/.
-orthogroup_table="HOG" # "OG" or "HOG"
+orthogroup_table="HOG" # "OG" or "HOG"; choose whether orthogroup selection starts from OrthoFinder orthogroups or hierarchical orthogroups.
 orthogroup_annotation_method="mmseqs2" # blastp|mmseqs2 for representative-gene UniProt annotation in orthogroup selection.
 min_num_gene=4 # Minimum total gene count required for an orthogroup.
 min_num_species=2 # Minimum number of species required for an orthogroup.
@@ -166,8 +166,8 @@ grampa_h1="" # Optional GRAMPA H1 hypothesis. Leave empty to skip GRAMPA steps. 
 max_size_differential_cafe=9999999 # Maximum family-size difference modeled by CAFE.
 n_gamma_cats_cafe=4 # Number of gamma categories used by CAFE.
 target_branch_go="" # Optional GO-enrichment target branch. Leave empty to skip GO enrichment. Example: "<1>" or "Arabidopsis_thaliana".
-change_direction_go="increase" # "increase" or "decrease"
-go_category="BP,MF,CC" # BP, MF, CC
+change_direction_go="increase" # "increase" or "decrease"; family-size direction tested for GO enrichment on target_branch_go.
+go_category="BP,MF,CC" # GO aspects included in enrichment: BP biological process, MF molecular function, CC cellular component.
 
 ### End: Modify this block to tailor your analysis ###
 

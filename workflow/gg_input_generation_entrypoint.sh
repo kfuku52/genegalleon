@@ -90,22 +90,22 @@ run_multispecies_summary=1 # Generate multi-species BUSCO summary plots and tabl
 run_generate_species_trait=0 # Generate species_trait.tsv from downloaded or local metadata sources.
 
 # Shared parameters
-provider="all" # all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|ddbj|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local
-input_generation_mode="single" # single=all stages in one run | array_prepare=build task plan | array_worker=run one species task per GG_ARRAY_TASK_ID | array_finalize=merge shards and run shared validation/summaries
-trait_profile="none" # none|gift_starter|gbif_distribution
+provider="all" # all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|ddbj|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local; selects which provider-specific local layout or download-manifest rows are formatted, with all scanning every supported provider directory.
+input_generation_mode="single" # single=all stages in one run | array_prepare=build task plan | array_worker=run one species task per GG_ARRAY_TASK_ID | array_finalize=merge shards and run shared validation/summaries; use array_* for large downloads/formatting across many species.
+trait_profile="none" # none|gift_starter|gbif_distribution; optional preset for generating species_trait.tsv from external trait databases.
 busco_lineage="${GG_COMMON_BUSCO_LINEAGE:-auto}" # BUSCO lineage dataset name, or auto to infer a shared dataset from the discovered species set.
-strict=0 # Treat input formatting and validation warnings as errors.
-overwrite=0 # Overwrite existing formatted or downloaded outputs.
-download_only=0 # Stop after download/format steps without validation-only downstream work.
-dry_run=0 # Print planned actions without downloading or writing outputs.
+strict=0 # Treat input formatting and validation warnings as fatal errors.
+overwrite=0 # Regenerate formatted/downloaded outputs even when existing non-empty outputs are present.
+download_only=0 # Stop after provider/download-manifest download and formatting; skip validation, BUSCO, summaries, and trait generation.
+dry_run=0 # Print planned downloads/formatting actions without writing formatted outputs.
 download_timeout=120 # Per-request timeout in seconds for remote downloads.
-gene_grouping_mode="rescue_overlap" # strict|rescue_overlap
-trait_species_source="download_manifest" # download_manifest|species_cds
-trait_databases="auto" # auto|all|comma-separated IDs
+gene_grouping_mode="rescue_overlap" # strict|rescue_overlap; strict keeps provider gene models as-is, while rescue_overlap merges likely fragmented/overlapping CDS records into a gene-level representative when possible.
+trait_species_source="download_manifest" # download_manifest|species_cds; source used to decide which species are included during trait-table generation.
+trait_databases="auto" # auto|all|comma-separated IDs; trait databases queried by the selected trait_profile, with auto choosing profile defaults.
 
 # Request parameters
-auth_bearer_token_env="" # e.g., GFE_DOWNLOAD_BEARER_TOKEN
-http_header="" # e.g., "User-Agent: genegalleon-input-generation"
+auth_bearer_token_env="" # Environment variable name containing a bearer token for authenticated download-manifest URLs, e.g., GFE_DOWNLOAD_BEARER_TOKEN.
+http_header="" # Extra HTTP header forwarded to download requests, e.g., "User-Agent: genegalleon-input-generation".
 
 # Path and output parameters
 input_dir="" # Local raw input directory to ingest instead of downloading.
@@ -127,12 +127,12 @@ trait_database_sources="" # Optional mapping file that defines trait database so
 trait_download_dir="" # Directory for cached or raw trait database downloads.
 trait_download_timeout=120 # Per-request timeout in seconds for trait database downloads.
 gbif_api="" # Optional GBIF API base URI override for trait_profile=gbif_distribution.
-gbif_page_size="" # Occurrence search page size for GBIF distribution traits.
-gbif_max_occurrences_per_species="" # Max no-login occurrence-search records fetched per species.
-gbif_grid_degrees="" # Grid size in degrees for GBIF occupied area.
-gbif_min_match_confidence="" # Minimum GBIF species-match confidence.
-gbif_max_coordinate_uncertainty_m="" # Optional maximum GBIF coordinate uncertainty in meters.
-gbif_max_distance_from_centroid_m="" # Optional maximum GBIF distance-from-centroid in meters.
+gbif_page_size="" # Number of occurrence records requested per GBIF API page.
+gbif_max_occurrences_per_species="" # Maximum no-login GBIF occurrence records fetched per species before summarizing distribution traits.
+gbif_grid_degrees="" # Latitude/longitude grid size in degrees used to estimate occupied GBIF area.
+gbif_min_match_confidence="" # Minimum GBIF species-match confidence required before using occurrence records.
+gbif_max_coordinate_uncertainty_m="" # Optional maximum GBIF coordinate uncertainty in meters; blank keeps GBIF records regardless of uncertainty.
+gbif_max_distance_from_centroid_m="" # Optional maximum distance from the species occurrence centroid in meters; blank disables centroid-distance filtering.
 
 ### End: Modify this block to tailor your analysis ###
 

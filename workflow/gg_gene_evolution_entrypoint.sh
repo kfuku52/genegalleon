@@ -83,13 +83,13 @@ gg_entrypoint_name="gg_gene_evolution_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Mode
-mode_gene_evolution="${mode_gene_evolution:-query2family}" # query2family|orthogroup
-gene_evolution_profile="${gene_evolution_profile:-default}" # default|hgt
+mode_gene_evolution="${mode_gene_evolution:-query2family}" # query2family|orthogroup; query2family starts from query gene IDs or FASTA and retrieves homolog families, while orthogroup analyzes existing OrthoFinder orthogroups directly.
+gene_evolution_profile="${gene_evolution_profile:-default}" # default|hgt; hgt switches to orthogroup mode and enables HGT-oriented defaults for UniProt annotation, GeneRax DTL reconciliation, GFF/expression/intron evidence, and tree plotting.
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode is partial and deactivates CDS-only analyses.
 
 # Query2family workflow flags
 run_extract_query_fasta=1 # Activated if mode_gene_evolution=query2family. Generate amino acid fasta file for query BLAST.
-run_query_blast=1 # Activated if mode_gene_evolution=query2family.
+run_query_blast=1 # Activated if mode_gene_evolution=query2family; search query amino-acid sequences against formatted species CDS/protein databases to retrieve homolog candidates.
 run_extract_primary_fasta=1 # Generate in-frame CDS fasta file.
 run_rps_blast=1 # RPS-BLAST protein domain search.
 run_uniprot_annotation=0 # Annotation against UniProt Swiss-Prot.
@@ -105,7 +105,7 @@ run_iqtree=1 # Maximum-likelihood phylogenetic reconstruction.
 run_tree_root=1 # Root gene tree using tree_rooting_method.
 
 # Reconciliation and dating workflow flags
-run_orthogroup_extraction=0 # Activated if mode_gene_evolution=query2family.
+run_orthogroup_extraction=0 # Optional query2family refinement; extract the subtree and FASTA subset containing the seed query genes from the rooted homolog tree.
 run_generax=0 # GeneRax off by default for local/smoke environments without MPI setup.
 run_notung_reconcil=0 # Run NOTUNG for RADTE.
 run_tree_dating=0 # Species-tree-guided divergence time estimation with RADTE.
@@ -138,39 +138,39 @@ run_summary=1 # Generate summary tables.
 run_tree_plot=1 # Tree visualization pdf.
 
 # Query2family parameters
-query_blast_method="diamond" # diamond|tblastn
+query_blast_method="diamond" # diamond|tblastn; diamond translates species CDS and runs protein BLASTP-style searches, while tblastn searches protein queries against nucleotide CDS databases.
 query_blast_evalue="0.01" # BLAST E-value threshold.
 query_blast_coverage="0.25" # BLAST coverage threshold.
 max_num_gene_blast_hit_retrieval=5000 # Maximum number of genes to retrieve.
-retain_query_in_maxalign=1 # BOOL.
+retain_query_in_maxalign=1 # Keep query sequences during MaxAlign filtering in query2family mode so seed genes are not removed as alignment outliers.
 
 # Annotation parameters
 uniprot_annotation_method="mmseqs2" # blastp|mmseqs2 for UniProt Swiss-Prot annotation search engine.
 
 # Phylogeny reconstruction and reconciliation parameters
-iqtree_fast_mode_gt=2000 # INTEGER.
+iqtree_fast_mode_gt=2000 # Sequence-count threshold above which IQ-TREE runs with --fast and disables UFBOOT for large alignments.
 tree_rooting_method="mad" # notung|midpoint|mad|md; md is mapped to nwkit method "mv".
 generax_model="GTR+G4" # GeneRax substitution model.
-generax_rec_model="UndatedDL" # "UndatedDTL" or "UndatedDL"
+generax_rec_model="UndatedDL" # "UndatedDTL" or "UndatedDL"; GeneRax reconciliation model, with DL modeling duplication/loss and DTL also allowing transfer events for HGT-oriented analyses.
 radte_max_age=1000 # Upper limit of estimated divergence time in MY.
 
 # species_expression data (value in input files)
 exp_value_type="log2p1" # Expression scale used in species_expression input tables.
-pgls_use_phenocov=0 # BOOL.
+pgls_use_phenocov=0 # If 1, keep replicate expression columns separate for phenotype-covariance-aware species-tree PGLS; if 0, merge replicates before PGLS.
 
 # Promoter cis-element analysis
-promoter_bp=2000 # Promoter length in bp
+promoter_bp=2000 # Upstream promoter length in bp extracted from reference genomes for FIMO motif scans.
 fimo_qvalue="0.05" # False discovery rate threshold for FIMO motif search
 jaspar_file="latest" # "latest"/"auto" or explicit JASPAR filename in ${dir_jaspardb}
 
 # Ornstein-Uhlenbeck modeling of gene expression evolution
-l1ou_criterion="AICc" # "pBIC", "mBIC", "BIC", or "AICc"
-l1ou_nbootstrap=0 # INTEGER.
-l1ou_use_fit_file=1 # BOOL.
+l1ou_criterion="AICc" # "pBIC", "mBIC", "BIC", or "AICc"; model-selection criterion used by l1ou to choose the number and placement of OU expression-regime shifts.
+l1ou_nbootstrap=0 # Number of bootstrap replicates for l1ou OU-shift support; 0 disables bootstrap output.
+l1ou_use_fit_file=1 # Reuse an existing l1ou individual-fit RData file as the starting fit when available.
 l1ou_alpha_upper="auto" # Numeric value or "auto"/"l1ou" to use the kfl1ou default upper bound.
-l1ou_convergence=1 # BOOL.
-large_tree_num_gene=1000 # INTEGER.
-large_tree_max_nshift=10 # INTEGER.
+l1ou_convergence=1 # Also estimate convergent OU regimes and save the convergent-fit RData output.
+large_tree_num_gene=1000 # Gene-tree tip-count threshold that activates a capped l1ou shift search for large families.
+large_tree_max_nshift=10 # Maximum l1ou shift count used when a family reaches large_tree_num_gene.
 
 # CSUBST options
 csubst_max_arity=10 # Maximum foreground arity considered by CSUBST.
@@ -179,25 +179,25 @@ csubst_cutoff_stat="OCNany2spe,2.0|omegaCany2spe,5.0" # CSUBST branch-statistic 
 csubst_max_combination=10000 # Maximum number of CSUBST combinations retained after filtering.
 csubst_fg_exclude_wg="no" # Exclude whole-genome duplication branches from CSUBST foregrounds.
 csubst_fg_stem_only="yes" # Restrict CSUBST foreground candidates to stem branches only.
-csubst_nonsyn_recode="${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" # no|3di20|dayhoff6|sr6|kgb6|sr4|dayhoff9|dayhoff12|dayhoff15|dayhoff18|srchisq6|kgbauto6.
+csubst_nonsyn_recode="${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" # no|3di20|dayhoff6|sr6|kgb6|sr4|dayhoff9|dayhoff12|dayhoff15|dayhoff18|srchisq6|kgbauto6; optional amino-acid recoding scheme used for CSUBST nonsynonymous convergence tests.
 
 # Intron and chromosomal character evolution
-intron_gain_rate="0.0001" # FLOAT.
-retrotransposition_rate="0.001" # FLOAT.
+intron_gain_rate="0.0001" # Prior intron-gain rate used by stochastic character mapping of intron presence/absence.
+retrotransposition_rate="0.001" # Prior retrotransposition rate used by stochastic character mapping of intron loss patterns.
 
 # Tree visualization
-treevis_event_method="species_overlap" # "auto", "generax", or "species_overlap"
-treevis_clade_ortholog=1 # BOOL.
-treevis_support_value="support_unrooted" # "support_unrooted", "dup_conf_score", "no"
-treevis_branch_length="bl_rooted" # "bl_dated", "bl_rooted", "mapdnds_omega"
-treevis_branch_color="l1ou_regime" # "species", "no", or *_regime
+treevis_event_method="species_overlap" # "auto", "generax", or "species_overlap"; source for duplication/transfer/loss event labels in treevis plots.
+treevis_clade_ortholog=1 # Prefix clade-ortholog labels in treevis plots with the resolved annotation species when available.
+treevis_support_value="support_unrooted" # "support_unrooted", "dup_conf_score", "no"; branch/node support annotation shown on treevis trees.
+treevis_branch_length="bl_rooted" # "bl_dated", "bl_rooted", "mapdnds_omega"; branch-length metric used for treevis tree geometry.
+treevis_branch_color="l1ou_regime" # "species", "no", or *_regime; branch color source for treevis, including species colors or inferred regime assignments.
 treevis_retrotransposition_delta_intron="-0.5" # Delta-intron cutoff used to flag retrotransposition candidates in plots.
-treevis_heatmap_transform="no" # "no", "log2", "log10p1", "log2p1"
-treevis_pie_chart_value_transformation="identity" # identity|delog2|delog2p1|delog10|delog10p1
+treevis_heatmap_transform="no" # "no", "log2", "log10p1", "log2p1"; transform applied to numeric matrix values before rendering treevis heatmaps.
+treevis_pie_chart_value_transformation="identity" # identity|delog2|delog2p1|delog10|delog10p1; transform expression-like values before pie-chart rendering.
 treevis_max_intergenic_dist=100000 # Maximum distance between genes in bp.
-treevis_synteny=1 # BOOL.
-treevis_synteny_window=5 # INTEGER.
-treevis_long_branch_display="auto" # "auto" or "no"
+treevis_synteny=1 # Generate and display local synteny evidence around orthogroup genes when genome/GFF inputs are available.
+treevis_synteny_window=5 # Number of neighboring genes on each side used for the treevis synteny panel.
+treevis_long_branch_display="auto" # "auto" or "no"; auto detects unusually long branches and compresses their displayed length using the long-branch thresholds below.
 treevis_long_branch_ref_quantile="0.95" # Reference branch-length quantile used for long-branch detection.
 treevis_long_branch_detect_ratio=5 # Ratio above the reference used to flag long branches.
 treevis_long_branch_cap_ratio="2.5" # Maximum displayed long-branch length as a multiple of the reference.

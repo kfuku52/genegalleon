@@ -2288,7 +2288,7 @@ def test_genome_evolution_uses_local_species_tree_rooting_parameter():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
     common = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
 
-    assert 'species_tree_rooting="taxonomy" # taxonomy[,ncbi[,opentree,timetree...]] | outgroup,GENUS_SPECIES[,GENUS_SPECIES...] | midpoint | mad | mv' in entrypoint
+    assert 'species_tree_rooting="taxonomy" # taxonomy[,ncbi[,opentree,timetree...]] | outgroup,GENUS_SPECIES[,GENUS_SPECIES...] | midpoint | mad | mv; selects how species trees are rooted before dating, using taxonomy providers, explicit outgroups, or topology/branch-length rooting methods.' in entrypoint
     assert "GG_COMMON_OUTGROUP_LABELS" not in common
     assert 'species_tree_rooting="${species_tree_rooting:-taxonomy}"' in core
     assert 'parse_species_tree_rooting "${species_tree_rooting}" species_tree_rooting_method species_tree_rooting_value' in core

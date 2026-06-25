@@ -1646,7 +1646,7 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
       fi
       n_pair=${#candidate_fastq_files[@]}
       if [[ ${n_pair} -ge 10 ]]; then
-        echo "Selecting top 9 ${lib_layout}-end fastq files by size, as rnaSPAdes accepts fewer than 10 libraries with different protocols."
+        echo "Selecting top 9 ${lib_layout}-end fastq files by size to fit SPAdes/rnaSPAdes numbered library input slots (--s1..--s9 or --pe1..--pe9)."
         echo "For details, please refer to the rnaSPAdes manual: https://ablab.github.io/spades/rna.html"
         echo "Selected fastq files:"
         if [[ ${lib_layout} == 'single' ]]; then

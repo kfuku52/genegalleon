@@ -86,7 +86,7 @@ gg_entrypoint_name="gg_transcriptome_generation_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Mode
-mode_transcriptome_assembly="${mode_transcriptome_assembly:-auto}" # {"auto", "sraid", "fastq", "metadata"}
+mode_transcriptome_assembly="${mode_transcriptome_assembly:-auto}" # {"auto", "sraid", "fastq", "metadata"}; input source for transcriptome assembly: sraid reads accession lists in workspace/input/query_sra_id, fastq reads local FASTQ directories in workspace/input/species_rnaseq, metadata reads amalgkit metadata TSVs, and auto selects the single available layout.
 
 # Workflow flags
 run_amalgkit_metadata_or_integrate=1 # Metadata retrieval.
@@ -117,12 +117,12 @@ remove_amalgkit_fastq_after_completion=1 # Delete per-species amalgkit FASTQ fil
 # Assembly and quantification parameters
 max_assembly_input_fastq_size="30,000,000,000" # Maximum total FASTQ length in bp used for transcriptome assembly.
 assembly_method="auto" # {auto,Trinity,rnaSPAdes,RNA-Bloom2}; auto picks rnaSPAdes for short-read metadata and RNA-Bloom2 for detected PacBio/ONT metadata.
-protocol_rna_seq="mixed" # {same,mixed}
+protocol_rna_seq="mixed" # {same,mixed}; rnaSPAdes library protocol handling. Use "same" when all FASTQ libraries share the same RNA-seq library/preparation protocol, so GeneGalleon passes them as one rnaSPAdes library group. Use "mixed" when libraries may come from different protocols or samples, so GeneGalleon passes each library separately as a numbered SPAdes/rnaSPAdes library (--s1..--s9 or --pe1..--pe9); if 10 or more mixed libraries are detected, GeneGalleon first keeps only the 9 largest libraries to fit those numbered input slots, then applies max_assembly_input_fastq_size by subsampling reads from the retained libraries when their combined FASTQ length exceeds the cap.
 amalgkit_quant_backend="${amalgkit_quant_backend:-auto}" # {auto,kallisto,oarfish}; auto selects kallisto for short-read runs and oarfish for long-read runs.
 amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}" # {auto,ont-cdna,ont-drna,pac-bio,pac-bio-hifi}; auto infers long-read subtype from metadata for oarfish.
 amalgkit_oarfish_options="${amalgkit_oarfish_options:-}" # Optional extra shell-style option string forwarded to amalgkit quant --oarfish_options.
-kallisto_reference="longest_cds" # {species_cds,longest_transcript,longest_cds,contamination_removed_longest_cds}
-orf_aggregation_level="i" # {c,g,i,p}
+kallisto_reference="longest_cds" # {species_cds,longest_transcript,longest_cds,contamination_removed_longest_cds}; reference FASTA used for expression quantification, choosing provider CDS, assembled longest transcripts, assembled longest CDS, or contamination-filtered longest CDS.
+orf_aggregation_level="i" # {c,g,i,p}; Longest-CDS ORF aggregation level. The value selects how transcript/ORF IDs are trimmed before choosing one representative CDS per group: "p" groups ORFs within the same transcript, "i" groups isoforms within the same gene-level ID, and "g" or "c" use broader upstream ID levels when those levels exist in the assembler output. Lower levels are more aggressive and collapse more sequences; "i" is the default balance. For rnaSPAdes, "c" is not supported because rnaSPAdes transcript IDs do not include a Trinity-style component level.
 assembly_cpu_offset=0 # Number of CPU cores reserved from GG_TASK_CPUS before launching the assembler.
 assembly_ram_offset=4 # Amount of RAM in GB reserved from GG_MEM_TOTAL_GB before launching the assembler.
 

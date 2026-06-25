@@ -76,7 +76,7 @@ gg_entrypoint_name="gg_progress_summary_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Mode
-mode_transcriptome_assembly="auto" # {"auto", "sraid", "fastq", "metadata"}
+mode_transcriptome_assembly="auto" # {"auto", "sraid", "fastq", "metadata"}; input mode used to interpret transcriptome-generation progress directories, with auto detecting the available workspace/input layout.
 
 # Runtime parameters
 ncpu_progress_summary="" # Number of CPU threads used by summary scripts; empty falls back to GG_TASK_CPUS.

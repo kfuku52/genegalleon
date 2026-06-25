@@ -82,22 +82,22 @@ gg_entrypoint_name="gg_genome_annotation_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # CDS workflow flags
-run_collect_gff_info=0 # Collect gene information from workspace/input/species_gff
-run_busco_cds=0 # Gene set completeness analysis
+run_collect_gff_info=0 # Collect per-gene coordinates, exon/intron structure, and gene stats from workspace/input/species_gff.
+run_busco_cds=0 # BUSCO completeness analysis on species CDS inputs.
 run_uniprot_annotation=0 # CDS annotation against UniProt Swiss-Prot.
-run_cds_fx2tab=0 # Sequence stats of CDS sequences
-run_cds_mmseqs2taxonomy=0 # Taxonomic assignment of CDS sequences
-run_cds_contamination_removal=0 # Removal of contaminated sequences
-run_annotation=0 # Per-gene annotation summary
+run_cds_fx2tab=0 # Sequence-length and composition stats for species CDS FASTA files.
+run_cds_mmseqs2taxonomy=0 # MMseqs2 taxonomy assignment for CDS sequences.
+run_cds_contamination_removal=0 # Remove CDS sequences assigned outside the expected lineage.
+run_annotation=0 # Combine GFF, UniProt, domain, taxonomy, and sequence-derived signals into per-gene annotation summaries.
 run_wgd_ksd=0 # WGD inference by dS distribution
 
 # Genome workflow flags
-run_busco_genome=0 # Gene set completeness analysis
+run_busco_genome=0 # BUSCO completeness analysis on genome assembly inputs.
 run_subphaser=0 # Subgenome structure inference
-run_genome_fx2tab=0 # Sequence stats of reference genome
-run_scaffold_histogram=0 # Scaffold histogram
-run_genome_mmseqs2taxonomy=0 # Taxonomic assignment of genome assembly
-run_genome_contamination_removal=0 # Removal of contaminated sequences
+run_genome_fx2tab=0 # Sequence-length and composition stats for genome assembly FASTA files.
+run_scaffold_histogram=0 # Plot scaffold/contig length distributions for genome assemblies.
+run_genome_mmseqs2taxonomy=0 # MMseqs2 taxonomy assignment for genome assembly sequences.
+run_genome_contamination_removal=0 # Remove genome scaffolds/contigs assigned outside the expected lineage.
 run_jcvi_dotplot=0 # Self-self synteny dotplot
 
 # DNA-seq workflow flags

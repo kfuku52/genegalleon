@@ -76,7 +76,7 @@ gg_entrypoint_name="gg_gene_summary_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Mode
-mode_gene_summary="${mode_gene_summary:-query2family}" # query2family|orthogroup
+mode_gene_summary="${mode_gene_summary:-query2family}" # query2family|orthogroup; selects whether summaries read query2family outputs or orthogroup-mode outputs.
 
 # Output and shared summary parameters
 dir_gene_summary="${dir_gene_summary:-auto}" # Output directory for mode-specific gene summaries.
