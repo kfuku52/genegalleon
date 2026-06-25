@@ -62,6 +62,14 @@ def test_species_labeling_builds_qualified_labels_from_scientific_text():
     assert mod.species_label_from_taxonomic_text("Asimitellaria furusei var. furusei") == "Asimitellaria_furusei_var._furusei"
     assert mod.species_label_from_taxonomic_text("Solanum lycopersicum cultivar Heinz 1706") == "Solanum_lycopersicum_cultivar_Heinz1706"
     assert mod.species_label_from_taxonomic_text("Escherichia coli serovar O157") == "Escherichia_coli_serovar_O157"
+    assert (
+        mod.species_label_from_taxonomic_text("Cenchrus americanus x Cenchrus purpureus")
+        == "Cenchrus_americanus_x_Cenchrus_purpureus"
+    )
+    assert (
+        mod.species_label_from_taxonomic_text("Cenchrus americanus \u00d7 Cenchrus purpureus")
+        == "Cenchrus_americanus_x_Cenchrus_purpureus"
+    )
 
 
 def test_species_labeling_extracts_dotted_rank_labels_from_filenames():
@@ -93,4 +101,16 @@ def test_species_labeling_extracts_dotted_rank_labels_from_filenames():
         mod.extract_species_label("Arisaema_sp._aooni.dna.primary_assembly.fa.gz", strip_extension=True)
         == "Arisaema_sp._aooni"
     )
+    assert (
+        mod.extract_species_label("Cenchrus_americanus_x_Cenchrus_purpureus_metadata.tsv", strip_extension=True)
+        == "Cenchrus_americanus_x_Cenchrus_purpureus"
+    )
     assert mod.scientific_name_from_label("Asimitellaria_furusei_var._furusei") == "Asimitellaria furusei var. furusei"
+    assert (
+        mod.scientific_name_from_label("Cenchrus_americanus_x_Cenchrus_purpureus")
+        == "Cenchrus americanus x Cenchrus purpureus"
+    )
+    assert (
+        mod.base_species_label("Cenchrus_americanus_x_Cenchrus_purpureus")
+        == "Cenchrus_americanus_x_Cenchrus_purpureus"
+    )

@@ -6,6 +6,7 @@ import re
 
 TAXONOMIC_PROXIMITY_QUALIFIERS = frozenset(("cf", "aff", "nr"))
 TAXONOMIC_GENUS_ONLY_PLACEHOLDERS = frozenset(("sp", "spp"))
+TAXONOMIC_HYBRID_CONNECTORS = frozenset(("x", "\u00d7", "hybrid"))
 TAXONOMIC_INFRASPECIFIC_RANKS = frozenset((
     "subsp",
     "var",
@@ -173,6 +174,7 @@ SPECIES_LABEL_TERMINAL_SUFFIXES = (
 def normalize_taxonomic_name_text(text):
     raw = str(text or "").strip()
     raw = raw.replace("−", "-")
+    raw = raw.replace("\u00d7", " x ")
     raw = re.sub(r"\([^)]*\)", " ", raw)
     raw = raw.replace("_", " ")
     return re.sub(r"\s+", " ", raw).strip()
@@ -191,6 +193,19 @@ def taxonomic_token_key(token):
     if lowered in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
         return TAXONOMIC_INFRASPECIFIC_RANK_ALIASES[lowered]
     return lowered
+
+
+def is_hybrid_connector_token(token):
+    return str(token or "").strip().rstrip(".").lower() in TAXONOMIC_HYBRID_CONNECTORS
+
+
+def is_hybrid_binomial_connector(parts, index=2):
+    if len(parts) < index + 3:
+        return False
+    if not is_hybrid_connector_token(parts[index]):
+        return False
+    next_genus = str(parts[index + 1] or "").strip()
+    return bool(next_genus) and next_genus[:1].isupper()
 
 
 def canonical_taxonomic_token(token):
@@ -238,6 +253,10 @@ def species_label_from_taxonomic_text(text):
 
     species = species_key_token(tokens[1].lower())
     if len(tokens) >= 3:
+        if is_hybrid_binomial_connector(tokens, 2):
+            hybrid_genus = tokens[3][:1].upper() + tokens[3][1:].lower()
+            hybrid_species = species_key_token(tokens[4].lower())
+            return "{}_{}_x_{}_{}".format(genus, species, hybrid_genus, hybrid_species)
         third_key = taxonomic_token_key(tokens[2])
         if third_key in TAXONOMIC_PROXIMITY_QUALIFIERS:
             return "{}_{}_{}".format(genus, species, display_rank_token(third_key))
@@ -260,6 +279,8 @@ def species_prefix_token_count(parts):
         return 3 if len(normalized) >= 3 else 2
     if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
         return 3 if len(normalized) >= 3 else 2
+    if is_hybrid_binomial_connector(normalized, 2):
+        return 5
     if third in TAXONOMIC_PROXIMITY_QUALIFIERS:
         return 3
     if third in TAXONOMIC_INFRASPECIFIC_RANKS:
@@ -301,6 +322,8 @@ def extract_species_label(value, strip_extension=False):
     if count == 0:
         return ""
     prefix_parts = [species_label_prefix_token(part) for part in parts[:count]]
+    if len(prefix_parts) >= 5 and is_hybrid_connector_token(prefix_parts[2]):
+        prefix_parts[2] = "x"
     prefix_parts = [part for part in prefix_parts if part != ""]
     return "_".join(prefix_parts)
 
@@ -318,6 +341,8 @@ def scientific_name_from_label(value):
     if species_label == "":
         species_label = str(value or "").strip()
     parts = [part for part in species_label.split("_") if part != ""]
+    if len(parts) >= 5 and is_hybrid_connector_token(parts[2]):
+        return "{} {} x {} {}".format(parts[0], parts[1], parts[3], parts[4])
     if len(parts) >= 3 and taxonomic_token_key(parts[1]) in TAXONOMIC_PROXIMITY_QUALIFIERS:
         return "{} {}. {}".format(parts[0], taxonomic_token_key(parts[1]), parts[2])
     if len(parts) >= 3 and taxonomic_token_key(parts[2]) in TAXONOMIC_PROXIMITY_QUALIFIERS:
@@ -335,6 +360,8 @@ def base_species_label(value):
     if species_label == "":
         species_label = str(value or "").strip()
     parts = [part for part in species_label.split("_") if part != ""]
+    if len(parts) >= 5 and is_hybrid_connector_token(parts[2]):
+        return "_".join(parts[:5])
     if len(parts) >= 3 and taxonomic_token_key(parts[1]) == "sp":
         return parts[0]
     if len(parts) >= 3 and taxonomic_token_key(parts[1]) in TAXONOMIC_PROXIMITY_QUALIFIERS:
