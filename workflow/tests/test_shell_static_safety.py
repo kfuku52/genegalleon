@@ -2385,6 +2385,26 @@ def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_suppor
     assert "apply_gene_evolution_input_sequence_mode\nif [[ \"${mode_gene_evolution}\" == \"query2family\" && ${run_query_blast} -eq 1 ]]; then" in core
 
 
+def test_gene_evolution_supports_auto_query_blast_evalue_by_query_length():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_gene_evolution_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+
+    gene_block_start = config_vars.index("gg_gene_evolution_entrypoint.sh)")
+    gene_block_end = config_vars.index("gg_hgt_entrypoint.sh)")
+    gene_block = config_vars[gene_block_start:gene_block_end]
+
+    assert 'query_blast_evalue="auto"' in entrypoint
+    assert 'query_blast_auto_evalue_maxlen_cutoffs="40:1000,80:100,150:10,300:1,inf:0.01"' in entrypoint
+    assert "\nquery_blast_auto_evalue_maxlen_cutoffs\n" in gene_block
+    assert 'query_blast_evalue="${query_blast_evalue:-auto}"' in core
+    assert 'resolve_query_blast_evalue() {' in core
+    assert 'max_len <= cutoff + 0' in core
+    assert 'resolve_query_blast_evalue "${query_blast_evalue}" "${query_aa_local}" "${query_blast_auto_evalue_maxlen_cutoffs}"' in core
+    assert '-evalue "${effective_query_blast_evalue}"' in core
+    assert '--evalue "${effective_query_blast_evalue}"' in core
+
+
 def test_genome_evolution_places_run_cds_translation_before_dependent_run_flags():
     entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")

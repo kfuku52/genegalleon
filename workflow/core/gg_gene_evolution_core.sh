@@ -24,6 +24,8 @@ run_generate_expression_matrix="${run_generate_expression_matrix:-0}"
 run_collect_gff_info="${run_collect_gff_info:-0}"
 run_extract_promoter_fasta="${run_extract_promoter_fasta:-0}"
 treevis_query_marker="${treevis_query_marker:-1}"
+query_blast_evalue="${query_blast_evalue:-auto}"
+query_blast_auto_evalue_maxlen_cutoffs="${query_blast_auto_evalue_maxlen_cutoffs:-40:1000,80:100,150:10,300:1,inf:0.01}"
 
 # Substitution model in CSUBST and mapdNdS
 if [[ ${genetic_code} -eq 1 ]]; then
@@ -45,6 +47,81 @@ build_iqtree_mem_args() {
   IQTREE_MEM_ARGS=()
   if [[ -n "${GG_MEM_TOTAL_GB:-}" ]]; then
     IQTREE_MEM_ARGS=(--mem "${GG_MEM_TOTAL_GB}G")
+  fi
+}
+
+resolve_query_blast_evalue() {
+  local requested_evalue="$1"
+  local query_fasta="$2"
+  local cutoffs="$3"
+  local requested_lower=""
+  local query_blast_stats=""
+
+  requested_lower=$(printf '%s' "${requested_evalue}" | tr '[:upper:]' '[:lower:]')
+  effective_query_blast_evalue="${requested_evalue}"
+  query_blast_query_num_seqs="NA"
+  query_blast_query_min_aa_len="NA"
+  query_blast_query_avg_aa_len="NA"
+  query_blast_query_max_aa_len="NA"
+
+  if [[ "${requested_lower}" != "auto" ]]; then
+    return 0
+  fi
+  if [[ ! -s "${query_fasta}" ]]; then
+    echo "query_blast_evalue=auto requires a non-empty query FASTA: ${query_fasta}"
+    return 1
+  fi
+  if ! query_blast_stats=$(seqkit stats --tabular "${query_fasta}" | awk 'NR==2 {gsub(/,/, "", $4); gsub(/,/, "", $6); gsub(/,/, "", $7); gsub(/,/, "", $8); print $4, $6, $7, $8}'); then
+    echo "Failed to calculate query FASTA length statistics for query_blast_evalue=auto: ${query_fasta}"
+    return 1
+  fi
+  read -r query_blast_query_num_seqs query_blast_query_min_aa_len query_blast_query_avg_aa_len query_blast_query_max_aa_len <<< "${query_blast_stats}"
+  if [[ ! "${query_blast_query_max_aa_len}" =~ ^[0-9]+$ ]]; then
+    echo "Failed to parse max query amino-acid length for query_blast_evalue=auto: ${query_fasta}"
+    return 1
+  fi
+  if ! effective_query_blast_evalue=$(awk -v max_len="${query_blast_query_max_aa_len}" -v cutoffs="${cutoffs}" '
+    function trim(x) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", x)
+      return x
+    }
+    BEGIN {
+      n = split(cutoffs, rules, ",")
+      for (i = 1; i <= n; i++) {
+        rule = trim(rules[i])
+        if (rule == "") {
+          continue
+        }
+        n_parts = split(rule, parts, ":")
+        if (n_parts != 2) {
+          exit 2
+        }
+        cutoff = trim(parts[1])
+        evalue = trim(parts[2])
+        if (evalue == "") {
+          exit 2
+        }
+        if (tolower(cutoff) == "inf") {
+          print evalue
+          exit 0
+        }
+        if (cutoff !~ /^[0-9]+$/) {
+          exit 2
+        }
+        if (max_len <= cutoff + 0) {
+          print evalue
+          exit 0
+        }
+      }
+      exit 3
+    }
+  '); then
+    echo "Invalid query_blast_auto_evalue_maxlen_cutoffs: ${cutoffs}"
+    return 1
+  fi
+  if [[ -z "${effective_query_blast_evalue}" ]]; then
+    echo "Failed to resolve query_blast_evalue=auto using cutoffs: ${cutoffs}"
+    return 1
   fi
 }
 
@@ -1059,6 +1136,13 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && "${mode_gene_
   echo "db_files: ${db_files[*]}"
   query_aa_local="${og_id}.query.aa.tmp.for_blast.fasta"
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_query_aa_fasta}" --out-file "${query_aa_local}"
+  resolve_query_blast_evalue "${query_blast_evalue}" "${query_aa_local}" "${query_blast_auto_evalue_maxlen_cutoffs}"
+  if [[ "$(printf '%s' "${query_blast_evalue}" | tr '[:upper:]' '[:lower:]')" == "auto" ]]; then
+    echo "query BLAST auto E-value: query_count=${query_blast_query_num_seqs} min_aa_len=${query_blast_query_min_aa_len} avg_aa_len=${query_blast_query_avg_aa_len} max_aa_len=${query_blast_query_max_aa_len}"
+    echo "query BLAST auto E-value: cutoffs=${query_blast_auto_evalue_maxlen_cutoffs} effective_query_blast_evalue=${effective_query_blast_evalue}"
+  else
+    echo "query BLAST E-value: effective_query_blast_evalue=${effective_query_blast_evalue}"
+  fi
 
   outfmt="qacc sacc pident length mismatch gapopen qstart qend sstart send evalue bitscore frames qlen slen"
   if [[ ${query_blast_method} == "tblastn" ]]; then
@@ -1070,7 +1154,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && "${mode_gene_
       -db "${db_files_str}" \
       -out blast_out.tsv \
       -db_gencode "${genetic_code}" \
-      -evalue "${query_blast_evalue}" \
+      -evalue "${effective_query_blast_evalue}" \
       -max_target_seqs 50000 \
       -outfmt "6 ${outfmt}" \
       -num_threads "${GG_TASK_CPUS}"; then
@@ -1091,7 +1175,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && "${mode_gene_
         --query "${query_aa_local}" \
         --db "${db_file}" \
         --out "${tmp_diamond_out}" \
-        --evalue "${query_blast_evalue}" \
+        --evalue "${effective_query_blast_evalue}" \
         --max-target-seqs 50000 \
         --threads "${GG_TASK_CPUS}" \
         --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen; then

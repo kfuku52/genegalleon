@@ -100,6 +100,7 @@ mode_gene_evolution
 pgls_use_phenocov
 promoter_bp
 query_blast_coverage
+query_blast_auto_evalue_maxlen_cutoffs
 query_blast_evalue
 query_blast_method
 radte_max_age
