@@ -1,0 +1,6 @@
+# Busco id	Status	Sequence	Score	Length
+BUSCO0001	Complete	Spinacia_oleracea_gene1	100	250
+BUSCO0002	Complete	Spinacia_oleracea_gene2	100	250
+BUSCO0003	Duplicated	Spinacia_oleracea_gene3	100	250
+BUSCO0004	Fragmented	Spinacia_oleracea_gene4	100	250
+BUSCO0005	Missing	Spinacia_oleracea_gene5	100	250

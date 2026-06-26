@@ -299,6 +299,7 @@ available, the figure also adds right-side per-species BUSCO stacked bars;
 full tables include Fragmented counts. Override the auto-selected
 files with `gene_summary_species_tree`, `gene_summary_species_tree_ci`,
 `gene_summary_species_tree_support`, or `gene_summary_busco_table` when needed.
+See [Example Plots](example-plots.md) for a compact generated figure.
 
 ## 10. Generate summary TSVs
 

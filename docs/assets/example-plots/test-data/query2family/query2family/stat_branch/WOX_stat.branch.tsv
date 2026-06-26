@@ -1,0 +1,8 @@
+branch_id	node_name	spnode_coverage	so_event	num_leaf
+1	Amborella_trichopoda_WOX_1	Amborella_trichopoda	L	1
+2	Arabidopsis_thaliana_WOX_1	Arabidopsis_thaliana	L	1
+3	Cephalotus_follicularis_WOX_1	Cephalotus_follicularis	L	1
+4	Dionaea_muscipula_WOX_1	Dionaea_muscipula	L	1
+5	Nepenthes_gracilis_WOX_1	Nepenthes_gracilis	L	1
+6	Oryza_sativa_WOX_1	Oryza_sativa	L	1
+7	WOX_internal_duplication	Arabidopsis_thaliana	D	2

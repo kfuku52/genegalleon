@@ -1,0 +1,6 @@
+# Busco id	Status	Sequence	Score	Length
+BUSCO0001	Complete	Arabidopsis_thaliana_gene1	100	250
+BUSCO0002	Complete	Arabidopsis_thaliana_gene2	100	250
+BUSCO0003	Duplicated	Arabidopsis_thaliana_gene3	100	250
+BUSCO0004	Duplicated	Arabidopsis_thaliana_gene4	100	250
+BUSCO0005	Missing	Arabidopsis_thaliana_gene5	100	250

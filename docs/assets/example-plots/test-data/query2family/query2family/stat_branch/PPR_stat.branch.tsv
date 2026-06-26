@@ -1,0 +1,16 @@
+branch_id	node_name	spnode_coverage	so_event	num_leaf
+1	Amborella_trichopoda_PPR_1	Amborella_trichopoda	L	1
+2	Amborella_trichopoda_PPR_2	Amborella_trichopoda	L	1
+3	Arabidopsis_thaliana_PPR_1	Arabidopsis_thaliana	L	1
+4	Arabidopsis_thaliana_PPR_2	Arabidopsis_thaliana	L	1
+5	Cephalotus_follicularis_PPR_1	Cephalotus_follicularis	L	1
+6	Cephalotus_follicularis_PPR_2	Cephalotus_follicularis	L	1
+7	Dionaea_muscipula_PPR_1	Dionaea_muscipula	L	1
+8	Dionaea_muscipula_PPR_2	Dionaea_muscipula	L	1
+9	Nepenthes_gracilis_PPR_1	Nepenthes_gracilis	L	1
+10	Nepenthes_gracilis_PPR_2	Nepenthes_gracilis	L	1
+11	Oryza_sativa_PPR_1	Oryza_sativa	L	1
+12	Oryza_sativa_PPR_2	Oryza_sativa	L	1
+13	Spinacia_oleracea_PPR_1	Spinacia_oleracea	L	1
+14	Spinacia_oleracea_PPR_2	Spinacia_oleracea	L	1
+15	PPR_internal_duplication	Arabidopsis_thaliana	D	2

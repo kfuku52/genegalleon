@@ -1,0 +1,6 @@
+orthogroup	gene_id	gene_taxon	candidate_branch_count	candidate_branch_ids	besthit_accession	besthit_organism	besthit_taxid	besthit_taxonomy_method	besthit_lca_rank	besthit_same_superkingdom	intron_supported	expression_measured	synteny_support_score	contamination_lca_taxid	contamination_lca_sciname	contamination_is_compatible_lineage
+OG0000001	Arabidopsis_thaliana_AHA1	Arabidopsis thaliana	1	3	P001	Bacillus subtilis		name_heuristic	genus_mismatch	0	True	True	0.8			True
+OG0000001	Spinacia_oleracea_AHA1	Spinacia oleracea	1	3	P002	Bacillus subtilis		name_heuristic	genus_mismatch	0	True	True	0.4			True
+OG0000002	Cephalotus_follicularis_HGT1	Cephalotus follicularis	1	7	P003	Pseudomonas fluorescens		name_heuristic	phylum_mismatch	0	False	True	0.0	294	Pseudomonas fluorescens	False
+OG0000003	Dionaea_muscipula_HGT2	Dionaea muscipula	1	12	P004	Escherichia coli		name_heuristic	species	1	False	True	0.0	562	Escherichia coli	False
+OG0000004	Nepenthes_gracilis_HGT3	Nepenthes gracilis	1	19	P005	Streptomyces coelicolor		name_heuristic	class_mismatch	0	True	False	0.2			True

@@ -73,6 +73,17 @@ This writes results under:
 - `workspace/output/query2family`
 - `workspace/downloads`
 
+Example query2family tree plot:
+
+![Query2family tree plot example](docs/assets/example-plots/query2family-tree-plot.png)
+
+Example gene-family presence/absence summary:
+
+![Gene-family presence/absence example](docs/assets/example-plots/query2family-presence-absence.png)
+
+More generated examples are collected in
+[Example Plots](docs/example-plots.md).
+
 ## Documentation
 
 Detailed guides are split by topic:
@@ -81,6 +92,7 @@ Detailed guides are split by topic:
 - [Execution Model](docs/execution-model.md)
 - [Common Workflow Recipes](docs/common-workflow-recipes.md)
 - [Gene-Family Outputs and Progress Monitoring](docs/gene-family-outputs-and-progress-monitoring.md)
+- [Example Plots](docs/example-plots.md)
 - [Container Build and Runtime](docs/container-build-and-runtime.md)
 - [Workspace Layout and Data Model](docs/workspace-layout-and-data-model.md)
 - [Input Conventions](docs/input-conventions.md)

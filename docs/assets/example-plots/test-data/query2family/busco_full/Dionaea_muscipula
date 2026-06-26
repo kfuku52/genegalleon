@@ -1,0 +1,6 @@
+# Busco id	Status	Sequence	Score	Length
+BUSCO0001	Complete	Dionaea_muscipula_gene1	100	250
+BUSCO0002	Duplicated	Dionaea_muscipula_gene2	100	250
+BUSCO0003	Duplicated	Dionaea_muscipula_gene3	100	250
+BUSCO0004	Fragmented	Dionaea_muscipula_gene4	100	250
+BUSCO0005	Missing	Dionaea_muscipula_gene5	100	250

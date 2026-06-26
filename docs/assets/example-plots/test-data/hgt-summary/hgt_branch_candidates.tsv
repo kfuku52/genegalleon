@@ -1,0 +1,5 @@
+orthogroup	branch_id	candidate_gene_count	matched_leaf_count	besthit_gene_count	besthit_taxid_count	besthit_taxonomy_method	besthit_same_superkingdom_fraction	besthit_lca_rank_mode	intron_support_fraction	expression_measured_fraction	clade_min_expression_pearsoncor	synteny_support_fraction	synteny_mean_support_score	contamination_incompatible_fraction	contamination_top_lca_sciname
+OG0000001	3	2	2	2	0	name_heuristic	0.0	genus_mismatch	1.0	1.0	0.42	0.5	0.6	0.0	
+OG0000002	7	3	3	3	0	name_heuristic	0.0	phylum_mismatch	0.33	0.67	0.15	0.0	0.0	0.33	Pseudomonas fluorescens
+OG0000003	12	1	1	1	0	name_heuristic	1.0	species	0.0	1.0	0.0	0.0	0.0	1.0	Escherichia coli
+OG0000004	19	4	4	3	0	name_heuristic	0.25	class_mismatch	0.75	0.75	0.31	0.25	0.22	0.0	

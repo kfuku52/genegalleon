@@ -1,0 +1,6 @@
+# Busco id	Status	Sequence	Score	Length
+BUSCO0001	Complete	Oryza_sativa_gene1	100	250
+BUSCO0002	Complete	Oryza_sativa_gene2	100	250
+BUSCO0003	Complete	Oryza_sativa_gene3	100	250
+BUSCO0004	Duplicated	Oryza_sativa_gene4	100	250
+BUSCO0005	Missing	Oryza_sativa_gene5	100	250

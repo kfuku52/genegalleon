@@ -1,0 +1,6 @@
+# Busco id	Status	Sequence	Score	Length
+BUSCO0001	Complete	Cephalotus_follicularis_gene1	100	250
+BUSCO0002	Duplicated	Cephalotus_follicularis_gene2	100	250
+BUSCO0003	Fragmented	Cephalotus_follicularis_gene3	100	250
+BUSCO0004	Missing	Cephalotus_follicularis_gene4	100	250
+BUSCO0005	Missing	Cephalotus_follicularis_gene5	100	250

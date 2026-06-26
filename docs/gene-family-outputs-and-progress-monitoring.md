@@ -78,6 +78,8 @@ Practical interpretation:
 
 `stat.branch.tsv` is the master table that collects per-branch and per-tip
 annotations for plotting. `stat.tree.tsv` is the paired tree-level summary.
+See [Example Plots](example-plots.md) for a compact generated tree-plot
+example from the bundled quick-start data.
 
 ## Gene-family progress summaries
 
