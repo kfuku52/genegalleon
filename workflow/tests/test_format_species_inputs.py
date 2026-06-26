@@ -291,6 +291,15 @@ def test_parse_species_key_candidate_preserves_taxonomic_qualifiers():
     assert mod.parse_species_key_candidate("Amoeba sp.") == "Amoeba_sp_unknown"
     assert mod.parse_species_key_candidate("Solanum lycopersicum cultivar Heinz 1706") == "Solanum_lycopersicum_cultivar_Heinz1706"
     assert mod.parse_species_key_candidate("Escherichia coli serovar O157") == "Escherichia_coli_serovar_O157"
+    assert mod.parse_species_key_candidate("Citrus x limon") == "Citrus_x_limon"
+    assert (
+        mod.parse_species_key_candidate("Cenchrus americanus x Cenchrus purpureus")
+        == "Cenchrus_americanus_x_Cenchrus_purpureus"
+    )
+    assert (
+        mod.parse_species_key_candidate("Cenchrus americanus \u00d7 Cenchrus purpureus")
+        == "Cenchrus_americanus_x_Cenchrus_purpureus"
+    )
 
 
 def test_source_id_candidates_add_ensemblplants_species_and_accession_variants():
@@ -393,6 +402,10 @@ def test_species_prefix_keeps_hybrid_marker_with_following_epithet():
     mod = load_module()
     assert mod.species_prefix_from_value("Citrus_x_limon") == "Citrus_x_limon"
     assert mod.species_prefix_from_value("Petunia_x_hybrida") == "Petunia_x_hybrida"
+    assert (
+        mod.species_prefix_from_value("Cenchrus_americanus_x_Cenchrus_purpureus.cds.fa.gz")
+        == "Cenchrus_americanus_x_Cenchrus_purpureus"
+    )
 
 
 def test_species_prefix_preserves_dotted_taxonomic_qualifiers():

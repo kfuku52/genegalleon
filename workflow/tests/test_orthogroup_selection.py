@@ -207,6 +207,20 @@ def test_load_besthit_table_reads_only_first_two_columns(tmp_path):
     ]
 
 
+def test_remove_tmp_files_only_removes_known_selection_files(tmp_path, monkeypatch):
+    mod = load_module()
+    monkeypatch.chdir(tmp_path)
+    known = tmp_path / "tmp.query.fasta"
+    unrelated = tmp_path / "tmp.user.tsv"
+    known.write_text("", encoding="utf-8")
+    unrelated.write_text("keep\n", encoding="utf-8")
+
+    mod.remove_tmp_files()
+
+    assert not known.exists()
+    assert unrelated.exists()
+
+
 def test_resolve_mmseqs_db_prefix_rejects_multiline_path():
     mod = load_module()
 

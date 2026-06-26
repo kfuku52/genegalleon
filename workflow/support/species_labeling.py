@@ -275,6 +275,8 @@ def species_prefix_token_count(parts):
         return 0
     second = taxonomic_token_key(normalized[1])
     third = taxonomic_token_key(normalized[2]) if len(normalized) >= 3 else ""
+    if is_hybrid_connector_token(normalized[1]):
+        return 3 if len(normalized) >= 3 else 2
     if second == "sp":
         return 3 if len(normalized) >= 3 else 2
     if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
@@ -291,7 +293,8 @@ def species_prefix_token_count(parts):
 def is_species_rank_or_qualifier_token(token):
     key = taxonomic_token_key(token)
     return (
-        key == "sp"
+        is_hybrid_connector_token(token)
+        or key == "sp"
         or key in TAXONOMIC_PROXIMITY_QUALIFIERS
         or key in TAXONOMIC_INFRASPECIFIC_RANKS
     )
@@ -299,6 +302,8 @@ def is_species_rank_or_qualifier_token(token):
 
 def species_label_prefix_token(token):
     text = str(token or "").strip()
+    if is_hybrid_connector_token(text):
+        return "x"
     if is_species_rank_or_qualifier_token(text):
         return text
     return text.split(".", 1)[0]

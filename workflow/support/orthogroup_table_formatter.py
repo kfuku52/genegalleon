@@ -86,10 +86,6 @@ def run(args):
     with open(outpath_readme, 'w') as f:
         f.write(txt_readme)
 
-    for tmp_file in [f for f in os.listdir(os.getcwd()) if f.startswith('tmp.')]:
-        print('Removing: {}'.format(tmp_file))
-        os.remove(tmp_file)
-
     print('Ending {} at {}. Elapsed time: {:,} sec'.format(sys.argv[0], datetime.datetime.now(), int(time.time() - start)))
 
 

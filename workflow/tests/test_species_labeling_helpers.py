@@ -81,6 +81,8 @@ def test_species_labeling_builds_qualified_labels_from_scientific_text():
         mod.species_label_from_taxonomic_text("Cenchrus americanus \u00d7 Cenchrus purpureus")
         == "Cenchrus_americanus_x_Cenchrus_purpureus"
     )
+    assert mod.extract_species_label("Citrus_x_limon_gene1") == "Citrus_x_limon"
+    assert mod.extract_species_label("Citrus_\u00d7_limon_gene1") == "Citrus_x_limon"
 
 
 def test_species_labeling_extracts_dotted_rank_labels_from_filenames():

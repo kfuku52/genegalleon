@@ -2010,7 +2010,6 @@ if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree
   done
   wait_for_background_jobs
   rm -f -- species_tree_input_fasta_list.txt
-  rm -f -- tmp.*
 else
   gg_step_skip "${task}"
 fi
@@ -3576,7 +3575,6 @@ if [[ ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then
   done
   wait_for_background_jobs
   rm -f -- species_tree_input_fasta_list.txt
-  find . -maxdepth 1 -type f -name 'tmp.*' -delete
 else
   gg_step_skip "${task}"
 fi

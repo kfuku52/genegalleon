@@ -1253,9 +1253,13 @@ gg_species_name_from_path() {
 
 _gg_species_rank_token_key() {
   local token=${1:-}
+  local multiplication_sign=$'\303\227'
   token=${token%.}
   token=$(printf '%s' "${token}" | tr '[:upper:]' '[:lower:]')
   case "${token}" in
+    x|hybrid|"${multiplication_sign}")
+      printf '%s\n' "x"
+      ;;
     spp)
       printf '%s\n' "sp"
       ;;
@@ -1297,12 +1301,24 @@ _gg_species_prefix_token_count() {
     fi
     return 0
   fi
+  if [[ "${second}" == "x" ]]; then
+    if [[ ${#parts[@]} -ge 3 ]]; then
+      printf '3\n'
+    else
+      printf '2\n'
+    fi
+    return 0
+  fi
   if [[ "${second}" == "cf" || "${second}" == "aff" || "${second}" == "nr" ]]; then
     if [[ ${#parts[@]} -ge 3 ]]; then
       printf '3\n'
     else
       printf '2\n'
     fi
+    return 0
+  fi
+  if [[ "${third}" == "x" && ${#parts[@]} -ge 5 && "${parts[3]}" =~ ^[[:upper:]] ]]; then
+    printf '5\n'
     return 0
   fi
   if [[ "${third}" == "cf" || "${third}" == "aff" || "${third}" == "nr" ]]; then
@@ -1326,7 +1342,7 @@ _gg_species_is_rank_or_qualifier_token() {
   local key
   key=$(_gg_species_rank_token_key "${1:-}")
   case "${key}" in
-    sp|cf|aff|nr|subsp|var|forma|f|strain|substrain|serovar|serotype|serogroup|pathovar|pv|biovar|biotype|chemovar|morphovar|cultivar|cv|isolate|group|subgroup|complex|clade|lineage|section|series|ecotype|breed)
+    x|sp|cf|aff|nr|subsp|var|forma|f|strain|substrain|serovar|serotype|serogroup|pathovar|pv|biovar|biotype|chemovar|morphovar|cultivar|cv|isolate|group|subgroup|complex|clade|lineage|section|series|ecotype|breed)
       return 0
       ;;
   esac
@@ -1335,7 +1351,13 @@ _gg_species_is_rank_or_qualifier_token() {
 
 _gg_species_label_prefix_part() {
   local part=${1:-}
+  local key
   if _gg_species_is_rank_or_qualifier_token "${part}"; then
+    key=$(_gg_species_rank_token_key "${part}")
+    if [[ "${key}" == "x" ]]; then
+      printf '%s\n' "x"
+      return 0
+    fi
     printf '%s\n' "${part}"
     return 0
   fi

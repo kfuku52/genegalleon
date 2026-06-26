@@ -343,6 +343,7 @@ NCBI_DATASETS_INCLUDE_BY_LABEL = {
 DOWNLOAD_LABELS = ("CDS", "GFF", "GENOME")
 TAXONOMIC_PROXIMITY_QUALIFIERS = frozenset(("cf", "aff", "nr"))
 TAXONOMIC_GENUS_ONLY_PLACEHOLDERS = frozenset(("sp", "spp"))
+TAXONOMIC_HYBRID_CONNECTORS = frozenset(("x", "\u00d7", "hybrid"))
 TAXONOMIC_INFRASPECIFIC_RANK_ALIASES = {
     "subsp": "subsp",
     "ssp": "subsp",
@@ -566,7 +567,8 @@ def blank_species_taxonomy_metadata():
 
 
 def normalize_taxonomic_name_text(text):
-    return re.sub(r"\s*\(.*?\)\s*", " ", str(text or "")).strip()
+    normalized = str(text or "").replace("\u00d7", " x ")
+    return re.sub(r"\s*\(.*?\)\s*", " ", normalized).strip()
 
 
 def tokenize_taxonomic_name(text):
@@ -590,6 +592,19 @@ def taxonomic_token_key(token):
     return str(canonical_taxonomic_token(token)).lower()
 
 
+def is_hybrid_connector_token(token):
+    return str(token or "").strip().rstrip(".").lower() in TAXONOMIC_HYBRID_CONNECTORS
+
+
+def is_hybrid_binomial_connector(tokens, index=2):
+    if len(tokens) < index + 3:
+        return False
+    if not is_hybrid_connector_token(tokens[index]):
+        return False
+    next_genus = str(tokens[index + 1] or "").strip()
+    return bool(next_genus) and next_genus[:1].isupper()
+
+
 def build_species_key_from_tokens(tokens):
     normalized = [canonical_taxonomic_token(token) for token in tokens if str(token or "").strip() != ""]
     if len(normalized) == 0:
@@ -599,6 +614,10 @@ def build_species_key_from_tokens(tokens):
 
     genus = normalized[0]
     second = normalized[1].lower()
+    if is_hybrid_connector_token(normalized[1]):
+        if len(normalized) >= 3:
+            return "{}_x_{}".format(genus, normalized[2])
+        return "{}_x".format(genus)
     if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
         if len(normalized) >= 3:
             return "{}_{}_{}".format(genus, second, normalized[2])
@@ -611,6 +630,10 @@ def build_species_key_from_tokens(tokens):
 
     species = normalized[1]
     if len(normalized) >= 3:
+        if is_hybrid_binomial_connector(normalized, 2):
+            hybrid_genus = normalized[3]
+            hybrid_species = normalized[4]
+            return "{}_{}_x_{}_{}".format(genus, species, hybrid_genus, hybrid_species)
         third = normalized[2].lower()
         if third in TAXONOMIC_PROXIMITY_QUALIFIERS:
             return "{}_{}_{}".format(genus, species, third)
@@ -656,6 +679,14 @@ def taxonomic_name_lookup_candidates(text):
         candidates.append(candidate)
 
     add(" ".join(parts))
+    if len(parts) >= 3 and is_hybrid_connector_token(parts[1]):
+        add("{} x {}".format(parts[0], parts[2]))
+        add("{} \u00d7 {}".format(parts[0], parts[2]))
+        return candidates
+    if len(parts) >= 5 and is_hybrid_connector_token(parts[2]):
+        add("{} {} x {} {}".format(parts[0], parts[1], parts[3], parts[4]))
+        add("{} {} \u00d7 {} {}".format(parts[0], parts[1], parts[3], parts[4]))
+        return candidates
     if len(parts) >= 3 and parts[1].lower() in TAXONOMIC_PROXIMITY_QUALIFIERS:
         add("{} {}. {}".format(parts[0], parts[1], parts[2]))
         add("{} {} {}".format(parts[0], parts[1], parts[2]))
@@ -691,12 +722,14 @@ def species_prefix_token_count(tokens):
         return 0
     second = taxonomic_token_key(tokens[1])
     third = taxonomic_token_key(tokens[2]) if len(tokens) >= 3 else ""
-    if second == "x":
+    if is_hybrid_connector_token(tokens[1]):
         return 3 if len(tokens) >= 3 else 2
     if second == "sp":
         return 3 if len(tokens) >= 3 else 2
     if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
         return 3 if len(tokens) >= 3 else 2
+    if is_hybrid_binomial_connector(tokens, 2):
+        return 5
     if third in TAXONOMIC_PROXIMITY_QUALIFIERS:
         return 3
     if third in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
@@ -6526,6 +6559,8 @@ def strip_species_key_filename_suffixes(value):
 
 def species_prefix_filename_token(token):
     text = str(token or "").strip()
+    if is_hybrid_connector_token(text):
+        return "x"
     key = taxonomic_token_key(text)
     if (
         key == "sp"

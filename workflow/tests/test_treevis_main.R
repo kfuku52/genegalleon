@@ -519,6 +519,12 @@ if (!treevis_label_matches_ortholog_prefix("Species_a_gene1", "Species_a_")) {
 if (treevis_label_matches_ortholog_prefix("Species_a_subsp_x_gene1", "Species_a_")) {
   stop("treevis_label_matches_ortholog_prefix should not match a longer species label.")
 }
+if (!treevis_label_matches_ortholog_prefix("Cenchrus_americanus_x_Cenchrus_purpureus_gene1", "Cenchrus_americanus_x_Cenchrus_purpureus_")) {
+  stop("treevis_label_matches_ortholog_prefix should match hybrid binomial species labels.")
+}
+if (treevis_label_matches_ortholog_prefix("Cenchrus_americanus_x_Cenchrus_purpureus_gene1", "Cenchrus_americanus_")) {
+  stop("treevis_label_matches_ortholog_prefix should not shorten hybrid binomial species labels.")
+}
 if (treevis_strip_ortholog_prefix("Species_a_gene1", "Species_a_") != "gene1") {
   stop("treevis_strip_ortholog_prefix should strip the exact species prefix.")
 }

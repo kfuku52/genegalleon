@@ -1,5 +1,6 @@
 GG_TAXONOMIC_PROXIMITY_QUALIFIERS <- c("cf", "aff", "nr")
 GG_TAXONOMIC_GENUS_ONLY_PLACEHOLDERS <- c("sp", "spp")
+GG_TAXONOMIC_HYBRID_CONNECTORS <- c("x", "\u00d7", "hybrid")
 GG_TAXONOMIC_INFRASPECIFIC_RANKS <- c(
     "subsp",
     "var",
@@ -197,6 +198,9 @@ gg_species_strip_terminal_suffixes <- function(values) {
 
 gg_taxonomic_token_key <- function(token) {
     lowered <- tolower(sub("[.]$", "", trimws(as.character(token))))
+    if (lowered %in% GG_TAXONOMIC_HYBRID_CONNECTORS) {
+        return("x")
+    }
     if (lowered %in% GG_TAXONOMIC_GENUS_ONLY_PLACEHOLDERS) {
         return("sp")
     }
@@ -209,18 +213,39 @@ gg_taxonomic_token_key <- function(token) {
     return(lowered)
 }
 
+gg_is_hybrid_connector_token <- function(token) {
+    gg_taxonomic_token_key(token) == "x"
+}
+
+gg_is_hybrid_binomial_connector <- function(parts, index = 3L) {
+    if (length(parts) < index + 2L) {
+        return(FALSE)
+    }
+    if (!gg_is_hybrid_connector_token(parts[[index]])) {
+        return(FALSE)
+    }
+    next_genus <- trimws(as.character(parts[[index + 1L]]))
+    nzchar(next_genus) && grepl("^[A-Z]", next_genus)
+}
+
 gg_species_prefix_token_count <- function(parts) {
     normalized <- parts[nzchar(parts)]
     if (length(normalized) < 2) {
-        return(length(normalized))
+        return(0L)
     }
     second <- gg_taxonomic_token_key(normalized[[2]])
     third <- if (length(normalized) >= 3) gg_taxonomic_token_key(normalized[[3]]) else ""
+    if (second == "x") {
+        return(if (length(normalized) >= 3) 3 else 2)
+    }
     if (second == "sp") {
         return(if (length(normalized) >= 3) 3 else 2)
     }
     if (second %in% GG_TAXONOMIC_PROXIMITY_QUALIFIERS) {
         return(if (length(normalized) >= 3) 3 else 2)
+    }
+    if (gg_is_hybrid_binomial_connector(normalized, 3L)) {
+        return(5L)
     }
     if (third %in% GG_TAXONOMIC_PROXIMITY_QUALIFIERS) {
         return(3)
@@ -233,7 +258,7 @@ gg_species_prefix_token_count <- function(parts) {
 
 gg_species_is_rank_or_qualifier_token <- function(token) {
     key <- gg_taxonomic_token_key(token)
-    key == "sp" || key %in% GG_TAXONOMIC_PROXIMITY_QUALIFIERS || key %in% GG_TAXONOMIC_INFRASPECIFIC_RANKS
+    key == "x" || key == "sp" || key %in% GG_TAXONOMIC_PROXIMITY_QUALIFIERS || key %in% GG_TAXONOMIC_INFRASPECIFIC_RANKS
 }
 
 gg_species_prefix_token <- function(token) {
@@ -261,6 +286,10 @@ gg_species_label_from_value_one <- function(value, strip_extension = FALSE) {
         return("")
     }
     selected <- vapply(parts[seq_len(count)], gg_species_prefix_token, character(1), USE.NAMES = FALSE)
+    is_hybrid_connector <- vapply(selected, gg_is_hybrid_connector_token, logical(1), USE.NAMES = FALSE)
+    if (any(is_hybrid_connector)) {
+        selected[is_hybrid_connector] <- "x"
+    }
     selected <- selected[nzchar(selected)]
     return(paste(selected, collapse = "_"))
 }
@@ -293,6 +322,9 @@ gg_species_display_from_key_one <- function(value) {
     }
     parts <- strsplit(species_label, "_", fixed = TRUE)[[1]]
     parts <- parts[nzchar(parts)]
+    if (length(parts) >= 5 && gg_is_hybrid_connector_token(parts[[3]])) {
+        return(sprintf("%s %s x %s %s", parts[[1]], parts[[2]], parts[[4]], parts[[5]]))
+    }
     if (length(parts) >= 3 && gg_taxonomic_token_key(parts[[2]]) %in% GG_TAXONOMIC_PROXIMITY_QUALIFIERS) {
         return(sprintf("%s %s %s", parts[[1]], gg_species_display_rank(gg_taxonomic_token_key(parts[[2]])), parts[[3]]))
     }

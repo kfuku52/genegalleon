@@ -6,6 +6,7 @@ import datetime
 import glob
 import io
 import os
+from pathlib import Path
 import shlex
 import shutil
 import subprocess
@@ -25,6 +26,14 @@ except ModuleNotFoundError:
 
 import numpy
 import pandas
+
+ORTHOGROUP_SELECTION_TMP_FILES = (
+    'tmp.query.fasta',
+    'tmp.query.txt',
+    'tmp.blastp.out.tsv',
+    'tmp.mmseqs2.out.tsv',
+    'tmp.Orthogroups.GeneCount.quartile_genes.tsv',
+)
 
 
 def _format_command_arg_for_log(arg):
@@ -470,10 +479,13 @@ def plot_gene_number(args, df_gc_original, df_gc):
         fig.savefig(outpath, format=ext)
 
 
-def remove_tmp_files():
-    for tmp_file in [f for f in os.listdir(os.getcwd()) if f.startswith('tmp.')]:
-        print('Removing: {}'.format(tmp_file))
-        os.remove(tmp_file)
+def remove_tmp_files(paths=ORTHOGROUP_SELECTION_TMP_FILES):
+    for tmp_file in paths:
+        tmp_path = Path(tmp_file)
+        if not tmp_path.exists() or not tmp_path.is_file():
+            continue
+        print('Removing: {}'.format(tmp_path))
+        tmp_path.unlink()
 
 
 def run(args):

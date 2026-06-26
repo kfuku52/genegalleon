@@ -4,9 +4,11 @@ import argparse
 import datetime
 import gzip
 import pandas
-import re
 import sys
 import time
+from urllib.parse import unquote
+
+from species_labeling import strip_species_label
 
 pandas.options.mode.chained_assignment = None
 
@@ -36,29 +38,34 @@ def read_fasta_seqname(file_path):
     return seqnames
 
 def get_gene_names(seq_names):
-    gene_names = seq_names.str.replace('_', 'PLACEHOLDERTEXT', 2)
-    gene_names = gene_names.str.replace(r'.*PLACEHOLDERTEXT', '', regex=True)
-    return gene_names
+    return seq_names.astype(str).map(strip_species_label)
 
-def filename2sciname(file_name):
-    tmp = re.sub('.*/', '', file_name)
-    tmp = tmp.replace('_','|',1)
-    tmp = re.sub(r'[-_.,].*', '', tmp)
-    sci_name = tmp.replace('|', '_')
-    return sci_name
+
+def parse_gff_attributes(raw_attributes):
+    attrs = {}
+    for item in str(raw_attributes or "").split(";"):
+        if item == "":
+            continue
+        key, sep, value = item.partition("=")
+        if sep == "":
+            continue
+        attrs[key] = unquote(value)
+    return attrs
 
 def identify_attribute_key(args):
     seq_names = read_fasta_seqname(file_path=args.fasta_file)
-    sci_name = filename2sciname(file_name=args.fasta_file)
-    seq_names = seq_names.str.replace('^'+sci_name+'_', '', regex=True).sort_values().reset_index(drop=True)
+    candidate_seq_names = pandas.concat(
+        [seq_names.astype(str), get_gene_names(seq_names)],
+        ignore_index=True,
+    ).drop_duplicates().reset_index(drop=True)
     gff_cols = ['sequence','source','feature','start','end','score','strand','phase','attributes']
     gff = pandas.read_csv(args.gff_file, sep='\t', header=None, comment='#', low_memory=False, quoting=3)
     gff.columns = gff_cols
     gff = gff.loc[(gff['feature']==args.gff_feature),:].reset_index(drop=True)
     for i in gff.index:
-        attrs = {re.sub('=.*', '', item): re.sub('.*=', '', item) for item in gff.loc[i,'attributes'].split(';')}
+        attrs = parse_gff_attributes(gff.loc[i,'attributes'])
         for key, value in attrs.items():
-            if (value == seq_names).any():
+            if (value == candidate_seq_names).any():
                 return key
     return None
 

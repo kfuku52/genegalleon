@@ -10,7 +10,9 @@ labels <- c(
   "Dictyostelium_cf._discoideum.longestCDS.fa.gz",
   "Asimitellaria_furusei_var._furusei.cds.fa.gz",
   "homo_sapiens.GRCh38.cds.all.fa.gz",
-  "Arisaema_sp._aooni.dna.primary_assembly.fa.gz"
+  "Arisaema_sp._aooni.dna.primary_assembly.fa.gz",
+  "Citrus_\u00d7_limon.cds.fa.gz",
+  "Cenchrus_americanus_x_Cenchrus_purpureus.cds.fa.gz"
 )
 expected_keys <- c(
   "Asimitellaria_furusei_var._furusei",
@@ -22,7 +24,9 @@ expected_keys <- c(
   "Dictyostelium_cf._discoideum",
   "Asimitellaria_furusei_var._furusei",
   "homo_sapiens",
-  "Arisaema_sp._aooni"
+  "Arisaema_sp._aooni",
+  "Citrus_x_limon",
+  "Cenchrus_americanus_x_Cenchrus_purpureus"
 )
 actual_keys <- gg_species_label_from_filename(labels)
 if (!identical(actual_keys, expected_keys)) {
@@ -38,6 +42,10 @@ expected_display <- c(
 actual_display <- gg_species_display_from_key(expected_keys[1:4])
 if (!identical(actual_display, expected_display)) {
   stop(sprintf("Unexpected display labels: %s", paste(actual_display, collapse = ",")))
+}
+hybrid_display <- gg_species_display_from_key("Cenchrus_americanus_x_Cenchrus_purpureus")
+if (!identical(hybrid_display, "Cenchrus americanus x Cenchrus purpureus")) {
+  stop(sprintf("Unexpected hybrid display label: %s", hybrid_display))
 }
 
 duplicate_message <- tryCatch(
@@ -57,4 +65,12 @@ if (
   !grepl("furusei_b.tsv", duplicate_message, fixed = TRUE)
 ) {
   stop(sprintf("Duplicate guard did not report colliding files: %s", duplicate_message))
+}
+
+source("workflow/support/pgls_common.R")
+if (!identical(extract_species_label("Cenchrus_americanus_x_Cenchrus_purpureus_gene1"), "Cenchrus_americanus_x_Cenchrus_purpureus")) {
+  stop("pgls_common extract_species_label should preserve hybrid binomial species labels.")
+}
+if (!identical(scientific_name_from_label("Cenchrus_americanus_x_Cenchrus_purpureus"), "Cenchrus americanus x Cenchrus purpureus")) {
+  stop("pgls_common scientific_name_from_label should display hybrid binomial species labels.")
 }

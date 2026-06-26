@@ -19,7 +19,10 @@ def test_hog2og_long_cells_do_not_require_fixed_width_numpy_strings(tmp_path, mo
     mod = load_module()
     input_path = tmp_path / "N1.tsv"
     out_dir = tmp_path / "Orthogroups"
+    unrelated_tmp = tmp_path / "tmp.user.tsv"
     huge_cell = ", ".join(f"gene{i}" for i in range(6000))
+    unrelated_tmp.write_text("keep\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
 
     pandas.DataFrame(
         [
@@ -70,3 +73,4 @@ def test_hog2og_long_cells_do_not_require_fixed_width_numpy_strings(tmp_path, mo
     assert gene_counts.loc[1, "spA"] == 0
     assert gene_counts.loc[1, "spB"] == 1
     assert gene_counts.loc[1, "Total"] == 1
+    assert unrelated_tmp.read_text(encoding="utf-8") == "keep\n"

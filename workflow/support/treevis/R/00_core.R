@@ -18,6 +18,7 @@ get_df_tip = function(g) {
 
 treevis_taxonomic_genus_only_placeholders <- c("sp", "spp")
 treevis_taxonomic_proximity_qualifiers <- c("cf", "aff", "nr")
+treevis_taxonomic_hybrid_connectors <- c("x", "\u00d7", "hybrid")
 treevis_taxonomic_rank_aliases <- c(
     "subsp" = "subsp",
     "ssp" = "subsp",
@@ -54,6 +55,9 @@ treevis_taxonomic_rank_aliases <- c(
 
 treevis_taxonomic_token_key <- function(token) {
     key <- tolower(sub("[.]$", "", as.character(token)))
+    if (key %in% treevis_taxonomic_hybrid_connectors) {
+        return("x")
+    }
     if (key %in% treevis_taxonomic_genus_only_placeholders) {
         return("sp")
     }
@@ -63,6 +67,21 @@ treevis_taxonomic_token_key <- function(token) {
     key
 }
 
+treevis_is_hybrid_connector_token <- function(token) {
+    treevis_taxonomic_token_key(token) == "x"
+}
+
+treevis_is_hybrid_binomial_connector <- function(parts, index = 3L) {
+    if (length(parts) < index + 2L) {
+        return(FALSE)
+    }
+    if (!treevis_is_hybrid_connector_token(parts[[index]])) {
+        return(FALSE)
+    }
+    next_genus <- trimws(as.character(parts[[index + 1L]]))
+    nzchar(next_genus) && grepl("^[A-Z]", next_genus)
+}
+
 treevis_species_prefix_token_count <- function(parts) {
     parts <- parts[nzchar(parts)]
     if (length(parts) < 2) {
@@ -70,11 +89,17 @@ treevis_species_prefix_token_count <- function(parts) {
     }
     second <- treevis_taxonomic_token_key(parts[[2]])
     third <- if (length(parts) >= 3) treevis_taxonomic_token_key(parts[[3]]) else ""
+    if (second == "x") {
+        return(if (length(parts) >= 3) 3L else 2L)
+    }
     if (second %in% treevis_taxonomic_genus_only_placeholders) {
         return(if (length(parts) >= 3) 3L else 2L)
     }
     if (second %in% treevis_taxonomic_proximity_qualifiers) {
         return(if (length(parts) >= 3) 3L else 2L)
+    }
+    if (treevis_is_hybrid_binomial_connector(parts, 3L)) {
+        return(5L)
     }
     if (third %in% treevis_taxonomic_proximity_qualifiers) {
         return(3L)
@@ -96,7 +121,12 @@ treevis_extract_species_label <- function(x) {
     if (prefix_count == 0) {
         return("")
     }
-    paste(parts[seq_len(prefix_count)], collapse = "_")
+    selected <- parts[seq_len(prefix_count)]
+    is_hybrid_connector <- vapply(selected, treevis_is_hybrid_connector_token, logical(1), USE.NAMES = FALSE)
+    if (any(is_hybrid_connector)) {
+        selected[is_hybrid_connector] <- "x"
+    }
+    paste(selected, collapse = "_")
 }
 
 treevis_ortholog_prefix_target <- function(ortholog_prefix) {

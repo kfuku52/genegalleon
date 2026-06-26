@@ -25,6 +25,7 @@ tmp/
 *.sif
 
 # Pipeline outputs and local runtime state
+output/
 workspace/output/
 workspace/downloads/
 workspace/db/
