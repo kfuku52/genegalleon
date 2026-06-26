@@ -1,17 +1,35 @@
 # Agent / Developer Validation Policy
 
-Use the repository `genegalleon.sif` runtime for workflow validation, integration tests, R helper checks, and toolchain-dependent behavior.
+Use a GeneGalleon container runtime for workflow validation, integration tests, R helper checks, and toolchain-dependent behavior.
+
+On Linux/HPC hosts with Apptainer or Singularity, prefer the repository `genegalleon.sif` runtime.
+
+On macOS, where SIF execution is normally unavailable, use the Docker-backed GeneGalleon runtime instead. For validation of local code changes, prefer a Docker image built from the current repository rather than a stale public image:
+
+```bash
+BUILD_SIF=0 IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
+docker run --rm -i -v "$PWD:$PWD" -w "$PWD" local/genegalleon:dev python -m pytest -q workflow/tests/test_hgt_end_to_end.py
+docker run --rm -i -v "$PWD:$PWD" -w "$PWD" local/genegalleon:dev Rscript workflow/tests/test_treevis_main.R
+```
+
+GeneGalleon entrypoint wrappers can also dispatch through the Docker-backed singularity shim:
+
+```bash
+GG_CONTAINER_RUNTIME=docker \
+GG_CONTAINER_DOCKER_IMAGE=local/genegalleon:dev \
+bash workflow/gg_progress_summary_entrypoint.sh
+```
 
 Do not treat host-local Python, R, or command-line tool behavior as authoritative for GeneGalleon runtime compatibility. Host-local checks are acceptable for quick syntax or narrow static checks, but container-backed checks are the source of truth when dependencies matter.
 
-Preferred validation entrypoint:
+Preferred SIF validation entrypoint:
 
 ```bash
 bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_end_to_end.py
 bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_treevis_main.R
 ```
 
-If `genegalleon.sif` or an Apptainer/Singularity runtime is unavailable, report that clearly and do not conclude SIF compatibility from host-local results.
+If `genegalleon.sif` or an Apptainer/Singularity runtime is unavailable, report that clearly and do not conclude SIF compatibility from host-local results. If Docker is available, use Docker-backed container validation and report it as Docker/container validation rather than SIF validation. If no GeneGalleon container runtime is available, report that clearly and do not conclude runtime compatibility from host-local results.
 
 Do not add backward-compatibility workarounds for older dependency behavior.
 
