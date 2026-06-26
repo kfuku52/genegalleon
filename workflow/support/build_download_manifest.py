@@ -27,6 +27,12 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
+from format_species_provider_config import (
+    DEFAULT_INPUT_RELATIVE_DIRS,
+    DOWNLOAD_MANIFEST_BUILDER_PROVIDERS,
+    DOWNLOAD_MANIFEST_LEGACY_NCBI_PROVIDER_ALIASES,
+    ENSEMBL_LIKE_PROVIDERS,
+)
 from species_labeling import extract_species_label
 
 
@@ -73,32 +79,8 @@ GENBANK_EXTENSIONS = (
     ".genbank.gz",
 )
 
-PROVIDERS = (
-    "ensembl",
-    "ensemblplants",
-    "ensemblmetazoa",
-    "ensemblprotists",
-    "ncbi",
-    "ddbj",
-    "coge",
-    "cngb",
-    "gwh",
-    "citrusgenomedb",
-    "figshare",
-    "plantgarden",
-    "plantaedb",
-    "flybase",
-    "wormbase",
-    "vectorbase",
-    "fernbase",
-    "veupathdb",
-    "dictybase",
-    "insectbase",
-    "oryza_minuta",
-    "direct",
-    "local",
-)
-LEGACY_NCBI_PROVIDER_ALIASES = ("refseq", "genbank")
+PROVIDERS = DOWNLOAD_MANIFEST_BUILDER_PROVIDERS
+LEGACY_NCBI_PROVIDER_ALIASES = DOWNLOAD_MANIFEST_LEGACY_NCBI_PROVIDER_ALIASES
 FERNBASE_CONFIDENCE_MODE_FIELD = "fernbase_confidence_mode"
 FERNBASE_CONFIDENCE_MODE_HIGH_ONLY = "high-confidence only"
 FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED = "high-low combined"
@@ -108,41 +90,10 @@ FERNBASE_CONFIDENCE_MODE_CHOICES = (
 )
 FERNBASE_COMBINED_FILENAME_MARKER = "highlowcombined"
 
-DEFAULT_INPUT_RELATIVE_DIRS = {
-    "ensembl": Path("Ensembl") / "original_files",
-    "ensemblplants": Path("20230216_EnsemblPlants") / "original_files",
-    "ensemblmetazoa": Path("EnsemblMetazoa") / "original_files",
-    "ensemblprotists": Path("EnsemblProtists") / "original_files",
-    "ncbi": Path("NCBI_Genome") / "species_wise_original",
-    "ddbj": Path("DDBJ") / "species_wise_original",
-    "coge": Path("CoGe") / "species_wise_original",
-    "cngb": Path("CNGB") / "species_wise_original",
-    "gwh": Path("GWH") / "species_wise_original",
-    "citrusgenomedb": Path("CitrusGenomeDB") / "species_wise_original",
-    "figshare": Path("Figshare") / "species_wise_original",
-    "plantgarden": Path("PlantGARDEN") / "species_wise_original",
-    "plantaedb": Path("PlantaeDB") / "species_wise_original",
-    "flybase": Path("FlyBase") / "species_wise_original",
-    "wormbase": Path("WormBase") / "species_wise_original",
-    "vectorbase": Path("VectorBase") / "species_wise_original",
-    "fernbase": Path("FernBase") / "species_wise_original",
-    "veupathdb": Path("VEuPathDB") / "species_wise_original",
-    "dictybase": Path("dictyBase") / "species_wise_original",
-    "insectbase": Path("InsectBase") / "species_wise_original",
-    "oryza_minuta": Path("OryzaMinuta") / "species_wise_original",
-    "direct": Path("Direct") / "species_wise_original",
-    "local": Path("Local") / "species_wise_original",
-}
-ENSEMBL_LIKE_PROVIDERS = (
-    "ensembl",
-    "ensemblplants",
-    "ensemblmetazoa",
-    "ensemblprotists",
-)
 NCBI_MERGED_INPUT_RELATIVE_DIRS = (
-    Path("NCBI_Genome") / "species_wise_original",
-    Path("NCBI_RefSeq") / "species_wise_original",
-    Path("NCBI_GenBank") / "species_wise_original",
+    DEFAULT_INPUT_RELATIVE_DIRS["ncbi"],
+    DEFAULT_INPUT_RELATIVE_DIRS["refseq"],
+    DEFAULT_INPUT_RELATIVE_DIRS["genbank"],
 )
 
 MANIFEST_FIELDNAMES = (

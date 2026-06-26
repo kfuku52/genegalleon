@@ -167,12 +167,14 @@ jobs:
             workflow/support/shared_lock.py \
             workflow/support/format_species_provider_config.py \
             workflow/tests/test_gg_shared_lock_shell.py \
+            workflow/tests/test_shell_entrypoint_static.py \
             workflow/tests/test_shell_shared_lock_static.py
 
       - name: Shell static safety checks
         run: |
           python -m pytest -q \
             workflow/tests/test_shell_static_safety.py \
+            workflow/tests/test_shell_entrypoint_static.py \
             workflow/tests/test_shell_shared_lock_static.py
 
   r-script-parse:

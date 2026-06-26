@@ -93,6 +93,27 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "local",
 )
 
+DOWNLOAD_MANIFEST_BUILDER_PROVIDERS = tuple(
+    provider
+    for provider in DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS
+    if provider not in ("refseq", "genbank")
+)
+DOWNLOAD_MANIFEST_LEGACY_NCBI_PROVIDER_ALIASES = ("refseq", "genbank")
+
+ID_OPTIONS_FETCH_PROVIDERS = (
+    "ensembl",
+    "ensemblplants",
+    "ensemblmetazoa",
+    "ensemblprotists",
+    "flybase",
+    "wormbase",
+    "vectorbase",
+    "fernbase",
+    "veupathdb",
+    "insectbase",
+    "local",
+)
+
 ENSEMBL_LIKE_PROVIDERS = (
     "ensembl",
     "ensemblplants",

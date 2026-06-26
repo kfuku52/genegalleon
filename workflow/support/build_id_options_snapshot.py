@@ -16,50 +16,18 @@ try:
 except Exception:  # pragma: no cover
     load_workbook = None
 
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
 
-PROVIDERS = (
-    "ensembl",
-    "ensemblplants",
-    "ensemblmetazoa",
-    "ensemblprotists",
-    "ncbi",
-    "ddbj",
-    "coge",
-    "cngb",
-    "gwh",
-    "citrusgenomedb",
-    "figshare",
-    "plantgarden",
-    "plantaedb",
-    "flybase",
-    "wormbase",
-    "vectorbase",
-    "fernbase",
-    "veupathdb",
-    "dictybase",
-    "insectbase",
-    "oryza_minuta",
-    "direct",
-    "local",
+from format_species_provider_config import (  # noqa: E402
+    DEFAULT_INPUT_RELATIVE_DIRS,
+    DOWNLOAD_MANIFEST_BUILDER_PROVIDERS,
+    ID_OPTIONS_FETCH_PROVIDERS,
 )
 
-FETCH_PROVIDERS = (
-    "ensembl",
-    "ensemblplants",
-    "ensemblmetazoa",
-    "ensemblprotists",
-    "flybase",
-    "wormbase",
-    "vectorbase",
-    "fernbase",
-    "veupathdb",
-    "insectbase",
-    "local",
-)
-
-DEFAULT_INPUT_RELATIVE_DIRS = {
-    "local": Path("Local") / "species_wise_original",
-}
+PROVIDERS = DOWNLOAD_MANIFEST_BUILDER_PROVIDERS
+FETCH_PROVIDERS = ID_OPTIONS_FETCH_PROVIDERS
 
 MANIFEST_FIELDNAMES = (
     "provider",

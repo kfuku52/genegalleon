@@ -74,6 +74,16 @@ def read_comment_vml(path):
     return ""
 
 
+def test_build_download_manifest_reuses_shared_provider_config():
+    script_text = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "PROVIDERS = DOWNLOAD_MANIFEST_BUILDER_PROVIDERS" in script_text
+    assert "DEFAULT_INPUT_RELATIVE_DIRS = {" not in script_text
+    assert "ENSEMBL_LIKE_PROVIDERS = (" not in script_text
+    assert 'DEFAULT_INPUT_RELATIVE_DIRS["refseq"]' in script_text
+    assert 'DEFAULT_INPUT_RELATIVE_DIRS["genbank"]' in script_text
+
+
 def test_build_download_manifest_from_small_fixture_all(tmp_path):
     out = tmp_path / "download_manifest.xlsx"
     completed = run_script(

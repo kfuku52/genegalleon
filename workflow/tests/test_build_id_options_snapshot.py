@@ -16,6 +16,14 @@ def load_module():
     return module
 
 
+def test_build_id_options_snapshot_reuses_shared_provider_config():
+    module = load_module()
+
+    assert module.PROVIDERS == module.DOWNLOAD_MANIFEST_BUILDER_PROVIDERS
+    assert module.FETCH_PROVIDERS == module.ID_OPTIONS_FETCH_PROVIDERS
+    assert module.DEFAULT_INPUT_RELATIVE_DIRS["local"] == Path("Local") / "species_wise_original"
+
+
 def test_build_direct_catalog_from_manifest_rows_reads_xlsx(tmp_path):
     module = load_module()
     manifest_path = tmp_path / "direct_manifest.xlsx"
