@@ -165,17 +165,31 @@ jobs:
         run: |
           python -m ruff check \
             workflow/support/shared_lock.py \
+            workflow/support/amalgkit_metadata_accessions.py \
             workflow/support/format_species_provider_config.py \
+            workflow/support/format_species_provider_urls.py \
+            workflow/tests/test_ci_static.py \
+            workflow/tests/test_amalgkit_metadata_accessions.py \
+            workflow/tests/test_docker_runtime_shim.py \
+            workflow/tests/test_format_species_provider_urls.py \
             workflow/tests/test_gg_shared_lock_shell.py \
+            workflow/tests/test_shell_download_static.py \
             workflow/tests/test_shell_entrypoint_static.py \
-            workflow/tests/test_shell_shared_lock_static.py
+            workflow/tests/test_shell_shared_lock_static.py \
+            workflow/tests/test_shell_static_safety.py \
+            workflow/tests/test_shell_transcriptome_static.py \
+            workflow/tests/test_transcriptome_metadata_retry.py \
+            workflow/tests/shell_static_helpers.py
 
       - name: Shell static safety checks
         run: |
           python -m pytest -q \
+            workflow/tests/test_ci_static.py \
+            workflow/tests/test_shell_download_static.py \
             workflow/tests/test_shell_static_safety.py \
             workflow/tests/test_shell_entrypoint_static.py \
-            workflow/tests/test_shell_shared_lock_static.py
+            workflow/tests/test_shell_shared_lock_static.py \
+            workflow/tests/test_shell_transcriptome_static.py
 
   r-script-parse:
     runs-on: ubuntu-latest
@@ -243,16 +257,29 @@ jobs:
           set -euo pipefail
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           repo_name="$(basename "${GITHUB_REPOSITORY}")"
-          IMAGE="ghcr.io/${owner}/${repo_name}" \
-          TAG="${GITHUB_SHA::7}" \
-          ENGINE="${{ steps.runtime.outputs.engine }}" \
-          OUT="${GITHUB_WORKSPACE}/genegalleon.sif" \
-            bash container/apptainer_from_docker.sh || \
-          IMAGE="ghcr.io/${owner}/${repo_name}" \
-          TAG="latest" \
-          ENGINE="${{ steps.runtime.outputs.engine }}" \
-          OUT="${GITHUB_WORKSPACE}/genegalleon.sif" \
-            bash container/apptainer_from_docker.sh
+          image="ghcr.io/${owner}/${repo_name}"
+          sha_tag="sha-${GITHUB_SHA::7}"
+          selected_tag="${sha_tag}"
+          if ! IMAGE="${image}" \
+            TAG="${sha_tag}" \
+            ENGINE="${{ steps.runtime.outputs.engine }}" \
+            OUT="${GITHUB_WORKSPACE}/genegalleon.sif" \
+              bash container/apptainer_from_docker.sh; then
+            selected_tag="latest"
+            echo "::warning::GHCR image ${image}:${sha_tag} was unavailable; falling back to ${image}:latest for dependency-runtime validation."
+            IMAGE="${image}" \
+            TAG="${selected_tag}" \
+            ENGINE="${{ steps.runtime.outputs.engine }}" \
+            OUT="${GITHUB_WORKSPACE}/genegalleon.sif" \
+              bash container/apptainer_from_docker.sh
+          fi
+          {
+            echo "SIF validation image:"
+            echo "- ${image}:${selected_tag}"
+            if [[ "${selected_tag}" != "${sha_tag}" ]]; then
+              echo "- warning: commit-specific image ${image}:${sha_tag} was unavailable; latest was used."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Run SIF validation checks
         run: |

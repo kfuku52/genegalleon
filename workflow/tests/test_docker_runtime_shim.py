@@ -1,9 +1,8 @@
-from pathlib import Path
 import os
 import shlex
 import stat
 import subprocess
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / "workflow"
@@ -265,6 +264,7 @@ def test_progress_summary_entrypoint_auto_detects_pulled_public_image_without_ru
     env["GG_WRAPPER_BIN"] = str(wrapper_bin)
     env["GG_SITE_PROFILE"] = "default"
     env["gg_workspace_dir"] = str(workspace_dir)
+    env["gg_container_image_path"] = str(tmp_path / "missing.sif")
     env.pop("GG_CONTAINER_RUNTIME", None)
     env.pop("GG_CONTAINER_DOCKER_IMAGE", None)
 

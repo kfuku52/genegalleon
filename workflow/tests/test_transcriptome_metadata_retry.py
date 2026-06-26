@@ -1,33 +1,12 @@
 import csv
-import re
-import subprocess
 import sys
 from pathlib import Path
 
+SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CORE_SCRIPT = REPO_ROOT / "workflow" / "core" / "gg_transcriptome_generation_core.sh"
-
-
-def _function_body(text: str, function_name: str) -> str:
-    pattern = re.compile(rf"^\s*{re.escape(function_name)}\(\)\s*\{{", re.MULTILINE)
-    match = pattern.search(text)
-    if match is None:
-        raise AssertionError(f"Function not found: {function_name}")
-    start = match.start()
-    next_match = re.search(r"^\s*[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{", text[match.end():], re.MULTILINE)
-    if next_match is None:
-        return text[start:]
-    return text[start:match.end() + next_match.start()]
-
-
-def _embedded_python(function_name: str) -> str:
-    text = CORE_SCRIPT.read_text(encoding="utf-8")
-    body = _function_body(text, function_name)
-    match = re.search(r"<<'PY'\n(.*?)\nPY", body, re.DOTALL)
-    if match is None:
-        raise AssertionError(f"Embedded Python not found in function: {function_name}")
-    return match.group(1)
+import amalgkit_metadata_accessions as ama  # noqa: E402
 
 
 def test_merge_metadata_tables_by_run_appends_new_columns_from_relaxed_metadata(tmp_path):
@@ -57,15 +36,7 @@ def test_merge_metadata_tables_by_run_appends_new_columns_from_relaxed_metadata(
         encoding="utf-8",
     )
 
-    completed = subprocess.run(
-        [sys.executable, "-", str(primary_path), str(extra_path), str(output_path)],
-        input=_embedded_python("merge_metadata_tables_by_run"),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    ama.merge_metadata_tables_by_run(primary_path, extra_path, output_path)
 
     with output_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")

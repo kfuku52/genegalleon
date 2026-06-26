@@ -401,96 +401,23 @@ extract_requested_accessions_missing_from_metadata() {
   local metadata_table=$1
   local accession_file=$2
 
-  python - "${metadata_table}" "${accession_file}" <<'PY'
-import csv
-import sys
-from pathlib import Path
-
-metadata_path = Path(sys.argv[1])
-accession_path = Path(sys.argv[2])
-
-requested = []
-seen = set()
-with accession_path.open("rt", encoding="utf-8") as handle:
-    for raw_line in handle:
-        accession = raw_line.strip()
-        if not accession or accession in seen:
-            continue
-        seen.add(accession)
-        requested.append(accession)
-
-found = set()
-if metadata_path.exists() and metadata_path.stat().st_size > 0:
-    with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        fieldnames = reader.fieldnames or []
-        if "run" in fieldnames:
-            for row in reader:
-                run = str(row.get("run", "") or "").strip()
-                if run:
-                    found.add(run)
-
-for accession in requested:
-    if accession not in found:
-        print(accession)
-PY
+  python "${gg_support_dir}/amalgkit_metadata_accessions.py" \
+    missing \
+    "${metadata_table}" \
+    "${accession_file}"
 }
 
-# TODO(kfuku, 2026-04+): Remove this genegalleon-side metadata retry wrapper
-# once the bundled amalgkit release natively preserves recovered transcriptomic
-# accessions without requiring shell-side filtering and merge repair.
 extract_transcriptomic_rows_for_requested_accessions() {
   local metadata_source=$1
   local accession_file=$2
   local output_file=$3
   local raw_output_file="${output_file}.raw.$$"
 
-  python - "${metadata_source}" "${accession_file}" "${raw_output_file}" <<'PY'
-import csv
-import sys
-from pathlib import Path
-
-metadata_path = Path(sys.argv[1])
-accession_path = Path(sys.argv[2])
-output_path = Path(sys.argv[3])
-
-requested = []
-requested_set = set()
-with accession_path.open("rt", encoding="utf-8") as handle:
-    for raw_line in handle:
-        accession = raw_line.strip()
-        if not accession or accession in requested_set:
-            continue
-        requested.append(accession)
-        requested_set.add(accession)
-
-with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
-    reader = csv.DictReader(handle, delimiter="\t")
-    fieldnames = reader.fieldnames
-    if not fieldnames:
-        raise SystemExit("Metadata table is missing a header: {}".format(metadata_path))
-    if "run" not in fieldnames:
-        raise SystemExit("Metadata table is missing required 'run' column: {}".format(metadata_path))
-
-    rows = []
-    for row in reader:
-        run = str(row.get("run", "") or "").strip()
-        lib_source = str(row.get("lib_source", "") or "").strip().lower()
-        lib_strategy = str(row.get("lib_strategy", "") or "").strip().lower()
-        is_transcriptomic = (
-            lib_source == "transcriptomic"
-            or lib_strategy in {"rna-seq", "est", "clone"}
-        )
-        if run in requested_set and is_transcriptomic:
-            rows.append(row)
-
-output_path.parent.mkdir(parents=True, exist_ok=True)
-with output_path.open("wt", encoding="utf-8", newline="") as handle:
-    writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
-    writer.writeheader()
-    for row in rows:
-        writer.writerow(row)
-PY
+  python "${gg_support_dir}/amalgkit_metadata_accessions.py" \
+    extract-transcriptomic \
+    "${metadata_source}" \
+    "${accession_file}" \
+    "${raw_output_file}"
 
   mv_out < <(sed -e "s/\t\t\tno\t/\tyes\tyes\tno\t/g" "${raw_output_file}") "${output_file}"
   rm -f -- "${raw_output_file}"
@@ -501,55 +428,11 @@ merge_metadata_tables_by_run() {
   local extra_table=$2
   local output_file=$3
 
-  python - "${primary_table}" "${extra_table}" "${output_file}" <<'PY'
-import csv
-import sys
-from pathlib import Path
-
-primary_path = Path(sys.argv[1])
-extra_path = Path(sys.argv[2])
-output_path = Path(sys.argv[3])
-
-fieldnames = []
-seen_fieldnames = set()
-rows = []
-seen_runs = set()
-
-for path in (primary_path, extra_path):
-    if not path.exists() or path.stat().st_size == 0:
-        continue
-    with path.open("rt", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        if not reader.fieldnames:
-            continue
-        for fieldname in reader.fieldnames:
-            if fieldname not in seen_fieldnames:
-                fieldnames.append(fieldname)
-                seen_fieldnames.add(fieldname)
-        for row in reader:
-            run = str(row.get("run", "") or "").strip()
-            dedupe_key = run or tuple((name, row.get(name, "")) for name in reader.fieldnames)
-            if dedupe_key in seen_runs:
-                continue
-            seen_runs.add(dedupe_key)
-            rows.append(row)
-
-if len(fieldnames) == 0:
-    raise SystemExit("Could not determine metadata header from {} or {}".format(primary_path, extra_path))
-
-output_path.parent.mkdir(parents=True, exist_ok=True)
-with output_path.open("wt", encoding="utf-8", newline="") as handle:
-    writer = csv.DictWriter(
-        handle,
-        fieldnames=fieldnames,
-        delimiter="\t",
-        lineterminator="\n",
-        extrasaction="ignore",
-    )
-    writer.writeheader()
-    for row in rows:
-        writer.writerow({name: row.get(name, "") or "" for name in fieldnames})
-PY
+  python "${gg_support_dir}/amalgkit_metadata_accessions.py" \
+    merge-by-run \
+    "${primary_table}" \
+    "${extra_table}" \
+    "${output_file}"
 }
 
 repair_private_fastq_metadata_scientific_names() {

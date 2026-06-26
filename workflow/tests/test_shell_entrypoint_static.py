@@ -1,36 +1,17 @@
 import re
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW_DIR = REPO_ROOT / "workflow"
-
-
-def _read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
-
-
-def _function_body(text: str, function_name: str) -> str:
-    pattern = re.compile(rf"^\s*{re.escape(function_name)}\(\)\s*\{{", re.MULTILINE)
-    match = pattern.search(text)
-    if match is None:
-        raise AssertionError(f"Function not found: {function_name}")
-    start = match.start()
-    next_match = re.search(r"^\s*[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{", text[match.end() :], re.MULTILINE)
-    if next_match is None:
-        return text[start:]
-    return text[start : match.end() + next_match.start()]
-
-
-def _entrypoint_scheduler_header(script: Path) -> str:
-    text = _read_text(script)
-    marker = "set -euo pipefail"
-    assert marker in text, f"Missing strict mode marker in {script}"
-    return text.split(marker, 1)[0]
+from shell_static_helpers import (
+    REPO_ROOT,
+    WORKFLOW_DIR,
+    entrypoint_scheduler_header,
+    function_body,
+    read_text,
+)
 
 
 def test_set_singularity_command_supports_apptainer_fallback():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
+    text = read_text(util_path)
     assert "gg_detect_container_runtime_binary()" in text
     assert "command -v singularity" in text
     assert "command -v apptainer" in text
@@ -40,14 +21,14 @@ def test_set_singularity_command_supports_apptainer_fallback():
 def test_site_runtime_exec_command_uses_output_parameter():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     site_runtime_path = WORKFLOW_DIR / "support" / "gg_site_runtime.sh"
-    util_text = _read_text(util_path)
-    site_text = _read_text(site_runtime_path)
-    site_body = _function_body(site_text, "gg_site_container_shell_command")
-    helper_body = _function_body(site_text, "gg_set_command_array")
+    util_text = read_text(util_path)
+    site_text = read_text(site_runtime_path)
+    site_body = function_body(site_text, "gg_site_container_shell_command")
+    helper_body = function_body(site_text, "gg_set_command_array")
     assert "local out_var=${2:-}" in site_body
     assert 'gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1' in site_body
     assert 'gg_set_command_array "${out_var}" "${runtime_bin}" exec --contain || return 1' in site_body
-    assert "printf -v \"${out_var}\" '%s' \"${command_text}\"" not in site_body
+    assert 'printf -v "${out_var}" \'%s\' "${command_text}"' not in site_body
     assert 'echo "${runtime_bin} shell"' not in site_body
     assert 'echo "${runtime_bin} shell --contain"' not in site_body
     assert 'echo "${runtime_bin} exec"' not in site_body
@@ -64,7 +45,7 @@ def test_site_runtime_exec_command_uses_output_parameter():
 
 def test_set_singularityenv_does_not_dump_singularityenv_values():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
+    text = read_text(util_path)
     assert 'set | grep "^SINGULARITY"' not in text
     assert "forwarded_container_env_vars" in text
 
@@ -73,17 +54,16 @@ def test_all_entrypoints_call_set_singularity_command():
     entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
     assert entrypoints, "No entrypoint scripts were found."
     for script in entrypoints:
-        text = _read_text(script)
-        assert (
-            "set_singularity_command" in text
-            or "gg_entrypoint_prepare_container_runtime" in text
-        ), f"Missing container runtime preparation call: {script}"
+        text = read_text(script)
+        assert "set_singularity_command" in text or "gg_entrypoint_prepare_container_runtime" in text, (
+            f"Missing container runtime preparation call: {script}"
+        )
 
 
 def test_gg_trigger_versions_dump_is_runtime_agnostic():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "gg_trigger_versions_dump")
+    text = read_text(util_path)
+    body = function_body(text, "gg_trigger_versions_dump")
     assert 'export SINGULARITYENV_GG_VERSION="${gg_version}"' in body
     assert 'export APPTAINERENV_GG_VERSION="${gg_version}"' in body
     assert 'command -v "${container_runtime_bin}"' in body
@@ -92,21 +72,21 @@ def test_gg_trigger_versions_dump_is_runtime_agnostic():
     assert '"${container_runtime_bin}" inspect "${gg_container_image_path}"' in body
     assert '"${container_runtime_bin}" version || {' in body
     assert 'singularity inspect "${gg_container_image_path}"' not in body
-    assert 'singularity version || {' not in body
+    assert "singularity version || {" not in body
 
 
 def test_entrypoint_activate_container_runtime_prints_version_summary():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "gg_entrypoint_activate_container_runtime")
+    text = read_text(util_path)
+    body = function_body(text, "gg_entrypoint_activate_container_runtime")
     assert "gg_entrypoint_print_version_summary" in body
 
 
 def test_container_build_metadata_includes_repo_version_label():
-    dockerfile = _read_text(REPO_ROOT / "container" / "Dockerfile")
-    buildx = _read_text(REPO_ROOT / "container" / "buildx.sh")
-    local_build = _read_text(REPO_ROOT / "container" / "apptainer_local_build.sh")
-    definition_template = _read_text(REPO_ROOT / "container" / "apptainer_local_build.def.template")
+    dockerfile = read_text(REPO_ROOT / "container" / "Dockerfile")
+    buildx = read_text(REPO_ROOT / "container" / "buildx.sh")
+    local_build = read_text(REPO_ROOT / "container" / "apptainer_local_build.sh")
+    definition_template = read_text(REPO_ROOT / "container" / "apptainer_local_build.def.template")
 
     assert 'org.opencontainers.image.version="${GG_VERSION}"' in dockerfile
     assert '--build-arg GG_VERSION="${gg_version}"' in buildx
@@ -115,11 +95,11 @@ def test_container_build_metadata_includes_repo_version_label():
 
 
 def test_container_defaults_pin_amalgkit_to_master():
-    dockerfile = _read_text(REPO_ROOT / "container" / "Dockerfile")
-    buildx = _read_text(REPO_ROOT / "container" / "buildx.sh")
-    local_build = _read_text(REPO_ROOT / "container" / "apptainer_local_build.sh")
-    ensure_latest = _read_text(REPO_ROOT / "container" / "scripts" / "ensure_kfuku52_tools_latest.sh")
-    capability_matrix = _read_text(REPO_ROOT / "container" / "CAPABILITY_MATRIX.md")
+    dockerfile = read_text(REPO_ROOT / "container" / "Dockerfile")
+    buildx = read_text(REPO_ROOT / "container" / "buildx.sh")
+    local_build = read_text(REPO_ROOT / "container" / "apptainer_local_build.sh")
+    ensure_latest = read_text(REPO_ROOT / "container" / "scripts" / "ensure_kfuku52_tools_latest.sh")
+    capability_matrix = read_text(REPO_ROOT / "container" / "CAPABILITY_MATRIX.md")
 
     assert 'ARG KFU52_AMALGKIT_AUTO_SELECT_REF="0"' in dockerfile
     assert 'ARG KFU52_AMALGKIT_REPO_REF="master"' in dockerfile
@@ -135,8 +115,8 @@ def test_container_defaults_pin_amalgkit_to_master():
 
 def test_run_container_shell_script_uses_exec_with_bash_stdin_bridge():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "gg_run_container_shell_script")
+    text = read_text(util_path)
+    body = function_body(text, "gg_run_container_shell_script")
     assert "subcommand=$(gg_container_shell_command_subcommand || true)" in body
     assert '"${singularity_command[@]}" "${image_path}" bash -s -- < "${script_path}"' in body
     assert '${singularity_command} "${image_path}" bash -s -- < "${script_path}"' in body
@@ -147,7 +127,7 @@ def test_entrypoints_stream_core_scripts_via_container_shell_helper():
     entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
     assert entrypoints, "No entrypoint scripts were found."
     for script in entrypoints:
-        text = _read_text(script)
+        text = read_text(script)
         if "gg_core_dir=" not in text:
             continue
         assert 'gg_run_container_shell_script "${gg_container_image_path}"' in text
@@ -156,7 +136,7 @@ def test_entrypoints_stream_core_scripts_via_container_shell_helper():
 
 def test_progress_summary_entrypoint_uses_auto_forwarding_and_normalized_nslots():
     entrypoint = WORKFLOW_DIR / "gg_progress_summary_entrypoint.sh"
-    text = _read_text(entrypoint)
+    text = read_text(entrypoint)
 
     assert "forward_config_vars_to_container_env()" not in text
     assert 'gg_entrypoint_name="gg_progress_summary_entrypoint.sh"' in text
@@ -172,7 +152,7 @@ def test_progress_summary_entrypoint_uses_auto_forwarding_and_normalized_nslots(
 
 def test_input_generation_entrypoint_forwards_env_driven_overrides():
     entrypoint = WORKFLOW_DIR / "gg_input_generation_entrypoint.sh"
-    text = _read_text(entrypoint)
+    text = read_text(entrypoint)
 
     assert 'gg_apply_registered_env_overrides "${gg_entrypoint_name}"' in text
     assert "gg_apply_named_env_overrides \\" not in text
@@ -184,7 +164,7 @@ def test_input_generation_entrypoint_forwards_env_driven_overrides():
 
 def test_input_generation_entrypoint_is_array_ready():
     entrypoint = WORKFLOW_DIR / "gg_input_generation_entrypoint.sh"
-    text = _read_text(entrypoint)
+    text = read_text(entrypoint)
 
     assert "#SBATCH -a 1" in text
     assert "#$ -t 1" in text
@@ -197,15 +177,15 @@ def test_input_generation_entrypoint_is_array_ready():
 def test_input_generation_trait_profile_preset_is_wired():
     entrypoint = WORKFLOW_DIR / "gg_input_generation_entrypoint.sh"
     core = WORKFLOW_DIR / "core" / "gg_input_generation_core.sh"
-    entry_text = _read_text(entrypoint)
-    core_text = _read_text(core)
+    entry_text = read_text(entrypoint)
+    core_text = read_text(core)
 
     assert 'trait_profile="none"' in entry_text
     assert "run_cds_fx2tab=1" in entry_text
     assert "run_species_busco=1" in entry_text
     assert "run_multispecies_summary=1" in entry_text
     assert "gg_apply_registered_env_overrides" in entry_text
-    assert "trait_profile" in _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    assert "trait_profile" in read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
     assert "GG_INPUT_" not in core_text
     assert "apply_env_override()" not in core_text
     assert 'case "${trait_profile}" in' in core_text
@@ -215,7 +195,7 @@ def test_input_generation_trait_profile_preset_is_wired():
 
 def test_gg_util_has_common_forward_config_export_helpers():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
+    text = read_text(util_path)
     assert "gg_export_var_to_container_env_if_set()" in text
     assert "gg_apply_named_env_overrides()" in text
     assert "gg_apply_registered_env_overrides()" in text
@@ -227,16 +207,16 @@ def test_gg_util_has_common_forward_config_export_helpers():
     assert "gg_prepare_entrypoint_runtime_snapshot()" in text
     assert "gg_entrypoint_runtime_snapshot_dir()" in text
     assert "gg_resolve_physical_path()" in text
-    body = _function_body(text, "forward_config_vars_to_container_env")
+    body = function_body(text, "forward_config_vars_to_container_env")
     assert "gg_print_entrypoint_config_vars" in body
     assert 'gg_export_var_to_container_env_if_set "gg_debug_mode"' in body
-    body = _function_body(text, "gg_apply_registered_env_overrides")
+    body = function_body(text, "gg_apply_registered_env_overrides")
     assert "gg_print_entrypoint_config_vars" in body
     assert "gg_entrypoint_env_override_prefix" in body
 
 
 def test_entrypoint_config_var_registry_covers_all_entrypoints():
-    registry_text = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    registry_text = read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
     entrypoints = sorted(path.name for path in WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
     assert entrypoints
     for entrypoint_name in entrypoints:
@@ -253,7 +233,7 @@ def test_entrypoints_define_scheduler_sections_in_canonical_order():
         '# Number of parallel batch jobs ("-t 1-N" in SGE or "--array 1-N" in SLURM):',
     ]
     for script in entrypoints:
-        header = _entrypoint_scheduler_header(script)
+        header = entrypoint_scheduler_header(script)
         positions = []
         for token in section_tokens:
             assert token in header, f"Missing scheduler header section {token!r} in {script}"
@@ -265,7 +245,7 @@ def test_entrypoints_use_active_scheduler_directives_in_header_template():
     entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
     assert entrypoints, "No entrypoint scripts were found."
     for script in entrypoints:
-        header = _entrypoint_scheduler_header(script)
+        header = entrypoint_scheduler_header(script)
         assert "##PBS" not in header, f"Use active #PBS directives in {script}"
         assert "##SBATCH -N" not in header, f"Drop legacy commented node-count example from {script}"
         assert "##SBATCH -n" not in header, f"Drop legacy commented task-count example from {script}"
@@ -278,7 +258,7 @@ def test_entrypoints_use_shared_slurm_partition_fallbacks():
     entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
     assert entrypoints, "No entrypoint scripts were found."
     for script in entrypoints:
-        header = _entrypoint_scheduler_header(script)
+        header = entrypoint_scheduler_header(script)
         assert "#SBATCH -p epyc,rome,medium" in header, f"Missing shared Slurm partitions in {script}"
 
 
@@ -287,7 +267,7 @@ def test_entrypoint_scheduler_directives_are_left_aligned():
     assert entrypoints, "No entrypoint scripts were found."
     bad_lines = []
     for script in entrypoints:
-        for lineno, line in enumerate(_entrypoint_scheduler_header(script).splitlines(), start=1):
+        for lineno, line in enumerate(entrypoint_scheduler_header(script).splitlines(), start=1):
             if re.match(r"^ (?:#SBATCH|#PBS|#\$)", line):
                 bad_lines.append(f"{script}:{lineno}: {line}")
     assert not bad_lines, "Left-align scheduler directives in entrypoint headers:\n" + "\n".join(bad_lines)
@@ -295,8 +275,8 @@ def test_entrypoint_scheduler_directives_are_left_aligned():
 
 def test_gg_util_uses_explicit_conda_shell_initialization():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "gg_initialize_conda_shell")
+    text = read_text(util_path)
+    body = function_body(text, "gg_initialize_conda_shell")
     assert "/home/.bashrc" not in text
     assert "micromamba shell hook --shell bash" in body
     assert "conda() {" in text
@@ -306,8 +286,8 @@ def test_gg_util_uses_explicit_conda_shell_initialization():
 
 def test_gg_add_container_bind_mount_skips_duplicate_destinations():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "gg_add_container_bind_mount")
+    text = read_text(util_path)
+    body = function_body(text, "gg_add_container_bind_mount")
     assert "gg_container_mount_destination()" in text
     assert "gg_container_bind_destination_exists()" in text
     assert 'if gg_container_bind_destination_exists "${mount_spec}"; then' in body

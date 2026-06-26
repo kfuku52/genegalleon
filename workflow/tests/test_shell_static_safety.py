@@ -1,48 +1,32 @@
-from pathlib import Path
+# ruff: noqa: E501
+
 import re
-import subprocess
+from pathlib import Path
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW_DIR = REPO_ROOT / "workflow"
-CORE_DIR = WORKFLOW_DIR / "core"
-CONTAINER_SCRIPTS_DIR = REPO_ROOT / "container" / "scripts"
-GITHUB_WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
-
-
-def _read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
-
-
-def _function_body(text: str, function_name: str) -> str:
-    pattern = re.compile(rf"^\s*{re.escape(function_name)}\(\)\s*\{{", re.MULTILINE)
-    match = pattern.search(text)
-    if match is None:
-        raise AssertionError(f"Function not found: {function_name}")
-    start = match.start()
-    next_match = re.search(r"^\s*[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{", text[match.end():], re.MULTILINE)
-    if next_match is None:
-        return text[start:]
-    return text[start:match.end() + next_match.start()]
-
-
-def _workflow_shell_scripts():
-    return sorted(WORKFLOW_DIR.rglob("*.sh"))
-
-
-def _container_shell_scripts():
-    return sorted(CONTAINER_SCRIPTS_DIR.rglob("*.sh"))
-
-
-def _core_and_entrypoint_scripts():
-    core_scripts = sorted(CORE_DIR.glob("*.sh"))
-    entrypoint_scripts = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
-    return core_scripts + entrypoint_scripts
-
-
-def _strict_mode_header(script: Path) -> str:
-    max_lines = 60 if script.name.endswith("_entrypoint.sh") else 30
-    return "\n".join(_read_text(script).splitlines()[:max_lines])
+from shell_static_helpers import (
+    CONTAINER_SCRIPTS_DIR,
+    CORE_DIR,
+    GITHUB_WORKFLOWS_DIR,
+    WORKFLOW_DIR,
+)
+from shell_static_helpers import (
+    container_shell_scripts as _container_shell_scripts,
+)
+from shell_static_helpers import (
+    core_and_entrypoint_scripts as _core_and_entrypoint_scripts,
+)
+from shell_static_helpers import (
+    function_body as _function_body,
+)
+from shell_static_helpers import (
+    read_text as _read_text,
+)
+from shell_static_helpers import (
+    strict_mode_header as _strict_mode_header,
+)
+from shell_static_helpers import (
+    workflow_shell_scripts as _workflow_shell_scripts,
+)
 
 
 def _entrypoint_modify_block_assignments(script: Path):
@@ -190,20 +174,20 @@ def test_conda_activation_temporarily_disables_nounset():
     text = _read_text(WORKFLOW_DIR / "support" / "gg_util.sh")
     activate_body = _function_body(text, "gg_activate_conda_env")
     deactivate_body = _function_body(text, "gg_deactivate_conda_env")
-    assert 'if [[ $- == *u* ]]; then' in activate_body
-    assert 'set +u' in activate_body
+    assert "if [[ $- == *u* ]]; then" in activate_body
+    assert "set +u" in activate_body
     assert 'conda activate "${conda_env}"' in activate_body
-    assert 'set -u' in activate_body
-    assert 'if [[ $- == *u* ]]; then' in deactivate_body
-    assert 'set +u' in deactivate_body
-    assert 'conda deactivate >/dev/null 2>&1 || true' in deactivate_body
-    assert 'set -u' in deactivate_body
+    assert "set -u" in activate_body
+    assert "if [[ $- == *u* ]]; then" in deactivate_body
+    assert "set +u" in deactivate_body
+    assert "conda deactivate >/dev/null 2>&1 || true" in deactivate_body
+    assert "set -u" in deactivate_body
 
 
 def test_prepare_cmd_runtime_makes_ulimit_best_effort():
     text = _read_text(WORKFLOW_DIR / "support" / "gg_util.sh")
     body = _function_body(text, "gg_prepare_cmd_runtime")
-    assert 'ulimit -s unlimited 2>/dev/null || true' in body
+    assert "ulimit -s unlimited 2>/dev/null || true" in body
 
 
 def test_busco_download_lock_is_per_lineage_shared_artifact_lock():
@@ -253,9 +237,7 @@ def test_workflow_and_container_scripts_do_not_use_for_in_seq_command_substituti
     scripts = _workflow_shell_scripts() + _container_shell_scripts()
     for script in scripts:
         text = _read_text(script)
-        assert pattern.search(text) is None, (
-            f"Use arithmetic for-loops instead of `for ... in $(seq ...)`: {script}"
-        )
+        assert pattern.search(text) is None, f"Use arithmetic for-loops instead of `for ... in $(seq ...)`: {script}"
 
 
 def test_workflow_and_container_scripts_do_not_use_for_in_command_substitution():
@@ -273,9 +255,7 @@ def test_workflow_and_container_scripts_avoid_nonportable_awk_match_array_captur
     scripts = _workflow_shell_scripts() + _container_shell_scripts()
     for script in scripts:
         text = _read_text(script)
-        assert pattern.search(text) is None, (
-            f"Avoid awk match(..., ..., array) for portability: {script}"
-        )
+        assert pattern.search(text) is None, f"Avoid awk match(..., ..., array) for portability: {script}"
 
 
 def test_no_unquoted_cd_var_in_set_e_scripts():
@@ -327,7 +307,10 @@ def test_support_python_shebangs_use_python3():
 def test_progress_summary_entrypoint_runs_core_script_in_container():
     entrypoint = WORKFLOW_DIR / "gg_progress_summary_entrypoint.sh"
     text = _read_text(entrypoint)
-    assert 'gg_runtime_core_script="$(gg_prepare_entrypoint_runtime_snapshot "${gg_entrypoint_name}" "${gg_core_dir}/gg_progress_summary_core.sh")"' in text
+    assert (
+        'gg_runtime_core_script="$(gg_prepare_entrypoint_runtime_snapshot "${gg_entrypoint_name}" "${gg_core_dir}/gg_progress_summary_core.sh")"'
+        in text
+    )
     assert 'gg_run_container_shell_script "${gg_container_image_path}" "${gg_runtime_core_script}"' in text
     assert "orthogroup_output_summary.py" not in text
     assert "transcriptome_assembly_output_summary.py" not in text
@@ -340,7 +323,7 @@ def test_no_known_unquoted_query_gene_file_expansions():
         "head --bytes 1 ${file_query_gene}",
         "seqkit stats --tabular ${file_query_gene}",
         "seqkit translate --allow-unknown-codon --transl-table ${genetic_code} --threads ${GG_TASK_CPUS} ${file_query_gene}",
-        "cp_out ${file_query_gene} ${dir_output_active}/query_gene/$(basename \"${file_query_gene}\")",
+        'cp_out ${file_query_gene} ${dir_output_active}/query_gene/$(basename "${file_query_gene}")',
     ]
     for token in banned_tokens:
         assert token not in text, f"Found unquoted file_query_gene expansion: {token}"
@@ -354,7 +337,7 @@ def test_no_known_unquoted_file_sp_trait_expansions():
         "if [[ -s ${file_sp_trait} ]]; then",
         "if head -n1 ${file_sp_trait} | grep -q ' '; then",
         "sed '2,$ s/\\t/_.*\\t/' ${file_sp_trait} > \"foreground.tsv\"",
-        "sed '2,$ s/\\t/_.*\\t/' \"${file_sp_trait}\" > \"foreground.tsv\"",
+        'sed \'2,$ s/\\t/_.*\\t/\' "${file_sp_trait}" > "foreground.tsv"',
         "sed '2,$ s/\\t/_.*\\t/' species_trait_binary.tsv > foreground.tsv",
         "\t${file_sp_trait}",
     ]
@@ -408,12 +391,8 @@ def test_no_unquoted_path_like_option_expansions_in_core_scripts():
             stripped = line.lstrip()
             if stripped.startswith("#"):
                 continue
-            assert brace_pat.search(line) is None, (
-                f"Unquoted path-like option expansion in {script}:{lineno}: {line}"
-            )
-            assert plain_pat.search(line) is None, (
-                f"Unquoted path-like option expansion in {script}:{lineno}: {line}"
-            )
+            assert brace_pat.search(line) is None, f"Unquoted path-like option expansion in {script}:{lineno}: {line}"
+            assert plain_pat.search(line) is None, f"Unquoted path-like option expansion in {script}:{lineno}: {line}"
 
 
 def test_no_unquoted_infile_option_expansions_in_core_scripts():
@@ -423,9 +402,7 @@ def test_no_unquoted_infile_option_expansions_in_core_scripts():
             stripped = line.lstrip()
             if stripped.startswith("#"):
                 continue
-            assert pattern.search(line) is None, (
-                f"Unquoted --infile expansion in {script}:{lineno}: {line}"
-            )
+            assert pattern.search(line) is None, f"Unquoted --infile expansion in {script}:{lineno}: {line}"
 
 
 def test_no_unquoted_outfile_option_expansions_in_core_scripts():
@@ -435,9 +412,7 @@ def test_no_unquoted_outfile_option_expansions_in_core_scripts():
             stripped = line.lstrip()
             if stripped.startswith("#"):
                 continue
-            assert pattern.search(line) is None, (
-                f"Unquoted --outfile expansion in {script}:{lineno}: {line}"
-            )
+            assert pattern.search(line) is None, f"Unquoted --outfile expansion in {script}:{lineno}: {line}"
 
 
 def test_no_eval_in_gg_test_shell_commands():
@@ -460,8 +435,8 @@ def test_print_softmasked_percentage_handles_zero_length_input_safely():
     assert "tr -d '\\n'" in body
     assert 'if [[ "${num_total_bp}" -eq 0 ]]; then' in body
     assert 'echo "0.0% masked (0/0 bp)"' in body
-    assert 'python -c' in body
-    assert ' ${num_masked_bp} ${num_total_bp}' not in body
+    assert "python -c" in body
+    assert " ${num_masked_bp} ${num_total_bp}" not in body
 
 
 def test_is_output_older_than_inputs_uses_compgen_variable_listing():
@@ -532,11 +507,11 @@ def test_gene_evolution_scripts_do_not_use_removed_run_pgls_gene_tree_toggle():
 def test_gene_evolution_core_passes_gg_task_cpus_to_kfl1ou():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    assert 'CPU_PER_HOST=' not in text
+    assert "CPU_PER_HOST=" not in text
     assert 'cpu_pick="${GG_TASK_CPUS}"' not in text
     assert '--nslots="${GG_TASK_CPUS}"' in text
-    assert 'taskset' not in text
-    assert 'cpu_id=$(python -c' not in text
+    assert "taskset" not in text
+    assert "cpu_id=$(python -c" not in text
     assert '"${l1ou_cmd[@]}"' in text
 
 
@@ -544,23 +519,23 @@ def test_gene_evolution_core_uses_kfl1ou_wrapper_with_supported_args_only():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     block_start = text.index('task="l1ou"')
-    block_end = text.index('mv_out fit_ind.RData', block_start)
+    block_end = text.index("mv_out fit_ind.RData", block_start)
     l1ou_block = text[block_start:block_end]
 
-    assert 'detect_OU_shift_l1ou.r' not in l1ou_block
+    assert "detect_OU_shift_l1ou.r" not in l1ou_block
     assert 'Rscript "${gg_support_dir}/detect_OU_shift_kfl1ou.r"' in l1ou_block
     assert '--require_internal_node_labels="${require_internal_node_labels:-1}"' not in l1ou_block
     assert '--clade_collapse_similarity_method="${clade_collapse_similarity_method}"' not in l1ou_block
     assert '--clade_collapse_similarity_threshold="${clade_collapse_similarity_threshold}"' not in l1ou_block
-    assert '--ceil_negative=0' not in l1ou_block
+    assert "--ceil_negative=0" not in l1ou_block
     assert '--replicate_sep="_"' in l1ou_block
 
 
 def test_detect_ou_shift_kfl1ou_enables_measurement_error_by_default():
     script = WORKFLOW_DIR / "support" / "detect_OU_shift_kfl1ou.r"
     text = _read_text(script)
-    assert 'measurement_error = TRUE' in text
-    assert 'input_error = input_error_fit' in text
+    assert "measurement_error = TRUE" in text
+    assert "input_error = input_error_fit" in text
 
 
 def test_gene_evolution_core_uses_explicit_ne_and_grouped_logic_for_tree_pruning_gate():
@@ -754,16 +729,19 @@ def test_gg_trigger_versions_dump_reuses_one_log_per_container():
     body = _function_body(text, "gg_trigger_versions_dump")
     assert 'log_file="${versions_dir}/container.${container_key_hash}.versions.log"' in body
     assert 'if [[ -s "${log_file}" ]]; then' in body
-    assert 'gg_trigger_versions_dump: skipped existing ${log_file}' in body
-    assert 'timestamp=$(date' not in body
+    assert "gg_trigger_versions_dump: skipped existing ${log_file}" in body
+    assert "timestamp=$(date" not in body
 
 
 def test_gg_trigger_versions_dump_key_tracks_versions_script_and_repo_version():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
     body = _function_body(text, "gg_trigger_versions_dump")
-    assert 'container_key_seed="gg_container_image_path=${gg_container_image_path};runtime=${container_runtime_bin};gg_version=${gg_version}"' in body
-    assert 'versions_script_hash=$(sha256sum "${versions_script}" | awk \'{print $1}\')' in body
+    assert (
+        'container_key_seed="gg_container_image_path=${gg_container_image_path};runtime=${container_runtime_bin};gg_version=${gg_version}"'
+        in body
+    )
+    assert "versions_script_hash=$(sha256sum \"${versions_script}\" | awk '{print $1}')" in body
     assert 'container_key_seed="${container_key_seed};versions_script_sha256=${versions_script_hash}"' in body
 
 
@@ -780,8 +758,12 @@ def test_entrypoints_require_versions_dump_success():
     assert entrypoints, "No entrypoint scripts were found."
     for script in entrypoints:
         text = _read_text(script)
-        assert 'Warning: gg_versions trigger failed.' not in text, f"Legacy warning-only versions dump handling remains: {script}"
-        assert 'gg_require_versions_dump "${gg_entrypoint_name}"' in text, f"Entry point must fail on versions dump error: {script}"
+        assert "Warning: gg_versions trigger failed." not in text, (
+            f"Legacy warning-only versions dump handling remains: {script}"
+        )
+        assert 'gg_require_versions_dump "${gg_entrypoint_name}"' in text, (
+            f"Entry point must fail on versions dump error: {script}"
+        )
 
 
 def test_gg_prepare_cds_fasta_stream_pipes_to_cdskit_pad():
@@ -862,7 +844,7 @@ def test_gene_evolution_entrypoint_allows_debug_runner_mode_overrides():
 def test_genome_evolution_core_prints_effective_config_summary():
     text = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
     assert "print_effective_genome_evolution_config_summary()" in text
-    assert 'gg_print_registered_config_summary \\' in text
+    assert "gg_print_registered_config_summary \\" in text
     assert '"effective config summary (gg_genome_evolution_core.sh)" \\' in text
     assert "print_effective_genome_evolution_config_summary" in text.split("root_species_tree()", 1)[0]
 
@@ -876,422 +858,9 @@ def test_entrypoints_with_exit_if_running_call_duplicate_guard():
     for script_name in scripts:
         text = _read_text(WORKFLOW_DIR / script_name)
         assert "exit_if_running=" in text
-        assert (
-            "exit_if_running_qstat" in text
-            or "gg_entrypoint_prepare_container_runtime 1" in text
-        ), f"Missing duplicate-job guard call in {script_name}"
-
-
-def test_download_pfam_helper_guards_output_dir_before_recursive_delete():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "_download_pfam_le_to_dir")
-    assert 'if [[ -z "${output_dir}" || "${output_dir}" == "/" ]]; then' in body
-    assert 'rm -rf -- "${output_dir}.tmp"' in body
-    assert 'rm -rf -- "${output_dir}"' in body
-
-
-def test_download_helpers_use_set_e_safe_command_guards():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-
-    uniprot_body = _function_body(text, "_download_uniprot_sprot_to_prefix")
-    assert 'if ! curl -fsSL "${uniprot_url}" | gzip -dc > "${pep_tmp}"; then' in uniprot_body
-    assert 'if ! diamond makedb --in "${pep_tmp}" --db "${dmnd_tmp_prefix}"; then' in uniprot_body
-
-    pfam_body = _function_body(text, "_download_pfam_le_to_dir")
-    assert 'if ! curl -fsSL "${url}" -o "${archive_path}"; then' in pfam_body
-    assert 'if ! tar -xzf "${archive_path}" -C "${tmp_dir}"; then' in pfam_body
-
-
-def test_nonconda_download_helpers_use_archive_files_and_wget_fallback():
-    script_path = REPO_ROOT / "container" / "scripts" / "install_nonconda_fallbacks.sh"
-    text = _read_text(script_path)
-    download_script_path = REPO_ROOT / "container" / "scripts" / "download_url.sh"
-    download_script = _read_text(download_script_path)
-
-    download_body = _function_body(text, "download_url_to_file")
-    assert 'bash "${download_url_script}" "${url}" "${dest}"' in download_body
-
-    assert 'max_attempts=${DOWNLOAD_URL_MAX_ATTEMPTS:-8}' in download_script
-    assert 'retry_delay_sec=${DOWNLOAD_URL_RETRY_DELAY_SEC:-5}' in download_script
-    assert 'connect_timeout_sec=${DOWNLOAD_URL_CONNECT_TIMEOUT_SEC:-30}' in download_script
-    assert 'max_time_sec=${DOWNLOAD_URL_MAX_TIME_SEC:-600}' in download_script
-    assert '--retry "${max_attempts}" \\' in download_script
-    assert '--retry-all-errors \\' in download_script
-    assert '--retry-delay "${retry_delay_sec}" \\' in download_script
-    assert '--connect-timeout "${connect_timeout_sec}" \\' in download_script
-    assert '--max-time "${max_time_sec}" \\' in download_script
-    assert '--tries="${max_attempts}" \\' in download_script
-    assert '--waitretry="${retry_delay_sec}" \\' in download_script
-    assert '-O "${output_path}" \\' in download_script
-    assert 'rm -f -- "${output_path}"' in download_script
-
-    tag_body = _function_body(text, "download_github_tag_tarball")
-    assert 'archive_path=$(mktemp)' in tag_body
-    assert 'if ! download_checked_url_to_file "${url}" "${archive_path}" "${expected_sha256}"; then' in tag_body
-    assert 'if ! tar -xzf "${archive_path}" -C "${dest}" --strip-components=1; then' in tag_body
-
-    cafe_body = _function_body(text, "install_cafe5")
-    assert 'archive_path="${workdir}/CAFE5-5.1.0.tar.gz"' in cafe_body
-    assert 'if ! download_checked_url_to_file \\' in cafe_body
-    assert 'install_r_cran_packages "${r_env_name}" Rphylopars Rtsne' in text
-    assert "pkgs <- c('Rphylopars','Rtsne'" in text
-    assert 'if ! tar -xzf "${archive_path}" -C "${workdir}"; then' in cafe_body
-
-
-def test_download_lock_helper_uses_shared_lock_metadata_and_heartbeat():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "gg_array_download_once")
-    assert 'if gg_artifact_ready "${artifact_path}"; then' in body
-    assert 'if ! gg_shared_lock_acquire "${lock_file}" "${description}"; then' in body
-    assert 'gg_shared_lock_start_heartbeat "${lock_file}"' in body
-    assert 'heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}' in body
-    assert '"$@" >&2' in body
-    assert 'gg_shared_lock_stop_heartbeat "${heartbeat_pid}"' in body
-    assert 'gg_shared_lock_release "${lock_file}"' in body
-    assert '.dlock' not in body
-
-
-def test_download_lock_helper_redirects_artifact_stdout(tmp_path):
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    artifact_path = tmp_path / "artifact.ready"
-    lock_path = tmp_path / "artifact.lock"
-    script = f"""
-set -euo pipefail
-source "{util_path}"
-GG_ARRAY_TASK_ID=1
-GG_LOCK_HEARTBEAT_SECONDS=1
-fake_builder() {{
-  echo noisy-tool-stdout
-  gg_write_ready_marker "{artifact_path}"
-}}
-gg_array_download_once "{lock_path}" "{artifact_path}" "fake artifact" fake_builder
-"""
-
-    result = subprocess.run(
-        ["bash", "-c", script],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == ""
-    assert "noisy-tool-stdout" in result.stderr
-
-
-def test_uniprot_mmseqs_helper_stdout_is_only_db_prefix(tmp_path):
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    workspace = tmp_path / "workspace"
-    runtime_prefix = workspace / "downloads" / "uniprot_sprot" / "uniprot_sprot"
-    runtime_prefix.parent.mkdir(parents=True)
-    (runtime_prefix.with_suffix(".pep")).write_text(">sp|P1\nMA\n", encoding="utf-8")
-    (runtime_prefix.with_suffix(".meta.tsv.gz")).write_text("metadata\n", encoding="utf-8")
-    script = f"""
-set -euo pipefail
-source "{util_path}"
-GG_ARRAY_TASK_ID=1
-GG_LOCK_HEARTBEAT_SECONDS=1
-mmseqs() {{
-  if [[ "$1" == "createdb" ]]; then
-    echo "createdb $2 $3"
-    printf 'db\\n' > "$3"
-    printf '0\\n' > "$3.dbtype"
-    return 0
-  fi
-  return 1
-}}
-ensure_uniprot_sprot_mmseqs_db "{workspace}"
-"""
-
-    result = subprocess.run(
-        ["bash", "-c", script],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == str(runtime_prefix) + "\n"
-    assert "createdb" in result.stderr
-
-
-def test_uniprot_blast_helper_stdout_is_only_db_prefix(tmp_path):
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    workspace = tmp_path / "workspace"
-    runtime_prefix = workspace / "downloads" / "uniprot_sprot" / "uniprot_sprot"
-    runtime_prefix.parent.mkdir(parents=True)
-    (runtime_prefix.with_suffix(".pep")).write_text(">sp|P1\nMA\n", encoding="utf-8")
-    (runtime_prefix.with_suffix(".meta.tsv.gz")).write_text("metadata\n", encoding="utf-8")
-    script = f"""
-set -euo pipefail
-source "{util_path}"
-GG_ARRAY_TASK_ID=1
-GG_LOCK_HEARTBEAT_SECONDS=1
-makeblastdb() {{
-  local out_prefix=""
-  while [[ $# -gt 0 ]]; do
-    if [[ "$1" == "-out" ]]; then
-      out_prefix="$2"
-      shift 2
-    else
-      shift
-    fi
-  done
-  echo "makeblastdb $out_prefix"
-  printf 'pin\\n' > "$out_prefix.pin"
-  printf 'phr\\n' > "$out_prefix.phr"
-  printf 'psq\\n' > "$out_prefix.psq"
-}}
-ensure_uniprot_sprot_blast_db "{workspace}"
-"""
-
-    result = subprocess.run(
-        ["bash", "-c", script],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == str(runtime_prefix) + "\n"
-    assert "makeblastdb" in result.stderr
-
-
-def test_uniprot_db_prefix_validator_rejects_contaminated_values(tmp_path):
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    script = f"""
-set -euo pipefail
-source "{util_path}"
-validate_uniprot_sprot_db_prefix $'createdb /tmp/uniprot.pep\\n/tmp/uniprot.mmseqs' mmseqs2
-"""
-
-    result = subprocess.run(
-        ["bash", "-c", script],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
-
-    assert result.returncode != 0
-    assert "DB prefix is malformed" in result.stderr
-
-
-def test_uniprot_db_prefix_validator_allows_spaces_in_paths(tmp_path):
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    db_prefix = tmp_path / "uniprot sprot"
-    (tmp_path / "uniprot sprot.mmseqs").write_text("db\n", encoding="utf-8")
-    (tmp_path / "uniprot sprot.mmseqs.dbtype").write_text("0\n", encoding="utf-8")
-    script = f"""
-set -euo pipefail
-source "{util_path}"
-validate_uniprot_sprot_db_prefix "{db_prefix}" mmseqs2
-"""
-
-    result = subprocess.run(
-        ["bash", "-c", script],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-
-
-def test_uniprot_db_prefixes_are_validated_after_capture():
-    for script in [
-        CORE_DIR / "gg_genome_annotation_core.sh",
-        CORE_DIR / "gg_gene_evolution_core.sh",
-        CORE_DIR / "gg_genome_evolution_core.sh",
-    ]:
-        text = _read_text(script)
-        assert 'validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "blastp"' in text
-        assert 'validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "mmseqs2"' in text
-
-
-def test_download_entrypoints_use_shared_lock_helper_for_busco_and_ete():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    busco_body = _function_body(text, "ensure_busco_download_path")
-    ete_body = _function_body(text, "ensure_ete_taxonomy_db")
-    assert 'runtime_ready_marker="${runtime_busco_lineage}/.download.ready"' in busco_body
-    assert 'gg_array_download_once "${lock_file}" "${runtime_ready_marker}"' in busco_body
-    assert 'gg_array_download_once "${lock_file}" "${db_file}" "ETE taxonomy DB"' in ete_body
-
-
-def test_ete_taxonomy_helper_uses_explicit_shared_taxdump_path():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    set_env_body = _function_body(text, "gg_set_taxonomy_cache_env")
-    locked_body = _function_body(text, "_ensure_ete_taxonomy_db_locked")
-    ensure_body = _function_body(text, "ensure_ete_taxonomy_db")
-    assert 'workspace_taxonomy_taxdumpfile()' in text
-    assert 'ensure_dir "${dir_taxonomy}/ete4"' in set_env_body
-    assert 'export GG_TAXONOMY_TAXDUMPFILE="${dir_taxonomy}/taxdump.tar.gz"' in set_env_body
-    assert 'os.makedirs(os.path.join(cache_dir, "ete4"), exist_ok=True)' in locked_body
-    assert 'GG_TAXONOMY_TAXDUMPFILE="${taxdump_file}"' in text
-    assert 'NCBITaxa(dbfile=db_file, taxdump_file=ensure_taxdump_file(), update=True)' in locked_body
-    assert 'ensure_dir "${dir_taxonomy}/ete4"' in ensure_body
-    assert 'taxdump_file=$(workspace_taxonomy_taxdumpfile "${gg_workspace_dir}")' in ensure_body
-    assert '_ensure_ete_taxonomy_db_locked "${db_file}" "${taxdump_file}"' in ensure_body
-
-
-def test_latest_jaspar_lock_uses_shared_lock_and_marker_resolution():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "ensure_latest_jaspar_file")
-    assert 'if resolved_path=$(_resolve_latest_jaspar_path_from_marker "${latest_marker}" "${sys_dir}" "${runtime_dir}"); then' in body
-    assert 'if ! gg_shared_lock_acquire "${lock_file}" "latest JASPAR motif file"; then' in body
-    assert 'gg_shared_lock_start_heartbeat "${lock_file}"' in body
-    assert 'heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}' in body
-    assert 'gg_shared_lock_stop_heartbeat "${heartbeat_pid}"' in body
-    assert 'gg_shared_lock_release "${lock_file}"' in body
-
-
-def test_shared_lock_heartbeat_is_not_started_via_command_substitution():
-    disallowed = 'heartbeat_pid=$(gg_shared_lock_start_heartbeat'
-    for script in _workflow_shell_scripts():
-      assert disallowed not in _read_text(script), (
-          f"Do not start shared-lock heartbeat via command substitution: {script}"
-      )
-
-
-def test_pfam_helpers_use_only_new_runtime_layout_and_function_name():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    gene_core = CORE_DIR / "gg_gene_evolution_core.sh"
-    util_text = _read_text(util_path)
-    gene_text = _read_text(gene_core)
-
-    assert "legacy_runtime_dir" not in util_text
-    assert "downloads/Pfam_LE" not in util_text
-    assert "ensure_pfam_domain_db()" not in util_text
-    assert "ensure_pfam_domain_db" not in gene_text
-    assert 'ensure_pfam_le_db "${gg_workspace_dir}"' in gene_text
-
-
-def test_get_total_fastq_len_uses_bash3_compatible_read_loop_and_excludes_hidden_files():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "get_total_fastq_len")
-    assert "mapfile -d '' -t files" not in body
-    assert "while IFS= read -r -d '' f; do" in body
-    assert 'find "${input_dir}" -type f ! -name \'.*\' -name "${regex}" -print0' in body
-
-
-def test_gg_util_avoids_mapfile_for_host_bash_compatibility():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    assert "mapfile" not in text
-
-
-def test_busco_dataset_download_merges_staged_directory_contents():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "_download_busco_lineage_to_runtime")
-    assert 'gg_merge_directory_contents "busco_downloads" "${runtime_busco_db}"' in body
-    assert "-exec mv -f -- {}" not in body
-
-
-def test_shared_busco_summary_stage_normalizes_and_checks_species_set_before_collect():
-    script = CORE_DIR / "gg_genome_evolution_core.sh"
-    text = _read_text(script)
-    gate = "if [[ ${run_build_species_busco_summary} -ne 1 ]]; then"
-    source_dir = 'source_species_input_dir=$(effective_species_input_source_dir_path)'
-    normalize = 'normalize_busco_table_naming "${dir_species_busco_full}" "${dir_species_busco_short}"'
-    check = 'if ! is_species_set_identical "${source_species_input_dir}" "${dir_species_busco_full}"; then'
-    collect = 'python "${gg_support_dir}/collect_common_BUSCO_genes.py" \\'
-    assert "run_shared_busco_summary_stage() {" in text
-    assert gate in text
-    assert source_dir in text
-    assert normalize in text
-    assert check in text
-    assert collect in text
-    gate_idx = text.index(gate)
-    source_dir_idx = text.index(source_dir, gate_idx)
-    normalize_idx = text.index(normalize, source_dir_idx)
-    check_idx = text.index(check, normalize_idx)
-    collect_idx = text.index(collect, check_idx)
-    assert gate_idx < source_dir_idx < normalize_idx < check_idx < collect_idx
-
-
-def test_genome_busco_summary_syncs_from_shared_summary_and_gates_busco_getfasta():
-    script = CORE_DIR / "gg_genome_evolution_core.sh"
-    text = _read_text(script)
-    sync_fn = "sync_genome_busco_summary_table_from_shared() {"
-    cmp_stmt = 'cmp -s "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"'
-    copy_stmt = 'cp_out "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"'
-    sync_call = "sync_genome_busco_summary_table_from_shared || true"
-    gate = 'disable_if_no_input_file "run_busco_dupaware_extract_fasta" "${file_genome_busco_summary_table}"'
-    assert sync_fn in text
-    assert cmp_stmt in text
-    assert copy_stmt in text
-    assert sync_call in text
-    assert gate in text
-    assert text.index(sync_call) < text.index(gate)
-
-
-def test_shared_species_busco_stage_runs_for_species_or_genome_busco_flags():
-    script = CORE_DIR / "gg_genome_evolution_core.sh"
-    text = _read_text(script)
-    stage_fn = "run_shared_species_busco_stage() {"
-    gate = "if [[ ${run_species_busco} -ne 1 ]]; then"
-    species_call = "run_shared_species_busco_stage"
-    assert stage_fn in text
-    assert gate in text
-    assert text.count(species_call) >= 2
-
-
-def test_shared_species_busco_stage_matches_existing_outputs_by_species_name():
-    script = CORE_DIR / "gg_genome_evolution_core.sh"
-    text = _read_text(script)
-    body = _function_body(text, "run_shared_species_busco_stage")
-
-    assert 'sp_ub=$(gg_species_name_from_path_or_dot "${seq_file}")' in body
-    assert '-name "*busco.full.tsv"' in body
-    assert '-name "*busco.short.txt"' in body
-    assert 'busco_species=$(gg_species_name_from_path_or_dot "${busco_base}")' in body
-    assert 'busco_output_exists_for_species "${dir_species_busco_full}" "${sp_ub}" "*busco.full.tsv"' in body
-    assert 'busco_output_exists_for_species "${dir_species_busco_short}" "${sp_ub}" "*busco.short.txt"' in body
-
-
-def test_busco_getfasta_step_is_gated_by_summary_table_presence():
-    script = CORE_DIR / "gg_genome_evolution_core.sh"
-    text = _read_text(script)
-    gate = 'disable_if_no_input_file "run_busco_dupaware_extract_fasta" "${file_genome_busco_summary_table}"'
-    step = "if [[ ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then"
-    assert gate in text
-    assert step in text
-    assert text.index(gate) < text.index(step)
-
-
-def test_busco_getfasta_step_defines_and_uses_its_duplicate_aware_helper():
-    script = CORE_DIR / "gg_genome_evolution_core.sh"
-    text = _read_text(script)
-    step = "if [[ ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then"
-    helper = "generate_genome_dupaware_busco_fasta() {"
-    invoke = 'generate_genome_dupaware_busco_fasta "${busco_idx}" &'
-    step_idx = text.index(step)
-    helper_idx = text.index(helper, step_idx)
-    invoke_idx = text.index(invoke, helper_idx)
-    assert helper_idx < invoke_idx
-
-
-def test_genome_evolution_core_uses_safe_busco_summary_count_helper():
-    script = CORE_DIR / "gg_genome_evolution_core.sh"
-    text = _read_text(script)
-    assert 'num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")' in text
+        assert "exit_if_running_qstat" in text or "gg_entrypoint_prepare_container_runtime 1" in text, (
+            f"Missing duplicate-job guard call in {script_name}"
+        )
 
 
 def test_remove_empty_subdirs_calls_use_quoted_variable_arguments():
@@ -1301,9 +870,7 @@ def test_remove_empty_subdirs_calls_use_quoted_variable_arguments():
     )
     for script in sorted(CORE_DIR.glob("*.sh")):
         text = _read_text(script)
-        assert pattern.search(text) is None, (
-            f"Unquoted variable passed to remove_empty_subdirs in {script}"
-        )
+        assert pattern.search(text) is None, f"Unquoted variable passed to remove_empty_subdirs in {script}"
 
 
 def test_codeml_step_guards_against_empty_trait_columns_before_paste():
@@ -1370,7 +937,7 @@ def test_genome_evolution_core_runs_mcmctree_time_scaling_in_scratch():
         'scale_mcmctree_calibrations_file "${iq2mc_work_dir}/iq2mc.rooted.nwk" "${file_iq2mc_rooted_tree}" "${mcmctree_time_scale_factor}" "up"',
         'mcmctree_work_dir=$(mktemp -d "${dir_tmp}/tmp.mcmctree.work.XXXXXX")',
         'extract_scaled_mcmctree_figtree "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" "${file_mcmctree_figtree_tre}" "${mcmctree_time_scale_factor}"',
-        'Raw scaled MCMCTree output is not retained by default.',
+        "Raw scaled MCMCTree output is not retained by default.",
     ]
     for token in expected_tokens:
         assert token in text, f"Missing MCMCTree scaling token: {token}"
@@ -1389,11 +956,20 @@ def test_genome_evolution_core_quotes_grampa_output_and_cafe_option_values():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
 
-    assert 'busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" ${file_busco_grampa_dna}' not in text
-    assert 'busco_grampa "${dir_busco_rooted_nwk_pep}" "$(dirname "${file_busco_grampa_pep}")" ${file_busco_grampa_pep}' not in text
-    assert 'busco_grampa "./tmp.orthogroup_grampa_indir" "$(dirname "${file_orthogroup_grampa}")" ${file_orthogroup_grampa}' not in text
-    assert '--genecount ${file_orthogroup_genecount_selected}' not in text
-    assert '--dated_species_tree ${file_dated_species_tree}' not in text
+    assert (
+        'busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" ${file_busco_grampa_dna}'
+        not in text
+    )
+    assert (
+        'busco_grampa "${dir_busco_rooted_nwk_pep}" "$(dirname "${file_busco_grampa_pep}")" ${file_busco_grampa_pep}'
+        not in text
+    )
+    assert (
+        'busco_grampa "./tmp.orthogroup_grampa_indir" "$(dirname "${file_orthogroup_grampa}")" ${file_orthogroup_grampa}'
+        not in text
+    )
+    assert "--genecount ${file_orthogroup_genecount_selected}" not in text
+    assert "--dated_species_tree ${file_dated_species_tree}" not in text
     assert "--max_size_differential ${max_size_differential_cafe}" not in text
     assert "--tree ${file_dated_species_tree}" not in text
     assert "--n_gamma_cats ${n_gamma_cats_cafe}" not in text
@@ -1403,9 +979,18 @@ def test_genome_evolution_core_quotes_grampa_output_and_cafe_option_values():
     assert "--file_sptree=${file_dated_species_tree}" not in text
     assert "--file_trait=${file_trait}" not in text
 
-    assert 'busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" "${file_busco_grampa_dna}"' in text
-    assert 'busco_grampa "${dir_busco_rooted_nwk_pep}" "$(dirname "${file_busco_grampa_pep}")" "${file_busco_grampa_pep}"' in text
-    assert 'busco_grampa "./tmp.orthogroup_grampa_indir" "$(dirname "${file_orthogroup_grampa}")" "${file_orthogroup_grampa}"' in text
+    assert (
+        'busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" "${file_busco_grampa_dna}"'
+        in text
+    )
+    assert (
+        'busco_grampa "${dir_busco_rooted_nwk_pep}" "$(dirname "${file_busco_grampa_pep}")" "${file_busco_grampa_pep}"'
+        in text
+    )
+    assert (
+        'busco_grampa "./tmp.orthogroup_grampa_indir" "$(dirname "${file_orthogroup_grampa}")" "${file_orthogroup_grampa}"'
+        in text
+    )
     assert '--genecount "${file_orthogroup_genecount_selected}"' in text
     assert '--dated_species_tree "${file_dated_species_tree}"' in text
     assert '--max_size_differential "${max_size_differential_cafe}"' in text
@@ -1421,7 +1006,7 @@ def test_genome_evolution_core_quotes_grampa_output_and_cafe_option_values():
 def test_genome_evolution_core_builds_grampa_arguments_with_array():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    assert "h1_param=\"-h1 " not in text
+    assert 'h1_param="-h1 ' not in text
     assert "grampa_args=(" in text
     assert 'grampa_args+=(-h1 "${grampa_h1_normalized}")' in text
     assert 'grampa.py "${grampa_args[@]}"' in text
@@ -1520,7 +1105,9 @@ def test_genome_evolution_core_quotes_orthogroup_iq2mc_and_busco_summary_options
     assert '-T "${GG_TASK_CPUS}"' in iq2mc_block
 
     busco_summary_start = text.index('python "${gg_support_dir}/collect_common_BUSCO_genes.py" \\')
-    busco_summary_end = text.index('--outfile "tmp.busco_summary_table.tsv"', busco_summary_start) + len('--outfile "tmp.busco_summary_table.tsv"')
+    busco_summary_end = text.index('--outfile "tmp.busco_summary_table.tsv"', busco_summary_start) + len(
+        '--outfile "tmp.busco_summary_table.tsv"'
+    )
     busco_summary_block = text[busco_summary_start:busco_summary_end]
     assert "--busco_outdir ${dir_species_busco_full}" not in busco_summary_block
     assert "--ncpu ${GG_TASK_CPUS}" not in busco_summary_block
@@ -1554,319 +1141,6 @@ def test_genome_evolution_core_treats_v31_orthogroups_as_root_hog_equivalent():
     assert "Orthogroups/Orthogroups.tsv is treated as the root-level HOG equivalent" in text
     assert 'cp_out "${source_og}" "${target_dir}/Orthogroups.tsv"' in text
     assert 'cp_out "${source_genecount}" "${target_dir}/Orthogroups.GeneCount.tsv"' in text
-
-
-def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-
-    banned_tokens = [
-        "--fastq_dir ${dir_species_fastq}",
-        "--out_dir ${dir_tmp}",
-        "--download_dir ${dir_amalgkit_download_dir}",
-        "--download_lock_dir ${dir_amalgkit_download_lock_dir}",
-        "--metadata ${file_amalgkit_metadata}",
-        "--rrna_filter ${amalgkit_rrna_filter}",
-        "--contam_filter ${amalgkit_contam_filter}",
-        "--contam_filter_rank ${contamination_removal_rank_for_amalgkit}",
-        "--contam_filter_db ${dir_mmseqs2_db}/UniRef90_DB",
-        "ln -s ${dir_amalgkit_getfastq_sp} \"./getfastq\"",
-        "--fasta_file ${file_longestcds}",
-        "--mmseqs2taxonomy_tsv ${file_longestcds_mmseqs2taxonomy}",
-        "--fx2tab_tsv ${file_longestcds_fx2tab}",
-        "--species_name ${sp_ub}",
-        "--rank ${contamination_removal_rank_for_remove_contaminated_sequences}",
-        "seqkit seq --threads ${GG_TASK_CPUS} ${file_isoform} --out-file \"busco_infile_cdna.fa\"",
-        "seqkit seq --threads ${GG_TASK_CPUS} ${file_longestcds} --out-file \"busco_infile_cds.fa\"",
-        "seqkit seq --threads ${GG_TASK_CPUS} ${file_longestcds_contamination_removal_fasta} --out-file \"busco_infile_cds.fa\"",
-        "--lineage_dataset ${dir_busco_lineage}",
-        "--download_path ${dir_busco_db}",
-        "if [[ -e ${file_kallisto_reference_fasta} ]]; then",
-        "ln -s ${file_kallisto_reference_fasta} ${file_reference_fasta_link}",
-        "stage_quant_reference_fasta_aliases ${file_amalgkit_metadata} ${file_kallisto_reference_fasta} ./fasta ${sp_ub}",
-        "ln -s ${dir_amalgkit_quant}/${sp_ub} ./quant",
-        'grep -e "${sp_space}" "./metadata/metadata.tsv"',
-        "d.loc[:,'scientific_name']='${sp_ub}'",
-        "mv_out ./metadata_private_fastq.tsv ./metadata.tsv",
-    ]
-    for token in banned_tokens:
-        assert token not in text, f"Found unquoted transcriptome token: {token}"
-
-    expected_tokens = [
-        '--fastq_dir "${dir_species_fastq}"',
-        '--out_dir "${dir_tmp}"',
-        '--download_dir "${dir_amalgkit_download_dir}"',
-        '--download_lock_dir "${dir_amalgkit_download_lock_dir}"',
-        '--metadata "${file_amalgkit_metadata}"',
-        '--rrna_filter "${rrna_filter_value}"',
-        '--contam_filter "${amalgkit_contam_filter}"',
-        '--contam_filter_rank "${contamination_removal_rank_for_amalgkit}"',
-        '--contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"',
-        'ln -s "${dir_amalgkit_getfastq_sp}" "./getfastq"',
-        '--fasta_file "${file_longestcds}"',
-        '--mmseqs2taxonomy_tsv "${file_longestcds_mmseqs2taxonomy}"',
-        '--fx2tab_tsv "${file_longestcds_fx2tab}"',
-        '--species_name "${contamination_removal_target_taxon:-${sp_ub}}"',
-        '--rank "${contamination_removal_rank_for_remove_contaminated_sequences}"',
-        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"',
-        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"',
-        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"',
-        '--lineage_dataset "${dir_busco_lineage}"',
-        '--download_path "${dir_busco_db}"',
-        'if [[ -e "${file_kallisto_reference_fasta}" ]]; then',
-        'stage_quant_reference_fasta_aliases \\',
-        '        "${file_amalgkit_metadata}" \\',
-        '        "${file_kallisto_reference_fasta}" \\',
-        '        "./fasta" \\',
-        '        "${sp_ub}" \\',
-        '        "${gg_support_dir}"',
-        'ln -s "${dir_amalgkit_quant}/${sp_ub}" "./quant"',
-        'merge_output_prefix=$(resolve_amalgkit_merge_output_prefix \\',
-        '    "${file_amalgkit_metadata}" \\',
-        '    "./merge" \\',
-        '    "${sp_ub}")',
-        'mv_out "${merge_output_dir}/${merge_output_prefix}_eff_length.tsv" "${file_amalgkit_merge_efflen}"',
-        'mv_out "${merge_output_dir}/${merge_output_prefix}_est_counts.tsv" "${file_amalgkit_merge_count}"',
-        'mv_out "${merge_output_dir}/${merge_output_prefix}_tpm.tsv" "${file_amalgkit_merge_tpm}"',
-        'grep -F -- "${species_name}" "${metadata_source}"',
-        'mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"',
-    ]
-    for token in expected_tokens:
-        assert token in text, f"Missing quoted transcriptome token: {token}"
-
-
-def test_transcriptome_core_sraid_metadata_filter_handles_zero_match_explicitly():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    extract_body = _function_body(text, "extract_sraid_metadata_rows_for_species")
-    assert 'grep -F -- "${species_name}" "${metadata_source}" || true' in extract_body
-    assert 'if ! metadata_table_has_data_rows "./metadata.tsv"; then' in text
-    assert "No metadata rows matched species" in text
-
-
-def test_transcriptome_core_sraid_metadata_search_accepts_non_illumina_short_reads():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}"' in text
-    assert 'search_string="${search_string} AND (${amalgkit_sra_strategy_query})"' in text
-    assert '\\"Illumina\\"[Platform]' not in text
-    assert '\\"CLONE\\"[Strategy]' in text
-
-
-def test_transcriptome_core_relaxes_sraid_strategy_filter_for_missing_explicit_accessions():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    build_body = _function_body(text, "build_entrez_or_search_string_from_file")
-    missing_body = _function_body(text, "extract_requested_accessions_missing_from_metadata")
-    relaxed_body = _function_body(text, "extract_transcriptomic_rows_for_requested_accessions")
-    merge_body = _function_body(text, "merge_metadata_tables_by_run")
-
-    assert "printf '(%s)\\n' \"${joined_terms}\"" in build_body
-    assert 'mapfile -t missing_requested_sra_ids < <(extract_requested_accessions_missing_from_metadata "./metadata.tsv" "${file_input_sra_list}")' in text
-    assert "Retrying the missing accessions without the Entrez strategy filter" in text
-    assert "lib_source == \"transcriptomic\"" in relaxed_body
-    assert 'or lib_strategy in {"rna-seq", "est", "clone"}' in relaxed_body
-    assert 'extract_transcriptomic_rows_for_requested_accessions "./metadata/metadata.tsv" "./metadata_missing_accessions.txt" "./metadata.relaxed.tsv"' in text
-    assert 'merge_metadata_tables_by_run "./metadata.tsv" "./metadata.relaxed.tsv" "./metadata.merged.tsv"' in text
-    assert "Relaxed accession-driven metadata fallback retained" in text
-    assert "Could not determine metadata header" in merge_body
-    assert 'if "run" in fieldnames:' in missing_body
-
-
-def test_transcriptome_core_detects_long_read_platforms_from_metadata():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    body = _function_body(text, "detect_transcriptome_read_technology_from_metadata")
-    configure_body = _function_body(text, "configure_transcriptome_runtime_from_detected_metadata")
-
-    assert 'file_amalgkit_read_technology="${dir_transcriptome_assembly_output}/amalgkit_read_technology/${sp_ub}_read_technology.tsv"' in text
-    assert 'file_amalgkit_read_technology_summary_sh="${dir_tmp}/metadata/read_technology.summary.sh"' in text
-    assert 'python "${gg_support_dir}/detect_amalgkit_read_technology.py" \\' in body
-    assert '--metadata "${metadata_tsv}"' in body
-    assert '--classification-out "${classification_tsv}"' in body
-    assert '--summary-sh "${summary_sh}"' in body
-    assert 'detect_transcriptome_read_technology_from_metadata "${file_amalgkit_metadata}" "${file_amalgkit_read_technology}" "${file_amalgkit_read_technology_summary_sh}"' in text
-    assert 'source "${summary_sh}"' in body
-    assert 'effective_assembly_method="rna-bloom2"' in configure_body
-    assert 'effective_assembly_method="rnaspades"' in configure_body
-    assert 'Mixed PacBio and ONT long-read runs were detected in metadata' in configure_body
-    assert 'Mixed ONT cDNA and direct-RNA runs were detected in metadata' in configure_body
-    assert 'run_amalgkit_quant remains enabled; amalgkit quant will use quant_backend=${amalgkit_quant_backend}.' in configure_body
-    assert 'run_amalgkit_merge remains enabled because amalgkit merge accepts normalized abundance tables from long-read quant.' in configure_body
-    assert 'amalgkit quant cannot auto-resolve oarfish sequencing technology for these runs.' in configure_body
-
-
-def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_failure():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    body = _function_body(text, "download_public_original_fastqs_for_metadata")
-
-    assert 'download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_amalgkit_getfastq_sp}"' in text
-    assert "amalgkit getfastq did not safely finish. Attempting fallback download of public original FASTQ files." in text
-    assert "Fallback download of public original FASTQ files succeeded." in text
-    assert "Fallback direct FASTQ recovery also failed. Exiting." in text
-    assert 'xml_url = "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}".format(' in body
-    assert 'if node.attrib.get("semantic_name") != "fastq":' in body
-    assert 'if node.attrib.get("supertype") != "Original":' in body
-    assert 'if payload[:2] == b"\\x1f\\x8b":' in body
-    assert 'dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)' in body
-
-
-def test_transcriptome_core_detects_fatal_getfastq_logs_and_retries_without_rrna():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    cleanup_body = _function_body(text, "cleanup_partial_getfastq_outputs")
-    detect_body = _function_body(text, "amalgkit_getfastq_log_has_fatal_message")
-    attempt_body = _function_body(text, "run_amalgkit_getfastq_attempt")
-
-    assert 'rm -rf -- "${dir_tmp}/getfastq"' in cleanup_body
-    assert 'rm -rf -- "${dir_amalgkit_getfastq_sp}"' in cleanup_body
-    assert "grep -Eq '^ERROR: '" in detect_body
-    assert "Detected fatal message in amalgkit getfastq log despite a zero exit code" in attempt_body
-    assert '--download_lock_dir "${dir_amalgkit_download_lock_dir}"' in attempt_body
-    assert '--ncbi_download_max_concurrency "${amalgkit_ncbi_download_max_concurrency}"' in attempt_body
-    assert '--aws_download_max_concurrency "${amalgkit_aws_download_max_concurrency}"' in attempt_body
-    assert '--gcp_download_max_concurrency "${amalgkit_gcp_download_max_concurrency}"' in attempt_body
-    assert 'run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"' in text
-    assert "Exiting without fallback download so partial outputs do not reach downstream steps." in text
-
-
-def test_transcriptome_entrypoint_exposes_auto_assembly_and_metadata_detection():
-    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
-    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
-    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
-
-    assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Explicit-accession fallback automatically retries without this clause when transcriptomic runs are missed. Set empty to disable strategy filtering.' in entrypoint
-    assert 'amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\\"RNA-seq\\"[Strategy] OR \\"EST\\"[Strategy] OR \\"CLONE\\"[Strategy]}"' in core
-    assert "amalgkit_sra_strategy_query" in config_vars
-    assert 'assembly_method="auto" # {auto,Trinity,rnaSPAdes,RNA-Bloom2}; auto picks rnaSPAdes for short-read metadata and RNA-Bloom2 for detected PacBio/ONT metadata.' in entrypoint
-    assert 'requested_assembly_method=$(printf \'%s\' "${assembly_method:-auto}" | tr \'[:upper:]\' \'[:lower:]\' | tr \'_\' \'-\')' in core
-    assert "assembly_method" in config_vars
-    assert 'amalgkit_quant_backend="${amalgkit_quant_backend:-auto}" # {auto,kallisto,oarfish}; auto selects kallisto for short-read runs and oarfish for long-read runs.' in entrypoint
-    assert 'amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}" # {auto,ont-cdna,ont-drna,pac-bio,pac-bio-hifi}; auto infers long-read subtype from metadata for oarfish.' in entrypoint
-    assert 'amalgkit_oarfish_options="${amalgkit_oarfish_options:-}" # Optional extra shell-style option string forwarded to amalgkit quant --oarfish_options.' in entrypoint
-    assert 'amalgkit_quant_backend="${amalgkit_quant_backend:-auto}"' in core
-    assert 'amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}"' in core
-    assert 'amalgkit_oarfish_options="${amalgkit_oarfish_options:-}"' in core
-    assert "amalgkit_quant_backend" in config_vars
-    assert "amalgkit_oarfish_seq_tech" in config_vars
-    assert "amalgkit_oarfish_options" in config_vars
-    assert "amalgkit_long_read_instrument_pattern" not in entrypoint
-    assert "amalgkit_long_read_instrument_pattern" not in core
-    assert "amalgkit_long_read_instrument_pattern" not in config_vars
-
-
-def test_transcriptome_core_long_read_branch_uses_rnabloom2_and_corset():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-
-    assert 'if [[ "${effective_assembly_method}" == \'rna-bloom2\' ]]; then' in text
-    assert 'rnabloom_input_args=(-long)' in text
-    assert 'rnabloom_extra_args+=(-lrpb)' in text
-    assert 'rnabloom_extra_args+=(-stranded)' in text
-    assert 'rnabloom.transcripts.fa' in text
-    assert "task='Corset clustering of long-read transcripts'" in text
-    assert 'corset_minimap2_preset="map-pb"' in text
-    assert 'corset_minimap2_preset="map-ont"' in text
-    assert 'corset \\' in text
-    assert 'file_corset_clusters="${dir_transcriptome_assembly_output}/corset_clusters/${sp_ub}_corset.clusters.tsv"' in text
-    assert 'python "${gg_support_dir}/rename_rnabloom_transcripts.py" \\' in text
-    assert 'aggregate_expression="\\-i[0-9].*"' in text
-
-
-def test_transcriptome_entrypoint_exposes_amalgkit_ncbi_concurrency_limits():
-    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
-    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
-    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
-
-    assert 'amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency:-20}" # Maximum concurrent NCBI Entrez metadata requests across array tasks. Forwarded to amalgkit metadata/getfastq --ncbi_metadata_max_concurrency. Set 0 or auto to disable throttling.' in entrypoint
-    assert 'amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}" # Maximum concurrent NCBI cloud-object downloads across array tasks. Forwarded to amalgkit getfastq --ncbi_download_max_concurrency. Set 0 or auto to disable throttling.' in entrypoint
-    assert 'amalgkit_aws_download_max_concurrency="${amalgkit_aws_download_max_concurrency:-20}" # Maximum concurrent AWS cloud-object downloads across array tasks. Forwarded to amalgkit getfastq --aws_download_max_concurrency. Set 0 or auto to disable throttling.' in entrypoint
-    assert 'amalgkit_gcp_download_max_concurrency="${amalgkit_gcp_download_max_concurrency:-20}" # Maximum concurrent GCP cloud-object downloads across array tasks. Forwarded to amalgkit getfastq --gcp_download_max_concurrency. Set 0 or auto to disable throttling.' in entrypoint
-    assert 'amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency:-20}"' in core
-    assert 'amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}"' in core
-    assert 'amalgkit_aws_download_max_concurrency="${amalgkit_aws_download_max_concurrency:-20}"' in core
-    assert 'amalgkit_gcp_download_max_concurrency="${amalgkit_gcp_download_max_concurrency:-20}"' in core
-    assert "amalgkit_ncbi_metadata_max_concurrency" in config_vars
-    assert "amalgkit_ncbi_download_max_concurrency" in config_vars
-    assert "amalgkit_aws_download_max_concurrency" in config_vars
-    assert "amalgkit_gcp_download_max_concurrency" in config_vars
-    assert "amalgkit_metadata_max_concurrent_jobs" not in config_vars
-    assert "amalgkit_getfastq_max_concurrent_jobs" not in config_vars
-
-
-def test_transcriptome_core_requires_taxid_for_contam_filter():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    assert 'effective_amalgkit_contam_filter=' not in text
-    assert 'Continuing with effective_amalgkit_contam_filter=no.' not in text
-    assert 'amalgkit_contam_filter=yes requires a taxid column in metadata: ${file_amalgkit_metadata}. Exiting.' in text
-
-
-def test_transcriptome_core_passes_download_dir_to_amalgkit_integrate():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    integrate_start = text.index("    amalgkit integrate \\")
-    integrate_end = text.index('    mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"', integrate_start)
-    integrate_block = text[integrate_start:integrate_end]
-    assert '--download_dir "${dir_amalgkit_download_dir}"' in integrate_block
-    assert 'repair_private_fastq_metadata_scientific_names \\' in integrate_block
-    assert '      "./metadata_private_fastq.tsv" \\' in integrate_block
-    assert '      "${sp_ub}" \\' in integrate_block
-    assert '      "${gg_support_dir}"' in integrate_block
-
-
-def test_transcriptome_core_passes_shared_mmseqs_db_to_amalgkit_getfastq():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    getfastq_block = _function_body(text, "run_amalgkit_getfastq_attempt")
-    assert 'dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"' in text
-    assert '--contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"' in getfastq_block
-
-
-def test_transcriptome_core_delegates_ncbi_parallelism_to_amalgkit():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    normalize_body = _function_body(text, "normalize_amalgkit_download_limit_value")
-    require_body = _function_body(text, "require_amalgkit_supported_options")
-    metadata_body = _function_body(text, "run_amalgkit_metadata_query")
-    getfastq_body = _function_body(text, "run_amalgkit_getfastq_attempt")
-
-    assert 'gg_run_with_shared_semaphore' not in text
-    assert 'dir_amalgkit_metadata_semaphore=' not in text
-    assert 'dir_amalgkit_getfastq_semaphore=' not in text
-    assert 'dir_amalgkit_download_lock_dir="${dir_amalgkit_download_dir}/locks"' in text
-    assert 'amalgkit_ncbi_metadata_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_ncbi_metadata_max_concurrency}" "amalgkit_ncbi_metadata_max_concurrency")"' in text
-    assert 'amalgkit_ncbi_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_ncbi_download_max_concurrency}" "amalgkit_ncbi_download_max_concurrency")"' in text
-    assert 'amalgkit_aws_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_aws_download_max_concurrency}" "amalgkit_aws_download_max_concurrency")"' in text
-    assert 'amalgkit_gcp_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_gcp_download_max_concurrency}" "amalgkit_gcp_download_max_concurrency")"' in text
-    assert 'if (( 10#${normalized_value} == 0 )); then' in normalize_body
-    assert 'printf \'0\\n\'' in normalize_body
-    assert 'Use a non-negative integer or auto' in normalize_body
-    assert 'Installed amalgkit ${subcommand} does not support ${option_name}. Update amalgkit to a build with shared download throttling. Exiting.' in require_body
-    assert 'require_amalgkit_supported_options "metadata" "--download_lock_dir" "--ncbi_metadata_max_concurrency"' in metadata_body
-    assert '--download_lock_dir "${dir_amalgkit_download_lock_dir}"' in metadata_body
-    assert '--ncbi_metadata_max_concurrency "${amalgkit_ncbi_metadata_max_concurrency}"' in metadata_body
-    assert 'require_amalgkit_supported_options "getfastq" \\' in getfastq_body
-    assert '--ncbi_download_max_concurrency "${amalgkit_ncbi_download_max_concurrency}"' in getfastq_body
-    assert '--aws_download_max_concurrency "${amalgkit_aws_download_max_concurrency}"' in getfastq_body
-    assert '--gcp_download_max_concurrency "${amalgkit_gcp_download_max_concurrency}"' in getfastq_body
-
-
-def test_transcriptome_core_invalidates_stale_cached_query_tables_on_species_prefix_change():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    body = _function_body(text, "invalidate_cached_query_table_if_prefix_mismatch")
-
-    assert "first_query=$(awk -F '\\t' -v skip=\"${header_lines}\" 'NR > skip && $1 != \"\" { print $1; exit }' \"${table_file}\")" in body
-    assert 'expected_species=${expected_prefix%_}' in body
-    assert 'first_query_species=$(gg_species_name_from_path_or_dot "${first_query}")' in body
-    assert 'if [[ "${first_query_species}" != "${expected_species}" ]]; then' in body
-    assert 'stale_file="${table_file}.stale.$(date +%Y%m%d%H%M%S)"' in body
-    assert 'mv -f -- "${table_file}" "${stale_file}"' in body
-    assert 'Archived stale file to: ${stale_file}' in body
-    assert 'invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_fx2tab}" "${sp_ub}_" "${task}" 1' in text
-    assert 'invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_mmseqs2taxonomy}" "${sp_ub}_" "${task}" 0' in text
 
 
 def test_common_params_do_not_define_contamination_removal_rank():
@@ -1933,14 +1207,26 @@ def test_genome_evolution_uses_local_optional_grampa_and_go_target_parameters():
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
-    assert 'grampa_h1="" # Optional GRAMPA H1 hypothesis. Leave empty to skip GRAMPA steps. Example: "2" or "x,y,z".' in entrypoint
-    assert 'target_branch_go="" # Optional GO-enrichment target branch. Leave empty to skip GO enrichment. Example: "<1>" or "Arabidopsis_thaliana".' in entrypoint
+    assert (
+        'grampa_h1="" # Optional GRAMPA H1 hypothesis. Leave empty to skip GRAMPA steps. Example: "2" or "x,y,z".'
+        in entrypoint
+    )
+    assert (
+        'target_branch_go="" # Optional GO-enrichment target branch. Leave empty to skip GO enrichment. Example: "<1>" or "Arabidopsis_thaliana".'
+        in entrypoint
+    )
     assert "GG_COMMON_GRAMPA_H1" not in core
     assert "GG_COMMON_TARGET_BRANCH_GO" not in core
     assert 'grampa_h1="${grampa_h1:-}"' in core
     assert 'target_branch_go="${target_branch_go:-}"' in core
-    assert 'Disabling GRAMPA tasks because grampa_h1 is empty. Set grampa_h1 in gg_genome_evolution_entrypoint.sh to enable them.' in core
-    assert 'Disabling run_go_enrichment because target_branch_go is empty. Set target_branch_go in gg_genome_evolution_entrypoint.sh to enable it.' in core
+    assert (
+        "Disabling GRAMPA tasks because grampa_h1 is empty. Set grampa_h1 in gg_genome_evolution_entrypoint.sh to enable them."
+        in core
+    )
+    assert (
+        "Disabling run_go_enrichment because target_branch_go is empty. Set target_branch_go in gg_genome_evolution_entrypoint.sh to enable it."
+        in core
+    )
     assert ': "${grampa_h1:?' not in core
     assert ': "${target_branch_go:?' not in core
     assert "grampa_h1" in config_vars
@@ -1964,7 +1250,7 @@ def test_genome_evolution_exposes_cafe_trait_pgls_parameters():
     expected_entrypoint_tokens = [
         "run_cafe_trait_pgls=0 # Test associations between CAFE-selected orthogroup copy numbers and species traits with species-tree PGLS.",
         'cafe_trait="all" # Trait column name(s) in species_trait.tsv to test against CAFE-selected copy numbers, or "all".',
-        'cafe_trait_min_species=4 # Minimum number of tree-matched species required for each CAFE copy-number trait PGLS fit.',
+        "cafe_trait_min_species=4 # Minimum number of tree-matched species required for each CAFE copy-number trait PGLS fit.",
         'cafe_trait_family_ids="" # Optional comma/space-separated CAFE family IDs to test; empty means use max_families.',
         'cafe_trait_family_file="" # Optional file listing CAFE family IDs to test.',
         'cafe_trait_max_families="all" # Maximum CAFE families tested: all|auto|0 for unlimited, or a non-negative integer.',
@@ -1999,11 +1285,20 @@ def test_genome_evolution_uses_local_species_tree_rooting_parameter():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
     common = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
 
-    assert 'species_tree_rooting="taxonomy" # taxonomy[,ncbi[,opentree,timetree...]] | outgroup,GENUS_SPECIES[,GENUS_SPECIES...] | midpoint | mad | mv; selects how species trees are rooted before dating, using taxonomy providers, explicit outgroups, or topology/branch-length rooting methods.' in entrypoint
+    assert (
+        'species_tree_rooting="taxonomy" # taxonomy[,ncbi[,opentree,timetree...]] | outgroup,GENUS_SPECIES[,GENUS_SPECIES...] | midpoint | mad | mv; selects how species trees are rooted before dating, using taxonomy providers, explicit outgroups, or topology/branch-length rooting methods.'
+        in entrypoint
+    )
     assert "GG_COMMON_OUTGROUP_LABELS" not in common
     assert 'species_tree_rooting="${species_tree_rooting:-taxonomy}"' in core
-    assert 'parse_species_tree_rooting "${species_tree_rooting}" species_tree_rooting_method species_tree_rooting_value' in core
-    assert 'species_tree_rooting must be one of "outgroup,GENUS_SPECIES[,GENUS_SPECIES...]", "midpoint", "mad", "mv", or "taxonomy[,ncbi[,opentree,timetree...]]".' in core
+    assert (
+        'parse_species_tree_rooting "${species_tree_rooting}" species_tree_rooting_method species_tree_rooting_value'
+        in core
+    )
+    assert (
+        'species_tree_rooting must be one of "outgroup,GENUS_SPECIES[,GENUS_SPECIES...]", "midpoint", "mad", "mv", or "taxonomy[,ncbi[,opentree,timetree...]]".'
+        in core
+    )
     assert 'nwkit_root_args=(--method "${root_method}" --infile "${infile}" --outfile "${outfile}")' in core
     assert 'nwkit_root_args+=(--outgroup "${root_value}")' in core
     assert 'nwkit_root_args+=(--download_dir "${dir_nwkit_download_dir}")' in core
@@ -2016,32 +1311,45 @@ def test_genome_evolution_supports_protein_input_mode_and_species_code_overrides
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
     util = _read_text(WORKFLOW_DIR / "support" / "gg_util.sh")
 
-    assert 'input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.' in entrypoint
+    assert (
+        'input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.'
+        in entrypoint
+    )
     assert "input_sequence_mode" in config_vars
     assert 'input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"' in core
     assert 'input_sequence_mode=$(gg_normalize_input_sequence_mode "${input_sequence_mode}")' in core
     assert "gg_normalize_input_sequence_mode() {" in util
-    assert 'species_genetic_code_table_path() {' in core
+    assert "species_genetic_code_table_path() {" in core
     assert 'echo "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv"' in core
     assert 'echo "${gg_workspace_input_dir}/species_protein"' in core
-    assert 'prepare_species_genetic_code_table() {' in core
-    assert 'lookup_species_genetic_code() {' in core
+    assert "prepare_species_genetic_code_table() {" in core
+    assert "lookup_species_genetic_code() {" in core
     assert 'check_species_protein_dir "${dir_sp_protein_input}"' in core
-    assert 'species_genetic_code.tsv is ignored because species_protein inputs are provided' in core
+    assert "species_genetic_code.tsv is ignored because species_protein inputs are provided" in core
     assert 'if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then' in core
-    assert 'Ignoring species_protein inputs in cds mode: ${dir_sp_protein_input}' in core
-    assert 'cds mode always generates temporary species_protein FASTA files from species_cds.' in core
-    assert 'run_cds_translation must be 1 when species proteins need to be generated from species_cds.' in core
-    assert 'Translation started: ${cds} (genetic_code=${species_code})' in core
+    assert "Ignoring species_protein inputs in cds mode: ${dir_sp_protein_input}" in core
+    assert "cds mode always generates temporary species_protein FASTA files from species_cds." in core
+    assert "run_cds_translation must be 1 when species proteins need to be generated from species_cds." in core
+    assert "Translation started: ${cds} (genetic_code=${species_code})" in core
     assert 'translated_file="${sp_ub}.fa.gz"' in core
     assert 'Copying protein FASTA: $(basename "${protein_path}") -> ${translated_file}' in core
-    assert 'stage_species_protein_fasta() {' in core
-    assert 'prepare_species_protein_orthofinder_dir() {' in core
+    assert "stage_species_protein_fasta() {" in core
+    assert "prepare_species_protein_orthofinder_dir() {" in core
     assert 'prepare_species_protein_orthofinder_dir "${dir_sp_protein}" "${dir_sp_protein_orthofinder}"' in core
-    assert 'refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}"' in core
-    assert 'mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_protein_input}")' in core
-    protein_candidates_index = core.index('if [[ ${#annotation_species_candidates[@]} -eq 0 && "${input_sequence_mode}" == "protein" ]]; then')
-    cds_candidates_index = core.index('if [[ ${#annotation_species_candidates[@]} -eq 0 ]]; then\n  mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_cds}")\nfi')
+    assert (
+        'refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}"'
+        in core
+    )
+    assert (
+        'mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_protein_input}")'
+        in core
+    )
+    protein_candidates_index = core.index(
+        'if [[ ${#annotation_species_candidates[@]} -eq 0 && "${input_sequence_mode}" == "protein" ]]; then'
+    )
+    cds_candidates_index = core.index(
+        'if [[ ${#annotation_species_candidates[@]} -eq 0 ]]; then\n  mapfile -t annotation_species_candidates < <(gg_species_names_from_fasta_dir "${dir_sp_cds}")\nfi'
+    )
     assert protein_candidates_index < cds_candidates_index
 
 
@@ -2055,7 +1363,10 @@ def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_suppor
     gene_block_end = config_vars.index("gg_hgt_entrypoint.sh)")
     gene_block = config_vars[gene_block_start:gene_block_end]
 
-    assert 'input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode is partial and deactivates CDS-only analyses.' in entrypoint
+    assert (
+        'input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode is partial and deactivates CDS-only analyses.'
+        in entrypoint
+    )
     assert "\ninput_sequence_mode\n" in gene_block
     assert 'input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"' in core
     assert 'input_sequence_mode=$(gg_normalize_input_sequence_mode "${input_sequence_mode}")' in core
@@ -2069,30 +1380,50 @@ def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_suppor
     assert "assert_gene_evolution_aa_model_for_protein_mode() {" in core
     assert 'if [[ "${input_sequence_mode}" != "protein" ]]; then' in core
     assert 'if [[ "${mode_gene_evolution}" == "query2family" ]]; then' in core
-    assert 'query2family currently requires species_cds-backed search and CDS extraction.' in core
+    assert "query2family currently requires species_cds-backed search and CDS extraction." in core
     assert 'dir_sp_protein_input="$(gg_species_protein_input_dir_path "${gg_workspace_input_dir}")"' in core
     assert 'file_species_genetic_code="$(gg_species_genetic_code_table_path "${gg_workspace_input_dir}")"' in core
     assert 'file_og_pep_fasta="${dir_output_active}/protein_fasta/${og_id}_pep.fa.gz"' in core
-    assert 'if [[ "${input_sequence_mode}" == "protein" ]]; then\n  file_og_primary_fasta="${file_og_pep_fasta}"' in core
+    assert (
+        'if [[ "${input_sequence_mode}" == "protein" ]]; then\n  file_og_primary_fasta="${file_og_pep_fasta}"' in core
+    )
     assert 'if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then' in core
     assert 'check_species_protein_dir "${dir_sp_protein_input}"' in core
-    assert 'gg_prepare_species_genetic_code_table "${dir_sp_cds}" "${genetic_code}" "${file_species_genetic_code_resolved}" "${file_species_genetic_code}"' in core
-    assert 'translate_orthogroup_cds_to_protein_fasta "${file_og_cds_fasta}" "${file_og_pep_fasta}" "${file_species_genetic_code_resolved}"' in core
+    assert (
+        'gg_prepare_species_genetic_code_table "${dir_sp_cds}" "${genetic_code}" "${file_species_genetic_code_resolved}" "${file_species_genetic_code}"'
+        in core
+    )
+    assert (
+        'translate_orthogroup_cds_to_protein_fasta "${file_og_cds_fasta}" "${file_og_pep_fasta}" "${file_species_genetic_code_resolved}"'
+        in core
+    )
     assert 'assert_gene_evolution_aa_model_for_protein_mode "${task}"' in core
     assert 'disable_if_no_input_file "run_collect_gff_info" "${file_og_primary_fasta}"' in core
-    assert 'seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"' in core
+    assert (
+        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"'
+        in core
+    )
     assert 'disable_if_no_input_file "run_extract_promoter_fasta" "${file_og_gff_info}"' in core
     assert 'disable_if_no_input_file "run_fimo" "${file_og_promoter_fasta}" "${jaspar_path}"' in core
-    assert 'disable_flag_with_reason "run_mapdnds_parameter_estimation" "input_sequence_mode=protein: mapdNdS parameter estimation requires codon alignments."' in core
+    assert (
+        'disable_flag_with_reason "run_mapdnds_parameter_estimation" "input_sequence_mode=protein: mapdNdS parameter estimation requires codon alignments."'
+        in core
+    )
     assert 'disable_flag_with_reason "run_collect_gff_info"' not in core
     assert 'disable_flag_with_reason "run_scm_intron"' not in core
     assert 'disable_flag_with_reason "run_extract_promoter_fasta"' not in core
     assert 'disable_flag_with_reason "run_fimo"' not in core
     assert 'disable_flag_with_reason "treevis_synteny"' not in core
     assert 'synteny_source_dir="${dir_sp_cds}"' in core
-    assert 'if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then\n    synteny_source_dir="${dir_sp_protein_input}"' in core
+    assert (
+        'if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then\n    synteny_source_dir="${dir_sp_protein_input}"'
+        in core
+    )
     assert '--input_sequence_mode "${synteny_sequence_mode}"' in core
-    assert "apply_gene_evolution_input_sequence_mode\nif [[ \"${mode_gene_evolution}\" == \"query2family\" && ${run_query_blast} -eq 1 ]]; then" in core
+    assert (
+        'apply_gene_evolution_input_sequence_mode\nif [[ "${mode_gene_evolution}" == "query2family" && ${run_query_blast} -eq 1 ]]; then'
+        in core
+    )
 
 
 def test_gene_evolution_supports_auto_query_blast_evalue_by_query_length():
@@ -2108,9 +1439,12 @@ def test_gene_evolution_supports_auto_query_blast_evalue_by_query_length():
     assert 'query_blast_auto_evalue_maxlen_cutoffs="40:1000,80:100,150:10,300:1,inf:0.01"' in entrypoint
     assert "\nquery_blast_auto_evalue_maxlen_cutoffs\n" in gene_block
     assert 'query_blast_evalue="${query_blast_evalue:-auto}"' in core
-    assert 'resolve_query_blast_evalue() {' in core
-    assert 'max_len <= cutoff + 0' in core
-    assert 'resolve_query_blast_evalue "${query_blast_evalue}" "${query_aa_local}" "${query_blast_auto_evalue_maxlen_cutoffs}"' in core
+    assert "resolve_query_blast_evalue() {" in core
+    assert "max_len <= cutoff + 0" in core
+    assert (
+        'resolve_query_blast_evalue "${query_blast_evalue}" "${query_aa_local}" "${query_blast_auto_evalue_maxlen_cutoffs}"'
+        in core
+    )
     assert '-evalue "${effective_query_blast_evalue}"' in core
     assert '--evalue "${effective_query_blast_evalue}"' in core
 
@@ -2119,30 +1453,35 @@ def test_genome_evolution_places_run_cds_translation_before_dependent_run_flags(
     entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
 
-    entrypoint_translation_index = entrypoint.index('run_cds_translation=1')
-    entrypoint_species_busco_index = entrypoint.index('run_species_busco=1')
-    entrypoint_species_omark_index = entrypoint.index('run_species_omark=0')
-    entrypoint_orthofinder_index = entrypoint.index('run_orthofinder=1')
-    entrypoint_busco_getfasta_index = entrypoint.index('run_busco_dupaware_extract_fasta=')
+    entrypoint_translation_index = entrypoint.index("run_cds_translation=1")
+    entrypoint_species_busco_index = entrypoint.index("run_species_busco=1")
+    entrypoint_species_omark_index = entrypoint.index("run_species_omark=0")
+    entrypoint_orthofinder_index = entrypoint.index("run_orthofinder=1")
+    entrypoint_busco_getfasta_index = entrypoint.index("run_busco_dupaware_extract_fasta=")
 
     assert entrypoint_translation_index < entrypoint_species_busco_index
     assert entrypoint_translation_index < entrypoint_species_omark_index
     assert entrypoint_translation_index < entrypoint_orthofinder_index
     assert entrypoint_translation_index < entrypoint_busco_getfasta_index
 
-    config_translation_index = config_vars.index('run_cds_translation')
-    config_species_busco_index = config_vars.index('run_species_busco')
-    config_species_omark_index = config_vars.index('run_species_omark')
-    config_species_omark_summary_index = config_vars.index('run_build_species_omark_summary')
-    config_orthofinder_index = config_vars.index('run_orthofinder')
-    config_og_selection_index = config_vars.index('run_og_selection')
-    config_busco_getfasta_index = config_vars.index('run_busco_dupaware_extract_fasta')
+    config_translation_index = config_vars.index("run_cds_translation")
+    config_species_busco_index = config_vars.index("run_species_busco")
+    config_species_omark_index = config_vars.index("run_species_omark")
+    config_species_omark_summary_index = config_vars.index("run_build_species_omark_summary")
+    config_orthofinder_index = config_vars.index("run_orthofinder")
+    config_og_selection_index = config_vars.index("run_og_selection")
+    config_busco_getfasta_index = config_vars.index("run_busco_dupaware_extract_fasta")
 
     assert config_translation_index < config_species_busco_index
     assert config_translation_index < config_species_omark_index
     assert config_translation_index < config_orthofinder_index
     assert config_translation_index < config_busco_getfasta_index
-    assert config_orthofinder_index < config_species_omark_index < config_species_omark_summary_index < config_og_selection_index
+    assert (
+        config_orthofinder_index
+        < config_species_omark_index
+        < config_species_omark_summary_index
+        < config_og_selection_index
+    )
 
 
 def test_genome_evolution_exposes_omark_controls_and_summary_stage():
@@ -2150,9 +1489,18 @@ def test_genome_evolution_exposes_omark_controls_and_summary_stage():
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
-    assert 'run_species_omark=0 # Run OMArk proteome quality assessment for each species using shared protein inputs.' in entrypoint
-    assert 'run_build_species_omark_summary=1 # Build the shared OMArk summary table for species-wise proteome quality assessment.' in entrypoint
-    assert 'omark_db_path="auto" # Path to the OMArk OMAmer LUCA.h5 database, or "auto" to download it under workspace/downloads/omark/.' in entrypoint
+    assert (
+        "run_species_omark=0 # Run OMArk proteome quality assessment for each species using shared protein inputs."
+        in entrypoint
+    )
+    assert (
+        "run_build_species_omark_summary=1 # Build the shared OMArk summary table for species-wise proteome quality assessment."
+        in entrypoint
+    )
+    assert (
+        'omark_db_path="auto" # Path to the OMArk OMAmer LUCA.h5 database, or "auto" to download it under workspace/downloads/omark/.'
+        in entrypoint
+    )
     assert "run_species_omark" in config_vars
     assert "run_build_species_omark_summary" in config_vars
     assert "omark_db_path" in config_vars
@@ -2161,8 +1509,8 @@ def test_genome_evolution_exposes_omark_controls_and_summary_stage():
     assert 'dir_species_omark="${dir_genome_evolution}/omark"' in core
     assert 'file_species_omark_summary_table="${dir_genome_evolution}/omark_summary_table/omark_summary.tsv"' in core
     assert 'ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}"' in core
-    assert 'omamer search \\' in core
-    assert 'omark \\' in core
+    assert "omamer search \\" in core
+    assert "omark \\" in core
     assert 'python "${gg_support_dir}/summarize_omark.py" \\' in core
 
 
@@ -2212,7 +1560,7 @@ def test_common_params_and_rooting_helpers_expose_shared_species_label_parser():
     assert '"--species_parser=${species_label_parser}" \\' in genome_core
     assert "species_parser = args[['species_parser']]" in rooting_helper
     assert "species_parser = 'taxonomic'" in rooting_helper
-    assert 'get_species_overlap_score(phy=rt, dc_cutoff=0, species_parser=species_parser)' in rooting_helper
+    assert "get_species_overlap_score(phy=rt, dc_cutoff=0, species_parser=species_parser)" in rooting_helper
     assert 'species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"' in gene_core
     assert 'species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"' in gene_core
     assert 'species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"' in gene_core
@@ -2249,8 +1597,8 @@ def test_nwkit_call_sites_receive_species_label_parser_options():
 def test_genome_evolution_reuse_check_precedes_busco_lineage_resolution():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
-    missing_outputs_index = core.index('if [[ ${missing_busco_outputs} -ne 1 ]]; then')
-    reuse_return_index = core.index('    return 0\n  fi', missing_outputs_index)
+    missing_outputs_index = core.index("if [[ ${missing_busco_outputs} -ne 1 ]]; then")
+    reuse_return_index = core.index("    return 0\n  fi", missing_outputs_index)
     resolve_lineage_index = core.index('if ! resolve_busco_lineage_for_species_set "${input_species_set[@]}"; then')
 
     assert reuse_return_index < resolve_lineage_index
@@ -2290,8 +1638,12 @@ def test_genome_evolution_exposes_single_copy_ortholog_decay_plot():
 def test_genome_evolution_runs_omark_after_orthofinder_and_before_og_selection():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
-    orthofinder_index = core.index('task="OrthoFinder"\nif [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; then')
-    omark_index = core.index('task="OMArk analysis of species-wise protein input files"\nrun_shared_species_omark_stage')
+    orthofinder_index = core.index(
+        'task="OrthoFinder"\nif [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; then'
+    )
+    omark_index = core.index(
+        'task="OMArk analysis of species-wise protein input files"\nrun_shared_species_omark_stage'
+    )
     omark_summary_index = core.index('task="Summarizing OMArk species quality results"\nrun_shared_omark_summary_stage')
     og_selection_index = core.index('task="Selecting orthogroups based on gene and species numbers"')
 
@@ -2303,8 +1655,14 @@ def test_genome_evolution_runs_omark_after_orthofinder_and_before_og_selection()
 def test_genome_evolution_protein_mode_allows_species_tree_plotting_with_pep_trees_only():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
-    assert 'if [[ "${input_sequence_mode}" == "protein" ]]; then\n    disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_pep_root}" "${file_astral_tree_pep}"' in core
-    assert 'disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"' in core
+    assert (
+        'if [[ "${input_sequence_mode}" == "protein" ]]; then\n    disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_pep_root}" "${file_astral_tree_pep}"'
+        in core
+    )
+    assert (
+        'disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"'
+        in core
+    )
 
 
 def test_plot_species_trees_r_filters_missing_tree_inputs():
@@ -2321,75 +1679,18 @@ def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
     assert 'if [[ "${input_sequence_mode}" == "protein" ]]; then' in core
-    assert 'protein mode does not support undated_species_tree=${undated_species_tree}.' in core
+    assert "protein mode does not support undated_species_tree=${undated_species_tree}." in core
     assert "Use iqtree_pep or astral_pep instead." in core
     assert "Disabling DNA-only species-tree steps in protein mode" in core
     assert "Disabling CDS-only dating steps in protein mode" in core
     assert "Disabling DNA-only duplicate-aware BUSCO genome-evolution steps in protein mode" in core
     assert 'dir_species_busco_full="${gg_workspace_output_dir}/species_protein_busco_full"' in core
     assert 'dir_species_busco_short="${gg_workspace_output_dir}/species_protein_busco_short"' in core
-    assert 'prepare_species_tree_input_dir' in core
+    assert "prepare_species_tree_input_dir" in core
     assert '--mode "${species_tree_busco_mode}"' in core
     assert 'outfile2="${dir_busco_fasta}/${busco_id}${genome_busco_fasta_suffix}"' in core
-    assert 'outfile=${dir_busco_mafft}/${infile_base}${genome_busco_aln_suffix}' in core
+    assert "outfile=${dir_busco_mafft}/${infile_base}${genome_busco_aln_suffix}" in core
     assert 'outfile="${dir_busco_trimal}/${infile_base}${genome_busco_trimal_suffix}"' in core
-
-
-def test_annotation_and_transcriptome_use_local_contamination_removal_rank_parameter():
-    annotation_entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_annotation_entrypoint.sh")
-    transcriptome_entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
-    annotation_core = _read_text(CORE_DIR / "gg_genome_annotation_core.sh")
-    transcriptome_core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
-    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
-    common = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
-
-    assert 'contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.' in annotation_entrypoint
-    assert 'contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.' in transcriptome_entrypoint
-    assert 'contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).' in annotation_entrypoint
-    assert 'contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # Optional NCBI taxon name used as the lineage anchor for contamination removal (for example, Eukaryota when the sample species name is unknown).' in transcriptome_entrypoint
-    assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in common
-    assert 'contamination_removal_rank="${contamination_removal_rank:-domain}"' in annotation_core
-    assert 'contamination_removal_rank="${contamination_removal_rank:-domain}"' in transcriptome_core
-    assert 'contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"' in annotation_core
-    assert 'contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"' in transcriptome_core
-    assert '--species_name "${contamination_removal_target_taxon:-${sp_ub}}"' in annotation_core
-    assert '--species_name "${contamination_removal_target_taxon:-${sp_ub}}"' in transcriptome_core
-    assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in annotation_core
-    assert "GG_COMMON_CONTAMINATION_REMOVAL_RANK" not in transcriptome_core
-    assert "contamination_removal_rank" in config_vars
-    assert "contamination_removal_target_taxon" in config_vars
-
-
-def test_transcriptome_entrypoint_uses_descriptive_busco_flag_names():
-    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
-    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
-    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
-
-    assert 'run_busco_isoforms=1 # BUSCO for transcriptome assembly with isoforms.' in entrypoint
-    assert 'run_busco_longest_cds=1 # BUSCO for longest CDS.' in entrypoint
-    assert 'run_busco_contamination_removed_longest_cds=0 # BUSCO for contamination-removed longest CDS.' in entrypoint
-    assert 'disable_if_no_input_file "run_busco_isoforms" "${file_isoform}"' in core
-    assert 'disable_if_no_input_file "run_busco_longest_cds" "${file_longestcds}"' in core
-    assert 'disable_if_no_input_file "run_busco_contamination_removed_longest_cds" "${file_longestcds_contamination_removal_fasta}"' in core
-    assert "run_busco1" not in entrypoint
-    assert "run_busco2" not in entrypoint
-    assert "run_busco3" not in entrypoint
-    assert "run_busco1" not in core
-    assert "run_busco2" not in core
-    assert "run_busco3" not in core
-    assert "run_busco1" not in config_vars
-    assert "run_busco2" not in config_vars
-    assert "run_busco3" not in config_vars
-
-
-def test_transcriptome_wrapper_uses_amalgkit_default_filter_order():
-    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
-    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
-    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
-
-    assert "amalgkit_filter_order=" not in entrypoint
-    assert "--filter_order" not in core
-    assert "amalgkit_filter_order" not in config_vars
 
 
 def test_entrypoint_modify_block_parameters_have_inline_comments():
@@ -2405,11 +1706,7 @@ def test_entrypoint_modify_block_parameters_have_inline_comments():
 
 def test_common_parameters_have_inline_comments():
     script = WORKFLOW_DIR / "gg_common_params.sh"
-    missing = [
-        f"{script}:{lineno}: {line}"
-        for lineno, line in _common_param_assignments(script)
-        if "#" not in line
-    ]
+    missing = [f"{script}:{lineno}: {line}" for lineno, line in _common_param_assignments(script) if "#" not in line]
     assert not missing, "Add inline comments to common parameters:\n" + "\n".join(missing)
 
 
@@ -2420,7 +1717,7 @@ def test_genome_annotation_core_quotes_known_path_sensitive_options():
     banned_tokens = [
         "--lineage_dataset ${dir_busco_lineage}",
         "--download_path ${dir_busco_db}",
-        "seqkit seq --threads ${GG_TASK_CPUS} ${file_sp_genome} > \"busco_genome_input.fa\"",
+        'seqkit seq --threads ${GG_TASK_CPUS} ${file_sp_genome} > "busco_genome_input.fa"',
         "mmseqs createdb ${file_sp_cds} queryDB",
         "--fasta_file ${file_sp_cds}",
         "--mmseqs2taxonomy_tsv ${file_sp_cds_mmseqs2taxonomy}",
@@ -2466,7 +1763,7 @@ def test_genome_annotation_core_quotes_known_path_sensitive_options():
         '--fasta_file "${file_sp_genome}"',
         '--mmseqs2taxonomy_tsv "${file_sp_genome_mmseqs2taxonomy}"',
         '--fx2tab_tsv "${file_sp_genome_fx2tab}"',
-        'awk -v scaffold="${scaffold}" \'$1 == scaffold\' tmp.species1.bed',
+        "awk -v scaffold=\"${scaffold}\" '$1 == scaffold' tmp.species1.bed",
     ]
     for token in expected_tokens:
         assert token in text, f"Missing quoted genome-annotation token: {token}"
@@ -2483,8 +1780,8 @@ def test_genome_evolution_core_quotes_busco_lineage_and_trimal_input_paths():
         "seqkit translate --transl-table ${genetic_code} --threads 1 ${dir_single_copy_mafft}/${infile}",
         "seqkit seq --remove-gaps --threads 1 ${dir_busco_mafft}/${infile}",
         "seqkit translate --transl-table ${genetic_code} --threads 1 ${dir_busco_mafft}/${infile}",
-        'trimal -in ${dir_single_copy_mafft}/${infile}',
-        'trimal -in ${dir_busco_mafft}/${infile}',
+        "trimal -in ${dir_single_copy_mafft}/${infile}",
+        "trimal -in ${dir_busco_mafft}/${infile}",
     ]
     for token in banned_tokens:
         assert token not in text, f"Found unquoted genome-evolution token: {token}"
@@ -2587,8 +1884,8 @@ def test_gene_evolution_core_uses_exact_header_match_for_missing_query_gene_dete
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     assert 'if ! grep -q -e "^>${gene_name}" "${og_id}.query.cds.2.fasta"; then' not in text
-    assert "if ! awk -v gene=\"${gene_name}\" '" in text
-    assert "sub(/[[:space:]].*$/, \"\", header)" in text
+    assert 'if ! awk -v gene="${gene_name}" \'' in text
+    assert 'sub(/[[:space:]].*$/, "", header)' in text
     assert "if (header == gene)" in text
 
 
@@ -2598,54 +1895,40 @@ def test_gene_evolution_core_filters_empty_translated_records_before_diamond_mak
     assert "filter_translated_fasta_for_diamond() {" in text
     assert 'gsub(/\\*/, "", $0)' in text
     assert 'if ($0 != "") {' in text
-    assert 'printf("Dropped %d translated protein records with empty sequence after stop-codon removal.\\n", dropped) > "/dev/stderr"' in text
-    assert text.count('filter_translated_fasta_for_diamond \\') >= 2
-
-
-def test_transcriptome_core_quotes_mmseqs_createdb_input_path():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    assert "mmseqs createdb ${file_longestcds} queryDB" not in text
-    assert 'mmseqs createdb "${file_longestcds}" queryDB' in text
+    assert (
+        'printf("Dropped %d translated protein records with empty sequence after stop-codon removal.\\n", dropped) > "/dev/stderr"'
+        in text
+    )
+    assert text.count("filter_translated_fasta_for_diamond \\") >= 2
 
 
 def test_gene_evolution_core_quotes_orthogroup_lookup_and_makeblastdb_args():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    assert 'og_id=$(python -c "import sys,pandas; df=pandas.read_csv(sys.argv[1],sep=\'\\t\',header=0); print(df.loc[int(sys.argv[2]),:].iloc[0])" ${file_orthogroup_genecount_selected} ${ind})' not in text
-    assert 'og_id=$(python -c "import sys,pandas; df=pandas.read_csv(sys.argv[1],sep=\'\\t\',header=0); print(df.loc[int(sys.argv[2]),:].iloc[0])" "${file_orthogroup_genecount_selected}" "${ind}")' not in text
+    assert (
+        "og_id=$(python -c \"import sys,pandas; df=pandas.read_csv(sys.argv[1],sep='\\t',header=0); print(df.loc[int(sys.argv[2]),:].iloc[0])\" ${file_orthogroup_genecount_selected} ${ind})"
+        not in text
+    )
+    assert (
+        'og_id=$(python -c "import sys,pandas; df=pandas.read_csv(sys.argv[1],sep=\'\\t\',header=0); print(df.loc[int(sys.argv[2]),:].iloc[0])" "${file_orthogroup_genecount_selected}" "${ind}")'
+        not in text
+    )
     assert "df=pandas.read_csv(sys.argv[1],sep='\\t',header=0); print(df.loc[int(sys.argv[2]),:].iloc[0])" not in text
-    assert 'og_id=$(awk -F\'\\t\' -v row="${GG_ARRAY_TASK_ID}" \'NR == (row + 1) { print $1; exit }\' "${file_orthogroup_genecount_selected}")' in text
-    assert 'makeblastdb -dbtype nucl -title ${sp_cds} -out ${sp_cds_blastdb}' not in text
-    assert 'makeblastdb -dbtype nucl -in ${sp_cds} -out ${sp_cds_blastdb}' not in text
+    assert (
+        "og_id=$(awk -F'\\t' -v row=\"${GG_ARRAY_TASK_ID}\" 'NR == (row + 1) { print $1; exit }' \"${file_orthogroup_genecount_selected}\")"
+        in text
+    )
+    assert "makeblastdb -dbtype nucl -title ${sp_cds} -out ${sp_cds_blastdb}" not in text
+    assert "makeblastdb -dbtype nucl -in ${sp_cds} -out ${sp_cds_blastdb}" not in text
     assert 'makeblastdb -dbtype nucl -title "${sp_cds}" -out "${sp_cds_blastdb}"' in text
     assert 'makeblastdb -dbtype nucl -in "${sp_cds}" -out "${sp_cds_blastdb}"' in text
-
-
-def test_transcriptome_core_uses_rerun_safe_directory_replacement_for_staged_outputs():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    assert 'mv_out "${dir_tmp}"/getfastq/* "${dir_amalgkit_getfastq_sp}"' not in text
-    assert "mv_out ./quant/* \"${dir_amalgkit_quant}/${sp_ub}\"" not in text
-    assert 'mv_out "./merge/${sp_ub}" "$(dirname "$(dirname "${file_amalgkit_merge_tpm}")")"' not in text
-    assert 'mv_out_replace_dir "./merge/${sp_ub}" "$(dirname "${file_amalgkit_merge_tpm}")"' not in text
-    assert 'getfastq_outputs=("${dir_tmp}"/getfastq/*)' in text
-    assert 'mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"' in text
-    assert "quant_outputs=(./quant/*)" in text
-    assert 'mv_out_replace_dir "./quant" "${dir_amalgkit_quant}/${sp_ub}"' in text
-    assert 'resolve_amalgkit_merge_output_prefix' in text
-    assert 'mv_out "${merge_output_dir}/${merge_output_prefix}_eff_length.tsv" "${file_amalgkit_merge_efflen}"' in text
-    assert 'mv_out "${merge_output_dir}/${merge_output_prefix}_est_counts.tsv" "${file_amalgkit_merge_count}"' in text
-    assert 'mv_out "${merge_output_dir}/${merge_output_prefix}_tpm.tsv" "${file_amalgkit_merge_tpm}"' in text
 
 
 def test_no_cp_out_or_mv_out_glob_arguments_in_core_scripts():
     pattern = re.compile(r"^[ \t]*(cp_out|mv_out)\b[^\n]*\*", re.MULTILINE)
     for script in sorted(CORE_DIR.glob("*.sh")):
         text = _read_text(script)
-        assert pattern.search(text) is None, (
-            f"Use nullglob+array guard instead of cp_out/mv_out glob in {script}"
-        )
+        assert pattern.search(text) is None, f"Use nullglob+array guard instead of cp_out/mv_out glob in {script}"
 
 
 def test_gene_evolution_core_quotes_notung_zip_and_summary_presence_checks():
@@ -2717,9 +2000,7 @@ def test_gene_and_genome_core_quote_model_and_codon_options():
     for script in targets:
         text = _read_text(script)
         for pattern in patterns:
-            assert pattern.search(text) is None, (
-                f"Found unquoted model/codon option in {script}: {pattern.pattern}"
-            )
+            assert pattern.search(text) is None, f"Found unquoted model/codon option in {script}: {pattern.pattern}"
 
 
 def test_gene_evolution_core_quotes_trimal_tmp_paths():
@@ -2739,10 +2020,10 @@ def test_genome_evolution_core_quotes_parallel_function_call_args():
         "run_iqtree_dna ${input_alignment_file} &",
         "busco_iqtree_dna ${input_alignment_file} ${dir_busco_trimal} ${dir_busco_iqtree_dna} &",
         "busco_iqtree_pep ${input_alignment_file} ${dir_busco_trimal} ${dir_busco_iqtree_pep} &",
-        "busco_notung ${infile} ${dir_busco_iqtree_dna} \"${dir_busco_notung_dna}\" &",
-        "busco_notung ${infile} ${dir_busco_iqtree_pep} \"${dir_busco_notung_pep}\" &",
-        "busco_species_tree_assisted_gene_tree_rooting ${infile} \"${dir_busco_notung_dna}\" ${dir_busco_iqtree_dna} \"${dir_busco_rooted_txt_dna}\" \"${dir_busco_rooted_nwk_dna}\" &",
-        "busco_species_tree_assisted_gene_tree_rooting ${infile} \"${dir_busco_notung_pep}\" ${dir_busco_iqtree_pep} \"${dir_busco_rooted_txt_pep}\" \"${dir_busco_rooted_nwk_pep}\" &",
+        'busco_notung ${infile} ${dir_busco_iqtree_dna} "${dir_busco_notung_dna}" &',
+        'busco_notung ${infile} ${dir_busco_iqtree_pep} "${dir_busco_notung_pep}" &',
+        'busco_species_tree_assisted_gene_tree_rooting ${infile} "${dir_busco_notung_dna}" ${dir_busco_iqtree_dna} "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}" &',
+        'busco_species_tree_assisted_gene_tree_rooting ${infile} "${dir_busco_notung_pep}" ${dir_busco_iqtree_pep} "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}" &',
     ]
     for token in banned_tokens:
         assert token not in text, f"Found unquoted parallel call args: {token}"
@@ -2766,8 +2047,8 @@ def test_genome_evolution_core_uses_array_for_optional_orthofinder_species_tree_
     text = _read_text(script)
     banned_tokens = [
         "param_species_tree=''",
-        "param_species_tree=\"-s ${species_tree}\"",
-        "if [[ -n \"${param_species_tree}\" ]]; then",
+        'param_species_tree="-s ${species_tree}"',
+        'if [[ -n "${param_species_tree}" ]]; then',
         "${param_species_tree}; then",
     ]
     for token in banned_tokens:
@@ -2794,7 +2075,10 @@ def test_genome_evolution_core_requires_requested_species_tree_before_orthofinde
     assert "Refusing to run OrthoFinder without a species tree." in text
     assert "Species-tree generation was requested, but no summary tree is available." in text
     assert "Running OrthoFinder without species tree constraints." not in text
-    assert "Refusing to run OrthoFinder without species tree constraints because a species tree was found but does not match the current OrthoFinder species set." in text
+    assert (
+        "Refusing to run OrthoFinder without species tree constraints because a species tree was found but does not match the current OrthoFinder species set."
+        in text
+    )
 
 
 def test_genome_evolution_core_only_uses_orthofinder_core_tree_when_species_tree_is_available():
@@ -2811,7 +2095,12 @@ def test_genome_evolution_core_only_uses_orthofinder_core_tree_when_species_tree
     assert core_tree_check in text
     assert core_arg in text
     assert orthofinder_call_arg in text
-    assert text.index(species_tree_arg) < text.index(core_tree_check) < text.index(core_arg) < text.index(orthofinder_call_arg)
+    assert (
+        text.index(species_tree_arg)
+        < text.index(core_tree_check)
+        < text.index(core_arg)
+        < text.index(orthofinder_call_arg)
+    )
 
 
 def test_gene_evolution_core_quotes_notung_and_mapdnds_args():
@@ -2869,12 +2158,8 @@ def test_no_line_start_option_uses_unquoted_variable_in_core_scripts():
     single_dash_long_option = re.compile(r"^[ \t]*-[A-Za-z0-9][A-Za-z0-9_-]+\s+\$\{[^}]+\}", re.MULTILINE)
     for script in sorted(CORE_DIR.glob("*.sh")):
         text = _read_text(script)
-        assert long_option.search(text) is None, (
-            f"Found unquoted variable in long option argument in {script}"
-        )
-        assert short_option.search(text) is None, (
-            f"Found unquoted variable in short option argument in {script}"
-        )
+        assert long_option.search(text) is None, f"Found unquoted variable in long option argument in {script}"
+        assert short_option.search(text) is None, f"Found unquoted variable in short option argument in {script}"
         assert single_dash_long_option.search(text) is None, (
             f"Found unquoted variable in single-dash long option argument in {script}"
         )
@@ -2921,72 +2206,17 @@ def test_no_for_seq_command_substitution_in_core_scripts():
     pattern = re.compile(r"^\s*for\s+[A-Za-z_][A-Za-z0-9_]*\s+in\s+\$\(seq\b", re.MULTILINE)
     for script in sorted(CORE_DIR.glob("*.sh")):
         text = _read_text(script)
-        assert pattern.search(text) is None, (
-            f"Use arithmetic for-loop instead of for-in $(seq ...) in {script}"
-        )
-
-
-def test_transcriptome_core_uses_array_args_for_trinity_and_rnaspades_inputs():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    assert "trinity_input=" not in text
-    assert "${trinity_input}" not in text
-    assert "--single \"${in_single}\"" in text
-    assert "--left \"${in_left}\"" in text
-    assert "--right \"${in_right}\"" in text
-
-    assert "rnaspades_input=$(for i in" not in text
-    assert "rnaspades_input_args=()" in text
-    assert '"${rnaspades_input_args[@]}"' in text
-    assert 'OMP_NUM_THREADS="${assembly_cpus}" \\' in text
-    assert 'OMP_THREAD_LIMIT="${assembly_cpus}" \\' in text
-    assert 'rnaspades_transcript_fasta=$(resolve_rnaspades_transcript_fasta "${dir_tmp}/rnaspades_output")' in text
-    assert 'echo "Using rnaSPAdes transcript fasta: ${rnaspades_transcript_fasta}"' in text
-    assert 'Checked: transcripts.fasta, soft_filtered_transcripts.fasta, hard_filtered_transcripts.fasta' in text
-
-
-def test_transcriptome_core_filters_invalid_paired_fastq_before_assembly():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    count_body = _function_body(text, "fastq_num_seqs_from_file")
-    filter_body = _function_body(text, "filter_valid_paired_fastq_files")
-
-    assert 'seqkit stats --tabular "${fastq_path}"' in count_body
-    assert '$i == "num_seqs"' in count_body
-    assert 'right_file="${left_file%_1.amalgkit.fastq.gz}_2.amalgkit.fastq.gz"' in filter_body
-    assert 'expected_left="${right_file%_2.amalgkit.fastq.gz}_1.amalgkit.fastq.gz"' in filter_body
-    assert 'read_count_mismatch' in filter_body
-    assert 'files_left=("${valid_left[@]}")' in filter_body
-    assert 'files_right=("${valid_right[@]}")' in filter_body
-    assert 'if ! filter_valid_paired_fastq_files "${dir_tmp}/paired_fastq_validation.tsv"; then' in text
-
-
-def test_transcriptome_core_captures_busco_repro_artifacts_on_failure_paths():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    assert 'capture_busco_failure_context() {' in text
-    assert 'cleanup_busco_stage_temp_artifacts() {' in text
-    assert 'run_busco_with_capture() {' in text
-    assert 'capture_busco_repro_artifacts \\' in text
-    assert '2> >(tee "${stderr_log}" >&2)' in text
-    assert 'if ! gg_run_busco_with_metaeuk_modified_fas_compat \\' in text
-    assert 'if gg_busco_stderr_matches_known_metaeuk_modified_fas_bug "${stderr_log}"; then' in text
-    assert 'return 10' in text
-    assert 'Skipping BUSCO outputs for longest CDS because BUSCO hit the known MetaEuk transcriptome bug.' in text
-    assert 'run_busco_with_capture "cdna_isoforms" "busco_infile_cdna.fa"' in text
-    assert 'run_busco_with_capture "longest_cds" "busco_infile_cds.fa"' in text
-    assert 'run_busco_with_capture "contamination_removed_longest_cds" "busco_infile_cds.fa"' in text
-    assert 'capture_busco_failure_context "cdna_isoforms" "busco_infile_cdna.fa" "./busco_tmp.stderr.log"' in text
+        assert pattern.search(text) is None, f"Use arithmetic for-loop instead of for-in $(seq ...) in {script}"
 
 
 def test_busco_support_script_uses_shared_hmmsearch_compat_wrapper():
     script = WORKFLOW_DIR / "support" / "gg_busco.sh"
     text = _read_text(script)
-    assert 'gg_busco_hmmsearch_wrapper_path() {' in text
-    assert 'gg_run_busco_with_metaeuk_modified_fas_compat() {' in text
-    assert 'gg_busco_stderr_matches_known_metaeuk_modified_fas_bug() {' in text
+    assert "gg_busco_hmmsearch_wrapper_path() {" in text
+    assert "gg_run_busco_with_metaeuk_modified_fas_compat() {" in text
+    assert "gg_busco_stderr_matches_known_metaeuk_modified_fas_bug() {" in text
     assert 'GG_REAL_HMMSEARCH="${real_hmmsearch}" \\' in text
-    assert 'GG_BUSCO_METAEUK_MODIFIED_FAS_COMPAT=1 \\' in text
+    assert "GG_BUSCO_METAEUK_MODIFIED_FAS_COMPAT=1 \\" in text
 
 
 def test_busco_call_sites_use_shared_hmmsearch_compat_helper():
@@ -2994,58 +2224,10 @@ def test_busco_call_sites_use_shared_hmmsearch_compat_helper():
     annotation = _read_text(CORE_DIR / "gg_genome_annotation_core.sh")
     input_generation = _read_text(CORE_DIR / "gg_input_generation_core.sh")
     genome_evolution = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
-    assert 'gg_run_busco_with_metaeuk_modified_fas_compat \\' in transcriptome
-    assert 'gg_run_busco_with_metaeuk_modified_fas_compat \\' in annotation
-    assert 'gg_run_busco_with_metaeuk_modified_fas_compat \\' in input_generation
-    assert 'gg_run_busco_with_metaeuk_modified_fas_compat \\' in genome_evolution
-
-
-def test_transcriptome_core_uses_array_for_assembly_stat_input_files():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    assert "input_files=${file_isoform}" not in text
-    assert 'input_files="${input_files} ${file_longestcds}"' not in text
-    assert 'input_files="${input_files} ${file_longestcds_contamination_removal_fasta}"' not in text
-    assert "${input_files}" not in text
-    assert 'input_files=("${file_isoform}")' in text
-    assert 'input_files+=("${file_longestcds}")' in text
-    assert 'input_files+=("${file_longestcds_contamination_removal_fasta}")' in text
-    assert '"${input_files[@]}"' in text
-
-
-def test_transcriptome_core_quotes_get_total_fastq_len_dir_argument():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    banned_tokens = [
-        'get_total_fastq_len ${selected_fastq_dir} "*.amalgkit.fastq.gz"',
-        'get_total_fastq_len ${selected_fastq_dir} "*_1.amalgkit.fastq.gz"',
-        'get_total_fastq_len ${selected_fastq_dir} "*_2.amalgkit.fastq.gz"',
-        'get_total_fastq_len ${assembly_input_fastq_dir} "*.amalgkit.fastq.gz"',
-    ]
-    for token in banned_tokens:
-        assert token not in text, f"Found unquoted get_total_fastq_len dir arg token: {token}"
-
-    expected_tokens = [
-        'get_total_fastq_len "${selected_fastq_dir}" "*.amalgkit.fastq.gz"',
-        'get_total_fastq_len "${selected_fastq_dir}" "*_1.amalgkit.fastq.gz"',
-        'get_total_fastq_len "${selected_fastq_dir}" "*_2.amalgkit.fastq.gz"',
-        'get_total_fastq_len "${assembly_input_fastq_dir}" "*.amalgkit.fastq.gz"',
-    ]
-    for token in expected_tokens:
-        assert token in text, f"Missing quoted get_total_fastq_len dir arg token: {token}"
-
-
-def test_transcriptome_core_guards_non_positive_assembly_resources():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    expected_tokens = [
-        "if [[ ${assembly_cpus} -lt 1 ]]; then",
-        "assembly_cpus=1",
-        "if [[ ${assembly_mem_gb} -lt 1 ]]; then",
-        "assembly_mem_gb=1",
-    ]
-    for token in expected_tokens:
-        assert token in text, f"Missing assembly resource guard token: {token}"
+    assert "gg_run_busco_with_metaeuk_modified_fas_compat \\" in transcriptome
+    assert "gg_run_busco_with_metaeuk_modified_fas_compat \\" in annotation
+    assert "gg_run_busco_with_metaeuk_modified_fas_compat \\" in input_generation
+    assert "gg_run_busco_with_metaeuk_modified_fas_compat \\" in genome_evolution
 
 
 def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
@@ -3055,7 +2237,7 @@ def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
         'bound_params="${bound_params} --lower_bound ${mcmctree_params[2]}"',
         'bound_params="${bound_params} --upper_bound ${mcmctree_params[3]}"',
         'left_right="--left_species ${mcmctree_params[0]} --right_species ${mcmctree_params[1]}"',
-        'tree_string=$(printf \'%s\\n\' "${tree_string}" | nwkit mcmctree ${left_right} ${bound_params})',
+        "tree_string=$(printf '%s\\n' \"${tree_string}\" | nwkit mcmctree ${left_right} ${bound_params})",
         'echo -e "${tree_string}" > "tmp.constrained.tree.nwk"',
         'nwkit mcmctree \\n    --infile "${file_undated_species_tree}"',
     ]
@@ -3086,7 +2268,7 @@ def test_genome_evolution_core_initializes_concat_iqtree_optional_args_as_arrays
     banned_tokens = [
         "bootstrap_params=''",
         "iqtree_mem_arg=''",
-        "iqtree_mem_arg=\"-mem ${GG_MEM_TOTAL_GB}G\"",
+        'iqtree_mem_arg="-mem ${GG_MEM_TOTAL_GB}G"',
         "${iqtree_mem_arg} \\",
         "${bootstrap_params}; then",
     ]
@@ -3164,34 +2346,42 @@ def test_gene_evolution_core_anchors_query_ids_in_maxalign_keep_regex():
 def test_gene_evolution_core_disables_initial_ufboot_when_fast_mode_is_enabled():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    assert 'if [[ ${num_seq} -gt ${iqtree_fast_mode_gt} ]]; then' in text
-    assert 'if [[ ${use_ufboot} -eq 1 ]]; then' in text
-    assert 'Disabling IQ-TREE UFBOOT because fast mode is enabled for large alignments (${num_seq} > ${iqtree_fast_mode_gt}).' in text
-    assert 'other_iqtree_params=()' in text
+    assert "if [[ ${num_seq} -gt ${iqtree_fast_mode_gt} ]]; then" in text
+    assert "if [[ ${use_ufboot} -eq 1 ]]; then" in text
+    assert (
+        "Disabling IQ-TREE UFBOOT because fast mode is enabled for large alignments (${num_seq} > ${iqtree_fast_mode_gt})."
+        in text
+    )
+    assert "other_iqtree_params=()" in text
     assert 'file_tree="${og_id}.treefile"' in text
-    assert 'other_iqtree_params+=(--fast)' in text
+    assert "other_iqtree_params+=(--fast)" in text
 
 
 def test_gene_evolution_core_keeps_generax_ufboot_task_free_of_fast_flag():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    assert 'Skipping IQ-TREE --fast in UFBOOT-on-GeneRax mode because the options are incompatible.' in text
+    assert "Skipping IQ-TREE --fast in UFBOOT-on-GeneRax mode because the options are incompatible." in text
 
     ufboot_block_start = text.index('task="IQ-TREE UFBOOT on GeneRax topology"')
-    ufboot_block_end = text.index('build_iqtree_mem_args', ufboot_block_start)
+    ufboot_block_end = text.index("build_iqtree_mem_args", ufboot_block_start)
     ufboot_block = text[ufboot_block_start:ufboot_block_end]
-    assert 'other_iqtree_params+=( --fast )' not in ufboot_block
+    assert "other_iqtree_params+=( --fast )" not in ufboot_block
 
 
 def test_gene_evolution_core_drops_all_branch_lengths_from_generax_constraint_tree():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     ufboot_block_start = text.index('task="IQ-TREE UFBOOT on GeneRax topology"')
-    ufboot_block_end = text.index('build_iqtree_mem_args', ufboot_block_start)
+    ufboot_block_end = text.index("build_iqtree_mem_args", ufboot_block_start)
     ufboot_block = text[ufboot_block_start:ufboot_block_end]
 
-    assert 'nwkit drop --target all --length yes --outformat 9 --outfile "${og_id}.generax_ufboot.constraint.nwk"' in ufboot_block
-    assert 'nwkit drop --target root --length yes --outfile "${og_id}.generax_ufboot.constraint.nwk"' not in ufboot_block
+    assert (
+        'nwkit drop --target all --length yes --outformat 9 --outfile "${og_id}.generax_ufboot.constraint.nwk"'
+        in ufboot_block
+    )
+    assert (
+        'nwkit drop --target root --length yes --outfile "${og_id}.generax_ufboot.constraint.nwk"' not in ufboot_block
+    )
 
 
 def test_gene_evolution_core_uses_container_safe_generax_mpi_launcher():
@@ -3202,7 +2392,10 @@ def test_gene_evolution_core_uses_container_safe_generax_mpi_launcher():
     generax_block = text[generax_block_start:generax_block_end]
 
     assert 'mpiexec_args=(mpiexec -oversubscribe -np "${GG_TASK_CPUS}")' in generax_block
-    assert 'mpi_env_args=(env OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)' in generax_block
+    assert (
+        "mpi_env_args=(env OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)"
+        in generax_block
+    )
     assert "running_under_scheduler" not in generax_block
 
 
@@ -3210,8 +2403,8 @@ def test_generax_container_smoke_test_uses_runtime_mpi_launcher():
     script = CONTAINER_SCRIPTS_DIR / "ensure_generax_stable.sh"
     body = _function_body(_read_text(script), "run_smoke_test")
 
-    assert 'mpi_env_args=(env OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)' in body
-    assert 'mpiexec_args=(mpiexec --allow-run-as-root -oversubscribe -np 1)' in body
+    assert "mpi_env_args=(env OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)" in body
+    assert "mpiexec_args=(mpiexec --allow-run-as-root -oversubscribe -np 1)" in body
     assert '"${mpi_env_args[@]}" "${mpiexec_args[@]}"' in body
     assert "env OMPI_MCA_plm=isolated \\" not in body
 
@@ -3249,9 +2442,7 @@ def test_no_pipe_to_head_n1_in_core_and_support_scripts():
             stripped = line.lstrip()
             if stripped.startswith("#"):
                 continue
-            assert pattern.search(line) is None, (
-                f"Avoid pipe-to-head under pipefail in {script}:{line_no}: {line}"
-            )
+            assert pattern.search(line) is None, f"Avoid pipe-to-head under pipefail in {script}:{line_no}: {line}"
 
 
 def test_no_pipe_to_awk_exit_in_core_and_support_scripts():
@@ -3262,18 +2453,14 @@ def test_no_pipe_to_awk_exit_in_core_and_support_scripts():
             stripped = line.lstrip()
             if stripped.startswith("#"):
                 continue
-            assert pattern.search(line) is None, (
-                f"Avoid pipe-to-awk-exit under pipefail in {script}:{line_no}: {line}"
-            )
+            assert pattern.search(line) is None, f"Avoid pipe-to-awk-exit under pipefail in {script}:{line_no}: {line}"
 
 
 def test_no_standalone_unquoted_file_or_dir_variable_argument_lines_in_core_scripts():
     pattern = re.compile(r"^[ \t]*\$\{(?:file|dir)_[^}]+\}[ \t]*\\?$", re.MULTILINE)
     for script in sorted(CORE_DIR.glob("*.sh")):
         text = _read_text(script)
-        assert pattern.search(text) is None, (
-            f"Found standalone unquoted file/dir variable argument line in {script}"
-        )
+        assert pattern.search(text) is None, f"Found standalone unquoted file/dir variable argument line in {script}"
 
 
 def test_core_scripts_quote_is_output_older_than_inputs_target_path():
@@ -3293,8 +2480,14 @@ def test_gene_evolution_core_uses_exact_qacc_match_for_rpsblast_hit_presence():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     assert 'if ! grep -F -q -- "${gene}" "${og_id}.rpsblast.tmp.tsv"; then' not in text
-    assert "if ! awk -F '\\t' -v gene=\"${gene}\" '$1 == gene {found=1; exit} END {exit(found ? 0 : 1)}' \"${og_id}.rpsblast.tmp.tsv\"; then" in text
-    assert "qlen=$(seqkit fx2tab --length ungapped_translated_cds.fas | awk -F '\\t' -v gene=\"${gene}\" '$1 == gene {print $NF}')" in text
+    assert (
+        "if ! awk -F '\\t' -v gene=\"${gene}\" '$1 == gene {found=1; exit} END {exit(found ? 0 : 1)}' \"${og_id}.rpsblast.tmp.tsv\"; then"
+        in text
+    )
+    assert (
+        "qlen=$(seqkit fx2tab --length ungapped_translated_cds.fas | awk -F '\\t' -v gene=\"${gene}\" '$1 == gene {print $NF}')"
+        in text
+    )
 
 
 def test_gene_evolution_core_tree_pruning_uses_awk_id_match_instead_of_python_split_filter():
@@ -3305,10 +2498,10 @@ def test_gene_evolution_core_tree_pruning_uses_awk_id_match_instead_of_python_sp
     ]
     for token in banned_tokens:
         assert token not in text
-    assert "sub(/[[:space:]].*$/, \"\", id)" in text
+    assert 'sub(/[[:space:]].*$/, "", id)' in text
     assert "keep_seq = (id in keep)" in text
-    assert "' target_genes.txt \"${og_id}.untrimmed.input.fasta\" > \"${og_id}.untrimmed.pruned.tmp.fasta\"" in text
-    assert "' target_genes.txt \"${og_id}.trimmed.input.fasta\" > \"${og_id}.trimmed.pruned.tmp.fasta\"" in text
+    assert '\' target_genes.txt "${og_id}.untrimmed.input.fasta" > "${og_id}.untrimmed.pruned.tmp.fasta"' in text
+    assert '\' target_genes.txt "${og_id}.trimmed.input.fasta" > "${og_id}.trimmed.pruned.tmp.fasta"' in text
 
 
 def test_gg_util_python_package_check_uses_importlib_with_argv():
@@ -3376,7 +2569,7 @@ def test_support_python_scalar_conditions_use_logical_and_not_bitwise_and():
 def test_gene_evolution_core_uses_csubst_search_namespace():
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
     assert "csubst analyze \\" not in core
-    assert 'csubst search \\' in core
+    assert "csubst search \\" in core
     assert 'csubst_search_dir="csubst_search"' in core
     assert 'csubst_nonsyn_recode=$(echo "${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr' in core
     assert '--nonsyn_recode "${csubst_nonsyn_recode}"' in core
@@ -3407,17 +2600,6 @@ def test_csubst_site_wrapper_omits_redundant_sites_defaults():
     assert "cmd += ['--mafft_exe', 'mafft']" not in wrapper
     assert "if recode != 'no':" in wrapper
     assert "cmd += ['--nonsyn_recode', recode]" in wrapper
-
-
-def test_is_fastq_requiring_downstream_analysis_done_quotes_path_checks():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "is_fastq_requiring_downstream_analysis_done")
-    assert '-s ${file_isoform}' not in body
-    assert '-s ${file_amalgkit_merge_count}' not in body
-    assert '-s "${file_isoform}"' in body
-    assert '-s "${file_amalgkit_merge_count}"' in body
-    assert 'echo "${out}"' in body
 
 
 def test_genome_annotation_core_has_jcvi_scaffold_fallback_for_small_genomes():
@@ -3521,29 +2703,6 @@ def test_genome_evolution_core_uses_filtered_orthofinder_core_sampling():
     assert '--method "${orthofinder_core_method}"' in text
 
 
-def test_transcriptome_gene_and_genome_evolution_core_guard_tmp_delete_against_root_path():
-    transcriptome = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
-    gene_evolution = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
-    genome_evolution = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
-
-    assert 'if [[ -n "${dir_tmp:-}" && "${dir_tmp}" != "/" ]]; then' in transcriptome
-    assert "Refusing to delete unsafe tmp directory" in transcriptome
-
-    assert 'if [[ -n "${dir_tmp:-}" && -d "${dir_tmp}" && "${dir_tmp}" != "/" ]]; then' in gene_evolution
-    assert "Refusing to delete unsafe tmp directory" in gene_evolution
-
-    assert 'if [[ -d "${dir_tmp}" && -n "${dir_tmp:-}" && "${dir_tmp}" != "/" ]]; then' in genome_evolution
-    assert "Refusing to delete unsafe tmp directory" in genome_evolution
-    assert 'echo "$(date): end"' in genome_evolution
-
-
-def test_transcriptome_core_busco_summary_loop_guards_missing_dir_before_find():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    assert 'if [[ -z "$(find "${dir_busco}" -mindepth 1 -print -quit)" ]]; then' not in text
-    assert 'if [[ ! -d "${dir_busco}" || -z "$(find "${dir_busco}" -mindepth 1 -print -quit 2> /dev/null)" ]]; then' in text
-
-
 def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
@@ -3575,124 +2734,32 @@ def test_gene_evolution_core_guards_array_task_id_range_before_input_indexing():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
 
-    assert 'mapfile -t files < <(find "${dir_genelist}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
+    assert "mapfile -t files < <(find \"${dir_genelist}\" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)" in text
     assert 'files=( "${dir_genelist}"/* )' not in text
     assert 'if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then' in text
-    assert 'num_orthogroups=$(awk \'END { print (NR > 0 ? NR - 1 : 0) }\'' in text
-    assert 'if [[ ${GG_ARRAY_TASK_ID} -gt ${num_orthogroups} ]]; then' in text
+    assert "num_orthogroups=$(awk 'END { print (NR > 0 ? NR - 1 : 0) }'" in text
+    assert "if [[ ${GG_ARRAY_TASK_ID} -gt ${num_orthogroups} ]]; then" in text
     assert "df=pandas.read_csv(sys.argv[1],sep='\\t',header=0); print(df.loc[int(sys.argv[2]),:].iloc[0])" not in text
-    assert 'og_id=$(awk -F\'\\t\' -v row="${GG_ARRAY_TASK_ID}" \'NR == (row + 1) { print $1; exit }\'' in text
+    assert "og_id=$(awk -F'\\t' -v row=\"${GG_ARRAY_TASK_ID}\" 'NR == (row + 1) { print $1; exit }'" in text
 
-    idx_guard = 'if [[ ${idx} -ge ${#files[@]} ]]; then'
+    idx_guard = "if [[ ${idx} -ge ${#files[@]} ]]; then"
     idx_use = 'file_query_gene="${files[${idx}]}"'
     assert idx_guard in text
     assert idx_use in text
     assert text.index(idx_guard) < text.index(idx_use)
 
 
-def test_transcriptome_core_guards_array_task_id_range_before_array_indexing():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-
-    assert 'dir_input_fastq="${dir_transcriptome_assembly_input}/input_fastq"' not in text
-    assert 'dir_input_sra_list="${dir_transcriptome_assembly_input}/input_sra_list"' not in text
-    assert "Backward compatibility for legacy input layout" not in text
-    assert 'mapfile -t fastq_mode_dirs < <(find "${dir_input_fastq}" -mindepth 1 -maxdepth 1 -type d ! -name \'.*\' | sort)' in text
-    assert 'mapfile -t files_fastq < <(find "${dir_species_fastq}" -maxdepth 1 -type f ! -name \'.*\' \\( -name "*.fq" -o -name "*.fastq" -o -name "*.fq.gz" -o -name "*.fastq.gz" \\) | sort)' in text
-    assert 'mapfile -t sra_mode_files < <(find "${dir_input_sra_list}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
-    assert 'mapfile -t metadata_mode_files < <(find "${dir_input_amalgkit_metadata}" -mindepth 1 -maxdepth 1 -type f ! -name \'.*\' | sort)' in text
-    assert 'dirs=( "${fastq_mode_dirs[@]}" )' in text
-    assert 'files=( "${sra_mode_files[@]}" )' in text
-    assert 'files=( "${metadata_mode_files[@]}" )' in text
-    assert re.search(r'^[ \t]*dirs=\( "\$\{dir_input_fastq\}"/\* \)', text, re.MULTILINE) is None
-    assert re.search(r'^[ \t]*files=\( "\$\{dir_input_sra_list\}"/\* \)', text, re.MULTILINE) is None
-    assert re.search(r'^[ \t]*files=\( "\$\{dir_input_amalgkit_metadata\}"/\* \)', text, re.MULTILINE) is None
-    assert 'files_fastq=( "${dir_species_fastq}"/* )' not in text
-    assert 'if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then' in text
-    assert 'if [[ ${#fastq_mode_dirs[@]} -eq 0 ]]; then' in text
-    assert 'if [[ ${#sra_mode_files[@]} -eq 0 ]]; then' in text
-    assert 'if [[ ${#metadata_mode_files[@]} -eq 0 ]]; then' in text
-
-    fastq_guard = 'if [[ ${id} -ge ${#dirs[@]} ]]; then'
-    fastq_use = 'dir_species_fastq="${dirs[${id}]}"'
-    assert fastq_guard in text
-    assert fastq_use in text
-    assert text.index(fastq_guard) < text.index(fastq_use)
-
-    sraid_guard = 'if [[ ${id} -ge ${#files[@]} ]]; then'
-    sraid_use = 'file_input_sra_list="${files[${id}]}"'
-    assert sraid_guard in text
-    assert sraid_use in text
-    assert text.index(sraid_guard) < text.index(sraid_use)
-
-    metadata_guard = 'if [[ ${id} -ge ${#files[@]} ]]; then'
-    metadata_use = 'file_metadata="${files[${id}]}"'
-    assert metadata_use in text
-    assert text.rindex(metadata_guard) < text.index(metadata_use)
-
-
-def test_transcriptome_core_stores_generated_metadata_under_output_dir():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-
-    assert 'dir_input_amalgkit_metadata="${gg_workspace_input_dir}/amalgkit_metadata"' in text
-    assert 'dir_generated_amalgkit_metadata="${dir_transcriptome_assembly_output}/amalgkit_metadata"' in text
-    assert 'file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"' in text
-    assert 'file_generated_amalgkit_metadata="${dir_generated_amalgkit_metadata}/${sp_ub}_metadata.tsv"' in text
-    assert 'if [[ "${selected_transcriptome_mode}" == "metadata" ]]; then' in text
-    assert 'file_amalgkit_metadata="${file_input_amalgkit_metadata}"' in text
-    assert 'file_amalgkit_metadata="${file_generated_amalgkit_metadata}"' in text
-    assert 'file_amalgkit_metadata="${dir_amalgkit_metadata}/${sp_ub}_metadata.tsv"' not in text
-
-
-def test_transcriptome_core_guards_getfastq_outputs_before_assembly_and_quant():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    dir_guard = 'if [[ ! -d "${dir_amalgkit_getfastq_sp}" ]]; then'
-    fastq_guard = 'if [[ -z "$(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" -print -quit 2> /dev/null)" ]]; then'
-    assert text.count(dir_guard) >= 2
-    assert text.count(fastq_guard) >= 2
-    assert "amalgkit getfastq output directory not found" in text
-    assert "No amalgkit getfastq FASTQ files were found in" in text
-
-
-def test_transcriptome_core_uses_type_f_for_fastq_find_patterns():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    expected_tokens = [
-        'find "${dir_amalgkit_getfastq_sp}" -type f -name "*_2.amalgkit.fastq.gz"',
-        'find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz"',
-        'find "${dir_amalgkit_getfastq_sp}" -type f -name "*_1.amalgkit.fastq.gz"',
-        'find "${selected_fastq_dir}" -type f -name "*.amalgkit.fastq.gz"',
-        'find "${selected_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz"',
-        'find "${selected_fastq_dir}" -type f -name "*_2.amalgkit.fastq.gz"',
-        'find "${assembly_input_fastq_dir}" -type f -name "*.amalgkit.fastq.gz"',
-        'find "${assembly_input_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz"',
-        'find "${assembly_input_fastq_dir}" -type f -name "*_2.amalgkit.fastq.gz"',
-    ]
-    for token in expected_tokens:
-        assert token in text
-
-    banned_tokens = [
-        'find "${dir_amalgkit_getfastq_sp}" -name "*_2.amalgkit.fastq.gz"',
-        'find "${dir_amalgkit_getfastq_sp}" -name "*.amalgkit.fastq.gz"',
-        'find "${dir_amalgkit_getfastq_sp}" -name "*_1.amalgkit.fastq.gz"',
-        'find "${selected_fastq_dir}" -name "*.amalgkit.fastq.gz"',
-        'find "${selected_fastq_dir}" -name "*_1.amalgkit.fastq.gz"',
-        'find "${selected_fastq_dir}" -name "*_2.amalgkit.fastq.gz"',
-        'find "${assembly_input_fastq_dir}" -name "*.amalgkit.fastq.gz"',
-        'find "${assembly_input_fastq_dir}" -name "*_1.amalgkit.fastq.gz"',
-        'find "${assembly_input_fastq_dir}" -name "*_2.amalgkit.fastq.gz"',
-    ]
-    for token in banned_tokens:
-        assert token not in text
-
-
 def test_gene_evolution_core_escapes_embedded_quotes_in_seqtype_error_message():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    assert 'echo "Unsupported sequence type \'${seqtype}\' in \'${file_query_gene}\'. Only "DNA" or "Protein" are allowed. Exiting."' not in text
-    assert 'echo "Unsupported sequence type \'${seqtype}\' in \'${file_query_gene}\'. Only \\"DNA\\" or \\"Protein\\" are allowed. Exiting."' in text
+    assert (
+        'echo "Unsupported sequence type \'${seqtype}\' in \'${file_query_gene}\'. Only "DNA" or "Protein" are allowed. Exiting."'
+        not in text
+    )
+    assert (
+        'echo "Unsupported sequence type \'${seqtype}\' in \'${file_query_gene}\'. Only \\"DNA\\" or \\"Protein\\" are allowed. Exiting."'
+        in text
+    )
 
 
 def test_genome_annotation_core_guards_array_task_id_before_task_index_math():
@@ -3700,8 +2767,8 @@ def test_genome_annotation_core_guards_array_task_id_before_task_index_math():
     text = _read_text(script)
     assert 'if [[ ! -d "${dir_sp_cds}" ]]; then' in text
     assert 'echo "Input directory not found: ${dir_sp_cds}. Exiting."' in text
-    assert 'find "${dir_sp_cds}" -maxdepth 1 -type f ! -name \'.*\'' in text
-    assert 'find "${dir_sp_dnaseq}/${sp_ub}" -type f ! -name \'.*\'' in text
+    assert "find \"${dir_sp_cds}\" -maxdepth 1 -type f ! -name '.*'" in text
+    assert "find \"${dir_sp_dnaseq}/${sp_ub}\" -type f ! -name '.*'" in text
     guard = 'if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then'
     task_index = "task_index=$((GG_ARRAY_TASK_ID - 1))"
     assert guard in text
@@ -3713,7 +2780,7 @@ def test_genome_annotation_core_multispecies_summary_requires_real_summary_input
     script = CORE_DIR / "gg_genome_annotation_core.sh"
     text = _read_text(script)
     assert "summary_inputs_available=0" in text
-    assert 'No multispecies summary inputs are available yet. Skipping summary generation.' in text
+    assert "No multispecies summary inputs are available yet. Skipping summary generation." in text
     assert 'if is_output_older_than_inputs "^file_sp_" "${file_multispecies_summary}"; then' not in text
     assert 'if is_output_older_than_inputs "^(dir_summary_|file_summary_)" "${file_multispecies_summary}"; then' in text
     assert 'dir_summary_species_annotation="${gg_workspace_output_dir}/species_cds_annotation"' in text
@@ -3723,13 +2790,13 @@ def test_genome_annotation_core_multispecies_summary_requires_real_summary_input
 def test_genome_evolution_core_excludes_hidden_files_when_listing_species_proteins():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    assert 'find "${dir_sp_protein_orthofinder}" -maxdepth 1 -type f ! -name \'.*\'' in text
+    assert "find \"${dir_sp_protein_orthofinder}\" -maxdepth 1 -type f ! -name '.*'" in text
 
 
 def test_input_generation_core_excludes_hidden_files_when_listing_species_inputs():
     script = CORE_DIR / "gg_input_generation_core.sh"
     text = _read_text(script)
-    assert 'find "${search_dir}" -maxdepth 1 -type f ! -name \'.*\'' in text
+    assert "find \"${search_dir}\" -maxdepth 1 -type f ! -name '.*'" in text
     expected_tokens = [
         'list_nonhidden_matching_files "${species_cds_dir}"',
         'list_nonhidden_matching_files "${species_gff_dir}"',
@@ -3741,7 +2808,7 @@ def test_input_generation_core_excludes_hidden_files_when_listing_species_inputs
 def test_input_generation_core_runs_cds_gff_mapping_validation():
     script = CORE_DIR / "gg_input_generation_core.sh"
     text = _read_text(script)
-    assert 'validate_cds_gff_mapping.py' in text
+    assert "validate_cds_gff_mapping.py" in text
     assert '--species-cds-dir "${species_cds_dir}"' in text
     assert '--species-gff-dir "${species_gff_dir}"' in text
     assert '--nthreads "${GG_TASK_CPUS:-1}"' in text
@@ -3759,7 +2826,7 @@ def test_input_generation_core_wires_array_modes_and_busco_outputs_under_input_g
     script = CORE_DIR / "gg_input_generation_core.sh"
     text = _read_text(script)
     assert 'input_generation_mode="${input_generation_mode:-single}"' in text
-    assert 'single|array_prepare|array_worker|array_finalize' in text
+    assert "single|array_prepare|array_worker|array_finalize" in text
     assert 'run_species_busco="${run_species_busco:-1}"' in text
     assert 'run_cds_fx2tab="${run_cds_fx2tab:-1}"' in text
     assert 'run_multispecies_summary="${run_multispecies_summary:-1}"' in text
@@ -3782,8 +2849,8 @@ def test_mmseqs_uniref90_download_retries_and_reports_disk_context():
     assert 'local output_db="${db_dir}/${uniref_db}_DB"' in body
     assert 'mmseqs databases "${uniref_db}" "${output_db}" "${db_dir}" --threads "${nthreads}"' in body
     assert "for attempt in 1 2 3; do" in body
-    assert 'Preparing MMseqs2 UniRef90 taxonomy DB in: ${db_dir} (attempt ${attempt}/${max_attempts})' in body
-    assert 'MMseqs2 UniRef90 taxonomy DB preparation failed in: ${db_dir} (attempt ${attempt}/${max_attempts})' in body
+    assert "Preparing MMseqs2 UniRef90 taxonomy DB in: ${db_dir} (attempt ${attempt}/${max_attempts})" in body
+    assert "MMseqs2 UniRef90 taxonomy DB preparation failed in: ${db_dir} (attempt ${attempt}/${max_attempts})" in body
     assert 'df -h "${db_dir}" >&2 || true' in body
     assert "sleep 5" in body
 
@@ -3797,11 +2864,11 @@ def test_genome_evolution_core_does_not_include_legacy_output_migration_code():
         "legacy_mafft_files=()",
         "legacy_trimal_files=()",
         "migrate_legacy_fasta_outputs()",
-        "migrate_legacy_fasta_outputs \"${dir_busco_fasta}\"",
-        "migrate_legacy_fasta_outputs \"${dir_busco_mafft}\"",
-        "migrate_legacy_fasta_outputs \"${dir_busco_trimal}\"",
-        "-name \"*_busco.full.tsv\"",
-        "-name \"*_busco.short.txt\"",
+        'migrate_legacy_fasta_outputs "${dir_busco_fasta}"',
+        'migrate_legacy_fasta_outputs "${dir_busco_mafft}"',
+        'migrate_legacy_fasta_outputs "${dir_busco_trimal}"',
+        '-name "*_busco.full.tsv"',
+        '-name "*_busco.short.txt"',
     ]
     for token in banned_tokens:
         assert token not in text
