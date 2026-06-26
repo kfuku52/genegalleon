@@ -36,3 +36,10 @@ def test_get_genome_file_ignores_hidden_entries_and_directories(tmp_path: Path):
 
     detected = mod.get_genome_file(str(tmp_path), "Species_a")
     assert detected == str(target)
+
+
+def test_get_genome_file_does_not_match_longer_species_label(tmp_path: Path):
+    mod = load_module()
+    (tmp_path / "Species_a_subsp_x.genome.fa").write_text(">x\nAT\n", encoding="utf-8")
+
+    assert mod.get_genome_file(str(tmp_path), "Species_a") is None

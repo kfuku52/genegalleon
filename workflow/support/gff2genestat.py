@@ -13,9 +13,9 @@ import sys
 import time
 
 try:
-    from species_labeling import strip_species_label
+    from species_labeling import extract_species_label, strip_species_label
 except ImportError:  # pragma: no cover - package import path used in tests
-    from .species_labeling import strip_species_label
+    from .species_labeling import extract_species_label, strip_species_label
 
 pandas.options.mode.chained_assignment = None
 
@@ -656,12 +656,15 @@ def main():
     out_cols = ['gene_id', 'feature_size', 'num_intron', 'intron_positions', 'chromosome', 'start', 'end','strand']
     gff_cols = ['sequence','source','feature','start','end','score','strand','phase','attributes']
     seq_names = read_fasta_seqname(file_path=args.seqfile)
+    seq_species_labels = seq_names.map(extract_species_label)
     gff_files = [gff for gff in os.listdir(args.dir_gff) if not gff.startswith('.')]
     gff_files = [gff for gff in gff_files if gff.endswith(('.gff', '.gtf', '.gff3', '.gff.gz', '.gtf.gz', '.gff3.gz'))]
     tasks = []
     for gff_file in gff_files:
-        sp_ub = filename2sciname(file_name=gff_file)
-        seq_sp = seq_names[seq_names.str.startswith(sp_ub)]
+        sp_ub = extract_species_label(gff_file, strip_extension=True)
+        if sp_ub == "":
+            sp_ub = filename2sciname(file_name=gff_file)
+        seq_sp = seq_names[seq_species_labels == sp_ub]
         if seq_sp.shape[0] == 0:
             continue
         tasks.append((gff_file, seq_sp.tolist()))

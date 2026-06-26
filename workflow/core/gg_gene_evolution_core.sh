@@ -342,6 +342,47 @@ apply_gene_evolution_input_sequence_mode() {
   disable_flag_with_reason "run_csubst" "input_sequence_mode=protein: CSUBST currently depends on codon-mode ancestral reconstruction."
 }
 
+write_species_trait_foreground_regex_table() {
+  local input_tsv=$1
+  local output_tsv=$2
+  PYTHONPATH="${gg_support_dir}${PYTHONPATH:+:${PYTHONPATH}}" python - "${input_tsv}" "${output_tsv}" <<'PY'
+import csv
+import re
+import sys
+
+from species_labeling import extract_species_label
+
+RANK_OR_QUALIFIER_TOKENS = (
+    "cf", "aff", "nr", "sp", "spp",
+    "subsp", "ssp", "subspecies", "var", "variety", "forma", "form", "f",
+    "strain", "substrain", "serovar", "serotype", "serogroup",
+    "pathovar", "pv", "biovar", "biotype", "chemovar", "morphovar",
+    "cultivar", "cv", "isolate", "group", "subgroup", "complex",
+    "clade", "lineage", "section", "series", "ecotype", "breed",
+)
+
+
+def species_foreground_regex(value):
+    species_label = extract_species_label(value) or str(value or "").strip()
+    if species_label == "":
+        return ""
+    token_pattern = "|".join(re.escape(token) for token in RANK_OR_QUALIFIER_TOKENS)
+    return r"^{}_(?!(?:{})(?:\.|_)).*".format(re.escape(species_label), token_pattern)
+
+
+infile, outfile = sys.argv[1:3]
+with open(infile, "r", encoding="utf-8", errors="replace", newline="") as src, open(
+    outfile, "w", encoding="utf-8", newline=""
+) as dst:
+    reader = csv.reader(src, delimiter="\t")
+    writer = csv.writer(dst, delimiter="\t", lineterminator="\n")
+    for row_index, row in enumerate(reader):
+        if row_index > 0 and row:
+            row[0] = species_foreground_regex(row[0])
+        writer.writerow(row)
+PY
+}
+
 # Setting modes
 if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
   enable_all_run_flags_for_debug_mode "gg debug mode: All run_* variables are forced to set 1, except for too-time-consuming tasks."
@@ -1606,7 +1647,7 @@ for gene in gene_ids:
             seen.add(candidate)
             normalized_ids.append(candidate)
 
-patterns = [f"(?i:{re.escape(gene)}.*)" for gene in normalized_ids]
+patterns = [f"(?i:^{re.escape(gene)}$)" for gene in normalized_ids]
 print(','.join(patterns))
 PY
     )
@@ -2696,7 +2737,7 @@ if [[ ! -s "${file_og_codeml_two_ratio}" && "${run_codeml_two_ratio}" -eq 1 ]]; 
   gg_step_start "${task}"
 
   binarize_species_trait "${file_sp_trait}" species_trait_binary.tsv
-  sed '2,$ s/\t/_.*\t/' species_trait_binary.tsv > foreground.tsv
+  write_species_trait_foreground_regex_table species_trait_binary.tsv foreground.tsv
   IFS=$'\t' read -r -a colname_array < foreground.tsv
 
   if [[ ${#colname_array[@]} -le 1 ]]; then
@@ -2878,7 +2919,7 @@ run_hyphy_relax_for_all_traits() {
   fi
 
   binarize_species_trait "${file_sp_trait}" species_trait_binary.tsv
-  sed '2,$ s/\t/_.*\t/' species_trait_binary.tsv > foreground.tsv
+  write_species_trait_foreground_regex_table species_trait_binary.tsv foreground.tsv
   IFS=$'\t' read -r -a colname_array < foreground.tsv
 
   local reversed_mark=""
@@ -3194,7 +3235,7 @@ if [[ (! -s "${file_og_csubst_b}" || ! -s "${file_og_csubst_cb_stats}") && ${run
       echo "Exiting."
       exit 1
     fi
-    sed '2,$ s/\t/_.*\t/' "${file_sp_trait}" > "foreground.tsv"
+    write_species_trait_foreground_regex_table "${file_sp_trait}" "foreground.tsv"
     foreground_params=(--foreground foreground.tsv --fg_format 2)
   else
     echo 'Foreground specification file was not found. CSUBST will run without it.'

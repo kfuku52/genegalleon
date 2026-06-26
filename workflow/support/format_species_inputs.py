@@ -1967,10 +1967,11 @@ def remove_stale_ensembl_like_partial_gff_outputs(provider, species_prefix, outp
     keep_path = Path(keep_path)
     if ensembl_like_gff_url_is_disfavored(keep_path.name):
         return []
-    prefix = "{}_".format(species_prefix)
     removed = []
-    for path in sorted(output_dir.glob("{}*".format(prefix))):
+    for path in sorted(Path(output_dir).iterdir()):
         if path == keep_path or not path.is_file():
+            continue
+        if species_prefix_from_value(path.name) != species_prefix:
             continue
         if not is_gff_filename(path.name):
             continue

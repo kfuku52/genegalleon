@@ -22,7 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from species_labeling import extract_species_label, scientific_name_from_label
+from species_labeling import extract_species_label, scientific_name_from_label, strip_species_label
 
 
 def new_tree(newick_or_path, format=1, quoted_node_names=False):
@@ -1398,12 +1398,13 @@ def main():
         df_branch = pandas.merge(df_branch, merged_node_left, on='node_name', how='left')
     if (params['clade_ortholog_prefix'] != '') and os.path.exists(params["rooted_tree"]):
         newcol = params['clade_ortholog_prefix']+'closest_gene'
+        clade_ortholog_species = params['clade_ortholog_prefix'].rstrip('_')
         ortholog_ids_by_label = {}
         for node in rooted_tree.traverse(strategy='postorder'):
             nlabel = get_node_label(node)
             if node_is_leaf(node):
-                if node.name.startswith(params['clade_ortholog_prefix']):
-                    ortholog_ids_by_label[nlabel] = [node.name.replace(params['clade_ortholog_prefix'], ''),]
+                if extract_species_label(node.name) == clade_ortholog_species:
+                    ortholog_ids_by_label[nlabel] = [strip_species_label(node.name),]
                 else:
                     ortholog_ids_by_label[nlabel] = []
             else:

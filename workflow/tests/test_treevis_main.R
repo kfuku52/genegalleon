@@ -513,6 +513,15 @@ df_nearest <- data.frame(
 )
 clade <- get_df_clade(df_nearest, ortholog_prefix = "SPX_")
 if (nrow(clade) != 2) stop("get_df_clade should create two grouped clades.")
+if (!treevis_label_matches_ortholog_prefix("Species_a_gene1", "Species_a_")) {
+  stop("treevis_label_matches_ortholog_prefix should match the exact species label.")
+}
+if (treevis_label_matches_ortholog_prefix("Species_a_subsp_x_gene1", "Species_a_")) {
+  stop("treevis_label_matches_ortholog_prefix should not match a longer species label.")
+}
+if (treevis_strip_ortholog_prefix("Species_a_gene1", "Species_a_") != "gene1") {
+  stop("treevis_strip_ortholog_prefix should strip the exact species prefix.")
+}
 df_nested <- data.frame(
   nearests = c("x", "y"),
   ymin = c(1, 2),

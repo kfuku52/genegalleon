@@ -114,9 +114,6 @@ def alignment_subset_nuc_freqs(alignment_file, model, leaf_names=None):
             if header in leaf_set:
                 selected_headers.append(header)
                 continue
-            if any(header.startswith(name) for name in leaf_names):
-                selected_headers.append(header)
-                continue
             if normalize_label(header) in leaf_norm_set:
                 selected_headers.append(header)
     if len(selected_headers) == 0:

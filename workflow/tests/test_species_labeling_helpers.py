@@ -28,6 +28,17 @@ def test_synteny_neighbors_guess_species_name_preserves_qualified_species_labels
     assert mod.guess_species_name("Amoeba_sp_JDSRuffled_geneB") == "Amoeba_sp_JDSRuffled"
 
 
+def test_synteny_neighbors_find_species_file_uses_exact_species_label(tmp_path):
+    mod = load_module("synteny_neighbors.py", "synteny_neighbors_module")
+
+    (tmp_path / "Species_a_subsp_x.fa").write_text(">x\nATG\n", encoding="utf-8")
+    assert mod.find_species_file(str(tmp_path), "Species_a", mod.FASTA_EXTENSIONS) == ""
+
+    target = tmp_path / "Species_a.fa"
+    target.write_text(">a\nATG\n", encoding="utf-8")
+    assert mod.find_species_file(str(tmp_path), "Species_a", mod.FASTA_EXTENSIONS) == str(target)
+
+
 def test_get_promoter_fasta_extracts_qualified_species_label_from_gene_id():
     mod = load_module("get_promoter_fasta.py", "get_promoter_fasta_module")
 
@@ -114,3 +125,10 @@ def test_species_labeling_extracts_dotted_rank_labels_from_filenames():
         mod.base_species_label("Cenchrus_americanus_x_Cenchrus_purpureus")
         == "Cenchrus_americanus_x_Cenchrus_purpureus"
     )
+
+
+def test_species_labeling_matches_species_label_exactly_after_suffix_stripping():
+    mod = load_module("species_labeling.py", "species_labeling_module")
+
+    assert mod.matches_species_label("Species_a.fa", "Species_a", strip_extension=True)
+    assert not mod.matches_species_label("Species_a_subsp_x.fa", "Species_a", strip_extension=True)

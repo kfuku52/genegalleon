@@ -59,6 +59,16 @@ def test_index_gff_files_prefers_full_annotation_over_partial_files(tmp_path):
     assert indexed["Saccharomyces_cerevisiae"][0].name == "Saccharomyces_cerevisiae_R64-1-1.115.gff.gz"
 
 
+def test_first_nonmatching_prefix_uses_exact_species_label():
+    mod = load_module()
+
+    assert (
+        mod.first_nonmatching_prefix(["Species_a_subsp_x_gene1"], "Species_a")
+        == "Species_a_subsp_x_gene1"
+    )
+    assert mod.first_nonmatching_prefix(["Species_a_gene1"], "Species_a") == ""
+
+
 def test_validate_cds_gff_mapping_passes_on_matching_ids(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"

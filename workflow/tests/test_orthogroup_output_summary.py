@@ -40,6 +40,13 @@ def test_extract_orthogroup_id_accepts_prefixed_filenames():
     assert mod._extract_orthogroup_id("README.txt") is None
 
 
+def test_extract_orthogroup_id_requires_boundary_after_numeric_id():
+    mod = load_module()
+    assert mod._extract_orthogroup_id("OG1abc.tsv") is None
+    assert mod._extract_orthogroup_id("HOG0000010extra.tsv") is None
+    assert mod._extract_orthogroup_id("SP1-extra.tsv") == "SP1"
+
+
 def test_get_amas_stats_uses_index_ids_without_creating_extra_rows(tmp_path):
     mod = load_module()
     df = pandas.DataFrame({"Total": [1, 2]}, index=["HOG0000010", "HOG0000011"])

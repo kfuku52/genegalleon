@@ -29,6 +29,22 @@ write_tsv_base <- function(df, path) {
   write.table(df, file = path, sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE, na = "NA")
 }
 
+resolve_target_branch_id <- function(target_branch, branch_columns) {
+  exact_matches <- branch_columns[branch_columns == target_branch]
+  if (length(exact_matches) == 1) {
+    return(exact_matches)
+  }
+  if (length(exact_matches) > 1) {
+    stop("Multiple exact branches found for target branch: ", paste(exact_matches, collapse = ", "))
+  }
+  fixed_matches <- grep(target_branch, branch_columns, value = TRUE, fixed = TRUE)
+  suffix <- ""
+  if (length(fixed_matches) > 0) {
+    suffix <- paste0(". Fixed substring candidate(s): ", paste(fixed_matches, collapse = ", "))
+  }
+  stop("Target branch not found in the CAFE tree: ", target_branch, suffix)
+}
+
 split_tokens <- function(x, sep) {
   if (is.na(x) || x == "") {
     return(NA_character_)
@@ -216,12 +232,7 @@ go_category <- strsplit(args[8], ",")[[1]]
 
 p_value_threshold <- 0.05
 
-target_branch_id <- grep(target_branch, colnames(change_df), value = TRUE)
-if (length(target_branch_id) == 0) {
-  stop("Target branch not found in the CAFE tree: ", target_branch)
-} else if (length(target_branch_id) > 1) {
-  stop("Multiple matching branches found for target branch: ", target_branch_id, ". Please specify a more precise identifier for 'target_branch'.")
-}
+target_branch_id <- resolve_target_branch_id(target_branch, colnames(change_df))
 go_ref_sp <- sub("\\.annotation\\.tsv$", "", basename(args[4]))
 if (!all(go_category %in% c("BP", "MF", "CC"))) {
   stop("Invalid GO category specified. Valid categories are 'BP', 'MF', or 'CC'. Use comma to separate multiple categories.")

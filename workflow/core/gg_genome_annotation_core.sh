@@ -63,17 +63,19 @@ resolve_species_file() {
     echo ""
     return
   fi
-  mapfile -t matches < <(find "${search_dir}" -maxdepth 1 -type f -name "${species_prefix}*" | sort)
+  mapfile -t matches < <(gg_find_species_files_by_label "${search_dir}" "${species_prefix}")
   if [[ ${#matches[@]} -eq 0 ]]; then
     if [[ ${required} -eq 1 ]]; then
-      echo "No ${label} file matched prefix '${species_prefix}' in: ${search_dir}. Exiting." >&2
+      echo "No ${label} file matched species label '${species_prefix}' in: ${search_dir}. Exiting." >&2
       exit 1
     fi
     echo ""
     return
   fi
   if [[ ${#matches[@]} -gt 1 ]]; then
-    echo "Multiple ${label} files matched '${species_prefix}' in ${search_dir}. Using: ${matches[0]}" >&2
+    echo "Multiple ${label} files matched species label '${species_prefix}' in ${search_dir}. Exiting." >&2
+    printf '  %s\n' "${matches[@]}" >&2
+    exit 1
   fi
   echo "${matches[0]}"
 }

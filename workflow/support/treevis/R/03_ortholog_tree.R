@@ -26,7 +26,12 @@ add_ortholog_column <- function(g,
   # Identify which tips are queries vs. subjects
   is_query <- tree2[['tip.label']] %in% tree[['tip.label']]
   queries  <- tree2[['tip.label']][is_query]
-  subjects <- tree2[['tip.label']][startsWith(tree2[['tip.label']], ortholog_prefix)]
+  subjects <- tree2[['tip.label']][vapply(
+    tree2[['tip.label']],
+    treevis_label_matches_ortholog_prefix,
+    logical(1),
+    ortholog_prefix = ortholog_prefix
+  )]
   
   # If no subjects found, bail out
   if (length(subjects) == 0) {
@@ -761,4 +766,3 @@ add_integer_column = function(g, args, gname, col, xlab) {
         )
     return(g)
 }
-

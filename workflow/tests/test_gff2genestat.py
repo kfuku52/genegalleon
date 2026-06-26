@@ -1,3 +1,7 @@
+from pathlib import Path
+import subprocess
+import sys
+
 import pandas
 
 from workflow.support.gff2genestat import add_id_column
@@ -6,6 +10,9 @@ from workflow.support.gff2genestat import extract_by_ids
 from workflow.support.gff2genestat import process_single_gff
 from workflow.support.gff2genestat import summarize_gene_features
 from workflow.support.gff2genestat import trim_species_prefix
+
+
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "gff2genestat.py"
 
 
 def test_add_intron_info_uses_semicolon_delimiter():
@@ -31,6 +38,38 @@ def test_trim_species_prefix_preserves_dotted_taxonomic_qualifier_boundaries():
     assert trim_species_prefix("Asimitellaria_furusei_var._subramosa_gene1") == "gene1"
     assert trim_species_prefix("Arisaema_sp._aooni_gene1") == "gene1"
     assert trim_species_prefix("Bacillus_subtilis_subsp._subtilis_gene1") == "gene1"
+
+
+def test_main_does_not_assign_short_species_gff_to_longer_species_seqfile(tmp_path: Path):
+    gff_dir = tmp_path / "gff"
+    gff_dir.mkdir()
+    seqfile = tmp_path / "Species_a_subsp_x.fa"
+    outfile = tmp_path / "out.tsv"
+    seqfile.write_text(">Species_a_subsp_x_gene1\nATGAAA\n", encoding="utf-8")
+    (gff_dir / "Species_a.gff").write_text(
+        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=gene1.CDS1;Parent=gene1;\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--dir_gff",
+            str(gff_dir),
+            "--seqfile",
+            str(seqfile),
+            "--outfile",
+            str(outfile),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    out = pandas.read_csv(outfile, sep="\t")
+    assert out.empty
 
 
 def test_add_intron_info_keeps_empty_when_no_intron():

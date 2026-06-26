@@ -1403,6 +1403,38 @@ gg_species_name_from_path_or_dot() {
   printf '%s\n' "${species_name}"
 }
 
+gg_species_file_matches_label() {
+  local file_path=$1
+  local species_name=$2
+  local parsed_species=""
+
+  parsed_species=$(gg_species_name_from_path_or_dot "$(basename "${file_path}")")
+  [[ -n "${parsed_species}" && "${parsed_species}" == "${species_name}" ]]
+}
+
+gg_find_species_files_by_label() {
+  local search_dir=$1
+  local species_name=$2
+  local file
+
+  [[ -d "${search_dir}" ]] || return 0
+  while IFS= read -r file; do
+    if gg_species_file_matches_label "${file}" "${species_name}"; then
+      printf '%s\n' "${file}"
+    fi
+  done < <(find "${search_dir}" -maxdepth 1 -type f ! -name '.*' | sort)
+}
+
+gg_orthogroup_file_matches_id() {
+  local file_name=$1
+  local orthogroup_id=$2
+
+  [[ "${file_name}" == "${orthogroup_id}" \
+    || "${file_name}" == "${orthogroup_id}".* \
+    || "${file_name}" == "${orthogroup_id}"_* \
+    || "${file_name}" == "${orthogroup_id}"-* ]]
+}
+
 gg_annotation_species_priority() {
   cat <<'EOF'
 Arabidopsis_thaliana
@@ -3050,6 +3082,7 @@ stop_if_species_not_found_in() {
   species_name=$(echo "${species_name}" | sed -e "s/[[:space:]]/_/g")
   local files=()
   local file
+  local file_species=""
   shopt -s nullglob dotglob
   for file in "${dir}"/*; do
     [[ -f "${file}" ]] || continue
@@ -3059,7 +3092,8 @@ stop_if_species_not_found_in() {
   shopt -u nullglob dotglob
   local species_found_flag=0
   for file in "${files[@]}"; do
-    if [[ "$(basename "${file}")" == *"${species_name}"* ]]; then
+    file_species=$(gg_species_name_from_path_or_dot "$(basename "${file}")")
+    if [[ "${file_species}" == "${species_name}" ]]; then
       species_found_flag=1
       break
     fi

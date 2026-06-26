@@ -15,7 +15,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from species_labeling import extract_species_label
+from species_labeling import extract_species_label, matches_species_label
 
 
 def build_arg_parser():
@@ -54,8 +54,8 @@ def get_genome_file(dir_genome, sp):
         file
         for file in os.listdir(dir_genome)
         if (not file.startswith('.'))
-        and file.startswith(sp)
         and os.path.isfile(os.path.join(dir_genome, file))
+        and matches_species_label(file, sp, strip_extension=True)
     ]
     genome_files = sorted(genome_files)
     if len(genome_files) == 0:

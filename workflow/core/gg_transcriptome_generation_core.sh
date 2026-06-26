@@ -144,6 +144,8 @@ invalidate_cached_query_table_if_prefix_mismatch() {
   local label=$3
   local header_lines=${4:-0}
   local first_query=""
+  local first_query_species=""
+  local expected_species=""
   local stale_file=""
 
   if [[ ! -s "${table_file}" ]]; then
@@ -153,7 +155,9 @@ invalidate_cached_query_table_if_prefix_mismatch() {
   if [[ -z "${first_query}" ]]; then
     return 0
   fi
-  if [[ "${first_query}" != ${expected_prefix}* ]]; then
+  expected_species=${expected_prefix%_}
+  first_query_species=$(gg_species_name_from_path_or_dot "${first_query}")
+  if [[ "${first_query_species}" != "${expected_species}" ]]; then
     stale_file="${table_file}.stale.$(date +%Y%m%d%H%M%S)"
     mv -f -- "${table_file}" "${stale_file}"
     echo "Cached ${label} is inconsistent with the current species prefix ${expected_prefix}."
@@ -2397,13 +2401,15 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
   recreate_dir "./quant"
   if [[ ${kallisto_reference} == 'species_cds' ]]; then
     kallisto_ref_candidates=()
-    mapfile -t kallisto_ref_candidates < <(find "${gg_workspace_input_dir}/species_cds" -maxdepth 1 -type f -name "${sp_ub}_*" | sort)
+    mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${gg_workspace_input_dir}/species_cds" "${sp_ub}")
     if [[ ${#kallisto_ref_candidates[@]} -eq 0 ]]; then
-      echo "No species_cds reference file matched ${sp_ub}_* in ${gg_workspace_input_dir}/species_cds. Exiting."
+      echo "No species_cds reference file matched species label ${sp_ub} in ${gg_workspace_input_dir}/species_cds. Exiting."
       exit 1
     fi
     if [[ ${#kallisto_ref_candidates[@]} -gt 1 ]]; then
-      echo "Multiple species_cds reference files matched ${sp_ub}_*. Using the first one: ${kallisto_ref_candidates[0]}"
+      echo "Multiple species_cds reference files matched species label ${sp_ub}. Exiting."
+      printf '  %s\n' "${kallisto_ref_candidates[@]}"
+      exit 1
     fi
     file_kallisto_reference_fasta="${kallisto_ref_candidates[0]}"
   elif [[ ${kallisto_reference} == 'longest_transcript' ]]; then

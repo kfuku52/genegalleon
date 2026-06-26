@@ -234,5 +234,7 @@ def test_gene_family_database_id_strips_genegalleon_suffixes():
 
     assert mod.gene_family_id_from_path("/tmp/HOG000001_stat.branch.tsv") == "HOG000001"
     assert mod.gene_family_id_from_path("/tmp/AC_stat.tree.tsv") == "AC"
+    assert mod.gene_family_id_from_path("/tmp/A.B.stat.branch.tsv") == "A.B"
+    assert mod.gene_family_id_from_path("/tmp/A.B.stat.tree.tsv") == "A.B"
     assert mod.gene_family_id_from_path("/tmp/HOG000001.csubst_cb_3.tsv") == "HOG000001"
     assert mod.gene_family_id_from_path("/tmp/HOG000001_csubst_cb_2.tsv") == "HOG000001"

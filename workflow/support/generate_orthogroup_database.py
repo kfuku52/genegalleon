@@ -211,6 +211,9 @@ def gene_family_id_from_path(file_path):
         '_stat.branch',
         '_stat.tree',
         '_csubst_cb_stats',
+        '.stat.branch',
+        '.stat.tree',
+        '.csubst_cb_stats',
     ):
         if stem.endswith(suffix):
             return stem[:-len(suffix)]

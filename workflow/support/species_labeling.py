@@ -328,6 +328,13 @@ def extract_species_label(value, strip_extension=False):
     return "_".join(prefix_parts)
 
 
+def matches_species_label(value, species_label, strip_extension=False):
+    expected = str(species_label or "").strip()
+    if expected == "":
+        return False
+    return extract_species_label(value, strip_extension=strip_extension) == expected
+
+
 def strip_species_label(value):
     text = str(value or "")
     species_label = extract_species_label(text, strip_extension=False)

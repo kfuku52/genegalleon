@@ -276,7 +276,7 @@ correct_self_hit_query = function(df, tree2, mrca_matrix, ortholog_prefix) {
         #    if (length(new_nearests)>1) {                    
         #        all_except_sq = tree2[['tip.label']][tree2[['tip.label']]!=sq]
         #        tmp = rkftools::get_nearest_tips(phy=tree2, sq, all_except_sq, mrca_matrix)
-        #        #if (all(startsWith(tmp[['nearests']], ortholog_prefix))) {
+        #        #if (all(vapply(tmp[['nearests']], treevis_label_matches_ortholog_prefix, logical(1), ortholog_prefix = ortholog_prefix))) {
         #        if (!all(tmp[['nearests']]==sq)) {
         #            new_nearests = new_nearests[new_nearests!=sq]
         #        }
@@ -322,7 +322,12 @@ get_df_clade = function(df, ortholog_prefix) {
     ymin = df[['y']][start_idx] - clade_bar_offset
     ymax = df[['y']][end_idx] + clade_bar_offset
     ymid = (ymin + ymax) / 2
-    is_self = startsWith(as.character(df[['query']][start_idx]), ortholog_prefix)
+    is_self = vapply(
+        as.character(df[['query']][start_idx]),
+        treevis_label_matches_ortholog_prefix,
+        logical(1),
+        ortholog_prefix = ortholog_prefix
+    )
     df_clade = data.frame(
         nearests = nearests,
         ymin = as.numeric(ymin),
@@ -331,7 +336,12 @@ get_df_clade = function(df, ortholog_prefix) {
         is_self = as.logical(is_self),
         stringsAsFactors = FALSE
     )
-    df_clade[['nearests']] = gsub(ortholog_prefix, '', df_clade[['nearests']])
+    df_clade[['nearests']] = vapply(
+        as.character(df_clade[['nearests']]),
+        treevis_strip_ortholog_prefix,
+        character(1),
+        ortholog_prefix = ortholog_prefix
+    )
     df_clade[['num_line']] = ceiling(df_clade[['ymax']] - df_clade[['ymin']])
     df_clade[['num_label']] = sapply(df_clade[['nearests']], get_label_num)
     return(df_clade)
@@ -396,4 +406,3 @@ split_nested_clade = function(df_clade, margin=0.3) {
     }
     return(df_clade)
 }
-

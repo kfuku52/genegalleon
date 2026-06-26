@@ -361,6 +361,8 @@ def test_no_known_unquoted_file_sp_trait_expansions():
         "if [[ -s ${file_sp_trait} ]]; then",
         "if head -n1 ${file_sp_trait} | grep -q ' '; then",
         "sed '2,$ s/\\t/_.*\\t/' ${file_sp_trait} > \"foreground.tsv\"",
+        "sed '2,$ s/\\t/_.*\\t/' \"${file_sp_trait}\" > \"foreground.tsv\"",
+        "sed '2,$ s/\\t/_.*\\t/' species_trait_binary.tsv > foreground.tsv",
         "\t${file_sp_trait}",
     ]
     for token in banned_tokens:
@@ -1727,6 +1729,8 @@ def test_genome_evolution_core_uses_rerun_safe_mkdir_for_orthogroup_grampa_tmp_i
     text = _read_text(script)
     assert "mkdir ./tmp.orthogroup_grampa_indir" not in text
     assert "mkdir -p ./tmp.orthogroup_grampa_indir" in text
+    assert '[[ "${file_name}" == "${og_id}"* ]]' not in text
+    assert 'gg_orthogroup_file_matches_id "${file_name}" "${og_id}"' in text
 
 
 def test_genome_evolution_core_quotes_grampa_output_and_cafe_option_values():
@@ -2203,7 +2207,9 @@ def test_transcriptome_core_invalidates_stale_cached_query_tables_on_species_pre
     body = _function_body(text, "invalidate_cached_query_table_if_prefix_mismatch")
 
     assert "first_query=$(awk -F '\\t' -v skip=\"${header_lines}\" 'NR > skip && $1 != \"\" { print $1; exit }' \"${table_file}\")" in body
-    assert 'if [[ "${first_query}" != ${expected_prefix}* ]]; then' in body
+    assert 'expected_species=${expected_prefix%_}' in body
+    assert 'first_query_species=$(gg_species_name_from_path_or_dot "${first_query}")' in body
+    assert 'if [[ "${first_query_species}" != "${expected_species}" ]]; then' in body
     assert 'stale_file="${table_file}.stale.$(date +%Y%m%d%H%M%S)"' in body
     assert 'mv -f -- "${table_file}" "${stale_file}"' in body
     assert 'Archived stale file to: ${stale_file}' in body
@@ -2287,6 +2293,15 @@ def test_genome_evolution_uses_local_optional_grampa_and_go_target_parameters():
     assert ': "${target_branch_go:?' not in core
     assert "grampa_h1" in config_vars
     assert "target_branch_go" in config_vars
+
+
+def test_cafe_go_enrichment_resolves_target_branch_by_exact_column_name():
+    text = _read_text(WORKFLOW_DIR / "support" / "cafe_go_enrichment.r")
+
+    assert "target_branch_id <- grep(target_branch" not in text
+    assert "resolve_target_branch_id <- function(target_branch, branch_columns)" in text
+    assert "exact_matches <- branch_columns[branch_columns == target_branch]" in text
+    assert "grep(target_branch, branch_columns, value = TRUE, fixed = TRUE)" in text
 
 
 def test_genome_evolution_exposes_cafe_trait_pgls_parameters():
@@ -3472,6 +3487,26 @@ def test_gene_evolution_core_uses_array_optional_args_for_iqtree_and_csubst():
     ]
     for token in expected_tokens:
         assert token in text, f"Missing array-based optional args token: {token}"
+
+
+def test_gene_evolution_core_builds_species_foreground_regexes_with_label_boundaries():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+
+    assert "write_species_trait_foreground_regex_table()" in text
+    assert "from species_labeling import extract_species_label" in text
+    assert "RANK_OR_QUALIFIER_TOKENS" in text
+    assert 'return r"^{}_(?!(?:{})(?:\\.|_)).*"' in text
+    assert "write_species_trait_foreground_regex_table species_trait_binary.tsv foreground.tsv" in text
+    assert 'write_species_trait_foreground_regex_table "${file_sp_trait}" "foreground.tsv"' in text
+
+
+def test_gene_evolution_core_anchors_query_ids_in_maxalign_keep_regex():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+
+    assert 'patterns = [f"(?i:{re.escape(gene)}.*)" for gene in normalized_ids]' not in text
+    assert 'patterns = [f"(?i:^{re.escape(gene)}$)" for gene in normalized_ids]' in text
 
 
 def test_gene_evolution_core_disables_initial_ufboot_when_fast_mode_is_enabled():

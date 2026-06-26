@@ -12,6 +12,12 @@ import subprocess
 import sys
 from typing import Dict, List, Optional, Sequence, Tuple
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from species_labeling import extract_species_label, matches_species_label
+
 
 FASTA_EXTENSIONS = (
     ".fa",
@@ -97,14 +103,33 @@ def parse_busco_complete_pct(path: Path) -> str:
 def find_busco_short_file(busco_short_dir: Path, leaf_name: str) -> Optional[Path]:
     if not busco_short_dir.is_dir():
         return None
+    leaf_label = extract_species_label(leaf_name, strip_extension=True) or leaf_name
     candidates = [
         busco_short_dir / f"{leaf_name}.busco.short.txt",
         busco_short_dir / f"{leaf_name}_busco.short.txt",
+        busco_short_dir / f"{leaf_label}.busco.short.txt",
+        busco_short_dir / f"{leaf_label}_busco.short.txt",
     ]
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    matches = sorted(busco_short_dir.glob(f"{leaf_name}*busco.short.txt"))
+    matches = sorted(
+        path
+        for path in busco_short_dir.iterdir()
+        if path.is_file()
+        and not path.name.startswith(".")
+        and path.name.endswith("busco.short.txt")
+        and matches_species_label(path.name, leaf_label, strip_extension=True)
+    )
+    if len(matches) > 1:
+        print(
+            "Multiple BUSCO short files matched species label {}: {}".format(
+                leaf_label,
+                ", ".join(path.name for path in matches),
+            ),
+            file=sys.stderr,
+        )
+        return None
     return matches[0] if matches else None
 
 

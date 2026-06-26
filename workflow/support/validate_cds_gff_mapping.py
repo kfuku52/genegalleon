@@ -142,9 +142,8 @@ def read_fasta_ids(path):
 
 
 def first_nonmatching_prefix(cds_ids, species_prefix):
-    expected_prefix = "{}_".format(species_prefix)
     for cds_id in cds_ids:
-        if not cds_id.startswith(expected_prefix):
+        if extract_species_label(cds_id) != species_prefix:
             return cds_id
     return ""
 

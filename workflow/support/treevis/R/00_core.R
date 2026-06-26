@@ -16,6 +16,124 @@ get_df_tip = function(g) {
     return(df_tip)
 }
 
+treevis_taxonomic_genus_only_placeholders <- c("sp", "spp")
+treevis_taxonomic_proximity_qualifiers <- c("cf", "aff", "nr")
+treevis_taxonomic_rank_aliases <- c(
+    "subsp" = "subsp",
+    "ssp" = "subsp",
+    "subspecies" = "subsp",
+    "var" = "var",
+    "variety" = "var",
+    "forma" = "forma",
+    "form" = "forma",
+    "f" = "forma",
+    "strain" = "strain",
+    "substrain" = "substrain",
+    "serovar" = "serovar",
+    "serotype" = "serotype",
+    "serogroup" = "serogroup",
+    "pathovar" = "pathovar",
+    "pv" = "pathovar",
+    "biovar" = "biovar",
+    "biotype" = "biotype",
+    "chemovar" = "chemovar",
+    "morphovar" = "morphovar",
+    "cultivar" = "cultivar",
+    "cv" = "cultivar",
+    "isolate" = "isolate",
+    "group" = "group",
+    "subgroup" = "subgroup",
+    "complex" = "complex",
+    "clade" = "clade",
+    "lineage" = "lineage",
+    "section" = "section",
+    "series" = "series",
+    "ecotype" = "ecotype",
+    "breed" = "breed"
+)
+
+treevis_taxonomic_token_key <- function(token) {
+    key <- tolower(sub("[.]$", "", as.character(token)))
+    if (key %in% treevis_taxonomic_genus_only_placeholders) {
+        return("sp")
+    }
+    if (key %in% names(treevis_taxonomic_rank_aliases)) {
+        return(unname(treevis_taxonomic_rank_aliases[[key]]))
+    }
+    key
+}
+
+treevis_species_prefix_token_count <- function(parts) {
+    parts <- parts[nzchar(parts)]
+    if (length(parts) < 2) {
+        return(0L)
+    }
+    second <- treevis_taxonomic_token_key(parts[[2]])
+    third <- if (length(parts) >= 3) treevis_taxonomic_token_key(parts[[3]]) else ""
+    if (second %in% treevis_taxonomic_genus_only_placeholders) {
+        return(if (length(parts) >= 3) 3L else 2L)
+    }
+    if (second %in% treevis_taxonomic_proximity_qualifiers) {
+        return(if (length(parts) >= 3) 3L else 2L)
+    }
+    if (third %in% treevis_taxonomic_proximity_qualifiers) {
+        return(3L)
+    }
+    if (third %in% unname(treevis_taxonomic_rank_aliases)) {
+        return(if (length(parts) >= 4) 4L else 3L)
+    }
+    return(2L)
+}
+
+treevis_extract_species_label <- function(x) {
+    text <- as.character(x)
+    if (!nzchar(text)) {
+        return("")
+    }
+    parts <- strsplit(text, "_", fixed = TRUE)[[1]]
+    parts <- parts[nzchar(parts)]
+    prefix_count <- treevis_species_prefix_token_count(parts)
+    if (prefix_count == 0) {
+        return("")
+    }
+    paste(parts[seq_len(prefix_count)], collapse = "_")
+}
+
+treevis_ortholog_prefix_target <- function(ortholog_prefix) {
+    sub("_$", "", as.character(ortholog_prefix))
+}
+
+treevis_label_matches_ortholog_prefix <- function(label, ortholog_prefix) {
+    prefix <- as.character(ortholog_prefix)
+    if (!nzchar(prefix)) {
+        return(TRUE)
+    }
+    target <- treevis_ortholog_prefix_target(prefix)
+    target_label <- treevis_extract_species_label(target)
+    label_label <- treevis_extract_species_label(label)
+    if (nzchar(target_label) && identical(target_label, target) && nzchar(label_label)) {
+        return(identical(label_label, target_label))
+    }
+    startsWith(as.character(label), prefix)
+}
+
+treevis_strip_ortholog_prefix <- function(label, ortholog_prefix) {
+    text <- as.character(label)
+    prefix <- as.character(ortholog_prefix)
+    if (!nzchar(prefix)) {
+        return(text)
+    }
+    target <- treevis_ortholog_prefix_target(prefix)
+    exact_prefix <- paste0(target, "_")
+    if (treevis_label_matches_ortholog_prefix(text, prefix) && startsWith(text, exact_prefix)) {
+        return(substr(text, nchar(exact_prefix) + 1, nchar(text)))
+    }
+    if (startsWith(text, prefix)) {
+        return(substr(text, nchar(prefix) + 1, nchar(text)))
+    }
+    text
+}
+
 reshape_long_base = function(df, id_col, value_cols, key_col, value_col) {
     if (!(id_col %in% colnames(df))) {
         stop(paste0("reshape_long_base: id column not found: ", id_col))

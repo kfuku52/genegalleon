@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy
 import pandas
 
-ORTHOGROUP_ID_RE = re.compile(r'^(OG\d+|HOG\d+|SP\d+)')
+ORTHOGROUP_ID_RE = re.compile(r'^(OG\d+|HOG\d+|SP\d+)(?=$|[._-])')
 
 
 def build_arg_parser():

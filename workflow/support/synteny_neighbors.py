@@ -24,7 +24,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from species_labeling import extract_species_label
+from species_labeling import extract_species_label, matches_species_label
 
 
 FASTA_EXTENSIONS = (
@@ -109,14 +109,20 @@ def find_species_file(directory, species_name, extensions):
         return ""
     candidates = []
     for name in os.listdir(directory):
-        if not name.startswith(species_name):
-            continue
         lower_name = name.lower()
-        if any(lower_name.endswith(ext) for ext in extensions):
+        if any(lower_name.endswith(ext) for ext in extensions) and matches_species_label(
+            name, species_name, strip_extension=True
+        ):
             candidates.append(name)
     if not candidates:
         return ""
     candidates.sort()
+    if len(candidates) > 1:
+        print(
+            "multiple files matched species label {}: {}".format(species_name, ", ".join(candidates)),
+            file=sys.stderr,
+        )
+        return ""
     return os.path.join(directory, candidates[0])
 
 

@@ -68,6 +68,18 @@ def test_select_orthofinder_core_species_falls_back_when_busco_values_are_missin
     assert "Large_species" not in selected
 
 
+def test_find_busco_short_file_does_not_match_longer_species_label(tmp_path: Path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("select_orthofinder_core_species", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    _write_busco(tmp_path / "busco" / "Species_a_subsp_x.busco.short.txt", 95.0)
+
+    assert mod.find_busco_short_file(tmp_path / "busco", "Species_a") is None
+
+
 def test_select_orthofinder_core_species_calls_nwkit_sample_with_default_filters(tmp_path: Path):
     _write_protein(tmp_path / "protein" / "Good_species.fa", 1)
     _write_protein(tmp_path / "protein" / "Lowbusco_species.fa", 1)

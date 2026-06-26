@@ -1769,7 +1769,8 @@ def test_remove_stale_ensembl_like_partial_gff_outputs_keeps_full_annotation(tmp
     abinitio = gff_dir / "Saccharomyces_cerevisiae_R64-1-1.115.abinitio.gff.gz"
     chromosome = gff_dir / "Saccharomyces_cerevisiae_R64-1-1.115.chromosome.I.gff.gz"
     unrelated = gff_dir / "Drosophila_melanogaster_BDGP6.54.115.abinitio.gff.gz"
-    for path in (full, abinitio, chromosome, unrelated):
+    longer_species = gff_dir / "Saccharomyces_cerevisiae_subsp_x_R64-1-1.115.abinitio.gff.gz"
+    for path in (full, abinitio, chromosome, unrelated, longer_species):
         path.write_bytes(b"dummy")
 
     removed = module.remove_stale_ensembl_like_partial_gff_outputs(
@@ -1782,5 +1783,6 @@ def test_remove_stale_ensembl_like_partial_gff_outputs_keeps_full_annotation(tmp
     assert sorted(removed) == sorted([abinitio.name, chromosome.name])
     assert full.exists()
     assert unrelated.exists()
+    assert longer_species.exists()
     assert not abinitio.exists()
     assert not chromosome.exists()

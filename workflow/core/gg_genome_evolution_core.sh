@@ -4130,7 +4130,7 @@ if [[ ! -s "${file_orthogroup_grampa}" && ${run_orthogroup_grampa} -eq 1 ]]; the
   mkdir -p ./tmp.orthogroup_grampa_indir
   for file_name in "${file_names[@]}"; do
     for og_id in "${og_ids[@]}"; do
-      if [[ "${file_name}" == "${og_id}"* ]]; then
+      if gg_orthogroup_file_matches_id "${file_name}" "${og_id}"; then
         cp_out "${dir_og_rooted_tree}"/"${file_name}" ./tmp.orthogroup_grampa_indir
         mapfile -t og_ids < <(printf "%s\n" "${og_ids[@]}" | grep -v -Fx -- "${og_id}" || true)
         break
