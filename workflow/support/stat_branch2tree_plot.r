@@ -131,7 +131,7 @@ source(file.path(treevis_dir, 'R', 'main.R'), local = TRUE)
 # cluster_membership: Gene cluster membership plot. format = cluster_membership,MAXDIST
 # MAXDIST: Maximum distance between genes in bp to call the cluster membership.
 
-# signal_peptide: Stacked bar plot for TargetP results.
+# signal_peptide: Stacked bar plot for cdskit localize signal probabilities.
 
 # transmembrane_domain: Number of transmembrane domains predicted by TMHMM.
 

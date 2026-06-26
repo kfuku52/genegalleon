@@ -148,12 +148,14 @@ Purpose:
 - per-species CDS/genome annotation and QC,
 - BUSCO (CDS/genome),
 - UniProt annotation (`blastp` or `mmseqs2`),
+- optional `cdskit localize` targeting-peptide and peroxisome localization prediction,
 - optional MMseqs2 taxonomy and contamination removal,
 - optional genome analyses (SubPhaser, dotplot, GenomeScope).
 
 Main outputs:
 
 - `workspace/output/species_cds_annotation`
+- `workspace/output/species_cds_cdskit_localize`
 - `workspace/output/species_cds_busco_full`, `species_cds_busco_short`
 - `workspace/output/species_genome_busco_full`, `species_genome_busco_short`
 
@@ -161,6 +163,7 @@ Notable defaults:
 
 - most heavy tasks default to `0`,
 - `uniprot_annotation_method="mmseqs2"` (set `blastp` to use NCBI BLASTP for UniProt annotation),
+- `cdskit_localize_organism_group="auto"` infers plant/non-plant mode from `busco_lineage` where possible,
 - `run_multispecies_summary=1` by default.
 
 ### `gg_genome_evolution_entrypoint.sh`
@@ -266,6 +269,8 @@ Main outputs:
 
 - `workspace/output/query2family/*` in query2family mode,
 - `workspace/output/orthogroup/*` in orthogroup mode.
+- optional localization tables under `workspace/output/query2family/cdskit_localize/`
+  or `workspace/output/orthogroup/cdskit_localize/`.
 
 Notable defaults:
 
@@ -274,6 +279,7 @@ Notable defaults:
 - `run_tree_plot=1`
 - `run_summary=1`
 - `uniprot_annotation_method="mmseqs2"` (set `blastp` for NCBI BLASTP-based UniProt annotation),
+- `cdskit_localize_organism_group="auto"` infers plant/non-plant mode from `busco_lineage` where possible,
 - many advanced analyses default to `0`.
 
 Current behavior notes:

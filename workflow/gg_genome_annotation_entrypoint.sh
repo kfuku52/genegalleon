@@ -85,6 +85,7 @@ gg_entrypoint_name="gg_genome_annotation_entrypoint.sh"
 run_collect_gff_info=0 # Collect per-gene coordinates, exon/intron structure, and gene stats from workspace/input/species_gff.
 run_busco_cds=0 # BUSCO completeness analysis on species CDS inputs.
 run_uniprot_annotation=0 # CDS annotation against UniProt Swiss-Prot.
+run_cdskit_localize=0 # Predict targeting-peptide and peroxisome localization signals with cdskit localize.
 run_cds_fx2tab=0 # Sequence-length and composition stats for species CDS FASTA files.
 run_cds_mmseqs2taxonomy=0 # MMseqs2 taxonomy assignment for CDS sequences.
 run_cds_contamination_removal=0 # Remove CDS sequences assigned outside the expected lineage.
@@ -108,6 +109,10 @@ run_multispecies_summary=1 # Multi-species summary plots and tables
 
 # Annotation parameters
 uniprot_annotation_method="mmseqs2" # blastp|mmseqs2 for UniProt Swiss-Prot annotation search engine.
+cdskit_localize_model="${cdskit_localize_model:-targeting5-perox-deeploc21-et-v1}" # cdskit localize model path or alias; default includes the peroxisome head.
+cdskit_localize_organism_group="${cdskit_localize_organism_group:-auto}" # auto|unknown|plant|non_plant; auto infers from GG_COMMON_BUSCO_LINEAGE/busco_lineage.
+cdskit_localize_include_features=0 # Include internal cdskit localize sequence features in the output TSV.
+cdskit_localize_no_model_download=0 # Set 1 to require the localize model to already exist in the cdskit model cache.
 
 # Contamination-removal parameters
 contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.

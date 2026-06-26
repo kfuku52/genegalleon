@@ -694,14 +694,14 @@ add_node_labels = function(g, args, nodelabel_col) {
 add_signal_peptide_column = function(g, args) {
     cat(as.character(Sys.time()), 'Adding signal peptide column.\n')
     gname = 'signal_peptide'    
-    cols = c('targetp_noTP','targetp_SP','targetp_mTP','targetp_cTP','targetp_luTP')
+    cols = c('cdskit_localize_p_noTP','cdskit_localize_p_SP','cdskit_localize_p_mTP','cdskit_localize_p_cTP','cdskit_localize_p_lTP')
     df_tip = get_df_tip(g[['tree']])
     if (!all(cols %in% colnames(df_tip))) {
-        cat('TargetP info were not found. Signal peptide column will not be shown.\n')
+        cat('cdskit localize probabilities were not found. Signal peptide column will not be shown.\n')
         return(g)
     }
-    colnames(df_tip) = sub('targetp_', '', colnames(df_tip))
-    newcols = sub('targetp_', '', cols)
+    colnames(df_tip) = sub('cdskit_localize_p_', '', colnames(df_tip))
+    newcols = sub('cdskit_localize_p_', '', cols)
     df_tip2 = reshape_long_base(
         df = df_tip[, c('y', newcols), drop = FALSE],
         id_col = 'y',
@@ -717,7 +717,7 @@ add_signal_peptide_column = function(g, args) {
         ylab(NULL) +
         xlab(NULL) +
         theme_minimal(base_size=args[['font_size']]) + 
-        labs(fill='Signal peptide') +
+        labs(fill='cdskit localize') +
         guides(
             fill=guide_legend(title=NULL, nrow=6, byrow=FALSE)
         ) +

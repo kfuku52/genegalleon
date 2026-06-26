@@ -71,7 +71,12 @@ EOF
       ;;
     gg_gene_evolution_entrypoint.sh)
       cat <<'EOF'
+busco_lineage
 check_pruned
+cdskit_localize_include_features
+cdskit_localize_model
+cdskit_localize_no_model_download
+cdskit_localize_organism_group
 csubst_cutoff_stat
 csubst_exhaustive_until
 csubst_fg_exclude_wg
@@ -108,6 +113,7 @@ retain_query_in_maxalign
 retrotransposition_rate
 run_amas_cleaned
 run_amas_original
+run_cdskit_localize
 run_clipkit
 run_codeml_two_ratio
 run_csubst
@@ -181,8 +187,13 @@ EOF
       ;;
     gg_genome_annotation_entrypoint.sh)
       cat <<'EOF'
+busco_lineage
 contamination_removal_rank
 contamination_removal_target_taxon
+cdskit_localize_include_features
+cdskit_localize_model
+cdskit_localize_no_model_download
+cdskit_localize_organism_group
 run_annotation
 run_busco_cds
 run_busco_genome
@@ -198,6 +209,7 @@ run_jcvi_dotplot
 run_multispecies_summary
 run_scaffold_histogram
 run_subphaser
+run_cdskit_localize
 run_uniprot_annotation
 run_wgd_ksd
 uniprot_annotation_method

@@ -69,6 +69,7 @@ This is the main results area. Major stage roots include:
 - `workspace/output/input_generation`
 - `workspace/output/transcriptome_assembly`
 - `workspace/output/species_cds_annotation`
+- `workspace/output/species_cds_cdskit_localize`
 - `workspace/output/species_tree`
 - `workspace/output/orthofinder`
 - `workspace/output/genome_evolution`
@@ -80,6 +81,11 @@ This is the main results area. Major stage roots include:
 `workspace/output/input_generation/gg_input_generation_species.tsv` is the rolling species summary table
 from `gg_input_generation_entrypoint.sh`. When taxonomy metadata is available, it includes per-species
 `taxid` plus nuclear, mitochondrial, and plastid genetic-code columns.
+
+When localization prediction is enabled, per-species CDS tables are written to
+`workspace/output/species_cds_cdskit_localize/`, and per-family tables are
+written under `workspace/output/query2family/cdskit_localize/` or
+`workspace/output/orthogroup/cdskit_localize/` depending on the active mode.
 
 ### `workspace/downloads/`
 

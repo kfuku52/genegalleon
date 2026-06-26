@@ -652,6 +652,37 @@ def test_finalize_auto_busco_lineage_name_preserves_existing_suffix(tmp_path):
     assert completed.stdout.strip() == "embryophyta_odb12"
 
 
+def test_cdskit_localize_organism_group_infers_from_busco_lineage(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "printf '%s\\n%s\\n%s\\n' "
+        '"$(gg_cdskit_localize_organism_group_from_busco_lineage embryophyta_odb12)" '
+        '"$(gg_cdskit_localize_organism_group_from_busco_lineage metazoa_odb12)" '
+        '"$(gg_cdskit_localize_organism_group_from_busco_lineage eukaryota_odb12)"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == ["plant", "non_plant", "unknown"]
+
+
+def test_cdskit_localize_organism_group_resolver_uses_explicit_group_or_lineage(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "printf '%s\\n%s\\n' "
+        '"$(gg_resolve_cdskit_localize_organism_group nonplant '
+        f'{shlex.quote(str(tmp_path))} auto)" '
+        '"$(gg_resolve_cdskit_localize_organism_group auto '
+        f'{shlex.quote(str(tmp_path))} viridiplantae_odb12)"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == ["non_plant", "plant"]
+
+
 def test_workspace_layout_defaults_to_split_for_empty_workspace(tmp_path):
     project_dir = tmp_path / "project"
     project_dir.mkdir()

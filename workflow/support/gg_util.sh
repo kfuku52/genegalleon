@@ -1501,6 +1501,87 @@ gg_finalize_auto_busco_lineage_name() {
   printf '%s_odb%s\n' "${lineage}" "${odb_version}"
 }
 
+gg_cdskit_localize_default_model() {
+  printf '%s\n' "targeting5-perox-deeploc21-et-v1"
+}
+
+gg_normalize_cdskit_localize_organism_group() {
+  local group=${1:-}
+  group=$(printf '%s' "${group}" | tr '[:upper:]' '[:lower:]' | sed -e 's/[[:space:]-]\+/_/g')
+  case "${group}" in
+    ""|auto)
+      printf '%s\n' "auto"
+      ;;
+    unknown)
+      printf '%s\n' "unknown"
+      ;;
+    plant|plants|viridiplantae)
+      printf '%s\n' "plant"
+      ;;
+    nonplant|non_plant|non_plants|other|metazoa|fungi|animal|animals)
+      printf '%s\n' "non_plant"
+      ;;
+    *)
+      echo "Invalid cdskit_localize_organism_group: ${group}" >&2
+      echo "cdskit_localize_organism_group must be auto, unknown, plant, or non_plant." >&2
+      return 1
+      ;;
+  esac
+}
+
+gg_cdskit_localize_organism_group_from_busco_lineage() {
+  local lineage=${1:-}
+  local lineage_lc=""
+  lineage_lc=$(printf '%s' "${lineage}" | tr '[:upper:]' '[:lower:]')
+  lineage_lc=${lineage_lc%%_odb*}
+
+  case "${lineage_lc}" in
+    *viridiplantae*|*embryophyta*|*streptophyta*|*tracheophyta*|*chlorophyta*|*rhodophyta*|*glaucophyta*|*brassicales*|*fabales*|*poales*|*solanales*|*asterales*)
+      printf '%s\n' "plant"
+      ;;
+    *metazoa*|*vertebrata*|*mammalia*|*aves*|*actinopterygii*|*arthropoda*|*insecta*|*diptera*|*hymenoptera*|*nematoda*|*mollusca*|*annelida*|*cnidaria*|*fungi*|*ascomycota*|*basidiomycota*|*bacteria*|*archaea*)
+      printf '%s\n' "non_plant"
+      ;;
+    *)
+      printf '%s\n' "unknown"
+      ;;
+  esac
+}
+
+gg_resolve_cdskit_localize_organism_group() {
+  local requested_group=${1:-auto}
+  local gg_workspace_dir=$2
+  local busco_lineage_request=${3:-}
+  shift 3 || true
+  local normalized_group=""
+  local resolved_lineage=""
+  local inferred_group=""
+
+  normalized_group=$(gg_normalize_cdskit_localize_organism_group "${requested_group}") || return 1
+  if [[ "${normalized_group}" != "auto" ]]; then
+    printf '%s\n' "${normalized_group}"
+    return 0
+  fi
+
+  if [[ -n "${busco_lineage_request}" ]]; then
+    if resolved_lineage=$(gg_resolve_busco_lineage "${gg_workspace_dir}" "${busco_lineage_request}" "$@" 2>/dev/null); then
+      inferred_group=$(gg_cdskit_localize_organism_group_from_busco_lineage "${resolved_lineage}")
+      echo "cdskit localize organism_group=${inferred_group} inferred from BUSCO lineage: ${resolved_lineage}" >&2
+      printf '%s\n' "${inferred_group}"
+      return 0
+    fi
+    inferred_group=$(gg_cdskit_localize_organism_group_from_busco_lineage "${busco_lineage_request}")
+    if [[ "${inferred_group}" != "unknown" ]]; then
+      echo "cdskit localize organism_group=${inferred_group} inferred from BUSCO lineage request: ${busco_lineage_request}" >&2
+      printf '%s\n' "${inferred_group}"
+      return 0
+    fi
+  fi
+
+  echo "cdskit localize organism_group=unknown; BUSCO lineage did not resolve to plant or non_plant." >&2
+  printf '%s\n' "unknown"
+}
+
 gg_species_names_from_fasta_dir() {
   local search_dir=${1:-}
   local file
@@ -2159,6 +2240,55 @@ gg_prepare_cds_fasta_stream() {
     | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${threads}" \
     | cdskit pad
   fi
+}
+
+gg_prepare_cdskit_localize_cds_input() {
+  local infile=$1
+  local outfile=$2
+  local threads=${3:-1}
+  local codontable=${4:-1}
+
+  seqkit seq --remove-gaps --upper-case --only-id --threads "${threads}" "${infile}" |
+    seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads "${threads}" |
+    cdskit pad --codontable "${codontable}" |
+    cdskit mask --codontable "${codontable}" --stopcodon no --ambiguouscodon yes --maskchar 'N' \
+      > "${outfile}"
+}
+
+gg_run_cdskit_localize() {
+  local seqfile=$1
+  local seqtype=$2
+  local report=$3
+  local model=$4
+  local organism_group=$5
+  local include_features=${6:-0}
+  local no_model_download=${7:-0}
+  local threads=${8:-1}
+  local codontable=${9:-1}
+  local include_features_arg="no"
+  local no_model_download_arg="no"
+
+  if [[ "${include_features}" == "1" || "${include_features}" == "yes" || "${include_features}" == "true" ]]; then
+    include_features_arg="yes"
+  fi
+  if [[ "${no_model_download}" == "1" || "${no_model_download}" == "yes" || "${no_model_download}" == "true" ]]; then
+    no_model_download_arg="yes"
+  fi
+
+  export CDSKIT_MODEL_DIR="${CDSKIT_MODEL_DIR:-${gg_workspace_downloads_dir}/cdskit_models}"
+  ensure_dir "${CDSKIT_MODEL_DIR}"
+
+  cdskit localize \
+    --seqfile "${seqfile}" \
+    --inseqformat fasta \
+    --codontable "${codontable}" \
+    --threads "${threads}" \
+    --model "${model}" \
+    --no_model_download "${no_model_download_arg}" \
+    --report "${report}" \
+    --include_features "${include_features_arg}" \
+    --seqtype "${seqtype}" \
+    --organism_group "${organism_group}"
 }
 
 _download_busco_lineage_to_runtime() {

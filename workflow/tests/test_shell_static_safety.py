@@ -1726,6 +1726,7 @@ def test_genome_annotation_core_quotes_known_path_sensitive_options():
         "--species_name ${sp_ub}",
         "--cds_fasta ${file_sp_cds}",
         "--uniprot_tsv ${file_sp_uniprot_annotation}",
+        "--cdskit_localize_tsv ${file_sp_cdskit_localize}",
         "--busco_tsv ${file_sp_cds_busco_full}",
         "--expression_tsv ${file_sp_expression}",
         "--gff_info ${file_sp_gff_info}",
@@ -1753,6 +1754,7 @@ def test_genome_annotation_core_quotes_known_path_sensitive_options():
         '--species_name "${contamination_removal_target_taxon:-${sp_ub}}"',
         '--cds_fasta "${file_sp_cds}"',
         '--uniprot_tsv "${file_sp_uniprot_annotation}"',
+        '--cdskit_localize_tsv "${file_sp_cdskit_localize}"',
         '--busco_tsv "${file_sp_cds_busco_full}"',
         '--expression_tsv "${file_sp_expression}"',
         '--gff_info "${file_sp_gff_info}"',
@@ -1835,6 +1837,7 @@ def test_gene_evolution_core_quotes_trait_promoter_and_summary_path_options():
         "--species_pgls_stats ${file_og_species_pgls}",
         "--rpsblast ${file_og_rpsblast}",
         "--uniprot ${file_og_uniprot_annotation}",
+        "--cdskit_localize ${file_og_cdskit_localize}",
         "--clade_ortholog_prefix ${treevis_clade_ortholog_prefix}",
         "run_hyphy_relax_for_all_traits 1 ${file_og_hyphy_relax}",
         "run_hyphy_relax_for_all_traits 0 ${file_og_hyphy_relax_reversed}",
@@ -1872,6 +1875,7 @@ def test_gene_evolution_core_quotes_trait_promoter_and_summary_path_options():
         '--species_pgls_stats "${file_og_species_pgls}"',
         '--rpsblast "${file_og_rpsblast}"',
         '--uniprot "${file_og_uniprot_annotation}"',
+        '--cdskit_localize "${file_og_cdskit_localize}"',
         '--clade_ortholog_prefix "${treevis_clade_ortholog_prefix}"',
         'run_hyphy_relax_for_all_traits 1 "${file_og_hyphy_relax}"',
         'run_hyphy_relax_for_all_traits 0 "${file_og_hyphy_relax_reversed}"',
@@ -1879,6 +1883,37 @@ def test_gene_evolution_core_quotes_trait_promoter_and_summary_path_options():
     ]
     for token in expected_tokens:
         assert token in text, f"Missing quoted gene-evolution token: {token}"
+
+
+def test_cdskit_localize_wiring_and_output_paths():
+    genome_core = _read_text(CORE_DIR / "gg_genome_annotation_core.sh")
+    gene_core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    merge_script = _read_text(WORKFLOW_DIR / "support" / "merge_cds_annotation.py")
+    stats_script = _read_text(WORKFLOW_DIR / "support" / "orthogroup_statistics.py")
+    tree_script = _read_text(WORKFLOW_DIR / "support" / "treevis" / "R" / "03_ortholog_tree.R")
+
+    assert (
+        'file_sp_cdskit_localize="${gg_workspace_output_dir}/species_cds_cdskit_localize/${sp_ub}_cdskit_localize.tsv"'
+        in genome_core
+    )
+    assert 'task="cdskit localize"' in genome_core
+    assert 'gg_resolve_cdskit_localize_organism_group' in genome_core
+    assert '--cdskit_localize_tsv "${file_sp_cdskit_localize}"' in genome_core
+
+    assert (
+        'file_og_cdskit_localize="${dir_output_active}/cdskit_localize/${og_id}_cdskit_localize.tsv"'
+        in gene_core
+    )
+    assert 'task="cdskit localize"' in gene_core
+    assert 'gg_resolve_cdskit_localize_organism_group' in gene_core
+    assert '--cdskit_localize "${file_og_cdskit_localize}"' in gene_core
+
+    assert "cdskit_localize_predicted_class" in _read_text(WORKFLOW_DIR / "support" / "annotation_summary.r")
+    assert "cdskit_localize_p_noTP" in tree_script
+
+    forbidden = "target" + "p"
+    for script_text in [genome_core, gene_core, merge_script, stats_script, tree_script]:
+        assert forbidden not in script_text.lower()
 
 
 def test_gene_evolution_core_uses_exact_header_match_for_missing_query_gene_detection():

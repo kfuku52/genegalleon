@@ -93,6 +93,7 @@ run_query_blast=1 # Activated if mode_gene_evolution=query2family; search query 
 run_extract_primary_fasta=1 # Generate in-frame CDS fasta file.
 run_rps_blast=1 # RPS-BLAST protein domain search.
 run_uniprot_annotation=0 # Annotation against UniProt Swiss-Prot.
+run_cdskit_localize=0 # Predict targeting-peptide and peroxisome localization signals with cdskit localize.
 
 # Alignment and tree workflow flags
 run_mafft=1 # In-frame nucleotide alignment using MAFFT.
@@ -147,6 +148,10 @@ retain_query_in_maxalign=1 # Keep query sequences during MaxAlign filtering in q
 
 # Annotation parameters
 uniprot_annotation_method="mmseqs2" # blastp|mmseqs2 for UniProt Swiss-Prot annotation search engine.
+cdskit_localize_model="${cdskit_localize_model:-targeting5-perox-deeploc21-et-v1}" # cdskit localize model path or alias; default includes the peroxisome head.
+cdskit_localize_organism_group="${cdskit_localize_organism_group:-auto}" # auto|unknown|plant|non_plant; auto infers from GG_COMMON_BUSCO_LINEAGE/busco_lineage.
+cdskit_localize_include_features=0 # Include internal cdskit localize sequence features in the output TSV.
+cdskit_localize_no_model_download=0 # Set 1 to require the localize model to already exist in the cdskit model cache.
 
 # Phylogeny reconstruction and reconciliation parameters
 iqtree_fast_mode_gt=2000 # Sequence-count threshold above which IQ-TREE runs with --fast and disables UFBOOT for large alignments.

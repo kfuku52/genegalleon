@@ -114,7 +114,7 @@ def build_arg_parser():
     parser.add_argument('--dated_tree', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--dated_log', metavar='PATH', default='', type=str, help='')
     
-    parser.add_argument('--targetp', metavar='PATH', default='', type=str, help='')
+    parser.add_argument('--cdskit_localize', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--rpsblast', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--uniprot', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--synteny', metavar='PATH', default='', type=str, help='')
@@ -267,6 +267,19 @@ def load_fimo_hits(path):
     df_out['start'] = df_out['start'].astype(int)
     df_out['stop'] = df_out['stop'].astype(int)
     return df_out
+
+
+def load_cdskit_localize(path):
+    df = pandas.read_csv(path, sep='\t', header=0, index_col=None, low_memory=False)
+    if 'seq_id' not in df.columns:
+        raise ValueError('seq_id column was not found in cdskit localize table: {}'.format(path))
+    df = df.rename(columns={'seq_id': 'node_name'})
+    rename_map = {
+        col: 'cdskit_localize_{}'.format(col)
+        for col in df.columns
+        if col != 'node_name'
+    }
+    return df.rename(columns=rename_map)
 
 
 def load_synteny_summary(path):
@@ -1279,26 +1292,8 @@ def main():
             df_branch = pandas.merge(df_branch, df_tmp, on='node_name', how='outer')
         df_branch = df_branch.drop('intron_absent', axis=1)
         df_branch = compute_delta(df_branch, 'intron_present')
-    if (os.path.exists(params["targetp"])):
-        df_tmp = pandas.read_csv(
-            params['targetp'],
-            sep='\t',
-            header=None,
-            index_col=None,
-            comment='#',
-            usecols=range(8),
-            names=[
-                'node_name',
-                'targetp_prediction',
-                'targetp_noTP',
-                'targetp_SP',
-                'targetp_mTP',
-                'targetp_cTP',
-                'targetp_luTP',
-                'targetp_CS_position',
-            ],
-        )
-        node_left_merge_tables.append(df_tmp)
+    if (os.path.exists(params["cdskit_localize"])):
+        node_left_merge_tables.append(load_cdskit_localize(params['cdskit_localize']))
     if (os.path.exists(params["uniprot"])):
         df_tmp = pandas.read_csv(params['uniprot'], sep='\t',  header=0, index_col=None, low_memory=False)
         df_tmp = df_tmp.rename(columns={'gene_id': 'node_name'})

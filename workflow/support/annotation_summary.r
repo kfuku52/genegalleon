@@ -519,8 +519,8 @@ generate_annotation_summary <- function(dir_species_annotation, outbase, tr = NA
     
     cat("Starting the analysis of annotation tables.\n")
     df <- data.frame()
-    old_cols <- c('gene_id', 'orthogroup', 'sprot_best', 'busco_id')
-    new_cols <- c('num_gene', 'num_orthogroup', 'num_sprot', 'num_busco')
+    old_cols <- c('gene_id', 'orthogroup', 'sprot_best', 'cdskit_localize_predicted_class', 'busco_id')
+    new_cols <- c('num_gene', 'num_orthogroup', 'num_sprot', 'num_cdskit_localize', 'num_busco')
     species_keys <- gg_species_label_from_filename(files)
     gg_stop_on_duplicate_species_keys(species_keys, files, paste(outbase, 'annotation files'))
     species_labels <- setNames(gg_species_display_from_key(species_keys), files)
@@ -582,12 +582,14 @@ generate_annotation_summary <- function(dir_species_annotation, outbase, tr = NA
             'num_gene',
             'num_orthogroup',
             'num_sprot',
+            'num_cdskit_localize',
             'num_busco'
         )
         raw_xlabels <- c(
             '# genes',
             '# OG',
             '# UNIPROT',
+            '# cdskit localize',
             '# BUSCO'
         )
         
@@ -648,11 +650,13 @@ generate_annotation_summary <- function(dir_species_annotation, outbase, tr = NA
         percent_xs <- c(
             'percent_orthogroup',
             'percent_sprot',
+            'percent_cdskit_localize',
             'percent_busco'
         )
         percent_xlabels <- c(
             '% OG',
             '% UNIPROT',
+            '% cdskit localize',
             '% BUSCO'
         )
         

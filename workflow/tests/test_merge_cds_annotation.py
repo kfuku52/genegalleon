@@ -52,6 +52,26 @@ def test_load_busco_aggregates_by_gene_id_and_indexes(tmp_path):
     assert out.loc["geneB", "busco_sequence"] == "geneB"
 
 
+def test_load_cdskit_localize_prefixes_columns_and_indexes(tmp_path):
+    mod = load_module()
+    infile = tmp_path / "cdskit_localize.tsv"
+    infile.write_text(
+        "seq_id\tpredicted_class\tp_noTP\tp_SP\tp_mTP\tp_cTP\tp_lTP\tp_peroxisome\tperox_signal_type\n"
+        "geneA\tSP\t0.1\t0.7\t0.1\t0.05\t0.05\t0.02\t-\n"
+        "geneB\tperoxisome\t0.2\t0.1\t0.1\t0.1\t0.1\t0.4\tPTS1\n",
+        encoding="utf-8",
+    )
+
+    out = mod.load_cdskit_localize(str(infile))
+
+    assert out.index.name == "gene_id"
+    assert "seq_id" not in out.columns
+    assert "predicted_class" not in out.columns
+    assert out.loc["geneA", "cdskit_localize_predicted_class"] == "SP"
+    assert out.loc["geneB", "cdskit_localize_p_peroxisome"] == 0.4
+    assert out.loc["geneB", "cdskit_localize_perox_signal_type"] == "PTS1"
+
+
 def test_join_if_available_accepts_preindexed_tables():
     mod = load_module()
     df = pandas.DataFrame(index=pandas.Index(["geneA", "geneB"], name="gene_id"))

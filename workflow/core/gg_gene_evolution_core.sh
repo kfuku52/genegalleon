@@ -12,12 +12,17 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_gene_evolution_entrypoint.sh.
+busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"
 species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"
 species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"
 species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"
+cdskit_localize_model="${cdskit_localize_model:-targeting5-perox-deeploc21-et-v1}"
+cdskit_localize_organism_group="${cdskit_localize_organism_group:-auto}"
+cdskit_localize_include_features="${cdskit_localize_include_features:-0}"
+cdskit_localize_no_model_download="${cdskit_localize_no_model_download:-0}"
 run_extract_query_fasta="${run_extract_query_fasta:-1}"
 run_extract_primary_fasta="${run_extract_primary_fasta:-1}"
 run_generate_expression_matrix="${run_generate_expression_matrix:-0}"
@@ -564,6 +569,7 @@ file_og_cds_fasta="${dir_output_active}/cds_fasta/${og_id}_cds.fa.gz"
 file_og_pep_fasta="${dir_output_active}/protein_fasta/${og_id}_pep.fa.gz"
 file_og_rpsblast="${dir_output_active}/rpsblast/${og_id}_rpsblast.tsv"
 file_og_uniprot_annotation="${dir_output_active}/uniprot_annotation/${og_id}_uniprot.tsv"
+file_og_cdskit_localize="${dir_output_active}/cdskit_localize/${og_id}_cdskit_localize.tsv"
 file_og_mafft="${dir_output_active}/mafft/${og_id}_cds.aln.fa.gz"
 file_og_maxalign="${dir_output_active}/maxalign/${og_id}_cds.maxalign.fa.gz"
 file_og_trimal="${dir_output_active}/trimal/${og_id}_cds.trimal.fa.gz"
@@ -1537,6 +1543,57 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
     --outfile uniprot.annotation.tsv
 
   cp_out uniprot.annotation.tsv "${file_og_uniprot_annotation}"
+else
+  gg_step_skip "${task}"
+fi
+
+task="cdskit localize"
+disable_if_no_input_file "run_cdskit_localize" "${file_og_primary_fasta}"
+if [[ ! -s "${file_og_cdskit_localize}" && ${run_cdskit_localize} -eq 1 ]]; then
+  gg_step_start "${task}"
+
+  cdskit_localize_species_dir="${dir_sp_cds}"
+  if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
+    cdskit_localize_species_dir="${dir_sp_protein_input}"
+  fi
+  cdskit_localize_species_names=()
+  mapfile -t cdskit_localize_species_names < <(gg_species_names_from_fasta_dir "${cdskit_localize_species_dir}")
+  cdskit_localize_group_resolved=$(
+    gg_resolve_cdskit_localize_organism_group \
+      "${cdskit_localize_organism_group}" \
+      "${gg_workspace_dir}" \
+      "${busco_lineage}" \
+      "${cdskit_localize_species_names[@]}"
+  )
+
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    seqkit seq --remove-gaps --only-id --threads "${GG_TASK_CPUS}" "${file_og_pep_fasta}" > "cdskit_localize.input.pep.fasta"
+    cdskit_localize_input="cdskit_localize.input.pep.fasta"
+    cdskit_localize_seqtype="protein"
+  else
+    gg_prepare_cdskit_localize_cds_input \
+      "${file_og_cds_fasta}" \
+      "cdskit_localize.input.cds.fasta" \
+      "${GG_TASK_CPUS}" \
+      "${genetic_code}"
+    cdskit_localize_input="cdskit_localize.input.cds.fasta"
+    cdskit_localize_seqtype="dna"
+  fi
+
+  gg_run_cdskit_localize \
+    "${cdskit_localize_input}" \
+    "${cdskit_localize_seqtype}" \
+    "cdskit_localize.tsv" \
+    "${cdskit_localize_model}" \
+    "${cdskit_localize_group_resolved}" \
+    "${cdskit_localize_include_features}" \
+    "${cdskit_localize_no_model_download}" \
+    "${GG_TASK_CPUS}" \
+    "${genetic_code}"
+  if [[ -s "cdskit_localize.tsv" ]]; then
+    mv_out "cdskit_localize.tsv" "${file_og_cdskit_localize}"
+  fi
+  rm -f -- "cdskit_localize.input.cds.fasta" "cdskit_localize.input.pep.fasta"
 else
   gg_step_skip "${task}"
 fi
@@ -3454,6 +3511,7 @@ if [[ (${summary_flag} -eq 1 || ! -s "${file_og_stat_branch}" || ! -s "${file_og
     --species_pgls_stats "${file_og_species_pgls}" \
     --rpsblast "${file_og_rpsblast}" \
     --uniprot "${file_og_uniprot_annotation}" \
+    --cdskit_localize "${file_og_cdskit_localize}" \
     --synteny "${file_og_synteny}" \
     --ncpu "${GG_TASK_CPUS}" \
     --clade_ortholog_prefix "${treevis_clade_ortholog_prefix}"

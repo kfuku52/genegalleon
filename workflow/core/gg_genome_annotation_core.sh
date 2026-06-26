@@ -16,6 +16,10 @@ busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 contamination_removal_rank="${contamination_removal_rank:-domain}"
 contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"
+cdskit_localize_model="${cdskit_localize_model:-targeting5-perox-deeploc21-et-v1}"
+cdskit_localize_organism_group="${cdskit_localize_organism_group:-auto}"
+cdskit_localize_include_features="${cdskit_localize_include_features:-0}"
+cdskit_localize_no_model_download="${cdskit_localize_no_model_download:-0}"
 run_collect_gff_info="${run_collect_gff_info:-0}"
 ### End: Job-supplied configuration ###
 
@@ -129,6 +133,7 @@ file_sp_cds_busco_short="${gg_workspace_output_dir}/species_cds_busco_short/${sp
 file_sp_genome_busco_full="${gg_workspace_output_dir}/species_genome_busco_full/${sp_ub}_busco.full.tsv"
 file_sp_genome_busco_short="${gg_workspace_output_dir}/species_genome_busco_short/${sp_ub}_busco.short.txt"
 file_sp_uniprot_annotation="${gg_workspace_output_dir}/species_cds_uniprot_annotation/${sp_ub}_uniprot.tsv"
+file_sp_cdskit_localize="${gg_workspace_output_dir}/species_cds_cdskit_localize/${sp_ub}_cdskit_localize.tsv"
 file_sp_annotation="${gg_workspace_output_dir}/species_cds_annotation/${sp_ub}_annotation.tsv"
 file_sp_wgd_ksd="${gg_workspace_output_dir}/species_cds_wgd_ksd/${sp_ub}_wgd_ksd.tsv"
 file_sp_subphaser="${gg_workspace_output_dir}/species_genome_subphaser/${sp_ub}_subphaser.zip"
@@ -383,6 +388,41 @@ else
   gg_step_skip "${task}"
 fi
 
+task="cdskit localize"
+disable_if_no_input_file "run_cdskit_localize" "${file_sp_cds}"
+if [[ ! -s "${file_sp_cdskit_localize}" && ${run_cdskit_localize} -eq 1 ]]; then
+  gg_step_start "${task}"
+
+  cdskit_localize_group_resolved=$(
+    gg_resolve_cdskit_localize_organism_group \
+      "${cdskit_localize_organism_group}" \
+      "${gg_workspace_dir}" \
+      "${busco_lineage}" \
+      "${sp_ub}"
+  )
+  gg_prepare_cdskit_localize_cds_input \
+    "${file_sp_cds}" \
+    "cdskit_localize.input.cds.fasta" \
+    "${GG_TASK_CPUS}" \
+    "${genetic_code}"
+  gg_run_cdskit_localize \
+    "cdskit_localize.input.cds.fasta" \
+    "dna" \
+    "cdskit_localize.tsv" \
+    "${cdskit_localize_model}" \
+    "${cdskit_localize_group_resolved}" \
+    "${cdskit_localize_include_features}" \
+    "${cdskit_localize_no_model_download}" \
+    "${GG_TASK_CPUS}" \
+    "${genetic_code}"
+  if [[ -s "cdskit_localize.tsv" ]]; then
+    mv_out "cdskit_localize.tsv" "${file_sp_cdskit_localize}"
+  fi
+  rm -f -- "cdskit_localize.input.cds.fasta"
+else
+  gg_step_skip "${task}"
+fi
+
 task="seqkit fx2tab for the CDS sequences"
 disable_if_no_input_file "run_cds_fx2tab" "${file_sp_cds}"
 if [[ ! -s "${file_sp_cds_fx2tab}" && ${run_cds_fx2tab} -eq 1 ]]; then
@@ -498,6 +538,7 @@ if [[ ! -s "${file_sp_annotation}" ]] && [[ ${run_annotation} -eq 1 ]]; then
     --cds_fasta "${file_sp_cds}" \
     --uniprot_tsv "${file_sp_uniprot_annotation}" \
     --busco_tsv "${file_sp_cds_busco_full}" \
+    --cdskit_localize_tsv "${file_sp_cdskit_localize}" \
     --expression_tsv "${file_sp_expression}" \
     --gff_info "${file_sp_gff_info}" \
     --orthogroup_tsv "${file_orthogroup}" \

@@ -10,11 +10,13 @@ pandas
 pypdf
 reportlab
 requests
+scikit-learn
 scipy
 sqlalchemy
 statsmodels
 tenacity
 tqdm
+pytorch
 
 # genegalleon bioinformatics core (intended to be cross-arch)
 amas

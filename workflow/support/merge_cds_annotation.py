@@ -62,6 +62,25 @@ def load_uniprot(path):
     return dedupe_gene_id_index(pandas.read_csv(path, sep='\t', header=0, index_col=None, low_memory=False))
 
 
+def load_cdskit_localize(path):
+    if not os.path.exists(path):
+        print('File not found: {}'.format(path), flush=True)
+        return None
+    print('{}: Processing: {}'.format(datetime.datetime.now(), path), flush=True)
+    tmp = pandas.read_csv(path, sep='\t', header=0, index_col=None, low_memory=False)
+    if 'seq_id' not in tmp.columns:
+        print('seq_id column was not found in cdskit localize table: {}'.format(path), flush=True)
+        return None
+    tmp = tmp.rename(columns={'seq_id': 'gene_id'})
+    rename_map = {
+        col: 'cdskit_localize_{}'.format(col)
+        for col in tmp.columns
+        if col != 'gene_id'
+    }
+    tmp = tmp.rename(columns=rename_map)
+    return dedupe_gene_id_index(tmp)
+
+
 def load_busco(path):
     if not os.path.exists(path):
         print('File not found: {}'.format(path), flush=True)
@@ -144,6 +163,7 @@ def main():
     parser.add_argument('--cds_fasta', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--orthogroup_tsv', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--uniprot_tsv', metavar='PATH', default='', type=str, help='')
+    parser.add_argument('--cdskit_localize_tsv', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--busco_tsv', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--expression_tsv', metavar='PATH', default='', type=str, help='')
     parser.add_argument('--gff_info', metavar='PATH', default='', type=str, help='')
@@ -163,6 +183,7 @@ def main():
 
     tasks = {
         'uniprot': (load_uniprot, args.uniprot_tsv),
+        'cdskit_localize': (load_cdskit_localize, args.cdskit_localize_tsv),
         'busco': (load_busco, args.busco_tsv),
         'fx2tab': (load_fx2tab, args.fx2tab),
         'gff_info': (load_gff_info, args.gff_info),
@@ -182,7 +203,7 @@ def main():
                 key = futures[future]
                 loaded[key] = future.result()
 
-    for key in ['uniprot', 'busco', 'fx2tab', 'gff_info', 'expression', 'mmseqs']:
+    for key in ['uniprot', 'cdskit_localize', 'busco', 'fx2tab', 'gff_info', 'expression', 'mmseqs']:
         df = join_if_available(df, loaded[key])
 
     df = df.reset_index()
