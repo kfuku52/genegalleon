@@ -120,6 +120,7 @@ def test_core_and_entrypoint_scripts_use_strict_euo_pipefail():
 def test_non_library_workflow_shell_scripts_use_strict_euo_pipefail():
     allowed_non_strict = {
         WORKFLOW_DIR / "gg_common_params.sh",
+        WORKFLOW_DIR / "support" / "gg_shared_lock.sh",
         WORKFLOW_DIR / "support" / "gg_util.sh",
     }
     scripts = _workflow_shell_scripts()
