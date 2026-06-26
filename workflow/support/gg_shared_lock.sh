@@ -1,0 +1,450 @@
+#!/usr/bin/env bash
+
+gg_lock_stale_seconds() {
+  local stale_seconds="${GG_LOCK_STALE_SECONDS:-900}"
+  if [[ ! "${stale_seconds}" =~ ^[0-9]+$ ]]; then
+    stale_seconds=900
+  fi
+  if (( stale_seconds < 1 )); then
+    stale_seconds=1
+  fi
+  echo "${stale_seconds}"
+}
+
+gg_lock_heartbeat_seconds() {
+  local heartbeat_seconds="${GG_LOCK_HEARTBEAT_SECONDS:-60}"
+  if [[ ! "${heartbeat_seconds}" =~ ^[0-9]+$ ]]; then
+    heartbeat_seconds=60
+  fi
+  if (( heartbeat_seconds < 1 )); then
+    heartbeat_seconds=1
+  fi
+  echo "${heartbeat_seconds}"
+}
+
+gg_lock_acquire_timeout_seconds() {
+  local acquire_timeout_seconds="${GG_LOCK_ACQUIRE_TIMEOUT_SECONDS:-86400}"
+  if [[ ! "${acquire_timeout_seconds}" =~ ^[0-9]+$ ]]; then
+    acquire_timeout_seconds=86400
+  fi
+  if (( acquire_timeout_seconds < 1 )); then
+    acquire_timeout_seconds=1
+  fi
+  echo "${acquire_timeout_seconds}"
+}
+
+gg_lock_poll_seconds() {
+  local poll_seconds="${GG_LOCK_POLL_SECONDS:-5}"
+  if [[ ! "${poll_seconds}" =~ ^[0-9]+$ ]]; then
+    poll_seconds=5
+  fi
+  if (( poll_seconds < 1 )); then
+    poll_seconds=1
+  fi
+  echo "${poll_seconds}"
+}
+
+gg_stat_mtime_epoch() {
+  local target=$1
+  if [[ ! -e "${target}" ]]; then
+    echo ""
+    return 0
+  fi
+  if stat --version >/dev/null 2>&1; then
+    stat -c '%Y' "${target}" 2>/dev/null || true
+  else
+    stat -f '%m' "${target}" 2>/dev/null || true
+  fi
+}
+
+gg_write_ready_marker() {
+  local marker_path=$1
+  mkdir -p "$(dirname "${marker_path}")"
+  printf 'ready\n' > "${marker_path}"
+}
+
+gg_artifact_ready() {
+  local artifact_path=$1
+  if [[ -d "${artifact_path}" ]]; then
+    return 0
+  fi
+  [[ -s "${artifact_path}" ]]
+}
+
+gg_shared_lock_helper_script() {
+  local helper_dir="${gg_support_dir:-}"
+  if [[ -z "${helper_dir}" ]]; then
+    helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd 2>/dev/null || true)"
+  fi
+  if [[ -z "${helper_dir}" || ! -s "${helper_dir}/shared_lock.py" ]]; then
+    echo "shared_lock.py was not found relative to gg_util.sh" >&2
+    return 1
+  fi
+  printf '%s\n' "${helper_dir}/shared_lock.py"
+}
+
+gg_shared_lock_python() {
+  gg_find_python_exec
+}
+
+gg_lock_hostname() {
+  hostname 2>/dev/null || uname -n
+}
+
+gg_lock_boot_id() {
+  if [[ -r /proc/sys/kernel/random/boot_id ]]; then
+    tr -d '\r\n' < /proc/sys/kernel/random/boot_id
+    return 0
+  fi
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -n kern.bootsessionuuid 2>/dev/null | tr -d '[:space:]'
+    return 0
+  fi
+  echo ""
+}
+
+gg_shared_lock_read_metadata() {
+  local lock_file=$1
+  local py_exec
+  local helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  "${py_exec}" "${helper_script}" read-metadata "${lock_file}"
+}
+
+gg_shared_lock_owner_summary() {
+  local lock_file=$1
+  local py_exec
+  local helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  "${py_exec}" "${helper_script}" owner-summary "${lock_file}"
+}
+
+gg_shared_lock_try_create() {
+  local lock_file=$1
+  local owner_pid=${2:-$$}
+  local py_exec
+  local helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  "${py_exec}" "${helper_script}" try-create "${lock_file}" --pid "${owner_pid}"
+}
+
+gg_shared_lock_remove_if_unchanged() {
+  local lock_file=$1
+  local expected_device=$2
+  local expected_inode=$3
+  local py_exec
+  local helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  "${py_exec}" "${helper_script}" remove-if-unchanged "${lock_file}" "${expected_device}" "${expected_inode}"
+}
+
+gg_shared_lock_reclaim_if_stale() {
+  local lock_file=$1
+  local description=$2
+  if [[ ! -e "${lock_file}" ]]; then
+    return 1
+  fi
+  local stale_seconds
+  stale_seconds=$(gg_lock_stale_seconds)
+  local py_exec
+  local helper_script
+  local stale_summary=""
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  if stale_summary=$("${py_exec}" "${helper_script}" reclaim-if-stale "${lock_file}" --stale-seconds "${stale_seconds}"); then
+    echo "Recovered stale shared lock: ${description} (${stale_summary})" >&2
+    return 0
+  fi
+  return 1
+}
+
+gg_shared_lock_start_heartbeat() {
+  local lock_file=$1
+  local interval_seconds
+  interval_seconds=$(gg_lock_heartbeat_seconds)
+  (
+    while [[ -e "${lock_file}" ]]; do
+      sleep "${interval_seconds}" || exit 0
+      if [[ -e "${lock_file}" ]]; then
+        touch -c -- "${lock_file}" 2>/dev/null || true
+      fi
+    done
+  ) &
+  GG_SHARED_LOCK_HEARTBEAT_PID=$!
+}
+
+gg_shared_lock_stop_heartbeat() {
+  local heartbeat_pid=${1:-}
+  if [[ ! "${heartbeat_pid}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  kill "${heartbeat_pid}" 2>/dev/null || true
+  wait "${heartbeat_pid}" 2>/dev/null || true
+}
+
+gg_shared_lock_release() {
+  local lock_file=$1
+  rm -f -- "${lock_file}"
+}
+
+gg_shared_lock_acquire() {
+  local lock_file=$1
+  local description=$2
+  local task_id=${GG_ARRAY_TASK_ID:-1}
+  local poll_seconds
+  local timeout_seconds
+  local wait_started
+  local wait_logged=0
+  poll_seconds=$(gg_lock_poll_seconds)
+  timeout_seconds=$(gg_lock_acquire_timeout_seconds)
+  wait_started=$(date +%s)
+  mkdir -p "$(dirname "${lock_file}")"
+  while true; do
+    if gg_shared_lock_try_create "${lock_file}"; then
+      return 0
+    fi
+    if gg_shared_lock_reclaim_if_stale "${lock_file}" "${description}"; then
+      continue
+    fi
+    local owner_summary
+    owner_summary=$(gg_shared_lock_owner_summary "${lock_file}")
+    if [[ ${wait_logged} -eq 0 ]]; then
+      echo "GG_ARRAY_TASK_ID=${task_id}: waiting for shared lock: ${description} (${owner_summary})" >&2
+      wait_logged=1
+    fi
+    local now_epoch
+    now_epoch=$(date +%s)
+    if (( now_epoch - wait_started >= timeout_seconds )); then
+      echo "GG_ARRAY_TASK_ID=${task_id}: timed out waiting for shared lock: ${description} (${owner_summary})" >&2
+      return 1
+    fi
+    sleep "${poll_seconds}"
+  done
+}
+
+gg_shared_semaphore_max_slots() {
+  local max_slots="${1:-1}"
+  if [[ ! "${max_slots}" =~ ^[0-9]+$ ]]; then
+    max_slots=1
+  fi
+  if (( max_slots < 0 )); then
+    max_slots=1
+  fi
+  echo "${max_slots}"
+}
+
+gg_shared_semaphore_acquire() {
+  local semaphore_dir=$1
+  local requested_slots=$2
+  local description=$3
+  local max_slots
+  local task_id=${GG_ARRAY_TASK_ID:-1}
+  local poll_seconds
+  local timeout_seconds
+  local wait_started
+  local wait_logged=0
+  local slot_idx=0
+  local slot_lock=""
+
+  max_slots=$(gg_shared_semaphore_max_slots "${requested_slots}")
+  if (( max_slots < 1 )); then
+    GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE=""
+    GG_SHARED_SEMAPHORE_SLOT_INDEX=""
+    GG_SHARED_SEMAPHORE_MAX_SLOTS="${max_slots}"
+    return 0
+  fi
+
+  poll_seconds=$(gg_lock_poll_seconds)
+  timeout_seconds=$(gg_lock_acquire_timeout_seconds)
+  wait_started=$(date +%s)
+  mkdir -p "${semaphore_dir}"
+  while true; do
+    for (( slot_idx=1; slot_idx<=max_slots; slot_idx++ )); do
+      slot_lock="${semaphore_dir}/slot.${slot_idx}.lock"
+      if gg_shared_lock_try_create "${slot_lock}"; then
+        GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE="${slot_lock}"
+        GG_SHARED_SEMAPHORE_SLOT_INDEX="${slot_idx}"
+        GG_SHARED_SEMAPHORE_MAX_SLOTS="${max_slots}"
+        return 0
+      fi
+      if gg_shared_lock_reclaim_if_stale "${slot_lock}" "${description} slot ${slot_idx}/${max_slots}"; then
+        if gg_shared_lock_try_create "${slot_lock}"; then
+          GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE="${slot_lock}"
+          GG_SHARED_SEMAPHORE_SLOT_INDEX="${slot_idx}"
+          GG_SHARED_SEMAPHORE_MAX_SLOTS="${max_slots}"
+          return 0
+        fi
+      fi
+    done
+    if [[ ${wait_logged} -eq 0 ]]; then
+      echo "GG_ARRAY_TASK_ID=${task_id}: waiting for shared semaphore slot: ${description} (max_concurrent=${max_slots}; lock_dir=${semaphore_dir})" >&2
+      wait_logged=1
+    fi
+    local now_epoch
+    now_epoch=$(date +%s)
+    if (( now_epoch - wait_started >= timeout_seconds )); then
+      echo "GG_ARRAY_TASK_ID=${task_id}: timed out waiting for shared semaphore slot: ${description} (max_concurrent=${max_slots}; lock_dir=${semaphore_dir})" >&2
+      return 1
+    fi
+    sleep "${poll_seconds}"
+  done
+}
+
+gg_shared_semaphore_release() {
+  local slot_lock="${1:-${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}}"
+  if [[ -z "${slot_lock}" ]]; then
+    return 0
+  fi
+  gg_shared_lock_release "${slot_lock}"
+  if [[ "${slot_lock}" == "${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}" ]]; then
+    GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE=""
+    GG_SHARED_SEMAPHORE_SLOT_INDEX=""
+    GG_SHARED_SEMAPHORE_MAX_SLOTS=""
+  fi
+}
+
+gg_run_with_shared_semaphore() {
+  local semaphore_dir=$1
+  local requested_slots=$2
+  local description=$3
+  shift 3
+  local task_id=${GG_ARRAY_TASK_ID:-1}
+  local max_slots
+  local slot_lock=""
+  local heartbeat_pid=""
+  local command_exit_code=0
+  local saved_exit_trap=""
+  local saved_hup_trap=""
+  local saved_int_trap=""
+  local saved_term_trap=""
+
+  max_slots=$(gg_shared_semaphore_max_slots "${requested_slots}")
+  if (( max_slots < 1 )); then
+    if "$@"; then
+      return 0
+    fi
+    return $?
+  fi
+
+  if ! gg_shared_semaphore_acquire "${semaphore_dir}" "${max_slots}" "${description}"; then
+    return 1
+  fi
+  slot_lock="${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}"
+  if [[ -z "${slot_lock}" ]]; then
+    echo "Failed to resolve shared semaphore slot after acquire: ${description}" >&2
+    return 1
+  fi
+
+  cleanup_shared_semaphore() {
+    gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+    gg_shared_semaphore_release "${slot_lock}"
+  }
+
+  restore_shared_semaphore_traps() {
+    trap - EXIT
+    trap - HUP
+    trap - INT
+    trap - TERM
+    if [[ -n "${saved_exit_trap}" ]]; then
+      eval "${saved_exit_trap}"
+    fi
+    if [[ -n "${saved_hup_trap}" ]]; then
+      eval "${saved_hup_trap}"
+    fi
+    if [[ -n "${saved_int_trap}" ]]; then
+      eval "${saved_int_trap}"
+    fi
+    if [[ -n "${saved_term_trap}" ]]; then
+      eval "${saved_term_trap}"
+    fi
+  }
+
+  shared_semaphore_signal_handler() {
+    local signal_name=$1
+    cleanup_shared_semaphore
+    restore_shared_semaphore_traps
+    kill "-${signal_name}" "${BASHPID:-$$}"
+  }
+
+  saved_exit_trap=$(trap -p EXIT || true)
+  saved_hup_trap=$(trap -p HUP || true)
+  saved_int_trap=$(trap -p INT || true)
+  saved_term_trap=$(trap -p TERM || true)
+  trap 'cleanup_shared_semaphore; restore_shared_semaphore_traps' EXIT
+  trap 'shared_semaphore_signal_handler HUP' HUP
+  trap 'shared_semaphore_signal_handler INT' INT
+  trap 'shared_semaphore_signal_handler TERM' TERM
+
+  gg_shared_lock_start_heartbeat "${slot_lock}"
+  heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
+  echo "GG_ARRAY_TASK_ID=${task_id}: acquired shared semaphore slot ${GG_SHARED_SEMAPHORE_SLOT_INDEX:-?}/${GG_SHARED_SEMAPHORE_MAX_SLOTS:-${max_slots}}: ${description}" >&2
+  if "$@"; then
+    command_exit_code=0
+  else
+    command_exit_code=$?
+  fi
+  cleanup_shared_semaphore
+  restore_shared_semaphore_traps
+  return "${command_exit_code}"
+}
+
+gg_lock_pid_is_alive() {
+  local pid=$1
+  if [[ ! "${pid}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  kill -0 "${pid}" 2>/dev/null
+}
+
+gg_array_download_once() {
+  local lock_file=$1
+  local artifact_path=$2
+  local description=$3
+  shift 3
+  local task_id=${GG_ARRAY_TASK_ID:-1}
+  local heartbeat_pid=""
+  local artifact_exit_code=0
+
+  mkdir -p "$(dirname "${lock_file}")"
+
+  if gg_artifact_ready "${artifact_path}"; then
+    return 0
+  fi
+  if ! gg_shared_lock_acquire "${lock_file}" "${description}"; then
+    return 1
+  fi
+  gg_shared_lock_start_heartbeat "${lock_file}"
+  heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
+
+  if gg_artifact_ready "${artifact_path}"; then
+    gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+    gg_shared_lock_release "${lock_file}"
+    return 0
+  fi
+
+  echo "GG_ARRAY_TASK_ID=${task_id}: starting shared artifact preparation: ${description}" >&2
+  # Artifact builders may run tools that log to stdout; keep caller-captured
+  # return values, such as DB prefixes, clean.
+  "$@" >&2
+  artifact_exit_code=$?
+  if [[ ${artifact_exit_code} -ne 0 ]]; then
+    echo "GG_ARRAY_TASK_ID=${task_id}: shared artifact preparation failed: ${description}" >&2
+    gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+    gg_shared_lock_release "${lock_file}"
+    return "${artifact_exit_code}"
+  fi
+  if ! gg_artifact_ready "${artifact_path}"; then
+    echo "Shared artifact was not ready after synchronization: ${artifact_path}" >&2
+    gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+    gg_shared_lock_release "${lock_file}"
+    return 1
+  fi
+
+  echo "GG_ARRAY_TASK_ID=${task_id}: shared artifact ready: ${description}" >&2
+  gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+  gg_shared_lock_release "${lock_file}"
+}

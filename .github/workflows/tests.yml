@@ -72,7 +72,9 @@ jobs:
 
           exclude=(
             "workflow/tests/test_busco_hmmsearch_wrapper.py"
+            "workflow/tests/test_format_species_inputs_download_runtime.py"
             "workflow/tests/test_format_species_inputs_download.py"
+            "workflow/tests/test_format_species_inputs_provider_pages.py"
             "workflow/tests/test_generate_species_trait.py"
             "workflow/tests/test_genome_evolution_protein_mode.py"
             "workflow/tests/test_gg_input_generation_end_to_end.py"
@@ -108,6 +110,8 @@ jobs:
           - name: download-and-traits
             tests: >-
               workflow/tests/test_format_species_inputs_download.py
+              workflow/tests/test_format_species_inputs_download_runtime.py
+              workflow/tests/test_format_species_inputs_provider_pages.py
               workflow/tests/test_generate_species_trait.py
           - name: workflow-integrations
             tests: >-
@@ -166,13 +170,16 @@ jobs:
           python -m ruff check \
             workflow/support/shared_lock.py \
             workflow/support/amalgkit_metadata_accessions.py \
+            workflow/support/format_species_manifest.py \
             workflow/support/format_species_provider_config.py \
             workflow/support/format_species_provider_urls.py \
             workflow/tests/test_ci_static.py \
             workflow/tests/test_amalgkit_metadata_accessions.py \
             workflow/tests/test_docker_runtime_shim.py \
+            workflow/tests/test_format_species_manifest.py \
             workflow/tests/test_format_species_provider_urls.py \
             workflow/tests/test_gg_shared_lock_shell.py \
+            workflow/tests/test_legacy_policy_static.py \
             workflow/tests/test_shell_download_static.py \
             workflow/tests/test_shell_entrypoint_static.py \
             workflow/tests/test_shell_shared_lock_static.py \

@@ -77,8 +77,8 @@ def test_nonconda_download_helpers_use_archive_files_and_wget_fallback():
 
 
 def test_download_lock_helper_uses_shared_lock_metadata_and_heartbeat():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
+    lock_path = WORKFLOW_DIR / "support" / "gg_shared_lock.sh"
+    text = _read_text(lock_path)
     body = _function_body(text, "gg_array_download_once")
     assert 'if gg_artifact_ready "${artifact_path}"; then' in body
     assert 'if ! gg_shared_lock_acquire "${lock_file}" "${description}"; then' in body

@@ -231,7 +231,7 @@ def _normalize_ncpu(ncpu):
 
 
 def annotate_blast_coverage(df, ncpu=1):
-    _normalize_ncpu(ncpu)  # Keep CLI/API validation backward-compatible.
+    _normalize_ncpu(ncpu)  # Validate the public parameter even though this implementation is serial.
     out = _prepare_blast_dataframe(df)
     return _annotate_blast_coverage_serial(out)
 
