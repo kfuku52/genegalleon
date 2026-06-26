@@ -1585,7 +1585,7 @@ def test_download_manifest_derives_cds_when_direct_urls_need_explicit_target_fil
     formatted_cds = matches[0]
     with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
         cds_text = handle.read()
-    assert cds_text.count(">Populus_tremula_gene1") == 1
+    assert cds_text.count(">Populus_tremula_x_Populus_alba_gene1") == 1
     assert "ATGTTT" in cds_text
 
 

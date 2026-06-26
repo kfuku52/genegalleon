@@ -28,6 +28,19 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+
+from format_species_provider_config import (
+    DEFAULT_INPUT_RELATIVE_DIRS,
+    DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS,
+    ENSEMBL_LIKE_PROVIDERS,
+    ORYZA_MINUTA_PROVIDER,
+    PROVIDERS,
+)
+from shared_lock import acquire_lock, release_lock
+
 try:
     from openpyxl import load_workbook
 except Exception:  # pragma: no cover - exercised in runtime environments without openpyxl
@@ -52,7 +65,6 @@ FERNBASE_CONFIDENCE_MODE_CHOICES = (
     FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED,
 )
 FERNBASE_COMBINED_FILENAME_MARKER = "highlowcombined"
-ORYZA_MINUTA_PROVIDER = "oryza_minuta"
 ORYZA_MINUTA_DEFAULT_SPECIES_KEY = "Oryza_minuta"
 ORYZA_MINUTA_CANONICAL_SOURCE_ID = "gramene_tetraploids"
 ORYZA_MINUTA_SOURCE_ID_ALIASES = frozenset(
@@ -201,105 +213,12 @@ FIGSHARE_ARTICLE_ID_PATTERN = re.compile(r"/articles(?:/[^/?#]+)*/([0-9]+)(?:$|[
 PLANTGARDEN_TAXID_PATTERN = re.compile(r"^t[0-9]+$", re.IGNORECASE)
 PLANTGARDEN_GENOME_ID_PATTERN = re.compile(r"^(t[0-9]+)[.]G[0-9]+$", re.IGNORECASE)
 
-DEFAULT_INPUT_RELATIVE_DIRS = {
-    "ensembl": Path("Ensembl") / "original_files",
-    "ensemblplants": Path("20230216_EnsemblPlants") / "original_files",
-    "ensemblmetazoa": Path("EnsemblMetazoa") / "original_files",
-    "ensemblprotists": Path("EnsemblProtists") / "original_files",
-    "phycocosm": Path("PhycoCosm") / "species_wise_original",
-    "phytozome": Path("Phytozome") / "species_wise_original",
-    "ncbi": Path("NCBI_Genome") / "species_wise_original",
-    "ddbj": Path("DDBJ") / "species_wise_original",
-    "refseq": Path("NCBI_RefSeq") / "species_wise_original",
-    "genbank": Path("NCBI_GenBank") / "species_wise_original",
-    "coge": Path("CoGe") / "species_wise_original",
-    "cngb": Path("CNGB") / "species_wise_original",
-    "gwh": Path("GWH") / "species_wise_original",
-    "citrusgenomedb": Path("CitrusGenomeDB") / "species_wise_original",
-    "figshare": Path("Figshare") / "species_wise_original",
-    "plantgarden": Path("PlantGARDEN") / "species_wise_original",
-    "plantaedb": Path("PlantaeDB") / "species_wise_original",
-    "flybase": Path("FlyBase") / "species_wise_original",
-    "wormbase": Path("WormBase") / "species_wise_original",
-    "vectorbase": Path("VectorBase") / "species_wise_original",
-    "fernbase": Path("FernBase") / "species_wise_original",
-    "veupathdb": Path("VEuPathDB") / "species_wise_original",
-    "dictybase": Path("dictyBase") / "species_wise_original",
-    "insectbase": Path("InsectBase") / "species_wise_original",
-    ORYZA_MINUTA_PROVIDER: Path("OryzaMinuta") / "species_wise_original",
-    "direct": Path("Direct") / "species_wise_original",
-    "local": Path("Local") / "species_wise_original",
-}
-
-PROVIDERS = (
-    "ensembl",
-    "ensemblplants",
-    "ensemblmetazoa",
-    "ensemblprotists",
-    "phycocosm",
-    "phytozome",
-    "ncbi",
-    "ddbj",
-    "refseq",
-    "genbank",
-    "coge",
-    "cngb",
-    "gwh",
-    "citrusgenomedb",
-    "figshare",
-    "plantgarden",
-    "plantaedb",
-    "flybase",
-    "wormbase",
-    "vectorbase",
-    "fernbase",
-    "veupathdb",
-    "dictybase",
-    "insectbase",
-    ORYZA_MINUTA_PROVIDER,
-    "direct",
-    "local",
-)
-DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
-    "ensembl",
-    "ensemblplants",
-    "ensemblmetazoa",
-    "ensemblprotists",
-    "ncbi",
-    "ddbj",
-    "refseq",
-    "genbank",
-    "coge",
-    "cngb",
-    "gwh",
-    "citrusgenomedb",
-    "figshare",
-    "plantgarden",
-    "plantaedb",
-    "flybase",
-    "wormbase",
-    "vectorbase",
-    "fernbase",
-    "veupathdb",
-    "dictybase",
-    "insectbase",
-    ORYZA_MINUTA_PROVIDER,
-    "direct",
-    "local",
-)
-ENSEMBL_LIKE_PROVIDERS = (
-    "ensembl",
-    "ensemblplants",
-    "ensemblmetazoa",
-    "ensemblprotists",
-)
 DEFAULT_DOWNLOAD_LOCK_STALE_SECONDS = 900
 DEFAULT_DOWNLOAD_LOCK_HEARTBEAT_SECONDS = 60
 DEFAULT_DOWNLOAD_LOCK_ACQUIRE_TIMEOUT_SECONDS = 3600
 DEFAULT_DOWNLOAD_LOCK_POLL_SECONDS = 5.0
 DEFAULT_DOWNLOAD_ATTEMPTS = 4
 DEFAULT_DOWNLOAD_RETRY_BASE_SECONDS = 5.0
-SHARED_DOWNLOAD_LOCK_FORMAT = "shared-lock-v2"
 DOWNLOAD_DIAGNOSTIC_KEYS = (
     "cache_preexisting_partial_tmp",
     "cache_preexisting_corrupt",
@@ -4989,242 +4908,21 @@ def resolve_download_lock_poll_seconds():
     return value
 
 
-def lock_pid_is_alive(pid):
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def lock_hostname():
-    return socket.gethostname()
-
-
-def lock_boot_id():
-    boot_id_path = Path("/proc/sys/kernel/random/boot_id")
-    try:
-        if boot_id_path.is_file():
-            return boot_id_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        pass
-    try:
-        completed = subprocess.run(
-            ["sysctl", "-n", "kern.bootsessionuuid"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
-        return ""
-    if completed.returncode != 0:
-        return ""
-    return completed.stdout.strip()
-
-
-def read_lock_metadata(lock_path):
-    metadata = {
-        "format": "",
-        "pid": None,
-        "hostname": "",
-        "boot_id": "",
-        "created_at": "",
-    }
-    try:
-        raw = lock_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return metadata
-    if raw == "":
-        return metadata
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return metadata
-    if not isinstance(payload, dict):
-        return metadata
-    metadata["format"] = str(payload.get("format", "") or "")
-    pid = payload.get("pid")
-    if isinstance(pid, int):
-        metadata["pid"] = pid
-    else:
-        try:
-            metadata["pid"] = int(str(pid).strip())
-        except (TypeError, ValueError):
-            metadata["pid"] = None
-    metadata["hostname"] = str(payload.get("hostname", "") or "")
-    metadata["boot_id"] = str(payload.get("boot_id", "") or "")
-    metadata["created_at"] = str(payload.get("created_at", "") or "")
-    return metadata
-
-
-def read_lock_stat(lock_path):
-    try:
-        return lock_path.stat()
-    except OSError:
-        return None
-
-
-def format_lock_owner_summary(lock_path, metadata=None, stat_result=None):
-    if metadata is None:
-        metadata = read_lock_metadata(lock_path)
-    if stat_result is None:
-        stat_result = read_lock_stat(lock_path)
-    if stat_result is None:
-        age_text = "unknown"
-    else:
-        age = int(time.time() - stat_result.st_mtime)
-        if age < 0:
-            age = 0
-        age_text = "{}s".format(age)
-    return "host={}, pid={}, created_at={}, boot_id={}, heartbeat_age={}, lock={}".format(
-        metadata.get("hostname", "") or "unknown",
-        metadata.get("pid", None) if metadata.get("pid", None) is not None else "unknown",
-        metadata.get("created_at", "") or "unknown",
-        metadata.get("boot_id", "") or "unknown",
-        age_text,
-        lock_path,
-    )
-
-
-def stale_lock_reason(lock_path, stale_seconds, metadata=None, stat_result=None):
-    if not lock_path.exists():
-        return ""
-    if metadata is None:
-        metadata = read_lock_metadata(lock_path)
-    if stat_result is None:
-        stat_result = read_lock_stat(lock_path)
-    current_boot_id = lock_boot_id()
-    is_same_host_boot = (
-        metadata.get("hostname", "") != ""
-        and metadata.get("boot_id", "") != ""
-        and current_boot_id != ""
-        and metadata.get("hostname", "") == lock_hostname()
-        and metadata.get("boot_id", "") == current_boot_id
-    )
-    pid = metadata.get("pid", None)
-    if is_same_host_boot and pid is not None and not lock_pid_is_alive(pid):
-        return "same_host_same_boot_dead_pid"
-    if stat_result is None:
-        return ""
-    age = int(time.time() - stat_result.st_mtime)
-    if age < 0:
-        age = 0
-    if age < stale_seconds:
-        return ""
-    return "heartbeat_timeout"
-
-
-def remove_lock_if_unchanged(lock_path, stat_result):
-    current_stat = read_lock_stat(lock_path)
-    if current_stat is None or stat_result is None:
-        return False
-    if current_stat.st_dev != stat_result.st_dev or current_stat.st_ino != stat_result.st_ino:
-        return False
-    try:
-        lock_path.unlink()
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return False
-    return True
-
-
-def start_download_lock_heartbeat(lock_path):
-    stop_event = threading.Event()
-    interval_seconds = resolve_download_lock_heartbeat_seconds()
-
-    def _heartbeat():
-        while not stop_event.wait(interval_seconds):
-            try:
-                os.utime(lock_path, None)
-            except FileNotFoundError:
-                return
-            except OSError:
-                continue
-
-    thread = threading.Thread(
-        target=_heartbeat,
-        name="download-lock-heartbeat-{}".format(lock_path.name),
-        daemon=True,
-    )
-    thread.start()
-    return stop_event, thread
-
-
 def acquire_download_lock(lock_path, stale_seconds, warnings, lock_context):
-    timeout_seconds = resolve_download_lock_acquire_timeout_seconds()
-    poll_seconds = resolve_download_lock_poll_seconds()
-    wait_started = time.monotonic()
-    wait_logged = False
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    while True:
-        payload = {
-            "format": SHARED_DOWNLOAD_LOCK_FORMAT,
-            "pid": os.getpid(),
-            "hostname": lock_hostname(),
-            "boot_id": lock_boot_id(),
-            "created_at": time.time(),
-        }
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            metadata = read_lock_metadata(lock_path)
-            stat_result = read_lock_stat(lock_path)
-            reason = stale_lock_reason(lock_path, stale_seconds, metadata, stat_result)
-            if reason != "":
-                owner_summary = format_lock_owner_summary(lock_path, metadata, stat_result)
-                if remove_lock_if_unchanged(lock_path, stat_result):
-                    warnings.append(
-                        "[download-lock] recovered stale lock for {}: {} ({}; {})".format(
-                            lock_context, lock_path, reason, owner_summary
-                        )
-                    )
-                    continue
-            owner_summary = format_lock_owner_summary(lock_path, metadata, stat_result)
-            if not wait_logged:
-                warnings.append(
-                    "[download-lock] waiting for shared lock for {} ({})".format(
-                        lock_context, owner_summary
-                    )
-                )
-                wait_logged = True
-            if time.monotonic() - wait_started >= float(timeout_seconds):
-                raise RuntimeError(
-                    "[download-lock] timed out waiting for shared lock for {} ({})".format(
-                        lock_context, owner_summary
-                    )
-                )
-            time.sleep(float(poll_seconds))
-            continue
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, separators=(",", ":"))
-                handle.write("\n")
-        except Exception:
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
-            raise
-        finally:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        return start_download_lock_heartbeat(lock_path)
+    return acquire_lock(
+        lock_path,
+        stale_seconds=stale_seconds,
+        timeout_seconds=resolve_download_lock_acquire_timeout_seconds(),
+        poll_seconds=resolve_download_lock_poll_seconds(),
+        context=lock_context,
+        warning_callback=warnings.append,
+        message_label="[download-lock]",
+        heartbeat_interval_seconds=resolve_download_lock_heartbeat_seconds(),
+    )
 
 
 def release_download_lock(lock_path, heartbeat_state=None):
-    if heartbeat_state is not None:
-        stop_event, thread = heartbeat_state
-        stop_event.set()
-        thread.join(timeout=1.0)
-    try:
-        lock_path.unlink()
-    except FileNotFoundError:
-        return
-    except OSError:
-        return
+    release_lock(lock_path, heartbeat_state)
 
 
 def download_url_to_file(

@@ -1,13 +1,77 @@
+import json
 import os
 import signal
 import subprocess
+import sys
 import textwrap
 import time
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GG_UTIL = REPO_ROOT / "workflow" / "support" / "gg_util.sh"
+SUPPORT_DIR = REPO_ROOT / "workflow" / "support"
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+
+from shared_lock import FIELD_SEPARATOR, read_lock_metadata, try_create_lock  # noqa: E402
+
+
+def test_python_and_shell_shared_lock_helpers_use_same_metadata_format(tmp_path):
+    lock_path = tmp_path / "shared.lock"
+    assert try_create_lock(lock_path, pid=12345, hostname="lock-host", boot_id="boot-1")
+
+    script = textwrap.dedent(
+        f"""
+        set -euo pipefail
+        source "{GG_UTIL}"
+        gg_shared_lock_read_metadata "{lock_path}"
+        """
+    )
+    completed = subprocess.run(
+        ["bash", "-lc", script],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    fields = completed.stdout.strip().split(FIELD_SEPARATOR)
+    assert fields[:4] == ["shared-lock-v2", "12345", "lock-host", "boot-1"]
+    assert fields[5] != ""
+    assert fields[6] != ""
+    assert fields[7] != ""
+
+    metadata = read_lock_metadata(lock_path)
+    assert metadata["format"] == "shared-lock-v2"
+    assert metadata["pid"] == 12345
+    assert metadata["hostname"] == "lock-host"
+    assert metadata["boot_id"] == "boot-1"
+
+
+def test_shell_shared_lock_try_create_writes_python_readable_metadata(tmp_path):
+    lock_path = tmp_path / "created-by-shell.lock"
+    script = textwrap.dedent(
+        f"""
+        set -euo pipefail
+        source "{GG_UTIL}"
+        gg_shared_lock_try_create "{lock_path}" 4242
+        """
+    )
+    completed = subprocess.run(
+        ["bash", "-lc", script],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    assert payload["format"] == "shared-lock-v2"
+    assert payload["pid"] == 4242
+    assert payload["hostname"]
+    assert "created_at" in payload
 
 
 def test_malformed_shared_lock_still_uses_stat_fields_for_stale_recovery(tmp_path):

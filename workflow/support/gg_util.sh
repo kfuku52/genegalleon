@@ -4183,6 +4183,22 @@ gg_artifact_ready() {
   [[ -s "${artifact_path}" ]]
 }
 
+gg_shared_lock_helper_script() {
+  local helper_dir="${gg_support_dir:-}"
+  if [[ -z "${helper_dir}" ]]; then
+    helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd 2>/dev/null || true)"
+  fi
+  if [[ -z "${helper_dir}" || ! -s "${helper_dir}/shared_lock.py" ]]; then
+    echo "shared_lock.py was not found relative to gg_util.sh" >&2
+    return 1
+  fi
+  printf '%s\n' "${helper_dir}/shared_lock.py"
+}
+
+gg_shared_lock_python() {
+  gg_find_python_exec
+}
+
 gg_lock_hostname() {
   hostname 2>/dev/null || uname -n
 }
@@ -4201,135 +4217,41 @@ gg_lock_boot_id() {
 
 gg_shared_lock_read_metadata() {
   local lock_file=$1
-  python - "${lock_file}" <<'PY'
-import json
-import os
-import sys
-
-path = sys.argv[1]
-sep = "\x1f"
-fmt = ""
-pid = ""
-hostname = ""
-boot_id = ""
-created_at = ""
-mtime = ""
-device = ""
-inode = ""
-try:
-    stat_result = os.stat(path)
-    mtime = str(stat_result.st_mtime)
-    device = str(stat_result.st_dev)
-    inode = str(stat_result.st_ino)
-except Exception:
-    mtime = ""
-    device = ""
-    inode = ""
-try:
-    with open(path, "rt", encoding="utf-8") as handle:
-        data = json.load(handle)
-    fmt = str(data.get("format", "") or "")
-    pid = str(data.get("pid", "") or "")
-    hostname = str(data.get("hostname", "") or "")
-    boot_id = str(data.get("boot_id", "") or "")
-    created_at = str(data.get("created_at", "") or "")
-except Exception:
-    pass
-print(sep.join((fmt, pid, hostname, boot_id, created_at, mtime, device, inode)))
-PY
+  local py_exec
+  local helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  "${py_exec}" "${helper_script}" read-metadata "${lock_file}"
 }
 
 gg_shared_lock_owner_summary() {
   local lock_file=$1
-  local fmt=""
-  local owner_pid=""
-  local owner_host=""
-  local owner_boot_id=""
-  local created_at=""
-  local mtime=""
-  local device=""
-  local inode=""
-  IFS=$'\037' read -r fmt owner_pid owner_host owner_boot_id created_at mtime device inode < <(gg_shared_lock_read_metadata "${lock_file}")
-  local now_epoch
-  now_epoch=$(date +%s)
-  local age_text="unknown"
-  if [[ "${mtime}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    age_text=$(python - "${mtime}" "${now_epoch}" <<'PY'
-import math
-import sys
-mtime = float(sys.argv[1])
-now_epoch = float(sys.argv[2])
-age = now_epoch - mtime
-if age < 0:
-    age = 0
-print(str(int(age)))
-PY
-)
-    age_text="${age_text}s"
-  fi
-  printf 'host=%s, pid=%s, created_at=%s, boot_id=%s, heartbeat_age=%s, lock=%s' \
-    "${owner_host:-unknown}" \
-    "${owner_pid:-unknown}" \
-    "${created_at:-unknown}" \
-    "${owner_boot_id:-unknown}" \
-    "${age_text}" \
-    "${lock_file}"
+  local py_exec
+  local helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  "${py_exec}" "${helper_script}" owner-summary "${lock_file}"
 }
 
 gg_shared_lock_try_create() {
   local lock_file=$1
   local owner_pid=${2:-$$}
-  local owner_host
-  local owner_boot_id
-  owner_host=$(gg_lock_hostname)
-  owner_boot_id=$(gg_lock_boot_id)
-  python - "${lock_file}" "${owner_pid}" "${owner_host}" "${owner_boot_id}" <<'PY'
-import json
-import os
-import sys
-import time
-
-path, pid, hostname, boot_id = sys.argv[1:5]
-payload = {
-    "format": "shared-lock-v2",
-    "pid": int(pid),
-    "hostname": hostname,
-    "boot_id": boot_id,
-    "created_at": time.time(),
-}
-flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-try:
-    fd = os.open(path, flags, 0o644)
-except FileExistsError:
-    raise SystemExit(1)
-with os.fdopen(fd, "w", encoding="utf-8") as handle:
-    json.dump(payload, handle, separators=(",", ":"))
-    handle.write("\n")
-PY
+  local py_exec
+  local helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  "${py_exec}" "${helper_script}" try-create "${lock_file}" --pid "${owner_pid}"
 }
 
 gg_shared_lock_remove_if_unchanged() {
   local lock_file=$1
   local expected_device=$2
   local expected_inode=$3
-  python - "${lock_file}" "${expected_device}" "${expected_inode}" <<'PY'
-import os
-import sys
-
-path, expected_device, expected_inode = sys.argv[1:4]
-try:
-    stat_result = os.stat(path)
-except FileNotFoundError:
-    raise SystemExit(1)
-except Exception:
-    raise SystemExit(1)
-if str(stat_result.st_dev) != expected_device or str(stat_result.st_ino) != expected_inode:
-    raise SystemExit(1)
-try:
-    os.unlink(path)
-except FileNotFoundError:
-    raise SystemExit(1)
-PY
+  local py_exec
+  local helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  "${py_exec}" "${helper_script}" remove-if-unchanged "${lock_file}" "${expected_device}" "${expected_inode}"
 }
 
 gg_shared_lock_reclaim_if_stale() {
@@ -4338,58 +4260,16 @@ gg_shared_lock_reclaim_if_stale() {
   if [[ ! -e "${lock_file}" ]]; then
     return 1
   fi
-  local fmt=""
-  local owner_pid=""
-  local owner_host=""
-  local owner_boot_id=""
-  local created_at=""
-  local mtime=""
-  local device=""
-  local inode=""
-  IFS=$'\037' read -r fmt owner_pid owner_host owner_boot_id created_at mtime device inode < <(gg_shared_lock_read_metadata "${lock_file}")
-  local current_host
-  local current_boot_id
   local stale_seconds
-  local now_epoch
-  current_host=$(gg_lock_hostname)
-  current_boot_id=$(gg_lock_boot_id)
   stale_seconds=$(gg_lock_stale_seconds)
-  now_epoch=$(date +%s)
-  local is_same_host_boot=1
-  if [[ -z "${owner_host}" || -z "${owner_boot_id}" || -z "${current_boot_id}" ]]; then
-    is_same_host_boot=0
-  elif [[ "${owner_host}" != "${current_host}" || "${owner_boot_id}" != "${current_boot_id}" ]]; then
-    is_same_host_boot=0
-  fi
-  local stale_reason=""
-  if [[ ${is_same_host_boot} -eq 1 && "${owner_pid}" =~ ^[0-9]+$ ]]; then
-    if ! gg_lock_pid_is_alive "${owner_pid}"; then
-      stale_reason="same_host_same_boot_dead_pid"
-    fi
-  fi
-  if [[ -z "${stale_reason}" && "${mtime}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    local mtime_age
-    mtime_age=$(python - "${mtime}" "${now_epoch}" <<'PY'
-import sys
-mtime = float(sys.argv[1])
-now_epoch = float(sys.argv[2])
-age = now_epoch - mtime
-if age < 0:
-    age = 0
-print(str(int(age)))
-PY
-)
-    if [[ "${mtime_age}" =~ ^[0-9]+$ ]] && (( mtime_age >= stale_seconds )); then
-      stale_reason="heartbeat_timeout"
-    fi
-  fi
-  if [[ -n "${stale_reason}" ]]; then
-    local owner_summary
-    owner_summary=$(gg_shared_lock_owner_summary "${lock_file}")
-    if gg_shared_lock_remove_if_unchanged "${lock_file}" "${device}" "${inode}"; then
-      echo "Recovered stale shared lock: ${description} (${stale_reason}; ${owner_summary})" >&2
-      return 0
-    fi
+  local py_exec
+  local helper_script
+  local stale_summary=""
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  if stale_summary=$("${py_exec}" "${helper_script}" reclaim-if-stale "${lock_file}" --stale-seconds "${stale_seconds}"); then
+    echo "Recovered stale shared lock: ${description} (${stale_summary})" >&2
+    return 0
   fi
   return 1
 }

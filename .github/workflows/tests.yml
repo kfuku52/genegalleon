@@ -152,7 +152,7 @@ jobs:
       - name: Install minimal test dependency
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest
+          python -m pip install pytest ruff
 
       - name: Bash syntax check for workflow scripts
         run: |
@@ -161,9 +161,19 @@ jobs:
             bash -n "${script}"
           done < <(find workflow -type f -name "*.sh" | sort)
 
+      - name: Ruff check focused shared helpers
+        run: |
+          python -m ruff check \
+            workflow/support/shared_lock.py \
+            workflow/support/format_species_provider_config.py \
+            workflow/tests/test_gg_shared_lock_shell.py \
+            workflow/tests/test_shell_shared_lock_static.py
+
       - name: Shell static safety checks
         run: |
-          python -m pytest -q workflow/tests/test_shell_static_safety.py
+          python -m pytest -q \
+            workflow/tests/test_shell_static_safety.py \
+            workflow/tests/test_shell_shared_lock_static.py
 
   r-script-parse:
     runs-on: ubuntu-latest
@@ -194,3 +204,55 @@ jobs:
           Rscript workflow/tests/test_pgls_common_rphylopars.R
           Rscript workflow/tests/test_r_species_label_utils.R
           Rscript workflow/tests/test_treevis_main.R
+
+  sif-runtime-validation:
+    needs:
+      - python-heavy
+      - shell-static
+      - r-script-parse
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Apptainer
+        id: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          if ! sudo apt-get install -y apptainer; then
+            sudo apt-get install -y singularity-container || true
+          fi
+          if command -v apptainer >/dev/null 2>&1; then
+            echo "engine=apptainer" >> "${GITHUB_OUTPUT}"
+          elif command -v singularity >/dev/null 2>&1; then
+            echo "engine=singularity" >> "${GITHUB_OUTPUT}"
+          else
+            echo "Neither apptainer nor singularity is available."
+            exit 1
+          fi
+
+      - name: Build validation SIF from GHCR image
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          repo_name="$(basename "${GITHUB_REPOSITORY}")"
+          IMAGE="ghcr.io/${owner}/${repo_name}" \
+          TAG="${GITHUB_SHA::7}" \
+          ENGINE="${{ steps.runtime.outputs.engine }}" \
+          OUT="${GITHUB_WORKSPACE}/genegalleon.sif" \
+            bash container/apptainer_from_docker.sh || \
+          IMAGE="ghcr.io/${owner}/${repo_name}" \
+          TAG="latest" \
+          ENGINE="${{ steps.runtime.outputs.engine }}" \
+          OUT="${GITHUB_WORKSPACE}/genegalleon.sif" \
+            bash container/apptainer_from_docker.sh
+
+      - name: Run SIF validation checks
+        run: |
+          bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_end_to_end.py
+          bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_treevis_main.R
