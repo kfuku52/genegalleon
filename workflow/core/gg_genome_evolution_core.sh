@@ -55,6 +55,16 @@ run_busco_dupaware_grampa_pep="${run_busco_dupaware_grampa_pep:-0}"
 mcmctree_divergence_time_constraints_str="${mcmctree_divergence_time_constraints_str:-}"
 grampa_h1="${grampa_h1:-}"
 target_branch_go="${target_branch_go:-}"
+run_cafe_trait_pgls="${run_cafe_trait_pgls:-0}"
+cafe_trait="${cafe_trait:-all}"
+cafe_trait_min_species="${cafe_trait_min_species:-4}"
+cafe_trait_family_ids="${cafe_trait_family_ids:-}"
+cafe_trait_family_file="${cafe_trait_family_file:-}"
+cafe_trait_max_families="${cafe_trait_max_families:-all}"
+cafe_trait_p_adjust_method="${cafe_trait_p_adjust_method:-BH}"
+cafe_trait_alpha="${cafe_trait_alpha:-0.05}"
+cafe_trait_plot_top_n="${cafe_trait_plot_top_n:-50}"
+file_trait="${file_trait:-auto}"
 mcmctree_divergence_time_constraints=()
 if [[ -n "${mcmctree_divergence_time_constraints_str:-}" ]]; then
   IFS='|' read -r -a mcmctree_divergence_time_constraints <<< "${mcmctree_divergence_time_constraints_str}"
@@ -551,6 +561,10 @@ dir_busco_rooted_nwk_pep="${dir_genome_evolution}/busco_rooted_nwk_pep"
 dir_cafe="${dir_genome_evolution}/cafe"
 dir_cafe_orthogroup_selection="${dir_cafe}/orthogroup_selection"
 dir_cafe_output="${dir_cafe}/cafe_output"
+dir_cafe_trait_pgls="${dir_cafe}/trait_pgls"
+if [[ "${file_trait}" == "auto" ]]; then
+  file_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
+fi
 
 # Output files
 # Species tree
@@ -607,6 +621,10 @@ file_orthogroup_grampa="${dir_genome_evolution}/grampa_orthogroup/grampa_summary
 file_gene_id="${dir_orthofinder_filtered}/Orthogroups.selected.tsv"
 file_cafe_summary_all_pdf="${dir_cafe}/summary_plot/summary_all.pdf"
 file_cafe_summary_significant_pdf="${dir_cafe}/summary_plot/summary_significant.pdf"
+file_cafe_copy_number_matrix="${dir_cafe_trait_pgls}/cafe_copy_number_matrix.tsv"
+file_cafe_trait_pgls="${dir_cafe_trait_pgls}/cafe_trait_pgls.tsv"
+file_cafe_trait_pgls_significant="${dir_cafe_trait_pgls}/cafe_trait_pgls.significant.tsv"
+file_cafe_trait_pgls_summary_pdf="${dir_cafe_trait_pgls}/cafe_trait_pgls.summary.pdf"
 file_go_enrichment_significant="${dir_cafe}/go_enrichment/enrichment_significant_${change_direction_go}_${target_branch_go}_significant_go.tsv"
 
 # Runtime helpers
@@ -4185,6 +4203,33 @@ if [[ (! -s "${file_cafe_summary_all_pdf}" || ! -s "${file_cafe_summary_signific
     exit 1
   fi
 
+  echo "$(date): End: ${task}"
+else
+  gg_step_skip "${task}"
+fi
+
+task="CAFE copy-number trait PGLS"
+disable_if_no_input_file "run_cafe_trait_pgls" "${dir_cafe_orthogroup_selection}/cafe_input.tsv" "${file_dated_species_tree}" "${file_trait}"
+if [[ (! -s "${file_cafe_copy_number_matrix}" || ! -s "${file_cafe_trait_pgls}" || ! -s "${file_cafe_trait_pgls_summary_pdf}") && ${run_cafe_trait_pgls} -eq 1 ]]; then
+  gg_step_start "${task}"
+  ensure_dir "${dir_cafe_trait_pgls}"
+  if ! Rscript "${gg_support_dir}/cafe_trait_pgls.r" \
+    --file_cafe_input="${dir_cafe_orthogroup_selection}/cafe_input.tsv" \
+    --file_sptree="${file_dated_species_tree}" \
+    --file_trait="${file_trait}" \
+    --outdir="${dir_cafe_trait_pgls}" \
+    --trait="${cafe_trait}" \
+    --min_species="${cafe_trait_min_species}" \
+    --family_ids="${cafe_trait_family_ids}" \
+    --family_file="${cafe_trait_family_file}" \
+    --max_families="${cafe_trait_max_families}" \
+    --p_adjust_method="${cafe_trait_p_adjust_method}" \
+    --alpha="${cafe_trait_alpha}" \
+    --plot_top_n="${cafe_trait_plot_top_n}" \
+    --verbose=0; then
+    echo "Error in Rscript cafe_trait_pgls.r. Exiting."
+    exit 1
+  fi
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"

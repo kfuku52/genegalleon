@@ -377,7 +377,26 @@ fit_phylopars_lm_with_retries = function(formula_obj, trait_data, tree, model = 
   ))
 }
 
-run_phylopars_regression = function(df_trait_exp, tree, trait_cols, expression_bases, output_cols, include_foreground_lineage = FALSE, verbose_working = FALSE, use_phenocov = FALSE) {
+escape_regex = function(x) {
+  gsub("([][{}()+*^$|\\\\.?])", "\\\\\\1", x)
+}
+
+expression_replicate_columns = function(column_names, expression_base, replicate_sep = "_") {
+  column_names = as.character(column_names)
+  expression_base = as.character(expression_base)
+  if (!length(column_names) || !nzchar(expression_base)) {
+    return(character(0))
+  }
+  exact = column_names == expression_base
+  if (is.null(replicate_sep) || is.na(replicate_sep) || replicate_sep == "") {
+    replicated = grepl(paste0("^", escape_regex(expression_base), "[0-9]+$"), column_names)
+  } else {
+    replicated = startsWith(column_names, paste0(expression_base, replicate_sep))
+  }
+  column_names[exact | replicated]
+}
+
+run_phylopars_regression = function(df_trait_exp, tree, trait_cols, expression_bases, output_cols, include_foreground_lineage = FALSE, verbose_working = FALSE, use_phenocov = FALSE, replicate_sep = "_") {
   fg_nums = NULL
   if (include_foreground_lineage) {
     fg_nums = rkftools::count_foreground_lineage(tree, df_trait_exp[, c('species', trait_cols), drop = FALSE])
@@ -393,8 +412,7 @@ run_phylopars_regression = function(df_trait_exp, tree, trait_cols, expression_b
       if (verbose_working) {
         cat('Working with', trait_col, 'vs', expression_base, '\n')
       }
-      expression_cols = colnames(df_trait_exp)[startsWith(colnames(df_trait_exp), expression_base)]
-      expression_cols = expression_cols[(expression_cols == expression_base) | (grepl('.*[0-9]$', expression_cols))]
+      expression_cols = expression_replicate_columns(colnames(df_trait_exp), expression_base, replicate_sep = replicate_sep)
       explanatory_variables = paste(expression_cols, collapse = ' + ')
       explained_variable = trait_col
       formula_string = paste(explained_variable, '~', explanatory_variables)
@@ -542,14 +560,14 @@ run_phylopars_regression = function(df_trait_exp, tree, trait_cols, expression_b
   return(df_stat)
 }
 
-add_expression_mean_cols = function(exp, expression_bases) {
+add_expression_mean_cols = function(exp, expression_bases, replicate_sep = "_") {
   for (col in expression_bases) {
-    is_col = grepl(col, colnames(exp))
+    selected_cols = expression_replicate_columns(colnames(exp), col, replicate_sep = replicate_sep)
     mean_col = paste('mean_', col, sep = '')
-    if (sum(is_col) > 1) {
-      exp[, mean_col] = apply(exp[, is_col], 1, function(x) { mean(x, na.rm = TRUE) })
-    } else {
-      exp[, mean_col] = exp[, is_col]
+    if (length(selected_cols) > 1) {
+      exp[, mean_col] = apply(exp[, selected_cols, drop = FALSE], 1, function(x) { mean(x, na.rm = TRUE) })
+    } else if (length(selected_cols) == 1) {
+      exp[, mean_col] = exp[, selected_cols]
     }
   }
   return(exp)

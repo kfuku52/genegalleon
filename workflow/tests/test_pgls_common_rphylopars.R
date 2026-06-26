@@ -88,6 +88,23 @@ df_with_var$expr_2 <- c(1.6, 2.4)
 res_with_var <- build_phenocov_input(df_with_var, "trait", c("expr_1", "expr_2"), "expr")
 stopifnot(isTRUE(res_with_var$has_within_species_variation))
 
+# expression_replicate_columns: avoid prefix bleed-through (e.g. OG1 must not match OG10_1)
+prefix_cols <- c("species", "OG1_1", "OG1_2", "OG10_1", "OG10_2", "trait")
+stopifnot(identical(expression_replicate_columns(prefix_cols, "OG1", "_"), c("OG1_1", "OG1_2")))
+stopifnot(identical(expression_replicate_columns(prefix_cols, "OG10", "_"), c("OG10_1", "OG10_2")))
+
+df_prefix <- data.frame(
+  species = c("sp1", "sp2"),
+  OG1_1 = c(1, 2),
+  OG1_2 = c(3, 4),
+  OG10_1 = c(100, 200),
+  OG10_2 = c(300, 400),
+  stringsAsFactors = FALSE
+)
+df_prefix_mean <- add_expression_mean_cols(df_prefix, c("OG1", "OG10"), replicate_sep = "_")
+stopifnot(identical(df_prefix_mean$mean_OG1, c(2, 3)))
+stopifnot(identical(df_prefix_mean$mean_OG10, c(200, 300)))
+
 # sanitize_phenocov_list
 raw_phenocov <- list(
   sp1 = matrix(c(NA, Inf, -Inf, -1), nrow = 2, byrow = TRUE),

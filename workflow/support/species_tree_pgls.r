@@ -179,7 +179,7 @@ expression_cols = colnames(exp)[is_retained_cols]
 expression_cols = expression_cols[2:length(expression_cols)]
 exp = exp[, is_retained_cols]
 expression_bases = get_expression_bases(exp[, 2:ncol(exp), drop=FALSE], args[['replicate_sep']])
-exp_mean = add_expression_mean_cols(exp, expression_bases)
+exp_mean = add_expression_mean_cols(exp, expression_bases, args[['replicate_sep']])
 df_trait_exp = merge(exp_mean, trait, all.x = TRUE)
 cat('Expression data removed due to insufficuent data points:', paste0(removed_expression_cols), '\n')
 cat('Number of genes in the input expression table:', num_gene, '\n')
@@ -195,7 +195,8 @@ df_stat = run_phylopars_regression(
   expression_bases = expression_bases,
   output_cols = output_cols,
   include_foreground_lineage = TRUE,
-  use_phenocov = (args[['merge_replicates']] != 'yes')
+  use_phenocov = (args[['merge_replicates']] != 'yes'),
+  replicate_sep = args[['replicate_sep']]
 )
 df_stat = finalize_pgls_stats(df_stat)
 file_name = 'species_tree_PGLS.tsv'

@@ -38,7 +38,7 @@ output_cols = c("R2", "R2adj", "sigma", "Fstat", "pval", "logLik", "AIC", "BIC",
 trait_cols = colnames(trait[2:length(trait)])
 
 #calculate mean expression
-exp = add_expression_mean_cols(exp, expression_bases)
+exp = add_expression_mean_cols(exp, expression_bases, args[['replicate_sep']])
 
 #prepare species column from the gene_id column
 exp[,'species'] = sapply(exp[,'gene_id'], extract_species_label)
@@ -62,7 +62,8 @@ df_stat = run_phylopars_regression(
     output_cols = output_cols,
     include_foreground_lineage = FALSE,
     verbose_working = TRUE,
-    use_phenocov = (args[['merge_replicates']] != 'yes')
+    use_phenocov = (args[['merge_replicates']] != 'yes'),
+    replicate_sep = args[['replicate_sep']]
 )
 
 #output1

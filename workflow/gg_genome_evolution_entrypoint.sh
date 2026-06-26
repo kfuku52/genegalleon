@@ -121,6 +121,7 @@ run_busco_dupaware_grampa_dna=0 # Run GRAMPA on rooted duplicate-aware BUSCO DNA
 run_busco_dupaware_grampa_pep=0 # Run GRAMPA on rooted duplicate-aware BUSCO protein trees.
 run_orthogroup_grampa=1 # Run GRAMPA on orthogroup gene trees; requires rooted trees produced by gg_gene_evolution.
 run_cafe=0 # Run CAFE family-size evolution analysis on selected orthogroup gene-count tables and the dated species tree.
+run_cafe_trait_pgls=0 # Test associations between CAFE-selected orthogroup copy numbers and species traits with species-tree PGLS.
 run_go_enrichment=0 # Run GO enrichment for branches or orthogroups selected by family-size change tests.
 
 # Shared parameters
@@ -165,6 +166,15 @@ max_gene_orthogroup_grampa=50 # Maximum gene count allowed for GRAMPA-ready orth
 grampa_h1="" # Optional GRAMPA H1 hypothesis. Leave empty to skip GRAMPA steps. Example: "2" or "x,y,z".
 max_size_differential_cafe=9999999 # Maximum family-size difference modeled by CAFE.
 n_gamma_cats_cafe=4 # Number of gamma categories used by CAFE.
+cafe_trait="all" # Trait column name(s) in species_trait.tsv to test against CAFE-selected copy numbers, or "all".
+cafe_trait_min_species=4 # Minimum number of tree-matched species required for each CAFE copy-number trait PGLS fit.
+cafe_trait_family_ids="" # Optional comma/space-separated CAFE family IDs to test; empty means use max_families.
+cafe_trait_family_file="" # Optional file listing CAFE family IDs to test.
+cafe_trait_max_families="all" # Maximum CAFE families tested: all|auto|0 for unlimited, or a non-negative integer.
+cafe_trait_p_adjust_method="BH" # P-value adjustment method passed to p.adjust for CAFE copy-number trait PGLS.
+cafe_trait_alpha=0.05 # Adjusted P-value cutoff used for cafe_trait_pgls.significant.tsv and summary plot guide line.
+cafe_trait_plot_top_n=50 # Number of strongest CAFE copy-number trait associations shown in the summary plot.
+file_trait="auto" # Species trait table path for CAFE copy-number trait PGLS, or auto for workspace/input/species_trait/species_trait.tsv.
 target_branch_go="" # Optional GO-enrichment target branch. Leave empty to skip GO enrichment. Example: "<1>" or "Arabidopsis_thaliana".
 change_direction_go="increase" # "increase" or "decrease"; family-size direction tested for GO enrichment on target_branch_go.
 go_category="BP,MF,CC" # GO aspects included in enrichment: BP biological process, MF molecular function, CC cellular component.

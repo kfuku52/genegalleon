@@ -207,8 +207,17 @@ EOF
       cat <<'EOF'
 astral_min_tips
 bootstrap_params
+cafe_trait
+cafe_trait_alpha
+cafe_trait_family_file
+cafe_trait_family_ids
+cafe_trait_max_families
+cafe_trait_min_species
+cafe_trait_p_adjust_method
+cafe_trait_plot_top_n
 change_direction_go
 delete_tmp_dir
+file_trait
 grampa_h1
 go_category
 input_sequence_mode
@@ -278,6 +287,7 @@ run_busco_dupaware_grampa_dna
 run_busco_dupaware_grampa_pep
 run_orthogroup_grampa
 run_cafe
+run_cafe_trait_pgls
 run_go_enrichment
 species_label_parser
 species_label_regex

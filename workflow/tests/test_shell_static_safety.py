@@ -1743,6 +1743,9 @@ def test_genome_evolution_core_quotes_grampa_output_and_cafe_option_values():
     assert "--n_gamma_cats ${n_gamma_cats_cafe}" not in text
     assert "--cores ${GG_TASK_CPUS}" not in text
     assert "--output_prefix ${dir_cafe_output}" not in text
+    assert "--file_cafe_input=${dir_cafe_orthogroup_selection}/cafe_input.tsv" not in text
+    assert "--file_sptree=${file_dated_species_tree}" not in text
+    assert "--file_trait=${file_trait}" not in text
 
     assert 'busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" "${file_busco_grampa_dna}"' in text
     assert 'busco_grampa "${dir_busco_rooted_nwk_pep}" "$(dirname "${file_busco_grampa_pep}")" "${file_busco_grampa_pep}"' in text
@@ -1754,6 +1757,9 @@ def test_genome_evolution_core_quotes_grampa_output_and_cafe_option_values():
     assert '--n_gamma_cats "${n_gamma_cats_cafe}"' in text
     assert '--cores "${GG_TASK_CPUS}"' in text
     assert '--output_prefix "${dir_cafe_output}"' in text
+    assert '--file_cafe_input="${dir_cafe_orthogroup_selection}/cafe_input.tsv"' in text
+    assert '--file_sptree="${file_dated_species_tree}"' in text
+    assert '--file_trait="${file_trait}"' in text
 
 
 def test_genome_evolution_core_builds_grampa_arguments_with_array():
@@ -2281,6 +2287,43 @@ def test_genome_evolution_uses_local_optional_grampa_and_go_target_parameters():
     assert ': "${target_branch_go:?' not in core
     assert "grampa_h1" in config_vars
     assert "target_branch_go" in config_vars
+
+
+def test_genome_evolution_exposes_cafe_trait_pgls_parameters():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    expected_entrypoint_tokens = [
+        "run_cafe_trait_pgls=0 # Test associations between CAFE-selected orthogroup copy numbers and species traits with species-tree PGLS.",
+        'cafe_trait="all" # Trait column name(s) in species_trait.tsv to test against CAFE-selected copy numbers, or "all".',
+        'cafe_trait_min_species=4 # Minimum number of tree-matched species required for each CAFE copy-number trait PGLS fit.',
+        'cafe_trait_family_ids="" # Optional comma/space-separated CAFE family IDs to test; empty means use max_families.',
+        'cafe_trait_family_file="" # Optional file listing CAFE family IDs to test.',
+        'cafe_trait_max_families="all" # Maximum CAFE families tested: all|auto|0 for unlimited, or a non-negative integer.',
+        'file_trait="auto" # Species trait table path for CAFE copy-number trait PGLS, or auto for workspace/input/species_trait/species_trait.tsv.',
+    ]
+    for token in expected_entrypoint_tokens:
+        assert token in entrypoint
+
+    for token in [
+        "run_cafe_trait_pgls",
+        "cafe_trait",
+        "cafe_trait_min_species",
+        "cafe_trait_family_ids",
+        "cafe_trait_family_file",
+        "cafe_trait_max_families",
+        "cafe_trait_p_adjust_method",
+        "cafe_trait_alpha",
+        "cafe_trait_plot_top_n",
+        "file_trait",
+    ]:
+        assert token in config_vars
+        assert token in core
+
+    assert 'file_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv"' in core
+    assert 'task="CAFE copy-number trait PGLS"' in core
+    assert 'Rscript "${gg_support_dir}/cafe_trait_pgls.r"' in core
 
 
 def test_genome_evolution_uses_local_species_tree_rooting_parameter():
