@@ -5,7 +5,9 @@ import os
 import re
 from http.cookiejar import CookieJar
 from urllib.parse import urlencode, urljoin, urlparse
-from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener
+
+from format_species_network import guarded_urlopen as urlopen
 
 NCBI_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^GC[AF]_[0-9]+\.[0-9]+$", re.IGNORECASE)
 

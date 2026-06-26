@@ -170,14 +170,21 @@ jobs:
           python -m ruff check \
             workflow/support/shared_lock.py \
             workflow/support/amalgkit_metadata_accessions.py \
+            workflow/support/format_species_download_stage.py \
             workflow/support/format_species_manifest.py \
+            workflow/support/format_species_network.py \
+            workflow/support/format_species_provider_inputs.py \
             workflow/support/format_species_provider_config.py \
             workflow/support/format_species_provider_urls.py \
+            workflow/support/format_species_writers.py \
+            workflow/tests/conftest.py \
             workflow/tests/test_ci_static.py \
             workflow/tests/test_amalgkit_metadata_accessions.py \
             workflow/tests/test_docker_runtime_shim.py \
             workflow/tests/test_format_species_manifest.py \
+            workflow/tests/test_format_species_network.py \
             workflow/tests/test_format_species_provider_urls.py \
+            workflow/tests/test_format_species_split_static.py \
             workflow/tests/test_gg_shared_lock_shell.py \
             workflow/tests/test_legacy_policy_static.py \
             workflow/tests/test_shell_download_static.py \

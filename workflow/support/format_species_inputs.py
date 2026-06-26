@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import bz2
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
@@ -14,18 +13,16 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import sqlite3
 import socket
-import subprocess
 import sys
 import tarfile
 import threading
 import time
 import zipfile
-from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
+from urllib.request import Request
 
 SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
@@ -47,6 +44,9 @@ from format_species_manifest import (
     resolved_manifest_fieldnames,
     write_resolved_manifest_tsv,
 )
+from format_species_download_stage import apply_download_input_dir, run_download_stage
+from format_species_network import guarded_urlopen as urlopen
+from format_species_provider_inputs import manifest_declared_providers, resolve_provider_inputs
 from format_species_provider_urls import (
     ENSEMBLGENOMES_DEFAULT_ID_URL_TEMPLATES,
     NCBI_ASSEMBLY_ACCESSION_PATTERN,
@@ -82,6 +82,15 @@ from format_species_provider_urls import (
     resolve_veupathdb_service_base_url,
     strip_provider_prefix,
 )
+from format_species_writers import (
+    apply_common_replacements,
+    open_text,
+    write_fasta_records,
+    write_fasta_records_gzip,
+    write_gff_gzip,
+    write_gff_lines_gzip,
+    write_text_lines,
+)
 from shared_lock import acquire_lock, release_lock
 
 try:
@@ -90,11 +99,6 @@ except Exception:  # pragma: no cover - exercised in runtime environments withou
     SeqIO = None
 
 
-COMMON_REPLACEMENTS = (
-    ("evm_27.model.", ""),
-    ("evm.model.", ""),
-    ("Oropetium_20150105_", ""),
-)
 FERNBASE_CONFIDENCE_MODE_FIELD = "fernbase_confidence_mode"
 FERNBASE_CONFIDENCE_MODE_HIGH_ONLY = "high-confidence only"
 FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED = "high-low combined"
@@ -744,30 +748,6 @@ class SpeciesTaxonomyMetadataResolver:
         return metadata
 
 
-def output_gzip_compresslevel():
-    raw = os.environ.get("GG_INPUT_GZIP_LEVEL", "").strip()
-    if raw == "":
-        return 9
-    try:
-        level = int(raw)
-    except ValueError:
-        raise ValueError("GG_INPUT_GZIP_LEVEL must be an integer between 1 and 9.")
-    if level < 1 or level > 9:
-        raise ValueError("GG_INPUT_GZIP_LEVEL must be between 1 and 9.")
-    return level
-
-
-def output_compression_threads():
-    raw = os.environ.get("GG_TASK_CPUS", "").strip()
-    if raw == "":
-        return 1
-    try:
-        value = int(raw)
-    except ValueError:
-        return 1
-    return max(1, value)
-
-
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -943,194 +923,6 @@ def build_arg_parser():
         ),
     )
     return parser
-
-
-def open_text(path, mode):
-    if path.name.endswith(".gz"):
-        kwargs = {"encoding": "utf-8"}
-        if any(flag in mode for flag in ("w", "a", "x")):
-            kwargs["compresslevel"] = output_gzip_compresslevel()
-        return gzip.open(path, mode, **kwargs)
-    if path.name.endswith(".bz2"):
-        return bz2.open(path, mode, encoding="utf-8")
-    return open(path, mode, encoding="utf-8")
-
-
-def make_temporary_output_path(output_path):
-    base_name = output_path.name
-    suffix = output_path.suffix
-    if suffix != "" and base_name.endswith(suffix):
-        base_name = base_name[: -len(suffix)]
-    return output_path.parent / ".{}.tmp.{}.{}{}".format(
-        base_name,
-        os.getpid(),
-        time.time_ns(),
-        suffix,
-    )
-
-
-def write_text_output_via_command(output_path, writer, command_builder, output_via_stdout):
-    tmp_output = make_temporary_output_path(output_path)
-    stderr_text = ""
-    proc = None
-    stdout_handle = None
-    try:
-        stdout_target = subprocess.DEVNULL
-        if output_via_stdout:
-            stdout_handle = open(tmp_output, "wb")
-            stdout_target = stdout_handle
-        command = command_builder(tmp_output)
-        proc = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=stdout_target,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-        )
-        try:
-            if proc.stdin is None:
-                raise RuntimeError("Failed to open stdin for: {}".format(" ".join(command)))
-            writer(proc.stdin)
-            proc.stdin.close()
-            proc.stdin = None
-            if proc.stderr is not None:
-                stderr_text = proc.stderr.read()
-            return_code = proc.wait()
-        except Exception:
-            if proc.stdin is not None:
-                try:
-                    proc.stdin.close()
-                except Exception:
-                    pass
-            proc.kill()
-            proc.wait()
-            if proc.stderr is not None:
-                try:
-                    stderr_text = proc.stderr.read()
-                except Exception:
-                    stderr_text = ""
-            raise
-        finally:
-            if stdout_handle is not None:
-                stdout_handle.close()
-                stdout_handle = None
-
-        if return_code != 0:
-            raise RuntimeError(
-                "Command failed while writing '{}': {}".format(
-                    output_path,
-                    stderr_text.strip() or "exit code {}".format(return_code),
-                )
-            )
-        if not tmp_output.exists() or tmp_output.stat().st_size == 0:
-            raise RuntimeError("Command produced no output for '{}'".format(output_path))
-        tmp_output.replace(output_path)
-    finally:
-        if proc is not None and proc.stderr is not None:
-            proc.stderr.close()
-        if stdout_handle is not None:
-            stdout_handle.close()
-        if tmp_output.exists():
-            tmp_output.unlink()
-
-
-def write_fasta_records_gzip(output_path, records):
-    seqkit_path = shutil.which("seqkit")
-    if seqkit_path is None:
-        with open_text(output_path, "wt") as handle:
-            for record_id, sequence in records:
-                write_fasta_record(handle, record_id, sequence)
-        return
-
-    def writer(handle):
-        for record_id, sequence in records:
-            write_fasta_record(handle, record_id, sequence)
-
-    write_text_output_via_command(
-        output_path,
-        writer,
-        lambda tmp_output: [
-            seqkit_path,
-            "seq",
-            "--threads",
-            str(output_compression_threads()),
-            "-o",
-            str(tmp_output),
-            "-",
-        ],
-        output_via_stdout=False,
-    )
-
-
-def write_gff_gzip(input_path, output_path):
-    pigz_path = shutil.which("pigz")
-    line_count = 0
-
-    if pigz_path is None:
-        with open_text(input_path, "rt") as fin, open_text(output_path, "wt") as fout:
-            for line in fin:
-                fout.write(apply_common_replacements(line))
-                line_count += 1
-        return line_count
-
-    def writer(handle):
-        nonlocal line_count
-        with open_text(input_path, "rt") as fin:
-            for line in fin:
-                handle.write(apply_common_replacements(line))
-                line_count += 1
-
-    write_text_output_via_command(
-        output_path,
-        writer,
-        lambda _tmp_output: [
-            pigz_path,
-            "-p",
-            str(output_compression_threads()),
-            "-c",
-        ],
-        output_via_stdout=True,
-    )
-    return line_count
-
-
-def write_gff_lines_gzip(output_path, lines):
-    pigz_path = shutil.which("pigz")
-    line_count = 0
-    feature_count = 0
-
-    if pigz_path is None:
-        with open_text(output_path, "wt") as fout:
-            for line in lines:
-                normalized = apply_common_replacements(line)
-                fout.write(normalized)
-                line_count += 1
-                if normalized.strip() != "" and not normalized.startswith("#"):
-                    feature_count += 1
-        return line_count, feature_count
-
-    def writer(handle):
-        nonlocal line_count, feature_count
-        for line in lines:
-            normalized = apply_common_replacements(line)
-            handle.write(normalized)
-            line_count += 1
-            if normalized.strip() != "" and not normalized.startswith("#"):
-                feature_count += 1
-
-    write_text_output_via_command(
-        output_path,
-        writer,
-        lambda _tmp_output: [
-            pigz_path,
-            "-p",
-            str(output_compression_threads()),
-            "-c",
-        ],
-        output_via_stdout=True,
-    )
-    return line_count, feature_count
 
 
 def provider_raw_dir(provider, download_root, species_key):
@@ -1800,40 +1592,6 @@ def iter_fernbase_combined_cds_records(high_cds_path, low_cds_path, kept_gene_id
         gene_token = fernbase_feature_gene_token_from_header(header)
         if gene_token in kept_gene_ids:
             yield header, sequence
-
-
-def write_text_lines(output_path, lines):
-    tmp_output = make_temporary_output_path(output_path)
-    try:
-        with open_text(tmp_output, "wt") as handle:
-            for line in lines:
-                handle.write(str(line))
-        tmp_output.replace(output_path)
-    except Exception:
-        try:
-            tmp_output.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-        raise
-
-
-def write_fasta_records(output_path, records):
-    tmp_output = make_temporary_output_path(output_path)
-    try:
-        with open_text(tmp_output, "wt") as handle:
-            for header, sequence in records:
-                handle.write(">{}\n{}\n".format(str(header or "").strip(), re.sub(r"\s+", "", str(sequence or ""))))
-        tmp_output.replace(output_path)
-    except Exception:
-        try:
-            tmp_output.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-        raise
 
 
 def merge_fernbase_confidence_bundle(
@@ -4584,22 +4342,6 @@ def quarantine_corrupt_gzip(path, warnings, context):
     return True
 
 
-def manifest_declared_providers(rows, provider_filter="all"):
-    normalized_filter = str(provider_filter or "all").strip().lower()
-    if normalized_filter != "all":
-        return [normalized_filter]
-
-    providers = []
-    seen = set()
-    for row in rows:
-        provider = str((row or {}).get("provider", "") or "").strip().lower()
-        if provider == "" or provider not in PROVIDERS or provider in seen:
-            continue
-        seen.add(provider)
-        providers.append(provider)
-    return providers
-
-
 def resolve_local_reference_path(reference, manifest_parent_dir):
     text = str(reference or "").strip()
     if text == "":
@@ -5752,13 +5494,6 @@ def normalize_gff_output_basename(source_name, species_prefix):
     return stem + ".gff.gz"
 
 
-def apply_common_replacements(text):
-    out = text
-    for old, new in COMMON_REPLACEMENTS:
-        out = out.replace(old, new)
-    return out
-
-
 def sanitize_identifier(identifier):
     out = identifier.replace("−", "-")
     out = apply_common_replacements(out)
@@ -6685,12 +6420,6 @@ def count_fasta_records(path):
     return count, first_name
 
 
-def write_fasta_record(handle, record_id, sequence, width=80):
-    handle.write(">{}\n".format(record_id))
-    for i in range(0, len(sequence), width):
-        handle.write(sequence[i:i + width] + "\n")
-
-
 def extract_ensembl_id(header):
     match = re.search(r"(?:^|\s)gene:([^\s]+)", header)
     if match:
@@ -7522,27 +7251,6 @@ def format_gff(task, output_dir, overwrite, dry_run):
     return {"status": "write", "output_path": output_path, "lines": line_count}
 
 
-def resolve_provider_inputs(args, manifest_rows=None):
-    if args.provider == "all":
-        if args.input_dir == "":
-            raise ValueError("--input-dir is required when --provider all is used.")
-        input_root = Path(args.input_dir).expanduser().resolve()
-        provider_names = list(PROVIDERS)
-        if manifest_rows is not None:
-            manifest_providers = manifest_declared_providers(manifest_rows, args.provider)
-            if len(manifest_providers) > 0:
-                provider_names = manifest_providers
-        return [
-            (provider, (input_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]).resolve())
-            for provider in provider_names
-        ]
-
-    provider = args.provider
-    if args.input_dir != "":
-        return [(provider, Path(args.input_dir).expanduser().resolve())]
-    raise ValueError("Specify --input-dir.")
-
-
 def utc_now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -7712,50 +7420,20 @@ def main():
         parser.error(str(exc))
 
     if args.download_manifest != "":
-        parallel_jobs = resolve_parallel_jobs(args.jobs)
-        download_root = Path(args.download_dir).expanduser().resolve()
-        download_root.mkdir(parents=True, exist_ok=True)
-        resolved_manifest_output_path = None
-        if args.resolved_manifest_output != "":
-            resolved_manifest_output_path = Path(args.resolved_manifest_output).expanduser().resolve()
-        report = download_from_manifest(
-            manifest_path=Path(args.download_manifest).expanduser().resolve(),
-            download_root=download_root,
-            provider_filter=args.provider,
-            overwrite=args.overwrite,
-            headers=http_headers,
-            timeout=float(args.download_timeout),
-            dry_run=args.dry_run,
-            jobs=parallel_jobs,
-            resolved_manifest_output_path=resolved_manifest_output_path,
+        report = run_download_stage(
+            args,
+            http_headers,
+            download_from_manifest=download_from_manifest,
+            format_download_diagnostics_line=format_download_diagnostics_line,
+            resolve_parallel_jobs=resolve_parallel_jobs,
+            stderr=sys.stderr,
         )
-        for warning in report["warnings"]:
-            sys.stderr.write("Warning: {}\n".format(warning))
-        for error in report["errors"]:
-            sys.stderr.write("Error: {}\n".format(error))
-        print(
-            "Download stage: rows processed={}, files downloaded={}, planned downloads={}, download root={}, resolved manifest={}, dry_run={}, jobs={}".format(
-                report["processed"],
-                report["downloaded"],
-                report["planned"],
-                download_root,
-                report.get("resolved_manifest_output", ""),
-                int(args.dry_run),
-                parallel_jobs,
-            )
-        )
-        print(format_download_diagnostics_line(report.get("download_diagnostics", {})))
         if args.download_only:
             return 0 if len(report["errors"]) == 0 else 1
         if len(report["errors"]) > 0 and args.strict:
             return 1
 
-    if args.input_dir == "" and args.download_manifest != "":
-        download_input_root = Path(args.download_dir).expanduser().resolve()
-        if args.provider == "all":
-            args.input_dir = str(download_input_root)
-        else:
-            args.input_dir = str((download_input_root / DEFAULT_INPUT_RELATIVE_DIRS[args.provider]).resolve())
+    apply_download_input_dir(args)
 
     manifest_rows_for_provider_inputs = None
     if args.download_manifest != "" and args.provider == "all":

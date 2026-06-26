@@ -1332,8 +1332,8 @@ def test_write_fasta_records_gzip_prefers_seqkit(monkeypatch, tmp_path):
             return None
 
     monkeypatch.setenv("GG_TASK_CPUS", "3")
-    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/{}".format(name))
-    monkeypatch.setattr(mod.subprocess, "Popen", FakeSeqkitProcess)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/{}".format(name))
+    monkeypatch.setattr(subprocess, "Popen", FakeSeqkitProcess)
 
     mod.write_fasta_records_gzip(output_path, [("seq1", "ATG"), ("seq2", "ATGA")])
 
@@ -1370,8 +1370,8 @@ def test_write_gff_gzip_prefers_pigz(monkeypatch, tmp_path):
             return None
 
     monkeypatch.setenv("GG_TASK_CPUS", "4")
-    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/{}".format(name))
-    monkeypatch.setattr(mod.subprocess, "Popen", FakePigzProcess)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/{}".format(name))
+    monkeypatch.setattr(subprocess, "Popen", FakePigzProcess)
 
     line_count = mod.write_gff_gzip(input_path, output_path)
 

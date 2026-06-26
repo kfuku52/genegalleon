@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 from urllib.parse import quote, urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 try:
     from openpyxl import load_workbook
@@ -25,6 +25,7 @@ from format_species_provider_config import (  # noqa: E402
     DOWNLOAD_MANIFEST_BUILDER_PROVIDERS,
     ID_OPTIONS_FETCH_PROVIDERS,
 )
+from format_species_network import guarded_urlopen as urlopen  # noqa: E402
 
 PROVIDERS = DOWNLOAD_MANIFEST_BUILDER_PROVIDERS
 FETCH_PROVIDERS = ID_OPTIONS_FETCH_PROVIDERS

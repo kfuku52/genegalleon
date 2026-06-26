@@ -14,7 +14,7 @@ import sys
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 import zipfile
 from urllib.parse import quote, urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 import pandas
 
@@ -22,6 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from format_species_network import guarded_urlopen as urlopen
 from species_labeling import base_species_label, species_label_from_taxonomic_text
 
 try:
