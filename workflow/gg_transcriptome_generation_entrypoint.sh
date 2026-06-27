@@ -124,7 +124,7 @@ amalgkit_oarfish_options="${amalgkit_oarfish_options:-}" # Optional extra shell-
 kallisto_reference="longest_cds" # {species_cds,longest_transcript,longest_cds,contamination_removed_longest_cds}; reference FASTA used for expression quantification, choosing provider CDS, assembled longest transcripts, assembled longest CDS, or contamination-filtered longest CDS.
 orf_aggregation_level="i" # {c,g,i,p}; Longest-CDS ORF aggregation level. The value selects how transcript/ORF IDs are trimmed before choosing one representative CDS per group: "p" groups ORFs within the same transcript, "i" groups isoforms within the same gene-level ID, and "g" or "c" use broader upstream ID levels when those levels exist in the assembler output. Lower levels are more aggressive and collapse more sequences; "i" is the default balance. For rnaSPAdes, "c" is not supported because rnaSPAdes transcript IDs do not include a Trinity-style component level.
 assembly_cpu_offset=0 # Number of CPU cores reserved from GG_TASK_CPUS before launching the assembler.
-assembly_ram_offset=4 # Amount of RAM in GB reserved from GG_MEM_TOTAL_GB before launching the assembler.
+assembly_ram_offset=4 # Amount of RAM in GB reserved from GG_MEM_TOTAL_GB before launching the assembler; GG_MEM_TOOL_RESERVE_GB is used if larger.
 
 # Contamination-removal parameters
 contamination_removal_rank="domain" # Taxonomic rank for contamination removal. Canonical value is domain; GeneGalleon normalizes tool-specific synonyms automatically.

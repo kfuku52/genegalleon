@@ -2305,6 +2305,7 @@ def test_genome_evolution_core_initializes_concat_iqtree_optional_args_as_arrays
         "bootstrap_params=''",
         "iqtree_mem_arg=''",
         'iqtree_mem_arg="-mem ${GG_MEM_TOTAL_GB}G"',
+        'iqtree_mem_args=(-mem "${GG_MEM_TOTAL_GB}G")',
         "${iqtree_mem_arg} \\",
         "${bootstrap_params}; then",
     ]
@@ -2315,12 +2316,39 @@ def test_genome_evolution_core_initializes_concat_iqtree_optional_args_as_arrays
         "bootstrap_params=(--ufboot 1000 --bnni)",
         "bootstrap_params=()",
         "iqtree_mem_args=()",
-        'iqtree_mem_args=(-mem "${GG_MEM_TOTAL_GB}G")',
+        'iqtree_mem_args=(-mem "${GG_MEM_TOOL_GB}G")',
         '"${iqtree_mem_args[@]}" \\',
         '"${bootstrap_params[@]}"; then',
     ]
     for token in expected_tokens:
         assert token in text, f"Missing array-based concat-IQ-TREE args token: {token}"
+
+
+def test_memory_limited_tool_invocations_use_tool_budget():
+    genome_core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+    gene_core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    annotation_core = _read_text(CORE_DIR / "gg_genome_annotation_core.sh")
+    transcriptome_core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+
+    expected_genome_tokens = [
+        'memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")',
+        'iqtree_full_mem_args=(-mem "${GG_MEM_TOOL_GB}G")',
+        'iqtree_parallel_mem_args=(-mem "${memory_iqtree_parallel}G")',
+        'astral_mem_args=("-Xmx${GG_MEM_TOOL_GB}g")',
+        '"${iqtree_full_mem_args[@]}" \\',
+        '"${iqtree_parallel_mem_args[@]}" \\',
+        '"${astral_mem_args[@]}" \\',
+        '--mmseqs_split_memory_limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \\',
+    ]
+    for token in expected_genome_tokens:
+        assert token in genome_core
+
+    for text in (gene_core, annotation_core):
+        assert 'mmseqs search "uniprot.queryDB"' in text
+        assert '--split-memory-limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \\' in text
+
+    assert '-mem "${assembly_mem_gb}" \\' in transcriptome_core
+    assert '--memory "${assembly_mem_gb}" \\' in transcriptome_core
 
 
 def test_gene_evolution_core_quotes_nwkit_subtree_leaves_argument():

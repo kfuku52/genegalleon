@@ -55,6 +55,7 @@ def build_arg_parser():
     parser.add_argument('--annotation_search_method', metavar='blastp|mmseqs2', default='mmseqs2', type=str, help='')
     parser.add_argument('--path_search_db', metavar='PATH', default='', type=str, help='', required=True)
     parser.add_argument('--evalue', metavar='FLOAT', default='1e-2', type=str, help='E-value cutoff for BLASTP/MMseqs2 search')
+    parser.add_argument('--mmseqs_split_memory_limit', metavar='SIZE', default='', type=str, help='Optional MMseqs2 --split-memory-limit value, e.g. 8G.')
     parser.add_argument('--gene_size_quantiles', metavar='COMMA_SEPARATED_FLOAT', default='0.05,0.25,0.5,0.75,0.95', type=str, help='')
     parser.add_argument('--min_gene_num', metavar='INT', default=4, type=int, help='')
     parser.add_argument('--max_gene_num', metavar='INT', default=1000, type=int, help='')
@@ -235,6 +236,15 @@ def normalize_annotation_search_method(value):
     return method
 
 
+def normalize_mmseqs_split_memory_limit(value):
+    value = str(value or '').strip()
+    if value == '':
+        return ''
+    if any(ch in value for ch in ('\n', '\r', '\t', '\x00')):
+        raise ValueError('--mmseqs_split_memory_limit contains control characters: {!r}'.format(value))
+    return value
+
+
 def _load_besthit_table(path_out):
     if not os.path.exists(path_out):
         return pandas.DataFrame(columns=['qseqid', 'stitle'])
@@ -342,11 +352,14 @@ def annotate_representative_genes(df_gc_original_quartile, args):
             tmp_result_db = 'mmseqs2.resultDB'
             tmp_mmseqs_dir = 'mmseqs2_tmp_search'
             run_command(['mmseqs', 'createdb', tmp_query_fasta, tmp_query_db], tool_name='mmseqs')
+            command_mmseqs_search = [
+                'mmseqs', 'search', tmp_query_db, mmseqs_db, tmp_result_db, tmp_mmseqs_dir,
+                '--threads', str(args.ncpu), '--max-seqs', '1', '-e', args.evalue, '-s', '7.5',
+            ]
+            if args.mmseqs_split_memory_limit != '':
+                command_mmseqs_search.extend(['--split-memory-limit', args.mmseqs_split_memory_limit])
             run_command(
-                [
-                    'mmseqs', 'search', tmp_query_db, mmseqs_db, tmp_result_db, tmp_mmseqs_dir,
-                    '--threads', str(args.ncpu), '--max-seqs', '1', '-e', args.evalue, '-s', '7.5',
-                ],
+                command_mmseqs_search,
                 tool_name='mmseqs',
             )
             run_command(
@@ -501,6 +514,7 @@ def main():
     args = parser.parse_args()
     args.ncpu = max(1, int(args.ncpu))
     args.annotation_search_method = normalize_annotation_search_method(args.annotation_search_method)
+    args.mmseqs_split_memory_limit = normalize_mmseqs_split_memory_limit(args.mmseqs_split_memory_limit)
     start = time.time()
     print('Starting {} at {}'.format(sys.argv[0], datetime.datetime.now()))
     run(args)

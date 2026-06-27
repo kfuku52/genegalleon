@@ -1276,7 +1276,11 @@ fi
 refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}"
 refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}"
 refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}"
-memory_notung=${GG_MEM_PER_CPU_GB}
+memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
+memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
+iqtree_full_mem_args=(-mem "${GG_MEM_TOOL_GB}G")
+iqtree_parallel_mem_args=(-mem "${memory_iqtree_parallel}G")
+astral_mem_args=("-Xmx${GG_MEM_TOOL_GB}g")
 
 ensure_dir "${dir_species_tree_summary}"
 ensure_dir "${dir_tmp}"
@@ -1809,6 +1813,7 @@ optimize_astral_tree_branch_lengths() {
     -m "${model}" \
     -n 0 \
     -T "${GG_TASK_CPUS}" \
+    "${iqtree_full_mem_args[@]}" \
     --prefix "${iqtree_prefix}" \
     --seed 12345 \
     --redo
@@ -2208,8 +2213,8 @@ if [[ ! -s "${file_concat_iqtree_pep}" && ${run_concat_iqtree_protein} -eq 1 ]];
     bootstrap_params=()
   fi
   iqtree_mem_args=()
-  if [[ -n "${GG_MEM_TOTAL_GB:-}" ]]; then
-    iqtree_mem_args=(-mem "${GG_MEM_TOTAL_GB}G")
+  if [[ -n "${GG_MEM_TOOL_GB:-}" ]]; then
+    iqtree_mem_args=(-mem "${GG_MEM_TOOL_GB}G")
   fi
 
   cd "${dir_concat_iqtree_pep}"
@@ -2285,8 +2290,8 @@ if [[ ! -s "${file_concat_iqtree_dna}" && ${run_concat_iqtree_dna} -eq 1 ]]; the
     bootstrap_params=()
   fi
   iqtree_mem_args=()
-  if [[ -n "${GG_MEM_TOTAL_GB:-}" ]]; then
-    iqtree_mem_args=(-mem "${GG_MEM_TOTAL_GB}G")
+  if [[ -n "${GG_MEM_TOOL_GB:-}" ]]; then
+    iqtree_mem_args=(-mem "${GG_MEM_TOOL_GB}G")
   fi
 
   cd "${dir_concat_iqtree_dna}"
@@ -2381,6 +2386,7 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq
       -s "tmp.${infile_base}.pep.fasta" \
       -m "${protein_model}" \
       -T 1 \
+      "${iqtree_parallel_mem_args[@]}" \
       --prefix "tmp.${infile_base}" \
       --seed 12345 \
       --redo
@@ -2413,6 +2419,7 @@ if [[ (! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}") && ${run
     echo "Skipped. No eligible protein gene trees for ASTRAL after filtering."
   else
     astral-hybrid \
+      "${astral_mem_args[@]}" \
       --input "tmp.astral.merged.iqtree.nwk" \
       --output "tmp.astral.out.tree" \
       --mode 3 \
@@ -2507,6 +2514,7 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq
       -s "./tmp.${infile_base}.input.fasta" \
       -m "${nucleotide_model}" \
       -T 1 \
+      "${iqtree_parallel_mem_args[@]}" \
       --prefix "tmp.${infile_base}" \
       --seed 12345 \
       --redo
@@ -2539,6 +2547,7 @@ if [[ (! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}") && ${run
     echo "Skipped. No eligible DNA gene trees for ASTRAL after filtering."
   else
     astral-hybrid \
+      "${astral_mem_args[@]}" \
       --input "tmp.astral.merged.iqtree.nwk" \
       --output "tmp.astral.out.tree" \
       --mode 3 \
@@ -3395,6 +3404,7 @@ if [[ ! -s "${file_orthogroup_selection}" && ${run_og_selection} -eq 1 ]]; then
     --annotation_search_method "${orthogroup_annotation_method}" \
     --path_search_db "${uniprot_db_prefix}" \
     --evalue '1e-2' \
+    --mmseqs_split_memory_limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \
     --ncpu "${GG_TASK_CPUS}"; then
     exit_code=0
   else
@@ -3743,6 +3753,7 @@ if [[ ${run_busco_dupaware_iqtree_dna} -eq 1 ]]; then
       -s "./tmp.${infile_base}.input.fasta" \
       -m "${nucleotide_model}" \
       -T 1 \
+      "${iqtree_parallel_mem_args[@]}" \
       --prefix "tmp.${infile_base}" \
       --seed 12345 \
       --redo
@@ -3794,6 +3805,7 @@ if [[ ${run_busco_dupaware_iqtree_pep} -eq 1 ]]; then
       -m "${protein_model}" \
       -st AA \
       -T 1 \
+      "${iqtree_parallel_mem_args[@]}" \
       --prefix "tmp.${infile_base}" \
       --seed 12345 \
       --redo

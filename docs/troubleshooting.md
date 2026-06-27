@@ -84,6 +84,19 @@ What to check:
 - unset inherited `SBATCH_MEM`, `SBATCH_MEM_PER_CPU`, or `SBATCH_MEM_PER_GPU` variables before submission if your shell profile exports them,
 - current entrypoints include `#SBATCH --ignore-pbs` because some Slurm builds also parse embedded `#PBS` lines unless told not to.
 
+### Job is killed near the requested memory limit
+
+Symptom:
+
+- SLURM/PBS/UGE reports an out-of-memory kill even though a tool was configured with the job's requested RAM.
+
+What to check:
+
+- scheduler allocation is recorded as `GG_MEM_TOTAL_GB`,
+- tools should receive `GG_MEM_TOOL_GB`, which leaves `GG_MEM_TOOL_RESERVE_GB` for container-side overhead and helper processes,
+- increase the scheduler memory request if `GG_MEM_TOOL_GB` is still too small for the tool,
+- reduce `GG_MEM_TOOL_RESERVE_GB` only after confirming the extra processes and tool overhead fit inside the job allocation.
+
 ### Stage skipped unexpectedly
 
 Symptom:

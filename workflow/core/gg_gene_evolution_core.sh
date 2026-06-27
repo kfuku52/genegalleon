@@ -50,8 +50,8 @@ delete_tmp_dir=${delete_tmp_dir:-1}
 
 build_iqtree_mem_args() {
   IQTREE_MEM_ARGS=()
-  if [[ -n "${GG_MEM_TOTAL_GB:-}" ]]; then
-    IQTREE_MEM_ARGS=(--mem "${GG_MEM_TOTAL_GB}G")
+  if [[ -n "${GG_MEM_TOOL_GB:-}" ]]; then
+    IQTREE_MEM_ARGS=(--mem "${GG_MEM_TOOL_GB}G")
   fi
 }
 
@@ -809,7 +809,7 @@ prepare_species_tree_pruned() {
 prepare_species_tree_pruned || true
 set_default_analysis_files
 
-memory_notung=$((GG_MEM_TOTAL_GB / 4))
+memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 4)
 
 echo "Checking parameter conflicts..."
 if [[ ${run_trimal} -eq 1 && ${run_clipkit} -eq 1 ]]; then
@@ -1519,6 +1519,7 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
     mmseqs createdb "uniprot.query.pep.fas" "uniprot.queryDB"
     mmseqs search "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "tmp_mmseqs2_uniprot" \
       --threads "${GG_TASK_CPUS}" \
+      --split-memory-limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \
       --max-seqs 1 \
       -e 1e-2 \
       -s 7.5

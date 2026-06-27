@@ -268,6 +268,7 @@ def test_transcriptome_core_long_read_branch_uses_rnabloom2_and_corset():
     assert "rnabloom_input_args=(-long)" in text
     assert "rnabloom_extra_args+=(-lrpb)" in text
     assert "rnabloom_extra_args+=(-stranded)" in text
+    assert '-mem "${assembly_mem_gb}"' in text
     assert "rnabloom.transcripts.fa" in text
     assert "task='Corset clustering of long-read transcripts'" in text
     assert 'corset_minimap2_preset="map-pb"' in text

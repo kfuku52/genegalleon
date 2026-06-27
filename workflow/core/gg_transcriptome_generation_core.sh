@@ -1561,7 +1561,15 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
   fi
 
   assembly_cpus=$((${GG_TASK_CPUS} - ${assembly_cpu_offset}))
-  assembly_mem_gb=$((${GG_MEM_TOTAL_GB} - ${assembly_ram_offset}))
+  if ! gg_is_nonnegative_integer "${assembly_ram_offset:-0}"; then
+    echo "Invalid assembly_ram_offset=${assembly_ram_offset:-unset}; using 0."
+    assembly_ram_offset=0
+  fi
+  assembly_ram_reserved_gb=${assembly_ram_offset}
+  if [[ "${assembly_ram_reserved_gb}" -lt "${GG_MEM_TOOL_RESERVE_GB}" ]]; then
+    assembly_ram_reserved_gb=${GG_MEM_TOOL_RESERVE_GB}
+  fi
+  assembly_mem_gb=$((${GG_MEM_TOTAL_GB} - ${assembly_ram_reserved_gb}))
   if [[ ${assembly_cpus} -lt 1 ]]; then
     echo "Adjusted assembly_cpus from ${assembly_cpus} to 1 because it must be >=1."
     assembly_cpus=1
@@ -1570,8 +1578,9 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
     echo "Adjusted assembly_mem_gb from ${assembly_mem_gb}G to 1G because it must be >=1G."
     assembly_mem_gb=1
   fi
-  bflyHeapSpaceMax=${GG_MEM_PER_CPU_GB} # GB
+  bflyHeapSpaceMax=$(gg_memory_fraction_gb "${assembly_mem_gb}" 1 "${assembly_cpus}") # GB
   echo "Number of offset CPUs for transcriptome assembly is ${assembly_cpu_offset}."
+  echo "Number of reserved GB for transcriptome assembly is ${assembly_ram_reserved_gb}."
   echo "${GG_TASK_CPUS} CPUs and ${GG_MEM_TOTAL_GB}G RAM are allocated to this job."
   echo "${assembly_cpus} CPUs and ${assembly_mem_gb}G RAM are used for transcriptome assembly."
 
@@ -1621,6 +1630,7 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
       "${rnabloom_extra_args[@]}" \
       "${rnabloom_input_args[@]}" \
       -t "${assembly_cpus}" \
+      -mem "${assembly_mem_gb}" \
       -outdir rnabloom_output
     if [[ -s "${dir_tmp}/rnabloom_output/rnabloom.transcripts.fa" ]]; then
       seqkit seq --threads "${GG_TASK_CPUS}" "${dir_tmp}/rnabloom_output/rnabloom.transcripts.fa" --out-file "tmp.isoform.fa.gz"
@@ -2054,7 +2064,7 @@ if [[ ! -s "${file_longestcds_mmseqs2taxonomy}" && ${run_longestcds_mmseqs2taxon
 
   mmseqs taxonomy "queryDB" "${dir_mmseqs2_db}/UniRef90_DB" "output_prefix" "tmp" \
     --split-mode 2 \
-    --split-memory-limit $((${GG_MEM_TOTAL_GB} * 3 / 4))G \
+    --split-memory-limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \
     --majority 0.5 \
     --lca-mode 3 \
     --vote-mode 1 \

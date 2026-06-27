@@ -26,6 +26,8 @@ unset_singularity_envs() {
 	unset SINGULARITYENV_GG_JOB_ID
 	unset SINGULARITYENV_GG_MEM_PER_CPU_GB
 	unset SINGULARITYENV_GG_MEM_TOTAL_GB
+	unset SINGULARITYENV_GG_MEM_TOOL_RESERVE_GB
+	unset SINGULARITYENV_GG_MEM_TOOL_GB
 	unset SINGULARITYENV_OMP_NUM_THREADS
 	unset SINGULARITYENV_OMP_THREAD_LIMIT
 	unset SINGULARITYENV_KMP_ALL_THREADS
@@ -41,6 +43,8 @@ unset_singularity_envs() {
 	unset APPTAINERENV_GG_JOB_ID
 	unset APPTAINERENV_GG_MEM_PER_CPU_GB
 	unset APPTAINERENV_GG_MEM_TOTAL_GB
+	unset APPTAINERENV_GG_MEM_TOOL_RESERVE_GB
+	unset APPTAINERENV_GG_MEM_TOOL_GB
 	unset APPTAINERENV_OMP_NUM_THREADS
 	unset APPTAINERENV_OMP_THREAD_LIMIT
 	unset APPTAINERENV_KMP_ALL_THREADS
@@ -944,7 +948,91 @@ gg_sync_legacy_scheduler_aliases() {
 	MEM_PER_SLOT=${GG_MEM_PER_CPU_GB:-3}
 	MEM_PER_HOST=${GG_MEM_TOTAL_GB:-$((MEM_PER_SLOT * NSLOTS))}
 	export GG_TASK_CPUS GG_JOB_ID GG_ARRAY_TASK_ID GG_MEM_PER_CPU_GB GG_MEM_TOTAL_GB
+	if [[ -n "${GG_MEM_TOOL_RESERVE_GB+x}" ]]; then
+		export GG_MEM_TOOL_RESERVE_GB
+	fi
+	if [[ -n "${GG_MEM_TOOL_GB+x}" ]]; then
+		export GG_MEM_TOOL_GB
+	fi
 	export NSLOTS JOB_ID SGE_TASK_ID MEM_PER_SLOT MEM_PER_HOST
+}
+
+gg_is_nonnegative_integer() {
+	[[ "${1:-}" =~ ^[0-9]+$ ]]
+}
+
+gg_default_tool_memory_reserve_gb() {
+	local total_gb=${1:-1}
+	local reserve_gb=0
+	if ! gg_is_nonnegative_integer "${total_gb}" || [[ "${total_gb}" -le 1 ]]; then
+		echo 0
+		return 0
+	fi
+	reserve_gb=$((total_gb / 8))
+	if [[ "${reserve_gb}" -lt 1 ]]; then
+		reserve_gb=1
+	fi
+	if [[ "${reserve_gb}" -gt 4 ]]; then
+		reserve_gb=4
+	fi
+	echo "${reserve_gb}"
+}
+
+gg_normalize_memory_budget() {
+	local echo_header='gg_normalize_memory_budget: '
+	local max_tool_memory_gb=""
+
+	if ! gg_is_nonnegative_integer "${GG_MEM_TOTAL_GB:-}" || [[ "${GG_MEM_TOTAL_GB:-0}" -lt 1 ]]; then
+		echo "${echo_header}GG_MEM_TOTAL_GB is invalid or less than 1 (${GG_MEM_TOTAL_GB:-unset}). GG_MEM_TOTAL_GB=1"
+		GG_MEM_TOTAL_GB=1
+	fi
+
+	if [[ -z "${GG_MEM_TOOL_RESERVE_GB:-}" ]]; then
+		GG_MEM_TOOL_RESERVE_GB=$(gg_default_tool_memory_reserve_gb "${GG_MEM_TOTAL_GB}")
+		echo "${echo_header}GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB} (derived from GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB})"
+	elif ! gg_is_nonnegative_integer "${GG_MEM_TOOL_RESERVE_GB}"; then
+		echo "${echo_header}GG_MEM_TOOL_RESERVE_GB is invalid (${GG_MEM_TOOL_RESERVE_GB}). GG_MEM_TOOL_RESERVE_GB=0"
+		GG_MEM_TOOL_RESERVE_GB=0
+	fi
+
+	max_tool_memory_gb=$((GG_MEM_TOTAL_GB - GG_MEM_TOOL_RESERVE_GB))
+	if [[ "${max_tool_memory_gb}" -lt 1 ]]; then
+		max_tool_memory_gb=1
+	fi
+
+	if [[ -z "${GG_MEM_TOOL_GB:-}" ]]; then
+		GG_MEM_TOOL_GB=${max_tool_memory_gb}
+		echo "${echo_header}GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB} (GG_MEM_TOTAL_GB - GG_MEM_TOOL_RESERVE_GB, floored at 1G)"
+	elif ! gg_is_nonnegative_integer "${GG_MEM_TOOL_GB}" || [[ "${GG_MEM_TOOL_GB}" -lt 1 ]]; then
+		echo "${echo_header}GG_MEM_TOOL_GB is invalid or less than 1 (${GG_MEM_TOOL_GB}). GG_MEM_TOOL_GB=1"
+		GG_MEM_TOOL_GB=1
+	elif [[ "${GG_MEM_TOOL_GB}" -gt "${max_tool_memory_gb}" ]]; then
+		echo "${echo_header}GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB} exceeds the reserved budget. GG_MEM_TOOL_GB=${max_tool_memory_gb}"
+		GG_MEM_TOOL_GB=${max_tool_memory_gb}
+	fi
+}
+
+gg_memory_fraction_gb() {
+	local total_gb=${1:-1}
+	local numerator=${2:-1}
+	local denominator=${3:-1}
+	local value_gb=1
+
+	if ! gg_is_nonnegative_integer "${total_gb}" || [[ "${total_gb}" -lt 1 ]]; then
+		total_gb=1
+	fi
+	if ! gg_is_nonnegative_integer "${numerator}"; then
+		numerator=1
+	fi
+	if ! gg_is_nonnegative_integer "${denominator}" || [[ "${denominator}" -lt 1 ]]; then
+		denominator=1
+	fi
+
+	value_gb=$((total_gb * numerator / denominator))
+	if [[ "${value_gb}" -lt 1 ]]; then
+		value_gb=1
+	fi
+	echo "${value_gb}"
 }
 
 gg_normalize_scheduler_env() {
@@ -1045,12 +1133,15 @@ gg_normalize_scheduler_env() {
 	if [[ -z "${GG_MEM_TOTAL_GB:-}" ]]; then
 		GG_MEM_TOTAL_GB=$((${GG_MEM_PER_CPU_GB}*${GG_TASK_CPUS}))
 	fi
+	gg_normalize_memory_budget
 	gg_sync_legacy_scheduler_aliases
 	echo ${echo_header}"GG_TASK_CPUS=${GG_TASK_CPUS}"
 	echo ${echo_header}"GG_JOB_ID=${GG_JOB_ID}"
 	echo ${echo_header}"GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID}"
 	echo ${echo_header}"GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB}"
 	echo ${echo_header}"GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB}"
+	echo ${echo_header}"GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB}"
+	echo ${echo_header}"GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB}"
 	echo ""
 	export GG_SCHEDULER_KIND
 }
@@ -1077,7 +1168,7 @@ gg_print_scheduler_runtime_summary() {
 	echo "${echo_header}requested.slurm cpus_per_task=${SLURM_CPUS_PER_TASK:-NA} mem_per_cpu_mb=${SLURM_MEM_PER_CPU:-NA} array_task_id=${SLURM_ARRAY_TASK_ID:-NA} job_id=${SLURM_JOB_ID:-NA}"
 	echo "${echo_header}requested.pbs nodefile_slots=${pbs_slots} array_index=${PBS_ARRAY_INDEX:-NA} array_id=${PBS_ARRAYID:-NA} job_id=${PBS_JOBID:-NA}"
 	echo "${echo_header}legacy_aliases NSLOTS=${NSLOTS:-NA} SGE_TASK_ID=${SGE_TASK_ID:-NA} JOB_ID=${JOB_ID:-NA} MEM_PER_SLOT=${MEM_PER_SLOT:-NA} MEM_PER_HOST=${MEM_PER_HOST:-NA}"
-	echo "${echo_header}detected GG_TASK_CPUS=${GG_TASK_CPUS:-NA} GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-NA} GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-NA} GG_JOB_ID=${GG_JOB_ID:-NA} GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-NA}"
+	echo "${echo_header}detected GG_TASK_CPUS=${GG_TASK_CPUS:-NA} GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-NA} GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-NA} GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB:-NA} GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB:-NA} GG_JOB_ID=${GG_JOB_ID:-NA} GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-NA}"
 	echo "${echo_header}forwarded SINGULARITYENV_GG_TASK_CPUS=${SINGULARITYENV_GG_TASK_CPUS:-unset} SINGULARITYENV_GG_MEM_PER_CPU_GB=${SINGULARITYENV_GG_MEM_PER_CPU_GB:-unset} SINGULARITYENV_GG_ARRAY_TASK_ID=${SINGULARITYENV_GG_ARRAY_TASK_ID:-unset}"
 	echo "${echo_header}forwarded APPTAINERENV_GG_TASK_CPUS=${APPTAINERENV_GG_TASK_CPUS:-unset} APPTAINERENV_GG_MEM_PER_CPU_GB=${APPTAINERENV_GG_MEM_PER_CPU_GB:-unset} APPTAINERENV_GG_ARRAY_TASK_ID=${APPTAINERENV_GG_ARRAY_TASK_ID:-unset}"
 	echo "${echo_header}forwarded SINGULARITYENV_OMP_NUM_THREADS=${SINGULARITYENV_OMP_NUM_THREADS:-unset} SINGULARITYENV_OMP_THREAD_LIMIT=${SINGULARITYENV_OMP_THREAD_LIMIT:-unset}"
@@ -1134,6 +1225,10 @@ set_singularityenv() {
 	export APPTAINERENV_GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-3}
 	export SINGULARITYENV_GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-3}
 	export APPTAINERENV_GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-3}
+	export SINGULARITYENV_GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB:-0}
+	export APPTAINERENV_GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB:-0}
+	export SINGULARITYENV_GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB:-${GG_MEM_TOTAL_GB:-3}}
+	export APPTAINERENV_GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB:-${GG_MEM_TOTAL_GB:-3}}
 	export SINGULARITYENV_SGE_TASK_ID=${SGE_TASK_ID:-1}
 	export APPTAINERENV_SGE_TASK_ID=${SGE_TASK_ID:-1}
 	export SINGULARITYENV_NSLOTS=${NSLOTS:-1}
@@ -4198,6 +4293,7 @@ ensure_gg_scheduler_defaults() {
     GG_MEM_TOTAL_GB=$((GG_MEM_PER_CPU_GB * GG_TASK_CPUS))
     echo "${echo_header}GG_MEM_TOTAL_GB is undefined or empty. GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB}"
   fi
+  gg_normalize_memory_budget
   gg_sync_legacy_scheduler_aliases
 }
 
@@ -4226,6 +4322,8 @@ print_gg_container_starting_message() {
   echo "GG_TASK_CPUS: ${GG_TASK_CPUS}"
   echo "GG_MEM_PER_CPU_GB: ${GG_MEM_PER_CPU_GB}"
   echo "GG_MEM_TOTAL_GB: ${GG_MEM_TOTAL_GB}"
+  echo "GG_MEM_TOOL_RESERVE_GB: ${GG_MEM_TOOL_RESERVE_GB}"
+  echo "GG_MEM_TOOL_GB: ${GG_MEM_TOOL_GB}"
   echo "GG_JOB_ID: ${GG_JOB_ID}"
   echo "GG_ARRAY_TASK_ID: ${GG_ARRAY_TASK_ID}"
   echo "ulimit -Hn: $(ulimit -Hn)"

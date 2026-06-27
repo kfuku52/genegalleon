@@ -360,6 +360,7 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
     mmseqs createdb "uniprot.query.pep.fas" "uniprot.queryDB"
     mmseqs search "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "tmp_mmseqs2_uniprot" \
       --threads "${GG_TASK_CPUS}" \
+      --split-memory-limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \
       --max-seqs 1 \
       -e 1e-2 \
       -s 7.5
@@ -467,7 +468,7 @@ if [[ ! -s "${file_sp_cds_mmseqs2taxonomy}" && ${run_cds_mmseqs2taxonomy} -eq 1 
 
   mmseqs taxonomy "queryDB" "${dir_mmseqs2_db}/UniRef90_DB" "output_prefix" "tmp" \
     --split-mode 2 \
-    --split-memory-limit $((${GG_MEM_TOTAL_GB} * 3 / 4))G \
+    --split-memory-limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \
     --majority 0.5 \
     --lca-mode 3 \
     --vote-mode 1 \
@@ -589,7 +590,7 @@ if [[ ! -s "${file_sp_subphaser}" && ${run_subphaser} -eq 1 ]]; then
     -outdir "subphaser" \
     -tmpdir "tmp" \
     -ncpu "${GG_TASK_CPUS}" \
-    -max_memory "${GG_MEM_TOTAL_GB}"; then
+    -max_memory "${GG_MEM_TOOL_GB}"; then
     subphaser_exit_status=0
   else
     subphaser_exit_status=$?
@@ -668,7 +669,7 @@ if [[ ! -s "${file_sp_genome_mmseqs2taxonomy}" && ${run_genome_mmseqs2taxonomy} 
 
   mmseqs taxonomy "queryDB" "${dir_mmseqs2_db}/UniRef90_DB" "output_prefix" "tmp" \
     --split-mode 2 \
-    --split-memory-limit $((${GG_MEM_TOTAL_GB} * 3 / 4))G \
+    --split-memory-limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \
     --majority 0.5 \
     --lca-mode 3 \
     --vote-mode 1 \
@@ -748,7 +749,7 @@ if [[ ! -s "${file_sp_genomescope}" && ${run_genomescope} -eq 1 ]]; then
       rm -rf -- ./tmp
     fi
     mkdir -p ./tmp
-    kmc -k${klength} -t${GG_TASK_CPUS} -m${GG_MEM_TOTAL_GB} -ci${kmer_lower} -cs${kmer_upper} @input_fastq_files.txt tmp.reads ./tmp
+    kmc -k${klength} -t${GG_TASK_CPUS} -m${GG_MEM_TOOL_GB} -ci${kmer_lower} -cs${kmer_upper} @input_fastq_files.txt tmp.reads ./tmp
     kmc_tools transform tmp.reads histogram tmp.reads.histo -cx${kmer_upper}
     rm -rf -- ./tmp
     /usr/local/bin/genomescope2.0/genomescope.R -i "tmp.reads.histo" -o "${sp_ub}.genomescope" -k ${klength}

@@ -114,6 +114,13 @@ def test_format_command_for_log_escapes_control_characters():
     assert "bad\npath" not in command_log
 
 
+def test_normalize_mmseqs_split_memory_limit_rejects_control_characters():
+    mod = load_module()
+
+    with pytest.raises(ValueError, match="contains control characters"):
+        mod.normalize_mmseqs_split_memory_limit("8G\n--bad")
+
+
 def test_get_concatenated_fx2tab_runs_single_seqkit_call(monkeypatch, tmp_path):
     mod = load_module()
     file_a = tmp_path / "spA.fa"
@@ -205,6 +212,51 @@ def test_load_besthit_table_reads_only_first_two_columns(tmp_path):
         {"qseqid": "geneA", "stitle": "hitA"},
         {"qseqid": "geneB", "stitle": "hitB"},
     ]
+
+
+def test_mmseqs_annotation_search_passes_split_memory_limit(tmp_path, monkeypatch):
+    mod = load_module()
+    monkeypatch.chdir(tmp_path)
+
+    protein_dir = tmp_path / "proteins"
+    protein_dir.mkdir()
+    (protein_dir / "spA.fa").write_text(">geneA\nMA\n", encoding="utf-8")
+    mmseqs_prefix = tmp_path / "uniprot.mmseqs"
+    mmseqs_prefix.write_text("db\n", encoding="utf-8")
+    (tmp_path / "uniprot.mmseqs.dbtype").write_text("0\n", encoding="utf-8")
+
+    calls = []
+
+    def fake_run_command(command, stdout_file=None, append=False, tool_name="tool", capture_output=False):
+        calls.append(command)
+        if stdout_file is not None:
+            mode = "a" if append else "w"
+            with open(stdout_file, mode, encoding="utf-8") as handle:
+                handle.write(">geneA\nMA\n")
+        if command[:2] == ["mmseqs", "convertalis"]:
+            Path(command[5]).write_text("geneA\thitA\t1e-20\t100\n", encoding="utf-8")
+        return b""
+
+    monkeypatch.setattr(mod, "run_command", fake_run_command)
+    args = SimpleNamespace(
+        annotation_search_method="mmseqs2",
+        gene_size_quantiles="0.5",
+        dir_species_protein=str(protein_dir),
+        ncpu=2,
+        path_search_db=str(tmp_path / "uniprot"),
+        evalue="1e-2",
+        mmseqs_split_memory_limit="12G",
+    )
+
+    df_gc = pandas.DataFrame([{"Orthogroup": "OG1", "geneid_0.5": "geneA"}])
+    out = mod.annotate_representative_genes(df_gc, args)
+
+    search_calls = [call for call in calls if call[:2] == ["mmseqs", "search"]]
+    assert len(search_calls) == 1
+    assert "--split-memory-limit" in search_calls[0]
+    limit_index = search_calls[0].index("--split-memory-limit")
+    assert search_calls[0][limit_index + 1] == "12G"
+    assert out.loc[0, "besthit_0.5"] == "hitA"
 
 
 def test_remove_tmp_files_only_removes_known_selection_files(tmp_path, monkeypatch):

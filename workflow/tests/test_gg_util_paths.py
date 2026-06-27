@@ -96,6 +96,64 @@ def test_export_var_to_container_env_ignores_invalid_variable_name(tmp_path):
     assert "ignoring invalid variable name" in completed.stderr
 
 
+def test_scheduler_defaults_derives_tool_memory_budget(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "GG_TASK_CPUS=4; "
+        "GG_MEM_PER_CPU_GB=8; "
+        "ensure_gg_scheduler_defaults >/dev/null; "
+        'printf "total=%s\\nreserve=%s\\ntool=%s\\n" '
+        '"${GG_MEM_TOTAL_GB}" "${GG_MEM_TOOL_RESERVE_GB}" "${GG_MEM_TOOL_GB}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [
+        "total=32",
+        "reserve=4",
+        "tool=28",
+    ]
+
+
+def test_scheduler_defaults_clamps_manual_tool_memory_to_reserved_budget(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "GG_TASK_CPUS=4; "
+        "GG_MEM_PER_CPU_GB=8; "
+        "GG_MEM_TOTAL_GB=32; "
+        "GG_MEM_TOOL_RESERVE_GB=4; "
+        "GG_MEM_TOOL_GB=32; "
+        "ensure_gg_scheduler_defaults >/dev/null; "
+        'printf "tool=%s\\n" "${GG_MEM_TOOL_GB}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "tool=28"
+
+
+def test_scheduler_defaults_uses_constant_like_reserve_for_large_jobs(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "GG_TASK_CPUS=8; "
+        "GG_MEM_PER_CPU_GB=32; "
+        "ensure_gg_scheduler_defaults >/dev/null; "
+        'printf "total=%s\\nreserve=%s\\ntool=%s\\n" '
+        '"${GG_MEM_TOTAL_GB}" "${GG_MEM_TOOL_RESERVE_GB}" "${GG_MEM_TOOL_GB}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [
+        "total=256",
+        "reserve=4",
+        "tool=252",
+    ]
+
+
 def test_apply_registered_env_overrides_uses_entrypoint_prefixes_and_empty_values(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "

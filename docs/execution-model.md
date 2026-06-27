@@ -65,8 +65,11 @@ Inside the runtime, GeneGalleon consistently uses:
 - `GG_TASK_CPUS`
 - `GG_JOB_ID`
 - `GG_ARRAY_TASK_ID`
+- `GG_MEM_TOTAL_GB`
+- `GG_MEM_TOOL_GB`
 
 Those are populated from SLURM/PBS/UGE values when available and then forwarded into the container as both `SINGULARITYENV_*` and `APPTAINERENV_*`.
+`GG_MEM_TOTAL_GB` records the scheduler allocation. `GG_MEM_TOOL_GB` is the smaller memory budget passed to tools that accept a maximum-memory option, leaving headroom for the shell, Python/R helpers, Java overhead, compression, and other container-side processes. By default the reserved headroom is `GG_MEM_TOOL_RESERVE_GB`, a bounded absolute reserve that scales down for small jobs but saturates at 4 GB for larger jobs. Set `GG_MEM_TOOL_RESERVE_GB` explicitly when a workflow or site needs more headroom; set it to `0` only when you intentionally want tool limits to consume the full job allocation.
 
 ## Container activation and bind mounts
 
