@@ -5,7 +5,6 @@ args = cli_args
 options(lifecycle_verbosity = 'quiet')
 suppressWarnings(suppressPackageStartupMessages(library(ape, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(cowplot, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(ggmsa, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(ggplot2, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(ggtree, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(grid, quietly = TRUE)))
@@ -358,7 +357,7 @@ for (col in unlist(args[grep("^panel", names(args))])) {
       } else if (file.exists(cds_aln_file)) {
           cds_aln = ape::read.FASTA(cds_aln_file, type = 'DNA')
           aa_aln = ape::trans(x = cds_aln, code = genetic_code, codonstart = 1)
-          tidy_aln = ggmsa::tidy_msa(aa_aln)
+          tidy_aln = treevis_tidy_msa(aa_aln)
           g = add_amino_acid_site_column(g, args, tidy_aln, selected_amino_acid_sites)
       } else {
           cat('CDS alignment file not found. Skipping.\n')

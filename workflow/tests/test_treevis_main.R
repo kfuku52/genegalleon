@@ -93,15 +93,31 @@ dummy_site_state_plot <- ggplot(data.frame(x = c(1, 2, 3), y = c(1, 1, 1))) +
 g_state <- list(tree = ggplot(), site_state_dayhoff6 = dummy_site_state_plot)
 w_state <- get_rel_widths(g_state, "")
 if (!("site_state_dayhoff6" %in% names(w_state))) stop("get_rel_widths missing recoded site-state key.")
-expected_site_state_width <- 0.18 / (1.5 + 0.18)
+expected_site_state_width <- 0.32 / (1.5 + 0.32)
 if (abs(unname(w_state["site_state_dayhoff6"]) - expected_site_state_width) > 1e-9) stop("get_rel_widths did not size recoded site-state panel.")
 
-# 2c) read_site_state_alignment: recoded symbols are preserved as plain characters.
+# 2c) treevis_wrap_axis_label: long site-panel axis labels are wrapped at word boundaries.
+wrapped_site_xlab <- treevis_wrap_axis_label("Recoded state (dayhoff6)")
+if (!identical(wrapped_site_xlab, "Recoded\nstate\n(dayhoff6)")) stop("treevis_wrap_axis_label should wrap long site-panel labels.")
+if (!treevis_should_wrap_site_axis_label("Amino acid position (aa)", c(130, 323))) stop("Narrow site panels should wrap long x-axis labels.")
+if (treevis_should_wrap_site_axis_label("Amino acid position (aa)", seq_len(12))) stop("Wide site panels should keep x-axis labels unwrapped.")
+
+# 2d) read_site_state_alignment: recoded symbols are preserved as plain characters.
 site_state_fasta <- tempfile(fileext = ".fa")
 writeLines(c(">g1", "ABZ09", ">g2", "CFY18"), site_state_fasta)
 site_state_tidy <- read_site_state_alignment(site_state_fasta)
 if (!all(colnames(site_state_tidy) == c("name", "position", "character"))) stop("read_site_state_alignment returned unexpected columns.")
 if (!all(c("B", "Z", "0", "9") %in% site_state_tidy$character)) stop("read_site_state_alignment should preserve recoded symbols.")
+
+# 2e) treevis_tidy_msa: ggmsa-free alignment tidying preserves names, positions, and characters.
+aa_tidy <- treevis_tidy_msa(list(g1 = c("A", "d", "-"), g2 = "CEG"))
+if (!all(colnames(aa_tidy) == c("name", "position", "character"))) stop("treevis_tidy_msa returned unexpected columns.")
+if (!all(aa_tidy$character %in% c("A", "D", "-", "C", "E", "G"))) stop("treevis_tidy_msa should uppercase amino-acid symbols.")
+if (!identical(levels(aa_tidy$name), c("g2", "g1"))) stop("treevis_tidy_msa should use reversed input order for factor levels.")
+letter_palette <- treevis_ggmsa_letter_palette()
+if (!identical(unname(letter_palette["A"]), "#FF5005")) stop("LETTER palette should keep ggmsa-compatible color for A.")
+if (!identical(unname(letter_palette["D"]), "#740AFF")) stop("LETTER palette should keep ggmsa-compatible color for D.")
+if (!identical(unname(letter_palette["-"]), "#FFFFFF")) stop("LETTER palette should keep gaps white.")
 g_site_state_in <- list(
   tree = list(
     data = data.frame(
@@ -113,16 +129,38 @@ g_site_state_in <- list(
     )
   )
 )
+args_site_state <- list(font_size = 6, font_size_factor = 0.352777778, margins = c(0, 0, 0, 0))
 g_site_state_out <- add_site_state_column(
   g_site_state_in,
-  list(font_size = 6, margins = c(0, 0, 0, 0)),
+  args_site_state,
   site_state_tidy,
   c(1, 3, 5),
   qname = "site_state_dayhoff6",
   xlab = "Recoded state (dayhoff6)"
 )
 if (!("site_state_dayhoff6" %in% names(g_site_state_out))) stop("add_site_state_column should add named recoded site-state panel.")
+site_state_text_size <- g_site_state_out[["site_state_dayhoff6"]][["layers"]][[3]][["aes_params"]][["size"]]
+expected_text_size <- args_site_state[["font_size"]] * args_site_state[["font_size_factor"]]
+if (abs(site_state_text_size - expected_text_size) > 1e-9) stop("add_site_state_column should use ggplot text-size units for recoded symbols.")
+if (!grepl("\n", g_site_state_out[["site_state_dayhoff6"]][["labels"]][["x"]], fixed = TRUE)) stop("add_site_state_column should wrap long x-axis labels.")
 invisible(ggplot_build(g_site_state_out[["site_state_dayhoff6"]]))
+
+g_amino_site_out <- add_amino_acid_site_column(
+  g_site_state_in,
+  args_site_state,
+  aa_tidy,
+  c(1, 2),
+  qname = "amino_acid_site",
+  xlab = "Amino acid position (aa)"
+)
+if (!("amino_acid_site" %in% names(g_amino_site_out))) stop("add_amino_acid_site_column should add an amino-acid site panel.")
+amino_text_size <- g_amino_site_out[["amino_acid_site"]][["layers"]][[3]][["aes_params"]][["size"]]
+if (abs(amino_text_size - site_state_text_size) > 1e-9) stop("Amino-acid and site-state panels should use the same text size.")
+if (!grepl("\n", g_amino_site_out[["amino_acid_site"]][["labels"]][["x"]], fixed = TRUE)) stop("add_amino_acid_site_column should wrap narrow x-axis labels.")
+amino_site_built <- ggplot_build(g_amino_site_out[["amino_acid_site"]])
+amino_tile_fill <- amino_site_built[["data"]][[2]][["fill"]]
+if (!("#FF5005" %in% amino_tile_fill)) stop("add_amino_acid_site_column should use the ggmsa LETTER palette.")
+invisible(amino_site_built)
 
 # 3) get_df_trait: relative scaling should not produce Inf/NaN for all-zero rows.
 b <- data.frame(
@@ -597,7 +635,7 @@ if (nrow(lc_chain) != 2) stop("get_line_coordinate(pairwise=FALSE) should return
 lc_pair <- get_line_coordinate(g_line, c(1, 2, 3), pairwise = TRUE)
 if (nrow(lc_pair) != 3) stop("get_line_coordinate(pairwise=TRUE) should return nC2 segments.")
 
-# 20) propagate_tiplab_colors_to_internal_branches: paints internal branch when descendant tips share one color.
+# 20) propagate_tiplab_colors_to_internal_branches: paints only all-colored clades.
 gtree_col <- list(data = data.frame(
   node = c(1, 2, 3),
   parent = c(3, 3, NA),
@@ -609,6 +647,17 @@ gtree_col <- list(data = data.frame(
 gtree_col2 <- propagate_tiplab_colors_to_internal_branches(gtree_col, tree = NULL)
 internal_col <- gtree_col2$data$branch_color[gtree_col2$data$isTip == FALSE]
 if (!(length(internal_col) == 1 && internal_col == "red")) stop("Internal branch color propagation failed.")
+gtree_mixed_col <- list(data = data.frame(
+  node = c(1, 2, 3),
+  parent = c(3, 3, NA),
+  isTip = c(TRUE, TRUE, FALSE),
+  branch_color = c("red", "black", "black"),
+  x = c(1, 1, 0),
+  stringsAsFactors = FALSE
+))
+gtree_mixed_col2 <- propagate_tiplab_colors_to_internal_branches(gtree_mixed_col, tree = NULL)
+mixed_internal_col <- gtree_mixed_col2$data$branch_color[gtree_mixed_col2$data$isTip == FALSE]
+if (!(length(mixed_internal_col) == 1 && mixed_internal_col == "black")) stop("Internal branch color should not propagate across mixed foreground/background descendants.")
 
 # 21) get_df_polygon: NA y rows should be ignored without crashing.
 df_poly_na <- data.frame(

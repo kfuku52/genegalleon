@@ -381,7 +381,7 @@ install_r_kfl1ou() {
 
 verify_plotting_packages_in_r() {
   log "Verifying plotting packages are available in '${r_env_name}'"
-  micromamba run -n "${r_env_name}" Rscript -e "pkgs <- c('Rphylopars','Rtsne','ape','aplot','cowplot','ggmsa','ggplot2','ggrepel','ggtree','phangorn','svglite','viridis','xml2'); missing <- pkgs[!vapply(pkgs, requireNamespace, quietly=TRUE, FUN.VALUE=logical(1))]; if (length(missing) > 0) stop(sprintf('Missing packages in env ${r_env_name}: %s', paste(missing, collapse=', ')))"
+  micromamba run -n "${r_env_name}" Rscript -e "pkgs <- c('Rphylopars','Rtsne','ape','aplot','cowplot','ggplot2','ggrepel','ggtree','phangorn','svglite','viridis','xml2'); missing <- pkgs[!vapply(pkgs, requireNamespace, quietly=TRUE, FUN.VALUE=logical(1))]; if (length(missing) > 0) stop(sprintf('Missing packages in env ${r_env_name}: %s', paste(missing, collapse=', ')))"
 }
 
 main() {

@@ -1128,6 +1128,40 @@ extract_alignment_sites <- function(tidy_aln, selected_amino_acid_sites) {
   tidy_aln
 }
 
+treevis_tidy_msa <- function(msa, start = NULL, end = NULL) {
+  aln <- msa
+  seq_names <- names(aln)
+  if (is.null(seq_names) || any(is.na(seq_names)) || any(!nzchar(seq_names))) {
+    stop("Sequences must have unique names")
+  }
+  if (length(unique(seq_names)) != length(seq_names)) {
+    stop("Sequences must have unique names")
+  }
+  rows <- lapply(seq_along(aln), function(i) {
+    chars <- as.character(aln[[i]])
+    if (length(chars) == 1) {
+      chars <- strsplit(chars, "", fixed = TRUE)[[1]]
+    }
+    data.frame(
+      name = seq_names[[i]],
+      position = seq_along(chars),
+      character = toupper(chars),
+      stringsAsFactors = FALSE
+    )
+  })
+  out <- do.call(rbind, rows)
+  out[["name"]] <- factor(out[["name"]], levels = rev(seq_names))
+  if (is.null(start)) {
+    start <- min(out[["position"]])
+  }
+  if (is.null(end)) {
+    end <- max(out[["position"]])
+  }
+  out <- out[out[["position"]] >= start & out[["position"]] <= end, , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
 read_site_state_alignment <- function(path) {
   lines <- readLines(path, warn = FALSE)
   lines <- trimws(lines)
@@ -1170,6 +1204,124 @@ read_site_state_alignment <- function(path) {
   out
 }
 
+treevis_ggmsa_letter_palette <- function() {
+  c(
+    '-' = '#FFFFFF',
+    A = '#FF5005',
+    B = '#FFFF80',
+    C = '#990000',
+    D = '#740AFF',
+    E = '#E0FF66',
+    F = '#00998F',
+    G = '#5EF1F2',
+    H = '#FF0010',
+    I = '#426600',
+    J = '#FFA8BB',
+    K = '#FFA405',
+    L = '#003380',
+    M = '#C20088',
+    N = '#9DCC00',
+    O = '#8F7C00',
+    P = '#94FFB5',
+    Q = '#94FFB5',
+    R = '#FFCC99',
+    S = '#2BCE48',
+    T = '#005C31',
+    U = '#191919',
+    V = '#4C005C',
+    W = '#993F00',
+    X = '#0075DC',
+    Y = '#F0A3FF',
+    Z = '#000000'
+  )
+}
+
+treevis_site_state_palette <- function(characters) {
+  states <- sort(unique(as.character(characters)))
+  states <- states[!is.na(states) & nzchar(states)]
+  if (length(states) == 0) {
+    return(c())
+  }
+  colors <- scales::hue_pal()(length(states))
+  names(colors) <- states
+  colors
+}
+
+treevis_should_wrap_site_axis_label <- function(label, selected_sites) {
+  label <- as.character(label)
+  if (length(label) == 0 || is.na(label[[1]])) {
+    return(FALSE)
+  }
+  label <- trimws(paste(label, collapse = " "))
+  if (!nzchar(label) || grepl("\n", label, fixed = TRUE)) {
+    return(FALSE)
+  }
+  num_sites <- length(selected_sites[!is.na(selected_sites)])
+  site_panel_width <- max(0.32, 0.09 * num_sites)
+  nchar(label, type = "chars") > (site_panel_width * 35)
+}
+
+treevis_axis_label <- function(label) {
+  label <- as.character(label)
+  if (length(label) == 0 || is.na(label[[1]])) {
+    return("")
+  }
+  trimws(paste(label, collapse = " "))
+}
+
+add_symbol_site_column <- function(g, args, tidy_site, selected_sites, qname, xlab, fill_values = NULL, wrap_xlab = NULL) {
+  df_tip <- get_df_tip(g[["tree"]])[, c("label", "branch_id")]
+  tidy_site <- merge(tidy_site, df_tip, by.x = "name", by.y = "label", all.x = TRUE)
+  tidy_site[["name"]] <- factor(tidy_site[["name"]], levels = df_tip[["label"]])
+  tidy_site[["character"]] <- as.character(tidy_site[["character"]])
+  text_size <- treevis_text_size(args)
+  fill_layer <- if (is.null(fill_values)) {
+    scale_fill_discrete(na.value = "white", guide = "none")
+  } else {
+    scale_fill_manual(values = fill_values, na.value = "white", guide = "none")
+  }
+  if (is.null(wrap_xlab)) {
+    wrap_xlab <- treevis_should_wrap_site_axis_label(xlab, selected_sites)
+  }
+  axis_label <- if (isTRUE(wrap_xlab)) treevis_wrap_axis_label(xlab, width = 14) else treevis_axis_label(xlab)
+  axis_title_size <- if (isTRUE(wrap_xlab)) args[["font_size"]] * 0.82 else args[["font_size"]]
+  axis_title_lineheight <- if (isTRUE(wrap_xlab)) 0.78 else 0.9
+  g[[qname]] <- ggplot() +
+    geom_blank(data = df_tip, aes(y = label)) +
+    geom_tile(
+      data = tidy_site,
+      aes(x = position, y = name, fill = character),
+      color = "grey80",
+      linewidth = 0.1
+    ) +
+    geom_text(
+      data = tidy_site,
+      aes(x = position, y = name, label = character),
+      size = text_size,
+      color = "black"
+    ) +
+    fill_layer +
+    scale_x_continuous(
+      breaks = seq_along(selected_sites),
+      labels = selected_sites
+    ) +
+    xlab(axis_label) +
+    theme(
+      axis.title.y        = element_blank(),
+      axis.title.x        = element_text(size = axis_title_size, lineheight = axis_title_lineheight),
+      axis.text.x         = element_text(angle = 90, hjust = 1, vjust = 0.5, color = "black", size = args[["font_size"]]),
+      axis.ticks.x        = element_blank(),
+      axis.line.x         = element_blank(),
+      axis.text.y         = element_blank(),
+      axis.ticks.y        = element_blank(),
+      axis.line.y         = element_blank(),
+      panel.grid.major.y  = element_blank(),
+      rect                = element_blank(),
+      plot.margin         = unit(args[["margins"]] / 4, "cm")
+    )
+  g
+}
+
 add_amino_acid_site_column <- function(g, args, tidy_aln, selected_amino_acid_sites, qname = "amino_acid_site", xlab = "Amino acid position (aa)") {
   cat(as.character(Sys.time()), "Adding amino acid site column:", qname, "\n")
   qname <- as.character(qname)
@@ -1181,33 +1333,16 @@ add_amino_acid_site_column <- function(g, args, tidy_aln, selected_amino_acid_si
     cat("Amino acid site list is empty. amino_acid_site column will not be added.\n")
     return(g)
   }
-  df_tip <- get_df_tip(g[["tree"]])[,c('label','branch_id')]
   tidy_site <- extract_alignment_sites(tidy_aln, selected_amino_acid_sites)
-  tidy_site <- merge(tidy_site, df_tip, by.x = "name", by.y = "label", all.x = TRUE)
-  tidy_site[["name"]] <- factor(tidy_site[["name"]], levels = df_tip[["label"]])
-    g[[qname]] <- ggplot() + 
-    geom_blank(data = df_tip, aes(y = label)) + 
-    ggmsa::geom_msa(data = tidy_site, color = "LETTER") +
-    scale_x_continuous(
-        breaks = 1:length(selected_amino_acid_sites),
-        labels = selected_amino_acid_sites
-    ) +
-    xlab(xlab) +
-    theme(
-        axis.title.y        = element_blank(),
-        axis.title.x        = element_text(size = args[["font_size"]]),
-        axis.text.x         = element_text(angle = 90, hjust = 1, vjust = 0.5, color = 'black', size = args[["font_size"]]),
-        axis.ticks.x        = element_blank(),
-        axis.line.x         = element_blank(),
-        axis.text.y         = element_blank(),
-        axis.ticks.y        = element_blank(),
-        axis.line.y         = element_blank(), 
-        panel.grid.major.y  = element_blank(),
-        rect                = element_blank(),
-        plot.margin         = unit(args[["margins"]] / 4, "cm")
-    )
-  
-  g
+  add_symbol_site_column(
+    g = g,
+    args = args,
+    tidy_site = tidy_site,
+    selected_sites = selected_amino_acid_sites,
+    qname = qname,
+    xlab = xlab,
+    fill_values = treevis_ggmsa_letter_palette()
+  )
 }
 
 add_site_state_column <- function(g, args, tidy_aln, selected_sites, qname = "site_state", xlab = "Site state") {
@@ -1221,43 +1356,14 @@ add_site_state_column <- function(g, args, tidy_aln, selected_sites, qname = "si
     cat("Site-state list is empty. site_state column will not be added.\n")
     return(g)
   }
-  df_tip <- get_df_tip(g[["tree"]])[,c("label", "branch_id")]
   tidy_site <- extract_alignment_sites(tidy_aln, selected_sites)
-  tidy_site <- merge(tidy_site, df_tip, by.x = "name", by.y = "label", all.x = TRUE)
-  tidy_site[["name"]] <- factor(tidy_site[["name"]], levels = df_tip[["label"]])
-  site_state_text_size <- args[["font_size"]] * 0.9
-  g[[qname]] <- ggplot() +
-    geom_blank(data = df_tip, aes(y = label)) +
-    geom_tile(
-      data = tidy_site,
-      aes(x = position, y = name, fill = character),
-      color = "grey80",
-      linewidth = 0.1
-    ) +
-    geom_text(
-      data = tidy_site,
-      aes(x = position, y = name, label = character),
-      size = site_state_text_size,
-      color = "black"
-    ) +
-    scale_fill_discrete(na.value = "white", guide = "none") +
-    scale_x_continuous(
-      breaks = seq_along(selected_sites),
-      labels = selected_sites
-    ) +
-    xlab(xlab) +
-    theme(
-      axis.title.y        = element_blank(),
-      axis.title.x        = element_text(size = args[["font_size"]]),
-      axis.text.x         = element_text(angle = 90, hjust = 1, vjust = 0.5, color = "black", size = args[["font_size"]]),
-      axis.ticks.x        = element_blank(),
-      axis.line.x         = element_blank(),
-      axis.text.y         = element_blank(),
-      axis.ticks.y        = element_blank(),
-      axis.line.y         = element_blank(),
-      panel.grid.major.y  = element_blank(),
-      rect                = element_blank(),
-      plot.margin         = unit(args[["margins"]] / 4, "cm")
-    )
-  g
+  add_symbol_site_column(
+    g = g,
+    args = args,
+    tidy_site = tidy_site,
+    selected_sites = selected_sites,
+    qname = qname,
+    xlab = xlab,
+    fill_values = treevis_site_state_palette(tidy_site[["character"]])
+  )
 }

@@ -7,4 +7,4 @@ Depends: R (>= 3.4.1)
 License: BSD 3-Clause License
 Encoding: UTF-8
 LazyData: true
-Imports: ape, colorspace, ggmsa, ggplot2, ggrepel, ggtree, grid, RColorBrewer, rkftools, scales, viridis, rlang
+Imports: ape, colorspace, ggplot2, ggrepel, ggtree, grid, RColorBrewer, rkftools, scales, viridis, rlang

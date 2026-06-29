@@ -16,6 +16,46 @@ get_df_tip = function(g) {
     return(df_tip)
 }
 
+treevis_font_size_factor <- function(args) {
+    factor <- suppressWarnings(as.numeric(args[['font_size_factor']]))
+    if (!is.finite(factor) || is.na(factor) || (factor <= 0)) {
+        factor <- 0.352777778
+    }
+    factor
+}
+
+treevis_text_size <- function(args, scale = 1) {
+    font_size <- suppressWarnings(as.numeric(args[['font_size']]))
+    if (!is.finite(font_size) || is.na(font_size) || (font_size <= 0)) {
+        font_size <- 6
+    }
+    font_size * treevis_font_size_factor(args) * scale
+}
+
+treevis_wrap_axis_label <- function(label, width = 12) {
+    label <- as.character(label)
+    if (length(label) == 0 || is.na(label[[1]])) {
+        return('')
+    }
+    label <- trimws(paste(label, collapse = ' '))
+    if (!nzchar(label)) {
+        return('')
+    }
+    parts <- strsplit(label, '\n', fixed = TRUE)[[1]]
+    wrapped_parts <- unlist(lapply(parts, function(part) {
+        part <- trimws(part)
+        if (!nzchar(part)) {
+            return('')
+        }
+        wrapped <- strwrap(part, width = width, simplify = TRUE)
+        if (length(wrapped) == 0) {
+            return(part)
+        }
+        wrapped
+    }), use.names = FALSE)
+    paste(wrapped_parts, collapse = '\n')
+}
+
 treevis_taxonomic_genus_only_placeholders <- c("sp", "spp")
 treevis_taxonomic_proximity_qualifiers <- c("cf", "aff", "nr")
 treevis_taxonomic_hybrid_connectors <- c("x", "\u00d7", "hybrid")
@@ -369,7 +409,7 @@ get_rel_widths = function(g, args_rel_widths) {
             built_plot <- ggplot_build(g[[gname]])
             xmax = built_plot$layout$panel_scales_x[[1]]$range$range[2]
             num_amino_acid_site = floor(xmax) - 1
-            rel_widths[gname] = 0.09 * num_amino_acid_site
+            rel_widths[gname] = max(0.32, 0.09 * num_amino_acid_site)
         } else if (grepl('^ortholog,', gname)) {
             rel_widths[gname] = 0.7
         } else {

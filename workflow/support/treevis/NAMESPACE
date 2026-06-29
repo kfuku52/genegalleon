@@ -2,7 +2,6 @@
 exportPattern("^[^\\.]")
 import(ape)
 import(colorspace)
-import(ggmsa)
 import(ggplot2)
 import(ggrepel)
 import(ggtree)

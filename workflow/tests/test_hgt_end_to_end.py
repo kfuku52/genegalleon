@@ -63,50 +63,6 @@ def _install_stub_ggimage(tmp_path: Path) -> Path:
     return lib_dir
 
 
-def _install_stub_ggmsa(tmp_path: Path) -> Path:
-    lib_dir = tmp_path / "r_stub_lib"
-    src_dir = tmp_path / "ggmsa_stub"
-    r_dir = src_dir / "R"
-    r_dir.mkdir(parents=True, exist_ok=True)
-    (src_dir / "DESCRIPTION").write_text(
-        "\n".join(
-            [
-                "Package: ggmsa",
-                "Type: Package",
-                "Title: Stub ggmsa for workflow integration tests",
-                "Version: 0.0.0.9000",
-                "Authors@R: person('Codex', 'Stub', email = 'stub@example.com', role = c('aut', 'cre'))",
-                "Description: Minimal stub package providing geom_msa so alignment panels render during integration tests.",
-                "License: MIT",
-                "Encoding: UTF-8",
-                "Imports: ggplot2",
-                "LazyData: true",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    (src_dir / "NAMESPACE").write_text("export(geom_msa)\nimportFrom(ggplot2, geom_blank)\n", encoding="utf-8")
-    (r_dir / "stub.R").write_text(
-        "\n".join(
-            [
-                "geom_msa <- function(data = NULL, color = NULL, ...) {",
-                "  ggplot2::geom_blank(data = data, ...)",
-                "}",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    lib_dir.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(
-        ["R", "CMD", "INSTALL", "-l", str(lib_dir), str(src_dir)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode == 0, completed.stderr
-    return lib_dir
-
-
 def _install_fake_conda(tmp_path: Path) -> Path:
     bin_dir = tmp_path / "fake_conda_bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -423,7 +379,6 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     workspace = tmp_path / "workspace"
     _write_workspace_fixture(workspace)
     stub_lib = _install_stub_ggimage(tmp_path)
-    _install_stub_ggmsa(tmp_path)
     fake_conda_bin = _install_fake_conda(tmp_path)
 
     env = {

@@ -369,10 +369,13 @@ propagate_tiplab_colors_to_internal_branches = function(gtree, tree) {
         if (length(child_idx) == 0) {
             next
         }
-        colors = unique(desc_color[child_idx])
-        colors = colors[!is.na(colors) & nzchar(colors) & !(colors %in% c('#000000', 'black'))]
-        if (length(colors) == 1) {
-            desc_color[ri] = colors[1]
+        child_colors = desc_color[child_idx]
+        valid_child_color = !is.na(child_colors) & nzchar(child_colors) & !(child_colors %in% c('#000000', 'black'))
+        if (length(child_colors) > 0 && all(valid_child_color)) {
+            colors = unique(child_colors)
+            if (length(colors) == 1) {
+                desc_color[ri] = colors[1]
+            }
         }
     }
     can_update = (!dat[['isTip']]) & is_black & !is.na(desc_color)

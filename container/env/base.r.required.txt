@@ -2,7 +2,6 @@
 r-base
 r-ape
 r-aplot
-bioconductor-ggmsa
 r-cowplot
 r-grplasso
 r-ggimage
