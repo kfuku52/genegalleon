@@ -1257,7 +1257,7 @@ treevis_should_wrap_site_axis_label <- function(label, selected_sites) {
     return(FALSE)
   }
   num_sites <- length(selected_sites[!is.na(selected_sites)])
-  site_panel_width <- max(0.32, 0.09 * num_sites)
+  site_panel_width <- treevis_site_panel_width(num_sites)
   nchar(label, type = "chars") > (site_panel_width * 35)
 }
 
@@ -1284,8 +1284,9 @@ add_symbol_site_column <- function(g, args, tidy_site, selected_sites, qname, xl
     wrap_xlab <- treevis_should_wrap_site_axis_label(xlab, selected_sites)
   }
   axis_label <- if (isTRUE(wrap_xlab)) treevis_wrap_axis_label(xlab, width = 14) else treevis_axis_label(xlab)
-  axis_title_size <- if (isTRUE(wrap_xlab)) args[["font_size"]] * 0.82 else args[["font_size"]]
+  axis_title_size <- args[["font_size"]]
   axis_title_lineheight <- if (isTRUE(wrap_xlab)) 0.78 else 0.9
+  plot_margins <- args[["margins"]] / 4
   g[[qname]] <- ggplot() +
     geom_blank(data = df_tip, aes(y = label)) +
     geom_tile(
@@ -1317,7 +1318,7 @@ add_symbol_site_column <- function(g, args, tidy_site, selected_sites, qname, xl
       axis.line.y         = element_blank(),
       panel.grid.major.y  = element_blank(),
       rect                = element_blank(),
-      plot.margin         = unit(args[["margins"]] / 4, "cm")
+      plot.margin         = unit(plot_margins, "cm")
     )
   g
 }

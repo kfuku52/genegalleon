@@ -56,6 +56,14 @@ treevis_wrap_axis_label <- function(label, width = 12) {
     paste(wrapped_parts, collapse = '\n')
 }
 
+treevis_site_panel_width <- function(num_sites) {
+    num_sites <- suppressWarnings(as.numeric(num_sites))
+    if (!is.finite(num_sites) || is.na(num_sites) || (num_sites < 0)) {
+        num_sites <- 0
+    }
+    max(0.45, 0.09 * num_sites)
+}
+
 treevis_taxonomic_genus_only_placeholders <- c("sp", "spp")
 treevis_taxonomic_proximity_qualifiers <- c("cf", "aff", "nr")
 treevis_taxonomic_hybrid_connectors <- c("x", "\u00d7", "hybrid")
@@ -409,7 +417,7 @@ get_rel_widths = function(g, args_rel_widths) {
             built_plot <- ggplot_build(g[[gname]])
             xmax = built_plot$layout$panel_scales_x[[1]]$range$range[2]
             num_amino_acid_site = floor(xmax) - 1
-            rel_widths[gname] = max(0.32, 0.09 * num_amino_acid_site)
+            rel_widths[gname] = treevis_site_panel_width(num_amino_acid_site)
         } else if (grepl('^ortholog,', gname)) {
             rel_widths[gname] = 0.7
         } else {

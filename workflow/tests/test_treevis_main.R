@@ -93,7 +93,7 @@ dummy_site_state_plot <- ggplot(data.frame(x = c(1, 2, 3), y = c(1, 1, 1))) +
 g_state <- list(tree = ggplot(), site_state_dayhoff6 = dummy_site_state_plot)
 w_state <- get_rel_widths(g_state, "")
 if (!("site_state_dayhoff6" %in% names(w_state))) stop("get_rel_widths missing recoded site-state key.")
-expected_site_state_width <- 0.32 / (1.5 + 0.32)
+expected_site_state_width <- treevis_site_panel_width(3) / (1.5 + treevis_site_panel_width(3))
 if (abs(unname(w_state["site_state_dayhoff6"]) - expected_site_state_width) > 1e-9) stop("get_rel_widths did not size recoded site-state panel.")
 
 # 2c) treevis_wrap_axis_label: long site-panel axis labels are wrapped at word boundaries.
@@ -143,6 +143,8 @@ site_state_text_size <- g_site_state_out[["site_state_dayhoff6"]][["layers"]][[3
 expected_text_size <- args_site_state[["font_size"]] * args_site_state[["font_size_factor"]]
 if (abs(site_state_text_size - expected_text_size) > 1e-9) stop("add_site_state_column should use ggplot text-size units for recoded symbols.")
 if (!grepl("\n", g_site_state_out[["site_state_dayhoff6"]][["labels"]][["x"]], fixed = TRUE)) stop("add_site_state_column should wrap long x-axis labels.")
+site_state_axis_title_size <- g_site_state_out[["site_state_dayhoff6"]][["theme"]][["axis.title.x"]][["size"]]
+if (abs(site_state_axis_title_size - args_site_state[["font_size"]]) > 1e-9) stop("add_site_state_column should keep the standard x-axis title size.")
 invisible(ggplot_build(g_site_state_out[["site_state_dayhoff6"]]))
 
 g_amino_site_out <- add_amino_acid_site_column(
@@ -157,6 +159,8 @@ if (!("amino_acid_site" %in% names(g_amino_site_out))) stop("add_amino_acid_site
 amino_text_size <- g_amino_site_out[["amino_acid_site"]][["layers"]][[3]][["aes_params"]][["size"]]
 if (abs(amino_text_size - site_state_text_size) > 1e-9) stop("Amino-acid and site-state panels should use the same text size.")
 if (!grepl("\n", g_amino_site_out[["amino_acid_site"]][["labels"]][["x"]], fixed = TRUE)) stop("add_amino_acid_site_column should wrap narrow x-axis labels.")
+amino_axis_title_size <- g_amino_site_out[["amino_acid_site"]][["theme"]][["axis.title.x"]][["size"]]
+if (abs(amino_axis_title_size - args_site_state[["font_size"]]) > 1e-9) stop("add_amino_acid_site_column should keep the standard x-axis title size.")
 amino_site_built <- ggplot_build(g_amino_site_out[["amino_acid_site"]])
 amino_tile_fill <- amino_site_built[["data"]][[2]][["fill"]]
 if (!("#FF5005" %in% amino_tile_fill)) stop("add_amino_acid_site_column should use the ggmsa LETTER palette.")
