@@ -2615,6 +2615,13 @@ def test_orthogroup_statistics_handles_ete4_root_support_assertion_on_reroot():
     assert "clear_root_branch_property_compat(tree, 'dist')" in text
 
 
+def test_orthogroup_statistics_skips_unrooted_annotation_transfer_failures():
+    script = WORKFLOW_DIR / "support" / "orthogroup_statistics.py"
+    text = _read_text(script)
+    assert "Failed to transfer unrooted-tree branch annotations to the rooted tree" in text
+    assert "Leaving support_unrooted and bl_unrooted as NA" in text
+
+
 def test_orthogroup_statistics_skips_invalid_regime2tree_summary_instead_of_aborting():
     script = WORKFLOW_DIR / "support" / "orthogroup_statistics.py"
     text = _read_text(script)

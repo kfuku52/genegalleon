@@ -1190,16 +1190,23 @@ def main():
         df_tmp.loc[:,'support_unrooted'] = numpy.nan
         df_tmp.loc[:,'bl_unrooted'] = numpy.nan
         unrooted = new_unrooted_tree(params['unrooted_tree'])
-        unrooted = transfer_root(tree_to=unrooted, tree_from=rooted_tree)
-        unrooted = annotate_clade_signatures(unrooted)
-        unrooted_by_clade = {unode.props.get('clade_sig'): unode for unode in unrooted.traverse()}
-        for rnode in rooted_tree.traverse():
-            unode = unrooted_by_clade.get(rnode.props.get('clade_sig'))
-            if unode is not None:
-                df_tmp.at[get_node_label(rnode), 'bl_unrooted'] = unode.dist
-                support = getattr(unode, "support", None)
-                if support is not None and support != 1.0:
-                    df_tmp.at[get_node_label(rnode), 'support_unrooted'] = support
+        try:
+            unrooted = transfer_root(tree_to=unrooted, tree_from=rooted_tree)
+            unrooted = annotate_clade_signatures(unrooted)
+            unrooted_by_clade = {unode.props.get('clade_sig'): unode for unode in unrooted.traverse()}
+            for rnode in rooted_tree.traverse():
+                unode = unrooted_by_clade.get(rnode.props.get('clade_sig'))
+                if unode is not None:
+                    df_tmp.at[get_node_label(rnode), 'bl_unrooted'] = unode.dist
+                    support = getattr(unode, "support", None)
+                    if support is not None and support != 1.0:
+                        df_tmp.at[get_node_label(rnode), 'support_unrooted'] = support
+        except Exception as exc:
+            print(
+                'Warning: Failed to transfer unrooted-tree branch annotations to the rooted tree. '
+                f'Leaving support_unrooted and bl_unrooted as NA: {exc}',
+                file=sys.stderr,
+            )
         subroot_nodes = rooted_tree.get_children()
         subroot_nlabels = [get_node_label(n) for n in subroot_nodes]
         is_subroot_support = ~df_tmp.loc[subroot_nlabels,'support_unrooted'].isna()
