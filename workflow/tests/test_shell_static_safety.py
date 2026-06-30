@@ -2360,6 +2360,18 @@ def test_gene_evolution_core_quotes_nwkit_subtree_leaves_argument():
     assert 'run_nwkit_subtree "${subtree_infile}"' in text
 
 
+def test_gene_evolution_core_falls_back_to_tree_backed_query_blast_seed():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    assert "Query IDs absent from the tree will be replaced by their best tree-backed query BLAST hit." in text
+    assert "tree_leaves = parse_newick_leaves(tree_path)" in text
+    assert "best_hits = best_tree_backed_hits(query_blast_path, tree_leaves)" in text
+    assert 'sacc not in leaves' in text
+    assert "rank = (evalue, -bitscore, row_index)" in text
+    assert "using best tree-backed " in text
+    assert "query BLAST hit {seed}" in text
+
+
 def test_gene_evolution_core_uses_array_optional_args_for_iqtree_and_csubst():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)

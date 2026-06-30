@@ -2026,14 +2026,11 @@ if [[ (! -s "${file_og_orthogroup_extraction_nwk}" || ! -s "${file_og_orthogroup
   gg_step_start "${task}"
 
   if [[ "$(head -c 1 "${file_query_gene}")" == ">" ]]; then
-    echo "Fasta format was detected. Running run_orthogroup_extraction but gene names in the input fasta may not be compatible with this task."
-    comma_separated_genes=$(awk '/^>/ {sub(/^>/, "", $0); sub(/[[:space:]].*$/, "", $0); gsub(/−/, "-", $0); print}' "${file_query_gene}" | paste -sd, -)
+    echo "Fasta format was detected. Query IDs absent from the tree will be replaced by their best tree-backed query BLAST hit."
   else
     echo "Gene IDs were detected."
     cp_out "${file_query_gene}" "${dir_output_active}/query_gene/$(basename "${file_query_gene}")"
-    comma_separated_genes=$(tr '\n' ',' < "${file_query_gene}" | sed -e 's/,$//' | tr '−' '-')
   fi
-  echo "Seed genes for orthogroup extraction: ${comma_separated_genes}"
 
   run_nwkit_subtree() {
     local infile=$1
@@ -2060,6 +2057,159 @@ if [[ (! -s "${file_og_orthogroup_extraction_nwk}" || ! -s "${file_og_orthogroup
       exit 1
     fi
   fi
+  comma_separated_genes=$(
+    python - "${file_query_gene}" "${file_og_query_blast:-}" "${subtree_infiles[0]}" << 'PY'
+import csv
+import math
+import os
+import sys
+
+query_gene_path = sys.argv[1]
+query_blast_path = sys.argv[2]
+tree_path = sys.argv[3]
+
+
+def normalize_id(value):
+    return value.strip().replace("−", "-")
+
+
+def parse_query_ids(path):
+    query_ids = []
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        first_char = handle.read(1)
+        handle.seek(0)
+        if first_char == ">":
+            for line in handle:
+                if not line.startswith(">"):
+                    continue
+                query_id = normalize_id(line[1:].split()[0])
+                if query_id:
+                    query_ids.append(query_id)
+        else:
+            for line in handle:
+                query_id = normalize_id(line)
+                if query_id:
+                    query_ids.append(query_id)
+    return query_ids
+
+
+def parse_newick_leaves(path):
+    text = open(path, "r", encoding="utf-8", errors="replace").read()
+    leaves = set()
+    index = 0
+    while index < len(text):
+        if text[index] not in "(,":
+            index += 1
+            continue
+        index += 1
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text) or text[index] == ")":
+            continue
+        if text[index] == "'":
+            index += 1
+            token = []
+            while index < len(text):
+                char = text[index]
+                if char == "'":
+                    if index + 1 < len(text) and text[index + 1] == "'":
+                        token.append("'")
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                token.append(char)
+                index += 1
+            label = "".join(token)
+        else:
+            start = index
+            while index < len(text) and text[index] not in ":,();":
+                index += 1
+            label = text[start:index]
+        label = normalize_id(label)
+        if label:
+            leaves.add(label)
+    return leaves
+
+
+def to_float(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def best_tree_backed_hits(path, leaves):
+    best = {}
+    if not path or not os.path.exists(path):
+        return best
+    with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for row_index, row in enumerate(reader):
+            qacc = normalize_id(row.get("qacc", ""))
+            sacc = normalize_id(row.get("sacc", ""))
+            if not qacc or not sacc or sacc not in leaves:
+                continue
+            evalue = to_float(row.get("min_evalue") or row.get("evalue"), math.inf)
+            bitscore = to_float(row.get("max_bitscore") or row.get("bitscore"), -math.inf)
+            rank = (evalue, -bitscore, row_index)
+            current = best.get(qacc)
+            if current is None or rank < current["rank"]:
+                best[qacc] = {
+                    "sacc": sacc,
+                    "evalue": evalue,
+                    "bitscore": bitscore,
+                    "rank": rank,
+                }
+    return best
+
+
+query_ids = parse_query_ids(query_gene_path)
+tree_leaves = parse_newick_leaves(tree_path)
+best_hits = best_tree_backed_hits(query_blast_path, tree_leaves)
+resolved = []
+seen = set()
+
+for query_id in query_ids:
+    if query_id in tree_leaves:
+        seed = query_id
+    elif query_id in best_hits:
+        hit = best_hits[query_id]
+        seed = hit["sacc"]
+        print(
+            "Orthogroup extraction seed fallback: "
+            f"query {query_id} was not found in the tree; using best tree-backed "
+            f"query BLAST hit {seed} (evalue={hit['evalue']}, bitscore={hit['bitscore']}).",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "Warning: Orthogroup extraction seed skipped because neither the query "
+            f"nor a tree-backed query BLAST hit was found: {query_id}",
+            file=sys.stderr,
+        )
+        continue
+    if seed in seen:
+        print(
+            f"Orthogroup extraction seed duplicate skipped: {seed} "
+            f"(from query {query_id}).",
+            file=sys.stderr,
+        )
+        continue
+    seen.add(seed)
+    resolved.append(seed)
+
+if not resolved:
+    print(
+        "No orthogroup extraction seed genes were found in the rooted tree. Exiting.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+print(",".join(resolved))
+PY
+  )
+  echo "Seed genes for orthogroup extraction: ${comma_separated_genes}"
 
   printf 'num_leaf\tfile\n' > tmp_num_leaf.tsv
   for subtree_infile in "${subtree_infiles[@]}"; do
