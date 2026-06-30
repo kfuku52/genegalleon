@@ -578,6 +578,7 @@ file_og_clipkit_log="${dir_output_active}/clipkit_log/${og_id}_cds.clipkit.log"
 file_og_iqtree_tree="${dir_output_active}/iqtree_tree/${og_id}_iqtree.nwk"
 file_og_iqtree_generax_ufboot="${dir_output_active}/generax_ufboot_tree/${og_id}_generax.ufboot.nwk"
 file_og_orthogroup_extraction_nwk="${dir_output_active}/orthogroup_extraction_nwk/${og_id}_orthogroup_extraction.nwk"
+file_og_orthogroup_extraction_rooted_nwk="${dir_output_active}/orthogroup_extraction_rooted_nwk/${og_id}_orthogroup_extraction.rooted.nwk"
 file_og_orthogroup_extraction_fasta="${dir_output_active}/orthogroup_extraction_fasta/${og_id}_orthogroup_extraction.fa.gz"
 file_og_generax_nhx="${dir_output_active}/generax_tree/${og_id}_generax.nhx"
 file_og_generax_nwk="${dir_output_active}/generax_nwk/${og_id}_generax.nwk"
@@ -2022,7 +2023,7 @@ fi
 task="Orthogroup extraction with NWKIT"
 run_orthogroup_extraction_original="${run_orthogroup_extraction}" # This variable may be disabled by disable_if_no_input_file but the original value is necessary to properly update file_og_*_analysis
 disable_if_no_input_file "run_orthogroup_extraction" "${file_query_gene:-}" "${file_og_trimmed_aln_analysis}" "${file_og_rooted_tree_analysis}"
-if [[ (! -s "${file_og_orthogroup_extraction_nwk}" || ! -s "${file_og_orthogroup_extraction_fasta}") && ${run_orthogroup_extraction} -eq 1 ]]; then
+if [[ (! -s "${file_og_orthogroup_extraction_nwk}" || ! -s "${file_og_orthogroup_extraction_rooted_nwk}" || ! -s "${file_og_orthogroup_extraction_fasta}") && ${run_orthogroup_extraction} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ "$(head -c 1 "${file_query_gene}")" == ">" ]]; then
@@ -2257,7 +2258,7 @@ PY
     --seqout /dev/null \
     --match "complete"
   mv_out "${og_id}.orthogroup_extraction.tmp.nwk" "${file_og_orthogroup_extraction_nwk}"
-  rm -f -- "${og_id}.orthogroup_seed.tmp.nwk"
+  mv_out "${og_id}.orthogroup_seed.tmp.nwk" "${file_og_orthogroup_extraction_rooted_nwk}"
 
   if [[ "${input_sequence_mode}" == "protein" ]]; then
     seqkit seq --threads "${GG_TASK_CPUS}" tmp.fasta --out-file "${og_id}.orthogroup_extraction.tmp.fasta"
@@ -2270,8 +2271,9 @@ PY
 else
   gg_step_skip "${task}"
 fi
-if [[ ${run_orthogroup_extraction_original} -eq 1 && -s "${file_og_orthogroup_extraction_nwk}" && -s "${file_og_orthogroup_extraction_fasta}" ]]; then
+if [[ ${run_orthogroup_extraction_original} -eq 1 && -s "${file_og_orthogroup_extraction_nwk}" && -s "${file_og_orthogroup_extraction_rooted_nwk}" && -s "${file_og_orthogroup_extraction_fasta}" ]]; then
   set_analysis_file unrooted_tree "${file_og_orthogroup_extraction_nwk}"
+  set_analysis_file rooted_tree "${file_og_orthogroup_extraction_rooted_nwk}"
   set_analysis_file trimmed_aln "${file_og_orthogroup_extraction_fasta}"
 fi
 

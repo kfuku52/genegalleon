@@ -2372,6 +2372,15 @@ def test_gene_evolution_core_falls_back_to_tree_backed_query_blast_seed():
     assert "query BLAST hit {seed}" in text
 
 
+def test_gene_evolution_core_routes_extracted_rooted_tree_to_downstream_analysis():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    assert "file_og_orthogroup_extraction_rooted_nwk=" in text
+    assert '! -s "${file_og_orthogroup_extraction_rooted_nwk}"' in text
+    assert 'mv_out "${og_id}.orthogroup_seed.tmp.nwk" "${file_og_orthogroup_extraction_rooted_nwk}"' in text
+    assert 'set_analysis_file rooted_tree "${file_og_orthogroup_extraction_rooted_nwk}"' in text
+
+
 def test_gene_evolution_core_uses_array_optional_args_for_iqtree_and_csubst():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
