@@ -1280,7 +1280,6 @@ memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
 memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
 iqtree_full_mem_args=(-mem "${GG_MEM_TOOL_GB}G")
 iqtree_parallel_mem_args=(-mem "${memory_iqtree_parallel}G")
-astral_mem_args=("-Xmx${GG_MEM_TOOL_GB}g")
 
 ensure_dir "${dir_species_tree_summary}"
 ensure_dir "${dir_tmp}"
@@ -2419,7 +2418,6 @@ if [[ (! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}") && ${run
     echo "Skipped. No eligible protein gene trees for ASTRAL after filtering."
   else
     astral-hybrid \
-      "${astral_mem_args[@]}" \
       --input "tmp.astral.merged.iqtree.nwk" \
       --output "tmp.astral.out.tree" \
       --mode 3 \
@@ -2547,7 +2545,6 @@ if [[ (! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}") && ${run
     echo "Skipped. No eligible DNA gene trees for ASTRAL after filtering."
   else
     astral-hybrid \
-      "${astral_mem_args[@]}" \
       --input "tmp.astral.merged.iqtree.nwk" \
       --output "tmp.astral.out.tree" \
       --mode 3 \
