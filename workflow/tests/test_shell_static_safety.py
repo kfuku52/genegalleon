@@ -1446,8 +1446,13 @@ def test_gene_evolution_supports_auto_query_blast_evalue_by_query_length():
         'resolve_query_blast_evalue "${query_blast_evalue}" "${query_aa_local}" "${query_blast_auto_evalue_maxlen_cutoffs}"'
         in core
     )
+    assert "prepare_synteny_evalue_fasta() {" in core
+    assert 'resolve_query_blast_evalue "${query_blast_evalue}" "${synteny_evalue_query_fasta}" "${query_blast_auto_evalue_maxlen_cutoffs}"' in core
+    assert 'synteny_evalue="${effective_query_blast_evalue}"' in core
     assert '-evalue "${effective_query_blast_evalue}"' in core
     assert '--evalue "${effective_query_blast_evalue}"' in core
+    assert '--evalue "${synteny_evalue}"' in core
+    assert '--evalue "${query_blast_evalue}"' not in core
 
 
 def test_genome_evolution_places_run_cds_translation_before_dependent_run_flags():

@@ -130,6 +130,25 @@ resolve_query_blast_evalue() {
   fi
 }
 
+prepare_synteny_evalue_fasta() {
+  local outfile="$1"
+
+  if [[ -s "${file_og_query_aa_fasta}" ]]; then
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_query_aa_fasta}" --out-file "${outfile}"
+    return
+  fi
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${outfile}"
+    return
+  fi
+  seqkit translate \
+    --allow-unknown-codon \
+    --transl-table "${genetic_code}" \
+    --threads "${GG_TASK_CPUS}" \
+    "${file_og_primary_fasta}" \
+    --out-file "${outfile}"
+}
+
 binarize_species_trait() {
   local file_in="$1"
   local file_out="$2"
@@ -3561,6 +3580,23 @@ if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tr
     elif [[ ! -s "${file_og_primary_fasta}" ]]; then
       echo "Focal sequence fasta file not found. Skipping synteny panel input generation: ${file_og_primary_fasta}"
     else
+      synteny_evalue="${query_blast_evalue}"
+      if [[ "$(printf '%s' "${query_blast_evalue}" | tr '[:upper:]' '[:lower:]')" == "auto" ]]; then
+        synteny_evalue_query_fasta="${og_id}.synteny.evalue.aa.tmp.fasta"
+        if ! prepare_synteny_evalue_fasta "${synteny_evalue_query_fasta}"; then
+          rm -f -- "${synteny_evalue_query_fasta}"
+          echo "Failed to prepare amino-acid FASTA for synteny query_blast_evalue=auto: ${file_og_primary_fasta}"
+          exit 1
+        fi
+        if ! resolve_query_blast_evalue "${query_blast_evalue}" "${synteny_evalue_query_fasta}" "${query_blast_auto_evalue_maxlen_cutoffs}"; then
+          rm -f -- "${synteny_evalue_query_fasta}"
+          exit 1
+        fi
+        synteny_evalue="${effective_query_blast_evalue}"
+        echo "synteny auto E-value: query_count=${query_blast_query_num_seqs} min_aa_len=${query_blast_query_min_aa_len} avg_aa_len=${query_blast_query_avg_aa_len} max_aa_len=${query_blast_query_max_aa_len}"
+        echo "synteny auto E-value: cutoffs=${query_blast_auto_evalue_maxlen_cutoffs} effective_synteny_evalue=${synteny_evalue}"
+        rm -f -- "${synteny_evalue_query_fasta}"
+      fi
       python "${gg_support_dir}/synteny_neighbors.py" \
         --focal_cds_fasta "${file_og_primary_fasta}" \
         --dir_sp_cds "${synteny_source_dir}" \
@@ -3570,7 +3606,7 @@ if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tr
         --gff2genestat_script "${gg_support_dir}/gff2genestat.py" \
         --input_sequence_mode "${synteny_sequence_mode}" \
         --window "${treevis_synteny_window}" \
-        --evalue "${query_blast_evalue}" \
+        --evalue "${synteny_evalue}" \
         --genetic_code "${genetic_code}" \
         --threads "${GG_TASK_CPUS}" \
         --outfile "${file_og_synteny}"
