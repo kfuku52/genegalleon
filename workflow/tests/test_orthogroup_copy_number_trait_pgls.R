@@ -15,17 +15,17 @@ if (is.null(script_path) || nchar(script_path) == 0) {
 resolved_script_path <- normalizePath(script_path, winslash = "/", mustWork = TRUE)
 repo_root <- normalizePath(file.path(dirname(resolved_script_path), "..", ".."), winslash = "/", mustWork = TRUE)
 
-Sys.setenv(GG_CAFE_TRAIT_PGLS_NO_MAIN = "1")
-source(file.path(repo_root, "workflow", "support", "cafe_trait_pgls.r"))
+Sys.setenv(GG_ORTHOGROUP_COPY_NUMBER_TRAIT_PGLS_NO_MAIN = "1")
+source(file.path(repo_root, "workflow", "support", "orthogroup_copy_number_trait_pgls.r"))
 
-tmp <- tempfile("gg_cafe_trait_pgls_")
+tmp <- tempfile("gg_orthogroup_copy_number_trait_pgls_")
 dir.create(tmp, recursive = TRUE)
 on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
 
 tree_file <- file.path(tmp, "tree.nwk")
 writeLines("((sp1:1,sp2:1):1,(sp3:1,sp4:1):1);", tree_file)
 
-cafe_input <- file.path(tmp, "cafe_input.tsv")
+copy_number_file <- file.path(tmp, "orthogroup_copy_number.tsv")
 writeLines(
   c(
     "besthit_0.95\tOrthogroup\tsp1\tsp2\tsp3\tsp4",
@@ -33,7 +33,7 @@ writeLines(
     "hit2\tOG10\t9\t9\t9\t9",
     "hit3\tOG2\t4\t3\t2\t1"
   ),
-  cafe_input
+  copy_number_file
 )
 
 trait_file <- file.path(tmp, "species_trait.tsv")
@@ -49,7 +49,7 @@ writeLines(
 )
 
 tree <- load_tree_normalized(tree_file)
-copy_matrix <- load_cafe_copy_number_matrix(cafe_input, tree, family_ids = "OG1 OG10", max_families = "all")
+copy_matrix <- load_orthogroup_copy_number_matrix(copy_number_file, tree, family_ids = "OG1 OG10", max_families = "all")
 stopifnot(identical(colnames(copy_matrix), c("OG1", "OG10")))
 stopifnot(identical(rownames(copy_matrix), c("sp1", "sp2", "sp3", "sp4")))
 stopifnot(identical(as.numeric(copy_matrix[, "OG1"]), c(1, 2, 3, 4)))
@@ -57,7 +57,7 @@ stopifnot(identical(as.numeric(copy_matrix[, "OG10"]), c(9, 9, 9, 9)))
 
 family_file <- file.path(tmp, "families.tsv")
 writeLines(c("family_id", "OG2"), family_file)
-copy_matrix_file <- load_cafe_copy_number_matrix(cafe_input, tree, family_file = family_file, max_families = "all")
+copy_matrix_file <- load_orthogroup_copy_number_matrix(copy_number_file, tree, family_file = family_file, max_families = "all")
 stopifnot(identical(colnames(copy_matrix_file), "OG2"))
 
 trait <- load_trait_table(trait_file)
@@ -67,13 +67,13 @@ stopifnot(identical(resolve_trait_cols(trait, "height,binary_trait"), c("height"
 mock_phylopars <- function(...) {
   structure(
     list(R2 = 0.8, R2adj = 0.7, sigma = 0.1, Fstat = 10, pval = 0.01, logLik = -2),
-    class = "mock_cafe_phylopars"
+    class = "mock_copy_number_phylopars"
   )
 }
-AIC.mock_cafe_phylopars <- function(object, ...) 12
-BIC.mock_cafe_phylopars <- function(object, ...) 14
+AIC.mock_copy_number_phylopars <- function(object, ...) 12
+BIC.mock_copy_number_phylopars <- function(object, ...) 14
 
-df_stat <- run_cafe_trait_associations(
+df_stat <- run_orthogroup_copy_number_trait_associations(
   copy_matrix = copy_matrix,
   trait = trait,
   tree = tree,
@@ -102,8 +102,8 @@ stopifnot(identical(og1_constant$status, "skipped"))
 stopifnot(identical(og1_constant$skip_reason, "invariant_trait"))
 
 outdir <- file.path(tmp, "out")
-run_cafe_trait_pgls(
-  file_cafe_input = cafe_input,
+run_orthogroup_copy_number_trait_pgls(
+  file_orthogroup_copy_number = copy_number_file,
   file_sptree = tree_file,
   file_trait = trait_file,
   outdir = outdir,
@@ -115,14 +115,14 @@ run_cafe_trait_pgls(
   verbose = FALSE
 )
 
-stopifnot(file.exists(file.path(outdir, "cafe_copy_number_matrix.tsv")))
-stopifnot(file.exists(file.path(outdir, "cafe_trait_pgls.tsv")))
-stopifnot(file.exists(file.path(outdir, "cafe_trait_pgls.significant.tsv")))
-stopifnot(file.exists(file.path(outdir, "cafe_trait_pgls.summary.pdf")))
+stopifnot(file.exists(file.path(outdir, "orthogroup_copy_number_matrix.tsv")))
+stopifnot(file.exists(file.path(outdir, "orthogroup_copy_number_trait_pgls.tsv")))
+stopifnot(file.exists(file.path(outdir, "orthogroup_copy_number_trait_pgls.significant.tsv")))
+stopifnot(file.exists(file.path(outdir, "orthogroup_copy_number_trait_pgls.summary.pdf")))
 
-written_stats <- read.delim(file.path(outdir, "cafe_trait_pgls.tsv"), sep = "\t", check.names = FALSE)
+written_stats <- read.delim(file.path(outdir, "orthogroup_copy_number_trait_pgls.tsv"), sep = "\t", check.names = FALSE)
 stopifnot(identical(written_stats$Orthogroup, "OG1"))
 stopifnot(identical(written_stats$trait, "height"))
 stopifnot(identical(written_stats$status, "ok"))
 
-cat("test_cafe_trait_pgls.R: OK\n")
+cat("test_orthogroup_copy_number_trait_pgls.R: OK\n")

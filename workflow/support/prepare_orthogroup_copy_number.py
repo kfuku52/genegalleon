@@ -60,15 +60,15 @@ def main():
     fig.savefig(os.path.join(args.output_dir, 'size_differential_histogram.svg'), format='svg', dpi=300)
     fig.savefig(os.path.join(args.output_dir, 'size_differential_histogram.pdf'), format='pdf', dpi=300)
 
-    # Filter orthogroups by size differential and write CAFE input file
+    # Filter orthogroups by size differential and write orthogroup copy-number table
     print(f'Removing orthogroups with size differentials > {args.max_size_differential}: {args.output_dir}/removed_orthogroups.tsv')
     genecount_df[genecount_df['size_differentials'] > args.max_size_differential].to_csv(os.path.join(args.output_dir, 'removed_orthogroups.tsv'), sep='\t', index=False)
     genecount_df = genecount_df[genecount_df['size_differentials'] <= args.max_size_differential]
 
-    # Write CAFE input file
-    print(f'Writing CAFE input file: {args.output_dir}/cafe_input.tsv')
-    cafe_input_df = genecount_df[['besthit_0.95', 'Orthogroup'] + leaf_names]
-    cafe_input_df.to_csv(os.path.join(args.output_dir, 'cafe_input.tsv'), sep='\t', index=False)
+    # Write orthogroup copy-number table
+    print(f'Writing orthogroup copy-number table: {args.output_dir}/orthogroup_copy_number.tsv')
+    copy_number_df = genecount_df[['besthit_0.95', 'Orthogroup'] + leaf_names]
+    copy_number_df.to_csv(os.path.join(args.output_dir, 'orthogroup_copy_number.tsv'), sep='\t', index=False)
 
     print('Ending {} at {}. Elapsed time: {:,} sec'.format(sys.argv[0], datetime.datetime.now(), int(time.time() - start)))
 

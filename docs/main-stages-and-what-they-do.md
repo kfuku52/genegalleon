@@ -302,7 +302,7 @@ Wrapper-specific note:
 Purpose:
 
 - BUSCO-based and orthogroup-based GRAMPA workflows,
-- optional CAFE, CAFE copy-number trait PGLS, and GO enrichment analyses.
+- optional CAFE, orthogroup copy-number trait PGLS, and GO enrichment analyses.
 
 Main outputs:
 
@@ -313,12 +313,16 @@ Notable defaults:
 - duplicate-aware BUSCO genome-evolution substeps default to `0`,
 - `run_orthogroup_grampa=1`, but GRAMPA is auto-disabled unless rooted
   orthogroup trees exist and `grampa_h1` is set,
-- `run_cafe=0`, `run_cafe_trait_pgls=0`, `run_go_enrichment=0` by default,
-- `run_cafe_trait_pgls=1` tests associations between CAFE-selected
-  orthogroup copy numbers from `cafe/orthogroup_selection/cafe_input.tsv`
-  and `workspace/input/species_trait/species_trait.tsv` with species-tree PGLS,
-- CAFE trait-PGLS outputs are written under
-  `workspace/output/genome_evolution/cafe/trait_pgls/`,
+- `run_cafe=0`, `run_orthogroup_copy_number_trait_pgls=0`, and
+  `run_go_enrichment=0` by default,
+- `orthogroup_copy_number/orthogroup_copy_number.tsv` is a shared
+  species-by-orthogroup copy-number matrix used by CAFE and by trait PGLS,
+- `run_orthogroup_copy_number_trait_pgls=1` tests associations between
+  orthogroup copy numbers and `workspace/input/species_trait/species_trait.tsv`
+  with species-tree PGLS; it does not use CAFE5 result files such as
+  `Gamma_change.tab`,
+- orthogroup copy-number trait-PGLS outputs are written under
+  `workspace/output/genome_evolution/orthogroup_copy_number/trait_pgls/`,
 - `grampa_h1` and `target_branch_go` default to empty strings; leaving them empty skips GRAMPA or GO enrichment only,
 - GO target can be specified by species name or branch ID.
 

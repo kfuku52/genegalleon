@@ -219,14 +219,6 @@ EOF
       cat <<'EOF'
 astral_min_tips
 bootstrap_params
-cafe_trait
-cafe_trait_alpha
-cafe_trait_family_file
-cafe_trait_family_ids
-cafe_trait_max_families
-cafe_trait_min_species
-cafe_trait_p_adjust_method
-cafe_trait_plot_top_n
 change_direction_go
 delete_tmp_dir
 file_trait
@@ -236,7 +228,6 @@ input_sequence_mode
 max_gene_orthogroup_grampa
 max_num_gene
 max_orthofinder_core_species
-max_size_differential_cafe
 mcmctree_divergence_time_constraints_str
 mcmc_birth_death_sampling
 mcmc_burnin
@@ -251,6 +242,15 @@ n_gamma_cats_cafe
 notung_jar
 nucleotide_model
 omark_db_path
+orthogroup_copy_number_max_size_differential
+orthogroup_copy_number_trait
+orthogroup_copy_number_trait_alpha
+orthogroup_copy_number_trait_family_file
+orthogroup_copy_number_trait_family_ids
+orthogroup_copy_number_trait_max_families
+orthogroup_copy_number_trait_min_species
+orthogroup_copy_number_trait_p_adjust_method
+orthogroup_copy_number_trait_plot_top_n
 orthofinder_core_filters
 orthofinder_core_method
 orthofinder_core_rank
@@ -299,7 +299,7 @@ run_busco_dupaware_grampa_dna
 run_busco_dupaware_grampa_pep
 run_orthogroup_grampa
 run_cafe
-run_cafe_trait_pgls
+run_orthogroup_copy_number_trait_pgls
 run_go_enrichment
 species_label_parser
 species_label_regex

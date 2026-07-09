@@ -1,20 +1,20 @@
 #!/usr/bin/env Rscript
 
-# cafe_trait_pgls.r
+# orthogroup_copy_number_trait_pgls.r
 # Usage:
-#   Rscript cafe_trait_pgls.r \
-#     --file_cafe_input=orthogroup_selection/cafe_input.tsv \
+#   Rscript orthogroup_copy_number_trait_pgls.r \
+#     --file_orthogroup_copy_number=orthogroup_copy_number/orthogroup_copy_number.tsv \
 #     --file_sptree=dated_species_tree.nwk \
 #     --file_trait=species_trait.tsv \
 #     --outdir=trait_pgls
 #
 # Outputs:
-#   outdir/cafe_copy_number_matrix.tsv
-#   outdir/cafe_trait_pgls.tsv
-#   outdir/cafe_trait_pgls.significant.tsv
-#   outdir/cafe_trait_pgls.summary.(pdf|svg)
+#   outdir/orthogroup_copy_number_matrix.tsv
+#   outdir/orthogroup_copy_number_trait_pgls.tsv
+#   outdir/orthogroup_copy_number_trait_pgls.significant.tsv
+#   outdir/orthogroup_copy_number_trait_pgls.summary.(pdf|svg)
 
-cat(as.character(Sys.time()), "Starting cafe_trait_pgls.r\n")
+cat(as.character(Sys.time()), "Starting orthogroup_copy_number_trait_pgls.r\n")
 
 suppressPackageStartupMessages({
   library(ape)
@@ -171,13 +171,13 @@ parse_max_families <- function(value) {
   out
 }
 
-select_cafe_families <- function(available_ids, family_ids = "", family_file = "", max_families = "all") {
+select_orthogroup_copy_number_families <- function(available_ids, family_ids = "", family_file = "", max_families = "all") {
   explicit <- deduplicate_ordered(c(split_tokens(family_ids), read_family_file(family_file)))
   available_ids <- as.character(available_ids)
   if (length(explicit)) {
     missing <- explicit[!explicit %in% available_ids]
     if (length(missing)) {
-      stop("Requested CAFE family ID(s) were not found: ", paste(head(missing, 20), collapse = ", "))
+      stop("Requested orthogroup family ID(s) were not found: ", paste(head(missing, 20), collapse = ", "))
     }
     return(explicit)
   }
@@ -197,7 +197,7 @@ detect_family_col <- function(df) {
   if (ncol(df) >= 1L) {
     return(colnames(df)[[1]])
   }
-  stop("CAFE input table has no columns.")
+  stop("Orthogroup copy-number table has no columns.")
 }
 
 assert_unique_labels <- function(labels, context) {
@@ -239,32 +239,32 @@ resolve_trait_cols <- function(trait, trait_arg = "all") {
   requested
 }
 
-load_cafe_copy_number_matrix <- function(file_cafe_input, tree, family_ids = "", family_file = "", max_families = "all") {
-  cafe_df <- read_tsv_base(file_cafe_input)
-  family_col <- detect_family_col(cafe_df)
-  family_all <- as.character(cafe_df[[family_col]])
+load_orthogroup_copy_number_matrix <- function(file_orthogroup_copy_number, tree, family_ids = "", family_file = "", max_families = "all") {
+  copy_number_df <- read_tsv_base(file_orthogroup_copy_number)
+  family_col <- detect_family_col(copy_number_df)
+  family_all <- as.character(copy_number_df[[family_col]])
   if (any(!nzchar(family_all))) {
-    stop("CAFE input contains empty family IDs in column: ", family_col)
+    stop("Orthogroup copy-number table contains empty family IDs in column: ", family_col)
   }
   if (anyDuplicated(family_all)) {
     duplicated_ids <- unique(family_all[duplicated(family_all)])
-    stop("CAFE input contains duplicate family IDs: ", paste(head(duplicated_ids, 20), collapse = ", "))
+    stop("Orthogroup copy-number table contains duplicate family IDs: ", paste(head(duplicated_ids, 20), collapse = ", "))
   }
 
-  raw_cols <- colnames(cafe_df)
+  raw_cols <- colnames(copy_number_df)
   norm_cols <- normalize_species_label(raw_cols)
-  assert_unique_labels(norm_cols, "CAFE input column names")
+  assert_unique_labels(norm_cols, "Orthogroup copy-number table column names")
   col_map <- setNames(raw_cols, norm_cols)
   species <- tree$tip.label
   missing_species <- species[!species %in% names(col_map)]
   if (length(missing_species)) {
-    stop("CAFE input is missing species column(s) from the species tree: ", paste(head(missing_species, 20), collapse = ", "))
+    stop("Orthogroup copy-number table is missing species column(s) from the species tree: ", paste(head(missing_species, 20), collapse = ", "))
   }
 
-  selected_families <- select_cafe_families(family_all, family_ids = family_ids, family_file = family_file, max_families = max_families)
+  selected_families <- select_orthogroup_copy_number_families(family_all, family_ids = family_ids, family_file = family_file, max_families = max_families)
   selected_rows <- match(selected_families, family_all)
   species_raw_cols <- unname(col_map[species])
-  count_df <- cafe_df[selected_rows, species_raw_cols, drop = FALSE]
+  count_df <- copy_number_df[selected_rows, species_raw_cols, drop = FALSE]
   count_df[] <- lapply(count_df, function(x) suppressWarnings(as.numeric(x)))
   count_mat <- t(as.matrix(count_df))
   rownames(count_mat) <- species
@@ -311,12 +311,12 @@ make_empty_result_row <- function(family_id, trait_col, n_species = 0L, status =
   )
 }
 
-empty_cafe_trait_result <- function() {
+empty_orthogroup_copy_number_trait_result <- function() {
   out <- make_empty_result_row("", "")
   out[0, , drop = FALSE]
 }
 
-fit_one_cafe_trait <- function(model_df, tree, family_id, trait_col, min_species = 4L,
+fit_one_orthogroup_copy_number_trait <- function(model_df, tree, family_id, trait_col, min_species = 4L,
                                fit_fun = NULL, verbose = FALSE) {
   model_df$trait_value <- suppressWarnings(as.numeric(model_df$trait_value))
   model_df$copy_number <- suppressWarnings(as.numeric(model_df$copy_number))
@@ -359,7 +359,7 @@ fit_one_cafe_trait <- function(model_df, tree, family_id, trait_col, min_species
     phenocov_list = list(),
     trait_col = "trait_value",
     expression_col = "copy_number",
-    fit_mode_label = "cafe_copy_number",
+    fit_mode_label = "orthogroup_copy_number",
     fit_fun = fit_fun,
     verbose = verbose
   ))
@@ -386,7 +386,7 @@ fit_one_cafe_trait <- function(model_df, tree, family_id, trait_col, min_species
   out
 }
 
-run_cafe_trait_associations <- function(copy_matrix, trait, tree, trait_cols, min_species = 4L,
+run_orthogroup_copy_number_trait_associations <- function(copy_matrix, trait, tree, trait_cols, min_species = 4L,
                                         p_adjust_method = "BH", fit_fun = NULL, verbose = FALSE) {
   rows <- list()
   idx <- 0L
@@ -400,7 +400,7 @@ run_cafe_trait_associations <- function(copy_matrix, trait, tree, trait_cols, mi
       idx <- idx + 1L
       copy_df <- data.frame(species = rownames(copy_matrix), copy_number = copy_matrix[, family_id], stringsAsFactors = FALSE)
       model_df <- merge(copy_df, trait_df, by = "species", all = FALSE, sort = FALSE)
-      rows[[idx]] <- fit_one_cafe_trait(
+      rows[[idx]] <- fit_one_orthogroup_copy_number_trait(
         model_df = model_df,
         tree = tree,
         family_id = family_id,
@@ -412,7 +412,7 @@ run_cafe_trait_associations <- function(copy_matrix, trait, tree, trait_cols, mi
     }
   }
   if (!length(rows)) {
-    return(empty_cafe_trait_result())
+    return(empty_orthogroup_copy_number_trait_result())
   }
   out <- do.call(rbind, rows)
   ok <- is.finite(out$pval)
@@ -431,12 +431,12 @@ run_cafe_trait_associations <- function(copy_matrix, trait, tree, trait_cols, mi
 }
 
 save_summary_plot <- function(df_stat, outdir, alpha = 0.05, top_n = 50L) {
-  plot_file_pdf <- file.path(outdir, "cafe_trait_pgls.summary.pdf")
-  plot_file_svg <- file.path(outdir, "cafe_trait_pgls.summary.svg")
+  plot_file_pdf <- file.path(outdir, "orthogroup_copy_number_trait_pgls.summary.pdf")
+  plot_file_svg <- file.path(outdir, "orthogroup_copy_number_trait_pgls.summary.svg")
   plot_df <- df_stat[df_stat$status == "ok" & is.finite(df_stat$pval), , drop = FALSE]
   if (nrow(plot_df) == 0L) {
     p <- ggplot() +
-      annotate("text", x = 0, y = 0, label = "No fitted CAFE copy-number trait associations") +
+      annotate("text", x = 0, y = 0, label = "No fitted orthogroup copy-number trait associations") +
       theme_void()
   } else {
     plot_df <- plot_df[order(plot_df$p.adj.global, plot_df$pval), , drop = FALSE]
@@ -462,7 +462,7 @@ save_summary_plot <- function(df_stat, outdir, alpha = 0.05, top_n = 50L) {
   ggsave(plot_file_svg, p, width = 7.2, height = height, dpi = 300)
 }
 
-run_cafe_trait_pgls <- function(file_cafe_input, file_sptree, file_trait, outdir,
+run_orthogroup_copy_number_trait_pgls <- function(file_orthogroup_copy_number, file_sptree, file_trait, outdir,
                                 trait_arg = "all", min_species = 4L,
                                 family_ids = "", family_file = "", max_families = "all",
                                 p_adjust_method = "BH", alpha = 0.05, plot_top_n = 50L,
@@ -471,17 +471,17 @@ run_cafe_trait_pgls <- function(file_cafe_input, file_sptree, file_trait, outdir
   tree <- load_tree_normalized(file_sptree)
   trait <- load_trait_table(file_trait)
   trait_cols <- resolve_trait_cols(trait, trait_arg)
-  copy_matrix <- load_cafe_copy_number_matrix(
-    file_cafe_input = file_cafe_input,
+  copy_matrix <- load_orthogroup_copy_number_matrix(
+    file_orthogroup_copy_number = file_orthogroup_copy_number,
     tree = tree,
     family_ids = family_ids,
     family_file = family_file,
     max_families = max_families
   )
 
-  write_tsv_base(copy_matrix_to_table(copy_matrix), file.path(outdir, "cafe_copy_number_matrix.tsv"))
+  write_tsv_base(copy_matrix_to_table(copy_matrix), file.path(outdir, "orthogroup_copy_number_matrix.tsv"))
 
-  df_stat <- run_cafe_trait_associations(
+  df_stat <- run_orthogroup_copy_number_trait_associations(
     copy_matrix = copy_matrix,
     trait = trait,
     tree = tree,
@@ -491,24 +491,24 @@ run_cafe_trait_pgls <- function(file_cafe_input, file_sptree, file_trait, outdir
     fit_fun = fit_fun,
     verbose = verbose
   )
-  write_tsv_base(df_stat, file.path(outdir, "cafe_trait_pgls.tsv"))
+  write_tsv_base(df_stat, file.path(outdir, "orthogroup_copy_number_trait_pgls.tsv"))
   df_sig <- df_stat[df_stat$status == "ok" & is.finite(df_stat$p.adj.global) & df_stat$p.adj.global < alpha, , drop = FALSE]
-  write_tsv_base(df_sig, file.path(outdir, "cafe_trait_pgls.significant.tsv"))
+  write_tsv_base(df_sig, file.path(outdir, "orthogroup_copy_number_trait_pgls.significant.tsv"))
   save_summary_plot(df_stat, outdir = outdir, alpha = alpha, top_n = plot_top_n)
   invisible(list(copy_matrix = copy_matrix, stats = df_stat, significant = df_sig))
 }
 
 main <- function() {
   args <- parse_args(commandArgs(trailingOnly = TRUE))
-  required <- c("file_cafe_input", "file_sptree", "file_trait", "outdir")
+  required <- c("file_orthogroup_copy_number", "file_sptree", "file_trait", "outdir")
   missing <- required[vapply(required, function(key) {
     is.null(args[[key]]) || !nzchar(args[[key]])
   }, logical(1))]
   if (length(missing)) {
     stop("Missing required argument(s): ", paste(missing, collapse = ", "))
   }
-  run_cafe_trait_pgls(
-    file_cafe_input = parse_string(args, "file_cafe_input"),
+  run_orthogroup_copy_number_trait_pgls(
+    file_orthogroup_copy_number = parse_string(args, "file_orthogroup_copy_number"),
     file_sptree = parse_string(args, "file_sptree"),
     file_trait = parse_string(args, "file_trait"),
     outdir = parse_string(args, "outdir"),
@@ -522,9 +522,9 @@ main <- function() {
     plot_top_n = parse_integer(args, "plot_top_n", 50L),
     verbose = parse_bool(args, "verbose", TRUE)
   )
-  cat(as.character(Sys.time()), "cafe_trait_pgls.r completed successfully. Exiting\n")
+  cat(as.character(Sys.time()), "orthogroup_copy_number_trait_pgls.r completed successfully. Exiting\n")
 }
 
-if (!identical(Sys.getenv("GG_CAFE_TRAIT_PGLS_NO_MAIN"), "1")) {
+if (!identical(Sys.getenv("GG_ORTHOGROUP_COPY_NUMBER_TRAIT_PGLS_NO_MAIN"), "1")) {
   main()
 }
