@@ -151,19 +151,35 @@ def test_scaled_tree_runs_with_real_mcmctree_and_exports_public_units(tmp_path):
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     raw_output = (tmp_path / "mcmctree.out").read_text(encoding="utf-8")
+    raw_figtree = mcmctree_time_scale.extract_figtree_text(
+        raw_output,
+        mcmctree_time_scale.Decimal("1"),
+        "up",
+    )
     public_figtree = mcmctree_time_scale.extract_figtree_text(
         raw_output,
         factor,
         "up",
     )
+    raw_branch_lengths = [
+        float(value)
+        for value in re.findall(r":\s*([0-9]+(?:\.[0-9]+)?)", raw_figtree)
+    ]
     branch_lengths = [
         float(value)
         for value in re.findall(r":\s*([0-9]+(?:\.[0-9]+)?)", public_figtree)
     ]
+    raw_hpd_pairs = re.findall(r"95%HPD=\{([0-9.]+),\s*([0-9.]+)\}", raw_figtree)
+    raw_hpd_values = [float(value) for pair in raw_hpd_pairs for value in pair]
     hpd_pairs = re.findall(r"95%HPD=\{([0-9.]+),\s*([0-9.]+)\}", public_figtree)
     hpd_values = [float(value) for pair in hpd_pairs for value in pair]
 
     assert "Species tree for FigTree" in public_figtree
+    assert factor == mcmctree_time_scale.Decimal("1000")
+    assert raw_branch_lengths
     assert max(branch_lengths) > 100
-    assert max(hpd_values) > 1000
+    assert max(branch_lengths) == pytest.approx(max(raw_branch_lengths) * float(factor))
+    assert raw_hpd_values
+    assert hpd_values
+    assert max(hpd_values) == pytest.approx(max(raw_hpd_values) * float(factor))
     assert "B(0." not in public_figtree
