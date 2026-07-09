@@ -25,16 +25,52 @@ on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
 tree_file <- file.path(tmp, "tree.nwk")
 writeLines("((sp1:1,sp2:1):1,(sp3:1,sp4:1):1);", tree_file)
 
-copy_number_file <- file.path(tmp, "orthogroup_copy_number.tsv")
+genecount_file <- file.path(tmp, "Orthogroups.GeneCount.selected.tsv")
 writeLines(
   c(
     "besthit_0.95\tOrthogroup\tsp1\tsp2\tsp3\tsp4",
     "hit1\tOG1\t1\t2\t3\t4",
     "hit2\tOG10\t9\t9\t9\t9",
-    "hit3\tOG2\t4\t3\t2\t1"
+    "hit3\tOG2\t4\t3\t2\t1",
+    "hit4\tOG_TOO_WIDE\t1\t1\t1\t99"
   ),
-  copy_number_file
+  genecount_file
 )
+
+python_bin <- Sys.which("python")
+if (!nzchar(python_bin)) {
+  python_bin <- Sys.which("python3")
+}
+if (!nzchar(python_bin)) {
+  stop("python or python3 is required for the orthogroup copy-number preparation integration test.")
+}
+prepare_dir <- file.path(tmp, "prepared_copy_number")
+prepare_script <- file.path(repo_root, "workflow", "support", "prepare_orthogroup_copy_number.py")
+prepare_out <- system2(
+  python_bin,
+  c(
+    prepare_script,
+    "--genecount", genecount_file,
+    "--dated_species_tree", tree_file,
+    "--output_dir", prepare_dir,
+    "--max_size_differential", "10"
+  ),
+  stdout = TRUE,
+  stderr = TRUE
+)
+prepare_status <- attr(prepare_out, "status")
+if (!is.null(prepare_status) && prepare_status != 0) {
+  stop(paste(c("prepare_orthogroup_copy_number.py failed:", prepare_out), collapse = "\n"))
+}
+
+copy_number_file <- file.path(prepare_dir, "orthogroup_copy_number.tsv")
+removed_file <- file.path(prepare_dir, "removed_orthogroups.tsv")
+stopifnot(file.exists(copy_number_file))
+stopifnot(file.exists(removed_file))
+prepared_copy_number <- read.delim(copy_number_file, sep = "\t", check.names = FALSE)
+removed_orthogroups <- read.delim(removed_file, sep = "\t", check.names = FALSE)
+stopifnot(identical(prepared_copy_number$Orthogroup, c("OG1", "OG10", "OG2")))
+stopifnot(identical(removed_orthogroups$Orthogroup, "OG_TOO_WIDE"))
 
 trait_file <- file.path(tmp, "species_trait.tsv")
 writeLines(

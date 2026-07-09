@@ -162,7 +162,37 @@ EOF
 Then set `input_sequence_mode="protein"` in `workflow/gg_genome_evolution_entrypoint.sh` and run the wrapper normally.
 Species missing from `species_genetic_code.tsv` still use the configured default `genetic_code`.
 
-## 5. Run gene-family analyses in query2family mode
+## 5. Test phenotype associations with orthogroup copy number
+
+After the species tree, orthogroup gene-count table, and
+`workspace/input/species_trait/species_trait.tsv` are available, enable the
+orthogroup copy-number trait PGLS stage from the genome-evolution wrapper:
+
+```bash
+cd workflow
+run_cafe=0 \
+run_orthogroup_copy_number_trait_pgls=1 \
+orthogroup_copy_number_trait="all" \
+bash gg_genome_evolution_entrypoint.sh
+```
+
+This writes the shared copy-number matrix to:
+
+- `workspace/output/genome_evolution/orthogroup_copy_number/orthogroup_copy_number.tsv`
+
+Trait-PGLS outputs are written under:
+
+- `workspace/output/genome_evolution/orthogroup_copy_number/trait_pgls/`
+
+Use `orthogroup_copy_number_trait="trait_a,trait_b"` to test selected trait
+columns, and use `orthogroup_copy_number_trait_family_ids` or
+`orthogroup_copy_number_trait_family_file` to restrict the orthogroups tested.
+This stage tests species-level orthogroup copy numbers against species traits
+with species-tree PGLS. It does not use CAFE5 result files such as
+`Gamma_change.tab`; `run_cafe=1` is only needed when you also want the separate
+CAFE family-size evolution analysis.
+
+## 6. Run gene-family analyses in query2family mode
 
 This is the default mode of `gg_gene_evolution_entrypoint.sh`.
 
@@ -185,7 +215,7 @@ Use this mode when you want to start from hand-picked genes or families rather t
 For concrete query-file examples and the resulting per-family output layout, see
 [Gene-Family Outputs and Progress Monitoring](gene-family-outputs-and-progress-monitoring.md).
 
-## 6. Run gene-family analyses in orthogroup mode
+## 7. Run gene-family analyses in orthogroup mode
 
 This mode depends on prior orthogroup selection output from `gg_genome_evolution_entrypoint.sh`.
 
@@ -206,7 +236,7 @@ Important note:
 
 - unlike input generation, this wrapper does not expose a dedicated host-side `GG_*` override map for these mode toggles, so changing the top block is the supported route.
 
-## 7. Build the orthogroup SQLite database
+## 8. Build the orthogroup SQLite database
 
 After orthogroup-mode downstream outputs exist:
 
@@ -239,7 +269,7 @@ cd workflow
 mode_gene_summary=query2family run_database_prep=1 bash gg_gene_summary_entrypoint.sh
 ```
 
-## 8. Run site-level convergence analysis
+## 9. Run site-level convergence analysis
 
 After orthogroup outputs and the database are available:
 
@@ -261,7 +291,7 @@ Main output root:
 `gg_gene_summary_entrypoint.sh` can run the same post-analysis for either
 gene-family mode by setting `mode_gene_summary` and `run_convergent_sites=1`.
 
-## 9. Generate gene-family summary figures
+## 10. Generate gene-family summary figures
 
 To combine query2family outputs into a species-tree presence/absence summary:
 
@@ -301,7 +331,7 @@ files with `gene_summary_species_tree`, `gene_summary_species_tree_ci`,
 `gene_summary_species_tree_support`, or `gene_summary_busco_table` when needed.
 See [Example Plots](example-plots.md) for a compact generated figure.
 
-## 10. Generate summary TSVs
+## 11. Generate summary TSVs
 
 To create summary tables for completed transcriptome, orthogroup, or
 query2family runs:
@@ -326,7 +356,7 @@ Current scope:
 - transcriptome summary is generated when
   `workspace/output/transcriptome_assembly` exists.
 
-## 11. Full end-to-end order
+## 12. Full end-to-end order
 
 Not every project needs every step, but the common broad order is:
 
@@ -336,13 +366,16 @@ Not every project needs every step, but the common broad order is:
 4. optionally run `gg_transcriptome_generation_entrypoint.sh`
 5. optionally run `gg_genome_annotation_entrypoint.sh`
 6. run `gg_genome_evolution_entrypoint.sh`
-7. run `gg_gene_evolution_entrypoint.sh` in the mode you need
-8. optionally run `gg_gene_summary_entrypoint.sh`
-9. optionally run `gg_gene_database_entrypoint.sh`
-10. optionally run `gg_convergent_sites_entrypoint.sh`
-11. optionally run `gg_progress_summary_entrypoint.sh`
+7. optionally enable `run_orthogroup_copy_number_trait_pgls=1` in
+   `gg_genome_evolution_entrypoint.sh` for phenotype/copy-number association
+   tests
+8. run `gg_gene_evolution_entrypoint.sh` in the mode you need
+9. optionally run `gg_gene_summary_entrypoint.sh`
+10. optionally run `gg_gene_database_entrypoint.sh`
+11. optionally run `gg_convergent_sites_entrypoint.sh`
+12. optionally run `gg_progress_summary_entrypoint.sh`
 
-## 12. Dry-run and debug the full wrapper chain
+## 13. Dry-run and debug the full wrapper chain
 
 For a dependency-aware wrapper sanity check:
 
