@@ -46,13 +46,16 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     summary_core_text = GENE_SUMMARY_CORE.read_text(encoding="utf-8")
     core_text = HGT_CORE.read_text(encoding="utf-8")
 
-    assert 'run_hgt_eval="${run_hgt_eval:-0}"' in entrypoint_text
-    assert 'run_hgt_plot="${run_hgt_plot:-0}"' in entrypoint_text
-    assert 'hgt_contamination_dir="${hgt_contamination_dir:-}"' in entrypoint_text
-    assert 'hgt_taxonomy_flow_rank="${hgt_taxonomy_flow_rank:-phylum}"' in entrypoint_text
-    assert 'hgt_tree_plot_width="${hgt_tree_plot_width:-24}"' in entrypoint_text
+    assert 'run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}"' in entrypoint_text
+    assert 'run_hgt_summary_plots="${run_hgt_summary_plots:-0}"' in entrypoint_text
+    assert 'hgt_summary_contamination_dir="${hgt_summary_contamination_dir:-}"' in entrypoint_text
+    assert 'hgt_summary_taxonomy_flow_rank="${hgt_summary_taxonomy_flow_rank:-phylum}"' in entrypoint_text
+    assert 'hgt_summary_tree_plot_width="${hgt_summary_tree_plot_width:-24}"' in entrypoint_text
     assert "hgt_min_branch_score" not in entrypoint_text
     assert 'bash "${gg_core_dir}/gg_hgt_core.sh"' in summary_core_text
+    assert 'run_hgt_eval="${run_hgt_candidate_summary}"' in summary_core_text
+    assert 'run_hgt_plot="${run_hgt_summary_plots}"' in summary_core_text
+    assert 'hgt_contamination_dir="${hgt_summary_contamination_dir:-}"' in summary_core_text
     assert 'run_hgt_plot="${run_hgt_plot:-1}"' in core_text
     assert 'hgt_tree_plot_width="${hgt_tree_plot_width:-24}"' in core_text
     assert 'hgt_contamination_dir="${hgt_contamination_dir:-}"' in core_text

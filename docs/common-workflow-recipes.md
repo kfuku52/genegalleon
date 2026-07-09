@@ -242,7 +242,7 @@ After orthogroup-mode downstream outputs exist:
 
 ```bash
 cd workflow
-mode_gene_summary=orthogroup run_database_prep=1 bash gg_gene_summary_entrypoint.sh
+gene_family_source=orthogroup run_gene_family_database_build=1 run_csubst_scan_aa_change_summary=1 bash gg_gene_summary_entrypoint.sh
 ```
 
 Required inputs:
@@ -253,12 +253,14 @@ Required inputs:
 Main output:
 
 - `workspace/output/orthogroup/gg_orthogroup.db`
+- `workspace/output/gene_summary/orthogroup/orthogroup_csubst_aa_change_summary.tsv`
+- `workspace/output/gene_summary/orthogroup/orthogroup_csubst_aa_change_*.pdf`
 
-For query2family outputs, switch the mode:
+For query2family outputs, switch the gene-family source:
 
 ```bash
 cd workflow
-mode_gene_summary=query2family run_database_prep=1 bash gg_gene_summary_entrypoint.sh
+gene_family_source=query2family run_gene_family_database_build=1 run_csubst_scan_aa_change_summary=1 bash gg_gene_summary_entrypoint.sh
 ```
 
 ## 9. Run site-level convergence analysis
@@ -267,7 +269,7 @@ After orthogroup outputs and the database are available:
 
 ```bash
 cd workflow
-mode_gene_summary=orthogroup run_convergent_sites=1 bash gg_gene_summary_entrypoint.sh
+gene_family_source=orthogroup run_csubst_site_convergence_summary=1 bash gg_gene_summary_entrypoint.sh
 ```
 
 Default prerequisites:
@@ -281,7 +283,7 @@ Main output root:
 - `workspace/output/csubst_site`
 
 The same post-analysis can be run for either gene-family mode by setting
-`mode_gene_summary` and `run_convergent_sites=1`.
+`gene_family_source` and `run_csubst_site_convergence_summary=1`.
 
 ## 10. Generate gene-family summary figures
 
@@ -289,7 +291,7 @@ To combine query2family outputs into a species-tree presence/absence summary:
 
 ```bash
 cd workflow
-mode_gene_summary=query2family bash gg_gene_summary_entrypoint.sh
+gene_family_source=query2family bash gg_gene_summary_entrypoint.sh
 ```
 
 Main output root:
@@ -300,16 +302,16 @@ For orthogroups, switch the mode:
 
 ```bash
 cd workflow
-mode_gene_summary=orthogroup bash gg_gene_summary_entrypoint.sh
+gene_family_source=orthogroup bash gg_gene_summary_entrypoint.sh
 ```
 
 The PDF/SVG figure combines the species tree with the gene-family
 detected/undetected matrix. The full TSV matrices are written for all detected
 families, while `.plot.*` files record the subset used for the figure. By
 default, query2family plots all query files and orthogroup plots the first
-100 orthogroups. Use `gene_summary_max_families=0` or `all` to remove the cap,
-or set `gene_summary_family_ids=OG0000001,OG0000042` /
-`gene_summary_family_file=selected_ogs.txt` to plot an explicit subset in the
+100 orthogroups. Use `presence_absence_max_families=0` or `all` to remove the cap,
+or set `presence_absence_family_ids=OG0000001,OG0000042` /
+`presence_absence_family_file=selected_ogs.txt` to plot an explicit subset in the
 requested order.
 
 If the selected species tree is dated and
@@ -319,8 +321,8 @@ transferred from available species-tree support files when their splits match
 the plotted tree. When BUSCO full tables or a BUSCO summary table are
 available, the figure also adds right-side per-species BUSCO stacked bars;
 full tables include Fragmented counts. Override the auto-selected
-files with `gene_summary_species_tree`, `gene_summary_species_tree_ci`,
-`gene_summary_species_tree_support`, or `gene_summary_busco_table` when needed.
+files with `presence_absence_species_tree`, `presence_absence_species_tree_ci`,
+`presence_absence_species_tree_support`, or `presence_absence_busco_table` when needed.
 See [Example Plots](example-plots.md) for a compact generated figure.
 
 ## 11. Generate summary TSVs

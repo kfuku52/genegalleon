@@ -215,7 +215,7 @@ def read_family_file(path):
         return []
     family_file = Path(path)
     if not family_file.is_file() or family_file.stat().st_size == 0:
-        raise FileNotFoundError(f"gene_summary_family_file was not found or empty: {family_file}")
+        raise FileNotFoundError(f"family_file was not found or empty: {family_file}")
     out = []
     header_tokens = {"family_id", "query", "orthogroup", "gene_family_id", "id"}
     with family_file.open("r", encoding="utf-8", errors="replace") as handle:

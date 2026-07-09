@@ -15,29 +15,39 @@ unset gg_core_bootstrap
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 
-mode_gene_summary=$(echo "${mode_gene_summary:-query2family}" | tr '[:upper:]' '[:lower:]')
-run_gene_completion_summary="${run_gene_completion_summary:-1}"
-run_gene_presence_absence="${run_gene_presence_absence:-1}"
-run_database_prep="${run_database_prep:-0}"
-run_hgt_eval="${run_hgt_eval:-0}"
-run_hgt_plot="${run_hgt_plot:-0}"
-run_convergent_sites="${run_convergent_sites:-0}"
-csubst_nonsyn_recode=$(echo "${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
-gene_summary_include_incomplete="${gene_summary_include_incomplete:-0}"
-gene_summary_heatmap_value=$(echo "${gene_summary_heatmap_value:-presence}" | tr '[:upper:]' '[:lower:]')
-gene_summary_species_tree="${gene_summary_species_tree:-auto}"
-gene_summary_species_tree_ci="${gene_summary_species_tree_ci:-auto}"
-gene_summary_species_tree_support="${gene_summary_species_tree_support:-auto}"
-gene_summary_busco_table="${gene_summary_busco_table:-auto}"
-gene_summary_plot_width="${gene_summary_plot_width:-7.2}"
-gene_summary_max_families="${gene_summary_max_families:-auto}"
-gene_summary_family_ids="${gene_summary_family_ids:-}"
-gene_summary_family_file="${gene_summary_family_file:-}"
-dir_gene_summary="${dir_gene_summary:-auto}"
-dir_hgt="${dir_hgt:-auto}"
-dir_convergent_sites="${dir_convergent_sites:-auto}"
-dir_orthofinder="${dir_orthofinder:-auto}"
-file_trait="${file_trait:-auto}"
+gene_family_source=$(echo "${gene_family_source:-query2family}" | tr '[:upper:]' '[:lower:]')
+run_family_completion_summary="${run_family_completion_summary:-1}"
+run_presence_absence_summary="${run_presence_absence_summary:-1}"
+run_gene_family_database_build="${run_gene_family_database_build:-0}"
+run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}"
+run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}"
+run_hgt_summary_plots="${run_hgt_summary_plots:-0}"
+run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}"
+csubst_scan_aa_change_top_n="${csubst_scan_aa_change_top_n:-30}"
+csubst_site_nonsyn_recode=$(echo "${csubst_site_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
+presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}"
+presence_absence_heatmap_value=$(echo "${presence_absence_heatmap_value:-presence}" | tr '[:upper:]' '[:lower:]')
+presence_absence_species_tree="${presence_absence_species_tree:-auto}"
+presence_absence_species_tree_ci="${presence_absence_species_tree_ci:-auto}"
+presence_absence_species_tree_support="${presence_absence_species_tree_support:-auto}"
+presence_absence_busco_table="${presence_absence_busco_table:-auto}"
+presence_absence_plot_width="${presence_absence_plot_width:-7.2}"
+presence_absence_max_families="${presence_absence_max_families:-auto}"
+presence_absence_family_ids="${presence_absence_family_ids:-}"
+presence_absence_family_file="${presence_absence_family_file:-}"
+summary_output_dir="${summary_output_dir:-auto}"
+hgt_summary_output_dir="${hgt_summary_output_dir:-auto}"
+csubst_site_output_dir="${csubst_site_output_dir:-auto}"
+csubst_site_orthofinder_dir="${csubst_site_orthofinder_dir:-auto}"
+csubst_site_trait_file="${csubst_site_trait_file:-auto}"
+csubst_site_arity_range="${csubst_site_arity_range:-2-10}"
+csubst_site_trait="${csubst_site_trait:-all}"
+csubst_site_skip_lower_order="${csubst_site_skip_lower_order:-yes}"
+csubst_site_min_fg_stem_ratio="${csubst_site_min_fg_stem_ratio:-0.5}"
+csubst_site_min_ocn_any2spe="${csubst_site_min_ocn_any2spe:-1.8}"
+csubst_site_min_omega_c_any2spe="${csubst_site_min_omega_c_any2spe:-3.0}"
+csubst_site_min_ocn_cod="${csubst_site_min_ocn_cod:-0}"
+csubst_site_max_candidates_per_arity="${csubst_site_max_candidates_per_arity:-100}"
 
 enable_all_run_flags_for_debug_mode
 
@@ -50,56 +60,57 @@ validate_binary_flag() {
   fi
 }
 
-validate_binary_flag "run_gene_completion_summary" "${run_gene_completion_summary}"
-validate_binary_flag "run_gene_presence_absence" "${run_gene_presence_absence}"
-validate_binary_flag "run_database_prep" "${run_database_prep}"
-validate_binary_flag "run_hgt_eval" "${run_hgt_eval}"
-validate_binary_flag "run_hgt_plot" "${run_hgt_plot}"
-validate_binary_flag "run_convergent_sites" "${run_convergent_sites}"
-validate_binary_flag "gene_summary_include_incomplete" "${gene_summary_include_incomplete}"
+validate_binary_flag "run_family_completion_summary" "${run_family_completion_summary}"
+validate_binary_flag "run_presence_absence_summary" "${run_presence_absence_summary}"
+validate_binary_flag "run_gene_family_database_build" "${run_gene_family_database_build}"
+validate_binary_flag "run_csubst_scan_aa_change_summary" "${run_csubst_scan_aa_change_summary}"
+validate_binary_flag "run_hgt_candidate_summary" "${run_hgt_candidate_summary}"
+validate_binary_flag "run_hgt_summary_plots" "${run_hgt_summary_plots}"
+validate_binary_flag "run_csubst_site_convergence_summary" "${run_csubst_site_convergence_summary}"
+validate_binary_flag "presence_absence_include_incomplete" "${presence_absence_include_incomplete}"
 
-case "${mode_gene_summary}" in
+case "${gene_family_source}" in
   query2family)
     dir_gene_family="${gg_workspace_output_dir}/query2family"
     dir_query_gene="${gg_workspace_input_dir}/query_gene"
-    default_dir_summary="${gg_workspace_output_dir}/gene_summary/query2family"
+    default_summary_output_dir="${gg_workspace_output_dir}/gene_summary/query2family"
     default_dir_hgt="${gg_workspace_output_dir}/query2family_hgt"
     default_dir_convergent_sites="${gg_workspace_output_dir}/query2family_csubst_site"
     ;;
   orthogroup)
     dir_gene_family="${gg_workspace_output_dir}/orthogroup"
-    default_dir_summary="${gg_workspace_output_dir}/gene_summary/orthogroup"
+    default_summary_output_dir="${gg_workspace_output_dir}/gene_summary/orthogroup"
     default_dir_hgt="${gg_workspace_output_dir}/hgt"
     default_dir_convergent_sites="${gg_workspace_output_dir}/csubst_site"
     ;;
   *)
-    echo "Invalid mode_gene_summary: ${mode_gene_summary}"
-    echo 'mode_gene_summary must be either "query2family" or "orthogroup". Exiting.'
+    echo "Invalid gene_family_source: ${gene_family_source}"
+    echo 'gene_family_source must be either "query2family" or "orthogroup". Exiting.'
     exit 1
     ;;
 esac
 
-case "${gene_summary_heatmap_value}" in
+case "${presence_absence_heatmap_value}" in
   presence|copy_number)
     ;;
   *)
-    echo "Invalid gene_summary_heatmap_value: ${gene_summary_heatmap_value}"
-    echo 'gene_summary_heatmap_value must be either "presence" or "copy_number". Exiting.'
+    echo "Invalid presence_absence_heatmap_value: ${presence_absence_heatmap_value}"
+    echo 'presence_absence_heatmap_value must be either "presence" or "copy_number". Exiting.'
     exit 1
     ;;
 esac
 
-if [[ "${dir_gene_summary}" == "auto" ]]; then
-  dir_gene_summary="${default_dir_summary}"
+if [[ "${summary_output_dir}" == "auto" ]]; then
+  summary_output_dir="${default_summary_output_dir}"
 fi
-if [[ "${dir_hgt}" == "auto" ]]; then
-  dir_hgt="${default_dir_hgt}"
+if [[ "${hgt_summary_output_dir}" == "auto" ]]; then
+  hgt_summary_output_dir="${default_dir_hgt}"
 fi
-if [[ "${dir_convergent_sites}" == "auto" ]]; then
-  dir_convergent_sites="${default_dir_convergent_sites}"
+if [[ "${csubst_site_output_dir}" == "auto" ]]; then
+  csubst_site_output_dir="${default_dir_convergent_sites}"
 fi
 
-mkdir -p "${dir_gene_summary}"
+mkdir -p "${summary_output_dir}"
 
 file_gene_family_db="${dir_gene_family}/gg_orthogroup.db"
 resolve_orthogroup_genecount_selected() {
@@ -126,13 +137,13 @@ else
   file_orthogroup_genecount_selected=""
 fi
 
-resolve_gene_summary_species_tree() {
-  if [[ "${gene_summary_species_tree}" != "auto" ]]; then
-    if [[ -s "${gene_summary_species_tree}" ]]; then
-      printf '%s\n' "${gene_summary_species_tree}"
+resolve_presence_absence_species_tree() {
+  if [[ "${presence_absence_species_tree}" != "auto" ]]; then
+    if [[ -s "${presence_absence_species_tree}" ]]; then
+      printf '%s\n' "${presence_absence_species_tree}"
       return 0
     fi
-    echo "Configured gene_summary_species_tree was not found: ${gene_summary_species_tree}" >&2
+    echo "Configured presence_absence_species_tree was not found: ${presence_absence_species_tree}" >&2
     return 1
   fi
 
@@ -163,14 +174,14 @@ tree_has_numeric_internal_labels() {
   grep -Eq '\)[[:space:]]*[-+]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?[[:space:]]*:' "${tree_file}"
 }
 
-resolve_gene_summary_species_tree_ci() {
+resolve_presence_absence_species_tree_ci() {
   local file_species_tree=$1
-  if [[ "${gene_summary_species_tree_ci}" != "auto" ]]; then
-    if [[ -s "${gene_summary_species_tree_ci}" ]]; then
-      printf '%s\n' "${gene_summary_species_tree_ci}"
+  if [[ "${presence_absence_species_tree_ci}" != "auto" ]]; then
+    if [[ -s "${presence_absence_species_tree_ci}" ]]; then
+      printf '%s\n' "${presence_absence_species_tree_ci}"
       return 0
     fi
-    echo "Configured gene_summary_species_tree_ci was not found: ${gene_summary_species_tree_ci}" >&2
+    echo "Configured presence_absence_species_tree_ci was not found: ${presence_absence_species_tree_ci}" >&2
     return 1
   fi
 
@@ -196,13 +207,13 @@ resolve_gene_summary_species_tree_ci() {
   return 1
 }
 
-resolve_gene_summary_species_tree_support() {
-  if [[ "${gene_summary_species_tree_support}" != "auto" ]]; then
-    if [[ -s "${gene_summary_species_tree_support}" ]]; then
-      printf '%s\n' "${gene_summary_species_tree_support}"
+resolve_presence_absence_species_tree_support() {
+  if [[ "${presence_absence_species_tree_support}" != "auto" ]]; then
+    if [[ -s "${presence_absence_species_tree_support}" ]]; then
+      printf '%s\n' "${presence_absence_species_tree_support}"
       return 0
     fi
-    echo "Configured gene_summary_species_tree_support was not found: ${gene_summary_species_tree_support}" >&2
+    echo "Configured presence_absence_species_tree_support was not found: ${presence_absence_species_tree_support}" >&2
     return 1
   fi
 
@@ -229,7 +240,7 @@ resolve_gene_summary_species_tree_support() {
   return 1
 }
 
-resolve_gene_summary_busco_table() {
+resolve_presence_absence_busco_table() {
   busco_summary_input_exists() {
     local path=$1
     if [[ -s "${path}" ]]; then
@@ -241,12 +252,12 @@ resolve_gene_summary_busco_table() {
     return 1
   }
 
-  if [[ "${gene_summary_busco_table}" != "auto" ]]; then
-    if busco_summary_input_exists "${gene_summary_busco_table}"; then
-      printf '%s\n' "${gene_summary_busco_table}"
+  if [[ "${presence_absence_busco_table}" != "auto" ]]; then
+    if busco_summary_input_exists "${presence_absence_busco_table}"; then
+      printf '%s\n' "${presence_absence_busco_table}"
       return 0
     fi
-    echo "Configured gene_summary_busco_table was not found or contains no BUSCO full tables: ${gene_summary_busco_table}" >&2
+    echo "Configured presence_absence_busco_table was not found or contains no BUSCO full tables: ${presence_absence_busco_table}" >&2
     return 1
   fi
 
@@ -269,12 +280,12 @@ resolve_gene_summary_busco_table() {
   return 1
 }
 
-run_completion_summary_for_mode() {
-  if [[ ${run_gene_completion_summary} -ne 1 ]]; then
-    echo "Skipping gene completion summary because run_gene_completion_summary=0."
+run_family_completion_summary_for_source() {
+  if [[ ${run_family_completion_summary} -ne 1 ]]; then
+    echo "Skipping gene completion summary because run_family_completion_summary=0."
     return 0
   fi
-  if [[ "${mode_gene_summary}" == "query2family" ]]; then
+  if [[ "${gene_family_source}" == "query2family" ]]; then
     echo "Generating query2family completion summary."
     if [[ ! -d "${dir_gene_family}" ]]; then
       echo "Skipping query2family summary because directory was not found: ${dir_gene_family}"
@@ -288,7 +299,7 @@ run_completion_summary_for_mode() {
       --dir_query2family "${dir_gene_family}" \
       --dir_query_gene "${dir_query_gene}" \
       --ncpu "${GG_TASK_CPUS:-1}" \
-      --out "${dir_gene_summary}/query2family_summary.tsv"
+      --out "${summary_output_dir}/query2family_summary.tsv"
   else
     echo "Generating orthogroup completion summary."
     if [[ ! -d "${dir_gene_family}" ]]; then
@@ -307,13 +318,13 @@ run_completion_summary_for_mode() {
       --dir_og "${dir_gene_family}" \
       --genecount "${file_orthogroup_genecount_selected}" \
       --ncpu "${GG_TASK_CPUS:-1}" \
-      --out "${dir_gene_summary}/orthogroup_summary.tsv"
+      --out "${summary_output_dir}/orthogroup_summary.tsv"
   fi
 }
 
-run_gene_presence_absence_summary() {
-  if [[ ${run_gene_presence_absence} -ne 1 ]]; then
-    echo "Skipping gene-family presence/absence summary because run_gene_presence_absence=0."
+run_presence_absence_summary_for_source() {
+  if [[ ${run_presence_absence_summary} -ne 1 ]]; then
+    echo "Skipping gene-family presence/absence summary because run_presence_absence_summary=0."
     return 0
   fi
   if [[ ! -d "${dir_gene_family}/stat_branch" ]]; then
@@ -324,52 +335,52 @@ run_gene_presence_absence_summary() {
     echo "Skipping gene-family presence/absence summary because no stat_branch files were found under: ${dir_gene_family}/stat_branch"
     return 0
   fi
-  if [[ "${mode_gene_summary}" == "query2family" && ! -d "${dir_query_gene}" ]]; then
+  if [[ "${gene_family_source}" == "query2family" && ! -d "${dir_query_gene}" ]]; then
     echo "Skipping query2family presence/absence summary because query_gene input directory was not found: ${dir_query_gene}"
     return 0
   fi
 
   local file_species_tree
-  if ! file_species_tree=$(resolve_gene_summary_species_tree); then
+  if ! file_species_tree=$(resolve_presence_absence_species_tree); then
     echo "Skipping gene-family presence/absence summary because no species tree was found."
     return 0
   fi
-  echo "Using species tree for ${mode_gene_summary} presence/absence summary: ${file_species_tree}"
+  echo "Using species tree for ${gene_family_source} presence/absence summary: ${file_species_tree}"
 
   local file_species_tree_ci=""
-  if file_species_tree_ci=$(resolve_gene_summary_species_tree_ci "${file_species_tree}"); then
+  if file_species_tree_ci=$(resolve_presence_absence_species_tree_ci "${file_species_tree}"); then
     echo "Using dated species-tree CI annotations: ${file_species_tree_ci}"
   else
     file_species_tree_ci=""
   fi
 
   local file_species_tree_support=""
-  if file_species_tree_support=$(resolve_gene_summary_species_tree_support); then
+  if file_species_tree_support=$(resolve_presence_absence_species_tree_support); then
     echo "Using species-tree branch support labels: ${file_species_tree_support}"
   else
     file_species_tree_support=""
   fi
 
   local file_busco_table=""
-  if file_busco_table=$(resolve_gene_summary_busco_table); then
+  if file_busco_table=$(resolve_presence_absence_busco_table); then
     echo "Using BUSCO input for species stacked bars: ${file_busco_table}"
   else
     file_busco_table=""
   fi
 
-  local outbase="${mode_gene_summary}_presence_absence"
-  local file_presence="${dir_gene_summary}/${outbase}.tsv"
-  local file_copy_number="${dir_gene_summary}/${mode_gene_summary}_copy_number.tsv"
-  local file_long="${dir_gene_summary}/${outbase}.long.tsv"
-  local file_plot_presence="${dir_gene_summary}/${outbase}.plot.tsv"
-  local file_plot_copy_number="${dir_gene_summary}/${mode_gene_summary}_copy_number.plot.tsv"
-  local file_plot_long="${dir_gene_summary}/${outbase}.plot.long.tsv"
-  local file_selection="${dir_gene_summary}/${outbase}.plot_selection.tsv"
-  local file_pdf="${dir_gene_summary}/${outbase}.pdf"
-  local file_svg="${dir_gene_summary}/${outbase}.svg"
+  local outbase="${gene_family_source}_presence_absence"
+  local file_presence="${summary_output_dir}/${outbase}.tsv"
+  local file_copy_number="${summary_output_dir}/${gene_family_source}_copy_number.tsv"
+  local file_long="${summary_output_dir}/${outbase}.long.tsv"
+  local file_plot_presence="${summary_output_dir}/${outbase}.plot.tsv"
+  local file_plot_copy_number="${summary_output_dir}/${gene_family_source}_copy_number.plot.tsv"
+  local file_plot_long="${summary_output_dir}/${outbase}.plot.long.tsv"
+  local file_selection="${summary_output_dir}/${outbase}.plot_selection.tsv"
+  local file_pdf="${summary_output_dir}/${outbase}.pdf"
+  local file_svg="${summary_output_dir}/${outbase}.svg"
 
   local collect_args=(
-    --mode "${mode_gene_summary}"
+    --mode "${gene_family_source}"
     --dir_gene_family "${dir_gene_family}"
     --species_tree "${file_species_tree}"
     --out_presence "${file_presence}"
@@ -379,19 +390,19 @@ run_gene_presence_absence_summary() {
     --out_plot_copy_number "${file_plot_copy_number}"
     --out_plot_long "${file_plot_long}"
     --out_selection "${file_selection}"
-    --include_incomplete "${gene_summary_include_incomplete}"
-    --max_families "${gene_summary_max_families}"
+    --include_incomplete "${presence_absence_include_incomplete}"
+    --max_families "${presence_absence_max_families}"
   )
-  if [[ "${mode_gene_summary}" == "query2family" ]]; then
+  if [[ "${gene_family_source}" == "query2family" ]]; then
     collect_args+=(--dir_query_gene "${dir_query_gene}")
   elif [[ -n "${file_orthogroup_genecount_selected}" ]]; then
     collect_args+=(--orthogroup_genecount "${file_orthogroup_genecount_selected}")
   fi
-  if [[ -n "${gene_summary_family_ids}" ]]; then
-    collect_args+=(--family_ids "${gene_summary_family_ids}")
+  if [[ -n "${presence_absence_family_ids}" ]]; then
+    collect_args+=(--family_ids "${presence_absence_family_ids}")
   fi
-  if [[ -n "${gene_summary_family_file}" ]]; then
-    collect_args+=(--family_file "${gene_summary_family_file}")
+  if [[ -n "${presence_absence_family_file}" ]]; then
+    collect_args+=(--family_file "${presence_absence_family_file}")
   fi
 
   python "${gg_support_dir}/gene_family_presence_absence.py" "${collect_args[@]}"
@@ -399,8 +410,8 @@ run_gene_presence_absence_summary() {
   local plot_args=(
     --species_tree="${file_species_tree}" \
     --long_table="${file_plot_long}" \
-    --value="${gene_summary_heatmap_value}" \
-    --width="${gene_summary_plot_width}" \
+    --value="${presence_absence_heatmap_value}" \
+    --width="${presence_absence_plot_width}" \
     --out_pdf="${file_pdf}" \
     --out_svg="${file_svg}"
   )
@@ -416,9 +427,9 @@ run_gene_presence_absence_summary() {
   Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" "${plot_args[@]}"
 }
 
-run_database_summary_for_mode() {
-  if [[ ${run_database_prep} -ne 1 ]]; then
-    echo "Skipping database prep because run_database_prep=0."
+run_gene_family_database_for_source() {
+  if [[ ${run_gene_family_database_build} -ne 1 ]]; then
+    echo "Skipping database prep because run_gene_family_database_build=0."
     return 0
   fi
   local missing_input=0
@@ -434,7 +445,7 @@ run_database_summary_for_mode() {
   if [[ ${missing_input} -ne 0 ]]; then
     return 0
   fi
-  echo "Generating gene-family database for mode_gene_summary=${mode_gene_summary}: ${file_gene_family_db}"
+  echo "Generating gene-family database for gene_family_source=${gene_family_source}: ${file_gene_family_db}"
   python "${gg_support_dir}/generate_orthogroup_database.py" \
     --overwrite 1 \
     --dbpath "${file_gene_family_db}" \
@@ -446,64 +457,78 @@ run_database_summary_for_mode() {
     --row_threshold 8000 \
     --cutoff_stat "OCNany2spe,0.8" \
     --ncpu "${GG_TASK_CPUS:-1}"
-  python "${gg_support_dir}/plot_csubst_aa_change_summary.py" \
-    --dbpath "${file_gene_family_db}" \
-    --out_prefix "${dir_gene_summary}/${mode_gene_summary}_csubst_aa_change" \
-    --out_tsv "${dir_gene_summary}/${mode_gene_summary}_csubst_aa_change_summary.tsv" \
-    --top_n 30
 }
 
-run_hgt_summary_for_mode() {
-  if [[ ${run_hgt_eval} -ne 1 && ${run_hgt_plot} -ne 1 ]]; then
-    echo "Skipping HGT summary because run_hgt_eval=0 and run_hgt_plot=0."
+run_csubst_scan_aa_change_summary_for_source() {
+  if [[ ${run_csubst_scan_aa_change_summary} -ne 1 ]]; then
+    echo "Skipping CSUBST scan summary because run_csubst_scan_aa_change_summary=0."
     return 0
   fi
-  echo "Running HGT summary for mode_gene_summary=${mode_gene_summary}."
+  if [[ ! -s "${file_gene_family_db}" ]]; then
+    echo "Skipping CSUBST scan summary because gene-family database was not found: ${file_gene_family_db}"
+    echo "Set run_gene_family_database_build=1 with run_csubst_scan_aa_change_summary=1 to refresh the database and generate CSUBST scan summaries in one run."
+    return 0
+  fi
+  echo "Generating CSUBST scan AA-change summary for gene_family_source=${gene_family_source}: ${file_gene_family_db}"
+  python "${gg_support_dir}/plot_csubst_aa_change_summary.py" \
+    --dbpath "${file_gene_family_db}" \
+    --out_prefix "${summary_output_dir}/${gene_family_source}_csubst_aa_change" \
+    --out_tsv "${summary_output_dir}/${gene_family_source}_csubst_aa_change_summary.tsv" \
+    --top_n "${csubst_scan_aa_change_top_n}"
+}
+
+run_hgt_summary_for_source() {
+  if [[ ${run_hgt_candidate_summary} -ne 1 && ${run_hgt_summary_plots} -ne 1 ]]; then
+    echo "Skipping HGT summary because run_hgt_candidate_summary=0 and run_hgt_summary_plots=0."
+    return 0
+  fi
+  echo "Running HGT summary for gene_family_source=${gene_family_source}."
   hgt_gene_family_dir="${dir_gene_family}" \
   hgt_db_path="${file_gene_family_db}" \
-  hgt_output_dir="${dir_hgt}" \
-  run_hgt_eval="${run_hgt_eval}" \
-  run_hgt_plot="${run_hgt_plot}" \
-  hgt_use_taxonomy_db="${hgt_use_taxonomy_db:-1}" \
-  hgt_contamination_dir="${hgt_contamination_dir:-}" \
-  hgt_taxonomy_flow_rank="${hgt_taxonomy_flow_rank:-phylum}" \
-  hgt_taxonomy_flow_max_categories="${hgt_taxonomy_flow_max_categories:-12}" \
-  hgt_tree_plot_width="${hgt_tree_plot_width:-24}" \
-  hgt_promoter_bp="${hgt_promoter_bp:-2000}" \
-  hgt_fimo_qvalue="${hgt_fimo_qvalue:-0.05}" \
+  hgt_output_dir="${hgt_summary_output_dir}" \
+  run_hgt_eval="${run_hgt_candidate_summary}" \
+  run_hgt_plot="${run_hgt_summary_plots}" \
+  hgt_use_taxonomy_db="${hgt_summary_use_taxonomy_db:-1}" \
+  hgt_contamination_dir="${hgt_summary_contamination_dir:-}" \
+  hgt_taxonomy_flow_rank="${hgt_summary_taxonomy_flow_rank:-phylum}" \
+  hgt_taxonomy_flow_max_categories="${hgt_summary_taxonomy_flow_max_categories:-12}" \
+  hgt_tree_plot_width="${hgt_summary_tree_plot_width:-24}" \
+  hgt_promoter_bp="${hgt_summary_promoter_bp:-2000}" \
+  hgt_fimo_qvalue="${hgt_summary_fimo_qvalue:-0.05}" \
     bash "${gg_core_dir}/gg_hgt_core.sh"
 }
 
-run_convergent_site_summary_for_mode() {
-  if [[ ${run_convergent_sites} -ne 1 ]]; then
-    echo "Skipping convergent-site summary because run_convergent_sites=0."
+run_csubst_site_convergence_summary_for_source() {
+  if [[ ${run_csubst_site_convergence_summary} -ne 1 ]]; then
+    echo "Skipping convergent-site summary because run_csubst_site_convergence_summary=0."
     return 0
   fi
-  echo "Running convergent-site summary for mode_gene_summary=${mode_gene_summary}."
+  echo "Running convergent-site summary for gene_family_source=${gene_family_source}."
   dir_orthogroup="${dir_gene_family}" \
-  dir_orthofinder="${dir_orthofinder}" \
-  dir_out="${dir_convergent_sites}" \
-  file_trait="${file_trait}" \
-  arity_range="${arity_range:-2-10}" \
-  trait="${trait:-all}" \
-  skip_lower_order="${skip_lower_order:-yes}" \
-  min_fg_stem_ratio="${min_fg_stem_ratio:-0.5}" \
-  min_OCNany2spe="${min_OCNany2spe:-1.8}" \
-  min_omegaCany2spe="${min_omegaCany2spe:-3.0}" \
-  min_OCNCoD="${min_OCNCoD:-0}" \
-  max_per_K="${max_per_K:-100}" \
-  csubst_nonsyn_recode="${csubst_nonsyn_recode}" \
+  dir_orthofinder="${csubst_site_orthofinder_dir}" \
+  dir_out="${csubst_site_output_dir}" \
+  file_trait="${csubst_site_trait_file}" \
+  arity_range="${csubst_site_arity_range}" \
+  trait="${csubst_site_trait}" \
+  skip_lower_order="${csubst_site_skip_lower_order}" \
+  min_fg_stem_ratio="${csubst_site_min_fg_stem_ratio}" \
+  min_OCNany2spe="${csubst_site_min_ocn_any2spe}" \
+  min_omegaCany2spe="${csubst_site_min_omega_c_any2spe}" \
+  min_OCNCoD="${csubst_site_min_ocn_cod}" \
+  max_per_K="${csubst_site_max_candidates_per_arity}" \
+  csubst_nonsyn_recode="${csubst_site_nonsyn_recode}" \
     bash "${gg_core_dir}/gg_convergent_sites_core.sh"
 }
 
-echo "mode_gene_summary=${mode_gene_summary}"
+echo "gene_family_source=${gene_family_source}"
 echo "dir_gene_family=${dir_gene_family}"
-echo "dir_gene_summary=${dir_gene_summary}"
+echo "summary_output_dir=${summary_output_dir}"
 
-run_completion_summary_for_mode
-run_gene_presence_absence_summary
-run_database_summary_for_mode
-run_hgt_summary_for_mode
-run_convergent_site_summary_for_mode
+run_family_completion_summary_for_source
+run_presence_absence_summary_for_source
+run_gene_family_database_for_source
+run_csubst_scan_aa_change_summary_for_source
+run_hgt_summary_for_source
+run_csubst_site_convergence_summary_for_source
 
 echo "$(date): Exiting Singularity environment"

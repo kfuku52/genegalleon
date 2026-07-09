@@ -278,8 +278,8 @@ That keeps routine runs reproducible without forcing edits in the core implement
 
 `workflow/gg_gene_evolution_entrypoint.sh` exposes `csubst_nonsyn_recode` for
 `csubst search --nonsyn_recode`. `workflow/gg_gene_summary_entrypoint.sh`
-reuses the same value for `csubst sites --nonsyn_recode` when
-`run_convergent_sites=1`. The shared default is:
+exposes `csubst_site_nonsyn_recode` for `csubst sites --nonsyn_recode` when
+`run_csubst_site_convergence_summary=1`. The shared default is:
 
 ```bash
 GG_COMMON_CSUBST_NONSYN_RECODE="no"
@@ -288,7 +288,8 @@ GG_COMMON_CSUBST_NONSYN_RECODE="no"
 Set it to one of `no`, `3di20`, `dayhoff6`, `sr6`, `kgb6`, `sr4`,
 `dayhoff9`, `dayhoff12`, `dayhoff15`, `dayhoff18`, `srchisq6`, or
 `kgbauto6` in `workflow/gg_common_params.sh` before running gene-family
-analyses. Stage-specific `csubst_nonsyn_recode` overrides still take priority
+analyses. Stage-specific `csubst_nonsyn_recode` or
+`csubst_site_nonsyn_recode` overrides still take priority
 when supplied for a single entrypoint run.
 
 ## CSUBST scan
@@ -320,7 +321,9 @@ Database preparation imports `csubst_scan/*.tsv` into the `aa_change` table and
 `csubst_scan_units/*.tsv` into `aa_change_unit`. The `aa_change` table is a
 candidate state-change table, not a one-row-per-site table; GeneGalleon adds
 global BH-FDR columns such as `q_rate_enrichment_global` after aggregating all
-candidate substitutions into the SQLite database. Gene summary database prep
-also writes ranked candidate TSV output plus `*_csubst_aa_change_evidence_density.pdf`,
+candidate substitutions into the SQLite database. In `gg_gene_summary`, set
+`run_csubst_scan_aa_change_summary=1` to write ranked candidate TSV output plus
+`*_csubst_aa_change_evidence_density.pdf`,
 `*_csubst_aa_change_substitution_spectrum.pdf`, and
-`*_csubst_aa_change_foreground_unit_support_matrix.pdf`.
+`*_csubst_aa_change_foreground_unit_support_matrix.pdf`; combine it with
+`run_gene_family_database_build=1` to refresh the database and plots in one run.

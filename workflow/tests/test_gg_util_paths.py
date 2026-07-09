@@ -75,19 +75,40 @@ def test_forward_config_vars_includes_gene_evolution_csubst_scan_options(tmp_pat
     ]
 
 
-def test_forward_config_vars_includes_gene_summary_csubst_nonsyn_recode(tmp_path):
+def test_forward_config_vars_includes_gene_summary_csubst_site_nonsyn_recode(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        "csubst_nonsyn_recode=dayhoff9; "
+        "csubst_site_nonsyn_recode=dayhoff9; "
         "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
-        'printf "csubst_nonsyn_recode=%s\\n" '
-        '"${SINGULARITYENV_csubst_nonsyn_recode:-}"'
+        'printf "csubst_site_nonsyn_recode=%s\\n" '
+        '"${SINGULARITYENV_csubst_site_nonsyn_recode:-}"'
     )
 
     completed = run_bash(command, cwd=tmp_path)
 
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip() == "csubst_nonsyn_recode=dayhoff9"
+    assert completed.stdout.strip() == "csubst_site_nonsyn_recode=dayhoff9"
+
+
+def test_gene_summary_run_csubst_scan_aa_change_summary_env_override_and_forwarding(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"source {shlex.quote(str(GG_ENTRYPOINT_CONFIG_VARS_PATH))}; "
+        "run_csubst_scan_aa_change_summary=0; "
+        "GG_GENE_SUMMARY_RUN_CSUBST_SCAN_AA_CHANGE_SUMMARY=1; "
+        "gg_apply_registered_env_overrides gg_gene_summary_entrypoint.sh; "
+        "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
+        'printf "local=%s\\nforwarded=%s\\n" '
+        '"${run_csubst_scan_aa_change_summary}" "${SINGULARITYENV_run_csubst_scan_aa_change_summary:-}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "local=1",
+        "forwarded=1",
+    ]
 
 
 def test_export_var_to_container_env_ignores_invalid_variable_name(tmp_path):

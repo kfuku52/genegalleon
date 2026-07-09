@@ -337,12 +337,12 @@ Purpose:
 
 - run mode-aware cross-family summaries for `query2family` or `orthogroup` outputs,
 - generate species-tree presence/absence and copy-number matrices for `query2family` or `orthogroup`,
-- optionally build the selected mode's `gg_orthogroup.db`,
-- optionally run HGT and convergent-site summaries against the selected mode.
+- optionally build the selected source's `gg_orthogroup.db`,
+- optionally run HGT and convergent-site summaries against the selected source.
 
-Main mode switch:
+Main Gene-Family Source:
 
-- `mode_gene_summary="query2family"` or `mode_gene_summary="orthogroup"`
+- `gene_family_source="query2family"` or `gene_family_source="orthogroup"`
 
 Main presence/absence outputs:
 
@@ -354,36 +354,37 @@ Main presence/absence outputs:
 
 Notable defaults:
 
-- `run_gene_presence_absence=1`
+- `run_presence_absence_summary=1`
 - query-gene names in the presence/absence plot come from
   `workspace/input/query_gene` file basenames
-- `gene_summary_max_families=auto` plots all query2family queries but only the first 100 orthogroups by default
-- `gene_summary_family_ids` and `gene_summary_family_file` select an explicit plotted subset for either mode
-- `gene_summary_species_tree=auto` prefers query2family-pruned dated species
+- `presence_absence_max_families=auto` plots all query2family queries but only the first 100 orthogroups by default
+- `presence_absence_family_ids` and `presence_absence_family_file` select an explicit plotted subset for either mode
+- `presence_absence_species_tree=auto` prefers query2family-pruned dated species
   trees when available
-- `gene_summary_species_tree_ci=auto` adds MCMCtree 95% HPD node-age bars for
+- `presence_absence_species_tree_ci=auto` adds MCMCtree 95% HPD node-age bars for
   dated species trees when `mcmctree_95CI.nwk` is available
-- `gene_summary_species_tree_support=auto` transfers numeric branch-support
+- `presence_absence_species_tree_support=auto` transfers numeric branch-support
   labels from matching species-tree support files
-- `gene_summary_busco_table=auto` adds per-species BUSCO stacked bars when
+- `presence_absence_busco_table=auto` adds per-species BUSCO stacked bars when
   BUSCO full tables or `workspace/output/species_tree/busco_summary_table/busco_summary.tsv`
   are available; full tables include Fragmented counts
-- `gene_summary_plot_width=7.2`; the plotter caps figure width at 7.2 inches
-- `run_database_prep=0`, `run_hgt_eval=0`, `run_hgt_plot=0`, and `run_convergent_sites=0`
-- database, HGT, and convergent-site flags are valid for both summary modes and use the selected mode's gene-family output directory,
-- `run_database_prep=1` assembles the selected mode's SQLite DB from
+- `presence_absence_plot_width=7.2`; the plotter caps figure width at 7.2 inches
+- `run_gene_family_database_build=0`, `run_csubst_scan_aa_change_summary=0`, `run_hgt_candidate_summary=0`, `run_hgt_summary_plots=0`, and `run_csubst_site_convergence_summary=0`
+- database, CSUBST scan AA-change summary, HGT, and CSUBST site convergence flags are valid for both sources and use the selected source's gene-family output directory,
+- `run_gene_family_database_build=1` assembles the selected source's SQLite DB from
   `stat_tree/` and `stat_branch/` and skips database generation if those
   required directories are missing,
 - when present, `csubst_scan/` is imported as DB table `aa_change`, and
   `csubst_scan_units/` is imported as `aa_change_unit`; `aa_change` receives
   global BH-FDR columns after all candidate substitutions are loaded,
-- database preparation also writes `*_csubst_aa_change_summary.tsv` ranked by
-  the global FDR columns and, when `aa_change` candidates are available,
+- `run_csubst_scan_aa_change_summary=1` writes `*_csubst_aa_change_summary.tsv` ranked
+  by the global FDR columns and, when `aa_change` candidates are available,
   CSUBST scan plots for evidence density, substitution spectrum, and
-  foreground-unit support,
-- `run_convergent_sites=1` runs site-level convergence screening with
+  foreground-unit support; use it with `run_gene_family_database_build=1` to refresh the DB
+  and plots in one run,
+- `run_csubst_site_convergence_summary=1` runs site-level convergence screening with
   `csubst_site_wrapper.py`, combines orthogroup results with species traits,
-  and writes convergence outputs under the selected mode's `csubst_site`
+  and writes convergence outputs under the selected source's `csubst_site`
   summary directory.
 
 ### `gg_progress_summary_entrypoint.sh`

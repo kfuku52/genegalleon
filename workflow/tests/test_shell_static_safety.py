@@ -833,6 +833,49 @@ def test_gene_summary_entrypoint_does_not_define_unused_delete_tmp_dir():
     assert "delete_tmp_dir=" not in text
 
 
+def test_gene_summary_entrypoint_groups_workflow_flags_before_parameters():
+    assignments = list(_entrypoint_modify_block_assignments(WORKFLOW_DIR / "gg_gene_summary_entrypoint.sh"))
+    names = [assignment.split("=", 1)[0] for _, assignment in assignments]
+    run_indices = [idx for idx, name in enumerate(names) if name.startswith("run_")]
+    assert run_indices == list(range(min(run_indices), max(run_indices) + 1))
+    assert names[0] == "gene_family_source"
+    assert names[min(run_indices) - 1] == "gene_family_source"
+    assert all(not name.startswith("run_") for name in names[max(run_indices) + 1 :])
+
+
+def test_gene_summary_entrypoint_uses_stage_scoped_config_names():
+    assignments = list(_entrypoint_modify_block_assignments(WORKFLOW_DIR / "gg_gene_summary_entrypoint.sh"))
+    names = {assignment.split("=", 1)[0] for _, assignment in assignments}
+    legacy_names = {
+        "mode_gene_summary",
+        "dir_gene_summary",
+        "gene_summary_mode",
+        "gene_summary_output_dir",
+        "run_gene_presence_absence",
+        "run_database_prep",
+        "run_csubst_scan_summary",
+        "run_hgt_eval",
+        "run_hgt_plot",
+        "run_convergent_sites",
+        "gene_summary_species_tree",
+        "gene_summary_family_file",
+        "hgt_contamination_dir",
+        "arity_range",
+        "trait",
+        "file_trait",
+        "csubst_nonsyn_recode",
+    }
+
+    assert names.isdisjoint(legacy_names)
+    assert {
+        "run_csubst_scan_aa_change_summary",
+        "csubst_scan_aa_change_top_n",
+        "run_csubst_site_convergence_summary",
+        "csubst_site_trait",
+        "csubst_site_nonsyn_recode",
+    } <= names
+
+
 def test_gene_evolution_entrypoint_allows_debug_runner_mode_overrides():
     text = _read_text(WORKFLOW_DIR / "gg_gene_evolution_entrypoint.sh")
     assert 'mode_gene_evolution="${mode_gene_evolution:-query2family}"' in text
@@ -2714,13 +2757,27 @@ def test_gene_evolution_core_runs_csubst_scan_as_aa_change_stage():
     assert 'mv_out "${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"' in core
 
 
-def test_gene_summary_database_includes_csubst_scan_tables_and_plot():
+def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     core = _read_text(CORE_DIR / "gg_gene_summary_core.sh")
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_gene_summary_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
     plot_script = _read_text(WORKFLOW_DIR / "support" / "plot_csubst_aa_change_summary.py")
+    database_body = _function_body(core, "run_gene_family_database_for_source")
+    csubst_summary_body = _function_body(core, "run_csubst_scan_aa_change_summary_for_source")
+
+    assert 'run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}"' in entrypoint
+    assert 'csubst_scan_aa_change_top_n="${csubst_scan_aa_change_top_n:-30}"' in entrypoint
+    assert 'run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}"' in core
+    assert 'validate_binary_flag "run_csubst_scan_aa_change_summary"' in core
+    assert "run_csubst_scan_aa_change_summary" in config_vars
+    assert "csubst_scan_aa_change_top_n" in config_vars
     assert '--dir_csubst_aa_change "${dir_gene_family}/csubst_scan"' in core
     assert '--dir_csubst_aa_change_unit "${dir_gene_family}/csubst_scan_units"' in core
-    assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py"' in core
-    assert '--out_prefix "${dir_gene_summary}/${mode_gene_summary}_csubst_aa_change"' in core
+    assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py"' not in database_body
+    assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py"' in csubst_summary_body
+    assert "run_csubst_scan_aa_change_summary=0" in csubst_summary_body
+    assert '--out_prefix "${summary_output_dir}/${gene_family_source}_csubst_aa_change"' in core
+    assert '--top_n "${csubst_scan_aa_change_top_n}"' in core
     assert '"--out_prefix"' in plot_script
     assert "required=True" in plot_script
     assert '"--out_pdf"' not in plot_script
