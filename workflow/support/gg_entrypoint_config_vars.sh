@@ -5,28 +5,6 @@ gg_print_entrypoint_config_vars() {
   local entrypoint_name=${1:-}
 
   case "${entrypoint_name}" in
-    gg_convergent_sites_entrypoint.sh)
-      cat <<'EOF'
-arity_range
-dir_orthofinder
-dir_orthogroup
-dir_out
-file_trait
-csubst_nonsyn_recode
-max_per_K
-min_OCNCoD
-min_OCNany2spe
-min_fg_stem_ratio
-min_omegaCany2spe
-skip_lower_order
-trait
-EOF
-      ;;
-    gg_gene_database_entrypoint.sh)
-      cat <<'EOF'
-run_database_prep
-EOF
-      ;;
     gg_gene_summary_entrypoint.sh)
       cat <<'EOF'
 arity_range
@@ -84,6 +62,18 @@ csubst_fg_stem_only
 csubst_max_arity
 csubst_max_combination
 csubst_nonsyn_recode
+csubst_scan_match
+csubst_scan_min_event_pp
+csubst_scan_min_support
+csubst_scan_n_permutations
+csubst_scan_other_scope
+csubst_scan_pvalue_calibration
+csubst_scan_rate_event_mode
+csubst_scan_rate_exposure
+csubst_scan_rate_length
+csubst_scan_site_plot
+csubst_scan_tree_site_plot_format
+csubst_scan_tree_site_plot_max_sites
 exp_value_type
 fimo_qvalue
 generax_model
@@ -117,6 +107,7 @@ run_cdskit_localize
 run_clipkit
 run_codeml_two_ratio
 run_csubst
+run_csubst_scan
 run_fimo
 run_generax
 run_generate_expression_matrix
@@ -170,19 +161,6 @@ treevis_support_value
 treevis_synteny
 treevis_synteny_window
 uniprot_annotation_method
-EOF
-      ;;
-    gg_hgt_entrypoint.sh)
-      cat <<'EOF'
-hgt_contamination_dir
-hgt_fimo_qvalue
-hgt_promoter_bp
-hgt_taxonomy_flow_max_categories
-hgt_taxonomy_flow_rank
-hgt_tree_plot_width
-hgt_use_taxonomy_db
-run_hgt_eval
-run_hgt_plot
 EOF
       ;;
     gg_genome_annotation_entrypoint.sh)

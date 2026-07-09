@@ -475,8 +475,8 @@ def test_ensure_latest_jaspar_file_uses_set_e_safe_assignments():
     assert unsafe_ensure.search(body) is None
 
 
-def test_convergent_sites_entrypoint_forwards_plot_runtime_envs():
-    entrypoint = WORKFLOW_DIR / "gg_convergent_sites_entrypoint.sh"
+def test_gene_summary_entrypoint_forwards_convergent_site_plot_runtime_envs():
+    entrypoint = WORKFLOW_DIR / "gg_gene_summary_entrypoint.sh"
     text = _read_text(entrypoint)
 
     assert 'gg_export_var_to_container_env_if_set "PYMOL_HEADLESS"' in text
@@ -828,8 +828,8 @@ def test_entrypoints_apply_registered_env_overrides_before_forwarding_config():
         assert token in text, f"Missing registered env override call in {script.name}: {token}"
 
 
-def test_convergent_sites_entrypoint_does_not_define_unused_delete_tmp_dir():
-    text = _read_text(WORKFLOW_DIR / "gg_convergent_sites_entrypoint.sh")
+def test_gene_summary_entrypoint_does_not_define_unused_delete_tmp_dir():
+    text = _read_text(WORKFLOW_DIR / "gg_gene_summary_entrypoint.sh")
     assert "delete_tmp_dir=" not in text
 
 
@@ -852,7 +852,6 @@ def test_genome_evolution_core_prints_effective_config_summary():
 
 def test_entrypoints_with_exit_if_running_call_duplicate_guard():
     scripts = [
-        "gg_convergent_sites_entrypoint.sh",
         "gg_genome_annotation_entrypoint.sh",
         "gg_gene_evolution_entrypoint.sh",
     ]
@@ -1366,7 +1365,7 @@ def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_suppor
     util = _read_text(WORKFLOW_DIR / "support" / "gg_util.sh")
 
     gene_block_start = config_vars.index("gg_gene_evolution_entrypoint.sh)")
-    gene_block_end = config_vars.index("gg_hgt_entrypoint.sh)")
+    gene_block_end = config_vars.index("gg_genome_annotation_entrypoint.sh)")
     gene_block = config_vars[gene_block_start:gene_block_end]
 
     assert (
@@ -1438,7 +1437,7 @@ def test_gene_evolution_supports_auto_query_blast_evalue_by_query_length():
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
 
     gene_block_start = config_vars.index("gg_gene_evolution_entrypoint.sh)")
-    gene_block_end = config_vars.index("gg_hgt_entrypoint.sh)")
+    gene_block_end = config_vars.index("gg_genome_annotation_entrypoint.sh)")
     gene_block = config_vars[gene_block_start:gene_block_end]
 
     assert 'query_blast_evalue="auto"' in entrypoint
@@ -2699,6 +2698,32 @@ def test_gene_evolution_core_uses_csubst_search_namespace():
         '--outdir "${csubst_search_dir}"',
     ]:
         assert redundant_flag not in core
+
+
+def test_gene_evolution_core_runs_csubst_scan_as_aa_change_stage():
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    assert 'task="CSUBST scan"' in core
+    assert "csubst scan \\" in core
+    assert 'disable_if_no_input_file "run_csubst_scan" "${file_og_iqtree_anc}" "${file_sp_trait}"' in core
+    assert "--foreground foreground.tsv \\" in core
+    assert "--fg_format 2 \\" in core
+    assert "--scan_match \"${csubst_scan_match}\"" in core
+    assert "--scan_pvalue_calibration \"${csubst_scan_pvalue_calibration}\"" in core
+    assert "--nonsyn_recode \"${csubst_nonsyn_recode}\"" in core
+    assert 'mv_out "${csubst_scan_dir}/csubst_scan.tsv" "${file_og_csubst_scan}"' in core
+    assert 'mv_out "${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"' in core
+
+
+def test_gene_summary_database_includes_csubst_scan_tables_and_plot():
+    core = _read_text(CORE_DIR / "gg_gene_summary_core.sh")
+    plot_script = _read_text(WORKFLOW_DIR / "support" / "plot_csubst_aa_change_summary.py")
+    assert '--dir_csubst_aa_change "${dir_gene_family}/csubst_scan"' in core
+    assert '--dir_csubst_aa_change_unit "${dir_gene_family}/csubst_scan_units"' in core
+    assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py"' in core
+    assert '--out_prefix "${dir_gene_summary}/${mode_gene_summary}_csubst_aa_change"' in core
+    assert '"--out_prefix"' in plot_script
+    assert "required=True" in plot_script
+    assert '"--out_pdf"' not in plot_script
 
 
 def test_csubst_site_wrapper_omits_redundant_sites_defaults():

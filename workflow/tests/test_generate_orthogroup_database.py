@@ -1,5 +1,7 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+import math
+import sqlite3
 import subprocess
 import sys
 
@@ -71,6 +73,89 @@ def test_apply_cutoff_accepts_preparsed_cutoff_list():
     out = mod.apply_cutoff(df, [("A", 0.8), ("B", 0.5)])
     assert out.shape[0] == 1
     assert out.iloc[0]["A"] == "0.95"
+
+
+def test_gene_family_id_from_path_recognizes_csubst_scan_suffixes():
+    mod = load_module()
+
+    assert mod.gene_family_id_from_path("/tmp/OG0001_csubst_scan.tsv") == "OG0001"
+    assert mod.gene_family_id_from_path("/tmp/OG0001_csubst_scan_units.tsv") == "OG0001"
+    assert mod.gene_family_id_from_path("/tmp/HOG0002.csubst_scan.tsv") == "HOG0002"
+    assert mod.gene_family_id_from_path("/tmp/HOG0002.csubst_scan_units.tsv") == "HOG0002"
+
+
+def test_calculate_bh_fdr_preserves_nan_and_original_order():
+    mod = load_module()
+
+    out = mod.calculate_bh_fdr([0.01, 0.04, 0.03, float("nan")])
+
+    assert out[:3].tolist() == [0.03, 0.04, 0.04]
+    assert math.isnan(out[3])
+
+
+def test_database_builder_adds_aa_change_tables_and_global_fdr(tmp_path):
+    stat_tree = tmp_path / "stat_tree"
+    stat_branch = tmp_path / "stat_branch"
+    aa_change = tmp_path / "csubst_scan"
+    aa_change_unit = tmp_path / "csubst_scan_units"
+    for path in [stat_tree, stat_branch, aa_change, aa_change_unit]:
+        path.mkdir()
+
+    pandas.DataFrame({"tree_metric": [1.0]}).to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
+    pandas.DataFrame({"branch_id": [1], "branch_metric": [2.0]}).to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
+    pandas.DataFrame(
+        [
+            {"trait": "traitA", "state_change": "10K", "p_rate_enrichment": 0.01, "p_rate_enrichment_empirical": 0.02},
+            {"trait": "traitA", "state_change": "12S", "p_rate_enrichment": 0.04, "p_rate_enrichment_empirical": 0.50},
+        ]
+    ).to_csv(aa_change / "OG0001_csubst_scan.tsv", sep="\t", index=False)
+    pandas.DataFrame(
+        [
+            {"trait": "traitA", "unit_id": 1, "matched_leaf_names": "Species_A"},
+            {"trait": "traitA", "unit_id": 2, "matched_leaf_names": "Species_B"},
+        ]
+    ).to_csv(aa_change_unit / "OG0001_csubst_scan_units.tsv", sep="\t", index=False)
+
+    db_path = tmp_path / "gg_orthogroup.db"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--overwrite",
+            "1",
+            "--dbpath",
+            str(db_path),
+            "--dir_stat_tree",
+            str(stat_tree),
+            "--dir_stat_branch",
+            str(stat_branch),
+            "--dir_csubst_aa_change",
+            str(aa_change),
+            "--dir_csubst_aa_change_unit",
+            str(aa_change_unit),
+            "--ncpu",
+            "1",
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    with sqlite3.connect(db_path) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "aa_change" in tables
+        assert "aa_change_unit" in tables
+        aa_df = pandas.read_sql_query(
+            "SELECT orthogroup, state_change, q_rate_enrichment_global, q_rate_enrichment_empirical_global FROM aa_change ORDER BY state_change",
+            conn,
+        )
+        unit_df = pandas.read_sql_query("SELECT orthogroup, unit_id FROM aa_change_unit ORDER BY unit_id", conn)
+
+    assert aa_df["orthogroup"].tolist() == ["OG0001", "OG0001"]
+    assert aa_df["q_rate_enrichment_global"].round(4).tolist() == [0.02, 0.04]
+    assert aa_df["q_rate_enrichment_empirical_global"].round(4).tolist() == [0.04, 0.5]
+    assert unit_df["orthogroup"].tolist() == ["OG0001", "OG0001"]
 
 
 def test_import_has_no_logfile_side_effect(tmp_path, monkeypatch):

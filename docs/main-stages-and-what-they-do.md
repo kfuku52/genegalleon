@@ -271,6 +271,8 @@ Main outputs:
 - `workspace/output/orthogroup/*` in orthogroup mode.
 - optional localization tables under `workspace/output/query2family/cdskit_localize/`
   or `workspace/output/orthogroup/cdskit_localize/`.
+- optional `csubst scan` outputs under `csubst_scan/`, `csubst_scan_units/`,
+  `csubst_scan_foreground_branch/`, `csubst_scan_plot/`, and `csubst_scan_log/`.
 
 Notable defaults:
 
@@ -289,7 +291,10 @@ Current behavior notes:
 - Pfam RPS-BLAST DB (`Pfam_LE`) is auto-prepared when missing, with lock-based
   synchronization for array jobs,
 - gene-tree/species-tree PGLS outputs are `gene_tree_PGLS.tsv` and
-  `species_tree_PGLS.tsv`.
+  `species_tree_PGLS.tsv`,
+- `run_csubst_scan=1` uses existing CSUBST ancestral-reconstruction inputs and
+  writes candidate amino-acid/state changes; it is independent from
+  `run_csubst`, which runs branch-combination search.
 
 Wrapper-specific note:
 
@@ -325,26 +330,6 @@ Notable defaults:
   `workspace/output/genome_evolution/orthogroup_copy_number/trait_pgls/`,
 - `grampa_h1` and `target_branch_go` default to empty strings; leaving them empty skips GRAMPA or GO enrichment only,
 - GO target can be specified by species name or branch ID.
-
-### `gg_gene_database_entrypoint.sh`
-
-Purpose:
-
-- assemble SQLite DB from orthogroup summary tables.
-
-Main output:
-
-- `workspace/output/orthogroup/gg_orthogroup.db`
-
-Required input directories:
-
-- `workspace/output/orthogroup/stat_tree`
-- `workspace/output/orthogroup/stat_branch`
-
-Notable defaults:
-
-- `run_database_prep=1`
-- the stage skips database generation if the required `stat_tree/` or `stat_branch/` directories are missing.
 
 ### `gg_gene_summary_entrypoint.sh`
 
@@ -385,7 +370,21 @@ Notable defaults:
   are available; full tables include Fragmented counts
 - `gene_summary_plot_width=7.2`; the plotter caps figure width at 7.2 inches
 - `run_database_prep=0`, `run_hgt_eval=0`, `run_hgt_plot=0`, and `run_convergent_sites=0`
-- database, HGT, and convergent-site flags are valid for both summary modes and use the selected mode's gene-family output directory.
+- database, HGT, and convergent-site flags are valid for both summary modes and use the selected mode's gene-family output directory,
+- `run_database_prep=1` assembles the selected mode's SQLite DB from
+  `stat_tree/` and `stat_branch/` and skips database generation if those
+  required directories are missing,
+- when present, `csubst_scan/` is imported as DB table `aa_change`, and
+  `csubst_scan_units/` is imported as `aa_change_unit`; `aa_change` receives
+  global BH-FDR columns after all candidate substitutions are loaded,
+- database preparation also writes `*_csubst_aa_change_summary.tsv` ranked by
+  the global FDR columns and, when `aa_change` candidates are available,
+  CSUBST scan plots for evidence density, substitution spectrum, and
+  foreground-unit support,
+- `run_convergent_sites=1` runs site-level convergence screening with
+  `csubst_site_wrapper.py`, combines orthogroup results with species traits,
+  and writes convergence outputs under the selected mode's `csubst_site`
+  summary directory.
 
 ### `gg_progress_summary_entrypoint.sh`
 
@@ -405,25 +404,6 @@ Note:
 - orthogroup summary generation is skipped when the selected gene-count table or AMAS directories are absent.
 - query2family summary generation is skipped when `workspace/output/query2family`
   or `workspace/input/query_gene` is absent.
-
-### `gg_convergent_sites_entrypoint.sh`
-
-Purpose:
-
-- run site-level convergence screening with `csubst_site_wrapper.py`,
-- combine orthogroup results with species traits,
-- generate convergence summary tables and branch-level reports.
-
-Main output root:
-
-- `workspace/output/csubst_site`
-
-Notable defaults:
-
-- `arity_range="2-10"`
-- `trait="all"`
-- `skip_lower_order="yes"`
-- `file_trait`, `dir_orthogroup`, `dir_orthofinder`, and `dir_out` auto-resolve to workspace defaults unless explicitly overridden.
 
 ### Utility wrappers
 

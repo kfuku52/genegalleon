@@ -4,8 +4,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENE_EVOLUTION_ENTRYPOINT = REPO_ROOT / "workflow" / "gg_gene_evolution_entrypoint.sh"
 GENE_EVOLUTION_CORE = REPO_ROOT / "workflow" / "core" / "gg_gene_evolution_core.sh"
+GENE_SUMMARY_ENTRYPOINT = REPO_ROOT / "workflow" / "gg_gene_summary_entrypoint.sh"
+GENE_SUMMARY_CORE = REPO_ROOT / "workflow" / "core" / "gg_gene_summary_core.sh"
 GENOME_ANNOTATION_CORE = REPO_ROOT / "workflow" / "core" / "gg_genome_annotation_core.sh"
-HGT_ENTRYPOINT = REPO_ROOT / "workflow" / "gg_hgt_entrypoint.sh"
 HGT_CORE = REPO_ROOT / "workflow" / "core" / "gg_hgt_core.sh"
 
 
@@ -41,14 +42,17 @@ def test_genome_annotation_core_passes_uniprot_metadata_to_reformatter():
 
 
 def test_hgt_core_uses_optional_direct_contamination_input_directory():
-    entrypoint_text = HGT_ENTRYPOINT.read_text(encoding="utf-8")
+    entrypoint_text = GENE_SUMMARY_ENTRYPOINT.read_text(encoding="utf-8")
+    summary_core_text = GENE_SUMMARY_CORE.read_text(encoding="utf-8")
     core_text = HGT_CORE.read_text(encoding="utf-8")
 
-    assert 'run_hgt_plot=1' in entrypoint_text
-    assert 'hgt_contamination_dir=""' in entrypoint_text
-    assert 'hgt_taxonomy_flow_rank="phylum"' in entrypoint_text
-    assert 'hgt_tree_plot_width="24"' in entrypoint_text
+    assert 'run_hgt_eval="${run_hgt_eval:-0}"' in entrypoint_text
+    assert 'run_hgt_plot="${run_hgt_plot:-0}"' in entrypoint_text
+    assert 'hgt_contamination_dir="${hgt_contamination_dir:-}"' in entrypoint_text
+    assert 'hgt_taxonomy_flow_rank="${hgt_taxonomy_flow_rank:-phylum}"' in entrypoint_text
+    assert 'hgt_tree_plot_width="${hgt_tree_plot_width:-24}"' in entrypoint_text
     assert "hgt_min_branch_score" not in entrypoint_text
+    assert 'bash "${gg_core_dir}/gg_hgt_core.sh"' in summary_core_text
     assert 'run_hgt_plot="${run_hgt_plot:-1}"' in core_text
     assert 'hgt_tree_plot_width="${hgt_tree_plot_width:-24}"' in core_text
     assert 'hgt_contamination_dir="${hgt_contamination_dir:-}"' in core_text

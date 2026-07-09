@@ -8,8 +8,6 @@ set -euo pipefail
 #     -> gg_gene_evolution_entrypoint.sh (mode_gene_evolution=orthogroup)
 #     -> gg_gene_evolution_entrypoint.sh (mode_gene_evolution=query2family)
 #     -> gg_gene_summary_entrypoint.sh
-#     -> gg_gene_database_entrypoint.sh
-#     -> gg_convergent_sites_entrypoint.sh
 #
 # Other entrypoints are executed around this chain so all entrypoints are covered.
 
@@ -92,26 +90,12 @@ prereq_fail_reason=""
 check_step_prerequisites() {
   local step_id="$1"
   local file_orthogroup_genecount_selected="${repo_root}/workspace/output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv"
-  local dir_orthogroup="${repo_root}/workspace/output/orthogroup"
-  local file_orthogroup_db="${dir_orthogroup}/gg_orthogroup.db"
 
   prereq_fail_reason=""
   case "${step_id}" in
     gg_gene_evolution_mode_orthogroup)
       if [[ ! -s "${file_orthogroup_genecount_selected}" ]]; then
         prereq_fail_reason="missing required file: ${file_orthogroup_genecount_selected}"
-        return 1
-      fi
-      ;;
-    gg_gene_database)
-      if [[ ! -d "${dir_orthogroup}/stat_tree" || ! -d "${dir_orthogroup}/stat_branch" ]]; then
-        prereq_fail_reason="missing required directories: ${dir_orthogroup}/stat_tree or ${dir_orthogroup}/stat_branch"
-        return 1
-      fi
-      ;;
-    gg_convergent_sites)
-      if [[ ! -s "${file_orthogroup_db}" ]]; then
-        prereq_fail_reason="missing required database: ${file_orthogroup_db}"
         return 1
       fi
       ;;
@@ -200,8 +184,6 @@ ordered_steps=(
   "gg_gene_evolution_mode_orthogroup|gg_gene_evolution_entrypoint.sh|mode_gene_evolution=orthogroup run_hyphy_relax=0 run_hyphy_relax_reversed=0"
   "gg_gene_evolution_mode_query2family|gg_gene_evolution_entrypoint.sh|mode_gene_evolution=query2family run_hyphy_relax=0 run_hyphy_relax_reversed=0"
   "gg_gene_summary|gg_gene_summary_entrypoint.sh|run_database_prep=0 run_hgt_eval=0 run_hgt_plot=0 run_convergent_sites=0"
-  "gg_gene_database|gg_gene_database_entrypoint.sh|"
-  "gg_convergent_sites|gg_convergent_sites_entrypoint.sh|"
   "gg_progress_summary|gg_progress_summary_entrypoint.sh|"
 )
 

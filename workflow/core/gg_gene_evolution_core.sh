@@ -364,6 +364,7 @@ apply_gene_evolution_input_sequence_mode() {
   disable_flag_with_reason "run_hyphy_relax_reversed" "input_sequence_mode=protein: reversed HyPhy RELAX requires codon alignments."
   disable_flag_with_reason "run_iqtree_anc" "input_sequence_mode=protein: ancestral reconstruction for CSUBST runs in codon mode."
   disable_flag_with_reason "run_csubst" "input_sequence_mode=protein: CSUBST currently depends on codon-mode ancestral reconstruction."
+  disable_flag_with_reason "run_csubst_scan" "input_sequence_mode=protein: CSUBST scan currently depends on codon-mode ancestral reconstruction."
 }
 
 write_species_trait_foreground_regex_table() {
@@ -425,6 +426,18 @@ mode_gene_evolution=$(echo "${mode_gene_evolution:-query2family}" | tr '[:upper:
 gene_evolution_profile=$(echo "${gene_evolution_profile:-default}" | tr '[:upper:]' '[:lower:]')
 input_sequence_mode=$(gg_normalize_input_sequence_mode "${input_sequence_mode}")
 csubst_nonsyn_recode=$(echo "${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
+csubst_scan_match=$(echo "${csubst_scan_match:-any2spe}" | tr '[:upper:]' '[:lower:]')
+csubst_scan_min_event_pp="${csubst_scan_min_event_pp:-0.5}"
+csubst_scan_min_support="${csubst_scan_min_support:-2}"
+csubst_scan_rate_event_mode=$(echo "${csubst_scan_rate_event_mode:-posterior_sum}" | tr '[:upper:]' '[:lower:]')
+csubst_scan_rate_length=$(echo "${csubst_scan_rate_length:-n_rescaled}" | tr '[:upper:]' '[:lower:]')
+csubst_scan_rate_exposure=$(echo "${csubst_scan_rate_exposure:-q_weighted}" | tr '[:upper:]' '[:lower:]')
+csubst_scan_other_scope=$(echo "${csubst_scan_other_scope:-all}" | tr '[:upper:]' '[:lower:]')
+csubst_scan_pvalue_calibration=$(echo "${csubst_scan_pvalue_calibration:-full_scan}" | tr '[:upper:]' '[:lower:]')
+csubst_scan_n_permutations="${csubst_scan_n_permutations:-1000}"
+csubst_scan_site_plot=$(echo "${csubst_scan_site_plot:-yes}" | tr '[:upper:]' '[:lower:]')
+csubst_scan_tree_site_plot_format=$(echo "${csubst_scan_tree_site_plot_format:-pdf}" | tr '[:upper:]' '[:lower:]')
+csubst_scan_tree_site_plot_max_sites="${csubst_scan_tree_site_plot_max_sites:-30}"
 uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
 tree_rooting_method=$(echo "${tree_rooting_method}" | tr '[:upper:]' '[:lower:]')
 apply_gene_evolution_profile
@@ -449,6 +462,69 @@ case "${csubst_nonsyn_recode}" in
   *)
     echo "Invalid csubst_nonsyn_recode: ${csubst_nonsyn_recode}"
     echo 'csubst_nonsyn_recode must be one of no, 3di20, dayhoff6, sr6, kgb6, sr4, dayhoff9, dayhoff12, dayhoff15, dayhoff18, srchisq6, kgbauto6. Exiting.'
+    exit 1
+    ;;
+esac
+case "${csubst_scan_rate_event_mode}" in
+  posterior_sum|called)
+    ;;
+  *)
+    echo "Invalid csubst_scan_rate_event_mode: ${csubst_scan_rate_event_mode}"
+    echo 'csubst_scan_rate_event_mode must be either "posterior_sum" or "called". Exiting.'
+    exit 1
+    ;;
+esac
+case "${csubst_scan_rate_length}" in
+  raw|sn_rescaled|n_rescaled)
+    ;;
+  *)
+    echo "Invalid csubst_scan_rate_length: ${csubst_scan_rate_length}"
+    echo 'csubst_scan_rate_length must be one of raw, sn_rescaled, n_rescaled. Exiting.'
+    exit 1
+    ;;
+esac
+case "${csubst_scan_rate_exposure}" in
+  q_weighted|state_aware|raw_branch_length)
+    ;;
+  *)
+    echo "Invalid csubst_scan_rate_exposure: ${csubst_scan_rate_exposure}"
+    echo 'csubst_scan_rate_exposure must be one of q_weighted, state_aware, raw_branch_length. Exiting.'
+    exit 1
+    ;;
+esac
+case "${csubst_scan_other_scope}" in
+  all|sister)
+    ;;
+  *)
+    echo "Invalid csubst_scan_other_scope: ${csubst_scan_other_scope}"
+    echo 'csubst_scan_other_scope must be either "all" or "sister". Exiting.'
+    exit 1
+    ;;
+esac
+case "${csubst_scan_pvalue_calibration}" in
+  none|candidate_fixed|full_scan)
+    ;;
+  *)
+    echo "Invalid csubst_scan_pvalue_calibration: ${csubst_scan_pvalue_calibration}"
+    echo 'csubst_scan_pvalue_calibration must be one of none, candidate_fixed, full_scan. Exiting.'
+    exit 1
+    ;;
+esac
+case "${csubst_scan_site_plot}" in
+  yes|no)
+    ;;
+  *)
+    echo "Invalid csubst_scan_site_plot: ${csubst_scan_site_plot}"
+    echo 'csubst_scan_site_plot must be either "yes" or "no". Exiting.'
+    exit 1
+    ;;
+esac
+case "${csubst_scan_tree_site_plot_format}" in
+  pdf|png|svg)
+    ;;
+  *)
+    echo "Invalid csubst_scan_tree_site_plot_format: ${csubst_scan_tree_site_plot_format}"
+    echo 'csubst_scan_tree_site_plot_format must be one of pdf, png, svg. Exiting.'
     exit 1
     ;;
 esac
@@ -634,6 +710,11 @@ file_og_iqtree_anc="${dir_output_active}/iqtree_anc/${og_id}_iqtree.anc.zip"
 file_og_csubst_b="${dir_output_active}/csubst_b/${og_id}_csubst_b.tsv"
 file_og_csubst_cb_2="${dir_output_active}/csubst_cb_2/${og_id}_csubst_cb_2.tsv"
 file_og_csubst_cb_stats="${dir_output_active}/csubst_cb_stats/${og_id}_csubst_cb_stats.tsv"
+file_og_csubst_scan="${dir_output_active}/csubst_scan/${og_id}_csubst_scan.tsv"
+file_og_csubst_scan_units="${dir_output_active}/csubst_scan_units/${og_id}_csubst_scan_units.tsv"
+file_og_csubst_scan_foreground_branch="${dir_output_active}/csubst_scan_foreground_branch/${og_id}_csubst_foreground_branch.txt"
+file_og_csubst_scan_plot="${dir_output_active}/csubst_scan_plot/${og_id}_csubst_scan.tree_site.${csubst_scan_tree_site_plot_format}"
+file_og_csubst_scan_log="${dir_output_active}/csubst_scan_log/${og_id}_csubst_scan.log"
 if [[ ${csubst_max_arity} -gt 2 ]]; then
   for ((i = 3; i <= csubst_max_arity; i++)); do
     declare file_og_csubst_cb_${i}="${dir_output_active}/csubst_cb_${i}/${og_id}.csubst_cb_${i}.tsv"
@@ -2831,6 +2912,11 @@ if [[ ${check_pruned} -eq 1 ]]; then
     "${file_og_iqtree_anc}"
     "${file_og_csubst_b}"
     "${file_og_csubst_cb_stats}"
+    "${file_og_csubst_scan}"
+    "${file_og_csubst_scan_units}"
+    "${file_og_csubst_scan_foreground_branch}"
+    "${file_og_csubst_scan_plot}"
+    "${file_og_csubst_scan_log}"
     "${file_og_gene_pgls}"
     "${file_og_gene_pgls_plot}"
     "${file_og_species_pgls}"
@@ -3400,7 +3486,7 @@ if [[ ! -s "${file_og_iqtree_anc}" && ${run_iqtree_anc} -eq 1 ]]; then
   gg_step_start "${task}"
 
   shopt -s nullglob
-  csubst_cleanup_paths=(csubst.* csubst_search)
+  csubst_cleanup_paths=(csubst.* csubst_search csubst_scan)
   shopt -u nullglob
   if [[ ${#csubst_cleanup_paths[@]} -gt 0 ]]; then
     rm -rf -- "${csubst_cleanup_paths[@]}"
@@ -3549,6 +3635,97 @@ if [[ (! -s "${file_og_csubst_b}" || ! -s "${file_og_csubst_cb_stats}") && ${run
   else
     echo "CSUBST failed."
   fi
+else
+  gg_step_skip "${task}"
+fi
+
+task="CSUBST scan"
+disable_if_no_input_file "run_csubst_scan" "${file_og_iqtree_anc}" "${file_sp_trait}"
+if [[ (! -s "${file_og_csubst_scan}" || ! -s "${file_og_csubst_scan_units}") && ${run_csubst_scan} -eq 1 ]]; then
+  gg_step_start "${task}"
+
+  echo "CSUBST scan foreground specification file: ${file_sp_trait}"
+  first_trait_header=""
+  IFS= read -r first_trait_header < "${file_sp_trait}" || true
+  if [[ "${first_trait_header}" == *" "* ]]; then
+    echo "Column names should not contain spaces: ${file_sp_trait}"
+    echo "Exiting."
+    exit 1
+  fi
+  write_species_trait_foreground_regex_table "${file_sp_trait}" "foreground.tsv"
+
+  if ! csubst scan -h >/dev/null 2>&1; then
+    echo "csubst scan is unavailable in this runtime. Rebuild the GeneGalleon container with a csubst version that provides the scan subcommand."
+    exit 1
+  fi
+
+  shopt -s nullglob
+  csubst_cleanup_paths=(csubst.* csubst_scan)
+  shopt -u nullglob
+  if [[ ${#csubst_cleanup_paths[@]} -gt 0 ]]; then
+    rm -rf -- "${csubst_cleanup_paths[@]}"
+  fi
+  if [[ -e "${og_id}.iqtree.anc" ]]; then
+    rm -rf -- "${og_id}.iqtree.anc"
+  fi
+  unzip -q "${file_og_iqtree_anc}"
+  csubst_input_base="./${og_id}.iqtree.anc/csubst"
+  csubst_scan_dir="csubst_scan"
+
+  csubst scan \
+    --genetic_code "${genetic_code}" \
+    --alignment_file "${csubst_input_base}.fasta" \
+    --rooted_tree_file "${csubst_input_base}.nwk" \
+    --iqtree_treefile "${csubst_input_base}.treefile" \
+    --iqtree_state "${csubst_input_base}.state" \
+    --iqtree_rate "${csubst_input_base}.rate" \
+    --iqtree_iqtree "${csubst_input_base}.iqtree" \
+    --iqtree_log "${csubst_input_base}.log" \
+    --iqtree_model "${codon_model}" \
+    --foreground foreground.tsv \
+    --fg_format 2 \
+    --scan_match "${csubst_scan_match}" \
+    --scan_min_event_pp "${csubst_scan_min_event_pp}" \
+    --scan_min_support "${csubst_scan_min_support}" \
+    --scan_rate_event_mode "${csubst_scan_rate_event_mode}" \
+    --scan_rate_length "${csubst_scan_rate_length}" \
+    --scan_rate_exposure "${csubst_scan_rate_exposure}" \
+    --scan_other_scope "${csubst_scan_other_scope}" \
+    --scan_pvalue_calibration "${csubst_scan_pvalue_calibration}" \
+    --scan_n_permutations "${csubst_scan_n_permutations}" \
+    --scan_site_plot "${csubst_scan_site_plot}" \
+    --tree_site_plot_format "${csubst_scan_tree_site_plot_format}" \
+    --tree_site_plot_max_sites "${csubst_scan_tree_site_plot_max_sites}" \
+    --nonsyn_recode "${csubst_nonsyn_recode}" \
+    --threads "${GG_TASK_CPUS}" \
+    --float_type 32 \
+    --outdir "${csubst_scan_dir}" \
+    --output_prefix csubst
+
+  if [[ -s "${csubst_scan_dir}/csubst_scan.tsv" && -s "${csubst_scan_dir}/csubst_scan_units.tsv" ]]; then
+    echo "CSUBST scan was successful."
+    mv_out "${csubst_scan_dir}/csubst_scan.tsv" "${file_og_csubst_scan}"
+    mv_out "${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"
+    shopt -s nullglob
+    csubst_scan_foreground_branch_files=("${csubst_scan_dir}"/csubst_foreground_branch*.txt)
+    shopt -u nullglob
+    for csubst_scan_foreground_branch_file in "${csubst_scan_foreground_branch_files[@]}"; do
+      csubst_scan_foreground_branch_name=$(basename "${csubst_scan_foreground_branch_file}")
+      csubst_scan_foreground_branch_suffix="${csubst_scan_foreground_branch_name#csubst_foreground_branch}"
+      mv_out \
+        "${csubst_scan_foreground_branch_file}" \
+        "${dir_output_active}/csubst_scan_foreground_branch/${og_id}_csubst_foreground_branch${csubst_scan_foreground_branch_suffix}"
+    done
+    if [[ -e "${csubst_scan_dir}/csubst_scan.tree_site.${csubst_scan_tree_site_plot_format}" ]]; then
+      mv_out "${csubst_scan_dir}/csubst_scan.tree_site.${csubst_scan_tree_site_plot_format}" "${file_og_csubst_scan_plot}"
+    fi
+    if [[ -e "${csubst_scan_dir}/csubst.log" ]]; then
+      mv_out "${csubst_scan_dir}/csubst.log" "${file_og_csubst_scan_log}"
+    fi
+  else
+    echo "CSUBST scan failed."
+  fi
+  rm -rf -- "${og_id}.iqtree.anc" "${csubst_scan_dir}"
 else
   gg_step_skip "${task}"
 fi

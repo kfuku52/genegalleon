@@ -62,6 +62,16 @@ while IFS=$'\t' read -r env_name command_name; do
   fi
 done < <(read_tsv "${required_file}")
 
+if micromamba run -n base bash -lc "command -v csubst >/dev/null 2>&1"; then
+  if micromamba run -n base csubst scan -h >/dev/null 2>&1; then
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "csubst scan" "1" >> "${report_file}"
+  else
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "csubst scan" "0" >> "${report_file}"
+    echo "[validate_runtime] csubst is installed but the scan subcommand is unavailable."
+    required_failed=1
+  fi
+fi
+
 while IFS=$'\t' read -r env_name command_name; do
   check_one "optional" "${env_name}" "${command_name}" || true
 done < <(read_tsv "${optional_file}")

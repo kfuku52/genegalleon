@@ -111,7 +111,7 @@ Likely causes:
 
 Examples:
 
-- `gg_gene_database_core.sh` skips database generation if `stat_tree/` or `stat_branch/` is missing,
+- `gg_gene_summary_entrypoint.sh` skips database generation if `stat_tree/` or `stat_branch/` is missing,
 - `gg_progress_summary_core.sh` skips orthogroup summary generation if the selected gene-count table or AMAS directories are absent.
 
 ### Taxonomy or database cache issues

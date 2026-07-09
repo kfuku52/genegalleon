@@ -756,20 +756,8 @@ gg_entrypoint_env_override_prefix() {
 			printf '%s\n' "GG_GENE_EVOLUTION_"
 			return 0
 			;;
-		gg_gene_database_entrypoint.sh)
-			printf '%s\n' "GG_GENE_DATABASE_"
-			return 0
-			;;
 		gg_gene_summary_entrypoint.sh)
 			printf '%s\n' "GG_GENE_SUMMARY_"
-			return 0
-			;;
-		gg_hgt_entrypoint.sh)
-			printf '%s\n' "GG_HGT_"
-			return 0
-			;;
-		gg_convergent_sites_entrypoint.sh)
-			printf '%s\n' "GG_CONVERGENT_SITES_"
 			return 0
 			;;
 		gg_progress_summary_entrypoint.sh)

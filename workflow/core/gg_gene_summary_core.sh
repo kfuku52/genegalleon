@@ -441,9 +441,16 @@ run_database_summary_for_mode() {
     --dir_stat_tree "${dir_gene_family}/stat_tree" \
     --dir_stat_branch "${dir_gene_family}/stat_branch" \
     --dir_csubst_cb_prefix "${dir_gene_family}/csubst_cb_" \
+    --dir_csubst_aa_change "${dir_gene_family}/csubst_scan" \
+    --dir_csubst_aa_change_unit "${dir_gene_family}/csubst_scan_units" \
     --row_threshold 8000 \
     --cutoff_stat "OCNany2spe,0.8" \
     --ncpu "${GG_TASK_CPUS:-1}"
+  python "${gg_support_dir}/plot_csubst_aa_change_summary.py" \
+    --dbpath "${file_gene_family_db}" \
+    --out_prefix "${dir_gene_summary}/${mode_gene_summary}_csubst_aa_change" \
+    --out_tsv "${dir_gene_summary}/${mode_gene_summary}_csubst_aa_change_summary.tsv" \
+    --top_n 30
 }
 
 run_hgt_summary_for_mode() {

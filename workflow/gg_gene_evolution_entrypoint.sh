@@ -135,6 +135,7 @@ run_l1ou=0 # OU modeling of gene expression using the kfl1ou-backed l1ou-compati
 run_pgls_species_tree=0 # PGLS with species tree.
 run_iqtree_anc=0 # Ancestral state reconstruction required for CSUBST.
 run_csubst=0 # Protein convergence analysis with CSUBST.
+run_csubst_scan=0 # Direct recurrent amino-acid/state-change scan with CSUBST.
 run_summary=1 # Generate summary tables.
 run_tree_plot=1 # Tree visualization pdf.
 
@@ -186,6 +187,18 @@ csubst_max_combination=10000 # Maximum number of CSUBST combinations retained af
 csubst_fg_exclude_wg="no" # Exclude whole-genome duplication branches from CSUBST foregrounds.
 csubst_fg_stem_only="yes" # Restrict CSUBST foreground candidates to stem branches only.
 csubst_nonsyn_recode="${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" # no|3di20|dayhoff6|sr6|kgb6|sr4|dayhoff9|dayhoff12|dayhoff15|dayhoff18|srchisq6|kgbauto6; optional amino-acid recoding scheme used for CSUBST nonsynonymous convergence tests.
+csubst_scan_match="${csubst_scan_match:-any2spe}" # CSUBST scan recurrent substitution pattern classes: any2spe by default, or comma-separated classes/all.
+csubst_scan_min_event_pp="${csubst_scan_min_event_pp:-0.5}" # Posterior probability threshold for candidate discovery and support calls.
+csubst_scan_min_support="${csubst_scan_min_support:-2}" # Minimum foreground-unit support; <=1 is treated as a fraction, >1 as a count.
+csubst_scan_rate_event_mode="${csubst_scan_rate_event_mode:-posterior_sum}" # posterior_sum|called; event mass used for scan rate tests.
+csubst_scan_rate_length="${csubst_scan_rate_length:-n_rescaled}" # raw|sn_rescaled|n_rescaled branch-length scale for scan rate tests.
+csubst_scan_rate_exposure="${csubst_scan_rate_exposure:-q_weighted}" # q_weighted|state_aware|raw_branch_length exposure model for scan rate tests.
+csubst_scan_other_scope="${csubst_scan_other_scope:-all}" # all|sister control branch set for scan rate tests.
+csubst_scan_pvalue_calibration="${csubst_scan_pvalue_calibration:-full_scan}" # none|candidate_fixed|full_scan empirical scan P-value calibration.
+csubst_scan_n_permutations="${csubst_scan_n_permutations:-1000}" # Number of foreground-clade permutations for csubst scan calibration.
+csubst_scan_site_plot="${csubst_scan_site_plot:-yes}" # Generate csubst scan tree + detected-site summary plot.
+csubst_scan_tree_site_plot_format="${csubst_scan_tree_site_plot_format:-pdf}" # pdf|png|svg format for csubst scan site plot.
+csubst_scan_tree_site_plot_max_sites="${csubst_scan_tree_site_plot_max_sites:-30}" # Maximum detected sites shown in the csubst scan site plot.
 
 # Intron and chromosomal character evolution
 intron_gain_rate="0.0001" # Prior intron-gain rate used by stochastic character mapping of intron presence/absence.

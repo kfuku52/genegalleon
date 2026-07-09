@@ -76,6 +76,9 @@ This is the main results area. Major stage roots include:
 - `workspace/output/query2family`
 - `workspace/output/orthogroup`
 - `workspace/output/csubst_site`
+- `workspace/output/{query2family,orthogroup}/csubst_scan`
+- `workspace/output/{query2family,orthogroup}/csubst_scan_units`
+- `workspace/output/{query2family,orthogroup}/csubst_scan_plot`
 - `workspace/output/versions`
 
 `workspace/output/input_generation/gg_input_generation_species.tsv` is the rolling species summary table

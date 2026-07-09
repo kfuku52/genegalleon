@@ -11,6 +11,7 @@ import gc
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import math
 import logging
+import numpy as np
 try:
     from tqdm import tqdm
 except ImportError:
@@ -57,6 +58,13 @@ pd.set_option('display.max_rows', 100)
 pd.set_option('display.max_columns', 1000)
 
 MAX_SQL_VARIABLES = 999
+AA_CHANGE_TABLE = "aa_change"
+AA_CHANGE_UNIT_TABLE = "aa_change_unit"
+AA_CHANGE_FDR_PVALUE_COLUMNS = {
+    "p_rate_enrichment": "q_rate_enrichment_global",
+    "p_rate_enrichment_empirical": "q_rate_enrichment_empirical_global",
+    "p_rate_enrichment_empirical_maxT": "q_rate_enrichment_empirical_maxT_global",
+}
 
 
 def require_sqlalchemy():
@@ -119,6 +127,96 @@ def create_indexes(engine, tables):
                 logger.info(f"Created index '{index_name}' on table '{table}'.")
             except Exception as e:
                 logger.error(f"Failed to create index on table '{table}': {e}")
+
+
+def quote_sql_identifier(identifier):
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", str(identifier)):
+        raise ValueError(f"Unsafe SQL identifier: {identifier}")
+    return f'"{identifier}"'
+
+
+def table_exists(conn, table_name):
+    query = sqlalchemy.text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:name")
+    return conn.execute(query, {"name": table_name}).fetchone() is not None
+
+
+def table_columns(conn, table_name):
+    table_sql = quote_sql_identifier(table_name)
+    info = pd.read_sql_query(sql=sqlalchemy.text(f"PRAGMA TABLE_INFO({table_sql})"), con=conn)
+    if info.empty:
+        return []
+    return info["name"].tolist()
+
+
+def calculate_bh_fdr(pvalues):
+    pvalues = pd.to_numeric(pd.Series(pvalues), errors="coerce").to_numpy(dtype=float)
+    qvalues = np.full(shape=pvalues.shape, fill_value=np.nan, dtype=float)
+    finite = np.isfinite(pvalues)
+    if not finite.any():
+        return qvalues
+    finite_index = np.flatnonzero(finite)
+    finite_p = np.clip(pvalues[finite], 0.0, 1.0)
+    order = np.argsort(finite_p, kind="mergesort")
+    ranked = finite_p[order]
+    ranks = np.arange(1, ranked.shape[0] + 1, dtype=float)
+    ranked_q = ranked * ranked.shape[0] / ranks
+    ranked_q = np.minimum.accumulate(ranked_q[::-1])[::-1]
+    ranked_q = np.clip(ranked_q, 0.0, 1.0)
+    qvalues[finite_index[order]] = ranked_q
+    return qvalues
+
+
+def add_global_aa_change_fdr_columns(engine, table_name=AA_CHANGE_TABLE):
+    require_sqlalchemy()
+    with engine.begin() as conn:
+        if not table_exists(conn, table_name):
+            logger.info(f"Skipping global FDR calculation because table '{table_name}' does not exist.")
+            return []
+        columns = table_columns(conn, table_name)
+        pvalue_columns = [col for col in AA_CHANGE_FDR_PVALUE_COLUMNS if col in columns]
+        if not pvalue_columns:
+            logger.info(f"Skipping global FDR calculation because '{table_name}' has no recognized P-value columns.")
+            return []
+
+        table_sql = quote_sql_identifier(table_name)
+        for p_col in pvalue_columns:
+            q_col = AA_CHANGE_FDR_PVALUE_COLUMNS[p_col]
+            if q_col not in columns:
+                conn.execute(sqlalchemy.text(f"ALTER TABLE {table_sql} ADD COLUMN {quote_sql_identifier(q_col)} REAL"))
+                logger.info(f"Added global FDR column '{q_col}' to table '{table_name}'.")
+
+        select_cols = ["rowid AS _rowid"] + [quote_sql_identifier(col) for col in pvalue_columns]
+        df = pd.read_sql_query(
+            sql=sqlalchemy.text(f"SELECT {', '.join(select_cols)} FROM {table_sql}"),
+            con=conn,
+        )
+        if df.empty:
+            logger.info(f"Table '{table_name}' is empty; global FDR columns were added without row updates.")
+            return [AA_CHANGE_FDR_PVALUE_COLUMNS[col] for col in pvalue_columns]
+
+        update_df = pd.DataFrame({"_rowid": df["_rowid"].astype(int)})
+        for p_col in pvalue_columns:
+            q_col = AA_CHANGE_FDR_PVALUE_COLUMNS[p_col]
+            update_df[q_col] = calculate_bh_fdr(df[p_col])
+
+        temp_table = "_tmp_aa_change_global_fdr"
+        update_df.to_sql(temp_table, con=conn, if_exists="replace", index=False, chunksize=calculate_chunksize(update_df.shape[1]), method="multi")
+        conn.execute(sqlalchemy.text(f"CREATE INDEX IF NOT EXISTS idx_{temp_table}_rowid ON {quote_sql_identifier(temp_table)} (_rowid);"))
+        temp_sql = quote_sql_identifier(temp_table)
+        for q_col in update_df.columns:
+            if q_col == "_rowid":
+                continue
+            q_col_sql = quote_sql_identifier(q_col)
+            conn.execute(sqlalchemy.text(
+                f"UPDATE {table_sql} "
+                f"SET {q_col_sql} = (SELECT {q_col_sql} FROM {temp_sql} WHERE {temp_sql}._rowid = {table_sql}.rowid) "
+                f"WHERE rowid IN (SELECT _rowid FROM {temp_sql});"
+            ))
+        conn.execute(sqlalchemy.text(f"DROP TABLE {temp_sql};"))
+        logger.info(
+            f"Calculated global BH FDR for {update_df.shape[0]:,} '{table_name}' rows using columns: {', '.join(pvalue_columns)}"
+        )
+        return [AA_CHANGE_FDR_PVALUE_COLUMNS[col] for col in pvalue_columns]
 
 def validate_directories(required_dirs, db_path):
     for dir_path in required_dirs:
@@ -210,9 +308,13 @@ def gene_family_id_from_path(file_path):
     for suffix in (
         '_stat.branch',
         '_stat.tree',
+        '_csubst_scan_units',
+        '_csubst_scan',
         '_csubst_cb_stats',
         '.stat.branch',
         '.stat.tree',
+        '.csubst_scan_units',
+        '.csubst_scan',
         '.csubst_cb_stats',
     ):
         if stem.endswith(suffix):
@@ -279,6 +381,8 @@ def main():
     parser.add_argument('--dir_stat_tree', metavar='PATH', default='', type=str, help='Directory for stat_tree files.')
     parser.add_argument('--dir_stat_branch', metavar='PATH', default='', type=str, help='Directory for stat_branch files.')
     parser.add_argument('--dir_csubst_cb_prefix', metavar='PATH', default='', type=str, help='Prefix path for csubst_cb directories.')
+    parser.add_argument('--dir_csubst_aa_change', metavar='PATH', default='', type=str, help='Directory for csubst scan candidate state-change files.')
+    parser.add_argument('--dir_csubst_aa_change_unit', metavar='PATH', default='', type=str, help='Directory for csubst scan foreground-unit files.')
     parser.add_argument('--row_threshold', metavar='INT', default=10000, type=int, help='Number of rows to accumulate before inserting into SQL.')
     parser.add_argument('--cb_categories', metavar='CAT1,CAT2,...', default='any2any,any2spe', type=str, help='CSUBST cb stat categories to incorporate.')
     parser.add_argument('--cutoff_stat', metavar='STAT1,VALUE1|STAT2,VALUE2|...', default='OCNany2spe,0.8', type=str, help='Cutoff statistics for filtering.')
@@ -341,6 +445,14 @@ def main():
             arity = re.sub('.*_', '', cb_dir)
             table_name = f'cb{arity}'
             indirs[table_name] = cb_dir
+    scan_dirs = [
+        (AA_CHANGE_TABLE, params['dir_csubst_aa_change']),
+        (AA_CHANGE_UNIT_TABLE, params['dir_csubst_aa_change_unit']),
+    ]
+    for table_name, scan_dir in scan_dirs:
+        if scan_dir and os.path.isdir(scan_dir) and has_visible_entries(scan_dir):
+            logger.info(f"CSUBST scan directory detected for table '{table_name}': {scan_dir}")
+            indirs[table_name] = scan_dir
     logger.info(f"Input directories to be appended: {', '.join(indirs.values())}")
 
     # Check column names of all input files
@@ -512,6 +624,16 @@ def main():
             logger.info(f"Existing tables before indexing: {tables}")
         except Exception as e:
             logger.error(f"Failed to retrieve tables after insertion: {e}")
+            tables = []
+
+    add_global_aa_change_fdr_columns(engine)
+
+    with engine.begin() as conn:
+        try:
+            tables = pd.read_sql_query(sql=sqlalchemy.text("SELECT name FROM sqlite_master WHERE type='table'"), con=conn)['name'].values
+            logger.info(f"Existing tables after global FDR calculation: {tables}")
+        except Exception as e:
+            logger.error(f"Failed to retrieve tables after FDR calculation: {e}")
             tables = []
 
     # Create indexes on the new tables

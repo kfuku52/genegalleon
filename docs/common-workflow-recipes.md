@@ -242,7 +242,7 @@ After orthogroup-mode downstream outputs exist:
 
 ```bash
 cd workflow
-bash gg_gene_database_entrypoint.sh
+mode_gene_summary=orthogroup run_database_prep=1 bash gg_gene_summary_entrypoint.sh
 ```
 
 Required inputs:
@@ -253,14 +253,6 @@ Required inputs:
 Main output:
 
 - `workspace/output/orthogroup/gg_orthogroup.db`
-
-The same database build can also be run through the mode-aware summary
-entrypoint:
-
-```bash
-cd workflow
-mode_gene_summary=orthogroup run_database_prep=1 bash gg_gene_summary_entrypoint.sh
-```
 
 For query2family outputs, switch the mode:
 
@@ -275,7 +267,7 @@ After orthogroup outputs and the database are available:
 
 ```bash
 cd workflow
-bash gg_convergent_sites_entrypoint.sh
+mode_gene_summary=orthogroup run_convergent_sites=1 bash gg_gene_summary_entrypoint.sh
 ```
 
 Default prerequisites:
@@ -288,8 +280,8 @@ Main output root:
 
 - `workspace/output/csubst_site`
 
-`gg_gene_summary_entrypoint.sh` can run the same post-analysis for either
-gene-family mode by setting `mode_gene_summary` and `run_convergent_sites=1`.
+The same post-analysis can be run for either gene-family mode by setting
+`mode_gene_summary` and `run_convergent_sites=1`.
 
 ## 10. Generate gene-family summary figures
 
@@ -371,9 +363,7 @@ Not every project needs every step, but the common broad order is:
    tests
 8. run `gg_gene_evolution_entrypoint.sh` in the mode you need
 9. optionally run `gg_gene_summary_entrypoint.sh`
-10. optionally run `gg_gene_database_entrypoint.sh`
-11. optionally run `gg_convergent_sites_entrypoint.sh`
-12. optionally run `gg_progress_summary_entrypoint.sh`
+10. optionally run `gg_progress_summary_entrypoint.sh`
 
 ## 13. Dry-run and debug the full wrapper chain
 
