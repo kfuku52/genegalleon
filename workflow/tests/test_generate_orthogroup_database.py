@@ -55,6 +55,21 @@ def test_process_files_returns_empty_dataframe_when_columns_missing(tmp_path):
     assert out.empty
 
 
+def test_process_files_can_fill_missing_optional_columns(tmp_path):
+    mod = load_module()
+    infile = tmp_path / "OG0003.csubst_scan.tsv"
+    pandas.DataFrame({"a": [1], "b": [2]}).to_csv(infile, sep="\t", index=False)
+
+    out = mod.process_files(
+        str(infile),
+        ["orthogroup", "a", "b", "future_optional"],
+        fill_missing_columns=True,
+    )
+
+    assert out.columns.tolist() == ["orthogroup", "a", "b", "future_optional"]
+    assert pandas.isna(out.loc[0, "future_optional"])
+
+
 def test_parse_cutoff_stat_parses_valid_tokens_and_ignores_invalid():
     mod = load_module()
     parsed = mod.parse_cutoff_stat("OCNany2spe,0.8|badtoken|,1|ABC,notfloat|XYZ,1.5")
@@ -105,14 +120,35 @@ def test_database_builder_adds_aa_change_tables_and_global_fdr(tmp_path):
     pandas.DataFrame({"branch_id": [1], "branch_metric": [2.0]}).to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
     pandas.DataFrame(
         [
-            {"trait": "traitA", "state_change": "10K", "p_rate_enrichment": 0.01, "p_rate_enrichment_empirical": 0.02},
-            {"trait": "traitA", "state_change": "12S", "p_rate_enrichment": 0.04, "p_rate_enrichment_empirical": 0.50},
+            {
+                "trait": "traitA",
+                "state_change": "10K",
+                "site_rate": 0.15,
+                "site_rate_categorized": 2.0,
+                "p_rate_enrichment": 1e-7,
+                "p_rate_enrichment_empirical": 2e-6,
+                "q_rate_enrichment_empirical": 0.03,
+                "q_rate_enrichment_empirical_by_trait": 0.04,
+                "q_rate_enrichment_empirical_by_trait_match": 0.05,
+            },
+            {
+                "trait": "traitA",
+                "state_change": "12S",
+                "site_rate": 0.25,
+                "site_rate_categorized": 3.0,
+                "p_rate_enrichment": 0.04,
+                "p_rate_enrichment_empirical": 0.50,
+                "q_rate_enrichment_empirical": 0.50,
+                "q_rate_enrichment_empirical_by_trait": 0.60,
+                "q_rate_enrichment_empirical_by_trait_match": 0.70,
+            },
         ]
     ).to_csv(aa_change / "OG0001_csubst_scan.tsv", sep="\t", index=False)
+    assert "1e-07" in (aa_change / "OG0001_csubst_scan.tsv").read_text(encoding="utf-8")
     pandas.DataFrame(
         [
-            {"trait": "traitA", "unit_id": 1, "matched_leaf_names": "Species_A"},
-            {"trait": "traitA", "unit_id": 2, "matched_leaf_names": "Species_B"},
+            {"trait": "traitA", "unit_id": 1, "matched_leaf_names": "Species_A", "fg_clade_branch_ids": "1,2"},
+            {"trait": "traitA", "unit_id": 2, "matched_leaf_names": "Species_B", "fg_clade_branch_ids": "3,4"},
         ]
     ).to_csv(aa_change_unit / "OG0001_csubst_scan_units.tsv", sep="\t", index=False)
 
@@ -147,15 +183,169 @@ def test_database_builder_adds_aa_change_tables_and_global_fdr(tmp_path):
         assert "aa_change" in tables
         assert "aa_change_unit" in tables
         aa_df = pandas.read_sql_query(
-            "SELECT orthogroup, state_change, q_rate_enrichment_global, q_rate_enrichment_empirical_global FROM aa_change ORDER BY state_change",
+            "SELECT orthogroup, state_change, site_rate, site_rate_categorized, "
+            "q_rate_enrichment_empirical_by_trait_match, q_rate_enrichment_global, "
+            "q_rate_enrichment_empirical_global FROM aa_change ORDER BY state_change",
             conn,
         )
-        unit_df = pandas.read_sql_query("SELECT orthogroup, unit_id FROM aa_change_unit ORDER BY unit_id", conn)
+        unit_df = pandas.read_sql_query(
+            "SELECT orthogroup, unit_id, fg_clade_branch_ids FROM aa_change_unit ORDER BY unit_id",
+            conn,
+        )
 
     assert aa_df["orthogroup"].tolist() == ["OG0001", "OG0001"]
-    assert aa_df["q_rate_enrichment_global"].round(4).tolist() == [0.02, 0.04]
-    assert aa_df["q_rate_enrichment_empirical_global"].round(4).tolist() == [0.04, 0.5]
+    assert math.isclose(aa_df.loc[0, "q_rate_enrichment_global"], 2e-7)
+    assert math.isclose(aa_df.loc[1, "q_rate_enrichment_global"], 0.04)
+    assert math.isclose(aa_df.loc[0, "q_rate_enrichment_empirical_global"], 4e-6)
+    assert math.isclose(aa_df.loc[1, "q_rate_enrichment_empirical_global"], 0.5)
+    assert aa_df["site_rate"].tolist() == [0.15, 0.25]
+    assert aa_df["site_rate_categorized"].tolist() == [2.0, 3.0]
+    assert aa_df["q_rate_enrichment_empirical_by_trait_match"].tolist() == [0.05, 0.7]
     assert unit_df["orthogroup"].tolist() == ["OG0001", "OG0001"]
+    assert unit_df["fg_clade_branch_ids"].tolist() == ["1,2", "3,4"]
+
+
+def test_database_builder_rejects_legacy_scan_schema_before_overwriting_database(tmp_path):
+    stat_tree = tmp_path / "stat_tree"
+    stat_branch = tmp_path / "stat_branch"
+    aa_change = tmp_path / "csubst_scan"
+    aa_change_unit = tmp_path / "csubst_scan_units"
+    for path in [stat_tree, stat_branch, aa_change, aa_change_unit]:
+        path.mkdir()
+
+    pandas.DataFrame({"tree_metric": [1.0]}).to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
+    pandas.DataFrame({"branch_metric": [2.0]}).to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
+    pandas.DataFrame(
+        [{"trait": "traitA", "state_change": "10K", "p_rate_enrichment": 0.01}]
+    ).to_csv(aa_change / "OG0001_csubst_scan.tsv", sep="\t", index=False)
+    pandas.DataFrame(
+        [{"trait": "traitA", "unit_id": 1}]
+    ).to_csv(aa_change_unit / "OG0001_csubst_scan_units.tsv", sep="\t", index=False)
+
+    db_path = tmp_path / "gg_orthogroup.db"
+    original_database = b"existing database must survive schema preflight"
+    db_path.write_bytes(original_database)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--overwrite",
+            "1",
+            "--dbpath",
+            str(db_path),
+            "--dir_stat_tree",
+            str(stat_tree),
+            "--dir_stat_branch",
+            str(stat_branch),
+            "--dir_csubst_aa_change",
+            str(aa_change),
+            "--dir_csubst_aa_change_unit",
+            str(aa_change_unit),
+            "--ncpu",
+            "1",
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode != 0
+    assert "Unsupported legacy CSUBST scan TSV schema" in proc.stderr
+    assert "site_rate_categorized" in proc.stderr
+    assert "fg_clade_branch_ids" in proc.stderr
+    assert "Regenerate legacy CSUBST scan outputs" in proc.stderr
+    assert db_path.read_bytes() == original_database
+
+
+def test_scan_schema_preflight_allows_different_optional_column_sets(tmp_path):
+    mod = load_module()
+    aa_change = tmp_path / "csubst_scan"
+    aa_change.mkdir()
+    pandas.DataFrame(
+        [
+            {
+                "trait": "traitA",
+                "state_change": "A10V",
+                "site_rate_categorized": 2.0,
+                "q_rate_enrichment_empirical": 0.03,
+                "q_rate_enrichment_empirical_by_trait": 0.04,
+                "q_rate_enrichment_empirical_by_trait_match": 0.05,
+            }
+        ]
+    ).to_csv(aa_change / "OG0001_csubst_scan.tsv", sep="\t", index=False)
+    pandas.DataFrame(
+        [
+            {
+                "trait": "traitA",
+                "state_change": "A20V",
+                "site_rate_categorized": 3.0,
+                "q_rate_enrichment_empirical": 0.06,
+                "q_rate_enrichment_empirical_by_trait": 0.07,
+                "q_rate_enrichment_empirical_by_trait_match": 0.08,
+                "future_optional_metric": 42.0,
+            }
+        ]
+    ).to_csv(aa_change / "OG0002_csubst_scan.tsv", sep="\t", index=False)
+
+    mod.validate_csubst_scan_schemas([(mod.AA_CHANGE_TABLE, str(aa_change))])
+
+
+def test_database_builder_imports_variable_current_scan_columns(tmp_path):
+    stat_tree = tmp_path / "stat_tree"
+    stat_branch = tmp_path / "stat_branch"
+    aa_change = tmp_path / "csubst_scan"
+    aa_change_unit = tmp_path / "csubst_scan_units"
+    for path in [stat_tree, stat_branch, aa_change, aa_change_unit]:
+        path.mkdir()
+
+    pandas.DataFrame({"tree_metric": [1.0]}).to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
+    pandas.DataFrame({"branch_metric": [2.0]}).to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
+    baseline = {
+        "trait": "traitA",
+        "site_rate_categorized": 2.0,
+        "p_rate_enrichment": 0.01,
+        "q_rate_enrichment_empirical": 0.03,
+        "q_rate_enrichment_empirical_by_trait": 0.04,
+        "q_rate_enrichment_empirical_by_trait_match": 0.05,
+    }
+    pandas.DataFrame([{**baseline, "state_change": "A10V"}]).to_csv(
+        aa_change / "OG0001_csubst_scan.tsv", sep="\t", index=False
+    )
+    pandas.DataFrame([{**baseline, "state_change": "A20V", "future_optional_metric": 42.0}]).to_csv(
+        aa_change / "OG0002_csubst_scan.tsv", sep="\t", index=False
+    )
+
+    db_path = tmp_path / "gg_orthogroup.db"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--overwrite",
+            "1",
+            "--dbpath",
+            str(db_path),
+            "--dir_stat_tree",
+            str(stat_tree),
+            "--dir_stat_branch",
+            str(stat_branch),
+            "--dir_csubst_aa_change",
+            str(aa_change),
+            "--dir_csubst_aa_change_unit",
+            str(aa_change_unit),
+            "--ncpu",
+            "1",
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    with sqlite3.connect(db_path) as conn:
+        observed = conn.execute(
+            "SELECT orthogroup, future_optional_metric FROM aa_change ORDER BY orthogroup"
+        ).fetchall()
+    assert observed == [("OG0001", None), ("OG0002", 42.0)]
 
 
 def test_import_has_no_logfile_side_effect(tmp_path, monkeypatch):

@@ -295,6 +295,10 @@ Current behavior notes:
 - `run_csubst_scan=1` uses existing CSUBST ancestral-reconstruction inputs and
   writes candidate amino-acid/state changes; it is independent from
   `run_csubst`, which runs branch-combination search.
+- `csubst scan` columns are matched by name rather than position or count;
+  additional columns and per-file optional-column differences are retained,
+  with unavailable values stored as `NULL`. Legacy outputs missing the current
+  semantic marker columns are rejected during database preparation.
 
 Wrapper-specific note:
 

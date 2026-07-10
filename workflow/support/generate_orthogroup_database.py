@@ -65,6 +65,17 @@ AA_CHANGE_FDR_PVALUE_COLUMNS = {
     "p_rate_enrichment_empirical": "q_rate_enrichment_empirical_global",
     "p_rate_enrichment_empirical_maxT": "q_rate_enrichment_empirical_maxT_global",
 }
+CSUBST_SCAN_BASELINE_COLUMNS = {
+    AA_CHANGE_TABLE: {
+        "site_rate_categorized",
+        "q_rate_enrichment_empirical",
+        "q_rate_enrichment_empirical_by_trait",
+        "q_rate_enrichment_empirical_by_trait_match",
+    },
+    AA_CHANGE_UNIT_TABLE: {
+        "fg_clade_branch_ids",
+    },
+}
 
 
 def require_sqlalchemy():
@@ -93,6 +104,51 @@ def visible_files(path):
 
 def has_visible_entries(path):
     return len(visible_entries(path)) > 0
+
+
+def validate_csubst_scan_schemas(scan_dirs):
+    """
+    Require current semantic marker columns while allowing optional columns to vary.
+
+    The marker columns distinguish the current scan semantics from legacy
+    outputs. Additional columns are discovered dynamically and need not be the
+    same across every per-family TSV.
+    """
+    problems = []
+    for table_name, scan_dir in scan_dirs:
+        if not scan_dir or not os.path.isdir(scan_dir):
+            continue
+        files = visible_files(scan_dir)
+        if not files:
+            continue
+
+        required_columns = CSUBST_SCAN_BASELINE_COLUMNS[table_name]
+        for infile in files:
+            file_path = os.path.join(scan_dir, infile)
+            header_columns = read_header_columns(file_path)
+            duplicate_columns = sorted({col for col in header_columns if header_columns.count(col) > 1})
+            if duplicate_columns:
+                problems.append(
+                    f"{file_path}: duplicate columns: {', '.join(duplicate_columns)}"
+                )
+                continue
+
+            header_set = frozenset(header_columns)
+            missing_columns = sorted(required_columns.difference(header_set))
+            if missing_columns:
+                problems.append(
+                    f"{file_path}: missing current-schema columns: {', '.join(missing_columns)}"
+                )
+
+    if problems:
+        details = "\n  - ".join(problems)
+        raise ValueError(
+            "Unsupported legacy CSUBST scan TSV schema. GeneGalleon requires the current "
+            "semantic marker columns but accepts any number of additional columns. "
+            "Regenerate legacy CSUBST scan outputs with the current "
+            f"csubst version before rebuilding the database.\n  - {details}"
+        )
+
 
 def optimize_sqlite(engine):
     """
@@ -238,11 +294,13 @@ def validate_directories(required_dirs, db_path):
     retry=retry_if_exception_type(Exception),
     reraise=True
 )
-def process_files(file_path, columns_to_read, available_cols_set=None):
+def process_files(file_path, columns_to_read, available_cols_set=None, fill_missing_columns=False):
     """
     Read a TSV file, add the 'orthogroup' column, ensure any missing columns become NaN,
     and return the trimmed DataFrame with the columns we want to keep (including 'orthogroup').
-    If any required columns are missing, return an empty DataFrame.
+    If required columns are missing, return an empty DataFrame unless
+    fill_missing_columns is enabled. The latter is used for CSUBST scan tables,
+    whose optional output columns may vary between files and csubst releases.
     """
     try:
         # Derive the gene-family ID from the file name. This script is used for
@@ -264,7 +322,7 @@ def process_files(file_path, columns_to_read, available_cols_set=None):
 
         # Check if any desired columns are missing from the file
         missing_cols = [c for c in desired_cols if c not in available_cols_set]
-        if missing_cols:
+        if missing_cols and not fill_missing_columns:
             # Convert the set to a string and truncate if it is too long
             msg = str(missing_cols)
             if len(msg) > 300:
@@ -282,6 +340,10 @@ def process_files(file_path, columns_to_read, available_cols_set=None):
             usecols=filtered_cols, 
             low_memory=True
         )
+
+        if fill_missing_columns:
+            for col in missing_cols:
+                df[col] = np.nan
 
         # --- Clean null characters ---
         # Apply cleaning only on object-type columns so that numeric columns remain unaffected.
@@ -406,6 +468,16 @@ def main():
     ]
     validate_directories(required_dirs, db_path)
 
+    scan_dirs = [
+        (AA_CHANGE_TABLE, params['dir_csubst_aa_change']),
+        (AA_CHANGE_UNIT_TABLE, params['dir_csubst_aa_change_unit']),
+    ]
+    try:
+        validate_csubst_scan_schemas(scan_dirs)
+    except ValueError as exc:
+        logger.error(str(exc))
+        raise SystemExit(1) from exc
+
     if params['overwrite'] and os.path.exists(db_path):
         try:
             os.remove(db_path)
@@ -445,10 +517,6 @@ def main():
             arity = re.sub('.*_', '', cb_dir)
             table_name = f'cb{arity}'
             indirs[table_name] = cb_dir
-    scan_dirs = [
-        (AA_CHANGE_TABLE, params['dir_csubst_aa_change']),
-        (AA_CHANGE_UNIT_TABLE, params['dir_csubst_aa_change_unit']),
-    ]
     for table_name, scan_dir in scan_dirs:
         if scan_dir and os.path.isdir(scan_dir) and has_visible_entries(scan_dir):
             logger.info(f"CSUBST scan directory detected for table '{table_name}': {scan_dir}")
@@ -557,6 +625,7 @@ def main():
                     file_path,
                     columns[stat],
                     header_columns_set_by_file[stat].get(infile),
+                    stat in CSUBST_SCAN_BASELINE_COLUMNS,
                 )
                 futures[future] = (stat, file_path)
 

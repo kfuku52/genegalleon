@@ -31,8 +31,12 @@ DISPLAY_COLUMNS = [
     "state_change",
     "target_class",
     "scan_match",
+    "scan_rate_exposure",
     "codon_site_alignment",
     "site",
+    "site_rate",
+    "site_rate_categorized",
+    "site_rate_quantile",
     "from_state",
     "to_state",
     "support_unit_count",
@@ -49,7 +53,9 @@ DISPLAY_COLUMNS = [
     "q_rate_enrichment_global",
     "q_rate_enrichment_empirical_global",
     "q_rate_enrichment_empirical_maxT_global",
-    "site_rate_quantile",
+    "q_rate_enrichment_empirical",
+    "q_rate_enrichment_empirical_by_trait",
+    "q_rate_enrichment_empirical_by_trait_match",
 ]
 
 

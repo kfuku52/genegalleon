@@ -310,6 +310,10 @@ csubst_scan_n_permutations="1000"
 csubst_scan_site_plot="yes"
 ```
 
+`csubst_scan_min_support` preserves the spelling passed to `csubst`: `"1"`
+means one foreground unit, fractional values such as `"0.5"` are proportions,
+and `"1.0"` means 100% of foreground units.
+
 `csubst scan` treats each positive foreground lineage ID as one foreground unit.
 For scan support counts, use distinct positive IDs for independent foreground
 lineages in `workspace/input/species_trait/species_trait.tsv` rather than a
@@ -327,3 +331,27 @@ candidate substitutions into the SQLite database. In `gg_gene_summary`, set
 `*_csubst_aa_change_substitution_spectrum.pdf`, and
 `*_csubst_aa_change_foreground_unit_support_matrix.pdf`; combine it with
 `run_gene_family_database_build=1` to refresh the database and plots in one run.
+
+GeneGalleon does not require a fixed CSUBST scan column count. Columns are
+matched by header name, the union of reported columns is retained, and optional
+columns absent from an individual per-family TSV are stored as `NULL` in the
+SQLite database. The semantic baseline for this release requires
+`site_rate_categorized` and the three empirical q-value columns in
+`csubst_scan.tsv`, plus `fg_clade_branch_ids` in
+`csubst_scan_units.tsv`; any number of additional columns is accepted without a
+GeneGalleon change. Legacy outputs missing those baseline markers are rejected
+before the SQLite database is overwritten. When a csubst upgrade changes scan
+statistic semantics rather than only adding report columns, regenerate all scan
+tables, plots, logs, and foreground-branch outputs together so that the result
+set remains internally consistent.
+
+For current scan outputs, `site_rate` is the posterior-mean rate and the former
+IQ-TREE categorical rate is retained as `site_rate_categorized`.
+`site_rate_quantile` is calculated from posterior-mean rates with tied values
+sharing the same average rank. Target and other event/rate quantities cover the
+full foreground clades, and q-weighted exposure uses the parent-codon posterior
+and codon Q values. Analytical and empirical P/q values therefore should not be
+compared directly with values from legacy scan outputs. For 3Di analyses,
+`scan_rate_exposure` records the effective `state_aware` model even when the
+requested default was `q_weighted`. These provenance and new empirical q-value
+columns are retained in the database and the ranked AA-change summary TSV.
