@@ -6,7 +6,6 @@ import re
 import shlex
 from pathlib import Path
 
-
 SHORT_OTHER_RE = re.compile(r"ion torrent|dnbseq|bgiseq|capillary|abi|454|ls454", re.IGNORECASE)
 SHORT_READ_SPOT_LENGTH_THRESHOLD = 1000
 PLATFORM_REGEX_BY_FAMILY = {

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
 import re
-
+from pathlib import Path
 
 TAXONOMIC_PROXIMITY_QUALIFIERS = frozenset(("cf", "aff", "nr"))
 TAXONOMIC_GENUS_ONLY_PLACEHOLDERS = frozenset(("sp", "spp"))

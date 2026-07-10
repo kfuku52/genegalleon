@@ -1,8 +1,7 @@
-from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
 import sys
 import types
-
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "orthogroup_statistics.py"
 

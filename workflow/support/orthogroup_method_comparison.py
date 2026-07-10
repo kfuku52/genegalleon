@@ -4,9 +4,10 @@
 import argparse
 import datetime
 import os
-import pandas
 import sys
 import time
+
+import pandas
 
 pandas.set_option("display.max_columns", None)
 

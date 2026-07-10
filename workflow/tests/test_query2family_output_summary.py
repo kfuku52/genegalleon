@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pandas
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "query2family_output_summary.py"
 
 

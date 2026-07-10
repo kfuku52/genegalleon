@@ -2,14 +2,14 @@
 
 import argparse
 import csv
-from functools import cmp_to_key
 import gzip
-from pathlib import Path
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+from functools import cmp_to_key
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -17,7 +17,6 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from species_labeling import extract_species_label, matches_species_label
-
 
 FASTA_EXTENSIONS = (
     ".fa",

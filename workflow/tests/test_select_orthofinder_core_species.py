@@ -1,9 +1,8 @@
-from pathlib import Path
 import os
 import stat
 import subprocess
 import sys
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "workflow" / "support" / "select_orthofinder_core_species.py"

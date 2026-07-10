@@ -2,11 +2,11 @@
 # coding: utf-8
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
-from pathlib import Path
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import numpy
 import pandas

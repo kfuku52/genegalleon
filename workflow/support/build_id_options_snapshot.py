@@ -2,12 +2,12 @@
 
 import argparse
 import csv
-from datetime import datetime, timezone
 import json
-from pathlib import Path
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request
 
@@ -20,12 +20,12 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
+from format_species_network import guarded_urlopen as urlopen  # noqa: E402
 from format_species_provider_config import (  # noqa: E402
     DEFAULT_INPUT_RELATIVE_DIRS,
     DOWNLOAD_MANIFEST_BUILDER_PROVIDERS,
     ID_OPTIONS_FETCH_PROVIDERS,
 )
-from format_species_network import guarded_urlopen as urlopen  # noqa: E402
 
 PROVIDERS = DOWNLOAD_MANIFEST_BUILDER_PROVIDERS
 FETCH_PROVIDERS = ID_OPTIONS_FETCH_PROVIDERS

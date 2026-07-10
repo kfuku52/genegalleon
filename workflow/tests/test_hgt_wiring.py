@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENE_EVOLUTION_ENTRYPOINT = REPO_ROOT / "workflow" / "gg_gene_evolution_entrypoint.sh"
 GENE_EVOLUTION_CORE = REPO_ROOT / "workflow" / "core" / "gg_gene_evolution_core.sh"

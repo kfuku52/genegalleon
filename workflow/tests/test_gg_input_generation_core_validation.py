@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 WORKFLOW_DIR = Path(__file__).resolve().parents[1]
 
 

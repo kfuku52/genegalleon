@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 
 import argparse
-from collections import defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
-from http.client import IncompleteRead, RemoteDisconnected
 import gzip
 import hashlib
 import html
 import io
 import json
 import os
-from pathlib import Path
 import re
-import sqlite3
 import socket
+import sqlite3
 import sys
 import tarfile
 import threading
 import time
 import zipfile
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from http.client import IncompleteRead, RemoteDisconnected
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 from urllib.request import Request
@@ -28,6 +28,15 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
+from format_species_download_stage import apply_download_input_dir, run_download_stage
+from format_species_manifest import (
+    build_resolved_manifest_row,
+    manifest_has_usable_source_bundle,
+    read_download_manifest,
+    resolved_manifest_fieldnames,
+    write_resolved_manifest_tsv,
+)
+from format_species_network import guarded_urlopen as urlopen
 from format_species_provider_config import (
     DEFAULT_INPUT_RELATIVE_DIRS,
     DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS,
@@ -35,18 +44,7 @@ from format_species_provider_config import (
     ORYZA_MINUTA_PROVIDER,
     PROVIDERS,
 )
-from format_species_manifest import (
-    build_resolved_manifest_row,
-    manifest_has_annotation_source,
-    manifest_has_cds_source,
-    manifest_has_usable_source_bundle,
-    read_download_manifest,
-    resolved_manifest_fieldnames,
-    write_resolved_manifest_tsv,
-)
-from format_species_download_stage import apply_download_input_dir, run_download_stage
-from format_species_network import guarded_urlopen as urlopen
-from format_species_provider_inputs import manifest_declared_providers, resolve_provider_inputs
+from format_species_provider_inputs import manifest_declared_providers, resolve_provider_inputs  # noqa: F401
 from format_species_provider_urls import (
     ENSEMBLGENOMES_DEFAULT_ID_URL_TEMPLATES,
     NCBI_ASSEMBLY_ACCESSION_PATTERN,
@@ -55,7 +53,6 @@ from format_species_provider_urls import (
     ensembl_like_default_id_url_templates,
     expand_ensemblgenomes_id_candidates_from_available,
     extract_ncbi_accession_from_source_id,
-    fetch_ensemblgenomes_dir_ids as _fetch_ensemblgenomes_dir_ids,
     fetch_jgi_session_cookie,
     fetch_text_with_headers,
     is_url_like,
@@ -81,6 +78,9 @@ from format_species_provider_urls import (
     resolve_plantgarden_web_base_url,
     resolve_veupathdb_service_base_url,
     strip_provider_prefix,
+)
+from format_species_provider_urls import (
+    fetch_ensemblgenomes_dir_ids as _fetch_ensemblgenomes_dir_ids,
 )
 from format_species_writers import (
     apply_common_replacements,

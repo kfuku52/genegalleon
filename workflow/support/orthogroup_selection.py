@@ -6,12 +6,12 @@ import datetime
 import glob
 import io
 import os
-from pathlib import Path
 import shlex
 import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 try:
     from distutils.util import strtobool

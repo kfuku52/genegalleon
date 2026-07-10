@@ -1,8 +1,7 @@
-from pathlib import Path
 import os
 import stat
 import subprocess
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT = REPO_ROOT / "gg_container_build_entrypoint.sh"

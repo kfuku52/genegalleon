@@ -3,27 +3,30 @@
 
 import argparse
 import datetime
+import gc
 import glob
+import logging
+import math
 import os
 import re
 import time
-import gc
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import math
-import logging
+
 import numpy as np
+
 try:
     from tqdm import tqdm
 except ImportError:
     def tqdm(iterable, **_kwargs):
         return iterable
 import pandas as pd
+
 try:
     import sqlalchemy
 except ImportError:
     sqlalchemy = None
 try:
-    from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type
+    from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 except ImportError:
     def retry(*_args, **_kwargs):
         def _decorator(func):
@@ -104,6 +107,16 @@ def visible_files(path):
 
 def has_visible_entries(path):
     return len(visible_entries(path)) > 0
+
+
+def discover_csubst_cb_dirs(prefix):
+    if not prefix:
+        return []
+    return [
+        path
+        for path in glob.glob(prefix + '*')
+        if not path.endswith('csubst_cb_stats')
+    ]
 
 
 def validate_csubst_scan_schemas(scan_dirs):
@@ -298,9 +311,9 @@ def process_files(file_path, columns_to_read, available_cols_set=None, fill_miss
     """
     Read a TSV file, add the 'orthogroup' column, ensure any missing columns become NaN,
     and return the trimmed DataFrame with the columns we want to keep (including 'orthogroup').
-    If required columns are missing, return an empty DataFrame unless
-    fill_missing_columns is enabled. The latter is used for CSUBST scan tables,
-    whose optional output columns may vary between files and csubst releases.
+    If required columns are missing, raise an error unless fill_missing_columns
+    is enabled. The latter is used for CSUBST scan tables, whose optional output
+    columns may vary between files and csubst releases.
     """
     try:
         # Derive the gene-family ID from the file name. This script is used for
@@ -323,14 +336,12 @@ def process_files(file_path, columns_to_read, available_cols_set=None, fill_miss
         # Check if any desired columns are missing from the file
         missing_cols = [c for c in desired_cols if c not in available_cols_set]
         if missing_cols and not fill_missing_columns:
-            # Convert the set to a string and truncate if it is too long
-            msg = str(missing_cols)
-            if len(msg) > 300:
-                msg = msg[:300] + "..."
-            logger.warning(
-                f"Missing columns {msg} in file '{file_path}'. Skipping this file."
+            preview = ", ".join(missing_cols[:20])
+            if len(missing_cols) > 20:
+                preview += f", ... ({len(missing_cols)} total)"
+            raise ValueError(
+                f"Missing required columns in '{file_path}': {preview}"
             )
-            return pd.DataFrame()  # Return empty DataFrame
 
         # Read only the available columns using the filtered list.
         df = pd.read_csv(
@@ -360,8 +371,8 @@ def process_files(file_path, columns_to_read, available_cols_set=None, fill_miss
 
         return df
 
-    except Exception as e:
-        logger.error(f"Error processing file {file_path}: {e}")
+    except Exception:
+        logger.exception("Error processing file %s", file_path)
         raise
 
 
@@ -510,7 +521,7 @@ def main():
         'branch': params['dir_stat_branch'],
     }
     # Identify csubst directories
-    cb_dirs = [d for d in glob.glob(params['dir_csubst_cb_prefix'] + '*') if not d.endswith('csubst_cb_stats')]
+    cb_dirs = discover_csubst_cb_dirs(params['dir_csubst_cb_prefix'])
     for cb_dir in cb_dirs:
         if os.path.isdir(cb_dir) and has_visible_entries(cb_dir):
             logger.info(f"CSUBST higher-order convergence directory detected: {cb_dir}")
@@ -610,15 +621,17 @@ def main():
         if cs < 1:
             chunksizes[stat] = 1
 
-    # Process files concurrently
+    # Process files concurrently. Any unreadable or malformed input makes the
+    # complete database build fail; a partial database must never be reported
+    # as a successful result.
     futures = {}
+    processing_errors = []
     with ThreadPoolExecutor(max_workers=params['max_workers']) as executor:
         for stat, files in infiles.items():
             for infile in files:
                 file_path = os.path.join(indirs[stat], infile)
                 if os.path.getsize(file_path) == 0:
-                    logger.warning(f"Skipping empty file: {file_path}")
-                    processed_files[stat] += 1
+                    processing_errors.append((file_path, "input file is empty"))
                     continue
                 future = executor.submit(
                     process_files,
@@ -661,6 +674,30 @@ def main():
                     gc.collect()
             except Exception as e:
                 logger.error(f"Error processing file {file_path}: {e}")
+                processing_errors.append((file_path, str(e)))
+
+    if processing_errors:
+        engine.dispose()
+        details = "\n  - ".join(
+            f"{file_path}: {message}" for file_path, message in processing_errors
+        )
+        raise RuntimeError(
+            "Orthogroup database generation failed; no partial build will be "
+            f"reported as successful.\n  - {details}"
+        )
+
+    incomplete_tables = {
+        stat: (processed_files[stat], total_files[stat])
+        for stat in total_files
+        if processed_files[stat] != total_files[stat]
+    }
+    if incomplete_tables:
+        engine.dispose()
+        details = ", ".join(
+            f"{stat}={processed}/{total}"
+            for stat, (processed, total) in sorted(incomplete_tables.items())
+        )
+        raise RuntimeError(f"Input-file accounting mismatch: {details}")
 
     # Insert any remaining rows for each table
     for stat, buffer_list in buffers.items():

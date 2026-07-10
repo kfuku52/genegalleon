@@ -9,7 +9,6 @@ import sys
 from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 
-
 NUMERIC_RE = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 CALIBRATION_RE = re.compile(r"(?P<kind>\b[BUL])\((?P<body>[^)]*)\)")
 BRANCH_LENGTH_RE = re.compile(

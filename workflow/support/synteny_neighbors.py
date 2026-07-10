@@ -4,12 +4,12 @@ import argparse
 import gzip
 import hashlib
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 from collections import defaultdict
+from pathlib import Path
 
 import pandas
 
@@ -25,7 +25,6 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from species_labeling import extract_species_label, matches_species_label
-
 
 FASTA_EXTENSIONS = (
     ".fa",

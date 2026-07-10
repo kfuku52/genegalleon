@@ -1,17 +1,16 @@
-from importlib.util import module_from_spec, spec_from_file_location
-from http.client import RemoteDisconnected
-import io
-from pathlib import Path
 import csv
 import gzip
+import io
 import json
 import os
-import sqlite3
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tarfile
-
+from http.client import RemoteDisconnected
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "format_species_inputs.py"
 VALIDATE_MAPPING_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_cds_gff_mapping.py"

@@ -3,17 +3,17 @@
 import argparse
 import csv
 import json
-from pathlib import Path
 import re
 import sys
-from typing import Dict, Iterable, List, Tuple
+from pathlib import Path
+from typing import Dict, Iterable, List
 
 try:
     from openpyxl import Workbook
+    from openpyxl.comments import Comment
+    from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter
     from openpyxl.workbook.defined_name import DefinedName
-    from openpyxl.styles import Font
-    from openpyxl.comments import Comment
     from openpyxl.worksheet.datavalidation import DataValidation
 except Exception:  # pragma: no cover - exercised in runtime environments without openpyxl
     Workbook = None
@@ -34,7 +34,6 @@ from format_species_provider_config import (
     ENSEMBL_LIKE_PROVIDERS,
 )
 from species_labeling import extract_species_label
-
 
 FASTA_EXTENSIONS = (
     ".fa",

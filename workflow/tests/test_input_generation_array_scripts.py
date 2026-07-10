@@ -1,10 +1,9 @@
-from pathlib import Path
 import csv
 import gzip
 import json
 import subprocess
 import sys
-
+from pathlib import Path
 
 SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 PLAN_SCRIPT = SUPPORT_DIR / "plan_input_generation_tasks.py"

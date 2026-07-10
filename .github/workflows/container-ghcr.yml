@@ -279,6 +279,23 @@ jobs:
           cache-from: type=gha,scope=container-${{ steps.platform.outputs.pair }}
           cache-to: type=gha,mode=max,scope=container-${{ steps.platform.outputs.pair }}
 
+      - name: Validate current csubst scan runtime and database import
+        shell: bash
+        env:
+          IMAGE: ${{ needs.prepare-build.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DIGEST}" ]]; then
+            echo "docker/build-push-action did not return an image digest."
+            exit 1
+          fi
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -w "${GITHUB_WORKSPACE}" \
+            "${IMAGE}@${DIGEST}" \
+            python -m pytest -q workflow/tests/test_csubst_scan_runtime_integration.py
+
       - name: Export digest
         shell: bash
         run: |

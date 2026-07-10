@@ -1,15 +1,14 @@
 import importlib.util
-from pathlib import Path
-import zipfile
 import json
-import threading
 import subprocess
 import sys
+import threading
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pandas
-
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "generate_species_trait.py"
 

@@ -1,9 +1,8 @@
-from pathlib import Path
 import gzip
 import json
 import subprocess
 import sys
-
+from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_cds_gff_mapping.py"
 

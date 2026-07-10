@@ -3,11 +3,11 @@
 import argparse
 import datetime
 import gzip
-import pandas
 import sys
 import time
 from urllib.parse import unquote
 
+import pandas
 from species_labeling import strip_species_label
 
 pandas.options.mode.chained_assignment = None

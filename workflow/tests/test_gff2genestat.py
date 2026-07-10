@@ -1,16 +1,17 @@
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pandas
 
-from workflow.support.gff2genestat import add_id_column
-from workflow.support.gff2genestat import add_intron_info
-from workflow.support.gff2genestat import extract_by_ids
-from workflow.support.gff2genestat import process_single_gff
-from workflow.support.gff2genestat import summarize_gene_features
-from workflow.support.gff2genestat import trim_species_prefix
-
+from workflow.support.gff2genestat import (
+    add_id_column,
+    add_intron_info,
+    extract_by_ids,
+    process_single_gff,
+    summarize_gene_features,
+    trim_species_prefix,
+)
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "gff2genestat.py"
 

@@ -4,13 +4,11 @@ import argparse
 import math
 import os
 import textwrap
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, List, Tuple
 
 import numpy
 import pandas
-
 from score_hgt_candidates import TaxonomyResolver, normalize_sci_name
-
 
 OVERVIEW_NUMERIC_COLUMNS: List[Tuple[str, str, str]] = [
     ("candidate_gene_count", "Cand", "Number of genes descending from the candidate GeneRax HGT branch."),
@@ -55,8 +53,8 @@ def get_pyplot():
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
-    from matplotlib.path import Path
     from matplotlib.patches import PathPatch, Rectangle
+    from matplotlib.path import Path
 
     matplotlib.rcParams["font.size"] = 8
     matplotlib.rcParams["font.family"] = "Helvetica"

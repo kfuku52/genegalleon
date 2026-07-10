@@ -1,7 +1,6 @@
+import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-import sys
-
 
 SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 SCRIPT_PATH = SUPPORT_DIR / "gff_attribute_identifier.py"

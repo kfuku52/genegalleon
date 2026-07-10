@@ -1,13 +1,12 @@
-from pathlib import Path
 import gzip
 import os
 import shutil
 import sqlite3
 import subprocess
+from pathlib import Path
 
 import pandas
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HGT_CORE = REPO_ROOT / "workflow" / "core" / "gg_hgt_core.sh"

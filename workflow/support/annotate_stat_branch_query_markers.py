@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pandas
 
-
 MARKER_COLUMNS = [
     "query_marker",
     "query_marker_source",

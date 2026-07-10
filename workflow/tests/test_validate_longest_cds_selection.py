@@ -1,10 +1,9 @@
-from pathlib import Path
 import csv
 import gzip
 import json
 import subprocess
 import sys
-
+from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_longest_cds_selection.py"
 

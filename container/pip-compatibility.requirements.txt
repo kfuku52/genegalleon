@@ -1,0 +1,9 @@
+# Packages that must be installed after the conda environment is solved.
+# Keep this file shared by Docker and native Apptainer builds so both
+# container paths have the same dependency constraints and security fixes.
+pillow==12.3.0
+lxml==6.1.1
+genomepy==0.16.2
+mysql-connector-python==9.7.0
+ortools==9.12.4544
+protobuf==5.29.6

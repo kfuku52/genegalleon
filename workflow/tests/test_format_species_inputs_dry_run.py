@@ -1,9 +1,8 @@
-from pathlib import Path
 import csv
 import os
 import subprocess
 import sys
-
+from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "format_species_inputs.py"
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"

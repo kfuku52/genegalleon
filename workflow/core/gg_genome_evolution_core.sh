@@ -2037,7 +2037,8 @@ if [[ ${num_busco_ids} -ne ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]
       return 0
     fi
     local infile_path="${dir_single_copy_fasta}/${infile}"
-    local num_seq=$(gg_count_fasta_records "${infile_path}")
+    local num_seq
+    num_seq=$(gg_count_fasta_records "${infile_path}")
     if [[ ${num_seq} -lt 2 ]]; then
       echo "Skipped. At least 2 sequences are necessary for MAFFT: ${infile}"
       return 0
@@ -2372,7 +2373,8 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq
     if [[ -s "${outfile}" ]]; then
       return 0
     fi
-    local num_seq=$(gg_count_fasta_records "${dir_single_copy_trimal}/${infile}")
+    local num_seq
+    num_seq=$(gg_count_fasta_records "${dir_single_copy_trimal}/${infile}")
     if [[ ${num_seq} -lt 3 ]]; then
       echo "Skipped. At least 3 sequences are necessary for IQ-TREE: ${infile}"
       return 0
@@ -2504,7 +2506,8 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq
     if [[ -s "${outfile}" ]]; then
       return 0
     fi
-    local num_seq=$(gg_count_fasta_records "${dir_single_copy_trimal}/${infile}")
+    local num_seq
+    num_seq=$(gg_count_fasta_records "${dir_single_copy_trimal}/${infile}")
     if [[ ${num_seq} -lt 3 ]]; then
       echo "Skipped. At least 3 sequences are necessary for IQ-TREE: ${infile}"
       return 0
@@ -3979,8 +3982,8 @@ busco_grampa() {
     sed -e "s/_/-/g" \
       > "grampa_input_species_tree.nwk"
 
-  > "grampa_input_gene_trees.nwk"
-  > "busco_genetree_filenames.txt"
+  : > "grampa_input_gene_trees.nwk"
+  : > "busco_genetree_filenames.txt"
   for nwk_file in "${nwk_files[@]}"; do
     transformed_tree=$(
       sed -E "s/([(,])([^_)(,:]+)_([^_)(,:]+)_([^)(,:]+)([)(,:])/\1\4|||\2\-\3\5/g" "${nwk_file}" |

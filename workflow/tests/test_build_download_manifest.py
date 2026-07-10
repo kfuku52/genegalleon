@@ -1,13 +1,12 @@
-from pathlib import Path
 import csv
 import json
 import shutil
 import subprocess
 import sys
 import zipfile
+from pathlib import Path
 
 from openpyxl import load_workbook
-
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "build_download_manifest.py"
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"

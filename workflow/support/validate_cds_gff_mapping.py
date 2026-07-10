@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import gzip
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
 from species_labeling import extract_species_label
-
 
 FASTA_EXTENSIONS = (
     ".fa",

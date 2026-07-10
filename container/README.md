@@ -9,17 +9,22 @@ that can target both:
 
 From the project README and Wiki (`gg_versions`):
 - `GeneGalleon` was originally assembled interactively from a miniconda3 Singularity sandbox.
-- The runtime now uses a single conda `base` env, with selected tools installed from upstream refs at build time
+- The runtime now uses a single conda `base` env, with selected tools installed from pinned upstream commits at build time
   (`kfuku52/amalgkit`, `kfuku52/cdskit`, `kfuku52/csubst`, `kfuku52/nwkit`,
   `kfuku52/kftools`, `kfuku52/rkftools`, `kfuku52/RADTE`).
-  User-authored tools follow their configured refs by default, while explicit
-  `*_REPO_SHA` pins remain available as an override when needed.
+  The authoritative defaults live in `container/source_pins.env`; explicit
+  `*_REPO_SHA` build variables remain available as overrides.
 
 So this Dockerfile is designed as:
-1. reproducible base build,
+1. controlled and auditable base build,
 2. architecture-aware optional package handling,
 3. build-time runtime validation against required command lists,
 4. explicit post-build manual steps for licensed/large assets.
+
+The Dockerfile frontend and Micromamba base image are digest-pinned. Updating
+either is an explicit maintenance change, not an implicit effect of rebuilding.
+APT and conda packages are still resolved from their current repositories, so
+builds are not claimed to be bit-for-bit reproducible.
 
 See `container/CAPABILITY_MATRIX.md` for expected parity by architecture.
 
@@ -30,50 +35,34 @@ chmod +x container/buildx.sh
 IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.sh
 ```
 
-Source refs, optional pins, and checksums can be overridden at build time:
+Exact source commits and checksums can be overridden at build time:
 
 ```bash
-KFU52_AMALGKIT_REPO_SHA= \
-KFU52_AMALGKIT_REPO_REF=master \
-KFU52_REPO_REF=master \
+KFU52_CSUBST_REPO_SHA=<40-character-commit-sha> \
 BUSCO_REPO_SHA=6278721a1916f6da310e03ec9674099028c927a4 \
 PAML_REPO_SHA=8daeead6b55523f375d9ac56dcfac38373ef8a2e \
-KFL1OU_REPO_REF=master \
-KFL1OU_REPO_SHA= \
-KFTOOLS_REPO_URL=https://github.com/kfuku52/kftools.git \
-KFTOOLS_REPO_REF=master \
-KFTOOLS_REPO_SHA= \
-RKFTOOLS_REPO_URL=https://github.com/kfuku52/rkftools.git \
-RKFTOOLS_REPO_REF=master \
-RKFTOOLS_REPO_SHA= \
-RADTE_REPO_URL=https://github.com/kfuku52/RADTE.git \
-RADTE_REPO_REF=master \
-RADTE_REPO_SHA= \
 TESTNH_TARBALL_SHA256=598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2 \
 CAFE5_TARBALL_SHA256=71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8 \
 IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.sh
 ```
 
 Default hardening behavior:
-- `amalgkit` installs from `master` by default unless explicitly overridden or pinned
-- user-authored source installs follow their configured refs by default for `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE`
+- all GeneGalleon-maintained source installs use exact Git SHAs from `container/source_pins.env`
+- changing a default source intentionally requires updating that pin file; the change invalidates the corresponding build cache
+- `/opt/pg/logs/source_revisions.tsv` records the effective source revision in both Docker and native Apptainer images
 - `BUSCO` and `paml` remain pinned by default
 - `BioPP/testnh` and `CAFE5` release tarballs are verified with SHA-256 before extraction
 - GitHub/GitLab source fetches prefer release/archive downloads and fall back to `git` retry logic only when needed
 
 Override rules:
-- `KFU52_REPO_REF` applies to `cdskit`, `csubst`, and `nwkit` only when the corresponding `KFU52_*_REPO_SHA` is empty.
-- `KFL1OU_REPO_REF` and `RADTE_REPO_REF` default to `KFU52_REPO_REF` and are used when the corresponding `*_REPO_SHA` is empty.
-- `KFTOOLS_REPO_REF`/`RKFTOOLS_REPO_REF` override only `kftools`/`rkftools` and default to `KFU52_REPO_REF` when set and the corresponding `*_REPO_SHA` is empty.
+- an explicitly supplied `*_REPO_SHA` takes precedence over the matching default in `container/source_pins.env`
+- source overrides should be full 40-character commit SHAs; the standard build wrappers intentionally do not provide an unpinned-ref mode
 - `BUSCO_MIRROR_REPO_URL` is optional and is only used as a secondary source if the primary `BUSCO_REPO_URL` fetch fails.
-- If you override a repo URL to a fork, also update the matching `*_REPO_SHA` or clear it to fall back to the ref/default branch.
+- if you override a repo URL to a fork, also supply a commit SHA that exists in that fork
 
-For `amalgkit`, the default source ref is fixed to `master`:
-- `KFU52_AMALGKIT_REPO_REF=master` (default)
-- `KFU52_AMALGKIT_REPO_SHA=<commit>` pins an exact commit and takes precedence over refs
-- `KFU52_AMALGKIT_AUTO_SELECT_REF=0` (default)
-- `KFU52_AMALGKIT_BRANCH_CANDIDATES=master,kfdevel,devel` is only used if branch auto-selection is explicitly re-enabled
-To restore branch auto-selection, set `KFU52_AMALGKIT_REPO_REF=` and `KFU52_AMALGKIT_AUTO_SELECT_REF=1`. This logic only takes effect when `KFU52_AMALGKIT_REPO_SHA` is empty.
+To update a default dependency, change its SHA in `container/source_pins.env`,
+update any matching version assertion such as `GG_PIN_CSUBST_VERSION`, and run
+the container-backed validation before publishing.
 
 `buildx.sh` runs a preflight check to ensure the conda env set used in
 `workflow/core/gg_*_core.sh` is covered by env installs in `container/Dockerfile`.
@@ -208,7 +197,7 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
   and installed as:
   - `/usr/local/bin/Notung.jar`
 - `BUSCO` and `paml` are fetched from pinned upstream source snapshots by default.
-- `amalgkit` installs from `master` by default; `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` follow their configured refs by default.
+- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` install from the exact commits in `container/source_pins.env` by default.
 - `BioPP/testnh` and `CAFE5` tarballs are checksum-verified during build.
 - The default source is the pinned stable ZIP:
   - `NOTUNG_DOWNLOAD_PAGE=https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip`

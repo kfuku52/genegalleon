@@ -3,20 +3,19 @@
 
 import argparse
 import copy
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
+import ete4
 import numpy
 import pandas
-import ete4
 from ete4.parser.newick import NewickError
-from kftools.kfog import *
-from kftools.kfphylo import *
+from kftools import kfog
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -930,7 +929,7 @@ def main():
         df[cn2] = df[cn2].astype(float)
         df[cn3] = df[cn3].astype(float)
 
-        df["tau"] = calc_tau(df, cn3, unlog2=True, unPlus1=True)
+        df["tau"] = kfog.calc_tau(df, cn3, unlog2=True, unPlus1=True)
         df = df.set_index("branch_id", drop=False)
         for node in nodes:
             nlabel = get_node_label(node)
@@ -948,7 +947,9 @@ def main():
                     df.at[nlabel, "delta_maxmu"] = delta_maxmu
                     my_mu_unlog = numpy.clip(numpy.exp2(my_mu) - 1, a_min=0, a_max=None)
                     sis_mu_unlog = numpy.clip(numpy.exp2(sis_mu) - 1, a_min=0, a_max=None)
-                    df.at[nlabel, "mu_complementarity"] = calc_complementarity(my_mu_unlog, sis_mu_unlog)
+                    df.at[nlabel, "mu_complementarity"] = kfog.calc_complementarity(
+                        my_mu_unlog, sis_mu_unlog
+                    )
             if not node_is_leaf(node):
                 node_regime = regime_by_label[nlabel]
                 child_labels = [get_node_label(child) for child in node.get_children()]
@@ -1207,9 +1208,6 @@ def main():
                 f'Leaving support_unrooted and bl_unrooted as NA: {exc}',
                 file=sys.stderr,
             )
-        subroot_nodes = rooted_tree.get_children()
-        subroot_nlabels = [get_node_label(n) for n in subroot_nodes]
-        is_subroot_support = ~df_tmp.loc[subroot_nlabels,'support_unrooted'].isna()
         numlabel_merge_tables.append(df_tmp)
     if os.path.exists(params["dated_tree"]):
         df_tmp = nwk2table(tree=params["dated_tree"], attr='dist', age=True)
@@ -1298,7 +1296,7 @@ def main():
         else:
             df_branch = pandas.merge(df_branch, df_tmp, on='node_name', how='outer')
         df_branch = df_branch.drop('intron_absent', axis=1)
-        df_branch = compute_delta(df_branch, 'intron_present')
+        df_branch = kfog.compute_delta(df_branch, 'intron_present')
     if (os.path.exists(params["cdskit_localize"])):
         node_left_merge_tables.append(load_cdskit_localize(params['cdskit_localize']))
     if (os.path.exists(params["uniprot"])):
@@ -1453,26 +1451,26 @@ def main():
     tree_info = dict()
     tree_info.update(branch2tree(df_branch))
     if os.path.exists(params['dated_log']):
-        tree_info['dating_method'] = get_dating_method(params['dated_log'])
+        tree_info['dating_method'] = kfog.get_dating_method(params['dated_log'])
     if os.path.exists(params["unaligned_aln"]):
-        tree_tmp = get_aln_stats(params['unaligned_aln'])
+        tree_tmp = kfog.get_aln_stats(params['unaligned_aln'])
         tree_tmp = add_dict_key_prefix(tree_tmp, 'original')
         tree_info.update(tree_tmp)
     if os.path.exists(params["trimal_aln"]):
-        tree_tmp = get_aln_stats(params['trimal_aln'])
+        tree_tmp = kfog.get_aln_stats(params['trimal_aln'])
         tree_tmp = add_dict_key_prefix(tree_tmp, 'cleaned')
         tree_info.update(tree_tmp)
     if os.path.exists(params["rooting_log"]):
-        tree_tmp = get_root_stats(params['rooting_log'])
+        tree_tmp = kfog.get_root_stats(params['rooting_log'])
         tree_info.update(tree_tmp)
     if os.path.exists(params["notung_root_log"]):
-        tree_tmp = get_notung_root_stats(params['notung_root_log'])
+        tree_tmp = kfog.get_notung_root_stats(params['notung_root_log'])
         tree_info.update(tree_tmp)
     if os.path.exists(params["notung_reconcil_stats"]):
-        tree_tmp = get_notung_reconcil_stats(params['notung_reconcil_stats'])
+        tree_tmp = kfog.get_notung_reconcil_stats(params['notung_reconcil_stats'])
         tree_info.update(tree_tmp)
     if os.path.exists(params["iqtree_model"]):
-        tree_tmp = get_iqtree_model_stats(params['iqtree_model'])
+        tree_tmp = kfog.get_iqtree_model_stats(params['iqtree_model'])
         tree_info.update(tree_tmp)
     if os.path.exists(params["codeml_tsv"]):
         tmp = pandas.read_csv(params['codeml_tsv'], sep='\t', header=0, index_col=None, nrows=1)
@@ -1486,7 +1484,7 @@ def main():
             tree_info.update(tree_tmp)
         if os.path.exists(params[method+"_regime"]):
             try:
-                tree_tmp = regime2tree(params[method+'_regime'])
+                tree_tmp = kfog.regime2tree(params[method+'_regime'])
             except ValueError as exc:
                 print(
                     "Skipping {} regime summary due to invalid regime parameters: {}".format(

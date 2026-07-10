@@ -2,13 +2,12 @@
 
 import argparse
 import os
-from pathlib import Path
 import re
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 
-import numpy
 import pandas
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -111,7 +110,8 @@ def run_seqkit(args, df, i, genome_file):
     command1 = [args.seqkit_exe, 'grep', '--pattern', df.at[i, 'chromosome'], '--threads', str(args.ncpu), genome_file]
     command2 = [args.seqkit_exe, 'subseq', '--region', seqkit_region, '--threads', str(args.ncpu)]
     command3 = [args.seqkit_exe, 'seq', '--reverse', '--complement', '--seq-type', 'DNA']
-    cmd_to_str = lambda cmd: ' '.join([shlex.quote(str(x)) for x in cmd])
+    def cmd_to_str(cmd):
+        return ' '.join([shlex.quote(str(x)) for x in cmd])
     if strand == '+':
         commands = [command1, command2]
     else:

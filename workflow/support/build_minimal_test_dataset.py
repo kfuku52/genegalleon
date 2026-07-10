@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
-
 DEFAULT_TARGET_SPECIES = [
     "Arabidopsis_thaliana",
     "Cephalotus_follicularis",

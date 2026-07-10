@@ -587,7 +587,7 @@ gg_export_var_to_container_env_if_set() {
 		return 0
 	fi
 	if [[ -n "${!var_name+x}" ]]; then
-		export "${var_name}"
+		export "${var_name?}"
 		export "SINGULARITYENV_${var_name}=${!var_name}"
 		export "APPTAINERENV_${var_name}=${!var_name}"
 	fi
@@ -4183,6 +4183,9 @@ gg_trigger_versions_dump() {
     echo ""
     echo "$(date): gg_versions trigger completed"
   } > "${tmp_log_file}" 2>&1
+  # The status belongs to the redirected command group above, not to a
+  # standalone echo/printf command.
+  # shellcheck disable=SC2320
   block_exit_code=$?
   if [[ ${block_exit_code} -ne 0 && ${versions_exit_code} -eq 0 ]]; then
     versions_exit_code=${block_exit_code}
@@ -4254,7 +4257,7 @@ enable_all_run_flags_for_debug_mode() {
   done < <(set | sed -n -E 's/^(run_[A-Za-z0-9_]+)=.*/\1/p')
   for flag in "${flags[@]}"; do
     printf -v "${flag}" '%s' 1
-    export "${flag}"
+    export "${flag?}"
   done
   return 0
 }
@@ -4741,7 +4744,8 @@ validate_uniprot_sprot_db_prefix() {
 ensure_uniprot_sprot_db() {
   local gg_workspace_dir=$1
   local sys_prefix="/usr/local/db/uniprot_sprot"
-  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
+  local runtime_root
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
   local runtime_dir="${runtime_root}/uniprot_sprot"
   local runtime_prefix="${runtime_dir}/uniprot_sprot"
   local lock_file="${runtime_root}/locks/uniprot_sprot.lock"
@@ -4778,7 +4782,8 @@ ensure_uniprot_sprot_db() {
 ensure_uniprot_sprot_mmseqs_db() {
   local gg_workspace_dir=$1
   local sys_prefix="/usr/local/db/uniprot_sprot"
-  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
+  local runtime_root
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
   local runtime_dir="${runtime_root}/uniprot_sprot"
   local runtime_prefix="${runtime_dir}/uniprot_sprot"
   local runtime_pep="${runtime_prefix}.pep"
@@ -4839,7 +4844,8 @@ ensure_uniprot_sprot_mmseqs_db() {
 ensure_uniprot_sprot_blast_db() {
   local gg_workspace_dir=$1
   local sys_prefix="/usr/local/db/uniprot_sprot"
-  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
+  local runtime_root
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
   local runtime_dir="${runtime_root}/uniprot_sprot"
   local runtime_prefix="${runtime_dir}/uniprot_sprot"
   local runtime_pep="${runtime_prefix}.pep"
@@ -4971,7 +4977,8 @@ pfam_le_db_is_ready() {
 ensure_pfam_le_db() {
   local gg_workspace_dir=$1
   local sys_dir="/usr/local/db/Pfam_LE"
-  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
+  local runtime_root
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
   local runtime_parent
   runtime_parent=$(workspace_pfam_root "${gg_workspace_dir}")
   local runtime_dir
@@ -5151,7 +5158,8 @@ _ensure_jaspar_file_named() {
   local gg_workspace_dir=$1
   local jaspar_filename=$2
   local sys_file="/usr/local/db/jaspar/${jaspar_filename}"
-  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
+  local runtime_root
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
   local runtime_file="${runtime_root}/jaspar/${jaspar_filename}"
   local lock_basename
   lock_basename=$(echo "${jaspar_filename}" | tr '/ ' '__')
@@ -5239,7 +5247,8 @@ _prepare_latest_jaspar_file_locked() {
 
 ensure_latest_jaspar_file() {
   local gg_workspace_dir=$1
-  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
+  local runtime_root
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
   local runtime_dir="${runtime_root}/jaspar"
   local sys_dir="/usr/local/db/jaspar"
   local lock_file="${runtime_root}/locks/jaspar_latest.lock"
@@ -5312,7 +5321,8 @@ _download_silva_rrna_ref_to_file() {
 ensure_silva_rrna_ref_db() {
   local gg_workspace_dir=$1
   local sys_file="/usr/local/db/silva/rRNA_ref.fa.gz"
-  local runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
+  local runtime_root
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
   local runtime_file="${runtime_root}/silva/rRNA_ref.fa.gz"
   local lock_file="${runtime_root}/locks/silva_rrna_ref.lock"
 

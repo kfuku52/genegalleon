@@ -63,13 +63,15 @@ jobs:
           build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           sif_name="${repo_name}_${release_tag}_amd64.sif"
 
-          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
-          echo "release_sha=${release_sha}" >> "${GITHUB_OUTPUT}"
-          echo "image=${image}" >> "${GITHUB_OUTPUT}"
-          echo "immutable_tag=${immutable_tag}" >> "${GITHUB_OUTPUT}"
-          echo "sha_tag=sha-${short_sha}" >> "${GITHUB_OUTPUT}"
-          echo "build_date=${build_date}" >> "${GITHUB_OUTPUT}"
-          echo "sif_name=${sif_name}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "release_tag=${release_tag}"
+            echo "release_sha=${release_sha}"
+            echo "image=${image}"
+            echo "immutable_tag=${immutable_tag}"
+            echo "sha_tag=sha-${short_sha}"
+            echo "build_date=${build_date}"
+            echo "sif_name=${sif_name}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

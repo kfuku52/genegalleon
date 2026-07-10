@@ -1,11 +1,12 @@
 Bootstrap: docker
-From: mambaorg/micromamba:noble
+From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023bb127baade7e8faca
 
 %files
     @@STAGING_ROOT@@/env /opt/pg/env
     @@STAGING_ROOT@@/spec /opt/pg/spec
     @@STAGING_ROOT@@/testdata /opt/pg/testdata
     @@STAGING_ROOT@@/scripts /opt/pg/scripts
+    @@STAGING_ROOT@@/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt
 
 %environment
     export DEBIAN_FRONTEND=noninteractive
@@ -66,6 +67,7 @@ From: mambaorg/micromamba:noble
 
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archives/partial/*
     apt-get update
+    apt-get upgrade -y
     apt-get install -y --no-install-recommends \
         augustus \
         build-essential \
@@ -115,7 +117,8 @@ From: mambaorg/micromamba:noble
 
     /opt/pg/scripts/install_env.sh base "${base_required}" "${optional_file}" python=3.12
     /opt/pg/scripts/ensure_generax_stable.sh base
-    micromamba install -y --retry-clean-cache --repodata-ttl 3600 -n base -c conda-forge -c bioconda pymol-open-source
+    micromamba install -y --retry-clean-cache --repodata-ttl 3600 -n base -c conda-forge -c bioconda \
+        pymol-open-source 'numpy>=1.26.4,<2'
     micromamba run -n base pip install --no-cache-dir ete4
     micromamba run -n base python -c "import ete4"
     PAML_REPO_URL="${paml_repo_url}" \
@@ -123,6 +126,10 @@ From: mambaorg/micromamba:noble
     PAML_REPO_SHA="${paml_repo_sha}" \
         /opt/pg/scripts/ensure_iq2mc_toolchain.sh base
     /opt/pg/scripts/install_env.sh base "${reconciled_required}" /opt/pg/env/base.r.optional.txt r-base
+    micromamba run -n base pip install --no-cache-dir \
+        -r /opt/pg/pip-compatibility.requirements.txt
+    micromamba run -n base python -c "import genomepy, lxml, ortools, PIL"
+    micromamba run -n base python -m pip check
     kfl1ou_repo_ref="${kfl1ou_repo_ref:-${kfu52_repo_ref}}"
     TESTNH_TARBALL_SHA256="${testnh_tarball_sha256}" \
     CAFE5_TARBALL_SHA256="${cafe5_tarball_sha256}" \
@@ -185,10 +192,24 @@ From: mambaorg/micromamba:noble
     install -m 0755 /tmp/radte/radte.r /usr/local/bin/radte.r
     rm -rf /tmp/radte
 
+    mkdir -p /opt/pg/logs
+    printf '%s\t%s\n' \
+        source revision \
+        amalgkit "${kfu52_amalgkit_repo_sha}" \
+        cdskit "${kfu52_cdskit_repo_sha}" \
+        csubst "${kfu52_csubst_repo_sha}" \
+        nwkit "${kfu52_nwkit_repo_sha}" \
+        kfl1ou "${kfl1ou_repo_sha}" \
+        kftools "${kftools_source_ref}" \
+        rkftools "${rkftools_source_ref}" \
+        RADTE "${radte_source_ref}" \
+        > /opt/pg/logs/source_revisions.tsv
+
     /opt/pg/scripts/validate_runtime.sh \
         --required "${runtime_required}" \
         --optional "${runtime_optional}" \
         --report "/opt/pg/logs/runtime_validation_${target_arch}.tsv"
+    micromamba run -n base python -m pip check
     micromamba clean -i -l -y
 
     mkdir -p /home /usr/local/db/Pfam_LE /usr/local/db/jaspar /opt/pg/logs /opt/conda/envs /workspace

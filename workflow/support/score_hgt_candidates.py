@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
 import argparse
-from collections import Counter
 import gzip
 import os
 import re
 import sqlite3
+from collections import Counter
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy
@@ -674,9 +674,6 @@ def summarize_candidate_branch(
     contamination_per_gene = evidence["contamination"]["per_gene"]
     intron_supported = {}
     if not matched_leaf_rows.empty:
-        intron_df = matched_leaf_rows.loc[:, ["node_name"]].copy()
-        intron_flags = intron_support_from_leaf_rows(matched_leaf_rows)
-        del intron_flags
         supported_mask = pandas.Series(False, index=matched_leaf_rows.index)
         if "num_intron" in matched_leaf_rows.columns:
             supported_mask = supported_mask | pandas.to_numeric(matched_leaf_rows["num_intron"], errors="coerce").fillna(0).gt(0)

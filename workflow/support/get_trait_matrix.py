@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
 import os
-from pathlib import Path
-import pandas
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+import pandas
 
 pandas.options.mode.chained_assignment = None
 
@@ -15,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from species_labeling import extract_species_label, strip_species_label
+
 
 def read_fasta_seqname(file_path):
     seqnames = []

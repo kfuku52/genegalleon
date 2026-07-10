@@ -2,15 +2,16 @@
 
 import argparse
 import csv
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
 import gzip
-import numpy
 import os
-import pandas
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import numpy
+import pandas
 
 try:
     from species_labeling import extract_species_label, strip_species_label

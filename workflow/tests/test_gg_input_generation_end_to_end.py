@@ -1,13 +1,12 @@
-from pathlib import Path
 import csv
 import os
 import sqlite3
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 from openpyxl import Workbook
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORE_PATH = REPO_ROOT / "workflow" / "core" / "gg_input_generation_core.sh"

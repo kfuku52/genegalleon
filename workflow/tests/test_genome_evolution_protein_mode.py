@@ -1,15 +1,14 @@
-from pathlib import Path
 import os
 import re
-import shutil
 import shlex
+import shutil
 import stat
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 import pandas
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / "workflow"

@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pandas
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "merge_cds_annotation.py"
 
 

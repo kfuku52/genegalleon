@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pandas
 
-
 SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 
 

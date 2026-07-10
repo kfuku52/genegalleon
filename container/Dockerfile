@@ -1,6 +1,6 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM mambaorg/micromamba:noble
+FROM mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023bb127baade7e8faca
 
 ARG TARGETARCH
 ARG TARGETPLATFORM
@@ -46,6 +46,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archives/partial/* \
  && apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
     augustus \
     build-essential \
@@ -80,6 +81,7 @@ RUN rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archive
 COPY container/env /opt/pg/env
 COPY container/spec /opt/pg/spec
 COPY container/testdata /opt/pg/testdata
+COPY container/source_pins.env /opt/pg/source_pins.env
 COPY container/scripts/install_env.sh /opt/pg/scripts/install_env.sh
 COPY container/scripts/ensure_generax_stable.sh /opt/pg/scripts/ensure_generax_stable.sh
 COPY container/scripts/ensure_kfuku52_tools_latest.sh /opt/pg/scripts/ensure_kfuku52_tools_latest.sh
@@ -108,7 +110,7 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "${base_required}" /opt/pg/env/base.r.required.txt | awk '!seen[$0]++' > "${reconciled_required}" \
  && /opt/pg/scripts/install_env.sh base "${base_required}" /opt/pg/env/base.${TARGETARCH}.optional.txt python=3.12 \
  && /opt/pg/scripts/ensure_generax_stable.sh base \
- && micromamba install -y --retry-clean-cache --repodata-ttl 3600 -n base -c conda-forge -c bioconda pymol-open-source \
+ && micromamba install -y --retry-clean-cache --repodata-ttl 3600 -n base -c conda-forge -c bioconda pymol-open-source 'numpy>=1.26.4,<2' \
  && micromamba run -n base pip install --no-cache-dir ete4 \
  && micromamba run -n base python -c "import ete4" \
  && PAML_REPO_URL="${PAML_REPO_URL}" \
@@ -116,39 +118,62 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
     PAML_REPO_SHA="${PAML_REPO_SHA}" \
     /opt/pg/scripts/ensure_iq2mc_toolchain.sh base \
  && /opt/pg/scripts/install_env.sh base "${reconciled_required}" /opt/pg/env/base.r.optional.txt r-base \
+ && source /opt/pg/source_pins.env \
  && kfl1ou_repo_ref="${KFL1OU_REPO_REF:-${KFU52_REPO_REF}}" \
+ && kfl1ou_repo_sha="${KFL1OU_REPO_SHA:-${GG_PIN_KFL1OU_REPO_SHA}}" \
  && TESTNH_TARBALL_SHA256="${TESTNH_TARBALL_SHA256}" \
     CAFE5_TARBALL_SHA256="${CAFE5_TARBALL_SHA256}" \
     KFU52_REPO_REF="${KFU52_REPO_REF}" \
     KFL1OU_REPO_URL="${KFL1OU_REPO_URL}" \
     KFL1OU_REPO_REF="${kfl1ou_repo_ref}" \
-    KFL1OU_REPO_SHA="${KFL1OU_REPO_SHA}" \
+    KFL1OU_REPO_SHA="${kfl1ou_repo_sha}" \
     /opt/pg/scripts/install_nonconda_fallbacks.sh \
  && rm -f "${reconciled_required}"
+
+# Install Python-only compatibility/security updates after the conda solver has
+# finished so wheel dependencies cannot pull the scientific stack away from
+# the NumPy range required by both PyMOL and ClipKIT.
+COPY container/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+ micromamba run -n base pip install --no-cache-dir \
+      -r /opt/pg/pip-compatibility.requirements.txt \
+ && micromamba run -n base python -c "import genomepy, lxml, ortools, PIL" \
+ && micromamba run -n base python -m pip check
 
 # Keep fast-changing GitHub-derived installs separate to reduce rebuild scope.
 RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  --mount=type=cache,target=/root/.mamba/pkgs,sharing=locked \
  --mount=type=cache,target=/root/.cache/pip \
  export USE_DEFAULTS_CHANNEL=0 STRICT_CHANNEL_PRIORITY=1 MAMBA_NO_LOW_SPEED_LIMIT=1 \
+ && source /opt/pg/source_pins.env \
+ && mkdir -p /opt/pg/logs \
  && runtime_required="/opt/pg/spec/required_commands.tsv" \
  && runtime_optional="/opt/pg/spec/optional_commands.${TARGETARCH}.tsv" \
  && if [[ -f "/opt/pg/spec/required_commands.${TARGETARCH}.tsv" ]]; then runtime_required="/opt/pg/spec/required_commands.${TARGETARCH}.tsv"; fi \
  && kftools_repo_ref="${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
  && rkftools_repo_ref="${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
  && radte_repo_ref="${RADTE_REPO_REF:-${KFU52_REPO_REF}}" \
+ && kfl1ou_repo_sha="${KFL1OU_REPO_SHA:-${GG_PIN_KFL1OU_REPO_SHA}}" \
+ && amalgkit_repo_sha="${KFU52_AMALGKIT_REPO_SHA:-${GG_PIN_AMALGKIT_REPO_SHA}}" \
+ && cdskit_repo_sha="${KFU52_CDSKIT_REPO_SHA:-${GG_PIN_CDSKIT_REPO_SHA}}" \
+ && csubst_repo_sha="${KFU52_CSUBST_REPO_SHA:-${GG_PIN_CSUBST_REPO_SHA}}" \
+ && nwkit_repo_sha="${KFU52_NWKIT_REPO_SHA:-${GG_PIN_NWKIT_REPO_SHA}}" \
+ && kftools_repo_sha="${KFTOOLS_REPO_SHA:-${GG_PIN_KFTOOLS_REPO_SHA}}" \
+ && rkftools_repo_sha="${RKFTOOLS_REPO_SHA:-${GG_PIN_RKFTOOLS_REPO_SHA}}" \
+ && radte_repo_sha="${RADTE_REPO_SHA:-${GG_PIN_RADTE_REPO_SHA}}" \
  && busco_source_ref="${BUSCO_REPO_SHA:-${BUSCO_REPO_REF}}" \
- && kftools_source_ref="${KFTOOLS_REPO_SHA:-${kftools_repo_ref}}" \
- && rkftools_source_ref="${RKFTOOLS_REPO_SHA:-${rkftools_repo_ref}}" \
- && radte_source_ref="${RADTE_REPO_SHA:-${radte_repo_ref}}" \
+ && kftools_source_ref="${kftools_repo_sha:-${kftools_repo_ref}}" \
+ && rkftools_source_ref="${rkftools_repo_sha:-${rkftools_repo_ref}}" \
+ && radte_source_ref="${radte_repo_sha:-${radte_repo_ref}}" \
  && KFU52_REPO_REF="${KFU52_REPO_REF}" \
     KFU52_AMALGKIT_AUTO_SELECT_REF="${KFU52_AMALGKIT_AUTO_SELECT_REF}" \
     KFU52_AMALGKIT_BRANCH_CANDIDATES="${KFU52_AMALGKIT_BRANCH_CANDIDATES}" \
     KFU52_AMALGKIT_REPO_REF="${KFU52_AMALGKIT_REPO_REF}" \
-    KFU52_AMALGKIT_REPO_SHA="${KFU52_AMALGKIT_REPO_SHA}" \
-    KFU52_CDSKIT_REPO_SHA="${KFU52_CDSKIT_REPO_SHA}" \
-    KFU52_CSUBST_REPO_SHA="${KFU52_CSUBST_REPO_SHA}" \
-    KFU52_NWKIT_REPO_SHA="${KFU52_NWKIT_REPO_SHA}" \
+    KFU52_AMALGKIT_REPO_SHA="${amalgkit_repo_sha}" \
+    KFU52_CDSKIT_REPO_SHA="${cdskit_repo_sha}" \
+    KFU52_CSUBST_REPO_SHA="${csubst_repo_sha}" \
+    KFU52_NWKIT_REPO_SHA="${nwkit_repo_sha}" \
     /opt/pg/scripts/ensure_kfuku52_tools_latest.sh base \
  && rm -rf /tmp/busco \
  && /opt/pg/scripts/fetch_git_repo.sh "${BUSCO_REPO_URL}" "${busco_source_ref}" /tmp/busco "${BUSCO_MIRROR_REPO_URL}" \
@@ -171,10 +196,22 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
     fi \
  && install -m 0755 /tmp/radte/radte.r /usr/local/bin/radte.r \
  && rm -rf /tmp/radte \
+ && printf '%s\t%s\n' \
+      source revision \
+      amalgkit "${amalgkit_repo_sha}" \
+      cdskit "${cdskit_repo_sha}" \
+      csubst "${csubst_repo_sha}" \
+      nwkit "${nwkit_repo_sha}" \
+      kfl1ou "${kfl1ou_repo_sha}" \
+      kftools "${kftools_source_ref}" \
+      rkftools "${rkftools_source_ref}" \
+      RADTE "${radte_source_ref}" \
+      > /opt/pg/logs/source_revisions.tsv \
  && /opt/pg/scripts/validate_runtime.sh \
       --required "${runtime_required}" \
       --optional "${runtime_optional}" \
       --report /opt/pg/logs/runtime_validation_${TARGETARCH}.tsv \
+ && micromamba run -n base python -m pip check \
  && micromamba clean -i -l -y
 
 COPY container/scripts/post_install_notes.sh /opt/pg/scripts/post_install_notes.sh

@@ -7,7 +7,6 @@ import re
 import numpy
 import pandas
 
-
 BRANCH_PREFIX_COLUMNS = [
     "candidate_gene_count",
     "matched_leaf_count",

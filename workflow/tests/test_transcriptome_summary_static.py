@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 R_SCRIPT = REPO_ROOT / "workflow" / "support" / "multispecies_transcriptome_summary.r"
 ANNOTATION_R_SCRIPT = REPO_ROOT / "workflow" / "support" / "annotation_summary.r"

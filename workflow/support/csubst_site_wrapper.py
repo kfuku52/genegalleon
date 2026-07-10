@@ -5,17 +5,19 @@ import argparse
 import datetime
 import glob
 import gzip
-import numpy
 import os
-import pandas
 import re
-import shutil
 import shlex
+import shutil
 import subprocess
 import textwrap
 import zipfile
 from concurrent.futures import ProcessPoolExecutor
 from itertools import repeat
+
+import numpy
+import pandas
+
 try:
     import sqlalchemy
 except ImportError:
@@ -37,10 +39,10 @@ except ImportError:
     PdfReader = None
     PdfWriter = None
 try:
-    from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import letter
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfgen import canvas
 except ImportError:
     canvas = None
     letter = None
@@ -567,7 +569,8 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
         ] + glob.glob('*.cif')
         if os.path.exists(file_summary):
             for remove_file in remove_files:
-                if os.path.exists(remove_file): os.remove(remove_file)
+                if os.path.exists(remove_file):
+                    os.remove(remove_file)
         return og,None
     except Exception as e:
         print(f'process_index: Error in {og}: {e}', flush=True)
@@ -973,7 +976,7 @@ def write_annotated_table(cb_passed, annot, dir_out, out_name):
 
 def filter_max_per_K_1st(cb_passed, arity, trait):
     print(f'Number of branch combinations after filtering exceeded the maximum: {cb_passed.shape[0]} > {args.max_per_K}.')
-    print(f'Selecting one branch combination per orthogroup with the highest OCN.', flush=True)
+    print('Selecting one branch combination per orthogroup with the highest OCN.', flush=True)
     num_before_filtering = cb_passed.shape[0]
     cb_passed = cb_passed.sort_values(by=['orthogroup','OCNany2spe'], ascending=[True, False])
     cb_passed = cb_passed.drop_duplicates(subset=['orthogroup'], keep='first').reset_index(drop=True)
@@ -1072,6 +1075,13 @@ def resolve_path_arg(path_arg, workspace_dir, *relative_parts):
         return os.path.realpath(path_arg)
     return os.path.realpath(os.path.join(workspace_dir, *relative_parts))
 
+
+def raise_on_processing_failures(failures):
+    if not failures:
+        return
+    details = "; ".join(f"{og}: {error}" for og, error in failures)
+    raise RuntimeError(f"CSUBST site processing failed for {len(failures)} job(s): {details}")
+
 if __name__ == '__main__':
     print(f'{datetime.datetime.now()}: {__file__} started.', flush=True)
 
@@ -1102,7 +1112,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.ncpu = max(1, int(args.ncpu))
 
-    if not 'cwd' in locals():
+    if 'cwd' not in locals():
         cwd = os.getcwd()
     print('Working at: {}'.format(cwd))
     min_OCNany2spe = args.min_OCNany2spe
@@ -1163,6 +1173,7 @@ if __name__ == '__main__':
     generate_trait_colors(df_trait=df_trait, trait_names=trait_names)
     annot_besthits = load_annotation_besthits(dir_of)
     already_analyzed_in_greater_K = dict()
+    processing_failures = []
     for trait in trait_names:
         already_analyzed_in_greater_K[trait] = dict() # Initialize
     for arity in arity_range:
@@ -1298,6 +1309,7 @@ if __name__ == '__main__':
                     if isinstance(result, Exception):
                         print(f"Error in {og}: {result}")
                         flag_zip = False
+                        processing_failures.append((og, result))
             os.chdir(cwd)
             if flag_zip:
                 print(f'No error detected. Zipping {dir_out}', flush=True)
@@ -1306,4 +1318,5 @@ if __name__ == '__main__':
             else:
                 print(f'Error detected. Skipping zipping {dir_out}', flush=True)
     conn.dispose()
+    raise_on_processing_failures(processing_failures)
     print(f'{datetime.datetime.now()}: {__file__} completed!', flush=True)

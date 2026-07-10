@@ -1,10 +1,10 @@
 import ast
 import gzip
-from importlib.util import module_from_spec, spec_from_file_location
 import os
 import re
 import subprocess
 import sys
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import pandas
@@ -474,3 +474,18 @@ def test_help_has_no_side_effect_files(tmp_path):
     assert proc.returncode == 0
     assert not (tmp_path / "generate_orthogroup_database.log").exists()
     assert not (tmp_path / "mpl").exists()
+
+
+def test_raise_on_processing_failures_propagates_worker_errors():
+    mod = load_module()
+
+    with pytest.raises(RuntimeError, match="OG0002: failed site analysis"):
+        mod.raise_on_processing_failures(
+            [("OG0002", RuntimeError("failed site analysis"))]
+        )
+
+
+def test_raise_on_processing_failures_accepts_success():
+    mod = load_module()
+
+    assert mod.raise_on_processing_failures([]) is None

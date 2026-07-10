@@ -1,9 +1,8 @@
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pandas
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "workflow" / "support" / "transcriptome_assembly_output_summary.py"

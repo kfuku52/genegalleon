@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 
 import argparse
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import gzip
 import json
-from pathlib import Path
 import re
 import sys
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import format_species_inputs as formatter
-
 
 FASTA_EXTENSIONS = (
     ".fa",

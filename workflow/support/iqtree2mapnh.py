@@ -6,8 +6,7 @@ import math
 import re
 
 import pandas
-from kftools.kfphylo import *
-from kftools.kfseq import *
+from kftools import kfphylo, kfseq
 
 
 def build_arg_parser():
@@ -56,7 +55,7 @@ def safe_codon_freqs_to_nuc_freqs(codon_freqs, model):
     if (len(cleaned) == 0) or (sum(cleaned.values()) <= 0):
         return None
     try:
-        return codon2nuc_freqs(codon_freqs=cleaned, model=model)
+        return kfseq.codon2nuc_freqs(codon_freqs=cleaned, model=model)
     except ZeroDivisionError:
         return None
 
@@ -157,10 +156,10 @@ def run(args):
         nuc_freqs = alignment_subset_nuc_freqs(alignment_file=args.alignment, model=value_model)
     print('equilibrium nucleotide frequency:', nuc_freqs)
 
-    thetas = nuc_freq2theta(nuc_freqs=nuc_freqs)
+    thetas = kfseq.nuc_freq2theta(nuc_freqs=nuc_freqs)
     print('equilibrium theta:', thetas)
 
-    iqtree_tree = transfer_root(tree_to=args.treefile, tree_from=args.rooted_tree)
+    iqtree_tree = kfphylo.transfer_root(tree_to=args.treefile, tree_from=args.rooted_tree)
 
     anc_state = pandas.read_csv(args.state, sep='\t', comment='#')
     subroot_nodes = list(iqtree_tree.get_children())
@@ -190,10 +189,12 @@ def run(args):
                 leaf_names=list(subroot_node.leaf_names()),
             )
         subroot_nuc_freqs[snn] = subroot_nuc_freq
-        subroot_thetas[snn] = nuc_freq2theta(nuc_freqs=subroot_nuc_freqs[snn])
+        subroot_thetas[snn] = kfseq.nuc_freq2theta(nuc_freqs=subroot_nuc_freqs[snn])
 
     print('subroot nucleotide frequency:', subroot_nuc_freqs)
-    root_thetas = weighted_mean_root_thetas(subroot_thetas, iqtree_tree, model=value_model)
+    root_thetas = kfseq.weighted_mean_root_thetas(
+        subroot_thetas, iqtree_tree, model=value_model
+    )
     print('root theta:', root_thetas)
 
     num_gamma_category = re.sub(r'.*\+G', '', value_model)

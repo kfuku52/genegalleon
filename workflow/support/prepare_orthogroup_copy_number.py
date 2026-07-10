@@ -3,13 +3,13 @@
 
 import argparse
 import datetime
-import pandas
-import numpy
 import os
 import sys
 import time
-import ete4
 
+import ete4
+import numpy
+import pandas
 
 REQUIRED_GENECOUNT_COLUMNS = ['besthit_0.95', 'Orthogroup']
 

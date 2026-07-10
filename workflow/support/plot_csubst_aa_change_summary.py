@@ -2,14 +2,12 @@
 # coding: utf-8
 
 import argparse
-import math
 import os
 import re
 import sqlite3
 
 import numpy as np
 import pandas as pd
-
 
 FDR_PRIORITY = [
     "q_rate_enrichment_empirical_maxT_global",
@@ -109,6 +107,7 @@ def read_table(conn, table):
     for col in FDR_PRIORITY + P_PRIORITY:
         if col in columns and col not in selected:
             selected.append(col)
+    selected.extend(col for col in columns if col not in selected)
     if not selected:
         return pd.DataFrame()
     query = "SELECT {} FROM {}".format(

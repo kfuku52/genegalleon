@@ -1,9 +1,8 @@
+import sqlite3
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-import sqlite3
 
 import pandas
-
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "plot_csubst_aa_change_summary.py"
 
@@ -33,6 +32,7 @@ def test_read_table_retains_current_csubst_scan_rate_and_empirical_q_columns(tmp
                 "q_rate_enrichment_empirical": 0.03,
                 "q_rate_enrichment_empirical_by_trait": 0.04,
                 "q_rate_enrichment_empirical_by_trait_match": 0.05,
+                "future_csubst_metric": 42.0,
             }
         ]
     )
@@ -48,10 +48,13 @@ def test_read_table_retains_current_csubst_scan_rate_and_empirical_q_columns(tmp
         "q_rate_enrichment_empirical",
         "q_rate_enrichment_empirical_by_trait",
         "q_rate_enrichment_empirical_by_trait_match",
+        "future_csubst_metric",
     }
     assert expected_columns.issubset(observed.columns)
     assert observed.loc[0, "scan_rate_exposure"] == "state_aware"
     assert observed.loc[0, "site_rate"] == 0.125
+    assert observed.loc[0, "future_csubst_metric"] == 42.0
+    assert observed.columns[-1] == "future_csubst_metric"
 
     ranked, score_column, score_kind = mod.ranked_candidates(observed)
     assert ranked.shape[0] == 1

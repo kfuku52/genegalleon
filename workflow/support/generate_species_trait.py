@@ -2,17 +2,17 @@
 
 import argparse
 import csv
-from dataclasses import dataclass
 import hashlib
-from io import BytesIO, StringIO
 import json
 import math
-from pathlib import Path
 import re
 import shutil
 import sys
-from typing import Dict, List, Optional, Sequence, Set, Tuple
 import zipfile
+from dataclasses import dataclass
+from io import BytesIO, StringIO
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request
 

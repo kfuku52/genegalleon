@@ -2,9 +2,8 @@
 
 import argparse
 import csv
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 DEFAULT_COLUMNS = [
     "started_utc",

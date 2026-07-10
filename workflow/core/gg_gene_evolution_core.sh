@@ -1215,7 +1215,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && "${mode_gene_
             fi
             echo "Generating BLAST database: ${sp_cds}"
             echo "Generating BLAST database: ${sp_cds}" >&2
-            if [[ ${sp_cds} =~ ".gz" ]]; then
+            if [[ ${sp_cds} == *.gz ]]; then
               seqkit seq --threads "${GG_TASK_CPUS}" "${sp_cds}" | makeblastdb -dbtype nucl -title "${sp_cds}" -out "${sp_cds_blastdb}"
             else
               makeblastdb -dbtype nucl -in "${sp_cds}" -out "${sp_cds_blastdb}"
@@ -1251,7 +1251,7 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && "${mode_gene_
             fi
             echo "Generating DIAMOND database: ${sp_cds}"
             echo "Generating DIAMOND database: ${sp_cds}" >&2
-            if [[ ${sp_cds} =~ ".gz" ]]; then
+            if [[ ${sp_cds} == *.gz ]]; then
               seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${sp_cds}" |
                 seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" |
                 filter_translated_fasta_for_diamond \
@@ -1827,8 +1827,8 @@ PY
   fi
   "${maxalign_cmd[@]}"
 
-  echo Number of sequences before MaxAlign: $(gg_count_fasta_records "${og_id}.cds.aln.fasta")
-  echo Number of sequences after MaxAlign: $(gg_count_fasta_records "${og_id}.maxalign.output.fasta")
+  echo "Number of sequences before MaxAlign: $(gg_count_fasta_records "${og_id}.cds.aln.fasta")"
+  echo "Number of sequences after MaxAlign: $(gg_count_fasta_records "${og_id}.maxalign.output.fasta")"
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.maxalign.output.fasta" --out-file "${og_id}.maxalign.out.fa.gz"
   mv_out "${og_id}.maxalign.out.fa.gz" "${file_og_maxalign}"
@@ -2136,7 +2136,8 @@ if [[ (! -s "${file_og_orthogroup_extraction_nwk}" || ! -s "${file_og_orthogroup
   run_nwkit_subtree() {
     local infile=$1
     echo "Running nwkit subtree for ${infile}"
-    local info_txt=$(nwkit subtree --infile "${infile}" --leaves "${comma_separated_genes}" --orthogroup "yes" --dup_conf_score_threshold 0 2> /dev/null | nwkit info 2> /dev/null)
+    local info_txt
+    info_txt=$(nwkit subtree --infile "${infile}" --leaves "${comma_separated_genes}" --orthogroup "yes" --dup_conf_score_threshold 0 2> /dev/null | nwkit info 2> /dev/null)
     local num_leaf
     num_leaf=$(awk -F': *' '/Number of leaves/ {print $2; exit}' <<< "${info_txt}")
     printf '%s\t%s\n' "${num_leaf}" "${infile}" >> tmp_num_leaf.tsv

@@ -10,7 +10,6 @@ import time
 import numpy
 import pandas
 
-
 METRIC_LABELS = {
     "strict_single_copy": "Strictly single-copy orthogroups",
     "non_missing": "Non-missing orthogroups",

@@ -1,9 +1,8 @@
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pandas
-
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "annotate_hgt_tree_plot.py"
 

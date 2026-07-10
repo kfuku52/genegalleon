@@ -6,7 +6,6 @@ import gzip
 import os
 import re
 
-
 OUTPUT_COLUMNS = [
     "accession",
     "signal_start",

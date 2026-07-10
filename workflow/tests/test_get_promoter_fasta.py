@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "get_promoter_fasta.py"
 
 

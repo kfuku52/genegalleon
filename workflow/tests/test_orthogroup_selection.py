@@ -6,7 +6,6 @@ import numpy
 import pandas
 import pytest
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "orthogroup_selection.py"
 
 

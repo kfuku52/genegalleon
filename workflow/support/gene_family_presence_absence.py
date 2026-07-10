@@ -16,7 +16,6 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from species_labeling import scientific_name_from_label
 
-
 STAT_BRANCH_SUFFIX = "_stat.branch.tsv"
 
 

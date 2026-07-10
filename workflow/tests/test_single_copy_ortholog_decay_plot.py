@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pandas
 import pytest
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "single_copy_ortholog_decay_plot.py"
 
 

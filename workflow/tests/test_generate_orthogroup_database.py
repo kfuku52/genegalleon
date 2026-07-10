@@ -1,12 +1,12 @@
-from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
 import math
 import sqlite3
 import subprocess
 import sys
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 import pandas
-
+import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "generate_orthogroup_database.py"
 
@@ -46,13 +46,13 @@ def test_process_files_uses_single_read_csv_call(tmp_path, monkeypatch):
     assert out["orthogroup"].iloc[0] == "OG0001"
 
 
-def test_process_files_returns_empty_dataframe_when_columns_missing(tmp_path):
+def test_process_files_raises_when_required_columns_are_missing(tmp_path):
     mod = load_module()
     infile = tmp_path / "OG0002.test.tsv"
     pandas.DataFrame({"a": [1], "b": [2]}).to_csv(infile, sep="\t", index=False)
 
-    out = mod.process_files(str(infile), ["orthogroup", "a", "b", "c"])
-    assert out.empty
+    with pytest.raises(ValueError, match="Missing required columns"):
+        mod.process_files(str(infile), ["orthogroup", "a", "b", "c"])
 
 
 def test_process_files_can_fill_missing_optional_columns(tmp_path):
@@ -348,6 +348,83 @@ def test_database_builder_imports_variable_current_scan_columns(tmp_path):
     assert observed == [("OG0001", None), ("OG0002", 42.0)]
 
 
+def test_database_builder_fails_when_any_input_file_has_missing_columns(tmp_path):
+    stat_tree = tmp_path / "stat_tree"
+    stat_branch = tmp_path / "stat_branch"
+    stat_tree.mkdir()
+    stat_branch.mkdir()
+
+    pandas.DataFrame({"metric_a": [1], "metric_b": [2]}).to_csv(
+        stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False
+    )
+    pandas.DataFrame({"metric_a": [3]}).to_csv(
+        stat_tree / "OG0002_stat.tree.tsv", sep="\t", index=False
+    )
+    pandas.DataFrame({"branch_metric": [1]}).to_csv(
+        stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False
+    )
+
+    db_path = tmp_path / "gg_orthogroup.db"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--overwrite",
+            "1",
+            "--dbpath",
+            str(db_path),
+            "--dir_stat_tree",
+            str(stat_tree),
+            "--dir_stat_branch",
+            str(stat_branch),
+            "--ncpu",
+            "1",
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode != 0
+    assert "Missing required columns" in proc.stderr
+    assert "OG0002_stat.tree.tsv" in proc.stderr
+    assert "no partial build will be reported as successful" in proc.stderr
+
+
+def test_database_builder_fails_when_any_input_file_is_empty(tmp_path):
+    stat_tree = tmp_path / "stat_tree"
+    stat_branch = tmp_path / "stat_branch"
+    stat_tree.mkdir()
+    stat_branch.mkdir()
+    (stat_tree / "OG0001_stat.tree.tsv").write_text("", encoding="utf-8")
+    pandas.DataFrame({"branch_metric": [1]}).to_csv(
+        stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--overwrite",
+            "1",
+            "--dbpath",
+            str(tmp_path / "gg_orthogroup.db"),
+            "--dir_stat_tree",
+            str(stat_tree),
+            "--dir_stat_branch",
+            str(stat_branch),
+            "--ncpu",
+            "1",
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode != 0
+    assert "input file is empty" in proc.stderr
+
+
 def test_import_has_no_logfile_side_effect(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     log_path = tmp_path / "generate_orthogroup_database.log"
@@ -395,3 +472,11 @@ def test_visible_files_returns_only_non_hidden_regular_files(tmp_path):
     (directory / "nested").mkdir()
 
     assert mod.visible_files(str(directory)) == ["table.tsv"]
+
+
+def test_empty_csubst_cb_prefix_does_not_scan_working_directory(tmp_path, monkeypatch):
+    mod = load_module()
+    (tmp_path / "unrelated_directory").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    assert mod.discover_csubst_cb_dirs("") == []

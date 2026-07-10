@@ -4,7 +4,6 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "build_id_options_snapshot.py"
 
 

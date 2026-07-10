@@ -3,13 +3,14 @@
 
 import argparse
 import datetime
-from concurrent.futures import ProcessPoolExecutor
-import pandas
-from pathlib import Path
+import os
 import re
 import sys
-import os
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
 import ete4
+import pandas
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -206,8 +207,8 @@ def main():
         # Legacy Grampa output format.
         with open(args.grampa_out, 'r') as f:
             out_txts = f.readlines()
-        out_txts = [l for l in out_txts if l.startswith('MT-')]
-        out_txts = [re.split('\t', l) for l in out_txts]
+        out_txts = [line for line in out_txts if line.startswith('MT-')]
+        out_txts = [re.split('\t', line) for line in out_txts]
         out = pandas.DataFrame(out_txts, columns=['mul_tree', 'H1_node', 'H2_node', 'mul_tree_string', 'multree_score'])
         out['multree_score'] = out['multree_score'].replace('\n', '', regex=False).astype(int)
     print('{} MUL trees were found.'.format(out.shape[0]))

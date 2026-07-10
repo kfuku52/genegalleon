@@ -2683,7 +2683,7 @@ def test_orthogroup_statistics_skips_unrooted_annotation_transfer_failures():
 def test_orthogroup_statistics_skips_invalid_regime2tree_summary_instead_of_aborting():
     script = WORKFLOW_DIR / "support" / "orthogroup_statistics.py"
     text = _read_text(script)
-    assert "tree_tmp = regime2tree(params[method+'_regime'])" in text
+    assert "tree_tmp = kfog.regime2tree(params[method+'_regime'])" in text
     assert "except ValueError as exc:" in text
     assert "Skipping {} regime summary due to invalid regime parameters" in text
 

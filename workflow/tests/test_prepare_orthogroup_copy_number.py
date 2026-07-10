@@ -3,7 +3,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "workflow" / "support" / "prepare_orthogroup_copy_number.py"
 GENOME_EVOLUTION_CORE = REPO_ROOT / "workflow" / "core" / "gg_genome_evolution_core.sh"

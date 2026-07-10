@@ -165,35 +165,9 @@ jobs:
             bash -n "${script}"
           done < <(find workflow -type f -name "*.sh" | sort)
 
-      - name: Ruff check focused shared helpers
+      - name: Ruff check all Python sources
         run: |
-          python -m ruff check \
-            workflow/support/shared_lock.py \
-            workflow/support/amalgkit_metadata_accessions.py \
-            workflow/support/format_species_download_stage.py \
-            workflow/support/format_species_manifest.py \
-            workflow/support/format_species_network.py \
-            workflow/support/format_species_provider_inputs.py \
-            workflow/support/format_species_provider_config.py \
-            workflow/support/format_species_provider_urls.py \
-            workflow/support/format_species_writers.py \
-            workflow/tests/conftest.py \
-            workflow/tests/test_ci_static.py \
-            workflow/tests/test_amalgkit_metadata_accessions.py \
-            workflow/tests/test_docker_runtime_shim.py \
-            workflow/tests/test_format_species_manifest.py \
-            workflow/tests/test_format_species_network.py \
-            workflow/tests/test_format_species_provider_urls.py \
-            workflow/tests/test_format_species_split_static.py \
-            workflow/tests/test_gg_shared_lock_shell.py \
-            workflow/tests/test_legacy_policy_static.py \
-            workflow/tests/test_shell_download_static.py \
-            workflow/tests/test_shell_entrypoint_static.py \
-            workflow/tests/test_shell_shared_lock_static.py \
-            workflow/tests/test_shell_static_safety.py \
-            workflow/tests/test_shell_transcriptome_static.py \
-            workflow/tests/test_transcriptome_metadata_retry.py \
-            workflow/tests/shell_static_helpers.py
+          python -m ruff check workflow
 
       - name: Shell static safety checks
         run: |
@@ -231,6 +205,7 @@ jobs:
 
       - name: Run lightweight R unit tests
         run: |
+          Rscript workflow/tests/test_orthogroup_copy_number_trait_pgls.R
           Rscript workflow/tests/test_pgls_common_rphylopars.R
           Rscript workflow/tests/test_r_species_label_utils.R
           Rscript workflow/tests/test_treevis_main.R
