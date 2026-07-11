@@ -3,6 +3,7 @@
 # container paths have the same dependency constraints and security fixes.
 pillow==12.3.0
 lxml==6.1.1
+ete4==4.4.0
 genomepy==0.16.2
 mysql-connector-python==9.7.0
 ortools==9.12.4544

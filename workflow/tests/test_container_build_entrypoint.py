@@ -81,6 +81,17 @@ def _run_entrypoint(tmp_path: Path, runtime_name: str, extra_env: dict[str, str]
     env["PATH"] = path_value
     env["OUT"] = str(tmp_path / "genegalleon.sif")
     env["BUILD_SIF"] = "1"
+    for sha_var in (
+        "KFU52_AMALGKIT_REPO_SHA",
+        "KFU52_CDSKIT_REPO_SHA",
+        "KFU52_CSUBST_REPO_SHA",
+        "KFU52_NWKIT_REPO_SHA",
+        "KFL1OU_REPO_SHA",
+        "KFTOOLS_REPO_SHA",
+        "RKFTOOLS_REPO_SHA",
+        "RADTE_REPO_SHA",
+    ):
+        env[sha_var] = "0" * 40
     if extra_env:
         env.update(extra_env)
     completed = subprocess.run(
@@ -100,6 +111,17 @@ def _run_entrypoint_with_buildx(tmp_path: Path, runtime_name: str, extra_env: di
     env["PATH"] = path_value
     env["OUT"] = str(tmp_path / "genegalleon.sif")
     env["BUILD_SIF"] = "1"
+    for sha_var in (
+        "KFU52_AMALGKIT_REPO_SHA",
+        "KFU52_CDSKIT_REPO_SHA",
+        "KFU52_CSUBST_REPO_SHA",
+        "KFU52_NWKIT_REPO_SHA",
+        "KFL1OU_REPO_SHA",
+        "KFTOOLS_REPO_SHA",
+        "RKFTOOLS_REPO_SHA",
+        "RADTE_REPO_SHA",
+    ):
+        env[sha_var] = "0" * 40
     if extra_env:
         env.update(extra_env)
     completed = subprocess.run(
@@ -247,6 +269,7 @@ def test_container_build_entrypoint_native_local_build_renders_repo_version_labe
     assert f"org.opencontainers.image.version {REPO_VERSION}" in definition_text
     assert 'kfu52_amalgkit_auto_select_ref="0"' in definition_text
     assert 'kfu52_amalgkit_repo_ref="master"' in definition_text
+    assert 'kfu52_csubst_repo_ref="master"' in definition_text
 
 
 def test_container_build_entrypoint_uses_docker_daemon_for_local_buildx_image(tmp_path: Path):

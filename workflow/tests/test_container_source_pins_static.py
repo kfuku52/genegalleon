@@ -2,51 +2,51 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PIN_FILE = REPO_ROOT / "container" / "source_pins.env"
-SHA_PIN_NAMES = {
-    "GG_PIN_AMALGKIT_REPO_SHA",
-    "GG_PIN_CDSKIT_REPO_SHA",
-    "GG_PIN_CSUBST_REPO_SHA",
-    "GG_PIN_NWKIT_REPO_SHA",
-    "GG_PIN_KFL1OU_REPO_SHA",
-    "GG_PIN_KFTOOLS_REPO_SHA",
-    "GG_PIN_RKFTOOLS_REPO_SHA",
-    "GG_PIN_RADTE_REPO_SHA",
-}
+KFUKU52_SHA_VARS = (
+    "KFU52_AMALGKIT_REPO_SHA",
+    "KFU52_CDSKIT_REPO_SHA",
+    "KFU52_CSUBST_REPO_SHA",
+    "KFU52_NWKIT_REPO_SHA",
+    "KFL1OU_REPO_SHA",
+    "KFTOOLS_REPO_SHA",
+    "RKFTOOLS_REPO_SHA",
+    "RADTE_REPO_SHA",
+)
 
 
-def read_pins():
-    pins = {}
-    for raw_line in PIN_FILE.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        key, value = line.split("=", 1)
-        pins[key] = value
-    return pins
-
-
-def test_all_github_source_revisions_are_pinned_to_commits():
-    pins = read_pins()
-
-    assert SHA_PIN_NAMES.issubset(pins)
-    for name in SHA_PIN_NAMES:
-        assert re.fullmatch(r"[0-9a-f]{40}", pins[name]), name
-    assert re.fullmatch(r"\d+\.\d+\.\d+", pins["GG_PIN_CSUBST_VERSION"])
-
-
-def test_all_container_build_paths_consume_authoritative_source_pins():
+def test_kfuku52_sources_have_no_fixed_default_sha():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
     apptainer = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(
         encoding="utf-8"
     )
 
-    assert "COPY container/source_pins.env /opt/pg/source_pins.env" in dockerfile
-    assert dockerfile.count("source /opt/pg/source_pins.env") == 2
-    assert 'source "${script_dir}/source_pins.env"' in buildx
-    assert 'source "${script_dir}/source_pins.env"' in apptainer
-    assert "KFU52_CSUBST_REPO_SHA=\"${csubst_repo_sha}\"" in dockerfile
+    assert not (REPO_ROOT / "container" / "source_pins.env").exists()
+    assert "source_pins.env" not in dockerfile
+    assert "GG_PIN_" not in dockerfile
+    assert "GG_PIN_" not in buildx
+    assert "GG_PIN_" not in apptainer
+    for sha_var in KFUKU52_SHA_VARS:
+        assert f'ARG {sha_var}=""' in dockerfile
+        assert f"{sha_var}=${{{sha_var}:-}}" in buildx
+        assert f"{sha_var}=${{{sha_var}:-}}" in apptainer
+
+
+def test_all_container_build_paths_resolve_current_master_revisions():
+    dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
+    buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
+    apptainer = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'ARG KFU52_REPO_REF="master"' in dockerfile
+    assert 'ARG KFU52_AMALGKIT_REPO_REF="master"' in dockerfile
+    assert 'ARG KFU52_CSUBST_REPO_REF="master"' in dockerfile
+    assert buildx.count("resolve_source_sha ") == 8
+    assert apptainer.count("resolve_source_sha ") == 8
+    for source in ("amalgkit", "cdskit", "csubst", "nwkit", "kfl1ou", "kftools", "rkftools", "RADTE"):
+        assert f" {source}" in buildx
+        assert f" {source}" in apptainer
     assert "> /opt/pg/logs/source_revisions.tsv" in dockerfile
 
 
@@ -76,6 +76,7 @@ def test_container_build_paths_share_python_compatibility_constraints():
     for package in (
         "pillow",
         "lxml",
+        "ete4",
         "genomepy",
         "mysql-connector-python",
         "ortools",

@@ -2564,6 +2564,33 @@ def test_container_ghcr_builds_arm64_on_native_runner_without_qemu():
     assert "docker/setup-qemu-action" not in build_block
 
 
+def test_container_ghcr_tracks_and_builds_current_kfuku52_master_revisions():
+    workflow = _read_text(GITHUB_WORKFLOWS_DIR / "container-ghcr.yml")
+
+    for repo in ("amalgkit", "cdskit", "csubst", "nwkit", "kfl1ou", "kftools", "rkftools", "RADTE"):
+        assert f'                  "{repo}",' in workflow
+        output_name = repo.lower() if repo == "RADTE" else repo
+        assert f"{output_name}_repo_sha: ${{{{ steps.vars.outputs.{output_name}_repo_sha }}}}" in workflow
+        assert f"{output_name}_repo_sha=\"$(resolve_source_sha {repo})\"" in workflow
+
+    assert 'f"/repos/kfuku52/{upstream_repo}/commits"' in workflow
+    assert 'matched_files = [f"kfuku52/{upstream_repo}@master"]' in workflow
+    assert "KFU52_REPO_REF=master" in workflow
+    assert "KFU52_AMALGKIT_REPO_REF=master" in workflow
+    assert "KFU52_CSUBST_REPO_REF=master" in workflow
+    for build_arg, output_name in (
+        ("KFU52_AMALGKIT_REPO_SHA", "amalgkit_repo_sha"),
+        ("KFU52_CDSKIT_REPO_SHA", "cdskit_repo_sha"),
+        ("KFU52_CSUBST_REPO_SHA", "csubst_repo_sha"),
+        ("KFU52_NWKIT_REPO_SHA", "nwkit_repo_sha"),
+        ("KFL1OU_REPO_SHA", "kfl1ou_repo_sha"),
+        ("KFTOOLS_REPO_SHA", "kftools_repo_sha"),
+        ("RKFTOOLS_REPO_SHA", "rkftools_repo_sha"),
+        ("RADTE_REPO_SHA", "radte_repo_sha"),
+    ):
+        assert f"{build_arg}=${{{{ needs.prepare-build.outputs.{output_name} }}}}" in workflow
+
+
 def test_no_pipe_to_grep_q_in_core_and_support_scripts():
     scripts = sorted(CORE_DIR.glob("*.sh")) + sorted((WORKFLOW_DIR / "support").glob("*.sh"))
     pattern = re.compile(r"\|\s*(?:z?grep)\s+-q|\|\s*grep\s+-Fq|\|\s*grep\s+-Fxq")

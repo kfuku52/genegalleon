@@ -7,7 +7,6 @@ set -euo pipefail
 #   KFU52_AMALGKIT_REPO_REF=kfdevel MODE=push ./container/buildx.sh
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${script_dir}/source_pins.env"
 
 IMAGE=${IMAGE:-ghcr.io/example/genegalleon}
 TAG=${TAG:-dev}
@@ -19,10 +18,11 @@ KFU52_REPO_REF=${KFU52_REPO_REF:-master}
 KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}
 KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
 KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF-master}
-KFU52_AMALGKIT_REPO_SHA=${KFU52_AMALGKIT_REPO_SHA:-${GG_PIN_AMALGKIT_REPO_SHA}}
-KFU52_CDSKIT_REPO_SHA=${KFU52_CDSKIT_REPO_SHA:-${GG_PIN_CDSKIT_REPO_SHA}}
-KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-${GG_PIN_CSUBST_REPO_SHA}}
-KFU52_NWKIT_REPO_SHA=${KFU52_NWKIT_REPO_SHA:-${GG_PIN_NWKIT_REPO_SHA}}
+KFU52_AMALGKIT_REPO_SHA=${KFU52_AMALGKIT_REPO_SHA:-}
+KFU52_CDSKIT_REPO_SHA=${KFU52_CDSKIT_REPO_SHA:-}
+KFU52_CSUBST_REPO_REF=${KFU52_CSUBST_REPO_REF:-master}
+KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-}
+KFU52_NWKIT_REPO_SHA=${KFU52_NWKIT_REPO_SHA:-}
 BUSCO_REPO_URL=${BUSCO_REPO_URL:-https://gitlab.com/ezlab/busco.git}
 BUSCO_MIRROR_REPO_URL=${BUSCO_MIRROR_REPO_URL:-}
 BUSCO_REPO_REF=${BUSCO_REPO_REF:-6.0.0}
@@ -32,16 +32,16 @@ PAML_REPO_REF=${PAML_REPO_REF:-master}
 PAML_REPO_SHA=${PAML_REPO_SHA:-8daeead6b55523f375d9ac56dcfac38373ef8a2e}
 KFL1OU_REPO_URL=${KFL1OU_REPO_URL:-https://github.com/kfuku52/kfl1ou.git}
 KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-${KFU52_REPO_REF}}
-KFL1OU_REPO_SHA=${KFL1OU_REPO_SHA:-${GG_PIN_KFL1OU_REPO_SHA}}
+KFL1OU_REPO_SHA=${KFL1OU_REPO_SHA:-}
 KFTOOLS_REPO_URL=${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}
 RKFTOOLS_REPO_URL=${RKFTOOLS_REPO_URL:-https://github.com/kfuku52/rkftools.git}
 RADTE_REPO_URL=${RADTE_REPO_URL:-https://github.com/kfuku52/RADTE.git}
 KFTOOLS_REPO_REF=${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}
 RKFTOOLS_REPO_REF=${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}
 RADTE_REPO_REF=${RADTE_REPO_REF:-${KFU52_REPO_REF}}
-KFTOOLS_REPO_SHA=${KFTOOLS_REPO_SHA:-${GG_PIN_KFTOOLS_REPO_SHA}}
-RKFTOOLS_REPO_SHA=${RKFTOOLS_REPO_SHA:-${GG_PIN_RKFTOOLS_REPO_SHA}}
-RADTE_REPO_SHA=${RADTE_REPO_SHA:-${GG_PIN_RADTE_REPO_SHA}}
+KFTOOLS_REPO_SHA=${KFTOOLS_REPO_SHA:-}
+RKFTOOLS_REPO_SHA=${RKFTOOLS_REPO_SHA:-}
+RADTE_REPO_SHA=${RADTE_REPO_SHA:-}
 TESTNH_TARBALL_SHA256=${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}
 CAFE5_TARBALL_SHA256=${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}
 CACHE_DIR=${CACHE_DIR:-.buildx-cache}
@@ -77,6 +77,29 @@ fi
 # Ensure conda env coverage stays consistent with pipeline script usage.
 container/scripts/check_env_coverage.sh .
 
+resolve_source_sha() {
+  local sha_var="$1"
+  local repo_url="$2"
+  local repo_ref="$3"
+  local source_name="$4"
+  local resolved_sha="${!sha_var}"
+
+  if [[ -z "${resolved_sha}" ]]; then
+    resolved_sha="$(bash container/scripts/resolve_git_branch_sha.sh "${repo_url}" "${repo_ref}")"
+    printf -v "${sha_var}" '%s' "${resolved_sha}"
+  fi
+  echo "[buildx] Resolved ${source_name} ${repo_ref}: ${resolved_sha}"
+}
+
+resolve_source_sha KFU52_AMALGKIT_REPO_SHA https://github.com/kfuku52/amalgkit.git "${KFU52_AMALGKIT_REPO_REF}" amalgkit
+resolve_source_sha KFU52_CDSKIT_REPO_SHA https://github.com/kfuku52/cdskit.git "${KFU52_REPO_REF}" cdskit
+resolve_source_sha KFU52_CSUBST_REPO_SHA https://github.com/kfuku52/csubst.git "${KFU52_CSUBST_REPO_REF}" csubst
+resolve_source_sha KFU52_NWKIT_REPO_SHA https://github.com/kfuku52/nwkit.git "${KFU52_REPO_REF}" nwkit
+resolve_source_sha KFL1OU_REPO_SHA "${KFL1OU_REPO_URL}" "${KFL1OU_REPO_REF}" kfl1ou
+resolve_source_sha KFTOOLS_REPO_SHA "${KFTOOLS_REPO_URL}" "${KFTOOLS_REPO_REF}" kftools
+resolve_source_sha RKFTOOLS_REPO_SHA "${RKFTOOLS_REPO_URL}" "${RKFTOOLS_REPO_REF}" rkftools
+resolve_source_sha RADTE_REPO_SHA "${RADTE_REPO_URL}" "${RADTE_REPO_REF}" RADTE
+
 output_flag="--push"
 if [[ "${MODE}" == "load" ]]; then
   output_flag="--load"
@@ -91,7 +114,12 @@ fi
 
 cache_args=()
 cache_dir_new=""
-buildx_driver=$(docker buildx inspect --bootstrap 2>/dev/null | awk -F': *' '/^Driver:/ {print $2; exit}' | xargs)
+buildx_driver=""
+if buildx_inspect="$(docker buildx inspect --bootstrap 2>/dev/null)"; then
+  buildx_driver="$(printf '%s\n' "${buildx_inspect}" | awk -F': *' '/^Driver:/ {print $2; exit}' | xargs)"
+else
+  echo "[buildx] Could not inspect the builder; continuing without local cache configuration."
+fi
 if [[ -n "${CACHE_FROM}" || -n "${CACHE_TO}" ]]; then
   if [[ -n "${CACHE_FROM}" ]]; then
     cache_args+=(--cache-from "${CACHE_FROM}")
@@ -100,7 +128,9 @@ if [[ -n "${CACHE_FROM}" || -n "${CACHE_TO}" ]]; then
     cache_args+=(--cache-to "${CACHE_TO}")
   fi
 elif [[ "${USE_LOCAL_CACHE}" == "1" ]]; then
-  if [[ "${buildx_driver}" == "docker" ]]; then
+  if [[ -z "${buildx_driver}" ]]; then
+    echo "[buildx] Builder driver is unknown; continuing without --cache-to/--cache-from."
+  elif [[ "${buildx_driver}" == "docker" ]]; then
     echo "[buildx] Driver '${buildx_driver}' does not support local cache export; continuing without --cache-to/--cache-from."
     echo "[buildx] For external cache, use a docker-container builder or set CACHE_FROM/CACHE_TO explicitly."
   else
@@ -127,6 +157,7 @@ if [[ ${#cache_args[@]} -gt 0 ]]; then
     --build-arg KFU52_AMALGKIT_REPO_REF="${KFU52_AMALGKIT_REPO_REF}" \
     --build-arg KFU52_AMALGKIT_REPO_SHA="${KFU52_AMALGKIT_REPO_SHA}" \
     --build-arg KFU52_CDSKIT_REPO_SHA="${KFU52_CDSKIT_REPO_SHA}" \
+    --build-arg KFU52_CSUBST_REPO_REF="${KFU52_CSUBST_REPO_REF}" \
     --build-arg KFU52_CSUBST_REPO_SHA="${KFU52_CSUBST_REPO_SHA}" \
     --build-arg KFU52_NWKIT_REPO_SHA="${KFU52_NWKIT_REPO_SHA}" \
     --build-arg BUSCO_REPO_URL="${BUSCO_REPO_URL}" \
@@ -169,6 +200,7 @@ else
     --build-arg KFU52_AMALGKIT_REPO_REF="${KFU52_AMALGKIT_REPO_REF}" \
     --build-arg KFU52_AMALGKIT_REPO_SHA="${KFU52_AMALGKIT_REPO_SHA}" \
     --build-arg KFU52_CDSKIT_REPO_SHA="${KFU52_CDSKIT_REPO_SHA}" \
+    --build-arg KFU52_CSUBST_REPO_REF="${KFU52_CSUBST_REPO_REF}" \
     --build-arg KFU52_CSUBST_REPO_SHA="${KFU52_CSUBST_REPO_SHA}" \
     --build-arg KFU52_NWKIT_REPO_SHA="${KFU52_NWKIT_REPO_SHA}" \
     --build-arg BUSCO_REPO_URL="${BUSCO_REPO_URL}" \

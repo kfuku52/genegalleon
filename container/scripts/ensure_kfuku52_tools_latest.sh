@@ -8,6 +8,7 @@ env_name=${1:-base}
 repo_owner=${KFU52_REPO_OWNER:-kfuku52}
 tools_csv=${KFU52_TOOLS:-amalgkit,cdskit,csubst,nwkit}
 repo_ref=${KFU52_REPO_REF:-master}
+csubst_repo_ref=${KFU52_CSUBST_REPO_REF:-master}
 amalgkit_branch_candidates=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
 amalgkit_auto_select_ref=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}
 amalgkit_repo_ref_override=${KFU52_AMALGKIT_REPO_REF-master}
@@ -60,15 +61,23 @@ resolve_tool_repo_ref() {
   local pinned_sha
   pinned_sha=$(resolve_tool_repo_sha "${tool}")
   if [[ -n "${pinned_sha}" ]]; then
-    log "Using pinned ${tool} commit from environment: ${pinned_sha}" >&2
+    log "Using resolved or overridden ${tool} commit from environment: ${pinned_sha}" >&2
     echo "${pinned_sha}"
     return 0
   fi
 
-  if [[ "${tool}" != "amalgkit" ]]; then
-    echo "${repo_ref}"
-    return 0
-  fi
+  case "${tool}" in
+    csubst)
+      echo "${csubst_repo_ref}"
+      return 0
+      ;;
+    amalgkit)
+      ;;
+    *)
+      echo "${repo_ref}"
+      return 0
+      ;;
+  esac
 
   if [[ -n "${amalgkit_repo_ref_override}" ]]; then
     log "Using amalgkit ref override from KFU52_AMALGKIT_REPO_REF: ${amalgkit_repo_ref_override}" >&2

@@ -149,8 +149,37 @@ jobs:
                   break
               page += 1
 
+          if not matched_sha:
+              upstream_repositories = (
+                  "amalgkit",
+                  "cdskit",
+                  "csubst",
+                  "nwkit",
+                  "kfl1ou",
+                  "kftools",
+                  "rkftools",
+                  "RADTE",
+              )
+              for upstream_repo in upstream_repositories:
+                  upstream_commits = github_api(
+                      f"/repos/kfuku52/{upstream_repo}/commits",
+                      {
+                          "sha": "master",
+                          "since": since,
+                          "until": until,
+                          "per_page": "1",
+                      },
+                  )
+                  if upstream_commits:
+                      matched_sha = upstream_commits[0]["sha"][:7]
+                      matched_files = [f"kfuku52/{upstream_repo}@master"]
+                      break
+
           if matched_sha:
-              reason = "container-related changes found on the previous JST day"
+              if matched_files and matched_files[0].startswith("kfuku52/"):
+                  reason = "a tracked kfuku52 master branch changed on the previous JST day"
+              else:
+                  reason = "container-related changes found on the previous JST day"
               set_output("should_build", "1")
               set_output("decision_reason", reason)
               set_output("matched_sha", matched_sha)
@@ -194,6 +223,14 @@ jobs:
       immutable_tag: ${{ steps.vars.outputs.immutable_tag }}
       sha_tag: ${{ steps.vars.outputs.sha_tag }}
       build_date: ${{ steps.vars.outputs.build_date }}
+      amalgkit_repo_sha: ${{ steps.vars.outputs.amalgkit_repo_sha }}
+      cdskit_repo_sha: ${{ steps.vars.outputs.cdskit_repo_sha }}
+      csubst_repo_sha: ${{ steps.vars.outputs.csubst_repo_sha }}
+      nwkit_repo_sha: ${{ steps.vars.outputs.nwkit_repo_sha }}
+      kfl1ou_repo_sha: ${{ steps.vars.outputs.kfl1ou_repo_sha }}
+      kftools_repo_sha: ${{ steps.vars.outputs.kftools_repo_sha }}
+      rkftools_repo_sha: ${{ steps.vars.outputs.rkftools_repo_sha }}
+      radte_repo_sha: ${{ steps.vars.outputs.radte_repo_sha }}
 
     steps:
       - name: Checkout
@@ -218,11 +255,33 @@ jobs:
           immutable_tag="${date_tag}-${short_sha}"
           build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+          resolve_source_sha() {
+            bash container/scripts/resolve_git_branch_sha.sh \
+              "https://github.com/kfuku52/$1.git" master
+          }
+
+          amalgkit_repo_sha="$(resolve_source_sha amalgkit)"
+          cdskit_repo_sha="$(resolve_source_sha cdskit)"
+          csubst_repo_sha="$(resolve_source_sha csubst)"
+          nwkit_repo_sha="$(resolve_source_sha nwkit)"
+          kfl1ou_repo_sha="$(resolve_source_sha kfl1ou)"
+          kftools_repo_sha="$(resolve_source_sha kftools)"
+          rkftools_repo_sha="$(resolve_source_sha rkftools)"
+          radte_repo_sha="$(resolve_source_sha RADTE)"
+
           {
             echo "image=${image}"
             echo "immutable_tag=${immutable_tag}"
             echo "sha_tag=sha-${short_sha}"
             echo "build_date=${build_date}"
+            echo "amalgkit_repo_sha=${amalgkit_repo_sha}"
+            echo "cdskit_repo_sha=${cdskit_repo_sha}"
+            echo "csubst_repo_sha=${csubst_repo_sha}"
+            echo "nwkit_repo_sha=${nwkit_repo_sha}"
+            echo "kfl1ou_repo_sha=${kfl1ou_repo_sha}"
+            echo "kftools_repo_sha=${kftools_repo_sha}"
+            echo "rkftools_repo_sha=${rkftools_repo_sha}"
+            echo "radte_repo_sha=${radte_repo_sha}"
           } >> "${GITHUB_OUTPUT}"
 
   build-and-push:
@@ -276,6 +335,17 @@ jobs:
           build-args: |
             BUILD_DATE=${{ needs.prepare-build.outputs.build_date }}
             VCS_REF=${{ github.sha }}
+            KFU52_REPO_REF=master
+            KFU52_AMALGKIT_REPO_REF=master
+            KFU52_AMALGKIT_REPO_SHA=${{ needs.prepare-build.outputs.amalgkit_repo_sha }}
+            KFU52_CDSKIT_REPO_SHA=${{ needs.prepare-build.outputs.cdskit_repo_sha }}
+            KFU52_CSUBST_REPO_REF=master
+            KFU52_CSUBST_REPO_SHA=${{ needs.prepare-build.outputs.csubst_repo_sha }}
+            KFU52_NWKIT_REPO_SHA=${{ needs.prepare-build.outputs.nwkit_repo_sha }}
+            KFL1OU_REPO_SHA=${{ needs.prepare-build.outputs.kfl1ou_repo_sha }}
+            KFTOOLS_REPO_SHA=${{ needs.prepare-build.outputs.kftools_repo_sha }}
+            RKFTOOLS_REPO_SHA=${{ needs.prepare-build.outputs.rkftools_repo_sha }}
+            RADTE_REPO_SHA=${{ needs.prepare-build.outputs.radte_repo_sha }}
           cache-from: type=gha,scope=container-${{ steps.platform.outputs.pair }}
           cache-to: type=gha,mode=max,scope=container-${{ steps.platform.outputs.pair }}
 

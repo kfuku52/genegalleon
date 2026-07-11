@@ -9,11 +9,11 @@ that can target both:
 
 From the project README and Wiki (`gg_versions`):
 - `GeneGalleon` was originally assembled interactively from a miniconda3 Singularity sandbox.
-- The runtime now uses a single conda `base` env, with selected tools installed from pinned upstream commits at build time
+- The runtime now uses a single conda `base` env, with selected tools installed from upstream GitHub at build time
   (`kfuku52/amalgkit`, `kfuku52/cdskit`, `kfuku52/csubst`, `kfuku52/nwkit`,
-  `kfuku52/kftools`, `kfuku52/rkftools`, `kfuku52/RADTE`).
-  The authoritative defaults live in `container/source_pins.env`; explicit
-  `*_REPO_SHA` build variables remain available as overrides.
+  `kfuku52/kfl1ou`, `kfuku52/kftools`, `kfuku52/rkftools`, `kfuku52/RADTE`).
+  Standard builds resolve the latest `master` commit for every one of these
+  repositories. Explicit `*_REPO_SHA` variables remain available as overrides.
 
 So this Dockerfile is designed as:
 1. controlled and auditable base build,
@@ -47,22 +47,21 @@ IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.s
 ```
 
 Default hardening behavior:
-- all GeneGalleon-maintained source installs use exact Git SHAs from `container/source_pins.env`
-- changing a default source intentionally requires updating that pin file; the change invalidates the corresponding build cache
+- every `kfuku52` source resolves and installs the latest GitHub `master` commit for each standard build
+- build wrappers pass the resolved commits into Docker so upstream changes invalidate the corresponding build cache
 - `/opt/pg/logs/source_revisions.tsv` records the effective source revision in both Docker and native Apptainer images
 - `BUSCO` and `paml` remain pinned by default
 - `BioPP/testnh` and `CAFE5` release tarballs are verified with SHA-256 before extraction
 - GitHub/GitLab source fetches prefer release/archive downloads and fall back to `git` retry logic only when needed
 
 Override rules:
-- an explicitly supplied `*_REPO_SHA` takes precedence over the matching default in `container/source_pins.env`
-- source overrides should be full 40-character commit SHAs; the standard build wrappers intentionally do not provide an unpinned-ref mode
+- an explicitly supplied `*_REPO_SHA` takes precedence over dynamic `master` resolution
+- source SHA overrides should be full 40-character commit SHAs
 - `BUSCO_MIRROR_REPO_URL` is optional and is only used as a secondary source if the primary `BUSCO_REPO_URL` fetch fails.
 - if you override a repo URL to a fork, also supply a commit SHA that exists in that fork
 
-To update a default dependency, change its SHA in `container/source_pins.env`,
-update any matching version assertion such as `GG_PIN_CSUBST_VERSION`, and run
-the container-backed validation before publishing.
+No pin update is required when a `kfuku52` repository changes because standard
+builds resolve its current GitHub `master` commit automatically.
 
 `buildx.sh` runs a preflight check to ensure the conda env set used in
 `workflow/core/gg_*_core.sh` is covered by env installs in `container/Dockerfile`.
@@ -187,8 +186,8 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
   were dropped from `workflow/core/gg_genome_annotation_core.sh`.
 - Required/optional command validation report is generated at build time:
   - `/opt/pg/logs/runtime_validation_<arch>.tsv`
-- `ete4` is installed via `pip` in `base` because `nwkit` imports `ete4`
-  modules directly for tree rooting/transfer/timetree operations.
+- `ete4==4.4.0` is installed via `pip` in `base` because `nwkit` imports
+  `ete4` modules directly for tree rooting/transfer/timetree operations.
 - Database paths required by pipeline scripts must be populated manually:
   - `/usr/local/db/Pfam_LE`
   - `/usr/local/db/uniprot_sprot.pep` (and derived DIAMOND DB if needed)
@@ -197,7 +196,7 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
   and installed as:
   - `/usr/local/bin/Notung.jar`
 - `BUSCO` and `paml` are fetched from pinned upstream source snapshots by default.
-- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` install from the exact commits in `container/source_pins.env` by default.
+- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` install from the latest GitHub `master` commit by default.
 - `BioPP/testnh` and `CAFE5` tarballs are checksum-verified during build.
 - The default source is the pinned stable ZIP:
   - `NOTUNG_DOWNLOAD_PAGE=https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip`

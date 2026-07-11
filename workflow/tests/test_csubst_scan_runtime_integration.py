@@ -12,24 +12,12 @@ from csubst import ete, substitution_scan, tree  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DB_SCRIPT = REPO_ROOT / "workflow" / "support" / "generate_orthogroup_database.py"
-PIN_FILE = REPO_ROOT / "container" / "source_pins.env"
 BASELINE_SCAN_COLUMNS = {
     "site_rate_categorized",
     "q_rate_enrichment_empirical",
     "q_rate_enrichment_empirical_by_trait",
     "q_rate_enrichment_empirical_by_trait_match",
 }
-
-
-def read_source_pins():
-    pins = {}
-    for raw_line in PIN_FILE.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        key, value = line.split("=", 1)
-        pins[key] = value
-    return pins
 
 
 def set_state(state, branch_id, site, state_id):
@@ -113,10 +101,7 @@ def toy_scan_context():
     return context, on_tensor
 
 
-def test_pinned_csubst_scan_output_imports_into_gene_family_database(tmp_path):
-    pins = read_source_pins()
-    assert csubst.__version__ == pins["GG_PIN_CSUBST_VERSION"]
-
+def test_current_csubst_scan_output_imports_into_gene_family_database(tmp_path):
     context, on_tensor = toy_scan_context()
     scan_df, units_df = substitution_scan.scan_substitutions(
         g=context, ON_tensor=on_tensor
