@@ -4,8 +4,8 @@ import io
 import json
 import os
 import shutil
-import ssl
 import sqlite3
+import ssl
 import subprocess
 import sys
 import tarfile
