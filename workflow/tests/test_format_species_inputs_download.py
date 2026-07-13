@@ -1136,6 +1136,68 @@ def test_download_manifest_retries_transient_http_errors(tmp_path):
     assert FlakyHandler.attempts == 2
 
 
+def test_download_manifest_uses_default_user_agent_for_direct_downloads(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Croton_tiglium"
+    cds_source = source_dir / "Croton_tiglium.cds.fa.gz"
+    with gzip.open(cds_source, "wt", encoding="utf-8") as handle:
+        handle.write(">ctg1.t1\nATGAA\n")
+
+    class UserAgentHandler(SimpleHTTPRequestHandler):
+        seen_user_agent = ""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(source_dir), **kwargs)
+
+        def log_message(self, format, *args):
+            return
+
+        def do_GET(self):
+            if self.path.endswith("/Croton_tiglium.cds.fa.gz"):
+                type(self).seen_user_agent = self.headers.get("User-Agent", "")
+                if type(self).seen_user_agent != "genegalleon-input-generation":
+                    self.send_response(403)
+                    self.end_headers()
+                    self.wfile.write(b"missing expected user agent")
+                    return
+            super().do_GET()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), UserAgentHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "direct",
+                    "id": "VVPY-Croton_tiglium",
+                    "species_key": species_key,
+                    "cds_url": "http://127.0.0.1:{}/Croton_tiglium.cds.fa.gz".format(server.server_port),
+                    "cds_filename": species_key + ".cds.fa.gz",
+                }
+            ],
+        )
+
+        completed = run_script(
+            "--provider",
+            "direct",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(tmp_path / "download_cache"),
+            "--download-only",
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert UserAgentHandler.seen_user_agent == "genegalleon-input-generation"
+
+
 def test_download_manifest_supports_direct_archive_members(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()

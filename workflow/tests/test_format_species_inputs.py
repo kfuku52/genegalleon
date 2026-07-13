@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import ssl
 import sqlite3
 import subprocess
 import sys
@@ -11,6 +12,7 @@ import tarfile
 from http.client import RemoteDisconnected
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from urllib.error import URLError
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "format_species_inputs.py"
 VALIDATE_MAPPING_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_cds_gff_mapping.py"
@@ -41,6 +43,14 @@ def run_validate_mapping_script(*args):
         text=True,
         check=False,
     )
+
+
+def test_transient_network_error_treats_ssl_eof_as_retryable():
+    module = load_module()
+
+    error = URLError(ssl.SSLEOFError(8, "UNEXPECTED_EOF_WHILE_READING"))
+
+    assert module.is_transient_network_error(error)
 
 
 def test_cds_extension_is_treated_as_fasta():

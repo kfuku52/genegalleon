@@ -3672,6 +3672,12 @@ def is_transient_network_error(exc):
         if isinstance(current, OSError):
             if getattr(current, "errno", None) in (104, 110, 111, 113):
                 return True
+            lowered_message = str(current).lower()
+            if (
+                "unexpected_eof_while_reading" in lowered_message
+                or "eof occurred in violation of protocol" in lowered_message
+            ):
+                return True
 
         if isinstance(current, URLError):
             reason = getattr(current, "reason", None)
@@ -3682,6 +3688,8 @@ def is_transient_network_error(exc):
                     or "temporarily unavailable" in lowered
                     or "connection reset" in lowered
                     or "remote end closed connection" in lowered
+                    or "unexpected_eof_while_reading" in lowered
+                    or "eof occurred in violation of protocol" in lowered
                 ):
                     return True
             elif isinstance(reason, BaseException):
@@ -4159,6 +4167,9 @@ def download_url_to_file(
 ):
     if dry_run:
         return False
+    request_headers = dict(headers or {})
+    if "User-Agent" not in request_headers:
+        request_headers["User-Agent"] = "genegalleon-input-generation"
     archive_member_text = str(archive_member or "").strip()
     archive_cache_path = None
     archive_tmp = None
@@ -4189,7 +4200,7 @@ def download_url_to_file(
             last_validation_error = None
             for attempt in range(1, attempts + 1):
                 try:
-                    request = Request(url, headers=headers)
+                    request = Request(url, headers=request_headers)
                     with urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
                         while True:
                             chunk = response.read(1024 * 1024)
@@ -4242,7 +4253,7 @@ def download_url_to_file(
             if overwrite or not archive_cache_path.exists() or archive_cache_path.stat().st_size == 0:
                 for attempt in range(1, attempts + 1):
                     try:
-                        request = Request(url, headers=headers)
+                        request = Request(url, headers=request_headers)
                         with urlopen(request, timeout=timeout) as response, open(archive_tmp, "wb") as out:
                             while True:
                                 chunk = response.read(1024 * 1024)
