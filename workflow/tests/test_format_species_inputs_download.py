@@ -773,6 +773,52 @@ def test_download_manifest_all_provider_only_scans_providers_declared_in_manifes
     assert (raw_dir / (species_key + ".direct.genome.fa")).exists()
 
 
+def test_download_manifest_ignores_retired_species_cache_directories(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Medicago_sativa"
+    cds_source = source_dir / "medicago_sativa.cds.fa"
+    cds_source.write_text(">MsG1.t1\nATGAAATTT\n", encoding="utf-8")
+
+    manifest = tmp_path / "manifest.tsv"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "direct",
+                "id": "medicago_sativa_direct",
+                "species_key": species_key,
+                "cds_url": to_file_url(cds_source),
+                "cds_filename": species_key + ".direct.cds.fa",
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    stale_dir = download_dir / "Direct" / "species_wise_original" / "Retired_species"
+    (stale_dir / ".archive_cache").mkdir(parents=True)
+    completed = run_script(
+        "--provider",
+        "all",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(tmp_path / "out_cds"),
+        "--species-gff-dir",
+        str(tmp_path / "out_gff"),
+        "--species-genome-dir",
+        str(tmp_path / "out_genome"),
+        "--strict",
+    )
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "Retired_species" not in completed.stderr
+    assert stale_dir.exists()
+    assert list((tmp_path / "out_cds").glob("Medicago_sativa*.fa.gz"))
+
+
 def test_download_manifest_xlsx_direct_catalog_sheet_fills_runtime_urls(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()

@@ -44,7 +44,11 @@ from format_species_provider_config import (
     ORYZA_MINUTA_PROVIDER,
     PROVIDERS,
 )
-from format_species_provider_inputs import manifest_declared_providers, resolve_provider_inputs  # noqa: F401
+from format_species_provider_inputs import (  # noqa: F401
+    manifest_declared_providers,
+    manifest_declared_species_keys,
+    resolve_provider_inputs,
+)
 from format_species_provider_urls import (
     ENSEMBLGENOMES_DEFAULT_ID_URL_TEMPLATES,
     NCBI_ASSEMBLY_ACCESSION_PATTERN,
@@ -4645,6 +4649,7 @@ def download_from_manifest(
             "processed": processed,
             "downloaded": downloaded,
             "planned": planned,
+            "resolved_rows": resolved_rows,
             "download_diagnostics": summarize_download_diagnostics(
                 preexisting_cache_diagnostics,
                 final_cache_diagnostics,
@@ -4664,6 +4669,7 @@ def download_from_manifest(
             "processed": processed,
             "downloaded": downloaded,
             "planned": planned,
+            "resolved_rows": resolved_rows,
             "download_diagnostics": summarize_download_diagnostics(
                 preexisting_cache_diagnostics,
                 final_cache_diagnostics,
@@ -5269,6 +5275,7 @@ def download_from_manifest(
         "processed": processed,
         "downloaded": downloaded,
         "planned": planned,
+        "resolved_rows": resolved_rows,
         "download_diagnostics": summarize_download_diagnostics(
             preexisting_cache_diagnostics,
             final_cache_diagnostics,
@@ -6642,7 +6649,7 @@ def iter_task_cds_records(task):
     raise ValueError("No CDS source is available for {}".format(task.get("species_key", "")))
 
 
-def discover_generic_species_dir_tasks(provider, input_dir):
+def discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys=None):
     warnings = []
     errors = []
     tasks = []
@@ -6651,6 +6658,8 @@ def discover_generic_species_dir_tasks(provider, input_dir):
         if not species_dir.is_dir():
             continue
         species_key = normalize_species_key_for_runtime(species_dir.name)
+        if allowed_species_keys is not None and species_key not in allowed_species_keys:
+            continue
         invalid_species_key = invalid_species_key_error(provider, species_key)
         if invalid_species_key != "":
             errors.append(invalid_species_key)
@@ -6796,7 +6805,7 @@ def pick_single_file(matches, provider, species_key, label, warnings):
     return ordered[0]
 
 
-def discover_ensembl_like_tasks(input_dir, provider):
+def discover_ensembl_like_tasks(input_dir, provider, allowed_species_keys=None):
     warnings = []
     errors = []
     tasks = []
@@ -6831,6 +6840,8 @@ def discover_ensembl_like_tasks(input_dir, provider):
         | set(gbff_by_species.keys())
         | set(genome_by_species.keys())
     ):
+        if allowed_species_keys is not None and species_key not in allowed_species_keys:
+            continue
         invalid_species_key = invalid_species_key_error(provider, species_key)
         if invalid_species_key != "":
             errors.append(invalid_species_key)
@@ -6894,7 +6905,7 @@ def discover_ensembl_like_tasks(input_dir, provider):
     return tasks, warnings, errors
 
 
-def discover_phycocosm_tasks(input_dir):
+def discover_phycocosm_tasks(input_dir, allowed_species_keys=None):
     warnings = []
     errors = []
     tasks = []
@@ -6903,6 +6914,8 @@ def discover_phycocosm_tasks(input_dir):
         if not species_dir.is_dir():
             continue
         species_key = normalize_species_key_for_runtime(species_dir.name)
+        if allowed_species_keys is not None and species_key not in allowed_species_keys:
+            continue
         invalid_species_key = invalid_species_key_error("phycocosm", species_key)
         if invalid_species_key != "":
             errors.append(invalid_species_key)
@@ -6948,7 +6961,7 @@ def discover_phycocosm_tasks(input_dir):
     return tasks, warnings, errors
 
 
-def discover_phytozome_tasks(input_dir):
+def discover_phytozome_tasks(input_dir, allowed_species_keys=None):
     warnings = []
     errors = []
     tasks = []
@@ -6957,6 +6970,8 @@ def discover_phytozome_tasks(input_dir):
         if not species_dir.is_dir():
             continue
         species_key = normalize_species_key_for_runtime(species_dir.name)
+        if allowed_species_keys is not None and species_key not in allowed_species_keys:
+            continue
         invalid_species_key = invalid_species_key_error("phytozome", species_key)
         if invalid_species_key != "":
             errors.append(invalid_species_key)
@@ -7006,7 +7021,7 @@ def discover_phytozome_tasks(input_dir):
     return tasks, warnings, errors
 
 
-def discover_ncbi_like_tasks(input_dir, provider):
+def discover_ncbi_like_tasks(input_dir, provider, allowed_species_keys=None):
     warnings = []
     errors = []
     tasks = []
@@ -7015,6 +7030,8 @@ def discover_ncbi_like_tasks(input_dir, provider):
         if not species_dir.is_dir():
             continue
         species_key = normalize_species_key_for_runtime(species_dir.name)
+        if allowed_species_keys is not None and species_key not in allowed_species_keys:
+            continue
         invalid_species_key = invalid_species_key_error(provider, species_key)
         if invalid_species_key != "":
             errors.append(invalid_species_key)
@@ -7073,23 +7090,23 @@ def discover_ncbi_like_tasks(input_dir, provider):
     return tasks, warnings, errors
 
 
-def discover_tasks(provider, input_dir):
+def discover_tasks(provider, input_dir, allowed_species_keys=None):
     if provider in ENSEMBL_LIKE_PROVIDERS:
-        return discover_ensembl_like_tasks(input_dir, provider)
+        return discover_ensembl_like_tasks(input_dir, provider, allowed_species_keys)
     if provider == "phycocosm":
-        return discover_phycocosm_tasks(input_dir)
+        return discover_phycocosm_tasks(input_dir, allowed_species_keys)
     if provider == "phytozome":
-        return discover_phytozome_tasks(input_dir)
+        return discover_phytozome_tasks(input_dir, allowed_species_keys)
     if provider in ("ncbi", "refseq", "genbank", "plantgarden", "plantaedb"):
-        return discover_ncbi_like_tasks(input_dir, provider)
+        return discover_ncbi_like_tasks(input_dir, provider, allowed_species_keys)
     if provider == "coge":
-        return discover_generic_species_dir_tasks(provider, input_dir)
+        return discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys)
     if provider == "cngb":
-        return discover_generic_species_dir_tasks(provider, input_dir)
+        return discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys)
     if provider in ("ddbj", "gwh", "citrusgenomedb", "plantgarden", "flybase", "wormbase", "vectorbase", "fernbase", "veupathdb", "dictybase", "insectbase", ORYZA_MINUTA_PROVIDER, "direct"):
-        return discover_generic_species_dir_tasks(provider, input_dir)
+        return discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys)
     if provider == "local":
-        return discover_generic_species_dir_tasks(provider, input_dir)
+        return discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys)
     raise ValueError("Unknown provider: {}".format(provider))
 
 
@@ -7430,8 +7447,9 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
 
+    download_report = None
     if args.download_manifest != "":
-        report = run_download_stage(
+        download_report = run_download_stage(
             args,
             http_headers,
             download_from_manifest=download_from_manifest,
@@ -7440,18 +7458,15 @@ def main():
             stderr=sys.stderr,
         )
         if args.download_only:
-            return 0 if len(report["errors"]) == 0 else 1
-        if len(report["errors"]) > 0 and args.strict:
+            return 0 if len(download_report["errors"]) == 0 else 1
+        if len(download_report["errors"]) > 0 and args.strict:
             return 1
 
     apply_download_input_dir(args)
 
     manifest_rows_for_provider_inputs = None
-    if args.download_manifest != "" and args.provider == "all":
-        try:
-            manifest_rows_for_provider_inputs = read_download_manifest(Path(args.download_manifest).expanduser().resolve())
-        except Exception as exc:
-            parser.error(str(exc))
+    if download_report is not None:
+        manifest_rows_for_provider_inputs = list(download_report.get("resolved_rows", ()))
 
     try:
         provider_inputs = resolve_provider_inputs(args, manifest_rows=manifest_rows_for_provider_inputs)
@@ -7481,7 +7496,14 @@ def main():
             else:
                 all_errors.append(message)
             continue
-        tasks, warnings, errors = discover_tasks(provider, input_dir)
+        allowed_species_keys = None
+        if manifest_rows_for_provider_inputs is not None:
+            allowed_species_keys = manifest_declared_species_keys(manifest_rows_for_provider_inputs, provider)
+        tasks, warnings, errors = discover_tasks(
+            provider,
+            input_dir,
+            allowed_species_keys=allowed_species_keys,
+        )
         for task in tasks:
             task["gene_grouping_mode"] = args.gene_grouping_mode
         all_tasks.extend(tasks)

@@ -2619,6 +2619,56 @@ else
   gg_step_skip "${task}"
 fi
 
+task="Materialize selected undated species tree summary"
+if [[ ! -s "${file_undated_species_tree}" && ${species_tree_requested_for_orthofinder} -eq 1 ]]; then
+  selected_undated_species_tree_source=""
+  selected_undated_species_tree_is_astral=0
+  case "${undated_species_tree}" in
+    iqtree_pep)
+      selected_undated_species_tree_source="${file_concat_iqtree_pep_root}"
+      ;;
+    iqtree_dna)
+      selected_undated_species_tree_source="${file_concat_iqtree_dna_root}"
+      ;;
+    astral_pep)
+      selected_undated_species_tree_source="${file_astral_tree_pep}"
+      selected_undated_species_tree_is_astral=1
+      ;;
+    astral_dna)
+      selected_undated_species_tree_source="${file_astral_tree_dna}"
+      selected_undated_species_tree_is_astral=1
+      ;;
+  esac
+
+  if [[ -s "${selected_undated_species_tree_source}" ]]; then
+    gg_step_start "${task}"
+    echo "Rebuilding missing undated species tree summary from cached source:"
+    echo "from: ${selected_undated_species_tree_source}"
+    echo "to: ${file_undated_species_tree}"
+    if [[ ${selected_undated_species_tree_is_astral} -eq 1 ]]; then
+      rm -f -- "tmp.undated_species_tree.nwk"
+      if ! nwkit drop --name yes --target intnode --infile "${selected_undated_species_tree_source}" |
+        nwkit label --target intnode --force yes --outfile "tmp.undated_species_tree.nwk"; then
+        echo "Warning: Failed to convert cached ASTRAL tree with nwkit drop|label. Copying cached tree instead."
+      fi
+      if [[ -s "tmp.undated_species_tree.nwk" ]]; then
+        mv_out "tmp.undated_species_tree.nwk" "${file_undated_species_tree}"
+      else
+        cp_out "${selected_undated_species_tree_source}" "${file_undated_species_tree}"
+      fi
+    else
+      cp_out "${selected_undated_species_tree_source}" "${file_undated_species_tree}"
+    fi
+    if [[ -s "${file_undated_species_tree}" ]]; then
+      Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
+    fi
+  else
+    echo "Selected undated species tree source is not available: ${selected_undated_species_tree_source}"
+  fi
+else
+  gg_step_skip "${task}"
+fi
+
 task="Species tree plotting"
 if [[ ${run_plot_species_trees} -eq 1 ]]; then
   if [[ "${input_sequence_mode}" == "protein" ]]; then

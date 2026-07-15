@@ -17,9 +17,10 @@ def test_format_species_inputs_delegates_stage_and_provider_input_helpers():
     script_text = (SUPPORT_DIR / "format_species_inputs.py").read_text(encoding="utf-8")
 
     assert "from format_species_download_stage import apply_download_input_dir, run_download_stage" in script_text
-    assert (
-        "from format_species_provider_inputs import manifest_declared_providers, resolve_provider_inputs"
-        in script_text
-    )
+    assert "from format_species_provider_inputs import (" in script_text
+    assert "manifest_declared_providers," in script_text
+    assert "manifest_declared_species_keys," in script_text
+    assert "resolve_provider_inputs," in script_text
     assert "def resolve_provider_inputs(" not in script_text
     assert "def manifest_declared_providers(" not in script_text
+    assert "def manifest_declared_species_keys(" not in script_text

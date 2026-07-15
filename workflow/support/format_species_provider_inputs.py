@@ -19,6 +19,16 @@ def manifest_declared_providers(rows, provider_filter="all"):
     return providers
 
 
+def manifest_declared_species_keys(rows, provider):
+    normalized_provider = str(provider or "").strip().lower()
+    return {
+        str((row or {}).get("species_key", "") or "").strip()
+        for row in rows
+        if str((row or {}).get("provider", "") or "").strip().lower() == normalized_provider
+        and str((row or {}).get("species_key", "") or "").strip() != ""
+    }
+
+
 def resolve_provider_inputs(args, manifest_rows=None):
     if args.provider == "all":
         if args.input_dir == "":
@@ -26,9 +36,7 @@ def resolve_provider_inputs(args, manifest_rows=None):
         input_root = Path(args.input_dir).expanduser().resolve()
         provider_names = list(PROVIDERS)
         if manifest_rows is not None:
-            manifest_providers = manifest_declared_providers(manifest_rows, args.provider)
-            if len(manifest_providers) > 0:
-                provider_names = manifest_providers
+            provider_names = manifest_declared_providers(manifest_rows, args.provider)
         return [
             (provider, (input_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]).resolve())
             for provider in provider_names

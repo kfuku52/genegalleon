@@ -485,17 +485,51 @@ def sample(args):
     Path(outfile).write_text("(" + leaves + ");\\n", encoding="utf-8")
 
 
+def passthrough_tree(args):
+    infile = ""
+    outfile = ""
+    idx = 0
+    while idx < len(args):
+        arg = args[idx]
+        if arg == "--infile":
+            infile = args[idx + 1]
+            idx += 2
+        elif arg == "--outfile":
+            outfile = args[idx + 1]
+            idx += 2
+        elif arg in {{"--name", "--target", "--force"}}:
+            idx += 2
+        else:
+            idx += 1
+    text = Path(infile).read_text(encoding="utf-8") if infile else sys.stdin.read()
+    if outfile:
+        Path(outfile).write_text(text, encoding="utf-8")
+    else:
+        sys.stdout.write(text)
+
+
 def main():
     if len(sys.argv) < 2:
         raise SystemExit("nwkit stub requires a subcommand")
     if sys.argv[1] == "sample":
         sample(sys.argv[2:])
         return
+    if sys.argv[1] in {{"drop", "label"}}:
+        passthrough_tree(sys.argv[2:])
+        return
     raise SystemExit("Unsupported nwkit subcommand: " + sys.argv[1])
 
 
 if __name__ == "__main__":
     main()
+""",
+    )
+
+    _write_executable(
+        bin_dir / "Rscript",
+        """#!/usr/bin/env bash
+set -euo pipefail
+exit 0
 """,
     )
 
@@ -891,6 +925,34 @@ def test_genome_evolution_refuses_orthofinder_when_requested_species_tree_is_mis
     assert completed.returncode != 0
     assert "Refusing to run OrthoFinder without a species tree." in completed.stdout
     assert "Species-tree generation was requested, but no summary tree is available." in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_rebuilds_missing_summary_from_cached_astral_tree(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    astral_dir = workspace / "output" / "species_tree" / "single_copy_astral_pep"
+    species_protein_dir.mkdir(parents=True)
+    astral_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+    (species_protein_dir / "Oryza_sativa_pep.fa").write_text(
+        ">Oryza_sativa_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+    cached_tree = "(Arabidopsis_thaliana:0.1,Oryza_sativa:0.1);\n"
+    (astral_dir / "single_copy.astral.pep.optimized.nwk").write_text(cached_tree, encoding="utf-8")
+    (astral_dir / "single_copy.astral.pep.log").write_text("cached\n", encoding="utf-8")
+
+    completed = _run_core(tmp_path, {"run_astral_pep": "1", "undated_species_tree": "astral_pep"})
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    summary_tree = workspace / "output" / "species_tree" / "species_tree_summary" / "undated_species_tree.nwk"
+    assert summary_tree.read_text(encoding="utf-8") == cached_tree
+    assert "Rebuilding missing undated species tree summary from cached source:" in completed.stdout
+    assert "OrthoFinder will use the species tree:" in completed.stdout
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
