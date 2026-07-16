@@ -1,6 +1,36 @@
 # ruff: noqa: E501,E731,F403,F405
 
+import shutil
+import struct
+import zlib
+
+import pytest
 from format_species_download_helpers import *
+
+
+def _build_rar4_store_archive(member_name, payload):
+    def block(body):
+        return struct.pack("<H", zlib.crc32(body) & 0xFFFF) + body
+
+    name = member_name.encode("utf-8")
+    main_header = struct.pack("<BHHHI", 0x73, 0, 13, 0, 0)
+    file_header = struct.pack(
+        "<BHHIIBIIBBHI",
+        0x74,
+        0x8000,
+        32 + len(name),
+        len(payload),
+        len(payload),
+        3,
+        zlib.crc32(payload) & 0xFFFFFFFF,
+        0,
+        20,
+        0x30,
+        len(name),
+        0o100644,
+    ) + name
+    end_header = struct.pack("<BHH", 0x7B, 0, 7)
+    return b"Rar!\x1a\x07\x00" + block(main_header) + block(file_header) + payload + block(end_header)
 
 
 def test_download_manifest_resolves_coge_urls_from_id_without_templates(tmp_path):
@@ -1120,17 +1150,25 @@ def test_download_manifest_figshare_article_supports_archive_members(tmp_path):
         env = dict(os.environ)
         env["GG_FIGSHARE_API_BASE_URL"] = "http://127.0.0.1:{}/v2".format(server.server_port)
         resolved_manifest = tmp_path / "resolved.tsv"
+        download_cache = tmp_path / "download_cache"
+        out_cds = tmp_path / "out_cds"
+        out_gff = tmp_path / "out_gff"
+        out_genome = tmp_path / "out_genome"
         completed = run_script(
             "--provider",
             "all",
             "--download-manifest",
             str(manifest),
             "--download-dir",
-            str(tmp_path / "download_cache"),
+            str(download_cache),
             "--resolved-manifest-output",
             str(resolved_manifest),
-            "--download-only",
-            "--dry-run",
+            "--species-cds-dir",
+            str(out_cds),
+            "--species-gff-dir",
+            str(out_gff),
+            "--species-genome-dir",
+            str(out_genome),
             env=env,
             timeout=TEST_COMMAND_TIMEOUT,
         )
@@ -1151,6 +1189,101 @@ def test_download_manifest_figshare_article_supports_archive_members(tmp_path):
     assert row["cds_filename"] == "camellia_meiocarpa.gene.cds.fa"
     assert row["gff_filename"] == "camellia_meiocarpa.gene.gff"
     assert row["genome_filename"] == "youcha.Changed.A.fasta.gz"
+    raw_dir = download_cache / "Figshare" / "species_wise_original" / "Camellia_meiocarpa"
+    assert (raw_dir / row["cds_filename"]).is_file()
+    assert (raw_dir / row["gff_filename"]).is_file()
+    assert (raw_dir / row["genome_filename"]).is_file()
+    assert len(list(out_cds.glob("*.cds.fa.gz"))) == 1
+    assert len(list(out_gff.glob("*.gff.gz"))) == 1
+
+
+def test_download_manifest_figshare_extracts_rar_member_from_extensionless_url(tmp_path):
+    if shutil.which("bsdtar") is None:
+        pytest.skip("bsdtar is supplied by the GeneGalleon container runtime")
+
+    server_root = tmp_path / "server_root"
+    api_dir = server_root / "v2" / "articles"
+    files_dir = server_root / "files"
+    api_dir.mkdir(parents=True, exist_ok=True)
+    files_dir.mkdir(parents=True, exist_ok=True)
+
+    member_name = "data/test.txt"
+    member_payload = b"original fixture\r\n"
+    rar_payload = _build_rar4_store_archive(member_name, member_payload)
+    (files_dir / "45433333").write_bytes(rar_payload)
+
+    article_payload = {
+        "id": 25533064,
+        "title": "Chromosome-level genome assembly and annotation of Reaumuria soongarica",
+        "files": [
+            {
+                "id": 45433333,
+                "name": "Chromosome-level genome assembly and annotation of Reaumuria soongarica.rar",
+                "download_url": "http://127.0.0.1:0/files/45433333",
+            }
+        ],
+    }
+
+    class _FigshareRarFixtureHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(server_root), **kwargs)
+
+        def do_GET(self):
+            if self.path == "/v2/articles/25533064":
+                payload = json.dumps(article_payload).replace(":0/", ":{}".format(self.server.server_port) + "/").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            super().do_GET()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FigshareRarFixtureHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "figshare",
+                    "id": "https://springernature.figshare.com/articles/dataset/25533064",
+                    "species_key": "Reaumuria_soongarica",
+                    "cds_filename": article_payload["files"][0]["name"],
+                    "cds_archive_member": member_name,
+                }
+            ],
+        )
+        env = dict(os.environ)
+        env["GG_FIGSHARE_API_BASE_URL"] = "http://127.0.0.1:{}/v2".format(server.server_port)
+        completed = run_script(
+            "--provider",
+            "figshare",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(tmp_path / "download_cache"),
+            "--download-only",
+            env=env,
+            timeout=TEST_COMMAND_TIMEOUT,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    extracted = (
+        tmp_path
+        / "download_cache"
+        / "Figshare"
+        / "species_wise_original"
+        / "Reaumuria_soongarica"
+        / "test.txt"
+    )
+    assert extracted.read_bytes() == member_payload
 
 
 def test_download_manifest_resolves_plantgarden_assembly_page_to_public_bundle(tmp_path):

@@ -310,6 +310,7 @@ def discover_tasks(provider, input_dir, allowed_species_keys=None):
         "ddbj",
         "gwh",
         "citrusgenomedb",
+        "figshare",
         "plantgarden",
         "flybase",
         "wormbase",

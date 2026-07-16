@@ -217,7 +217,7 @@ HEADER_COMMENTS = {
             "Optional.",
             "",
             "Path to the CDS file inside an archive referenced by cds_url.",
-            "Use this when cds_url points to a .zip or .tar.* bundle instead of a plain FASTA.",
+            "Use this when cds_url points to a .zip, .tar.*, or .rar bundle instead of a plain FASTA.",
             "Example: SpeciesA/SpeciesA.cds.fasta",
         )
     ),
@@ -226,7 +226,7 @@ HEADER_COMMENTS = {
             "Optional.",
             "",
             "Path to the GFF/GTF file inside an archive referenced by gff_url.",
-            "Use this when gff_url points to a .zip or .tar.* bundle instead of a plain annotation file.",
+            "Use this when gff_url points to a .zip, .tar.*, or .rar bundle instead of a plain annotation file.",
             "Example: SpeciesA/SpeciesA.genes.gff3",
         )
     ),
@@ -235,7 +235,7 @@ HEADER_COMMENTS = {
             "Optional.",
             "",
             "Path to the GBFF/GenBank file inside an archive referenced by gbff_url.",
-            "Use this when gbff_url points to a .zip or .tar.* bundle instead of a plain annotation file.",
+            "Use this when gbff_url points to a .zip, .tar.*, or .rar bundle instead of a plain annotation file.",
             "Example: SpeciesA/SpeciesA.genomic.gbff",
         )
     ),
@@ -244,7 +244,7 @@ HEADER_COMMENTS = {
             "Optional.",
             "",
             "Path to the genome FASTA inside an archive referenced by genome_url.",
-            "Use this when genome_url points to a .zip or .tar.* bundle instead of a plain FASTA.",
+            "Use this when genome_url points to a .zip, .tar.*, or .rar bundle instead of a plain FASTA.",
             "Example: SpeciesA/SpeciesA.fasta",
         )
     ),

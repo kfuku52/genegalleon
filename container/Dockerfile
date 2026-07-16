@@ -25,6 +25,7 @@ RUN rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archive
     gfortran \
     git \
     less \
+    libarchive-tools \
     libboost-dev \
     libbpp-phyl-dev \
     libcurl4-openssl-dev \

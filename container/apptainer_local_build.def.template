@@ -82,6 +82,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
         gfortran \
         git \
         less \
+        libarchive-tools \
         libboost-dev \
         libbpp-phyl-dev \
         libcurl4-openssl-dev \

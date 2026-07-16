@@ -2,6 +2,8 @@
 
 import hashlib
 import os
+import shutil
+import subprocess
 import tarfile
 import time
 import zipfile
@@ -29,6 +31,45 @@ from .local import (
     quarantine_corrupt_gzip,
     quarantine_existing_file,
 )
+
+RAR4_SIGNATURE = b"Rar!\x1a\x07\x00"
+RAR5_SIGNATURE = b"Rar!\x1a\x07\x01\x00"
+
+
+def is_rar_archive(path):
+    with open(path, "rb") as handle:
+        signature = handle.read(len(RAR5_SIGNATURE))
+    return signature.startswith(RAR4_SIGNATURE) or signature.startswith(RAR5_SIGNATURE)
+
+
+def extract_rar_archive_member(archive_path, archive_member, destination):
+    bsdtar = shutil.which("bsdtar")
+    if bsdtar is None:
+        raise RuntimeError(
+            "RAR archive extraction requires 'bsdtar'; use the GeneGalleon container runtime"
+        )
+    with open(destination, "wb") as out:
+        completed = subprocess.run(
+            [bsdtar, "-xOf", str(archive_path), "--", str(archive_member)],
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    if completed.returncode == 0:
+        return
+    try:
+        destination.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+    detail = completed.stderr.decode("utf-8", errors="replace").strip()
+    if detail == "":
+        detail = "bsdtar exited with status {}".format(completed.returncode)
+    raise OSError(
+        "failed to extract RAR archive member '{}': {}".format(archive_member, detail)
+    )
 
 
 def resolve_download_lock_stale_seconds():
@@ -338,14 +379,18 @@ def download_url_to_file(
             if zipfile.is_zipfile(archive_cache_path):
                 with zipfile.ZipFile(archive_cache_path) as archive:
                     payload = archive.read(archive_member_text)
+                with open(tmp, "wb") as out:
+                    out.write(payload)
+            elif is_rar_archive(archive_cache_path):
+                extract_rar_archive_member(archive_cache_path, archive_member_text, tmp)
             else:
                 with tarfile.open(archive_cache_path, "r:*") as archive:
                     extracted = archive.extractfile(archive_member_text)
                     if extracted is None:
                         raise KeyError(archive_member_text)
                     payload = extracted.read()
-            with open(tmp, "wb") as out:
-                out.write(payload)
+                with open(tmp, "wb") as out:
+                    out.write(payload)
             tmp.replace(destination)
             validation_error = gzip_integrity_error(destination)
             if validation_error is not None:

@@ -287,6 +287,7 @@ jobs:
       - name: Run SIF validation checks
         run: |
           bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_end_to_end.py
+          bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_format_species_inputs_provider_pages.py::test_download_manifest_figshare_extracts_rar_member_from_extensionless_url
           bash workflow/tests/run_in_sif.sh bash workflow/tests/check_treevis_package.sh
           bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_orthogroup_copy_number_trait_pgls.R
           bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_treevis_main.R

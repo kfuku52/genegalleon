@@ -313,6 +313,7 @@ Manifest required columns:
   - for `provider=citrusgenomedb`, `id` can be a Citrus Genome Database organism page URL (for example `/organism/5799`) or an analysis page URL (for example `/Analysis/2530647`); the resolver discovers public genome/GFF/CDS downloads from the selected page.
   - for `provider=figshare`, `id` can be a public figshare article URL or numeric article id; the resolver uses the figshare article API to discover file downloads.
     - for multi-file articles, set one or more of `cds_filename`, `gff_filename`, or `genome_filename` to select the exact files within the article.
+    - when a selected Figshare file is an archive, set the matching `*_archive_member` column to the path of the data file inside it; `.zip`, `.tar.*`, and `.rar` archives are supported.
   - for `provider=plantgarden`, `id` can be a PlantGARDEN species/genome/download URL (for example `/en/list/t64480/genome/t64480.G001`); the resolver follows the PlantGARDEN assembly page to the public download index and discovers CDS or transcript FASTA together with GFF/genome files when available.
   - for `provider=plantaedb`, `id` can be a PlantaeDB species page URL (or a relative PlantaeDB `/taxa/...` path); the resolver extracts the linked NCBI `GCA/GCF` assembly accession and delegates to the NCBI resolver.
   - for `provider=flybase`, `provider=wormbase`, `provider=vectorbase`, `provider=fernbase`, `provider=veupathdb`, and `provider=dictybase`, `id` can be resolved via explicit URL columns or `GG_<PROVIDER>_*_URL_TEMPLATE`.
@@ -337,7 +338,7 @@ Optional columns:
 
 - `species_key`
 - `cds_archive_member`, `gff_archive_member`, `gbff_archive_member`, `genome_archive_member`
-  (optional paths inside `.zip` or `.tar.*` archives referenced by the corresponding `*_url`)
+  (optional paths inside `.zip`, `.tar.*`, or `.rar` archives referenced by the corresponding `*_url`)
 - `cds_filename`
 - `gff_filename`
 - `gbff_filename`

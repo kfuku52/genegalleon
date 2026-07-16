@@ -139,3 +139,21 @@ def test_container_build_paths_pin_the_same_base_image_digest():
     assert docker_base is not None
     assert apptainer_base is not None
     assert docker_base.group(0) == apptainer_base.group(0)
+
+
+def test_container_build_paths_include_rar_extraction_runtime():
+    dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
+    apptainer_template = (
+        REPO_ROOT / "container" / "apptainer_local_build.def.template"
+    ).read_text(encoding="utf-8")
+    required_commands = (
+        REPO_ROOT / "container" / "spec" / "required_commands.tsv"
+    ).read_text(encoding="utf-8")
+    arm64_required_commands = (
+        REPO_ROOT / "container" / "spec" / "required_commands.arm64.tsv"
+    ).read_text(encoding="utf-8")
+
+    assert "libarchive-tools" in dockerfile
+    assert "libarchive-tools" in apptainer_template
+    assert "base\tbsdtar" in required_commands
+    assert "base\tbsdtar" in arm64_required_commands
