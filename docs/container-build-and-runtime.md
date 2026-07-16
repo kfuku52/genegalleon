@@ -97,6 +97,12 @@ Single-platform local load example:
 IMAGE=local/genegalleon TAG=dev PLATFORMS=linux/arm64 MODE=load ./container/buildx.sh
 ```
 
+Buildx's internal builder cache is used automatically. The additional local
+cache export is opt-in (`USE_LOCAL_CACHE=1`) because this image's full cache is
+large and exporting it on every invocation can dominate a warm build.
+Unchanged `MODE=load` invocations are skipped using a build-input fingerprint;
+set `SKIP_UNCHANGED_LOAD=0` when BuildKit must be forced to run.
+
 ### Convert registry or Docker-daemon image to SIF
 
 ```bash

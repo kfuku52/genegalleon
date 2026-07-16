@@ -385,12 +385,39 @@ verify_plotting_packages_in_r() {
 }
 
 main() {
-  install_cafe5
-  install_mapnh
-  install_astral_hybrid_wrapper
-  install_r_cran_packages "${r_env_name}" Rphylopars Rtsne
-  install_r_kfl1ou
-  verify_plotting_packages_in_r
+  local -a components=("$@")
+  local component
+
+  if [[ ${#components[@]} -eq 0 ]]; then
+    components=(cafe5 mapnh astral r-cran kfl1ou verify-r)
+  fi
+
+  for component in "${components[@]}"; do
+    case "${component}" in
+      cafe5)
+        install_cafe5
+        ;;
+      mapnh)
+        install_mapnh
+        ;;
+      astral)
+        install_astral_hybrid_wrapper
+        ;;
+      r-cran)
+        install_r_cran_packages "${r_env_name}" Rphylopars Rtsne
+        ;;
+      kfl1ou)
+        install_r_kfl1ou
+        ;;
+      verify-r)
+        verify_plotting_packages_in_r
+        ;;
+      *)
+        echo "Usage: $0 [cafe5|mapnh|astral|r-cran|kfl1ou|verify-r ...]" >&2
+        exit 2
+        ;;
+    esac
+  done
 }
 
 main "$@"

@@ -2591,6 +2591,32 @@ def test_container_ghcr_tracks_and_builds_current_kfuku52_master_revisions():
         assert f"{build_arg}=${{{{ needs.prepare-build.outputs.{output_name} }}}}" in workflow
 
 
+def test_release_sif_builds_platforms_concurrently_on_native_runners():
+    workflow = _read_text(GITHUB_WORKFLOWS_DIR / "release-sif.yml")
+    build_start = workflow.index("  build-platform:")
+    publish_start = workflow.index("  publish-manifest-and-sif:", build_start)
+    build_block = workflow[build_start:publish_start]
+
+    assert "runs-on: ${{ matrix.runner }}" in build_block
+    assert "- platform: linux/amd64\n            runner: ubuntu-latest" in build_block
+    assert "- platform: linux/arm64\n            runner: ubuntu-24.04-arm" in build_block
+    assert "docker/setup-qemu-action" not in workflow
+    assert "scope=container-${{ steps.platform.outputs.pair }}" in build_block
+    assert "push-by-digest=true" in build_block
+
+
+def test_local_buildx_skips_an_unchanged_loaded_image_by_fingerprint():
+    dockerfile = _read_text(WORKFLOW_DIR.parent / "container" / "Dockerfile")
+    buildx = _read_text(WORKFLOW_DIR.parent / "container" / "buildx.sh")
+
+    assert 'ARG BUILD_INPUT_HASH=""' in dockerfile
+    assert 'io.genegalleon.build-input="${BUILD_INPUT_HASH}"' in dockerfile
+    assert "SKIP_UNCHANGED_LOAD=${SKIP_UNCHANGED_LOAD:-1}" in buildx
+    assert '--build-arg BUILD_INPUT_HASH="${build_input_hash}"' in buildx
+    assert '"${image_hash}" == "${build_input_hash}"' in buildx
+    assert "USE_LOCAL_CACHE=${USE_LOCAL_CACHE:-0}" in buildx
+
+
 def test_no_pipe_to_grep_q_in_core_and_support_scripts():
     scripts = sorted(CORE_DIR.glob("*.sh")) + sorted((WORKFLOW_DIR / "support").glob("*.sh"))
     pattern = re.compile(r"\|\s*(?:z?grep)\s+-q|\|\s*grep\s+-Fq|\|\s*grep\s+-Fxq")

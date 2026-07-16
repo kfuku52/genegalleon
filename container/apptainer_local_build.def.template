@@ -116,20 +116,18 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
         "${base_required}" /opt/pg/env/base.r.required.txt | awk '!seen[$0]++' > "${reconciled_required}"
 
-    /opt/pg/scripts/install_env.sh base "${base_required}" "${optional_file}" python=3.12
+    # Resolve the complete Python/R environment once. The previous sequence
+    # solved the base environment, added packages explicitly, then solved the
+    # combined environment again.
+    /opt/pg/scripts/install_env.sh base "${reconciled_required}" "${optional_file}" python=3.12
     /opt/pg/scripts/ensure_generax_stable.sh base
-    micromamba install -y --retry-clean-cache --repodata-ttl 3600 -n base -c conda-forge -c bioconda \
-        pymol-open-source 'numpy>=1.26.4,<2'
-    micromamba run -n base pip install --no-cache-dir 'ete4==4.4.0'
-    micromamba run -n base python -c "import ete4"
     PAML_REPO_URL="${paml_repo_url}" \
     PAML_REPO_REF="${paml_repo_ref}" \
     PAML_REPO_SHA="${paml_repo_sha}" \
         /opt/pg/scripts/ensure_iq2mc_toolchain.sh base
-    /opt/pg/scripts/install_env.sh base "${reconciled_required}" /opt/pg/env/base.r.optional.txt r-base
     micromamba run -n base pip install --no-cache-dir \
         -r /opt/pg/pip-compatibility.requirements.txt
-    micromamba run -n base python -c "import genomepy, lxml, ortools, PIL"
+    micromamba run -n base python -c "import ete4, genomepy, lxml, ortools, PIL"
     micromamba run -n base python -m pip check
     kfl1ou_repo_ref="${kfl1ou_repo_ref:-${kfu52_repo_ref}}"
     TESTNH_TARBALL_SHA256="${testnh_tarball_sha256}" \

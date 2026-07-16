@@ -1,41 +1,6 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023bb127baade7e8faca
-
-ARG TARGETARCH
-ARG TARGETPLATFORM
-ARG NOTUNG_DOWNLOAD_PAGE="https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip"
-ARG NOTUNG_DOWNLOAD_HOST_IP="128.2.205.60"
-ARG KFU52_REPO_REF="master"
-ARG KFU52_AMALGKIT_AUTO_SELECT_REF="0"
-ARG KFU52_AMALGKIT_BRANCH_CANDIDATES="master,kfdevel,devel"
-ARG KFU52_AMALGKIT_REPO_REF="master"
-ARG KFU52_AMALGKIT_REPO_SHA=""
-ARG KFU52_CDSKIT_REPO_SHA=""
-ARG KFU52_CSUBST_REPO_REF="master"
-ARG KFU52_CSUBST_REPO_SHA=""
-ARG KFU52_NWKIT_REPO_SHA=""
-ARG BUSCO_REPO_URL="https://gitlab.com/ezlab/busco.git"
-ARG BUSCO_MIRROR_REPO_URL=""
-ARG BUSCO_REPO_REF="6.0.0"
-ARG BUSCO_REPO_SHA="6278721a1916f6da310e03ec9674099028c927a4"
-ARG PAML_REPO_URL="https://github.com/iqtree/paml.git"
-ARG PAML_REPO_REF="master"
-ARG PAML_REPO_SHA="8daeead6b55523f375d9ac56dcfac38373ef8a2e"
-ARG KFL1OU_REPO_URL="https://github.com/kfuku52/kfl1ou.git"
-ARG KFL1OU_REPO_REF=""
-ARG KFL1OU_REPO_SHA=""
-ARG KFTOOLS_REPO_URL="https://github.com/kfuku52/kftools.git"
-ARG RKFTOOLS_REPO_URL="https://github.com/kfuku52/rkftools.git"
-ARG RADTE_REPO_URL="https://github.com/kfuku52/RADTE.git"
-ARG KFTOOLS_REPO_REF=""
-ARG RKFTOOLS_REPO_REF=""
-ARG RADTE_REPO_REF=""
-ARG KFTOOLS_REPO_SHA=""
-ARG RKFTOOLS_REPO_SHA=""
-ARG RADTE_REPO_SHA=""
-ARG TESTNH_TARBALL_SHA256="598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2"
-ARG CAFE5_TARBALL_SHA256="71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8"
+FROM mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023bb127baade7e8faca AS system
 
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -79,85 +44,160 @@ RUN rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archive
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-COPY container/env /opt/pg/env
-COPY container/spec /opt/pg/spec
-COPY container/testdata /opt/pg/testdata
-COPY container/scripts/install_env.sh /opt/pg/scripts/install_env.sh
-COPY container/scripts/ensure_generax_stable.sh /opt/pg/scripts/ensure_generax_stable.sh
-COPY container/scripts/ensure_kfuku52_tools_latest.sh /opt/pg/scripts/ensure_kfuku52_tools_latest.sh
-COPY container/scripts/ensure_iq2mc_toolchain.sh /opt/pg/scripts/ensure_iq2mc_toolchain.sh
+# Isolate the Notung download so Git source revisions in the runtime stage do
+# not invalidate it.
+FROM system AS notung
+
+ARG NOTUNG_DOWNLOAD_PAGE="https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip"
+ARG NOTUNG_DOWNLOAD_HOST_IP="128.2.205.60"
+
 COPY container/scripts/resolve_notung_latest.sh /opt/pg/scripts/resolve_notung_latest.sh
 COPY container/scripts/download_url.sh /opt/pg/scripts/download_url.sh
 COPY container/scripts/download_url_with_fallback.sh /opt/pg/scripts/download_url_with_fallback.sh
+
+RUN chmod +x /opt/pg/scripts/*.sh \
+ && notung_url="$(/opt/pg/scripts/resolve_notung_latest.sh "${NOTUNG_DOWNLOAD_PAGE}")" \
+ && tmp_zip="$(mktemp /tmp/notung.XXXXXX.zip)" \
+ && tmp_dir="$(mktemp -d /tmp/notung.XXXXXX)" \
+ && NOTUNG_DOWNLOAD_HOST_IP="${NOTUNG_DOWNLOAD_HOST_IP}" /opt/pg/scripts/download_url_with_fallback.sh "${notung_url}" "${tmp_zip}" \
+ && unzip -q "${tmp_zip}" -d "${tmp_dir}" \
+ && notung_jar="$(find "${tmp_dir}" -type f -name 'Notung-2.9*.jar' | sort -V | tail -n 1)" \
+ && if [[ -z "${notung_jar}" ]]; then echo "Notung jar was not found in ${notung_url}"; exit 1; fi \
+ && install -m 0755 "${notung_jar}" /Notung.jar \
+ && rm -f "${tmp_zip}" \
+ && rm -rf "${tmp_dir}"
+
+FROM system AS runtime
+
+ARG TARGETARCH
+ARG TARGETPLATFORM
+
+# Resolve the complete conda environment in one transaction. Keeping source
+# revisions and validation files below this layer preserves the expensive
+# solver/install cache when those fast-changing inputs are updated.
+COPY container/env /opt/pg/env
+COPY container/scripts/install_env.sh /opt/pg/scripts/install_env.sh
+
+RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
+ --mount=type=cache,target=/root/.mamba/pkgs,sharing=locked \
+ chmod +x /opt/pg/scripts/install_env.sh \
+ && export USE_DEFAULTS_CHANNEL=0 STRICT_CHANNEL_PRIORITY=1 MAMBA_NO_LOW_SPEED_LIMIT=1 \
+ && base_required="/opt/pg/env/base.required.txt" \
+ && optional_file="/opt/pg/env/base.${TARGETARCH}.optional.txt" \
+ && reconciled_required="/tmp/pg.base.required.txt" \
+ && if [[ -f "/opt/pg/env/base.${TARGETARCH}.required.txt" ]]; then base_required="/opt/pg/env/base.${TARGETARCH}.required.txt"; fi \
+ && if [[ ! -f "${optional_file}" ]]; then optional_file="/dev/null"; fi \
+ && sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "${base_required}" /opt/pg/env/base.r.required.txt | awk '!seen[$0]++' > "${reconciled_required}" \
+ && /opt/pg/scripts/install_env.sh base "${reconciled_required}" "${optional_file}" python=3.12 \
+ && rm -f "${reconciled_required}"
+
+COPY container/testdata /opt/pg/testdata
+COPY container/scripts/ensure_generax_stable.sh /opt/pg/scripts/ensure_generax_stable.sh
+
+RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
+ --mount=type=cache,target=/root/.mamba/pkgs,sharing=locked \
+ chmod +x /opt/pg/scripts/ensure_generax_stable.sh \
+ && /opt/pg/scripts/ensure_generax_stable.sh base
+
+ARG PAML_REPO_URL="https://github.com/iqtree/paml.git"
+ARG PAML_REPO_REF="master"
+ARG PAML_REPO_SHA="8daeead6b55523f375d9ac56dcfac38373ef8a2e"
+
+COPY container/scripts/ensure_iq2mc_toolchain.sh /opt/pg/scripts/ensure_iq2mc_toolchain.sh
+COPY container/scripts/download_url.sh /opt/pg/scripts/download_url.sh
 COPY container/scripts/verify_sha256.sh /opt/pg/scripts/verify_sha256.sh
 COPY container/scripts/fetch_git_repo.sh /opt/pg/scripts/fetch_git_repo.sh
-COPY container/scripts/install_helvetica_compat_font.sh /opt/pg/scripts/install_helvetica_compat_font.sh
-COPY container/scripts/install_nonconda_fallbacks.sh /opt/pg/scripts/install_nonconda_fallbacks.sh
-COPY container/scripts/validate_runtime.sh /opt/pg/scripts/validate_runtime.sh
 
-# nwkit currently imports ete4 modules directly and requires ete4 >= 4.4.0,
-# so install the pinned pip build explicitly and assert importability.
-# Keep this layer focused on architecture/base toolchain setup so it can be
-# reused even when Git refs change.
+RUN chmod +x /opt/pg/scripts/*.sh \
+ && PAML_REPO_URL="${PAML_REPO_URL}" \
+    PAML_REPO_REF="${PAML_REPO_REF}" \
+    PAML_REPO_SHA="${PAML_REPO_SHA}" \
+    /opt/pg/scripts/ensure_iq2mc_toolchain.sh base
+
+# Install Python-only compatibility/security updates once, after the conda
+# solver has finished, so wheels cannot pull the scientific stack away from
+# the NumPy range required by both PyMOL and ClipKIT.
+COPY container/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+ micromamba run -n base pip install \
+      -r /opt/pg/pip-compatibility.requirements.txt \
+ && micromamba run -n base python -c "import ete4, genomepy, lxml, ortools, PIL" \
+ && micromamba run -n base python -m pip check
+
+# Native tools and CRAN fallbacks change much less frequently than the Git
+# sources below, so give them an independent reusable layer.
+ARG TESTNH_TARBALL_SHA256="598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2"
+ARG CAFE5_TARBALL_SHA256="71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8"
+
+COPY container/scripts/install_nonconda_fallbacks.sh /opt/pg/scripts/install_nonconda_fallbacks.sh
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+ chmod +x /opt/pg/scripts/install_nonconda_fallbacks.sh \
+ && TESTNH_TARBALL_SHA256="${TESTNH_TARBALL_SHA256}" \
+ CAFE5_TARBALL_SHA256="${CAFE5_TARBALL_SHA256}" \
+ /opt/pg/scripts/install_nonconda_fallbacks.sh cafe5 mapnh astral r-cran verify-r
+
+COPY --from=notung /Notung.jar /usr/local/bin/Notung.jar
+
+RUN mkdir -p /home /usr/local/db/Pfam_LE /usr/local/db/jaspar /opt/pg/logs /opt/conda/envs \
+ && ln -sfn /opt/conda /opt/conda/envs/base \
+ && printf '%s\n' \
+   'export MAMBA_ROOT_PREFIX=/opt/conda' \
+   'eval "$(micromamba shell hook --shell bash)"' \
+   'conda() { micromamba "$@"; }' \
+   'export PATH=/usr/local/bin:${PATH}' \
+   > /home/.bashrc \
+ && cp /home/.bashrc /root/.bashrc
+
+# Declare mutable source inputs only immediately before their install layer.
+# BuildKit includes in-scope ARGs in RUN cache keys even when a command does
+# not reference them, so early declarations would invalidate the conda layer.
+ARG KFU52_REPO_REF="master"
+ARG KFU52_AMALGKIT_AUTO_SELECT_REF="0"
+ARG KFU52_AMALGKIT_BRANCH_CANDIDATES="master,kfdevel,devel"
+ARG KFU52_AMALGKIT_REPO_REF="master"
+ARG KFU52_AMALGKIT_REPO_SHA=""
+ARG KFU52_CDSKIT_REPO_SHA=""
+ARG KFU52_CSUBST_REPO_REF="master"
+ARG KFU52_CSUBST_REPO_SHA=""
+ARG KFU52_NWKIT_REPO_SHA=""
+ARG BUSCO_REPO_URL="https://gitlab.com/ezlab/busco.git"
+ARG BUSCO_MIRROR_REPO_URL=""
+ARG BUSCO_REPO_REF="6.0.0"
+ARG BUSCO_REPO_SHA="6278721a1916f6da310e03ec9674099028c927a4"
+ARG KFL1OU_REPO_URL="https://github.com/kfuku52/kfl1ou.git"
+ARG KFL1OU_REPO_REF=""
+ARG KFL1OU_REPO_SHA=""
+ARG KFTOOLS_REPO_URL="https://github.com/kfuku52/kftools.git"
+ARG RKFTOOLS_REPO_URL="https://github.com/kfuku52/rkftools.git"
+ARG RADTE_REPO_URL="https://github.com/kfuku52/RADTE.git"
+ARG KFTOOLS_REPO_REF=""
+ARG RKFTOOLS_REPO_REF=""
+ARG RADTE_REPO_REF=""
+ARG KFTOOLS_REPO_SHA=""
+ARG RKFTOOLS_REPO_SHA=""
+ARG RADTE_REPO_SHA=""
+
+COPY container/scripts/ensure_kfuku52_tools_latest.sh /opt/pg/scripts/ensure_kfuku52_tools_latest.sh
+COPY container/scripts/install_helvetica_compat_font.sh /opt/pg/scripts/install_helvetica_compat_font.sh
+
 RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  --mount=type=cache,target=/root/.mamba/pkgs,sharing=locked \
  --mount=type=cache,target=/root/.cache/pip \
  chmod +x /opt/pg/scripts/*.sh \
  && export USE_DEFAULTS_CHANNEL=0 STRICT_CHANNEL_PRIORITY=1 MAMBA_NO_LOW_SPEED_LIMIT=1 \
- && base_required="/opt/pg/env/base.required.txt" \
- && reconciled_required="/tmp/pg.base.required.txt" \
- && if [[ -f "/opt/pg/env/base.${TARGETARCH}.required.txt" ]]; then base_required="/opt/pg/env/base.${TARGETARCH}.required.txt"; fi \
- && sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "${base_required}" /opt/pg/env/base.r.required.txt | awk '!seen[$0]++' > "${reconciled_required}" \
- && /opt/pg/scripts/install_env.sh base "${base_required}" /opt/pg/env/base.${TARGETARCH}.optional.txt python=3.12 \
- && /opt/pg/scripts/ensure_generax_stable.sh base \
- && micromamba install -y --retry-clean-cache --repodata-ttl 3600 -n base -c conda-forge -c bioconda pymol-open-source 'numpy>=1.26.4,<2' \
- && micromamba run -n base pip install --no-cache-dir 'ete4==4.4.0' \
- && micromamba run -n base python -c "import ete4" \
- && PAML_REPO_URL="${PAML_REPO_URL}" \
-    PAML_REPO_REF="${PAML_REPO_REF}" \
-    PAML_REPO_SHA="${PAML_REPO_SHA}" \
-    /opt/pg/scripts/ensure_iq2mc_toolchain.sh base \
- && /opt/pg/scripts/install_env.sh base "${reconciled_required}" /opt/pg/env/base.r.optional.txt r-base \
- && kfl1ou_repo_ref="${KFL1OU_REPO_REF:-${KFU52_REPO_REF}}" \
- && kfl1ou_repo_sha="${KFL1OU_REPO_SHA:-}" \
- && TESTNH_TARBALL_SHA256="${TESTNH_TARBALL_SHA256}" \
-    CAFE5_TARBALL_SHA256="${CAFE5_TARBALL_SHA256}" \
-    KFU52_REPO_REF="${KFU52_REPO_REF}" \
-    KFL1OU_REPO_URL="${KFL1OU_REPO_URL}" \
-    KFL1OU_REPO_REF="${kfl1ou_repo_ref}" \
-    KFL1OU_REPO_SHA="${kfl1ou_repo_sha}" \
-    /opt/pg/scripts/install_nonconda_fallbacks.sh \
- && rm -f "${reconciled_required}"
-
-# Install Python-only compatibility/security updates after the conda solver has
-# finished so wheel dependencies cannot pull the scientific stack away from
-# the NumPy range required by both PyMOL and ClipKIT.
-COPY container/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt
-
-RUN --mount=type=cache,target=/root/.cache/pip \
- micromamba run -n base pip install --no-cache-dir \
-      -r /opt/pg/pip-compatibility.requirements.txt \
- && micromamba run -n base python -c "import genomepy, lxml, ortools, PIL" \
- && micromamba run -n base python -m pip check
-
-# Keep fast-changing GitHub-derived installs separate to reduce rebuild scope.
-RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
- --mount=type=cache,target=/root/.mamba/pkgs,sharing=locked \
- --mount=type=cache,target=/root/.cache/pip \
- export USE_DEFAULTS_CHANNEL=0 STRICT_CHANNEL_PRIORITY=1 MAMBA_NO_LOW_SPEED_LIMIT=1 \
  && mkdir -p /opt/pg/logs \
- && runtime_required="/opt/pg/spec/required_commands.tsv" \
- && runtime_optional="/opt/pg/spec/optional_commands.${TARGETARCH}.tsv" \
- && if [[ -f "/opt/pg/spec/required_commands.${TARGETARCH}.tsv" ]]; then runtime_required="/opt/pg/spec/required_commands.${TARGETARCH}.tsv"; fi \
  && kftools_repo_ref="${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
  && rkftools_repo_ref="${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
  && radte_repo_ref="${RADTE_REPO_REF:-${KFU52_REPO_REF}}" \
- && kfl1ou_repo_sha="${KFL1OU_REPO_SHA:-}" \
+ && kfl1ou_repo_ref="${KFL1OU_REPO_REF:-${KFU52_REPO_REF}}" \
  && amalgkit_repo_sha="${KFU52_AMALGKIT_REPO_SHA:-}" \
  && cdskit_repo_sha="${KFU52_CDSKIT_REPO_SHA:-}" \
  && csubst_repo_ref="${KFU52_CSUBST_REPO_REF:-master}" \
  && csubst_repo_sha="${KFU52_CSUBST_REPO_SHA:-}" \
  && nwkit_repo_sha="${KFU52_NWKIT_REPO_SHA:-}" \
+ && kfl1ou_repo_sha="${KFL1OU_REPO_SHA:-}" \
  && kftools_repo_sha="${KFTOOLS_REPO_SHA:-}" \
  && rkftools_repo_sha="${RKFTOOLS_REPO_SHA:-}" \
  && radte_repo_sha="${RADTE_REPO_SHA:-}" \
@@ -165,7 +205,7 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && cdskit_source_ref="${cdskit_repo_sha:-${KFU52_REPO_REF}}" \
  && csubst_source_ref="${csubst_repo_sha:-${csubst_repo_ref}}" \
  && nwkit_source_ref="${nwkit_repo_sha:-${KFU52_REPO_REF}}" \
- && kfl1ou_source_ref="${kfl1ou_repo_sha:-${KFL1OU_REPO_REF:-${KFU52_REPO_REF}}}" \
+ && kfl1ou_source_ref="${kfl1ou_repo_sha:-${kfl1ou_repo_ref}}" \
  && busco_source_ref="${BUSCO_REPO_SHA:-${BUSCO_REPO_REF}}" \
  && kftools_source_ref="${kftools_repo_sha:-${kftools_repo_ref}}" \
  && rkftools_source_ref="${rkftools_repo_sha:-${rkftools_repo_ref}}" \
@@ -180,13 +220,18 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
     KFU52_CSUBST_REPO_SHA="${csubst_repo_sha}" \
     KFU52_NWKIT_REPO_SHA="${nwkit_repo_sha}" \
     /opt/pg/scripts/ensure_kfuku52_tools_latest.sh base \
+ && KFU52_REPO_REF="${KFU52_REPO_REF}" \
+    KFL1OU_REPO_URL="${KFL1OU_REPO_URL}" \
+    KFL1OU_REPO_REF="${kfl1ou_repo_ref}" \
+    KFL1OU_REPO_SHA="${kfl1ou_repo_sha}" \
+    /opt/pg/scripts/install_nonconda_fallbacks.sh kfl1ou \
  && rm -rf /tmp/busco \
  && /opt/pg/scripts/fetch_git_repo.sh "${BUSCO_REPO_URL}" "${busco_source_ref}" /tmp/busco "${BUSCO_MIRROR_REPO_URL}" \
- && micromamba run -n base pip install --no-cache-dir --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/busco \
+ && micromamba run -n base pip install --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/busco \
  && rm -rf /tmp/busco \
  && rm -rf /tmp/kftools \
  && /opt/pg/scripts/fetch_git_repo.sh "${KFTOOLS_REPO_URL}" "${kftools_source_ref}" /tmp/kftools \
- && micromamba run -n base pip install --no-cache-dir --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/kftools \
+ && micromamba run -n base pip install --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/kftools \
  && rm -rf /tmp/kftools \
  && /opt/pg/scripts/install_helvetica_compat_font.sh base \
  && rm -rf /tmp/rkftools \
@@ -211,50 +256,38 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
       kftools "${kftools_source_ref}" \
       rkftools "${rkftools_source_ref}" \
       RADTE "${radte_source_ref}" \
-      > /opt/pg/logs/source_revisions.tsv \
+      > /opt/pg/logs/source_revisions.tsv
+
+# Validation is intentionally last and isolated: editing checks must not force
+# package solving or source builds to run again.
+COPY container/spec /opt/pg/spec
+COPY container/scripts/validate_runtime.sh /opt/pg/scripts/validate_runtime.sh
+COPY container/scripts/post_install_notes.sh /opt/pg/scripts/post_install_notes.sh
+
+RUN chmod +x /opt/pg/scripts/validate_runtime.sh \
+ && runtime_required="/opt/pg/spec/required_commands.tsv" \
+ && runtime_optional="/opt/pg/spec/optional_commands.${TARGETARCH}.tsv" \
+ && if [[ -f "/opt/pg/spec/required_commands.${TARGETARCH}.tsv" ]]; then runtime_required="/opt/pg/spec/required_commands.${TARGETARCH}.tsv"; fi \
  && /opt/pg/scripts/validate_runtime.sh \
       --required "${runtime_required}" \
       --optional "${runtime_optional}" \
       --report /opt/pg/logs/runtime_validation_${TARGETARCH}.tsv \
  && micromamba run -n base python -m pip check \
- && micromamba clean -i -l -y
-
-COPY container/scripts/post_install_notes.sh /opt/pg/scripts/post_install_notes.sh
-
-RUN mkdir -p /home /usr/local/db/Pfam_LE /usr/local/db/jaspar /opt/pg/logs /opt/conda/envs \
- && ln -sfn /opt/conda /opt/conda/envs/base \
- && printf '%s\n' \
-   'export MAMBA_ROOT_PREFIX=/opt/conda' \
-   'eval "$(micromamba shell hook --shell bash)"' \
-   'conda() { micromamba "$@"; }' \
-   'export PATH=/usr/local/bin:${PATH}' \
-   > /home/.bashrc \
- && cp /home/.bashrc /root/.bashrc
-
-# Notung is Java-based, so this works on both amd64/arm64.
-RUN notung_url="$(/opt/pg/scripts/resolve_notung_latest.sh "${NOTUNG_DOWNLOAD_PAGE}")" \
- && tmp_zip="$(mktemp /tmp/notung.XXXXXX.zip)" \
- && tmp_dir="$(mktemp -d /tmp/notung.XXXXXX)" \
- && NOTUNG_DOWNLOAD_HOST_IP="${NOTUNG_DOWNLOAD_HOST_IP}" /opt/pg/scripts/download_url_with_fallback.sh "${notung_url}" "${tmp_zip}" \
- && unzip -q "${tmp_zip}" -d "${tmp_dir}" \
- && notung_jar="$(find "${tmp_dir}" -type f -name 'Notung-2.9*.jar' | sort -V | tail -n 1)" \
- && if [[ -z "${notung_jar}" ]]; then echo "Notung jar was not found in ${notung_url}"; exit 1; fi \
- && cp "${notung_jar}" /usr/local/bin/Notung.jar \
- && chmod 0755 /usr/local/bin/Notung.jar \
- && rm -f "${tmp_zip}" \
- && rm -rf "${tmp_dir}" \
+ && micromamba clean -i -l -y \
  && bash /opt/pg/scripts/post_install_notes.sh "${TARGETARCH}"
 
 ARG BUILD_DATE=""
 ARG VCS_REF="unknown"
 ARG GG_VERSION="unknown"
+ARG BUILD_INPUT_HASH=""
 
 LABEL org.opencontainers.image.title="GeneGalleon multi-arch candidate container" \
       org.opencontainers.image.description="Reproducible multi-arch build scaffold for GeneGalleon (amd64 + arm64)" \
       org.opencontainers.image.source="https://github.com/kfuku52/genegalleon" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.version="${GG_VERSION}"
+      org.opencontainers.image.version="${GG_VERSION}" \
+      io.genegalleon.build-input="${BUILD_INPUT_HASH}"
 
 WORKDIR /workspace
 ENTRYPOINT ["/usr/bin/tini", "--"]

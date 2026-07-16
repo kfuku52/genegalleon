@@ -72,6 +72,15 @@ Single-platform local test image:
 IMAGE=local/genegalleon TAG=dev PLATFORMS=linux/arm64 MODE=load ./container/buildx.sh
 ```
 
+The selected Buildx builder's internal cache is used by default. A separate
+local cache export is disabled because exporting the full GeneGalleon cache can
+write several gigabytes after every build. Set `USE_LOCAL_CACHE=1` only when a
+portable cache directory is needed; `CACHE_DIR` defaults to `.buildx-cache`.
+
+For `MODE=load`, `buildx.sh` fingerprints the Docker build inputs and skips
+BuildKit entirely when the tagged local image already has the same fingerprint.
+Set `SKIP_UNCHANGED_LOAD=0` to force a rebuild.
+
 ## One-command build (local/public selectable)
 
 ```bash

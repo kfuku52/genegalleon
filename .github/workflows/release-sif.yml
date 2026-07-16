@@ -19,14 +19,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-push-and-attach-sif:
+  prepare-release:
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.vars.outputs.release_tag }}
+      release_sha: ${{ steps.vars.outputs.release_sha }}
+      image: ${{ steps.vars.outputs.image }}
+      immutable_tag: ${{ steps.vars.outputs.immutable_tag }}
+      sha_tag: ${{ steps.vars.outputs.sha_tag }}
+      build_date: ${{ steps.vars.outputs.build_date }}
+      gg_version: ${{ steps.vars.outputs.gg_version }}
+      sif_name: ${{ steps.vars.outputs.sif_name }}
+      amalgkit_repo_sha: ${{ steps.vars.outputs.amalgkit_repo_sha }}
+      cdskit_repo_sha: ${{ steps.vars.outputs.cdskit_repo_sha }}
+      csubst_repo_sha: ${{ steps.vars.outputs.csubst_repo_sha }}
+      nwkit_repo_sha: ${{ steps.vars.outputs.nwkit_repo_sha }}
+      kfl1ou_repo_sha: ${{ steps.vars.outputs.kfl1ou_repo_sha }}
+      kftools_repo_sha: ${{ steps.vars.outputs.kftools_repo_sha }}
+      rkftools_repo_sha: ${{ steps.vars.outputs.rkftools_repo_sha }}
+      radte_repo_sha: ${{ steps.vars.outputs.radte_repo_sha }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Resolve release and image tags
+      - name: Resolve release, image tags, and source revisions
         id: vars
         shell: bash
         run: |
@@ -53,6 +72,7 @@ jobs:
             exit 1
           fi
           git checkout --detach "${release_sha}"
+          container/scripts/check_env_coverage.sh .
 
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           repo_name="$(basename "${GITHUB_REPOSITORY}")"
@@ -61,7 +81,22 @@ jobs:
           short_sha="${release_sha:0:7}"
           immutable_tag="${date_tag}-${short_sha}"
           build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          gg_version="$(sed -n '1p' VERSION | tr -d '\r')"
           sif_name="${repo_name}_${release_tag}_amd64.sif"
+
+          resolve_source_sha() {
+            bash container/scripts/resolve_git_branch_sha.sh \
+              "https://github.com/kfuku52/$1.git" master
+          }
+
+          amalgkit_repo_sha="$(resolve_source_sha amalgkit)"
+          cdskit_repo_sha="$(resolve_source_sha cdskit)"
+          csubst_repo_sha="$(resolve_source_sha csubst)"
+          nwkit_repo_sha="$(resolve_source_sha nwkit)"
+          kfl1ou_repo_sha="$(resolve_source_sha kfl1ou)"
+          kftools_repo_sha="$(resolve_source_sha kftools)"
+          rkftools_repo_sha="$(resolve_source_sha rkftools)"
+          radte_repo_sha="$(resolve_source_sha RADTE)"
 
           {
             echo "release_tag=${release_tag}"
@@ -70,11 +105,44 @@ jobs:
             echo "immutable_tag=${immutable_tag}"
             echo "sha_tag=sha-${short_sha}"
             echo "build_date=${build_date}"
+            echo "gg_version=${gg_version}"
             echo "sif_name=${sif_name}"
+            echo "amalgkit_repo_sha=${amalgkit_repo_sha}"
+            echo "cdskit_repo_sha=${cdskit_repo_sha}"
+            echo "csubst_repo_sha=${csubst_repo_sha}"
+            echo "nwkit_repo_sha=${nwkit_repo_sha}"
+            echo "kfl1ou_repo_sha=${kfl1ou_repo_sha}"
+            echo "kftools_repo_sha=${kftools_repo_sha}"
+            echo "rkftools_repo_sha=${rkftools_repo_sha}"
+            echo "radte_repo_sha=${radte_repo_sha}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+  build-platform:
+    needs: prepare-release
+    name: build-platform (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout release revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.release_sha }}
+
+      - name: Resolve platform
+        id: platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform="${{ matrix.platform }}"
+          echo "pair=${platform//\//-}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -86,31 +154,111 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Preflight env coverage check
-        shell: bash
-        run: |
-          set -euo pipefail
-          container/scripts/check_env_coverage.sh .
-
-      - name: Build and push multi-arch release image
+      - name: Build and push native platform image by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: container/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.release_tag }}
-            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.immutable_tag }}
-            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha_tag }}
+          platforms: ${{ matrix.platform }}
+          outputs: >-
+            type=image,name=${{ needs.prepare-release.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ steps.vars.outputs.release_sha }}
+            org.opencontainers.image.revision=${{ needs.prepare-release.outputs.release_sha }}
           build-args: |
-            BUILD_DATE=${{ steps.vars.outputs.build_date }}
-            VCS_REF=${{ steps.vars.outputs.release_sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            BUILD_DATE=${{ needs.prepare-release.outputs.build_date }}
+            VCS_REF=${{ needs.prepare-release.outputs.release_sha }}
+            GG_VERSION=${{ needs.prepare-release.outputs.gg_version }}
+            KFU52_REPO_REF=master
+            KFU52_AMALGKIT_REPO_REF=master
+            KFU52_AMALGKIT_REPO_SHA=${{ needs.prepare-release.outputs.amalgkit_repo_sha }}
+            KFU52_CDSKIT_REPO_SHA=${{ needs.prepare-release.outputs.cdskit_repo_sha }}
+            KFU52_CSUBST_REPO_REF=master
+            KFU52_CSUBST_REPO_SHA=${{ needs.prepare-release.outputs.csubst_repo_sha }}
+            KFU52_NWKIT_REPO_SHA=${{ needs.prepare-release.outputs.nwkit_repo_sha }}
+            KFL1OU_REPO_SHA=${{ needs.prepare-release.outputs.kfl1ou_repo_sha }}
+            KFTOOLS_REPO_SHA=${{ needs.prepare-release.outputs.kftools_repo_sha }}
+            RKFTOOLS_REPO_SHA=${{ needs.prepare-release.outputs.rkftools_repo_sha }}
+            RADTE_REPO_SHA=${{ needs.prepare-release.outputs.radte_repo_sha }}
+          # Reuse the same per-platform cache scopes as container-ghcr.yml.
+          cache-from: type=gha,scope=container-${{ steps.platform.outputs.pair }}
+          cache-to: type=gha,mode=max,scope=container-${{ steps.platform.outputs.pair }}
+
+      - name: Export digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="${{ steps.build.outputs.digest }}"
+          if [[ -z "${digest}" ]]; then
+            echo "docker/build-push-action did not return an image digest."
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-digests-${{ steps.platform.outputs.pair }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-manifest-and-sif:
+    needs:
+      - prepare-release
+      - build-platform
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.release_sha }}
+
+      - name: Download platform digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: release-digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch release manifest
+        shell: bash
+        env:
+          IMAGE: ${{ needs.prepare-release.outputs.image }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
+          IMMUTABLE_TAG: ${{ needs.prepare-release.outputs.immutable_tag }}
+          SHA_TAG: ${{ needs.prepare-release.outputs.sha_tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t digests < <(find "${RUNNER_TEMP}/digests" -maxdepth 1 -type f -printf '%f\n' | sort)
+          if [[ "${#digests[@]}" -ne 2 ]]; then
+            echo "Expected two platform digests, found ${#digests[@]}."
+            exit 1
+          fi
+
+          refs=()
+          for digest in "${digests[@]}"; do
+            refs+=("${IMAGE}@sha256:${digest}")
+          done
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${RELEASE_TAG}" \
+            --tag "${IMAGE}:${IMMUTABLE_TAG}" \
+            --tag "${IMAGE}:${SHA_TAG}" \
+            "${refs[@]}"
 
       - name: Install Apptainer
         id: runtime
@@ -134,19 +282,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          IMAGE="${{ steps.vars.outputs.image }}" \
-          TAG="${{ steps.vars.outputs.release_tag }}" \
+          IMAGE="${{ needs.prepare-release.outputs.image }}" \
+          TAG="${{ needs.prepare-release.outputs.release_tag }}" \
           ENGINE="${{ steps.runtime.outputs.engine }}" \
-          OUT="${{ steps.vars.outputs.sif_name }}" \
+          OUT="${{ needs.prepare-release.outputs.sif_name }}" \
             bash container/apptainer_from_docker.sh
-          sha256sum "${{ steps.vars.outputs.sif_name }}" > "${{ steps.vars.outputs.sif_name }}.sha256"
+          sha256sum "${{ needs.prepare-release.outputs.sif_name }}" > "${{ needs.prepare-release.outputs.sif_name }}.sha256"
 
       - name: Resolve SIF upload strategy
         id: sif_meta
         shell: bash
         run: |
           set -euo pipefail
-          sif_file="${{ steps.vars.outputs.sif_name }}"
+          sif_file="${{ needs.prepare-release.outputs.sif_name }}"
           limit_bytes=2147483648
           size_bytes=$(stat -c '%s' "${sif_file}")
           echo "size_bytes=${size_bytes}" >> "${GITHUB_OUTPUT}"
@@ -170,20 +318,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release upload "${{ steps.vars.outputs.release_tag }}" \
-            "${{ steps.vars.outputs.sif_name }}" \
-            "${{ steps.vars.outputs.sif_name }}.sha256" \
+          gh release upload "${{ needs.prepare-release.outputs.release_tag }}" \
+            "${{ needs.prepare-release.outputs.sif_name }}" \
+            "${{ needs.prepare-release.outputs.sif_name }}.sha256" \
             --clobber
 
       - name: Upload large SIF as workflow artifact
         if: steps.sif_meta.outputs.upload_to_release != '1'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.vars.outputs.sif_name }}
-          path: ${{ steps.vars.outputs.sif_name }}
+          name: ${{ needs.prepare-release.outputs.sif_name }}
+          path: ${{ needs.prepare-release.outputs.sif_name }}
           if-no-files-found: error
-          # Large SIF artifacts are short-lived convenience copies.
-          # Long-term reproducibility comes from immutable GHCR image tags.
           retention-days: 90
 
       - name: Upload checksum and download notice to GitHub Release
@@ -193,8 +339,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release upload "${{ steps.vars.outputs.release_tag }}" \
-            "${{ steps.vars.outputs.sif_name }}.sha256" \
+          gh release upload "${{ needs.prepare-release.outputs.release_tag }}" \
+            "${{ needs.prepare-release.outputs.sif_name }}.sha256" \
             "${{ steps.sif_meta.outputs.notice_file }}" \
             --clobber
 
@@ -204,21 +350,22 @@ jobs:
           set -euo pipefail
           {
             echo "Pushed image tags:"
-            echo "- ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.release_tag }}"
-            echo "- ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.immutable_tag }}"
-            echo "- ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha_tag }}"
+            echo "- ${{ needs.prepare-release.outputs.image }}:${{ needs.prepare-release.outputs.release_tag }}"
+            echo "- ${{ needs.prepare-release.outputs.image }}:${{ needs.prepare-release.outputs.immutable_tag }}"
+            echo "- ${{ needs.prepare-release.outputs.image }}:${{ needs.prepare-release.outputs.sha_tag }}"
             echo ""
+            echo "Platforms were built concurrently on native amd64 and arm64 runners."
             echo "SIF size (bytes): ${{ steps.sif_meta.outputs.size_bytes }}"
             if [[ "${{ steps.sif_meta.outputs.upload_to_release }}" == "1" ]]; then
               echo "Uploaded release assets:"
-              echo "- ${{ steps.vars.outputs.sif_name }}"
-              echo "- ${{ steps.vars.outputs.sif_name }}.sha256"
+              echo "- ${{ needs.prepare-release.outputs.sif_name }}"
+              echo "- ${{ needs.prepare-release.outputs.sif_name }}.sha256"
             else
               echo "SIF exceeded GitHub Release size limit and was uploaded as a workflow artifact."
               echo "Uploaded release assets:"
-              echo "- ${{ steps.vars.outputs.sif_name }}.sha256"
+              echo "- ${{ needs.prepare-release.outputs.sif_name }}.sha256"
               echo "- ${{ steps.sif_meta.outputs.notice_file }}"
               echo "Workflow artifact:"
-              echo "- ${{ steps.vars.outputs.sif_name }}"
+              echo "- ${{ needs.prepare-release.outputs.sif_name }}"
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
