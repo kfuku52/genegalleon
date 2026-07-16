@@ -1,3 +1,5 @@
+import ast
+import re
 import sqlite3
 import subprocess
 import sys
@@ -12,12 +14,77 @@ from csubst import ete, substitution_scan, tree  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DB_SCRIPT = REPO_ROOT / "workflow" / "support" / "generate_orthogroup_database.py"
+CSUBST_CORE_SCRIPT = REPO_ROOT / "workflow" / "core" / "gg_gene_evolution_core.sh"
+CSUBST_SITE_WRAPPER = REPO_ROOT / "workflow" / "support" / "csubst_site_wrapper.py"
 BASELINE_SCAN_COLUMNS = {
     "site_rate_categorized",
     "q_rate_enrichment_empirical",
     "q_rate_enrichment_empirical_by_trait",
     "q_rate_enrichment_empirical_by_trait_match",
 }
+
+
+def shell_csubst_command_options(subcommand):
+    lines = CSUBST_CORE_SCRIPT.read_text(encoding="utf-8").splitlines()
+    command_start = f"csubst {subcommand} \\"
+    for start, line in enumerate(lines):
+        if line.strip() == command_start:
+            break
+    else:
+        raise AssertionError(f"CSUBST command not found: {subcommand}")
+
+    options = set()
+    for line in lines[start + 1 :]:
+        match = re.match(r"\s*(--[A-Za-z][A-Za-z0-9_]*)", line)
+        if match is not None:
+            options.add(match.group(1))
+        if not line.rstrip().endswith("\\"):
+            break
+    if subcommand == "search":
+        options.update({"--foreground", "--fg_format"})
+    return options
+
+
+def csubst_sites_wrapper_options():
+    tree = ast.parse(
+        CSUBST_SITE_WRAPPER.read_text(encoding="utf-8"),
+        filename=str(CSUBST_SITE_WRAPPER),
+    )
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_csubst_sites_command"
+    )
+    return {
+        node.value
+        for node in ast.walk(function)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and re.fullmatch(r"--[A-Za-z][A-Za-z0-9_]*", node.value)
+    }
+
+
+@pytest.mark.parametrize("subcommand", ["search", "scan", "sites"])
+def test_current_csubst_cli_supports_genegalleon_options(subcommand):
+    proc = subprocess.run(
+        ["csubst", subcommand, "--help-advanced"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    supported_options = set(
+        re.findall(r"--[A-Za-z][A-Za-z0-9_]*", proc.stdout)
+    )
+    if subcommand == "sites":
+        used_options = csubst_sites_wrapper_options()
+    else:
+        used_options = shell_csubst_command_options(subcommand)
+    assert used_options <= supported_options, (
+        f"GeneGalleon passes unsupported csubst {subcommand} options: "
+        f"{sorted(used_options - supported_options)}"
+    )
 
 
 def set_state(state, branch_id, site, state_id):
@@ -84,6 +151,7 @@ def toy_scan_context():
         "iqtree_rate_values": np.array([0.25], dtype=float),
         "float_tol": 1e-12,
         "nonsyn_recode": "no",
+        "scan_unit_mode": "clade",
         "scan_match": "any2spe",
         "scan_min_event_pp": 0.5,
         "scan_min_support": "2",

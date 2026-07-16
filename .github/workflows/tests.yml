@@ -171,7 +171,7 @@ jobs:
             bash -n "${script}"
           done < <(find workflow -type f -name "*.sh" | sort)
 
-      - name: ShellCheck split workflow drivers
+      - name: ShellCheck workflow drivers
         run: |
           shellcheck -S warning -x \
             -e SC1091,SC2034,SC2154,SC2317 \
@@ -179,10 +179,7 @@ jobs:
             workflow/core/gg_genome_evolution_core.sh \
             workflow/core/gg_transcriptome_generation_core.sh \
             workflow/support/gg_util.sh \
-            workflow/support/gg_util/*.sh \
-            workflow/core/stages/gg_gene_evolution/*.sh \
-            workflow/core/stages/gg_genome_evolution/*.sh \
-            workflow/core/stages/gg_transcriptome_generation/*.sh
+            workflow/support/gg_util/*.sh
 
       - name: Ruff check all Python sources
         run: |

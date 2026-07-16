@@ -303,6 +303,7 @@ Key options:
 ```bash
 run_iqtree_anc=1
 run_csubst_scan=1
+csubst_scan_unit_mode="clade"
 csubst_scan_match="any2spe"
 csubst_scan_min_support="2"
 csubst_scan_pvalue_calibration="full_scan"
@@ -314,10 +315,13 @@ csubst_scan_site_plot="yes"
 means one foreground unit, fractional values such as `"0.5"` are proportions,
 and `"1.0"` means 100% of foreground units.
 
-`csubst scan` treats each positive foreground lineage ID as one foreground unit.
-For scan support counts, use distinct positive IDs for independent foreground
-lineages in `workspace/input/species_trait/species_trait.tsv` rather than a
-simple 0/1 trait when each foreground species or clade should count separately.
+`csubst_scan_unit_mode` defines the independent foreground support units. The
+default `clade` mode automatically splits disconnected foreground regions and
+uses every branch within each foreground clade. `stem` uses the same automatic
+split but scans only each clade's stem branch. `lineage` uses each positive
+foreground lineage ID as one unit and follows `csubst_fg_stem_only`; use
+distinct positive IDs in `workspace/input/species_trait/species_trait.tsv` when
+independent lineages must remain separate in this mode.
 
 Per-family outputs are written under `csubst_scan/`, `csubst_scan_units/`,
 `csubst_scan_foreground_branch/`, `csubst_scan_plot/`, and `csubst_scan_log/`.

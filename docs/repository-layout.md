@@ -32,11 +32,7 @@ Main contents:
 - `workflow/gg_*_entrypoint.sh`
   - scheduler-friendly wrappers that users launch directly
 - `workflow/core/gg_*_core.sh`
-  - compact configuration and ordered-stage drivers streamed into the container runtime
-- `workflow/core/stages/gg_*_functions.sh`
-  - reusable named shell functions for each large workflow
-- `workflow/core/stages/gg_*/`
-  - ordered execution-stage groups sourced by the matching core driver
+  - self-contained implementation scripts streamed into the container runtime
 - `workflow/support/`
   - shared shell/Python/R helpers, plotting utilities, bootstrap scripts, and support tools
 - `workflow/tests/`
@@ -106,11 +102,7 @@ See `docs/workspace-layout-and-data-model.md` for the detailed data model.
 Use this rough rule:
 
 - user-facing execution behavior: `workflow/gg_*_entrypoint.sh`
-- stage orchestration: `workflow/core/gg_*_core.sh`
-- named reusable stage functions: `workflow/core/stages/`
-- ordered execution-stage groups: `workflow/core/stages/gg_gene_evolution/`,
-  `workflow/core/stages/gg_genome_evolution/`, and
-  `workflow/core/stages/gg_transcriptome_generation/`
+- stage logic and orchestration: `workflow/core/gg_*_core.sh`
 - shared runtime/path compatibility entry point: `workflow/support/gg_util.sh`
 - shared runtime/path implementation modules: `workflow/support/gg_util/`
 - input-format compatibility façades: `workflow/support/format_species_annotations.py`,

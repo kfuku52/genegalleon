@@ -34,3 +34,9 @@ If `genegalleon.sif` or an Apptainer/Singularity runtime is unavailable, report 
 Do not add backward-compatibility workarounds for older dependency behavior.
 
 If the root cause is in a dependency program or package, do not patch GeneGalleon to absorb it. Report it as dependency-side so the dependency can be fixed or updated instead.
+
+# Core Workflow Architecture
+
+Keep `workflow/core/gg_*_core.sh` as self-contained workflow implementation scripts. Do not split their functions or ordered execution stages into `workflow/core/stages/`, per-stage shell fragments, or sourced function libraries merely to reduce file size or reorganize code.
+
+Changes to this architecture require explicit user approval. Without that approval, edit the matching core script in place and preserve its existing execution order.

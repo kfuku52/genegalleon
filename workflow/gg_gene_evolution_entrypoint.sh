@@ -187,6 +187,7 @@ csubst_max_combination=10000 # Maximum number of CSUBST combinations retained af
 csubst_fg_exclude_wg="no" # Exclude whole-genome duplication branches from CSUBST foregrounds.
 csubst_fg_stem_only="yes" # Restrict CSUBST foreground candidates to stem branches only.
 csubst_nonsyn_recode="${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" # no|3di20|dayhoff6|sr6|kgb6|sr4|dayhoff9|dayhoff12|dayhoff15|dayhoff18|srchisq6|kgbauto6; optional amino-acid recoding scheme used for CSUBST nonsynonymous convergence tests.
+csubst_scan_unit_mode="${csubst_scan_unit_mode:-clade}" # lineage|stem|clade definition of independent foreground support units; clade follows the current CSUBST default.
 csubst_scan_match="${csubst_scan_match:-any2spe}" # CSUBST scan recurrent substitution pattern classes: any2spe by default, or comma-separated classes/all.
 csubst_scan_min_event_pp="${csubst_scan_min_event_pp:-0.5}" # Posterior probability threshold for candidate discovery and support calls.
 csubst_scan_min_support="${csubst_scan_min_support:-2}" # Minimum foreground-unit support; "1" means one unit, fractional values such as "0.5" are proportions, and "1.0" means 100%.

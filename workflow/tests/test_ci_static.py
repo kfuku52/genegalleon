@@ -118,7 +118,7 @@ def test_shell_job_uses_structural_workflow_and_shell_linters():
     shell_job = load_workflow("tests.yml")["jobs"]["shell-static"]
     install_run = step_run(shell_job, "Install shell and workflow linters")
     actionlint_run = step_run(shell_job, "Validate GitHub Actions workflows")
-    shellcheck_run = step_run(shell_job, "ShellCheck split workflow drivers")
+    shellcheck_run = step_run(shell_job, "ShellCheck workflow drivers")
 
     assert "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12" in install_run
     assert "actionlint" in actionlint_run

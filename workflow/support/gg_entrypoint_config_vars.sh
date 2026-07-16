@@ -76,6 +76,7 @@ csubst_scan_rate_length
 csubst_scan_site_plot
 csubst_scan_tree_site_plot_format
 csubst_scan_tree_site_plot_max_sites
+csubst_scan_unit_mode
 exp_value_type
 fimo_qvalue
 generax_model

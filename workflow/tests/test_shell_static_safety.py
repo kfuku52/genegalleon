@@ -129,7 +129,6 @@ def test_non_library_workflow_shell_scripts_use_strict_euo_pipefail():
         if (
             script in allowed_non_strict
             or script.parent == WORKFLOW_DIR / "support" / "gg_util"
-            or CORE_DIR / "stages" in script.parents
         ):
             continue
         header = _strict_mode_header(script)
@@ -141,45 +140,19 @@ def test_support_directory_has_no_numbered_duplicate_scripts():
     assert not duplicates, f"Remove accidental duplicate support scripts: {duplicates}"
 
 
-def test_large_core_scripts_source_named_stage_function_libraries():
+def test_large_core_scripts_remain_self_contained():
     expected_functions = {
         "gg_gene_evolution_core.sh": "build_iqtree_mem_args() {",
         "gg_genome_evolution_core.sh": "run_shared_species_busco_stage() {",
         "gg_transcriptome_generation_core.sh": "run_amalgkit_getfastq_or_fallback() {",
     }
+    assert not (CORE_DIR / "stages").exists()
     for core_name, function_definition in expected_functions.items():
         core_path = CORE_DIR / core_name
-        stage_path = CORE_DIR / "stages" / f"{core_path.stem}_functions.sh"
         core_text = core_path.read_text(encoding="utf-8")
-        stage_text = stage_path.read_text(encoding="utf-8")
-
-        assert f"/stages/{stage_path.name}" in core_text
-        assert 'source "${gg_core_stage_library}"' in core_text
-        assert function_definition not in core_text
-        assert function_definition in stage_text
-
-
-def test_large_core_scripts_source_ordered_execution_stage_groups():
-    expected_stage_counts = {
-        "gg_gene_evolution_core.sh": 7,
-        "gg_genome_evolution_core.sh": 6,
-        "gg_transcriptome_generation_core.sh": 4,
-    }
-    for core_name, expected_count in expected_stage_counts.items():
-        core_path = CORE_DIR / core_name
-        stage_dir = CORE_DIR / "stages" / core_path.stem.removesuffix("_core")
-        stage_paths = sorted(stage_dir.glob("*.sh"))
-        core_text = core_path.read_text(encoding="utf-8")
-        sourced_stage_names = re.findall(
-            r'^source "\$\{gg_core_execution_stage_dir\}/([^"]+)"$',
-            core_text,
-            flags=re.MULTILINE,
-        )
-
-        assert len(core_text.splitlines()) < 600
-        assert len(stage_paths) == expected_count
-        assert all(len(stage.read_text(encoding="utf-8").splitlines()) < 750 for stage in stage_paths)
-        assert sourced_stage_names == [stage.name for stage in stage_paths]
+        assert function_definition in core_text
+        assert "gg_core_stage_library" not in core_text
+        assert "gg_core_execution_stage_dir" not in core_text
 
 
 def test_gg_util_is_a_small_compatibility_aggregator():
@@ -2843,6 +2816,7 @@ def test_gene_evolution_core_uses_csubst_search_namespace():
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
     assert "csubst analyze \\" not in core
     assert "csubst search \\" in core
+    assert "--float_type" not in core
     assert 'csubst_search_dir="csubst_search"' in core
     assert 'csubst_nonsyn_recode=$(echo "${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr' in core
     assert '--nonsyn_recode "${csubst_nonsyn_recode}"' in core
@@ -2868,11 +2842,19 @@ def test_gene_evolution_core_uses_csubst_search_namespace():
 
 def test_gene_evolution_core_runs_csubst_scan_as_aa_change_stage():
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_gene_evolution_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
     assert 'task="CSUBST scan"' in core
     assert "csubst scan \\" in core
     assert 'disable_if_no_input_file "run_csubst_scan" "${file_og_iqtree_anc}" "${file_sp_trait}"' in core
     assert "--foreground foreground.tsv \\" in core
     assert "--fg_format 2 \\" in core
+    assert 'csubst_scan_unit_mode=$(echo "${csubst_scan_unit_mode:-clade}"' in core
+    assert 'case "${csubst_scan_unit_mode}" in' in core
+    assert "lineage|stem|clade)" in core
+    assert 'csubst_scan_unit_mode="${csubst_scan_unit_mode:-clade}"' in entrypoint
+    assert "csubst_scan_unit_mode" in config_vars
+    assert '--scan_unit_mode "${csubst_scan_unit_mode}"' in core
     assert '--scan_match "${csubst_scan_match}"' in core
     assert '--scan_pvalue_calibration "${csubst_scan_pvalue_calibration}"' in core
     assert '--nonsyn_recode "${csubst_nonsyn_recode}"' in core

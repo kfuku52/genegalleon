@@ -107,9 +107,8 @@ The repository includes tests that intentionally enforce shell hygiene, for exam
 When editing shell code, `workflow/tests/test_shell_static_safety.py` is often the fastest high-signal check to run first.
 
 CI also runs `actionlint` against parsed GitHub Actions workflows and runs
-ShellCheck at warning severity against the split core drivers, their ordered
-execution stages, and the `gg_util.sh` compatibility façade. Local equivalents
-are:
+ShellCheck at warning severity against the self-contained core drivers and the
+`gg_util.sh` compatibility façade. Local equivalents are:
 
 ```bash
 actionlint
@@ -122,10 +121,7 @@ shellcheck -S warning -x \
   workflow/core/gg_genome_evolution_core.sh \
   workflow/core/gg_transcriptome_generation_core.sh \
   workflow/support/gg_util.sh \
-  workflow/support/gg_util/*.sh \
-  workflow/core/stages/gg_gene_evolution/*.sh \
-  workflow/core/stages/gg_genome_evolution/*.sh \
-  workflow/core/stages/gg_transcriptome_generation/*.sh
+  workflow/support/gg_util/*.sh
 ```
 
 ## Dependency-aware debug harness
