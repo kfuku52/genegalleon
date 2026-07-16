@@ -14,6 +14,14 @@ bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_en
 bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_treevis_main.R
 ```
 
+The tree visualization helpers are an installed internal R package. Validate
+its package metadata, namespace, installability, and exported API before the R
+behavior test:
+
+```bash
+bash workflow/tests/run_in_sif.sh bash workflow/tests/check_treevis_package.sh
+```
+
 `workflow/tests/run_in_sif.sh` expects `./genegalleon.sif` at the repository root. Set `GENEGALLEON_SIF=/path/to/genegalleon.sif` when using a different SIF path.
 
 Host-local checks are useful for quick syntax or narrow static feedback, but do not use them as evidence of container runtime compatibility. If the SIF or Apptainer/Singularity is unavailable, report that limitation explicitly.
@@ -55,6 +63,10 @@ This covers a mix of:
 - path/bootstrap helpers,
 - shell static-safety invariants.
 
+Tests set `GG_INPUT_GENERATION_OUTPUT_ROOT` to a per-test temporary directory,
+so CLI defaults cannot leave generated summaries or downloads in the repository
+working tree.
+
 ## Run focused test subsets
 
 Useful targeted commands:
@@ -93,6 +105,28 @@ The repository includes tests that intentionally enforce shell hygiene, for exam
 - avoiding fragile `for ... in $(...)` shell patterns.
 
 When editing shell code, `workflow/tests/test_shell_static_safety.py` is often the fastest high-signal check to run first.
+
+CI also runs `actionlint` against parsed GitHub Actions workflows and runs
+ShellCheck at warning severity against the split core drivers, their ordered
+execution stages, and the `gg_util.sh` compatibility façade. Local equivalents
+are:
+
+```bash
+actionlint
+```
+
+```bash
+shellcheck -S warning -x \
+  -e SC1091,SC2034,SC2154,SC2317 \
+  workflow/core/gg_gene_evolution_core.sh \
+  workflow/core/gg_genome_evolution_core.sh \
+  workflow/core/gg_transcriptome_generation_core.sh \
+  workflow/support/gg_util.sh \
+  workflow/support/gg_util/*.sh \
+  workflow/core/stages/gg_gene_evolution/*.sh \
+  workflow/core/stages/gg_genome_evolution/*.sh \
+  workflow/core/stages/gg_transcriptome_generation/*.sh
+```
 
 ## Dependency-aware debug harness
 

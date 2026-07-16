@@ -106,7 +106,7 @@ jobs:
               ".dockerignore",
               ".github/workflows/container-ghcr.yml",
           }
-          watched_prefixes = ("container/",)
+          watched_prefixes = ("container/", "workflow/support/treevis/")
 
           page = 1
           commit_count = 0
@@ -234,7 +234,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Preflight env coverage check
         shell: bash
@@ -252,7 +252,6 @@ jobs:
           image="ghcr.io/${owner}/${repo_name}"
           date_tag="$(date -u +%Y%m%d)"
           short_sha="${GITHUB_SHA::7}"
-          immutable_tag="${date_tag}-${short_sha}"
           build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
           resolve_source_sha() {
@@ -268,6 +267,19 @@ jobs:
           kftools_repo_sha="$(resolve_source_sha kftools)"
           rkftools_repo_sha="$(resolve_source_sha rkftools)"
           radte_repo_sha="$(resolve_source_sha RADTE)"
+          source_revision_hash="$(
+            printf '%s\n' \
+              "${amalgkit_repo_sha}" \
+              "${cdskit_repo_sha}" \
+              "${csubst_repo_sha}" \
+              "${nwkit_repo_sha}" \
+              "${kfl1ou_repo_sha}" \
+              "${kftools_repo_sha}" \
+              "${rkftools_repo_sha}" \
+              "${radte_repo_sha}" \
+              | sha256sum | cut -c1-12
+          )"
+          immutable_tag="${date_tag}-${short_sha}-${source_revision_hash}"
 
           {
             echo "image=${image}"
@@ -300,7 +312,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve platform
         id: platform
@@ -432,6 +444,11 @@ jobs:
           for digest in "${digests[@]}"; do
             refs+=("${IMAGE}@sha256:${digest}")
           done
+
+          if docker buildx imagetools inspect "${IMAGE}:${IMMUTABLE_TAG}" >/dev/null 2>&1; then
+            echo "Refusing to overwrite immutable image tag: ${IMAGE}:${IMMUTABLE_TAG}"
+            exit 1
+          fi
 
           docker buildx imagetools create \
             --tag "${IMAGE}:${IMMUTABLE_TAG}" \

@@ -242,6 +242,13 @@ Manual formatting can be replaced with `workflow/support/format_species_inputs.p
 - `data_formatting_phycocosm.sh`
 - `data_formatting_phytozome.sh`
 
+`format_species_inputs.py` is the stable CLI/API facade. Its implementation is
+split by responsibility across `format_species_taxonomy.py`,
+`format_species_annotations.py`, `format_species_provider_resolvers.py`,
+`format_species_download_runtime.py`, `format_species_discovery.py`, and
+`format_species_summary.py`. Provider-specific ID resolution uses the common
+`ProviderIdResolver` interface and registry.
+
 Example (single provider, explicit input directory):
 
 ```bash

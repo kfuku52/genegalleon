@@ -9,5 +9,9 @@ if str(REPO_ROOT) not in sys.path:
 
 
 @pytest.fixture(autouse=True)
-def block_external_network(monkeypatch):
+def isolate_test_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("GG_TEST_ALLOW_ONLY_LOOPBACK_HTTP", "1")
+    monkeypatch.setenv(
+        "GG_INPUT_GENERATION_OUTPUT_ROOT",
+        str(tmp_path / "input_generation_output"),
+    )

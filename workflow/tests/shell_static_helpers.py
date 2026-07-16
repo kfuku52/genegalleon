@@ -9,7 +9,24 @@ GITHUB_WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 
 
 def read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+    if path == WORKFLOW_DIR / "support" / "gg_util.sh":
+        module_dir = path.parent / "gg_util"
+        module_text = "\n".join(module.read_text(encoding="utf-8") for module in sorted(module_dir.glob("*.sh")))
+        return f"{text}\n{module_text}"
+    if path.parent == CORE_DIR and path.name.endswith("_core.sh"):
+        stage_library = CORE_DIR / "stages" / f"{path.stem}_functions.sh"
+        execution_stage_dir = CORE_DIR / "stages" / path.stem.removesuffix("_core")
+        parts = []
+        if stage_library.is_file():
+            parts.append(stage_library.read_text(encoding="utf-8"))
+        parts.append(text)
+        if execution_stage_dir.is_dir():
+            parts.extend(
+                stage.read_text(encoding="utf-8") for stage in sorted(execution_stage_dir.glob("*.sh"))
+            )
+        return "\n".join(parts)
+    return text
 
 
 def function_body(text: str, function_name: str) -> str:
@@ -40,7 +57,7 @@ def core_and_entrypoint_scripts():
 
 def strict_mode_header(script: Path) -> str:
     max_lines = 60 if script.name.endswith("_entrypoint.sh") else 30
-    return "\n".join(read_text(script).splitlines()[:max_lines])
+    return "\n".join(script.read_text(encoding="utf-8").splitlines()[:max_lines])
 
 
 def entrypoint_scheduler_header(script: Path) -> str:

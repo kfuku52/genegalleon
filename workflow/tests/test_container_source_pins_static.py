@@ -104,6 +104,27 @@ def test_native_apptainer_build_records_source_revisions():
         assert source in apptainer_template
 
 
+def test_treevis_package_is_part_of_every_repository_owned_image_context():
+    dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
+    buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
+    apptainer_template = (
+        REPO_ROOT / "container" / "apptainer_local_build.def.template"
+    ).read_text(encoding="utf-8")
+    apptainer_build = (
+        REPO_ROOT / "container" / "apptainer_local_build.sh"
+    ).read_text(encoding="utf-8")
+    publish_workflow = (
+        REPO_ROOT / ".github" / "workflows" / "container-ghcr.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "COPY workflow/support/treevis /opt/pg/src/genegalleon.treevis" in dockerfile
+    assert "R CMD INSTALL /opt/pg/src/genegalleon.treevis" in dockerfile
+    assert "find workflow/support/treevis -type f -print" in buildx
+    assert 'cp -R "${repo_root}/workflow/support/treevis" "${staging_root}/"' in apptainer_build
+    assert "@@STAGING_ROOT@@/treevis /opt/pg/src/genegalleon.treevis" in apptainer_template
+    assert '"workflow/support/treevis/"' in publish_workflow
+
+
 def test_container_build_paths_pin_the_same_base_image_digest():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     apptainer_template = (

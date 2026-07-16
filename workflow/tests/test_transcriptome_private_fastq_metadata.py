@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from shell_static_helpers import read_text
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORE_SCRIPT = REPO_ROOT / "workflow" / "core" / "gg_transcriptome_generation_core.sh"
 SUPPORT_DIR = REPO_ROOT / "workflow" / "support"
@@ -22,7 +24,7 @@ def _function_body(text: str, function_name: str) -> str:
 
 
 def _embedded_python(function_name: str) -> str:
-    text = CORE_SCRIPT.read_text(encoding="utf-8")
+    text = read_text(CORE_SCRIPT)
     body = _function_body(text, function_name)
     match = re.search(r"<<'PY'\n(.*?)\nPY", body, re.DOTALL)
     if match is None:

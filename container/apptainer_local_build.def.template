@@ -6,6 +6,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     @@STAGING_ROOT@@/spec /opt/pg/spec
     @@STAGING_ROOT@@/testdata /opt/pg/testdata
     @@STAGING_ROOT@@/scripts /opt/pg/scripts
+    @@STAGING_ROOT@@/treevis /opt/pg/src/genegalleon.treevis
     @@STAGING_ROOT@@/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt
 
 %environment
@@ -187,6 +188,9 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     /opt/pg/scripts/fetch_git_repo.sh "${rkftools_repo_url}" "${rkftools_source_ref}" /tmp/rkftools
     micromamba run -n base R CMD INSTALL /tmp/rkftools
     rm -rf /tmp/rkftools
+    micromamba run -n base R CMD INSTALL /opt/pg/src/genegalleon.treevis
+    micromamba run -n base Rscript -e \
+        "stopifnot(requireNamespace('genegalleon.treevis', quietly = TRUE))"
 
     rm -rf /tmp/radte
     /opt/pg/scripts/fetch_git_repo.sh "${radte_repo_url}" "${radte_source_ref}" /tmp/radte

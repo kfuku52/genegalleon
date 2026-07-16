@@ -1,4 +1,5 @@
 pytest
+PyYAML
 ruff
 numpy
 pandas

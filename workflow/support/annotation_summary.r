@@ -11,6 +11,7 @@ library(phytools, quietly=TRUE)
 library(ggtree, quietly=TRUE)
 library(svglite, quietly=TRUE)
 library(rkftools, quietly=TRUE)
+suppressPackageStartupMessages(library(genegalleon.treevis))
 options(stringsAsFactors=FALSE)
 script_file_arg = grep('^--file=', commandArgs(), value=TRUE)
 if (length(script_file_arg) > 0) {
@@ -22,17 +23,6 @@ if (length(script_file_arg) > 0) {
 cat('arguments:\n')
 args = rkftools::get_parsed_args(args, print=TRUE)
 
-resolve_treevis_dir = function(args) {
-    for (key in c('treevis_dir', 'tree_annotation_dir')) {
-        if (key %in% names(args) && !is.null(args[[key]]) && nzchar(as.character(args[[key]]))) {
-            return(as.character(args[[key]]))
-        }
-    }
-    stop('Neither --treevis_dir nor --tree_annotation_dir was provided.')
-}
-
-treevis_dir = resolve_treevis_dir(args)
-source(file.path(treevis_dir, 'R', 'main.R'), local = TRUE)
 source(file.path(script_dir, 'species_label_utils.r'), local = TRUE)
 
 font_size = 8

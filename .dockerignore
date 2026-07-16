@@ -1,2 +1,8 @@
 *
 !container/
+!workflow/
+workflow/*
+!workflow/support/
+workflow/support/*
+!workflow/support/treevis/
+!workflow/support/treevis/**

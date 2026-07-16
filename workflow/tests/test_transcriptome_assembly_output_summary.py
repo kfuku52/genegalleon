@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pandas
+from shell_static_helpers import read_text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "workflow" / "support" / "transcriptome_assembly_output_summary.py"
@@ -150,7 +151,7 @@ def test_summary_detects_legacy_species_safely_removed_markers(tmp_path: Path):
 
 
 def test_transcriptome_core_safe_delete_matches_amalgkit_format():
-    text = CORE_SCRIPT.read_text(encoding="utf-8")
+    text = read_text(CORE_SCRIPT)
 
     assert '${fastq_file}.safely_removed' in text
     assert 'tmp.amalgkit_getfastq_removed.flag.txt' not in text

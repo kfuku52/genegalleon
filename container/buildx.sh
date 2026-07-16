@@ -134,6 +134,7 @@ sha256_file() {
 context_digest="$({
   printf '%s\n' .dockerignore container/Dockerfile container/pip-compatibility.requirements.txt
   find container/env container/spec container/testdata container/scripts -type f -print
+  find workflow/support/treevis -type f -print
 } | LC_ALL=C sort | while IFS= read -r path; do
   printf '%s\t%s\n' "${path}" "$(sha256_file "${path}")"
 done | sha256_stream)"

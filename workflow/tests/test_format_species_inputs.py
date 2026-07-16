@@ -45,6 +45,27 @@ def run_validate_mapping_script(*args):
     )
 
 
+def test_cli_default_outputs_honor_isolated_output_root(monkeypatch, tmp_path):
+    module = load_module()
+    output_root = tmp_path / "isolated-output"
+    monkeypatch.setenv("GG_INPUT_GENERATION_OUTPUT_ROOT", str(output_root))
+
+    args = module.build_arg_parser().parse_args(["--provider", "local"])
+
+    assert Path(args.species_cds_dir) == output_root / "species_cds"
+    assert Path(args.species_gff_dir) == output_root / "species_gff"
+    assert Path(args.species_genome_dir) == output_root / "species_genome"
+    assert Path(args.species_summary_output) == output_root / "gg_input_generation_species.tsv"
+
+
+def test_provider_resolvers_share_one_registry_interface():
+    module = load_module()
+
+    assert "coge" in module.PROVIDER_ID_RESOLVERS
+    assert "figshare" in module.PROVIDER_ID_RESOLVERS
+    assert all(hasattr(resolver, "resolve") for resolver in module.PROVIDER_ID_RESOLVERS.values())
+
+
 def test_transient_network_error_treats_ssl_eof_as_retryable():
     module = load_module()
 
@@ -59,8 +80,14 @@ def test_cds_extension_is_treated_as_fasta():
     assert module.is_fasta_filename("GZX_Primary.cds")
     assert module.is_fasta_filename("GZX_Primary.cds.gz")
     assert not module.is_fasta_filename("GZX_Primary.gff")
-    assert module.normalize_cds_output_basename("GZX_Primary.cds", "Fakus_species") == "Fakus_species_GZX_Primary.cds.fa.gz"
-    assert module.normalize_cds_output_basename("GZX_Primary.cds.gz", "Fakus_species") == "Fakus_species_GZX_Primary.cds.fa.gz"
+    assert (
+        module.normalize_cds_output_basename("GZX_Primary.cds", "Fakus_species")
+        == "Fakus_species_GZX_Primary.cds.fa.gz"
+    )
+    assert (
+        module.normalize_cds_output_basename("GZX_Primary.cds.gz", "Fakus_species")
+        == "Fakus_species_GZX_Primary.cds.fa.gz"
+    )
 
 
 def test_direct_ncbi_like_cds_header_uses_locus_tag_for_gene_grouping():
@@ -159,7 +186,9 @@ def write_test_taxonomy_fixture(tmp_path):
     db_path = tmp_path / "taxa.sqlite"
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
-    cur.execute("CREATE TABLE species (taxid INT PRIMARY KEY, parent INT, spname VARCHAR(50) COLLATE NOCASE, common VARCHAR(50) COLLATE NOCASE, rank VARCHAR(50), track TEXT)")
+    cur.execute(
+        "CREATE TABLE species (taxid INT PRIMARY KEY, parent INT, spname VARCHAR(50) COLLATE NOCASE, common VARCHAR(50) COLLATE NOCASE, rank VARCHAR(50), track TEXT)"
+    )
     cur.execute("CREATE TABLE synonym (taxid INT,spname VARCHAR(50) COLLATE NOCASE, PRIMARY KEY (spname, taxid))")
     species_rows = [
         (1, 1, "root", "", "no rank", "1"),
@@ -170,7 +199,9 @@ def write_test_taxonomy_fixture(tmp_path):
         (5786, 2759, "Dictyostelium discoideum", "", "species", "5786,2759,131567,1"),
         (5911, 2759, "Tetrahymena thermophila", "", "species", "5911,2759,131567,1"),
     ]
-    cur.executemany("INSERT INTO species (taxid, parent, spname, common, rank, track) VALUES (?, ?, ?, ?, ?, ?)", species_rows)
+    cur.executemany(
+        "INSERT INTO species (taxid, parent, spname, common, rank, track) VALUES (?, ?, ?, ?, ?, ?)", species_rows
+    )
     cur.execute("INSERT INTO synonym (taxid, spname) VALUES (?, ?)", (242159, "Ostreococcus_lucimarinus"))
     conn.commit()
     conn.close()
@@ -298,7 +329,10 @@ def test_parse_species_key_candidate_preserves_taxonomic_qualifiers():
     assert mod.parse_species_key_candidate("Bacillus subtilis subsp. subtilis") == "Bacillus_subtilis_subsp_subtilis"
     assert mod.parse_species_key_candidate("Amoeba sp. JDS-Ruffled") == "Amoeba_sp_JDSRuffled"
     assert mod.parse_species_key_candidate("Amoeba sp.") == "Amoeba_sp_unknown"
-    assert mod.parse_species_key_candidate("Solanum lycopersicum cultivar Heinz 1706") == "Solanum_lycopersicum_cultivar_Heinz1706"
+    assert (
+        mod.parse_species_key_candidate("Solanum lycopersicum cultivar Heinz 1706")
+        == "Solanum_lycopersicum_cultivar_Heinz1706"
+    )
     assert mod.parse_species_key_candidate("Escherichia coli serovar O157") == "Escherichia_coli_serovar_O157"
     assert mod.parse_species_key_candidate("Citrus x limon") == "Citrus_x_limon"
     assert (
@@ -352,9 +386,10 @@ def test_source_id_candidates_add_ensemblmetazoa_accession_suffix_variants():
 
 def test_expand_ensemblgenomes_id_candidates_prefers_matching_directory_suffix(monkeypatch):
     mod = load_module()
+    provider_module = sys.modules[mod.expand_ensemblgenomes_id_candidates.__module__]
 
     monkeypatch.setattr(
-        mod,
+        provider_module,
         "fetch_ensemblgenomes_dir_ids",
         lambda provider, timeout, headers: ["rhopalosiphum_maidis_gca003676215v3"],
     )
@@ -554,7 +589,9 @@ def test_species_summary_includes_taxid_and_genetic_codes_when_taxonomy_cache_is
 def test_format_species_inputs_strict_mode_accepts_cds_only_inputs(tmp_path):
     dataset_copy = tmp_path / "small_gfe_dataset_copy"
     shutil.copytree(SMALL_DATASET_ROOT, dataset_copy)
-    missing_gff = dataset_copy / "20230216_EnsemblPlants" / "original_files" / "Ostreococcus_lucimarinus.ASM9206v1.56.gff3"
+    missing_gff = (
+        dataset_copy / "20230216_EnsemblPlants" / "original_files" / "Ostreococcus_lucimarinus.ASM9206v1.56.gff3"
+    )
     missing_gff.unlink()
 
     out_cds = tmp_path / "species_cds"
@@ -852,16 +889,19 @@ def test_build_formatted_cds_id_ensembl_uses_transcript_token_for_tie_breaks():
         "provider": "ensemblplants",
         "species_prefix": "Arabidopsis_thaliana",
     }
-    raw_header = (
-        "AT1G01520.5 cds chromosome:TAIR10:1:190478:192436:1 "
-        "gene:AT1G01520 gene_symbol:ASG4"
-    )
+    raw_header = "AT1G01520.5 cds chromosome:TAIR10:1:190478:192436:1 gene:AT1G01520 gene_symbol:ASG4"
     derived_header = "transcript:AT1G01520.1 gene=AT1G01520"
 
     assert module.build_formatted_cds_id(task, raw_header) == "Arabidopsis_thaliana_AT1G01520.5"
     assert module.build_formatted_cds_id(task, derived_header) == "Arabidopsis_thaliana_AT1G01520.1"
-    assert module.build_gene_aggregate_id(task, raw_header, "Arabidopsis_thaliana_AT1G01520.5") == "Arabidopsis_thaliana_AT1G01520"
-    assert module.build_gene_aggregate_id(task, derived_header, "Arabidopsis_thaliana_AT1G01520.1") == "Arabidopsis_thaliana_AT1G01520"
+    assert (
+        module.build_gene_aggregate_id(task, raw_header, "Arabidopsis_thaliana_AT1G01520.5")
+        == "Arabidopsis_thaliana_AT1G01520"
+    )
+    assert (
+        module.build_gene_aggregate_id(task, derived_header, "Arabidopsis_thaliana_AT1G01520.1")
+        == "Arabidopsis_thaliana_AT1G01520"
+    )
 
 
 def test_format_species_inputs_derives_cds_excluding_overlapping_utrs(tmp_path):
@@ -1008,11 +1048,7 @@ def test_format_species_inputs_uses_locus_tag_for_genbank_style_ncbi_cds(tmp_pat
             )
         )
     with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
-        handle.write(
-            ">JBTAPH010000036.1\n"
-            + ("A" * 3000)
-            + "\n"
-        )
+        handle.write(">JBTAPH010000036.1\n" + ("A" * 3000) + "\n")
 
     out_cds = tmp_path / "species_cds"
     out_gff = tmp_path / "species_gff"
@@ -1082,11 +1118,7 @@ def test_format_species_inputs_uses_protein_id_when_ncbi_header_lacks_gene_tags(
             )
         )
     with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
-        handle.write(
-            ">CM069765.1\n"
-            + ("A" * 12000)
-            + "\n"
-        )
+        handle.write(">CM069765.1\n" + ("A" * 12000) + "\n")
 
     out_cds = tmp_path / "species_cds"
     out_gff = tmp_path / "species_gff"
@@ -1179,9 +1211,15 @@ def test_format_species_inputs_fernbase_prefers_primary_annotation_files(tmp_pat
     input_dir = tmp_path / "FernBase" / "species_wise_original"
     species_dir = input_dir / "Azolla_filiculoides"
     species_dir.mkdir(parents=True, exist_ok=True)
-    (species_dir / "Azolla_filiculoides.CDS.lowconfidence_v1.1.fasta").write_text(">Azfi_g1.t1\nATG\n", encoding="utf-8")
-    (species_dir / "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta").write_text(">Azfi_g1.t1\nATGAA\n", encoding="utf-8")
-    (species_dir / "Azolla_filiculoides.transcript.highconfidence_v1.1.fasta").write_text(">Azfi_g1.t1\nATGAAA\n", encoding="utf-8")
+    (species_dir / "Azolla_filiculoides.CDS.lowconfidence_v1.1.fasta").write_text(
+        ">Azfi_g1.t1\nATG\n", encoding="utf-8"
+    )
+    (species_dir / "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta").write_text(
+        ">Azfi_g1.t1\nATGAA\n", encoding="utf-8"
+    )
+    (species_dir / "Azolla_filiculoides.transcript.highconfidence_v1.1.fasta").write_text(
+        ">Azfi_g1.t1\nATGAAA\n", encoding="utf-8"
+    )
     (species_dir / "Azolla_filiculoides.gene_models.lowconfidence_v1.1.gff").write_text(
         "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=Azfi_g1\n",
         encoding="utf-8",
@@ -1423,8 +1461,7 @@ def test_resolve_ncbi_download_urls_from_id_retries_transient_remote_disconnect(
                     "uids": ["12345"],
                     "12345": {
                         "ftppath_genbank": (
-                            "ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/036/169/595/"
-                            "GCA_036169595.1_ASM3616959v1"
+                            "ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/036/169/595/GCA_036169595.1_ASM3616959v1"
                         ),
                         "organism": "Dictyostelium firmibasis",
                         "speciesname": "Dictyostelium firmibasis",
@@ -1434,9 +1471,10 @@ def test_resolve_ncbi_download_urls_from_id_retries_transient_remote_disconnect(
             return FakeBinaryResponse(json.dumps(payload).encode("utf-8"))
         raise AssertionError(url)
 
-    monkeypatch.setattr(mod, "urlopen", fake_urlopen)
-    monkeypatch.setattr(mod, "throttle_ncbi_eutils_request", lambda: None)
-    monkeypatch.setattr(mod.time, "sleep", lambda _seconds: None)
+    provider_module = sys.modules[mod.resolve_ncbi_download_urls_from_id.__module__]
+    monkeypatch.setattr(provider_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(provider_module, "throttle_ncbi_eutils_request", lambda: None)
+    monkeypatch.setattr(provider_module.time, "sleep", lambda _seconds: None)
 
     resolved = mod.resolve_ncbi_download_urls_from_id("GCA_036169595.1", timeout=1.0)
     assert calls["esearch"] == 2
@@ -1468,19 +1506,11 @@ def test_format_species_inputs_fernbase_prefers_namespaced_transcript_gene_id_wh
     species_dir = input_dir / "Salvinia_molesta"
     species_dir.mkdir(parents=True, exist_ok=True)
     (species_dir / "sg2.cds").write_text(
-        (
-            ">sg2.g13251.t1 gene=g13251\n"
-            "ATGAAATAG\n"
-            ">sg2.g9.t1 gene=g9\n"
-            "ATGAAATAA\n"
-        ),
+        (">sg2.g13251.t1 gene=g13251\nATGAAATAG\n>sg2.g9.t1 gene=g9\nATGAAATAA\n"),
         encoding="utf-8",
     )
     (species_dir / "sg2.gff3").write_text(
-        (
-            "Chr_1\tgmst\tgene\t1\t9\t.\t+\t.\tID=sg2.g13251\n"
-            "Chr_1\tgmst\tgene\t20\t28\t.\t+\t.\tID=sg2.g9\n"
-        ),
+        ("Chr_1\tgmst\tgene\t1\t9\t.\t+\t.\tID=sg2.g13251\nChr_1\tgmst\tgene\t20\t28\t.\t+\t.\tID=sg2.g9\n"),
         encoding="utf-8",
     )
     (species_dir / "sg2_genome.fasta").write_text(">Chr_1\nATGCATGCATGC\n", encoding="utf-8")
@@ -1516,12 +1546,7 @@ def test_format_species_inputs_fernbase_strips_amt_suffix_when_gff_uses_base_gen
     species_dir = input_dir / "Azolla_filiculoides"
     species_dir.mkdir(parents=True, exist_ok=True)
     (species_dir / "Azolla_filiculoides.CDS.highconfidence_v1.1.fasta").write_text(
-        (
-            ">Azfi_s0034.g025227.AMT2\n"
-            "ATGAAATAG\n"
-            ">Azfi_s0093.g043301.AMT2\n"
-            "ATGAAATAA\n"
-        ),
+        (">Azfi_s0034.g025227.AMT2\nATGAAATAG\n>Azfi_s0093.g043301.AMT2\nATGAAATAA\n"),
         encoding="utf-8",
     )
     (species_dir / "Azolla_filiculoides.gene_models.highconfidence_v1.1.gff").write_text(
@@ -1627,12 +1652,12 @@ def test_format_species_inputs_derives_from_gbff_and_genome_when_gff_and_cds_are
                 "VERSION     chr1",
                 "FEATURES             Location/Qualifiers",
                 "     gene            1..9",
-                "                     /locus_tag=\"gene1\"",
-                "                     /gene=\"gene1\"",
+                '                     /locus_tag="gene1"',
+                '                     /gene="gene1"',
                 "     CDS             join(1..3,7..9)",
-                "                     /locus_tag=\"gene1\"",
-                "                     /gene=\"gene1\"",
-                "                     /protein_id=\"gene1.t1\"",
+                '                     /locus_tag="gene1"',
+                '                     /gene="gene1"',
+                '                     /protein_id="gene1.t1"',
                 "ORIGIN",
                 "        1 atgaaattt",
                 "//",
@@ -1707,8 +1732,8 @@ def test_format_species_inputs_does_not_write_empty_gbff_derived_outputs(tmp_pat
                 "VERSION     chr1",
                 "FEATURES             Location/Qualifiers",
                 "     gene            1..9",
-                "                     /locus_tag=\"gene1\"",
-                "                     /gene=\"gene1\"",
+                '                     /locus_tag="gene1"',
+                '                     /gene="gene1"',
                 "ORIGIN",
                 "        1 atgaaattt",
                 "//",
@@ -1769,6 +1794,7 @@ def test_ensembl_like_gff_selection_prefers_full_annotation_over_partial_files()
 
 def test_ensembl_like_explicit_partial_gff_url_is_replaced_with_full_annotation(monkeypatch):
     module = load_module()
+    provider_module = sys.modules[module.resolve_preferred_ensembl_like_gff_url.__module__]
 
     partial_url = "https://ftp.example/current_gff3/saccharomyces_cerevisiae/Saccharomyces_cerevisiae.R64-1-1.115.abinitio.gff3.gz"
     full_url = "https://ftp.example/current_gff3/saccharomyces_cerevisiae/Saccharomyces_cerevisiae.R64-1-1.115.gff3.gz"
@@ -1778,7 +1804,7 @@ def test_ensembl_like_explicit_partial_gff_url_is_replaced_with_full_annotation(
         assert index_url == "https://ftp.example/current_gff3/saccharomyces_cerevisiae/"
         return {"gff_url": full_url}
 
-    monkeypatch.setattr(module, "resolve_urls_from_index_url", fake_resolve_urls_from_index_url)
+    monkeypatch.setattr(provider_module, "resolve_urls_from_index_url", fake_resolve_urls_from_index_url)
 
     assert module.resolve_preferred_ensembl_like_gff_url("ensembl", partial_url, 1, {}) == full_url
 

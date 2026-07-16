@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from shell_static_helpers import read_text
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "workflow" / "support" / "prepare_orthogroup_copy_number.py"
 GENOME_EVOLUTION_CORE = REPO_ROOT / "workflow" / "core" / "gg_genome_evolution_core.sh"
@@ -100,7 +102,7 @@ def test_prepare_orthogroup_copy_number_reports_nonnumeric_counts(tmp_path):
 
 
 def test_genome_evolution_wires_trait_pgls_without_requiring_cafe():
-    core = GENOME_EVOLUTION_CORE.read_text(encoding="utf-8")
+    core = read_text(GENOME_EVOLUTION_CORE)
     prep_condition = (
         'if [[ ! -s "${file_orthogroup_copy_number}" && '
         '( ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 ) ]]'

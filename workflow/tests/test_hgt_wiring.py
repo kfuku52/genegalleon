@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from shell_static_helpers import read_text
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENE_EVOLUTION_ENTRYPOINT = REPO_ROOT / "workflow" / "gg_gene_evolution_entrypoint.sh"
 GENE_EVOLUTION_CORE = REPO_ROOT / "workflow" / "core" / "gg_gene_evolution_core.sh"
@@ -10,7 +12,7 @@ HGT_CORE = REPO_ROOT / "workflow" / "core" / "gg_hgt_core.sh"
 
 
 def test_gene_evolution_core_passes_uniprot_metadata_and_synteny_to_summary():
-    text = GENE_EVOLUTION_CORE.read_text(encoding="utf-8")
+    text = read_text(GENE_EVOLUTION_CORE)
     assert '--uniprot_meta_tsv "${uniprot_meta_tsv}"' in text
     assert '--synteny "${file_og_synteny}"' in text
     assert 'summary_unaligned_fasta="${og_id}.summary.unaligned.fasta"' in text
@@ -22,7 +24,7 @@ def test_gene_evolution_core_passes_uniprot_metadata_and_synteny_to_summary():
 
 def test_gene_evolution_hgt_profile_is_wired_as_a_preset():
     entry_text = GENE_EVOLUTION_ENTRYPOINT.read_text(encoding="utf-8")
-    core_text = GENE_EVOLUTION_CORE.read_text(encoding="utf-8")
+    core_text = read_text(GENE_EVOLUTION_CORE)
 
     assert 'gene_evolution_profile="${gene_evolution_profile:-default}"' in entry_text
     assert 'input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"' in entry_text

@@ -10,12 +10,12 @@ Current consumers include:
 
 Notes:
 
-- `R/main.R` is a loader that sources the split module files in this
-  directory,
-- the helpers are sourced directly from `workflow/support/treevis/R/` during
-  workflow runs; the legacy `workflow/support/tree_annotation/` path is kept as
-  a compatibility symlink,
-- the package metadata files (`DESCRIPTION`, `NAMESPACE`) remain here for local
-  development and editor tooling,
-- when updating plotting behavior for branch/stat annotation, start with the
-  module file that owns the function and the caller script that sources it.
+- the package is installed into the GeneGalleon container image during the
+  image build,
+- workflow consumers load it with `library(genegalleon.treevis)`; running those
+  consumers outside the GeneGalleon runtime therefore requires installing this
+  package and its declared dependencies first,
+- `R/` contains the implementation modules and `NAMESPACE` is the public API
+  boundary,
+- validate package changes with `workflow/tests/check_treevis_package.sh` and
+  `workflow/tests/test_treevis_main.R` inside a GeneGalleon runtime.

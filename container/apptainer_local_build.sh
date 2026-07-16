@@ -192,6 +192,7 @@ cp -R "${repo_root}/container/env" "${staging_root}/"
 cp -R "${repo_root}/container/spec" "${staging_root}/"
 cp -R "${repo_root}/container/testdata" "${staging_root}/"
 cp -R "${repo_root}/container/scripts" "${staging_root}/"
+cp -R "${repo_root}/workflow/support/treevis" "${staging_root}/"
 cp "${repo_root}/container/pip-compatibility.requirements.txt" "${staging_root}/"
 
 (

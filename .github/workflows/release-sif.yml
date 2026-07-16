@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -79,7 +79,6 @@ jobs:
           image="ghcr.io/${owner}/${repo_name}"
           date_tag="$(date -u +%Y%m%d)"
           short_sha="${release_sha:0:7}"
-          immutable_tag="${date_tag}-${short_sha}"
           build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           gg_version="$(sed -n '1p' VERSION | tr -d '\r')"
           sif_name="${repo_name}_${release_tag}_amd64.sif"
@@ -97,6 +96,19 @@ jobs:
           kftools_repo_sha="$(resolve_source_sha kftools)"
           rkftools_repo_sha="$(resolve_source_sha rkftools)"
           radte_repo_sha="$(resolve_source_sha RADTE)"
+          source_revision_hash="$(
+            printf '%s\n' \
+              "${amalgkit_repo_sha}" \
+              "${cdskit_repo_sha}" \
+              "${csubst_repo_sha}" \
+              "${nwkit_repo_sha}" \
+              "${kfl1ou_repo_sha}" \
+              "${kftools_repo_sha}" \
+              "${rkftools_repo_sha}" \
+              "${radte_repo_sha}" \
+              | sha256sum | cut -c1-12
+          )"
+          immutable_tag="${date_tag}-${short_sha}-${source_revision_hash}"
 
           {
             echo "release_tag=${release_tag}"
@@ -132,7 +144,7 @@ jobs:
 
     steps:
       - name: Checkout release revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare-release.outputs.release_sha }}
 
@@ -213,7 +225,7 @@ jobs:
 
     steps:
       - name: Checkout release revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare-release.outputs.release_sha }}
 
@@ -253,6 +265,11 @@ jobs:
           for digest in "${digests[@]}"; do
             refs+=("${IMAGE}@sha256:${digest}")
           done
+
+          if docker buildx imagetools inspect "${IMAGE}:${IMMUTABLE_TAG}" >/dev/null 2>&1; then
+            echo "Refusing to overwrite immutable image tag: ${IMAGE}:${IMMUTABLE_TAG}"
+            exit 1
+          fi
 
           docker buildx imagetools create \
             --tag "${IMAGE}:${RELEASE_TAG}" \

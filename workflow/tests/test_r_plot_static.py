@@ -15,10 +15,7 @@ def test_r_scripts_do_not_use_deprecated_numeric_legend_position():
         if NUMERIC_LEGEND_POSITION_RE.search(text):
             offending.append(path.relative_to(REPO_ROOT).as_posix())
 
-    assert offending == [], (
-        "Found deprecated numeric legend.position usage in: "
-        + ", ".join(offending)
-    )
+    assert offending == [], "Found deprecated numeric legend.position usage in: " + ", ".join(offending)
 
 
 def test_amino_acid_site_panel_noops_on_empty_site_list():
@@ -38,3 +35,15 @@ def test_query2family_busco_plot_uses_shared_species_label_parser():
     assert 'source(file.path(script_dir, "species_label_utils.r"), local = TRUE)' in text
     assert "gg_species_label_from_filename(x)" in text
     assert 'sub("_sp_[^._-]+$", "_sp", x)' not in text
+
+
+def test_tree_plot_consumers_load_the_installed_treevis_package():
+    for name in ("annotation_summary.r", "stat_branch2tree_plot.r"):
+        text = (SUPPORT_DIR / name).read_text(encoding="utf-8")
+        assert "library(genegalleon.treevis)" in text
+        assert "treevis_dir" not in text
+        assert "tree_annotation_dir" not in text
+        assert "R/main.R" not in text
+
+    assert not (SUPPORT_DIR / "tree_annotation").is_symlink()
+    assert not (SUPPORT_DIR / "treevis" / "R" / "main.R").exists()

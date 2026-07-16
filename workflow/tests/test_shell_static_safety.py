@@ -126,7 +126,11 @@ def test_non_library_workflow_shell_scripts_use_strict_euo_pipefail():
     scripts = _workflow_shell_scripts()
     assert scripts, "No workflow shell scripts were found."
     for script in scripts:
-        if script in allowed_non_strict:
+        if (
+            script in allowed_non_strict
+            or script.parent == WORKFLOW_DIR / "support" / "gg_util"
+            or CORE_DIR / "stages" in script.parents
+        ):
             continue
         header = _strict_mode_header(script)
         assert "set -euo pipefail" in header, f"Use strict mode (set -euo pipefail): {script}"
@@ -135,6 +139,72 @@ def test_non_library_workflow_shell_scripts_use_strict_euo_pipefail():
 def test_support_directory_has_no_numbered_duplicate_scripts():
     duplicates = sorted((WORKFLOW_DIR / "support").glob("* 2.*"))
     assert not duplicates, f"Remove accidental duplicate support scripts: {duplicates}"
+
+
+def test_large_core_scripts_source_named_stage_function_libraries():
+    expected_functions = {
+        "gg_gene_evolution_core.sh": "build_iqtree_mem_args() {",
+        "gg_genome_evolution_core.sh": "run_shared_species_busco_stage() {",
+        "gg_transcriptome_generation_core.sh": "run_amalgkit_getfastq_or_fallback() {",
+    }
+    for core_name, function_definition in expected_functions.items():
+        core_path = CORE_DIR / core_name
+        stage_path = CORE_DIR / "stages" / f"{core_path.stem}_functions.sh"
+        core_text = core_path.read_text(encoding="utf-8")
+        stage_text = stage_path.read_text(encoding="utf-8")
+
+        assert f"/stages/{stage_path.name}" in core_text
+        assert 'source "${gg_core_stage_library}"' in core_text
+        assert function_definition not in core_text
+        assert function_definition in stage_text
+
+
+def test_large_core_scripts_source_ordered_execution_stage_groups():
+    expected_stage_counts = {
+        "gg_gene_evolution_core.sh": 7,
+        "gg_genome_evolution_core.sh": 6,
+        "gg_transcriptome_generation_core.sh": 4,
+    }
+    for core_name, expected_count in expected_stage_counts.items():
+        core_path = CORE_DIR / core_name
+        stage_dir = CORE_DIR / "stages" / core_path.stem.removesuffix("_core")
+        stage_paths = sorted(stage_dir.glob("*.sh"))
+        core_text = core_path.read_text(encoding="utf-8")
+        sourced_stage_names = re.findall(
+            r'^source "\$\{gg_core_execution_stage_dir\}/([^"]+)"$',
+            core_text,
+            flags=re.MULTILINE,
+        )
+
+        assert len(core_text.splitlines()) < 600
+        assert len(stage_paths) == expected_count
+        assert all(len(stage.read_text(encoding="utf-8").splitlines()) < 750 for stage in stage_paths)
+        assert sourced_stage_names == [stage.name for stage in stage_paths]
+
+
+def test_gg_util_is_a_small_compatibility_aggregator():
+    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
+    util_text = util_path.read_text(encoding="utf-8")
+    module_dir = util_path.parent / "gg_util"
+    modules = sorted(module_dir.glob("*.sh"))
+
+    assert len(util_text.splitlines()) < 100
+    assert [module.name for module in modules] == [
+        "01_runtime_config.sh",
+        "02_container_scheduler.sh",
+        "03_species_helpers.sh",
+        "04_busco_runtime.sh",
+        "05_workspace_io.sh",
+        "06_workspace_validation.sh",
+        "07_execution_runtime.sh",
+        "08_execution_reporting.sh",
+        "09_sequence_databases.sh",
+        "10_reference_databases.sh",
+        "11_fasta.sh",
+    ]
+    for module in modules:
+        assert len(module.read_text(encoding="utf-8").splitlines()) < 700
+        assert module.name in util_text
 
 
 def test_gg_versions_lists_support_dir_without_undefined_alias():
@@ -1494,7 +1564,10 @@ def test_gene_evolution_supports_auto_query_blast_evalue_by_query_length():
         in core
     )
     assert "prepare_synteny_evalue_fasta() {" in core
-    assert 'resolve_query_blast_evalue "${query_blast_evalue}" "${synteny_evalue_query_fasta}" "${query_blast_auto_evalue_maxlen_cutoffs}"' in core
+    assert (
+        'resolve_query_blast_evalue "${query_blast_evalue}" "${synteny_evalue_query_fasta}" "${query_blast_auto_evalue_maxlen_cutoffs}"'
+        in core
+    )
     assert 'synteny_evalue="${effective_query_blast_evalue}"' in core
     assert '-evalue "${effective_query_blast_evalue}"' in core
     assert '--evalue "${effective_query_blast_evalue}"' in core
@@ -1949,15 +2022,12 @@ def test_cdskit_localize_wiring_and_output_paths():
         in genome_core
     )
     assert 'task="cdskit localize"' in genome_core
-    assert 'gg_resolve_cdskit_localize_organism_group' in genome_core
+    assert "gg_resolve_cdskit_localize_organism_group" in genome_core
     assert '--cdskit_localize_tsv "${file_sp_cdskit_localize}"' in genome_core
 
-    assert (
-        'file_og_cdskit_localize="${dir_output_active}/cdskit_localize/${og_id}_cdskit_localize.tsv"'
-        in gene_core
-    )
+    assert 'file_og_cdskit_localize="${dir_output_active}/cdskit_localize/${og_id}_cdskit_localize.tsv"' in gene_core
     assert 'task="cdskit localize"' in gene_core
-    assert 'gg_resolve_cdskit_localize_organism_group' in gene_core
+    assert "gg_resolve_cdskit_localize_organism_group" in gene_core
     assert '--cdskit_localize "${file_og_cdskit_localize}"' in gene_core
 
     assert "cdskit_localize_predicted_class" in _read_text(WORKFLOW_DIR / "support" / "annotation_summary.r")
@@ -2424,7 +2494,7 @@ def test_gene_evolution_core_falls_back_to_tree_backed_query_blast_seed():
     assert "Query IDs absent from the tree will be replaced by their best tree-backed query BLAST hit." in text
     assert "tree_leaves = parse_newick_leaves(tree_path)" in text
     assert "best_hits = best_tree_backed_hits(query_blast_path, tree_leaves)" in text
-    assert 'sacc not in leaves' in text
+    assert "sacc not in leaves" in text
     assert "rank = (evalue, -bitscore, row_index)" in text
     assert "using best tree-backed " in text
     assert "query BLAST hit {seed}" in text
@@ -2571,7 +2641,7 @@ def test_container_ghcr_tracks_and_builds_current_kfuku52_master_revisions():
         assert f'                  "{repo}",' in workflow
         output_name = repo.lower() if repo == "RADTE" else repo
         assert f"{output_name}_repo_sha: ${{{{ steps.vars.outputs.{output_name}_repo_sha }}}}" in workflow
-        assert f"{output_name}_repo_sha=\"$(resolve_source_sha {repo})\"" in workflow
+        assert f'{output_name}_repo_sha="$(resolve_source_sha {repo})"' in workflow
 
     assert 'f"/repos/kfuku52/{upstream_repo}/commits"' in workflow
     assert 'matched_files = [f"kfuku52/{upstream_repo}@master"]' in workflow
@@ -2803,9 +2873,9 @@ def test_gene_evolution_core_runs_csubst_scan_as_aa_change_stage():
     assert 'disable_if_no_input_file "run_csubst_scan" "${file_og_iqtree_anc}" "${file_sp_trait}"' in core
     assert "--foreground foreground.tsv \\" in core
     assert "--fg_format 2 \\" in core
-    assert "--scan_match \"${csubst_scan_match}\"" in core
-    assert "--scan_pvalue_calibration \"${csubst_scan_pvalue_calibration}\"" in core
-    assert "--nonsyn_recode \"${csubst_nonsyn_recode}\"" in core
+    assert '--scan_match "${csubst_scan_match}"' in core
+    assert '--scan_pvalue_calibration "${csubst_scan_pvalue_calibration}"' in core
+    assert '--nonsyn_recode "${csubst_nonsyn_recode}"' in core
     assert 'mv_out "${csubst_scan_dir}/csubst_scan.tsv" "${file_og_csubst_scan}"' in core
     assert 'mv_out "${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"' in core
 

@@ -1207,7 +1207,6 @@ run_multispecies_summary_stage() {
   if [[ -s "${species_trait_output}" ]]; then
     cmd+=(--file_species_trait="${species_trait_output}")
   fi
-  cmd+=(--treevis_dir="${gg_support_dir}/treevis")
   cmd+=(--min_og_species=auto)
   echo "Running: ${cmd[*]}"
   if "${cmd[@]}"; then

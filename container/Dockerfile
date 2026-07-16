@@ -258,6 +258,14 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
       RADTE "${radte_source_ref}" \
       > /opt/pg/logs/source_revisions.tsv
 
+# Install GeneGalleon's repository-owned R package after its external R
+# dependencies. Keeping this in its own layer makes treevis-only edits cheap to
+# validate while ensuring every workflow consumer sees the packaged API.
+COPY workflow/support/treevis /opt/pg/src/genegalleon.treevis
+RUN micromamba run -n base R CMD INSTALL /opt/pg/src/genegalleon.treevis \
+ && micromamba run -n base Rscript -e \
+      "stopifnot(requireNamespace('genegalleon.treevis', quietly = TRUE))"
+
 # Validation is intentionally last and isolated: editing checks must not force
 # package solving or source builds to run again.
 COPY container/spec /opt/pg/spec

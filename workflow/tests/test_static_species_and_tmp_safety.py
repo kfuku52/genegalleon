@@ -1,13 +1,11 @@
 import subprocess
 from pathlib import Path
 
+from shell_static_helpers import read_text as _read_text
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / "workflow"
 CORE_DIR = WORKFLOW_DIR / "core"
-
-
-def _read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
 
 
 def test_species_label_parsing_does_not_use_legacy_two_token_sed():

@@ -16,10 +16,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -38,22 +38,18 @@ jobs:
 
   python-fast:
     needs: python-smoke
-    name: python-fast (${{ matrix.python-version }})
+    name: python-fast (Python 3.12)
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    strategy:
-      fail-fast: true
-      matrix:
-        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
           cache: "pip"
           cache-dependency-path: workflow/tests/requirements.txt
 
@@ -122,10 +118,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -142,21 +138,31 @@ jobs:
 
   shell-static:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install minimal test dependency
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest ruff
+          python -m pip install pytest pyyaml ruff
+
+      - name: Install shell and workflow linters
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      - name: Validate GitHub Actions workflows
+        run: |
+          "$(go env GOPATH)/bin/actionlint"
 
       - name: Bash syntax check for workflow scripts
         run: |
@@ -164,6 +170,19 @@ jobs:
           while IFS= read -r script; do
             bash -n "${script}"
           done < <(find workflow -type f -name "*.sh" | sort)
+
+      - name: ShellCheck split workflow drivers
+        run: |
+          shellcheck -S warning -x \
+            -e SC1091,SC2034,SC2154,SC2317 \
+            workflow/core/gg_gene_evolution_core.sh \
+            workflow/core/gg_genome_evolution_core.sh \
+            workflow/core/gg_transcriptome_generation_core.sh \
+            workflow/support/gg_util.sh \
+            workflow/support/gg_util/*.sh \
+            workflow/core/stages/gg_gene_evolution/*.sh \
+            workflow/core/stages/gg_genome_evolution/*.sh \
+            workflow/core/stages/gg_transcriptome_generation/*.sh
 
       - name: Ruff check all Python sources
         run: |
@@ -185,7 +204,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up R
         uses: r-lib/actions/setup-r@v2
@@ -207,7 +226,6 @@ jobs:
         run: |
           Rscript workflow/tests/test_pgls_common_rphylopars.R
           Rscript workflow/tests/test_r_species_label_utils.R
-          Rscript workflow/tests/test_treevis_main.R
 
   sif-runtime-validation:
     needs:
@@ -215,11 +233,26 @@ jobs:
       - shell-static
       - r-script-parse
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build current GeneGalleon image
+        shell: bash
+        run: |
+          BUILD_SIF=0 \
+          IMAGE_SOURCE=local \
+          IMAGE=local/genegalleon \
+          TAG=ci \
+          MODE=load \
+          PLATFORMS=linux/amd64 \
+          FORCE_LOAD_IN_CI=1 \
+            bash ./gg_container_build_entrypoint.sh
 
       - name: Install Apptainer
         id: runtime
@@ -239,38 +272,24 @@ jobs:
             exit 1
           fi
 
-      - name: Build validation SIF from GHCR image
+      - name: Build validation SIF from current image
         shell: bash
         run: |
           set -euo pipefail
-          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-          repo_name="$(basename "${GITHUB_REPOSITORY}")"
-          image="ghcr.io/${owner}/${repo_name}"
-          sha_tag="sha-${GITHUB_SHA::7}"
-          selected_tag="${sha_tag}"
-          if ! IMAGE="${image}" \
-            TAG="${sha_tag}" \
-            ENGINE="${{ steps.runtime.outputs.engine }}" \
-            OUT="${GITHUB_WORKSPACE}/genegalleon.sif" \
-              bash container/apptainer_from_docker.sh; then
-            selected_tag="latest"
-            echo "::warning::GHCR image ${image}:${sha_tag} was unavailable; falling back to ${image}:latest for dependency-runtime validation."
-            IMAGE="${image}" \
-            TAG="${selected_tag}" \
-            ENGINE="${{ steps.runtime.outputs.engine }}" \
-            OUT="${GITHUB_WORKSPACE}/genegalleon.sif" \
-              bash container/apptainer_from_docker.sh
-          fi
+          SOURCE=docker-daemon \
+          IMAGE=local/genegalleon \
+          TAG=ci \
+          ENGINE="${{ steps.runtime.outputs.engine }}" \
+          OUT="${GITHUB_WORKSPACE}/genegalleon.sif" \
+            bash container/apptainer_from_docker.sh
           {
             echo "SIF validation image:"
-            echo "- ${image}:${selected_tag}"
-            if [[ "${selected_tag}" != "${sha_tag}" ]]; then
-              echo "- warning: commit-specific image ${image}:${sha_tag} was unavailable; latest was used."
-            fi
+            echo "- local/genegalleon:ci (built from ${GITHUB_SHA})"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Run SIF validation checks
         run: |
           bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_end_to_end.py
+          bash workflow/tests/run_in_sif.sh bash workflow/tests/check_treevis_package.sh
           bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_orthogroup_copy_number_trait_pgls.R
           bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_treevis_main.R

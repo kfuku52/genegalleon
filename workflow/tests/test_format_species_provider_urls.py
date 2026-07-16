@@ -1,11 +1,11 @@
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
+import format_species_inputs as format_species  # noqa: E402
 from format_species_provider_urls import (  # noqa: E402
     ENSEMBLGENOMES_DEFAULT_ID_URL_TEMPLATES,
     NCBI_ASSEMBLY_ACCESSION_PATTERN,
@@ -41,10 +41,7 @@ def test_provider_url_template_and_cookie_helpers():
 
 
 def test_format_species_inputs_delegates_provider_url_helpers():
-    script_text = (REPO_ROOT / "workflow" / "support" / "format_species_inputs.py").read_text(encoding="utf-8")
-
-    assert "from format_species_provider_urls import (" in script_text
-    assert "def fetch_text_with_headers(" not in script_text
-    assert "def strip_provider_prefix(" not in script_text
-    assert "ENSEMBL_DEFAULT_ID_URL_TEMPLATES = {" not in script_text
-    assert "DEFAULT_NCBI_EUTILS_BASE_URL =" not in script_text
+    assert format_species.append_cookie_header is append_cookie_header
+    assert format_species.extract_ncbi_accession_from_source_id is extract_ncbi_accession_from_source_id
+    assert format_species.render_id_url_template is render_id_url_template
+    assert format_species.strip_provider_prefix is strip_provider_prefix

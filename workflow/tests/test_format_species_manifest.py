@@ -8,6 +8,7 @@ SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
+import format_species_inputs as format_species  # noqa: E402
 import format_species_manifest as manifest  # noqa: E402
 
 
@@ -66,9 +67,6 @@ def test_direct_catalog_xlsx_defaults_fill_direct_rows(tmp_path):
 
 
 def test_format_species_inputs_delegates_manifest_helpers():
-    script_text = (SUPPORT_DIR / "format_species_inputs.py").read_text(encoding="utf-8")
-
-    assert "from format_species_manifest import (" in script_text
-    assert "def read_download_manifest(" not in script_text
-    assert "def read_download_manifest_xlsx(" not in script_text
-    assert "def write_resolved_manifest_tsv(" not in script_text
+    assert format_species.read_download_manifest is manifest.read_download_manifest
+    assert format_species.resolved_manifest_fieldnames is manifest.resolved_manifest_fieldnames
+    assert format_species.write_resolved_manifest_tsv is manifest.write_resolved_manifest_tsv

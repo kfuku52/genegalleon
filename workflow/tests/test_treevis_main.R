@@ -1,68 +1,8 @@
-args <- commandArgs(trailingOnly = FALSE)
-file_arg <- "--file="
-script_path <- NULL
-for (arg in args) {
-  if (startsWith(arg, file_arg)) {
-    script_path <- substring(arg, nchar(file_arg) + 1)
-    break
-  }
-}
-
-if (is.null(script_path) || nchar(script_path) == 0) {
-  stop("Could not determine test script path from commandArgs().")
-}
-
-resolve_script_path <- function(path_in) {
-  candidates <- unique(c(
-    path_in,
-    gsub("~\\+~", " ", path_in),
-    gsub("%20", " ", path_in)
-  ))
-  for (candidate in candidates) {
-    if (file.exists(candidate)) {
-      return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
-    }
-  }
-  return(NA_character_)
-}
-
-resolved_script_path <- resolve_script_path(script_path)
-repo_root <- NA_character_
-
-if (!is.na(resolved_script_path)) {
-  script_dir <- dirname(resolved_script_path)
-  repo_root_candidate <- normalizePath(file.path(script_dir, "..", ".."), winslash = "/", mustWork = FALSE)
-  if (dir.exists(file.path(repo_root_candidate, "workflow", "support"))) {
-    repo_root <- normalizePath(repo_root_candidate, winslash = "/", mustWork = TRUE)
-  }
-}
-
-if (is.na(repo_root)) {
-  cwd_candidate <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
-  if (dir.exists(file.path(cwd_candidate, "workflow", "support"))) {
-    repo_root <- cwd_candidate
-  }
-}
-
-if (is.na(repo_root)) {
-  stop("Could not resolve repository root.")
-}
-
-main_r <- file.path(repo_root, "workflow", "support", "treevis", "R", "main.R")
-if (!file.exists(main_r)) {
-  stop(sprintf("main.R not found: %s", main_r))
-}
-
-if (!requireNamespace("ggplot2", quietly = TRUE)) {
-  cat("test_treevis_main.R: SKIP (ggplot2 is not installed)\n")
-  quit(save = "no", status = 0)
-}
-if (!requireNamespace("ape", quietly = TRUE)) {
-  cat("test_treevis_main.R: SKIP (ape is not installed)\n")
-  quit(save = "no", status = 0)
+if (!requireNamespace("genegalleon.treevis", quietly = TRUE)) {
+  stop("genegalleon.treevis is not installed in the active runtime.")
 }
 suppressPackageStartupMessages(library(ggplot2))
-source(main_r, local = .GlobalEnv)
+suppressPackageStartupMessages(library(genegalleon.treevis))
 
 # 1) tidy_df_tip: group order and tip order are stable and numeric conversion works.
 df_tip <- data.frame(
@@ -975,4 +915,4 @@ if (!identical(domain_order, alignment_order)) {
   stop("Protein domain and alignment overlap stacks should use the same bottom-to-top domain order.")
 }
 
-cat("treevis main.R tests passed.\n")
+cat("genegalleon.treevis package tests passed.\n")

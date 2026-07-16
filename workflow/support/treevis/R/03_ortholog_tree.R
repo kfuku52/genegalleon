@@ -203,7 +203,7 @@ overlay_convergence = function(g, top_percent_to_show, max_num_to_show, is_targe
       cat('Skipping. CSUBST cb file was not found for arity (K) =', arity, '\n')
       next
     }
-    cb = read.table(cb_file, sep = '\t', header = TRUE, stringsAsFactors = FALSE, check.name = FALSE)
+    cb = read.table(cb_file, sep = '\t', header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
     bid_cols = colnames(cb)[grep('branch_id_', colnames(cb))]
     fg_cols = colnames(cb)[grep('is_fg', colnames(cb))]
     if (is_target_only) {
