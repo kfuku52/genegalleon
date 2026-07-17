@@ -8,3 +8,4 @@ genomepy==0.16.2
 mysql-connector-python==9.7.0
 ortools==9.12.4544
 protobuf==5.29.6
+defusedxml==0.7.1

@@ -81,6 +81,7 @@ def test_container_build_paths_share_python_compatibility_constraints():
         "mysql-connector-python",
         "ortools",
         "protobuf",
+        "defusedxml",
     ):
         assert f"{package}==" in requirements
 
