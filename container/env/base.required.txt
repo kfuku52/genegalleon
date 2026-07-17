@@ -47,6 +47,7 @@ pigz
 racon
 rnabloom
 samtools
+salmon=1.11.4
 spades
 pymol-open-source
 corset

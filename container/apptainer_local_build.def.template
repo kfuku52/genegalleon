@@ -89,6 +89,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
         libeigen3-dev \
         libssl-dev \
         libxml2-dev \
+        locales \
         parallel \
         pigz \
         perl \
@@ -99,6 +100,8 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
         unzip \
         wget \
         zip
+    sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+    locale-gen en_US.UTF-8
     apt-get clean
     rm -rf /var/lib/apt/lists/*
 

@@ -32,6 +32,7 @@ RUN rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archive
     libeigen3-dev \
     libssl-dev \
     libxml2-dev \
+    locales \
     parallel \
     pigz \
     perl \
@@ -42,6 +43,8 @@ RUN rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archive
     unzip \
     wget \
     zip \
+ && sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
+ && locale-gen en_US.UTF-8 \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 

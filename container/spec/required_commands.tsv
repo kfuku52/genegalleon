@@ -38,6 +38,7 @@ base	rnabloom
 base	rnaspades.py
 base	rpsblast
 base	samtools
+base	salmon
 base	seqkit
 base	tblastn
 base	Trinity
