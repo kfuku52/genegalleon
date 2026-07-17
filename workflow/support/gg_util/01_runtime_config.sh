@@ -489,6 +489,8 @@ gg_detect_active_container_runtime() {
 	printf '%s\n' "${runtime_bin}"
 }
 
+# Optional runtime override is used by callers outside the ShellCheck driver set.
+# shellcheck disable=SC2120
 gg_sync_container_bind_envs() {
 	local runtime_bin=${1:-}
 	local bind_mounts=""

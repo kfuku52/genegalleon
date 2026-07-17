@@ -100,6 +100,7 @@ download_only=0 # Stop after provider/download-manifest download and formatting;
 dry_run=0 # Print planned downloads/formatting actions without writing formatted outputs.
 download_timeout=120 # Per-request timeout in seconds for remote downloads.
 gene_grouping_mode="rescue_overlap" # strict|rescue_overlap; strict keeps provider gene models as-is, while rescue_overlap merges likely fragmented/overlapping CDS records into a gene-level representative when possible.
+gff_repair_mode="safe" # off|safe|strict; safe repairs only unique collision-free GFF gene IDs against final CDS IDs, while strict rejects ambiguous repair candidates.
 trait_species_source="download_manifest" # download_manifest|species_cds; source used to decide which species are included during trait-table generation.
 trait_databases="auto" # auto|all|comma-separated IDs; trait databases queried by the selected trait_profile, with auto choosing profile defaults.
 

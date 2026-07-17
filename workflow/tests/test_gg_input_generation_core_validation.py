@@ -10,4 +10,6 @@ def test_gg_input_generation_core_validates_configured_species_cds_dir():
     assert 'check_species_cds "${gg_workspace_dir}"' not in text
     assert 'gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"' in text
     assert '--gene-grouping-mode "${gene_grouping_mode}"' in text
+    assert 'gff_repair_mode="${gff_repair_mode:-safe}"' in text
+    assert '--gff-repair-mode "${gff_repair_mode}"' in text
     assert 'validate_longest_cds_selection.py' in text

@@ -116,6 +116,7 @@ def main():
         )
         for task in tasks:
             task["gene_grouping_mode"] = args.gene_grouping_mode
+            task["gff_repair_mode"] = args.gff_repair_mode
         all_tasks.extend(tasks)
         all_warnings.extend(warnings)
         all_errors.extend(errors)
@@ -138,9 +139,19 @@ def main():
     first_cds_sequence_name = ""
     species_with_genome = 0
     failed_format_tasks = 0
+    total_gff_repaired_gene_ids = 0
+    total_gff_repaired_references = 0
+    total_gff_repair_ambiguous = 0
+    total_gff_repair_collisions = 0
     for task in all_tasks:
         cds_result = format_cds(task, output_cds_dir, args.overwrite, args.dry_run)
-        gff_result = format_gff(task, output_gff_dir, args.overwrite, args.dry_run)
+        gff_result = format_gff(
+            task,
+            output_gff_dir,
+            args.overwrite,
+            args.dry_run,
+            formatted_cds_path=cds_result.get("output_path"),
+        )
         genome_result = format_genome(task, output_genome_dir, args.overwrite, args.dry_run)
         stale_gff_outputs = []
         if gff_result["status"] in ("write", "skip"):
@@ -193,12 +204,16 @@ def main():
         total_duplicates += cds_result["duplicates"]
         total_cds_before += cds_result["before_count"]
         total_cds_after += cds_result["after_count"]
+        total_gff_repaired_gene_ids += int(gff_result.get("repair_gene_ids", 0) or 0)
+        total_gff_repaired_references += int(gff_result.get("repair_references", 0) or 0)
+        total_gff_repair_ambiguous += int(gff_result.get("repair_ambiguous", 0) or 0)
+        total_gff_repair_collisions += int(gff_result.get("repair_collisions", 0) or 0)
         if first_cds_sequence_name == "":
             first_cds_sequence_name = cds_result["first_sequence_name"]
         if genome_result["status"] != "missing":
             species_with_genome += 1
         print(
-            "[{}] {}: CDS={} ({}, {}, aggregated_away={}, before={}, after={}), GFF={} ({}, lines={}), GENOME={} ({})".format(
+            "[{}] {}: CDS={} ({}, {}, aggregated_away={}, before={}, after={}), GFF={} ({}, lines={}) [repair_status={}, repaired_gene_ids={}, repaired_references={}, ambiguous={}, collisions={}], GENOME={} ({})".format(
                 task["provider"],
                 task["species_prefix"],
                 task["cds_path"].name
@@ -212,6 +227,11 @@ def main():
                 Path(str(describe_task_gff_input(task) or "derived_gff")).name,
                 gff_result["status"],
                 gff_result["lines"],
+                gff_result.get("repair_status", "unavailable"),
+                gff_result.get("repair_gene_ids", 0),
+                gff_result.get("repair_references", 0),
+                gff_result.get("repair_ambiguous", 0),
+                gff_result.get("repair_collisions", 0),
                 Path(str(describe_task_genome_input(task) or "NA")).name,
                 genome_result["status"],
             )
@@ -227,6 +247,11 @@ def main():
         "cds_first_sequence_name": first_cds_sequence_name,
         "aggregated_cds_removed": total_duplicates,
         "duplicate_cds_ids_skipped": total_duplicates,
+        "gff_repaired_gene_ids": total_gff_repaired_gene_ids,
+        "gff_repaired_references": total_gff_repaired_references,
+        "gff_repair_ambiguous": total_gff_repair_ambiguous,
+        "gff_repair_collisions": total_gff_repair_collisions,
+        "gff_repair_mode": args.gff_repair_mode,
         "dry_run": int(args.dry_run),
     }
     if args.stats_output != "":

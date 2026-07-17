@@ -83,6 +83,10 @@ def main():
     cds_sequences_after = 0
     cds_first_sequence_name = ""
     aggregated_cds_removed = 0
+    gff_repaired_gene_ids = 0
+    gff_repaired_references = 0
+    gff_repair_ambiguous = 0
+    gff_repair_collisions = 0
 
     for stats_path in stats_paths:
         payload = read_task_stats(stats_path)
@@ -93,6 +97,10 @@ def main():
         cds_sequences_before += int(payload.get("cds_sequences_before", 0) or 0)
         cds_sequences_after += int(payload.get("cds_sequences_after", 0) or 0)
         aggregated_cds_removed += int(payload.get("aggregated_cds_removed", 0) or 0)
+        gff_repaired_gene_ids += int(payload.get("gff_repaired_gene_ids", 0) or 0)
+        gff_repaired_references += int(payload.get("gff_repaired_references", 0) or 0)
+        gff_repair_ambiguous += int(payload.get("gff_repair_ambiguous", 0) or 0)
+        gff_repair_collisions += int(payload.get("gff_repair_collisions", 0) or 0)
         if cds_first_sequence_name == "":
             cds_first_sequence_name = str(payload.get("cds_first_sequence_name", "") or "")
 
@@ -109,6 +117,10 @@ def main():
                 "cds_first_sequence_name": cds_first_sequence_name,
                 "aggregated_cds_removed": aggregated_cds_removed,
                 "duplicate_cds_ids_skipped": aggregated_cds_removed,
+                "gff_repaired_gene_ids": gff_repaired_gene_ids,
+                "gff_repaired_references": gff_repaired_references,
+                "gff_repair_ambiguous": gff_repair_ambiguous,
+                "gff_repair_collisions": gff_repair_collisions,
                 "merged_species_summary_rows": len(merged_rows),
                 "task_stats_files": len(stats_paths),
                 "task_species_summary_shards": shard_row_count,

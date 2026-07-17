@@ -299,6 +299,9 @@ def remove_stale_ensembl_like_partial_gff_outputs(provider, species_prefix, outp
         if not ensembl_like_gff_url_is_disfavored(path.name):
             continue
         path.unlink()
+        audit_path = Path(str(path) + ".repair.json")
+        if audit_path.is_file():
+            audit_path.unlink()
         removed.append(path.name)
     return removed
 

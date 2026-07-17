@@ -83,7 +83,10 @@ This is the main results area. Major stage roots include:
 
 `workspace/output/input_generation/gg_input_generation_species.tsv` is the rolling species summary table
 from `gg_input_generation_entrypoint.sh`. When taxonomy metadata is available, it includes per-species
-`taxid` plus nuclear, mitochondrial, and plastid genetic-code columns.
+`taxid` plus nuclear, mitochondrial, and plastid genetic-code columns. It also records the GFF repair
+mode/status, audit path, repaired gene/reference counts, and unresolved ambiguity/collision counts.
+Formatted source GFF files may have neighboring `*.gff.gz.repair.json` audit files; raw downloaded GFF
+files remain unchanged.
 
 When localization prediction is enabled, per-species CDS tables are written to
 `workspace/output/species_cds_cdskit_localize/`, and per-family tables are

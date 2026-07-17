@@ -99,7 +99,7 @@ check_trinity_salmon_compatibility() {
     passed=0
   fi
 
-  rm -rf "${tmp_dir}"
+  rm -rf -- "${tmp_dir}"
   printf '%s\t%s\t%s\t%s\n' \
     "required" "${env_name}" "Trinity/Salmon compatibility" "${passed}" >> "${report_file}"
   [[ ${passed} -eq 1 ]]

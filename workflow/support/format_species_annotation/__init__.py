@@ -59,6 +59,17 @@ from .genbank import (
     parse_genbank_codon_start,
     require_biopython_for_gbff,
 )
+from .gff_repair import (
+    GFF_REPAIR_MODES,
+    GFF_REPAIR_VERSION,
+    audit_matches_inputs,
+    gff_repair_audit_path,
+    gff_repair_mode_for_task,
+    normalize_gff_repair_mode,
+    read_json,
+    repair_result_fields,
+    write_repaired_gff,
+)
 from .grouping import (
     build_rescued_gene_tokens_for_transcripts,
     build_transcript_grouping_entry,
@@ -111,6 +122,15 @@ __all__ = [
     'should_rescue_overlapping_transcripts',
     'choose_rescue_cluster_gene_token',
     'build_rescued_gene_tokens_for_transcripts',
+    'GFF_REPAIR_MODES',
+    'GFF_REPAIR_VERSION',
+    'normalize_gff_repair_mode',
+    'gff_repair_mode_for_task',
+    'gff_repair_audit_path',
+    'audit_matches_inputs',
+    'read_json',
+    'write_repaired_gff',
+    'repair_result_fields',
     'require_biopython_for_gbff',
     'iter_genbank_records',
     'choose_first_feature_qualifier',

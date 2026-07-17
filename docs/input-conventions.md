@@ -278,6 +278,13 @@ Notes:
   aggregated to one representative CDS per gene,
 - common historical replacements are applied to CDS/GFF text,
 - CDS are padded to codon-length multiples and transcript-level redundancies are collapsed at gene level.
+- formatted GFF gene IDs are conservatively repaired against the final CDS IDs by default
+  (`--gff-repair-mode safe`). Only unique, collision-free mappings are applied; the
+  downloaded/source GFF is not modified. Use `off` to preserve source identifiers or
+  `strict` to reject ambiguous repair candidates.
+- each formatted source GFF has a neighboring `*.gff.gz.repair.json` audit containing
+  the old/new gene IDs, reasons, changed references, ambiguity/collision counts, and
+  input/output fingerprints used for cache invalidation.
 - when taxonomy cache preparation succeeds, the generated
   `gg_input_generation_species.tsv` also includes:
   - `taxid`
@@ -471,6 +478,7 @@ Alternative runtime overrides (without editing files) via env vars:
 - `GG_INPUT_PROVIDER`, `GG_INPUT_STRICT`, `GG_INPUT_OVERWRITE`,
 - `GG_INPUT_DOWNLOAD_ONLY`, `GG_INPUT_DRY_RUN`,
 - `GG_INPUT_DOWNLOAD_TIMEOUT`,
+- `GG_INPUT_GFF_REPAIR_MODE` (`off`, `safe`, or `strict`; default `safe`),
 - `GG_INPUT_DOWNLOAD_MANIFEST`, `GG_INPUT_INPUT_DIR`, `GG_INPUT_DOWNLOAD_DIR`,
 - `GG_INPUT_SPECIES_CDS_DIR`, `GG_INPUT_SPECIES_GFF_DIR`, `GG_INPUT_SPECIES_GENOME_DIR`,
 - `GG_INPUT_SPECIES_SUMMARY_OUTPUT`,

@@ -13,6 +13,8 @@ gg_tmp_root() {
 	printf '.\n'
 }
 
+# Optional template arguments are used by helpers outside the ShellCheck driver set.
+# shellcheck disable=SC2120
 gg_mktemp() {
 	local make_dir=0
 	local template=${1:-}

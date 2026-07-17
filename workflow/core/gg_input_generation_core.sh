@@ -53,6 +53,7 @@ gbif_min_match_confidence="${gbif_min_match_confidence:-}"
 gbif_max_coordinate_uncertainty_m="${gbif_max_coordinate_uncertainty_m:-}"
 gbif_max_distance_from_centroid_m="${gbif_max_distance_from_centroid_m:-}"
 gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
+gff_repair_mode="${gff_repair_mode:-safe}"
 
 enable_all_run_flags_for_debug_mode
 
@@ -138,6 +139,13 @@ case "${gene_grouping_mode}" in
   strict|rescue_overlap) ;;
   *)
     echo "Invalid gene_grouping_mode: ${gene_grouping_mode} (allowed: strict|rescue_overlap)"
+    exit 1
+    ;;
+esac
+case "${gff_repair_mode}" in
+  off|safe|strict) ;;
+  *)
+    echo "Invalid gff_repair_mode: ${gff_repair_mode} (allowed: off|safe|strict)"
     exit 1
     ;;
 esac
@@ -677,6 +685,7 @@ run_format_stage_single() {
   cmd+=(--species-summary-output "${species_summary_output}")
   cmd+=(--stats-output "${format_stats_file}")
   cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
+  cmd+=(--gff-repair-mode "${gff_repair_mode}")
 
   if [[ -n "${download_manifest}" ]]; then
     cmd+=(--download-manifest "${download_manifest}")
@@ -1344,6 +1353,7 @@ run_array_prepare_mode() {
     cmd+=(--download-timeout "${download_timeout}")
     cmd+=(--jobs "${GG_TASK_CPUS:-1}")
     cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
+    cmd+=(--gff-repair-mode "${gff_repair_mode}")
     if [[ ${overwrite} -eq 1 ]]; then
       cmd+=(--overwrite)
     fi
@@ -1381,6 +1391,7 @@ run_array_prepare_mode() {
   cmd+=(--input-dir "${effective_input_dir}")
   cmd+=(--outfile "${task_plan_output}")
   cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
+  cmd+=(--gff-repair-mode "${gff_repair_mode}")
   if [[ ${strict} -eq 1 ]]; then
     cmd+=(--strict)
   fi

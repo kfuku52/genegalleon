@@ -95,7 +95,13 @@ def main():
     output_genome_dir.mkdir(parents=True, exist_ok=True)
 
     cds_result = fsi.format_cds(task, output_cds_dir, args.overwrite, args.dry_run)
-    gff_result = fsi.format_gff(task, output_gff_dir, args.overwrite, args.dry_run)
+    gff_result = fsi.format_gff(
+        task,
+        output_gff_dir,
+        args.overwrite,
+        args.dry_run,
+        formatted_cds_path=cds_result.get("output_path"),
+    )
     genome_result = fsi.format_genome(task, output_genome_dir, args.overwrite, args.dry_run)
 
     run_started_utc = fsi.utc_now_iso()
@@ -132,6 +138,11 @@ def main():
         "cds_first_sequence_name": cds_result.get("first_sequence_name", ""),
         "aggregated_cds_removed": cds_result.get("duplicates", 0),
         "duplicate_cds_ids_skipped": cds_result.get("duplicates", 0),
+        "gff_repaired_gene_ids": gff_result.get("repair_gene_ids", 0),
+        "gff_repaired_references": gff_result.get("repair_references", 0),
+        "gff_repair_ambiguous": gff_result.get("repair_ambiguous", 0),
+        "gff_repair_collisions": gff_result.get("repair_collisions", 0),
+        "gff_repair_mode": gff_result.get("repair_mode", ""),
         "dry_run": int(args.dry_run),
         "species_prefix": task["species_prefix"],
         "species_key": task["species_key"],
@@ -151,6 +162,10 @@ def main():
             "genome_output_path": str(genome_result.get("output_path") or ""),
             "cds_status": cds_result.get("status", ""),
             "gff_status": gff_result.get("status", ""),
+            "gff_repair_status": gff_result.get("repair_status", ""),
+            "gff_repair_audit_path": str(gff_result.get("repair_audit_path") or ""),
+            "gff_repaired_gene_ids": gff_result.get("repair_gene_ids", 0),
+            "gff_repaired_references": gff_result.get("repair_references", 0),
             "genome_status": genome_result.get("status", ""),
         },
     )

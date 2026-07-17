@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 
+from format_species_annotation.gff_repair import GFF_REPAIR_MODES
 from format_species_constants import GENE_GROUPING_MODES
 from format_species_provider_config import PROVIDERS
 
@@ -170,6 +171,16 @@ def build_arg_parser():
             "'strict' uses annotation hierarchy and identifier normalization only. "
             "'rescue_overlap' also merges highly similar overlapping GFF-derived transcripts "
             "when annotation gene IDs appear inconsistent."
+        ),
+    )
+    parser.add_argument(
+        "--gff-repair-mode",
+        choices=GFF_REPAIR_MODES,
+        default="safe",
+        help=(
+            "How to repair formatted GFF gene identifiers against final CDS IDs. "
+            "'safe' applies only unique, collision-free repairs; 'strict' also rejects "
+            "ambiguous repair candidates; 'off' preserves the source GFF identifiers."
         ),
     )
     parser.add_argument(

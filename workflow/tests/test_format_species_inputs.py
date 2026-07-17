@@ -1820,6 +1820,10 @@ def test_remove_stale_ensembl_like_partial_gff_outputs_keeps_full_annotation(tmp
     longer_species = gff_dir / "Saccharomyces_cerevisiae_subsp_x_R64-1-1.115.abinitio.gff.gz"
     for path in (full, abinitio, chromosome, unrelated, longer_species):
         path.write_bytes(b"dummy")
+    abinitio_audit = Path(str(abinitio) + ".repair.json")
+    chromosome_audit = Path(str(chromosome) + ".repair.json")
+    abinitio_audit.write_text("{}", encoding="utf-8")
+    chromosome_audit.write_text("{}", encoding="utf-8")
 
     removed = module.remove_stale_ensembl_like_partial_gff_outputs(
         "ensembl",
@@ -1834,3 +1838,5 @@ def test_remove_stale_ensembl_like_partial_gff_outputs_keeps_full_annotation(tmp
     assert longer_species.exists()
     assert not abinitio.exists()
     assert not chromosome.exists()
+    assert not abinitio_audit.exists()
+    assert not chromosome_audit.exists()

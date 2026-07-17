@@ -1,6 +1,9 @@
 """Compatibility facade for annotation parsing and CDS derivation."""
 
 from format_species_annotation import (
+    GFF_REPAIR_MODES,
+    GFF_REPAIR_VERSION,
+    audit_matches_inputs,
     build_derived_cds_output_basename,
     build_derived_genome_output_basename,
     build_derived_gff_output_basename,
@@ -37,6 +40,8 @@ from format_species_annotation import (
     format_gff_attributes,
     gene_grouping_mode_for_task,
     get_genbank_feature_strand,
+    gff_repair_audit_path,
+    gff_repair_mode_for_task,
     gff_seqids,
     infer_genbank_gene_token,
     infer_genbank_transcript_token,
@@ -54,10 +59,13 @@ from format_species_annotation import (
     normalize_genome_output_basename,
     normalize_gff_attribute_value,
     normalize_gff_output_basename,
+    normalize_gff_repair_mode,
     normalize_output_basename,
     pad_to_codon_length,
     parse_genbank_codon_start,
     parse_gff_attributes,
+    read_json,
+    repair_result_fields,
     require_biopython_for_gbff,
     resolve_feature_gene_token,
     reverse_complement,
@@ -70,6 +78,7 @@ from format_species_annotation import (
     task_has_usable_source_bundle,
     task_missing_annotation_label,
     transcript_feature_gene_token,
+    write_repaired_gff,
 )
 
 __all__ = [
@@ -105,6 +114,15 @@ __all__ = [
     'should_rescue_overlapping_transcripts',
     'choose_rescue_cluster_gene_token',
     'build_rescued_gene_tokens_for_transcripts',
+    'GFF_REPAIR_MODES',
+    'GFF_REPAIR_VERSION',
+    'normalize_gff_repair_mode',
+    'gff_repair_mode_for_task',
+    'gff_repair_audit_path',
+    'audit_matches_inputs',
+    'read_json',
+    'write_repaired_gff',
+    'repair_result_fields',
     'require_biopython_for_gbff',
     'iter_genbank_records',
     'choose_first_feature_qualifier',

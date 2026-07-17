@@ -3,8 +3,10 @@
 import re
 import time
 from collections import defaultdict
+from pathlib import Path
 
 from format_species_annotations import (
+    audit_matches_inputs,
     build_derived_cds_output_basename,
     build_derived_genome_output_basename,
     build_derived_gff_output_basename,
@@ -14,6 +16,8 @@ from format_species_annotations import (
     discover_generic_species_dir_tasks,
     extract_provider_transcript_id,
     first_token,
+    gff_repair_audit_path,
+    gff_repair_mode_for_task,
     iter_fasta_records,
     iter_genome_records_from_gbff,
     iter_gff_lines_from_gbff,
@@ -22,9 +26,12 @@ from format_species_annotations import (
     normalize_genome_output_basename,
     normalize_gff_output_basename,
     pad_to_codon_length,
+    read_json,
+    repair_result_fields,
     sanitize_identifier,
     species_prefix_from_value,
     task_missing_annotation_label,
+    write_repaired_gff,
 )
 from format_species_common import (
     is_fasta_filename,
@@ -466,31 +473,92 @@ def format_genome(task, output_dir, overwrite, dry_run):
     return {"status": "write", "output_path": output_path, "written": written}
 
 
-def format_gff(task, output_dir, overwrite, dry_run):
+def format_gff(task, output_dir, overwrite, dry_run, formatted_cds_path=None):
     gff_path = task.get("gff_path")
     gbff_path = task.get("gbff_path")
+    repair_mode = gff_repair_mode_for_task(task)
     if gff_path is not None:
         output_name = normalize_gff_output_basename(gff_path.name, task["species_prefix"])
     elif gbff_path is not None:
         output_name = build_derived_gff_output_basename(task)
     else:
-        return {"status": "missing", "output_path": None, "lines": 0}
+        return {
+            "status": "missing",
+            "output_path": None,
+            "lines": 0,
+            "repair_mode": repair_mode,
+            "repair_status": "not_applicable",
+            "repair_audit_path": None,
+            "repair_gene_ids": 0,
+            "repair_references": 0,
+            "repair_ambiguous": 0,
+            "repair_collisions": 0,
+        }
     output_path = output_dir / output_name
     if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
-        return {"status": "skip", "output_path": output_path, "lines": 0}
+        if gff_path is not None and formatted_cds_path is not None and Path(formatted_cds_path).exists():
+            audit_path = gff_repair_audit_path(output_path)
+            audit = read_json(audit_path)
+            if audit_matches_inputs(
+                audit,
+                repair_mode,
+                gff_path,
+                formatted_cds_path,
+                output_path,
+            ):
+                result = {"status": "skip", "output_path": output_path, "lines": 0}
+                result.update(repair_result_fields(audit, output_path))
+                return result
+            if audit is None and repair_mode == "off":
+                result = {"status": "skip", "output_path": output_path, "lines": 0}
+                result.update(repair_result_fields(None, output_path))
+                result["repair_mode"] = repair_mode
+                result["repair_status"] = "legacy_untracked"
+                return result
+        elif gff_path is None or formatted_cds_path is None:
+            result = {"status": "skip", "output_path": output_path, "lines": 0}
+            result.update(repair_result_fields(None, output_path))
+            result["repair_mode"] = repair_mode
+            result["repair_status"] = "not_applied"
+            return result
     if dry_run:
-        return {"status": "dry-run", "output_path": output_path, "lines": 0}
+        result = {"status": "dry-run", "output_path": output_path, "lines": 0}
+        result.update(repair_result_fields(None, output_path))
+        result["repair_mode"] = repair_mode
+        result["repair_status"] = "planned"
+        return result
 
     feature_count = 0
     if gff_path is not None:
-        line_count = write_gff_gzip(gff_path, output_path)
+        if formatted_cds_path is not None and Path(formatted_cds_path).exists():
+            audit = write_repaired_gff(
+                gff_path=gff_path,
+                cds_path=formatted_cds_path,
+                output_path=output_path,
+                species_prefix=task["species_prefix"],
+                mode=repair_mode,
+            )
+            line_count = int(audit.get("line_count", 0) or 0)
+            repair_fields = repair_result_fields(audit, output_path)
+        else:
+            line_count = write_gff_gzip(gff_path, output_path)
+            repair_fields = repair_result_fields(None, output_path)
+            repair_fields["repair_mode"] = repair_mode
+            repair_fields["repair_status"] = "not_applied"
     else:
         line_count, feature_count = write_gff_lines_gzip(output_path, iter_gff_lines_from_gbff(task))
+        repair_fields = repair_result_fields(None, output_path)
+        repair_fields["repair_mode"] = repair_mode
+        repair_fields["repair_status"] = "not_applicable"
         if feature_count == 0:
             if output_path.exists():
                 output_path.unlink()
-            return {"status": "empty", "output_path": None, "lines": line_count}
-    return {"status": "write", "output_path": output_path, "lines": line_count}
+            result = {"status": "empty", "output_path": None, "lines": line_count}
+            result.update(repair_fields)
+            return result
+    result = {"status": "write", "output_path": output_path, "lines": line_count}
+    result.update(repair_fields)
+    return result
 
 
 def utc_now_iso():

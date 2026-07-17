@@ -39,6 +39,12 @@ def build_arg_parser():
         default="rescue_overlap",
         help="Gene grouping mode to embed in each planned task.",
     )
+    parser.add_argument(
+        "--gff-repair-mode",
+        choices=fsi.GFF_REPAIR_MODES,
+        default="safe",
+        help="GFF repair mode to embed in each planned task.",
+    )
     return parser
 
 
@@ -80,6 +86,7 @@ def main():
         tasks, warnings, errors = fsi.discover_tasks(provider, input_dir)
         for task in tasks:
             task["gene_grouping_mode"] = args.gene_grouping_mode
+            task["gff_repair_mode"] = args.gff_repair_mode
         all_tasks.extend(tasks)
         all_warnings.extend(warnings)
         all_errors.extend(errors)
