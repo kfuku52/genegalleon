@@ -99,7 +99,7 @@ import sys
 args = sys.argv[1:]
 Path(sys.argv[0]).with_suffix(".args").write_text(" ".join(args) + "\\n", encoding="utf-8")
 trait = args[args.index("--trait") + 1]
-output_table = args[args.index("--output-table") + 1]
+report = args[args.index("--report") + 1]
 outfile = args[args.index("--outfile") + 1]
 filters = [args[idx + 1] for idx, arg in enumerate(args) if arg == "--filter"]
 
@@ -112,8 +112,9 @@ def passes(row, spec):
 with open(trait, encoding="utf-8", newline="") as handle:
     rows = list(csv.DictReader(handle, delimiter="\\t"))
 selected = [row for row in rows if all(passes(row, spec) for spec in filters)][:1]
-with open(output_table, "w", encoding="utf-8", newline="") as handle:
-    writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()), delimiter="\\t", lineterminator="\\n")
+selected = [{"sample_order": index, **row} for index, row in enumerate(selected, start=1)]
+with open(report, "w", encoding="utf-8", newline="") as handle:
+    writer = csv.DictWriter(handle, fieldnames=["sample_order", *rows[0].keys()], delimiter="\\t", lineterminator="\\n")
     writer.writeheader()
     writer.writerows(selected)
 Path(outfile).write_text("(" + selected[0]["leaf_name"] + ":0.1);\\n", encoding="utf-8")
@@ -132,4 +133,8 @@ Path(outfile).write_text("(" + selected[0]["leaf_name"] + ":0.1);\\n", encoding=
     assert "--filter busco_complete_pct:ge:80" in nwkit_args
     assert "--filter num_seq:le:100000" in nwkit_args
     assert "--method max-pd" in nwkit_args
+    assert "--report" in nwkit_args
+    assert "--output-table" not in nwkit_args
+    selected_header = (tmp_path / "out" / "selected.tsv").read_text(encoding="utf-8").splitlines()[0]
+    assert selected_header.startswith("sample_order\tleaf_name\t")
     assert (tmp_path / "out" / "selected.txt").read_text(encoding="utf-8") == "Good_species.fa\n"

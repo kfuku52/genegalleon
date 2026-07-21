@@ -441,7 +441,7 @@ def compare_rows(rank_specs):
 def sample(args):
     Path(capture_dir, "nwkit_args.txt").write_text(" ".join(sys.argv[1:]) + "\\n", encoding="utf-8")
     trait = ""
-    output_table = ""
+    report = ""
     outfile = ""
     n = 0
     filters = []
@@ -452,8 +452,8 @@ def sample(args):
         if arg == "--trait":
             trait = args[idx + 1]
             idx += 2
-        elif arg == "--output-table":
-            output_table = args[idx + 1]
+        elif arg == "--report":
+            report = args[idx + 1]
             idx += 2
         elif arg == "--outfile":
             outfile = args[idx + 1]
@@ -477,8 +477,9 @@ def sample(args):
     if ranks:
         selected = sorted(selected, key=cmp_to_key(compare_rows(ranks)))
     selected = selected[:n]
-    with open(output_table, "w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()), delimiter="\\t", lineterminator="\\n")
+    selected = [{{"sample_order": index, **row}} for index, row in enumerate(selected, start=1)]
+    with open(report, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["sample_order", *rows[0].keys()], delimiter="\\t", lineterminator="\\n")
         writer.writeheader()
         writer.writerows(selected)
     leaves = ",".join(row["leaf_name"] + ":0.1" for row in selected)

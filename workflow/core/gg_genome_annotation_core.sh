@@ -324,8 +324,8 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
   gg_step_start "${task}"
 
   seqkit seq --remove-gaps --only-id --threads "${GG_TASK_CPUS}" "${file_sp_cds}" |
-    cdskit pad --codontable "${genetic_code}" |
-    cdskit mask --codontable "${genetic_code}" --stopcodon yes --ambiguouscodon yes --maskchar 'N' |
+    cdskit pad --codon_table "${genetic_code}" |
+    cdskit mask --codon_table "${genetic_code}" --stop_codon yes --ambiguous_codon yes --mask_char 'N' |
     seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
       > uniprot.query.pep.fas
 
@@ -561,7 +561,7 @@ if [[ ! -s "${file_sp_wgd_ksd}" && ${run_wgd_ksd} -eq 1 && ${gg_debug_mode:-0} -
 
   seqkit seq --remove-gaps --upper-case --threads "${GG_TASK_CPUS}" "${file_sp_cds}" |
     gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${genetic_code}" |
-    cdskit mask --codontable "${genetic_code}" --stopcodon no --ambiguouscodon yes --maskchar 'N' \
+    cdskit mask --codon_table "${genetic_code}" --stop_codon no --ambiguous_codon yes --mask_char 'N' \
       > "tmp.${sp_ub}.nuc.fasta"
 
   wgd dmd --ignorestop --nostrictcds "tmp.${sp_ub}.nuc.fasta"

@@ -444,7 +444,7 @@ gg_prepare_cds_fasta_stream() {
   if [[ -n "${codontable}" ]]; then
     seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads "${threads}" \
     | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${threads}" \
-    | cdskit pad --codontable "${codontable}"
+    | cdskit pad --codon_table "${codontable}"
   else
     seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads "${threads}" \
     | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${threads}" \
@@ -460,8 +460,8 @@ gg_prepare_cdskit_localize_cds_input() {
 
   seqkit seq --remove-gaps --upper-case --only-id --threads "${threads}" "${infile}" |
     seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads "${threads}" |
-    cdskit pad --codontable "${codontable}" |
-    cdskit mask --codontable "${codontable}" --stopcodon no --ambiguouscodon yes --maskchar 'N' \
+    cdskit pad --codon_table "${codontable}" |
+    cdskit mask --codon_table "${codontable}" --stop_codon no --ambiguous_codon yes --mask_char 'N' \
       > "${outfile}"
 }
 
@@ -476,28 +476,28 @@ gg_run_cdskit_localize() {
   local threads=${8:-1}
   local codontable=${9:-1}
   local include_features_arg="no"
-  local no_model_download_arg="no"
+  local model_download_arg="yes"
 
   if [[ "${include_features}" == "1" || "${include_features}" == "yes" || "${include_features}" == "true" ]]; then
     include_features_arg="yes"
   fi
   if [[ "${no_model_download}" == "1" || "${no_model_download}" == "yes" || "${no_model_download}" == "true" ]]; then
-    no_model_download_arg="yes"
+    model_download_arg="no"
   fi
 
   export CDSKIT_MODEL_DIR="${CDSKIT_MODEL_DIR:-${gg_workspace_downloads_dir}/cdskit_models}"
   ensure_dir "${CDSKIT_MODEL_DIR}"
 
   cdskit localize \
-    --seqfile "${seqfile}" \
-    --inseqformat fasta \
-    --codontable "${codontable}" \
+    --seq_file "${seqfile}" \
+    --in_seq_format fasta \
+    --codon_table "${codontable}" \
     --threads "${threads}" \
     --model "${model}" \
-    --no_model_download "${no_model_download_arg}" \
+    --model_download "${model_download_arg}" \
     --report "${report}" \
     --include_features "${include_features_arg}" \
-    --seqtype "${seqtype}" \
+    --seq_type "${seqtype}" \
     --organism_group "${organism_group}"
 }
 

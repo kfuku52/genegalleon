@@ -1081,7 +1081,7 @@ root_species_tree() {
     nwkit_root_args+=(--outgroup "${root_value}")
   elif [[ "${root_method}" == "taxonomy" ]]; then
     ensure_dir "${dir_nwkit_download_dir}"
-    nwkit_root_args+=(--download_dir "${dir_nwkit_download_dir}")
+    nwkit_root_args+=(--download-dir "${dir_nwkit_download_dir}")
     nwkit_root_args+=(--species-parser "${species_label_parser}")
     if [[ -n "${species_label_regex}" ]]; then
       nwkit_root_args+=(--species-regex "${species_label_regex}")
@@ -1090,7 +1090,7 @@ root_species_tree() {
       nwkit_root_args+=(--species-map-tsv "${species_label_map_tsv}")
     fi
     if [[ -n "${root_value}" ]]; then
-      nwkit_root_args+=(--taxonomy_source "${root_value}")
+      nwkit_root_args+=(--taxonomy-source "${root_value}")
     fi
   fi
 
@@ -2391,8 +2391,8 @@ if [[ ${num_busco_ids} -ne ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]
     else
       seqkit seq --threads 1 "${infile_path}" --out-file "tmp.${infile_base}.input.cds.fasta"
       cdskit mask \
-        --seqfile "tmp.${infile_base}.input.cds.fasta" \
-        --outfile "tmp.${infile_base}.cds.fasta"
+        --seq_file "tmp.${infile_base}.input.cds.fasta" \
+        --out_file "tmp.${infile_base}.cds.fasta"
       seqkit translate \
         --allow-unknown-codon \
         --transl-table "${genetic_code}" \
@@ -2405,10 +2405,10 @@ if [[ ${num_busco_ids} -ne ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]
         "tmp.${infile_base}.pep.fasta" \
         > "tmp.${infile_base}.pep.aln.fasta"
       cdskit backalign \
-        --seqfile "tmp.${infile_base}.cds.fasta" \
+        --seq_file "tmp.${infile_base}.cds.fasta" \
         --aa_aln "tmp.${infile_base}.pep.aln.fasta" \
-        --codontable "${genetic_code}" \
-        --outfile "tmp.${infile_base}.cds.aln.fasta"
+        --codon_table "${genetic_code}" \
+        --out_file "tmp.${infile_base}.cds.aln.fasta"
       if [[ -s "tmp.${infile_base}.cds.aln.fasta" ]]; then
         seqkit seq --threads 1 "tmp.${infile_base}.cds.aln.fasta" --out-file "tmp.${infile_base}.cds.aln.out.fa.gz"
         mv_out "tmp.${infile_base}.cds.aln.out.fa.gz" "${outfile}"
@@ -3072,10 +3072,10 @@ if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
   ensure_dir "${dir_nwkit_download_dir}"
   if [[ ${timetree_constraint} -eq 1 ]]; then
     nwkit_args=(
-      --download_dir "${dir_nwkit_download_dir}"
+      --download-dir "${dir_nwkit_download_dir}"
       --infile "${file_undated_species_tree}"
       --timetree "ci"
-      --min_clade_prop 0.2
+      --min-clade-prop 0.2
       --outfile "tmp.constrained.tree.nwk"
       --species-parser "${species_label_parser}"
     )
@@ -3103,9 +3103,9 @@ if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
         exit 1
       fi
       nwkit_args=(
-        --download_dir "${dir_nwkit_download_dir}"
-        --left_species "${mcmctree_params[0]}"
-        --right_species "${mcmctree_params[1]}"
+        --download-dir "${dir_nwkit_download_dir}"
+        --left-species "${mcmctree_params[0]}"
+        --right-species "${mcmctree_params[1]}"
         --species-parser "${species_label_parser}"
       )
       if [[ -n "${species_label_regex}" ]]; then
@@ -3115,10 +3115,10 @@ if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
         nwkit_args+=(--species-map-tsv "${species_label_map_tsv}")
       fi
       if [[ "${mcmctree_params[2]}" != "-" ]]; then
-        nwkit_args+=(--lower_bound "${mcmctree_params[2]}")
+        nwkit_args+=(--lower-bound "${mcmctree_params[2]}")
       fi
       if [[ "${mcmctree_params[3]}" != "-" ]]; then
-        nwkit_args+=(--upper_bound "${mcmctree_params[3]}")
+        nwkit_args+=(--upper-bound "${mcmctree_params[3]}")
       fi
       echo "nwkit mcmctree params: ${nwkit_args[*]}"
       tree_string=$(printf '%s\n' "${tree_string}" | nwkit mcmctree "${nwkit_args[@]}")
@@ -3951,8 +3951,8 @@ if [[ ${run_busco_dupaware_mafft} -eq 1 ]]; then
     else
       seqkit seq --threads 1 "${dir_busco_fasta}/${infile}" --out-file "tmp.${infile_base}.input.cds.fasta"
       cdskit mask \
-        --seqfile "tmp.${infile_base}.input.cds.fasta" \
-        --outfile "tmp.${infile_base}.cds.fasta"
+        --seq_file "tmp.${infile_base}.input.cds.fasta" \
+        --out_file "tmp.${infile_base}.cds.fasta"
 
       num_seq=$(gg_count_fasta_records "tmp.${infile_base}.cds.fasta")
       if [[ ${num_seq} -lt 2 ]]; then
@@ -3978,10 +3978,10 @@ if [[ ${run_busco_dupaware_mafft} -eq 1 ]]; then
         > "tmp.${infile_base}.pep.aln.fasta"
 
       cdskit backalign \
-        --seqfile "tmp.${infile_base}.cds.fasta" \
+        --seq_file "tmp.${infile_base}.cds.fasta" \
         --aa_aln "tmp.${infile_base}.pep.aln.fasta" \
-        --codontable "${genetic_code}" \
-        --outfile "tmp.${infile_base}.cds.aln.fasta"
+        --codon_table "${genetic_code}" \
+        --out_file "tmp.${infile_base}.cds.aln.fasta"
 
       if [[ -s "tmp.${infile_base}.cds.aln.fasta" ]]; then
         seqkit seq --threads 1 "tmp.${infile_base}.cds.aln.fasta" --out-file "tmp.${infile_base}.cds.aln.out.fa.gz"

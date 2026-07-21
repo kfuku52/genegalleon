@@ -814,7 +814,7 @@ def test_gg_prepare_cds_fasta_stream_pipes_to_cdskit_pad():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
     body = _function_body(text, "gg_prepare_cds_fasta_stream")
-    assert "| cdskit pad --codontable" in body
+    assert "| cdskit pad --codon_table" in body
     assert "| cdskit pad" in body
 
 
@@ -1392,7 +1392,7 @@ def test_genome_evolution_uses_local_species_tree_rooting_parameter():
     )
     assert 'nwkit_root_args=(--method "${root_method}" --infile "${infile}" --outfile "${outfile}")' in core
     assert 'nwkit_root_args+=(--outgroup "${root_value}")' in core
-    assert 'nwkit_root_args+=(--download_dir "${dir_nwkit_download_dir}")' in core
+    assert 'nwkit_root_args+=(--download-dir "${dir_nwkit_download_dir}")' in core
     assert "species_tree_rooting" in config_vars
 
 
@@ -1986,6 +1986,7 @@ def test_gene_evolution_core_quotes_trait_promoter_and_summary_path_options():
 def test_cdskit_localize_wiring_and_output_paths():
     genome_core = _read_text(CORE_DIR / "gg_genome_annotation_core.sh")
     gene_core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    busco_runtime = _read_text(WORKFLOW_DIR / "support" / "gg_util" / "04_busco_runtime.sh")
     merge_script = _read_text(WORKFLOW_DIR / "support" / "merge_cds_annotation.py")
     stats_script = _read_text(WORKFLOW_DIR / "support" / "orthogroup_statistics.py")
     tree_script = _read_text(WORKFLOW_DIR / "support" / "treevis" / "R" / "03_ortholog_tree.R")
@@ -2005,6 +2006,22 @@ def test_cdskit_localize_wiring_and_output_paths():
 
     assert "cdskit_localize_predicted_class" in _read_text(WORKFLOW_DIR / "support" / "annotation_summary.r")
     assert "cdskit_localize_p_noTP" in tree_script
+    for option in (
+        '--seq_file "${seqfile}"',
+        "--in_seq_format fasta",
+        '--codon_table "${codontable}"',
+        '--model_download "${model_download_arg}"',
+        '--seq_type "${seqtype}"',
+    ):
+        assert option in busco_runtime
+    for deprecated_option in (
+        "--seqfile",
+        "--inseqformat",
+        "--codontable",
+        "--no_model_download",
+        "--seqtype",
+    ):
+        assert deprecated_option not in busco_runtime
 
     forbidden = "target" + "p"
     for script_text in [genome_core, gene_core, merge_script, stats_script, tree_script]:
@@ -2084,9 +2101,9 @@ def test_genome_evolution_core_quotes_notung_unzip_and_rooting_temp_paths():
         "if [[ -s ${busco_id}.root.nwk ]]; then",
         "run_mafft ${input_alignment_file} &",
         "run_trimal ${input_alignment_file} &",
-        "--seqfile tmp.${infile_base}.cds.fasta",
+        "--seq_file tmp.${infile_base}.cds.fasta",
         "--aa_aln tmp.${infile_base}.pep.aln.fasta",
-        "--outfile tmp.${infile_base}.cds.aln.fasta",
+        "--out_file tmp.${infile_base}.cds.aln.fasta",
         "if [[ -s tmp.${infile_base}.cds.aln.fasta ]]; then",
         "seqkit seq --threads 1 tmp.${infile_base}.cds.aln.fasta --out-file",
         "rm -f -- tmp.${infile_base}*",
@@ -2103,9 +2120,9 @@ def test_genome_evolution_core_quotes_notung_unzip_and_rooting_temp_paths():
         'if [[ -s "${busco_id}.root.nwk" ]]; then',
         'run_mafft "${input_alignment_file}" &',
         'run_trimal "${input_alignment_file}" &',
-        '--seqfile "tmp.${infile_base}.cds.fasta"',
+        '--seq_file "tmp.${infile_base}.cds.fasta"',
         '--aa_aln "tmp.${infile_base}.pep.aln.fasta"',
-        '--outfile "tmp.${infile_base}.cds.aln.fasta"',
+        '--out_file "tmp.${infile_base}.cds.aln.fasta"',
         'if [[ -s "tmp.${infile_base}.cds.aln.fasta" ]]; then',
         'seqkit seq --threads 1 "tmp.${infile_base}.cds.aln.fasta" --out-file',
         'rm -f -- "tmp.${infile_base}"*',
@@ -2124,7 +2141,7 @@ def test_gene_and_genome_core_quote_model_and_codon_options():
     ]
     patterns = [
         re.compile(r"--transl-table\s+\$\{[^}]+\}"),
-        re.compile(r"--codontable\s+\$\{[^}]+\}"),
+        re.compile(r"--codon_table\s+\$\{[^}]+\}"),
         re.compile(r"(^|\s)-m\s+\$\{[^}]+\}", re.MULTILINE),
         re.compile(r"--prefix\s+tmp\.\$\{[^}]+\}"),
     ]
@@ -2138,9 +2155,9 @@ def test_gene_evolution_core_quotes_trimal_tmp_paths():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     assert "-out ${og_id}.cds.trimal.tmp1.fasta" not in text
-    assert "--seqfile ${og_id}.cds.trimal.tmp1.fasta" not in text
+    assert "--seq_file ${og_id}.cds.trimal.tmp1.fasta" not in text
     assert '-out "${og_id}.cds.trimal.tmp1.fasta"' in text
-    assert '--seqfile "${og_id}.cds.trimal.tmp1.fasta"' in text
+    assert '--seq_file "${og_id}.cds.trimal.tmp1.fasta"' in text
 
 
 def test_genome_evolution_core_quotes_parallel_function_call_args():
@@ -2365,9 +2382,9 @@ def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
     banned_tokens = [
-        'bound_params="${bound_params} --lower_bound ${mcmctree_params[2]}"',
-        'bound_params="${bound_params} --upper_bound ${mcmctree_params[3]}"',
-        'left_right="--left_species ${mcmctree_params[0]} --right_species ${mcmctree_params[1]}"',
+        'bound_params="${bound_params} --lower-bound ${mcmctree_params[2]}"',
+        'bound_params="${bound_params} --upper-bound ${mcmctree_params[3]}"',
+        'left_right="--left-species ${mcmctree_params[0]} --right-species ${mcmctree_params[1]}"',
         "tree_string=$(printf '%s\\n' \"${tree_string}\" | nwkit mcmctree ${left_right} ${bound_params})",
         'echo -e "${tree_string}" > "tmp.constrained.tree.nwk"',
         'nwkit mcmctree \\n    --infile "${file_undated_species_tree}"',
@@ -2378,13 +2395,13 @@ def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
     expected_tokens = [
         'dir_nwkit_download_dir="${gg_workspace_downloads_dir}/nwkit_downloads"',
         'ensure_dir "${dir_nwkit_download_dir}"',
-        '--download_dir "${dir_nwkit_download_dir}"',
+        '--download-dir "${dir_nwkit_download_dir}"',
         "nwkit_args=(",
-        '--download_dir "${dir_nwkit_download_dir}"',
-        '--left_species "${mcmctree_params[0]}"',
-        '--right_species "${mcmctree_params[1]}"',
-        'nwkit_args+=(--lower_bound "${mcmctree_params[2]}")',
-        'nwkit_args+=(--upper_bound "${mcmctree_params[3]}")',
+        '--download-dir "${dir_nwkit_download_dir}"',
+        '--left-species "${mcmctree_params[0]}"',
+        '--right-species "${mcmctree_params[1]}"',
+        'nwkit_args+=(--lower-bound "${mcmctree_params[2]}")',
+        'nwkit_args+=(--upper-bound "${mcmctree_params[3]}")',
         'echo "nwkit mcmctree params: ${nwkit_args[*]}"',
         'tree_string=$(printf \'%s\\n\' "${tree_string}" | nwkit mcmctree "${nwkit_args[@]}")',
         'printf \'%s\\n\' "${tree_string}" > "tmp.constrained.tree.nwk"',
@@ -2527,6 +2544,37 @@ def test_gene_evolution_core_anchors_query_ids_in_maxalign_keep_regex():
 
     assert 'patterns = [f"(?i:{re.escape(gene)}.*)" for gene in normalized_ids]' not in text
     assert 'patterns = [f"(?i:^{re.escape(gene)}$)" for gene in normalized_ids]' in text
+    assert 'maxalign_cmd+=(--keep_seq_name_regex "${maxalign_keep_regex}")' in text
+    assert 'maxalign_cmd+=(--keep "${maxalign_keep_regex}")' not in text
+
+
+def test_nwkit_calls_use_current_canonical_option_names():
+    gene_core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    genome_core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+    selector = _read_text(WORKFLOW_DIR / "support" / "select_orthofinder_core_species.py")
+
+    for deprecated_option in (
+        "--invert_match",
+        "--target_only_clade",
+        "--insert_txt",
+        "--insert_sep",
+        "--remove_singleton",
+        "--resolve_polytomy",
+        "--dup_conf_score_threshold",
+    ):
+        assert deprecated_option not in gene_core
+    for deprecated_option in (
+        "--download_dir",
+        "--taxonomy_source",
+        "--left_species",
+        "--right_species",
+        "--lower_bound",
+        "--upper_bound",
+        "--min_clade_prop",
+    ):
+        assert deprecated_option not in genome_core
+    assert '"--report"' in selector
+    assert '"--output-table"' not in selector
 
 
 def test_gene_evolution_core_disables_initial_ufboot_when_fast_mode_is_enabled():

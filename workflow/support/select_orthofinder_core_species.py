@@ -314,7 +314,7 @@ def run_nwkit_sample(
         str(max_core_species),
         "--method",
         method,
-        "--output-table",
+        "--report",
         str(selected_table),
         "--outfile",
         str(core_tree),

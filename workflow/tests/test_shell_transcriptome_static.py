@@ -496,6 +496,17 @@ def test_transcriptome_core_quotes_mmseqs_createdb_input_path():
     assert 'mmseqs createdb "${file_longestcds}" queryDB' in text
 
 
+def test_transcriptome_core_uses_current_cdskit_longestorf_interface():
+    text = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+
+    assert "if ! cdskit longestorf \\" in text
+    assert '--seq_file "${sp_ub}.tmp.renamed.fa"' in text
+    assert '--out_file "${longestcds_tmp}"' in text
+    assert '--codon_table "${genetic_code}"' in text
+    assert "--annotate_seq_name no" in text
+    assert "cdskit longestcds" not in text
+
+
 def test_transcriptome_core_uses_rerun_safe_directory_replacement_for_staged_outputs():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)

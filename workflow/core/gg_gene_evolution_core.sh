@@ -555,7 +555,7 @@ prepare_species_tree_pruned() {
   if nwkit prune \
     --infile "${species_tree}" \
     --pattern "^(${keep_pattern})$" \
-    --invert_match yes \
+    --invert-match yes \
     --outfile "${tmp_pruned}"; then
     if [[ -s "${tmp_pruned}" ]]; then
       mv_out "${tmp_pruned}" "${species_tree_pruned}"
@@ -621,8 +621,8 @@ run_hyphy_relax_for_all_traits() {
     fg_regex=$(paste -sd'|' "foreground_${trait}${reversed_mark}.txt")
     echo "Foreground node search pattern: ${fg_regex}"
     nwkit drop --target intnode --support yes --name yes --infile "${file_og_rooted_tree_analysis}" |
-      nwkit mark --pattern "${fg_regex}" --target "clade" --target_only_clade "yes" --insert_txt "{Foreground}" --outformat 1 |
-      nwkit sanitize --remove_singleton yes --resolve_polytomy no \
+      nwkit mark --pattern "${fg_regex}" --target "clade" --target-only-clade "yes" --insert-text "{Foreground}" --outformat 1 |
+      nwkit sanitize --remove-singleton yes --resolve-polytomy no \
         > "${hyphy_tree_file}"
 
     if grep -q "{Foreground}" "${hyphy_tree_file}"; then
@@ -1609,7 +1609,7 @@ if [[ ! -s "${file_og_primary_fasta}" && ${run_extract_primary_fasta} -eq 1 ]]; 
       seqkit replace --pattern "X" --replacement "N" --by-seq --ignore-case --threads "${GG_TASK_CPUS}" "${og_id}.cds.fasta" |
         seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${GG_TASK_CPUS}" |
         seqkit replace --pattern "\+" --replacement "_" --ignore-case --threads "${GG_TASK_CPUS}" |
-        cdskit pad --codontable "${genetic_code}" |
+        cdskit pad --codon_table "${genetic_code}" |
         sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
           > "${og_id}.cds.2.fasta"
 
@@ -1887,7 +1887,7 @@ if [[ ! -s "${file_og_mafft}" && ${run_mafft} -eq 1 ]]; then
       > "${og_id}.cds.aln.fasta"
   else
     seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" --out-file tmp.cds.input.fasta
-    cdskit mask --seqfile tmp.cds.input.fasta --codontable "${genetic_code}" --outfile tmp.cds.fasta
+    cdskit mask --seq_file tmp.cds.input.fasta --codon_table "${genetic_code}" --out_file tmp.cds.fasta
 
     seqkit translate \
       --allow-unknown-codon \
@@ -1905,10 +1905,10 @@ if [[ ! -s "${file_og_mafft}" && ${run_mafft} -eq 1 ]]; then
       > tmp.pep.aln.fasta
 
     cdskit backalign \
-      --seqfile tmp.cds.fasta \
+      --seq_file tmp.cds.fasta \
       --aa_aln tmp.pep.aln.fasta \
-      --codontable "${genetic_code}" \
-      --outfile "${og_id}.cds.aln.fasta"
+      --codon_table "${genetic_code}" \
+      --out_file "${og_id}.cds.aln.fasta"
   fi
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.aln.fasta" --out-file "${og_id}.cds.aln.out.fa.gz"
@@ -1982,7 +1982,7 @@ print(','.join(patterns))
 PY
     )
     if [[ -z "${maxalign_keep_regex}" ]]; then
-      echo "Warning: No query IDs were parsed for MaxAlign --keep. Running without keep constraints."
+      echo "Warning: No query IDs were parsed for MaxAlign --keep_seq_name_regex. Running without keep constraints."
     fi
   else
     maxalign_keep_regex=""
@@ -1990,11 +1990,11 @@ PY
 
   maxalign_cmd=(
     cdskit maxalign
-    --seqfile "${og_id}.cds.aln.fasta"
-    --outfile "${og_id}.maxalign.output.fasta"
+    --seq_file "${og_id}.cds.aln.fasta"
+    --out_file "${og_id}.maxalign.output.fasta"
   )
   if [[ -n "${maxalign_keep_regex}" ]]; then
-    maxalign_cmd+=(--keep "${maxalign_keep_regex}")
+    maxalign_cmd+=(--keep_seq_name_regex "${maxalign_keep_regex}")
   fi
   "${maxalign_cmd[@]}"
 
@@ -2039,13 +2039,13 @@ if [[ ! -s "${file_og_trimal}" && ${run_trimal} -eq 1 ]]; then
       -automated1
 
     cdskit rmseq \
-      --seqfile "${og_id}.cds.trimal.tmp1.fasta" \
+      --seq_file "${og_id}.cds.trimal.tmp1.fasta" \
       --problematic_percent 100 |
       cdskit hammer \
-        --seqfile "-" \
-        --codontable "${genetic_code}" \
+        --seq_file "-" \
+        --codon_table "${genetic_code}" \
         --nail 4 \
-        --outfile "${og_id}.cds.trimal.tmp2.fasta"
+        --out_file "${og_id}.cds.trimal.tmp2.fasta"
   fi
 
   if [[ -s "${og_id}.cds.trimal.tmp2.fasta" ]]; then
@@ -2088,12 +2088,12 @@ if [[ ! -s "${file_og_clipkit}" && ${run_clipkit} -eq 1 ]]; then
       --log
 
     cdskit hammer \
-      --codontable "${genetic_code}" \
+      --codon_table "${genetic_code}" \
       --nail 4 \
-      --seqfile "${og_id}.cds.clipkit.tmp.fasta" |
+      --seq_file "${og_id}.cds.clipkit.tmp.fasta" |
       cdskit rmseq \
         --problematic_percent 100 \
-        --outfile "${og_id}.cds.clipkit.hammer.fasta"
+        --out_file "${og_id}.cds.clipkit.hammer.fasta"
   fi
 
   if [[ -s "${og_id}.cds.clipkit.hammer.fasta" ]]; then
@@ -2310,7 +2310,7 @@ if [[ (! -s "${file_og_orthogroup_extraction_nwk}" || ! -s "${file_og_orthogroup
     local infile=$1
     echo "Running nwkit subtree for ${infile}"
     local info_txt
-    info_txt=$(nwkit subtree --infile "${infile}" --leaves "${comma_separated_genes}" --orthogroup "yes" --dup_conf_score_threshold 0 2> /dev/null | nwkit info 2> /dev/null)
+    info_txt=$(nwkit subtree --infile "${infile}" --leaves "${comma_separated_genes}" --orthogroup "yes" --dup-conf-score-threshold 0 2> /dev/null | nwkit info 2> /dev/null)
     local num_leaf
     num_leaf=$(awk -F': *' '/Number of leaves/ {print $2; exit}' <<< "${info_txt}")
     printf '%s\t%s\n' "${num_leaf}" "${infile}" >> tmp_num_leaf.tsv
@@ -2512,7 +2512,7 @@ PY
   echo "Minimum number of orthogroup subtree leaves after checking all rooting positions: ${min_leaf_num} in ${min_leaf_file} (will be used for orthogroup extraction)"
   echo "Maximum number of orthogroup subtree leaves after checking all rooting positions: ${max_leaf_num} in ${max_leaf_file} (shown just as a reference)"
 
-  nwkit subtree --infile "${min_leaf_file}" --leaves "${comma_separated_genes}" --orthogroup "yes" --dup_conf_score_threshold 0 \
+  nwkit subtree --infile "${min_leaf_file}" --leaves "${comma_separated_genes}" --orthogroup "yes" --dup-conf-score-threshold 0 \
     --outfile "${og_id}.orthogroup_seed.tmp.nwk"
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file tmp.trimmed.input.fasta
@@ -2993,10 +2993,10 @@ if [[ ${is_all_outputs_exist} -eq 0 && ${run_tree_pruning} -eq 1 ]]; then
       nwkit prune \
         --infile "${file_og_unrooted_tree_analysis}" \
         --pattern "^(${prune_pattern})$" \
-        --invert_match yes
+        --invert-match yes
     fi |
       nwkit drop --target root --length yes |
-      nwkit sanitize --remove_singleton yes --resolve_polytomy no \
+      nwkit sanitize --remove-singleton yes --resolve-polytomy no \
         > "${og_id}.unrooted.pruned.tmp.nwk"
     mv_out "${og_id}.unrooted.pruned.tmp.nwk" "${file_og_unrooted_tree_pruned}"
   fi
@@ -3008,10 +3008,10 @@ if [[ ${is_all_outputs_exist} -eq 0 && ${run_tree_pruning} -eq 1 ]]; then
       nwkit prune \
         --infile "${file_og_rooted_tree_analysis}" \
         --pattern "^(${prune_pattern})$" \
-        --invert_match yes
+        --invert-match yes
     fi |
       nwkit drop --target root --length yes |
-      nwkit sanitize --remove_singleton yes --resolve_polytomy no \
+      nwkit sanitize --remove-singleton yes --resolve-polytomy no \
         > "${og_id}.rooted.pruned.tmp.nwk"
     mv_out "${og_id}.rooted.pruned.tmp.nwk" "${file_og_rooted_tree_pruned}"
   fi
@@ -3023,10 +3023,10 @@ if [[ ${is_all_outputs_exist} -eq 0 && ${run_tree_pruning} -eq 1 ]]; then
       nwkit prune \
         --infile "${file_og_dated_tree_analysis}" \
         --pattern "^(${prune_pattern})$" \
-        --invert_match yes
+        --invert-match yes
     fi |
       nwkit drop --target root --length yes |
-      nwkit sanitize --remove_singleton yes --resolve_polytomy no \
+      nwkit sanitize --remove-singleton yes --resolve-polytomy no \
         > "${og_id}.dated.pruned.tmp.nwk"
     mv_out "${og_id}.dated.pruned.tmp.nwk" "${file_og_dated_tree_pruned}"
   fi
@@ -3145,7 +3145,7 @@ if [[ ! -s "${file_og_mapdnds_parameter}" && ${run_mapdnds_parameter_estimation}
 
   nwkit drop --target intnode --support yes --name yes \
     --infile "${file_og_rooted_tree_analysis}" |
-    nwkit sanitize --remove_singleton yes --resolve_polytomy no \
+    nwkit sanitize --remove-singleton yes --resolve-polytomy no \
       > mapdnds_input.nwk
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file ./mapdnds_input.fasta
@@ -3251,10 +3251,10 @@ if [[ ! -s "${file_og_codeml_two_ratio}" && "${run_codeml_two_ratio}" -eq 1 ]]; 
         --name "yes" |
         nwkit mark \
           --pattern "${target_spnode}" \
-          --insert_txt "#1" \
-          --insert_sep "" \
+          --insert-text "#1" \
+          --insert-separator "" \
           --target "mrca" \
-          --target_only_clade "yes" \
+          --target-only-clade "yes" \
           --outfile "codeml_input_${trait}.nwk"
       echo "CodeML input tree: $(< "codeml_input_${trait}.nwk")"
 
@@ -3360,7 +3360,7 @@ if [[ ! -s "${file_og_hyphy_dnds}" && ${run_hyphy_dnds} -eq 1 ]]; then
 
   nwkit drop --target intnode --support yes --name yes \
     --infile "${file_og_rooted_tree_analysis}" |
-    nwkit sanitize --remove_singleton yes --resolve_polytomy no \
+    nwkit sanitize --remove-singleton yes --resolve-polytomy no \
       > "hyphy_input.nwk"
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "hyphy_input.fasta"
@@ -3543,7 +3543,7 @@ if [[ ! -s "${file_og_iqtree_anc}" && ${run_iqtree_anc} -eq 1 ]]; then
 
   nwkit drop --target intnode --support yes --name no --infile "${file_og_rooted_tree_analysis}" |
     nwkit intersection --seqin tmp.csubst.fasta --seqout csubst.fasta |
-    nwkit sanitize --remove_singleton yes --resolve_polytomy no \
+    nwkit sanitize --remove-singleton yes --resolve-polytomy no \
       > csubst.nwk
 
   rm -f -- tmp.csubst.fasta
