@@ -155,6 +155,7 @@ def test_docker_singularity_shim_translates_bind_mounts_and_envs(tmp_path: Path)
     assert args[0] == "run"
     assert "--rm" in args
     assert "-i" in args
+    assert args[args.index("--label") + 1] == "io.github.kfuku52.project=genegalleon"
     assert "--contain" not in args
     assert args[args.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
     assert "/host/workspace:/workspace" in args
