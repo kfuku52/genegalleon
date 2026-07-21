@@ -17,6 +17,11 @@ REVIEWED_ACTIONS = {
     "r-lib/actions/setup-r-dependencies",
 }
 
+SINGULARITY_CE_VERSION = "4.5.0"
+SINGULARITY_CE_DEB_SHA256 = (
+    "85e6f7af5e7aad5b1bf28183ce333998bd37eb8f4769af352c47a5153f3373fb"
+)
+
 
 def load_workflow(name: str) -> dict:
     path = GITHUB_WORKFLOWS_DIR / name
@@ -36,6 +41,22 @@ def named_step(job: dict, name: str) -> dict:
 
 def step_run(job: dict, name: str) -> str:
     return str(named_step(job, name).get("run", ""))
+
+
+def assert_pinned_singularity_runtime(step: dict) -> None:
+    run = str(step.get("run", ""))
+    env = step.get("env", {})
+
+    assert env["SINGULARITY_CE_VERSION"] == SINGULARITY_CE_VERSION
+    assert env["SINGULARITY_CE_DEB_SHA256"] == SINGULARITY_CE_DEB_SHA256
+    assert "releases/download/v${SINGULARITY_CE_VERSION}" in run
+    assert 'deb_name="singularity-ce_${SINGULARITY_CE_VERSION}-noble_amd64.deb"' in run
+    assert "sha256sum --check --strict" in run
+    assert 'apt-get install -y "${deb_path}"' in run
+    assert "apt-get install -y singularity-container" not in run
+    assert 'installed_version="$(singularity version)"' in run
+    assert 'expected_version="${SINGULARITY_CE_VERSION}-noble"' in run
+    assert '"${installed_version}" != "${expected_version}"' in run
 
 
 def test_workflows_pin_all_actions_to_reviewed_full_commit_shas():
@@ -163,7 +184,7 @@ def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
     sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
     runner_cleanup = step_run(sif_job, "Reclaim runner disk space for SIF conversion")
     buildkit_cleanup = step_run(sif_job, "Reclaim BuildKit cache before SIF conversion")
-    runtime_install = step_run(sif_job, "Install Singularity runtime")
+    runtime_install = named_step(sif_job, "Install Singularity runtime")
     conversion = named_step(sif_job, "Build validation SIF from current image")
     disk_report = named_step(sif_job, "Report SIF conversion disk usage")
 
@@ -173,21 +194,23 @@ def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
     assert "docker buildx prune --all --force" in buildkit_cleanup
     assert "docker image inspect --format '{{.Size}}' local/genegalleon:ci" in buildkit_cleanup
     assert "Insufficient disk space for SIF conversion" in buildkit_cleanup
-    assert "apt-get install -y singularity-container" in runtime_install
-    assert "apt-get install -y apptainer" not in runtime_install
-    assert "singularity version" in runtime_install
+    assert_pinned_singularity_runtime(runtime_install)
+    assert "apt-get install -y apptainer" not in runtime_install["run"]
     assert conversion["env"]["APPTAINER_DISABLE_CACHE"] == "1"
     assert conversion["env"]["SINGULARITY_DISABLE_CACHE"] == "1"
     assert "runner.temp" in conversion["env"]["APPTAINER_TMPDIR"]
     assert "runner.temp" in conversion["env"]["SINGULARITY_TMPDIR"]
+    assert "runner.temp" in conversion["env"]["TMPDIR"]
+    assert '2 * image_bytes + reserve_bytes' in buildkit_cleanup
     assert disk_report["if"] == "always()"
     assert "df -h /" in disk_report["run"]
+    assert "singularity-transport-tmp" in disk_report["run"]
 
 
 def test_release_sif_conversion_has_matching_disk_safeguards():
     release_job = load_workflow("release-sif.yml")["jobs"]["publish-manifest-and-sif"]
     runner_cleanup = step_run(release_job, "Reclaim runner disk space for SIF conversion")
-    runtime_install = step_run(release_job, "Install Singularity runtime")
+    runtime_install = named_step(release_job, "Install Singularity runtime")
     conversion = named_step(release_job, "Build SIF from GHCR release tag")
     disk_report = named_step(release_job, "Report SIF conversion disk usage")
 
@@ -198,9 +221,11 @@ def test_release_sif_conversion_has_matching_disk_safeguards():
     assert conversion["env"]["SINGULARITY_DISABLE_CACHE"] == "1"
     assert "required_bytes" in conversion["run"]
     assert "Insufficient disk space for SIF conversion" in conversion["run"]
-    assert "apt-get install -y singularity-container" in runtime_install
-    assert "apt-get install -y apptainer" not in runtime_install
+    assert_pinned_singularity_runtime(runtime_install)
+    assert "apt-get install -y apptainer" not in runtime_install["run"]
+    assert "runner.temp" in conversion["env"]["TMPDIR"]
     assert disk_report["if"] == "always()"
+    assert "singularity-transport-tmp" in disk_report["run"]
 
 
 def test_toolchain_dependent_r_integration_test_runs_in_sif_job():
