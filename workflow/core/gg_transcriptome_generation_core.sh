@@ -524,11 +524,12 @@ stage_quant_reference_fasta_aliases() {
   local output_dir=$3
   local canonical_prefix=$4
   local support_dir=${5:-${gg_support_dir:-}}
+  local taxonomy_dbfile=${6:-${GG_TAXONOMY_DBFILE:-}}
+  local audit_file=${7:-}
 
-  python - "${metadata_file}" "${reference_fasta}" "${output_dir}" "${canonical_prefix}" "${support_dir}" <<'PY'
+  python - "${metadata_file}" "${reference_fasta}" "${output_dir}" "${canonical_prefix}" "${support_dir}" "${taxonomy_dbfile}" "${audit_file}" <<'PY'
 import csv
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -537,6 +538,8 @@ reference_path = Path(sys.argv[2])
 output_dir = Path(sys.argv[3])
 canonical_prefix = sys.argv[4]
 support_dir = Path(sys.argv[5])
+taxonomy_dbfile = sys.argv[6] if len(sys.argv) > 6 else ""
+audit_file = Path(sys.argv[7]) if len(sys.argv) > 7 and sys.argv[7] else None
 
 if not reference_path.exists():
     raise SystemExit("Reference fasta file was not found: {}".format(reference_path))
@@ -546,75 +549,101 @@ if not support_dir.exists():
     raise SystemExit("Support directory was not found: {}".format(support_dir))
 
 sys.path.insert(0, str(support_dir))
-from species_labeling import base_species_label, species_label_from_taxonomic_text
+from transcriptome_species_aliases import (
+    SpeciesAliasError,
+    metadata_declared_species_taxid,
+    normalize_species_prefix,
+    validate_species_alias,
+)
 
-def normalize_prefix(raw_value):
-    text = str(raw_value or "").strip()
-    if not text:
-        return ""
-    species_label = species_label_from_taxonomic_text(text)
-    if species_label != "":
-        return species_label
-    text = re.sub(r"\s+", "_", text)
-    text = text.replace("/", "_").replace("\\", "_")
-    return text
-
-canonical_prefix_normalized = normalize_prefix(canonical_prefix)
-canonical_base_prefix = base_species_label(canonical_prefix_normalized)
-if canonical_base_prefix == "":
-    canonical_base_prefix = canonical_prefix_normalized
-canonical_is_species_level = canonical_prefix_normalized == canonical_base_prefix
-metadata_prefixes = []
-seen_prefixes = set()
-
-def add_metadata_prefix(raw_value):
-    prefix = normalize_prefix(raw_value)
-    if (not prefix) or (prefix in seen_prefixes):
-        return
-    seen_prefixes.add(prefix)
-    metadata_prefixes.append(prefix)
+canonical_prefix_normalized = normalize_species_prefix(canonical_prefix)
+metadata_rows = []
 
 if metadata_path.exists() and metadata_path.stat().st_size > 0:
     with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         fieldnames = reader.fieldnames or []
-        candidate_fields = ["scientific_name"] if "scientific_name" in fieldnames else []
-        for row in reader:
-            for fieldname in candidate_fields:
-                add_metadata_prefix(row.get(fieldname, ""))
+        if "scientific_name" in fieldnames:
+            metadata_rows = [row for row in reader if str(row.get("scientific_name", "") or "").strip()]
 
-prefixes_to_stage = metadata_prefixes if metadata_prefixes else [canonical_prefix_normalized]
-invalid_prefixes = []
-for prefix in prefixes_to_stage:
-    prefix_base = base_species_label(prefix)
-    if prefix_base == "":
-        prefix_base = prefix
-    is_exact = prefix == canonical_prefix_normalized
-    is_same_base = canonical_is_species_level and prefix_base == canonical_prefix_normalized
-    if not (is_exact or is_same_base):
-        invalid_prefixes.append(prefix)
+if not metadata_rows:
+    metadata_rows = [{"scientific_name": canonical_prefix_normalized.replace("_", " ")}]
 
-if invalid_prefixes:
-    raise SystemExit(
-        "Metadata contains scientific_name prefixes outside GeneGalleon species_key '{}': {} (all prefixes: {})".format(
-            canonical_prefix_normalized,
-            ", ".join(invalid_prefixes),
-            ", ".join(prefixes_to_stage),
-        )
-    )
-
-if any(prefix == "" for prefix in prefixes_to_stage):
+if canonical_prefix_normalized == "":
     raise SystemExit("Could not determine quant reference prefix for species_key: {}".format(canonical_prefix))
 
+resolutions = []
+resolution_by_prefix = {}
+try:
+    for row in metadata_rows:
+        declared_taxid = metadata_declared_species_taxid(row)
+        resolution = validate_species_alias(
+            canonical_prefix,
+            row.get("scientific_name", ""),
+            taxonomy_dbfile=taxonomy_dbfile,
+            declared_taxid=declared_taxid,
+        )
+        previous = resolution_by_prefix.get(resolution.metadata_prefix)
+        if previous is not None:
+            if (
+                previous.declared_taxid
+                and resolution.declared_taxid
+                and previous.declared_taxid != resolution.declared_taxid
+            ):
+                raise SpeciesAliasError(
+                    "Metadata has inconsistent species taxids for {!r}: {!r} and {!r}".format(
+                        resolution.metadata_scientific_name,
+                        previous.declared_taxid,
+                        resolution.declared_taxid,
+                    )
+                )
+            continue
+        resolution_by_prefix[resolution.metadata_prefix] = resolution
+        resolutions.append(resolution)
+except SpeciesAliasError as exc:
+    raise SystemExit(str(exc))
+
 output_dir.mkdir(parents=True, exist_ok=True)
-for prefix in prefixes_to_stage:
-    alias_path = output_dir / "{}_for_kallisto_index.fasta".format(prefix)
+audit_rows = []
+for resolution in resolutions:
+    alias_path = output_dir / "{}_for_kallisto_index.fasta".format(resolution.metadata_prefix)
     if alias_path.exists() or alias_path.is_symlink():
         if alias_path.resolve() != reference_path.resolve():
             raise SystemExit("Quant reference path already exists for a different target: {}".format(alias_path))
     else:
         os.symlink(reference_path, alias_path)
+    audit_rows.append(
+        {
+            "canonical_species_key": resolution.canonical_prefix,
+            "canonical_scientific_name": resolution.canonical_scientific_name,
+            "metadata_scientific_name": resolution.metadata_scientific_name,
+            "metadata_prefix": resolution.metadata_prefix,
+            "declared_taxid": resolution.declared_taxid,
+            "resolved_taxid": resolution.resolved_taxid,
+            "resolution_method": resolution.method,
+            "alias_path": str(alias_path),
+            "reference_fasta": str(reference_path),
+        }
+    )
     print(alias_path.name)
+
+if audit_file is not None:
+    audit_file.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "canonical_species_key",
+        "canonical_scientific_name",
+        "metadata_scientific_name",
+        "metadata_prefix",
+        "declared_taxid",
+        "resolved_taxid",
+        "resolution_method",
+        "alias_path",
+        "reference_fasta",
+    ]
+    with audit_file.open("wt", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(audit_rows)
 PY
 }
 
@@ -623,10 +652,10 @@ stage_amalgkit_merge_metadata_for_species() {
   local output_file=$2
   local canonical_prefix=$3
   local support_dir=${4:-${gg_support_dir:-}}
+  local taxonomy_dbfile=${5:-${GG_TAXONOMY_DBFILE:-}}
 
-  python - "${metadata_file}" "${output_file}" "${canonical_prefix}" "${support_dir}" <<'PY'
+  python - "${metadata_file}" "${output_file}" "${canonical_prefix}" "${support_dir}" "${taxonomy_dbfile}" <<'PY'
 import csv
-import re
 import sys
 from pathlib import Path
 
@@ -634,6 +663,7 @@ metadata_path = Path(sys.argv[1])
 output_path = Path(sys.argv[2])
 canonical_prefix = sys.argv[3]
 support_dir = Path(sys.argv[4])
+taxonomy_dbfile = sys.argv[5]
 
 if not metadata_path.exists():
     raise SystemExit("Metadata file was not found: {}".format(metadata_path))
@@ -641,27 +671,11 @@ if not support_dir.exists():
     raise SystemExit("Support directory was not found: {}".format(support_dir))
 
 sys.path.insert(0, str(support_dir))
-from species_labeling import base_species_label, scientific_name_from_label, species_label_from_taxonomic_text
-
-def normalize_prefix(raw_value):
-    text = str(raw_value or "").strip()
-    if not text:
-        return ""
-    species_label = species_label_from_taxonomic_text(text)
-    if species_label != "":
-        return species_label
-    text = re.sub(r"\s+", "_", text)
-    text = text.replace("/", "_").replace("\\", "_")
-    return text
-
-canonical_prefix_normalized = normalize_prefix(canonical_prefix)
-canonical_base_prefix = base_species_label(canonical_prefix_normalized)
-if canonical_base_prefix == "":
-    canonical_base_prefix = canonical_prefix_normalized
-canonical_is_species_level = canonical_prefix_normalized == canonical_base_prefix
-canonical_scientific_name = scientific_name_from_label(canonical_prefix_normalized)
-if canonical_scientific_name == "":
-    canonical_scientific_name = canonical_prefix_normalized.replace("_", " ")
+from transcriptome_species_aliases import (
+    SpeciesAliasError,
+    metadata_declared_species_taxid,
+    validate_species_alias,
+)
 
 with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
@@ -672,29 +686,17 @@ with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
         raise SystemExit("Metadata table is missing required 'scientific_name' column: {}".format(metadata_path))
     rows = list(reader)
 
-invalid_prefixes = []
-seen_invalid_prefixes = set()
-for row in rows:
-    prefix = normalize_prefix(row.get("scientific_name", ""))
-    prefix_base = base_species_label(prefix)
-    if prefix_base == "":
-        prefix_base = prefix
-    is_exact = prefix == canonical_prefix_normalized
-    is_same_base = canonical_is_species_level and prefix_base == canonical_prefix_normalized
-    if not (is_exact or is_same_base):
-        if prefix not in seen_invalid_prefixes:
-            seen_invalid_prefixes.add(prefix)
-            invalid_prefixes.append(prefix)
-        continue
-    row["scientific_name"] = canonical_scientific_name
-
-if invalid_prefixes:
-    raise SystemExit(
-        "Metadata contains scientific_name prefixes outside GeneGalleon species_key '{}': {}".format(
-            canonical_prefix_normalized,
-            ", ".join(invalid_prefixes),
+try:
+    for row in rows:
+        resolution = validate_species_alias(
+            canonical_prefix,
+            row.get("scientific_name", ""),
+            taxonomy_dbfile=taxonomy_dbfile,
+            declared_taxid=metadata_declared_species_taxid(row),
         )
-    )
+        row["scientific_name"] = resolution.canonical_scientific_name
+except SpeciesAliasError as exc:
+    raise SystemExit(str(exc))
 
 output_path.parent.mkdir(parents=True, exist_ok=True)
 with output_path.open("wt", encoding="utf-8", newline="") as handle:
@@ -2320,6 +2322,10 @@ task='amalgkit quant'
 disable_if_no_input_file "run_amalgkit_quant" "${file_amalgkit_metadata}"
 if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count}" || ! -s "${file_amalgkit_merge_tpm}") && ${run_amalgkit_quant} -eq 1 ]]; then
   gg_step_start "${task}"
+  if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+    echo "Failed to prepare ETE taxonomy DB for quant reference alias validation. Exiting."
+    exit 1
+  fi
   ensure_dir "${dir_amalgkit_quant}/${sp_ub}"
   if [[ ! -d "${dir_amalgkit_getfastq_sp}" ]]; then
     echo "amalgkit getfastq output directory not found: ${dir_amalgkit_getfastq_sp}. Exiting."
@@ -2337,6 +2343,8 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
   recreate_dir "./fasta"
   recreate_dir "./index"
   recreate_dir "./quant"
+  quant_reference_alias_audit="./quant_reference_aliases.tsv"
+  rm -f -- "${quant_reference_alias_audit}"
   if [[ ${kallisto_reference} == 'species_cds' ]]; then
     kallisto_ref_candidates=()
     mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${gg_workspace_input_dir}/species_cds" "${sp_ub}")
@@ -2363,17 +2371,22 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
 
   echo "kallisto reference = ${kallisto_reference}: ${file_kallisto_reference_fasta}"
   if [[ -e "${file_kallisto_reference_fasta}" ]]; then
-    while IFS= read -r alias_name; do
-      [[ -n "${alias_name}" ]] || continue
-      echo "Staged exact quant reference from metadata scientific_name: ./fasta/${alias_name}"
-    done < <(
-      stage_quant_reference_fasta_aliases \
+    staged_quant_reference_aliases=""
+    if ! staged_quant_reference_aliases=$(stage_quant_reference_fasta_aliases \
         "${file_amalgkit_metadata}" \
         "${file_kallisto_reference_fasta}" \
         "./fasta" \
         "${sp_ub}" \
-        "${gg_support_dir}"
-    )
+        "${gg_support_dir}" \
+        "${GG_TAXONOMY_DBFILE}" \
+        "${quant_reference_alias_audit}"); then
+      echo "Failed to validate and stage the quant reference alias. Exiting."
+      exit 1
+    fi
+    while IFS= read -r alias_name; do
+      [[ -n "${alias_name}" ]] || continue
+      echo "Staged exact quant reference from metadata scientific_name: ./fasta/${alias_name}"
+    done <<< "${staged_quant_reference_aliases}"
   else
     echo "kallisto reference fasta file was not found in: ${file_kallisto_reference_fasta}"
     exit 1
@@ -2412,6 +2425,9 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
       echo "amalgkit quant finished but no files were found in ./quant."
       exit 1
     fi
+    if [[ -s "${quant_reference_alias_audit}" ]]; then
+      mv -- "${quant_reference_alias_audit}" "./quant/reference_aliases.tsv"
+    fi
     mv_out_replace_dir "./quant" "${dir_amalgkit_quant}/${sp_ub}"
     rm -rf -- "./quant"
     rm -f -- "./getfastq" # Do not put -r, otherwise the original getfastq files will be deleted.
@@ -2426,6 +2442,10 @@ task='amalgkit merge'
 disable_if_no_input_file "run_amalgkit_merge" "${file_amalgkit_metadata}"
 if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count}" || ! -s "${file_amalgkit_merge_tpm}" || ! -s "${file_amalgkit_merge_metadata}") && ${run_amalgkit_merge} -eq 1 ]]; then
   gg_step_start "${task}"
+  if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+    echo "Failed to prepare ETE taxonomy DB for merge metadata alias validation. Exiting."
+    exit 1
+  fi
   merge_output_prefix=""
   merge_output_dir=""
   merge_metadata_file="./metadata.merge_species_level.tsv"
@@ -2438,7 +2458,8 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
     "${file_amalgkit_metadata}" \
     "${merge_metadata_file}" \
     "${sp_ub}" \
-    "${gg_support_dir}"
+    "${gg_support_dir}" \
+    "${GG_TAXONOMY_DBFILE}"
 
   amalgkit merge \
     --out_dir "./" \
