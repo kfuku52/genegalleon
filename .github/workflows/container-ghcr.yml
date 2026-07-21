@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: container-ghcr-${{ github.ref }}
@@ -15,7 +14,7 @@ concurrency:
 
 jobs:
   check-trigger:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       should_build: ${{ steps.decision.outputs.should_build }}
       decision_reason: ${{ steps.decision.outputs.decision_reason }}
@@ -217,7 +216,7 @@ jobs:
     if: |
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
       needs.check-trigger.outputs.should_build == '1'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       image: ${{ steps.vars.outputs.image }}
       immutable_tag: ${{ steps.vars.outputs.immutable_tag }}
@@ -234,7 +233,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Preflight env coverage check
         shell: bash
@@ -301,18 +300,21 @@ jobs:
     if: needs.prepare-build.result == 'success'
     name: build-and-push (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Resolve platform
         id: platform
@@ -323,10 +325,10 @@ jobs:
           echo "pair=${platform//\//-}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -334,7 +336,7 @@ jobs:
 
       - name: Build and push platform image by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: container/Dockerfile
@@ -391,7 +393,7 @@ jobs:
           touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: digests-${{ steps.platform.outputs.pair }}
           path: ${{ runner.temp }}/digests/*
@@ -406,21 +408,24 @@ jobs:
     if: |
       needs.prepare-build.result == 'success' &&
       needs.build-and-push.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -435,8 +440,8 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t digests < <(find "${RUNNER_TEMP}/digests" -maxdepth 1 -type f -printf '%f\n' | sort)
-          if [[ "${#digests[@]}" -eq 0 ]]; then
-            echo "No platform digests were downloaded."
+          if [[ "${#digests[@]}" -ne 2 ]]; then
+            echo "Expected two platform digests, found ${#digests[@]}."
             exit 1
           fi
 
@@ -445,16 +450,31 @@ jobs:
             refs+=("${IMAGE}@sha256:${digest}")
           done
 
-          if docker buildx imagetools inspect "${IMAGE}:${IMMUTABLE_TAG}" >/dev/null 2>&1; then
-            echo "Refusing to overwrite immutable image tag: ${IMAGE}:${IMMUTABLE_TAG}"
-            exit 1
+          immutable_exists=0
+          if existing_manifest="$(docker buildx imagetools inspect --raw "${IMAGE}:${IMMUTABLE_TAG}" 2>/dev/null)"; then
+            immutable_exists=1
+            planned_manifest="$(docker buildx imagetools create --dry-run --progress=none "${refs[@]}")"
+            planned_fingerprint="$(
+              jq -S -c '{schemaVersion, mediaType, manifests}' <<< "${planned_manifest}" | sha256sum | cut -d' ' -f1
+            )"
+            existing_fingerprint="$(
+              jq -S -c '{schemaVersion, mediaType, manifests}' <<< "${existing_manifest}" | sha256sum | cut -d' ' -f1
+            )"
+            if [[ "${planned_fingerprint}" != "${existing_fingerprint}" ]]; then
+              echo "Refusing to overwrite immutable image tag with different content: ${IMAGE}:${IMMUTABLE_TAG}"
+              exit 1
+            fi
+            echo "Immutable image tag already matches the planned manifest; reusing it."
           fi
 
-          docker buildx imagetools create \
-            --tag "${IMAGE}:${IMMUTABLE_TAG}" \
-            --tag "${IMAGE}:${SHA_TAG}" \
-            --tag "${IMAGE}:latest" \
-            "${refs[@]}"
+          manifest_tags=(
+            --tag "${IMAGE}:${SHA_TAG}"
+            --tag "${IMAGE}:latest"
+          )
+          if [[ "${immutable_exists}" == "0" ]]; then
+            manifest_tags+=(--tag "${IMAGE}:${IMMUTABLE_TAG}")
+          fi
+          docker buildx imagetools create "${manifest_tags[@]}" "${refs[@]}"
 
       - name: Summary
         shell: bash

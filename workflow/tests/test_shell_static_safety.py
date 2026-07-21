@@ -2602,7 +2602,7 @@ def test_container_ghcr_builds_arm64_on_native_runner_without_qemu():
     build_block = workflow[build_start:publish_start]
 
     assert "runs-on: ${{ matrix.runner }}" in build_block
-    assert "- platform: linux/amd64\n            runner: ubuntu-latest" in build_block
+    assert "- platform: linux/amd64\n            runner: ubuntu-24.04" in build_block
     assert "- platform: linux/arm64\n            runner: ubuntu-24.04-arm" in build_block
     assert "docker/setup-qemu-action" not in build_block
 
@@ -2641,7 +2641,7 @@ def test_release_sif_builds_platforms_concurrently_on_native_runners():
     build_block = workflow[build_start:publish_start]
 
     assert "runs-on: ${{ matrix.runner }}" in build_block
-    assert "- platform: linux/amd64\n            runner: ubuntu-latest" in build_block
+    assert "- platform: linux/amd64\n            runner: ubuntu-24.04" in build_block
     assert "- platform: linux/arm64\n            runner: ubuntu-24.04-arm" in build_block
     assert "docker/setup-qemu-action" not in workflow
     assert "scope=container-${{ steps.platform.outputs.pair }}" in build_block

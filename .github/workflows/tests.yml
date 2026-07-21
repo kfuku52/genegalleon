@@ -5,21 +5,24 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   python-smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -39,15 +42,15 @@ jobs:
   python-fast:
     needs: python-smoke
     name: python-fast (Python 3.12)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -97,7 +100,7 @@ jobs:
   python-heavy:
     needs: python-smoke
     name: python-heavy (${{ matrix.shard.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
       fail-fast: true
@@ -118,10 +121,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -137,15 +140,15 @@ jobs:
           python -m pytest -q ${{ matrix.shard.tests }}
 
   shell-static:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
@@ -196,18 +199,18 @@ jobs:
             workflow/tests/test_shell_transcriptome_static.py
 
   r-script-parse:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up R
-        uses: r-lib/actions/setup-r@v2
+        uses: r-lib/actions/setup-r@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
 
       - name: Install R test dependencies
-        uses: r-lib/actions/setup-r-dependencies@v2
+        uses: r-lib/actions/setup-r-dependencies@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
         with:
           cache: always
           packages: any::sessioninfo
@@ -229,18 +232,39 @@ jobs:
       - python-heavy
       - shell-static
       - r-script-parse
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Reclaim runner disk space for SIF conversion
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Disk usage before cleanup:"
+          df -h /
+          sudo rm -rf -- \
+            /opt/ghc \
+            /usr/local/lib/android \
+            /usr/share/dotnet
+          sudo apt-get clean
+          docker system prune --all --force --volumes
+          echo "Disk usage after cleanup:"
+          df -h /
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Expose GitHub runtime for BuildKit cache
+        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4
 
       - name: Build current GeneGalleon image
         shell: bash
+        env:
+          CACHE_FROM: type=gha,scope=container-linux-amd64
+          CACHE_TO: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'type=gha,mode=max,scope=container-linux-amd64,ignore-error=true' || '' }}
         run: |
           BUILD_SIF=0 \
           IMAGE_SOURCE=local \
@@ -251,28 +275,60 @@ jobs:
           FORCE_LOAD_IN_CI=1 \
             bash ./gg_container_build_entrypoint.sh
 
-      - name: Install Apptainer
+      - name: Reclaim BuildKit cache before SIF conversion
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Container storage before BuildKit cleanup:"
+          docker system df
+          docker buildx prune --all --force
+          echo "Disk usage after BuildKit cleanup:"
+          df -h /
+          docker system df
+          image_bytes="$(docker image inspect --format '{{.Size}}' local/genegalleon:ci)"
+          reserve_bytes=$((6 * 1024 * 1024 * 1024))
+          required_bytes=$((image_bytes + reserve_bytes))
+          available_bytes="$(df --output=avail -B1 "${RUNNER_TEMP}" | awk 'NR == 2 { print $1 }')"
+          printf 'SIF disk preflight: image=%s required_free=%s available=%s bytes\n' \
+            "${image_bytes}" "${required_bytes}" "${available_bytes}"
+          if (( available_bytes < required_bytes )); then
+            echo "::error::Insufficient disk space for SIF conversion: need ${required_bytes} bytes, have ${available_bytes} bytes."
+            exit 1
+          fi
+          free -h
+
+      - name: Install Singularity runtime
         id: runtime
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          if ! sudo apt-get install -y apptainer; then
-            sudo apt-get install -y singularity-container || true
-          fi
-          if command -v apptainer >/dev/null 2>&1; then
-            echo "engine=apptainer" >> "${GITHUB_OUTPUT}"
-          elif command -v singularity >/dev/null 2>&1; then
-            echo "engine=singularity" >> "${GITHUB_OUTPUT}"
-          else
-            echo "Neither apptainer nor singularity is available."
+          sudo apt-get install -y singularity-container
+          if ! command -v singularity >/dev/null 2>&1; then
+            echo "singularity-container installation did not provide the singularity command."
             exit 1
           fi
+          singularity version
+          echo "engine=singularity" >> "${GITHUB_OUTPUT}"
 
       - name: Build validation SIF from current image
         shell: bash
+        env:
+          APPTAINER_CACHEDIR: ${{ runner.temp }}/apptainer-cache
+          APPTAINER_DISABLE_CACHE: "1"
+          APPTAINER_TMPDIR: ${{ runner.temp }}/apptainer-tmp
+          SINGULARITY_CACHEDIR: ${{ runner.temp }}/singularity-cache
+          SINGULARITY_DISABLE_CACHE: "1"
+          SINGULARITY_TMPDIR: ${{ runner.temp }}/singularity-tmp
         run: |
           set -euo pipefail
+          mkdir -p \
+            "${APPTAINER_CACHEDIR}" \
+            "${APPTAINER_TMPDIR}" \
+            "${SINGULARITY_CACHEDIR}" \
+            "${SINGULARITY_TMPDIR}"
+          echo "Disk usage before SIF conversion:"
+          df -h /
           SOURCE=docker-daemon \
           IMAGE=local/genegalleon \
           TAG=ci \
@@ -283,6 +339,21 @@ jobs:
             echo "SIF validation image:"
             echo "- local/genegalleon:ci (built from ${GITHUB_SHA})"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Report SIF conversion disk usage
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          df -h /
+          free -h
+          docker system df || true
+          du -sh \
+            "${RUNNER_TEMP}/apptainer-cache" \
+            "${RUNNER_TEMP}/apptainer-tmp" \
+            "${RUNNER_TEMP}/singularity-cache" \
+            "${RUNNER_TEMP}/singularity-tmp" \
+            2>/dev/null || true
 
       - name: Run SIF validation checks
         run: |

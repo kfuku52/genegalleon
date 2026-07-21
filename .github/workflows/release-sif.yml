@@ -11,8 +11,7 @@ on:
         type: string
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: release-sif-${{ github.ref }}
@@ -20,7 +19,7 @@ concurrency:
 
 jobs:
   prepare-release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       release_tag: ${{ steps.vars.outputs.release_tag }}
       release_sha: ${{ steps.vars.outputs.release_sha }}
@@ -41,7 +40,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
@@ -133,18 +132,21 @@ jobs:
     needs: prepare-release
     name: build-platform (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout release revision
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.prepare-release.outputs.release_sha }}
 
@@ -157,10 +159,10 @@ jobs:
           echo "pair=${platform//\//-}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -168,7 +170,7 @@ jobs:
 
       - name: Build and push native platform image by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: container/Dockerfile
@@ -210,7 +212,7 @@ jobs:
           touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-digests-${{ steps.platform.outputs.pair }}
           path: ${{ runner.temp }}/digests/*
@@ -221,26 +223,44 @@ jobs:
     needs:
       - prepare-release
       - build-platform
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
 
     steps:
       - name: Checkout release revision
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.prepare-release.outputs.release_sha }}
 
+      - name: Reclaim runner disk space for SIF conversion
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Disk usage before cleanup:"
+          df -h /
+          sudo rm -rf -- \
+            /opt/ghc \
+            /usr/local/lib/android \
+            /usr/share/dotnet
+          sudo apt-get clean
+          docker system prune --all --force --volumes
+          echo "Disk usage after cleanup:"
+          df -h /
+
       - name: Download platform digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: ${{ runner.temp }}/digests
           pattern: release-digests-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -266,45 +286,92 @@ jobs:
             refs+=("${IMAGE}@sha256:${digest}")
           done
 
-          if docker buildx imagetools inspect "${IMAGE}:${IMMUTABLE_TAG}" >/dev/null 2>&1; then
-            echo "Refusing to overwrite immutable image tag: ${IMAGE}:${IMMUTABLE_TAG}"
-            exit 1
+          immutable_exists=0
+          if existing_manifest="$(docker buildx imagetools inspect --raw "${IMAGE}:${IMMUTABLE_TAG}" 2>/dev/null)"; then
+            immutable_exists=1
+            planned_manifest="$(docker buildx imagetools create --dry-run --progress=none "${refs[@]}")"
+            planned_fingerprint="$(
+              jq -S -c '{schemaVersion, mediaType, manifests}' <<< "${planned_manifest}" | sha256sum | cut -d' ' -f1
+            )"
+            existing_fingerprint="$(
+              jq -S -c '{schemaVersion, mediaType, manifests}' <<< "${existing_manifest}" | sha256sum | cut -d' ' -f1
+            )"
+            if [[ "${planned_fingerprint}" != "${existing_fingerprint}" ]]; then
+              echo "Refusing to overwrite immutable image tag with different content: ${IMAGE}:${IMMUTABLE_TAG}"
+              exit 1
+            fi
+            echo "Immutable image tag already matches the planned manifest; reusing it."
           fi
 
-          docker buildx imagetools create \
-            --tag "${IMAGE}:${RELEASE_TAG}" \
-            --tag "${IMAGE}:${IMMUTABLE_TAG}" \
-            --tag "${IMAGE}:${SHA_TAG}" \
-            "${refs[@]}"
+          manifest_tags=(
+            --tag "${IMAGE}:${RELEASE_TAG}"
+            --tag "${IMAGE}:${SHA_TAG}"
+          )
+          if [[ "${immutable_exists}" == "0" ]]; then
+            manifest_tags+=(--tag "${IMAGE}:${IMMUTABLE_TAG}")
+          fi
+          docker buildx imagetools create "${manifest_tags[@]}" "${refs[@]}"
 
-      - name: Install Apptainer
+      - name: Install Singularity runtime
         id: runtime
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          if ! sudo apt-get install -y apptainer; then
-            sudo apt-get install -y singularity-container || true
-          fi
-          if command -v apptainer >/dev/null 2>&1; then
-            echo "engine=apptainer" >> "${GITHUB_OUTPUT}"
-          elif command -v singularity >/dev/null 2>&1; then
-            echo "engine=singularity" >> "${GITHUB_OUTPUT}"
-          else
-            echo "Neither apptainer nor singularity is available."
+          sudo apt-get install -y singularity-container
+          if ! command -v singularity >/dev/null 2>&1; then
+            echo "singularity-container installation did not provide the singularity command."
             exit 1
           fi
+          singularity version
+          echo "engine=singularity" >> "${GITHUB_OUTPUT}"
 
       - name: Build SIF from GHCR release tag
         shell: bash
+        env:
+          APPTAINER_CACHEDIR: ${{ runner.temp }}/apptainer-cache
+          APPTAINER_DISABLE_CACHE: "1"
+          APPTAINER_TMPDIR: ${{ runner.temp }}/apptainer-tmp
+          SINGULARITY_CACHEDIR: ${{ runner.temp }}/singularity-cache
+          SINGULARITY_DISABLE_CACHE: "1"
+          SINGULARITY_TMPDIR: ${{ runner.temp }}/singularity-tmp
         run: |
           set -euo pipefail
+          mkdir -p \
+            "${APPTAINER_CACHEDIR}" \
+            "${APPTAINER_TMPDIR}" \
+            "${SINGULARITY_CACHEDIR}" \
+            "${SINGULARITY_TMPDIR}"
+          required_bytes=$((15 * 1024 * 1024 * 1024))
+          available_bytes="$(df --output=avail -B1 "${RUNNER_TEMP}" | awk 'NR == 2 { print $1 }')"
+          printf 'SIF disk preflight: required_free=%s available=%s bytes\n' \
+            "${required_bytes}" "${available_bytes}"
+          if (( available_bytes < required_bytes )); then
+            echo "::error::Insufficient disk space for SIF conversion: need ${required_bytes} bytes, have ${available_bytes} bytes."
+            exit 1
+          fi
+          df -h /
+          free -h
           IMAGE="${{ needs.prepare-release.outputs.image }}" \
           TAG="${{ needs.prepare-release.outputs.release_tag }}" \
           ENGINE="${{ steps.runtime.outputs.engine }}" \
           OUT="${{ needs.prepare-release.outputs.sif_name }}" \
             bash container/apptainer_from_docker.sh
           sha256sum "${{ needs.prepare-release.outputs.sif_name }}" > "${{ needs.prepare-release.outputs.sif_name }}.sha256"
+
+      - name: Report SIF conversion disk usage
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          df -h /
+          free -h
+          du -sh \
+            "${RUNNER_TEMP}/apptainer-cache" \
+            "${RUNNER_TEMP}/apptainer-tmp" \
+            "${RUNNER_TEMP}/singularity-cache" \
+            "${RUNNER_TEMP}/singularity-tmp" \
+            2>/dev/null || true
 
       - name: Resolve SIF upload strategy
         id: sif_meta
@@ -342,7 +409,7 @@ jobs:
 
       - name: Upload large SIF as workflow artifact
         if: steps.sif_meta.outputs.upload_to_release != '1'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ needs.prepare-release.outputs.sif_name }}
           path: ${{ needs.prepare-release.outputs.sif_name }}
