@@ -1182,6 +1182,109 @@ def test_download_manifest_retries_transient_http_errors(tmp_path):
     assert FlakyHandler.attempts == 2
 
 
+def test_download_manifest_resumes_partial_http_download_with_range(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Croton_tiglium"
+    cds_source = source_dir / "Croton_tiglium.cds.fa.gz"
+    with gzip.open(cds_source, "wb", compresslevel=1) as handle:
+        handle.write(os.urandom(3 * 1024 * 1024))
+    payload = cds_source.read_bytes()
+    interrupted_at = len(payload) // 2
+
+    class InterruptedRangeHandler(SimpleHTTPRequestHandler):
+        attempts = 0
+        seen_ranges = []
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(source_dir), **kwargs)
+
+        def log_message(self, format, *args):
+            return
+
+        def do_GET(self):
+            if not self.path.endswith("/Croton_tiglium.cds.fa.gz"):
+                self.send_error(404)
+                return
+            type(self).attempts += 1
+            range_header = self.headers.get("Range", "")
+            type(self).seen_ranges.append(range_header)
+            if type(self).attempts == 1:
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload[:interrupted_at])
+                self.wfile.flush()
+                self.connection.shutdown(socket.SHUT_RDWR)
+                self.connection.close()
+                return
+
+            assert range_header.startswith("bytes=") and range_header.endswith("-")
+            start = int(range_header.removeprefix("bytes=").removesuffix("-"))
+            response_payload = payload[start:]
+            self.send_response(206)
+            self.send_header("Content-Length", str(len(response_payload)))
+            self.send_header("Content-Range", "bytes {}-{}/{}".format(start, len(payload) - 1, len(payload)))
+            self.end_headers()
+            self.wfile.write(response_payload)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), InterruptedRangeHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        make_manifest(
+            manifest,
+            [
+                {
+                    "provider": "direct",
+                    "id": "VVPY-Croton_tiglium",
+                    "species_key": species_key,
+                    "cds_url": "http://127.0.0.1:{}/Croton_tiglium.cds.fa.gz".format(server.server_port),
+                    "cds_filename": species_key + ".cds.fa.gz",
+                }
+            ],
+        )
+
+        download_dir = tmp_path / "download_cache"
+        env = dict(os.environ)
+        env["GG_DOWNLOAD_RETRY_BASE_SECONDS"] = "0"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--provider",
+                "direct",
+                "--download-manifest",
+                str(manifest),
+                "--download-dir",
+                str(download_dir),
+                "--download-only",
+            ],
+            cwd=str(source_dir),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+            timeout=TEST_COMMAND_TIMEOUT,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert InterruptedRangeHandler.attempts == 2
+    assert InterruptedRangeHandler.seen_ranges[0] == ""
+    assert InterruptedRangeHandler.seen_ranges[1].startswith("bytes=")
+    assert "resuming partial download at byte" in completed.stderr
+    assert "range_resumes=1" in completed.stdout
+    raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
+    downloaded = raw_dir / (species_key + ".cds.fa.gz")
+    assert downloaded.read_bytes() == payload
+    assert not Path(str(downloaded) + ".part").exists()
+    assert not Path(str(downloaded) + ".part.urlsha256").exists()
+
+
 def test_download_manifest_uses_default_user_agent_for_direct_downloads(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()

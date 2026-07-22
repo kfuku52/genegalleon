@@ -10,7 +10,7 @@ Purpose:
   `workspace/output/input_generation/species_gff` and
   `workspace/output/input_generation/species_genome`,
 - optionally generate `workspace/input/species_trait/species_trait.tsv` using
-  target species from `download_plan.xlsx` (default) or `species_cds`.
+  target species from an auto-discovered `download_plan` manifest or `species_cds`.
 
 Main scripts:
 
@@ -20,6 +20,9 @@ Main scripts:
 
 Notable defaults:
 
+- when `GG_INPUT_DOWNLOAD_MANIFEST` is unset, exactly one non-empty CSV, TSV,
+  or XLSX `download_plan*` file with `provider` and `id` columns is selected;
+  multiple valid candidates stop the run and require an explicit manifest path,
 - `run_validate_inputs=1` validates CDS naming rules, including the required
   `GENUS_SPECIES_GENEID` sequence-ID pattern, CDS/GFF species-set consistency,
   and CDS-to-GFF mapping compatibility, with species-level mapping checks

@@ -216,12 +216,83 @@ fi
 if [[ -z "${trait_download_dir}" ]]; then
   trait_download_dir="${gg_workspace_downloads_dir}/trait_datasets"
 fi
+
+discover_input_generation_manifests() {
+  local manifest_dir="${gg_workspace_input_dir}/input_generation"
+  if [[ ! -d "${manifest_dir}" ]]; then
+    return 0
+  fi
+  python - "${manifest_dir}" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+
+manifest_dir = Path(sys.argv[1])
+excluded_markers = ("audit", "resolved", "summary", "template", "snapshot", "options")
+
+
+def delimited_manifest_shape(path):
+    delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
+    with path.open("rt", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.reader(handle, delimiter=delimiter)
+        header = next(reader, [])
+        has_data = any(any(str(value).strip() for value in row) for row in reader)
+    return header, has_data
+
+
+def xlsx_manifest_shape(path):
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet = workbook.active
+        rows = sheet.iter_rows(values_only=True)
+        header = list(next(rows, ()) or ())
+        has_data = any(any(value is not None and str(value).strip() for value in row) for row in rows)
+        return header, has_data
+    finally:
+        workbook.close()
+
+
+for path in sorted(manifest_dir.iterdir()):
+    if not path.is_file() or path.stat().st_size == 0:
+        continue
+    suffix = path.suffix.lower()
+    if suffix not in (".csv", ".tsv", ".xlsx"):
+        continue
+    stem = path.stem.lower()
+    if not stem.startswith("download_plan"):
+        continue
+    if any(marker in stem for marker in excluded_markers):
+        continue
+    try:
+        if suffix == ".xlsx":
+            header, has_data = xlsx_manifest_shape(path)
+        else:
+            header, has_data = delimited_manifest_shape(path)
+    except Exception:
+        print(path.resolve())
+        continue
+    normalized_header = {str(value or "").strip().lower() for value in header}
+    if has_data and {"provider", "id"}.issubset(normalized_header):
+        print(path.resolve())
+PY
+}
+
 if [[ -z "${download_manifest}" ]]; then
-  default_download_manifest="${gg_workspace_input_dir}/input_generation/download_plan.xlsx"
-  if [[ -s "${default_download_manifest}" ]]; then
-    download_manifest="${default_download_manifest}"
+  default_download_manifests=()
+  mapfile -t default_download_manifests < <(discover_input_generation_manifests)
+  if [[ ${#default_download_manifests[@]} -gt 1 ]]; then
+    echo "Multiple input-generation download manifests were discovered. Set GG_INPUT_DOWNLOAD_MANIFEST explicitly:"
+    printf '  %s\n' "${default_download_manifests[@]}"
+    exit 1
+  fi
+  if [[ ${#default_download_manifests[@]} -eq 1 ]]; then
+    download_manifest="${default_download_manifests[0]}"
     echo "Auto-selected download_manifest: ${download_manifest}"
   fi
+  unset default_download_manifests
 fi
 
 file_multispecies_summary="${input_generation_root}/annotation_summary/annotation_summary.tsv"

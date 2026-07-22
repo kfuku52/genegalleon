@@ -438,8 +438,17 @@ python workflow/support/build_download_manifest.py \
 
 This writes `file://` URLs, so you can test the full download+format pipeline locally before replacing them with remote URLs.
 
-Use `workspace/input/input_generation/download_plan.xlsx` as the runtime manifest input file.
+Use `workspace/input/input_generation/download_plan.xlsx` as the standard runtime manifest input file.
+When `GG_INPUT_DOWNLOAD_MANIFEST` is unset, GeneGalleon auto-selects a single
+non-empty `download_plan*` CSV, TSV, or XLSX file that contains `provider` and
+`id` columns. If multiple valid manifests coexist, set
+`GG_INPUT_DOWNLOAD_MANIFEST` explicitly; GeneGalleon stops instead of guessing.
 Resolved/filled rows are written to `workspace/output/input_generation/download_plan.resolved.tsv`.
+
+Interrupted HTTP downloads retain a URL-hash-guarded `.part` file. A retry for
+the same URL requests the remaining bytes with HTTP Range, verifies response
+length and gzip integrity, and restarts from byte zero when the server does not
+honor Range requests.
 
 Latest template distribution:
 
@@ -470,7 +479,8 @@ Configuration:
 
 - edit the `### Start: Modify this block ... ###` section in
   `workflow/gg_input_generation_entrypoint.sh`,
-- keep `workspace/input/input_generation/download_plan.xlsx` as the runtime manifest input file.
+- keep one canonical runtime manifest, or set `GG_INPUT_DOWNLOAD_MANIFEST`
+  explicitly when multiple valid `download_plan*` files must coexist.
 - check resolved rows at `workspace/output/input_generation/download_plan.resolved.tsv`.
 
 Alternative runtime overrides (without editing files) via env vars:

@@ -233,6 +233,7 @@ DOWNLOAD_DIAGNOSTIC_KEYS = (
     "download_jobs",
     "failed_downloads",
     "transient_retries",
+    "range_resumes",
     "corrupt_download_retries",
     "corrupt_cache_recoveries",
     "stale_locks_recovered",

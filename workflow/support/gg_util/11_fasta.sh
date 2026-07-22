@@ -64,7 +64,7 @@ gg_find_fasta_files() {
   if [[ -z "${search_dir}" || ! -d "${search_dir}" ]]; then
     return 0
   fi
-  find "${search_dir}" -maxdepth "${maxdepth}" -type f ! -name '.*' \
+  find -H "${search_dir}" -maxdepth "${maxdepth}" -type f ! -name '.*' \
   \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) \
   | sort
 }
@@ -76,7 +76,7 @@ gg_find_file_basenames() {
   if [[ -z "${search_dir}" || ! -d "${search_dir}" ]]; then
     return 0
   fi
-  find "${search_dir}" -maxdepth "${maxdepth}" -type f ! -name '.*' -name "${name_pattern}" \
+  find -H "${search_dir}" -maxdepth "${maxdepth}" -type f ! -name '.*' -name "${name_pattern}" \
   | awk -F'/' '{print $NF}' \
   | sort
 }

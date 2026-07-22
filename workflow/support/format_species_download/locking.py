@@ -2,12 +2,15 @@
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import tarfile
 import time
 import zipfile
+from http.client import IncompleteRead
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import unquote, urlparse
 from urllib.request import Request
 
@@ -34,6 +37,8 @@ from .local import (
 
 RAR4_SIGNATURE = b"Rar!\x1a\x07\x00"
 RAR5_SIGNATURE = b"Rar!\x1a\x07\x01\x00"
+CONTENT_RANGE_PATTERN = re.compile(r"^bytes\s+([0-9]+)-([0-9]+)/([0-9]+|[*])$", re.IGNORECASE)
+UNSATISFIED_CONTENT_RANGE_PATTERN = re.compile(r"^bytes\s+[*]/([0-9]+)$", re.IGNORECASE)
 
 
 def is_rar_archive(path):
@@ -130,6 +135,137 @@ def sleep_before_download_retry(attempt, base_seconds):
         time.sleep(delay)
 
 
+def partial_download_paths(target):
+    partial_path = Path(str(target) + ".part")
+    url_hash_path = Path(str(partial_path) + ".urlsha256")
+    return partial_path, url_hash_path
+
+
+def discard_partial_download(partial_path, url_hash_path):
+    for path in (partial_path, url_hash_path):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def prepare_partial_download(target, url, overwrite):
+    partial_path, url_hash_path = partial_download_paths(target)
+    expected_url_hash = hashlib.sha256(str(url).encode("utf-8")).hexdigest()
+    if overwrite:
+        discard_partial_download(partial_path, url_hash_path)
+    elif partial_path.exists():
+        try:
+            stored_url_hash = url_hash_path.read_text(encoding="utf-8").strip()
+        except (FileNotFoundError, OSError):
+            stored_url_hash = ""
+        if stored_url_hash != expected_url_hash:
+            discard_partial_download(partial_path, url_hash_path)
+    elif url_hash_path.exists():
+        discard_partial_download(partial_path, url_hash_path)
+    url_hash_path.write_text(expected_url_hash + "\n", encoding="utf-8")
+    return partial_path, url_hash_path
+
+
+def parse_content_range(value):
+    match = CONTENT_RANGE_PATTERN.match(str(value or "").strip())
+    if match is None:
+        return None, None
+    start = int(match.group(1))
+    total_text = match.group(3)
+    total = None if total_text == "*" else int(total_text)
+    return start, total
+
+
+def parse_unsatisfied_content_range_total(value):
+    match = UNSATISFIED_CONTENT_RANGE_PATTERN.match(str(value or "").strip())
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def response_status_code(response):
+    status = getattr(response, "status", None)
+    if status is None:
+        status = response.getcode()
+    try:
+        return int(status)
+    except (TypeError, ValueError):
+        return 0
+
+
+def response_content_length(response):
+    raw = response.headers.get("Content-Length")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_context):
+    resume_from = partial_path.stat().st_size if partial_path.exists() else 0
+    request_headers = dict(headers or {})
+    if resume_from > 0:
+        request_headers["Range"] = "bytes={}-".format(resume_from)
+    request = Request(url, headers=request_headers)
+    try:
+        response_context = urlopen(request, timeout=timeout)
+    except HTTPError as exc:
+        if int(getattr(exc, "code", 0)) == 416 and resume_from > 0:
+            total = parse_unsatisfied_content_range_total(exc.headers.get("Content-Range"))
+            if total is not None and total == resume_from:
+                return
+        raise
+
+    with response_context as response:
+        status = response_status_code(response)
+        content_range_start, content_range_total = parse_content_range(response.headers.get("Content-Range"))
+        append_response = resume_from > 0 and status == 206 and content_range_start == resume_from
+        if append_response:
+            warnings.append("{} resuming partial download at byte {}".format(lock_context, resume_from))
+            file_mode = "ab"
+        else:
+            if resume_from > 0:
+                warnings.append(
+                    "{} server did not honor Range bytes={}-; restarting the download".format(
+                        lock_context,
+                        resume_from,
+                    )
+                )
+            resume_from = 0
+            content_range_total = None
+            file_mode = "wb"
+
+        expected_response_bytes = response_content_length(response)
+        response_bytes = 0
+        with open(partial_path, file_mode) as out:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+                response_bytes += len(chunk)
+
+        if expected_response_bytes is not None and response_bytes != expected_response_bytes:
+            raise IncompleteRead(b"", max(0, expected_response_bytes - response_bytes))
+        final_size = partial_path.stat().st_size
+        if content_range_total is not None and final_size != content_range_total:
+            raise IncompleteRead(b"", max(0, content_range_total - final_size))
+
+
+def finalize_partial_download(partial_path, url_hash_path, destination):
+    partial_path.replace(destination)
+    try:
+        url_hash_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def empty_download_diagnostics():
     return {key: 0 for key in DOWNLOAD_DIAGNOSTIC_KEYS}
 
@@ -152,7 +288,7 @@ def scan_download_cache_diagnostics(download_root):
             except OSError:
                 continue
             name = path.name
-            if ".tmp." in name:
+            if ".tmp." in name or name.endswith(".part"):
                 counts["partial_tmp"] += 1
             if ".corrupt." in name:
                 counts["corrupt"] += 1
@@ -179,6 +315,8 @@ def summarize_download_diagnostics(
         text = str(warning or "").lower()
         if "failed transiently; retrying" in text:
             diagnostics["transient_retries"] += 1
+        if "resuming partial download at byte" in text:
+            diagnostics["range_resumes"] += 1
         if "downloaded corrupt gzip" in text and "retrying" in text:
             diagnostics["corrupt_download_retries"] += 1
         if "found corrupt gzip cache" in text:
@@ -199,7 +337,7 @@ def format_download_diagnostics_line(diagnostics):
         "cache_final partial_tmp={cache_final_partial_tmp},corrupt={cache_final_corrupt},locks={cache_final_locks}; "
         "download_jobs={download_jobs}; "
         "failed_downloads={failed_downloads}; "
-        "retries transient={transient_retries},corrupt_gzip={corrupt_download_retries}; "
+        "retries transient={transient_retries},corrupt_gzip={corrupt_download_retries},range_resumes={range_resumes}; "
         "corrupt_cache_recoveries={corrupt_cache_recoveries}; "
         "stale_locks recovered={stale_locks_recovered},waits={lock_waits}"
     ).format(**values)
@@ -267,7 +405,6 @@ def download_url_to_file(
         request_headers["User-Agent"] = "genegalleon-input-generation"
     archive_member_text = str(archive_member or "").strip()
     archive_cache_path = None
-    archive_tmp = None
     if archive_member_text == "":
         lock_path = Path(str(destination) + ".lock")
     else:
@@ -292,20 +429,23 @@ def download_url_to_file(
         attempts = resolve_download_attempts()
         retry_base_seconds = resolve_download_retry_base_seconds()
         if archive_member_text == "":
+            partial_path, partial_url_hash_path = prepare_partial_download(destination, url, overwrite)
             last_validation_error = None
             for attempt in range(1, attempts + 1):
                 try:
-                    request = Request(url, headers=request_headers)
-                    with urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
-                        while True:
-                            chunk = response.read(1024 * 1024)
-                            if not chunk:
-                                break
-                            out.write(chunk)
-                    tmp.replace(destination)
+                    download_url_to_partial(
+                        url,
+                        partial_path,
+                        request_headers,
+                        timeout,
+                        warnings,
+                        lock_context,
+                    )
+                    partial_path.replace(destination)
                     validation_error = gzip_integrity_error(destination)
                     if validation_error is None:
                         last_validation_error = None
+                        discard_partial_download(partial_path, partial_url_hash_path)
                         break
                     last_validation_error = validation_error
                     quarantined = quarantine_existing_file(destination, warnings, lock_context, validation_error)
@@ -323,13 +463,8 @@ def download_url_to_file(
                         continue
                     raise OSError("downloaded gzip failed integrity check: {}".format(validation_error))
                 except Exception as exc:
-                    try:
-                        tmp.unlink()
-                    except FileNotFoundError:
-                        pass
-                    except OSError:
-                        pass
-                    if attempt < attempts and is_transient_network_error(exc):
+                    transient_error = is_transient_network_error(exc)
+                    if attempt < attempts and transient_error:
                         warnings.append(
                             "{} download attempt {}/{} failed transiently; retrying ({})".format(
                                 lock_context,
@@ -340,31 +475,37 @@ def download_url_to_file(
                         )
                         sleep_before_download_retry(attempt, retry_base_seconds)
                         continue
+                    if not transient_error:
+                        discard_partial_download(partial_path, partial_url_hash_path)
                     raise
             if last_validation_error is not None:
                 raise OSError("downloaded gzip failed integrity check: {}".format(last_validation_error))
         else:
-            archive_tmp = Path(str(archive_cache_path) + ".tmp.{}".format(os.getpid()))
             if overwrite or not archive_cache_path.exists() or archive_cache_path.stat().st_size == 0:
+                archive_partial_path, archive_url_hash_path = prepare_partial_download(
+                    archive_cache_path,
+                    url,
+                    overwrite,
+                )
                 for attempt in range(1, attempts + 1):
                     try:
-                        request = Request(url, headers=request_headers)
-                        with urlopen(request, timeout=timeout) as response, open(archive_tmp, "wb") as out:
-                            while True:
-                                chunk = response.read(1024 * 1024)
-                                if not chunk:
-                                    break
-                                out.write(chunk)
-                        archive_tmp.replace(archive_cache_path)
+                        download_url_to_partial(
+                            url,
+                            archive_partial_path,
+                            request_headers,
+                            timeout,
+                            warnings,
+                            lock_context,
+                        )
+                        finalize_partial_download(
+                            archive_partial_path,
+                            archive_url_hash_path,
+                            archive_cache_path,
+                        )
                         break
                     except Exception as exc:
-                        try:
-                            archive_tmp.unlink()
-                        except FileNotFoundError:
-                            pass
-                        except OSError:
-                            pass
-                        if attempt < attempts and is_transient_network_error(exc):
+                        transient_error = is_transient_network_error(exc)
+                        if attempt < attempts and transient_error:
                             warnings.append(
                                 "{} archive download attempt {}/{} failed transiently; retrying ({})".format(
                                     lock_context,
@@ -375,6 +516,8 @@ def download_url_to_file(
                             )
                             sleep_before_download_retry(attempt, retry_base_seconds)
                             continue
+                        if not transient_error:
+                            discard_partial_download(archive_partial_path, archive_url_hash_path)
                         raise
             if zipfile.is_zipfile(archive_cache_path):
                 with zipfile.ZipFile(archive_cache_path) as archive:
@@ -403,13 +546,6 @@ def download_url_to_file(
             pass
         except OSError:
             pass
-        if archive_tmp is not None:
-            try:
-                archive_tmp.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError:
-                pass
         raise
     finally:
         release_download_lock(lock_path, heartbeat_state)

@@ -83,6 +83,41 @@ def _write_default_download_manifest(workspace: Path, input_dir: Path) -> Path:
     return manifest_path
 
 
+def _write_tsv_download_manifest(workspace: Path, input_dir: Path, name: str = "download_plan_v64.tsv") -> Path:
+    manifest_path = workspace / "input" / "input_generation" / name
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = (
+        "provider",
+        "id",
+        "species_key",
+        "cds_url",
+        "gff_url",
+        "genome_url",
+        "cds_filename",
+        "gff_filename",
+        "genome_filename",
+    )
+    with manifest_path.open("wt", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+            species_dir = input_dir / species
+            writer.writerow(
+                {
+                    "provider": "direct",
+                    "id": f"{species.lower()}_direct",
+                    "species_key": species,
+                    "cds_url": _to_file_url(species_dir / f"{species}.cds.fa"),
+                    "gff_url": _to_file_url(species_dir / f"{species}.gff"),
+                    "genome_url": _to_file_url(species_dir / f"{species}.genome.fa"),
+                    "cds_filename": f"{species}.direct.cds.fa",
+                    "gff_filename": f"{species}.direct.gff",
+                    "genome_filename": f"{species}.direct.genome.fa",
+                }
+            )
+    return manifest_path
+
+
 def _write_minimal_ete_taxonomy_db(workspace: Path) -> None:
     db_path = workspace / "downloads" / "ete_taxonomy" / "taxa.sqlite"
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -546,6 +581,47 @@ def test_gg_input_generation_single_mode_auto_selects_default_manifest(tmp_path:
     assert runs[-1]["stage_species_busco_status"] == "ok"
     assert runs[-1]["stage_multispecies_summary_status"] == "ok"
     assert runs[-1]["download_manifest"] == str(manifest_path)
+
+
+def test_gg_input_generation_auto_selects_single_versioned_tsv_manifest(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "versioned_manifest_workspace"
+    manifest_path = _write_tsv_download_manifest(workspace, input_dir)
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    completed = _run_core(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="single")
+
+    assert f"Auto-selected download_manifest: {manifest_path}" in completed.stdout
+    output_root = workspace / "output" / "input_generation"
+    runs = _read_tsv_rows(output_root / "gg_input_generation_runs.tsv")
+    assert runs[-1]["download_manifest"] == str(manifest_path)
+
+
+def test_gg_input_generation_rejects_ambiguous_auto_discovered_manifests(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "ambiguous_manifest_workspace"
+    xlsx_manifest = _write_default_download_manifest(workspace, input_dir)
+    tsv_manifest = _write_tsv_download_manifest(workspace, input_dir)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    env = _core_env(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="single")
+
+    completed = subprocess.run(
+        ["bash", str(CORE_PATH)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+
+    assert completed.returncode == 1
+    assert "Multiple input-generation download manifests were discovered" in completed.stdout
+    assert str(xlsx_manifest) in completed.stdout
+    assert str(tsv_manifest) in completed.stdout
+    assert "GG_INPUT_DOWNLOAD_MANIFEST" in completed.stdout
 
 
 def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_path: Path):

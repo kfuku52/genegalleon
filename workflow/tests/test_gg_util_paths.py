@@ -1216,3 +1216,24 @@ def test_gg_find_fasta_files_excludes_hidden_files(tmp_path):
     out_lines = [line for line in completed.stdout.splitlines() if line.strip()]
     assert str(visible) in out_lines
     assert str(hidden) not in out_lines
+
+
+def test_gg_find_helpers_follow_symlinked_search_root(tmp_path):
+    fasta_dir = tmp_path / "fasta"
+    fasta_dir.mkdir()
+    visible = fasta_dir / "Arabidopsis_thaliana.fa"
+    visible.write_text(">a\nATG\n")
+    linked_dir = tmp_path / "linked_fasta"
+    linked_dir.symlink_to(fasta_dir, target_is_directory=True)
+
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"gg_find_fasta_files {shlex.quote(str(linked_dir))} 1; "
+        f"gg_find_file_basenames {shlex.quote(str(linked_dir))} '*.fa' 1"
+    )
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    out_lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    assert str(linked_dir / visible.name) in out_lines
+    assert visible.name in out_lines
