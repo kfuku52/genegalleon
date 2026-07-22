@@ -359,6 +359,9 @@ amalgkit_oarfish_options
 amalgkit_oarfish_seq_tech
 amalgkit_quant_backend
 amalgkit_rrna_filter
+amalgkit_rrna_filter_chunk_spots
+amalgkit_rrna_filter_jobs
+amalgkit_rrna_filter_memory_limit
 amalgkit_sra_strategy_query
 assembly_cpu_offset
 assembly_method

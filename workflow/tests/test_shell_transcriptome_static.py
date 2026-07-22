@@ -197,21 +197,31 @@ def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_fa
     assert 'dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)' in body
 
 
-def test_transcriptome_core_detects_fatal_getfastq_logs_and_retries_without_rrna():
+def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
-    cleanup_body = _function_body(text, "cleanup_partial_getfastq_outputs")
+    discard_body = _function_body(text, "discard_partial_getfastq_outputs")
+    stage_body = _function_body(text, "stage_getfastq_outputs_for_resume")
     detect_body = _function_body(text, "amalgkit_getfastq_log_has_fatal_message")
     attempt_body = _function_body(text, "run_amalgkit_getfastq_attempt")
 
-    assert 'rm -rf -- "${dir_tmp}/getfastq"' in cleanup_body
-    assert 'rm -rf -- "${dir_amalgkit_getfastq_sp}"' in cleanup_body
+    assert 'rm -rf -- "${dir_tmp}/getfastq"' in discard_body
+    assert 'rm -rf -- "${dir_amalgkit_getfastq_sp}"' in discard_body
+    assert 'mv -- "${dir_amalgkit_getfastq_sp}" "${dir_tmp}/getfastq"' in stage_body
+    assert "discard_partial_getfastq_outputs" not in attempt_body
     assert "grep -Eq '^ERROR: '" in detect_body
     assert "Detected fatal message in amalgkit getfastq log despite a zero exit code" in attempt_body
     assert '--download_lock_dir "${dir_amalgkit_download_lock_dir}"' in attempt_body
     assert '--ncbi_download_max_concurrency "${amalgkit_ncbi_download_max_concurrency}"' in attempt_body
     assert '--aws_download_max_concurrency "${amalgkit_aws_download_max_concurrency}"' in attempt_body
     assert '--gcp_download_max_concurrency "${amalgkit_gcp_download_max_concurrency}"' in attempt_body
+    assert '--rrna_filter_jobs "${amalgkit_rrna_filter_jobs}"' in attempt_body
+    assert '--rrna_filter_chunk_spots "${amalgkit_rrna_filter_chunk_spots}"' in attempt_body
+    assert '--rrna_filter_memory_limit "${amalgkit_rrna_filter_memory_limit}"' in attempt_body
+    assert '"${dir_tmp}/getfastq/getfastq_completion.json"' in attempt_body
+    assert "has_resumable_getfastq_run_state" in text
+    assert '(${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1)' not in text
+    assert 'if [[ ${run_amalgkit_getfastq} -eq 1 && $(is_fastq_requiring_downstream_analysis_done) -eq 0 ]]; then' in text
     assert 'run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"' in text
     assert "Exiting without fallback download so partial outputs do not reach downstream steps." in text
 
@@ -315,6 +325,22 @@ def test_transcriptome_entrypoint_exposes_amalgkit_ncbi_concurrency_limits():
     assert "amalgkit_gcp_download_max_concurrency" in config_vars
     assert "amalgkit_metadata_max_concurrent_jobs" not in config_vars
     assert "amalgkit_getfastq_max_concurrent_jobs" not in config_vars
+
+
+def test_transcriptome_entrypoint_exposes_amalgkit_rrna_resource_limits():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
+    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+
+    assert 'amalgkit_rrna_filter_jobs="${amalgkit_rrna_filter_jobs:-1}"' in entrypoint
+    assert 'amalgkit_rrna_filter_chunk_spots="${amalgkit_rrna_filter_chunk_spots:-5000000}"' in entrypoint
+    assert 'amalgkit_rrna_filter_memory_limit="${amalgkit_rrna_filter_memory_limit:-32G}"' in entrypoint
+    assert '--rrna_filter_jobs "${amalgkit_rrna_filter_jobs}"' in core
+    assert '--rrna_filter_chunk_spots "${amalgkit_rrna_filter_chunk_spots}"' in core
+    assert '--rrna_filter_memory_limit "${amalgkit_rrna_filter_memory_limit}"' in core
+    assert "amalgkit_rrna_filter_jobs" in config_vars
+    assert "amalgkit_rrna_filter_chunk_spots" in config_vars
+    assert "amalgkit_rrna_filter_memory_limit" in config_vars
 
 
 def test_transcriptome_core_requires_taxid_for_contam_filter():
@@ -514,7 +540,8 @@ def test_transcriptome_core_uses_rerun_safe_directory_replacement_for_staged_out
     assert 'mv_out ./quant/* "${dir_amalgkit_quant}/${sp_ub}"' not in text
     assert 'mv_out "./merge/${sp_ub}" "$(dirname "$(dirname "${file_amalgkit_merge_tpm}")")"' not in text
     assert 'mv_out_replace_dir "./merge/${sp_ub}" "$(dirname "${file_amalgkit_merge_tpm}")"' not in text
-    assert 'getfastq_outputs=("${dir_tmp}"/getfastq/*)' in text
+    assert "stage_getfastq_outputs_for_resume" in text
+    assert "validate_amalgkit_getfastq_completion_manifest" in text
     assert 'mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"' in text
     assert "quant_outputs=(./quant/*)" in text
     assert 'mv_out_replace_dir "./quant" "${dir_amalgkit_quant}/${sp_ub}"' in text

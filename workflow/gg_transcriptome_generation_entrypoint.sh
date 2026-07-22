@@ -106,6 +106,9 @@ run_multispecies_summary=1 # Multi-species summary.
 
 # Input-download parameters
 amalgkit_rrna_filter="yes" # read-level rRNA removal in amalgkit getfastq. Observed to finish for ~4.2 Gbp total / ~14 million reads within a 350G job before contamination filtering; exact peak RAM and elapsed time for this step alone were not logged.
+amalgkit_rrna_filter_jobs="${amalgkit_rrna_filter_jobs:-1}" # Maximum number of runs searched for rRNA concurrently. One run still uses all GG_TASK_CPUS internally.
+amalgkit_rrna_filter_chunk_spots="${amalgkit_rrna_filter_chunk_spots:-5000000}" # Maximum spots per synchronized MMseqs rRNA query chunk.
+amalgkit_rrna_filter_memory_limit="${amalgkit_rrna_filter_memory_limit:-32G}" # MMseqs --split-memory-limit used for SILVA index creation and rRNA searches.
 amalgkit_contam_filter="no" # read-level contamination removal in amalgkit getfastq. Rank follows contamination_removal_rank below. Setting yes may require >350G RAM for large private FASTQ inputs (for example, ~4.2 Gbp total, ~14 million reads).
 amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency:-20}" # Maximum concurrent NCBI Entrez metadata requests across array tasks. Forwarded to amalgkit metadata/getfastq --ncbi_metadata_max_concurrency. Set 0 or auto to disable throttling.
 amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}" # Maximum concurrent NCBI cloud-object downloads across array tasks. Forwarded to amalgkit getfastq --ncbi_download_max_concurrency. Set 0 or auto to disable throttling.

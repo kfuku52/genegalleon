@@ -793,23 +793,109 @@ run_amalgkit_metadata_query() {
   "${metadata_cmd[@]}"
 }
 
-cleanup_partial_getfastq_outputs() {
+discard_partial_getfastq_outputs() {
   rm -rf -- "${dir_tmp}/getfastq"
   rm -rf -- "${dir_amalgkit_getfastq_sp}"
   ensure_dir "${dir_amalgkit_getfastq_sp}"
 }
 
+stage_getfastq_outputs_for_resume() {
+  local published_entries=()
+  local published_entry=""
+  local resume_entry=""
+
+  if [[ ! -d "${dir_tmp}/getfastq" ]]; then
+    if [[ -d "${dir_amalgkit_getfastq_sp}" ]]; then
+      shopt -s nullglob dotglob
+      published_entries=("${dir_amalgkit_getfastq_sp}"/*)
+      shopt -u nullglob dotglob
+      if [[ ${#published_entries[@]} -gt 0 ]]; then
+        ensure_parent_dir "${dir_tmp}/getfastq"
+        mv -- "${dir_amalgkit_getfastq_sp}" "${dir_tmp}/getfastq"
+        echo "Moved published amalgkit getfastq outputs into the resumable work directory."
+        return 0
+      fi
+    fi
+    ensure_dir "${dir_tmp}/getfastq"
+  fi
+
+  [[ -d "${dir_amalgkit_getfastq_sp}" ]] || return 0
+  shopt -s nullglob dotglob
+  published_entries=("${dir_amalgkit_getfastq_sp}"/*)
+  shopt -u nullglob dotglob
+  for published_entry in "${published_entries[@]}"; do
+    resume_entry="${dir_tmp}/getfastq/$(basename "${published_entry}")"
+    if [[ -e "${resume_entry}" || -L "${resume_entry}" ]]; then
+      echo "Keeping newer resumable getfastq entry and leaving the published conflict in place: ${resume_entry}"
+      continue
+    fi
+    mv -- "${published_entry}" "${resume_entry}"
+  done
+}
+
+has_resumable_getfastq_run_state() {
+  [[ -d "${dir_tmp}/getfastq" ]] || return 1
+  [[ -n "$(find "${dir_tmp}/getfastq" -mindepth 2 -maxdepth 2 -type f -name 'getfastq_run_state.json' -print -quit 2> /dev/null)" ]]
+}
+
+validate_amalgkit_getfastq_completion_manifest() {
+  local completion_manifest=$1
+  local metadata_tsv=$2
+
+  python - "${completion_manifest}" "${metadata_tsv}" <<'PY'
+import csv
+import json
+import pathlib
+import sys
+
+manifest_path = pathlib.Path(sys.argv[1])
+metadata_path = pathlib.Path(sys.argv[2])
+if not manifest_path.is_file() or manifest_path.stat().st_size == 0:
+    raise SystemExit("Missing or empty amalgkit getfastq completion manifest: {}".format(manifest_path))
+
+with manifest_path.open("rt", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+if manifest.get("status") != "complete":
+    raise SystemExit("amalgkit getfastq completion manifest is not complete: {}".format(manifest_path))
+
+with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
+    reader = csv.DictReader(handle, delimiter="\t")
+    if "run" not in (reader.fieldnames or []):
+        raise SystemExit("Metadata lacks the run column: {}".format(metadata_path))
+    expected_runs = [str(row.get("run", "") or "").strip() for row in reader]
+expected_runs = [run for run in expected_runs if run]
+if len(expected_runs) != len(set(expected_runs)):
+    raise SystemExit("Metadata contains duplicate run IDs: {}".format(metadata_path))
+
+manifest_entries = manifest.get("runs")
+if not isinstance(manifest_entries, list):
+    raise SystemExit("Completion manifest lacks a runs list: {}".format(manifest_path))
+manifest_runs = [str(entry.get("run", "") or "").strip() for entry in manifest_entries if isinstance(entry, dict)]
+if manifest.get("run_count") != len(manifest_runs):
+    raise SystemExit("Completion manifest run_count does not match its runs list: {}".format(manifest_path))
+if sorted(manifest_runs) != sorted(expected_runs):
+    raise SystemExit(
+        "Completion manifest run IDs differ from metadata. expected={} observed={}".format(
+            ",".join(sorted(expected_runs)),
+            ",".join(sorted(manifest_runs)),
+        )
+    )
+PY
+}
+
 clear_getfastq_safely_removed_markers() {
   local safely_removed_files=()
+  local marker_root=""
   if [[ -e "${file_amalgkit_getfastq_legacy_safely_removed_flag}" ]]; then
     rm -f -- "${file_amalgkit_getfastq_legacy_safely_removed_flag}"
   fi
-  if [[ -d "${dir_amalgkit_getfastq_sp}" ]]; then
-    mapfile -t safely_removed_files < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.safely_removed" | sort)
+  for marker_root in "${dir_amalgkit_getfastq_sp}" "${dir_tmp}/getfastq"; do
+    [[ -d "${marker_root}" ]] || continue
+    mapfile -t safely_removed_files < <(find "${marker_root}" -type f -name "*.safely_removed" | sort)
     if [[ ${#safely_removed_files[@]} -gt 0 ]]; then
       rm -f -- "${safely_removed_files[@]}"
     fi
-  fi
+  done
 }
 
 safe_delete_getfastq_fastq_files() {
@@ -842,7 +928,6 @@ run_amalgkit_getfastq_attempt() {
   local rrna_filter_value=$1
   local attempt_label=$2
   local log_file="${dir_tmp}/amalgkit_getfastq.${attempt_label}.log"
-  local getfastq_outputs=()
   local getfastq_cmd=()
 
   rm -f -- "${log_file}"
@@ -851,12 +936,16 @@ run_amalgkit_getfastq_attempt() {
   echo "amalgkit getfastq NCBI download max concurrency: ${amalgkit_ncbi_download_max_concurrency}"
   echo "amalgkit getfastq AWS download max concurrency: ${amalgkit_aws_download_max_concurrency}"
   echo "amalgkit getfastq GCP download max concurrency: ${amalgkit_gcp_download_max_concurrency}"
+  echo "amalgkit getfastq rRNA jobs/chunk/memory: ${amalgkit_rrna_filter_jobs}/${amalgkit_rrna_filter_chunk_spots}/${amalgkit_rrna_filter_memory_limit}"
   require_amalgkit_supported_options "getfastq" \
     "--download_lock_dir" \
     "--ncbi_metadata_max_concurrency" \
     "--ncbi_download_max_concurrency" \
     "--aws_download_max_concurrency" \
-    "--gcp_download_max_concurrency"
+    "--gcp_download_max_concurrency" \
+    "--rrna_filter_jobs" \
+    "--rrna_filter_chunk_spots" \
+    "--rrna_filter_memory_limit"
 
   getfastq_cmd=(
     amalgkit getfastq
@@ -870,6 +959,9 @@ run_amalgkit_getfastq_attempt() {
     --aws_download_max_concurrency "${amalgkit_aws_download_max_concurrency}"
     --gcp_download_max_concurrency "${amalgkit_gcp_download_max_concurrency}"
     --rrna_filter "${rrna_filter_value}"
+    --rrna_filter_jobs "${amalgkit_rrna_filter_jobs}"
+    --rrna_filter_chunk_spots "${amalgkit_rrna_filter_chunk_spots}"
+    --rrna_filter_memory_limit "${amalgkit_rrna_filter_memory_limit}"
     --contam_filter "${amalgkit_contam_filter}"
     --contam_filter_rank "${contamination_removal_rank_for_amalgkit}"
     --contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"
@@ -886,17 +978,15 @@ run_amalgkit_getfastq_attempt() {
     if amalgkit_getfastq_log_has_fatal_message "${log_file}"; then
       echo "Detected fatal message in amalgkit getfastq log despite a zero exit code: ${log_file}"
       grep -E '^ERROR: ' "${log_file}" || true
-      cleanup_partial_getfastq_outputs
       return 2
     fi
     echo "amalgkit getfastq safely finished."
     echo "amalgkit getfastq log: ${log_file}"
-    shopt -s nullglob
-    getfastq_outputs=("${dir_tmp}"/getfastq/*)
-    shopt -u nullglob
-    if [[ ${#getfastq_outputs[@]} -eq 0 ]]; then
-      echo "amalgkit getfastq finished but no output files were found under: ${dir_tmp}/getfastq"
-      cleanup_partial_getfastq_outputs
+    if ! validate_amalgkit_getfastq_completion_manifest \
+      "${dir_tmp}/getfastq/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+    then
+      echo "amalgkit getfastq finished without a valid all-run completion manifest."
       return 1
     fi
     mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"
@@ -910,11 +1000,9 @@ run_amalgkit_getfastq_attempt() {
   if amalgkit_getfastq_log_has_fatal_message "${log_file}"; then
     echo "Detected fatal message in amalgkit getfastq log."
     grep -E '^ERROR: ' "${log_file}" || true
-    cleanup_partial_getfastq_outputs
     return 2
   fi
   tail -n 50 "${log_file}" || true
-  cleanup_partial_getfastq_outputs
   return 1
 }
 
@@ -1222,12 +1310,15 @@ run_amalgkit_getfastq_or_fallback() {
       fi
     fi
     echo "amalgkit getfastq encountered a fatal error${fatal_retry_suffix}. Exiting without fallback download so partial outputs do not reach downstream steps."
-    cleanup_partial_getfastq_outputs
     return 1
   fi
 
+  if has_resumable_getfastq_run_state; then
+    echo "amalgkit getfastq left validated run-level resume state. Preserving it and exiting for a resumable retry instead of replacing it with unfiltered original FASTQ files."
+    return 1
+  fi
   echo "amalgkit getfastq did not safely finish. Attempting fallback download of public original FASTQ files."
-  cleanup_partial_getfastq_outputs
+  discard_partial_getfastq_outputs
   if download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_amalgkit_getfastq_sp}"; then
     echo "Fallback download of public original FASTQ files succeeded."
     return 0
@@ -1429,6 +1520,9 @@ dir_tmp="${dir_transcriptome_assembly_output}/tmp/${GG_ARRAY_TASK_ID}_${sp_ub}"
 dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
 dir_amalgkit_download_dir="${gg_workspace_downloads_dir}"
 dir_amalgkit_download_lock_dir="${dir_amalgkit_download_dir}/locks"
+amalgkit_rrna_filter_jobs="${amalgkit_rrna_filter_jobs:-1}"
+amalgkit_rrna_filter_chunk_spots="${amalgkit_rrna_filter_chunk_spots:-5000000}"
+amalgkit_rrna_filter_memory_limit="${amalgkit_rrna_filter_memory_limit:-32G}"
 dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"
 file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"
 file_generated_amalgkit_metadata="${dir_generated_amalgkit_metadata}/${sp_ub}_metadata.tsv"
@@ -1568,11 +1662,12 @@ if [[ -d "${dir_amalgkit_getfastq_sp}" ]]; then
 fi
 echo "Number of amalgkit getfastq fastq files: ${#amalgkit_fastq_files[@]}"
 echo "is_fastq_requiring_downstream_analysis_done: $(is_fastq_requiring_downstream_analysis_done)"
-if [[ (${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1) && $(is_fastq_requiring_downstream_analysis_done) -eq 0 ]]; then
+if [[ ${run_amalgkit_getfastq} -eq 1 && $(is_fastq_requiring_downstream_analysis_done) -eq 0 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_amalgkit_getfastq_sp}"
 
   clear_getfastq_safely_removed_markers
+  stage_getfastq_outputs_for_resume
 
   if [[ "${amalgkit_contam_filter}" == "yes" ]]; then
     if ! awk -F '\t' 'NR==1 {found=0; for (i=1; i<=NF; i++) if ($i=="taxid") found=1; exit(found ? 0 : 1)}' "${file_amalgkit_metadata}"; then
