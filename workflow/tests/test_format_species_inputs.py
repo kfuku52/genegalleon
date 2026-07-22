@@ -220,26 +220,68 @@ def test_format_coge_delimited_cds_headers_map_to_gff_genes(tmp_path):
     assert "[Sarracenia_purpurea] CDS-to-GFF mapping OK: 1/1 IDs" in mapping.stdout
 
 
-def test_local_gff_genome_lcl_prefix_mismatch_is_reported_during_discovery(tmp_path):
-    module = load_module()
+def test_local_gff_genome_lcl_prefix_is_resolved_when_deriving_cds(tmp_path):
     input_dir = tmp_path / "Local" / "species_wise_original"
     species_dir = input_dir / "Gilia_yorkii"
     species_dir.mkdir(parents=True)
-    (species_dir / "Gilia_yorkii.genome.fa").write_text(">lcl|Gy1\nATGAAATTT\n", encoding="utf-8")
+    (species_dir / "Gilia_yorkii.genome.fa").write_text(
+        ">lcl|Gy1\nATGAAATTT\n>lcl|Gy2\nATGCCCTTT\n",
+        encoding="utf-8",
+    )
     (species_dir / "Gilia_yorkii.gff").write_text(
         "Gy1\tCoGe\tgene\t1\t9\t.\t+\t.\tID=GY000001\n"
         "Gy1\tCoGe\tmRNA\t1\t9\t.\t+\t.\tID=GY000001.mRNA1;Parent=GY000001\n"
-        "Gy1\tCoGe\tCDS\t1\t9\t.\t+\t0\tID=GY000001-RA;Parent=GY000001.mRNA1\n",
+        "Gy1\tCoGe\tCDS\t1\t9\t.\t+\t0\tID=GY000001-RA;Parent=GY000001.mRNA1\n"
+        "Gy2\tCoGe\tgene\t1\t9\t.\t+\t.\tID=GY000002\n"
+        "Gy2\tCoGe\tmRNA\t1\t9\t.\t+\t.\tID=GY000002.mRNA1;Parent=GY000002\n"
+        "Gy2\tCoGe\tCDS\t1\t9\t.\t+\t0\tID=GY000002-RA;Parent=GY000002.mRNA1\n",
         encoding="utf-8",
     )
 
-    tasks, warnings, errors = module.discover_tasks("local", input_dir)
+    out_cds = tmp_path / "species_cds"
+    completed = run_script(
+        "--provider",
+        "local",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(tmp_path / "species_gff"),
+        "--species-genome-dir",
+        str(tmp_path / "species_genome"),
+    )
 
-    assert tasks == []
-    assert warnings == []
-    assert len(errors) == 1
-    assert "genome FASTA sequence ID 'lcl|Gy1' does not match GFF seqid 'Gy1'" in errors[0]
-    assert "provide a matching source GFF/FASTA bundle" in errors[0]
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    formatted_cds = next(out_cds.glob("*.fa.gz"))
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert ">Gilia_yorkii_GY000001" in text
+    assert ">Gilia_yorkii_GY000002" in text
+    assert "ATGAAATTT" in text
+    assert "ATGCCCTTT" in text
+
+
+def test_gff_genome_seqid_map_rejects_many_to_one_lcl_alias():
+    module = load_module()
+
+    with pytest.raises(ValueError, match="both resolve to FASTA sequence ID 'lcl\\|Gy1'"):
+        module.build_gff_genome_seqid_map(
+            {"lcl|Gy1": "ATGAAATTT"},
+            {"Gy1", "lcl|Gy1"},
+        )
+
+
+def test_gff_genome_seqid_map_reports_unresolved_seqids():
+    module = load_module()
+
+    seqid_map, missing_seqids = module.build_gff_genome_seqid_map(
+        {"lcl|Gy1": "ATGAAATTT", "Gy2": "ATGCCCTTT"},
+        {"Gy1", "Gy2", "Gy3"},
+    )
+
+    assert seqid_map == {"Gy1": "lcl|Gy1", "Gy2": "Gy2"}
+    assert missing_seqids == ("Gy3",)
 
 
 def test_direct_ncbi_like_cds_header_uses_locus_tag_for_gene_grouping():
@@ -267,7 +309,7 @@ def test_direct_species_discovery_treats_lone_chr_fasta_as_genome_when_gff_exist
     input_dir = tmp_path / "Direct" / "species_wise_original"
     species_dir = input_dir / "Santalum_album"
     species_dir.mkdir(parents=True)
-    (species_dir / "tanxiang.FINAL.chr.fa").write_text(">Chr01\nATGAAATTT\n", encoding="utf-8")
+    (species_dir / "tanxiang.FINAL.chr.fa").write_text(">lcl|Chr01\nATGAAATTT\n", encoding="utf-8")
     (species_dir / "tanxiang.FINAL.chr_modified.gff").write_text(
         "Chr01\tGnomon\tmRNA\t1\t9\t.\t+\t.\tID=SA1G00001\n"
         "Chr01\tGnomon\tCDS\t1\t9\t.\t+\t0\tID=SA1G00001.cds1;Parent=SA1G00001\n",

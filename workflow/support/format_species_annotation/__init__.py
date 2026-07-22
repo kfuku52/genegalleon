@@ -2,6 +2,7 @@
 
 from .common import (
     build_coge_gff_gene_id_map,
+    build_gff_genome_seqid_map,
     choose_first_gff_attribute,
     collapse_transcript_suffix,
     compute_interval_overlap_bases,
@@ -16,13 +17,10 @@ from .common import (
     extract_phytozome_id,
     extract_provider_id,
     extract_provider_transcript_id,
-    fasta_gff_lcl_prefix_mismatch,
     fasta_headers_overlap_gff_seqids,
     fasta_looks_like_gff_genome,
-    first_fasta_header_id,
     first_token,
     gene_grouping_mode_for_task,
-    gff_has_seqid,
     gff_seqids,
     iter_fasta_records,
     load_genome_sequences,
@@ -96,13 +94,11 @@ from .tasks import (
 
 __all__ = [
     'build_coge_gff_gene_id_map',
+    'build_gff_genome_seqid_map',
     'task_has_usable_source_bundle',
     'gff_seqids',
     'fasta_headers_overlap_gff_seqids',
     'fasta_looks_like_gff_genome',
-    'fasta_gff_lcl_prefix_mismatch',
-    'first_fasta_header_id',
-    'gff_has_seqid',
     'first_token',
     'extract_header_tag_value',
     'extract_ncbi_gene_id_from_header',

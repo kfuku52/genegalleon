@@ -15,6 +15,7 @@ except Exception:  # pragma: no cover - runtime without biopython
 
 
 from .common import (
+    build_gff_genome_seqid_map,
     choose_first_gff_attribute,
     collapse_transcript_suffix,
     first_token,
@@ -374,6 +375,33 @@ def derive_cds_records_from_gff_and_genome(task):
                 )
 
     rescued_gene_tokens = build_rescued_gene_tokens_for_transcripts(task, cds_features_by_transcript)
+    required_gff_seqids = {
+        feature["seqid"]
+        for features in cds_features_by_transcript.values()
+        for feature in features
+        if str(feature.get("seqid", "") or "").strip() != ""
+    }
+    try:
+        genome_seqid_map, missing_seqids = build_gff_genome_seqid_map(
+            genome_sequences,
+            required_gff_seqids,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "Genome FASTA for {} has ambiguous sequence-ID aliases required by {}: {}".format(
+                task.get("species_key", ""),
+                gff_path,
+                exc,
+            )
+        ) from exc
+    if len(missing_seqids) > 0:
+        raise ValueError(
+            "Genome FASTA for {} is missing sequence(s) {} required by {}".format(
+                task.get("species_key", ""),
+                ",".join(missing_seqids[:5]),
+                gff_path,
+            )
+        )
     for transcript_id in sorted(cds_features_by_transcript.keys()):
         features = cds_features_by_transcript[transcript_id]
         if len(features) == 0:
@@ -443,7 +471,8 @@ def derive_cds_records_from_gff_and_genome(task):
             if feature["strand"] != strand:
                 raise ValueError("Mixed-strand CDS features for transcript '{}' in {}".format(transcript_id, gff_path))
             seqid = feature["seqid"]
-            genome_seq = genome_sequences.get(seqid, "")
+            fasta_seqid = genome_seqid_map.get(seqid, seqid)
+            genome_seq = genome_sequences.get(fasta_seqid, "")
             if genome_seq == "":
                 raise ValueError(
                     "Genome FASTA for {} is missing sequence '{}' required by {}".format(

@@ -31,7 +31,6 @@ from .common import (
     extract_ncbi_ensembl_gene_id_from_header,
     extract_ncbi_gene_id_from_header,
     extract_provider_id,
-    fasta_gff_lcl_prefix_mismatch,
     fasta_looks_like_gff_genome,
     iter_fasta_records,
     normalize_output_basename,
@@ -202,21 +201,6 @@ def discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys
         if missing_label != "":
             errors.append("[{}] {}: missing {}".format(provider, species_key, missing_label))
             continue
-        if cds_path is None and gff_path is not None and genome_path is not None:
-            mismatch = fasta_gff_lcl_prefix_mismatch(genome_path, gff_path)
-            if mismatch is not None:
-                fasta_seqid, gff_seqid = mismatch
-                errors.append(
-                    "[{}] {}: genome FASTA sequence ID '{}' does not match GFF seqid '{}'. "
-                    "The FASTA uses a local 'lcl|' prefix that is absent from the GFF; "
-                    "provide a matching source GFF/FASTA bundle.".format(
-                        provider,
-                        species_key,
-                        fasta_seqid,
-                        gff_seqid,
-                    )
-                )
-                continue
         tasks.append(
             {
                 "provider": provider,

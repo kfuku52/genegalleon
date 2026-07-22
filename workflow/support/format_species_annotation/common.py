@@ -60,7 +60,10 @@ def fasta_headers_overlap_gff_seqids(fasta_path, gff_path):
     if len(seqids) == 0:
         return False
     for header, _sequence in iter_fasta_records(fasta_path):
-        if first_token(header) in seqids:
+        fasta_seqid = first_token(header)
+        if fasta_seqid in seqids:
+            return True
+        if fasta_seqid.startswith("lcl|") and fasta_seqid[len("lcl|") :] in seqids:
             return True
     return False
 
@@ -80,39 +83,6 @@ def first_token(text):
     if len(parts) == 0:
         return ""
     return parts[0]
-
-
-def first_fasta_header_id(path):
-    with open_text(path, "rt") as handle:
-        for raw_line in handle:
-            if not raw_line.startswith(">"):
-                continue
-            return first_token(raw_line[1:].strip())
-    return ""
-
-
-def gff_has_seqid(path, expected_seqid):
-    target = str(expected_seqid or "").strip()
-    if target == "":
-        return False
-    with open_text(path, "rt") as handle:
-        for raw_line in handle:
-            if raw_line.startswith("#") or raw_line.strip() == "":
-                continue
-            parts = raw_line.rstrip("\n\r").split("\t", 1)
-            if len(parts) >= 1 and str(parts[0] or "").strip() == target:
-                return True
-    return False
-
-
-def fasta_gff_lcl_prefix_mismatch(fasta_path, gff_path):
-    fasta_seqid = first_fasta_header_id(fasta_path)
-    if not fasta_seqid.startswith("lcl|"):
-        return None
-    stripped_seqid = fasta_seqid[len("lcl|") :]
-    if stripped_seqid == "" or not gff_has_seqid(gff_path, stripped_seqid):
-        return None
-    return fasta_seqid, stripped_seqid
 
 
 def extract_header_tag_value(header, tag):
@@ -300,6 +270,42 @@ def load_genome_sequences(path):
         if full_name != "" and full_name not in sequences:
             sequences[full_name] = seq
     return sequences
+
+
+def build_gff_genome_seqid_map(genome_sequences, required_gff_seqids):
+    """Resolve GFF seqids to exact or uniquely prefixed genome FASTA IDs."""
+    seqid_map = {}
+    missing_seqids = []
+    gff_seqid_by_fasta_seqid = {}
+    normalized_seqids = sorted(
+        {
+            str(raw_seqid or "").strip()
+            for raw_seqid in required_gff_seqids
+            if str(raw_seqid or "").strip() != ""
+        }
+    )
+    for gff_seqid in normalized_seqids:
+        if gff_seqid in genome_sequences:
+            fasta_seqid = gff_seqid
+        else:
+            prefixed_seqid = "lcl|{}".format(gff_seqid)
+            if prefixed_seqid not in genome_sequences:
+                missing_seqids.append(gff_seqid)
+                continue
+            fasta_seqid = prefixed_seqid
+
+        previous_gff_seqid = gff_seqid_by_fasta_seqid.get(fasta_seqid)
+        if previous_gff_seqid is not None and previous_gff_seqid != gff_seqid:
+            raise ValueError(
+                "GFF seqids '{}' and '{}' both resolve to FASTA sequence ID '{}'".format(
+                    previous_gff_seqid,
+                    gff_seqid,
+                    fasta_seqid,
+                )
+            )
+        gff_seqid_by_fasta_seqid[fasta_seqid] = gff_seqid
+        seqid_map[gff_seqid] = fasta_seqid
+    return seqid_map, tuple(missing_seqids)
 
 
 def resolve_feature_gene_token(feature_id, feature_records, provider, cache, active):
