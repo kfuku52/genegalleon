@@ -7,6 +7,7 @@ from pathlib import Path
 
 from format_species_annotations import (
     audit_matches_inputs,
+    build_coge_gff_gene_id_map,
     build_derived_cds_output_basename,
     build_derived_genome_output_basename,
     build_derived_gff_output_basename,
@@ -370,10 +371,14 @@ def format_cds(task, output_dir, overwrite, dry_run):
     aggregated_away = 0
     first_sequence_name = ""
     records_by_gene = {}
+    cds_task = task
+    if task.get("provider") == "coge" and task.get("gff_path") is not None:
+        cds_task = dict(task)
+        cds_task["_provider_gene_id_map"] = build_coge_gff_gene_id_map(task["gff_path"])
     for header, sequence in iter_task_cds_records(task):
         before_count += 1
-        transcript_id = build_formatted_cds_id(task, header)
-        gene_id = build_gene_aggregate_id(task, header, transcript_id)
+        transcript_id = build_formatted_cds_id(cds_task, header)
+        gene_id = build_gene_aggregate_id(cds_task, header, transcript_id)
         seq = re.sub(r"\s+", "", sequence).upper()
         # Keep codon-frame-safe length (equivalent role of `cdskit pad` in shell pipelines).
         seq = pad_to_codon_length(seq)

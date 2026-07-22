@@ -82,6 +82,39 @@ def first_token(text):
     return parts[0]
 
 
+def first_fasta_header_id(path):
+    with open_text(path, "rt") as handle:
+        for raw_line in handle:
+            if not raw_line.startswith(">"):
+                continue
+            return first_token(raw_line[1:].strip())
+    return ""
+
+
+def gff_has_seqid(path, expected_seqid):
+    target = str(expected_seqid or "").strip()
+    if target == "":
+        return False
+    with open_text(path, "rt") as handle:
+        for raw_line in handle:
+            if raw_line.startswith("#") or raw_line.strip() == "":
+                continue
+            parts = raw_line.rstrip("\n\r").split("\t", 1)
+            if len(parts) >= 1 and str(parts[0] or "").strip() == target:
+                return True
+    return False
+
+
+def fasta_gff_lcl_prefix_mismatch(fasta_path, gff_path):
+    fasta_seqid = first_fasta_header_id(fasta_path)
+    if not fasta_seqid.startswith("lcl|"):
+        return None
+    stripped_seqid = fasta_seqid[len("lcl|") :]
+    if stripped_seqid == "" or not gff_has_seqid(gff_path, stripped_seqid):
+        return None
+    return fasta_seqid, stripped_seqid
+
+
 def extract_header_tag_value(header, tag):
     pattern = r"\[{}=([^\]]+)\]".format(re.escape(tag))
     match = re.search(pattern, header)
@@ -309,6 +342,104 @@ def resolve_feature_gene_token(feature_id, feature_records, provider, cache, act
     return cache[feature_text]
 
 
+def build_coge_gff_gene_id_map(gff_path):
+    feature_parents = {}
+    direct_gene_tokens = {}
+    alias_keys = ("ID", "Name", "Alias", "CDS", "mRNA", "transcript_id", "protein_id")
+    with open_text(gff_path, "rt") as handle:
+        for raw_line in handle:
+            if raw_line.startswith("#") or raw_line.strip() == "":
+                continue
+            parts = raw_line.rstrip("\n\r").split("\t")
+            if len(parts) < 9:
+                continue
+            feature_type = str(parts[2] or "").strip().lower()
+            if feature_type not in ("gene", "mrna"):
+                continue
+            attrs = parse_gff_attributes(parts[8])
+            feature_id = choose_first_gff_attribute(attrs, ("ID", "transcript_id", "protein_id", "Name"))
+            if feature_id == "":
+                continue
+            feature_parents[feature_id] = tuple(attrs.get("Parent", ()))
+            direct = choose_first_gff_attribute(
+                attrs,
+                ("gene", "gene_id", "locus_tag", "geneName", "Accession", "Parent_Accession"),
+            )
+            if direct == "" and feature_type == "gene":
+                direct = choose_first_gff_attribute(attrs, ("Name", "ID"))
+            if direct != "":
+                direct_gene_tokens[feature_id] = direct
+
+    cache = {}
+
+    def resolve_gene_token(feature_id, active):
+        feature_text = str(feature_id or "").strip()
+        if feature_text == "":
+            return ""
+        if feature_text in cache:
+            return cache[feature_text]
+        if feature_text in active:
+            return collapse_transcript_suffix("coge", feature_text)
+        direct = direct_gene_tokens.get(feature_text, "")
+        if direct != "":
+            cache[feature_text] = direct
+            return direct
+        active.add(feature_text)
+        for parent_id in feature_parents.get(feature_text, ()):
+            direct = resolve_gene_token(parent_id, active)
+            if direct != "":
+                break
+        active.remove(feature_text)
+        if direct == "":
+            direct = collapse_transcript_suffix("coge", feature_text)
+        cache[feature_text] = direct
+        return direct
+
+    tokens_by_alias = defaultdict(set)
+    with open_text(gff_path, "rt") as handle:
+        for raw_line in handle:
+            if raw_line.startswith("#") or raw_line.strip() == "":
+                continue
+            parts = raw_line.rstrip("\n\r").split("\t")
+            if len(parts) < 9:
+                continue
+            feature_type = str(parts[2] or "").strip().lower()
+            if feature_type not in ("gene", "mrna", "cds"):
+                continue
+            attrs = parse_gff_attributes(parts[8])
+            feature_id = choose_first_gff_attribute(attrs, ("ID", "transcript_id", "protein_id", "Name"))
+            direct = choose_first_gff_attribute(
+                attrs,
+                ("gene", "gene_id", "locus_tag", "geneName", "Accession", "Parent_Accession"),
+            )
+            if direct == "" and feature_type == "gene":
+                direct = choose_first_gff_attribute(attrs, ("Name", "ID"))
+            if direct == "" and feature_id in feature_parents:
+                direct = resolve_gene_token(feature_id, set())
+            if direct == "":
+                for parent_id in attrs.get("Parent", ()):
+                    direct = resolve_gene_token(parent_id, set())
+                    if direct != "":
+                        break
+            if direct == "" and feature_id != "":
+                direct = collapse_transcript_suffix("coge", feature_id)
+            if direct == "":
+                continue
+            if feature_id != "":
+                tokens_by_alias[feature_id].add(direct)
+            for key in alias_keys:
+                for value in attrs.get(key, ()):
+                    alias = str(value or "").strip()
+                    if alias != "":
+                        tokens_by_alias[alias].add(direct)
+
+    return {
+        alias: next(iter(gene_tokens))
+        for alias, gene_tokens in tokens_by_alias.items()
+        if len(gene_tokens) == 1
+    }
+
+
 def merge_coordinate_intervals(intervals):
     ordered = sorted((int(start), int(end)) for start, end in intervals if int(start) <= int(end))
     merged = []
@@ -420,6 +551,13 @@ def extract_phytozome_id(header):
     return first_token(header)
 
 
+def extract_coge_id(header):
+    fields = [str(field or "").strip() for field in str(header or "").split("||")]
+    if len(fields) >= 5 and fields[4] != "":
+        return fields[4]
+    return first_token(header)
+
+
 def extract_gwh_id(header):
     for tag in ("Gene", "OriGeneID"):
         candidate = extract_header_tag_value(header, tag)
@@ -433,6 +571,8 @@ def extract_provider_id(provider, header):
         return extract_ensembl_id(header)
     if provider == "phycocosm":
         return extract_phycocosm_id(header)
+    if provider == "coge":
+        return extract_coge_id(header)
     if provider == "gwh":
         return extract_gwh_id(header)
     if provider in ("ncbi", "refseq", "genbank", "plantgarden", "plantaedb"):

@@ -1,6 +1,8 @@
 """Provider-specific source resolvers grouped by provider family."""
 
 from .catalogs import (
+    coge_export_url_has_feature,
+    coge_gff_line_is_feature,
     citrusgenomedb_repository_request_headers,
     extract_coge_gid_candidate,
     extract_plantaedb_ncbi_accession,
@@ -18,6 +20,7 @@ from .catalogs import (
     resolve_plantaedb_download_urls_from_id,
     resolve_plantaedb_source_page_url,
     resolved_manifest_bundle_urls_available,
+    validate_coge_export_gff_file,
 )
 from .common import (
     ensembl_like_gff_url_is_disfavored,
@@ -176,10 +179,13 @@ __all__ = [
     'normalize_manifest_source_id',
     'extract_insectbase_ibg_id_candidate',
     'extract_coge_gid_candidate',
+    'coge_gff_line_is_feature',
+    'coge_export_url_has_feature',
     'normalize_lookup_text',
     'pick_best_coge_genome',
     'resolve_coge_genome_from_source_id',
     'resolve_coge_download_urls_from_id',
+    'validate_coge_export_gff_file',
     'resolve_cngb_summary_from_id',
     'resolve_cngb_download_urls_from_id',
     'resolve_plantaedb_source_page_url',

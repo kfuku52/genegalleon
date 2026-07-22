@@ -36,6 +36,7 @@ from format_species_provider_resolvers import (
     resolve_non_ncbi_download_urls_from_id,
     resolve_oryza_minuta_download_bundle_from_id,
     resolve_preferred_ensembl_like_gff_url,
+    validate_coge_export_gff_file,
 )
 from format_species_provider_urls import (
     extract_ncbi_accession_from_source_id,
@@ -254,6 +255,7 @@ def download_from_manifest(
         gff_filename = (row.get("gff_filename") or "").strip()
         gbff_filename = (row.get("gbff_filename") or "").strip()
         genome_filename = (row.get("genome_filename") or "").strip()
+        gff_validation = ""
         fernbase_confidence_mode_raw = (row.get(FERNBASE_CONFIDENCE_MODE_FIELD) or "").strip()
         resolved_ncbi = None
         oryza_minuta_bundle = None
@@ -397,6 +399,7 @@ def download_from_manifest(
                             row=row,
                         )
                 if resolved_urls is not None:
+                    gff_validation = str(resolved_urls.get("gff_validation") or "").strip()
                     if cds_url == "":
                         cds_url = (resolved_urls.get("cds_url") or "").strip()
                     if gff_url == "":
@@ -673,7 +676,9 @@ def download_from_manifest(
         resolved_rows.append(resolved_row)
         row_target_paths[i] = {
             "provider": provider,
+            "source_id": source_id,
             "species_key": species_key,
+            "gff_validation": gff_validation,
             "paths": {label: target for label, _url, target, _archive_member in download_targets},
         }
         for label, url, target, archive_member in download_targets:
@@ -737,6 +742,23 @@ def download_from_manifest(
                 failed_downloads.extend(result.get("failed", []))
 
     if not dry_run:
+        for row_info in row_target_paths.values():
+            if row_info.get("gff_validation") != "coge_export_cds":
+                continue
+            gff_path = row_info.get("paths", {}).get("GFF")
+            if gff_path is None or not gff_path.exists() or gff_path.stat().st_size == 0:
+                continue
+            try:
+                validate_coge_export_gff_file(gff_path, gid=row_info.get("source_id", ""))
+            except Exception as exc:
+                errors.append(
+                    "[download:coge] {} invalid GFF export at {} ({})".format(
+                        row_info.get("species_key", ""),
+                        gff_path,
+                        exc,
+                    )
+                )
+
         for cleanup_path in cleanup_paths:
             try:
                 if cleanup_path.exists() and cleanup_path.is_file():

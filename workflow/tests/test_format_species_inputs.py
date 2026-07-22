@@ -9,6 +9,8 @@ import ssl
 import subprocess
 import sys
 import tarfile
+
+import pytest
 from http.client import RemoteDisconnected
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -88,6 +90,156 @@ def test_cds_extension_is_treated_as_fasta():
         module.normalize_cds_output_basename("GZX_Primary.cds.gz", "Fakus_species")
         == "Fakus_species_GZX_Primary.cds.fa.gz"
     )
+
+
+def test_coge_cds_header_uses_delimited_feature_id():
+    module = load_module()
+    headers = (
+        "Gilia yorkii||Gy1||47683||49946||GY000001-RA||-1||CDS||3560718418||1",
+        "Gilia yorkii||Gy1||92931||101228||GY000002-RA||-1||CDS||3560718421||2",
+        (
+            "Sarracenia purpurea ||CM117427.1_RagTag||149705||152539||"
+            "evm.model.CM117427.1_RagTag.1||-1||CDS||4559620697||1"
+        ),
+    )
+
+    assert [module.extract_provider_id("coge", header) for header in headers] == [
+        "GY000001-RA",
+        "GY000002-RA",
+        "evm.model.CM117427.1_RagTag.1",
+    ]
+    gilia_task = {"provider": "coge", "species_prefix": "Gilia_yorkii"}
+    assert module.build_formatted_cds_id(gilia_task, headers[0]) == "Gilia_yorkii_GY000001-RA"
+    assert module.build_formatted_cds_id(gilia_task, headers[1]) == "Gilia_yorkii_GY000002-RA"
+
+
+def test_coge_coding_export_requires_cds_features(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "gene_only.gff"
+    gff_path.write_text("chr1\tCoGe\tgene\t1\t9\t.\t+\t.\tID=g1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="coding-only GFF export with no CDS records"):
+        module.validate_coge_export_gff_file(gff_path, gid="69349")
+
+
+def test_format_coge_delimited_cds_headers_map_to_gff_genes(tmp_path):
+    input_dir = tmp_path / "CoGe" / "species_wise_original"
+    species_dir = input_dir / "Gilia_yorkii"
+    species_dir.mkdir(parents=True)
+    (species_dir / "Gilia_yorkii.coge.gid62042.cds.fa").write_text(
+        (
+            ">Gilia yorkii||Gy1||1||9||GY000001-RA||1||CDS||101||1\nATGAAATTT\n"
+            ">Gilia yorkii||Gy1||20||28||GY000002-RA||1||CDS||102||2\nATGCCCTTT\n"
+        ),
+        encoding="utf-8",
+    )
+    sarracenia_dir = input_dir / "Sarracenia_purpurea"
+    sarracenia_dir.mkdir()
+    (sarracenia_dir / "Sarracenia_purpurea.coge.gid69349.cds.fa").write_text(
+        (
+            ">Sarracenia purpurea ||CM117427.1_RagTag||1||9||"
+            "evm.model.CM117427.1_RagTag.1||1||CDS||201||1\nATGAAATTT\n"
+        ),
+        encoding="utf-8",
+    )
+    (sarracenia_dir / "Sarracenia_purpurea.gid69349.gff").write_text(
+        "\n".join(
+            [
+                "##gff-version\t3",
+                (
+                    "CM117427.1_RagTag\tCoGe\tgene\t1\t9\t.\t+\t.\t"
+                    "ID=EVM%20prediction%20CM117427.1_RagTag.1;"
+                    "Name=EVM%20prediction%20CM117427.1_RagTag.1;"
+                    "gene=EVM%20prediction%20CM117427.1_RagTag.1"
+                ),
+                (
+                    "CM117427.1_RagTag\tCoGe\tmRNA\t1\t9\t.\t+\t.\t"
+                    "ID=evm.model.CM117427.1_RagTag.1;"
+                    "Parent=EVM%20prediction%20CM117427.1_RagTag.1"
+                ),
+                (
+                    "CM117427.1_RagTag\tCoGe\tCDS\t1\t9\t.\t+\t0\t"
+                    "ID=evm.model.CM117427.1_RagTag.1.cds;"
+                    "Parent=evm.model.CM117427.1_RagTag.1;"
+                    "Alias=evm.model.CM117427.1_RagTag.1"
+                ),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (species_dir / "Gilia_yorkii.gid62042.gff").write_text(
+        "\n".join(
+            [
+                "##gff-version\t3",
+                "Gy1\tCoGe\tgene\t1\t9\t.\t+\t.\tID=GY000001;Name=GY000001;gene=GY000001",
+                "Gy1\tCoGe\tmRNA\t1\t9\t.\t+\t.\tID=GY000001.mRNA1;Parent=GY000001;Alias=GY000001-RA",
+                "Gy1\tCoGe\tCDS\t1\t9\t.\t+\t0\tID=GY000001-RA;Parent=GY000001.mRNA1;CDS=GY000001-RA",
+                "Gy1\tCoGe\tgene\t20\t28\t.\t+\t.\tID=GY000002;Name=GY000002;gene=GY000002",
+                "Gy1\tCoGe\tmRNA\t20\t28\t.\t+\t.\tID=GY000002.mRNA1;Parent=GY000002;Alias=GY000002-RA",
+                "Gy1\tCoGe\tCDS\t20\t28\t.\t+\t0\tID=GY000002-RA;Parent=GY000002.mRNA1;CDS=GY000002-RA",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    completed = run_script(
+        "--provider",
+        "coge",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(tmp_path / "species_genome"),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = out_cds / "Gilia_yorkii_coge.gid62042.cds.fa.gz"
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert headers == [">Gilia_yorkii_GY000001", ">Gilia_yorkii_GY000002"]
+    sarracenia_cds = out_cds / "Sarracenia_purpurea_coge.gid69349.cds.fa.gz"
+    with gzip.open(sarracenia_cds, "rt", encoding="utf-8") as handle:
+        sarracenia_headers = [line.strip() for line in handle if line.startswith(">")]
+    assert sarracenia_headers == [">Sarracenia_purpurea_EVM_prediction_CM117427.1_RagTag.1"]
+
+    mapping = run_validate_mapping_script(
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+    )
+    assert mapping.returncode == 0, mapping.stderr + "\n" + mapping.stdout
+    assert "[Gilia_yorkii] CDS-to-GFF mapping OK: 2/2 IDs" in mapping.stdout
+    assert "[Sarracenia_purpurea] CDS-to-GFF mapping OK: 1/1 IDs" in mapping.stdout
+
+
+def test_local_gff_genome_lcl_prefix_mismatch_is_reported_during_discovery(tmp_path):
+    module = load_module()
+    input_dir = tmp_path / "Local" / "species_wise_original"
+    species_dir = input_dir / "Gilia_yorkii"
+    species_dir.mkdir(parents=True)
+    (species_dir / "Gilia_yorkii.genome.fa").write_text(">lcl|Gy1\nATGAAATTT\n", encoding="utf-8")
+    (species_dir / "Gilia_yorkii.gff").write_text(
+        "Gy1\tCoGe\tgene\t1\t9\t.\t+\t.\tID=GY000001\n"
+        "Gy1\tCoGe\tmRNA\t1\t9\t.\t+\t.\tID=GY000001.mRNA1;Parent=GY000001\n"
+        "Gy1\tCoGe\tCDS\t1\t9\t.\t+\t0\tID=GY000001-RA;Parent=GY000001.mRNA1\n",
+        encoding="utf-8",
+    )
+
+    tasks, warnings, errors = module.discover_tasks("local", input_dir)
+
+    assert tasks == []
+    assert warnings == []
+    assert len(errors) == 1
+    assert "genome FASTA sequence ID 'lcl|Gy1' does not match GFF seqid 'Gy1'" in errors[0]
+    assert "provide a matching source GFF/FASTA bundle" in errors[0]
 
 
 def test_direct_ncbi_like_cds_header_uses_locus_tag_for_gene_grouping():

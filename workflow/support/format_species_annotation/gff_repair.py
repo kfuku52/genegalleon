@@ -7,7 +7,13 @@ from pathlib import Path
 
 from format_species_writers import apply_common_replacements, open_text, write_gff_lines_gzip
 
-from .common import first_token, iter_fasta_records, parse_gff_attributes, sanitize_identifier
+from .common import (
+    first_token,
+    iter_fasta_records,
+    normalize_gff_attribute_value,
+    parse_gff_attributes,
+    sanitize_identifier,
+)
 
 GFF_REPAIR_VERSION = 1
 GFF_REPAIR_MODES = ("off", "safe", "strict")
@@ -253,7 +259,7 @@ def normalize_raw_attribute_value(value):
     text = str(value or "").strip()
     if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
         text = text[1:-1]
-    return text
+    return normalize_gff_attribute_value(text)
 
 
 def rewrite_attribute_value(raw_value, id_mapping, multiple=False):

@@ -173,6 +173,7 @@ def resolve_non_ncbi_download_urls_from_id(provider, source_id, species_key, tim
             "gbff_filename",
             "genome_filename",
             "species_key",
+            "gff_validation",
         ):
             if resolved.get(key, "") == "" and str(provider_specific.get(key, "") or "").strip() != "":
                 resolved[key] = str(provider_specific[key]).strip()

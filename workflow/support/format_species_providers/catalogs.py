@@ -3,6 +3,7 @@
 import re
 from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse
+from urllib.request import Request
 
 from format_species_annotations import (
     sanitize_identifier,
@@ -16,6 +17,7 @@ from format_species_constants import (
     COGE_GID_PATTERN,
 )
 from format_species_manifest import manifest_has_usable_source_bundle
+from format_species_network import guarded_urlopen as urlopen
 from format_species_provider_urls import (
     extract_ncbi_accession_from_source_id,
     fetch_text_with_headers,
@@ -28,6 +30,7 @@ from format_species_provider_urls import (
     resolve_plantaedb_web_base_url,
     strip_provider_prefix,
 )
+from format_species_writers import open_text
 
 from .common import (
     fetch_json_with_headers,
@@ -92,12 +95,60 @@ def resolve_coge_genome_from_source_id(source_id, timeout, headers):
     return gid, {"id": int(gid)}
 
 
+def coge_gff_line_is_feature(raw_line):
+    if isinstance(raw_line, bytes):
+        line = raw_line.decode("utf-8", errors="replace")
+    else:
+        line = str(raw_line or "")
+    if line.startswith("#") or line.strip() == "":
+        return False
+    return len(line.rstrip("\n\r").split("\t")) >= 9
+
+
+def coge_export_url_has_feature(gff_url, timeout, headers):
+    request_headers = dict(headers or {})
+    if "User-Agent" not in request_headers:
+        request_headers["User-Agent"] = "genegalleon-input-generation"
+    request = Request(gff_url, headers=request_headers)
+    with urlopen(request, timeout=timeout) as response:
+        for raw_line in response:
+            if coge_gff_line_is_feature(raw_line):
+                return True
+    return False
+
+
+def validate_coge_export_gff_file(path, gid=""):
+    feature_count = 0
+    cds_count = 0
+    with open_text(Path(path), "rt") as handle:
+        for raw_line in handle:
+            if not coge_gff_line_is_feature(raw_line):
+                continue
+            feature_count += 1
+            parts = raw_line.rstrip("\n\r").split("\t")
+            if str(parts[2] or "").strip().lower() == "cds":
+                cds_count += 1
+    gid_label = str(gid or "").strip() or "unknown"
+    if feature_count == 0:
+        raise ValueError(
+            "CoGe returned a header-only GFF export for gid {}. "
+            "The CoGe export contains no 9-column feature records; provide a matching source bundle "
+            "or retry after the CoGe dataset/export is fixed.".format(gid_label)
+        )
+    if cds_count == 0:
+        raise ValueError(
+            "CoGe returned a coding-only GFF export with no CDS records for gid {}. "
+            "Provide a matching source bundle or retry after the CoGe dataset/export is fixed.".format(gid_label)
+        )
+    return {"feature_count": feature_count, "cds_count": cds_count}
+
+
 def resolve_coge_download_urls_from_id(source_id, species_key, timeout, headers):
     gid, genome_info = resolve_coge_genome_from_source_id(source_id, timeout, headers)
     web_base = resolve_coge_web_base_url()
     api_base = resolve_coge_api_base_url()
 
-    gff_meta_url = "{}/GenomeInfo.pl?fname=get_gff&gid={}&id_type=name&cds=0&annos=0&nu=0&upa=0&chr=".format(
+    gff_meta_url = "{}/GenomeInfo.pl?fname=get_gff&gid={}&id_type=name&cds=1&annos=0&nu=0&upa=0&chr=".format(
         web_base, gid
     )
     gff_meta = fetch_json_with_headers(gff_meta_url, timeout, headers)
@@ -108,6 +159,12 @@ def resolve_coge_download_urls_from_id(source_id, species_key, timeout, headers)
         gff_url = "{}/api/v1/downloads/?gid={}&filename={}".format(web_base, gid, quote(gff_filename, safe=""))
     if gff_url == "":
         raise ValueError("CoGe did not return a downloadable GFF URL for gid {}".format(gid))
+    if not coge_export_url_has_feature(gff_url, timeout, headers):
+        raise ValueError(
+            "CoGe returned a header-only GFF export for gid {}. "
+            "The CoGe export contains no 9-column feature records; provide a matching source bundle "
+            "or retry after the CoGe dataset/export is fixed.".format(gid)
+        )
 
     organism_name = str((genome_info.get("organism") or {}).get("name", "") or "")
     inferred_species = parse_species_key_candidate(organism_name)
@@ -133,6 +190,7 @@ def resolve_coge_download_urls_from_id(source_id, species_key, timeout, headers)
         "cds_filename": "{}.coge.gid{}.cds.fa".format(prefix, gid),
         "gff_filename": gff_filename,
         "genome_filename": "{}.coge.gid{}.genome.fa".format(prefix, gid),
+        "gff_validation": "coge_export_cds",
     }
 
 
