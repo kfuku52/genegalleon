@@ -69,6 +69,11 @@ gg_bootstrap_core_runtime() {
   local print_start_message=${4:-1}
   local resolved_support_dir=""
 
+  # Apptainer/Singularity normally bind the host home directory. Disable the
+  # Python user site again inside the core process so host ~/.local packages
+  # cannot shadow the versions installed in the GeneGalleon image.
+  export PYTHONNOUSERSITE=1
+
   if [[ "${GG_CORE_COMMON_PARAMS_LOADED:-0}" -ne 1 ]]; then
     gg_source_common_params_from_core "${core_script_path}"
   fi

@@ -211,6 +211,7 @@ def test_core_bootstrap_sets_python_pycacheprefix_under_tmp():
     assert 'mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true' in body
     assert 'export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"' in body
     runtime_body = _function_body(text, "gg_bootstrap_core_runtime")
+    assert "export PYTHONNOUSERSITE=1" in runtime_body
     assert "gg_configure_python_pycacheprefix_from_core" in runtime_body
 
 
