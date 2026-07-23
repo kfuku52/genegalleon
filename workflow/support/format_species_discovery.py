@@ -343,6 +343,14 @@ def build_formatted_cds_id(task, header):
     return sanitize_identifier(prefixed)
 
 
+def prepare_cds_identifier_task(task):
+    if task.get("provider") != "coge" or task.get("gff_path") is None:
+        return task
+    prepared = dict(task)
+    prepared["_provider_gene_id_map"] = build_coge_gff_gene_id_map(task["gff_path"])
+    return prepared
+
+
 def format_cds(task, output_dir, overwrite, dry_run):
     cds_input = task.get("cds_path")
     if cds_input is not None:
@@ -371,10 +379,7 @@ def format_cds(task, output_dir, overwrite, dry_run):
     aggregated_away = 0
     first_sequence_name = ""
     records_by_gene = {}
-    cds_task = task
-    if task.get("provider") == "coge" and task.get("gff_path") is not None:
-        cds_task = dict(task)
-        cds_task["_provider_gene_id_map"] = build_coge_gff_gene_id_map(task["gff_path"])
+    cds_task = prepare_cds_identifier_task(task)
     for header, sequence in iter_task_cds_records(task):
         before_count += 1
         transcript_id = build_formatted_cds_id(cds_task, header)

@@ -246,11 +246,12 @@ def collect_expected_longest_records(task):
     expected = {}
     transcripts_by_gene = defaultdict(int)
     transcript_total = 0
+    cds_identifier_task = formatter.prepare_cds_identifier_task(task)
 
     for header, sequence in formatter.iter_task_cds_records(task):
         transcript_total += 1
-        transcript_id = formatter.build_formatted_cds_id(task, header)
-        gene_id = formatter.build_gene_aggregate_id(task, header, transcript_id)
+        transcript_id = formatter.build_formatted_cds_id(cds_identifier_task, header)
+        gene_id = formatter.build_gene_aggregate_id(cds_identifier_task, header, transcript_id)
         seq = formatter.pad_to_codon_length(re.sub(r"\s+", "", sequence).upper())
         transcripts_by_gene[gene_id] += 1
         previous = expected.get(gene_id)

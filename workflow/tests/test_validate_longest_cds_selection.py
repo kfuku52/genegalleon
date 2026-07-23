@@ -278,3 +278,72 @@ def test_validate_longest_cds_selection_respects_rescue_overlap_mode(tmp_path):
     )
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     assert "[Arabidopsis_thaliana] Longest CDS validation OK:" in completed.stdout
+
+
+def test_validate_longest_cds_selection_reuses_coge_gff_gene_mapping(tmp_path):
+    raw_dir = tmp_path / "raw"
+    cds_dir = tmp_path / "species_cds"
+    raw_dir.mkdir()
+    cds_dir.mkdir()
+
+    raw_cds = raw_dir / "Gilia_yorkii.coge.gid62042.cds.fa"
+    raw_cds.write_text(
+        (
+            ">Gilia yorkii||Gy1||1||9||GY000001-RA||1||CDS||101||1\nATGAAATTT\n"
+            ">Gilia yorkii||Gy1||20||28||GY000002-RA||1||CDS||102||2\nATGCCCTTT\n"
+        ),
+        encoding="utf-8",
+    )
+    raw_gff = raw_dir / "Gilia_yorkii.gid62042.gff"
+    raw_gff.write_text(
+        "\n".join(
+            [
+                "Gy1\tCoGe\tgene\t1\t9\t.\t+\t.\tID=GY000001;Name=GY000001;gene=GY000001",
+                "Gy1\tCoGe\tmRNA\t1\t9\t.\t+\t.\tID=GY000001.mRNA1;Parent=GY000001;Alias=GY000001-RA",
+                "Gy1\tCoGe\tCDS\t1\t9\t.\t+\t0\tID=GY000001-RA;Parent=GY000001.mRNA1;CDS=GY000001-RA",
+                "Gy1\tCoGe\tgene\t20\t28\t.\t+\t.\tID=GY000002;Name=GY000002;gene=GY000002",
+                "Gy1\tCoGe\tmRNA\t20\t28\t.\t+\t.\tID=GY000002.mRNA1;Parent=GY000002;Alias=GY000002-RA",
+                "Gy1\tCoGe\tCDS\t20\t28\t.\t+\t0\tID=GY000002-RA;Parent=GY000002.mRNA1;CDS=GY000002-RA",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    formatted_cds = cds_dir / "Gilia_yorkii_coge.gid62042.cds.fa.gz"
+    write_gzip_text(
+        formatted_cds,
+        (
+            ">Gilia_yorkii_GY000001\nATGAAATTT\n"
+            ">Gilia_yorkii_GY000002\nATGCCCTTT\n"
+        ),
+    )
+
+    summary_path = tmp_path / "gg_input_generation_species.tsv"
+    write_species_summary(
+        summary_path,
+        [
+            {
+                "provider": "coge",
+                "species_key": "Gilia_yorkii",
+                "species_prefix": "Gilia_yorkii",
+                "cds_input_path": str(raw_cds),
+                "gff_input_path": str(raw_gff),
+                "genome_input_path": "",
+                "cds_output_path": str(formatted_cds),
+                "cds_sequences_before": "2",
+                "cds_sequences_after": "2",
+                "aggregated_cds_removed": "0",
+            }
+        ],
+    )
+
+    completed = run_script(
+        "--species-cds-dir",
+        str(cds_dir),
+        "--species-summary",
+        str(summary_path),
+    )
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "[Gilia_yorkii] Longest CDS validation OK:" in completed.stdout

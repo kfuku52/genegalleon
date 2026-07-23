@@ -18,6 +18,7 @@ import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "format_species_inputs.py"
 VALIDATE_MAPPING_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_cds_gff_mapping.py"
+VALIDATE_LONGEST_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_longest_cds_selection.py"
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"
 
 
@@ -41,6 +42,15 @@ def run_script(*args, env=None):
 def run_validate_mapping_script(*args):
     return subprocess.run(
         [sys.executable, str(VALIDATE_MAPPING_SCRIPT_PATH), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def run_validate_longest_script(*args):
+    return subprocess.run(
+        [sys.executable, str(VALIDATE_LONGEST_SCRIPT_PATH), *args],
         capture_output=True,
         text=True,
         check=False,
@@ -260,6 +270,103 @@ def test_local_gff_genome_lcl_prefix_is_resolved_when_deriving_cds(tmp_path):
     assert ">Gilia_yorkii_GY000002" in text
     assert "ATGAAATTT" in text
     assert "ATGCCCTTT" in text
+
+
+def test_local_coge_gff_percent_encoded_gene_ids_remain_distinct(tmp_path):
+    input_dir = tmp_path / "Local" / "species_wise_original"
+    species_dir = input_dir / "Sarracenia_purpurea"
+    species_dir.mkdir(parents=True)
+    genome_path = species_dir / "Sarracenia_purpurea.genome.fa"
+    genome_path.write_text(
+        ">lcl|CM117427.1_RagTag\nATGAAATTTATGCCCTTT\n",
+        encoding="utf-8",
+    )
+    gff_path = species_dir / "Sarracenia_purpurea.gff"
+    gff_path.write_text(
+        "\n".join(
+            [
+                (
+                    "CM117427.1_RagTag\tCoGe\tgene\t1\t9\t.\t+\t.\t"
+                    "ID=EVM%20prediction%20CM117427.1_RagTag.1;"
+                    "Name=EVM%20prediction%20CM117427.1_RagTag.1;"
+                    "gene=EVM%20prediction%20CM117427.1_RagTag.1"
+                ),
+                (
+                    "CM117427.1_RagTag\tCoGe\tmRNA\t1\t9\t.\t+\t.\t"
+                    "ID=evm.model.CM117427.1_RagTag.1;"
+                    "Parent=EVM%20prediction%20CM117427.1_RagTag.1"
+                ),
+                (
+                    "CM117427.1_RagTag\tCoGe\tCDS\t1\t9\t.\t+\t0\t"
+                    "ID=evm.model.CM117427.1_RagTag.1.cds;"
+                    "Parent=evm.model.CM117427.1_RagTag.1"
+                ),
+                (
+                    "CM117427.1_RagTag\tCoGe\tgene\t10\t18\t.\t+\t.\t"
+                    "ID=EVM%20prediction%20CM117427.1_RagTag.2;"
+                    "Name=EVM%20prediction%20CM117427.1_RagTag.2;"
+                    "gene=EVM%20prediction%20CM117427.1_RagTag.2"
+                ),
+                (
+                    "CM117427.1_RagTag\tCoGe\tmRNA\t10\t18\t.\t+\t.\t"
+                    "ID=evm.model.CM117427.1_RagTag.2;"
+                    "Parent=EVM%20prediction%20CM117427.1_RagTag.2"
+                ),
+                (
+                    "CM117427.1_RagTag\tCoGe\tCDS\t10\t18\t.\t+\t0\t"
+                    "ID=evm.model.CM117427.1_RagTag.2.cds;"
+                    "Parent=evm.model.CM117427.1_RagTag.2"
+                ),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    summary_path = tmp_path / "gg_input_generation_species.tsv"
+    completed = run_script(
+        "--provider",
+        "local",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(tmp_path / "species_genome"),
+        "--species-summary-output",
+        str(summary_path),
+    )
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    formatted_cds = next(out_cds.glob("*.fa.gz"))
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert headers == [
+        ">Sarracenia_purpurea_EVM_prediction_CM117427.1_RagTag.1",
+        ">Sarracenia_purpurea_EVM_prediction_CM117427.1_RagTag.2",
+    ]
+
+    mapping = run_validate_mapping_script(
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+    )
+    assert mapping.returncode == 0, mapping.stderr + "\n" + mapping.stdout
+    assert "[Sarracenia_purpurea] CDS-to-GFF mapping OK: 2/2 IDs" in mapping.stdout
+
+    longest = run_validate_longest_script(
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-summary",
+        str(summary_path),
+    )
+    assert longest.returncode == 0, longest.stderr + "\n" + longest.stdout
+    assert "[Sarracenia_purpurea] Longest CDS validation OK:" in longest.stdout
 
 
 def test_gff_genome_seqid_map_rejects_many_to_one_lcl_alias():

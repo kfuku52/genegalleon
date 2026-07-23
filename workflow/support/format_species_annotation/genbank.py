@@ -500,7 +500,7 @@ def derive_cds_records_from_gff_and_genome(task):
             continue
         header = str(transcript_id or "").strip()
         if gene_token != "":
-            header = "{} gene={}".format(header, gene_token)
+            header = "{} [gene={}]".format(header, gene_token)
         yield header, sequence
 
 
@@ -512,7 +512,7 @@ def derive_cds_records_from_gbff(task):
         for transcript in transcripts:
             header = transcript["transcript_token"]
             if transcript["gene_token"] != "":
-                header = "{} gene={}".format(header, transcript["gene_token"])
+                header = "{} [gene={}]".format(header, transcript["gene_token"])
             yield header, transcript["sequence"]
 
 
