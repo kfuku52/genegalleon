@@ -1,9 +1,9 @@
 """Provider-specific source resolvers grouped by provider family."""
 
 from .catalogs import (
+    citrusgenomedb_repository_request_headers,
     coge_export_url_has_feature,
     coge_gff_line_is_feature,
-    citrusgenomedb_repository_request_headers,
     extract_coge_gid_candidate,
     extract_plantaedb_ncbi_accession,
     infer_citrusgenomedb_species_key,

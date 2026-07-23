@@ -9,12 +9,12 @@ import ssl
 import subprocess
 import sys
 import tarfile
-
-import pytest
 from http.client import RemoteDisconnected
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from urllib.error import URLError
+
+import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "format_species_inputs.py"
 VALIDATE_MAPPING_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_cds_gff_mapping.py"

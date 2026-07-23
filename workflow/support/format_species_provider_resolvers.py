@@ -5,9 +5,9 @@ from format_species_providers import (
     ProviderIdResolver,
     build_fernbase_combined_filename,
     build_oryza_minuta_merged_filename,
+    citrusgenomedb_repository_request_headers,
     coge_export_url_has_feature,
     coge_gff_line_is_feature,
-    citrusgenomedb_repository_request_headers,
     collect_ddbj_wgs_prefixes_from_bioproject_entry,
     ddbj_entry_organism_name,
     ddbj_wgs_candidate_urls,
@@ -110,8 +110,8 @@ from format_species_providers import (
     strip_html_tags,
     strip_html_to_text,
     throttle_ncbi_eutils_request,
-    veupathdb_source_id_from_url,
     validate_coge_export_gff_file,
+    veupathdb_source_id_from_url,
 )
 
 __all__ = [
