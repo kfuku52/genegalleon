@@ -32,7 +32,7 @@ def test_kfuku52_sources_have_no_fixed_default_sha():
         assert f"{sha_var}=${{{sha_var}:-}}" in apptainer
 
 
-def test_all_container_build_paths_resolve_current_master_revisions():
+def test_all_container_build_paths_resolve_current_upstream_revisions():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
     apptainer = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(
@@ -42,6 +42,9 @@ def test_all_container_build_paths_resolve_current_master_revisions():
     assert 'ARG KFU52_REPO_REF="master"' in dockerfile
     assert 'ARG KFU52_AMALGKIT_REPO_REF="master"' in dockerfile
     assert 'ARG KFU52_CSUBST_REPO_REF="master"' in dockerfile
+    assert 'ARG KFL1OU_REPO_REF="main"' in dockerfile
+    assert "KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-main}" in buildx
+    assert "KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-main}" in apptainer
     assert buildx.count("resolve_source_sha ") == 8
     assert apptainer.count("resolve_source_sha ") == 8
     for source in ("amalgkit", "cdskit", "csubst", "nwkit", "kfl1ou", "kftools", "rkftools", "RADTE"):

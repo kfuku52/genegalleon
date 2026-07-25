@@ -150,20 +150,20 @@ jobs:
 
           if not matched_sha:
               upstream_repositories = (
-                  "amalgkit",
-                  "cdskit",
-                  "csubst",
-                  "nwkit",
-                  "kfl1ou",
-                  "kftools",
-                  "rkftools",
-                  "RADTE",
+                  ("amalgkit", "master"),
+                  ("cdskit", "master"),
+                  ("csubst", "master"),
+                  ("nwkit", "master"),
+                  ("kfl1ou", "main"),
+                  ("kftools", "master"),
+                  ("rkftools", "master"),
+                  ("RADTE", "master"),
               )
-              for upstream_repo in upstream_repositories:
+              for upstream_repo, upstream_branch in upstream_repositories:
                   upstream_commits = github_api(
                       f"/repos/kfuku52/{upstream_repo}/commits",
                       {
-                          "sha": "master",
+                          "sha": upstream_branch,
                           "since": since,
                           "until": until,
                           "per_page": "1",
@@ -171,12 +171,12 @@ jobs:
                   )
                   if upstream_commits:
                       matched_sha = upstream_commits[0]["sha"][:7]
-                      matched_files = [f"kfuku52/{upstream_repo}@master"]
+                      matched_files = [f"kfuku52/{upstream_repo}@{upstream_branch}"]
                       break
 
           if matched_sha:
               if matched_files and matched_files[0].startswith("kfuku52/"):
-                  reason = "a tracked kfuku52 master branch changed on the previous JST day"
+                  reason = "a tracked kfuku52 upstream branch changed on the previous JST day"
               else:
                   reason = "container-related changes found on the previous JST day"
               set_output("should_build", "1")
@@ -254,15 +254,17 @@ jobs:
           build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
           resolve_source_sha() {
+            local repo="$1"
+            local branch="${2:-master}"
             bash container/scripts/resolve_git_branch_sha.sh \
-              "https://github.com/kfuku52/$1.git" master
+              "https://github.com/kfuku52/${repo}.git" "${branch}"
           }
 
           amalgkit_repo_sha="$(resolve_source_sha amalgkit)"
           cdskit_repo_sha="$(resolve_source_sha cdskit)"
           csubst_repo_sha="$(resolve_source_sha csubst)"
           nwkit_repo_sha="$(resolve_source_sha nwkit)"
-          kfl1ou_repo_sha="$(resolve_source_sha kfl1ou)"
+          kfl1ou_repo_sha="$(resolve_source_sha kfl1ou main)"
           kftools_repo_sha="$(resolve_source_sha kftools)"
           rkftools_repo_sha="$(resolve_source_sha rkftools)"
           radte_repo_sha="$(resolve_source_sha RADTE)"
@@ -356,6 +358,7 @@ jobs:
             KFU52_CSUBST_REPO_REF=master
             KFU52_CSUBST_REPO_SHA=${{ needs.prepare-build.outputs.csubst_repo_sha }}
             KFU52_NWKIT_REPO_SHA=${{ needs.prepare-build.outputs.nwkit_repo_sha }}
+            KFL1OU_REPO_REF=main
             KFL1OU_REPO_SHA=${{ needs.prepare-build.outputs.kfl1ou_repo_sha }}
             KFTOOLS_REPO_SHA=${{ needs.prepare-build.outputs.kftools_repo_sha }}
             RKFTOOLS_REPO_SHA=${{ needs.prepare-build.outputs.rkftools_repo_sha }}

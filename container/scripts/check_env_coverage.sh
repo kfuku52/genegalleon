@@ -30,33 +30,69 @@ is_dropped_env() {
   return 1
 }
 
+search_lines() {
+  local pattern=$1
+  shift
+  local matches
+  local status
+
+  if matches="$(grep -nE -- "${pattern}" "$@")"; then
+    printf '%s\n' "${matches}"
+  else
+    status=$?
+    if [[ ${status} -ne 1 ]]; then
+      return "${status}"
+    fi
+  fi
+}
+
+core_scripts=("${repo_root}/workflow/core"/gg_*_core.sh)
+activate_matches="$(
+  search_lines "conda activate [A-Za-z0-9_.-]+" "${core_scripts[@]}"
+)"
+bootstrap_matches="$(
+  search_lines \
+    'gg_bootstrap_core_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"[A-Za-z0-9_.-]+"' \
+    "${core_scripts[@]}"
+)"
+prepare_matches="$(
+  search_lines \
+    'gg_prepare_cmd_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"[A-Za-z0-9_.-]+"' \
+    "${core_scripts[@]}"
+)"
+pipeline_env_output="$(
+  {
+    printf '%s\n' "${activate_matches}" \
+      | sed -E -n 's/.*conda activate ([A-Za-z0-9_.-]+).*/\1/p'
+    printf '%s\n' "${bootstrap_matches}" \
+      | sed -E -n 's/.*gg_bootstrap_core_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"([A-Za-z0-9_.-]+)".*/\1/p'
+    printf '%s\n' "${prepare_matches}" \
+      | sed -E -n 's/.*gg_prepare_cmd_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"([A-Za-z0-9_.-]+)".*/\1/p'
+  } | sort -u
+)"
+
 pipeline_envs=()
 while IFS= read -r env_name; do
   [[ -n "${env_name}" ]] || continue
   is_dropped_env "${env_name}" && continue
   pipeline_envs+=("${env_name}")
-done < <(
-  {
-    rg -n "conda activate [A-Za-z0-9_.-]+" "${repo_root}/workflow/core"/gg_*_core.sh \
-      | sed -E 's/.*conda activate ([A-Za-z0-9_.-]+).*/\1/' || true
-    rg -n 'gg_bootstrap_core_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"[A-Za-z0-9_.-]+"' "${repo_root}/workflow/core"/gg_*_core.sh \
-      | sed -E 's/.*gg_bootstrap_core_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"([A-Za-z0-9_.-]+)".*/\1/' || true
-    rg -n 'gg_prepare_cmd_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"[A-Za-z0-9_.-]+"' "${repo_root}/workflow/core"/gg_*_core.sh \
-      | sed -E 's/.*gg_prepare_cmd_runtime[[:space:]]+[^[:space:]]+[[:space:]]+"([A-Za-z0-9_.-]+)".*/\1/' || true
-  } \
+done <<< "${pipeline_env_output}"
+
+docker_env_matches="$(
+  search_lines "/opt/pg/scripts/install_env.sh [A-Za-z0-9_.-]+" "${dockerfile}"
+)"
+docker_env_output="$(
+  printf '%s\n' "${docker_env_matches}" \
+    | sed -E -n 's/.*install_env.sh ([A-Za-z0-9_.-]+).*/\1/p' \
     | sort -u
-)
+)"
 
 docker_envs=()
 while IFS= read -r env_name; do
   [[ -n "${env_name}" ]] || continue
   is_dropped_env "${env_name}" && continue
   docker_envs+=("${env_name}")
-done < <(
-  rg -n "/opt/pg/scripts/install_env.sh [A-Za-z0-9_.-]+" "${dockerfile}" \
-    | sed -E 's/.*install_env.sh ([A-Za-z0-9_.-]+).*/\1/' \
-    | sort -u
-)
+done <<< "${docker_env_output}"
 
 contains_env() {
   local target=$1

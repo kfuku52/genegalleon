@@ -207,7 +207,9 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
   and installed as:
   - `/usr/local/bin/Notung.jar`
 - `BUSCO` and `paml` are fetched from pinned upstream source snapshots by default.
-- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` install from the latest GitHub `master` commit by default.
+- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kftools`, `rkftools`, and `RADTE`
+  install from the latest GitHub `master` commit by default; `kfl1ou` follows
+  its GitHub `main` branch.
 - `BioPP/testnh` and `CAFE5` tarballs are checksum-verified during build.
 - The default source is the pinned stable ZIP:
   - `NOTUNG_DOWNLOAD_PAGE=https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip`
