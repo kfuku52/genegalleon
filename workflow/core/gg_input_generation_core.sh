@@ -284,7 +284,7 @@ if [[ -z "${download_manifest}" ]]; then
   default_download_manifests=()
   mapfile -t default_download_manifests < <(discover_input_generation_manifests)
   if [[ ${#default_download_manifests[@]} -gt 1 ]]; then
-    echo "Multiple input-generation download manifests were discovered. Set download_manifest explicitly:"
+    echo "Multiple input-generation download manifests were discovered. Set GG_INPUT_DOWNLOAD_MANIFEST explicitly:"
     printf '  %s\n' "${default_download_manifests[@]}"
     exit 1
   fi
