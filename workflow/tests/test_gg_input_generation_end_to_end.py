@@ -621,7 +621,7 @@ def test_gg_input_generation_rejects_ambiguous_auto_discovered_manifests(tmp_pat
     assert "Multiple input-generation download manifests were discovered" in completed.stdout
     assert str(xlsx_manifest) in completed.stdout
     assert str(tsv_manifest) in completed.stdout
-    assert "GG_INPUT_DOWNLOAD_MANIFEST" in completed.stdout
+    assert "Set download_manifest explicitly" in completed.stdout
 
 
 def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_path: Path):
