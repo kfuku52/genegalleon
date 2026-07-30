@@ -259,6 +259,12 @@ gg_detect_container_runtime_binary() {
 		echo "${shim_path}"
 		return 0
 	fi
+	if declare -F gg_detect_site_profile >/dev/null 2>&1 \
+		&& [[ "$(gg_detect_site_profile)" == "shirokane" ]] \
+		&& command -v apptainer >/dev/null 2>&1; then
+		echo apptainer
+		return 0
+	fi
 	if command -v singularity >/dev/null 2>&1; then
 		echo singularity
 		return 0
@@ -399,6 +405,57 @@ gg_memory_fraction_gb() {
 	echo "${value_gb}"
 }
 
+gg_sge_memory_value_to_gb() {
+	local raw_value=${1:-}
+	[[ "${raw_value}" =~ ^([0-9]+([.][0-9]+)?)([bBkKmMgGtTpP]?)$ ]] || return 1
+	local number="${BASH_REMATCH[1]}"
+	local unit
+	unit=$(printf '%s' "${BASH_REMATCH[3]}" | tr '[:lower:]' '[:upper:]')
+
+	awk -v number="${number}" -v unit="${unit}" '
+		BEGIN {
+			factor = 1 / 1073741824
+			if (unit == "K") factor = 1 / 1048576
+			else if (unit == "M") factor = 1 / 1024
+			else if (unit == "G") factor = 1
+			else if (unit == "T") factor = 1024
+			else if (unit == "P") factor = 1048576
+			value = number * factor
+			rounded = int(value)
+			if (rounded < value) rounded++
+			if (rounded < 1 && value > 0) rounded = 1
+			print rounded
+		}
+	'
+}
+
+gg_sge_requested_mem_per_slot_gb() {
+	local job_id=${1:-}
+	local qstat_output=""
+	local requested_value=""
+
+	if [[ -z "${job_id}" ]] || ! command -v qstat >/dev/null 2>&1; then
+		return 1
+	fi
+	qstat_output=$(qstat -j "${job_id}" 2>/dev/null || true)
+	if [[ -z "${qstat_output}" ]]; then
+		qstat_output=$(qstat -f -j "${job_id}" 2>/dev/null || true)
+	fi
+	requested_value=$(
+		printf '%s\n' "${qstat_output}" \
+			| awk '
+				match($0, /s_vmem=[0-9]+([.][0-9]+)?[bBkKmMgGtTpP]?/) {
+					print substr($0, RSTART + 7, RLENGTH - 7)
+					exit
+				}
+			'
+	)
+	if [[ -z "${requested_value}" ]]; then
+		return 1
+	fi
+	gg_sge_memory_value_to_gb "${requested_value}"
+}
+
 gg_normalize_scheduler_env() {
 	local echo_header='gg_normalize_scheduler_env: '
 	local scheduler_kind
@@ -448,11 +505,15 @@ gg_normalize_scheduler_env() {
 		fi
 	fi
 	if [[ -z "${GG_ARRAY_TASK_ID:-}" ]]; then
-		if [[ -n "${SGE_TASK_ID:-}" ]]; then
+		if [[ "${SGE_TASK_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
 			echo ${echo_header}'GG_ARRAY_TASK_ID=${SGE_TASK_ID} (from legacy SGE_TASK_ID)'
 			GG_ARRAY_TASK_ID=${SGE_TASK_ID}
 		else
-			echo ${echo_header}'${GG_ARRAY_TASK_ID} is undefined.'
+			if [[ -n "${SGE_TASK_ID:-}" ]]; then
+				echo ${echo_header}'Ignoring non-numeric SGE_TASK_ID='"${SGE_TASK_ID}"'.'
+			else
+				echo ${echo_header}'${GG_ARRAY_TASK_ID} is undefined.'
+			fi
 		fi
 	fi
 	if [[ -z "${GG_ARRAY_TASK_ID:-}" ]]; then
@@ -475,10 +536,10 @@ gg_normalize_scheduler_env() {
 		GG_MEM_PER_CPU_GB=${MEM_PER_SLOT}
 	fi
 	if [[ -z "${GG_MEM_PER_CPU_GB:-}" ]] && type qstat >/dev/null 2>&1; then
-		GG_MEM_PER_CPU_GB=$(
-			{ qstat -f -j "${GG_JOB_ID}" 2>/dev/null || true; } \
-			| awk -F'mem_req=|G' '/mem_req=[0-9]+G/ { if (!seen) { print $2; seen=1 } }'
-		)
+		GG_MEM_PER_CPU_GB=$(gg_sge_requested_mem_per_slot_gb "${GG_JOB_ID}" || true)
+		if [[ -n "${GG_MEM_PER_CPU_GB}" ]]; then
+			echo ${echo_header}'GG_MEM_PER_CPU_GB='"${GG_MEM_PER_CPU_GB}"' (from AGE s_vmem)'
+		fi
 	fi
 	if [[ -z "${GG_MEM_PER_CPU_GB:-}" ]]; then
 		echo ${echo_header}'${GG_MEM_PER_CPU_GB} is undefined.'
@@ -535,8 +596,8 @@ gg_print_scheduler_runtime_summary() {
 	echo "${echo_header}detected GG_TASK_CPUS=${GG_TASK_CPUS:-NA} GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-NA} GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-NA} GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB:-NA} GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB:-NA} GG_JOB_ID=${GG_JOB_ID:-NA} GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-NA}"
 	echo "${echo_header}forwarded SINGULARITYENV_GG_TASK_CPUS=${SINGULARITYENV_GG_TASK_CPUS:-unset} SINGULARITYENV_GG_MEM_PER_CPU_GB=${SINGULARITYENV_GG_MEM_PER_CPU_GB:-unset} SINGULARITYENV_GG_ARRAY_TASK_ID=${SINGULARITYENV_GG_ARRAY_TASK_ID:-unset}"
 	echo "${echo_header}forwarded APPTAINERENV_GG_TASK_CPUS=${APPTAINERENV_GG_TASK_CPUS:-unset} APPTAINERENV_GG_MEM_PER_CPU_GB=${APPTAINERENV_GG_MEM_PER_CPU_GB:-unset} APPTAINERENV_GG_ARRAY_TASK_ID=${APPTAINERENV_GG_ARRAY_TASK_ID:-unset}"
-	echo "${echo_header}forwarded SINGULARITYENV_OMP_NUM_THREADS=${SINGULARITYENV_OMP_NUM_THREADS:-unset} SINGULARITYENV_OMP_THREAD_LIMIT=${SINGULARITYENV_OMP_THREAD_LIMIT:-unset}"
-	echo "${echo_header}forwarded APPTAINERENV_OMP_NUM_THREADS=${APPTAINERENV_OMP_NUM_THREADS:-unset} APPTAINERENV_OMP_THREAD_LIMIT=${APPTAINERENV_OMP_THREAD_LIMIT:-unset}"
+	echo "${echo_header}forwarded SINGULARITYENV_OMP_NUM_THREADS=${SINGULARITYENV_OMP_NUM_THREADS:-unset} SINGULARITYENV_OPENBLAS_NUM_THREADS=${SINGULARITYENV_OPENBLAS_NUM_THREADS:-unset} SINGULARITYENV_MKL_NUM_THREADS=${SINGULARITYENV_MKL_NUM_THREADS:-unset} SINGULARITYENV_NUMEXPR_NUM_THREADS=${SINGULARITYENV_NUMEXPR_NUM_THREADS:-unset}"
+	echo "${echo_header}forwarded APPTAINERENV_OMP_NUM_THREADS=${APPTAINERENV_OMP_NUM_THREADS:-unset} APPTAINERENV_OPENBLAS_NUM_THREADS=${APPTAINERENV_OPENBLAS_NUM_THREADS:-unset} APPTAINERENV_MKL_NUM_THREADS=${APPTAINERENV_MKL_NUM_THREADS:-unset} APPTAINERENV_NUMEXPR_NUM_THREADS=${APPTAINERENV_NUMEXPR_NUM_THREADS:-unset}"
 	echo ""
 }
 
@@ -575,6 +636,12 @@ set_singularityenv() {
 	export APPTAINERENV_GG_TASK_CPUS=${GG_TASK_CPUS:-1}
 	export SINGULARITYENV_OMP_NUM_THREADS=${GG_TASK_CPUS:-1}
 	export APPTAINERENV_OMP_NUM_THREADS=${GG_TASK_CPUS:-1}
+	export SINGULARITYENV_OPENBLAS_NUM_THREADS=${GG_TASK_CPUS:-1}
+	export APPTAINERENV_OPENBLAS_NUM_THREADS=${GG_TASK_CPUS:-1}
+	export SINGULARITYENV_MKL_NUM_THREADS=${GG_TASK_CPUS:-1}
+	export APPTAINERENV_MKL_NUM_THREADS=${GG_TASK_CPUS:-1}
+	export SINGULARITYENV_NUMEXPR_NUM_THREADS=${GG_TASK_CPUS:-1}
+	export APPTAINERENV_NUMEXPR_NUM_THREADS=${GG_TASK_CPUS:-1}
 	unset SINGULARITYENV_OMP_THREAD_LIMIT
 	unset APPTAINERENV_OMP_THREAD_LIMIT
 	unset SINGULARITYENV_KMP_ALL_THREADS

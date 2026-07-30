@@ -9,6 +9,11 @@ gg_detect_site_profile() {
     return 0
   fi
 
+  if [[ "${SGE_ROOT:-}" == "/home/geadmin/N1GE" ]]; then
+    echo "shirokane"
+    return 0
+  fi
+
   hostname_text="$(hostname 2>/dev/null || true)"
   case "${hostname_text}" in
     at*|m*|igt*|it*)
@@ -26,8 +31,67 @@ gg_detect_site_profile() {
   esac
 }
 
+gg_initialize_environment_modules() {
+  local module_init
+
+  if type module >/dev/null 2>&1; then
+    return 0
+  fi
+
+  for module_init in \
+    /etc/profile.d/modules.sh \
+    /usr/share/Modules/init/bash \
+    /usr/share/lmod/lmod/init/bash
+  do
+    if [[ -s "${module_init}" ]]; then
+      # shellcheck disable=SC1090
+      source "${module_init}"
+      if type module >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+  done
+
+  echo "Environment Modules could not be initialized." >&2
+  return 1
+}
+
+gg_shirokane_load_apptainer_module() {
+  local modulefiles_dir="${GG_SHIROKANE_MODULEFILES_DIR:-/usr/local/package/modulefiles}"
+
+  if command -v apptainer >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! gg_initialize_environment_modules; then
+    echo "SHIROKANE requires the Apptainer module on an AGE compute node." >&2
+    echo "Submit this command with qsub or enter a compute node with qlogin." >&2
+    return 1
+  fi
+  if [[ ! -d "${modulefiles_dir}" ]]; then
+    echo "SHIROKANE module directory is unavailable on this host: ${modulefiles_dir}" >&2
+    echo "Apptainer is provided on AGE compute nodes, not on the login node." >&2
+    return 1
+  fi
+
+  if ! module use "${modulefiles_dir}"; then
+    echo "Failed to add the SHIROKANE module directory: ${modulefiles_dir}" >&2
+    return 1
+  fi
+  if ! module load apptainer; then
+    echo "Failed to load the SHIROKANE Apptainer module." >&2
+    return 1
+  fi
+  if ! command -v apptainer >/dev/null 2>&1; then
+    echo "The SHIROKANE Apptainer module loaded without providing the apptainer command." >&2
+    return 1
+  fi
+}
+
 gg_site_scheduler_prelude() {
   case "$(gg_detect_site_profile)" in
+    shirokane)
+      gg_shirokane_load_apptainer_module || return 1
+      ;;
     nig)
       if [[ -n "${PBS_O_WORKDIR:-}" ]]; then
         cd "${PBS_O_WORKDIR}" || return 1
@@ -74,6 +138,10 @@ gg_site_container_shell_command() {
 
   site_profile="$(gg_detect_site_profile)"
   case "${site_profile}" in
+    shirokane)
+      echo "${echo_header}site profile = shirokane"
+      gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1
+      ;;
     nig)
       echo "${echo_header}site profile = nig"
       if [[ -e /var/spool/uge ]]; then

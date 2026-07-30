@@ -24,16 +24,13 @@
 ##SBATCH --mail-user=<aaa@bbb.com>
 
 ## UGE
-# Common parameters: shell, working directory, slot count, memory per slot, and runtime limits.
+# Portable AGE/UGE parameters: shell, working directory, slot count, and memory per slot.
 #$ -S /bin/bash
 #$ -cwd
 #$ -pe def_slot 4
 #$ -l s_vmem=32G
-#$ -l mem_req=32G
-# Site-specific resource example.
-#$ -l epyc
-#$ -l d_rt=124:00:00:00
-#$ -l s_rt=124:00:00:00
+# SHIROKANE submissions use workflow/sites/shirokane/gg_shirokane_submit.sh,
+# which requests the ljob resource by default.
 # Array example for array-aware entrypoints.
 #$ -t 1
 
@@ -52,7 +49,7 @@
 # N = Number of directories in workspace/input/species_rnaseq for mode_transcriptome_assembly=fastq
 # N = Number of files in workspace/input/query_sra_id for mode_transcriptome_assembly=sraid
 # N = Number of files in workspace/input/amalgkit_metadata for mode_transcriptome_assembly=metadata
-# In many cases, 4 cores and mem_req=16G (=64G) worked well in per-SRA Trinity assembly.
+# In many cases, 4 cores and s_vmem=16G (=64G) worked well in per-SRA Trinity assembly.
 # Increase per-core RAM to 32G if Trinity fails.
 
 set -euo pipefail

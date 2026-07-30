@@ -526,13 +526,13 @@ gg_entrypoint_prepare_container_runtime() {
 	local call_exit_if_running=${1:-0}
 	gg_scheduler_runtime_prelude
 	unset_singularity_envs
+	gg_normalize_scheduler_env
 	if [[ "${call_exit_if_running}" -eq 1 ]]; then
 		exit_if_running_qstat
 	fi
 	if ! set_singularity_command; then
 		return 1
 	fi
-	gg_normalize_scheduler_env
 	return 0
 }
 

@@ -22,16 +22,13 @@
 ##SBATCH --mail-user=<aaa@bbb.com>
 
 ## UGE
-# Common parameters: shell, working directory, slot count, memory per slot, and runtime limits.
+# Portable AGE/UGE parameters: shell, working directory, slot count, and memory per slot.
 #$ -S /bin/bash
 #$ -cwd
 #$ -pe def_slot 4
 #$ -l s_vmem=8G
-#$ -l mem_req=8G
-# Site-specific resource example.
-#$ -l epyc
-#$ -l d_rt=124:00:00:00
-#$ -l s_rt=124:00:00:00
+# SHIROKANE submissions use workflow/sites/shirokane/gg_shirokane_submit.sh,
+# which requests the ljob resource by default.
 
 ## PBS
 # Common parameters: shell, CPU count, total memory, and exported environment.

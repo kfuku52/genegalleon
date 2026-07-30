@@ -121,6 +121,23 @@ Wrappers expect the SIF at repo root by default:
 
 - `workflow/../genegalleon.sif`
 
+On SHIROKANE, Apptainer is supplied as a compute-node module. Transfer a
+completed SIF, then validate and install it through AGE:
+
+```bash
+qsub \
+  -terse \
+  -v GG_SHIROKANE_PREBUILT_SIF=incoming/genegalleon-<tag>.sif,\
+GG_SHIROKANE_SIF_TAG=<tag>,GG_SHIROKANE_SIF_SHA256=<sha256> \
+  workflow/sites/shirokane/gg_shirokane_prepare_sif.sh
+```
+
+The checksum is required. The registration job also executes `uname -m` inside
+the SIF and rejects images that are not compatible with SHIROKANE's amd64
+compute nodes.
+
+See the [SHIROKANE AGE Guide](shirokane-age.md) for the complete workflow.
+
 ### Run wrappers against a Docker image directly
 
 This opt-in mode keeps the existing `gg_*_entrypoint.sh` interface but swaps the

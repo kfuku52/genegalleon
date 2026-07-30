@@ -30,6 +30,18 @@ sbatch workflow/gg_gene_evolution_entrypoint.sh
 qsub workflow/gg_gene_evolution_entrypoint.sh
 ```
 
+On SHIROKANE, use the site submit helper instead. It adds the `ljob` resource
+by default while retaining the entrypoint's slot, memory, and array settings:
+
+```bash
+bash workflow/sites/shirokane/gg_shirokane_submit.sh \
+  --entrypoint gg_gene_evolution_entrypoint.sh \
+  --tasks 1-N
+```
+
+See the [SHIROKANE AGE Guide](shirokane-age.md) for SIF preparation, AGE
+verification, and resource selection.
+
 When no scheduler metadata is present, GeneGalleon falls back to local defaults such as:
 
 - `GG_TASK_CPUS=1`
@@ -93,6 +105,10 @@ These wrappers are intended to run as one task:
 - selecting a modified container shell command.
 
 That logic is automatic; you do not normally need to edit scheduler headers just to get the runtime bindings right.
+
+The SHIROKANE profile also initializes Environment Modules and loads
+`apptainer` on AGE compute nodes. The login node is used for submission and
+file management, not direct workflow execution.
 
 ## Debugging scheduler problems
 
