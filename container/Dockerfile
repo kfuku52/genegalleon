@@ -171,7 +171,7 @@ ARG BUSCO_MIRROR_REPO_URL=""
 ARG BUSCO_REPO_REF="6.0.0"
 ARG BUSCO_REPO_SHA="6278721a1916f6da310e03ec9674099028c927a4"
 ARG KFL1OU_REPO_URL="https://github.com/kfuku52/kfl1ou.git"
-ARG KFL1OU_REPO_REF=""
+ARG KFL1OU_REPO_REF="main"
 ARG KFL1OU_REPO_SHA=""
 ARG KFTOOLS_REPO_URL="https://github.com/kfuku52/kftools.git"
 ARG RKFTOOLS_REPO_URL="https://github.com/kfuku52/rkftools.git"
@@ -195,7 +195,7 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && kftools_repo_ref="${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
  && rkftools_repo_ref="${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
  && radte_repo_ref="${RADTE_REPO_REF:-${KFU52_REPO_REF}}" \
- && kfl1ou_repo_ref="${KFL1OU_REPO_REF:-${KFU52_REPO_REF}}" \
+ && kfl1ou_repo_ref="${KFL1OU_REPO_REF:-main}" \
  && amalgkit_repo_sha="${KFU52_AMALGKIT_REPO_SHA:-}" \
  && cdskit_repo_sha="${KFU52_CDSKIT_REPO_SHA:-}" \
  && csubst_repo_ref="${KFU52_CSUBST_REPO_REF:-master}" \

@@ -2656,20 +2656,33 @@ def test_container_ghcr_builds_arm64_on_native_runner_without_qemu():
     assert "docker/setup-qemu-action" not in build_block
 
 
-def test_container_ghcr_tracks_and_builds_current_kfuku52_master_revisions():
+def test_container_ghcr_tracks_and_builds_current_kfuku52_upstream_revisions():
     workflow = _read_text(GITHUB_WORKFLOWS_DIR / "container-ghcr.yml")
 
-    for repo in ("amalgkit", "cdskit", "csubst", "nwkit", "kfl1ou", "kftools", "rkftools", "RADTE"):
-        assert f'                  "{repo}",' in workflow
+    upstream_branches = {
+        "amalgkit": "master",
+        "cdskit": "master",
+        "csubst": "master",
+        "nwkit": "master",
+        "kfl1ou": "main",
+        "kftools": "master",
+        "rkftools": "master",
+        "RADTE": "master",
+    }
+    for repo, branch in upstream_branches.items():
+        assert f'                  ("{repo}", "{branch}"),' in workflow
         output_name = repo.lower() if repo == "RADTE" else repo
         assert f"{output_name}_repo_sha: ${{{{ steps.vars.outputs.{output_name}_repo_sha }}}}" in workflow
-        assert f'{output_name}_repo_sha="$(resolve_source_sha {repo})"' in workflow
+        resolve_args = f"{repo} main" if repo == "kfl1ou" else repo
+        assert f'{output_name}_repo_sha="$(resolve_source_sha {resolve_args})"' in workflow
 
     assert 'f"/repos/kfuku52/{upstream_repo}/commits"' in workflow
-    assert 'matched_files = [f"kfuku52/{upstream_repo}@master"]' in workflow
+    assert '"sha": upstream_branch' in workflow
+    assert 'matched_files = [f"kfuku52/{upstream_repo}@{upstream_branch}"]' in workflow
     assert "KFU52_REPO_REF=master" in workflow
     assert "KFU52_AMALGKIT_REPO_REF=master" in workflow
     assert "KFU52_CSUBST_REPO_REF=master" in workflow
+    assert "KFL1OU_REPO_REF=main" in workflow
     for build_arg, output_name in (
         ("KFU52_AMALGKIT_REPO_SHA", "amalgkit_repo_sha"),
         ("KFU52_CDSKIT_REPO_SHA", "cdskit_repo_sha"),
@@ -2695,6 +2708,8 @@ def test_release_sif_builds_platforms_concurrently_on_native_runners():
     assert "docker/setup-qemu-action" not in workflow
     assert "scope=container-${{ steps.platform.outputs.pair }}" in build_block
     assert "push-by-digest=true" in build_block
+    assert 'kfl1ou_repo_sha="$(resolve_source_sha kfl1ou main)"' in workflow
+    assert "KFL1OU_REPO_REF=main" in workflow
 
 
 def test_local_buildx_skips_an_unchanged_loaded_image_by_fingerprint():

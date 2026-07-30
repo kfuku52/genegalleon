@@ -323,3 +323,9 @@ def test_container_env_coverage_preflight_matches_current_repo():
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "Conda environment coverage matches" in completed.stdout
+
+
+def test_container_env_coverage_preflight_does_not_require_ripgrep():
+    script = CHECK_ENV_COVERAGE.read_text(encoding="utf-8")
+
+    assert "rg -n" not in script

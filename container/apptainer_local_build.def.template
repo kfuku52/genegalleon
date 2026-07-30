@@ -134,7 +134,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
         -r /opt/pg/pip-compatibility.requirements.txt
     micromamba run -n base python -c "import ete4, genomepy, lxml, ortools, PIL"
     micromamba run -n base python -m pip check
-    kfl1ou_repo_ref="${kfl1ou_repo_ref:-${kfu52_repo_ref}}"
+    kfl1ou_repo_ref="${kfl1ou_repo_ref:-main}"
     TESTNH_TARBALL_SHA256="${testnh_tarball_sha256}" \
     CAFE5_TARBALL_SHA256="${cafe5_tarball_sha256}" \
     KFU52_REPO_REF="${kfu52_repo_ref}" \

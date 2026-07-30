@@ -83,15 +83,17 @@ jobs:
           sif_name="${repo_name}_${release_tag}_amd64.sif"
 
           resolve_source_sha() {
+            local repo="$1"
+            local branch="${2:-master}"
             bash container/scripts/resolve_git_branch_sha.sh \
-              "https://github.com/kfuku52/$1.git" master
+              "https://github.com/kfuku52/${repo}.git" "${branch}"
           }
 
           amalgkit_repo_sha="$(resolve_source_sha amalgkit)"
           cdskit_repo_sha="$(resolve_source_sha cdskit)"
           csubst_repo_sha="$(resolve_source_sha csubst)"
           nwkit_repo_sha="$(resolve_source_sha nwkit)"
-          kfl1ou_repo_sha="$(resolve_source_sha kfl1ou)"
+          kfl1ou_repo_sha="$(resolve_source_sha kfl1ou main)"
           kftools_repo_sha="$(resolve_source_sha kftools)"
           rkftools_repo_sha="$(resolve_source_sha rkftools)"
           radte_repo_sha="$(resolve_source_sha RADTE)"
@@ -191,6 +193,7 @@ jobs:
             KFU52_CSUBST_REPO_REF=master
             KFU52_CSUBST_REPO_SHA=${{ needs.prepare-release.outputs.csubst_repo_sha }}
             KFU52_NWKIT_REPO_SHA=${{ needs.prepare-release.outputs.nwkit_repo_sha }}
+            KFL1OU_REPO_REF=main
             KFL1OU_REPO_SHA=${{ needs.prepare-release.outputs.kfl1ou_repo_sha }}
             KFTOOLS_REPO_SHA=${{ needs.prepare-release.outputs.kftools_repo_sha }}
             RKFTOOLS_REPO_SHA=${{ needs.prepare-release.outputs.rkftools_repo_sha }}
