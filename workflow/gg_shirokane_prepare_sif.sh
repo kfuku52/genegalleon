@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# SHIROKANE AGE resources for materializing a GeneGalleon SIF.
+# SHIROKANE AGE resources for validating and installing a GeneGalleon SIF.
 #$ -S /bin/bash
 #$ -cwd
 #$ -pe def_slot 1

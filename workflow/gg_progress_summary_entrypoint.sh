@@ -3,7 +3,7 @@
 # Scheduler header notes:
 # - Keep sections ordered as SLURM -> UGE -> PBS across entrypoints.
 # - Update job name, CPU count, memory, walltime, log paths, and array size together.
-# - Site-specific partition/queue/resource lines stay commented examples by default.
+# - UGE resources default to SHIROKANE AGE; SLURM/PBS site-specific lines remain examples.
 
 # SLURM
 # Common parameters: job name, cores per task, memory per core, walltime, log files, and working directory.
@@ -22,13 +22,12 @@
 ##SBATCH --mail-user=<aaa@bbb.com>
 
 ## UGE
-# Portable AGE/UGE parameters: shell, working directory, slot count, and memory per slot.
+# SHIROKANE AGE defaults: shell, working directory, slot count, memory per slot, and ljob.
 #$ -S /bin/bash
 #$ -cwd
 #$ -pe def_slot 4
 #$ -l s_vmem=8G
-# SHIROKANE submissions use workflow/sites/shirokane/gg_shirokane_submit.sh,
-# which requests the ljob resource by default.
+#$ -l ljob
 
 ## PBS
 # Common parameters: shell, CPU count, total memory, and exported environment.

@@ -65,7 +65,7 @@ ssh shirokane-kf52 \
 GG_SHIROKANE_PREBUILT_SIF=incoming/genegalleon-${tag}.sif,\
 GG_SHIROKANE_SIF_TAG=${tag},\
 GG_SHIROKANE_SIF_SHA256=${sha256} \
-workflow/sites/shirokane/gg_shirokane_prepare_sif.sh"
+workflow/gg_shirokane_prepare_sif.sh"
 ```
 
 The preparation job:
@@ -95,7 +95,7 @@ a job. Normal submissions also use `qsub -terse`, so successful output contains
 the AGE job ID:
 
 ```bash
-bash workflow/sites/shirokane/gg_shirokane_submit.sh \
+bash workflow/gg_shirokane_submit.sh \
   --entrypoint gg_gene_evolution_entrypoint.sh \
   --tasks 1 \
   --verify
@@ -110,7 +110,7 @@ ranges and step zero are rejected before `qsub` is called.
 Array-aware example:
 
 ```bash
-bash workflow/sites/shirokane/gg_shirokane_submit.sh \
+bash workflow/gg_shirokane_submit.sh \
   --entrypoint gg_gene_evolution_entrypoint.sh \
   --tasks 1-N
 ```
@@ -118,15 +118,16 @@ bash workflow/sites/shirokane/gg_shirokane_submit.sh \
 Fixed single-task example:
 
 ```bash
-bash workflow/sites/shirokane/gg_shirokane_submit.sh \
+bash workflow/gg_shirokane_submit.sh \
   --entrypoint gg_genome_evolution_entrypoint.sh
 ```
 
-The helper preserves each entrypoint's default `def_slot` and `s_vmem`
-directives while adding `ljob`. Override them only when the data require it:
+Each entrypoint now carries SHIROKANE defaults for `def_slot`, `s_vmem`, and
+`ljob`. The helper preserves those defaults and lets the command line override
+them when the data require it:
 
 ```bash
-bash workflow/sites/shirokane/gg_shirokane_submit.sh \
+bash workflow/gg_shirokane_submit.sh \
   --entrypoint gg_transcriptome_generation_entrypoint.sh \
   --tasks 1-N \
   --slots 4 \

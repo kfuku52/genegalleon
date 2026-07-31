@@ -129,7 +129,7 @@ qsub \
   -terse \
   -v GG_SHIROKANE_PREBUILT_SIF=incoming/genegalleon-<tag>.sif,\
 GG_SHIROKANE_SIF_TAG=<tag>,GG_SHIROKANE_SIF_SHA256=<sha256> \
-  workflow/sites/shirokane/gg_shirokane_prepare_sif.sh
+  workflow/gg_shirokane_prepare_sif.sh
 ```
 
 The checksum is required. The registration job also executes `uname -m` inside

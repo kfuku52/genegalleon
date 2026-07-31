@@ -14,8 +14,8 @@ from shell_static_helpers import (
 
 SITE_RUNTIME_PATH = WORKFLOW_DIR / "support" / "gg_site_runtime.sh"
 GG_UTIL_PATH = WORKFLOW_DIR / "support" / "gg_util.sh"
-SUBMIT_HELPER_PATH = WORKFLOW_DIR / "sites" / "shirokane" / "gg_shirokane_submit.sh"
-PREPARE_SIF_PATH = WORKFLOW_DIR / "sites" / "shirokane" / "gg_shirokane_prepare_sif.sh"
+SUBMIT_HELPER_PATH = WORKFLOW_DIR / "gg_shirokane_submit.sh"
+PREPARE_SIF_PATH = WORKFLOW_DIR / "gg_shirokane_prepare_sif.sh"
 
 
 def run_bash(command: str, cwd: Path):
@@ -142,7 +142,7 @@ def test_shirokane_submit_helper_rejects_invalid_task_ranges(tmp_path, tasks):
 def test_shirokane_submit_helper_accepts_symlinked_repository_path(tmp_path):
     repo_link = tmp_path / "repo-link"
     repo_link.symlink_to(WORKFLOW_DIR.parent, target_is_directory=True)
-    helper = repo_link / "workflow" / "sites" / "shirokane" / "gg_shirokane_submit.sh"
+    helper = repo_link / "workflow" / "gg_shirokane_submit.sh"
 
     completed = subprocess.run(
         [
@@ -401,7 +401,7 @@ def test_shirokane_sif_preparation_rejects_concurrent_same_tag_install(tmp_path)
     assert "job_id=another-job" in completed.stderr
 
 
-def test_portable_uge_headers_drop_nonportable_resources():
+def test_uge_headers_default_to_shirokane_ljob():
     entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
     assert entrypoints
 
@@ -412,6 +412,7 @@ def test_portable_uge_headers_drop_nonportable_resources():
         assert "#$ -cwd" in uge_header
         assert "#$ -pe def_slot " in uge_header
         assert "#$ -l s_vmem=" in uge_header
+        assert "#$ -l ljob" in uge_header
         assert "#$ -l mem_req=" not in uge_header
         assert "#$ -l epyc" not in uge_header
         assert "#$ -l d_rt=" not in uge_header

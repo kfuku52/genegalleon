@@ -184,7 +184,7 @@ jobs:
             workflow/support/gg_site_runtime.sh \
             workflow/support/gg_util.sh \
             workflow/support/gg_util/*.sh \
-            workflow/sites/shirokane/*.sh
+            workflow/gg_shirokane_*.sh
 
       - name: Ruff check all Python sources
         run: |

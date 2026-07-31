@@ -30,11 +30,12 @@ sbatch workflow/gg_gene_evolution_entrypoint.sh
 qsub workflow/gg_gene_evolution_entrypoint.sh
 ```
 
-On SHIROKANE, use the site submit helper instead. It adds the `ljob` resource
-by default while retaining the entrypoint's slot, memory, and array settings:
+The UGE directives in each entrypoint default to the SHIROKANE `ljob`
+resource. The optional submit helper keeps those defaults while accepting
+array ranges and resource overrides on the command line:
 
 ```bash
-bash workflow/sites/shirokane/gg_shirokane_submit.sh \
+bash workflow/gg_shirokane_submit.sh \
   --entrypoint gg_gene_evolution_entrypoint.sh \
   --tasks 1-N
 ```

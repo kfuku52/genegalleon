@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-repo_root="$(cd "${script_dir}/../../.." && pwd -P)"
+repo_root="$(cd "${script_dir}/.." && pwd -P)"
 workflow_dir="${repo_root}/workflow"
 
 validate_age_task_range() {
@@ -31,7 +31,7 @@ validate_age_task_range() {
 usage() {
   cat <<'EOF'
 Usage:
-  bash workflow/sites/shirokane/gg_shirokane_submit.sh \
+  bash workflow/gg_shirokane_submit.sh \
     --entrypoint <gg_*_entrypoint.sh> [options]
 
 Required:
@@ -48,10 +48,10 @@ Options:
   -h, --help                 Show this help.
 
 Examples:
-  bash workflow/sites/shirokane/gg_shirokane_submit.sh \
+  bash workflow/gg_shirokane_submit.sh \
     --entrypoint gg_gene_evolution_entrypoint.sh --tasks 1-20
 
-  bash workflow/sites/shirokane/gg_shirokane_submit.sh \
+  bash workflow/gg_shirokane_submit.sh \
     --entrypoint gg_transcriptome_generation_entrypoint.sh \
     --tasks 1-8 --slots 4 --mem-per-slot 32G --verify
 EOF
