@@ -41,97 +41,55 @@ The default layout expects:
 - `./workflow/`
 - `./workspace/`
 
-## 2. Install a versioned SIF
+## 2. Place the SIF
 
 Build or obtain the SIF outside SHIROKANE, then transfer the completed file.
-SHIROKANE currently provides Apptainer 1.2.4, so the deployment path does not
-convert the large OCI image on the cluster.
+Use an amd64 image because SHIROKANE compute nodes are amd64. The workflow
+expects the final file at `./genegalleon.sif`.
 
 Example on the machine that holds the SIF:
 
 ```bash
 sha256=$(shasum -a 256 genegalleon.sif | awk '{print $1}')
-tag="sha256-${sha256:0:12}"
-ssh shirokane-kf52 'mkdir -p "$HOME/genegalleon/incoming"'
+ssh shirokane-kf52 'mkdir -p "$HOME/genegalleon"'
 rsync --partial --progress genegalleon.sif \
-  "shirokane-kf52:genegalleon/incoming/genegalleon-${tag}.sif"
-```
-
-Submit the validation and installation job from the same local shell:
-
-```bash
+  "shirokane-kf52:genegalleon/genegalleon.sif.incoming"
 ssh shirokane-kf52 \
-  "cd \"\$HOME/genegalleon\" && qsub -terse -v \
-GG_SHIROKANE_PREBUILT_SIF=incoming/genegalleon-${tag}.sif,\
-GG_SHIROKANE_SIF_TAG=${tag},\
-GG_SHIROKANE_SIF_SHA256=${sha256} \
-workflow/gg_shirokane_prepare_sif.sh"
-```
-
-The preparation job:
-
-- requests the SHIROKANE `ljob` resource,
-- validates the transferred image with `apptainer inspect` on a compute node,
-- requires and verifies the expected SHA-256 before and after installation,
-- executes `uname -m` inside the SIF and rejects non-amd64 images,
-- serializes installations that use the same immutable tag,
-- writes a versioned SIF under `containers/`,
-- writes a relocatable SHA-256 file,
-- updates `./genegalleon.sif` atomically as a relative symlink after validation.
-
-It refuses to replace an existing regular `./genegalleon.sif`. Move or rename
-such a file explicitly before switching to versioned symlinks.
-
-Monitor the job with:
-
-```bash
-qstat
+  "cd \"\$HOME/genegalleon\" && \
+printf '%s  %s\n' '${sha256}' genegalleon.sif.incoming | sha256sum -c - && \
+mv -f genegalleon.sif.incoming genegalleon.sif"
 ```
 
 ## 3. Verify an AGE submission
 
-The SHIROKANE submit helper defaults to `-l ljob`. Verification does not submit
-a job. Normal submissions also use `qsub -terse`, so successful output contains
-the AGE job ID:
+The UGE header in each entrypoint already contains the SHIROKANE `ljob`
+resource. Verification does not submit a job:
 
 ```bash
-bash workflow/gg_shirokane_submit.sh \
-  --entrypoint gg_gene_evolution_entrypoint.sh \
-  --tasks 1 \
-  --verify
+qsub -verify -t 1 workflow/gg_gene_evolution_entrypoint.sh
 ```
-
-Use `--dry-run` to print the `qsub` command without contacting AGE.
-Task IDs, range endpoints, and range steps must be positive integers; decreasing
-ranges and step zero are rejected before `qsub` is called.
 
 ## 4. Submit a workflow
 
 Array-aware example:
 
 ```bash
-bash workflow/gg_shirokane_submit.sh \
-  --entrypoint gg_gene_evolution_entrypoint.sh \
-  --tasks 1-N
+qsub -terse -t 1-N workflow/gg_gene_evolution_entrypoint.sh
 ```
 
 Fixed single-task example:
 
 ```bash
-bash workflow/gg_shirokane_submit.sh \
-  --entrypoint gg_genome_evolution_entrypoint.sh
+qsub -terse workflow/gg_genome_evolution_entrypoint.sh
 ```
 
 Each entrypoint now carries SHIROKANE defaults for `def_slot`, `s_vmem`, and
-`ljob`. The helper preserves those defaults and lets the command line override
-them when the data require it:
+`ljob`. Override them with standard `qsub` options only when the data require
+it:
 
 ```bash
-bash workflow/gg_shirokane_submit.sh \
-  --entrypoint gg_transcriptome_generation_entrypoint.sh \
-  --tasks 1-N \
-  --slots 4 \
-  --mem-per-slot 32G
+qsub -terse -t 1-N -pe def_slot 4 -l s_vmem=32G,ljob \
+  workflow/gg_transcriptome_generation_entrypoint.sh
 ```
 
 On SHIROKANE, `s_vmem` is memory per slot. The last example requests
@@ -144,16 +102,15 @@ or reserving more virtual memory than AGE allocated.
 
 ## Resource selection
 
-The helper accepts:
-
-- `--resource ljob`: default; Thin nodes, maximum runtime 62 days.
-- `--resource mjob`: Thin nodes, maximum runtime 2 days.
-- `--resource lmem`: Fat nodes, maximum runtime 14 days.
-- `--resource exclusive`: dedicated group queue when the account has an
+- `ljob`: default; Thin nodes, maximum runtime 62 days.
+- `mjob`: Thin nodes, maximum runtime 2 days.
+- `lmem`: Fat nodes, maximum runtime 14 days.
+- `exclusive`: dedicated group queue when the account has an
   allocation.
 
 Use the default `ljob` for GeneGalleon production work. Use `lmem` only when
-the requested total memory or observed workload requires a Fat node.
+the requested total memory or observed workload requires a Fat node. Specify an
+alternative together with `s_vmem`, for example `-l s_vmem=64G,lmem`.
 
 AGE chooses SHIROKANE queues through these resources. Do not add a direct
 `-q ljobs.q` selection.
@@ -170,7 +127,7 @@ particular:
 - transcriptome generation uses the number of selected species/SRA input
   units.
 
-Start with `--tasks 1 --verify`, then submit one real task before launching the
+Start with `qsub -verify -t 1`, then submit one real task before launching the
 full range.
 
 ## Storage checks
@@ -186,9 +143,8 @@ Avoid placing more than 5,000 files in one directory. Archive completed,
 fine-grained intermediate outputs when they no longer need to be accessed
 individually.
 
-GeneGalleon outputs remain in the shared workspace. SIF installation copies to
-`containers/<name>.sif.partial.<JOB_ID>` and removes an incomplete partial file
-on exit. Runtime workflows may use job-local `/tmp` for transient work.
+GeneGalleon outputs and `genegalleon.sif` remain on the shared filesystem.
+Runtime workflows may use job-local `/tmp` for transient work.
 
 ## Expected startup evidence
 

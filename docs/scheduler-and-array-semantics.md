@@ -31,16 +31,13 @@ qsub workflow/gg_gene_evolution_entrypoint.sh
 ```
 
 The UGE directives in each entrypoint default to the SHIROKANE `ljob`
-resource. The optional submit helper keeps those defaults while accepting
-array ranges and resource overrides on the command line:
+resource. Use standard `qsub` options for array ranges and resource overrides:
 
 ```bash
-bash workflow/gg_shirokane_submit.sh \
-  --entrypoint gg_gene_evolution_entrypoint.sh \
-  --tasks 1-N
+qsub -terse -t 1-N workflow/gg_gene_evolution_entrypoint.sh
 ```
 
-See the [SHIROKANE AGE Guide](shirokane-age.md) for SIF preparation, AGE
+See the [SHIROKANE AGE Guide](shirokane-age.md) for SIF transfer, AGE
 verification, and resource selection.
 
 When no scheduler metadata is present, GeneGalleon falls back to local defaults such as:

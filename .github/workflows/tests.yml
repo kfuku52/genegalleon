@@ -183,8 +183,7 @@ jobs:
             workflow/core/gg_transcriptome_generation_core.sh \
             workflow/support/gg_site_runtime.sh \
             workflow/support/gg_util.sh \
-            workflow/support/gg_util/*.sh \
-            workflow/gg_shirokane_*.sh
+            workflow/support/gg_util/*.sh
 
       - name: Ruff check all Python sources
         run: |
