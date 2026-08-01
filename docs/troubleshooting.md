@@ -124,8 +124,10 @@ Symptom:
 What to do:
 
 - stop old array jobs that may still write below the affected query2family or orthogroup root,
+- inspect the saved phase and counts with `gg_gene_family_archive.sh conversion-status --root <output-root>`,
 - rerun the same `gg_gene_family_archive.sh convert-storage ... --to zip|raw` command,
-- if the command instead reports `index-update.pending`, run `verify` and then `repair` as instructed before resuming conversion,
+- or add `--resume` to require that the pending conversion exists and matches the requested direction,
+- raw-to-ZIP resume cleans partial shards and repairs a pending index automatically; use the standalone `repair` command only when no conversion marker exists,
 - do not remove the conversion marker manually; it records the required target direction.
 
 ### Taxonomy or database cache issues

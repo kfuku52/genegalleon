@@ -89,18 +89,18 @@ remain live. Array tasks archive in batches controlled by
 summary flushes smaller completed batches.
 
 Gene-family tasks hold a shared lock for their family while they may read or
-write live outputs. Lock files use a fixed set of hash buckets, so lock
+write live outputs. Lock files use 16 fixed hash stripes, so lock
 metadata itself cannot grow with the number of families. Archive maintenance
 takes only the relevant buckets exclusively and nonblockingly: an active
 family is skipped while completed families in other buckets can still be
 archived. A separate reader-maintenance lock prevents a ZIP shard from being
 replaced while a downstream reader has it open.
 
-The bounded metadata cost is at most 256 family-lock files, 256 state-lock
+The bounded metadata cost is at most 16 family-lock files, 16 state-lock
 files, 256 family-index JSON files, and 256 state-index JSON files, plus a
-small number of global/per-subdirectory files and ZIP shards. Thus the fixed
-worst-case metadata is roughly one thousand files rather than one lock or
-index file per family.
+small number of global/per-subdirectory files and ZIP shards. Existing stores
+created by an older build can remove unused 256-way lock files with
+`optimize-metadata` after every job using that output root has stopped.
 
 Immutable shards are compacted automatically before the number of referenced
 shards in one logical subdirectory becomes large. Index updates and obsolete
@@ -132,7 +132,7 @@ can obtain the affected family lock. It also retains at most
 individual limit to `0` to disable it. Cleanup recognizes only task directory
 names beginning with a numeric array index and an underscore.
 
-Archives are ordinary Deflate-compatible ZIP files under
+Archives are ordinary ZIP files under
 `<gene-family-root>/.gg_archives/<subdirectory>/{part,pack}-*.zip`. Each member keeps
 its logical `<subdirectory>/<filename>` path. GeneGalleon summaries, database
 generation, HGT plots, csubst site plots, and orthogroup-based GRAmPA read
@@ -140,6 +140,18 @@ these archives transparently or materialize only the family inputs required
 by an external tool. HGT and csubst materialization directories carry
 per-run locks; after SIGKILL, a later invocation reclaims only run directories
 whose owner lock is no longer held.
+
+The default `adaptive` compression deflates ordinary text and sequence files
+while storing already compressed `.gz`, `.zip`, image, and PDF members without
+redundant recompression. Configure routine workflow archiving with:
+
+- `GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION=adaptive|deflate|store`
+- `GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL=0..9`
+- `GG_COMMON_GENE_FAMILY_ZIP_WORKERS=1..4`
+
+`store` prioritizes packing files into a small number of inodes over reducing
+bytes. Worker concurrency is deliberately capped at four to avoid an
+unbounded burst of metadata and read traffic on a shared filesystem.
 
 ### Adding, replacing, and deleting files manually
 
@@ -253,6 +265,33 @@ bash workflow/gg_gene_family_archive.sh convert-storage \
   --to zip
 ```
 
+`--query-dir` unambiguously selects query2family mode and `--genecount`
+selects orthogroup mode, so `--mode` can be omitted in these examples. The
+first ZIP write records `store.json` with the mode, current catalog count and
+family-ID digest, compression settings, and catalog source paths. Commands
+against an existing ZIP store then infer the mode and reject an explicit
+conflicting value. Adding query input files updates the catalog count and
+digest without invalidating older shards.
+
+Large conversions emit a flushed `progress` line immediately, at each shard
+or subdirectory transition, and every 30 seconds while a ZIP write is still
+running. Each line includes elapsed seconds and the latest phase/counts. Use
+`--progress-interval 10` for more frequent heartbeats or `0` for transition
+lines only. Conversion writes its current phase, heartbeat, completed
+subdirectories, and committed counts into the durable conversion marker.
+
+Compression and bounded parallel writing can also be selected per conversion:
+
+```bash
+bash workflow/gg_gene_family_archive.sh convert-storage \
+  --root workspace/output/orthogroup \
+  --genecount workspace/output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv \
+  --to zip \
+  --compression adaptive \
+  --compression-level 1 \
+  --workers 2
+```
+
 The command reads but never modifies `workspace/output/orthofinder/`.
 
 To restore the current logical view to ordinary files, first inspect the
@@ -261,13 +300,11 @@ uncompressed byte and file counts and then run the conversion:
 ```bash
 bash workflow/gg_gene_family_archive.sh convert-storage \
   --root workspace/output/query2family \
-  --mode query2family \
   --to raw \
   --dry-run
 
 bash workflow/gg_gene_family_archive.sh convert-storage \
   --root workspace/output/query2family \
-  --mode query2family \
   --to raw
 ```
 
@@ -283,7 +320,12 @@ reported `raw_materialize_allocated_bytes` and `raw_peak_new_files` with the
 applicable quota before a large conversion.
 
 Both directions write `storage-conversion.pending`. A stopped conversion is
-resumed by running the same command again. `gg_gene_evolution` and progress
+resumed automatically by running the same command again. Add `--resume` when
+you want the command to require an existing matching interrupted conversion;
+it fails instead of silently starting a new conversion when no marker exists.
+Before resuming raw-to-ZIP, GeneGalleon removes partial shards and rebuilds the
+authoritative indexes from committed manifests, making shard/index crash
+windows recoverable. `gg_gene_evolution` and progress
 summary refuse to start while the marker remains. Stop old array jobs before
 conversion; writers from code predating this lock protocol cannot be prevented
 from creating new live files, although signature checks keep such files from
@@ -294,8 +336,23 @@ To inspect the current physical/logical counts independently:
 ```bash
 bash workflow/gg_gene_family_archive.sh storage-status \
   --root workspace/output/query2family \
-  --mode query2family \
   --query-dir workspace/input/query_gene
+```
+
+To inspect only the resumable marker and archive format without reading the
+family catalog:
+
+```bash
+bash workflow/gg_gene_family_archive.sh conversion-status \
+  --root workspace/output/query2family
+```
+
+After upgrading a project and stopping all old/new gene-family jobs, remove
+obsolete lock files created by the former 256-way layout:
+
+```bash
+bash workflow/gg_gene_family_archive.sh optimize-metadata \
+  --root workspace/output/query2family
 ```
 
 To compact existing shards explicitly:

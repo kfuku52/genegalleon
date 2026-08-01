@@ -88,6 +88,9 @@ gene_family_tmp_max_bytes
 gene_family_tmp_max_files
 gene_family_tmp_retention_days
 gene_family_zip_min_batch_files
+gene_family_zip_compression
+gene_family_zip_compression_level
+gene_family_zip_workers
 input_sequence_mode
 intron_gain_rate
 iqtree_fast_mode_gt
@@ -351,6 +354,9 @@ EOF
     gg_progress_summary_entrypoint.sh)
       cat <<'EOF'
 gene_family_output_storage
+gene_family_zip_compression
+gene_family_zip_compression_level
+gene_family_zip_workers
 gene_family_tmp_max_dirs
 gene_family_tmp_max_bytes
 gene_family_tmp_max_files

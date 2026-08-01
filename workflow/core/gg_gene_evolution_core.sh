@@ -53,6 +53,9 @@ gene_family_run_succeeded=0
 gene_family_materialization_receipt=""
 gene_family_output_storage=$(printf '%s' "${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}" | tr '[:upper:]' '[:lower:]')
 gene_family_zip_min_batch_files="${gene_family_zip_min_batch_files:-${GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES:-100}}"
+gene_family_zip_compression=$(printf '%s' "${gene_family_zip_compression:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION:-adaptive}}" | tr '[:upper:]' '[:lower:]')
+gene_family_zip_compression_level="${gene_family_zip_compression_level:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL:-6}}"
+gene_family_zip_workers="${gene_family_zip_workers:-${GG_COMMON_GENE_FAMILY_ZIP_WORKERS:-1}}"
 gene_family_tmp_retention_days="${gene_family_tmp_retention_days:-${GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS:-7}}"
 gene_family_tmp_max_dirs="${gene_family_tmp_max_dirs:-${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:-100}}"
 gene_family_tmp_max_bytes="${gene_family_tmp_max_bytes:-${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:-107374182400}}"
@@ -72,6 +75,27 @@ if [[ ! "${gene_family_zip_min_batch_files}" =~ ^[0-9]+$ || ${gene_family_zip_mi
   echo "Invalid gene_family_zip_min_batch_files: ${gene_family_zip_min_batch_files}; expected a positive integer." >&2
   exit 1
 fi
+case "${gene_family_zip_compression}" in
+  adaptive|deflate|store)
+    ;;
+  *)
+    echo "Invalid gene_family_zip_compression: ${gene_family_zip_compression}; expected adaptive, deflate, or store." >&2
+    exit 1
+    ;;
+esac
+if [[ ! "${gene_family_zip_compression_level}" =~ ^[0-9]+$ || ${gene_family_zip_compression_level} -gt 9 ]]; then
+  echo "Invalid gene_family_zip_compression_level: ${gene_family_zip_compression_level}; expected an integer from 0 through 9." >&2
+  exit 1
+fi
+if [[ ! "${gene_family_zip_workers}" =~ ^[0-9]+$ || ${gene_family_zip_workers} -lt 1 || ${gene_family_zip_workers} -gt 4 ]]; then
+  echo "Invalid gene_family_zip_workers: ${gene_family_zip_workers}; expected an integer from 1 through 4." >&2
+  exit 1
+fi
+gene_family_archive_write_args=(
+  --compression "${gene_family_zip_compression}"
+  --compression-level "${gene_family_zip_compression_level}"
+  --workers "${gene_family_zip_workers}"
+)
 if [[ ! "${gene_family_tmp_retention_days}" =~ ^[0-9]+$ ]]; then
   echo "Invalid gene_family_tmp_retention_days: ${gene_family_tmp_retention_days}; expected a non-negative integer." >&2
   exit 1
@@ -647,6 +671,7 @@ cleanup_tmp_dir_on_normal_exit() {
   ]]; then
     if ! python "${gene_family_store_script}" archive-family \
       "${gene_family_store_context_args[@]}" \
+      "${gene_family_archive_write_args[@]}" \
       --family-id "${og_id}" \
       --nonblocking
     then
@@ -4372,6 +4397,7 @@ fi
 if [[ "${gene_family_output_storage}" == "zip" && ${gg_debug_mode:-0} -eq 0 ]]; then
   if ! python "${gene_family_store_script}" archive-completed \
     "${gene_family_store_context_args[@]}" \
+    "${gene_family_archive_write_args[@]}" \
     --min-files "${gene_family_zip_min_batch_files}" \
     --nonblocking
   then

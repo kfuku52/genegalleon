@@ -26,10 +26,12 @@ from workflow.support.gene_family_output_store import (
     family_context,
     family_context_with_supplement,
     family_lock_path,
+    optimize_archive_metadata,
     orthogroup_id_from_name,
     purge_archives,
     repair_archive_index,
     run_cli,
+    storage_conversion_status,
     storage_conversion_summary,
 )
 
@@ -1906,7 +1908,8 @@ def test_archive_rejects_mode_different_from_existing_shards(tmp_path: Path):
     root = tmp_path / "query2family"
     family_id = "OG0000001"
     _write_family_outputs(root, family_id, complete=False)
-    matcher = lambda name: family_id if name.startswith(family_id + "_") else None
+    def matcher(name):
+        return family_id if name.startswith(family_id + "_") else None
     archive_completed_outputs(
         root,
         "query2family",
@@ -1942,7 +1945,8 @@ def test_archive_mode_mismatch_is_rejected_without_archive_candidates(
     root = tmp_path / "query2family"
     family_id = "OG0000001"
     _write_family_outputs(root, family_id, complete=False)
-    matcher = lambda name: family_id if name.startswith(family_id + "_") else None
+    def matcher(name):
+        return family_id if name.startswith(family_id + "_") else None
     archive_completed_outputs(
         root,
         "query2family",
@@ -1971,7 +1975,8 @@ def test_verify_rejects_referenced_shards_with_mixed_modes(
     root = tmp_path / "query2family"
     family_id = "OG0000001"
     _write_family_outputs(root, family_id, complete=False)
-    matcher = lambda name: family_id if name.startswith(family_id + "_") else None
+    def matcher(name):
+        return family_id if name.startswith(family_id + "_") else None
     archive_completed_outputs(
         root,
         "query2family",
@@ -1983,6 +1988,7 @@ def test_verify_rejects_referenced_shards_with_mixed_modes(
     second.parent.mkdir(parents=True)
     second.write_text("second mode\n", encoding="utf-8")
     monkeypatch.setattr(output_store_module, "_assert_archive_mode", lambda *_: None)
+    monkeypatch.setattr(output_store_module, "_write_store_metadata", lambda *_, **__: {})
     archive_completed_outputs(
         root,
         "orthogroup",
@@ -2080,3 +2086,253 @@ def test_convert_storage_dry_run_does_not_create_archive_metadata(
     assert "requested_target\tzip" in output
     assert paths["mafft"].is_file()
     assert not (root / ".gg_archives").exists()
+
+
+def test_archive_metadata_enables_mode_autodetection_and_tracks_catalog_additions(
+    tmp_path: Path,
+):
+    root = tmp_path / "query2family"
+    query_dir = tmp_path / "query_gene"
+    query_dir.mkdir()
+    (query_dir / "A").write_text("geneA\n", encoding="utf-8")
+    _write_family_outputs(root, "A", complete=True)
+    family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
+    archive_completed_outputs(root, "query2family", family_ids, family_from_name)
+    metadata_path = root / ".gg_archives" / "store.json"
+    first_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    destination = tmp_path / "materialized"
+    args = build_parser().parse_args(
+        [
+            "materialize-family",
+            "--root",
+            str(root),
+            "--family-id",
+            "A",
+            "--destination",
+            str(destination),
+        ]
+    )
+    assert run_cli(args) == 0
+    assert (destination / "mafft" / "A_cds.aln.fa.gz").is_file()
+
+    (query_dir / "B").write_text("geneB\n", encoding="utf-8")
+    _write_family_outputs(root, "B", complete=True)
+    args = build_parser().parse_args(
+        [
+            "archive-completed",
+            "--root",
+            str(root),
+            "--query-dir",
+            str(query_dir),
+        ]
+    )
+    assert run_cli(args) == 0
+    second_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert first_metadata["mode"] == second_metadata["mode"] == "query2family"
+    assert first_metadata["catalog_family_count"] == 1
+    assert second_metadata["catalog_family_count"] == 2
+    assert first_metadata["catalog_family_ids_sha256"] != second_metadata[
+        "catalog_family_ids_sha256"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("compression", "text_method", "gzip_method"),
+    [
+        ("adaptive", zipfile.ZIP_DEFLATED, zipfile.ZIP_STORED),
+        ("deflate", zipfile.ZIP_DEFLATED, zipfile.ZIP_DEFLATED),
+        ("store", zipfile.ZIP_STORED, zipfile.ZIP_STORED),
+    ],
+)
+def test_zip_compression_mode_controls_artifact_members(
+    tmp_path: Path,
+    compression: str,
+    text_method: int,
+    gzip_method: int,
+):
+    root = tmp_path / compression
+    family_id = "OG0000001"
+    text_path = root / "result" / f"{family_id}_plain.tsv"
+    gzip_path = root / "result" / f"{family_id}_nested.fa.gz"
+    text_path.parent.mkdir(parents=True)
+    text_path.write_bytes(b"plain text\n" * 100)
+    gzip_path.write_bytes(b"already compressed by convention")
+    archived = archive_completed_outputs(
+        root,
+        "orthogroup",
+        [family_id],
+        orthogroup_id_from_name,
+        include_incomplete=True,
+        compression=compression,
+        compression_level=1,
+    )
+    assert len(archived) == 1
+    with zipfile.ZipFile(archived[0][0]) as archive:
+        assert archive.getinfo(f"result/{text_path.name}").compress_type == text_method
+        assert archive.getinfo(f"result/{gzip_path.name}").compress_type == gzip_method
+
+
+def test_parallel_zip_workers_are_bounded_and_used_for_multiple_shards(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "orthogroup"
+    output_dir = root / "result"
+    output_dir.mkdir(parents=True)
+    family_id = "OG0000001"
+    for index in range(4):
+        (output_dir / f"{family_id}_{index}.tsv").write_bytes(b"x" * 1024)
+    original_archive_chunk = output_store_module._archive_chunk
+    active = 0
+    maximum_active = 0
+    active_lock = threading.Lock()
+
+    def observed_archive_chunk(*args, **kwargs):
+        nonlocal active, maximum_active
+        with active_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        try:
+            time.sleep(0.05)
+            return original_archive_chunk(*args, **kwargs)
+        finally:
+            with active_lock:
+                active -= 1
+
+    monkeypatch.setattr(output_store_module, "_archive_chunk", observed_archive_chunk)
+    archive_completed_outputs(
+        root,
+        "orthogroup",
+        [family_id],
+        orthogroup_id_from_name,
+        include_incomplete=True,
+        max_files_per_shard=2,
+        workers=2,
+    )
+
+    assert maximum_active == 2
+    GeneFamilyOutputStore(root).verify()
+
+
+def test_conversion_status_and_explicit_resume_recover_interruption(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "query2family"
+    query_dir = tmp_path / "query_gene"
+    query_dir.mkdir()
+    (query_dir / "A").write_text("geneA\n", encoding="utf-8")
+    paths = _write_family_outputs(root, "A", complete=False)
+    family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
+    original_remove = output_store_module._remove_archived_sources
+
+    def interrupt_source_cleanup(root, signatures):
+        raise OSError("simulated resumable interruption")
+
+    monkeypatch.setattr(output_store_module, "_remove_archived_sources", interrupt_source_cleanup)
+    with pytest.raises(OSError, match="simulated resumable interruption"):
+        convert_storage_to_zip(root, "query2family", family_ids, family_from_name)
+    status = storage_conversion_status(root)
+    assert status["conversion"] == "in-progress"
+    assert status["target"] == "zip"
+    assert status["mode"] == "query2family"
+    assert paths["mafft"].is_file()
+
+    monkeypatch.setattr(output_store_module, "_remove_archived_sources", original_remove)
+    result = convert_storage_to_zip(
+        root,
+        "query2family",
+        family_ids,
+        family_from_name,
+        require_resume=True,
+    )
+    assert result["conversion_resumed"] is True
+    assert storage_conversion_status(root)["conversion"] == "idle"
+    assert not paths["mafft"].exists()
+
+
+def test_explicit_resume_requires_pending_conversion(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    root.mkdir()
+    with pytest.raises(ArchiveStoreError, match="no interrupted storage conversion"):
+        convert_storage_to_zip(
+            root,
+            "orthogroup",
+            ["OG0000001"],
+            orthogroup_id_from_name,
+            require_resume=True,
+        )
+
+
+def test_convert_cli_emits_flushed_progress_and_auto_detects_reverse_mode(
+    tmp_path: Path,
+    capsys,
+):
+    root = tmp_path / "orthogroup"
+    genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    genecount.write_text("Orthogroup\tTotal\nOG0000001\t1\n", encoding="utf-8")
+    _write_family_outputs(root, "OG0000001", complete=False)
+    to_zip = build_parser().parse_args(
+        [
+            "convert-storage",
+            "--root",
+            str(root),
+            "--genecount",
+            str(genecount),
+            "--to",
+            "zip",
+            "--progress-interval",
+            "0",
+        ]
+    )
+    assert run_cli(to_zip) == 0
+    captured = capsys.readouterr()
+    assert "progress\t" in captured.err
+    assert "phase=complete" in captured.err
+
+    to_raw = build_parser().parse_args(
+        [
+            "convert-storage",
+            "--root",
+            str(root),
+            "--to",
+            "raw",
+            "--progress-interval",
+            "0",
+        ]
+    )
+    assert run_cli(to_raw) == 0
+    assert (root / "mafft" / "OG0000001_cds.aln.fa.gz").is_file()
+
+
+def test_lock_striping_and_metadata_optimization_reduce_legacy_lock_files(
+    tmp_path: Path,
+):
+    root = tmp_path / "orthogroup"
+    archive_root = root / ".gg_archives"
+    family_locks = archive_root / "family-locks"
+    state_locks = archive_root / "family-state-locks"
+    family_locks.mkdir(parents=True)
+    state_locks.mkdir(parents=True)
+    for name in ("00.lock", "0f.lock", "10.lock", "ff.lock"):
+        (family_locks / name).touch()
+    for name in ("00.lock", "fe.lock"):
+        (state_locks / name).touch()
+    stripe_names = {
+        family_lock_path(archive_root, f"OG{index:07d}").name
+        for index in range(1000)
+    }
+    assert len(stripe_names) <= 16
+    assert all(int(name.removesuffix(".lock"), 16) < 16 for name in stripe_names)
+
+    result = optimize_archive_metadata(root)
+    assert result["removed_legacy_lock_files"] == 3
+    assert (family_locks / "00.lock").is_file()
+    assert (family_locks / "0f.lock").is_file()
+    assert not (family_locks / "ff.lock").exists()
+    assert not (state_locks / "fe.lock").exists()
