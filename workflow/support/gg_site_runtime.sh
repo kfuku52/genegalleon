@@ -87,6 +87,58 @@ gg_shirokane_load_apptainer_module() {
   fi
 }
 
+gg_site_prepend_path_once() {
+  local path_entry=${1:-}
+
+  if [[ -z "${path_entry}" ]]; then
+    echo "Cannot prepend an empty PATH entry." >&2
+    return 1
+  fi
+
+  case ":${PATH:-}:" in
+    *":${path_entry}:"*)
+      return 0
+      ;;
+  esac
+
+  export PATH="${path_entry}${PATH:+:${PATH}}"
+}
+
+gg_nig_prepend_container_runtime_path() {
+  local package_root=${1:-/opt/pkg}
+  local legacy_runtime_dir=${2:-/bio/package/singularity/singularity_3.0/bin}
+  local runtime_name
+  local runtime_bin
+
+  if command -v apptainer >/dev/null 2>&1 \
+    || command -v singularity >/dev/null 2>&1; then
+    return 0
+  fi
+
+  for runtime_name in apptainer singularity; do
+    for runtime_bin in \
+      "${package_root}/${runtime_name}/bin/${runtime_name}" \
+      "${package_root}/${runtime_name}"/*/bin/"${runtime_name}"
+    do
+      if [[ ! -x "${runtime_bin}" ]]; then
+        continue
+      fi
+      gg_site_prepend_path_once "${runtime_bin%/*}"
+      return 0
+    done
+  done
+
+  for runtime_name in apptainer singularity; do
+    runtime_bin="${legacy_runtime_dir}/${runtime_name}"
+    if [[ -x "${runtime_bin}" ]]; then
+      gg_site_prepend_path_once "${legacy_runtime_dir}"
+      return 0
+    fi
+  done
+
+  return 0
+}
+
 gg_site_scheduler_prelude() {
   case "$(gg_detect_site_profile)" in
     shirokane)
@@ -95,10 +147,8 @@ gg_site_scheduler_prelude() {
     nig)
       if [[ -n "${PBS_O_WORKDIR:-}" ]]; then
         cd "${PBS_O_WORKDIR}" || return 1
-        if [[ -d "/bio/package/singularity/singularity_3.0/bin" ]]; then
-          export PATH="${PATH}:/bio/package/singularity/singularity_3.0/bin"
-        fi
       fi
+      gg_nig_prepend_container_runtime_path || return 1
       ;;
     *)
       if [[ -n "${PBS_O_WORKDIR:-}" ]]; then
