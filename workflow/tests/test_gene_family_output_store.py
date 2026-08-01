@@ -254,6 +254,45 @@ def test_verify_rejects_directly_modified_zip(tmp_path: Path):
         GeneFamilyOutputStore(root).verify()
 
 
+def test_verify_streams_each_manifest_once_without_testzip(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root = tmp_path / "orthogroup"
+    _write_family_outputs(root, "OG0000001", complete=True)
+    archive_completed_outputs(
+        root,
+        "orthogroup",
+        ["OG0000001"],
+        lambda name: "OG0000001" if name.startswith("OG0000001_") else None,
+    )
+    store = GeneFamilyOutputStore(root)
+    original_read_manifest = store._read_manifest
+
+    class SinglePassMembers(list):
+        iterated = False
+
+        def __iter__(self):
+            if self.iterated:
+                raise AssertionError("manifest members were iterated more than once")
+            self.iterated = True
+            return super().__iter__()
+
+    def read_manifest_once(zip_path):
+        manifest = original_read_manifest(zip_path)
+        manifest["members"] = SinglePassMembers(manifest["members"])
+        return manifest
+
+    monkeypatch.setattr(store, "_read_manifest", read_manifest_once)
+    monkeypatch.setattr(
+        zipfile.ZipFile,
+        "testzip",
+        lambda self: (_ for _ in ()).throw(AssertionError("testzip was called")),
+    )
+
+    assert store.verify()
+
+
 def test_list_cli_reports_live_override_and_archived_members(tmp_path: Path, capsys):
     root = tmp_path / "query2family"
     query_dir = tmp_path / "query_gene"

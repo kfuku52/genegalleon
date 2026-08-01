@@ -2327,7 +2327,7 @@ class GeneFamilyOutputStore:
         self._load_archives()
         catalog = self._load_index_catalog()
         if catalog is not None and self.family_filter is None:
-            by_subdir: Dict[str, Artifact] = {}
+            subdir_paths: Set[str] = set()
             for subdir in catalog["subdirs"]:
                 subdir_artifacts = self._load_subdir_artifacts(str(subdir))
                 expected_count = int(catalog["subdir_counts"][subdir])
@@ -2337,18 +2337,23 @@ class GeneFamilyOutputStore:
                         f"{len(subdir_artifacts)} != {expected_count}"
                     )
                 for logical_path, artifact in subdir_artifacts.items():
-                    if logical_path in by_subdir:
+                    if logical_path in subdir_paths:
                         raise ArchiveStoreError(
                             f"Subdirectory indexes contain a duplicate logical path: "
                             f"{logical_path}"
                         )
-                    by_subdir[logical_path] = artifact
-            if len(by_subdir) != int(catalog["artifact_count"]):
+                    subdir_paths.add(logical_path)
+                    indexed_artifact = self._archived.get(logical_path)
+                    if indexed_artifact is not None and artifact != indexed_artifact:
+                        raise ArchiveStoreError(
+                            f"Family and subdirectory archive metadata disagree: "
+                            f"{logical_path}"
+                        )
+            if len(subdir_paths) != int(catalog["artifact_count"]):
                 raise ArchiveStoreError(
                     "Subdirectory indexes do not contain the cataloged artifact count"
                 )
             family_paths = set(self._archived)
-            subdir_paths = set(by_subdir)
             if family_paths != subdir_paths:
                 missing = sorted(family_paths - subdir_paths)
                 extra = sorted(subdir_paths - family_paths)
@@ -2356,100 +2361,103 @@ class GeneFamilyOutputStore:
                     "Family and subdirectory archive indexes disagree: "
                     f"missing={missing[:10]}, extra={extra[:10]}"
                 )
-            for logical_path, artifact in by_subdir.items():
-                if artifact != self._archived[logical_path]:
-                    raise ArchiveStoreError(
-                        f"Family and subdirectory archive metadata disagree: "
-                        f"{logical_path}"
-                    )
-        manifests: Dict[Path, dict] = {}
+        manifest_modes: Dict[Path, str] = {}
         manifest_logical_paths: Set[str] = set()
+        duplicate_manifest_logical_paths: Set[str] = set()
         for zip_path in sorted(self.archive_root.glob("*/*.zip")):
             if zip_path.is_symlink() or zip_path.parent.is_symlink():
                 raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {zip_path}")
             manifest = self._read_manifest(zip_path)
             with zipfile.ZipFile(zip_path, "r") as archive:
-                corrupt_member = archive.testzip()
-                if corrupt_member is not None:
-                    raise ArchiveStoreError(
-                        f"CRC verification failed in {zip_path}: {corrupt_member}"
-                    )
                 for member in manifest["members"]:
                     digest = hashlib.sha256()
-                    with archive.open(str(member["member_name"]), "r") as handle:
-                        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                            digest.update(chunk)
+                    member_name = str(member["member_name"])
+                    try:
+                        with archive.open(member_name, "r") as handle:
+                            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                                digest.update(chunk)
+                    except zipfile.BadZipFile as exc:
+                        raise ArchiveStoreError(
+                            f"CRC verification failed in {zip_path}: {member_name}"
+                        ) from exc
                     if digest.hexdigest() != str(member.get("sha256", "")):
                         raise ArchiveStoreError(
                             f"SHA256 verification failed in {zip_path}: "
-                            f"{member['member_name']}"
+                            f"{member_name}"
                         )
-            manifests[zip_path] = manifest
-            manifest_logical_paths.update(
-                str(member["logical_path"])
-                for member in manifest["members"]
-            )
+                    logical_path = str(member["logical_path"])
+                    if logical_path in manifest_logical_paths:
+                        duplicate_manifest_logical_paths.add(logical_path)
+                    manifest_logical_paths.add(logical_path)
+                    artifact = self._archived.get(logical_path)
+                    if artifact is None:
+                        continue
+                    if artifact.zip_path != zip_path:
+                        continue
+                    manifest_generation = int(
+                        member.get("generation", manifest["generation"])
+                    )
+                    manifest_family_id = (
+                        str(member["family_id"])
+                        if member.get("family_id") not in {None, ""}
+                        else None
+                    )
+                    member_mtime_ns = member.get("mtime_ns")
+                    source_signature = member.get("source_signature")
+                    if (
+                        member_mtime_ns is None
+                        and isinstance(source_signature, list)
+                        and len(source_signature) >= 4
+                    ):
+                        member_mtime_ns = source_signature[3]
+                    manifest_mtime_ns = (
+                        int(member_mtime_ns)
+                        if member_mtime_ns is not None
+                        else None
+                    )
+                    expected = (
+                        artifact.member_name,
+                        artifact.generation,
+                        int(artifact.size or 0),
+                        int(artifact.crc or 0),
+                        artifact.sha256 or "",
+                        artifact.mtime_ns,
+                        artifact.family_id,
+                    )
+                    observed = (
+                        member_name,
+                        manifest_generation,
+                        int(member["size"]),
+                        int(member["crc"]),
+                        str(member.get("sha256", "")),
+                        manifest_mtime_ns,
+                        manifest_family_id,
+                    )
+                    if observed != expected:
+                        raise ArchiveStoreError(
+                            f"Archive index differs from its manifest for "
+                            f"{logical_path} in {zip_path}"
+                        )
+            manifest_modes[zip_path] = str(manifest["mode"])
             verified.append(zip_path)
-        for artifact in self._archived.values():
-            assert artifact.zip_path is not None
-            manifest = manifests.get(artifact.zip_path)
-            if manifest is None:
+        for zip_path in {
+            artifact.zip_path
+            for artifact in self._archived.values()
+            if artifact.zip_path is not None
+        }:
+            if zip_path not in manifest_modes:
                 raise ArchiveStoreError(
-                    f"Archive index references a missing ZIP: {artifact.zip_path}"
+                    f"Archive index references a missing ZIP: {zip_path}"
                 )
-            manifest_members = {
-                str(member["logical_path"]): member
-                for member in manifest["members"]
-            }
-            member = manifest_members.get(artifact.logical_path)
-            if member is None:
-                raise ArchiveStoreError(
-                    f"Archive index references a member absent from its manifest: "
-                    f"{artifact.logical_path} in {artifact.zip_path}"
-                )
-            manifest_generation = int(member.get("generation", manifest["generation"]))
-            manifest_family_id = (
-                str(member["family_id"])
-                if member.get("family_id") not in {None, ""}
-                else None
+        missing_manifest_members = set(self._archived) - manifest_logical_paths
+        if missing_manifest_members:
+            logical_path = sorted(missing_manifest_members)[0]
+            artifact = self._archived[logical_path]
+            raise ArchiveStoreError(
+                f"Archive index references a member absent from its manifest: "
+                f"{logical_path} in {artifact.zip_path}"
             )
-            member_mtime_ns = member.get("mtime_ns")
-            source_signature = member.get("source_signature")
-            if (
-                member_mtime_ns is None
-                and isinstance(source_signature, list)
-                and len(source_signature) >= 4
-            ):
-                member_mtime_ns = source_signature[3]
-            manifest_mtime_ns = (
-                int(member_mtime_ns)
-                if member_mtime_ns is not None
-                else None
-            )
-            expected = (
-                artifact.member_name,
-                artifact.generation,
-                int(artifact.size or 0),
-                int(artifact.crc or 0),
-                artifact.sha256 or "",
-                artifact.mtime_ns,
-                artifact.family_id,
-            )
-            observed = (
-                str(member["member_name"]),
-                manifest_generation,
-                int(member["size"]),
-                int(member["crc"]),
-                str(member.get("sha256", "")),
-                manifest_mtime_ns,
-                manifest_family_id,
-            )
-            if observed != expected:
-                raise ArchiveStoreError(
-                    f"Archive index differs from its manifest for "
-                    f"{artifact.logical_path} in {artifact.zip_path}"
-                )
-        if manifests and not self._index_loaded:
+        if manifest_modes and not self._index_loaded:
             raise ArchiveStoreError(
                 "ZIP shards exist but no authoritative archive index was found; "
                 "run the repair command before reading this store"
@@ -2465,15 +2473,14 @@ class GeneFamilyOutputStore:
             )
         if self._index_loaded and self.family_filter is None:
             referenced_zip_paths = {
-                artifact.zip_path.resolve()
+                artifact.zip_path
                 for artifact in self._archived.values()
                 if artifact.zip_path is not None
             }
             referenced_modes = {
-                str(manifests[artifact.zip_path]["mode"])
-                for artifact in self._archived.values()
-                if artifact.zip_path is not None
-                and artifact.zip_path in manifests
+                manifest_modes[zip_path]
+                for zip_path in referenced_zip_paths
+                if zip_path in manifest_modes
             }
             if len(referenced_modes) > 1:
                 raise ArchiveStoreError(
@@ -2482,13 +2489,18 @@ class GeneFamilyOutputStore:
                 )
             orphaned = sorted(
                 zip_path
-                for zip_path in manifests
-                if zip_path.resolve() not in referenced_zip_paths
+                for zip_path in manifest_modes
+                if zip_path not in referenced_zip_paths
             )
             if orphaned:
                 raise ArchiveStoreError(
                     "Unreferenced ZIP shards were found: "
                     + ", ".join(str(path) for path in orphaned[:10])
+                )
+            if duplicate_manifest_logical_paths:
+                raise ArchiveStoreError(
+                    "ZIP manifests contain duplicate logical members: "
+                    + ", ".join(sorted(duplicate_manifest_logical_paths)[:10])
                 )
         return verified
 
