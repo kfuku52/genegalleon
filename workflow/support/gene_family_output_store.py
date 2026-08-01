@@ -434,6 +434,7 @@ def _write_store_metadata(
     compression: str = "adaptive",
     compression_level: int = 6,
     catalog_sources: Optional[Sequence[Path]] = None,
+    preserve_existing_catalog: bool = False,
 ) -> dict:
     if mode not in {"query2family", "orthogroup"}:
         raise ValueError(f"Unsupported gene-family mode: {mode}")
@@ -452,17 +453,24 @@ def _write_store_metadata(
         {
             "schema_version": STORE_METADATA_SCHEMA_VERSION,
             "mode": mode,
-            "catalog_family_count": len(family_ids_set),
-            "catalog_family_ids_sha256": _family_catalog_digest(family_ids_set),
-            "catalog_updated_utc": time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-            ),
             "compression": compression,
             "compression_level": int(compression_level),
             "family_lock_stripes": FAMILY_LOCK_STRIPES,
         }
     )
-    if catalog_sources:
+    if not preserve_existing_catalog or existing is None:
+        payload.update(
+            {
+                "catalog_family_count": len(family_ids_set),
+                "catalog_family_ids_sha256": _family_catalog_digest(
+                    family_ids_set
+                ),
+                "catalog_updated_utc": time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                ),
+            }
+        )
+    if catalog_sources and not preserve_existing_catalog:
         payload["catalog_sources"] = [
             str(Path(path).resolve()) for path in catalog_sources
         ]
@@ -2659,7 +2667,11 @@ class GeneFamilyOutputStore:
                 )
         manifest_modes: Dict[Path, str] = {}
         manifest_logical_paths: Set[str] = set()
-        duplicate_manifest_logical_paths: Set[str] = set()
+        manifest_candidate_ranks: Dict[str, Tuple[int, int, str]] = {}
+        manifest_candidate_records: Dict[
+            str,
+            Tuple[Path, Tuple[object, ...]],
+        ] = {}
         for zip_path in sorted(self.archive_root.glob("*/*.zip")):
             if zip_path.is_symlink() or zip_path.parent.is_symlink():
                 raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {zip_path}")
@@ -2682,14 +2694,7 @@ class GeneFamilyOutputStore:
                             f"{member_name}"
                         )
                     logical_path = str(member["logical_path"])
-                    if logical_path in manifest_logical_paths:
-                        duplicate_manifest_logical_paths.add(logical_path)
                     manifest_logical_paths.add(logical_path)
-                    artifact = self._archived.get(logical_path)
-                    if artifact is None:
-                        continue
-                    if artifact.zip_path != zip_path:
-                        continue
                     manifest_generation = int(
                         member.get("generation", manifest["generation"])
                     )
@@ -2711,15 +2716,6 @@ class GeneFamilyOutputStore:
                         if member_mtime_ns is not None
                         else None
                     )
-                    expected = (
-                        artifact.member_name,
-                        artifact.generation,
-                        int(artifact.size or 0),
-                        int(artifact.crc or 0),
-                        artifact.sha256 or "",
-                        artifact.mtime_ns,
-                        artifact.family_id,
-                    )
                     observed = (
                         member_name,
                         manifest_generation,
@@ -2728,6 +2724,32 @@ class GeneFamilyOutputStore:
                         str(member.get("sha256", "")),
                         manifest_mtime_ns,
                         manifest_family_id,
+                    )
+                    candidate_rank = (
+                        manifest_generation,
+                        int(manifest["generation"]),
+                        str(zip_path),
+                    )
+                    if (
+                        logical_path not in manifest_candidate_ranks
+                        or candidate_rank > manifest_candidate_ranks[logical_path]
+                    ):
+                        manifest_candidate_ranks[logical_path] = candidate_rank
+                        manifest_candidate_records[logical_path] = (
+                            zip_path,
+                            observed,
+                        )
+                    artifact = self._archived.get(logical_path)
+                    if artifact is None or artifact.zip_path != zip_path:
+                        continue
+                    expected = (
+                        artifact.member_name,
+                        artifact.generation,
+                        int(artifact.size or 0),
+                        int(artifact.crc or 0),
+                        artifact.sha256 or "",
+                        artifact.mtime_ns,
+                        artifact.family_id,
                     )
                     if observed != expected:
                         raise ArchiveStoreError(
@@ -2804,11 +2826,25 @@ class GeneFamilyOutputStore:
                     "Unreferenced ZIP shards were found: "
                     + ", ".join(str(path) for path in orphaned[:10])
                 )
-            if duplicate_manifest_logical_paths:
-                raise ArchiveStoreError(
-                    "ZIP manifests contain duplicate logical members: "
-                    + ", ".join(sorted(duplicate_manifest_logical_paths)[:10])
+            for logical_path, artifact in self._archived.items():
+                candidate = manifest_candidate_records.get(logical_path)
+                if candidate is None:
+                    continue
+                winner_path, winner_record = candidate
+                indexed_record = (
+                    artifact.member_name,
+                    artifact.generation,
+                    int(artifact.size or 0),
+                    int(artifact.crc or 0),
+                    artifact.sha256 or "",
+                    artifact.mtime_ns,
+                    artifact.family_id,
                 )
+                if artifact.zip_path != winner_path or indexed_record != winner_record:
+                    raise ArchiveStoreError(
+                        "Archive index does not select the latest manifest "
+                        f"generation for {logical_path}"
+                    )
         return verified
 
 
@@ -3274,6 +3310,7 @@ def archive_completed_outputs(
     workers: int = 1,
     catalog_sources: Optional[Sequence[Path]] = None,
     catalog_family_ids: Optional[Sequence[str]] = None,
+    preserve_existing_catalog: bool = False,
     progress_callback: Optional[Callable[..., None]] = None,
 ) -> List[Tuple[Path, int]]:
     root = Path(root).resolve()
@@ -3303,6 +3340,7 @@ def archive_completed_outputs(
                 compression=compression,
                 compression_level=compression_level,
                 catalog_sources=catalog_sources,
+                preserve_existing_catalog=preserve_existing_catalog,
             )
             valid_family_ids = set(lockable_family_ids)
             if not valid_family_ids:
@@ -5293,6 +5331,9 @@ def run_cli(args: argparse.Namespace) -> int:
             workers=args.workers,
             catalog_sources=_catalog_sources(args),
             catalog_family_ids=family_ids,
+            preserve_existing_catalog=(
+                args.query_dir is None and args.genecount is None
+            ),
         )
         for zip_path, removed in results:
             print(f"archived-partial\t{removed}\t{zip_path}")

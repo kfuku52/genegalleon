@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from workflow.support.gene_family_output_store import (
+    MANIFEST_MEMBER,
     MAX_REFERENCED_SHARDS_PER_SUBDIR,
     ArchiveStoreError,
     Artifact,
@@ -1053,6 +1054,55 @@ def test_existing_store_refreshes_after_archive_replacement(tmp_path: Path):
 
     with store.open_binary("stat_branch", replacement.name) as handle:
         assert handle.read() == b"replacement\n"
+
+
+def test_verify_allows_superseded_members_in_retained_shared_shards(
+    tmp_path: Path,
+):
+    root = tmp_path / "orthogroup"
+    rerun_family = "OG0000001"
+    retained_family = "OG0000002"
+    for family_id in (rerun_family, retained_family):
+        _write_family_outputs(root, family_id, complete=True)
+    archive_completed_outputs(
+        root,
+        "orthogroup",
+        [rerun_family, retained_family],
+        orthogroup_id_from_name,
+    )
+
+    rerun_store = GeneFamilyOutputStore(root, family_filter=rerun_family)
+    rerun_store.materialize_family(rerun_family, orthogroup_id_from_name)
+    replacement = root / "stat_branch" / f"{rerun_family}_stat.branch.tsv"
+    replacement.write_bytes(b"replacement-after-rerun\n")
+    rerun_store.mark_family_state(rerun_family, "complete")
+    archive_completed_outputs(
+        root,
+        "orthogroup",
+        [rerun_family, retained_family],
+        orthogroup_id_from_name,
+    )
+
+    store = GeneFamilyOutputStore(root)
+    assert store.verify()
+    with store.open_binary("stat_branch", replacement.name) as handle:
+        assert handle.read() == b"replacement-after-rerun\n"
+    with store.open_binary(
+        "stat_branch",
+        f"{retained_family}_stat.branch.tsv",
+    ) as handle:
+        assert handle.read() == f"stat_branch:{retained_family}\n".encode()
+
+    logical_path = f"stat_branch/{rerun_family}_stat.branch.tsv"
+    manifest_occurrences = 0
+    for zip_path in (root / ".gg_archives" / "stat_branch").glob("*.zip"):
+        with zipfile.ZipFile(zip_path) as archive:
+            manifest = json.loads(archive.read(MANIFEST_MEMBER))
+        manifest_occurrences += sum(
+            member["logical_path"] == logical_path
+            for member in manifest["members"]
+        )
+    assert manifest_occurrences == 2
 
 
 def test_existing_store_refreshes_after_tombstone_change(tmp_path: Path):
@@ -2171,6 +2221,62 @@ def test_archive_metadata_enables_mode_autodetection_and_tracks_catalog_addition
     assert first_metadata["catalog_family_ids_sha256"] != second_metadata[
         "catalog_family_ids_sha256"
     ]
+
+
+def test_archive_family_autodetection_preserves_full_catalog_metadata(
+    tmp_path: Path,
+):
+    root = tmp_path / "query2family"
+    query_dir = tmp_path / "query_gene"
+    query_dir.mkdir()
+    for family_id in ("A", "B"):
+        (query_dir / family_id).write_text(
+            f"gene{family_id}\n",
+            encoding="utf-8",
+        )
+        _write_family_outputs(root, family_id, complete=True)
+    family_ids, family_from_name = family_context(
+        "query2family",
+        query_dir=query_dir,
+    )
+    archive_completed_outputs(
+        root,
+        "query2family",
+        family_ids,
+        family_from_name,
+        catalog_sources=[query_dir],
+    )
+    metadata_path = root / ".gg_archives" / "store.json"
+    before = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    store = GeneFamilyOutputStore(root, family_filter="A")
+    live_path = store.materialize(
+        "stat_branch",
+        "A_stat.branch.tsv",
+    )
+    live_path.write_bytes(b"partial-rerun\n")
+    args = build_parser().parse_args(
+        [
+            "archive-family",
+            "--root",
+            str(root),
+            "--family-id",
+            "A",
+            "--compression-level",
+            "1",
+        ]
+    )
+
+    assert run_cli(args) == 0
+    after = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert after["catalog_family_count"] == before["catalog_family_count"] == 2
+    assert (
+        after["catalog_family_ids_sha256"]
+        == before["catalog_family_ids_sha256"]
+    )
+    assert after["catalog_sources"] == before["catalog_sources"]
+    assert after["compression_level"] == 1
+    assert GeneFamilyOutputStore(root).verify()
 
 
 @pytest.mark.parametrize(
