@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import threading
 import time
@@ -3149,15 +3150,62 @@ def scan_live_output_ownership(
     valid_family_ids: Set[str],
     family_from_name: Callable[[str], Optional[str]],
 ) -> Tuple[List[Path], List[Path]]:
+    owned, unmatched, _, _ = _scan_live_output_inventory(
+        root,
+        valid_family_ids,
+        family_from_name,
+    )
+    return owned, unmatched
+
+
+def _scan_live_output_inventory(
+    root: Path,
+    valid_family_ids: Set[str],
+    family_from_name: Callable[[str], Optional[str]],
+) -> Tuple[List[Path], List[Path], int, List[Path]]:
+    root = Path(root).resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"Gene-family output root was not found: {root}")
     owned: List[Path] = []
     unmatched: List[Path] = []
-    for _, path in _visible_live_output_files(Path(root).resolve()):
-        family_id = family_from_name(path.name)
-        if family_id is not None and family_id in valid_family_ids:
-            owned.append(path)
-        else:
-            unmatched.append(path)
-    return owned, unmatched
+    owned_bytes = 0
+    unsupported_symlinks: List[Path] = []
+    with os.scandir(root) as root_entries:
+        directories = sorted(root_entries, key=lambda entry: entry.name)
+    for directory_entry in directories:
+        if (
+            directory_entry.name.startswith(".")
+            or directory_entry.name in EXCLUDED_SUBDIRS
+        ):
+            continue
+        directory_path = Path(directory_entry.path)
+        if directory_entry.is_symlink():
+            unsupported_symlinks.append(directory_path)
+            continue
+        if not directory_entry.is_dir(follow_symlinks=False):
+            continue
+        with os.scandir(directory_entry.path) as child_entries:
+            entries = sorted(child_entries, key=lambda entry: entry.name)
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            path = Path(entry.path)
+            if entry.is_symlink():
+                unsupported_symlinks.append(path)
+                continue
+            try:
+                stat_result = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(stat_result.st_mode):
+                continue
+            family_id = family_from_name(entry.name)
+            if family_id is not None and family_id in valid_family_ids:
+                owned.append(path)
+                owned_bytes += int(stat_result.st_size)
+            else:
+                unmatched.append(path)
+    return owned, unmatched, owned_bytes, unsupported_symlinks
 
 
 def _read_storage_conversion_marker(root: Path) -> Optional[dict]:
@@ -3304,36 +3352,41 @@ def storage_conversion_summary(
     family_from_name: Callable[[str], Optional[str]],
 ) -> Tuple[dict, List[Path]]:
     root = Path(root).resolve()
-    owned, unmatched = scan_live_output_ownership(
+    owned, unmatched, owned_bytes, unsupported_symlinks = _scan_live_output_inventory(
         root,
         valid_family_ids,
         family_from_name,
     )
-    store = GeneFamilyOutputStore(root)
+    shard_paths = sorted((root / ARCHIVE_DIR_NAME).glob("*/*.zip"))
     archived_only_count = 0
     archived_only_bytes = 0
     archived_only_artifacts: List[Artifact] = []
-    logical_count = 0
-    with producer_read_lock(store.archive_root):
-        store._refresh_if_index_changed()
-        for subdir in store._logical_subdirs_unlocked():
-            for name in store._file_names_unlocked(subdir):
-                artifact = store._artifact_unchecked(subdir, name)
-                if artifact is None:
-                    continue
-                logical_count += 1
-                if not artifact.is_live:
-                    archived_only_count += 1
-                    archived_only_bytes += int(artifact.size or 0)
-                    archived_only_artifacts.append(artifact)
-        store._load_archives()
-        indexed_artifact_count = len(store._archived)
-        archived_live_overrides = sum(
-            1
-            for logical_path in store._archived
-            if (root / logical_path).is_file()
-        )
-    shard_paths = sorted(store.archive_root.glob("*/*.zip"))
+    if shard_paths:
+        store = GeneFamilyOutputStore(root)
+        logical_count = 0
+        with producer_read_lock(store.archive_root):
+            store._refresh_if_index_changed()
+            for subdir in store._logical_subdirs_unlocked():
+                for name in store._file_names_unlocked(subdir):
+                    artifact = store._artifact_unchecked(subdir, name)
+                    if artifact is None:
+                        continue
+                    logical_count += 1
+                    if not artifact.is_live:
+                        archived_only_count += 1
+                        archived_only_bytes += int(artifact.size or 0)
+                        archived_only_artifacts.append(artifact)
+            store._load_archives()
+            indexed_artifact_count = len(store._archived)
+            archived_live_overrides = sum(
+                1
+                for logical_path in store._archived
+                if (root / logical_path).is_file()
+            )
+    else:
+        logical_count = len(owned) + len(unmatched)
+        indexed_artifact_count = 0
+        archived_live_overrides = 0
     marker = _read_storage_conversion_marker(root)
     raw_allocated_bytes, raw_peak_new_files = _zip_to_raw_requirements(
         root,
@@ -3351,7 +3404,7 @@ def storage_conversion_summary(
         "storage": storage,
         "logical_files": logical_count,
         "owned_live_files": len(owned),
-        "owned_live_bytes": sum(path.stat().st_size for path in owned),
+        "owned_live_bytes": owned_bytes,
         "unmatched_live_files": len(unmatched),
         "indexed_artifacts": indexed_artifact_count,
         "archived_live_overrides": archived_live_overrides,
@@ -3361,7 +3414,7 @@ def storage_conversion_summary(
         "raw_materialize_bytes": archived_only_bytes,
         "raw_materialize_allocated_bytes": raw_allocated_bytes,
         "raw_peak_new_files": raw_peak_new_files,
-        "unsupported_symlinks": len(_unsupported_output_symlinks(root)),
+        "unsupported_symlinks": len(unsupported_symlinks),
     }
     if marker is not None:
         summary["conversion_target"] = str(marker["target"])
@@ -3391,8 +3444,8 @@ def convert_storage_to_zip(
             "to leave them in place: "
             + ", ".join(str(path) for path in unmatched[:10])
         )
-    unsupported_symlinks = _unsupported_output_symlinks(root)
-    if unsupported_symlinks:
+    if summary["unsupported_symlinks"]:
+        unsupported_symlinks = _unsupported_output_symlinks(root)
         raise ArchiveStoreError(
             "Symlinked output paths cannot be converted safely: "
             + ", ".join(str(path) for path in unsupported_symlinks[:10])

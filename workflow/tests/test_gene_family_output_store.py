@@ -26,6 +26,7 @@ from workflow.support.gene_family_output_store import (
     family_context,
     family_context_with_supplement,
     family_lock_path,
+    orthogroup_id_from_name,
     purge_archives,
     repair_archive_index,
     run_cli,
@@ -1654,6 +1655,32 @@ def test_conversion_summary_reports_mixed_store_and_unmatched_files(tmp_path: Pa
 
     assert summary["storage"] == "mixed"
     assert summary["owned_live_files"] == 1
+    assert unmatched_paths == [unmatched]
+
+
+def test_raw_conversion_summary_combines_size_and_symlink_inventory(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    owned = root / "mafft" / "OG0000001_alignment.tsv"
+    owned.parent.mkdir(parents=True)
+    owned.write_bytes(b"owned")
+    unmatched = root / "parameters" / "common.tsv"
+    unmatched.parent.mkdir(parents=True)
+    unmatched.write_bytes(b"shared")
+    linked = root / "mafft" / "OG0000002_alignment.tsv"
+    linked.symlink_to(owned)
+
+    summary, unmatched_paths = storage_conversion_summary(
+        root,
+        {"OG0000001", "OG0000002"},
+        orthogroup_id_from_name,
+    )
+
+    assert summary["storage"] == "raw"
+    assert summary["logical_files"] == 2
+    assert summary["owned_live_files"] == 1
+    assert summary["owned_live_bytes"] == len(b"owned")
+    assert summary["unmatched_live_files"] == 1
+    assert summary["unsupported_symlinks"] == 1
     assert unmatched_paths == [unmatched]
 
 
