@@ -1809,6 +1809,7 @@ class GeneFamilyOutputStore:
                 if entry.is_dir()
                 and not entry.is_symlink()
                 and not entry.name.startswith(".")
+                and entry.name not in EXCLUDED_SUBDIRS
             )
         return sorted(subdirs)
 
