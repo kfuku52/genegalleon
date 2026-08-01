@@ -4265,24 +4265,27 @@ if [[ ! -s "${file_orthogroup_grampa}" && ${run_orthogroup_grampa} -eq 1 ]]; the
       "${file_orthogroup_genecount_selected}" "${min_gene_orthogroup_grampa}" "${max_gene_orthogroup_grampa}"
   )
   dir_og_rooted_tree_effective="${dir_og_rooted_tree}"
-  orthogroup_grampa_family_ids=""
-  orthogroup_grampa_materialized=""
-  orthogroup_grampa_indir="./tmp.orthogroup_grampa_indir"
+  orthogroup_grampa_work_dir=$(mktemp -d "${dir_tmp}/tmp.orthogroup_grampa.XXXXXX")
+  orthogroup_grampa_family_ids="${orthogroup_grampa_work_dir}/family_ids.txt"
+  orthogroup_grampa_materialized="${orthogroup_grampa_work_dir}/materialized"
+  orthogroup_grampa_indir="${orthogroup_grampa_work_dir}/input"
   cleanup_orthogroup_grampa_tmp() {
-    if [[ -n "${orthogroup_grampa_family_ids:-}" ]]; then
-      rm -f -- "${orthogroup_grampa_family_ids}"
-    fi
-    if [[ -n "${orthogroup_grampa_materialized:-}" ]]; then
-      rm -rf -- "${orthogroup_grampa_materialized}"
-    fi
-    rm -rf -- "${orthogroup_grampa_indir}"
+    local target="${orthogroup_grampa_work_dir:-}"
+    case "${target}" in
+      "${dir_tmp}/tmp.orthogroup_grampa."*)
+        rm -rf -- "${target}"
+        ;;
+      "")
+        ;;
+      *)
+        echo "Refusing to remove unexpected orthogroup GRAMPA temporary directory: ${target}" >&2
+        ;;
+    esac
+    orthogroup_grampa_work_dir=""
   }
   trap cleanup_orthogroup_grampa_tmp EXIT
   if [[ -d "${gg_workspace_output_dir}/orthogroup/.gg_archives" ]]; then
-    orthogroup_grampa_family_ids="./tmp.orthogroup_grampa_family_ids.txt"
     printf "%s\n" "${og_ids[@]}" > "${orthogroup_grampa_family_ids}"
-    orthogroup_grampa_materialized="./tmp.orthogroup_grampa_materialized"
-    rm -rf -- "${orthogroup_grampa_materialized}"
     python "${gg_support_dir}/gene_family_output_store.py" materialize-families \
       --root "${gg_workspace_output_dir}/orthogroup" \
       --mode orthogroup \
@@ -4294,7 +4297,6 @@ if [[ ! -s "${file_orthogroup_grampa}" && ${run_orthogroup_grampa} -eq 1 ]]; the
   else
     file_names=()
     mapfile -t file_names < <(gg_find_file_basenames "${dir_og_rooted_tree_effective}")
-    rm -rf -- "${orthogroup_grampa_indir}"
     mkdir -p "${orthogroup_grampa_indir}"
     for file_name in "${file_names[@]}"; do
       for og_id in "${og_ids[@]}"; do

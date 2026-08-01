@@ -2170,6 +2170,37 @@ class GeneFamilyOutputStore:
                 return archived.family_id
         return orthogroup_id_from_name(name)
 
+    def _managed_family_id(
+        self,
+        logical_path: str,
+        family_id: Optional[str],
+        operation: str,
+    ) -> str:
+        inferred_family_id = self._family_id_for_logical_path(logical_path)
+        if (
+            family_id not in {None, ""}
+            and inferred_family_id is not None
+            and family_id != inferred_family_id
+        ):
+            raise ArchiveStoreError(
+                f"The supplied family ID {family_id!r} differs from the "
+                f"inferred family ID {inferred_family_id!r} for {logical_path}"
+            )
+        if family_id not in {None, ""} and inferred_family_id is None:
+            _, name = logical_path.split("/", 1)
+            if query_id_from_name(name, [str(family_id)]) != family_id:
+                raise ArchiveStoreError(
+                    f"The supplied family ID {family_id!r} does not match the "
+                    f"logical filename {name!r}"
+                )
+        resolved_family_id = family_id or inferred_family_id
+        if resolved_family_id is None:
+            raise ArchiveStoreError(
+                f"The gene-family ID could not be inferred for managed {operation}; "
+                "supply --family-id explicitly"
+            )
+        return resolved_family_id
+
     def delete(
         self,
         logical_path: str,
@@ -2179,11 +2210,11 @@ class GeneFamilyOutputStore:
         subdir, name = logical_path.split("/", 1)
         _safe_logical_path(subdir, name)
         live_path = self.root / subdir / name
-        family_id = family_id or self._family_id_for_logical_path(logical_path)
-        family_context = (
-            family_bucket_lock(self.archive_root, family_id, exclusive=True)
-            if family_id is not None
-            else contextlib.nullcontext(True)
+        family_id = self._managed_family_id(logical_path, family_id, "deletion")
+        family_context = family_bucket_lock(
+            self.archive_root,
+            family_id,
+            exclusive=True,
         )
         with family_context as family_idle:
             if not family_idle:
@@ -2206,10 +2237,15 @@ class GeneFamilyOutputStore:
         _family_locked: bool = False,
         family_id: Optional[str] = None,
     ) -> None:
-        family_id = family_id or self._family_id_for_logical_path(logical_path)
+        if _family_locked:
+            if family_id in {None, ""}:
+                raise ValueError("family_id is required when the family lock is held")
+        else:
+            family_id = self._managed_family_id(logical_path, family_id, "undelete")
+        assert family_id is not None
         family_context = (
             contextlib.nullcontext(True)
-            if _family_locked or family_id is None
+            if _family_locked
             else family_bucket_lock(self.archive_root, family_id, exclusive=True)
         )
         lock_context = (
@@ -2234,11 +2270,11 @@ class GeneFamilyOutputStore:
         overwrite: bool = False,
         family_id: Optional[str] = None,
     ) -> Path:
-        family_id = family_id or self._family_id_for_logical_path(logical_path)
-        family_context = (
-            family_bucket_lock(self.archive_root, family_id, exclusive=True)
-            if family_id is not None
-            else contextlib.nullcontext(True)
+        family_id = self._managed_family_id(logical_path, family_id, "restore")
+        family_context = family_bucket_lock(
+            self.archive_root,
+            family_id,
+            exclusive=True,
         )
         with family_context as family_idle:
             if not family_idle:
@@ -2432,6 +2468,17 @@ class GeneFamilyOutputStore:
                 for artifact in self._archived.values()
                 if artifact.zip_path is not None
             }
+            referenced_modes = {
+                str(manifests[artifact.zip_path]["mode"])
+                for artifact in self._archived.values()
+                if artifact.zip_path is not None
+                and artifact.zip_path in manifests
+            }
+            if len(referenced_modes) > 1:
+                raise ArchiveStoreError(
+                    "Referenced ZIP shards use mixed gene-family modes: "
+                    + ", ".join(sorted(referenced_modes))
+                )
             orphaned = sorted(
                 zip_path
                 for zip_path in manifests
@@ -2890,6 +2937,8 @@ def archive_completed_outputs(
             if not acquired:
                 return []
             _cleanup_partial_archives(archive_root)
+            store = GeneFamilyOutputStore(root)
+            _assert_archive_mode(store, mode)
             valid_family_ids = set(lockable_family_ids)
             if not valid_family_ids:
                 return []
@@ -2918,7 +2967,6 @@ def archive_completed_outputs(
             if not potential_by_subdir:
                 return []
 
-            store = GeneFamilyOutputStore(root)
             if store._load_index_catalog() is None and any(archive_root.glob("*/*.zip")):
                 store._load_archives()
                 if store._archived and not store._index_loaded:
@@ -3221,6 +3269,35 @@ def _assert_archive_mode(store: GeneFamilyOutputStore, mode: str) -> None:
         )
 
 
+def _zip_to_raw_requirements(
+    root: Path,
+    artifacts: Sequence[Artifact],
+    *,
+    block_size: Optional[int] = None,
+) -> Tuple[int, int]:
+    root = Path(root).resolve()
+    if block_size is None:
+        filesystem_stats = os.statvfs(root)
+        block_size = int(filesystem_stats.f_frsize or filesystem_stats.f_bsize or 4096)
+    block_size = max(1, int(block_size))
+    missing_subdirs = {
+        root / artifact.subdir
+        for artifact in artifacts
+        if not (root / artifact.subdir).is_dir()
+    }
+    allocated_file_bytes = sum(
+        ((int(artifact.size or 0) + block_size - 1) // block_size) * block_size
+        for artifact in artifacts
+    )
+    required_bytes = allocated_file_bytes + len(missing_subdirs) * block_size
+    required_inodes = (
+        len(artifacts)
+        + len(missing_subdirs)
+        + (1 if artifacts else 0)
+    )
+    return required_bytes, required_inodes
+
+
 def storage_conversion_summary(
     root: Path,
     valid_family_ids: Set[str],
@@ -3235,6 +3312,7 @@ def storage_conversion_summary(
     store = GeneFamilyOutputStore(root)
     archived_only_count = 0
     archived_only_bytes = 0
+    archived_only_artifacts: List[Artifact] = []
     logical_count = 0
     with producer_read_lock(store.archive_root):
         store._refresh_if_index_changed()
@@ -3247,6 +3325,7 @@ def storage_conversion_summary(
                 if not artifact.is_live:
                     archived_only_count += 1
                     archived_only_bytes += int(artifact.size or 0)
+                    archived_only_artifacts.append(artifact)
         store._load_archives()
         indexed_artifact_count = len(store._archived)
         archived_live_overrides = sum(
@@ -3256,6 +3335,10 @@ def storage_conversion_summary(
         )
     shard_paths = sorted(store.archive_root.glob("*/*.zip"))
     marker = _read_storage_conversion_marker(root)
+    raw_allocated_bytes, raw_peak_new_files = _zip_to_raw_requirements(
+        root,
+        archived_only_artifacts,
+    )
     if marker is not None:
         storage = "conversion-in-progress"
     elif shard_paths and (owned or archived_live_overrides):
@@ -3276,7 +3359,8 @@ def storage_conversion_summary(
         "zip_bytes": sum(path.stat().st_size for path in shard_paths),
         "raw_materialize_files": archived_only_count,
         "raw_materialize_bytes": archived_only_bytes,
-        "raw_peak_new_files": archived_only_count + (1 if archived_only_count else 0),
+        "raw_materialize_allocated_bytes": raw_allocated_bytes,
+        "raw_peak_new_files": raw_peak_new_files,
         "unsupported_symlinks": len(_unsupported_output_symlinks(root)),
     }
     if marker is not None:
@@ -3416,20 +3500,32 @@ def convert_storage_to_raw(
                         artifact = store._artifact_unchecked(subdir, name)
                         if artifact is not None and not artifact.is_live:
                             pending.append(artifact)
-                required_bytes = sum(int(artifact.size or 0) for artifact in pending)
+                filesystem_stats = os.statvfs(root)
+                block_size = int(
+                    filesystem_stats.f_frsize
+                    or filesystem_stats.f_bsize
+                    or 4096
+                )
+                required_bytes, required_inodes = _zip_to_raw_requirements(
+                    root,
+                    pending,
+                    block_size=block_size,
+                )
                 free_bytes = shutil.disk_usage(root).free
                 if required_bytes > free_bytes:
                     raise ArchiveStoreError(
                         "Insufficient filesystem free space for ZIP-to-raw conversion: "
-                        f"required={required_bytes}, free={free_bytes}"
+                        f"allocated_required={required_bytes}, free={free_bytes}. "
+                        "User or project quota may provide less space than the "
+                        "filesystem-wide free value"
                     )
-                filesystem_stats = os.statvfs(root)
                 available_inodes = int(filesystem_stats.f_favail)
-                required_inodes = len(pending) + (1 if pending else 0)
                 if available_inodes > 0 and required_inodes > available_inodes:
                     raise ArchiveStoreError(
                         "Insufficient filesystem inodes for ZIP-to-raw conversion: "
-                        f"required={required_inodes}, available={available_inodes}"
+                        f"required={required_inodes}, available={available_inodes}. "
+                        "User or project quota may provide fewer inodes than the "
+                        "filesystem-wide available value"
                     )
                 for artifact in sorted(
                     pending,
@@ -3506,6 +3602,7 @@ def compact_archives(
                 return []
             _cleanup_partial_archives(archive_root)
             store = GeneFamilyOutputStore(root)
+            _assert_archive_mode(store, mode)
             created: List[Path] = []
             for subdir in store._logical_subdirs_unlocked():
                 artifacts = list(store._load_subdir_artifacts(subdir).values())
@@ -3562,6 +3659,7 @@ def repair_archive_index(
             store = GeneFamilyOutputStore(root)
             rebuilt: Dict[str, Artifact] = {}
             rebuilt_ranks: Dict[str, Tuple[int, int, str]] = {}
+            mode_by_path: Dict[Path, str] = {}
             physical_paths = sorted(archive_root.glob("*/*.zip"))
             for zip_path in physical_paths:
                 if zip_path.is_symlink() or zip_path.parent.is_symlink():
@@ -3569,6 +3667,7 @@ def repair_archive_index(
                         f"Symlinked ZIP shards are not supported: {zip_path}"
                     )
                 manifest = store._read_manifest(zip_path)
+                mode_by_path[zip_path.resolve()] = str(manifest["mode"])
                 manifest_generation = int(manifest["generation"])
                 with zipfile.ZipFile(zip_path, "r") as archive:
                     corrupt_member = archive.testzip()
@@ -3627,12 +3726,23 @@ def repair_archive_index(
                         ):
                             rebuilt[logical_path] = artifact
                             rebuilt_ranks[logical_path] = candidate_rank
-            store._write_index(rebuilt, recover_pending=True)
             referenced = {
                 artifact.zip_path.resolve()
                 for artifact in rebuilt.values()
                 if artifact.zip_path is not None
             }
+            referenced_modes = {
+                mode_by_path[path]
+                for path in referenced
+                if path in mode_by_path
+            }
+            if len(referenced_modes) > 1:
+                raise ArchiveStoreError(
+                    "Cannot repair indexes whose referenced ZIP shards use mixed "
+                    "gene-family modes: "
+                    + ", ".join(sorted(referenced_modes))
+                )
+            store._write_index(rebuilt, recover_pending=True)
             orphaned = [
                 path for path in physical_paths if path.resolve() not in referenced
             ]
@@ -3665,6 +3775,7 @@ def purge_archives(
             raise ArchiveStoreError("Failed to acquire the archive maintenance lock")
         with archive_lock(archive_root):
             store = GeneFamilyOutputStore(root)
+            _assert_archive_mode(store, mode)
             store._load_tombstones()
             created: List[Path] = []
             archived_subdirs = list(store._logical_subdirs_unlocked())

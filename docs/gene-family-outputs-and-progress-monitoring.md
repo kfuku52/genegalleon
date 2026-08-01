@@ -158,7 +158,9 @@ Perform direct `cp` changes only when the affected gene-family task is idle.
 The managed `delete`, `undelete`, and `restore` commands take the affected
 family lock before changing logical state. For a query2family live file that
 has never been archived, supply `--family-id` explicitly because its family
-cannot be recovered from archive metadata.
+cannot be recovered from archive metadata. The command fails without changing
+the logical store when a family ID cannot be inferred safely or when an
+explicit ID disagrees with existing archive metadata or the logical filename.
 
 A later archive pass stores the replacement as a new immutable ZIP shard. To
 inspect the logical view and see whether each artifact is live or archived:
@@ -203,7 +205,8 @@ bash workflow/gg_gene_family_archive.sh verify \
 
 `verify` also cross-checks the family and subdirectory index views and rejects
 a missing authoritative index, an index reference to a missing shard, an
-unfinished index-update marker, and unreferenced/orphan ZIP shards. If an
+unfinished index-update marker, mixed query2family/orthogroup shard modes, and
+unreferenced/orphan ZIP shards. If an
 interrupted archive, compaction, repair, or manual operation left valid ZIP
 manifests but incomplete or missing indexes, rebuild them explicitly:
 
@@ -272,7 +275,12 @@ ZIP-to-raw conversion materializes and verifies every non-deleted logical
 artifact before removing ZIP payload. Tombstones become absence and live
 overrides remain authoritative. Bounded family-state and lock metadata remain
 by default; add `--pure-raw` only when an exact pre-ZIP physical layout is
-required and discarding that control metadata is acceptable.
+required and discarding that control metadata is acceptable. The preflight
+estimate rounds each restored file to the filesystem allocation-block size and
+includes missing output directories. Filesystem-wide free-space and inode
+values can still exceed a Shirokane user or project quota, so compare the
+reported `raw_materialize_allocated_bytes` and `raw_peak_new_files` with the
+applicable quota before a large conversion.
 
 Both directions write `storage-conversion.pending`. A stopped conversion is
 resumed by running the same command again. `gg_gene_evolution` and progress

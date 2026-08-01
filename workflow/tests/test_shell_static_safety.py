@@ -1030,11 +1030,13 @@ def test_genome_evolution_core_runs_mcmctree_time_scaling_in_scratch():
         assert token in text, f"Missing MCMCTree scaling token: {token}"
 
 
-def test_genome_evolution_core_uses_rerun_safe_mkdir_for_orthogroup_grampa_tmp_input():
+def test_genome_evolution_core_uses_unique_orthogroup_grampa_tmp_input():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
     assert "mkdir ./tmp.orthogroup_grampa_indir" not in text
+    assert 'orthogroup_grampa_work_dir=$(mktemp -d "${dir_tmp}/tmp.orthogroup_grampa.XXXXXX")' in text
     assert 'mkdir -p "${orthogroup_grampa_indir}"' in text
+    assert '"${dir_tmp}/tmp.orthogroup_grampa."*)' in text
     assert '[[ "${file_name}" == "${og_id}"* ]]' not in text
     assert 'gg_orthogroup_file_matches_id "${file_name}" "${og_id}"' in text
 
@@ -1340,6 +1342,7 @@ def test_orthogroup_grampa_materializes_only_selected_rooted_trees():
 
     assert "materialize-families" in core
     assert "--subdirs rooted_tree" in core
+    assert 'orthogroup_grampa_materialized="${orthogroup_grampa_work_dir}/materialized"' in core
     assert 'dir_og_rooted_tree_effective="${orthogroup_grampa_materialized}/rooted_tree"' in core
     assert 'orthogroup_grampa_indir="${dir_og_rooted_tree_effective}"' in core
     assert 'busco_grampa "${orthogroup_grampa_indir}"' in core

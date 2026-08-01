@@ -13,7 +13,9 @@ import pytest
 from workflow.support.gene_family_output_store import (
     MAX_REFERENCED_SHARDS_PER_SUBDIR,
     ArchiveStoreError,
+    Artifact,
     GeneFamilyOutputStore,
+    _zip_to_raw_requirements,
     archive_completed_outputs,
     build_parser,
     cleanup_materialization_receipt,
@@ -455,6 +457,82 @@ def test_managed_delete_waits_for_the_active_family_lock(tmp_path: Path):
     assert finished.is_set()
     assert failures == []
     assert not live_path.exists()
+
+
+@pytest.mark.parametrize("operation", ["delete", "undelete", "restore"])
+def test_managed_query_operation_requires_unknown_family_id(
+    tmp_path: Path,
+    operation: str,
+):
+    root = tmp_path / "query2family"
+    logical_path = "stat_branch/query_name_stat.branch.tsv"
+    live_path = root / logical_path
+    live_path.parent.mkdir(parents=True)
+    live_path.write_text("manual output\n", encoding="utf-8")
+    store = GeneFamilyOutputStore(root)
+
+    with pytest.raises(ArchiveStoreError, match="supply --family-id explicitly"):
+        getattr(store, operation)(logical_path)
+
+    assert live_path.is_file()
+
+
+def test_managed_query_delete_accepts_explicit_unknown_family_id(tmp_path: Path):
+    root = tmp_path / "query2family"
+    logical_path = "stat_branch/query_name_stat.branch.tsv"
+    live_path = root / logical_path
+    live_path.parent.mkdir(parents=True)
+    live_path.write_text("manual output\n", encoding="utf-8")
+
+    GeneFamilyOutputStore(root).delete(
+        logical_path,
+        family_id="query_name",
+    )
+
+    assert not live_path.exists()
+    assert not GeneFamilyOutputStore(root).logical_exists(logical_path)
+
+
+def test_managed_query_delete_rejects_explicit_id_that_does_not_match_filename(
+    tmp_path: Path,
+):
+    root = tmp_path / "query2family"
+    logical_path = "stat_branch/query_name_stat.branch.tsv"
+    live_path = root / logical_path
+    live_path.parent.mkdir(parents=True)
+    live_path.write_text("manual output\n", encoding="utf-8")
+
+    with pytest.raises(ArchiveStoreError, match="does not match the logical filename"):
+        GeneFamilyOutputStore(root).delete(
+            logical_path,
+            family_id="another_family",
+        )
+
+    assert live_path.is_file()
+
+
+@pytest.mark.parametrize("operation", ["delete", "undelete", "restore"])
+def test_managed_operation_rejects_family_id_different_from_archive_metadata(
+    tmp_path: Path,
+    operation: str,
+):
+    root = tmp_path / "query2family"
+    family_id = "query_name"
+    logical_path = f"stat_branch/{family_id}_stat.branch.tsv"
+    _write_family_outputs(root, family_id, complete=True)
+    archive_completed_outputs(
+        root,
+        "query2family",
+        [family_id],
+        lambda name: family_id if name.startswith(family_id + "_") else None,
+        include_incomplete=True,
+    )
+    store = GeneFamilyOutputStore(root)
+
+    with pytest.raises(ArchiveStoreError, match="differs from the inferred family ID"):
+        getattr(store, operation)(logical_path, family_id="another_family")
+
+    assert GeneFamilyOutputStore(root).logical_exists(logical_path)
 
 
 def test_active_store_reader_prevents_nonblocking_archive(tmp_path: Path):
@@ -1756,6 +1834,133 @@ def test_raw_to_zip_conversion_rejects_symlinked_family_artifact(tmp_path: Path)
 
     assert linked.is_symlink()
     assert external.read_text(encoding="utf-8") == "external\n"
+
+
+def test_archive_rejects_mode_different_from_existing_shards(tmp_path: Path):
+    root = tmp_path / "query2family"
+    family_id = "OG0000001"
+    _write_family_outputs(root, family_id, complete=False)
+    matcher = lambda name: family_id if name.startswith(family_id + "_") else None
+    archive_completed_outputs(
+        root,
+        "query2family",
+        [family_id],
+        matcher,
+        include_incomplete=True,
+    )
+    replacement = root / "rpsblast" / f"{family_id}_rpsblast.tsv"
+    replacement.parent.mkdir(parents=True)
+    replacement.write_text("replacement\n", encoding="utf-8")
+
+    for maintenance in (
+        lambda: archive_completed_outputs(
+            root,
+            "orthogroup",
+            [family_id],
+            matcher,
+            include_incomplete=True,
+        ),
+        lambda: compact_archives(root, "orthogroup"),
+        lambda: purge_archives(root, "orthogroup"),
+    ):
+        with pytest.raises(ArchiveStoreError, match="different gene-family mode"):
+            maintenance()
+
+    assert replacement.is_file()
+    GeneFamilyOutputStore(root).verify()
+
+
+def test_archive_mode_mismatch_is_rejected_without_archive_candidates(
+    tmp_path: Path,
+):
+    root = tmp_path / "query2family"
+    family_id = "OG0000001"
+    _write_family_outputs(root, family_id, complete=False)
+    matcher = lambda name: family_id if name.startswith(family_id + "_") else None
+    archive_completed_outputs(
+        root,
+        "query2family",
+        [family_id],
+        matcher,
+        include_incomplete=True,
+    )
+
+    with pytest.raises(ArchiveStoreError, match="different gene-family mode"):
+        archive_completed_outputs(
+            root,
+            "orthogroup",
+            [family_id],
+            matcher,
+            min_files=100,
+            include_incomplete=True,
+        )
+
+
+def test_verify_rejects_referenced_shards_with_mixed_modes(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "query2family"
+    family_id = "OG0000001"
+    _write_family_outputs(root, family_id, complete=False)
+    matcher = lambda name: family_id if name.startswith(family_id + "_") else None
+    archive_completed_outputs(
+        root,
+        "query2family",
+        [family_id],
+        matcher,
+        include_incomplete=True,
+    )
+    second = root / "rpsblast" / f"{family_id}_rpsblast.tsv"
+    second.parent.mkdir(parents=True)
+    second.write_text("second mode\n", encoding="utf-8")
+    monkeypatch.setattr(output_store_module, "_assert_archive_mode", lambda *_: None)
+    archive_completed_outputs(
+        root,
+        "orthogroup",
+        [family_id],
+        matcher,
+        include_incomplete=True,
+    )
+
+    with pytest.raises(ArchiveStoreError, match="mixed gene-family modes"):
+        repair_archive_index(root)
+    with pytest.raises(ArchiveStoreError, match="mixed gene-family modes"):
+        GeneFamilyOutputStore(root).verify()
+
+
+def test_zip_to_raw_requirements_include_blocks_and_missing_subdirectories(
+    tmp_path: Path,
+):
+    root = tmp_path / "orthogroup"
+    (root / "existing").mkdir(parents=True)
+    artifacts = [
+        Artifact(
+            logical_path="existing/OG0000001_a.tsv",
+            subdir="existing",
+            name="OG0000001_a.tsv",
+            generation=1,
+            size=1,
+        ),
+        Artifact(
+            logical_path="missing/OG0000001_b.tsv",
+            subdir="missing",
+            name="OG0000001_b.tsv",
+            generation=1,
+            size=4097,
+        ),
+    ]
+
+    required_bytes, required_inodes = _zip_to_raw_requirements(
+        root,
+        artifacts,
+        block_size=4096,
+    )
+
+    assert required_bytes == 4 * 4096
+    assert required_inodes == 4
 
 
 def test_storage_status_cli_can_inspect_physical_store_without_catalog(
