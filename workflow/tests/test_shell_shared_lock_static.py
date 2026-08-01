@@ -21,6 +21,9 @@ def test_shared_lock_helpers_delegate_metadata_to_shared_python_module():
     assert 'touch -c -- "${lock_file}" 2>/dev/null || true' in lock_text
     assert "waiting for shared lock: ${description} (${owner_summary})" in lock_text
     assert "timed out waiting for shared lock: ${description} (${owner_summary})" in lock_text
+    assert "gg_advisory_shared_lock_acquire()" in lock_text
+    assert 'flock -s "${GG_ADVISORY_SHARED_LOCK_FD}"' in lock_text
+    assert "gg_advisory_shared_lock_release()" in lock_text
 
 
 def test_shared_semaphore_helpers_reuse_shared_lock_primitives():

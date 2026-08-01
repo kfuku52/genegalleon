@@ -15,6 +15,8 @@ unset gg_core_bootstrap
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 
+hgt_gene_family_mode="${hgt_gene_family_mode:-orthogroup}"
+
 run_hgt_eval="${run_hgt_eval:-1}"
 run_hgt_plot="${run_hgt_plot:-1}"
 hgt_use_taxonomy_db="${hgt_use_taxonomy_db:-1}"
@@ -135,6 +137,105 @@ hgt_select_alignment_input() {
   printf '%s\n' "$1"
 }
 
+hgt_materialization_root="${dir_hgt_tmp}/materialized"
+hgt_materialization_global_lock="${dir_hgt_tmp}/materialized.cleanup.lock"
+hgt_materialization_run_dir=""
+hgt_materialization_lock_held=0
+hgt_materialization_locking_available=0
+if command -v flock >/dev/null 2>&1; then
+  hgt_materialization_locking_available=1
+fi
+
+hgt_cleanup_materialization_run() {
+  local target="${hgt_materialization_run_dir:-}"
+  if [[ -n "${target}" && ${hgt_materialization_locking_available} -eq 1 ]]; then
+    mkdir -p -- "${dir_hgt_tmp}"
+    exec 198> "${hgt_materialization_global_lock}"
+    flock -x 198
+  fi
+  if [[ ${hgt_materialization_lock_held:-0} -eq 1 ]]; then
+    flock -u 197 2>/dev/null || true
+    exec 197>&-
+    hgt_materialization_lock_held=0
+  fi
+  if [[ -z "${target}" ]]; then
+    return 0
+  fi
+  case "${target}" in
+    "${hgt_materialization_root}/"*)
+      rm -rf -- "${target}"
+      rmdir -- "${hgt_materialization_root}" 2>/dev/null || true
+      ;;
+    *)
+      echo "Refusing to remove unexpected HGT materialization run: ${target}" >&2
+      return 1
+      ;;
+  esac
+  hgt_materialization_run_dir=""
+  if [[ ${hgt_materialization_locking_available} -eq 1 ]]; then
+    flock -u 198 2>/dev/null || true
+    exec 198>&-
+  fi
+}
+
+hgt_cleanup_stale_materialization_runs() {
+  local candidate=""
+  if [[ ! -d "${hgt_materialization_root}" || -L "${hgt_materialization_root}" ]]; then
+    return 0
+  fi
+  for candidate in "${hgt_materialization_root}"/*; do
+    [[ -d "${candidate}" && ! -L "${candidate}" ]] || continue
+    exec 196> "${candidate}/.run.lock"
+    if flock -n -x 196; then
+      case "${candidate}" in
+        "${hgt_materialization_root}/"*)
+          rm -rf -- "${candidate}"
+          ;;
+      esac
+      flock -u 196 2>/dev/null || true
+    fi
+    exec 196>&-
+  done
+  rmdir -- "${hgt_materialization_root}" 2>/dev/null || true
+}
+
+hgt_prepare_materialization_run() {
+  mkdir -p -- "${dir_hgt_tmp}"
+  if [[ ${hgt_materialization_locking_available} -eq 0 ]]; then
+    mkdir -p "${hgt_materialization_root}"
+    hgt_materialization_run_dir="${hgt_materialization_root}/${GG_JOB_ID:-local}_${GG_ARRAY_TASK_ID:-1}_$$"
+    mkdir -p "${hgt_materialization_run_dir}"
+    return 0
+  fi
+  exec 198> "${hgt_materialization_global_lock}"
+  flock -x 198
+  hgt_cleanup_stale_materialization_runs
+  mkdir -p "${hgt_materialization_root}"
+  hgt_materialization_run_dir="${hgt_materialization_root}/${GG_JOB_ID:-local}_${GG_ARRAY_TASK_ID:-1}_$$"
+  mkdir -p "${hgt_materialization_run_dir}"
+  exec 197> "${hgt_materialization_run_dir}/.run.lock"
+  flock -x 197
+  hgt_materialization_lock_held=1
+  flock -u 198
+  exec 198>&-
+}
+
+hgt_cleanup_family_materialization() {
+  local target="${1:-}"
+  [[ -n "${target}" ]] || return 0
+  case "${target}" in
+    "${hgt_materialization_run_dir}/"*)
+      rm -rf -- "${target}"
+      ;;
+    *)
+      echo "Refusing to remove unexpected HGT family materialization: ${target}" >&2
+      return 1
+      ;;
+  esac
+}
+
+trap hgt_cleanup_materialization_run EXIT
+
 if [[ ${run_hgt_eval} -eq 1 ]]; then
   if [[ ! -s "${file_orthogroup_db}" ]]; then
     echo "Skipping HGT evaluation because the orthogroup database was not found: ${file_orthogroup_db}"
@@ -178,6 +279,7 @@ if [[ ${run_hgt_plot} -eq 1 ]]; then
   fi
 
   mkdir -p "${dir_hgt_plot}" "${dir_hgt_tree_plot}" "${dir_hgt_tree_input}" "${dir_hgt_tmp}"
+  hgt_prepare_materialization_run
 
   hgt_taxonomy_dbfile=""
   if [[ ${hgt_use_taxonomy_db} -eq 1 ]] && ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
@@ -220,18 +322,42 @@ if [[ ${run_hgt_plot} -eq 1 ]]; then
 
   for og_id in "${hgt_orthogroups[@]}"; do
     [[ -z "${og_id}" ]] && continue
-    file_og_stat_branch="${dir_orthogroup}/stat_branch/${og_id}_stat.branch.tsv"
-    file_og_synteny="${dir_orthogroup}/synteny/${og_id}_synteny.tsv"
-    file_og_rpsblast="${dir_orthogroup}/rpsblast/${og_id}_rpsblast.tsv"
-    file_og_clipkit="${dir_orthogroup}/clipkit/${og_id}_cds.clipkit.fa.gz"
-    file_og_orthogroup_extraction_fasta="${dir_orthogroup}/orthogroup_extraction_fasta/${og_id}_orthogroup_extraction.fa.gz"
-    file_og_maxalign="${dir_orthogroup}/maxalign/${og_id}_cds.maxalign.fa.gz"
-    file_og_mafft="${dir_orthogroup}/mafft/${og_id}_cds.aln.fa.gz"
-    file_og_pep_fasta="${dir_orthogroup}/protein_fasta/${og_id}_pep.fa.gz"
-    file_og_cds_fasta="${dir_orthogroup}/cds_fasta/${og_id}_cds.fa.gz"
-    file_og_dated_tree="${dir_orthogroup}/dated_tree/${og_id}_dated.nwk"
-    file_og_fimo="${dir_orthogroup}/fimo/${og_id}_fimo.tsv"
-    file_og_meme="${dir_orthogroup}/meme/${og_id}_meme.xml"
+    dir_og_input_root="${dir_orthogroup}"
+    dir_hgt_materialized="${hgt_materialization_run_dir}/${og_id}"
+    hgt_current_materialized=""
+    if [[ -d "${dir_orthogroup}/.gg_archives" ]]; then
+      hgt_current_materialized="${dir_hgt_materialized}"
+      materialize_args=(
+        materialize-family
+        --root "${dir_orthogroup}"
+        --mode "${hgt_gene_family_mode}"
+        --family-id "${og_id}"
+        --destination-root "${dir_hgt_materialized}"
+        --subdirs "stat_branch,synteny,rpsblast,clipkit,orthogroup_extraction_fasta,maxalign,mafft,protein_fasta,cds_fasta,dated_tree,fimo,meme"
+      )
+      if [[ "${hgt_gene_family_mode}" == "query2family" ]]; then
+        materialize_args+=(--query-dir "${gg_workspace_input_dir}/query_gene")
+      fi
+      if ! python "${gg_support_dir}/gene_family_output_store.py" "${materialize_args[@]}"; then
+        echo "Skipping HGT tree plot for ${og_id}: failed to materialize ZIP-backed inputs." >&2
+        hgt_cleanup_family_materialization "${hgt_current_materialized}"
+        hgt_current_materialized=""
+        continue
+      fi
+      dir_og_input_root="${dir_hgt_materialized}"
+    fi
+    file_og_stat_branch="${dir_og_input_root}/stat_branch/${og_id}_stat.branch.tsv"
+    file_og_synteny="${dir_og_input_root}/synteny/${og_id}_synteny.tsv"
+    file_og_rpsblast="${dir_og_input_root}/rpsblast/${og_id}_rpsblast.tsv"
+    file_og_clipkit="${dir_og_input_root}/clipkit/${og_id}_cds.clipkit.fa.gz"
+    file_og_orthogroup_extraction_fasta="${dir_og_input_root}/orthogroup_extraction_fasta/${og_id}_orthogroup_extraction.fa.gz"
+    file_og_maxalign="${dir_og_input_root}/maxalign/${og_id}_cds.maxalign.fa.gz"
+    file_og_mafft="${dir_og_input_root}/mafft/${og_id}_cds.aln.fa.gz"
+    file_og_pep_fasta="${dir_og_input_root}/protein_fasta/${og_id}_pep.fa.gz"
+    file_og_cds_fasta="${dir_og_input_root}/cds_fasta/${og_id}_cds.fa.gz"
+    file_og_dated_tree="${dir_og_input_root}/dated_tree/${og_id}_dated.nwk"
+    file_og_fimo="${dir_og_input_root}/fimo/${og_id}_fimo.tsv"
+    file_og_meme="${dir_og_input_root}/meme/${og_id}_meme.xml"
     file_hgt_stat_branch="${dir_hgt_tree_input}/${og_id}_hgt_stat.branch.tsv"
     file_hgt_tree_plot="${dir_hgt_tree_plot}/${og_id}_hgt_tree_plot.pdf"
     ortholog_prefix=$(hgt_majority_ortholog_prefix "${og_id}" "${file_hgt_gene}")
@@ -241,6 +367,8 @@ if [[ ${run_hgt_plot} -eq 1 ]]; then
 
     if [[ ! -s "${file_og_stat_branch}" ]]; then
       echo "Skipping HGT tree plot for ${og_id}: stat_branch not found (${file_og_stat_branch})"
+      hgt_cleanup_family_materialization "${hgt_current_materialized}"
+      hgt_current_materialized=""
       continue
     fi
 
@@ -305,7 +433,11 @@ if [[ ${run_hgt_plot} -eq 1 ]]; then
         echo "Warning: HGT tree plot was not generated for ${og_id}."
       fi
     )
+    hgt_cleanup_family_materialization "${hgt_current_materialized}"
+    hgt_current_materialized=""
   done
 fi
 
+hgt_cleanup_materialization_run
+trap - EXIT
 echo "$(date): Exiting Singularity environment"

@@ -44,6 +44,294 @@ typically written under `workspace/output/query2family/` as:
 In `mode_gene_evolution=orthogroup`, the same style of per-family outputs is
 written under `workspace/output/orthogroup/`.
 
+## ZIP-backed storage
+
+On this experimental branch, `workflow/gg_common_params.sh` defaults
+`GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE` to `zip`. The alternative value
+`files` preserves the historical one-file-per-artifact layout for newly
+produced artifacts; `raw` is accepted as an alias for `files`. Existing ZIP
+shards remain readable in either mode; a rerun in `files` mode restores the
+selected family as needed and leaves it as normal files.
+
+ZIP mode applies only below:
+
+- `workspace/output/query2family/`
+- `workspace/output/orthogroup/`
+
+It does not archive `workspace/output/orthofinder/` or
+`workspace/output/genome_evolution/busco_*`.
+
+Routine batch archiving makes a family eligible when its gene-evolution task
+reaches the end successfully and records a completion state. Current state is stored in at
+most 256 bucketed JSON files instead of an ever-growing per-event log. This is
+independent of optional outputs, so runs with `run_summary=0` or
+`run_tree_plot=0` can still be archived. Outputs created before
+completion-state tracking use the historical
+`stat_branch` + `stat_tree` + `tree_plot` test as a one-time legacy fallback.
+Starting a rerun immediately invalidates the previous completion state until
+that rerun succeeds.
+
+Storage conversion and controlled failed-run cleanup may archive an incomplete
+family without marking it complete. Before a rerun starts, GeneGalleon
+materializes only that family's archived artifacts at their historical paths,
+preserves their mtimes, and then applies the normal stage skip/staleness tests.
+Consequently, a legacy run converted after MAFFT, for example, can resume from
+the later stages instead of starting over. A controlled failure records
+`failed`, removes unchanged materialized copies, and archives new or changed
+partial artifacts. After an abrupt kill, any remaining live files override the
+older ZIP members and are consumed on the next rerun.
+
+The other output subdirectories do not have to contain every expected family.
+For example, files for completed families can be moved from a partially
+complete `mafft/` directory into ZIP storage while incomplete-family files
+remain live. Array tasks archive in batches controlled by
+`GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES` (default `100`); the progress
+summary flushes smaller completed batches.
+
+Gene-family tasks hold a shared lock for their family while they may read or
+write live outputs. Lock files use a fixed set of hash buckets, so lock
+metadata itself cannot grow with the number of families. Archive maintenance
+takes only the relevant buckets exclusively and nonblockingly: an active
+family is skipped while completed families in other buckets can still be
+archived. A separate reader-maintenance lock prevents a ZIP shard from being
+replaced while a downstream reader has it open.
+
+The bounded metadata cost is at most 256 family-lock files, 256 state-lock
+files, 256 family-index JSON files, and 256 state-index JSON files, plus a
+small number of global/per-subdirectory files and ZIP shards. Thus the fixed
+worst-case metadata is roughly one thousand files rather than one lock or
+index file per family.
+
+Immutable shards are compacted automatically before the number of referenced
+shards in one logical subdirectory becomes large. Index updates and obsolete
+shard reclamation are committed one subdirectory at a time, bounding peak
+space during archive and compaction. A durable update marker makes readers
+fail closed if a process stops between updates to the denormalized index
+views; `repair` then rebuilds every view from the ZIP manifests. Family-bucket
+and subdirectory indexes, plus an epoch used to invalidate long-lived reader
+caches, avoid opening every ZIP manifest for normal listing, status, and
+task-level materialization.
+
+Temporary task data remains under the historical
+`workspace/output/{query2family,orthogroup}/tmp/` roots, avoiding an
+unbounded burst in a node-wide system temporary filesystem. When a rerun
+temporarily restores archived inputs into the historical paths, it writes a
+receipt before computation begins. A failed or killed run subsequently
+removes only receipt-listed files whose size and SHA-256 still match the
+restored member. Files modified by the failed run or by a person remain live;
+stale-task maintenance applies the same receipt cleanup.
+
+Successful jobs
+still remove their own task directory immediately. In ZIP mode, opportunistic
+and progress-summary maintenance removes failed-job task directories older
+than `GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS` (default `7`) only after it
+can obtain the affected family lock. It also retains at most
+`GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS` recent failed-task directories (default
+`100`), `GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES` bytes (default 100 GiB), and
+`GG_COMMON_GENE_FAMILY_TMP_MAX_FILES` files (default `100000`). Set an
+individual limit to `0` to disable it. Cleanup recognizes only task directory
+names beginning with a numeric array index and an underscore.
+
+Archives are ordinary Deflate-compatible ZIP files under
+`<gene-family-root>/.gg_archives/<subdirectory>/{part,pack}-*.zip`. Each member keeps
+its logical `<subdirectory>/<filename>` path. GeneGalleon summaries, database
+generation, HGT plots, csubst site plots, and orthogroup-based GRAmPA read
+these archives transparently or materialize only the family inputs required
+by an external tool. HGT and csubst materialization directories carry
+per-run locks; after SIGKILL, a later invocation reclaims only run directories
+whose owner lock is no longer held.
+
+### Adding, replacing, and deleting files manually
+
+Do not edit `part-*.zip` in place. The archive manifest intentionally detects
+direct ZIP edits as an error.
+
+To add or replace an artifact, put it at its historical path. A live file
+always overrides the archived version:
+
+```bash
+cp replacement.tsv \
+  workspace/output/query2family/stat_branch/2_WOX_stat.branch.tsv
+```
+
+Perform direct `cp` changes only when the affected gene-family task is idle.
+The managed `delete`, `undelete`, and `restore` commands take the affected
+family lock before changing logical state. For a query2family live file that
+has never been archived, supply `--family-id` explicitly because its family
+cannot be recovered from archive metadata.
+
+A later archive pass stores the replacement as a new immutable ZIP shard. To
+inspect the logical view and see whether each artifact is live or archived:
+
+```bash
+bash workflow/gg_gene_family_archive.sh list \
+  --root workspace/output/query2family \
+  --subdir stat_branch
+```
+
+For deletion, use the management command instead of `rm`. It records a
+tombstone so an older archived version cannot reappear:
+
+```bash
+bash workflow/gg_gene_family_archive.sh delete \
+  --root workspace/output/query2family \
+  --family-id 2_WOX \
+  --path stat_branch/2_WOX_stat.branch.tsv
+```
+
+The operation can be reversed, or the archived artifact can be restored as a
+normal file:
+
+```bash
+bash workflow/gg_gene_family_archive.sh undelete \
+  --root workspace/output/query2family \
+  --family-id 2_WOX \
+  --path stat_branch/2_WOX_stat.branch.tsv
+
+bash workflow/gg_gene_family_archive.sh restore \
+  --root workspace/output/query2family \
+  --family-id 2_WOX \
+  --path stat_branch/2_WOX_stat.branch.tsv
+```
+
+Verify every archive member with CRC and SHA-256 checks after copying a run:
+
+```bash
+bash workflow/gg_gene_family_archive.sh verify \
+  --root workspace/output/query2family
+```
+
+`verify` also cross-checks the family and subdirectory index views and rejects
+a missing authoritative index, an index reference to a missing shard, an
+unfinished index-update marker, and unreferenced/orphan ZIP shards. If an
+interrupted archive, compaction, repair, or manual operation left valid ZIP
+manifests but incomplete or missing indexes, rebuild them explicitly:
+
+```bash
+bash workflow/gg_gene_family_archive.sh repair \
+  --root workspace/output/query2family
+```
+
+Add `--remove-orphans` only after reviewing the reported orphan paths.
+
+### Converting an existing workspace
+
+Inspect a query2family root before changing its storage:
+
+```bash
+bash workflow/gg_gene_family_archive.sh convert-storage \
+  --root workspace/output/query2family \
+  --mode query2family \
+  --query-dir workspace/input/query_gene \
+  --to zip \
+  --dry-run
+```
+
+Remove `--dry-run` to archive every recognized family-owned live artifact,
+including outputs of incomplete families. Conversion does not create a
+completion state. Shared or unrecognized files remain live and are reported;
+`--strict-unmatched` instead aborts before conversion. If query inputs were
+removed after their outputs were created, list the missing family IDs one per
+line and pass `--family-id-file`.
+
+The command does not edit `gg_common_params.sh`. Set
+`GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE=zip` before resubmitting converted
+families. A rerun in `files`/`raw` mode remains readable, but its new outputs
+stay as ordinary files and GeneGalleon prints a mode-mismatch warning.
+
+For orthogroup output, use the selected gene-count table as a read-only family
+catalog:
+
+```bash
+bash workflow/gg_gene_family_archive.sh convert-storage \
+  --root workspace/output/orthogroup \
+  --mode orthogroup \
+  --genecount workspace/output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv \
+  --to zip
+```
+
+The command reads but never modifies `workspace/output/orthofinder/`.
+
+To restore the current logical view to ordinary files, first inspect the
+uncompressed byte and file counts and then run the conversion:
+
+```bash
+bash workflow/gg_gene_family_archive.sh convert-storage \
+  --root workspace/output/query2family \
+  --mode query2family \
+  --to raw \
+  --dry-run
+
+bash workflow/gg_gene_family_archive.sh convert-storage \
+  --root workspace/output/query2family \
+  --mode query2family \
+  --to raw
+```
+
+ZIP-to-raw conversion materializes and verifies every non-deleted logical
+artifact before removing ZIP payload. Tombstones become absence and live
+overrides remain authoritative. Bounded family-state and lock metadata remain
+by default; add `--pure-raw` only when an exact pre-ZIP physical layout is
+required and discarding that control metadata is acceptable.
+
+Both directions write `storage-conversion.pending`. A stopped conversion is
+resumed by running the same command again. `gg_gene_evolution` and progress
+summary refuse to start while the marker remains. Stop old array jobs before
+conversion; writers from code predating this lock protocol cannot be prevented
+from creating new live files, although signature checks keep such files from
+being deleted.
+
+To inspect the current physical/logical counts independently:
+
+```bash
+bash workflow/gg_gene_family_archive.sh storage-status \
+  --root workspace/output/query2family \
+  --mode query2family \
+  --query-dir workspace/input/query_gene
+```
+
+To compact existing shards explicitly:
+
+```bash
+bash workflow/gg_gene_family_archive.sh compact \
+  --root workspace/output/query2family \
+  --mode query2family
+```
+
+Logical deletion uses a tombstone log; it is automatically reduced to the
+latest record per path after it reaches its rotation threshold. To physically
+rewrite shards so tombstoned members and archived versions hidden by live
+overrides no longer occupy space, use the irreversible maintenance command:
+
+```bash
+bash workflow/gg_gene_family_archive.sh purge \
+  --root workspace/output/query2family \
+  --mode query2family \
+  --query-dir workspace/input/query_gene
+```
+
+`purge --drop-unlisted` additionally removes archived members and family-state
+records for query inputs no longer present (or orthogroups absent from the
+specified gene-count table). Run `verify` and keep a backup before purge.
+
+To produce a normal directory containing only the current logical versions
+(live overrides applied and tombstoned files omitted), use `export-current`.
+This is the safe form to transfer for ordinary Finder/Archive Utility use when
+the store has replacements or deletions:
+
+```bash
+bash workflow/gg_gene_family_archive.sh export-current \
+  --root workspace/output/query2family \
+  --destination-root ../query2family-current
+```
+
+The export destination must not exist or must be empty. This prevents files
+deleted from the logical store from surviving in a reused export directory.
+
+Directly deleting a live override with `rm` is ambiguous: GeneGalleon will
+then expose an older archived version if one exists. Use the managed `delete`
+command when logical deletion is intended.
+
 ## How to read `tree_plot`
 
 `tree_plot` is generated from `stat_branch/*.tsv` and summarizes many
@@ -130,26 +418,18 @@ statistics when `amas_original` or `amas_cleaned` outputs are present.
 For large query2family runs, inspect late-stage completion markers such as
 `tree_plot`, `stat_branch`, or `stat_tree`.
 
-Manual equivalent using `tree_plot` as the completion marker:
+Archive-aware manual status:
 
 ```bash
-python - <<'PY'
-from pathlib import Path
-
-query_dir = Path("workspace/input/query_gene")
-plot_dir = Path("workspace/output/query2family/tree_plot")
-
-queries = sorted(p.name for p in query_dir.iterdir() if p.is_file())
-finished = {p.name[:-len("_tree_plot.pdf")] for p in plot_dir.glob("*_tree_plot.pdf")}
-
-for task_id, family in enumerate(queries, start=1):
-    if family not in finished:
-        print(f"{task_id}\t{family}")
-PY
+bash workflow/gg_gene_family_archive.sh status \
+  --root workspace/output/query2family \
+  --mode query2family \
+  --query-dir workspace/input/query_gene
 ```
 
-If `run_tree_plot=0`, switch the marker to `stat_branch/*_stat.branch.tsv`
-instead of `tree_plot/*_tree_plot.pdf`.
+For task-level resubmission decisions, use `query2family_summary.tsv`; it
+contains the archive-aware `tree_plot`, `stat_branch`, and `stat_tree`
+completion columns together with `GG_ARRAY_TASK_ID`.
 
 ## Rerunning incomplete tasks
 

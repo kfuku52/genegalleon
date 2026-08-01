@@ -1034,7 +1034,7 @@ def test_genome_evolution_core_uses_rerun_safe_mkdir_for_orthogroup_grampa_tmp_i
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
     assert "mkdir ./tmp.orthogroup_grampa_indir" not in text
-    assert "mkdir -p ./tmp.orthogroup_grampa_indir" in text
+    assert 'mkdir -p "${orthogroup_grampa_indir}"' in text
     assert '[[ "${file_name}" == "${og_id}"* ]]' not in text
     assert 'gg_orthogroup_file_matches_id "${file_name}" "${og_id}"' in text
 
@@ -1075,7 +1075,7 @@ def test_genome_evolution_core_quotes_grampa_output_and_cafe_option_values():
         in text
     )
     assert (
-        'busco_grampa "./tmp.orthogroup_grampa_indir" "$(dirname "${file_orthogroup_grampa}")" "${file_orthogroup_grampa}"'
+        'busco_grampa "${orthogroup_grampa_indir}" "$(dirname "${file_orthogroup_grampa}")" "${file_orthogroup_grampa}"'
         in text
     )
     assert '--genecount "${file_orthogroup_genecount_selected}"' in text
@@ -1249,6 +1249,113 @@ def test_common_input_sequence_mode_defaults_to_cds():
 def test_common_csubst_nonsyn_recode_defaults_to_no():
     text = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
     assert ': "${GG_COMMON_CSUBST_NONSYN_RECODE:=no}"' in text
+
+
+def test_gene_family_zip_storage_is_common_default_and_remains_configurable():
+    common = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_gene_evolution_entrypoint.sh")
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+
+    assert ': "${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:=zip}"' in common
+    assert ': "${GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES:=100}"' in common
+    assert ': "${GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS:=7}"' in common
+    assert ': "${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:=100}"' in common
+    assert ': "${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:=107374182400}"' in common
+    assert ': "${GG_COMMON_GENE_FAMILY_TMP_MAX_FILES:=100000}"' in common
+    assert 'gene_family_output_storage="${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}"' in entrypoint
+    assert "zip|files)" in core
+    assert 'raw)' in core
+    assert 'gene_family_output_storage="files"' in core
+    assert "gene_family_output_storage" in config_vars
+    assert "gene_family_zip_min_batch_files" in config_vars
+    assert "gene_family_tmp_retention_days" in config_vars
+    assert "gene_family_tmp_max_dirs" in config_vars
+    assert "gene_family_tmp_max_bytes" in config_vars
+    assert "gene_family_tmp_max_files" in config_vars
+
+
+def test_gene_family_zip_archiving_is_scoped_to_active_gene_family_roots():
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    progress = _read_text(CORE_DIR / "gg_progress_summary_core.sh")
+
+    assert '--root "${dir_output_active}"' in core
+    assert '--root "${dir_orthogroup}"' in progress
+    assert '--root "${dir_query2family}"' in progress
+    assert "--root \"${gg_workspace_output_dir}/orthofinder\"" not in progress
+    assert "busco_" not in progress
+    assert "storage-conversion.pending" in progress
+    assert 'assert_gene_family_storage_ready "${dir_orthogroup}"' in progress
+    assert 'assert_gene_family_storage_ready "${dir_query2family}"' in progress
+
+
+def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion_state():
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+
+    assert "producer.lock" not in core
+    assert "lock-path" in core
+    assert "gg_advisory_shared_lock_acquire" in core
+    assert "gg_advisory_shared_lock_release" in core
+    assert '"${gene_family_output_storage}" == "zip" || -d "${dir_output_active}/.gg_archives"' in core
+    assert 'mark-running \\' in core
+    assert 'mark-complete \\' in core
+    assert 'mark-failed \\' in core
+    assert 'archive-family \\' in core
+    assert 'storage-conversion.pending' in core
+    assert "is-complete" not in core
+    assert "finalize_gene_family_run_success" in core
+    assert "cleanup-materialized" in core
+    assert '--receipt "${gene_family_materialization_receipt}"' in core
+    assert "materialization receipt still requires cleanup" in core
+    assert "Refusing to remove tmp directory while its materialization receipt remains" in core
+    finalize_body = _function_body(core, "finalize_gene_family_run_success")
+    assert 'if ! python "${gene_family_store_script}" mark-complete \\' in finalize_body
+    assert "return 1" in finalize_body
+    assert "gene_family_run_succeeded=1" in finalize_body
+    cleanup_body = _function_body(core, "cleanup_tmp_dir_on_normal_exit")
+    assert cleanup_body.index("gg_advisory_shared_lock_release") < cleanup_body.index(
+        "cleanup-materialized"
+    )
+    assert cleanup_body.index("cleanup-materialized") < cleanup_body.index(
+        "archive-family"
+    )
+
+
+def test_gene_family_zip_stale_tmp_cleanup_uses_family_exclusion_and_caps():
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    progress = _read_text(CORE_DIR / "gg_progress_summary_core.sh")
+
+    assert "cleanup-tmp" in core
+    assert "cleanup-tmp" in progress
+    assert "--nonblocking" in core
+    assert "--nonblocking" in progress
+    assert "--max-bytes" in core
+    assert "--max-files" in core
+    assert "--max-bytes" in progress
+    assert "--max-files" in progress
+
+
+def test_orthogroup_grampa_materializes_only_selected_rooted_trees():
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+
+    assert "materialize-families" in core
+    assert "--subdirs rooted_tree" in core
+    assert 'dir_og_rooted_tree_effective="${orthogroup_grampa_materialized}/rooted_tree"' in core
+    assert 'orthogroup_grampa_indir="${dir_og_rooted_tree_effective}"' in core
+    assert 'busco_grampa "${orthogroup_grampa_indir}"' in core
+    assert "cleanup_orthogroup_grampa_tmp" in core
+
+
+def test_hgt_zip_materialization_uses_locked_run_directory_and_stale_recovery():
+    core = _read_text(CORE_DIR / "gg_hgt_core.sh")
+
+    assert 'hgt_materialization_root="${dir_hgt_tmp}/materialized"' in core
+    assert "hgt_cleanup_stale_materialization_runs" in core
+    assert 'exec 197> "${hgt_materialization_run_dir}/.run.lock"' in core
+    assert "flock -x 197" in core
+    assert "if flock -n -x 196; then" in core
+    assert 'dir_hgt_materialized="${hgt_materialization_run_dir}/${og_id}"' in core
+    assert "trap hgt_cleanup_materialization_run EXIT" in core
 
 
 def test_common_params_define_reference_species_auto_only_once():
@@ -3081,7 +3188,7 @@ def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
         'if [[ ! -s "${file_og_scm_intron_summary}" && ${run_scm_intron} -eq 1 ]]; then',
         'if [[ (! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || ! -s "${file_og_l1ou_fit_regime}" || ! -s "${file_og_l1ou_fit_leaf}") && ${run_l1ou} -eq 1 ]]; then',
         'if ([[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]]) && [[ ${run_tree_plot} -eq 1 ]]; then',
-        'if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" && ${gg_debug_mode:-0} -eq 0 ]]; then',
+        'if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" ]]; then',
     ]
     for token in expected_tokens:
         assert token in text

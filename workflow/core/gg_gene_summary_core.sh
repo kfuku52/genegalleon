@@ -310,10 +310,6 @@ run_family_completion_summary_for_source() {
       echo "Skipping orthogroup summary because no selected gene-count table was found under workspace/output/orthofinder."
       return 0
     fi
-    if [[ ! -d "${dir_gene_family}/amas_original" || ! -d "${dir_gene_family}/amas_cleaned" ]]; then
-      echo "Skipping orthogroup summary because required AMAS directories were not found under: ${dir_gene_family}"
-      return 0
-    fi
     python "${gg_support_dir}/orthogroup_output_summary.py" \
       --dir_og "${dir_gene_family}" \
       --genecount "${file_orthogroup_genecount_selected}" \
@@ -323,17 +319,24 @@ run_family_completion_summary_for_source() {
 }
 
 run_presence_absence_summary_for_source() {
+  local store_status
   if [[ ${run_presence_absence_summary} -ne 1 ]]; then
     echo "Skipping gene-family presence/absence summary because run_presence_absence_summary=0."
     return 0
   fi
-  if [[ ! -d "${dir_gene_family}/stat_branch" ]]; then
-    echo "Skipping gene-family presence/absence summary because stat_branch directory was not found: ${dir_gene_family}/stat_branch"
-    return 0
-  fi
-  if [[ -z "$(find "${dir_gene_family}/stat_branch" -mindepth 1 -maxdepth 1 -type f -name '*_stat.branch.tsv' -print -quit 2>/dev/null)" ]]; then
-    echo "Skipping gene-family presence/absence summary because no stat_branch files were found under: ${dir_gene_family}/stat_branch"
-    return 0
+  if python "${gg_support_dir}/gene_family_output_store.py" has-files \
+    --root "${dir_gene_family}" \
+    --subdir stat_branch \
+    --suffix "_stat.branch.tsv"
+  then
+    :
+  else
+    store_status=$?
+    if [[ ${store_status} -eq 1 ]]; then
+      echo "Skipping gene-family presence/absence summary because no live or ZIP-backed stat_branch files were found under: ${dir_gene_family}"
+      return 0
+    fi
+    return "${store_status}"
   fi
   if [[ "${gene_family_source}" == "query2family" && ! -d "${dir_query_gene}" ]]; then
     echo "Skipping query2family presence/absence summary because query_gene input directory was not found: ${dir_query_gene}"
@@ -432,23 +435,28 @@ run_gene_family_database_for_source() {
     echo "Skipping database prep because run_gene_family_database_build=0."
     return 0
   fi
-  local missing_input=0
-  for required_dir in \
-    "${dir_gene_family}/stat_tree" \
-    "${dir_gene_family}/stat_branch"
-  do
-    if [[ ! -d "${required_dir}" ]]; then
-      echo "Skipping database prep because required directory is missing: ${required_dir}"
-      missing_input=1
+  local required_subdir
+  local store_status
+  for required_subdir in stat_tree stat_branch; do
+    if python "${gg_support_dir}/gene_family_output_store.py" has-files \
+      --root "${dir_gene_family}" \
+      --subdir "${required_subdir}"
+    then
+      :
+    else
+      store_status=$?
+      if [[ ${store_status} -eq 1 ]]; then
+        echo "Skipping database prep because no live or ZIP-backed files were found in logical subdirectory: ${required_subdir}"
+        return 0
+      fi
+      return "${store_status}"
     fi
   done
-  if [[ ${missing_input} -ne 0 ]]; then
-    return 0
-  fi
   echo "Generating gene-family database for gene_family_source=${gene_family_source}: ${file_gene_family_db}"
   python "${gg_support_dir}/generate_orthogroup_database.py" \
     --overwrite 1 \
     --dbpath "${file_gene_family_db}" \
+    --dir_gene_family "${dir_gene_family}" \
     --dir_stat_tree "${dir_gene_family}/stat_tree" \
     --dir_stat_branch "${dir_gene_family}/stat_branch" \
     --dir_csubst_cb_prefix "${dir_gene_family}/csubst_cb_" \
@@ -484,6 +492,7 @@ run_hgt_summary_for_source() {
   fi
   echo "Running HGT summary for gene_family_source=${gene_family_source}."
   hgt_gene_family_dir="${dir_gene_family}" \
+  hgt_gene_family_mode="${gene_family_source}" \
   hgt_db_path="${file_gene_family_db}" \
   hgt_output_dir="${hgt_summary_output_dir}" \
   run_hgt_eval="${run_hgt_candidate_summary}" \

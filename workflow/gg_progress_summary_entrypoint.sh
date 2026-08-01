@@ -73,6 +73,11 @@ gg_entrypoint_name="gg_progress_summary_entrypoint.sh"
 
 # Mode
 mode_transcriptome_assembly="auto" # {"auto", "sraid", "fastq", "metadata"}; input mode used to interpret transcriptome-generation progress directories, with auto detecting the available workspace/input layout.
+gene_family_output_storage="${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}" # zip|files|raw; raw aliases files, while zip flushes completed live gene-family artifacts after archive-aware summaries.
+gene_family_tmp_retention_days="${gene_family_tmp_retention_days:-${GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS:-7}}" # Failed task directories below query2family/orthogroup tmp roots are removed after this many days when their family lock is idle; 0 disables the age limit.
+gene_family_tmp_max_dirs="${gene_family_tmp_max_dirs:-${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:-100}}" # Maximum failed task directories retained per query2family/orthogroup root; oldest excess directories are removed and 0 disables the count limit.
+gene_family_tmp_max_bytes="${gene_family_tmp_max_bytes:-${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:-107374182400}}" # Maximum bytes retained across inactive failed task directories; 0 disables the byte limit.
+gene_family_tmp_max_files="${gene_family_tmp_max_files:-${GG_COMMON_GENE_FAMILY_TMP_MAX_FILES:-100000}}" # Maximum files retained across inactive failed task directories; 0 disables the file-count limit.
 
 # Runtime parameters
 ncpu_progress_summary="" # Number of CPU threads used by summary scripts; empty falls back to GG_TASK_CPUS.

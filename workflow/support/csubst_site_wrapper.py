@@ -3,6 +3,7 @@
 
 import argparse
 import datetime
+import fcntl
 import glob
 import gzip
 import os
@@ -10,18 +11,113 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
+import tempfile
 import textwrap
 import zipfile
 from concurrent.futures import ProcessPoolExecutor
 from itertools import repeat
+from pathlib import Path
 
 import numpy
 import pandas
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from gene_family_output_store import GeneFamilyOutputStore
 
 try:
     import sqlalchemy
 except ImportError:
     sqlalchemy = None
+
+
+class LockedMaterializationDirectory:
+    def __init__(self, parent, og):
+        self.parent = Path(parent).resolve()
+        self.root = self.parent / ".gg_materialized"
+        # One stable lock outside the per-analysis directory avoids including a
+        # lock file in the result ZIP. It must not be unlinked: unlinking a
+        # flocked file lets a concurrent opener lock a different inode.
+        self.global_lock_path = self.parent.parent / ".gg_materialized.lock"
+        self.descriptor = None
+        self.name = ""
+        self.parent.mkdir(parents=True, exist_ok=True)
+        global_descriptor = _open_materialization_lock(self.global_lock_path)
+        try:
+            fcntl.flock(global_descriptor, fcntl.LOCK_EX)
+            self.root.mkdir(parents=True, exist_ok=True)
+            for candidate in sorted(self.root.iterdir()):
+                if not candidate.is_dir() or candidate.is_symlink():
+                    continue
+                lock_path = candidate / ".run.lock"
+                stale_descriptor = _open_materialization_lock(lock_path)
+                try:
+                    try:
+                        fcntl.flock(
+                            stale_descriptor,
+                            fcntl.LOCK_EX | fcntl.LOCK_NB,
+                        )
+                    except BlockingIOError:
+                        continue
+                    shutil.rmtree(candidate)
+                finally:
+                    os.close(stale_descriptor)
+            run_dir = Path(
+                tempfile.mkdtemp(
+                    prefix=f"{og}.",
+                    dir=self.root,
+                )
+            )
+            lock_path = run_dir / ".run.lock"
+            self.descriptor = _open_materialization_lock(lock_path)
+            fcntl.flock(self.descriptor, fcntl.LOCK_EX)
+            self.name = str(run_dir)
+        finally:
+            fcntl.flock(global_descriptor, fcntl.LOCK_UN)
+            os.close(global_descriptor)
+
+    def cleanup(self):
+        if self.descriptor is None:
+            return
+        global_descriptor = _open_materialization_lock(self.global_lock_path)
+        try:
+            fcntl.flock(global_descriptor, fcntl.LOCK_EX)
+            fcntl.flock(self.descriptor, fcntl.LOCK_UN)
+            os.close(self.descriptor)
+            self.descriptor = None
+            if self.name:
+                shutil.rmtree(self.name, ignore_errors=True)
+            try:
+                self.root.rmdir()
+            except OSError:
+                pass
+        finally:
+            fcntl.flock(global_descriptor, fcntl.LOCK_UN)
+            os.close(global_descriptor)
+
+
+def _open_materialization_lock(path):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return os.open(path, flags, 0o600)
+
+
+def cleanup_materialization_metadata(parent):
+    parent = Path(parent).resolve()
+    root = parent / ".gg_materialized"
+    try:
+        root.rmdir()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return
+
 
 try:
     from distutils.util import strtobool
@@ -508,15 +604,29 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
     file_summary = os.path.join(dir_out_og, f'summary.{og}_branch_id{branch_id_str}.pdf')
     if os.path.exists(file_summary):
         print(f'Skipped. Outfile already exists: {file_summary}', flush=True)
+        os.chdir(previous_cwd)
         return og, None
+    materialized_input_context = None
     try:
+        effective_dir_og = dir_og
+        if os.path.isdir(os.path.join(dir_og, '.gg_archives')):
+            materialized_input_context = LockedMaterializationDirectory(
+                dir_out,
+                og,
+            )
+            effective_dir_og = materialized_input_context.name
+            materialize_csubst_site_inputs(
+                dir_og=dir_og,
+                og=og,
+                destination_root=effective_dir_og,
+            )
         artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
         file_csubst_out = artifacts['site_table_tsv']
         if file_csubst_out is not None and os.path.exists(file_csubst_out):
             print(f'Skipped csubst sites. Outfile already exists: {file_csubst_out}', flush=True)
         else:
             print(f'Running csubst sites. Output file not found: {file_csubst_out}', flush=True)
-            path_iqtree_zip = get_iqtree_anc_zip_path(dir_og=dir_og, og=og)
+            path_iqtree_zip = get_iqtree_anc_zip_path(dir_og=effective_dir_og, og=og)
             with zipfile.ZipFile(path_iqtree_zip, "r") as zip_ref:
                 zip_ref.extractall(dir_out_og)
             cmd = csubst_sites_cmd
@@ -533,7 +643,7 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
                 branch_id_str,
                 file_trait_color=file_trait_color,
                 dir_out_og=dir_out_og,
-                dir_og=dir_og,
+                dir_og=effective_dir_og,
                 ncpu=ncpu,
                 csubst_nonsyn_recode=csubst_nonsyn_recode,
             )
@@ -577,6 +687,54 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
         return og,e
     finally:
         os.chdir(previous_cwd)
+        if materialized_input_context is not None:
+            materialized_input_context.cleanup()
+
+
+def process_og_batch(
+    og,
+    branch_id_strs,
+    dir_out,
+    dir_og,
+    file_trait_color,
+    ncpu,
+    csubst_nonsyn_recode,
+    annotation_texts,
+):
+    materialized_input_context = None
+    effective_dir_og = dir_og
+    try:
+        if os.path.isdir(os.path.join(dir_og, '.gg_archives')):
+            materialized_input_context = LockedMaterializationDirectory(
+                dir_out,
+                og,
+            )
+            effective_dir_og = materialized_input_context.name
+            materialize_csubst_site_inputs(
+                dir_og=dir_og,
+                og=og,
+                destination_root=effective_dir_og,
+            )
+        return [
+            process_index(
+                og,
+                branch_id_str,
+                dir_out,
+                effective_dir_og,
+                file_trait_color,
+                ncpu,
+                csubst_nonsyn_recode,
+                annotation_text,
+            )
+            for branch_id_str, annotation_text in zip(
+                branch_id_strs,
+                annotation_texts,
+            )
+        ]
+    finally:
+        if materialized_input_context is not None:
+            materialized_input_context.cleanup()
+
 
 def skip_lower_order(cb_passed, arity, trait, already_analyzed_in_greater_K):
     num_before_filtering = cb_passed.shape[0]
@@ -660,6 +818,47 @@ def get_stat_branch_path(dir_og, og):
 
 def get_rpsblast_path(dir_og, og):
     return os.path.join(dir_og, 'rpsblast', og + '_rpsblast.tsv')
+
+def materialize_csubst_site_inputs(dir_og, og, destination_root):
+    store = GeneFamilyOutputStore(dir_og, family_filter=og)
+    candidates_by_subdir = {
+        'iqtree_anc': [og + '_iqtree.anc.zip'],
+        'stat_branch': [og + '_stat.branch.tsv'],
+        'rpsblast': [og + '_rpsblast.tsv'],
+        'clipkit': [
+            og + '_cds.clipkit.fa.gz',
+            og + '_cds.clipkit.fasta',
+            og + '_cds.clipkit.fa',
+        ],
+        'mafft': [
+            og + '_cds.aln.fa.gz',
+            og + '_cds.aln.fasta',
+            og + '_cds.aln.fa',
+        ],
+        'orthogroup_extraction_fasta': [
+            og + '_orthogroup_extraction.fa.gz',
+            og + '_orthogroup_extraction.fasta',
+            og + '_orthogroup_extraction.fa',
+        ],
+        'cds_fasta': [
+            og + '_cds.fa.gz',
+            og + '_cds.fasta',
+            og + '_cds.fa',
+        ],
+    }
+    materialized = []
+    for subdir, candidate_names in candidates_by_subdir.items():
+        for name in candidate_names:
+            if store.artifact(subdir, name) is None:
+                continue
+            materialized.append(
+                store.materialize(
+                    subdir,
+                    name,
+                    destination_root=destination_root,
+                )
+            )
+    return materialized
 
 def materialize_tree_plot_alignment(alignment_path, plain_path):
     if alignment_path.endswith('.gz'):
@@ -1291,23 +1490,39 @@ if __name__ == '__main__':
                         observed_values=observed_values,
                     )
                 )
+            batch_order = []
+            branch_ids_by_og = {}
+            annotations_by_og = {}
+            for og, branch_id_str, annotation_text in zip(
+                og_list,
+                branch_id_str_list,
+                annotation_text_list,
+            ):
+                if og not in branch_ids_by_og:
+                    batch_order.append(og)
+                    branch_ids_by_og[og] = []
+                    annotations_by_og[og] = []
+                branch_ids_by_og[og].append(branch_id_str)
+                annotations_by_og[og].append(annotation_text)
             with ProcessPoolExecutor(max_workers=args.ncpu) as executor:
                 results = executor.map(
-                    process_index,
-                    og_list,
-                    branch_id_str_list,
+                    process_og_batch,
+                    batch_order,
+                    [branch_ids_by_og[og] for og in batch_order],
                     repeat(dir_out),
                     repeat(dir_og),
                     repeat(file_trait_color),
                     repeat(args.ncpu),
                     repeat(args.csubst_nonsyn_recode),
-                    annotation_text_list,
+                    [annotations_by_og[og] for og in batch_order],
                 )
-                for og,result in results:
-                    if isinstance(result, Exception):
-                        print(f"Error in {og}: {result}")
-                        flag_zip = False
-                        processing_failures.append((og, result))
+                for batch_results in results:
+                    for og,result in batch_results:
+                        if isinstance(result, Exception):
+                            print(f"Error in {og}: {result}")
+                            flag_zip = False
+                            processing_failures.append((og, result))
+            cleanup_materialization_metadata(dir_out)
             os.chdir(cwd)
             if flag_zip:
                 print(f'No error detected. Zipping {dir_out}', flush=True)

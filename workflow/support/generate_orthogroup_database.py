@@ -9,8 +9,10 @@ import logging
 import math
 import os
 import re
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import numpy as np
 
@@ -20,6 +22,12 @@ except ImportError:
     def tqdm(iterable, **_kwargs):
         return iterable
 import pandas as pd
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from gene_family_output_store import GeneFamilyOutputStore
 
 try:
     import sqlalchemy
@@ -86,12 +94,16 @@ def require_sqlalchemy():
         raise ImportError("sqlalchemy is required to build the orthogroup database.")
 
 
-def read_header_columns(file_path):
+def read_header_columns(file_path, store=None, logical_subdir=None, logical_name=None):
     """
     Read the first line of a TSV file and return column names.
     """
-    with open(file_path, "r", encoding="utf-8", errors="replace") as file_handle:
-        header_line = file_handle.readline().strip()
+    if store is None:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as file_handle:
+            header_line = file_handle.readline().strip()
+    else:
+        with store.open_binary(logical_subdir, logical_name) as file_handle:
+            header_line = file_handle.readline().decode("utf-8", errors="replace").strip()
     if not header_line:
         return []
     return header_line.split("\t")
@@ -119,7 +131,7 @@ def discover_csubst_cb_dirs(prefix):
     ]
 
 
-def validate_csubst_scan_schemas(scan_dirs):
+def validate_csubst_scan_schemas(scan_dirs, store=None):
     """
     Require current semantic marker columns while allowing optional columns to vary.
 
@@ -129,16 +141,29 @@ def validate_csubst_scan_schemas(scan_dirs):
     """
     problems = []
     for table_name, scan_dir in scan_dirs:
-        if not scan_dir or not os.path.isdir(scan_dir):
+        logical_subdir = os.path.basename(os.path.normpath(scan_dir)) if scan_dir else ""
+        if not scan_dir:
             continue
-        files = visible_files(scan_dir)
+        if store is None:
+            if not os.path.isdir(scan_dir):
+                continue
+            files = visible_files(scan_dir)
+        else:
+            if logical_subdir not in store.logical_subdirs():
+                continue
+            files = store.file_names(logical_subdir)
         if not files:
             continue
 
         required_columns = CSUBST_SCAN_BASELINE_COLUMNS[table_name]
         for infile in files:
             file_path = os.path.join(scan_dir, infile)
-            header_columns = read_header_columns(file_path)
+            header_columns = read_header_columns(
+                file_path,
+                store=store,
+                logical_subdir=logical_subdir,
+                logical_name=infile,
+            )
             duplicate_columns = sorted({col for col in header_columns if header_columns.count(col) > 1})
             if duplicate_columns:
                 problems.append(
@@ -307,7 +332,15 @@ def validate_directories(required_dirs, db_path):
     retry=retry_if_exception_type(Exception),
     reraise=True
 )
-def process_files(file_path, columns_to_read, available_cols_set=None, fill_missing_columns=False):
+def process_files(
+    file_path,
+    columns_to_read,
+    available_cols_set=None,
+    fill_missing_columns=False,
+    store=None,
+    logical_subdir=None,
+    logical_name=None,
+):
     """
     Read a TSV file, add the 'orthogroup' column, ensure any missing columns become NaN,
     and return the trimmed DataFrame with the columns we want to keep (including 'orthogroup').
@@ -326,7 +359,14 @@ def process_files(file_path, columns_to_read, available_cols_set=None, fill_miss
 
         # Use caller-provided header columns when available to avoid a second parse.
         if available_cols_set is None:
-            available_cols_set = set(read_header_columns(file_path))
+            available_cols_set = set(
+                read_header_columns(
+                    file_path,
+                    store=store,
+                    logical_subdir=logical_subdir,
+                    logical_name=logical_name,
+                )
+            )
         else:
             available_cols_set = set(available_cols_set)
 
@@ -344,13 +384,23 @@ def process_files(file_path, columns_to_read, available_cols_set=None, fill_miss
             )
 
         # Read only the available columns using the filtered list.
-        df = pd.read_csv(
-            file_path, 
-            sep="\t", 
-            header=0, 
-            usecols=filtered_cols, 
-            low_memory=True
-        )
+        if store is None:
+            df = pd.read_csv(
+                file_path,
+                sep="\t",
+                header=0,
+                usecols=filtered_cols,
+                low_memory=True,
+            )
+        else:
+            with store.open_binary(logical_subdir, logical_name) as file_handle:
+                df = pd.read_csv(
+                    file_handle,
+                    sep="\t",
+                    header=0,
+                    usecols=filtered_cols,
+                    low_memory=True,
+                )
 
         if fill_missing_columns:
             for col in missing_cols:
@@ -456,6 +506,7 @@ def main():
     parser.add_argument('--dir_csubst_cb_prefix', metavar='PATH', default='', type=str, help='Prefix path for csubst_cb directories.')
     parser.add_argument('--dir_csubst_aa_change', metavar='PATH', default='', type=str, help='Directory for csubst scan candidate state-change files.')
     parser.add_argument('--dir_csubst_aa_change_unit', metavar='PATH', default='', type=str, help='Directory for csubst scan foreground-unit files.')
+    parser.add_argument('--dir_gene_family', metavar='PATH', default='', type=str, help='Optional query2family/orthogroup root used to read live and ZIP-backed logical subdirectories.')
     parser.add_argument('--row_threshold', metavar='INT', default=10000, type=int, help='Number of rows to accumulate before inserting into SQL.')
     parser.add_argument('--cb_categories', metavar='CAT1,CAT2,...', default='any2any,any2spe', type=str, help='CSUBST cb stat categories to incorporate.')
     parser.add_argument('--cutoff_stat', metavar='STAT1,VALUE1|STAT2,VALUE2|...', default='OCNany2spe,0.8', type=str, help='Cutoff statistics for filtering.')
@@ -468,6 +519,11 @@ def main():
     params = vars(args)
     params['max_workers'] = max(1, int(params['max_workers']))
     db_path = params['dbpath']
+    output_store = (
+        GeneFamilyOutputStore(params['dir_gene_family'])
+        if params['dir_gene_family']
+        else None
+    )
 
     cb_categories = [cat.strip() for cat in args.cb_categories.split(',')]
     all_cb_categories = ['any2any','any2spe','spe2any','spe2spe','any2dif','dif2any','spe2dif','dif2spe','dif2dif']
@@ -477,14 +533,27 @@ def main():
         params['dir_stat_tree'],
         params['dir_stat_branch'],
     ]
-    validate_directories(required_dirs, db_path)
+    if output_store is None:
+        validate_directories(required_dirs, db_path)
+    else:
+        logical_subdirs = set(output_store.logical_subdirs())
+        for required_dir in required_dirs:
+            required_subdir = os.path.basename(os.path.normpath(required_dir))
+            if required_subdir not in logical_subdirs:
+                raise FileNotFoundError(
+                    f"Logical input subdirectory does not exist: {required_subdir} "
+                    f"under {params['dir_gene_family']}"
+                )
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
 
     scan_dirs = [
         (AA_CHANGE_TABLE, params['dir_csubst_aa_change']),
         (AA_CHANGE_UNIT_TABLE, params['dir_csubst_aa_change_unit']),
     ]
     try:
-        validate_csubst_scan_schemas(scan_dirs)
+        validate_csubst_scan_schemas(scan_dirs, store=output_store)
     except ValueError as exc:
         logger.error(str(exc))
         raise SystemExit(1) from exc
@@ -521,15 +590,35 @@ def main():
         'branch': params['dir_stat_branch'],
     }
     # Identify csubst directories
-    cb_dirs = discover_csubst_cb_dirs(params['dir_csubst_cb_prefix'])
+    if output_store is None:
+        cb_dirs = discover_csubst_cb_dirs(params['dir_csubst_cb_prefix'])
+    else:
+        cb_prefix = os.path.basename(os.path.normpath(params['dir_csubst_cb_prefix']))
+        cb_dirs = [
+            os.path.join(params['dir_gene_family'], subdir)
+            for subdir in output_store.logical_subdirs()
+            if subdir.startswith(cb_prefix) and subdir != "csubst_cb_stats"
+        ]
     for cb_dir in cb_dirs:
-        if os.path.isdir(cb_dir) and has_visible_entries(cb_dir):
+        cb_subdir = os.path.basename(os.path.normpath(cb_dir))
+        cb_has_entries = (
+            os.path.isdir(cb_dir) and has_visible_entries(cb_dir)
+            if output_store is None
+            else bool(output_store.file_names(cb_subdir))
+        )
+        if cb_has_entries:
             logger.info(f"CSUBST higher-order convergence directory detected: {cb_dir}")
             arity = re.sub('.*_', '', cb_dir)
             table_name = f'cb{arity}'
             indirs[table_name] = cb_dir
     for table_name, scan_dir in scan_dirs:
-        if scan_dir and os.path.isdir(scan_dir) and has_visible_entries(scan_dir):
+        scan_subdir = os.path.basename(os.path.normpath(scan_dir)) if scan_dir else ""
+        scan_has_entries = (
+            bool(scan_dir) and os.path.isdir(scan_dir) and has_visible_entries(scan_dir)
+            if output_store is None
+            else bool(scan_dir) and bool(output_store.file_names(scan_subdir))
+        )
+        if scan_has_entries:
             logger.info(f"CSUBST scan directory detected for table '{table_name}': {scan_dir}")
             indirs[table_name] = scan_dir
     logger.info(f"Input directories to be appended: {', '.join(indirs.values())}")
@@ -537,10 +626,15 @@ def main():
     # Check column names of all input files
     for stat in indirs.keys():
         dir_path = indirs[stat]
-        if not os.path.exists(dir_path):
+        logical_subdir = os.path.basename(os.path.normpath(dir_path))
+        if output_store is None and not os.path.exists(dir_path):
             logger.warning(f"Directory does not exist. Skipping: {dir_path}")
             continue
-        infiles[stat] = visible_files(dir_path)
+        infiles[stat] = (
+            visible_files(dir_path)
+            if output_store is None
+            else output_store.file_names(logical_subdir)
+        )
         logger.info(f"Number of infiles for '{stat}': {len(infiles[stat])}")
         num_columns[stat] = []
         header_columns_by_file[stat] = {}
@@ -549,7 +643,12 @@ def main():
         for infile in infiles[stat]:
             file_path = os.path.join(dir_path, infile)
             try:
-                infile_columns = read_header_columns(file_path)
+                infile_columns = read_header_columns(
+                    file_path,
+                    store=output_store,
+                    logical_subdir=logical_subdir,
+                    logical_name=infile,
+                )
                 infile_column_names_set = set(infile_columns)
                 header_columns_by_file[stat][infile] = infile_columns
                 header_columns_set_by_file[stat][infile] = infile_column_names_set
@@ -630,7 +729,18 @@ def main():
         for stat, files in infiles.items():
             for infile in files:
                 file_path = os.path.join(indirs[stat], infile)
-                if os.path.getsize(file_path) == 0:
+                logical_subdir = os.path.basename(os.path.normpath(indirs[stat]))
+                artifact = (
+                    None
+                    if output_store is None
+                    else output_store.artifact(logical_subdir, infile)
+                )
+                file_size = (
+                    os.path.getsize(file_path)
+                    if output_store is None
+                    else int(artifact.size or 0) if artifact is not None else 0
+                )
+                if file_size == 0:
                     processing_errors.append((file_path, "input file is empty"))
                     continue
                 future = executor.submit(
@@ -639,6 +749,9 @@ def main():
                     columns[stat],
                     header_columns_set_by_file[stat].get(infile),
                     stat in CSUBST_SCAN_BASELINE_COLUMNS,
+                    output_store,
+                    logical_subdir,
+                    infile,
                 )
                 futures[future] = (stat, file_path)
 

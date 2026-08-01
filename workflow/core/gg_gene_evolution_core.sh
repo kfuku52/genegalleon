@@ -47,6 +47,47 @@ fi
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 delete_preexisting_tmp_dir=${delete_preexisting_tmp_dir:-1}
 delete_tmp_dir=${delete_tmp_dir:-1}
+gene_family_run_token=""
+gene_family_state_finalized=1
+gene_family_run_succeeded=0
+gene_family_materialization_receipt=""
+gene_family_output_storage=$(printf '%s' "${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}" | tr '[:upper:]' '[:lower:]')
+gene_family_zip_min_batch_files="${gene_family_zip_min_batch_files:-${GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES:-100}}"
+gene_family_tmp_retention_days="${gene_family_tmp_retention_days:-${GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS:-7}}"
+gene_family_tmp_max_dirs="${gene_family_tmp_max_dirs:-${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:-100}}"
+gene_family_tmp_max_bytes="${gene_family_tmp_max_bytes:-${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:-107374182400}}"
+gene_family_tmp_max_files="${gene_family_tmp_max_files:-${GG_COMMON_GENE_FAMILY_TMP_MAX_FILES:-100000}}"
+case "${gene_family_output_storage}" in
+  zip|files)
+    ;;
+  raw)
+    gene_family_output_storage="files"
+    ;;
+  *)
+    echo "Invalid gene_family_output_storage: ${gene_family_output_storage}; expected zip, files, or raw." >&2
+    exit 1
+    ;;
+esac
+if [[ ! "${gene_family_zip_min_batch_files}" =~ ^[0-9]+$ || ${gene_family_zip_min_batch_files} -lt 1 ]]; then
+  echo "Invalid gene_family_zip_min_batch_files: ${gene_family_zip_min_batch_files}; expected a positive integer." >&2
+  exit 1
+fi
+if [[ ! "${gene_family_tmp_retention_days}" =~ ^[0-9]+$ ]]; then
+  echo "Invalid gene_family_tmp_retention_days: ${gene_family_tmp_retention_days}; expected a non-negative integer." >&2
+  exit 1
+fi
+if [[ ! "${gene_family_tmp_max_dirs}" =~ ^[0-9]+$ ]]; then
+  echo "Invalid gene_family_tmp_max_dirs: ${gene_family_tmp_max_dirs}; expected a non-negative integer." >&2
+  exit 1
+fi
+if [[ ! "${gene_family_tmp_max_bytes}" =~ ^[0-9]+$ ]]; then
+  echo "Invalid gene_family_tmp_max_bytes: ${gene_family_tmp_max_bytes}; expected a non-negative integer." >&2
+  exit 1
+fi
+if [[ ! "${gene_family_tmp_max_files}" =~ ^[0-9]+$ ]]; then
+  echo "Invalid gene_family_tmp_max_files: ${gene_family_tmp_max_files}; expected a non-negative integer." >&2
+  exit 1
+fi
 
 # Named stage functions for gg_gene_evolution_core.sh.
 # This file is sourced by workflow/core/gg_gene_evolution_core.sh.
@@ -573,15 +614,96 @@ prepare_species_tree_pruned() {
 
 cleanup_tmp_dir_on_normal_exit() {
   local exit_code=$?
+  if [[ -n "${gene_family_run_token:-}" && ${gene_family_state_finalized:-1} -eq 0 ]]; then
+    if ! python "${gene_family_store_script}" mark-failed \
+      --root "${dir_output_active}" \
+      --family-id "${og_id}" \
+      --run-token "${gene_family_run_token}"
+    then
+      echo "Warning: Failed to record failed gene-family state for ${og_id}." >&2
+    fi
+    gene_family_state_finalized=1
+  fi
+  gg_advisory_shared_lock_release 2>/dev/null || true
+  if [[
+    ${gene_family_run_succeeded:-0} -eq 0
+    && -n "${gene_family_materialization_receipt:-}"
+    && -s "${gene_family_materialization_receipt}"
+  ]]; then
+    if ! python "${gene_family_store_script}" cleanup-materialized \
+      --receipt "${gene_family_materialization_receipt}" \
+      --nonblocking
+    then
+      echo "Warning: Failed to remove unchanged materialized artifacts for ${og_id}." >&2
+    fi
+  fi
+  if [[
+    ${gene_family_run_succeeded:-0} -eq 0
+    && "${gene_family_output_storage}" == "zip"
+    && ${gg_debug_mode:-0} -eq 0
+    && -n "${gene_family_store_script:-}"
+    && -n "${dir_output_active:-}"
+    && -n "${og_id:-}"
+  ]]; then
+    if ! python "${gene_family_store_script}" archive-family \
+      "${gene_family_store_context_args[@]}" \
+      --family-id "${og_id}" \
+      --nonblocking
+    then
+      echo "Warning: Failed to archive partial outputs for ${og_id}; live files were preserved." >&2
+    fi
+  fi
   if [[ ${delete_tmp_dir} -eq 1 && (${exit_code} -eq 0 || ${exit_code} -eq 8) ]]; then
-    if [[ -n "${dir_tmp:-}" && -d "${dir_tmp}" && "${dir_tmp}" != "/" ]]; then
+    if [[
+      -n "${gene_family_materialization_receipt:-}"
+      && -s "${gene_family_materialization_receipt}"
+    ]]; then
+      echo "Retaining ${dir_tmp}: materialization receipt still requires cleanup." >&2
+    elif [[ -n "${dir_tmp:-}" && -d "${dir_tmp}" && "${dir_tmp}" != "/" ]]; then
       echo "Deleting ${dir_tmp}"
       rm -rf -- "${dir_tmp}"
     elif [[ -n "${dir_tmp:-}" ]]; then
       echo "Refusing to delete unsafe tmp directory: ${dir_tmp}"
     fi
   fi
+  if [[
+    "${gene_family_output_storage}" == "zip"
+    && (
+      ${gene_family_tmp_retention_days} -gt 0
+      || ${gene_family_tmp_max_dirs} -gt 0
+      || ${gene_family_tmp_max_bytes} -gt 0
+      || ${gene_family_tmp_max_files} -gt 0
+    )
+  ]]; then
+    if ! python "${gene_family_store_script}" cleanup-tmp \
+      --root "${dir_output_active}" \
+      --older-than-days "${gene_family_tmp_retention_days}" \
+      --max-directories "${gene_family_tmp_max_dirs}" \
+      --max-bytes "${gene_family_tmp_max_bytes}" \
+      --max-files "${gene_family_tmp_max_files}" \
+      --nonblocking
+    then
+      echo "Warning: Failed to clean stale or excess gene-family temporary directories." >&2
+    fi
+  fi
   return ${exit_code}
+}
+
+finalize_gene_family_run_success() {
+  if [[ -n "${gene_family_run_token:-}" && ${gene_family_state_finalized:-1} -eq 0 ]]; then
+    if ! python "${gene_family_store_script}" mark-complete \
+      --root "${dir_output_active}" \
+      --family-id "${og_id}" \
+      --run-token "${gene_family_run_token}"
+    then
+      return 1
+    fi
+    gene_family_state_finalized=1
+  fi
+  if ! gg_advisory_shared_lock_release; then
+    return 1
+  fi
+  gene_family_run_succeeded=1
 }
 
 run_hyphy_relax_for_all_traits() {
@@ -940,6 +1062,73 @@ if [[ -z "$og_id" ]]; then
   exit 1
 fi
 
+gene_family_store_script="${gg_support_dir}/gene_family_output_store.py"
+gene_family_store_context_args=(
+  --root "${dir_output_active}"
+  --mode "${mode_gene_evolution}"
+)
+if [[ "${mode_gene_evolution}" == "query2family" ]]; then
+  gene_family_store_context_args+=(--query-dir "${dir_genelist}")
+else
+  gene_family_store_context_args+=(--genecount "${file_orthogroup_genecount_selected}")
+fi
+gene_family_storage_conversion_marker="${dir_output_active}/.gg_archives/storage-conversion.pending"
+if [[ -e "${gene_family_storage_conversion_marker}" || -L "${gene_family_storage_conversion_marker}" ]]; then
+  echo "Gene-family storage conversion is in progress or needs to be resumed: ${gene_family_storage_conversion_marker}" >&2
+  echo "Refusing to start gg_gene_evolution until convert-storage finishes." >&2
+  exit 1
+fi
+if [[
+  "${gene_family_output_storage}" == "files"
+  && -d "${dir_output_active}/.gg_archives"
+  && -n "$(find "${dir_output_active}/.gg_archives" -mindepth 2 -maxdepth 2 -type f -name '*.zip' -print -quit 2>/dev/null)"
+]]; then
+  echo "Warning: ZIP-backed artifacts exist below ${dir_output_active}, but gene_family_output_storage=${gene_family_output_storage}." >&2
+  echo "The family can resume, but new outputs will remain raw; use storage mode zip to return them to ZIP." >&2
+fi
+gene_family_task_tmp_dir="${dir_output_active}/tmp/${GG_ARRAY_TASK_ID}_${og_id}"
+if [[ -e "${gene_family_task_tmp_dir}" && ${delete_preexisting_tmp_dir} -eq 1 ]]; then
+  echo "$(date): Deleting preexisting ${gene_family_task_tmp_dir}"
+  stale_receipt="${gene_family_task_tmp_dir}/.gg_materialized.jsonl"
+  if [[ -s "${stale_receipt}" ]]; then
+    if ! python "${gene_family_store_script}" cleanup-materialized \
+      --receipt "${stale_receipt}"
+    then
+      echo "Failed to clean the preexisting materialization receipt: ${stale_receipt}" >&2
+      exit 1
+    fi
+    if [[ -s "${stale_receipt}" ]]; then
+      echo "Refusing to remove tmp directory while its materialization receipt remains: ${stale_receipt}" >&2
+      exit 1
+    fi
+  fi
+  rm -rf -- "${gene_family_task_tmp_dir}"
+fi
+if [[ "${gene_family_output_storage}" == "zip" || -d "${dir_output_active}/.gg_archives" ]]; then
+  gene_family_lock_path=$(python "${gene_family_store_script}" lock-path \
+    --root "${dir_output_active}" \
+    --family-id "${og_id}")
+  if ! gg_advisory_shared_lock_acquire \
+    "${gene_family_lock_path}"
+  then
+    echo "Failed to acquire the gene-family lock." >&2
+    exit 1
+  fi
+  trap cleanup_tmp_dir_on_normal_exit EXIT
+fi
+if [[ "${gene_family_output_storage}" == "zip" ]]; then
+  gene_family_run_token="${GG_JOB_ID:-local}_${GG_ARRAY_TASK_ID:-1}_$$_$(date +%s)"
+  gene_family_state_finalized=0
+  if ! python "${gene_family_store_script}" mark-running \
+    --root "${dir_output_active}" \
+    --family-id "${og_id}" \
+    --run-token "${gene_family_run_token}"
+  then
+    echo "Failed to record running gene-family state for ${og_id}." >&2
+    exit 1
+  fi
+fi
+
 dir_sp_genome="${gg_workspace_input_dir}/species_genome"
 dir_sp_gff="${gg_workspace_input_dir}/species_gff"
 dir_sp_expression="${gg_workspace_input_dir}/species_expression"
@@ -985,7 +1174,8 @@ dir_rpsblastdb="/usr/local/db/Pfam_LE"
 
 # Directory PATHs
 # Directories for temporary files
-dir_tmp="${dir_output_active}/tmp/${GG_ARRAY_TASK_ID}_${og_id}" #_${RANDOM}
+dir_tmp="${gene_family_task_tmp_dir}" #_${RANDOM}
+gene_family_materialization_receipt="${dir_tmp}/.gg_materialized.jsonl"
 
 # File PATHs
 # Alignment and gene tree preparation and others
@@ -1123,18 +1313,26 @@ else
   run_fimo=0
 fi
 echo "Checking preexisting tmp directory."
-if [[ -e "${dir_tmp}" && ${delete_preexisting_tmp_dir} -eq 1 ]]; then
-  echo "$(date): Deleting preexisting ${dir_tmp}"
-  shopt -s nullglob
-  stale_tmp_paths=("${dir_output_active}/tmp/${GG_ARRAY_TASK_ID}_"*)
-  shopt -u nullglob
-  if [[ ${#stale_tmp_paths[@]} -gt 0 ]]; then
-    rm -rf -- "${stale_tmp_paths[@]}"
-  fi
-fi
 if [[ ! -e "${dir_tmp}" ]]; then
   echo "Making ${dir_tmp}"
   mkdir -p "${dir_tmp}"
+fi
+if [[ -d "${dir_output_active}/.gg_archives" ]]; then
+  materialize_args=(
+    materialize-family
+    "${gene_family_store_context_args[@]}"
+    --family-id "${og_id}"
+  )
+  if [[ "${gene_family_output_storage}" == "zip" ]]; then
+    materialize_args+=(
+      --receipt "${gene_family_materialization_receipt}"
+      --run-token "${gene_family_run_token}"
+    )
+  fi
+  if ! python "${gene_family_store_script}" "${materialize_args[@]}"; then
+    echo "Failed to materialize archived artifacts for ${og_id}." >&2
+    exit 1
+  fi
 fi
 cd "${dir_tmp}"
 echo "Working at: $(pwd)"
@@ -4158,14 +4356,37 @@ done
 cd "${gg_workspace_dir}" || exit 1
 remove_empty_subdirs "${dir_output_active}"
 
-if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" && ${gg_debug_mode:-0} -eq 0 ]]; then
+gene_family_outputs_complete=0
+if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" ]]; then
+  gene_family_outputs_complete=1
+fi
+if [[ "${gene_family_output_storage}" == "zip" && ${gg_debug_mode:-0} -eq 0 ]]; then
+  if ! finalize_gene_family_run_success; then
+    echo "Failed to record completed gene-family state for ${og_id}." >&2
+    exit 1
+  fi
+fi
+if [[ ${gene_family_run_succeeded:-0} -eq 1 && -n "${gene_family_materialization_receipt:-}" ]]; then
+  rm -f -- "${gene_family_materialization_receipt}"
+fi
+if [[ "${gene_family_output_storage}" == "zip" && ${gg_debug_mode:-0} -eq 0 ]]; then
+  if ! python "${gene_family_store_script}" archive-completed \
+    "${gene_family_store_context_args[@]}" \
+    --min-files "${gene_family_zip_min_batch_files}" \
+    --nonblocking
+  then
+    echo "Warning: Failed to archive completed gene-family outputs; live files were preserved." >&2
+  fi
+fi
+
+if [[ ${gene_family_outputs_complete} -eq 1 && ${gg_debug_mode:-0} -eq 0 ]]; then
   echo "Output files detected."
   echo "${file_og_stat_branch}"
   echo "${file_og_stat_tree}"
   echo "${file_og_tree_plot}"
   echo "$(date): Exiting Singularity environment"
   exit 8
-elif [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" && ${gg_debug_mode:-0} -eq 1 ]]; then
+elif [[ ${gene_family_outputs_complete} -eq 1 && ${gg_debug_mode:-0} -eq 1 ]]; then
   echo "Output files detected & debug mode."
 else
   echo "Output files not found."

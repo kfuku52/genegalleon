@@ -4,6 +4,12 @@ from types import SimpleNamespace
 
 import pandas
 
+from workflow.support.gene_family_output_store import (
+    GeneFamilyOutputStore,
+    archive_completed_outputs,
+    family_context,
+)
+
 SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 
 
@@ -84,6 +90,41 @@ def test_query2family_presence_absence_counts_leaf_species(tmp_path: Path):
     long_df = pandas.read_csv(out_long, sep="\t")
     assert set(long_df["query"]) == {"A", "B"}
     assert set(long_df["status"]) == {"complete"}
+
+
+def test_presence_absence_reads_stat_branch_from_zip_storage(tmp_path: Path):
+    mod = load_module("gene_family_presence_absence.py")
+    query_gene = tmp_path / "query_gene"
+    root = tmp_path / "query2family"
+    query_gene.mkdir()
+    (query_gene / "A").write_text("geneA\n", encoding="utf-8")
+    write_stat_branch(
+        root / "stat_branch" / "A_stat.branch.tsv",
+        [
+            {"branch_id": 0, "spnode_coverage": "Species_one", "so_event": "L"},
+            {"branch_id": 1, "spnode_coverage": "Species_one", "so_event": "L"},
+        ],
+    )
+    for subdir, suffix in (
+        ("stat_tree", "_stat.tree.tsv"),
+        ("tree_plot", "_tree_plot.pdf"),
+    ):
+        path = root / subdir / f"A{suffix}"
+        path.parent.mkdir(parents=True)
+        path.write_text(f"{subdir}\n", encoding="utf-8")
+    family_ids, family_from_name = family_context("query2family", query_dir=query_gene)
+    archive_completed_outputs(root, "query2family", family_ids, family_from_name)
+
+    store = GeneFamilyOutputStore(root)
+    counts = mod.read_stat_branch_copy_numbers(
+        root / "stat_branch" / "A_stat.branch.tsv",
+        store=store,
+        family_id="A",
+    )
+
+    assert mod.visible_stat_branch_ids(root) == ["A"]
+    assert counts == {"Species_one": 2}
+    assert not (root / "stat_branch").exists()
 
 
 def test_query2family_presence_absence_can_include_incomplete_queries(tmp_path: Path):

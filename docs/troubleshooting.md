@@ -111,8 +111,22 @@ Likely causes:
 
 Examples:
 
-- `gg_gene_summary_entrypoint.sh` skips database generation if `stat_tree/` or `stat_branch/` is missing,
-- `gg_progress_summary_core.sh` skips orthogroup summary generation if the selected gene-count table or AMAS directories are absent.
+- `gg_gene_summary_entrypoint.sh` skips database generation if logical `stat_tree` or `stat_branch` inputs are absent from both live files and ZIP storage,
+- `gg_progress_summary_core.sh` skips orthogroup summary generation if the selected gene-count table is absent; AMAS inputs may be live or ZIP-backed.
+
+### Gene-family storage conversion is pending
+
+Symptom:
+
+- `gg_gene_evolution` or progress summary refuses to start because
+  `.gg_archives/storage-conversion.pending` exists.
+
+What to do:
+
+- stop old array jobs that may still write below the affected query2family or orthogroup root,
+- rerun the same `gg_gene_family_archive.sh convert-storage ... --to zip|raw` command,
+- if the command instead reports `index-update.pending`, run `verify` and then `repair` as instructed before resuming conversion,
+- do not remove the conversion marker manually; it records the required target direction.
 
 ### Taxonomy or database cache issues
 

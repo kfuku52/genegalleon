@@ -464,6 +464,152 @@ def test_get_alignment_for_tree_plot_rejects_legacy_dot_clipkit_name(tmp_path):
         mod.get_alignment_for_tree_plot(str(dir_og), "OG0001", str(dir_out_og))
 
 
+def test_materialize_csubst_site_inputs_reads_only_requested_family_from_zip(tmp_path):
+    from workflow.support.gene_family_output_store import archive_completed_outputs, family_context
+
+    mod = load_module()
+    dir_og = tmp_path / "orthogroup"
+    genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    genecount.write_text("Orthogroup\tTotal\nOG0001\t1\nOG0002\t1\n", encoding="utf-8")
+    for family_id in ("OG0001", "OG0002"):
+        for subdir, suffix in (
+            ("stat_branch", "_stat.branch.tsv"),
+            ("stat_tree", "_stat.tree.tsv"),
+            ("tree_plot", "_tree_plot.pdf"),
+            ("iqtree_anc", "_iqtree.anc.zip"),
+            ("rpsblast", "_rpsblast.tsv"),
+            ("clipkit", "_cds.clipkit.fa.gz"),
+        ):
+            path = dir_og / subdir / f"{family_id}{suffix}"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(f"{family_id}:{subdir}\n".encode())
+    family_ids, family_from_name = family_context("orthogroup", genecount=genecount)
+    archive_completed_outputs(dir_og, "orthogroup", family_ids, family_from_name)
+
+    destination = tmp_path / "materialized"
+    materialized = mod.materialize_csubst_site_inputs(
+        str(dir_og),
+        "OG0001",
+        str(destination),
+    )
+
+    assert materialized
+    assert (destination / "iqtree_anc" / "OG0001_iqtree.anc.zip").is_file()
+    assert (destination / "clipkit" / "OG0001_cds.clipkit.fa.gz").is_file()
+    assert not (destination / "stat_branch" / "OG0002_stat.branch.tsv").exists()
+
+
+def test_process_og_batch_materializes_each_family_only_once(tmp_path, monkeypatch):
+    mod = load_module()
+    dir_og = tmp_path / "orthogroup"
+    (dir_og / ".gg_archives").mkdir(parents=True)
+    materialize_calls = []
+    process_calls = []
+
+    def fake_materialize(dir_og, og, destination_root):
+        materialize_calls.append((dir_og, og, destination_root))
+        return []
+
+    def fake_process(
+        og,
+        branch_id_str,
+        dir_out,
+        effective_dir_og,
+        file_trait_color,
+        ncpu,
+        csubst_nonsyn_recode,
+        annotation_text,
+    ):
+        assert Path(effective_dir_og).is_dir()
+        process_calls.append((og, branch_id_str, effective_dir_og, annotation_text))
+        return og, None
+
+    monkeypatch.setattr(mod, "materialize_csubst_site_inputs", fake_materialize)
+    monkeypatch.setattr(mod, "process_index", fake_process)
+
+    results = mod.process_og_batch(
+        "OG0001",
+        ["1,2", "3,4"],
+        str(tmp_path / "out"),
+        str(dir_og),
+        "trait.tsv",
+        2,
+        "no",
+        ["first", "second"],
+    )
+
+    assert results == [("OG0001", None), ("OG0001", None)]
+    assert len(materialize_calls) == 1
+    assert [call[1] for call in process_calls] == ["1,2", "3,4"]
+    assert process_calls[0][2] == process_calls[1][2]
+    assert not Path(process_calls[0][2]).exists()
+    mod.cleanup_materialization_metadata(tmp_path / "out")
+    assert not (tmp_path / "out" / ".gg_materialized.lock").exists()
+    assert (tmp_path / ".gg_materialized.lock").is_file()
+
+
+def test_locked_materialization_directory_reclaims_stale_runs(tmp_path):
+    mod = load_module()
+    output = tmp_path / "out"
+    stale = output / ".gg_materialized" / "stale"
+    stale.mkdir(parents=True)
+    (stale / ".run.lock").write_bytes(b"")
+    (stale / "large-input.bin").write_bytes(b"x" * 1024)
+
+    managed = mod.LockedMaterializationDirectory(output, "OG0001")
+    try:
+        assert not stale.exists()
+        assert Path(managed.name).is_dir()
+    finally:
+        managed.cleanup()
+        mod.cleanup_materialization_metadata(output)
+
+    assert not (output / ".gg_materialized").exists()
+    assert not (output / ".gg_materialized.lock").exists()
+    assert (tmp_path / ".gg_materialized.lock").is_file()
+
+
+def test_locked_materialization_directory_preserves_concurrent_runs(tmp_path):
+    mod = load_module()
+    output = tmp_path / "out"
+
+    first = mod.LockedMaterializationDirectory(output, "OG0001")
+    second = mod.LockedMaterializationDirectory(output, "OG0002")
+    try:
+        assert Path(first.name).is_dir()
+        assert Path(second.name).is_dir()
+        first.cleanup()
+        assert not Path(first.name).exists()
+        assert Path(second.name).is_dir()
+    finally:
+        first.cleanup()
+        second.cleanup()
+
+    assert not (output / ".gg_materialized").exists()
+    assert (tmp_path / ".gg_materialized.lock").is_file()
+
+
+def test_process_index_restores_cwd_when_summary_already_exists(tmp_path):
+    mod = load_module()
+    output_root = tmp_path / "out"
+    output = output_root / "OG0001_1_2"
+    output.mkdir(parents=True)
+    (output / "summary.OG0001_branch_id1,2.pdf").write_bytes(b"pdf")
+    original_cwd = os.getcwd()
+
+    assert mod.process_index(
+        "OG0001",
+        "1,2",
+        str(output_root),
+        str(tmp_path / "orthogroup"),
+        "trait.tsv",
+        1,
+        "no",
+        "annotation",
+    ) == ("OG0001", None)
+    assert os.getcwd() == original_cwd
+
+
 def test_help_has_no_side_effect_files(tmp_path):
     proc = subprocess.run(
         [sys.executable, str(SCRIPT_PATH), "--help"],

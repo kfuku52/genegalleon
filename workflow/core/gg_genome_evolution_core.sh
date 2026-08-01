@@ -3824,6 +3824,21 @@ if [[ ${run_orthogroup_grampa} -eq 1 ]]; then
   if [[ ! -s "${file_orthogroup_genecount_selected}" ]]; then
     echo "Disabling run_orthogroup_grampa because required file is missing: ${file_orthogroup_genecount_selected}"
     run_orthogroup_grampa=0
+  elif [[ -d "${gg_workspace_output_dir}/orthogroup/.gg_archives" ]]; then
+    if python "${gg_support_dir}/gene_family_output_store.py" has-files \
+      --root "${gg_workspace_output_dir}/orthogroup" \
+      --subdir rooted_tree
+    then
+      :
+    else
+      rooted_tree_store_status=$?
+      if [[ ${rooted_tree_store_status} -eq 1 ]]; then
+        echo "Disabling run_orthogroup_grampa because logical rooted_tree output is empty: ${dir_og_rooted_tree}"
+        run_orthogroup_grampa=0
+      else
+        exit "${rooted_tree_store_status}"
+      fi
+    fi
   elif [[ ! -d "${dir_og_rooted_tree}" ]]; then
     echo "Disabling run_orthogroup_grampa because required directory is missing: ${dir_og_rooted_tree}"
     run_orthogroup_grampa=0
@@ -4249,25 +4264,52 @@ if [[ ! -s "${file_orthogroup_grampa}" && ${run_orthogroup_grampa} -eq 1 ]]; the
     python -c 'import pandas,sys; d=pandas.read_csv(sys.argv[1],sep="\t",header=0); ids=d.loc[(d["Total"]>=int(sys.argv[2]))&(d["Total"]<=int(sys.argv[3])),"Orthogroup"].astype(str).tolist(); print("\n".join(ids))' \
       "${file_orthogroup_genecount_selected}" "${min_gene_orthogroup_grampa}" "${max_gene_orthogroup_grampa}"
   )
-  file_names=()
-  mapfile -t file_names < <(gg_find_file_basenames "${dir_og_rooted_tree}")
-  echo "Number of files in ${dir_og_rooted_tree}: ${#file_names[@]}"
-  echo "Number of selected orthogroups with ${min_gene_orthogroup_grampa}<=gene number<=${max_gene_orthogroup_grampa}: ${#og_ids[@]}"
-  if [[ -e ./tmp.orthogroup_grampa_indir ]]; then
-    rm -rf -- ./tmp.orthogroup_grampa_indir
-  fi
-  mkdir -p ./tmp.orthogroup_grampa_indir
-  for file_name in "${file_names[@]}"; do
-    for og_id in "${og_ids[@]}"; do
-      if gg_orthogroup_file_matches_id "${file_name}" "${og_id}"; then
-        cp_out "${dir_og_rooted_tree}"/"${file_name}" ./tmp.orthogroup_grampa_indir
-        mapfile -t og_ids < <(printf "%s\n" "${og_ids[@]}" | grep -v -Fx -- "${og_id}" || true)
-        break
-      fi
+  dir_og_rooted_tree_effective="${dir_og_rooted_tree}"
+  orthogroup_grampa_family_ids=""
+  orthogroup_grampa_materialized=""
+  orthogroup_grampa_indir="./tmp.orthogroup_grampa_indir"
+  cleanup_orthogroup_grampa_tmp() {
+    if [[ -n "${orthogroup_grampa_family_ids:-}" ]]; then
+      rm -f -- "${orthogroup_grampa_family_ids}"
+    fi
+    if [[ -n "${orthogroup_grampa_materialized:-}" ]]; then
+      rm -rf -- "${orthogroup_grampa_materialized}"
+    fi
+    rm -rf -- "${orthogroup_grampa_indir}"
+  }
+  trap cleanup_orthogroup_grampa_tmp EXIT
+  if [[ -d "${gg_workspace_output_dir}/orthogroup/.gg_archives" ]]; then
+    orthogroup_grampa_family_ids="./tmp.orthogroup_grampa_family_ids.txt"
+    printf "%s\n" "${og_ids[@]}" > "${orthogroup_grampa_family_ids}"
+    orthogroup_grampa_materialized="./tmp.orthogroup_grampa_materialized"
+    rm -rf -- "${orthogroup_grampa_materialized}"
+    python "${gg_support_dir}/gene_family_output_store.py" materialize-families \
+      --root "${gg_workspace_output_dir}/orthogroup" \
+      --mode orthogroup \
+      --family-id-file "${orthogroup_grampa_family_ids}" \
+      --destination-root "${orthogroup_grampa_materialized}" \
+      --subdirs rooted_tree
+    dir_og_rooted_tree_effective="${orthogroup_grampa_materialized}/rooted_tree"
+    orthogroup_grampa_indir="${dir_og_rooted_tree_effective}"
+  else
+    file_names=()
+    mapfile -t file_names < <(gg_find_file_basenames "${dir_og_rooted_tree_effective}")
+    rm -rf -- "${orthogroup_grampa_indir}"
+    mkdir -p "${orthogroup_grampa_indir}"
+    for file_name in "${file_names[@]}"; do
+      for og_id in "${og_ids[@]}"; do
+        if gg_orthogroup_file_matches_id "${file_name}" "${og_id}"; then
+          cp_out "${dir_og_rooted_tree_effective}"/"${file_name}" "${orthogroup_grampa_indir}"
+          mapfile -t og_ids < <(printf "%s\n" "${og_ids[@]}" | grep -v -Fx -- "${og_id}" || true)
+          break
+        fi
+      done
     done
-  done
-
-  busco_grampa "./tmp.orthogroup_grampa_indir" "$(dirname "${file_orthogroup_grampa}")" "${file_orthogroup_grampa}"
+  fi
+  echo "Number of selected rooted trees: $(gg_find_file_basenames "${orthogroup_grampa_indir}" | wc -l)"
+  busco_grampa "${orthogroup_grampa_indir}" "$(dirname "${file_orthogroup_grampa}")" "${file_orthogroup_grampa}"
+  cleanup_orthogroup_grampa_tmp
+  trap - EXIT
 else
   gg_step_skip "${task}"
 fi

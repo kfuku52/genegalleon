@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pandas
 
+from workflow.support.gene_family_output_store import archive_completed_outputs, family_context
+
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "orthogroup_output_summary.py"
 
 
@@ -173,3 +175,42 @@ def test_get_amas_stats_ignores_non_file_entries_in_amas_dir(tmp_path):
 
     out = mod.get_amas_stats(df.copy(), str(amas_dir), "original", ncpu=1)
     assert out.loc["HOG0000010", "No_of_taxa_original"] == 7
+
+
+def test_run_reads_orthogroup_artifacts_from_zip_shards(tmp_path):
+    mod = load_module()
+    dir_og = tmp_path / "orthogroup"
+    family_id = "HOG0000010"
+    genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    pandas.DataFrame(
+        [{"Orthogroup": family_id, "Total": 1}]
+    ).to_csv(genecount, sep="\t", index=False)
+    for subdir, suffix in (
+        ("stat_branch", "_stat.branch.tsv"),
+        ("stat_tree", "_stat.tree.tsv"),
+        ("tree_plot", "_tree_plot.pdf"),
+        ("cds_fasta", "_cds.fa.gz"),
+    ):
+        path = dir_og / subdir / f"{family_id}{suffix}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{subdir}\n", encoding="utf-8")
+    amas_path = dir_og / "amas_original" / f"{family_id}_amas.original.tsv"
+    amas_path.parent.mkdir(parents=True)
+    _write_amas(amas_path, 13)
+    family_ids, family_from_name = family_context("orthogroup", genecount=genecount)
+    archive_completed_outputs(dir_og, "orthogroup", family_ids, family_from_name)
+
+    out_tsv = tmp_path / "orthogroup_summary.tsv"
+    mod.run(
+        SimpleNamespace(
+            dir_og=str(dir_og),
+            genecount=str(genecount),
+            out=str(out_tsv),
+            ncpu=1,
+        )
+    )
+
+    out = pandas.read_csv(out_tsv, sep="\t", index_col=0)
+    assert out.loc[family_id, "cds_fasta"] == 1
+    assert out.loc[family_id, "tree_plot"] == 1
+    assert out.loc[family_id, "No_of_taxa_original"] == 13
