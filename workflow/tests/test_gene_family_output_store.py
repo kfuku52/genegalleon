@@ -239,6 +239,42 @@ def test_materialize_families_cli_restores_selected_subdir_in_one_pass(tmp_path:
     assert (destination / "mafft" / "OG0000003_cds.aln.fa.gz").is_file()
 
 
+def test_materialize_families_opens_each_source_shard_once(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "orthogroup"
+    family_ids = {"OG0000001", "OG0000002", "OG0000003"}
+    for family_id in sorted(family_ids):
+        _write_family_outputs(root, family_id, complete=True)
+    archive_completed_outputs(
+        root,
+        "orthogroup",
+        sorted(family_ids),
+        orthogroup_id_from_name,
+    )
+    original_zip_file = output_store_module.zipfile.ZipFile
+    opened = []
+
+    def observed_zip_file(path, *args, **kwargs):
+        opened.append(Path(path))
+        return original_zip_file(path, *args, **kwargs)
+
+    monkeypatch.setattr(output_store_module.zipfile, "ZipFile", observed_zip_file)
+    destination = tmp_path / "selected"
+    restored = GeneFamilyOutputStore(root).materialize_families(
+        family_ids,
+        orthogroup_id_from_name,
+        destination_root=destination,
+        subdirs={"mafft"},
+    )
+
+    assert len(restored) == 3
+    assert len(opened) == 1
+
+
 def test_verify_rejects_directly_modified_zip(tmp_path: Path):
     root = tmp_path / "query2family"
     query_dir = tmp_path / "query_gene"

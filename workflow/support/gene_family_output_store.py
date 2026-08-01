@@ -2003,45 +2003,127 @@ class GeneFamilyOutputStore:
         receipt_path: Optional[Path] = None,
         run_token: str = "",
     ) -> List[Path]:
-        restored: List[Path] = []
-        for subdir in self.logical_subdirs():
-            if subdirs is not None and subdir not in subdirs:
-                continue
-            for artifact in self.artifacts(subdir):
-                name = artifact.name
-                artifact_family_id = (
-                    artifact.family_id
-                    if artifact.family_id is not None
-                    else family_from_name(name)
-                )
-                if artifact_family_id not in family_ids:
+        destination_root_resolved = (
+            self.root
+            if destination_root is None
+            else Path(destination_root).resolve()
+        )
+        selected: List[Tuple[Artifact, str]] = []
+        with producer_read_lock(self.archive_root):
+            self._refresh_if_index_changed()
+            for subdir in self._logical_subdirs_unlocked():
+                if subdirs is not None and subdir not in subdirs:
                     continue
-                if artifact.is_live and (
-                    destination_root is None
-                    or Path(destination_root).resolve() == self.root
-                ):
-                    continue
-                if (
-                    receipt_path is not None
-                    and artifact.zip_path is not None
-                    and (
-                        destination_root is None
-                        or Path(destination_root).resolve() == self.root
+                for name in self._file_names_unlocked(subdir):
+                    artifact = self._artifact_unchecked(subdir, name)
+                    if artifact is None:
+                        continue
+                    artifact_family_id = (
+                        artifact.family_id
+                        if artifact.family_id is not None
+                        else family_from_name(name)
                     )
-                ):
-                    self._append_materialization_receipt(
-                        Path(receipt_path),
-                        artifact,
-                        family_id=str(artifact_family_id),
-                        run_token=run_token,
+                    if artifact_family_id not in family_ids:
+                        continue
+                    if artifact.is_live and destination_root_resolved == self.root:
+                        continue
+                    selected.append((artifact, str(artifact_family_id)))
+
+            if destination_root_resolved == self.root:
+                restored_in_place: List[Path] = []
+                for artifact, artifact_family_id in selected:
+                    if receipt_path is not None and artifact.zip_path is not None:
+                        self._append_materialization_receipt(
+                            Path(receipt_path),
+                            artifact,
+                            family_id=artifact_family_id,
+                            run_token=run_token,
+                        )
+                    restored_in_place.append(
+                        self.materialize(
+                            artifact.subdir,
+                            artifact.name,
+                            destination_root=destination_root_resolved,
+                        )
                     )
-                restored_path = self.materialize(
-                    subdir,
-                    name,
-                    destination_root=destination_root,
+                return restored_in_place
+
+            restored: List[Path] = []
+            touched_directories: Set[Path] = set()
+            by_zip: Dict[Optional[Path], List[Tuple[Artifact, str]]] = {}
+            for artifact, artifact_family_id in selected:
+                by_zip.setdefault(artifact.zip_path, []).append(
+                    (artifact, artifact_family_id)
                 )
-                restored.append(restored_path)
-        return restored
+
+            def write_artifact(
+                artifact: Artifact,
+                source: BinaryIO,
+            ) -> Path:
+                destination = (
+                    destination_root_resolved / artifact.subdir / artifact.name
+                )
+                if destination.is_symlink() or destination.parent.is_symlink():
+                    raise ArchiveStoreError(
+                        "Symlinked materialization destinations are not supported: "
+                        f"{destination}"
+                    )
+                if destination.is_file():
+                    return destination
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                temporary = destination.with_name(
+                    f".{destination.name}.materialize.{os.getpid()}.{uuid.uuid4().hex}"
+                )
+                try:
+                    with temporary.open("wb") as target:
+                        shutil.copyfileobj(source, target, length=1024 * 1024)
+                        target.flush()
+                        os.fsync(target.fileno())
+                    if artifact.mtime_ns is not None:
+                        os.utime(
+                            temporary,
+                            ns=(artifact.mtime_ns, artifact.mtime_ns),
+                        )
+                    os.replace(temporary, destination)
+                    touched_directories.add(destination.parent)
+                finally:
+                    if temporary.exists():
+                        temporary.unlink()
+                return destination
+
+            live_entries = by_zip.pop(None, [])
+            for artifact, _ in live_entries:
+                if artifact.live_path is None:
+                    raise ArchiveStoreError(
+                        f"Logical artifact has no readable source: {artifact.logical_path}"
+                    )
+                with artifact.live_path.open("rb") as source:
+                    restored.append(
+                        write_artifact(artifact, source)
+                    )
+            for zip_path, entries in sorted(by_zip.items(), key=lambda item: str(item[0])):
+                assert zip_path is not None
+                if zip_path.is_symlink() or zip_path.parent.is_symlink():
+                    raise ArchiveStoreError(
+                        f"Symlinked ZIP shards are not supported: {zip_path}"
+                    )
+                with zipfile.ZipFile(zip_path, "r") as archive:
+                    for artifact, _ in sorted(
+                        entries,
+                        key=lambda item: item[0].logical_path,
+                    ):
+                        if artifact.member_name is None:
+                            raise ArchiveStoreError(
+                                f"Archive member is missing a member name: "
+                                f"{artifact.logical_path}"
+                            )
+                        with archive.open(artifact.member_name, "r") as source:
+                            restored.append(
+                                write_artifact(artifact, source)
+                            )
+            for directory in sorted(touched_directories):
+                _fsync_directory(directory)
+            return sorted(restored)
 
     def _append_materialization_receipt(
         self,
