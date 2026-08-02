@@ -104,6 +104,8 @@ gg_site_prepend_path_once() {
   export PATH="${path_entry}${PATH:+:${PATH}}"
 }
 
+# Optional path overrides are used by runtime-discovery tests.
+# shellcheck disable=SC2120
 gg_nig_prepend_container_runtime_path() {
   local package_root=${1:-/opt/pkg}
   local legacy_runtime_dir=${2:-/bio/package/singularity/singularity_3.0/bin}
