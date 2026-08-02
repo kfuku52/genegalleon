@@ -1307,7 +1307,9 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     assert "lock-path" in core
     assert "gg_advisory_shared_lock_acquire" in core
     assert "gg_advisory_shared_lock_release" in core
-    assert '"${gene_family_output_storage}" == "zip" || -d "${dir_output_active}/.gg_archives"' in core
+    assert '"${gene_family_output_storage}" == "zip"' in core
+    assert '-d "${dir_output_active}/.gg_store"' in core
+    assert '-d "${dir_output_active}/.gg_archives"' in core
     assert 'mark-running \\' in core
     assert 'mark-complete \\' in core
     assert 'mark-failed \\' in core

@@ -27,6 +27,8 @@ from workflow.support.gene_family_output_store import (
     family_context,
     family_context_with_supplement,
     family_lock_path,
+    finalize_archives,
+    migrate_archive_layout,
     optimize_archive_metadata,
     orthogroup_id_from_name,
     purge_archives,
@@ -108,19 +110,149 @@ def test_query_addition_creates_a_later_shard_without_rewriting_old_shards(tmp_p
     _write_family_outputs(root, "A", complete=True)
     family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
     archive_completed_outputs(root, "query2family", family_ids, family_from_name)
-    old_shards = set((root / ".gg_archives").glob("*/*.zip"))
+    old_shards = set((root / "archives").glob("*/*.zip"))
 
     (query_dir / "B").write_text("geneB\n", encoding="utf-8")
     _write_family_outputs(root, "B", complete=True)
     family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
     archive_completed_outputs(root, "query2family", family_ids, family_from_name)
-    new_shards = set((root / ".gg_archives").glob("*/*.zip"))
+    new_shards = set((root / "archives").glob("*/*.zip"))
 
     assert old_shards
     assert old_shards < new_shards
     store = GeneFamilyOutputStore(root)
     assert store.logical_exists("stat_branch/A_stat.branch.tsv")
     assert store.logical_exists("stat_branch/B_stat.branch.tsv")
+
+
+def test_finalize_creates_user_facing_single_zips_and_status(tmp_path: Path):
+    root = tmp_path / "query2family"
+    query_dir = tmp_path / "query_gene"
+    query_dir.mkdir()
+    (query_dir / "A").write_text("geneA\n", encoding="utf-8")
+    _write_family_outputs(root, "A", complete=True)
+    family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
+    archive_completed_outputs(root, "query2family", family_ids, family_from_name)
+
+    part_path = next((root / "archives" / "mafft").glob("*.zip"))
+    assert part_path.name.startswith("mafft.part-")
+    assert (root / "README_GENE_FAMILY_OUTPUTS.txt").is_file()
+
+    finalized = finalize_archives(root, "query2family", family_ids)
+
+    assert root / "mafft.zip" in finalized
+    assert (root / "mafft.zip").is_file()
+    assert not (root / "archives" / "mafft").exists()
+    assert (root / ".gg_store").is_dir()
+    with zipfile.ZipFile(root / "mafft.zip") as archive:
+        assert "mafft/A_cds.aln.fa.gz" in archive.namelist()
+        assert MANIFEST_MEMBER in archive.namelist()
+    status = (root / "ARCHIVE_STATUS.tsv").read_text(encoding="utf-8")
+    assert "mafft\tfinalized\t0\t1\t1\tmafft.zip" in status
+    GeneFamilyOutputStore(root).verify()
+
+
+def test_query_addition_uses_visible_parts_until_refinalized(tmp_path: Path):
+    root = tmp_path / "query2family"
+    query_dir = tmp_path / "query_gene"
+    query_dir.mkdir()
+    (query_dir / "A").write_text("geneA\n", encoding="utf-8")
+    _write_family_outputs(root, "A", complete=True)
+    family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
+    archive_completed_outputs(root, "query2family", family_ids, family_from_name)
+    finalize_archives(root, "query2family", family_ids)
+    original_base = (root / "mafft.zip").read_bytes()
+
+    (query_dir / "B").write_text("geneB\n", encoding="utf-8")
+    _write_family_outputs(root, "B", complete=True)
+    family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
+    archive_completed_outputs(root, "query2family", family_ids, family_from_name)
+
+    assert (root / "mafft.zip").read_bytes() == original_base
+    parts = list((root / "archives" / "mafft").glob("mafft.part-*.zip"))
+    assert len(parts) == 1
+    store = GeneFamilyOutputStore(root)
+    assert store.logical_exists("mafft/A_cds.aln.fa.gz")
+    assert store.logical_exists("mafft/B_cds.aln.fa.gz")
+
+    finalize_archives(root, "query2family", family_ids)
+    assert not (root / "archives" / "mafft").exists()
+    with zipfile.ZipFile(root / "mafft.zip") as archive:
+        assert "mafft/A_cds.aln.fa.gz" in archive.namelist()
+        assert "mafft/B_cds.aln.fa.gz" in archive.namelist()
+    GeneFamilyOutputStore(root).verify()
+
+
+def test_finalize_refuses_to_replace_an_unrelated_zip(tmp_path: Path):
+    root = tmp_path / "query2family"
+    query_dir = tmp_path / "query_gene"
+    query_dir.mkdir()
+    (query_dir / "A").write_text("geneA\n", encoding="utf-8")
+    _write_family_outputs(root, "A", complete=True)
+    family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
+    archive_completed_outputs(root, "query2family", family_ids, family_from_name)
+    with zipfile.ZipFile(root / "mafft.zip", "w") as archive:
+        archive.writestr("unrelated.txt", "keep me")
+
+    with pytest.raises(ArchiveStoreError, match="unrelated ZIP"):
+        finalize_archives(root, "query2family", family_ids)
+
+    with zipfile.ZipFile(root / "mafft.zip") as archive:
+        assert archive.read("unrelated.txt") == b"keep me"
+
+
+def test_archive_completed_cli_auto_finalizes_a_finished_orthogroup_run(
+    tmp_path: Path,
+):
+    root = tmp_path / "orthogroup"
+    genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    genecount.write_text(
+        "Orthogroup\tTotal\nOG0000001\t1\n",
+        encoding="utf-8",
+    )
+    _write_family_outputs(root, "OG0000001", complete=True)
+    args = build_parser().parse_args(
+        [
+            "archive-completed",
+            "--root",
+            str(root),
+            "--mode",
+            "orthogroup",
+            "--genecount",
+            str(genecount),
+        ]
+    )
+
+    assert run_cli(args) == 0
+    assert (root / "mafft.zip").is_file()
+    assert not (root / "archives" / "mafft").exists()
+    GeneFamilyOutputStore(root).verify()
+
+
+def test_migrate_layout_moves_legacy_payload_and_preserves_logical_view(tmp_path: Path):
+    root = tmp_path / "query2family"
+    query_dir = tmp_path / "query_gene"
+    query_dir.mkdir()
+    (query_dir / "A").write_text("geneA\n", encoding="utf-8")
+    _write_family_outputs(root, "A", complete=True)
+    family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
+    archive_completed_outputs(root, "query2family", family_ids, family_from_name)
+
+    legacy = root / ".gg_archives"
+    (root / ".gg_store").rename(legacy)
+    for shard_dir in sorted((root / "archives").iterdir()):
+        shard_dir.rename(legacy / shard_dir.name)
+    (root / "archives").rmdir()
+    GeneFamilyOutputStore(root).verify()
+
+    moved = migrate_archive_layout(root)
+
+    assert moved
+    assert not legacy.exists()
+    assert (root / ".gg_store").is_dir()
+    assert list((root / "archives" / "mafft").glob("mafft.part-*.zip"))
+    assert GeneFamilyOutputStore(root).logical_exists("mafft/A_cds.aln.fa.gz")
+    GeneFamilyOutputStore(root).verify()
 
 
 def test_live_file_overrides_archive_and_delete_uses_tombstone(tmp_path: Path):
@@ -160,7 +292,7 @@ def test_tombstone_log_is_compacted_to_latest_records(tmp_path: Path, monkeypatc
     store.delete(logical_path)
 
     lines = (
-        root / ".gg_archives" / "tombstones.jsonl"
+        root / ".gg_store" / "tombstones.jsonl"
     ).read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert '"operation":"delete"' in lines[0]
@@ -284,7 +416,7 @@ def test_verify_rejects_directly_modified_zip(tmp_path: Path):
     _write_family_outputs(root, "A", complete=True)
     family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
     archive_completed_outputs(root, "query2family", family_ids, family_from_name)
-    zip_path = next((root / ".gg_archives").glob("*/*.zip"))
+    zip_path = next((root / "archives").glob("*/*.zip"))
 
     with zipfile.ZipFile(zip_path, "a") as archive:
         archive.writestr("manually-added.txt", "unsupported")
@@ -441,7 +573,7 @@ def test_family_filtered_store_refreshes_current_state(tmp_path: Path):
 def test_active_family_shared_lock_prevents_nonblocking_archive(tmp_path: Path):
     root = tmp_path / "orthogroup"
     paths = _write_family_outputs(root, "OG0000001", complete=True)
-    archive_root = root / ".gg_archives"
+    archive_root = root / ".gg_store"
     lock_path = family_lock_path(archive_root, "OG0000001")
     lock_path.parent.mkdir(parents=True)
     lock_handle = lock_path.open("a+b")
@@ -465,13 +597,13 @@ def test_active_family_does_not_block_archiving_an_unrelated_family(tmp_path: Pa
     active_family = "OG0000001"
     completed_family = "OG0000002"
     while family_lock_path(
-        root / ".gg_archives",
+        root / ".gg_store",
         active_family,
-    ) == family_lock_path(root / ".gg_archives", completed_family):
+    ) == family_lock_path(root / ".gg_store", completed_family):
         completed_family = f"OG{int(completed_family[2:]) + 1:07d}"
     active_paths = _write_family_outputs(root, active_family, complete=True)
     completed_paths = _write_family_outputs(root, completed_family, complete=True)
-    archive_root = root / ".gg_archives"
+    archive_root = root / ".gg_store"
     lock_path = family_lock_path(archive_root, active_family)
     lock_path.parent.mkdir(parents=True)
     lock_handle = lock_path.open("a+b")
@@ -503,7 +635,7 @@ def test_managed_delete_waits_for_the_active_family_lock(tmp_path: Path):
     live_path = root / "stat_branch" / f"{family_id}_stat.branch.tsv"
     live_path.parent.mkdir(parents=True)
     live_path.write_text("active output\n", encoding="utf-8")
-    lock_path = family_lock_path(root / ".gg_archives", family_id)
+    lock_path = family_lock_path(root / ".gg_store", family_id)
     lock_path.parent.mkdir(parents=True)
     lock_handle = lock_path.open("a+b")
     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_SH)
@@ -702,7 +834,7 @@ def test_incremental_archives_are_compacted_to_bounded_shard_count(tmp_path: Pat
             ),
         )
 
-    shard_count = len(list((root / ".gg_archives").glob("*/*.zip")))
+    shard_count = len(list((root / "archives").glob("*/*.zip")))
     assert shard_count <= len(subdirs) * (MAX_REFERENCED_SHARDS_PER_SUBDIR - 1)
     assert sum(
         len(GeneFamilyOutputStore(root).file_names(subdir))
@@ -729,7 +861,7 @@ def test_required_multi_shard_store_allows_only_bounded_fragmentation(tmp_path: 
             max_files_per_shard=2,
         )
 
-    shard_count = len(list((root / ".gg_archives" / "mafft").glob("*.zip")))
+    shard_count = len(list((root / "archives" / "mafft").glob("*.zip")))
     minimum_shards = 15
     assert minimum_shards <= shard_count <= (
         minimum_shards + MAX_REFERENCED_SHARDS_PER_SUBDIR - 1
@@ -807,7 +939,7 @@ def test_verify_rejects_index_reference_to_missing_zip(tmp_path: Path):
         ["OG0000001"],
         lambda name: "OG0000001" if name.startswith("OG0000001_") else None,
     )
-    zip_path = next((root / ".gg_archives").glob("*/*.zip"))
+    zip_path = next((root / "archives").glob("*/*.zip"))
     zip_path.unlink()
 
     with pytest.raises(ArchiveStoreError, match="references a missing ZIP"):
@@ -823,7 +955,7 @@ def test_verify_rejects_manifest_members_missing_from_index(tmp_path: Path):
         ["OG0000001"],
         lambda name: "OG0000001" if name.startswith("OG0000001_") else None,
     )
-    for index_path in (root / ".gg_archives" / "index").glob("*.json"):
+    for index_path in (root / ".gg_store" / "index").glob("*.json"):
         index_path.unlink()
 
     with pytest.raises(ArchiveStoreError, match="absent from the archive index"):
@@ -842,7 +974,7 @@ def test_failed_restore_preserves_prior_logical_deletion(tmp_path: Path):
     logical_path = "stat_branch/OG0000001_stat.branch.tsv"
     store = GeneFamilyOutputStore(root)
     store.delete(logical_path)
-    zip_path = next((root / ".gg_archives").glob("stat_branch/*.zip"))
+    zip_path = next((root / "archives").glob("stat_branch/*.zip"))
     zip_path.unlink()
 
     with pytest.raises(FileNotFoundError):
@@ -875,9 +1007,9 @@ def test_stale_tmp_cleanup_skips_only_the_active_family(tmp_path: Path):
     root = tmp_path / "orthogroup"
     unrelated_family = "OG0000002"
     while family_lock_path(
-        root / ".gg_archives",
+        root / ".gg_store",
         "OG0000001",
-    ) == family_lock_path(root / ".gg_archives", unrelated_family):
+    ) == family_lock_path(root / ".gg_store", unrelated_family):
         unrelated_family = f"OG{int(unrelated_family[2:]) + 1:07d}"
     old_dir = root / "tmp" / "1_OG0000001"
     unrelated_dir = root / "tmp" / f"2_{unrelated_family}"
@@ -886,7 +1018,7 @@ def test_stale_tmp_cleanup_skips_only_the_active_family(tmp_path: Path):
     old_ns = time.time_ns() - 10 * 86400 * 1_000_000_000
     os.utime(old_dir, ns=(old_ns, old_ns))
     os.utime(unrelated_dir, ns=(old_ns, old_ns))
-    archive_root = root / ".gg_archives"
+    archive_root = root / ".gg_store"
     lock_path = family_lock_path(archive_root, "OG0000001")
     lock_path.parent.mkdir(parents=True)
     lock_handle = lock_path.open("a+b")
@@ -1095,7 +1227,7 @@ def test_verify_allows_superseded_members_in_retained_shared_shards(
 
     logical_path = f"stat_branch/{rerun_family}_stat.branch.tsv"
     manifest_occurrences = 0
-    for zip_path in (root / ".gg_archives" / "stat_branch").glob("*.zip"):
+    for zip_path in (root / "archives" / "stat_branch").glob("*.zip"):
         with zipfile.ZipFile(zip_path) as archive:
             manifest = json.loads(archive.read(MANIFEST_MEMBER))
         manifest_occurrences += sum(
@@ -1134,7 +1266,7 @@ def test_verify_rejects_an_unreferenced_duplicate_zip(tmp_path: Path):
         [family_id],
         lambda name: family_id if name.startswith(f"{family_id}_") else None,
     )
-    source = next((root / ".gg_archives" / "mafft").glob("*.zip"))
+    source = next((root / "archives" / "mafft").glob("*.zip"))
     duplicate = source.with_name(f"orphan-{source.name}")
     shutil.copy2(source, duplicate)
 
@@ -1152,10 +1284,10 @@ def test_repair_rebuilds_missing_index_and_can_remove_orphans(tmp_path: Path):
         [family_id],
         lambda name: family_id if name.startswith(f"{family_id}_") else None,
     )
-    source = next((root / ".gg_archives" / "mafft").glob("*.zip"))
+    source = next((root / "archives" / "mafft").glob("*.zip"))
     duplicate = source.with_name(f"orphan-{source.name}")
     shutil.copy2(source, duplicate)
-    for index_path in (root / ".gg_archives" / "index").glob("*.json"):
+    for index_path in (root / ".gg_store" / "index").glob("*.json"):
         index_path.unlink()
 
     orphaned = repair_archive_index(root, remove_orphans=True)
@@ -1215,7 +1347,7 @@ def test_purge_physically_applies_tombstones_live_overrides_and_family_filter(
         root,
         family_filter=dropped_family,
     ).family_state(dropped_family) is None
-    assert not (root / ".gg_archives" / "tombstones.jsonl").exists()
+    assert not (root / ".gg_store" / "tombstones.jsonl").exists()
     refreshed.verify()
 
 
@@ -1261,10 +1393,10 @@ def test_family_states_use_bounded_bucketed_current_state_files(tmp_path: Path):
             f"run-{index}",
         )
 
-    state_root = root / ".gg_archives" / "family-state"
+    state_root = root / ".gg_store" / "family-state"
     assert (state_root / ".complete").is_file()
     assert 1 <= len(list(state_root.glob("*.json"))) <= 256
-    assert not (root / ".gg_archives" / "family-state.jsonl").exists()
+    assert not (root / ".gg_store" / "family-state.jsonl").exists()
     assert GeneFamilyOutputStore(
         root,
         family_filter="OG0000299",
@@ -1350,7 +1482,7 @@ def test_interrupted_index_update_fails_closed_and_repair_recovers(
             family_from_name,
         )
 
-    marker = root / ".gg_archives" / "index-update.pending"
+    marker = root / ".gg_store" / "index-update.pending"
     assert marker.is_file()
     assert paths["mafft"].is_file()
     with pytest.raises(ArchiveStoreError, match="interrupted archive index update"):
@@ -1377,7 +1509,7 @@ def test_verify_compares_family_and_subdirectory_index_views(tmp_path: Path):
     family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
     archive_completed_outputs(root, "query2family", family_ids, family_from_name)
 
-    archive_root = root / ".gg_archives"
+    archive_root = root / ".gg_store"
     catalog = json.loads(
         (archive_root / "index-catalog.json").read_text(encoding="utf-8")
     )
@@ -1406,7 +1538,7 @@ def test_invalid_family_bucket_record_is_not_silently_ignored(tmp_path: Path):
     family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
     archive_completed_outputs(root, "query2family", family_ids, family_from_name)
 
-    bucket_path = next((root / ".gg_archives" / "index").glob("*.json"))
+    bucket_path = next((root / ".gg_store" / "index").glob("*.json"))
     payload = json.loads(bucket_path.read_text(encoding="utf-8"))
     logical_path = next(iter(payload["artifacts"]))
     payload["artifacts"][logical_path] = "invalid"
@@ -1432,7 +1564,7 @@ def test_symlinked_archive_root_is_rejected(tmp_path: Path):
     root.mkdir()
     external = tmp_path / "external-archive"
     external.mkdir()
-    (root / ".gg_archives").symlink_to(external, target_is_directory=True)
+    (root / ".gg_store").symlink_to(external, target_is_directory=True)
 
     with pytest.raises(ArchiveStoreError, match="Symlinked GeneGalleon archive roots"):
         GeneFamilyOutputStore(root)
@@ -1453,7 +1585,7 @@ def test_repair_prefers_newer_compaction_when_member_generations_tie(
     _write_family_outputs(root, "B", complete=True)
     family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
     archive_completed_outputs(root, "query2family", family_ids, family_from_name)
-    archive_root = root / ".gg_archives"
+    archive_root = root / "archives"
     old_shards = {
         path.relative_to(archive_root): path.read_bytes()
         for path in archive_root.glob("*/*.zip")
@@ -1466,7 +1598,7 @@ def test_repair_prefers_newer_compaction_when_member_generations_tie(
     )
     assert compacted is not None
     assert compacted.zip_path is not None
-    assert compacted.zip_path.name.startswith("pack-")
+    assert compacted.zip_path.name.startswith("stat_branch.pack-")
 
     # Recreate the crash state after the new index commit but before obsolete
     # shards were removed.
@@ -1480,7 +1612,7 @@ def test_repair_prefers_newer_compaction_when_member_generations_tie(
     repaired_artifact = repaired.artifact("stat_branch", "A_stat.branch.tsv")
     assert repaired_artifact is not None
     assert repaired_artifact.zip_path is not None
-    assert repaired_artifact.zip_path.name.startswith("pack-")
+    assert repaired_artifact.zip_path.name.startswith("stat_branch.pack-")
     repaired.verify()
 
 
@@ -1629,7 +1761,7 @@ def test_raw_to_zip_conversion_archives_partial_family_without_marking_complete(
     store = GeneFamilyOutputStore(root, family_filter="A")
     assert store.logical_exists("mafft/A_cds.aln.fa.gz")
     assert store.family_state("A") is None
-    assert not (root / ".gg_archives" / "storage-conversion.pending").exists()
+    assert not (root / ".gg_store" / "storage-conversion.pending").exists()
 
 
 def test_partial_family_can_be_materialized_updated_and_rearchived(tmp_path: Path):
@@ -1708,7 +1840,8 @@ def test_zip_to_raw_conversion_applies_tombstones_and_live_overrides(tmp_path: P
     assert replacement.read_bytes() == b"manual live override\n"
     assert not paths["tree_plot"].exists()
     assert paths["mafft"].is_file()
-    assert not list((root / ".gg_archives").glob("*/*.zip"))
+    assert not list((root / "archives").glob("*/*.zip"))
+    assert not list(root.glob("*.zip"))
     GeneFamilyOutputStore(root).verify()
 
     convert_storage_to_zip(
@@ -1747,8 +1880,8 @@ def test_pure_raw_conversion_removes_archive_control_metadata(tmp_path: Path):
     assert result["pure_raw"] is True
     assert paths["mafft"].is_file()
     assert not interrupted_partial.exists()
-    assert not (root / ".gg_archives").exists()
-    assert not (root / ".gg_archives.pure-raw-retired").exists()
+    assert not (root / ".gg_store").exists()
+    assert not (root / ".gg_store.pure-raw-retired").exists()
 
 
 def test_conversion_summary_reports_mixed_store_and_unmatched_files(tmp_path: Path):
@@ -1835,7 +1968,8 @@ def test_convert_storage_cli_accepts_files_as_raw_alias(tmp_path: Path):
 
     assert run_cli(args) == 0
     assert (root / "mafft" / f"{family_id}_cds.aln.fa.gz").is_file()
-    assert not list((root / ".gg_archives").glob("*/*.zip"))
+    assert not list((root / "archives").glob("*/*.zip"))
+    assert not list(root.glob("*.zip"))
 
 
 def test_raw_to_zip_conversion_resumes_after_source_cleanup_interruption(
@@ -1871,7 +2005,7 @@ def test_raw_to_zip_conversion_resumes_after_source_cleanup_interruption(
             family_from_name,
         )
 
-    marker = root / ".gg_archives" / "storage-conversion.pending"
+    marker = root / ".gg_store" / "storage-conversion.pending"
     assert marker.is_file()
     assert paths["mafft"].is_file()
     monkeypatch.setattr(
@@ -1934,7 +2068,7 @@ def test_strict_unmatched_conversion_fails_before_creating_marker(tmp_path: Path
         )
 
     assert shared.is_file()
-    assert not (root / ".gg_archives" / "storage-conversion.pending").exists()
+    assert not (root / ".gg_store" / "storage-conversion.pending").exists()
 
 
 def test_archive_family_cli_archives_failed_partial_outputs(tmp_path: Path):
@@ -2171,7 +2305,7 @@ def test_convert_storage_dry_run_does_not_create_archive_metadata(
     output = capsys.readouterr().out
     assert "requested_target\tzip" in output
     assert paths["mafft"].is_file()
-    assert not (root / ".gg_archives").exists()
+    assert not (root / ".gg_store").exists()
 
 
 def test_archive_metadata_enables_mode_autodetection_and_tracks_catalog_additions(
@@ -2184,7 +2318,7 @@ def test_archive_metadata_enables_mode_autodetection_and_tracks_catalog_addition
     _write_family_outputs(root, "A", complete=True)
     family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
     archive_completed_outputs(root, "query2family", family_ids, family_from_name)
-    metadata_path = root / ".gg_archives" / "store.json"
+    metadata_path = root / ".gg_store" / "store.json"
     first_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
     destination = tmp_path / "materialized"
@@ -2246,7 +2380,7 @@ def test_archive_family_autodetection_preserves_full_catalog_metadata(
         family_from_name,
         catalog_sources=[query_dir],
     )
-    metadata_path = root / ".gg_archives" / "store.json"
+    metadata_path = root / ".gg_store" / "store.json"
     before = json.loads(metadata_path.read_text(encoding="utf-8"))
 
     store = GeneFamilyOutputStore(root, family_filter="A")
@@ -2456,7 +2590,7 @@ def test_lock_striping_and_metadata_optimization_reduce_legacy_lock_files(
     tmp_path: Path,
 ):
     root = tmp_path / "orthogroup"
-    archive_root = root / ".gg_archives"
+    archive_root = root / ".gg_store"
     family_locks = archive_root / "family-locks"
     state_locks = archive_root / "family-state-locks"
     family_locks.mkdir(parents=True)

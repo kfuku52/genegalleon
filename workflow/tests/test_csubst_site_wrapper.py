@@ -502,7 +502,7 @@ def test_materialize_csubst_site_inputs_reads_only_requested_family_from_zip(tmp
 def test_process_og_batch_materializes_each_family_only_once(tmp_path, monkeypatch):
     mod = load_module()
     dir_og = tmp_path / "orthogroup"
-    (dir_og / ".gg_archives").mkdir(parents=True)
+    (dir_og / ".gg_store").mkdir(parents=True)
     materialize_calls = []
     process_calls = []
 

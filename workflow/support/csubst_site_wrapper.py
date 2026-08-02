@@ -609,7 +609,10 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
     materialized_input_context = None
     try:
         effective_dir_og = dir_og
-        if os.path.isdir(os.path.join(dir_og, '.gg_archives')):
+        if any(
+            os.path.isdir(os.path.join(dir_og, name))
+            for name in ('.gg_store', '.gg_archives')
+        ):
             materialized_input_context = LockedMaterializationDirectory(
                 dir_out,
                 og,
@@ -704,7 +707,10 @@ def process_og_batch(
     materialized_input_context = None
     effective_dir_og = dir_og
     try:
-        if os.path.isdir(os.path.join(dir_og, '.gg_archives')):
+        if any(
+            os.path.isdir(os.path.join(dir_og, name))
+            for name in ('.gg_store', '.gg_archives')
+        ):
             materialized_input_context = LockedMaterializationDirectory(
                 dir_out,
                 og,

@@ -119,7 +119,9 @@ Examples:
 Symptom:
 
 - `gg_gene_evolution` or progress summary refuses to start because
-  `.gg_archives/storage-conversion.pending` exists.
+  `.gg_store/storage-conversion.pending` exists. A store created by the first
+  experimental ZIP implementation may use
+  `.gg_archives/storage-conversion.pending` until `migrate-layout` completes.
 
 What to do:
 

@@ -3824,7 +3824,7 @@ if [[ ${run_orthogroup_grampa} -eq 1 ]]; then
   if [[ ! -s "${file_orthogroup_genecount_selected}" ]]; then
     echo "Disabling run_orthogroup_grampa because required file is missing: ${file_orthogroup_genecount_selected}"
     run_orthogroup_grampa=0
-  elif [[ -d "${gg_workspace_output_dir}/orthogroup/.gg_archives" ]]; then
+  elif [[ -d "${gg_workspace_output_dir}/orthogroup/.gg_store" || -d "${gg_workspace_output_dir}/orthogroup/.gg_archives" ]]; then
     if python "${gg_support_dir}/gene_family_output_store.py" has-files \
       --root "${gg_workspace_output_dir}/orthogroup" \
       --subdir rooted_tree
@@ -4284,7 +4284,7 @@ if [[ ! -s "${file_orthogroup_grampa}" && ${run_orthogroup_grampa} -eq 1 ]]; the
     orthogroup_grampa_work_dir=""
   }
   trap cleanup_orthogroup_grampa_tmp EXIT
-  if [[ -d "${gg_workspace_output_dir}/orthogroup/.gg_archives" ]]; then
+  if [[ -d "${gg_workspace_output_dir}/orthogroup/.gg_store" || -d "${gg_workspace_output_dir}/orthogroup/.gg_archives" ]]; then
     printf "%s\n" "${og_ids[@]}" > "${orthogroup_grampa_family_ids}"
     python "${gg_support_dir}/gene_family_output_store.py" materialize-families \
       --root "${gg_workspace_output_dir}/orthogroup" \

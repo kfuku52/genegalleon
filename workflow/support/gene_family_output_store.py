@@ -30,7 +30,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
-ARCHIVE_DIR_NAME = ".gg_archives"
+STORE_DIR_NAME = ".gg_store"
+ACTIVE_ARCHIVE_DIR_NAME = "archives"
+LEGACY_ARCHIVE_DIR_NAME = ".gg_archives"
+# ARCHIVE_DIR_NAME remains the metadata/locking root name for callers that
+# import it.  ZIP payload lives separately in ACTIVE_ARCHIVE_DIR_NAME.
+ARCHIVE_DIR_NAME = STORE_DIR_NAME
 MANIFEST_MEMBER = ".genegalleon-manifest.json"
 TOMBSTONE_FILE = "tombstones.jsonl"
 FAMILY_STATE_FILE = "family-state.jsonl"
@@ -46,7 +51,7 @@ INDEX_UPDATE_FILE = "index-update.pending"
 STORAGE_CONVERSION_FILE = "storage-conversion.pending"
 STORAGE_CONVERSION_LOCK_FILE = "storage-conversion.lock"
 STORE_METADATA_FILE = "store.json"
-PURE_RAW_RETIRED_DIR_NAME = ".gg_archives.pure-raw-retired"
+PURE_RAW_RETIRED_DIR_NAME = ".gg_store.pure-raw-retired"
 GENERATION_FILE = "generation.counter"
 LOCK_FILE = "archive.lock"
 PRODUCER_LOCK_FILE = "producer.lock"
@@ -59,7 +64,7 @@ MAX_OPEN_COMPACTION_SOURCES = 32
 TOMBSTONE_LOG_COMPACT_BYTES = 4 * 1024 * 1024
 MATERIALIZATION_RECEIPT_NAME = ".gg_materialized.jsonl"
 ORTHOGROUP_ID_RE = re.compile(r"^(OG\d+|HOG\d+|SP\d+)(?=$|[._-])")
-EXCLUDED_SUBDIRS = {"tmp"}
+EXCLUDED_SUBDIRS = {"tmp", ACTIVE_ARCHIVE_DIR_NAME}
 PRECOMPRESSED_SUFFIXES = (
     ".gz",
     ".zip",
@@ -155,6 +160,59 @@ def _validate_archive_root(archive_root: Path) -> None:
         raise ArchiveStoreError(
             f"Symlinked GeneGalleon archive roots are not supported: {archive_root}"
         )
+
+
+def _archive_state_root(root: Path | str) -> Path:
+    """Return the metadata root, retaining read support for legacy stores."""
+
+    resolved = Path(root).resolve()
+    current = resolved / STORE_DIR_NAME
+    legacy = resolved / LEGACY_ARCHIVE_DIR_NAME
+    if current.exists() or current.is_symlink() or not (
+        legacy.exists() or legacy.is_symlink()
+    ):
+        return current
+    return legacy
+
+
+def _archive_payload_root(root: Path | str) -> Path:
+    """Return the immutable-shard root for the selected store layout."""
+
+    resolved = Path(root).resolve()
+    state_root = _archive_state_root(resolved)
+    if state_root.name == LEGACY_ARCHIVE_DIR_NAME:
+        return state_root
+    return resolved / ACTIVE_ARCHIVE_DIR_NAME
+
+
+def _zip_has_genegalleon_manifest(path: Path) -> bool:
+    if not path.is_file() or path.is_symlink():
+        return False
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            return MANIFEST_MEMBER in archive.namelist()
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
+def _physical_archive_paths(root: Path | str) -> List[Path]:
+    """List active shards and finalized, user-facing ZIP files."""
+
+    resolved = Path(root).resolve()
+    payload_root = _archive_payload_root(resolved)
+    paths = list(payload_root.glob("*/*.zip")) if payload_root.is_dir() else []
+    if _archive_state_root(resolved).name != LEGACY_ARCHIVE_DIR_NAME:
+        paths.extend(
+            path
+            for path in resolved.glob("*.zip")
+            if _zip_has_genegalleon_manifest(path)
+        )
+    return sorted(set(paths))
+
+
+def _final_archive_path(root: Path | str, subdir: str) -> Path:
+    _safe_logical_path(subdir, "__archive__")
+    return Path(root).resolve() / f"{subdir}.zip"
 
 
 def _family_index_bucket(family_id: Optional[str]) -> str:
@@ -394,7 +452,7 @@ def _family_catalog_digest(family_ids: Iterable[str]) -> str:
 
 
 def _read_store_metadata(root: Path) -> Optional[dict]:
-    metadata_path = Path(root).resolve() / ARCHIVE_DIR_NAME / STORE_METADATA_FILE
+    metadata_path = _archive_state_root(root) / STORE_METADATA_FILE
     if metadata_path.is_symlink():
         raise ArchiveStoreError(
             f"Symlinked archive store metadata is not supported: {metadata_path}"
@@ -438,7 +496,7 @@ def _write_store_metadata(
 ) -> dict:
     if mode not in {"query2family", "orthogroup"}:
         raise ValueError(f"Unsupported gene-family mode: {mode}")
-    archive_root = Path(root).resolve() / ARCHIVE_DIR_NAME
+    archive_root = _archive_state_root(root)
     _validate_archive_root(archive_root)
     archive_root.mkdir(parents=True, exist_ok=True)
     existing = _read_store_metadata(root)
@@ -489,13 +547,41 @@ def _write_store_metadata(
     finally:
         if temporary.exists():
             temporary.unlink()
+    _write_archive_readme(root)
     return payload
+
+
+def _write_archive_readme(root: Path | str) -> None:
+    resolved = Path(root).resolve()
+    readme_path = resolved / "README_GENE_FAMILY_OUTPUTS.txt"
+    content = (
+        "GeneGalleon ZIP-backed gene-family outputs\n"
+        "\n"
+        "Finalized output sets are ordinary <subdirectory>.zip files in this directory.\n"
+        "New or manually changed files remain in <subdirectory>/ and override ZIP members.\n"
+        "While a run is active, immutable ZIP parts are visible below archives/<subdirectory>/.\n"
+        "ARCHIVE_STATUS.tsv reports the current physical location of every logical output set.\n"
+        "Internal indexes, locks, and deletion records are under .gg_store/; do not edit them.\n"
+        "Use gg_gene_family_archive.sh list, verify, restore, delete, or finalize to manage files.\n"
+    )
+    temporary = readme_path.with_name(
+        f".{readme_path.name}.partial.{os.getpid()}.{uuid.uuid4().hex}"
+    )
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, readme_path)
+        _fsync_directory(resolved)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _manifest_modes(root: Path) -> Set[str]:
     modes: Set[str] = set()
-    archive_root = Path(root).resolve() / ARCHIVE_DIR_NAME
-    for zip_path in sorted(archive_root.glob("*/*.zip")):
+    for zip_path in _physical_archive_paths(root):
         if zip_path.is_symlink() or zip_path.parent.is_symlink():
             raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {zip_path}")
         try:
@@ -620,8 +706,10 @@ def producer_read_lock(archive_root: Path) -> Iterator[None]:
 class GeneFamilyOutputStore:
     def __init__(self, root: Path | str, family_filter: Optional[str] = None):
         self.root = Path(root).resolve()
-        self.archive_root = self.root / ARCHIVE_DIR_NAME
+        self.archive_root = _archive_state_root(self.root)
+        self.payload_root = _archive_payload_root(self.root)
         _validate_archive_root(self.archive_root)
+        _validate_archive_root(self.payload_root)
         self.family_filter = family_filter
         self._archives_loaded = False
         self._archived: Dict[str, Artifact] = {}
@@ -961,17 +1049,21 @@ class GeneFamilyOutputStore:
             ) from exc
         _safe_logical_path(subdir, name)
         relative_zip = Path(str(record["zip_path"]))
-        if (
-            relative_zip.is_absolute()
-            or ".." in relative_zip.parts
-            or len(relative_zip.parts) != 2
-            or relative_zip.parent.name != subdir
-            or relative_zip.suffix.lower() != ".zip"
-        ):
+        zip_location = str(record.get("zip_location", "active"))
+        unsafe = relative_zip.is_absolute() or ".." in relative_zip.parts
+        if zip_location == "active":
+            unsafe = unsafe or len(relative_zip.parts) != 2 or relative_zip.parent.name != subdir
+            zip_path = self.payload_root / relative_zip
+        elif zip_location == "final":
+            unsafe = unsafe or len(relative_zip.parts) != 1 or relative_zip.name != f"{subdir}.zip"
+            zip_path = self.root / relative_zip
+        else:
+            unsafe = True
+            zip_path = self.root / relative_zip
+        if unsafe or relative_zip.suffix.lower() != ".zip":
             raise ArchiveStoreError(
                 f"Archive index contains an unsafe ZIP path: {relative_zip}"
             )
-        zip_path = self.archive_root / relative_zip
         artifact = Artifact(
             logical_path=logical_path,
             subdir=subdir,
@@ -1452,7 +1544,7 @@ class GeneFamilyOutputStore:
                     index_dir / f"{bucket}.json"
                     for bucket in sorted(expected & catalog_buckets)
                 ]
-            if not index_paths and catalog is None and any(self.archive_root.glob("*/*.zip")):
+            if not index_paths and catalog is None and _physical_archive_paths(self.root):
                 return False
         elif legacy_index_path.is_file():
             index_paths = [legacy_index_path]
@@ -1578,9 +1670,14 @@ class GeneFamilyOutputStore:
                         f"Archive manifest contains an invalid member record: {zip_path}"
                     )
                 declared_subdir = str(manifest.get("subdir", ""))
-                if declared_subdir != zip_path.parent.name:
+                active_location = declared_subdir == zip_path.parent.name
+                final_location = (
+                    zip_path.parent.resolve() == self.root
+                    and zip_path.name == f"{declared_subdir}.zip"
+                )
+                if not active_location and not final_location:
                     raise ArchiveStoreError(
-                        f"Archive subdirectory differs from its manifest in {zip_path}: "
+                        f"Archive location differs from its manifest in {zip_path}: "
                         f"{declared_subdir!r}"
                     )
                 zip_infos = archive.infolist()
@@ -1672,8 +1769,8 @@ class GeneFamilyOutputStore:
             return
         self._load_tombstones()
         index_loaded = self._load_index()
-        if self.archive_root.is_dir() and not index_loaded:
-            zip_paths = sorted(self.archive_root.glob("*/*.zip"))
+        if not index_loaded:
+            zip_paths = _physical_archive_paths(self.root)
             for zip_path in zip_paths:
                 if zip_path.is_symlink() or zip_path.parent.is_symlink():
                     raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {zip_path}")
@@ -2222,14 +2319,21 @@ class GeneFamilyOutputStore:
             raise ArchiveStoreError(
                 f"Cannot index a live artifact as an archive member: {artifact.logical_path}"
             )
-        try:
-            relative_zip = artifact.zip_path.relative_to(self.archive_root)
-        except ValueError as exc:
-            raise ArchiveStoreError(
-                f"Archive member is outside the archive root: {artifact.zip_path}"
-            ) from exc
+        final_path = _final_archive_path(self.root, artifact.subdir)
+        if artifact.zip_path.resolve() == final_path.resolve():
+            relative_zip = Path(final_path.name)
+            zip_location = "final"
+        else:
+            try:
+                relative_zip = artifact.zip_path.relative_to(self.payload_root)
+            except ValueError as exc:
+                raise ArchiveStoreError(
+                    f"Archive member is outside the payload root: {artifact.zip_path}"
+                ) from exc
+            zip_location = "active"
         return {
             "zip_path": relative_zip.as_posix(),
+            "zip_location": zip_location,
             "member_name": artifact.member_name,
             "generation": artifact.generation,
             "size": int(artifact.size or 0),
@@ -2673,7 +2777,7 @@ class GeneFamilyOutputStore:
             str,
             Tuple[Path, Tuple[object, ...]],
         ] = {}
-        for zip_path in sorted(self.archive_root.glob("*/*.zip")):
+        for zip_path in _physical_archive_paths(self.root):
             if zip_path.is_symlink() or zip_path.parent.is_symlink():
                 raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {zip_path}")
             manifest = self._read_manifest(zip_path)
@@ -2978,7 +3082,7 @@ def completed_family_ids(store: GeneFamilyOutputStore, family_ids: Iterable[str]
 
 def _archive_chunk(
     root: Path,
-    archive_root: Path,
+    payload_root: Path,
     subdir: str,
     paths: Sequence[Path],
     mode: str,
@@ -2988,13 +3092,15 @@ def _archive_chunk(
     compression: str = "adaptive",
     compression_level: int = 6,
 ) -> Tuple[Path, List[Artifact], Dict[Path, Tuple[int, int, int, int, int]]]:
-    shard_dir = archive_root / subdir
+    shard_dir = payload_root / subdir
     if shard_dir.is_symlink():
         raise ArchiveStoreError(f"Symlinked archive shard directories are not supported: {shard_dir}")
     shard_dir.mkdir(parents=True, exist_ok=True)
-    shard_token = f"{generation}-{os.getpid()}-{uuid.uuid4().hex[:10]}"
-    final_path = shard_dir / f"part-{shard_token}.zip"
-    partial_path = shard_dir / f".part-{shard_token}.zip.partial"
+    final_path = shard_dir / f"{subdir}.part-{generation:06d}.zip"
+    partial_path = shard_dir / (
+        f".{subdir}.part-{generation:06d}.zip.partial."
+        f"{os.getpid()}.{uuid.uuid4().hex}"
+    )
     signatures = {path: _stat_signature(path) for path in paths}
     members: List[dict] = []
     try:
@@ -3089,7 +3195,7 @@ def _archive_chunk(
 
 
 def _compact_artifact_chunk(
-    archive_root: Path,
+    payload_root: Path,
     subdir: str,
     artifacts: Sequence[Artifact],
     mode: str,
@@ -3097,16 +3203,37 @@ def _compact_artifact_chunk(
     *,
     compression: str = "adaptive",
     compression_level: int = 6,
+    destination_path: Optional[Path] = None,
 ) -> Tuple[Path, List[Artifact]]:
-    shard_dir = archive_root / subdir
+    shard_dir = (
+        Path(destination_path).resolve().parent
+        if destination_path is not None
+        else payload_root / subdir
+    )
     if shard_dir.is_symlink():
         raise ArchiveStoreError(
             f"Symlinked archive shard directories are not supported: {shard_dir}"
         )
     shard_dir.mkdir(parents=True, exist_ok=True)
-    token = f"{archive_generation}-{os.getpid()}-{uuid.uuid4().hex[:10]}"
-    final_path = shard_dir / f"pack-{token}.zip"
-    partial_path = shard_dir / f".pack-{token}.zip.partial"
+    final_path = (
+        Path(destination_path).resolve()
+        if destination_path is not None
+        else shard_dir / f"{subdir}.pack-{archive_generation:06d}.zip"
+    )
+    if final_path.is_symlink():
+        raise ArchiveStoreError(f"Symlinked ZIP destinations are not supported: {final_path}")
+    if (
+        destination_path is not None
+        and final_path.is_file()
+        and not _zip_has_genegalleon_manifest(final_path)
+    ):
+        raise ArchiveStoreError(
+            f"Refusing to replace an unrelated ZIP file: {final_path}"
+        )
+    partial_path = shard_dir / (
+        f".{final_path.name}.partial."
+        f"{os.getpid()}.{uuid.uuid4().hex}"
+    )
     members: List[dict] = []
     try:
         with zipfile.ZipFile(
@@ -3248,9 +3375,14 @@ def _remove_archived_sources(
 
 
 def _cleanup_partial_archives(archive_root: Path) -> None:
-    if not archive_root.is_dir():
-        return
-    for partial_path in archive_root.glob("*/.*.zip.partial"):
+    partial_paths = (
+        list(archive_root.glob("*/.*.zip.partial*"))
+        if archive_root.is_dir()
+        else []
+    )
+    if archive_root.name == ACTIVE_ARCHIVE_DIR_NAME:
+        partial_paths.extend(archive_root.parent.glob(".*.zip.partial.*"))
+    for partial_path in partial_paths:
         try:
             if partial_path.parent.is_symlink():
                 raise ArchiveStoreError(
@@ -3315,7 +3447,8 @@ def archive_completed_outputs(
     progress_callback: Optional[Callable[..., None]] = None,
 ) -> List[Tuple[Path, int]]:
     root = Path(root).resolve()
-    archive_root = root / ARCHIVE_DIR_NAME
+    archive_root = _archive_state_root(root)
+    payload_root = _archive_payload_root(root)
     created_paths: List[Path] = []
     removed_total = 0
     with lock_available_family_ids(
@@ -3331,7 +3464,7 @@ def archive_completed_outputs(
         with archive_lock(archive_root, nonblocking=nonblocking) as acquired:
             if not acquired:
                 return []
-            _cleanup_partial_archives(archive_root)
+            _cleanup_partial_archives(payload_root)
             store = GeneFamilyOutputStore(root)
             _assert_archive_mode(store, mode)
             _write_store_metadata(
@@ -3371,7 +3504,7 @@ def archive_completed_outputs(
             if not potential_by_subdir:
                 return []
 
-            if store._load_index_catalog() is None and any(archive_root.glob("*/*.zip")):
+            if store._load_index_catalog() is None and _physical_archive_paths(root):
                 store._load_archives()
                 if store._archived and not store._index_loaded:
                     store._write_index()
@@ -3429,7 +3562,7 @@ def archive_completed_outputs(
                         for index, (generation, chunk) in enumerate(chunk_specs):
                             chunk_results[index] = _archive_chunk(
                                 root,
-                                archive_root,
+                                payload_root,
                                 subdir,
                                 chunk,
                                 mode,
@@ -3447,7 +3580,7 @@ def archive_completed_outputs(
                                 future = executor.submit(
                                     _archive_chunk,
                                     root,
-                                    archive_root,
+                                    payload_root,
                                     subdir,
                                     chunk,
                                     mode,
@@ -3478,7 +3611,7 @@ def archive_completed_outputs(
                                 future.result()[0].unlink()
                             except OSError:
                                 pass
-                    _cleanup_partial_archives(archive_root)
+                    _cleanup_partial_archives(payload_root)
                     raise
                 for index in sorted(chunk_results):
                     zip_path, artifacts, signatures = chunk_results[index]
@@ -3513,26 +3646,44 @@ def archive_completed_outputs(
                         subdir_artifact_values,
                         key=lambda artifact: artifact.logical_path,
                     )
-                    for compact_start in range(
-                        0,
-                        len(ordered),
-                        max(1, max_files_per_shard),
-                    ):
+                    final_archive = _final_archive_path(root, subdir)
+                    if final_archive.resolve() in {
+                        path.resolve() for path in referenced_shards
+                    }:
                         generation = store._next_generation()
                         zip_path, compacted = _compact_artifact_chunk(
-                            archive_root,
+                            payload_root,
                             subdir,
-                            ordered[
-                                compact_start : compact_start
-                                + max(1, max_files_per_shard)
-                            ],
+                            ordered,
                             mode,
                             generation,
                             compression=compression,
                             compression_level=compression_level,
+                            destination_path=final_archive,
                         )
                         created_paths.append(zip_path)
                         compacted_artifacts.extend(compacted)
+                    else:
+                        for compact_start in range(
+                            0,
+                            len(ordered),
+                            max(1, max_files_per_shard),
+                        ):
+                            generation = store._next_generation()
+                            zip_path, compacted = _compact_artifact_chunk(
+                                payload_root,
+                                subdir,
+                                ordered[
+                                    compact_start : compact_start
+                                    + max(1, max_files_per_shard)
+                                ],
+                                mode,
+                                generation,
+                                compression=compression,
+                                compression_level=compression_level,
+                            )
+                            created_paths.append(zip_path)
+                            compacted_artifacts.extend(compacted)
                     final_subdir_artifacts = {
                         artifact.logical_path: artifact
                         for artifact in compacted_artifacts
@@ -3549,15 +3700,17 @@ def archive_completed_outputs(
                     for artifact in final_subdir_artifacts.values()
                     if artifact.zip_path is not None
                 }
-                for zip_path in sorted((archive_root / subdir).glob("*.zip")):
-                    if zip_path.resolve() in referenced_paths:
-                        continue
-                    try:
-                        zip_path.unlink()
-                    except OSError as exc:
-                        raise ArchiveStoreError(
-                            f"Failed to remove obsolete ZIP shard {zip_path}: {exc}"
-                        ) from exc
+                try:
+                    _remove_unreferenced_subdir_archives(
+                        root,
+                        payload_root,
+                        subdir,
+                        referenced_paths,
+                    )
+                except OSError as exc:
+                    raise ArchiveStoreError(
+                        f"Failed to remove obsolete ZIP payload for {subdir}: {exc}"
+                    ) from exc
 
                 # Drop paths compacted away from the result list immediately; the
                 # caller should only report shards that are still authoritative.
@@ -3574,7 +3727,7 @@ def archive_completed_outputs(
                         archived_live_files=removed_total,
                         created_zip_shards=len(created_paths),
                     )
-            for shard_dir in sorted(archive_root.iterdir()) if archive_root.is_dir() else []:
+            for shard_dir in sorted(payload_root.iterdir()) if payload_root.is_dir() else []:
                 try:
                     if shard_dir.is_dir() and not any(shard_dir.iterdir()):
                         shard_dir.rmdir()
@@ -3691,7 +3844,7 @@ def _scan_live_output_inventory(
 
 
 def _read_storage_conversion_marker(root: Path) -> Optional[dict]:
-    marker = root / ARCHIVE_DIR_NAME / STORAGE_CONVERSION_FILE
+    marker = _archive_state_root(root) / STORAGE_CONVERSION_FILE
     if marker.is_symlink():
         raise ArchiveStoreError(
             f"Symlinked storage conversion markers are not supported: {marker}"
@@ -3723,7 +3876,7 @@ def _read_storage_conversion_marker(root: Path) -> Optional[dict]:
 
 
 def _write_storage_conversion_marker(root: Path, mode: str, target: str) -> bool:
-    archive_root = root / ARCHIVE_DIR_NAME
+    archive_root = _archive_state_root(root)
     archive_root.mkdir(parents=True, exist_ok=True)
     existing = _read_storage_conversion_marker(root)
     if existing is not None:
@@ -3767,7 +3920,7 @@ def _write_storage_conversion_marker(root: Path, mode: str, target: str) -> bool
 
 def _update_storage_conversion_marker(root: Path, **updates: object) -> dict:
     root = Path(root).resolve()
-    marker = root / ARCHIVE_DIR_NAME / STORAGE_CONVERSION_FILE
+    marker = _archive_state_root(root) / STORAGE_CONVERSION_FILE
     payload = _read_storage_conversion_marker(root)
     if payload is None:
         raise ArchiveStoreError(
@@ -3796,7 +3949,7 @@ def _update_storage_conversion_marker(root: Path, **updates: object) -> dict:
 
 
 def _finish_storage_conversion(root: Path) -> None:
-    marker = root / ARCHIVE_DIR_NAME / STORAGE_CONVERSION_FILE
+    marker = _archive_state_root(root) / STORAGE_CONVERSION_FILE
     if marker.is_file() and not marker.is_symlink():
         marker.unlink()
         _fsync_directory(marker.parent)
@@ -3810,7 +3963,7 @@ def storage_conversion_session(
     *,
     require_resume: bool = False,
 ) -> Iterator[bool]:
-    archive_root = root / ARCHIVE_DIR_NAME
+    archive_root = _archive_state_root(root)
     archive_root.mkdir(parents=True, exist_ok=True)
     with _bucket_lock(
         archive_root / STORAGE_CONVERSION_LOCK_FILE,
@@ -3874,7 +4027,7 @@ def storage_conversion_summary(
         valid_family_ids,
         family_from_name,
     )
-    shard_paths = sorted((root / ARCHIVE_DIR_NAME).glob("*/*.zip"))
+    shard_paths = _physical_archive_paths(root)
     archived_only_count = 0
     archived_only_bytes = 0
     archived_only_artifacts: List[Artifact] = []
@@ -3937,9 +4090,14 @@ def storage_conversion_summary(
         "raw_materialize_allocated_bytes": raw_allocated_bytes,
         "raw_peak_new_files": raw_peak_new_files,
         "unsupported_symlinks": len(unsupported_symlinks),
-        "physical_archive_files": sum(
-            1 for path in (root / ARCHIVE_DIR_NAME).rglob("*") if path.is_file()
-        ) if (root / ARCHIVE_DIR_NAME).is_dir() else 0,
+        "physical_archive_files": (
+            sum(
+                1
+                for path in _archive_state_root(root).rglob("*")
+                if path.is_file()
+            )
+            + len(shard_paths)
+        ) if _archive_state_root(root).is_dir() else len(shard_paths),
     }
     if marker is not None:
         summary["conversion_target"] = str(marker["target"])
@@ -3951,11 +4109,14 @@ def storage_conversion_summary(
 
 def storage_conversion_status(root: Path) -> dict:
     root = Path(root).resolve()
-    archive_root = root / ARCHIVE_DIR_NAME
+    archive_root = _archive_state_root(root)
+    payload_root = _archive_payload_root(root)
     marker = _read_storage_conversion_marker(root)
     metadata = _read_store_metadata(root)
-    partial_paths = sorted(archive_root.glob("*/.*.zip.partial"))
-    zip_paths = sorted(archive_root.glob("*/*.zip"))
+    partial_paths = sorted(payload_root.glob("*/.*.zip.partial*"))
+    if payload_root.name == ACTIVE_ARCHIVE_DIR_NAME:
+        partial_paths.extend(sorted(root.glob(".*.zip.partial.*")))
+    zip_paths = _physical_archive_paths(root)
     lock_paths = sorted(archive_root.glob("**/*.lock")) if archive_root.is_dir() else []
     status = {
         "conversion": "in-progress" if marker is not None else "idle",
@@ -4009,7 +4170,7 @@ def optimize_archive_metadata(root: Path) -> dict:
     """Prune obsolete 256-way lock files after all project jobs are stopped."""
 
     root = Path(root).resolve()
-    archive_root = root / ARCHIVE_DIR_NAME
+    archive_root = _archive_state_root(root)
     if not archive_root.is_dir():
         return {"removed_legacy_lock_files": 0, "remaining_lock_files": 0}
     current_names = {f"{value:02x}.lock" for value in range(FAMILY_LOCK_STRIPES)}
@@ -4067,7 +4228,7 @@ def optimize_archive_metadata(root: Path) -> dict:
                             pass
                 for directory_name in (FAMILY_LOCK_DIR_NAME, FAMILY_STATE_LOCK_DIR_NAME):
                     _fsync_directory(archive_root / directory_name)
-                if _read_store_metadata(root) is None and any(archive_root.glob("*/*.zip")):
+                if _read_store_metadata(root) is None and _physical_archive_paths(root):
                     mode = resolve_archive_mode(root, required=True)
                     assert mode is not None
                     store = GeneFamilyOutputStore(root)
@@ -4135,7 +4296,7 @@ def convert_storage_to_zip(
         require_resume=require_resume,
     ) as resumed:
         if resumed:
-            _cleanup_partial_archives(root / ARCHIVE_DIR_NAME)
+            _cleanup_partial_archives(_archive_payload_root(root))
             repair_archive_index(root, remove_orphans=True)
         preflight_store = GeneFamilyOutputStore(root)
         preflight_store.verify()
@@ -4225,6 +4386,18 @@ def convert_storage_to_zip(
                 "Owned live files kept changing during raw-to-ZIP conversion; "
                 "stop older gene-family jobs and rerun the same command"
             )
+        _update_storage_conversion_marker(root, phase="finalizing")
+        if progress_callback is not None:
+            progress_callback(force=True, phase="finalizing")
+        finalized_paths = finalize_archives(
+            root,
+            mode,
+            family_ids,
+            nonblocking=False,
+            compression=compression,
+            compression_level=compression_level,
+        )
+        created_paths.update(finalized_paths)
         _update_storage_conversion_marker(root, phase="verifying")
         if progress_callback is not None:
             progress_callback(force=True, phase="verifying")
@@ -4302,7 +4475,7 @@ def convert_storage_to_raw(
         "raw",
         require_resume=require_resume,
     ) as resumed:
-        _cleanup_partial_archives(root / ARCHIVE_DIR_NAME)
+        _cleanup_partial_archives(_archive_payload_root(root))
         _cleanup_partial_materializations(root)
         preflight_store = GeneFamilyOutputStore(root)
         preflight_store.verify()
@@ -4314,7 +4487,7 @@ def convert_storage_to_raw(
         )
         if progress_callback is not None:
             progress_callback(force=True, phase="preflight", resumed=resumed)
-        archive_root = root / ARCHIVE_DIR_NAME
+        archive_root = _archive_state_root(root)
         with all_family_bucket_locks(archive_root), producer_quiescence_lock(
             archive_root
         ) as readers_idle:
@@ -4440,14 +4613,14 @@ def convert_storage_to_raw(
         )
         final_store = GeneFamilyOutputStore(root)
         final_store.verify()
-        remaining_shards = sorted((root / ARCHIVE_DIR_NAME).glob("*/*.zip"))
+        remaining_shards = _physical_archive_paths(root)
         if remaining_shards:
             raise ArchiveStoreError(
                 "ZIP shards remained after raw conversion: "
                 + ", ".join(str(path) for path in remaining_shards[:10])
             )
         if pure_raw:
-            archive_root = root / ARCHIVE_DIR_NAME
+            archive_root = _archive_state_root(root)
             if archive_root.is_symlink():
                 raise ArchiveStoreError(
                     f"Refusing to remove symlinked archive root: {archive_root}"
@@ -4490,7 +4663,8 @@ def compact_archives(
     compression_level: int = 6,
 ) -> List[Path]:
     root = Path(root).resolve()
-    archive_root = root / ARCHIVE_DIR_NAME
+    archive_root = _archive_state_root(root)
+    payload_root = _archive_payload_root(root)
     if not archive_root.is_dir():
         return []
     with producer_quiescence_lock(archive_root, nonblocking=nonblocking) as producers_idle:
@@ -4499,7 +4673,7 @@ def compact_archives(
         with archive_lock(archive_root, nonblocking=nonblocking) as acquired:
             if not acquired:
                 return []
-            _cleanup_partial_archives(archive_root)
+            _cleanup_partial_archives(payload_root)
             store = GeneFamilyOutputStore(root)
             _assert_archive_mode(store, mode)
             created: List[Path] = []
@@ -4514,19 +4688,37 @@ def compact_archives(
                     continue
                 ordered = sorted(artifacts, key=lambda artifact: artifact.logical_path)
                 compacted_all: List[Artifact] = []
-                for start in range(0, len(ordered), max(1, max_files_per_shard)):
+                final_archive = _final_archive_path(root, subdir)
+                if final_archive.resolve() in {
+                    path.resolve() for path in referenced_shards
+                }:
                     generation = store._next_generation()
                     zip_path, compacted = _compact_artifact_chunk(
-                        archive_root,
+                        payload_root,
                         subdir,
-                        ordered[start : start + max(1, max_files_per_shard)],
+                        ordered,
                         mode,
                         generation,
                         compression=compression,
                         compression_level=compression_level,
+                        destination_path=final_archive,
                     )
                     created.append(zip_path)
                     compacted_all.extend(compacted)
+                else:
+                    for start in range(0, len(ordered), max(1, max_files_per_shard)):
+                        generation = store._next_generation()
+                        zip_path, compacted = _compact_artifact_chunk(
+                            payload_root,
+                            subdir,
+                            ordered[start : start + max(1, max_files_per_shard)],
+                            mode,
+                            generation,
+                            compression=compression,
+                            compression_level=compression_level,
+                        )
+                        created.append(zip_path)
+                        compacted_all.extend(compacted)
                 updated_subdir = {
                     artifact.logical_path: artifact
                     for artifact in compacted_all
@@ -4537,10 +4729,317 @@ def compact_archives(
                     for artifact in updated_subdir.values()
                     if artifact.zip_path is not None
                 }
-                for zip_path in sorted((archive_root / subdir).glob("*.zip")):
-                    if zip_path.resolve() not in referenced_paths:
-                        zip_path.unlink()
+                _remove_unreferenced_subdir_archives(
+                    root,
+                    payload_root,
+                    subdir,
+                    referenced_paths,
+                )
             return [path for path in created if path.is_file()]
+
+
+def _write_archive_status(root: Path, store: Optional[GeneFamilyOutputStore] = None) -> Path:
+    root = Path(root).resolve()
+    store = store or GeneFamilyOutputStore(root)
+    rows: List[Tuple[str, str, int, int, int, str]] = []
+    with producer_read_lock(store.archive_root):
+        store._refresh_if_index_changed()
+        for subdir in store._logical_subdirs_unlocked():
+            artifacts = store._load_subdir_artifacts(subdir)
+            live_dir = root / subdir
+            live_files = sum(
+                1
+                for path in live_dir.iterdir()
+                if path.is_file() and not path.is_symlink() and not path.name.startswith(".")
+            ) if live_dir.is_dir() and not live_dir.is_symlink() else 0
+            zip_paths = sorted(
+                {
+                    artifact.zip_path.resolve()
+                    for artifact in artifacts.values()
+                    if artifact.zip_path is not None
+                }
+            )
+            final_path = _final_archive_path(root, subdir).resolve()
+            if zip_paths and set(zip_paths) == {final_path}:
+                storage = "finalized"
+            elif zip_paths and final_path in zip_paths:
+                storage = "base+parts"
+            elif zip_paths:
+                storage = "parts"
+            else:
+                storage = "raw"
+            location = ",".join(
+                path.relative_to(root).as_posix() for path in zip_paths
+            )
+            rows.append(
+                (subdir, storage, live_files, len(artifacts), len(zip_paths), location)
+            )
+    status_path = root / "ARCHIVE_STATUS.tsv"
+    temporary = status_path.with_name(
+        f".{status_path.name}.partial.{os.getpid()}.{uuid.uuid4().hex}"
+    )
+    try:
+        with temporary.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(
+                "logical_subdirectory\tstorage\tlive_files\tarchived_files\tzip_files\tlocation\n"
+            )
+            for row in rows:
+                handle.write("\t".join(str(value) for value in row) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, status_path)
+        _fsync_directory(root)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return status_path
+
+
+def _remove_unreferenced_subdir_archives(
+    root: Path,
+    payload_root: Path,
+    subdir: str,
+    referenced: Set[Path],
+) -> None:
+    candidates = list((payload_root / subdir).glob("*.zip"))
+    final_path = _final_archive_path(root, subdir)
+    if final_path.is_file() and _zip_has_genegalleon_manifest(final_path):
+        candidates.append(final_path)
+    for path in sorted(set(candidates)):
+        if path.resolve() not in referenced:
+            path.unlink()
+    shard_dir = payload_root / subdir
+    try:
+        if shard_dir.is_dir() and not any(shard_dir.iterdir()):
+            shard_dir.rmdir()
+    except OSError:
+        pass
+    try:
+        if payload_root.is_dir() and not any(payload_root.iterdir()):
+            payload_root.rmdir()
+    except OSError:
+        pass
+
+
+def _finalize_subdirs_locked(
+    root: Path,
+    mode: str,
+    subdirs: Optional[Iterable[str]] = None,
+    *,
+    compression: str = "adaptive",
+    compression_level: int = 6,
+) -> List[Path]:
+    root = Path(root).resolve()
+    payload_root = _archive_payload_root(root)
+    store = GeneFamilyOutputStore(root)
+    _assert_archive_mode(store, mode)
+    catalog = store._load_index_catalog()
+    archived_subdirs = (
+        sorted(str(value) for value in catalog["subdirs"])
+        if catalog is not None
+        else (
+            store._load_archives()
+            or sorted({artifact.subdir for artifact in store._archived.values()})
+        )
+    )
+    selected = (
+        sorted(set(str(value) for value in subdirs))
+        if subdirs is not None
+        else archived_subdirs
+    )
+    created: List[Path] = []
+    for subdir in selected:
+        _safe_logical_path(subdir, "__archive__")
+        live_dir = root / subdir
+        live_files = [
+            path
+            for path in sorted(live_dir.iterdir())
+            if path.is_file() and not path.is_symlink() and not path.name.startswith(".")
+        ] if live_dir.is_dir() and not live_dir.is_symlink() else []
+        if live_files:
+            raise ArchiveStoreError(
+                f"Cannot finalize {subdir} while live output files remain: "
+                + ", ".join(str(path) for path in live_files[:10])
+            )
+        artifacts = list(store._load_subdir_artifacts(subdir).values())
+        if not artifacts:
+            continue
+        final_path = _final_archive_path(root, subdir)
+        referenced_before = {
+            artifact.zip_path.resolve()
+            for artifact in artifacts
+            if artifact.zip_path is not None
+        }
+        if referenced_before == {final_path.resolve()}:
+            continue
+        generation = store._next_generation()
+        _, finalized = _compact_artifact_chunk(
+            payload_root,
+            subdir,
+            sorted(artifacts, key=lambda artifact: artifact.logical_path),
+            mode,
+            generation,
+            compression=compression,
+            compression_level=compression_level,
+            destination_path=final_path,
+        )
+        updated = {artifact.logical_path: artifact for artifact in finalized}
+        store._merge_index_subdirs({subdir: updated})
+        referenced = {
+            artifact.zip_path.resolve()
+            for artifact in updated.values()
+            if artifact.zip_path is not None
+        }
+        _remove_unreferenced_subdir_archives(
+            root,
+            payload_root,
+            subdir,
+            referenced,
+        )
+        created.append(final_path)
+    return created
+
+
+def finalize_archives(
+    root: Path,
+    mode: str,
+    family_ids: Sequence[str],
+    *,
+    subdirs: Optional[Iterable[str]] = None,
+    nonblocking: bool = False,
+    compression: str = "adaptive",
+    compression_level: int = 6,
+) -> List[Path]:
+    root = Path(root).resolve()
+    archive_root = _archive_state_root(root)
+    if not archive_root.is_dir():
+        return []
+    finalized: List[Path] = []
+    with lock_available_family_ids(
+        archive_root,
+        family_ids,
+        nonblocking=nonblocking,
+    ) as lockable_family_ids:
+        if set(lockable_family_ids) != set(family_ids):
+            return []
+        with producer_quiescence_lock(
+            archive_root,
+            nonblocking=nonblocking,
+        ) as producers_idle:
+            if not producers_idle:
+                return []
+            with archive_lock(archive_root, nonblocking=nonblocking) as acquired:
+                if not acquired:
+                    return []
+                _cleanup_partial_archives(_archive_payload_root(root))
+                finalized = _finalize_subdirs_locked(
+                    root,
+                    mode,
+                    subdirs,
+                    compression=compression,
+                    compression_level=compression_level,
+                )
+    _write_archive_status(root)
+    return finalized
+
+
+def migrate_archive_layout(root: Path) -> List[Tuple[Path, Path]]:
+    """Move legacy mixed metadata/payload stores into the visible layout."""
+
+    root = Path(root).resolve()
+    legacy_root = root / LEGACY_ARCHIVE_DIR_NAME
+    state_root = root / STORE_DIR_NAME
+    payload_root = root / ACTIVE_ARCHIVE_DIR_NAME
+    if legacy_root.is_symlink() or state_root.is_symlink() or payload_root.is_symlink():
+        raise ArchiveStoreError("Symlinked archive layout roots are not supported")
+    if legacy_root.exists() and state_root.exists():
+        raise ArchiveStoreError(
+            f"Both legacy and current archive metadata roots exist: {legacy_root}, {state_root}"
+        )
+    migrated_legacy = legacy_root.is_dir()
+    if migrated_legacy:
+        legacy_store = GeneFamilyOutputStore(root)
+        legacy_store.verify()
+        with all_family_bucket_locks(legacy_root), producer_quiescence_lock(
+            legacy_root
+        ) as readers_idle:
+            if not readers_idle:
+                raise ArchiveStoreError("Failed to acquire the archive maintenance lock")
+            with archive_lock(legacy_root):
+                os.replace(legacy_root, state_root)
+                _fsync_directory(root)
+    if not state_root.is_dir():
+        return []
+
+    embedded_zip_paths = [
+        path
+        for directory in state_root.iterdir()
+        if directory.is_dir() and not directory.is_symlink()
+        for path in directory.glob("*.zip")
+    ]
+    if not migrated_legacy and not embedded_zip_paths:
+        _write_archive_readme(root)
+        _write_archive_status(root)
+        return []
+
+    payload_root.mkdir(parents=True, exist_ok=True)
+    moved: List[Tuple[Path, Path]] = []
+    marker = state_root / INDEX_UPDATE_FILE
+    if not marker.exists():
+        marker.write_text(
+            json.dumps(
+                {
+                    "schema_version": INDEX_SCHEMA_VERSION,
+                    "pid": os.getpid(),
+                    "hostname": os.uname().nodename,
+                    "created_ns": time.time_ns(),
+                    "layout_migration": True,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        _fsync_directory(state_root)
+    for source_dir in sorted(state_root.iterdir()):
+        if not source_dir.is_dir() or source_dir.is_symlink():
+            continue
+        zip_paths = sorted(source_dir.glob("*.zip"))
+        if not zip_paths:
+            continue
+        destination_dir = payload_root / source_dir.name
+        if destination_dir.exists():
+            if not destination_dir.is_dir() or destination_dir.is_symlink():
+                raise ArchiveStoreError(
+                    f"Invalid visible archive directory: {destination_dir}"
+                )
+        else:
+            destination_dir.mkdir(parents=True)
+        for source_path in zip_paths:
+            with zipfile.ZipFile(source_path, "r") as archive:
+                manifest = json.loads(archive.read(MANIFEST_MEMBER))
+            generation = int(manifest["generation"])
+            kind = "pack" if source_path.name.startswith("pack-") else "part"
+            destination_path = destination_dir / (
+                f"{source_dir.name}.{kind}-{generation:06d}.zip"
+            )
+            if destination_path.exists():
+                raise ArchiveStoreError(
+                    f"Visible archive destination already exists: {destination_path}"
+                )
+            os.replace(source_path, destination_path)
+            moved.append((source_path, destination_path))
+        try:
+            source_dir.rmdir()
+        except OSError:
+            pass
+        _fsync_directory(destination_dir)
+    _fsync_directory(payload_root)
+    repair_archive_index(root, remove_orphans=False)
+    _write_archive_readme(root)
+    _write_archive_status(root)
+    return moved
 
 
 def repair_archive_index(
@@ -4549,19 +5048,20 @@ def repair_archive_index(
     remove_orphans: bool = False,
 ) -> List[Path]:
     root = Path(root).resolve()
-    archive_root = root / ARCHIVE_DIR_NAME
-    if not archive_root.is_dir():
+    archive_root = _archive_state_root(root)
+    payload_root = _archive_payload_root(root)
+    if not archive_root.is_dir() and not _physical_archive_paths(root):
         return []
     with producer_quiescence_lock(archive_root) as readers_idle:
         if not readers_idle:
             raise ArchiveStoreError("Failed to acquire the archive maintenance lock")
         with archive_lock(archive_root):
-            _cleanup_partial_archives(archive_root)
+            _cleanup_partial_archives(payload_root)
             store = GeneFamilyOutputStore(root)
             rebuilt: Dict[str, Artifact] = {}
             rebuilt_ranks: Dict[str, Tuple[int, int, str]] = {}
             mode_by_path: Dict[Path, str] = {}
-            physical_paths = sorted(archive_root.glob("*/*.zip"))
+            physical_paths = _physical_archive_paths(root)
             for zip_path in physical_paths:
                 if zip_path.is_symlink() or zip_path.parent.is_symlink():
                     raise ArchiveStoreError(
@@ -4675,7 +5175,8 @@ def purge_archives(
     compression_level: int = 6,
 ) -> List[Path]:
     root = Path(root).resolve()
-    archive_root = root / ARCHIVE_DIR_NAME
+    archive_root = _archive_state_root(root)
+    payload_root = _archive_payload_root(root)
     if not archive_root.is_dir():
         return []
     # Finish one-time migration before taking the maintenance lock below.
@@ -4720,7 +5221,7 @@ def purge_archives(
                 for start in range(0, len(ordered), max(1, max_files_per_shard)):
                     generation = store._next_generation()
                     zip_path, compacted = _compact_artifact_chunk(
-                        archive_root,
+                        payload_root,
                         subdir,
                         ordered[start : start + max(1, max_files_per_shard)],
                         mode,
@@ -4737,10 +5238,14 @@ def purge_archives(
                     for artifact in remaining_subdir.values()
                     if artifact.zip_path is not None
                 }
-                for path in sorted((archive_root / subdir).glob("*.zip")):
+                physical_subdir_paths = list((payload_root / subdir).glob("*.zip"))
+                final_path = _final_archive_path(root, subdir)
+                if final_path.is_file() and _zip_has_genegalleon_manifest(final_path):
+                    physical_subdir_paths.append(final_path)
+                for path in sorted(physical_subdir_paths):
                     if path.resolve() not in referenced:
                         path.unlink()
-                _fsync_directory(archive_root / subdir)
+                _fsync_directory(payload_root / subdir)
             tombstone_path = archive_root / TOMBSTONE_FILE
             if tombstone_path.is_file() and not tombstone_path.is_symlink():
                 tombstone_path.unlink()
@@ -4858,7 +5363,7 @@ def cleanup_materialization_receipt(
             yield True
         else:
             with family_bucket_lock(
-                root / ARCHIVE_DIR_NAME,
+                _archive_state_root(root),
                 family_id,
                 exclusive=True,
                 nonblocking=nonblocking,
@@ -4929,7 +5434,7 @@ def cleanup_stale_tmp(
         else None
     )
     removed: List[Path] = []
-    archive_root = root / ARCHIVE_DIR_NAME
+    archive_root = _archive_state_root(root)
     task_dirs = [
         candidate
         for candidate in sorted(tmp_root.iterdir())
@@ -5170,6 +5675,22 @@ def build_parser() -> argparse.ArgumentParser:
     compact_parser.add_argument("--nonblocking", action="store_true")
     add_zip_write_options(compact_parser)
 
+    finalize_parser = subparsers.add_parser(
+        "finalize",
+        help="Consolidate each selected logical subdirectory into <subdirectory>.zip.",
+    )
+    add_root(finalize_parser)
+    add_family_context(finalize_parser)
+    finalize_parser.add_argument("--subdirs")
+    finalize_parser.add_argument("--nonblocking", action="store_true")
+    add_zip_write_options(finalize_parser)
+
+    migrate_layout_parser = subparsers.add_parser(
+        "migrate-layout",
+        help="Move a legacy .gg_archives store into the visible ZIP layout.",
+    )
+    add_root(migrate_layout_parser)
+
     repair_parser = subparsers.add_parser("repair")
     add_root(repair_parser)
     repair_parser.add_argument("--remove-orphans", action="store_true")
@@ -5270,6 +5791,10 @@ def run_cli(args: argparse.Namespace) -> int:
         for key, value in optimize_archive_metadata(root).items():
             print(f"{key}\t{value}")
         return 0
+    if args.command == "migrate-layout":
+        for old_path, new_path in migrate_archive_layout(root):
+            print(f"moved\t{old_path}\t{new_path}")
+        return 0
     if args.command == "archive-completed":
         _validate_zip_write_options(args)
         mode = _resolve_cli_mode(args, root)
@@ -5295,6 +5820,20 @@ def run_cli(args: argparse.Namespace) -> int:
         )
         for zip_path, removed in results:
             print(f"archived\t{removed}\t{zip_path}")
+        _write_archive_status(root)
+        if mode == "orthogroup":
+            completion_store = GeneFamilyOutputStore(root)
+            if completed_family_ids(completion_store, family_ids) == set(family_ids):
+                finalized = finalize_archives(
+                    root,
+                    mode,
+                    family_ids,
+                    nonblocking=args.nonblocking,
+                    compression=args.compression,
+                    compression_level=args.compression_level,
+                )
+                for zip_path in finalized:
+                    print(f"finalized\t{zip_path}")
         return 0
     if args.command == "archive-family":
         _validate_zip_write_options(args)
@@ -5338,6 +5877,7 @@ def run_cli(args: argparse.Namespace) -> int:
         )
         for zip_path, removed in results:
             print(f"archived-partial\t{removed}\t{zip_path}")
+        _write_archive_status(root)
         return 0
     if args.command in {"convert-storage", "storage-status"}:
         if args.command == "convert-storage":
@@ -5377,7 +5917,7 @@ def run_cli(args: argparse.Namespace) -> int:
             )
         else:
             family_ids = []
-            if mode is not None and any((root / ARCHIVE_DIR_NAME).glob("*/*.zip")):
+            if mode is not None and _physical_archive_paths(root):
                 archived_store = GeneFamilyOutputStore(root)
                 archived_store._load_archives()
                 family_ids = sorted(
@@ -5482,6 +6022,26 @@ def run_cli(args: argparse.Namespace) -> int:
         ):
             print(f"removed-tmp\t{removed_path}")
         return 0
+    if args.command == "finalize":
+        _validate_zip_write_options(args)
+        mode = _resolve_cli_mode(args, root)
+        assert mode is not None
+        family_ids, _ = family_context(
+            mode,
+            query_dir=args.query_dir,
+            genecount=args.genecount,
+        )
+        for zip_path in finalize_archives(
+            root,
+            mode,
+            family_ids,
+            subdirs=_parse_subdirs(args.subdirs),
+            nonblocking=args.nonblocking,
+            compression=args.compression,
+            compression_level=args.compression_level,
+        ):
+            print(f"finalized\t{zip_path}")
+        return 0
     if args.command == "repair":
         orphaned = repair_archive_index(
             root,
@@ -5492,7 +6052,7 @@ def run_cli(args: argparse.Namespace) -> int:
             print(f"{action}\t{path}")
         return 0
     if args.command == "lock-path":
-        print(family_lock_path(root / ARCHIVE_DIR_NAME, args.family_id))
+        print(family_lock_path(_archive_state_root(root), args.family_id))
         return 0
 
     family_filter = (
@@ -5652,6 +6212,7 @@ def run_cli(args: argparse.Namespace) -> int:
             compression_level=args.compression_level,
         ):
             print(f"compacted\t{zip_path}")
+        _write_archive_status(root)
         return 0
     if args.command == "purge":
         _validate_zip_write_options(args)
@@ -5675,6 +6236,7 @@ def run_cli(args: argparse.Namespace) -> int:
             compression_level=args.compression_level,
         ):
             print(f"purged\t{zip_path}")
+        _write_archive_status(root)
         return 0
     if args.command in {"mark-running", "mark-complete", "mark-failed"}:
         store.mark_family_state(

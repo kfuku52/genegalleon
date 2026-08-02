@@ -1097,16 +1097,22 @@ if [[ "${mode_gene_evolution}" == "query2family" ]]; then
 else
   gene_family_store_context_args+=(--genecount "${file_orthogroup_genecount_selected}")
 fi
-gene_family_storage_conversion_marker="${dir_output_active}/.gg_archives/storage-conversion.pending"
-if [[ -e "${gene_family_storage_conversion_marker}" || -L "${gene_family_storage_conversion_marker}" ]]; then
-  echo "Gene-family storage conversion is in progress or needs to be resumed: ${gene_family_storage_conversion_marker}" >&2
-  echo "Refusing to start gg_gene_evolution until convert-storage finishes." >&2
-  exit 1
-fi
+for gene_family_storage_conversion_marker in \
+  "${dir_output_active}/.gg_store/storage-conversion.pending" \
+  "${dir_output_active}/.gg_archives/storage-conversion.pending"
+do
+  if [[ -e "${gene_family_storage_conversion_marker}" || -L "${gene_family_storage_conversion_marker}" ]]; then
+    echo "Gene-family storage conversion is in progress or needs to be resumed: ${gene_family_storage_conversion_marker}" >&2
+    echo "Refusing to start gg_gene_evolution until convert-storage finishes." >&2
+    exit 1
+  fi
+done
 if [[
   "${gene_family_output_storage}" == "files"
-  && -d "${dir_output_active}/.gg_archives"
-  && -n "$(find "${dir_output_active}/.gg_archives" -mindepth 2 -maxdepth 2 -type f -name '*.zip' -print -quit 2>/dev/null)"
+  && (
+    -d "${dir_output_active}/.gg_store"
+    || -d "${dir_output_active}/.gg_archives"
+  )
 ]]; then
   echo "Warning: ZIP-backed artifacts exist below ${dir_output_active}, but gene_family_output_storage=${gene_family_output_storage}." >&2
   echo "The family can resume, but new outputs will remain raw; use storage mode zip to return them to ZIP." >&2
@@ -1129,7 +1135,11 @@ if [[ -e "${gene_family_task_tmp_dir}" && ${delete_preexisting_tmp_dir} -eq 1 ]]
   fi
   rm -rf -- "${gene_family_task_tmp_dir}"
 fi
-if [[ "${gene_family_output_storage}" == "zip" || -d "${dir_output_active}/.gg_archives" ]]; then
+if [[
+  "${gene_family_output_storage}" == "zip"
+  || -d "${dir_output_active}/.gg_store"
+  || -d "${dir_output_active}/.gg_archives"
+]]; then
   gene_family_lock_path=$(python "${gene_family_store_script}" lock-path \
     --root "${dir_output_active}" \
     --family-id "${og_id}")
@@ -1342,7 +1352,7 @@ if [[ ! -e "${dir_tmp}" ]]; then
   echo "Making ${dir_tmp}"
   mkdir -p "${dir_tmp}"
 fi
-if [[ -d "${dir_output_active}/.gg_archives" ]]; then
+if [[ -d "${dir_output_active}/.gg_store" || -d "${dir_output_active}/.gg_archives" ]]; then
   materialize_args=(
     materialize-family
     "${gene_family_store_context_args[@]}"

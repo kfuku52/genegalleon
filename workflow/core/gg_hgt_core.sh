@@ -325,7 +325,7 @@ if [[ ${run_hgt_plot} -eq 1 ]]; then
     dir_og_input_root="${dir_orthogroup}"
     dir_hgt_materialized="${hgt_materialization_run_dir}/${og_id}"
     hgt_current_materialized=""
-    if [[ -d "${dir_orthogroup}/.gg_archives" ]]; then
+    if [[ -d "${dir_orthogroup}/.gg_store" || -d "${dir_orthogroup}/.gg_archives" ]]; then
       hgt_current_materialized="${dir_hgt_materialized}"
       materialize_args=(
         materialize-family

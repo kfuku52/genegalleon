@@ -80,12 +80,17 @@ file_orthogroup_genecount_selected="${gg_workspace_output_dir}/orthofinder/Ortho
 
 assert_gene_family_storage_ready() {
   local output_root=$1
-  local conversion_marker="${output_root}/.gg_archives/storage-conversion.pending"
-  if [[ -e "${conversion_marker}" || -L "${conversion_marker}" ]]; then
-    echo "Gene-family storage conversion is in progress or needs to be resumed: ${conversion_marker}" >&2
-    echo "Refusing to create a progress summary from a converting store." >&2
-    exit 1
-  fi
+  local conversion_marker
+  for conversion_marker in \
+    "${output_root}/.gg_store/storage-conversion.pending" \
+    "${output_root}/.gg_archives/storage-conversion.pending"
+  do
+    if [[ -e "${conversion_marker}" || -L "${conversion_marker}" ]]; then
+      echo "Gene-family storage conversion is in progress or needs to be resumed: ${conversion_marker}" >&2
+      echo "Refusing to create a progress summary from a converting store." >&2
+      exit 1
+    fi
+  done
 }
 
 cleanup_gene_family_tmp_if_enabled() {

@@ -96,9 +96,9 @@ family is skipped while completed families in other buckets can still be
 archived. A separate reader-maintenance lock prevents a ZIP shard from being
 replaced while a downstream reader has it open.
 
-The bounded metadata cost is at most 16 family-lock files, 16 state-lock
-files, 256 family-index JSON files, and 256 state-index JSON files, plus a
-small number of global/per-subdirectory files and ZIP shards. Existing stores
+The bounded internal metadata under `.gg_store/` costs at most 16 family-lock
+files, 16 state-lock files, 256 family-index JSON files, and 256 state-index
+JSON files, plus a small number of global/per-subdirectory files. Existing stores
 created by an older build can remove unused 256-way lock files with
 `optimize-metadata` after every job using that output root has stopped.
 
@@ -132,14 +132,28 @@ can obtain the affected family lock. It also retains at most
 individual limit to `0` to disable it. Cleanup recognizes only task directory
 names beginning with a numeric array index and an underscore.
 
-Archives are ordinary ZIP files under
-`<gene-family-root>/.gg_archives/<subdirectory>/{part,pack}-*.zip`. Each member keeps
-its logical `<subdirectory>/<filename>` path. GeneGalleon summaries, database
+Archives are ordinary, visible ZIP files. While a run is active, immutable
+parts are stored under
+`<gene-family-root>/archives/<subdirectory>/<subdirectory>.part-NNNNNN.zip`.
+Once an orthogroup catalog is fully complete and no family task holds a lock,
+progress-summary maintenance consolidates each logical output set once into
+`<gene-family-root>/<subdirectory>.zip` and removes its parts. Raw-to-ZIP
+conversion also produces this finalized layout. Each member keeps its logical
+`<subdirectory>/<filename>` path. GeneGalleon summaries, database
 generation, HGT plots, csubst site plots, and orthogroup-based GRAmPA read
 these archives transparently or materialize only the family inputs required
 by an external tool. HGT and csubst materialization directories carry
 per-run locks; after SIGKILL, a later invocation reclaims only run directories
 whose owner lock is no longer held.
+
+`query2family` remains open for later inputs. A finalized
+`<subdirectory>.zip` is an immutable base; newly completed queries go into
+visible parts below `archives/`. The logical reader overlays the parts on the
+base, and an explicit `finalize` safely rebuilds the single ZIP when desired.
+GeneGalleon writes `README_GENE_FAMILY_OUTPUTS.txt` and `ARCHIVE_STATUS.tsv`
+at the output root so a user browsing with Finder, FileZilla, or `ls` can see
+where each logical output set is stored. Only locks, indexes, tombstones, and
+transaction markers remain hidden under `.gg_store/`.
 
 The default `adaptive` compression deflates ordinary text and sequence files
 while storing already compressed `.gz`, `.zip`, image, and PDF members without
@@ -155,7 +169,7 @@ unbounded burst of metadata and read traffic on a shared filesystem.
 
 ### Adding, replacing, and deleting files manually
 
-Do not edit `part-*.zip` in place. The archive manifest intentionally detects
+Do not edit `*.zip` in place. The archive manifest intentionally detects
 direct ZIP edits as an error.
 
 To add or replace an artifact, put it at its historical path. A live file
@@ -207,6 +221,19 @@ bash workflow/gg_gene_family_archive.sh restore \
   --family-id 2_WOX \
   --path stat_branch/2_WOX_stat.branch.tsv
 ```
+
+Consolidate the current base and parts into one ordinary ZIP per logical
+subdirectory only while the affected gene-family jobs are stopped:
+
+```bash
+bash workflow/gg_gene_family_archive.sh finalize \
+  --root workspace/output/query2family \
+  --mode query2family \
+  --query-dir workspace/input/query_gene
+```
+
+Finalization refuses to replace an unrelated pre-existing
+`<subdirectory>.zip`; move or rename that file explicitly after inspecting it.
 
 Verify every archive member with CRC and SHA-256 checks after copying a run:
 
@@ -293,6 +320,25 @@ bash workflow/gg_gene_family_archive.sh convert-storage \
 ```
 
 The command reads but never modifies `workspace/output/orthofinder/`.
+
+Stores created by the first experimental ZIP implementation can be moved out
+of the hidden mixed `.gg_archives/` layout without changing their logical
+contents. Stop every job using the output root, then run:
+
+```bash
+bash workflow/gg_gene_family_archive.sh migrate-layout \
+  --root workspace/output/orthogroup
+
+bash workflow/gg_gene_family_archive.sh finalize \
+  --root workspace/output/orthogroup \
+  --mode orthogroup \
+  --genecount workspace/output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv
+```
+
+The migration moves ZIP payload into visible `archives/`, moves internal
+metadata into `.gg_store/`, rebuilds indexes from verified manifests, and
+writes the user-facing README and status table. `finalize` then creates the
+single `<subdirectory>.zip` files.
 
 To restore the current logical view to ordinary files, first inspect the
 uncompressed byte and file counts and then run the conversion:
