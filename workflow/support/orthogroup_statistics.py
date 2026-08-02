@@ -1323,7 +1323,14 @@ def main():
         df_tmp.loc[:,'stitle'] = df_tmp.loc[:,'stitle'].str.replace('|',',', 1, regex=False)
         df_tmp.loc[:, 'stitle'] = df_tmp['stitle'].astype(str)
         df_tmp = df_tmp.groupby('qacc', sort=False)['stitle'].agg('; '.join).rename('pfam_domain')
-        node_left_merge_tables.append(df_tmp.reset_index().rename(columns={'qacc': 'node_name'}))
+        if df_tmp.empty:
+            # RPS-BLAST ran successfully, but no sequence had a significant
+            # Pfam hit. Keep the output schema consistent with orthogroups
+            # that do have hits so database generation can represent this as
+            # NULL instead of treating the column as missing.
+            df_branch.loc[:, 'pfam_domain'] = numpy.nan
+        else:
+            node_left_merge_tables.append(df_tmp.reset_index().rename(columns={'qacc': 'node_name'}))
     if (os.path.exists(params['fimo'])):
         df_tmp = load_fimo_hits(params['fimo'])
         if not df_tmp.empty:

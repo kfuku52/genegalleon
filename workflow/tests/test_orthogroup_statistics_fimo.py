@@ -1,7 +1,11 @@
+import os
+import subprocess
 import sys
 import types
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+
+import pandas
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "orthogroup_statistics.py"
 
@@ -19,6 +23,55 @@ def load_module():
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def write_kftools_stub(stub_root):
+    package_dir = stub_root / "kftools"
+    package_dir.mkdir(parents=True)
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    (package_dir / "kfog.py").write_text("", encoding="utf-8")
+
+
+def test_no_significant_pfam_hits_preserve_branch_table_schema(tmp_path):
+    rooted_tree = tmp_path / "rooted.nwk"
+    rooted_tree.write_text("(Species_A_gene1:1,Species_B_gene2:1)n0;\n", encoding="utf-8")
+    rpsblast = tmp_path / "rpsblast.tsv"
+    pandas.DataFrame(
+        [
+            {"qacc": "Species_A_gene1", "evalue": float("nan"), "stitle": None},
+            {"qacc": "Species_B_gene2", "evalue": float("nan"), "stitle": None},
+        ]
+    ).to_csv(rpsblast, sep="\t", index=False)
+
+    stub_root = tmp_path / "stub_packages"
+    write_kftools_stub(stub_root)
+    env = os.environ.copy()
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{stub_root}{os.pathsep}{existing_pythonpath}"
+        if existing_pythonpath
+        else str(stub_root)
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--rooted_tree",
+            str(rooted_tree),
+            "--rpsblast",
+            str(rpsblast),
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    branch_table = pandas.read_csv(tmp_path / "orthogroup.branch.tsv", sep="\t")
+    assert "pfam_domain" in branch_table.columns
+    assert branch_table["pfam_domain"].isna().all()
 
 
 def test_load_fimo_hits_parses_modern_fimo_tsv(tmp_path):
