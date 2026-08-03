@@ -141,9 +141,15 @@ gg_prepare_cmd_runtime() {
 }
 
 gg_initialize_conda_shell() {
-	if [[ "${GG_CONDA_SHELL_INITIALIZED:-0}" -eq 1 ]]; then
+	# Conda shell functions are local to the current Bash process. Keep the
+	# initialization marker shell-local too, and do not trust a marker inherited
+	# from a parent process unless the function itself is also present.
+	export -n GG_CONDA_SHELL_INITIALIZED 2>/dev/null || true
+	if declare -F conda >/dev/null 2>&1; then
+		GG_CONDA_SHELL_INITIALIZED=1
 		return 0
 	fi
+	GG_CONDA_SHELL_INITIALIZED=0
 	if command -v micromamba >/dev/null 2>&1; then
 		export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/opt/conda}"
 		eval "$(micromamba shell hook --shell bash)"
@@ -152,24 +158,19 @@ gg_initialize_conda_shell() {
 				micromamba "$@"
 			}
 		fi
-		GG_CONDA_SHELL_INITIALIZED=1
-		export GG_CONDA_SHELL_INITIALIZED
-		return 0
-	fi
-	if [[ -f /opt/conda/etc/profile.d/conda.sh ]]; then
+	elif [[ -f /opt/conda/etc/profile.d/conda.sh ]]; then
 		# shellcheck disable=SC1091
 		source /opt/conda/etc/profile.d/conda.sh
-		GG_CONDA_SHELL_INITIALIZED=1
-		export GG_CONDA_SHELL_INITIALIZED
-		return 0
-	fi
-	if command -v conda >/dev/null 2>&1; then
+	elif command -v conda >/dev/null 2>&1; then
 		eval "$(conda shell.bash hook)"
-		GG_CONDA_SHELL_INITIALIZED=1
-		export GG_CONDA_SHELL_INITIALIZED
-		return 0
+	else
+		return 1
 	fi
-	return 1
+	if ! command -v conda >/dev/null 2>&1; then
+		return 1
+	fi
+	GG_CONDA_SHELL_INITIALIZED=1
+	return 0
 }
 
 gg_activate_conda_env() {
