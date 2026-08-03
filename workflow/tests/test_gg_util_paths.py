@@ -51,6 +51,21 @@ def test_forward_config_vars_includes_gene_evolution_csubst_nonsyn_recode(tmp_pa
     assert completed.stdout.strip() == "csubst_nonsyn_recode=dayhoff6"
 
 
+def test_forward_config_vars_includes_binary_foreground_resolver_option(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "csubst_resolve_binary_foreground=yes; "
+        "forward_config_vars_to_container_env gg_gene_evolution_entrypoint.sh; "
+        'printf "resolver=%s\\n" '
+        '"${SINGULARITYENV_csubst_resolve_binary_foreground:-}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "resolver=yes"
+
+
 def test_forward_config_vars_includes_gene_evolution_csubst_scan_options(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "

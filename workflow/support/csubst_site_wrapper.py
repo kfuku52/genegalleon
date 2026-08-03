@@ -586,10 +586,24 @@ def skip_lower_order(cb_passed, arity, trait, already_analyzed_in_greater_K):
     print(f'K = {arity}: Skipped branch combinations that are subsets of already analyzed higher-order convergence: {num_before_filtering} -> {num_after_filtering}', flush=True)
     return cb_passed, already_analyzed_in_greater_K
 
+def is_foreground_trait_value(value):
+    if pandas.isna(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip()
+    if text == '' or text.lower() in {'na', 'nan', 'none', 'null'}:
+        return False
+    try:
+        return float(text) != 0
+    except ValueError:
+        return True
+
+
 def generate_trait_colors(df_trait, trait_names):
     for trait_name in trait_names:
         df_trait_color = df_trait.loc[:,['species', trait_name]]
-        is_foreground = (df_trait_color[trait_name]==1)
+        is_foreground = df_trait_color[trait_name].map(is_foreground_trait_value)
         df_trait_color.columns = ['species', 'color']
         df_trait_color['color'] = 'black'
         df_trait_color.loc[is_foreground,'color'] = 'firebrick'

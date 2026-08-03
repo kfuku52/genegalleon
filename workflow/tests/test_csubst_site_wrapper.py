@@ -46,6 +46,22 @@ def test_get_matplotlib_imports_plotting_submodules():
     assert hasattr(matplotlib, "patches")
 
 
+def test_generate_trait_colors_marks_every_nonbackground_lineage_id(monkeypatch, tmp_path):
+    mod = load_module()
+    monkeypatch.chdir(tmp_path)
+    df_trait = pandas.DataFrame(
+        {
+            "species": ["sp0", "sp1", "sp2", "sp16", "sp_missing"],
+            "trait": [0, 1, 2, 16, None],
+        }
+    )
+
+    mod.generate_trait_colors(df_trait=df_trait, trait_names=["trait"])
+
+    colors = pandas.read_csv(tmp_path / "trait_trait.color.tsv", sep="\t")
+    assert colors["color"].tolist() == ["black", "firebrick", "firebrick", "firebrick", "black"]
+
+
 def test_extract_pdb_id_returns_none_for_missing_directory(tmp_path):
     extract_pdb_id = load_extract_pdb_id()
     missing = tmp_path / "missing"

@@ -182,6 +182,7 @@ csubst_cutoff_stat="OCNany2spe,2.0|omegaCany2spe,5.0" # CSUBST branch-statistic 
 csubst_max_combination=10000 # Maximum number of CSUBST combinations retained after filtering.
 csubst_fg_exclude_wg="no" # Exclude whole-genome duplication branches from CSUBST foregrounds.
 csubst_fg_stem_only="yes" # Restrict CSUBST foreground candidates to stem branches only.
+csubst_resolve_binary_foreground="${csubst_resolve_binary_foreground:-no}" # yes|no; assign distinct lineage IDs to disconnected foreground clades in 0/1 trait columns before CSUBST.
 csubst_nonsyn_recode="${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" # no|3di20|dayhoff6|sr6|kgb6|sr4|dayhoff9|dayhoff12|dayhoff15|dayhoff18|srchisq6|kgbauto6; optional amino-acid recoding scheme used for CSUBST nonsynonymous convergence tests.
 csubst_scan_unit_mode="${csubst_scan_unit_mode:-clade}" # lineage|stem|clade definition of independent foreground support units; clade follows the current CSUBST default.
 csubst_scan_match="${csubst_scan_match:-any2spe}" # CSUBST scan recurrent substitution pattern classes: any2spe by default, or comma-separated classes/all.

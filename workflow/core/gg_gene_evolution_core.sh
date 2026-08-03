@@ -411,6 +411,28 @@ with open(infile, "r", encoding="utf-8", errors="replace", newline="") as src, o
 PY
 }
 
+write_csubst_foreground_table() {
+  local input_tsv=$1
+  local output_tsv=$2
+  local resolved_tsv="${output_tsv}.binary-resolved.tsv"
+
+  if [[ "${csubst_resolve_binary_foreground}" != "yes" ]]; then
+    write_species_trait_foreground_regex_table "${input_tsv}" "${output_tsv}"
+    return 0
+  fi
+  if [[ ! -s "${species_tree_pruned}" ]]; then
+    echo "csubst_resolve_binary_foreground=yes requires the pruned species tree: ${species_tree_pruned}"
+    exit 1
+  fi
+
+  python "${gg_support_dir}/resolve_binary_trait_foregrounds.py" \
+    --input "${input_tsv}" \
+    --species-tree "${species_tree_pruned}" \
+    --output "${resolved_tsv}"
+  write_species_trait_foreground_regex_table "${resolved_tsv}" "${output_tsv}"
+  rm -f -- "${resolved_tsv}"
+}
+
 set_analysis_file() {
   local slot=$1
   local path=$2
@@ -747,6 +769,7 @@ mode_gene_evolution=$(echo "${mode_gene_evolution:-query2family}" | tr '[:upper:
 gene_evolution_profile=$(echo "${gene_evolution_profile:-default}" | tr '[:upper:]' '[:lower:]')
 input_sequence_mode=$(gg_normalize_input_sequence_mode "${input_sequence_mode}")
 csubst_nonsyn_recode=$(echo "${csubst_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
+csubst_resolve_binary_foreground=$(echo "${csubst_resolve_binary_foreground:-no}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_unit_mode=$(echo "${csubst_scan_unit_mode:-clade}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_match=$(echo "${csubst_scan_match:-any2spe}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_min_event_pp="${csubst_scan_min_event_pp:-0.5}"
@@ -784,6 +807,15 @@ case "${csubst_nonsyn_recode}" in
   *)
     echo "Invalid csubst_nonsyn_recode: ${csubst_nonsyn_recode}"
     echo 'csubst_nonsyn_recode must be one of no, 3di20, dayhoff6, sr6, kgb6, sr4, dayhoff9, dayhoff12, dayhoff15, dayhoff18, srchisq6, kgbauto6. Exiting.'
+    exit 1
+    ;;
+esac
+case "${csubst_resolve_binary_foreground}" in
+  yes|no)
+    ;;
+  *)
+    echo "Invalid csubst_resolve_binary_foreground: ${csubst_resolve_binary_foreground}"
+    echo 'csubst_resolve_binary_foreground must be either "yes" or "no". Exiting.'
     exit 1
     ;;
 esac
@@ -3598,7 +3630,7 @@ if [[ (! -s "${file_og_csubst_b}" || ! -s "${file_og_csubst_cb_stats}") && ${run
       echo "Exiting."
       exit 1
     fi
-    write_species_trait_foreground_regex_table "${file_sp_trait}" "foreground.tsv"
+    write_csubst_foreground_table "${file_sp_trait}" "foreground.tsv"
     foreground_params=(--foreground foreground.tsv --fg_format 2)
   else
     echo 'Foreground specification file was not found. CSUBST will run without it.'
@@ -3699,7 +3731,7 @@ if [[ (! -s "${file_og_csubst_scan}" || ! -s "${file_og_csubst_scan_units}") && 
     echo "Exiting."
     exit 1
   fi
-  write_species_trait_foreground_regex_table "${file_sp_trait}" "foreground.tsv"
+  write_csubst_foreground_table "${file_sp_trait}" "foreground.tsv"
 
   if ! csubst scan -h >/dev/null 2>&1; then
     echo "csubst scan is unavailable in this runtime. Rebuild the GeneGalleon container with a csubst version that provides the scan subcommand."

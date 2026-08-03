@@ -292,6 +292,24 @@ analyses. Stage-specific `csubst_nonsyn_recode` or
 `csubst_site_nonsyn_recode` overrides still take priority
 when supplied for a single entrypoint run.
 
+## CSUBST binary foreground resolution
+
+Set the following opt-in option when a `species_trait.tsv` column uses only
+`0` and `1`, but disconnected foreground clades should be treated as distinct
+CSUBST lineages:
+
+```bash
+csubst_resolve_binary_foreground="yes"
+```
+
+The default is `no`. When enabled, GeneGalleon uses the pruned species tree to
+find maximal all-foreground clades and assigns them deterministic positive
+lineage IDs before both `csubst search` and `csubst scan`. Columns that already
+contain a value other than `0` or `1` are treated as manually numbered and are
+left unchanged. Missing or unlisted species are treated as background when
+clade boundaries are resolved. Summary PDF trait colors use every nonzero
+lineage ID as foreground, including IDs of `2` or greater.
+
 ## CSUBST scan
 
 `workflow/gg_gene_evolution_entrypoint.sh` also exposes `run_csubst_scan` for

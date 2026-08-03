@@ -64,6 +64,7 @@ csubst_fg_stem_only
 csubst_max_arity
 csubst_max_combination
 csubst_nonsyn_recode
+csubst_resolve_binary_foreground
 csubst_scan_match
 csubst_scan_min_event_pp
 csubst_scan_min_support

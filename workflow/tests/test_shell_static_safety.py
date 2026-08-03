@@ -2536,7 +2536,10 @@ def test_gene_evolution_core_builds_species_foreground_regexes_with_label_bounda
     assert "RANK_OR_QUALIFIER_TOKENS" in text
     assert 'return r"^{}_(?!(?:{})(?:\\.|_)).*"' in text
     assert "write_species_trait_foreground_regex_table species_trait_binary.tsv foreground.tsv" in text
-    assert 'write_species_trait_foreground_regex_table "${file_sp_trait}" "foreground.tsv"' in text
+    assert "write_csubst_foreground_table()" in text
+    assert 'write_csubst_foreground_table "${file_sp_trait}" "foreground.tsv"' in text
+    assert 'python "${gg_support_dir}/resolve_binary_trait_foregrounds.py"' in text
+    assert 'csubst_resolve_binary_foreground=$(echo "${csubst_resolve_binary_foreground:-no}"' in text
 
 
 def test_gene_evolution_core_anchors_query_ids_in_maxalign_keep_regex():
