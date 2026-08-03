@@ -169,8 +169,9 @@ def build_arg_parser():
         help=(
             "How to group transcript/CDS records into gene-level representatives. "
             "'strict' uses annotation hierarchy and identifier normalization only. "
-            "'rescue_overlap' also merges highly similar overlapping GFF-derived transcripts "
-            "when annotation gene IDs appear inconsistent."
+            "When both CDS and GFF are available, GFF transcript/gene aliases are used to group "
+            "the provided CDS records. 'rescue_overlap' also merges highly similar overlapping "
+            "GFF transcript models when annotation gene IDs appear inconsistent."
         ),
     )
     parser.add_argument(

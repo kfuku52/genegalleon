@@ -1205,6 +1205,207 @@ def test_build_formatted_cds_id_ensembl_uses_transcript_token_for_tie_breaks():
     )
 
 
+def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selection(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Arabidopsis_thaliana"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    cds_path = species_dir / "models.cds.fa"
+    gff_path = species_dir / "models.gff3"
+    species_summary = tmp_path / "gg_input_generation_species.tsv"
+    cds_path.write_text(
+        ">transcript_alpha\nATGAAATTT\n>transcript_beta\nATGAAACCCGGGTTT\n",
+        encoding="utf-8",
+    )
+    gff_path.write_text(
+        "\n".join(
+            [
+                "##gff-version 3",
+                "chr1\tsrc\tgene\t1\t30\t.\t+\t.\tID=gene_from_gff",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=transcript_alpha;Parent=gene_from_gff;longest=1",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds_alpha;Parent=transcript_alpha",
+                "chr1\tsrc\tmRNA\t16\t30\t.\t+\t.\tID=transcript_beta;Parent=gene_from_gff;longest=0",
+                "chr1\tsrc\tCDS\t16\t30\t.\t+\t0\tID=cds_beta;Parent=transcript_beta",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = next(out_cds.glob("*.fa.gz"))
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert text == ">Arabidopsis_thaliana_gene_from_gff\nATGAAACCCGGGTTT\n"
+
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert rows[0]["cds_grouping_source"] == "gff"
+    assert rows[0]["cds_gff_records_mapped"] == "2"
+    assert rows[0]["cds_gff_records_unmapped"] == "0"
+    audit_path = Path(rows[0]["cds_gff_grouping_audit_path"])
+    assert audit_path.exists()
+    with open(audit_path, "rt", encoding="utf-8", newline="") as handle:
+        audit_rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert [row["mapping_status"] for row in audit_rows] == ["mapped", "mapped"]
+    assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
+
+    longest = run_validate_longest_script(
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-summary",
+        str(species_summary),
+    )
+    assert longest.returncode == 0, longest.stderr + "\n" + longest.stdout
+
+
+def test_provided_cds_gff_grouping_audits_fallback_and_strict_mode_rejects_it(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Arabidopsis_thaliana"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "models.cds.fa").write_text(
+        ">known_transcript\nATGAAATTT\n>missing_transcript\nATGCCCTTT\n",
+        encoding="utf-8",
+    )
+    (species_dir / "models.gff3").write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=known_gene",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=known_transcript;Parent=known_gene",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=known_transcript",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    normal_root = tmp_path / "normal"
+    normal_summary = normal_root / "summary.tsv"
+    normal = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(normal_root / "cds"),
+        "--species-gff-dir",
+        str(normal_root / "gff"),
+        "--species-genome-dir",
+        str(normal_root / "genome"),
+        "--species-summary-output",
+        str(normal_summary),
+    )
+    assert normal.returncode == 0, normal.stderr + "\n" + normal.stdout
+    with open(normal_summary, "rt", encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle, delimiter="\t"))
+    assert row["cds_grouping_source"] == "gff_with_header_fallback"
+    assert row["cds_gff_records_mapped"] == "1"
+    assert row["cds_gff_records_unmapped"] == "1"
+
+    strict_root = tmp_path / "strict"
+    strict = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(strict_root / "cds"),
+        "--species-gff-dir",
+        str(strict_root / "gff"),
+        "--species-genome-dir",
+        str(strict_root / "genome"),
+        "--strict",
+    )
+    assert strict.returncode != 0
+    assert "unmapped=1 and ambiguous=0" in strict.stderr
+
+
+def test_gff_grouping_rescue_overlap_applies_to_provided_cds_aliases(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "models.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=badGeneA",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=locusX.t1;Parent=badGeneA",
+                "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=cds1;Parent=locusX.t1",
+                "chr1\tsrc\tCDS\t13\t18\t.\t+\t0\tID=cds2;Parent=locusX.t1",
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=badGeneB",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=locusX.t2;Parent=badGeneB",
+                "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds3;Parent=locusX.t2",
+                "chr1\tsrc\tCDS\t13\t18\t.\t+\t0\tID=cds4;Parent=locusX.t2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    base_task = {
+        "provider": "direct",
+        "species_prefix": "Arabidopsis_thaliana",
+        "gff_path": gff_path,
+    }
+
+    strict_index = module.build_gff_cds_grouping_index({**base_task, "gene_grouping_mode": "strict"})
+    rescue_index = module.build_gff_cds_grouping_index({**base_task, "gene_grouping_mode": "rescue_overlap"})
+    strict_a = module.resolve_cds_header_gff_gene(base_task, "locusX.t1", strict_index)
+    strict_b = module.resolve_cds_header_gff_gene(base_task, "locusX.t2", strict_index)
+    rescue_a = module.resolve_cds_header_gff_gene(base_task, "locusX.t1", rescue_index)
+    rescue_b = module.resolve_cds_header_gff_gene(base_task, "locusX.t2", rescue_index)
+
+    assert {strict_a["gene_token"], strict_b["gene_token"]} == {"badGeneA", "badGeneB"}
+    assert rescue_a["gene_token"] == rescue_b["gene_token"] == "locusX"
+    assert rescue_index["coordinate_rescued_transcripts"] == 2
+    assert rescue_index["coordinate_rescued_groups"] == 1
+
+
+def test_gff_grouping_does_not_merge_overlapping_opposite_strands(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "models.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=geneA",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=locusY.t1;Parent=geneA",
+                "chr1\tsrc\tCDS\t1\t18\t.\t+\t0\tParent=locusY.t1",
+                "chr1\tsrc\tgene\t1\t18\t.\t-\t.\tID=geneB",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t-\t.\tID=locusY.t2;Parent=geneB",
+                "chr1\tsrc\tCDS\t1\t18\t.\t-\t0\tParent=locusY.t2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_prefix": "Arabidopsis_thaliana",
+        "gff_path": gff_path,
+        "gene_grouping_mode": "rescue_overlap",
+    }
+    index = module.build_gff_cds_grouping_index(task)
+
+    left = module.resolve_cds_header_gff_gene(task, "locusY.t1", index)
+    right = module.resolve_cds_header_gff_gene(task, "locusY.t2", index)
+    assert {left["gene_token"], right["gene_token"]} == {"geneA", "geneB"}
+    assert index["coordinate_rescued_transcripts"] == 0
+
+
 def test_format_species_inputs_derives_cds_excluding_overlapping_utrs(tmp_path):
     input_dir = tmp_path / "Direct" / "species_wise_original"
     species_dir = input_dir / "Arabidopsis_thaliana"
@@ -1386,7 +1587,7 @@ def test_format_species_inputs_uses_locus_tag_for_genbank_style_ncbi_cds(tmp_pat
     assert "[Dictyostelium_cf_discoideum] CDS-to-GFF mapping OK: 2/2 IDs" in mapping.stdout
 
 
-def test_format_species_inputs_uses_protein_id_when_ncbi_header_lacks_gene_tags(tmp_path):
+def test_format_species_inputs_maps_protein_id_through_gff_gene_hierarchy(tmp_path):
     input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
     species_dir = input_dir / "Dictyostelium_firmibasis"
     species_dir.mkdir(parents=True, exist_ok=True)
@@ -1442,8 +1643,8 @@ def test_format_species_inputs_uses_protein_id_when_ncbi_header_lacks_gene_tags(
     with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
         headers = [line.strip() for line in handle if line.startswith(">")]
     assert headers == [
-        ">Dictyostelium_firmibasis_KAK5581746.1",
-        ">Dictyostelium_firmibasis_KAK5581747.1",
+        ">Dictyostelium_firmibasis_RB653_003324",
+        ">Dictyostelium_firmibasis_RB653_003325",
     ]
 
     mapping = run_validate_mapping_script(

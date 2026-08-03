@@ -74,9 +74,13 @@ from .gff_repair import (
     write_repaired_gff,
 )
 from .grouping import (
+    build_gff_cds_grouping_index,
     build_rescued_gene_tokens_for_transcripts,
     build_transcript_grouping_entry,
     choose_rescue_cluster_gene_token,
+    extract_cds_header_alias_tiers,
+    gff_alias_variants,
+    resolve_cds_header_gff_gene,
     should_rescue_overlapping_transcripts,
 )
 from .tasks import (
@@ -84,11 +88,13 @@ from .tasks import (
     build_derived_genome_output_basename,
     build_derived_gff_output_basename,
     build_gene_aggregate_id,
+    build_header_gene_aggregate_id,
     describe_task_cds_input,
     describe_task_genome_input,
     describe_task_gff_input,
     discover_generic_species_dir_tasks,
     iter_task_cds_records,
+    resolve_gene_aggregate_id,
     task_missing_annotation_label,
 )
 
@@ -123,6 +129,10 @@ __all__ = [
     'merge_coordinate_intervals',
     'compute_interval_overlap_bases',
     'transcript_feature_gene_token',
+    'gff_alias_variants',
+    'extract_cds_header_alias_tiers',
+    'build_gff_cds_grouping_index',
+    'resolve_cds_header_gff_gene',
     'build_transcript_grouping_entry',
     'should_rescue_overlapping_transcripts',
     'choose_rescue_cluster_gene_token',
@@ -173,5 +183,7 @@ __all__ = [
     'build_derived_genome_output_basename',
     'iter_task_cds_records',
     'discover_generic_species_dir_tasks',
+    'build_header_gene_aggregate_id',
+    'resolve_gene_aggregate_id',
     'build_gene_aggregate_id',
 ]

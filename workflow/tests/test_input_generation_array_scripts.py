@@ -68,6 +68,7 @@ def test_plan_input_generation_tasks_discovers_direct_species(tmp_path: Path):
     assert payload["tasks"][0]["provider"] == "direct"
     assert payload["tasks"][0]["gene_grouping_mode"] == "rescue_overlap"
     assert payload["tasks"][0]["gff_repair_mode"] == "safe"
+    assert payload["tasks"][0]["format_strict"] is False
 
 
 def test_run_input_generation_task_and_merge_shards(tmp_path: Path):
@@ -150,3 +151,5 @@ def test_run_input_generation_task_and_merge_shards(tmp_path: Path):
     assert payload["num_species_cds_files"] == 2
     assert payload["num_species_gff_files"] == 2
     assert payload["num_species_genome_files"] == 2
+    assert payload["cds_gff_records_mapped"] == 2
+    assert payload["cds_gff_records_unmapped"] == 0

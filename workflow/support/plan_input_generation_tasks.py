@@ -87,6 +87,7 @@ def main():
         for task in tasks:
             task["gene_grouping_mode"] = args.gene_grouping_mode
             task["gff_repair_mode"] = args.gff_repair_mode
+            task["format_strict"] = bool(args.strict)
         all_tasks.extend(tasks)
         all_warnings.extend(warnings)
         all_errors.extend(errors)

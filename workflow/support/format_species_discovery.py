@@ -1,5 +1,7 @@
 """Local input discovery and formatted output writers."""
 
+import csv
+import json
 import re
 import time
 from collections import defaultdict
@@ -11,7 +13,7 @@ from format_species_annotations import (
     build_derived_cds_output_basename,
     build_derived_genome_output_basename,
     build_derived_gff_output_basename,
-    build_gene_aggregate_id,
+    build_gff_cds_grouping_index,
     count_fasta_records,
     describe_task_cds_input,
     discover_generic_species_dir_tasks,
@@ -29,6 +31,7 @@ from format_species_annotations import (
     pad_to_codon_length,
     read_json,
     repair_result_fields,
+    resolve_gene_aggregate_id,
     sanitize_identifier,
     species_prefix_from_value,
     task_missing_annotation_label,
@@ -50,6 +53,109 @@ from format_species_writers import (
     write_gff_gzip,
     write_gff_lines_gzip,
 )
+
+CDS_GFF_GROUPING_AUDIT_VERSION = 1
+
+
+def cds_gff_grouping_audit_paths(output_path):
+    return (
+        Path(str(output_path) + ".gff-grouping.json"),
+        Path(str(output_path) + ".gff-grouping.tsv"),
+    )
+
+
+def cds_gff_source_signature(path):
+    resolved = Path(path).expanduser().resolve()
+    stat = resolved.stat()
+    return {
+        "path": str(resolved),
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+
+
+def cds_gff_grouping_audit_matches(audit, task, output_path):
+    if not isinstance(audit, dict):
+        return False
+    if int(audit.get("version", 0) or 0) != CDS_GFF_GROUPING_AUDIT_VERSION:
+        return False
+    if str(audit.get("gene_grouping_mode", "") or "") != str(task.get("gene_grouping_mode", "strict") or "strict"):
+        return False
+    if task.get("cds_path") is None or task.get("gff_path") is None:
+        return False
+    try:
+        if audit.get("cds_input") != cds_gff_source_signature(task["cds_path"]):
+            return False
+        if audit.get("gff_input") != cds_gff_source_signature(task["gff_path"]):
+            return False
+    except (FileNotFoundError, OSError):
+        return False
+    if str(audit.get("output_path", "") or "") != str(Path(output_path).expanduser().resolve()):
+        return False
+    _json_path, records_path = cds_gff_grouping_audit_paths(output_path)
+    return records_path.exists() and records_path.stat().st_size > 0
+
+
+def cds_gff_result_fields(audit=None):
+    payload = audit if isinstance(audit, dict) else {}
+    stats = payload.get("stats") if isinstance(payload.get("stats"), dict) else {}
+    return {
+        "grouping_source": str(payload.get("grouping_source", "header") or "header"),
+        "gff_grouping_audit_path": str(payload.get("records_audit_path", "") or ""),
+        "gff_records_mapped": int(stats.get("mapped", 0) or 0),
+        "gff_records_unmapped": int(stats.get("unmapped", 0) or 0),
+        "gff_records_ambiguous": int(stats.get("ambiguous", 0) or 0),
+        "gff_coordinate_rescued_transcripts": int(stats.get("coordinate_rescued_transcripts", 0) or 0),
+        "gff_coordinate_rescued_groups": int(stats.get("coordinate_rescued_groups", 0) or 0),
+    }
+
+
+def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload):
+    json_path, records_path = cds_gff_grouping_audit_paths(output_path)
+    json_tmp = Path(str(json_path) + ".tmp.{}.{}".format(time.time_ns(), len(audit_rows)))
+    records_tmp = Path(str(records_path) + ".tmp.{}.{}".format(time.time_ns(), len(audit_rows)))
+    fieldnames = (
+        "record_index",
+        "raw_cds_id",
+        "formatted_transcript_id",
+        "mapping_status",
+        "matched_aliases",
+        "candidate_gene_tokens",
+        "selected_gene_id",
+        "sequence_length",
+        "selected_longest",
+    )
+    try:
+        with open(records_tmp, "wt", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+            writer.writeheader()
+            for row in audit_rows:
+                writer.writerow({key: row.get(key, "") for key in fieldnames})
+        records_tmp.replace(records_path)
+        final_payload = dict(payload)
+        final_payload.update(
+            {
+                "version": CDS_GFF_GROUPING_AUDIT_VERSION,
+                "provider": task["provider"],
+                "species_key": task["species_key"],
+                "species_prefix": task["species_prefix"],
+                "gene_grouping_mode": task.get("gene_grouping_mode", "strict"),
+                "cds_input": cds_gff_source_signature(task["cds_path"]),
+                "gff_input": cds_gff_source_signature(task["gff_path"]),
+                "output_path": str(Path(output_path).expanduser().resolve()),
+                "records_audit_path": str(records_path.resolve()),
+            }
+        )
+        with open(json_tmp, "wt", encoding="utf-8") as handle:
+            json.dump(final_payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
+        json_tmp.replace(json_path)
+        return final_payload
+    finally:
+        for tmp_path in (json_tmp, records_tmp):
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def discover_ensembl_like_tasks(input_dir, provider, allowed_species_keys=None):
@@ -344,14 +450,15 @@ def build_formatted_cds_id(task, header):
 
 
 def prepare_cds_identifier_task(task):
-    if task.get("provider") != "coge" or task.get("gff_path") is None:
-        return task
     prepared = dict(task)
-    prepared["_provider_gene_id_map"] = build_coge_gff_gene_id_map(task["gff_path"])
+    if task.get("cds_path") is not None and task.get("gff_path") is not None:
+        prepared["_gff_cds_grouping_index"] = build_gff_cds_grouping_index(task)
+    if task.get("provider") == "coge" and task.get("gff_path") is not None:
+        prepared["_provider_gene_id_map"] = build_coge_gff_gene_id_map(task["gff_path"])
     return prepared
 
 
-def format_cds(task, output_dir, overwrite, dry_run):
+def format_cds(task, output_dir, overwrite, dry_run, strict=None):
     cds_input = task.get("cds_path")
     if cds_input is not None:
         output_name = normalize_cds_output_basename(cds_input.name, task["species_prefix"])
@@ -359,12 +466,33 @@ def format_cds(task, output_dir, overwrite, dry_run):
         output_name = build_derived_cds_output_basename(task)
     output_path = output_dir / output_name
 
-    if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
+    use_gff_grouping = task.get("cds_path") is not None and task.get("gff_path") is not None
+    audit_json_path, _audit_records_path = cds_gff_grouping_audit_paths(output_path)
+    existing_audit = read_json(audit_json_path) if use_gff_grouping else None
+    if (
+        output_path.exists()
+        and output_path.stat().st_size > 0
+        and not overwrite
+        and (not use_gff_grouping or cds_gff_grouping_audit_matches(existing_audit, task, output_path))
+    ):
+        if use_gff_grouping:
+            result = {
+                "status": "skip",
+                "output_path": output_path,
+                "input_path": describe_task_cds_input(task),
+                "written": int(existing_audit.get("after_count", 0) or 0),
+                "duplicates": int(existing_audit.get("duplicates", 0) or 0),
+                "before_count": int(existing_audit.get("before_count", 0) or 0),
+                "after_count": int(existing_audit.get("after_count", 0) or 0),
+                "first_sequence_name": str(existing_audit.get("first_sequence_name", "") or ""),
+            }
+            result.update(cds_gff_result_fields(existing_audit))
+            return result
         before_count = 0
         for _header, _sequence in iter_task_cds_records(task):
             before_count += 1
         after_count, first_existing = count_fasta_records(output_path)
-        return {
+        result = {
             "status": "skip",
             "output_path": output_path,
             "input_path": describe_task_cds_input(task),
@@ -374,19 +502,41 @@ def format_cds(task, output_dir, overwrite, dry_run):
             "after_count": after_count,
             "first_sequence_name": first_existing,
         }
+        result.update(cds_gff_result_fields())
+        return result
 
     before_count = 0
     aggregated_away = 0
     first_sequence_name = ""
     records_by_gene = {}
     cds_task = prepare_cds_identifier_task(task)
+    grouping_index = cds_task.get("_gff_cds_grouping_index")
+    mapping_counts = {"mapped": 0, "unmapped": 0, "ambiguous": 0}
+    audit_rows = []
     for header, sequence in iter_task_cds_records(task):
         before_count += 1
         transcript_id = build_formatted_cds_id(cds_task, header)
-        gene_id = build_gene_aggregate_id(cds_task, header, transcript_id)
+        gene_id, gff_match = resolve_gene_aggregate_id(cds_task, header, transcript_id)
+        mapping_status = str(gff_match.get("status", "not_applicable") or "not_applicable")
+        if mapping_status in mapping_counts:
+            mapping_counts[mapping_status] += 1
         seq = re.sub(r"\s+", "", sequence).upper()
         # Keep codon-frame-safe length (equivalent role of `cdskit pad` in shell pipelines).
         seq = pad_to_codon_length(seq)
+        record_index = before_count
+        audit_rows.append(
+            {
+                "record_index": record_index,
+                "raw_cds_id": first_token(header),
+                "formatted_transcript_id": transcript_id,
+                "mapping_status": mapping_status,
+                "matched_aliases": ",".join(gff_match.get("matched_aliases", ())),
+                "candidate_gene_tokens": ",".join(gff_match.get("candidate_gene_tokens", ())),
+                "selected_gene_id": gene_id,
+                "sequence_length": len(seq),
+                "selected_longest": 0,
+            }
+        )
 
         previous = records_by_gene.get(gene_id)
         if previous is None:
@@ -394,6 +544,7 @@ def format_cds(task, output_dir, overwrite, dry_run):
                 "id": gene_id,
                 "sequence": seq,
                 "transcript_id": transcript_id,
+                "record_index": record_index,
             }
             continue
 
@@ -405,6 +556,7 @@ def format_cds(task, output_dir, overwrite, dry_run):
                 "id": gene_id,
                 "sequence": seq,
                 "transcript_id": transcript_id,
+                "record_index": record_index,
             }
 
     ordered_ids = sorted(records_by_gene.keys())
@@ -412,11 +564,26 @@ def format_cds(task, output_dir, overwrite, dry_run):
     aggregated_away = max(0, before_count - after_count)
     if len(ordered_ids) > 0:
         first_sequence_name = ordered_ids[0]
+    selected_record_indexes = {records_by_gene[gene_id]["record_index"] for gene_id in ordered_ids}
+    for row in audit_rows:
+        row["selected_longest"] = int(row["record_index"] in selected_record_indexes)
+
+    strict_mode = bool(task.get("format_strict", False)) if strict is None else bool(strict)
+    if grouping_index is not None and strict_mode and (
+        mapping_counts["unmapped"] > 0 or mapping_counts["ambiguous"] > 0
+    ):
+        raise ValueError(
+            "GFF-backed CDS grouping for {} has unmapped={} and ambiguous={} CDS records".format(
+                task.get("species_prefix", ""),
+                mapping_counts["unmapped"],
+                mapping_counts["ambiguous"],
+            )
+        )
 
     if task.get("cds_path") is None and after_count == 0:
         if output_path.exists():
             output_path.unlink()
-        return {
+        result = {
             "status": "empty",
             "output_path": None,
             "input_path": describe_task_cds_input(task),
@@ -426,6 +593,8 @@ def format_cds(task, output_dir, overwrite, dry_run):
             "after_count": after_count,
             "first_sequence_name": first_sequence_name,
         }
+        result.update(cds_gff_result_fields())
+        return result
 
     if not dry_run:
         write_fasta_records_gzip(
@@ -433,8 +602,34 @@ def format_cds(task, output_dir, overwrite, dry_run):
             ((records_by_gene[gene_id]["id"], records_by_gene[gene_id]["sequence"]) for gene_id in ordered_ids),
         )
 
+    if grouping_index is None:
+        grouping_source = "header"
+    elif mapping_counts["unmapped"] > 0 or mapping_counts["ambiguous"] > 0:
+        grouping_source = "gff_with_header_fallback"
+    else:
+        grouping_source = "gff"
+    audit_payload = {
+        "grouping_source": grouping_source,
+        "before_count": before_count,
+        "after_count": after_count,
+        "duplicates": aggregated_away,
+        "first_sequence_name": first_sequence_name,
+        "stats": {
+            "mapped": mapping_counts["mapped"],
+            "unmapped": mapping_counts["unmapped"],
+            "ambiguous": mapping_counts["ambiguous"],
+            "gff_transcripts_total": int((grouping_index or {}).get("transcripts_total", 0) or 0),
+            "coordinate_rescued_transcripts": int(
+                (grouping_index or {}).get("coordinate_rescued_transcripts", 0) or 0
+            ),
+            "coordinate_rescued_groups": int((grouping_index or {}).get("coordinate_rescued_groups", 0) or 0),
+        },
+    }
+    if grouping_index is not None and not dry_run:
+        audit_payload = write_cds_gff_grouping_audit(task, output_path, audit_rows, audit_payload)
+
     status = "dry-run" if dry_run else "write"
-    return {
+    result = {
         "status": status,
         "output_path": output_path,
         "input_path": describe_task_cds_input(task),
@@ -444,6 +639,8 @@ def format_cds(task, output_dir, overwrite, dry_run):
         "after_count": after_count,
         "first_sequence_name": first_sequence_name,
     }
+    result.update(cds_gff_result_fields(audit_payload))
+    return result
 
 
 def format_genome(task, output_dir, overwrite, dry_run):

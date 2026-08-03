@@ -117,6 +117,7 @@ def main():
         for task in tasks:
             task["gene_grouping_mode"] = args.gene_grouping_mode
             task["gff_repair_mode"] = args.gff_repair_mode
+            task["format_strict"] = bool(args.strict)
         all_tasks.extend(tasks)
         all_warnings.extend(warnings)
         all_errors.extend(errors)
@@ -143,6 +144,11 @@ def main():
     total_gff_repaired_references = 0
     total_gff_repair_ambiguous = 0
     total_gff_repair_collisions = 0
+    total_cds_gff_mapped = 0
+    total_cds_gff_unmapped = 0
+    total_cds_gff_ambiguous = 0
+    total_cds_gff_coordinate_rescued_transcripts = 0
+    total_cds_gff_coordinate_rescued_groups = 0
     for task in all_tasks:
         cds_result = format_cds(task, output_cds_dir, args.overwrite, args.dry_run)
         gff_result = format_gff(
@@ -208,12 +214,21 @@ def main():
         total_gff_repaired_references += int(gff_result.get("repair_references", 0) or 0)
         total_gff_repair_ambiguous += int(gff_result.get("repair_ambiguous", 0) or 0)
         total_gff_repair_collisions += int(gff_result.get("repair_collisions", 0) or 0)
+        total_cds_gff_mapped += int(cds_result.get("gff_records_mapped", 0) or 0)
+        total_cds_gff_unmapped += int(cds_result.get("gff_records_unmapped", 0) or 0)
+        total_cds_gff_ambiguous += int(cds_result.get("gff_records_ambiguous", 0) or 0)
+        total_cds_gff_coordinate_rescued_transcripts += int(
+            cds_result.get("gff_coordinate_rescued_transcripts", 0) or 0
+        )
+        total_cds_gff_coordinate_rescued_groups += int(
+            cds_result.get("gff_coordinate_rescued_groups", 0) or 0
+        )
         if first_cds_sequence_name == "":
             first_cds_sequence_name = cds_result["first_sequence_name"]
         if genome_result["status"] != "missing":
             species_with_genome += 1
         print(
-            "[{}] {}: CDS={} ({}, {}, aggregated_away={}, before={}, after={}), GFF={} ({}, lines={}) [repair_status={}, repaired_gene_ids={}, repaired_references={}, ambiguous={}, collisions={}], GENOME={} ({})".format(
+            "[{}] {}: CDS={} ({}, {}, aggregated_away={}, before={}, after={}, grouping_source={}, gff_mapped={}, gff_unmapped={}, gff_ambiguous={}, coordinate_rescued_transcripts={}), GFF={} ({}, lines={}) [repair_status={}, repaired_gene_ids={}, repaired_references={}, ambiguous={}, collisions={}], GENOME={} ({})".format(
                 task["provider"],
                 task["species_prefix"],
                 task["cds_path"].name
@@ -224,6 +239,11 @@ def main():
                 cds_result["duplicates"],
                 cds_result["before_count"],
                 cds_result["after_count"],
+                cds_result.get("grouping_source", "header"),
+                cds_result.get("gff_records_mapped", 0),
+                cds_result.get("gff_records_unmapped", 0),
+                cds_result.get("gff_records_ambiguous", 0),
+                cds_result.get("gff_coordinate_rescued_transcripts", 0),
                 Path(str(describe_task_gff_input(task) or "derived_gff")).name,
                 gff_result["status"],
                 gff_result["lines"],
@@ -252,6 +272,11 @@ def main():
         "gff_repair_ambiguous": total_gff_repair_ambiguous,
         "gff_repair_collisions": total_gff_repair_collisions,
         "gff_repair_mode": args.gff_repair_mode,
+        "cds_gff_records_mapped": total_cds_gff_mapped,
+        "cds_gff_records_unmapped": total_cds_gff_unmapped,
+        "cds_gff_records_ambiguous": total_cds_gff_ambiguous,
+        "cds_gff_coordinate_rescued_transcripts": total_cds_gff_coordinate_rescued_transcripts,
+        "cds_gff_coordinate_rescued_groups": total_cds_gff_coordinate_rescued_groups,
         "dry_run": int(args.dry_run),
     }
     if args.stats_output != "":

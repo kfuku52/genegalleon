@@ -87,6 +87,11 @@ def main():
     gff_repaired_references = 0
     gff_repair_ambiguous = 0
     gff_repair_collisions = 0
+    cds_gff_records_mapped = 0
+    cds_gff_records_unmapped = 0
+    cds_gff_records_ambiguous = 0
+    cds_gff_coordinate_rescued_transcripts = 0
+    cds_gff_coordinate_rescued_groups = 0
 
     for stats_path in stats_paths:
         payload = read_task_stats(stats_path)
@@ -101,6 +106,15 @@ def main():
         gff_repaired_references += int(payload.get("gff_repaired_references", 0) or 0)
         gff_repair_ambiguous += int(payload.get("gff_repair_ambiguous", 0) or 0)
         gff_repair_collisions += int(payload.get("gff_repair_collisions", 0) or 0)
+        cds_gff_records_mapped += int(payload.get("cds_gff_records_mapped", 0) or 0)
+        cds_gff_records_unmapped += int(payload.get("cds_gff_records_unmapped", 0) or 0)
+        cds_gff_records_ambiguous += int(payload.get("cds_gff_records_ambiguous", 0) or 0)
+        cds_gff_coordinate_rescued_transcripts += int(
+            payload.get("cds_gff_coordinate_rescued_transcripts", 0) or 0
+        )
+        cds_gff_coordinate_rescued_groups += int(
+            payload.get("cds_gff_coordinate_rescued_groups", 0) or 0
+        )
         if cds_first_sequence_name == "":
             cds_first_sequence_name = str(payload.get("cds_first_sequence_name", "") or "")
 
@@ -121,6 +135,11 @@ def main():
                 "gff_repaired_references": gff_repaired_references,
                 "gff_repair_ambiguous": gff_repair_ambiguous,
                 "gff_repair_collisions": gff_repair_collisions,
+                "cds_gff_records_mapped": cds_gff_records_mapped,
+                "cds_gff_records_unmapped": cds_gff_records_unmapped,
+                "cds_gff_records_ambiguous": cds_gff_records_ambiguous,
+                "cds_gff_coordinate_rescued_transcripts": cds_gff_coordinate_rescued_transcripts,
+                "cds_gff_coordinate_rescued_groups": cds_gff_coordinate_rescued_groups,
                 "merged_species_summary_rows": len(merged_rows),
                 "task_stats_files": len(stats_paths),
                 "task_species_summary_shards": shard_row_count,

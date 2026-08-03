@@ -370,6 +370,13 @@ SPECIES_SUMMARY_COLUMNS = (
     "cds_first_sequence_name",
     "aggregated_cds_removed",
     "gene_grouping_mode",
+    "cds_grouping_source",
+    "cds_gff_grouping_audit_path",
+    "cds_gff_records_mapped",
+    "cds_gff_records_unmapped",
+    "cds_gff_records_ambiguous",
+    "cds_gff_coordinate_rescued_transcripts",
+    "cds_gff_coordinate_rescued_groups",
     "overwrite",
     "dry_run",
 )

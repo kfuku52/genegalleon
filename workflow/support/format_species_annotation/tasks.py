@@ -43,6 +43,7 @@ from .genbank import (
     derive_cds_records_from_gbff,
     derive_cds_records_from_gff_and_genome,
 )
+from .grouping import resolve_cds_header_gff_gene
 
 
 def task_missing_annotation_label(cds_path, gff_path, gbff_path, genome_path):
@@ -215,7 +216,7 @@ def discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys
     return tasks, warnings, errors
 
 
-def build_gene_aggregate_id(task, header, transcript_id):
+def build_header_gene_aggregate_id(task, header, transcript_id):
     provider = task["provider"]
     species_prefix = task["species_prefix"]
     if provider == "coge":
@@ -280,3 +281,16 @@ def build_gene_aggregate_id(task, header, transcript_id):
             gene_token = collapsed if collapsed != "" else extracted
     prefixed = "{}_{}".format(species_prefix, sanitize_identifier(gene_token))
     return sanitize_identifier(prefixed)
+
+
+def resolve_gene_aggregate_id(task, header, transcript_id):
+    gff_match = resolve_cds_header_gff_gene(task, header)
+    if gff_match["status"] == "mapped":
+        prefixed = "{}_{}".format(task["species_prefix"], sanitize_identifier(gff_match["gene_token"]))
+        return sanitize_identifier(prefixed), gff_match
+    return build_header_gene_aggregate_id(task, header, transcript_id), gff_match
+
+
+def build_gene_aggregate_id(task, header, transcript_id):
+    gene_id, _gff_match = resolve_gene_aggregate_id(task, header, transcript_id)
+    return gene_id

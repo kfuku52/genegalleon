@@ -150,6 +150,15 @@ def build_species_summary_row(
         "cds_first_sequence_name": cds_result.get("first_sequence_name", "") or "NA",
         "aggregated_cds_removed": str(cds_result.get("duplicates", "")),
         "gene_grouping_mode": gene_grouping_mode_for_task(task),
+        "cds_grouping_source": str(cds_result.get("grouping_source", "header") or "header"),
+        "cds_gff_grouping_audit_path": str(cds_result.get("gff_grouping_audit_path", "") or ""),
+        "cds_gff_records_mapped": str(cds_result.get("gff_records_mapped", 0)),
+        "cds_gff_records_unmapped": str(cds_result.get("gff_records_unmapped", 0)),
+        "cds_gff_records_ambiguous": str(cds_result.get("gff_records_ambiguous", 0)),
+        "cds_gff_coordinate_rescued_transcripts": str(
+            cds_result.get("gff_coordinate_rescued_transcripts", 0)
+        ),
+        "cds_gff_coordinate_rescued_groups": str(cds_result.get("gff_coordinate_rescued_groups", 0)),
         "overwrite": str(int(bool(overwrite))),
         "dry_run": str(int(bool(dry_run))),
     }
