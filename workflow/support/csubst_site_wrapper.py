@@ -149,6 +149,8 @@ CSUBST_NONSYN_RECODE_CHOICES = (
     'no', '3di20', 'dayhoff6', 'sr6', 'kgb6', 'sr4', 'dayhoff9',
     'dayhoff12', 'dayhoff15', 'dayhoff18', 'srchisq6', 'kgbauto6',
 )
+CSUBST_SITES_OUTDIR = 'csubst_sites'
+CSUBST_SITES_OUTPUT_PREFIX = 'csubst'
 NSY_ALIGNMENT_SYMBOLS = tuple('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz')
 STANDARD_GENETIC_CODE = {
     'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L',
@@ -185,6 +187,8 @@ def csubst_nonsyn_recode_output_suffix(value):
 def build_csubst_sites_command(iqtree_anc_rel_dir, iqtree_anc_dir, branch_id_str, ncpu, csubst_nonsyn_recode):
     recode = normalize_csubst_nonsyn_recode(csubst_nonsyn_recode)
     cmd = ['csubst', 'sites']
+    cmd += ['--outdir', CSUBST_SITES_OUTDIR]
+    cmd += ['--output_prefix', CSUBST_SITES_OUTPUT_PREFIX]
     cmd += ['--alignment_file', os.path.join(iqtree_anc_rel_dir, 'csubst.fasta')]
     cmd += ['--rooted_tree_file', os.path.join(iqtree_anc_rel_dir, 'csubst.nwk')]
     cmd += ['--branch_id', branch_id_str]
@@ -302,7 +306,7 @@ def combine_pdfs(pdf_file_paths, output_path):
     return None
 
 def extract_pdb_id(indir):
-    pattern = re.compile(r'^csubst_sites?\.([^.]+)\.fa$')
+    pattern = re.compile(r'^csubst\.([^.]+)\.fa$')
     if not os.path.isdir(indir):
         print(f"PDB ID search directory not found: {indir}", flush=True)
         return None
@@ -316,28 +320,17 @@ def extract_pdb_id(indir):
     return None
 
 
-def get_site_dir_candidates(dir_out_og, branch_id_str):
-    return [
-        os.path.join(dir_out_og, 'csubst_sites.branch_id' + branch_id_str),
-        os.path.join(dir_out_og, 'csubst_site.branch_id' + branch_id_str),
-    ]
-
-
 def resolve_site_output_dir(dir_out_og, branch_id_str):
-    candidates = get_site_dir_candidates(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
-    for candidate in candidates:
-        if os.path.isdir(candidate):
-            return candidate
-    return candidates[0]
+    return os.path.join(
+        dir_out_og,
+        CSUBST_SITES_OUTDIR,
+        CSUBST_SITES_OUTPUT_PREFIX + '.branch_id' + branch_id_str,
+    )
 
 
 def load_site_output_manifest(site_dir):
-    manifest_candidates = [
-        os.path.join(site_dir, 'csubst_sites.outputs.tsv'),
-        os.path.join(site_dir, 'csubst_site.outputs.tsv'),
-    ]
-    manifest_path = resolve_existing_path(manifest_candidates)
-    if manifest_path is None:
+    manifest_path = os.path.join(site_dir, CSUBST_SITES_OUTPUT_PREFIX + '.outputs.tsv')
+    if not os.path.isfile(manifest_path):
         return None
     return pandas.read_csv(manifest_path, sep='\t', header=0, index_col=None)
 
@@ -413,24 +406,19 @@ def resolve_site_artifacts(dir_out_og, branch_id_str):
     pymol_pdf_candidates = []
     if pdb_id is not None:
         site_table_candidates.extend([
-            os.path.join(site_dir, f'csubst_sites.{pdb_id}.tsv'),
-            os.path.join(site_dir, f'csubst_site.{pdb_id}.tsv'),
+            os.path.join(site_dir, f'{CSUBST_SITES_OUTPUT_PREFIX}.{pdb_id}.tsv'),
         ])
         site_summary_pdf_candidates.extend([
-            os.path.join(site_dir, f'csubst_sites.{pdb_id}.pdf'),
-            os.path.join(site_dir, f'csubst_site.{pdb_id}.pdf'),
+            os.path.join(site_dir, f'{CSUBST_SITES_OUTPUT_PREFIX}.{pdb_id}.pdf'),
         ])
         pymol_pdf_candidates.extend([
-            os.path.join(site_dir, f'csubst_sites.{pdb_id}.pymol.pdf'),
-            os.path.join(site_dir, f'csubst_site.{pdb_id}.pymol.pdf'),
+            os.path.join(site_dir, f'{CSUBST_SITES_OUTPUT_PREFIX}.{pdb_id}.pymol.pdf'),
         ])
     site_table_candidates.extend([
-        os.path.join(site_dir, 'csubst_sites.tsv'),
-        os.path.join(site_dir, 'csubst_site.tsv'),
+        os.path.join(site_dir, CSUBST_SITES_OUTPUT_PREFIX + '.tsv'),
     ])
     site_summary_pdf_candidates.extend([
-        os.path.join(site_dir, 'csubst_sites.pdf'),
-        os.path.join(site_dir, 'csubst_site.pdf'),
+        os.path.join(site_dir, CSUBST_SITES_OUTPUT_PREFIX + '.pdf'),
     ])
 
     site_table_tsv = find_site_output_from_manifest(
@@ -443,7 +431,7 @@ def resolve_site_artifacts(dir_out_og, branch_id_str):
     if site_table_tsv is None:
         site_table_tsv = find_first_matching_file(
             site_dir=site_dir,
-            glob_patterns=['csubst_sites*.tsv', 'csubst_site*.tsv'],
+            glob_patterns=[CSUBST_SITES_OUTPUT_PREFIX + '*.tsv'],
             exclude_predicate=is_auxiliary_site_tsv,
         )
 
@@ -457,7 +445,7 @@ def resolve_site_artifacts(dir_out_og, branch_id_str):
     if site_summary_pdf is None:
         site_summary_pdf = find_first_matching_file(
             site_dir=site_dir,
-            glob_patterns=['csubst_sites*.pdf', 'csubst_site*.pdf'],
+            glob_patterns=[CSUBST_SITES_OUTPUT_PREFIX + '*.pdf'],
             exclude_predicate=is_auxiliary_site_pdf,
         )
 
@@ -471,7 +459,7 @@ def resolve_site_artifacts(dir_out_og, branch_id_str):
     if pymol_summary_pdf is None:
         pymol_summary_pdf = find_first_matching_file(
             site_dir=site_dir,
-            glob_patterns=['csubst_sites*.pymol.pdf', 'csubst_site*.pymol.pdf'],
+            glob_patterns=[CSUBST_SITES_OUTPUT_PREFIX + '*.pymol.pdf'],
         )
 
     return {
