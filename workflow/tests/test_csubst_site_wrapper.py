@@ -61,48 +61,53 @@ def test_extract_pdb_id_returns_none_when_no_match(tmp_path):
 
 def test_extract_pdb_id_parses_expected_identifier(tmp_path):
     extract_pdb_id = load_extract_pdb_id()
-    (tmp_path / "csubst_sites.2XYZ.fa").write_text(">x\nAA\n", encoding="utf-8")
+    (tmp_path / "csubst.2XYZ.fa").write_text(">x\nAA\n", encoding="utf-8")
     assert extract_pdb_id(str(tmp_path)) == "2XYZ"
 
 
 def test_extract_pdb_id_ignores_hidden_files_and_is_deterministic(tmp_path):
     extract_pdb_id = load_extract_pdb_id()
-    (tmp_path / ".csubst_sites.ZZZZ.fa").write_text(">x\nAA\n", encoding="utf-8")
-    (tmp_path / "csubst_sites.BBBB.fa").write_text(">x\nAA\n", encoding="utf-8")
-    (tmp_path / "csubst_sites.AAAA.fa").write_text(">x\nAA\n", encoding="utf-8")
+    (tmp_path / ".csubst.ZZZZ.fa").write_text(">x\nAA\n", encoding="utf-8")
+    (tmp_path / "csubst.BBBB.fa").write_text(">x\nAA\n", encoding="utf-8")
+    (tmp_path / "csubst.AAAA.fa").write_text(">x\nAA\n", encoding="utf-8")
     assert extract_pdb_id(str(tmp_path)) == "AAAA"
 
 
-def test_resolve_site_output_dir_prefers_latest_directory_name(tmp_path):
+def test_resolve_site_output_dir_uses_current_csubst_namespace(tmp_path):
     mod = load_module()
-    latest = tmp_path / "OG1_1_2" / "csubst_sites.branch_id1,2"
-    legacy = tmp_path / "OG1_1_2" / "csubst_site.branch_id1,2"
-    latest.mkdir(parents=True)
-    legacy.mkdir(parents=True)
+    expected = (
+        tmp_path
+        / "OG0009394_2_66_70_79_99_116"
+        / "csubst_sites"
+        / "csubst.branch_id2,66,70,79,99,116"
+    )
 
-    out = mod.resolve_site_output_dir(str(tmp_path / "OG1_1_2"), "1,2")
+    out = mod.resolve_site_output_dir(
+        str(tmp_path / "OG0009394_2_66_70_79_99_116"),
+        "2,66,70,79,99,116",
+    )
 
-    assert out == str(latest)
+    assert out == str(expected)
 
 
-def test_resolve_site_artifacts_reads_latest_manifest_outputs(tmp_path):
+def test_resolve_site_artifacts_reads_current_manifest_outputs(tmp_path):
     mod = load_module()
-    site_dir = tmp_path / "OG1_1_2" / "csubst_sites.branch_id1,2"
+    site_dir = tmp_path / "OG1_1_2" / "csubst_sites" / "csubst.branch_id1,2"
     site_dir.mkdir(parents=True)
-    site_tsv = site_dir / "csubst_sites.tsv"
-    site_pdf = site_dir / "csubst_sites.pdf"
-    pymol_pdf = site_dir / "csubst_sites.2XYZ.pymol.pdf"
+    site_tsv = site_dir / "csubst.2XYZ.tsv"
+    site_pdf = site_dir / "csubst.2XYZ.pdf"
+    pymol_pdf = site_dir / "csubst.2XYZ.pymol.pdf"
     site_tsv.write_text("codon_site_alignment\tOCNany2spe\n1\t1\n", encoding="utf-8")
     site_pdf.write_text("pdf", encoding="utf-8")
     pymol_pdf.write_text("pdf", encoding="utf-8")
-    (site_dir / "csubst_sites.2XYZ.fa").write_text(">x\nAA\n", encoding="utf-8")
+    (site_dir / "csubst.2XYZ.fa").write_text(">x\nAA\n", encoding="utf-8")
     pandas.DataFrame(
         [
             {"output_kind": "site_table_tsv", "output_path": str(site_tsv), "file_exists": "Y"},
             {"output_kind": "site_summary_pdf", "output_path": str(site_pdf), "file_exists": "Y"},
             {"output_kind": "pymol_summary_pdf", "output_path": str(pymol_pdf), "file_exists": "Y"},
         ]
-    ).to_csv(site_dir / "csubst_sites.outputs.tsv", sep="\t", index=False)
+    ).to_csv(site_dir / "csubst.outputs.tsv", sep="\t", index=False)
 
     artifacts = mod.resolve_site_artifacts(str(tmp_path / "OG1_1_2"), "1,2")
 
@@ -113,17 +118,17 @@ def test_resolve_site_artifacts_reads_latest_manifest_outputs(tmp_path):
     assert artifacts["pdb_id"] == "2XYZ"
 
 
-def test_resolve_site_artifacts_falls_back_to_legacy_names_without_manifest(tmp_path):
+def test_resolve_site_artifacts_falls_back_to_current_names_without_manifest(tmp_path):
     mod = load_module()
-    site_dir = tmp_path / "OG1_1_2" / "csubst_site.branch_id1,2"
+    site_dir = tmp_path / "OG1_1_2" / "csubst_sites" / "csubst.branch_id1,2"
     site_dir.mkdir(parents=True)
-    site_tsv = site_dir / "csubst_site.2XYZ.tsv"
-    site_pdf = site_dir / "csubst_site.2XYZ.pdf"
-    pymol_pdf = site_dir / "csubst_site.2XYZ.pymol.pdf"
+    site_tsv = site_dir / "csubst.2XYZ.tsv"
+    site_pdf = site_dir / "csubst.2XYZ.pdf"
+    pymol_pdf = site_dir / "csubst.2XYZ.pymol.pdf"
     site_tsv.write_text("codon_site_alignment\tOCNany2spe\n1\t1\n", encoding="utf-8")
     site_pdf.write_text("pdf", encoding="utf-8")
     pymol_pdf.write_text("pdf", encoding="utf-8")
-    (site_dir / "csubst_site.2XYZ.fa").write_text(">x\nAA\n", encoding="utf-8")
+    (site_dir / "csubst.2XYZ.fa").write_text(">x\nAA\n", encoding="utf-8")
 
     artifacts = mod.resolve_site_artifacts(str(tmp_path / "OG1_1_2"), "1,2")
 
@@ -450,6 +455,8 @@ def test_build_csubst_sites_command_passes_nondefault_nonsyn_recode_only():
 
     assert "--nonsyn_recode" not in default_cmd
     assert recoded_cmd[recoded_cmd.index("--nonsyn_recode") + 1] == "dayhoff6"
+    assert default_cmd[default_cmd.index("--outdir") + 1] == "csubst_sites"
+    assert default_cmd[default_cmd.index("--output_prefix") + 1] == "csubst"
 
 
 def test_get_alignment_for_tree_plot_rejects_legacy_dot_clipkit_name(tmp_path):
