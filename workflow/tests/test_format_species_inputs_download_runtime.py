@@ -1518,7 +1518,13 @@ def test_download_manifest_ncbi_gene_level_aggregate_keeps_one_longest_per_gene(
             "ATGAAATTT\n"
         )
     with gzip.open(gff_source, "wt", encoding="utf-8") as handle:
-        handle.write("chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n")
+        handle.write(
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-111;Dbxref=GeneID:111;gene=ABC1\n"
+            "chr1\tsrc\tmRNA\t1\t6\t.\t+\t.\tID=rna-XP_1.1;Parent=gene-111\n"
+            "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=cds-XP_1.1;Parent=rna-XP_1.1;Dbxref=GeneID:111;gene=ABC1;protein_id=XP_1.1\n"
+            "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=rna-XP_1.2;Parent=gene-111\n"
+            "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds-XP_1.2;Parent=rna-XP_1.2;Dbxref=GeneID:111;gene=ABC1;protein_id=XP_1.2\n"
+        )
     with gzip.open(genome_source, "wt", encoding="utf-8") as handle:
         handle.write(">chr1\nATGCATGC\n")
 
@@ -1564,6 +1570,11 @@ def test_download_manifest_ncbi_gene_level_aggregate_keeps_one_longest_per_gene(
         text = handle.read()
     assert text.count(">Homo_sapiens_GeneID111") == 1
     assert "ATGAAATTT" in text
+    with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
+        audit = json.load(handle)
+    assert audit["grouping_source"] == "gff"
+    assert audit["stats"]["mapped"] == 2
+    assert audit["stats"]["unmapped"] == 0
 
 
 def test_download_manifest_ncbi_gene_level_aggregate_prefers_locus_tag_over_geneid(tmp_path):

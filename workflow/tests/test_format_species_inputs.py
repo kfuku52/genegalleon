@@ -1267,6 +1267,29 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
     assert [row["mapping_status"] for row in audit_rows] == ["mapped", "mapped"]
     assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
 
+    original_stat = formatted_cds.stat()
+    corrupted_bytes = bytearray(formatted_cds.read_bytes())
+    corrupted_bytes[len(corrupted_bytes) // 2] ^= 1
+    formatted_cds.write_bytes(corrupted_bytes)
+    os.utime(formatted_cds, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    repaired = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert repaired.returncode == 0, repaired.stderr + "\n" + repaired.stdout
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        assert handle.read() == ">Arabidopsis_thaliana_gene_from_gff\nATGAAACCCGGGTTT\n"
+
     longest = run_validate_longest_script(
         "--species-cds-dir",
         str(out_cds),
@@ -1318,6 +1341,22 @@ def test_provided_cds_gff_grouping_audits_fallback_and_strict_mode_rejects_it(tm
     assert row["cds_grouping_source"] == "gff_with_header_fallback"
     assert row["cds_gff_records_mapped"] == "1"
     assert row["cds_gff_records_unmapped"] == "1"
+
+    cached_strict = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(normal_root / "cds"),
+        "--species-gff-dir",
+        str(normal_root / "gff"),
+        "--species-genome-dir",
+        str(normal_root / "genome"),
+        "--strict",
+    )
+    assert cached_strict.returncode != 0
+    assert "unmapped=1 and ambiguous=0" in cached_strict.stderr
 
     strict_root = tmp_path / "strict"
     strict = run_script(
@@ -1404,6 +1443,110 @@ def test_gff_grouping_does_not_merge_overlapping_opposite_strands(tmp_path):
     right = module.resolve_cds_header_gff_gene(task, "locusY.t2", index)
     assert {left["gene_token"], right["gene_token"]} == {"geneA", "geneB"}
     assert index["coordinate_rescued_transcripts"] == 0
+
+
+def test_gff_grouping_prefers_locus_identity_over_shared_gene_symbol(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "shared-symbol.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-L1;gene=SHARED;locus_tag=L1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=tx1;Parent=gene-L1;locus_tag=L1",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds1;Parent=tx1;gene=SHARED;locus_tag=L1;protein_id=P1",
+                "chr1\tsrc\tgene\t20\t28\t.\t+\t.\tID=gene-L2;gene=SHARED;locus_tag=L2",
+                "chr1\tsrc\tmRNA\t20\t28\t.\t+\t.\tID=tx2;Parent=gene-L2;locus_tag=L2",
+                "chr1\tsrc\tCDS\t20\t28\t.\t+\t0\tID=cds2;Parent=tx2;gene=SHARED;locus_tag=L2;protein_id=P2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_prefix": "Test_species",
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+    }
+    index = module.build_gff_cds_grouping_index(task)
+
+    assert module.resolve_cds_header_gff_gene(task, "tx1", index)["gene_token"] == "L1"
+    assert module.resolve_cds_header_gff_gene(task, "P1", index)["gene_token"] == "L1"
+    assert module.resolve_cds_header_gff_gene(task, "tx2", index)["gene_token"] == "L2"
+    assert module.resolve_cds_header_gff_gene(task, "P2", index)["gene_token"] == "L2"
+
+
+def test_gff_grouping_normalizes_separators_without_hiding_collisions(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "separator-aliases.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=riceGene",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=LOC_Os10g36420.1;Parent=riceGene",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=LOC_Os10g36420.1",
+                "chr1\tsrc\tgene\t20\t28\t.\t+\t.\tID=cephalotusGene",
+                "chr1\tsrc\tmRNA\t20\t28\t.\t+\t.\tID=Cfol_v3_15267;Parent=cephalotusGene",
+                "chr1\tsrc\tCDS\t20\t28\t.\t+\t0\tParent=Cfol_v3_15267",
+                "chr1\tsrc\tgene\t40\t48\t.\t+\t.\tID=collisionA",
+                "chr1\tsrc\tmRNA\t40\t48\t.\t+\t.\tID=X-A;Parent=collisionA",
+                "chr1\tsrc\tCDS\t40\t48\t.\t+\t0\tParent=X-A",
+                "chr1\tsrc\tgene\t60\t68\t.\t+\t.\tID=collisionB",
+                "chr1\tsrc\tmRNA\t60\t68\t.\t+\t.\tID=X_A;Parent=collisionB",
+                "chr1\tsrc\tCDS\t60\t68\t.\t+\t0\tParent=X_A",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_prefix": "Test_species",
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+    }
+    index = module.build_gff_cds_grouping_index(task)
+
+    assert module.resolve_cds_header_gff_gene(task, "LOC-Os10g36420.1", index)["gene_token"] == "riceGene"
+    assert module.resolve_cds_header_gff_gene(task, "Cfol-v3-15267", index)["gene_token"] == "cephalotusGene"
+    assert module.resolve_cds_header_gff_gene(task, "X-A", index)["gene_token"] == "collisionA"
+    collision = module.resolve_cds_header_gff_gene(task, "X__A", index)
+    assert collision["status"] == "ambiguous"
+    assert set(collision["candidate_gene_tokens"]) == {"collisionA", "collisionB"}
+
+
+def test_gff_grouping_uses_gene_alias_to_disambiguate_shared_protein_id(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "shared-protein.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-L1;locus_tag=L1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=tx1;Parent=gene-L1;locus_tag=L1",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=tx1;locus_tag=L1;protein_id=P_SHARED",
+                "chr1\tsrc\tgene\t20\t28\t.\t+\t.\tID=gene-L2;locus_tag=L2",
+                "chr1\tsrc\tmRNA\t20\t28\t.\t+\t.\tID=tx2;Parent=gene-L2;locus_tag=L2",
+                "chr1\tsrc\tCDS\t20\t28\t.\t+\t0\tParent=tx2;locus_tag=L2;protein_id=P_SHARED",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "ncbi",
+        "species_prefix": "Test_species",
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+    }
+    index = module.build_gff_cds_grouping_index(task)
+    hit = module.resolve_cds_header_gff_gene(
+        task,
+        "record [protein_id=P_SHARED] [locus_tag=L2]",
+        index,
+    )
+
+    assert hit["status"] == "mapped"
+    assert hit["gene_token"] == "L2"
 
 
 def test_format_species_inputs_derives_cds_excluding_overlapping_utrs(tmp_path):

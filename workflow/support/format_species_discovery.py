@@ -1,6 +1,7 @@
 """Local input discovery and formatted output writers."""
 
 import csv
+import hashlib
 import json
 import re
 import time
@@ -54,7 +55,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 1
+CDS_GFF_GROUPING_AUDIT_VERSION = 2
 
 
 def cds_gff_grouping_audit_paths(output_path):
@@ -74,12 +75,24 @@ def cds_gff_source_signature(path):
     }
 
 
-def cds_gff_grouping_audit_matches(audit, task, output_path):
+def cds_gff_artifact_signature(path):
+    signature = cds_gff_source_signature(path)
+    digest = hashlib.sha256()
+    with open(Path(path).expanduser().resolve(), "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    signature["sha256"] = digest.hexdigest()
+    return signature
+
+
+def cds_gff_grouping_audit_matches(audit, task, output_path, strict_mode):
     if not isinstance(audit, dict):
         return False
     if int(audit.get("version", 0) or 0) != CDS_GFF_GROUPING_AUDIT_VERSION:
         return False
     if str(audit.get("gene_grouping_mode", "") or "") != str(task.get("gene_grouping_mode", "strict") or "strict"):
+        return False
+    if bool(audit.get("format_strict", False)) != bool(strict_mode):
         return False
     if task.get("cds_path") is None or task.get("gff_path") is None:
         return False
@@ -88,12 +101,17 @@ def cds_gff_grouping_audit_matches(audit, task, output_path):
             return False
         if audit.get("gff_input") != cds_gff_source_signature(task["gff_path"]):
             return False
+        if audit.get("output_fingerprint") != cds_gff_artifact_signature(output_path):
+            return False
     except (FileNotFoundError, OSError):
         return False
     if str(audit.get("output_path", "") or "") != str(Path(output_path).expanduser().resolve()):
         return False
     _json_path, records_path = cds_gff_grouping_audit_paths(output_path)
-    return records_path.exists() and records_path.stat().st_size > 0
+    try:
+        return audit.get("records_audit_fingerprint") == cds_gff_artifact_signature(records_path)
+    except (FileNotFoundError, OSError):
+        return False
 
 
 def cds_gff_result_fields(audit=None):
@@ -110,7 +128,7 @@ def cds_gff_result_fields(audit=None):
     }
 
 
-def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload):
+def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload, strict_mode):
     json_path, records_path = cds_gff_grouping_audit_paths(output_path)
     json_tmp = Path(str(json_path) + ".tmp.{}.{}".format(time.time_ns(), len(audit_rows)))
     records_tmp = Path(str(records_path) + ".tmp.{}.{}".format(time.time_ns(), len(audit_rows)))
@@ -140,10 +158,13 @@ def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload):
                 "species_key": task["species_key"],
                 "species_prefix": task["species_prefix"],
                 "gene_grouping_mode": task.get("gene_grouping_mode", "strict"),
+                "format_strict": bool(strict_mode),
                 "cds_input": cds_gff_source_signature(task["cds_path"]),
                 "gff_input": cds_gff_source_signature(task["gff_path"]),
                 "output_path": str(Path(output_path).expanduser().resolve()),
+                "output_fingerprint": cds_gff_artifact_signature(output_path),
                 "records_audit_path": str(records_path.resolve()),
+                "records_audit_fingerprint": cds_gff_artifact_signature(records_path),
             }
         )
         with open(json_tmp, "wt", encoding="utf-8") as handle:
@@ -467,13 +488,17 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
     output_path = output_dir / output_name
 
     use_gff_grouping = task.get("cds_path") is not None and task.get("gff_path") is not None
+    strict_mode = bool(task.get("format_strict", False)) if strict is None else bool(strict)
     audit_json_path, _audit_records_path = cds_gff_grouping_audit_paths(output_path)
     existing_audit = read_json(audit_json_path) if use_gff_grouping else None
     if (
         output_path.exists()
         and output_path.stat().st_size > 0
         and not overwrite
-        and (not use_gff_grouping or cds_gff_grouping_audit_matches(existing_audit, task, output_path))
+        and (
+            not use_gff_grouping
+            or cds_gff_grouping_audit_matches(existing_audit, task, output_path, strict_mode)
+        )
     ):
         if use_gff_grouping:
             result = {
@@ -568,7 +593,6 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
     for row in audit_rows:
         row["selected_longest"] = int(row["record_index"] in selected_record_indexes)
 
-    strict_mode = bool(task.get("format_strict", False)) if strict is None else bool(strict)
     if grouping_index is not None and strict_mode and (
         mapping_counts["unmapped"] > 0 or mapping_counts["ambiguous"] > 0
     ):
@@ -626,7 +650,13 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
         },
     }
     if grouping_index is not None and not dry_run:
-        audit_payload = write_cds_gff_grouping_audit(task, output_path, audit_rows, audit_payload)
+        audit_payload = write_cds_gff_grouping_audit(
+            task,
+            output_path,
+            audit_rows,
+            audit_payload,
+            strict_mode,
+        )
 
     status = "dry-run" if dry_run else "write"
     result = {

@@ -27,7 +27,6 @@ from .common import (
     gene_grouping_mode_for_task,
     merge_coordinate_intervals,
     parse_gff_attributes,
-    resolve_feature_gene_token,
     transcript_feature_gene_token,
 )
 
@@ -82,6 +81,22 @@ KNOWN_ALIAS_PREFIXES = (
     "transcript:",
 )
 
+GFF_GROUPING_PARENT_FEATURE_TYPES = frozenset(
+    (
+        "gene",
+        "lncrna",
+        "mrna",
+        "ncrna",
+        "polypeptide",
+        "primary_transcript",
+        "pseudogene",
+        "rna",
+        "rrna",
+        "transcript",
+        "trna",
+    )
+)
+
 
 def gff_alias_variants(value):
     text = str(value or "").strip()
@@ -89,12 +104,17 @@ def gff_alias_variants(value):
         return ()
     variants = []
 
-    def add(candidate):
+    def add(candidate, normalize_separators=True):
         normalized = str(candidate or "").strip()
         if normalized != "" and normalized not in variants:
             variants.append(normalized)
+        if normalize_separators:
+            separator_normalized = re.sub(r"[-_]+", "_", normalized)
+            if separator_normalized != "" and separator_normalized not in variants:
+                variants.append(separator_normalized)
 
-    add(text)
+    has_known_prefix = any(text.lower().startswith(prefix) for prefix in KNOWN_ALIAS_PREFIXES)
+    add(text, normalize_separators=not has_known_prefix)
     current = text
     while True:
         lowered = current.lower()
@@ -123,16 +143,129 @@ def gff_alias_variants(value):
     return tuple(variants)
 
 
-def gff_aliases_from_attributes(attrs):
+def gff_alias_values_from_attributes(attrs):
     aliases = []
     for key, values in attrs.items():
         if str(key or "").strip().lower() not in GFF_CDS_ALIAS_KEYS:
             continue
         for value in values:
-            for alias in gff_alias_variants(value):
-                if alias not in aliases:
-                    aliases.append(alias)
+            alias = str(value or "").strip()
+            if alias != "" and alias not in aliases:
+                aliases.append(alias)
     return tuple(aliases)
+
+
+def gff_aliases_from_attributes(attrs):
+    aliases = []
+    for value in gff_alias_values_from_attributes(attrs):
+        for alias in gff_alias_variants(value):
+            if alias not in aliases:
+                aliases.append(alias)
+    return tuple(aliases)
+
+
+def gff_grouping_parent_feature_type(feature_type):
+    feature_type_lower = str(feature_type or "").strip().lower()
+    return (
+        feature_type_lower in GFF_GROUPING_PARENT_FEATURE_TYPES
+        or "transcript" in feature_type_lower
+        or feature_type_lower.endswith("gene")
+        or feature_type_lower.endswith("rna")
+    )
+
+
+def gff_dbxref_gene_token(attrs):
+    dbxrefs = []
+    for key in ("Dbxref", "db_xref", "dbxref"):
+        dbxrefs.extend(attrs.get(key, ()))
+    for namespace in ("Ensembl", "Araport", "TAIR"):
+        prefix = namespace.lower() + ":"
+        for raw_value in dbxrefs:
+            value = str(raw_value or "").strip()
+            if value.lower().startswith(prefix):
+                candidate = value[len(prefix) :].strip()
+                if candidate != "":
+                    return candidate
+    for raw_value in dbxrefs:
+        value = str(raw_value or "").strip()
+        if value.lower().startswith("geneid:"):
+            candidate = value.split(":", 1)[1].strip()
+            if candidate != "":
+                return "GeneID{}".format(candidate)
+    return ""
+
+
+def strip_gff_feature_prefix(value):
+    current = str(value or "").strip()
+    while current != "":
+        lowered = current.lower()
+        stripped = ""
+        for prefix in KNOWN_ALIAS_PREFIXES:
+            if lowered.startswith(prefix):
+                stripped = current[len(prefix) :].strip()
+                break
+        if stripped == "" or stripped == current:
+            break
+        current = stripped
+    return current
+
+
+def gff_stable_gene_token(attrs, feature_type, include_symbol=True):
+    dbxref_token = gff_dbxref_gene_token(attrs)
+    direct = choose_first_gff_attribute(attrs, ("locus_tag", "gene_id"))
+    if dbxref_token != "" and dbxref_token.lower().startswith(("ens", "araport", "tair")):
+        return dbxref_token
+    if direct != "":
+        return direct
+    if dbxref_token != "":
+        return dbxref_token
+    direct = choose_first_gff_attribute(attrs, ("Parent_Accession", "Accession"))
+    if direct != "":
+        return direct
+    if str(feature_type or "").strip().lower() == "gene":
+        direct = choose_first_gff_attribute(attrs, ("ID", "Name"))
+        if direct != "":
+            return strip_gff_feature_prefix(direct)
+    if include_symbol:
+        return choose_first_gff_attribute(attrs, ("gene", "geneName"))
+    return ""
+
+
+def resolve_grouping_feature_gene_token(feature_id, feature_records, provider, cache, active):
+    feature_text = str(feature_id or "").strip()
+    if feature_text == "":
+        return ""
+    if feature_text in cache:
+        return cache[feature_text]
+    if feature_text in active:
+        collapsed = collapse_transcript_suffix(provider, feature_text)
+        return collapsed if collapsed != "" else feature_text
+
+    record = feature_records.get(feature_text)
+    if record is None:
+        collapsed = collapse_transcript_suffix(provider, feature_text)
+        cache[feature_text] = collapsed if collapsed != "" else strip_gff_feature_prefix(feature_text)
+        return cache[feature_text]
+
+    active.add(feature_text)
+    resolved = ""
+    if record.get("feature_type") != "gene":
+        for parent_id in record.get("parents", ()):
+            resolved = resolve_grouping_feature_gene_token(parent_id, feature_records, provider, cache, active)
+            if resolved != "":
+                break
+    if resolved == "":
+        resolved = str(record.get("gene_token", "") or "").strip()
+    if resolved == "" and record.get("feature_type") == "gene":
+        for parent_id in record.get("parents", ()):
+            resolved = resolve_grouping_feature_gene_token(parent_id, feature_records, provider, cache, active)
+            if resolved != "":
+                break
+    if resolved == "":
+        resolved = collapse_transcript_suffix(provider, feature_text)
+    active.remove(feature_text)
+    cache[feature_text] = str(resolved or "").strip()
+    return cache[feature_text]
 
 
 def build_gff_cds_grouping_index(task):
@@ -142,8 +275,10 @@ def build_gff_cds_grouping_index(task):
         return None
 
     feature_records = {}
-    cds_features_by_transcript = defaultdict(list)
     aliases_by_transcript = defaultdict(set)
+    fallback_gene_tokens = {}
+    use_coordinate_rescue = gene_grouping_mode_for_task(task) == "rescue_overlap"
+    cds_features_by_transcript = defaultdict(list) if use_coordinate_rescue else None
 
     with open_text(gff_path, "rt") as handle:
         for raw_line in handle:
@@ -158,14 +293,13 @@ def build_gff_cds_grouping_index(task):
             attrs = parse_gff_attributes(attr_text)
             feature_id = choose_first_gff_attribute(attrs, ("ID", "transcript_id", "protein_id", "Name"))
             parents = tuple(value for value in attrs.get("Parent", ()) if str(value or "").strip() != "")
-            if feature_id != "":
-                existing = feature_records.get(feature_id)
-                if existing is None or existing.get("feature_type") == "cds":
-                    feature_records[feature_id] = {
-                        "feature_type": feature_type_lower,
-                        "parents": parents,
-                        "attrs": attrs,
-                    }
+            if feature_id != "" and gff_grouping_parent_feature_type(feature_type_lower):
+                feature_records[feature_id] = {
+                    "feature_type": feature_type_lower,
+                    "parents": parents,
+                    "gene_token": gff_stable_gene_token(attrs, feature_type_lower),
+                    "aliases": gff_alias_values_from_attributes(attrs),
+                }
             if feature_type_lower != "cds":
                 continue
             try:
@@ -181,48 +315,72 @@ def build_gff_cds_grouping_index(task):
                 if transcript_id == "":
                     transcript_id = "{}:{}-{}".format(seqid, start, end)
                 transcript_ids = [transcript_id]
-            explicit_gene = choose_first_gff_attribute(
-                attrs,
-                ("gene", "gene_id", "locus_tag", "geneName", "Parent_Accession", "Accession"),
-            )
-            attribute_aliases = gff_aliases_from_attributes(attrs)
+            fallback_gene = gff_stable_gene_token(attrs, feature_type_lower)
+            attribute_aliases = gff_alias_values_from_attributes(attrs)
             for transcript_id in transcript_ids:
                 transcript_text = str(transcript_id or "").strip()
                 if transcript_text == "":
                     continue
-                cds_features_by_transcript[transcript_text].append(
-                    {
-                        "seqid": str(seqid or "").strip(),
-                        "start": start,
-                        "end": end,
-                        "strand": str(strand or "").strip() or "+",
-                        "gene_token": explicit_gene,
-                    }
-                )
                 for alias in gff_alias_variants(transcript_text):
                     aliases_by_transcript[transcript_text].add(alias)
-                aliases_by_transcript[transcript_text].update(attribute_aliases)
+                for raw_alias in attribute_aliases:
+                    aliases_by_transcript[transcript_text].update(gff_alias_variants(raw_alias))
+                if fallback_gene != "":
+                    previous_fallback = fallback_gene_tokens.get(transcript_text, "")
+                    if previous_fallback == "" or fallback_gene < previous_fallback:
+                        fallback_gene_tokens[transcript_text] = fallback_gene
+                if use_coordinate_rescue:
+                    cds_features_by_transcript[transcript_text].append(
+                        {
+                            "seqid": str(seqid or "").strip(),
+                            "start": start,
+                            "end": end,
+                            "strand": str(strand or "").strip() or "+",
+                            "gene_token": fallback_gene,
+                        }
+                    )
 
     gene_cache = {}
-    for transcript_id, features in cds_features_by_transcript.items():
-        resolved_gene = resolve_feature_gene_token(
-            transcript_id,
-            feature_records,
-            task["provider"],
-            gene_cache,
-            set(),
-        )
-        for feature in features:
-            if str(feature.get("gene_token", "") or "").strip() == "":
+    if use_coordinate_rescue:
+        for transcript_id, features in cds_features_by_transcript.items():
+            resolved_gene = ""
+            if transcript_id in feature_records:
+                resolved_gene = resolve_grouping_feature_gene_token(
+                    transcript_id,
+                    feature_records,
+                    task["provider"],
+                    gene_cache,
+                    set(),
+                )
+            if resolved_gene == "":
+                resolved_gene = fallback_gene_tokens.get(transcript_id, "")
+            for feature in features:
                 feature["gene_token"] = resolved_gene
+        original_gene_tokens = {
+            transcript_id: transcript_feature_gene_token(features)
+            for transcript_id, features in cds_features_by_transcript.items()
+        }
+        resolved_gene_tokens = build_rescued_gene_tokens_for_transcripts(task, cds_features_by_transcript)
+    else:
+        original_gene_tokens = {}
+        for transcript_id in aliases_by_transcript:
+            resolved_gene = ""
+            if transcript_id in feature_records:
+                resolved_gene = resolve_grouping_feature_gene_token(
+                    transcript_id,
+                    feature_records,
+                    task["provider"],
+                    gene_cache,
+                    set(),
+                )
+            if resolved_gene == "":
+                resolved_gene = fallback_gene_tokens.get(transcript_id, "")
+            if resolved_gene == "":
+                resolved_gene = collapse_transcript_suffix(task["provider"], transcript_id) or transcript_id
+            original_gene_tokens[transcript_id] = resolved_gene
+        resolved_gene_tokens = dict(original_gene_tokens)
 
-    original_gene_tokens = {
-        transcript_id: transcript_feature_gene_token(features)
-        for transcript_id, features in cds_features_by_transcript.items()
-    }
-    resolved_gene_tokens = build_rescued_gene_tokens_for_transcripts(task, cds_features_by_transcript)
-
-    for transcript_id in cds_features_by_transcript:
+    for transcript_id in aliases_by_transcript:
         pending = [transcript_id]
         visited = set()
         while len(pending) > 0:
@@ -235,11 +393,18 @@ def build_gff_cds_grouping_index(task):
             record = feature_records.get(feature_id)
             if record is None:
                 continue
-            aliases_by_transcript[transcript_id].update(gff_aliases_from_attributes(record.get("attrs", {})))
+            for raw_alias in record.get("aliases", ()):
+                aliases_by_transcript[transcript_id].update(gff_alias_variants(raw_alias))
             for parent_id in record.get("parents", ()):
                 parent_text = str(parent_id or "").strip()
                 if parent_text != "" and parent_text not in visited:
                     pending.append(parent_text)
+
+    feature_records.clear()
+    gene_cache.clear()
+    fallback_gene_tokens.clear()
+    if cds_features_by_transcript is not None:
+        cds_features_by_transcript.clear()
 
     alias_to_gene_tokens = defaultdict(set)
     for transcript_id, aliases in aliases_by_transcript.items():
@@ -247,12 +412,11 @@ def build_gff_cds_grouping_index(task):
         if gene_token == "":
             gene_token = collapse_transcript_suffix(task["provider"], transcript_id) or transcript_id
         for alias in aliases:
-            for variant in gff_alias_variants(alias):
-                alias_to_gene_tokens[variant].add(gene_token)
+            alias_to_gene_tokens[alias].add(gene_token)
 
     rescued_transcripts = sorted(
         transcript_id
-        for transcript_id in cds_features_by_transcript
+        for transcript_id in resolved_gene_tokens
         if str(original_gene_tokens.get(transcript_id, "") or "").strip()
         != str(resolved_gene_tokens.get(transcript_id, "") or "").strip()
     )
@@ -262,7 +426,7 @@ def build_gff_cds_grouping_index(task):
             alias: tuple(sorted(gene_tokens)) for alias, gene_tokens in alias_to_gene_tokens.items()
         },
         "transcript_gene_tokens": dict(resolved_gene_tokens),
-        "transcripts_total": len(cds_features_by_transcript),
+        "transcripts_total": len(aliases_by_transcript),
         "coordinate_rescued_transcripts": len(rescued_transcripts),
         "coordinate_rescued_groups": len(
             {
@@ -329,29 +493,29 @@ def resolve_cds_header_gff_gene(task, header, grouping_index=None):
             "candidate_gene_tokens": (),
         }
     alias_index = index.get("alias_to_gene_tokens", {})
+    ambiguous_aliases = []
+    ambiguous_gene_tokens = set()
     for aliases in extract_cds_header_alias_tiers(task, header):
-        matched_aliases = []
-        gene_tokens = set()
         for alias in aliases:
-            candidates = alias_index.get(alias, ())
-            if len(candidates) == 0:
-                continue
-            matched_aliases.append(alias)
-            gene_tokens.update(candidates)
-        if len(gene_tokens) == 1:
-            return {
-                "status": "mapped",
-                "gene_token": next(iter(gene_tokens)),
-                "matched_aliases": tuple(matched_aliases),
-                "candidate_gene_tokens": tuple(sorted(gene_tokens)),
-            }
-        if len(gene_tokens) > 1:
-            return {
-                "status": "ambiguous",
-                "gene_token": "",
-                "matched_aliases": tuple(matched_aliases),
-                "candidate_gene_tokens": tuple(sorted(gene_tokens)),
-            }
+            candidates = tuple(alias_index.get(alias, ()))
+            if len(candidates) == 1:
+                return {
+                    "status": "mapped",
+                    "gene_token": candidates[0],
+                    "matched_aliases": (alias,),
+                    "candidate_gene_tokens": candidates,
+                }
+            if len(candidates) > 1:
+                if alias not in ambiguous_aliases:
+                    ambiguous_aliases.append(alias)
+                ambiguous_gene_tokens.update(candidates)
+    if len(ambiguous_gene_tokens) > 0:
+        return {
+            "status": "ambiguous",
+            "gene_token": "",
+            "matched_aliases": tuple(ambiguous_aliases),
+            "candidate_gene_tokens": tuple(sorted(ambiguous_gene_tokens)),
+        }
     return {
         "status": "unmapped",
         "gene_token": "",
