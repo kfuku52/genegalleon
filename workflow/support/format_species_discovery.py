@@ -55,7 +55,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 2
+CDS_GFF_GROUPING_AUDIT_VERSION = 3
 
 
 def cds_gff_grouping_audit_paths(output_path):
@@ -67,22 +67,27 @@ def cds_gff_grouping_audit_paths(output_path):
 
 def cds_gff_source_signature(path):
     resolved = Path(path).expanduser().resolve()
-    stat = resolved.stat()
+    before_stat = resolved.stat()
+    digest = hashlib.sha256()
+    with open(resolved, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    after_stat = resolved.stat()
+    if (
+        int(before_stat.st_size) != int(after_stat.st_size)
+        or int(before_stat.st_mtime_ns) != int(after_stat.st_mtime_ns)
+    ):
+        raise OSError("File changed while computing its signature: {}".format(resolved))
     return {
         "path": str(resolved),
-        "size": int(stat.st_size),
-        "mtime_ns": int(stat.st_mtime_ns),
+        "size": int(after_stat.st_size),
+        "mtime_ns": int(after_stat.st_mtime_ns),
+        "sha256": digest.hexdigest(),
     }
 
 
 def cds_gff_artifact_signature(path):
-    signature = cds_gff_source_signature(path)
-    digest = hashlib.sha256()
-    with open(Path(path).expanduser().resolve(), "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    signature["sha256"] = digest.hexdigest()
-    return signature
+    return cds_gff_source_signature(path)
 
 
 def cds_gff_grouping_audit_matches(audit, task, output_path, strict_mode):
@@ -537,6 +542,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
     cds_task = prepare_cds_identifier_task(task)
     grouping_index = cds_task.get("_gff_cds_grouping_index")
     mapping_counts = {"mapped": 0, "unmapped": 0, "ambiguous": 0}
+    raw_gff_tokens_by_gene_id = defaultdict(set)
     audit_rows = []
     for header, sequence in iter_task_cds_records(task):
         before_count += 1
@@ -545,6 +551,10 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
         mapping_status = str(gff_match.get("status", "not_applicable") or "not_applicable")
         if mapping_status in mapping_counts:
             mapping_counts[mapping_status] += 1
+        if mapping_status == "mapped":
+            raw_gene_token = str(gff_match.get("gene_token", "") or "").strip()
+            if raw_gene_token != "":
+                raw_gff_tokens_by_gene_id[gene_id].add(raw_gene_token)
         seq = re.sub(r"\s+", "", sequence).upper()
         # Keep codon-frame-safe length (equivalent role of `cdskit pad` in shell pipelines).
         seq = pad_to_codon_length(seq)
@@ -592,6 +602,20 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
     selected_record_indexes = {records_by_gene[gene_id]["record_index"] for gene_id in ordered_ids}
     for row in audit_rows:
         row["selected_longest"] = int(row["record_index"] in selected_record_indexes)
+
+    sanitized_gene_id_collisions = {
+        gene_id: tuple(sorted(raw_tokens))
+        for gene_id, raw_tokens in raw_gff_tokens_by_gene_id.items()
+        if len(raw_tokens) > 1
+    }
+    if len(sanitized_gene_id_collisions) > 0:
+        examples = []
+        for gene_id in sorted(sanitized_gene_id_collisions)[:5]:
+            examples.append("{} <- {}".format(gene_id, ",".join(sanitized_gene_id_collisions[gene_id])))
+        raise ValueError(
+            "GFF-backed CDS grouping for {} has distinct gene IDs that collide after identifier "
+            "sanitization: {}".format(task.get("species_prefix", ""), "; ".join(examples))
+        )
 
     if grouping_index is not None and strict_mode and (
         mapping_counts["unmapped"] > 0 or mapping_counts["ambiguous"] > 0

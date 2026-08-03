@@ -1290,6 +1290,59 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
     with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_gff\nATGAAACCCGGGTTT\n"
 
+    cds_input_stat = cds_path.stat()
+    cds_path.write_text(
+        ">transcript_alpha\nATGAAATTT\n>transcript_beta\nATGCCCAAAGGGTTT\n",
+        encoding="utf-8",
+    )
+    os.utime(cds_path, ns=(cds_input_stat.st_atime_ns, cds_input_stat.st_mtime_ns))
+    changed_cds = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert changed_cds.returncode == 0, changed_cds.stderr + "\n" + changed_cds.stdout
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        assert handle.read() == ">Arabidopsis_thaliana_gene_from_gff\nATGCCCAAAGGGTTT\n"
+
+    gff_input_stat = gff_path.stat()
+    changed_gff_text = gff_path.read_text(encoding="utf-8").replace("gene_from_gff", "gene_from_xff")
+    assert len(changed_gff_text.encode("utf-8")) == gff_input_stat.st_size
+    gff_path.write_text(changed_gff_text, encoding="utf-8")
+    os.utime(gff_path, ns=(gff_input_stat.st_atime_ns, gff_input_stat.st_mtime_ns))
+    next(out_gff.glob("*.gff.gz")).unlink()
+    changed_gff = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert changed_gff.returncode == 0, changed_gff.stderr + "\n" + changed_gff.stdout
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
+    with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
+        audit = json.load(handle)
+    assert audit["version"] == 3
+    assert len(audit["cds_input"]["sha256"]) == 64
+    assert len(audit["gff_input"]["sha256"]) == 64
+
     longest = run_validate_longest_script(
         "--species-cds-dir",
         str(out_cds),
@@ -1547,6 +1600,138 @@ def test_gff_grouping_uses_gene_alias_to_disambiguate_shared_protein_id(tmp_path
 
     assert hit["status"] == "mapped"
     assert hit["gene_token"] == "L2"
+
+
+def test_gff_grouping_prefers_gtf_gene_id_over_transcript_dbxref(tmp_path):
+    module = load_module()
+    gtf_path = tmp_path / "models.gtf"
+    gtf_path.write_text(
+        "\n".join(
+            [
+                'chr1\tsrc\ttranscript\t1\t9\t.\t+\t.\tgene_id "G1"; transcript_id "T1"; db_xref "Ensembl:ENST000001";',
+                'chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tgene_id "G1"; transcript_id "T1"; protein_id "P1";',
+                (
+                    'chr1\tsrc\ttranscript\t20\t31\t.\t+\t.\tgene_id "G1"; '
+                    'transcript_id "T2"; db_xref "Ensembl:ENST000002";'
+                ),
+                'chr1\tsrc\tCDS\t20\t31\t.\t+\t0\tgene_id "G1"; transcript_id "T2"; protein_id "P2";',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "ensemblplants",
+        "species_prefix": "Test_species",
+        "gff_path": gtf_path,
+        "gene_grouping_mode": "strict",
+    }
+
+    index = module.build_gff_cds_grouping_index(task)
+
+    assert module.resolve_cds_header_gff_gene(task, "P1", index)["gene_token"] == "G1"
+    assert module.resolve_cds_header_gff_gene(task, "P2", index)["gene_token"] == "G1"
+    assert module.resolve_cds_header_gff_gene(task, "ENST000001", index)["gene_token"] == "G1"
+
+
+def test_gff_grouping_maps_polypeptide_and_protein_derives_from_aliases(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "protein-aliases.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t30\t.\t+\t.\tID=G1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=T1;Parent=G1",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=T1",
+                "chr1\tsrc\tpolypeptide\t1\t9\t.\t+\t.\tID=P1;Derives_from=T1",
+                "chr1\tsrc\tmRNA\t16\t30\t.\t+\t.\tID=T2;Parent=G1",
+                "chr1\tsrc\tCDS\t16\t30\t.\t+\t0\tParent=T2",
+                "chr1\tsrc\tprotein\t16\t30\t.\t+\t.\tID=P2;Derives_from=T2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_prefix": "Test_species",
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+    }
+
+    index = module.build_gff_cds_grouping_index(task)
+
+    assert module.resolve_cds_header_gff_gene(task, "P1", index)["gene_token"] == "G1"
+    assert module.resolve_cds_header_gff_gene(task, "P2", index)["gene_token"] == "G1"
+
+
+def test_gff_grouping_rejects_conflicting_unique_header_aliases(tmp_path):
+    module = load_module()
+    cds_path = tmp_path / "conflicting-aliases.cds.fa"
+    gff_path = tmp_path / "conflicting-aliases.gff3"
+    cds_path.write_text(">PA [locus_tag=L2]\nATGAAATTT\n", encoding="utf-8")
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-L1;locus_tag=L1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=T1;Parent=gene-L1",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=T1;protein_id=PA",
+                "chr1\tsrc\tgene\t20\t28\t.\t+\t.\tID=gene-L2;locus_tag=L2",
+                "chr1\tsrc\tmRNA\t20\t28\t.\t+\t.\tID=T2;Parent=gene-L2",
+                "chr1\tsrc\tCDS\t20\t28\t.\t+\t0\tParent=T2;protein_id=PB",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "ncbi",
+        "species_key": "Test_species",
+        "species_prefix": "Test_species",
+        "cds_path": cds_path,
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+    }
+
+    index = module.build_gff_cds_grouping_index(task)
+    hit = module.resolve_cds_header_gff_gene(task, "PA [locus_tag=L2]", index)
+
+    assert hit["status"] == "ambiguous"
+    assert set(hit["candidate_gene_tokens"]) == {"L1", "L2"}
+    with pytest.raises(ValueError, match="unmapped=0 and ambiguous=1"):
+        module.format_cds(task, tmp_path / "out", overwrite=False, dry_run=False, strict=True)
+
+
+def test_gff_grouping_rejects_sanitized_gene_id_collisions(tmp_path):
+    module = load_module()
+    cds_path = tmp_path / "models.cds.fa"
+    gff_path = tmp_path / "models.gff3"
+    cds_path.write_text(">T1\nATGAAATTT\n>T2\nATGCCCAAATTT\n", encoding="utf-8")
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=A:B",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=T1;Parent=A:B",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=T1",
+                "chr1\tsrc\tgene\t20\t31\t.\t+\t.\tID=A%2FB",
+                "chr1\tsrc\tmRNA\t20\t31\t.\t+\t.\tID=T2;Parent=A%2FB",
+                "chr1\tsrc\tCDS\t20\t31\t.\t+\t0\tParent=T2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_key": "Test_species",
+        "species_prefix": "Test_species",
+        "cds_path": cds_path,
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+    }
+
+    with pytest.raises(ValueError, match="collide after identifier sanitization"):
+        module.format_cds(task, tmp_path / "out", overwrite=False, dry_run=False)
 
 
 def test_format_species_inputs_derives_cds_excluding_overlapping_utrs(tmp_path):

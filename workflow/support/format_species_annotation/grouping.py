@@ -9,6 +9,7 @@ except Exception:  # pragma: no cover - runtime without biopython
     SeqIO = None
 
 from format_species_constants import (
+    ENSEMBL_GENE_ID_PATTERN,
     RESCUE_SAME_TERMINAL_MIN_LONGER_OVERLAP,
     RESCUE_SAME_TERMINAL_MIN_SHORTER_OVERLAP,
     RESCUE_SHARED_JUNCTION_MIN_LONGER_OVERLAP,
@@ -89,6 +90,7 @@ GFF_GROUPING_PARENT_FEATURE_TYPES = frozenset(
         "ncrna",
         "polypeptide",
         "primary_transcript",
+        "protein",
         "pseudogene",
         "rna",
         "rrna",
@@ -178,14 +180,26 @@ def gff_dbxref_gene_token(attrs):
     dbxrefs = []
     for key in ("Dbxref", "db_xref", "dbxref"):
         dbxrefs.extend(attrs.get(key, ()))
-    for namespace in ("Ensembl", "Araport", "TAIR"):
+    for raw_value in dbxrefs:
+        value = str(raw_value or "").strip()
+        if value.lower().startswith("ensembl:"):
+            candidate = value.split(":", 1)[1].strip()
+            if ENSEMBL_GENE_ID_PATTERN.match(candidate):
+                return candidate
+    for namespace in ("Araport", "TAIR"):
         prefix = namespace.lower() + ":"
         for raw_value in dbxrefs:
             value = str(raw_value or "").strip()
-            if value.lower().startswith(prefix):
-                candidate = value[len(prefix) :].strip()
-                if candidate != "":
-                    return candidate
+            if not value.lower().startswith(prefix):
+                continue
+            candidate = value[len(prefix) :].strip()
+            match = re.match(
+                r"^(AT(?:[1-5]|C|M)G[0-9]+)(?:\.[0-9]+)?$",
+                candidate,
+                flags=re.IGNORECASE,
+            )
+            if match is not None:
+                return match.group(1)
     for raw_value in dbxrefs:
         value = str(raw_value or "").strip()
         if value.lower().startswith("geneid:"):
@@ -211,12 +225,10 @@ def strip_gff_feature_prefix(value):
 
 
 def gff_stable_gene_token(attrs, feature_type, include_symbol=True):
-    dbxref_token = gff_dbxref_gene_token(attrs)
     direct = choose_first_gff_attribute(attrs, ("locus_tag", "gene_id"))
-    if dbxref_token != "" and dbxref_token.lower().startswith(("ens", "araport", "tair")):
-        return dbxref_token
     if direct != "":
         return direct
+    dbxref_token = gff_dbxref_gene_token(attrs)
     if dbxref_token != "":
         return dbxref_token
     direct = choose_first_gff_attribute(attrs, ("Parent_Accession", "Accession"))
@@ -275,6 +287,7 @@ def build_gff_cds_grouping_index(task):
         return None
 
     feature_records = {}
+    child_features_by_parent = defaultdict(set)
     aliases_by_transcript = defaultdict(set)
     fallback_gene_tokens = {}
     use_coordinate_rescue = gene_grouping_mode_for_task(task) == "rescue_overlap"
@@ -292,7 +305,18 @@ def build_gff_cds_grouping_index(task):
             feature_type_lower = str(feature_type or "").strip().lower()
             attrs = parse_gff_attributes(attr_text)
             feature_id = choose_first_gff_attribute(attrs, ("ID", "transcript_id", "protein_id", "Name"))
-            parents = tuple(value for value in attrs.get("Parent", ()) if str(value or "").strip() != "")
+            direct_parents = tuple(
+                str(value or "").strip()
+                for value in attrs.get("Parent", ())
+                if str(value or "").strip() != ""
+            )
+            parents = list(direct_parents)
+            for relationship_key in ("Parent", "Derives_from", "derives_from"):
+                for value in attrs.get(relationship_key, ()):
+                    parent_text = str(value or "").strip()
+                    if parent_text != "" and parent_text not in parents:
+                        parents.append(parent_text)
+            parents = tuple(parents)
             if feature_id != "" and gff_grouping_parent_feature_type(feature_type_lower):
                 feature_records[feature_id] = {
                     "feature_type": feature_type_lower,
@@ -300,6 +324,11 @@ def build_gff_cds_grouping_index(task):
                     "gene_token": gff_stable_gene_token(attrs, feature_type_lower),
                     "aliases": gff_alias_values_from_attributes(attrs),
                 }
+                if feature_type_lower in ("polypeptide", "protein") or any(
+                    len(attrs.get(key, ())) > 0 for key in ("Derives_from", "derives_from")
+                ):
+                    for parent_id in parents:
+                        child_features_by_parent[parent_id].add(feature_id)
             if feature_type_lower != "cds":
                 continue
             try:
@@ -309,7 +338,7 @@ def build_gff_cds_grouping_index(task):
                 continue
             if start > end:
                 start, end = end, start
-            transcript_ids = list(parents)
+            transcript_ids = list(direct_parents if len(direct_parents) > 0 else parents)
             if len(transcript_ids) == 0:
                 transcript_id = choose_first_gff_attribute(attrs, ("transcript_id", "protein_id", "ID", "Name"))
                 if transcript_id == "":
@@ -400,7 +429,25 @@ def build_gff_cds_grouping_index(task):
                 if parent_text != "" and parent_text not in visited:
                     pending.append(parent_text)
 
+        pending = list(child_features_by_parent.get(transcript_id, ()))
+        visited = set()
+        while len(pending) > 0:
+            feature_id = pending.pop()
+            if feature_id in visited:
+                continue
+            visited.add(feature_id)
+            for alias in gff_alias_variants(feature_id):
+                aliases_by_transcript[transcript_id].add(alias)
+            record = feature_records.get(feature_id)
+            if record is not None:
+                for raw_alias in record.get("aliases", ()):
+                    aliases_by_transcript[transcript_id].update(gff_alias_variants(raw_alias))
+            for child_id in child_features_by_parent.get(feature_id, ()):
+                if child_id not in visited:
+                    pending.append(child_id)
+
     feature_records.clear()
+    child_features_by_parent.clear()
     gene_cache.clear()
     fallback_gene_tokens.clear()
     if cds_features_by_transcript is not None:
@@ -493,28 +540,36 @@ def resolve_cds_header_gff_gene(task, header, grouping_index=None):
             "candidate_gene_tokens": (),
         }
     alias_index = index.get("alias_to_gene_tokens", {})
-    ambiguous_aliases = []
-    ambiguous_gene_tokens = set()
+    evidence = []
+    seen_aliases = set()
+    unique_gene_tokens = set()
+    candidate_gene_tokens = set()
     for aliases in extract_cds_header_alias_tiers(task, header):
         for alias in aliases:
+            if alias in seen_aliases:
+                continue
+            seen_aliases.add(alias)
             candidates = tuple(alias_index.get(alias, ()))
+            if len(candidates) > 0:
+                evidence.append((alias, candidates))
+                candidate_gene_tokens.update(candidates)
             if len(candidates) == 1:
-                return {
-                    "status": "mapped",
-                    "gene_token": candidates[0],
-                    "matched_aliases": (alias,),
-                    "candidate_gene_tokens": candidates,
-                }
-            if len(candidates) > 1:
-                if alias not in ambiguous_aliases:
-                    ambiguous_aliases.append(alias)
-                ambiguous_gene_tokens.update(candidates)
-    if len(ambiguous_gene_tokens) > 0:
+                unique_gene_tokens.add(candidates[0])
+    if len(unique_gene_tokens) == 1:
+        selected = next(iter(unique_gene_tokens))
+        if all(selected in candidates for _alias, candidates in evidence):
+            return {
+                "status": "mapped",
+                "gene_token": selected,
+                "matched_aliases": tuple(alias for alias, candidates in evidence if selected in candidates),
+                "candidate_gene_tokens": (selected,),
+            }
+    if len(candidate_gene_tokens) > 0:
         return {
             "status": "ambiguous",
             "gene_token": "",
-            "matched_aliases": tuple(ambiguous_aliases),
-            "candidate_gene_tokens": tuple(sorted(ambiguous_gene_tokens)),
+            "matched_aliases": tuple(alias for alias, _candidates in evidence),
+            "candidate_gene_tokens": tuple(sorted(candidate_gene_tokens)),
         }
     return {
         "status": "unmapped",
