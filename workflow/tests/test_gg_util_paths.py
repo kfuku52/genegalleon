@@ -36,6 +36,29 @@ def test_forward_config_vars_trims_registry_whitespace_for_genome_evolution_entr
     ]
 
 
+def test_forward_config_vars_includes_species_tree_zip_options(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "species_tree_output_storage=files; "
+        "species_tree_zip_compression=store; "
+        "species_tree_zip_compression_level=0; "
+        "forward_config_vars_to_container_env gg_genome_evolution_entrypoint.sh; "
+        'printf "storage=%s\\ncompression=%s\\nlevel=%s\\n" '
+        '"${SINGULARITYENV_species_tree_output_storage:-}" '
+        '"${SINGULARITYENV_species_tree_zip_compression:-}" '
+        '"${SINGULARITYENV_species_tree_zip_compression_level:-}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "storage=files",
+        "compression=store",
+        "level=0",
+    ]
+
+
 def test_forward_config_vars_includes_gene_evolution_csubst_nonsyn_recode(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "

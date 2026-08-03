@@ -29,6 +29,9 @@ species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-
 species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"
 species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"
 omark_db_path="${omark_db_path:-auto}"
+species_tree_output_storage=$(printf '%s' "${species_tree_output_storage:-${GG_COMMON_SPECIES_TREE_OUTPUT_STORAGE:-zip}}" | tr '[:upper:]' '[:lower:]')
+species_tree_zip_compression=$(printf '%s' "${species_tree_zip_compression:-${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION:-adaptive}}" | tr '[:upper:]' '[:lower:]')
+species_tree_zip_compression_level="${species_tree_zip_compression_level:-${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION_LEVEL:-6}}"
 run_cds_translation="${run_cds_translation:-1}"
 run_species_omark="${run_species_omark:-0}"
 run_build_species_busco_summary="${run_build_species_busco_summary:-1}"
@@ -83,6 +86,30 @@ source "${gg_support_dir}/gg_busco.sh"
 delete_tmp_dir=${delete_tmp_dir:-1}
 busco_lineage_resolved=""
 omark_db_resolved=""
+
+case "${species_tree_output_storage}" in
+  zip|files)
+    ;;
+  raw)
+    species_tree_output_storage="files"
+    ;;
+  *)
+    echo "Invalid species_tree_output_storage: ${species_tree_output_storage}; expected zip, files, or raw." >&2
+    exit 1
+    ;;
+esac
+case "${species_tree_zip_compression}" in
+  adaptive|deflate|store)
+    ;;
+  *)
+    echo "Invalid species_tree_zip_compression: ${species_tree_zip_compression}; expected adaptive, deflate, or store." >&2
+    exit 1
+    ;;
+esac
+if [[ ! "${species_tree_zip_compression_level}" =~ ^[0-9]+$ || ${species_tree_zip_compression_level} -gt 9 ]]; then
+  echo "Invalid species_tree_zip_compression_level: ${species_tree_zip_compression_level}; expected an integer from 0 through 9." >&2
+  exit 1
+fi
 
 # Named stage functions for gg_genome_evolution_core.sh.
 # This file is sourced by workflow/core/gg_genome_evolution_core.sh.
@@ -867,6 +894,9 @@ print_effective_genome_evolution_config_summary() {
     annotation_species_resolved \
     omark_db_path \
     omark_db_resolved \
+    species_tree_output_storage \
+    species_tree_zip_compression \
+    species_tree_zip_compression_level \
     species_tree_rooting_method \
     species_tree_rooting_value \
     species_tree_busco_mode \
@@ -1995,6 +2025,80 @@ dir_mcmctree2="${dir_species_tree}/mcmctree_main"
 dir_tmp="${dir_species_tree}/tmp"
 dir_nwkit_download_dir="${gg_workspace_downloads_dir}/nwkit_downloads"
 
+species_tree_managed_directory_paths=(
+  "${dir_single_copy_fasta}"
+  "${dir_single_copy_mafft}"
+  "${dir_single_copy_trimal}"
+  "${dir_single_copy_iqtree_pep}"
+  "${dir_single_copy_iqtree_dna}"
+)
+
+species_tree_archive_write_args=(
+  --compression "${species_tree_zip_compression}"
+  --compression-level "${species_tree_zip_compression_level}"
+)
+
+species_tree_materialize_directory() {
+  local directory_path=$1
+  local directory_name
+  directory_name=$(basename "${directory_path}")
+  python "${gg_support_dir}/species_tree_output_store.py" materialize \
+    --root "${dir_species_tree}" \
+    --directory "${directory_name}"
+}
+
+species_tree_materialize_managed_directories_for_files_mode() {
+  if [[ "${species_tree_output_storage}" != "files" ]]; then
+    return 0
+  fi
+  python "${gg_support_dir}/species_tree_output_store.py" materialize \
+    --root "${dir_species_tree}"
+}
+
+species_tree_matching_file_count() {
+  local directory_path=$1
+  local name_pattern=$2
+  local directory_name
+  directory_name=$(basename "${directory_path}")
+  python "${gg_support_dir}/species_tree_output_store.py" count \
+    --root "${dir_species_tree}" \
+    --directory "${directory_name}" \
+    --pattern "${name_pattern}"
+}
+
+species_tree_archive_directory() {
+  local directory_path=$1
+  if [[ "${species_tree_output_storage}" != "zip" ]]; then
+    return 0
+  fi
+  local directory_name
+  directory_name=$(basename "${directory_path}")
+  if [[ -d "${directory_path}" && -f "${directory_path}.zip" ]]; then
+    echo "Recovering mixed raw/ZIP species-tree state before packing: ${directory_path}"
+    species_tree_materialize_directory "${directory_path}"
+  fi
+  python "${gg_support_dir}/species_tree_output_store.py" pack \
+    --root "${dir_species_tree}" \
+    --directory "${directory_name}" \
+    "${species_tree_archive_write_args[@]}"
+}
+
+species_tree_archive_managed_directories() {
+  if [[ "${species_tree_output_storage}" != "zip" ]]; then
+    return 0
+  fi
+  local directory_path
+  for directory_path in "${species_tree_managed_directory_paths[@]}"; do
+    if [[ -d "${directory_path}" && -f "${directory_path}.zip" ]]; then
+      echo "Recovering mixed raw/ZIP species-tree state before packing: ${directory_path}"
+      species_tree_materialize_directory "${directory_path}"
+    fi
+  done
+  python "${gg_support_dir}/species_tree_output_store.py" pack \
+    --root "${dir_species_tree}" \
+    "${species_tree_archive_write_args[@]}"
+}
+
 # Orthogroup
 dir_sp_protein="${gg_workspace_downloads_dir}/tmp/species_protein"
 dir_orthofinder="${gg_workspace_output_dir}/orthofinder"
@@ -2094,6 +2198,31 @@ shared_busco_summary_stage_done=0
 shared_species_omark_stage_done=0
 shared_omark_summary_stage_done=0
 
+cleanup_genome_evolution_on_exit() {
+  local exit_status=$?
+  local cleanup_status=0
+  local archive_status=0
+  local active_background_jobs=""
+  trap - EXIT
+  set +e
+  cleanup_species_protein_tmp
+  cleanup_status=$?
+  active_background_jobs=$(jobs -pr)
+  if [[ -n "${active_background_jobs}" ]]; then
+    echo "Warning: Background jobs are still active; leaving managed species-tree directories raw to avoid archiving files that may still be changing." >&2
+  else
+    species_tree_archive_managed_directories
+    archive_status=$?
+  fi
+  if [[ ${exit_status} -eq 0 ]]; then
+    if [[ ${cleanup_status} -ne 0 ]]; then
+      exit_status=${cleanup_status}
+    elif [[ ${archive_status} -ne 0 ]]; then
+      exit_status=${archive_status}
+    fi
+  fi
+  exit "${exit_status}"
+}
 
 
 
@@ -2112,7 +2241,8 @@ shared_omark_summary_stage_done=0
 
 
 
-trap cleanup_species_protein_tmp EXIT
+
+trap cleanup_genome_evolution_on_exit EXIT
 
 # Runtime setup
 if [[ "${input_sequence_mode}" == "protein" ]]; then
@@ -2158,6 +2288,7 @@ if species_tree_summary_generation_requested; then
   species_tree_requested_for_orthofinder=1
 fi
 refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}"
+species_tree_materialize_managed_directories_for_files_mode
 refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}"
 refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}"
 memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
@@ -2257,12 +2388,11 @@ task="Collecting IDs of common BUSCO genes"
 run_shared_busco_summary_stage
 
 task="Generating FASTA files for duplicate-aware BUSCO genes"
-ensure_dir "${dir_single_copy_fasta}"
 num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
-singlecopy_fasta_files=()
-mapfile -t singlecopy_fasta_files < <(gg_find_file_basenames "${dir_single_copy_fasta}" "${single_copy_fasta_glob}")
-num_singlecopy_fasta=${#singlecopy_fasta_files[@]}
+num_singlecopy_fasta=$(species_tree_matching_file_count "${dir_single_copy_fasta}" "${single_copy_fasta_glob}")
 if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree_fasta} -eq 1 ]]; then
+  species_tree_materialize_directory "${dir_single_copy_fasta}"
+  ensure_dir "${dir_single_copy_fasta}"
   prepare_species_tree_input_dir
   gg_step_start "${task}"
 
@@ -2353,12 +2483,13 @@ else
 fi
 
 task="MAFFT alignment"
-ensure_dir "${dir_single_copy_mafft}"
 num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
-mafft_fasta_files=()
-mapfile -t mafft_fasta_files < <(gg_find_file_basenames "${dir_single_copy_mafft}" "${single_copy_aln_glob}")
-num_mafft_fasta=${#mafft_fasta_files[@]}
+num_mafft_fasta=$(species_tree_matching_file_count "${dir_single_copy_mafft}" "${single_copy_aln_glob}")
 if [[ ${num_busco_ids} -ne ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]]; then
+  species_tree_materialize_directory "${dir_single_copy_mafft}"
+  species_tree_materialize_directory "${dir_single_copy_fasta}"
+  ensure_dir "${dir_single_copy_mafft}"
+  ensure_dir "${dir_single_copy_fasta}"
   gg_step_start "${task}"
 
   run_mafft() {
@@ -2429,12 +2560,15 @@ else
   gg_step_skip "${task}"
 fi
 
+species_tree_archive_directory "${dir_single_copy_fasta}"
+
 task="TrimAl"
-ensure_dir "${dir_single_copy_trimal}"
-trimal_fasta_files=()
-mapfile -t trimal_fasta_files < <(gg_find_file_basenames "${dir_single_copy_trimal}" "${single_copy_trimal_glob}")
-num_trimal_fasta=${#trimal_fasta_files[@]}
+num_trimal_fasta=$(species_tree_matching_file_count "${dir_single_copy_trimal}" "${single_copy_trimal_glob}")
 if [[ ${num_busco_ids} -ne ${num_trimal_fasta} && ${run_individual_trimal} -eq 1 ]]; then
+  species_tree_materialize_directory "${dir_single_copy_trimal}"
+  species_tree_materialize_directory "${dir_single_copy_mafft}"
+  ensure_dir "${dir_single_copy_trimal}"
+  ensure_dir "${dir_single_copy_mafft}"
   gg_step_start "${task}"
 
   run_trimal() {
@@ -2477,6 +2611,7 @@ if [[ ${num_busco_ids} -ne ${num_trimal_fasta} && ${run_individual_trimal} -eq 1
 else
   gg_step_skip "${task}"
 fi
+species_tree_archive_directory "${dir_single_copy_mafft}"
 # shellcheck shell=bash
 # Sourced by gg_genome_evolution_core.sh.
 
@@ -2492,6 +2627,8 @@ else
   fi
 fi
 if [[ ${concat_alignment_ready} -eq 0 && ${run_concat_alignment} -eq 1 ]]; then
+  species_tree_materialize_directory "${dir_single_copy_trimal}"
+  ensure_dir "${dir_single_copy_trimal}"
   gg_step_start "${task}"
   ensure_parent_dir "${file_concat_pep}"
   ensure_dir "${dir_concat_fasta}"
@@ -2693,11 +2830,12 @@ else
 fi
 
 task="IQ-TREE for individual single-copy protein trees"
-ensure_dir "${dir_single_copy_iqtree_pep}"
-iqtree_pep_tree_files=()
-mapfile -t iqtree_pep_tree_files < <(gg_find_file_basenames "${dir_single_copy_iqtree_pep}" "*.nwk")
-num_iqtree_pep=${#iqtree_pep_tree_files[@]}
+num_iqtree_pep=$(species_tree_matching_file_count "${dir_single_copy_iqtree_pep}" "*.nwk")
 if [[ ${num_busco_ids} -ne ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq 1 ]]; then
+  species_tree_materialize_directory "${dir_single_copy_iqtree_pep}"
+  species_tree_materialize_directory "${dir_single_copy_trimal}"
+  ensure_dir "${dir_single_copy_iqtree_pep}"
+  ensure_dir "${dir_single_copy_trimal}"
   gg_step_start "${task}"
 
   run_iqtree_pep() {
@@ -2745,6 +2883,8 @@ fi
 
 task="ASTRAL of individual single-copy protein trees"
 if [[ (! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}") && ${run_astral_pep} -eq 1 ]]; then
+  species_tree_materialize_directory "${dir_single_copy_iqtree_pep}"
+  ensure_dir "${dir_single_copy_iqtree_pep}"
   gg_step_start "${task}"
   ensure_dir "${dir_astral_pep}"
 
@@ -2825,12 +2965,15 @@ else
   gg_step_skip "${task}"
 fi
 
+species_tree_archive_directory "${dir_single_copy_iqtree_pep}"
+
 task="IQ-TREE for individual single-copy DNA trees"
-ensure_dir "${dir_single_copy_iqtree_dna}"
-iqtree_dna_tree_files=()
-mapfile -t iqtree_dna_tree_files < <(gg_find_file_basenames "${dir_single_copy_iqtree_dna}" "*.nwk")
-num_iqtree_dna=${#iqtree_dna_tree_files[@]}
+num_iqtree_dna=$(species_tree_matching_file_count "${dir_single_copy_iqtree_dna}" "*.nwk")
 if [[ ${num_busco_ids} -ne ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq 1 ]]; then
+  species_tree_materialize_directory "${dir_single_copy_iqtree_dna}"
+  species_tree_materialize_directory "${dir_single_copy_trimal}"
+  ensure_dir "${dir_single_copy_iqtree_dna}"
+  ensure_dir "${dir_single_copy_trimal}"
   gg_step_start "${task}"
 
   run_iqtree_dna() {
@@ -2873,6 +3016,8 @@ fi
 
 task="ASTRAL of individual single-copy DNA trees"
 if [[ (! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}") && ${run_astral_dna} -eq 1 ]]; then
+  species_tree_materialize_directory "${dir_single_copy_iqtree_dna}"
+  ensure_dir "${dir_single_copy_iqtree_dna}"
   gg_step_start "${task}"
   ensure_dir "${dir_astral_dna}"
 
@@ -2952,6 +3097,8 @@ if [[ (! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}") && ${run
 else
   gg_step_skip "${task}"
 fi
+species_tree_archive_directory "${dir_single_copy_iqtree_dna}"
+species_tree_archive_directory "${dir_single_copy_trimal}"
 # shellcheck shell=bash
 # Sourced by gg_genome_evolution_core.sh.
 
@@ -3804,6 +3951,7 @@ else
 fi
 
 cleanup_species_protein_tmp
+species_tree_archive_managed_directories
 trap - EXIT
 
 # Genome evolution

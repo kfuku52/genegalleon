@@ -74,6 +74,7 @@ gg_workspace_output_dir=$(workspace_output_root "${gg_workspace_dir}")
 gg_workspace_input_dir=$(workspace_input_root "${gg_workspace_dir}")
 dir_orthogroup="${gg_workspace_output_dir}/orthogroup"
 dir_query2family="${gg_workspace_output_dir}/query2family"
+dir_species_tree="${gg_workspace_output_dir}/species_tree"
 dir_transcriptome_assembly="${gg_workspace_output_dir}/transcriptome_assembly"
 dir_query_gene="${gg_workspace_input_dir}/query_gene"
 file_orthogroup_genecount_selected="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv"
@@ -169,6 +170,13 @@ if [[ -d "${dir_query2family}" ]]; then
     fi
   fi
   cleanup_gene_family_tmp_if_enabled "${dir_query2family}"
+fi
+
+if [[ -d "${dir_species_tree}" ]]; then
+  echo ""
+  echo "Checking managed species-tree stage storage: ${dir_species_tree}"
+  python "${gg_support_dir}/species_tree_output_store.py" status \
+    --root "${dir_species_tree}"
 fi
 
 if [[ -d "${dir_transcriptome_assembly}" ]]; then

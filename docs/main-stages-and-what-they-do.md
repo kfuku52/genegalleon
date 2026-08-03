@@ -422,6 +422,9 @@ Note:
 - Gene-family ZIP manager:
   - `workflow/gg_gene_family_archive.sh`
   - lists, verifies, deletes, undeletes, restores, and explicitly archives logical query2family/orthogroup artifacts
+- Species-tree stage ZIP manager:
+  - `workflow/gg_species_tree_archive.sh`
+  - converts, verifies, and reports the high-file-count `species_tree/single_copy_*` stage directories
 - Versions dump:
   - collector script: `workflow/support/gg_versions.sh`
   - auto-triggered at the end of each `gg_*_entrypoint.sh` on successful completion

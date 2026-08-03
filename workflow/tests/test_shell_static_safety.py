@@ -1286,6 +1286,47 @@ def test_gene_family_zip_storage_is_common_default_and_remains_configurable():
     assert "gene_family_tmp_max_files" in config_vars
 
 
+def test_species_tree_zip_storage_is_common_default_and_scoped():
+    common = _read_text(WORKFLOW_DIR / "gg_common_params.sh")
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
+    core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+    progress = _read_text(CORE_DIR / "gg_progress_summary_core.sh")
+    store = _read_text(WORKFLOW_DIR / "support" / "species_tree_output_store.py")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+
+    assert ': "${GG_COMMON_SPECIES_TREE_OUTPUT_STORAGE:=zip}"' in common
+    assert ': "${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION:=adaptive}"' in common
+    assert ': "${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION_LEVEL:=6}"' in common
+    assert "GG_COMMON_SPECIES_TREE_OUTPUT_STORAGE:-zip" in entrypoint
+    assert "species_tree_output_storage" in config_vars
+    assert "species_tree_zip_compression" in config_vars
+    assert "species_tree_zip_compression_level" in config_vars
+    assert 'species_tree_output_storage="files"' in core
+    assert 'species_tree_output_store.py" pack' in core
+    assert 'species_tree_output_store.py" materialize' in core
+    assert 'species_tree_output_store.py" status' in progress
+    for managed in (
+        "single_copy_cds_fasta",
+        "single_copy_mafft",
+        "single_copy_trimal",
+        "single_copy_iqtree_pep",
+        "single_copy_iqtree_dna",
+    ):
+        assert f'"{managed}"' in store
+    for unmanaged in (
+        "species_tree_summary",
+        "single_copy_astral_dna",
+        "single_copy_astral_pep",
+        "concatenated_alignment",
+        "mcmctree_main",
+        "busco_",
+        "orthofinder",
+        "orthogroup",
+        "query2family",
+    ):
+        assert f'"{unmanaged}"' not in store
+
+
 def test_gene_family_zip_archiving_is_scoped_to_active_gene_family_roots():
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
     progress = _read_text(CORE_DIR / "gg_progress_summary_core.sh")

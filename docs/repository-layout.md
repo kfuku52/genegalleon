@@ -41,6 +41,8 @@ Main contents:
   - shared defaults reused by multiple stages
 - `workflow/gg_gene_family_archive.sh`
   - manual inspection, verification, deletion, and restoration for ZIP-backed gene-family outputs
+- `workflow/gg_species_tree_archive.sh`
+  - raw/ZIP conversion and verification for high-file-count species-tree stage directories
 - `workflow/gg_path_defaults.sh`
   - default path definitions for workspace and container image
 - `workflow/gg_all_entrypoints_debug.sh`

@@ -294,6 +294,9 @@ run_go_enrichment
 species_label_parser
 species_label_regex
 species_label_map_tsv
+species_tree_output_storage
+species_tree_zip_compression
+species_tree_zip_compression_level
 species_tree_rooting
 strictly_single_copy_only
 target_branch_go

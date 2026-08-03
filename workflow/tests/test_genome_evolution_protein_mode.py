@@ -4,6 +4,8 @@ import shlex
 import shutil
 import stat
 import subprocess
+import sys
+import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -692,6 +694,9 @@ def _run_core(
     env.update(
         {
             "input_sequence_mode": "protein",
+            "species_tree_output_storage": "zip",
+            "species_tree_zip_compression": "adaptive",
+            "species_tree_zip_compression_level": "6",
             "run_species_busco": "0",
             "run_build_species_busco_summary": "0",
             "run_species_omark": "0",
@@ -883,6 +888,246 @@ def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launcher
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_archives_and_reuses_high_count_species_tree_stages(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_protein_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEPTIDE\n",
+        encoding="utf-8",
+    )
+    species_tree_dir = workspace / "output" / "species_tree"
+    managed = (
+        "single_copy_cds_fasta",
+        "single_copy_mafft",
+        "single_copy_trimal",
+        "single_copy_iqtree_pep",
+        "single_copy_iqtree_dna",
+    )
+    for name in managed:
+        directory = species_tree_dir / name
+        directory.mkdir(parents=True)
+        (directory / "preserved.txt").write_text(name, encoding="utf-8")
+    summary_dir = species_tree_dir / "species_tree_summary"
+    summary_dir.mkdir()
+    (summary_dir / "preserved.txt").write_text("visible", encoding="utf-8")
+
+    first = _run_core(tmp_path, {"run_orthofinder": "0"})
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    for name in managed:
+        assert not (species_tree_dir / name).exists()
+        assert (species_tree_dir / f"{name}.zip").is_file()
+    assert (summary_dir / "preserved.txt").read_text(encoding="utf-8") == "visible"
+    assert not (species_tree_dir / "species_tree_summary.zip").exists()
+    first_archive_stats = {
+        name: (species_tree_dir / f"{name}.zip").stat()
+        for name in managed
+    }
+
+    second = _run_core(tmp_path, {"run_orthofinder": "0"})
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    for name in managed:
+        assert not (species_tree_dir / name).exists()
+        archive_path = species_tree_dir / f"{name}.zip"
+        assert archive_path.is_file()
+        assert archive_path.stat().st_ino == first_archive_stats[name].st_ino
+        assert archive_path.stat().st_mtime_ns == first_archive_stats[name].st_mtime_ns
+        with zipfile.ZipFile(archive_path) as archive:
+            assert archive.read(f"{name}/preserved.txt").decode("utf-8") == name
+    assert (summary_dir / "preserved.txt").read_text(encoding="utf-8") == "visible"
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_files_mode_materializes_existing_species_tree_zips(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_protein_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEPTIDE\n",
+        encoding="utf-8",
+    )
+    species_tree_dir = workspace / "output" / "species_tree"
+    raw = species_tree_dir / "single_copy_iqtree_dna"
+    raw.mkdir(parents=True)
+    (raw / "preserved.txt").write_text("preserved", encoding="utf-8")
+    subprocess.run(
+        [
+            sys.executable,
+            str(WORKFLOW_DIR / "support" / "species_tree_output_store.py"),
+            "pack",
+            "--root",
+            str(species_tree_dir),
+            "--directory",
+            "single_copy_iqtree_dna",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    completed = _run_core(
+        tmp_path,
+        {
+            "run_orthofinder": "0",
+            "species_tree_output_storage": "files",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert (raw / "preserved.txt").read_text(encoding="utf-8") == "preserved"
+    assert not (species_tree_dir / "single_copy_iqtree_dna.zip").exists()
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_zip_mode_recovers_mixed_species_tree_state(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_protein_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEPTIDE\n",
+        encoding="utf-8",
+    )
+    species_tree_dir = workspace / "output" / "species_tree"
+    raw = species_tree_dir / "single_copy_iqtree_dna"
+    raw.mkdir(parents=True)
+    same_name = raw / "BUSCO1.dna.nwk"
+    same_name.write_text("archived\n", encoding="utf-8")
+    subprocess.run(
+        [
+            sys.executable,
+            str(WORKFLOW_DIR / "support" / "species_tree_output_store.py"),
+            "pack",
+            "--root",
+            str(species_tree_dir),
+            "--directory",
+            "single_copy_iqtree_dna",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    raw.mkdir()
+    same_name.write_text("newer live\n", encoding="utf-8")
+    (raw / "BUSCO2.dna.nwk").write_text("new live\n", encoding="utf-8")
+
+    completed = _run_core(tmp_path, {"run_orthofinder": "0"})
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "Recovering mixed raw/ZIP species-tree state" in completed.stdout
+    assert not raw.exists()
+    with zipfile.ZipFile(species_tree_dir / "single_copy_iqtree_dna.zip") as archive:
+        assert archive.read("single_copy_iqtree_dna/BUSCO1.dna.nwk") == b"newer live\n"
+        assert archive.read("single_copy_iqtree_dna/BUSCO2.dna.nwk") == b"new live\n"
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_files_mode_materializes_all_before_later_failure(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_protein_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEPTIDE\n",
+        encoding="utf-8",
+    )
+    species_tree_dir = workspace / "output" / "species_tree"
+    names = ("single_copy_cds_fasta", "single_copy_iqtree_dna")
+    for name in names:
+        raw = species_tree_dir / name
+        raw.mkdir(parents=True)
+        (raw / "preserved.txt").write_text(name, encoding="utf-8")
+    subprocess.run(
+        [
+            sys.executable,
+            str(WORKFLOW_DIR / "support" / "species_tree_output_store.py"),
+            "pack",
+            "--root",
+            str(species_tree_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    completed = _run_core(
+        tmp_path,
+        {
+            "run_orthofinder": "0",
+            "species_tree_output_storage": "files",
+            "orthogroup_annotation_method": "invalid",
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "Invalid orthogroup_annotation_method" in completed.stdout
+    for name in names:
+        raw = species_tree_dir / name
+        assert (raw / "preserved.txt").read_text(encoding="utf-8") == name
+        assert not (species_tree_dir / f"{name}.zip").exists()
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_failure_archives_live_species_tree_stages(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_protein_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEPTIDE\n",
+        encoding="utf-8",
+    )
+    species_tree_dir = workspace / "output" / "species_tree"
+    raw = species_tree_dir / "single_copy_iqtree_dna"
+    raw.mkdir(parents=True)
+    (raw / "preserved.txt").write_text("preserved", encoding="utf-8")
+
+    completed = _run_core(
+        tmp_path,
+        {
+            "run_orthofinder": "0",
+            "orthogroup_annotation_method": "invalid",
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "Invalid orthogroup_annotation_method" in completed.stdout
+    assert not raw.exists()
+    archive_path = species_tree_dir / "single_copy_iqtree_dna.zip"
+    assert archive_path.is_file()
+    with zipfile.ZipFile(archive_path) as archive:
+        assert archive.read("single_copy_iqtree_dna/preserved.txt") == b"preserved"
+
+
+@pytest.mark.parametrize(
+    ("extra_env", "expected_error"),
+    [
+        ({"species_tree_output_storage": "tar"}, "Invalid species_tree_output_storage"),
+        ({"species_tree_zip_compression": "bzip2"}, "Invalid species_tree_zip_compression"),
+        ({"species_tree_zip_compression_level": "-1"}, "Invalid species_tree_zip_compression_level"),
+        ({"species_tree_zip_compression_level": "10"}, "Invalid species_tree_zip_compression_level"),
+    ],
+)
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_rejects_invalid_species_tree_storage_settings_without_modifying_outputs(
+    tmp_path: Path,
+    extra_env: dict[str, str],
+    expected_error: str,
+):
+    species_tree_dir = tmp_path / "workspace" / "output" / "species_tree"
+    raw = species_tree_dir / "single_copy_iqtree_dna"
+    raw.mkdir(parents=True)
+    marker = raw / "preserved.txt"
+    marker.write_text("preserved", encoding="utf-8")
+
+    completed = _run_core(tmp_path, extra_env)
+
+    assert completed.returncode != 0
+    assert expected_error in completed.stderr
+    assert marker.read_text(encoding="utf-8") == "preserved"
+    assert not (species_tree_dir / "single_copy_iqtree_dna.zip").exists()
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
 def test_genome_evolution_accepts_legacy_species_tree_rooting_outgroup_lists(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1006,6 +1251,58 @@ def test_genome_evolution_keeps_species_tree_outputs_when_generation_disabled_an
     assert existing_tree.read_text(encoding="utf-8") == "(Arabidopsis_thaliana:0.1);\n"
     assert stamp.read_text(encoding="utf-8") == "old-signature\n"
     assert "Keeping existing species_tree outputs for reuse" in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_invalidates_zip_backed_species_tree_outputs_when_generation_enabled(
+    tmp_path: Path,
+):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_tree_dir = workspace / "output" / "species_tree"
+    managed = species_tree_dir / "single_copy_iqtree_dna"
+    species_protein_dir.mkdir(parents=True)
+    managed.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+    (managed / "stale.nwk").write_text("(stale);\n", encoding="utf-8")
+    subprocess.run(
+        [
+            sys.executable,
+            str(WORKFLOW_DIR / "support" / "species_tree_output_store.py"),
+            "pack",
+            "--root",
+            str(species_tree_dir),
+            "--directory",
+            "single_copy_iqtree_dna",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (species_tree_dir / ".shared_protein_input_signature").write_text(
+        "old-signature\n", encoding="utf-8"
+    )
+
+    completed = _run_core(
+        tmp_path,
+        {
+            "run_orthofinder": "0",
+            "run_concat_iqtree_protein": "1",
+        },
+    )
+
+    # The requested downstream step has no concatenated alignment in this
+    # fixture, but invalidation must occur before that later input failure.
+    assert completed.returncode != 0
+    assert "Clearing derived outputs" in completed.stdout
+    archive_path = species_tree_dir / "single_copy_iqtree_dna.zip"
+    if archive_path.is_file():
+        with zipfile.ZipFile(archive_path) as archive:
+            assert "single_copy_iqtree_dna/stale.nwk" not in archive.namelist()
+    assert not (species_tree_dir / "single_copy_iqtree_dna" / "stale.nwk").exists()
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")

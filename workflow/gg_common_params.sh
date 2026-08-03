@@ -22,3 +22,6 @@
 : "${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:=100}" # Maximum failed gene-family task directories retained per query2family/orthogroup root; oldest excess directories are removed and 0 disables the count limit.
 : "${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:=107374182400}" # Maximum total bytes retained across inactive failed gene-family tmp directories (100 GiB by default); 0 disables the byte limit.
 : "${GG_COMMON_GENE_FAMILY_TMP_MAX_FILES:=100000}" # Maximum total files retained across inactive failed gene-family tmp directories; 0 disables the file-count limit.
+: "${GG_COMMON_SPECIES_TREE_OUTPUT_STORAGE:=zip}" # zip|files|raw; ZIP mode stores high-file-count single-copy stage directories as visible species_tree/<stage>.zip files.
+: "${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION:=adaptive}" # adaptive stores already-compressed members and deflates other species-tree stage files; deflate or store forces one method.
+: "${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION_LEVEL:=6}" # Deflate level from 0 through 9 for managed species-tree stage archives.
