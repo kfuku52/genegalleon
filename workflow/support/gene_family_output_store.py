@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 import uuid
+import weakref
 import zipfile
 from collections import OrderedDict
 from dataclasses import dataclass, replace
@@ -271,6 +272,57 @@ def _physical_archive_paths(root: Path | str) -> List[Path]:
             if _zip_has_genegalleon_manifest(path)
         )
     return sorted(set(paths))
+
+
+def _unrelated_final_zip_candidates(root: Path | str) -> List[Path]:
+    """List user ZIPs whose names could collide with managed final ZIPs."""
+
+    resolved = Path(root).resolve()
+    return sorted(
+        path
+        for path in resolved.glob("*.zip")
+        if path.is_file()
+        and not path.is_symlink()
+        and not _zip_has_genegalleon_manifest(path)
+        and (resolved / path.stem).is_dir()
+        and not (resolved / path.stem).is_symlink()
+    )
+
+
+def _conflicting_final_zip_paths(
+    root: Path | str,
+    managed_subdirs: Set[str],
+) -> List[Path]:
+    return [
+        path
+        for path in _unrelated_final_zip_candidates(root)
+        if path.stem in managed_subdirs
+    ]
+
+
+def _catalog_conflicting_final_zip_paths(
+    root: Path | str,
+    valid_family_ids: Set[str],
+    family_from_name: Callable[[str], Optional[str]],
+) -> List[Path]:
+    """Find collisions without rescanning unrelated output subdirectories."""
+
+    conflicts: List[Path] = []
+    for zip_path in _unrelated_final_zip_candidates(root):
+        live_dir = zip_path.with_suffix("")
+        with os.scandir(live_dir) as entries:
+            for entry in entries:
+                if (
+                    entry.name.startswith(".")
+                    or entry.is_symlink()
+                    or not entry.is_file(follow_symlinks=False)
+                ):
+                    continue
+                family_id = family_from_name(entry.name)
+                if family_id is not None and family_id in valid_family_ids:
+                    conflicts.append(zip_path)
+                    break
+    return conflicts
 
 
 def _final_archive_path(root: Path | str, subdir: str) -> Path:
@@ -794,6 +846,10 @@ class GeneFamilyOutputStore:
         self._cache_epoch: Optional[str] = None
         self._index_update_active = False
         self._cache_lock = threading.RLock()
+        self._zip_reader_cache: weakref.WeakKeyDictionary[
+            threading.Thread,
+            Tuple[Path, zipfile.ZipFile, int],
+        ] = weakref.WeakKeyDictionary()
 
     def _assert_no_pending_index_update(self) -> None:
         marker = self.archive_root / INDEX_UPDATE_FILE
@@ -2175,9 +2231,45 @@ class GeneFamilyOutputStore:
                 raise ArchiveStoreError(
                     f"Symlinked ZIP shards are not supported: {artifact.zip_path}"
                 )
-            with zipfile.ZipFile(artifact.zip_path, "r") as archive:
+            thread = threading.current_thread()
+            cached_reader = False
+            with self._cache_lock:
+                cached = self._zip_reader_cache.get(thread)
+                if cached is not None and cached[0] == artifact.zip_path:
+                    archive = cached[1]
+                    self._zip_reader_cache[thread] = (
+                        cached[0],
+                        cached[1],
+                        cached[2] + 1,
+                    )
+                    cached_reader = True
+                elif cached is None or cached[2] == 0:
+                    if cached is not None:
+                        cached[1].close()
+                    archive = zipfile.ZipFile(artifact.zip_path, "r")
+                    self._zip_reader_cache[thread] = (
+                        artifact.zip_path,
+                        archive,
+                        1,
+                    )
+                    cached_reader = True
+                else:
+                    archive = zipfile.ZipFile(artifact.zip_path, "r")
+            try:
                 with archive.open(artifact.member_name, "r") as handle:
                     yield handle
+            finally:
+                if cached_reader:
+                    with self._cache_lock:
+                        cached = self._zip_reader_cache.get(thread)
+                        if cached is not None and cached[1] is archive:
+                            self._zip_reader_cache[thread] = (
+                                cached[0],
+                                cached[1],
+                                max(0, cached[2] - 1),
+                            )
+                else:
+                    archive.close()
 
     def materialize(
         self,
@@ -2617,6 +2709,9 @@ class GeneFamilyOutputStore:
 
     def _reset_cache(self) -> None:
         with self._cache_lock:
+            for _, archive, _ in self._zip_reader_cache.values():
+                archive.close()
+            self._zip_reader_cache.clear()
             self._archives_loaded = False
             self._archived.clear()
             self._tombstones.clear()
@@ -2909,11 +3004,17 @@ class GeneFamilyOutputStore:
                             self._append_tombstone(logical_path, "delete")
                     raise
 
-    def verify(self) -> List[Path]:
+    def verify(
+        self,
+        progress_callback: Optional[Callable[..., None]] = None,
+    ) -> List[Path]:
         with producer_read_lock(self.archive_root):
-            return self._verify_unlocked()
+            return self._verify_unlocked(progress_callback=progress_callback)
 
-    def _verify_unlocked(self) -> List[Path]:
+    def _verify_unlocked(
+        self,
+        progress_callback: Optional[Callable[..., None]] = None,
+    ) -> List[Path]:
         verified: List[Path] = []
         if not self.archive_root.is_dir():
             return verified
@@ -2961,10 +3062,37 @@ class GeneFamilyOutputStore:
             str,
             Tuple[Path, Tuple[object, ...]],
         ] = {}
+        archive_manifests: List[Tuple[Path, dict]] = []
         for zip_path in _physical_archive_paths(self.root):
             if zip_path.is_symlink() or zip_path.parent.is_symlink():
                 raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {zip_path}")
-            manifest = self._read_manifest(zip_path)
+            archive_manifests.append((zip_path, self._read_manifest(zip_path)))
+        total_zip_files = len(archive_manifests)
+        total_members = sum(
+            len(manifest["members"])
+            for _, manifest in archive_manifests
+        )
+        total_bytes = sum(
+            int(manifest["members"][member_index]["size"])
+            for _, manifest in archive_manifests
+            for member_index in range(len(manifest["members"]))
+        )
+        completed_members = 0
+        completed_bytes = 0
+        last_progress = time.monotonic()
+        if progress_callback is not None:
+            progress_callback(
+                force=True,
+                phase="verifying",
+                verify_zip_files_completed=0,
+                verify_zip_files_total=total_zip_files,
+                verify_members_completed=0,
+                verify_members_total=total_members,
+                verify_bytes_completed=0,
+                verify_bytes_total=total_bytes,
+                current_zip="-",
+            )
+        for zip_index, (zip_path, manifest) in enumerate(archive_manifests):
             with zipfile.ZipFile(zip_path, "r") as archive:
                 for member in manifest["members"]:
                     digest = hashlib.sha256()
@@ -2973,6 +3101,24 @@ class GeneFamilyOutputStore:
                         with archive.open(member_name, "r") as handle:
                             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                                 digest.update(chunk)
+                                completed_bytes += len(chunk)
+                                now = time.monotonic()
+                                if (
+                                    progress_callback is not None
+                                    and now - last_progress >= 30.0
+                                ):
+                                    progress_callback(
+                                        force=False,
+                                        phase="verifying",
+                                        verify_zip_files_completed=zip_index,
+                                        verify_zip_files_total=total_zip_files,
+                                        verify_members_completed=completed_members,
+                                        verify_members_total=total_members,
+                                        verify_bytes_completed=completed_bytes,
+                                        verify_bytes_total=total_bytes,
+                                        current_zip=zip_path.name,
+                                    )
+                                    last_progress = now
                     except zipfile.BadZipFile as exc:
                         raise ArchiveStoreError(
                             f"CRC verification failed in {zip_path}: {member_name}"
@@ -2982,6 +3128,7 @@ class GeneFamilyOutputStore:
                             f"SHA256 verification failed in {zip_path}: "
                             f"{member_name}"
                         )
+                    completed_members += 1
                     logical_path = str(member["logical_path"])
                     manifest_logical_paths.add(logical_path)
                     manifest_generation = int(
@@ -3047,6 +3194,18 @@ class GeneFamilyOutputStore:
                         )
             manifest_modes[zip_path] = str(manifest["mode"])
             verified.append(zip_path)
+            if progress_callback is not None:
+                progress_callback(
+                    force=True,
+                    phase="verifying",
+                    verify_zip_files_completed=zip_index + 1,
+                    verify_zip_files_total=total_zip_files,
+                    verify_members_completed=completed_members,
+                    verify_members_total=total_members,
+                    verify_bytes_completed=completed_bytes,
+                    verify_bytes_total=total_bytes,
+                    current_zip=zip_path.name,
+                )
         for zip_path in {
             artifact.zip_path
             for artifact in self._archived.values()
@@ -3264,6 +3423,52 @@ def completed_family_ids(store: GeneFamilyOutputStore, family_ids: Iterable[str]
     return completed
 
 
+def _verify_zip_crc(
+    path: Path,
+    progress_callback: Optional[Callable[[int, int, int, int], None]] = None,
+) -> None:
+    """Read a completed ZIP once so ZipExtFile validates every member CRC."""
+
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            infos = archive.infolist()
+            total_members = len(infos)
+            total_bytes = sum(int(info.file_size) for info in infos)
+            completed_members = 0
+            completed_bytes = 0
+            last_progress = time.monotonic()
+            if progress_callback is not None:
+                progress_callback(0, total_members, 0, total_bytes)
+            for info in infos:
+                with archive.open(info, "r") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        completed_bytes += len(chunk)
+                        now = time.monotonic()
+                        if (
+                            progress_callback is not None
+                            and now - last_progress >= 30.0
+                        ):
+                            progress_callback(
+                                completed_members,
+                                total_members,
+                                completed_bytes,
+                                total_bytes,
+                            )
+                            last_progress = now
+                completed_members += 1
+            if progress_callback is not None:
+                progress_callback(
+                    completed_members,
+                    total_members,
+                    completed_bytes,
+                    total_bytes,
+                )
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ArchiveStoreError(
+            f"CRC verification failed while reading {path}: {exc}"
+        ) from exc
+
+
 def _archive_chunk(
     root: Path,
     payload_root: Path,
@@ -3277,6 +3482,9 @@ def _archive_chunk(
     compression_level: int = 6,
     destination_path: Optional[Path] = None,
     byte_progress_callback: Optional[Callable[[int], None]] = None,
+    verification_progress_callback: Optional[
+        Callable[[int, int, int, int], None]
+    ] = None,
 ) -> Tuple[Path, List[Artifact], Dict[Path, Tuple[int, int, int, int, int]]]:
     shard_dir = (
         Path(destination_path).resolve().parent
@@ -3373,12 +3581,7 @@ def _archive_chunk(
                 json.dumps(manifest, sort_keys=True, separators=(",", ":")),
                 compress_type=zipfile.ZIP_DEFLATED,
             )
-        with zipfile.ZipFile(partial_path, "r") as archive:
-            corrupt_member = archive.testzip()
-            if corrupt_member is not None:
-                raise ArchiveStoreError(
-                    f"CRC verification failed while creating {partial_path}: {corrupt_member}"
-                )
+        _verify_zip_crc(partial_path, verification_progress_callback)
         with partial_path.open("rb") as handle:
             os.fsync(handle.fileno())
         os.replace(partial_path, final_path)
@@ -3422,6 +3625,9 @@ def _compact_artifact_chunk(
     compression_level: int = 6,
     destination_path: Optional[Path] = None,
     byte_progress_callback: Optional[Callable[[int], None]] = None,
+    verification_progress_callback: Optional[
+        Callable[[int, int, int, int], None]
+    ] = None,
 ) -> Tuple[Path, List[Artifact]]:
     shard_dir = (
         Path(destination_path).resolve().parent
@@ -3542,12 +3748,7 @@ def _compact_artifact_chunk(
                 json.dumps(manifest, sort_keys=True, separators=(",", ":")),
                 compress_type=zipfile.ZIP_DEFLATED,
             )
-        with zipfile.ZipFile(partial_path, "r") as archive:
-            corrupt_member = archive.testzip()
-            if corrupt_member is not None:
-                raise ArchiveStoreError(
-                    f"CRC verification failed while compacting {partial_path}: {corrupt_member}"
-                )
+        _verify_zip_crc(partial_path, verification_progress_callback)
         with partial_path.open("rb") as handle:
             os.fsync(handle.fileno())
         os.replace(partial_path, final_path)
@@ -3774,6 +3975,10 @@ def archive_completed_outputs(
                     )
 
             direct_subdirs = {subdir for subdir, _, _ in direct_specs}
+            direct_subdir_file_counts = {
+                subdir: len(candidates)
+                for subdir, candidates, _ in direct_specs
+            }
             direct_completed = 0
             direct_progress_lock = threading.Lock()
             direct_zip_bytes: Dict[str, int] = {}
@@ -3800,6 +4005,40 @@ def archive_completed_outputs(
                             current_subdir=subdir,
                             current_zip=f"{subdir}.zip",
                             current_zip_bytes=byte_count,
+                            subdir_files=len(candidates),
+                            subdir_shards=1,
+                            verify_members_completed=0,
+                            verify_members_total=0,
+                            verify_bytes_completed=0,
+                            verify_bytes_total=0,
+                            active_subdirs=",".join(sorted(direct_zip_bytes)),
+                            active_zip_bytes=sum(direct_zip_bytes.values()),
+                            finalized_subdirs=direct_completed,
+                            total_subdirs=len(direct_specs),
+                        )
+
+                def report_direct_verification(
+                    members_completed: int,
+                    members_total: int,
+                    bytes_completed: int,
+                    bytes_total: int,
+                ) -> None:
+                    if progress_callback is None:
+                        return
+                    with direct_progress_lock:
+                        progress_callback(
+                            force=(members_completed == members_total),
+                            phase="verifying-final-zip",
+                            subdir=subdir,
+                            current_subdir=subdir,
+                            current_zip=f"{subdir}.zip",
+                            current_zip_bytes=direct_zip_bytes.get(subdir, 0),
+                            subdir_files=len(candidates),
+                            subdir_shards=1,
+                            verify_members_completed=members_completed,
+                            verify_members_total=members_total,
+                            verify_bytes_completed=bytes_completed,
+                            verify_bytes_total=bytes_total,
                             active_subdirs=",".join(sorted(direct_zip_bytes)),
                             active_zip_bytes=sum(direct_zip_bytes.values()),
                             finalized_subdirs=direct_completed,
@@ -3807,20 +4046,68 @@ def archive_completed_outputs(
                         )
 
                 report_direct_bytes(0)
-                zip_path, artifacts, signatures = _archive_chunk(
-                    root,
-                    payload_root,
-                    subdir,
-                    candidates,
-                    mode,
-                    generation,
-                    family_from_name,
-                    compression=compression,
-                    compression_level=compression_level,
-                    destination_path=_final_archive_path(root, subdir),
-                    byte_progress_callback=report_direct_bytes,
-                )
-                return subdir, zip_path, artifacts, signatures
+                try:
+                    zip_path, artifacts, signatures = _archive_chunk(
+                        root,
+                        payload_root,
+                        subdir,
+                        candidates,
+                        mode,
+                        generation,
+                        family_from_name,
+                        compression=compression,
+                        compression_level=compression_level,
+                        destination_path=_final_archive_path(root, subdir),
+                        byte_progress_callback=report_direct_bytes,
+                        verification_progress_callback=(
+                            report_direct_verification
+                            if progress_callback is not None
+                            else None
+                        ),
+                    )
+                    return subdir, zip_path, artifacts, signatures
+                finally:
+                    if progress_callback is not None:
+                        with direct_progress_lock:
+                            direct_zip_bytes.pop(subdir, None)
+                            remaining_subdirs = sorted(direct_zip_bytes)
+                            next_subdir = (
+                                remaining_subdirs[0]
+                                if remaining_subdirs
+                                else "-"
+                            )
+                            progress_callback(
+                                force=False,
+                                phase="archiving-final",
+                                subdir=next_subdir,
+                                current_subdir=next_subdir,
+                                current_zip=(
+                                    f"{next_subdir}.zip"
+                                    if remaining_subdirs
+                                    else "-"
+                                ),
+                                current_zip_bytes=(
+                                    direct_zip_bytes[next_subdir]
+                                    if remaining_subdirs
+                                    else 0
+                                ),
+                                subdir_files=(
+                                    direct_subdir_file_counts[next_subdir]
+                                    if remaining_subdirs
+                                    else 0
+                                ),
+                                subdir_shards=(1 if remaining_subdirs else 0),
+                                verify_members_completed=0,
+                                verify_members_total=0,
+                                verify_bytes_completed=0,
+                                verify_bytes_total=0,
+                                active_subdirs=(
+                                    ",".join(remaining_subdirs) or "-"
+                                ),
+                                active_zip_bytes=sum(direct_zip_bytes.values()),
+                                finalized_subdirs=direct_completed,
+                                total_subdirs=len(direct_specs),
+                            )
 
             def commit_direct_final(
                 result: Tuple[
@@ -3861,6 +4148,10 @@ def archive_completed_outputs(
                             current_zip=zip_path.name,
                             subdir_files=len(artifacts),
                             subdir_shards=1,
+                            verify_members_completed=0,
+                            verify_members_total=0,
+                            verify_bytes_completed=0,
+                            verify_bytes_total=0,
                             finalized_subdirs=direct_completed,
                             total_subdirs=len(direct_specs),
                             current_zip_bytes=zip_path.stat().st_size,
@@ -3880,6 +4171,12 @@ def archive_completed_outputs(
                         current_subdir="-",
                         current_zip="-",
                         current_zip_bytes=0,
+                        subdir_files=0,
+                        subdir_shards=0,
+                        verify_members_completed=0,
+                        verify_members_total=0,
+                        verify_bytes_completed=0,
+                        verify_bytes_total=0,
                         finalized_subdirs=0,
                         total_subdirs=len(direct_specs),
                         archived_live_files=removed_total,
@@ -4538,6 +4835,10 @@ def storage_conversion_summary(
         storage = "zip"
     else:
         storage = "raw"
+    conflicting_final_zips = _conflicting_final_zip_paths(
+        root,
+        {path.parent.name for path in owned},
+    )
     shard_resolved_paths = {path.resolve() for path in shard_paths}
     metadata_files = (
         sum(
@@ -4577,6 +4878,7 @@ def storage_conversion_summary(
         "raw_materialize_allocated_bytes": raw_allocated_bytes,
         "raw_peak_new_files": raw_peak_new_files,
         "unsupported_symlinks": len(unsupported_symlinks),
+        "conflicting_final_zip_files": len(conflicting_final_zips),
         "metadata_files": metadata_files,
         "physical_store_files": (
             len(owned)
@@ -4659,6 +4961,12 @@ def storage_conversion_status(root: Path) -> dict:
             "repair_zip_bytes_total",
             "repair_members_verified",
             "repair_bytes_verified",
+            "verify_members_completed",
+            "verify_members_total",
+            "verify_bytes_completed",
+            "verify_bytes_total",
+            "verify_zip_files_completed",
+            "verify_zip_files_total",
             "workers",
         ):
             if key in marker:
@@ -4776,6 +5084,17 @@ def convert_storage_to_zip(
         family_from_name,
         workers=workers,
     )
+    conflicting_final_zips = _catalog_conflicting_final_zip_paths(
+        root,
+        valid_family_ids,
+        family_from_name,
+    )
+    if conflicting_final_zips:
+        raise ArchiveStoreError(
+            "Unrelated ZIP files would collide with GeneGalleon final archive "
+            "destinations; move or rename them before converting: "
+            + ", ".join(str(path) for path in conflicting_final_zips[:10])
+        )
     if strict_unmatched and unmatched:
         raise ArchiveStoreError(
             "Unmatched live output files were found; rerun without --strict-unmatched "
@@ -4955,7 +5274,7 @@ def convert_storage_to_zip(
                 current_zip_bytes=0,
             )
         final_store = GeneFamilyOutputStore(root)
-        final_store.verify()
+        final_store.verify(progress_callback=conversion_progress)
         _assert_archive_mode(final_store, mode)
         _update_storage_conversion_marker(
             root,
@@ -5452,6 +5771,10 @@ def _finalize_subdirs_locked(
                 current_zip=final_path.name,
                 finalized_subdirs=finalized_count,
                 total_subdirs=total_subdirs,
+                verify_members_completed=0,
+                verify_members_total=0,
+                verify_bytes_completed=0,
+                verify_bytes_total=0,
                 current_zip_bytes=(
                     final_path.stat().st_size if final_path.is_file() else 0
                 ),
@@ -5478,6 +5801,10 @@ def _finalize_subdirs_locked(
                     current_zip=final_path.name,
                     finalized_subdirs=finalized_count,
                     total_subdirs=total_subdirs,
+                    verify_members_completed=0,
+                    verify_members_total=0,
+                    verify_bytes_completed=0,
+                    verify_bytes_total=0,
                     current_zip_bytes=final_path.stat().st_size,
                 )
             continue
@@ -5493,7 +5820,35 @@ def _finalize_subdirs_locked(
                     current_zip=final_path.name,
                     finalized_subdirs=finalized_count,
                     total_subdirs=total_subdirs,
+                    verify_members_completed=0,
+                    verify_members_total=0,
+                    verify_bytes_completed=0,
+                    verify_bytes_total=0,
                     current_zip_bytes=byte_count,
+                )
+
+        def report_zip_verification(
+            members_completed: int,
+            members_total: int,
+            bytes_completed: int,
+            bytes_total: int,
+        ) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    force=(members_completed == members_total),
+                    phase="verifying-final-zip",
+                    subdir=subdir,
+                    current_subdir=subdir,
+                    current_zip=final_path.name,
+                    finalized_subdirs=finalized_count,
+                    total_subdirs=total_subdirs,
+                    verify_members_completed=members_completed,
+                    verify_members_total=members_total,
+                    verify_bytes_completed=bytes_completed,
+                    verify_bytes_total=bytes_total,
+                    current_zip_bytes=(
+                        final_path.stat().st_size if final_path.is_file() else 0
+                    ),
                 )
 
         _, finalized = _compact_artifact_chunk(
@@ -5506,6 +5861,7 @@ def _finalize_subdirs_locked(
             compression_level=compression_level,
             destination_path=final_path,
             byte_progress_callback=report_zip_bytes,
+            verification_progress_callback=report_zip_verification,
         )
         updated = {artifact.logical_path: artifact for artifact in finalized}
         store._merge_index_subdirs({subdir: updated})
@@ -5531,6 +5887,10 @@ def _finalize_subdirs_locked(
                 current_zip=final_path.name,
                 finalized_subdirs=finalized_count,
                 total_subdirs=total_subdirs,
+                verify_members_completed=0,
+                verify_members_total=0,
+                verify_bytes_completed=0,
+                verify_bytes_total=0,
                 current_zip_bytes=final_path.stat().st_size,
             )
     return created
@@ -6349,6 +6709,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify_parser = subparsers.add_parser("verify")
     add_root(verify_parser)
+    verify_parser.add_argument("--progress-interval", type=float, default=30.0)
 
     list_parser = subparsers.add_parser("list")
     add_root(list_parser)
@@ -6681,6 +7042,12 @@ def run_cli(args: argparse.Namespace) -> int:
             if needs_catalog:
                 for path in unmatched:
                     print(f"unmatched\t{path}")
+                for path in _catalog_conflicting_final_zip_paths(
+                    root,
+                    set(family_ids),
+                    family_from_name,
+                ):
+                    print(f"conflicting-final-zip\t{path}")
             if args.command == "storage-status" or args.dry_run:
                 return 0
         if target == "zip":
@@ -6898,7 +7265,15 @@ def run_cli(args: argparse.Namespace) -> int:
         )
         return 0
     if args.command == "verify":
-        for zip_path in store.verify():
+        if args.progress_interval < 0:
+            raise ValueError("--progress-interval must be non-negative")
+        reporter = ProgressReporter(args.progress_interval)
+        reporter.start()
+        try:
+            verified_paths = store.verify(progress_callback=reporter.update)
+        finally:
+            reporter.close()
+        for zip_path in verified_paths:
             print(f"verified\t{zip_path}")
         return 0
     if args.command == "list":

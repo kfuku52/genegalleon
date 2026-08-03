@@ -17,6 +17,7 @@ from workflow.support.gene_family_output_store import (
     ArchiveStoreError,
     Artifact,
     GeneFamilyOutputStore,
+    _verify_zip_crc,
     _zip_to_raw_requirements,
     archive_completed_outputs,
     build_parser,
@@ -683,6 +684,43 @@ def test_verify_rejects_directly_modified_zip(tmp_path: Path):
         GeneFamilyOutputStore(root).verify()
 
 
+def test_repeated_member_reads_reuse_one_zip_reader_per_thread(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "orthogroup"
+    for family_id in ("OG0000001", "OG0000002"):
+        _write_family_outputs(root, family_id, complete=True)
+    archive_completed_outputs(
+        root,
+        "orthogroup",
+        ["OG0000001", "OG0000002"],
+        orthogroup_id_from_name,
+    )
+    store = GeneFamilyOutputStore(root)
+    assert len(store.file_names("mafft")) == 2
+
+    original_zip_file = output_store_module.zipfile.ZipFile
+    opened = []
+
+    def observed_zip_file(path, *args, **kwargs):
+        opened.append(Path(path))
+        return original_zip_file(path, *args, **kwargs)
+
+    monkeypatch.setattr(output_store_module.zipfile, "ZipFile", observed_zip_file)
+    for family_id in ("OG0000001", "OG0000002"):
+        with store.open_binary(
+            "mafft",
+            f"{family_id}_cds.aln.fa.gz",
+        ) as handle:
+            assert handle.read()
+
+    assert len(opened) == 1
+    assert opened[0].parent == root / "archives" / "mafft"
+
+
 def test_verify_streams_each_manifest_once_without_testzip(
     tmp_path: Path,
     monkeypatch,
@@ -720,6 +758,30 @@ def test_verify_streams_each_manifest_once_without_testzip(
     )
 
     assert store.verify()
+
+
+def test_post_write_crc_verification_rejects_corrupt_member(tmp_path: Path):
+    zip_path = tmp_path / "corrupt.zip"
+    member_name = "stat_tree/OG0000001_stat.tree.tsv"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr(member_name, b"original payload")
+
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        info = archive.getinfo(member_name)
+        data_offset = (
+            info.header_offset
+            + 30
+            + len(info.filename.encode("utf-8"))
+            + len(info.extra)
+        )
+    with zip_path.open("r+b") as handle:
+        handle.seek(data_offset)
+        original = handle.read(1)
+        handle.seek(data_offset)
+        handle.write(bytes([original[0] ^ 0xFF]))
+
+    with pytest.raises(ArchiveStoreError, match="CRC verification failed"):
+        _verify_zip_crc(zip_path)
 
 
 def test_list_cli_reports_live_override_and_archived_members(tmp_path: Path, capsys):
@@ -2187,10 +2249,16 @@ def test_offline_conversion_writes_final_zips_once_and_parallelizes_subdirs(
     root = tmp_path / "orthogroup"
     family_id = "OG0000001"
     _write_family_outputs(root, family_id, complete=True)
+    for subdir in ("csubst_extra_a", "csubst_extra_b"):
+        path = root / subdir / f"{family_id}_{subdir}.tsv"
+        path.parent.mkdir()
+        path.write_text(f"{subdir}\n", encoding="utf-8")
     original_archive_chunk = output_store_module._archive_chunk
+    original_remove_archived_sources = output_store_module._remove_archived_sources
     active = 0
     maximum_active = 0
     destinations = []
+    progress_events = []
     active_lock = threading.Lock()
 
     def observed_archive_chunk(*args, **kwargs):
@@ -2209,6 +2277,10 @@ def test_offline_conversion_writes_final_zips_once_and_parallelizes_subdirs(
     def reject_second_compression(*args, **kwargs):
         raise AssertionError("offline conversion must not compact freshly written ZIPs")
 
+    def slow_remove_archived_sources(*args, **kwargs):
+        time.sleep(0.1)
+        return original_remove_archived_sources(*args, **kwargs)
+
     monkeypatch.setattr(
         output_store_module,
         "_archive_chunk",
@@ -2219,25 +2291,64 @@ def test_offline_conversion_writes_final_zips_once_and_parallelizes_subdirs(
         "_compact_artifact_chunk",
         reject_second_compression,
     )
+    monkeypatch.setattr(
+        output_store_module,
+        "_remove_archived_sources",
+        slow_remove_archived_sources,
+    )
 
     result = convert_storage_to_zip(
         root,
         "orthogroup",
         [family_id],
         orthogroup_id_from_name,
-        workers=4,
+        workers=2,
+        progress_callback=lambda **fields: progress_events.append(fields),
     )
 
     assert maximum_active >= 2
-    assert len(destinations) == 4
+    assert len(destinations) == 6
     assert all(path is not None and path.parent == root for path in destinations)
-    assert result["zip_files"] == 4
+    assert result["zip_files"] == 6
     assert sorted(path.name for path in root.glob("*.zip")) == [
+        "csubst_extra_a.zip",
+        "csubst_extra_b.zip",
         "mafft.zip",
         "stat_branch.zip",
         "stat_tree.zip",
         "tree_plot.zip",
     ]
+    active_counts = [
+        0 if value == "-" else len(str(value).split(","))
+        for event in progress_events
+        if (value := event.get("active_subdirs")) is not None
+    ]
+    assert active_counts
+    assert max(active_counts) <= 2
+    assert any(
+        event.get("phase") == "archiving-final"
+        and event.get("current_subdir") == "csubst_extra_a"
+        and event.get("subdir_files") == 1
+        for event in progress_events
+    )
+    assert any(
+        event.get("phase") == "verifying-final-zip"
+        and event.get("verify_members_completed")
+        == event.get("verify_members_total")
+        and event.get("verify_bytes_completed")
+        == event.get("verify_bytes_total")
+        for event in progress_events
+    )
+    assert any(
+        event.get("phase") == "verifying"
+        and event.get("verify_zip_files_completed")
+        == event.get("verify_zip_files_total")
+        and event.get("verify_members_completed")
+        == event.get("verify_members_total")
+        and event.get("verify_bytes_completed")
+        == event.get("verify_bytes_total")
+        for event in progress_events
+    )
     assert not list((root / "archives").glob("*/*.zip"))
     GeneFamilyOutputStore(root).verify()
 
@@ -2276,6 +2387,56 @@ def test_storage_metrics_separate_zip_metadata_and_shared_raw_files(tmp_path: Pa
     assert storage_conversion_status(root)["zip_files"] == 1
 
 
+def test_raw_conversion_preflight_rejects_unrelated_final_zip_before_writes(
+    tmp_path: Path,
+    capsys,
+):
+    root = tmp_path / "orthogroup"
+    family_id = "OG0000001"
+    _write_family_outputs(root, family_id, complete=True)
+    conflict = root / "tree_plot.zip"
+    with zipfile.ZipFile(conflict, "w") as archive:
+        archive.writestr("tree_plot/legacy.pdf", b"legacy")
+    genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    genecount.write_text(
+        f"Orthogroup\tTotal\n{family_id}\t1\n",
+        encoding="utf-8",
+    )
+    dry_run_args = build_parser().parse_args(
+        [
+            "convert-storage",
+            "--root",
+            str(root),
+            "--mode",
+            "orthogroup",
+            "--to",
+            "zip",
+            "--genecount",
+            str(genecount),
+            "--dry-run",
+        ]
+    )
+
+    assert run_cli(dry_run_args) == 0
+    dry_run_output = capsys.readouterr().out
+    assert "conflicting_final_zip_files\t1" in dry_run_output
+    assert f"conflicting-final-zip\t{conflict}" in dry_run_output
+
+    with pytest.raises(ArchiveStoreError, match="move or rename"):
+        convert_storage_to_zip(
+            root,
+            "orthogroup",
+            [family_id],
+            orthogroup_id_from_name,
+            workers=4,
+        )
+
+    assert conflict.is_file()
+    assert (root / "mafft" / f"{family_id}_cds.aln.fa.gz").is_file()
+    assert not (root / "mafft.zip").exists()
+    assert not (root / ".gg_store" / "storage-conversion.pending").exists()
+
+
 def test_finalize_and_repair_report_detailed_progress(tmp_path: Path):
     root = tmp_path / "orthogroup"
     family_id = "OG0000001"
@@ -2304,6 +2465,12 @@ def test_finalize_and_repair_report_detailed_progress(tmp_path: Path):
     )
     assert finalize_progress[-1]["finalized_subdirs"] == 4
     assert finalize_progress[-1]["total_subdirs"] == 4
+    assert any(
+        row.get("phase") == "verifying-final-zip"
+        and row.get("verify_members_completed")
+        == row.get("verify_members_total")
+        for row in finalize_progress
+    )
 
     repair_progress = []
     repair_archive_index(
@@ -2363,6 +2530,21 @@ def test_archive_completed_and_repair_cli_expose_long_operation_progress(
     repair_stderr = capsys.readouterr().err
     assert "phase=repairing-index" in repair_stderr
     assert "repair_zip_files_completed=4" in repair_stderr
+
+    verify_args = build_parser().parse_args(
+        [
+            "verify",
+            "--root",
+            str(root),
+            "--progress-interval",
+            "0",
+        ]
+    )
+    assert run_cli(verify_args) == 0
+    verify_output = capsys.readouterr()
+    assert "phase=verifying" in verify_output.err
+    assert "verify_zip_files_completed=4" in verify_output.err
+    assert "verified\t" in verify_output.out
 
 
 def test_family_filter_rejects_multiple_family_ids(tmp_path: Path):

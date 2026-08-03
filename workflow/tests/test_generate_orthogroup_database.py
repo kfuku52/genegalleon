@@ -219,20 +219,30 @@ def test_database_builder_adds_aa_change_tables_and_global_fdr(tmp_path):
     assert unit_df["fg_clade_branch_ids"].tolist() == ["1,2", "3,4"]
 
 
-def test_database_builder_reads_stat_tables_from_zip_shards(tmp_path):
+@pytest.mark.parametrize("legacy_layout", [False, True])
+def test_database_builder_reads_stat_tables_from_zip_shards(
+    tmp_path,
+    legacy_layout,
+):
     root = tmp_path / "orthogroup"
     family_id = "OG0001"
     genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
     genecount.write_text("Orthogroup\tTotal\nOG0001\t1\n", encoding="utf-8")
+    stat_tree_subdir = "stat.tree" if legacy_layout else "stat_tree"
+    stat_branch_subdir = "stat.branch" if legacy_layout else "stat_branch"
     for subdir, frame in (
-        ("stat_tree", stat_tree_frame(tree_metric=1.25)),
-        ("stat_branch", stat_branch_frame(branch_id=1, branch_metric=2.5)),
+        (stat_tree_subdir, stat_tree_frame(tree_metric=1.25)),
+        (stat_branch_subdir, stat_branch_frame(branch_id=1, branch_metric=2.5)),
         ("tree_plot", None),
     ):
         suffix = {
-            "stat_tree": "_stat.tree.tsv",
-            "stat_branch": "_stat.branch.tsv",
-            "tree_plot": "_tree_plot.pdf",
+            stat_tree_subdir: (
+                ".stat.tree.tsv" if legacy_layout else "_stat.tree.tsv"
+            ),
+            stat_branch_subdir: (
+                ".stat.branch.tsv" if legacy_layout else "_stat.branch.tsv"
+            ),
+            "tree_plot": ".tree_plot.pdf" if legacy_layout else "_tree_plot.pdf",
         }[subdir]
         path = root / subdir / f"{family_id}{suffix}"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -255,9 +265,9 @@ def test_database_builder_reads_stat_tables_from_zip_shards(tmp_path):
             "--dir_gene_family",
             str(root),
             "--dir_stat_tree",
-            str(root / "stat_tree"),
+            str(root / stat_tree_subdir),
             "--dir_stat_branch",
-            str(root / "stat_branch"),
+            str(root / stat_branch_subdir),
             "--ncpu",
             "1",
         ],
@@ -267,7 +277,7 @@ def test_database_builder_reads_stat_tables_from_zip_shards(tmp_path):
     )
 
     assert proc.returncode == 0, proc.stderr
-    assert not (root / "stat_tree").exists()
+    assert not (root / stat_tree_subdir).exists()
     with sqlite3.connect(db_path) as conn:
         tree = pandas.read_sql_query("SELECT orthogroup, tree_metric FROM tree", conn)
         branch = pandas.read_sql_query("SELECT orthogroup, branch_metric FROM branch", conn)

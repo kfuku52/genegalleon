@@ -29,7 +29,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from gene_family_output_store import GeneFamilyOutputStore
+from gene_family_output_store import GeneFamilyOutputStore, LEGACY_SUBDIR_ALIASES
 
 try:
     import sqlalchemy
@@ -53,6 +53,13 @@ except ImportError:
         return None
 
 logger = logging.getLogger(__name__)
+
+
+def logical_store_subdir(path):
+    if not path:
+        return ""
+    subdir = os.path.basename(os.path.normpath(path))
+    return LEGACY_SUBDIR_ALIASES.get(subdir, subdir)
 
 
 def configure_logging(log_file_path="generate_orthogroup_database.log"):
@@ -178,7 +185,7 @@ def validate_csubst_scan_schemas(scan_dirs, store=None):
     """
     problems = []
     for table_name, scan_dir in scan_dirs:
-        logical_subdir = os.path.basename(os.path.normpath(scan_dir)) if scan_dir else ""
+        logical_subdir = logical_store_subdir(scan_dir)
         if not scan_dir:
             continue
         if store is None:
@@ -575,7 +582,7 @@ def main():
     else:
         logical_subdirs = set(output_store.logical_subdirs())
         for required_dir in required_dirs:
-            required_subdir = os.path.basename(os.path.normpath(required_dir))
+            required_subdir = logical_store_subdir(required_dir)
             if required_subdir not in logical_subdirs:
                 raise FileNotFoundError(
                     f"Logical input subdirectory does not exist: {required_subdir} "
@@ -617,7 +624,7 @@ def main():
             if subdir.startswith(cb_prefix) and subdir != "csubst_cb_stats"
         ]
     for cb_dir in cb_dirs:
-        cb_subdir = os.path.basename(os.path.normpath(cb_dir))
+        cb_subdir = logical_store_subdir(cb_dir)
         cb_has_entries = (
             os.path.isdir(cb_dir) and has_visible_entries(cb_dir)
             if output_store is None
@@ -629,7 +636,7 @@ def main():
             table_name = f'cb{arity}'
             indirs[table_name] = cb_dir
     for table_name, scan_dir in scan_dirs:
-        scan_subdir = os.path.basename(os.path.normpath(scan_dir)) if scan_dir else ""
+        scan_subdir = logical_store_subdir(scan_dir)
         scan_has_entries = (
             bool(scan_dir) and os.path.isdir(scan_dir) and has_visible_entries(scan_dir)
             if output_store is None
@@ -643,7 +650,7 @@ def main():
     # Check column names of all input files
     for stat in indirs.keys():
         dir_path = indirs[stat]
-        logical_subdir = os.path.basename(os.path.normpath(dir_path))
+        logical_subdir = logical_store_subdir(dir_path)
         if output_store is None and not os.path.exists(dir_path):
             logger.warning(f"Directory does not exist. Skipping: {dir_path}")
             continue
@@ -792,7 +799,7 @@ def main():
         for stat, files in infiles.items():
             for infile in files:
                 file_path = os.path.join(indirs[stat], infile)
-                logical_subdir = os.path.basename(os.path.normpath(indirs[stat]))
+                logical_subdir = logical_store_subdir(indirs[stat])
                 artifact = (
                     None
                     if output_store is None

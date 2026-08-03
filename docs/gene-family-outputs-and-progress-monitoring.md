@@ -119,6 +119,10 @@ views; `repair` then rebuilds every view from the ZIP manifests. Family-bucket
 and subdirectory indexes, plus an epoch used to invalidate long-lived reader
 caches, avoid opening every ZIP manifest for normal listing, status, and
 task-level materialization.
+Repeated transparent reads reuse one ZIP reader per worker thread until that
+worker moves to another archive. This avoids reparsing a large central
+directory once per member in summaries and database generation; an index
+epoch change closes the cached readers before refreshed artifacts are used.
 
 Temporary task data remains under the historical
 `workspace/output/{query2family,orthogroup}/tmp/` roots, avoiding an
@@ -255,12 +259,17 @@ bash workflow/gg_gene_family_archive.sh finalize \
 
 Finalization refuses to replace an unrelated pre-existing
 `<subdirectory>.zip`; move or rename that file explicitly after inspecting it.
+Raw-to-ZIP conversion checks every such collision during preflight, before it
+creates a conversion marker or writes any managed ZIP. Dry-run and
+`storage-status` report both `conflicting_final_zip_files` and each
+`conflicting-final-zip` path.
 
 Verify every archive member with CRC and SHA-256 checks after copying a run:
 
 ```bash
 bash workflow/gg_gene_family_archive.sh verify \
-  --root workspace/output/query2family
+  --root workspace/output/query2family \
+  --progress-interval 30
 ```
 
 `verify` also cross-checks the family and subdirectory index views and rejects
@@ -335,7 +344,13 @@ immediately, at each shard or subdirectory transition, and every 30 seconds
 while a ZIP operation is still running. Direct final-ZIP writes report
 `active_subdirs`, aggregate
 `active_zip_bytes`, and the most recently updated `current_subdir` and
-`current_zip_bytes`. Finalization reports `finalized_subdirs` and
+`current_zip_bytes`; completed ZIP writers waiting for index commit are not
+counted as active. The mandatory post-write CRC read uses
+`phase=verifying-final-zip` with completed/total member and logical-byte
+counts, so a large final ZIP does not appear stalled after its size stops
+growing. The final whole-store verification and the standalone `verify`
+command report completed/total ZIP, member, and logical-byte counts under
+`phase=verifying`. Finalization reports `finalized_subdirs` and
 `total_subdirs`. Interrupted conversions use the explicit
 `phase=repairing-index` phase with verified ZIP/member/byte counts instead of
 remaining at `phase=starting`. Each line includes elapsed seconds and the
