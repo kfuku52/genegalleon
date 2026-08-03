@@ -55,7 +55,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 4
+CDS_GFF_GROUPING_AUDIT_VERSION = 5
 
 
 def cds_gff_grouping_audit_paths(output_path):
