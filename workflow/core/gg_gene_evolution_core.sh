@@ -508,6 +508,83 @@ set_default_analysis_files() {
   fi
 }
 
+adopt_existing_output_path() {
+  local variable_name=$1
+  shift
+  local configured_path=${!variable_name}
+  local candidate
+  if [[ -s "${configured_path}" ]]; then
+    return 0
+  fi
+  for candidate in "$@"; do
+    if [[ -s "${candidate}" ]]; then
+      printf -v "${variable_name}" '%s' "${candidate}"
+      echo "Using historical output path for ${variable_name}: ${candidate}"
+      return 0
+    fi
+  done
+}
+
+adopt_historical_gene_family_outputs() {
+  adopt_existing_output_path file_og_cds_fasta \
+    "${dir_output_active}/cds_fasta/${og_id}_cds.fasta" \
+    "${dir_output_active}/cds.fasta/${og_id}.cds.fasta"
+  adopt_existing_output_path file_og_rpsblast \
+    "${dir_output_active}/rpsblast/${og_id}_rpsblast.tsv" \
+    "${dir_output_active}/rpsblast/${og_id}.rpsblast.tsv"
+  adopt_existing_output_path file_og_mafft \
+    "${dir_output_active}/mafft/${og_id}_cds.aln.fasta" \
+    "${dir_output_active}/mafft/${og_id}.cds.aln.fasta"
+  adopt_existing_output_path file_og_clipkit \
+    "${dir_output_active}/clipkit/${og_id}_cds.clipkit.fasta" \
+    "${dir_output_active}/clipkit/${og_id}.cds.clipkit.fasta"
+  adopt_existing_output_path file_og_clipkit_log \
+    "${dir_output_active}/clipkit_log/${og_id}_cds.clipkit.log" \
+    "${dir_output_active}/clipkit.log/${og_id}.cds.clipkit.log"
+  adopt_existing_output_path file_og_iqtree_tree \
+    "${dir_output_active}/iqtree_tree/${og_id}_iqtree.nwk" \
+    "${dir_output_active}/iqtree.tree/${og_id}.iqtree.nwk"
+  adopt_existing_output_path file_og_generax_nhx \
+    "${dir_output_active}/generax_tree/${og_id}_generax.nhx" \
+    "${dir_output_active}/generax.tree/${og_id}.generax.nhx"
+  adopt_existing_output_path file_og_generax_nwk \
+    "${dir_output_active}/generax_nwk/${og_id}_generax.nwk" \
+    "${dir_output_active}/generax.nwk/${og_id}.generax.nwk"
+  adopt_existing_output_path file_og_generax_xml \
+    "${dir_output_active}/generax_xml/${og_id}_generax.xml" \
+    "${dir_output_active}/generax.xml/${og_id}.generax.xml"
+  adopt_existing_output_path file_og_mapdnds_dn \
+    "${dir_output_active}/mapdnds_dn_tree/${og_id}_mapdNdS.dN.nwk" \
+    "${dir_output_active}/mapdNdS.dN.tree/${og_id}.mapdNdS.dN.nwk"
+  adopt_existing_output_path file_og_mapdnds_ds \
+    "${dir_output_active}/mapdnds_ds_tree/${og_id}_mapdNdS.dS.nwk" \
+    "${dir_output_active}/mapdNdS.dS.tree/${og_id}.mapdNdS.dS.nwk"
+  adopt_existing_output_path file_og_gff_info \
+    "${dir_output_active}/character_gff_info/${og_id}_gff.tsv" \
+    "${dir_output_active}/character.gff/${og_id}.gff.tsv"
+  adopt_existing_output_path file_og_stat_branch \
+    "${dir_output_active}/stat_branch/${og_id}_stat.branch.tsv" \
+    "${dir_output_active}/stat.branch/${og_id}.stat.branch.tsv"
+  adopt_existing_output_path file_og_stat_tree \
+    "${dir_output_active}/stat_tree/${og_id}_stat.tree.tsv" \
+    "${dir_output_active}/stat.tree/${og_id}.stat.tree.tsv"
+  adopt_existing_output_path file_og_amas_original \
+    "${dir_output_active}/amas_original/${og_id}_amas.original.tsv" \
+    "${dir_output_active}/amas.original/${og_id}.amas.original.tsv"
+  adopt_existing_output_path file_og_amas_cleaned \
+    "${dir_output_active}/amas_cleaned/${og_id}_amas.cleaned.tsv" \
+    "${dir_output_active}/amas.cleaned/${og_id}.amas.cleaned.tsv"
+  adopt_existing_output_path file_og_tree_plot \
+    "${dir_output_active}/tree_plot/${og_id}_tree_plot.pdf" \
+    "${dir_output_active}/tree_plot/${og_id}.tree_plot.pdf"
+
+  file_og_primary_fasta=${file_og_cds_fasta}
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    file_og_primary_fasta=${file_og_pep_fasta}
+  fi
+  set_default_analysis_files
+}
+
 switch_alignment_analysis_source() {
   local infile=$1
   set_analysis_file untrimmed_aln "${infile}"
@@ -1369,6 +1446,7 @@ if [[ -d "${dir_output_active}/.gg_store" || -d "${dir_output_active}/.gg_archiv
     exit 1
   fi
 fi
+adopt_historical_gene_family_outputs
 cd "${dir_tmp}"
 echo "Working at: $(pwd)"
 
@@ -4013,11 +4091,54 @@ fi
 # Sourced by gg_gene_evolution_core.sh.
 
 task="summary statistics"
-if is_output_older_than_inputs "^file_og_" "${file_og_tree_plot}"; then
-  summary_flag=0
-else
-  summary_flag=$?
-fi
+summary_input_files=(
+  "${species_tree_pruned}"
+  "${file_og_primary_fasta}"
+  "${file_og_trimmed_aln_analysis}"
+  "${file_og_unrooted_tree_analysis}"
+  "${file_og_rooted_tree_analysis}"
+  "${file_og_rooted_log}"
+  "${file_og_notung_reconcil}"
+  "${file_og_dated_tree_analysis}"
+  "${file_og_dated_tree_log}"
+  "${file_og_generax_nhx}"
+  "${file_og_hyphy_dnds}"
+  "${file_og_hyphy_relax}"
+  "${file_og_hyphy_relax_reversed}"
+  "${file_og_l1ou_fit_tree}"
+  "${file_og_l1ou_fit_regime}"
+  "${file_og_l1ou_fit_leaf}"
+  "${file_og_expression}"
+  "${file_og_mapdnds_dn}"
+  "${file_og_mapdnds_ds}"
+  "${file_og_codeml_two_ratio}"
+  "${file_og_gff_info}"
+  "${file_og_fimo}"
+  "${file_og_promoter_fasta}"
+  "${file_og_scm_intron_summary}"
+  "${file_og_csubst_b}"
+  "${file_og_gene_pgls}"
+  "${file_og_species_pgls}"
+  "${file_og_rpsblast}"
+  "${file_og_uniprot_annotation}"
+  "${file_og_cdskit_localize}"
+  "${file_og_synteny}"
+)
+summary_flag=0
+for summary_output in "${file_og_stat_branch}" "${file_og_stat_tree}"; do
+  if [[ ! -s "${summary_output}" ]]; then
+    echo "Summary output not found. Will be generated: ${summary_output}"
+    summary_flag=1
+    continue
+  fi
+  for summary_input in "${summary_input_files[@]}"; do
+    if [[ -e "${summary_input}" && "${summary_input}" -nt "${summary_output}" ]]; then
+      echo "Summary output will be renewed. Detected a new input file: ${summary_input}"
+      summary_flag=1
+      break
+    fi
+  done
+done
 task="Synteny neighborhood grouping"
 if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then
   synteny_source_dir="${dir_sp_cds}"

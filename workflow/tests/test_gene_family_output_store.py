@@ -1,3 +1,4 @@
+import concurrent.futures
 import fcntl
 import json
 import os
@@ -22,6 +23,7 @@ from workflow.support.gene_family_output_store import (
     cleanup_materialization_receipt,
     cleanup_stale_tmp,
     compact_archives,
+    completion_outputs_present,
     convert_storage_to_raw,
     convert_storage_to_zip,
     family_context,
@@ -150,6 +152,262 @@ def test_finalize_creates_user_facing_single_zips_and_status(tmp_path: Path):
     status = (root / "ARCHIVE_STATUS.tsv").read_text(encoding="utf-8")
     assert "mafft\tfinalized\t0\t1\t1\tmafft.zip" in status
     GeneFamilyOutputStore(root).verify()
+
+
+def test_refresh_status_cli_updates_snapshot_after_manual_changes(tmp_path: Path):
+    root = tmp_path / "query2family"
+    stat_branch = root / "stat_branch"
+    stat_branch.mkdir(parents=True)
+    (stat_branch / "A_stat.branch.tsv").write_text("a\n", encoding="utf-8")
+    args = build_parser().parse_args(
+        ["refresh-status", "--root", str(root)]
+    )
+
+    assert run_cli(args) == 0
+    assert "stat_branch\traw\t1\t0\t0\t" in (
+        root / "ARCHIVE_STATUS.tsv"
+    ).read_text(encoding="utf-8")
+
+    (stat_branch / "B_stat.branch.tsv").write_text("b\n", encoding="utf-8")
+    assert run_cli(args) == 0
+    assert "stat_branch\traw\t2\t0\t0\t" in (
+        root / "ARCHIVE_STATUS.tsv"
+    ).read_text(encoding="utf-8")
+
+
+def test_raw_to_zip_finalizes_family_parameters_while_shared_files_remain(
+    tmp_path: Path,
+):
+    root = tmp_path / "orthogroup"
+    genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    family_id = "OG0000001"
+    genecount.write_text(
+        f"Orthogroup\tTotal\n{family_id}\t1\n",
+        encoding="utf-8",
+    )
+    _write_family_outputs(root, family_id, complete=True)
+    parameters = root / "parameters"
+    parameters.mkdir(parents=True)
+    family_parameter = parameters / f"{family_id}_species_genetic_code.resolved.tsv"
+    family_parameter.write_text("family\n", encoding="utf-8")
+    shared_parameter = parameters / "species_tree.pruned.nwk"
+    shared_parameter.write_text("(A,B);\n", encoding="utf-8")
+    family_ids, family_from_name = family_context(
+        "orthogroup",
+        genecount=genecount,
+    )
+
+    result = convert_storage_to_zip(
+        root,
+        "orthogroup",
+        family_ids,
+        family_from_name,
+    )
+
+    assert result["unmatched_live_files"] == 0
+    assert result["shared_raw_files"] == 1
+    assert shared_parameter.is_file()
+    assert not family_parameter.exists()
+    assert (root / "parameters.zip").is_file()
+    with GeneFamilyOutputStore(root).open_binary(
+        "parameters",
+        family_parameter.name,
+    ) as handle:
+        assert handle.read() == b"family\n"
+    assert "parameters\tfinalized+live\t1\t1\t1\tparameters.zip" in (
+        root / "ARCHIVE_STATUS.tsv"
+    ).read_text(encoding="utf-8")
+    GeneFamilyOutputStore(root).verify()
+
+
+def test_finalize_retry_removes_parts_left_after_index_commit(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "query2family"
+    query_dir = tmp_path / "query_gene"
+    query_dir.mkdir()
+    (query_dir / "A").write_text("geneA\n", encoding="utf-8")
+    _write_family_outputs(root, "A", complete=True)
+    family_ids, family_from_name = family_context(
+        "query2family",
+        query_dir=query_dir,
+    )
+    archive_completed_outputs(root, "query2family", family_ids, family_from_name)
+    original_remove = output_store_module._remove_unreferenced_subdir_archives
+
+    def fail_cleanup(*args, **kwargs):
+        raise OSError("simulated cleanup interruption")
+
+    monkeypatch.setattr(
+        output_store_module,
+        "_remove_unreferenced_subdir_archives",
+        fail_cleanup,
+    )
+    with pytest.raises(OSError, match="simulated cleanup interruption"):
+        finalize_archives(
+            root,
+            "query2family",
+            family_ids,
+            subdirs={"mafft"},
+        )
+    assert (root / "mafft.zip").is_file()
+    assert list((root / "archives" / "mafft").glob("*.zip"))
+
+    monkeypatch.setattr(
+        output_store_module,
+        "_remove_unreferenced_subdir_archives",
+        original_remove,
+    )
+    assert finalize_archives(
+        root,
+        "query2family",
+        family_ids,
+        subdirs={"mafft"},
+    ) == []
+    assert not (root / "archives" / "mafft").exists()
+    GeneFamilyOutputStore(root).verify()
+
+
+def test_legacy_dot_layout_is_exposed_and_materialized_as_current_paths(
+    tmp_path: Path,
+):
+    root = tmp_path / "orthogroup"
+    family_id = "HOG0000010"
+    genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    genecount.write_text(
+        f"Orthogroup\tTotal\n{family_id}\t1\n",
+        encoding="utf-8",
+    )
+    legacy_outputs = {
+        "amas.cleaned": (".amas.cleaned.tsv", b"amas\n"),
+        "cds.fasta": (".cds.fasta", b">a\nATG\n"),
+        "stat.branch": (".stat.branch.tsv", b"branch\n"),
+        "stat.tree": (".stat.tree.tsv", b"tree\n"),
+        "tree_plot": (".tree_plot.pdf", b"pdf\n"),
+    }
+    for subdir, (suffix, contents) in legacy_outputs.items():
+        path = root / subdir / f"{family_id}{suffix}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+    family_ids, family_from_name = family_context(
+        "orthogroup",
+        genecount=genecount,
+    )
+    convert_storage_to_zip(
+        root,
+        "orthogroup",
+        family_ids,
+        family_from_name,
+    )
+    store = GeneFamilyOutputStore(root)
+
+    assert "amas_cleaned" in store.logical_subdirs()
+    assert "amas.cleaned" not in store.logical_subdirs()
+    assert store.file_names("amas_cleaned") == [
+        f"{family_id}_amas.cleaned.tsv"
+    ]
+    with store.open_binary(
+        "cds_fasta",
+        f"{family_id}_cds.fasta",
+    ) as handle:
+        assert handle.read() == b">a\nATG\n"
+    assert completion_outputs_present(store, family_id)
+
+    restored = store.materialize_family(
+        family_id,
+        orthogroup_id_from_name,
+    )
+    assert root / "cds_fasta" / f"{family_id}_cds.fasta" in restored
+    assert (root / "stat_branch" / f"{family_id}_stat.branch.tsv").is_file()
+
+    canonical_cds = f"cds_fasta/{family_id}_cds.fasta"
+    store.delete(canonical_cds)
+    assert not store.logical_exists(canonical_cds)
+    restored_cds = store.restore(canonical_cds)
+    assert restored_cds == root / canonical_cds
+    assert restored_cds.read_bytes() == b">a\nATG\n"
+
+    store.delete(canonical_cds)
+    convert_storage_to_raw(root, "orthogroup")
+    assert not (root / canonical_cds).exists()
+    assert not (root / "cds.fasta" / f"{family_id}.cds.fasta").exists()
+
+
+@pytest.mark.parametrize(
+    ("legacy_path", "current_path"),
+    [
+        ("amas.cleaned/HOG0000010.amas.cleaned.tsv", "amas_cleaned/HOG0000010_amas.cleaned.tsv"),
+        ("amas.original/HOG0000010.amas.original.tsv", "amas_original/HOG0000010_amas.original.tsv"),
+        ("cds.fasta/HOG0000010.cds.fasta", "cds_fasta/HOG0000010_cds.fasta"),
+        ("character.gff/HOG0000010.gff.tsv", "character_gff_info/HOG0000010_gff.tsv"),
+        ("clipkit.log/HOG0000010.cds.clipkit.log", "clipkit_log/HOG0000010_cds.clipkit.log"),
+        ("clipkit/HOG0000010.cds.clipkit.fasta", "clipkit/HOG0000010_cds.clipkit.fasta"),
+        ("generax.nwk/HOG0000010.generax.nwk", "generax_nwk/HOG0000010_generax.nwk"),
+        ("generax.tree/HOG0000010.generax.nhx", "generax_tree/HOG0000010_generax.nhx"),
+        ("generax.xml/HOG0000010.generax.xml", "generax_xml/HOG0000010_generax.xml"),
+        ("iqtree.model/HOG0000010.model.gz", "iqtree_model/HOG0000010_model.gz"),
+        ("iqtree.tree/HOG0000010.iqtree.nwk", "iqtree_tree/HOG0000010_iqtree.nwk"),
+        ("mafft/HOG0000010.cds.aln.fasta", "mafft/HOG0000010_cds.aln.fasta"),
+        ("mapdNdS.dN.tree/HOG0000010.mapdNdS.dN.nwk", "mapdnds_dn_tree/HOG0000010_mapdNdS.dN.nwk"),
+        ("mapdNdS.dS.tree/HOG0000010.mapdNdS.dS.nwk", "mapdnds_ds_tree/HOG0000010_mapdNdS.dS.nwk"),
+        ("rpsblast/HOG0000010.rpsblast.tsv", "rpsblast/HOG0000010_rpsblast.tsv"),
+        ("stat.branch/HOG0000010.stat.branch.tsv", "stat_branch/HOG0000010_stat.branch.tsv"),
+        ("stat.tree/HOG0000010.stat.tree.tsv", "stat_tree/HOG0000010_stat.tree.tsv"),
+        ("tree_plot/HOG0000010.tree_plot.pdf", "tree_plot/HOG0000010_tree_plot.pdf"),
+    ],
+)
+def test_every_observed_legacy_output_path_has_a_current_logical_alias(
+    tmp_path: Path,
+    legacy_path: str,
+    current_path: str,
+):
+    root = tmp_path / "orthogroup"
+    source = root / legacy_path
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"legacy-output\n")
+    current_subdir, current_name = current_path.split("/", 1)
+    store = GeneFamilyOutputStore(root)
+
+    assert current_subdir in store.logical_subdirs()
+    assert current_name in store.file_names(current_subdir)
+    with store.open_binary(current_subdir, current_name) as handle:
+        assert handle.read() == b"legacy-output\n"
+
+
+def test_zip_only_file_listing_does_not_stat_each_archived_member(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root = tmp_path / "orthogroup"
+    genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    family_id = "HOG0000010"
+    genecount.write_text(
+        f"Orthogroup\tTotal\n{family_id}\t1\n",
+        encoding="utf-8",
+    )
+    legacy_path = root / "mafft" / f"{family_id}.cds.aln.fasta"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_bytes(b">a\nATG\n")
+    family_ids, family_from_name = family_context(
+        "orthogroup",
+        genecount=genecount,
+    )
+    convert_storage_to_zip(
+        root,
+        "orthogroup",
+        family_ids,
+        family_from_name,
+    )
+    store = GeneFamilyOutputStore(root)
+
+    def unexpected_live_stat(*args, **kwargs):
+        raise AssertionError("ZIP-only listing attempted a per-member live stat")
+
+    monkeypatch.setattr(store, "_live_artifact", unexpected_live_stat)
+    assert store.file_names("mafft") == [f"{family_id}_cds.aln.fasta"]
 
 
 def test_query_addition_uses_visible_parts_until_refinalized(tmp_path: Path):
@@ -1915,7 +2173,201 @@ def test_conversion_summary_reports_mixed_store_and_unmatched_files(tmp_path: Pa
 
     assert summary["storage"] == "mixed"
     assert summary["owned_live_files"] == 1
-    assert unmatched_paths == [unmatched]
+    assert summary["shared_raw_files"] == 1
+    assert summary["shared_raw_bytes"] == len(b"shared\n")
+    assert unmatched_paths == []
+
+
+def test_offline_conversion_writes_final_zips_once_and_parallelizes_subdirs(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "orthogroup"
+    family_id = "OG0000001"
+    _write_family_outputs(root, family_id, complete=True)
+    original_archive_chunk = output_store_module._archive_chunk
+    active = 0
+    maximum_active = 0
+    destinations = []
+    active_lock = threading.Lock()
+
+    def observed_archive_chunk(*args, **kwargs):
+        nonlocal active, maximum_active
+        destinations.append(kwargs.get("destination_path"))
+        with active_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        try:
+            time.sleep(0.05)
+            return original_archive_chunk(*args, **kwargs)
+        finally:
+            with active_lock:
+                active -= 1
+
+    def reject_second_compression(*args, **kwargs):
+        raise AssertionError("offline conversion must not compact freshly written ZIPs")
+
+    monkeypatch.setattr(
+        output_store_module,
+        "_archive_chunk",
+        observed_archive_chunk,
+    )
+    monkeypatch.setattr(
+        output_store_module,
+        "_compact_artifact_chunk",
+        reject_second_compression,
+    )
+
+    result = convert_storage_to_zip(
+        root,
+        "orthogroup",
+        [family_id],
+        orthogroup_id_from_name,
+        workers=4,
+    )
+
+    assert maximum_active >= 2
+    assert len(destinations) == 4
+    assert all(path is not None and path.parent == root for path in destinations)
+    assert result["zip_files"] == 4
+    assert sorted(path.name for path in root.glob("*.zip")) == [
+        "mafft.zip",
+        "stat_branch.zip",
+        "stat_tree.zip",
+        "tree_plot.zip",
+    ]
+    assert not list((root / "archives").glob("*/*.zip"))
+    GeneFamilyOutputStore(root).verify()
+
+
+def test_storage_metrics_separate_zip_metadata_and_shared_raw_files(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    family_id = "OG0000001"
+    _write_family_outputs(root, family_id, complete=False)
+    shared = root / "parameters" / "common.tsv"
+    shared.parent.mkdir(parents=True)
+    shared.write_text("shared\n", encoding="utf-8")
+    convert_storage_to_zip(
+        root,
+        "orthogroup",
+        [family_id],
+        orthogroup_id_from_name,
+    )
+
+    summary, unmatched = storage_conversion_summary(
+        root,
+        {family_id},
+        orthogroup_id_from_name,
+    )
+
+    assert unmatched == []
+    assert summary["zip_files"] == 1
+    assert summary["metadata_files"] > 0
+    assert summary["shared_raw_files"] == 1
+    assert summary["physical_store_files"] == (
+        summary["zip_files"]
+        + summary["metadata_files"]
+        + summary["shared_raw_files"]
+    )
+    assert "zip_shards" not in summary
+    assert "physical_archive_files" not in summary
+    assert storage_conversion_status(root)["zip_files"] == 1
+
+
+def test_finalize_and_repair_report_detailed_progress(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    family_id = "OG0000001"
+    _write_family_outputs(root, family_id, complete=True)
+    archive_completed_outputs(
+        root,
+        "orthogroup",
+        [family_id],
+        orthogroup_id_from_name,
+        include_incomplete=True,
+    )
+    finalize_progress = []
+
+    finalize_archives(
+        root,
+        "orthogroup",
+        [family_id],
+        progress_callback=lambda **fields: finalize_progress.append(fields),
+    )
+
+    assert any(
+        row.get("current_subdir") == "mafft"
+        and row.get("current_zip") == "mafft.zip"
+        and row.get("current_zip_bytes", 0) > 0
+        for row in finalize_progress
+    )
+    assert finalize_progress[-1]["finalized_subdirs"] == 4
+    assert finalize_progress[-1]["total_subdirs"] == 4
+
+    repair_progress = []
+    repair_archive_index(
+        root,
+        progress_callback=lambda **fields: repair_progress.append(fields),
+    )
+
+    assert repair_progress[0]["phase"] == "repairing-index"
+    assert repair_progress[-1]["repair_zip_files_completed"] == 4
+    assert repair_progress[-1]["repair_zip_files_total"] == 4
+    assert repair_progress[-1]["repair_members_verified"] == 4
+    assert repair_progress[-1]["repair_bytes_verified"] > 0
+
+
+def test_archive_completed_and_repair_cli_expose_long_operation_progress(
+    tmp_path: Path,
+    capsys,
+):
+    root = tmp_path / "orthogroup"
+    family_id = "OG0000001"
+    genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    genecount.write_text(
+        f"Orthogroup\tTotal\n{family_id}\t1\n",
+        encoding="utf-8",
+    )
+    _write_family_outputs(root, family_id, complete=True)
+    archive_args = build_parser().parse_args(
+        [
+            "archive-completed",
+            "--root",
+            str(root),
+            "--mode",
+            "orthogroup",
+            "--genecount",
+            str(genecount),
+            "--progress-interval",
+            "0",
+        ]
+    )
+
+    assert run_cli(archive_args) == 0
+    archive_stderr = capsys.readouterr().err
+    assert "phase=finalizing" in archive_stderr
+    assert "current_zip=mafft.zip" in archive_stderr
+    assert (root / "mafft.zip").is_file()
+
+    repair_args = build_parser().parse_args(
+        [
+            "repair",
+            "--root",
+            str(root),
+            "--progress-interval",
+            "0",
+        ]
+    )
+    assert run_cli(repair_args) == 0
+    repair_stderr = capsys.readouterr().err
+    assert "phase=repairing-index" in repair_stderr
+    assert "repair_zip_files_completed=4" in repair_stderr
+
+
+def test_family_filter_rejects_multiple_family_ids(tmp_path: Path):
+    with pytest.raises(TypeError, match="single family ID string"):
+        GeneFamilyOutputStore(tmp_path, family_filter={"A", "B"})
 
 
 def test_raw_conversion_summary_combines_size_and_symlink_inventory(tmp_path: Path):
@@ -1939,9 +2391,88 @@ def test_raw_conversion_summary_combines_size_and_symlink_inventory(tmp_path: Pa
     assert summary["logical_files"] == 2
     assert summary["owned_live_files"] == 1
     assert summary["owned_live_bytes"] == len(b"owned")
-    assert summary["unmatched_live_files"] == 1
+    assert summary["unmatched_live_files"] == 0
+    assert summary["shared_raw_files"] == 1
+    assert summary["shared_raw_bytes"] == len(b"shared")
     assert summary["unsupported_symlinks"] == 1
-    assert unmatched_paths == [unmatched]
+    assert unmatched_paths == []
+
+
+def test_conversion_inventory_uses_requested_parallel_workers(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "orthogroup"
+    for subdir in ("mafft", "stat_branch", "tree_plot"):
+        path = root / subdir / f"OG0000001_{subdir}.tsv"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(subdir.encode("utf-8"))
+    original_executor = concurrent.futures.ThreadPoolExecutor
+    observed_workers = []
+
+    class RecordingExecutor(original_executor):
+        def __init__(self, max_workers=None, *args, **kwargs):
+            observed_workers.append(max_workers)
+            super().__init__(max_workers=max_workers, *args, **kwargs)
+
+    monkeypatch.setattr(
+        output_store_module.concurrent.futures,
+        "ThreadPoolExecutor",
+        RecordingExecutor,
+    )
+
+    summary, unmatched = storage_conversion_summary(
+        root,
+        {"OG0000001"},
+        orthogroup_id_from_name,
+        workers=3,
+    )
+
+    assert summary["owned_live_files"] == 3
+    assert unmatched == []
+    assert observed_workers == [3]
+
+
+def test_zip_conversion_summary_stats_each_missing_subdirectory_once(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root = tmp_path / "orthogroup"
+    family_ids = [f"OG{index:07d}" for index in range(40)]
+    for family_id in family_ids:
+        path = root / "mafft" / f"{family_id}_alignment.tsv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(family_id.encode("utf-8"))
+    convert_storage_to_zip(
+        root,
+        "orthogroup",
+        family_ids,
+        orthogroup_id_from_name,
+    )
+    mafft_dir = root / "mafft"
+    original_is_dir = Path.is_dir
+    mafft_is_dir_calls = 0
+
+    def observed_is_dir(path):
+        nonlocal mafft_is_dir_calls
+        if path == mafft_dir:
+            mafft_is_dir_calls += 1
+        return original_is_dir(path)
+
+    monkeypatch.setattr(Path, "is_dir", observed_is_dir)
+
+    summary, unmatched = storage_conversion_summary(
+        root,
+        set(family_ids),
+        orthogroup_id_from_name,
+    )
+
+    assert summary["storage"] == "zip"
+    assert summary["raw_materialize_files"] == len(family_ids)
+    assert unmatched == []
+    assert mafft_is_dir_calls < 10
 
 
 def test_convert_storage_cli_accepts_files_as_raw_alias(tmp_path: Path):
@@ -2054,9 +2585,9 @@ def test_removed_query_family_can_be_added_to_conversion_catalog(tmp_path: Path)
 def test_strict_unmatched_conversion_fails_before_creating_marker(tmp_path: Path):
     root = tmp_path / "orthogroup"
     root.mkdir()
-    shared = root / "parameters" / "common.tsv"
-    shared.parent.mkdir()
-    shared.write_text("shared\n", encoding="utf-8")
+    unmatched = root / "misc" / "common.tsv"
+    unmatched.parent.mkdir()
+    unmatched.write_text("unmatched\n", encoding="utf-8")
 
     with pytest.raises(ArchiveStoreError, match="Unmatched live output files"):
         convert_storage_to_zip(
@@ -2067,7 +2598,55 @@ def test_strict_unmatched_conversion_fails_before_creating_marker(tmp_path: Path
             strict_unmatched=True,
         )
 
+    assert unmatched.is_file()
+    assert not (root / ".gg_store" / "storage-conversion.pending").exists()
+
+
+def test_strict_conversion_accepts_intentional_shared_raw_files(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    owned = root / "mafft" / "OG0000001_alignment.tsv"
+    owned.parent.mkdir(parents=True)
+    owned.write_text("owned\n", encoding="utf-8")
+    shared = root / "parameters" / "common.tsv"
+    shared.parent.mkdir()
+    shared.write_text("shared\n", encoding="utf-8")
+
+    result = convert_storage_to_zip(
+        root,
+        "orthogroup",
+        ["OG0000001"],
+        orthogroup_id_from_name,
+        strict_unmatched=True,
+    )
+
+    assert result["unmatched_live_files"] == 0
+    assert result["shared_raw_files"] == 1
     assert shared.is_file()
+    assert (root / "mafft.zip").is_file()
+
+
+def test_strict_conversion_rejects_family_owned_parameter_outside_catalog(
+    tmp_path: Path,
+):
+    root = tmp_path / "orthogroup"
+    unexpected = (
+        root
+        / "parameters"
+        / "OG0000002_species_genetic_code.resolved.tsv"
+    )
+    unexpected.parent.mkdir(parents=True)
+    unexpected.write_text("unexpected family\n", encoding="utf-8")
+
+    with pytest.raises(ArchiveStoreError, match="Unmatched live output files"):
+        convert_storage_to_zip(
+            root,
+            "orthogroup",
+            ["OG0000001"],
+            orthogroup_id_from_name,
+            strict_unmatched=True,
+        )
+
+    assert unexpected.is_file()
     assert not (root / ".gg_store" / "storage-conversion.pending").exists()
 
 

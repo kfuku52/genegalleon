@@ -129,6 +129,7 @@ if [[ -d "${dir_orthogroup}" ]]; then
       --dir_og "${dir_orthogroup}" \
       --genecount "${file_orthogroup_genecount_selected}" \
       --ncpu "${ncpu_progress_summary}" \
+      --updated-genecount-out orthogroup_genecount.amas.tsv \
       --out orthogroup_summary.tsv
     if [[ "${gene_family_output_storage}" == "zip" ]]; then
       python "${gg_support_dir}/gene_family_output_store.py" archive-completed \

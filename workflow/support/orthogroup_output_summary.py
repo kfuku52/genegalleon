@@ -16,7 +16,7 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
-from gene_family_output_store import GeneFamilyOutputStore
+from gene_family_output_store import GeneFamilyOutputStore, SHARED_OUTPUT_SUBDIRS
 
 ORTHOGROUP_ID_RE = re.compile(r'^(OG\d+|HOG\d+|SP\d+)(?=$|[._-])')
 
@@ -26,6 +26,12 @@ def build_arg_parser():
     parser.add_argument('--dir_og', metavar='PATH', type=str, required=True, help='')
     parser.add_argument('--genecount', metavar='PATH', type=str, required=True, help='')
     parser.add_argument('--out', metavar='PATH', type=str, required=True, help='')
+    parser.add_argument(
+        '--updated-genecount-out',
+        metavar='PATH',
+        type=str,
+        help='Write the AMAS-augmented gene-count table here; the default is beside --out.',
+    )
     parser.add_argument('--ncpu', metavar='INT', default=1, type=int, help='Number of worker threads.')
     return parser
 
@@ -169,7 +175,12 @@ def run(args):
     print('args:', vars(args))
 
     start = time.time()
-    updated_genecount = args.genecount.replace('.tsv', '') + '.amas.tsv'
+    updated_genecount = getattr(args, 'updated_genecount_out', None)
+    if updated_genecount is None:
+        out_path = Path(args.out)
+        updated_genecount = str(
+            out_path.with_name(f'{out_path.stem}.genecount.amas.tsv')
+        )
     df_original = pandas.read_csv(args.genecount, sep='\t', index_col=0, header=0)
     df_original.index = df_original.index.astype(str)
     if os.path.exists(updated_genecount):
@@ -207,7 +218,11 @@ def run(args):
 
     df.loc[:, 'GG_ARRAY_TASK_ID'] = numpy.arange(df.shape[0]) + 1
 
-    subdirs = store.logical_subdirs()
+    subdirs = [
+        subdir
+        for subdir in store.logical_subdirs()
+        if subdir not in SHARED_OUTPUT_SUBDIRS
+    ]
     df = pandas.concat([df, pandas.DataFrame(data=0, index=df.index, columns=subdirs, dtype=int)], axis=1)
     valid_og_ids = set(df.index.astype(str))
     for subdir in subdirs:

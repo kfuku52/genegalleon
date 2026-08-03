@@ -15,7 +15,7 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
-from gene_family_output_store import GeneFamilyOutputStore
+from gene_family_output_store import GeneFamilyOutputStore, SHARED_OUTPUT_SUBDIRS
 
 
 def build_arg_parser():
@@ -212,7 +212,11 @@ def run(args):
 
     df.insert(0, 'GG_ARRAY_TASK_ID', numpy.arange(df.shape[0]) + 1)
 
-    subdirs = store.logical_subdirs()
+    subdirs = [
+        subdir
+        for subdir in store.logical_subdirs()
+        if subdir not in SHARED_OUTPUT_SUBDIRS
+    ]
     df = pandas.concat([df, pandas.DataFrame(data=0, index=df.index, columns=subdirs, dtype=int)], axis=1)
     valid_query_ids = set(df.index.astype(str))
     for subdir in subdirs:

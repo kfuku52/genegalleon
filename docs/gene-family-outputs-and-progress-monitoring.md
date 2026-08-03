@@ -81,6 +81,14 @@ the later stages instead of starting over. A controlled failure records
 partial artifacts. After an abrupt kill, any remaining live files override the
 older ZIP members and are consumed on the next rerun.
 
+Workspaces from releases that used dot-separated subdirectories and filenames
+(for example `amas.cleaned/HOG0000010.amas.cleaned.tsv`) are exposed through
+the current underscore-based logical names. On rerun, only the selected
+family is materialized under the corresponding current directory, and the
+workflow accepts the historical uncompressed FASTA names as valid stage
+inputs. This allows a partially completed pre-ZIP family to continue after a
+raw-to-ZIP conversion without rewriting every archive member first.
+
 The other output subdirectories do not have to contain every expected family.
 For example, files for completed families can be moved from a partially
 complete `mafft/` directory into ZIP storage while incomplete-family files
@@ -138,7 +146,9 @@ parts are stored under
 Once an orthogroup catalog is fully complete and no family task holds a lock,
 progress-summary maintenance consolidates each logical output set once into
 `<gene-family-root>/<subdirectory>.zip` and removes its parts. Raw-to-ZIP
-conversion also produces this finalized layout. Each member keeps its logical
+conversion writes previously raw subdirectories directly to this finalized
+layout, in parallel up to `--workers`, rather than creating parts and then
+recompressing them. Each member keeps its logical
 `<subdirectory>/<filename>` path. GeneGalleon summaries, database
 generation, HGT plots, csubst site plots, and orthogroup-based GRAmPA read
 these archives transparently or materialize only the family inputs required
@@ -154,6 +164,9 @@ GeneGalleon writes `README_GENE_FAMILY_OUTPUTS.txt` and `ARCHIVE_STATUS.tsv`
 at the output root so a user browsing with Finder, FileZilla, or `ls` can see
 where each logical output set is stored. Only locks, indexes, tombstones, and
 transaction markers remain hidden under `.gg_store/`.
+Rows whose ZIP storage also has visible overrides or shared files use a
+`+live` storage suffix (for example `finalized+live`) and report the live count
+separately.
 
 The default `adaptive` compression deflates ordinary text and sequence files
 while storing already compressed `.gz`, `.zip`, image, and PDF members without
@@ -178,6 +191,14 @@ always overrides the archived version:
 ```bash
 cp replacement.tsv \
   workspace/output/query2family/stat_branch/2_WOX_stat.branch.tsv
+```
+
+`ARCHIVE_STATUS.tsv` is a snapshot rather than a filesystem watcher. After
+manual `cp`, `mv`, or `rm` operations, refresh its live-file counts with:
+
+```bash
+bash workflow/gg_gene_family_archive.sh refresh-status \
+  --root workspace/output/query2family
 ```
 
 Perform direct `cp` changes only when the affected gene-family task is idle.
@@ -251,10 +272,14 @@ manifests but incomplete or missing indexes, rebuild them explicitly:
 
 ```bash
 bash workflow/gg_gene_family_archive.sh repair \
-  --root workspace/output/query2family
+  --root workspace/output/query2family \
+  --progress-interval 10
 ```
 
 Add `--remove-orphans` only after reviewing the reported orphan paths.
+Both explicit `repair` and `finalize` commands emit the same periodic progress
+fields as conversion. The orthogroup finalization automatically triggered by
+`gg_progress_summary` does so as well.
 
 ### Converting an existing workspace
 
@@ -271,8 +296,13 @@ bash workflow/gg_gene_family_archive.sh convert-storage \
 
 Remove `--dry-run` to archive every recognized family-owned live artifact,
 including outputs of incomplete families. Conversion does not create a
-completion state. Shared or unrecognized files remain live and are reported;
-`--strict-unmatched` instead aborts before conversion. If query inputs were
+completion state. Intentional shared files such as common files below
+`parameters/` remain live and are reported as `shared_raw_files`; they do not
+trigger `--strict-unmatched`. Other unrecognized files remain live and are
+reported as `unmatched_live_files`; `--strict-unmatched` aborts before
+conversion when those files exist. A parameter filename that identifies an
+orthogroup outside the supplied catalog is likewise unmatched, rather than
+being hidden in the shared count. If query inputs were
 removed after their outputs were created, list the missing family IDs one per
 line and pass `--family-id-file`.
 
@@ -300,9 +330,16 @@ against an existing ZIP store then infer the mode and reject an explicit
 conflicting value. Adding query input files updates the catalog count and
 digest without invalidating older shards.
 
-Large conversions emit a flushed `progress` line immediately, at each shard
-or subdirectory transition, and every 30 seconds while a ZIP write is still
-running. Each line includes elapsed seconds and the latest phase/counts. Use
+Large conversions, repairs, and finalizations emit a flushed `progress` line
+immediately, at each shard or subdirectory transition, and every 30 seconds
+while a ZIP operation is still running. Direct final-ZIP writes report
+`active_subdirs`, aggregate
+`active_zip_bytes`, and the most recently updated `current_subdir` and
+`current_zip_bytes`. Finalization reports `finalized_subdirs` and
+`total_subdirs`. Interrupted conversions use the explicit
+`phase=repairing-index` phase with verified ZIP/member/byte counts instead of
+remaining at `phase=starting`. Each line includes elapsed seconds and the
+latest phase/counts. Use
 `--progress-interval 10` for more frequent heartbeats or `0` for transition
 lines only. Conversion writes its current phase, heartbeat, completed
 subdirectories, and committed counts into the durable conversion marker.
@@ -320,6 +357,10 @@ bash workflow/gg_gene_family_archive.sh convert-storage \
 ```
 
 The command reads but never modifies `workspace/output/orthofinder/`.
+Progress-summary wrappers likewise write their AMAS-augmented copy to the
+summary output directory; `orthogroup_output_summary.py` accepts
+`--updated-genecount-out` for callers that need an explicit destination and
+otherwise writes beside `--out`, never beside the input gene-count table.
 
 Stores created by the first experimental ZIP implementation can be moved out
 of the hidden mixed `.gg_archives/` layout without changing their logical
@@ -370,8 +411,9 @@ resumed automatically by running the same command again. Add `--resume` when
 you want the command to require an existing matching interrupted conversion;
 it fails instead of silently starting a new conversion when no marker exists.
 Before resuming raw-to-ZIP, GeneGalleon removes partial shards and rebuilds the
-authoritative indexes from committed manifests, making shard/index crash
-windows recoverable. `gg_gene_evolution` and progress
+authoritative indexes from committed manifests, verifying CRC and SHA-256 in
+one read pass and making shard/index crash windows recoverable.
+`gg_gene_evolution` and progress
 summary refuse to start while the marker remains. Stop old array jobs before
 conversion; writers from code predating this lock protocol cannot be prevented
 from creating new live files, although signature checks keep such files from
@@ -384,6 +426,12 @@ bash workflow/gg_gene_family_archive.sh storage-status \
   --root workspace/output/query2family \
   --query-dir workspace/input/query_gene
 ```
+
+The status distinguishes `zip_files`, bounded GeneGalleon
+`metadata_files`, and their managed total in `physical_store_files`.
+Intentional common files are counted separately as `shared_raw_files` and
+`shared_raw_bytes`, while `unmatched_live_files` is reserved for files that
+need review.
 
 To inspect only the resumable marker and archive format without reading the
 family catalog:

@@ -380,7 +380,11 @@ Notable defaults:
 - database, CSUBST scan AA-change summary, HGT, and CSUBST site convergence flags are valid for both sources and use the selected source's gene-family output directory,
 - `run_gene_family_database_build=1` assembles the selected source's SQLite DB from
   logical `stat_tree` and `stat_branch` inputs, whether they are live files or
-  members of GeneGalleon ZIP shards,
+  members of GeneGalleon ZIP shards; structural columns are required, while
+  analysis-specific columns that are absent from individual families are stored
+  as SQL `NULL`,
+- overwrite builds use a temporary SQLite file and replace the published database
+  only after every input has been loaded and indexed successfully,
 - when present, `csubst_scan/` is imported as DB table `aa_change`, and
   `csubst_scan_units/` is imported as `aa_change_unit`; `aa_change` receives
   global BH-FDR columns after all candidate substitutions are loaded,

@@ -314,6 +314,7 @@ run_family_completion_summary_for_source() {
       --dir_og "${dir_gene_family}" \
       --genecount "${file_orthogroup_genecount_selected}" \
       --ncpu "${GG_TASK_CPUS:-1}" \
+      --updated-genecount-out "${summary_output_dir}/orthogroup_genecount.amas.tsv" \
       --out "${summary_output_dir}/orthogroup_summary.tsv"
   fi
 }

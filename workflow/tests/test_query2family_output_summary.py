@@ -57,6 +57,8 @@ def test_run_writes_query_completion_summary_from_input_order(tmp_path: Path):
     (query2family / "stat_branch").mkdir()
     (query2family / "tmp" / "1_AHA").mkdir(parents=True)
     (query2family / ".hidden_stage").mkdir()
+    (query2family / "parameters").mkdir()
+    (query2family / "parameters" / "species_tree.nwk").write_text("(A,B);\n", encoding="utf-8")
     (query2family / "tree_plot" / "2_WOX_tree_plot.pdf").write_text("", encoding="utf-8")
     (query2family / "tree_plot" / "UNKNOWN_tree_plot.pdf").write_text("", encoding="utf-8")
     (query2family / "stat_branch" / "AHA_stat.branch.tsv").write_text("", encoding="utf-8")
@@ -78,6 +80,7 @@ def test_run_writes_query_completion_summary_from_input_order(tmp_path: Path):
     assert out.loc["AHA", "GG_ARRAY_TASK_ID"] == 2
     assert ".hidden_stage" not in out.columns
     assert "tmp" not in out.columns
+    assert "parameters" not in out.columns
     assert out.loc["2_WOX", "tree_plot"] == 1
     assert out.loc["AHA", "tree_plot"] == 0
     assert out.loc["2_WOX", "stat_branch"] == 0

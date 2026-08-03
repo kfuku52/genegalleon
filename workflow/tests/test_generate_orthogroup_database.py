@@ -20,6 +20,18 @@ def load_module():
     return module
 
 
+def stat_tree_frame(**extra_columns):
+    row = {"num_branch": 3, "num_spe": 1, "num_dup": 0, "num_sp": 2}
+    row.update(extra_columns)
+    return pandas.DataFrame([row])
+
+
+def stat_branch_frame(**extra_columns):
+    row = {"branch_id": 0, "node_name": "n0", "num_sp": 2, "so_event": "S"}
+    row.update(extra_columns)
+    return pandas.DataFrame([row])
+
+
 def test_read_header_columns_returns_tsv_header_columns(tmp_path):
     mod = load_module()
     infile = tmp_path / "sample.tsv"
@@ -118,8 +130,8 @@ def test_database_builder_adds_aa_change_tables_and_global_fdr(tmp_path):
     for path in [stat_tree, stat_branch, aa_change, aa_change_unit]:
         path.mkdir()
 
-    pandas.DataFrame({"tree_metric": [1.0]}).to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
-    pandas.DataFrame({"branch_id": [1], "branch_metric": [2.0]}).to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
+    stat_tree_frame(tree_metric=1.0).to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
+    stat_branch_frame(branch_id=1, branch_metric=2.0).to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
     pandas.DataFrame(
         [
             {
@@ -213,8 +225,8 @@ def test_database_builder_reads_stat_tables_from_zip_shards(tmp_path):
     genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
     genecount.write_text("Orthogroup\tTotal\nOG0001\t1\n", encoding="utf-8")
     for subdir, frame in (
-        ("stat_tree", pandas.DataFrame({"tree_metric": [1.25]})),
-        ("stat_branch", pandas.DataFrame({"branch_id": [1], "branch_metric": [2.5]})),
+        ("stat_tree", stat_tree_frame(tree_metric=1.25)),
+        ("stat_branch", stat_branch_frame(branch_id=1, branch_metric=2.5)),
         ("tree_plot", None),
     ):
         suffix = {
@@ -271,8 +283,8 @@ def test_database_builder_rejects_legacy_scan_schema_before_overwriting_database
     for path in [stat_tree, stat_branch, aa_change, aa_change_unit]:
         path.mkdir()
 
-    pandas.DataFrame({"tree_metric": [1.0]}).to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
-    pandas.DataFrame({"branch_metric": [2.0]}).to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
+    stat_tree_frame(tree_metric=1.0).to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
+    stat_branch_frame(branch_metric=2.0).to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
     pandas.DataFrame(
         [{"trait": "traitA", "state_change": "10K", "p_rate_enrichment": 0.01}]
     ).to_csv(aa_change / "OG0001_csubst_scan.tsv", sep="\t", index=False)
@@ -356,8 +368,8 @@ def test_database_builder_imports_variable_current_scan_columns(tmp_path):
     for path in [stat_tree, stat_branch, aa_change, aa_change_unit]:
         path.mkdir()
 
-    pandas.DataFrame({"tree_metric": [1.0]}).to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
-    pandas.DataFrame({"branch_metric": [2.0]}).to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
+    stat_tree_frame(tree_metric=1.0).to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
+    stat_branch_frame(branch_metric=2.0).to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
     baseline = {
         "trait": "traitA",
         "site_rate_categorized": 2.0,
@@ -406,20 +418,23 @@ def test_database_builder_imports_variable_current_scan_columns(tmp_path):
     assert observed == [("OG0001", None), ("OG0002", 42.0)]
 
 
-def test_database_builder_fails_when_any_input_file_has_missing_columns(tmp_path):
+def test_database_builder_fills_missing_optional_stat_columns_with_null(tmp_path):
     stat_tree = tmp_path / "stat_tree"
     stat_branch = tmp_path / "stat_branch"
     stat_tree.mkdir()
     stat_branch.mkdir()
 
-    pandas.DataFrame({"metric_a": [1], "metric_b": [2]}).to_csv(
+    stat_tree_frame(hyphy_relax_pvalue_is_terrestrial=0.01).to_csv(
         stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False
     )
-    pandas.DataFrame({"metric_a": [3]}).to_csv(
+    stat_tree_frame().to_csv(
         stat_tree / "OG0002_stat.tree.tsv", sep="\t", index=False
     )
-    pandas.DataFrame({"branch_metric": [1]}).to_csv(
+    stat_branch_frame(pfam_domain="PF00001").to_csv(
         stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False
+    )
+    stat_branch_frame().to_csv(
+        stat_branch / "OG0002_stat.branch.tsv", sep="\t", index=False
     )
 
     db_path = tmp_path / "gg_orthogroup.db"
@@ -443,22 +458,34 @@ def test_database_builder_fails_when_any_input_file_has_missing_columns(tmp_path
         text=True,
     )
 
-    assert proc.returncode != 0
-    assert "Missing required columns" in proc.stderr
-    assert "OG0002_stat.tree.tsv" in proc.stderr
-    assert "no partial build will be reported as successful" in proc.stderr
+    assert proc.returncode == 0, proc.stderr
+    with sqlite3.connect(db_path) as conn:
+        tree_rows = conn.execute(
+            "SELECT orthogroup, hyphy_relax_pvalue_is_terrestrial "
+            "FROM tree ORDER BY orthogroup"
+        ).fetchall()
+        branch_rows = conn.execute(
+            "SELECT orthogroup, pfam_domain FROM branch ORDER BY orthogroup"
+        ).fetchall()
+    assert tree_rows == [("OG0001", 0.01), ("OG0002", None)]
+    assert branch_rows == [("OG0001", "PF00001"), ("OG0002", None)]
 
 
-def test_database_builder_fails_when_any_input_file_is_empty(tmp_path):
+def test_database_builder_rejects_missing_structural_stat_columns(tmp_path):
     stat_tree = tmp_path / "stat_tree"
     stat_branch = tmp_path / "stat_branch"
     stat_tree.mkdir()
     stat_branch.mkdir()
-    (stat_tree / "OG0001_stat.tree.tsv").write_text("", encoding="utf-8")
-    pandas.DataFrame({"branch_metric": [1]}).to_csv(
+
+    malformed_tree = stat_tree_frame().drop(columns=["num_sp"])
+    malformed_tree.to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
+    stat_branch_frame().to_csv(
         stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False
     )
 
+    db_path = tmp_path / "gg_orthogroup.db"
+    original_database = b"existing database must survive structural schema preflight"
+    db_path.write_bytes(original_database)
     proc = subprocess.run(
         [
             sys.executable,
@@ -466,7 +493,7 @@ def test_database_builder_fails_when_any_input_file_is_empty(tmp_path):
             "--overwrite",
             "1",
             "--dbpath",
-            str(tmp_path / "gg_orthogroup.db"),
+            str(db_path),
             "--dir_stat_tree",
             str(stat_tree),
             "--dir_stat_branch",
@@ -480,7 +507,53 @@ def test_database_builder_fails_when_any_input_file_is_empty(tmp_path):
     )
 
     assert proc.returncode != 0
+    assert "invalid structural TSV schemas" in proc.stderr
+    assert "missing structural columns: num_sp" in proc.stderr
+    assert db_path.read_bytes() == original_database
+
+
+def test_database_builder_fails_when_any_input_file_is_empty(tmp_path):
+    stat_tree = tmp_path / "stat_tree"
+    stat_branch = tmp_path / "stat_branch"
+    stat_tree.mkdir()
+    stat_branch.mkdir()
+    (stat_tree / "OG0001_stat.tree.tsv").write_text("", encoding="utf-8")
+    stat_tree_frame().to_csv(
+        stat_tree / "OG0002_stat.tree.tsv", sep="\t", index=False
+    )
+    stat_branch_frame().to_csv(
+        stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False
+    )
+
+    db_path = tmp_path / "gg_orthogroup.db"
+    original_database = b"existing completed database"
+    db_path.write_bytes(original_database)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--overwrite",
+            "1",
+            "--dbpath",
+            str(db_path),
+            "--dir_stat_tree",
+            str(stat_tree),
+            "--dir_stat_branch",
+            str(stat_branch),
+            "--ncpu",
+            "1",
+            "--row_threshold",
+            "1",
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode != 0
     assert "input file is empty" in proc.stderr
+    assert db_path.read_bytes() == original_database
+    assert list(tmp_path.glob(".gg_orthogroup.db.*.tmp")) == []
 
 
 def test_import_has_no_logfile_side_effect(tmp_path, monkeypatch):
