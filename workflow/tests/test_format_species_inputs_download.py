@@ -653,7 +653,19 @@ def test_download_manifest_supports_direct_with_explicit_urls(tmp_path):
     gff_source = source_dir / "medicago_sativa.gene.gff3"
     genome_source = source_dir / "medicago_sativa.genome.fa"
     cds_source.write_text(">MsG1.t1\nATGAA\n>MsG1.t2\nATGAAATTT\n", encoding="utf-8")
-    gff_source.write_text("chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=MsG1\n", encoding="utf-8")
+    gff_source.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=MsG1",
+                "chr1\tsrc\tmRNA\t1\t5\t.\t+\t.\tID=MsG1.t1;Parent=MsG1",
+                "chr1\tsrc\tCDS\t1\t5\t.\t+\t0\tParent=MsG1.t1",
+                "chr1\tsrc\tmRNA\t10\t18\t.\t+\t.\tID=MsG1.t2;Parent=MsG1",
+                "chr1\tsrc\tCDS\t10\t18\t.\t+\t0\tParent=MsG1.t2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     genome_source.write_text(">chr1\nATGCATGC\n", encoding="utf-8")
 
     manifest = tmp_path / "manifest.tsv"
@@ -703,6 +715,17 @@ def test_download_manifest_supports_direct_with_explicit_urls(tmp_path):
     with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
         cds_text = handle.read()
     assert cds_text.count(">Medicago_sativa_MsG1") == 1
+    assert "ATGAAATTT" in cds_text
+    assert (out_gff / (species_key + "_direct.gene.gff.gz")).exists()
+    assert (out_genome / (species_key + "_direct.genome.fa.gz")).exists()
+    with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
+        audit = json.load(handle)
+    assert audit["version"] == 4
+    assert audit["grouping_source"] == "gff"
+    assert audit["stats"]["mapped"] == 2
+    assert audit["stats"]["unmapped"] == 0
+    assert audit["before_count"] == 2
+    assert audit["after_count"] == 1
 
 
 def test_download_manifest_all_provider_only_scans_providers_declared_in_manifest_xlsx(tmp_path):

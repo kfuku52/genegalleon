@@ -160,6 +160,49 @@ def test_validate_longest_cds_selection_fails_when_shorter_isoform_is_kept(tmp_p
     assert "sequence_mismatch=1 sample=Arabidopsis_thaliana_gene1" in completed.stderr
 
 
+def test_validate_longest_cds_selection_compares_lengths_before_padding(tmp_path):
+    raw_dir = tmp_path / "raw"
+    cds_dir = tmp_path / "species_cds"
+    raw_dir.mkdir()
+    cds_dir.mkdir()
+
+    raw_cds = raw_dir / "Test_species.raw.fa"
+    raw_cds.write_text(
+        ">A_short gene=G1\nATGAAAAA\n>B_long gene=G1\nATGAAAAAA\n",
+        encoding="utf-8",
+    )
+    formatted_cds = cds_dir / "Test_species_demo.fa.gz"
+    write_gzip_text(formatted_cds, ">Test_species_G1\nATGAAAAAA\n")
+    summary_path = tmp_path / "gg_input_generation_species.tsv"
+    write_species_summary(
+        summary_path,
+        [
+            {
+                "provider": "direct",
+                "species_key": "Test_species",
+                "species_prefix": "Test_species",
+                "cds_input_path": str(raw_cds),
+                "gff_input_path": "",
+                "genome_input_path": "",
+                "cds_output_path": str(formatted_cds),
+                "cds_sequences_before": "2",
+                "cds_sequences_after": "1",
+                "aggregated_cds_removed": "1",
+            }
+        ],
+    )
+
+    completed = run_script(
+        "--species-cds-dir",
+        str(cds_dir),
+        "--species-summary",
+        str(summary_path),
+    )
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "[Test_species] Longest CDS validation OK:" in completed.stdout
+
+
 def test_validate_longest_cds_selection_passes_for_gff_derived_inputs(tmp_path):
     raw_dir = tmp_path / "raw"
     cds_dir = tmp_path / "species_cds"

@@ -252,22 +252,25 @@ def collect_expected_longest_records(task):
         transcript_total += 1
         transcript_id = formatter.build_formatted_cds_id(cds_identifier_task, header)
         gene_id = formatter.build_gene_aggregate_id(cds_identifier_task, header, transcript_id)
-        seq = formatter.pad_to_codon_length(re.sub(r"\s+", "", sequence).upper())
+        raw_seq = re.sub(r"\s+", "", sequence).upper()
+        seq = formatter.pad_to_codon_length(raw_seq)
         transcripts_by_gene[gene_id] += 1
         previous = expected.get(gene_id)
         if previous is None:
             expected[gene_id] = {
                 "sequence": seq,
+                "raw_sequence_length": len(raw_seq),
                 "transcript_id": transcript_id,
             }
             continue
-        previous_seq = previous["sequence"]
+        previous_raw_sequence_length = previous["raw_sequence_length"]
         previous_transcript_id = previous["transcript_id"]
-        if len(seq) > len(previous_seq) or (
-            len(seq) == len(previous_seq) and transcript_id < previous_transcript_id
+        if len(raw_seq) > previous_raw_sequence_length or (
+            len(raw_seq) == previous_raw_sequence_length and transcript_id < previous_transcript_id
         ):
             expected[gene_id] = {
                 "sequence": seq,
+                "raw_sequence_length": len(raw_seq),
                 "transcript_id": transcript_id,
             }
 

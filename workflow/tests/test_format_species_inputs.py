@@ -1339,7 +1339,7 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 3
+    assert audit["version"] == 4
     assert len(audit["cds_input"]["sha256"]) == 64
     assert len(audit["gff_input"]["sha256"]) == 64
 
@@ -1465,6 +1465,82 @@ def test_gff_grouping_rescue_overlap_applies_to_provided_cds_aliases(tmp_path):
     assert rescue_a["gene_token"] == rescue_b["gene_token"] == "locusX"
     assert rescue_index["coordinate_rescued_transcripts"] == 2
     assert rescue_index["coordinate_rescued_groups"] == 1
+
+
+def test_gff_grouping_rescue_preserves_distinct_authoritative_loci(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "distinct-loci.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=gene-L1;locus_tag=L1",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=L1.t1;Parent=gene-L1",
+                "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tParent=L1.t1",
+                "chr1\tsrc\tCDS\t13\t18\t.\t+\t0\tParent=L1.t1",
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=gene-L2;locus_tag=L2",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=L2.t1;Parent=gene-L2",
+                "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tParent=L2.t1",
+                "chr1\tsrc\tCDS\t13\t18\t.\t+\t0\tParent=L2.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_prefix": "Test_species",
+        "gff_path": gff_path,
+        "gene_grouping_mode": "rescue_overlap",
+    }
+
+    index = module.build_gff_cds_grouping_index(task)
+
+    left = module.resolve_cds_header_gff_gene(task, "L1.t1", index)
+    right = module.resolve_cds_header_gff_gene(task, "L2.t1", index)
+    assert {left["gene_token"], right["gene_token"]} == {"L1", "L2"}
+    assert index["coordinate_rescued_transcripts"] == 0
+    assert index["coordinate_rescued_groups"] == 0
+
+
+def test_gff_grouping_rescue_does_not_bridge_authoritative_loci_through_unlabeled_model(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "bridged-loci.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=gene-L1;locus_tag=L1",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=L1.t1;Parent=gene-L1",
+                "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tParent=L1.t1",
+                "chr1\tsrc\tCDS\t13\t18\t.\t+\t0\tParent=L1.t1",
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=unlabeledGene",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=bridge.t1;Parent=unlabeledGene",
+                "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tParent=bridge.t1",
+                "chr1\tsrc\tCDS\t13\t18\t.\t+\t0\tParent=bridge.t1",
+                "chr1\tsrc\tgene\t1\t18\t.\t+\t.\tID=gene-L2;locus_tag=L2",
+                "chr1\tsrc\tmRNA\t1\t18\t.\t+\t.\tID=L2.t1;Parent=gene-L2",
+                "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tParent=L2.t1",
+                "chr1\tsrc\tCDS\t13\t18\t.\t+\t0\tParent=L2.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_prefix": "Test_species",
+        "gff_path": gff_path,
+        "gene_grouping_mode": "rescue_overlap",
+    }
+
+    index = module.build_gff_cds_grouping_index(task)
+
+    gene_tokens = {
+        module.resolve_cds_header_gff_gene(task, transcript_id, index)["gene_token"]
+        for transcript_id in ("L1.t1", "bridge.t1", "L2.t1")
+    }
+    assert gene_tokens == {"L1", "unlabeledGene", "L2"}
+    assert index["coordinate_rescued_transcripts"] == 0
+    assert index["coordinate_rescued_groups"] == 0
 
 
 def test_gff_grouping_does_not_merge_overlapping_opposite_strands(tmp_path):
@@ -1732,6 +1808,113 @@ def test_gff_grouping_rejects_sanitized_gene_id_collisions(tmp_path):
 
     with pytest.raises(ValueError, match="collide after identifier sanitization"):
         module.format_cds(task, tmp_path / "out", overwrite=False, dry_run=False)
+
+
+@pytest.mark.parametrize("gene_grouping_mode", ("strict", "rescue_overlap"))
+def test_gff_grouping_rejects_gene_feature_prefix_collisions(tmp_path, gene_grouping_mode):
+    module = load_module()
+    gff_path = tmp_path / "prefix-collision.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-A",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=T1;Parent=gene-A",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=T1",
+                "chr1\tsrc\tgene\t20\t28\t.\t+\t.\tID=A",
+                "chr1\tsrc\tmRNA\t20\t28\t.\t+\t.\tID=T2;Parent=A",
+                "chr1\tsrc\tCDS\t20\t28\t.\t+\t0\tParent=T2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_prefix": "Test_species",
+        "gff_path": gff_path,
+        "gene_grouping_mode": gene_grouping_mode,
+    }
+
+    with pytest.raises(ValueError, match="collapse after prefix normalization"):
+        module.build_gff_cds_grouping_index(task)
+
+
+def test_gff_grouping_allows_prefix_variants_confirmed_by_same_locus_tag(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "confirmed-prefix-variants.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-A;locus_tag=A",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=T1;Parent=gene-A",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=T1",
+                "chr1\tsrc\tgene\t20\t28\t.\t+\t.\tID=A;locus_tag=A",
+                "chr1\tsrc\tmRNA\t20\t28\t.\t+\t.\tID=T2;Parent=A",
+                "chr1\tsrc\tCDS\t20\t28\t.\t+\t0\tParent=T2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_prefix": "Test_species",
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+    }
+
+    index = module.build_gff_cds_grouping_index(task)
+
+    assert module.resolve_cds_header_gff_gene(task, "T1", index)["gene_token"] == "A"
+    assert module.resolve_cds_header_gff_gene(task, "T2", index)["gene_token"] == "A"
+
+
+def test_provided_cds_longest_selection_compares_lengths_before_padding(tmp_path):
+    module = load_module()
+    cds_path = tmp_path / "models.cds.fa"
+    gff_path = tmp_path / "models.gff3"
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    cds_path.write_text(
+        ">A_short\nATGAAAAA\n>B_long\nATGAAAAAA\n",
+        encoding="utf-8",
+    )
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t20\t.\t+\t.\tID=G1",
+                "chr1\tsrc\tmRNA\t1\t8\t.\t+\t.\tID=A_short;Parent=G1",
+                "chr1\tsrc\tCDS\t1\t8\t.\t+\t0\tParent=A_short",
+                "chr1\tsrc\tmRNA\t12\t20\t.\t+\t.\tID=B_long;Parent=G1",
+                "chr1\tsrc\tCDS\t12\t20\t.\t+\t0\tParent=B_long",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_key": "Test_species",
+        "species_prefix": "Test_species",
+        "cds_path": cds_path,
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+    }
+
+    result = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
+
+    with gzip.open(result["output_path"], "rt", encoding="utf-8") as handle:
+        assert handle.read() == ">Test_species_G1\nATGAAAAAA\n"
+    audit_json_path = Path(str(result["output_path"]) + ".gff-grouping.json")
+    audit_tsv_path = Path(str(result["output_path"]) + ".gff-grouping.tsv")
+    with open(audit_json_path, "rt", encoding="utf-8") as handle:
+        audit = json.load(handle)
+    with open(audit_tsv_path, "rt", encoding="utf-8", newline="") as handle:
+        audit_rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert audit["version"] == 4
+    assert [row["raw_sequence_length"] for row in audit_rows] == ["8", "9"]
+    assert [row["sequence_length"] for row in audit_rows] == ["9", "9"]
+    assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
 
 
 def test_format_species_inputs_derives_cds_excluding_overlapping_utrs(tmp_path):

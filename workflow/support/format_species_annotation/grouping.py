@@ -9,7 +9,6 @@ except Exception:  # pragma: no cover - runtime without biopython
     SeqIO = None
 
 from format_species_constants import (
-    ENSEMBL_GENE_ID_PATTERN,
     RESCUE_SAME_TERMINAL_MIN_LONGER_OVERLAP,
     RESCUE_SAME_TERMINAL_MIN_SHORTER_OVERLAP,
     RESCUE_SHARED_JUNCTION_MIN_LONGER_OVERLAP,
@@ -29,6 +28,15 @@ from .common import (
     merge_coordinate_intervals,
     parse_gff_attributes,
     transcript_feature_gene_token,
+)
+from .grouping_identity import (
+    KNOWN_ALIAS_PREFIXES,
+    gff_authoritative_gene_token,
+    gff_stable_gene_token,
+    reject_gff_gene_prefix_normalization_collisions,
+    resolve_grouping_feature_authoritative_gene_tokens,
+    resolve_grouping_feature_gene_feature_ids,
+    strip_gff_feature_prefix,
 )
 
 GFF_CDS_ALIAS_KEYS = frozenset(
@@ -65,21 +73,6 @@ CDS_HEADER_GENE_TAGS = (
     "locus_tag",
     "gene_id",
     "gene",
-)
-
-KNOWN_ALIAS_PREFIXES = (
-    "cds-",
-    "cds:",
-    "gene-",
-    "gene:",
-    "mrna-",
-    "mrna:",
-    "protein-",
-    "protein:",
-    "rna-",
-    "rna:",
-    "transcript-",
-    "transcript:",
 )
 
 GFF_GROUPING_PARENT_FEATURE_TYPES = frozenset(
@@ -176,73 +169,6 @@ def gff_grouping_parent_feature_type(feature_type):
     )
 
 
-def gff_dbxref_gene_token(attrs):
-    dbxrefs = []
-    for key in ("Dbxref", "db_xref", "dbxref"):
-        dbxrefs.extend(attrs.get(key, ()))
-    for raw_value in dbxrefs:
-        value = str(raw_value or "").strip()
-        if value.lower().startswith("ensembl:"):
-            candidate = value.split(":", 1)[1].strip()
-            if ENSEMBL_GENE_ID_PATTERN.match(candidate):
-                return candidate
-    for namespace in ("Araport", "TAIR"):
-        prefix = namespace.lower() + ":"
-        for raw_value in dbxrefs:
-            value = str(raw_value or "").strip()
-            if not value.lower().startswith(prefix):
-                continue
-            candidate = value[len(prefix) :].strip()
-            match = re.match(
-                r"^(AT(?:[1-5]|C|M)G[0-9]+)(?:\.[0-9]+)?$",
-                candidate,
-                flags=re.IGNORECASE,
-            )
-            if match is not None:
-                return match.group(1)
-    for raw_value in dbxrefs:
-        value = str(raw_value or "").strip()
-        if value.lower().startswith("geneid:"):
-            candidate = value.split(":", 1)[1].strip()
-            if candidate != "":
-                return "GeneID{}".format(candidate)
-    return ""
-
-
-def strip_gff_feature_prefix(value):
-    current = str(value or "").strip()
-    while current != "":
-        lowered = current.lower()
-        stripped = ""
-        for prefix in KNOWN_ALIAS_PREFIXES:
-            if lowered.startswith(prefix):
-                stripped = current[len(prefix) :].strip()
-                break
-        if stripped == "" or stripped == current:
-            break
-        current = stripped
-    return current
-
-
-def gff_stable_gene_token(attrs, feature_type, include_symbol=True):
-    direct = choose_first_gff_attribute(attrs, ("locus_tag", "gene_id"))
-    if direct != "":
-        return direct
-    dbxref_token = gff_dbxref_gene_token(attrs)
-    if dbxref_token != "":
-        return dbxref_token
-    direct = choose_first_gff_attribute(attrs, ("Parent_Accession", "Accession"))
-    if direct != "":
-        return direct
-    if str(feature_type or "").strip().lower() == "gene":
-        direct = choose_first_gff_attribute(attrs, ("ID", "Name"))
-        if direct != "":
-            return strip_gff_feature_prefix(direct)
-    if include_symbol:
-        return choose_first_gff_attribute(attrs, ("gene", "geneName"))
-    return ""
-
-
 def resolve_grouping_feature_gene_token(feature_id, feature_records, provider, cache, active):
     feature_text = str(feature_id or "").strip()
     if feature_text == "":
@@ -290,6 +216,7 @@ def build_gff_cds_grouping_index(task):
     child_features_by_parent = defaultdict(set)
     aliases_by_transcript = defaultdict(set)
     fallback_gene_tokens = {}
+    authoritative_gene_tokens_by_transcript = defaultdict(set)
     use_coordinate_rescue = gene_grouping_mode_for_task(task) == "rescue_overlap"
     cds_features_by_transcript = defaultdict(list) if use_coordinate_rescue else None
 
@@ -322,6 +249,11 @@ def build_gff_cds_grouping_index(task):
                     "feature_type": feature_type_lower,
                     "parents": parents,
                     "gene_token": gff_stable_gene_token(attrs, feature_type_lower),
+                    "authoritative_gene_tokens": tuple(
+                        token
+                        for token in (gff_authoritative_gene_token(attrs),)
+                        if token != ""
+                    ),
                     "aliases": gff_alias_values_from_attributes(attrs),
                 }
                 if feature_type_lower in ("polypeptide", "protein") or any(
@@ -345,6 +277,7 @@ def build_gff_cds_grouping_index(task):
                     transcript_id = "{}:{}-{}".format(seqid, start, end)
                 transcript_ids = [transcript_id]
             fallback_gene = gff_stable_gene_token(attrs, feature_type_lower)
+            authoritative_gene = gff_authoritative_gene_token(attrs)
             attribute_aliases = gff_alias_values_from_attributes(attrs)
             for transcript_id in transcript_ids:
                 transcript_text = str(transcript_id or "").strip()
@@ -358,6 +291,8 @@ def build_gff_cds_grouping_index(task):
                     previous_fallback = fallback_gene_tokens.get(transcript_text, "")
                     if previous_fallback == "" or fallback_gene < previous_fallback:
                         fallback_gene_tokens[transcript_text] = fallback_gene
+                if authoritative_gene != "":
+                    authoritative_gene_tokens_by_transcript[transcript_text].add(authoritative_gene)
                 if use_coordinate_rescue:
                     cds_features_by_transcript[transcript_text].append(
                         {
@@ -370,6 +305,27 @@ def build_gff_cds_grouping_index(task):
                     )
 
     gene_cache = {}
+    authoritative_gene_cache = {}
+    gene_feature_id_cache = {}
+    resolved_authoritative_gene_tokens = {}
+    gene_feature_ids_by_transcript = {}
+    for transcript_id in aliases_by_transcript:
+        authoritative_tokens = set(authoritative_gene_tokens_by_transcript.get(transcript_id, ()))
+        authoritative_tokens.update(
+            resolve_grouping_feature_authoritative_gene_tokens(
+                transcript_id,
+                feature_records,
+                authoritative_gene_cache,
+                set(),
+            )
+        )
+        resolved_authoritative_gene_tokens[transcript_id] = tuple(sorted(authoritative_tokens))
+        gene_feature_ids_by_transcript[transcript_id] = resolve_grouping_feature_gene_feature_ids(
+            transcript_id,
+            feature_records,
+            gene_feature_id_cache,
+            set(),
+        )
     if use_coordinate_rescue:
         for transcript_id, features in cds_features_by_transcript.items():
             resolved_gene = ""
@@ -389,7 +345,11 @@ def build_gff_cds_grouping_index(task):
             transcript_id: transcript_feature_gene_token(features)
             for transcript_id, features in cds_features_by_transcript.items()
         }
-        resolved_gene_tokens = build_rescued_gene_tokens_for_transcripts(task, cds_features_by_transcript)
+        resolved_gene_tokens = build_rescued_gene_tokens_for_transcripts(
+            task,
+            cds_features_by_transcript,
+            resolved_authoritative_gene_tokens,
+        )
     else:
         original_gene_tokens = {}
         for transcript_id in aliases_by_transcript:
@@ -408,6 +368,13 @@ def build_gff_cds_grouping_index(task):
                 resolved_gene = collapse_transcript_suffix(task["provider"], transcript_id) or transcript_id
             original_gene_tokens[transcript_id] = resolved_gene
         resolved_gene_tokens = dict(original_gene_tokens)
+
+    reject_gff_gene_prefix_normalization_collisions(
+        task,
+        original_gene_tokens,
+        gene_feature_ids_by_transcript,
+        resolved_authoritative_gene_tokens,
+    )
 
     for transcript_id in aliases_by_transcript:
         pending = [transcript_id]
@@ -449,7 +416,12 @@ def build_gff_cds_grouping_index(task):
     feature_records.clear()
     child_features_by_parent.clear()
     gene_cache.clear()
+    authoritative_gene_cache.clear()
+    gene_feature_id_cache.clear()
     fallback_gene_tokens.clear()
+    authoritative_gene_tokens_by_transcript.clear()
+    gene_feature_ids_by_transcript.clear()
+    resolved_authoritative_gene_tokens.clear()
     if cds_features_by_transcript is not None:
         cds_features_by_transcript.clear()
 
@@ -579,7 +551,7 @@ def resolve_cds_header_gff_gene(task, header, grouping_index=None):
     }
 
 
-def build_transcript_grouping_entry(provider, transcript_id, features):
+def build_transcript_grouping_entry(provider, transcript_id, features, authoritative_gene_tokens=()):
     if len(features) == 0:
         return {
             "transcript_id": transcript_id,
@@ -594,6 +566,7 @@ def build_transcript_grouping_entry(provider, transcript_id, features):
             "terminal_coord": 0,
             "rescue_ineligible": True,
             "collapsed_transcript_id": collapse_transcript_suffix(provider, transcript_id),
+            "authoritative_gene_tokens": frozenset(authoritative_gene_tokens),
         }
     seqid = str(features[0].get("seqid", "") or "").strip()
     strand = str(features[0].get("strand", "") or "").strip() or "+"
@@ -634,6 +607,7 @@ def build_transcript_grouping_entry(provider, transcript_id, features):
         "terminal_coord": terminal_coord,
         "rescue_ineligible": rescue_ineligible,
         "collapsed_transcript_id": collapse_transcript_suffix(provider, transcript_id),
+        "authoritative_gene_tokens": frozenset(authoritative_gene_tokens),
     }
 
 
@@ -641,6 +615,10 @@ def should_rescue_overlapping_transcripts(left, right):
     if left["rescue_ineligible"] or right["rescue_ineligible"]:
         return False
     if left["seqid"] != right["seqid"] or left["strand"] != right["strand"]:
+        return False
+    left_authoritative = frozenset(left.get("authoritative_gene_tokens", ()))
+    right_authoritative = frozenset(right.get("authoritative_gene_tokens", ()))
+    if len(left_authoritative) > 0 and len(right_authoritative) > 0 and left_authoritative != right_authoritative:
         return False
     if left["cds_length"] <= 0 or right["cds_length"] <= 0:
         return False
@@ -699,7 +677,11 @@ def choose_rescue_cluster_gene_token(provider, entries):
     return ""
 
 
-def build_rescued_gene_tokens_for_transcripts(task, cds_features_by_transcript):
+def build_rescued_gene_tokens_for_transcripts(
+    task,
+    cds_features_by_transcript,
+    authoritative_gene_tokens_by_transcript=None,
+):
     resolved = {
         transcript_id: transcript_feature_gene_token(features)
         for transcript_id, features in cds_features_by_transcript.items()
@@ -708,10 +690,20 @@ def build_rescued_gene_tokens_for_transcripts(task, cds_features_by_transcript):
         return resolved
 
     provider = task["provider"]
+    authoritative_tokens = (
+        authoritative_gene_tokens_by_transcript
+        if isinstance(authoritative_gene_tokens_by_transcript, dict)
+        else {}
+    )
     entries_by_id = {}
     buckets = defaultdict(list)
     for transcript_id, features in cds_features_by_transcript.items():
-        entry = build_transcript_grouping_entry(provider, transcript_id, features)
+        entry = build_transcript_grouping_entry(
+            provider,
+            transcript_id,
+            features,
+            authoritative_tokens.get(transcript_id, ()),
+        )
         entries_by_id[transcript_id] = entry
         buckets[(entry["seqid"], entry["strand"])].append(entry)
 
@@ -749,6 +741,13 @@ def build_rescued_gene_tokens_for_transcripts(task, cds_features_by_transcript):
         if len(component_ids) <= 1:
             continue
         component_entries = [entries_by_id[current_id] for current_id in sorted(component_ids)]
+        component_authoritative_identities = {
+            frozenset(entry.get("authoritative_gene_tokens", ()))
+            for entry in component_entries
+            if len(entry.get("authoritative_gene_tokens", ())) > 0
+        }
+        if len(component_authoritative_identities) > 1:
+            continue
         cluster_gene_token = choose_rescue_cluster_gene_token(provider, component_entries)
         if cluster_gene_token == "":
             continue

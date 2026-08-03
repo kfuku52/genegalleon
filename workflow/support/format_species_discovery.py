@@ -55,7 +55,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 3
+CDS_GFF_GROUPING_AUDIT_VERSION = 4
 
 
 def cds_gff_grouping_audit_paths(output_path):
@@ -145,6 +145,7 @@ def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload, strict_
         "matched_aliases",
         "candidate_gene_tokens",
         "selected_gene_id",
+        "raw_sequence_length",
         "sequence_length",
         "selected_longest",
     )
@@ -555,9 +556,9 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
             raw_gene_token = str(gff_match.get("gene_token", "") or "").strip()
             if raw_gene_token != "":
                 raw_gff_tokens_by_gene_id[gene_id].add(raw_gene_token)
-        seq = re.sub(r"\s+", "", sequence).upper()
+        raw_seq = re.sub(r"\s+", "", sequence).upper()
         # Keep codon-frame-safe length (equivalent role of `cdskit pad` in shell pipelines).
-        seq = pad_to_codon_length(seq)
+        seq = pad_to_codon_length(raw_seq)
         record_index = before_count
         audit_rows.append(
             {
@@ -568,6 +569,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
                 "matched_aliases": ",".join(gff_match.get("matched_aliases", ())),
                 "candidate_gene_tokens": ",".join(gff_match.get("candidate_gene_tokens", ())),
                 "selected_gene_id": gene_id,
+                "raw_sequence_length": len(raw_seq),
                 "sequence_length": len(seq),
                 "selected_longest": 0,
             }
@@ -578,18 +580,22 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
             records_by_gene[gene_id] = {
                 "id": gene_id,
                 "sequence": seq,
+                "raw_sequence_length": len(raw_seq),
                 "transcript_id": transcript_id,
                 "record_index": record_index,
             }
             continue
 
-        previous_seq = previous["sequence"]
+        previous_raw_sequence_length = previous["raw_sequence_length"]
         previous_transcript_id = previous["transcript_id"]
-        # Keep one representative CDS per gene; prefer longer CDS and then lexicographically stable tie-breaker.
-        if len(seq) > len(previous_seq) or (len(seq) == len(previous_seq) and transcript_id < previous_transcript_id):
+        # Compare biological input lengths before codon padding; padded ties can otherwise hide a longer CDS.
+        if len(raw_seq) > previous_raw_sequence_length or (
+            len(raw_seq) == previous_raw_sequence_length and transcript_id < previous_transcript_id
+        ):
             records_by_gene[gene_id] = {
                 "id": gene_id,
                 "sequence": seq,
+                "raw_sequence_length": len(raw_seq),
                 "transcript_id": transcript_id,
                 "record_index": record_index,
             }
