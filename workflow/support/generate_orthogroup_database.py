@@ -2,6 +2,7 @@
 # coding: utf-8
 
 import argparse
+import atexit
 import datetime
 import gc
 import glob
@@ -9,6 +10,7 @@ import logging
 import math
 import os
 import re
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -79,6 +81,13 @@ CSUBST_SCAN_BASELINE_COLUMNS = {
         "fg_clade_branch_ids",
     },
 }
+STAT_TABLE_REQUIRED_COLUMNS = {
+    "tree": {"num_branch", "num_spe", "num_dup", "num_sp"},
+    "branch": {"branch_id", "node_name", "num_sp", "so_event"},
+}
+TABLES_WITH_OPTIONAL_UNION_COLUMNS = frozenset(
+    set(STAT_TABLE_REQUIRED_COLUMNS).union(CSUBST_SCAN_BASELINE_COLUMNS)
+)
 
 
 def require_sqlalchemy():
@@ -117,6 +126,34 @@ def discover_csubst_cb_dirs(prefix):
         for path in glob.glob(prefix + '*')
         if not path.endswith('csubst_cb_stats')
     ]
+
+
+def remove_database_build_files(db_path):
+    for suffix in ("", "-journal", "-shm", "-wal"):
+        candidate = f"{db_path}{suffix}"
+        try:
+            if os.path.exists(candidate):
+                os.remove(candidate)
+        except OSError:
+            logger.exception("Failed to remove temporary database file: %s", candidate)
+
+
+def prepare_database_build_path(final_db_path, overwrite):
+    """Return a build path that preserves the published DB until success."""
+    if not overwrite:
+        return final_db_path, False
+
+    db_dir = os.path.dirname(final_db_path) or "."
+    db_name = os.path.basename(final_db_path)
+    file_descriptor, build_db_path = tempfile.mkstemp(
+        prefix=f".{db_name}.",
+        suffix=".tmp",
+        dir=db_dir,
+    )
+    os.close(file_descriptor)
+    os.remove(build_db_path)
+    atexit.register(remove_database_build_files, build_db_path)
+    return build_db_path, True
 
 
 def validate_csubst_scan_schemas(scan_dirs):
@@ -311,9 +348,9 @@ def process_files(file_path, columns_to_read, available_cols_set=None, fill_miss
     """
     Read a TSV file, add the 'orthogroup' column, ensure any missing columns become NaN,
     and return the trimmed DataFrame with the columns we want to keep (including 'orthogroup').
-    If required columns are missing, raise an error unless fill_missing_columns
-    is enabled. The latter is used for CSUBST scan tables, whose optional output
-    columns may vary between files and csubst releases.
+    If requested columns are missing, raise an error unless fill_missing_columns
+    is enabled. Structural columns are validated before this function is called;
+    optional analysis columns in stat and CSUBST scan tables are filled with NaN.
     """
     try:
         # Derive the gene-family ID from the file name. This script is used for
@@ -467,7 +504,7 @@ def main():
 
     params = vars(args)
     params['max_workers'] = max(1, int(params['max_workers']))
-    db_path = params['dbpath']
+    final_db_path = params['dbpath']
 
     cb_categories = [cat.strip() for cat in args.cb_categories.split(',')]
     all_cb_categories = ['any2any','any2spe','spe2any','spe2spe','any2dif','dif2any','spe2dif','dif2spe','dif2dif']
@@ -477,7 +514,7 @@ def main():
         params['dir_stat_tree'],
         params['dir_stat_branch'],
     ]
-    validate_directories(required_dirs, db_path)
+    validate_directories(required_dirs, final_db_path)
 
     scan_dirs = [
         (AA_CHANGE_TABLE, params['dir_csubst_aa_change']),
@@ -489,33 +526,13 @@ def main():
         logger.error(str(exc))
         raise SystemExit(1) from exc
 
-    if params['overwrite'] and os.path.exists(db_path):
-        try:
-            os.remove(db_path)
-            logger.info(f"Existing database '{db_path}' removed due to overwrite flag.")
-        except Exception as e:
-            logger.error(f"Failed to remove existing database '{db_path}': {e}")
-            exit(1)
-
-    engine = sqlalchemy.create_engine(
-        f"sqlite:///{db_path}",
-        poolclass=sqlalchemy.pool.QueuePool,
-        echo=False,
-        future=True,
-        connect_args={"timeout": 30},
-        pool_size=params['max_workers'],
-        max_overflow=0
-    )
-    optimize_sqlite(engine)
-
-    # We'll not connect yet; we will connect within transactions below.
-
     # Gather input directories
     infiles = {}
     columns = {}
     num_columns = {}
     header_columns_by_file = {}
     header_columns_set_by_file = {}
+    schema_problems = []
     indirs = {
         'tree': params['dir_stat_tree'],
         'branch': params['dir_stat_branch'],
@@ -550,6 +567,20 @@ def main():
             file_path = os.path.join(dir_path, infile)
             try:
                 infile_columns = read_header_columns(file_path)
+                duplicate_columns = sorted(
+                    {column for column in infile_columns if infile_columns.count(column) > 1}
+                )
+                if duplicate_columns:
+                    schema_problems.append(
+                        f"{file_path}: duplicate columns: {', '.join(duplicate_columns)}"
+                    )
+                required_columns = STAT_TABLE_REQUIRED_COLUMNS.get(stat, set())
+                if infile_columns and required_columns:
+                    missing_required = sorted(required_columns.difference(infile_columns))
+                    if missing_required:
+                        schema_problems.append(
+                            f"{file_path}: missing structural columns: {', '.join(missing_required)}"
+                        )
                 infile_column_names_set = set(infile_columns)
                 header_columns_by_file[stat][infile] = infile_columns
                 header_columns_set_by_file[stat][infile] = infile_column_names_set
@@ -557,6 +588,7 @@ def main():
                 num_columns[stat].append(len(infile_column_names_set))
             except Exception as e:
                 logger.error(f"Error reading header from {file_path}: {e}")
+                schema_problems.append(f"{file_path}: failed to read header: {e}")
                 header_columns_by_file[stat][infile] = []
                 header_columns_set_by_file[stat][infile] = set()
                 num_columns[stat].append(0)
@@ -606,6 +638,37 @@ def main():
             columns[stat] = ['orthogroup']
             logger.warning(f"Falling back to minimal columns for '{stat}'.")
 
+    if schema_problems:
+        details = "\n  - ".join(schema_problems)
+        raise ValueError(
+            "Gene-family database input has invalid structural TSV schemas. "
+            "Analysis-specific columns may vary, but structural columns must be present."
+            f"\n  - {details}"
+        )
+
+    db_path, replace_database_on_success = prepare_database_build_path(
+        final_db_path,
+        params['overwrite'],
+    )
+    if replace_database_on_success:
+        logger.info(
+            "Building replacement database at temporary path '%s'; published database '%s' "
+            "will be replaced only after successful completion.",
+            db_path,
+            final_db_path,
+        )
+
+    engine = sqlalchemy.create_engine(
+        f"sqlite:///{db_path}",
+        poolclass=sqlalchemy.pool.QueuePool,
+        echo=False,
+        future=True,
+        connect_args={"timeout": 30},
+        pool_size=params['max_workers'],
+        max_overflow=0
+    )
+    optimize_sqlite(engine)
+
     logger.info(f"{datetime.datetime.today()}: Started adding infiles to the database.")
 
     buffers = initialize_buffers(infiles, columns)
@@ -638,7 +701,7 @@ def main():
                     file_path,
                     columns[stat],
                     header_columns_set_by_file[stat].get(infile),
-                    stat in CSUBST_SCAN_BASELINE_COLUMNS,
+                    stat in TABLES_WITH_OPTIONAL_UNION_COLUMNS,
                 )
                 futures[future] = (stat, file_path)
 
@@ -756,6 +819,9 @@ def main():
 
     # Dispose engine to close all connections
     engine.dispose()
+    if replace_database_on_success:
+        os.replace(db_path, final_db_path)
+        logger.info("Published completed database atomically: %s", final_db_path)
     logger.info("All database operations completed and engine disposed.")
 
 if __name__ == "__main__":
