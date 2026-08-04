@@ -1,3 +1,4 @@
+import gzip
 import shlex
 import subprocess
 from pathlib import Path
@@ -588,14 +589,18 @@ def test_resolve_annotation_species_normalizes_legacy_trailing_underscore(tmp_pa
 def test_species_name_from_path_or_dot_preserves_taxonomic_qualifiers(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        'printf "%s\\n%s\\n%s\\n%s\\n%s\\n" '
+        'printf "%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n" '
         '"$(gg_species_name_from_path_or_dot "Dictyostelium_cf_discoideum_GCA_054859205.1.fa.gz")" '
         '"$(gg_species_name_from_path_or_dot "Bacillus_subtilis_subsp._subtilis_demo.fa.gz")" '
         '"$(gg_species_name_from_path_or_dot "Amoeba_sp._JDS-Ruffled.tsv")" '
         '"$(gg_species_name_from_path_or_dot "Arisaema_sp._aooni_longestCDS.fa.gz")" '
         '"$(gg_species_name_from_path_or_dot "Asimitellaria_furusei_var._subramosa_busco.full.tsv")" '
         '"$(gg_species_name_from_path_or_dot "Asimitellaria_furusei_var._furusei.cds.fa.gz")" '
-        '"$(gg_species_name_from_path_or_dot "homo_sapiens.GRCh38.cds.all.fa.gz")"'
+        '"$(gg_species_name_from_path_or_dot "homo_sapiens.GRCh38.cds.all.fa.gz")" '
+        '"$(gg_species_name_from_path_or_dot "Amphizonella_sp_longestCDS.fa.gz")" '
+        '"$(gg_species_name_from_path_or_dot "Cunea_sp_longestCDS_contamination_removal.fa.gz")" '
+        '"$(gg_species_name_from_path_or_dot "Vannella_sp_longestCDS.transcript.fa.gz")" '
+        '"$(gg_species_name_from_path_or_dot "Vexillifera_sp_longestCDS.busco.full.tsv")"'
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -609,7 +614,55 @@ def test_species_name_from_path_or_dot_preserves_taxonomic_qualifiers(tmp_path):
         "Asimitellaria_furusei_var._subramosa",
         "Asimitellaria_furusei_var._furusei",
         "homo_sapiens",
+        "Amphizonella_sp",
+        "Cunea_sp",
+        "Vannella_sp",
+        "Vexillifera_sp",
     ]
+
+
+def test_check_species_sequences_accept_transcriptome_longest_cds_for_genus_sp(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    seqkit = bin_dir / "seqkit"
+    seqkit.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "[[ ${1:-} == seq ]]\n"
+        "gzip -cd -- ${2:?}\n",
+        encoding="utf-8",
+    )
+    seqkit.chmod(0o755)
+
+    cases = (
+        ("species_cds", "check_species_cds_dir", "ATG", "All per-species CDS files are valid."),
+        (
+            "species_protein",
+            "check_species_protein_dir",
+            "MPEP",
+            "All per-species protein files are valid.",
+        ),
+    )
+    for directory_name, validator, sequence, success_message in cases:
+        species_dir = tmp_path / directory_name
+        species_dir.mkdir()
+        fasta_path = species_dir / "Amphizonella_sp_longestCDS.fa.gz"
+        with gzip.open(fasta_path, "wt", encoding="utf-8") as handle:
+            handle.write(
+                f">Amphizonella_sp_g0\n{sequence}\n"
+                f">Amphizonella_sp_g1\n{sequence}\n"
+            )
+
+        command = (
+            f"export PATH={shlex.quote(str(bin_dir))}:$PATH; "
+            f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+            "GG_TASK_CPUS=1; "
+            f"{validator} {shlex.quote(str(species_dir))}"
+        )
+        completed = run_bash(command, cwd=tmp_path)
+
+        assert completed.returncode == 0, completed.stderr + completed.stdout
+        assert success_message in completed.stdout
 
 
 def test_fasta_relabel_headers_to_species_preserves_taxonomic_qualifiers(tmp_path):

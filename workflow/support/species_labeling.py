@@ -93,6 +93,10 @@ TAXONOMIC_DISPLAY_RANKS = {
 }
 
 SPECIES_LABEL_TERMINAL_SUFFIXES = (
+    ".longestcds.busco.full.tsv",
+    "_longestcds.busco.full.tsv",
+    ".longestcds.busco.short.txt",
+    "_longestcds.busco.short.txt",
     ".fasta.busco.full.tsv",
     ".fa.busco.full.tsv",
     ".faa.busco.full.tsv",
@@ -114,11 +118,17 @@ SPECIES_LABEL_TERMINAL_SUFFIXES = (
     ".busco",
     "_busco",
     ".longestcds.transcript.fa.gz",
+    "_longestcds.transcript.fa.gz",
     ".longestcds_contamination_removal.fa.gz",
+    "_longestcds_contamination_removal.fa.gz",
     ".longestcds.fx2tab_cds.tsv",
+    "_longestcds.fx2tab_cds.tsv",
     ".longestcds.mmseqs2taxonomy.tsv",
+    "_longestcds.mmseqs2taxonomy.tsv",
     ".longestcds.fa.gz",
+    "_longestcds.fa.gz",
     ".isoform.fa.gz",
+    "_isoform.fa.gz",
     ".derived.cds.fa.gz",
     "_derived.cds.fa.gz",
     ".derived.genome.fa.gz",

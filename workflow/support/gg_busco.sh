@@ -164,10 +164,20 @@ busco_output_exists_for_species() {
   local search_dir=$1
   local species_name=$2
   local name_glob=$3
+  local canonical_path=""
   local busco_file busco_base busco_species
 
   if [[ -z "${search_dir}" || ! -d "${search_dir}" ]]; then
     return 1
+  fi
+
+  if [[ "${name_glob}" == "*busco.full.tsv" ]]; then
+    canonical_path="${search_dir}/${species_name}.busco.full.tsv"
+  elif [[ "${name_glob}" == "*busco.short.txt" ]]; then
+    canonical_path="${search_dir}/${species_name}.busco.short.txt"
+  fi
+  if [[ -n "${canonical_path}" && -f "${canonical_path}" ]]; then
+    return 0
   fi
 
   while IFS= read -r busco_file; do

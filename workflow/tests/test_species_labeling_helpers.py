@@ -88,6 +88,10 @@ def test_species_labeling_extracts_dotted_rank_labels_from_filenames():
     mod = load_module("species_labeling.py", "species_labeling_module")
 
     assert mod.extract_species_label("Arisaema_sp._aooni_longestCDS.fa.gz", strip_extension=True) == "Arisaema_sp._aooni"
+    assert mod.extract_species_label("Amphizonella_sp_longestCDS.fa.gz", strip_extension=True) == "Amphizonella_sp"
+    assert mod.extract_species_label("Cunea_sp_longestCDS_contamination_removal.fa.gz", strip_extension=True) == "Cunea_sp"
+    assert mod.extract_species_label("Vannella_sp_longestCDS.transcript.fa.gz", strip_extension=True) == "Vannella_sp"
+    assert mod.extract_species_label("Vexillifera_sp_longestCDS.busco.full.tsv", strip_extension=True) == "Vexillifera_sp"
     assert mod.extract_species_label("Homo_sapiens.isoform.fa.gz", strip_extension=True) == "Homo_sapiens"
     assert (
         mod.extract_species_label("Dictyostelium_cf_discoideum.longestCDS.fa.gz", strip_extension=True)

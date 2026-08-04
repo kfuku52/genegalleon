@@ -123,7 +123,6 @@ check_species_cds_dir() {
     local sp_ub
     local first_header
     local first_header_no_gt
-    local first_header_sp
     local spfasta_startswith
     sp_ub=$(gg_species_name_from_path_or_dot "${spfasta}")
     local seq_names
@@ -131,10 +130,9 @@ check_species_cds_dir() {
     first_header=${seq_names%%$'\n'*}
     first_header=${first_header%%[[:space:]]*}
     first_header_no_gt=${first_header#>}
-    first_header_sp=$(gg_species_name_from_path_or_dot "${first_header_no_gt}")
-    spfasta_startswith=">${first_header_sp}"
+    spfasta_startswith=">${first_header_no_gt}"
 
-    if [[ ${spfasta_startswith} != ">${sp_ub}" ]]; then
+    if [[ "${first_header_no_gt}" != "${sp_ub}" && "${first_header_no_gt}" != "${sp_ub}_"* ]]; then
       echo "Sequence names start with ${spfasta_startswith} but this is not consistent with the species name (${sp_ub}) parsed from the file name of ${spfasta}" >> "${error_log}"
     fi
 
@@ -200,7 +198,6 @@ check_species_protein_dir() {
     local sp_ub
     local first_header
     local first_header_no_gt
-    local first_header_sp
     local spfasta_startswith
     local seq_names
     sp_ub=$(gg_species_name_from_path_or_dot "${spfasta}")
@@ -208,10 +205,9 @@ check_species_protein_dir() {
     first_header=${seq_names%%$'\n'*}
     first_header=${first_header%%[[:space:]]*}
     first_header_no_gt=${first_header#>}
-    first_header_sp=$(gg_species_name_from_path_or_dot "${first_header_no_gt}")
-    spfasta_startswith=">${first_header_sp}"
+    spfasta_startswith=">${first_header_no_gt}"
 
-    if [[ ${spfasta_startswith} != ">${sp_ub}" ]]; then
+    if [[ "${first_header_no_gt}" != "${sp_ub}" && "${first_header_no_gt}" != "${sp_ub}_"* ]]; then
       echo "Sequence names start with ${spfasta_startswith} but this is not consistent with the species name (${sp_ub}) parsed from the file name of ${spfasta}" >> "${error_log}"
     fi
 

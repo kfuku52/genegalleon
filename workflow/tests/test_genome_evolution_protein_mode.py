@@ -1243,14 +1243,86 @@ def test_genome_evolution_keeps_species_tree_outputs_when_generation_disabled_an
     existing_tree = species_tree_summary_dir / "undated_species_tree.nwk"
     existing_tree.write_text("(Arabidopsis_thaliana:0.1);\n", encoding="utf-8")
     stamp = species_tree_dir / ".shared_protein_input_signature"
-    stamp.write_text("old-signature\n", encoding="utf-8")
+    stamp.write_text("v2:old-signature\n", encoding="utf-8")
 
     completed = _run_core(tmp_path)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert existing_tree.read_text(encoding="utf-8") == "(Arabidopsis_thaliana:0.1);\n"
-    assert stamp.read_text(encoding="utf-8") == "old-signature\n"
+    assert stamp.read_text(encoding="utf-8") == "v2:old-signature\n"
     assert "Keeping existing species_tree outputs for reuse" in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.parametrize("legacy_signature", ["123456789", "v1:123456789"])
+def test_genome_evolution_upgrades_legacy_signatures_without_clearing_outputs(
+    tmp_path: Path, legacy_signature: str
+):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_protein_dir.mkdir(parents=True)
+    (species_protein_dir / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+
+    managed_outputs = {
+        "species_tree": "dated_species_tree.nwk",
+        "orthofinder": "Orthogroups.tsv",
+        "genome_evolution": "result.tsv",
+    }
+    for directory_name, marker_name in managed_outputs.items():
+        output_dir = workspace / "output" / directory_name
+        output_dir.mkdir(parents=True)
+        (output_dir / marker_name).write_text("preserve me\n", encoding="utf-8")
+        (output_dir / ".shared_protein_input_signature").write_text(
+            f"{legacy_signature}\n", encoding="utf-8"
+        )
+
+    completed = _run_core(tmp_path, {"run_orthofinder": "0"})
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    for directory_name, marker_name in managed_outputs.items():
+        output_dir = workspace / "output" / directory_name
+        assert (output_dir / marker_name).read_text(encoding="utf-8") == "preserve me\n"
+        signature = (output_dir / ".shared_protein_input_signature").read_text(
+            encoding="utf-8"
+        )
+        assert signature.startswith("v2:")
+    assert completed.stdout.count("Legacy shared protein input signature found") == 3
+    assert "Clearing derived outputs" not in completed.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+def test_genome_evolution_input_signature_is_independent_of_workspace_location(tmp_path: Path):
+    signatures = []
+    fixed_mtime = 1_700_000_000
+
+    for workspace_name in ("first_location", "second_location"):
+        run_root = tmp_path / workspace_name
+        species_protein_dir = run_root / "workspace" / "input" / "species_protein"
+        species_protein_dir.mkdir(parents=True)
+        protein_path = species_protein_dir / "Arabidopsis_thaliana_pep.fa"
+        protein_path.write_text(
+            ">Arabidopsis_thaliana_gene1\nMPEP\n",
+            encoding="utf-8",
+        )
+        os.utime(protein_path, (fixed_mtime, fixed_mtime))
+
+        completed = _run_core(run_root, {"run_orthofinder": "0"})
+
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        stamp = (
+            run_root
+            / "workspace"
+            / "output"
+            / "species_tree"
+            / ".shared_protein_input_signature"
+        ).read_text(encoding="utf-8").strip()
+        assert stamp.startswith("v2:")
+        signatures.append(stamp)
+
+    assert signatures[0] == signatures[1]
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
@@ -1283,7 +1355,7 @@ def test_genome_evolution_invalidates_zip_backed_species_tree_outputs_when_gener
         text=True,
     )
     (species_tree_dir / ".shared_protein_input_signature").write_text(
-        "old-signature\n", encoding="utf-8"
+        "v2:old-signature\n", encoding="utf-8"
     )
 
     completed = _run_core(

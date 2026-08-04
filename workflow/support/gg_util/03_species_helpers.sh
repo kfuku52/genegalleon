@@ -205,10 +205,18 @@ _gg_strip_species_terminal_suffixes() {
   local stem_lc
   local suffix
   local -a suffixes=(
+    ".longestcds.busco.full.tsv" "_longestcds.busco.full.tsv"
+    ".longestcds.busco.short.txt" "_longestcds.busco.short.txt"
     ".fasta.busco.full.tsv" ".fa.busco.full.tsv" ".faa.busco.full.tsv" ".fna.busco.full.tsv" ".ffn.busco.full.tsv"
     ".fasta.busco.short.txt" ".fa.busco.short.txt" ".faa.busco.short.txt" ".fna.busco.short.txt" ".ffn.busco.short.txt"
     ".busco.full.tsv" "_busco.full.tsv" ".busco.short.txt" "_busco.short.txt"
     ".busco.full" "_busco.full" ".busco.short" "_busco.short" ".busco" "_busco"
+    ".longestcds.transcript.fa.gz" "_longestcds.transcript.fa.gz"
+    ".longestcds_contamination_removal.fa.gz" "_longestcds_contamination_removal.fa.gz"
+    ".longestcds.fx2tab_cds.tsv" "_longestcds.fx2tab_cds.tsv"
+    ".longestcds.mmseqs2taxonomy.tsv" "_longestcds.mmseqs2taxonomy.tsv"
+    ".longestcds.fa.gz" "_longestcds.fa.gz"
+    ".isoform.fa.gz" "_isoform.fa.gz"
     ".derived.cds.fa.gz" "_derived.cds.fa.gz" ".derived.genome.fa.gz" "_derived.genome.fa.gz" ".derived.gff.gz" "_derived.gff.gz"
     ".cds.all.fa.gz" "_cds.all.fa.gz" ".cds.fa.gz" "_cds.fa.gz" ".cds.fna.gz" "_cds.fna.gz"
     ".genome.fa.gz" "_genome.fa.gz" ".genomic.fna.gz" "_genomic.fna.gz" ".dna.primary_assembly.fa.gz" ".dna.toplevel.fa.gz"

@@ -836,6 +836,9 @@ effective_species_input_source_dir_path() {
 
 compute_shared_protein_input_signature() {
   local input_file
+  local input_label
+  local input_stat
+  local stat_style="bsd"
   local -a input_files=()
   local -a stat_lines=()
   local metadata_source="species_cds"
@@ -853,12 +856,23 @@ compute_shared_protein_input_signature() {
     done < <(gg_find_fasta_files "${dir_sp_cds}" 1)
   fi
 
+  if stat --version > /dev/null 2>&1; then
+    stat_style="gnu"
+  fi
   if [[ ${#input_files[@]} -gt 0 ]]; then
-    if stat --version > /dev/null 2>&1; then
-      mapfile -t stat_lines < <(stat -c '%n:%s:%Y' "${input_files[@]}")
-    else
-      mapfile -t stat_lines < <(stat -f '%N:%z:%m' "${input_files[@]}")
-    fi
+    for input_file in "${input_files[@]}"; do
+      if [[ "${input_file}" == "${file_species_genetic_code}" ]]; then
+        input_label="species_genetic_code/${input_file##*/}"
+      else
+        input_label="${metadata_source}/${input_file##*/}"
+      fi
+      if [[ "${stat_style}" == "gnu" ]]; then
+        input_stat=$(stat -c '%s:%Y' "${input_file}")
+      else
+        input_stat=$(stat -f '%z:%m' "${input_file}")
+      fi
+      stat_lines+=( "${input_label}:${input_stat}" )
+    done
   fi
 
   {
@@ -867,7 +881,12 @@ compute_shared_protein_input_signature() {
     printf 'metadata_source=%s\n' "${metadata_source}"
     printf 'species_tree_busco_mode=%s\n' "${species_tree_busco_mode}"
     printf '%s\n' "${stat_lines[@]}"
-  } | cksum | awk '{print $1}'
+  } | cksum | awk '{print "v2:" $1}'
+}
+
+shared_protein_input_signature_is_current_schema() {
+  local signature=${1:-}
+  [[ "${signature}" == v2:* ]]
 }
 
 print_effective_genome_evolution_config_summary() {
@@ -918,10 +937,15 @@ refresh_dir_for_shared_protein_input_signature() {
     previous_signature=$(< "${stamp_file}")
   fi
   if [[ -n "${previous_signature}" && "${previous_signature}" != "${signature}" ]]; then
-    echo "Shared protein input signature changed for ${description}. Clearing derived outputs in ${target_dir}"
-    if ! clear_directory_contents_safe "${target_dir}"; then
-      echo "Failed to clear ${description} directory after input signature change: ${target_dir}"
-      exit 1
+    if shared_protein_input_signature_is_current_schema "${previous_signature}"; then
+      echo "Shared protein input signature changed for ${description}. Clearing derived outputs in ${target_dir}"
+      if ! clear_directory_contents_safe "${target_dir}"; then
+        echo "Failed to clear ${description} directory after input signature change: ${target_dir}"
+        exit 1
+      fi
+    else
+      echo "Legacy shared protein input signature found for ${description}."
+      echo "Preserving existing outputs and upgrading the signature stamp in place: ${target_dir}"
     fi
   fi
   ensure_dir "${target_dir}"
@@ -946,16 +970,20 @@ refresh_species_tree_for_shared_protein_input_signature() {
     previous_signature=$(< "${stamp_file}")
   fi
   if [[ -n "${previous_signature}" && "${previous_signature}" != "${signature}" ]]; then
-    if [[ ${species_tree_requested_for_orthofinder} -eq 0 ]]; then
+    if ! shared_protein_input_signature_is_current_schema "${previous_signature}"; then
+      echo "Legacy shared protein input signature found for species_tree."
+      echo "Preserving existing outputs and upgrading the signature stamp in place: ${dir_species_tree}"
+    elif [[ ${species_tree_requested_for_orthofinder} -eq 0 ]]; then
       echo "Shared protein input signature changed for species_tree, but species-tree generation flags are disabled."
       echo "Keeping existing species_tree outputs for reuse: ${dir_species_tree}"
       echo "The species_tree signature stamp will be updated next time species-tree generation is enabled."
       return 0
-    fi
-    echo "Shared protein input signature changed for species_tree. Clearing derived outputs in ${dir_species_tree}"
-    if ! clear_directory_contents_safe "${dir_species_tree}"; then
-      echo "Failed to clear species_tree directory after input signature change: ${dir_species_tree}"
-      exit 1
+    else
+      echo "Shared protein input signature changed for species_tree. Clearing derived outputs in ${dir_species_tree}"
+      if ! clear_directory_contents_safe "${dir_species_tree}"; then
+        echo "Failed to clear species_tree directory after input signature change: ${dir_species_tree}"
+        exit 1
+      fi
     fi
   fi
   ensure_dir "${dir_species_tree}"

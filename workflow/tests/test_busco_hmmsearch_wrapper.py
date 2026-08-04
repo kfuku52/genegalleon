@@ -31,6 +31,26 @@ def _run_bash(command: str, cwd: Path, env: dict[str, str] | None = None):
     )
 
 
+def test_busco_output_exists_uses_canonical_path_without_directory_rescan(tmp_path: Path):
+    busco_dir = tmp_path / "busco"
+    busco_dir.mkdir()
+    (busco_dir / "Amphizonella_sp.busco.full.tsv").write_text(
+        "Busco id\\tStatus\\n", encoding="utf-8"
+    )
+    command = (
+        f"source {shlex.quote(str(WORKFLOW_DIR / 'support' / 'gg_util.sh'))}; "
+        f"source {shlex.quote(str(GG_BUSCO_PATH))}; "
+        "find() { echo unexpected-find >&2; return 91; }; "
+        f"busco_output_exists_for_species {shlex.quote(str(busco_dir))} "
+        "Amphizonella_sp '*busco.full.tsv'"
+    )
+
+    completed = _run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "unexpected-find" not in completed.stderr
+
+
 def test_hmmsearch_wrapper_creates_modified_fas_symlink_when_missing(tmp_path: Path):
     real_hmmsearch = tmp_path / "bin" / "hmmsearch-real"
     observed_args = tmp_path / "observed.args"
