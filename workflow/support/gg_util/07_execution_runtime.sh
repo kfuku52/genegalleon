@@ -153,7 +153,7 @@ gg_initialize_conda_shell() {
 	if command -v micromamba >/dev/null 2>&1; then
 		export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/opt/conda}"
 		eval "$(micromamba shell hook --shell bash)"
-		if ! declare -F conda >/dev/null 2>&1 && ! command -v conda >/dev/null 2>&1; then
+		if ! declare -F conda >/dev/null 2>&1; then
 			conda() {
 				micromamba "$@"
 			}
@@ -166,7 +166,7 @@ gg_initialize_conda_shell() {
 	else
 		return 1
 	fi
-	if ! command -v conda >/dev/null 2>&1; then
+	if ! declare -F conda >/dev/null 2>&1; then
 		return 1
 	fi
 	GG_CONDA_SHELL_INITIALIZED=1

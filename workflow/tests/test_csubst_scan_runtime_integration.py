@@ -186,10 +186,26 @@ def test_current_csubst_scan_output_imports_into_gene_family_database(tmp_path):
     units_dir = tmp_path / "csubst_scan_units"
     for directory in [stat_tree, stat_branch, scan_dir, units_dir]:
         directory.mkdir()
-    pd.DataFrame({"tree_metric": [1.0]}).to_csv(
+    pd.DataFrame(
+        {
+            "num_branch": [3],
+            "num_spe": [1],
+            "num_dup": [0],
+            "num_sp": [2],
+            "tree_metric": [1.0],
+        }
+    ).to_csv(
         stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False
     )
-    pd.DataFrame({"branch_metric": [1.0]}).to_csv(
+    pd.DataFrame(
+        {
+            "branch_id": [0],
+            "node_name": ["n0"],
+            "num_sp": [2],
+            "so_event": ["S"],
+            "branch_metric": [1.0],
+        }
+    ).to_csv(
         stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False
     )
     scan_df.to_csv(scan_dir / "OG0001_csubst_scan.tsv", sep="\t", index=False)

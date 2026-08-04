@@ -35,6 +35,12 @@ def _install_fake_micromamba(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     micromamba.chmod(0o755)
+    conda = bin_dir / "conda"
+    conda.write_text(
+        "#!/usr/bin/env bash\necho \"CondaError: Run 'conda init' before 'conda activate'\" >&2\nexit 86\n",
+        encoding="utf-8",
+    )
+    conda.chmod(0o755)
     return bin_dir
 
 
