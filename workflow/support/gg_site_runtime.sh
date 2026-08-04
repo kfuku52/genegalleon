@@ -104,9 +104,10 @@ gg_site_prepend_path_once() {
   export PATH="${path_entry}${PATH:+:${PATH}}"
 }
 
-# Optional path overrides are used by runtime-discovery tests.
+# Optional path overrides are used by runtime-discovery tests and by sites
+# whose package tree is mounted somewhere other than /opt/pkg.
 # shellcheck disable=SC2120
-gg_nig_prepend_container_runtime_path() {
+gg_prepend_container_runtime_path() {
   local package_root=${1:-/opt/pkg}
   local legacy_runtime_dir=${2:-/bio/package/singularity/singularity_3.0/bin}
   local runtime_name
@@ -139,6 +140,13 @@ gg_nig_prepend_container_runtime_path() {
   done
 
   return 0
+}
+
+# Backward-compatible NIG entry point. Runtime discovery itself is generic and
+# can be reused by validation commands on any host with a versioned package tree.
+# shellcheck disable=SC2120
+gg_nig_prepend_container_runtime_path() {
+  gg_prepend_container_runtime_path "${1:-/opt/pkg}" "${2:-/bio/package/singularity/singularity_3.0/bin}"
 }
 
 gg_site_scheduler_prelude() {

@@ -3621,7 +3621,6 @@ PY
     rm -rf -- "${dir_orthofinder}/main"
   fi
 
-  echo "OrthoFinder finished successfully."
   orthofinder_output_directory_cleanup "${dir_orthofinder}" "${GG_TASK_CPUS}"
 
   orthofinder_version=$(detect_orthofinder_version)
@@ -3641,7 +3640,7 @@ PY
           --dir_out "${dir_orthofinder_hog2og}" \
           --mode "hog2og"
       else
-        echo "Neither OrthoFinder v3.1+ Orthogroups.tsv nor root-level HOG table N0.tsv was available. Exiting."
+        echo "OrthoFinder failed output validation: neither v3.1+ Orthogroups.tsv nor root-level HOG table N0.tsv was available. Exiting."
         exit 1
       fi
     fi
@@ -3653,7 +3652,7 @@ PY
   else
     hog_candidates=()
     mapfile -t hog_candidates < <(find "${dir_orthofinder}/Phylogenetic_Hierarchical_Orthogroups" -maxdepth 1 -type f -name 'N*.tsv' | sort -V)
-    echo "Required root-level HOG table was not found: ${hog_table}"
+    echo "OrthoFinder failed output validation: Required root-level HOG table was not found: ${hog_table}"
     echo "For OrthoFinder versions earlier than v3.1, genegalleon requires Phylogenetic_Hierarchical_Orthogroups/N0.tsv for whole-dataset HOG selection."
     if [[ ${#hog_candidates[@]} -gt 0 ]]; then
       echo "Other HOG tables were found, but they correspond to individual species-tree clades and will not be selected automatically:"
@@ -3664,6 +3663,7 @@ PY
     fi
     exit 1
   fi
+  echo "OrthoFinder finished successfully."
 else
   gg_step_skip "${task}"
 fi

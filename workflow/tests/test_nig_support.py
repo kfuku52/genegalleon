@@ -5,6 +5,7 @@ from pathlib import Path
 from shell_static_helpers import WORKFLOW_DIR
 
 SITE_RUNTIME_PATH = WORKFLOW_DIR / "support" / "gg_site_runtime.sh"
+GENOME_EVOLUTION_CORE_PATH = WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh"
 
 
 def run_bash(command: str, cwd: Path):
@@ -94,6 +95,33 @@ def test_nig_runtime_discovery_falls_back_to_versioned_singularity(tmp_path):
         f"runtime={runtime_bin}",
         f"path={runtime_bin.parent}:{base_path}",
     ]
+
+
+def test_generic_runtime_discovery_reuses_versioned_package_tree(tmp_path):
+    package_root = tmp_path / "site-packages"
+    runtime_bin = package_root / "apptainer" / "2.0.0" / "bin" / "apptainer"
+    make_runtime(runtime_bin)
+
+    command = (
+        "export PATH=/usr/bin:/bin; "
+        f"source {shlex.quote(str(SITE_RUNTIME_PATH))}; "
+        f"gg_prepend_container_runtime_path {shlex.quote(str(package_root))}; "
+        'command -v apptainer'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == str(runtime_bin)
+
+
+def test_orthofinder_success_message_follows_root_hog_validation():
+    text = GENOME_EVOLUTION_CORE_PATH.read_text(encoding="utf-8")
+
+    validation_marker = "OrthoFinder failed output validation:"
+    success_marker = 'echo "OrthoFinder finished successfully."'
+    assert validation_marker in text
+    assert text.index(success_marker) > text.index(validation_marker)
 
 
 def test_nig_scheduler_prelude_discovers_runtime_without_pbs_workdir(tmp_path):
