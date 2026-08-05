@@ -411,8 +411,12 @@ global BH-FDR columns such as `q_rate_enrichment_global` after aggregating all
 candidate substitutions into the SQLite database. In `gg_gene_summary`, set
 `run_csubst_scan_aa_change_summary=1` to write ranked candidate TSV output plus
 `*_csubst_aa_change_evidence_density.pdf`,
-`*_csubst_aa_change_substitution_spectrum.pdf`, and
-`*_csubst_aa_change_foreground_unit_support_matrix.pdf`; combine it with
+`*_csubst_aa_change_substitution_spectrum.pdf`,
+`*_csubst_aa_change_foreground_unit_support_matrix.pdf`, and
+`*_csubst_aa_change_pvalue_qvalue_distributions.pdf`. The last plot compares the
+analytical, candidate-level empirical, and full-scan empirical maxT P-value
+distributions with their corresponding global BH-FDR q-value distributions.
+Combine it with
 `run_gene_family_database_build=1` to refresh the database and plots in one run.
 
 GeneGalleon does not require a fixed CSUBST scan column count. Columns are

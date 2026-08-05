@@ -405,8 +405,10 @@ Notable defaults:
 - `run_csubst_scan_aa_change_summary=1` writes `*_csubst_aa_change_summary.tsv` ranked
   by the global FDR columns and, when `aa_change` candidates are available,
   CSUBST scan plots for evidence density, substitution spectrum, and
-  foreground-unit support; use it with `run_gene_family_database_build=1` to refresh the DB
-  and plots in one run,
+  foreground-unit support, plus a four-panel comparison of analytical,
+  candidate-level empirical, and full-scan empirical maxT P values with their
+  corresponding global BH-FDR q values; use it with
+  `run_gene_family_database_build=1` to refresh the DB and plots in one run,
 - `run_csubst_site_convergence_summary=1` runs site-level convergence screening with
   `csubst_site_wrapper.py`, combines orthogroup results with species traits,
   and writes convergence outputs under the selected source's `csubst_site`

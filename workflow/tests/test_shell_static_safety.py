@@ -3165,6 +3165,8 @@ def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     assert '"--out_prefix"' in plot_script
     assert "required=True" in plot_script
     assert '"--out_pdf"' not in plot_script
+    assert "_pvalue_qvalue_distributions.pdf" in plot_script
+    assert "write_pvalue_qvalue_distributions" in plot_script
 
 
 def test_csubst_site_wrapper_omits_redundant_sites_defaults():

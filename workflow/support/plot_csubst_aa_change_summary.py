@@ -22,6 +22,33 @@ P_PRIORITY = [
     "p_rate_enrichment_empirical",
     "p_rate_enrichment",
 ]
+PVALUE_QVALUE_METHODS = [
+    {
+        "label": "Analytical",
+        "short_label": "Analytical",
+        "p_column": "p_rate_enrichment",
+        "q_column": "q_rate_enrichment_global",
+        "color": "#2F6B9A",
+        "linestyle": "-",
+    },
+    {
+        "label": "Empirical (candidate-level)",
+        "short_label": "Empirical",
+        "p_column": "p_rate_enrichment_empirical",
+        "q_column": "q_rate_enrichment_empirical_global",
+        "color": "#D17A22",
+        "linestyle": "--",
+    },
+    {
+        "label": "Empirical maxT (full-scan)",
+        "short_label": "Empirical maxT",
+        "p_column": "p_rate_enrichment_empirical_maxT",
+        "q_column": "q_rate_enrichment_empirical_maxT_global",
+        "color": "#6B7F2A",
+        "linestyle": ":",
+    },
+]
+PROBABILITY_COUNT_THRESHOLDS = (0.05, 0.01, 0.001)
 AA_ORDER = list("ACDEFGHIKLMNPQRSTVWY")
 DISPLAY_COLUMNS = [
     "orthogroup",
@@ -72,7 +99,8 @@ def parse_args():
         required=True,
         help=(
             "Prefix for plot PDFs. Writes *_evidence_density.pdf, "
-            "*_substitution_spectrum.pdf, and *_foreground_unit_support_matrix.pdf."
+            "*_substitution_spectrum.pdf, *_foreground_unit_support_matrix.pdf, "
+            "and *_pvalue_qvalue_distributions.pdf."
         ),
     )
     parser.add_argument("--table", metavar="NAME", default="aa_change", help="Database table name. Default: aa_change.")
@@ -174,6 +202,7 @@ def plot_paths(out_prefix):
         "evidence_density": f"{out_prefix}_evidence_density.pdf",
         "substitution_spectrum": f"{out_prefix}_substitution_spectrum.pdf",
         "foreground_unit_support_matrix": f"{out_prefix}_foreground_unit_support_matrix.pdf",
+        "pvalue_qvalue_distributions": f"{out_prefix}_pvalue_qvalue_distributions.pdf",
     }
 
 
@@ -199,6 +228,218 @@ def write_empty_plot(out_pdf, message):
 def write_empty_plot_set(paths, message):
     for out_pdf in paths.values():
         write_empty_plot(out_pdf, message)
+
+
+def finite_probability_values(df, column):
+    if column not in df.columns:
+        return np.array([], dtype=np.float64)
+    values = pd.to_numeric(df[column], errors="coerce").to_numpy(dtype=np.float64)
+    return values[np.isfinite(values) & (values >= 0.0) & (values <= 1.0)]
+
+
+def probability_count_label(method, values):
+    counts = [int((values <= threshold).sum()) for threshold in PROBABILITY_COUNT_THRESHOLDS]
+    return f"{method['short_label']}: " + " / ".join(f"{count:,}" for count in counts)
+
+
+def probability_series(df, column_key):
+    series = []
+    for method in PVALUE_QVALUE_METHODS:
+        column = method[column_key]
+        values = finite_probability_values(df, column)
+        if values.size == 0:
+            continue
+        series.append((method, column, values))
+    return series
+
+
+def probability_floor(series):
+    positive_minima = [values[values > 0].min() for _, _, values in series if (values > 0).any()]
+    if not positive_minima:
+        return 1e-6
+    return max(float(min(positive_minima)) / 10.0, 1e-300)
+
+
+def style_probability_axis(ax):
+    ax.grid(True, which="major", color="#E5E7EB", linewidth=0.75)
+    ax.grid(True, which="minor", color="#F3F4F6", linewidth=0.4)
+    for spine in ["top", "right"]:
+        ax.spines[spine].set_visible(False)
+
+
+def plot_probability_cdf(ax, series, value_label, panel_label):
+    if not series:
+        ax.axis("off")
+        ax.text(0.5, 0.5, f"No finite {value_label} values were available.", ha="center", va="center")
+        return
+    floor_value = probability_floor(series)
+    x_min = 10 ** np.floor(np.log10(floor_value))
+    thresholds = np.geomspace(x_min, 1.0, 700)
+    min_fraction = 1.0
+    point_masses = []
+    for method, _, values in series:
+        ordered = np.sort(np.clip(values, x_min, 1.0))
+        cumulative = np.searchsorted(ordered, thresholds, side="right") / ordered.size
+        positive = cumulative > 0
+        min_fraction = min(min_fraction, float(cumulative[positive].min()))
+        ax.step(
+            thresholds[positive],
+            cumulative[positive] * 100.0,
+            where="post",
+            color=method["color"],
+            linestyle=method["linestyle"],
+            linewidth=2.0,
+            label=probability_count_label(method, values),
+        )
+        if positive.sum() == 1:
+            point_masses.append(
+                (
+                    method,
+                    float(thresholds[positive][0]),
+                    float(cumulative[positive][0] * 100.0),
+                )
+            )
+    ax.axvline(0.05, color="#6B7280", linestyle=(0, (4, 3)), linewidth=1.0)
+    ax.set_xscale("log")
+    ax.set_xlim(x_min, 1.18)
+    if min_fraction >= 0.01:
+        ax.set_ylim(0.0, 105.0)
+    else:
+        ax.set_yscale("log")
+        ax.set_ylim(max(min_fraction * 80.0, 1e-5), 125.0)
+    for method, point_x, point_y in point_masses:
+        ax.vlines(
+            point_x,
+            ax.get_ylim()[0],
+            point_y,
+            color=method["color"],
+            linestyle=method["linestyle"],
+            linewidth=2.7,
+            zorder=4,
+        )
+    ax.set_xlabel(f"{value_label} threshold")
+    ax.set_ylabel("Candidates at or below threshold (%)")
+    ax.set_title(f"{panel_label}  Cumulative {value_label} distribution", loc="left", fontsize=12, weight="bold")
+    ax.legend(
+        loc="upper left",
+        frameon=False,
+        fontsize=7.8,
+        handlelength=2.7,
+        title="Candidate n <= 0.05 / 0.01 / 0.001",
+        title_fontsize=7.8,
+    )
+    style_probability_axis(ax)
+
+
+def plot_probability_histogram(ax, series, value_label, panel_label):
+    if not series:
+        ax.axis("off")
+        ax.text(0.5, 0.5, f"No finite {value_label} values were available.", ha="center", va="center")
+        return
+    floor_value = probability_floor(series)
+    max_evidence = max(
+        float((-np.log10(np.clip(values, floor_value, 1.0))).max())
+        for _, _, values in series
+    )
+    upper = max(3.2, min(16.0, np.ceil(max_evidence * 5.0) / 5.0))
+    bins = np.linspace(0.0, upper, 86)
+    minimum_nonzero_percent = 100.0
+    for method, _, values in series:
+        evidence = -np.log10(np.clip(values, floor_value, 1.0))
+        evidence = np.clip(evidence, 0.0, np.nextafter(upper, 0.0))
+        counts, _ = np.histogram(evidence, bins=bins)
+        nonzero = counts[counts > 0]
+        if nonzero.size > 0:
+            minimum_nonzero_percent = min(
+                minimum_nonzero_percent,
+                float(nonzero.min()) / values.size * 100.0,
+            )
+        ax.hist(
+            evidence,
+            bins=bins,
+            weights=np.full(evidence.shape, 100.0 / evidence.size),
+            histtype="step",
+            linewidth=1.9,
+            color=method["color"],
+            linestyle=method["linestyle"],
+            label=method["label"],
+        )
+    ax.axvline(-np.log10(0.05), color="#6B7280", linestyle=(0, (4, 3)), linewidth=1.0)
+    ax.set_yscale("log")
+    ax.set_xlim(0.0, upper)
+    ax.set_ylim(max(minimum_nonzero_percent * 0.7, 1e-5), 125.0)
+    ax.set_xlabel(f"Evidence strength, -log10({value_label})")
+    ax.set_ylabel("Candidates per bin (%)")
+    ax.set_title(f"{panel_label}  {value_label} evidence strength", loc="left", fontsize=12, weight="bold")
+    ax.legend(loc="upper right", frameon=False, fontsize=8.2, handlelength=3.0)
+    style_probability_axis(ax)
+
+
+def write_pvalue_qvalue_distributions(df, out_pdf):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    ensure_parent(out_pdf)
+    p_series = probability_series(df, "p_column")
+    q_series = probability_series(df, "q_column")
+    if not p_series and not q_series:
+        write_empty_plot(out_pdf, "No finite P-value or global q-value columns were available.")
+        return
+
+    with plt.rc_context(
+        {
+            "font.family": "DejaVu Sans",
+            "font.size": 9.5,
+            "axes.edgecolor": "#4B5563",
+            "axes.linewidth": 0.8,
+            "xtick.color": "#374151",
+            "ytick.color": "#374151",
+            "text.color": "#1F2937",
+        }
+    ):
+        fig, axes = plt.subplots(2, 2, figsize=(11.2, 8.4))
+        plot_probability_cdf(axes[0, 0], p_series, "P-value", "A")
+        plot_probability_cdf(axes[0, 1], q_series, "global q-value", "B")
+        plot_probability_histogram(axes[1, 0], p_series, "P", "C")
+        plot_probability_histogram(axes[1, 1], q_series, "global q", "D")
+        fig.suptitle(
+            "CSUBST scan P-value and global q-value distributions",
+            x=0.07,
+            y=0.985,
+            ha="left",
+            fontsize=16,
+            weight="bold",
+            color="#111827",
+        )
+        fig.text(
+            0.07,
+            0.952,
+            (
+                f"All {df.shape[0]:,} candidate state-change rows; "
+                "global q-values use BH-FDR across all gene families"
+            ),
+            ha="left",
+            va="top",
+            fontsize=9.5,
+            color="#4B5563",
+        )
+        fig.text(
+            0.07,
+            0.018,
+            (
+                "Colors identify the P/q method pair. Empirical values are discrete at the permutation resolution; "
+                "the maxT method compares against the strongest null candidate per permutation."
+            ),
+            ha="left",
+            va="bottom",
+            fontsize=8.2,
+            color="#4B5563",
+        )
+        fig.subplots_adjust(left=0.08, right=0.985, top=0.90, bottom=0.095, hspace=0.34, wspace=0.25)
+        fig.savefig(out_pdf)
+        plt.close(fig)
 
 
 def write_evidence_density(df, score_col, out_pdf):
@@ -413,6 +654,7 @@ def main():
         write_evidence_density(ranked, score_col, paths["evidence_density"])
         write_substitution_spectrum(ranked, paths["substitution_spectrum"])
         write_foreground_unit_support_matrix(ranked, score_col, paths["foreground_unit_support_matrix"], args.top_n)
+        write_pvalue_qvalue_distributions(ranked, paths["pvalue_qvalue_distributions"])
     return 0
 
 
