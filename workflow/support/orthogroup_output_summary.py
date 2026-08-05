@@ -4,11 +4,19 @@
 import argparse
 import os
 import re
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import numpy
 import pandas
+
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+
+from gene_family_output_store import GeneFamilyOutputStore, SHARED_OUTPUT_SUBDIRS
 
 ORTHOGROUP_ID_RE = re.compile(r'^(OG\d+|HOG\d+|SP\d+)(?=$|[._-])')
 
@@ -18,6 +26,12 @@ def build_arg_parser():
     parser.add_argument('--dir_og', metavar='PATH', type=str, required=True, help='')
     parser.add_argument('--genecount', metavar='PATH', type=str, required=True, help='')
     parser.add_argument('--out', metavar='PATH', type=str, required=True, help='')
+    parser.add_argument(
+        '--updated-genecount-out',
+        metavar='PATH',
+        type=str,
+        help='Write the AMAS-augmented gene-count table here; the default is beside --out.',
+    )
     parser.add_argument('--ncpu', metavar='INT', default=1, type=int, help='Number of worker threads.')
     return parser
 
@@ -51,26 +65,39 @@ def _read_amas_file(file_path, og_id, amas_cols):
     return og_id, tmp.iloc[0].to_list()
 
 
-def get_amas_stats(df, dir_amas, extension, ncpu):
+def _read_amas_store_file(store, subdir, file_name, og_id, amas_cols):
+    with store.open_binary(subdir, file_name) as handle:
+        tmp = pandas.read_csv(handle, sep='\t', header=0, usecols=amas_cols, nrows=1, low_memory=False)
+    return og_id, tmp.iloc[0].to_list()
+
+
+def get_amas_stats(df, dir_amas, extension, ncpu, store=None, logical_subdir=None):
     amas_cols = _amas_columns()
     amas_new_cols = [f'{col}_{extension}' for col in amas_cols]
     for ncol in amas_new_cols:
         if ncol not in df.columns:
             df.loc[:, ncol] = numpy.nan
 
-    if not os.path.isdir(dir_amas):
+    if store is None and not os.path.isdir(dir_amas):
         print(f'{extension}: {dir_amas} was not found. Skipping.', flush=True)
+        return df
+    if store is not None and logical_subdir not in store.logical_subdirs():
+        print(f'{extension}: logical subdirectory {logical_subdir} was not found. Skipping.', flush=True)
         return df
 
     is_prefilled = ~df[f'No_of_taxa_{extension}'].isna()
     prefilled_ogs = set(df.index[is_prefilled])
-    files = sorted(_visible_entries(dir_amas))
+    files = (
+        sorted(_visible_entries(dir_amas))
+        if store is None
+        else store.file_names(logical_subdir)
+    )
     queued = []
     seen_ogs = set()
     valid_ogs = set(df.index.astype(str))
     for file in files:
         file_path = os.path.join(dir_amas, file)
-        if not os.path.isfile(file_path):
+        if store is None and not os.path.isfile(file_path):
             continue
         og_id = _extract_orthogroup_id(file)
         if og_id is None:
@@ -90,7 +117,21 @@ def get_amas_stats(df, dir_amas, extension, ncpu):
         max_workers = min(ncpu, len(queued))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
-                executor.submit(_read_amas_file, os.path.join(dir_amas, file), og_id, amas_cols)
+                executor.submit(
+                    _read_amas_file,
+                    os.path.join(dir_amas, file),
+                    og_id,
+                    amas_cols,
+                )
+                if store is None
+                else executor.submit(
+                    _read_amas_store_file,
+                    store,
+                    logical_subdir,
+                    file,
+                    og_id,
+                    amas_cols,
+                )
                 for file, og_id in queued
             ]
             for future in as_completed(futures):
@@ -99,8 +140,17 @@ def get_amas_stats(df, dir_amas, extension, ncpu):
                 counter += 1
     else:
         for file, og_id in queued:
-            file_path = os.path.join(dir_amas, file)
-            og_id, values = _read_amas_file(file_path, og_id, amas_cols)
+            if store is None:
+                file_path = os.path.join(dir_amas, file)
+                og_id, values = _read_amas_file(file_path, og_id, amas_cols)
+            else:
+                og_id, values = _read_amas_store_file(
+                    store,
+                    logical_subdir,
+                    file,
+                    og_id,
+                    amas_cols,
+                )
             result_rows.append((og_id, values))
             counter += 1
 
@@ -125,7 +175,12 @@ def run(args):
     print('args:', vars(args))
 
     start = time.time()
-    updated_genecount = args.genecount.replace('.tsv', '') + '.amas.tsv'
+    updated_genecount = getattr(args, 'updated_genecount_out', None)
+    if updated_genecount is None:
+        out_path = Path(args.out)
+        updated_genecount = str(
+            out_path.with_name(f'{out_path.stem}.genecount.amas.tsv')
+        )
     df_original = pandas.read_csv(args.genecount, sep='\t', index_col=0, header=0)
     df_original.index = df_original.index.astype(str)
     if os.path.exists(updated_genecount):
@@ -140,23 +195,38 @@ def run(args):
         print('Updated --genecount file was not detected. Reading the original.', flush=True)
         df = df_original
 
+    store = GeneFamilyOutputStore(args.dir_og)
     dir_amas = os.path.join(args.dir_og, 'amas_original')
-    df = get_amas_stats(df, dir_amas, 'original', args.ncpu)
+    df = get_amas_stats(
+        df,
+        dir_amas,
+        'original',
+        args.ncpu,
+        store=store,
+        logical_subdir='amas_original',
+    )
     dir_amas = os.path.join(args.dir_og, 'amas_cleaned')
-    df = get_amas_stats(df, dir_amas, 'clean', args.ncpu)
+    df = get_amas_stats(
+        df,
+        dir_amas,
+        'clean',
+        args.ncpu,
+        store=store,
+        logical_subdir='amas_cleaned',
+    )
     df.to_csv(updated_genecount, index=True, sep='\t')
 
     df.loc[:, 'GG_ARRAY_TASK_ID'] = numpy.arange(df.shape[0]) + 1
 
-    subdirs = _visible_entries(args.dir_og)
-    subdirs = [sd for sd in subdirs if os.path.isdir(os.path.join(args.dir_og, sd))]
-    subdirs = sorted(subdirs)
+    subdirs = [
+        subdir
+        for subdir in store.logical_subdirs()
+        if subdir not in SHARED_OUTPUT_SUBDIRS
+    ]
     df = pandas.concat([df, pandas.DataFrame(data=0, index=df.index, columns=subdirs, dtype=int)], axis=1)
     valid_og_ids = set(df.index.astype(str))
     for subdir in subdirs:
-        subdir_path = os.path.join(args.dir_og, subdir)
-        subdir_path = os.path.realpath(subdir_path)
-        files = _visible_entries(subdir_path)
+        files = store.file_names(subdir)
         og_ids = sorted(
             {
                 og_id

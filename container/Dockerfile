@@ -41,6 +41,7 @@ RUN rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archive
     rsync \
     tini \
     unzip \
+    util-linux \
     wget \
     zip \
  && sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \

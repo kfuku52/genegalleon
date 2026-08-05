@@ -39,6 +39,12 @@ Main contents:
   - pytest and R-based checks for key helpers and wrapper behavior
 - `workflow/gg_common_params.sh`
   - shared defaults reused by multiple stages
+- `workflow/gg_gene_family_archive.sh`
+  - manual inspection, verification, deletion, and restoration for ZIP-backed gene-family outputs
+- `workflow/gg_species_tree_archive.sh`
+  - raw/ZIP conversion and verification for high-file-count species-tree stage directories
+- `workflow/gg_workspace_storage.sh`
+  - workspace-wide preflight, conversion, verification, and JSON/TSV audit reports
 - `workflow/gg_path_defaults.sh`
   - default path definitions for workspace and container image
 - `workflow/gg_all_entrypoints_debug.sh`

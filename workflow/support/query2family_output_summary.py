@@ -3,12 +3,19 @@
 
 import argparse
 import os
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy
 import pandas
+
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+
+from gene_family_output_store import GeneFamilyOutputStore, SHARED_OUTPUT_SUBDIRS
 
 
 def build_arg_parser():
@@ -63,9 +70,26 @@ def _read_amas_file(file_path, query_id, amas_cols):
     return query_id, tmp.iloc[0].to_list()
 
 
-def get_amas_stats(df, dir_amas, extension, query_id_matchers, ncpu):
-    if not os.path.isdir(dir_amas):
+def _read_amas_store_file(store, subdir, file_name, query_id, amas_cols):
+    with store.open_binary(subdir, file_name) as handle:
+        tmp = pandas.read_csv(handle, sep='\t', header=0, usecols=amas_cols, nrows=1, low_memory=False)
+    return query_id, tmp.iloc[0].to_list()
+
+
+def get_amas_stats(
+    df,
+    dir_amas,
+    extension,
+    query_id_matchers,
+    ncpu,
+    store=None,
+    logical_subdir=None,
+):
+    if store is None and not os.path.isdir(dir_amas):
         print(f'{extension}: {dir_amas} was not found. Skipping.', flush=True)
+        return df
+    if store is not None and logical_subdir not in store.logical_subdirs():
+        print(f'{extension}: logical subdirectory {logical_subdir} was not found. Skipping.', flush=True)
         return df
 
     amas_cols = _amas_columns()
@@ -76,13 +100,17 @@ def get_amas_stats(df, dir_amas, extension, query_id_matchers, ncpu):
 
     is_prefilled = ~df[f'No_of_taxa_{extension}'].isna()
     prefilled_query_ids = set(df.index[is_prefilled])
-    files = sorted(_visible_entries(dir_amas))
+    files = (
+        sorted(_visible_entries(dir_amas))
+        if store is None
+        else store.file_names(logical_subdir)
+    )
     queued = []
     seen_query_ids = set()
     valid_query_ids = set(df.index.astype(str))
     for file in files:
         file_path = os.path.join(dir_amas, file)
-        if not os.path.isfile(file_path):
+        if store is None and not os.path.isfile(file_path):
             continue
         query_id = _extract_query_id(file, query_id_matchers)
         if query_id is None:
@@ -102,7 +130,21 @@ def get_amas_stats(df, dir_amas, extension, query_id_matchers, ncpu):
         max_workers = min(ncpu, len(queued))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
-                executor.submit(_read_amas_file, os.path.join(dir_amas, file), query_id, amas_cols)
+                executor.submit(
+                    _read_amas_file,
+                    os.path.join(dir_amas, file),
+                    query_id,
+                    amas_cols,
+                )
+                if store is None
+                else executor.submit(
+                    _read_amas_store_file,
+                    store,
+                    logical_subdir,
+                    file,
+                    query_id,
+                    amas_cols,
+                )
                 for file, query_id in queued
             ]
             for future in as_completed(futures):
@@ -111,7 +153,16 @@ def get_amas_stats(df, dir_amas, extension, query_id_matchers, ncpu):
                 counter += 1
     else:
         for file, query_id in queued:
-            query_id, values = _read_amas_file(os.path.join(dir_amas, file), query_id, amas_cols)
+            if store is None:
+                query_id, values = _read_amas_file(os.path.join(dir_amas, file), query_id, amas_cols)
+            else:
+                query_id, values = _read_amas_store_file(
+                    store,
+                    logical_subdir,
+                    file,
+                    query_id,
+                    amas_cols,
+                )
             result_rows.append((query_id, values))
             counter += 1
 
@@ -138,6 +189,7 @@ def run(args):
     query_id_matchers = _query_id_matchers(query_ids)
     df = pandas.DataFrame(index=query_ids)
     df.index.name = 'query'
+    store = GeneFamilyOutputStore(args.dir_query2family)
 
     df = get_amas_stats(
         df,
@@ -145,6 +197,8 @@ def run(args):
         'original',
         query_id_matchers,
         args.ncpu,
+        store=store,
+        logical_subdir='amas_original',
     )
     df = get_amas_stats(
         df,
@@ -152,18 +206,21 @@ def run(args):
         'clean',
         query_id_matchers,
         args.ncpu,
+        store=store,
+        logical_subdir='amas_cleaned',
     )
 
     df.insert(0, 'GG_ARRAY_TASK_ID', numpy.arange(df.shape[0]) + 1)
 
-    subdirs = _visible_entries(args.dir_query2family)
-    subdirs = [sd for sd in subdirs if os.path.isdir(os.path.join(args.dir_query2family, sd))]
-    subdirs = sorted(subdirs)
+    subdirs = [
+        subdir
+        for subdir in store.logical_subdirs()
+        if subdir not in SHARED_OUTPUT_SUBDIRS
+    ]
     df = pandas.concat([df, pandas.DataFrame(data=0, index=df.index, columns=subdirs, dtype=int)], axis=1)
     valid_query_ids = set(df.index.astype(str))
     for subdir in subdirs:
-        subdir_path = os.path.realpath(os.path.join(args.dir_query2family, subdir))
-        files = _visible_entries(subdir_path)
+        files = store.file_names(subdir)
         query_ids_in_files = sorted(
             {
                 query_id

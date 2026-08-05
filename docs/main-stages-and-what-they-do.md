@@ -393,8 +393,12 @@ Notable defaults:
 - `run_gene_family_database_build=0`, `run_csubst_scan_aa_change_summary=0`, `run_hgt_candidate_summary=0`, `run_hgt_summary_plots=0`, and `run_csubst_site_convergence_summary=0`
 - database, CSUBST scan AA-change summary, HGT, and CSUBST site convergence flags are valid for both sources and use the selected source's gene-family output directory,
 - `run_gene_family_database_build=1` assembles the selected source's SQLite DB from
-  `stat_tree/` and `stat_branch/` and skips database generation if those
-  required directories are missing,
+  logical `stat_tree` and `stat_branch` inputs, whether they are live files or
+  members of GeneGalleon ZIP shards; structural columns are required, while
+  analysis-specific columns that are absent from individual families are stored
+  as SQL `NULL`,
+- overwrite builds use a temporary SQLite file and replace the published database
+  only after every input has been loaded and indexed successfully,
 - when present, `csubst_scan/` is imported as DB table `aa_change`, and
   `csubst_scan_units/` is imported as `aa_change_unit`; `aa_change` receives
   global BH-FDR columns after all candidate substitutions are loaded,
@@ -423,12 +427,18 @@ Main outputs in the workspace root (`workspace/`):
 Note:
 
 - this stage runs `workflow/core/gg_progress_summary_core.sh` inside the container.
-- orthogroup summary generation is skipped when the selected gene-count table or AMAS directories are absent.
+- orthogroup summary generation is skipped when the selected gene-count table is absent; AMAS inputs are optional and may be live or ZIP-backed.
 - query2family summary generation is skipped when `workspace/output/query2family`
   or `workspace/input/query_gene` is absent.
 
 ### Utility wrappers
 
+- Gene-family ZIP manager:
+  - `workflow/gg_gene_family_archive.sh`
+  - lists, verifies, deletes, undeletes, restores, and explicitly archives logical query2family/orthogroup artifacts
+- Species-tree stage ZIP manager:
+  - `workflow/gg_species_tree_archive.sh`
+  - converts, verifies, and reports the high-file-count `species_tree/single_copy_*` stage directories
 - Versions dump:
   - collector script: `workflow/support/gg_versions.sh`
   - auto-triggered at the end of each `gg_*_entrypoint.sh` on successful completion

@@ -120,8 +120,26 @@ Likely causes:
 
 Examples:
 
-- `gg_gene_summary_entrypoint.sh` skips database generation if `stat_tree/` or `stat_branch/` is missing,
-- `gg_progress_summary_core.sh` skips orthogroup summary generation if the selected gene-count table or AMAS directories are absent.
+- `gg_gene_summary_entrypoint.sh` skips database generation if logical `stat_tree` or `stat_branch` inputs are absent from both live files and ZIP storage,
+- `gg_progress_summary_core.sh` skips orthogroup summary generation if the selected gene-count table is absent; AMAS inputs may be live or ZIP-backed.
+
+### Gene-family storage conversion is pending
+
+Symptom:
+
+- `gg_gene_evolution` or progress summary refuses to start because
+  `.gg_store/storage-conversion.pending` exists. A store created by the first
+  experimental ZIP implementation may use
+  `.gg_archives/storage-conversion.pending` until `migrate-layout` completes.
+
+What to do:
+
+- stop old array jobs that may still write below the affected query2family or orthogroup root,
+- inspect the saved phase and counts with `gg_gene_family_archive.sh conversion-status --root <output-root>`,
+- rerun the same `gg_gene_family_archive.sh convert-storage ... --to zip|raw` command,
+- or add `--resume` to require that the pending conversion exists and matches the requested direction,
+- raw-to-ZIP resume cleans partial shards and repairs a pending index automatically; use the standalone `repair` command only when no conversion marker exists,
+- do not remove the conversion marker manually; it records the required target direction.
 
 ### A one-off parameter override is ignored
 

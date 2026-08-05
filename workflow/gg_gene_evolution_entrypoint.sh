@@ -82,6 +82,16 @@ gg_entrypoint_name="gg_gene_evolution_entrypoint.sh"
 mode_gene_evolution="${mode_gene_evolution:-query2family}" # query2family|orthogroup; query2family starts from query gene IDs or FASTA and retrieves homolog families, while orthogroup analyzes existing OrthoFinder orthogroups directly.
 gene_evolution_profile="${gene_evolution_profile:-default}" # default|hgt; hgt switches to orthogroup mode and enables HGT-oriented defaults for UniProt annotation, GeneRax DTL reconciliation, GFF/expression/intron evidence, and tree plotting.
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode is partial and deactivates CDS-only analyses.
+gene_family_output_storage="${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}" # zip|files|raw; raw aliases files, while zip transparently archives family artifacts.
+gene_family_zip_min_batch_files="${gene_family_zip_min_batch_files:-${GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES:-100}}" # Minimum completed live files per subdirectory before an array task creates a ZIP shard.
+gene_family_zip_compression="${gene_family_zip_compression:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION:-adaptive}}" # adaptive|deflate|store.
+gene_family_zip_compression_level="${gene_family_zip_compression_level:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL:-6}}" # Deflate level 0-9.
+gene_family_zip_workers="${gene_family_zip_workers:-${GG_COMMON_GENE_FAMILY_ZIP_WORKERS:-1}}" # Concurrent ZIP writers, capped at 4.
+gene_family_final_zip_max_bytes="${gene_family_final_zip_max_bytes:-${GG_COMMON_GENE_FAMILY_FINAL_ZIP_MAX_BYTES:-0}}" # 0 permits one final ZIP of any size; a positive byte limit retains human-readable part ZIPs for larger subdirectories.
+gene_family_tmp_retention_days="${gene_family_tmp_retention_days:-${GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS:-7}}" # Failed task directories below the active output root's tmp directory are removed after this many days when their family lock is idle; 0 disables the age limit.
+gene_family_tmp_max_dirs="${gene_family_tmp_max_dirs:-${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:-100}}" # Maximum failed task directories retained below the active output root; oldest excess directories are removed and 0 disables the count limit.
+gene_family_tmp_max_bytes="${gene_family_tmp_max_bytes:-${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:-107374182400}}" # Maximum bytes retained across inactive failed task directories; 0 disables the byte limit.
+gene_family_tmp_max_files="${gene_family_tmp_max_files:-${GG_COMMON_GENE_FAMILY_TMP_MAX_FILES:-100000}}" # Maximum files retained across inactive failed task directories; 0 disables the file-count limit.
 
 # Query2family workflow flags
 run_extract_query_fasta=1 # Activated if mode_gene_evolution=query2family. Generate amino acid fasta file for query BLAST.

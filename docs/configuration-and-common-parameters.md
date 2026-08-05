@@ -75,8 +75,40 @@ when a parameter intentionally needs to be cleared.
 - `GG_COMMON_SPECIES_LABEL_PARSER` (default `taxonomic`)
 - `GG_COMMON_SPECIES_LABEL_REGEX` (default empty)
 - `GG_COMMON_SPECIES_LABEL_MAP_TSV` (default empty)
+- `GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE` (default `zip`; `zip`, `files`, or the `raw` alias for `files`)
+- `GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES` (default `100`)
+- `GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION` (default `adaptive`; `adaptive`, `deflate`, or `store`)
+- `GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL` (default `6`; `0` through `9`)
+- `GG_COMMON_GENE_FAMILY_ZIP_WORKERS` (default `1`; `1` through `4`)
+- `GG_COMMON_GENE_FAMILY_LARGE_ZIP_WARNING_BYTES` (default `21474836480`, 20 GiB; `0` disables conversion-report warnings)
+- `GG_COMMON_GENE_FAMILY_FINAL_ZIP_MAX_BYTES` (default `0`, a final ZIP may have any size; a positive value retains named part ZIPs above that logical size)
+- `GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS` (default `7`; `0` disables the age limit)
+- `GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS` (default `100`; `0` disables the failed-directory count limit)
+- `GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES` (default `107374182400`, 100 GiB; `0` disables the byte limit)
+- `GG_COMMON_GENE_FAMILY_TMP_MAX_FILES` (default `100000`; `0` disables the file-count limit)
+- `GG_COMMON_SPECIES_TREE_OUTPUT_STORAGE` (default `zip`; `zip`, `files`, or the `raw` alias for `files`)
+- `GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION` (default `adaptive`; `adaptive`, `deflate`, or `store`)
+- `GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION_LEVEL` (default `6`; `0` through `9`)
 
 These are intended for values that recur across multiple stages.
+
+The gene-family storage setting applies to query2family and orthogroup
+artifacts only. ZIP mode leaves eligible artifacts in standard ZIP shards
+while downstream summaries and selected consumers use a logical live-plus-ZIP
+view. `files` and its `raw` alias keep the previous one-file-per-artifact behavior.
+Failed-task work directories remain below each gene-family output root rather
+than using a node-wide system temporary directory. In ZIP mode, cleanup runs
+only for families whose family lock is idle and removes task directories
+older than the configured retention period. It also enforces directory,
+aggregate-byte, and file-count limits while preferentially retaining the
+newest failed-task directories, so a burst of failures is bounded without
+blocking cleanup for unrelated active families.
+
+The species-tree storage setting applies only to the five high-file-count
+single-copy stage directories documented in
+`docs/species-tree-stage-zip-storage.md`. Small summary, concatenated-tree,
+ASTRAL, and MCMCTree directories remain directly visible for cross-workflow
+consumers.
 
 For BUSCO, `GG_COMMON_BUSCO_LINEAGE=auto` resolves a dataset from species names.
 For single-species stages, GeneGalleon picks the deepest BUSCO dataset mapped to that species.

@@ -4,7 +4,21 @@ GeneGalleon is intentionally gzip-friendly. Current practice is:
 
 - inputs may be plain or gzipped,
 - retained pipeline outputs are standardized toward `.fa.gz`,
-- plain FASTA is generated only when an intermediate third-party step requires it.
+- plain FASTA is generated only when an intermediate third-party step requires it,
+- query2family and orthogroup artifacts may be grouped into standard
+  ZIP shards to reduce filesystem inode usage.
+
+Gzip and ZIP serve different purposes here. Gzip remains the retained format
+for an individual FASTA. ZIP-backed gene-family storage groups many otherwise
+independent artifacts and presents them through a logical file view. Already
+compressed members such as `.fa.gz`, `.pdf`, and nested `.zip` files are stored
+without redundant recompression.
+
+Set `GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE=files` (or its `raw` alias) in
+`workflow/gg_common_params.sh` to retain the historical physical-file layout,
+or leave the default `zip`. See
+[Gene-Family Outputs and Progress Monitoring](gene-family-outputs-and-progress-monitoring.md#zip-backed-storage)
+for archive scope and manual-management commands.
 
 ## Accepted input forms
 

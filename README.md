@@ -57,6 +57,8 @@ Detailed guides are split by topic:
 - [Execution Model](docs/execution-model.md)
 - [Common Workflow Recipes](docs/common-workflow-recipes.md)
 - [Gene-Family Outputs and Progress Monitoring](docs/gene-family-outputs-and-progress-monitoring.md)
+- [Species-Tree Stage ZIP Storage](docs/species-tree-stage-zip-storage.md)
+- [Migrating Legacy Unzipped Workspaces to ZIP Storage (audit, conversion, and rollback)](docs/workspace-storage-management.md)
 - [Example Plots](docs/example-plots.md)
 - [Container Build and Runtime](docs/container-build-and-runtime.md)
 - [Workspace Layout and Data Model](docs/workspace-layout-and-data-model.md)

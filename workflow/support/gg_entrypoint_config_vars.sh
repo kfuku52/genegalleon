@@ -83,6 +83,16 @@ fimo_qvalue
 generax_model
 generax_rec_model
 gene_evolution_profile
+gene_family_output_storage
+gene_family_tmp_max_dirs
+gene_family_tmp_max_bytes
+gene_family_tmp_max_files
+gene_family_tmp_retention_days
+gene_family_zip_min_batch_files
+gene_family_zip_compression
+gene_family_zip_compression_level
+gene_family_zip_workers
+gene_family_final_zip_max_bytes
 input_sequence_mode
 intron_gain_rate
 iqtree_fast_mode_gt
@@ -286,6 +296,9 @@ run_go_enrichment
 species_label_parser
 species_label_regex
 species_label_map_tsv
+species_tree_output_storage
+species_tree_zip_compression
+species_tree_zip_compression_level
 species_tree_rooting
 strictly_single_copy_only
 target_branch_go
@@ -345,6 +358,15 @@ EOF
       ;;
     gg_progress_summary_entrypoint.sh)
       cat <<'EOF'
+gene_family_output_storage
+gene_family_zip_compression
+gene_family_zip_compression_level
+gene_family_zip_workers
+gene_family_final_zip_max_bytes
+gene_family_tmp_max_dirs
+gene_family_tmp_max_bytes
+gene_family_tmp_max_files
+gene_family_tmp_retention_days
 mode_transcriptome_assembly
 ncpu_progress_summary
 EOF

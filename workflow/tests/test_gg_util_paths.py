@@ -37,6 +37,29 @@ def test_forward_config_vars_trims_registry_whitespace_for_genome_evolution_entr
     ]
 
 
+def test_forward_config_vars_includes_species_tree_zip_options(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "species_tree_output_storage=files; "
+        "species_tree_zip_compression=store; "
+        "species_tree_zip_compression_level=0; "
+        "forward_config_vars_to_container_env gg_genome_evolution_entrypoint.sh; "
+        'printf "storage=%s\\ncompression=%s\\nlevel=%s\\n" '
+        '"${SINGULARITYENV_species_tree_output_storage:-}" '
+        '"${SINGULARITYENV_species_tree_zip_compression:-}" '
+        '"${SINGULARITYENV_species_tree_zip_compression_level:-}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "storage=files",
+        "compression=store",
+        "level=0",
+    ]
+
+
 def test_forward_config_vars_includes_gene_evolution_csubst_nonsyn_recode(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
@@ -613,13 +636,7 @@ def test_species_name_from_path_or_dot_preserves_taxonomic_qualifiers(tmp_path):
     ]
 
 
-def test_check_species_cds_accepts_transcriptome_longest_cds_for_genus_sp(tmp_path):
-    species_dir = tmp_path / "species_cds"
-    species_dir.mkdir()
-    fasta_path = species_dir / "Amphizonella_sp_longestCDS.fa.gz"
-    with gzip.open(fasta_path, "wt", encoding="utf-8") as handle:
-        handle.write(">Amphizonella_sp_g0\nATG\n>Amphizonella_sp_g1\nATG\n")
-
+def test_check_species_sequences_accept_transcriptome_longest_cds_for_genus_sp(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     seqkit = bin_dir / "seqkit"
@@ -632,16 +649,35 @@ def test_check_species_cds_accepts_transcriptome_longest_cds_for_genus_sp(tmp_pa
     )
     seqkit.chmod(0o755)
 
-    command = (
-        f"export PATH={shlex.quote(str(bin_dir))}:$PATH; "
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        "GG_TASK_CPUS=1; "
-        f"check_species_cds_dir {shlex.quote(str(species_dir))}"
+    cases = (
+        ("species_cds", "check_species_cds_dir", "ATG", "All per-species CDS files are valid."),
+        (
+            "species_protein",
+            "check_species_protein_dir",
+            "MPEP",
+            "All per-species protein files are valid.",
+        ),
     )
-    completed = run_bash(command, cwd=tmp_path)
+    for directory_name, validator, sequence, success_message in cases:
+        species_dir = tmp_path / directory_name
+        species_dir.mkdir()
+        fasta_path = species_dir / "Amphizonella_sp_longestCDS.fa.gz"
+        with gzip.open(fasta_path, "wt", encoding="utf-8") as handle:
+            handle.write(
+                f">Amphizonella_sp_g0\n{sequence}\n"
+                f">Amphizonella_sp_g1\n{sequence}\n"
+            )
 
-    assert completed.returncode == 0, completed.stderr + completed.stdout
-    assert "All per-species CDS files are valid." in completed.stdout
+        command = (
+            f"export PATH={shlex.quote(str(bin_dir))}:$PATH; "
+            f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+            "GG_TASK_CPUS=1; "
+            f"{validator} {shlex.quote(str(species_dir))}"
+        )
+        completed = run_bash(command, cwd=tmp_path)
+
+        assert completed.returncode == 0, completed.stderr + completed.stdout
+        assert success_message in completed.stdout
 
 
 def test_fasta_relabel_headers_to_species_preserves_taxonomic_qualifiers(tmp_path):

@@ -8,6 +8,8 @@ from pathlib import Path
 import pandas
 import pytest
 
+from workflow.support.gene_family_output_store import archive_completed_outputs, family_context
+
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "generate_orthogroup_database.py"
 
 
@@ -215,6 +217,72 @@ def test_database_builder_adds_aa_change_tables_and_global_fdr(tmp_path):
     assert aa_df["q_rate_enrichment_empirical_by_trait_match"].tolist() == [0.05, 0.7]
     assert unit_df["orthogroup"].tolist() == ["OG0001", "OG0001"]
     assert unit_df["fg_clade_branch_ids"].tolist() == ["1,2", "3,4"]
+
+
+@pytest.mark.parametrize("legacy_layout", [False, True])
+def test_database_builder_reads_stat_tables_from_zip_shards(
+    tmp_path,
+    legacy_layout,
+):
+    root = tmp_path / "orthogroup"
+    family_id = "OG0001"
+    genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    genecount.write_text("Orthogroup\tTotal\nOG0001\t1\n", encoding="utf-8")
+    stat_tree_subdir = "stat.tree" if legacy_layout else "stat_tree"
+    stat_branch_subdir = "stat.branch" if legacy_layout else "stat_branch"
+    for subdir, frame in (
+        (stat_tree_subdir, stat_tree_frame(tree_metric=1.25)),
+        (stat_branch_subdir, stat_branch_frame(branch_id=1, branch_metric=2.5)),
+        ("tree_plot", None),
+    ):
+        suffix = {
+            stat_tree_subdir: (
+                ".stat.tree.tsv" if legacy_layout else "_stat.tree.tsv"
+            ),
+            stat_branch_subdir: (
+                ".stat.branch.tsv" if legacy_layout else "_stat.branch.tsv"
+            ),
+            "tree_plot": ".tree_plot.pdf" if legacy_layout else "_tree_plot.pdf",
+        }[subdir]
+        path = root / subdir / f"{family_id}{suffix}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if frame is None:
+            path.write_bytes(b"%PDF-test\n")
+        else:
+            frame.to_csv(path, sep="\t", index=False)
+    family_ids, family_from_name = family_context("orthogroup", genecount=genecount)
+    archive_completed_outputs(root, "orthogroup", family_ids, family_from_name)
+
+    db_path = root / "gg_orthogroup.db"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--overwrite",
+            "1",
+            "--dbpath",
+            str(db_path),
+            "--dir_gene_family",
+            str(root),
+            "--dir_stat_tree",
+            str(root / stat_tree_subdir),
+            "--dir_stat_branch",
+            str(root / stat_branch_subdir),
+            "--ncpu",
+            "1",
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert not (root / stat_tree_subdir).exists()
+    with sqlite3.connect(db_path) as conn:
+        tree = pandas.read_sql_query("SELECT orthogroup, tree_metric FROM tree", conn)
+        branch = pandas.read_sql_query("SELECT orthogroup, branch_metric FROM branch", conn)
+    assert tree.to_dict("records") == [{"orthogroup": family_id, "tree_metric": 1.25}]
+    assert branch.to_dict("records") == [{"orthogroup": family_id, "branch_metric": 2.5}]
 
 
 def test_database_builder_rejects_legacy_scan_schema_before_overwriting_database(tmp_path):

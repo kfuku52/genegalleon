@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import io
 import re
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from gene_family_output_store import GeneFamilyOutputStore
 from species_labeling import scientific_name_from_label
 
 STAT_BRANCH_SUFFIX = "_stat.branch.tsv"
@@ -74,13 +76,15 @@ def stat_branch_family_id(path):
 
 
 def visible_stat_branch_ids(dir_gene_family):
-    stat_branch_dir = Path(dir_gene_family) / "stat_branch"
-    if not stat_branch_dir.is_dir():
-        raise FileNotFoundError(f"stat_branch directory was not found: {stat_branch_dir}")
+    store = GeneFamilyOutputStore(dir_gene_family)
+    if "stat_branch" not in store.logical_subdirs():
+        raise FileNotFoundError(
+            f"Logical stat_branch output was not found under: {dir_gene_family}"
+        )
     return sorted(
-        stat_branch_family_id(path)
-        for path in stat_branch_dir.glob(f"*{STAT_BRANCH_SUFFIX}")
-        if path.is_file() and not path.name.startswith(".")
+        stat_branch_family_id(name)
+        for name in store.file_names("stat_branch")
+        if name.endswith(STAT_BRANCH_SUFFIX)
     )
 
 
@@ -149,30 +153,44 @@ def read_newick_tip_labels(path):
     return tips
 
 
-def read_stat_branch_copy_numbers(path):
+def _copy_numbers_from_handle(handle, label):
     counts = {}
-    stat_path = Path(path)
-    if not stat_path.is_file() or stat_path.stat().st_size == 0:
-        return counts
-
-    with stat_path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        fieldnames = reader.fieldnames or []
-        if "spnode_coverage" not in fieldnames:
-            raise ValueError(f"stat_branch is missing spnode_coverage: {stat_path}")
-        for row in reader:
-            is_tip = False
-            if row.get("so_event") == "L":
-                is_tip = True
-            elif row.get("num_leaf") == "1":
-                is_tip = True
-            if not is_tip:
-                continue
-            species = str(row.get("spnode_coverage") or "").strip()
-            if species == "":
-                continue
-            counts[species] = counts.get(species, 0) + 1
+    reader = csv.DictReader(handle, delimiter="\t")
+    fieldnames = reader.fieldnames or []
+    if "spnode_coverage" not in fieldnames:
+        raise ValueError(f"stat_branch is missing spnode_coverage: {label}")
+    for row in reader:
+        is_tip = False
+        if row.get("so_event") == "L":
+            is_tip = True
+        elif row.get("num_leaf") == "1":
+            is_tip = True
+        if not is_tip:
+            continue
+        species = str(row.get("spnode_coverage") or "").strip()
+        if species == "":
+            continue
+        counts[species] = counts.get(species, 0) + 1
     return counts
+
+
+def read_stat_branch_copy_numbers(path, store=None, family_id=None):
+    stat_path = Path(path)
+    if store is None:
+        if not stat_path.is_file() or stat_path.stat().st_size == 0:
+            return {}
+        with stat_path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+            return _copy_numbers_from_handle(handle, stat_path)
+
+    if family_id is None:
+        family_id = stat_branch_family_id(stat_path)
+    name = f"{family_id}{STAT_BRANCH_SUFFIX}"
+    artifact = store.artifact("stat_branch", name)
+    if artifact is None or artifact.size == 0:
+        return {}
+    with store.open_binary("stat_branch", name) as binary_handle:
+        with io.TextIOWrapper(binary_handle, encoding="utf-8", errors="replace", newline="") as handle:
+            return _copy_numbers_from_handle(handle, f"stat_branch/{name}")
 
 
 def build_species_aliases(species_order):
@@ -327,18 +345,25 @@ def build_matrices(mode, dir_gene_family, species_tree, dir_query_gene="", ortho
     if len(species_order) == 0:
         raise ValueError(f"No tip labels were detected in species tree: {species_tree}")
 
-    stat_branch_dir = Path(dir_gene_family) / "stat_branch"
-    if not stat_branch_dir.is_dir():
-        raise FileNotFoundError(f"{mode} stat_branch directory was not found: {stat_branch_dir}")
+    store = GeneFamilyOutputStore(dir_gene_family)
+    if "stat_branch" not in store.logical_subdirs():
+        raise FileNotFoundError(
+            f"{mode} logical stat_branch output was not found under: {dir_gene_family}"
+        )
 
     query_status = {}
     count_columns = {}
     unresolved_rows = []
     emitted_family_order = []
     for family_id in family_ids:
-        stat_branch = stat_branch_dir / f"{family_id}{STAT_BRANCH_SUFFIX}"
-        raw_counts = read_stat_branch_copy_numbers(stat_branch)
-        if stat_branch.is_file() and stat_branch.stat().st_size > 0:
+        stat_branch_name = f"{family_id}{STAT_BRANCH_SUFFIX}"
+        stat_branch = store.artifact("stat_branch", stat_branch_name)
+        raw_counts = read_stat_branch_copy_numbers(
+            Path(dir_gene_family) / "stat_branch" / stat_branch_name,
+            store=store,
+            family_id=family_id,
+        )
+        if stat_branch is not None and (stat_branch.size or 0) > 0:
             query_status[family_id] = "complete"
         else:
             query_status[family_id] = "missing_stat_branch"

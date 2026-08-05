@@ -129,6 +129,9 @@ protein_model="LG+R4" # IQ-TREE protein substitution model.
 notung_jar="/usr/local/bin/Notung.jar" # Path to the Notung JAR used for rooting.
 
 # Species-tree parameters
+species_tree_output_storage="${species_tree_output_storage:-${GG_COMMON_SPECIES_TREE_OUTPUT_STORAGE:-zip}}" # zip|files|raw; ZIP mode archives high-file-count single-copy stage directories between uses.
+species_tree_zip_compression="${species_tree_zip_compression:-${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION:-adaptive}}" # adaptive|deflate|store.
+species_tree_zip_compression_level="${species_tree_zip_compression_level:-${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION_LEVEL:-6}}" # Deflate level 0-9.
 undated_species_tree="astral_pep" # {iqtree_dna,iqtree_pep,astral_dna,astral_pep}; species-tree source copied to undated_species_tree.nwk for dating and downstream summaries.
 species_tree_rooting="taxonomy" # taxonomy[,ncbi[,opentree,timetree...]] | outgroup,GENUS_SPECIES[,GENUS_SPECIES...] | midpoint | mad | mv; selects how species trees are rooted before dating, using taxonomy providers, explicit outgroups, or topology/branch-length rooting methods.
 astral_min_tips=4 # Minimum tip count required for per-gene trees used by ASTRAL.
