@@ -133,6 +133,11 @@ Verify the checksum before renaming the transferred file to
 `genegalleon.sif`. See the [SHIROKANE AGE Guide](shirokane-age.md) for the
 complete commands.
 
+On supported HPC environments, the normal workflow entrypoints apply automatic
+site runtime setup, including module loading or versioned container-runtime
+discovery. See [Site Runtime Profiles](site-runtime-profiles.md); separate
+site-specific workflow wrappers are not required.
+
 ### Run wrappers against a Docker image directly
 
 This opt-in mode keeps the existing `gg_*_entrypoint.sh` interface but swaps the

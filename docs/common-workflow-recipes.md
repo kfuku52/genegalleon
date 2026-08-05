@@ -55,6 +55,11 @@ Useful outputs to inspect afterward:
 - `workspace/output/input_generation/gg_input_generation_species.tsv`
 - `workspace/output/input_generation/annotation_summary/annotation_summary.tsv`
 
+When both CDS and GFF are available for a species, also inspect the adjacent
+`*.fa.gz.gff-grouping.tsv` audit and the `cds_gff_*` columns in
+`gg_input_generation_species.tsv` before promoting formatted inputs into a
+project workspace.
+
 Wrapper note:
 
 - `provider=refseq` and `provider=genbank` are accepted by the wrapper as aliases of `ncbi`.
@@ -170,9 +175,9 @@ orthogroup copy-number trait PGLS stage from the genome-evolution wrapper:
 
 ```bash
 cd workflow
-run_cafe=0 \
-run_orthogroup_copy_number_trait_pgls=1 \
-orthogroup_copy_number_trait="all" \
+GG_GENOME_EVOLUTION_RUN_CAFE=0 \
+GG_GENOME_EVOLUTION_RUN_ORTHOGROUP_COPY_NUMBER_TRAIT_PGLS=1 \
+GG_GENOME_EVOLUTION_ORTHOGROUP_COPY_NUMBER_TRAIT="all" \
 bash gg_genome_evolution_entrypoint.sh
 ```
 
@@ -219,22 +224,19 @@ For concrete query-file examples and the resulting per-family output layout, see
 
 This mode depends on prior orthogroup selection output from `gg_genome_evolution_entrypoint.sh`.
 
-Edit the top block of `workflow/gg_gene_evolution_entrypoint.sh` so that:
-
-```bash
-mode_gene_evolution="orthogroup"
-```
-
-Then run:
+Set the mode persistently in the entrypoint's top block, or override it for one
+run:
 
 ```bash
 cd workflow
+GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION=orthogroup \
 bash gg_gene_evolution_entrypoint.sh
 ```
 
 Important note:
 
-- unlike input generation, this wrapper does not expose a dedicated host-side `GG_*` override map for these mode toggles, so changing the top block is the supported route.
+- scoped environment variables are intended for one-off runs; edit the top
+  config block when the mode is part of the persistent project configuration.
 
 ## 8. Build the orthogroup SQLite database
 
@@ -242,7 +244,10 @@ After orthogroup-mode downstream outputs exist:
 
 ```bash
 cd workflow
-gene_family_source=orthogroup run_gene_family_database_build=1 run_csubst_scan_aa_change_summary=1 bash gg_gene_summary_entrypoint.sh
+GG_GENE_SUMMARY_GENE_FAMILY_SOURCE=orthogroup \
+GG_GENE_SUMMARY_RUN_GENE_FAMILY_DATABASE_BUILD=1 \
+GG_GENE_SUMMARY_RUN_CSUBST_SCAN_AA_CHANGE_SUMMARY=1 \
+bash gg_gene_summary_entrypoint.sh
 ```
 
 Required inputs:
@@ -260,7 +265,10 @@ For query2family outputs, switch the gene-family source:
 
 ```bash
 cd workflow
-gene_family_source=query2family run_gene_family_database_build=1 run_csubst_scan_aa_change_summary=1 bash gg_gene_summary_entrypoint.sh
+GG_GENE_SUMMARY_GENE_FAMILY_SOURCE=query2family \
+GG_GENE_SUMMARY_RUN_GENE_FAMILY_DATABASE_BUILD=1 \
+GG_GENE_SUMMARY_RUN_CSUBST_SCAN_AA_CHANGE_SUMMARY=1 \
+bash gg_gene_summary_entrypoint.sh
 ```
 
 ## 9. Run site-level convergence analysis
@@ -269,7 +277,9 @@ After orthogroup outputs and the database are available:
 
 ```bash
 cd workflow
-gene_family_source=orthogroup run_csubst_site_convergence_summary=1 bash gg_gene_summary_entrypoint.sh
+GG_GENE_SUMMARY_GENE_FAMILY_SOURCE=orthogroup \
+GG_GENE_SUMMARY_RUN_CSUBST_SITE_CONVERGENCE_SUMMARY=1 \
+bash gg_gene_summary_entrypoint.sh
 ```
 
 Default prerequisites:
@@ -291,7 +301,8 @@ To combine query2family outputs into a species-tree presence/absence summary:
 
 ```bash
 cd workflow
-gene_family_source=query2family bash gg_gene_summary_entrypoint.sh
+GG_GENE_SUMMARY_GENE_FAMILY_SOURCE=query2family \
+bash gg_gene_summary_entrypoint.sh
 ```
 
 Main output root:
@@ -302,7 +313,8 @@ For orthogroups, switch the mode:
 
 ```bash
 cd workflow
-gene_family_source=orthogroup bash gg_gene_summary_entrypoint.sh
+GG_GENE_SUMMARY_GENE_FAMILY_SOURCE=orthogroup \
+bash gg_gene_summary_entrypoint.sh
 ```
 
 The PDF/SVG figure combines the species tree with the gene-family

@@ -96,13 +96,19 @@ These wrappers are intended to run as one task:
 
 ## Site-specific behavior
 
-`workflow/support/gg_site_runtime.sh` can apply site-aware behavior such as:
+`workflow/support/gg_site_runtime.sh` automatically selects a site profile and
+can apply behavior such as:
 
 - changing into `PBS_O_WORKDIR`,
 - adding site-specific container bind mounts,
 - selecting a modified container shell command.
 
 That logic is automatic; you do not normally need to edit scheduler headers just to get the runtime bindings right.
+
+Current profiles cover SHIROKANE, the National Institute of Genetics, NHR@FAU,
+and a default fallback. See [Site Runtime Profiles](site-runtime-profiles.md)
+for detection and runtime details. `GG_SITE_PROFILE` can force a profile when
+automatic hostname detection is not appropriate.
 
 The SHIROKANE profile also initializes Environment Modules and loads
 `apptainer` on AGE compute nodes. The login node is used for submission and

@@ -85,6 +85,9 @@ This is the main results area. Major stage roots include:
 from `gg_input_generation_entrypoint.sh`. When taxonomy metadata is available, it includes per-species
 `taxid` plus nuclear, mitochondrial, and plastid genetic-code columns. It also records the GFF repair
 mode/status, audit path, repaired gene/reference counts, and unresolved ambiguity/collision counts.
+When provided CDS and GFF files are grouped together, it records the grouping
+mode/source, the adjacent `*.gff-grouping.tsv` audit path, mapped/unmapped/
+ambiguous CDS counts, and coordinate-rescue counts.
 Formatted source GFF files may have neighboring `*.gff.gz.repair.json` audit files; raw downloaded GFF
 files remain unchanged.
 

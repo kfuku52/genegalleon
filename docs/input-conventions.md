@@ -246,8 +246,9 @@ Manual formatting can be replaced with `workflow/support/format_species_inputs.p
 split by responsibility across `format_species_taxonomy.py`,
 `format_species_annotations.py`, `format_species_provider_resolvers.py`,
 `format_species_download_runtime.py`, `format_species_discovery.py`, and
-`format_species_summary.py`. Provider-specific ID resolution uses the common
-`ProviderIdResolver` interface and registry.
+`format_species_summary.py`, with annotation grouping and GFF repair implemented
+under `format_species_annotation/`. Provider-specific ID resolution uses the
+common `ProviderIdResolver` interface and registry.
 
 Example (single provider, explicit input directory):
 
@@ -276,6 +277,16 @@ Notes:
 - formatted GFF outputs are always gzipped with `.gff.gz` extension,
 - CDS IDs are normalized into the required `GENUS_SPECIES_GENEID` pattern and
   aggregated to one representative CDS per gene,
+- when provided CDS and GFF files are both available, CDS headers are resolved
+  through GFF/GTF feature IDs, aliases, and parent relationships before the
+  longest CDS per gene is selected; unmapped or ambiguous records fall back to
+  header grouping unless input-generation `strict=1`,
+- `--gene-grouping-mode rescue_overlap` (the entrypoint default) merges only
+  compatible overlapping/fragmented models that do not cross strands or
+  authoritative locus boundaries; `strict` keeps provider model boundaries,
+- GFF-backed CDS grouping writes `*.fa.gz.gff-grouping.json` and
+  `*.fa.gz.gff-grouping.tsv` audit files beside the formatted CDS, including
+  mapping status and the selected representative for every input record,
 - common historical replacements are applied to CDS/GFF text,
 - CDS are padded to codon-length multiples and transcript-level redundancies are collapsed at gene level.
 - formatted GFF gene IDs are conservatively repaired against the final CDS IDs by default
@@ -488,6 +499,8 @@ Alternative runtime overrides (without editing files) via env vars:
 - `GG_INPUT_PROVIDER`, `GG_INPUT_STRICT`, `GG_INPUT_OVERWRITE`,
 - `GG_INPUT_DOWNLOAD_ONLY`, `GG_INPUT_DRY_RUN`,
 - `GG_INPUT_DOWNLOAD_TIMEOUT`,
+- `GG_INPUT_GENE_GROUPING_MODE` (`strict` or `rescue_overlap`; default
+  `rescue_overlap`),
 - `GG_INPUT_GFF_REPAIR_MODE` (`off`, `safe`, or `strict`; default `safe`),
 - `GG_INPUT_DOWNLOAD_MANIFEST`, `GG_INPUT_INPUT_DIR`, `GG_INPUT_DOWNLOAD_DIR`,
 - `GG_INPUT_SPECIES_CDS_DIR`, `GG_INPUT_SPECIES_GFF_DIR`, `GG_INPUT_SPECIES_GENOME_DIR`,

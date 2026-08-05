@@ -2,7 +2,8 @@
 
 ## Routine configuration
 
-For normal use, edit the top config block in each `workflow/gg_*_entrypoint.sh`:
+For a persistent project configuration, edit the top config block in each
+`workflow/gg_*_entrypoint.sh`:
 
 ```bash
 ### Start: Modify this block to tailor your analysis ###
@@ -18,7 +19,9 @@ That is the supported place for stage toggles such as:
 - tool selections,
 - output-control flags such as temporary-directory cleanup.
 
-`workflow/core/gg_*_core.sh` files contain the implementation and should usually not be edited for per-run parameter changes.
+For one-off runs, use the entrypoint-scoped environment overrides described
+below. `workflow/core/gg_*_core.sh` files contain the implementation and should
+not be edited for routine parameter changes.
 
 ## How values are forwarded
 
@@ -26,7 +29,8 @@ Entry-point variables are not forwarded implicitly by name. GeneGalleon uses an 
 
 - `workflow/support/gg_entrypoint_config_vars.sh`
 
-Only variables listed there are exported into the container runtime by `forward_config_vars_to_container_env`.
+Only variables listed there are eligible for scoped environment overrides and
+exported into the container runtime by `forward_config_vars_to_container_env`.
 
 This has two practical consequences:
 
@@ -35,18 +39,29 @@ This has two practical consequences:
 
 ## Configuration precedence
 
-The effective value seen by a core script usually comes from this order:
+The effective value seen by a core script usually follows this precedence,
+from highest to lowest:
 
-1. entrypoint config block values that are forwarded into the container,
-2. stage-specific override helpers such as `GG_INPUT_*` in `gg_input_generation_entrypoint.sh`,
-3. shared `GG_COMMON_*` variables,
-4. hard-coded fallback values inside core scripts.
+1. an entrypoint-scoped environment override,
+2. the entrypoint config block, including any `GG_COMMON_*` value referenced by
+   that block,
+3. a hard-coded fallback inside the core script.
 
-Important note:
+All main entrypoints support scoped overrides. The prefix identifies the
+entrypoint, and the registered variable name is converted to uppercase:
 
-- `gg_input_generation_entrypoint.sh` has a dedicated host-side override layer using `GG_INPUT_*`.
-- other entrypoints do not currently expose a generic `GG_*` override map for all top-block variables.
-- for those wrappers, routine changes should be made by editing the top block or maintaining a local wrapper copy.
+- `GG_INPUT_`
+- `GG_TRANSCRIPTOME_`
+- `GG_GENOME_ANNOTATION_`
+- `GG_GENOME_EVOLUTION_`
+- `GG_GENE_EVOLUTION_`
+- `GG_GENE_SUMMARY_`
+- `GG_PROGRESS_SUMMARY_`
+
+For example, `run_cafe` in `gg_genome_evolution_entrypoint.sh` becomes
+`GG_GENOME_EVOLUTION_RUN_CAFE`, while `mode_gene_evolution` becomes
+`GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION`. Empty override values are supported
+when a parameter intentionally needs to be cleared.
 
 ## Shared common parameter file
 
@@ -207,9 +222,21 @@ The effective CDS-to-protein code priority there is:
 
 ## Entry-point override patterns
 
-### Dedicated override map: input generation
+Every main entrypoint applies its scoped overrides after loading the editable
+config block. Examples include:
 
-`gg_input_generation_entrypoint.sh` explicitly supports host-side overrides such as:
+```bash
+GG_GENOME_EVOLUTION_RUN_CAFE=1 \
+GG_GENOME_EVOLUTION_RUN_ORTHOGROUP_COPY_NUMBER_TRAIT_PGLS=1 \
+bash workflow/gg_genome_evolution_entrypoint.sh
+```
+
+```bash
+GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION=orthogroup \
+bash workflow/gg_gene_evolution_entrypoint.sh
+```
+
+Input generation uses the shorter `GG_INPUT_` prefix. Common overrides include:
 
 - `GG_INPUT_PROVIDER`
 - `GG_INPUT_DOWNLOAD_MANIFEST`
@@ -217,6 +244,8 @@ The effective CDS-to-protein code priority there is:
 - `GG_INPUT_RUN_MULTISPECIES_SUMMARY`
 - `GG_INPUT_RUN_GENERATE_SPECIES_TRAIT`
 - `GG_INPUT_TRAIT_PROFILE`
+- `GG_INPUT_GENE_GROUPING_MODE`
+- `GG_INPUT_GFF_REPAIR_MODE`
 - `GG_INPUT_SPECIES_CDS_DIR`
 - `GG_INPUT_SPECIES_GFF_DIR`
 - `GG_INPUT_SPECIES_GENOME_DIR`
@@ -266,9 +295,9 @@ reserved for SIF-based runs; use `GG_CONTAINER_DOCKER_IMAGE` for the Docker imag
 Use the following split in practice:
 
 - stage-local flags in the entrypoint block,
+- one-off stage-local changes via the matching entrypoint-scoped prefix,
 - cross-stage defaults in `workflow/gg_common_params.sh`,
 - species-tree rooting in `workflow/gg_genome_evolution_entrypoint.sh` via `species_tree_rooting`,
-- one-off input-generation automation via `GG_INPUT_*`,
 - path relocation via `gg_workspace_dir` / `gg_container_image_path`,
 - direct Docker wrapper runs via `GG_CONTAINER_RUNTIME=docker` plus `GG_CONTAINER_DOCKER_IMAGE`.
 

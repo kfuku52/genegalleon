@@ -28,9 +28,18 @@ Symptom:
 
 What to check:
 
-- confirm the cluster login environment actually exposes the runtime,
+- confirm the compute-node environment exposes the runtime; some sites do not
+  make it available on login nodes,
+- inspect the startup `site profile` line and set `GG_SITE_PROFILE` explicitly
+  if automatic detection selected the wrong profile,
 - if your site uses a module system, load the container runtime before launching,
-- if you are on macOS, note that SIF creation is normally skipped by default and many runs are expected to happen on Linux hosts.
+- on NIG, the site profile searches versioned Apptainer/Singularity packages
+  under `/opt/pkg` and then the legacy package path,
+- if you are on macOS, build and validate with the Docker-backed GeneGalleon
+  runtime instead of treating host-local results as authoritative.
+
+See [Site Runtime Profiles](site-runtime-profiles.md) for the recognized
+environments.
 
 ### `genegalleon.sif` missing
 
@@ -113,6 +122,24 @@ Examples:
 
 - `gg_gene_summary_entrypoint.sh` skips database generation if `stat_tree/` or `stat_branch/` is missing,
 - `gg_progress_summary_core.sh` skips orthogroup summary generation if the selected gene-count table or AMAS directories are absent.
+
+### A one-off parameter override is ignored
+
+Symptom:
+
+- an inline environment value does not change the effective entrypoint config.
+
+What to check:
+
+- use the entrypoint-scoped prefix rather than the raw shell variable name,
+  for example `GG_GENOME_EVOLUTION_RUN_CAFE=1` or
+  `GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION=orthogroup`,
+- confirm that the parameter is registered in
+  `workflow/support/gg_entrypoint_config_vars.sh`,
+- inspect the effective config summary in the job log.
+
+See [Configuration and Common Parameters](configuration-and-common-parameters.md)
+for the complete prefix scheme.
 
 ### Taxonomy or database cache issues
 

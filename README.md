@@ -3,7 +3,7 @@
 ![GeneGalleon logo](logo/logo.png)
 
 GeneGalleon is a container-first comparative genomics and phylogenomics workflow suite.
-It provides shell-based staged pipelines for:
+It provides scheduler-ready staged pipelines for:
 
 - transcriptome assembly and expression quantification,
 - CDS/genome annotation and contamination filtering,
@@ -13,76 +13,41 @@ It provides shell-based staged pipelines for:
 - genome-evolution downstream analyses,
 - orthogroup database generation.
 
-The repository is designed for scheduler execution (SLURM/UGE/PBS) with Singularity/Apptainer wrappers, while still allowing local runs for development and debugging.
+The same entrypoints run through SLURM, UGE, PBS, or directly with Bash.
 
 ## Quick Start
 
-The fastest way to try GeneGalleon is to run
-`gg_gene_evolution_entrypoint.sh` against the bundled test data in the default
-`workspace/`.
-
-### 1. Prepare the container image
-
-Apptainer/Singularity workflow examples (these create `./genegalleon.sif`):
+Prepare either a repo-root SIF or a pulled Docker image, then run the bundled
+query2family example:
 
 ```bash
-# Build repo-root ./genegalleon.sif from the published GHCR image
+# Linux/HPC with Apptainer or Singularity
 IMAGE_SOURCE=public IMAGE=ghcr.io/kfuku52/genegalleon TAG=latest bash ./gg_container_build_entrypoint.sh
 
-# Build repo-root ./genegalleon.sif from this repository
-IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
-```
-
-Docker workflow examples (these do not create `./genegalleon.sif`):
-
-```bash
-# Docker image only: pull the published GHCR image (does not create ./genegalleon.sif)
+# Docker-only host
 docker pull ghcr.io/kfuku52/genegalleon:latest
 
-# Docker image only: build a local Docker image from this repository
-IMAGE_SOURCE=local BUILD_SIF=0 IMAGE=local/genegalleon TAG=dev MODE=load bash ./gg_container_build_entrypoint.sh
-```
-
-The quick start in Step 2 expects `./genegalleon.sif`, so use one of the first
-two wrapper commands above. Bare `apptainer build genegalleon.sif docker://...`
-follows your current working directory; `gg_container_build_entrypoint.sh`
-pins the default output to the repository root.
-
-If you only have a Docker image and want to run the workflow wrappers without a
-local `./genegalleon.sif`, pull the published image and launch the wrapper.
-When `./genegalleon.sif` is missing, wrappers now auto-fallback to the pulled
-Docker image:
-
-```bash
-docker pull ghcr.io/kfuku52/genegalleon:latest
-bash workflow/gg_gene_evolution_entrypoint.sh
-```
-
-You can still force Docker-backed wrapper mode explicitly with
-`GG_CONTAINER_RUNTIME=docker` and `GG_CONTAINER_DOCKER_IMAGE=<image:tag>`.
-
-### 2. Run the bundled quick start
-
-```bash
 cd workflow
 bash gg_gene_evolution_entrypoint.sh
 ```
 
-This writes results under:
+This writes results under `workspace/output/query2family`. Docker-only,
+local-build, HPC, and reproducible-tag options are covered in
+[Container Build and Runtime](docs/container-build-and-runtime.md) and
+[Common Workflow Recipes](docs/common-workflow-recipes.md).
 
-- `workspace/output/query2family`
-- `workspace/downloads`
+## Updating with an AI agent
 
-Example query2family tree plot:
+To update GeneGalleon without losing project settings, use:
 
-![Query2family tree plot example](docs/assets/example-plots/query2family-tree-plot.png)
-
-Example gene-family presence/absence summary:
-
-![Gene-family presence/absence example](docs/assets/example-plots/query2family-presence-absence.png)
-
-More generated examples are collected in
-[Example Plots](docs/example-plots.md).
+> Update GeneGalleon to the latest `origin/main`. Preserve all project-specific
+> parameter values, scheduler settings, workspace inputs, and other local
+> changes. Integrate upstream changes into the current configuration instead of
+> replacing customized files wholesale. If a parameter was renamed or removed,
+> migrate it appropriately or ask before proceeding. Do not use destructive Git
+> commands or delete workspace data. Follow `AGENTS.md`, validate the updated
+> version in a GeneGalleon container, and summarize the preserved settings,
+> version change, and test results.
 
 ## Documentation
 
@@ -98,8 +63,10 @@ Detailed guides are split by topic:
 - [Input Conventions](docs/input-conventions.md)
 - [Main Stages and What They Do](docs/main-stages-and-what-they-do.md)
 - [Scheduler and Array Semantics](docs/scheduler-and-array-semantics.md)
+- [Site Runtime Profiles](docs/site-runtime-profiles.md)
 - [SHIROKANE AGE Guide](docs/shirokane-age.md)
 - [Configuration and Common Parameters](docs/configuration-and-common-parameters.md)
+- [HGT Detection Research](docs/hgt-detection-research.md)
 - [Compression and FASTA Handling Policy](docs/compression-and-fasta-handling-policy.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Development and Tests](docs/development-and-tests.md)

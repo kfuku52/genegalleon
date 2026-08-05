@@ -79,6 +79,9 @@ Those are populated from SLURM/PBS/UGE values when available and then forwarded 
 - binds the workspace root to `/workspace`,
 - binds the workflow root to `/script`,
 - forwards shared `GG_COMMON_*` variables,
+- applies entrypoint-scoped environment overrides such as
+  `GG_GENOME_EVOLUTION_RUN_CAFE` or
+  `GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION`,
 - forwards entrypoint-specific config variables that are registered in `workflow/support/gg_entrypoint_config_vars.sh`,
 - prints a scheduler/runtime summary for debugging.
 
@@ -87,6 +90,9 @@ Site adapters in `workflow/support/gg_site_runtime.sh` can also add extra bind m
 - bind scheduler spool directories,
 - inject site-specific `PATH` entries,
 - change the container shell command to include options such as `--contain`.
+
+See [Site Runtime Profiles](site-runtime-profiles.md) for the currently
+recognized environments and the `GG_SITE_PROFILE` override.
 
 ## Core script bootstrap
 
@@ -119,6 +125,11 @@ That block is the supported place for:
 - selecting modes,
 - changing stage-specific thresholds,
 - switching tools such as `blastp` vs `mmseqs2`.
+
+For one-off changes, use the entrypoint-scoped prefix documented in
+[Configuration and Common Parameters](configuration-and-common-parameters.md).
+Scoped overrides are applied after the editable block and only to variables in
+the explicit config registry.
 
 `workflow/core/gg_*_core.sh` files are the implementation layer and are not the primary place for routine parameter tuning.
 

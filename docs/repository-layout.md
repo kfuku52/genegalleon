@@ -105,6 +105,7 @@ Use this rough rule:
 - stage logic and orchestration: `workflow/core/gg_*_core.sh`
 - shared runtime/path compatibility entry point: `workflow/support/gg_util.sh`
 - shared runtime/path implementation modules: `workflow/support/gg_util/`
+- scheduler and HPC site adaptation: `workflow/support/gg_site_runtime.sh`
 - input-format compatibility façades: `workflow/support/format_species_annotations.py`,
   `workflow/support/format_species_download_runtime.py`, and
   `workflow/support/format_species_provider_resolvers.py`

@@ -30,6 +30,13 @@ Notable defaults:
 - `run_species_busco=1` runs BUSCO on formatted CDS inputs by default,
 - `run_multispecies_summary=1` generates BUSCO plots and `annotation_summary.tsv` under `workspace/output/input_generation/annotation_summary/`,
 - formatted outputs default to `workspace/output/input_generation/species_cds`, `workspace/output/input_generation/species_gff`, and `workspace/output/input_generation/species_genome`,
+- when a species has both provided CDS and GFF inputs, CDS isoforms are grouped
+  through the GFF parent/alias graph before the longest CDS per resolved gene is
+  selected; `gene_grouping_mode=rescue_overlap` can rescue compatible fragmented
+  models, while `strict` preserves the provider's model boundaries,
+- GFF-backed grouping writes adjacent `*.gff-grouping.json` and
+  `*.gff-grouping.tsv` audits and records mapped, unmapped, ambiguous, and
+  coordinate-rescued counts in `gg_input_generation_species.tsv`,
 - per-run metadata defaults to `workspace/output/input_generation/gg_input_generation_runs.tsv`,
   `workspace/output/input_generation/gg_input_generation_species.tsv`, and
   `workspace/output/input_generation/download_plan.resolved.tsv`,
@@ -227,6 +234,11 @@ Notable defaults:
   If a species tree is available, GeneGalleon calls `nwkit sample` with
   `orthofinder_core_method="max-pd"` to keep phylogenetic diversity in the
   OrthoFinder core run; otherwise it falls back to ranked selection.
+- OrthoFinder is reported as successful only after its whole-dataset output is
+  validated. GeneGalleon accepts the current complete `Orthogroups.tsv` layout,
+  falls back to the root-level `Phylogenetic_Hierarchical_Orthogroups/N0.tsv`
+  when required by OrthoFinder 3.1+ output differences, and rejects clade-level
+  `N*.tsv` files as substitutes for the root table.
 
 ### Inlined Stage: Species Tree
 
@@ -305,9 +317,11 @@ Current behavior notes:
 
 Wrapper-specific note:
 
-- `gg_gene_evolution_entrypoint.sh` forwards all top-block variables to the container runtime,
-- routine changes should be made by editing the top config block,
-- unlike `gg_input_generation_entrypoint.sh`, this wrapper does not expose a separate host-side `GG_*` override map for all top-block variables.
+- `gg_gene_evolution_entrypoint.sh` forwards registered top-block variables to
+  the container runtime,
+- persistent changes belong in the top config block,
+- one-off changes can use the `GG_GENE_EVOLUTION_` prefix, for example
+  `GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION=orthogroup`.
 
 ### Inlined Stage: Genome Evolution
 

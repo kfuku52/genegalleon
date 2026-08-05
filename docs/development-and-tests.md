@@ -2,9 +2,11 @@
 
 ## Container-first validation policy
 
-For workflow validation, integration tests, R helper checks, and toolchain-dependent behavior, use the repository `genegalleon.sif` runtime instead of host-local Python, R, or command-line tools.
+For workflow validation, integration tests, R helper checks, and
+toolchain-dependent behavior, use a GeneGalleon container instead of
+host-local Python, R, or command-line tools.
 
-The preferred wrapper is:
+On Linux/HPC hosts with Apptainer or Singularity, the preferred wrapper is:
 
 ```bash
 bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_end_to_end.py
@@ -22,9 +24,38 @@ behavior test:
 bash workflow/tests/run_in_sif.sh bash workflow/tests/check_treevis_package.sh
 ```
 
-`workflow/tests/run_in_sif.sh` expects `./genegalleon.sif` at the repository root. Set `GENEGALLEON_SIF=/path/to/genegalleon.sif` when using a different SIF path.
+`workflow/tests/run_in_sif.sh` expects `./genegalleon.sif` at the repository
+root. Set `GENEGALLEON_SIF=/path/to/genegalleon.sif` when using a different SIF
+path. The wrapper also discovers versioned Apptainer/Singularity installations
+under `/opt/pkg` and the legacy NIG package path.
 
-Host-local checks are useful for quick syntax or narrow static feedback, but do not use them as evidence of container runtime compatibility. If the SIF or Apptainer/Singularity is unavailable, report that limitation explicitly.
+To expose an external read-only fixture or data directory at the same absolute
+path inside the SIF, provide one absolute path per line:
+
+```bash
+GENEGALLEON_SIF_EXTRA_BINDS=$'/data/reference\n/shared/fixtures' \
+bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_end_to_end.py
+```
+
+Relative paths, paths containing `:`, and nonexistent paths are rejected.
+
+On macOS, build an image from the current checkout and run validation through
+Docker:
+
+```bash
+BUILD_SIF=0 IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev \
+bash ./gg_container_build_entrypoint.sh
+```
+
+```bash
+docker run --rm -i -v "$PWD:$PWD" -w "$PWD" \
+  local/genegalleon:dev \
+  python -m pytest -q workflow/tests/test_hgt_end_to_end.py
+```
+
+Host-local checks are useful for quick syntax or narrow static feedback, but do
+not use them as evidence of container runtime compatibility. Report validation
+as SIF or Docker/container validation according to the runtime actually used.
 
 ## Install test dependencies
 
