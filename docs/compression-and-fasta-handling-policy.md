@@ -16,7 +16,7 @@ without redundant recompression.
 
 Set `GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE=files` (or its `raw` alias) in
 `workflow/gg_common_params.sh` to retain the historical physical-file layout,
-or leave the experimental branch default `zip`. See
+or leave the default `zip`. See
 [Gene-Family Outputs and Progress Monitoring](gene-family-outputs-and-progress-monitoring.md#zip-backed-storage)
 for archive scope and manual-management commands.
 

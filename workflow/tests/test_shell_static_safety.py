@@ -1264,6 +1264,8 @@ def test_gene_family_zip_storage_is_common_default_and_remains_configurable():
     assert ': "${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION:=adaptive}"' in common
     assert ': "${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL:=6}"' in common
     assert ': "${GG_COMMON_GENE_FAMILY_ZIP_WORKERS:=1}"' in common
+    assert ': "${GG_COMMON_GENE_FAMILY_LARGE_ZIP_WARNING_BYTES:=21474836480}"' in common
+    assert ': "${GG_COMMON_GENE_FAMILY_FINAL_ZIP_MAX_BYTES:=0}"' in common
     assert ': "${GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS:=7}"' in common
     assert ': "${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:=100}"' in common
     assert ': "${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:=107374182400}"' in common
@@ -1277,9 +1279,11 @@ def test_gene_family_zip_storage_is_common_default_and_remains_configurable():
     assert "gene_family_zip_compression" in config_vars
     assert "gene_family_zip_compression_level" in config_vars
     assert "gene_family_zip_workers" in config_vars
+    assert "gene_family_final_zip_max_bytes" in config_vars
     assert '--compression "${gene_family_zip_compression}"' in core
     assert '--compression-level "${gene_family_zip_compression_level}"' in core
     assert '--workers "${gene_family_zip_workers}"' in core
+    assert '--max-final-zip-bytes "${gene_family_final_zip_max_bytes}"' in core
     assert "gene_family_tmp_retention_days" in config_vars
     assert "gene_family_tmp_max_dirs" in config_vars
     assert "gene_family_tmp_max_bytes" in config_vars

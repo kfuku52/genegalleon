@@ -46,7 +46,7 @@ written under `workspace/output/orthogroup/`.
 
 ## ZIP-backed storage
 
-On this experimental branch, `workflow/gg_common_params.sh` defaults
+`workflow/gg_common_params.sh` defaults
 `GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE` to `zip`. The alternative value
 `files` preserves the historical one-file-per-artifact layout for newly
 produced artifacts; `raw` is accepted as an alias for `files`. Existing ZIP
@@ -179,6 +179,7 @@ redundant recompression. Configure routine workflow archiving with:
 - `GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION=adaptive|deflate|store`
 - `GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL=0..9`
 - `GG_COMMON_GENE_FAMILY_ZIP_WORKERS=1..4`
+- `GG_COMMON_GENE_FAMILY_FINAL_ZIP_MAX_BYTES=0..` (`0` keeps the one-final-ZIP behavior)
 
 `store` prioritizes packing files into a small number of inodes over reducing
 bytes. Worker concurrency is deliberately capped at four to avoid an
@@ -271,6 +272,14 @@ bash workflow/gg_gene_family_archive.sh verify \
   --root workspace/output/query2family \
   --progress-interval 30
 ```
+
+This deep verification reads every payload byte. Use `--quick` to validate ZIP
+inventories, manifests, recorded CRC/size values, and indexes without rereading
+every member. ZIP creation itself always performs one complete CRC read before
+raw sources are removed.
+Add `--json` to `verify`, `convert-storage`, `storage-status`, or
+`conversion-status` for one machine-readable result object; progress remains
+on standard error.
 
 `verify` also cross-checks the family and subdirectory index views and rejects
 a missing authoritative index, an index reference to a missing shard, an
@@ -414,12 +423,31 @@ ZIP-to-raw conversion materializes and verifies every non-deleted logical
 artifact before removing ZIP payload. Tombstones become absence and live
 overrides remain authoritative. Bounded family-state and lock metadata remain
 by default; add `--pure-raw` only when an exact pre-ZIP physical layout is
-required and discarding that control metadata is acceptable. The preflight
+required and discarding that control metadata, `README_GENE_FAMILY_OUTPUTS.txt`,
+and `ARCHIVE_STATUS.tsv` is acceptable. The preflight
 estimate rounds each restored file to the filesystem allocation-block size and
 includes missing output directories. Filesystem-wide free-space and inode
 values can still exceed a Shirokane user or project quota, so compare the
 reported `raw_materialize_allocated_bytes` and `raw_peak_new_files` with the
-applicable quota before a large conversion.
+applicable quota before a large conversion. `--available-bytes` applies to
+ZIP-to-raw as well as raw-to-ZIP conversion; a quota shortfall is rejected
+before a resumable conversion marker or raw output is created.
+
+Raw-to-ZIP dry-runs report `raw_zip_peak_new_bytes`, including concurrent
+writer and possible compression-expansion overhead. Pass the applicable quota
+remainder with `--available-bytes`; conversion then uses the smaller of that
+value and filesystem free space.
+
+Subdirectories above `--large-zip-warning-bytes` are identified before
+conversion. `--max-final-zip-bytes` can retain meaningful
+`archives/<subdir>/<subdir>.part-N.zip` files instead of consolidating an
+oversized `<subdir>.zip`. The default limit is 0 (unlimited).
+Applying a positive limit to an already ZIP-backed store also splits an older
+oversized final ZIP into the readable part names.
+
+For complete existing projects, use the workspace-level command documented in
+`docs/workspace-storage-management.md`; it audits all gene-family and
+species-tree targets before changing any of them and writes JSON/TSV receipts.
 
 Both directions write `storage-conversion.pending`. A stopped conversion is
 resumed automatically by running the same command again. Add `--resume` when

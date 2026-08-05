@@ -80,6 +80,22 @@ def test_pack_and_materialize_visible_named_archive(tmp_path: Path):
     assert (raw / "nested" / "BUSCO2.dna.nwk").read_text(encoding="utf-8") == "(A,C);\n"
 
 
+def test_materialize_quota_preflight_preserves_archive(tmp_path: Path):
+    root = tmp_path / "species_tree"
+    name = "single_copy_iqtree_dna"
+    raw = root / name
+    raw.mkdir(parents=True)
+    (raw / "BUSCO1.dna.nwk").write_text("(A,B);\n", encoding="utf-8")
+    STORE.pack_directory(root, name)
+
+    with pytest.raises(STORE.SpeciesTreeArchiveError, match="ZIP-to-raw"):
+        STORE.materialize_directory(root, name, available_bytes=0)
+
+    assert not raw.exists()
+    assert (root / f"{name}.zip").is_file()
+    assert STORE.verify_archive(root, name)["state"] == "archived"
+
+
 def test_manual_delete_and_add_are_preserved_after_unpack_and_repack(tmp_path: Path):
     root = tmp_path / "species_tree"
     raw = root / "single_copy_trimal"
@@ -292,6 +308,7 @@ def test_corrupt_archive_is_preserved_when_verify_and_materialize_fail(tmp_path:
 
     status = STORE.status(root, [name])
     assert status[0]["state"] == "archived"
+    assert STORE.verify_archive(root, name, check_crc=False)["verification_mode"] == "quick"
     with pytest.raises(STORE.SpeciesTreeArchiveError, match="CRC|Bad CRC"):
         STORE.verify_archive(root, name)
     with pytest.raises(STORE.SpeciesTreeArchiveError, match="extract|CRC|Bad CRC"):
@@ -300,6 +317,32 @@ def test_corrupt_archive_is_preserved_when_verify_and_materialize_fail(tmp_path:
     assert archive_path.is_file()
     assert not raw.exists()
     assert not list(root.glob(f".{name}.materialize.partial.*"))
+
+
+def test_convert_storage_dry_run_reports_space_without_writing(tmp_path: Path):
+    root = tmp_path / "species_tree"
+    name = "single_copy_iqtree_dna"
+    raw = root / name
+    raw.mkdir(parents=True)
+    (raw / "BUSCO1.dna.nwk").write_text("(A,B);\n", encoding="utf-8")
+    args = STORE.build_parser().parse_args(
+        [
+            "convert-storage",
+            "--root",
+            str(root),
+            "--directory",
+            name,
+            "--to",
+            "zip",
+            "--dry-run",
+            "--available-bytes",
+            "0",
+        ]
+    )
+
+    assert STORE.run_cli(args) == 0
+    assert raw.is_dir()
+    assert not (root / f"{name}.zip").exists()
 
 
 def test_pack_rejects_source_symlinks_without_deleting_raw(tmp_path: Path):

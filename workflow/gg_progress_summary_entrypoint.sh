@@ -77,6 +77,7 @@ gene_family_output_storage="${gene_family_output_storage:-${GG_COMMON_GENE_FAMIL
 gene_family_zip_compression="${gene_family_zip_compression:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION:-adaptive}}" # adaptive|deflate|store.
 gene_family_zip_compression_level="${gene_family_zip_compression_level:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL:-6}}" # Deflate level 0-9.
 gene_family_zip_workers="${gene_family_zip_workers:-${GG_COMMON_GENE_FAMILY_ZIP_WORKERS:-1}}" # Concurrent ZIP writers, capped at 4.
+gene_family_final_zip_max_bytes="${gene_family_final_zip_max_bytes:-${GG_COMMON_GENE_FAMILY_FINAL_ZIP_MAX_BYTES:-0}}" # 0 permits one final ZIP of any size; a positive byte limit retains named part ZIPs for larger subdirectories.
 gene_family_tmp_retention_days="${gene_family_tmp_retention_days:-${GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS:-7}}" # Failed task directories below query2family/orthogroup tmp roots are removed after this many days when their family lock is idle; 0 disables the age limit.
 gene_family_tmp_max_dirs="${gene_family_tmp_max_dirs:-${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:-100}}" # Maximum failed task directories retained per query2family/orthogroup root; oldest excess directories are removed and 0 disables the count limit.
 gene_family_tmp_max_bytes="${gene_family_tmp_max_bytes:-${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:-107374182400}}" # Maximum bytes retained across inactive failed task directories; 0 disables the byte limit.

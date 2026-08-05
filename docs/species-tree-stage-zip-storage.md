@@ -1,8 +1,7 @@
 # Species-Tree Stage ZIP Storage
 
 `gg_genome_evolution` can store its high-file-count species-tree intermediates
-as ordinary, visible ZIP files. ZIP mode is the default on the experimental
-ZIP-storage branch and is controlled by:
+as ordinary, visible ZIP files. ZIP mode is the default and is controlled by:
 
 ```bash
 GG_COMMON_SPECIES_TREE_OUTPUT_STORAGE=zip # zip|files|raw
@@ -85,6 +84,23 @@ bash workflow/gg_species_tree_archive.sh status \
 bash workflow/gg_species_tree_archive.sh verify \
   --root workspace/output/species_tree
 ```
+
+`verify` is deep by default. `--quick` validates the GeneGalleon marker and ZIP
+member inventory without reading payload bytes. `convert-storage --dry-run`
+reports raw/ZIP byte counts and a conservative temporary-space estimate.
+`--available-bytes` supplies the applicable user/project quota remainder for
+both packing and materialization. ZIP-to-raw preflight includes
+allocation-block-rounded file bytes, directory overhead, and required inodes.
+The option can also be supplied directly to `materialize`. A failure leaves
+the source ZIP unchanged. `--progress-interval` controls JSON progress records
+written to standard error during packing, materialization, and deep
+verification.
+Species-tree command results are JSON by default and also accept the common
+`--json` flag for command-line symmetry with the gene-family manager.
+
+To audit or convert gene-family and species-tree storage together, use
+`workflow/gg_workspace_storage.sh` as documented in
+`docs/workspace-storage-management.md`.
 
 Add one or more `--directory NAME` options to limit any command to selected
 managed directories.

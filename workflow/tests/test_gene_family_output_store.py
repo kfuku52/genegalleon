@@ -3,6 +3,7 @@ import fcntl
 import json
 import os
 import shutil
+import struct
 import threading
 import time
 import zipfile
@@ -682,6 +683,164 @@ def test_verify_rejects_directly_modified_zip(tmp_path: Path):
 
     with pytest.raises(ArchiveStoreError, match="differs from its manifest"):
         GeneFamilyOutputStore(root).verify()
+
+
+def test_quick_verify_skips_payload_while_deep_verify_detects_corruption(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    family_id = "OG0000001"
+    path = root / "mafft" / f"{family_id}_cds.aln.fasta"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"0123456789" * 1000)
+    archive_completed_outputs(
+        root,
+        "orthogroup",
+        [family_id],
+        orthogroup_id_from_name,
+        include_incomplete=True,
+        compression="store",
+    )
+    zip_path = next((root / "archives").glob("*/*.zip"))
+    with zipfile.ZipFile(zip_path) as archive:
+        info = archive.getinfo(f"mafft/{path.name}")
+    with zip_path.open("r+b") as handle:
+        handle.seek(info.header_offset + 26)
+        name_length, extra_length = struct.unpack("<HH", handle.read(4))
+        data_offset = info.header_offset + 30 + name_length + extra_length
+        handle.seek(data_offset + 10)
+        original = handle.read(1)
+        handle.seek(data_offset + 10)
+        handle.write(bytes([original[0] ^ 0xFF]))
+
+    assert GeneFamilyOutputStore(root).verify(deep=False) == [zip_path]
+    with pytest.raises(ArchiveStoreError, match="CRC|SHA256"):
+        GeneFamilyOutputStore(root).verify(deep=True)
+
+
+def test_raw_to_zip_quota_preflight_leaves_raw_untouched(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    family_id = "OG0000001"
+    path = root / "mafft" / f"{family_id}_cds.aln.fasta"
+    path.parent.mkdir(parents=True)
+    path.write_text(">a\nATG\n", encoding="utf-8")
+
+    with pytest.raises(ArchiveStoreError, match="Insufficient temporary space"):
+        convert_storage_to_zip(
+            root,
+            "orthogroup",
+            [family_id],
+            orthogroup_id_from_name,
+            available_bytes=0,
+        )
+
+    assert path.is_file()
+    assert not (root / ".gg_store").exists()
+    assert not list(root.glob("**/*.zip"))
+
+
+def test_zip_to_raw_quota_preflight_leaves_zip_untouched(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    family_id = "OG0000001"
+    path = root / "mafft" / f"{family_id}_cds.aln.fasta"
+    path.parent.mkdir(parents=True)
+    path.write_text(">a\nATG\n", encoding="utf-8")
+    convert_storage_to_zip(
+        root,
+        "orthogroup",
+        [family_id],
+        orthogroup_id_from_name,
+    )
+
+    with pytest.raises(ArchiveStoreError, match="ZIP-to-raw"):
+        convert_storage_to_raw(
+            root,
+            "orthogroup",
+            available_bytes=0,
+        )
+
+    assert not (root / "mafft").exists()
+    assert (root / "mafft.zip").is_file()
+    assert storage_conversion_status(root)["conversion"] == "idle"
+    GeneFamilyOutputStore(root).verify(deep=True)
+
+
+def test_final_zip_byte_limit_also_bounds_named_part_payloads(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    family_ids = ["OG0000001", "OG0000002", "OG0000003"]
+    for family_id in family_ids:
+        path = root / "mafft" / f"{family_id}_cds.aln.fasta"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"12345678")
+
+    result = convert_storage_to_zip(
+        root,
+        "orthogroup",
+        family_ids,
+        orthogroup_id_from_name,
+        max_final_zip_bytes=10,
+    )
+
+    assert result["split_zip_subdirs"] == "mafft"
+    assert not (root / "mafft.zip").exists()
+    parts = sorted((root / "archives" / "mafft").glob("mafft.part-*.zip"))
+    assert len(parts) == 3
+    for part in parts:
+        with zipfile.ZipFile(part) as archive:
+            manifest = json.loads(archive.read(MANIFEST_MEMBER))
+        assert sum(int(member["size"]) for member in manifest["members"]) <= 10
+
+
+def test_zip_conversion_splits_preexisting_oversized_final_zip(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    family_ids = ["OG0000001", "OG0000002", "OG0000003"]
+    for family_id in family_ids:
+        path = root / "mafft" / f"{family_id}_cds.aln.fasta"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"12345678")
+
+    convert_storage_to_zip(
+        root,
+        "orthogroup",
+        family_ids,
+        orthogroup_id_from_name,
+    )
+    final_zip = root / "mafft.zip"
+    assert final_zip.is_file()
+
+    result = convert_storage_to_zip(
+        root,
+        "orthogroup",
+        family_ids,
+        orthogroup_id_from_name,
+        max_final_zip_bytes=10,
+    )
+
+    assert result["split_zip_subdirs"] == "mafft"
+    assert not final_zip.exists()
+    parts = sorted((root / "archives" / "mafft").glob("mafft.part-*.zip"))
+    assert len(parts) == 3
+    assert GeneFamilyOutputStore(root).verify(deep=True) == parts
+
+
+def test_storage_status_json_output_is_machine_readable(tmp_path: Path, capsys):
+    root = tmp_path / "orthogroup"
+    path = root / "mafft" / "OG0000001_cds.aln.fasta"
+    path.parent.mkdir(parents=True)
+    path.write_text(">a\nATG\n", encoding="utf-8")
+    args = build_parser().parse_args(
+        [
+            "storage-status",
+            "--root",
+            str(root),
+            "--mode",
+            "orthogroup",
+            "--json",
+        ]
+    )
+
+    assert run_cli(args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["storage"] == "raw"
+    assert payload["owned_live_files"] == 0
 
 
 def test_repeated_member_reads_reuse_one_zip_reader_per_thread(
@@ -2202,6 +2361,8 @@ def test_pure_raw_conversion_removes_archive_control_metadata(tmp_path: Path):
     assert not interrupted_partial.exists()
     assert not (root / ".gg_store").exists()
     assert not (root / ".gg_store.pure-raw-retired").exists()
+    assert not (root / "README_GENE_FAMILY_OUTPUTS.txt").exists()
+    assert not (root / "ARCHIVE_STATUS.tsv").exists()
 
 
 def test_conversion_summary_reports_mixed_store_and_unmatched_files(tmp_path: Path):

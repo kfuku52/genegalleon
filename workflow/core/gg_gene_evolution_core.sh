@@ -56,6 +56,7 @@ gene_family_zip_min_batch_files="${gene_family_zip_min_batch_files:-${GG_COMMON_
 gene_family_zip_compression=$(printf '%s' "${gene_family_zip_compression:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION:-adaptive}}" | tr '[:upper:]' '[:lower:]')
 gene_family_zip_compression_level="${gene_family_zip_compression_level:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL:-6}}"
 gene_family_zip_workers="${gene_family_zip_workers:-${GG_COMMON_GENE_FAMILY_ZIP_WORKERS:-1}}"
+gene_family_final_zip_max_bytes="${gene_family_final_zip_max_bytes:-${GG_COMMON_GENE_FAMILY_FINAL_ZIP_MAX_BYTES:-0}}"
 gene_family_tmp_retention_days="${gene_family_tmp_retention_days:-${GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS:-7}}"
 gene_family_tmp_max_dirs="${gene_family_tmp_max_dirs:-${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:-100}}"
 gene_family_tmp_max_bytes="${gene_family_tmp_max_bytes:-${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:-107374182400}}"
@@ -91,10 +92,15 @@ if [[ ! "${gene_family_zip_workers}" =~ ^[0-9]+$ || ${gene_family_zip_workers} -
   echo "Invalid gene_family_zip_workers: ${gene_family_zip_workers}; expected an integer from 1 through 4." >&2
   exit 1
 fi
+if [[ ! "${gene_family_final_zip_max_bytes}" =~ ^[0-9]+$ ]]; then
+  echo "Invalid gene_family_final_zip_max_bytes: ${gene_family_final_zip_max_bytes}; expected a non-negative integer." >&2
+  exit 1
+fi
 gene_family_archive_write_args=(
   --compression "${gene_family_zip_compression}"
   --compression-level "${gene_family_zip_compression_level}"
   --workers "${gene_family_zip_workers}"
+  --max-final-zip-bytes "${gene_family_final_zip_max_bytes}"
 )
 if [[ ! "${gene_family_tmp_retention_days}" =~ ^[0-9]+$ ]]; then
   echo "Invalid gene_family_tmp_retention_days: ${gene_family_tmp_retention_days}; expected a non-negative integer." >&2

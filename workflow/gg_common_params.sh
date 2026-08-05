@@ -18,6 +18,8 @@
 : "${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION:=adaptive}" # adaptive stores already-compressed members and deflates other files; deflate or store forces one method for all artifact members.
 : "${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL:=6}" # Deflate level from 0 through 9; ignored for members stored without compression.
 : "${GG_COMMON_GENE_FAMILY_ZIP_WORKERS:=1}" # Bounded ZIP shard writers per subdirectory; valid range is 1 through 4.
+: "${GG_COMMON_GENE_FAMILY_LARGE_ZIP_WARNING_BYTES:=21474836480}" # Warn in conversion reports when one logical output subdirectory exceeds 20 GiB; 0 disables the warning.
+: "${GG_COMMON_GENE_FAMILY_FINAL_ZIP_MAX_BYTES:=0}" # Keep named part ZIPs instead of one <subdirectory>.zip above this logical size; 0 permits a final ZIP of any size.
 : "${GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS:=7}" # Failed gene-family task directories below output/{query2family,orthogroup}/tmp are retained for this many days; 0 disables the age limit.
 : "${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:=100}" # Maximum failed gene-family task directories retained per query2family/orthogroup root; oldest excess directories are removed and 0 disables the count limit.
 : "${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:=107374182400}" # Maximum total bytes retained across inactive failed gene-family tmp directories (100 GiB by default); 0 disables the byte limit.

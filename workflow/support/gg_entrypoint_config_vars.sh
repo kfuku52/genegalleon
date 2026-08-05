@@ -91,6 +91,7 @@ gene_family_zip_min_batch_files
 gene_family_zip_compression
 gene_family_zip_compression_level
 gene_family_zip_workers
+gene_family_final_zip_max_bytes
 input_sequence_mode
 intron_gain_rate
 iqtree_fast_mode_gt
@@ -360,6 +361,7 @@ gene_family_output_storage
 gene_family_zip_compression
 gene_family_zip_compression_level
 gene_family_zip_workers
+gene_family_final_zip_max_bytes
 gene_family_tmp_max_dirs
 gene_family_tmp_max_bytes
 gene_family_tmp_max_files

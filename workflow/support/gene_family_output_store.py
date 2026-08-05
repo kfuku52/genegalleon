@@ -63,6 +63,7 @@ FAMILY_LOCK_STRIPES = 16
 MAX_REFERENCED_SHARDS_PER_SUBDIR = 8
 MAX_OPEN_COMPACTION_SOURCES = 32
 TOMBSTONE_LOG_COMPACT_BYTES = 4 * 1024 * 1024
+DEFAULT_LARGE_ZIP_WARNING_BYTES = 20 * 1024 * 1024 * 1024
 MATERIALIZATION_RECEIPT_NAME = ".gg_materialized.jsonl"
 ORTHOGROUP_ID_RE = re.compile(r"^(OG\d+|HOG\d+|SP\d+)(?=$|[._-])")
 EXCLUDED_SUBDIRS = {"tmp", ACTIVE_ARCHIVE_DIR_NAME}
@@ -3007,13 +3008,20 @@ class GeneFamilyOutputStore:
     def verify(
         self,
         progress_callback: Optional[Callable[..., None]] = None,
+        *,
+        deep: bool = True,
     ) -> List[Path]:
         with producer_read_lock(self.archive_root):
-            return self._verify_unlocked(progress_callback=progress_callback)
+            return self._verify_unlocked(
+                progress_callback=progress_callback,
+                deep=deep,
+            )
 
     def _verify_unlocked(
         self,
         progress_callback: Optional[Callable[..., None]] = None,
+        *,
+        deep: bool = True,
     ) -> List[Path]:
         verified: List[Path] = []
         if not self.archive_root.is_dir():
@@ -3072,10 +3080,14 @@ class GeneFamilyOutputStore:
             len(manifest["members"])
             for _, manifest in archive_manifests
         )
-        total_bytes = sum(
-            int(manifest["members"][member_index]["size"])
-            for _, manifest in archive_manifests
-            for member_index in range(len(manifest["members"]))
+        total_bytes = (
+            sum(
+                int(manifest["members"][member_index]["size"])
+                for _, manifest in archive_manifests
+                for member_index in range(len(manifest["members"]))
+            )
+            if deep
+            else 0
         )
         completed_members = 0
         completed_bytes = 0
@@ -3091,43 +3103,46 @@ class GeneFamilyOutputStore:
                 verify_bytes_completed=0,
                 verify_bytes_total=total_bytes,
                 current_zip="-",
+                verify_mode="deep" if deep else "quick",
             )
         for zip_index, (zip_path, manifest) in enumerate(archive_manifests):
             with zipfile.ZipFile(zip_path, "r") as archive:
                 for member in manifest["members"]:
-                    digest = hashlib.sha256()
                     member_name = str(member["member_name"])
-                    try:
-                        with archive.open(member_name, "r") as handle:
-                            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                                digest.update(chunk)
-                                completed_bytes += len(chunk)
-                                now = time.monotonic()
-                                if (
-                                    progress_callback is not None
-                                    and now - last_progress >= 30.0
-                                ):
-                                    progress_callback(
-                                        force=False,
-                                        phase="verifying",
-                                        verify_zip_files_completed=zip_index,
-                                        verify_zip_files_total=total_zip_files,
-                                        verify_members_completed=completed_members,
-                                        verify_members_total=total_members,
-                                        verify_bytes_completed=completed_bytes,
-                                        verify_bytes_total=total_bytes,
-                                        current_zip=zip_path.name,
-                                    )
-                                    last_progress = now
-                    except zipfile.BadZipFile as exc:
-                        raise ArchiveStoreError(
-                            f"CRC verification failed in {zip_path}: {member_name}"
-                        ) from exc
-                    if digest.hexdigest() != str(member.get("sha256", "")):
-                        raise ArchiveStoreError(
-                            f"SHA256 verification failed in {zip_path}: "
-                            f"{member_name}"
-                        )
+                    if deep:
+                        digest = hashlib.sha256()
+                        try:
+                            with archive.open(member_name, "r") as handle:
+                                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                                    digest.update(chunk)
+                                    completed_bytes += len(chunk)
+                                    now = time.monotonic()
+                                    if (
+                                        progress_callback is not None
+                                        and now - last_progress >= 30.0
+                                    ):
+                                        progress_callback(
+                                            force=False,
+                                            phase="verifying",
+                                            verify_zip_files_completed=zip_index,
+                                            verify_zip_files_total=total_zip_files,
+                                            verify_members_completed=completed_members,
+                                            verify_members_total=total_members,
+                                            verify_bytes_completed=completed_bytes,
+                                            verify_bytes_total=total_bytes,
+                                            current_zip=zip_path.name,
+                                            verify_mode="deep",
+                                        )
+                                        last_progress = now
+                        except zipfile.BadZipFile as exc:
+                            raise ArchiveStoreError(
+                                f"CRC verification failed in {zip_path}: {member_name}"
+                            ) from exc
+                        if digest.hexdigest() != str(member.get("sha256", "")):
+                            raise ArchiveStoreError(
+                                f"SHA256 verification failed in {zip_path}: "
+                                f"{member_name}"
+                            )
                     completed_members += 1
                     logical_path = str(member["logical_path"])
                     manifest_logical_paths.add(logical_path)
@@ -3205,6 +3220,7 @@ class GeneFamilyOutputStore:
                     verify_bytes_completed=completed_bytes,
                     verify_bytes_total=total_bytes,
                     current_zip=zip_path.name,
+                    verify_mode="deep" if deep else "quick",
                 )
         for zip_path in {
             artifact.zip_path
@@ -3849,16 +3865,64 @@ def _cleanup_partial_materializations(root: Path) -> None:
 def _balanced_archive_chunks(
     paths: Sequence[Path],
     max_files_per_shard: int,
+    max_bytes_per_shard: int = 0,
 ) -> List[List[Path]]:
     if not paths:
         return []
     max_files = max(1, int(max_files_per_shard))
+    max_bytes = max(0, int(max_bytes_per_shard))
+    if max_bytes > 0:
+        chunks: List[List[Path]] = []
+        current: List[Path] = []
+        current_bytes = 0
+        for path in paths:
+            path_bytes = int(os.stat(path, follow_symlinks=False).st_size)
+            if current and (
+                len(current) >= max_files
+                or current_bytes + path_bytes > max_bytes
+            ):
+                chunks.append(current)
+                current = []
+                current_bytes = 0
+            current.append(path)
+            current_bytes += path_bytes
+        if current:
+            chunks.append(current)
+        return chunks
     chunk_count = (len(paths) + max_files - 1) // max_files
     chunk_size = (len(paths) + chunk_count - 1) // chunk_count
     return [
         list(paths[start : start + chunk_size])
         for start in range(0, len(paths), chunk_size)
     ]
+
+
+def _balanced_artifact_chunks(
+    artifacts: Sequence[Artifact],
+    max_files_per_shard: int,
+    max_bytes_per_shard: int = 0,
+) -> List[List[Artifact]]:
+    if not artifacts:
+        return []
+    max_files = max(1, int(max_files_per_shard))
+    max_bytes = max(0, int(max_bytes_per_shard))
+    chunks: List[List[Artifact]] = []
+    current: List[Artifact] = []
+    current_bytes = 0
+    for artifact in artifacts:
+        artifact_bytes = int(artifact.size or 0)
+        if current and (
+            len(current) >= max_files
+            or (max_bytes > 0 and current_bytes + artifact_bytes > max_bytes)
+        ):
+            chunks.append(current)
+            current = []
+            current_bytes = 0
+        current.append(artifact)
+        current_bytes += artifact_bytes
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def archive_completed_outputs(
@@ -3878,6 +3942,8 @@ def archive_completed_outputs(
     preserve_existing_catalog: bool = False,
     progress_callback: Optional[Callable[..., None]] = None,
     direct_final: bool = False,
+    direct_final_max_bytes: int = 0,
+    max_bytes_per_shard: int = 0,
 ) -> List[Tuple[Path, int]]:
     root = Path(root).resolve()
     archive_root = _archive_state_root(root)
@@ -3969,6 +4035,11 @@ def archive_completed_outputs(
                     if len(candidates) < min_files:
                         continue
                     if store._load_subdir_artifacts(subdir):
+                        continue
+                    if direct_final_max_bytes > 0 and sum(
+                        int(os.stat(path, follow_symlinks=False).st_size)
+                        for path in candidates
+                    ) > direct_final_max_bytes:
                         continue
                     direct_specs.append(
                         (subdir, candidates, store._next_generation())
@@ -4217,7 +4288,11 @@ def archive_completed_outputs(
                 ] = {}
                 subdir_artifacts = dict(store._load_subdir_artifacts(subdir))
                 chunk_specs = []
-                for chunk in _balanced_archive_chunks(candidates, max_files_per_shard):
+                for chunk in _balanced_archive_chunks(
+                    candidates,
+                    max_files_per_shard,
+                    max_bytes_per_shard,
+                ):
                     generation = store._next_generation()
                     chunk_specs.append((generation, chunk))
                 if progress_callback is not None:
@@ -4308,15 +4383,23 @@ def archive_completed_outputs(
                     for artifact in subdir_artifact_values
                     if artifact.zip_path is not None
                 }
-                minimum_shard_count = max(
-                    1,
-                    (
-                        len(subdir_artifact_values)
-                        + max(1, max_files_per_shard)
-                        - 1
-                    )
-                    // max(1, max_files_per_shard),
+                ordered_artifacts = sorted(
+                    subdir_artifact_values,
+                    key=lambda artifact: artifact.logical_path,
                 )
+                target_artifact_chunks = _balanced_artifact_chunks(
+                    ordered_artifacts,
+                    max_files_per_shard,
+                    max_bytes_per_shard,
+                )
+                logical_bytes = sum(
+                    int(artifact.size or 0) for artifact in ordered_artifacts
+                )
+                retain_named_parts = (
+                    max_bytes_per_shard > 0
+                    and logical_bytes > max_bytes_per_shard
+                )
+                minimum_shard_count = max(1, len(target_artifact_chunks))
                 if (
                     len(referenced_shards)
                     <= minimum_shard_count + MAX_REFERENCED_SHARDS_PER_SUBDIR - 1
@@ -4324,14 +4407,16 @@ def archive_completed_outputs(
                     final_subdir_artifacts = subdir_artifacts
                 else:
                     compacted_artifacts: List[Artifact] = []
-                    ordered = sorted(
-                        subdir_artifact_values,
-                        key=lambda artifact: artifact.logical_path,
-                    )
+                    ordered = ordered_artifacts
                     final_archive = _final_archive_path(root, subdir)
-                    if final_archive.resolve() in {
-                        path.resolve() for path in referenced_shards
-                    }:
+                    keep_final_archive = (
+                        final_archive.resolve()
+                        in {path.resolve() for path in referenced_shards}
+                        and not (
+                            retain_named_parts
+                        )
+                    )
+                    if keep_final_archive:
                         generation = store._next_generation()
                         zip_path, compacted = _compact_artifact_chunk(
                             payload_root,
@@ -4346,23 +4431,24 @@ def archive_completed_outputs(
                         created_paths.append(zip_path)
                         compacted_artifacts.extend(compacted)
                     else:
-                        for compact_start in range(
-                            0,
-                            len(ordered),
-                            max(1, max_files_per_shard),
-                        ):
+                        for artifact_chunk in target_artifact_chunks:
                             generation = store._next_generation()
+                            destination_path = (
+                                payload_root
+                                / subdir
+                                / f"{subdir}.part-{generation:06d}.zip"
+                                if retain_named_parts
+                                else None
+                            )
                             zip_path, compacted = _compact_artifact_chunk(
                                 payload_root,
                                 subdir,
-                                ordered[
-                                    compact_start : compact_start
-                                    + max(1, max_files_per_shard)
-                                ],
+                                artifact_chunk,
                                 mode,
                                 generation,
                                 compression=compression,
                                 compression_level=compression_level,
+                                destination_path=destination_path,
                             )
                             created_paths.append(zip_path)
                             compacted_artifacts.extend(compacted)
@@ -4469,7 +4555,7 @@ def scan_live_output_ownership(
     *,
     workers: int = 1,
 ) -> Tuple[List[Path], List[Path]]:
-    owned, unmatched, _, _, _, _ = _scan_live_output_inventory(
+    owned, unmatched, _, _, _, _, _, _ = _scan_live_output_inventory(
         root,
         valid_family_ids,
         family_from_name,
@@ -4484,7 +4570,16 @@ def _scan_live_output_inventory(
     family_from_name: Callable[[str], Optional[str]],
     *,
     workers: int = 1,
-) -> Tuple[List[Path], List[Path], int, List[Path], List[Path], int]:
+) -> Tuple[
+    List[Path],
+    List[Path],
+    int,
+    List[Path],
+    List[Path],
+    int,
+    Dict[str, Tuple[int, int]],
+    int,
+]:
     root = Path(root).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"Gene-family output root was not found: {root}")
@@ -4494,6 +4589,8 @@ def _scan_live_output_inventory(
     unsupported_symlinks: List[Path] = []
     shared_raw: List[Path] = []
     shared_raw_bytes = 0
+    owned_subdir_stats: Dict[str, Tuple[int, int]] = {}
+    unmatched_bytes = 0
     with os.scandir(root) as root_entries:
         directories = sorted(root_entries, key=lambda entry: entry.name)
     scan_directories: List[Path] = []
@@ -4513,13 +4610,14 @@ def _scan_live_output_inventory(
 
     def scan_directory(
         directory_path: Path,
-    ) -> Tuple[List[Path], List[Path], int, List[Path], List[Path], int]:
+    ) -> Tuple[List[Path], List[Path], int, List[Path], List[Path], int, int]:
         directory_owned: List[Path] = []
         directory_unmatched: List[Path] = []
         directory_owned_bytes = 0
         directory_symlinks: List[Path] = []
         directory_shared_raw: List[Path] = []
         directory_shared_raw_bytes = 0
+        directory_unmatched_bytes = 0
         with os.scandir(directory_path) as child_entries:
             entries = sorted(child_entries, key=lambda entry: entry.name)
         for entry in entries:
@@ -4542,11 +4640,13 @@ def _scan_live_output_inventory(
                     directory_owned_bytes += int(stat_result.st_size)
                 else:
                     directory_unmatched.append(path)
+                    directory_unmatched_bytes += int(stat_result.st_size)
             elif directory_path.name in SHARED_OUTPUT_SUBDIRS:
                 directory_shared_raw.append(path)
                 directory_shared_raw_bytes += int(stat_result.st_size)
             else:
                 directory_unmatched.append(path)
+                directory_unmatched_bytes += int(stat_result.st_size)
         return (
             directory_owned,
             directory_unmatched,
@@ -4554,6 +4654,7 @@ def _scan_live_output_inventory(
             directory_symlinks,
             directory_shared_raw,
             directory_shared_raw_bytes,
+            directory_unmatched_bytes,
         )
 
     worker_count = max(1, min(int(workers), len(scan_directories) or 1))
@@ -4571,6 +4672,7 @@ def _scan_live_output_inventory(
             directory_symlinks,
             directory_shared_raw,
             directory_shared_raw_bytes,
+            directory_unmatched_bytes,
         ) in results:
             owned.extend(directory_owned)
             unmatched.extend(directory_unmatched)
@@ -4578,6 +4680,12 @@ def _scan_live_output_inventory(
             unsupported_symlinks.extend(directory_symlinks)
             shared_raw.extend(directory_shared_raw)
             shared_raw_bytes += directory_shared_raw_bytes
+            unmatched_bytes += directory_unmatched_bytes
+            if directory_owned:
+                owned_subdir_stats[directory_owned[0].parent.name] = (
+                    directory_owned_bytes,
+                    len(directory_owned),
+                )
     finally:
         if executor is not None:
             executor.shutdown(wait=True)
@@ -4588,6 +4696,8 @@ def _scan_live_output_inventory(
         unsupported_symlinks,
         shared_raw,
         shared_raw_bytes,
+        owned_subdir_stats,
+        unmatched_bytes,
     )
 
 
@@ -4765,12 +4875,55 @@ def _zip_to_raw_requirements(
     return required_bytes, required_inodes
 
 
+def _raw_to_zip_requirements(
+    subdir_stats: Dict[str, Tuple[int, int]],
+    *,
+    workers: int = 1,
+) -> Tuple[int, str, int, int]:
+    """Return a conservative temporary-byte estimate for raw-to-ZIP conversion.
+
+    Completed ZIPs replace their raw inputs, but up to ``workers`` ZIPs can be
+    under construction while all corresponding sources still exist.  Deflate
+    can expand incompressible input slightly, so include one percent plus
+    per-member and per-archive overhead rather than assuming compression.
+    """
+
+    total_bytes = sum(logical_bytes for logical_bytes, _ in subdir_stats.values())
+    total_files = sum(file_count for _, file_count in subdir_stats.values())
+
+    estimates = []
+    for subdir, (logical_bytes, file_count) in subdir_stats.items():
+        upper_bound = (
+            logical_bytes
+            + max(64 * 1024, (logical_bytes + 99) // 100)
+            + file_count * 512
+            + 1024 * 1024
+        )
+        estimates.append((upper_bound, subdir))
+    estimates.sort(reverse=True)
+    concurrent = estimates[: max(1, min(int(workers), len(estimates) or 1))]
+    # Already committed ZIPs generally replace at least as many raw bytes.
+    # Keep a small aggregate allowance for ZIP/filesystem overhead while later
+    # subdirectories are still being written.
+    aggregate_overhead = (
+        max(64 * 1024, (total_bytes + 99) // 100)
+        + total_files * 512
+        + len(subdir_stats) * 1024 * 1024
+    )
+    peak_bytes = sum(value for value, _ in concurrent) + aggregate_overhead
+    peak_subdirs = ",".join(name for _, name in concurrent) or "-"
+    largest_bytes = estimates[0][0] if estimates else 0
+    return peak_bytes, peak_subdirs, largest_bytes, aggregate_overhead
+
+
 def storage_conversion_summary(
     root: Path,
     valid_family_ids: Set[str],
     family_from_name: Callable[[str], Optional[str]],
     *,
     workers: int = 1,
+    large_zip_warning_bytes: int = DEFAULT_LARGE_ZIP_WARNING_BYTES,
+    max_final_zip_bytes: int = 0,
 ) -> Tuple[dict, List[Path]]:
     root = Path(root).resolve()
     (
@@ -4780,6 +4933,8 @@ def storage_conversion_summary(
         unsupported_symlinks,
         shared_raw,
         shared_raw_bytes,
+        owned_subdir_stats,
+        unmatched_bytes,
     ) = _scan_live_output_inventory(
         root,
         valid_family_ids,
@@ -4827,6 +4982,68 @@ def storage_conversion_summary(
         root,
         archived_only_artifacts,
     )
+    (
+        raw_zip_peak_new_bytes,
+        raw_zip_peak_subdirs,
+        raw_zip_largest_subdir_bytes,
+        raw_zip_max_net_growth_bytes,
+    ) = _raw_to_zip_requirements(owned_subdir_stats, workers=workers)
+    raw_subdir_bytes: Dict[str, int] = {
+        subdir: logical_bytes
+        for subdir, (logical_bytes, _) in owned_subdir_stats.items()
+    }
+    for artifact in archived_only_artifacts:
+        raw_subdir_bytes[artifact.subdir] = (
+            raw_subdir_bytes.get(artifact.subdir, 0)
+            + int(artifact.size or 0)
+        )
+    raw_subdir_files: Dict[str, int] = {
+        subdir: file_count
+        for subdir, (_, file_count) in owned_subdir_stats.items()
+    }
+    for artifact in archived_only_artifacts:
+        raw_subdir_files[artifact.subdir] = raw_subdir_files.get(artifact.subdir, 0) + 1
+    combined_upper_bounds = {
+        subdir: (
+            logical_bytes
+            + max(64 * 1024, (logical_bytes + 99) // 100)
+            + raw_subdir_files.get(subdir, 0) * 512
+            + 1024 * 1024
+        )
+        for subdir, logical_bytes in raw_subdir_bytes.items()
+    }
+    if combined_upper_bounds:
+        largest_combined_subdir, largest_combined_bytes = max(
+            combined_upper_bounds.items(),
+            key=lambda item: (item[1], item[0]),
+        )
+        if largest_combined_bytes > raw_zip_peak_new_bytes:
+            raw_zip_peak_new_bytes = largest_combined_bytes
+            raw_zip_peak_subdirs = largest_combined_subdir
+        raw_zip_largest_subdir_bytes = max(
+            raw_zip_largest_subdir_bytes,
+            largest_combined_bytes,
+        )
+    else:
+        raw_zip_peak_new_bytes = 0
+        raw_zip_peak_subdirs = "-"
+        raw_zip_largest_subdir_bytes = 0
+    zip_bytes = sum(path.stat().st_size for path in shard_paths)
+    combined_upper_total = sum(combined_upper_bounds.values())
+    raw_zip_max_net_growth_bytes = max(
+        0,
+        combined_upper_total - owned_bytes - zip_bytes,
+    )
+    large_zip_subdirs = sorted(
+        subdir
+        for subdir, logical_bytes in raw_subdir_bytes.items()
+        if large_zip_warning_bytes > 0 and logical_bytes > large_zip_warning_bytes
+    )
+    split_zip_subdirs = sorted(
+        subdir
+        for subdir, logical_bytes in raw_subdir_bytes.items()
+        if max_final_zip_bytes > 0 and logical_bytes > max_final_zip_bytes
+    )
     if marker is not None:
         storage = "conversion-in-progress"
     elif shard_paths and (owned or archived_live_overrides):
@@ -4856,6 +5073,19 @@ def storage_conversion_summary(
             root / "ARCHIVE_STATUS.tsv",
         )
     )
+    metadata_bytes = sum(
+        path.stat().st_size
+        for path in _archive_state_root(root).rglob("*")
+        if path.is_file() and path.resolve() not in shard_resolved_paths
+    ) if _archive_state_root(root).is_dir() else 0
+    metadata_bytes += sum(
+        path.stat().st_size
+        for path in (
+            root / "README_GENE_FAMILY_OUTPUTS.txt",
+            root / "ARCHIVE_STATUS.tsv",
+        )
+        if path.is_file()
+    )
     summary = {
         "storage": storage,
         "mode": (
@@ -4864,15 +5094,28 @@ def storage_conversion_summary(
             else "unknown"
         ),
         "logical_files": logical_count,
+        "managed_logical_files": len(owned) + archived_only_count,
+        "managed_logical_bytes": owned_bytes + archived_only_bytes,
         "owned_live_files": len(owned),
         "owned_live_bytes": owned_bytes,
         "unmatched_live_files": len(unmatched),
+        "unmatched_live_bytes": unmatched_bytes,
         "shared_raw_files": len(shared_raw),
         "shared_raw_bytes": shared_raw_bytes,
         "indexed_artifacts": indexed_artifact_count,
         "archived_live_overrides": archived_live_overrides,
         "zip_files": len(shard_paths),
-        "zip_bytes": sum(path.stat().st_size for path in shard_paths),
+        "zip_bytes": zip_bytes,
+        "raw_zip_peak_new_bytes": raw_zip_peak_new_bytes,
+        "raw_zip_peak_subdirs": raw_zip_peak_subdirs,
+        "raw_zip_largest_subdir_bytes": raw_zip_largest_subdir_bytes,
+        "raw_zip_max_net_growth_bytes": raw_zip_max_net_growth_bytes,
+        "large_zip_warning_bytes": int(large_zip_warning_bytes),
+        "large_zip_subdir_count": len(large_zip_subdirs),
+        "large_zip_subdirs": ",".join(large_zip_subdirs) or "-",
+        "max_final_zip_bytes": int(max_final_zip_bytes),
+        "split_zip_subdir_count": len(split_zip_subdirs),
+        "split_zip_subdirs": ",".join(split_zip_subdirs) or "-",
         "raw_materialize_files": archived_only_count,
         "raw_materialize_bytes": archived_only_bytes,
         "raw_materialize_allocated_bytes": raw_allocated_bytes,
@@ -4880,6 +5123,7 @@ def storage_conversion_summary(
         "unsupported_symlinks": len(unsupported_symlinks),
         "conflicting_final_zip_files": len(conflicting_final_zips),
         "metadata_files": metadata_files,
+        "metadata_bytes": metadata_bytes,
         "physical_store_files": (
             len(owned)
             + len(unmatched)
@@ -4887,6 +5131,15 @@ def storage_conversion_summary(
             + len(unsupported_symlinks)
             + len(shard_paths)
             + metadata_files
+        ),
+        "physical_managed_files": len(owned) + len(shard_paths) + metadata_files,
+        "physical_managed_bytes": owned_bytes + zip_bytes + metadata_bytes,
+        "physical_store_bytes": (
+            owned_bytes
+            + shared_raw_bytes
+            + zip_bytes
+            + metadata_bytes
+            + unmatched_bytes
         ),
     }
     if marker is not None:
@@ -5074,6 +5327,9 @@ def convert_storage_to_zip(
     workers: int = 1,
     catalog_sources: Optional[Sequence[Path]] = None,
     require_resume: bool = False,
+    available_bytes: Optional[int] = None,
+    large_zip_warning_bytes: int = DEFAULT_LARGE_ZIP_WARNING_BYTES,
+    max_final_zip_bytes: int = 0,
     progress_callback: Optional[Callable[..., None]] = None,
 ) -> dict:
     root = Path(root).resolve()
@@ -5083,6 +5339,8 @@ def convert_storage_to_zip(
         valid_family_ids,
         family_from_name,
         workers=workers,
+        large_zip_warning_bytes=large_zip_warning_bytes,
+        max_final_zip_bytes=max_final_zip_bytes,
     )
     conflicting_final_zips = _catalog_conflicting_final_zip_paths(
         root,
@@ -5106,6 +5364,27 @@ def convert_storage_to_zip(
         raise ArchiveStoreError(
             "Symlinked output paths cannot be converted safely: "
             + ", ".join(str(path) for path in unsupported_symlinks[:10])
+        )
+    filesystem_free_bytes = int(shutil.disk_usage(root).free)
+    effective_available_bytes = filesystem_free_bytes
+    if available_bytes is not None:
+        if int(available_bytes) < 0:
+            raise ArchiveStoreError("available_bytes must be non-negative")
+        effective_available_bytes = min(
+            effective_available_bytes,
+            int(available_bytes),
+        )
+    required_peak_bytes = int(summary["raw_zip_peak_new_bytes"])
+    summary["filesystem_free_bytes"] = filesystem_free_bytes
+    summary["effective_available_bytes"] = effective_available_bytes
+    if required_peak_bytes > effective_available_bytes:
+        raise ArchiveStoreError(
+            "Insufficient temporary space for raw-to-ZIP conversion: "
+            f"estimated_peak_new_bytes={required_peak_bytes}, "
+            f"effective_available_bytes={effective_available_bytes}, "
+            f"peak_subdirs={summary['raw_zip_peak_subdirs']}. "
+            "Filesystem free space may exceed a user/project quota; pass the "
+            "quota remaining as --available-bytes for a quota-aware preflight."
         )
     archived_removed = 0
     created_paths: Set[Path] = set()
@@ -5161,6 +5440,8 @@ def convert_storage_to_zip(
             compression=compression,
             compression_level=int(compression_level),
             workers=int(workers),
+            estimated_peak_new_bytes=required_peak_bytes,
+            effective_available_bytes=effective_available_bytes,
         )
         if progress_callback is not None:
             progress_callback(
@@ -5210,6 +5491,8 @@ def convert_storage_to_zip(
                 catalog_sources=catalog_sources,
                 progress_callback=conversion_progress,
                 direct_final=True,
+                direct_final_max_bytes=max_final_zip_bytes,
+                max_bytes_per_shard=max_final_zip_bytes,
             )
             for zip_path, removed in results:
                 created_paths.add(zip_path)
@@ -5254,9 +5537,26 @@ def convert_storage_to_zip(
             nonblocking=False,
             compression=compression,
             compression_level=compression_level,
+            max_final_zip_bytes=max_final_zip_bytes,
             progress_callback=conversion_progress,
         )
         created_paths.update(finalized_paths)
+        if max_final_zip_bytes > 0:
+            # A workspace may already contain a single final ZIP produced before
+            # the byte limit was configured.  Recompact here so the limit also
+            # applies when a ZIP-backed store has no live files left to archive.
+            # Individual members larger than the limit necessarily remain in a
+            # one-member shard.
+            compacted_paths = compact_archives(
+                root,
+                mode,
+                max_files_per_shard=max(1, max_files_per_shard),
+                nonblocking=False,
+                compression=compression,
+                compression_level=compression_level,
+                max_bytes_per_shard=max_final_zip_bytes,
+            )
+            created_paths.update(compacted_paths)
         _update_storage_conversion_marker(
             root,
             phase="verifying",
@@ -5274,7 +5574,10 @@ def convert_storage_to_zip(
                 current_zip_bytes=0,
             )
         final_store = GeneFamilyOutputStore(root)
-        final_store.verify(progress_callback=conversion_progress)
+        # Every newly written archive was already read completely by
+        # _verify_zip_crc before its atomic rename.  Recheck the final
+        # manifests/indexes here without rereading every payload byte.
+        final_store.verify(progress_callback=conversion_progress, deep=False)
         _assert_archive_mode(final_store, mode)
         _update_storage_conversion_marker(
             root,
@@ -5303,6 +5606,8 @@ def convert_storage_to_zip(
         valid_family_ids,
         family_from_name,
         workers=workers,
+        large_zip_warning_bytes=large_zip_warning_bytes,
+        max_final_zip_bytes=max_final_zip_bytes,
     )
     final_summary.update(
         {
@@ -5315,6 +5620,15 @@ def convert_storage_to_zip(
             "compression": compression,
             "compression_level": compression_level,
             "workers": workers,
+            "estimated_peak_new_bytes": required_peak_bytes,
+            "filesystem_free_bytes": filesystem_free_bytes,
+            "effective_available_bytes": effective_available_bytes,
+            "large_zip_warning_bytes": int(large_zip_warning_bytes),
+            "large_zip_subdir_count": int(summary["large_zip_subdir_count"]),
+            "large_zip_subdirs": str(summary["large_zip_subdirs"]),
+            "max_final_zip_bytes": int(max_final_zip_bytes),
+            "split_zip_subdir_count": int(summary["split_zip_subdir_count"]),
+            "split_zip_subdirs": str(summary["split_zip_subdirs"]),
         }
     )
     return final_summary
@@ -5327,11 +5641,24 @@ def convert_storage_to_raw(
     max_files_per_shard: int = 5000,
     pure_raw: bool = False,
     require_resume: bool = False,
+    available_bytes: Optional[int] = None,
     progress_callback: Optional[Callable[..., None]] = None,
 ) -> dict:
     root = Path(root).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"Gene-family output root was not found: {root}")
+    if available_bytes is not None and int(available_bytes) < 0:
+        raise ArchiveStoreError("available_bytes must be non-negative")
+    if pure_raw:
+        for generated_status_path in (
+            root / "README_GENE_FAMILY_OUTPUTS.txt",
+            root / "ARCHIVE_STATUS.tsv",
+        ):
+            if generated_status_path.is_symlink():
+                raise ArchiveStoreError(
+                    "Refusing pure-raw conversion with a symlinked generated "
+                    f"status path: {generated_status_path}"
+                )
     retired_archive_root = root / PURE_RAW_RETIRED_DIR_NAME
     if pure_raw and (
         retired_archive_root.exists() or retired_archive_root.is_symlink()
@@ -5347,6 +5674,36 @@ def convert_storage_to_raw(
             )
         shutil.rmtree(retired_archive_root)
         _fsync_directory(root)
+    # Reject quota failures before creating a resumable conversion marker.  A
+    # second capacity check under the maintenance locks below protects against
+    # concurrent state changes between this read-only preflight and extraction.
+    preliminary_store = GeneFamilyOutputStore(root)
+    preliminary_store.verify(deep=False)
+    _assert_archive_mode(preliminary_store, mode)
+    preliminary_summary, _ = storage_conversion_summary(
+        root,
+        set(),
+        lambda _name: None,
+    )
+    preliminary_required_bytes = int(
+        preliminary_summary["raw_materialize_allocated_bytes"]
+    )
+    preliminary_filesystem_free = int(shutil.disk_usage(root).free)
+    preliminary_effective_available = preliminary_filesystem_free
+    if available_bytes is not None:
+        if int(available_bytes) < 0:
+            raise ArchiveStoreError("available_bytes must be non-negative")
+        preliminary_effective_available = min(
+            preliminary_effective_available,
+            int(available_bytes),
+        )
+    if preliminary_required_bytes > preliminary_effective_available:
+        raise ArchiveStoreError(
+            "Insufficient temporary space for ZIP-to-raw conversion: "
+            f"allocated_required={preliminary_required_bytes}, "
+            f"effective_available_bytes={preliminary_effective_available}. "
+            "Pass quota remaining as --available-bytes for a quota-aware preflight."
+        )
     restored = 0
     restored_bytes = 0
     with storage_conversion_session(
@@ -5397,13 +5754,22 @@ def convert_storage_to_raw(
                     pending,
                     block_size=block_size,
                 )
-                free_bytes = shutil.disk_usage(root).free
-                if required_bytes > free_bytes:
+                filesystem_free_bytes = int(shutil.disk_usage(root).free)
+                effective_available_bytes = filesystem_free_bytes
+                if available_bytes is not None:
+                    if int(available_bytes) < 0:
+                        raise ArchiveStoreError("available_bytes must be non-negative")
+                    effective_available_bytes = min(
+                        effective_available_bytes,
+                        int(available_bytes),
+                    )
+                if required_bytes > effective_available_bytes:
                     raise ArchiveStoreError(
                         "Insufficient filesystem free space for ZIP-to-raw conversion: "
-                        f"allocated_required={required_bytes}, free={free_bytes}. "
-                        "User or project quota may provide less space than the "
-                        "filesystem-wide free value"
+                        f"allocated_required={required_bytes}, "
+                        f"effective_available_bytes={effective_available_bytes}. "
+                        "Pass quota remaining as --available-bytes for a "
+                        "quota-aware preflight."
                     )
                 available_inodes = int(filesystem_stats.f_favail)
                 if available_inodes > 0 and required_inodes > available_inodes:
@@ -5510,6 +5876,17 @@ def convert_storage_to_raw(
                 _fsync_directory(root)
                 shutil.rmtree(retired_archive_root)
                 _fsync_directory(root)
+            for generated_status_path in (
+                root / "README_GENE_FAMILY_OUTPUTS.txt",
+                root / "ARCHIVE_STATUS.tsv",
+            ):
+                if generated_status_path.is_symlink():
+                    raise ArchiveStoreError(
+                        "Refusing to remove symlinked generated status path: "
+                        f"{generated_status_path}"
+                    )
+                generated_status_path.unlink(missing_ok=True)
+            _fsync_directory(root)
         else:
             _update_storage_conversion_marker(
                 root,
@@ -5529,6 +5906,9 @@ def convert_storage_to_raw(
         "storage": "raw",
         "materialized_files": restored,
         "materialized_bytes": restored_bytes,
+        "required_peak_new_bytes": required_bytes,
+        "filesystem_free_bytes": filesystem_free_bytes,
+        "effective_available_bytes": effective_available_bytes,
         "pure_raw": pure_raw,
         "conversion_resumed": resumed,
     }
@@ -5541,6 +5921,7 @@ def compact_archives(
     nonblocking: bool = False,
     compression: str = "adaptive",
     compression_level: int = 6,
+    max_bytes_per_shard: int = 0,
 ) -> List[Path]:
     root = Path(root).resolve()
     archive_root = _archive_state_root(root)
@@ -5564,14 +5945,35 @@ def compact_archives(
                     for artifact in artifacts
                     if artifact.zip_path is not None
                 }
-                if len(referenced_shards) <= 1:
+                logical_bytes = sum(int(artifact.size or 0) for artifact in artifacts)
+                oversized_single_archive = (
+                    len(referenced_shards) == 1
+                    and max_bytes_per_shard > 0
+                    and logical_bytes > max_bytes_per_shard
+                )
+                if len(referenced_shards) <= 1 and not oversized_single_archive:
                     continue
                 ordered = sorted(artifacts, key=lambda artifact: artifact.logical_path)
+                artifact_chunks = _balanced_artifact_chunks(
+                    ordered,
+                    max_files_per_shard,
+                    max_bytes_per_shard,
+                )
                 compacted_all: List[Artifact] = []
                 final_archive = _final_archive_path(root, subdir)
-                if final_archive.resolve() in {
-                    path.resolve() for path in referenced_shards
-                }:
+                keep_final_archive = (
+                    final_archive.resolve()
+                    in {path.resolve() for path in referenced_shards}
+                    and not (
+                        max_bytes_per_shard > 0
+                        and logical_bytes > max_bytes_per_shard
+                    )
+                )
+                retain_named_parts = (
+                    max_bytes_per_shard > 0
+                    and logical_bytes > max_bytes_per_shard
+                )
+                if keep_final_archive:
                     generation = store._next_generation()
                     zip_path, compacted = _compact_artifact_chunk(
                         payload_root,
@@ -5586,16 +5988,24 @@ def compact_archives(
                     created.append(zip_path)
                     compacted_all.extend(compacted)
                 else:
-                    for start in range(0, len(ordered), max(1, max_files_per_shard)):
+                    for artifact_chunk in artifact_chunks:
                         generation = store._next_generation()
+                        destination_path = (
+                            payload_root
+                            / subdir
+                            / f"{subdir}.part-{generation:06d}.zip"
+                            if retain_named_parts
+                            else None
+                        )
                         zip_path, compacted = _compact_artifact_chunk(
                             payload_root,
                             subdir,
-                            ordered[start : start + max(1, max_files_per_shard)],
+                            artifact_chunk,
                             mode,
                             generation,
                             compression=compression,
                             compression_level=compression_level,
+                            destination_path=destination_path,
                         )
                         created.append(zip_path)
                         compacted_all.extend(compacted)
@@ -5712,6 +6122,7 @@ def _finalize_subdirs_locked(
     *,
     compression: str = "adaptive",
     compression_level: int = 6,
+    max_final_zip_bytes: int = 0,
     progress_callback: Optional[Callable[..., None]] = None,
 ) -> List[Path]:
     root = Path(root).resolve()
@@ -5740,6 +6151,21 @@ def _finalize_subdirs_locked(
         _safe_logical_path(subdir, "__archive__")
         artifacts = list(store._load_subdir_artifacts(subdir).values())
         if not artifacts:
+            continue
+        logical_bytes = sum(int(artifact.size or 0) for artifact in artifacts)
+        if max_final_zip_bytes > 0 and logical_bytes > max_final_zip_bytes:
+            if progress_callback is not None:
+                progress_callback(
+                    force=True,
+                    phase="retaining-parts",
+                    subdir=subdir,
+                    current_subdir=subdir,
+                    current_zip="-",
+                    finalized_subdirs=finalized_count,
+                    total_subdirs=total_subdirs,
+                    logical_bytes=logical_bytes,
+                    max_final_zip_bytes=max_final_zip_bytes,
+                )
             continue
         archived_logical_paths = {
             artifact.logical_path for artifact in artifacts
@@ -5905,6 +6331,7 @@ def finalize_archives(
     nonblocking: bool = False,
     compression: str = "adaptive",
     compression_level: int = 6,
+    max_final_zip_bytes: int = 0,
     progress_callback: Optional[Callable[..., None]] = None,
 ) -> List[Path]:
     root = Path(root).resolve()
@@ -5943,6 +6370,7 @@ def finalize_archives(
                     subdirs,
                     compression=compression,
                     compression_level=compression_level,
+                    max_final_zip_bytes=max_final_zip_bytes,
                     progress_callback=progress_callback,
                 )
     _write_archive_status(root)
@@ -6605,6 +7033,7 @@ def build_parser() -> argparse.ArgumentParser:
     archive_parser.add_argument("--max-files-per-shard", type=int, default=5000)
     archive_parser.add_argument("--nonblocking", action="store_true")
     archive_parser.add_argument("--progress-interval", type=float, default=30.0)
+    archive_parser.add_argument("--max-final-zip-bytes", type=int, default=0)
     add_zip_write_options(archive_parser)
 
     archive_family_parser = subparsers.add_parser(
@@ -6616,6 +7045,7 @@ def build_parser() -> argparse.ArgumentParser:
     archive_family_parser.add_argument("--family-id", required=True)
     archive_family_parser.add_argument("--max-files-per-shard", type=int, default=5000)
     archive_family_parser.add_argument("--nonblocking", action="store_true")
+    archive_family_parser.add_argument("--max-final-zip-bytes", type=int, default=0)
     add_zip_write_options(archive_family_parser)
 
     convert_parser = subparsers.add_parser(
@@ -6630,6 +7060,24 @@ def build_parser() -> argparse.ArgumentParser:
     convert_parser.add_argument("--strict-unmatched", action="store_true")
     convert_parser.add_argument("--pure-raw", action="store_true")
     convert_parser.add_argument("--dry-run", action="store_true")
+    convert_parser.add_argument("--json", action="store_true")
+    convert_parser.add_argument(
+        "--available-bytes",
+        type=int,
+        help="Quota-aware bytes available for temporary ZIP creation or raw materialization; combined with filesystem free space.",
+    )
+    convert_parser.add_argument(
+        "--large-zip-warning-bytes",
+        type=int,
+        default=DEFAULT_LARGE_ZIP_WARNING_BYTES,
+        help="Warn when a logical subdirectory exceeds this many bytes; 0 disables warnings.",
+    )
+    convert_parser.add_argument(
+        "--max-final-zip-bytes",
+        type=int,
+        default=0,
+        help="Keep human-readable archives/<subdir>/<subdir>.part-N.zip files above this logical size; 0 allows one final ZIP of any size.",
+    )
     convert_parser.add_argument(
         "--resume",
         action="store_true",
@@ -6643,6 +7091,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report resumable storage-conversion state without requiring a catalog.",
     )
     add_root(conversion_status_parser)
+    conversion_status_parser.add_argument("--json", action="store_true")
 
     optimize_metadata_parser = subparsers.add_parser(
         "optimize-metadata",
@@ -6657,6 +7106,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_root(storage_status_parser)
     add_family_context(storage_status_parser)
     storage_status_parser.add_argument("--family-id-file", type=Path)
+    storage_status_parser.add_argument("--json", action="store_true")
 
     materialize_parser = subparsers.add_parser("materialize-family")
     add_root(materialize_parser)
@@ -6710,6 +7160,18 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser = subparsers.add_parser("verify")
     add_root(verify_parser)
     verify_parser.add_argument("--progress-interval", type=float, default=30.0)
+    verify_parser.add_argument("--json", action="store_true")
+    verify_depth = verify_parser.add_mutually_exclusive_group()
+    verify_depth.add_argument(
+        "--quick",
+        action="store_true",
+        help="Validate ZIP inventories, manifests, and indexes without reading every payload byte.",
+    )
+    verify_depth.add_argument(
+        "--deep",
+        action="store_true",
+        help="Read every member and validate CRC and SHA256 (the default).",
+    )
 
     list_parser = subparsers.add_parser("list")
     add_root(list_parser)
@@ -6738,6 +7200,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_root(compact_parser)
     compact_parser.add_argument("--mode", choices=["query2family", "orthogroup"])
     compact_parser.add_argument("--max-files-per-shard", type=int, default=5000)
+    compact_parser.add_argument("--max-final-zip-bytes", type=int, default=0)
     compact_parser.add_argument("--nonblocking", action="store_true")
     add_zip_write_options(compact_parser)
 
@@ -6750,6 +7213,7 @@ def build_parser() -> argparse.ArgumentParser:
     finalize_parser.add_argument("--subdirs")
     finalize_parser.add_argument("--nonblocking", action="store_true")
     finalize_parser.add_argument("--progress-interval", type=float, default=30.0)
+    finalize_parser.add_argument("--max-final-zip-bytes", type=int, default=0)
     add_zip_write_options(finalize_parser)
 
     migrate_layout_parser = subparsers.add_parser(
@@ -6852,8 +7316,12 @@ def run_cli(args: argparse.Namespace) -> int:
 
     root = args.root.resolve()
     if args.command == "conversion-status":
-        for key, value in storage_conversion_status(root).items():
-            print(f"{key}\t{value}")
+        status_payload = storage_conversion_status(root)
+        if args.json:
+            print(json.dumps(status_payload, indent=2, sort_keys=True))
+        else:
+            for key, value in status_payload.items():
+                print(f"{key}\t{value}")
         return 0
     if args.command == "optimize-metadata":
         for key, value in optimize_archive_metadata(root).items():
@@ -6870,6 +7338,8 @@ def run_cli(args: argparse.Namespace) -> int:
         _validate_zip_write_options(args)
         if args.progress_interval < 0:
             raise ValueError("--progress-interval must be non-negative")
+        if args.max_final_zip_bytes < 0:
+            raise ValueError("--max-final-zip-bytes must be non-negative")
         mode = _resolve_cli_mode(args, root)
         assert mode is not None
         family_ids, family_from_name = family_context(
@@ -6890,6 +7360,7 @@ def run_cli(args: argparse.Namespace) -> int:
             workers=args.workers,
             catalog_sources=_catalog_sources(args),
             catalog_family_ids=family_ids,
+            max_bytes_per_shard=args.max_final_zip_bytes,
         )
         for zip_path, removed in results:
             print(f"archived\t{removed}\t{zip_path}")
@@ -6907,6 +7378,7 @@ def run_cli(args: argparse.Namespace) -> int:
                         nonblocking=args.nonblocking,
                         compression=args.compression,
                         compression_level=args.compression_level,
+                        max_final_zip_bytes=args.max_final_zip_bytes,
                         progress_callback=reporter.update,
                     )
                 finally:
@@ -6916,6 +7388,8 @@ def run_cli(args: argparse.Namespace) -> int:
         return 0
     if args.command == "archive-family":
         _validate_zip_write_options(args)
+        if args.max_final_zip_bytes < 0:
+            raise ValueError("--max-final-zip-bytes must be non-negative")
         mode = _resolve_cli_mode(args, root)
         assert mode is not None
         if args.query_dir is not None or args.genecount is not None:
@@ -6953,6 +7427,7 @@ def run_cli(args: argparse.Namespace) -> int:
             preserve_existing_catalog=(
                 args.query_dir is None and args.genecount is None
             ),
+            max_bytes_per_shard=args.max_final_zip_bytes,
         )
         for zip_path, removed in results:
             print(f"archived-partial\t{removed}\t{zip_path}")
@@ -6963,6 +7438,12 @@ def run_cli(args: argparse.Namespace) -> int:
             _validate_zip_write_options(args)
             if args.progress_interval < 0:
                 raise ValueError("--progress-interval must be non-negative")
+            if args.available_bytes is not None and args.available_bytes < 0:
+                raise ValueError("--available-bytes must be non-negative")
+            if args.large_zip_warning_bytes < 0:
+                raise ValueError("--large-zip-warning-bytes must be non-negative")
+            if args.max_final_zip_bytes < 0:
+                raise ValueError("--max-final-zip-bytes must be non-negative")
             if args.resume and args.dry_run:
                 raise ValueError("--resume cannot be combined with --dry-run")
         target = (
@@ -7028,6 +7509,16 @@ def run_cli(args: argparse.Namespace) -> int:
                     set(family_ids),
                     family_from_name,
                     workers=max(1, int(getattr(args, "workers", 1))),
+                    large_zip_warning_bytes=int(
+                        getattr(
+                            args,
+                            "large_zip_warning_bytes",
+                            DEFAULT_LARGE_ZIP_WARNING_BYTES,
+                        )
+                    ),
+                    max_final_zip_bytes=int(
+                        getattr(args, "max_final_zip_bytes", 0)
+                    ),
                 )
             finally:
                 if dry_run_reporter is not None:
@@ -7037,17 +7528,52 @@ def run_cli(args: argparse.Namespace) -> int:
                 summary["requested_target"] = target
                 summary["pure_raw"] = bool(args.pure_raw)
                 summary["mode"] = mode or "unknown"
-            for key, value in summary.items():
-                print(f"{key}\t{value}")
+                filesystem_free_bytes = int(shutil.disk_usage(root).free)
+                effective_available_bytes = filesystem_free_bytes
+                if args.available_bytes is not None:
+                    effective_available_bytes = min(
+                        effective_available_bytes,
+                        int(args.available_bytes),
+                    )
+                required_peak_new_bytes = int(
+                    summary[
+                        "raw_zip_peak_new_bytes"
+                        if target == "zip"
+                        else "raw_materialize_allocated_bytes"
+                    ]
+                )
+                summary["filesystem_free_bytes"] = filesystem_free_bytes
+                summary["effective_available_bytes"] = effective_available_bytes
+                summary["required_peak_new_bytes"] = required_peak_new_bytes
+                summary["temporary_space_sufficient"] = int(
+                    required_peak_new_bytes <= effective_available_bytes
+                )
+            if getattr(args, "json", False):
+                json_payload = dict(summary)
+                json_payload["unmatched_paths"] = [str(path) for path in unmatched]
+                if needs_catalog:
+                    json_payload["conflicting_final_zip_paths"] = [
+                        str(path)
+                        for path in _catalog_conflicting_final_zip_paths(
+                            root,
+                            set(family_ids),
+                            family_from_name,
+                        )
+                    ]
+                print(json.dumps(json_payload, indent=2, sort_keys=True))
+            else:
+                for key, value in summary.items():
+                    print(f"{key}\t{value}")
             if needs_catalog:
-                for path in unmatched:
-                    print(f"unmatched\t{path}")
-                for path in _catalog_conflicting_final_zip_paths(
-                    root,
-                    set(family_ids),
-                    family_from_name,
-                ):
-                    print(f"conflicting-final-zip\t{path}")
+                if not getattr(args, "json", False):
+                    for path in unmatched:
+                        print(f"unmatched\t{path}")
+                    for path in _catalog_conflicting_final_zip_paths(
+                        root,
+                        set(family_ids),
+                        family_from_name,
+                    ):
+                        print(f"conflicting-final-zip\t{path}")
             if args.command == "storage-status" or args.dry_run:
                 return 0
         if target == "zip":
@@ -7067,6 +7593,9 @@ def run_cli(args: argparse.Namespace) -> int:
                     workers=args.workers,
                     catalog_sources=_catalog_sources(args),
                     require_resume=args.resume,
+                    available_bytes=args.available_bytes,
+                    large_zip_warning_bytes=args.large_zip_warning_bytes,
+                    max_final_zip_bytes=args.max_final_zip_bytes,
                     progress_callback=reporter.update,
                 )
             finally:
@@ -7088,15 +7617,24 @@ def run_cli(args: argparse.Namespace) -> int:
                     max_files_per_shard=max(1, args.max_files_per_shard),
                     pure_raw=args.pure_raw,
                     require_resume=args.resume,
+                    available_bytes=args.available_bytes,
                     progress_callback=reporter.update,
                 )
             finally:
                 reporter.close()
-        for key, value in summary.items():
-            print(f"{key}\t{value}")
-        if target == "zip":
-            for path in unmatched_after:
-                print(f"unmatched\t{path}")
+        if args.json:
+            json_payload = dict(summary)
+            if target == "zip":
+                json_payload["unmatched_paths"] = [
+                    str(path) for path in unmatched_after
+                ]
+            print(json.dumps(json_payload, indent=2, sort_keys=True))
+        else:
+            for key, value in summary.items():
+                print(f"{key}\t{value}")
+            if target == "zip":
+                for path in unmatched_after:
+                    print(f"unmatched\t{path}")
         return 0
     if args.command == "cleanup-tmp":
         for removed_path in cleanup_stale_tmp(
@@ -7113,6 +7651,8 @@ def run_cli(args: argparse.Namespace) -> int:
         _validate_zip_write_options(args)
         if args.progress_interval < 0:
             raise ValueError("--progress-interval must be non-negative")
+        if args.max_final_zip_bytes < 0:
+            raise ValueError("--max-final-zip-bytes must be non-negative")
         mode = _resolve_cli_mode(args, root)
         assert mode is not None
         family_ids, _ = family_context(
@@ -7131,6 +7671,7 @@ def run_cli(args: argparse.Namespace) -> int:
                 nonblocking=args.nonblocking,
                 compression=args.compression,
                 compression_level=args.compression_level,
+                max_final_zip_bytes=args.max_final_zip_bytes,
                 progress_callback=reporter.update,
             )
         finally:
@@ -7270,11 +7811,28 @@ def run_cli(args: argparse.Namespace) -> int:
         reporter = ProgressReporter(args.progress_interval)
         reporter.start()
         try:
-            verified_paths = store.verify(progress_callback=reporter.update)
+            verification_mode = "quick" if args.quick else "deep"
+            verified_paths = store.verify(
+                progress_callback=reporter.update,
+                deep=(verification_mode == "deep"),
+            )
         finally:
             reporter.close()
-        for zip_path in verified_paths:
-            print(f"verified\t{zip_path}")
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "verification_mode": verification_mode,
+                        "verified_zip_files": [str(path) for path in verified_paths],
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            print(f"verification_mode\t{verification_mode}")
+            for zip_path in verified_paths:
+                print(f"verified\t{zip_path}")
         return 0
     if args.command == "list":
         subdirs = [args.subdir] if args.subdir else store.logical_subdirs()
@@ -7314,6 +7872,8 @@ def run_cli(args: argparse.Namespace) -> int:
         return 0
     if args.command == "compact":
         _validate_zip_write_options(args)
+        if args.max_final_zip_bytes < 0:
+            raise ValueError("--max-final-zip-bytes must be non-negative")
         mode = _resolve_cli_mode(args, root)
         for zip_path in compact_archives(
             root,
@@ -7322,6 +7882,7 @@ def run_cli(args: argparse.Namespace) -> int:
             nonblocking=args.nonblocking,
             compression=args.compression,
             compression_level=args.compression_level,
+            max_bytes_per_shard=args.max_final_zip_bytes,
         ):
             print(f"compacted\t{zip_path}")
         _write_archive_status(root)
