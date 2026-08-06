@@ -3193,6 +3193,33 @@ def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     assert "write_pvalue_qvalue_distributions" in plot_script
 
 
+def test_gene_summary_csubst_scan_candidate_sites_are_opt_in_and_threshold_packaged():
+    core = _read_text(CORE_DIR / "gg_gene_summary_core.sh")
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_gene_summary_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    candidate_body = _function_body(core, "run_csubst_scan_candidate_sites_for_source")
+
+    assert 'run_csubst_scan_candidate_sites="${run_csubst_scan_candidate_sites:-0}"' in entrypoint
+    assert 'run_csubst_scan_candidate_sites="${run_csubst_scan_candidate_sites:-0}"' in core
+    assert 'validate_binary_flag "run_csubst_scan_candidate_sites"' in core
+    assert "run_csubst_scan_candidate_sites" in config_vars
+    assert 'csubst_scan_candidate_sites_min_support="${csubst_scan_candidate_sites_min_support:-5}"' in entrypoint
+    assert 'csubst_scan_candidate_sites_q_column="${csubst_scan_candidate_sites_q_column:-q_rate_enrichment_global}"' in entrypoint
+    assert 'csubst_scan_candidate_sites_q_threshold="${csubst_scan_candidate_sites_q_threshold:-0.05}"' in entrypoint
+    assert 'csubst_scan_candidate_sites_pdb="${csubst_scan_candidate_sites_pdb:-none}"' in entrypoint
+    assert "run_csubst_scan_candidate_sites=0" in candidate_body
+    assert 'python "${gg_support_dir}/csubst_scan_candidate_sites.py"' in candidate_body
+    assert '--summary_prefix "${summary_output_dir}/${gene_family_source}_csubst_aa_change"' in candidate_body
+    assert '--out_dir "${summary_output_dir}"' in candidate_body
+    assert '--min_support "${csubst_scan_candidate_sites_min_support}"' in candidate_body
+    assert '--q_column "${csubst_scan_candidate_sites_q_column}"' in candidate_body
+    assert '--q_threshold "${csubst_scan_candidate_sites_q_threshold}"' in candidate_body
+    assert '--pdb "${csubst_scan_candidate_sites_pdb}"' in candidate_body
+    assert core.index("run_csubst_scan_aa_change_summary_for_source\n") < core.index(
+        "run_csubst_scan_candidate_sites_for_source\n"
+    )
+
+
 def test_csubst_site_wrapper_omits_redundant_sites_defaults():
     wrapper = _read_text(WORKFLOW_DIR / "support" / "csubst_site_wrapper.py")
     assert "cmd = ['csubst', 'sites']" in wrapper

@@ -184,7 +184,14 @@ def csubst_nonsyn_recode_output_suffix(value):
         return ''
     return f'_nonsynRecode-{recode}'
 
-def build_csubst_sites_command(iqtree_anc_rel_dir, iqtree_anc_dir, branch_id_str, ncpu, csubst_nonsyn_recode):
+def build_csubst_sites_command(
+    iqtree_anc_rel_dir,
+    iqtree_anc_dir,
+    branch_id_str,
+    ncpu,
+    csubst_nonsyn_recode,
+    pdb='besthit',
+):
     recode = normalize_csubst_nonsyn_recode(csubst_nonsyn_recode)
     cmd = ['csubst', 'sites']
     cmd += ['--outdir', CSUBST_SITES_OUTDIR]
@@ -200,7 +207,8 @@ def build_csubst_sites_command(iqtree_anc_rel_dir, iqtree_anc_dir, branch_id_str
     cmd += ['--iqtree_log', os.path.join(iqtree_anc_dir, 'csubst.log')]
     if recode != 'no':
         cmd += ['--nonsyn_recode', recode]
-    cmd += ['--pdb', 'besthit']
+    if str(pdb or 'none').strip().lower() != 'none':
+        cmd += ['--pdb', str(pdb)]
     return cmd
 
 def shell_join_command(cmd):
@@ -1084,7 +1092,17 @@ def build_tree_plot_panel_args(file_og_rpsblast, file_csubst_input_fasta, conver
     panel_args.append(f'--panel{panel_index}=fimo,2000,0.05')
     return panel_args
 
-def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, dir_og, ncpu=1, csubst_nonsyn_recode='no'):
+def run_stat_branch2tree_plot(
+    og,
+    branch_id_str,
+    file_trait_color,
+    dir_out_og,
+    dir_og,
+    ncpu=1,
+    csubst_nonsyn_recode='no',
+    convergent_sites=None,
+    file_tree_plot_out=None,
+):
     dir_myscript = os.path.realpath(os.path.dirname(__file__))
     file_stat_branch = get_stat_branch_path(dir_og=dir_og, og=og)
     file_og_rpsblast = get_rpsblast_path(dir_og=dir_og, og=og)
@@ -1097,8 +1115,14 @@ def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, d
         raise FileNotFoundError(
             f'CSUBST site table was not found in {artifacts["site_dir"]}.'
         )
-    df_csubst_site = pandas.read_csv(file_csubst_site_tsv, sep='\t', header=0, index_col=None)
-    convergent_sites = df_csubst_site.loc[(df_csubst_site['OCNany2spe'] > 0.5), 'codon_site_alignment'].tolist()
+    explicit_convergent_sites = convergent_sites is not None
+    if convergent_sites is None:
+        df_csubst_site = pandas.read_csv(file_csubst_site_tsv, sep='\t', header=0, index_col=None)
+        convergent_sites = df_csubst_site.loc[(df_csubst_site['OCNany2spe'] > 0.5), 'codon_site_alignment'].tolist()
+    else:
+        convergent_sites = list(convergent_sites)
+    if explicit_convergent_sites and len(convergent_sites) == 0:
+        raise ValueError(f'No convergent sites were selected for tree plotting: {og}')
     convergent_site_str = ':'.join([ str(cs) for cs in convergent_sites ])
     print(f'Convergent sites extracted from {file_csubst_site_tsv}: {convergent_site_str}', flush=True)
     recoded_site_alignment = prepare_recoded_site_alignment(
@@ -1108,7 +1132,8 @@ def run_stat_branch2tree_plot(og, branch_id_str, file_trait_color, dir_out_og, d
         codon_alignment_path=file_csubst_input_fasta,
         csubst_nonsyn_recode=csubst_nonsyn_recode,
     )
-    file_tree_plot_out = og+'.tree_plot.pdf'
+    if file_tree_plot_out is None:
+        file_tree_plot_out = og+'.tree_plot.pdf'
     if os.path.exists(file_tree_plot_out):
         print(f'Tree plot skipped: outfile already exists: {file_tree_plot_out}', flush=True)
         return None

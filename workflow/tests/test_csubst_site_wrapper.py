@@ -473,6 +473,94 @@ def test_build_csubst_sites_command_passes_nondefault_nonsyn_recode_only():
     assert recoded_cmd[recoded_cmd.index("--nonsyn_recode") + 1] == "dayhoff6"
     assert default_cmd[default_cmd.index("--outdir") + 1] == "csubst_sites"
     assert default_cmd[default_cmd.index("--output_prefix") + 1] == "csubst"
+    assert default_cmd[default_cmd.index("--pdb") + 1] == "besthit"
+
+
+def test_build_csubst_sites_command_can_disable_pdb_search():
+    mod = load_module()
+
+    command = mod.build_csubst_sites_command(
+        "OG0001.iqtree.anc",
+        "/tmp/OG0001.iqtree.anc",
+        "1,2",
+        2,
+        "no",
+        pdb="none",
+    )
+
+    assert "--pdb" not in command
+
+
+def test_run_stat_branch2tree_plot_accepts_one_explicit_site(monkeypatch, tmp_path):
+    mod = load_module()
+    monkeypatch.chdir(tmp_path)
+    site_table = tmp_path / "csubst.tsv"
+    site_table.write_text(
+        "codon_site_alignment\tOCNany2spe\n2\t2.0\n5\t2.0\n",
+        encoding="utf-8",
+    )
+    iqtree_dir = tmp_path / "OG0001.iqtree.anc"
+    iqtree_dir.mkdir()
+    (iqtree_dir / "csubst.fasta").write_text(">a\nATG\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "get_stat_branch_path", lambda **kwargs: "stat.tsv")
+    monkeypatch.setattr(mod, "get_rpsblast_path", lambda **kwargs: "rps.tsv")
+    monkeypatch.setattr(mod, "get_alignment_for_tree_plot", lambda **kwargs: "trim.fa")
+    monkeypatch.setattr(mod, "get_untrimmed_alignment_for_tree_plot", lambda **kwargs: None)
+    monkeypatch.setattr(mod, "get_iqtree_anc_dir", lambda **kwargs: str(iqtree_dir))
+    monkeypatch.setattr(
+        mod,
+        "resolve_site_artifacts",
+        lambda **kwargs: {"site_table_tsv": str(site_table), "site_dir": str(tmp_path)},
+    )
+    monkeypatch.setattr(mod, "prepare_recoded_site_alignment", lambda **kwargs: None)
+    commands = []
+
+    def fake_run(command, check):
+        commands.append(command)
+        (tmp_path / "stat_branch2tree_plot.pdf").write_bytes(b"focused")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    output = tmp_path / "focused.pdf"
+
+    mod.run_stat_branch2tree_plot(
+        og="OG0001",
+        branch_id_str="1,2",
+        file_trait_color="trait.tsv",
+        dir_out_og=str(tmp_path),
+        dir_og=str(tmp_path),
+        convergent_sites=[5],
+        file_tree_plot_out=str(output),
+    )
+
+    assert output.read_bytes() == b"focused"
+    assert "--panel10=amino_acid_site,1,5," + str(iqtree_dir / "csubst.fasta") in commands[0]
+    assert not any("amino_acid_site,1,2:5," in token for token in commands[0])
+
+    site_table.write_text(
+        "codon_site_alignment\tOCNany2spe\n2\t0.0\n5\t0.0\n",
+        encoding="utf-8",
+    )
+    legacy_output = tmp_path / "legacy-empty-sites.pdf"
+    mod.run_stat_branch2tree_plot(
+        og="OG0001",
+        branch_id_str="1,2",
+        file_trait_color="trait.tsv",
+        dir_out_og=str(tmp_path),
+        dir_og=str(tmp_path),
+        file_tree_plot_out=str(legacy_output),
+    )
+    assert legacy_output.read_bytes() == b"focused"
+
+    with pytest.raises(ValueError, match="No convergent sites"):
+        mod.run_stat_branch2tree_plot(
+            og="OG0001",
+            branch_id_str="1,2",
+            file_trait_color="trait.tsv",
+            dir_out_og=str(tmp_path),
+            dir_og=str(tmp_path),
+            convergent_sites=[],
+            file_tree_plot_out=str(tmp_path / "explicit-empty-sites.pdf"),
+        )
 
 
 def test_get_alignment_for_tree_plot_rejects_legacy_dot_clipkit_name(tmp_path):

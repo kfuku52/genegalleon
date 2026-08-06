@@ -20,10 +20,16 @@ run_family_completion_summary="${run_family_completion_summary:-1}"
 run_presence_absence_summary="${run_presence_absence_summary:-1}"
 run_gene_family_database_build="${run_gene_family_database_build:-0}"
 run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}"
+run_csubst_scan_candidate_sites="${run_csubst_scan_candidate_sites:-0}"
 run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}"
 run_hgt_summary_plots="${run_hgt_summary_plots:-0}"
 run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}"
 csubst_site_nonsyn_recode=$(echo "${csubst_site_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
+csubst_scan_candidate_sites_min_support="${csubst_scan_candidate_sites_min_support:-5}"
+csubst_scan_candidate_sites_q_column="${csubst_scan_candidate_sites_q_column:-q_rate_enrichment_global}"
+csubst_scan_candidate_sites_q_threshold="${csubst_scan_candidate_sites_q_threshold:-0.05}"
+csubst_scan_candidate_sites_max_candidates="${csubst_scan_candidate_sites_max_candidates:-0}"
+csubst_scan_candidate_sites_pdb=$(echo "${csubst_scan_candidate_sites_pdb:-none}" | tr '[:upper:]' '[:lower:]')
 presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}"
 presence_absence_heatmap_value=$(echo "${presence_absence_heatmap_value:-presence}" | tr '[:upper:]' '[:lower:]')
 presence_absence_species_tree="${presence_absence_species_tree:-auto}"
@@ -63,10 +69,21 @@ validate_binary_flag "run_family_completion_summary" "${run_family_completion_su
 validate_binary_flag "run_presence_absence_summary" "${run_presence_absence_summary}"
 validate_binary_flag "run_gene_family_database_build" "${run_gene_family_database_build}"
 validate_binary_flag "run_csubst_scan_aa_change_summary" "${run_csubst_scan_aa_change_summary}"
+validate_binary_flag "run_csubst_scan_candidate_sites" "${run_csubst_scan_candidate_sites}"
 validate_binary_flag "run_hgt_candidate_summary" "${run_hgt_candidate_summary}"
 validate_binary_flag "run_hgt_summary_plots" "${run_hgt_summary_plots}"
 validate_binary_flag "run_csubst_site_convergence_summary" "${run_csubst_site_convergence_summary}"
 validate_binary_flag "presence_absence_include_incomplete" "${presence_absence_include_incomplete}"
+
+case "${csubst_scan_candidate_sites_pdb}" in
+  none|besthit)
+    ;;
+  *)
+    echo "Invalid csubst_scan_candidate_sites_pdb: ${csubst_scan_candidate_sites_pdb}"
+    echo 'csubst_scan_candidate_sites_pdb must be either "none" or "besthit". Exiting.'
+    exit 1
+    ;;
+esac
 
 case "${gene_family_source}" in
   query2family)
@@ -520,6 +537,34 @@ run_csubst_scan_aa_change_summary_for_source() {
   python "${gg_support_dir}/plot_csubst_aa_change_summary.py" "${summary_args[@]}"
 }
 
+run_csubst_scan_candidate_sites_for_source() {
+  if [[ ${run_csubst_scan_candidate_sites} -ne 1 ]]; then
+    echo "Skipping CSUBST scan candidate sites because run_csubst_scan_candidate_sites=0."
+    return 0
+  fi
+  local candidate_trait_file="${csubst_site_trait_file}"
+  if [[ "${candidate_trait_file}" == "auto" ]]; then
+    candidate_trait_file="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
+  fi
+  if [[ ! -s "${candidate_trait_file}" ]]; then
+    echo "CSUBST scan candidate-site trait table was not found: ${candidate_trait_file}" >&2
+    return 1
+  fi
+  echo "Packaging significant CSUBST scan candidates for gene_family_source=${gene_family_source}."
+  python "${gg_support_dir}/csubst_scan_candidate_sites.py" \
+    --summary_prefix "${summary_output_dir}/${gene_family_source}_csubst_aa_change" \
+    --dir_orthogroup "${dir_gene_family}" \
+    --file_trait "${candidate_trait_file}" \
+    --out_dir "${summary_output_dir}" \
+    --min_support "${csubst_scan_candidate_sites_min_support}" \
+    --q_column "${csubst_scan_candidate_sites_q_column}" \
+    --q_threshold "${csubst_scan_candidate_sites_q_threshold}" \
+    --max_candidates "${csubst_scan_candidate_sites_max_candidates}" \
+    --ncpu "${GG_TASK_CPUS:-1}" \
+    --csubst_nonsyn_recode "${csubst_site_nonsyn_recode}" \
+    --pdb "${csubst_scan_candidate_sites_pdb}"
+}
+
 run_hgt_summary_for_source() {
   if [[ ${run_hgt_candidate_summary} -ne 1 && ${run_hgt_summary_plots} -ne 1 ]]; then
     echo "Skipping HGT summary because run_hgt_candidate_summary=0 and run_hgt_summary_plots=0."
@@ -572,6 +617,7 @@ run_family_completion_summary_for_source
 run_presence_absence_summary_for_source
 run_gene_family_database_for_source
 run_csubst_scan_aa_change_summary_for_source
+run_csubst_scan_candidate_sites_for_source
 run_hgt_summary_for_source
 run_csubst_site_convergence_summary_for_source
 

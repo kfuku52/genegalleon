@@ -267,6 +267,23 @@ When
 is available, every orthogroup `min_support_*_summary.tsv` also includes the
 five representative `besthit_0.05` through `besthit_0.95` annotation columns.
 
+To also package analytical-global-q candidates for focused site review, enable
+the opt-in candidate-site stage. The summary stage may be enabled in the same
+run or its existing min-support TSVs may be reused:
+
+```bash
+cd workflow
+GG_GENE_SUMMARY_GENE_FAMILY_SOURCE=orthogroup \
+GG_GENE_SUMMARY_RUN_CSUBST_SCAN_AA_CHANGE_SUMMARY=1 \
+GG_GENE_SUMMARY_RUN_CSUBST_SCAN_CANDIDATE_SITES=1 \
+bash gg_gene_summary_entrypoint.sh
+```
+
+With the defaults, this writes one ZIP per threshold from the observed maximum
+down to 5 in `workspace/output/gene_summary/orthogroup`. Each threshold uses
+its own recalculated `q_rate_enrichment_global <= 0.05` selection and includes
+focused tree/site reports for the retained rows.
+
 For query2family outputs, switch the gene-family source:
 
 ```bash

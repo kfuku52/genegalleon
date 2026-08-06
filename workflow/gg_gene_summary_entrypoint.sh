@@ -79,12 +79,20 @@ run_family_completion_summary="${run_family_completion_summary:-1}" # Generate p
 run_presence_absence_summary="${run_presence_absence_summary:-1}" # Generate species x gene-family presence/absence and copy-number matrices.
 run_gene_family_database_build="${run_gene_family_database_build:-0}" # Prepare or refresh gg_orthogroup.db for the selected source.
 run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}" # Generate CSUBST scan AA-change summary tables and plots from gg_orthogroup.db.
+run_csubst_scan_candidate_sites="${run_csubst_scan_candidate_sites:-0}" # Package significant scan candidates and focused csubst sites reports by min_support.
 run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}" # Summarize GeneRax-first HGT candidate evidence from gg_orthogroup.db.
 run_hgt_summary_plots="${run_hgt_summary_plots:-0}" # Generate HGT overview, taxonomy-flow, and per-family HGT tree plots.
 run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}" # Run site-level convergence screening for the selected source.
 
 # Output and shared summary parameters
 summary_output_dir="${summary_output_dir:-auto}" # Output directory for source-specific gene summaries.
+
+# CSUBST scan candidate-site parameters
+csubst_scan_candidate_sites_min_support="${csubst_scan_candidate_sites_min_support:-5}" # Lowest post-hoc support threshold; ZIPs are generated from the observed maximum down to this value.
+csubst_scan_candidate_sites_q_column="${csubst_scan_candidate_sites_q_column:-q_rate_enrichment_global}" # Recalculated q-value column used to select candidates.
+csubst_scan_candidate_sites_q_threshold="${csubst_scan_candidate_sites_q_threshold:-0.05}" # Inclusive q-value cutoff used independently in each min_support summary.
+csubst_scan_candidate_sites_max_candidates="${csubst_scan_candidate_sites_max_candidates:-0}" # Maximum candidates per threshold ZIP; 0 keeps all significant candidates.
+csubst_scan_candidate_sites_pdb="${csubst_scan_candidate_sites_pdb:-none}" # none|besthit; optional csubst protein-structure search for unique candidates.
 
 # Gene-family species-tree presence/absence parameters
 presence_absence_species_tree="${presence_absence_species_tree:-auto}" # Species tree path, or auto to use query2family/species_tree outputs.

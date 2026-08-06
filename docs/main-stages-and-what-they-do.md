@@ -390,7 +390,7 @@ Notable defaults:
   BUSCO full tables or `workspace/output/species_tree/busco_summary_table/busco_summary.tsv`
   are available; full tables include Fragmented counts
 - `presence_absence_plot_width=7.2`; the plotter caps figure width at 7.2 inches
-- `run_gene_family_database_build=0`, `run_csubst_scan_aa_change_summary=0`, `run_hgt_candidate_summary=0`, `run_hgt_summary_plots=0`, and `run_csubst_site_convergence_summary=0`
+- `run_gene_family_database_build=0`, `run_csubst_scan_aa_change_summary=0`, `run_csubst_scan_candidate_sites=0`, `run_hgt_candidate_summary=0`, `run_hgt_summary_plots=0`, and `run_csubst_site_convergence_summary=0`
 - database, CSUBST scan AA-change summary, HGT, and CSUBST site convergence flags are valid for both sources and use the selected source's gene-family output directory,
 - `run_gene_family_database_build=1` assembles the selected source's SQLite DB from
   logical `stat_tree` and `stat_branch` inputs, whether they are live files or
@@ -416,6 +416,13 @@ Notable defaults:
   annotation columns from `Orthogroups.GeneCount.annotated.tsv` when available,
   and those columns are retained throughout the threshold series; use it with
   `run_gene_family_database_build=1` to refresh the DB and plots in one run,
+- `run_csubst_scan_candidate_sites=1` selects candidates independently from each
+  recalculated min-support summary (default: analytical global
+  `q_rate_enrichment_global <= 0.05`, thresholds from the observed maximum down
+  to 5), analyzes each unique candidate once, and writes a self-contained ZIP
+  per threshold directly under `gene_summary/<source>`; every candidate entry
+  contains its annotated row, raw `csubst sites` outputs, an exact-site tree
+  PDF, and a combined report; PDB search is disabled by default,
 - `run_csubst_site_convergence_summary=1` runs site-level convergence screening with
   `csubst_site_wrapper.py`, combines orthogroup results with species traits,
   and writes convergence outputs under the selected source's `csubst_site`

@@ -149,6 +149,55 @@ def test_gene_summary_run_csubst_scan_aa_change_summary_env_override_and_forward
     ]
 
 
+def test_gene_summary_candidate_site_options_are_forwarded(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "run_csubst_scan_candidate_sites=1; "
+        "csubst_scan_candidate_sites_min_support=5; "
+        "csubst_scan_candidate_sites_q_threshold=0.01; "
+        "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
+        'printf "run=%s\\nmin=%s\\nq=%s\\n" '
+        '"${SINGULARITYENV_run_csubst_scan_candidate_sites:-}" '
+        '"${SINGULARITYENV_csubst_scan_candidate_sites_min_support:-}" '
+        '"${SINGULARITYENV_csubst_scan_candidate_sites_q_threshold:-}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "run=1",
+        "min=5",
+        "q=0.01",
+    ]
+
+
+def test_gene_summary_candidate_site_scoped_env_override_is_applied(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"source {shlex.quote(str(GG_ENTRYPOINT_CONFIG_VARS_PATH))}; "
+        "run_csubst_scan_candidate_sites=0; "
+        "csubst_scan_candidate_sites_min_support=5; "
+        "GG_GENE_SUMMARY_RUN_CSUBST_SCAN_CANDIDATE_SITES=1; "
+        "GG_GENE_SUMMARY_CSUBST_SCAN_CANDIDATE_SITES_MIN_SUPPORT=7; "
+        "gg_apply_registered_env_overrides gg_gene_summary_entrypoint.sh; "
+        "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
+        'printf "run=%s\\nmin=%s\\nforwarded=%s\\n" '
+        '"${run_csubst_scan_candidate_sites}" '
+        '"${csubst_scan_candidate_sites_min_support}" '
+        '"${SINGULARITYENV_run_csubst_scan_candidate_sites:-}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "run=1",
+        "min=7",
+        "forwarded=1",
+    ]
+
+
 def test_export_var_to_container_env_ignores_invalid_variable_name(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "

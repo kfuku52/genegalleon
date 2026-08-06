@@ -438,6 +438,50 @@ P-values are retained. Consequently, these files are a post-hoc multiple-test
 sensitivity analysis; changing `csubst_scan_min_support` and rerunning
 `csubst scan` can also change the empirical null distributions and is required
 for an exact empirical/maxT reanalysis.
+
+Set `run_csubst_scan_candidate_sites=1` in `gg_gene_summary_entrypoint.sh` to
+turn significant rows from that sensitivity series into focused site reports.
+This is opt-in because `csubst sites` and tree rendering can be expensive. The
+defaults are:
+
+```bash
+run_csubst_scan_candidate_sites=0
+csubst_scan_candidate_sites_min_support=5
+csubst_scan_candidate_sites_q_column="q_rate_enrichment_global"
+csubst_scan_candidate_sites_q_threshold="0.05"
+csubst_scan_candidate_sites_max_candidates=0
+csubst_scan_candidate_sites_pdb="none"
+```
+
+GeneGalleon visits the available integer thresholds from the observed maximum
+down to `csubst_scan_candidate_sites_min_support`. Candidate selection is
+performed independently against each threshold's recalculated q-value column.
+The expensive site analysis is cached by orthogroup, alignment site, state
+change, supporting branch set, recoding mode, and PDB mode, so a candidate
+retained at several thresholds is analyzed once during the run and reused.
+`csubst_scan_candidate_sites_max_candidates=0` keeps all significant rows;
+positive values keep the best-ranked rows separately at each threshold.
+Protein-structure searching is disabled by default and can be enabled with
+`csubst_scan_candidate_sites_pdb="besthit"`.
+
+Each threshold produces one self-contained ZIP directly under
+`gene_summary/<source>`:
+
+```text
+<source>_csubst_aa_change_candidate_sites_min_support_<N>_q_rate_enrichment_global_le_0.05.zip
+```
+
+The ZIP contains a candidate manifest plus one directory per selected row.
+Each candidate directory contains its one-row annotated TSV, raw `csubst sites`
+outputs, a tree PDF restricted to the selected alignment site, and a combined
+PDF report. The sibling `*_candidate_sites_*_manifest.tsv` records threshold
+order, candidate counts, archive names, completion status, and analysis-engine
+provenance. Existing ZIPs and cached analyses are reused only when the source
+summary, GeneGalleon plotting code, installed csubst implementation, and core
+Python PDF/table dependencies match; stale or incomplete archives are rebuilt.
+The existing arity-based `run_csubst_site_convergence_summary` output is
+unchanged.
+
 Combine it with
 `run_gene_family_database_build=1` to refresh the database and plots in one run.
 
