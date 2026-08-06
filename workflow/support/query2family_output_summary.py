@@ -15,7 +15,7 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
-from gene_family_output_store import GeneFamilyOutputStore, SHARED_OUTPUT_SUBDIRS
+from gene_family_output_store import SHARED_OUTPUT_SUBDIRS, GeneFamilyOutputStore
 
 
 def build_arg_parser():

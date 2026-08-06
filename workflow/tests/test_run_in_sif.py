@@ -4,7 +4,6 @@ from pathlib import Path
 
 from shell_static_helpers import REPO_ROOT
 
-
 RUN_IN_SIF = REPO_ROOT / "workflow" / "tests" / "run_in_sif.sh"
 
 
