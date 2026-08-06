@@ -7,7 +7,6 @@ gg_print_entrypoint_config_vars() {
   case "${entrypoint_name}" in
     gg_gene_summary_entrypoint.sh)
       cat <<'EOF'
-csubst_scan_aa_change_top_n
 csubst_site_arity_range
 csubst_site_max_candidates_per_arity
 csubst_site_min_fg_stem_ratio

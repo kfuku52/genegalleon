@@ -402,12 +402,19 @@ Notable defaults:
 - when present, `csubst_scan/` is imported as DB table `aa_change`, and
   `csubst_scan_units/` is imported as `aa_change_unit`; `aa_change` receives
   global BH-FDR columns after all candidate substitutions are loaded,
-- `run_csubst_scan_aa_change_summary=1` writes `*_csubst_aa_change_summary.tsv` ranked
-  by the global FDR columns and, when `aa_change` candidates are available,
-  CSUBST scan plots for evidence density, substitution spectrum, and
-  foreground-unit support, plus a four-panel comparison of analytical,
+- `run_csubst_scan_aa_change_summary=1` writes
+  `*_csubst_aa_change_min_support_2_summary.tsv` ranked by the global FDR
+  columns and, when `aa_change` candidates are available,
+  CSUBST scan plots for foreground-support-binned significance rates and the
+  substitution spectrum, plus a four-panel comparison of analytical,
   candidate-level empirical, and full-scan empirical maxT P values with their
-  corresponding global BH-FDR q values; use it with
+  corresponding global BH-FDR q values; all primary filenames include
+  `min_support_2`, matching the upstream default; the same directory also
+  receives the integer support-threshold series from 3 to the observed maximum,
+  with filtered TSVs, recalculated BH q values, P/q-distribution PDFs, and a
+  manifest; orthogroup TSVs include the five representative `besthit_*`
+  annotation columns from `Orthogroups.GeneCount.annotated.tsv` when available,
+  and those columns are retained throughout the threshold series; use it with
   `run_gene_family_database_build=1` to refresh the DB and plots in one run,
 - `run_csubst_site_convergence_summary=1` runs site-level convergence screening with
   `csubst_site_wrapper.py`, combines orthogroup results with species traits,

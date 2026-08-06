@@ -86,9 +86,6 @@ run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}" 
 # Output and shared summary parameters
 summary_output_dir="${summary_output_dir:-auto}" # Output directory for source-specific gene summaries.
 
-# CSUBST scan AA-change summary parameters
-csubst_scan_aa_change_top_n="${csubst_scan_aa_change_top_n:-30}" # Number of top CSUBST scan candidates shown in the foreground-unit support matrix.
-
 # Gene-family species-tree presence/absence parameters
 presence_absence_species_tree="${presence_absence_species_tree:-auto}" # Species tree path, or auto to use query2family/species_tree outputs.
 presence_absence_species_tree_ci="${presence_absence_species_tree_ci:-auto}" # Dated species-tree CI path, or auto to use mcmctree_95CI.nwk when available.

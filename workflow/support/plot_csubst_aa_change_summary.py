@@ -5,6 +5,8 @@ import argparse
 import os
 import re
 import sqlite3
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -49,6 +51,34 @@ PVALUE_QVALUE_METHODS = [
     },
 ]
 PROBABILITY_COUNT_THRESHOLDS = (0.05, 0.01, 0.001)
+SUPPORT_SIGNIFICANCE_THRESHOLD = 0.05
+SUPPORT_BIN_COUNT = 10
+PRIMARY_MIN_SUPPORT = 2
+MIN_SUPPORT_SENSITIVITY_START = 3
+ORTHOGROUP_BESTHIT_COLUMNS = [
+    "besthit_0.05",
+    "besthit_0.25",
+    "besthit_0.5",
+    "besthit_0.75",
+    "besthit_0.95",
+]
+GLOBAL_QVALUE_COLUMNS = {
+    "p_rate_enrichment": "q_rate_enrichment_global",
+    "p_rate_enrichment_empirical": "q_rate_enrichment_empirical_global",
+    "p_rate_enrichment_empirical_maxT": "q_rate_enrichment_empirical_maxT_global",
+}
+GROUPED_QVALUE_COLUMNS = {
+    "p_rate_enrichment": {
+        "q_rate_enrichment": ("orthogroup",),
+        "q_rate_enrichment_by_trait": ("orthogroup", "trait"),
+        "q_rate_enrichment_by_trait_match": ("orthogroup", "trait", "scan_match"),
+    },
+    "p_rate_enrichment_empirical": {
+        "q_rate_enrichment_empirical": ("orthogroup",),
+        "q_rate_enrichment_empirical_by_trait": ("orthogroup", "trait"),
+        "q_rate_enrichment_empirical_by_trait_match": ("orthogroup", "trait", "scan_match"),
+    },
+}
 AA_ORDER = list("ACDEFGHIKLMNPQRSTVWY")
 DISPLAY_COLUMNS = [
     "orthogroup",
@@ -98,19 +128,19 @@ def parse_args():
         metavar="PATH_PREFIX",
         required=True,
         help=(
-            "Prefix for plot PDFs. Writes *_evidence_density.pdf, "
-            "*_substitution_spectrum.pdf, *_foreground_unit_support_matrix.pdf, "
-            "and *_pvalue_qvalue_distributions.pdf."
+            "Prefix for plot PDFs. Writes min_support_2 primary outputs plus "
+            "min_support_3 and higher sensitivity outputs in the same directory."
+        ),
+    )
+    parser.add_argument(
+        "--orthogroup_annotation_tsv",
+        metavar="PATH",
+        help=(
+            "Optional Orthogroups.GeneCount.annotated.tsv path. When supplied, "
+            "the five representative besthit columns are joined by orthogroup."
         ),
     )
     parser.add_argument("--table", metavar="NAME", default="aa_change", help="Database table name. Default: aa_change.")
-    parser.add_argument(
-        "--top_n",
-        metavar="INT",
-        default=30,
-        type=int,
-        help="Number of top candidates to show in the foreground-unit support matrix.",
-    )
     return parser.parse_args()
 
 
@@ -145,6 +175,108 @@ def read_table(conn, table):
     return pd.read_sql_query(query, conn)
 
 
+def attach_orthogroup_besthits(df, annotation_path):
+    if not annotation_path:
+        return df
+
+    annotation_path = Path(annotation_path)
+    if not annotation_path.is_file():
+        print(
+            f"Warning: orthogroup annotation table was not found: {annotation_path}. "
+            "Writing CSUBST summaries without besthit columns.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return df
+    if "orthogroup" not in df.columns:
+        raise ValueError(
+            "Cannot join orthogroup annotations because the CSUBST summary has no "
+            "'orthogroup' column."
+        )
+
+    annotation_key = "Orthogroup"
+    required_columns = [annotation_key, *ORTHOGROUP_BESTHIT_COLUMNS]
+    header = pd.read_csv(annotation_path, sep="\t", nrows=0).columns.tolist()
+    missing_columns = [column for column in required_columns if column not in header]
+    if missing_columns:
+        raise ValueError(
+            f"Orthogroup annotation table is missing required columns: "
+            f"{', '.join(missing_columns)}"
+        )
+
+    annotation = pd.read_csv(
+        annotation_path,
+        sep="\t",
+        usecols=required_columns,
+        dtype={annotation_key: "string"},
+        low_memory=False,
+    )
+    annotation[annotation_key] = annotation[annotation_key].str.strip()
+    missing_keys = annotation[annotation_key].isna() | annotation[annotation_key].eq("")
+    if missing_keys.any():
+        raise ValueError(
+            "Orthogroup annotation table contains "
+            f"{int(missing_keys.sum()):,} blank Orthogroup key(s)."
+        )
+    duplicate_keys = annotation[annotation_key].duplicated(keep=False)
+    if duplicate_keys.any():
+        examples = annotation.loc[duplicate_keys, annotation_key].drop_duplicates().head(5)
+        raise ValueError(
+            "Orthogroup annotation table contains duplicate Orthogroup keys: "
+            f"{', '.join(examples.astype(str))}"
+        )
+
+    join_key = "_orthogroup_annotation_key"
+    summary_keys = df["orthogroup"].astype("string").str.strip()
+    unique_summary_keys = summary_keys.dropna()
+    unique_summary_keys = unique_summary_keys[unique_summary_keys.ne("")].drop_duplicates()
+    if not unique_summary_keys.empty:
+        matched = unique_summary_keys.isin(annotation[annotation_key])
+        matched_count = int(matched.sum())
+        total_count = int(unique_summary_keys.shape[0])
+        if matched_count == 0:
+            raise ValueError(
+                "Orthogroup annotation join matched 0 of "
+                f"{total_count:,} CSUBST orthogroups. Check for an OG/HOG identifier mismatch."
+            )
+        coverage = matched_count / total_count
+        if matched_count < total_count:
+            print(
+                "Warning: orthogroup annotation join matched "
+                f"{matched_count:,} of {total_count:,} unique CSUBST orthogroups "
+                f"({coverage:.1%}); unmatched rows retain blank besthit values.",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print(
+                "Orthogroup annotation join matched "
+                f"{matched_count:,} of {total_count:,} unique CSUBST orthogroups (100.0%).",
+                flush=True,
+            )
+
+    output = df.drop(columns=[col for col in ORTHOGROUP_BESTHIT_COLUMNS if col in df.columns]).copy()
+    output[join_key] = summary_keys
+    annotation = annotation.rename(columns={annotation_key: join_key})
+    row_count = output.shape[0]
+    output = output.merge(
+        annotation,
+        how="left",
+        on=join_key,
+        sort=False,
+        validate="many_to_one",
+    ).drop(columns=join_key)
+    if output.shape[0] != row_count:
+        raise RuntimeError(
+            "Orthogroup annotation join changed the number of CSUBST summary rows: "
+            f"{row_count:,} -> {output.shape[0]:,}."
+        )
+
+    ordered_columns = ["orthogroup", *ORTHOGROUP_BESTHIT_COLUMNS]
+    ordered_columns.extend(column for column in output.columns if column not in ordered_columns)
+    return output.loc[:, ordered_columns]
+
+
 def choose_score_column(df):
     for col in FDR_PRIORITY:
         if col in df.columns and pd.to_numeric(df[col], errors="coerce").notna().any():
@@ -153,13 +285,6 @@ def choose_score_column(df):
         if col in df.columns and pd.to_numeric(df[col], errors="coerce").notna().any():
             return col, "P"
     return None, ""
-
-
-def negative_log10(series):
-    values = pd.to_numeric(series, errors="coerce")
-    positive = values[values > 0]
-    floor_value = positive.min() / 10 if not positive.empty else 1e-300
-    return -np.log10(values.fillna(1.0).clip(lower=floor_value, upper=1.0))
 
 
 def numeric_column(df, column, default=np.nan):
@@ -188,21 +313,184 @@ def ranked_candidates(df):
     return out.drop(columns=[col for col in internal_cols if col in out.columns]), score_col, score_kind
 
 
-def prepare_plot_data(df, score_col):
-    out = df.copy()
-    out["_score"] = pd.to_numeric(out[score_col], errors="coerce")
-    out["_neg_log10"] = negative_log10(out["_score"])
-    out["_support_fraction"] = numeric_column(out, "support_fraction", 0).fillna(0)
-    out["_support_unit_count"] = numeric_column(out, "support_unit_count", 0).fillna(0)
-    return out
+def calculate_bh_fdr(pvalues):
+    pvalues = pd.to_numeric(pd.Series(pvalues), errors="coerce").to_numpy(dtype=float)
+    qvalues = np.full(shape=pvalues.shape, fill_value=np.nan, dtype=float)
+    finite = np.isfinite(pvalues)
+    if not finite.any():
+        return qvalues
+    finite_index = np.flatnonzero(finite)
+    finite_p = np.clip(pvalues[finite], 0.0, 1.0)
+    order = np.argsort(finite_p, kind="mergesort")
+    ranked = finite_p[order]
+    ranks = np.arange(1, ranked.shape[0] + 1, dtype=float)
+    ranked_q = ranked * ranked.shape[0] / ranks
+    ranked_q = np.minimum.accumulate(ranked_q[::-1])[::-1]
+    ranked_q = np.clip(ranked_q, 0.0, 1.0)
+    qvalues[finite_index[order]] = ranked_q
+    return qvalues
+
+
+def calculate_grouped_bh_fdr(df, p_column, group_columns):
+    qvalues = np.full(shape=df.shape[0], fill_value=np.nan, dtype=float)
+    grouped_positions = df.groupby(list(group_columns), sort=False, dropna=False).indices.values()
+    for positions in grouped_positions:
+        positions = np.asarray(positions, dtype=np.int64)
+        qvalues[positions] = calculate_bh_fdr(df.iloc[positions][p_column])
+    return qvalues
+
+
+def recalculate_sensitivity_qvalues(df):
+    recalculated = []
+    for p_column, q_column in GLOBAL_QVALUE_COLUMNS.items():
+        if p_column not in df.columns:
+            continue
+        df[q_column] = calculate_bh_fdr(df[p_column])
+        recalculated.append(q_column)
+    for p_column, q_columns in GROUPED_QVALUE_COLUMNS.items():
+        if p_column not in df.columns:
+            continue
+        for q_column, group_columns in q_columns.items():
+            if not set(group_columns).issubset(df.columns):
+                continue
+            df[q_column] = calculate_grouped_bh_fdr(df, p_column, group_columns)
+            recalculated.append(q_column)
+    return recalculated
+
+
+def min_support_sensitivity_thresholds(df, start=MIN_SUPPORT_SENSITIVITY_START):
+    support = numeric_column(df, "support_unit_count")
+    finite = support[np.isfinite(support)]
+    if finite.empty:
+        return []
+    maximum = int(np.floor(finite.max()))
+    if maximum < start:
+        return []
+    return list(range(start, maximum + 1))
+
+
+def min_support_sensitivity_paths(out_prefix, threshold=None):
+    prefix = Path(str(out_prefix))
+    output_dir = prefix.parent
+    stem = prefix.name
+    paths = {
+        "output_dir": output_dir,
+        "manifest": output_dir / f"{stem}_min_support_manifest.tsv",
+    }
+    if threshold is not None:
+        threshold_stem = f"{stem}_min_support_{threshold}"
+        paths.update(
+            {
+                "summary_tsv": output_dir / f"{threshold_stem}_summary.tsv",
+                "plot_pdf": output_dir / f"{threshold_stem}_pvalue_qvalue_distributions.pdf",
+            }
+        )
+    return paths
+
+
+def qvalue_manifest_metrics(values):
+    values = np.asarray(values, dtype=np.float64)
+    finite = values[np.isfinite(values)]
+    metrics = {"min": float(finite.min()) if finite.size else np.nan}
+    for threshold in PROBABILITY_COUNT_THRESHOLDS:
+        metrics[f"le_{threshold}"] = int((finite <= threshold).sum())
+    return metrics
+
+
+def remove_stale_min_support_sensitivity_outputs(out_prefix, thresholds):
+    paths = min_support_sensitivity_paths(out_prefix)
+    output_dir = paths["output_dir"]
+    if not output_dir.is_dir():
+        return
+    primary_paths = min_support_sensitivity_paths(out_prefix, PRIMARY_MIN_SUPPORT)
+    expected = {primary_paths["summary_tsv"], primary_paths["plot_pdf"]}
+    for threshold in thresholds:
+        threshold_paths = min_support_sensitivity_paths(out_prefix, threshold)
+        expected.update((threshold_paths["summary_tsv"], threshold_paths["plot_pdf"]))
+    stem = Path(str(out_prefix)).name
+    patterns = (
+        f"{stem}_min_support_*_summary.tsv",
+        f"{stem}_min_support_*_pvalue_qvalue_distributions.pdf",
+    )
+    for pattern in patterns:
+        for candidate in output_dir.glob(pattern):
+            if candidate not in expected:
+                candidate.unlink()
+    paths["manifest"].unlink(missing_ok=True)
+
+
+def remove_legacy_min_support_output_layout(out_prefix):
+    prefix = Path(str(out_prefix))
+    legacy_files = (
+        Path(f"{prefix}_summary.tsv"),
+        Path(f"{prefix}_support_significance_rate.pdf"),
+        Path(f"{prefix}_substitution_spectrum.pdf"),
+        Path(f"{prefix}_pvalue_qvalue_distributions.pdf"),
+    )
+    for legacy_file in legacy_files:
+        legacy_file.unlink(missing_ok=True)
+
+    legacy_dir = prefix.parent / "min_support_sensitivity"
+    if not legacy_dir.is_dir():
+        return
+    patterns = (
+        f"{prefix.name}_min_support_*_summary.tsv",
+        f"{prefix.name}_min_support_*_pvalue_qvalue_distributions.pdf",
+        f"{prefix.name}_min_support_manifest.tsv",
+    )
+    for pattern in patterns:
+        for candidate in legacy_dir.glob(pattern):
+            candidate.unlink()
+    try:
+        legacy_dir.rmdir()
+    except OSError:
+        pass
+
+
+def write_min_support_sensitivity(df, out_prefix):
+    thresholds = min_support_sensitivity_thresholds(df)
+    remove_stale_min_support_sensitivity_outputs(out_prefix, thresholds)
+    if not thresholds:
+        print(
+            "Skipping min_support sensitivity outputs because support_unit_count "
+            f"has no finite value >= {MIN_SUPPORT_SENSITIVITY_START}.",
+            flush=True,
+        )
+        return None
+
+    paths = min_support_sensitivity_paths(out_prefix)
+    paths["output_dir"].mkdir(parents=True, exist_ok=True)
+    support = numeric_column(df, "support_unit_count")
+    manifest_rows = []
+    for threshold in thresholds:
+        threshold_paths = min_support_sensitivity_paths(out_prefix, threshold)
+        subset = df.loc[support >= threshold].copy()
+        q_columns = recalculate_sensitivity_qvalues(subset)
+        subset.to_csv(threshold_paths["summary_tsv"], sep="\t", index=False)
+        write_pvalue_qvalue_distributions(subset, threshold_paths["plot_pdf"])
+        row = {
+            "min_support": threshold,
+            "candidate_rows": int(subset.shape[0]),
+            "summary_tsv": threshold_paths["summary_tsv"].name,
+            "plot_pdf": threshold_paths["plot_pdf"].name,
+        }
+        for q_column in q_columns:
+            metrics = qvalue_manifest_metrics(subset[q_column])
+            for metric, value in metrics.items():
+                row[f"{q_column}_{metric}"] = value
+        manifest_rows.append(row)
+        print(f"min_support={threshold}: {subset.shape[0]:,} candidate rows", flush=True)
+
+    pd.DataFrame(manifest_rows).to_csv(paths["manifest"], sep="\t", index=False)
+    return paths["manifest"]
 
 
 def plot_paths(out_prefix):
+    primary_prefix = f"{out_prefix}_min_support_{PRIMARY_MIN_SUPPORT}"
     return {
-        "evidence_density": f"{out_prefix}_evidence_density.pdf",
-        "substitution_spectrum": f"{out_prefix}_substitution_spectrum.pdf",
-        "foreground_unit_support_matrix": f"{out_prefix}_foreground_unit_support_matrix.pdf",
-        "pvalue_qvalue_distributions": f"{out_prefix}_pvalue_qvalue_distributions.pdf",
+        "support_significance_rate": f"{primary_prefix}_support_significance_rate.pdf",
+        "substitution_spectrum": f"{primary_prefix}_substitution_spectrum.pdf",
+        "pvalue_qvalue_distributions": f"{primary_prefix}_pvalue_qvalue_distributions.pdf",
     }
 
 
@@ -442,59 +730,182 @@ def write_pvalue_qvalue_distributions(df, out_pdf):
         plt.close(fig)
 
 
-def write_evidence_density(df, score_col, out_pdf):
+def support_significance_data(
+    df,
+    bin_count=SUPPORT_BIN_COUNT,
+    threshold=SUPPORT_SIGNIFICANCE_THRESHOLD,
+):
+    support = numeric_column(df, "support_fraction")
+    support_valid = support.notna() & np.isfinite(support) & support.between(0.0, 1.0)
+    edges = np.linspace(0.0, 1.0, bin_count + 1)
+    centers = (edges[:-1] + edges[1:]) / 2.0
+    support_bins = pd.cut(
+        support,
+        bins=edges,
+        labels=centers,
+        include_lowest=True,
+        right=True,
+    )
+    candidate_counts = (
+        support_bins[support_valid]
+        .value_counts(sort=False)
+        .reindex(centers, fill_value=0)
+        .to_numpy(dtype=np.int64)
+    )
+
+    method_series = []
+    for method in PVALUE_QVALUE_METHODS:
+        column = method["q_column"]
+        if column not in df.columns:
+            continue
+        q_values = pd.to_numeric(df[column], errors="coerce")
+        q_valid = q_values.notna() & np.isfinite(q_values) & q_values.between(0.0, 1.0)
+        valid = support_valid & q_valid
+        if not valid.any():
+            continue
+        method_frame = pd.DataFrame(
+            {
+                "support_bin": support_bins[valid],
+                "significant": q_values[valid] <= threshold,
+            }
+        )
+        grouped = method_frame.groupby("support_bin", observed=False)["significant"].agg(["sum", "count"])
+        grouped = grouped.reindex(centers, fill_value=0)
+        denominators = grouped["count"].to_numpy(dtype=np.int64)
+        significant_counts = grouped["sum"].to_numpy(dtype=np.int64)
+        percentages = np.full(centers.shape, np.nan, dtype=np.float64)
+        populated = denominators > 0
+        percentages[populated] = significant_counts[populated] / denominators[populated] * 100.0
+        method_series.append(
+            {
+                "method": method,
+                "centers": centers.copy(),
+                "percentages": percentages,
+                "significant_counts": significant_counts,
+                "candidate_counts": denominators,
+            }
+        )
+    return centers, candidate_counts, method_series
+
+
+def write_support_significance_rate(df, out_pdf):
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     ensure_parent(out_pdf)
-    plot_df = prepare_plot_data(df, score_col)
-    plot_df = plot_df[plot_df["_support_fraction"].notna() & plot_df["_neg_log10"].notna()].copy()
-    if plot_df.empty:
-        write_empty_plot(out_pdf, "No finite support/FDR values for evidence-density plot.")
+    centers, candidate_counts, method_series = support_significance_data(df)
+    if not method_series:
+        write_empty_plot(out_pdf, "No finite foreground-support/global-q pairs were available.")
         return
 
-    fig, ax = plt.subplots(figsize=(6.4, 4.4))
-    if plot_df.shape[0] >= 20:
-        hb = ax.hexbin(
-            plot_df["_support_fraction"],
-            plot_df["_neg_log10"],
-            gridsize=30,
-            mincnt=1,
-            cmap="Blues",
+    marker_shapes = ["o", "s", "^"]
+    with plt.rc_context(
+        {
+            "font.family": "DejaVu Sans",
+            "font.size": 9.5,
+            "axes.edgecolor": "#4B5563",
+            "axes.linewidth": 0.8,
+            "xtick.color": "#374151",
+            "ytick.color": "#374151",
+            "text.color": "#1F2937",
+        }
+    ):
+        fig, (rate_ax, count_ax) = plt.subplots(
+            2,
+            1,
+            figsize=(8.2, 6.2),
+            sharex=True,
+            gridspec_kw={"height_ratios": [3.3, 1.0], "hspace": 0.08},
         )
-        fig.colorbar(hb, ax=ax, pad=0.01).set_label("candidate count")
-    else:
-        ax.scatter(
-            plot_df["_support_fraction"],
-            plot_df["_neg_log10"],
-            s=40,
-            color="#5AA6CF",
-            edgecolor="white",
-            linewidth=0.45,
-            alpha=0.85,
-        )
+        maximum_rate = 0.0
+        any_significant = False
+        for index, item in enumerate(method_series):
+            method = item["method"]
+            populated = item["candidate_counts"] > 0
+            if not populated.any():
+                continue
+            x_values = item["centers"][populated]
+            y_values = item["percentages"][populated]
+            significant_total = int(item["significant_counts"].sum())
+            candidate_total = int(item["candidate_counts"].sum())
+            any_significant = any_significant or significant_total > 0
+            maximum_rate = max(maximum_rate, float(np.nanmax(y_values)))
+            rate_ax.plot(
+                x_values,
+                y_values,
+                color=method["color"],
+                linestyle=method["linestyle"],
+                marker=marker_shapes[index % len(marker_shapes)],
+                markersize=4.5,
+                linewidth=1.9,
+                label=f"{method['label']} ({significant_total:,}/{candidate_total:,})",
+            )
 
-    top_df = plot_df.sort_values("_neg_log10", ascending=False).head(16)
-    ax.scatter(
-        top_df["_support_fraction"],
-        top_df["_neg_log10"],
-        s=34,
-        color="#D95F02",
-        edgecolor="white",
-        linewidth=0.45,
-        zorder=3,
-    )
-    ax.set_xlabel("Foreground support fraction")
-    ax.set_ylabel(f"-log10({score_col})")
-    ax.set_title("CSUBST scan evidence density", loc="left", fontsize=13, weight="bold")
-    ax.grid(color="#dddddd", linestyle=":", linewidth=0.7)
-    for spine in ["top", "right"]:
-        ax.spines[spine].set_visible(False)
-    fig.tight_layout()
-    fig.savefig(out_pdf)
-    plt.close(fig)
+        upper_limit = 1.0 if maximum_rate <= 0 else min(100.0, maximum_rate * 1.18 + 0.1)
+        rate_ax.set_ylim(0.0, upper_limit)
+        rate_ax.set_ylabel(f"Candidates with global q <= {SUPPORT_SIGNIFICANCE_THRESHOLD:g} (%)")
+        rate_ax.grid(True, color="#E5E7EB", linewidth=0.75)
+        rate_ax.legend(
+            loc="upper left",
+            frameon=False,
+            fontsize=8.3,
+            handlelength=3.0,
+            title="Significant / finite-q candidates",
+            title_fontsize=8.3,
+        )
+        if not any_significant:
+            rate_ax.text(
+                0.98,
+                0.08,
+                f"No candidates with global q <= {SUPPORT_SIGNIFICANCE_THRESHOLD:g}",
+                ha="right",
+                va="bottom",
+                transform=rate_ax.transAxes,
+                color="#6B7280",
+                fontsize=8.5,
+            )
+
+        populated_counts = candidate_counts > 0
+        count_ax.bar(
+            centers[populated_counts],
+            candidate_counts[populated_counts],
+            width=0.085,
+            color="#D1D5DB",
+            edgecolor="#6B7280",
+            linewidth=0.6,
+        )
+        count_ax.set_ylabel("Candidate n")
+        count_ax.set_xlabel("Foreground support fraction (0.1-wide bins)")
+        count_ax.set_xlim(0.0, 1.0)
+        count_ax.set_xticks(np.linspace(0.0, 1.0, 6))
+        count_ax.grid(True, axis="y", color="#E5E7EB", linewidth=0.7)
+
+        for axis in (rate_ax, count_ax):
+            for spine in ["top", "right"]:
+                axis.spines[spine].set_visible(False)
+        fig.suptitle(
+            "CSUBST scan foreground support and significance",
+            x=0.09,
+            y=0.985,
+            ha="left",
+            fontsize=14,
+            weight="bold",
+            color="#111827",
+        )
+        fig.text(
+            0.09,
+            0.945,
+            "Global BH-FDR significance rate within each foreground-support bin",
+            ha="left",
+            va="top",
+            fontsize=9,
+            color="#4B5563",
+        )
+        fig.subplots_adjust(left=0.12, right=0.985, top=0.89, bottom=0.11)
+        fig.savefig(out_pdf)
+        plt.close(fig)
 
 
 def state_order(values):
@@ -553,82 +964,9 @@ def write_substitution_spectrum(df, out_pdf):
     plt.close(fig)
 
 
-def parse_unit_ids(value):
-    if pd.isna(value):
-        return []
-    parts = re.split(r"[,;|\s]+", str(value).strip())
-    return [part for part in parts if part]
-
-
-def candidate_label(row):
-    orthogroup = str(row["orthogroup"]) if "orthogroup" in row and pd.notna(row["orthogroup"]) else "family"
-    state_change = str(row["state_change"]) if "state_change" in row and pd.notna(row["state_change"]) else "candidate"
-    trait = str(row["trait"]) if "trait" in row and pd.notna(row["trait"]) else ""
-    label = f"{orthogroup} {state_change}"
-    if trait:
-        label = f"{label} ({trait})"
-    return label
-
-
-def write_foreground_unit_support_matrix(df, score_col, out_pdf, top_n):
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import ListedColormap
-
-    ensure_parent(out_pdf)
-    if "support_unit_ids" not in df.columns:
-        write_empty_plot(out_pdf, "support_unit_ids column is unavailable.")
-        return
-    plot_df = prepare_plot_data(df, score_col)
-    plot_df["_unit_list"] = plot_df["support_unit_ids"].map(parse_unit_ids)
-    plot_df = plot_df[plot_df["_unit_list"].map(len) > 0].copy()
-    if plot_df.empty:
-        write_empty_plot(out_pdf, "No foreground-unit support values were available.")
-        return
-
-    plot_df = plot_df.sort_values(["_neg_log10", "_support_fraction"], ascending=[False, False]).head(max(1, top_n))
-    unit_ids = sorted(
-        {unit for units in plot_df["_unit_list"] for unit in units},
-        key=lambda item: (0, int(item)) if str(item).isdigit() else (1, str(item)),
-    )
-    mat = np.zeros((plot_df.shape[0], len(unit_ids)), dtype=float)
-    unit_index = {unit: idx for idx, unit in enumerate(unit_ids)}
-    for row_idx, units in enumerate(plot_df["_unit_list"]):
-        for unit in units:
-            if unit in unit_index:
-                mat[row_idx, unit_index[unit]] = 1.0
-
-    if mat.shape[1] > 1:
-        weights = np.linspace(1.0, 2.0, mat.shape[0])
-        col_order = np.argsort(mat.T @ weights)[::-1]
-        mat = mat[:, col_order]
-        unit_ids = [unit_ids[idx] for idx in col_order]
-
-    labels = [candidate_label(row) for _, row in plot_df.iterrows()]
-    height = max(4.4, min(16.0, 1.4 + 0.24 * len(labels)))
-    width = max(6.0, min(14.0, 2.8 + 0.4 * len(unit_ids)))
-    fig, ax = plt.subplots(figsize=(width, height))
-    ax.imshow(mat, aspect="auto", cmap=ListedColormap(["#f4f4f4", "#2166ac"]))
-    ax.set_xticks(range(len(unit_ids)))
-    ax.set_xticklabels(unit_ids)
-    ax.set_yticks(range(len(labels)))
-    ax.set_yticklabels(labels, fontsize=7)
-    ax.set_xlabel("Foreground unit")
-    ax.set_title("CSUBST scan foreground-unit support", loc="left", fontsize=13, weight="bold")
-    ax.tick_params(length=0)
-    for x in np.arange(-0.5, len(unit_ids), 1):
-        ax.axvline(x, color="white", linewidth=0.6)
-    for y in np.arange(-0.5, len(labels), 1):
-        ax.axhline(y, color="white", linewidth=0.6)
-    fig.tight_layout()
-    fig.savefig(out_pdf)
-    plt.close(fig)
-
-
 def main():
     args = parse_args()
+    remove_legacy_min_support_output_layout(args.out_prefix)
     paths = plot_paths(args.out_prefix)
     ensure_parent(args.out_tsv)
 
@@ -644,6 +982,7 @@ def main():
             return 0
         df = read_table(conn, args.table)
 
+    df = attach_orthogroup_besthits(df, args.orthogroup_annotation_tsv)
     ranked, score_col, score_kind = ranked_candidates(df)
     ranked.to_csv(args.out_tsv, sep="\t", index=False)
     if ranked.empty:
@@ -651,10 +990,11 @@ def main():
     elif score_col is None:
         write_empty_plot_set(paths, "No CSUBST scan P-value or FDR columns were available.")
     else:
-        write_evidence_density(ranked, score_col, paths["evidence_density"])
+        write_support_significance_rate(ranked, paths["support_significance_rate"])
         write_substitution_spectrum(ranked, paths["substitution_spectrum"])
-        write_foreground_unit_support_matrix(ranked, score_col, paths["foreground_unit_support_matrix"], args.top_n)
         write_pvalue_qvalue_distributions(ranked, paths["pvalue_qvalue_distributions"])
+    if not ranked.empty:
+        write_min_support_sensitivity(ranked, args.out_prefix)
     return 0
 
 

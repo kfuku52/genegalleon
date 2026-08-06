@@ -23,7 +23,6 @@ run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}"
 run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}"
 run_hgt_summary_plots="${run_hgt_summary_plots:-0}"
 run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}"
-csubst_scan_aa_change_top_n="${csubst_scan_aa_change_top_n:-30}"
 csubst_site_nonsyn_recode=$(echo "${csubst_site_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
 presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}"
 presence_absence_heatmap_value=$(echo "${presence_absence_heatmap_value:-presence}" | tr '[:upper:]' '[:lower:]')
@@ -130,11 +129,37 @@ resolve_orthogroup_genecount_selected() {
   return 1
 }
 
+resolve_orthogroup_genecount_annotated() {
+  local candidates=(
+    "${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv"
+    "${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.annotated.tsv"
+    "${gg_workspace_output_dir}/orthofinder/hog2og/Orthogroups.GeneCount.annotated.tsv"
+    "${gg_workspace_output_dir}/orthofinder/Orthogroups.GeneCount.annotated.tsv"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -s "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 file_orthogroup_genecount_selected=""
 if file_orthogroup_genecount_selected=$(resolve_orthogroup_genecount_selected); then
   :
 else
   file_orthogroup_genecount_selected=""
+fi
+
+file_orthogroup_genecount_annotated=""
+if [[ "${gene_family_source}" == "orthogroup" ]]; then
+  if file_orthogroup_genecount_annotated=$(resolve_orthogroup_genecount_annotated); then
+    :
+  else
+    file_orthogroup_genecount_annotated=""
+  fi
 fi
 
 resolve_presence_absence_species_tree() {
@@ -479,11 +504,20 @@ run_csubst_scan_aa_change_summary_for_source() {
     return 0
   fi
   echo "Generating CSUBST scan AA-change summary for gene_family_source=${gene_family_source}: ${file_gene_family_db}"
-  python "${gg_support_dir}/plot_csubst_aa_change_summary.py" \
-    --dbpath "${file_gene_family_db}" \
-    --out_prefix "${summary_output_dir}/${gene_family_source}_csubst_aa_change" \
-    --out_tsv "${summary_output_dir}/${gene_family_source}_csubst_aa_change_summary.tsv" \
-    --top_n "${csubst_scan_aa_change_top_n}"
+  local summary_args=(
+    --dbpath "${file_gene_family_db}"
+    --out_prefix "${summary_output_dir}/${gene_family_source}_csubst_aa_change"
+    --out_tsv "${summary_output_dir}/${gene_family_source}_csubst_aa_change_min_support_2_summary.tsv"
+  )
+  if [[ "${gene_family_source}" == "orthogroup" ]]; then
+    if [[ -n "${file_orthogroup_genecount_annotated}" ]]; then
+      echo "Adding representative best-hit annotations from: ${file_orthogroup_genecount_annotated}"
+      summary_args+=(--orthogroup_annotation_tsv "${file_orthogroup_genecount_annotated}")
+    else
+      echo "Orthogroup annotated gene-count table was not found; writing CSUBST summaries without besthit columns."
+    fi
+  fi
+  python "${gg_support_dir}/plot_csubst_aa_change_summary.py" "${summary_args[@]}"
 }
 
 run_hgt_summary_for_source() {

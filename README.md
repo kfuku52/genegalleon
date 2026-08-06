@@ -36,6 +36,18 @@ local-build, HPC, and reproducible-tag options are covered in
 [Container Build and Runtime](docs/container-build-and-runtime.md) and
 [Common Workflow Recipes](docs/common-workflow-recipes.md).
 
+## Output Examples
+
+Query2family tree plot:
+
+![Query2family tree plot example](docs/assets/example-plots/query2family-tree-plot.png)
+
+Gene-family presence/absence summary:
+
+![Gene-family presence/absence example](docs/assets/example-plots/query2family-presence-absence.png)
+
+See [Example Plots](docs/example-plots.md) for more outputs.
+
 ## Updating with an AI agent
 
 To update GeneGalleon without losing project settings, use:

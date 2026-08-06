@@ -410,12 +410,34 @@ candidate state-change table, not a one-row-per-site table; GeneGalleon adds
 global BH-FDR columns such as `q_rate_enrichment_global` after aggregating all
 candidate substitutions into the SQLite database. In `gg_gene_summary`, set
 `run_csubst_scan_aa_change_summary=1` to write ranked candidate TSV output plus
-`*_csubst_aa_change_evidence_density.pdf`,
-`*_csubst_aa_change_substitution_spectrum.pdf`,
-`*_csubst_aa_change_foreground_unit_support_matrix.pdf`, and
-`*_csubst_aa_change_pvalue_qvalue_distributions.pdf`. The last plot compares the
-analytical, candidate-level empirical, and full-scan empirical maxT P-value
+`*_csubst_aa_change_min_support_2_summary.tsv`,
+`*_csubst_aa_change_min_support_2_support_significance_rate.pdf`,
+`*_csubst_aa_change_min_support_2_substitution_spectrum.pdf`, and
+`*_csubst_aa_change_min_support_2_pvalue_qvalue_distributions.pdf`. The
+`min_support_2` label reflects the default `csubst_scan_min_support=2`. The
+orthogroup TSVs also receive `besthit_0.05`, `besthit_0.25`, `besthit_0.5`,
+`besthit_0.75`, and `besthit_0.95` immediately after `orthogroup`, joined from
+`orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv` when
+that table is available. These annotations propagate to every filtered
+`min_support` TSV; query2family summaries are unchanged.
+The support-significance plot groups candidates into 0.1-wide foreground-support
+bins, compares the fraction with global q values at or below 0.05 across the
+three calibration methods, and shows each bin's candidate count. The last plot
+compares the analytical, candidate-level empirical, and full-scan empirical maxT P-value
 distributions with their corresponding global BH-FDR q-value distributions.
+Without an additional option, the same summary run writes the sensitivity
+series directly beside those primary files. For every integer `min_support`
+from 3 through the largest observed `support_unit_count`, it writes
+`*_min_support_<N>_summary.tsv`,
+`*_min_support_<N>_pvalue_qvalue_distributions.pdf`, and a combined
+`*_min_support_manifest.tsv`. Each TSV retains candidates with
+`support_unit_count >= N` and recalculates the recognized global,
+orthogroup-level, trait-level, and trait/match-level BH q-value columns within
+that filtered candidate set. The original analytical, empirical, and maxT
+P-values are retained. Consequently, these files are a post-hoc multiple-test
+sensitivity analysis; changing `csubst_scan_min_support` and rerunning
+`csubst scan` can also change the empirical null distributions and is required
+for an exact empirical/maxT reanalysis.
 Combine it with
 `run_gene_family_database_build=1` to refresh the database and plots in one run.
 

@@ -258,8 +258,14 @@ Required inputs:
 Main output:
 
 - `workspace/output/orthogroup/gg_orthogroup.db`
-- `workspace/output/gene_summary/orthogroup/orthogroup_csubst_aa_change_summary.tsv`
-- `workspace/output/gene_summary/orthogroup/orthogroup_csubst_aa_change_*.pdf`
+- `workspace/output/gene_summary/orthogroup/orthogroup_csubst_aa_change_min_support_2_summary.tsv`
+- `workspace/output/gene_summary/orthogroup/orthogroup_csubst_aa_change_min_support_*.pdf`
+- `workspace/output/gene_summary/orthogroup/orthogroup_csubst_aa_change_min_support_manifest.tsv`
+
+When
+`workspace/output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv`
+is available, every orthogroup `min_support_*_summary.tsv` also includes the
+five representative `besthit_0.05` through `besthit_0.95` annotation columns.
 
 For query2family outputs, switch the gene-family source:
 

@@ -913,7 +913,6 @@ def test_gene_summary_entrypoint_uses_stage_scoped_config_names():
     assert names.isdisjoint(legacy_names)
     assert {
         "run_csubst_scan_aa_change_summary",
-        "csubst_scan_aa_change_top_n",
         "run_csubst_site_convergence_summary",
         "csubst_site_trait",
         "csubst_site_nonsyn_recode",
@@ -3150,18 +3149,43 @@ def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     csubst_summary_body = _function_body(core, "run_csubst_scan_aa_change_summary_for_source")
 
     assert 'run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}"' in entrypoint
-    assert 'csubst_scan_aa_change_top_n="${csubst_scan_aa_change_top_n:-30}"' in entrypoint
     assert 'run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}"' in core
     assert 'validate_binary_flag "run_csubst_scan_aa_change_summary"' in core
     assert "run_csubst_scan_aa_change_summary" in config_vars
-    assert "csubst_scan_aa_change_top_n" in config_vars
+    assert "csubst_scan_aa_change_top_n" not in entrypoint
+    assert "csubst_scan_aa_change_top_n" not in core
+    assert "csubst_scan_aa_change_top_n" not in config_vars
     assert '--dir_csubst_aa_change "${dir_gene_family}/csubst_scan"' in core
     assert '--dir_csubst_aa_change_unit "${dir_gene_family}/csubst_scan_units"' in core
     assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py"' not in database_body
     assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py"' in csubst_summary_body
     assert "run_csubst_scan_aa_change_summary=0" in csubst_summary_body
     assert '--out_prefix "${summary_output_dir}/${gene_family_source}_csubst_aa_change"' in core
-    assert '--top_n "${csubst_scan_aa_change_top_n}"' in core
+    assert (
+        '--out_tsv "${summary_output_dir}/${gene_family_source}_csubst_aa_change_min_support_2_summary.tsv"'
+        in core
+    )
+    assert "resolve_orthogroup_genecount_annotated" in core
+    assert (
+        '"${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv"'
+        in core
+    )
+    assert 'if [[ "${gene_family_source}" == "orthogroup" ]]; then' in csubst_summary_body
+    assert 'summary_args+=(--orthogroup_annotation_tsv "${file_orthogroup_genecount_annotated}")' in core
+    assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py" "${summary_args[@]}"' in core
+    assert '"--orthogroup_annotation_tsv"' in plot_script
+    assert "ORTHOGROUP_BESTHIT_COLUMNS" in plot_script
+    assert 'validate="many_to_one"' in plot_script
+    assert '"--top_n"' not in plot_script
+    assert "foreground_unit_support_matrix" not in plot_script
+    assert "_evidence_density.pdf" not in plot_script
+    assert "_support_significance_rate.pdf" in plot_script
+    assert "write_support_significance_rate" in plot_script
+    assert 'output_dir = prefix.parent' in plot_script
+    assert 'output_dir = prefix.parent / "min_support_sensitivity"' not in plot_script
+    assert "remove_legacy_min_support_output_layout" in plot_script
+    assert "write_min_support_sensitivity" in plot_script
+    assert "recalculate_sensitivity_qvalues" in plot_script
     assert '"--out_prefix"' in plot_script
     assert "required=True" in plot_script
     assert '"--out_pdf"' not in plot_script
