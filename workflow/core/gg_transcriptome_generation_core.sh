@@ -793,10 +793,8 @@ run_amalgkit_metadata_query() {
   "${metadata_cmd[@]}"
 }
 
-discard_partial_getfastq_outputs() {
-  rm -rf -- "${dir_tmp}/getfastq"
-  rm -rf -- "${dir_amalgkit_getfastq_sp}"
-  ensure_dir "${dir_amalgkit_getfastq_sp}"
+prepare_getfastq_outputs_for_public_fallback() {
+  ensure_dir "${dir_tmp}/getfastq"
 }
 
 stage_getfastq_outputs_for_resume() {
@@ -1183,7 +1181,8 @@ download_public_original_fastqs_for_metadata() {
   python - "${metadata_tsv}" "${output_dir}" <<'PY'
 import csv
 import gzip
-import shutil
+import json
+import os
 import sys
 import time
 import urllib.parse
@@ -1193,6 +1192,7 @@ from pathlib import Path
 
 metadata_path = Path(sys.argv[1])
 output_root = Path(sys.argv[2])
+completion_manifest = output_root / "getfastq_completion.json"
 
 
 def fetch_bytes(url: str) -> bytes:
@@ -1222,6 +1222,50 @@ def sort_key(item):
     return (2, name)
 
 
+def is_valid_gzip(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        with gzip.open(path, "rb") as handle:
+            handle.read(1)
+    except (EOFError, OSError):
+        return False
+    return True
+
+
+def preserve_previous_completion_manifest() -> None:
+    if not completion_manifest.exists():
+        return
+    suffix = ""
+    counter = 0
+    while True:
+        backup = output_root / "getfastq_completion.pre_public_fallback{}.json".format(suffix)
+        if not backup.exists():
+            os.replace(completion_manifest, backup)
+            print("Preserved previous getfastq completion manifest: {}".format(backup))
+            return
+        counter += 1
+        suffix = "_{}".format(counter)
+
+
+def write_fastq_atomically(dest: Path, payload: bytes) -> None:
+    part = dest.with_name(dest.name + ".part")
+    if part.exists() or part.is_symlink():
+        part.unlink()
+    try:
+        if payload[:2] == b"\x1f\x8b":
+            part.write_bytes(payload)
+        else:
+            with gzip.open(part, "wb") as handle_out:
+                handle_out.write(payload)
+        if not is_valid_gzip(part):
+            raise SystemExit("Downloaded FASTQ is not a valid gzip file: {}".format(dest))
+        os.replace(part, dest)
+    finally:
+        if part.exists() or part.is_symlink():
+            part.unlink()
+
+
 with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
     fieldnames = list(reader.fieldnames or [])
@@ -1240,6 +1284,8 @@ if not runs:
     raise SystemExit("No run accessions were found in metadata: {}".format(metadata_path))
 
 output_root.mkdir(parents=True, exist_ok=True)
+preserve_previous_completion_manifest()
+manifest_runs = []
 
 for run in runs:
     xml_url = "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}".format(
@@ -1269,23 +1315,45 @@ for run in runs:
         raise SystemExit("Unexpected number of original FASTQ files for run {}: {}".format(run, len(fastq_files)))
 
     run_dir = output_root / run
-    if run_dir.exists():
-        shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     fastq_files.sort(key=sort_key)
+    completed_files = []
 
     for idx, (filename, url) in enumerate(fastq_files, start=1):
         if len(fastq_files) == 1:
             dest = run_dir / "{}.amalgkit.fastq.gz".format(run)
         else:
             dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)
+        if dest.exists() or dest.is_symlink():
+            if not is_valid_gzip(dest):
+                raise SystemExit("Existing fallback FASTQ is invalid; refusing to replace it: {}".format(dest))
+            print("Reusing validated fallback FASTQ for {}: {}".format(run, dest))
+            completed_files.append(str(dest.relative_to(output_root)))
+            continue
         payload = fetch_bytes(url)
-        if payload[:2] == b"\x1f\x8b":
-            dest.write_bytes(payload)
-        else:
-            with gzip.open(dest, "wb") as handle_out:
-                handle_out.write(payload)
+        write_fastq_atomically(dest, payload)
         print("Recovered original FASTQ for {}: {} -> {}".format(run, filename or url, dest))
+        completed_files.append(str(dest.relative_to(output_root)))
+    manifest_runs.append({"run": run, "status": "complete", "files": completed_files})
+
+manifest = {
+    "status": "complete",
+    "run_count": len(manifest_runs),
+    "runs": manifest_runs,
+}
+manifest_part = completion_manifest.with_name(".getfastq_completion.json.part")
+if manifest_part.exists() or manifest_part.is_symlink():
+    manifest_part.unlink()
+try:
+    with manifest_part.open("wt", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(manifest_part, completion_manifest)
+finally:
+    if manifest_part.exists() or manifest_part.is_symlink():
+        manifest_part.unlink()
 PY
 }
 
@@ -1318,9 +1386,18 @@ run_amalgkit_getfastq_or_fallback() {
     return 1
   fi
   echo "amalgkit getfastq did not safely finish. Attempting fallback download of public original FASTQ files."
-  discard_partial_getfastq_outputs
-  if download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_amalgkit_getfastq_sp}"; then
-    echo "Fallback download of public original FASTQ files succeeded."
+  prepare_getfastq_outputs_for_public_fallback
+  if download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_tmp}/getfastq"; then
+    if ! validate_amalgkit_getfastq_completion_manifest \
+      "${dir_tmp}/getfastq/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+    then
+      echo "Fallback direct FASTQ recovery finished without a valid all-run completion manifest. Exiting."
+      return 1
+    fi
+    mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"
+    rm -rf -- "${dir_tmp}/getfastq"
+    echo "Fallback download of public original FASTQ files succeeded and was atomically published."
     return 0
   fi
   echo "Fallback direct FASTQ recovery also failed. Exiting."

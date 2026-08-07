@@ -1377,3 +1377,45 @@ def test_gg_find_helpers_follow_symlinked_search_root(tmp_path):
     out_lines = [line for line in completed.stdout.splitlines() if line.strip()]
     assert str(linked_dir / visible.name) in out_lines
     assert visible.name in out_lines
+
+
+def test_genome_annotation_species_cds_contract_accepts_symlinked_search_root(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    seqkit = bin_dir / "seqkit"
+    seqkit.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "[[ ${1:-} == seq ]]\n"
+        "cat -- ${2:?}\n",
+        encoding="utf-8",
+    )
+    seqkit.chmod(0o755)
+
+    species_dir = tmp_path / "species_cds"
+    species_dir.mkdir()
+    (species_dir / "Arabidopsis_thaliana.fa").write_text(">Arabidopsis_thaliana_gene1\nATG\n")
+    (species_dir / "Oryza_sativa.fa").write_text(">Oryza_sativa_gene1\nATG\n")
+    linked_dir = tmp_path / "linked_species_cds"
+    linked_dir.symlink_to(species_dir, target_is_directory=True)
+
+    find_expression = (
+        f"find -H {shlex.quote(str(linked_dir))} -maxdepth 1 -type f ! -name '.*' "
+        "\\( -name '*.fa' -o -name '*.fa.gz' -o -name '*.fas' -o -name '*.fas.gz' "
+        "-o -name '*.fasta' -o -name '*.fasta.gz' -o -name '*.fna' -o -name '*.fna.gz' \\) | sort"
+    )
+    command = (
+        f"export PATH={shlex.quote(str(bin_dir))}:$PATH; "
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "GG_TASK_CPUS=1; "
+        f"{find_expression}; "
+        f"check_species_cds_dir {shlex.quote(str(linked_dir) + '/.')}; "
+        f"check_if_species_files_unique {shlex.quote(str(linked_dir) + '/.')}"
+    )
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    assert str(linked_dir / "Arabidopsis_thaliana.fa") in completed.stdout
+    assert str(linked_dir / "Oryza_sativa.fa") in completed.stdout
+    assert "All per-species CDS files are valid." in completed.stdout
+    assert "Species files are unique in" in completed.stdout

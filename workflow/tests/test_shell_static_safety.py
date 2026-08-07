@@ -3394,13 +3394,23 @@ def test_genome_annotation_core_guards_array_task_id_before_task_index_math():
     text = _read_text(script)
     assert 'if [[ ! -d "${dir_sp_cds}" ]]; then' in text
     assert 'echo "Input directory not found: ${dir_sp_cds}. Exiting."' in text
-    assert "find \"${dir_sp_cds}\" -maxdepth 1 -type f ! -name '.*'" in text
+    assert "find -H \"${dir_sp_cds}\" -maxdepth 1 -type f ! -name '.*'" in text
     assert "find \"${dir_sp_dnaseq}/${sp_ub}\" -type f ! -name '.*'" in text
     guard = 'if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then'
     task_index = "task_index=$((GG_ARRAY_TASK_ID - 1))"
     assert guard in text
     assert task_index in text
     assert text.index(guard) < text.index(task_index)
+
+
+def test_genome_annotation_core_follows_symlinked_species_cds_for_discovery_and_validation():
+    script = CORE_DIR / "gg_genome_annotation_core.sh"
+    text = _read_text(script)
+
+    assert "find -H \"${dir_sp_cds}\" -maxdepth 1 -type f ! -name '.*'" in text
+    assert 'check_species_cds_dir "${dir_sp_cds%/}/."' in text
+    assert 'check_if_species_files_unique "${dir_sp_cds%/}/."' in text
+    assert 'check_species_cds "${gg_workspace_dir}"' not in text
 
 
 def test_genome_annotation_core_multispecies_summary_requires_real_summary_inputs():

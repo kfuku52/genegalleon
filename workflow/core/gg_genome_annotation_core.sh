@@ -94,7 +94,7 @@ if [[ ! -d "${dir_sp_cds}" ]]; then
   exit 1
 fi
 infiles=()
-mapfile -t infiles < <(find "${dir_sp_cds}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
+mapfile -t infiles < <(find -H "${dir_sp_cds}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
 if [[ ${#infiles[@]} -eq 0 ]]; then
   echo "No input fasta files were detected in: ${dir_sp_cds}. Exiting."
   exit 1
@@ -187,8 +187,8 @@ if [[ ! -s "${species_cds_validation_stamp}" ]]; then
     }
     trap cleanup_species_cds_validation_lock EXIT
     if [[ ! -s "${species_cds_validation_stamp}" ]]; then
-      check_species_cds "${gg_workspace_dir}"
-      check_if_species_files_unique "${dir_sp_cds}"
+      check_species_cds_dir "${dir_sp_cds%/}/."
+      check_if_species_files_unique "${dir_sp_cds%/}/."
       touch "${species_cds_validation_stamp}"
     fi
   ) || exit 1

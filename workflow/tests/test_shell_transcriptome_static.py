@@ -183,30 +183,35 @@ def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_fa
     body = _function_body(text, "download_public_original_fastqs_for_metadata")
 
     assert (
-        'download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_amalgkit_getfastq_sp}"' in text
+        'download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_tmp}/getfastq"' in text
     )
     assert (
         "amalgkit getfastq did not safely finish. Attempting fallback download of public original FASTQ files." in text
     )
-    assert "Fallback download of public original FASTQ files succeeded." in text
+    assert "Fallback download of public original FASTQ files succeeded and was atomically published." in text
     assert "Fallback direct FASTQ recovery also failed. Exiting." in text
     assert 'xml_url = "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}".format(' in body
     assert 'if node.attrib.get("semantic_name") != "fastq":' in body
     assert 'if node.attrib.get("supertype") != "Original":' in body
     assert 'if payload[:2] == b"\\x1f\\x8b":' in body
     assert 'dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)' in body
+    assert 'print("Reusing validated fallback FASTQ for {}: {}".format(run, dest))' in body
+    assert 'part = dest.with_name(dest.name + ".part")' in body
+    assert "os.replace(part, dest)" in body
+    assert "preserve_previous_completion_manifest()" in body
+    assert "os.replace(manifest_part, completion_manifest)" in body
 
 
 def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
-    discard_body = _function_body(text, "discard_partial_getfastq_outputs")
+    prepare_body = _function_body(text, "prepare_getfastq_outputs_for_public_fallback")
     stage_body = _function_body(text, "stage_getfastq_outputs_for_resume")
     detect_body = _function_body(text, "amalgkit_getfastq_log_has_fatal_message")
     attempt_body = _function_body(text, "run_amalgkit_getfastq_attempt")
 
-    assert 'rm -rf -- "${dir_tmp}/getfastq"' in discard_body
-    assert 'rm -rf -- "${dir_amalgkit_getfastq_sp}"' in discard_body
+    assert "rm -rf" not in prepare_body
+    assert 'ensure_dir "${dir_tmp}/getfastq"' in prepare_body
     assert 'mv -- "${dir_amalgkit_getfastq_sp}" "${dir_tmp}/getfastq"' in stage_body
     assert "discard_partial_getfastq_outputs" not in attempt_body
     assert "grep -Eq '^ERROR: '" in detect_body
@@ -224,6 +229,8 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     assert 'if [[ ${run_amalgkit_getfastq} -eq 1 && $(is_fastq_requiring_downstream_analysis_done) -eq 0 ]]; then' in text
     assert 'run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"' in text
     assert "Exiting without fallback download so partial outputs do not reach downstream steps." in text
+    assert 'mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"' in text
+    assert "Fallback direct FASTQ recovery finished without a valid all-run completion manifest." in text
 
 
 def test_transcriptome_entrypoint_exposes_auto_assembly_and_metadata_detection():
