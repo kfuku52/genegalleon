@@ -891,6 +891,7 @@ run_validate_stage() {
       cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
       cmd+=(--species-cds-dir "${species_cds_dir}")
       cmd+=(--species-gff-dir "${species_gff_dir}")
+      cmd+=(--species-summary "${species_summary_output}")
       cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
       cmd+=(--stats-output "${mapping_stats_file}")
       echo "Running: ${cmd[*]}"
@@ -923,6 +924,56 @@ run_validate_stage() {
       rm -f -- "${longest_cds_stats_file}"
     fi
   fi
+  stage_validate_status="ok"
+}
+
+run_validate_stage_one_worker() {
+  local task="Validate formatted species input"
+  local task_summary_file="${dir_species_summary_shards}/${GG_ARRAY_TASK_ID}.tsv"
+  local mapping_stats_file="${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.mapping.json"
+  local longest_stats_file="${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.longest.json"
+  local cmd=()
+
+  if [[ ${run_validate_inputs} -ne 1 || ${run_format_inputs} -ne 1 || ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
+    gg_step_skip "${task}"
+    stage_validate_status="skipped"
+    return 0
+  fi
+  if [[ ! -s "${task_summary_file}" ]]; then
+    echo "Species summary shard not found for array-worker validation: ${task_summary_file}"
+    stage_validate_status="failed"
+    exit 1
+  fi
+
+  gg_step_start "${task}"
+  stage_validate_status="running"
+  rm -f -- "${mapping_stats_file}" "${longest_stats_file}"
+  cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
+  cmd+=(--species-cds-dir "${species_cds_dir}")
+  cmd+=(--species-gff-dir "${species_gff_dir}")
+  cmd+=(--species-summary "${task_summary_file}")
+  cmd+=(--nthreads 1)
+  cmd+=(--stats-output "${mapping_stats_file}")
+  echo "Running: ${cmd[*]}"
+  if ! "${cmd[@]}"; then
+    stage_validate_status="failed"
+    echo "Failed: ${task} (CDS-to-GFF mapping)"
+    exit 1
+  fi
+
+  cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
+  cmd+=(--species-cds-dir "${species_cds_dir}")
+  cmd+=(--species-summary "${task_summary_file}")
+  cmd+=(--summary-outputs-only)
+  cmd+=(--nthreads 1)
+  cmd+=(--stats-output "${longest_stats_file}")
+  echo "Running: ${cmd[*]}"
+  if ! "${cmd[@]}"; then
+    stage_validate_status="failed"
+    echo "Failed: ${task} (longest CDS selection)"
+    exit 1
+  fi
+  rm -f -- "${mapping_stats_file}" "${longest_stats_file}"
   stage_validate_status="ok"
 }
 
@@ -1555,9 +1606,9 @@ run_array_worker_mode() {
   fi
   stage_format_status="ok"
 
+  run_validate_stage_one_worker
   run_cds_fx2tab_stage_one_worker
   run_species_busco_stage_one_worker
-  stage_validate_status="skipped"
   stage_multispecies_summary_status="skipped"
   stage_trait_status="skipped"
 }

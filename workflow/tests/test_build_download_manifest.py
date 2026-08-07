@@ -168,6 +168,43 @@ def test_build_download_manifest_ncbi_like_provider_from_species_dir_fixture(tmp
         assert row["genome_filename"].endswith("_genomic.fna.gz")
 
 
+def test_build_download_manifest_figshare_prefers_gene_model_gff(tmp_path):
+    input_root = tmp_path / "dataset"
+    species_dir = input_root / "Figshare" / "species_wise_original" / "Euryodendron_excelsum"
+    species_dir.mkdir(parents=True)
+    (species_dir / "Euryodendron_excelsum.cds.fa").write_text(">FUN_001415-T1\nATG\n", encoding="utf-8")
+    (species_dir / "Euryodendron_excelsum.gff3").write_text(
+        "chr1\tfunannotate\tgene\t1\t3\t.\t+\t.\tID=FUN_001415\n"
+        "chr1\tfunannotate\tmRNA\t1\t3\t.\t+\t.\tID=FUN_001415-T1;Parent=FUN_001415\n"
+        "chr1\tfunannotate\tCDS\t1\t3\t.\t+\t0\tID=FUN_001415-T1.cds;Parent=FUN_001415-T1\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Euryodendron_excelsum.EDTA.gff3").write_text(
+        "chr1\tEDTA\trepeat_region\t1\t3\t.\t+\t.\tID=repeat1\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Euryodendron_excelsum.only_long-transcripts.gff3").write_text(
+        "chr1\tfunannotate\tCDS\t1\t3\t.\t+\t0\tID=FUN_001415-T1.cds;Parent=FUN_001415-T1\n",
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "download_manifest_figshare.tsv"
+    completed = run_script(
+        "--provider",
+        "figshare",
+        "--input-dir",
+        str(input_root),
+        "--output",
+        str(out),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    rows = read_manifest(out)
+    assert len(rows) == 1
+    assert rows[0]["cds_filename"] == "Euryodendron_excelsum.cds.fa"
+    assert rows[0]["gff_filename"] == "Euryodendron_excelsum.gff3"
+    assert "Using 'Euryodendron_excelsum.gff3'" in completed.stderr
+
+
 def test_build_download_manifest_ensembl_provider_from_flat_fixture(tmp_path):
     input_root = tmp_path / "dataset"
     ensembl_dir = input_root / "Ensembl" / "original_files"

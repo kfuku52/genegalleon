@@ -887,7 +887,11 @@ def test_download_manifest_ncbi_id_only_auto_resolve(tmp_path):
     ftp_dir.mkdir(parents=True)
 
     cds_content = ">NC_000001.11_cds_NP_000001.1_1\nATGAA\n"
-    gff_content = "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n"
+    gff_content = (
+        "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-gene1;locus_tag=gene1\n"
+        "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=rna-1;Parent=gene-gene1;locus_tag=gene1\n"
+        "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds-1;Parent=rna-1;protein_id=NP_000001.1;locus_tag=gene1\n"
+    )
     with gzip.open(ftp_dir / "GCF_000001405.40_GRCh38.p14_cds_from_genomic.fna.gz", "wt", encoding="utf-8") as handle:
         handle.write(cds_content)
     with gzip.open(ftp_dir / "GCF_000001405.40_GRCh38.p14_genomic.gff.gz", "wt", encoding="utf-8") as handle:
@@ -963,7 +967,7 @@ def test_download_manifest_ncbi_id_only_auto_resolve(tmp_path):
         assert formatted_genome.exists()
         with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
             cds_text = handle.read()
-        assert ">Homo_sapiens_NC_000001.11_cds_NP_000001.1_1" in cds_text
+        assert ">Homo_sapiens_gene1" in cds_text
     finally:
         server.shutdown()
         server.server_close()
@@ -1656,7 +1660,13 @@ def test_download_manifest_ncbi_gene_level_aggregate_prefers_ensembl_gene_id(tmp
             "ATGAAATTT\n"
         )
     with gzip.open(gff_source, "wt", encoding="utf-8") as handle:
-        handle.write("chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n")
+        handle.write(
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-ENSG00000111111;Dbxref=Ensembl:ENSG00000111111\n"
+            "chr1\tsrc\tmRNA\t1\t5\t.\t+\t.\tID=rna-XP_1.1;Parent=gene-ENSG00000111111\n"
+            "chr1\tsrc\tCDS\t1\t5\t.\t+\t0\tID=cds-XP_1.1;Parent=rna-XP_1.1;protein_id=XP_1.1\n"
+            "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=rna-XP_1.2;Parent=gene-ENSG00000111111\n"
+            "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds-XP_1.2;Parent=rna-XP_1.2;protein_id=XP_1.2\n"
+        )
     with gzip.open(genome_source, "wt", encoding="utf-8") as handle:
         handle.write(">chr1\nATGCATGC\n")
 

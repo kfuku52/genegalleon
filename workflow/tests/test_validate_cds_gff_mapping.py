@@ -161,6 +161,31 @@ def test_validate_cds_gff_mapping_fails_on_missing_ids(tmp_path):
     assert "missing=1 sample=Arabidopsis_thaliana_gene2" in completed.stderr
 
 
+def test_validate_cds_gff_mapping_accepts_verified_gene_only_gff(tmp_path):
+    cds_dir = tmp_path / "species_cds"
+    gff_dir = tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+    write_gzip_text(
+        cds_dir / "Azolla_filiculoides_demo.fa.gz",
+        ">Azolla_filiculoides_Azfi_g1\nATGAAA\n",
+    )
+    write_gzip_text(
+        gff_dir / "Azolla_filiculoides_demo.gff.gz",
+        "chr1\tsrc\tgene\t1\t6\t.\t+\t.\tID=Azfi_g1\n",
+    )
+
+    completed = run_script(
+        "--species-cds-dir",
+        str(cds_dir),
+        "--species-gff-dir",
+        str(gff_dir),
+    )
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "CDS-to-GFF mapping OK: 1/1 IDs" in completed.stdout
+
+
 def test_validate_cds_gff_mapping_reports_incomplete_species_label_in_filename(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"
@@ -351,3 +376,37 @@ def test_validate_cds_gff_mapping_keeps_legacy_ncpu_alias(tmp_path):
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     stats = json.loads(stats_path.read_text(encoding="utf-8"))
     assert stats["nthreads"] == 3
+
+
+def test_species_summary_selects_exact_gff_instead_of_rediscovery(tmp_path):
+    cds_dir = tmp_path / "species_cds"
+    gff_dir = tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+    cds_path = cds_dir / "Arabidopsis_thaliana_demo.fa.gz"
+    wrong_gff = gff_dir / "Arabidopsis_thaliana_a.repeat.gff.gz"
+    correct_gff = gff_dir / "Arabidopsis_thaliana_z.genes.gff.gz"
+    summary = tmp_path / "summary.tsv"
+    write_gzip_text(cds_path, ">Arabidopsis_thaliana_gene1\nATGAAA\n")
+    write_gzip_text(wrong_gff, "chr1\trepeat\trepeat_region\t1\t6\t.\t+\t.\tID=R1\n")
+    write_gzip_text(
+        correct_gff,
+        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=gene1.CDS1;Parent=gene1;\n",
+    )
+    summary.write_text(
+        "species_prefix\tcds_output_path\tgff_output_path\n"
+        "Arabidopsis_thaliana\t{}\t{}\n".format(cds_path, correct_gff),
+        encoding="utf-8",
+    )
+
+    completed = run_script(
+        "--species-cds-dir",
+        str(cds_dir),
+        "--species-gff-dir",
+        str(gff_dir),
+        "--species-summary",
+        str(summary),
+    )
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "CDS-to-GFF mapping OK: 1/1 IDs" in completed.stdout

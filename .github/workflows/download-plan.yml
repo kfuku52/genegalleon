@@ -168,6 +168,14 @@ jobs:
             "${direct_catalog_args[@]}" \
             "${fallback_args[@]}"
 
+      - name: Validate curated direct-download bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python workflow/support/validate_direct_catalog.py \
+            --manifest workspace/input/input_generation/direct_catalog_curated.tsv \
+            --check-remote-gff
+
       - name: Build latest download plan XLSX
         shell: bash
         run: |

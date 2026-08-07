@@ -1,5 +1,7 @@
 """Shared filename classification, candidate ordering, and network predicates."""
 
+import bz2
+import gzip
 import re
 import socket
 from http.client import IncompleteRead, RemoteDisconnected
@@ -16,6 +18,14 @@ from format_species_provider_config import ENSEMBL_LIKE_PROVIDERS, ORYZA_MINUTA_
 
 FERNBASE_GFF_EXCLUDE_PATTERN = re.compile(
     r"(?:^|[._-])(te|teanno|repeat|repeats|transpos(?:on)?)(?:[._-]|$)",
+    re.IGNORECASE,
+)
+GFF_EXCLUDE_PATTERN = re.compile(
+    r"(?:^|[._-])(?:edta|red|repeat|repeats|te|teanno|transpos(?:on)?)(?:[._-]|$)",
+    re.IGNORECASE,
+)
+GFF_REDUCED_MODEL_PATTERN = re.compile(
+    r"(?:only[._-]?long(?:est)?[._-]?transcripts?|primary[._-]?transcripts?|longest)",
     re.IGNORECASE,
 )
 
@@ -88,7 +98,8 @@ def provider_candidate_sort_key(provider, label, name):
             )
         if label_upper == "GFF":
             return (
-                0 if any(marker in lower for marker in ("gff", "gff3", "gtf")) else 1,
+                1 if GFF_EXCLUDE_PATTERN.search(lower) else 0,
+                1 if GFF_REDUCED_MODEL_PATTERN.search(lower) else 0,
                 lower,
             )
         if label_upper == "GENOME":
@@ -110,6 +121,19 @@ def provider_candidate_sort_key(provider, label, name):
             )
         if label_upper == "GENOME":
             return (".chromosome." in lower, lower)
+        if label_upper == "CDS":
+            return (
+                0 if re.search(r"(?:^|[._-])cds(?:[._-]|$)", lower) else 1,
+                1 if any(marker in lower for marker in ("cdna", "mrna", "transcript")) else 0,
+                1 if any(marker in lower for marker in ("protein", "pep")) else 0,
+                lower,
+            )
+        if label_upper == "GFF":
+            return (
+                1 if GFF_EXCLUDE_PATTERN.search(lower) else 0,
+                1 if GFF_REDUCED_MODEL_PATTERN.search(lower) else 0,
+                lower,
+            )
         return (lower,)
     if label_upper == "CDS":
         return (
@@ -135,6 +159,42 @@ def provider_candidate_sort_key(provider, label, name):
             lower,
         )
     return (lower,)
+
+
+def gff_contains_cds_feature(path):
+    """Return whether a local GFF candidate contains at least one CDS row."""
+    name = str(path.name or "").lower()
+    opener = gzip.open if name.endswith(".gz") else bz2.open if name.endswith(".bz2") else open
+    try:
+        with opener(path, "rt", encoding="utf-8") as handle:
+            for raw_line in handle:
+                if raw_line == "" or raw_line.startswith("#"):
+                    continue
+                parts = raw_line.rstrip("\n\r").split("\t", 3)
+                if len(parts) >= 3 and parts[2].strip().lower() == "cds":
+                    return True
+    except (OSError, UnicodeError):
+        return False
+    return False
+
+
+def gff_candidate_sort_key(provider, path):
+    """Prefer full gene-model GFFs over repeat and reduced annotations."""
+    name = str(path.name or "")
+    excluded_by_name = GFF_EXCLUDE_PATTERN.search(name) is not None
+    reduced_by_name = GFF_REDUCED_MODEL_PATTERN.search(name) is not None
+    contains_cds = False if excluded_by_name else gff_contains_cds_feature(path)
+    return (
+        1 if excluded_by_name else 0,
+        1 if reduced_by_name else 0,
+        0 if contains_cds else 1,
+        provider_candidate_sort_key(provider, "GFF", name),
+    )
+
+
+def figshare_gff_candidate_sort_key(path):
+    """Backward-compatible wrapper for the shared GFF candidate policy."""
+    return gff_candidate_sort_key("figshare", path)
 
 
 def is_transient_network_error(exc):
@@ -245,7 +305,12 @@ def is_probable_genome_filename(provider, name):
     if provider == "fernbase":
         # FernBase often exposes the assembly as a plain ".fa"/".fasta" filename.
         return True
-    if provider in ("ncbi", "refseq", "genbank", "plantgarden", "plantaedb"):
+    if provider == "plantgarden":
+        return any(
+            marker in lower
+            for marker in ("genomic", "genome", "assembly", "pseudomolecule", "pmol")
+        )
+    if provider in ("ncbi", "refseq", "genbank", "plantaedb"):
         return "genomic" in lower
     if provider == "figshare":
         return any(
@@ -277,7 +342,10 @@ def is_probable_genome_filename(provider, name):
 def pick_single_file(matches, provider, species_key, label, warnings):
     if len(matches) == 0:
         return None
-    ordered = sorted(matches, key=lambda path: provider_candidate_sort_key(provider, label, path.name))
+    if str(label or "").upper() == "GFF":
+        ordered = sorted(matches, key=lambda path: gff_candidate_sort_key(provider, path))
+    else:
+        ordered = sorted(matches, key=lambda path: provider_candidate_sort_key(provider, label, path.name))
     if len(ordered) > 1:
         warnings.append(
             "[{}] {}: multiple {} files found. Using '{}'".format(provider, species_key, label, ordered[0].name)

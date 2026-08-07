@@ -10,6 +10,7 @@ from .common import choose_first_gff_attribute
 KNOWN_ALIAS_PREFIXES = (
     "cds-",
     "cds:",
+    "evm.model.",
     "gene-",
     "gene:",
     "mrna-",
@@ -58,6 +59,7 @@ def gff_dbxref_gene_token(attrs):
 
 def strip_gff_feature_prefix(value):
     current = str(value or "").strip()
+    current = re.sub(r"^evm(?:_[0-9]+)?\.model\.", "", current, flags=re.IGNORECASE)
     while current != "":
         lowered = current.lower()
         stripped = ""

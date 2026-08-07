@@ -17,6 +17,7 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
+from format_species_constants import KNOWN_ALLOWED_MISSING_CDS_IDS
 from species_labeling import extract_species_label
 
 FASTA_EXTENSIONS = (
@@ -39,26 +40,6 @@ GFF_EXTENSIONS = (
     ".gtf.gz",
 )
 
-KNOWN_ALLOWED_MISSING_CDS_IDS = {
-    # NCBI cds_from_genomic bundles can retain a small number of organellar or
-    # otherwise annotation-only CDS entries that are absent from the companion
-    # nuclear genomic GFF.
-    "Ananas_comosus": {
-        "Ananas_comosus_YP_009116321.1",
-    },
-    # FernBase Azolla_filiculoides publishes two CDS-only entries whose
-    # formatted IDs remain absent from the companion GFF.
-    "Azolla_filiculoides": {
-        "Azolla_filiculoides_Azfi_s0034.g025227",
-        "Azolla_filiculoides_Azfi_s0093.g043301",
-    },
-    "Glycine_max": {
-        "Glycine_max_GeneID100500117",
-    },
-    "Solanum_lycopersicum": {
-        "Solanum_lycopersicum_GeneID100736503",
-    },
-}
 TAXONOMIC_PROXIMITY_QUALIFIERS = frozenset(("cf", "aff", "nr"))
 TAXONOMIC_INFRASPECIFIC_RANKS = frozenset(("subsp", "ssp", "var", "forma", "f"))
 
@@ -72,6 +53,11 @@ def build_arg_parser():
     )
     parser.add_argument("--species-cds-dir", required=True, help="Directory containing formatted species CDS FASTA files.")
     parser.add_argument("--species-gff-dir", required=True, help="Directory containing formatted species GFF files.")
+    parser.add_argument(
+        "--species-summary",
+        default="",
+        help="Optional species summary used to select the exact CDS/GFF pair for each species.",
+    )
     parser.add_argument(
         "--nthreads",
         type=int,
@@ -175,7 +161,7 @@ def resolve_nthreads(args):
     return 1
 
 
-def run_gff2genestat(cds_file, gff_file):
+def run_gff2genestat(cds_file, gff_file, feature="CDS"):
     script_dir = Path(__file__).resolve().parent
     gff2genestat = script_dir / "gff2genestat.py"
     with tempfile.TemporaryDirectory(prefix="validate_cds_gff_mapping_") as tmp_dir_str:
@@ -192,7 +178,7 @@ def run_gff2genestat(cds_file, gff_file):
             "--outfile",
             str(out_path),
             "--feature",
-            "CDS",
+            feature,
             "--multiple_hits",
             "longest",
             "--ncpu",
@@ -217,6 +203,38 @@ def index_gff_files_by_species(gff_files):
     for species_prefix in out:
         out[species_prefix] = sorted(out[species_prefix], key=gff_candidate_sort_key)
     return out
+
+
+def read_species_summary_pairs(path):
+    pairs = []
+    errors = []
+    seen_species = set()
+    with open(path, "rt", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for line_number, row in enumerate(reader, 2):
+            species_prefix = str(row.get("species_prefix") or "").strip()
+            cds_output = str(row.get("cds_output_path") or "").strip()
+            gff_output = str(row.get("gff_output_path") or "").strip()
+            if cds_output == "" or gff_output == "":
+                continue
+            if species_prefix == "":
+                errors.append("Species summary line {} is missing species_prefix".format(line_number))
+                continue
+            if species_prefix in seen_species:
+                errors.append("Species summary contains duplicate formatted pair for '{}'".format(species_prefix))
+                continue
+            seen_species.add(species_prefix)
+            cds_file = Path(cds_output).expanduser().resolve()
+            gff_file = Path(gff_output).expanduser().resolve()
+            if not cds_file.is_file() or not gff_file.is_file():
+                errors.append(
+                    "[{}] Species summary references missing output: CDS={} GFF={}".format(
+                        species_prefix, cds_file, gff_file
+                    )
+                )
+                continue
+            pairs.append((species_prefix, cds_file, gff_file))
+    return pairs, errors
 
 
 def validate_single_species(task, missing_limit):
@@ -248,7 +266,7 @@ def validate_single_species(task, missing_limit):
                 ).format(species_prefix, cds_file.name, species_prefix, first_bad_prefix),
             }
 
-        completed, mapped_ids = run_gff2genestat(cds_file=cds_file, gff_file=gff_file)
+        completed, mapped_ids = run_gff2genestat(cds_file=cds_file, gff_file=gff_file, feature="CDS")
         if completed.returncode != 0:
             detail = "\n".join(
                 text for text in (completed.stdout.strip(), completed.stderr.strip()) if text
@@ -267,6 +285,13 @@ def validate_single_species(task, missing_limit):
 
         cds_id_set = set(cds_ids)
         mapped_id_set = set(mapped_ids)
+        if mapped_id_set != cds_id_set:
+            gene_completed, gene_mapped_ids = run_gff2genestat(
+                cds_file=cds_file, gff_file=gff_file, feature="gene"
+            )
+            if gene_completed.returncode == 0:
+                mapped_id_set.update(gene_mapped_ids)
+                mapped_ids = sorted(mapped_id_set)
         missing_ids = sorted(cds_id_set - mapped_id_set)
         extra_ids = sorted(mapped_id_set - cds_id_set)
         allowed_missing_id_set = KNOWN_ALLOWED_MISSING_CDS_IDS.get(species_prefix, set())
@@ -369,10 +394,13 @@ def main():
 
     cds_dir = Path(args.species_cds_dir).expanduser().resolve()
     gff_dir = Path(args.species_gff_dir).expanduser().resolve()
+    species_summary = Path(args.species_summary).expanduser().resolve() if args.species_summary != "" else None
     if not cds_dir.is_dir():
         parser.error("--species-cds-dir not found: {}".format(cds_dir))
     if not gff_dir.is_dir():
         parser.error("--species-gff-dir not found: {}".format(gff_dir))
+    if species_summary is not None and not species_summary.is_file():
+        parser.error("--species-summary not found: {}".format(species_summary))
 
     cds_files = list_nonhidden_files(cds_dir, FASTA_EXTENSIONS)
     gff_files = list_nonhidden_files(gff_dir, GFF_EXTENSIONS)
@@ -391,32 +419,45 @@ def main():
         "nthreads": nthreads,
     }
 
-    gff_by_species = index_gff_files_by_species(gff_files)
     tasks = []
-    for index, cds_file in enumerate(cds_files):
-        species_prefix = species_prefix_from_name(cds_file.name)
-        if species_prefix == "":
-            errors.append("Could not parse species prefix from CDS file name: {}".format(cds_file.name))
-            continue
-
-        matching_gff = gff_by_species.get(species_prefix, [])
-        if len(matching_gff) == 0:
-            errors.append("[{}] No matching GFF file found for CDS file {}".format(species_prefix, cds_file.name))
-            continue
-        if len(matching_gff) > 1:
-            warnings.append(
-                "[{}] Multiple matching GFF files found. Using '{}'".format(
-                    species_prefix, matching_gff[0].name
-                )
+    if species_summary is not None:
+        summary_pairs, summary_errors = read_species_summary_pairs(species_summary)
+        errors.extend(summary_errors)
+        for index, (species_prefix, cds_file, gff_file) in enumerate(summary_pairs):
+            tasks.append(
+                {
+                    "index": index,
+                    "species_prefix": species_prefix,
+                    "cds_file": cds_file,
+                    "gff_file": gff_file,
+                }
             )
-        tasks.append(
-            {
-                "index": index,
-                "species_prefix": species_prefix,
-                "cds_file": cds_file,
-                "gff_file": matching_gff[0],
-            }
-        )
+    else:
+        gff_by_species = index_gff_files_by_species(gff_files)
+        for index, cds_file in enumerate(cds_files):
+            species_prefix = species_prefix_from_name(cds_file.name)
+            if species_prefix == "":
+                errors.append("Could not parse species prefix from CDS file name: {}".format(cds_file.name))
+                continue
+
+            matching_gff = gff_by_species.get(species_prefix, [])
+            if len(matching_gff) == 0:
+                errors.append("[{}] No matching GFF file found for CDS file {}".format(species_prefix, cds_file.name))
+                continue
+            if len(matching_gff) > 1:
+                warnings.append(
+                    "[{}] Multiple matching GFF files found. Using '{}'".format(
+                        species_prefix, matching_gff[0].name
+                    )
+                )
+            tasks.append(
+                {
+                    "index": index,
+                    "species_prefix": species_prefix,
+                    "cds_file": cds_file,
+                    "gff_file": matching_gff[0],
+                }
+            )
 
     for result in run_validation_tasks(tasks=tasks, missing_limit=args.missing_limit, nthreads=nthreads):
         if result.get("stats_ready", False):

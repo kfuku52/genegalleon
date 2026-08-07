@@ -1339,7 +1339,7 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 5
+    assert audit["version"] == 6
     assert len(audit["cds_input"]["sha256"]) == 64
     assert len(audit["gff_input"]["sha256"]) == 64
 
@@ -1352,7 +1352,222 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
     assert longest.returncode == 0, longest.stderr + "\n" + longest.stdout
 
 
-def test_provided_cds_gff_grouping_audits_fallback_and_strict_mode_rejects_it(tmp_path):
+@pytest.mark.parametrize(
+    ("species_prefix", "gene_id", "isoforms", "selected_protein"),
+    (
+        (
+            "Erythranthe_tilingii",
+            "ACP275_01G000100",
+            (
+                ("KAL7121685.1", "rna-Mitil.01G000100.2", 9),
+                ("KAL7121688.1", "rna-Mitil.01G000100.3", 9),
+                ("KAL7121687.1", "rna-Mitil.01G000100.1", 10),
+                ("KAL7121686.1", "rna-Mitil.01G000100.4", 6),
+            ),
+            "KAL7121687.1",
+        ),
+        (
+            "Phlomoides_rotata",
+            "ACS0TY_000073",
+            (
+                ("KAL8550850.1", "rna-Phrot01aG0007500.1", 7),
+                ("KAL8550851.1", "rna-Phrot01aG0007500.2", 5),
+                ("KAL8550852.1", "rna-Phrot01aG0007500.3", 5),
+                ("KAL8550853.1", "rna-Phrot01aG0007500.4", 5),
+            ),
+            "KAL8550850.1",
+        ),
+        (
+            "Saponaria_officinalis",
+            "RND81_02G052900",
+            tuple(
+                ("KAK97483{}.1".format(suffix), "rna-Sapof.02G052900.{}".format(index), 8)
+                for index, suffix in enumerate(range(69, 75), 1)
+            ),
+            "KAK9748369.1",
+        ),
+        (
+            "Rhododendron_molle",
+            "RHMOL_Rhmol01G0002200",
+            (
+                ("KAI8570035.1", "rna-Rhmol01G0002200.1", 4),
+                ("KAI8570036.1", "rna-Rhmol01G0002200.2", 4),
+                ("KAI8570037.1", "rna-Rhmol01G0002200.3", 3),
+                ("KAI8570038.1", "rna-Rhmol01G0002200.4", 5),
+            ),
+            "KAI8570038.1",
+        ),
+    ),
+)
+def test_issue_26_ncbi_isoforms_group_by_gff_gene(
+    tmp_path,
+    species_prefix,
+    gene_id,
+    isoforms,
+    selected_protein,
+):
+    module = load_module()
+    cds_path = tmp_path / "models_cds_from_genomic.fna.gz"
+    gff_path = tmp_path / "models_genomic.gff.gz"
+    with gzip.open(cds_path, "wt", encoding="utf-8") as handle:
+        for index, (protein_id, _transcript_id, codon_length) in enumerate(isoforms, 1):
+            handle.write(
+                ">lcl|CM000001.1_cds_{}_{} [protein_id={}]\n{}\n".format(
+                    protein_id,
+                    index,
+                    protein_id,
+                    "ATG" * codon_length,
+                )
+            )
+    with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
+        handle.write("chr1\tsrc\tgene\t1\t1000\t.\t+\t.\tID=gene-{};locus_tag={}\n".format(gene_id, gene_id))
+        for index, (protein_id, transcript_id, codon_length) in enumerate(isoforms, 1):
+            handle.write(
+                "chr1\tsrc\tmRNA\t{}\t{}\t.\t+\t.\tID={};Parent=gene-{}\n".format(
+                    index,
+                    index + codon_length * 3 - 1,
+                    transcript_id,
+                    gene_id,
+                )
+            )
+            handle.write(
+                "chr1\tsrc\tCDS\t{}\t{}\t.\t+\t0\tID=cds-{};Parent={};protein_id={};locus_tag={}\n".format(
+                    index,
+                    index + codon_length * 3 - 1,
+                    protein_id,
+                    transcript_id,
+                    protein_id,
+                    gene_id,
+                )
+            )
+
+    task = {
+        "provider": "ncbi",
+        "species_key": species_prefix,
+        "species_prefix": species_prefix,
+        "cds_path": cds_path,
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+        "format_strict": True,
+    }
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    result = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
+
+    assert result["before_count"] == len(isoforms)
+    assert result["after_count"] == 1
+    assert result["gff_records_mapped"] == len(isoforms)
+    assert result["gff_records_unmapped"] == 0
+    with gzip.open(result["output_path"], "rt", encoding="utf-8") as handle:
+        assert handle.readline().strip() == ">{}_{}".format(species_prefix, gene_id)
+    with open(result["gff_grouping_audit_path"], "rt", encoding="utf-8", newline="") as handle:
+        audit_rows = list(csv.DictReader(handle, delimiter="\t"))
+    selected_rows = [row for row in audit_rows if row["selected_longest"] == "1"]
+    assert len(selected_rows) == 1
+    assert selected_protein in selected_rows[0]["raw_cds_id"]
+
+
+def test_issue_26_figshare_prefers_gene_gff_and_groups_isoforms(tmp_path):
+    module = load_module()
+    input_dir = tmp_path / "Figshare" / "species_wise_original"
+    species_dir = input_dir / "Euryodendron_excelsum"
+    species_dir.mkdir(parents=True)
+    (species_dir / "Euryodendron_excelsum.cds.fa").write_text(
+        "".join(
+            ">FUN_001415-T{}\n{}\n".format(index, "ATG" * codon_length)
+            for index, codon_length in enumerate((9, 8, 7, 6, 5, 4, 3), 1)
+        ),
+        encoding="utf-8",
+    )
+    canonical_gff = species_dir / "Euryodendron_excelsum.gff3"
+    canonical_gff.write_text(
+        "chr1\tfunannotate\tgene\t1\t100\t.\t+\t.\tID=FUN_001415;\n"
+        + "".join(
+            "chr1\tfunannotate\tmRNA\t1\t100\t.\t+\t.\tID=FUN_001415-T{0};Parent=FUN_001415;\n"
+            "chr1\tfunannotate\tCDS\t{0}\t{1}\t.\t+\t0\tID=FUN_001415-T{0}.cds;Parent=FUN_001415-T{0};\n".format(
+                index,
+                index + codon_length * 3 - 1,
+            )
+            for index, codon_length in enumerate((9, 8, 7, 6, 5, 4, 3), 1)
+        ),
+        encoding="utf-8",
+    )
+    (species_dir / "Euryodendron_excelsum.EDTA.gff3").write_text(
+        "chr1\tEDTA\trepeat_region\t1\t100\t.\t+\t.\tID=repeat1\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Euryodendron_excelsum.only_long-transcripts.gff3").write_text(
+        "chr1\tfunannotate\tgene\t1\t100\t.\t+\t.\tID=FUN_001415;\n"
+        "chr1\tfunannotate\tmRNA\t1\t100\t.\t+\t.\tID=FUN_001415-T1;Parent=FUN_001415;\n"
+        "chr1\tfunannotate\tCDS\t1\t27\t.\t+\t0\tID=FUN_001415-T1.cds;Parent=FUN_001415-T1;\n",
+        encoding="utf-8",
+    )
+
+    tasks, warnings, errors = module.discover_tasks("figshare", input_dir)
+    assert errors == []
+    assert tasks[0]["gff_path"] == canonical_gff
+    assert tasks[0]["gff_auto_selected_from_multiple"] is True
+    assert len(tasks[0]["gff_selection_candidates"]) == 3
+    assert any("Using 'Euryodendron_excelsum.gff3'" in warning for warning in warnings)
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    summary = tmp_path / "summary.tsv"
+    completed = run_script(
+        "--provider",
+        "figshare",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(summary),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    formatted_cds = next(out_cds.glob("*.fa.gz"))
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        assert handle.read() == ">Euryodendron_excelsum_FUN_001415\n{}\n".format("ATG" * 9)
+    with open(summary, "rt", encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle, delimiter="\t"))
+    assert row["cds_gff_records_mapped"] == "7"
+    assert row["cds_gff_records_unmapped"] == "0"
+
+
+def test_figshare_rejects_all_unmapped_auto_selected_gff(tmp_path):
+    module = load_module()
+    cds_path = tmp_path / "Euryodendron_excelsum.cds.fa"
+    gff_path = tmp_path / "Euryodendron_excelsum.EDTA.gff3"
+    cds_path.write_text(">FUN_001415-T1\nATG\n>FUN_001415-T2\nATGAAA\n", encoding="utf-8")
+    gff_path.write_text(
+        "chr1\tEDTA\trepeat_region\t1\t100\t.\t+\t.\tID=repeat1\n",
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "figshare",
+        "species_key": "Euryodendron_excelsum",
+        "species_prefix": "Euryodendron_excelsum",
+        "cds_path": cds_path,
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+        "gff_auto_selected_from_multiple": True,
+        "gff_selection_candidates": (
+            "Euryodendron_excelsum.EDTA.gff3",
+            "Euryodendron_excelsum.gff3",
+        ),
+    }
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    with pytest.raises(ValueError, match=r"unexpected_unmapped=2 ambiguous=0"):
+        module.format_cds(task, output_dir, overwrite=False, dry_run=False)
+
+
+def test_provided_cds_gff_grouping_rejects_unmapped_records_by_default(tmp_path):
     input_dir = tmp_path / "Direct" / "species_wise_original"
     species_dir = input_dir / "Arabidopsis_thaliana"
     species_dir.mkdir(parents=True, exist_ok=True)
@@ -1388,28 +1603,8 @@ def test_provided_cds_gff_grouping_audits_fallback_and_strict_mode_rejects_it(tm
         "--species-summary-output",
         str(normal_summary),
     )
-    assert normal.returncode == 0, normal.stderr + "\n" + normal.stdout
-    with open(normal_summary, "rt", encoding="utf-8", newline="") as handle:
-        row = next(csv.DictReader(handle, delimiter="\t"))
-    assert row["cds_grouping_source"] == "gff_with_header_fallback"
-    assert row["cds_gff_records_mapped"] == "1"
-    assert row["cds_gff_records_unmapped"] == "1"
-
-    cached_strict = run_script(
-        "--provider",
-        "direct",
-        "--input-dir",
-        str(input_dir),
-        "--species-cds-dir",
-        str(normal_root / "cds"),
-        "--species-gff-dir",
-        str(normal_root / "gff"),
-        "--species-genome-dir",
-        str(normal_root / "genome"),
-        "--strict",
-    )
-    assert cached_strict.returncode != 0
-    assert "unmapped=1 and ambiguous=0" in cached_strict.stderr
+    assert normal.returncode != 0
+    assert "unexpected_unmapped=1 ambiguous=0" in normal.stderr
 
     strict_root = tmp_path / "strict"
     strict = run_script(
@@ -1426,7 +1621,7 @@ def test_provided_cds_gff_grouping_audits_fallback_and_strict_mode_rejects_it(tm
         "--strict",
     )
     assert strict.returncode != 0
-    assert "unmapped=1 and ambiguous=0" in strict.stderr
+    assert "unexpected_unmapped=1 ambiguous=0" in strict.stderr
 
 
 def test_gff_grouping_rescue_overlap_applies_to_provided_cds_aliases(tmp_path):
@@ -1774,7 +1969,7 @@ def test_gff_grouping_rejects_conflicting_unique_header_aliases(tmp_path):
 
     assert hit["status"] == "ambiguous"
     assert set(hit["candidate_gene_tokens"]) == {"L1", "L2"}
-    with pytest.raises(ValueError, match="unmapped=0 and ambiguous=1"):
+    with pytest.raises(ValueError, match="unexpected_unmapped=0 ambiguous=1"):
         module.format_cds(task, tmp_path / "out", overwrite=False, dry_run=False, strict=True)
 
 
@@ -2223,13 +2418,13 @@ def test_provided_cds_longest_selection_compares_lengths_before_padding(tmp_path
         audit = json.load(handle)
     with open(audit_tsv_path, "rt", encoding="utf-8", newline="") as handle:
         audit_rows = list(csv.DictReader(handle, delimiter="\t"))
-    assert audit["version"] == 5
+    assert audit["version"] == 6
     assert [row["raw_sequence_length"] for row in audit_rows] == ["8", "9"]
     assert [row["sequence_length"] for row in audit_rows] == ["9", "9"]
     assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
 
 
-def test_provided_cds_gff_grouping_regenerates_version_four_audit(tmp_path):
+def test_provided_cds_gff_grouping_regenerates_older_audit_version(tmp_path):
     module = load_module()
     cds_path = tmp_path / "models.cds.fa"
     gff_path = tmp_path / "models.gff3"
@@ -2266,7 +2461,7 @@ def test_provided_cds_gff_grouping_regenerates_version_four_audit(tmp_path):
     skipped = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
 
     assert regenerated["status"] == "write"
-    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 5
+    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 6
     assert skipped["status"] == "skip"
 
 
@@ -2948,6 +3143,111 @@ def test_format_species_inputs_fernbase_strips_amt_suffix_when_gff_uses_base_gen
         ">Azolla_filiculoides_Azfi_s0034.g025227",
         ">Azolla_filiculoides_Azfi_s0093.g043301",
     ]
+
+
+def test_generic_discovery_prefers_cds_and_gene_model_gff_candidates(tmp_path):
+    module = load_module()
+    input_dir = tmp_path / "DDBJ" / "species_wise_original"
+    species_dir = input_dir / "Test_species"
+    species_dir.mkdir(parents=True)
+    (species_dir / "a.cdna.fa").write_text(">T1\nATG\n", encoding="utf-8")
+    cds_path = species_dir / "z.cds.fa"
+    cds_path.write_text(">T1\nATG\n", encoding="utf-8")
+    (species_dir / "a.repeat.gff3").write_text(
+        "chr1\trepeat\trepeat_region\t1\t3\t.\t+\t.\tID=R1\n", encoding="utf-8"
+    )
+    gff_path = species_dir / "z.genes.gff3"
+    gff_path.write_text("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=T1\n", encoding="utf-8")
+
+    tasks, _warnings, errors = module.discover_tasks("ddbj", input_dir)
+
+    assert errors == []
+    assert tasks[0]["cds_path"] == cds_path
+    assert tasks[0]["gff_path"] == gff_path
+
+
+def test_plantgarden_discovery_accepts_provider_native_filenames(tmp_path):
+    module = load_module()
+    input_dir = tmp_path / "PlantGARDEN" / "species_wise_original"
+    species_dir = input_dir / "Actinidia_polygama"
+    species_dir.mkdir(parents=True)
+    cds_path = species_dir / "APO1.1.cds.fasta.gz"
+    cds_path.write_text(">G1\nATG\n", encoding="utf-8")
+    gff_path = species_dir / "APO1.1.genes.gff.gz"
+    gff_path.write_text("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=G1\n", encoding="utf-8")
+    genome_path = species_dir / "APO_r1.1.pmol.fasta.gz"
+    genome_path.write_text(">chr1\nATG\n", encoding="utf-8")
+
+    tasks, _warnings, errors = module.discover_tasks("plantgarden", input_dir)
+
+    assert errors == []
+    assert len(tasks) == 1
+    assert tasks[0]["cds_path"] == cds_path
+    assert tasks[0]["gff_path"] == gff_path
+    assert tasks[0]["genome_path"] == genome_path
+
+
+def test_phycocosm_discovery_never_uses_assembly_as_cds(tmp_path):
+    module = load_module()
+    input_dir = tmp_path / "PhycoCosm" / "species_wise_original"
+    species_dir = input_dir / "Microglena_spYARC"
+    species_dir.mkdir(parents=True)
+    cds_path = species_dir / "MicrYARC1_GeneCatalog_CDS.fasta"
+    cds_path.write_text(">T1\nATG\n", encoding="utf-8")
+    genome_path = species_dir / "MicrYARC1_genome_assembly.fasta"
+    genome_path.write_text(">chr1\nATG\n", encoding="utf-8")
+    (species_dir / "MicrYARC1_genes.gff3").write_text(
+        "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=T1\n", encoding="utf-8"
+    )
+
+    tasks, _warnings, errors = module.discover_tasks("phycocosm", input_dir)
+
+    assert errors == []
+    assert tasks[0]["cds_path"] == cds_path
+    assert tasks[0]["genome_path"] == genome_path
+
+
+def test_ncbi_discovery_keeps_assembly_accession_bundle_coherent(tmp_path):
+    module = load_module()
+    input_dir = tmp_path / "NCBI" / "species_wise_original"
+    species_dir = input_dir / "Test_species"
+    species_dir.mkdir(parents=True)
+    (species_dir / "GCA_000001.1_old_cds_from_genomic.fna").write_text(">T1\nATG\n", encoding="utf-8")
+    gff_path = species_dir / "GCA_000002.1_new_genomic.gff"
+    gff_path.write_text("chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=T2\n", encoding="utf-8")
+    genome_path = species_dir / "GCA_000002.1_new_genomic.fna"
+    genome_path.write_text(">chr1\nATG\n", encoding="utf-8")
+
+    tasks, warnings, errors = module.discover_tasks("ncbi", input_dir)
+
+    assert errors == []
+    assert len(tasks) == 1
+    assert tasks[0]["source_bundle_id"] == "GCA_000002.1"
+    assert tasks[0]["cds_path"] is None
+    assert tasks[0]["gff_path"] == gff_path
+    assert tasks[0]["genome_path"] == genome_path
+    assert any("coherent bundle 'GCA_000002.1'" in warning for warning in warnings)
+
+
+def test_single_wrong_gff_is_rejected_without_strict_mode(tmp_path):
+    module = load_module()
+    cds_path = tmp_path / "models.cds.fa"
+    gff_path = tmp_path / "models.gff3"
+    cds_path.write_text(">T1\nATG\n", encoding="utf-8")
+    gff_path.write_text("chr1\trepeat\trepeat_region\t1\t3\t.\t+\t.\tID=R1\n", encoding="utf-8")
+    task = {
+        "provider": "direct",
+        "species_key": "Test_species",
+        "species_prefix": "Test_species",
+        "cds_path": cds_path,
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+    }
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    with pytest.raises(ValueError, match="unexpected_unmapped=1 ambiguous=0"):
+        module.format_cds(task, output_dir, overwrite=False, dry_run=False)
 
 
 def test_species_summary_is_incremental_and_persistent_across_runs(tmp_path):

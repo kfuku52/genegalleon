@@ -27,6 +27,7 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
+import format_species_common as species_common
 from format_species_provider_config import (
     DEFAULT_INPUT_RELATIVE_DIRS,
     DOWNLOAD_MANIFEST_BUILDER_PROVIDERS,
@@ -34,49 +35,6 @@ from format_species_provider_config import (
     ENSEMBL_LIKE_PROVIDERS,
 )
 from species_labeling import extract_species_label
-
-FASTA_EXTENSIONS = (
-    ".fa",
-    ".fas",
-    ".fasta",
-    ".fna",
-    ".fa.bz2",
-    ".fas.bz2",
-    ".fasta.bz2",
-    ".fna.bz2",
-    ".fa.gz",
-    ".fas.gz",
-    ".fasta.gz",
-    ".fna.gz",
-    ".fa.tar.gz",
-    ".fas.tar.gz",
-    ".fasta.tar.gz",
-    ".fna.tar.gz",
-    ".fa.tar.bz2",
-    ".fas.tar.bz2",
-    ".fasta.tar.bz2",
-    ".fna.tar.bz2",
-)
-
-GFF_EXTENSIONS = (
-    ".gff",
-    ".gff3",
-    ".gtf",
-    ".gff.gz",
-    ".gff3.gz",
-    ".gtf.gz",
-)
-
-GENBANK_EXTENSIONS = (
-    ".gb",
-    ".gbk",
-    ".gbff",
-    ".genbank",
-    ".gb.gz",
-    ".gbk.gz",
-    ".gbff.gz",
-    ".genbank.gz",
-)
 
 PROVIDERS = DOWNLOAD_MANIFEST_BUILDER_PROVIDERS
 LEGACY_NCBI_PROVIDER_ALIASES = DOWNLOAD_MANIFEST_LEGACY_NCBI_PROVIDER_ALIASES
@@ -871,63 +829,27 @@ def build_arg_parser():
 
 
 def is_fasta_filename(name):
-    lower = name.lower()
-    return any(lower.endswith(ext) for ext in FASTA_EXTENSIONS)
+    return species_common.is_fasta_filename(name)
 
 
 def is_gff_filename(name):
-    lower = name.lower()
-    return any(lower.endswith(ext) for ext in GFF_EXTENSIONS)
+    return species_common.is_gff_filename(name)
 
 
 def is_gbff_filename(name):
-    lower = name.lower()
-    return any(lower.endswith(ext) for ext in GENBANK_EXTENSIONS)
+    return species_common.is_gbff_filename(name)
 
 
 def has_haplotype_assembly_marker(name):
-    lower = str(name or "").lower()
-    return re.search(r"(?:^|[._-])(?:hap[0-9][0-9a-z]*|haplotype[0-9a-z]*)(?:[._-]|$)", lower) is not None
+    return species_common.has_haplotype_assembly_marker(name)
 
 
 def is_probable_genome_filename(provider, name):
-    if not is_fasta_filename(name):
-        return False
-    lower = name.lower()
-    non_genome_markers = (
-        "cds",
-        "mrna",
-        "trna",
-        "rrna",
-        "ncrna",
-        "rna_from_genomic",
-        "transcript",
-        "cdna",
-        "pep",
-        "protein",
-    )
-    if any(marker in lower for marker in non_genome_markers):
-        return False
-    if provider == "ncbi":
-        return "genomic" in lower
-    if provider in ENSEMBL_LIKE_PROVIDERS:
-        return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
-    return any(marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "scaffold")) or has_haplotype_assembly_marker(lower)
-
-
-FERNBASE_GFF_EXCLUDE_PATTERN = re.compile(
-    r"(?:^|[._-])(te|teanno|repeat|repeats|transpos(?:on)?)(?:[._-]|$)",
-    re.IGNORECASE,
-)
+    return species_common.is_probable_genome_filename(provider, name)
 
 
 def is_probable_cds_filename(provider, name):
-    lower = name.lower()
-    if provider == "fernbase" and (lower.endswith(".cds") or lower.endswith(".cds.gz")):
-        return True
-    if not is_fasta_filename(name):
-        return False
-    return any(marker in lower for marker in ("cds", "transcript", "mrna", "cdna"))
+    return species_common.is_probable_cds_filename(provider, name)
 
 
 def infer_fernbase_confidence_mode_from_files(files, cds_path, gff_path):
@@ -947,54 +869,11 @@ def infer_fernbase_confidence_mode_from_files(files, cds_path, gff_path):
 
 
 def provider_candidate_sort_key(provider, label, name):
-    lower = str(name or "").lower()
-    label_upper = str(label or "").upper()
-    if provider in ENSEMBL_LIKE_PROVIDERS and label_upper == "GFF":
-        return (
-            1 if "abinitio" in lower else 0,
-            1 if re.search(r"(?:^|[._-])(?:chr|chromosome)(?:[._-])", lower) else 0,
-            1 if ".primary_assembly." in lower else 0,
-            lower,
-        )
-    if provider != "fernbase":
-        return (lower,)
-    if label_upper == "CDS":
-        return (
-            0 if FERNBASE_COMBINED_FILENAME_MARKER in lower else 1,
-            0 if "highconfidence" in lower else 1,
-            1 if "lowconfidence" in lower else 0,
-            0 if "cds" in lower else 1,
-            1 if any(marker in lower for marker in ("transcript", "mrna", "cdna")) else 0,
-            lower,
-        )
-    if label_upper == "GFF":
-        return (
-            1 if FERNBASE_GFF_EXCLUDE_PATTERN.search(lower) else 0,
-            0 if FERNBASE_COMBINED_FILENAME_MARKER in lower else 1,
-            0 if "highconfidence" in lower else 1,
-            1 if "lowconfidence" in lower else 0,
-            lower,
-        )
-    if label_upper == "GENOME":
-        return (
-            1 if "chloroplast" in lower else 0,
-            0 if any(marker in lower for marker in ("genome", "assembly", "chr", "chromosome")) else 1,
-            lower,
-        )
-    return (lower,)
+    return species_common.provider_candidate_sort_key(provider, label, name)
 
 
 def pick_single_file(matches, provider, species_key, label, warnings):
-    if len(matches) == 0:
-        return None
-    ordered = sorted(matches, key=lambda path: provider_candidate_sort_key(provider, label, path.name))
-    if len(ordered) > 1:
-        warnings.append(
-            "[{}] {}: multiple {} files found. Using '{}'".format(
-                provider, species_key, label, ordered[0].name
-            )
-        )
-    return ordered[0]
+    return species_common.pick_single_file(matches, provider, species_key, label, warnings)
 
 
 def discover_ensembl_like(input_dir, provider):
@@ -1069,7 +948,12 @@ def discover_species_dir_based(provider, input_dir):
         species_key = species_dir.name
         files = [path for path in species_dir.iterdir() if path.is_file()]
         if provider == "phycocosm":
-            cds_matches = [path for path in files if "fasta" in path.name.lower() and is_fasta_filename(path.name)]
+            cds_matches = [
+                path
+                for path in files
+                if is_probable_cds_filename(provider, path.name)
+                and not is_probable_genome_filename(provider, path.name)
+            ]
             gff_matches = [path for path in files if "gff" in path.name.lower() and is_gff_filename(path.name)]
             gbff_matches = [path for path in files if is_gbff_filename(path.name)]
             genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]

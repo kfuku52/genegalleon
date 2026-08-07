@@ -298,6 +298,7 @@ def build_gff_cds_grouping_index(task):
     aliases_by_transcript = defaultdict(set)
     fallback_gene_tokens = {}
     authoritative_gene_tokens_by_transcript = defaultdict(set)
+    gene_alias_to_gene_tokens = defaultdict(set)
     use_coordinate_rescue = gene_grouping_mode_for_task(task) == "rescue_overlap"
     cds_features_by_transcript = defaultdict(list) if use_coordinate_rescue else None
 
@@ -326,10 +327,11 @@ def build_gff_cds_grouping_index(task):
                         parents.append(parent_text)
             parents = tuple(sorted(parents))
             if feature_id != "" and gff_grouping_parent_feature_type(feature_type_lower):
+                stable_gene_token = gff_stable_gene_token(attrs, feature_type_lower)
                 feature_record = {
                     "feature_type": feature_type_lower,
                     "parents": parents,
-                    "gene_token": gff_stable_gene_token(attrs, feature_type_lower),
+                    "gene_token": stable_gene_token,
                     "authoritative_gene_tokens": tuple(
                         token
                         for token in (gff_authoritative_gene_token(attrs),)
@@ -339,6 +341,15 @@ def build_gff_cds_grouping_index(task):
                     "line_number": line_number,
                 }
                 merge_gff_grouping_feature_record(task, feature_records, feature_id, feature_record)
+                if feature_type_lower == "gene" and stable_gene_token != "":
+                    raw_aliases = (
+                        feature_id,
+                        stable_gene_token,
+                        collapse_transcript_suffix(task["provider"], stable_gene_token),
+                    ) + gff_alias_values_from_attributes(attrs)
+                    for raw_alias in raw_aliases:
+                        for alias in gff_alias_variants(raw_alias):
+                            gene_alias_to_gene_tokens[alias].add(stable_gene_token)
                 if feature_type_lower in ("polypeptide", "protein") or any(
                     len(attrs.get(key, ())) > 0 for key in ("Derives_from", "derives_from")
                 ):
@@ -521,6 +532,8 @@ def build_gff_cds_grouping_index(task):
             gene_tokens = (gene_token,)
         for alias in aliases:
             alias_to_gene_tokens[alias].update(gene_tokens)
+    for alias, gene_tokens in gene_alias_to_gene_tokens.items():
+        alias_to_gene_tokens[alias].update(gene_tokens)
 
     rescued_transcripts = sorted(
         transcript_id
@@ -566,6 +579,10 @@ def extract_cds_header_alias_tiers(task, header):
     add(primary, first_token(header))
     add(primary, extract_provider_transcript_id(task["provider"], header))
     add(primary, extract_provider_id(task["provider"], header))
+    add(
+        gene_level,
+        collapse_transcript_suffix(task["provider"], extract_provider_id(task["provider"], header)),
+    )
     for tag in CDS_HEADER_PRIMARY_TAGS:
         add(primary, extract_header_tag_value(header, tag))
     for tag in CDS_HEADER_GENE_TAGS:

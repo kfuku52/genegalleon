@@ -42,10 +42,11 @@ from format_species_common import (
     is_fasta_filename,
     is_gbff_filename,
     is_gff_filename,
+    is_probable_cds_filename,
     is_probable_genome_filename,
     pick_single_file,
 )
-from format_species_constants import ENSEMBL_CDS_PATTERN
+from format_species_constants import ENSEMBL_CDS_PATTERN, KNOWN_ALLOWED_MISSING_CDS_IDS
 from format_species_provider_config import ENSEMBL_LIKE_PROVIDERS, ORYZA_MINUTA_PROVIDER
 from format_species_taxonomy import invalid_species_key_error, normalize_species_key_for_runtime
 from format_species_writers import (
@@ -55,7 +56,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 5
+CDS_GFF_GROUPING_AUDIT_VERSION = 6
 
 
 def cds_gff_grouping_audit_paths(output_path):
@@ -299,7 +300,12 @@ def discover_phycocosm_tasks(input_dir, allowed_species_keys=None):
             continue
 
         files = [path for path in species_dir.iterdir() if path.is_file()]
-        cds_matches = [path for path in files if "fasta" in path.name.lower() and is_fasta_filename(path.name)]
+        cds_matches = [
+            path
+            for path in files
+            if is_probable_cds_filename("phycocosm", path.name)
+            and not is_probable_genome_filename("phycocosm", path.name)
+        ]
         gff_matches = [path for path in files if "gff" in path.name.lower() and is_gff_filename(path.name)]
         gbff_matches = [path for path in files if is_gbff_filename(path.name)]
         genome_matches = [path for path in files if is_probable_genome_filename("phycocosm", path.name)]
@@ -410,6 +416,55 @@ def discover_ncbi_like_tasks(input_dir, provider, allowed_species_keys=None):
         gbff_matches = [path for path in files if "genomic.gbff" in path.name.lower() and is_gbff_filename(path.name)]
         genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
 
+        all_matches = cds_matches + gff_matches + gbff_matches + genome_matches
+        accessions = sorted(
+            {
+                match.group(1).upper()
+                for path in all_matches
+                for match in [re.search(r"(GC[AF]_[0-9]+\.[0-9]+)", path.name, re.IGNORECASE)]
+                if match is not None
+            }
+        )
+        selected_accession = ""
+        if len(accessions) > 0:
+            candidate_bundles = []
+            for accession in accessions:
+                bundle_cds = [path for path in cds_matches if accession.lower() in path.name.lower()]
+                bundle_gff = [path for path in gff_matches if accession.lower() in path.name.lower()]
+                bundle_gbff = [path for path in gbff_matches if accession.lower() in path.name.lower()]
+                bundle_genome = [path for path in genome_matches if accession.lower() in path.name.lower()]
+                coherent = len(bundle_gbff) > 0 or len(bundle_gff) > 0 and (
+                    len(bundle_cds) > 0 or len(bundle_genome) > 0
+                )
+                if coherent:
+                    candidate_bundles.append(
+                        (
+                            -(len(bundle_cds) > 0) - (len(bundle_gff) > 0) - (len(bundle_genome) > 0),
+                            accession,
+                            bundle_cds,
+                            bundle_gff,
+                            bundle_gbff,
+                            bundle_genome,
+                        )
+                    )
+            if len(candidate_bundles) == 0 and len(accessions) > 1:
+                errors.append(
+                    "[{}] {}: annotation files span incompatible assembly accessions: {}".format(
+                        provider, species_key, ",".join(accessions)
+                    )
+                )
+                continue
+            if len(candidate_bundles) > 0:
+                _score, selected_accession, cds_matches, gff_matches, gbff_matches, genome_matches = sorted(
+                    candidate_bundles, key=lambda item: (item[0], item[1])
+                )[0]
+                if len(accessions) > 1:
+                    warnings.append(
+                        "[{}] {}: multiple assembly bundles found. Using coherent bundle '{}'.".format(
+                            provider, species_key, selected_accession
+                        )
+                    )
+
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
         gbff_path = pick_single_file(gbff_matches, provider, species_key, "GBFF", warnings)
@@ -428,6 +483,9 @@ def discover_ncbi_like_tasks(input_dir, provider, allowed_species_keys=None):
                 "gff_path": gff_path,
                 "gbff_path": gbff_path,
                 "genome_path": genome_path,
+                "source_bundle_id": selected_accession,
+                "gff_auto_selected_from_multiple": len(gff_matches) > 1,
+                "gff_selection_candidates": tuple(sorted(path.name for path in gff_matches)),
             }
         )
 
@@ -441,7 +499,7 @@ def discover_tasks(provider, input_dir, allowed_species_keys=None):
         return discover_phycocosm_tasks(input_dir, allowed_species_keys)
     if provider == "phytozome":
         return discover_phytozome_tasks(input_dir, allowed_species_keys)
-    if provider in ("ncbi", "refseq", "genbank", "plantgarden", "plantaedb"):
+    if provider in ("ncbi", "refseq", "genbank", "plantaedb"):
         return discover_ncbi_like_tasks(input_dir, provider, allowed_species_keys)
     if provider == "coge":
         return discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys)
@@ -623,14 +681,27 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
             "sanitization: {}".format(task.get("species_prefix", ""), "; ".join(examples))
         )
 
-    if grouping_index is not None and strict_mode and (
-        mapping_counts["unmapped"] > 0 or mapping_counts["ambiguous"] > 0
+    allowed_missing_ids = KNOWN_ALLOWED_MISSING_CDS_IDS.get(task.get("species_prefix", ""), frozenset())
+    unexpected_unmapped_ids = sorted(
+        {
+            row["selected_gene_id"]
+            for row in audit_rows
+            if row["mapping_status"] == "unmapped" and row["selected_gene_id"] not in allowed_missing_ids
+        }
+    )
+    if grouping_index is not None and (
+        len(unexpected_unmapped_ids) > 0 or mapping_counts["ambiguous"] > 0
     ):
+        candidate_names = ",".join(task.get("gff_selection_candidates", ())) or Path(task["gff_path"]).name
         raise ValueError(
-            "GFF-backed CDS grouping for {} has unmapped={} and ambiguous={} CDS records".format(
+            "GFF-backed CDS grouping for {} failed: unexpected_unmapped={} ambiguous={} "
+            "GFF='{}' candidates={} sample={}".format(
                 task.get("species_prefix", ""),
-                mapping_counts["unmapped"],
+                len(unexpected_unmapped_ids),
                 mapping_counts["ambiguous"],
+                Path(task["gff_path"]).name,
+                candidate_names,
+                ",".join(unexpected_unmapped_ids[:5]),
             )
         )
 
@@ -658,8 +729,8 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
 
     if grouping_index is None:
         grouping_source = "header"
-    elif mapping_counts["unmapped"] > 0 or mapping_counts["ambiguous"] > 0:
-        grouping_source = "gff_with_header_fallback"
+    elif mapping_counts["unmapped"] > 0:
+        grouping_source = "gff_with_allowed_missing"
     else:
         grouping_source = "gff"
     audit_payload = {

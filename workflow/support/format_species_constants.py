@@ -53,6 +53,20 @@ ORYZA_MINUTA_SUBGENOME_BUNDLES = (
 
 GENE_GROUPING_MODES = ("strict", "rescue_overlap")
 
+# Published CDS bundles with a small, documented set of records absent from
+# the companion GFF. Formatting and validation share this exception policy.
+KNOWN_ALLOWED_MISSING_CDS_IDS = {
+    "Ananas_comosus": frozenset(("Ananas_comosus_YP_009116321.1",)),
+    "Azolla_filiculoides": frozenset(
+        (
+            "Azolla_filiculoides_Azfi_s0034.g025227",
+            "Azolla_filiculoides_Azfi_s0093.g043301",
+        )
+    ),
+    "Glycine_max": frozenset(("Glycine_max_GeneID100500117",)),
+    "Solanum_lycopersicum": frozenset(("Solanum_lycopersicum_GeneID100736503",)),
+}
+
 RESCUE_SHARED_JUNCTION_MIN_SHORTER_OVERLAP = 0.70
 
 RESCUE_SHARED_JUNCTION_MIN_LONGER_OVERLAP = 0.40

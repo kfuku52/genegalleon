@@ -1826,8 +1826,10 @@ def test_download_manifest_resolves_gwh_id_via_public_index(tmp_path):
         handle.write(
             ">GWHTIGRM000001.1 Protein=GWHPIGRM000001.1 Gene=GWHGIGRM000001.1 OriGeneID=MsaZM3G010000001\nATGAAATTT\n"
         )
-    with gzip.open(folder / "GWHIGRM00000000.1.gff.gz", "wt", encoding="utf-8") as handle:
-        handle.write("chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n")
+        with gzip.open(folder / "GWHIGRM00000000.1.gff.gz", "wt", encoding="utf-8") as handle:
+            handle.write(
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=GWHGIGRM000001.1;Accession=GWHGIGRM000001.1\n"
+            )
     with gzip.open(folder / "GWHIGRM00000000.1.genome.fasta.gz", "wt", encoding="utf-8") as handle:
         handle.write(">chr1\nATGCATGC\n")
 

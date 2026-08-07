@@ -211,6 +211,8 @@ def discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys
                 "gff_path": gff_path,
                 "gbff_path": gbff_path,
                 "genome_path": genome_path,
+                "gff_auto_selected_from_multiple": len(gff_matches) > 1,
+                "gff_selection_candidates": tuple(sorted(path.name for path in gff_matches)),
             }
         )
     return tasks, warnings, errors

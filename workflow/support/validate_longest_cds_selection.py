@@ -40,6 +40,11 @@ def build_arg_parser():
         help="Path to gg_input_generation_species.tsv written by format_species_inputs.py.",
     )
     parser.add_argument(
+        "--summary-outputs-only",
+        action="store_true",
+        help="Validate only CDS output paths declared by the supplied species summary.",
+    )
+    parser.add_argument(
         "--nthreads",
         type=int,
         default=None,
@@ -460,13 +465,24 @@ def main():
     if not species_summary.is_file():
         parser.error("--species-summary not found: {}".format(species_summary))
 
-    cds_files = list_nonhidden_files(cds_dir, FASTA_EXTENSIONS)
-    if len(cds_files) == 0:
-        parser.error("No CDS FASTA files found in: {}".format(cds_dir))
-
     summary_rows = read_species_summary_rows(species_summary)
     if len(summary_rows) == 0:
         parser.error("No rows found in species summary: {}".format(species_summary))
+
+    if args.summary_outputs_only:
+        cds_files = []
+        for row in summary_rows:
+            output_path = str(row.get("cds_output_path") or "").strip()
+            if output_path == "":
+                continue
+            path = Path(output_path).expanduser().resolve()
+            if not path.is_file():
+                parser.error("Species summary references missing CDS output: {}".format(path))
+            cds_files.append(path)
+    else:
+        cds_files = list_nonhidden_files(cds_dir, FASTA_EXTENSIONS)
+    if len(cds_files) == 0:
+        parser.error("No CDS FASTA files found in: {}".format(cds_dir))
 
     summary_by_output_name, index_errors = index_summary_rows_by_output_name(summary_rows)
     warnings = []

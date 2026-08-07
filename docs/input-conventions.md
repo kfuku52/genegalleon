@@ -378,6 +378,14 @@ XLSX template notes:
   `workspace/input/input_generation/direct_catalog_curated.tsv`.
 - use curated direct entries for public bundles that still need explicit filenames
   or hand-vetted URLs, instead of falling back to `provider=local`.
+- curated CDS/GFF entries must form one annotation bundle: transcriptome assemblies
+  are not accepted as CDS-only inputs, and repeat/reduced-model GFFs are not accepted
+  as the companion gene annotation.
+- validate catalog edits with
+  `python workflow/support/validate_direct_catalog.py --manifest workspace/input/input_generation/direct_catalog_curated.tsv`.
+  Add `--check-remote-gff` to stream remote GFFs and reject complete files with no
+  `CDS` feature; network timeouts, size limits, and archive members are reported as
+  indeterminate warnings rather than content failures.
 - when a generated XLSX contains a `_direct_catalog` sheet, `format_species_inputs.py`
   can fill `provider=direct` rows from that catalog at runtime even if Excel has not
   cached the formula results.
@@ -466,6 +474,7 @@ Latest template distribution:
 - On each push to the default branch, GitHub Actions runs `build_download_manifest.py`
   and publishes the latest `download_plan.xlsx`.
 - The workflow first builds `id_options_snapshot.json` (remote provider ID choices),
+  validates the curated direct bundles (including reachable remote GFF content),
   then generates `download_plan.xlsx` from that snapshot plus
   `workspace/input/input_generation/direct_catalog_curated.tsv` when present.
 - If remote ID fetch fails for some providers, the workflow reuses provider entries
