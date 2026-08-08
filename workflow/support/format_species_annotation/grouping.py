@@ -31,36 +31,14 @@ from .common import (
     transcript_feature_gene_token,
 )
 from .grouping_identity import (
-    KNOWN_ALIAS_PREFIXES,
+    gff_alias_values_from_attributes,
+    gff_alias_variants,
     gff_authoritative_gene_token,
     gff_stable_gene_token,
     reject_gff_gene_prefix_normalization_collisions,
     resolve_grouping_feature_authoritative_gene_tokens,
     resolve_grouping_feature_gene_feature_ids,
     strip_gff_feature_prefix,
-)
-
-GFF_CDS_ALIAS_KEYS = frozenset(
-    (
-        "accession",
-        "alias",
-        "cds",
-        "dbxref",
-        "db_xref",
-        "gene",
-        "gene_id",
-        "genename",
-        "id",
-        "locus_tag",
-        "mrna",
-        "name",
-        "orig_protein_id",
-        "orig_transcript_id",
-        "parent",
-        "parent_accession",
-        "protein_id",
-        "transcript_id",
-    )
 )
 
 CDS_HEADER_PRIMARY_TAGS = (
@@ -92,63 +70,6 @@ GFF_GROUPING_PARENT_FEATURE_TYPES = frozenset(
         "trna",
     )
 )
-
-
-def gff_alias_variants(value):
-    text = str(value or "").strip()
-    if text == "":
-        return ()
-    variants = []
-
-    def add(candidate, normalize_separators=True):
-        normalized = str(candidate or "").strip()
-        if normalized != "" and normalized not in variants:
-            variants.append(normalized)
-        if normalize_separators:
-            separator_normalized = re.sub(r"[-_]+", "_", normalized)
-            if separator_normalized != "" and separator_normalized not in variants:
-                variants.append(separator_normalized)
-
-    has_known_prefix = any(text.lower().startswith(prefix) for prefix in KNOWN_ALIAS_PREFIXES)
-    add(text, normalize_separators=not has_known_prefix)
-    current = text
-    while True:
-        lowered = current.lower()
-        stripped = ""
-        for prefix in KNOWN_ALIAS_PREFIXES:
-            if lowered.startswith(prefix):
-                stripped = current[len(prefix) :].strip()
-                break
-        if stripped == "" or stripped == current:
-            break
-        add(stripped)
-        current = stripped
-    if "|" in text:
-        add(text.rsplit("|", 1)[-1])
-    if ":" in text:
-        namespace, candidate = text.split(":", 1)
-        if namespace.lower() in (
-            "ensembl",
-            "genbank",
-            "geneid",
-            "ncbi_gene",
-            "ncbi_gp",
-            "refseq",
-        ):
-            add(candidate)
-    return tuple(variants)
-
-
-def gff_alias_values_from_attributes(attrs):
-    aliases = []
-    for key, values in attrs.items():
-        if str(key or "").strip().lower() not in GFF_CDS_ALIAS_KEYS:
-            continue
-        for value in values:
-            alias = str(value or "").strip()
-            if alias != "" and alias not in aliases:
-                aliases.append(alias)
-    return tuple(aliases)
 
 
 def gff_aliases_from_attributes(attrs):
