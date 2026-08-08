@@ -285,6 +285,34 @@ is_output_older_than_inputs() {
   return ${return_flag}
 }
 
+gg_artifact_provenance_script_path() {
+  local support_dir="${gg_support_dir:-${GG_UTIL_SUPPORT_DIR:-}}"
+  local script_path="${support_dir%/}/artifact_provenance.py"
+  if [[ -z "${support_dir}" || ! -s "${script_path}" ]]; then
+    echo "GeneGalleon artifact provenance helper was not found: ${script_path}" >&2
+    return 1
+  fi
+  printf '%s\n' "${script_path}"
+}
+
+gg_artifact_needs_run() {
+  local script_path
+  script_path=$(gg_artifact_provenance_script_path) || return 2
+  python "${script_path}" needs-run "$@"
+}
+
+gg_artifact_record() {
+  local script_path
+  script_path=$(gg_artifact_provenance_script_path) || return 2
+  python "${script_path}" record "$@"
+}
+
+gg_artifact_audit() {
+  local script_path
+  script_path=$(gg_artifact_provenance_script_path) || return 2
+  python "${script_path}" audit "$@"
+}
+
 stop_if_species_not_found_in() {
   local dir=$1
   local species_name=$2

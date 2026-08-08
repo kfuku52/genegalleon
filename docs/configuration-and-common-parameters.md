@@ -476,14 +476,24 @@ Each candidate directory contains its one-row annotated TSV, raw `csubst sites`
 outputs, a tree PDF restricted to the selected alignment site, and a combined
 PDF report. The sibling `*_candidate_sites_*_manifest.tsv` records threshold
 order, candidate counts, archive names, completion status, and analysis-engine
-provenance. Existing ZIPs and cached analyses are reused only when the source
-summary, GeneGalleon plotting code, installed csubst implementation, and core
-Python PDF/table dependencies match; stale or incomplete archives are rebuilt.
+provenance. Existing ZIPs and cached analyses are reused when the source
+summary, declared report parameters, and required per-family inputs match and
+the archive is complete. GeneGalleon, container, csubst, and Python dependency
+versions are recorded for diagnosis but do not invalidate an otherwise current
+result. Input-content or output-affecting parameter changes rebuild the affected
+analysis.
 The existing arity-based `run_csubst_site_convergence_summary` output is
 unchanged.
 
 Combine it with
 `run_gene_family_database_build=1` to refresh the database and plots in one run.
+Before replacing the database, GeneGalleon audits the raw or ZIP-backed
+gene-family provenance manifests and validates that every shared CSUBST and
+`stat_branch` branch ID represents the same descendant-tip clade. The audit is
+written to `gene_summary/<source>/<source>_artifact_provenance_audit.tsv`, and
+database generation stops on changed declared inputs or outputs and on
+branch-identity mismatches. Legacy outputs without manifests are reported as
+`legacy_untracked` but remain usable and do not stop the build.
 
 GeneGalleon does not require a fixed CSUBST scan column count. Columns are
 matched by header name, the union of reported columns is retained, and optional

@@ -1386,6 +1386,11 @@ file_og_csubst_scan_units="${dir_output_active}/csubst_scan_units/${og_id}_csubs
 file_og_csubst_scan_foreground_branch="${dir_output_active}/csubst_scan_foreground_branch/${og_id}_csubst_foreground_branch.txt"
 file_og_csubst_scan_plot="${dir_output_active}/csubst_scan_plot/${og_id}_csubst_scan.tree_site.${csubst_scan_tree_site_plot_format}"
 file_og_csubst_scan_log="${dir_output_active}/csubst_scan_log/${og_id}_csubst_scan.log"
+file_og_iqtree_anc_provenance="${dir_output_active}/artifact_provenance/${og_id}.iqtree_anc.json"
+file_og_csubst_provenance="${dir_output_active}/artifact_provenance/${og_id}.csubst.json"
+file_og_csubst_scan_provenance="${dir_output_active}/artifact_provenance/${og_id}.csubst_scan.json"
+file_og_summary_provenance="${dir_output_active}/artifact_provenance/${og_id}.summary_statistics.json"
+file_og_tree_plot_provenance="${dir_output_active}/artifact_provenance/${og_id}.tree_plot.json"
 if [[ ${csubst_max_arity} -gt 2 ]]; then
   for ((i = 3; i <= csubst_max_arity; i++)); do
     declare file_og_csubst_cb_${i}="${dir_output_active}/csubst_cb_${i}/${og_id}.csubst_cb_${i}.tsv"
@@ -3879,7 +3884,28 @@ fi
 
 task="IQ-TREE ancestral codon sequence reconstruction for CSUBST"
 disable_if_no_input_file "run_iqtree_anc" "${file_og_trimmed_aln_analysis}" "${file_og_rooted_tree_analysis}"
-if [[ ! -s "${file_og_iqtree_anc}" && ${run_iqtree_anc} -eq 1 ]]; then
+iqtree_anc_needs_update=0
+iqtree_anc_provenance_args=(
+  --manifest "${file_og_iqtree_anc_provenance}"
+  --step "iqtree_anc"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --input "rooted_tree=${file_og_rooted_tree_analysis}"
+  --output "iqtree_anc=${file_og_iqtree_anc}"
+  --parameter "codon_model=${codon_model}"
+  --parameter "genetic_code=${genetic_code}"
+)
+if gg_artifact_needs_run "${iqtree_anc_provenance_args[@]}"; then
+  iqtree_anc_needs_update=1
+else
+  artifact_check_status=$?
+  if [[ ${artifact_check_status} -ne 1 ]]; then
+    exit "${artifact_check_status}"
+  fi
+fi
+if [[ ${iqtree_anc_needs_update} -eq 1 && ${run_iqtree_anc} -eq 1 ]]; then
   gg_step_start "${task}"
 
   shopt -s nullglob
@@ -3928,14 +3954,62 @@ if [[ ! -s "${file_og_iqtree_anc}" && ${run_iqtree_anc} -eq 1 ]]; then
     zip -rq "${og_id}.iqtree.anc.zip" "${og_id}.iqtree.anc"
     mv_out "${og_id}.iqtree.anc.zip" "${file_og_iqtree_anc}"
     rm -rf -- "${og_id}.iqtree.anc"
+    iqtree_version_text=$(iqtree --version 2>&1 || true)
+    iqtree_version_text=${iqtree_version_text%%$'\n'*}
+    gg_artifact_record \
+      "${iqtree_anc_provenance_args[@]}" \
+      --diagnostic "genegalleon_version=${GG_VERSION:-${SINGULARITYENV_GG_VERSION:-${APPTAINERENV_GG_VERSION:-unknown}}}" \
+      --diagnostic "container_image=${gg_container_image_path:-unknown}" \
+      --diagnostic "iqtree_version=${iqtree_version_text:-unknown}"
+    iqtree_anc_needs_update=0
   fi
 else
   gg_step_skip "${task}"
 fi
 
+if [[ ${iqtree_anc_needs_update} -eq 1 ]] && { [[ ${run_csubst} -eq 1 ]] || [[ ${run_csubst_scan} -eq 1 ]]; }; then
+  echo "Refusing to consume stale or unverified IQ-TREE ancestral output: ${file_og_iqtree_anc}" >&2
+  echo "Set run_iqtree_anc=1 so it can be regenerated from the declared alignment and rooted tree." >&2
+  exit 1
+fi
+
 task="CSUBST"
 disable_if_no_input_file "run_csubst" "${file_og_iqtree_anc}"
-if [[ (! -s "${file_og_csubst_b}" || ! -s "${file_og_csubst_cb_stats}") && ${run_csubst} -eq 1 ]]; then
+csubst_needs_update=0
+csubst_provenance_args=(
+  --manifest "${file_og_csubst_provenance}"
+  --step "csubst"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "iqtree_anc=${file_og_iqtree_anc}"
+  --output "csubst_b=${file_og_csubst_b}"
+  --output "csubst_cb_stats=${file_og_csubst_cb_stats}"
+  --parameter "codon_model=${codon_model}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "max_arity=${csubst_max_arity}"
+  --parameter "exhaustive_until=${csubst_exhaustive_until}"
+  --parameter "cutoff_stat=${csubst_cutoff_stat}"
+  --parameter "max_combination=${csubst_max_combination}"
+  --parameter "fg_exclude_wg=${csubst_fg_exclude_wg}"
+  --parameter "fg_stem_only=${csubst_fg_stem_only}"
+  --parameter "nonsyn_recode=${csubst_nonsyn_recode}"
+)
+if [[ -s "${file_sp_trait}" ]]; then
+  csubst_provenance_args+=(--input "foreground_trait=${file_sp_trait}")
+  csubst_provenance_args+=(--parameter "foreground_present=1")
+else
+  csubst_provenance_args+=(--parameter "foreground_present=0")
+fi
+if gg_artifact_needs_run "${csubst_provenance_args[@]}"; then
+  csubst_needs_update=1
+else
+  artifact_check_status=$?
+  if [[ ${artifact_check_status} -ne 1 ]]; then
+    exit "${artifact_check_status}"
+  fi
+fi
+if [[ ${csubst_needs_update} -eq 1 && ${run_csubst} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ -s "${file_sp_trait}" ]]; then
@@ -4028,6 +4102,14 @@ if [[ (! -s "${file_og_csubst_b}" || ! -s "${file_og_csubst_cb_stats}") && ${run
         fi
       done
     fi
+    csubst_version_text=$(csubst --version 2>&1 || true)
+    csubst_version_text=${csubst_version_text%%$'\n'*}
+    gg_artifact_record \
+      "${csubst_provenance_args[@]}" \
+      --diagnostic "genegalleon_version=${GG_VERSION:-${SINGULARITYENV_GG_VERSION:-${APPTAINERENV_GG_VERSION:-unknown}}}" \
+      --diagnostic "container_image=${gg_container_image_path:-unknown}" \
+      --diagnostic "csubst_version=${csubst_version_text:-unknown}"
+    csubst_needs_update=0
   else
     echo "CSUBST failed."
   fi
@@ -4035,9 +4117,54 @@ else
   gg_step_skip "${task}"
 fi
 
+if [[ ${csubst_needs_update} -eq 1 && ${run_csubst} -ne 1 && ${run_summary} -eq 1 && -s "${file_og_csubst_b}" ]]; then
+  echo "Refusing to include stale or unverified CSUBST output in stat_branch: ${file_og_csubst_b}" >&2
+  echo "Set run_csubst=1 so it can be regenerated from the declared IQ-TREE archive and parameters." >&2
+  exit 1
+fi
+
 task="CSUBST scan"
 disable_if_no_input_file "run_csubst_scan" "${file_og_iqtree_anc}" "${file_sp_trait}"
-if [[ (! -s "${file_og_csubst_scan}" || ! -s "${file_og_csubst_scan_units}") && ${run_csubst_scan} -eq 1 ]]; then
+csubst_scan_needs_update=0
+csubst_scan_provenance_args=(
+  --manifest "${file_og_csubst_scan_provenance}"
+  --step "csubst_scan"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "iqtree_anc=${file_og_iqtree_anc}"
+  --input "foreground_trait=${file_sp_trait}"
+  --output "csubst_scan=${file_og_csubst_scan}"
+  --output "csubst_scan_units=${file_og_csubst_scan_units}"
+  --parameter "codon_model=${codon_model}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "scan_unit_mode=${csubst_scan_unit_mode}"
+  --parameter "scan_match=${csubst_scan_match}"
+  --parameter "scan_min_event_pp=${csubst_scan_min_event_pp}"
+  --parameter "scan_min_support=${csubst_scan_min_support}"
+  --parameter "scan_rate_event_mode=${csubst_scan_rate_event_mode}"
+  --parameter "scan_rate_length=${csubst_scan_rate_length}"
+  --parameter "scan_rate_exposure=${csubst_scan_rate_exposure}"
+  --parameter "scan_other_scope=${csubst_scan_other_scope}"
+  --parameter "scan_pvalue_calibration=${csubst_scan_pvalue_calibration}"
+  --parameter "scan_n_permutations=${csubst_scan_n_permutations}"
+  --parameter "scan_site_plot=${csubst_scan_site_plot}"
+  --parameter "tree_site_plot_format=${csubst_scan_tree_site_plot_format}"
+  --parameter "tree_site_plot_max_sites=${csubst_scan_tree_site_plot_max_sites}"
+  --parameter "nonsyn_recode=${csubst_nonsyn_recode}"
+)
+if [[ "${csubst_scan_site_plot}" == "yes" ]]; then
+  csubst_scan_provenance_args+=(--output "csubst_scan_plot=${file_og_csubst_scan_plot}")
+fi
+if gg_artifact_needs_run "${csubst_scan_provenance_args[@]}"; then
+  csubst_scan_needs_update=1
+else
+  artifact_check_status=$?
+  if [[ ${artifact_check_status} -ne 1 ]]; then
+    exit "${artifact_check_status}"
+  fi
+fi
+if [[ ${csubst_scan_needs_update} -eq 1 && ${run_csubst_scan} -eq 1 ]]; then
   gg_step_start "${task}"
 
   echo "CSUBST scan foreground specification file: ${file_sp_trait}"
@@ -4118,6 +4245,14 @@ if [[ (! -s "${file_og_csubst_scan}" || ! -s "${file_og_csubst_scan_units}") && 
     if [[ -e "${csubst_scan_dir}/csubst.log" ]]; then
       mv_out "${csubst_scan_dir}/csubst.log" "${file_og_csubst_scan_log}"
     fi
+    csubst_version_text=$(csubst --version 2>&1 || true)
+    csubst_version_text=${csubst_version_text%%$'\n'*}
+    gg_artifact_record \
+      "${csubst_scan_provenance_args[@]}" \
+      --diagnostic "genegalleon_version=${GG_VERSION:-${SINGULARITYENV_GG_VERSION:-${APPTAINERENV_GG_VERSION:-unknown}}}" \
+      --diagnostic "container_image=${gg_container_image_path:-unknown}" \
+      --diagnostic "csubst_version=${csubst_version_text:-unknown}"
+    csubst_scan_needs_update=0
   else
     echo "CSUBST scan failed."
   fi
@@ -4162,21 +4297,6 @@ summary_input_files=(
   "${file_og_cdskit_localize}"
   "${file_og_synteny}"
 )
-summary_flag=0
-for summary_output in "${file_og_stat_branch}" "${file_og_stat_tree}"; do
-  if [[ ! -s "${summary_output}" ]]; then
-    echo "Summary output not found. Will be generated: ${summary_output}"
-    summary_flag=1
-    continue
-  fi
-  for summary_input in "${summary_input_files[@]}"; do
-    if [[ -e "${summary_input}" && "${summary_input}" -nt "${summary_output}" ]]; then
-      echo "Summary output will be renewed. Detected a new input file: ${summary_input}"
-      summary_flag=1
-      break
-    fi
-  done
-done
 task="Synteny neighborhood grouping"
 if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then
   synteny_source_dir="${dir_sp_cds}"
@@ -4237,6 +4357,47 @@ if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tr
   fi
 else
   gg_step_skip "${task}"
+fi
+summary_flag=0
+summary_outputs_changed=0
+summary_provenance_args=(
+  --manifest "${file_og_summary_provenance}"
+  --step "summary_statistics"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --output "stat_branch=${file_og_stat_branch}"
+  --output "stat_tree=${file_og_stat_tree}"
+  --parameter "clade_ortholog_prefix=${treevis_clade_ortholog_prefix}"
+  --parameter "mode_gene_evolution=${mode_gene_evolution}"
+  --parameter "treevis_query_marker=${treevis_query_marker}"
+  --parameter "query_blast_coverage=${query_blast_coverage}"
+)
+for summary_input_index in "${!summary_input_files[@]}"; do
+  summary_input=${summary_input_files[${summary_input_index}]}
+  if [[ -e "${summary_input}" ]]; then
+    summary_provenance_args+=(--input "input_${summary_input_index}=${summary_input}")
+  fi
+done
+if [[ "${mode_gene_evolution}" == "query2family" ]]; then
+  for query_summary_input_spec in \
+    "query_gene=${file_query_gene:-}" \
+    "query_aa_fasta=${file_og_query_aa_fasta}" \
+    "query_blast=${file_og_query_blast}"
+  do
+    query_summary_input_path=${query_summary_input_spec#*=}
+    if [[ -e "${query_summary_input_path}" ]]; then
+      summary_provenance_args+=(--input "${query_summary_input_spec}")
+    fi
+  done
+fi
+if gg_artifact_needs_run "${summary_provenance_args[@]}"; then
+  summary_flag=1
+else
+  artifact_check_status=$?
+  if [[ ${artifact_check_status} -ne 1 ]]; then
+    exit "${artifact_check_status}"
+  fi
 fi
 task="summary statistics"
 disable_if_no_input_file "run_summary" "${file_og_rooted_tree_analysis}"
@@ -4330,9 +4491,16 @@ if [[ (${summary_flag} -eq 1 || ! -s "${file_og_stat_branch}" || ! -s "${file_og
 
   cp_out orthogroup.branch.tsv "${file_og_stat_branch}"
   cp_out orthogroup.tree.tsv "${file_og_stat_tree}"
+  summary_outputs_changed=1
 
 else
   gg_step_skip "${task}"
+fi
+
+if [[ ${summary_flag} -eq 1 && ${run_summary} -ne 1 ]] && { [[ ${run_tree_plot} -eq 1 ]] || [[ "${mode_gene_evolution}" == "query2family" && ${treevis_query_marker} -eq 1 ]]; }; then
+  echo "Refusing to consume stale or unverified summary outputs: ${file_og_stat_branch}, ${file_og_stat_tree}" >&2
+  echo "Set run_summary=1 so they can be regenerated from the declared inputs and parameters." >&2
+  exit 1
 fi
 
 task="Query marker annotation"
@@ -4358,6 +4526,7 @@ if [[ "${mode_gene_evolution}" == "query2family" && ${treevis_query_marker} -eq 
       --outfile "orthogroup.branch.query_marker.tsv"
     cp_out "orthogroup.branch.query_marker.tsv" "${file_og_stat_branch}"
     summary_flag=1
+    summary_outputs_changed=1
   else
     gg_step_skip "${task}"
   fi
@@ -4365,21 +4534,94 @@ else
   gg_step_skip "${task}"
 fi
 
-if [[ ${treevis_synteny} -eq 1 && -s "${file_og_synteny}" ]]; then
-  if [[ ! -s "${file_og_tree_plot}" || "${file_og_synteny}" -nt "${file_og_tree_plot}" ]]; then
-    summary_flag=1
-  fi
+if [[ ${summary_outputs_changed} -eq 1 ]]; then
+  gg_artifact_record \
+    "${summary_provenance_args[@]}" \
+    --diagnostic "genegalleon_version=${GG_VERSION:-${SINGULARITYENV_GG_VERSION:-${APPTAINERENV_GG_VERSION:-unknown}}}" \
+    --diagnostic "container_image=${gg_container_image_path:-unknown}"
+fi
+
+if [[ -s "${file_og_iqtree_anc}" && -s "${file_og_stat_branch}" ]]; then
+  python "${gg_support_dir}/validate_csubst_branch_identity.py" \
+    --iqtree-anc "${file_og_iqtree_anc}" \
+    --stat-branch "${file_og_stat_branch}"
 fi
 
 task="stat_branch2tree_plot"
 disable_if_no_input_file "run_tree_plot" "${file_og_stat_branch}" "${file_og_stat_tree}"
+tree_plot_needs_update=0
+tree_plot_provenance_args=(
+  --manifest "${file_og_tree_plot_provenance}"
+  --step "tree_plot"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --output "tree_plot=${file_og_tree_plot}"
+  --parameter "branch_length=${treevis_branch_length}"
+  --parameter "support_value=${treevis_support_value}"
+  --parameter "branch_color=${treevis_branch_color}"
+  --parameter "heatmap_transform=${treevis_heatmap_transform}"
+  --parameter "max_intergenic_dist=${treevis_max_intergenic_dist}"
+  --parameter "synteny_window=${treevis_synteny_window}"
+  --parameter "query_marker=${treevis_query_marker}"
+  --parameter "retrotransposition_delta_intron=${treevis_retrotransposition_delta_intron}"
+  --parameter "clade_ortholog=${treevis_clade_ortholog}"
+  --parameter "event_method=${treevis_event_method}"
+  --parameter "pie_chart_value_transformation=${treevis_pie_chart_value_transformation}"
+  --parameter "long_branch_display=${treevis_long_branch_display}"
+  --parameter "long_branch_ref_quantile=${treevis_long_branch_ref_quantile}"
+  --parameter "long_branch_detect_ratio=${treevis_long_branch_detect_ratio}"
+  --parameter "long_branch_cap_ratio=${treevis_long_branch_cap_ratio}"
+  --parameter "long_branch_tail_shrink=${treevis_long_branch_tail_shrink}"
+  --parameter "long_branch_max_fraction=${treevis_long_branch_max_fraction}"
+  --parameter "csubst_max_arity=${csubst_max_arity}"
+  --parameter "csubst_cutoff_stat=${csubst_cutoff_stat}"
+  --parameter "promoter_bp=${promoter_bp}"
+  --parameter "fimo_qvalue=${fimo_qvalue}"
+  --parameter "species_label_parser=${species_label_parser}"
+)
+tree_plot_input_files=(
+  "${file_og_stat_branch}"
+  "${file_og_stat_tree}"
+  "${file_og_synteny}"
+  "${file_og_trimmed_aln_analysis}"
+  "${file_og_untrimmed_aln_analysis}"
+  "${file_og_clipkit}"
+  "${file_og_orthogroup_extraction_fasta}"
+  "${file_og_maxalign}"
+  "${file_og_mafft}"
+  "${file_og_primary_fasta}"
+  "${file_og_rpsblast}"
+  "${file_og_meme}"
+  "${file_og_dated_tree}"
+)
+for ((i = 2; i <= csubst_max_arity; i++)); do
+  csubst_cb_varname="file_og_csubst_cb_${i}"
+  if [[ -n "${!csubst_cb_varname:-}" ]]; then
+    tree_plot_input_files+=("${!csubst_cb_varname}")
+  fi
+done
+for tree_plot_input_index in "${!tree_plot_input_files[@]}"; do
+  tree_plot_input=${tree_plot_input_files[${tree_plot_input_index}]}
+  if [[ -e "${tree_plot_input}" ]]; then
+    tree_plot_provenance_args+=(--input "input_${tree_plot_input_index}=${tree_plot_input}")
+  fi
+done
+if gg_artifact_needs_run "${tree_plot_provenance_args[@]}"; then
+  tree_plot_needs_update=1
+else
+  artifact_check_status=$?
+  if [[ ${artifact_check_status} -ne 1 ]]; then
+    exit "${artifact_check_status}"
+  fi
+fi
 if [[ ${run_tree_plot} -eq 1 ]]; then
   if ! Rscript -e "if (!requireNamespace('ggimage', quietly=TRUE)) quit(status=1)" > /dev/null 2>&1; then
     echo "ggimage package is unavailable. Disabling run_tree_plot."
     run_tree_plot=0
   fi
 fi
-if ([[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]]) && [[ ${run_tree_plot} -eq 1 ]]; then
+if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
   gg_step_start "${task}"
 
   num_tip_treeplot=$(
@@ -4507,6 +4749,10 @@ if ([[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]]) && [[ ${run_tree
     mv_out "df_fimo.tsv" "${file_og_fimo_collapsed}"
   fi
   mv_out stat_branch2tree_plot.pdf "${file_og_tree_plot}"
+  gg_artifact_record \
+    "${tree_plot_provenance_args[@]}" \
+    --diagnostic "genegalleon_version=${GG_VERSION:-${SINGULARITYENV_GG_VERSION:-${APPTAINERENV_GG_VERSION:-unknown}}}" \
+    --diagnostic "container_image=${gg_container_image_path:-unknown}"
 else
   gg_step_skip "${task}"
 fi

@@ -513,6 +513,11 @@ def test_run_stat_branch2tree_plot_accepts_one_explicit_site(monkeypatch, tmp_pa
         lambda **kwargs: {"site_table_tsv": str(site_table), "site_dir": str(tmp_path)},
     )
     monkeypatch.setattr(mod, "prepare_recoded_site_alignment", lambda **kwargs: None)
+    monkeypatch.setattr(
+        mod,
+        "validate_csubst_stat_branch_identity",
+        lambda **kwargs: None,
+    )
     commands = []
 
     def fake_run(command, check):
@@ -561,6 +566,115 @@ def test_run_stat_branch2tree_plot_accepts_one_explicit_site(monkeypatch, tmp_pa
             convergent_sites=[],
             file_tree_plot_out=str(tmp_path / "explicit-empty-sites.pdf"),
         )
+
+
+def test_validate_csubst_stat_branch_identity_accepts_identical_ids(monkeypatch, tmp_path):
+    mod = load_module()
+    stat_branch = tmp_path / "OG1_stat.branch.tsv"
+    pandas.DataFrame(
+        [
+            {
+                "branch_id": 94,
+                "node_name": "Chamberlinius_hualienensis_CHUAL_007731",
+                "gene_labels": "Chamberlinius_hualienensis_CHUAL_007731",
+            },
+        ]
+    ).to_csv(stat_branch, sep="\t", index=False)
+    monkeypatch.setattr(
+        mod,
+        "get_csubst_branch_clade_signatures",
+        lambda _path: {
+            94: frozenset(["Chamberlinius_hualienensis_CHUAL_007731"]),
+        },
+    )
+
+    result = mod.validate_csubst_stat_branch_identity(
+        branch_id_str="94",
+        file_stat_branch=str(stat_branch),
+        iqtree_anc_dir=str(tmp_path / "iqtree"),
+    )
+
+    assert result is None
+
+
+def test_validate_csubst_stat_branch_identity_rejects_same_id_for_different_clades(
+    monkeypatch, tmp_path
+):
+    mod = load_module()
+    stat_branch = tmp_path / "OG1_stat.branch.tsv"
+    pandas.DataFrame(
+        [
+            {
+                "branch_id": 94,
+                "node_name": "Hexapleomera_sasuke_DN1845-c1-g1",
+                "gene_labels": "Hexapleomera_sasuke_DN1845-c1-g1",
+            }
+        ]
+    ).to_csv(stat_branch, sep="\t", index=False)
+    monkeypatch.setattr(
+        mod,
+        "get_csubst_branch_clade_signatures",
+        lambda _path: {
+            94: frozenset(["Chamberlinius_hualienensis_CHUAL_007731"]),
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="Refusing to remap IDs"):
+        mod.validate_csubst_stat_branch_identity(
+            branch_id_str="94",
+            file_stat_branch=str(stat_branch),
+            iqtree_anc_dir=str(tmp_path / "iqtree"),
+        )
+
+
+def test_validate_csubst_stat_branch_identity_checks_unselected_branches(
+    monkeypatch, tmp_path
+):
+    mod = load_module()
+    stat_branch = tmp_path / "OG1_stat.branch.tsv"
+    pandas.DataFrame(
+        [
+            {"branch_id": 1, "node_name": "A", "gene_labels": "A"},
+            {"branch_id": 2, "node_name": "B", "gene_labels": "B"},
+        ]
+    ).to_csv(stat_branch, sep="\t", index=False)
+    monkeypatch.setattr(
+        mod,
+        "get_csubst_branch_clade_signatures",
+        lambda _path: {
+            1: frozenset(["A"]),
+            2: frozenset(["C"]),
+        },
+    )
+
+    with pytest.raises(RuntimeError, match=r"2: CSUBST=\[C\] stat_branch=\[B\]"):
+        mod.validate_csubst_stat_branch_identity(
+            branch_id_str="1",
+            file_stat_branch=str(stat_branch),
+            iqtree_anc_dir=str(tmp_path / "iqtree"),
+        )
+
+
+def test_get_csubst_branch_clade_signatures_reads_csubst_tree_context(tmp_path):
+    mod = load_module()
+    iqtree_dir = tmp_path / "OG1.iqtree.anc"
+    iqtree_dir.mkdir()
+    (iqtree_dir / "csubst.nwk").write_text(
+        "(A:1,(B:1,C:1)RootedBC:1)RootedRoot;\n",
+        encoding="utf-8",
+    )
+    (iqtree_dir / "csubst.treefile").write_text(
+        "(A:2,(B:2,C:2)IqtreeBC:2)IqtreeRoot;\n",
+        encoding="utf-8",
+    )
+
+    signatures = mod.get_csubst_branch_clade_signatures(str(iqtree_dir))
+
+    assert frozenset(["A"]) in signatures.values()
+    assert frozenset(["B"]) in signatures.values()
+    assert frozenset(["C"]) in signatures.values()
+    assert frozenset(["B", "C"]) in signatures.values()
+    assert frozenset(["A", "B", "C"]) in signatures.values()
 
 
 def test_get_alignment_for_tree_plot_rejects_legacy_dot_clipkit_name(tmp_path):

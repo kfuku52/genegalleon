@@ -835,9 +835,8 @@ def get_stat_branch_path(dir_og, og):
 def get_rpsblast_path(dir_og, og):
     return os.path.join(dir_og, 'rpsblast', og + '_rpsblast.tsv')
 
-def materialize_csubst_site_inputs(dir_og, og, destination_root):
-    store = GeneFamilyOutputStore(dir_og, family_filter=og)
-    candidates_by_subdir = {
+def get_csubst_site_input_candidates(og):
+    return {
         'iqtree_anc': [og + '_iqtree.anc.zip'],
         'stat_branch': [og + '_stat.branch.tsv'],
         'rpsblast': [og + '_rpsblast.tsv'],
@@ -862,6 +861,165 @@ def materialize_csubst_site_inputs(dir_og, og, destination_root):
             og + '_cds.fa',
         ],
     }
+
+def _parse_branch_id_list(value):
+    tokens = [token.strip() for token in str(value).split(',') if token.strip()]
+    if len(tokens) == 0:
+        raise ValueError('Branch ID list is empty.')
+    branch_ids = []
+    for token in tokens:
+        if re.fullmatch(r'[0-9]+', token) is None:
+            raise ValueError(f'Invalid branch ID: {token}')
+        branch_ids.append(int(token))
+    return sorted(set(branch_ids))
+
+def get_csubst_branch_clade_signatures(iqtree_anc_dir):
+    """Return CSUBST branch IDs keyed to stable descendant-tip signatures."""
+    try:
+        from csubst import ete as csubst_ete
+        from csubst import parser_misc as csubst_parser_misc
+        from csubst import tree as csubst_tree
+    except ImportError as error:
+        raise RuntimeError(
+            'The csubst Python package is required to validate CSUBST branch IDs.'
+        ) from error
+
+    context = {
+        'rooted_tree_file': os.path.join(iqtree_anc_dir, 'csubst.nwk'),
+        'iqtree_treefile': os.path.join(iqtree_anc_dir, 'csubst.treefile'),
+    }
+    for path in context.values():
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f'CSUBST tree input was not found: {path}')
+    context = csubst_tree.read_treefile(context)
+    context = csubst_parser_misc.annotate_tree(context)
+    signatures = {}
+    for node in context['tree'].traverse():
+        branch_id = int(csubst_ete.get_prop(node, 'numerical_label'))
+        signatures[branch_id] = frozenset(str(name) for name in csubst_ete.get_leaf_names(node))
+    return signatures
+
+def _parse_gene_labels(value):
+    if pandas.isna(value):
+        return frozenset()
+    return frozenset(label.strip() for label in str(value).split(';') if label.strip())
+
+def get_stat_branch_clade_signatures(file_stat_branch):
+    """Return stat_branch IDs keyed to descendant tips in its plotted topology."""
+    frame = pandas.read_csv(file_stat_branch, sep='\t', header=0, low_memory=False)
+    required = {'branch_id', 'node_name'}
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(
+            f'stat_branch is missing columns required for branch mapping: {", ".join(missing)}'
+        )
+    branch_ids = pandas.to_numeric(frame['branch_id'], errors='coerce')
+    if branch_ids.isna().any() or not numpy.equal(branch_ids, numpy.floor(branch_ids)).all():
+        raise ValueError(f'stat_branch contains non-integer branch IDs: {file_stat_branch}')
+    frame = frame.copy()
+    frame['branch_id'] = branch_ids.astype(int)
+    if frame['branch_id'].duplicated().any():
+        raise ValueError(f'stat_branch contains duplicate branch IDs: {file_stat_branch}')
+
+    if 'gene_labels' in frame.columns:
+        signatures = {
+            int(row.branch_id): _parse_gene_labels(row.gene_labels)
+            for row in frame.loc[:, ['branch_id', 'gene_labels']].itertuples(index=False)
+        }
+        if all(len(signature) > 0 for signature in signatures.values()):
+            return signatures
+
+    child_columns = [column for column in ('child1', 'child2') if column in frame.columns]
+    if len(child_columns) != 2:
+        raise ValueError(
+            'stat_branch needs complete gene_labels or child1/child2 columns for branch mapping: '
+            f'{file_stat_branch}'
+        )
+    rows = frame.set_index('branch_id', drop=False)
+    signatures = {}
+    active = set()
+
+    def descendant_tips(branch_id):
+        branch_id = int(branch_id)
+        if branch_id in signatures:
+            return signatures[branch_id]
+        if branch_id in active:
+            raise ValueError(f'stat_branch topology contains a cycle at branch {branch_id}.')
+        if branch_id not in rows.index:
+            raise ValueError(f'stat_branch references missing child branch {branch_id}.')
+        active.add(branch_id)
+        row = rows.loc[branch_id]
+        children = []
+        for column in child_columns:
+            child = pandas.to_numeric(pandas.Series([row[column]]), errors='coerce').iloc[0]
+            if pandas.isna(child) or int(child) < 0:
+                continue
+            children.append(int(child))
+        if len(children) == 0:
+            node_name = str(row['node_name']).strip()
+            if node_name == '' or node_name.lower() == 'nan':
+                raise ValueError(f'stat_branch leaf {branch_id} has no node_name.')
+            signature = frozenset([node_name])
+        else:
+            signature = frozenset().union(*(descendant_tips(child) for child in children))
+        active.remove(branch_id)
+        signatures[branch_id] = signature
+        return signature
+
+    for branch_id in frame['branch_id'].tolist():
+        descendant_tips(branch_id)
+    return signatures
+
+def validate_all_csubst_stat_branch_identity(file_stat_branch, iqtree_anc_dir):
+    """Require every CSUBST/stat_branch ID to describe the same rooted clade."""
+    csubst_signatures = get_csubst_branch_clade_signatures(iqtree_anc_dir)
+    stat_signatures = get_stat_branch_clade_signatures(file_stat_branch)
+    csubst_ids = set(csubst_signatures)
+    stat_ids = set(stat_signatures)
+    mismatched_ids = sorted(
+        branch_id
+        for branch_id in csubst_ids.intersection(stat_ids)
+        if csubst_signatures[branch_id] != stat_signatures[branch_id]
+    )
+    only_csubst = sorted(csubst_ids.difference(stat_ids))
+    only_stat = sorted(stat_ids.difference(csubst_ids))
+    if mismatched_ids or only_csubst or only_stat:
+        details = []
+        for branch_id in mismatched_ids[:5]:
+            csubst_preview = ','.join(sorted(csubst_signatures[branch_id])[:3])
+            stat_preview = ','.join(sorted(stat_signatures[branch_id])[:3])
+            details.append(
+                f'{branch_id}: CSUBST=[{csubst_preview}] stat_branch=[{stat_preview}]'
+            )
+        if only_csubst:
+            details.append(f'IDs only in CSUBST={only_csubst[:5]}')
+        if only_stat:
+            details.append(f'IDs only in stat_branch={only_stat[:5]}')
+        raise RuntimeError(
+            'CSUBST and stat_branch branch IDs were generated from inconsistent rooted trees. '
+            'Refusing to remap IDs because that would hide stale or mixed-provenance artifacts. '
+            'Rebuild iqtree_anc and its dependent CSUBST outputs from the same rooted tree used '
+            'to generate stat_branch. First differences: '
+            + '; '.join(details)
+        )
+    print(
+        f'Validated identical CSUBST/stat_branch branch IDs for {len(csubst_ids)} rooted clades.',
+        flush=True,
+    )
+
+
+def validate_csubst_stat_branch_identity(branch_id_str, file_stat_branch, iqtree_anc_dir):
+    """Require requested and complete CSUBST/stat_branch IDs to match rooted clades."""
+    csubst_branch_ids = _parse_branch_id_list(branch_id_str)
+    csubst_signatures = get_csubst_branch_clade_signatures(iqtree_anc_dir)
+    for csubst_branch_id in csubst_branch_ids:
+        if csubst_branch_id not in csubst_signatures:
+            raise ValueError(f'CSUBST branch ID was not found in its tree: {csubst_branch_id}')
+    validate_all_csubst_stat_branch_identity(file_stat_branch, iqtree_anc_dir)
+
+def materialize_csubst_site_inputs(dir_og, og, destination_root):
+    store = GeneFamilyOutputStore(dir_og, family_filter=og)
+    candidates_by_subdir = get_csubst_site_input_candidates(og)
     materialized = []
     for subdir, candidate_names in candidates_by_subdir.items():
         for name in candidate_names:
@@ -1108,7 +1266,8 @@ def run_stat_branch2tree_plot(
     file_og_rpsblast = get_rpsblast_path(dir_og=dir_og, og=og)
     file_og_alignment = get_alignment_for_tree_plot(dir_og=dir_og, og=og, dir_out_og=dir_out_og)
     file_og_untrimmed_alignment = get_untrimmed_alignment_for_tree_plot(dir_og=dir_og, og=og, dir_out_og=dir_out_og)
-    file_csubst_input_fasta = os.path.join(get_iqtree_anc_dir(dir_out_og=dir_out_og, og=og), 'csubst.fasta')
+    iqtree_anc_dir = get_iqtree_anc_dir(dir_out_og=dir_out_og, og=og)
+    file_csubst_input_fasta = os.path.join(iqtree_anc_dir, 'csubst.fasta')
     artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
     file_csubst_site_tsv = artifacts['site_table_tsv']
     if file_csubst_site_tsv is None:
@@ -1134,6 +1293,11 @@ def run_stat_branch2tree_plot(
     )
     if file_tree_plot_out is None:
         file_tree_plot_out = og+'.tree_plot.pdf'
+    validate_csubst_stat_branch_identity(
+        branch_id_str=branch_id_str,
+        file_stat_branch=file_stat_branch,
+        iqtree_anc_dir=iqtree_anc_dir,
+    )
     if os.path.exists(file_tree_plot_out):
         print(f'Tree plot skipped: outfile already exists: {file_tree_plot_out}', flush=True)
         return None

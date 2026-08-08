@@ -478,6 +478,23 @@ run_gene_family_database_for_source() {
     echo "Skipping database prep because run_gene_family_database_build=0."
     return 0
   fi
+  local provenance_report="${summary_output_dir}/${gene_family_source}_artifact_provenance_audit.tsv"
+  local provenance_audit_args=(
+    --logical-root "${dir_gene_family}"
+    --workspace-root "${gg_workspace_dir}"
+    --output-tsv "${provenance_report}"
+    --mode "${gene_family_source}"
+    --check-csubst-branches
+  )
+  if [[ "${gene_family_source}" == "query2family" ]]; then
+    provenance_audit_args+=(--query-dir "${dir_query_gene}")
+  fi
+  echo "Auditing gene-family artifact provenance before database generation: ${dir_gene_family}"
+  if ! gg_artifact_audit "${provenance_audit_args[@]}"; then
+    echo "Gene-family artifact provenance audit failed: ${provenance_report}" >&2
+    echo "Regenerate the reported changed or semantically inconsistent steps before rebuilding the database." >&2
+    return 1
+  fi
   local required_subdir
   local store_status
   for required_subdir in stat_tree stat_branch; do

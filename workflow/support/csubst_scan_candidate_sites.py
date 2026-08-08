@@ -59,12 +59,17 @@ INTERNAL_COLUMNS = {
     "_candidate_id",
     "_canonical_support_branch_ids",
     "_candidate_rank",
+    "_missing_required_inputs",
+    "_required_input_signature",
     "_source_summary_tsv",
     "_selection_min_support",
 }
 ARCHIVE_MANIFEST_COLUMNS = [
     "min_support",
     "candidate_count",
+    "packaged_candidate_count",
+    "skipped_candidate_count",
+    "skipped_gene_family_count",
     "summary_tsv",
     "summary_sha256",
     "analysis_engine_signature",
@@ -74,12 +79,14 @@ ARCHIVE_MANIFEST_COLUMNS = [
     "q_column",
     "q_threshold",
     "archive_zip",
+    "skipped_candidates_tsv",
     "status",
     "error",
 ]
 CANDIDATE_MANIFEST_COLUMNS = [
     "candidate_rank",
     "candidate_id",
+    "required_input_signature",
     "orthogroup",
     "trait",
     "codon_site_alignment",
@@ -94,6 +101,25 @@ CANDIDATE_MANIFEST_COLUMNS = [
     "report_pdf",
     "csubst_sites_dir",
 ]
+SKIPPED_CANDIDATE_COLUMNS = [
+    "min_support",
+    "candidate_rank",
+    "candidate_id",
+    "orthogroup",
+    "trait",
+    "codon_site_alignment",
+    "state_change",
+    "support_unit_count",
+    "support_branch_ids",
+    "reason_code",
+    "missing_required_inputs",
+    "remediation",
+]
+REQUIRED_REPORT_INPUT_SUBDIRS = ("iqtree_anc", "stat_branch", "clipkit")
+MISSING_INPUT_REMEDIATION = (
+    "Rerun gg_gene_evolution for this gene family to regenerate the missing "
+    "IQ-TREE ancestral-state, summary-statistics, or trimmed-alignment output."
+)
 
 
 def parse_args():
@@ -356,7 +382,6 @@ def assign_candidate_ids(frame, csubst_nonsyn_recode, pdb):
             "candidate": identity,
             "csubst_nonsyn_recode": csubst_nonsyn_recode,
             "pdb": pdb,
-            "analysis_engine_signature": analysis_engine_signature(),
         }
         analysis_text = json.dumps(analysis_payload, sort_keys=True, separators=(",", ":"))
         analysis_key = hashlib.sha256(analysis_text.encode("utf-8")).hexdigest()
@@ -446,6 +471,119 @@ def load_threshold_candidates(
     return selected
 
 
+def artifact_input_signature(artifact):
+    payload = {
+        "logical_path": artifact.logical_path,
+        "generation": int(artifact.generation),
+        "size": None if artifact.size is None else int(artifact.size),
+        "crc": None if artifact.crc is None else int(artifact.crc),
+        "sha256": artifact.sha256 or "",
+        "mtime_ns": None if artifact.mtime_ns is None else int(artifact.mtime_ns),
+    }
+    return payload
+
+
+def inspect_required_report_inputs(dir_orthogroup, orthogroups):
+    store = site_wrapper.GeneFamilyOutputStore(dir_orthogroup)
+    states = {}
+    for orthogroup in sorted(set(str(value) for value in orthogroups)):
+        input_candidates = site_wrapper.get_csubst_site_input_candidates(orthogroup)
+        missing = []
+        selected_artifacts = []
+        for subdir in REQUIRED_REPORT_INPUT_SUBDIRS:
+            candidate_names = input_candidates[subdir]
+            selected = None
+            for name in candidate_names:
+                artifact = store.artifact(subdir, name)
+                if artifact is None or (artifact.size is not None and artifact.size <= 0):
+                    continue
+                selected = artifact
+                break
+            if selected is None:
+                missing.append(
+                    "|".join(f"{subdir}/{name}" for name in candidate_names)
+                )
+            else:
+                selected_artifacts.append(artifact_input_signature(selected))
+        signature_payload = {
+            "orthogroup": orthogroup,
+            "required_artifacts": selected_artifacts,
+            "missing_required_inputs": missing,
+        }
+        signature_text = json.dumps(
+            signature_payload, sort_keys=True, separators=(",", ":")
+        )
+        states[orthogroup] = {
+            "missing_required_inputs": missing,
+            "required_input_signature": hashlib.sha256(
+                signature_text.encode("utf-8")
+            ).hexdigest(),
+        }
+    return states
+
+
+def annotate_candidate_input_state(candidates, input_states):
+    annotated = candidates.copy()
+    if annotated.empty:
+        annotated["_missing_required_inputs"] = pd.Series(dtype="string")
+        annotated["_required_input_signature"] = pd.Series(dtype="string")
+        return annotated
+    missing_values = []
+    input_signatures = []
+    analysis_keys = []
+    cache_names = []
+    for _, row in annotated.iterrows():
+        state = input_states[str(row["orthogroup"])]
+        missing_text = ";".join(state["missing_required_inputs"])
+        input_signature = state["required_input_signature"]
+        analysis_key = hashlib.sha256(
+            f"{row['_analysis_key']}\0{input_signature}".encode("utf-8")
+        ).hexdigest()
+        missing_values.append(missing_text)
+        input_signatures.append(input_signature)
+        analysis_keys.append(analysis_key)
+        cache_names.append(f"{row['_candidate_id']}_{analysis_key[:16]}")
+    annotated["_missing_required_inputs"] = missing_values
+    annotated["_required_input_signature"] = input_signatures
+    annotated["_analysis_key"] = analysis_keys
+    annotated["_cache_name"] = cache_names
+    return annotated
+
+
+def skipped_candidate_frame(candidates):
+    skipped = candidates.loc[candidates["_missing_required_inputs"].ne(""), :]
+    rows = []
+    for _, row in skipped.iterrows():
+        rows.append(
+            {
+                "min_support": int(row["_selection_min_support"]),
+                "candidate_rank": int(row["_candidate_rank"]),
+                "candidate_id": row["_candidate_id"],
+                "orthogroup": row["orthogroup"],
+                "trait": row["trait"],
+                "codon_site_alignment": int(row["codon_site_alignment"]),
+                "state_change": row["state_change"],
+                "support_unit_count": int(row["support_unit_count"]),
+                "support_branch_ids": row["_canonical_support_branch_ids"],
+                "reason_code": "missing_required_input",
+                "missing_required_inputs": row["_missing_required_inputs"],
+                "remediation": MISSING_INPUT_REMEDIATION,
+            }
+        )
+    return pd.DataFrame(rows, columns=SKIPPED_CANDIDATE_COLUMNS)
+
+
+def write_tsv_atomic(frame, path, columns):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    try:
+        frame.loc[:, columns].to_csv(temporary, sep="\t", index=False)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def write_trait_color_tables(file_trait, traits, output_dir):
     trait_frame = pd.read_csv(file_trait, sep="\t", low_memory=False)
     if "species" not in trait_frame.columns:
@@ -497,6 +635,12 @@ def candidate_cache_complete(cache_dir, record):
         if marker_frame.shape[0] != 1:
             return False
         if marker_frame.loc[0, "analysis_key"] != record["_analysis_key"]:
+            return False
+        if (
+            "required_input_signature" not in marker_frame.columns
+            or marker_frame.loc[0, "required_input_signature"]
+            != record["_required_input_signature"]
+        ):
             return False
         artifacts = site_wrapper.resolve_site_artifacts(
             str(cache_dir), record["_canonical_support_branch_ids"]
@@ -581,6 +725,7 @@ def analyze_candidate(record, cache_root, effective_dir_orthogroup, trait_color_
             [
                 {
                     "analysis_key": record["_analysis_key"],
+                    "required_input_signature": record["_required_input_signature"],
                     "candidate_id": record["_candidate_id"],
                     "orthogroup": record["orthogroup"],
                     "codon_site_alignment": target_site,
@@ -837,6 +982,7 @@ def package_candidate(row, package_root, cache_root, q_column, q_threshold):
     return {
         "candidate_rank": int(row["_candidate_rank"]),
         "candidate_id": row["_candidate_id"],
+        "required_input_signature": row["_required_input_signature"],
         "orthogroup": row["orthogroup"],
         "trait": row["trait"],
         "codon_site_alignment": int(row["codon_site_alignment"]),
@@ -853,7 +999,17 @@ def package_candidate(row, package_root, cache_root, q_column, q_threshold):
     }
 
 
-def write_package_readme(path, threshold, q_column, q_threshold, candidate_count, source_summary):
+def write_package_readme(
+    path,
+    threshold,
+    q_column,
+    q_threshold,
+    selected_candidate_count,
+    packaged_candidate_count,
+    skipped_candidate_count,
+    skipped_gene_family_count,
+    source_summary,
+):
     text = "\n".join(
         [
             "CSUBST scan candidate sites",
@@ -861,10 +1017,15 @@ def write_package_readme(path, threshold, q_column, q_threshold, candidate_count
             f"Source summary: {source_summary}",
             f"Selection: support_unit_count >= {threshold}",
             f"Selection: {q_column} <= {format_float_token(q_threshold)}",
-            f"Selected candidates: {candidate_count}",
+            f"Selected candidates: {selected_candidate_count}",
+            f"Packaged candidates: {packaged_candidate_count}",
+            f"Skipped candidates with missing required inputs: {skipped_candidate_count}",
+            f"Skipped gene families with missing required inputs: {skipped_gene_family_count}",
             "",
             "Each candidate directory contains the one-row source table, raw CSUBST sites outputs,",
             "a focused tree plot for the selected alignment site, and a combined PDF report.",
+            "Skipped candidates and their missing logical input paths are listed in",
+            "skipped_candidates.tsv. Regenerate those upstream gene-family outputs before rerunning.",
             "",
         ]
     )
@@ -876,7 +1037,10 @@ def write_package_metadata(
     threshold,
     q_column,
     q_threshold,
-    candidate_count,
+    selected_candidate_count,
+    packaged_candidate_count,
+    skipped_candidate_count,
+    skipped_gene_family_count,
     source_summary,
 ):
     pd.DataFrame(
@@ -885,7 +1049,11 @@ def write_package_metadata(
                 "min_support": int(threshold),
                 "q_column": q_column,
                 "q_threshold": float(q_threshold),
-                "candidate_count": int(candidate_count),
+                "candidate_count": int(packaged_candidate_count),
+                "selected_candidate_count": int(selected_candidate_count),
+                "packaged_candidate_count": int(packaged_candidate_count),
+                "skipped_candidate_count": int(skipped_candidate_count),
+                "skipped_gene_family_count": int(skipped_gene_family_count),
                 "source_summary_tsv": Path(source_summary).name,
                 "source_summary_sha256": file_sha256(source_summary),
                 "analysis_engine_signature": analysis_engine_signature(),
@@ -940,12 +1108,18 @@ def archive_site_outputs_are_complete(archive, manifest_member):
     return True
 
 
-def archive_matches_source(archive_path, source_summary):
+def archive_matches_source(
+    archive_path,
+    source_summary,
+    expected_candidates=None,
+    expected_skipped_candidates=None,
+):
     archive_path = Path(archive_path)
     if not archive_path.is_file() or not zipfile.is_zipfile(archive_path):
         return False
     metadata_member = f"{archive_path.stem}/package_metadata.tsv"
     candidate_manifest_member = f"{archive_path.stem}/candidate_manifest.tsv"
+    skipped_manifest_member = f"{archive_path.stem}/skipped_candidates.tsv"
     try:
         with zipfile.ZipFile(archive_path, "r") as archive:
             if archive.testzip() is not None:
@@ -962,6 +1136,7 @@ def archive_matches_source(archive_path, source_summary):
             required_top_level = {
                 metadata_member,
                 candidate_manifest_member,
+                skipped_manifest_member,
                 f"{archive_path.stem}/README.txt",
             }
             if not required_top_level.issubset(member_names):
@@ -969,13 +1144,57 @@ def archive_matches_source(archive_path, source_summary):
             with archive.open(metadata_member) as handle:
                 package_metadata = pd.read_csv(handle, sep="\t", dtype=str)
             with archive.open(candidate_manifest_member) as handle:
-                candidate_manifest = pd.read_csv(handle, sep="\t", dtype=str)
+                candidate_manifest = pd.read_csv(
+                    handle, sep="\t", dtype=str, keep_default_na=False
+                )
+            with archive.open(skipped_manifest_member) as handle:
+                skipped_manifest = pd.read_csv(
+                    handle, sep="\t", dtype=str, keep_default_na=False
+                )
             if candidate_manifest.columns.tolist() != CANDIDATE_MANIFEST_COLUMNS:
+                return False
+            if skipped_manifest.columns.tolist() != SKIPPED_CANDIDATE_COLUMNS:
                 return False
             if package_metadata.shape[0] != 1:
                 return False
             if int(package_metadata.loc[0, "candidate_count"]) != candidate_manifest.shape[0]:
                 return False
+            if (
+                int(package_metadata.loc[0, "packaged_candidate_count"])
+                != candidate_manifest.shape[0]
+                or int(package_metadata.loc[0, "skipped_candidate_count"])
+                != skipped_manifest.shape[0]
+                or int(package_metadata.loc[0, "skipped_gene_family_count"])
+                != skipped_manifest["orthogroup"].nunique()
+                or int(package_metadata.loc[0, "selected_candidate_count"])
+                != candidate_manifest.shape[0] + skipped_manifest.shape[0]
+            ):
+                return False
+            if expected_candidates is not None:
+                if expected_candidates.empty:
+                    expected_identities = pd.DataFrame(
+                        columns=["_candidate_id", "_required_input_signature"]
+                    )
+                else:
+                    expected_identities = expected_candidates.loc[
+                        :, ["_candidate_id", "_required_input_signature"]
+                    ].astype(str)
+                observed_identities = candidate_manifest.loc[
+                    :, ["candidate_id", "required_input_signature"]
+                ]
+                observed_identities.columns = expected_identities.columns
+                if observed_identities.to_dict(
+                    orient="records"
+                ) != expected_identities.to_dict(orient="records"):
+                    return False
+            if expected_skipped_candidates is not None:
+                expected_skipped = expected_skipped_candidates.loc[
+                    :, SKIPPED_CANDIDATE_COLUMNS
+                ].fillna("").astype(str)
+                if skipped_manifest.to_dict(orient="records") != expected_skipped.to_dict(
+                    orient="records"
+                ):
+                    return False
             for _, candidate in candidate_manifest.iterrows():
                 for column in ("candidate_tsv", "focused_tree_site_pdf", "report_pdf"):
                     if root_prefix + candidate[column] not in member_names:
@@ -990,17 +1209,35 @@ def archive_matches_source(archive_path, source_summary):
                     archive, output_manifests[0]
                 ):
                     return False
-        return (
-            package_metadata.loc[0, "source_summary_sha256"] == file_sha256(source_summary)
-            and package_metadata.loc[0, "analysis_engine_signature"]
-            == analysis_engine_signature()
-            and package_metadata.loc[0, "csubst_version"] == csubst_version()
-            and package_metadata.loc[0, "csubst_signature"] == csubst_signature()
-            and package_metadata.loc[0, "runtime_dependency_versions"]
-            == runtime_dependency_versions()
+        # Tool, runtime, container, and GeneGalleon versions are diagnostic
+        # provenance only. Cache invalidation is driven by source content,
+        # declared report parameters, and required per-family input signatures.
+        return package_metadata.loc[0, "source_summary_sha256"] == file_sha256(
+            source_summary
         )
     except Exception:
         return False
+
+
+def archived_diagnostic_provenance(archive_path):
+    """Return producer diagnostics stored inside an existing candidate ZIP."""
+    archive_path = Path(archive_path)
+    metadata_member = f"{archive_path.stem}/package_metadata.tsv"
+    with zipfile.ZipFile(archive_path, "r") as archive:
+        with archive.open(metadata_member) as handle:
+            metadata = pd.read_csv(handle, sep="\t", dtype=str, keep_default_na=False)
+    if metadata.shape[0] != 1:
+        raise ValueError(f"Invalid package metadata row count in {archive_path}")
+    return {
+        column: metadata.loc[0, column]
+        for column in (
+            "analysis_engine_signature",
+            "csubst_version",
+            "csubst_signature",
+            "runtime_dependency_versions",
+        )
+        if column in metadata.columns
+    }
 
 
 def create_zip_atomic(package_root, archive_path):
@@ -1031,7 +1268,12 @@ def package_threshold(
     cache_root,
     q_column,
     q_threshold,
+    skipped_candidates=None,
 ):
+    if skipped_candidates is None:
+        skipped_candidates = pd.DataFrame(columns=SKIPPED_CANDIDATE_COLUMNS)
+    selected_candidate_count = candidates.shape[0] + skipped_candidates.shape[0]
+    skipped_gene_family_count = skipped_candidates["orthogroup"].nunique()
     package_root = Path(packages_root) / Path(archive_path).stem
     if package_root.exists():
         shutil.rmtree(package_root)
@@ -1051,12 +1293,18 @@ def package_threshold(
         pd.DataFrame(manifest_rows, columns=CANDIDATE_MANIFEST_COLUMNS).to_csv(
             package_root / "candidate_manifest.tsv", sep="\t", index=False
         )
+        skipped_candidates.loc[:, SKIPPED_CANDIDATE_COLUMNS].to_csv(
+            package_root / "skipped_candidates.tsv", sep="\t", index=False
+        )
         write_package_readme(
             package_root / "README.txt",
             threshold=threshold,
             q_column=q_column,
             q_threshold=q_threshold,
-            candidate_count=candidates.shape[0],
+            selected_candidate_count=selected_candidate_count,
+            packaged_candidate_count=candidates.shape[0],
+            skipped_candidate_count=skipped_candidates.shape[0],
+            skipped_gene_family_count=skipped_gene_family_count,
             source_summary=Path(source_summary).name,
         )
         write_package_metadata(
@@ -1064,11 +1312,19 @@ def package_threshold(
             threshold=threshold,
             q_column=q_column,
             q_threshold=q_threshold,
-            candidate_count=candidates.shape[0],
+            selected_candidate_count=selected_candidate_count,
+            packaged_candidate_count=candidates.shape[0],
+            skipped_candidate_count=skipped_candidates.shape[0],
+            skipped_gene_family_count=skipped_gene_family_count,
             source_summary=source_summary,
         )
         create_zip_atomic(package_root, archive_path)
-        if not archive_matches_source(archive_path, source_summary):
+        if not archive_matches_source(
+            archive_path,
+            source_summary,
+            expected_candidates=candidates,
+            expected_skipped_candidates=skipped_candidates,
+        ):
             raise RuntimeError(f"Candidate-site ZIP validation failed: {archive_path}")
     except Exception:
         raise
@@ -1225,8 +1481,7 @@ def run_locked(args, output_dir, run_suffix):
         path.mkdir(parents=True, exist_ok=True)
 
     threshold_candidates = {}
-    all_traits = set()
-    archive_rows = []
+    all_orthogroups = set()
     for threshold, summary_path in summary_tables.items():
         candidates = load_threshold_candidates(
             summary_path=summary_path,
@@ -1238,7 +1493,41 @@ def run_locked(args, output_dir, run_suffix):
             pdb=args.pdb,
         )
         threshold_candidates[threshold] = candidates
-        all_traits.update(candidates["trait"].dropna().astype(str).tolist())
+        all_orthogroups.update(candidates["orthogroup"].dropna().astype(str).tolist())
+
+    input_states = inspect_required_report_inputs(
+        args.dir_orthogroup, all_orthogroups
+    )
+    eligible_by_threshold = {}
+    skipped_by_threshold = {}
+    all_skipped = []
+    all_traits = set()
+    for threshold, candidates in threshold_candidates.items():
+        annotated = annotate_candidate_input_state(candidates, input_states)
+        threshold_candidates[threshold] = annotated
+        skipped = skipped_candidate_frame(annotated)
+        eligible = annotated.loc[annotated["_missing_required_inputs"].eq(""), :].copy()
+        eligible_by_threshold[threshold] = eligible
+        skipped_by_threshold[threshold] = skipped
+        all_traits.update(eligible["trait"].dropna().astype(str).tolist())
+        if not skipped.empty:
+            all_skipped.append(skipped)
+
+    skipped_path = output_dir / (
+        f"{Path(args.summary_prefix).name}_candidate_sites_{run_suffix}_skipped_candidates.tsv"
+    )
+    combined_skipped = (
+        pd.concat(all_skipped, ignore_index=True)
+        if all_skipped
+        else pd.DataFrame(columns=SKIPPED_CANDIDATE_COLUMNS)
+    )
+    write_tsv_atomic(combined_skipped, skipped_path, SKIPPED_CANDIDATE_COLUMNS)
+
+    archive_rows = []
+    for threshold, summary_path in summary_tables.items():
+        candidates = threshold_candidates[threshold]
+        eligible = eligible_by_threshold[threshold]
+        skipped = skipped_by_threshold[threshold]
         archive_path = archive_path_for_threshold(
             summary_prefix=args.summary_prefix,
             out_dir=output_dir,
@@ -1253,6 +1542,9 @@ def run_locked(args, output_dir, run_suffix):
             {
                 "min_support": threshold,
                 "candidate_count": int(candidates.shape[0]),
+                "packaged_candidate_count": int(eligible.shape[0]),
+                "skipped_candidate_count": int(skipped.shape[0]),
+                "skipped_gene_family_count": int(skipped["orthogroup"].nunique()),
                 "summary_tsv": summary_path.name,
                 "summary_sha256": file_sha256(summary_path),
                 "analysis_engine_signature": analysis_engine_signature(),
@@ -1262,6 +1554,7 @@ def run_locked(args, output_dir, run_suffix):
                 "q_column": args.q_column,
                 "q_threshold": float(args.q_threshold),
                 "archive_zip": archive_path.name,
+                "skipped_candidates_tsv": skipped_path.name,
                 "status": "pending",
                 "error": "",
             }
@@ -1274,10 +1567,19 @@ def run_locked(args, output_dir, run_suffix):
     failures_detected = False
     for row_index, archive_row in enumerate(archive_rows):
         threshold = int(archive_row["min_support"])
-        candidates = threshold_candidates[threshold]
+        candidates = eligible_by_threshold[threshold]
+        skipped = skipped_by_threshold[threshold]
         archive_path = output_dir / archive_row["archive_zip"]
-        if archive_matches_source(archive_path, summary_tables[threshold]):
-            archive_rows[row_index]["status"] = "existing"
+        if archive_matches_source(
+            archive_path,
+            summary_tables[threshold],
+            expected_candidates=candidates,
+            expected_skipped_candidates=skipped,
+        ):
+            archive_rows[row_index].update(archived_diagnostic_provenance(archive_path))
+            archive_rows[row_index]["status"] = (
+                "existing_with_skips" if not skipped.empty else "existing"
+            )
             write_archive_manifest(archive_rows, manifest_path)
             print(f"min_support={threshold}: existing ZIP retained: {archive_path}", flush=True)
             continue
@@ -1322,6 +1624,7 @@ def run_locked(args, output_dir, run_suffix):
                 cache_root=cache_root,
                 q_column=args.q_column,
                 q_threshold=args.q_threshold,
+                skipped_candidates=skipped,
             )
         except Exception as error:
             failures_detected = True
@@ -1329,10 +1632,20 @@ def run_locked(args, output_dir, run_suffix):
             archive_rows[row_index]["error"] = str(error)
             write_archive_manifest(archive_rows, manifest_path)
             break
-        archive_rows[row_index]["status"] = "completed"
+        archive_rows[row_index]["status"] = (
+            "completed_with_skips" if not skipped.empty else "completed"
+        )
         write_archive_manifest(archive_rows, manifest_path)
+        if not skipped.empty:
+            print(
+                f"min_support={threshold}: skipped {skipped.shape[0]:,} candidate(s) "
+                f"from {skipped['orthogroup'].nunique():,} gene family/families because "
+                f"required report inputs are missing. Details: {skipped_path}",
+                flush=True,
+            )
         print(
-            f"min_support={threshold}: {candidates.shape[0]:,} candidates packaged: {archive_path}",
+            f"min_support={threshold}: {candidates.shape[0]:,} of "
+            f"{archive_row['candidate_count']:,} selected candidates packaged: {archive_path}",
             flush=True,
         )
 
@@ -1340,7 +1653,13 @@ def run_locked(args, output_dir, run_suffix):
         raise RuntimeError(
             f"CSUBST scan candidate-site packaging failed. See: {manifest_path}"
         )
-    if all(row["status"] in {"completed", "existing"} for row in archive_rows):
+    successful_statuses = {
+        "completed",
+        "completed_with_skips",
+        "existing",
+        "existing_with_skips",
+    }
+    if all(row["status"] in successful_statuses for row in archive_rows):
         shutil.rmtree(work_root, ignore_errors=True)
     return manifest_path
 

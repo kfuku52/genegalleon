@@ -148,6 +148,47 @@ def test_candidate_analysis_identity_is_stable_across_recalculated_q_values(tmp_
     assert loaded[0].loc[0, "_candidate_id"] == loaded[1].loc[0, "_candidate_id"]
 
 
+def test_candidate_analysis_identity_ignores_tool_versions_but_tracks_parameters(
+    monkeypatch, tmp_path
+):
+    mod = load_module()
+    summary = tmp_path / "summary.tsv"
+    write_summary(summary, candidate_rows().iloc[[0]].copy())
+
+    first = mod.load_threshold_candidates(
+        summary_path=summary,
+        minimum_support=5,
+        q_column="q_rate_enrichment_global",
+        q_threshold=0.05,
+        max_candidates=0,
+        csubst_nonsyn_recode="no",
+        pdb="none",
+    )
+    monkeypatch.setattr(mod, "analysis_engine_signature", lambda: "new-engine")
+    monkeypatch.setattr(mod, "csubst_version", lambda: "new-version")
+    second = mod.load_threshold_candidates(
+        summary_path=summary,
+        minimum_support=5,
+        q_column="q_rate_enrichment_global",
+        q_threshold=0.05,
+        max_candidates=0,
+        csubst_nonsyn_recode="no",
+        pdb="none",
+    )
+    changed_parameter = mod.load_threshold_candidates(
+        summary_path=summary,
+        minimum_support=5,
+        q_column="q_rate_enrichment_global",
+        q_threshold=0.05,
+        max_candidates=0,
+        csubst_nonsyn_recode="dayhoff6",
+        pdb="none",
+    )
+
+    assert first.loc[0, "_analysis_key"] == second.loc[0, "_analysis_key"]
+    assert first.loc[0, "_analysis_key"] != changed_parameter.loc[0, "_analysis_key"]
+
+
 def test_trait_color_paths_do_not_collide_after_filename_sanitizing(tmp_path):
     mod = load_module()
     trait_file = tmp_path / "traits.tsv"
@@ -241,6 +282,43 @@ def test_load_threshold_candidates_rejects_invalid_branch_ids(tmp_path):
         )
 
 
+def test_required_report_input_preflight_reports_and_recovers_missing_stat_branch(
+    tmp_path,
+):
+    mod = load_module()
+    family_dir = tmp_path / "orthogroup"
+    for subdir in ("iqtree_anc", "stat_branch", "clipkit"):
+        (family_dir / subdir).mkdir(parents=True)
+    for orthogroup in ("OG0001", "OG0002"):
+        (family_dir / "iqtree_anc" / f"{orthogroup}_iqtree.anc.zip").write_bytes(
+            b"placeholder"
+        )
+        (family_dir / "clipkit" / f"{orthogroup}_cds.clipkit.fa").write_text(
+            ">sp1\nAAA\n", encoding="utf-8"
+        )
+    (family_dir / "stat_branch" / "OG0001_stat.branch.tsv").write_text(
+        "branch_id\n0\n", encoding="utf-8"
+    )
+    missing_stat = family_dir / "stat_branch" / "OG0002_stat.branch.tsv"
+    missing_stat.write_bytes(b"")
+
+    first = mod.inspect_required_report_inputs(
+        family_dir, ["OG0001", "OG0002"]
+    )
+
+    assert first["OG0001"]["missing_required_inputs"] == []
+    assert first["OG0002"]["missing_required_inputs"] == [
+        "stat_branch/OG0002_stat.branch.tsv"
+    ]
+    first_signature = first["OG0002"]["required_input_signature"]
+
+    missing_stat.write_text("branch_id\n0\n", encoding="utf-8")
+    second = mod.inspect_required_report_inputs(family_dir, ["OG0002"])
+
+    assert second["OG0002"]["missing_required_inputs"] == []
+    assert second["OG0002"]["required_input_signature"] != first_signature
+
+
 def make_candidate_cache(mod, cache_root, row):
     cache_dir = cache_root / row["_cache_name"]
     cache_dir.mkdir(parents=True)
@@ -282,6 +360,7 @@ def make_candidate_cache(mod, cache_root, row):
         [
             {
                 "analysis_key": row["_analysis_key"],
+                "required_input_signature": row["_required_input_signature"],
                 "candidate_id": row["_candidate_id"],
             }
         ]
@@ -301,6 +380,7 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
         csubst_nonsyn_recode="no",
         pdb="none",
     )
+    candidates["_required_input_signature"] = "test-input-signature"
     row = candidates.iloc[0]
     cache_root = tmp_path / "cache"
     make_candidate_cache(mod, cache_root, row)
@@ -323,6 +403,7 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
         roots = {name.split("/", 1)[0] for name in names if name}
         assert roots == {archive.stem}
         assert f"{archive.stem}/candidate_manifest.tsv" in names
+        assert f"{archive.stem}/skipped_candidates.tsv" in names
         assert f"{archive.stem}/package_metadata.tsv" in names
         candidate_prefix = f"{archive.stem}/candidate_0001_{row['_candidate_id']}"
         assert f"{candidate_prefix}/candidate.tsv" in names
@@ -351,7 +432,9 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
 
     with monkeypatch.context() as context:
         context.setattr(mod, "analysis_engine_signature", lambda: "changed-engine")
-        assert not mod.archive_matches_source(archive, summary)
+        context.setattr(mod, "csubst_version", lambda: "changed-csubst")
+        context.setattr(mod, "runtime_dependency_versions", lambda: "changed-runtime")
+        assert mod.archive_matches_source(archive, summary)
 
     original_summary = summary.read_text(encoding="utf-8")
     summary.write_text(original_summary + "\n", encoding="utf-8")
@@ -381,6 +464,69 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
             target_zip.writestr(member, source_zip.read(member.filename))
     damaged.replace(archive)
     assert not mod.archive_matches_source(archive, summary)
+
+
+def test_package_threshold_records_candidates_skipped_for_missing_inputs(tmp_path):
+    mod = load_module()
+    summary = tmp_path / "summary.tsv"
+    write_summary(summary, candidate_rows().iloc[[0]].copy())
+    selected = mod.load_threshold_candidates(
+        summary_path=summary,
+        minimum_support=5,
+        q_column="q_rate_enrichment_global",
+        q_threshold=0.05,
+        max_candidates=0,
+        csubst_nonsyn_recode="no",
+        pdb="none",
+    )
+    selected["_missing_required_inputs"] = (
+        "stat_branch/OG0002_stat.branch.tsv"
+    )
+    selected["_required_input_signature"] = "missing-stat-branch"
+    skipped = mod.skipped_candidate_frame(selected)
+    eligible = selected.iloc[0:0].copy()
+    archive = tmp_path / "skipped.zip"
+
+    mod.package_threshold(
+        candidates=eligible,
+        threshold=5,
+        source_summary=summary,
+        archive_path=archive,
+        packages_root=tmp_path / "packages",
+        cache_root=tmp_path / "cache",
+        q_column="q_rate_enrichment_global",
+        q_threshold=0.05,
+        skipped_candidates=skipped,
+    )
+
+    assert mod.archive_matches_source(
+        archive,
+        summary,
+        expected_candidates=eligible,
+        expected_skipped_candidates=skipped,
+    )
+    with zipfile.ZipFile(archive) as zipped:
+        root = archive.stem
+        candidate_manifest = pd.read_csv(
+            zipped.open(f"{root}/candidate_manifest.tsv"), sep="\t"
+        )
+        skipped_manifest = pd.read_csv(
+            zipped.open(f"{root}/skipped_candidates.tsv"), sep="\t"
+        )
+        metadata = pd.read_csv(
+            zipped.open(f"{root}/package_metadata.tsv"), sep="\t"
+        )
+        assert candidate_manifest.empty
+        assert skipped_manifest.loc[0, "orthogroup"] == "OG0002"
+        assert skipped_manifest.loc[0, "reason_code"] == "missing_required_input"
+        assert (
+            skipped_manifest.loc[0, "missing_required_inputs"]
+            == "stat_branch/OG0002_stat.branch.tsv"
+        )
+        assert metadata.loc[0, "selected_candidate_count"] == 1
+        assert metadata.loc[0, "packaged_candidate_count"] == 0
+        assert metadata.loc[0, "skipped_candidate_count"] == 1
+        assert metadata.loc[0, "skipped_gene_family_count"] == 1
 
 
 def test_archive_names_record_selection_and_optional_analysis_modes(tmp_path):
@@ -528,6 +674,16 @@ def write_run_summaries(tmp_path):
         )
 
 
+def available_input_states(_dir_orthogroup, orthogroups):
+    return {
+        orthogroup: {
+            "missing_required_inputs": [],
+            "required_input_signature": f"available-{orthogroup}",
+        }
+        for orthogroup in orthogroups
+    }
+
+
 def test_run_processes_thresholds_in_descending_order(monkeypatch, tmp_path):
     mod = load_module()
     write_run_summaries(tmp_path)
@@ -547,6 +703,7 @@ def test_run_processes_thresholds_in_descending_order(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "ensure_candidate_analyses", fake_ensure)
     monkeypatch.setattr(mod, "package_threshold", fake_package)
     monkeypatch.setattr(mod, "archive_matches_source", lambda *args, **kwargs: False)
+    monkeypatch.setattr(mod, "inspect_required_report_inputs", available_input_states)
 
     manifest_path = mod.run(args)
 
@@ -555,6 +712,75 @@ def test_run_processes_thresholds_in_descending_order(monkeypatch, tmp_path):
     assert packaged == [(7, 1), (6, 2), (5, 3)]
     assert manifest["min_support"].tolist() == [7, 6, 5]
     assert manifest["status"].tolist() == ["completed", "completed", "completed"]
+
+
+def test_run_skips_missing_inputs_and_packages_remaining_candidates(
+    monkeypatch, tmp_path
+):
+    mod = load_module()
+    write_run_summaries(tmp_path)
+    args = make_run_args(tmp_path)
+    analyzed = []
+    packaged = []
+
+    def input_states(_dir_orthogroup, orthogroups):
+        return {
+            orthogroup: {
+                "missing_required_inputs": (
+                    ["stat_branch/OG0002_stat.branch.tsv"]
+                    if orthogroup == "OG0002"
+                    else []
+                ),
+                "required_input_signature": f"state-{orthogroup}",
+            }
+            for orthogroup in orthogroups
+        }
+
+    def fake_ensure(candidates, **kwargs):
+        analyzed.extend(candidates["orthogroup"].tolist())
+        return []
+
+    def fake_package(candidates, threshold, archive_path, skipped_candidates, **kwargs):
+        packaged.append(
+            (
+                threshold,
+                candidates["orthogroup"].tolist(),
+                skipped_candidates["orthogroup"].tolist(),
+            )
+        )
+        Path(archive_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(archive_path).write_bytes(b"placeholder")
+
+    monkeypatch.setattr(mod, "inspect_required_report_inputs", input_states)
+    monkeypatch.setattr(mod, "ensure_candidate_analyses", fake_ensure)
+    monkeypatch.setattr(mod, "package_threshold", fake_package)
+    monkeypatch.setattr(mod, "archive_matches_source", lambda *args, **kwargs: False)
+
+    manifest_path = mod.run(args)
+
+    manifest = pd.read_csv(manifest_path, sep="\t")
+    assert packaged == [
+        (7, ["OG0003"], []),
+        (6, ["OG0001", "OG0003"], []),
+        (5, ["OG0001", "OG0003"], ["OG0002"]),
+    ]
+    assert "OG0002" not in analyzed
+    assert manifest["candidate_count"].tolist() == [1, 2, 3]
+    assert manifest["packaged_candidate_count"].tolist() == [1, 2, 2]
+    assert manifest["skipped_candidate_count"].tolist() == [0, 0, 1]
+    assert manifest["skipped_gene_family_count"].tolist() == [0, 0, 1]
+    assert manifest["status"].tolist() == [
+        "completed",
+        "completed",
+        "completed_with_skips",
+    ]
+    skipped_path = tmp_path / "out" / manifest.loc[0, "skipped_candidates_tsv"]
+    skipped = pd.read_csv(skipped_path, sep="\t")
+    assert skipped["orthogroup"].tolist() == ["OG0002"]
+    assert skipped["reason_code"].tolist() == ["missing_required_input"]
+    assert skipped["missing_required_inputs"].tolist() == [
+        "stat_branch/OG0002_stat.branch.tsv"
+    ]
 
 
 def test_run_records_batch_setup_failure_in_manifest(monkeypatch, tmp_path):
@@ -567,6 +793,7 @@ def test_run_records_batch_setup_failure_in_manifest(monkeypatch, tmp_path):
 
     monkeypatch.setattr(mod, "ensure_candidate_analyses", fail_analysis)
     monkeypatch.setattr(mod, "archive_matches_source", lambda *args, **kwargs: False)
+    monkeypatch.setattr(mod, "inspect_required_report_inputs", available_input_states)
 
     with pytest.raises(RuntimeError, match="packaging failed"):
         mod.run(args)
@@ -578,6 +805,38 @@ def test_run_records_batch_setup_failure_in_manifest(monkeypatch, tmp_path):
     assert manifest.loc[0, "status"] == "failed"
     assert manifest.loc[0, "error"] == "materialization failed"
     assert manifest.loc[1:, "status"].tolist() == ["pending", "pending"]
+
+
+def test_run_keeps_candidate_analysis_errors_as_hard_failures(monkeypatch, tmp_path):
+    mod = load_module()
+    write_run_summaries(tmp_path)
+    args = make_run_args(tmp_path)
+    packaged = []
+
+    def failed_analysis(candidates, **kwargs):
+        return [
+            {
+                "candidate_id": candidates.iloc[0]["_candidate_id"],
+                "status": "failed",
+                "error": "CSUBST/stat_branch branch identity mismatch",
+            }
+        ]
+
+    monkeypatch.setattr(mod, "inspect_required_report_inputs", available_input_states)
+    monkeypatch.setattr(mod, "ensure_candidate_analyses", failed_analysis)
+    monkeypatch.setattr(
+        mod, "package_threshold", lambda **kwargs: packaged.append(kwargs)
+    )
+    monkeypatch.setattr(mod, "archive_matches_source", lambda *args, **kwargs: False)
+
+    with pytest.raises(RuntimeError, match="packaging failed"):
+        mod.run(args)
+
+    assert packaged == []
+    manifest_path = next((tmp_path / "out").glob("*_manifest.tsv"))
+    manifest = pd.read_csv(manifest_path, sep="\t")
+    assert manifest.loc[0, "status"] == "failed"
+    assert "branch identity mismatch" in manifest.loc[0, "error"]
 
 
 def test_run_writes_empty_manifest_when_no_threshold_reaches_minimum(tmp_path):
@@ -717,21 +976,26 @@ with open(os.environ["FAKE_RSCRIPT_LOG"], "a", encoding="utf-8") as handle:
         iqtree_zip = family_dir / "iqtree_anc" / f"{og}_iqtree.anc.zip"
         with zipfile.ZipFile(iqtree_zip, "w") as archive:
             for filename, content in {
-                "csubst.fasta": ">sp1\\nGCTGTTGAT\\n>sp2\\nGCTGTTGAT\\n",
-                "csubst.nwk": "(sp1:0.1,sp2:0.1);\\n",
-                "csubst.treefile": "(sp1:0.1,sp2:0.1);\\n",
-                "csubst.state": "placeholder\\n",
-                "csubst.rate": "placeholder\\n",
-                "csubst.iqtree": "placeholder\\n",
-                "csubst.log": "placeholder\\n",
+                "csubst.fasta": ">sp1\nGCTGTTGAT\n>sp2\nGCTGTTGAT\n>sp3\nGCTGTTGAT\n",
+                "csubst.nwk": "(sp1:0.1,(sp2:0.1,sp3:0.1)RootedBC:0.1)RootedRoot;\n",
+                "csubst.treefile": "(sp1:0.1,(sp2:0.1,sp3:0.1)IqtreeBC:0.1)IqtreeRoot;\n",
+                "csubst.state": "placeholder\n",
+                "csubst.rate": "placeholder\n",
+                "csubst.iqtree": "placeholder\n",
+                "csubst.log": "placeholder\n",
             }.items():
                 archive.writestr(f"{og}.iqtree.anc/{filename}", content)
         (family_dir / "clipkit" / f"{og}_cds.clipkit.fa").write_text(
-            ">sp1\nGCTGTTGAT\n>sp2\nGCTGTTGAT\n",
+            ">sp1\nGCTGTTGAT\n>sp2\nGCTGTTGAT\n>sp3\nGCTGTTGAT\n",
             encoding="utf-8",
         )
         (family_dir / "stat_branch" / f"{og}_stat.branch.tsv").write_text(
-            "branch_id\n1\n2\n3\n4\n",
+            "branch_id\tnode_name\tgene_labels\n"
+            "0\tsp1\tsp1\n"
+            "1\tsp2\tsp2\n"
+            "2\tsp3\tsp3\n"
+            "3\tN1\tsp2; sp3\n"
+            "4\tRoot\tsp1; sp2; sp3\n",
             encoding="utf-8",
         )
         (family_dir / "rpsblast" / f"{og}_rpsblast.tsv").write_text(
@@ -748,7 +1012,7 @@ with open(os.environ["FAKE_RSCRIPT_LOG"], "a", encoding="utf-8") as handle:
                 "codon_site_alignment": 2,
                 "support_unit_count": 6,
                 "support_unit_ids": "1,2,3,4,5,6",
-                "support_branch_ids": "1,2",
+                "support_branch_ids": "0,1",
                 "p_rate_enrichment": 0.001,
                 "q_rate_enrichment_global": 0.01,
                 "besthit_0.05": "annotated protein",
@@ -760,7 +1024,7 @@ with open(os.environ["FAKE_RSCRIPT_LOG"], "a", encoding="utf-8") as handle:
                 "codon_site_alignment": 3,
                 "support_unit_count": 6,
                 "support_unit_ids": "1,2,3,4,5,6",
-                "support_branch_ids": "3,4",
+                "support_branch_ids": "2,3",
                 "p_rate_enrichment": 0.002,
                 "q_rate_enrichment_global": 0.02,
                 "besthit_0.05": "second annotated protein",
@@ -775,7 +1039,7 @@ with open(os.environ["FAKE_RSCRIPT_LOG"], "a", encoding="utf-8") as handle:
             index=False,
         )
     trait_file = tmp_path / "species_trait.tsv"
-    trait_file.write_text("species\taquatic\nsp1\t1\nsp2\t0\n", encoding="utf-8")
+    trait_file.write_text("species\taquatic\nsp1\t1\nsp2\t0\nsp3\t0\n", encoding="utf-8")
     output_dir = tmp_path / "out"
     env = os.environ.copy()
     env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]

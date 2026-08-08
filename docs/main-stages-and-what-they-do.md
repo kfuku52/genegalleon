@@ -396,7 +396,11 @@ Notable defaults:
   logical `stat_tree` and `stat_branch` inputs, whether they are live files or
   members of GeneGalleon ZIP shards; structural columns are required, while
   analysis-specific columns that are absent from individual families are stored
-  as SQL `NULL`,
+  as SQL `NULL`; before the DB is replaced, content-based provenance manifests
+  and CSUBST/`stat_branch` descendant-tip branch identities are audited across
+  the selected source, with results written to
+  `gene_summary/<source>/<source>_artifact_provenance_audit.tsv`; legacy outputs
+  without manifests are reported as `legacy_untracked` and remain usable,
 - overwrite builds use a temporary SQLite file and replace the published database
   only after every input has been loaded and indexed successfully,
 - when present, `csubst_scan/` is imported as DB table `aa_change`, and

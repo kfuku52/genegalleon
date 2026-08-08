@@ -126,10 +126,7 @@ def test_non_library_workflow_shell_scripts_use_strict_euo_pipefail():
     scripts = _workflow_shell_scripts()
     assert scripts, "No workflow shell scripts were found."
     for script in scripts:
-        if (
-            script in allowed_non_strict
-            or script.parent == WORKFLOW_DIR / "support" / "gg_util"
-        ):
+        if script in allowed_non_strict or script.parent == WORKFLOW_DIR / "support" / "gg_util":
             continue
         header = _strict_mode_header(script)
         assert "set -euo pipefail" in header, f"Use strict mode (set -euo pipefail): {script}"
@@ -1269,9 +1266,12 @@ def test_gene_family_zip_storage_is_common_default_and_remains_configurable():
     assert ': "${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:=100}"' in common
     assert ': "${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:=107374182400}"' in common
     assert ': "${GG_COMMON_GENE_FAMILY_TMP_MAX_FILES:=100000}"' in common
-    assert 'gene_family_output_storage="${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}"' in entrypoint
+    assert (
+        'gene_family_output_storage="${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}"'
+        in entrypoint
+    )
     assert "zip|files)" in core
-    assert 'raw)' in core
+    assert "raw)" in core
     assert 'gene_family_output_storage="files"' in core
     assert "gene_family_output_storage" in config_vars
     assert "gene_family_zip_min_batch_files" in config_vars
@@ -1337,7 +1337,7 @@ def test_gene_family_zip_archiving_is_scoped_to_active_gene_family_roots():
     assert '--root "${dir_output_active}"' in core
     assert '--root "${dir_orthogroup}"' in progress
     assert '--root "${dir_query2family}"' in progress
-    assert "--root \"${gg_workspace_output_dir}/orthofinder\"" not in progress
+    assert '--root "${gg_workspace_output_dir}/orthofinder"' not in progress
     assert "busco_" not in progress
     assert "storage-conversion.pending" in progress
     assert 'assert_gene_family_storage_ready "${dir_orthogroup}"' in progress
@@ -1354,11 +1354,11 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     assert '"${gene_family_output_storage}" == "zip"' in core
     assert '-d "${dir_output_active}/.gg_store"' in core
     assert '-d "${dir_output_active}/.gg_archives"' in core
-    assert 'mark-running \\' in core
-    assert 'mark-complete \\' in core
-    assert 'mark-failed \\' in core
-    assert 'archive-family \\' in core
-    assert 'storage-conversion.pending' in core
+    assert "mark-running \\" in core
+    assert "mark-complete \\" in core
+    assert "mark-failed \\" in core
+    assert "archive-family \\" in core
+    assert "storage-conversion.pending" in core
     assert "is-complete" not in core
     assert "finalize_gene_family_run_success" in core
     assert "cleanup-materialized" in core
@@ -1370,12 +1370,8 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     assert "return 1" in finalize_body
     assert "gene_family_run_succeeded=1" in finalize_body
     cleanup_body = _function_body(core, "cleanup_tmp_dir_on_normal_exit")
-    assert cleanup_body.index("gg_advisory_shared_lock_release") < cleanup_body.index(
-        "cleanup-materialized"
-    )
-    assert cleanup_body.index("cleanup-materialized") < cleanup_body.index(
-        "archive-family"
-    )
+    assert cleanup_body.index("gg_advisory_shared_lock_release") < cleanup_body.index("cleanup-materialized")
+    assert cleanup_body.index("cleanup-materialized") < cleanup_body.index("archive-family")
 
 
 def test_gene_family_zip_reruns_adopt_pre_underscore_output_paths():
@@ -1395,7 +1391,7 @@ def test_gene_family_zip_reruns_adopt_pre_underscore_output_paths():
         "tree_plot/${og_id}.tree_plot.pdf",
     ):
         assert historical_path in adoption_body
-    materialize_call = core.index('materialize_args=(\n    materialize-family')
+    materialize_call = core.index("materialize_args=(\n    materialize-family")
     adoption_call = core.rindex("\nadopt_historical_gene_family_outputs\n")
     assert materialize_call < adoption_call
 
@@ -1405,10 +1401,7 @@ def test_orthogroup_summaries_do_not_write_augmented_tables_into_orthofinder():
     gene_summary = _read_text(CORE_DIR / "gg_gene_summary_core.sh")
 
     assert "--updated-genecount-out orthogroup_genecount.amas.tsv" in progress
-    assert (
-        '--updated-genecount-out "${summary_output_dir}/orthogroup_genecount.amas.tsv"'
-        in gene_summary
-    )
+    assert '--updated-genecount-out "${summary_output_dir}/orthogroup_genecount.amas.tsv"' in gene_summary
 
 
 def test_gene_family_zip_stale_tmp_cleanup_uses_family_exclusion_and_caps():
@@ -2294,7 +2287,9 @@ def test_gene_evolution_core_quotes_notung_zip_and_summary_presence_checks():
 def test_gene_evolution_summary_freshness_tracks_summary_tables_and_analysis_inputs():
     text = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
 
-    assert 'for summary_output in "${file_og_stat_branch}" "${file_og_stat_tree}"; do' in text
+    assert 'if gg_artifact_needs_run "${summary_provenance_args[@]}"; then' in text
+    assert '--output "stat_branch=${file_og_stat_branch}"' in text
+    assert '--output "stat_tree=${file_og_stat_tree}"' in text
     for analysis_input in (
         '"${file_og_hyphy_relax}"',
         '"${file_og_csubst_b}"',
@@ -3140,6 +3135,37 @@ def test_gene_evolution_core_runs_csubst_scan_as_aa_change_stage():
     assert 'mv_out "${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"' in core
 
 
+def test_gene_evolution_core_uses_content_and_parameter_provenance_for_csubst_chain():
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+
+    assert "iqtree_anc_needs_update=0" in core
+    assert 'if gg_artifact_needs_run "${iqtree_anc_provenance_args[@]}"; then' in core
+    assert '--input "trimmed_alignment=${file_og_trimmed_aln_analysis}"' in core
+    assert '--input "rooted_tree=${file_og_rooted_tree_analysis}"' in core
+    assert '--parameter "codon_model=${codon_model}"' in core
+    assert "if [[ ${iqtree_anc_needs_update} -eq 1 && ${run_iqtree_anc} -eq 1 ]]; then" in core
+
+    assert "csubst_needs_update=0" in core
+    assert 'if gg_artifact_needs_run "${csubst_provenance_args[@]}"; then' in core
+    assert '--parameter "max_arity=${csubst_max_arity}"' in core
+    assert '--parameter "nonsyn_recode=${csubst_nonsyn_recode}"' in core
+
+    assert "csubst_scan_needs_update=0" in core
+    assert 'if gg_artifact_needs_run "${csubst_scan_provenance_args[@]}"; then' in core
+    assert '--parameter "scan_min_support=${csubst_scan_min_support}"' in core
+    assert '--parameter "scan_pvalue_calibration=${csubst_scan_pvalue_calibration}"' in core
+    assert 'python "${gg_support_dir}/validate_csubst_branch_identity.py"' in core
+    assert '--iqtree-anc "${file_og_iqtree_anc}"' in core
+
+
+def test_artifact_provenance_versions_are_diagnostic_only():
+    script = _read_text(WORKFLOW_DIR / "support" / "artifact_provenance.py")
+    assert 'contract["diagnostics"] = normalized_diagnostics(args.diagnostic)' in script
+    comparison_body = script.split("def contract_comparison_payload", 1)[1].split("\ndef ", 1)[0]
+    assert '"parameters": contract.get("parameters")' in comparison_body
+    assert "diagnostics" not in comparison_body
+
+
 def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     core = _read_text(CORE_DIR / "gg_gene_summary_core.sh")
     entrypoint = _read_text(WORKFLOW_DIR / "gg_gene_summary_entrypoint.sh")
@@ -3161,15 +3187,9 @@ def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py"' in csubst_summary_body
     assert "run_csubst_scan_aa_change_summary=0" in csubst_summary_body
     assert '--out_prefix "${summary_output_dir}/${gene_family_source}_csubst_aa_change"' in core
-    assert (
-        '--out_tsv "${summary_output_dir}/${gene_family_source}_csubst_aa_change_min_support_2_summary.tsv"'
-        in core
-    )
+    assert '--out_tsv "${summary_output_dir}/${gene_family_source}_csubst_aa_change_min_support_2_summary.tsv"' in core
     assert "resolve_orthogroup_genecount_annotated" in core
-    assert (
-        '"${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv"'
-        in core
-    )
+    assert '"${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv"' in core
     assert 'if [[ "${gene_family_source}" == "orthogroup" ]]; then' in csubst_summary_body
     assert 'summary_args+=(--orthogroup_annotation_tsv "${file_orthogroup_genecount_annotated}")' in core
     assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py" "${summary_args[@]}"' in core
@@ -3181,7 +3201,7 @@ def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     assert "_evidence_density.pdf" not in plot_script
     assert "_support_significance_rate.pdf" in plot_script
     assert "write_support_significance_rate" in plot_script
-    assert 'output_dir = prefix.parent' in plot_script
+    assert "output_dir = prefix.parent" in plot_script
     assert 'output_dir = prefix.parent / "min_support_sensitivity"' not in plot_script
     assert "remove_legacy_min_support_output_layout" in plot_script
     assert "write_min_support_sensitivity" in plot_script
@@ -3204,7 +3224,10 @@ def test_gene_summary_csubst_scan_candidate_sites_are_opt_in_and_threshold_packa
     assert 'validate_binary_flag "run_csubst_scan_candidate_sites"' in core
     assert "run_csubst_scan_candidate_sites" in config_vars
     assert 'csubst_scan_candidate_sites_min_support="${csubst_scan_candidate_sites_min_support:-5}"' in entrypoint
-    assert 'csubst_scan_candidate_sites_q_column="${csubst_scan_candidate_sites_q_column:-q_rate_enrichment_global}"' in entrypoint
+    assert (
+        'csubst_scan_candidate_sites_q_column="${csubst_scan_candidate_sites_q_column:-q_rate_enrichment_global}"'
+        in entrypoint
+    )
     assert 'csubst_scan_candidate_sites_q_threshold="${csubst_scan_candidate_sites_q_threshold:-0.05}"' in entrypoint
     assert 'csubst_scan_candidate_sites_pdb="${csubst_scan_candidate_sites_pdb:-none}"' in entrypoint
     assert "run_csubst_scan_candidate_sites=0" in candidate_body
@@ -3251,15 +3274,15 @@ def test_gg_util_direct_cp_mv_calls_use_option_separator():
     ]
     for token in banned_tokens:
         assert token not in text
-    expected_tokens = [
-        'mv -- "${pep_tmp}" "${output_prefix}.pep"',
-        'mv -- "${dmnd_tmp_prefix}.dmnd" "${output_prefix}.dmnd"',
-        'cp -- "${f}" "${staged_dir}/"',
-        'mv -- "${staged_dir}" "${output_dir}.tmp"',
-        'mv -- "${output_dir}.tmp" "${output_dir}"',
-        'mv -- "${tmp_file}" "${output_file}"',
-        'mv -- "${latest_marker}.tmp" "${latest_marker}"',
-    ]
+        expected_tokens = [
+            'mv -- "${pep_tmp}" "${output_prefix}.pep"',
+            'mv -- "${dmnd_tmp_prefix}.dmnd" "${output_prefix}.dmnd"',
+            'cp -- "${f}" "${staged_dir}/"',
+            'mv -- "${staged_dir}" "${output_dir}.tmp"',
+            'mv -- "${output_dir}.tmp" "${output_dir}"',
+            'mv -- "${tmp_file}" "${output_file}"',
+            'mv -- "${latest_marker}.tmp" "${latest_marker}"',
+        ]
     for token in expected_tokens:
         assert token in text
 
@@ -3348,7 +3371,7 @@ def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
         'if [[ ! -s "${file_og_hyphy_relax_reversed}" && ${run_hyphy_relax_reversed} -eq 1 ]]; then',
         'if [[ ! -s "${file_og_scm_intron_summary}" && ${run_scm_intron} -eq 1 ]]; then',
         'if [[ (! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || ! -s "${file_og_l1ou_fit_regime}" || ! -s "${file_og_l1ou_fit_leaf}") && ${run_l1ou} -eq 1 ]]; then',
-        'if ([[ ${summary_flag} -eq 1 || ! -s "${file_og_tree_plot}" ]]) && [[ ${run_tree_plot} -eq 1 ]]; then',
+        "if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then",
         'if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" ]]; then',
     ]
     for token in expected_tokens:

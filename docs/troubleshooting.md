@@ -123,6 +123,38 @@ Examples:
 - `gg_gene_summary_entrypoint.sh` skips database generation if logical `stat_tree` or `stat_branch` inputs are absent from both live files and ZIP storage,
 - `gg_progress_summary_core.sh` skips orthogroup summary generation if the selected gene-count table is absent; AMAS inputs may be live or ZIP-backed.
 
+For `iqtree_anc`, `csubst`, `csubst_scan`, gene-family summary tables, and tree
+plots, GeneGalleon records content-based provenance manifests below the logical
+`artifact_provenance/` output subdirectory. Existing legacy outputs without a
+manifest are reused rather than regenerated. When all declared inputs are still
+available, GeneGalleon backfills a manifest from the current files and
+parameters so later changes can be detected. A changed declared input, modified
+output, or changed output-affecting parameter causes the stage to be regenerated
+when its `run_*` flag is enabled. If a downstream stage is enabled while its
+required upstream artifact has a recorded mismatch, the workflow stops instead
+of silently consuming it. Tool, container, and GeneGalleon versions are
+diagnostic fields only and do not cause regeneration.
+
+When `run_gene_family_database_build=1`, inspect
+`gene_summary/<source>/<source>_artifact_provenance_audit.tsv` for the exact HOG,
+step, status, and reason. `legacy_untracked` is informational and does not stop
+database generation. `semantic_mismatch` means the CSUBST and `stat_branch`
+branch IDs do not identify the same descendant-tip clades and the affected
+upstream chain must be regenerated.
+
+Developers can inventory remaining shell stages that still rely on
+existence-only cache guards with:
+
+```bash
+python workflow/support/audit_cache_guards.py \
+  --baseline workflow/tests/data/artifact_cache_guard_baseline.txt \
+  --output-tsv cache_guard_audit.tsv
+```
+
+The committed baseline records known migration debt without hiding it from the
+TSV. CI fails when a new unprovenanced cache guard is introduced; removing or
+migrating an existing guard reduces the reported inventory.
+
 ### Gene-family storage conversion is pending
 
 Symptom:
