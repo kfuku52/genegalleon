@@ -5,26 +5,30 @@ from __future__ import annotations
 
 import argparse
 import tempfile
-import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from csubst_site_wrapper import validate_all_csubst_stat_branch_identity
+from safe_zip_extract import extract_expected_prefix
 
 
 def safe_extract_iqtree_archive(archive_path: Path, destination: Path) -> Path:
-    with zipfile.ZipFile(archive_path, "r") as archive:
-        bad_member = archive.testzip()
-        if bad_member is not None:
-            raise ValueError(f"Corrupt IQ-TREE ancestral-state ZIP member: {bad_member}")
-        for member in archive.infolist():
-            pure_name = PurePosixPath(member.filename)
-            if pure_name.is_absolute() or ".." in pure_name.parts:
-                raise ValueError(f"Unsafe IQ-TREE ancestral-state ZIP member: {member.filename}")
-        archive.extractall(destination)
-    candidates = sorted(path.parent for path in destination.rglob("csubst.nwk"))
-    if len(candidates) != 1:
-        raise ValueError(f"Expected one csubst.nwk in {archive_path}, found {len(candidates)}")
-    return candidates[0]
+    archive_path = Path(archive_path)
+    stem = archive_path.stem
+    if stem.endswith("_iqtree.anc"):
+        expected_prefix = f"{stem.removesuffix('_iqtree.anc')}.iqtree.anc"
+    elif stem.endswith(".iqtree.anc"):
+        expected_prefix = stem
+    else:
+        raise ValueError(f"Unexpected IQ-TREE ancestral-state ZIP name: {archive_path}")
+    extracted = extract_expected_prefix(
+        archive_path,
+        destination,
+        expected_prefix,
+    )
+    csubst_tree = extracted / "csubst.nwk"
+    if not csubst_tree.is_file():
+        raise ValueError(f"Expected {csubst_tree} in {archive_path}")
+    return extracted
 
 
 def build_parser() -> argparse.ArgumentParser:

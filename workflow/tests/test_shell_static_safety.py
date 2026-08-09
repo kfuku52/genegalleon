@@ -2286,7 +2286,8 @@ def test_gene_evolution_core_quotes_notung_zip_and_provenances_summary_outputs()
     assert "! -s ${file_og_stat_branch}" not in text
     assert "! -s ${file_og_stat_tree}" not in text
     assert 'if [[ -s "${file_og_notung_reconcil}" ]]; then' in text
-    assert 'unzip -qf "${file_og_notung_reconcil}"' in text
+    assert '      "${file_og_notung_reconcil}" \\\n      "${og_id}.notung_reconcile"' in text
+    assert "unzip " not in text
     assert '--output "stat_branch=${file_og_stat_branch}"' in text
     assert '--output "stat_tree=${file_og_stat_tree}"' in text
     assert "if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then" in text
@@ -2330,7 +2331,10 @@ def test_genome_evolution_core_quotes_notung_unzip_and_rooting_temp_paths():
         assert token not in text, f"Found unquoted genome-evolution temp/rooting token: {token}"
 
     expected_tokens = [
-        'unzip -q "${infile}"',
+        'safe_zip_extract.py"',
+        '--archive "${indir}/${infile}"',
+        '--expected-prefix "${busco_id}.notung.root"',
+        '"--notung_root_dir=${notung_root_dir}"',
         '2>&1 | tee "${busco_id}.root.txt"',
         'if [[ -s "${busco_id}.root.nwk" ]]; then',
         'run_mafft "${input_alignment_file}" &',
@@ -2347,6 +2351,22 @@ def test_genome_evolution_core_quotes_notung_unzip_and_rooting_temp_paths():
     ]
     for token in expected_tokens:
         assert token in text, f"Missing quoted genome-evolution temp/rooting token: {token}"
+
+
+def test_workflow_zip_publication_is_verified_and_atomic():
+    scripts = [
+        CORE_DIR / "gg_gene_evolution_core.sh",
+        CORE_DIR / "gg_genome_evolution_core.sh",
+        CORE_DIR / "gg_genome_annotation_core.sh",
+    ]
+    combined = "\n".join(_read_text(script) for script in scripts)
+
+    assert 'atomic_zip_publish.py"' in combined
+    assert re.search(r"(?:cp_out|mv_out)[^\n]*\.zip", combined) is None
+    zip_commands = re.findall(r'^\s*zip\s+[^\n]+\s+"([^"]+[.]zip)"', combined, re.MULTILINE)
+    assert zip_commands
+    for archive in zip_commands:
+        assert f'rm -f -- "{archive}"' in combined
 
 
 def test_gene_and_genome_core_quote_model_and_codon_options():
@@ -3132,7 +3152,8 @@ def test_support_python_scalar_conditions_use_logical_and_not_bitwise_and():
         assert token not in csubst_wrapper
     assert "(og_indices.shape[0] > args.max_per_og) and (args.max_per_og > 0)" in csubst_wrapper
     assert "(not os.path.exists(dir_out)) and (not os.path.exists(out_zip))" in csubst_wrapper
-    assert "os.path.exists(dir_out) and (not os.path.exists(out_zip))" in csubst_wrapper
+    assert "elif os.path.exists(dir_out):" in csubst_wrapper
+    assert "csubst_site_archive_is_complete(out_zip)" in csubst_wrapper
 
 
 def test_gene_evolution_core_uses_csubst_search_namespace():

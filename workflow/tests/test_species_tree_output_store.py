@@ -11,6 +11,7 @@ import sys
 import time
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -94,6 +95,33 @@ def test_materialize_quota_preflight_preserves_archive(tmp_path: Path):
     assert not raw.exists()
     assert (root / f"{name}.zip").is_file()
     assert STORE.verify_archive(root, name)["state"] == "archived"
+
+
+def test_materialize_inode_preflight_treats_zero_as_exhausted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path / "species_tree"
+    name = "single_copy_iqtree_dna"
+    raw = root / name
+    raw.mkdir(parents=True)
+    (raw / "BUSCO1.dna.nwk").write_text("(A,B);\n", encoding="utf-8")
+    STORE.pack_directory(root, name)
+    real_stats = os.statvfs(root)
+    exhausted = SimpleNamespace(
+        **{
+            field: (0 if field == "f_favail" else getattr(real_stats, field))
+            for field in dir(real_stats)
+            if field.startswith("f_")
+        }
+    )
+    monkeypatch.setattr(STORE.os, "statvfs", lambda _path: exhausted)
+
+    with pytest.raises(STORE.SpeciesTreeArchiveError, match="available=0"):
+        STORE.materialize_directory(root, name)
+
+    assert not raw.exists()
+    assert (root / f"{name}.zip").is_file()
 
 
 def test_manual_delete_and_add_are_preserved_after_unpack_and_repack(tmp_path: Path):
@@ -566,6 +594,40 @@ def test_source_change_during_pack_never_replaces_raw(
         STORE.pack_directory(root, name)
 
     assert source.read_text(encoding="utf-8") == "after\n"
+    assert not (root / f"{name}.zip").exists()
+    assert not list(root.glob(f".{name}.zip.partial.*"))
+
+
+def test_same_size_source_change_with_restored_mtime_is_detected_during_pack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path / "species_tree"
+    name = "single_copy_iqtree_dna"
+    raw = root / name
+    raw.mkdir(parents=True)
+    source = raw / "BUSCO1.dna.nwk"
+    source.write_bytes(b"before\n")
+    real_validate = STORE._validated_members
+    mutated = False
+
+    def mutate_after_zip_validation(*args, **kwargs):
+        nonlocal mutated
+        result = real_validate(*args, **kwargs)
+        archive_path = Path(args[1])
+        if ".zip.partial." in archive_path.name and not mutated:
+            original_mtime_ns = source.stat().st_mtime_ns
+            source.write_bytes(b"AFTER!\n")
+            os.utime(source, ns=(original_mtime_ns, original_mtime_ns))
+            mutated = True
+        return result
+
+    monkeypatch.setattr(STORE, "_validated_members", mutate_after_zip_validation)
+
+    with pytest.raises(STORE.SpeciesTreeArchiveError, match="Source changed"):
+        STORE.pack_directory(root, name)
+
+    assert source.read_bytes() == b"AFTER!\n"
     assert not (root / f"{name}.zip").exists()
     assert not list(root.glob(f".{name}.zip.partial.*"))
 

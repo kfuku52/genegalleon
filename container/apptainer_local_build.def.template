@@ -97,7 +97,6 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
         procps \
         rsync \
         tini \
-        unzip \
         wget \
         zip
     sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
@@ -237,18 +236,11 @@ EOF_BASHRC
 
     notung_url="$("/opt/pg/scripts/resolve_notung_latest.sh" "${notung_download_page}")"
     tmp_zip="$(mktemp /tmp/notung.XXXXXX.zip)"
-    tmp_dir="$(mktemp -d /tmp/notung.XXXXXX)"
     NOTUNG_DOWNLOAD_HOST_IP="${notung_download_host_ip}" /opt/pg/scripts/download_url_with_fallback.sh "${notung_url}" "${tmp_zip}"
-    unzip -q "${tmp_zip}" -d "${tmp_dir}"
-    notung_jar="$(find "${tmp_dir}" -type f -name 'Notung-2.9*.jar' | sort -V | tail -n 1)"
-    if [[ -z "${notung_jar}" ]]; then
-        echo "Notung jar was not found in ${notung_url}"
-        exit 1
-    fi
-    cp "${notung_jar}" /usr/local/bin/Notung.jar
-    chmod 0755 /usr/local/bin/Notung.jar
+    python /opt/pg/scripts/extract_notung_jar.py \
+        --archive "${tmp_zip}" \
+        --destination /usr/local/bin/Notung.jar
     rm -f "${tmp_zip}"
-    rm -rf "${tmp_dir}"
 
     bash /opt/pg/scripts/post_install_notes.sh "${target_arch}"
 

@@ -40,7 +40,6 @@ RUN rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archive
     procps \
     rsync \
     tini \
-    unzip \
     util-linux \
     wget \
     zip \
@@ -59,18 +58,19 @@ ARG NOTUNG_DOWNLOAD_HOST_IP="128.2.205.60"
 COPY container/scripts/resolve_notung_latest.sh /opt/pg/scripts/resolve_notung_latest.sh
 COPY container/scripts/download_url.sh /opt/pg/scripts/download_url.sh
 COPY container/scripts/download_url_with_fallback.sh /opt/pg/scripts/download_url_with_fallback.sh
+COPY container/scripts/extract_notung_jar.py /opt/pg/scripts/extract_notung_jar.py
 
-RUN chmod +x /opt/pg/scripts/*.sh \
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 \
+ && chmod +x /opt/pg/scripts/*.sh \
  && notung_url="$(/opt/pg/scripts/resolve_notung_latest.sh "${NOTUNG_DOWNLOAD_PAGE}")" \
  && tmp_zip="$(mktemp /tmp/notung.XXXXXX.zip)" \
- && tmp_dir="$(mktemp -d /tmp/notung.XXXXXX)" \
  && NOTUNG_DOWNLOAD_HOST_IP="${NOTUNG_DOWNLOAD_HOST_IP}" /opt/pg/scripts/download_url_with_fallback.sh "${notung_url}" "${tmp_zip}" \
- && unzip -q "${tmp_zip}" -d "${tmp_dir}" \
- && notung_jar="$(find "${tmp_dir}" -type f -name 'Notung-2.9*.jar' | sort -V | tail -n 1)" \
- && if [[ -z "${notung_jar}" ]]; then echo "Notung jar was not found in ${notung_url}"; exit 1; fi \
- && install -m 0755 "${notung_jar}" /Notung.jar \
+ && python3 /opt/pg/scripts/extract_notung_jar.py --archive "${tmp_zip}" --destination /Notung.jar \
  && rm -f "${tmp_zip}" \
- && rm -rf "${tmp_dir}"
+ && apt-get purge -y python3 \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
 
 FROM system AS runtime
 

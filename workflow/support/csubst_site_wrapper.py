@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import uuid
 import zipfile
 from concurrent.futures import ProcessPoolExecutor
 from itertools import repeat
@@ -27,11 +28,99 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from gene_family_output_store import GeneFamilyOutputStore
+from safe_zip_extract import extract_expected_prefix
+
+CSUBST_SITE_ARCHIVE_COMMENT = b"GeneGalleon csubst-site archive v1\n"
 
 try:
     import sqlalchemy
 except ImportError:
     sqlalchemy = None
+
+
+def _fsync_directory(path):
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def csubst_site_archive_is_complete(path):
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            if archive.comment != CSUBST_SITE_ARCHIVE_COMMENT:
+                return False
+            if not any(not info.is_dir() for info in archive.infolist()):
+                return False
+            return archive.testzip() is None
+    except (OSError, RuntimeError, zipfile.BadZipFile):
+        return False
+
+
+def quarantine_unverified_csubst_site_archive(path):
+    path = Path(path)
+    if not path.exists():
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"Invalid CSUBST site archive path: {path}")
+    quarantine = path.with_name(
+        f".{path.name}.unverified.{os.getpid()}.{uuid.uuid4().hex}"
+    )
+    os.replace(path, quarantine)
+    _fsync_directory(path.parent)
+    return quarantine
+
+
+def cleanup_quarantined_csubst_site_archives(path):
+    path = Path(path)
+    removed = False
+    for candidate in path.parent.glob(f".{path.name}.unverified.*"):
+        if candidate.is_file() and not candidate.is_symlink():
+            candidate.unlink()
+            removed = True
+    if removed:
+        _fsync_directory(path.parent)
+
+
+def create_csubst_site_archive(directory):
+    directory = Path(directory).resolve()
+    if directory.is_symlink() or not directory.is_dir():
+        raise RuntimeError(f"CSUBST site archive source is not a directory: {directory}")
+    final_path = Path(f"{directory}.zip")
+    if final_path.is_symlink():
+        raise RuntimeError(f"Symlinked CSUBST site ZIP is unsupported: {final_path}")
+    temporary_base = final_path.parent / (
+        f".{final_path.stem}.partial.{os.getpid()}.{uuid.uuid4().hex}"
+    )
+    temporary_zip = Path(f"{temporary_base}.zip")
+    try:
+        shutil.make_archive(
+            str(temporary_base),
+            "zip",
+            root_dir=str(directory),
+        )
+        with zipfile.ZipFile(temporary_zip, "a") as archive:
+            archive.comment = CSUBST_SITE_ARCHIVE_COMMENT
+        if not csubst_site_archive_is_complete(temporary_zip):
+            raise RuntimeError(
+                f"New CSUBST site archive failed verification: {temporary_zip}"
+            )
+        with temporary_zip.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary_zip, final_path)
+        _fsync_directory(final_path.parent)
+        return final_path
+    finally:
+        temporary_zip.unlink(missing_ok=True)
 
 
 class LockedMaterializationDirectory:
@@ -628,8 +717,11 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
         else:
             print(f'Running csubst sites. Output file not found: {file_csubst_out}', flush=True)
             path_iqtree_zip = get_iqtree_anc_zip_path(dir_og=effective_dir_og, og=og)
-            with zipfile.ZipFile(path_iqtree_zip, "r") as zip_ref:
-                zip_ref.extractall(dir_out_og)
+            extract_expected_prefix(
+                path_iqtree_zip,
+                dir_out_og,
+                f"{og}.iqtree.anc",
+            )
             cmd = csubst_sites_cmd
             print('COMMAND: {}'.format(' '.join(cmd)), flush=True)
             subprocess.run(cmd, check=True)
@@ -1600,6 +1692,14 @@ if __name__ == '__main__':
             file_trait_color = find_file_trait_color(trait)
             dir_out = os.path.realpath(os.path.join(args.dir_out, out_name))
             out_zip = os.path.join(cwd, dir_out+'.zip')
+            quarantined_zip = None
+            if os.path.exists(out_zip) and not csubst_site_archive_is_complete(out_zip):
+                quarantined_zip = quarantine_unverified_csubst_site_archive(out_zip)
+                print(
+                    f'Rebuilding unverified CSUBST site ZIP; previous file retained at: '
+                    f'{quarantined_zip}',
+                    flush=True,
+                )
             if (not os.path.exists(dir_out)) and (not os.path.exists(out_zip)):
                 os.makedirs(dir_out)
             conditions = True
@@ -1616,17 +1716,20 @@ if __name__ == '__main__':
             if conditions.sum()==0:
                 outfile = os.path.join(dir_out, out_name+'.txt')
                 print('No branch combinations to analyze.', flush=True)
-                if os.path.exists(dir_out) and (not os.path.exists(out_zip)):
+                if csubst_site_archive_is_complete(out_zip):
+                    print(f'Skipped arity = {arity}. Verified output ZIP already exists: {out_zip}', flush=True)
+                elif os.path.exists(dir_out):
                     print(f'Writing a placeholder file to: {outfile}', flush=True)
                     with open(outfile, 'w') as f:
                         f.write('No analyzable branch combinations.\n')
-                    shutil.make_archive(dir_out, 'zip', dir_out)
+                    create_csubst_site_archive(dir_out)
                     shutil.rmtree(dir_out)
+                    cleanup_quarantined_csubst_site_archives(out_zip)
                 continue
             cb_passed = cb.loc[conditions,:].sort_values(by='orthogroup').reset_index(drop=True)                
             # gg-cache-guard: audited - the outer csubst_site artifact contract removes this directory on rebuild.
-            if os.path.exists(out_zip):
-                print(f'Skipped arity = {arity}. Output zip file already exists: {out_zip}', flush=True)
+            if csubst_site_archive_is_complete(out_zip):
+                print(f'Skipped arity = {arity}. Verified output ZIP already exists: {out_zip}', flush=True)
                 continue
             plot_scatter(cb=cb_passed, xcol='OCNany2spe', ycol='omegaCany2spe',
                          outbase=os.path.join(dir_out, out_name + '_OCNany2spe-omegaC'),
@@ -1727,8 +1830,9 @@ if __name__ == '__main__':
             os.chdir(cwd)
             if flag_zip:
                 print(f'No error detected. Zipping {dir_out}', flush=True)
-                shutil.make_archive(dir_out, 'zip', dir_out)
+                create_csubst_site_archive(dir_out)
                 shutil.rmtree(dir_out)
+                cleanup_quarantined_csubst_site_archives(out_zip)
             else:
                 print(f'Error detected. Skipping zipping {dir_out}', flush=True)
     conn.dispose()

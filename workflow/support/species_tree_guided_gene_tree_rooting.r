@@ -85,33 +85,11 @@ cat('Elapsed time for species overlap search:', (end - start)[3], 'sec\n')
 
 cat('Starting the analysis of NOTUNG root positions.\n')
 start = proc.time()
-zip_members = unzip(args[['notung_root_zip']], list = TRUE)$Name
-zip_members = zip_members[nzchar(zip_members)]
-dir_candidates = unique(sub('/.*$', '', zip_members))
-for (dir_candidate in dir_candidates) {
-    candidate_path = file.path(getwd(), dir_candidate)
-    if (dir.exists(candidate_path)) {
-        unlink(candidate_path, recursive = TRUE)
-    }
-}
-unzip(args[['notung_root_zip']])
-dir_notung = NULL
-for (dir_candidate in dir_candidates) {
-    candidate_path = file.path(getwd(), dir_candidate)
-    if (dir.exists(candidate_path)) {
-        dir_notung = candidate_path
-        break
-    }
-}
-if (is.null(dir_notung)) {
-    dir_notung_legacy = file.path(getwd(), sub('.zip$', '', basename(args[['notung_root_zip']])))
-    if (dir.exists(dir_notung_legacy)) {
-        dir_notung = dir_notung_legacy
-    }
-}
-if (is.null(dir_notung)) {
+dir_notung = args[['notung_root_dir']]
+if (is.null(dir_notung) || length(dir_notung) != 1 || is.na(dir_notung) || !dir.exists(dir_notung)) {
     nwk_files = character(0)
 } else {
+    dir_notung = normalizePath(dir_notung, mustWork = TRUE)
     files = list.files(dir_notung)
     nwk_files = files[grep('[0-9]$', files)]
 }

@@ -1,7 +1,9 @@
 """Download runtime implementation: targets."""
 
 import gzip
+import io
 import os
+import shutil
 import time
 import zipfile
 from pathlib import Path
@@ -167,16 +169,34 @@ def pick_ncbi_datasets_member_name(member_names, label):
     return sorted(matches)[0]
 
 
-def write_download_payload(destination, payload_bytes):
+def _fsync_directory(path):
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def write_download_stream(destination, source):
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = Path(str(destination) + ".tmp.{}".format(os.getpid()))
     try:
         if destination.name.lower().endswith(".gz"):
             with gzip.open(tmp, "wb") as out:
-                out.write(payload_bytes)
+                shutil.copyfileobj(source, out, length=1024 * 1024)
         else:
             with open(tmp, "wb") as out:
-                out.write(payload_bytes)
-        tmp.replace(destination)
+                shutil.copyfileobj(source, out, length=1024 * 1024)
+        with open(tmp, "rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(tmp, destination)
+        _fsync_directory(destination.parent)
     except Exception:
         try:
             tmp.unlink()
@@ -185,6 +205,11 @@ def write_download_payload(destination, payload_bytes):
         except OSError:
             pass
         raise
+
+
+def write_download_payload(destination, payload_bytes):
+    with io.BytesIO(payload_bytes) as source:
+        write_download_stream(destination, source)
 
 
 def download_ncbi_datasets_file_from_id(
@@ -244,8 +269,8 @@ def download_ncbi_datasets_file_from_id(
                         raise ValueError(
                             "datasets archive did not contain expected {} member for id {}".format(label, source_id)
                         )
-                    payload = archive.read(member_name)
-                write_download_payload(destination, payload)
+                    with archive.open(member_name, "r") as source:
+                        write_download_stream(destination, source)
                 last_error = None
                 break
             except Exception as exc:

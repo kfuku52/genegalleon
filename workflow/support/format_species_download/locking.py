@@ -41,6 +41,19 @@ CONTENT_RANGE_PATTERN = re.compile(r"^bytes\s+([0-9]+)-([0-9]+)/([0-9]+|[*])$", 
 UNSATISFIED_CONTENT_RANGE_PATTERN = re.compile(r"^bytes\s+[*]/([0-9]+)$", re.IGNORECASE)
 
 
+def _fsync_directory(path):
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 def is_rar_archive(path):
     with open(path, "rb") as handle:
         signature = handle.read(len(RAR5_SIGNATURE))
@@ -521,20 +534,27 @@ def download_url_to_file(
                         raise
             if zipfile.is_zipfile(archive_cache_path):
                 with zipfile.ZipFile(archive_cache_path) as archive:
-                    payload = archive.read(archive_member_text)
-                with open(tmp, "wb") as out:
-                    out.write(payload)
+                    with archive.open(archive_member_text, "r") as source, open(
+                        tmp, "wb"
+                    ) as out:
+                        shutil.copyfileobj(source, out, length=1024 * 1024)
+                        out.flush()
+                        os.fsync(out.fileno())
             elif is_rar_archive(archive_cache_path):
                 extract_rar_archive_member(archive_cache_path, archive_member_text, tmp)
+                with open(tmp, "rb") as handle:
+                    os.fsync(handle.fileno())
             else:
                 with tarfile.open(archive_cache_path, "r:*") as archive:
                     extracted = archive.extractfile(archive_member_text)
                     if extracted is None:
                         raise KeyError(archive_member_text)
-                    payload = extracted.read()
-                with open(tmp, "wb") as out:
-                    out.write(payload)
-            tmp.replace(destination)
+                    with extracted, open(tmp, "wb") as out:
+                        shutil.copyfileobj(extracted, out, length=1024 * 1024)
+                        out.flush()
+                        os.fsync(out.fileno())
+            os.replace(tmp, destination)
+            _fsync_directory(Path(destination).parent)
             validation_error = gzip_integrity_error(destination)
             if validation_error is not None:
                 quarantine_existing_file(destination, warnings, lock_context, validation_error)

@@ -757,8 +757,12 @@ if [[ ${subphaser_needs_update} -eq 1 && ${run_subphaser} -eq 1 ]]; then
 
   if [[ ${subphaser_exit_status} -eq 0 ]]; then
     echo "Zipping and copying SubPhaser's output files."
+    rm -f -- "${sp_ub}.subphaser.zip"
     zip -rq "${sp_ub}.subphaser.zip" "${sp_ub}.subphaser"
-    cp_out "${sp_ub}.subphaser.zip" "${file_sp_subphaser}"
+    python "${gg_support_dir}/atomic_zip_publish.py" \
+      --source "${sp_ub}.subphaser.zip" \
+      --destination "${file_sp_subphaser}" \
+      --expected-prefix "${sp_ub}.subphaser"
     gg_artifact_record "${subphaser_provenance_args[@]}"
   else
     echo "SubPhaser's exit status is not 0. Skipped zipping and copying SubPhaser's output files."
@@ -975,8 +979,13 @@ if [[ ${genomescope_needs_update} -eq 1 && ${run_genomescope} -eq 1 ]]; then
     if [[ -s "${sp_ub}.genomescope/transformed_linear_plot.png" ]]; then
       echo "GenomeScope output file was detected. Start compressing."
       mv_out "tmp.reads.histo" "${sp_ub}.genomescope/kmc.histo.tsv"
+      rm -f -- "${sp_ub}.genomescope.zip"
       zip -rq "${sp_ub}.genomescope.zip" "${sp_ub}.genomescope"
-      mv_out "${sp_ub}.genomescope.zip" "${file_sp_genomescope}"
+      python "${gg_support_dir}/atomic_zip_publish.py" \
+        --source "${sp_ub}.genomescope.zip" \
+        --destination "${file_sp_genomescope}" \
+        --expected-prefix "${sp_ub}.genomescope" \
+        --remove-source
       gg_artifact_record "${genomescope_provenance_args[@]}"
     fi
   fi
@@ -1076,8 +1085,13 @@ if [[ ${jcvi_needs_update} -eq 1 && ${run_jcvi_dotplot} -eq 1 ]]; then
 
   if [[ -s "${sp_ub}.jcvi_dotplot/${sp_ub}.pdf" ]]; then
     echo "JCVI dotplot output file was detected. Start compressing."
+    rm -f -- "${sp_ub}.jcvi_dotplot.zip"
     zip -rq "${sp_ub}.jcvi_dotplot.zip" "${sp_ub}.jcvi_dotplot"
-    mv_out "${sp_ub}.jcvi_dotplot.zip" "${file_sp_jcvi_dotplot}"
+    python "${gg_support_dir}/atomic_zip_publish.py" \
+      --source "${sp_ub}.jcvi_dotplot.zip" \
+      --destination "${file_sp_jcvi_dotplot}" \
+      --expected-prefix "${sp_ub}.jcvi_dotplot" \
+      --remove-source
     gg_artifact_record "${jcvi_provenance_args[@]}"
   fi
 else

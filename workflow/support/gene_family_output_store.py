@@ -85,6 +85,7 @@ PRECOMPRESSED_SUFFIXES = (
     ".jpeg",
     ".gif",
 )
+ArchivedSourceSignature = Tuple[int, int, int, int, int, str]
 
 # GeneGalleon releases predating the underscore-based output layout used dots
 # in both subdirectory and filename components.  Keep these mappings at the
@@ -709,7 +710,8 @@ def _manifest_modes(root: Path) -> Set[str]:
             raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {zip_path}")
         try:
             with zipfile.ZipFile(zip_path, "r") as archive:
-                manifest = json.loads(archive.read(MANIFEST_MEMBER))
+                with archive.open(MANIFEST_MEMBER, "r") as handle:
+                    manifest = json.load(handle)
             mode = str(manifest.get("mode", ""))
         except (OSError, KeyError, ValueError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
             raise ArchiveStoreError(
@@ -1764,12 +1766,13 @@ class GeneFamilyOutputStore:
         try:
             with zipfile.ZipFile(zip_path, "r") as archive:
                 try:
-                    raw_manifest = archive.read(MANIFEST_MEMBER)
+                    manifest_handle = archive.open(MANIFEST_MEMBER, "r")
                 except KeyError as exc:
                     raise ArchiveStoreError(
                         f"Registered GeneGalleon manifest was not found in ZIP: {zip_path}"
                     ) from exc
-                manifest = json.loads(raw_manifest.decode("utf-8"))
+                with manifest_handle:
+                    manifest = json.load(manifest_handle)
                 if not isinstance(manifest, dict):
                     raise ArchiveStoreError(
                         f"Archive manifest is not a JSON object: {zip_path}"
@@ -3508,7 +3511,7 @@ def _archive_chunk(
     verification_progress_callback: Optional[
         Callable[[int, int, int, int], None]
     ] = None,
-) -> Tuple[Path, List[Artifact], Dict[Path, Tuple[int, int, int, int, int]]]:
+) -> Tuple[Path, List[Artifact], Dict[Path, ArchivedSourceSignature]]:
     shard_dir = (
         Path(destination_path).resolve().parent
         if destination_path is not None
@@ -3536,7 +3539,8 @@ def _archive_chunk(
         f".{final_path.name}.partial."
         f"{os.getpid()}.{uuid.uuid4().hex}"
     )
-    signatures = {path: _stat_signature(path) for path in paths}
+    source_signatures = {path: _stat_signature(path) for path in paths}
+    signatures: Dict[Path, ArchivedSourceSignature] = {}
     members: List[dict] = []
     last_progress = time.monotonic()
     try:
@@ -3584,11 +3588,12 @@ def _archive_chunk(
                         "size": int(info.file_size),
                         "crc": int(info.CRC),
                         "sha256": digest.hexdigest(),
-                        "mtime_ns": int(signatures[path][3]),
+                        "mtime_ns": int(source_signatures[path][3]),
                         "family_id": family_from_name(path.name),
-                        "source_signature": list(signatures[path]),
+                        "source_signature": list(source_signatures[path]),
                     }
                 )
+                signatures[path] = (*source_signatures[path], digest.hexdigest())
             manifest = {
                 "schema_version": ARCHIVE_SCHEMA_VERSION,
                 "generation": generation,
@@ -3810,13 +3815,27 @@ def _compact_artifact_chunk(
 
 def _remove_archived_sources(
     root: Path,
-    signatures: Dict[Path, Tuple[int, int, int, int, int]],
+    signatures: Dict[Path, ArchivedSourceSignature],
 ) -> int:
     removed = 0
     touched_subdirs: Set[Path] = set()
     for path, signature in signatures.items():
         touched_subdirs.add(path.parent)
-        if _signature_matches(path, signature):
+        metadata_signature = signature[:5]
+        expected_sha256 = signature[5]
+        if _signature_matches(path, metadata_signature):
+            digest = hashlib.sha256()
+            try:
+                with path.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+            except FileNotFoundError:
+                continue
+            if (
+                digest.hexdigest() != expected_sha256
+                or not _signature_matches(path, metadata_signature)
+            ):
+                continue
             path.unlink()
             removed += 1
     for live_dir in touched_subdirs:
@@ -4067,7 +4086,7 @@ def archive_completed_outputs(
                 str,
                 Path,
                 List[Artifact],
-                Dict[Path, Tuple[int, int, int, int, int]],
+                Dict[Path, ArchivedSourceSignature],
             ]:
                 subdir, candidates, generation = spec
 
@@ -4192,7 +4211,7 @@ def archive_completed_outputs(
                     str,
                     Path,
                     List[Artifact],
-                    Dict[Path, Tuple[int, int, int, int, int]],
+                    Dict[Path, ArchivedSourceSignature],
                 ],
             ) -> None:
                 nonlocal direct_completed, removed_total
@@ -4317,7 +4336,7 @@ def archive_completed_outputs(
                     Tuple[
                         Path,
                         List[Artifact],
-                        Dict[Path, Tuple[int, int, int, int, int]],
+                        Dict[Path, ArchivedSourceSignature],
                     ],
                 ] = {}
                 futures: List[concurrent.futures.Future] = []
@@ -5779,7 +5798,7 @@ def convert_storage_to_raw(
                         "quota-aware preflight."
                     )
                 available_inodes = int(filesystem_stats.f_favail)
-                if available_inodes > 0 and required_inodes > available_inodes:
+                if available_inodes >= 0 and required_inodes > available_inodes:
                     raise ArchiveStoreError(
                         "Insufficient filesystem inodes for ZIP-to-raw conversion: "
                         f"required={required_inodes}, available={available_inodes}. "
@@ -6459,7 +6478,8 @@ def migrate_archive_layout(root: Path) -> List[Tuple[Path, Path]]:
             destination_dir.mkdir(parents=True)
         for source_path in zip_paths:
             with zipfile.ZipFile(source_path, "r") as archive:
-                manifest = json.loads(archive.read(MANIFEST_MEMBER))
+                with archive.open(MANIFEST_MEMBER, "r") as handle:
+                    manifest = json.load(handle)
             generation = int(manifest["generation"])
             kind = "pack" if source_path.name.startswith("pack-") else "part"
             destination_path = destination_dir / (

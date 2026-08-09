@@ -8,9 +8,10 @@ import math
 import re
 import shutil
 import sys
+import tempfile
 import zipfile
 from dataclasses import dataclass
-from io import BytesIO, StringIO
+from io import StringIO, TextIOWrapper
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 from urllib.parse import quote, urlencode, urlparse
@@ -424,20 +425,22 @@ def read_table_from_zip(path: Path, delimiter: str, archive_member: str) -> pand
         selected_member = choose_archive_member(members=members, requested=archive_member)
         if selected_member is None:
             raise ValueError("archive_member not found in {}: {}".format(path, archive_member))
-        payload = archive.read(selected_member)
-    if selected_member.lower().endswith(".xlsx"):
-        return pandas.read_excel(BytesIO(payload), dtype=str)
-    text: Optional[str] = None
-    for encoding in ("utf-8", "latin1"):
-        try:
-            text = payload.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            continue
-    if text is None:
-        text = payload.decode("utf-8", errors="replace")
-    sep = parse_delimiter(Path(selected_member), delimiter)
-    return pandas.read_csv(StringIO(text), sep=sep, dtype=str)
+        if selected_member.lower().endswith(".xlsx"):
+            with archive.open(selected_member) as source, tempfile.SpooledTemporaryFile(
+                max_size=8 * 1024 * 1024,
+            ) as temporary:
+                shutil.copyfileobj(source, temporary, length=1024 * 1024)
+                temporary.seek(0)
+                return pandas.read_excel(temporary, dtype=str)
+        sep = parse_delimiter(Path(selected_member), delimiter)
+        for encoding in ("utf-8", "latin1"):
+            try:
+                with archive.open(selected_member) as source:
+                    with TextIOWrapper(source, encoding=encoding) as text:
+                        return pandas.read_csv(text, sep=sep, dtype=str)
+            except UnicodeDecodeError:
+                continue
+    raise UnicodeDecodeError("utf-8", b"", 0, 1, "failed to decode ZIP member")
 
 
 def read_bulk_table_from_path(path: Path, config: Dict[str, str]) -> pandas.DataFrame:

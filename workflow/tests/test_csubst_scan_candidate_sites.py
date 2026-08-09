@@ -577,8 +577,8 @@ def test_safe_extract_zip_rejects_parent_path_traversal(tmp_path):
     with zipfile.ZipFile(archive, "w") as zipped:
         zipped.writestr("../escaped.txt", "unsafe")
 
-    with pytest.raises(ValueError, match="Unsafe path"):
-        mod.safe_extract_zip(archive, tmp_path / "extract")
+    with pytest.raises(ValueError, match="Unsafe ZIP archive"):
+        mod.safe_extract_zip(archive, tmp_path / "extract", "OG0001.iqtree.anc")
 
     assert not (tmp_path / "escaped.txt").exists()
 

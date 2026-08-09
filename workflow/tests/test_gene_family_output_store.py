@@ -3177,6 +3177,36 @@ def test_zip_to_raw_requirements_include_blocks_and_missing_subdirectories(
     assert required_inodes == 4
 
 
+def test_zip_to_raw_conversion_treats_zero_available_inodes_as_exhausted(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "query2family"
+    query_dir = tmp_path / "query_gene"
+    query_dir.mkdir()
+    (query_dir / "A").write_text("geneA\n", encoding="utf-8")
+    paths = _write_family_outputs(root, "A", complete=True)
+    family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
+    archive_completed_outputs(root, "query2family", family_ids, family_from_name)
+    real_stats = os.statvfs(root)
+    exhausted = SimpleNamespace(
+        **{
+            field: (0 if field == "f_favail" else getattr(real_stats, field))
+            for field in dir(real_stats)
+            if field.startswith("f_")
+        }
+    )
+    monkeypatch.setattr(output_store_module.os, "statvfs", lambda _path: exhausted)
+
+    with pytest.raises(ArchiveStoreError, match="available=0"):
+        convert_storage_to_raw(root, "query2family")
+
+    assert not paths["mafft"].exists()
+    assert GeneFamilyOutputStore(root).logical_exists("mafft/A_cds.aln.fa.gz")
+
+
 def test_storage_status_cli_can_inspect_physical_store_without_catalog(
     tmp_path: Path,
     capsys,

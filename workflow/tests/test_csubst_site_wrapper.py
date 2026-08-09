@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+import zipfile
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -44,6 +45,69 @@ def test_get_matplotlib_imports_plotting_submodules():
 
     assert hasattr(matplotlib, "pyplot")
     assert hasattr(matplotlib, "patches")
+
+
+def test_create_csubst_site_archive_marks_and_verifies_completed_zip(tmp_path):
+    mod = load_module()
+    output = tmp_path / "csubst_site_trait_K2"
+    output.mkdir()
+    (output / "summary.pdf").write_bytes(b"pdf")
+
+    archive_path = mod.create_csubst_site_archive(output)
+
+    assert archive_path == Path(f"{output}.zip")
+    assert mod.csubst_site_archive_is_complete(archive_path)
+    with zipfile.ZipFile(archive_path) as archive:
+        assert archive.comment == mod.CSUBST_SITE_ARCHIVE_COMMENT
+        assert archive.read("summary.pdf") == b"pdf"
+    assert not list(tmp_path.glob(".csubst_site_trait_K2.partial.*"))
+
+
+def test_unmarked_zip_is_not_treated_as_completed_csubst_site_output(tmp_path):
+    mod = load_module()
+    archive_path = tmp_path / "legacy.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("partial.txt", "partial\n")
+
+    assert not mod.csubst_site_archive_is_complete(archive_path)
+
+
+def test_interrupted_csubst_site_archive_creation_leaves_no_final_zip(
+    tmp_path,
+    monkeypatch,
+):
+    mod = load_module()
+    output = tmp_path / "csubst_site_trait_K2"
+    output.mkdir()
+    (output / "summary.pdf").write_bytes(b"pdf")
+
+    def interrupt_archive(base_name, archive_format, root_dir):
+        Path(f"{base_name}.zip").write_bytes(b"partial")
+        raise OSError("injected archive failure")
+
+    monkeypatch.setattr(mod.shutil, "make_archive", interrupt_archive)
+
+    with pytest.raises(OSError, match="injected archive failure"):
+        mod.create_csubst_site_archive(output)
+
+    assert not Path(f"{output}.zip").exists()
+    assert not list(tmp_path.glob(".csubst_site_trait_K2.partial.*"))
+
+
+def test_unverified_csubst_site_archive_is_quarantined_until_rebuild_succeeds(
+    tmp_path,
+):
+    mod = load_module()
+    archive_path = tmp_path / "result.zip"
+    archive_path.write_bytes(b"partial")
+
+    quarantined = mod.quarantine_unverified_csubst_site_archive(archive_path)
+
+    assert quarantined is not None
+    assert quarantined.read_bytes() == b"partial"
+    assert not archive_path.exists()
+    mod.cleanup_quarantined_csubst_site_archives(archive_path)
+    assert not quarantined.exists()
 
 
 def test_generate_trait_colors_marks_every_nonbackground_lineage_id(monkeypatch, tmp_path):

@@ -30,6 +30,11 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import csubst_site_wrapper as site_wrapper  # noqa: E402, I001
+from safe_zip_extract import (  # noqa: E402
+    SafeZipError,
+    extract_expected_prefix,
+    validated_members,
+)
 
 
 DEFAULT_MIN_SUPPORT = 5
@@ -44,6 +49,21 @@ BESTHIT_COLUMNS = [
     "besthit_0.75",
     "besthit_0.95",
 ]
+
+
+def _fsync_directory(path):
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 CANDIDATE_REQUIRED_COLUMNS = [
     "orthogroup",
     "trait",
@@ -610,15 +630,11 @@ def write_trait_color_tables(file_trait, traits, output_dir):
     return paths
 
 
-def safe_extract_zip(zip_path, destination):
-    destination = Path(destination).resolve()
-    destination.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path, "r") as archive:
-        for member in archive.infolist():
-            target = (destination / member.filename).resolve()
-            if os.path.commonpath([str(destination), str(target)]) != str(destination):
-                raise ValueError(f"Unsafe path in ZIP archive {zip_path}: {member.filename}")
-        archive.extractall(destination)
+def safe_extract_zip(zip_path, destination, expected_prefix):
+    try:
+        return extract_expected_prefix(zip_path, destination, expected_prefix)
+    except SafeZipError as exc:
+        raise ValueError(f"Unsafe ZIP archive {zip_path}: {exc}") from exc
 
 
 def candidate_cache_complete(cache_dir, record):
@@ -667,7 +683,11 @@ def analyze_candidate(record, cache_root, effective_dir_orthogroup, trait_color_
         )
         if not os.path.isfile(iqtree_zip):
             raise FileNotFoundError(f"IQ-TREE ancestral-state ZIP was not found: {iqtree_zip}")
-        safe_extract_zip(iqtree_zip, cache_dir)
+        safe_extract_zip(
+            iqtree_zip,
+            cache_dir,
+            f"{record['orthogroup']}.iqtree.anc",
+        )
         iqtree_anc_dir = site_wrapper.get_iqtree_anc_dir(
             str(cache_dir), record["orthogroup"]
         )
@@ -1251,7 +1271,17 @@ def create_zip_atomic(package_root, archive_path):
             root_dir=str(package_root.parent),
             base_dir=package_root.name,
         )
+        with zipfile.ZipFile(temporary_zip, "r") as archive:
+            validated_members(archive, temporary_zip, archive_path.stem)
+            bad_member = archive.testzip()
+        if bad_member is not None:
+            raise ValueError(
+                f"CRC verification failed for new archive member: {bad_member}"
+            )
+        with temporary_zip.open("rb") as handle:
+            os.fsync(handle.fileno())
         os.replace(temporary_zip, archive_path)
+        _fsync_directory(archive_path.parent)
     finally:
         temporary_zip.unlink(missing_ok=True)
 

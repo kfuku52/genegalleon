@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import fcntl
 import fnmatch
+import hashlib
 import json
 import os
 import shutil
@@ -257,9 +258,15 @@ def _zip_to_raw_requirements(
     )
 
 
-def _signature(path: Path) -> tuple[int, int, int, int]:
+def _signature(path: Path) -> tuple[int, int, int, int, int]:
     value = path.stat()
-    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
 
 
 def _archive_comment(name: str, file_count: int, directory_count: int) -> bytes:
@@ -535,6 +542,7 @@ def pack_directory(
                 "Pass quota remaining as --available-bytes for a quota-aware preflight."
             )
         signatures = {path: _signature(path) for path in directories + files}
+        archived_digests: dict[Path, str] = {}
         partial_path = root / f".{name}.zip.partial.{os.getpid()}.{uuid.uuid4().hex}"
         total_source_bytes = sum(int(path.stat().st_size) for path in files)
         completed_source_bytes = 0
@@ -566,6 +574,7 @@ def pack_directory(
                     info.compress_type = zipfile.ZIP_STORED
                     archive.writestr(info, b"")
                 for path in files:
+                    digest = hashlib.sha256()
                     relative = path.relative_to(raw_path).as_posix()
                     info = zipfile.ZipInfo.from_file(
                         path,
@@ -580,6 +589,7 @@ def pack_directory(
                             def write(self, chunk: bytes) -> int:
                                 nonlocal completed_source_bytes
                                 written = destination.write(chunk)
+                                digest.update(memoryview(chunk)[:written])
                                 completed_source_bytes += int(written)
                                 if progress_callback is not None:
                                     progress_callback(
@@ -597,6 +607,7 @@ def pack_directory(
                             ProgressDestination(),
                             length=1024 * 1024,
                         )
+                    archived_digests[path] = digest.hexdigest()
                     completed_files += 1
                 archive.comment = _archive_comment(name, len(files), len(directories))
 
@@ -618,6 +629,19 @@ def pack_directory(
                     not path.exists()
                     or path.is_symlink()
                     or _signature(path) != signature
+                ):
+                    raise SpeciesTreeArchiveError(
+                        f"Source changed while {name} was being archived: {path}"
+                    )
+            for path, archived_digest in archived_digests.items():
+                current_digest = hashlib.sha256()
+                with path.open("rb") as source:
+                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                        current_digest.update(chunk)
+                if (
+                    current_digest.hexdigest() != archived_digest
+                    or path.is_symlink()
+                    or _signature(path) != signatures[path]
                 ):
                     raise SpeciesTreeArchiveError(
                         f"Source changed while {name} was being archived: {path}"
@@ -801,7 +825,7 @@ def materialize_directory(
             )
         filesystem_stats = os.statvfs(root)
         available_inodes = int(filesystem_stats.f_favail)
-        if available_inodes > 0 and required_inodes > available_inodes:
+        if available_inodes >= 0 and required_inodes > available_inodes:
             raise SpeciesTreeArchiveError(
                 "Insufficient filesystem inodes for ZIP-to-raw conversion: "
                 f"required={required_inodes}, available={available_inodes}"

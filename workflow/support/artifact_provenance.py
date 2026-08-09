@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import zipfile
@@ -35,6 +36,7 @@ from gene_family_output_store import (
     query_id_from_name,
     query_id_matchers,
 )
+from safe_zip_extract import extract_expected_prefix, validated_members
 
 SCHEMA_VERSION = 1
 CURRENT = 1
@@ -427,10 +429,11 @@ def raw_or_zip_directory_digest(path: Path) -> tuple[str, int, int]:
             member_count = 0
             try:
                 with zipfile.ZipFile(archive_path, "r") as archive:
-                    infos = [info for info in archive.infolist() if not info.is_dir()]
-                    names = [info.filename for info in infos]
-                    if len(names) != len(set(names)):
-                        raise ProvenanceError(f"Logical directory ZIP contains duplicate members: {archive_path}")
+                    infos, _directories = validated_members(
+                        archive,
+                        archive_path,
+                        path.name,
+                    )
                     prefix = PurePosixPath(path.name)
                     members: list[tuple[PurePosixPath, zipfile.ZipInfo]] = []
                     for info in infos:
@@ -946,17 +949,21 @@ def artifact_family_id(artifact, mode: str, query_matcher_list=None) -> str | No
     return None
 
 
-def safe_extract_zip_bytes(data: bytes, destination: Path) -> Path:
-    with zipfile.ZipFile(io.BytesIO(data), "r") as archive:
-        for member in archive.infolist():
-            pure_name = PurePosixPath(member.filename)
-            if pure_name.is_absolute() or ".." in pure_name.parts:
-                raise ProvenanceError(f"Unsafe ZIP member in IQ-TREE archive: {member.filename}")
-        archive.extractall(destination)
-    candidates = sorted(path.parent for path in destination.rglob("csubst.nwk"))
-    if len(candidates) != 1:
-        raise ProvenanceError(f"Expected one extracted csubst.nwk, found {len(candidates)} in IQ-TREE archive")
-    return candidates[0]
+def safe_extract_iqtree_zip(
+    archive_path: Path,
+    destination: Path,
+    family_id: str,
+) -> Path:
+    expected_prefix = f"{family_id}.iqtree.anc"
+    extracted = extract_expected_prefix(
+        archive_path,
+        destination,
+        expected_prefix,
+    )
+    csubst_tree = extracted / "csubst.nwk"
+    if not csubst_tree.is_file():
+        raise ProvenanceError(f"Expected {csubst_tree} in IQ-TREE archive")
+    return extracted
 
 
 def branch_identity_rows(
@@ -991,15 +998,27 @@ def branch_identity_rows(
         iqtree_artifact = iqtree_by_family[family_id]
         stat_artifact = stat_by_family[family_id]
         try:
-            with store.open_binary(iqtree_artifact.subdir, iqtree_artifact.name) as handle:
-                iqtree_data = handle.read()
-            with store.open_binary(stat_artifact.subdir, stat_artifact.name) as handle:
-                stat_data = handle.read()
             with tempfile.TemporaryDirectory(prefix="gg-branch-audit-") as temporary:
                 temporary_path = Path(temporary)
-                iqtree_dir = safe_extract_zip_bytes(iqtree_data, temporary_path / "iqtree")
+                iqtree_path = temporary_path / "iqtree.zip"
+                with store.open_binary(
+                    iqtree_artifact.subdir,
+                    iqtree_artifact.name,
+                ) as source, iqtree_path.open("wb") as output:
+                    shutil.copyfileobj(source, output, length=CHUNK_SIZE)
+                    output.flush()
+                    os.fsync(output.fileno())
+                iqtree_dir = safe_extract_iqtree_zip(
+                    iqtree_path,
+                    temporary_path / "iqtree",
+                    family_id,
+                )
                 stat_path = temporary_path / "stat_branch.tsv"
-                stat_path.write_bytes(stat_data)
+                with store.open_binary(
+                    stat_artifact.subdir,
+                    stat_artifact.name,
+                ) as source, stat_path.open("wb") as output:
+                    shutil.copyfileobj(source, output, length=CHUNK_SIZE)
                 validate_all_csubst_stat_branch_identity(str(stat_path), str(iqtree_dir))
             status, reason = "current", ""
         except Exception as exc:

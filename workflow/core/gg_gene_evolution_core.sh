@@ -45,6 +45,15 @@ fi
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
+gg_extract_expected_zip_prefix() {
+  local archive_path=$1
+  local expected_prefix=$2
+  python "${gg_support_dir}/safe_zip_extract.py" \
+    --archive "${archive_path}" \
+    --destination-root . \
+    --expected-prefix "${expected_prefix}" >/dev/null
+}
+
 delete_preexisting_tmp_dir=${delete_preexisting_tmp_dir:-1}
 delete_tmp_dir=${delete_tmp_dir:-1}
 gene_family_run_token=""
@@ -3532,8 +3541,12 @@ if [[ ${notung_reconcil_needs_update} -eq 1 && ${run_notung_reconcil} -eq 1 ]]; 
     --outputdir ./${og_id}.notung_reconcile
 
   if [[ -s "${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.parsable.txt" || -s "${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.0.parsable.txt" ]]; then
+    rm -f -- "${og_id}.notung_reconcile.zip"
     zip -rq "${og_id}.notung_reconcile.zip" "${og_id}.notung_reconcile"
-    cp_out "${og_id}.notung_reconcile.zip" "${file_og_notung_reconcil}"
+    python "${gg_support_dir}/atomic_zip_publish.py" \
+      --source "${og_id}.notung_reconcile.zip" \
+      --destination "${file_og_notung_reconcil}" \
+      --expected-prefix "${og_id}.notung_reconcile"
   fi
   gg_artifact_record "${notung_reconcil_provenance_args[@]}"
 else
@@ -3578,11 +3591,9 @@ if [[ ${tree_dating_needs_update} -eq 1 && ${run_tree_dating} -eq 1 ]]; then
     radte_args+=("--species_tree=${species_tree_generax}")
     radte_args+=("--generax_nhx=${file_og_generax_nhx}")
   else
-    if [[ -e "./${og_id}.notung_reconcile" ]]; then
-      rm -rf -- "./${og_id}.notung_reconcile"
-    fi
-    cp_out "${file_og_notung_reconcil}" .
-    unzip -q "$(basename "${file_og_notung_reconcil}")"
+    gg_extract_expected_zip_prefix \
+      "${file_og_notung_reconcil}" \
+      "${og_id}.notung_reconcile"
     if [[ -s ./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.0 ]]; then
       cp_out ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.0 ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled
       cp_out ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.0.parsable.txt ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.parsable.txt
@@ -4066,8 +4077,13 @@ if [[ ${mapdnds_parameter_needs_update} -eq 1 && ${run_mapdnds_parameter_estimat
     mkdir -p "${og_id}.mapdnds_parameter"
     mv_out "iqtree2mapnh.params" ./"${og_id}".mapdnds_parameter
     mv_out "iqtree2mapnh.nwk" ./"${og_id}".mapdnds_parameter
+    rm -f -- "${og_id}.mapdnds_parameter.zip"
     zip -r "${og_id}.mapdnds_parameter.zip" "${og_id}.mapdnds_parameter"
-    mv_out "${og_id}.mapdnds_parameter.zip" "${file_og_mapdnds_parameter}"
+    python "${gg_support_dir}/atomic_zip_publish.py" \
+      --source "${og_id}.mapdnds_parameter.zip" \
+      --destination "${file_og_mapdnds_parameter}" \
+      --expected-prefix "${og_id}.mapdnds_parameter" \
+      --remove-source
   else
     echo "iqtree2mapnh.params was not generated."
   fi
@@ -4095,7 +4111,9 @@ gg_artifact_prepare_stage mapdnds_needs_update run_mapdnds "${mapdnds_provenance
 if [[ ${mapdnds_needs_update} -eq 1 && ${run_mapdnds} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  unzip -o "${file_og_mapdnds_parameter}"
+  gg_extract_expected_zip_prefix \
+    "${file_og_mapdnds_parameter}" \
+    "${og_id}.mapdnds_parameter"
   cd "${dir_tmp}/${og_id}.mapdnds_parameter" || exit 1
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file ./mapdnds_input.fasta
   normalize_mapnh_params_for_mapnh_v1 "iqtree2mapnh.params" "${genetic_code}"
@@ -4622,8 +4640,13 @@ if [[ ${iqtree_anc_needs_update} -eq 1 && ${run_iqtree_anc} -eq 1 ]]; then
       exit 1
     fi
     mv_out "${csubst_outputs[@]}" "${og_id}.iqtree.anc"
+    rm -f -- "${og_id}.iqtree.anc.zip"
     zip -rq "${og_id}.iqtree.anc.zip" "${og_id}.iqtree.anc"
-    mv_out "${og_id}.iqtree.anc.zip" "${file_og_iqtree_anc}"
+    python "${gg_support_dir}/atomic_zip_publish.py" \
+      --source "${og_id}.iqtree.anc.zip" \
+      --destination "${file_og_iqtree_anc}" \
+      --expected-prefix "${og_id}.iqtree.anc" \
+      --remove-source
     rm -rf -- "${og_id}.iqtree.anc"
     iqtree_version_text=$(iqtree --version 2>&1 || true)
     iqtree_version_text=${iqtree_version_text%%$'\n'*}
@@ -4735,7 +4758,9 @@ if [[ ${csubst_needs_update} -eq 1 && ${run_csubst} -eq 1 ]]; then
   if [[ ${#og_cleanup_paths[@]} -gt 0 ]]; then
     rm -rf -- "${og_cleanup_paths[@]}"
   fi
-  unzip -q "${file_og_iqtree_anc}"
+  gg_extract_expected_zip_prefix \
+    "${file_og_iqtree_anc}" \
+    "${og_id}.iqtree.anc"
   csubst_input_base="./${og_id}.iqtree.anc/csubst"
   csubst_search_dir="csubst_search"
 
@@ -4876,7 +4901,9 @@ if [[ ${csubst_scan_needs_update} -eq 1 && ${run_csubst_scan} -eq 1 ]]; then
   if [[ -e "${og_id}.iqtree.anc" ]]; then
     rm -rf -- "${og_id}.iqtree.anc"
   fi
-  unzip -q "${file_og_iqtree_anc}"
+  gg_extract_expected_zip_prefix \
+    "${file_og_iqtree_anc}" \
+    "${og_id}.iqtree.anc"
   csubst_input_base="./${og_id}.iqtree.anc/csubst"
   csubst_scan_dir="csubst_scan"
 
@@ -5106,7 +5133,9 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ -s "${file_og_notung_reconcil}" ]]; then
-    unzip -qf "${file_og_notung_reconcil}"
+    gg_extract_expected_zip_prefix \
+      "${file_og_notung_reconcil}" \
+      "${og_id}.notung_reconcile"
   fi
   notung_root_log_for_summary="PLACEHOLDER"
   if [[ -d "./${og_id}.notung.root" ]]; then

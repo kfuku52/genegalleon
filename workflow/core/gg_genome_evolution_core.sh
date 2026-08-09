@@ -1991,8 +1991,13 @@ busco_notung() {
     --nolosses \
     --outputdir "./${busco_id}.notung.root"
   if [[ -e "${busco_id}.notung.root/${busco_id}.busco.nwk.rooting.0" ]]; then
+    rm -f -- "${busco_id}.busco.notung.root.zip"
     zip -rq "${busco_id}.busco.notung.root.zip" "${busco_id}.notung.root"
-    mv_out "${busco_id}.busco.notung.root.zip" "${outfile}"
+    python "${gg_support_dir}/atomic_zip_publish.py" \
+      --source "${busco_id}.busco.notung.root.zip" \
+      --destination "${outfile}" \
+      --expected-prefix "${busco_id}.notung.root" \
+      --remove-source
     rm -rf -- "./${busco_id}.notung.root"
   fi
 }
@@ -2014,11 +2019,14 @@ busco_species_tree_assisted_gene_tree_rooting() {
   if [[ -e "./${busco_id}.notung.root" ]]; then
     rm -rf -- "./${busco_id}.notung.root"
   fi
-  cp_out "${indir}"/"${infile}" .
-  unzip -q "${infile}"
+  local notung_root_dir=""
+  notung_root_dir=$(python "${gg_support_dir}/safe_zip_extract.py" \
+    --archive "${indir}/${infile}" \
+    --destination-root . \
+    --expected-prefix "${busco_id}.notung.root") || return 1
 
   Rscript "${gg_support_dir}/species_tree_guided_gene_tree_rooting.r" \
-    "--notung_root_zip=./${infile}" \
+    "--notung_root_dir=${notung_root_dir}" \
     "--in_tree=${intree}" \
     "--out_tree=${busco_id}.root.nwk" \
     "--species_parser=${species_label_parser}" \
@@ -2028,7 +2036,6 @@ busco_species_tree_assisted_gene_tree_rooting() {
   if [[ -s "${busco_id}.root.nwk" ]]; then
     mv_out "${busco_id}".root.txt "${outfile_txt}"
     mv_out "${busco_id}".root.nwk "${outfile_nwk}"
-    rm -f -- "${infile}"
     rm -rf -- "${busco_id}.notung.root"
   fi
 }
