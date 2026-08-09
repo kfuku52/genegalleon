@@ -9,3 +9,8 @@ mysql-connector-python==9.7.0
 ortools==9.12.4544
 protobuf==5.29.6
 defusedxml==0.7.1
+# genomepy 0.16.2 requires norns 0.1.6, which imports pkg_resources; that
+# module was removed in setuptools 83. Upgrade this only after genomepy no
+# longer requires norns while remaining compatible with mysql-connector 9.x.
+setuptools<83
+pypdf>=6.15.0

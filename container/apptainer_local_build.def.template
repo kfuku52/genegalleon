@@ -8,6 +8,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     @@STAGING_ROOT@@/scripts /opt/pg/scripts
     @@STAGING_ROOT@@/treevis /opt/pg/src/genegalleon.treevis
     @@STAGING_ROOT@@/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt
+    @@STAGING_ROOT@@/source_pins.env /opt/pg/source_pins.env
 
 %environment
     export DEBIAN_FRONTEND=noninteractive

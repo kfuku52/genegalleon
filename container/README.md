@@ -12,8 +12,9 @@ From the project README and Wiki (`gg_versions`):
 - The runtime now uses a single conda `base` env, with selected tools installed from upstream GitHub at build time
   (`kfuku52/amalgkit`, `kfuku52/cdskit`, `kfuku52/csubst`, `kfuku52/nwkit`,
   `kfuku52/kfl1ou`, `kfuku52/kftools`, `kfuku52/rkftools`, `kfuku52/RADTE`).
-  Standard builds resolve the latest `master` commit for every one of these
-  repositories. Explicit `*_REPO_SHA` variables remain available as overrides.
+  Standard builds use the validated revisions in `source_pins.env` for every
+  one of these repositories. Explicit `*_REPO_SHA` variables remain available
+  as overrides.
 
 So this Dockerfile is designed as:
 1. controlled and auditable base build,
@@ -47,21 +48,21 @@ IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.s
 ```
 
 Default hardening behavior:
-- every `kfuku52` source resolves and installs the latest GitHub `master` commit for each standard build
-- build wrappers pass the resolved commits into Docker so upstream changes invalidate the corresponding build cache
+- every `kfuku52` source installs the validated commit recorded in `source_pins.env`
+- build wrappers pass those commits into Docker so pin updates invalidate the corresponding build cache
 - `/opt/pg/logs/source_revisions.tsv` records the effective source revision in both Docker and native Apptainer images
 - `BUSCO` and `paml` remain pinned by default
 - `BioPP/testnh` and `CAFE5` release tarballs are verified with SHA-256 before extraction
 - GitHub/GitLab source fetches prefer release/archive downloads and fall back to `git` retry logic only when needed
 
 Override rules:
-- an explicitly supplied `*_REPO_SHA` takes precedence over dynamic `master` resolution
+- an explicitly supplied `*_REPO_SHA` takes precedence over the repository pin
 - source SHA overrides should be full 40-character commit SHAs
 - `BUSCO_MIRROR_REPO_URL` is optional and is only used as a secondary source if the primary `BUSCO_REPO_URL` fetch fails.
 - if you override a repo URL to a fork, also supply a commit SHA that exists in that fork
 
-No pin update is required when a `kfuku52` repository changes because standard
-builds resolve its current GitHub `master` commit automatically.
+Update `source_pins.env` deliberately after a new upstream revision passes the
+full multi-architecture container validation suite.
 
 `buildx.sh` runs a preflight check to ensure the conda env set used in
 `workflow/core/gg_*_core.sh` is covered by env installs in `container/Dockerfile`.
@@ -207,9 +208,8 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
   and installed as:
   - `/usr/local/bin/Notung.jar`
 - `BUSCO` and `paml` are fetched from pinned upstream source snapshots by default.
-- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kftools`, `rkftools`, and `RADTE`
-  install from the latest GitHub `master` commit by default; `kfl1ou` follows
-  its GitHub `main` branch.
+- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and
+  `RADTE` install from the validated revisions in `source_pins.env` by default.
 - `BioPP/testnh` and `CAFE5` tarballs are checksum-verified during build.
 - The default source is the pinned stable ZIP:
   - `NOTUNG_DOWNLOAD_PAGE=https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip`

@@ -14,25 +14,36 @@ KFUKU52_SHA_VARS = (
 )
 
 
-def test_kfuku52_sources_have_no_fixed_default_sha():
+def test_kfuku52_sources_share_validated_default_pins():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
     apptainer = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(
         encoding="utf-8"
     )
 
-    assert not (REPO_ROOT / "container" / "source_pins.env").exists()
-    assert "source_pins.env" not in dockerfile
-    assert "GG_PIN_" not in dockerfile
-    assert "GG_PIN_" not in buildx
-    assert "GG_PIN_" not in apptainer
-    for sha_var in KFUKU52_SHA_VARS:
+    pins_path = REPO_ROOT / "container" / "source_pins.env"
+    pins = pins_path.read_text(encoding="utf-8")
+    assert "COPY container/source_pins.env /opt/pg/source_pins.env" in dockerfile
+    assert 'source "${script_dir}/source_pins.env"' in buildx
+    assert 'source "${script_dir}/source_pins.env"' in apptainer
+    pin_names = (
+        "GG_PIN_AMALGKIT_REPO_SHA",
+        "GG_PIN_CDSKIT_REPO_SHA",
+        "GG_PIN_CSUBST_REPO_SHA",
+        "GG_PIN_NWKIT_REPO_SHA",
+        "GG_PIN_KFL1OU_REPO_SHA",
+        "GG_PIN_KFTOOLS_REPO_SHA",
+        "GG_PIN_RKFTOOLS_REPO_SHA",
+        "GG_PIN_RADTE_REPO_SHA",
+    )
+    for sha_var, pin_name in zip(KFUKU52_SHA_VARS, pin_names, strict=True):
         assert f'ARG {sha_var}=""' in dockerfile
-        assert f"{sha_var}=${{{sha_var}:-}}" in buildx
-        assert f"{sha_var}=${{{sha_var}:-}}" in apptainer
+        assert re.search(rf"^{pin_name}=[0-9a-f]{{40}}$", pins, re.MULTILINE)
+        assert f"{sha_var}=${{{sha_var}:-${{{pin_name}}}}}" in buildx
+        assert f"{sha_var}=${{{sha_var}:-${{{pin_name}}}}}" in apptainer
 
 
-def test_all_container_build_paths_resolve_current_upstream_revisions():
+def test_all_container_build_paths_resolve_explicit_upstream_revisions():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
     apptainer = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(
@@ -87,6 +98,8 @@ def test_container_build_paths_share_python_compatibility_constraints():
         "defusedxml",
     ):
         assert f"{package}==" in requirements
+    assert "pypdf>=6.15.0" in requirements
+    assert "setuptools<83" in requirements
 
 
 def test_native_apptainer_build_records_source_revisions():

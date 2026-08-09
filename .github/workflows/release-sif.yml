@@ -82,21 +82,15 @@ jobs:
           gg_version="$(sed -n '1p' VERSION | tr -d '\r')"
           sif_name="${repo_name}_${release_tag}_amd64.sif"
 
-          resolve_source_sha() {
-            local repo="$1"
-            local branch="${2:-master}"
-            bash container/scripts/resolve_git_branch_sha.sh \
-              "https://github.com/kfuku52/${repo}.git" "${branch}"
-          }
-
-          amalgkit_repo_sha="$(resolve_source_sha amalgkit)"
-          cdskit_repo_sha="$(resolve_source_sha cdskit)"
-          csubst_repo_sha="$(resolve_source_sha csubst)"
-          nwkit_repo_sha="$(resolve_source_sha nwkit)"
-          kfl1ou_repo_sha="$(resolve_source_sha kfl1ou main)"
-          kftools_repo_sha="$(resolve_source_sha kftools)"
-          rkftools_repo_sha="$(resolve_source_sha rkftools)"
-          radte_repo_sha="$(resolve_source_sha RADTE)"
+          source container/source_pins.env
+          amalgkit_repo_sha="${GG_PIN_AMALGKIT_REPO_SHA}"
+          cdskit_repo_sha="${GG_PIN_CDSKIT_REPO_SHA}"
+          csubst_repo_sha="${GG_PIN_CSUBST_REPO_SHA}"
+          nwkit_repo_sha="${GG_PIN_NWKIT_REPO_SHA}"
+          kfl1ou_repo_sha="${GG_PIN_KFL1OU_REPO_SHA}"
+          kftools_repo_sha="${GG_PIN_KFTOOLS_REPO_SHA}"
+          rkftools_repo_sha="${GG_PIN_RKFTOOLS_REPO_SHA}"
+          radte_repo_sha="${GG_PIN_RADTE_REPO_SHA}"
           source_revision_hash="$(
             printf '%s\n' \
               "${amalgkit_repo_sha}" \

@@ -7,6 +7,8 @@ set -euo pipefail
 #   KFU52_AMALGKIT_REPO_REF=kfdevel MODE=push ./container/buildx.sh
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=source_pins.env
+source "${script_dir}/source_pins.env"
 
 IMAGE=${IMAGE:-ghcr.io/example/genegalleon}
 TAG=${TAG:-dev}
@@ -18,11 +20,11 @@ KFU52_REPO_REF=${KFU52_REPO_REF:-master}
 KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}
 KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
 KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF-master}
-KFU52_AMALGKIT_REPO_SHA=${KFU52_AMALGKIT_REPO_SHA:-}
-KFU52_CDSKIT_REPO_SHA=${KFU52_CDSKIT_REPO_SHA:-}
+KFU52_AMALGKIT_REPO_SHA=${KFU52_AMALGKIT_REPO_SHA:-${GG_PIN_AMALGKIT_REPO_SHA}}
+KFU52_CDSKIT_REPO_SHA=${KFU52_CDSKIT_REPO_SHA:-${GG_PIN_CDSKIT_REPO_SHA}}
 KFU52_CSUBST_REPO_REF=${KFU52_CSUBST_REPO_REF:-master}
-KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-}
-KFU52_NWKIT_REPO_SHA=${KFU52_NWKIT_REPO_SHA:-}
+KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-${GG_PIN_CSUBST_REPO_SHA}}
+KFU52_NWKIT_REPO_SHA=${KFU52_NWKIT_REPO_SHA:-${GG_PIN_NWKIT_REPO_SHA}}
 BUSCO_REPO_URL=${BUSCO_REPO_URL:-https://gitlab.com/ezlab/busco.git}
 BUSCO_MIRROR_REPO_URL=${BUSCO_MIRROR_REPO_URL:-}
 BUSCO_REPO_REF=${BUSCO_REPO_REF:-6.0.0}
@@ -32,16 +34,16 @@ PAML_REPO_REF=${PAML_REPO_REF:-master}
 PAML_REPO_SHA=${PAML_REPO_SHA:-8daeead6b55523f375d9ac56dcfac38373ef8a2e}
 KFL1OU_REPO_URL=${KFL1OU_REPO_URL:-https://github.com/kfuku52/kfl1ou.git}
 KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-main}
-KFL1OU_REPO_SHA=${KFL1OU_REPO_SHA:-}
+KFL1OU_REPO_SHA=${KFL1OU_REPO_SHA:-${GG_PIN_KFL1OU_REPO_SHA}}
 KFTOOLS_REPO_URL=${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}
 RKFTOOLS_REPO_URL=${RKFTOOLS_REPO_URL:-https://github.com/kfuku52/rkftools.git}
 RADTE_REPO_URL=${RADTE_REPO_URL:-https://github.com/kfuku52/RADTE.git}
 KFTOOLS_REPO_REF=${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}
 RKFTOOLS_REPO_REF=${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}
 RADTE_REPO_REF=${RADTE_REPO_REF:-${KFU52_REPO_REF}}
-KFTOOLS_REPO_SHA=${KFTOOLS_REPO_SHA:-}
-RKFTOOLS_REPO_SHA=${RKFTOOLS_REPO_SHA:-}
-RADTE_REPO_SHA=${RADTE_REPO_SHA:-}
+KFTOOLS_REPO_SHA=${KFTOOLS_REPO_SHA:-${GG_PIN_KFTOOLS_REPO_SHA}}
+RKFTOOLS_REPO_SHA=${RKFTOOLS_REPO_SHA:-${GG_PIN_RKFTOOLS_REPO_SHA}}
+RADTE_REPO_SHA=${RADTE_REPO_SHA:-${GG_PIN_RADTE_REPO_SHA}}
 TESTNH_TARBALL_SHA256=${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}
 CAFE5_TARBALL_SHA256=${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}
 CACHE_DIR=${CACHE_DIR:-.buildx-cache}
@@ -132,7 +134,7 @@ sha256_file() {
 }
 
 context_digest="$({
-  printf '%s\n' .dockerignore container/Dockerfile container/pip-compatibility.requirements.txt
+  printf '%s\n' .dockerignore container/Dockerfile container/pip-compatibility.requirements.txt container/source_pins.env
   find container/env container/spec container/testdata container/scripts -type f -print
   find workflow/support/treevis -type f -print
 } | LC_ALL=C sort | while IFS= read -r path; do

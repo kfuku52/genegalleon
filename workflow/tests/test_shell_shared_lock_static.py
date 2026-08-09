@@ -48,7 +48,10 @@ def test_shared_semaphore_helpers_reuse_shared_lock_primitives():
     assert "trap 'shared_semaphore_signal_handler INT' INT" in lock_text
     assert "trap 'shared_semaphore_signal_handler TERM' TERM" in lock_text
     assert 'gg_shared_lock_stop_heartbeat "${heartbeat_pid}"' in lock_text
-    assert 'gg_shared_semaphore_release "${slot_lock}"' in lock_text
+    assert 'gg_shared_semaphore_release "${acquired_slot_lock}"' in lock_text
+    assert lock_text.index("trap 'shared_semaphore_signal_handler TERM' TERM") < lock_text.index(
+        'if ! gg_shared_semaphore_acquire "${semaphore_dir}"'
+    )
 
 
 def test_gene_evolution_core_uses_shared_lock_helpers_for_db_builds_and_shared_copies():

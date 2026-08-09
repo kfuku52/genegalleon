@@ -184,6 +184,7 @@ ARG KFTOOLS_REPO_SHA=""
 ARG RKFTOOLS_REPO_SHA=""
 ARG RADTE_REPO_SHA=""
 
+COPY container/source_pins.env /opt/pg/source_pins.env
 COPY container/scripts/ensure_kfuku52_tools_latest.sh /opt/pg/scripts/ensure_kfuku52_tools_latest.sh
 COPY container/scripts/install_helvetica_compat_font.sh /opt/pg/scripts/install_helvetica_compat_font.sh
 
@@ -192,20 +193,21 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  --mount=type=cache,target=/root/.cache/pip \
  chmod +x /opt/pg/scripts/*.sh \
  && export USE_DEFAULTS_CHANNEL=0 STRICT_CHANNEL_PRIORITY=1 MAMBA_NO_LOW_SPEED_LIMIT=1 \
+ && source /opt/pg/source_pins.env \
  && mkdir -p /opt/pg/logs \
  && kftools_repo_ref="${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
  && rkftools_repo_ref="${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
  && radte_repo_ref="${RADTE_REPO_REF:-${KFU52_REPO_REF}}" \
  && kfl1ou_repo_ref="${KFL1OU_REPO_REF:-main}" \
- && amalgkit_repo_sha="${KFU52_AMALGKIT_REPO_SHA:-}" \
- && cdskit_repo_sha="${KFU52_CDSKIT_REPO_SHA:-}" \
+ && amalgkit_repo_sha="${KFU52_AMALGKIT_REPO_SHA:-${GG_PIN_AMALGKIT_REPO_SHA}}" \
+ && cdskit_repo_sha="${KFU52_CDSKIT_REPO_SHA:-${GG_PIN_CDSKIT_REPO_SHA}}" \
  && csubst_repo_ref="${KFU52_CSUBST_REPO_REF:-master}" \
- && csubst_repo_sha="${KFU52_CSUBST_REPO_SHA:-}" \
- && nwkit_repo_sha="${KFU52_NWKIT_REPO_SHA:-}" \
- && kfl1ou_repo_sha="${KFL1OU_REPO_SHA:-}" \
- && kftools_repo_sha="${KFTOOLS_REPO_SHA:-}" \
- && rkftools_repo_sha="${RKFTOOLS_REPO_SHA:-}" \
- && radte_repo_sha="${RADTE_REPO_SHA:-}" \
+ && csubst_repo_sha="${KFU52_CSUBST_REPO_SHA:-${GG_PIN_CSUBST_REPO_SHA}}" \
+ && nwkit_repo_sha="${KFU52_NWKIT_REPO_SHA:-${GG_PIN_NWKIT_REPO_SHA}}" \
+ && kfl1ou_repo_sha="${KFL1OU_REPO_SHA:-${GG_PIN_KFL1OU_REPO_SHA}}" \
+ && kftools_repo_sha="${KFTOOLS_REPO_SHA:-${GG_PIN_KFTOOLS_REPO_SHA}}" \
+ && rkftools_repo_sha="${RKFTOOLS_REPO_SHA:-${GG_PIN_RKFTOOLS_REPO_SHA}}" \
+ && radte_repo_sha="${RADTE_REPO_SHA:-${GG_PIN_RADTE_REPO_SHA}}" \
  && amalgkit_source_ref="${amalgkit_repo_sha:-${KFU52_AMALGKIT_REPO_REF}}" \
  && cdskit_source_ref="${cdskit_repo_sha:-${KFU52_REPO_REF}}" \
  && csubst_source_ref="${csubst_repo_sha:-${csubst_repo_ref}}" \

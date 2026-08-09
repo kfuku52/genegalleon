@@ -201,3 +201,53 @@ def test_shared_semaphore_releases_slot_immediately_on_term(tmp_path):
         if completed.poll() is None:
             os.killpg(completed.pid, signal.SIGKILL)
             completed.wait(timeout=5)
+
+
+def test_shared_semaphore_releases_slot_when_term_arrives_during_acquire_return(
+    tmp_path,
+):
+    semaphore_dir = tmp_path / "ncbi_semaphore_acquire_term"
+    acquired_marker = tmp_path / "acquired.marker"
+    script = textwrap.dedent(
+        f"""
+        set -euo pipefail
+        source "{GG_UTIL}"
+        eval "$(declare -f gg_shared_semaphore_acquire | sed '1s/gg_shared_semaphore_acquire/gg_shared_semaphore_acquire_original/')"
+        gg_shared_semaphore_acquire() {{
+          gg_shared_semaphore_acquire_original "$@"
+          : > "{acquired_marker}"
+          sleep 30
+        }}
+        gg_run_with_shared_semaphore "{semaphore_dir}" 1 "NCBI acquire test" true
+        """
+    )
+    completed = subprocess.Popen(
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        env={**os.environ, "GG_LOCK_STALE_SECONDS": "900"},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    lock_path = semaphore_dir / "slot.1.lock"
+    try:
+        for _ in range(50):
+            if acquired_marker.exists():
+                break
+            time.sleep(0.1)
+        assert acquired_marker.exists()
+        assert lock_path.exists()
+
+        os.killpg(completed.pid, signal.SIGTERM)
+        completed.wait(timeout=5)
+
+        for _ in range(50):
+            if not lock_path.exists():
+                break
+            time.sleep(0.1)
+        assert not lock_path.exists()
+    finally:
+        if completed.poll() is None:
+            os.killpg(completed.pid, signal.SIGKILL)
+            completed.wait(timeout=5)

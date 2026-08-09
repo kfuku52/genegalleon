@@ -91,9 +91,9 @@ commit SHAs (`amalgkit`, `cdskit`, `csubst`, `nwkit`, `BUSCO`, `paml`,
 `kfl1ou`, `kftools`, `rkftools`, `RADTE`) and verifies SHA-256 checksums for the
 downloaded `BioPP/testnh` and `CAFE5` tarballs.
 
-If you need to follow a floating ref again, clear the matching `*_REPO_SHA` and
-set the corresponding `*_REPO_REF`. When overriding a repo URL to a fork, also
-update or clear the matching `*_REPO_SHA`.
+To test a different revision, set the matching `*_REPO_SHA` to a full commit
+SHA. When overriding a repository URL to a fork, also supply a commit SHA that
+exists in that fork.
 
 Single-platform local load example:
 

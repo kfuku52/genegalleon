@@ -493,6 +493,7 @@ gg_run_with_shared_semaphore() {
   local saved_hup_trap=""
   local saved_int_trap=""
   local saved_term_trap=""
+  local initial_slot_lock="${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}"
 
   max_slots=$(gg_shared_semaphore_max_slots "${requested_slots}")
   if (( max_slots < 1 )); then
@@ -502,18 +503,14 @@ gg_run_with_shared_semaphore() {
     return $?
   fi
 
-  if ! gg_shared_semaphore_acquire "${semaphore_dir}" "${max_slots}" "${description}"; then
-    return 1
-  fi
-  slot_lock="${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}"
-  if [[ -z "${slot_lock}" ]]; then
-    echo "Failed to resolve shared semaphore slot after acquire: ${description}" >&2
-    return 1
-  fi
-
   cleanup_shared_semaphore() {
+    local acquired_slot_lock="${slot_lock}"
+    if [[ -z "${acquired_slot_lock}" \
+      && "${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}" != "${initial_slot_lock}" ]]; then
+      acquired_slot_lock="${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}"
+    fi
     gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
-    gg_shared_semaphore_release "${slot_lock}"
+    gg_shared_semaphore_release "${acquired_slot_lock}"
   }
 
   restore_shared_semaphore_traps() {
@@ -550,6 +547,18 @@ gg_run_with_shared_semaphore() {
   trap 'shared_semaphore_signal_handler HUP' HUP
   trap 'shared_semaphore_signal_handler INT' INT
   trap 'shared_semaphore_signal_handler TERM' TERM
+
+  if ! gg_shared_semaphore_acquire "${semaphore_dir}" "${max_slots}" "${description}"; then
+    restore_shared_semaphore_traps
+    return 1
+  fi
+  slot_lock="${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}"
+  if [[ -z "${slot_lock}" ]]; then
+    echo "Failed to resolve shared semaphore slot after acquire: ${description}" >&2
+    cleanup_shared_semaphore
+    restore_shared_semaphore_traps
+    return 1
+  fi
 
   gg_shared_lock_start_heartbeat "${slot_lock}"
   heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
