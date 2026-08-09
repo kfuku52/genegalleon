@@ -18,7 +18,7 @@ run_smoke_test() {
   local -a mpi_env_args mpiexec_args
   workdir=$(mktemp -d)
   log_file="${workdir}/generax_smoke.log"
-  mpi_env_args=(env OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)
+  mpi_env_args=(env OMPI_MCA_ras=^gridengine OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)
   mpiexec_args=(mpiexec --allow-run-as-root -oversubscribe -np 1)
 
   cp /opt/pg/testdata/generax_smoke/* "${workdir}/"

@@ -2949,9 +2949,9 @@ if [[ ! -s "${file_og_generax_nhx}" && ${run_generax} -eq 1 ]]; then
     "subst_model = ${generax_model}" \
     > generax_families.txt
 
-  # GeneRax runs within one scheduler task; keep OpenMPI from probing ssh/rsh inside containers.
+  # GeneRax runs within one scheduler task; ignore host Grid Engine discovery and use local launch inside containers.
   mpiexec_args=(mpiexec -oversubscribe -np "${GG_TASK_CPUS}")
-  mpi_env_args=(env OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)
+  mpi_env_args=(env OMPI_MCA_ras=^gridengine OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)
   if [[ "$(id -u)" -eq 0 ]]; then
     mpiexec_args+=(--allow-run-as-root)
   fi
