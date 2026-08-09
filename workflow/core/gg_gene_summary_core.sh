@@ -474,8 +474,25 @@ run_presence_absence_summary_for_source() {
 }
 
 run_gene_family_database_for_source() {
+  local database_needs_update=0
+  local database_provenance_args=(
+    --manifest "${summary_output_dir}/artifact_provenance/${gene_family_source}.gene_family_database.json"
+    --step "gene_family_database"
+    --family-id "${gene_family_source}"
+    --logical-root "${gg_workspace_output_dir}/.gg_global_artifacts"
+    --workspace-root "${gg_workspace_dir}"
+    --input-gene-family-store "gene_family_outputs=${dir_gene_family}"
+    --output "database=${file_gene_family_db}"
+    --parameter "row_threshold=8000"
+    --parameter "cutoff_stat=OCNany2spe,0.8"
+  )
+  gg_artifact_prepare_stage database_needs_update run_gene_family_database_build "${database_provenance_args[@]}" || return $?
   if [[ ${run_gene_family_database_build} -ne 1 ]]; then
     echo "Skipping database prep because run_gene_family_database_build=0."
+    return 0
+  fi
+  if [[ ${database_needs_update} -ne 1 ]]; then
+    echo "Skipping database prep because its artifact provenance is current or stale reuse was requested."
     return 0
   fi
   local provenance_report="${summary_output_dir}/${gene_family_source}_artifact_provenance_audit.tsv"
@@ -525,11 +542,37 @@ run_gene_family_database_for_source() {
     --row_threshold 8000 \
     --cutoff_stat "OCNany2spe,0.8" \
     --ncpu "${GG_TASK_CPUS:-1}"
+  gg_artifact_record "${database_provenance_args[@]}"
 }
 
 run_csubst_scan_aa_change_summary_for_source() {
+  local aa_summary_tsv="${summary_output_dir}/${gene_family_source}_csubst_aa_change_min_support_2_summary.tsv"
+  local aa_summary_prefix="${summary_output_dir}/${gene_family_source}_csubst_aa_change"
+  local aa_summary_needs_update=0
+  local aa_summary_provenance_args=(
+    --manifest "${summary_output_dir}/artifact_provenance/${gene_family_source}.csubst_aa_change_summary.json"
+    --step "csubst_aa_change_summary"
+    --family-id "${gene_family_source}"
+    --logical-root "${gg_workspace_output_dir}/.gg_global_artifacts"
+    --workspace-root "${gg_workspace_dir}"
+    --input "database=${file_gene_family_db}"
+    --output "summary_tsv=${aa_summary_tsv}"
+    --output "support_plot=${aa_summary_prefix}_min_support_2_support_significance_rate.pdf"
+    --output "spectrum_plot=${aa_summary_prefix}_min_support_2_substitution_spectrum.pdf"
+    --output "pvalue_plot=${aa_summary_prefix}_min_support_2_pvalue_qvalue_distributions.pdf"
+    --optional-output "sensitivity_manifest=${aa_summary_prefix}_min_support_manifest.tsv"
+    --parameter "primary_min_support=2"
+  )
+  if [[ "${gene_family_source}" == "orthogroup" && -n "${file_orthogroup_genecount_annotated}" ]]; then
+    aa_summary_provenance_args+=(--input "orthogroup_annotations=${file_orthogroup_genecount_annotated}")
+  fi
+  gg_artifact_prepare_stage aa_summary_needs_update run_csubst_scan_aa_change_summary "${aa_summary_provenance_args[@]}" || return $?
   if [[ ${run_csubst_scan_aa_change_summary} -ne 1 ]]; then
     echo "Skipping CSUBST scan summary because run_csubst_scan_aa_change_summary=0."
+    return 0
+  fi
+  if [[ ${aa_summary_needs_update} -ne 1 ]]; then
+    echo "Skipping CSUBST scan summary because its artifact provenance is current or stale reuse was requested."
     return 0
   fi
   if [[ ! -s "${file_gene_family_db}" ]]; then
@@ -540,8 +583,8 @@ run_csubst_scan_aa_change_summary_for_source() {
   echo "Generating CSUBST scan AA-change summary for gene_family_source=${gene_family_source}: ${file_gene_family_db}"
   local summary_args=(
     --dbpath "${file_gene_family_db}"
-    --out_prefix "${summary_output_dir}/${gene_family_source}_csubst_aa_change"
-    --out_tsv "${summary_output_dir}/${gene_family_source}_csubst_aa_change_min_support_2_summary.tsv"
+    --out_prefix "${aa_summary_prefix}"
+    --out_tsv "${aa_summary_tsv}"
   )
   if [[ "${gene_family_source}" == "orthogroup" ]]; then
     if [[ -n "${file_orthogroup_genecount_annotated}" ]]; then
@@ -552,6 +595,7 @@ run_csubst_scan_aa_change_summary_for_source() {
     fi
   fi
   python "${gg_support_dir}/plot_csubst_aa_change_summary.py" "${summary_args[@]}"
+  gg_artifact_record "${aa_summary_provenance_args[@]}"
 }
 
 run_csubst_scan_candidate_sites_for_source() {
@@ -605,10 +649,49 @@ run_hgt_summary_for_source() {
 }
 
 run_csubst_site_convergence_summary_for_source() {
+  local resolved_trait_file="${csubst_site_trait_file}"
+  local resolved_orthofinder_dir="${csubst_site_orthofinder_dir}"
+  local csubst_site_needs_update=0
+  if [[ "${resolved_trait_file}" == "auto" ]]; then
+    resolved_trait_file="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
+  fi
+  if [[ "${resolved_orthofinder_dir}" == "auto" ]]; then
+    resolved_orthofinder_dir="${gg_workspace_output_dir}/orthofinder"
+  fi
+  local csubst_site_provenance_args=(
+    --manifest "${summary_output_dir}/artifact_provenance/${gene_family_source}.csubst_site.json"
+    --step "csubst_site"
+    --family-id "${gene_family_source}"
+    --logical-root "${gg_workspace_output_dir}/.gg_global_artifacts"
+    --workspace-root "${gg_workspace_dir}"
+    --input-gene-family-store "gene_family_outputs=${dir_gene_family}"
+    --input "trait=${resolved_trait_file}"
+    --input "orthofinder=${resolved_orthofinder_dir}"
+    --output "result_directory=${csubst_site_output_dir}"
+    --parameter "arity_range=${csubst_site_arity_range}"
+    --parameter "trait=${csubst_site_trait}"
+    --parameter "skip_lower_order=${csubst_site_skip_lower_order}"
+    --parameter "min_fg_stem_ratio=${csubst_site_min_fg_stem_ratio}"
+    --parameter "min_OCNany2spe=${csubst_site_min_ocn_any2spe}"
+    --parameter "min_omegaCany2spe=${csubst_site_min_omega_c_any2spe}"
+    --parameter "min_OCNCoD=${csubst_site_min_ocn_cod}"
+    --parameter "max_per_K=${csubst_site_max_candidates_per_arity}"
+    --parameter "nonsyn_recode=${csubst_site_nonsyn_recode}"
+  )
+  gg_artifact_prepare_stage csubst_site_needs_update run_csubst_site_convergence_summary "${csubst_site_provenance_args[@]}" || return $?
   if [[ ${run_csubst_site_convergence_summary} -ne 1 ]]; then
     echo "Skipping convergent-site summary because run_csubst_site_convergence_summary=0."
     return 0
   fi
+  if [[ ${csubst_site_needs_update} -ne 1 ]]; then
+    echo "Skipping convergent-site summary because its artifact provenance is current or stale reuse was requested."
+    return 0
+  fi
+  if [[ -d "${csubst_site_output_dir}" ]]; then
+    echo "Removing stale convergent-site output directory before rebuild: ${csubst_site_output_dir}"
+    rm -rf -- "${csubst_site_output_dir}"
+  fi
+  mkdir -p "${csubst_site_output_dir}"
   echo "Running convergent-site summary for gene_family_source=${gene_family_source}."
   dir_orthogroup="${dir_gene_family}" \
   dir_orthofinder="${csubst_site_orthofinder_dir}" \
@@ -622,8 +705,9 @@ run_csubst_site_convergence_summary_for_source() {
   min_omegaCany2spe="${csubst_site_min_omega_c_any2spe}" \
   min_OCNCoD="${csubst_site_min_ocn_cod}" \
   max_per_K="${csubst_site_max_candidates_per_arity}" \
-  csubst_nonsyn_recode="${csubst_site_nonsyn_recode}" \
+    csubst_nonsyn_recode="${csubst_site_nonsyn_recode}" \
     bash "${gg_core_dir}/gg_convergent_sites_core.sh"
+  gg_artifact_record "${csubst_site_provenance_args[@]}"
 }
 
 echo "gene_family_source=${gene_family_source}"

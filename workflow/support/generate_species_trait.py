@@ -1560,6 +1560,7 @@ def fetch_gbif_distribution_table(
     effective_config = dict(config)
     effective_config["uri"] = api_base
     cache_path = gbif_cache_path(downloads_dir=downloads_dir, species=species, config=effective_config)
+    # gg-cache-guard: audited - gbif_cache_path hashes the species set and every result-affecting GBIF parameter.
     if use_cache and cache_path.exists() and not dry_run:
         _log("[{}] using cached GBIF distribution table: {}".format(database, cache_path))
         return read_table(cache_path, delimiter="\t")

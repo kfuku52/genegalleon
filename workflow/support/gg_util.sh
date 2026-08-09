@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 # Compatibility entry point for the modular GeneGalleon shell helper library.
+artifact_stale_policy="${artifact_stale_policy:-stop}"
 gg_util_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd 2>/dev/null || true)"
 GG_UTIL_SUPPORT_DIR="${gg_util_dir}"
 if [[ -n "${gg_util_dir}" && -s "${gg_util_dir}/gg_site_runtime.sh" ]]; then

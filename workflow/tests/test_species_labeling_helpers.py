@@ -38,6 +38,29 @@ def test_synteny_neighbors_find_species_file_uses_exact_species_label(tmp_path):
     assert mod.find_species_file(str(tmp_path), "Species_a", mod.FASTA_EXTENSIONS) == str(target)
 
 
+def test_synteny_species_gene_cache_tracks_input_and_output_content(tmp_path):
+    mod = load_module("synteny_neighbors.py", "synteny_neighbors_cache_module")
+    cds = tmp_path / "Species_a.fa"
+    gff = tmp_path / "Species_a.gff"
+    output = tmp_path / "Species_a.gff_info.tsv"
+    manifest = tmp_path / "Species_a.gff_info.tsv.provenance.json"
+    cds.write_text(">a\nATG\n", encoding="utf-8")
+    gff.write_text("chr1\t.\tCDS\t1\t3\t.\t+\t.\tID=a\n", encoding="utf-8")
+    output.write_text("gene_id\nA\n", encoding="utf-8")
+    contract = mod.species_gene_cache_contract("Species_a", str(cds), str(gff))
+
+    assert mod.species_gene_cache_is_current(str(output), str(manifest), contract)
+    assert manifest.is_file()
+    assert mod.species_gene_cache_is_current(str(output), str(manifest), contract)
+
+    output.write_text("gene_id\nB\n", encoding="utf-8")
+    assert not mod.species_gene_cache_is_current(str(output), str(manifest), contract)
+    output.write_text("gene_id\nA\n", encoding="utf-8")
+    gff.write_text("chr1\t.\tCDS\t2\t4\t.\t+\t.\tID=a\n", encoding="utf-8")
+    changed_contract = mod.species_gene_cache_contract("Species_a", str(cds), str(gff))
+    assert not mod.species_gene_cache_is_current(str(output), str(manifest), changed_contract)
+
+
 def test_get_promoter_fasta_extracts_qualified_species_label_from_gene_id():
     mod = load_module("get_promoter_fasta.py", "get_promoter_fasta_module")
 

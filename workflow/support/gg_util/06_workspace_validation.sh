@@ -253,38 +253,6 @@ check_species_protein() {
   check_species_protein_dir "$(workspace_input_root "${gg_workspace_dir}")/species_protein"
 }
 
-is_output_older_than_inputs() {
-  local input_file_variable_regex=$1
-  local output_file=$2
-  local return_flag=0
-  local i=0
-  if [[ ! -s "${output_file}" ]]; then
-    echo "Output file not found. Will be generated: ${output_file}"
-    return_flag=1
-	else
-	  echo "Checking whether there are any input files that are newer than the output file: ${output_file}"
-	  local infiles=()
-	  local input_var_name
-	  while IFS= read -r input_var_name; do
-	    infiles+=( "${input_var_name}" )
-	  done < <(compgen -A variable | grep -E -- "${input_file_variable_regex}" || true)
-	  for file_var in "${infiles[@]}"; do
-	    local file_path="${!file_var}"
-      if [[ -e "${file_path}" ]]; then
-        i=$((i+1))
-        if [[ "${file_path}" -nt "${output_file}" ]]; then
-          echo "Output file will be renewed. Detected a new input file: ${file_path}"
-          return_flag=1
-        fi
-      fi
-    done
-  fi
-  if [[ ${return_flag} -eq 0 ]]; then
-    echo "All examined input files (${i}) are older than the output file: ${output_file}"
-  fi
-  return ${return_flag}
-}
-
 gg_artifact_provenance_script_path() {
   local support_dir="${gg_support_dir:-${GG_UTIL_SUPPORT_DIR:-}}"
   local script_path="${support_dir%/}/artifact_provenance.py"
@@ -297,8 +265,107 @@ gg_artifact_provenance_script_path() {
 
 gg_artifact_needs_run() {
   local script_path
+  case "${artifact_stale_policy:-stop}" in
+    stop|reuse|rebuild)
+      ;;
+    *)
+      echo "Invalid artifact_stale_policy=${artifact_stale_policy:-}; expected stop, reuse, or rebuild." >&2
+      return 2
+      ;;
+  esac
   script_path=$(gg_artifact_provenance_script_path) || return 2
-  python "${script_path}" needs-run "$@"
+  python "${script_path}" needs-run \
+    --stale-policy "${artifact_stale_policy:-stop}" \
+    "$@"
+}
+
+gg_artifact_contract_init() {
+  local destination_variable=$1
+  local step=$2
+  local family_id=$3
+  local manifest=$4
+  local logical_root=${5:-"${gg_workspace_output_dir}/.gg_global_artifacts"}
+  local workspace_root=${6:-"${gg_workspace_dir}"}
+  local -n destination_ref="${destination_variable}"
+  destination_ref=(
+    --manifest "${manifest}"
+    --step "${step}"
+    --family-id "${family_id}"
+    --logical-root "${logical_root}"
+    --workspace-root "${workspace_root}"
+  )
+}
+
+gg_artifact_add_input_if_present() {
+  local destination_variable=$1
+  local label=$2
+  local path=$3
+  local -n destination_ref="${destination_variable}"
+  if [[ -n "${path}" && -e "${path}" ]]; then
+    local previous=""
+    local argument=""
+    for argument in "${destination_ref[@]}"; do
+      if [[ "${previous}" == "--input" && "${argument%%=*}" == "${label}" ]]; then
+        return 0
+      fi
+      previous=${argument}
+    done
+    destination_ref+=(--input "${label}=${path}")
+  fi
+}
+
+gg_artifact_set_needs_update() {
+  local destination_variable=$1
+  shift
+  local status=0
+  if gg_artifact_needs_run "$@"; then
+    printf -v "${destination_variable}" '%s' 1
+    return 0
+  else
+    status=$?
+  fi
+  if [[ ${status} -eq 1 ]]; then
+    printf -v "${destination_variable}" '%s' 0
+    return 0
+  fi
+  return "${status}"
+}
+
+gg_artifact_prepare_stage() {
+  local needs_update_variable=$1
+  local run_variable=$2
+  shift 2
+  local run_value=${!run_variable:-0}
+  local previous=""
+  local value=""
+  local path=""
+  local relevant=${run_value}
+  local argument
+
+  for argument in "$@"; do
+    if [[ "${previous}" == "--manifest" ]]; then
+      [[ -s "${argument}" ]] && relevant=1
+    elif [[ "${previous}" == "--output" || "${previous}" == "--optional-output" ]]; then
+      value=${argument#*=}
+      path=${value}
+      [[ -e "${path}" ]] && relevant=1
+    elif [[ "${previous}" == "--output-logical-directory" ]]; then
+      value=${argument#*=}
+      path=${value}
+      [[ -e "${path}" || -e "${path}.zip" ]] && relevant=1
+    fi
+    previous=${argument}
+  done
+
+  printf -v "${needs_update_variable}" '%s' 0
+  if [[ ${relevant} -ne 1 ]]; then
+    return 0
+  fi
+  gg_artifact_set_needs_update "${needs_update_variable}" "$@" || return $?
+  if [[ ${!needs_update_variable} -eq 1 && "${artifact_stale_policy:-stop}" == "rebuild" && ${run_value} -ne 1 ]]; then
+    printf -v "${run_variable}" '%s' 1
+    echo "Enabling ${run_variable}=1 because artifact_stale_policy=rebuild and its existing artifact is stale."
+  fi
 }
 
 gg_artifact_record() {
@@ -309,8 +376,18 @@ gg_artifact_record() {
 
 gg_artifact_audit() {
   local script_path
+  case "${artifact_stale_policy:-stop}" in
+    stop|reuse|rebuild)
+      ;;
+    *)
+      echo "Invalid artifact_stale_policy=${artifact_stale_policy:-}; expected stop, reuse, or rebuild." >&2
+      return 2
+      ;;
+  esac
   script_path=$(gg_artifact_provenance_script_path) || return 2
-  python "${script_path}" audit "$@"
+  python "${script_path}" audit \
+    --stale-policy "${artifact_stale_policy:-stop}" \
+    "$@"
 }
 
 stop_if_species_not_found_in() {

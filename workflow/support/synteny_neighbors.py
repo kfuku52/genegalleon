@@ -3,6 +3,7 @@
 import argparse
 import gzip
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -160,6 +161,59 @@ def load_gene_info(path):
     return out
 
 
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def species_gene_cache_contract(species_name, species_cds_path, species_gff_path):
+    return {
+        "schema_version": 1,
+        "species": species_name,
+        "inputs": {
+            "cds_sha256": sha256_file(species_cds_path),
+            "gff_sha256": sha256_file(species_gff_path),
+        },
+        "parameters": {"feature": "CDS", "multiple_hits": "longest"},
+    }
+
+
+def species_gene_cache_is_current(out_path, manifest_path, contract):
+    if not os.path.isfile(out_path) or os.path.getsize(out_path) == 0:
+        return False
+    if not os.path.isfile(manifest_path):
+        adopted = dict(contract)
+        adopted["output_sha256"] = sha256_file(out_path)
+        adopted["provenance_state"] = "adopted_legacy_output_without_rebuild"
+        write_species_gene_cache_manifest(manifest_path, adopted)
+        return True
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            recorded = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    return (
+        {key: recorded.get(key) for key in contract} == contract
+        and recorded.get("output_sha256") == sha256_file(out_path)
+    )
+
+
+def write_species_gene_cache_manifest(manifest_path, payload):
+    ensure_parent_dir(manifest_path)
+    tmp_path = manifest_path + ".tmp." + str(os.getpid())
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(tmp_path, manifest_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 def ensure_species_gene_cache(
     species_name,
     species_cds_path,
@@ -171,7 +225,12 @@ def ensure_species_gene_cache(
 ):
     ensure_parent_dir(os.path.join(cache_dir, "dummy"))
     out_path = os.path.join(cache_dir, species_name + ".gff_info.tsv")
-    if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+    manifest_path = out_path + ".provenance.json"
+    species_gff_path = find_species_file(dir_sp_gff, species_name, GFF_EXTENSIONS)
+    if not species_gff_path:
+        raise FileNotFoundError("No unique GFF file matched species: {}".format(species_name))
+    contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path)
+    if species_gene_cache_is_current(out_path, manifest_path, contract):
         return out_path
     lock_key = "{}|{}".format(os.path.abspath(cache_dir), species_name)
     lock_name = hashlib.sha1(lock_key.encode("utf-8")).hexdigest() + ".lock"
@@ -181,7 +240,8 @@ def ensure_species_gene_cache(
         if HAS_FCNTL:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         try:
-            if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path)
+            if species_gene_cache_is_current(out_path, manifest_path, contract):
                 return out_path
             tmp_path = out_path + ".tmp." + str(os.getpid())
             cmd = [
@@ -206,6 +266,9 @@ def ensure_species_gene_cache(
             if (not os.path.exists(tmp_path)) or os.path.getsize(tmp_path) == 0:
                 raise RuntimeError("gff2genestat did not produce an output: {}".format(tmp_path))
             os.replace(tmp_path, out_path)
+            recorded = dict(contract)
+            recorded["output_sha256"] = sha256_file(out_path)
+            write_species_gene_cache_manifest(manifest_path, recorded)
             return out_path
         finally:
             if HAS_FCNTL:

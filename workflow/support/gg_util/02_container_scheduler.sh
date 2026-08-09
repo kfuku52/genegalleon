@@ -516,6 +516,7 @@ gg_normalize_scheduler_env() {
 			fi
 		fi
 	fi
+	[[ -n "${GG_ARRAY_TASK_COUNT:-}" ]] || GG_ARRAY_TASK_COUNT=$(gg_array_expected_task_count 1)
 	if [[ -z "${GG_ARRAY_TASK_ID:-}" ]]; then
 		if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
 			echo ${echo_header}'GG_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID}'
@@ -568,7 +569,7 @@ gg_normalize_scheduler_env() {
 	echo ${echo_header}"GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB}"
 	echo ${echo_header}"GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB}"
 	echo ""
-	export GG_SCHEDULER_KIND
+	export GG_SCHEDULER_KIND GG_ARRAY_TASK_COUNT
 }
 
 variable_SGEnizer() {
@@ -630,8 +631,7 @@ set_singularityenv() {
 	resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")
 	gg_add_container_bind_mount "${resolved_workspace_dir}:/workspace"
 	gg_add_container_bind_mount "${resolved_workflow_dir}:/script"
-	export SINGULARITYENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1}
-	export APPTAINERENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1}
+	export SINGULARITYENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1} APPTAINERENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1} SINGULARITYENV_GG_ARRAY_TASK_COUNT=${GG_ARRAY_TASK_COUNT:-} APPTAINERENV_GG_ARRAY_TASK_COUNT=${GG_ARRAY_TASK_COUNT:-} SINGULARITYENV_GG_SCHEDULER_KIND=${GG_SCHEDULER_KIND:-local} APPTAINERENV_GG_SCHEDULER_KIND=${GG_SCHEDULER_KIND:-local}
 	export SINGULARITYENV_GG_TASK_CPUS=${GG_TASK_CPUS:-1}
 	export APPTAINERENV_GG_TASK_CPUS=${GG_TASK_CPUS:-1}
 	export SINGULARITYENV_OMP_NUM_THREADS=${GG_TASK_CPUS:-1}

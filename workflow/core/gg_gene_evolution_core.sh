@@ -1376,6 +1376,7 @@ file_og_l1ou_fit_tree="${dir_output_active}/l1ou_fit_tree/${og_id}_l1ou.tree.tsv
 file_og_l1ou_fit_regime="${dir_output_active}/l1ou_fit_regime/${og_id}_l1ou.regime.tsv"
 file_og_l1ou_fit_leaf="${dir_output_active}/l1ou_fit_leaf/${og_id}_l1ou.leaf.tsv"
 file_og_l1ou_fit_plot="${dir_output_active}/l1ou_fit_plot/${og_id}_l1ou.pdf"
+file_og_l1ou_bootstrap="${dir_output_active}/l1ou_bootstrap/${og_id}_l1ou.bootstrap.tsv"
 # Protein convergence analysis
 file_og_iqtree_anc="${dir_output_active}/iqtree_anc/${og_id}_iqtree.anc.zip"
 file_og_csubst_b="${dir_output_active}/csubst_b/${og_id}_csubst_b.tsv"
@@ -1508,7 +1509,22 @@ else
 fi
 
 task="Query fasta generation"
-if [[ ! -s "${file_og_query_aa_fasta}" && ${run_extract_query_fasta} -eq 1 ]]; then
+query_fasta_needs_update=0
+query_fasta_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.query_fasta.json"
+  --step "query_fasta"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "query=${file_query_gene}"
+  --output "query_fasta=${file_og_query_aa_fasta}"
+  --parameter "genetic_code=${genetic_code}"
+)
+if [[ "$(head -c 1 "${file_query_gene}")" != ">" ]]; then
+  query_fasta_provenance_args+=(--input "species_cds=${dir_sp_cds}")
+fi
+gg_artifact_prepare_stage query_fasta_needs_update run_extract_query_fasta "${query_fasta_provenance_args[@]}" || exit $?
+if [[ ${query_fasta_needs_update} -eq 1 && ${run_extract_query_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ "$(head -c 1 "${file_query_gene}")" == ">" ]]; then
     seqtype=$(seqkit stats --tabular "${file_query_gene}" | awk 'NR>1 {print $3}')
@@ -1609,12 +1625,31 @@ if [[ ! -s "${file_og_query_aa_fasta}" && ${run_extract_query_fasta} -eq 1 ]]; t
       rm -f -- "${og_id}.query.cds.2.fasta"
     fi
   fi
+  gg_artifact_record "${query_fasta_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="In-frame query BLAST (${query_blast_method})"
-if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && "${mode_gene_evolution}" == "query2family" ]]; then
+query_blast_needs_update=0
+query_blast_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.query_blast.json"
+  --step "query_blast"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "query_fasta=${file_og_query_aa_fasta}"
+  --input "species_cds=${dir_sp_cds}"
+  --output "query_blast=${file_og_query_blast}"
+  --parameter "method=${query_blast_method}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "evalue=${query_blast_evalue}"
+  --parameter "auto_evalue_cutoffs=${query_blast_auto_evalue_maxlen_cutoffs}"
+)
+if [[ "${mode_gene_evolution}" == "query2family" ]]; then
+  gg_artifact_prepare_stage query_blast_needs_update run_query_blast "${query_blast_provenance_args[@]}" || exit $?
+fi
+if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_gene_evolution}" == "query2family" ]]; then
   gg_step_start "${task}"
 
   if [[ ${query_blast_method} == "tblastn" ]]; then
@@ -1874,12 +1909,41 @@ if [[ ! -s "${file_og_query_blast}" && ${run_query_blast} -eq 1 && "${mode_gene_
     echo "No query BLAST hits were detected after in-frame filtering. Exiting."
     exit 1
   fi
+  gg_artifact_record "${query_blast_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Fasta generation"
-if [[ ! -s "${file_og_primary_fasta}" && ${run_extract_primary_fasta} -eq 1 ]]; then
+primary_fasta_needs_update=0
+primary_fasta_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.primary_fasta.json"
+  --step "primary_fasta"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --output "primary_fasta=${file_og_primary_fasta}"
+  --parameter "mode=${mode_gene_evolution}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "query_blast_coverage=${query_blast_coverage}"
+  --parameter "max_query_hits=${max_num_gene_blast_hit_retrieval}"
+)
+if [[ "${mode_gene_evolution}" == "orthogroup" ]]; then
+  primary_fasta_provenance_args+=(--input "orthogroups=${file_og}")
+else
+  primary_fasta_provenance_args+=(--input "query_blast=${file_og_query_blast}")
+fi
+if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
+  primary_fasta_provenance_args+=(--input "species_protein=${dir_sp_protein_input}")
+else
+  primary_fasta_provenance_args+=(--input "species_cds=${dir_sp_cds}")
+  if [[ -s "${file_species_genetic_code}" ]]; then
+    primary_fasta_provenance_args+=(--input "species_genetic_code=${file_species_genetic_code}")
+  fi
+fi
+gg_artifact_prepare_stage primary_fasta_needs_update run_extract_primary_fasta "${primary_fasta_provenance_args[@]}" || exit $?
+if [[ ${primary_fasta_needs_update} -eq 1 && ${run_extract_primary_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ "${mode_gene_evolution}" == "orthogroup" ]]; then
@@ -1995,6 +2059,7 @@ if [[ ! -s "${file_og_primary_fasta}" && ${run_extract_primary_fasta} -eq 1 ]]; 
       translate_orthogroup_cds_to_protein_fasta "${file_og_cds_fasta}" "${file_og_pep_fasta}" "${file_species_genetic_code_resolved}"
     fi
   fi
+  gg_artifact_record "${primary_fasta_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2003,7 +2068,21 @@ fi
 
 task="Protein RPS-BLAST"
 disable_if_no_input_file "run_rps_blast" "${file_og_primary_fasta}"
-if [[ ! -s "${file_og_rpsblast}" && ${run_rps_blast} -eq 1 ]]; then
+rpsblast_needs_update=0
+rpsblast_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.rpsblast.json"
+  --step "rpsblast"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "primary_fasta=${file_og_primary_fasta}"
+  --output "rpsblast=${file_og_rpsblast}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "evalue=0.01"
+)
+gg_artifact_prepare_stage rpsblast_needs_update run_rps_blast "${rpsblast_provenance_args[@]}" || exit $?
+if [[ ${rpsblast_needs_update} -eq 1 && ${run_rps_blast} -eq 1 ]]; then
   gg_step_start "${task}"
   if ! dir_rpsblastdb=$(ensure_pfam_le_db "${gg_workspace_dir}"); then
     echo "Failed to prepare Pfam_LE DB. Exiting."
@@ -2072,13 +2151,28 @@ if [[ ! -s "${file_og_rpsblast}" && ${run_rps_blast} -eq 1 ]]; then
   } > "${og_id}.rpsblast.tsv"
 
   cp_out "${og_id}.rpsblast.tsv" "${file_og_rpsblast}"
+  gg_artifact_record "${rpsblast_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Gene trait extraction from gff files"
 disable_if_no_input_file "run_collect_gff_info" "${file_og_primary_fasta}"
-if [[ ! -s "${file_og_gff_info}" && ${run_collect_gff_info} -eq 1 ]]; then
+gff_info_needs_update=0
+gff_info_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.gff_info.json"
+  --step "gff_info"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "primary_fasta=${file_og_primary_fasta}"
+  --input "species_gff=${dir_sp_gff}"
+  --output "gff_info=${file_og_gff_info}"
+  --parameter "feature=CDS"
+  --parameter "multiple_hits=longest"
+)
+gg_artifact_prepare_stage gff_info_needs_update run_collect_gff_info "${gff_info_provenance_args[@]}" || exit $?
+if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ -e gff2genestat.tsv ]]; then
     rm -f -- gff2genestat.tsv
@@ -2097,13 +2191,29 @@ if [[ ! -s "${file_og_gff_info}" && ${run_collect_gff_info} -eq 1 ]]; then
   if [[ -s gff2genestat.tsv ]]; then
     mv_out gff2genestat.tsv "${file_og_gff_info}"
   fi
+  gg_artifact_record "${gff_info_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="UniProt annotation (${uniprot_annotation_method})"
 disable_if_no_input_file "run_uniprot_annotation" "${file_og_primary_fasta}"
-if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]; then
+uniprot_annotation_needs_update=0
+uniprot_annotation_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.uniprot_annotation.json"
+  --step "uniprot_annotation"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "primary_fasta=${file_og_primary_fasta}"
+  --output "uniprot_annotation=${file_og_uniprot_annotation}"
+  --parameter "method=${uniprot_annotation_method}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "evalue=1e-2"
+)
+gg_artifact_prepare_stage uniprot_annotation_needs_update run_uniprot_annotation "${uniprot_annotation_provenance_args[@]}" || exit $?
+if [[ ${uniprot_annotation_needs_update} -eq 1 && ${run_uniprot_annotation} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ "${input_sequence_mode}" == "protein" ]]; then
@@ -2170,13 +2280,31 @@ if [[ ! -s "${file_og_uniprot_annotation}" && ${run_uniprot_annotation} -eq 1 ]]
     --outfile uniprot.annotation.tsv
 
   cp_out uniprot.annotation.tsv "${file_og_uniprot_annotation}"
+  gg_artifact_record "${uniprot_annotation_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="cdskit localize"
 disable_if_no_input_file "run_cdskit_localize" "${file_og_primary_fasta}"
-if [[ ! -s "${file_og_cdskit_localize}" && ${run_cdskit_localize} -eq 1 ]]; then
+cdskit_localize_needs_update=0
+cdskit_localize_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.cdskit_localize.json"
+  --step "cdskit_localize"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "primary_fasta=${file_og_primary_fasta}"
+  --output "cdskit_localize=${file_og_cdskit_localize}"
+  --parameter "model=${cdskit_localize_model}"
+  --parameter "organism_group=${cdskit_localize_organism_group}"
+  --parameter "include_features=${cdskit_localize_include_features}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "busco_lineage=${busco_lineage}"
+)
+gg_artifact_prepare_stage cdskit_localize_needs_update run_cdskit_localize "${cdskit_localize_provenance_args[@]}" || exit $?
+if [[ ${cdskit_localize_needs_update} -eq 1 && ${run_cdskit_localize} -eq 1 ]]; then
   gg_step_start "${task}"
 
   cdskit_localize_species_dir="${dir_sp_cds}"
@@ -2221,13 +2349,27 @@ if [[ ! -s "${file_og_cdskit_localize}" && ${run_cdskit_localize} -eq 1 ]]; then
     mv_out "cdskit_localize.tsv" "${file_og_cdskit_localize}"
   fi
   rm -f -- "cdskit_localize.input.cds.fasta" "cdskit_localize.input.pep.fasta"
+  gg_artifact_record "${cdskit_localize_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="In-frame mafft alignment"
 disable_if_no_input_file "run_mafft" "${file_og_primary_fasta}"
-if [[ ! -s "${file_og_mafft}" && ${run_mafft} -eq 1 ]]; then
+mafft_needs_update=0
+mafft_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.mafft.json"
+  --step "mafft"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "primary_fasta=${file_og_primary_fasta}"
+  --output "mafft=${file_og_mafft}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+)
+gg_artifact_prepare_stage mafft_needs_update run_mafft "${mafft_provenance_args[@]}" || exit $?
+if [[ ${mafft_needs_update} -eq 1 && ${run_mafft} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ "${input_sequence_mode}" == "protein" ]]; then
@@ -2268,13 +2410,26 @@ if [[ ! -s "${file_og_mafft}" && ${run_mafft} -eq 1 ]]; then
   seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.aln.fasta" --out-file "${og_id}.cds.aln.out.fa.gz"
   mv_out "${og_id}.cds.aln.out.fa.gz" "${file_og_mafft}"
   rm -f -- tmp.cds.input.fasta tmp.cds.fasta tmp.pep.fasta tmp.pep.aln.fasta tmp.pep.input.fasta
+  gg_artifact_record "${mafft_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="AMAS for original alignment"
 disable_if_no_input_file "run_amas_original" "${file_og_untrimmed_aln_analysis}"
-if [[ ! -s "${file_og_amas_original}" && ${run_amas_original} -eq 1 ]]; then
+amas_original_needs_update=0
+amas_original_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.amas_original.json"
+  --step "amas_original"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "alignment=${file_og_untrimmed_aln_analysis}"
+  --output "amas=${file_og_amas_original}"
+  --parameter "data_type=${amas_data_type}"
+)
+gg_artifact_prepare_stage amas_original_needs_update run_amas_original "${amas_original_provenance_args[@]}" || exit $?
+if [[ ${amas_original_needs_update} -eq 1 && ${run_amas_original} -eq 1 ]]; then
   gg_step_start "${task}"
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.amas.original.input.fasta"
 
@@ -2285,13 +2440,30 @@ if [[ ! -s "${file_og_amas_original}" && ${run_amas_original} -eq 1 ]]; then
 
   mv_out summary.txt "${file_og_amas_original}"
   rm -f -- "${og_id}.amas.original.input.fasta"
+  gg_artifact_record "${amas_original_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="MaxAlign"
 disable_if_no_input_file "run_maxalign" "${file_og_untrimmed_aln_analysis}"
-if [[ ! -s "${file_og_maxalign}" && ${run_maxalign} -eq 1 ]]; then
+maxalign_needs_update=0
+maxalign_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.maxalign.json"
+  --step "maxalign"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "untrimmed_alignment=${file_og_untrimmed_aln_analysis}"
+  --output "maxalign=${file_og_maxalign}"
+  --parameter "mode=${mode_gene_evolution}"
+  --parameter "retain_query=${retain_query_in_maxalign}"
+)
+if [[ "${mode_gene_evolution}" == "query2family" ]]; then
+  maxalign_provenance_args+=(--input "query=${file_query_gene}")
+fi
+gg_artifact_prepare_stage maxalign_needs_update run_maxalign "${maxalign_provenance_args[@]}" || exit $?
+if [[ ${maxalign_needs_update} -eq 1 && ${run_maxalign} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.cds.aln.fasta"
@@ -2358,6 +2530,7 @@ PY
   seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.maxalign.output.fasta" --out-file "${og_id}.maxalign.out.fa.gz"
   mv_out "${og_id}.maxalign.out.fa.gz" "${file_og_maxalign}"
   rm -f -- "${og_id}.maxalign.output.fasta"
+  gg_artifact_record "${maxalign_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2367,7 +2540,20 @@ fi
 
 task="TrimAl"
 disable_if_no_input_file "run_trimal" "${file_og_untrimmed_aln_analysis}"
-if [[ ! -s "${file_og_trimal}" && ${run_trimal} -eq 1 ]]; then
+trimal_needs_update=0
+trimal_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.trimal.json"
+  --step "trimal"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "untrimmed_alignment=${file_og_untrimmed_aln_analysis}"
+  --output "trimal=${file_og_trimal}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+)
+gg_artifact_prepare_stage trimal_needs_update run_trimal "${trimal_provenance_args[@]}" || exit $?
+if [[ ${trimal_needs_update} -eq 1 && ${run_trimal} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ "${input_sequence_mode}" == "protein" ]]; then
@@ -2407,6 +2593,7 @@ if [[ ! -s "${file_og_trimal}" && ${run_trimal} -eq 1 ]]; then
     seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.trimal.tmp2.fasta" --out-file "${og_id}.cds.trimal.out.fa.gz"
     mv_out "${og_id}.cds.trimal.out.fa.gz" "${file_og_trimal}"
   fi
+  gg_artifact_record "${trimal_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2416,8 +2603,25 @@ fi
 
 task="ClipKIT"
 disable_if_no_input_file "run_clipkit" "${file_og_untrimmed_aln_analysis}"
-if [[ ! -s "${file_og_clipkit}" && ${run_clipkit} -eq 1 ]]; then
+clipkit_needs_update=0
+clipkit_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.clipkit.json"
+  --step "clipkit"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "untrimmed_alignment=${file_og_untrimmed_aln_analysis}"
+  --output "clipkit=${file_og_clipkit}"
+  --optional-output "clipkit_log=${file_og_clipkit_log}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "mode=smart-gap"
+)
+gg_artifact_prepare_stage clipkit_needs_update run_clipkit "${clipkit_provenance_args[@]}" || exit $?
+if [[ ${clipkit_needs_update} -eq 1 && ${run_clipkit} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -f -- "${file_og_clipkit}" "${file_og_clipkit_log}"
+  rm -f -- "${og_id}.cds.clipkit.tmp.fasta.log" "${og_id}.cds.clipkit.hammer.fasta.log"
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.cds.clipkit.input.fasta"
 
@@ -2461,6 +2665,7 @@ if [[ ! -s "${file_og_clipkit}" && ${run_clipkit} -eq 1 ]]; then
     fi
   fi
   rm -f -- "${og_id}.cds.clipkit.input.fasta"
+  gg_artifact_record "${clipkit_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2470,7 +2675,19 @@ fi
 
 task="AMAS for cleaned alignment"
 disable_if_no_input_file "run_amas_cleaned" "${file_og_trimmed_aln_analysis}"
-if [[ ! -s "${file_og_amas_cleaned}" && ${run_amas_cleaned} -eq 1 ]]; then
+amas_cleaned_needs_update=0
+amas_cleaned_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.amas_cleaned.json"
+  --step "amas_cleaned"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "alignment=${file_og_trimmed_aln_analysis}"
+  --output "amas=${file_og_amas_cleaned}"
+  --parameter "data_type=${amas_data_type}"
+)
+gg_artifact_prepare_stage amas_cleaned_needs_update run_amas_cleaned "${amas_cleaned_provenance_args[@]}" || exit $?
+if [[ ${amas_cleaned_needs_update} -eq 1 && ${run_amas_cleaned} -eq 1 ]]; then
   gg_step_start "${task}"
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.amas.cleaned.input.fasta"
 
@@ -2481,6 +2698,7 @@ if [[ ! -s "${file_og_amas_cleaned}" && ${run_amas_cleaned} -eq 1 ]]; then
 
   mv_out summary.txt "${file_og_amas_cleaned}"
   rm -f -- "${og_id}.amas.cleaned.input.fasta"
+  gg_artifact_record "${amas_cleaned_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2501,7 +2719,23 @@ fi
 
 task="IQ-TREE"
 disable_if_no_input_file "run_iqtree" "${file_og_trimmed_aln_analysis}"
-if [[ ! -s "${file_og_iqtree_tree}" && ${run_iqtree} -eq 1 ]]; then
+iqtree_needs_update=0
+iqtree_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.iqtree.json"
+  --step "iqtree"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --output "iqtree=${file_og_iqtree_tree}"
+  --parameter "model=${generax_model}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "generax_enabled=${run_generax}"
+  --parameter "fast_mode_threshold=${iqtree_fast_mode_gt}"
+)
+gg_artifact_prepare_stage iqtree_needs_update run_iqtree "${iqtree_provenance_args[@]}" || exit $?
+if [[ ${iqtree_needs_update} -eq 1 && ${run_iqtree} -eq 1 ]]; then
   gg_step_start "${task}"
   num_seq=$(gg_count_fasta_records "${file_og_trimmed_aln_analysis}")
   if [[ ${num_seq} -ge 4 ]]; then
@@ -2563,13 +2797,36 @@ if [[ ! -s "${file_og_iqtree_tree}" && ${run_iqtree} -eq 1 ]]; then
     "${other_iqtree_params[@]}"
 
   cp_out "${file_tree}" "${file_og_iqtree_tree}"
+  gg_artifact_record "${iqtree_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Gene tree rooting"
 disable_if_no_input_file "run_tree_root" "${file_og_unrooted_tree_analysis}"
-if [[ (! -s "${file_og_rooted_tree}" || ! -s "${file_og_rooted_log}") && ${run_tree_root} -eq 1 ]]; then
+tree_root_needs_update=0
+tree_root_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.tree_root.json"
+  --step "tree_root"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "unrooted_tree=${file_og_unrooted_tree_analysis}"
+  --output "rooted_tree=${file_og_rooted_tree}"
+  --output "rooting_log=${file_og_rooted_log}"
+  --parameter "method=${tree_rooting_method}"
+  --parameter "species_parser=${species_label_parser}"
+  --parameter "species_regex=${species_label_regex}"
+  --parameter "species_map_present=$([[ -n "${species_label_map_tsv}" ]] && echo 1 || echo 0)"
+)
+if [[ "${tree_rooting_method}" == "notung" ]]; then
+  tree_root_provenance_args+=(--input "species_tree=${species_tree_pruned}")
+fi
+if [[ -n "${species_label_map_tsv}" ]]; then
+  tree_root_provenance_args+=(--input "species_map=${species_label_map_tsv}")
+fi
+gg_artifact_prepare_stage tree_root_needs_update run_tree_root "${tree_root_provenance_args[@]}" || exit $?
+if [[ ${tree_root_needs_update} -eq 1 && ${run_tree_root} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ "${tree_rooting_method}" == "notung" ]]; then
@@ -2643,6 +2900,7 @@ if [[ (! -s "${file_og_rooted_tree}" || ! -s "${file_og_rooted_log}") && ${run_t
     } > "${og_id}.root.txt"
     mv_out "${og_id}.root.txt" "${file_og_rooted_log}"
   fi
+  gg_artifact_record "${tree_root_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2650,7 +2908,31 @@ fi
 task="Orthogroup extraction with NWKIT"
 run_orthogroup_extraction_original="${run_orthogroup_extraction}" # This variable may be disabled by disable_if_no_input_file but the original value is necessary to properly update file_og_*_analysis
 disable_if_no_input_file "run_orthogroup_extraction" "${file_query_gene:-}" "${file_og_trimmed_aln_analysis}" "${file_og_rooted_tree_analysis}"
-if [[ (! -s "${file_og_orthogroup_extraction_nwk}" || ! -s "${file_og_orthogroup_extraction_rooted_nwk}" || ! -s "${file_og_orthogroup_extraction_fasta}") && ${run_orthogroup_extraction} -eq 1 ]]; then
+orthogroup_extraction_needs_update=0
+orthogroup_extraction_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.orthogroup_extraction.json"
+  --step "orthogroup_extraction"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "query=${file_query_gene:-}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --input "rooted_tree=${file_og_rooted_tree_analysis}"
+  --output "extracted_unrooted_tree=${file_og_orthogroup_extraction_nwk}"
+  --output "extracted_rooted_tree=${file_og_orthogroup_extraction_rooted_nwk}"
+  --output "extracted_fasta=${file_og_orthogroup_extraction_fasta}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "rooting_method=${tree_rooting_method}"
+)
+if [[ -s "${file_og_query_blast}" ]]; then
+  orthogroup_extraction_provenance_args+=(--input "query_blast=${file_og_query_blast}")
+fi
+gg_artifact_prepare_stage orthogroup_extraction_needs_update run_orthogroup_extraction "${orthogroup_extraction_provenance_args[@]}" || exit $?
+if [[ ${run_orthogroup_extraction} -eq 1 ]]; then
+  run_orthogroup_extraction_original=1
+fi
+if [[ ${orthogroup_extraction_needs_update} -eq 1 && ${run_orthogroup_extraction} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ "$(head -c 1 "${file_query_gene}")" == ">" ]]; then
@@ -2896,6 +3178,7 @@ PY
   seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.orthogroup_extraction.tmp.fasta" --out-file "${og_id}.orthogroup_extraction.out.fa.gz"
   mv_out "${og_id}.orthogroup_extraction.out.fa.gz" "${file_og_orthogroup_extraction_fasta}"
   rm -f -- "${og_id}.orthogroup_extraction.tmp.fasta"
+  gg_artifact_record "${orthogroup_extraction_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2907,7 +3190,26 @@ fi
 
 task="GeneRax"
 disable_if_no_input_file "run_generax" "${file_og_trimmed_aln_analysis}" "${file_og_unrooted_tree_analysis}" "${species_tree_pruned}"
-if [[ ! -s "${file_og_generax_nhx}" && ${run_generax} -eq 1 ]]; then
+generax_needs_update=0
+generax_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.generax.json"
+  --step "generax"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --input "unrooted_tree=${file_og_unrooted_tree_analysis}"
+  --input "species_tree=${species_tree_pruned}"
+  --output "generax_nwk=${file_og_generax_nwk}"
+  --output "generax_xml=${file_og_generax_xml}"
+  --output "generax_nhx=${file_og_generax_nhx}"
+  --parameter "model=${generax_model}"
+  --parameter "reconciliation_model=${generax_rec_model}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+)
+gg_artifact_prepare_stage generax_needs_update run_generax "${generax_provenance_args[@]}" || exit $?
+if [[ ${generax_needs_update} -eq 1 && ${run_generax} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ "${input_sequence_mode}" == "protein" ]]; then
@@ -3004,17 +3306,38 @@ if [[ ! -s "${file_og_generax_nhx}" && ${run_generax} -eq 1 ]]; then
     echo "GeneRax outfile was not found. Exiting."
     exit 1
   fi
+  gg_artifact_record "${generax_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="IQ-TREE UFBOOT on GeneRax topology"
+generax_ufboot_needs_update=0
+generax_ufboot_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.generax_ufboot.json"
+  --step "generax_ufboot"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "generax_tree=${file_og_generax_nwk}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --output "ufboot_tree=${file_og_iqtree_generax_ufboot}"
+  --parameter "model=${generax_model}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "ufboot=1000"
+  --parameter "bnni=yes"
+  --parameter "seed=12345"
+)
 if [[ ${run_generax} -eq 1 ]]; then
   if [[ ! -s "${file_og_generax_nwk}" ]]; then
     echo "Skipped: ${task}. Missing GeneRax output tree: ${file_og_generax_nwk}"
   elif [[ ! -s "${file_og_trimmed_aln_analysis}" ]]; then
     echo "Skipped: ${task}. Missing alignment: ${file_og_trimmed_aln_analysis}"
-  elif [[ ! -s "${file_og_iqtree_generax_ufboot}" || "${file_og_generax_nwk}" -nt "${file_og_iqtree_generax_ufboot}" || "${file_og_trimmed_aln_analysis}" -nt "${file_og_iqtree_generax_ufboot}" ]]; then
+  else
+    gg_artifact_prepare_stage generax_ufboot_needs_update run_generax "${generax_ufboot_provenance_args[@]}" || exit $?
+  fi
+  if [[ ${generax_ufboot_needs_update} -eq 1 && ${run_generax} -eq 1 ]]; then
     gg_step_start "${task}"
     num_seq=$(gg_count_fasta_records "${file_og_trimmed_aln_analysis}")
     if [[ ${num_seq} -lt 4 ]]; then
@@ -3066,6 +3389,7 @@ if [[ ${run_generax} -eq 1 ]]; then
       fi
       rm -f -- "${og_id}.generax_ufboot.input.fa" "${og_id}.generax_ufboot.constraint.nwk"
     fi
+    gg_artifact_record "${generax_ufboot_provenance_args[@]}"
   else
     gg_step_skip "${task}"
   fi
@@ -3078,7 +3402,20 @@ fi
 
 task="NOTUNG reconciliation"
 disable_if_no_input_file "run_notung_reconcil" "${file_og_rooted_tree}" "${species_tree_pruned}"
-if [[ ! -s "${file_og_notung_reconcil}" && ${run_notung_reconcil} -eq 1 ]]; then
+notung_reconcil_needs_update=0
+notung_reconcil_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.notung_reconciliation.json"
+  --step "notung_reconciliation"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "rooted_tree=${file_og_rooted_tree}"
+  --input "species_tree=${species_tree_pruned}"
+  --output "notung_reconciliation=${file_og_notung_reconcil}"
+  --parameter "species_parser=${species_label_parser}"
+)
+gg_artifact_prepare_stage notung_reconcil_needs_update run_notung_reconcil "${notung_reconcil_provenance_args[@]}" || exit $?
+if [[ ${notung_reconcil_needs_update} -eq 1 && ${run_notung_reconcil} -eq 1 ]]; then
   gg_step_start "${task}"
 
   echo "memory_notung: ${memory_notung}"
@@ -3113,13 +3450,42 @@ if [[ ! -s "${file_og_notung_reconcil}" && ${run_notung_reconcil} -eq 1 ]]; then
     zip -rq "${og_id}.notung_reconcile.zip" "${og_id}.notung_reconcile"
     cp_out "${og_id}.notung_reconcile.zip" "${file_og_notung_reconcil}"
   fi
+  gg_artifact_record "${notung_reconcil_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Species-tree-guided divergence time estimation"
 disable_if_no_input_file "run_tree_dating" "${species_tree_pruned}" "${file_og_unrooted_tree_analysis}"
-if [[ (! -s "${file_og_dated_tree}" || ! -s "${file_og_dated_tree_log}") && ${run_tree_dating} -eq 1 ]]; then
+tree_dating_needs_update=0
+tree_dating_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.tree_dating.json"
+  --step "tree_dating"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "species_tree=${species_tree_pruned}"
+  --input "unrooted_tree=${file_og_unrooted_tree_analysis}"
+  --output "dated_tree=${file_og_dated_tree}"
+  --output "dating_log=${file_og_dated_tree_log}"
+  --parameter "generax_enabled=${run_generax}"
+  --parameter "max_age=${radte_max_age}"
+  --parameter "species_parser=${species_label_parser}"
+  --parameter "species_regex=${species_label_regex}"
+)
+if [[ ${run_generax} -eq 1 ]]; then
+  tree_dating_provenance_args+=(
+    --input "generax_species_tree=${species_tree_generax}"
+    --input "generax_nhx=${file_og_generax_nhx}"
+  )
+else
+  tree_dating_provenance_args+=(--input "notung_reconciliation=${file_og_notung_reconcil}")
+fi
+if [[ -n "${species_label_map_tsv}" ]]; then
+  tree_dating_provenance_args+=(--input "species_map=${species_label_map_tsv}")
+fi
+gg_artifact_prepare_stage tree_dating_needs_update run_tree_dating "${tree_dating_provenance_args[@]}" || exit $?
+if [[ ${tree_dating_needs_update} -eq 1 && ${run_tree_dating} -eq 1 ]]; then
   gg_step_start "${task}"
   radte_args=()
 
@@ -3182,6 +3548,7 @@ if [[ (! -s "${file_og_dated_tree}" || ! -s "${file_og_dated_tree_log}") && ${ru
     cp_out radte_calibrated_nodes.txt "${file_og_dated_tree_log}"
     cp_out radte_gene_tree_output.nwk "${file_og_dated_tree}"
   fi
+  gg_artifact_record "${tree_dating_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -3190,7 +3557,20 @@ fi
 
 task="Expression matrix preparation"
 disable_if_no_input_file "run_generate_expression_matrix" "${file_og_trimmed_aln_analysis}"
-if [[ ! -s "${file_og_expression}" && ${run_generate_expression_matrix} -eq 1 ]]; then
+expression_needs_update=0
+expression_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.expression_matrix.json"
+  --step "expression_matrix"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --input "species_expression=${dir_sp_expression}"
+  --output "expression_matrix=${file_og_expression}"
+  --parameter "expression_value_type=${exp_value_type}"
+)
+gg_artifact_prepare_stage expression_needs_update run_generate_expression_matrix "${expression_provenance_args[@]}" || exit $?
+if [[ ${expression_needs_update} -eq 1 && ${run_generate_expression_matrix} -eq 1 ]]; then
   gg_step_start "${task}"
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.trait_matrix_input.fasta"
 
@@ -3203,13 +3583,27 @@ if [[ ! -s "${file_og_expression}" && ${run_generate_expression_matrix} -eq 1 ]]
   if [[ -s expression_matrix.tsv ]]; then
     mv_out expression_matrix.tsv "${file_og_expression}"
   fi
+  gg_artifact_record "${expression_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Promoter fasta generation"
 disable_if_no_input_file "run_extract_promoter_fasta" "${file_og_gff_info}"
-if [[ ! -s "${file_og_promoter_fasta}" && ${run_extract_promoter_fasta} -eq 1 ]]; then
+promoter_fasta_needs_update=0
+promoter_fasta_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.promoter_fasta.json"
+  --step "promoter_fasta"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "gff_info=${file_og_gff_info}"
+  --input "species_genome=${dir_sp_genome}"
+  --output "promoter_fasta=${file_og_promoter_fasta}"
+  --parameter "promoter_bp=${promoter_bp}"
+)
+gg_artifact_prepare_stage promoter_fasta_needs_update run_extract_promoter_fasta "${promoter_fasta_provenance_args[@]}" || exit $?
+if [[ ${promoter_fasta_needs_update} -eq 1 && ${run_extract_promoter_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
 
   python "${gg_support_dir}/get_promoter_fasta.py" \
@@ -3224,20 +3618,35 @@ if [[ ! -s "${file_og_promoter_fasta}" && ${run_extract_promoter_fasta} -eq 1 ]]
     mv_out "${og_id}.promoter.out.fa.gz" "${file_og_promoter_fasta}"
     rm -f -- "${og_id}.promoter.tmp.fasta"
   fi
+  gg_artifact_record "${promoter_fasta_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="fimo"
 jaspar_path=""
-if [[ ${run_fimo} -eq 1 ]]; then
+fimo_manifest="${dir_output_active}/artifact_provenance/${og_id}.fimo.json"
+if [[ ${run_fimo} -eq 1 || -s "${file_og_fimo}" || -s "${fimo_manifest}" ]]; then
   if ! jaspar_path=$(ensure_jaspar_file "${gg_workspace_dir}" "${jaspar_file}") || [[ -z "${jaspar_path}" ]]; then
     echo "Failed to prepare JASPAR motif file (${jaspar_file}). Exiting."
     exit 1
   fi
 fi
 disable_if_no_input_file "run_fimo" "${file_og_promoter_fasta}" "${jaspar_path}"
-if [[ ! -s "${file_og_fimo}" && ${run_fimo} -eq 1 ]]; then
+fimo_needs_update=0
+fimo_provenance_args=(
+  --manifest "${fimo_manifest}"
+  --step "fimo"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "promoter_fasta=${file_og_promoter_fasta}"
+  --input "jaspar=${jaspar_path}"
+  --output "fimo=${file_og_fimo}"
+  --parameter "jaspar_selector=${jaspar_file}"
+)
+gg_artifact_prepare_stage fimo_needs_update run_fimo "${fimo_provenance_args[@]}" || exit $?
+if [[ ${fimo_needs_update} -eq 1 && ${run_fimo} -eq 1 ]]; then
   gg_step_start "${task}"
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_promoter_fasta}" --out-file "${og_id}.fimo.input.fasta"
 
@@ -3260,23 +3669,44 @@ if [[ ! -s "${file_og_fimo}" && ${run_fimo} -eq 1 ]]; then
   else
     echo "FIMO result table was not detected (expected fimo.tsv or fimo.txt). Keeping fimo_out for inspection."
   fi
+  gg_artifact_record "${fimo_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Tree pruning"
 disable_if_no_input_file "run_tree_pruning" "${file_og_expression}" "${file_og_untrimmed_aln_analysis}" "${file_og_trimmed_aln_analysis}" "${file_og_unrooted_tree_analysis}" "${file_og_rooted_tree_analysis}"
-if [[ (! -s "${file_og_untrimmed_aln_pruned}" || ! -s "${file_og_trimmed_aln_pruned}" || ! -s "${file_og_unrooted_tree_pruned}" || ! -s "${file_og_rooted_tree_pruned}") ]]; then
-  is_all_outputs_exist=0
-else
-  if [[ ${run_tree_dating} -eq 1 && ! -s "${file_og_dated_tree_pruned}" ]]; then
-    is_all_outputs_exist=0
-  else
-    is_all_outputs_exist=1
-  fi
+tree_pruning_needs_update=0
+tree_pruning_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.tree_pruning.json"
+  --step "tree_pruning"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "expression=${file_og_expression}"
+  --input "untrimmed_alignment=${file_og_untrimmed_aln_analysis}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --input "unrooted_tree=${file_og_unrooted_tree_analysis}"
+  --input "rooted_tree=${file_og_rooted_tree_analysis}"
+  --output "untrimmed_alignment_pruned=${file_og_untrimmed_aln_pruned}"
+  --output "trimmed_alignment_pruned=${file_og_trimmed_aln_pruned}"
+  --output "unrooted_tree_pruned=${file_og_unrooted_tree_pruned}"
+  --output "rooted_tree_pruned=${file_og_rooted_tree_pruned}"
+  --optional-output "dated_tree_pruned=${file_og_dated_tree_pruned}"
+  --parameter "dated_tree_present=$([[ -s "${file_og_dated_tree_analysis}" ]] && echo 1 || echo 0)"
+)
+if [[ -s "${file_og_dated_tree_analysis}" ]]; then
+  tree_pruning_provenance_args+=(--input "dated_tree=${file_og_dated_tree_analysis}")
 fi
-if [[ ${is_all_outputs_exist} -eq 0 && ${run_tree_pruning} -eq 1 ]]; then
+gg_artifact_prepare_stage tree_pruning_needs_update run_tree_pruning "${tree_pruning_provenance_args[@]}" || exit $?
+if [[ ${tree_pruning_needs_update} -eq 1 && ${run_tree_pruning} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -f -- \
+    "${file_og_untrimmed_aln_pruned}" \
+    "${file_og_trimmed_aln_pruned}" \
+    "${file_og_unrooted_tree_pruned}" \
+    "${file_og_rooted_tree_pruned}" \
+    "${file_og_dated_tree_pruned}"
 
   cut -f 1 "${file_og_expression}" | tail -n +2 > target_genes.txt
 
@@ -3384,6 +3814,7 @@ if [[ ${is_all_outputs_exist} -eq 0 && ${run_tree_pruning} -eq 1 ]]; then
         > "${og_id}.dated.pruned.tmp.nwk"
     mv_out "${og_id}.dated.pruned.tmp.nwk" "${file_og_dated_tree_pruned}"
   fi
+  gg_artifact_record "${tree_pruning_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -3494,7 +3925,21 @@ fi
 
 task="Parameter estimation for mapdNdS"
 disable_if_no_input_file "run_mapdnds_parameter_estimation" "${file_og_rooted_tree_analysis}" "${file_og_trimmed_aln_analysis}"
-if [[ ! -s "${file_og_mapdnds_parameter}" && ${run_mapdnds_parameter_estimation} -eq 1 ]]; then
+mapdnds_parameter_needs_update=0
+mapdnds_parameter_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.mapdnds_parameter.json"
+  --step "mapdnds_parameter"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "rooted_tree=${file_og_rooted_tree_analysis}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --output "mapdnds_parameter=${file_og_mapdnds_parameter}"
+  --parameter "model=GY+F3X4+G4"
+  --parameter "genetic_code=${genetic_code}"
+)
+gg_artifact_prepare_stage mapdnds_parameter_needs_update run_mapdnds_parameter_estimation "${mapdnds_parameter_provenance_args[@]}" || exit $?
+if [[ ${mapdnds_parameter_needs_update} -eq 1 && ${run_mapdnds_parameter_estimation} -eq 1 ]]; then
   gg_step_start "${task}"
 
   nwkit drop --target intnode --support yes --name yes \
@@ -3541,13 +3986,28 @@ if [[ ! -s "${file_og_mapdnds_parameter}" && ${run_mapdnds_parameter_estimation}
   else
     echo "iqtree2mapnh.params was not generated."
   fi
+  gg_artifact_record "${mapdnds_parameter_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="mapdNdS main run"
 disable_if_no_input_file "run_mapdnds" "${file_og_mapdnds_parameter}" "${file_og_trimmed_aln_analysis}"
-if [[ (! -s "${file_og_mapdnds_dn}" || ! -s "${file_og_mapdnds_ds}") && ${run_mapdnds} -eq 1 ]]; then
+mapdnds_needs_update=0
+mapdnds_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.mapdnds.json"
+  --step "mapdnds"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "mapdnds_parameter=${file_og_mapdnds_parameter}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --output "dN_tree=${file_og_mapdnds_dn}"
+  --output "dS_tree=${file_og_mapdnds_ds}"
+  --parameter "genetic_code=${genetic_code}"
+)
+gg_artifact_prepare_stage mapdnds_needs_update run_mapdnds "${mapdnds_provenance_args[@]}" || exit $?
+if [[ ${mapdnds_needs_update} -eq 1 && ${run_mapdnds} -eq 1 ]]; then
   gg_step_start "${task}"
 
   unzip -o "${file_og_mapdnds_parameter}"
@@ -3574,13 +4034,29 @@ if [[ (! -s "${file_og_mapdnds_dn}" || ! -s "${file_og_mapdnds_ds}") && ${run_ma
     echo "mapnh output and HyPhy output are managed separately; no cross-substitution is applied."
   fi
   cd "${dir_tmp}" || exit 1
+  gg_artifact_record "${mapdnds_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="CodeML two-ratio model"
 disable_if_no_input_file "run_codeml_two_ratio" "${file_og_rooted_tree_analysis}" "${file_og_trimmed_aln_analysis}" "${file_sp_trait}"
-if [[ ! -s "${file_og_codeml_two_ratio}" && "${run_codeml_two_ratio}" -eq 1 ]]; then
+codeml_two_ratio_needs_update=0
+codeml_two_ratio_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.codeml_two_ratio.json"
+  --step "codeml_two_ratio"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "rooted_tree=${file_og_rooted_tree_analysis}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --input "foreground_trait=${file_sp_trait}"
+  --output "codeml_two_ratio=${file_og_codeml_two_ratio}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "model=two_ratio"
+)
+gg_artifact_prepare_stage codeml_two_ratio_needs_update run_codeml_two_ratio "${codeml_two_ratio_provenance_args[@]}" || exit $?
+if [[ ${codeml_two_ratio_needs_update} -eq 1 && ${run_codeml_two_ratio} -eq 1 ]]; then
   gg_step_start "${task}"
 
   binarize_species_trait "${file_sp_trait}" species_trait_binary.tsv
@@ -3703,13 +4179,29 @@ if [[ ! -s "${file_og_codeml_two_ratio}" && "${run_codeml_two_ratio}" -eq 1 ]]; 
       echo "The task has completed successfully: ${task}"
     fi
   fi
+  gg_artifact_record "${codeml_two_ratio_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="HyPhy dN-dS estimation"
 disable_if_no_input_file "run_hyphy_dnds" "${file_og_rooted_tree_analysis}" "${file_og_trimmed_aln_analysis}"
-if [[ ! -s "${file_og_hyphy_dnds}" && ${run_hyphy_dnds} -eq 1 ]]; then
+hyphy_dnds_needs_update=0
+hyphy_dnds_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.hyphy_dnds.json"
+  --step "hyphy_dnds"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "rooted_tree=${file_og_rooted_tree_analysis}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --output "hyphy_dnds=${file_og_hyphy_dnds}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "frequencies=CF3x4"
+  --parameter "type=local"
+)
+gg_artifact_prepare_stage hyphy_dnds_needs_update run_hyphy_dnds "${hyphy_dnds_provenance_args[@]}" || exit $?
+if [[ ${hyphy_dnds_needs_update} -eq 1 && ${run_hyphy_dnds} -eq 1 ]]; then
   gg_step_start "${task}"
 
   nwkit drop --target intnode --support yes --name yes \
@@ -3748,6 +4240,7 @@ if [[ ! -s "${file_og_hyphy_dnds}" && ${run_hyphy_dnds} -eq 1 ]]; then
     exit 1
   fi
   mv_out "${hyphy_dnds_json}" "${file_og_hyphy_dnds}"
+  gg_artifact_record "${hyphy_dnds_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -3757,7 +4250,23 @@ fi
 
 task="HyPhy RELAX"
 disable_if_no_input_file "run_hyphy_relax" "${file_og_rooted_tree_analysis}" "${file_og_trimmed_aln_analysis}" "${file_sp_trait}"
-if [[ ! -s "${file_og_hyphy_relax}" && ${run_hyphy_relax} -eq 1 ]]; then
+hyphy_relax_needs_update=0
+hyphy_relax_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.hyphy_relax.json"
+  --step "hyphy_relax"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "rooted_tree=${file_og_rooted_tree_analysis}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --input "foreground_trait=${file_sp_trait}"
+  --output "hyphy_relax=${file_og_hyphy_relax}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "foreground=1"
+  --parameter "mode=classic_minimal"
+)
+gg_artifact_prepare_stage hyphy_relax_needs_update run_hyphy_relax "${hyphy_relax_provenance_args[@]}" || exit $?
+if [[ ${hyphy_relax_needs_update} -eq 1 && ${run_hyphy_relax} -eq 1 ]]; then
   gg_step_start "${task}"
   run_hyphy_relax_for_all_traits 1 "${file_og_hyphy_relax}"
   if [[ -s "${file_og_hyphy_relax}" ]]; then
@@ -3765,13 +4274,30 @@ if [[ ! -s "${file_og_hyphy_relax}" && ${run_hyphy_relax} -eq 1 ]]; then
   else
     echo "The task has failed: ${task}"
   fi
+  gg_artifact_record "${hyphy_relax_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="HyPhy RELAX with reversed foreground/background"
 disable_if_no_input_file "run_hyphy_relax_reversed" "${file_og_rooted_tree_analysis}" "${file_og_trimmed_aln_analysis}" "${file_sp_trait}"
-if [[ ! -s "${file_og_hyphy_relax_reversed}" && ${run_hyphy_relax_reversed} -eq 1 ]]; then
+hyphy_relax_reversed_needs_update=0
+hyphy_relax_reversed_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.hyphy_relax_reversed.json"
+  --step "hyphy_relax_reversed"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "rooted_tree=${file_og_rooted_tree_analysis}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --input "foreground_trait=${file_sp_trait}"
+  --output "hyphy_relax_reversed=${file_og_hyphy_relax_reversed}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "foreground=0"
+  --parameter "mode=classic_minimal"
+)
+gg_artifact_prepare_stage hyphy_relax_reversed_needs_update run_hyphy_relax_reversed "${hyphy_relax_reversed_provenance_args[@]}" || exit $?
+if [[ ${hyphy_relax_reversed_needs_update} -eq 1 && ${run_hyphy_relax_reversed} -eq 1 ]]; then
   gg_step_start "${task}"
   run_hyphy_relax_for_all_traits 0 "${file_og_hyphy_relax_reversed}"
   if [[ -s "${file_og_hyphy_relax_reversed}" ]]; then
@@ -3779,14 +4305,33 @@ if [[ ! -s "${file_og_hyphy_relax_reversed}" && ${run_hyphy_relax_reversed} -eq 
   else
     echo "The task has failed: ${task}"
   fi
+  gg_artifact_record "${hyphy_relax_reversed_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Stochastic character mapping of intron evolution"
 disable_if_no_input_file "run_scm_intron" "${file_og_gff_info}" "${file_og_dated_tree_analysis}"
-if [[ ! -s "${file_og_scm_intron_summary}" && ${run_scm_intron} -eq 1 ]]; then
+scm_intron_needs_update=0
+scm_intron_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.scm_intron.json"
+  --step "scm_intron"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "gff_info=${file_og_gff_info}"
+  --input "dated_tree=${file_og_dated_tree_analysis}"
+  --output "scm_summary=${file_og_scm_intron_summary}"
+  --optional-output "scm_plot=${file_og_scm_intron_plot}"
+  --parameter "intron_gain_rate=${intron_gain_rate}"
+  --parameter "retrotransposition_rate=${retrotransposition_rate}"
+  --parameter "nrep=1000"
+)
+gg_artifact_prepare_stage scm_intron_needs_update run_scm_intron "${scm_intron_provenance_args[@]}" || exit $?
+if [[ ${scm_intron_needs_update} -eq 1 && ${run_scm_intron} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -f -- "${file_og_scm_intron_summary}" "${file_og_scm_intron_plot}"
+  rm -f -- intron_evolution_summary.tsv intron_evolution_plot.pdf
 
   Rscript "${gg_support_dir}/scm_intron_evolution.r" \
     --tree_file="${file_og_dated_tree_analysis}" \
@@ -3800,13 +4345,43 @@ if [[ ! -s "${file_og_scm_intron_summary}" && ${run_scm_intron} -eq 1 ]]; then
   if [[ -e intron_evolution_plot.pdf ]]; then
     cp_out intron_evolution_plot.pdf "${file_og_scm_intron_plot}"
   fi
+  gg_artifact_record "${scm_intron_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="l1ou"
 disable_if_no_input_file "run_l1ou" "${file_og_trimmed_aln_analysis}" "${file_og_expression}" "${file_og_dated_tree_analysis}"
-if [[ (! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || ! -s "${file_og_l1ou_fit_regime}" || ! -s "${file_og_l1ou_fit_leaf}") && ${run_l1ou} -eq 1 ]]; then
+l1ou_needs_update=0
+l1ou_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.l1ou.json"
+  --step "l1ou"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
+  --input "expression=${file_og_expression}"
+  --input "dated_tree=${file_og_dated_tree_analysis}"
+  --output "fit=${file_og_l1ou_fit_rdata}"
+  --output "tree=${file_og_l1ou_fit_tree}"
+  --output "regime=${file_og_l1ou_fit_regime}"
+  --output "leaf=${file_og_l1ou_fit_leaf}"
+  --output "plot=${file_og_l1ou_fit_plot}"
+  --parameter "criterion=${l1ou_criterion}"
+  --parameter "alpha_upper=${l1ou_alpha_upper}"
+  --parameter "convergence=${l1ou_convergence}"
+  --parameter "nbootstrap=${l1ou_nbootstrap}"
+  --parameter "large_tree_num_gene=${large_tree_num_gene}"
+  --parameter "large_tree_max_nshift=${large_tree_max_nshift}"
+)
+if [[ ${l1ou_convergence} -eq 1 ]]; then
+  l1ou_provenance_args+=(--output "convergent_fit=${file_og_l1ou_fit_conv_rdata}")
+fi
+if [[ ${l1ou_nbootstrap} -gt 0 ]]; then
+  l1ou_provenance_args+=(--output "bootstrap=${file_og_l1ou_bootstrap}")
+fi
+gg_artifact_prepare_stage l1ou_needs_update run_l1ou "${l1ou_provenance_args[@]}" || exit $?
+if [[ ${l1ou_needs_update} -eq 1 && ${run_l1ou} -eq 1 ]]; then
   gg_step_start "${task}"
 
   num_gene=$(gg_count_fasta_records "${file_og_trimmed_aln_analysis}")
@@ -3843,11 +4418,12 @@ if [[ (! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || ! 
   mv_out l1ou_leaf.tsv "${file_og_l1ou_fit_leaf}"
   mv_out l1ou_plot.pdf "${file_og_l1ou_fit_plot}"
   if [[ ${l1ou_nbootstrap} -gt 0 ]]; then
-    cp_out l1ou_bootstrap.tsv "${dir_l1ou_bootstrap}"/"${l1ou_bootstrap}"
+    cp_out l1ou_bootstrap.tsv "${file_og_l1ou_bootstrap}"
   fi
   if [[ ${l1ou_convergence} -eq 1 ]]; then
     cp_out fit_conv.RData "${file_og_l1ou_fit_conv_rdata}"
   fi
+  gg_artifact_record "${l1ou_provenance_args[@]}"
 
 else
   gg_step_skip "${task}"
@@ -3860,7 +4436,23 @@ gg_step_skip "${task}"
 
 task="Species tree PGLS analysis"
 disable_if_no_input_file "run_pgls_species_tree" "${file_sp_trait}" "${species_tree_pruned}" "${file_og_expression}"
-if [[ ! -s "${file_og_species_pgls}" && ${run_pgls_species_tree} -eq 1 ]]; then
+pgls_species_tree_needs_update=0
+pgls_species_tree_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.pgls_species_tree.json"
+  --step "pgls_species_tree"
+  --family-id "${og_id}"
+  --logical-root "${dir_output_active}"
+  --workspace-root "${gg_workspace_dir}"
+  --input "species_trait=${file_sp_trait}"
+  --input "species_tree=${species_tree_pruned}"
+  --input "expression=${file_og_expression}"
+  --output "pgls=${file_og_species_pgls}"
+  --output "pgls_plot=${file_og_species_pgls_plot}"
+  --parameter "expression_value_type=${exp_value_type}"
+  --parameter "use_phenotype_covariance=${pgls_use_phenocov}"
+)
+gg_artifact_prepare_stage pgls_species_tree_needs_update run_pgls_species_tree "${pgls_species_tree_provenance_args[@]}" || exit $?
+if [[ ${pgls_species_tree_needs_update} -eq 1 && ${run_pgls_species_tree} -eq 1 ]]; then
   gg_step_start "${task}"
   pgls_merge_replicates="yes"
   if [[ ${pgls_use_phenocov} -eq 1 ]]; then
@@ -3878,6 +4470,7 @@ if [[ ! -s "${file_og_species_pgls}" && ${run_pgls_species_tree} -eq 1 ]]; then
 
   mv_out species_tree_PGLS.tsv "${file_og_species_pgls}"
   mv_out species_tree_PGLS.barplot.pdf "${file_og_species_pgls_plot}"
+  gg_artifact_record "${pgls_species_tree_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -3897,14 +4490,7 @@ iqtree_anc_provenance_args=(
   --parameter "codon_model=${codon_model}"
   --parameter "genetic_code=${genetic_code}"
 )
-if gg_artifact_needs_run "${iqtree_anc_provenance_args[@]}"; then
-  iqtree_anc_needs_update=1
-else
-  artifact_check_status=$?
-  if [[ ${artifact_check_status} -ne 1 ]]; then
-    exit "${artifact_check_status}"
-  fi
-fi
+gg_artifact_prepare_stage iqtree_anc_needs_update run_iqtree_anc "${iqtree_anc_provenance_args[@]}" || exit $?
 if [[ ${iqtree_anc_needs_update} -eq 1 && ${run_iqtree_anc} -eq 1 ]]; then
   gg_step_start "${task}"
 
@@ -3995,22 +4581,43 @@ csubst_provenance_args=(
   --parameter "fg_stem_only=${csubst_fg_stem_only}"
   --parameter "nonsyn_recode=${csubst_nonsyn_recode}"
 )
+if [[ ${csubst_max_arity} -ge 2 ]]; then
+  for ((i = 2; i <= csubst_max_arity; i++)); do
+    csubst_cb_varname="file_og_csubst_cb_${i}"
+    csubst_provenance_args+=(
+      --optional-output "csubst_cb_${i}=${!csubst_cb_varname}"
+    )
+  done
+fi
 if [[ -s "${file_sp_trait}" ]]; then
   csubst_provenance_args+=(--input "foreground_trait=${file_sp_trait}")
   csubst_provenance_args+=(--parameter "foreground_present=1")
 else
   csubst_provenance_args+=(--parameter "foreground_present=0")
 fi
-if gg_artifact_needs_run "${csubst_provenance_args[@]}"; then
-  csubst_needs_update=1
-else
-  artifact_check_status=$?
-  if [[ ${artifact_check_status} -ne 1 ]]; then
-    exit "${artifact_check_status}"
-  fi
-fi
+gg_artifact_prepare_stage csubst_needs_update run_csubst "${csubst_provenance_args[@]}" || exit $?
 if [[ ${csubst_needs_update} -eq 1 && ${run_csubst} -eq 1 ]]; then
   gg_step_start "${task}"
+
+  # csubst_cb_K files are managed optional outputs: a missing arity can be a
+  # valid result, but a file from an older generation must never survive and
+  # be imported into the gene-family database as if it were current.
+  shopt -s nullglob
+  old_csubst_cb_files=(
+    "${dir_output_active}"/csubst_cb_[0-9]*/"${og_id}"_csubst_cb_*.tsv
+    "${dir_output_active}"/csubst_cb_[0-9]*/"${og_id}".csubst_cb_*.tsv
+  )
+  shopt -u nullglob
+  for old_csubst_cb_file in "${old_csubst_cb_files[@]}"; do
+    old_csubst_cb_logical_path=${old_csubst_cb_file#"${dir_output_active}"/}
+    if ! python "${gene_family_store_script}" delete \
+      --root "${dir_output_active}" \
+      --path "${old_csubst_cb_logical_path}" \
+      --family-id "${og_id}"; then
+      echo "Failed to remove stale managed CSUBST output: ${old_csubst_cb_file}" >&2
+      exit 1
+    fi
+  done
 
   if [[ -s "${file_sp_trait}" ]]; then
     echo "CSUBST foreground specification file: ${file_sp_trait}"
@@ -4087,7 +4694,7 @@ if [[ ${csubst_needs_update} -eq 1 && ${run_csubst} -eq 1 ]]; then
     echo "CSUBST was successful."
     mv_out "${csubst_b_src}" "${file_og_csubst_b}"
     mv_out "${csubst_cb_stats_src}" "${file_og_csubst_cb_stats}"
-    if [[ ${csubst_max_arity} -gt 2 ]]; then
+    if [[ ${csubst_max_arity} -ge 2 ]]; then
       for ((i = 2; i <= csubst_max_arity; i++)); do
         csubst_cb_src=""
         for candidate in "${csubst_search_dir}/csubst_cb_${i}.tsv" "csubst_cb_${i}.tsv"; do
@@ -4156,14 +4763,7 @@ csubst_scan_provenance_args=(
 if [[ "${csubst_scan_site_plot}" == "yes" ]]; then
   csubst_scan_provenance_args+=(--output "csubst_scan_plot=${file_og_csubst_scan_plot}")
 fi
-if gg_artifact_needs_run "${csubst_scan_provenance_args[@]}"; then
-  csubst_scan_needs_update=1
-else
-  artifact_check_status=$?
-  if [[ ${artifact_check_status} -ne 1 ]]; then
-    exit "${artifact_check_status}"
-  fi
-fi
+gg_artifact_prepare_stage csubst_scan_needs_update run_csubst_scan "${csubst_scan_provenance_args[@]}" || exit $?
 if [[ ${csubst_scan_needs_update} -eq 1 && ${run_csubst_scan} -eq 1 ]]; then
   gg_step_start "${task}"
 
@@ -4305,12 +4905,34 @@ if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tr
     synteny_source_dir="${dir_sp_protein_input}"
     synteny_sequence_mode="protein"
   fi
+  run_synteny_generation=1
   synteny_needs_update=0
-  if [[ ! -s "${file_og_synteny}" || "${file_og_primary_fasta}" -nt "${file_og_synteny}" ]]; then
-    synteny_needs_update=1
+  synteny_provenance_args=(
+    --manifest "${dir_output_active}/artifact_provenance/${og_id}.synteny.json"
+    --step "synteny"
+    --family-id "${og_id}"
+    --logical-root "${dir_output_active}"
+    --workspace-root "${gg_workspace_dir}"
+    --input "primary_fasta=${file_og_primary_fasta}"
+    --optional-output "synteny=${file_og_synteny}"
+    --parameter "input_sequence_mode=${synteny_sequence_mode}"
+    --parameter "window=${treevis_synteny_window}"
+    --parameter "query_blast_evalue=${query_blast_evalue}"
+    --parameter "auto_evalue_cutoffs=${query_blast_auto_evalue_maxlen_cutoffs}"
+    --parameter "genetic_code=${genetic_code}"
+    --parameter "sequence_dir_present=$([[ -d "${synteny_source_dir}" ]] && echo 1 || echo 0)"
+    --parameter "gff_dir_present=$([[ -d "${dir_sp_gff}" ]] && echo 1 || echo 0)"
+  )
+  if [[ -d "${synteny_source_dir}" ]]; then
+    synteny_provenance_args+=(--input "species_sequences=${synteny_source_dir}")
   fi
+  if [[ -d "${dir_sp_gff}" ]]; then
+    synteny_provenance_args+=(--input "species_gff=${dir_sp_gff}")
+  fi
+  gg_artifact_prepare_stage synteny_needs_update run_synteny_generation "${synteny_provenance_args[@]}" || exit $?
   if [[ ${synteny_needs_update} -eq 1 ]]; then
     gg_step_start "${task}"
+    rm -f -- "${file_og_synteny}"
     if [[ ! -d "${synteny_source_dir}" ]]; then
       echo "Sequence directory not found. Skipping synteny panel input generation: ${synteny_source_dir}"
     elif [[ ! -d "${dir_sp_gff}" ]]; then
@@ -4352,13 +4974,15 @@ if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tr
         echo "No synteny links were generated: ${file_og_synteny}"
       fi
     fi
+    gg_artifact_record "${synteny_provenance_args[@]}"
   else
     gg_step_skip "${task}"
   fi
 else
   gg_step_skip "${task}"
 fi
-summary_flag=0
+task="summary statistics"
+summary_needs_update=0
 summary_outputs_changed=0
 summary_provenance_args=(
   --manifest "${file_og_summary_provenance}"
@@ -4391,17 +5015,9 @@ if [[ "${mode_gene_evolution}" == "query2family" ]]; then
     fi
   done
 fi
-if gg_artifact_needs_run "${summary_provenance_args[@]}"; then
-  summary_flag=1
-else
-  artifact_check_status=$?
-  if [[ ${artifact_check_status} -ne 1 ]]; then
-    exit "${artifact_check_status}"
-  fi
-fi
-task="summary statistics"
+gg_artifact_prepare_stage summary_needs_update run_summary "${summary_provenance_args[@]}" || exit $?
 disable_if_no_input_file "run_summary" "${file_og_rooted_tree_analysis}"
-if [[ (${summary_flag} -eq 1 || ! -s "${file_og_stat_branch}" || ! -s "${file_og_stat_tree}") && ${run_summary} -eq 1 ]]; then
+if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ -s "${file_og_notung_reconcil}" ]]; then
@@ -4497,7 +5113,7 @@ else
   gg_step_skip "${task}"
 fi
 
-if [[ ${summary_flag} -eq 1 && ${run_summary} -ne 1 ]] && { [[ ${run_tree_plot} -eq 1 ]] || [[ "${mode_gene_evolution}" == "query2family" && ${treevis_query_marker} -eq 1 ]]; }; then
+if [[ ${summary_needs_update} -eq 1 && ${run_summary} -ne 1 ]] && { [[ ${run_tree_plot} -eq 1 ]] || [[ "${mode_gene_evolution}" == "query2family" && ${treevis_query_marker} -eq 1 ]]; }; then
   echo "Refusing to consume stale or unverified summary outputs: ${file_og_stat_branch}, ${file_og_stat_tree}" >&2
   echo "Set run_summary=1 so they can be regenerated from the declared inputs and parameters." >&2
   exit 1
@@ -4507,12 +5123,6 @@ task="Query marker annotation"
 if [[ "${mode_gene_evolution}" == "query2family" && ${treevis_query_marker} -eq 1 && -s "${file_og_stat_branch}" ]]; then
   query_marker_needs_update=0
   if ! awk -F $'\t' 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "query_marker") found = 1; exit(found ? 0 : 1) }' "${file_og_stat_branch}"; then
-    query_marker_needs_update=1
-  elif [[ -s "${file_query_gene}" && "${file_query_gene}" -nt "${file_og_stat_branch}" ]]; then
-    query_marker_needs_update=1
-  elif [[ -s "${file_og_query_aa_fasta}" && "${file_og_query_aa_fasta}" -nt "${file_og_stat_branch}" ]]; then
-    query_marker_needs_update=1
-  elif [[ -s "${file_og_query_blast}" && "${file_og_query_blast}" -nt "${file_og_stat_branch}" ]]; then
     query_marker_needs_update=1
   fi
   if [[ ${query_marker_needs_update} -eq 1 ]]; then
@@ -4525,7 +5135,7 @@ if [[ "${mode_gene_evolution}" == "query2family" && ${treevis_query_marker} -eq 
       --min_query_blast_coverage "${query_blast_coverage}" \
       --outfile "orthogroup.branch.query_marker.tsv"
     cp_out "orthogroup.branch.query_marker.tsv" "${file_og_stat_branch}"
-    summary_flag=1
+    summary_needs_update=1
     summary_outputs_changed=1
   else
     gg_step_skip "${task}"
@@ -4607,14 +5217,7 @@ for tree_plot_input_index in "${!tree_plot_input_files[@]}"; do
     tree_plot_provenance_args+=(--input "input_${tree_plot_input_index}=${tree_plot_input}")
   fi
 done
-if gg_artifact_needs_run "${tree_plot_provenance_args[@]}"; then
-  tree_plot_needs_update=1
-else
-  artifact_check_status=$?
-  if [[ ${artifact_check_status} -ne 1 ]]; then
-    exit "${artifact_check_status}"
-  fi
-fi
+gg_artifact_prepare_stage tree_plot_needs_update run_tree_plot "${tree_plot_provenance_args[@]}" || exit $?
 if [[ ${run_tree_plot} -eq 1 ]]; then
   if ! Rscript -e "if (!requireNamespace('ggimage', quietly=TRUE)) quit(status=1)" > /dev/null 2>&1; then
     echo "ggimage package is unavailable. Disabling run_tree_plot."

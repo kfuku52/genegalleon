@@ -149,7 +149,6 @@ invalidate_cached_query_table_if_prefix_mismatch() {
   local first_query=""
   local first_query_species=""
   local expected_species=""
-  local stale_file=""
 
   if [[ ! -s "${table_file}" ]]; then
     return 0
@@ -161,11 +160,25 @@ invalidate_cached_query_table_if_prefix_mismatch() {
   expected_species=${expected_prefix%_}
   first_query_species=$(gg_species_name_from_path_or_dot "${first_query}")
   if [[ "${first_query_species}" != "${expected_species}" ]]; then
-    stale_file="${table_file}.stale.$(date +%Y%m%d%H%M%S)"
-    mv -f -- "${table_file}" "${stale_file}"
-    echo "Cached ${label} is inconsistent with the current species prefix ${expected_prefix}."
-    echo "First query ID: ${first_query}"
-    echo "Archived stale file to: ${stale_file}"
+    case "${artifact_stale_policy:-stop}" in
+      stop)
+        echo "Cached ${label} is inconsistent with the current species prefix ${expected_prefix}." >&2
+        echo "First query ID: ${first_query}. No output files were modified." >&2
+        echo "Use artifact_stale_policy=rebuild to regenerate or artifact_stale_policy=reuse to keep this output." >&2
+        return 3
+        ;;
+      reuse)
+        echo "Warning: reusing ${label} with a mismatched species prefix because artifact_stale_policy=reuse: ${table_file}" >&2
+        ;;
+      rebuild)
+        echo "Regenerating ${label} because its first query (${first_query}) does not match ${expected_prefix}."
+        rm -f -- "${table_file}"
+        ;;
+      *)
+        echo "Invalid artifact_stale_policy=${artifact_stale_policy:-}; expected stop, reuse, or rebuild." >&2
+        return 2
+        ;;
+    esac
   fi
 }
 
@@ -1632,6 +1645,7 @@ file_amalgkit_merge_count="${dir_transcriptome_assembly_output}/amalgkit_merge/$
 file_amalgkit_merge_tpm="${dir_transcriptome_assembly_output}/amalgkit_merge/${sp_ub}/${sp_ub}_tpm.tsv"
 file_amalgkit_merge_metadata="${dir_transcriptome_assembly_output}/amalgkit_merge/${sp_ub}/${sp_ub}_metadata.tsv"
 file_multispecies_summary="${dir_transcriptome_assembly_output}/annotation_summary/assembly_stat_summary.pdf"
+transcriptome_provenance_dir="${dir_transcriptome_assembly_output}/artifact_provenance"
 
 ensure_dir "${dir_tmp}"
 ensure_dir "${dir_amalgkit_download_dir}"
@@ -1647,7 +1661,22 @@ amalgkit_gcp_download_max_concurrency="$(normalize_amalgkit_download_limit_value
 # Sourced by gg_transcriptome_generation_core.sh.
 
 task="amalgkit metadata/integrate"
-if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} -eq 1 ]]; then
+metadata_needs_update=0
+gg_artifact_contract_init metadata_provenance_args "transcriptome_metadata" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.metadata.json"
+if [[ "${selected_transcriptome_mode}" == "sraid" ]]; then
+  metadata_provenance_args+=(--input "sra_list=${file_input_sra_list}")
+elif [[ "${selected_transcriptome_mode}" == "fastq" ]]; then
+  metadata_provenance_args+=(--input "fastq_directory=${dir_species_fastq}")
+fi
+metadata_provenance_args+=(
+  --output "metadata=${file_amalgkit_metadata}"
+  --parameter "input_mode=${selected_transcriptome_mode}"
+  --parameter "sra_strategy_query=${amalgkit_sra_strategy_query}"
+)
+if [[ "${selected_transcriptome_mode}" != "metadata" ]]; then
+  gg_artifact_prepare_stage metadata_needs_update run_amalgkit_metadata_or_integrate "${metadata_provenance_args[@]}" || exit $?
+fi
+if [[ "${selected_transcriptome_mode}" != "metadata" && ${metadata_needs_update} -eq 1 && ${run_amalgkit_metadata_or_integrate} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ -e "./metadata" ]]; then
     rm -rf -- "./metadata"
@@ -1719,6 +1748,8 @@ if [[ ! -s "${file_amalgkit_metadata}" && ${run_amalgkit_metadata_or_integrate} 
     exit 1
   fi
 
+  gg_artifact_record "${metadata_provenance_args[@]}"
+
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
@@ -1739,7 +1770,28 @@ if [[ -d "${dir_amalgkit_getfastq_sp}" ]]; then
 fi
 echo "Number of amalgkit getfastq fastq files: ${#amalgkit_fastq_files[@]}"
 echo "is_fastq_requiring_downstream_analysis_done: $(is_fastq_requiring_downstream_analysis_done)"
-if [[ ${run_amalgkit_getfastq} -eq 1 && $(is_fastq_requiring_downstream_analysis_done) -eq 0 ]]; then
+getfastq_needs_update=0
+gg_artifact_contract_init getfastq_provenance_args "transcriptome_getfastq" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.getfastq.json"
+getfastq_provenance_args+=(
+  --input "metadata=${file_amalgkit_metadata}"
+  --output "completion_manifest=${dir_amalgkit_getfastq_sp}/getfastq_completion.json"
+  --parameter "rrna_filter=${amalgkit_rrna_filter}"
+  --parameter "rrna_filter_jobs=${amalgkit_rrna_filter_jobs}"
+  --parameter "rrna_filter_chunk_spots=${amalgkit_rrna_filter_chunk_spots}"
+  --parameter "rrna_filter_memory_limit=${amalgkit_rrna_filter_memory_limit}"
+  --parameter "contam_filter=${amalgkit_contam_filter}"
+  --parameter "contam_filter_rank=${contamination_removal_rank_for_amalgkit}"
+  --parameter "read_name=trinity"
+  --parameter "remove_sra=yes"
+  --parameter "remove_tmp=yes"
+  --parameter "dump_print=yes"
+  --parameter "aws=yes"
+  --parameter "ncbi=yes"
+  --parameter "redo=no"
+)
+gg_artifact_add_input_if_present getfastq_provenance_args "contam_filter_db" "${dir_mmseqs2_db}/UniRef90_DB"
+gg_artifact_prepare_stage getfastq_needs_update run_amalgkit_getfastq "${getfastq_provenance_args[@]}" || exit $?
+if [[ ${run_amalgkit_getfastq} -eq 1 && ${getfastq_needs_update} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_amalgkit_getfastq_sp}"
 
@@ -1755,6 +1807,8 @@ if [[ ${run_amalgkit_getfastq} -eq 1 && $(is_fastq_requiring_downstream_analysis
   if ! run_amalgkit_getfastq_or_fallback; then
     exit 1
   fi
+  gg_artifact_add_input_if_present getfastq_provenance_args "contam_filter_db" "${dir_mmseqs2_db}/UniRef90_DB"
+  gg_artifact_record "${getfastq_provenance_args[@]}"
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
@@ -1763,7 +1817,20 @@ fi
 # Sourced by gg_transcriptome_generation_core.sh.
 
 task='De novo transcriptome assembly'
-if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
+assembly_needs_update=0
+gg_artifact_contract_init assembly_provenance_args "transcriptome_assembly" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.assembly.json"
+assembly_provenance_args+=(
+  --input "getfastq_completion=${dir_amalgkit_getfastq_sp}/getfastq_completion.json"
+  --input "read_technology=${file_amalgkit_read_technology}"
+  --output "isoforms=${file_isoform}"
+  --parameter "assembly_method=${effective_assembly_method}"
+  --parameter "protocol_rna_seq=${protocol_rna_seq}"
+  --parameter "max_input_fastq_size=${max_assembly_input_fastq_size//,/}"
+  --parameter "subsample_seed=11"
+  --parameter "trinity_min_contig_length=200"
+)
+gg_artifact_prepare_stage assembly_needs_update run_assembly "${assembly_provenance_args[@]}" || exit $?
+if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_parent_dir "${file_isoform}"
   if [[ ! -d "${dir_amalgkit_getfastq_sp}" ]]; then
@@ -2072,14 +2139,33 @@ if [[ ! -s "${file_isoform}" && ${run_assembly} -eq 1 ]]; then
     exit 1
   fi
 
+  gg_artifact_record "${assembly_provenance_args[@]}"
+
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
 fi
 
 task='Corset clustering of long-read transcripts'
-if [[ "${effective_assembly_method}" == 'rna-bloom2' && -s "${file_isoform}" && ! -s "${file_corset_clusters}" && ${run_longestcds} -eq 1 ]]; then
+corset_needs_update=0
+gg_artifact_contract_init corset_provenance_args "transcriptome_corset" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.corset.json"
+corset_provenance_args+=(
+  --input "isoforms=${file_isoform}"
+  --input "read_technology=${file_amalgkit_read_technology}"
+  --input "getfastq_completion=${dir_amalgkit_getfastq_sp}/getfastq_completion.json"
+  --output "clusters=${file_corset_clusters}"
+  --optional-output "counts=${file_corset_counts}"
+  --parameter "minimap2_preset=$([[ ${detected_has_pacbio} -eq 1 ]] && echo map-pb || echo map-ont)"
+  --parameter "minimap2_secondary=yes"
+  --parameter "minimap2_N=50"
+  --parameter "corset_D=99999999999"
+)
+if [[ "${effective_assembly_method}" == 'rna-bloom2' ]]; then
+  gg_artifact_prepare_stage corset_needs_update run_longestcds "${corset_provenance_args[@]}" || exit $?
+fi
+if [[ "${effective_assembly_method}" == 'rna-bloom2' && -s "${file_isoform}" && ${corset_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -f -- "${file_corset_clusters}" "${file_corset_counts}"
   ensure_parent_dir "${file_corset_clusters}"
   ensure_parent_dir "${file_corset_counts}"
   load_classified_getfastq_files "${file_amalgkit_read_technology}"
@@ -2137,6 +2223,7 @@ if [[ "${effective_assembly_method}" == 'rna-bloom2' && -s "${file_isoform}" && 
   if [[ -s "counts.txt" ]]; then
     mv_out "counts.txt" "${file_corset_counts}"
   fi
+  gg_artifact_record "${corset_provenance_args[@]}"
   cd "${dir_tmp}" || exit 1
   echo "$(date): End: ${task}"
 else
@@ -2147,7 +2234,21 @@ fi
 
 task='Longest CDS extraction'
 disable_if_no_input_file "run_longestcds" "${file_isoform}"
-if [[ (! -s "${file_longestcds}" || ! -s "${file_longestcds_transcript}") && ${run_longestcds} -eq 1 ]]; then
+longestcds_needs_update=0
+gg_artifact_contract_init longestcds_provenance_args "transcriptome_longest_cds" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.longest_cds.json"
+longestcds_provenance_args+=(
+  --input "isoforms=${file_isoform}"
+  --output "longest_cds=${file_longestcds}"
+  --output "longest_transcript=${file_longestcds_transcript}"
+  --parameter "assembly_method=${effective_assembly_method}"
+  --parameter "orf_aggregation_level=${orf_aggregation_level}"
+  --parameter "genetic_code=${genetic_code}"
+)
+if [[ "${effective_assembly_method}" == 'rna-bloom2' ]]; then
+  longestcds_provenance_args+=(--input "corset_clusters=${file_corset_clusters}")
+fi
+gg_artifact_prepare_stage longestcds_needs_update run_longestcds "${longestcds_provenance_args[@]}" || exit $?
+if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_parent_dir "${file_longestcds}"
   ensure_parent_dir "${file_longestcds_transcript}"
@@ -2230,15 +2331,24 @@ if [[ (! -s "${file_longestcds}" || ! -s "${file_longestcds_transcript}") && ${r
   else
     echo "Output file not detected for the task: ${task}"
   fi
+  gg_artifact_record "${longestcds_provenance_args[@]}"
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
 fi
 
 task="seqkit fx2tab for the longest CDS sequences"
-invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_fx2tab}" "${sp_ub}_" "${task}" 1
+invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_fx2tab}" "${sp_ub}_" "${task}" 1 || exit $?
 disable_if_no_input_file "run_longestcds_fx2tab" "${file_longestcds}"
-if [[ ! -s "${file_longestcds_fx2tab}" && ${run_longestcds_fx2tab} -eq 1 ]]; then
+longestcds_fx2tab_needs_update=0
+gg_artifact_contract_init longestcds_fx2tab_provenance_args "transcriptome_longest_cds_fx2tab" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.longest_cds_fx2tab.json"
+longestcds_fx2tab_provenance_args+=(
+  --input "longest_cds=${file_longestcds}"
+  --output "fx2tab=${file_longestcds_fx2tab}"
+  --parameter "fields=length,name,gc,gc-skew,header-line,only-id"
+)
+gg_artifact_prepare_stage longestcds_fx2tab_needs_update run_longestcds_fx2tab "${longestcds_fx2tab_provenance_args[@]}" || exit $?
+if [[ ${longestcds_fx2tab_needs_update} -eq 1 && ${run_longestcds_fx2tab} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit fx2tab \
@@ -2256,14 +2366,29 @@ if [[ ! -s "${file_longestcds_fx2tab}" && ${run_longestcds_fx2tab} -eq 1 ]]; the
     echo "Output file detected for the task: ${task}"
     mv_out "tmp.cds_length.tsv" "${file_longestcds_fx2tab}"
   fi
+  gg_artifact_record "${longestcds_fx2tab_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="MMseqs2 Taxonomy of the CDS sequences"
-invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_mmseqs2taxonomy}" "${sp_ub}_" "${task}" 0
+invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_mmseqs2taxonomy}" "${sp_ub}_" "${task}" 0 || exit $?
 disable_if_no_input_file "run_longestcds_mmseqs2taxonomy" "${file_longestcds}"
-if [[ ! -s "${file_longestcds_mmseqs2taxonomy}" && ${run_longestcds_mmseqs2taxonomy} -eq 1 ]]; then
+longestcds_taxonomy_needs_update=0
+gg_artifact_contract_init longestcds_taxonomy_provenance_args "transcriptome_longest_cds_taxonomy" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.longest_cds_taxonomy.json"
+longestcds_taxonomy_provenance_args+=(
+  --input "longest_cds=${file_longestcds}"
+  --output "taxonomy=${file_longestcds_mmseqs2taxonomy}"
+  --parameter "split_mode=2"
+  --parameter "majority=0.5"
+  --parameter "lca_mode=3"
+  --parameter "vote_mode=1"
+  --parameter "tax_lineage=2"
+  --parameter "orf_filter=0"
+)
+gg_artifact_add_input_if_present longestcds_taxonomy_provenance_args "uniref90_db" "${dir_mmseqs2_db}/UniRef90_DB"
+gg_artifact_prepare_stage longestcds_taxonomy_needs_update run_longestcds_mmseqs2taxonomy "${longestcds_taxonomy_provenance_args[@]}" || exit $?
+if [[ ${longestcds_taxonomy_needs_update} -eq 1 && ${run_longestcds_mmseqs2taxonomy} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if ! ensure_mmseqs_uniref90_db "${dir_mmseqs2_db}" "${GG_TASK_CPUS}"; then
@@ -2298,13 +2423,28 @@ if [[ ! -s "${file_longestcds_mmseqs2taxonomy}" && ${run_longestcds_mmseqs2taxon
     rm -f -- output_prefix.*
     rm -rf -- "tmp_mmseqs2"
   fi
+  gg_artifact_add_input_if_present longestcds_taxonomy_provenance_args "uniref90_db" "${dir_mmseqs2_db}/UniRef90_DB"
+  gg_artifact_record "${longestcds_taxonomy_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Contaminated sequence removal from the CDS sequences"
 disable_if_no_input_file "run_longestcds_contamination_removal" "${file_longestcds}" "${file_longestcds_fx2tab}" "${file_longestcds_mmseqs2taxonomy}"
-if [[ (! -s "${file_longestcds_contamination_removal_fasta}" || ! -s "${file_longestcds_contamination_removal_tsv}") && ${run_longestcds_contamination_removal} -eq 1 ]]; then
+longestcds_contamination_needs_update=0
+gg_artifact_contract_init longestcds_contamination_provenance_args "transcriptome_longest_cds_contamination_removal" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.longest_cds_contamination_removal.json"
+longestcds_contamination_provenance_args+=(
+  --input "longest_cds=${file_longestcds}"
+  --input "taxonomy=${file_longestcds_mmseqs2taxonomy}"
+  --input "fx2tab=${file_longestcds_fx2tab}"
+  --output "filtered_fasta=${file_longestcds_contamination_removal_fasta}"
+  --output "compatibility=${file_longestcds_contamination_removal_tsv}"
+  --parameter "target_taxon=${contamination_removal_target_taxon:-${sp_ub}}"
+  --parameter "rank=${contamination_removal_rank_for_remove_contaminated_sequences}"
+  --parameter "rename_seq=no"
+)
+gg_artifact_prepare_stage longestcds_contamination_needs_update run_longestcds_contamination_removal "${longestcds_contamination_provenance_args[@]}" || exit $?
+if [[ ${longestcds_contamination_needs_update} -eq 1 && ${run_longestcds_contamination_removal} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_parent_dir "${file_longestcds_contamination_removal_fasta}"
 
@@ -2330,21 +2470,36 @@ if [[ (! -s "${file_longestcds_contamination_removal_fasta}" || ! -s "${file_lon
     rm -f -- "clean_sequences.fa"
     mv_out "lineage_compatibility.tsv" "${file_longestcds_contamination_removal_tsv}"
   fi
+  gg_artifact_record "${longestcds_contamination_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task='BUSCO for cDNA isoforms (isoform.fasta)'
 disable_if_no_input_file "run_busco_isoforms" "${file_isoform}"
-if [[ (! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna_isoforms}") && ${run_busco_isoforms} -eq 1 ]]; then
+if [[ ${run_busco_isoforms} -eq 1 || -s "${file_busco_full_cdna_isoforms}" || -s "${file_busco_short_cdna_isoforms}" || -s "${transcriptome_provenance_dir}/${sp_ub}.busco_isoforms.json" ]]; then
+  resolve_busco_lineage_for_current_species || exit 1
+fi
+busco_isoforms_needs_update=0
+gg_artifact_contract_init busco_isoforms_provenance_args "transcriptome_busco_isoforms" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.busco_isoforms.json"
+busco_isoforms_provenance_args+=(
+  --input "isoforms=${file_isoform}"
+  --optional-output "full_table=${file_busco_full_cdna_isoforms}"
+  --optional-output "short_summary=${file_busco_short_cdna_isoforms}"
+  --parameter "lineage=${busco_lineage_resolved:-${busco_lineage}}"
+  --parameter "mode=transcriptome"
+  --parameter "evalue=1e-03"
+  --parameter "limit=20"
+  --parameter "known_metaeuk_failure_outputs=optional_absence"
+)
+gg_artifact_prepare_stage busco_isoforms_needs_update run_busco_isoforms "${busco_isoforms_provenance_args[@]}" || exit $?
+if [[ ${busco_isoforms_needs_update} -eq 1 && ${run_busco_isoforms} -eq 1 ]]; then
   gg_step_start "${task}"
   busco_stage_status=0
+  rm -f -- "${file_busco_full_cdna_isoforms}" "${file_busco_short_cdna_isoforms}"
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"
 
-  if ! resolve_busco_lineage_for_current_species; then
-    exit 1
-  fi
   if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
     exit 1
@@ -2371,21 +2526,36 @@ if [[ (! -s "${file_busco_full_cdna_isoforms}" || ! -s "${file_busco_short_cdna_
     cleanup_busco_stage_temp_artifacts "busco_infile_cdna.fa"
     echo "$(date): End: ${task}"
   fi
+  gg_artifact_record "${busco_isoforms_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task='BUSCO for longest CDS'
 disable_if_no_input_file "run_busco_longest_cds" "${file_longestcds}"
-if [[ (! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longest_cds}") && ${run_busco_longest_cds} -eq 1 ]]; then
+if [[ ${run_busco_longest_cds} -eq 1 || -s "${file_busco_full_longest_cds}" || -s "${file_busco_short_longest_cds}" || -s "${transcriptome_provenance_dir}/${sp_ub}.busco_longest_cds.json" ]]; then
+  resolve_busco_lineage_for_current_species || exit 1
+fi
+busco_longest_cds_needs_update=0
+gg_artifact_contract_init busco_longest_cds_provenance_args "transcriptome_busco_longest_cds" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.busco_longest_cds.json"
+busco_longest_cds_provenance_args+=(
+  --input "longest_cds=${file_longestcds}"
+  --optional-output "full_table=${file_busco_full_longest_cds}"
+  --optional-output "short_summary=${file_busco_short_longest_cds}"
+  --parameter "lineage=${busco_lineage_resolved:-${busco_lineage}}"
+  --parameter "mode=transcriptome"
+  --parameter "evalue=1e-03"
+  --parameter "limit=20"
+  --parameter "known_metaeuk_failure_outputs=optional_absence"
+)
+gg_artifact_prepare_stage busco_longest_cds_needs_update run_busco_longest_cds "${busco_longest_cds_provenance_args[@]}" || exit $?
+if [[ ${busco_longest_cds_needs_update} -eq 1 && ${run_busco_longest_cds} -eq 1 ]]; then
   gg_step_start "${task}"
   busco_stage_status=0
+  rm -f -- "${file_busco_full_longest_cds}" "${file_busco_short_longest_cds}"
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"
 
-  if ! resolve_busco_lineage_for_current_species; then
-    exit 1
-  fi
   if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
     exit 1
@@ -2412,21 +2582,36 @@ if [[ (! -s "${file_busco_full_longest_cds}" || ! -s "${file_busco_short_longest
     cleanup_busco_stage_temp_artifacts "busco_infile_cds.fa"
     echo "$(date): End: ${task}"
   fi
+  gg_artifact_record "${busco_longest_cds_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task='BUSCO for contamination-removed longest CDS'
 disable_if_no_input_file "run_busco_contamination_removed_longest_cds" "${file_longestcds_contamination_removal_fasta}"
-if [[ (! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_short_longest_cds_filtered}") && ${run_busco_contamination_removed_longest_cds} -eq 1 ]]; then
+if [[ ${run_busco_contamination_removed_longest_cds} -eq 1 || -s "${file_busco_full_longest_cds_filtered}" || -s "${file_busco_short_longest_cds_filtered}" || -s "${transcriptome_provenance_dir}/${sp_ub}.busco_filtered_longest_cds.json" ]]; then
+  resolve_busco_lineage_for_current_species || exit 1
+fi
+busco_filtered_needs_update=0
+gg_artifact_contract_init busco_filtered_provenance_args "transcriptome_busco_filtered_longest_cds" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.busco_filtered_longest_cds.json"
+busco_filtered_provenance_args+=(
+  --input "filtered_longest_cds=${file_longestcds_contamination_removal_fasta}"
+  --optional-output "full_table=${file_busco_full_longest_cds_filtered}"
+  --optional-output "short_summary=${file_busco_short_longest_cds_filtered}"
+  --parameter "lineage=${busco_lineage_resolved:-${busco_lineage}}"
+  --parameter "mode=transcriptome"
+  --parameter "evalue=1e-03"
+  --parameter "limit=20"
+  --parameter "known_metaeuk_failure_outputs=optional_absence"
+)
+gg_artifact_prepare_stage busco_filtered_needs_update run_busco_contamination_removed_longest_cds "${busco_filtered_provenance_args[@]}" || exit $?
+if [[ ${busco_filtered_needs_update} -eq 1 && ${run_busco_contamination_removed_longest_cds} -eq 1 ]]; then
   gg_step_start "${task}"
   busco_stage_status=0
+  rm -f -- "${file_busco_full_longest_cds_filtered}" "${file_busco_short_longest_cds_filtered}"
 
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"
 
-  if ! resolve_busco_lineage_for_current_species; then
-    exit 1
-  fi
   if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
     exit 1
@@ -2453,6 +2638,7 @@ if [[ (! -s "${file_busco_full_longest_cds_filtered}" || ! -s "${file_busco_shor
     cleanup_busco_stage_temp_artifacts "busco_infile_cds.fa"
     echo "$(date): End: ${task}"
   fi
+  gg_artifact_record "${busco_filtered_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2461,7 +2647,17 @@ task='Assembly statistics'
 disable_if_no_input_file "run_assembly_stat" "${file_isoform}"
 if [[ "${run_longestcds}" -eq 1 ]]; then disable_if_no_input_file "run_assembly_stat" "${file_longestcds}"; fi
 if [[ "${run_longestcds_contamination_removal}" -eq 1 ]]; then disable_if_no_input_file "run_assembly_stat" "${file_longestcds_contamination_removal_fasta}"; fi
-if [[ ! -s "${file_assembly_stat}" && ${run_assembly_stat} -eq 1 ]]; then
+assembly_stat_needs_update=0
+gg_artifact_contract_init assembly_stat_provenance_args "transcriptome_assembly_statistics" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.assembly_statistics.json"
+assembly_stat_provenance_args+=(
+  --input "isoforms=${file_isoform}"
+  --output "statistics=${file_assembly_stat}"
+  --parameter "seqkit_stats=all,tabular"
+)
+gg_artifact_add_input_if_present assembly_stat_provenance_args "longest_cds" "${file_longestcds}"
+gg_artifact_add_input_if_present assembly_stat_provenance_args "filtered_longest_cds" "${file_longestcds_contamination_removal_fasta}"
+gg_artifact_prepare_stage assembly_stat_needs_update run_assembly_stat "${assembly_stat_provenance_args[@]}" || exit $?
+if [[ ${assembly_stat_needs_update} -eq 1 && ${run_assembly_stat} -eq 1 ]]; then
   gg_step_start "${task}"
 
   input_files=("${file_isoform}")
@@ -2483,6 +2679,7 @@ if [[ ! -s "${file_assembly_stat}" && ${run_assembly_stat} -eq 1 ]]; then
     echo "The task ${task} was successful."
     mv_out assembly_stat.tsv "${file_assembly_stat}"
   fi
+  gg_artifact_record "${assembly_stat_provenance_args[@]}"
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
@@ -2492,13 +2689,54 @@ fi
 
 task='amalgkit quant'
 disable_if_no_input_file "run_amalgkit_quant" "${file_amalgkit_metadata}"
-if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count}" || ! -s "${file_amalgkit_merge_tpm}") && ${run_amalgkit_quant} -eq 1 ]]; then
+file_kallisto_reference_fasta=""
+if [[ ${kallisto_reference} == 'species_cds' ]]; then
+  kallisto_ref_candidates=()
+  mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${gg_workspace_input_dir}/species_cds" "${sp_ub}")
+  if [[ ${#kallisto_ref_candidates[@]} -eq 1 ]]; then
+    file_kallisto_reference_fasta="${kallisto_ref_candidates[0]}"
+  elif [[ ${run_amalgkit_quant} -eq 1 ]]; then
+    echo "Expected exactly one species_cds reference for ${sp_ub}; found ${#kallisto_ref_candidates[@]}. Exiting."
+    exit 1
+  fi
+elif [[ ${kallisto_reference} == 'longest_transcript' ]]; then
+  file_kallisto_reference_fasta=${file_longestcds_transcript}
+elif [[ ${kallisto_reference} == 'longest_cds' ]]; then
+  file_kallisto_reference_fasta=${file_longestcds}
+elif [[ ${kallisto_reference} == 'contamination_removed_longest_cds' ]]; then
+  file_kallisto_reference_fasta=${file_longestcds_contamination_removal_fasta}
+else
+  echo "Please check the input parameter. kallisto_reference must not be: ${kallisto_reference}"
+  exit 1
+fi
+quant_needs_update=0
+gg_artifact_contract_init quant_provenance_args "transcriptome_quant" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.quant.json"
+quant_provenance_args+=(
+  --input "metadata=${file_amalgkit_metadata}"
+  --input "getfastq_completion=${dir_amalgkit_getfastq_sp}/getfastq_completion.json"
+  --input "reference=${file_kallisto_reference_fasta}"
+  --output "quant_directory=${dir_amalgkit_quant}/${sp_ub}"
+  --parameter "reference_type=${kallisto_reference}"
+  --parameter "quant_backend=${amalgkit_quant_backend}"
+  --parameter "oarfish_seq_tech=${amalgkit_oarfish_seq_tech}"
+  --parameter "oarfish_options=${amalgkit_oarfish_options}"
+  --parameter "clean_fastq=no"
+  --parameter "build_index=yes"
+)
+gg_artifact_prepare_stage quant_needs_update run_amalgkit_quant "${quant_provenance_args[@]}" || exit $?
+if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
   gg_step_start "${task}"
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
     echo "Failed to prepare ETE taxonomy DB for quant reference alias validation. Exiting."
     exit 1
   fi
-  ensure_dir "${dir_amalgkit_quant}/${sp_ub}"
+  if [[ -z "${dir_amalgkit_quant}" || "${dir_amalgkit_quant}" == "/" || -z "${sp_ub}" ]]; then
+    echo "Refusing to clear an unsafe amalgkit quant output path." >&2
+    exit 1
+  fi
+  quant_species_output_dir="${dir_amalgkit_quant%/}/${sp_ub}"
+  rm -rf -- "${quant_species_output_dir}"
+  ensure_dir "${quant_species_output_dir}"
   if [[ ! -d "${dir_amalgkit_getfastq_sp}" ]]; then
     echo "amalgkit getfastq output directory not found: ${dir_amalgkit_getfastq_sp}. Exiting."
     exit 1
@@ -2517,30 +2755,6 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
   recreate_dir "./quant"
   quant_reference_alias_audit="./quant_reference_aliases.tsv"
   rm -f -- "${quant_reference_alias_audit}"
-  if [[ ${kallisto_reference} == 'species_cds' ]]; then
-    kallisto_ref_candidates=()
-    mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${gg_workspace_input_dir}/species_cds" "${sp_ub}")
-    if [[ ${#kallisto_ref_candidates[@]} -eq 0 ]]; then
-      echo "No species_cds reference file matched species label ${sp_ub} in ${gg_workspace_input_dir}/species_cds. Exiting."
-      exit 1
-    fi
-    if [[ ${#kallisto_ref_candidates[@]} -gt 1 ]]; then
-      echo "Multiple species_cds reference files matched species label ${sp_ub}. Exiting."
-      printf '  %s\n' "${kallisto_ref_candidates[@]}"
-      exit 1
-    fi
-    file_kallisto_reference_fasta="${kallisto_ref_candidates[0]}"
-  elif [[ ${kallisto_reference} == 'longest_transcript' ]]; then
-    file_kallisto_reference_fasta=${file_longestcds_transcript}
-  elif [[ ${kallisto_reference} == 'longest_cds' ]]; then
-    file_kallisto_reference_fasta=${file_longestcds}
-  elif [[ ${kallisto_reference} == 'contamination_removed_longest_cds' ]]; then
-    file_kallisto_reference_fasta=${file_longestcds_contamination_removal_fasta}
-  else
-    echo "Please check the input parameter. kallisto_reference must not be: ${kallisto_reference}"
-    exit 1
-  fi
-
   echo "kallisto reference = ${kallisto_reference}: ${file_kallisto_reference_fasta}"
   if [[ -e "${file_kallisto_reference_fasta}" ]]; then
     staged_quant_reference_aliases=""
@@ -2605,6 +2819,8 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
     rm -f -- "./getfastq" # Do not put -r, otherwise the original getfastq files will be deleted.
   fi
 
+  gg_artifact_record "${quant_provenance_args[@]}"
+
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
@@ -2612,7 +2828,18 @@ fi
 
 task='amalgkit merge'
 disable_if_no_input_file "run_amalgkit_merge" "${file_amalgkit_metadata}"
-if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count}" || ! -s "${file_amalgkit_merge_tpm}" || ! -s "${file_amalgkit_merge_metadata}") && ${run_amalgkit_merge} -eq 1 ]]; then
+merge_needs_update=0
+gg_artifact_contract_init merge_provenance_args "transcriptome_merge" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.merge.json"
+merge_provenance_args+=(
+  --input "metadata=${file_amalgkit_metadata}"
+  --input "quant_directory=${dir_amalgkit_quant}/${sp_ub}"
+  --output "effective_length=${file_amalgkit_merge_efflen}"
+  --output "estimated_counts=${file_amalgkit_merge_count}"
+  --output "tpm=${file_amalgkit_merge_tpm}"
+  --output "metadata_output=${file_amalgkit_merge_metadata}"
+)
+gg_artifact_prepare_stage merge_needs_update run_amalgkit_merge "${merge_provenance_args[@]}" || exit $?
+if [[ ${merge_needs_update} -eq 1 && ${run_amalgkit_merge} -eq 1 ]]; then
   gg_step_start "${task}"
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
     echo "Failed to prepare ETE taxonomy DB for merge metadata alias validation. Exiting."
@@ -2653,20 +2880,60 @@ if [[ (! -s "${file_amalgkit_merge_efflen}" || ! -s "${file_amalgkit_merge_count
   else
     echo "amalgkit merge outputs were not found for the metadata scientific_name prefix under: ./merge"
   fi
+  gg_artifact_record "${merge_provenance_args[@]}"
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
 fi
 
 task='Multispecies summary'
-if is_output_older_than_inputs "^file_" "${file_multispecies_summary}"; then
-  summary_flag=0
+case "${selected_transcriptome_mode}" in
+  fastq) transcriptome_expected_tasks=${#fastq_mode_dirs[@]} ;;
+  sraid) transcriptome_expected_tasks=${#sra_mode_files[@]} ;;
+  metadata) transcriptome_expected_tasks=${#metadata_mode_files[@]} ;;
+  *) transcriptome_expected_tasks=1 ;;
+esac
+transcriptome_summary_finalizer_should_run=0
+transcriptome_summary_finalizer_claimed=0
+if gg_array_finalizer_claim \
+  "${transcriptome_provenance_dir}/array_finalizers" \
+  "multispecies_summary" \
+  "${transcriptome_expected_tasks}"; then
+  transcriptome_summary_finalizer_should_run=1
+  transcriptome_summary_finalizer_claimed=1
+  trap 'gg_array_finalizer_release' EXIT
 else
-  summary_flag=$?
+  transcriptome_summary_finalizer_status=$?
+  if [[ ${transcriptome_summary_finalizer_status} -ne 1 ]]; then
+    exit "${transcriptome_summary_finalizer_status}"
+  fi
 fi
-if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
+transcriptome_summary_needs_update=0
+gg_artifact_contract_init transcriptome_summary_provenance_args "transcriptome_multispecies_summary" "all_species" "${transcriptome_provenance_dir}/all_species.summary.json"
+gg_artifact_add_input_if_present transcriptome_summary_provenance_args "assembly_statistics" "$(dirname "${file_assembly_stat}")"
+gg_artifact_add_input_if_present transcriptome_summary_provenance_args "input_metadata" "${dir_input_amalgkit_metadata}"
+gg_artifact_add_input_if_present transcriptome_summary_provenance_args "merge_outputs" "$(dirname "$(dirname "${file_amalgkit_merge_tpm}")")"
+gg_artifact_add_input_if_present transcriptome_summary_provenance_args "busco_isoforms" "$(dirname "${file_busco_full_cdna_isoforms}")"
+gg_artifact_add_input_if_present transcriptome_summary_provenance_args "busco_longest_cds" "$(dirname "${file_busco_full_longest_cds}")"
+gg_artifact_add_input_if_present transcriptome_summary_provenance_args "busco_filtered_longest_cds" "$(dirname "${file_busco_full_longest_cds_filtered}")"
+transcriptome_summary_provenance_args+=(
+  --output "summary_pdf=${file_multispecies_summary}"
+  --output "summary_directory=$(dirname "${file_multispecies_summary}")"
+  --parameter "min_og_species=auto"
+)
+if [[ ${transcriptome_summary_finalizer_should_run} -eq 1 ]]; then
+  gg_artifact_prepare_stage transcriptome_summary_needs_update run_multispecies_summary "${transcriptome_summary_provenance_args[@]}" || exit $?
+fi
+if [[ ${transcriptome_summary_finalizer_should_run} -eq 1 && ${run_multispecies_summary} -eq 1 && ${transcriptome_summary_needs_update} -eq 1 ]]; then
   gg_step_start "${task}"
-  ensure_dir "$(dirname "${file_multispecies_summary}")"
+  transcriptome_summary_output_dir=$(dirname "${file_multispecies_summary}")
+  if [[ -z "${dir_transcriptome_assembly_output}" || "${dir_transcriptome_assembly_output}" == "/" \
+    || "${transcriptome_summary_output_dir}" != "${dir_transcriptome_assembly_output%/}/annotation_summary" ]]; then
+    echo "Refusing to clear an unsafe transcriptome summary output path: ${transcriptome_summary_output_dir}" >&2
+    exit 1
+  fi
+  rm -rf -- "${transcriptome_summary_output_dir}"
+  ensure_dir "${transcriptome_summary_output_dir}"
   cd "$(dirname "${file_multispecies_summary}")" || exit 1
 
   python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
@@ -2701,11 +2968,17 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_flag} -eq 1 ]]; then
   if [[ -e "Rplots.pdf" ]]; then
     rm -f -- "Rplots.pdf"
   fi
+  gg_artifact_record "${transcriptome_summary_provenance_args[@]}"
   cd "${dir_tmp}" || exit 1
 
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
+fi
+if [[ ${transcriptome_summary_finalizer_claimed} -eq 1 ]]; then
+  gg_array_finalizer_complete
+  transcriptome_summary_finalizer_claimed=0
+  trap - EXIT
 fi
 
 if [[ ${remove_amalgkit_fastq_after_completion} -eq 1 && $(is_fastq_requiring_downstream_analysis_done) -eq 1 ]]; then

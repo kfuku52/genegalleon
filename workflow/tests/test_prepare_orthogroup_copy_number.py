@@ -104,8 +104,8 @@ def test_prepare_orthogroup_copy_number_reports_nonnumeric_counts(tmp_path):
 def test_genome_evolution_wires_trait_pgls_without_requiring_cafe():
     core = read_text(GENOME_EVOLUTION_CORE)
     prep_condition = (
-        'if [[ ! -s "${file_orthogroup_copy_number}" && '
-        '( ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 ) ]]'
+        'if [[ ${copy_number_needs_update} -eq 1 && '
+        '${run_orthogroup_copy_number_stage} -eq 1 ]]'
     )
     trait_input_check = (
         'disable_if_no_input_file "run_orthogroup_copy_number_trait_pgls" '
@@ -113,6 +113,8 @@ def test_genome_evolution_wires_trait_pgls_without_requiring_cafe():
     )
     assert prep_condition in core
     assert 'task="Orthogroup copy-number matrix preparation"' in core
+    assert 'gg_artifact_prepare_stage copy_number_needs_update run_orthogroup_copy_number_stage' in core
+    assert '--parameter "max_size_differential=${orthogroup_copy_number_max_size_differential}"' in core
     assert trait_input_check in core
     assert 'cafe5 \\' in core
     assert '--infile "${file_orthogroup_copy_number}"' in core

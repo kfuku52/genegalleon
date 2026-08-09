@@ -164,6 +164,7 @@ fi
 
 input_generation_root="${gg_workspace_output_dir}/input_generation"
 input_generation_tmp_root="${input_generation_root}/tmp"
+input_generation_provenance_dir="${input_generation_root}/artifact_provenance"
 download_tmp_root="${input_generation_tmp_root}"
 dir_species_summary_shards="${input_generation_tmp_root}/species_summary_shards"
 dir_task_stats_shards="${input_generation_tmp_root}/task_stats_shards"
@@ -684,6 +685,54 @@ prepare_input_generation_tmp_dirs() {
   ensure_dir "${dir_task_meta_shards}"
 }
 
+handle_obsolete_input_generation_output() {
+  local path=$1
+  local description=$2
+  if [[ ! -e "${path}" ]]; then
+    return 0
+  fi
+  case "${artifact_stale_policy:-stop}" in
+    stop)
+      echo "Stale artifact detected: ${description}" >&2
+      echo "Reason: output belongs to a species that is absent from the current input set." >&2
+      echo "Path: ${path}" >&2
+      echo "No artifact files were modified. Use artifact_stale_policy=rebuild to remove obsolete outputs or artifact_stale_policy=reuse to keep them." >&2
+      return 3
+      ;;
+    reuse)
+      echo "Warning: keeping obsolete output because artifact_stale_policy=reuse: ${path}" >&2
+      return 0
+      ;;
+    rebuild)
+      echo "Removing obsolete output because artifact_stale_policy=rebuild: ${path}"
+      rm -f -- "${path}"
+      return 0
+      ;;
+    *)
+      echo "Invalid artifact_stale_policy=${artifact_stale_policy:-}; expected stop, reuse, or rebuild." >&2
+      return 2
+      ;;
+  esac
+}
+
+remove_formatted_species_outputs_for_rebuild() {
+  local species_label=$1
+  local managed_dir=""
+  local managed_path=""
+  for managed_dir in "${species_cds_dir}" "${species_gff_dir}" "${species_genome_dir}"; do
+    while IFS= read -r managed_path; do
+      [[ -n "${managed_path}" ]] || continue
+      case "${managed_path}" in
+        "${managed_dir}/"*) rm -f -- "${managed_path}" ;;
+        *)
+          echo "Refusing to remove an input-generation output outside ${managed_dir}: ${managed_path}" >&2
+          return 1
+          ;;
+      esac
+    done < <(gg_find_species_files_by_label "${managed_dir}" "${species_label}")
+  done
+}
+
 clean_input_generation_shards() {
   if [[ -d "${dir_species_summary_shards}" ]]; then rm -rf -- "${dir_species_summary_shards}"; fi
   if [[ -d "${dir_task_stats_shards}" ]]; then rm -rf -- "${dir_task_stats_shards}"; fi
@@ -701,17 +750,12 @@ run_format_stage_single() {
   local existing_cds=()
   local existing_gff=()
   local existing_genome=()
+  local format_needs_update=0
+  local format_force_overwrite=${overwrite}
+  local format_provenance_manifest="${input_generation_provenance_dir}/format.single.json"
+  local -a format_provenance_args=()
 
-  if [[ ${run_format_inputs} -ne 1 ]]; then
-    gg_step_skip "${task}"
-    stage_format_status="skipped"
-    return 0
-  fi
-
-  gg_step_start "${task}"
-  stage_format_status="running"
-
-  if ! ensure_selected_download_manifest_has_rows; then
+  if [[ ${run_format_inputs} -eq 1 ]] && ! ensure_selected_download_manifest_has_rows; then
     stage_format_status="failed"
     exit 1
   fi
@@ -735,10 +779,60 @@ run_format_stage_single() {
       run_format_inputs=0
       return 0
     fi
+    if [[ ${run_format_inputs} -ne 1 ]]; then
+      gg_step_skip "${task}"
+      stage_format_status="skipped"
+      return 0
+    fi
     echo "No input source was specified for formatting."
     echo "Set one of input_dir / download_manifest."
     stage_format_status="failed"
     exit 1
+  fi
+
+  if [[ ${download_only} -eq 0 && ${dry_run} -eq 0 ]]; then
+    gg_artifact_contract_init format_provenance_args "input_generation_format" "all_species" "${format_provenance_manifest}"
+    gg_artifact_add_input_if_present format_provenance_args "input_directory" "${input_dir}"
+    gg_artifact_add_input_if_present format_provenance_args "download_manifest" "${download_manifest}"
+    format_provenance_args+=(
+      --output "species_cds=${species_cds_dir}"
+      --output "species_gff=${species_gff_dir}"
+      --output "species_genome=${species_genome_dir}"
+      --output "species_summary=${species_summary_output}"
+      --parameter "provider=${provider}"
+      --parameter "gene_grouping_mode=${gene_grouping_mode}"
+      --parameter "gff_repair_mode=${gff_repair_mode}"
+      --parameter "strict=${strict}"
+    )
+    if [[ -n "${download_manifest}" ]]; then
+      format_provenance_args+=(--optional-output "resolved_manifest=${resolved_manifest_output}")
+    fi
+    if [[ ${overwrite} -eq 1 ]]; then
+      format_needs_update=1
+    else
+      gg_artifact_prepare_stage format_needs_update run_format_inputs "${format_provenance_args[@]}" || return $?
+    fi
+    if [[ ${format_needs_update} -ne 1 || ${run_format_inputs} -ne 1 ]]; then
+      gg_step_skip "${task}"
+      stage_format_status="skipped"
+      return 0
+    fi
+    if [[ -s "${format_provenance_manifest}" ]]; then
+      format_force_overwrite=1
+    fi
+  elif [[ ${run_format_inputs} -ne 1 ]]; then
+    gg_step_skip "${task}"
+    stage_format_status="skipped"
+    return 0
+  fi
+
+  gg_step_start "${task}"
+  stage_format_status="running"
+
+  if [[ ${format_force_overwrite} -eq 1 && -s "${format_provenance_manifest}" ]]; then
+    echo "Clearing managed formatted-input outputs before provenance rebuild."
+    rm -rf -- "${species_cds_dir}" "${species_gff_dir}" "${species_genome_dir}"
+    rm -f -- "${species_summary_output}" "${resolved_manifest_output}"
   fi
 
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
@@ -766,7 +860,7 @@ run_format_stage_single() {
   if [[ -n "${input_dir}" ]]; then
     cmd+=(--input-dir "${input_dir}")
   fi
-  if [[ ${overwrite} -eq 1 ]]; then
+  if [[ ${format_force_overwrite} -eq 1 ]]; then
     cmd+=(--overwrite)
   fi
   if [[ ${strict} -eq 1 ]]; then
@@ -807,6 +901,9 @@ run_format_stage_single() {
     cds_sequences_after="$(read_stats_json_field "${format_stats_file}" "cds_sequences_after")"
     cds_first_sequence_name="$(read_stats_json_field "${format_stats_file}" "cds_first_sequence_name")"
     rm -f -- "${format_stats_file}"
+  fi
+  if [[ ${download_only} -eq 0 && ${dry_run} -eq 0 ]]; then
+    gg_artifact_record "${format_provenance_args[@]}"
   fi
   stage_format_status="ok"
 }
@@ -983,11 +1080,28 @@ run_cds_fx2tab_for_one_file() {
   local seq_file=""
   local file_sp_cds_fx2tab=""
   local tmp_fx2tab_tsv=""
+  local fx2tab_needs_update=0
+  local -a fx2tab_provenance_args=()
 
   seq_file=$(basename "${seq_full}")
   file_sp_cds_fx2tab="${species_cds_fx2tab_dir}/${species_name}_fx2tab_cds.tsv"
 
-  if [[ ${overwrite} -ne 1 && -s "${file_sp_cds_fx2tab}" ]]; then
+  gg_artifact_contract_init fx2tab_provenance_args "input_generation_cds_fx2tab" "${species_name}" "${input_generation_provenance_dir}/fx2tab.${species_name}.json"
+  fx2tab_provenance_args+=(
+    --input "species_cds=${seq_full}"
+    --output "fx2tab=${file_sp_cds_fx2tab}"
+    --parameter "length=yes"
+    --parameter "name=yes"
+    --parameter "gc=yes"
+    --parameter "gc_skew=yes"
+    --parameter "only_id=yes"
+  )
+  if [[ ${overwrite} -eq 1 ]]; then
+    fx2tab_needs_update=1
+  else
+    gg_artifact_prepare_stage fx2tab_needs_update run_cds_fx2tab "${fx2tab_provenance_args[@]}" || return $?
+  fi
+  if [[ ${fx2tab_needs_update} -ne 1 || ${run_cds_fx2tab} -ne 1 ]]; then
     echo "Skipped fx2tab: ${seq_file}"
     return 0
   fi
@@ -1019,6 +1133,7 @@ run_cds_fx2tab_for_one_file() {
   fi
 
   mv -- "${tmp_fx2tab_tsv}" "${file_sp_cds_fx2tab}"
+  gg_artifact_record "${fx2tab_provenance_args[@]}"
 }
 
 run_cds_fx2tab_stage_all() {
@@ -1029,7 +1144,7 @@ run_cds_fx2tab_stage_all() {
   local fx2tab_file fx2tab_base fx2tab_species fx2tab_species_found input_species
   local seq_full seq_file sp_ub
 
-  if [[ ${run_cds_fx2tab} -ne 1 || ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
+  if [[ ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
     gg_step_skip "${task}"
     stage_cds_fx2tab_status="skipped"
     return 0
@@ -1044,9 +1159,14 @@ run_cds_fx2tab_stage_all() {
   done < <(gg_find_fasta_files "${species_cds_dir}" 1)
   echo "Number of CDS files for fx2tab: ${#source_species_input_fasta[@]}"
   if [[ ${#source_species_input_fasta[@]} -eq 0 ]]; then
-    echo "No CDS file found. Exiting."
-    stage_cds_fx2tab_status="failed"
-    exit 1
+    if [[ ${run_cds_fx2tab} -eq 1 ]]; then
+      echo "No CDS file found. Exiting."
+      stage_cds_fx2tab_status="failed"
+      exit 1
+    fi
+    gg_step_skip "${task}"
+    stage_cds_fx2tab_status="skipped"
+    return 0
   fi
   while IFS= read -r species_name; do
     [[ -n "${species_name}" ]] || continue
@@ -1068,8 +1188,7 @@ run_cds_fx2tab_stage_all() {
         fi
       done
       if [[ ${fx2tab_species_found} -eq 0 ]]; then
-        echo "Removing stale fx2tab output for species not in current input: ${fx2tab_file}"
-        rm -f -- "${fx2tab_file}"
+        handle_obsolete_input_generation_output "${fx2tab_file}" "fx2tab output for removed species" || return $?
       fi
     done
   fi
@@ -1081,7 +1200,11 @@ run_cds_fx2tab_stage_all() {
     run_cds_fx2tab_for_one_file "${seq_full}" "${sp_ub}"
   done
   num_species_cds_fx2tab=$(count_nonhidden_matching_files "${species_cds_fx2tab_dir}" "*_fx2tab_cds.tsv")
-  stage_cds_fx2tab_status="ok"
+  if [[ ${run_cds_fx2tab} -eq 1 ]]; then
+    stage_cds_fx2tab_status="ok"
+  else
+    stage_cds_fx2tab_status="skipped"
+  fi
 }
 
 run_cds_fx2tab_stage_one_worker() {
@@ -1090,7 +1213,7 @@ run_cds_fx2tab_stage_one_worker() {
   local species_prefix=""
   local cds_output_path=""
 
-  if [[ ${run_cds_fx2tab} -ne 1 || ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
+  if [[ ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
     gg_step_skip "${task}"
     stage_cds_fx2tab_status="skipped"
     return 0
@@ -1112,7 +1235,11 @@ run_cds_fx2tab_stage_one_worker() {
   fi
 
   run_cds_fx2tab_for_one_file "${cds_output_path}" "${species_prefix}"
-  stage_cds_fx2tab_status="ok"
+  if [[ ${run_cds_fx2tab} -eq 1 ]]; then
+    stage_cds_fx2tab_status="ok"
+  else
+    stage_cds_fx2tab_status="skipped"
+  fi
 }
 
 run_species_busco_for_one_file() {
@@ -1126,16 +1253,38 @@ run_species_busco_for_one_file() {
   local busco_work_root=""
   local busco_input_fasta=""
   local busco_output_dir=""
+  local busco_needs_update=0
+  local -a busco_provenance_args=()
 
   seq_file=$(basename "${seq_full}")
   file_sp_busco_full="${species_busco_full_dir}/${species_name}.busco.full.tsv"
   file_sp_busco_short="${species_busco_short_dir}/${species_name}.busco.short.txt"
 
-  if [[ ${overwrite} -ne 1 ]]; then
-    if busco_output_exists_for_species "${species_busco_full_dir}" "${species_name}" "*busco.full.tsv" \
-      && busco_output_exists_for_species "${species_busco_short_dir}" "${species_name}" "*busco.short.txt"; then
-      echo "Skipped BUSCO: ${seq_file}"
-      return 0
+  gg_artifact_contract_init busco_provenance_args "input_generation_species_busco" "${species_name}" "${input_generation_provenance_dir}/busco.${species_name}.json"
+  busco_provenance_args+=(
+    --input "species_cds=${seq_full}"
+    --output "busco_full=${file_sp_busco_full}"
+    --output "busco_short=${file_sp_busco_short}"
+    --parameter "busco_lineage_request=${busco_lineage}"
+    --parameter "busco_mode=transcriptome"
+    --parameter "evalue=1e-03"
+    --parameter "limit=20"
+  )
+  if [[ ${overwrite} -eq 1 ]]; then
+    busco_needs_update=1
+  else
+    gg_artifact_prepare_stage busco_needs_update run_species_busco "${busco_provenance_args[@]}" || return $?
+  fi
+  if [[ ${busco_needs_update} -ne 1 || ${run_species_busco} -ne 1 ]]; then
+    echo "Skipped BUSCO: ${seq_file}"
+    return 0
+  fi
+  if [[ -z "${busco_lineage_resolved}" ]]; then
+    if [[ "${input_generation_mode}" == "array_worker" ]]; then
+      ensure_shared_busco_lineage_ready "${task_plan_output}" || return 1
+    else
+      echo "BUSCO lineage must be resolved before running the serial species stage." >&2
+      return 1
     fi
   fi
 
@@ -1170,6 +1319,7 @@ run_species_busco_for_one_file() {
 
   if copy_busco_tables "${busco_output_dir}" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
     rm -rf -- "${busco_work_root}"
+    gg_artifact_record "${busco_provenance_args[@]}"
   else
     echo "Failed to locate normalized BUSCO outputs for ${species_name}. Exiting."
     rm -rf -- "${busco_work_root}"
@@ -1184,25 +1334,21 @@ run_species_busco_stage_all() {
   local busco_output_files=()
   local busco_file busco_base busco_species busco_species_found input_species
   local seq_full seq_file sp_ub
-
-  if [[ ${run_species_busco} -ne 1 ]]; then
-    gg_step_skip "${task}"
-    stage_species_busco_status="skipped"
-    return 0
-  fi
+  local busco_stage_relevant=${run_species_busco}
 
   gg_step_start "${task}"
   stage_species_busco_status="running"
-  normalize_busco_table_naming "${species_busco_full_dir}" "${species_busco_short_dir}"
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
     source_species_input_fasta+=( "${path}" )
   done < <(gg_find_fasta_files "${species_cds_dir}" 1)
   echo "Number of CDS files for BUSCO: ${#source_species_input_fasta[@]}"
   if [[ ${#source_species_input_fasta[@]} -eq 0 ]]; then
-    echo "No CDS file found. Exiting."
-    stage_species_busco_status="failed"
-    exit 1
+    if [[ ${run_species_busco} -eq 1 ]]; then
+      echo "No CDS file found. Exiting."
+      stage_species_busco_status="failed"
+      exit 1
+    fi
   fi
   while IFS= read -r species_name; do
     [[ -n "${species_name}" ]] || continue
@@ -1216,6 +1362,15 @@ run_species_busco_stage_all() {
       \( -name "*busco.full.tsv" -o -name "*busco.short.txt" \) \
       2> /dev/null | sort
   )
+  if [[ ${#busco_output_files[@]} -gt 0 ]] || compgen -G "${input_generation_provenance_dir}/busco.*.json" > /dev/null; then
+    busco_stage_relevant=1
+  fi
+  if [[ ${busco_stage_relevant} -ne 1 ]]; then
+    gg_step_skip "${task}"
+    stage_species_busco_status="skipped"
+    return 0
+  fi
+  normalize_busco_table_naming "${species_busco_full_dir}" "${species_busco_short_dir}"
   if [[ ${#busco_output_files[@]} -gt 0 ]]; then
     for busco_file in "${busco_output_files[@]}"; do
       busco_base=$(basename "${busco_file}")
@@ -1228,10 +1383,14 @@ run_species_busco_stage_all() {
         fi
       done
       if [[ ${busco_species_found} -eq 0 ]]; then
-        echo "Removing stale BUSCO output for species not in current input: ${busco_file}"
-        rm -f -- "${busco_file}"
+        handle_obsolete_input_generation_output "${busco_file}" "BUSCO output for removed species" || return $?
       fi
     done
+  fi
+  if [[ ${#source_species_input_fasta[@]} -eq 0 ]]; then
+    echo "No current CDS inputs are available for tracked BUSCO outputs." >&2
+    stage_species_busco_status="failed"
+    return 2
   fi
 
   if ! ensure_shared_busco_lineage_ready; then
@@ -1251,7 +1410,11 @@ run_species_busco_stage_all() {
   done
   num_species_busco_full=$(count_nonhidden_matching_files "${species_busco_full_dir}" "*busco.full.tsv")
   num_species_busco_short=$(count_nonhidden_matching_files "${species_busco_short_dir}" "*busco.short.txt")
-  stage_species_busco_status="ok"
+  if [[ ${run_species_busco} -eq 1 ]]; then
+    stage_species_busco_status="ok"
+  else
+    stage_species_busco_status="skipped"
+  fi
 }
 
 run_species_busco_stage_one_worker() {
@@ -1259,12 +1422,6 @@ run_species_busco_stage_one_worker() {
   local task_meta_file="${dir_task_meta_shards}/${GG_ARRAY_TASK_ID}.json"
   local species_prefix=""
   local cds_output_path=""
-
-  if [[ ${run_species_busco} -ne 1 ]]; then
-    gg_step_skip "${task}"
-    stage_species_busco_status="skipped"
-    return 0
-  fi
 
   gg_step_start "${task}"
   stage_species_busco_status="running"
@@ -1280,31 +1437,50 @@ run_species_busco_stage_one_worker() {
     stage_species_busco_status="failed"
     exit 1
   fi
-  if ! ensure_shared_busco_lineage_ready "${task_plan_output}"; then
-    echo "BUSCO lineage resolution file is missing for array worker: ${file_busco_lineage_resolved}"
-    stage_species_busco_status="failed"
-    exit 1
-  fi
-
   normalize_busco_table_naming "${species_busco_full_dir}" "${species_busco_short_dir}"
   run_species_busco_for_one_file "${cds_output_path}" "${species_prefix}"
-  stage_species_busco_status="ok"
+  if [[ ${run_species_busco} -eq 1 ]]; then
+    stage_species_busco_status="ok"
+  else
+    stage_species_busco_status="skipped"
+  fi
 }
 
 run_multispecies_summary_stage() {
   local task="Generate multispecies BUSCO summary"
   local cmd=()
   local cmd_status=0
-
-  if [[ ${run_multispecies_summary} -ne 1 ]]; then
-    gg_step_skip "${task}"
-    stage_multispecies_summary_status="skipped"
-    return 0
-  fi
+  local summary_needs_update=0
+  local -a summary_provenance_args=()
 
   normalize_busco_table_naming "${species_busco_full_dir}" "${species_busco_short_dir}"
   num_species_busco_full=$(count_nonhidden_matching_files "${species_busco_full_dir}" "*busco.full.tsv")
   num_species_busco_short=$(count_nonhidden_matching_files "${species_busco_short_dir}" "*busco.short.txt")
+  if [[ ${run_cds_fx2tab} -eq 1 && -d "${species_cds_fx2tab_dir}" ]]; then
+    num_species_cds_fx2tab=$(count_nonhidden_matching_files "${species_cds_fx2tab_dir}" "*_fx2tab_cds.tsv")
+  fi
+
+  gg_artifact_contract_init summary_provenance_args "input_generation_multispecies_summary" "all_species" "${input_generation_provenance_dir}/multispecies_summary.json"
+  summary_provenance_args+=(
+    --input "species_busco_full=${species_busco_full_dir}"
+    --output "summary=${file_multispecies_summary}"
+    --parameter "min_og_species=auto"
+    --parameter "include_fx2tab=${run_cds_fx2tab}"
+  )
+  if [[ ${run_cds_fx2tab} -eq 1 ]]; then
+    gg_artifact_add_input_if_present summary_provenance_args "species_cds_fx2tab" "${species_cds_fx2tab_dir}"
+  fi
+  gg_artifact_add_input_if_present summary_provenance_args "species_trait" "${species_trait_output}"
+  if [[ ${overwrite} -eq 1 ]]; then
+    summary_needs_update=1
+  else
+    gg_artifact_prepare_stage summary_needs_update run_multispecies_summary "${summary_provenance_args[@]}" || return $?
+  fi
+  if [[ ${summary_needs_update} -ne 1 || ${run_multispecies_summary} -ne 1 ]]; then
+    gg_step_skip "${task}"
+    stage_multispecies_summary_status="skipped"
+    return 0
+  fi
   if [[ "${num_species_busco_full}" == "0" ]]; then
     echo "No species BUSCO full tables were found. Skipping multispecies summary generation."
     gg_step_skip "${task}"
@@ -1316,13 +1492,11 @@ run_multispecies_summary_stage() {
     stage_multispecies_summary_status="failed"
     exit 1
   fi
-  if [[ ${run_cds_fx2tab} -eq 1 && -d "${species_cds_fx2tab_dir}" ]]; then
-    num_species_cds_fx2tab=$(count_nonhidden_matching_files "${species_cds_fx2tab_dir}" "*_fx2tab_cds.tsv")
-    if [[ "${num_species_cds_fx2tab}" != "0" ]] && ! is_species_set_identical "${species_cds_dir}" "${species_cds_fx2tab_dir}"; then
-      echo "Exiting due to species-set mismatch between ${species_cds_dir} and ${species_cds_fx2tab_dir}"
-      stage_multispecies_summary_status="failed"
-      exit 1
-    fi
+  if [[ ${run_cds_fx2tab} -eq 1 && "${num_species_cds_fx2tab:-0}" != "0" ]] \
+    && ! is_species_set_identical "${species_cds_dir}" "${species_cds_fx2tab_dir}"; then
+    echo "Exiting due to species-set mismatch between ${species_cds_dir} and ${species_cds_fx2tab_dir}"
+    stage_multispecies_summary_status="failed"
+    exit 1
   fi
 
   gg_step_start "${task}"
@@ -1353,6 +1527,7 @@ run_multispecies_summary_stage() {
   if [[ -e "Rplots.pdf" ]]; then
     rm -f -- "Rplots.pdf"
   fi
+  gg_artifact_record "${summary_provenance_args[@]}"
   cd "${gg_workspace_dir}"
   stage_multispecies_summary_status="ok"
 }
@@ -1364,12 +1539,8 @@ run_trait_stage() {
   local trait_stats_file=""
   local cmd=()
   local cmd_status=0
-
-  if [[ ${run_generate_species_trait} -ne 1 ]]; then
-    gg_step_skip "${task}"
-    stage_trait_status="skipped"
-    return 0
-  fi
+  local trait_needs_update=0
+  local -a trait_provenance_args=()
 
   gg_step_start "${task}"
   stage_trait_status="running"
@@ -1379,6 +1550,40 @@ run_trait_stage() {
     trait_manifest_default="${gg_workspace_input_dir}/input_generation/download_plan.xlsx"
     if [[ -s "${trait_manifest_default}" ]]; then
       trait_manifest_path="${trait_manifest_default}"
+    fi
+  fi
+
+  gg_artifact_contract_init trait_provenance_args "input_generation_species_trait" "all_species" "${input_generation_provenance_dir}/species_trait.json"
+  gg_artifact_add_input_if_present trait_provenance_args "download_manifest" "${trait_manifest_path}"
+  if [[ "${trait_species_source}" == "species_cds" ]]; then
+    gg_artifact_add_input_if_present trait_provenance_args "species_cds" "${species_cds_dir}"
+  fi
+  gg_artifact_add_input_if_present trait_provenance_args "trait_plan" "${trait_plan}"
+  gg_artifact_add_input_if_present trait_provenance_args "database_sources" "${trait_database_sources}"
+  trait_provenance_args+=(
+    --output "species_trait=${species_trait_output}"
+    --parameter "trait_profile=${trait_profile}"
+    --parameter "trait_species_source=${trait_species_source}"
+    --parameter "trait_databases=${trait_databases}"
+    --parameter "gbif_api=${gbif_api}"
+    --parameter "gbif_page_size=${gbif_page_size}"
+    --parameter "gbif_max_occurrences_per_species=${gbif_max_occurrences_per_species}"
+    --parameter "gbif_grid_degrees=${gbif_grid_degrees}"
+    --parameter "gbif_min_match_confidence=${gbif_min_match_confidence}"
+    --parameter "gbif_max_coordinate_uncertainty_m=${gbif_max_coordinate_uncertainty_m}"
+    --parameter "gbif_max_distance_from_centroid_m=${gbif_max_distance_from_centroid_m}"
+    --parameter "strict=${strict}"
+  )
+  if [[ ${dry_run} -eq 0 ]]; then
+    if [[ ${overwrite} -eq 1 ]]; then
+      trait_needs_update=1
+    else
+      gg_artifact_prepare_stage trait_needs_update run_generate_species_trait "${trait_provenance_args[@]}" || return $?
+    fi
+    if [[ ${trait_needs_update} -ne 1 || ${run_generate_species_trait} -ne 1 ]]; then
+      gg_step_skip "${task}"
+      stage_trait_status="skipped"
+      return 0
     fi
   fi
 
@@ -1442,6 +1647,9 @@ run_trait_stage() {
     num_species_trait="$(read_stats_json_field "${trait_stats_file}" "num_species_with_any_trait")"
     num_trait_columns="$(read_stats_json_field "${trait_stats_file}" "num_trait_columns")"
     rm -f -- "${trait_stats_file}"
+  fi
+  if [[ ${dry_run} -eq 0 ]]; then
+    gg_artifact_record "${trait_provenance_args[@]}"
   fi
   stage_trait_status="ok"
 }
@@ -1548,6 +1756,19 @@ run_array_worker_mode() {
   local task_summary_file=""
   local cmd=()
   local cmd_status=0
+  local describe_cmd=()
+  local format_needs_update=0
+  local format_force_overwrite=${overwrite}
+  local species_prefix=""
+  local cds_input_path=""
+  local gff_input_path=""
+  local gbff_input_path=""
+  local genome_input_path=""
+  local cds_output_path=""
+  local gff_output_path=""
+  local genome_output_path=""
+  local format_provenance_manifest=""
+  local -a format_provenance_args=()
 
   write_run_summary_on_exit=0
   prepare_input_generation_tmp_dirs
@@ -1568,6 +1789,59 @@ run_array_worker_mode() {
   task_summary_file="${dir_species_summary_shards}/${GG_ARRAY_TASK_ID}.tsv"
   rm -f -- "${task_stats_file}" "${task_meta_file}" "${task_summary_file}"
 
+  describe_cmd=(python "${gg_support_dir}/run_input_generation_task.py")
+  describe_cmd+=(--task-plan "${task_plan_output}")
+  describe_cmd+=(--task-index "${GG_ARRAY_TASK_ID}")
+  describe_cmd+=(--species-cds-dir "${species_cds_dir}")
+  describe_cmd+=(--species-gff-dir "${species_gff_dir}")
+  describe_cmd+=(--species-genome-dir "${species_genome_dir}")
+  describe_cmd+=(--task-meta-output "${task_meta_file}")
+  describe_cmd+=(--describe-only)
+  if ! "${describe_cmd[@]}"; then
+    stage_format_status="failed"
+    echo "Failed to describe input-generation array task ${GG_ARRAY_TASK_ID}."
+    exit 1
+  fi
+  species_prefix=$(read_stats_json_field "${task_meta_file}" "species_prefix")
+  cds_input_path=$(read_stats_json_field "${task_meta_file}" "cds_path")
+  gff_input_path=$(read_stats_json_field "${task_meta_file}" "gff_path")
+  gbff_input_path=$(read_stats_json_field "${task_meta_file}" "gbff_path")
+  genome_input_path=$(read_stats_json_field "${task_meta_file}" "genome_path")
+  cds_output_path=$(read_stats_json_field "${task_meta_file}" "cds_output_path")
+  gff_output_path=$(read_stats_json_field "${task_meta_file}" "gff_output_path")
+  genome_output_path=$(read_stats_json_field "${task_meta_file}" "genome_output_path")
+  if [[ -z "${species_prefix}" || -z "${cds_output_path}" || -z "${gff_output_path}" ]]; then
+    stage_format_status="failed"
+    echo "Array task description is missing required species or output paths: ${task_meta_file}"
+    exit 1
+  fi
+  format_provenance_manifest="${input_generation_provenance_dir}/format.${species_prefix}.json"
+  gg_artifact_contract_init format_provenance_args "input_generation_format" "${species_prefix}" "${format_provenance_manifest}"
+  gg_artifact_add_input_if_present format_provenance_args "cds_input" "${cds_input_path}"
+  gg_artifact_add_input_if_present format_provenance_args "gff_input" "${gff_input_path}"
+  gg_artifact_add_input_if_present format_provenance_args "gbff_input" "${gbff_input_path}"
+  gg_artifact_add_input_if_present format_provenance_args "genome_input" "${genome_input_path}"
+  format_provenance_args+=(
+    --output "formatted_cds=${cds_output_path}"
+    --output "formatted_gff=${gff_output_path}"
+    --parameter "provider=${provider}"
+    --parameter "gene_grouping_mode=${gene_grouping_mode}"
+    --parameter "gff_repair_mode=${gff_repair_mode}"
+    --parameter "strict=${strict}"
+  )
+  if [[ -n "${genome_output_path}" ]]; then
+    format_provenance_args+=(--optional-output "formatted_genome=${genome_output_path}")
+  fi
+  if [[ ${overwrite} -eq 1 ]]; then
+    format_needs_update=1
+  else
+    gg_artifact_prepare_stage format_needs_update run_format_inputs "${format_provenance_args[@]}" || exit $?
+  fi
+  if [[ ${format_needs_update} -eq 1 && -s "${format_provenance_manifest}" ]]; then
+    format_force_overwrite=1
+    remove_formatted_species_outputs_for_rebuild "${species_prefix}"
+  fi
+
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
     echo "Warning: Failed to prepare ETE taxonomy DB for species_summary taxonomy metadata. Continuing without taxid/genetic code annotation." >&2
   fi
@@ -1581,8 +1855,11 @@ run_array_worker_mode() {
   cmd+=(--species-summary-output "${task_summary_file}")
   cmd+=(--stats-output "${task_stats_file}")
   cmd+=(--task-meta-output "${task_meta_file}")
-  if [[ ${overwrite} -eq 1 ]]; then
+  if [[ ${format_force_overwrite} -eq 1 ]]; then
     cmd+=(--overwrite)
+  fi
+  if [[ "${artifact_stale_policy:-stop}" == "reuse" ]]; then
+    cmd+=(--reuse-existing)
   fi
   echo "Running: ${cmd[*]}"
   if "${cmd[@]}"; then
@@ -1594,6 +1871,9 @@ run_array_worker_mode() {
     stage_format_status="failed"
     echo "Failed: ${task} (exit=${cmd_status})"
     exit "${cmd_status}"
+  fi
+  if [[ ${format_needs_update} -eq 1 ]]; then
+    gg_artifact_record "${format_provenance_args[@]}"
   fi
 
   if [[ -s "${task_stats_file}" ]]; then

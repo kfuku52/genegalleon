@@ -423,4 +423,5 @@ EOF
       return 1
       ;;
   esac
+  printf '%s\n' artifact_stale_policy
 }

@@ -105,6 +105,130 @@ gg_artifact_ready() {
   [[ -s "${artifact_path}" ]]
 }
 
+gg_array_expected_task_count() {
+  local fallback_count=${1:-1}
+  local first_task=""
+  local last_task=""
+  local task_step=""
+  if [[ "${GG_ARRAY_TASK_COUNT:-}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${GG_ARRAY_TASK_COUNT}"
+    return 0
+  fi
+  if [[ "${SLURM_ARRAY_TASK_COUNT:-}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${SLURM_ARRAY_TASK_COUNT}"
+    return 0
+  fi
+  if [[ "${PBS_ARRAY_TASK_COUNT:-}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${PBS_ARRAY_TASK_COUNT}"
+    return 0
+  fi
+  first_task=${SGE_TASK_FIRST:-}
+  last_task=${SGE_TASK_LAST:-}
+  task_step=${SGE_TASK_STEPSIZE:-1}
+  if [[ "${first_task}" =~ ^[1-9][0-9]*$ \
+    && "${last_task}" =~ ^[1-9][0-9]*$ \
+    && "${task_step}" =~ ^[1-9][0-9]*$ \
+    && ${last_task} -ge ${first_task} ]]; then
+    echo $(( ((last_task - first_task) / task_step) + 1 ))
+    return 0
+  fi
+  if [[ -n "${PBS_ARRAY_INDEX:-${PBS_ARRAYID:-}}" \
+    && "${fallback_count}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${fallback_count}"
+    return 0
+  fi
+  if [[ "${GG_SCHEDULER_KIND:-local}" != "local" \
+    && "${fallback_count}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${fallback_count}"
+    return 0
+  fi
+  echo 1
+}
+
+gg_array_finalizer_claim() {
+  local state_root=${1:-}
+  local stage_name=${2:-}
+  local fallback_count=${3:-1}
+  local expected_count=""
+  local run_id=""
+  local task_id=""
+  local run_dir=""
+  local lock_file=""
+  local ready_count=0
+  if [[ -z "${state_root}" || -z "${stage_name}" ]]; then
+    echo "gg_array_finalizer_claim requires STATE_ROOT and STAGE_NAME." >&2
+    return 2
+  fi
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "Array finalizer coordination requires flock inside the runtime." >&2
+    return 2
+  fi
+  expected_count=$(gg_array_expected_task_count "${fallback_count}")
+  run_id=$(printf '%s' "${GG_JOB_ID:-local}" | sed 's/[^[:alnum:]._-]/_/g')
+  task_id=$(printf '%s' "${GG_ARRAY_TASK_ID:-1}" | sed 's/[^[:alnum:]._-]/_/g')
+  stage_name=$(printf '%s' "${stage_name}" | sed 's/[^[:alnum:]._-]/_/g')
+  # Local, non-array invocations commonly reuse the synthetic job ID "1".
+  # Give each process its own state directory so a completed prior invocation
+  # cannot suppress the summary in a later invocation.
+  if [[ "${GG_SCHEDULER_KIND:-local}" == "local" && ${expected_count} -eq 1 ]]; then
+    run_id="${run_id}.$$"
+  fi
+  run_dir="${state_root%/}/${stage_name}/${run_id}"
+  lock_file="${run_dir}.lock"
+  mkdir -p "${run_dir}"
+  exec {GG_ARRAY_FINALIZER_LOCK_FD}>"${lock_file}" || return 2
+  if ! flock -x "${GG_ARRAY_FINALIZER_LOCK_FD}"; then
+    exec {GG_ARRAY_FINALIZER_LOCK_FD}>&-
+    GG_ARRAY_FINALIZER_LOCK_FD=""
+    return 2
+  fi
+  printf 'ready\n' > "${run_dir}/task.${task_id}.ready"
+  ready_count=$(find "${run_dir}" -maxdepth 1 -type f -name 'task.*.ready' -print | wc -l | awk '{print $1}')
+  if [[ -e "${run_dir}/done" || -e "${run_dir}/claim" || ${ready_count} -lt ${expected_count} ]]; then
+    flock -u "${GG_ARRAY_FINALIZER_LOCK_FD}"
+    exec {GG_ARRAY_FINALIZER_LOCK_FD}>&-
+    GG_ARRAY_FINALIZER_LOCK_FD=""
+    echo "Array finalizer ${stage_name}: ready ${ready_count}/${expected_count}; this task will not finalize."
+    return 1
+  fi
+  printf '%s\n' "${task_id}" > "${run_dir}/claim"
+  flock -u "${GG_ARRAY_FINALIZER_LOCK_FD}"
+  exec {GG_ARRAY_FINALIZER_LOCK_FD}>&-
+  GG_ARRAY_FINALIZER_LOCK_FD=""
+  GG_ARRAY_FINALIZER_RUN_DIR="${run_dir}"
+  echo "Array finalizer ${stage_name}: ready ${ready_count}/${expected_count}; task ${task_id} claimed finalization."
+}
+
+gg_array_finalizer_complete() {
+  local run_dir=${GG_ARRAY_FINALIZER_RUN_DIR:-}
+  if [[ -z "${run_dir}" || ! -d "${run_dir}" ]]; then
+    echo "No array finalizer claim is active." >&2
+    return 1
+  fi
+  exec {GG_ARRAY_FINALIZER_LOCK_FD}>"${run_dir}.lock" || return 1
+  flock -x "${GG_ARRAY_FINALIZER_LOCK_FD}" || return 1
+  rm -f -- "${run_dir}/claim"
+  printf 'done\n' > "${run_dir}/done"
+  flock -u "${GG_ARRAY_FINALIZER_LOCK_FD}"
+  exec {GG_ARRAY_FINALIZER_LOCK_FD}>&-
+  GG_ARRAY_FINALIZER_LOCK_FD=""
+  GG_ARRAY_FINALIZER_RUN_DIR=""
+}
+
+gg_array_finalizer_release() {
+  local run_dir=${GG_ARRAY_FINALIZER_RUN_DIR:-}
+  if [[ -z "${run_dir}" ]]; then
+    return 0
+  fi
+  exec {GG_ARRAY_FINALIZER_LOCK_FD}>"${run_dir}.lock" || return 1
+  flock -x "${GG_ARRAY_FINALIZER_LOCK_FD}" || return 1
+  rm -f -- "${run_dir}/claim"
+  flock -u "${GG_ARRAY_FINALIZER_LOCK_FD}"
+  exec {GG_ARRAY_FINALIZER_LOCK_FD}>&-
+  GG_ARRAY_FINALIZER_LOCK_FD=""
+  GG_ARRAY_FINALIZER_RUN_DIR=""
+}
+
 gg_shared_lock_helper_script() {
   local helper_dir="${gg_support_dir:-}"
   if [[ -z "${helper_dir}" ]]; then

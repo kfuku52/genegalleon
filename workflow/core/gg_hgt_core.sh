@@ -38,6 +38,7 @@ dir_hgt_plot="${dir_hgt}/plots"
 dir_hgt_tree_plot="${dir_hgt}/tree_plot"
 dir_hgt_tree_input="${dir_hgt}/tree_plot_input"
 dir_hgt_tmp="${dir_hgt}/tmp"
+dir_hgt_provenance="${dir_hgt}/artifact_provenance"
 file_hgt_overview_pdf="${dir_hgt_plot}/hgt_branch_overview.pdf"
 file_hgt_taxonomy_flow_pdf="${dir_hgt_plot}/hgt_taxonomy_flow.pdf"
 
@@ -236,71 +237,105 @@ hgt_cleanup_family_materialization() {
 
 trap hgt_cleanup_materialization_run EXIT
 
-if [[ ${run_hgt_eval} -eq 1 ]]; then
-  if [[ ! -s "${file_orthogroup_db}" ]]; then
-    echo "Skipping HGT evaluation because the orthogroup database was not found: ${file_orthogroup_db}"
-    exit 0
+contamination_arg=""
+if [[ -n "${hgt_contamination_dir}" ]]; then
+  if [[ -d "${hgt_contamination_dir}" ]]; then
+    contamination_arg="${hgt_contamination_dir}"
+  else
+    echo "Warning: HGT contamination directory was provided but not found. Skipping contamination input: ${hgt_contamination_dir}" >&2
   fi
-
-  hgt_taxonomy_dbfile=""
-  if [[ ${hgt_use_taxonomy_db} -eq 1 ]]; then
-    if ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
-      hgt_taxonomy_dbfile=$(workspace_taxonomy_dbfile "${gg_workspace_dir}")
-    else
-      echo "Warning: Failed to prepare the ETE taxonomy DB. Continuing with best-hit name heuristics only." >&2
-    fi
-  fi
-
-  contamination_arg=""
-  if [[ -n "${hgt_contamination_dir}" ]]; then
-    if [[ -d "${hgt_contamination_dir}" ]]; then
-      contamination_arg="${hgt_contamination_dir}"
-    else
-      echo "Warning: HGT contamination directory was provided but not found. Skipping contamination input: ${hgt_contamination_dir}" >&2
-    fi
-  elif [[ -d "${default_hgt_contamination_dir}" ]]; then
-    contamination_arg="${default_hgt_contamination_dir}"
-  fi
-
-  python "${gg_support_dir}/score_hgt_candidates.py" \
-    --dbpath "${file_orthogroup_db}" \
-    --branch_out "${file_hgt_branch}" \
-    --gene_out "${file_hgt_gene}" \
-    --orthogroup_out "${file_hgt_orthogroup}" \
-    --dir_contamination_tsv "${contamination_arg}" \
-    --taxonomy_dbfile "${hgt_taxonomy_dbfile}"
+elif [[ -d "${default_hgt_contamination_dir}" ]]; then
+  contamination_arg="${default_hgt_contamination_dir}"
 fi
 
-if [[ ${run_hgt_plot} -eq 1 ]]; then
+hgt_taxonomy_db_candidate=""
+if [[ ${hgt_use_taxonomy_db} -eq 1 ]]; then
+  hgt_taxonomy_db_candidate=$(workspace_taxonomy_dbfile "${gg_workspace_dir}")
+fi
+
+hgt_eval_provenance_args=()
+gg_artifact_contract_init \
+  hgt_eval_provenance_args \
+  "hgt_evaluation" \
+  "all_gene_families" \
+  "${dir_hgt_provenance}/hgt_evaluation.json"
+hgt_eval_provenance_args+=(
+  --input "gene_family_database=${file_orthogroup_db}"
+  --output "branch_candidates=${file_hgt_branch}"
+  --output "gene_candidates=${file_hgt_gene}"
+  --output "gene_family_summary=${file_hgt_orthogroup}"
+  --parameter "use_taxonomy_db=${hgt_use_taxonomy_db}"
+)
+gg_artifact_add_input_if_present hgt_eval_provenance_args "contamination_tables" "${contamination_arg}"
+gg_artifact_add_input_if_present hgt_eval_provenance_args "taxonomy_database" "${hgt_taxonomy_db_candidate}"
+gg_artifact_prepare_stage hgt_eval_needs_update run_hgt_eval "${hgt_eval_provenance_args[@]}" || exit $?
+
+if [[ ${run_hgt_eval} -eq 1 && ${hgt_eval_needs_update} -eq 1 ]]; then
+  if [[ ! -s "${file_orthogroup_db}" ]]; then
+    echo "Skipping HGT evaluation because the orthogroup database was not found: ${file_orthogroup_db}"
+  else
+    hgt_taxonomy_dbfile=""
+    if [[ ${hgt_use_taxonomy_db} -eq 1 ]]; then
+      if ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+        hgt_taxonomy_dbfile=$(workspace_taxonomy_dbfile "${gg_workspace_dir}")
+        gg_artifact_add_input_if_present hgt_eval_provenance_args "taxonomy_database" "${hgt_taxonomy_dbfile}"
+      else
+        echo "Warning: Failed to prepare the ETE taxonomy DB. Continuing with best-hit name heuristics only." >&2
+      fi
+    fi
+
+    python "${gg_support_dir}/score_hgt_candidates.py" \
+      --dbpath "${file_orthogroup_db}" \
+      --branch_out "${file_hgt_branch}" \
+      --gene_out "${file_hgt_gene}" \
+      --orthogroup_out "${file_hgt_orthogroup}" \
+      --dir_contamination_tsv "${contamination_arg}" \
+      --taxonomy_dbfile "${hgt_taxonomy_dbfile}"
+    gg_artifact_record "${hgt_eval_provenance_args[@]}"
+  fi
+fi
+
+hgt_summary_plot_provenance_args=()
+gg_artifact_contract_init \
+  hgt_summary_plot_provenance_args \
+  "hgt_summary_plot" \
+  "all_candidates" \
+  "${dir_hgt_provenance}/hgt_summary_plot.json"
+hgt_summary_plot_provenance_args+=(
+  --input "branch_candidates=${file_hgt_branch}"
+  --input "gene_candidates=${file_hgt_gene}"
+  --output "branch_overview=${file_hgt_overview_pdf}"
+  --output "taxonomy_flow=${file_hgt_taxonomy_flow_pdf}"
+  --parameter "use_taxonomy_db=${hgt_use_taxonomy_db}"
+  --parameter "taxonomy_flow_rank=${hgt_taxonomy_flow_rank}"
+  --parameter "taxonomy_flow_max_categories=${hgt_taxonomy_flow_max_categories}"
+)
+gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "taxonomy_database" "${hgt_taxonomy_db_candidate}"
+gg_artifact_prepare_stage hgt_summary_plot_needs_update run_hgt_plot "${hgt_summary_plot_provenance_args[@]}" || exit $?
+
+if [[ ${run_hgt_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
   if [[ ! -s "${file_hgt_branch}" || ! -s "${file_hgt_gene}" ]]; then
-    echo "Skipping HGT plotting because candidate tables were not found: ${file_hgt_branch}, ${file_hgt_gene}"
-    echo "$(date): Exiting Singularity environment"
-    exit 0
+    echo "Skipping HGT summary plotting because candidate tables were not found: ${file_hgt_branch}, ${file_hgt_gene}"
+  else
+    mkdir -p "${dir_hgt_plot}"
+    hgt_taxonomy_dbfile=""
+    if [[ ${hgt_use_taxonomy_db} -eq 1 ]] && ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+      hgt_taxonomy_dbfile=$(workspace_taxonomy_dbfile "${gg_workspace_dir}")
+      gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "taxonomy_database" "${hgt_taxonomy_dbfile}"
+    fi
+    python "${gg_support_dir}/plot_hgt_summary.py" \
+      --branch_tsv "${file_hgt_branch}" \
+      --gene_tsv "${file_hgt_gene}" \
+      --overview_pdf "${file_hgt_overview_pdf}" \
+      --taxonomy_flow_pdf "${file_hgt_taxonomy_flow_pdf}" \
+      --taxonomy_dbfile "${hgt_taxonomy_dbfile}" \
+      --flow_rank "${hgt_taxonomy_flow_rank}" \
+      --flow_max_categories "${hgt_taxonomy_flow_max_categories}"
+    gg_artifact_record "${hgt_summary_plot_provenance_args[@]}"
   fi
+fi
 
-  mkdir -p "${dir_hgt_plot}" "${dir_hgt_tree_plot}" "${dir_hgt_tree_input}" "${dir_hgt_tmp}"
-  hgt_prepare_materialization_run
-
-  hgt_taxonomy_dbfile=""
-  if [[ ${hgt_use_taxonomy_db} -eq 1 ]] && ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
-    hgt_taxonomy_dbfile=$(workspace_taxonomy_dbfile "${gg_workspace_dir}")
-  fi
-
-  python "${gg_support_dir}/plot_hgt_summary.py" \
-    --branch_tsv "${file_hgt_branch}" \
-    --gene_tsv "${file_hgt_gene}" \
-    --overview_pdf "${file_hgt_overview_pdf}" \
-    --taxonomy_flow_pdf "${file_hgt_taxonomy_flow_pdf}" \
-    --taxonomy_dbfile "${hgt_taxonomy_dbfile}" \
-    --flow_rank "${hgt_taxonomy_flow_rank}" \
-    --flow_max_categories "${hgt_taxonomy_flow_max_categories}"
-
-  if ! Rscript -e "if (!requireNamespace('ggimage', quietly=TRUE)) quit(status=1)" > /dev/null 2>&1; then
-    echo "ggimage package is unavailable. Skipping HGT tree plots."
-    echo "$(date): Exiting Singularity environment"
-    exit 0
-  fi
-
+if [[ -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
   hgt_orthogroups=()
   while IFS= read -r og_id; do
     [[ -z "${og_id}" ]] && continue
@@ -320,12 +355,30 @@ if [[ ${run_hgt_plot} -eq 1 ]]; then
       ' "${file_hgt_branch}" | sort
   )
 
+  hgt_ggimage_available=-1
   for og_id in "${hgt_orthogroups[@]}"; do
     [[ -z "${og_id}" ]] && continue
+    file_hgt_stat_branch="${dir_hgt_tree_input}/${og_id}_hgt_stat.branch.tsv"
+    file_hgt_tree_plot="${dir_hgt_tree_plot}/${og_id}_hgt_tree_plot.pdf"
+    file_hgt_tree_manifest="${dir_hgt_provenance}/${og_id}.hgt_tree_plot.json"
+    hgt_tree_plot_run="${run_hgt_plot}"
+    if [[ ${hgt_tree_plot_run} -ne 1 \
+      && ! -e "${file_hgt_stat_branch}" \
+      && ! -e "${file_hgt_tree_plot}" \
+      && ! -e "${file_hgt_tree_manifest}" ]]; then
+      continue
+    fi
+
+    if [[ -z "${hgt_materialization_run_dir}" ]]; then
+      mkdir -p "${dir_hgt_tree_plot}" "${dir_hgt_tree_input}" "${dir_hgt_tmp}"
+      hgt_prepare_materialization_run
+    fi
     dir_og_input_root="${dir_orthogroup}"
     dir_hgt_materialized="${hgt_materialization_run_dir}/${og_id}"
     hgt_current_materialized=""
+    hgt_uses_gene_family_store=0
     if [[ -d "${dir_orthogroup}/.gg_store" || -d "${dir_orthogroup}/.gg_archives" ]]; then
+      hgt_uses_gene_family_store=1
       hgt_current_materialized="${dir_hgt_materialized}"
       materialize_args=(
         materialize-family
@@ -358,13 +411,6 @@ if [[ ${run_hgt_plot} -eq 1 ]]; then
     file_og_dated_tree="${dir_og_input_root}/dated_tree/${og_id}_dated.nwk"
     file_og_fimo="${dir_og_input_root}/fimo/${og_id}_fimo.tsv"
     file_og_meme="${dir_og_input_root}/meme/${og_id}_meme.xml"
-    file_hgt_stat_branch="${dir_hgt_tree_input}/${og_id}_hgt_stat.branch.tsv"
-    file_hgt_tree_plot="${dir_hgt_tree_plot}/${og_id}_hgt_tree_plot.pdf"
-    ortholog_prefix=$(hgt_majority_ortholog_prefix "${og_id}" "${file_hgt_gene}")
-    if [[ -z "${ortholog_prefix}" ]]; then
-      ortholog_prefix="HGT_UNRESOLVED_"
-    fi
-
     if [[ ! -s "${file_og_stat_branch}" ]]; then
       echo "Skipping HGT tree plot for ${og_id}: stat_branch not found (${file_og_stat_branch})"
       hgt_cleanup_family_materialization "${hgt_current_materialized}"
@@ -372,6 +418,77 @@ if [[ ${run_hgt_plot} -eq 1 ]]; then
       continue
     fi
 
+    hgt_tree_plot_provenance_args=()
+    gg_artifact_contract_init \
+      hgt_tree_plot_provenance_args \
+      "hgt_tree_plot" \
+      "${og_id}" \
+      "${file_hgt_tree_manifest}"
+    hgt_tree_plot_provenance_args+=(
+      --input "branch_candidates=${file_hgt_branch}"
+      --input "gene_candidates=${file_hgt_gene}"
+      --output "annotated_stat_branch=${file_hgt_stat_branch}"
+      --output "tree_plot=${file_hgt_tree_plot}"
+      --parameter "tree_plot_width=${hgt_tree_plot_width}"
+      --parameter "promoter_bp=${hgt_promoter_bp}"
+      --parameter "fimo_qvalue=${hgt_fimo_qvalue}"
+    )
+    hgt_family_input_specs=(
+      "stat_branch|stat_branch|${og_id}_stat.branch.tsv|${file_og_stat_branch}"
+      "synteny|synteny|${og_id}_synteny.tsv|${file_og_synteny}"
+      "rpsblast|rpsblast|${og_id}_rpsblast.tsv|${file_og_rpsblast}"
+      "clipkit_alignment|clipkit|${og_id}_cds.clipkit.fa.gz|${file_og_clipkit}"
+      "extracted_alignment|orthogroup_extraction_fasta|${og_id}_orthogroup_extraction.fa.gz|${file_og_orthogroup_extraction_fasta}"
+      "maxalign_alignment|maxalign|${og_id}_cds.maxalign.fa.gz|${file_og_maxalign}"
+      "mafft_alignment|mafft|${og_id}_cds.aln.fa.gz|${file_og_mafft}"
+      "protein_fasta|protein_fasta|${og_id}_pep.fa.gz|${file_og_pep_fasta}"
+      "cds_fasta|cds_fasta|${og_id}_cds.fa.gz|${file_og_cds_fasta}"
+      "dated_tree|dated_tree|${og_id}_dated.nwk|${file_og_dated_tree}"
+      "fimo|fimo|${og_id}_fimo.tsv|${file_og_fimo}"
+      "meme|meme|${og_id}_meme.xml|${file_og_meme}"
+    )
+    for hgt_family_input_spec in "${hgt_family_input_specs[@]}"; do
+      IFS='|' read -r hgt_input_label hgt_input_subdir hgt_input_name hgt_input_path <<< "${hgt_family_input_spec}"
+      [[ -e "${hgt_input_path}" ]] || continue
+      if [[ ${hgt_uses_gene_family_store} -eq 1 ]]; then
+        hgt_tree_plot_provenance_args+=(
+          --input-gene-family-artifact
+          "${hgt_input_label}=${dir_orthogroup}::${hgt_input_subdir}::${hgt_input_name}"
+        )
+      else
+        hgt_tree_plot_provenance_args+=(--input "${hgt_input_label}=${hgt_input_path}")
+      fi
+    done
+    gg_artifact_prepare_stage \
+      hgt_tree_plot_needs_update \
+      hgt_tree_plot_run \
+      "${hgt_tree_plot_provenance_args[@]}" || exit $?
+    if [[ ${hgt_tree_plot_run} -ne 1 || ${hgt_tree_plot_needs_update} -ne 1 ]]; then
+      hgt_cleanup_family_materialization "${hgt_current_materialized}"
+      hgt_current_materialized=""
+      continue
+    fi
+
+    if [[ ${hgt_ggimage_available} -lt 0 ]]; then
+      if Rscript -e "if (!requireNamespace('ggimage', quietly=TRUE)) quit(status=1)" > /dev/null 2>&1; then
+        hgt_ggimage_available=1
+      else
+        hgt_ggimage_available=0
+        echo "ggimage package is unavailable. Skipping HGT tree plots." >&2
+      fi
+    fi
+    if [[ ${hgt_ggimage_available} -eq 0 ]]; then
+      hgt_cleanup_family_materialization "${hgt_current_materialized}"
+      hgt_current_materialized=""
+      continue
+    fi
+
+    ortholog_prefix=$(hgt_majority_ortholog_prefix "${og_id}" "${file_hgt_gene}")
+    if [[ -z "${ortholog_prefix}" ]]; then
+      ortholog_prefix="HGT_UNRESOLVED_"
+    fi
+
+    rm -f -- "${file_hgt_stat_branch}" "${file_hgt_tree_plot}"
     python "${gg_support_dir}/annotate_hgt_tree_plot.py" \
       --stat_branch "${file_og_stat_branch}" \
       --branch_tsv "${file_hgt_branch}" \
@@ -433,6 +550,11 @@ if [[ ${run_hgt_plot} -eq 1 ]]; then
         echo "Warning: HGT tree plot was not generated for ${og_id}."
       fi
     )
+    if [[ -s "${file_hgt_stat_branch}" && -s "${file_hgt_tree_plot}" ]]; then
+      gg_artifact_record "${hgt_tree_plot_provenance_args[@]}"
+    else
+      echo "Warning: HGT tree plot outputs are incomplete for ${og_id}; provenance was not recorded." >&2
+    fi
     hgt_cleanup_family_materialization "${hgt_current_materialized}"
     hgt_current_materialized=""
   done

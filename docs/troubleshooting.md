@@ -123,17 +123,27 @@ Examples:
 - `gg_gene_summary_entrypoint.sh` skips database generation if logical `stat_tree` or `stat_branch` inputs are absent from both live files and ZIP storage,
 - `gg_progress_summary_core.sh` skips orthogroup summary generation if the selected gene-count table is absent; AMAS inputs may be live or ZIP-backed.
 
-For `iqtree_anc`, `csubst`, `csubst_scan`, gene-family summary tables, and tree
-plots, GeneGalleon records content-based provenance manifests below the logical
-`artifact_provenance/` output subdirectory. Existing legacy outputs without a
-manifest are reused rather than regenerated. When all declared inputs are still
+GeneGalleon records content-based provenance manifests for generated artifacts,
+including gene-family, genome-annotation, transcriptome, species-tree,
+orthogroup, and gene-summary stages. Existing legacy outputs without a manifest
+are reused rather than regenerated. When all declared inputs are still
 available, GeneGalleon backfills a manifest from the current files and
-parameters so later changes can be detected. A changed declared input, modified
-output, or changed output-affecting parameter causes the stage to be regenerated
-when its `run_*` flag is enabled. If a downstream stage is enabled while its
-required upstream artifact has a recorded mismatch, the workflow stops instead
-of silently consuming it. Tool, container, and GeneGalleon versions are
-diagnostic fields only and do not cause regeneration.
+parameters so later changes can be detected. Optional outputs record either a
+present or absent state, so a tool that legitimately produces no result (for
+example, no valid CSUBST foreground branch combination) is still complete.
+
+`artifact_stale_policy` controls a detected input, output, or parameter mismatch:
+
+- `stop` (default) prints the mismatched family, stage, manifest, and reason,
+  then exits before modifying outputs;
+- `reuse` continues with the stale output and does not rewrite its manifest;
+- `rebuild` enables the affected stage and regenerates it without confirmation.
+
+Only declared data content and output-affecting parameters participate in the
+freshness decision. Tool, container, and GeneGalleon versions are retained as
+diagnostics and do not cause regeneration. Raw and ZIP-backed managed output
+directories use the same logical content digest, so storage conversion alone
+does not cause regeneration.
 
 When `run_gene_family_database_build=1`, inspect
 `gene_summary/<source>/<source>_artifact_provenance_audit.tsv` for the exact HOG,
@@ -142,8 +152,9 @@ database generation. `semantic_mismatch` means the CSUBST and `stat_branch`
 branch IDs do not identify the same descendant-tip clades and the affected
 upstream chain must be regenerated.
 
-Developers can inventory remaining shell stages that still rely on
-existence-only cache guards with:
+Developers can inventory shell stages that rely on existence-, mtime-, count-,
+or readiness-only cache guards, plus Python functions that return/continue on
+an existing output, with:
 
 ```bash
 python workflow/support/audit_cache_guards.py \
@@ -152,8 +163,8 @@ python workflow/support/audit_cache_guards.py \
 ```
 
 The committed baseline records known migration debt without hiding it from the
-TSV. CI fails when a new unprovenanced cache guard is introduced; removing or
-migrating an existing guard reduces the reported inventory.
+TSV. It is currently empty. CI scans both `workflow/core` and
+`workflow/support` and fails when a new unprovenanced cache guard is introduced.
 
 ### Gene-family storage conversion is pending
 

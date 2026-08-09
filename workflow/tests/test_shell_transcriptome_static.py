@@ -226,7 +226,8 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     assert '"${dir_tmp}/getfastq/getfastq_completion.json"' in attempt_body
     assert "has_resumable_getfastq_run_state" in text
     assert '(${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1)' not in text
-    assert 'if [[ ${run_amalgkit_getfastq} -eq 1 && $(is_fastq_requiring_downstream_analysis_done) -eq 0 ]]; then' in text
+    assert 'gg_artifact_prepare_stage getfastq_needs_update run_amalgkit_getfastq' in text
+    assert 'if [[ ${run_amalgkit_getfastq} -eq 1 && ${getfastq_needs_update} -eq 1 ]]; then' in text
     assert 'run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"' in text
     assert "Exiting without fallback download so partial outputs do not reach downstream steps." in text
     assert 'mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"' in text
@@ -426,7 +427,7 @@ def test_transcriptome_core_delegates_ncbi_parallelism_to_amalgkit():
     assert '--gcp_download_max_concurrency "${amalgkit_gcp_download_max_concurrency}"' in getfastq_body
 
 
-def test_transcriptome_core_invalidates_stale_cached_query_tables_on_species_prefix_change():
+def test_transcriptome_core_applies_artifact_policy_to_mismatched_query_tables():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
     body = _function_body(text, "invalidate_cached_query_table_if_prefix_mismatch")
@@ -438,14 +439,15 @@ def test_transcriptome_core_invalidates_stale_cached_query_tables_on_species_pre
     assert "expected_species=${expected_prefix%_}" in body
     assert 'first_query_species=$(gg_species_name_from_path_or_dot "${first_query}")' in body
     assert 'if [[ "${first_query_species}" != "${expected_species}" ]]; then' in body
-    assert 'stale_file="${table_file}.stale.$(date +%Y%m%d%H%M%S)"' in body
-    assert 'mv -f -- "${table_file}" "${stale_file}"' in body
-    assert "Archived stale file to: ${stale_file}" in body
+    assert 'case "${artifact_stale_policy:-stop}" in' in body
+    assert "No output files were modified." in body
+    assert 'rm -f -- "${table_file}"' in body
+    assert "mv -f" not in body
     assert (
-        'invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_fx2tab}" "${sp_ub}_" "${task}" 1' in text
+        'invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_fx2tab}" "${sp_ub}_" "${task}" 1 || exit $?' in text
     )
     assert (
-        'invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_mmseqs2taxonomy}" "${sp_ub}_" "${task}" 0'
+        'invalidate_cached_query_table_if_prefix_mismatch "${file_longestcds_mmseqs2taxonomy}" "${sp_ub}_" "${task}" 0 || exit $?'
         in text
     )
 

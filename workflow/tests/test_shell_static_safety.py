@@ -481,12 +481,10 @@ def test_print_softmasked_percentage_handles_zero_length_input_safely():
     assert " ${num_masked_bp} ${num_total_bp}" not in body
 
 
-def test_is_output_older_than_inputs_uses_compgen_variable_listing():
+def test_mtime_only_output_freshness_helper_has_been_removed():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
-    body = _function_body(text, "is_output_older_than_inputs")
-    assert 'compgen -A variable | grep -E -- "${input_file_variable_regex}"' in body
-    assert 'set | grep "${input_file_variable_regex}"' not in body
+    assert "is_output_older_than_inputs()" not in text
 
 
 def test_ensure_latest_jaspar_file_uses_set_e_safe_assignments():
@@ -587,7 +585,7 @@ def test_gene_evolution_core_uses_explicit_ne_and_grouped_logic_for_tree_pruning
     assert "if [[ ${run_tree_pruning} -ne 1 && ${run_l1ou} -eq 1 ]]; then" in text
 
 
-def test_genome_evolution_core_uses_ne_for_busco_count_mismatch_checks():
+def test_genome_evolution_core_replaces_busco_count_cache_guards_with_provenance():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
     banned_tokens = [
@@ -597,7 +595,7 @@ def test_genome_evolution_core_uses_ne_for_busco_count_mismatch_checks():
         "if [[ ! ${num_busco_ids} -eq ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq 1 ]]; then",
         "if [[ ! ${num_busco_ids} -eq ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq 1 ]]; then",
     ]
-    expected_tokens = [
+    legacy_count_guards = [
         "if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree_fasta} -eq 1 ]]; then",
         "if [[ ${num_busco_ids} -ne ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]]; then",
         "if [[ ${num_busco_ids} -ne ${num_trimal_fasta} && ${run_individual_trimal} -eq 1 ]]; then",
@@ -606,8 +604,16 @@ def test_genome_evolution_core_uses_ne_for_busco_count_mismatch_checks():
     ]
     for token in banned_tokens:
         assert token not in text
-    for token in expected_tokens:
-        assert token in text
+    for token in legacy_count_guards:
+        assert token not in text
+    for stage in (
+        "extract_species_tree_fasta",
+        "individual_mafft",
+        "individual_trimal",
+        "individual_iqtree_pep",
+        "individual_iqtree_dna",
+    ):
+        assert f"gg_artifact_prepare_stage {stage}_needs_update" in text
 
 
 def test_set_singularityenv_forwards_gg_common_variables():
@@ -1929,9 +1935,8 @@ def test_genome_evolution_exposes_single_copy_ortholog_decay_plot():
 def test_genome_evolution_runs_omark_after_orthofinder_and_before_og_selection():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
-    orthofinder_index = core.index(
-        'task="OrthoFinder"\nif [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; then'
-    )
+    orthofinder_index = core.index('task="OrthoFinder"')
+    assert 'gg_artifact_prepare_stage orthofinder_needs_update run_orthofinder' in core
     omark_index = core.index(
         'task="OMArk analysis of species-wise protein input files"\nrun_shared_species_omark_stage'
     )
@@ -2271,7 +2276,7 @@ def test_no_cp_out_or_mv_out_glob_arguments_in_core_scripts():
         assert pattern.search(text) is None, f"Use nullglob+array guard instead of cp_out/mv_out glob in {script}"
 
 
-def test_gene_evolution_core_quotes_notung_zip_and_summary_presence_checks():
+def test_gene_evolution_core_quotes_notung_zip_and_provenances_summary_outputs():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     assert "if [[ -s ${file_og_notung_reconcil} ]]; then" not in text
@@ -2280,14 +2285,15 @@ def test_gene_evolution_core_quotes_notung_zip_and_summary_presence_checks():
     assert "! -s ${file_og_stat_tree}" not in text
     assert 'if [[ -s "${file_og_notung_reconcil}" ]]; then' in text
     assert 'unzip -qf "${file_og_notung_reconcil}"' in text
-    assert '! -s "${file_og_stat_branch}"' in text
-    assert '! -s "${file_og_stat_tree}"' in text
+    assert '--output "stat_branch=${file_og_stat_branch}"' in text
+    assert '--output "stat_tree=${file_og_stat_tree}"' in text
+    assert 'if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then' in text
 
 
 def test_gene_evolution_summary_freshness_tracks_summary_tables_and_analysis_inputs():
     text = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
 
-    assert 'if gg_artifact_needs_run "${summary_provenance_args[@]}"; then' in text
+    assert 'gg_artifact_prepare_stage summary_needs_update run_summary "${summary_provenance_args[@]}"' in text
     assert '--output "stat_branch=${file_og_stat_branch}"' in text
     assert '--output "stat_tree=${file_og_stat_tree}"' in text
     for analysis_input in (
@@ -2701,7 +2707,8 @@ def test_gene_evolution_core_routes_extracted_rooted_tree_to_downstream_analysis
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     assert "file_og_orthogroup_extraction_rooted_nwk=" in text
-    assert '! -s "${file_og_orthogroup_extraction_rooted_nwk}"' in text
+    assert '--output "extracted_rooted_tree=${file_og_orthogroup_extraction_rooted_nwk}"' in text
+    assert 'gg_artifact_prepare_stage orthogroup_extraction_needs_update' in text
     assert 'mv_out "${og_id}.orthogroup_seed.tmp.nwk" "${file_og_orthogroup_extraction_rooted_nwk}"' in text
     assert 'set_analysis_file rooted_tree "${file_og_orthogroup_extraction_rooted_nwk}"' in text
 
@@ -3139,19 +3146,22 @@ def test_gene_evolution_core_uses_content_and_parameter_provenance_for_csubst_ch
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
 
     assert "iqtree_anc_needs_update=0" in core
-    assert 'if gg_artifact_needs_run "${iqtree_anc_provenance_args[@]}"; then' in core
+    assert 'gg_artifact_prepare_stage iqtree_anc_needs_update run_iqtree_anc' in core
     assert '--input "trimmed_alignment=${file_og_trimmed_aln_analysis}"' in core
     assert '--input "rooted_tree=${file_og_rooted_tree_analysis}"' in core
     assert '--parameter "codon_model=${codon_model}"' in core
     assert "if [[ ${iqtree_anc_needs_update} -eq 1 && ${run_iqtree_anc} -eq 1 ]]; then" in core
 
     assert "csubst_needs_update=0" in core
-    assert 'if gg_artifact_needs_run "${csubst_provenance_args[@]}"; then' in core
+    assert 'gg_artifact_prepare_stage csubst_needs_update run_csubst' in core
     assert '--parameter "max_arity=${csubst_max_arity}"' in core
     assert '--parameter "nonsyn_recode=${csubst_nonsyn_recode}"' in core
+    assert '--optional-output "csubst_cb_${i}=${!csubst_cb_varname}"' in core
+    assert 'old_csubst_cb_logical_path=${old_csubst_cb_file#"${dir_output_active}"/}' in core
+    assert 'python "${gene_family_store_script}" delete \\' in core
 
     assert "csubst_scan_needs_update=0" in core
-    assert 'if gg_artifact_needs_run "${csubst_scan_provenance_args[@]}"; then' in core
+    assert 'gg_artifact_prepare_stage csubst_scan_needs_update run_csubst_scan' in core
     assert '--parameter "scan_min_support=${csubst_scan_min_support}"' in core
     assert '--parameter "scan_pvalue_calibration=${csubst_scan_pvalue_calibration}"' in core
     assert 'python "${gg_support_dir}/validate_csubst_branch_identity.py"' in core
@@ -3186,8 +3196,10 @@ def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py"' not in database_body
     assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py"' in csubst_summary_body
     assert "run_csubst_scan_aa_change_summary=0" in csubst_summary_body
-    assert '--out_prefix "${summary_output_dir}/${gene_family_source}_csubst_aa_change"' in core
-    assert '--out_tsv "${summary_output_dir}/${gene_family_source}_csubst_aa_change_min_support_2_summary.tsv"' in core
+    assert 'local aa_summary_prefix="${summary_output_dir}/${gene_family_source}_csubst_aa_change"' in core
+    assert '--out_prefix "${aa_summary_prefix}"' in core
+    assert 'local aa_summary_tsv="${summary_output_dir}/${gene_family_source}_csubst_aa_change_min_support_2_summary.tsv"' in core
+    assert '--out_tsv "${aa_summary_tsv}"' in core
     assert "resolve_orthogroup_genecount_annotated" in core
     assert '"${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv"' in core
     assert 'if [[ "${gene_family_source}" == "orthogroup" ]]; then' in csubst_summary_body
@@ -3368,9 +3380,9 @@ def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
         assert token not in text
     expected_tokens = [
         'if [[ -s "${file_og_expression}" && ${run_l1ou} -eq 1 ]]; then',
-        'if [[ ! -s "${file_og_hyphy_relax_reversed}" && ${run_hyphy_relax_reversed} -eq 1 ]]; then',
-        'if [[ ! -s "${file_og_scm_intron_summary}" && ${run_scm_intron} -eq 1 ]]; then',
-        'if [[ (! -s "${file_og_l1ou_fit_rdata}" || ! -s "${file_og_l1ou_fit_tree}" || ! -s "${file_og_l1ou_fit_regime}" || ! -s "${file_og_l1ou_fit_leaf}") && ${run_l1ou} -eq 1 ]]; then',
+        'if [[ ${hyphy_relax_reversed_needs_update} -eq 1 && ${run_hyphy_relax_reversed} -eq 1 ]]; then',
+        'if [[ ${scm_intron_needs_update} -eq 1 && ${run_scm_intron} -eq 1 ]]; then',
+        'if [[ ${l1ou_needs_update} -eq 1 && ${run_l1ou} -eq 1 ]]; then',
         "if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then",
         'if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" ]]; then',
     ]
@@ -3442,7 +3454,8 @@ def test_genome_annotation_core_multispecies_summary_requires_real_summary_input
     assert "summary_inputs_available=0" in text
     assert "No multispecies summary inputs are available yet. Skipping summary generation." in text
     assert 'if is_output_older_than_inputs "^file_sp_" "${file_multispecies_summary}"; then' not in text
-    assert 'if is_output_older_than_inputs "^(dir_summary_|file_summary_)" "${file_multispecies_summary}"; then' in text
+    assert 'gg_artifact_prepare_stage summary_needs_update run_multispecies_summary "${summary_provenance_args[@]}"' in text
+    assert '--output "summary=${file_multispecies_summary}"' in text
     assert 'dir_summary_species_annotation="${gg_workspace_output_dir}/species_cds_annotation"' in text
     assert 'file_summary_species_tree_dated="${dir_summary_species_tree}/dated_species_tree.nwk"' in text
 

@@ -37,6 +37,7 @@ SCHEMA_VERSION = 1
 CURRENT = 1
 NEEDS_RUN = 0
 ERROR = 2
+STALE_STOP = 3
 CHUNK_SIZE = 1024 * 1024
 MANIFEST_SUBDIR = "artifact_provenance"
 DEFAULT_REQUIRED_STEP_SUBDIRS = {
@@ -68,6 +69,14 @@ def parse_unique_pairs(values: Iterable[str], option: str) -> list[tuple[str, st
     duplicates = sorted({key for key in keys if keys.count(key) > 1})
     if duplicates:
         raise ProvenanceError(f"Duplicate {option} key(s): {', '.join(duplicates)}")
+    return pairs
+
+
+def parse_path_pairs(values: Iterable[str], option: str) -> list[tuple[str, str]]:
+    pairs = parse_unique_pairs(values, option)
+    empty = [label for label, path in pairs if not path.strip()]
+    if empty:
+        raise ProvenanceError(f"{option} path must not be empty for key(s): {', '.join(empty)}")
     return pairs
 
 
@@ -169,6 +178,299 @@ def describe_paths(pairs: list[tuple[str, str]], logical_root: Path, workspace_r
     return entries
 
 
+def describe_optional_paths(
+    pairs: list[tuple[str, str]], logical_root: Path, workspace_root: Path
+) -> list[dict[str, object]]:
+    """Describe managed outputs whose absence can be a valid result."""
+
+    entries: list[dict[str, object]] = []
+    for label, raw_path in pairs:
+        path = Path(raw_path)
+        reference = path_reference(path, logical_root, workspace_root)
+        try:
+            digest, size, artifact_type = sha256_path(path)
+        except FileNotFoundError:
+            entries.append(
+                {
+                    "label": label,
+                    **reference,
+                    "state": "absent",
+                }
+            )
+            continue
+        entries.append(
+            {
+                "label": label,
+                **reference,
+                "state": "present",
+                "artifact_type": artifact_type,
+                "sha256": digest,
+                "size_bytes": size,
+            }
+        )
+    return entries
+
+
+def gene_family_store_digest(root: Path) -> tuple[str, int, int]:
+    store = GeneFamilyOutputStore(root)
+    digest = hashlib.sha256()
+    total_size = 0
+    member_count = 0
+    for subdir in store.logical_subdirs():
+        if subdir == MANIFEST_SUBDIR:
+            continue
+        for artifact in store.artifacts(subdir):
+            artifact_digest = artifact.sha256
+            artifact_size = artifact.size
+            if not artifact_digest or artifact_size is None:
+                with store.open_binary(artifact.subdir, artifact.name) as handle:
+                    artifact_digest, artifact_size = sha256_stream(handle)
+            logical_path = artifact.logical_path.encode("utf-8")
+            digest.update(len(logical_path).to_bytes(8, "big"))
+            digest.update(logical_path)
+            digest.update(bytes.fromhex(str(artifact_digest)))
+            digest.update(int(artifact_size).to_bytes(8, "big"))
+            total_size += int(artifact_size)
+            member_count += 1
+    return digest.hexdigest(), total_size, member_count
+
+
+def gene_family_subdir_digest(root: Path, subdir: str) -> tuple[str, int, int]:
+    """Hash one logical gene-family subdirectory independent of raw/ZIP layout."""
+
+    pure_subdir = PurePosixPath(subdir)
+    if (
+        pure_subdir.is_absolute()
+        or len(pure_subdir.parts) != 1
+        or pure_subdir.parts[0] in {"", ".", ".."}
+    ):
+        raise ProvenanceError(f"Unsafe gene-family logical subdirectory: {subdir!r}")
+    if not root.is_dir() or root.is_symlink():
+        raise FileNotFoundError(root)
+    store = GeneFamilyOutputStore(root)
+    digest = hashlib.sha256()
+    total_size = 0
+    member_count = 0
+    for artifact in store.artifacts(subdir):
+        artifact_digest = artifact.sha256
+        artifact_size = artifact.size
+        if not artifact_digest or artifact_size is None:
+            with store.open_binary(artifact.subdir, artifact.name) as handle:
+                artifact_digest, artifact_size = sha256_stream(handle)
+        logical_path = artifact.logical_path.encode("utf-8")
+        digest.update(len(logical_path).to_bytes(8, "big"))
+        digest.update(logical_path)
+        digest.update(bytes.fromhex(str(artifact_digest)))
+        digest.update(int(artifact_size).to_bytes(8, "big"))
+        total_size += int(artifact_size)
+        member_count += 1
+    return digest.hexdigest(), total_size, member_count
+
+
+def gene_family_artifact_digest(root: Path, subdir: str, name: str) -> tuple[str, int]:
+    """Hash one logical artifact independent of raw/ZIP storage layout."""
+
+    pure_subdir = PurePosixPath(subdir)
+    pure_name = PurePosixPath(name)
+    if (
+        pure_subdir.is_absolute()
+        or len(pure_subdir.parts) != 1
+        or pure_subdir.parts[0] in {"", ".", ".."}
+        or pure_name.is_absolute()
+        or len(pure_name.parts) != 1
+        or pure_name.parts[0] in {"", ".", ".."}
+    ):
+        raise ProvenanceError(
+            f"Unsafe gene-family logical artifact: subdir={subdir!r}, name={name!r}"
+        )
+    if not root.is_dir() or root.is_symlink():
+        raise FileNotFoundError(root)
+    store = GeneFamilyOutputStore(root)
+    artifact = store.artifact(subdir, name)
+    if artifact is None:
+        raise FileNotFoundError(root / subdir / name)
+    artifact_digest = artifact.sha256
+    artifact_size = artifact.size
+    if not artifact_digest or artifact_size is None:
+        with store.open_binary(artifact.subdir, artifact.name) as handle:
+            artifact_digest, artifact_size = sha256_stream(handle)
+    return str(artifact_digest), int(artifact_size)
+
+
+def parse_gene_family_subdir_pairs(
+    values: Iterable[str], option: str
+) -> list[tuple[str, str, str]]:
+    pairs = parse_path_pairs(values, option)
+    parsed: list[tuple[str, str, str]] = []
+    for label, raw_value in pairs:
+        if "::" not in raw_value:
+            raise ProvenanceError(f"{option} must use LABEL=ROOT::SUBDIR syntax: {raw_value!r}")
+        root, subdir = raw_value.rsplit("::", 1)
+        if not root.strip() or not subdir.strip():
+            raise ProvenanceError(f"{option} must use LABEL=ROOT::SUBDIR syntax: {raw_value!r}")
+        parsed.append((label, root, subdir))
+    return parsed
+
+
+def parse_gene_family_artifact_pairs(
+    values: Iterable[str], option: str
+) -> list[tuple[str, str, str, str]]:
+    pairs = parse_path_pairs(values, option)
+    parsed: list[tuple[str, str, str, str]] = []
+    for label, raw_value in pairs:
+        parts = raw_value.rsplit("::", 2)
+        if len(parts) != 3 or any(not part.strip() for part in parts):
+            raise ProvenanceError(
+                f"{option} must use LABEL=ROOT::SUBDIR::FILENAME syntax: {raw_value!r}"
+            )
+        root, subdir, name = parts
+        parsed.append((label, root, subdir, name))
+    return parsed
+
+
+def describe_gene_family_stores(
+    pairs: list[tuple[str, str]], logical_root: Path, workspace_root: Path
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for label, raw_path in pairs:
+        path = Path(raw_path)
+        if not path.is_dir() or path.is_symlink():
+            raise FileNotFoundError(path)
+        digest, size, member_count = gene_family_store_digest(path)
+        entries.append(
+            {
+                "label": label,
+                **path_reference(path, logical_root, workspace_root),
+                "artifact_type": "gene_family_store",
+                "sha256": digest,
+                "size_bytes": size,
+                "member_count": member_count,
+            }
+        )
+    return entries
+
+
+def describe_gene_family_subdirs(
+    pairs: list[tuple[str, str, str]], logical_root: Path, workspace_root: Path
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for label, raw_root, subdir in pairs:
+        root = Path(raw_root)
+        digest, size, member_count = gene_family_subdir_digest(root, subdir)
+        entries.append(
+            {
+                "label": label,
+                **path_reference(root, logical_root, workspace_root),
+                "artifact_type": "gene_family_subdir",
+                "subdir": subdir,
+                "sha256": digest,
+                "size_bytes": size,
+                "member_count": member_count,
+            }
+        )
+    return entries
+
+
+def describe_gene_family_artifacts(
+    pairs: list[tuple[str, str, str, str]], logical_root: Path, workspace_root: Path
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for label, raw_root, subdir, name in pairs:
+        root = Path(raw_root)
+        digest, size = gene_family_artifact_digest(root, subdir, name)
+        entries.append(
+            {
+                "label": label,
+                **path_reference(root, logical_root, workspace_root),
+                "artifact_type": "gene_family_artifact",
+                "subdir": subdir,
+                "name": name,
+                "sha256": digest,
+                "size_bytes": size,
+            }
+        )
+    return entries
+
+
+def raw_or_zip_directory_digest(path: Path) -> tuple[str, int, int]:
+    archive_path = path.with_name(f"{path.name}.zip")
+    raw_result: tuple[str, int, int] | None = None
+    archive_result: tuple[str, int, int] | None = None
+    if path.exists():
+        digest, size, artifact_type = sha256_path(path)
+        if artifact_type != "directory":
+            raise ProvenanceError(f"Managed logical directory path is not a directory: {path}")
+        member_count = sum(1 for child in path.rglob("*") if child.is_file())
+        raw_result = (digest, size, member_count)
+    if archive_path.exists():
+        if archive_path.is_symlink() or not archive_path.is_file():
+            raise ProvenanceError(f"Managed logical directory archive is not a regular file: {archive_path}")
+        digest = hashlib.sha256()
+        total_size = 0
+        member_count = 0
+        try:
+            with zipfile.ZipFile(archive_path, "r") as archive:
+                infos = [info for info in archive.infolist() if not info.is_dir()]
+                names = [info.filename for info in infos]
+                if len(names) != len(set(names)):
+                    raise ProvenanceError(f"Logical directory ZIP contains duplicate members: {archive_path}")
+                prefix = PurePosixPath(path.name)
+                members: list[tuple[PurePosixPath, zipfile.ZipInfo]] = []
+                for info in infos:
+                    member = PurePosixPath(info.filename)
+                    if member.is_absolute() or ".." in member.parts:
+                        raise ProvenanceError(f"Unsafe logical directory ZIP member: {info.filename!r}")
+                    try:
+                        relative = member.relative_to(prefix)
+                    except ValueError as exc:
+                        raise ProvenanceError(
+                            f"Logical directory ZIP member is outside {path.name}/: {info.filename!r}"
+                        ) from exc
+                    if not relative.parts:
+                        continue
+                    members.append((relative, info))
+                for relative, info in sorted(members, key=lambda item: item[0].as_posix()):
+                    relative_bytes = relative.as_posix().encode("utf-8")
+                    with archive.open(info, "r") as handle:
+                        member_digest, member_size = sha256_stream(handle)
+                    digest.update(len(relative_bytes).to_bytes(8, "big"))
+                    digest.update(relative_bytes)
+                    digest.update(bytes.fromhex(member_digest))
+                    digest.update(member_size.to_bytes(8, "big"))
+                    total_size += member_size
+                    member_count += 1
+        except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+            raise ProvenanceError(f"Failed to read logical directory ZIP {archive_path}: {exc}") from exc
+        archive_result = (digest.hexdigest(), total_size, member_count)
+    if raw_result is None and archive_result is None:
+        raise FileNotFoundError(path)
+    if raw_result is not None and archive_result is not None and raw_result != archive_result:
+        raise ProvenanceError(
+            f"Raw and ZIP forms of a managed logical directory differ: {path} and {archive_path}"
+        )
+    return raw_result if raw_result is not None else archive_result  # type: ignore[return-value]
+
+
+def describe_logical_directories(
+    pairs: list[tuple[str, str]], logical_root: Path, workspace_root: Path
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for label, raw_path in pairs:
+        path = Path(raw_path)
+        digest, size, member_count = raw_or_zip_directory_digest(path)
+        entries.append(
+            {
+                "label": label,
+                **path_reference(path, logical_root, workspace_root),
+                "artifact_type": "logical_directory",
+                "sha256": digest,
+                "size_bytes": size,
+                "member_count": member_count,
+            }
+        )
+    return entries
+
+
 def normalized_parameters(values: Iterable[str]) -> dict[str, str]:
     return dict(sorted(parse_unique_pairs(values, "--parameter")))
 
@@ -180,12 +482,41 @@ def normalized_diagnostics(values: Iterable[str]) -> dict[str, str]:
 def build_contract(args: argparse.Namespace, include_diagnostics: bool) -> dict[str, object]:
     logical_root = args.logical_root.absolute()
     workspace_root = args.workspace_root.absolute()
+    input_pairs = parse_path_pairs(args.input, "--input")
+    store_pairs = parse_path_pairs(args.input_gene_family_store, "--input-gene-family-store")
+    store_subdir_pairs = parse_gene_family_subdir_pairs(
+        args.input_gene_family_subdir, "--input-gene-family-subdir"
+    )
+    store_artifact_pairs = parse_gene_family_artifact_pairs(
+        args.input_gene_family_artifact, "--input-gene-family-artifact"
+    )
+    logical_input_pairs = parse_path_pairs(args.input_logical_directory, "--input-logical-directory")
+    output_pairs = parse_path_pairs(args.output, "--output")
+    logical_output_pairs = parse_path_pairs(args.output_logical_directory, "--output-logical-directory")
+    input_labels = [label for label, _path in input_pairs + store_pairs + logical_input_pairs]
+    input_labels.extend(label for label, _root, _subdir in store_subdir_pairs)
+    input_labels.extend(label for label, _root, _subdir, _name in store_artifact_pairs)
+    duplicate_input_labels = sorted({label for label in input_labels if input_labels.count(label) > 1})
+    if duplicate_input_labels:
+        raise ProvenanceError(f"Duplicate input key(s): {', '.join(duplicate_input_labels)}")
+    output_labels = [label for label, _path in output_pairs + logical_output_pairs]
+    duplicate_output_labels = sorted({label for label in output_labels if output_labels.count(label) > 1})
+    if duplicate_output_labels:
+        raise ProvenanceError(f"Duplicate output key(s): {', '.join(duplicate_output_labels)}")
     contract: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "step": args.step,
         "family_id": args.family_id,
-        "inputs": describe_paths(parse_unique_pairs(args.input, "--input"), logical_root, workspace_root),
-        "outputs": describe_paths(parse_unique_pairs(args.output, "--output"), logical_root, workspace_root),
+        "inputs": describe_paths(input_pairs, logical_root, workspace_root)
+        + describe_gene_family_stores(store_pairs, logical_root, workspace_root)
+        + describe_gene_family_subdirs(store_subdir_pairs, logical_root, workspace_root)
+        + describe_gene_family_artifacts(store_artifact_pairs, logical_root, workspace_root)
+        + describe_logical_directories(logical_input_pairs, logical_root, workspace_root),
+        "outputs": describe_paths(output_pairs, logical_root, workspace_root)
+        + describe_logical_directories(logical_output_pairs, logical_root, workspace_root),
+        "optional_outputs": describe_optional_paths(
+            parse_path_pairs(args.optional_output, "--optional-output"), logical_root, workspace_root
+        ),
         "parameters": normalized_parameters(args.parameter),
     }
     if include_diagnostics:
@@ -201,8 +532,82 @@ def contract_comparison_payload(contract: dict[str, object]) -> dict[str, object
         "family_id": contract.get("family_id"),
         "inputs": contract.get("inputs"),
         "outputs": contract.get("outputs"),
+        "optional_outputs": contract.get("optional_outputs", []),
         "parameters": contract.get("parameters"),
     }
+
+
+def entries_by_label(contract: dict[str, object], collection: str) -> dict[str, object]:
+    entries = contract.get(collection, [])
+    if not isinstance(entries, list):
+        return {}
+    return {
+        str(entry.get("label", "")): entry
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("label")
+    }
+
+
+def describe_contract_difference(recorded: dict[str, object], current: dict[str, object]) -> str:
+    for key in ("schema_version", "step", "family_id"):
+        if recorded.get(key) != current.get(key):
+            return f"{key} changed: recorded={recorded.get(key)!r}, current={current.get(key)!r}"
+
+    recorded_parameters = recorded.get("parameters", {})
+    current_parameters = current.get("parameters", {})
+    if recorded_parameters != current_parameters:
+        recorded_parameters = recorded_parameters if isinstance(recorded_parameters, dict) else {}
+        current_parameters = current_parameters if isinstance(current_parameters, dict) else {}
+        for key in sorted(set(recorded_parameters) | set(current_parameters)):
+            if recorded_parameters.get(key) != current_parameters.get(key):
+                return (
+                    f"output-affecting parameter {key!r} changed: "
+                    f"recorded={recorded_parameters.get(key)!r}, current={current_parameters.get(key)!r}"
+                )
+        return "output-affecting parameters changed"
+
+    for collection, description in (
+        ("inputs", "input"),
+        ("outputs", "output"),
+        ("optional_outputs", "managed optional output"),
+    ):
+        recorded_entries = entries_by_label(recorded, collection)
+        current_entries = entries_by_label(current, collection)
+        if recorded_entries.keys() != current_entries.keys():
+            return f"declared {description} set changed"
+        for label in sorted(recorded_entries):
+            if recorded_entries[label] != current_entries[label]:
+                return f"{description} {label!r} changed"
+    return "artifact contract changed"
+
+
+def print_stale_message(args: argparse.Namespace, reason: str, action: str) -> None:
+    print("Stale artifact detected.", file=sys.stderr)
+    print(f"Family: {args.family_id}", file=sys.stderr)
+    print(f"Step: {args.step}", file=sys.stderr)
+    print(f"Reason: {reason}", file=sys.stderr)
+    print(f"Manifest: {args.manifest}", file=sys.stderr)
+    print(f"Policy action: {action}", file=sys.stderr)
+
+
+def stale_policy_result(
+    args: argparse.Namespace, reason: str, *, reusable: bool = True
+) -> int:
+    policy = args.stale_policy
+    if policy == "rebuild":
+        print_stale_message(args, reason, "regenerate without confirmation")
+        return NEEDS_RUN
+    if policy == "reuse" and reusable:
+        print_stale_message(args, reason, "reuse stale output without changing its manifest")
+        return CURRENT
+
+    print_stale_message(args, reason, "stop before modifying outputs")
+    print("No artifact files were modified.", file=sys.stderr)
+    print("Choose one of:", file=sys.stderr)
+    print("  artifact_stale_policy=rebuild  # regenerate automatically", file=sys.stderr)
+    if reusable:
+        print("  artifact_stale_policy=reuse    # continue with the stale output", file=sys.stderr)
+    return STALE_STOP
 
 
 def load_manifest(path: Path) -> dict[str, object]:
@@ -231,16 +636,60 @@ def write_manifest_atomic(path: Path, payload: dict[str, object]) -> None:
 
 def needs_run(args: argparse.Namespace) -> int:
     if not args.manifest.is_file():
-        output_pairs = parse_unique_pairs(args.output, "--output")
-        if not output_pairs:
-            print(f"Artifact will be regenerated because no outputs were declared: {args.manifest}")
-            return NEEDS_RUN
-        try:
-            for _label, raw_path in output_pairs:
+        output_pairs = parse_path_pairs(args.output, "--output")
+        logical_output_pairs = parse_path_pairs(
+            args.output_logical_directory, "--output-logical-directory"
+        )
+        if not output_pairs and not logical_output_pairs:
+            optional_pairs = parse_path_pairs(args.optional_output, "--optional-output")
+            present_optional = [
+                label for label, raw_path in optional_pairs if Path(raw_path).is_file() or Path(raw_path).is_dir()
+            ]
+            if not present_optional:
+                print(
+                    "Artifact will be generated because no provenance manifest or declared optional outputs exist: "
+                    f"{args.manifest}"
+                )
+                return NEEDS_RUN
+            try:
+                adopted = build_contract(args, include_diagnostics=False)
+            except FileNotFoundError as exc:
+                print(
+                    "Reusing legacy artifact without a provenance manifest; the manifest could not "
+                    f"be backfilled because a declared input is missing: {exc.filename}"
+                )
+                return CURRENT
+            adopted["created_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            adopted["diagnostics"] = {
+                "provenance_state": "adopted_legacy_optional_output_without_rebuild",
+            }
+            write_manifest_atomic(args.manifest, adopted)
+            print(f"Reusing legacy optional artifact and backfilled its provenance manifest: {args.manifest}")
+            return CURRENT
+        present_outputs = []
+        missing_outputs = []
+        for label, raw_path in output_pairs:
+            try:
                 sha256_path(Path(raw_path))
-        except FileNotFoundError as exc:
-            print(f"Artifact will be regenerated because a declared output is missing: {exc.filename}")
+                present_outputs.append(label)
+            except FileNotFoundError:
+                missing_outputs.append(label)
+        for label, raw_path in logical_output_pairs:
+            try:
+                raw_or_zip_directory_digest(Path(raw_path))
+                present_outputs.append(label)
+            except FileNotFoundError:
+                missing_outputs.append(label)
+        if missing_outputs and not present_outputs:
+            print(f"Artifact will be generated because no declared outputs exist: {args.manifest}")
             return NEEDS_RUN
+        if missing_outputs:
+            return stale_policy_result(
+                args,
+                "legacy output set is incomplete; missing required output(s): "
+                + ", ".join(missing_outputs),
+                reusable=False,
+            )
 
         try:
             adopted = build_contract(args, include_diagnostics=False)
@@ -259,14 +708,64 @@ def needs_run(args: argparse.Namespace) -> int:
         return CURRENT
     try:
         recorded = load_manifest(args.manifest)
+    except FileNotFoundError as exc:
+        print(f"Artifact provenance error: declared path is missing: {exc.filename}", file=sys.stderr)
+        return ERROR
+    try:
         current = build_contract(args, include_diagnostics=False)
     except FileNotFoundError as exc:
-        print(f"Artifact will be regenerated because a declared path is missing: {exc.filename}")
-        return NEEDS_RUN
+        missing_path = str(exc.filename or exc)
+        input_paths = {raw_path for _label, raw_path in parse_path_pairs(args.input, "--input")}
+        input_paths.update(
+            raw_path
+            for _label, raw_path in parse_path_pairs(
+                args.input_gene_family_store, "--input-gene-family-store"
+            )
+        )
+        input_paths.update(
+            raw_root
+            for _label, raw_root, _subdir in parse_gene_family_subdir_pairs(
+                args.input_gene_family_subdir, "--input-gene-family-subdir"
+            )
+        )
+        for _label, raw_root, subdir, name in parse_gene_family_artifact_pairs(
+            args.input_gene_family_artifact, "--input-gene-family-artifact"
+        ):
+            input_paths.add(raw_root)
+            input_paths.add(str(Path(raw_root) / subdir / name))
+        input_paths.update(
+            raw_path
+            for _label, raw_path in parse_path_pairs(
+                args.input_logical_directory, "--input-logical-directory"
+            )
+        )
+        if missing_path in input_paths:
+            print(f"Artifact provenance error: declared input is missing: {missing_path}", file=sys.stderr)
+            return ERROR
+        return stale_policy_result(
+            args,
+            f"required output is missing: {missing_path}",
+            reusable=False,
+        )
+
+    # Optional outputs were introduced after the first manifest schema. Adopt
+    # their current presence/absence once so existing tracked artifacts remain
+    # compatible with the legacy-output policy.
+    if "optional_outputs" not in recorded and current.get("optional_outputs"):
+        comparison_without_optional = contract_comparison_payload(current)
+        comparison_without_optional["optional_outputs"] = []
+        if contract_comparison_payload(recorded) == comparison_without_optional:
+            recorded["optional_outputs"] = current["optional_outputs"]
+            diagnostics = recorded.setdefault("diagnostics", {})
+            if isinstance(diagnostics, dict):
+                diagnostics["optional_output_provenance_state"] = "adopted_legacy_optional_outputs"
+            write_manifest_atomic(args.manifest, recorded)
+            print(f"Adopted previously untracked optional outputs: {args.manifest}")
+            return CURRENT
     if contract_comparison_payload(recorded) != contract_comparison_payload(current):
-        print(
-            "Artifact will be regenerated because an input, output, or output-affecting "
-            f"parameter changed: {args.manifest}"
+        return stale_policy_result(
+            args,
+            describe_contract_difference(recorded, current),
         )
         return NEEDS_RUN
     print(f"Artifact provenance is current: {args.manifest}")
@@ -330,6 +829,40 @@ def audit_manifest(
             if not isinstance(entry, dict):
                 return "invalid_manifest", f"{collection_name} contains a non-object entry"
             label = str(entry.get("label", ""))
+            if collection_name == "inputs" and entry.get("artifact_type") in {
+                "gene_family_store",
+                "gene_family_subdir",
+                "gene_family_artifact",
+            }:
+                try:
+                    store_path = resolve_reference(entry, logical_root, workspace_root)
+                    if entry.get("artifact_type") == "gene_family_artifact":
+                        digest, size = gene_family_artifact_digest(
+                            store_path,
+                            str(entry.get("subdir", "")),
+                            str(entry.get("name", "")),
+                        )
+                        member_count = None
+                    elif entry.get("artifact_type") == "gene_family_subdir":
+                        digest, size, member_count = gene_family_subdir_digest(
+                            store_path, str(entry.get("subdir", ""))
+                        )
+                    else:
+                        digest, size, member_count = gene_family_store_digest(store_path)
+                except FileNotFoundError:
+                    return "missing_input", label
+                except Exception as exc:
+                    return "invalid_manifest", f"{label}: {exc}"
+                if (
+                    digest != entry.get("sha256")
+                    or size != entry.get("size_bytes")
+                    or (
+                        entry.get("artifact_type") != "gene_family_artifact"
+                        and member_count != entry.get("member_count")
+                    )
+                ):
+                    return "changed_input", label
+                continue
             try:
                 with open_reference(entry, store, logical_root, workspace_root) as handle:
                     digest, size = sha256_stream(handle)
@@ -339,6 +872,30 @@ def audit_manifest(
                 return "invalid_manifest", f"{label}: {exc}"
             if digest != entry.get("sha256") or size != entry.get("size_bytes"):
                 return f"changed_{collection_name[:-1]}", label
+
+    optional_entries = payload.get("optional_outputs", [])
+    if not isinstance(optional_entries, list):
+        return "invalid_manifest", "optional_outputs must be a list"
+    for entry in optional_entries:
+        if not isinstance(entry, dict):
+            return "invalid_manifest", "optional_outputs contains a non-object entry"
+        label = str(entry.get("label", ""))
+        state = entry.get("state")
+        if state not in {"present", "absent"}:
+            return "invalid_manifest", f"optional output {label!r} has invalid state={state!r}"
+        try:
+            with open_reference(entry, store, logical_root, workspace_root) as handle:
+                digest, size = sha256_stream(handle)
+        except FileNotFoundError:
+            if state == "absent":
+                continue
+            return "missing_optional_output", label
+        except Exception as exc:
+            return "invalid_manifest", f"{label}: {exc}"
+        if state == "absent":
+            return "unexpected_optional_output", label
+        if digest != entry.get("sha256") or size != entry.get("size_bytes"):
+            return "changed_optional_output", label
     return "current", ""
 
 
@@ -508,6 +1065,16 @@ def audit(args: argparse.Namespace) -> int:
         temporary.unlink(missing_ok=True)
 
     nonfailure_statuses = {"current", "legacy_untracked"}
+    if args.stale_policy == "reuse":
+        nonfailure_statuses.update(
+            {
+                "changed_input",
+                "changed_output",
+                "changed_optional_output",
+                "missing_optional_output",
+                "unexpected_optional_output",
+            }
+        )
     failures = [row for row in rows if row["status"] not in nonfailure_statuses]
     print(f"Artifact provenance audit: checked={len(rows)}, failures={len(failures)}, report={args.output_tsv}")
     for row in failures[:20]:
@@ -525,7 +1092,49 @@ def add_contract_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--logical-root", required=True, type=Path)
     parser.add_argument("--workspace-root", required=True, type=Path)
     parser.add_argument("--input", action="append", default=[], metavar="LABEL=PATH")
+    parser.add_argument(
+        "--input-gene-family-store",
+        action="append",
+        default=[],
+        metavar="LABEL=ROOT",
+        help="Hash logical gene-family artifacts while ignoring ZIP/raw storage layout and provenance manifests",
+    )
+    parser.add_argument(
+        "--input-gene-family-subdir",
+        action="append",
+        default=[],
+        metavar="LABEL=ROOT::SUBDIR",
+        help="Hash one logical gene-family subdirectory while ignoring ZIP/raw storage layout",
+    )
+    parser.add_argument(
+        "--input-gene-family-artifact",
+        action="append",
+        default=[],
+        metavar="LABEL=ROOT::SUBDIR::FILENAME",
+        help="Hash one logical gene-family artifact while ignoring ZIP/raw storage layout",
+    )
+    parser.add_argument(
+        "--input-logical-directory",
+        action="append",
+        default=[],
+        metavar="LABEL=PATH",
+        help="Hash a managed directory identically in raw PATH and sibling PATH.zip forms",
+    )
     parser.add_argument("--output", action="append", default=[], metavar="LABEL=PATH")
+    parser.add_argument(
+        "--output-logical-directory",
+        action="append",
+        default=[],
+        metavar="LABEL=PATH",
+        help="Manage a directory output identically in raw PATH and sibling PATH.zip forms",
+    )
+    parser.add_argument(
+        "--optional-output",
+        action="append",
+        default=[],
+        metavar="LABEL=PATH",
+        help="Manage an output whose recorded absence is a valid completed result",
+    )
     parser.add_argument("--parameter", action="append", default=[], metavar="KEY=VALUE")
 
 
@@ -537,6 +1146,12 @@ def build_parser() -> argparse.ArgumentParser:
         "needs-run", help="Return 0 when a declared artifact must be regenerated and 1 when current"
     )
     add_contract_arguments(needs_parser)
+    needs_parser.add_argument(
+        "--stale-policy",
+        choices=("stop", "reuse", "rebuild"),
+        default="stop",
+        help="Action when an existing tracked artifact is stale",
+    )
 
     record_parser = subparsers.add_parser("record", help="Write a completed artifact contract")
     add_contract_arguments(record_parser)
@@ -556,6 +1171,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Require a manifest for every family represented in the logical subdirectory",
     )
     audit_parser.add_argument("--check-csubst-branches", action="store_true")
+    audit_parser.add_argument(
+        "--stale-policy",
+        choices=("stop", "reuse", "rebuild"),
+        default="stop",
+        help="Allow explicitly requested reuse of readable stale artifacts; structural errors remain fatal",
+    )
     return parser
 
 

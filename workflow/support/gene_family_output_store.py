@@ -2062,6 +2062,7 @@ class GeneFamilyOutputStore:
             live_path=live_path,
             size=live_path.stat().st_size,
             mtime_ns=live_path.stat().st_mtime_ns,
+            sha256=_sha256_path(live_path),
         )
 
     def _archived_artifact_is_deleted(self, artifact: Artifact) -> bool:

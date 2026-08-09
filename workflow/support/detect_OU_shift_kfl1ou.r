@@ -218,7 +218,7 @@ align_input_error_to_tree = function(tree, input_error, trait_names = NULL, cont
     return(aligned)
 }
 
-fit_matches_current_data = function(fit_obj, tree, trait_matrix) {
+fit_matches_current_data = function(fit_obj, tree, trait_matrix, cache_contract = NULL) {
     if (!inherits(fit_obj, "l1ou")) {
         return(FALSE)
     }
@@ -241,7 +241,31 @@ fit_matches_current_data = function(fit_obj, tree, trait_matrix) {
     if (!identical(colnames(fit_Y), colnames(trait_matrix))) {
         return(FALSE)
     }
+    if (!identical(unname(fit_Y), unname(trait_matrix))) {
+        return(FALSE)
+    }
+    if (!identical(fit_tree$edge, tree$edge)) {
+        return(FALSE)
+    }
+    if (!identical(fit_tree$edge.length, tree$edge.length)) {
+        return(FALSE)
+    }
+    if (!identical(fit_tree$Nnode, tree$Nnode)) {
+        return(FALSE)
+    }
+    recorded_contract = attr(fit_obj, "gg_cache_contract", exact = TRUE)
+    if (!is.null(recorded_contract) && !is.null(cache_contract) &&
+        !identical(recorded_contract, cache_contract)) {
+        return(FALSE)
+    }
     return(TRUE)
+}
+
+attach_cache_contract = function(fit_obj, cache_contract) {
+    if (inherits(fit_obj, "l1ou")) {
+        attr(fit_obj, "gg_cache_contract") = cache_contract
+    }
+    fit_obj
 }
 
 align_trait_table_to_tree = function(tree, trait_table, context = "trait_table") {
@@ -699,6 +723,23 @@ if (is.na(nbootstrap) || (nbootstrap < 0L)) {
 }
 detect_convergence = (parse_bool_flag(args[["detect_convergence"]], default = 1L) == 1L)
 criterion = parse_string_arg(args[["criterion"]], default = "pBIC")
+fit_ind_cache_contract = list(
+    schema_version = 1L,
+    kind = "individual",
+    criterion = criterion,
+    max_nshift = max_shift_info$value,
+    max_nshift_reported = max_shift_info$reported,
+    alpha_upper = alpha_bounds$value,
+    input_error = input_error_fit
+)
+fit_conv_cache_contract = list(
+    schema_version = 1L,
+    kind = "convergent",
+    individual = fit_ind_cache_contract,
+    criterion = criterion,
+    method = "backward",
+    fixed_alpha = TRUE
+)
 
 fit_ind = NULL
 fit_conv = NULL
@@ -714,8 +755,9 @@ if (!is.null(loaded_fit_ind)) {
         cat(fit_ind_file, "is malformed. Printing...\n")
         print(loaded_fit_ind)
     } else if (inherits(loaded_fit_ind, "l1ou")) {
-        if (fit_matches_current_data(loaded_fit_ind, adj_data$tree, trait_matrix)) {
-            fit_ind = loaded_fit_ind
+        if (fit_matches_current_data(loaded_fit_ind, adj_data$tree, trait_matrix, fit_ind_cache_contract)) {
+            fit_ind = attach_cache_contract(loaded_fit_ind, fit_ind_cache_contract)
+            save_named_object("fit_ind", fit_ind, "fit_ind.RData")
             cat(fit_ind_file, "was found. Loading the shift configurations.\n")
             ind_flag = TRUE
         } else {
@@ -743,6 +785,7 @@ if (!ind_flag) {
         ),
         silent = TRUE
     )
+    fit_ind = attach_cache_contract(fit_ind, fit_ind_cache_contract)
     save_named_object("fit_ind", fit_ind, "fit_ind.RData")
     cat("Time elapsed for shift detection:\n")
 }
@@ -755,8 +798,9 @@ if (!is.null(loaded_fit_conv)) {
         cat(fit_conv_file, "is malformed. Printing...\n")
         print(loaded_fit_conv)
     } else if (inherits(loaded_fit_conv, "l1ou")) {
-        if (fit_matches_current_data(loaded_fit_conv, adj_data$tree, trait_matrix)) {
-            fit_conv = loaded_fit_conv
+        if (fit_matches_current_data(loaded_fit_conv, adj_data$tree, trait_matrix, fit_conv_cache_contract)) {
+            fit_conv = attach_cache_contract(loaded_fit_conv, fit_conv_cache_contract)
+            save_named_object("fit_conv", fit_conv, "fit_conv.RData")
             cat(fit_conv_file, "was found. Loading the shift configurations.\n")
             conv_flag = TRUE
         } else {
@@ -781,6 +825,7 @@ if ((!conv_flag) && detect_convergence) {
                 ),
                 silent = TRUE
             )
+            fit_conv = attach_cache_contract(fit_conv, fit_conv_cache_contract)
         }
     } else {
         warning("estimate_shift_configuration() failed.")
@@ -788,6 +833,7 @@ if ((!conv_flag) && detect_convergence) {
             warning(attr(fit_ind, "condition"))
         }
     }
+    fit_conv = attach_cache_contract(fit_conv, fit_conv_cache_contract)
     save_named_object("fit_conv", fit_conv, "fit_conv.RData")
     cat("Time elapsed for shift detection + convergence detection:\n")
     print(fit_conv)

@@ -474,11 +474,8 @@ def load_threshold_candidates(
 def artifact_input_signature(artifact):
     payload = {
         "logical_path": artifact.logical_path,
-        "generation": int(artifact.generation),
         "size": None if artifact.size is None else int(artifact.size),
-        "crc": None if artifact.crc is None else int(artifact.crc),
         "sha256": artifact.sha256 or "",
-        "mtime_ns": None if artifact.mtime_ns is None else int(artifact.mtime_ns),
     }
     return payload
 

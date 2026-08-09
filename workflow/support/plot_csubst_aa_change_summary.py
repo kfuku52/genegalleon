@@ -986,6 +986,7 @@ def main():
     ranked, score_col, score_kind = ranked_candidates(df)
     ranked.to_csv(args.out_tsv, sep="\t", index=False)
     if ranked.empty:
+        remove_stale_min_support_sensitivity_outputs(args.out_prefix, [])
         write_empty_plot_set(paths, "No CSUBST scan candidates in aa_change.")
     elif score_col is None:
         write_empty_plot_set(paths, "No CSUBST scan P-value or FDR columns were available.")

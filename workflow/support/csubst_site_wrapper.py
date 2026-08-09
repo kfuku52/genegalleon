@@ -370,6 +370,7 @@ def find_site_output_from_manifest(manifest_df, site_dir, output_kinds):
         rows = manifest_df.loc[manifest_df['output_kind'].astype(str) == str(output_kind), :]
         for _, row in rows.iterrows():
             output_path = resolve_manifest_output_path(site_dir=site_dir, row=row)
+            # gg-cache-guard: audited - this resolves a manifest entry; it does not reuse a computation.
             if (output_path is not None) and os.path.exists(output_path):
                 return output_path
     return None
@@ -598,6 +599,7 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
     iqtree_log_file = os.path.join(iqtree_anc_dir, 'csubst.log')
     iqtree_ckp_file = os.path.join(iqtree_anc_dir, 'csubst.ckp.gz')
     file_summary = os.path.join(dir_out_og, f'summary.{og}_branch_id{branch_id_str}.pdf')
+    # gg-cache-guard: audited - the outer csubst_site artifact contract removes this directory on rebuild.
     if os.path.exists(file_summary):
         print(f'Skipped. Outfile already exists: {file_summary}', flush=True)
         os.chdir(previous_cwd)
@@ -1298,6 +1300,7 @@ def run_stat_branch2tree_plot(
         file_stat_branch=file_stat_branch,
         iqtree_anc_dir=iqtree_anc_dir,
     )
+    # gg-cache-guard: audited - the outer csubst_site artifact contract removes this directory on rebuild.
     if os.path.exists(file_tree_plot_out):
         print(f'Tree plot skipped: outfile already exists: {file_tree_plot_out}', flush=True)
         return None
@@ -1621,6 +1624,7 @@ if __name__ == '__main__':
                     shutil.rmtree(dir_out)
                 continue
             cb_passed = cb.loc[conditions,:].sort_values(by='orthogroup').reset_index(drop=True)                
+            # gg-cache-guard: audited - the outer csubst_site artifact contract removes this directory on rebuild.
             if os.path.exists(out_zip):
                 print(f'Skipped arity = {arity}. Output zip file already exists: {out_zip}', flush=True)
                 continue

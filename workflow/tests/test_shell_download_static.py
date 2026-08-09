@@ -369,12 +369,12 @@ def test_genome_busco_summary_syncs_from_shared_summary_and_gates_busco_getfasta
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
     sync_fn = "sync_genome_busco_summary_table_from_shared() {"
-    cmp_stmt = 'cmp -s "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"'
+    provenance = 'gg_artifact_prepare_stage sync_needs_update run_sync "${sync_provenance_args[@]}"'
     copy_stmt = 'cp_out "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"'
-    sync_call = "sync_genome_busco_summary_table_from_shared || true"
+    sync_call = "sync_genome_busco_summary_table_from_shared || return $?"
     gate = 'disable_if_no_input_file "run_busco_dupaware_extract_fasta" "${file_genome_busco_summary_table}"'
     assert sync_fn in text
-    assert cmp_stmt in text
+    assert provenance in text
     assert copy_stmt in text
     assert sync_call in text
     assert gate in text
@@ -409,7 +409,7 @@ def test_busco_getfasta_step_is_gated_by_summary_table_presence():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
     gate = 'disable_if_no_input_file "run_busco_dupaware_extract_fasta" "${file_genome_busco_summary_table}"'
-    step = "if [[ ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then"
+    step = "if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then"
     assert gate in text
     assert step in text
     assert text.index(gate) < text.index(step)
@@ -418,7 +418,7 @@ def test_busco_getfasta_step_is_gated_by_summary_table_presence():
 def test_busco_getfasta_step_defines_and_uses_its_duplicate_aware_helper():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
-    step = "if [[ ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then"
+    step = "if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then"
     helper = "generate_genome_dupaware_busco_fasta() {"
     invoke = 'generate_genome_dupaware_busco_fasta "${busco_idx}" &'
     step_idx = text.index(step)

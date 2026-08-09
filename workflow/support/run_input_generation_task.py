@@ -46,6 +46,16 @@ def build_arg_parser():
     )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing formatted outputs.")
     parser.add_argument("--dry-run", action="store_true", help="Plan actions without writing formatted outputs.")
+    parser.add_argument(
+        "--describe-only",
+        action="store_true",
+        help="Write task metadata with raw and expected formatted paths without creating outputs.",
+    )
+    parser.add_argument(
+        "--reuse-existing",
+        action="store_true",
+        help="Reuse existing formatted outputs without applying input-audit regeneration checks.",
+    )
     return parser
 
 
@@ -90,17 +100,71 @@ def main():
     output_cds_dir = Path(args.species_cds_dir).expanduser().resolve()
     output_gff_dir = Path(args.species_gff_dir).expanduser().resolve()
     output_genome_dir = Path(args.species_genome_dir).expanduser().resolve()
+    if task.get("cds_path") is not None:
+        cds_output_name = fsi.normalize_cds_output_basename(
+            task["cds_path"].name, task["species_prefix"]
+        )
+    else:
+        cds_output_name = fsi.build_derived_cds_output_basename(task)
+    if task.get("gff_path") is not None:
+        gff_output_name = fsi.normalize_gff_output_basename(
+            task["gff_path"].name, task["species_prefix"]
+        )
+    elif task.get("gbff_path") is not None:
+        gff_output_name = fsi.build_derived_gff_output_basename(task)
+    else:
+        gff_output_name = ""
+    if task.get("genome_path") is not None:
+        genome_output_name = fsi.normalize_genome_output_basename(
+            task["genome_path"].name, task["species_prefix"]
+        )
+    elif task.get("gbff_path") is not None:
+        genome_output_name = fsi.build_derived_genome_output_basename(task)
+    else:
+        genome_output_name = ""
+    expected_paths = {
+        "cds_output_path": str(output_cds_dir / cds_output_name),
+        "gff_output_path": str(output_gff_dir / gff_output_name) if gff_output_name else "",
+        "genome_output_path": (
+            str(output_genome_dir / genome_output_name) if genome_output_name else ""
+        ),
+    }
+    raw_paths = {
+        key: str(task.get(key) or "")
+        for key in ("cds_path", "gff_path", "gbff_path", "genome_path")
+    }
+    if args.describe_only:
+        write_json(
+            args.task_meta_output,
+            {
+                "task_index": args.task_index,
+                "task_count": len(tasks),
+                "species_prefix": task["species_prefix"],
+                "species_key": task["species_key"],
+                "provider": task["provider"],
+                **raw_paths,
+                **expected_paths,
+            },
+        )
+        return 0
     output_cds_dir.mkdir(parents=True, exist_ok=True)
     output_gff_dir.mkdir(parents=True, exist_ok=True)
     output_genome_dir.mkdir(parents=True, exist_ok=True)
 
-    cds_result = fsi.format_cds(task, output_cds_dir, args.overwrite, args.dry_run)
+    cds_result = fsi.format_cds(
+        task,
+        output_cds_dir,
+        args.overwrite,
+        args.dry_run,
+        reuse_existing=args.reuse_existing,
+    )
     gff_result = fsi.format_gff(
         task,
         output_gff_dir,
         args.overwrite,
         args.dry_run,
         formatted_cds_path=cds_result.get("output_path"),
+        reuse_existing=args.reuse_existing,
     )
     genome_result = fsi.format_genome(task, output_genome_dir, args.overwrite, args.dry_run)
 
@@ -165,6 +229,7 @@ def main():
             "species_prefix": task["species_prefix"],
             "species_key": task["species_key"],
             "provider": task["provider"],
+            **raw_paths,
             "cds_output_path": str(cds_result.get("output_path") or ""),
             "gff_output_path": str(gff_result.get("output_path") or ""),
             "genome_output_path": str(genome_result.get("output_path") or ""),

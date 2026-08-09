@@ -484,17 +484,27 @@ clear_directory_contents_safe() {
 }
 
 sync_genome_busco_summary_table_from_shared() {
+  local sync_needs_update=0
+  local run_sync=1
+  local -a sync_provenance_args=()
   if [[ "${file_genome_busco_summary_table}" == "${file_species_busco_summary_table}" ]]; then
     return 0
   fi
   if [[ ! -s "${file_species_busco_summary_table}" ]]; then
     return 1
   fi
-  ensure_parent_dir "${file_genome_busco_summary_table}"
-  if [[ -s "${file_genome_busco_summary_table}" ]] && cmp -s "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"; then
+  gg_artifact_contract_init sync_provenance_args "genome_evolution_busco_summary_sync" "all_species" "${genome_evolution_provenance_dir}/busco.summary_sync.json"
+  sync_provenance_args+=(
+    --input "species_tree_summary=${file_species_busco_summary_table}"
+    --output "genome_evolution_summary=${file_genome_busco_summary_table}"
+  )
+  gg_artifact_prepare_stage sync_needs_update run_sync "${sync_provenance_args[@]}" || return $?
+  if [[ ${sync_needs_update} -ne 1 ]]; then
     return 0
   fi
+  ensure_parent_dir "${file_genome_busco_summary_table}"
   cp_out "${file_species_busco_summary_table}" "${file_genome_busco_summary_table}"
+  gg_artifact_record "${sync_provenance_args[@]}"
 }
 
 run_shared_species_busco_stage() {
@@ -509,6 +519,8 @@ run_shared_species_busco_stage() {
   local dir_busco_db="" dir_busco_lineage=""
   local full_found=0 short_found=0
   local missing_busco_outputs=0
+  local busco_needs_update=0
+  local -a busco_provenance_args=()
 
   if [[ ${shared_species_busco_stage_done} -eq 1 ]]; then
     return 0
@@ -521,8 +533,6 @@ run_shared_species_busco_stage() {
   fi
 
   source_species_input_dir=$(effective_species_input_source_dir_path)
-  ensure_dir "${dir_species_busco_full}"
-  ensure_dir "${dir_species_busco_short}"
   mapfile -t source_species_input_fasta < <(gg_find_fasta_files "${source_species_input_dir}" 1)
   echo "Number of ${input_sequence_mode} files for BUSCO: ${#source_species_input_fasta[@]}"
   if [[ ${#source_species_input_fasta[@]} -eq 0 ]]; then
@@ -530,6 +540,39 @@ run_shared_species_busco_stage() {
     exit 1
   fi
   mapfile -t input_species_set < <(gg_species_names_from_fasta_dir "${source_species_input_dir}")
+  gg_artifact_contract_init busco_provenance_args "genome_evolution_species_busco" "all_species" "${genome_evolution_provenance_dir}/busco.species.json"
+  busco_provenance_args+=(
+    --input "species_sequences=${source_species_input_dir}"
+    --parameter "input_sequence_mode=${input_sequence_mode}"
+    --parameter "genetic_code=${genetic_code}"
+    --parameter "busco_mode=${species_tree_busco_mode}"
+    --parameter "busco_lineage=${busco_lineage}"
+    --parameter "evalue=1e-03"
+    --parameter "limit=20"
+  )
+  gg_artifact_add_input_if_present busco_provenance_args "species_genetic_code" "${file_species_genetic_code}"
+  for input_species in "${input_species_set[@]}"; do
+    busco_provenance_args+=(
+      --output "full_${input_species}=${dir_species_busco_full}/${input_species}.busco.full.tsv"
+      --output "short_${input_species}=${dir_species_busco_short}/${input_species}.busco.short.txt"
+    )
+  done
+  gg_artifact_prepare_stage busco_needs_update run_species_busco "${busco_provenance_args[@]}" || return $?
+  if [[ ${busco_needs_update} -ne 1 ]]; then
+    for seq_full in "${source_species_input_fasta[@]}"; do
+      echo "Skipped BUSCO: $(basename "${seq_full}")"
+    done
+    echo "$(date): End: ${task}"
+    return 0
+  fi
+  if [[ -d "${dir_species_busco_full}" ]]; then
+    clear_directory_contents_safe "${dir_species_busco_full}" || return 1
+  fi
+  if [[ -d "${dir_species_busco_short}" ]]; then
+    clear_directory_contents_safe "${dir_species_busco_short}" || return 1
+  fi
+  ensure_dir "${dir_species_busco_full}"
+  ensure_dir "${dir_species_busco_short}"
   mapfile -t busco_output_files < <(
     find "${dir_species_busco_full}" "${dir_species_busco_short}" -maxdepth 1 -type f \
       \( -name "*busco.full.tsv" -o -name "*busco.short.txt" \) \
@@ -628,6 +671,7 @@ run_shared_species_busco_stage() {
       echo "Skipped BUSCO: ${seq_file}"
     fi
   done
+  gg_artifact_record "${busco_provenance_args[@]}"
   echo "$(date): End: ${task}"
 }
 
@@ -635,10 +679,12 @@ run_shared_busco_summary_stage() {
   local task="Collecting IDs of common BUSCO genes"
   local num_busco_ids=0
   local source_species_input_dir=""
+  local busco_summary_needs_update=0
+  local -a busco_summary_provenance_args=()
 
   if [[ ${shared_busco_summary_stage_done} -eq 1 ]]; then
-    sync_genome_busco_summary_table_from_shared || true
-    return 0
+    sync_genome_busco_summary_table_from_shared
+    return $?
   fi
   shared_busco_summary_stage_done=1
 
@@ -648,28 +694,37 @@ run_shared_busco_summary_stage() {
   fi
 
   source_species_input_dir=$(effective_species_input_source_dir_path)
+  gg_artifact_contract_init busco_summary_provenance_args "genome_evolution_busco_summary" "all_species" "${genome_evolution_provenance_dir}/busco.summary.json"
+  busco_summary_provenance_args+=(
+    --input "busco_full_directory=${dir_species_busco_full}"
+    --output "summary=${file_species_busco_summary_table}"
+    --parameter "input_sequence_mode=${input_sequence_mode}"
+  )
+  gg_artifact_prepare_stage busco_summary_needs_update run_build_species_busco_summary "${busco_summary_provenance_args[@]}" || return $?
+  if [[ ${busco_summary_needs_update} -ne 1 ]]; then
+    gg_step_skip "${task}"
+    sync_genome_busco_summary_table_from_shared || return $?
+    return 0
+  fi
   normalize_busco_table_naming "${dir_species_busco_full}" "${dir_species_busco_short}"
   if ! is_species_set_identical "${source_species_input_dir}" "${dir_species_busco_full}"; then
     echo "Exiting due to species-set mismatch between ${source_species_input_dir} and ${dir_species_busco_full}"
     exit 1
   fi
-  if [[ ! -s "${file_species_busco_summary_table}" ]]; then
-    gg_step_start "${task}"
-    ensure_parent_dir "${file_species_busco_summary_table}"
+  gg_step_start "${task}"
+  ensure_parent_dir "${file_species_busco_summary_table}"
 
-    python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
-      --busco_outdir "${dir_species_busco_full}" \
-      --ncpu "${GG_TASK_CPUS}" \
-      --outfile "tmp.busco_summary_table.tsv"
-    mv_out "tmp.busco_summary_table.tsv" "${file_species_busco_summary_table}"
+  python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
+    --busco_outdir "${dir_species_busco_full}" \
+    --ncpu "${GG_TASK_CPUS}" \
+    --outfile "tmp.busco_summary_table.tsv"
+  mv_out "tmp.busco_summary_table.tsv" "${file_species_busco_summary_table}"
 
-    num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
-    echo "Number of BUSCO genes: ${num_busco_ids}"
-    echo "$(date): End: ${task}"
-  else
-    gg_step_skip "${task}"
-  fi
-  sync_genome_busco_summary_table_from_shared || true
+  num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
+  echo "Number of BUSCO genes: ${num_busco_ids}"
+  gg_artifact_record "${busco_summary_provenance_args[@]}"
+  echo "$(date): End: ${task}"
+  sync_genome_busco_summary_table_from_shared || return $?
 }
 
 run_shared_species_omark_stage() {
@@ -683,6 +738,8 @@ run_shared_species_omark_stage() {
   local input_species existing_dir existing_species existing_found
   local omark_db_file=""
   local missing_omark_outputs=0
+  local omark_needs_update=0
+  local -a omark_provenance_args=()
 
   if [[ ${shared_species_omark_stage_done} -eq 1 ]]; then
     return 0
@@ -705,6 +762,36 @@ run_shared_species_omark_stage() {
   fi
 
   mapfile -t input_species_set < <(gg_species_names_from_fasta_dir "${source_species_input_dir}")
+  gg_artifact_contract_init omark_provenance_args "genome_evolution_species_omark" "all_species" "${genome_evolution_provenance_dir}/omark.species.json"
+  omark_provenance_args+=(
+    --input "species_sequences=${source_species_input_dir}"
+    --parameter "input_sequence_mode=${input_sequence_mode}"
+    --parameter "genetic_code=${genetic_code}"
+    --parameter "omark_db_path=${omark_db_path}"
+  )
+  gg_artifact_add_input_if_present omark_provenance_args "species_genetic_code" "${file_species_genetic_code}"
+  for input_species in "${input_species_set[@]}"; do
+    omark_provenance_args+=(
+      --output "omamer_${input_species}=${dir_species_omamer}/${input_species}.omamer"
+      --output "summary_${input_species}=${dir_species_omark}/${input_species}/${input_species}.sum"
+    )
+  done
+  gg_artifact_prepare_stage omark_needs_update run_species_omark "${omark_provenance_args[@]}" || return $?
+  if [[ ${omark_needs_update} -ne 1 ]]; then
+    for protein_full in "${source_species_input_fasta[@]}"; do
+      echo "Skipped OMArk: $(basename "${protein_full}")"
+    done
+    echo "$(date): End: ${task}"
+    return 0
+  fi
+  if [[ -d "${dir_species_omamer}" ]]; then
+    clear_directory_contents_safe "${dir_species_omamer}" || return 1
+  fi
+  if [[ -d "${dir_species_omark}" ]]; then
+    clear_directory_contents_safe "${dir_species_omark}" || return 1
+  fi
+  ensure_dir "${dir_species_omamer}"
+  ensure_dir "${dir_species_omark}"
 
   mapfile -t existing_species_dirs < <(find "${dir_species_omark}" -maxdepth 1 -mindepth 1 -type d ! -name '.*' | sort)
   for existing_dir in "${existing_species_dirs[@]}"; do
@@ -784,11 +871,14 @@ run_shared_species_omark_stage() {
       exit 1
     fi
   done
+  gg_artifact_record "${omark_provenance_args[@]}"
   echo "$(date): End: ${task}"
 }
 
 run_shared_omark_summary_stage() {
   local task="Summarizing OMArk species quality results"
+  local omark_summary_needs_update=0
+  local -a omark_summary_provenance_args=()
 
   if [[ ${shared_omark_summary_stage_done} -eq 1 ]]; then
     return 0
@@ -800,18 +890,25 @@ run_shared_omark_summary_stage() {
     return 0
   fi
 
-  if [[ ! -s "${file_species_omark_summary_table}" ]]; then
-    gg_step_start "${task}"
-    ensure_parent_dir "${file_species_omark_summary_table}"
-
-    python "${gg_support_dir}/summarize_omark.py" \
-      --omark_outdir "${dir_species_omark}" \
-      --outfile "tmp.omark_summary.tsv"
-    mv_out "tmp.omark_summary.tsv" "${file_species_omark_summary_table}"
-    echo "$(date): End: ${task}"
-  else
+  gg_artifact_contract_init omark_summary_provenance_args "genome_evolution_omark_summary" "all_species" "${genome_evolution_provenance_dir}/omark.summary.json"
+  omark_summary_provenance_args+=(
+    --input "omark_directory=${dir_species_omark}"
+    --output "summary=${file_species_omark_summary_table}"
+  )
+  gg_artifact_prepare_stage omark_summary_needs_update run_build_species_omark_summary "${omark_summary_provenance_args[@]}" || return $?
+  if [[ ${omark_summary_needs_update} -ne 1 ]]; then
     gg_step_skip "${task}"
+    return 0
   fi
+  gg_step_start "${task}"
+  ensure_parent_dir "${file_species_omark_summary_table}"
+
+  python "${gg_support_dir}/summarize_omark.py" \
+    --omark_outdir "${dir_species_omark}" \
+    --outfile "tmp.omark_summary.tsv"
+  mv_out "tmp.omark_summary.tsv" "${file_species_omark_summary_table}"
+  gg_artifact_record "${omark_summary_provenance_args[@]}"
+  echo "$(date): End: ${task}"
 }
 
 species_protein_input_has_files() {
@@ -836,11 +933,7 @@ effective_species_input_source_dir_path() {
 
 compute_shared_protein_input_signature() {
   local input_file
-  local input_label
-  local input_stat
-  local stat_style="bsd"
   local -a input_files=()
-  local -a stat_lines=()
   local metadata_source="species_cds"
   if [[ -s "${file_species_genetic_code}" ]]; then
     input_files+=( "${file_species_genetic_code}" )
@@ -856,37 +949,46 @@ compute_shared_protein_input_signature() {
     done < <(gg_find_fasta_files "${dir_sp_cds}" 1)
   fi
 
-  if stat --version > /dev/null 2>&1; then
-    stat_style="gnu"
-  fi
-  if [[ ${#input_files[@]} -gt 0 ]]; then
-    for input_file in "${input_files[@]}"; do
-      if [[ "${input_file}" == "${file_species_genetic_code}" ]]; then
-        input_label="species_genetic_code/${input_file##*/}"
-      else
-        input_label="${metadata_source}/${input_file##*/}"
-      fi
-      if [[ "${stat_style}" == "gnu" ]]; then
-        input_stat=$(stat -c '%s:%Y' "${input_file}")
-      else
-        input_stat=$(stat -f '%z:%m' "${input_file}")
-      fi
-      stat_lines+=( "${input_label}:${input_stat}" )
-    done
-  fi
+  python - \
+    "${input_sequence_mode}" \
+    "${genetic_code}" \
+    "${metadata_source}" \
+    "${species_tree_busco_mode}" \
+    "${file_species_genetic_code}" \
+    "${input_files[@]}" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
 
-  {
-    printf 'input_sequence_mode=%s\n' "${input_sequence_mode}"
-    printf 'genetic_code=%s\n' "${genetic_code}"
-    printf 'metadata_source=%s\n' "${metadata_source}"
-    printf 'species_tree_busco_mode=%s\n' "${species_tree_busco_mode}"
-    printf '%s\n' "${stat_lines[@]}"
-  } | cksum | awk '{print "v2:" $1}'
+input_sequence_mode, genetic_code, metadata_source, busco_mode, genetic_code_path = sys.argv[1:6]
+paths = [Path(value) for value in sys.argv[6:]]
+genetic_code_resolved = Path(genetic_code_path).resolve()
+digest = hashlib.sha256()
+for key, value in (
+    ("input_sequence_mode", input_sequence_mode),
+    ("genetic_code", genetic_code),
+    ("metadata_source", metadata_source),
+    ("species_tree_busco_mode", busco_mode),
+):
+    digest.update(f"{key}={value}\0".encode("utf-8"))
+entries = []
+for path in paths:
+    resolved = path.resolve()
+    prefix = "species_genetic_code" if resolved == genetic_code_resolved else metadata_source
+    entries.append((f"{prefix}/{path.name}", path))
+for logical_name, path in sorted(entries):
+    digest.update(logical_name.encode("utf-8"))
+    digest.update(b"\0")
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+print("v3:" + digest.hexdigest())
+PY
 }
 
 shared_protein_input_signature_is_current_schema() {
   local signature=${1:-}
-  [[ "${signature}" == v2:* ]]
+  [[ "${signature}" == v3:* ]]
 }
 
 print_effective_genome_evolution_config_summary() {
@@ -938,11 +1040,28 @@ refresh_dir_for_shared_protein_input_signature() {
   fi
   if [[ -n "${previous_signature}" && "${previous_signature}" != "${signature}" ]]; then
     if shared_protein_input_signature_is_current_schema "${previous_signature}"; then
-      echo "Shared protein input signature changed for ${description}. Clearing derived outputs in ${target_dir}"
-      if ! clear_directory_contents_safe "${target_dir}"; then
-        echo "Failed to clear ${description} directory after input signature change: ${target_dir}"
-        exit 1
-      fi
+      case "${artifact_stale_policy:-stop}" in
+        stop)
+          echo "Existing ${description} outputs do not match the current shared protein inputs." >&2
+          echo "No output files were modified. Review the changed inputs, then rerun with artifact_stale_policy=rebuild to regenerate or artifact_stale_policy=reuse to keep the existing outputs." >&2
+          return 3
+          ;;
+        reuse)
+          echo "Warning: reusing stale ${description} outputs because artifact_stale_policy=reuse: ${target_dir}" >&2
+          return 0
+          ;;
+        rebuild)
+          echo "Shared protein input signature changed for ${description}. Clearing derived outputs in ${target_dir}"
+          if ! clear_directory_contents_safe "${target_dir}"; then
+            echo "Failed to clear ${description} directory after input signature change: ${target_dir}"
+            return 1
+          fi
+          ;;
+        *)
+          echo "Invalid artifact_stale_policy=${artifact_stale_policy:-}; expected stop, reuse, or rebuild." >&2
+          return 2
+          ;;
+      esac
     else
       echo "Legacy shared protein input signature found for ${description}."
       echo "Preserving existing outputs and upgrading the signature stamp in place: ${target_dir}"
@@ -973,17 +1092,34 @@ refresh_species_tree_for_shared_protein_input_signature() {
     if ! shared_protein_input_signature_is_current_schema "${previous_signature}"; then
       echo "Legacy shared protein input signature found for species_tree."
       echo "Preserving existing outputs and upgrading the signature stamp in place: ${dir_species_tree}"
-    elif [[ ${species_tree_requested_for_orthofinder} -eq 0 ]]; then
-      echo "Shared protein input signature changed for species_tree, but species-tree generation flags are disabled."
-      echo "Keeping existing species_tree outputs for reuse: ${dir_species_tree}"
-      echo "The species_tree signature stamp will be updated next time species-tree generation is enabled."
-      return 0
     else
-      echo "Shared protein input signature changed for species_tree. Clearing derived outputs in ${dir_species_tree}"
-      if ! clear_directory_contents_safe "${dir_species_tree}"; then
-        echo "Failed to clear species_tree directory after input signature change: ${dir_species_tree}"
-        exit 1
-      fi
+      case "${artifact_stale_policy:-stop}" in
+        stop)
+          echo "Existing species_tree outputs do not match the current shared protein inputs." >&2
+          echo "No output files were modified. Review the changed inputs, then rerun with artifact_stale_policy=rebuild to regenerate or artifact_stale_policy=reuse to keep the existing outputs." >&2
+          return 3
+          ;;
+        reuse)
+          echo "Warning: reusing stale species_tree outputs because artifact_stale_policy=reuse: ${dir_species_tree}" >&2
+          return 0
+          ;;
+        rebuild)
+          if [[ ${species_tree_requested_for_orthofinder} -eq 0 ]]; then
+            echo "Shared protein input signature changed for species_tree, but species-tree generation flags are disabled."
+            echo "Keeping existing species_tree outputs until a species-tree stage is requested: ${dir_species_tree}"
+            return 0
+          fi
+          echo "Shared protein input signature changed for species_tree. Clearing derived outputs in ${dir_species_tree}"
+          if ! clear_directory_contents_safe "${dir_species_tree}"; then
+            echo "Failed to clear species_tree directory after input signature change: ${dir_species_tree}"
+            return 1
+          fi
+          ;;
+        *)
+          echo "Invalid artifact_stale_policy=${artifact_stale_policy:-}; expected stop, reuse, or rebuild." >&2
+          return 2
+          ;;
+      esac
     fi
   fi
   ensure_dir "${dir_species_tree}"
@@ -2083,6 +2219,23 @@ species_tree_materialize_managed_directories_for_files_mode() {
     --root "${dir_species_tree}"
 }
 
+species_tree_clear_managed_directory() {
+  local directory_path=$1
+  local allowed_path=""
+  local is_allowed=0
+  for allowed_path in "${species_tree_managed_directory_paths[@]}"; do
+    if [[ "${directory_path}" == "${allowed_path}" ]]; then
+      is_allowed=1
+      break
+    fi
+  done
+  if [[ ${is_allowed} -ne 1 ]]; then
+    echo "Refusing to clear unmanaged species-tree directory: ${directory_path}" >&2
+    return 1
+  fi
+  rm -rf -- "${directory_path}" "${directory_path}.zip"
+}
+
 species_tree_matching_file_count() {
   local directory_path=$1
   local name_pattern=$2
@@ -2219,6 +2372,7 @@ file_orthogroup_copy_number_trait_pgls="${dir_orthogroup_copy_number_trait_pgls}
 file_orthogroup_copy_number_trait_pgls_significant="${dir_orthogroup_copy_number_trait_pgls}/orthogroup_copy_number_trait_pgls.significant.tsv"
 file_orthogroup_copy_number_trait_pgls_summary_pdf="${dir_orthogroup_copy_number_trait_pgls}/orthogroup_copy_number_trait_pgls.summary.pdf"
 file_go_enrichment_significant="${dir_cafe}/go_enrichment/enrichment_significant_${change_direction_go}_${target_branch_go}_significant_go.tsv"
+genome_evolution_provenance_dir="${gg_workspace_output_dir}/artifact_provenance/genome_evolution"
 
 # Runtime helpers
 shared_species_busco_stage_done=0
@@ -2315,10 +2469,10 @@ species_tree_requested_for_orthofinder=0
 if species_tree_summary_generation_requested; then
   species_tree_requested_for_orthofinder=1
 fi
-refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}"
+refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}" || exit $?
 species_tree_materialize_managed_directories_for_files_mode
-refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}"
-refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}"
+refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
+refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}" || exit $?
 memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
 memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
 iqtree_full_mem_args=(-mem "${GG_MEM_TOOL_GB}G")
@@ -2418,8 +2572,19 @@ run_shared_busco_summary_stage
 task="Generating FASTA files for duplicate-aware BUSCO genes"
 num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
 num_singlecopy_fasta=$(species_tree_matching_file_count "${dir_single_copy_fasta}" "${single_copy_fasta_glob}")
-if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree_fasta} -eq 1 ]]; then
-  species_tree_materialize_directory "${dir_single_copy_fasta}"
+extract_species_tree_fasta_needs_update=0
+gg_artifact_contract_init extract_species_tree_fasta_provenance_args "species_tree_extract_fasta" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.extract_fasta.json"
+extract_species_tree_fasta_provenance_args+=(
+  --input "busco_summary=${file_species_busco_summary_table}"
+  --output-logical-directory "fasta_directory=${dir_single_copy_fasta}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "strictly_single_copy_only=${strictly_single_copy_only}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "sequence_label=${species_tree_sequence_label}"
+)
+gg_artifact_prepare_stage extract_species_tree_fasta_needs_update run_extract_species_tree_fasta "${extract_species_tree_fasta_provenance_args[@]}" || exit $?
+if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_tree_fasta} -eq 1 ]]; then
+  species_tree_clear_managed_directory "${dir_single_copy_fasta}"
   ensure_dir "${dir_single_copy_fasta}"
   prepare_species_tree_input_dir
   gg_step_start "${task}"
@@ -2429,9 +2594,6 @@ if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree
     busco_id=$(awk -v row="$1" 'NR==row {print $1; exit}' "${file_species_busco_summary_table}")
     local remove_nonsingle=$2
     local outfile1="${dir_single_copy_fasta}/${busco_id}${single_copy_fasta_suffix}"
-    if [[ -s "${outfile1}" ]]; then
-      return 0
-    fi
     local genes=()
     IFS=$'\t' read -r -a genes <<< "$(sed -n "${1}P" "${file_species_busco_summary_table}" | cut -f 4-)"
     echo "busco_id: ${busco_id}"
@@ -2506,6 +2668,7 @@ if [[ ${num_busco_ids} -ne ${num_singlecopy_fasta} && ${run_extract_species_tree
   done
   wait_for_background_jobs
   rm -f -- species_tree_input_fasta_list.txt
+  gg_artifact_record "${extract_species_tree_fasta_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2513,8 +2676,19 @@ fi
 task="MAFFT alignment"
 num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
 num_mafft_fasta=$(species_tree_matching_file_count "${dir_single_copy_mafft}" "${single_copy_aln_glob}")
-if [[ ${num_busco_ids} -ne ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]]; then
-  species_tree_materialize_directory "${dir_single_copy_mafft}"
+individual_mafft_needs_update=0
+gg_artifact_contract_init individual_mafft_provenance_args "species_tree_mafft" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.mafft.json"
+individual_mafft_provenance_args+=(
+  --input-logical-directory "fasta_directory=${dir_single_copy_fasta}"
+  --output-logical-directory "alignment_directory=${dir_single_copy_mafft}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "mafft_mode=auto"
+  --parameter "cds_mask=cdskit_mask"
+)
+gg_artifact_prepare_stage individual_mafft_needs_update run_individual_mafft "${individual_mafft_provenance_args[@]}" || exit $?
+if [[ ${individual_mafft_needs_update} -eq 1 && ${run_individual_mafft} -eq 1 ]]; then
+  species_tree_clear_managed_directory "${dir_single_copy_mafft}"
   species_tree_materialize_directory "${dir_single_copy_fasta}"
   ensure_dir "${dir_single_copy_mafft}"
   ensure_dir "${dir_single_copy_fasta}"
@@ -2524,9 +2698,6 @@ if [[ ${num_busco_ids} -ne ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]
     local infile=$1
     local infile_base=${infile%%.*}
     local outfile="${dir_single_copy_mafft}/${infile_base}${single_copy_aln_suffix}"
-    if [[ -s "${outfile}" ]]; then
-      return 0
-    fi
     local infile_path="${dir_single_copy_fasta}/${infile}"
     local num_seq
     num_seq=$(gg_count_fasta_records "${infile_path}")
@@ -2584,6 +2755,7 @@ if [[ ${num_busco_ids} -ne ${num_mafft_fasta} && ${run_individual_mafft} -eq 1 ]
     run_mafft "${input_alignment_file}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${individual_mafft_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2592,8 +2764,19 @@ species_tree_archive_directory "${dir_single_copy_fasta}"
 
 task="TrimAl"
 num_trimal_fasta=$(species_tree_matching_file_count "${dir_single_copy_trimal}" "${single_copy_trimal_glob}")
-if [[ ${num_busco_ids} -ne ${num_trimal_fasta} && ${run_individual_trimal} -eq 1 ]]; then
-  species_tree_materialize_directory "${dir_single_copy_trimal}"
+individual_trimal_needs_update=0
+gg_artifact_contract_init individual_trimal_provenance_args "species_tree_trimal" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.trimal.json"
+individual_trimal_provenance_args+=(
+  --input-logical-directory "alignment_directory=${dir_single_copy_mafft}"
+  --output-logical-directory "trimmed_directory=${dir_single_copy_trimal}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "trimal_mode=automated1"
+  --parameter "ignore_stop_codon=1"
+)
+gg_artifact_prepare_stage individual_trimal_needs_update run_individual_trimal "${individual_trimal_provenance_args[@]}" || exit $?
+if [[ ${individual_trimal_needs_update} -eq 1 && ${run_individual_trimal} -eq 1 ]]; then
+  species_tree_clear_managed_directory "${dir_single_copy_trimal}"
   species_tree_materialize_directory "${dir_single_copy_mafft}"
   ensure_dir "${dir_single_copy_trimal}"
   ensure_dir "${dir_single_copy_mafft}"
@@ -2636,6 +2819,7 @@ if [[ ${num_busco_ids} -ne ${num_trimal_fasta} && ${run_individual_trimal} -eq 1
     run_trimal "${input_alignment_file}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${individual_trimal_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2654,7 +2838,19 @@ else
     concat_alignment_ready=1
   fi
 fi
-if [[ ${concat_alignment_ready} -eq 0 && ${run_concat_alignment} -eq 1 ]]; then
+concat_alignment_needs_update=0
+gg_artifact_contract_init concat_alignment_provenance_args "species_tree_concatenate_alignment" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.concat_alignment.json"
+concat_alignment_provenance_args+=(
+  --input-logical-directory "trimmed_directory=${dir_single_copy_trimal}"
+  --output "concat_peptide=${file_concat_pep}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+)
+if [[ "${input_sequence_mode}" != "protein" ]]; then
+  concat_alignment_provenance_args+=(--output "concat_cds=${file_concat_cds}")
+fi
+gg_artifact_prepare_stage concat_alignment_needs_update run_concat_alignment "${concat_alignment_provenance_args[@]}" || exit $?
+if [[ ${concat_alignment_needs_update} -eq 1 && ${run_concat_alignment} -eq 1 ]]; then
   species_tree_materialize_directory "${dir_single_copy_trimal}"
   ensure_dir "${dir_single_copy_trimal}"
   gg_step_start "${task}"
@@ -2699,12 +2895,24 @@ if [[ ${concat_alignment_ready} -eq 0 && ${run_concat_alignment} -eq 1 ]]; then
       seqkit seq --threads "${GG_TASK_CPUS}" --out-file "tmp.concat.pep.fa.gz"
     mv_out "tmp.concat.pep.fa.gz" "${file_concat_pep}"
   fi
+  gg_artifact_record "${concat_alignment_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="IQ-TREE of the concatenated alignment with a Protein evolution model"
-if [[ ! -s "${file_concat_iqtree_pep}" && ${run_concat_iqtree_protein} -eq 1 ]]; then
+concat_iqtree_pep_needs_update=0
+gg_artifact_contract_init concat_iqtree_pep_provenance_args "species_tree_concat_iqtree_pep" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.concat_iqtree_pep.json"
+concat_iqtree_pep_provenance_args+=(
+  --input "concat_peptide=${file_concat_pep}"
+  --output "tree=${file_concat_iqtree_pep}"
+  --parameter "sequence_type=AA"
+  --parameter "model=${protein_model}"
+  --parameter "seed=12345"
+  --parameter "bootstrap=ufboot1000,bnni_if_ntaxa_ge4"
+)
+gg_artifact_prepare_stage concat_iqtree_pep_needs_update run_concat_iqtree_protein "${concat_iqtree_pep_provenance_args[@]}" || exit $?
+if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_concat_iqtree_pep}"
 
@@ -2748,12 +2956,23 @@ if [[ ! -s "${file_concat_iqtree_pep}" && ${run_concat_iqtree_protein} -eq 1 ]];
     rm -f -- "./${concat_pep_local}"
   fi
   cd "${dir_tmp}" || exit 1
+  gg_artifact_record "${concat_iqtree_pep_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Rooting of IQ-TREE's protein tree"
-if [[ ! -s "${file_concat_iqtree_pep_root}" && ${run_concat_iqtree_protein} -eq 1 ]]; then
+concat_iqtree_pep_root_needs_update=0
+gg_artifact_contract_init concat_iqtree_pep_root_provenance_args "species_tree_root_concat_iqtree_pep" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.concat_iqtree_pep_root.json"
+concat_iqtree_pep_root_provenance_args+=(
+  --input "tree=${file_concat_iqtree_pep}"
+  --output "rooted_tree=${file_concat_iqtree_pep_root}"
+  --parameter "rooting_method=${species_tree_rooting_method}"
+  --parameter "rooting_value=${species_tree_rooting_value}"
+  --parameter "restore_internal_support=1"
+)
+gg_artifact_prepare_stage concat_iqtree_pep_root_needs_update run_concat_iqtree_protein "${concat_iqtree_pep_root_provenance_args[@]}" || exit $?
+if [[ ${concat_iqtree_pep_root_needs_update} -eq 1 && ${run_concat_iqtree_protein} -eq 1 ]]; then
   gg_step_start "${task}"
 
   root_species_tree \
@@ -2769,19 +2988,24 @@ if [[ ! -s "${file_concat_iqtree_pep_root}" && ${run_concat_iqtree_protein} -eq 
     Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_concat_iqtree_pep_root}"
   fi
 
-  if [[ -s "${file_concat_iqtree_pep_root}" && ${undated_species_tree} == 'iqtree_pep' ]]; then
-    echo "Undated species tree is copied,"
-    echo "from: ${file_concat_iqtree_pep_root}"
-    echo "to: ${file_undated_species_tree}"
-    cp_out "${file_concat_iqtree_pep_root}" "${file_undated_species_tree}"
-    Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
-  fi
+  gg_artifact_record "${concat_iqtree_pep_root_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="IQ-TREE of the concatenated alignment with a DNA evolution model"
-if [[ ! -s "${file_concat_iqtree_dna}" && ${run_concat_iqtree_dna} -eq 1 ]]; then
+concat_iqtree_dna_needs_update=0
+gg_artifact_contract_init concat_iqtree_dna_provenance_args "species_tree_concat_iqtree_dna" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.concat_iqtree_dna.json"
+concat_iqtree_dna_provenance_args+=(
+  --input "concat_cds=${file_concat_cds}"
+  --output "tree=${file_concat_iqtree_dna}"
+  --parameter "sequence_type=DNA"
+  --parameter "model=${nucleotide_model}"
+  --parameter "seed=12345"
+  --parameter "bootstrap=ufboot1000,bnni_if_ntaxa_ge4"
+)
+gg_artifact_prepare_stage concat_iqtree_dna_needs_update run_concat_iqtree_dna "${concat_iqtree_dna_provenance_args[@]}" || exit $?
+if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_concat_iqtree_dna}"
 
@@ -2825,12 +3049,23 @@ if [[ ! -s "${file_concat_iqtree_dna}" && ${run_concat_iqtree_dna} -eq 1 ]]; the
     rm -f -- "./${concat_cds_local}"
   fi
   cd "${dir_tmp}" || exit 1
+  gg_artifact_record "${concat_iqtree_dna_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Rooting of IQ-TREE's DNA tree"
-if [[ ! -s "${file_concat_iqtree_dna_root}" && ${run_concat_iqtree_dna} -eq 1 ]]; then
+concat_iqtree_dna_root_needs_update=0
+gg_artifact_contract_init concat_iqtree_dna_root_provenance_args "species_tree_root_concat_iqtree_dna" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.concat_iqtree_dna_root.json"
+concat_iqtree_dna_root_provenance_args+=(
+  --input "tree=${file_concat_iqtree_dna}"
+  --output "rooted_tree=${file_concat_iqtree_dna_root}"
+  --parameter "rooting_method=${species_tree_rooting_method}"
+  --parameter "rooting_value=${species_tree_rooting_value}"
+  --parameter "restore_internal_support=1"
+)
+gg_artifact_prepare_stage concat_iqtree_dna_root_needs_update run_concat_iqtree_dna "${concat_iqtree_dna_root_provenance_args[@]}" || exit $?
+if [[ ${concat_iqtree_dna_root_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 ]]; then
   gg_step_start "${task}"
 
   root_species_tree \
@@ -2846,21 +3081,27 @@ if [[ ! -s "${file_concat_iqtree_dna_root}" && ${run_concat_iqtree_dna} -eq 1 ]]
     Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_concat_iqtree_dna_root}"
   fi
 
-  if [[ -s "${file_concat_iqtree_dna_root}" && ${undated_species_tree} == 'iqtree_dna' ]]; then
-    echo "Undated species tree is copied,"
-    echo "from: ${file_concat_iqtree_dna_root}"
-    echo "to: ${file_undated_species_tree}"
-    cp_out "${file_concat_iqtree_dna_root}" "${file_undated_species_tree}"
-    Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
-  fi
+  gg_artifact_record "${concat_iqtree_dna_root_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="IQ-TREE for individual single-copy protein trees"
 num_iqtree_pep=$(species_tree_matching_file_count "${dir_single_copy_iqtree_pep}" "*.nwk")
-if [[ ${num_busco_ids} -ne ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq 1 ]]; then
-  species_tree_materialize_directory "${dir_single_copy_iqtree_pep}"
+individual_iqtree_pep_needs_update=0
+gg_artifact_contract_init individual_iqtree_pep_provenance_args "species_tree_individual_iqtree_pep" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.individual_iqtree_pep.json"
+individual_iqtree_pep_provenance_args+=(
+  --input-logical-directory "trimmed_directory=${dir_single_copy_trimal}"
+  --output-logical-directory "tree_directory=${dir_single_copy_iqtree_pep}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "model=${protein_model}"
+  --parameter "seed=12345"
+  --parameter "minimum_sequences=3"
+)
+gg_artifact_prepare_stage individual_iqtree_pep_needs_update run_individual_iqtree_pep "${individual_iqtree_pep_provenance_args[@]}" || exit $?
+if [[ ${individual_iqtree_pep_needs_update} -eq 1 && ${run_individual_iqtree_pep} -eq 1 ]]; then
+  species_tree_clear_managed_directory "${dir_single_copy_iqtree_pep}"
   species_tree_materialize_directory "${dir_single_copy_trimal}"
   ensure_dir "${dir_single_copy_iqtree_pep}"
   ensure_dir "${dir_single_copy_trimal}"
@@ -2870,9 +3111,6 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq
     local infile=$1
     local infile_base=${infile%%.*}
     local outfile="${dir_single_copy_iqtree_pep}/${infile_base}.pep.nwk"
-    if [[ -s "${outfile}" ]]; then
-      return 0
-    fi
     local num_seq
     num_seq=$(gg_count_fasta_records "${dir_single_copy_trimal}/${infile}")
     if [[ ${num_seq} -lt 3 ]]; then
@@ -2905,15 +3143,34 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_pep} && ${run_individual_iqtree_pep} -eq
     run_iqtree_pep "${input_alignment_file}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${individual_iqtree_pep_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="ASTRAL of individual single-copy protein trees"
-if [[ (! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}") && ${run_astral_pep} -eq 1 ]]; then
+astral_pep_needs_update=0
+gg_artifact_contract_init astral_pep_provenance_args "species_tree_astral_pep" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.astral_pep.json"
+astral_pep_provenance_args+=(
+  --input-logical-directory "gene_trees=${dir_single_copy_iqtree_pep}"
+  --input "concat_peptide=${file_concat_pep}"
+  --optional-output "result_directory=${dir_astral_pep}"
+  --optional-output "optimized_tree=${file_astral_tree_pep}"
+  --optional-output "log=${file_astral_log_pep}"
+  --parameter "minimum_tips=${astral_min_tips}"
+  --parameter "mode=3"
+  --parameter "support=2"
+  --parameter "branch_length_model=${protein_model}"
+  --parameter "rooting_method=${species_tree_rooting_method}"
+  --parameter "rooting_value=${species_tree_rooting_value}"
+  --parameter "absence_when_no_eligible_gene_trees=valid"
+)
+gg_artifact_prepare_stage astral_pep_needs_update run_astral_pep "${astral_pep_provenance_args[@]}" || exit $?
+if [[ ${astral_pep_needs_update} -eq 1 && ${run_astral_pep} -eq 1 ]]; then
   species_tree_materialize_directory "${dir_single_copy_iqtree_pep}"
   ensure_dir "${dir_single_copy_iqtree_pep}"
   gg_step_start "${task}"
+  rm -rf -- "${dir_astral_pep}"
   ensure_dir "${dir_astral_pep}"
 
   if compgen -G "tmp.astral.*" > /dev/null; then
@@ -2973,22 +3230,7 @@ if [[ (! -s "${file_astral_tree_pep}" || ! -s "${file_astral_log_pep}") && ${run
   fi
   rm -f -- tmp.astral.*
 
-  if [[ -s "${file_astral_tree_pep}" && ${undated_species_tree} == 'astral_pep' ]]; then
-    echo "Undated species tree is copied,"
-    echo "from: ${file_astral_tree_pep}"
-    echo "to: ${file_undated_species_tree}"
-    nwkit drop --name yes --target intnode --infile "${file_astral_tree_pep}" | nwkit label --target intnode --force yes --outfile "tmp.undated_species_tree.nwk"
-    if [[ -s "tmp.undated_species_tree.nwk" ]]; then
-      mv_out "tmp.undated_species_tree.nwk" "${file_undated_species_tree}"
-    fi
-    if [[ ! -s "${file_undated_species_tree}" ]]; then
-      echo "Warning: Failed to convert optimized ASTRAL protein tree with nwkit drop|label. Copying optimized tree instead."
-      cp_out "${file_astral_tree_pep}" "${file_undated_species_tree}"
-    fi
-    if [[ -s "${file_undated_species_tree}" ]]; then
-      Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
-    fi
-  fi
+  gg_artifact_record "${astral_pep_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -2997,8 +3239,18 @@ species_tree_archive_directory "${dir_single_copy_iqtree_pep}"
 
 task="IQ-TREE for individual single-copy DNA trees"
 num_iqtree_dna=$(species_tree_matching_file_count "${dir_single_copy_iqtree_dna}" "*.nwk")
-if [[ ${num_busco_ids} -ne ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq 1 ]]; then
-  species_tree_materialize_directory "${dir_single_copy_iqtree_dna}"
+individual_iqtree_dna_needs_update=0
+gg_artifact_contract_init individual_iqtree_dna_provenance_args "species_tree_individual_iqtree_dna" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.individual_iqtree_dna.json"
+individual_iqtree_dna_provenance_args+=(
+  --input-logical-directory "trimmed_directory=${dir_single_copy_trimal}"
+  --output-logical-directory "tree_directory=${dir_single_copy_iqtree_dna}"
+  --parameter "model=${nucleotide_model}"
+  --parameter "seed=12345"
+  --parameter "minimum_sequences=3"
+)
+gg_artifact_prepare_stage individual_iqtree_dna_needs_update run_individual_iqtree_dna "${individual_iqtree_dna_provenance_args[@]}" || exit $?
+if [[ ${individual_iqtree_dna_needs_update} -eq 1 && ${run_individual_iqtree_dna} -eq 1 ]]; then
+  species_tree_clear_managed_directory "${dir_single_copy_iqtree_dna}"
   species_tree_materialize_directory "${dir_single_copy_trimal}"
   ensure_dir "${dir_single_copy_iqtree_dna}"
   ensure_dir "${dir_single_copy_trimal}"
@@ -3008,9 +3260,6 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq
     local infile=$1
     local infile_base=${infile%%.*}
     local outfile="${dir_single_copy_iqtree_dna}/${infile_base}.dna.nwk"
-    if [[ -s "${outfile}" ]]; then
-      return 0
-    fi
     local num_seq
     num_seq=$(gg_count_fasta_records "${dir_single_copy_trimal}/${infile}")
     if [[ ${num_seq} -lt 3 ]]; then
@@ -3038,15 +3287,34 @@ if [[ ${num_busco_ids} -ne ${num_iqtree_dna} && ${run_individual_iqtree_dna} -eq
     run_iqtree_dna "${input_alignment_file}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${individual_iqtree_dna_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="ASTRAL of individual single-copy DNA trees"
-if [[ (! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}") && ${run_astral_dna} -eq 1 ]]; then
+astral_dna_needs_update=0
+gg_artifact_contract_init astral_dna_provenance_args "species_tree_astral_dna" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.astral_dna.json"
+astral_dna_provenance_args+=(
+  --input-logical-directory "gene_trees=${dir_single_copy_iqtree_dna}"
+  --input "concat_cds=${file_concat_cds}"
+  --optional-output "result_directory=${dir_astral_dna}"
+  --optional-output "optimized_tree=${file_astral_tree_dna}"
+  --optional-output "log=${file_astral_log_dna}"
+  --parameter "minimum_tips=${astral_min_tips}"
+  --parameter "mode=3"
+  --parameter "support=2"
+  --parameter "branch_length_model=${nucleotide_model}"
+  --parameter "rooting_method=${species_tree_rooting_method}"
+  --parameter "rooting_value=${species_tree_rooting_value}"
+  --parameter "absence_when_no_eligible_gene_trees=valid"
+)
+gg_artifact_prepare_stage astral_dna_needs_update run_astral_dna "${astral_dna_provenance_args[@]}" || exit $?
+if [[ ${astral_dna_needs_update} -eq 1 && ${run_astral_dna} -eq 1 ]]; then
   species_tree_materialize_directory "${dir_single_copy_iqtree_dna}"
   ensure_dir "${dir_single_copy_iqtree_dna}"
   gg_step_start "${task}"
+  rm -rf -- "${dir_astral_dna}"
   ensure_dir "${dir_astral_dna}"
 
   if compgen -G "tmp.astral.*" > /dev/null; then
@@ -3106,22 +3374,7 @@ if [[ (! -s "${file_astral_tree_dna}" || ! -s "${file_astral_log_dna}") && ${run
   fi
   rm -f -- tmp.astral.*
 
-  if [[ -s "${file_astral_tree_dna}" && ${undated_species_tree} == 'astral_dna' ]]; then
-    echo "Undated species tree is copied,"
-    echo "from: ${file_astral_tree_dna}"
-    echo "to: ${file_undated_species_tree}"
-    nwkit drop --name yes --target intnode --infile "${file_astral_tree_dna}" | nwkit label --target intnode --force yes --outfile "tmp.undated_species_tree.nwk"
-    if [[ -s "tmp.undated_species_tree.nwk" ]]; then
-      mv_out "tmp.undated_species_tree.nwk" "${file_undated_species_tree}"
-    fi
-    if [[ ! -s "${file_undated_species_tree}" ]]; then
-      echo "Warning: Failed to convert optimized ASTRAL DNA tree with nwkit drop|label. Copying optimized tree instead."
-      cp_out "${file_astral_tree_dna}" "${file_undated_species_tree}"
-    fi
-    if [[ -s "${file_undated_species_tree}" ]]; then
-      Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
-    fi
-  fi
+  gg_artifact_record "${astral_dna_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -3131,25 +3384,34 @@ species_tree_archive_directory "${dir_single_copy_trimal}"
 # Sourced by gg_genome_evolution_core.sh.
 
 task="Materialize selected undated species tree summary"
-if [[ ! -s "${file_undated_species_tree}" && ${species_tree_requested_for_orthofinder} -eq 1 ]]; then
-  selected_undated_species_tree_source=""
-  selected_undated_species_tree_is_astral=0
-  case "${undated_species_tree}" in
-    iqtree_pep)
-      selected_undated_species_tree_source="${file_concat_iqtree_pep_root}"
-      ;;
-    iqtree_dna)
-      selected_undated_species_tree_source="${file_concat_iqtree_dna_root}"
-      ;;
-    astral_pep)
-      selected_undated_species_tree_source="${file_astral_tree_pep}"
-      selected_undated_species_tree_is_astral=1
-      ;;
-    astral_dna)
-      selected_undated_species_tree_source="${file_astral_tree_dna}"
-      selected_undated_species_tree_is_astral=1
-      ;;
-  esac
+selected_undated_species_tree_source=""
+selected_undated_species_tree_is_astral=0
+case "${undated_species_tree}" in
+  iqtree_pep)
+    selected_undated_species_tree_source="${file_concat_iqtree_pep_root}"
+    ;;
+  iqtree_dna)
+    selected_undated_species_tree_source="${file_concat_iqtree_dna_root}"
+    ;;
+  astral_pep)
+    selected_undated_species_tree_source="${file_astral_tree_pep}"
+    selected_undated_species_tree_is_astral=1
+    ;;
+  astral_dna)
+    selected_undated_species_tree_source="${file_astral_tree_dna}"
+    selected_undated_species_tree_is_astral=1
+    ;;
+esac
+undated_summary_needs_update=0
+gg_artifact_contract_init undated_summary_provenance_args "species_tree_select_undated_summary" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.undated_summary.json"
+gg_artifact_add_input_if_present undated_summary_provenance_args "selected_source" "${selected_undated_species_tree_source}"
+undated_summary_provenance_args+=(
+  --output "undated_tree=${file_undated_species_tree}"
+  --parameter "source=${undated_species_tree}"
+  --parameter "normalize_astral_internal_labels=${selected_undated_species_tree_is_astral}"
+)
+gg_artifact_prepare_stage undated_summary_needs_update species_tree_requested_for_orthofinder "${undated_summary_provenance_args[@]}" || exit $?
+if [[ ${undated_summary_needs_update} -eq 1 && ${species_tree_requested_for_orthofinder} -eq 1 ]]; then
 
   if [[ -s "${selected_undated_species_tree_source}" ]]; then
     gg_step_start "${task}"
@@ -3173,6 +3435,7 @@ if [[ ! -s "${file_undated_species_tree}" && ${species_tree_requested_for_orthof
     if [[ -s "${file_undated_species_tree}" ]]; then
       Rscript "${gg_support_dir}/nwk2pdf.r" --underbar2space=yes --italic=yes --infile="${file_undated_species_tree}"
     fi
+    gg_artifact_record "${undated_summary_provenance_args[@]}"
   else
     echo "Selected undated species tree source is not available: ${selected_undated_species_tree_source}"
   fi
@@ -3188,7 +3451,19 @@ if [[ ${run_plot_species_trees} -eq 1 ]]; then
     disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"
   fi
 fi
-if [[ ! -s "${file_plot_species_trees}" && ${run_plot_species_trees} -eq 1 ]]; then
+species_tree_plot_needs_update=0
+gg_artifact_contract_init species_tree_plot_provenance_args "species_tree_comparison_plot" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.comparison_plot.json"
+gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_dna" "${file_concat_iqtree_dna_root}"
+gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_pep" "${file_concat_iqtree_pep_root}"
+gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_dna_log" "${dir_concat_iqtree_dna}/tmp.concat.cds.input.fasta.log"
+gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_pep_log" "${dir_concat_iqtree_pep}/tmp.concat.pep.input.fasta.log"
+gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_dna" "${file_astral_tree_dna}"
+gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_pep" "${file_astral_tree_pep}"
+gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_dna_log" "${file_astral_log_dna}"
+gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_pep_log" "${file_astral_log_pep}"
+species_tree_plot_provenance_args+=(--output "plot=${file_plot_species_trees}")
+gg_artifact_prepare_stage species_tree_plot_needs_update run_plot_species_trees "${species_tree_plot_provenance_args[@]}" || exit $?
+if [[ ${species_tree_plot_needs_update} -eq 1 && ${run_plot_species_trees} -eq 1 ]]; then
   gg_step_start "${task}"
 
   Rscript "${gg_support_dir}/plot_species_trees.r" \
@@ -3205,13 +3480,25 @@ if [[ ! -s "${file_plot_species_trees}" && ${run_plot_species_trees} -eq 1 ]]; t
     echo "Output file found for the task: ${task}"
     mv_out "species_trees.pdf" "${file_plot_species_trees}"
   fi
+  gg_artifact_record "${species_tree_plot_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="BUSCO stacked bar species tree plotting"
 disable_if_no_input_file "run_plot_species_trees" "${file_undated_species_tree}" "${dir_species_busco_full}"
-if [[ (! -s "${file_species_tree_busco_cds_pdf}" || ! -s "${file_species_tree_busco_cds_svg}" || ! -s "${file_species_tree_busco_summary}") && ${run_plot_species_trees} -eq 1 ]]; then
+species_tree_busco_plot_needs_update=0
+gg_artifact_contract_init species_tree_busco_plot_provenance_args "species_tree_busco_plot" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.busco_plot.json"
+species_tree_busco_plot_provenance_args+=(
+  --input "undated_tree=${file_undated_species_tree}"
+  --input "busco_directory=${dir_species_busco_full}"
+  --output "pdf=${file_species_tree_busco_cds_pdf}"
+  --output "svg=${file_species_tree_busco_cds_svg}"
+  --output "summary=${file_species_tree_busco_summary}"
+  --parameter "min_og_species=auto"
+)
+gg_artifact_prepare_stage species_tree_busco_plot_needs_update run_plot_species_trees "${species_tree_busco_plot_provenance_args[@]}" || exit $?
+if [[ ${species_tree_busco_plot_needs_update} -eq 1 && ${run_plot_species_trees} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_species_tree_summary}"
   cd "${dir_species_tree_summary}" || exit 1
@@ -3235,13 +3522,28 @@ if [[ (! -s "${file_species_tree_busco_cds_pdf}" || ! -s "${file_species_tree_bu
   if [[ -s "${file_species_tree_busco_cds_pdf}" && -s "${file_species_tree_busco_cds_svg}" ]]; then
     echo "Output file found for the task: ${task}"
   fi
+  gg_artifact_record "${species_tree_busco_plot_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Time-constrained tree preparation"
 disable_if_no_input_file "run_constrained_tree" "${file_undated_species_tree}"
-if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
+constrained_tree_needs_update=0
+gg_artifact_contract_init constrained_tree_provenance_args "species_tree_time_constraints" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.constrained_tree.json"
+constrained_tree_provenance_args+=(
+  --input "undated_tree=${file_undated_species_tree}"
+  --output "constrained_tree=${file_constrained_tree}"
+  --parameter "timetree_constraint=${timetree_constraint}"
+  --parameter "divergence_time_constraints=${mcmctree_divergence_time_constraints_str}"
+  --parameter "timetree_statistic=ci"
+  --parameter "min_clade_proportion=0.2"
+  --parameter "species_label_parser=${species_label_parser}"
+  --parameter "species_label_regex=${species_label_regex}"
+)
+gg_artifact_add_input_if_present constrained_tree_provenance_args "species_label_map" "${species_label_map_tsv}"
+gg_artifact_prepare_stage constrained_tree_needs_update run_constrained_tree "${constrained_tree_provenance_args[@]}" || exit $?
+if [[ ${constrained_tree_needs_update} -eq 1 && ${run_constrained_tree} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_parent_dir "${file_constrained_tree}"
   ensure_dir "${dir_nwkit_download_dir}"
@@ -3309,13 +3611,21 @@ if [[ ! -s "${file_constrained_tree}" && ${run_constrained_tree} -eq 1 ]]; then
       exit 1
     fi
   fi
+  gg_artifact_record "${constrained_tree_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Constrained range plotting"
 disable_if_no_input_file "run_plot_constrained_tree" "${file_constrained_tree}"
-if [[ ! -s "${file_plot_constrained_tree}" && ${run_plot_constrained_tree} -eq 1 ]]; then
+constrained_tree_plot_needs_update=0
+gg_artifact_contract_init constrained_tree_plot_provenance_args "species_tree_constraint_plot" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.constrained_tree_plot.json"
+constrained_tree_plot_provenance_args+=(
+  --input "constrained_tree=${file_constrained_tree}"
+  --output "plot=${file_plot_constrained_tree}"
+)
+gg_artifact_prepare_stage constrained_tree_plot_needs_update run_plot_constrained_tree "${constrained_tree_plot_provenance_args[@]}" || exit $?
+if [[ ${constrained_tree_plot_needs_update} -eq 1 && ${run_plot_constrained_tree} -eq 1 ]]; then
   gg_step_start "${task}"
   Rscript "${gg_support_dir}/plot_constrained_tree.r" \
     --infile="${file_constrained_tree}" \
@@ -3326,13 +3636,30 @@ if [[ ! -s "${file_plot_constrained_tree}" && ${run_plot_constrained_tree} -eq 1
   if [[ -s "${file_plot_constrained_tree}" ]]; then
     echo "Output file found for the task: ${task}"
   fi
+  gg_artifact_record "${constrained_tree_plot_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="IQ2MC step 2 (IQ-TREE Hessian/control generation)"
 disable_if_no_input_file "run_mcmctree1" "${file_constrained_tree}" "${file_concat_cds}"
-if [[ (! -s "${file_iq2mc_ctl}" || ! -s "${file_iq2mc_hessian}" || ! -s "${file_iq2mc_rooted_tree}" || ! -s "${file_iq2mc_dummy_phy}") && ${run_mcmctree1} -eq 1 ]]; then
+iq2mc_needs_update=0
+gg_artifact_contract_init iq2mc_provenance_args "species_tree_iq2mc_parameters" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.iq2mc.json"
+iq2mc_provenance_args+=(
+  --input "constrained_tree=${file_constrained_tree}"
+  --input "concat_cds=${file_concat_cds}"
+  --output "control=${file_iq2mc_ctl}"
+  --output "hessian=${file_iq2mc_hessian}"
+  --output "rooted_tree=${file_iq2mc_rooted_tree}"
+  --output "dummy_alignment=${file_iq2mc_dummy_phy}"
+  --parameter "nucleotide_model=${nucleotide_model}"
+  --parameter "birth_death_sampling=${mcmc_birth_death_sampling}"
+  --parameter "clock_model=${mcmc_clock_model}"
+  --parameter "iterations=${mcmc_burnin},${mcmc_sampfreq},${mcmc_nsample}"
+  --parameter "time_scale=automatic_safe_iq2mc_unit"
+)
+gg_artifact_prepare_stage iq2mc_needs_update run_mcmctree1 "${iq2mc_provenance_args[@]}" || exit $?
+if [[ ${iq2mc_needs_update} -eq 1 && ${run_mcmctree1} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "$(dirname "${file_iq2mc_ctl}")"
 
@@ -3388,13 +3715,27 @@ if [[ (! -s "${file_iq2mc_ctl}" || ! -s "${file_iq2mc_hessian}" || ! -s "${file_
   else
     rm -rf -- "${iq2mc_work_dir}"
   fi
+  gg_artifact_record "${iq2mc_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="IQ2MC step 3 (MCMCtree dating run)"
 disable_if_no_input_file "run_mcmctree2" "${file_iq2mc_ctl}" "${file_iq2mc_hessian}" "${file_iq2mc_rooted_tree}" "${file_iq2mc_dummy_phy}"
-if [[ ! -s "${file_mcmctree_figtree_tre}" && ${run_mcmctree2} -eq 1 ]]; then
+mcmctree_needs_update=0
+gg_artifact_contract_init mcmctree_provenance_args "species_tree_mcmctree" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.mcmctree.json"
+mcmctree_provenance_args+=(
+  --input "control=${file_iq2mc_ctl}"
+  --input "hessian=${file_iq2mc_hessian}"
+  --input "rooted_tree=${file_iq2mc_rooted_tree}"
+  --input "dummy_alignment=${file_iq2mc_dummy_phy}"
+  --output "figtree=${file_mcmctree_figtree_tre}"
+  --output "public_raw_summary=${file_mcmctree_raw_output}"
+  --parameter "print=1"
+  --parameter "time_scale=automatic_safe_iq2mc_unit"
+)
+gg_artifact_prepare_stage mcmctree_needs_update run_mcmctree2 "${mcmctree_provenance_args[@]}" || exit $?
+if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_mcmctree2}"
 
@@ -3448,12 +3789,13 @@ if [[ ! -s "${file_mcmctree_figtree_tre}" && ${run_mcmctree2} -eq 1 ]]; then
   else
     rm -rf -- "${mcmctree_work_dir}"
   fi
+  gg_artifact_record "${mcmctree_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
-if [[ ! -s "${file_mcmctree_figtree_tre}" && -s "${file_mcmctree_raw_output}" ]]; then
-  echo "Generating ${file_mcmctree_figtree_tre} from ${file_mcmctree_raw_output}"
+if [[ ! -s "${genome_evolution_provenance_dir}/species_tree.mcmctree.json" && ! -s "${file_mcmctree_figtree_tre}" && -s "${file_mcmctree_raw_output}" ]]; then
+  echo "Backfilling legacy ${file_mcmctree_figtree_tre} from ${file_mcmctree_raw_output} before provenance adoption."
   awk '
   /Species tree for FigTree/ {print; in_figtree=1; next}
   in_figtree && /^\(\(/ {print; count++; if (count >= 3) exit}
@@ -3469,7 +3811,18 @@ fi
 
 task="Convert tree format"
 disable_if_no_input_file "run_convert_tree_format" "${file_mcmctree_figtree_tre}"
-if [[ ! -s "${file_mcmctree_dated_nwk}" && ${run_convert_tree_format} -eq 1 ]]; then
+convert_tree_needs_update=0
+gg_artifact_contract_init convert_tree_provenance_args "species_tree_convert_mcmctree" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.convert_mcmctree.json"
+convert_tree_provenance_args+=(
+  --input "figtree=${file_mcmctree_figtree_tre}"
+  --output "dated_tree=${file_mcmctree_dated_nwk}"
+  --output "dated_tree_summary=${file_dated_species_tree}"
+  --output "tree_with_ci=${dir_mcmctree2}/mcmctree_95CI.nwk"
+  --output "tree_without_ci=${dir_mcmctree2}/mcmctree_no95CI.nwk"
+  --parameter "internal_node_labels=sequential_s"
+)
+gg_artifact_prepare_stage convert_tree_needs_update run_convert_tree_format "${convert_tree_provenance_args[@]}" || exit $?
+if [[ ${convert_tree_needs_update} -eq 1 && ${run_convert_tree_format} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_parent_dir "${file_mcmctree_dated_nwk}"
 
@@ -3502,30 +3855,28 @@ if [[ ! -s "${file_mcmctree_dated_nwk}" && ${run_convert_tree_format} -eq 1 ]]; 
     echo "Error: Missing mcmctree_no95CI.nwk. Skipping tree conversion."
   fi
 
-  if [[ ! -s "${file_dated_species_tree}" ]]; then
-    echo "Dated species tree for gg_pipeline is not placed yet: ${file_dated_species_tree}"
-    if [[ -s "${file_mcmctree_dated_nwk}" ]]; then
-      echo "Copying from: ${file_mcmctree_dated_nwk}"
-      echo "Copying to: ${file_dated_species_tree}"
-      cp_out "${file_mcmctree_dated_nwk}" "${file_dated_species_tree}"
-      if [[ -s "${file_plot_mcmctree_pdf}" ]]; then
-        echo "Copying from: ${file_plot_mcmctree_pdf}"
-        echo "Copying to: ${file_dated_species_tree_pdf}"
-        cp_out "${file_plot_mcmctree_pdf}" "${file_dated_species_tree_pdf}"
-      fi
-      echo "Please manually check whether the species tree is valid."
-    fi
-  else
-    echo "Dated species tree for gg_pipeline is already placed: ${file_dated_species_tree}"
-    echo "If necessary, please replace the file with: ${file_mcmctree_dated_nwk}"
+  if [[ -s "${file_mcmctree_dated_nwk}" ]]; then
+    echo "Copying converted dated tree to the canonical GeneGalleon summary: ${file_dated_species_tree}"
+    cp_out "${file_mcmctree_dated_nwk}" "${file_dated_species_tree}"
   fi
+  gg_artifact_record "${convert_tree_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Dated species tree plotting"
 disable_if_no_input_file "run_plot_mcmctreer" "${file_mcmctree_dated_nwk}"
-if [[ ! -s "${file_plot_mcmctree_pdf}" && ${run_plot_mcmctreer} -eq 1 ]]; then
+dated_tree_plot_needs_update=0
+gg_artifact_contract_init dated_tree_plot_provenance_args "species_tree_dated_plot" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.dated_plot.json"
+dated_tree_plot_provenance_args+=(
+  --input "dated_tree=${file_mcmctree_dated_nwk}"
+  --output "plot=${file_plot_mcmctree_pdf}"
+)
+if [[ -s "${file_dated_species_tree}" ]]; then
+  dated_tree_plot_provenance_args+=(--output "summary_plot=${file_dated_species_tree_pdf}")
+fi
+gg_artifact_prepare_stage dated_tree_plot_needs_update run_plot_mcmctreer "${dated_tree_plot_provenance_args[@]}" || exit $?
+if [[ ${dated_tree_plot_needs_update} -eq 1 && ${run_plot_mcmctreer} -eq 1 ]]; then
   gg_step_start "${task}"
 
   Rscript "${gg_support_dir}/plot_mcmctreer.r" \
@@ -3544,6 +3895,7 @@ if [[ ! -s "${file_plot_mcmctree_pdf}" && ${run_plot_mcmctreer} -eq 1 ]]; then
       cp_out "${file_plot_mcmctree_pdf}" "${file_dated_species_tree_pdf}"
     fi
   fi
+  gg_artifact_record "${dated_tree_plot_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -3568,7 +3920,35 @@ cd "${dir_tmp}" || exit 1
 # Sourced by gg_genome_evolution_core.sh.
 
 task="OrthoFinder"
-if [[ ! -s "${file_orthofinder_done_marker}" && ${run_orthofinder} -eq 1 ]]; then
+orthofinder_needs_update=0
+gg_artifact_contract_init orthofinder_provenance_args "orthofinder" "all_species" "${genome_evolution_provenance_dir}/orthofinder.json"
+if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
+  orthofinder_provenance_args+=(--input "species_sequences=${dir_sp_protein_input}")
+else
+  orthofinder_provenance_args+=(--input "species_sequences=${dir_sp_cds}")
+  gg_artifact_add_input_if_present orthofinder_provenance_args "species_genetic_code" "${file_species_genetic_code}"
+fi
+if [[ -s "${dir_species_tree_summary}/dated_species_tree.nwk" ]]; then
+  orthofinder_provenance_args+=(--input "species_tree=${dir_species_tree_summary}/dated_species_tree.nwk")
+elif [[ -s "${dir_species_tree_summary}/undated_species_tree.nwk" ]]; then
+  orthofinder_provenance_args+=(--input "species_tree=${dir_species_tree_summary}/undated_species_tree.nwk")
+fi
+gg_artifact_add_input_if_present orthofinder_provenance_args "busco_short_summaries" "${dir_species_busco_short}"
+orthofinder_provenance_args+=(
+  --output "orthogroups=${dir_orthofinder_og}"
+  --output "root_hog_equivalent=${dir_orthofinder_hog2og}"
+  --output "completion_marker=${file_orthofinder_done_marker}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "msa_method=msa"
+  --parameter "search_method=diamond"
+  --parameter "max_core_species=${max_orthofinder_core_species}"
+  --parameter "core_filters=${orthofinder_core_filters}"
+  --parameter "core_rank=${orthofinder_core_rank}"
+  --parameter "core_method=${orthofinder_core_method}"
+)
+gg_artifact_prepare_stage orthofinder_needs_update run_orthofinder "${orthofinder_provenance_args[@]}" || exit $?
+if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then
   dir_sp_protein_orthofinder="${dir_sp_protein}_orthofinder"
   gg_step_start "${task}"
   prepare_species_protein_tmp
@@ -3839,6 +4219,7 @@ PY
     exit 1
   fi
   echo "OrthoFinder finished successfully."
+  gg_artifact_record "${orthofinder_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -3850,9 +4231,41 @@ task="Summarizing OMArk species quality results"
 run_shared_omark_summary_stage
 
 task="Selecting orthogroups based on gene and species numbers"
-if [[ ! -s "${file_orthogroup_selection}" && ${run_og_selection} -eq 1 ]]; then
+if [[ ${orthogroup_table} == "OG" ]]; then
+  dir_orthogroup_selection_input="${dir_orthofinder_og}"
+elif [[ ${orthogroup_table} == "HOG" ]]; then
+  dir_orthogroup_selection_input="${dir_orthofinder_hog2og}"
+else
+  echo "Unsupported orthogroup_table: ${orthogroup_table}. Allowed values are OG or HOG."
+  exit 1
+fi
+og_selection_needs_update=0
+gg_artifact_contract_init og_selection_provenance_args "orthogroup_selection" "all_species" "${genome_evolution_provenance_dir}/orthogroup_selection.json"
+og_selection_provenance_args+=(
+  --input "orthogroups=${dir_orthogroup_selection_input}/Orthogroups.tsv"
+  --input "gene_counts=${dir_orthogroup_selection_input}/Orthogroups.GeneCount.tsv"
+  --output "selected_directory=${dir_orthofinder_filtered}"
+  --output "selected_table=${file_orthogroup_selection}"
+  --parameter "orthogroup_table=${orthogroup_table}"
+  --parameter "min_gene_num=${min_num_gene}"
+  --parameter "max_gene_num=${max_num_gene}"
+  --parameter "min_species_num=${min_num_species}"
+  --parameter "min_percent_species_coverage=${min_percent_species_coverage}"
+  --parameter "remove_unannotated=yes"
+  --parameter "gene_size_quantiles=0.05,0.25,0.5,0.75,0.95"
+  --parameter "annotation_search_method=${orthogroup_annotation_method}"
+  --parameter "evalue=1e-2"
+)
+if [[ -s "/usr/local/db/uniprot_sprot.pep" ]]; then
+  og_selection_provenance_args+=(--input "uniprot_sprot=/usr/local/db/uniprot_sprot.pep")
+else
+  gg_artifact_add_input_if_present og_selection_provenance_args "uniprot_sprot" "${gg_workspace_downloads_dir}/uniprot_sprot/uniprot_sprot.pep"
+fi
+gg_artifact_prepare_stage og_selection_needs_update run_og_selection "${og_selection_provenance_args[@]}" || exit $?
+if [[ ${og_selection_needs_update} -eq 1 && ${run_og_selection} -eq 1 ]]; then
   gg_step_start "${task}"
   prepare_species_protein_tmp
+  rm -rf -- "${dir_orthofinder_filtered}"
   ensure_dir "${dir_orthofinder_filtered}"
   if [[ "${orthogroup_annotation_method}" == "blastp" ]]; then
     if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then
@@ -3872,15 +4285,6 @@ if [[ ! -s "${file_orthogroup_selection}" && ${run_og_selection} -eq 1 ]]; then
       echo "Invalid UniProt Swiss-Prot MMseqs2 DB prefix. Exiting."
       exit 1
     fi
-  fi
-
-  if [[ ${orthogroup_table} == "OG" ]]; then
-    dir_orthogroup_selection_input="${dir_orthofinder_og}"
-  elif [[ ${orthogroup_table} == "HOG" ]]; then
-    dir_orthogroup_selection_input="${dir_orthofinder_hog2og}"
-  else
-    echo "Unsupported orthogroup_table: ${orthogroup_table}. Allowed values are OG or HOG."
-    exit 1
   fi
 
   if [[ ! -s "${dir_orthogroup_selection_input}/Orthogroups.tsv" || ! -s "${dir_orthogroup_selection_input}/Orthogroups.GeneCount.tsv" ]]; then
@@ -3915,13 +4319,27 @@ if [[ ! -s "${file_orthogroup_selection}" && ${run_og_selection} -eq 1 ]]; then
     echo "Orthogroup selection failed. Exiting."
     exit 1
   fi
+  if [[ -s "/usr/local/db/uniprot_sprot.pep" ]]; then
+    :
+  else
+    gg_artifact_add_input_if_present og_selection_provenance_args "uniprot_sprot" "${gg_workspace_downloads_dir}/uniprot_sprot/uniprot_sprot.pep"
+  fi
+  gg_artifact_record "${og_selection_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Orthogroup method comparison"
 disable_if_no_input_file "run_orthogroup_method_comparison" "${file_orthofinder_done_marker}"
-if [[ ! -s "${file_orthogroup_method_comparison}" && ${run_orthogroup_method_comparison} -eq 1 ]]; then
+orthogroup_comparison_needs_update=0
+gg_artifact_contract_init orthogroup_comparison_provenance_args "orthogroup_method_comparison" "all_species" "${genome_evolution_provenance_dir}/orthogroup_method_comparison.json"
+orthogroup_comparison_provenance_args+=(
+  --input "orthogroup_counts=${dir_orthofinder_og}/Orthogroups.GeneCount.tsv"
+  --input "hog_counts=${dir_orthofinder_hog2og}/Orthogroups.GeneCount.tsv"
+  --output "plot=${file_orthogroup_method_comparison}"
+)
+gg_artifact_prepare_stage orthogroup_comparison_needs_update run_orthogroup_method_comparison "${orthogroup_comparison_provenance_args[@]}" || exit $?
+if [[ ${orthogroup_comparison_needs_update} -eq 1 && ${run_orthogroup_method_comparison} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if python "${gg_support_dir}/orthogroup_method_comparison.py" \
@@ -3938,6 +4356,7 @@ if [[ ! -s "${file_orthogroup_method_comparison}" && ${run_orthogroup_method_com
     echo "Orthogroup method comparison failed. Exiting."
     exit 1
   fi
+  gg_artifact_record "${orthogroup_comparison_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -3953,7 +4372,20 @@ elif [[ ${run_single_copy_ortholog_decay_plot} -eq 1 ]]; then
   exit 1
 fi
 disable_if_no_input_file "run_single_copy_ortholog_decay_plot" "${orthogroup_decay_genecount}"
-if [[ (! -s "${file_single_copy_ortholog_decay_plot}" || ! -s "${file_single_copy_ortholog_decay_summary}") && ${run_single_copy_ortholog_decay_plot} -eq 1 ]]; then
+orthogroup_decay_needs_update=0
+gg_artifact_contract_init orthogroup_decay_provenance_args "single_copy_ortholog_decay" "all_species" "${genome_evolution_provenance_dir}/single_copy_ortholog_decay.json"
+orthogroup_decay_provenance_args+=(
+  --input "gene_counts=${orthogroup_decay_genecount}"
+  --output "plot=${file_single_copy_ortholog_decay_plot}"
+  --output "summary=${file_single_copy_ortholog_decay_summary}"
+  --parameter "orthogroup_table=${orthogroup_table}"
+  --parameter "replicates=${orthogroup_decay_replicates}"
+  --parameter "species_counts=${orthogroup_decay_species_counts}"
+  --parameter "seed=${orthogroup_decay_seed}"
+  --parameter "formats=pdf,svg"
+)
+gg_artifact_prepare_stage orthogroup_decay_needs_update run_single_copy_ortholog_decay_plot "${orthogroup_decay_provenance_args[@]}" || exit $?
+if [[ ${orthogroup_decay_needs_update} -eq 1 && ${run_single_copy_ortholog_decay_plot} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_orthogroup_decay}"
 
@@ -3974,6 +4406,7 @@ if [[ (! -s "${file_single_copy_ortholog_decay_plot}" || ! -s "${file_single_cop
     echo "Single-copy ortholog decay plot failed. Exiting."
     exit 1
   fi
+  gg_artifact_record "${orthogroup_decay_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -4043,9 +4476,20 @@ cd "${dir_tmp}" || exit 1
 task="Generating FASTA files for duplicate-aware BUSCO genes"
 sync_genome_busco_summary_table_from_shared || true
 disable_if_no_input_file "run_busco_dupaware_extract_fasta" "${file_genome_busco_summary_table}"
-if [[ ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then
+busco_extract_needs_update=0
+gg_artifact_contract_init busco_extract_provenance_args "genome_evolution_busco_extract_fasta" "all_buscos" "${genome_evolution_provenance_dir}/busco.extract_fasta.json"
+busco_extract_provenance_args+=(
+  --input "busco_summary=${file_genome_busco_summary_table}"
+  --output "fasta_directory=${dir_busco_fasta}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "duplicate_handling=split_duplicated"
+)
+gg_artifact_prepare_stage busco_extract_needs_update run_busco_dupaware_extract_fasta "${busco_extract_provenance_args[@]}" || exit $?
+if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then
   prepare_species_tree_input_dir
   gg_step_start "${task}"
+  rm -rf -- "${dir_busco_fasta}"
   ensure_dir "${dir_busco_fasta}"
   busco_rows=()
   mapfile -t busco_rows < <(tail -n +2 "${file_genome_busco_summary_table}")
@@ -4068,9 +4512,6 @@ if [[ ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then
       genes=("${cols[@]:3}")
     fi
     outfile2="${dir_busco_fasta}/${busco_id}${genome_busco_fasta_suffix}"
-    if [[ -s "${outfile2}" ]]; then
-      return 0
-    fi
     echo "busco_id: ${busco_id}"
     if [[ ! -s "${outfile2}" ]]; then
       mapfile -t genes2 < <(gg_busco_gene_tokens "split_duplicated" "${genes[@]}")
@@ -4101,22 +4542,32 @@ if [[ ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then
   done
   wait_for_background_jobs
   rm -f -- species_tree_input_fasta_list.txt
+  gg_artifact_record "${busco_extract_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="In-frame mafft alignment of duplicate-containing BUSCO genes"
-if [[ ${run_busco_dupaware_mafft} -eq 1 ]]; then
+busco_mafft_needs_update=0
+gg_artifact_contract_init busco_mafft_provenance_args "genome_evolution_busco_mafft" "all_buscos" "${genome_evolution_provenance_dir}/busco.mafft.json"
+busco_mafft_provenance_args+=(
+  --input "fasta_directory=${dir_busco_fasta}"
+  --output "alignment_directory=${dir_busco_mafft}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "mafft_mode=auto,amino"
+  --parameter "minimum_sequences=2_with_identity_fallback"
+)
+gg_artifact_prepare_stage busco_mafft_needs_update run_busco_dupaware_mafft "${busco_mafft_provenance_args[@]}" || exit $?
+if [[ ${busco_mafft_needs_update} -eq 1 && ${run_busco_dupaware_mafft} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -rf -- "${dir_busco_mafft}"
   ensure_dir "${dir_busco_mafft}"
 
   run_mafft() {
     infile=$1
     infile_base=${infile%%.*}
     outfile=${dir_busco_mafft}/${infile_base}${genome_busco_aln_suffix}
-    if [[ -s "${outfile}" ]]; then
-      return 0
-    fi
     echo "$(date): start mafft: ${infile_base}"
 
     if [[ "${input_sequence_mode}" == "protein" ]]; then
@@ -4190,22 +4641,32 @@ if [[ ${run_busco_dupaware_mafft} -eq 1 ]]; then
     run_mafft "${input_alignment_file}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${busco_mafft_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="TrimAl of duplicate-containing BUSCO genes"
-if [[ ${run_busco_dupaware_trimal} -eq 1 ]]; then
+busco_trimal_needs_update=0
+gg_artifact_contract_init busco_trimal_provenance_args "genome_evolution_busco_trimal" "all_buscos" "${genome_evolution_provenance_dir}/busco.trimal.json"
+busco_trimal_provenance_args+=(
+  --input "alignment_directory=${dir_busco_mafft}"
+  --output "trimmed_directory=${dir_busco_trimal}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "trimal_mode=automated1"
+  --parameter "ignore_stop_codon=1"
+)
+gg_artifact_prepare_stage busco_trimal_needs_update run_busco_dupaware_trimal "${busco_trimal_provenance_args[@]}" || exit $?
+if [[ ${busco_trimal_needs_update} -eq 1 && ${run_busco_dupaware_trimal} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -rf -- "${dir_busco_trimal}"
   ensure_dir "${dir_busco_trimal}"
 
   run_trimal() {
     infile=$1
     infile_base=${infile%%.*}
     outfile="${dir_busco_trimal}/${infile_base}${genome_busco_trimal_suffix}"
-    if [[ -s "${outfile}" ]]; then
-      return 0
-    fi
     if [[ "${input_sequence_mode}" == "protein" ]]; then
       seqkit seq --threads 1 "${dir_busco_mafft}/${infile}" --out-file "tmp.${infile_base}.pep.aln.fasta"
       trimal \
@@ -4239,13 +4700,25 @@ if [[ ${run_busco_dupaware_trimal} -eq 1 ]]; then
     run_trimal "${input_alignment_file}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${busco_trimal_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="IQ-TREE for duplicate-containing BUSCO DNA trees"
-if [[ ${run_busco_dupaware_iqtree_dna} -eq 1 ]]; then
+busco_iqtree_dna_needs_update=0
+gg_artifact_contract_init busco_iqtree_dna_provenance_args "genome_evolution_busco_iqtree_dna" "all_buscos" "${genome_evolution_provenance_dir}/busco.iqtree_dna.json"
+busco_iqtree_dna_provenance_args+=(
+  --input "trimmed_directory=${dir_busco_trimal}"
+  --output "tree_directory=${dir_busco_iqtree_dna}"
+  --parameter "model=${nucleotide_model}"
+  --parameter "seed=12345"
+  --parameter "minimum_sequences=3"
+)
+gg_artifact_prepare_stage busco_iqtree_dna_needs_update run_busco_dupaware_iqtree_dna "${busco_iqtree_dna_provenance_args[@]}" || exit $?
+if [[ ${busco_iqtree_dna_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_dna} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -rf -- "${dir_busco_iqtree_dna}"
   ensure_dir "${dir_busco_iqtree_dna}"
 
   busco_iqtree_dna() {
@@ -4254,9 +4727,6 @@ if [[ ${run_busco_dupaware_iqtree_dna} -eq 1 ]]; then
     outdir=$3
     infile_base=${infile%%.*}
     outfile="${outdir}/${infile_base}.busco.nwk"
-    if [[ -s "${outfile}" ]]; then
-      return 0
-    fi
     num_seq=$(gg_count_fasta_records "${dir_busco_trimal}/${infile}")
     if [[ ${num_seq} -lt 3 ]]; then
       echo "Skipped. At least 3 sequences are necessary for IQ-TREE: ${infile}"
@@ -4286,13 +4756,27 @@ if [[ ${run_busco_dupaware_iqtree_dna} -eq 1 ]]; then
     busco_iqtree_dna "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_dna}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${busco_iqtree_dna_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="IQ-TREE for duplicate-containing BUSCO protein trees"
-if [[ ${run_busco_dupaware_iqtree_pep} -eq 1 ]]; then
+busco_iqtree_pep_needs_update=0
+gg_artifact_contract_init busco_iqtree_pep_provenance_args "genome_evolution_busco_iqtree_pep" "all_buscos" "${genome_evolution_provenance_dir}/busco.iqtree_pep.json"
+busco_iqtree_pep_provenance_args+=(
+  --input "trimmed_directory=${dir_busco_trimal}"
+  --output "tree_directory=${dir_busco_iqtree_pep}"
+  --parameter "input_sequence_mode=${input_sequence_mode}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "model=${protein_model}"
+  --parameter "seed=12345"
+  --parameter "minimum_sequences=3"
+)
+gg_artifact_prepare_stage busco_iqtree_pep_needs_update run_busco_dupaware_iqtree_pep "${busco_iqtree_pep_provenance_args[@]}" || exit $?
+if [[ ${busco_iqtree_pep_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_pep} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -rf -- "${dir_busco_iqtree_pep}"
   ensure_dir "${dir_busco_iqtree_pep}"
 
   busco_iqtree_pep() {
@@ -4301,9 +4785,6 @@ if [[ ${run_busco_dupaware_iqtree_pep} -eq 1 ]]; then
     outdir=$3
     infile_base=${infile%%.*}
     outfile="${outdir}/${infile_base}.busco.nwk"
-    if [[ -s "${outfile}" ]]; then
-      return 0
-    fi
     num_seq=$(gg_count_fasta_records "${dir_busco_trimal}/${infile}")
     if [[ ${num_seq} -lt 3 ]]; then
       echo "Skipped. At least 3 sequences are necessary for IQ-TREE: ${infile}"
@@ -4338,6 +4819,7 @@ if [[ ${run_busco_dupaware_iqtree_pep} -eq 1 ]]; then
     busco_iqtree_pep "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_pep}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${busco_iqtree_pep_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -4345,8 +4827,23 @@ fi
 
 task="NOTUNG rooting of duplicate-containing BUSCO DNA trees"
 disable_if_no_input_file "run_busco_dupaware_notung_root_dna" "${file_dated_species_tree}"
-if [[ ${run_busco_dupaware_notung_root_dna} -eq 1 ]]; then
+busco_notung_dna_needs_update=0
+gg_artifact_contract_init busco_notung_dna_provenance_args "genome_evolution_busco_notung_dna" "all_buscos" "${genome_evolution_provenance_dir}/busco.notung_dna.json"
+busco_notung_dna_provenance_args+=(
+  --input "gene_tree_directory=${dir_busco_iqtree_dna}"
+  --input "species_tree=${file_dated_species_tree}"
+  --output "notung_directory=${dir_busco_notung_dna}"
+  --parameter "infer_transfers=false"
+  --parameter "species_tag=prefix"
+  --parameter "all_opt=1"
+  --parameter "max_trees=1000"
+  --parameter "no_losses=1"
+)
+gg_artifact_prepare_stage busco_notung_dna_needs_update run_busco_dupaware_notung_root_dna "${busco_notung_dna_provenance_args[@]}" || exit $?
+if [[ ${busco_notung_dna_needs_update} -eq 1 && ${run_busco_dupaware_notung_root_dna} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -rf -- "${dir_busco_notung_dna}"
+  ensure_dir "${dir_busco_notung_dna}"
 
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_dna}")
@@ -4355,14 +4852,30 @@ if [[ ${run_busco_dupaware_notung_root_dna} -eq 1 ]]; then
     busco_notung "${infile}" "${dir_busco_iqtree_dna}" "${dir_busco_notung_dna}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${busco_notung_dna_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="NOTUNG rooting of duplicate-containing BUSCO protein trees"
 disable_if_no_input_file "run_busco_dupaware_notung_root_pep" "${file_dated_species_tree}"
-if [[ ${run_busco_dupaware_notung_root_pep} -eq 1 ]]; then
+busco_notung_pep_needs_update=0
+gg_artifact_contract_init busco_notung_pep_provenance_args "genome_evolution_busco_notung_pep" "all_buscos" "${genome_evolution_provenance_dir}/busco.notung_pep.json"
+busco_notung_pep_provenance_args+=(
+  --input "gene_tree_directory=${dir_busco_iqtree_pep}"
+  --input "species_tree=${file_dated_species_tree}"
+  --output "notung_directory=${dir_busco_notung_pep}"
+  --parameter "infer_transfers=false"
+  --parameter "species_tag=prefix"
+  --parameter "all_opt=1"
+  --parameter "max_trees=1000"
+  --parameter "no_losses=1"
+)
+gg_artifact_prepare_stage busco_notung_pep_needs_update run_busco_dupaware_notung_root_pep "${busco_notung_pep_provenance_args[@]}" || exit $?
+if [[ ${busco_notung_pep_needs_update} -eq 1 && ${run_busco_dupaware_notung_root_pep} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -rf -- "${dir_busco_notung_pep}"
+  ensure_dir "${dir_busco_notung_pep}"
 
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_pep}")
@@ -4371,6 +4884,7 @@ if [[ ${run_busco_dupaware_notung_root_pep} -eq 1 ]]; then
     busco_notung "${infile}" "${dir_busco_iqtree_pep}" "${dir_busco_notung_pep}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${busco_notung_pep_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -4378,8 +4892,22 @@ fi
 
 task="Species-tree-guided gene tree rooting of duplicate-containing BUSCO DNA trees"
 disable_if_no_input_file "run_busco_dupaware_root_dna" "${file_dated_species_tree}"
-if [[ ${run_busco_dupaware_root_dna} -eq 1 ]]; then
+busco_root_dna_needs_update=0
+gg_artifact_contract_init busco_root_dna_provenance_args "genome_evolution_busco_root_dna" "all_buscos" "${genome_evolution_provenance_dir}/busco.root_dna.json"
+busco_root_dna_provenance_args+=(
+  --input "notung_directory=${dir_busco_notung_dna}"
+  --input "unrooted_tree_directory=${dir_busco_iqtree_dna}"
+  --input "species_tree=${file_dated_species_tree}"
+  --output "rooting_report_directory=${dir_busco_rooted_txt_dna}"
+  --output "rooted_tree_directory=${dir_busco_rooted_nwk_dna}"
+  --parameter "species_parser=${species_label_parser}"
+)
+gg_artifact_prepare_stage busco_root_dna_needs_update run_busco_dupaware_root_dna "${busco_root_dna_provenance_args[@]}" || exit $?
+if [[ ${busco_root_dna_needs_update} -eq 1 && ${run_busco_dupaware_root_dna} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -rf -- "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}"
+  ensure_dir "${dir_busco_rooted_txt_dna}"
+  ensure_dir "${dir_busco_rooted_nwk_dna}"
 
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_dna}")
@@ -4388,14 +4916,29 @@ if [[ ${run_busco_dupaware_root_dna} -eq 1 ]]; then
     busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_dna}" "${dir_busco_iqtree_dna}" "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${busco_root_dna_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Species-tree-guided gene tree rooting of duplicate-containing BUSCO protein trees"
 disable_if_no_input_file "run_busco_dupaware_root_pep" "${file_dated_species_tree}"
-if [[ ${run_busco_dupaware_root_pep} -eq 1 ]]; then
+busco_root_pep_needs_update=0
+gg_artifact_contract_init busco_root_pep_provenance_args "genome_evolution_busco_root_pep" "all_buscos" "${genome_evolution_provenance_dir}/busco.root_pep.json"
+busco_root_pep_provenance_args+=(
+  --input "notung_directory=${dir_busco_notung_pep}"
+  --input "unrooted_tree_directory=${dir_busco_iqtree_pep}"
+  --input "species_tree=${file_dated_species_tree}"
+  --output "rooting_report_directory=${dir_busco_rooted_txt_pep}"
+  --output "rooted_tree_directory=${dir_busco_rooted_nwk_pep}"
+  --parameter "species_parser=${species_label_parser}"
+)
+gg_artifact_prepare_stage busco_root_pep_needs_update run_busco_dupaware_root_pep "${busco_root_pep_provenance_args[@]}" || exit $?
+if [[ ${busco_root_pep_needs_update} -eq 1 && ${run_busco_dupaware_root_pep} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -rf -- "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}"
+  ensure_dir "${dir_busco_rooted_txt_pep}"
+  ensure_dir "${dir_busco_rooted_nwk_pep}"
 
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_pep}")
@@ -4404,6 +4947,7 @@ if [[ ${run_busco_dupaware_root_pep} -eq 1 ]]; then
     busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_pep}" "${dir_busco_iqtree_pep}" "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}" &
   done
   wait_for_background_jobs
+  gg_artifact_record "${busco_root_pep_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -4411,20 +4955,44 @@ fi
 
 task="BUSCO-based Grampa analysis for the polyploidization history with BUSCO DNA trees"
 disable_if_no_input_file "run_busco_dupaware_grampa_dna" "${file_dated_species_tree}"
-if [[ ! -s "${file_busco_grampa_dna}" && ${run_busco_dupaware_grampa_dna} -eq 1 ]]; then
+busco_grampa_dna_needs_update=0
+gg_artifact_contract_init busco_grampa_dna_provenance_args "genome_evolution_busco_grampa_dna" "all_buscos" "${genome_evolution_provenance_dir}/busco.grampa_dna.json"
+busco_grampa_dna_provenance_args+=(
+  --input "rooted_tree_directory=${dir_busco_rooted_nwk_dna}"
+  --input "species_tree=${file_dated_species_tree}"
+  --optional-output "summary=${file_busco_grampa_dna}"
+  --parameter "h1=${grampa_h1}"
+  --parameter "maps=1"
+  --parameter "absence_when_no_valid_gene_trees=valid"
+)
+gg_artifact_prepare_stage busco_grampa_dna_needs_update run_busco_dupaware_grampa_dna "${busco_grampa_dna_provenance_args[@]}" || exit $?
+if [[ ${busco_grampa_dna_needs_update} -eq 1 && ${run_busco_dupaware_grampa_dna} -eq 1 ]]; then
   gg_step_start "${task}"
-
+  rm -f -- "${file_busco_grampa_dna}"
   busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" "${file_busco_grampa_dna}"
+  gg_artifact_record "${busco_grampa_dna_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="BUSCO-based Grampa analysis for the polyploidization history with BUSCO protein trees"
 disable_if_no_input_file "run_busco_dupaware_grampa_pep" "${file_dated_species_tree}"
-if [[ ! -s "${file_busco_grampa_pep}" && ${run_busco_dupaware_grampa_pep} -eq 1 ]]; then
+busco_grampa_pep_needs_update=0
+gg_artifact_contract_init busco_grampa_pep_provenance_args "genome_evolution_busco_grampa_pep" "all_buscos" "${genome_evolution_provenance_dir}/busco.grampa_pep.json"
+busco_grampa_pep_provenance_args+=(
+  --input "rooted_tree_directory=${dir_busco_rooted_nwk_pep}"
+  --input "species_tree=${file_dated_species_tree}"
+  --optional-output "summary=${file_busco_grampa_pep}"
+  --parameter "h1=${grampa_h1}"
+  --parameter "maps=1"
+  --parameter "absence_when_no_valid_gene_trees=valid"
+)
+gg_artifact_prepare_stage busco_grampa_pep_needs_update run_busco_dupaware_grampa_pep "${busco_grampa_pep_provenance_args[@]}" || exit $?
+if [[ ${busco_grampa_pep_needs_update} -eq 1 && ${run_busco_dupaware_grampa_pep} -eq 1 ]]; then
   gg_step_start "${task}"
-
+  rm -f -- "${file_busco_grampa_pep}"
   busco_grampa "${dir_busco_rooted_nwk_pep}" "$(dirname "${file_busco_grampa_pep}")" "${file_busco_grampa_pep}"
+  gg_artifact_record "${busco_grampa_pep_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -4432,8 +5000,23 @@ fi
 # Sourced by gg_genome_evolution_core.sh.
 
 task="Orthogroup-based Grampa analysis for polyploidization history"
-if [[ ! -s "${file_orthogroup_grampa}" && ${run_orthogroup_grampa} -eq 1 ]]; then
+orthogroup_grampa_needs_update=0
+gg_artifact_contract_init orthogroup_grampa_provenance_args "genome_evolution_orthogroup_grampa" "selected_orthogroups" "${genome_evolution_provenance_dir}/orthogroup.grampa.json"
+orthogroup_grampa_provenance_args+=(
+  --input "selected_gene_counts=${file_orthogroup_genecount_selected}"
+  --input "species_tree=${file_dated_species_tree}"
+  --input-gene-family-subdir "rooted_trees=${gg_workspace_output_dir}/orthogroup::rooted_tree"
+  --optional-output "summary=${file_orthogroup_grampa}"
+  --parameter "min_gene_count=${min_gene_orthogroup_grampa}"
+  --parameter "max_gene_count=${max_gene_orthogroup_grampa}"
+  --parameter "h1=${grampa_h1}"
+  --parameter "maps=1"
+  --parameter "absence_when_no_valid_gene_trees=valid"
+)
+gg_artifact_prepare_stage orthogroup_grampa_needs_update run_orthogroup_grampa "${orthogroup_grampa_provenance_args[@]}" || exit $?
+if [[ ${orthogroup_grampa_needs_update} -eq 1 && ${run_orthogroup_grampa} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -f -- "${file_orthogroup_grampa}"
 
   og_ids=()
   mapfile -t og_ids < <(
@@ -4488,6 +5071,7 @@ if [[ ! -s "${file_orthogroup_grampa}" && ${run_orthogroup_grampa} -eq 1 ]]; the
   busco_grampa "${orthogroup_grampa_indir}" "$(dirname "${file_orthogroup_grampa}")" "${file_orthogroup_grampa}"
   cleanup_orthogroup_grampa_tmp
   trap - EXIT
+  gg_artifact_record "${orthogroup_grampa_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -4508,7 +5092,20 @@ if [[ ${run_orthogroup_copy_number_trait_pgls} -eq 1 ]]; then
 fi
 
 task="Orthogroup copy-number matrix preparation"
-if [[ ! -s "${file_orthogroup_copy_number}" && ( ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 ) ]]; then
+run_orthogroup_copy_number_stage=0
+if [[ ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 ]]; then
+  run_orthogroup_copy_number_stage=1
+fi
+copy_number_needs_update=0
+gg_artifact_contract_init copy_number_provenance_args "orthogroup_copy_number" "all_orthogroups" "${genome_evolution_provenance_dir}/orthogroup.copy_number.json"
+copy_number_provenance_args+=(
+  --input "selected_gene_counts=${file_orthogroup_genecount_selected}"
+  --input "dated_species_tree=${file_dated_species_tree}"
+  --output "copy_number=${file_orthogroup_copy_number}"
+  --parameter "max_size_differential=${orthogroup_copy_number_max_size_differential}"
+)
+gg_artifact_prepare_stage copy_number_needs_update run_orthogroup_copy_number_stage "${copy_number_provenance_args[@]}" || exit $?
+if [[ ${copy_number_needs_update} -eq 1 && ${run_orthogroup_copy_number_stage} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ -d "${dir_orthogroup_copy_number}" ]]; then
     rm -rf -- "${dir_orthogroup_copy_number}"
@@ -4518,14 +5115,31 @@ if [[ ! -s "${file_orthogroup_copy_number}" && ( ${run_cafe} -eq 1 || ${run_orth
     --dated_species_tree "${file_dated_species_tree}" \
     --output_dir "${dir_orthogroup_copy_number}" \
     --max_size_differential "${orthogroup_copy_number_max_size_differential}"
+  gg_artifact_record "${copy_number_provenance_args[@]}"
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
 fi
 
 task='CAFE analysis'
-if [[ (! -s "${file_cafe_summary_all_pdf}" || ! -s "${file_cafe_summary_significant_pdf}") && ${run_cafe} -eq 1 ]]; then
+cafe_needs_update=0
+gg_artifact_contract_init cafe_provenance_args "cafe" "all_orthogroups" "${genome_evolution_provenance_dir}/cafe.json"
+cafe_provenance_args+=(
+  --input "copy_number=${file_orthogroup_copy_number}"
+  --input "dated_species_tree=${file_dated_species_tree}"
+  --output "ancestral_tree=${dir_cafe_output}/Gamma_asr.tre"
+  --output "ancestral_counts=${dir_cafe_output}/Gamma_count.tab"
+  --output "branch_changes=${dir_cafe_output}/Gamma_change.tab"
+  --output "branch_probabilities=${dir_cafe_output}/Gamma_branch_probabilities.tab"
+  --output "summary_all=${file_cafe_summary_all_pdf}"
+  --output "summary_significant=${file_cafe_summary_significant_pdf}"
+  --parameter "gamma_categories=${n_gamma_cats_cafe}"
+  --parameter "pvalue=0.05"
+)
+gg_artifact_prepare_stage cafe_needs_update run_cafe "${cafe_provenance_args[@]}" || exit $?
+if [[ ${cafe_needs_update} -eq 1 && ${run_cafe} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -rf -- "${dir_cafe}"
   ensure_dir "${dir_cafe}"
 
   if [[ ! -s "${dir_cafe_output}/Gamma_asr.tre" || ! -s "${dir_cafe_output}/Gamma_count.tab" || ! -s "${dir_cafe_output}/Gamma_change.tab" ]]; then
@@ -4573,6 +5187,7 @@ if [[ (! -s "${file_cafe_summary_all_pdf}" || ! -s "${file_cafe_summary_signific
     exit 1
   fi
 
+  gg_artifact_record "${cafe_provenance_args[@]}"
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
@@ -4580,8 +5195,29 @@ fi
 
 task="Orthogroup copy-number trait PGLS"
 disable_if_no_input_file "run_orthogroup_copy_number_trait_pgls" "${file_orthogroup_copy_number}" "${file_dated_species_tree}" "${file_trait}"
-if [[ (! -s "${file_orthogroup_copy_number_matrix}" || ! -s "${file_orthogroup_copy_number_trait_pgls}" || ! -s "${file_orthogroup_copy_number_trait_pgls_summary_pdf}") && ${run_orthogroup_copy_number_trait_pgls} -eq 1 ]]; then
+copy_number_pgls_needs_update=0
+gg_artifact_contract_init copy_number_pgls_provenance_args "orthogroup_copy_number_trait_pgls" "all_orthogroups" "${genome_evolution_provenance_dir}/orthogroup.copy_number_trait_pgls.json"
+copy_number_pgls_provenance_args+=(
+  --input "copy_number=${file_orthogroup_copy_number}"
+  --input "dated_species_tree=${file_dated_species_tree}"
+  --input "trait_table=${file_trait}"
+  --output "matrix=${file_orthogroup_copy_number_matrix}"
+  --output "pgls=${file_orthogroup_copy_number_trait_pgls}"
+  --output "summary_plot=${file_orthogroup_copy_number_trait_pgls_summary_pdf}"
+  --optional-output "significant=${file_orthogroup_copy_number_trait_pgls_significant}"
+  --parameter "trait=${orthogroup_copy_number_trait}"
+  --parameter "min_species=${orthogroup_copy_number_trait_min_species}"
+  --parameter "family_ids=${orthogroup_copy_number_trait_family_ids}"
+  --parameter "max_families=${orthogroup_copy_number_trait_max_families}"
+  --parameter "p_adjust_method=${orthogroup_copy_number_trait_p_adjust_method}"
+  --parameter "alpha=${orthogroup_copy_number_trait_alpha}"
+  --parameter "plot_top_n=${orthogroup_copy_number_trait_plot_top_n}"
+)
+gg_artifact_add_input_if_present copy_number_pgls_provenance_args "family_file" "${orthogroup_copy_number_trait_family_file}"
+gg_artifact_prepare_stage copy_number_pgls_needs_update run_orthogroup_copy_number_trait_pgls "${copy_number_pgls_provenance_args[@]}" || exit $?
+if [[ ${copy_number_pgls_needs_update} -eq 1 && ${run_orthogroup_copy_number_trait_pgls} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -f -- "${file_orthogroup_copy_number_trait_pgls_significant}"
   ensure_dir "${dir_orthogroup_copy_number_trait_pgls}"
   if ! Rscript "${gg_support_dir}/orthogroup_copy_number_trait_pgls.r" \
     --file_orthogroup_copy_number="${file_orthogroup_copy_number}" \
@@ -4600,6 +5236,7 @@ if [[ (! -s "${file_orthogroup_copy_number_matrix}" || ! -s "${file_orthogroup_c
     echo "Error in Rscript orthogroup_copy_number_trait_pgls.r. Exiting."
     exit 1
   fi
+  gg_artifact_record "${copy_number_pgls_provenance_args[@]}"
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
@@ -4607,8 +5244,23 @@ fi
 
 task="GO enrichment analysis"
 disable_if_no_input_file "run_go_enrichment" "${dir_cafe_output}/Gamma_change.tab" "${dir_cafe_output}/Gamma_branch_probabilities.tab" "${file_gene_id}" "${file_go_annotation}"
-if [[ ! -s "${file_go_enrichment_significant}" && ${run_go_enrichment} -eq 1 ]]; then
+go_enrichment_needs_update=0
+gg_artifact_contract_init go_enrichment_provenance_args "cafe_go_enrichment" "${target_branch_go:-unset}" "${genome_evolution_provenance_dir}/cafe.go_enrichment.json"
+go_enrichment_provenance_args+=(
+  --input "branch_changes=${dir_cafe_output}/Gamma_change.tab"
+  --input "branch_probabilities=${dir_cafe_output}/Gamma_branch_probabilities.tab"
+  --input "gene_ids=${file_gene_id}"
+  --optional-output "significant_enrichment=${file_go_enrichment_significant}"
+  --parameter "target_branch=${target_branch_go}"
+  --parameter "change_direction=${change_direction_go}"
+  --parameter "go_category=${go_category}"
+  --parameter "absence_when_no_significant_terms=valid"
+)
+gg_artifact_add_input_if_present go_enrichment_provenance_args "go_annotation" "${file_go_annotation}"
+gg_artifact_prepare_stage go_enrichment_needs_update run_go_enrichment "${go_enrichment_provenance_args[@]}" || exit $?
+if [[ ${go_enrichment_needs_update} -eq 1 && ${run_go_enrichment} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -f -- "${file_go_enrichment_significant}"
   ensure_dir "$(dirname "${file_go_enrichment_significant}")"
   if ! Rscript "${gg_support_dir}/cafe_go_enrichment.r" \
     "${dir_cafe_output}/Gamma_change.tab" \
@@ -4622,6 +5274,7 @@ if [[ ! -s "${file_go_enrichment_significant}" && ${run_go_enrichment} -eq 1 ]];
     echo "Error in Rscript cafe_go_enrichment.r. Exiting."
     exit 1
   fi
+  gg_artifact_record "${go_enrichment_provenance_args[@]}"
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"

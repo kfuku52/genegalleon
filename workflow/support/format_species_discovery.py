@@ -82,13 +82,21 @@ def cds_gff_source_signature(path):
     return {
         "path": str(resolved),
         "size": int(after_stat.st_size),
-        "mtime_ns": int(after_stat.st_mtime_ns),
         "sha256": digest.hexdigest(),
     }
 
 
 def cds_gff_artifact_signature(path):
     return cds_gff_source_signature(path)
+
+
+def cds_gff_signatures_equal(recorded, current):
+    """Compare content contracts while ignoring legacy mtime diagnostics."""
+
+    if not isinstance(recorded, dict) or not isinstance(current, dict):
+        return False
+    keys = ("path", "size", "sha256")
+    return all(recorded.get(key) == current.get(key) for key in keys)
 
 
 def cds_gff_grouping_audit_matches(audit, task, output_path, strict_mode):
@@ -103,11 +111,17 @@ def cds_gff_grouping_audit_matches(audit, task, output_path, strict_mode):
     if task.get("cds_path") is None or task.get("gff_path") is None:
         return False
     try:
-        if audit.get("cds_input") != cds_gff_source_signature(task["cds_path"]):
+        if not cds_gff_signatures_equal(
+            audit.get("cds_input"), cds_gff_source_signature(task["cds_path"])
+        ):
             return False
-        if audit.get("gff_input") != cds_gff_source_signature(task["gff_path"]):
+        if not cds_gff_signatures_equal(
+            audit.get("gff_input"), cds_gff_source_signature(task["gff_path"])
+        ):
             return False
-        if audit.get("output_fingerprint") != cds_gff_artifact_signature(output_path):
+        if not cds_gff_signatures_equal(
+            audit.get("output_fingerprint"), cds_gff_artifact_signature(output_path)
+        ):
             return False
     except (FileNotFoundError, OSError):
         return False
@@ -115,7 +129,9 @@ def cds_gff_grouping_audit_matches(audit, task, output_path, strict_mode):
         return False
     _json_path, records_path = cds_gff_grouping_audit_paths(output_path)
     try:
-        return audit.get("records_audit_fingerprint") == cds_gff_artifact_signature(records_path)
+        return cds_gff_signatures_equal(
+            audit.get("records_audit_fingerprint"), cds_gff_artifact_signature(records_path)
+        )
     except (FileNotFoundError, OSError):
         return False
 
@@ -543,7 +559,7 @@ def prepare_cds_identifier_task(task):
     return prepared
 
 
-def format_cds(task, output_dir, overwrite, dry_run, strict=None):
+def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing=False):
     cds_input = task.get("cds_path")
     if cds_input is not None:
         output_name = normalize_cds_output_basename(cds_input.name, task["species_prefix"])
@@ -555,11 +571,14 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None):
     strict_mode = bool(task.get("format_strict", False)) if strict is None else bool(strict)
     audit_json_path, _audit_records_path = cds_gff_grouping_audit_paths(output_path)
     existing_audit = read_json(audit_json_path) if use_gff_grouping else None
+    # gg-cache-guard: audited - the grouping audit covers inputs/parameters; the outer formatter contract handles rebuild policy.
     if (
         output_path.exists()
         and output_path.stat().st_size > 0
         and not overwrite
         and (
+            reuse_existing
+            or
             not use_gff_grouping
             or cds_gff_grouping_audit_matches(existing_audit, task, output_path, strict_mode)
         )
@@ -785,6 +804,7 @@ def format_genome(task, output_dir, overwrite, dry_run):
     else:
         output_name = build_derived_genome_output_basename(task)
     output_path = output_dir / output_name
+    # gg-cache-guard: audited - the outer formatter contract deletes this species output on rebuild.
     if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
         return {"status": "skip", "output_path": output_path, "written": 0}
     if dry_run:
@@ -811,7 +831,14 @@ def format_genome(task, output_dir, overwrite, dry_run):
     return {"status": "write", "output_path": output_path, "written": written}
 
 
-def format_gff(task, output_dir, overwrite, dry_run, formatted_cds_path=None):
+def format_gff(
+    task,
+    output_dir,
+    overwrite,
+    dry_run,
+    formatted_cds_path=None,
+    reuse_existing=False,
+):
     gff_path = task.get("gff_path")
     gbff_path = task.get("gbff_path")
     repair_mode = gff_repair_mode_for_task(task)
@@ -833,7 +860,14 @@ def format_gff(task, output_dir, overwrite, dry_run, formatted_cds_path=None):
             "repair_collisions": 0,
         }
     output_path = output_dir / output_name
+    # gg-cache-guard: audited - reuse is explicit or input/output hashes are checked below; outer provenance handles rebuild policy.
     if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
+        if reuse_existing:
+            result = {"status": "skip", "output_path": output_path, "lines": 0}
+            result.update(repair_result_fields(None, output_path))
+            result["repair_mode"] = repair_mode
+            result["repair_status"] = "reused_by_policy"
+            return result
         if gff_path is not None and formatted_cds_path is not None and Path(formatted_cds_path).exists():
             audit_path = gff_repair_audit_path(output_path)
             audit = read_json(audit_path)

@@ -159,18 +159,26 @@ dir_summary_species_cds_fx2tab="${gg_workspace_output_dir}/species_cds_fx2tab"
 dir_summary_species_genome_fx2tab="${gg_workspace_output_dir}/species_genome_fx2tab"
 file_summary_species_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
 file_summary_orthogroup_gene_count="${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.tsv"
+annotation_provenance_dir="${gg_workspace_output_dir}/artifact_provenance/genome_annotation"
 
 ensure_dir "${dir_sp_tmp}"
 cd "${dir_sp_tmp}"
 ensure_dir "${dir_tmp}"
 species_cds_validation_signature=$(
-  {
-    if stat --version > /dev/null 2>&1; then
-      stat -c '%n:%s:%Y' "${infiles[@]}"
-    else
-      stat -f '%N:%z:%m' "${infiles[@]}"
-    fi
-  } | cksum | awk '{print $1}'
+  python - "${infiles[@]}" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+digest = hashlib.sha256()
+for path in sorted((Path(value) for value in sys.argv[1:]), key=lambda value: value.name):
+    digest.update(path.name.encode("utf-8"))
+    digest.update(b"\0")
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+print(digest.hexdigest())
+PY
 )
 species_cds_validation_stamp="${dir_tmp}/species_cds_validation.${species_cds_validation_signature}.ok"
 species_cds_validation_lock="${species_cds_validation_stamp}.lock"
@@ -196,7 +204,17 @@ fi
 
 task="Gene trait extraction from gff files"
 disable_if_no_input_file "run_collect_gff_info" "${file_sp_gff}"
-if [[ ! -s "${file_sp_gff_info}" && ${run_collect_gff_info} -eq 1 ]]; then
+gff_info_needs_update=0
+gg_artifact_contract_init gff_info_provenance_args "genome_annotation_gff_info" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.gff_info.json"
+gff_info_provenance_args+=(
+  --input "gff=${file_sp_gff}"
+  --input "cds=${file_sp_cds}"
+  --output "gff_info=${file_sp_gff_info}"
+  --parameter "feature=CDS"
+  --parameter "multiple_hits=longest"
+)
+gg_artifact_prepare_stage gff_info_needs_update run_collect_gff_info "${gff_info_provenance_args[@]}" || exit $?
+if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ -e gff2genestat.tsv ]]; then
     rm -f -- gff2genestat.tsv
@@ -218,13 +236,29 @@ if [[ ! -s "${file_sp_gff_info}" && ${run_collect_gff_info} -eq 1 ]]; then
   if [[ -s gff2genestat.tsv ]]; then
     mv_out gff2genestat.tsv "${file_sp_gff_info}"
   fi
+  gg_artifact_record "${gff_info_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task='BUSCO of species_cds'
 disable_if_no_input_file "run_busco_cds" "${file_sp_cds}"
-if [[ (! -s "${file_sp_cds_busco_full}" || ! -s "${file_sp_cds_busco_short}") && ${run_busco_cds} -eq 1 ]]; then
+if [[ ${run_busco_cds} -eq 1 || -s "${file_sp_cds_busco_full}" || -s "${file_sp_cds_busco_short}" || -s "${annotation_provenance_dir}/${sp_ub}.busco_cds.json" ]]; then
+  resolve_busco_lineage_for_current_species || exit 1
+fi
+busco_cds_needs_update=0
+gg_artifact_contract_init busco_cds_provenance_args "genome_annotation_busco_cds" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.busco_cds.json"
+busco_cds_provenance_args+=(
+  --input "cds=${file_sp_cds}"
+  --output "full_table=${file_sp_cds_busco_full}"
+  --output "short_summary=${file_sp_cds_busco_short}"
+  --parameter "lineage=${busco_lineage_resolved:-${busco_lineage}}"
+  --parameter "mode=transcriptome"
+  --parameter "evalue=1e-03"
+  --parameter "limit=20"
+)
+gg_artifact_prepare_stage busco_cds_needs_update run_busco_cds "${busco_cds_provenance_args[@]}" || exit $?
+if [[ ${busco_cds_needs_update} -eq 1 && ${run_busco_cds} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ -e "./busco_tmp" ]]; then
@@ -238,9 +272,6 @@ if [[ (! -s "${file_sp_cds_busco_full}" || ! -s "${file_sp_cds_busco_short}") &&
     busco_infile=${file_sp_cds}
   fi
 
-  if ! resolve_busco_lineage_for_current_species; then
-    exit 1
-  fi
   if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
     exit 1
@@ -268,6 +299,9 @@ if [[ (! -s "${file_sp_cds_busco_full}" || ! -s "${file_sp_cds_busco_short}") &&
     busco_exit_status=$?
     echo "BUSCO of species_cds failed with exit code ${busco_exit_status}. Continuing without BUSCO outputs."
   fi
+  if [[ -s "${file_sp_cds_busco_full}" && -s "${file_sp_cds_busco_short}" ]]; then
+    gg_artifact_record "${busco_cds_provenance_args[@]}"
+  fi
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
@@ -275,16 +309,28 @@ fi
 
 task='BUSCO of species_genome'
 disable_if_no_input_file "run_busco_genome" "${file_sp_genome}"
-if [[ (! -s "${file_sp_genome_busco_full}" || ! -s "${file_sp_genome_busco_short}") && ${run_busco_genome} -eq 1 ]]; then
+if [[ ${run_busco_genome} -eq 1 || -s "${file_sp_genome_busco_full}" || -s "${file_sp_genome_busco_short}" || -s "${annotation_provenance_dir}/${sp_ub}.busco_genome.json" ]]; then
+  resolve_busco_lineage_for_current_species || exit 1
+fi
+busco_genome_needs_update=0
+gg_artifact_contract_init busco_genome_provenance_args "genome_annotation_busco_genome" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.busco_genome.json"
+busco_genome_provenance_args+=(
+  --input "genome=${file_sp_genome}"
+  --output "full_table=${file_sp_genome_busco_full}"
+  --output "short_summary=${file_sp_genome_busco_short}"
+  --parameter "lineage=${busco_lineage_resolved:-${busco_lineage}}"
+  --parameter "mode=genome"
+  --parameter "evalue=1e-03"
+  --parameter "limit=20"
+)
+gg_artifact_prepare_stage busco_genome_needs_update run_busco_genome "${busco_genome_provenance_args[@]}" || exit $?
+if [[ ${busco_genome_needs_update} -eq 1 && ${run_busco_genome} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ -e "./busco_tmp" ]]; then
     rm -rf -- "./busco_tmp"
   fi
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_sp_genome}" > "busco_genome_input.fa"
-  if ! resolve_busco_lineage_for_current_species; then
-    exit 1
-  fi
   if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
     exit 1
@@ -313,6 +359,9 @@ if [[ (! -s "${file_sp_genome_busco_full}" || ! -s "${file_sp_genome_busco_short
     busco_exit_status=$?
     echo "BUSCO of species_genome failed with exit code ${busco_exit_status}. Continuing without BUSCO outputs."
   fi
+  if [[ -s "${file_sp_genome_busco_full}" && -s "${file_sp_genome_busco_short}" ]]; then
+    gg_artifact_record "${busco_genome_provenance_args[@]}"
+  fi
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
@@ -320,7 +369,18 @@ fi
 
 task="UniProt annotation (${uniprot_annotation_method})"
 disable_if_no_input_file "run_uniprot_annotation" "${file_sp_cds}"
-if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -eq 1 ]]; then
+uniprot_needs_update=0
+gg_artifact_contract_init uniprot_provenance_args "genome_annotation_uniprot" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.uniprot.json"
+uniprot_provenance_args+=(
+  --input "cds=${file_sp_cds}"
+  --output "annotation=${file_sp_uniprot_annotation}"
+  --parameter "method=${uniprot_annotation_method}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "max_target_sequences=1"
+  --parameter "evalue=1e-2"
+)
+gg_artifact_prepare_stage uniprot_needs_update run_uniprot_annotation "${uniprot_provenance_args[@]}" || exit $?
+if [[ ${uniprot_needs_update} -eq 1 && ${run_uniprot_annotation} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit seq --remove-gaps --only-id --threads "${GG_TASK_CPUS}" "${file_sp_cds}" |
@@ -385,15 +445,15 @@ if [[ ! -s "${file_sp_uniprot_annotation}" ]] && [[ ${run_uniprot_annotation} -e
     --outfile uniprot.annotation.tsv
 
   cp_out uniprot.annotation.tsv "${file_sp_uniprot_annotation}"
+  gg_artifact_record "${uniprot_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="cdskit localize"
 disable_if_no_input_file "run_cdskit_localize" "${file_sp_cds}"
-if [[ ! -s "${file_sp_cdskit_localize}" && ${run_cdskit_localize} -eq 1 ]]; then
-  gg_step_start "${task}"
-
+cdskit_localize_group_resolved=""
+if [[ ${run_cdskit_localize} -eq 1 || -s "${file_sp_cdskit_localize}" || -s "${annotation_provenance_dir}/${sp_ub}.cdskit_localize.json" ]]; then
   cdskit_localize_group_resolved=$(
     gg_resolve_cdskit_localize_organism_group \
       "${cdskit_localize_organism_group}" \
@@ -401,6 +461,22 @@ if [[ ! -s "${file_sp_cdskit_localize}" && ${run_cdskit_localize} -eq 1 ]]; then
       "${busco_lineage}" \
       "${sp_ub}"
   )
+fi
+cdskit_localize_needs_update=0
+gg_artifact_contract_init cdskit_localize_provenance_args "genome_annotation_cdskit_localize" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.cdskit_localize.json"
+cdskit_localize_provenance_args+=(
+  --input "cds=${file_sp_cds}"
+  --output "localization=${file_sp_cdskit_localize}"
+  --parameter "model=${cdskit_localize_model}"
+  --parameter "organism_group=${cdskit_localize_group_resolved:-${cdskit_localize_organism_group}}"
+  --parameter "include_features=${cdskit_localize_include_features}"
+  --parameter "no_model_download=${cdskit_localize_no_model_download}"
+  --parameter "genetic_code=${genetic_code}"
+)
+gg_artifact_prepare_stage cdskit_localize_needs_update run_cdskit_localize "${cdskit_localize_provenance_args[@]}" || exit $?
+if [[ ${cdskit_localize_needs_update} -eq 1 && ${run_cdskit_localize} -eq 1 ]]; then
+  gg_step_start "${task}"
+
   gg_prepare_cdskit_localize_cds_input \
     "${file_sp_cds}" \
     "cdskit_localize.input.cds.fasta" \
@@ -420,13 +496,22 @@ if [[ ! -s "${file_sp_cdskit_localize}" && ${run_cdskit_localize} -eq 1 ]]; then
     mv_out "cdskit_localize.tsv" "${file_sp_cdskit_localize}"
   fi
   rm -f -- "cdskit_localize.input.cds.fasta"
+  gg_artifact_record "${cdskit_localize_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="seqkit fx2tab for the CDS sequences"
 disable_if_no_input_file "run_cds_fx2tab" "${file_sp_cds}"
-if [[ ! -s "${file_sp_cds_fx2tab}" && ${run_cds_fx2tab} -eq 1 ]]; then
+cds_fx2tab_needs_update=0
+gg_artifact_contract_init cds_fx2tab_provenance_args "genome_annotation_cds_fx2tab" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.cds_fx2tab.json"
+cds_fx2tab_provenance_args+=(
+  --input "cds=${file_sp_cds}"
+  --output "fx2tab=${file_sp_cds_fx2tab}"
+  --parameter "fields=length,name,gc,gc-skew,header-line,only-id"
+)
+gg_artifact_prepare_stage cds_fx2tab_needs_update run_cds_fx2tab "${cds_fx2tab_provenance_args[@]}" || exit $?
+if [[ ${cds_fx2tab_needs_update} -eq 1 && ${run_cds_fx2tab} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit fx2tab \
@@ -444,13 +529,28 @@ if [[ ! -s "${file_sp_cds_fx2tab}" && ${run_cds_fx2tab} -eq 1 ]]; then
     echo "Output file detected for the task: ${task}"
     mv_out "tmp.cds_length.tsv" "${file_sp_cds_fx2tab}"
   fi
+  gg_artifact_record "${cds_fx2tab_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="MMseqs2 Taxonomy of the CDS sequences"
 disable_if_no_input_file "run_cds_mmseqs2taxonomy" "${file_sp_cds}"
-if [[ ! -s "${file_sp_cds_mmseqs2taxonomy}" && ${run_cds_mmseqs2taxonomy} -eq 1 && ${gg_debug_mode:-0} -eq 0 ]]; then
+cds_taxonomy_needs_update=0
+gg_artifact_contract_init cds_taxonomy_provenance_args "genome_annotation_cds_taxonomy" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.cds_taxonomy.json"
+cds_taxonomy_provenance_args+=(
+  --input "cds=${file_sp_cds}"
+  --output "taxonomy=${file_sp_cds_mmseqs2taxonomy}"
+  --parameter "split_mode=2"
+  --parameter "majority=0.5"
+  --parameter "lca_mode=3"
+  --parameter "vote_mode=1"
+  --parameter "tax_lineage=2"
+  --parameter "orf_filter=0"
+)
+gg_artifact_add_input_if_present cds_taxonomy_provenance_args "uniref90_db" "${dir_mmseqs2_db}/UniRef90_DB"
+gg_artifact_prepare_stage cds_taxonomy_needs_update run_cds_mmseqs2taxonomy "${cds_taxonomy_provenance_args[@]}" || exit $?
+if [[ ${cds_taxonomy_needs_update} -eq 1 && ${run_cds_mmseqs2taxonomy} -eq 1 && ${gg_debug_mode:-0} -eq 0 ]]; then
   gg_step_start "${task}"
 
   if ! ensure_mmseqs_uniref90_db "${dir_mmseqs2_db}" "${GG_TASK_CPUS}"; then
@@ -485,13 +585,28 @@ if [[ ! -s "${file_sp_cds_mmseqs2taxonomy}" && ${run_cds_mmseqs2taxonomy} -eq 1 
     rm -f -- output_prefix.*
     rm -rf -- "tmp_mmseqs2"
   fi
+  gg_artifact_add_input_if_present cds_taxonomy_provenance_args "uniref90_db" "${dir_mmseqs2_db}/UniRef90_DB"
+  gg_artifact_record "${cds_taxonomy_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Contaminated sequence removal from the CDS sequences"
 disable_if_no_input_file "run_cds_contamination_removal" "${file_sp_cds}" "${file_sp_cds_fx2tab}" "${file_sp_cds_mmseqs2taxonomy}"
-if [[ (! -s "${file_sp_cds_contamination_removal_fasta}" || ! -s "${file_sp_cds_contamination_removal_tsv}") && ${run_cds_contamination_removal} -eq 1 ]]; then
+cds_contamination_needs_update=0
+gg_artifact_contract_init cds_contamination_provenance_args "genome_annotation_cds_contamination_removal" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.cds_contamination_removal.json"
+cds_contamination_provenance_args+=(
+  --input "cds=${file_sp_cds}"
+  --input "taxonomy=${file_sp_cds_mmseqs2taxonomy}"
+  --input "fx2tab=${file_sp_cds_fx2tab}"
+  --output "filtered_fasta=${file_sp_cds_contamination_removal_fasta}"
+  --output "compatibility=${file_sp_cds_contamination_removal_tsv}"
+  --parameter "target_taxon=${contamination_removal_target_taxon:-${sp_ub}}"
+  --parameter "rank=${contamination_removal_rank_for_remove_contaminated_sequences}"
+  --parameter "rename_seq=no"
+)
+gg_artifact_prepare_stage cds_contamination_needs_update run_cds_contamination_removal "${cds_contamination_provenance_args[@]}" || exit $?
+if [[ ${cds_contamination_needs_update} -eq 1 && ${run_cds_contamination_removal} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
@@ -517,13 +632,30 @@ if [[ (! -s "${file_sp_cds_contamination_removal_fasta}" || ! -s "${file_sp_cds_
     rm -f -- "clean_sequences.fa"
     mv_out "lineage_compatibility.tsv" "${file_sp_cds_contamination_removal_tsv}"
   fi
+  gg_artifact_record "${cds_contamination_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Merge annotations"
 disable_if_no_input_file "run_annotation" "${file_sp_cds}"
-if [[ ! -s "${file_sp_annotation}" ]] && [[ ${run_annotation} -eq 1 ]]; then
+annotation_needs_update=0
+gg_artifact_contract_init annotation_provenance_args "genome_annotation_merge" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.annotation.json"
+annotation_provenance_args+=(
+  --input "cds=${file_sp_cds}"
+  --output "annotation=${file_sp_annotation}"
+  --parameter "scientific_name=${sp_ub}"
+)
+gg_artifact_add_input_if_present annotation_provenance_args "uniprot" "${file_sp_uniprot_annotation}"
+gg_artifact_add_input_if_present annotation_provenance_args "busco" "${file_sp_cds_busco_full}"
+gg_artifact_add_input_if_present annotation_provenance_args "localization" "${file_sp_cdskit_localize}"
+gg_artifact_add_input_if_present annotation_provenance_args "expression" "${file_sp_expression}"
+gg_artifact_add_input_if_present annotation_provenance_args "gff_info" "${file_sp_gff_info}"
+gg_artifact_add_input_if_present annotation_provenance_args "orthogroup" "${file_orthogroup}"
+gg_artifact_add_input_if_present annotation_provenance_args "taxonomy" "${file_sp_cds_mmseqs2taxonomy}"
+gg_artifact_add_input_if_present annotation_provenance_args "fx2tab" "${file_sp_cds_fx2tab}"
+gg_artifact_prepare_stage annotation_needs_update run_annotation "${annotation_provenance_args[@]}" || exit $?
+if [[ ${annotation_needs_update} -eq 1 && ${run_annotation} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ -z "${file_sp_expression}" ]]; then
@@ -550,13 +682,25 @@ if [[ ! -s "${file_sp_annotation}" ]] && [[ ${run_annotation} -eq 1 ]]; then
   if [[ -s "tmp.annotation.tsv" ]]; then
     mv_out "tmp.annotation.tsv" "${file_sp_annotation}"
   fi
+  gg_artifact_record "${annotation_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="wgd ksd"
 disable_if_no_input_file "run_wgd_ksd" "${file_sp_cds}"
-if [[ ! -s "${file_sp_wgd_ksd}" && ${run_wgd_ksd} -eq 1 && ${gg_debug_mode:-0} -eq 0 ]]; then
+wgd_ksd_needs_update=0
+gg_artifact_contract_init wgd_ksd_provenance_args "genome_annotation_wgd_ksd" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.wgd_ksd.json"
+wgd_ksd_provenance_args+=(
+  --input "cds=${file_sp_cds}"
+  --output "ks_distribution=${file_sp_wgd_ksd}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "aligner=mafft"
+  --parameter "weighting_method=alc"
+  --parameter "max_pairwise=1000"
+)
+gg_artifact_prepare_stage wgd_ksd_needs_update run_wgd_ksd "${wgd_ksd_provenance_args[@]}" || exit $?
+if [[ ${wgd_ksd_needs_update} -eq 1 && ${run_wgd_ksd} -eq 1 && ${gg_debug_mode:-0} -eq 0 ]]; then
   gg_step_start "${task}"
 
   seqkit seq --remove-gaps --upper-case --threads "${GG_TASK_CPUS}" "${file_sp_cds}" |
@@ -573,13 +717,27 @@ if [[ ! -s "${file_sp_wgd_ksd}" && ${run_wgd_ksd} -eq 1 && ${gg_debug_mode:-0} -
     "./wgd_dmd/tmp.${sp_ub}.nuc.fasta.mcl" \
     "tmp.${sp_ub}.nuc.fasta"
 
+  if [[ -s "${file_sp_wgd_ksd}" ]]; then
+    gg_artifact_record "${wgd_ksd_provenance_args[@]}"
+  fi
+
 else
   gg_step_skip "${task}"
 fi
 
 task="SubPhaser"
 disable_if_no_input_file "run_subphaser" "${file_sp_genome}" "${file_sp_subphaser_cfg}"
-if [[ ! -s "${file_sp_subphaser}" && ${run_subphaser} -eq 1 ]]; then
+subphaser_needs_update=0
+gg_artifact_contract_init subphaser_provenance_args "genome_annotation_subphaser" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.subphaser.json"
+subphaser_provenance_args+=(
+  --input "genome=${file_sp_genome}"
+  --input "config=${file_sp_subphaser_cfg}"
+  --output "archive=${file_sp_subphaser}"
+  --parameter "no_label=1"
+  --parameter "prefix=${sp_ub}."
+)
+gg_artifact_prepare_stage subphaser_needs_update run_subphaser "${subphaser_provenance_args[@]}" || exit $?
+if [[ ${subphaser_needs_update} -eq 1 && ${run_subphaser} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if subphaser \
@@ -601,6 +759,7 @@ if [[ ! -s "${file_sp_subphaser}" && ${run_subphaser} -eq 1 ]]; then
     echo "Zipping and copying SubPhaser's output files."
     zip -rq "${sp_ub}.subphaser.zip" "${sp_ub}.subphaser"
     cp_out "${sp_ub}.subphaser.zip" "${file_sp_subphaser}"
+    gg_artifact_record "${subphaser_provenance_args[@]}"
   else
     echo "SubPhaser's exit status is not 0. Skipped zipping and copying SubPhaser's output files."
   fi
@@ -610,7 +769,15 @@ fi
 
 task="seqkit fx2tab for the reference genome"
 disable_if_no_input_file "run_genome_fx2tab" "${file_sp_genome}"
-if [[ ! -s "${file_sp_genome_fx2tab}" && ${run_genome_fx2tab} -eq 1 ]]; then
+genome_fx2tab_needs_update=0
+gg_artifact_contract_init genome_fx2tab_provenance_args "genome_annotation_genome_fx2tab" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.genome_fx2tab.json"
+genome_fx2tab_provenance_args+=(
+  --input "genome=${file_sp_genome}"
+  --output "fx2tab=${file_sp_genome_fx2tab}"
+  --parameter "fields=length,name,gc,gc-skew,header-line,only-id"
+)
+gg_artifact_prepare_stage genome_fx2tab_needs_update run_genome_fx2tab "${genome_fx2tab_provenance_args[@]}" || exit $?
+if [[ ${genome_fx2tab_needs_update} -eq 1 && ${run_genome_fx2tab} -eq 1 ]]; then
   gg_step_start "${task}"
 
   seqkit fx2tab \
@@ -628,13 +795,22 @@ if [[ ! -s "${file_sp_genome_fx2tab}" && ${run_genome_fx2tab} -eq 1 ]]; then
     echo "Output file detected for the task: ${task}"
     mv_out "tmp.scaffold_length.tsv" "${file_sp_genome_fx2tab}"
   fi
+  gg_artifact_record "${genome_fx2tab_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="scaffold size histogram"
 disable_if_no_input_file "run_scaffold_histogram" "${file_sp_genome_fx2tab}"
-if [[ ! -s "${file_sp_scaffold_histogram}" && ${run_scaffold_histogram} -eq 1 ]]; then
+scaffold_histogram_needs_update=0
+gg_artifact_contract_init scaffold_histogram_provenance_args "genome_annotation_scaffold_histogram" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.scaffold_histogram.json"
+scaffold_histogram_provenance_args+=(
+  --input "genome_fx2tab=${file_sp_genome_fx2tab}"
+  --output "histogram=${file_sp_scaffold_histogram}"
+  --parameter "min_scaffold_size=1000000"
+)
+gg_artifact_prepare_stage scaffold_histogram_needs_update run_scaffold_histogram "${scaffold_histogram_provenance_args[@]}" || exit $?
+if [[ ${scaffold_histogram_needs_update} -eq 1 && ${run_scaffold_histogram} -eq 1 ]]; then
   gg_step_start "${task}"
 
   python "${gg_support_dir}/scaffold_size_histogram.py" \
@@ -645,13 +821,28 @@ if [[ ! -s "${file_sp_scaffold_histogram}" && ${run_scaffold_histogram} -eq 1 ]]
     echo "Output file detected for the task: ${task}"
     mv_out "scaffold_size_histogram.pdf" "${file_sp_scaffold_histogram}"
   fi
+  gg_artifact_record "${scaffold_histogram_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="MMseqs2 Taxonomy of the reference genome"
 disable_if_no_input_file "run_genome_mmseqs2taxonomy" "${file_sp_genome}"
-if [[ ! -s "${file_sp_genome_mmseqs2taxonomy}" && ${run_genome_mmseqs2taxonomy} -eq 1 ]]; then
+genome_taxonomy_needs_update=0
+gg_artifact_contract_init genome_taxonomy_provenance_args "genome_annotation_genome_taxonomy" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.genome_taxonomy.json"
+genome_taxonomy_provenance_args+=(
+  --input "genome=${file_sp_genome}"
+  --output "taxonomy=${file_sp_genome_mmseqs2taxonomy}"
+  --parameter "split_mode=2"
+  --parameter "majority=0.5"
+  --parameter "lca_mode=3"
+  --parameter "vote_mode=1"
+  --parameter "tax_lineage=2"
+  --parameter "orf_filter=0"
+)
+gg_artifact_add_input_if_present genome_taxonomy_provenance_args "uniref90_db" "${dir_mmseqs2_db}/UniRef90_DB"
+gg_artifact_prepare_stage genome_taxonomy_needs_update run_genome_mmseqs2taxonomy "${genome_taxonomy_provenance_args[@]}" || exit $?
+if [[ ${genome_taxonomy_needs_update} -eq 1 && ${run_genome_mmseqs2taxonomy} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if ! ensure_mmseqs_uniref90_db "${dir_mmseqs2_db}" "${GG_TASK_CPUS}"; then
@@ -686,13 +877,29 @@ if [[ ! -s "${file_sp_genome_mmseqs2taxonomy}" && ${run_genome_mmseqs2taxonomy} 
     rm -f -- output_prefix.*
     rm -rf -- "tmp_mmseqs2"
   fi
+  gg_artifact_add_input_if_present genome_taxonomy_provenance_args "uniref90_db" "${dir_mmseqs2_db}/UniRef90_DB"
+  gg_artifact_record "${genome_taxonomy_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
 task="Contaminated sequence removal from the reference genome"
 disable_if_no_input_file "run_genome_contamination_removal" "${file_sp_genome}" "${file_sp_genome_mmseqs2taxonomy}" "${file_sp_genome_fx2tab}"
-if [[ (! -s "${file_sp_genome_contamination_removal_fasta}" || ! -s "${file_sp_genome_contamination_removal_tsv}") && ${run_genome_contamination_removal} -eq 1 ]]; then
+genome_contamination_needs_update=0
+gg_artifact_contract_init genome_contamination_provenance_args "genome_annotation_genome_contamination_removal" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.genome_contamination_removal.json"
+genome_contamination_provenance_args+=(
+  --input "genome=${file_sp_genome}"
+  --input "taxonomy=${file_sp_genome_mmseqs2taxonomy}"
+  --input "fx2tab=${file_sp_genome_fx2tab}"
+  --output "filtered_fasta=${file_sp_genome_contamination_removal_fasta}"
+  --output "compatibility=${file_sp_genome_contamination_removal_tsv}"
+  --parameter "target_taxon=${contamination_removal_target_taxon:-${sp_ub}}"
+  --parameter "rank=${contamination_removal_rank_for_remove_contaminated_sequences}"
+  --parameter "rename_seq=yes"
+  --parameter "rename_prefix=scaffold"
+)
+gg_artifact_prepare_stage genome_contamination_needs_update run_genome_contamination_removal "${genome_contamination_provenance_args[@]}" || exit $?
+if [[ ${genome_contamination_needs_update} -eq 1 && ${run_genome_contamination_removal} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
@@ -719,6 +926,7 @@ if [[ (! -s "${file_sp_genome_contamination_removal_fasta}" || ! -s "${file_sp_g
     rm -f -- "clean_sequences.fa"
     mv_out "lineage_compatibility.tsv" "${file_sp_genome_contamination_removal_tsv}"
   fi
+  gg_artifact_record "${genome_contamination_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -728,7 +936,17 @@ if [[ ! -e "${dir_sp_dnaseq}/${sp_ub}" ]]; then
   echo "dir_sp_dnaseq/sp not found. Skipping ${task}"
   run_genomescope=0
 fi
-if [[ ! -s "${file_sp_genomescope}" && ${run_genomescope} -eq 1 ]]; then
+genomescope_needs_update=0
+gg_artifact_contract_init genomescope_provenance_args "genome_annotation_genomescope" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.genomescope.json"
+gg_artifact_add_input_if_present genomescope_provenance_args "dna_reads" "${dir_sp_dnaseq}/${sp_ub}"
+genomescope_provenance_args+=(
+  --output "archive=${file_sp_genomescope}"
+  --parameter "kmer_length=21"
+  --parameter "kmer_lower=1"
+  --parameter "kmer_upper=1000"
+)
+gg_artifact_prepare_stage genomescope_needs_update run_genomescope "${genomescope_provenance_args[@]}" || exit $?
+if [[ ${genomescope_needs_update} -eq 1 && ${run_genomescope} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ -e "${sp_ub}.genomescope" ]]; then
@@ -759,6 +977,7 @@ if [[ ! -s "${file_sp_genomescope}" && ${run_genomescope} -eq 1 ]]; then
       mv_out "tmp.reads.histo" "${sp_ub}.genomescope/kmc.histo.tsv"
       zip -rq "${sp_ub}.genomescope.zip" "${sp_ub}.genomescope"
       mv_out "${sp_ub}.genomescope.zip" "${file_sp_genomescope}"
+      gg_artifact_record "${genomescope_provenance_args[@]}"
     fi
   fi
 else
@@ -767,7 +986,22 @@ fi
 
 task="JCVI synteny dotplot"
 disable_if_no_input_file "run_jcvi_dotplot" "${file_sp_cds}" "${file_sp_gff}" "${file_sp_genome_fx2tab}"
-if [[ ! -s "${file_sp_jcvi_dotplot}" && ${run_jcvi_dotplot} -eq 1 ]]; then
+jcvi_needs_update=0
+gg_artifact_contract_init jcvi_provenance_args "genome_annotation_jcvi_dotplot" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.jcvi_dotplot.json"
+jcvi_provenance_args+=(
+  --input "cds=${file_sp_cds}"
+  --input "gff=${file_sp_gff}"
+  --input "genome_fx2tab=${file_sp_genome_fx2tab}"
+  --output "archive=${file_sp_jcvi_dotplot}"
+  --parameter "minimum_scaffold_size=1000000"
+  --parameter "fallback_scaffold_count=20"
+  --parameter "cscore=0.7"
+  --parameter "gff_feature=mRNA"
+  --parameter "screen_minspan=30"
+  --parameter "screen_minsize=0"
+)
+gg_artifact_prepare_stage jcvi_needs_update run_jcvi_dotplot "${jcvi_provenance_args[@]}" || exit $?
+if [[ ${jcvi_needs_update} -eq 1 && ${run_jcvi_dotplot} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ -e "${sp_ub}.jcvi_dotplot" ]]; then
@@ -844,6 +1078,7 @@ if [[ ! -s "${file_sp_jcvi_dotplot}" && ${run_jcvi_dotplot} -eq 1 ]]; then
     echo "JCVI dotplot output file was detected. Start compressing."
     zip -rq "${sp_ub}.jcvi_dotplot.zip" "${sp_ub}.jcvi_dotplot"
     mv_out "${sp_ub}.jcvi_dotplot.zip" "${file_sp_jcvi_dotplot}"
+    gg_artifact_record "${jcvi_provenance_args[@]}"
   fi
 else
   gg_step_skip "${task}"
@@ -853,6 +1088,21 @@ fi
 # `repeat` conda environment.
 
 task="Multispecies annotation summary"
+summary_finalizer_should_run=0
+summary_finalizer_claimed=0
+if gg_array_finalizer_claim \
+  "${annotation_provenance_dir}/array_finalizers" \
+  "multispecies_summary" \
+  "${#infiles[@]}"; then
+  summary_finalizer_should_run=1
+  summary_finalizer_claimed=1
+  trap 'gg_array_finalizer_release' EXIT
+else
+  summary_finalizer_status=$?
+  if [[ ${summary_finalizer_status} -ne 1 ]]; then
+    exit "${summary_finalizer_status}"
+  fi
+fi
 summary_inputs_available=0
 for summary_dir in \
   "${dir_summary_species_cds_busco}" \
@@ -869,18 +1119,29 @@ if [[ ${summary_inputs_available} -eq 0 ]] && [[ -s "${file_summary_species_tree
   summary_inputs_available=1
 fi
 
-summary_flag=0
-if [[ ${summary_inputs_available} -eq 1 ]]; then
-  if is_output_older_than_inputs "^(dir_summary_|file_summary_)" "${file_multispecies_summary}"; then
-    summary_flag=0
-  else
-    summary_flag=$?
-  fi
-else
+summary_needs_update=0
+summary_provenance_args=()
+gg_artifact_contract_init summary_provenance_args "genome_annotation_multispecies_summary" "all_species" "${annotation_provenance_dir}/all_species.summary.json"
+gg_artifact_add_input_if_present summary_provenance_args "species_tree_dated" "${file_summary_species_tree_dated}"
+gg_artifact_add_input_if_present summary_provenance_args "species_tree_undated" "${file_summary_species_tree_undated}"
+gg_artifact_add_input_if_present summary_provenance_args "species_cds_busco" "${dir_summary_species_cds_busco}"
+gg_artifact_add_input_if_present summary_provenance_args "species_genome_busco" "${dir_summary_species_genome_busco}"
+gg_artifact_add_input_if_present summary_provenance_args "species_annotation" "${dir_summary_species_annotation}"
+gg_artifact_add_input_if_present summary_provenance_args "species_cds_fx2tab" "${dir_summary_species_cds_fx2tab}"
+gg_artifact_add_input_if_present summary_provenance_args "species_genome_fx2tab" "${dir_summary_species_genome_fx2tab}"
+gg_artifact_add_input_if_present summary_provenance_args "species_trait" "${file_summary_species_trait}"
+gg_artifact_add_input_if_present summary_provenance_args "orthogroup_gene_count" "${file_summary_orthogroup_gene_count}"
+summary_provenance_args+=(
+  --output "summary=${file_multispecies_summary}"
+  --parameter "min_og_species=auto"
+)
+if [[ ${summary_finalizer_should_run} -eq 1 && ${summary_inputs_available} -eq 1 ]]; then
+  gg_artifact_prepare_stage summary_needs_update run_multispecies_summary "${summary_provenance_args[@]}" || exit $?
+elif [[ ${summary_finalizer_should_run} -eq 1 ]]; then
   echo "No multispecies summary inputs are available yet. Skipping summary generation."
 fi
 
-if [[ ${run_multispecies_summary} -eq 1 && ${summary_inputs_available} -eq 1 && ${summary_flag} -eq 1 ]]; then
+if [[ ${summary_finalizer_should_run} -eq 1 && ${run_multispecies_summary} -eq 1 && ${summary_inputs_available} -eq 1 && ${summary_needs_update} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "$(dirname "${file_multispecies_summary}")"
   cd "$(dirname "${file_multispecies_summary}")"
@@ -900,9 +1161,16 @@ if [[ ${run_multispecies_summary} -eq 1 && ${summary_inputs_available} -eq 1 && 
     rm -f -- "Rplots.pdf"
   fi
 
+  gg_artifact_record "${summary_provenance_args[@]}"
+
   cd "${dir_sp_tmp}"
 else
   gg_step_skip "${task}"
+fi
+if [[ ${summary_finalizer_claimed} -eq 1 ]]; then
+  gg_array_finalizer_complete
+  summary_finalizer_claimed=0
+  trap - EXIT
 fi
 
 remove_empty_subdirs "${gg_workspace_output_dir}"
