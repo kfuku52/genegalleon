@@ -249,6 +249,7 @@ orthogroup_copy_number_trait_min_species
 orthogroup_copy_number_trait_p_adjust_method
 orthogroup_copy_number_trait_plot_top_n
 orthofinder_core_filters
+orthofinder_algorithm_threads
 orthofinder_core_method
 orthofinder_core_rank
 orthogroup_decay_replicates
@@ -257,6 +258,8 @@ orthogroup_decay_species_counts
 orthogroup_annotation_method
 orthogroup_table
 protein_model
+species_busco_parallel_jobs
+species_busco_memory_gb_per_job
 run_cds_translation
 run_species_busco
 run_build_species_busco_summary
@@ -341,6 +344,8 @@ run_generate_species_trait
 run_multispecies_summary
 run_species_busco
 run_validate_inputs
+species_busco_parallel_jobs
+species_busco_memory_gb_per_job
 species_cds_dir
 species_cds_fx2tab_dir
 species_busco_full_dir

@@ -2,6 +2,23 @@
 # Workflow execution, environment, version, and scheduler helpers.
 # This file is sourced by workflow/support/gg_util.sh.
 
+gg_memory_parallel_job_cap() {
+  local available_gb=${1:-}
+  local minimum_gb_per_job=${2:-}
+  local job_cap=1
+  if [[ ! "${available_gb}" =~ ^[0-9]+$ || ${available_gb} -lt 1 ]]; then
+    echo "Invalid available memory for parallel-job calculation: ${available_gb:-unset}" >&2
+    return 2
+  fi
+  if [[ ! "${minimum_gb_per_job}" =~ ^[0-9]+$ || ${minimum_gb_per_job} -lt 1 ]]; then
+    echo "Invalid minimum memory per parallel job: ${minimum_gb_per_job:-unset}" >&2
+    return 2
+  fi
+  job_cap=$((available_gb / minimum_gb_per_job))
+  [[ ${job_cap} -lt 1 ]] && job_cap=1
+  printf '%s\n' "${job_cap}"
+}
+
 disable_flag_with_reason() {
   local variable_name=$1
   local reason=$2

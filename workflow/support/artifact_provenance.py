@@ -27,6 +27,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from content_digest_cache import cache as digest_cache
+from content_digest_cache import cached_sha256_file
+from content_digest_cache import configure as configure_digest_cache
 from gene_family_output_store import (
     GeneFamilyOutputStore,
     query_id_from_name,
@@ -93,8 +96,7 @@ def sha256_path(path: Path) -> tuple[str, int, str]:
     if path.is_symlink():
         raise ProvenanceError(f"Symlinked provenance inputs and outputs are unsupported: {path}")
     if path.is_file():
-        with path.open("rb") as handle:
-            digest, size = sha256_stream(handle)
+        digest, size = cached_sha256_file(path)
         return digest, size, "file"
     if not path.is_dir():
         raise FileNotFoundError(path)
@@ -405,43 +407,67 @@ def raw_or_zip_directory_digest(path: Path) -> tuple[str, int, int]:
     if archive_path.exists():
         if archive_path.is_symlink() or not archive_path.is_file():
             raise ProvenanceError(f"Managed logical directory archive is not a regular file: {archive_path}")
-        digest = hashlib.sha256()
-        total_size = 0
-        member_count = 0
-        try:
-            with zipfile.ZipFile(archive_path, "r") as archive:
-                infos = [info for info in archive.infolist() if not info.is_dir()]
-                names = [info.filename for info in infos]
-                if len(names) != len(set(names)):
-                    raise ProvenanceError(f"Logical directory ZIP contains duplicate members: {archive_path}")
-                prefix = PurePosixPath(path.name)
-                members: list[tuple[PurePosixPath, zipfile.ZipInfo]] = []
-                for info in infos:
-                    member = PurePosixPath(info.filename)
-                    if member.is_absolute() or ".." in member.parts:
-                        raise ProvenanceError(f"Unsafe logical directory ZIP member: {info.filename!r}")
-                    try:
-                        relative = member.relative_to(prefix)
-                    except ValueError as exc:
-                        raise ProvenanceError(
-                            f"Logical directory ZIP member is outside {path.name}/: {info.filename!r}"
-                        ) from exc
-                    if not relative.parts:
-                        continue
-                    members.append((relative, info))
-                for relative, info in sorted(members, key=lambda item: item[0].as_posix()):
-                    relative_bytes = relative.as_posix().encode("utf-8")
-                    with archive.open(info, "r") as handle:
-                        member_digest, member_size = sha256_stream(handle)
-                    digest.update(len(relative_bytes).to_bytes(8, "big"))
-                    digest.update(relative_bytes)
-                    digest.update(bytes.fromhex(member_digest))
-                    digest.update(member_size.to_bytes(8, "big"))
-                    total_size += member_size
-                    member_count += 1
-        except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
-            raise ProvenanceError(f"Failed to read logical directory ZIP {archive_path}: {exc}") from exc
-        archive_result = (digest.hexdigest(), total_size, member_count)
+        current_cache = digest_cache()
+        cached_archive = (
+            current_cache.get("logical_zip_directory", archive_path)
+            if current_cache is not None
+            else None
+        )
+        if cached_archive is not None and cached_archive[2] is not None:
+            archive_result = (cached_archive[0], cached_archive[1], cached_archive[2])
+        else:
+            archive_signature = None
+            if current_cache is not None:
+                try:
+                    archive_signature = current_cache.signature(archive_path)
+                except OSError:
+                    pass
+            digest = hashlib.sha256()
+            total_size = 0
+            member_count = 0
+            try:
+                with zipfile.ZipFile(archive_path, "r") as archive:
+                    infos = [info for info in archive.infolist() if not info.is_dir()]
+                    names = [info.filename for info in infos]
+                    if len(names) != len(set(names)):
+                        raise ProvenanceError(f"Logical directory ZIP contains duplicate members: {archive_path}")
+                    prefix = PurePosixPath(path.name)
+                    members: list[tuple[PurePosixPath, zipfile.ZipInfo]] = []
+                    for info in infos:
+                        member = PurePosixPath(info.filename)
+                        if member.is_absolute() or ".." in member.parts:
+                            raise ProvenanceError(f"Unsafe logical directory ZIP member: {info.filename!r}")
+                        try:
+                            relative = member.relative_to(prefix)
+                        except ValueError as exc:
+                            raise ProvenanceError(
+                                f"Logical directory ZIP member is outside {path.name}/: {info.filename!r}"
+                            ) from exc
+                        if not relative.parts:
+                            continue
+                        members.append((relative, info))
+                    for relative, info in sorted(members, key=lambda item: item[0].as_posix()):
+                        relative_bytes = relative.as_posix().encode("utf-8")
+                        with archive.open(info, "r") as handle:
+                            member_digest, member_size = sha256_stream(handle)
+                        digest.update(len(relative_bytes).to_bytes(8, "big"))
+                        digest.update(relative_bytes)
+                        digest.update(bytes.fromhex(member_digest))
+                        digest.update(member_size.to_bytes(8, "big"))
+                        total_size += member_size
+                        member_count += 1
+            except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+                raise ProvenanceError(f"Failed to read logical directory ZIP {archive_path}: {exc}") from exc
+            archive_result = (digest.hexdigest(), total_size, member_count)
+            if current_cache is not None and archive_signature is not None:
+                current_cache.put(
+                    "logical_zip_directory",
+                    archive_path,
+                    archive_result[0],
+                    archive_result[1],
+                    archive_result[2],
+                    expected_signature=archive_signature,
+                )
     if raw_result is None and archive_result is None:
         raise FileNotFoundError(path)
     if raw_result is not None and archive_result is not None and raw_result != archive_result:
@@ -1180,9 +1206,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def dispatch(argv: list[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    workspace_root = getattr(args, "workspace_root", None)
+    if workspace_root is not None:
+        cache_path = Path(workspace_root).absolute() / ".gg_cache" / "content_digests.sqlite3"
+        os.environ["GG_CONTENT_DIGEST_CACHE"] = str(cache_path)
+        configure_digest_cache(cache_path)
     try:
         if args.command == "needs-run":
             return needs_run(args)
@@ -1195,6 +1226,41 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Artifact provenance error: {exc}", file=sys.stderr)
         return ERROR
     return ERROR
+
+
+def serve() -> int:
+    """Serve NUL-delimited argv requests for one workflow shell process."""
+
+    pending = bytearray()
+    arguments: list[str] = []
+    while chunk := sys.stdin.buffer.read1(65536):
+        pending.extend(chunk)
+        while True:
+            try:
+                end = pending.index(0)
+            except ValueError:
+                break
+            token = bytes(pending[:end]).decode("utf-8")
+            del pending[: end + 1]
+            if token:
+                arguments.append(token)
+                continue
+            if not arguments:
+                continue
+            # Stdout is reserved for the one-line status protocol. Normal
+            # provenance diagnostics remain visible through stderr.
+            with contextlib.redirect_stdout(sys.stderr):
+                status = dispatch(arguments)
+            print(status, flush=True)
+            arguments = []
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    resolved_argv = list(sys.argv[1:] if argv is None else argv)
+    if resolved_argv == ["serve"]:
+        return serve()
+    return dispatch(resolved_argv)
 
 
 if __name__ == "__main__":

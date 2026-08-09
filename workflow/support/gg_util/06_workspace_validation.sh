@@ -73,33 +73,49 @@ exit_if_running_qstat() {
 	fi
 }
 
+GG_BACKGROUND_PIDS=()
+GG_BACKGROUND_FAILURE=0
+gg_background_register() {
+  local pid=$1
+  if [[ ! "${pid}" =~ ^[0-9]+$ ]]; then
+    echo "Invalid background PID: ${pid}" >&2
+    return 2
+  fi
+  GG_BACKGROUND_PIDS+=("${pid}")
+}
+
+gg_background_wait_one() {
+  local pid=""
+  if [[ ${#GG_BACKGROUND_PIDS[@]} -eq 0 ]]; then
+    return 0
+  fi
+  pid=${GG_BACKGROUND_PIDS[0]}
+  GG_BACKGROUND_PIDS=("${GG_BACKGROUND_PIDS[@]:1}")
+  if ! wait "${pid}"; then
+    GG_BACKGROUND_FAILURE=1
+  fi
+  return 0
+}
+
 wait_until_jobn_le() {
-  # https://qiita.com/jokester/items/34ce222e1702c6e120eb
   local max_jobn=$1
-  while [[ "$(jobs | wc -l)" -gt "$max_jobn" ]] ; do
-    sleep 1
+  if [[ ! "${max_jobn}" =~ ^[0-9]+$ || ${max_jobn} -lt 1 ]]; then
+    max_jobn=1
+  fi
+  while [[ ${#GG_BACKGROUND_PIDS[@]} -ge ${max_jobn} ]]; do
+    gg_background_wait_one
   done
 }
 
 wait_for_background_jobs() {
-  # `wait` without pid can miss failures when a non-final background job exits non-zero.
-  local pids=()
-  while IFS= read -r pid; do
-    if [[ -n "${pid}" ]]; then
-      pids+=( "${pid}" )
-    fi
-  done < <(jobs -pr)
-  if [[ ${#pids[@]} -eq 0 ]]; then
-    return 0
-  fi
-
-  local pid
-  local status=0
-  for pid in "${pids[@]}"; do
-    if ! wait "${pid}"; then
-      status=1
-    fi
+  local status=${GG_BACKGROUND_FAILURE:-0}
+  while [[ ${#GG_BACKGROUND_PIDS[@]} -gt 0 ]]; do
+    gg_background_wait_one
   done
+  if [[ ${GG_BACKGROUND_FAILURE:-0} -ne 0 ]]; then
+    status=1
+  fi
+  GG_BACKGROUND_FAILURE=0
   return "${status}"
 }
 
@@ -125,11 +141,12 @@ check_species_cds_dir() {
     local first_header_no_gt
     local spfasta_startswith
     sp_ub=$(gg_species_name_from_path_or_dot "${spfasta}")
-    local seq_names
-    seq_names=$(seqkit seq "${spfasta}" | awk '/^>/ {print}')
-    first_header=${seq_names%%$'\n'*}
+    local seq_names_file
+    seq_names_file=$(gg_mktemp)
+    seqkit seq --name --threads 1 "${spfasta}" > "${seq_names_file}"
+    IFS= read -r first_header < "${seq_names_file}" || first_header=""
     first_header=${first_header%%[[:space:]]*}
-    first_header_no_gt=${first_header#>}
+    first_header_no_gt=${first_header}
     spfasta_startswith=">${first_header_no_gt}"
 
     if [[ "${first_header_no_gt}" != "${sp_ub}" && "${first_header_no_gt}" != "${sp_ub}_"* ]]; then
@@ -138,20 +155,22 @@ check_species_cds_dir() {
 
     local num_all_seq
     local num_uniq_seq
-    num_all_seq=$(printf '%s\n' "${seq_names}" | grep -c '^>')
-    num_uniq_seq=$(printf '%s\n' "${seq_names}" | sort -u | grep -c '^>')
+    num_all_seq=$(wc -l < "${seq_names_file}" | tr -d '[:space:]')
+    num_uniq_seq=$(LC_ALL=C sort -u "${seq_names_file}" | wc -l | tr -d '[:space:]')
     if [[ ${num_all_seq} -ne ${num_uniq_seq} ]]; then
       echo "Sequence names are not unique. # all seqs = ${num_all_seq} and # unique seqs = ${num_uniq_seq}" >> "${error_log}"
     fi
 
     for prohibited_character in "%" "/" "+" ":" ";" "&" "^" "$" "#" "@" "!" "~" "=" "\'" "\"" "\`" "*" "(" ")" "{" "}" "[" "]" "|" "?" " " "\t"; do
-      if [[ "${seq_names}" == *"${prohibited_character}"* ]]; then
+      if grep -F -q -- "${prohibited_character}" "${seq_names_file}"; then
         echo "Sequence names contain '${prohibited_character}': ${spfasta}" >> "${error_log}"
       fi
     done
+    rm -f -- "${seq_names_file}"
   }
 
   export -f check_single_species_cds
+  export -f gg_mktemp gg_tmp_root
   export -f gg_species_name_from_path_or_dot _gg_strip_species_terminal_suffixes _gg_species_prefix_token_count _gg_species_rank_token_key _gg_species_is_rank_or_qualifier_token _gg_species_label_prefix_part
   export error_log
   if command -v parallel >/dev/null 2>&1; then
@@ -199,12 +218,13 @@ check_species_protein_dir() {
     local first_header
     local first_header_no_gt
     local spfasta_startswith
-    local seq_names
+    local seq_names_file
     sp_ub=$(gg_species_name_from_path_or_dot "${spfasta}")
-    seq_names=$(seqkit seq "${spfasta}" | awk '/^>/ {print}')
-    first_header=${seq_names%%$'\n'*}
+    seq_names_file=$(gg_mktemp)
+    seqkit seq --name --threads 1 "${spfasta}" > "${seq_names_file}"
+    IFS= read -r first_header < "${seq_names_file}" || first_header=""
     first_header=${first_header%%[[:space:]]*}
-    first_header_no_gt=${first_header#>}
+    first_header_no_gt=${first_header}
     spfasta_startswith=">${first_header_no_gt}"
 
     if [[ "${first_header_no_gt}" != "${sp_ub}" && "${first_header_no_gt}" != "${sp_ub}_"* ]]; then
@@ -213,20 +233,22 @@ check_species_protein_dir() {
 
     local num_all_seq
     local num_uniq_seq
-    num_all_seq=$(printf '%s\n' "${seq_names}" | grep -c '^>')
-    num_uniq_seq=$(printf '%s\n' "${seq_names}" | sort -u | grep -c '^>')
+    num_all_seq=$(wc -l < "${seq_names_file}" | tr -d '[:space:]')
+    num_uniq_seq=$(LC_ALL=C sort -u "${seq_names_file}" | wc -l | tr -d '[:space:]')
     if [[ ${num_all_seq} -ne ${num_uniq_seq} ]]; then
       echo "Sequence names are not unique. # all seqs = ${num_all_seq} and # unique seqs = ${num_uniq_seq}" >> "${error_log}"
     fi
 
     for prohibited_character in "%" "/" "+" ":" ";" "&" "^" "$" "#" "@" "!" "~" "=" "\'" "\"" "\`" "*" "(" ")" "{" "}" "[" "]" "|" "?" " " "\t"; do
-      if [[ "${seq_names}" == *"${prohibited_character}"* ]]; then
+      if grep -F -q -- "${prohibited_character}" "${seq_names_file}"; then
         echo "Sequence names contain '${prohibited_character}': ${spfasta}" >> "${error_log}"
       fi
     done
+    rm -f -- "${seq_names_file}"
   }
 
   export -f check_single_species_protein
+  export -f gg_mktemp gg_tmp_root
   export -f gg_species_name_from_path_or_dot _gg_strip_species_terminal_suffixes _gg_species_prefix_token_count _gg_species_rank_token_key _gg_species_is_rank_or_qualifier_token _gg_species_label_prefix_part
   export error_log
   if command -v parallel >/dev/null 2>&1; then
@@ -263,6 +285,47 @@ gg_artifact_provenance_script_path() {
   printf '%s\n' "${script_path}"
 }
 
+gg_artifact_server_request() {
+  local script_path=$1
+  shift
+  local status=""
+  if [[ ${BASH_VERSINFO[0]:-0} -lt 4 ]]; then
+    python "${script_path}" "$@"
+    return $?
+  fi
+  if [[ -n "${GG_ARTIFACT_SERVER_OWNER_BASHPID:-}" &&
+    "${BASHPID:-$$}" != "${GG_ARTIFACT_SERVER_OWNER_BASHPID}" ]]
+  then
+    python "${script_path}" "$@"
+    return $?
+  fi
+  if [[ -z "${GG_ARTIFACT_SERVER_PROCESS_PID:-}" ]] ||
+    ! kill -0 "${GG_ARTIFACT_SERVER_PROCESS_PID}" 2> /dev/null
+  then
+    GG_ARTIFACT_SERVER_OWNER_BASHPID=${BASHPID:-$$}
+    eval 'coproc GG_ARTIFACT_SERVER_PROCESS { python "${script_path}" serve; }'
+    disown "${GG_ARTIFACT_SERVER_PROCESS_PID}" 2> /dev/null || true
+    # Allocate descriptors dynamically so workflow-specific flock descriptors
+    # (for example HGT's 196-198) cannot overwrite the server pipes. Keep the
+    # Bash 4 syntax inside eval so this utility still parses under macOS Bash 3.
+    eval 'exec {GG_ARTIFACT_SERVER_INPUT_FD}>&"${GG_ARTIFACT_SERVER_PROCESS[1]}"'
+    eval 'exec {GG_ARTIFACT_SERVER_OUTPUT_FD}<&"${GG_ARTIFACT_SERVER_PROCESS[0]}"'
+  fi
+  if ! printf '%s\0' "$@" "" >&"${GG_ARTIFACT_SERVER_INPUT_FD}"; then
+    echo "Failed to send a request to the artifact provenance server." >&2
+    return 2
+  fi
+  if ! IFS= read -r status <&"${GG_ARTIFACT_SERVER_OUTPUT_FD}"; then
+    echo "Artifact provenance server ended without a response." >&2
+    return 2
+  fi
+  if [[ ! "${status}" =~ ^[0-9]+$ ]]; then
+    echo "Invalid artifact provenance server response: ${status}" >&2
+    return 2
+  fi
+  return "${status}"
+}
+
 gg_artifact_needs_run() {
   local script_path
   case "${artifact_stale_policy:-stop}" in
@@ -274,7 +337,7 @@ gg_artifact_needs_run() {
       ;;
   esac
   script_path=$(gg_artifact_provenance_script_path) || return 2
-  python "${script_path}" needs-run \
+  gg_artifact_server_request "${script_path}" needs-run \
     --stale-policy "${artifact_stale_policy:-stop}" \
     "$@"
 }
@@ -286,35 +349,43 @@ gg_artifact_contract_init() {
   local manifest=$4
   local logical_root=${5:-"${gg_workspace_output_dir}/.gg_global_artifacts"}
   local workspace_root=${6:-"${gg_workspace_dir}"}
-  # The caller supplies the name of an array that this helper initializes.
-  # shellcheck disable=SC2178
-  local -n destination_ref="${destination_variable}"
-  destination_ref=(
-    --manifest "${manifest}"
-    --step "${step}"
-    --family-id "${family_id}"
-    --logical-root "${logical_root}"
-    --workspace-root "${workspace_root}"
-  )
+  local quoted_arguments=""
+  local value=""
+  if [[ ! "${destination_variable}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "Invalid artifact contract array name: ${destination_variable}" >&2
+    return 2
+  fi
+  for value in --manifest "${manifest}" --step "${step}" --family-id "${family_id}" \
+    --logical-root "${logical_root}" --workspace-root "${workspace_root}"
+  do
+    printf -v value '%q' "${value}"
+    quoted_arguments+=" ${value}"
+  done
+  eval "${destination_variable}=(${quoted_arguments})"
 }
 
 gg_artifact_add_input_if_present() {
   local destination_variable=$1
   local label=$2
   local path=$3
-  # The caller supplies the name of an array that this helper extends.
-  # shellcheck disable=SC2178
-  local -n destination_ref="${destination_variable}"
+  local -a destination_values=()
+  local quoted_input=""
+  if [[ ! "${destination_variable}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "Invalid artifact contract array name: ${destination_variable}" >&2
+    return 2
+  fi
+  eval "destination_values=( \"\${${destination_variable}[@]}\" )"
   if [[ -n "${path}" && -e "${path}" ]]; then
     local previous=""
     local argument=""
-    for argument in "${destination_ref[@]}"; do
+    for argument in "${destination_values[@]}"; do
       if [[ "${previous}" == "--input" && "${argument%%=*}" == "${label}" ]]; then
         return 0
       fi
       previous=${argument}
     done
-    destination_ref+=(--input "${label}=${path}")
+    printf -v quoted_input '%q' "${label}=${path}"
+    eval "${destination_variable}+=(--input ${quoted_input})"
   fi
 }
 
@@ -375,7 +446,7 @@ gg_artifact_prepare_stage() {
 gg_artifact_record() {
   local script_path
   script_path=$(gg_artifact_provenance_script_path) || return 2
-  python "${script_path}" record "$@"
+  gg_artifact_server_request "${script_path}" record "$@"
 }
 
 gg_artifact_audit() {
@@ -389,7 +460,7 @@ gg_artifact_audit() {
       ;;
   esac
   script_path=$(gg_artifact_provenance_script_path) || return 2
-  python "${script_path}" audit \
+  gg_artifact_server_request "${script_path}" audit \
     --stale-policy "${artifact_stale_policy:-stop}" \
     "$@"
 }

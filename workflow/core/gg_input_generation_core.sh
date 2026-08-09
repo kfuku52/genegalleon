@@ -22,6 +22,8 @@ source "${gg_support_dir}/gg_busco.sh"
 config_file="${config_file:-gg_input_generation_entrypoint.sh}"
 input_generation_mode="${input_generation_mode:-single}"
 run_species_busco="${run_species_busco:-1}"
+species_busco_parallel_jobs="${species_busco_parallel_jobs:-auto}"
+species_busco_memory_gb_per_job="${species_busco_memory_gb_per_job:-4}"
 run_cds_fx2tab="${run_cds_fx2tab:-1}"
 run_multispecies_summary="${run_multispecies_summary:-1}"
 run_generate_species_trait="${run_generate_species_trait:-0}"
@@ -283,7 +285,11 @@ PY
 
 if [[ -z "${download_manifest}" ]]; then
   default_download_manifests=()
-  mapfile -t default_download_manifests < <(discover_input_generation_manifests)
+  while IFS= read -r discovered_manifest; do
+    [[ -n "${discovered_manifest}" ]] || continue
+    default_download_manifests+=( "${discovered_manifest}" )
+  done < <(discover_input_generation_manifests)
+  unset discovered_manifest
   if [[ ${#default_download_manifests[@]} -gt 1 ]]; then
     echo "Multiple input-generation download manifests were discovered. Set download_manifest explicitly:"
     printf '  %s\n' "${default_download_manifests[@]}"
@@ -1245,6 +1251,7 @@ run_cds_fx2tab_stage_one_worker() {
 run_species_busco_for_one_file() {
   local seq_full=$1
   local species_name=$2
+  local busco_threads=${3:-${GG_TASK_CPUS}}
   local seq_file=""
   local file_sp_busco_full=""
   local file_sp_busco_short=""
@@ -1260,12 +1267,22 @@ run_species_busco_for_one_file() {
   file_sp_busco_full="${species_busco_full_dir}/${species_name}.busco.full.tsv"
   file_sp_busco_short="${species_busco_short_dir}/${species_name}.busco.short.txt"
 
+  if [[ -z "${busco_lineage_resolved}" ]]; then
+    if [[ "${input_generation_mode}" == "array_worker" ]]; then
+      ensure_shared_busco_lineage_ready "${task_plan_output}" || return 1
+    else
+      echo "BUSCO lineage must be resolved before running the serial species stage." >&2
+      return 1
+    fi
+  fi
+
   gg_artifact_contract_init busco_provenance_args "input_generation_species_busco" "${species_name}" "${input_generation_provenance_dir}/busco.${species_name}.json"
   busco_provenance_args+=(
     --input "species_cds=${seq_full}"
     --output "busco_full=${file_sp_busco_full}"
     --output "busco_short=${file_sp_busco_short}"
     --parameter "busco_lineage_request=${busco_lineage}"
+    --parameter "busco_lineage_resolved=${busco_lineage_resolved}"
     --parameter "busco_mode=transcriptome"
     --parameter "evalue=1e-03"
     --parameter "limit=20"
@@ -1279,21 +1296,12 @@ run_species_busco_for_one_file() {
     echo "Skipped BUSCO: ${seq_file}"
     return 0
   fi
-  if [[ -z "${busco_lineage_resolved}" ]]; then
-    if [[ "${input_generation_mode}" == "array_worker" ]]; then
-      ensure_shared_busco_lineage_ready "${task_plan_output}" || return 1
-    else
-      echo "BUSCO lineage must be resolved before running the serial species stage." >&2
-      return 1
-    fi
-  fi
-
   remove_busco_outputs_for_species "${species_busco_full_dir}" "${species_name}" "*busco.full.tsv"
   remove_busco_outputs_for_species "${species_busco_short_dir}" "${species_name}" "*busco.short.txt"
   busco_work_root=$(mktemp -d "${input_generation_tmp_root}/busco.${species_name}.XXXXXX")
   busco_input_fasta="${busco_work_root}/input.fasta"
   busco_output_dir="${busco_work_root}/busco_tmp"
-  seqkit seq --threads "${GG_TASK_CPUS}" "${seq_full}" --out-file "${busco_input_fasta}"
+  seqkit seq --threads "${busco_threads}" "${seq_full}" --out-file "${busco_input_fasta}"
 
   if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
@@ -1308,7 +1316,7 @@ run_species_busco_for_one_file() {
       --in "input.fasta" \
       --mode "transcriptome" \
       --out "busco_tmp" \
-      --cpu "${GG_TASK_CPUS}" \
+      --cpu "${busco_threads}" \
       --force \
       --evalue 1e-03 \
       --limit 20 \
@@ -1401,13 +1409,48 @@ run_species_busco_stage_all() {
     fi
     echo "Resolved BUSCO lineage for species set (${#input_species_set[@]} species): ${busco_lineage_resolved}"
   fi
-
+  local busco_jobs=1
+  local busco_memory_job_cap=1
+  if [[ "${species_busco_parallel_jobs}" == "auto" ]]; then
+    busco_jobs=${GG_TASK_CPUS}
+    [[ ${busco_jobs} -gt 4 ]] && busco_jobs=4
+    [[ ${busco_jobs} -gt ${#source_species_input_fasta[@]} ]] && busco_jobs=${#source_species_input_fasta[@]}
+  elif [[ "${species_busco_parallel_jobs}" =~ ^[0-9]+$ && ${species_busco_parallel_jobs} -ge 1 ]]; then
+    busco_jobs=${species_busco_parallel_jobs}
+    [[ ${busco_jobs} -gt ${GG_TASK_CPUS} ]] && busco_jobs=${GG_TASK_CPUS}
+    [[ ${busco_jobs} -gt ${#source_species_input_fasta[@]} ]] && busco_jobs=${#source_species_input_fasta[@]}
+  else
+    echo "Invalid species_busco_parallel_jobs=${species_busco_parallel_jobs}; expected auto or a positive integer." >&2
+    stage_species_busco_status="failed"
+    return 2
+  fi
+  if ! busco_memory_job_cap=$(gg_memory_parallel_job_cap "${GG_MEM_TOOL_GB}" "${species_busco_memory_gb_per_job}"); then
+    stage_species_busco_status="failed"
+    return 2
+  fi
+  if [[ ${busco_jobs} -gt ${busco_memory_job_cap} ]]; then
+    echo "Capping BUSCO species parallelism at ${busco_memory_job_cap} job(s) for ${GG_MEM_TOOL_GB}G tool memory (${species_busco_memory_gb_per_job}G/job)."
+    busco_jobs=${busco_memory_job_cap}
+  fi
+  [[ ${busco_jobs} -lt 1 ]] && busco_jobs=1
+  local busco_threads_per_job=$((GG_TASK_CPUS / busco_jobs))
+  [[ ${busco_threads_per_job} -lt 1 ]] && busco_threads_per_job=1
+  echo "BUSCO species parallelism: jobs=${busco_jobs}, threads_per_job=${busco_threads_per_job}"
   for seq_full in "${source_species_input_fasta[@]}"; do
     seq_file=$(basename "${seq_full}")
     sp_ub=$(gg_species_name_from_path_or_dot "${seq_file}")
     gg_step_start "${task}: ${seq_file}"
-    run_species_busco_for_one_file "${seq_full}" "${sp_ub}"
+    if [[ ${busco_jobs} -eq 1 ]]; then
+      run_species_busco_for_one_file "${seq_full}" "${sp_ub}" "${busco_threads_per_job}"
+    else
+      wait_until_jobn_le "${busco_jobs}"
+      run_species_busco_for_one_file "${seq_full}" "${sp_ub}" "${busco_threads_per_job}" &
+      gg_background_register "$!"
+    fi
   done
+  if [[ ${busco_jobs} -gt 1 ]]; then
+    wait_for_background_jobs
+  fi
   num_species_busco_full=$(count_nonhidden_matching_files "${species_busco_full_dir}" "*busco.full.tsv")
   num_species_busco_short=$(count_nonhidden_matching_files "${species_busco_short_dir}" "*busco.short.txt")
   if [[ ${run_species_busco} -eq 1 ]]; then

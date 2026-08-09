@@ -390,6 +390,7 @@ with outfile.open("w", encoding="utf-8", newline="") as handle:
     handle.write("\\t".join(cols) + "\\n")
     genes = [f"{{sp}}_gene1" for sp in species]
     handle.write("\\t".join(["N0.HOG0000001", "OG0000001", "n0", *genes]) + "\\n")
+orthogroups_dir.mkdir(parents=True, exist_ok=True)
 with (orthogroups_dir / "Orthogroups.tsv").open("w", encoding="utf-8", newline="") as handle:
     handle.write("\\t".join(["Orthogroup", *species]) + "\\n")
     handle.write("\\t".join(["OG0000001", *genes]) + "\\n")
@@ -728,7 +729,7 @@ def _run_core(
             "run_species_busco": "0",
             "run_build_species_busco_summary": "0",
             "run_species_omark": "0",
-            "run_build_species_omark_summary": "1",
+            "run_build_species_omark_summary": "0",
             "run_extract_species_tree_fasta": "0",
             "run_individual_mafft": "0",
             "run_individual_trimal": "0",

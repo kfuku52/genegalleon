@@ -23,6 +23,8 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
+species_busco_parallel_jobs="${species_busco_parallel_jobs:-auto}"
+species_busco_memory_gb_per_job="${species_busco_memory_gb_per_job:-4}"
 species_tree_rooting="${species_tree_rooting:-taxonomy}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"
@@ -44,6 +46,7 @@ orthogroup_decay_seed="${orthogroup_decay_seed:-1}"
 orthofinder_core_filters="${orthofinder_core_filters:-busco_complete_pct:ge:80,num_seq:le:100000}"
 orthofinder_core_rank="${orthofinder_core_rank:-num_seq:asc,busco_complete_pct:desc}"
 orthofinder_core_method="${orthofinder_core_method:-max-pd}"
+orthofinder_algorithm_threads="${orthofinder_algorithm_threads:-auto}"
 run_busco_dupaware_extract_fasta="${run_busco_dupaware_extract_fasta:-0}"
 run_busco_dupaware_mafft="${run_busco_dupaware_mafft:-0}"
 run_busco_dupaware_trimal="${run_busco_dupaware_trimal:-0}"
@@ -507,6 +510,46 @@ sync_genome_busco_summary_table_from_shared() {
   gg_artifact_record "${sync_provenance_args[@]}"
 }
 
+run_one_genome_species_busco() {
+  local seq_full=$1
+  local sp_ub=$2
+  local file_sp_busco_full=$3
+  local file_sp_busco_short=$4
+  local busco_threads=$5
+  local busco_tmp_root=$6
+  local busco_mode=$7
+  local busco_lineage_dir=$8
+  local busco_download_dir=$9
+  local busco_lineage_name=${10}
+  local busco_work_root=""
+  busco_work_root=$(mktemp -d "${busco_tmp_root}/busco.${sp_ub}.XXXXXX")
+  seqkit seq --threads "${busco_threads}" "${seq_full}" --out-file "${busco_work_root}/input.fasta"
+  if ! (
+    cd "${busco_work_root}"
+    gg_run_busco_with_metaeuk_modified_fas_compat \
+      --in "input.fasta" \
+      --mode "${busco_mode}" \
+      --out "busco_tmp" \
+      --cpu "${busco_threads}" \
+      --force \
+      --evalue 1e-03 \
+      --limit 20 \
+      --lineage_dataset "${busco_lineage_dir}" \
+      --download_path "${busco_download_dir}" \
+      --offline
+  ); then
+    rm -rf -- "${busco_work_root}"
+    return 1
+  fi
+  if copy_busco_tables "${busco_work_root}/busco_tmp" "${busco_lineage_name}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
+    rm -rf -- "${busco_work_root}"
+  else
+    echo "Failed to locate normalized BUSCO outputs for ${sp_ub}." >&2
+    rm -rf -- "${busco_work_root}"
+    return 1
+  fi
+}
+
 run_shared_species_busco_stage() {
   local task="BUSCO analysis of species-wise input files"
   local source_species_input_dir=""
@@ -622,55 +665,87 @@ run_shared_species_busco_stage() {
 
   prepare_species_tree_input_dir
   mapfile -t species_input_fasta < <(gg_find_fasta_files "${species_tree_input_dir}" 1)
+  local busco_jobs=1
+  local busco_memory_job_cap=1
+  if [[ "${species_busco_parallel_jobs}" == "auto" ]]; then
+    busco_jobs=${GG_TASK_CPUS}
+    [[ ${busco_jobs} -gt 4 ]] && busco_jobs=4
+    [[ ${busco_jobs} -gt ${#species_input_fasta[@]} ]] && busco_jobs=${#species_input_fasta[@]}
+  elif [[ "${species_busco_parallel_jobs}" =~ ^[0-9]+$ && ${species_busco_parallel_jobs} -ge 1 ]]; then
+    busco_jobs=${species_busco_parallel_jobs}
+    [[ ${busco_jobs} -gt ${GG_TASK_CPUS} ]] && busco_jobs=${GG_TASK_CPUS}
+    [[ ${busco_jobs} -gt ${#species_input_fasta[@]} ]] && busco_jobs=${#species_input_fasta[@]}
+  else
+    echo "Invalid species_busco_parallel_jobs=${species_busco_parallel_jobs}; expected auto or a positive integer." >&2
+    return 2
+  fi
+  busco_memory_job_cap=$(gg_memory_parallel_job_cap "${GG_MEM_TOOL_GB}" "${species_busco_memory_gb_per_job}") || return 2
+  if [[ ${busco_jobs} -gt ${busco_memory_job_cap} ]]; then
+    echo "Capping BUSCO species parallelism at ${busco_memory_job_cap} job(s) for ${GG_MEM_TOOL_GB}G tool memory (${species_busco_memory_gb_per_job}G/job)."
+    busco_jobs=${busco_memory_job_cap}
+  fi
+  [[ ${busco_jobs} -lt 1 ]] && busco_jobs=1
+  local busco_threads_per_job=$((GG_TASK_CPUS / busco_jobs))
+  [[ ${busco_threads_per_job} -lt 1 ]] && busco_threads_per_job=1
+  echo "BUSCO species parallelism: jobs=${busco_jobs}, threads_per_job=${busco_threads_per_job}"
+
   for seq_full in "${species_input_fasta[@]}"; do
     seq_file=$(basename "${seq_full}")
     sp_ub=$(gg_species_name_from_path_or_dot "${seq_file}")
     file_sp_busco_full="${dir_species_busco_full}/${sp_ub}.busco.full.tsv"
     file_sp_busco_short="${dir_species_busco_short}/${sp_ub}.busco.short.txt"
-    if busco_output_exists_for_species "${dir_species_busco_full}" "${sp_ub}" "*busco.full.tsv"; then
-      full_found=1
-    else
-      full_found=0
+    if busco_output_exists_for_species "${dir_species_busco_full}" "${sp_ub}" "*busco.full.tsv" &&
+      busco_output_exists_for_species "${dir_species_busco_short}" "${sp_ub}" "*busco.short.txt"
+    then
+      echo "Skipped BUSCO: ${seq_file}"
+      continue
     fi
-    if busco_output_exists_for_species "${dir_species_busco_short}" "${sp_ub}" "*busco.short.txt"; then
-      short_found=1
-    else
-      short_found=0
-    fi
-    if [[ ${full_found} -ne 1 || ${short_found} -ne 1 ]]; then
-      gg_step_start "${task}: ${seq_file}"
-      remove_busco_outputs_for_species "${dir_species_busco_full}" "${sp_ub}" "*busco.full.tsv"
-      remove_busco_outputs_for_species "${dir_species_busco_short}" "${sp_ub}" "*busco.short.txt"
-      seqkit seq --threads "${GG_TASK_CPUS}" "${species_tree_input_dir}/${seq_file}" --out-file "tmp.busco_input.fasta"
+    remove_busco_outputs_for_species "${dir_species_busco_full}" "${sp_ub}" "*busco.full.tsv"
+    remove_busco_outputs_for_species "${dir_species_busco_short}" "${sp_ub}" "*busco.short.txt"
 
+    if [[ "${input_sequence_mode}" == "cds" ]]; then
+      local original_cds=""
+      local candidate=""
+      for candidate in "${source_species_input_fasta[@]}"; do
+        if [[ "$(gg_species_name_from_path_or_dot "$(basename "${candidate}")")" == "${sp_ub}" ]]; then
+          original_cds=${candidate}
+          break
+        fi
+      done
+      if [[ -n "${original_cds}" ]] && python "${gg_support_dir}/reuse_busco_outputs.py" \
+        --manifest "${gg_workspace_output_dir}/input_generation/artifact_provenance/busco.${sp_ub}.json" \
+        --species "${sp_ub}" \
+        --input "${original_cds}" \
+        --lineage "${busco_lineage_resolved}" \
+        --full-source "${gg_workspace_output_dir}/input_generation/species_cds_busco_full/${sp_ub}.busco.full.tsv" \
+        --short-source "${gg_workspace_output_dir}/input_generation/species_cds_busco_short/${sp_ub}.busco.short.txt" \
+        --full-destination "${file_sp_busco_full}" \
+        --short-destination "${file_sp_busco_short}" \
+        --digest-cache "${gg_workspace_dir}/.gg_cache/content_digests.sqlite3" \
+        2> /dev/null
+      then
+        continue
+      fi
+    fi
+    if [[ -z "${dir_busco_db}" ]]; then
       if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
         echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
         exit 1
       fi
       dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
-
-      gg_run_busco_with_metaeuk_modified_fas_compat \
-        --in "tmp.busco_input.fasta" \
-        --mode "${species_tree_busco_mode}" \
-        --out "busco_tmp" \
-        --cpu "${GG_TASK_CPUS}" \
-        --force \
-        --evalue 1e-03 \
-        --limit 20 \
-        --lineage_dataset "${dir_busco_lineage}" \
-        --download_path "${dir_busco_db}" \
-        --offline
-
-      if copy_busco_tables "./busco_tmp" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
-        rm -rf -- "./busco_tmp"
-      else
-        echo "Failed to locate normalized BUSCO outputs for ${sp_ub}. Exiting."
-        exit 1
-      fi
+    fi
+    gg_step_start "${task}: ${seq_file}"
+    if [[ ${busco_jobs} -eq 1 ]]; then
+      run_one_genome_species_busco "${seq_full}" "${sp_ub}" "${file_sp_busco_full}" "${file_sp_busco_short}" "${busco_threads_per_job}" "${dir_tmp}" "${species_tree_busco_mode}" "${dir_busco_lineage}" "${dir_busco_db}" "${busco_lineage_resolved}"
     else
-      echo "Skipped BUSCO: ${seq_file}"
+      wait_until_jobn_le "${busco_jobs}"
+      run_one_genome_species_busco "${seq_full}" "${sp_ub}" "${file_sp_busco_full}" "${file_sp_busco_short}" "${busco_threads_per_job}" "${dir_tmp}" "${species_tree_busco_mode}" "${dir_busco_lineage}" "${dir_busco_db}" "${busco_lineage_resolved}" &
+      gg_background_register "$!"
     fi
   done
+  if [[ ${busco_jobs} -gt 1 ]]; then
+    wait_for_background_jobs
+  fi
   gg_artifact_record "${busco_provenance_args[@]}"
   echo "$(date): End: ${task}"
 }
@@ -893,9 +968,10 @@ run_shared_omark_summary_stage() {
   ensure_dir "${dir_species_omark}"
   gg_artifact_contract_init omark_summary_provenance_args "genome_evolution_omark_summary" "all_species" "${genome_evolution_provenance_dir}/omark.summary.json"
   omark_summary_provenance_args+=(
-    --input "omark_directory=${dir_species_omark}"
     --output "summary=${file_species_omark_summary_table}"
+    --parameter "absence_when_no_omark_outputs=valid"
   )
+  gg_artifact_add_input_if_present omark_summary_provenance_args "omark_directory" "${dir_species_omark}"
   gg_artifact_prepare_stage omark_summary_needs_update run_build_species_omark_summary "${omark_summary_provenance_args[@]}" || return $?
   if [[ ${omark_summary_needs_update} -ne 1 ]]; then
     gg_step_skip "${task}"
@@ -2485,6 +2561,9 @@ fi
 species_tree_recover_mixed_managed_directories
 refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}" || exit $?
 species_tree_materialize_managed_directories_for_files_mode
+if [[ "${species_tree_output_storage}" == "zip" ]]; then
+  species_tree_archive_managed_directories
+fi
 refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
 refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}" || exit $?
 memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
@@ -2603,84 +2682,51 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
   prepare_species_tree_input_dir
   gg_step_start "${task}"
 
-  generate_dupaware_busco_fasta() {
+  gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
+  busco_batch_raw_dir="${dir_tmp}/species_tree_busco_batch_raw"
+  busco_batch_report="${dir_tmp}/species_tree_busco_batch.tsv"
+  rm -rf -- "${busco_batch_raw_dir}"
+  ensure_dir "${busco_batch_raw_dir}"
+  busco_batch_args=(
+    --summary "${file_species_busco_summary_table}"
+    --fasta-list "species_tree_input_fasta_list.txt"
+    --output-dir "${busco_batch_raw_dir}"
+    --suffix ".raw.fa"
+    --report "${busco_batch_report}"
+    --mode single-copy
+  )
+  if [[ ${strictly_single_copy_only} -eq 1 ]]; then
+    busco_batch_args+=(--strict --require-complete)
+  fi
+  python "${gg_support_dir}/batch_extract_busco_fasta.py" "${busco_batch_args[@]}"
+
+  finalize_species_tree_busco_fasta() {
+    local raw_fasta=$1
     local busco_id
-    busco_id=$(awk -v row="$1" 'NR==row {print $1; exit}' "${file_species_busco_summary_table}")
-    local remove_nonsingle=$2
-    local outfile1="${dir_single_copy_fasta}/${busco_id}${single_copy_fasta_suffix}"
-    local genes=()
-    IFS=$'\t' read -r -a genes <<< "$(sed -n "${1}P" "${file_species_busco_summary_table}" | cut -f 4-)"
-    echo "busco_id: ${busco_id}"
-    if [[ ${strictly_single_copy_only} -eq 1 ]]; then
-      local gene_token
-      for gene_token in "${genes[@]}"; do
-        if [[ "${gene_token}" == "-" ]]; then
-          echo "Skipping. ${busco_id} has missing gene(s)."
-          return 0
-        fi
-        if [[ "${gene_token}" == *","* ]]; then
-          echo "Skipping. ${busco_id} has duplicated gene(s)."
-          return 0
-        fi
-      done
-    fi
-    local genes1=()
-    read -r -a genes1 <<< "$(printf "%s " "${genes[@]}" | sed -e "s/[[:space:]]-[[:space:]]/ /g" -e "s/[^[[:space:]]]*,[^[[:space:]]]*//g" -e "s/[[:space:]]+/ /g")"
-    local num_gene=${#genes1[@]}
-    if [[ ${num_gene} -eq 0 ]]; then
-      echo "Skipping. ${busco_id} has no genes in the selected species."
-      return 0
-    fi
-    if [[ ! -s "${outfile1}" ]]; then
-      if [[ "${input_sequence_mode}" == "protein" ]]; then
-        gg_seqkit_grep_by_patterns_from_infile_list 1 "species_tree_input_fasta_list.txt" "${genes1[@]}" |
-          seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 |
-          gg_fasta_relabel_headers_to_species |
-          seqkit seq --threads 1 --out-file "${outfile1}"
-      else
-        local pattern_args=()
-        for gene in "${genes1[@]}"; do
-          pattern_args+=(--pattern "${gene}")
-        done
-        seqkit grep --threads 1 "${pattern_args[@]}" --infile-list "species_tree_input_fasta_list.txt" |
-          seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads 1 |
-          seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 |
-          cdskit pad |
-          gg_fasta_relabel_headers_to_species |
-          seqkit seq --threads 1 --out-file "${outfile1}"
-      fi
-      if [[ ! -s "${outfile1}" ]]; then
-        echo "File is empty. Removing: ${outfile1}"
-        rm -f -- "${outfile1}"
-      fi
-    fi
-    local fasta_genes=()
-    if [[ -s "${outfile1}" ]]; then
-      mapfile -t fasta_genes < <(seqkit seq --name --threads 1 "${outfile1}")
-    fi
-    local num_seq=${#fasta_genes[@]}
-    # this block needs to be disabeld for ${strictly_single_copy_only} -eq 1, because orthogroups won't be complete
-    if [[ ${num_gene} -ne ${num_seq} && ${strictly_single_copy_only} -eq 1 ]]; then
-      echo "${busco_id}: Error. Number of genes and sequences did not match."
-      echo "Genes in the orthogroup or BLAST hit:"
-      printf '%s\n' "${genes1[@]}"
-      echo ""
-      echo "Genes in the generated FASTA:"
-      printf '%s\n' "${fasta_genes[@]}"
-      echo ""
-      echo "Check duplicated sequence names in the species input FASTA files. Exiting."
-      rm -f -- "${outfile1}"
-      exit 1
+    local outfile1
+    busco_id=$(basename "${raw_fasta}" .raw.fa)
+    outfile1="${dir_single_copy_fasta}/${busco_id}${single_copy_fasta_suffix}"
+    if [[ "${input_sequence_mode}" == "protein" ]]; then
+      seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 "${raw_fasta}" |
+        gg_fasta_relabel_headers_to_species |
+        seqkit seq --threads 1 --out-file "${outfile1}"
+    else
+      seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads 1 "${raw_fasta}" |
+        seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 |
+        cdskit pad |
+        gg_fasta_relabel_headers_to_species |
+        seqkit seq --threads 1 --out-file "${outfile1}"
     fi
   }
-
-  gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
-  num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
-  for ((i = 2; i <= num_busco_ids + 1; i++)); do # starting from 2 because the line 1 is header.
-    wait_until_jobn_le ${GG_TASK_CPUS}
-    generate_dupaware_busco_fasta ${i} ${strictly_single_copy_only} &
+  mapfile -t busco_batch_raw_files < <(find "${busco_batch_raw_dir}" -maxdepth 1 -type f -name '*.raw.fa' | sort)
+  for busco_batch_raw_file in "${busco_batch_raw_files[@]}"; do
+    wait_until_jobn_le "${GG_TASK_CPUS}"
+    finalize_species_tree_busco_fasta "${busco_batch_raw_file}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
+  rm -rf -- "${busco_batch_raw_dir}"
+  rm -f -- "${busco_batch_report}"
   rm -f -- species_tree_input_fasta_list.txt
   gg_artifact_record "${extract_species_tree_fasta_provenance_args[@]}"
 else
@@ -2767,6 +2813,7 @@ if [[ ${individual_mafft_needs_update} -eq 1 && ${run_individual_mafft} -eq 1 ]]
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
     run_mafft "${input_alignment_file}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${individual_mafft_provenance_args[@]}"
@@ -2831,6 +2878,7 @@ if [[ ${individual_trimal_needs_update} -eq 1 && ${run_individual_trimal} -eq 1 
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
     run_trimal "${input_alignment_file}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${individual_trimal_provenance_args[@]}"
@@ -3155,6 +3203,7 @@ if [[ ${individual_iqtree_pep_needs_update} -eq 1 && ${run_individual_iqtree_pep
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
     run_iqtree_pep "${input_alignment_file}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${individual_iqtree_pep_provenance_args[@]}"
@@ -3164,6 +3213,10 @@ fi
 
 task="ASTRAL of individual single-copy protein trees"
 astral_pep_needs_update=0
+if [[ ${run_astral_pep} -eq 1 ]]; then
+  species_tree_materialize_directory "${dir_single_copy_iqtree_pep}"
+  ensure_dir "${dir_single_copy_iqtree_pep}"
+fi
 gg_artifact_contract_init astral_pep_provenance_args "species_tree_astral_pep" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.astral_pep.json"
 astral_pep_provenance_args+=(
   --input-logical-directory "gene_trees=${dir_single_copy_iqtree_pep}"
@@ -3299,6 +3352,7 @@ if [[ ${individual_iqtree_dna_needs_update} -eq 1 && ${run_individual_iqtree_dna
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
     run_iqtree_dna "${input_alignment_file}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${individual_iqtree_dna_provenance_args[@]}"
@@ -3308,6 +3362,10 @@ fi
 
 task="ASTRAL of individual single-copy DNA trees"
 astral_dna_needs_update=0
+if [[ ${run_astral_dna} -eq 1 ]]; then
+  species_tree_materialize_directory "${dir_single_copy_iqtree_dna}"
+  ensure_dir "${dir_single_copy_iqtree_dna}"
+fi
 gg_artifact_contract_init astral_dna_provenance_args "species_tree_astral_dna" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.astral_dna.json"
 astral_dna_provenance_args+=(
   --input-logical-directory "gene_trees=${dir_single_copy_iqtree_dna}"
@@ -3970,9 +4028,15 @@ if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then
   ensure_dir "${dir_orthofinder}"
   ensure_dir "${dir_orthofinder_hog2og}"
 
-  orthofinder_algorithm_threads=$((${GG_TASK_CPUS} / 4))
-  if [[ ${orthofinder_algorithm_threads} -eq 0 ]]; then
-    orthofinder_algorithm_threads=1
+  if [[ "${orthofinder_algorithm_threads}" == "auto" ]]; then
+    orthofinder_algorithm_threads=${GG_TASK_CPUS}
+  elif [[ ! "${orthofinder_algorithm_threads}" =~ ^[0-9]+$ || ${orthofinder_algorithm_threads} -lt 1 ]]; then
+    echo "Invalid orthofinder_algorithm_threads=${orthofinder_algorithm_threads}; expected auto or a positive integer." >&2
+    exit 1
+  fi
+  if [[ ${orthofinder_algorithm_threads} -gt ${GG_TASK_CPUS} ]]; then
+    echo "Capping orthofinder_algorithm_threads=${orthofinder_algorithm_threads} at GG_TASK_CPUS=${GG_TASK_CPUS}."
+    orthofinder_algorithm_threads=${GG_TASK_CPUS}
   fi
   param_species_tree=()
   species_tree=""
@@ -4505,56 +4569,42 @@ if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta}
   gg_step_start "${task}"
   rm -rf -- "${dir_busco_fasta}"
   ensure_dir "${dir_busco_fasta}"
-  busco_rows=()
-  mapfile -t busco_rows < <(tail -n +2 "${file_genome_busco_summary_table}")
-  num_busco_ids=${#busco_rows[@]}
+  gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
+  genome_busco_batch_raw_dir="${dir_tmp}/genome_busco_batch_raw"
+  genome_busco_batch_report="${dir_tmp}/genome_busco_batch.tsv"
+  rm -rf -- "${genome_busco_batch_raw_dir}"
+  ensure_dir "${genome_busco_batch_raw_dir}"
+  python "${gg_support_dir}/batch_extract_busco_fasta.py" \
+    --summary "${file_genome_busco_summary_table}" \
+    --fasta-list "species_tree_input_fasta_list.txt" \
+    --output-dir "${genome_busco_batch_raw_dir}" \
+    --suffix ".raw.fa" \
+    --report "${genome_busco_batch_report}" \
+    --mode duplicate-aware
 
-  generate_genome_dupaware_busco_fasta() {
-    local busco_idx=$1
-    local busco_row="${busco_rows[${busco_idx}]}"
+  finalize_genome_busco_fasta() {
+    local raw_fasta=$1
     local busco_id
     local outfile2
-    local cols=()
-    local genes=()
-    local genes2=()
-    IFS=$'\t' read -r -a cols <<< "${busco_row}"
-    busco_id="${cols[0]:-}"
-    if [[ -z "${busco_id}" ]]; then
-      return 0
-    fi
-    if [[ ${#cols[@]} -gt 3 ]]; then
-      genes=("${cols[@]:3}")
-    fi
+    busco_id=$(basename "${raw_fasta}" .raw.fa)
     outfile2="${dir_busco_fasta}/${busco_id}${genome_busco_fasta_suffix}"
-    echo "busco_id: ${busco_id}"
-    if [[ ! -s "${outfile2}" ]]; then
-      mapfile -t genes2 < <(gg_busco_gene_tokens "split_duplicated" "${genes[@]}")
-      if [[ ${#genes2[@]} -eq 0 ]]; then
-        echo "Skipping. ${busco_id} has no genes in the selected species."
-        return 0
-      fi
-      if [[ "${input_sequence_mode}" == "protein" ]]; then
-        gg_seqkit_grep_by_patterns_from_infile_list 1 "species_tree_input_fasta_list.txt" "${genes2[@]}" |
-          seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 |
-          seqkit seq --threads 1 --out-file "${outfile2}"
-      else
-        gg_seqkit_grep_by_patterns_from_infile_list 1 "species_tree_input_fasta_list.txt" "${genes2[@]}" |
-          gg_prepare_cds_fasta_stream 1 |
-          seqkit seq --threads 1 --out-file "${outfile2}"
-      fi
-      if [[ ! -s "${outfile2}" ]]; then
-        echo "File is empty. Removing: ${outfile2}"
-        rm -f -- "${outfile2}"
-      fi
+    if [[ "${input_sequence_mode}" == "protein" ]]; then
+      seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 "${raw_fasta}" |
+        seqkit seq --threads 1 --out-file "${outfile2}"
+    else
+      gg_prepare_cds_fasta_stream 1 < "${raw_fasta}" |
+        seqkit seq --threads 1 --out-file "${outfile2}"
     fi
   }
-
-  gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
-  for ((busco_idx = 0; busco_idx < num_busco_ids; busco_idx++)); do
-    wait_until_jobn_le ${GG_TASK_CPUS}
-    generate_genome_dupaware_busco_fasta "${busco_idx}" &
+  mapfile -t genome_busco_batch_raw_files < <(find "${genome_busco_batch_raw_dir}" -maxdepth 1 -type f -name '*.raw.fa' | sort)
+  for genome_busco_batch_raw_file in "${genome_busco_batch_raw_files[@]}"; do
+    wait_until_jobn_le "${GG_TASK_CPUS}"
+    finalize_genome_busco_fasta "${genome_busco_batch_raw_file}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
+  rm -rf -- "${genome_busco_batch_raw_dir}"
+  rm -f -- "${genome_busco_batch_report}"
   rm -f -- species_tree_input_fasta_list.txt
   gg_artifact_record "${busco_extract_provenance_args[@]}"
 else
@@ -4653,6 +4703,7 @@ if [[ ${busco_mafft_needs_update} -eq 1 && ${run_busco_dupaware_mafft} -eq 1 ]];
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
     run_mafft "${input_alignment_file}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${busco_mafft_provenance_args[@]}"
@@ -4712,6 +4763,7 @@ if [[ ${busco_trimal_needs_update} -eq 1 && ${run_busco_dupaware_trimal} -eq 1 ]
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
     run_trimal "${input_alignment_file}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${busco_trimal_provenance_args[@]}"
@@ -4768,6 +4820,7 @@ if [[ ${busco_iqtree_dna_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_dna}
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
     busco_iqtree_dna "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_dna}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${busco_iqtree_dna_provenance_args[@]}"
@@ -4831,6 +4884,7 @@ if [[ ${busco_iqtree_pep_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_pep}
   for input_alignment_file in "${input_alignment_files[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
     busco_iqtree_pep "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_pep}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${busco_iqtree_pep_provenance_args[@]}"
@@ -4864,6 +4918,7 @@ if [[ ${busco_notung_dna_needs_update} -eq 1 && ${run_busco_dupaware_notung_root
   for infile in "${infiles[@]}"; do
     wait_until_jobn_le $((${GG_TASK_CPUS} / 2))
     busco_notung "${infile}" "${dir_busco_iqtree_dna}" "${dir_busco_notung_dna}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${busco_notung_dna_provenance_args[@]}"
@@ -4896,6 +4951,7 @@ if [[ ${busco_notung_pep_needs_update} -eq 1 && ${run_busco_dupaware_notung_root
   for infile in "${infiles[@]}"; do
     wait_until_jobn_le $((${GG_TASK_CPUS} / 2))
     busco_notung "${infile}" "${dir_busco_iqtree_pep}" "${dir_busco_notung_pep}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${busco_notung_pep_provenance_args[@]}"
@@ -4928,6 +4984,7 @@ if [[ ${busco_root_dna_needs_update} -eq 1 && ${run_busco_dupaware_root_dna} -eq
   for infile in "${infiles[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
     busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_dna}" "${dir_busco_iqtree_dna}" "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${busco_root_dna_provenance_args[@]}"
@@ -4959,6 +5016,7 @@ if [[ ${busco_root_pep_needs_update} -eq 1 && ${run_busco_dupaware_root_pep} -eq
   for infile in "${infiles[@]}"; do
     wait_until_jobn_le ${GG_TASK_CPUS}
     busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_pep}" "${dir_busco_iqtree_pep}" "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}" &
+    gg_background_register "$!"
   done
   wait_for_background_jobs
   gg_artifact_record "${busco_root_pep_provenance_args[@]}"

@@ -415,16 +415,15 @@ def test_busco_getfasta_step_is_gated_by_summary_table_presence():
     assert text.index(gate) < text.index(step)
 
 
-def test_busco_getfasta_step_defines_and_uses_its_duplicate_aware_helper():
+def test_busco_getfasta_step_uses_the_batch_duplicate_aware_extractor():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
     step = "if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then"
-    helper = "generate_genome_dupaware_busco_fasta() {"
-    invoke = 'generate_genome_dupaware_busco_fasta "${busco_idx}" &'
     step_idx = text.index(step)
-    helper_idx = text.index(helper, step_idx)
-    invoke_idx = text.index(invoke, helper_idx)
-    assert helper_idx < invoke_idx
+    batch_idx = text.index('python "${gg_support_dir}/batch_extract_busco_fasta.py"', step_idx)
+    mode_idx = text.index("--mode duplicate-aware", batch_idx)
+    finalize_idx = text.index("finalize_genome_busco_fasta() {", mode_idx)
+    assert batch_idx < mode_idx < finalize_idx
 
 
 def test_genome_evolution_core_uses_safe_busco_summary_count_helper():

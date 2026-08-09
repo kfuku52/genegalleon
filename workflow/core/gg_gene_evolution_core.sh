@@ -1285,6 +1285,11 @@ dir_sp_expression="${gg_workspace_input_dir}/species_expression"
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
 dir_sp_protein_input="$(gg_species_protein_input_dir_path "${gg_workspace_input_dir}")"
 dir_sp_blastdb="${gg_workspace_output_dir}/species_cds_blastdb"
+dir_fasta_sequence_store="${gg_workspace_output_dir}/.gg_cache/fasta_sequence_store"
+file_species_cds_store_db="${dir_fasta_sequence_store}/species_cds.sqlite3"
+file_species_cds_store_manifest="${dir_fasta_sequence_store}/species_cds.json"
+file_species_protein_store_db="${dir_fasta_sequence_store}/species_protein.sqlite3"
+file_species_protein_store_manifest="${dir_fasta_sequence_store}/species_protein.json"
 file_species_genetic_code="$(gg_species_genetic_code_table_path "${gg_workspace_input_dir}")"
 file_species_genetic_code_resolved="${dir_output_active}/parameters/${og_id}_species_genetic_code.resolved.tsv"
 annotation_species_resolved=""
@@ -1497,6 +1502,52 @@ echo "Working at: $(pwd)"
 trap cleanup_tmp_dir_on_normal_exit EXIT
 
 
+ensure_species_fasta_sequence_store() {
+  local sequence_kind=$1
+  local source_dir=""
+  local database=""
+  local manifest=""
+  local source_list="${dir_tmp}/.${sequence_kind}.sequence_store.sources.$$.tsv"
+  local source_path=""
+  local species=""
+  case "${sequence_kind}" in
+    cds)
+      source_dir="${dir_sp_cds}"
+      database="${file_species_cds_store_db}"
+      manifest="${file_species_cds_store_manifest}"
+      ;;
+    protein)
+      source_dir="${dir_sp_protein_input}"
+      database="${file_species_protein_store_db}"
+      manifest="${file_species_protein_store_manifest}"
+      ;;
+    *)
+      echo "Invalid FASTA sequence-store kind: ${sequence_kind}" >&2
+      return 1
+      ;;
+  esac
+  : > "${source_list}"
+  while IFS= read -r source_path; do
+    species=$(gg_species_name_from_path "${source_path}")
+    printf '%s\t%s\n' "${source_path}" "${species}" >> "${source_list}"
+  done < <(gg_find_fasta_files "${source_dir}" 1)
+  if [[ ! -s "${source_list}" ]]; then
+    echo "No FASTA inputs were found for the ${sequence_kind} sequence store: ${source_dir}" >&2
+    return 1
+  fi
+  ensure_dir "${dir_fasta_sequence_store}"
+  if ! python "${gg_support_dir}/fasta_sequence_store.py" ensure \
+    --database "${database}" \
+    --manifest "${manifest}" \
+    --source-list "${source_list}" \
+    --digest-cache "${gg_workspace_dir}/.gg_cache/content_digests.sqlite3"
+  then
+    return 1
+  fi
+  rm -f -- "${source_list}"
+}
+
+
 # shellcheck shell=bash
 # Sourced by gg_gene_evolution_core.sh.
 
@@ -1521,7 +1572,9 @@ query_fasta_provenance_args=(
   --parameter "genetic_code=${genetic_code}"
 )
 if [[ "$(head -c 1 "${file_query_gene}")" != ">" ]]; then
-  query_fasta_provenance_args+=(--input "species_cds=${dir_sp_cds}")
+  ensure_species_fasta_sequence_store cds || exit 1
+  query_fasta_provenance_args+=(--input "species_cds_index=${file_species_cds_store_manifest}")
+  query_fasta_provenance_args+=(--parameter "fasta_sequence_store_schema=1")
 fi
 gg_artifact_prepare_stage query_fasta_needs_update run_extract_query_fasta "${query_fasta_provenance_args[@]}" || exit $?
 if [[ ${query_fasta_needs_update} -eq 1 && ${run_extract_query_fasta} -eq 1 ]]; then
@@ -1546,7 +1599,6 @@ if [[ ${query_fasta_needs_update} -eq 1 && ${run_extract_query_fasta} -eq 1 ]]; 
     echo "Gene IDs were detected. Extracting in-frame CDS sequences from species_cds: ${file_query_gene}"
     cp_out "${file_query_gene}" "${dir_output_active}/query_gene/$(basename "${file_query_gene}")"
     mapfile -t genes < <(sed -e '/^[[:space:]]*$/d' "${file_query_gene}")
-    mapfile -t cds_files < <(gg_find_fasta_files "${dir_sp_cds}" 1)
     if [[ -e pattern.txt ]]; then
       rm -f -- pattern.txt
     fi
@@ -1564,30 +1616,13 @@ if [[ ${query_fasta_needs_update} -eq 1 && ${run_extract_query_fasta} -eq 1 ]]; 
     if [[ -e "${og_id}.query.cds.2.fasta" ]]; then
       rm -f -- "${og_id}.query.cds.2.fasta"
     fi
-    touch "${og_id}.query.cds.fasta"
-    query_hits_tmp_dir="./tmp.query_hits"
-    if [[ -d "${query_hits_tmp_dir}" ]]; then
-      rm -rf -- "${query_hits_tmp_dir}"
-    fi
-    mkdir -p "${query_hits_tmp_dir}"
-    for file_cds in "${cds_files[@]}"; do
-      wait_until_jobn_le ${GG_TASK_CPUS}
-      (
-        sp_ub=$(gg_species_name_from_path "${file_cds}")
-        query_hits_tmp_file="${query_hits_tmp_dir}/$(basename "${file_cds}").hits.fasta"
-        seqkit grep --threads "${GG_TASK_CPUS}" --ignore-case --pattern-file <(awk -v sp="${sp_ub}" '{print $0; print sp "_" $0}' pattern.txt) "${file_cds}" |
-          sed -e "s/^>${sp_ub}_/>/" -e "s/^>${sp_ub}-/>/" -e "s/^>${sp_ub}[[:space:]]/>/" -e "s/^>${sp_ub}\./>/" -e "s/^>/>${sp_ub}_/" \
-            > "${query_hits_tmp_file}"
-      ) &
-    done
-    wait_for_background_jobs
-    shopt -s nullglob
-    query_hits_tmp_files=("${query_hits_tmp_dir}"/*.hits.fasta)
-    shopt -u nullglob
-    for query_hits_tmp_file in "${query_hits_tmp_files[@]}"; do
-      cat "${query_hits_tmp_file}" >> "${og_id}.query.cds.fasta"
-    done
-    rm -rf -- "${query_hits_tmp_dir}"
+    python "${gg_support_dir}/fasta_sequence_store.py" extract \
+      --database "${file_species_cds_store_db}" \
+      --pattern-file pattern.txt \
+      --output "${og_id}.query.cds.fasta" \
+      --ignore-case \
+      --query-variants \
+      --prefix-species
     gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${genetic_code}" < "${og_id}.query.cds.fasta" |
       sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
         > "${og_id}.query.cds.2.fasta"
@@ -1639,7 +1674,6 @@ query_blast_provenance_args=(
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --input "query_fasta=${file_og_query_aa_fasta}"
-  --input "species_cds=${dir_sp_cds}"
   --output "query_blast=${file_og_query_blast}"
   --parameter "method=${query_blast_method}"
   --parameter "genetic_code=${genetic_code}"
@@ -1647,6 +1681,9 @@ query_blast_provenance_args=(
   --parameter "auto_evalue_cutoffs=${query_blast_auto_evalue_maxlen_cutoffs}"
 )
 if [[ "${mode_gene_evolution}" == "query2family" ]]; then
+  ensure_species_fasta_sequence_store cds || exit 1
+  query_blast_provenance_args+=(--input "species_cds_index=${file_species_cds_store_manifest}")
+  query_blast_provenance_args+=(--parameter "fasta_sequence_store_schema=1")
   gg_artifact_prepare_stage query_blast_needs_update run_query_blast "${query_blast_provenance_args[@]}" || exit $?
 fi
 if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_gene_evolution}" == "query2family" ]]; then
@@ -1687,6 +1724,21 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
     cds_spp+=("$(gg_species_name_from_path "${cds_file}")")
   done
   mapfile -t cds_spp < <(printf "%s\n" "${cds_spp[@]}" | sort -u)
+  db_build_jobs=${GG_TASK_CPUS}
+  [[ ${db_build_jobs} -gt ${#cds_spp[@]} ]] && db_build_jobs=${#cds_spp[@]}
+  [[ ${db_build_jobs} -lt 1 ]] && db_build_jobs=1
+  db_threads_per_job=$((GG_TASK_CPUS / db_build_jobs))
+  [[ ${db_threads_per_job} -lt 1 ]] && db_threads_per_job=1
+  species_cds_digest_table="${dir_tmp}/species_cds.sequence_digests.$$.tsv"
+  python - "${file_species_cds_store_manifest}" > "${species_cds_digest_table}" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+for entry in payload.get("sources", []):
+    print(f"{entry['species']}\t{entry['sha256']}")
+PY
   filter_translated_fasta_for_diamond() {
     awk '
       BEGIN {
@@ -1731,7 +1783,7 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
     '
   }
   for sp in "${cds_spp[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${db_build_jobs}"
     echo "sp: ${sp}"
     sp_cds_candidates=()
     for cds_file in "${cds_files[@]}"; do
@@ -1746,11 +1798,21 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
     mapfile -t sp_cds_candidates < <(printf "%s\n" "${sp_cds_candidates[@]}" | sort)
     sp_cds=${sp_cds_candidates[0]}
     sp_cds_blastdb="${dir_sp_blastdb}/$(basename "${sp_cds}")"
+    sp_cds_source_digest=$(awk -F '\t' -v species="${sp}" '$1 == species {print $2; exit}' "${species_cds_digest_table}")
+    if [[ ! "${sp_cds_source_digest}" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "No indexed content digest was found for species CDS: ${sp_cds}. Exiting." >&2
+      exit 1
+    fi
+    db_source_signature="source_sha256=${sp_cds_source_digest};method=${query_blast_method}"
+    if [[ ${query_blast_method} == "diamond" ]]; then
+      db_source_signature="${db_source_signature};genetic_code=${genetic_code};translation_filter=1"
+    fi
+    db_signature_file="${sp_cds_blastdb}.${query_blast_method}.build.signature"
     db_files+=("${sp_cds_blastdb}")
     if [[ ${query_blast_method} == "tblastn" ]]; then
       echo "makeblastdb input CDS file: ${sp_cds}"
       echo "makeblastdb output database file: ${sp_cds_blastdb}"
-      if [[ ! -e "${sp_cds_blastdb}".nhr || ! -e "${sp_cds_blastdb}".nin || ! -e "${sp_cds_blastdb}".nsq || ! -e "${sp_cds_blastdb}".ndb ]]; then
+      if [[ ! -e "${sp_cds_blastdb}".nhr || ! -e "${sp_cds_blastdb}".nin || ! -e "${sp_cds_blastdb}".nsq || ! -e "${sp_cds_blastdb}".ndb || ! -s "${db_signature_file}" || "$(< "${db_signature_file}")" != "${db_source_signature}" ]]; then
         db_lock_file="${sp_cds_blastdb}.tblastn.build.lock"
         (
           if ! gg_shared_lock_acquire "${db_lock_file}" "TBLASTN database build (${sp})"; then
@@ -1763,7 +1825,7 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
             gg_shared_lock_release "${db_lock_file}"
           }
           trap cleanup_tblastn_db_lock EXIT
-          if [[ ! -e "${sp_cds_blastdb}".nhr || ! -e "${sp_cds_blastdb}".nin || ! -e "${sp_cds_blastdb}".nsq || ! -e "${sp_cds_blastdb}".ndb ]]; then
+          if [[ ! -e "${sp_cds_blastdb}".nhr || ! -e "${sp_cds_blastdb}".nin || ! -e "${sp_cds_blastdb}".nsq || ! -e "${sp_cds_blastdb}".ndb || ! -s "${db_signature_file}" || "$(< "${db_signature_file}")" != "${db_source_signature}" ]]; then
             if zgrep -q -e "^>.*[[:blank:]]" "${sp_cds}"; then
               echo "Space is detected. Please remove all annotation info after spaces in sequence names. Exiting: ${sp_cds}"
               exit 1
@@ -1774,19 +1836,21 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
             echo "Generating BLAST database: ${sp_cds}"
             echo "Generating BLAST database: ${sp_cds}" >&2
             if [[ ${sp_cds} == *.gz ]]; then
-              seqkit seq --threads "${GG_TASK_CPUS}" "${sp_cds}" | makeblastdb -dbtype nucl -title "${sp_cds}" -out "${sp_cds_blastdb}"
+              seqkit seq --threads "${db_threads_per_job}" "${sp_cds}" | makeblastdb -dbtype nucl -title "${sp_cds}" -out "${sp_cds_blastdb}"
             else
               makeblastdb -dbtype nucl -in "${sp_cds}" -out "${sp_cds_blastdb}"
             fi
+            printf '%s\n' "${db_source_signature}" > "${db_signature_file}"
           fi
-        ) || exit 1
+        ) &
+        gg_background_register "$!"
       fi
     elif [[ ${query_blast_method} == "diamond" ]]; then
       sp_cds_diamond_fasta="${sp_cds_blastdb}.diamond.fasta"
       echo "diamond input CDS file: ${sp_cds}"
       echo "diamond translated protein file: ${sp_cds_diamond_fasta}"
       echo "diamond database file: ${sp_cds_blastdb}.dmnd"
-      if [[ ! -e "${sp_cds_blastdb}".dmnd ]]; then
+      if [[ ! -e "${sp_cds_blastdb}".dmnd || ! -s "${db_signature_file}" || "$(< "${db_signature_file}")" != "${db_source_signature}" ]]; then
         db_lock_file="${sp_cds_blastdb}.diamond.build.lock"
         (
           if ! gg_shared_lock_acquire "${db_lock_file}" "DIAMOND database build (${sp})"; then
@@ -1799,7 +1863,7 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
             gg_shared_lock_release "${db_lock_file}"
           }
           trap cleanup_diamond_db_lock EXIT
-          if [[ ! -e "${sp_cds_blastdb}".dmnd ]]; then
+          if [[ ! -e "${sp_cds_blastdb}".dmnd || ! -s "${db_signature_file}" || "$(< "${db_signature_file}")" != "${db_source_signature}" ]]; then
             if zgrep -q -e "^>.*[[:blank:]]" "${sp_cds}"; then
               echo "Space is detected. Please remove all annotation info after spaces in sequence names. Exiting: ${sp_cds}"
               exit 1
@@ -1810,13 +1874,13 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
             echo "Generating DIAMOND database: ${sp_cds}"
             echo "Generating DIAMOND database: ${sp_cds}" >&2
             if [[ ${sp_cds} == *.gz ]]; then
-              seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${sp_cds}" |
-                seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" |
+              seqkit seq --remove-gaps --threads 1 "${sp_cds}" |
+                seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${db_threads_per_job}" |
                 filter_translated_fasta_for_diamond \
                   > "${sp_cds_diamond_fasta}"
             else
-              seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${sp_cds}" |
-                seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" |
+              seqkit seq --remove-gaps --threads 1 "${sp_cds}" |
+                seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${db_threads_per_job}" |
                 filter_translated_fasta_for_diamond \
                   > "${sp_cds_diamond_fasta}"
             fi
@@ -1828,17 +1892,20 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
               echo "Translated FASTA for DIAMOND is empty: ${sp_cds_diamond_fasta}. Exiting."
               exit 1
             fi
-            if ! diamond makedb --in "${sp_cds_diamond_fasta}" --db "${sp_cds_blastdb}"; then
+            if ! diamond makedb --in "${sp_cds_diamond_fasta}" --db "${sp_cds_blastdb}" --threads "${db_threads_per_job}"; then
               echo "diamond makedb failed for ${sp_cds}. Exiting."
               exit 1
             fi
             rm -f -- "${sp_cds_diamond_fasta}"
+            printf '%s\n' "${db_source_signature}" > "${db_signature_file}"
           fi
-        ) || exit 1
+        ) &
+        gg_background_register "$!"
       fi
     fi
   done
   wait_for_background_jobs
+  rm -f -- "${species_cds_digest_table}"
   echo "db_files: ${db_files[*]}"
   query_aa_local="${og_id}.query.aa.tmp.for_blast.fasta"
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_query_aa_fasta}" --out-file "${query_aa_local}"
@@ -1871,23 +1938,37 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
     echo "Running diamond blastp."
     rm -f -- blast_out.tsv
     touch blast_out.tsv
+    diamond_search_jobs=${GG_TASK_CPUS}
+    [[ ${diamond_search_jobs} -gt ${#db_files[@]} ]] && diamond_search_jobs=${#db_files[@]}
+    [[ ${diamond_search_jobs} -lt 1 ]] && diamond_search_jobs=1
+    diamond_threads_per_job=$((GG_TASK_CPUS / diamond_search_jobs))
+    [[ ${diamond_threads_per_job} -lt 1 ]] && diamond_threads_per_job=1
     for db_file in "${db_files[@]}"; do
       if [[ ! -e "${db_file}".dmnd ]]; then
         echo "DIAMOND database file is missing: ${db_file}.dmnd. Exiting."
         exit 1
       fi
       tmp_diamond_out="$(basename "${db_file}").diamond.out.tsv"
-      if ! diamond blastp \
-        --query "${query_aa_local}" \
-        --db "${db_file}" \
-        --out "${tmp_diamond_out}" \
-        --evalue "${effective_query_blast_evalue}" \
-        --max-target-seqs 50000 \
-        --threads "${GG_TASK_CPUS}" \
-        --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen; then
-        echo "diamond blastp failed for database: ${db_file}. Exiting."
-        exit 1
-      fi
+      wait_until_jobn_le "${diamond_search_jobs}"
+      (
+        if ! diamond blastp \
+          --query "${query_aa_local}" \
+          --db "${db_file}" \
+          --out "${tmp_diamond_out}" \
+          --evalue "${effective_query_blast_evalue}" \
+          --max-target-seqs 50000 \
+          --threads "${diamond_threads_per_job}" \
+          --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen
+        then
+          echo "diamond blastp failed for database: ${db_file}." >&2
+          exit 1
+        fi
+      ) &
+      gg_background_register "$!"
+    done
+    wait_for_background_jobs
+    for db_file in "${db_files[@]}"; do
+      tmp_diamond_out="$(basename "${db_file}").diamond.out.tsv"
       if [[ -s "${tmp_diamond_out}" ]]; then
         awk -F '\t' 'BEGIN{OFS="\t"} {print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,"0/1",$13,$14}' "${tmp_diamond_out}" >> blast_out.tsv
       fi
@@ -1935,13 +2016,16 @@ else
   primary_fasta_provenance_args+=(--input "query_blast=${file_og_query_blast}")
 fi
 if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
-  primary_fasta_provenance_args+=(--input "species_protein=${dir_sp_protein_input}")
+  ensure_species_fasta_sequence_store protein || exit 1
+  primary_fasta_provenance_args+=(--input "species_protein_index=${file_species_protein_store_manifest}")
 else
-  primary_fasta_provenance_args+=(--input "species_cds=${dir_sp_cds}")
+  ensure_species_fasta_sequence_store cds || exit 1
+  primary_fasta_provenance_args+=(--input "species_cds_index=${file_species_cds_store_manifest}")
   if [[ -s "${file_species_genetic_code}" ]]; then
     primary_fasta_provenance_args+=(--input "species_genetic_code=${file_species_genetic_code}")
   fi
 fi
+primary_fasta_provenance_args+=(--parameter "fasta_sequence_store_schema=1")
 gg_artifact_prepare_stage primary_fasta_needs_update run_extract_primary_fasta "${primary_fasta_provenance_args[@]}" || exit $?
 if [[ ${primary_fasta_needs_update} -eq 1 && ${run_extract_primary_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -1967,20 +2051,17 @@ if [[ ${primary_fasta_needs_update} -eq 1 && ${run_extract_primary_fasta} -eq 1 
 
   num_gene=${#genes[@]}
   if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
-    protein_files=()
     check_species_protein_dir "${dir_sp_protein_input}"
     check_if_species_files_unique "${dir_sp_protein_input}"
-    mapfile -t protein_files < <(gg_find_fasta_files "${dir_sp_protein_input}" 1)
-    echo "Number of protein files in ${dir_sp_protein_input}: ${#protein_files[@]}"
     if [[ -s "${file_species_genetic_code}" ]]; then
       echo "species_genetic_code.tsv is ignored because species_protein inputs are provided: ${file_species_genetic_code}"
     fi
     rm -f -- "${og_id}.pep.fasta"
-    touch "${og_id}.pep.fasta"
-    for protein_path in "${protein_files[@]}"; do
-      seqkit grep --threads "${GG_TASK_CPUS}" --pattern-file pattern.txt "${protein_path}" \
-        >> "${og_id}.pep.fasta"
-    done
+    python "${gg_support_dir}/fasta_sequence_store.py" extract \
+      --database "${file_species_protein_store_db}" \
+      --pattern-file pattern.txt \
+      --output "${og_id}.pep.fasta" \
+      --require-all
     seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${GG_TASK_CPUS}" "${og_id}.pep.fasta" |
       seqkit replace --pattern "\+" --replacement "_" --ignore-case --threads "${GG_TASK_CPUS}" |
       sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
@@ -2008,21 +2089,14 @@ if [[ ${primary_fasta_needs_update} -eq 1 && ${run_extract_primary_fasta} -eq 1 
     fi
   else
     if [[ ! -s "${file_og_cds_fasta}" ]]; then
-      cds_files=()
-      mapfile -t cds_files < <(gg_find_fasta_files "${dir_sp_cds}" 1)
-      echo "Number of CDS files in ${dir_sp_cds}: ${#cds_files[@]}"
-      if [[ ${#cds_files[@]} -eq 0 ]]; then
-        echo "No species_cds FASTA files were found for focal fasta generation: ${dir_sp_cds}"
-        exit 1
-      fi
       if [[ -e "${og_id}.cds.fasta" ]]; then
         rm -f -- "${og_id}.cds.fasta"
       fi
-      touch "${og_id}.cds.fasta"
-      for file_cds in "${cds_files[@]}"; do
-        seqkit grep --threads "${GG_TASK_CPUS}" --pattern-file pattern.txt "${file_cds}" \
-          >> "${og_id}.cds.fasta"
-      done
+      python "${gg_support_dir}/fasta_sequence_store.py" extract \
+        --database "${file_species_cds_store_db}" \
+        --pattern-file pattern.txt \
+        --output "${og_id}.cds.fasta" \
+        --require-all
 
       seqkit replace --pattern "X" --replacement "N" --by-seq --ignore-case --threads "${GG_TASK_CPUS}" "${og_id}.cds.fasta" |
         seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${GG_TASK_CPUS}" |
@@ -2944,12 +3018,13 @@ if [[ ${orthogroup_extraction_needs_update} -eq 1 && ${run_orthogroup_extraction
 
   run_nwkit_subtree() {
     local infile=$1
+    local result_file=$2
     echo "Running nwkit subtree for ${infile}"
     local info_txt
     info_txt=$(nwkit subtree --infile "${infile}" --leaves "${comma_separated_genes}" --orthogroup "yes" --dup-conf-score-threshold 0 2> /dev/null | nwkit info 2> /dev/null)
     local num_leaf
     num_leaf=$(awk -F': *' '/Number of leaves/ {print $2; exit}' <<< "${info_txt}")
-    printf '%s\t%s\n' "${num_leaf}" "${infile}" >> tmp_num_leaf.tsv
+    printf '%s\t%s\n' "${num_leaf}" "${infile}" > "${result_file}"
   }
 
   subtree_infiles=()
@@ -3123,10 +3198,20 @@ PY
   echo "Seed genes for orthogroup extraction: ${comma_separated_genes}"
 
   printf 'num_leaf\tfile\n' > tmp_num_leaf.tsv
+  rm -rf -- tmp_num_leaf.parts
+  mkdir -p tmp_num_leaf.parts
+  subtree_index=0
   for subtree_infile in "${subtree_infiles[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
-    run_nwkit_subtree "${subtree_infile}"
+    wait_until_jobn_le "${GG_TASK_CPUS}"
+    run_nwkit_subtree "${subtree_infile}" "tmp_num_leaf.parts/${subtree_index}.tsv" &
+    gg_background_register "$!"
+    subtree_index=$((subtree_index + 1))
   done
+  wait_for_background_jobs
+  for ((subtree_index = 0; subtree_index < ${#subtree_infiles[@]}; subtree_index++)); do
+    cat "tmp_num_leaf.parts/${subtree_index}.tsv" >> tmp_num_leaf.tsv
+  done
+  rm -rf -- tmp_num_leaf.parts
 
   if ! IFS=$'\t' read -r min_leaf_num min_leaf_file max_leaf_num max_leaf_file < <(
     awk -F'\t' '

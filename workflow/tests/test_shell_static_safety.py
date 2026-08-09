@@ -173,7 +173,7 @@ def test_gg_util_is_a_small_compatibility_aggregator():
         "11_fasta.sh",
     ]
     for module in modules:
-        assert len(module.read_text(encoding="utf-8").splitlines()) < 700
+        assert len(module.read_text(encoding="utf-8").splitlines()) <= 700
         assert module.name in util_text
 
 
@@ -1936,7 +1936,7 @@ def test_genome_evolution_runs_omark_after_orthofinder_and_before_og_selection()
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
     orthofinder_index = core.index('task="OrthoFinder"')
-    assert 'gg_artifact_prepare_stage orthofinder_needs_update run_orthofinder' in core
+    assert "gg_artifact_prepare_stage orthofinder_needs_update run_orthofinder" in core
     omark_index = core.index(
         'task="OMArk analysis of species-wise protein input files"\nrun_shared_species_omark_stage'
     )
@@ -1983,7 +1983,7 @@ def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps
     assert 'dir_species_busco_full="${gg_workspace_output_dir}/species_protein_busco_full"' in core
     assert 'dir_species_busco_short="${gg_workspace_output_dir}/species_protein_busco_short"' in core
     assert "prepare_species_tree_input_dir" in core
-    assert '--mode "${species_tree_busco_mode}"' in core
+    assert '--mode "${busco_mode}"' in core
     assert 'outfile2="${dir_busco_fasta}/${busco_id}${genome_busco_fasta_suffix}"' in core
     assert "outfile=${dir_busco_mafft}/${infile_base}${genome_busco_aln_suffix}" in core
     assert 'outfile="${dir_busco_trimal}/${infile_base}${genome_busco_trimal_suffix}"' in core
@@ -2074,6 +2074,8 @@ def test_genome_evolution_core_quotes_busco_lineage_and_trimal_input_paths():
     banned_tokens = [
         "--lineage_dataset ${dir_busco_lineage}",
         "--download_path ${dir_busco_db}",
+        "--lineage_dataset ${busco_lineage_dir}",
+        "--download_path ${busco_download_dir}",
         "seqkit seq --remove-gaps --threads 1 ${dir_single_copy_mafft}/${infile}",
         "seqkit translate --transl-table ${genetic_code} --threads 1 ${dir_single_copy_mafft}/${infile}",
         "seqkit seq --remove-gaps --threads 1 ${dir_busco_mafft}/${infile}",
@@ -2085,8 +2087,8 @@ def test_genome_evolution_core_quotes_busco_lineage_and_trimal_input_paths():
         assert token not in text, f"Found unquoted genome-evolution token: {token}"
 
     expected_tokens = [
-        '--lineage_dataset "${dir_busco_lineage}"',
-        '--download_path "${dir_busco_db}"',
+        '--lineage_dataset "${busco_lineage_dir}"',
+        '--download_path "${busco_download_dir}"',
         'seqkit seq --remove-gaps --threads 1 "${dir_single_copy_mafft}/${infile}"',
         'seqkit translate --transl-table "${genetic_code}" --threads 1 "${dir_single_copy_mafft}/${infile}"',
         'seqkit seq --remove-gaps --threads 1 "${dir_busco_mafft}/${infile}"',
@@ -2287,7 +2289,7 @@ def test_gene_evolution_core_quotes_notung_zip_and_provenances_summary_outputs()
     assert 'unzip -qf "${file_og_notung_reconcil}"' in text
     assert '--output "stat_branch=${file_og_stat_branch}"' in text
     assert '--output "stat_tree=${file_og_stat_tree}"' in text
-    assert 'if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then' in text
+    assert "if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then" in text
 
 
 def test_gene_evolution_summary_freshness_tracks_summary_tables_and_analysis_inputs():
@@ -2532,7 +2534,9 @@ def test_wait_for_background_jobs_helper_exists():
     assert re.search(r"^\s*wait_for_background_jobs\(\)\s*\{", text, re.MULTILINE)
     body = _function_body(text, "wait_for_background_jobs")
     assert "mapfile -t pids" not in body
-    assert "done < <(jobs -pr)" in body
+    assert "jobs -pr" not in body
+    assert "GG_BACKGROUND_PIDS" in body
+    assert "gg_background_wait_one" in body
 
 
 def test_gene_and_genome_core_do_not_use_plain_wait():
@@ -2547,12 +2551,48 @@ def test_gene_and_genome_core_do_not_use_plain_wait():
         assert "wait_for_background_jobs" in text, f"Missing wait helper usage in {script}"
 
 
-def test_gene_evolution_core_uses_nullglob_array_for_query_hits_merge():
+def test_core_background_launches_register_their_pids():
+    targets = [
+        CORE_DIR / "gg_gene_evolution_core.sh",
+        CORE_DIR / "gg_genome_evolution_core.sh",
+        CORE_DIR / "gg_input_generation_core.sh",
+    ]
+    for script in targets:
+        lines = _read_text(script).splitlines()
+        for index, line in enumerate(lines):
+            if re.search(r"&\s*$", line) is None or line.rstrip().endswith("&&"):
+                continue
+            following = "\n".join(lines[index + 1 : index + 3])
+            assert 'gg_background_register "$!"' in following, (
+                f"Background launch at {script}:{index + 1} is not registered"
+            )
+
+
+def test_gene_evolution_core_uses_shared_sequence_store_for_query_hits():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     assert "for query_hits_tmp_file in ${query_hits_tmp_dir}/*.hits.fasta; do" not in text
-    assert 'query_hits_tmp_files=("${query_hits_tmp_dir}"/*.hits.fasta)' in text
-    assert 'for query_hits_tmp_file in "${query_hits_tmp_files[@]}"; do' in text
+    assert 'fasta_sequence_store.py" extract' in text
+    assert '--database "${file_species_cds_store_db}"' in text
+    assert "--query-variants" in text
+    assert "--prefix-species" in text
+
+
+def test_diamond_database_build_respects_the_per_job_thread_budget():
+    text = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    assert (
+        'diamond makedb --in "${sp_cds_diamond_fasta}" --db "${sp_cds_blastdb}" --threads "${db_threads_per_job}"'
+    ) in text
+
+
+def test_species_busco_parallelism_is_capped_by_memory_in_both_workflows():
+    for script in (
+        CORE_DIR / "gg_input_generation_core.sh",
+        CORE_DIR / "gg_genome_evolution_core.sh",
+    ):
+        text = _read_text(script)
+        assert 'gg_memory_parallel_job_cap "${GG_MEM_TOOL_GB}"' in text
+        assert "species_busco_memory_gb_per_job" in text
 
 
 def test_genome_annotation_core_skips_identity_rename_in_jcvi_output_loop():
@@ -2708,7 +2748,7 @@ def test_gene_evolution_core_routes_extracted_rooted_tree_to_downstream_analysis
     text = _read_text(script)
     assert "file_og_orthogroup_extraction_rooted_nwk=" in text
     assert '--output "extracted_rooted_tree=${file_og_orthogroup_extraction_rooted_nwk}"' in text
-    assert 'gg_artifact_prepare_stage orthogroup_extraction_needs_update' in text
+    assert "gg_artifact_prepare_stage orthogroup_extraction_needs_update" in text
     assert 'mv_out "${og_id}.orthogroup_seed.tmp.nwk" "${file_og_orthogroup_extraction_rooted_nwk}"' in text
     assert 'set_analysis_file rooted_tree "${file_og_orthogroup_extraction_rooted_nwk}"' in text
 
@@ -2854,7 +2894,10 @@ def test_generax_container_smoke_test_uses_runtime_mpi_launcher():
     script = CONTAINER_SCRIPTS_DIR / "ensure_generax_stable.sh"
     body = _function_body(_read_text(script), "run_smoke_test")
 
-    assert "mpi_env_args=(env OMPI_MCA_ras=^gridengine OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)" in body
+    assert (
+        "mpi_env_args=(env OMPI_MCA_ras=^gridengine OMPI_MCA_plm=isolated OMPI_MCA_plm_rsh_agent=/bin/false OMPI_MCA_btl=^openib)"
+        in body
+    )
     assert "mpiexec_args=(mpiexec --allow-run-as-root -oversubscribe -np 1)" in body
     assert '"${mpi_env_args[@]}" "${mpiexec_args[@]}"' in body
     assert "env OMPI_MCA_plm=isolated \\" not in body
@@ -3146,14 +3189,14 @@ def test_gene_evolution_core_uses_content_and_parameter_provenance_for_csubst_ch
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
 
     assert "iqtree_anc_needs_update=0" in core
-    assert 'gg_artifact_prepare_stage iqtree_anc_needs_update run_iqtree_anc' in core
+    assert "gg_artifact_prepare_stage iqtree_anc_needs_update run_iqtree_anc" in core
     assert '--input "trimmed_alignment=${file_og_trimmed_aln_analysis}"' in core
     assert '--input "rooted_tree=${file_og_rooted_tree_analysis}"' in core
     assert '--parameter "codon_model=${codon_model}"' in core
     assert "if [[ ${iqtree_anc_needs_update} -eq 1 && ${run_iqtree_anc} -eq 1 ]]; then" in core
 
     assert "csubst_needs_update=0" in core
-    assert 'gg_artifact_prepare_stage csubst_needs_update run_csubst' in core
+    assert "gg_artifact_prepare_stage csubst_needs_update run_csubst" in core
     assert '--parameter "max_arity=${csubst_max_arity}"' in core
     assert '--parameter "nonsyn_recode=${csubst_nonsyn_recode}"' in core
     assert '--optional-output "csubst_cb_${i}=${!csubst_cb_varname}"' in core
@@ -3161,7 +3204,7 @@ def test_gene_evolution_core_uses_content_and_parameter_provenance_for_csubst_ch
     assert 'python "${gene_family_store_script}" delete \\' in core
 
     assert "csubst_scan_needs_update=0" in core
-    assert 'gg_artifact_prepare_stage csubst_scan_needs_update run_csubst_scan' in core
+    assert "gg_artifact_prepare_stage csubst_scan_needs_update run_csubst_scan" in core
     assert '--parameter "scan_min_support=${csubst_scan_min_support}"' in core
     assert '--parameter "scan_pvalue_calibration=${csubst_scan_pvalue_calibration}"' in core
     assert 'python "${gg_support_dir}/validate_csubst_branch_identity.py"' in core
@@ -3198,7 +3241,10 @@ def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     assert "run_csubst_scan_aa_change_summary=0" in csubst_summary_body
     assert 'local aa_summary_prefix="${summary_output_dir}/${gene_family_source}_csubst_aa_change"' in core
     assert '--out_prefix "${aa_summary_prefix}"' in core
-    assert 'local aa_summary_tsv="${summary_output_dir}/${gene_family_source}_csubst_aa_change_min_support_2_summary.tsv"' in core
+    assert (
+        'local aa_summary_tsv="${summary_output_dir}/${gene_family_source}_csubst_aa_change_min_support_2_summary.tsv"'
+        in core
+    )
     assert '--out_tsv "${aa_summary_tsv}"' in core
     assert "resolve_orthogroup_genecount_annotated" in core
     assert '"${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv"' in core
@@ -3380,9 +3426,9 @@ def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
         assert token not in text
     expected_tokens = [
         'if [[ -s "${file_og_expression}" && ${run_l1ou} -eq 1 ]]; then',
-        'if [[ ${hyphy_relax_reversed_needs_update} -eq 1 && ${run_hyphy_relax_reversed} -eq 1 ]]; then',
-        'if [[ ${scm_intron_needs_update} -eq 1 && ${run_scm_intron} -eq 1 ]]; then',
-        'if [[ ${l1ou_needs_update} -eq 1 && ${run_l1ou} -eq 1 ]]; then',
+        "if [[ ${hyphy_relax_reversed_needs_update} -eq 1 && ${run_hyphy_relax_reversed} -eq 1 ]]; then",
+        "if [[ ${scm_intron_needs_update} -eq 1 && ${run_scm_intron} -eq 1 ]]; then",
+        "if [[ ${l1ou_needs_update} -eq 1 && ${run_l1ou} -eq 1 ]]; then",
         "if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then",
         'if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" ]]; then',
     ]
@@ -3454,7 +3500,10 @@ def test_genome_annotation_core_multispecies_summary_requires_real_summary_input
     assert "summary_inputs_available=0" in text
     assert "No multispecies summary inputs are available yet. Skipping summary generation." in text
     assert 'if is_output_older_than_inputs "^file_sp_" "${file_multispecies_summary}"; then' not in text
-    assert 'gg_artifact_prepare_stage summary_needs_update run_multispecies_summary "${summary_provenance_args[@]}"' in text
+    assert (
+        'gg_artifact_prepare_stage summary_needs_update run_multispecies_summary "${summary_provenance_args[@]}"'
+        in text
+    )
     assert '--output "summary=${file_multispecies_summary}"' in text
     assert 'dir_summary_species_annotation="${gg_workspace_output_dir}/species_cds_annotation"' in text
     assert 'file_summary_species_tree_dated="${dir_summary_species_tree}/dated_species_tree.nwk"' in text

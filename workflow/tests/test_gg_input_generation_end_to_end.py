@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import sqlite3
 import subprocess
@@ -230,6 +231,7 @@ def _install_fake_toolchain(root: Path) -> Path:
             subcommand = args[0]
             input_path = ""
             output_path = ""
+            name_only = False
             i = 1
             while i < len(args):
                 arg = args[i]
@@ -238,7 +240,10 @@ def _install_fake_toolchain(root: Path) -> Path:
                 elif arg in ("--out-file", "-o"):
                     output_path = args[i + 1]
                     i += 2
-                elif arg in ("--length", "--name", "--gc", "--gc-skew", "--header-line", "--only-id"):
+                elif arg == "--name":
+                    name_only = True
+                    i += 1
+                elif arg in ("--length", "--gc", "--gc-skew", "--header-line", "--only-id"):
                     i += 1
                 elif arg == "-":
                     input_path = arg
@@ -251,6 +256,8 @@ def _install_fake_toolchain(root: Path) -> Path:
 
             if subcommand == "seq":
                 content = read_text(input_path) if input_path else sys.stdin.read()
+                if name_only:
+                    content = "".join(f"{header.split()[0]}\\n" for header, _sequence in iter_fasta_records(content))
                 if output_path:
                     opener = gzip.open if output_path.endswith(".gz") else open
                     with opener(output_path, "wt", encoding="utf-8") as dst:
@@ -385,10 +392,14 @@ def _install_fake_toolchain(root: Path) -> Path:
     return bin_dir
 
 
-def _core_env(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None) -> dict[str, str]:
+def _core_env(
+    workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None
+) -> dict[str, str]:
     env = {
         "HOME": os.environ["HOME"],
-        "PATH": os.pathsep.join([str(fake_bin), str(Path(sys.executable).parent), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
+        "PATH": os.pathsep.join(
+            [str(fake_bin), str(Path(sys.executable).parent), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        ),
         "TMPDIR": str(workspace / "tmp_runtime"),
         "GG_TASK_CPUS": "1",
         "gg_workspace_dir": str(workspace),
@@ -435,7 +446,9 @@ def _core_env(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str
     return env
 
 
-def _run_core(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None) -> subprocess.CompletedProcess[str]:
+def _run_core(
+    workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None
+) -> subprocess.CompletedProcess[str]:
     env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode, task_id=task_id)
     completed = subprocess.run(
         ["bash", str(CORE_PATH)],
@@ -450,7 +463,9 @@ def _run_core(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str
     return completed
 
 
-def _run_core_async(workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int) -> subprocess.Popen[str]:
+def _run_core_async(
+    workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int
+) -> subprocess.Popen[str]:
     return subprocess.Popen(
         ["bash", str(CORE_PATH)],
         cwd=REPO_ROOT,
@@ -652,12 +667,23 @@ def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_pat
     _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_prepare")
     _write_runtime_busco_dataset(workspace)
 
-    worker1 = _run_core_async(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_worker", task_id=1)
-    worker2 = _run_core_async(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_worker", task_id=2)
+    worker1 = _run_core_async(
+        workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_worker", task_id=1
+    )
+    worker2 = _run_core_async(
+        workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_worker", task_id=2
+    )
     stdout1, stderr1 = worker1.communicate(timeout=180)
     stdout2, stderr2 = worker2.communicate(timeout=180)
     assert worker1.returncode == 0, stdout1 + "\n" + stderr1
     assert worker2.returncode == 0, stdout2 + "\n" + stderr2
+
+    provenance_dir = workspace / "output" / "input_generation" / "artifact_provenance"
+    busco_manifests = sorted(provenance_dir.glob("busco.*.json"))
+    assert len(busco_manifests) == 2
+    for manifest_path in busco_manifests:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest["parameters"]["busco_lineage_resolved"] == "eukaryota_odb12"
 
     _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_finalize")
 

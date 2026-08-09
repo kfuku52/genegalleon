@@ -134,6 +134,8 @@ species_tree_zip_compression="${species_tree_zip_compression:-${GG_COMMON_SPECIE
 species_tree_zip_compression_level="${species_tree_zip_compression_level:-${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION_LEVEL:-6}}" # Deflate level 0-9.
 undated_species_tree="astral_pep" # {iqtree_dna,iqtree_pep,astral_dna,astral_pep}; species-tree source copied to undated_species_tree.nwk for dating and downstream summaries.
 species_tree_rooting="taxonomy" # taxonomy[,ncbi[,opentree,timetree...]] | outgroup,GENUS_SPECIES[,GENUS_SPECIES...] | midpoint | mad | mv; selects how species trees are rooted before dating, using taxonomy providers, explicit outgroups, or topology/branch-length rooting methods.
+species_busco_parallel_jobs="auto" # auto uses up to four concurrent species BUSCO jobs within GG_TASK_CPUS; set a positive integer to cap memory use.
+species_busco_memory_gb_per_job=4 # Minimum tool-memory budget per concurrent BUSCO species job; parallelism is capped by GG_MEM_TOOL_GB / this value.
 astral_min_tips=4 # Minimum tip count required for per-gene trees used by ASTRAL.
 timetree_constraint=1 # Use TimeTree confidence intervals for species-tree dating when set to 1.
 mcmctree_divergence_time_constraints_str="" # Used only when timetree_constraint=0. Example: "Arabidopsis_thaliana,Oryza_sativa,130,-|Arabidopsis_thaliana,Amborella_trichopoda,150,200"
@@ -153,6 +155,7 @@ max_orthofinder_core_species=50 # Maximum number of species retained in the core
 orthofinder_core_filters="busco_complete_pct:ge:80,num_seq:le:100000" # Comma-separated nwkit sample filters for two-round OrthoFinder core selection.
 orthofinder_core_rank="num_seq:asc,busco_complete_pct:desc" # Comma-separated nwkit sample rank keys used after filtering.
 orthofinder_core_method="max-pd" # nwkit sample method for tree-aware OrthoFinder core selection.
+orthofinder_algorithm_threads="auto" # auto uses GG_TASK_CPUS for OrthoFinder analysis phases; set a positive integer to cap them.
 min_percent_species_coverage=50 # Minimum percent species coverage required for orthogroup selection.
 max_num_gene=1000 # Maximum total gene count allowed for an orthogroup.
 orthogroup_decay_replicates=1000 # Random species subsets per species-count value for single-copy ortholog decay plotting.

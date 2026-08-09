@@ -31,6 +31,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import BinaryIO, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from content_digest_cache import cached_sha256_file
+
 STORE_DIR_NAME = ".gg_store"
 ACTIVE_ARCHIVE_DIR_NAME = "archives"
 LEGACY_ARCHIVE_DIR_NAME = ".gg_archives"
@@ -6768,11 +6774,7 @@ def purge_archives(
 
 
 def _sha256_path(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return cached_sha256_file(path)[0]
 
 
 def cleanup_materialization_receipt(

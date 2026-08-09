@@ -87,6 +87,7 @@ gg_bootstrap_core_runtime() {
   gg_workflow_dir="$(cd "${gg_support_dir}/.." && pwd -P)"
   gg_core_dir="${gg_workflow_dir}/core"
   : "${gg_workspace_dir:=/workspace}"
+  export GG_CONTENT_DIGEST_CACHE="${GG_CONTENT_DIGEST_CACHE:-${gg_workspace_dir}/.gg_cache/content_digests.sqlite3}"
   gg_configure_python_pycacheprefix_from_core
 
   # shellcheck disable=SC1090

@@ -697,7 +697,10 @@ def test_check_species_sequences_accept_transcriptome_longest_cds_for_genus_sp(t
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "[[ ${1:-} == seq ]]\n"
-        "gzip -cd -- ${2:?}\n",
+        "shift\n"
+        "[[ ${1:-} == --name ]] && shift\n"
+        "if [[ ${1:-} == --threads ]]; then shift 2; fi\n"
+        "gzip -cd -- ${1:?} | awk '/^>/ {sub(/^>/, \"\"); sub(/[[:space:]].*$/, \"\"); print}'\n",
         encoding="utf-8",
     )
     seqkit.chmod(0o755)
@@ -1391,7 +1394,10 @@ def test_genome_annotation_species_cds_contract_accepts_symlinked_search_root(tm
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "[[ ${1:-} == seq ]]\n"
-        "cat -- ${2:?}\n",
+        "shift\n"
+        "[[ ${1:-} == --name ]] && shift\n"
+        "if [[ ${1:-} == --threads ]]; then shift 2; fi\n"
+        "awk '/^>/ {sub(/^>/, \"\"); sub(/[[:space:]].*$/, \"\"); print}' ${1:?}\n",
         encoding="utf-8",
     )
     seqkit.chmod(0o755)
