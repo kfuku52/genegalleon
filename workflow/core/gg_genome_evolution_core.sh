@@ -890,6 +890,7 @@ run_shared_omark_summary_stage() {
     return 0
   fi
 
+  ensure_dir "${dir_species_omark}"
   gg_artifact_contract_init omark_summary_provenance_args "genome_evolution_omark_summary" "all_species" "${genome_evolution_provenance_dir}/omark.summary.json"
   omark_summary_provenance_args+=(
     --input "omark_directory=${dir_species_omark}"

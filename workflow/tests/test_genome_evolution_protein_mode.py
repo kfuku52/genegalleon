@@ -339,7 +339,9 @@ if [[ -z "${{input_dir}}" || -z "${{output_dir}}" || -z "${{run_name}}" ]]; then
   exit 1
 fi
 results_dir="${{output_dir}}/Results_${{run_name}}"
-mkdir -p "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups"
+mkdir -p \
+  "${{results_dir}}/Orthogroups" \
+  "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups"
 input_capture="${{capture_dir}}/input_files_${{run_name}}.txt"
 proteins_capture="${{capture_dir}}/proteins_${{run_name}}.fasta"
 find "${{input_dir}}" -maxdepth 1 -type f ! -name '.*' | sort > "${{input_capture}}"
@@ -350,12 +352,16 @@ while IFS= read -r fasta; do
   cat "${{fasta}}" >> "${{proteins_capture}}"
   cat "${{fasta}}" >> "${{capture_dir}}/proteins.fasta"
 done < "${{input_capture}}"
-python - "${{input_capture}}" "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups/N0.tsv" <<'PY'
+python - \
+  "${{input_capture}}" \
+  "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups/N0.tsv" \
+  "${{results_dir}}/Orthogroups" <<'PY'
 import pathlib
 import sys
 
 input_files = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
 outfile = pathlib.Path(sys.argv[2])
+orthogroups_dir = pathlib.Path(sys.argv[3])
 species = []
 for path in input_files:
     name = pathlib.Path(path).name
@@ -368,6 +374,12 @@ with outfile.open("w", encoding="utf-8", newline="") as handle:
     handle.write("\\t".join(cols) + "\\n")
     genes = [f"{{sp}}_gene1" for sp in species]
     handle.write("\\t".join(["N0.HOG0000001", "OG0000001", "n0", *genes]) + "\\n")
+with (orthogroups_dir / "Orthogroups.tsv").open("w", encoding="utf-8", newline="") as handle:
+    handle.write("\\t".join(["Orthogroup", *species]) + "\\n")
+    handle.write("\\t".join(["OG0000001", *genes]) + "\\n")
+with (orthogroups_dir / "Orthogroups.GeneCount.tsv").open("w", encoding="utf-8", newline="") as handle:
+    handle.write("\\t".join(["Orthogroup", *species, "Total"]) + "\\n")
+    handle.write("\\t".join(["OG0000001", *(["1"] * len(species)), str(len(species))]) + "\\n")
 PY
 """,
     )

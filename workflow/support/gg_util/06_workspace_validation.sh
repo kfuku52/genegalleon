@@ -286,6 +286,8 @@ gg_artifact_contract_init() {
   local manifest=$4
   local logical_root=${5:-"${gg_workspace_output_dir}/.gg_global_artifacts"}
   local workspace_root=${6:-"${gg_workspace_dir}"}
+  # The caller supplies the name of an array that this helper initializes.
+  # shellcheck disable=SC2178
   local -n destination_ref="${destination_variable}"
   destination_ref=(
     --manifest "${manifest}"

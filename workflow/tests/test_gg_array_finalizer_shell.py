@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 WORKFLOW_DIR = Path(__file__).resolve().parents[1]
 LOCK_HELPER = WORKFLOW_DIR / "support" / "gg_shared_lock.sh"
 
