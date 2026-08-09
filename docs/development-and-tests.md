@@ -118,6 +118,28 @@ bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_format
 bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_generate_species_trait.py workflow/tests/test_trait_input_templates.py
 ```
 
+The Python suite is also divided into non-overlapping CI lanes. The same
+selection works locally and in a GeneGalleon container:
+
+```bash
+bash workflow/tests/run_in_sif.sh python -m pytest -q --gg-suite fast workflow/tests
+```
+
+```bash
+bash workflow/tests/run_in_sif.sh python -m pytest -q --gg-suite integration-download workflow/tests
+bash workflow/tests/run_in_sif.sh python -m pytest -q --gg-suite integration-workflow workflow/tests
+```
+
+```bash
+bash workflow/tests/run_in_sif.sh python -m pytest -q --gg-suite static workflow/tests
+bash workflow/tests/run_in_sif.sh python -m pytest -q --gg-suite runtime workflow/tests
+```
+
+Use `--gg-suite smoke` for the minimal CI preflight. Suite membership is
+defined in `workflow/tests/conftest.py`; pytest markers expose the same lane
+metadata during full-suite collection. Strict marker and configuration checks
+are enabled, so new marker names must be registered in `pyproject.toml`.
+
 ## Run R-side parse checks
 
 ```bash

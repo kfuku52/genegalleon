@@ -172,6 +172,25 @@ def _install_fake_toolchain(root: Path) -> Path:
         mode=0o755,
     )
     _write_text(
+        bin_dir / "micromamba",
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            if [[ ${1:-} == shell && ${2:-} == hook && ${3:-} == --shell && ${4:-} == bash ]]; then
+              cat <<'EOF'
+            conda() {
+              return 0
+            }
+            EOF
+              exit 0
+            fi
+            exit 0
+            """
+        ),
+        mode=0o755,
+    )
+    _write_text(
         bin_dir / "seqkit",
         textwrap.dedent(
             """\

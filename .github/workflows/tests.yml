@@ -36,8 +36,10 @@ jobs:
       - name: Run smoke tests
         run: |
           python -m pytest -q -x \
-            workflow/tests/test_busco_hmmsearch_wrapper.py \
-            workflow/tests/test_gg_input_generation_end_to_end.py::test_gg_input_generation_single_mode_end_to_end
+            --gg-suite smoke \
+            --durations=25 \
+            --durations-min=0.5 \
+            workflow/tests
 
   python-fast:
     needs: python-smoke
@@ -62,40 +64,12 @@ jobs:
           python -m pip install -r workflow/tests/requirements.txt
 
       - name: Run fast Python tests
-        shell: bash
         run: |
-          tests=()
-          while IFS= read -r test_path; do
-            tests+=("${test_path}")
-          done < <(find workflow/tests -maxdepth 1 -type f -name "test_*.py" | sort)
-
-          exclude=(
-            "workflow/tests/test_busco_hmmsearch_wrapper.py"
-            "workflow/tests/test_format_species_inputs_download_runtime.py"
-            "workflow/tests/test_format_species_inputs_download.py"
-            "workflow/tests/test_format_species_inputs_provider_pages.py"
-            "workflow/tests/test_generate_species_trait.py"
-            "workflow/tests/test_genome_evolution_protein_mode.py"
-            "workflow/tests/test_gg_input_generation_end_to_end.py"
-            "workflow/tests/test_hgt_end_to_end.py"
-            "workflow/tests/test_shell_static_safety.py"
-          )
-
-          filtered=()
-          for test_path in "${tests[@]}"; do
-            skip=0
-            for excluded in "${exclude[@]}"; do
-              if [[ "${test_path}" == "${excluded}" ]]; then
-                skip=1
-                break
-              fi
-            done
-            if [[ "${skip}" -eq 0 ]]; then
-              filtered+=("${test_path}")
-            fi
-          done
-
-          python -m pytest -q "${filtered[@]}"
+          python -m pytest -q \
+            --gg-suite fast \
+            --durations=25 \
+            --durations-min=0.5 \
+            workflow/tests
 
   python-heavy:
     needs: python-smoke
@@ -107,17 +81,9 @@ jobs:
       matrix:
         shard:
           - name: download-and-traits
-            tests: >-
-              workflow/tests/test_format_species_inputs_download.py
-              workflow/tests/test_format_species_inputs_download_runtime.py
-              workflow/tests/test_format_species_inputs_provider_pages.py
-              workflow/tests/test_generate_species_trait.py
+            suite: integration-download
           - name: workflow-integrations
-            tests: >-
-              workflow/tests/test_busco_hmmsearch_wrapper.py
-              workflow/tests/test_genome_evolution_protein_mode.py
-              workflow/tests/test_gg_input_generation_end_to_end.py
-              workflow/tests/test_hgt_end_to_end.py
+            suite: integration-workflow
 
     steps:
       - name: Checkout
@@ -137,7 +103,11 @@ jobs:
 
       - name: Run heavy Python tests
         run: |
-          python -m pytest -q ${{ matrix.shard.tests }}
+          python -m pytest -q \
+            --gg-suite "${{ matrix.shard.suite }}" \
+            --durations=25 \
+            --durations-min=0.5 \
+            workflow/tests
 
   shell-static:
     runs-on: ubuntu-24.04
@@ -192,12 +162,10 @@ jobs:
       - name: Shell static safety checks
         run: |
           python -m pytest -q \
-            workflow/tests/test_ci_static.py \
-            workflow/tests/test_shell_download_static.py \
-            workflow/tests/test_shell_static_safety.py \
-            workflow/tests/test_shell_entrypoint_static.py \
-            workflow/tests/test_shell_shared_lock_static.py \
-            workflow/tests/test_shell_transcriptome_static.py
+            --gg-suite static \
+            --durations=25 \
+            --durations-min=0.5 \
+            workflow/tests
 
   r-script-parse:
     runs-on: ubuntu-24.04
@@ -230,9 +198,8 @@ jobs:
 
   sif-runtime-validation:
     needs:
-      - python-heavy
+      - python-smoke
       - shell-static
-      - r-script-parse
     runs-on: ubuntu-24.04
     timeout-minutes: 180
 

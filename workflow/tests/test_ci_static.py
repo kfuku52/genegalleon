@@ -180,6 +180,12 @@ def test_sif_runtime_validation_builds_the_current_repository_image():
     assert "latest" not in conversion_run.lower()
 
 
+def test_sif_runtime_validation_starts_after_fast_preflight_guards():
+    sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+
+    assert set(sif_job["needs"]) == {"python-smoke", "shell-static"}
+
+
 def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
     sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
     runner_cleanup = step_run(sif_job, "Reclaim runner disk space for SIF conversion")

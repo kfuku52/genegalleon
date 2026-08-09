@@ -325,8 +325,22 @@ gg_shared_lock_start_heartbeat() {
   local interval_seconds
   interval_seconds=$(gg_lock_heartbeat_seconds)
   (
+    local heartbeat_sleep_pid=""
+
+    stop_heartbeat_process() {
+      if [[ "${heartbeat_sleep_pid}" =~ ^[0-9]+$ ]]; then
+        kill "${heartbeat_sleep_pid}" 2>/dev/null || true
+        wait "${heartbeat_sleep_pid}" 2>/dev/null || true
+      fi
+      exit 0
+    }
+
+    trap 'stop_heartbeat_process' HUP INT TERM
     while [[ -e "${lock_file}" ]]; do
-      sleep "${interval_seconds}" || exit 0
+      sleep "${interval_seconds}" &
+      heartbeat_sleep_pid=$!
+      wait "${heartbeat_sleep_pid}" || exit 0
+      heartbeat_sleep_pid=""
       if [[ -e "${lock_file}" ]]; then
         touch -c -- "${lock_file}" 2>/dev/null || true
       fi

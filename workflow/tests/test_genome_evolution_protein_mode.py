@@ -84,6 +84,22 @@ exit 0
     )
 
     _write_executable(
+        bin_dir / "micromamba",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == shell && ${2:-} == hook && ${3:-} == --shell && ${4:-} == bash ]]; then
+  cat <<'EOF'
+conda() {
+  return 0
+}
+EOF
+  exit 0
+fi
+exit 0
+""",
+    )
+
+    _write_executable(
         bin_dir / "seqkit",
         r"""#!/usr/bin/env python3
 import re

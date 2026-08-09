@@ -1,6 +1,7 @@
 import gzip
 import shlex
 import subprocess
+import time
 from pathlib import Path
 
 GG_UTIL_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_util.sh"
@@ -436,9 +437,12 @@ def test_gg_array_download_once_accepts_nonempty_ready_marker(tmp_path):
         'cat "$marker_file"'
     )
 
+    started = time.monotonic()
     completed = run_bash(command, cwd=tmp_path)
+    elapsed = time.monotonic() - started
 
     assert completed.returncode == 0, completed.stderr
+    assert elapsed < 5, f"heartbeat shutdown took {elapsed:.2f}s"
     lines = completed.stdout.strip().splitlines()
     assert lines[0] == "0"
     assert int(lines[1]) > 0

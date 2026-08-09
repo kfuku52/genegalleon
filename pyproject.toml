@@ -1,5 +1,15 @@
 [tool.pytest.ini_options]
 testpaths = ["workflow/tests"]
+addopts = ["--strict-config", "--strict-markers"]
+markers = [
+  "fast: dependency-light tests intended for the main Python feedback job",
+  "integration: multi-component workflow and CLI integration tests",
+  "network: tests that are explicitly allowed to access a non-loopback network endpoint",
+  "runtime: tests that require tools or packages from the GeneGalleon runtime",
+  "slow: tests kept outside the fast feedback lane",
+  "smoke: minimal high-signal tests used as the CI preflight gate",
+  "static: source, configuration, and workflow structure checks",
+]
 norecursedirs = [
   ".git",
   ".pytest_cache",
