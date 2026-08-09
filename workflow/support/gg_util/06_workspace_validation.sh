@@ -302,6 +302,8 @@ gg_artifact_add_input_if_present() {
   local destination_variable=$1
   local label=$2
   local path=$3
+  # The caller supplies the name of an array that this helper extends.
+  # shellcheck disable=SC2178
   local -n destination_ref="${destination_variable}"
   if [[ -n "${path}" && -e "${path}" ]]; then
     local previous=""
