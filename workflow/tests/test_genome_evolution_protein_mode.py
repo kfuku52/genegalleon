@@ -1255,18 +1255,23 @@ def test_genome_evolution_keeps_species_tree_outputs_when_generation_disabled_an
     existing_tree = species_tree_summary_dir / "undated_species_tree.nwk"
     existing_tree.write_text("(Arabidopsis_thaliana:0.1);\n", encoding="utf-8")
     stamp = species_tree_dir / ".shared_protein_input_signature"
-    stamp.write_text("v2:old-signature\n", encoding="utf-8")
+    stamp.write_text("v3:old-signature\n", encoding="utf-8")
 
-    completed = _run_core(tmp_path)
+    completed = _run_core(tmp_path, {"artifact_stale_policy": "rebuild"})
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert existing_tree.read_text(encoding="utf-8") == "(Arabidopsis_thaliana:0.1);\n"
-    assert stamp.read_text(encoding="utf-8") == "v2:old-signature\n"
-    assert "Keeping existing species_tree outputs for reuse" in completed.stdout
+    assert stamp.read_text(encoding="utf-8") == "v3:old-signature\n"
+    assert (
+        "Keeping existing species_tree outputs until a species-tree stage is requested"
+        in completed.stdout
+    )
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
-@pytest.mark.parametrize("legacy_signature", ["123456789", "v1:123456789"])
+@pytest.mark.parametrize(
+    "legacy_signature", ["123456789", "v1:123456789", "v2:123456789"]
+)
 def test_genome_evolution_upgrades_legacy_signatures_without_clearing_outputs(
     tmp_path: Path, legacy_signature: str
 ):
@@ -1300,7 +1305,7 @@ def test_genome_evolution_upgrades_legacy_signatures_without_clearing_outputs(
         signature = (output_dir / ".shared_protein_input_signature").read_text(
             encoding="utf-8"
         )
-        assert signature.startswith("v2:")
+        assert signature.startswith("v3:")
     assert completed.stdout.count("Legacy shared protein input signature found") == 3
     assert "Clearing derived outputs" not in completed.stdout
 
@@ -1331,7 +1336,7 @@ def test_genome_evolution_input_signature_is_independent_of_workspace_location(t
             / "species_tree"
             / ".shared_protein_input_signature"
         ).read_text(encoding="utf-8").strip()
-        assert stamp.startswith("v2:")
+        assert stamp.startswith("v3:")
         signatures.append(stamp)
 
     assert signatures[0] == signatures[1]
@@ -1367,7 +1372,7 @@ def test_genome_evolution_invalidates_zip_backed_species_tree_outputs_when_gener
         text=True,
     )
     (species_tree_dir / ".shared_protein_input_signature").write_text(
-        "v2:old-signature\n", encoding="utf-8"
+        "v3:old-signature\n", encoding="utf-8"
     )
 
     completed = _run_core(
@@ -1375,6 +1380,7 @@ def test_genome_evolution_invalidates_zip_backed_species_tree_outputs_when_gener
         {
             "run_orthofinder": "0",
             "run_concat_iqtree_protein": "1",
+            "artifact_stale_policy": "rebuild",
         },
     )
 

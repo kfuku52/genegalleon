@@ -2220,6 +2220,18 @@ species_tree_materialize_managed_directories_for_files_mode() {
     --root "${dir_species_tree}"
 }
 
+species_tree_recover_mixed_managed_directories() {
+  if [[ "${species_tree_output_storage}" != "zip" ]]; then
+    return 0
+  fi
+  local directory_path
+  for directory_path in "${species_tree_managed_directory_paths[@]}"; do
+    if [[ -d "${directory_path}" && -f "${directory_path}.zip" ]]; then
+      species_tree_archive_directory "${directory_path}"
+    fi
+  done
+}
+
 species_tree_clear_managed_directory() {
   local directory_path=$1
   local allowed_path=""
@@ -2470,6 +2482,7 @@ species_tree_requested_for_orthofinder=0
 if species_tree_summary_generation_requested; then
   species_tree_requested_for_orthofinder=1
 fi
+species_tree_recover_mixed_managed_directories
 refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}" || exit $?
 species_tree_materialize_managed_directories_for_files_mode
 refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
@@ -3154,7 +3167,6 @@ astral_pep_needs_update=0
 gg_artifact_contract_init astral_pep_provenance_args "species_tree_astral_pep" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.astral_pep.json"
 astral_pep_provenance_args+=(
   --input-logical-directory "gene_trees=${dir_single_copy_iqtree_pep}"
-  --input "concat_peptide=${file_concat_pep}"
   --optional-output "result_directory=${dir_astral_pep}"
   --optional-output "optimized_tree=${file_astral_tree_pep}"
   --optional-output "log=${file_astral_log_pep}"
@@ -3166,6 +3178,7 @@ astral_pep_provenance_args+=(
   --parameter "rooting_value=${species_tree_rooting_value}"
   --parameter "absence_when_no_eligible_gene_trees=valid"
 )
+gg_artifact_add_input_if_present astral_pep_provenance_args "concat_peptide" "${file_concat_pep}"
 gg_artifact_prepare_stage astral_pep_needs_update run_astral_pep "${astral_pep_provenance_args[@]}" || exit $?
 if [[ ${astral_pep_needs_update} -eq 1 && ${run_astral_pep} -eq 1 ]]; then
   species_tree_materialize_directory "${dir_single_copy_iqtree_pep}"
@@ -3298,7 +3311,6 @@ astral_dna_needs_update=0
 gg_artifact_contract_init astral_dna_provenance_args "species_tree_astral_dna" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.astral_dna.json"
 astral_dna_provenance_args+=(
   --input-logical-directory "gene_trees=${dir_single_copy_iqtree_dna}"
-  --input "concat_cds=${file_concat_cds}"
   --optional-output "result_directory=${dir_astral_dna}"
   --optional-output "optimized_tree=${file_astral_tree_dna}"
   --optional-output "log=${file_astral_log_dna}"
@@ -3310,6 +3322,7 @@ astral_dna_provenance_args+=(
   --parameter "rooting_value=${species_tree_rooting_value}"
   --parameter "absence_when_no_eligible_gene_trees=valid"
 )
+gg_artifact_add_input_if_present astral_dna_provenance_args "concat_cds" "${file_concat_cds}"
 gg_artifact_prepare_stage astral_dna_needs_update run_astral_dna "${astral_dna_provenance_args[@]}" || exit $?
 if [[ ${astral_dna_needs_update} -eq 1 && ${run_astral_dna} -eq 1 ]]; then
   species_tree_materialize_directory "${dir_single_copy_iqtree_dna}"
