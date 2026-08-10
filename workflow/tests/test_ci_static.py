@@ -18,9 +18,7 @@ REVIEWED_ACTIONS = {
 }
 
 SINGULARITY_CE_VERSION = "4.5.0"
-SINGULARITY_CE_DEB_SHA256 = (
-    "85e6f7af5e7aad5b1bf28183ce333998bd37eb8f4769af352c47a5153f3373fb"
-)
+SINGULARITY_CE_DEB_SHA256 = "85e6f7af5e7aad5b1bf28183ce333998bd37eb8f4769af352c47a5153f3373fb"
 
 
 def load_workflow(name: str) -> dict:
@@ -78,10 +76,7 @@ def test_workflows_pin_all_actions_to_reviewed_full_commit_shas():
 
 
 def test_workflows_pin_x64_jobs_to_ubuntu_2404():
-    workflow_text = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted(GITHUB_WORKFLOWS_DIR.glob("*.yml"))
-    )
+    workflow_text = "\n".join(path.read_text(encoding="utf-8") for path in sorted(GITHUB_WORKFLOWS_DIR.glob("*.yml")))
 
     assert "ubuntu-latest" not in workflow_text
     assert "runs-on: ubuntu-24.04" in workflow_text
@@ -93,7 +88,7 @@ def test_workflows_limit_github_token_permissions_by_default():
     release = load_workflow("release-sif.yml")
 
     assert tests["permissions"] == {"contents": "read"}
-    assert container["permissions"] == {"contents": "read"}
+    assert container["permissions"] == {"actions": "read", "contents": "read"}
     assert release["permissions"] == {"contents": "read"}
     assert container["jobs"]["build-and-push"]["permissions"] == {
         "contents": "read",
@@ -117,14 +112,14 @@ def test_dependabot_updates_pinned_github_actions():
     dependabot_path = GITHUB_WORKFLOWS_DIR.parent / "dependabot.yml"
     config = yaml.load(dependabot_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
 
-    github_actions = [
-        update
-        for update in config["updates"]
-        if update.get("package-ecosystem") == "github-actions"
-    ]
+    github_actions = [update for update in config["updates"] if update.get("package-ecosystem") == "github-actions"]
     assert len(github_actions) == 1
     assert github_actions[0]["directory"] == "/"
     assert github_actions[0]["schedule"]["interval"] == "weekly"
+
+    pip_updates = [update for update in config["updates"] if update.get("package-ecosystem") == "pip"]
+    assert len(pip_updates) == 1
+    assert pip_updates[0]["directory"] == "/workflow/tests"
 
 
 def test_immutable_image_tags_fingerprint_resolved_upstream_sources():
@@ -183,7 +178,12 @@ def test_sif_runtime_validation_builds_the_current_repository_image():
 def test_sif_runtime_validation_starts_after_fast_preflight_guards():
     sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
 
-    assert set(sif_job["needs"]) == {"python-smoke", "shell-static"}
+    assert set(sif_job["needs"]) == {
+        "python-smoke",
+        "runtime-change-filter",
+        "shell-static",
+    }
+    assert "runtime-change-filter.outputs.should_run == '1'" in sif_job["if"]
 
 
 def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
@@ -207,7 +207,7 @@ def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
     assert "runner.temp" in conversion["env"]["APPTAINER_TMPDIR"]
     assert "runner.temp" in conversion["env"]["SINGULARITY_TMPDIR"]
     assert "runner.temp" in conversion["env"]["TMPDIR"]
-    assert '2 * image_bytes + reserve_bytes' in buildkit_cleanup
+    assert "2 * image_bytes + reserve_bytes" in buildkit_cleanup
     assert disk_report["if"] == "always()"
     assert "df -h /" in disk_report["run"]
     assert "singularity-transport-tmp" in disk_report["run"]
@@ -242,20 +242,22 @@ def test_toolchain_dependent_r_integration_test_runs_in_sif_job():
     sif_commands = "\n".join(str(step.get("run", "")) for step in sif_job["steps"])
     integration_test = "workflow/tests/test_orthogroup_copy_number_trait_pgls.R"
 
-    assert not any(
-        str(step.get("uses", "")).startswith("actions/setup-python@")
-        for step in r_job["steps"]
-    )
+    assert not any(str(step.get("uses", "")).startswith("actions/setup-python@") for step in r_job["steps"])
     assert integration_test not in r_commands
     assert f"bash workflow/tests/run_in_sif.sh Rscript {integration_test}" in sif_commands
+
+
+def test_runtime_python_suite_runs_in_authoritative_sif_job():
+    sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    commands = "\n".join(str(step.get("run", "")) for step in sif_job["steps"])
+
+    assert "run_in_sif.sh python -m pytest -q --gg-suite runtime workflow/tests" in commands
 
 
 def test_treevis_package_validation_runs_only_in_the_container_job():
     jobs = load_workflow("tests.yml")["jobs"]
     r_commands = "\n".join(str(step.get("run", "")) for step in jobs["r-script-parse"]["steps"])
-    sif_commands = "\n".join(
-        str(step.get("run", "")) for step in jobs["sif-runtime-validation"]["steps"]
-    )
+    sif_commands = "\n".join(str(step.get("run", "")) for step in jobs["sif-runtime-validation"]["steps"])
 
     assert "test_treevis_main.R" not in r_commands
     assert "workflow/tests/check_treevis_package.sh" in sif_commands
@@ -273,8 +275,41 @@ def test_shell_job_uses_structural_workflow_and_shell_linters():
     shell_job = load_workflow("tests.yml")["jobs"]["shell-static"]
     install_run = step_run(shell_job, "Install shell and workflow linters")
     actionlint_run = step_run(shell_job, "Validate GitHub Actions workflows")
-    shellcheck_run = step_run(shell_job, "ShellCheck workflow drivers")
+    shellcheck_run = step_run(shell_job, "ShellCheck all tracked shell scripts")
 
     assert "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12" in install_run
     assert "actionlint" in actionlint_run
     assert "shellcheck -S warning" in shellcheck_run
+    assert "git ls-files -z '*.sh'" in shellcheck_run
+    assert "scripts+=(dev)" in shellcheck_run
+
+
+def test_container_workflows_embed_version_and_shared_build_input_hash():
+    cases = (
+        ("container-ghcr.yml", "build-and-push", "prepare-build"),
+        ("release-sif.yml", "build-platform", "prepare-release"),
+    )
+    for workflow_name, build_job_name, prepare_job_name in cases:
+        jobs = load_workflow(workflow_name)["jobs"]
+        build_job = jobs[build_job_name]
+        hash_step = named_step(build_job, "Compute build input hash")
+        build_step = next(
+            step for step in build_job["steps"] if str(step.get("uses", "")).startswith("docker/build-push-action@")
+        )
+        build_args = str(build_step["with"]["build-args"])
+
+        assert "container/scripts/compute_build_input_hash.sh" in hash_step["run"]
+        assert "GG_BUILD_VERSION" in hash_step["env"]
+        assert "GG_VERSION=${{ needs." + prepare_job_name + ".outputs.gg_version }}" in build_args
+        assert "BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}" in build_args
+
+
+def test_scheduled_container_build_compares_with_last_successful_run():
+    workflow = load_workflow("container-ghcr.yml")
+    decision = step_run(workflow["jobs"]["check-trigger"], "Decide whether a scheduled build is needed")
+
+    assert "/actions/workflows/container-ghcr.yml/runs" in decision
+    assert '"status": "success"' in decision
+    assert "/compare/{baseline}...{os.environ['GITHUB_SHA']}" in decision
+    assert "previous JST day" not in decision
+    assert "preflight failed conservatively" in decision

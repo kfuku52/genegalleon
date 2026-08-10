@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+runtime_runner="${repo_root}/workflow/tests/run_in_runtime.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: bash ./dev <command> [args...]
+
+Commands:
+  check smoke|fast|static|runtime       Run one focused test lane.
+  check integration-download           Run provider/download integration tests.
+  check integration-workflow           Run workflow integration tests.
+  check full                            Run the complete Python and key R tests.
+  check r                               Run R parse and unit checks in the runtime.
+  config-check                          Validate entrypoint config metadata.
+  config-schema [json|markdown]         Print generated config documentation.
+  version                               Print VERSION.
+  bump major|minor|patch                Update VERSION using Semantic Versioning.
+  build                                 Build local/genegalleon:dev from this checkout.
+EOF
+}
+
+command_name="${1:-}"
+if [[ -z "${command_name}" ]]; then
+  usage >&2
+  exit 2
+fi
+shift
+
+case "${command_name}" in
+  check)
+    suite="${1:-fast}"
+    case "${suite}" in
+      smoke|fast|static|runtime|integration-download|integration-workflow)
+        exec bash "${runtime_runner}" python -m pytest -q --gg-suite "${suite}" workflow/tests
+        ;;
+      full)
+        bash "${runtime_runner}" python -m pytest -q workflow/tests
+        bash "${runtime_runner}" Rscript workflow/tests/test_r_scripts_parse.R
+        exec bash "${runtime_runner}" Rscript workflow/tests/test_treevis_main.R
+        ;;
+      r)
+        bash "${runtime_runner}" Rscript workflow/tests/test_r_scripts_parse.R
+        bash "${runtime_runner}" Rscript workflow/tests/test_pgls_common_rphylopars.R
+        exec bash "${runtime_runner}" Rscript workflow/tests/test_r_species_label_utils.R
+        ;;
+      *)
+        echo "Unknown check suite: ${suite}" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  config-check)
+    exec python "${repo_root}/workflow/support/entrypoint_config_schema.py" --check
+    ;;
+  config-schema)
+    format="${1:-json}"
+    exec python "${repo_root}/workflow/support/entrypoint_config_schema.py" --format "${format}"
+    ;;
+  version)
+    sed -n '1p' "${repo_root}/VERSION"
+    ;;
+  bump)
+    exec python "${repo_root}/workflow/support/bump_version.py" "${1:-}"
+    ;;
+  build)
+    exec env BUILD_SIF=0 IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev \
+      bash "${repo_root}/gg_container_build_entrypoint.sh"
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    echo "Unknown command: ${command_name}" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

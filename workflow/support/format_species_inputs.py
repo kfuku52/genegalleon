@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Public API and CLI facade for GeneGalleon species input formatting."""
-# ruff: noqa: F401,F403,F405
 
 import sys
 from pathlib import Path
@@ -11,24 +10,85 @@ if str(SUPPORT_DIR) not in sys.path:
 
 import json
 
-from format_species_annotations import *
-from format_species_cli import *
-from format_species_common import *
-from format_species_constants import *
-from format_species_discovery import *
-from format_species_download_runtime import *
+import format_species_annotations as _annotations
+import format_species_cli as _cli
+import format_species_common as _common
+import format_species_constants as _constants
+import format_species_discovery as _discovery
+import format_species_download_runtime as _download_runtime
+import format_species_download_stage as _download_stage
+import format_species_manifest as _manifest
+import format_species_provider_inputs as _provider_inputs
+import format_species_provider_resolvers as _provider_resolvers
+import format_species_provider_urls as _provider_urls
+import format_species_summary as _summary
+import format_species_taxonomy as _taxonomy
+import format_species_writers as _writers
+from format_species_annotations import (
+    describe_task_cds_input,
+    describe_task_genome_input,
+    describe_task_gff_input,
+)
+from format_species_cli import build_arg_parser
+from format_species_discovery import discover_tasks, format_cds, format_genome, format_gff, utc_now_iso
+from format_species_download_runtime import (
+    download_from_manifest,
+    format_download_diagnostics_line,
+    parse_http_headers,
+    resolve_parallel_jobs,
+)
 from format_species_download_stage import apply_download_input_dir, run_download_stage
-from format_species_manifest import *
 from format_species_provider_inputs import (
-    manifest_declared_providers,
     manifest_declared_species_keys,
     resolve_provider_inputs,
 )
-from format_species_provider_resolvers import *
-from format_species_provider_urls import *
-from format_species_summary import *
-from format_species_taxonomy import *
-from format_species_writers import *
+from format_species_provider_resolvers import remove_stale_ensembl_like_partial_gff_outputs
+from format_species_summary import (
+    build_species_summary_row,
+    format_task_succeeded,
+    read_species_summary_rows,
+    result_output_name,
+    retain_existing_species_summary_rows,
+    species_row_key,
+    write_species_summary_rows,
+)
+from format_species_taxonomy import SpeciesTaxonomyMetadataResolver
+
+# Preserve the exact legacy star-import order and its two explicitly imported
+# helper groups. CLI dependencies stay explicit above, while existing callers
+# keep the same facade attributes and ``from format_species_inputs import *``
+# behavior.
+_LEGACY_EXPORT_SOURCES = (
+    (_annotations, None),
+    (_cli, None),
+    (_common, None),
+    (_constants, None),
+    (_discovery, None),
+    (_download_runtime, None),
+    (_download_stage, ("apply_download_input_dir", "run_download_stage")),
+    (_manifest, None),
+    (
+        _provider_inputs,
+        (
+            "manifest_declared_providers",
+            "manifest_declared_species_keys",
+            "resolve_provider_inputs",
+        ),
+    ),
+    (_provider_resolvers, None),
+    (_provider_urls, None),
+    (_summary, None),
+    (_taxonomy, None),
+    (_writers, None),
+)
+for _module, _selected_names in _LEGACY_EXPORT_SOURCES:
+    _names = _selected_names or getattr(
+        _module,
+        "__all__",
+        tuple(name for name in vars(_module) if not name.startswith("_")),
+    )
+    for _name in _names:
+        globals()[_name] = getattr(_module, _name)
 
 
 def main():
@@ -220,9 +280,7 @@ def main():
         total_cds_gff_coordinate_rescued_transcripts += int(
             cds_result.get("gff_coordinate_rescued_transcripts", 0) or 0
         )
-        total_cds_gff_coordinate_rescued_groups += int(
-            cds_result.get("gff_coordinate_rescued_groups", 0) or 0
-        )
+        total_cds_gff_coordinate_rescued_groups += int(cds_result.get("gff_coordinate_rescued_groups", 0) or 0)
         if first_cds_sequence_name == "":
             first_cds_sequence_name = cds_result["first_sequence_name"]
         if genome_result["status"] != "missing":

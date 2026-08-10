@@ -147,7 +147,7 @@ Main outputs:
 
 Notable defaults:
 
-- `assembly_method="rnaSPAdes"`
+- `assembly_method="auto"` (selects an available supported assembler; set `rnaSPAdes` or `Trinity` to force one)
 - `kallisto_reference="longest_cds"`
 - staged FASTA outputs are written as `.fa.gz`.
 

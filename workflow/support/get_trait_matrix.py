@@ -20,15 +20,15 @@ from species_labeling import extract_species_label, strip_species_label
 
 def read_fasta_seqname(file_path):
     seqnames = []
-    if file_path.endswith('.gz'):
-        with gzip.open(file_path, 'rt') as f:
+    if file_path.endswith(".gz"):
+        with gzip.open(file_path, "rt") as f:
             for line in f:
-                if line.startswith('>'):
+                if line.startswith(">"):
                     seqnames.append(line[1:].strip())
     else:
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             for line in f:
-                if line.startswith('>'):
+                if line.startswith(">"):
                     seqnames.append(line[1:].strip())
     return seqnames
 
@@ -39,42 +39,42 @@ def get_gene_name(seq_name):
 
 def get_species_name(seq_name):
     species_name = extract_species_label(seq_name)
-    if species_name != '':
+    if species_name != "":
         return species_name
     return seq_name
 
 
 def trait_filename_to_species_name(trait_file):
     species_name = extract_species_label(trait_file, strip_extension=True)
-    if species_name != '':
+    if species_name != "":
         return species_name
-    return trait_file.split('.', 1)[0] if '.' in trait_file else trait_file
+    return trait_file.split(".", 1)[0] if "." in trait_file else trait_file
 
 
 def process_trait_file(trait_path, search_ids, id_map):
-    trait = pandas.read_csv(trait_path, sep='\t', header=0, comment='#')
+    trait = pandas.read_csv(trait_path, sep="\t", header=0, comment="#")
     if trait.shape[0] == 0:
         return trait
     if trait.index.values[0] != 0:
         trait = trait.reset_index(drop=False)
-    trait = trait.rename(columns={trait.columns.to_list()[0]: 'gene_id'})
-    trait['gene_id'] = trait['gene_id'].astype(str)
-    trait2 = trait.loc[trait['gene_id'].isin(search_ids), :].copy()
+    trait = trait.rename(columns={trait.columns.to_list()[0]: "gene_id"})
+    trait["gene_id"] = trait["gene_id"].astype(str)
+    trait2 = trait.loc[trait["gene_id"].isin(search_ids), :].copy()
     if trait2.shape[0] == 0:
         return trait2
-    trait2.loc[:, 'gene_id'] = trait2['gene_id'].map(id_map).fillna(trait2['gene_id'])
+    trait2.loc[:, "gene_id"] = trait2["gene_id"].map(id_map).fillna(trait2["gene_id"])
     return trait2
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dir_trait', metavar='PATH', default='', type=str, help='')
-    parser.add_argument('--seqfile', metavar='PATH', default='', type=str, help='')
-    parser.add_argument('--outfile', metavar='PATH', default='trait.tsv', type=str, help='')
-    parser.add_argument('--ncpu', metavar='INT', default=1, type=int, help='Number of worker threads.')
+    parser.add_argument("--dir_trait", metavar="PATH", default="", type=str, help="Path used by --dir_trait.")
+    parser.add_argument("--seqfile", metavar="PATH", default="", type=str, help="Path used by --seqfile.")
+    parser.add_argument("--outfile", metavar="PATH", default="trait.tsv", type=str, help="Path used by --outfile.")
+    parser.add_argument("--ncpu", metavar="INT", default=1, type=int, help="Number of worker threads.")
     args = parser.parse_args()
     args.ncpu = max(1, int(args.ncpu))
-    print('get_trait_matrix.py started.')
+    print("get_trait_matrix.py started.")
 
     seq_names = read_fasta_seqname(file_path=args.seqfile)
     gene_names = [get_gene_name(sn) for sn in seq_names]
@@ -82,17 +82,17 @@ def main():
     search_ids = set(seq_names + gene_names)
 
     id_map = {}
-    for seq_name, gene_name in zip(seq_names, gene_names):
+    for seq_name, gene_name in zip(seq_names, gene_names, strict=True):
         id_map[seq_name] = seq_name
         id_map[gene_name] = seq_name
 
-    trait_files = sorted([tf for tf in os.listdir(args.dir_trait) if not tf.startswith('.')])
+    trait_files = sorted([tf for tf in os.listdir(args.dir_trait) if not tf.startswith(".")])
     tasks = []
     for trait_file in trait_files:
         species_name = trait_filename_to_species_name(trait_file)
         print("Started processing {}: species name = {}".format(trait_file, species_name))
         if species_name not in gene_species_uniq:
-            print('Trait file for {} not found in {}. Skipping'.format(species_name, args.dir_trait))
+            print("Trait file for {} not found in {}. Skipping".format(species_name, args.dir_trait))
             continue
         trait_path = os.path.join(args.dir_trait, trait_file)
         tasks.append((trait_file, trait_path))
@@ -103,7 +103,7 @@ def main():
             trait2 = process_trait_file(trait_path=trait_path, search_ids=search_ids, id_map=id_map)
             if trait2.shape[0] > 0:
                 frames.append(trait2)
-            print('Finished processing {}: Number of identified genes = {:,}'.format(trait_file, trait2.shape[0]))
+            print("Finished processing {}: Number of identified genes = {:,}".format(trait_file, trait2.shape[0]))
     else:
         max_workers = min(args.ncpu, len(tasks))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -116,7 +116,7 @@ def main():
                 idx, trait_file = futures[future]
                 trait2 = future.result()
                 ordered_results[idx] = trait2
-                print('Finished processing {}: Number of identified genes = {:,}'.format(trait_file, trait2.shape[0]))
+                print("Finished processing {}: Number of identified genes = {:,}".format(trait_file, trait2.shape[0]))
             for idx in sorted(ordered_results.keys()):
                 trait2 = ordered_results[idx]
                 if trait2.shape[0] > 0:
@@ -126,11 +126,11 @@ def main():
         df_trait_all = pandas.concat(frames, ignore_index=True)
     else:
         df_trait_all = pandas.DataFrame()
-    print('Number of input genes: {:,}'.format(len(seq_names)))
-    print('Number of output genes with traits: {:,}'.format(df_trait_all.shape[0]))
-    df_trait_all.to_csv(args.outfile, sep='\t', header=True, index=False)
-    print('get_trait_matrix.py done!')
+    print("Number of input genes: {:,}".format(len(seq_names)))
+    print("Number of output genes with traits: {:,}".format(df_trait_all.shape[0]))
+    df_trait_all.to_csv(args.outfile, sep="\t", header=True, index=False)
+    print("get_trait_matrix.py done!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

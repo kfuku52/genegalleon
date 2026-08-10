@@ -3094,18 +3094,18 @@ def test_orthogroup_statistics_flushes_terminal_contiguous_n_run():
     script = WORKFLOW_DIR / "support" / "orthogroup_statistics.py"
     text = _read_text(script)
     assert "# Flush the final contiguous N-run when it reaches the sequence end." in text
-    assert "new_slice = N_slices[len(N_slices)-1]+':'+N_extension_until" in text
-    assert "re.finditer('[Nn]', seqs[i])" in text
-    assert "if len(seqs) == 0 or all((s.strip() == '') for s in seqs):" in text
+    assert 'new_slice = N_slices[len(N_slices) - 1] + ":" + N_extension_until' in text
+    assert 're.finditer("[Nn]", seqs[i])' in text
+    assert 'if len(seqs) == 0 or all((s.strip() == "") for s in seqs):' in text
 
 
 def test_orthogroup_statistics_handles_ete4_root_support_assertion_on_reroot():
     script = WORKFLOW_DIR / "support" / "orthogroup_statistics.py"
     text = _read_text(script)
     assert "root has branch property: support" in text
-    assert "clear_root_branch_property_compat(tree, 'support')" in text
+    assert 'clear_root_branch_property_compat(tree, "support")' in text
     assert "root has a distance" in text
-    assert "clear_root_branch_property_compat(tree, 'dist')" in text
+    assert 'clear_root_branch_property_compat(tree, "dist")' in text
 
 
 def test_orthogroup_statistics_skips_unrooted_annotation_transfer_failures():
@@ -3118,7 +3118,7 @@ def test_orthogroup_statistics_skips_unrooted_annotation_transfer_failures():
 def test_orthogroup_statistics_skips_invalid_regime2tree_summary_instead_of_aborting():
     script = WORKFLOW_DIR / "support" / "orthogroup_statistics.py"
     text = _read_text(script)
-    assert "tree_tmp = kfog.regime2tree(params[method+'_regime'])" in text
+    assert 'tree_tmp = kfog.regime2tree(params[method + "_regime"])' in text
     assert "except ValueError as exc:" in text
     assert "Skipping {} regime summary due to invalid regime parameters" in text
 
@@ -3320,11 +3320,11 @@ def test_gene_summary_csubst_scan_candidate_sites_are_opt_in_and_threshold_packa
 
 def test_csubst_site_wrapper_omits_redundant_sites_defaults():
     wrapper = _read_text(WORKFLOW_DIR / "support" / "csubst_site_wrapper.py")
-    assert "cmd = ['csubst', 'sites']" in wrapper
-    assert "cmd += ['--ml_anc', 'no']" not in wrapper
-    assert "cmd += ['--mafft_exe', 'mafft']" not in wrapper
-    assert "if recode != 'no':" in wrapper
-    assert "cmd += ['--nonsyn_recode', recode]" in wrapper
+    assert 'cmd = ["csubst", "sites"]' in wrapper
+    assert 'cmd += ["--ml_anc", "no"]' not in wrapper
+    assert 'cmd += ["--mafft_exe", "mafft"]' not in wrapper
+    assert 'if recode != "no":' in wrapper
+    assert 'cmd += ["--nonsyn_recode", recode]' in wrapper
 
 
 def test_genome_annotation_core_has_jcvi_scaffold_fallback_for_small_genomes():

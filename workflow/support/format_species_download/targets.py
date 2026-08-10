@@ -147,7 +147,7 @@ def resolve_download_urls_from_templates(provider, source_id, species_key, row):
         if genome_template != "":
             resolved["genome_url"] = genome_template.format(**mapping)
     except KeyError as exc:
-        raise ValueError("template placeholder is not supported: {}".format(exc))
+        raise ValueError("template placeholder is not supported: {}".format(exc)) from exc
     return resolved
 
 

@@ -6,6 +6,17 @@ For workflow validation, integration tests, R helper checks, and
 toolchain-dependent behavior, use a GeneGalleon container instead of
 host-local Python, R, or command-line tools.
 
+```bash
+bash ./dev check fast
+bash ./dev check runtime
+bash ./dev check r
+```
+
+`workflow/tests/run_in_runtime.sh`, used by `dev`, prefers a usable SIF on
+Linux/HPC and otherwise uses `local/genegalleon:dev` through Docker. Force the
+selection with `GG_TEST_RUNTIME=sif` or `GG_TEST_RUNTIME=docker`. The command
+reports an error rather than treating host-local behavior as runtime evidence.
+
 On Linux/HPC hosts with Apptainer or Singularity, the preferred wrapper is:
 
 ```bash
@@ -40,7 +51,7 @@ bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_en
 Relative paths, paths containing `:`, and nonexistent paths are rejected.
 
 On macOS, build an image from the current checkout and run validation through
-Docker:
+the same wrapper:
 
 ```bash
 BUILD_SIF=0 IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev \
@@ -48,8 +59,7 @@ bash ./gg_container_build_entrypoint.sh
 ```
 
 ```bash
-docker run --rm -i -v "$PWD:$PWD" -w "$PWD" \
-  local/genegalleon:dev \
+GG_TEST_RUNTIME=docker bash workflow/tests/run_in_runtime.sh \
   python -m pytest -q workflow/tests/test_hgt_end_to_end.py
 ```
 
@@ -62,11 +72,14 @@ as SIF or Docker/container validation according to the runtime actually used.
 Python-side test dependencies are listed in:
 
 - `workflow/tests/requirements.txt`
+- `workflow/tests/requirements.lock.txt` (validated exact direct-dependency constraints)
 
 Typical setup:
 
 ```bash
-python -m pip install -r workflow/tests/requirements.txt
+python -m pip install \
+  --constraint workflow/tests/requirements.lock.txt \
+  --requirement workflow/tests/requirements.txt
 ```
 
 To keep `.pyc` files out of the repository during direct local Python runs,
@@ -159,22 +172,36 @@ The repository includes tests that intentionally enforce shell hygiene, for exam
 
 When editing shell code, `workflow/tests/test_shell_static_safety.py` is often the fastest high-signal check to run first.
 
+The editable entrypoint blocks are also the source for a machine-readable
+configuration schema. Validate the forwarding registry or render current
+JSON/Markdown reference data with:
+
+```bash
+bash ./dev config-check
+bash ./dev config-schema json
+bash ./dev config-schema markdown
+```
+
+Use `bash ./dev bump patch` (or `minor`/`major`) for an atomic Semantic Version
+update; `python workflow/support/bump_version.py patch --dry-run` previews it.
+
+`gg_genome_annotation_core.sh` also supports `GG_CORE_SOURCE_ONLY=1` when a
+focused shell test needs to load its helper functions without starting a
+workflow. Its functions and ordered stages remain in the self-contained core
+file; the switch is a test boundary, not a sourced production architecture.
+
 CI also runs `actionlint` against parsed GitHub Actions workflows and runs
-ShellCheck at warning severity against the self-contained core drivers and the
-`gg_util.sh` compatibility façade. Local equivalents are:
+ShellCheck at warning severity against every tracked shell script. Local
+equivalents are:
 
 ```bash
 actionlint
 ```
 
 ```bash
-shellcheck -S warning -x \
-  -e SC1091,SC2034,SC2154,SC2317 \
-  workflow/core/gg_gene_evolution_core.sh \
-  workflow/core/gg_genome_evolution_core.sh \
-  workflow/core/gg_transcriptome_generation_core.sh \
-  workflow/support/gg_util.sh \
-  workflow/support/gg_util/*.sh
+mapfile -d '' -t scripts < <(git ls-files -z '*.sh')
+scripts+=(dev)
+shellcheck -S warning -x -e SC1091,SC2034,SC2154,SC2317 "${scripts[@]}"
 ```
 
 ## Dependency-aware debug harness

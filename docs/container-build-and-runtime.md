@@ -104,8 +104,10 @@ IMAGE=local/genegalleon TAG=dev PLATFORMS=linux/arm64 MODE=load ./container/buil
 Buildx's internal builder cache is used automatically. The additional local
 cache export is opt-in (`USE_LOCAL_CACHE=1`) because this image's full cache is
 large and exporting it on every invocation can dominate a warm build.
-Unchanged `MODE=load` invocations are skipped using a build-input fingerprint;
-set `SKIP_UNCHANGED_LOAD=0` when BuildKit must be forced to run.
+Unchanged `MODE=load` invocations are skipped using a shared build-input
+fingerprint; scheduled and release builds calculate the same value and embed it
+in `io.genegalleon.build-input`. Set `SKIP_UNCHANGED_LOAD=0` when BuildKit must
+be forced to run. OCI labels also carry the repository version and MIT license.
 
 ### Convert registry or Docker-daemon image to SIF
 
@@ -184,9 +186,10 @@ Runtime profile highlights in the current container scaffold:
 - `pigz` is included for fast compression/decompression,
 - `Notung.jar` is installed during image build from the pinned official Notung 2.9 ZIP by default,
 - `NOTUNG_DOWNLOAD_PAGE` can still point at the legacy Notung HTML download
-  page when you want build-time ZIP auto-resolution, and
+  page when you want build-time ZIP auto-resolution; any override must also set
+  the matching `NOTUNG_ZIP_SHA256`, and
   `NOTUNG_DOWNLOAD_HOST_IP` can be used to override the fallback IP for the
   official `amberjack.compbio.cs.cmu.edu` host,
 - `BUSCO`, `paml`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` are installed from pinned upstream source snapshots during image build,
 - GitHub/GitLab source fetches prefer tarball/archive downloads and fall back to `git` retry logic when archive fetches fail,
-- downloaded `BioPP/testnh` and `CAFE5` tarballs are SHA-256 verified before extraction.
+- downloaded `Notung`, `BioPP/testnh`, and `CAFE5` archives are SHA-256 verified before extraction.

@@ -169,7 +169,7 @@ def read_branch_subset(
     frames = []
     select_cols = ", ".join(quote_ident(col) for col in columns)
     for start in range(0, len(orthogroups), chunk_size):
-        chunk = orthogroups[start:start + chunk_size]
+        chunk = orthogroups[start : start + chunk_size]
         placeholders = ", ".join("?" for _ in chunk)
         query = f"SELECT {select_cols} FROM branch WHERE orthogroup IN ({placeholders})"
         frames.append(pandas.read_sql_query(query, conn, params=list(chunk)))
@@ -543,7 +543,11 @@ def besthit_support_from_leaf_rows(
     if len(comparisons) == 0:
         return result
     lca_ranks = [str(c.get("lca_rank", "")).strip() for c in comparisons if str(c.get("lca_rank", "")).strip() != ""]
-    same_super = [safe_float(c.get("same_superkingdom", numpy.nan)) for c in comparisons if not pandas.isna(c.get("same_superkingdom", numpy.nan))]
+    same_super = [
+        safe_float(c.get("same_superkingdom", numpy.nan))
+        for c in comparisons
+        if not pandas.isna(c.get("same_superkingdom", numpy.nan))
+    ]
     if len(methods) > 0:
         result["method"] = Counter(methods).most_common(1)[0][0]
     if len(same_super) > 0:
@@ -581,18 +585,27 @@ def contamination_support_for_genes(
     result["incompatible_fraction"] = incompatible_count / measured_count if measured_count > 0 else numpy.nan
     if incompatible_count > 0 and "lca_sciname" in subset.columns:
         incompatible_subset = subset.loc[incompatible_mask, :].copy()
-        incompatible_subset["lca_taxid_str"] = incompatible_subset.get("lca_taxid", pandas.Series(index=incompatible_subset.index, dtype=object)).fillna("").astype(str)
-        incompatible_subset["lca_sciname_str"] = incompatible_subset.get("lca_sciname", pandas.Series(index=incompatible_subset.index, dtype=object)).fillna("").astype(str)
+        incompatible_subset["lca_taxid_str"] = (
+            incompatible_subset.get("lca_taxid", pandas.Series(index=incompatible_subset.index, dtype=object))
+            .fillna("")
+            .astype(str)
+        )
+        incompatible_subset["lca_sciname_str"] = (
+            incompatible_subset.get("lca_sciname", pandas.Series(index=incompatible_subset.index, dtype=object))
+            .fillna("")
+            .astype(str)
+        )
         incompatible_subset = incompatible_subset.loc[
-            (incompatible_subset["lca_taxid_str"] != "") | (incompatible_subset["lca_sciname_str"] != ""),
-            :
+            (incompatible_subset["lca_taxid_str"] != "") | (incompatible_subset["lca_sciname_str"] != ""), :
         ]
         if not incompatible_subset.empty:
             top_taxon = (
                 incompatible_subset.groupby(["lca_taxid_str", "lca_sciname_str"], sort=False)
                 .size()
                 .reset_index(name="count")
-                .sort_values(["count", "lca_sciname_str", "lca_taxid_str"], ascending=[False, True, True], kind="mergesort")
+                .sort_values(
+                    ["count", "lca_sciname_str", "lca_taxid_str"], ascending=[False, True, True], kind="mergesort"
+                )
                 .iloc[0]
             )
             result["top_lca_taxid"] = top_taxon["lca_taxid_str"]
@@ -676,20 +689,24 @@ def summarize_candidate_branch(
     if not matched_leaf_rows.empty:
         supported_mask = pandas.Series(False, index=matched_leaf_rows.index)
         if "num_intron" in matched_leaf_rows.columns:
-            supported_mask = supported_mask | pandas.to_numeric(matched_leaf_rows["num_intron"], errors="coerce").fillna(0).gt(0)
+            supported_mask = supported_mask | pandas.to_numeric(
+                matched_leaf_rows["num_intron"], errors="coerce"
+            ).fillna(0).gt(0)
         if "intron_present" in matched_leaf_rows.columns:
-            supported_mask = supported_mask | pandas.to_numeric(matched_leaf_rows["intron_present"], errors="coerce").fillna(0).gt(0)
-        intron_supported = dict(zip(matched_leaf_rows["node_name"], supported_mask))
+            supported_mask = supported_mask | pandas.to_numeric(
+                matched_leaf_rows["intron_present"], errors="coerce"
+            ).fillna(0).gt(0)
+        intron_supported = dict(zip(matched_leaf_rows["node_name"], supported_mask, strict=True))
     expression_measured = {}
     if not matched_leaf_rows.empty and len(expression_cols) > 0:
         expr_df = matched_leaf_rows.loc[:, ["node_name"] + list(expression_cols)].copy()
         expr_vals = expr_df.loc[:, expression_cols].apply(pandas.to_numeric, errors="coerce")
         expr_mask = expr_vals.notna().any(axis=1)
-        expression_measured = dict(zip(expr_df["node_name"], expr_mask))
+        expression_measured = dict(zip(expr_df["node_name"], expr_mask, strict=True))
     synteny_by_gene = {}
     if "synteny_support_score" in matched_leaf_rows.columns:
         synteny_vals = pandas.to_numeric(matched_leaf_rows["synteny_support_score"], errors="coerce")
-        synteny_by_gene = dict(zip(matched_leaf_rows["node_name"], synteny_vals))
+        synteny_by_gene = dict(zip(matched_leaf_rows["node_name"], synteny_vals, strict=True))
 
     for gene_id in candidate_genes:
         leaf_match = matched_leaf_rows.loc[matched_leaf_rows["node_name"] == gene_id, :]
@@ -715,7 +732,9 @@ def summarize_candidate_branch(
                 "synteny_support_score": synteny_by_gene.get(gene_id, numpy.nan),
                 "contamination_lca_taxid": contamination_info.get("contamination_lca_taxid", pandas.NA),
                 "contamination_lca_sciname": contamination_info.get("contamination_lca_sciname", ""),
-                "contamination_is_compatible_lineage": contamination_info.get("contamination_is_compatible_lineage", pandas.NA),
+                "contamination_is_compatible_lineage": contamination_info.get(
+                    "contamination_is_compatible_lineage", pandas.NA
+                ),
             }
         )
     return branch_record, gene_records
@@ -805,26 +824,31 @@ def main():
             write_tsv(empty_frame(GENE_OUTPUT_COLUMNS), args.gene_out, GENE_OUTPUT_COLUMNS)
             write_tsv(empty_frame(ORTHOGROUP_OUTPUT_COLUMNS), args.orthogroup_out, ORTHOGROUP_OUTPUT_COLUMNS)
             return
-        selected_columns = list(dict.fromkeys([
-            "orthogroup",
-            "branch_id",
-            "node_name",
-            "gene_labels",
-            "num_leaf",
-            "so_event",
-            "taxon",
-            "spnode_coverage",
-            "generax_event",
-            "generax_transfer",
-            "generax_event_parent",
-            "clade_min_expression_pearsoncor",
-            "num_intron",
-            "intron_present",
-            "synteny_support_score",
-            "sprot_best",
-            "organism",
-            "taxid_y",
-        ] + [col for col in branch_columns if col.startswith("expression_")]))
+        selected_columns = list(
+            dict.fromkeys(
+                [
+                    "orthogroup",
+                    "branch_id",
+                    "node_name",
+                    "gene_labels",
+                    "num_leaf",
+                    "so_event",
+                    "taxon",
+                    "spnode_coverage",
+                    "generax_event",
+                    "generax_transfer",
+                    "generax_event_parent",
+                    "clade_min_expression_pearsoncor",
+                    "num_intron",
+                    "intron_present",
+                    "synteny_support_score",
+                    "sprot_best",
+                    "organism",
+                    "taxid_y",
+                ]
+                + [col for col in branch_columns if col.startswith("expression_")]
+            )
+        )
         selected_columns = [col for col in selected_columns if col in set(branch_columns)]
         branch_df = read_branch_subset(conn, orthogroups, selected_columns)
 

@@ -19,8 +19,8 @@ def output_gzip_compresslevel():
         return 9
     try:
         level = int(raw)
-    except ValueError:
-        raise ValueError("GG_INPUT_GZIP_LEVEL must be an integer between 1 and 9.")
+    except ValueError as exc:
+        raise ValueError("GG_INPUT_GZIP_LEVEL must be an integer between 1 and 9.") from exc
     if level < 1 or level > 9:
         raise ValueError("GG_INPUT_GZIP_LEVEL must be between 1 and 9.")
     return level

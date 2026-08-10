@@ -15,6 +15,10 @@ It provides scheduler-ready staged pipelines for:
 
 The same entrypoints run through SLURM, UGE, PBS, or directly with Bash.
 
+For repository development, `bash ./dev check fast` selects an authoritative
+GeneGalleon SIF or Docker runtime automatically. See
+[Development and Tests](docs/development-and-tests.md).
+
 ## Quick Start
 
 Prepare either a repo-root SIF or a pulled Docker image, then run the bundled

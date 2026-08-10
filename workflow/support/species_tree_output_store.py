@@ -68,9 +68,7 @@ class ProgressReporter:
 def _directory_name(value: str) -> str:
     if value not in MANAGED_DIRECTORIES:
         expected = ", ".join(MANAGED_DIRECTORIES)
-        raise SpeciesTreeArchiveError(
-            f"Unsupported species-tree directory {value!r}; expected one of: {expected}"
-        )
+        raise SpeciesTreeArchiveError(f"Unsupported species-tree directory {value!r}; expected one of: {expected}")
     return value
 
 
@@ -155,9 +153,7 @@ def _source_inventory(raw_path: Path) -> tuple[list[Path], list[Path]]:
     def raise_walk_error(exc: OSError) -> None:
         raise SpeciesTreeArchiveError(f"Failed to scan {raw_path}: {exc}") from exc
 
-    for current_root, directory_names, file_names in os.walk(
-        raw_path, onerror=raise_walk_error
-    ):
+    for current_root, directory_names, file_names in os.walk(raw_path, onerror=raise_walk_error):
         current = Path(current_root)
         for directory_name in directory_names:
             directory = current / directory_name
@@ -193,9 +189,7 @@ def _count_source_files_best_effort(raw_path: Path) -> int:
     def raise_walk_error(exc: OSError) -> None:
         raise SpeciesTreeArchiveError(f"Failed to scan {raw_path}: {exc}") from exc
 
-    for current_root, directory_names, file_names in os.walk(
-        raw_path, onerror=raise_walk_error
-    ):
+    for current_root, directory_names, file_names in os.walk(raw_path, onerror=raise_walk_error):
         current = Path(current_root)
         for directory_name in directory_names:
             _assert_regular_path(current / directory_name, "source directory")
@@ -203,9 +197,7 @@ def _count_source_files_best_effort(raw_path: Path) -> int:
             path = current / file_name
             _assert_regular_path(path, "source file")
             if path.exists() and not path.is_file():
-                raise SpeciesTreeArchiveError(
-                    f"Non-regular source file is not supported: {path}"
-                )
+                raise SpeciesTreeArchiveError(f"Non-regular source file is not supported: {path}")
             count += 1
     return count
 
@@ -217,12 +209,7 @@ def _raw_directory_stats(raw_path: Path) -> tuple[int, int]:
 
 def _raw_to_zip_peak_bytes(files: Sequence[Path]) -> int:
     logical_bytes = sum(int(path.stat().st_size) for path in files)
-    return (
-        logical_bytes
-        + max(64 * 1024, (logical_bytes + 99) // 100)
-        + len(files) * 512
-        + 1024 * 1024
-    )
+    return logical_bytes + max(64 * 1024, (logical_bytes + 99) // 100) + len(files) * 512 + 1024 * 1024
 
 
 def _zip_to_raw_requirements(
@@ -231,19 +218,11 @@ def _zip_to_raw_requirements(
     directory_members: Sequence[zipfile.ZipInfo],
 ) -> tuple[int, int]:
     filesystem_stats = os.statvfs(root)
-    block_size = int(
-        filesystem_stats.f_frsize
-        or filesystem_stats.f_bsize
-        or 4096
-    )
+    block_size = int(filesystem_stats.f_frsize or filesystem_stats.f_bsize or 4096)
     allocated_file_bytes = sum(
-        ((int(info.file_size) + block_size - 1) // block_size) * block_size
-        for info in file_members
+        ((int(info.file_size) + block_size - 1) // block_size) * block_size for info in file_members
     )
-    directory_names = {
-        PurePosixPath(info.filename).as_posix().rstrip("/")
-        for info in directory_members
-    }
+    directory_names = {PurePosixPath(info.filename).as_posix().rstrip("/") for info in directory_members}
     for info in file_members:
         parent = PurePosixPath(info.filename).parent
         while parent.as_posix() != ".":
@@ -282,24 +261,16 @@ def _archive_comment(name: str, file_count: int, directory_count: int) -> bytes:
 
 def _read_archive_metadata(archive: zipfile.ZipFile, path: Path) -> dict:
     if not archive.comment.startswith(COMMENT_PREFIX):
-        raise SpeciesTreeArchiveError(
-            f"Refusing to manage a ZIP without a GeneGalleon species-tree marker: {path}"
-        )
+        raise SpeciesTreeArchiveError(f"Refusing to manage a ZIP without a GeneGalleon species-tree marker: {path}")
     try:
         payload = json.loads(archive.comment[len(COMMENT_PREFIX) :].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SpeciesTreeArchiveError(f"Invalid archive metadata in {path}: {exc}") from exc
     if not isinstance(payload, dict):
+        raise SpeciesTreeArchiveError(f"Archive metadata must be a JSON object in {path}")
+    if type(payload.get("schema_version")) is not int or payload.get("schema_version") != SCHEMA_VERSION:
         raise SpeciesTreeArchiveError(
-            f"Archive metadata must be a JSON object in {path}"
-        )
-    if (
-        type(payload.get("schema_version")) is not int
-        or payload.get("schema_version") != SCHEMA_VERSION
-    ):
-        raise SpeciesTreeArchiveError(
-            f"Unsupported species-tree archive schema in {path}: "
-            f"{payload.get('schema_version')!r}"
+            f"Unsupported species-tree archive schema in {path}: {payload.get('schema_version')!r}"
         )
     return payload
 
@@ -313,9 +284,7 @@ def _validated_members(
 ) -> tuple[list[zipfile.ZipInfo], list[zipfile.ZipInfo]]:
     payload = _read_archive_metadata(archive, path)
     if payload.get("directory") != expected_name:
-        raise SpeciesTreeArchiveError(
-            f"Archive directory mismatch in {path}: {payload.get('directory')!r}"
-        )
+        raise SpeciesTreeArchiveError(f"Archive directory mismatch in {path}: {payload.get('directory')!r}")
     file_members: list[zipfile.ZipInfo] = []
     directory_members: list[zipfile.ZipInfo] = []
     seen: set[str] = set()
@@ -324,9 +293,7 @@ def _validated_members(
     for info in archive.infolist():
         member = PurePosixPath(info.filename)
         canonical_name = member.as_posix()
-        canonical_archive_name = (
-            f"{canonical_name}/" if info.is_dir() else canonical_name
-        )
+        canonical_archive_name = f"{canonical_name}/" if info.is_dir() else canonical_name
         root_directory_member = info.is_dir() and canonical_name == expected_name
         if (
             canonical_name in seen
@@ -334,21 +301,13 @@ def _validated_members(
             or "\\" in info.filename
             or canonical_archive_name != info.filename
             or ".." in member.parts
-            or (
-                not root_directory_member
-                and (
-                    not info.filename.startswith(prefix)
-                    or len(member.parts) < 2
-                )
-            )
+            or (not root_directory_member and (not info.filename.startswith(prefix) or len(member.parts) < 2))
         ):
             raise SpeciesTreeArchiveError(f"Unsafe ZIP member in {path}: {info.filename!r}")
         seen.add(canonical_name)
         mode = info.external_attr >> 16
         if stat.S_ISLNK(mode):
-            raise SpeciesTreeArchiveError(
-                f"Symlinked ZIP members are not supported in {path}: {info.filename}"
-            )
+            raise SpeciesTreeArchiveError(f"Symlinked ZIP members are not supported in {path}: {info.filename}")
         if info.is_dir():
             directory_members.append(info)
         else:
@@ -358,9 +317,7 @@ def _validated_members(
         parent = PurePosixPath(canonical_name).parent
         while parent.as_posix() not in {".", expected_name}:
             if parent.as_posix() in file_names:
-                raise SpeciesTreeArchiveError(
-                    f"ZIP member is nested below a file in {path}: {canonical_name!r}"
-                )
+                raise SpeciesTreeArchiveError(f"ZIP member is nested below a file in {path}: {canonical_name!r}")
             parent = parent.parent
     expected_count = payload.get("file_count")
     if type(expected_count) is not int or expected_count != len(file_members):
@@ -370,8 +327,7 @@ def _validated_members(
         )
     expected_directory_count = payload.get("directory_count")
     if expected_directory_count is not None and (
-        type(expected_directory_count) is not int
-        or expected_directory_count != len(directory_members)
+        type(expected_directory_count) is not int or expected_directory_count != len(directory_members)
     ):
         raise SpeciesTreeArchiveError(
             f"Archive directory count differs from its metadata in {path}: "
@@ -419,9 +375,7 @@ def _verify_member_payloads(
                             verify_bytes_total=total_bytes,
                         )
         except zipfile.BadZipFile as exc:
-            raise SpeciesTreeArchiveError(
-                f"CRC verification failed in {path}: {info.filename}"
-            ) from exc
+            raise SpeciesTreeArchiveError(f"CRC verification failed in {path}: {info.filename}") from exc
         completed_files += 1
     if progress_callback is not None:
         progress_callback(
@@ -568,9 +522,7 @@ def pack_directory(
                 for path in directories:
                     relative = path.relative_to(raw_path).as_posix()
                     archive_name = f"{name}/" if relative == "." else f"{name}/{relative}/"
-                    info = zipfile.ZipInfo.from_file(
-                        path, arcname=archive_name, strict_timestamps=False
-                    )
+                    info = zipfile.ZipInfo.from_file(path, arcname=archive_name, strict_timestamps=False)
                     info.compress_type = zipfile.ZIP_STORED
                     archive.writestr(info, b"")
                 for path in files:
@@ -582,20 +534,25 @@ def pack_directory(
                         strict_timestamps=False,
                     )
                     info.compress_type = _compression_for(path, compression)
-                    with path.open("rb") as source, archive.open(
-                        info, "w", force_zip64=True
-                    ) as destination:
+                    with path.open("rb") as source, archive.open(info, "w", force_zip64=True) as destination:
+
                         class ProgressDestination:
-                            def write(self, chunk: bytes) -> int:
+                            def write(
+                                self,
+                                chunk: bytes,
+                                *,
+                                _digest: "hashlib._Hash" = digest,
+                                _completed_files: int = completed_files,
+                            ) -> int:
                                 nonlocal completed_source_bytes
                                 written = destination.write(chunk)
-                                digest.update(memoryview(chunk)[:written])
+                                _digest.update(memoryview(chunk)[:written])
                                 completed_source_bytes += int(written)
                                 if progress_callback is not None:
                                     progress_callback(
                                         phase="packing",
                                         directory=name,
-                                        files_completed=completed_files,
+                                        files_completed=_completed_files,
                                         files_total=len(files),
                                         bytes_completed=completed_source_bytes,
                                         bytes_total=total_source_bytes,
@@ -625,14 +582,8 @@ def pack_directory(
                     progress_callback=progress_callback,
                 )
             for path, signature in signatures.items():
-                if (
-                    not path.exists()
-                    or path.is_symlink()
-                    or _signature(path) != signature
-                ):
-                    raise SpeciesTreeArchiveError(
-                        f"Source changed while {name} was being archived: {path}"
-                    )
+                if not path.exists() or path.is_symlink() or _signature(path) != signature:
+                    raise SpeciesTreeArchiveError(f"Source changed while {name} was being archived: {path}")
             for path, archived_digest in archived_digests.items():
                 current_digest = hashlib.sha256()
                 with path.open("rb") as source:
@@ -643,14 +594,10 @@ def pack_directory(
                     or path.is_symlink()
                     or _signature(path) != signatures[path]
                 ):
-                    raise SpeciesTreeArchiveError(
-                        f"Source changed while {name} was being archived: {path}"
-                    )
+                    raise SpeciesTreeArchiveError(f"Source changed while {name} was being archived: {path}")
             current_directories, current_files = _source_inventory(raw_path)
             if current_directories != directories or current_files != files:
-                raise SpeciesTreeArchiveError(
-                    f"Source inventory changed while {name} was being archived"
-                )
+                raise SpeciesTreeArchiveError(f"Source inventory changed while {name} was being archived")
 
             with partial_path.open("rb") as handle:
                 os.fsync(handle.fileno())
@@ -682,9 +629,7 @@ def _safe_destination(base: Path, member_name: str) -> Path:
     try:
         destination.resolve().relative_to(base.resolve())
     except ValueError as exc:
-        raise SpeciesTreeArchiveError(
-            f"ZIP member escapes its extraction root: {member_name!r}"
-        ) from exc
+        raise SpeciesTreeArchiveError(f"ZIP member escapes its extraction root: {member_name!r}") from exc
     return destination
 
 
@@ -697,9 +642,7 @@ def _extract_archive_to(
 ) -> int:
     try:
         with zipfile.ZipFile(archive_path, "r") as archive:
-            members, directory_members = _validated_members(
-                archive, archive_path, name, check_crc=False
-            )
+            members, directory_members = _validated_members(archive, archive_path, name, check_crc=False)
             directory_metadata: list[tuple[Path, int, tuple[int, ...]]] = []
             total_bytes = sum(int(info.file_size) for info in members)
             completed_bytes = 0
@@ -720,15 +663,19 @@ def _extract_archive_to(
             ):
                 target = _safe_destination(destination, info.filename)
                 target.mkdir(parents=True, exist_ok=True)
-                directory_metadata.append(
-                    (target, info.external_attr >> 16, info.date_time)
-                )
+                directory_metadata.append((target, info.external_attr >> 16, info.date_time))
             for info in members:
                 target = _safe_destination(destination, info.filename)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(info, "r") as source, target.open("wb") as output:
+
                     class ProgressOutput:
-                        def write(self, chunk: bytes) -> int:
+                        def write(
+                            self,
+                            chunk: bytes,
+                            *,
+                            _completed_files: int = completed_files,
+                        ) -> int:
                             nonlocal completed_bytes
                             written = output.write(chunk)
                             completed_bytes += int(written)
@@ -736,7 +683,7 @@ def _extract_archive_to(
                                 progress_callback(
                                     phase="materializing",
                                     directory=name,
-                                    files_completed=completed_files,
+                                    files_completed=_completed_files,
                                     files_total=len(members),
                                     bytes_completed=completed_bytes,
                                     bytes_total=total_bytes,
@@ -852,34 +799,22 @@ def materialize_directory(
                     relative = source_directory.relative_to(extracted)
                     destination_directory = raw_path / relative
                     if destination_directory.exists():
-                        if (
-                            destination_directory.is_symlink()
-                            or not destination_directory.is_dir()
-                        ):
+                        if destination_directory.is_symlink() or not destination_directory.is_dir():
                             raise SpeciesTreeArchiveError(
-                                "Live path conflicts with an archived directory: "
-                                f"{destination_directory}"
+                                f"Live path conflicts with an archived directory: {destination_directory}"
                             )
                     else:
                         destination_directory.mkdir(parents=True)
-                        new_directories.append(
-                            (source_directory, destination_directory)
-                        )
+                        new_directories.append((source_directory, destination_directory))
                 for source in extracted_files:
                     relative = source.relative_to(extracted)
                     destination = raw_path / relative
                     destination.parent.mkdir(parents=True, exist_ok=True)
-                    if destination.is_symlink() or (
-                        destination.exists() and not destination.is_file()
-                    ):
-                        raise SpeciesTreeArchiveError(
-                            f"Live path conflicts with an archived file: {destination}"
-                        )
+                    if destination.is_symlink() or (destination.exists() and not destination.is_file()):
+                        raise SpeciesTreeArchiveError(f"Live path conflicts with an archived file: {destination}")
                     if not destination.exists():
                         os.replace(source, destination)
-                for source_directory, destination_directory in reversed(
-                    new_directories
-                ):
+                for source_directory, destination_directory in reversed(new_directories):
                     shutil.copystat(source_directory, destination_directory)
             else:
                 os.replace(extracted, raw_path)
@@ -887,9 +822,7 @@ def materialize_directory(
             archive_path.unlink()
             _fsync_directory(root)
         except OSError as exc:
-            raise SpeciesTreeArchiveError(
-                f"Failed to materialize {archive_path}: {exc}"
-            ) from exc
+            raise SpeciesTreeArchiveError(f"Failed to materialize {archive_path}: {exc}") from exc
         finally:
             shutil.rmtree(temporary, ignore_errors=True)
     result = {"directory": name, "state": "raw", "files": file_count}
@@ -932,16 +865,10 @@ def status(root: Path, names: Iterable[str]) -> list[dict]:
             if archive_path.exists():
                 archive_status = verify_archive(root, name, check_crc=False)
                 archived_files = int(archive_status["files"])
-                archived_logical_bytes = int(
-                    archive_status.get("logical_bytes", 0)
-                )
+                archived_logical_bytes = int(archive_status.get("logical_bytes", 0))
                 zip_bytes = int(archive_status.get("zip_bytes", 0))
-                raw_materialize_allocated_bytes = int(
-                    archive_status.get("raw_materialize_allocated_bytes", 0)
-                )
-                raw_materialize_required_inodes = int(
-                    archive_status.get("raw_materialize_required_inodes", 0)
-                )
+                raw_materialize_allocated_bytes = int(archive_status.get("raw_materialize_allocated_bytes", 0))
+                raw_materialize_required_inodes = int(archive_status.get("raw_materialize_required_inodes", 0))
             state = (
                 "mixed"
                 if raw_path.exists() and archive_path.exists()
@@ -994,9 +921,7 @@ def count_matching_files(root: Path, name: str, pattern: str) -> int:
                 raise SpeciesTreeArchiveError(f"Archive path is not a file: {archive_path}")
             try:
                 with zipfile.ZipFile(archive_path, "r") as archive:
-                    members, _ = _validated_members(
-                        archive, archive_path, name, check_crc=False
-                    )
+                    members, _ = _validated_members(archive, archive_path, name, check_crc=False)
                     for info in members:
                         relative = PurePosixPath(info.filename).relative_to(name)
                         if (
@@ -1006,17 +931,13 @@ def count_matching_files(root: Path, name: str, pattern: str) -> int:
                         ):
                             matching_names.add(relative.name)
             except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
-                raise SpeciesTreeArchiveError(
-                    f"Failed to inspect {archive_path}: {exc}"
-                ) from exc
+                raise SpeciesTreeArchiveError(f"Failed to inspect {archive_path}: {exc}") from exc
     return len(matching_names)
 
 
 def _validate_options(compression: str, compression_level: int) -> None:
     if compression not in {"adaptive", "deflate", "store"}:
-        raise SpeciesTreeArchiveError(
-            f"Invalid compression {compression!r}; expected adaptive, deflate, or store"
-        )
+        raise SpeciesTreeArchiveError(f"Invalid compression {compression!r}; expected adaptive, deflate, or store")
     if compression_level < 0 or compression_level > 9:
         raise SpeciesTreeArchiveError("Compression level must be from 0 through 9")
 
@@ -1025,9 +946,7 @@ def _emit(records: object) -> None:
     print(json.dumps(records, indent=2, sort_keys=True))
 
 
-def _run_each(
-    names: Iterable[str], operation: Callable[[str], dict]
-) -> tuple[list[dict], list[str]]:
+def _run_each(names: Iterable[str], operation: Callable[[str], dict]) -> tuple[list[dict], list[str]]:
     records: list[dict] = []
     errors: list[str] = []
     for name in names:
@@ -1062,9 +981,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pack.add_argument("--progress-interval", type=float, default=30.0)
 
-    materialize = subparsers.add_parser(
-        "materialize", help="Restore ZIPs as raw directories and consume the ZIPs"
-    )
+    materialize = subparsers.add_parser("materialize", help="Restore ZIPs as raw directories and consume the ZIPs")
     add_common(materialize)
     materialize.add_argument(
         "--available-bytes",
@@ -1103,9 +1020,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     status_parser = subparsers.add_parser("status", help="Show raw/ZIP state")
     add_common(status_parser)
-    count = subparsers.add_parser(
-        "count", help="Count matching top-level files without materializing a ZIP"
-    )
+    count = subparsers.add_parser("count", help="Count matching top-level files without materializing a ZIP")
     count.add_argument("--root", required=True, type=Path)
     count.add_argument("--directory", required=True, choices=MANAGED_DIRECTORIES)
     count.add_argument("--pattern", required=True)
@@ -1144,21 +1059,13 @@ def run_cli(args: argparse.Namespace) -> int:
             record["filesystem_free_bytes"] = filesystem_free_bytes
             record["effective_available_bytes"] = effective_available_bytes
             required_peak_new_bytes = int(
-                record[
-                    "estimated_peak_new_bytes"
-                    if requested_target == "zip"
-                    else "raw_materialize_allocated_bytes"
-                ]
+                record["estimated_peak_new_bytes" if requested_target == "zip" else "raw_materialize_allocated_bytes"]
             )
             record["required_peak_new_bytes"] = required_peak_new_bytes
-            record["temporary_space_sufficient"] = (
-                required_peak_new_bytes <= effective_available_bytes
-            )
+            record["temporary_space_sufficient"] = required_peak_new_bytes <= effective_available_bytes
         _emit(records)
         return 0
-    if args.command == "pack" or (
-        args.command == "convert-storage" and args.to == "zip"
-    ):
+    if args.command == "pack" or (args.command == "convert-storage" and args.to == "zip"):
         reporter = ProgressReporter(args.progress_interval)
         records, errors = _run_each(
             names,
@@ -1176,9 +1083,7 @@ def run_cli(args: argparse.Namespace) -> int:
         for error in errors:
             print(f"Error: {error}", file=sys.stderr)
         return 1 if errors else 0
-    if args.command == "materialize" or (
-        args.command == "convert-storage" and args.to in {"raw", "files"}
-    ):
+    if args.command == "materialize" or (args.command == "convert-storage" and args.to in {"raw", "files"}):
         reporter = ProgressReporter(args.progress_interval)
         records, errors = _run_each(
             names,

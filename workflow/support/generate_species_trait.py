@@ -314,11 +314,7 @@ def read_trait_plan(path: Path) -> List[TraitPlanRow]:
         if aggregation == "":
             aggregation = "any" if value_type == "binary" else "median"
         positive_raw = str(raw.get("positive_values", "") or "").strip()
-        positive_values = {
-            token.strip().lower()
-            for token in positive_raw.split(",")
-            if token.strip() != ""
-        }
+        positive_values = {token.strip().lower() for token in positive_raw.split(",") if token.strip() != ""}
         trait_key = str(raw.get("trait_key", "") or "").strip()
         trait_key_column = str(raw.get("trait_key_column", "") or "").strip()
         out.append(
@@ -426,9 +422,12 @@ def read_table_from_zip(path: Path, delimiter: str, archive_member: str) -> pand
         if selected_member is None:
             raise ValueError("archive_member not found in {}: {}".format(path, archive_member))
         if selected_member.lower().endswith(".xlsx"):
-            with archive.open(selected_member) as source, tempfile.SpooledTemporaryFile(
-                max_size=8 * 1024 * 1024,
-            ) as temporary:
+            with (
+                archive.open(selected_member) as source,
+                tempfile.SpooledTemporaryFile(
+                    max_size=8 * 1024 * 1024,
+                ) as temporary,
+            ):
                 shutil.copyfileobj(source, temporary, length=1024 * 1024)
                 temporary.seek(0)
                 return pandas.read_excel(temporary, dtype=str)
@@ -575,8 +574,7 @@ def fetch_species_api_table(
     for species_name in species:
         safe_species = quote(species_name.replace("_", " "))
         url = (
-            uri_template
-            .replace("{species}", species_name)
+            uri_template.replace("{species}", species_name)
             .replace("{species_space}", species_name.replace("_", " "))
             .replace("{species_urlencoded}", safe_species)
         )
@@ -592,9 +590,7 @@ def fetch_species_api_table(
                 sep = parse_delimiter(Path("dummy.{}".format(response_format)), delimiter)
             frames.append(read_table_from_text(payload, sep))
         else:
-            raise ValueError(
-                "Unsupported species_api response_format '{}' for '{}'.".format(response_format, database)
-            )
+            raise ValueError("Unsupported species_api response_format '{}' for '{}'.".format(response_format, database))
     if len(frames) == 0:
         return None
     return pandas.concat(frames, ignore_index=True)
@@ -657,7 +653,7 @@ def fetch_json_payload(url: str, timeout: float) -> object:
     try:
         return json.loads(payload)
     except json.JSONDecodeError as exc:
-        raise ValueError("Failed to parse JSON response from {}: {}".format(url, exc))
+        raise ValueError("Failed to parse JSON response from {}: {}".format(url, exc)) from exc
 
 
 def json_payload_to_rows(payload: object) -> List[Dict[str, object]]:
@@ -1224,10 +1220,7 @@ def minimal_longitude_interval(longitudes: Sequence[float]) -> Tuple[object, obj
     if len(longitudes_360) == 1:
         lon = normalize_longitude(longitudes_360[0])
         return (lon, lon, 0.0)
-    gaps = [
-        longitudes_360[index + 1] - longitudes_360[index]
-        for index in range(len(longitudes_360) - 1)
-    ]
+    gaps = [longitudes_360[index + 1] - longitudes_360[index] for index in range(len(longitudes_360) - 1)]
     gaps.append(longitudes_360[0] + 360.0 - longitudes_360[-1])
     largest_gap_index = max(range(len(gaps)), key=lambda index: gaps[index])
     west_360 = longitudes_360[(largest_gap_index + 1) % len(longitudes_360)]
@@ -1237,10 +1230,7 @@ def minimal_longitude_interval(longitudes: Sequence[float]) -> Tuple[object, obj
 
 
 def unwrap_longitudes_around_center(longitudes: Sequence[float], center_longitude: float) -> List[float]:
-    return [
-        center_longitude + ((float(lon) - center_longitude + 180.0) % 360.0) - 180.0
-        for lon in longitudes
-    ]
+    return [center_longitude + ((float(lon) - center_longitude + 180.0) % 360.0) - 180.0 for lon in longitudes]
 
 
 def occupied_grid_area_km2(points: Sequence[Tuple[float, float, str]], grid_degrees: float) -> object:
@@ -1276,10 +1266,7 @@ def monotonic_chain_convex_hull(points: Sequence[Tuple[float, float]]) -> List[T
         return unique_points
 
     def cross(origin: Tuple[float, float], point_a: Tuple[float, float], point_b: Tuple[float, float]) -> float:
-        return (
-            (point_a[0] - origin[0]) * (point_b[1] - origin[1])
-            - (point_a[1] - origin[1]) * (point_b[0] - origin[0])
-        )
+        return (point_a[0] - origin[0]) * (point_b[1] - origin[1]) - (point_a[1] - origin[1]) * (point_b[0] - origin[0])
 
     lower: List[Tuple[float, float]] = []
     for point in unique_points:
@@ -1320,12 +1307,10 @@ def convex_hull_area_km2(points: Sequence[Tuple[float, float, str]]) -> object:
     unwrapped_longitudes = unwrap_longitudes_around_center(longitudes, float(center_lon))
     projected_points = [
         (
-            EARTH_RADIUS_KM
-            * math.radians(lon - float(center_lon))
-            * math.cos(math.radians(center_lat)),
+            EARTH_RADIUS_KM * math.radians(lon - float(center_lon)) * math.cos(math.radians(center_lat)),
             EARTH_RADIUS_KM * math.radians(lat - center_lat),
         )
-        for lat, lon in zip(latitudes, unwrapped_longitudes)
+        for lat, lon in zip(latitudes, unwrapped_longitudes, strict=True)
     ]
     hull = monotonic_chain_convex_hull(projected_points)
     return polygon_area_km2(hull)

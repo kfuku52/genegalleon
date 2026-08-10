@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -18,7 +19,7 @@ jobs:
     outputs:
       should_build: ${{ steps.decision.outputs.should_build }}
       decision_reason: ${{ steps.decision.outputs.decision_reason }}
-      matched_sha: ${{ steps.decision.outputs.matched_sha }}
+      baseline_sha: ${{ steps.decision.outputs.baseline_sha }}
       matched_files: ${{ steps.decision.outputs.matched_files }}
     steps:
       - name: Decide whether a scheduled build is needed
@@ -35,8 +36,6 @@ jobs:
           import os
           import urllib.parse
           import urllib.request
-          from datetime import datetime, time, timedelta, timezone
-          from zoneinfo import ZoneInfo
 
           owner, repo = os.environ["GITHUB_REPOSITORY"].split("/", 1)
           default_branch = os.environ["DEFAULT_BRANCH"]
@@ -72,7 +71,7 @@ jobs:
           if event_name == "workflow_dispatch":
               set_output("should_build", "1")
               set_output("decision_reason", "manual dispatch")
-              set_output("matched_sha", "manual")
+              set_output("baseline_sha", "manual")
               set_output("matched_files", "manual dispatch")
               append_summary(
                   [
@@ -84,102 +83,72 @@ jobs:
               )
               raise SystemExit(0)
 
-          now_jst = datetime.now(ZoneInfo("Asia/Tokyo"))
-          today_jst = now_jst.date()
-          start_jst = datetime.combine(
-              today_jst - timedelta(days=1),
-              time.min,
-              tzinfo=ZoneInfo("Asia/Tokyo"),
-          )
-          end_jst = datetime.combine(
-              today_jst,
-              time.min,
-              tzinfo=ZoneInfo("Asia/Tokyo"),
-          )
-          start_utc = start_jst.astimezone(timezone.utc).replace(microsecond=0)
-          end_utc = end_jst.astimezone(timezone.utc).replace(microsecond=0)
-          since = start_utc.isoformat().replace("+00:00", "Z")
-          until = end_utc.isoformat().replace("+00:00", "Z")
-
           watched_paths = {
               ".dockerignore",
               ".github/workflows/container-ghcr.yml",
+              "VERSION",
           }
           watched_prefixes = ("container/", "workflow/support/treevis/")
 
-          page = 1
-          commit_count = 0
-          matched_sha = ""
-          matched_files: list[str] = []
+          def decide(should_build: bool, reason: str, baseline: str, files: list[str]) -> None:
+              set_output("should_build", "1" if should_build else "0")
+              set_output("decision_reason", reason)
+              set_output("baseline_sha", baseline[:7] if baseline else "none")
+              set_output("matched_files", ",".join(files) if files else "none")
+              append_summary(
+                  [
+                      "Scheduled publish preflight:",
+                      "",
+                      f"- Build decision: {'run' if should_build else 'skip'}",
+                      f"- Baseline: `{baseline[:7]}`" if baseline else "- Baseline: none",
+                      f"- Reason: {reason}",
+                      f"- Matching paths: {', '.join(files)}" if files else "- Matching paths: none",
+                  ]
+              )
 
-          while True:
-              commits = github_api(
-                  f"/repos/{owner}/{repo}/commits",
+          try:
+              runs = github_api(
+                  f"/repos/{owner}/{repo}/actions/workflows/container-ghcr.yml/runs",
                   {
-                      "sha": default_branch,
-                      "since": since,
-                      "until": until,
-                      "per_page": "100",
-                      "page": str(page),
+                      "branch": default_branch,
+                      "status": "success",
+                      "per_page": "20",
                   },
+              ).get("workflow_runs", [])
+              baseline = next(
+                  (run["head_sha"] for run in runs if run.get("head_sha")),
+                  "",
               )
-              if not commits:
-                  break
+              if not baseline:
+                  decide(True, "no previous successful publish run was found", "", [])
+                  raise SystemExit(0)
 
-              commit_count += len(commits)
-              for commit in commits:
-                  sha = commit["sha"]
-                  details = github_api(f"/repos/{owner}/{repo}/commits/{sha}")
-                  files = [item["filename"] for item in details.get("files", [])]
-                  matched = sorted(
-                      {
-                          path
-                          for path in files
-                          if path in watched_paths
-                          or any(path.startswith(prefix) for prefix in watched_prefixes)
-                      }
-                  )
-                  if matched:
-                      matched_sha = sha[:7]
-                      matched_files = matched
-                      break
-
-              if matched_sha or len(commits) < 100:
-                  break
-              page += 1
-
-          if matched_sha:
-              reason = "container-related changes found on the previous JST day"
-              set_output("should_build", "1")
-              set_output("decision_reason", reason)
-              set_output("matched_sha", matched_sha)
-              set_output("matched_files", ",".join(matched_files))
-              append_summary(
-                  [
-                      "Scheduled publish preflight:",
-                      "",
-                      "- Build decision: run",
-                      f"- JST window: {start_jst.isoformat()} to {end_jst.isoformat()}",
-                      f"- Matching commit: `{matched_sha}`",
-                      f"- Matching paths: {', '.join(matched_files)}",
-                  ]
+              comparison = github_api(
+                  f"/repos/{owner}/{repo}/compare/{baseline}...{os.environ['GITHUB_SHA']}"
               )
-          else:
-              reason = "no container-related changes found on the previous JST day"
-              set_output("should_build", "0")
-              set_output("decision_reason", reason)
-              set_output("matched_sha", "none")
-              set_output("matched_files", "none")
-              append_summary(
-                  [
-                      "Scheduled publish preflight:",
-                      "",
-                      "- Build decision: skip",
-                      f"- JST window: {start_jst.isoformat()} to {end_jst.isoformat()}",
-                      f"- Commits inspected on `{default_branch}`: {commit_count}",
-                      "- Matching paths: none",
-                  ]
+              if comparison.get("status") not in {"ahead", "identical"}:
+                  decide(True, "the successful baseline is not an ancestor of the current revision", baseline, [])
+                  raise SystemExit(0)
+              if comparison.get("total_commits", 0) > 250:
+                  decide(True, "the comparison is too large to inspect safely", baseline, [])
+                  raise SystemExit(0)
+
+              changed_files = [item["filename"] for item in comparison.get("files", [])]
+              matched_files = sorted(
+                  path
+                  for path in changed_files
+                  if path in watched_paths
+                  or any(path.startswith(prefix) for prefix in watched_prefixes)
               )
+              if matched_files:
+                  decide(True, "container inputs changed since the last successful publish", baseline, matched_files)
+              else:
+                  decide(False, "container inputs are unchanged since the last successful publish", baseline, [])
+          except SystemExit:
+              raise
+          except Exception as exc:
+              # A transient API or comparison failure must not permanently hide a build.
+              decide(True, f"preflight failed conservatively: {type(exc).__name__}: {exc}", "", [])
           PY
 
   prepare-build:
@@ -193,6 +162,7 @@ jobs:
       immutable_tag: ${{ steps.vars.outputs.immutable_tag }}
       sha_tag: ${{ steps.vars.outputs.sha_tag }}
       build_date: ${{ steps.vars.outputs.build_date }}
+      gg_version: ${{ steps.vars.outputs.gg_version }}
       amalgkit_repo_sha: ${{ steps.vars.outputs.amalgkit_repo_sha }}
       cdskit_repo_sha: ${{ steps.vars.outputs.cdskit_repo_sha }}
       csubst_repo_sha: ${{ steps.vars.outputs.csubst_repo_sha }}
@@ -223,6 +193,7 @@ jobs:
           date_tag="$(date -u +%Y%m%d)"
           short_sha="${GITHUB_SHA::7}"
           build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          gg_version="$(sed -n '1p' VERSION | tr -d '\r')"
 
           source container/source_pins.env
           amalgkit_repo_sha="${GG_PIN_AMALGKIT_REPO_SHA}"
@@ -252,6 +223,7 @@ jobs:
             echo "immutable_tag=${immutable_tag}"
             echo "sha_tag=sha-${short_sha}"
             echo "build_date=${build_date}"
+            echo "gg_version=${gg_version}"
             echo "amalgkit_repo_sha=${amalgkit_repo_sha}"
             echo "cdskit_repo_sha=${cdskit_repo_sha}"
             echo "csubst_repo_sha=${csubst_repo_sha}"
@@ -294,6 +266,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
+      - name: Compute build input hash
+        id: build-input
+        shell: bash
+        env:
+          GG_BUILD_PLATFORMS: ${{ matrix.platform }}
+          GG_BUILD_VCS_REF: ${{ github.sha }}
+          GG_BUILD_VERSION: ${{ needs.prepare-build.outputs.gg_version }}
+          KFU52_AMALGKIT_REPO_SHA: ${{ needs.prepare-build.outputs.amalgkit_repo_sha }}
+          KFU52_CDSKIT_REPO_SHA: ${{ needs.prepare-build.outputs.cdskit_repo_sha }}
+          KFU52_CSUBST_REPO_SHA: ${{ needs.prepare-build.outputs.csubst_repo_sha }}
+          KFU52_NWKIT_REPO_SHA: ${{ needs.prepare-build.outputs.nwkit_repo_sha }}
+          KFL1OU_REPO_SHA: ${{ needs.prepare-build.outputs.kfl1ou_repo_sha }}
+          KFTOOLS_REPO_SHA: ${{ needs.prepare-build.outputs.kftools_repo_sha }}
+          RKFTOOLS_REPO_SHA: ${{ needs.prepare-build.outputs.rkftools_repo_sha }}
+          RADTE_REPO_SHA: ${{ needs.prepare-build.outputs.radte_repo_sha }}
+        run: echo "value=$(bash container/scripts/compute_build_input_hash.sh)" >> "${GITHUB_OUTPUT}"
+
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -316,6 +305,8 @@ jobs:
           build-args: |
             BUILD_DATE=${{ needs.prepare-build.outputs.build_date }}
             VCS_REF=${{ github.sha }}
+            GG_VERSION=${{ needs.prepare-build.outputs.gg_version }}
+            BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}
             KFU52_REPO_REF=master
             KFU52_AMALGKIT_REPO_REF=master
             KFU52_AMALGKIT_REPO_SHA=${{ needs.prepare-build.outputs.amalgkit_repo_sha }}
@@ -451,7 +442,7 @@ jobs:
           {
             echo "Build trigger:"
             echo "- ${{ needs.check-trigger.outputs.decision_reason }}"
-            echo "- matched commit: ${{ needs.check-trigger.outputs.matched_sha }}"
+            echo "- successful baseline: ${{ needs.check-trigger.outputs.baseline_sha }}"
             echo "- matched paths: ${{ needs.check-trigger.outputs.matched_files }}"
             echo ""
             echo "Pushed image tags:"

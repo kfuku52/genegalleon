@@ -21,8 +21,11 @@ import numpy as np
 try:
     from tqdm import tqdm
 except ImportError:
+
     def tqdm(iterable, **_kwargs):
         return iterable
+
+
 import pandas as pd
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -38,9 +41,11 @@ except ImportError:
 try:
     from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 except ImportError:
+
     def retry(*_args, **_kwargs):
         def _decorator(func):
             return func
+
         return _decorator
 
     def wait_fixed(_seconds):
@@ -51,6 +56,7 @@ except ImportError:
 
     def retry_if_exception_type(_exception_type):
         return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +74,15 @@ def configure_logging(log_file_path="generate_orthogroup_database.log"):
         handlers.insert(0, logging.FileHandler(log_file_path))
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(message)s',
+        format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=handlers,
         force=True,
     )
 
+
 # Set pandas display options
-pd.set_option('display.max_rows', 100)
-pd.set_option('display.max_columns', 1000)
+pd.set_option("display.max_rows", 100)
+pd.set_option("display.max_columns", 1000)
 
 MAX_SQL_VARIABLES = 999
 AA_CHANGE_TABLE = "aa_change"
@@ -100,9 +107,7 @@ STAT_TABLE_REQUIRED_COLUMNS = {
     "tree": {"num_branch", "num_spe", "num_dup", "num_sp"},
     "branch": {"branch_id", "node_name", "num_sp", "so_event"},
 }
-TABLES_WITH_OPTIONAL_UNION_COLUMNS = frozenset(
-    set(STAT_TABLE_REQUIRED_COLUMNS).union(CSUBST_SCAN_BASELINE_COLUMNS)
-)
+TABLES_WITH_OPTIONAL_UNION_COLUMNS = frozenset(set(STAT_TABLE_REQUIRED_COLUMNS).union(CSUBST_SCAN_BASELINE_COLUMNS))
 
 
 def require_sqlalchemy():
@@ -140,11 +145,7 @@ def has_visible_entries(path):
 def discover_csubst_cb_dirs(prefix):
     if not prefix:
         return []
-    return [
-        path
-        for path in glob.glob(prefix + '*')
-        if not path.endswith('csubst_cb_stats')
-    ]
+    return [path for path in glob.glob(prefix + "*") if not path.endswith("csubst_cb_stats")]
 
 
 def remove_database_build_files(db_path):
@@ -210,17 +211,13 @@ def validate_csubst_scan_schemas(scan_dirs, store=None):
             )
             duplicate_columns = sorted({col for col in header_columns if header_columns.count(col) > 1})
             if duplicate_columns:
-                problems.append(
-                    f"{file_path}: duplicate columns: {', '.join(duplicate_columns)}"
-                )
+                problems.append(f"{file_path}: duplicate columns: {', '.join(duplicate_columns)}")
                 continue
 
             header_set = frozenset(header_columns)
             missing_columns = sorted(required_columns.difference(header_set))
             if missing_columns:
-                problems.append(
-                    f"{file_path}: missing current-schema columns: {', '.join(missing_columns)}"
-                )
+                problems.append(f"{file_path}: missing current-schema columns: {', '.join(missing_columns)}")
 
     if problems:
         details = "\n  - ".join(problems)
@@ -246,11 +243,14 @@ def optimize_sqlite(engine):
         conn.execute(sqlalchemy.text("PRAGMA busy_timeout = 30000;"))
     logger.info("SQLite PRAGMA settings optimized for performance and busy timeout set.")
 
+
 def calculate_chunksize(num_columns, max_sql_vars=MAX_SQL_VARIABLES):
     return max(1, math.floor(max_sql_vars / num_columns))
 
+
 def initialize_buffers(infiles, columns):
     return {stat: [] for stat in infiles.keys()}
+
 
 def create_indexes(engine, tables):
     """
@@ -338,23 +338,37 @@ def add_global_aa_change_fdr_columns(engine, table_name=AA_CHANGE_TABLE):
             update_df[q_col] = calculate_bh_fdr(df[p_col])
 
         temp_table = "_tmp_aa_change_global_fdr"
-        update_df.to_sql(temp_table, con=conn, if_exists="replace", index=False, chunksize=calculate_chunksize(update_df.shape[1]), method="multi")
-        conn.execute(sqlalchemy.text(f"CREATE INDEX IF NOT EXISTS idx_{temp_table}_rowid ON {quote_sql_identifier(temp_table)} (_rowid);"))
+        update_df.to_sql(
+            temp_table,
+            con=conn,
+            if_exists="replace",
+            index=False,
+            chunksize=calculate_chunksize(update_df.shape[1]),
+            method="multi",
+        )
+        conn.execute(
+            sqlalchemy.text(
+                f"CREATE INDEX IF NOT EXISTS idx_{temp_table}_rowid ON {quote_sql_identifier(temp_table)} (_rowid);"
+            )
+        )
         temp_sql = quote_sql_identifier(temp_table)
         for q_col in update_df.columns:
             if q_col == "_rowid":
                 continue
             q_col_sql = quote_sql_identifier(q_col)
-            conn.execute(sqlalchemy.text(
-                f"UPDATE {table_sql} "
-                f"SET {q_col_sql} = (SELECT {q_col_sql} FROM {temp_sql} WHERE {temp_sql}._rowid = {table_sql}.rowid) "
-                f"WHERE rowid IN (SELECT _rowid FROM {temp_sql});"
-            ))
+            conn.execute(
+                sqlalchemy.text(
+                    f"UPDATE {table_sql} "
+                    f"SET {q_col_sql} = (SELECT {q_col_sql} FROM {temp_sql} WHERE {temp_sql}._rowid = {table_sql}.rowid) "
+                    f"WHERE rowid IN (SELECT _rowid FROM {temp_sql});"
+                )
+            )
         conn.execute(sqlalchemy.text(f"DROP TABLE {temp_sql};"))
         logger.info(
             f"Calculated global BH FDR for {update_df.shape[0]:,} '{table_name}' rows using columns: {', '.join(pvalue_columns)}"
         )
         return [AA_CHANGE_FDR_PVALUE_COLUMNS[col] for col in pvalue_columns]
+
 
 def validate_directories(required_dirs, db_path):
     for dir_path in required_dirs:
@@ -370,12 +384,8 @@ def validate_directories(required_dirs, db_path):
             logger.error(f"Failed to create database directory '{db_dir}': {e}")
             exit(1)
 
-@retry(
-    wait=wait_fixed(2),
-    stop=stop_after_attempt(3),
-    retry=retry_if_exception_type(Exception),
-    reraise=True
-)
+
+@retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(Exception), reraise=True)
 def process_files(
     file_path,
     columns_to_read,
@@ -399,7 +409,7 @@ def process_files(
         og = gene_family_id_from_path(file_path)
 
         # Define the desired columns to read (exclude 'orthogroup' because it isn’t in the file)
-        desired_cols = [col for col in columns_to_read if col != 'orthogroup']
+        desired_cols = [col for col in columns_to_read if col != "orthogroup"]
 
         # Use caller-provided header columns when available to avoid a second parse.
         if available_cols_set is None:
@@ -423,9 +433,7 @@ def process_files(
             preview = ", ".join(missing_cols[:20])
             if len(missing_cols) > 20:
                 preview += f", ... ({len(missing_cols)} total)"
-            raise ValueError(
-                f"Missing required columns in '{file_path}': {preview}"
-            )
+            raise ValueError(f"Missing required columns in '{file_path}': {preview}")
 
         # Read only the available columns using the filtered list.
         if store is None:
@@ -452,8 +460,8 @@ def process_files(
 
         # --- Clean null characters ---
         # Apply cleaning only on object-type columns so that numeric columns remain unaffected.
-        #object_cols = df.select_dtypes(include=[object]).columns
-        #for col in object_cols:
+        # object_cols = df.select_dtypes(include=[object]).columns
+        # for col in object_cols:
         #    df[col] = df[col].str.replace('\x00', '')
 
         # Insert the 'orthogroup' column derived from the file name.
@@ -473,26 +481,27 @@ def process_files(
 def gene_family_id_from_path(file_path):
     stem = os.path.splitext(os.path.basename(file_path))[0]
     for suffix in (
-        '_stat.branch',
-        '_stat.tree',
-        '_csubst_scan_units',
-        '_csubst_scan',
-        '_csubst_cb_stats',
-        '.stat.branch',
-        '.stat.tree',
-        '.csubst_scan_units',
-        '.csubst_scan',
-        '.csubst_cb_stats',
+        "_stat.branch",
+        "_stat.tree",
+        "_csubst_scan_units",
+        "_csubst_scan",
+        "_csubst_cb_stats",
+        ".stat.branch",
+        ".stat.tree",
+        ".csubst_scan_units",
+        ".csubst_scan",
+        ".csubst_cb_stats",
     ):
         if stem.endswith(suffix):
-            return stem[:-len(suffix)]
+            return stem[: -len(suffix)]
     for marker in (
-        '.csubst_cb_',
-        '_csubst_cb_',
+        ".csubst_cb_",
+        "_csubst_cb_",
     ):
         if marker in stem:
             return stem.split(marker, 1)[0]
-    return stem.split('.')[0]
+    return stem.split(".")[0]
+
 
 def parse_cutoff_stat(cutoff_stat):
     parsed = []
@@ -502,7 +511,7 @@ def parse_cutoff_stat(cutoff_stat):
     if isinstance(cutoff_stat, (list, tuple)):
         tokens = cutoff_stat
     else:
-        tokens = [s.strip() for s in str(cutoff_stat).split('|')]
+        tokens = [s.strip() for s in str(cutoff_stat).split("|")]
 
     for token in tokens:
         if isinstance(token, (list, tuple)):
@@ -512,9 +521,9 @@ def parse_cutoff_stat(cutoff_stat):
             stat_value_raw = token[1]
         else:
             token_str = str(token).strip().replace("'", "").replace('"', "")
-            if not token_str or ',' not in token_str:
+            if not token_str or "," not in token_str:
                 continue
-            stat_name, stat_value_raw = token_str.split(',', 1)
+            stat_name, stat_value_raw = token_str.split(",", 1)
             stat_name = stat_name.strip()
             stat_value_raw = stat_value_raw.strip()
 
@@ -534,48 +543,99 @@ def apply_cutoff(df, cutoff_stat):
         cutoff_stats = parse_cutoff_stat(cutoff_stat)
         for stat_name, stat_value in cutoff_stats:
             if stat_name in df.columns:
-                values = pd.to_numeric(df[stat_name], errors='coerce').fillna(0)
+                values = pd.to_numeric(df[stat_name], errors="coerce").fillna(0)
                 df = df[values >= stat_value]
         return df
     except Exception as e:
         logger.error(f"Error applying cutoff: {e}")
         return df
 
+
 def main():
     parser = argparse.ArgumentParser(description="Optimize performance for database population script.")
-    parser.add_argument('--overwrite', metavar='bool', default=0, type=int, help='Overwrite existing database if set to 1.')
-    parser.add_argument('--dbpath', metavar='PATH', default='', type=str, help='Path to the SQLite database.')
-    parser.add_argument('--dir_stat_tree', metavar='PATH', default='', type=str, help='Directory for stat_tree files.')
-    parser.add_argument('--dir_stat_branch', metavar='PATH', default='', type=str, help='Directory for stat_branch files.')
-    parser.add_argument('--dir_csubst_cb_prefix', metavar='PATH', default='', type=str, help='Prefix path for csubst_cb directories.')
-    parser.add_argument('--dir_csubst_aa_change', metavar='PATH', default='', type=str, help='Directory for csubst scan candidate state-change files.')
-    parser.add_argument('--dir_csubst_aa_change_unit', metavar='PATH', default='', type=str, help='Directory for csubst scan foreground-unit files.')
-    parser.add_argument('--dir_gene_family', metavar='PATH', default='', type=str, help='Optional query2family/orthogroup root used to read live and ZIP-backed logical subdirectories.')
-    parser.add_argument('--row_threshold', metavar='INT', default=10000, type=int, help='Number of rows to accumulate before inserting into SQL.')
-    parser.add_argument('--cb_categories', metavar='CAT1,CAT2,...', default='any2any,any2spe', type=str, help='CSUBST cb stat categories to incorporate.')
-    parser.add_argument('--cutoff_stat', metavar='STAT1,VALUE1|STAT2,VALUE2|...', default='OCNany2spe,0.8', type=str, help='Cutoff statistics for filtering.')
-    parser.add_argument('--ncpu', dest='max_workers', metavar='INT', default=4, type=int, help='Number of worker threads.')
+    parser.add_argument(
+        "--overwrite", metavar="bool", default=0, type=int, help="Overwrite existing database if set to 1."
+    )
+    parser.add_argument("--dbpath", metavar="PATH", default="", type=str, help="Path to the SQLite database.")
+    parser.add_argument("--dir_stat_tree", metavar="PATH", default="", type=str, help="Directory for stat_tree files.")
+    parser.add_argument(
+        "--dir_stat_branch", metavar="PATH", default="", type=str, help="Directory for stat_branch files."
+    )
+    parser.add_argument(
+        "--dir_csubst_cb_prefix", metavar="PATH", default="", type=str, help="Prefix path for csubst_cb directories."
+    )
+    parser.add_argument(
+        "--dir_csubst_aa_change",
+        metavar="PATH",
+        default="",
+        type=str,
+        help="Directory for csubst scan candidate state-change files.",
+    )
+    parser.add_argument(
+        "--dir_csubst_aa_change_unit",
+        metavar="PATH",
+        default="",
+        type=str,
+        help="Directory for csubst scan foreground-unit files.",
+    )
+    parser.add_argument(
+        "--dir_gene_family",
+        metavar="PATH",
+        default="",
+        type=str,
+        help="Optional query2family/orthogroup root used to read live and ZIP-backed logical subdirectories.",
+    )
+    parser.add_argument(
+        "--row_threshold",
+        metavar="INT",
+        default=10000,
+        type=int,
+        help="Number of rows to accumulate before inserting into SQL.",
+    )
+    parser.add_argument(
+        "--cb_categories",
+        metavar="CAT1,CAT2,...",
+        default="any2any,any2spe",
+        type=str,
+        help="CSUBST cb stat categories to incorporate.",
+    )
+    parser.add_argument(
+        "--cutoff_stat",
+        metavar="STAT1,VALUE1|STAT2,VALUE2|...",
+        default="OCNany2spe,0.8",
+        type=str,
+        help="Cutoff statistics for filtering.",
+    )
+    parser.add_argument(
+        "--ncpu", dest="max_workers", metavar="INT", default=4, type=int, help="Number of worker threads."
+    )
     args = parser.parse_args()
     configure_logging()
     require_sqlalchemy()
     logger.info("Starting the orthogroup database generation script.")
 
     params = vars(args)
-    params['max_workers'] = max(1, int(params['max_workers']))
-    final_db_path = params['dbpath']
-    output_store = (
-        GeneFamilyOutputStore(params['dir_gene_family'])
-        if params['dir_gene_family']
-        else None
-    )
+    params["max_workers"] = max(1, int(params["max_workers"]))
+    final_db_path = params["dbpath"]
+    output_store = GeneFamilyOutputStore(params["dir_gene_family"]) if params["dir_gene_family"] else None
 
-    cb_categories = [cat.strip() for cat in args.cb_categories.split(',')]
-    all_cb_categories = ['any2any','any2spe','spe2any','spe2spe','any2dif','dif2any','spe2dif','dif2spe','dif2dif']
+    cb_categories = [cat.strip() for cat in args.cb_categories.split(",")]
+    all_cb_categories = [
+        "any2any",
+        "any2spe",
+        "spe2any",
+        "spe2spe",
+        "any2dif",
+        "dif2any",
+        "spe2dif",
+        "dif2spe",
+        "dif2dif",
+    ]
     cb_remove_categories = list(set(all_cb_categories).difference(set(cb_categories)))
 
     required_dirs = [
-        params['dir_stat_tree'],
-        params['dir_stat_branch'],
+        params["dir_stat_tree"],
+        params["dir_stat_branch"],
     ]
     if output_store is None:
         validate_directories(required_dirs, final_db_path)
@@ -585,16 +645,15 @@ def main():
             required_subdir = logical_store_subdir(required_dir)
             if required_subdir not in logical_subdirs:
                 raise FileNotFoundError(
-                    f"Logical input subdirectory does not exist: {required_subdir} "
-                    f"under {params['dir_gene_family']}"
+                    f"Logical input subdirectory does not exist: {required_subdir} under {params['dir_gene_family']}"
                 )
         db_dir = os.path.dirname(final_db_path)
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
 
     scan_dirs = [
-        (AA_CHANGE_TABLE, params['dir_csubst_aa_change']),
-        (AA_CHANGE_UNIT_TABLE, params['dir_csubst_aa_change_unit']),
+        (AA_CHANGE_TABLE, params["dir_csubst_aa_change"]),
+        (AA_CHANGE_UNIT_TABLE, params["dir_csubst_aa_change_unit"]),
     ]
     try:
         validate_csubst_scan_schemas(scan_dirs, store=output_store)
@@ -610,16 +669,16 @@ def main():
     header_columns_set_by_file = {}
     schema_problems = []
     indirs = {
-        'tree': params['dir_stat_tree'],
-        'branch': params['dir_stat_branch'],
+        "tree": params["dir_stat_tree"],
+        "branch": params["dir_stat_branch"],
     }
     # Identify csubst directories
     if output_store is None:
-        cb_dirs = discover_csubst_cb_dirs(params['dir_csubst_cb_prefix'])
+        cb_dirs = discover_csubst_cb_dirs(params["dir_csubst_cb_prefix"])
     else:
-        cb_prefix = os.path.basename(os.path.normpath(params['dir_csubst_cb_prefix']))
+        cb_prefix = os.path.basename(os.path.normpath(params["dir_csubst_cb_prefix"]))
         cb_dirs = [
-            os.path.join(params['dir_gene_family'], subdir)
+            os.path.join(params["dir_gene_family"], subdir)
             for subdir in output_store.logical_subdirs()
             if subdir.startswith(cb_prefix) and subdir != "csubst_cb_stats"
         ]
@@ -632,8 +691,8 @@ def main():
         )
         if cb_has_entries:
             logger.info(f"CSUBST higher-order convergence directory detected: {cb_dir}")
-            arity = re.sub('.*_', '', cb_dir)
-            table_name = f'cb{arity}'
+            arity = re.sub(".*_", "", cb_dir)
+            table_name = f"cb{arity}"
             indirs[table_name] = cb_dir
     for table_name, scan_dir in scan_dirs:
         scan_subdir = logical_store_subdir(scan_dir)
@@ -654,11 +713,7 @@ def main():
         if output_store is None and not os.path.exists(dir_path):
             logger.warning(f"Directory does not exist. Skipping: {dir_path}")
             continue
-        infiles[stat] = (
-            visible_files(dir_path)
-            if output_store is None
-            else output_store.file_names(logical_subdir)
-        )
+        infiles[stat] = visible_files(dir_path) if output_store is None else output_store.file_names(logical_subdir)
         logger.info(f"Number of infiles for '{stat}': {len(infiles[stat])}")
         num_columns[stat] = []
         header_columns_by_file[stat] = {}
@@ -673,13 +728,9 @@ def main():
                     logical_subdir=logical_subdir,
                     logical_name=infile,
                 )
-                duplicate_columns = sorted(
-                    {column for column in infile_columns if infile_columns.count(column) > 1}
-                )
+                duplicate_columns = sorted({column for column in infile_columns if infile_columns.count(column) > 1})
                 if duplicate_columns:
-                    schema_problems.append(
-                        f"{file_path}: duplicate columns: {', '.join(duplicate_columns)}"
-                    )
+                    schema_problems.append(f"{file_path}: duplicate columns: {', '.join(duplicate_columns)}")
                 required_columns = STAT_TABLE_REQUIRED_COLUMNS.get(stat, set())
                 if infile_columns and required_columns:
                     missing_required = sorted(required_columns.difference(infile_columns))
@@ -701,9 +752,7 @@ def main():
 
         # Sort files so that the one with the greatest number of columns is first
         sorted_pairs = sorted(
-            zip(infiles[stat], num_columns[stat]),
-            key=lambda item: item[1],
-            reverse=True
+            zip(infiles[stat], num_columns[stat], strict=True), key=lambda item: item[1], reverse=True
         )
         infiles[stat] = [infile for infile, _ in sorted_pairs]
         if not infiles[stat]:
@@ -716,32 +765,30 @@ def main():
             logger.info(f"Max columns file: {max_columns_file}")
             logger.info(f"Number of all columns in input for '{stat}': {len(column_names_set)}")
             logger.info(f"Max number of columns in input tables for '{stat}': {len(max_columns)}")
-            
+
             # Initialize columns list
-            if stat.startswith('cb'):
+            if stat.startswith("cb"):
                 filtered_columns = [
-                    col for col in max_columns
-                    if not any(remove_cat in col for remove_cat in cb_remove_categories)
+                    col for col in max_columns if not any(remove_cat in col for remove_cat in cb_remove_categories)
                 ]
                 additional_columns = list(column_names_set - set(max_columns))
                 additional_filtered = [
-                    col for col in additional_columns 
+                    col
+                    for col in additional_columns
                     if not any(remove_cat in col for remove_cat in cb_remove_categories)
                 ]
-                columns[stat] = ['orthogroup'] + filtered_columns + additional_filtered
+                columns[stat] = ["orthogroup"] + filtered_columns + additional_filtered
             else:
-                columns[stat] = ['orthogroup'] \
-                                + max_columns \
-                                + list(column_names_set - set(max_columns))
-            max_col_len = 300 # Upper limit to detect malformed column names like '\x00\x00\x00\x00...'
+                columns[stat] = ["orthogroup"] + max_columns + list(column_names_set - set(max_columns))
+            max_col_len = 300  # Upper limit to detect malformed column names like '\x00\x00\x00\x00...'
             columns[stat] = [col for col in columns[stat] if (len(col) <= max_col_len)]
             logger.info(f"Number of all columns for '{stat}': {len(columns[stat])}")
             preview_cols = columns[stat][:20]
-            suffix = ' ...' if len(columns[stat]) > 20 else ''
+            suffix = " ..." if len(columns[stat]) > 20 else ""
             logger.info(f"First columns for '{stat}': {preview_cols}{suffix}")
         except Exception as e:
             logger.error(f"Error reading max columns file '{max_columns_file}': {e}")
-            columns[stat] = ['orthogroup']
+            columns[stat] = ["orthogroup"]
             logger.warning(f"Falling back to minimal columns for '{stat}'.")
 
     if schema_problems:
@@ -754,7 +801,7 @@ def main():
 
     db_path, replace_database_on_success = prepare_database_build_path(
         final_db_path,
-        params['overwrite'],
+        params["overwrite"],
     )
     if replace_database_on_success:
         logger.info(
@@ -770,8 +817,8 @@ def main():
         echo=False,
         future=True,
         connect_args={"timeout": 30},
-        pool_size=params['max_workers'],
-        max_overflow=0
+        pool_size=params["max_workers"],
+        max_overflow=0,
     )
     optimize_sqlite(engine)
 
@@ -795,20 +842,18 @@ def main():
     # as a successful result.
     futures = {}
     processing_errors = []
-    with ThreadPoolExecutor(max_workers=params['max_workers']) as executor:
+    with ThreadPoolExecutor(max_workers=params["max_workers"]) as executor:
         for stat, files in infiles.items():
             for infile in files:
                 file_path = os.path.join(indirs[stat], infile)
                 logical_subdir = logical_store_subdir(indirs[stat])
-                artifact = (
-                    None
-                    if output_store is None
-                    else output_store.artifact(logical_subdir, infile)
-                )
+                artifact = None if output_store is None else output_store.artifact(logical_subdir, infile)
                 file_size = (
                     os.path.getsize(file_path)
                     if output_store is None
-                    else int(artifact.size or 0) if artifact is not None else 0
+                    else int(artifact.size or 0)
+                    if artifact is not None
+                    else 0
                 )
                 if file_size == 0:
                     processing_errors.append((file_path, "input file is empty"))
@@ -830,14 +875,14 @@ def main():
             try:
                 df = future.result()
                 # If it's a csubst table, apply cutoff
-                if stat.startswith('cb'):
-                    df = apply_cutoff(df, params['cutoff_stat'])
+                if stat.startswith("cb"):
+                    df = apply_cutoff(df, params["cutoff_stat"])
                 if not df.empty:
                     buffers[stat].append(df)
                     buffer_row_counts[stat] += len(df)
                 processed_files[stat] += 1
                 # Check if buffer exceeds threshold and insert into DB
-                if buffer_row_counts[stat] >= params['row_threshold']:
+                if buffer_row_counts[stat] >= params["row_threshold"]:
                     full_df = pd.concat(buffers[stat], ignore_index=True)
                     if not full_df.empty:
                         with engine.begin() as conn:
@@ -848,10 +893,12 @@ def main():
                                 index=False,
                                 dtype=None,
                                 chunksize=chunksizes[stat],
-                                method='multi'
+                                method="multi",
                             )
                         remaining = total_files[stat] - processed_files[stat]
-                        logger.info(f"{datetime.datetime.today()}: {stat}: Inserted {buffer_row_counts[stat]} rows. Files done: {processed_files[stat]}, remaining: {remaining}")
+                        logger.info(
+                            f"{datetime.datetime.today()}: {stat}: Inserted {buffer_row_counts[stat]} rows. Files done: {processed_files[stat]}, remaining: {remaining}"
+                        )
                     buffers[stat] = []
                     buffer_row_counts[stat] = 0
                     gc.collect()
@@ -861,12 +908,9 @@ def main():
 
     if processing_errors:
         engine.dispose()
-        details = "\n  - ".join(
-            f"{file_path}: {message}" for file_path, message in processing_errors
-        )
+        details = "\n  - ".join(f"{file_path}: {message}" for file_path, message in processing_errors)
         raise RuntimeError(
-            "Orthogroup database generation failed; no partial build will be "
-            f"reported as successful.\n  - {details}"
+            f"Orthogroup database generation failed; no partial build will be reported as successful.\n  - {details}"
         )
 
     incomplete_tables = {
@@ -877,8 +921,7 @@ def main():
     if incomplete_tables:
         engine.dispose()
         details = ", ".join(
-            f"{stat}={processed}/{total}"
-            for stat, (processed, total) in sorted(incomplete_tables.items())
+            f"{stat}={processed}/{total}" for stat, (processed, total) in sorted(incomplete_tables.items())
         )
         raise RuntimeError(f"Input-file accounting mismatch: {details}")
 
@@ -895,9 +938,11 @@ def main():
                         index=False,
                         dtype=None,
                         chunksize=chunksizes[stat],
-                        method='multi'
+                        method="multi",
                     )
-                logger.info(f"{datetime.datetime.today()}: Inserted remaining {buffer_row_counts[stat]} rows for '{stat}'.")
+                logger.info(
+                    f"{datetime.datetime.today()}: Inserted remaining {buffer_row_counts[stat]} rows for '{stat}'."
+                )
             else:
                 logger.info(f"No rows to insert for '{stat}' (buffer empty).")
             buffers[stat] = []
@@ -909,7 +954,9 @@ def main():
     # Retrieve table info
     with engine.begin() as conn:
         try:
-            tables = pd.read_sql_query(sql=sqlalchemy.text("SELECT name FROM sqlite_master WHERE type='table'"), con=conn)['name'].values
+            tables = pd.read_sql_query(
+                sql=sqlalchemy.text("SELECT name FROM sqlite_master WHERE type='table'"), con=conn
+            )["name"].values
             logger.info(f"Existing tables before indexing: {tables}")
         except Exception as e:
             logger.error(f"Failed to retrieve tables after insertion: {e}")
@@ -919,7 +966,9 @@ def main():
 
     with engine.begin() as conn:
         try:
-            tables = pd.read_sql_query(sql=sqlalchemy.text("SELECT name FROM sqlite_master WHERE type='table'"), con=conn)['name'].values
+            tables = pd.read_sql_query(
+                sql=sqlalchemy.text("SELECT name FROM sqlite_master WHERE type='table'"), con=conn
+            )["name"].values
             logger.info(f"Existing tables after global FDR calculation: {tables}")
         except Exception as e:
             logger.error(f"Failed to retrieve tables after FDR calculation: {e}")
@@ -943,6 +992,7 @@ def main():
         os.replace(db_path, final_db_path)
         logger.info("Published completed database atomically: %s", final_db_path)
     logger.info("All database operations completed and engine disposed.")
+
 
 if __name__ == "__main__":
     start_time = time.time()

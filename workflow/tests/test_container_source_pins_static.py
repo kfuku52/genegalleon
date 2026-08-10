@@ -17,9 +17,7 @@ KFUKU52_SHA_VARS = (
 def test_kfuku52_sources_share_validated_default_pins():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
-    apptainer = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(
-        encoding="utf-8"
-    )
+    apptainer = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(encoding="utf-8")
 
     pins_path = REPO_ROOT / "container" / "source_pins.env"
     pins = pins_path.read_text(encoding="utf-8")
@@ -46,9 +44,7 @@ def test_kfuku52_sources_share_validated_default_pins():
 def test_all_container_build_paths_resolve_explicit_upstream_revisions():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
-    apptainer = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(
-        encoding="utf-8"
-    )
+    apptainer = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(encoding="utf-8")
 
     assert 'ARG KFU52_REPO_REF="master"' in dockerfile
     assert 'ARG KFU52_AMALGKIT_REPO_REF="master"' in dockerfile
@@ -66,25 +62,17 @@ def test_all_container_build_paths_resolve_explicit_upstream_revisions():
 
 def test_container_build_paths_share_python_compatibility_constraints():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
-    apptainer_template = (
-        REPO_ROOT / "container" / "apptainer_local_build.def.template"
-    ).read_text(encoding="utf-8")
-    apptainer_build = (
-        REPO_ROOT / "container" / "apptainer_local_build.sh"
-    ).read_text(encoding="utf-8")
+    apptainer_template = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")
+    apptainer_build = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(encoding="utf-8")
     requirements_path = REPO_ROOT / "container" / "pip-compatibility.requirements.txt"
     requirements = requirements_path.read_text(encoding="utf-8")
 
     assert "-r /opt/pg/pip-compatibility.requirements.txt" in dockerfile
     assert "-r /opt/pg/pip-compatibility.requirements.txt" in apptainer_template
     assert (
-        "@@STAGING_ROOT@@/pip-compatibility.requirements.txt "
-        "/opt/pg/pip-compatibility.requirements.txt"
+        "@@STAGING_ROOT@@/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt"
     ) in apptainer_template
-    assert (
-        'cp "${repo_root}/container/pip-compatibility.requirements.txt" '
-        '"${staging_root}/"'
-    ) in apptainer_build
+    assert ('cp "${repo_root}/container/pip-compatibility.requirements.txt" "${staging_root}/"') in apptainer_build
     assert "python -m pip check" in dockerfile
     assert "python -m pip check" in apptainer_template
     for package in (
@@ -103,9 +91,7 @@ def test_container_build_paths_share_python_compatibility_constraints():
 
 
 def test_native_apptainer_build_records_source_revisions():
-    apptainer_template = (
-        REPO_ROOT / "container" / "apptainer_local_build.def.template"
-    ).read_text(encoding="utf-8")
+    apptainer_template = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")
 
     assert "> /opt/pg/logs/source_revisions.tsv" in apptainer_template
     for source in (
@@ -124,19 +110,15 @@ def test_native_apptainer_build_records_source_revisions():
 def test_treevis_package_is_part_of_every_repository_owned_image_context():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
-    apptainer_template = (
-        REPO_ROOT / "container" / "apptainer_local_build.def.template"
-    ).read_text(encoding="utf-8")
-    apptainer_build = (
-        REPO_ROOT / "container" / "apptainer_local_build.sh"
-    ).read_text(encoding="utf-8")
-    publish_workflow = (
-        REPO_ROOT / ".github" / "workflows" / "container-ghcr.yml"
-    ).read_text(encoding="utf-8")
+    apptainer_template = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")
+    apptainer_build = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(encoding="utf-8")
+    publish_workflow = (REPO_ROOT / ".github" / "workflows" / "container-ghcr.yml").read_text(encoding="utf-8")
 
     assert "COPY workflow/support/treevis /opt/pg/src/genegalleon.treevis" in dockerfile
     assert "R CMD INSTALL /opt/pg/src/genegalleon.treevis" in dockerfile
-    assert "find workflow/support/treevis -type f -print" in buildx
+    build_hash = (REPO_ROOT / "container" / "scripts" / "compute_build_input_hash.sh").read_text(encoding="utf-8")
+    assert "compute_build_input_hash.sh" in buildx
+    assert "find workflow/support/treevis -type f -print" in build_hash
     assert 'cp -R "${repo_root}/workflow/support/treevis" "${staging_root}/"' in apptainer_build
     assert "@@STAGING_ROOT@@/treevis /opt/pg/src/genegalleon.treevis" in apptainer_template
     assert '"workflow/support/treevis/"' in publish_workflow
@@ -144,12 +126,8 @@ def test_treevis_package_is_part_of_every_repository_owned_image_context():
 
 def test_container_build_paths_pin_the_same_base_image_digest():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
-    apptainer_template = (
-        REPO_ROOT / "container" / "apptainer_local_build.def.template"
-    ).read_text(encoding="utf-8")
-    base_pattern = re.compile(
-        r"mambaorg/micromamba:noble@sha256:[0-9a-f]{64}"
-    )
+    apptainer_template = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")
+    base_pattern = re.compile(r"mambaorg/micromamba:noble@sha256:[0-9a-f]{64}")
 
     docker_base = base_pattern.search(dockerfile)
     apptainer_base = base_pattern.search(apptainer_template)
@@ -160,15 +138,11 @@ def test_container_build_paths_pin_the_same_base_image_digest():
 
 def test_container_build_paths_include_rar_extraction_runtime():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
-    apptainer_template = (
-        REPO_ROOT / "container" / "apptainer_local_build.def.template"
-    ).read_text(encoding="utf-8")
-    required_commands = (
-        REPO_ROOT / "container" / "spec" / "required_commands.tsv"
-    ).read_text(encoding="utf-8")
-    arm64_required_commands = (
-        REPO_ROOT / "container" / "spec" / "required_commands.arm64.tsv"
-    ).read_text(encoding="utf-8")
+    apptainer_template = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")
+    required_commands = (REPO_ROOT / "container" / "spec" / "required_commands.tsv").read_text(encoding="utf-8")
+    arm64_required_commands = (REPO_ROOT / "container" / "spec" / "required_commands.arm64.tsv").read_text(
+        encoding="utf-8"
+    )
 
     assert "libarchive-tools" in dockerfile
     assert "libarchive-tools" in apptainer_template

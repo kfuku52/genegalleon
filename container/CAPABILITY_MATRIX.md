@@ -1,6 +1,6 @@
 # Capability Matrix
 
-This matrix summarizes intended behavior for the multi-arch `GeneGalleon` scaffold.
+This matrix summarizes intended behavior for the multi-arch `GeneGalleon` runtime.
 
 | Tier | Scope | amd64 | arm64 |
 |---|---|---|---|

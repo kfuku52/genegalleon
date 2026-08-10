@@ -40,13 +40,14 @@ HIT_COLUMNS_TO_CONCAT = (
     "frames",
 )
 
+
 def _interval_union_coverage(lo, hi, length):
     if length <= 0:
         return 0.0
     if lo.size == 0:
         return 0.0
     if lo.size < 32:
-        pairs = sorted(zip(lo.tolist(), hi.tolist()), key=lambda x: x[0])
+        pairs = sorted(zip(lo.tolist(), hi.tolist(), strict=True), key=lambda x: x[0])
         covered = 0
         cur_lo, cur_hi = pairs[0]
         for next_lo, next_hi in pairs[1:]:
@@ -223,8 +224,8 @@ def _annotate_blast_coverage_serial(out):
 def _normalize_ncpu(ncpu):
     try:
         value = int(ncpu)
-    except (TypeError, ValueError):
-        raise ValueError(f"Invalid ncpu value: {ncpu}")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid ncpu value: {ncpu}") from exc
     if value < 1:
         value = 1
     return value

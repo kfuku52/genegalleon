@@ -10,6 +10,8 @@ This page is a navigation map for the repository. When in doubt, start here and 
   - license text
 - `VERSION`
   - repository version marker
+- `dev`
+  - cross-platform container test, configuration-schema, build, and version helper
 - `gg_container_build_entrypoint.sh`
   - top-level convenience wrapper for container image/SIF creation
 - `docs/`
@@ -36,7 +38,7 @@ Main contents:
 - `workflow/support/`
   - shared shell/Python/R helpers, plotting utilities, bootstrap scripts, and support tools
 - `workflow/tests/`
-  - pytest and R-based checks for key helpers and wrapper behavior
+  - pytest and R-based checks plus the SIF/Docker auto-selecting validation runner
 - `workflow/gg_common_params.sh`
   - shared defaults reused by multiple stages
 - `workflow/gg_gene_family_archive.sh`

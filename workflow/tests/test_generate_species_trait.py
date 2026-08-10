@@ -50,13 +50,7 @@ def test_generate_species_trait_from_manifest_bulk_source(tmp_path):
     trait_source = tmp_path / "downloads" / "trait_datasets" / "austraits" / "austraits.tsv"
     write_text(
         trait_source,
-        (
-            "species\tbody_mass_g\n"
-            "Homo_sapiens\t70\n"
-            "Homo_sapiens\t72\n"
-            "Mus_musculus\t22\n"
-            "Pan_troglodytes\t45\n"
-        ),
+        ("species\tbody_mass_g\nHomo_sapiens\t70\nHomo_sapiens\t72\nMus_musculus\t22\nPan_troglodytes\t45\n"),
     )
 
     trait_plan = tmp_path / "input" / "input_generation" / "trait_plan.tsv"
@@ -96,7 +90,7 @@ def test_generate_species_trait_from_manifest_bulk_source(tmp_path):
     df = pandas.read_csv(output, sep="\t")
     assert list(df.columns) == ["species", "body_mass_g"]
     assert df.shape[0] == 2
-    mass_by_species = dict(zip(df["species"], df["body_mass_g"]))
+    mass_by_species = dict(zip(df["species"], df["body_mass_g"], strict=True))
     assert mass_by_species["Homo_sapiens"] == 71
     assert mass_by_species["Mus_musculus"] == 22
 
@@ -110,12 +104,7 @@ def test_generate_species_trait_from_species_cds_source(tmp_path):
     trait_source = tmp_path / "downloads" / "trait_datasets" / "animaltraits" / "animaltraits.tsv"
     write_text(
         trait_source,
-        (
-            "scientific_name\tlifespan_years\n"
-            "Canis lupus\t13\n"
-            "Felis catus\t15\n"
-            "Panthera leo\t14\n"
-        ),
+        ("scientific_name\tlifespan_years\nCanis lupus\t13\nFelis catus\t15\nPanthera leo\t14\n"),
     )
 
     trait_plan = tmp_path / "input" / "input_generation" / "trait_plan.tsv"
@@ -154,7 +143,7 @@ def test_generate_species_trait_from_species_cds_source(tmp_path):
     assert completed.returncode == 0, completed.stderr + completed.stdout
     df = pandas.read_csv(output, sep="\t")
     assert set(df["species"].tolist()) == {"Canis_lupus", "Felis_catus"}
-    value_map = dict(zip(df["species"], df["lifespan_years"]))
+    value_map = dict(zip(df["species"], df["lifespan_years"], strict=True))
     assert value_map["Canis_lupus"] == 13
     assert value_map["Felis_catus"] == 15
 
@@ -163,11 +152,7 @@ def test_generate_species_trait_species_api_mode_downloads_target_species_only(t
     manifest = tmp_path / "input" / "input_generation" / "download_plan.tsv"
     write_text(
         manifest,
-        (
-            "provider\tid\tspecies_key\n"
-            "local\tid1\tHomo_sapiens\n"
-            "local\tid2\tMus_musculus\n"
-        ),
+        ("provider\tid\tspecies_key\nlocal\tid1\tHomo_sapiens\nlocal\tid2\tMus_musculus\n"),
     )
 
     api_root = tmp_path / "api"
@@ -235,10 +220,7 @@ def test_generate_species_trait_maps_base_species_rows_to_unique_qualified_targe
     trait_source = tmp_path / "downloads" / "trait_datasets" / "animaltraits" / "animaltraits.tsv"
     write_text(
         trait_source,
-        (
-            "scientific_name\tlifespan_years\n"
-            "Dictyostelium discoideum\t7\n"
-        ),
+        ("scientific_name\tlifespan_years\nDictyostelium discoideum\t7\n"),
     )
 
     trait_plan = tmp_path / "input" / "input_generation" / "trait_plan.tsv"
@@ -291,10 +273,7 @@ def test_generate_species_trait_does_not_duplicate_base_rows_when_exact_target_e
     trait_source = tmp_path / "downloads" / "trait_datasets" / "animaltraits" / "animaltraits.tsv"
     write_text(
         trait_source,
-        (
-            "scientific_name\tlifespan_years\n"
-            "Dictyostelium discoideum\t7\n"
-        ),
+        ("scientific_name\tlifespan_years\nDictyostelium discoideum\t7\n"),
     )
 
     trait_plan = tmp_path / "input" / "input_generation" / "trait_plan.tsv"
@@ -333,7 +312,7 @@ def test_generate_species_trait_does_not_duplicate_base_rows_when_exact_target_e
     assert completed.returncode == 0, completed.stderr + completed.stdout
 
     df = pandas.read_csv(output, sep="\t")
-    value_map = dict(zip(df["species"], df["lifespan_years"]))
+    value_map = dict(zip(df["species"], df["lifespan_years"], strict=True))
     assert value_map["Dictyostelium_discoideum"] == 7
     assert pandas.isna(value_map["Dictyostelium_cf._discoideum"])
 
@@ -342,34 +321,22 @@ def test_generate_species_trait_strict_fails_when_source_column_missing(tmp_path
     manifest = tmp_path / "manifest.tsv"
     write_text(
         manifest,
-        (
-            "provider\tid\tspecies_key\n"
-            "local\tid\tArabidopsis_thaliana\n"
-        ),
+        ("provider\tid\tspecies_key\nlocal\tid\tArabidopsis_thaliana\n"),
     )
     trait_source = tmp_path / "traits.tsv"
     write_text(
         trait_source,
-        (
-            "species\tleaf_n\n"
-            "Arabidopsis_thaliana\t2.1\n"
-        ),
+        ("species\tleaf_n\nArabidopsis_thaliana\t2.1\n"),
     )
     trait_plan = tmp_path / "trait_plan.tsv"
     write_text(
         trait_plan,
-        (
-            "database\tsource_column\toutput_trait\n"
-            "austraits\tmissing_column\tleaf_N_percent\n"
-        ),
+        ("database\tsource_column\toutput_trait\naustraits\tmissing_column\tleaf_N_percent\n"),
     )
     db_sources = tmp_path / "trait_database_sources.tsv"
     write_text(
         db_sources,
-        (
-            "database\tacquisition_mode\turi\tspecies_column\n"
-            f"austraits\tbulk\t{trait_source}\tspecies\n"
-        ),
+        (f"database\tacquisition_mode\turi\tspecies_column\naustraits\tbulk\t{trait_source}\tspecies\n"),
     )
 
     completed = run_script(
@@ -391,11 +358,7 @@ def test_generate_species_trait_supports_long_format_with_trait_key_and_zip_sour
     manifest = tmp_path / "manifest.tsv"
     write_text(
         manifest,
-        (
-            "provider\tid\tspecies_key\n"
-            "local\ta\tEucalyptus_regnans\n"
-            "local\tb\tAcacia_dealbata\n"
-        ),
+        ("provider\tid\tspecies_key\nlocal\ta\tEucalyptus_regnans\nlocal\tb\tAcacia_dealbata\n"),
     )
 
     zip_path = tmp_path / "austraits.zip"
@@ -447,7 +410,13 @@ def test_generate_species_trait_supports_long_format_with_trait_key_and_zip_sour
     assert completed.returncode == 0, completed.stderr + completed.stdout
     df = pandas.read_csv(output, sep="\t")
     assert set(df.columns) == {"species", "leaf_N_per_dry_mass", "genome_size"}
-    out = dict(zip(df["species"], zip(df["leaf_N_per_dry_mass"], df["genome_size"])))
+    out = dict(
+        zip(
+            df["species"],
+            zip(df["leaf_N_per_dry_mass"], df["genome_size"], strict=True),
+            strict=True,
+        )
+    )
     assert out["Eucalyptus_regnans"] == (1.1, 1.7)
     assert out["Acacia_dealbata"] == (2.2, 0.9)
 
@@ -456,11 +425,7 @@ def test_generate_species_trait_bulk_uri_accepts_multiple_sources(tmp_path):
     manifest = tmp_path / "manifest.tsv"
     write_text(
         manifest,
-        (
-            "provider\tid\tspecies_key\n"
-            "local\ta\tCanis_lupus\n"
-            "local\tb\tFelis_catus\n"
-        ),
+        ("provider\tid\tspecies_key\nlocal\ta\tCanis_lupus\nlocal\tb\tFelis_catus\n"),
     )
     source1 = tmp_path / "elton_1.tsv"
     source2 = tmp_path / "elton_2.tsv"
@@ -495,7 +460,7 @@ def test_generate_species_trait_bulk_uri_accepts_multiple_sources(tmp_path):
     )
     assert completed.returncode == 0, completed.stderr + completed.stdout
     df = pandas.read_csv(output, sep="\t")
-    vals = dict(zip(df["species"], df["body_mass_g"]))
+    vals = dict(zip(df["species"], df["body_mass_g"], strict=True))
     assert vals["Canis_lupus"] == 30
     assert vals["Felis_catus"] == 4
 
@@ -504,11 +469,7 @@ def test_generate_species_trait_gift_api_mode_uses_species_lookup_and_trait_page
     manifest = tmp_path / "manifest.tsv"
     write_text(
         manifest,
-        (
-            "provider\tid\tspecies_key\n"
-            "local\ta\tHomo_sapiens\n"
-            "local\tb\tMus_musculus\n"
-        ),
+        ("provider\tid\tspecies_key\nlocal\ta\tHomo_sapiens\nlocal\tb\tMus_musculus\n"),
     )
     trait_plan = tmp_path / "trait_plan.tsv"
     write_text(
@@ -611,7 +572,7 @@ def test_generate_species_trait_gift_api_mode_uses_species_lookup_and_trait_page
     assert completed is not None
     assert completed.returncode == 0, completed.stderr + completed.stdout
     df = pandas.read_csv(output, sep="\t")
-    values = dict(zip(df["species"], df["woodiness"]))
+    values = dict(zip(df["species"], df["woodiness"], strict=True))
     assert values["Homo_sapiens"] == "woody"
     assert values["Mus_musculus"] == "non-woody"
     lookup_calls = [row for row in request_log if row["query"] == "names_matched_unique"]
@@ -625,10 +586,7 @@ def test_generate_species_trait_non_strict_warns_and_continues_on_source_load_fa
     manifest = tmp_path / "manifest.tsv"
     write_text(
         manifest,
-        (
-            "provider\tid\tspecies_key\n"
-            "local\ta\tHomo_sapiens\n"
-        ),
+        ("provider\tid\tspecies_key\nlocal\ta\tHomo_sapiens\n"),
     )
     trait_plan = tmp_path / "trait_plan.tsv"
     write_text(
@@ -671,10 +629,7 @@ def test_generate_species_trait_gift_api_resolves_trait_name_via_traits_meta(tmp
     manifest = tmp_path / "manifest.tsv"
     write_text(
         manifest,
-        (
-            "provider\tid\tspecies_key\n"
-            "local\ta\tHomo_sapiens\n"
-        ),
+        ("provider\tid\tspecies_key\nlocal\ta\tHomo_sapiens\n"),
     )
     trait_plan = tmp_path / "trait_plan.tsv"
     write_text(
@@ -757,7 +712,7 @@ def test_generate_species_trait_gift_api_resolves_trait_name_via_traits_meta(tmp
     assert completed is not None
     assert completed.returncode == 0, completed.stderr + completed.stdout
     df = pandas.read_csv(output, sep="\t")
-    assert dict(zip(df["species"], df["woodiness"]))["Homo_sapiens"] == "woody"
+    assert dict(zip(df["species"], df["woodiness"], strict=True))["Homo_sapiens"] == "woody"
     assert any(row["query"] == "traits_meta" for row in request_log)
     assert any(row["query"] == "traits" and row["traitid"] == "1.1.1" for row in request_log)
 
@@ -772,8 +727,22 @@ def test_generate_species_trait_print_gift_traits_supports_search_and_limit():
                 payload = [{"version": "1.0"}]
             elif parsed.path == "/api/index1.0.php" and query_name == "traits_meta":
                 payload = [
-                    {"Lvl3": "1.1.1", "Trait2": "Woodiness_1", "Trait1": "Woodiness", "type": "categorical", "Units": "woody, non-woody", "count": "249169"},
-                    {"Lvl3": "3.2.3", "Trait2": "Seed_mass_mean", "Trait1": "Seed mass", "type": "numeric", "Units": "g", "count": "24034"},
+                    {
+                        "Lvl3": "1.1.1",
+                        "Trait2": "Woodiness_1",
+                        "Trait1": "Woodiness",
+                        "type": "categorical",
+                        "Units": "woody, non-woody",
+                        "count": "249169",
+                    },
+                    {
+                        "Lvl3": "3.2.3",
+                        "Trait2": "Seed_mass_mean",
+                        "Trait1": "Seed mass",
+                        "type": "numeric",
+                        "Units": "g",
+                        "count": "24034",
+                    },
                 ]
             else:
                 payload = []
@@ -829,11 +798,7 @@ def test_generate_species_trait_gbif_distribution_preset_without_trait_files(tmp
     manifest = tmp_path / "download_plan.tsv"
     write_text(
         manifest,
-        (
-            "provider\tid\tspecies_key\n"
-            "local\ta\tHomo_sapiens\n"
-            "local\tb\tMus_musculus\n"
-        ),
+        ("provider\tid\tspecies_key\nlocal\ta\tHomo_sapiens\nlocal\tb\tMus_musculus\n"),
     )
     request_log = []
     occurrences = {

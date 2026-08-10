@@ -1,11 +1,11 @@
-# Multi-Arch `GeneGalleon` Container Scaffold
+# Multi-Arch `GeneGalleon` Container Runtime
 
-This directory provides a reproducible Docker-first build scaffold for `GeneGalleon`
+This directory provides a reproducible Docker-first runtime build for `GeneGalleon`
 that can target both:
 - `linux/amd64` (x86_64)
 - `linux/arm64` (AArch64, Apple Silicon compatible runtime via Linux VM/container host)
 
-## Why this scaffold exists
+## Why this runtime exists
 
 From the project README and Wiki (`gg_versions`):
 - `GeneGalleon` was originally assembled interactively from a miniconda3 Singularity sandbox.
@@ -52,7 +52,7 @@ Default hardening behavior:
 - build wrappers pass those commits into Docker so pin updates invalidate the corresponding build cache
 - `/opt/pg/logs/source_revisions.tsv` records the effective source revision in both Docker and native Apptainer images
 - `BUSCO` and `paml` remain pinned by default
-- `BioPP/testnh` and `CAFE5` release tarballs are verified with SHA-256 before extraction
+- `Notung`, `BioPP/testnh`, and `CAFE5` release archives are verified with SHA-256 before extraction
 - GitHub/GitLab source fetches prefer release/archive downloads and fall back to `git` retry logic only when needed
 
 Override rules:
@@ -81,6 +81,9 @@ portable cache directory is needed; `CACHE_DIR` defaults to `.buildx-cache`.
 For `MODE=load`, `buildx.sh` fingerprints the Docker build inputs and skips
 BuildKit entirely when the tagged local image already has the same fingerprint.
 Set `SKIP_UNCHANGED_LOAD=0` to force a rebuild.
+The same shared fingerprint is embedded by local, scheduled, and release builds
+as `io.genegalleon.build-input`; OCI labels also record the repository version
+and MIT license.
 
 ## One-command build (local/public selectable)
 
@@ -150,7 +153,7 @@ GitHub Actions now publishes GHCR images and release SIF assets:
 
 - `.github/workflows/container-ghcr.yml`
   - schedule: daily at 04:00 JST
-  - runs only when the previous JST day had container-related changes on the default branch
+  - compares the default branch with the last successful publish, so a failed scheduled build is retried rather than forgotten
   - tags: `YYYYMMDD-<sha7>-<source-hash12>`, `sha-<sha7>`, `latest`
 - `.github/workflows/release-sif.yml`
   - trigger: Release `published`
@@ -210,11 +213,14 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
 - `BUSCO` and `paml` are fetched from pinned upstream source snapshots by default.
 - `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and
   `RADTE` install from the validated revisions in `source_pins.env` by default.
-- `BioPP/testnh` and `CAFE5` tarballs are checksum-verified during build.
+- `Notung`, `BioPP/testnh`, and `CAFE5` archives are checksum-verified during build.
 - The default source is the pinned stable ZIP:
   - `NOTUNG_DOWNLOAD_PAGE=https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip`
+- The corresponding default checksum is:
+  - `NOTUNG_ZIP_SHA256=81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6`
 - `NOTUNG_DOWNLOAD_PAGE` may also point at the legacy download page if you
-  want the build to resolve the latest stable `Notung-2.9.*.zip` there.
+  want the build to resolve another `Notung-2.9.*.zip`; set its matching
+  `NOTUNG_ZIP_SHA256` at the same time or verification will stop the build.
 - If the official `amberjack.compbio.cs.cmu.edu` hostname has a transient DNS
   issue during build, override the fallback IP if needed:
   - `NOTUNG_DOWNLOAD_HOST_IP=128.2.205.60`

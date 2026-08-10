@@ -63,12 +63,16 @@ For example, `run_cafe` in `gg_genome_evolution_entrypoint.sh` becomes
 `GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION`. Empty override values are supported
 when a parameter intentionally needs to be cleared.
 
+The editable entrypoint blocks are the source of generated configuration
+metadata. Run `bash ./dev config-check` to detect forwarding-registry drift,
+or `bash ./dev config-schema markdown` to render a current reference table.
+
 ## Shared common parameter file
 
 `workflow/gg_common_params.sh` currently defines:
 
 - `GG_COMMON_GENETIC_CODE` (default `1`)
-- `GG_COMMON_BUSCO_LINEAGE` (default `auto`)
+- `GG_COMMON_BUSCO_LINEAGE` (default `eukaryota_odb12`; set `auto` to infer a lineage from species names)
 - `GG_COMMON_REFERENCE_SPECIES` (default `auto`)
 - `GG_COMMON_INPUT_SEQUENCE_MODE` (default `cds`)
 - `GG_COMMON_CSUBST_NONSYN_RECODE` (default `no`)
@@ -110,7 +114,8 @@ single-copy stage directories documented in
 ASTRAL, and MCMCTree directories remain directly visible for cross-workflow
 consumers.
 
-For BUSCO, `GG_COMMON_BUSCO_LINEAGE=auto` resolves a dataset from species names.
+For BUSCO, the conservative default is `GG_COMMON_BUSCO_LINEAGE=eukaryota_odb12`.
+Setting `GG_COMMON_BUSCO_LINEAGE=auto` explicitly resolves a dataset from species names.
 For single-species stages, GeneGalleon picks the deepest BUSCO dataset mapped to that species.
 For multi-species BUSCO stages, it picks the deepest BUSCO dataset shared across the dataset's species.
 In `gg_genome_evolution`, the multi-species BUSCO run and BUSCO summary are shared between the

@@ -290,10 +290,8 @@ def acquire_lock(
                 wait_logged = True
             if time.monotonic() - wait_started >= float(timeout_seconds):
                 raise RuntimeError(
-                    "{} timed out waiting for shared lock for {} ({})".format(
-                        message_label, context, owner_summary
-                    )
-                )
+                    "{} timed out waiting for shared lock for {} ({})".format(message_label, context, owner_summary)
+                ) from None
             time.sleep(float(poll_seconds))
             continue
         if heartbeat_interval_seconds is None:

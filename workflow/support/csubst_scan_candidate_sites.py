@@ -200,9 +200,7 @@ def validate_args(args):
     dir_orthogroup = Path(args.dir_orthogroup).resolve()
     file_trait = Path(args.file_trait).resolve()
     if not dir_orthogroup.is_dir():
-        raise FileNotFoundError(
-            f"--dir_orthogroup directory was not found: {dir_orthogroup}"
-        )
+        raise FileNotFoundError(f"--dir_orthogroup directory was not found: {dir_orthogroup}")
     if not file_trait.is_file():
         raise FileNotFoundError(f"--file_trait file was not found: {file_trait}")
     args.summary_prefix = str(Path(args.summary_prefix).resolve())
@@ -289,8 +287,7 @@ def analysis_engine_signature():
         engine_paths.extend(
             path
             for path in treevis_dir.rglob("*")
-            if path.is_file()
-            and (path.suffix.lower() == ".r" or path.name in {"DESCRIPTION", "NAMESPACE"})
+            if path.is_file() and (path.suffix.lower() == ".r" or path.name in {"DESCRIPTION", "NAMESPACE"})
         )
     for path in sorted(engine_paths):
         try:
@@ -310,9 +307,7 @@ def analysis_engine_signature():
 
 def discover_summary_tables(summary_prefix, minimum_support):
     prefix = Path(summary_prefix)
-    pattern = re.compile(
-        rf"^{re.escape(prefix.name)}_min_support_([0-9]+)_summary\.tsv$"
-    )
+    pattern = re.compile(rf"^{re.escape(prefix.name)}_min_support_([0-9]+)_summary\.tsv$")
     all_discovered = {}
     for candidate in prefix.parent.glob(f"{prefix.name}_min_support_*_summary.tsv"):
         match = pattern.match(candidate.name)
@@ -321,14 +316,8 @@ def discover_summary_tables(summary_prefix, minimum_support):
         threshold = int(match.group(1))
         all_discovered[threshold] = candidate
     if not all_discovered:
-        raise FileNotFoundError(
-            f"No min_support summary TSVs were found for prefix: {prefix}"
-        )
-    discovered = {
-        threshold: path
-        for threshold, path in all_discovered.items()
-        if threshold >= minimum_support
-    }
+        raise FileNotFoundError(f"No min_support summary TSVs were found for prefix: {prefix}")
+    discovered = {threshold: path for threshold, path in all_discovered.items() if threshold >= minimum_support}
     if not discovered and max(all_discovered) < minimum_support:
         return {}
     maximum_support = max(discovered)
@@ -379,8 +368,7 @@ def candidate_identity(row):
         "_canonical_support_branch_ids",
     ]
     return {
-        column: None if column not in row or pd.isna(row[column]) else str(row[column])
-        for column in identity_columns
+        column: None if column not in row or pd.isna(row[column]) else str(row[column]) for column in identity_columns
     }
 
 
@@ -434,9 +422,7 @@ def load_threshold_candidates(
     required = [*CANDIDATE_REQUIRED_COLUMNS, q_column]
     missing = [column for column in required if column not in frame.columns]
     if missing:
-        raise ValueError(
-            f"{summary_path} is missing required candidate column(s): {', '.join(missing)}"
-        )
+        raise ValueError(f"{summary_path} is missing required candidate column(s): {', '.join(missing)}")
     support = pd.to_numeric(frame["support_unit_count"], errors="coerce")
     invalid_support = ~np.isfinite(support.to_numpy(dtype=float)) | (support < minimum_support)
     if invalid_support.any():
@@ -449,8 +435,7 @@ def load_threshold_candidates(
     selected[q_column] = qvalues.loc[keep].astype(float)
     selected["support_unit_count"] = support.loc[keep].astype(int)
     selected["codon_site_alignment"] = [
-        integer_value(value, "codon_site_alignment", minimum=1)
-        for value in selected["codon_site_alignment"]
+        integer_value(value, "codon_site_alignment", minimum=1) for value in selected["codon_site_alignment"]
     ]
     canonical_branch_ids = []
     for row_index, value in selected["support_branch_ids"].items():
@@ -469,9 +454,7 @@ def load_threshold_candidates(
     sort_columns = [q_column]
     ascending = [True]
     if "p_rate_enrichment" in selected.columns:
-        selected["p_rate_enrichment"] = pd.to_numeric(
-            selected["p_rate_enrichment"], errors="coerce"
-        )
+        selected["p_rate_enrichment"] = pd.to_numeric(selected["p_rate_enrichment"], errors="coerce")
         sort_columns.append("p_rate_enrichment")
         ascending.append(True)
     sort_columns.extend(["support_unit_count", "orthogroup", "codon_site_alignment", "state_change"])
@@ -517,9 +500,7 @@ def inspect_required_report_inputs(dir_orthogroup, orthogroups):
                 selected = artifact
                 break
             if selected is None:
-                missing.append(
-                    "|".join(f"{subdir}/{name}" for name in candidate_names)
-                )
+                missing.append("|".join(f"{subdir}/{name}" for name in candidate_names))
             else:
                 selected_artifacts.append(artifact_input_signature(selected))
         signature_payload = {
@@ -527,14 +508,10 @@ def inspect_required_report_inputs(dir_orthogroup, orthogroups):
             "required_artifacts": selected_artifacts,
             "missing_required_inputs": missing,
         }
-        signature_text = json.dumps(
-            signature_payload, sort_keys=True, separators=(",", ":")
-        )
+        signature_text = json.dumps(signature_payload, sort_keys=True, separators=(",", ":"))
         states[orthogroup] = {
             "missing_required_inputs": missing,
-            "required_input_signature": hashlib.sha256(
-                signature_text.encode("utf-8")
-            ).hexdigest(),
+            "required_input_signature": hashlib.sha256(signature_text.encode("utf-8")).hexdigest(),
         }
     return states
 
@@ -553,9 +530,7 @@ def annotate_candidate_input_state(candidates, input_states):
         state = input_states[str(row["orthogroup"])]
         missing_text = ";".join(state["missing_required_inputs"])
         input_signature = state["required_input_signature"]
-        analysis_key = hashlib.sha256(
-            f"{row['_analysis_key']}\0{input_signature}".encode("utf-8")
-        ).hexdigest()
+        analysis_key = hashlib.sha256(f"{row['_analysis_key']}\0{input_signature}".encode("utf-8")).hexdigest()
         missing_values.append(missing_text)
         input_signatures.append(input_signature)
         analysis_keys.append(analysis_key)
@@ -622,9 +597,7 @@ def write_trait_color_tables(file_trait, traits, output_dir):
             }
         )
         trait_digest = hashlib.sha256(trait.encode("utf-8")).hexdigest()[:8]
-        path = output_dir / (
-            f"trait_{sanitize_token(trait, max_length=70)}_{trait_digest}.color.tsv"
-        )
+        path = output_dir / (f"trait_{sanitize_token(trait, max_length=70)}_{trait_digest}.color.tsv")
         colors.to_csv(path, sep="\t", index=False)
         paths[trait] = str(path.resolve())
     return paths
@@ -651,13 +624,10 @@ def candidate_cache_complete(cache_dir, record):
             return False
         if (
             "required_input_signature" not in marker_frame.columns
-            or marker_frame.loc[0, "required_input_signature"]
-            != record["_required_input_signature"]
+            or marker_frame.loc[0, "required_input_signature"] != record["_required_input_signature"]
         ):
             return False
-        artifacts = site_wrapper.resolve_site_artifacts(
-            str(cache_dir), record["_canonical_support_branch_ids"]
-        )
+        artifacts = site_wrapper.resolve_site_artifacts(str(cache_dir), record["_canonical_support_branch_ids"])
         for key in ("site_table_tsv", "site_summary_pdf"):
             path = artifacts[key]
             if path is None or not os.path.isfile(path) or os.path.getsize(path) == 0:
@@ -678,9 +648,7 @@ def analyze_candidate(record, cache_root, effective_dir_orthogroup, trait_color_
     previous_cwd = os.getcwd()
     try:
         os.chdir(cache_dir)
-        iqtree_zip = site_wrapper.get_iqtree_anc_zip_path(
-            effective_dir_orthogroup, record["orthogroup"]
-        )
+        iqtree_zip = site_wrapper.get_iqtree_anc_zip_path(effective_dir_orthogroup, record["orthogroup"])
         if not os.path.isfile(iqtree_zip):
             raise FileNotFoundError(f"IQ-TREE ancestral-state ZIP was not found: {iqtree_zip}")
         safe_extract_zip(
@@ -688,9 +656,7 @@ def analyze_candidate(record, cache_root, effective_dir_orthogroup, trait_color_
             cache_dir,
             f"{record['orthogroup']}.iqtree.anc",
         )
-        iqtree_anc_dir = site_wrapper.get_iqtree_anc_dir(
-            str(cache_dir), record["orthogroup"]
-        )
+        iqtree_anc_dir = site_wrapper.get_iqtree_anc_dir(str(cache_dir), record["orthogroup"])
         iqtree_anc_rel_dir = os.path.basename(iqtree_anc_dir)
         command = site_wrapper.build_csubst_sites_command(
             iqtree_anc_rel_dir=iqtree_anc_rel_dir,
@@ -702,16 +668,12 @@ def analyze_candidate(record, cache_root, effective_dir_orthogroup, trait_color_
         )
         print("COMMAND: {}".format(site_wrapper.shell_join_command(command)), flush=True)
         subprocess.run(command, check=True)
-        artifacts = site_wrapper.resolve_site_artifacts(
-            str(cache_dir), record["_canonical_support_branch_ids"]
-        )
+        artifacts = site_wrapper.resolve_site_artifacts(str(cache_dir), record["_canonical_support_branch_ids"])
         if artifacts["site_table_tsv"] is None:
             raise FileNotFoundError(f"CSUBST sites table was not found for {record['_candidate_id']}")
         site_table = pd.read_csv(artifacts["site_table_tsv"], sep="\t", low_memory=False)
         if "codon_site_alignment" not in site_table.columns:
-            raise ValueError(
-                f"CSUBST sites table lacks codon_site_alignment: {artifacts['site_table_tsv']}"
-            )
+            raise ValueError(f"CSUBST sites table lacks codon_site_alignment: {artifacts['site_table_tsv']}")
         observed_sites = pd.to_numeric(site_table["codon_site_alignment"], errors="coerce")
         target_site = int(record["codon_site_alignment"])
         if not observed_sites.eq(target_site).any():
@@ -783,13 +745,8 @@ def analyze_orthogroup_batch(
     materialized_context = None
     effective_dir_orthogroup = dir_orthogroup
     try:
-        if any(
-            os.path.isdir(os.path.join(dir_orthogroup, name))
-            for name in (".gg_store", ".gg_archives")
-        ):
-            materialized_context = site_wrapper.LockedMaterializationDirectory(
-                materialization_parent, orthogroup
-            )
+        if any(os.path.isdir(os.path.join(dir_orthogroup, name)) for name in (".gg_store", ".gg_archives")):
+            materialized_context = site_wrapper.LockedMaterializationDirectory(materialization_parent, orthogroup)
             effective_dir_orthogroup = materialized_context.name
             site_wrapper.materialize_csubst_site_inputs(
                 dir_og=dir_orthogroup,
@@ -895,10 +852,7 @@ def candidate_annotation_text(row, q_column, q_threshold):
         "Representative best hits",
         "",
     ]
-    lines.extend(
-        f"{column}: {printable_value(row.get(column, np.nan))}"
-        for column in BESTHIT_COLUMNS
-    )
+    lines.extend(f"{column}: {printable_value(row.get(column, np.nan))}" for column in BESTHIT_COLUMNS)
     return "\n\n".join(lines)
 
 
@@ -933,10 +887,8 @@ def make_csubst_manifests_portable(candidate_dir):
         for output_file in manifest["output_file"].fillna(""):
             output_file = str(output_file).strip()
             output_path = (manifest_path.parent / output_file).resolve()
-            is_internal = (
-                output_file != ""
-                and os.path.commonpath([str(candidate_dir), str(output_path)])
-                == str(candidate_dir)
+            is_internal = output_file != "" and os.path.commonpath([str(candidate_dir), str(output_path)]) == str(
+                candidate_dir
             )
             exists = is_internal and output_path.is_file()
             portable_paths.append(output_file if is_internal else "")
@@ -945,24 +897,25 @@ def make_csubst_manifests_portable(candidate_dir):
         manifest["output_path"] = portable_paths
         manifest["file_exists"] = file_exists
         manifest["file_size_bytes"] = file_sizes
-        self_rows = manifest["output_file"].fillna("").map(
-            lambda value: (manifest_path.parent / str(value)).resolve()
-            == manifest_path.resolve()
+        self_rows = (
+            manifest["output_file"]
+            .fillna("")
+            .map(
+                lambda value, _manifest_path=manifest_path: (
+                    (_manifest_path.parent / str(value)).resolve() == _manifest_path.resolve()
+                )
+            )
         )
         manifest_text = ""
         for _ in range(10):
             manifest_text = manifest.to_csv(sep="\t", index=False, lineterminator="\n")
             manifest_size = len(manifest_text.encode("utf-8"))
-            previous_sizes = pd.to_numeric(
-                manifest.loc[self_rows, "file_size_bytes"], errors="coerce"
-            )
+            previous_sizes = pd.to_numeric(manifest.loc[self_rows, "file_size_bytes"], errors="coerce")
             if previous_sizes.eq(manifest_size).all():
                 break
             manifest.loc[self_rows, "file_size_bytes"] = manifest_size
         manifest_text = manifest.to_csv(sep="\t", index=False, lineterminator="\n")
-        temporary_path = manifest_path.with_name(
-            f".{manifest_path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
-        )
+        temporary_path = manifest_path.with_name(f".{manifest_path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
         try:
             temporary_path.write_text(manifest_text, encoding="utf-8")
             os.replace(temporary_path, manifest_path)
@@ -978,18 +931,14 @@ def package_candidate(row, package_root, cache_root, q_column, q_threshold):
         raise RuntimeError(f"Candidate cache is incomplete: {cache_dir}")
     copy_candidate_cache(cache_dir, candidate_dir)
     candidate_tsv = candidate_dir / "candidate.tsv"
-    candidate_output_frame(row, q_column, q_threshold).to_csv(
-        candidate_tsv, sep="\t", index=False
-    )
+    candidate_output_frame(row, q_column, q_threshold).to_csv(candidate_tsv, sep="\t", index=False)
     annotation_pdf = candidate_dir / "annotation.pdf"
     site_wrapper.create_pdf(
         candidate_annotation_text(row, q_column, q_threshold),
         str(annotation_pdf),
     )
     focused_pdf = candidate_dir / f"{row['_candidate_id']}.focused_tree_site.pdf"
-    artifacts = site_wrapper.resolve_site_artifacts(
-        str(candidate_dir), row["_canonical_support_branch_ids"]
-    )
+    artifacts = site_wrapper.resolve_site_artifacts(str(candidate_dir), row["_canonical_support_branch_ids"])
     report_pdf = candidate_dir / f"{row['_candidate_id']}.report.pdf"
     report_parts = [str(annotation_pdf), str(focused_pdf), artifacts["site_summary_pdf"]]
     if artifacts["pymol_summary_pdf"] is not None:
@@ -1161,13 +1110,9 @@ def archive_matches_source(
             with archive.open(metadata_member) as handle:
                 package_metadata = pd.read_csv(handle, sep="\t", dtype=str)
             with archive.open(candidate_manifest_member) as handle:
-                candidate_manifest = pd.read_csv(
-                    handle, sep="\t", dtype=str, keep_default_na=False
-                )
+                candidate_manifest = pd.read_csv(handle, sep="\t", dtype=str, keep_default_na=False)
             with archive.open(skipped_manifest_member) as handle:
-                skipped_manifest = pd.read_csv(
-                    handle, sep="\t", dtype=str, keep_default_na=False
-                )
+                skipped_manifest = pd.read_csv(handle, sep="\t", dtype=str, keep_default_na=False)
             if candidate_manifest.columns.tolist() != CANDIDATE_MANIFEST_COLUMNS:
                 return False
             if skipped_manifest.columns.tolist() != SKIPPED_CANDIDATE_COLUMNS:
@@ -1177,40 +1122,27 @@ def archive_matches_source(
             if int(package_metadata.loc[0, "candidate_count"]) != candidate_manifest.shape[0]:
                 return False
             if (
-                int(package_metadata.loc[0, "packaged_candidate_count"])
-                != candidate_manifest.shape[0]
-                or int(package_metadata.loc[0, "skipped_candidate_count"])
-                != skipped_manifest.shape[0]
-                or int(package_metadata.loc[0, "skipped_gene_family_count"])
-                != skipped_manifest["orthogroup"].nunique()
+                int(package_metadata.loc[0, "packaged_candidate_count"]) != candidate_manifest.shape[0]
+                or int(package_metadata.loc[0, "skipped_candidate_count"]) != skipped_manifest.shape[0]
+                or int(package_metadata.loc[0, "skipped_gene_family_count"]) != skipped_manifest["orthogroup"].nunique()
                 or int(package_metadata.loc[0, "selected_candidate_count"])
                 != candidate_manifest.shape[0] + skipped_manifest.shape[0]
             ):
                 return False
             if expected_candidates is not None:
                 if expected_candidates.empty:
-                    expected_identities = pd.DataFrame(
-                        columns=["_candidate_id", "_required_input_signature"]
-                    )
+                    expected_identities = pd.DataFrame(columns=["_candidate_id", "_required_input_signature"])
                 else:
                     expected_identities = expected_candidates.loc[
                         :, ["_candidate_id", "_required_input_signature"]
                     ].astype(str)
-                observed_identities = candidate_manifest.loc[
-                    :, ["candidate_id", "required_input_signature"]
-                ]
+                observed_identities = candidate_manifest.loc[:, ["candidate_id", "required_input_signature"]]
                 observed_identities.columns = expected_identities.columns
-                if observed_identities.to_dict(
-                    orient="records"
-                ) != expected_identities.to_dict(orient="records"):
+                if observed_identities.to_dict(orient="records") != expected_identities.to_dict(orient="records"):
                     return False
             if expected_skipped_candidates is not None:
-                expected_skipped = expected_skipped_candidates.loc[
-                    :, SKIPPED_CANDIDATE_COLUMNS
-                ].fillna("").astype(str)
-                if skipped_manifest.to_dict(orient="records") != expected_skipped.to_dict(
-                    orient="records"
-                ):
+                expected_skipped = expected_skipped_candidates.loc[:, SKIPPED_CANDIDATE_COLUMNS].fillna("").astype(str)
+                if skipped_manifest.to_dict(orient="records") != expected_skipped.to_dict(orient="records"):
                     return False
             for _, candidate in candidate_manifest.iterrows():
                 for column in ("candidate_tsv", "focused_tree_site_pdf", "report_pdf"):
@@ -1222,16 +1154,12 @@ def archive_matches_source(
                     for name in member_names
                     if name.startswith(csubst_prefix) and name.endswith("/csubst.outputs.tsv")
                 ]
-                if len(output_manifests) != 1 or not archive_site_outputs_are_complete(
-                    archive, output_manifests[0]
-                ):
+                if len(output_manifests) != 1 or not archive_site_outputs_are_complete(archive, output_manifests[0]):
                     return False
         # Tool, runtime, container, and GeneGalleon versions are diagnostic
         # provenance only. Cache invalidation is driven by source content,
         # declared report parameters, and required per-family input signatures.
-        return package_metadata.loc[0, "source_summary_sha256"] == file_sha256(
-            source_summary
-        )
+        return package_metadata.loc[0, "source_summary_sha256"] == file_sha256(source_summary)
     except Exception:
         return False
 
@@ -1260,9 +1188,7 @@ def archived_diagnostic_provenance(archive_path):
 def create_zip_atomic(package_root, archive_path):
     archive_path = Path(archive_path)
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_base = archive_path.parent / (
-        f".{archive_path.stem}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
-    )
+    temporary_base = archive_path.parent / (f".{archive_path.stem}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
     temporary_zip = Path(str(temporary_base) + ".zip")
     try:
         shutil.make_archive(
@@ -1275,9 +1201,7 @@ def create_zip_atomic(package_root, archive_path):
             validated_members(archive, temporary_zip, archive_path.stem)
             bad_member = archive.testzip()
         if bad_member is not None:
-            raise ValueError(
-                f"CRC verification failed for new archive member: {bad_member}"
-            )
+            raise ValueError(f"CRC verification failed for new archive member: {bad_member}")
         with temporary_zip.open("rb") as handle:
             os.fsync(handle.fileno())
         os.replace(temporary_zip, archive_path)
@@ -1379,21 +1303,15 @@ def archive_path_for_threshold(
     nonsyn_recode,
     pdb,
 ):
-    suffix = output_suffix(
-        q_column, q_threshold, max_candidates, nonsyn_recode, pdb
-    )
-    return Path(out_dir) / (
-        f"{Path(summary_prefix).name}_candidate_sites_min_support_{threshold}_{suffix}.zip"
-    )
+    suffix = output_suffix(q_column, q_threshold, max_candidates, nonsyn_recode, pdb)
+    return Path(out_dir) / (f"{Path(summary_prefix).name}_candidate_sites_min_support_{threshold}_{suffix}.zip")
 
 
 def write_archive_manifest(rows, path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    pd.DataFrame(rows, columns=ARCHIVE_MANIFEST_COLUMNS).to_csv(
-        temporary, sep="\t", index=False
-    )
+    pd.DataFrame(rows, columns=ARCHIVE_MANIFEST_COLUMNS).to_csv(temporary, sep="\t", index=False)
     os.replace(temporary, path)
 
 
@@ -1416,9 +1334,7 @@ def exclusive_run_lock(lock_path):
             break
         except FileExistsError:
             if run_lock_is_stale(lock_directory):
-                stale_directory = lock_directory.with_name(
-                    f"{lock_directory.name}.stale-{uuid.uuid4().hex}"
-                )
+                stale_directory = lock_directory.with_name(f"{lock_directory.name}.stale-{uuid.uuid4().hex}")
                 try:
                     os.replace(lock_directory, stale_directory)
                 except (FileNotFoundError, OSError):
@@ -1485,21 +1401,15 @@ def run(args):
         args.csubst_nonsyn_recode,
         args.pdb,
     )
-    lock_path = output_dir / (
-        f".{Path(args.summary_prefix).name}_candidate_sites_{run_suffix}.lock"
-    )
+    lock_path = output_dir / (f".{Path(args.summary_prefix).name}_candidate_sites_{run_suffix}.lock")
     with exclusive_run_lock(lock_path):
         return run_locked(args, output_dir, run_suffix)
 
 
 def run_locked(args, output_dir, run_suffix):
     summary_tables = discover_summary_tables(args.summary_prefix, args.min_support)
-    manifest_path = output_dir / (
-        f"{Path(args.summary_prefix).name}_candidate_sites_{run_suffix}_manifest.tsv"
-    )
-    work_root = output_dir / (
-        f".{Path(args.summary_prefix).name}_candidate_sites_{run_suffix}.work"
-    )
+    manifest_path = output_dir / (f"{Path(args.summary_prefix).name}_candidate_sites_{run_suffix}_manifest.tsv")
+    work_root = output_dir / (f".{Path(args.summary_prefix).name}_candidate_sites_{run_suffix}.work")
     cache_root = work_root / "cache"
     packages_root = work_root / "packages"
     materialization_parent = work_root / "materialized"
@@ -1522,9 +1432,7 @@ def run_locked(args, output_dir, run_suffix):
         threshold_candidates[threshold] = candidates
         all_orthogroups.update(candidates["orthogroup"].dropna().astype(str).tolist())
 
-    input_states = inspect_required_report_inputs(
-        args.dir_orthogroup, all_orthogroups
-    )
+    input_states = inspect_required_report_inputs(args.dir_orthogroup, all_orthogroups)
     eligible_by_threshold = {}
     skipped_by_threshold = {}
     all_skipped = []
@@ -1544,9 +1452,7 @@ def run_locked(args, output_dir, run_suffix):
         f"{Path(args.summary_prefix).name}_candidate_sites_{run_suffix}_skipped_candidates.tsv"
     )
     combined_skipped = (
-        pd.concat(all_skipped, ignore_index=True)
-        if all_skipped
-        else pd.DataFrame(columns=SKIPPED_CANDIDATE_COLUMNS)
+        pd.concat(all_skipped, ignore_index=True) if all_skipped else pd.DataFrame(columns=SKIPPED_CANDIDATE_COLUMNS)
     )
     write_tsv_atomic(combined_skipped, skipped_path, SKIPPED_CANDIDATE_COLUMNS)
 
@@ -1586,9 +1492,7 @@ def run_locked(args, output_dir, run_suffix):
                 "error": "",
             }
         )
-    trait_color_paths = write_trait_color_tables(
-        args.file_trait, all_traits, trait_color_dir
-    ) if all_traits else {}
+    trait_color_paths = write_trait_color_tables(args.file_trait, all_traits, trait_color_dir) if all_traits else {}
     write_archive_manifest(archive_rows, manifest_path)
 
     failures_detected = False
@@ -1604,16 +1508,13 @@ def run_locked(args, output_dir, run_suffix):
             expected_skipped_candidates=skipped,
         ):
             archive_rows[row_index].update(archived_diagnostic_provenance(archive_path))
-            archive_rows[row_index]["status"] = (
-                "existing_with_skips" if not skipped.empty else "existing"
-            )
+            archive_rows[row_index]["status"] = "existing_with_skips" if not skipped.empty else "existing"
             write_archive_manifest(archive_rows, manifest_path)
             print(f"min_support={threshold}: existing ZIP retained: {archive_path}", flush=True)
             continue
         if archive_path.exists():
             print(
-                f"min_support={threshold}: existing ZIP is stale or incomplete and will be replaced: "
-                f"{archive_path}",
+                f"min_support={threshold}: existing ZIP is stale or incomplete and will be replaced: {archive_path}",
                 flush=True,
             )
         try:
@@ -1659,9 +1560,7 @@ def run_locked(args, output_dir, run_suffix):
             archive_rows[row_index]["error"] = str(error)
             write_archive_manifest(archive_rows, manifest_path)
             break
-        archive_rows[row_index]["status"] = (
-            "completed_with_skips" if not skipped.empty else "completed"
-        )
+        archive_rows[row_index]["status"] = "completed_with_skips" if not skipped.empty else "completed"
         write_archive_manifest(archive_rows, manifest_path)
         if not skipped.empty:
             print(
@@ -1677,9 +1576,7 @@ def run_locked(args, output_dir, run_suffix):
         )
 
     if failures_detected:
-        raise RuntimeError(
-            f"CSUBST scan candidate-site packaging failed. See: {manifest_path}"
-        )
+        raise RuntimeError(f"CSUBST scan candidate-site packaging failed. See: {manifest_path}")
     successful_statuses = {
         "completed",
         "completed_with_skips",

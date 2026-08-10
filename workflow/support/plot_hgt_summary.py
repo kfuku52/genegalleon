@@ -12,21 +12,46 @@ from score_hgt_candidates import TaxonomyResolver, normalize_sci_name
 
 OVERVIEW_NUMERIC_COLUMNS: List[Tuple[str, str, str]] = [
     ("candidate_gene_count", "Cand", "Number of genes descending from the candidate GeneRax HGT branch."),
-    ("matched_leaf_count", "Tips", "Number of leaf rows in the database that were matched back to the candidate branch."),
+    (
+        "matched_leaf_count",
+        "Tips",
+        "Number of leaf rows in the database that were matched back to the candidate branch.",
+    ),
     ("besthit_gene_count", "HitGenes", "Number of candidate genes with a UniProt/Swiss-Prot best hit."),
-    ("besthit_taxid_count", "HitTaxID", "Number of candidate genes whose best hit could be resolved to a taxonomy-aware label."),
-    ("besthit_same_superkingdom_fraction", "SameSK", "Fraction of candidate genes whose best hit falls in the same superkingdom as the focal lineage."),
+    (
+        "besthit_taxid_count",
+        "HitTaxID",
+        "Number of candidate genes whose best hit could be resolved to a taxonomy-aware label.",
+    ),
+    (
+        "besthit_same_superkingdom_fraction",
+        "SameSK",
+        "Fraction of candidate genes whose best hit falls in the same superkingdom as the focal lineage.",
+    ),
     ("intron_support_fraction", "Intron", "Fraction of candidate genes with intron support recorded in stat_branch."),
     ("expression_measured_fraction", "Expr", "Fraction of candidate genes with any expression measurement."),
-    ("clade_min_expression_pearsoncor", "ExprCor", "Minimum clade-level Pearson correlation among measured expression profiles."),
+    (
+        "clade_min_expression_pearsoncor",
+        "ExprCor",
+        "Minimum clade-level Pearson correlation among measured expression profiles.",
+    ),
     ("synteny_support_fraction", "SynFrac", "Fraction of candidate genes with positive synteny support."),
     ("synteny_mean_support_score", "SynMean", "Mean synteny support score across candidate genes."),
-    ("contamination_incompatible_fraction", "Contam", "Fraction of candidate genes flagged as lineage-incompatible by contamination QC."),
+    (
+        "contamination_incompatible_fraction",
+        "Contam",
+        "Fraction of candidate genes flagged as lineage-incompatible by contamination QC.",
+    ),
 ]
 
 OVERVIEW_TEXT_COLUMNS: List[Tuple[str, str, int, str]] = [
     ("besthit_lca_rank_mode", "HitLCA", 18, "Most frequent best-hit lineage relationship label among candidate genes."),
-    ("contamination_top_lca_sciname", "TopContam", 28, "Most frequent contamination LCA scientific name among candidate genes."),
+    (
+        "contamination_top_lca_sciname",
+        "TopContam",
+        28,
+        "Most frequent contamination LCA scientific name among candidate genes.",
+    ),
 ]
 
 FLOW_FALLBACK_LABEL = "Unresolved"
@@ -34,9 +59,7 @@ FLOW_OTHER_LABEL = "Other"
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(
-        description="Plot overview and taxonomy-flow summaries for gg_hgt outputs."
-    )
+    parser = argparse.ArgumentParser(description="Plot overview and taxonomy-flow summaries for gg_hgt outputs.")
     parser.add_argument("--branch_tsv", metavar="PATH", required=True, type=str)
     parser.add_argument("--gene_tsv", metavar="PATH", required=True, type=str)
     parser.add_argument("--overview_pdf", metavar="PATH", required=True, type=str)
@@ -182,20 +205,22 @@ def plot_overview(branch_df: pandas.DataFrame, out_pdf: str) -> None:
 
     plot_df = branch_df.copy()
     plot_df["row_label"] = (
-        plot_df["orthogroup"].astype(str).str.strip()
-        + ":"
-        + plot_df["branch_id"].astype(str).str.strip()
+        plot_df["orthogroup"].astype(str).str.strip() + ":" + plot_df["branch_id"].astype(str).str.strip()
     )
-    plot_df = plot_df.sort_values(["orthogroup", "branch_id"], ascending=[True, True], kind="mergesort").reset_index(drop=True)
+    plot_df = plot_df.sort_values(["orthogroup", "branch_id"], ascending=[True, True], kind="mergesort").reset_index(
+        drop=True
+    )
     numeric_cols = [col for col, _label, _desc in OVERVIEW_NUMERIC_COLUMNS if col in plot_df.columns]
     text_specs = [(col, label, width) for col, label, width, _desc in OVERVIEW_TEXT_COLUMNS if col in plot_df.columns]
     chunk_size = 60
 
     with PdfPages(out_pdf) as pdf:
         for start in range(0, plot_df.shape[0], chunk_size):
-            chunk = plot_df.iloc[start:start + chunk_size, :].copy()
+            chunk = plot_df.iloc[start : start + chunk_size, :].copy()
             numeric_df = chunk.loc[:, numeric_cols].apply(pandas.to_numeric, errors="coerce")
-            normalized = normalize_numeric_frame(numeric_df) if len(numeric_cols) > 0 else pandas.DataFrame(index=chunk.index)
+            normalized = (
+                normalize_numeric_frame(numeric_df) if len(numeric_cols) > 0 else pandas.DataFrame(index=chunk.index)
+            )
             row_labels = chunk["row_label"].astype(str).tolist()
 
             fig_height = max(4.0, 0.24 * len(row_labels) + 1.8)
@@ -237,7 +262,7 @@ def plot_overview(branch_df: pandas.DataFrame, out_pdf: str) -> None:
                 ax_text.set_ylim(len(row_labels) - 0.5, -0.5)
                 ax_text.axis("off")
                 ax_text.set_title(label)
-                values = chunk[col].map(lambda x: shorten_text(x, width)).fillna("")
+                values = chunk[col].map(lambda x, _width=width: shorten_text(x, _width)).fillna("")
                 for y, value in enumerate(values.tolist()):
                     ax_text.text(0.0, y, value, va="center", ha="left", fontsize=7, clip_on=False)
 
@@ -288,7 +313,9 @@ def resolve_rank_label(
     return parts[0]
 
 
-def collapse_to_top_categories(count_df: pandas.DataFrame, left_col: str, right_col: str, max_categories: int) -> pandas.DataFrame:
+def collapse_to_top_categories(
+    count_df: pandas.DataFrame, left_col: str, right_col: str, max_categories: int
+) -> pandas.DataFrame:
     out = count_df.copy()
     left_totals = out.groupby(left_col, sort=False)["count"].sum().sort_values(ascending=False)
     right_totals = out.groupby(right_col, sort=False)["count"].sum().sort_values(ascending=False)
@@ -366,7 +393,9 @@ def plot_taxonomy_flow(
         axis=1,
     )
     plot_df["besthit_label"] = plot_df.apply(
-        lambda row: resolve_rank_label(row.get("besthit_organism", ""), row.get("besthit_taxid", numpy.nan), resolver, preferred_rank),
+        lambda row: resolve_rank_label(
+            row.get("besthit_organism", ""), row.get("besthit_taxid", numpy.nan), resolver, preferred_rank
+        ),
         axis=1,
     )
     plot_df["recipient_label"] = plot_df["recipient_label"].replace("", FLOW_FALLBACK_LABEL).fillna(FLOW_FALLBACK_LABEL)
@@ -398,7 +427,9 @@ def plot_taxonomy_flow(
     right_cursor = {key: value[1] for key, value in right_pos.items()}
     flow_df["recipient_label"] = pandas.Categorical(flow_df["recipient_label"], categories=left_order, ordered=True)
     flow_df["besthit_label"] = pandas.Categorical(flow_df["besthit_label"], categories=right_order, ordered=True)
-    flow_df = flow_df.sort_values(["recipient_label", "besthit_label"], ascending=[True, True], kind="mergesort").reset_index(drop=True)
+    flow_df = flow_df.sort_values(
+        ["recipient_label", "besthit_label"], ascending=[True, True], kind="mergesort"
+    ).reset_index(drop=True)
 
     plt, PdfPages, Path, PathPatch, Rectangle = get_pyplot()
     with PdfPages(out_pdf) as pdf:
@@ -421,24 +452,45 @@ def plot_taxonomy_flow(
             left_low = left_high - height
             right_high = right_cursor[right_cat]
             right_low = right_high - height
-            add_ribbon(ax, Path, PathPatch, left_x1, right_x0, left_low, left_high, right_low, right_high, color_map[left_cat])
+            add_ribbon(
+                ax, Path, PathPatch, left_x1, right_x0, left_low, left_high, right_low, right_high, color_map[left_cat]
+            )
             left_cursor[left_cat] = left_low
             right_cursor[right_cat] = right_low
 
         for category in left_order:
             y0, y1 = left_pos[category]
-            ax.add_patch(Rectangle((left_x0, y0), left_x1 - left_x0, y1 - y0, facecolor=color_map[category], edgecolor="black", linewidth=0.4))
+            ax.add_patch(
+                Rectangle(
+                    (left_x0, y0),
+                    left_x1 - left_x0,
+                    y1 - y0,
+                    facecolor=color_map[category],
+                    edgecolor="black",
+                    linewidth=0.4,
+                )
+            )
             ax.text(left_x0 - 0.02, (y0 + y1) / 2, wrap_label(category), ha="right", va="center", fontsize=7)
             ax.text(left_x1 + 0.01, (y0 + y1) / 2, str(int(left_totals[category])), ha="left", va="center", fontsize=7)
 
         for category in right_order:
             y0, y1 = right_pos[category]
-            ax.add_patch(Rectangle((right_x0, y0), right_x1 - right_x0, y1 - y0, facecolor="#d9d9d9", edgecolor="black", linewidth=0.4))
+            ax.add_patch(
+                Rectangle(
+                    (right_x0, y0), right_x1 - right_x0, y1 - y0, facecolor="#d9d9d9", edgecolor="black", linewidth=0.4
+                )
+            )
             ax.text(right_x1 + 0.02, (y0 + y1) / 2, wrap_label(category), ha="left", va="center", fontsize=7)
-            ax.text(right_x0 - 0.01, (y0 + y1) / 2, str(int(right_totals[category])), ha="right", va="center", fontsize=7)
+            ax.text(
+                right_x0 - 0.01, (y0 + y1) / 2, str(int(right_totals[category])), ha="right", va="center", fontsize=7
+            )
 
-        ax.text((left_x0 + left_x1) / 2, 1.01, "Recipient lineage", ha="center", va="bottom", fontsize=9, fontweight="bold")
-        ax.text((right_x0 + right_x1) / 2, 1.01, "Best-hit lineage", ha="center", va="bottom", fontsize=9, fontweight="bold")
+        ax.text(
+            (left_x0 + left_x1) / 2, 1.01, "Recipient lineage", ha="center", va="bottom", fontsize=9, fontweight="bold"
+        )
+        ax.text(
+            (right_x0 + right_x1) / 2, 1.01, "Best-hit lineage", ha="center", va="bottom", fontsize=9, fontweight="bold"
+        )
         ax.text(
             0.5,
             1.04,

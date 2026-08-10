@@ -33,42 +33,50 @@ def is_legacy_safely_removed_flag(filename):
 
 def build_arg_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dir_transcriptome_assembly', metavar='PATH', type=str, required=True, help='')
-    parser.add_argument('--gg_workspace_input_dir', metavar='PATH', type=str, default='', help='')
     parser.add_argument(
-        '--mode',
-        metavar='MODE',
+        "--dir_transcriptome_assembly",
+        metavar="PATH",
         type=str,
-        choices=['auto', 'sraid', 'fastq', 'metadata'],
         required=True,
-        help='',
+        help="Path used by --dir_transcriptome_assembly.",
     )
-    parser.add_argument('--out', metavar='PATH', type=str, required=True, help='')
-    parser.add_argument('--ncpu', metavar='INT', default=1, type=int, help='Number of worker threads.')
+    parser.add_argument(
+        "--gg_workspace_input_dir", metavar="PATH", type=str, default="", help="Path used by --gg_workspace_input_dir."
+    )
+    parser.add_argument(
+        "--mode",
+        metavar="MODE",
+        type=str,
+        choices=["auto", "sraid", "fastq", "metadata"],
+        required=True,
+        help="Value used by this argument.",
+    )
+    parser.add_argument("--out", metavar="PATH", type=str, required=True, help="Path used by --out.")
+    parser.add_argument("--ncpu", metavar="INT", default=1, type=int, help="Number of worker threads.")
     return parser
 
 
 def sorted_entries(path):
-    return sorted([entry for entry in os.listdir(path) if not entry.startswith('.')])
+    return sorted([entry for entry in os.listdir(path) if not entry.startswith(".")])
 
 
 def infer_input_root_from_output_dir(transcriptome_output_dir):
     output_root = os.path.dirname(os.path.realpath(transcriptome_output_dir))
     workspace_root = os.path.dirname(output_root)
-    return os.path.join(workspace_root, 'input')
+    return os.path.join(workspace_root, "input")
 
 
 def collect_species_from_sra_list(input_root):
-    input_dir = os.path.join(input_root, 'query_sra_id')
+    input_dir = os.path.join(input_root, "query_sra_id")
     if not os.path.isdir(input_dir):
-        raise FileNotFoundError(f'Directory not found: {input_dir}')
-    return [filename.split('.')[0] for filename in sorted_entries(input_dir) if filename.endswith('.txt')]
+        raise FileNotFoundError(f"Directory not found: {input_dir}")
+    return [filename.split(".")[0] for filename in sorted_entries(input_dir) if filename.endswith(".txt")]
 
 
 def collect_species_from_fastq(input_root):
-    input_dir = os.path.join(input_root, 'species_rnaseq')
+    input_dir = os.path.join(input_root, "species_rnaseq")
     if not os.path.isdir(input_dir):
-        raise FileNotFoundError(f'Directory not found: {input_dir}')
+        raise FileNotFoundError(f"Directory not found: {input_dir}")
     out = []
     for dirname in sorted_entries(input_dir):
         dir_path = os.path.join(input_dir, dirname)
@@ -78,18 +86,22 @@ def collect_species_from_fastq(input_root):
 
 
 def collect_species_from_metadata(input_root):
-    input_dir = os.path.join(input_root, 'amalgkit_metadata')
+    input_dir = os.path.join(input_root, "amalgkit_metadata")
     if not os.path.isdir(input_dir):
-        raise FileNotFoundError(f'Directory not found: {input_dir}')
-    return [filename[:-len('_metadata.tsv')] for filename in sorted_entries(input_dir) if filename.endswith('_metadata.tsv')]
+        raise FileNotFoundError(f"Directory not found: {input_dir}")
+    return [
+        filename[: -len("_metadata.tsv")]
+        for filename in sorted_entries(input_dir)
+        if filename.endswith("_metadata.tsv")
+    ]
 
 
 def collect_input_species(input_root, mode):
-    if mode == 'sraid':
+    if mode == "sraid":
         return collect_species_from_sra_list(input_root)
-    if mode == 'fastq':
+    if mode == "fastq":
         return collect_species_from_fastq(input_root)
-    if mode == 'metadata':
+    if mode == "metadata":
         return collect_species_from_metadata(input_root)
 
     # auto mode: pick the first source with non-empty entries
@@ -106,7 +118,7 @@ def collect_input_species(input_root, mode):
 def collect_species_ids_for_subdir(base_dir, subdir):
     subdir_path = os.path.realpath(os.path.join(base_dir, subdir))
     files = sorted_entries(subdir_path)
-    if subdir == 'amalgkit_getfastq':
+    if subdir == "amalgkit_getfastq":
         species_ids_in_files = set()
         for f in files:
             if is_legacy_safely_removed_flag(f):
@@ -118,14 +130,12 @@ def collect_species_ids_for_subdir(base_dir, subdir):
                     species_ids_in_files.add(f)
         return species_ids_in_files
     return {
-        species_id
-        for species_id in (extract_species_label(f, strip_extension=True) for f in files)
-        if species_id != ''
+        species_id for species_id in (extract_species_label(f, strip_extension=True) for f in files) if species_id != ""
     }
 
 
 def collect_safely_removed_species_ids(base_dir):
-    flagdir_path = os.path.realpath(os.path.join(base_dir, 'amalgkit_getfastq'))
+    flagdir_path = os.path.realpath(os.path.join(base_dir, "amalgkit_getfastq"))
     if not os.path.isdir(flagdir_path):
         return set()
 
@@ -134,7 +144,7 @@ def collect_safely_removed_species_ids(base_dir):
         entry_path = os.path.join(flagdir_path, entry)
         if is_legacy_safely_removed_flag(entry):
             species_id = extract_species_label(entry, strip_extension=True)
-            if species_id != '':
+            if species_id != "":
                 safely_removed_species_ids.add(species_id)
             continue
         if not os.path.isdir(entry_path):
@@ -146,16 +156,18 @@ def collect_safely_removed_species_ids(base_dir):
 
 
 def run(args):
-    print('args:', vars(args))
+    print("args:", vars(args))
     start = time.time()
 
     base_dir = args.dir_transcriptome_assembly
-    input_root = args.gg_workspace_input_dir if args.gg_workspace_input_dir else infer_input_root_from_output_dir(base_dir)
+    input_root = (
+        args.gg_workspace_input_dir if args.gg_workspace_input_dir else infer_input_root_from_output_dir(base_dir)
+    )
     input_species_list = collect_input_species(input_root, args.mode)
 
     subdirs = sorted_entries(base_dir)
     subdirs = [sd for sd in subdirs if os.path.isdir(os.path.join(base_dir, sd))]
-    candidate_subdirs = [sd for sd in subdirs if sd not in ['annotation_summary', 'tmp']]
+    candidate_subdirs = [sd for sd in subdirs if sd not in ["annotation_summary", "tmp"]]
 
     if not input_species_list:
         inferred_species = set()
@@ -163,11 +175,13 @@ def run(args):
             inferred_species.update(collect_species_ids_for_subdir(base_dir, subdir))
         input_species_list = sorted([sid for sid in inferred_species if sid])
         if input_species_list:
-            print('Input species could not be collected from input directories. Falling back to output-derived species list.')
+            print(
+                "Input species could not be collected from input directories. Falling back to output-derived species list."
+            )
 
     df = pandas.DataFrame(index=input_species_list)
-    df.index.name = 'species'
-    df['GG_ARRAY_TASK_ID'] = numpy.arange(1, df.shape[0] + 1)
+    df.index.name = "species"
+    df["GG_ARRAY_TASK_ID"] = numpy.arange(1, df.shape[0] + 1)
 
     df = pandas.concat([df, pandas.DataFrame(data=0, index=df.index, columns=subdirs, dtype=int)], axis=1)
     species_index_set = set(df.index)
@@ -187,13 +201,13 @@ def run(args):
             species_ids_per_subdir[subdir] = collect_species_ids_for_subdir(base_dir, subdir)
 
     for subdir in subdirs:
-        if subdir in ['annotation_summary', 'tmp']:
+        if subdir in ["annotation_summary", "tmp"]:
             continue
         species_ids_in_files = species_ids_per_subdir.get(subdir, set())
         species_ids_with_file = list(species_ids_in_files & species_index_set)
         df.loc[species_ids_with_file, subdir] = 1
         num_missing = (df.loc[:, subdir] == 0).sum()
-        txt = 'Subdirectory {}: {:,} / {:,} files are missing.'
+        txt = "Subdirectory {}: {:,} / {:,} files are missing."
         print(txt.format(subdir, num_missing, df.shape[0]))
 
     df = pandas.concat(
@@ -204,19 +218,17 @@ def run(args):
     safely_removed_species_ids_with_file = list(safely_removed_species_ids & set(df.index))
     df.loc[safely_removed_species_ids_with_file, SAFELY_REMOVED_SUMMARY_COLUMN] = 1
     num_missing = (df[SAFELY_REMOVED_SUMMARY_COLUMN] == 0).sum()
+    print("{}: {:,} / {:,} files are missing.".format(SAFELY_REMOVED_DISPLAY_GLOB, num_missing, df.shape[0]))
+
+    incomplete_ids = df.loc[df[SAFELY_REMOVED_SUMMARY_COLUMN] == 0, "GG_ARRAY_TASK_ID"].astype(int).tolist()
     print(
-        '{}: {:,} / {:,} files are missing.'.format(SAFELY_REMOVED_DISPLAY_GLOB, num_missing, df.shape[0])
+        "Incomplete job IDs (based on {}):".format(SAFELY_REMOVED_DISPLAY_GLOB),
+        ",".join(str(x) for x in sorted(incomplete_ids)),
     )
 
-    incomplete_ids = df.loc[df[SAFELY_REMOVED_SUMMARY_COLUMN] == 0, 'GG_ARRAY_TASK_ID'].astype(int).tolist()
-    print(
-        'Incomplete job IDs (based on {}):'.format(SAFELY_REMOVED_DISPLAY_GLOB),
-        ','.join(str(x) for x in sorted(incomplete_ids)),
-    )
-
-    print('Writing output file:', args.out, flush=True)
-    df.to_csv(args.out, index=True, sep='\t')
-    print('Done. Elapsed time: {:,} sec'.format(int(time.time() - start)))
+    print("Writing output file:", args.out, flush=True)
+    df.to_csv(args.out, index=True, sep="\t")
+    print("Done. Elapsed time: {:,} sec".format(int(time.time() - start)))
 
 
 def main():
@@ -226,5 +238,5 @@ def main():
     run(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

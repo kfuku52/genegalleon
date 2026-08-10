@@ -18,34 +18,34 @@ if str(SUPPORT_DIR) not in sys.path:
 
 from gene_family_output_store import SHARED_OUTPUT_SUBDIRS, GeneFamilyOutputStore
 
-ORTHOGROUP_ID_RE = re.compile(r'^(OG\d+|HOG\d+|SP\d+)(?=$|[._-])')
+ORTHOGROUP_ID_RE = re.compile(r"^(OG\d+|HOG\d+|SP\d+)(?=$|[._-])")
 
 
 def build_arg_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dir_og', metavar='PATH', type=str, required=True, help='')
-    parser.add_argument('--genecount', metavar='PATH', type=str, required=True, help='')
-    parser.add_argument('--out', metavar='PATH', type=str, required=True, help='')
+    parser.add_argument("--dir_og", metavar="PATH", type=str, required=True, help="Path used by --dir_og.")
+    parser.add_argument("--genecount", metavar="PATH", type=str, required=True, help="Path used by --genecount.")
+    parser.add_argument("--out", metavar="PATH", type=str, required=True, help="Path used by --out.")
     parser.add_argument(
-        '--updated-genecount-out',
-        metavar='PATH',
+        "--updated-genecount-out",
+        metavar="PATH",
         type=str,
-        help='Write the AMAS-augmented gene-count table here; the default is beside --out.',
+        help="Write the AMAS-augmented gene-count table here; the default is beside --out.",
     )
-    parser.add_argument('--ncpu', metavar='INT', default=1, type=int, help='Number of worker threads.')
+    parser.add_argument("--ncpu", metavar="INT", default=1, type=int, help="Number of worker threads.")
     return parser
 
 
 def _amas_columns():
     return [
-        'No_of_taxa',
-        'Alignment_length',
-        'Total_matrix_cells',
-        'Undetermined_characters',
-        'Missing_percent',
-        'No_variable_sites',
-        'Parsimony_informative_sites',
-        'GC_content',
+        "No_of_taxa",
+        "Alignment_length",
+        "Total_matrix_cells",
+        "Undetermined_characters",
+        "Missing_percent",
+        "No_variable_sites",
+        "Parsimony_informative_sites",
+        "GC_content",
     ]
 
 
@@ -57,41 +57,37 @@ def _extract_orthogroup_id(file_name):
 
 
 def _visible_entries(path):
-    return [entry for entry in os.listdir(path) if not entry.startswith('.')]
+    return [entry for entry in os.listdir(path) if not entry.startswith(".")]
 
 
 def _read_amas_file(file_path, og_id, amas_cols):
-    tmp = pandas.read_csv(file_path, sep='\t', header=0, usecols=amas_cols, nrows=1, low_memory=False)
+    tmp = pandas.read_csv(file_path, sep="\t", header=0, usecols=amas_cols, nrows=1, low_memory=False)
     return og_id, tmp.iloc[0].to_list()
 
 
 def _read_amas_store_file(store, subdir, file_name, og_id, amas_cols):
     with store.open_binary(subdir, file_name) as handle:
-        tmp = pandas.read_csv(handle, sep='\t', header=0, usecols=amas_cols, nrows=1, low_memory=False)
+        tmp = pandas.read_csv(handle, sep="\t", header=0, usecols=amas_cols, nrows=1, low_memory=False)
     return og_id, tmp.iloc[0].to_list()
 
 
 def get_amas_stats(df, dir_amas, extension, ncpu, store=None, logical_subdir=None):
     amas_cols = _amas_columns()
-    amas_new_cols = [f'{col}_{extension}' for col in amas_cols]
+    amas_new_cols = [f"{col}_{extension}" for col in amas_cols]
     for ncol in amas_new_cols:
         if ncol not in df.columns:
             df.loc[:, ncol] = numpy.nan
 
     if store is None and not os.path.isdir(dir_amas):
-        print(f'{extension}: {dir_amas} was not found. Skipping.', flush=True)
+        print(f"{extension}: {dir_amas} was not found. Skipping.", flush=True)
         return df
     if store is not None and logical_subdir not in store.logical_subdirs():
-        print(f'{extension}: logical subdirectory {logical_subdir} was not found. Skipping.', flush=True)
+        print(f"{extension}: logical subdirectory {logical_subdir} was not found. Skipping.", flush=True)
         return df
 
-    is_prefilled = ~df[f'No_of_taxa_{extension}'].isna()
+    is_prefilled = ~df[f"No_of_taxa_{extension}"].isna()
     prefilled_ogs = set(df.index[is_prefilled])
-    files = (
-        sorted(_visible_entries(dir_amas))
-        if store is None
-        else store.file_names(logical_subdir)
-    )
+    files = sorted(_visible_entries(dir_amas)) if store is None else store.file_names(logical_subdir)
     queued = []
     seen_ogs = set()
     valid_ogs = set(df.index.astype(str))
@@ -162,67 +158,61 @@ def get_amas_stats(df, dir_amas, extension, ncpu, store=None, logical_subdir=Non
         )
         df.loc[result_df.index, amas_new_cols] = result_df
 
-    idx_total = numpy.where(df.columns == 'Total')[0][0]
+    idx_total = numpy.where(df.columns == "Total")[0][0]
     idx_added = numpy.arange(idx_total + 1, df.columns.shape[0])
     original_cols = df.columns[numpy.arange(idx_total + 1)].tolist()
     sorted_amas_cols = df.columns[idx_added].sort_values().tolist()
     df = df.loc[:, original_cols + sorted_amas_cols]
-    print(f'{extension}: {counter} AMAS results were appended.', flush=True)
+    print(f"{extension}: {counter} AMAS results were appended.", flush=True)
     return df
 
 
 def run(args):
-    print('args:', vars(args))
+    print("args:", vars(args))
 
     start = time.time()
-    updated_genecount = getattr(args, 'updated_genecount_out', None)
+    updated_genecount = getattr(args, "updated_genecount_out", None)
     if updated_genecount is None:
         out_path = Path(args.out)
-        updated_genecount = str(
-            out_path.with_name(f'{out_path.stem}.genecount.amas.tsv')
-        )
-    df_original = pandas.read_csv(args.genecount, sep='\t', index_col=0, header=0)
+        updated_genecount = str(out_path.with_name(f"{out_path.stem}.genecount.amas.tsv"))
+    df_original = pandas.read_csv(args.genecount, sep="\t", index_col=0, header=0)
     df_original.index = df_original.index.astype(str)
     if os.path.exists(updated_genecount):
-        print('Updated --genecount file was detected. Reading and aligning to the original index.', flush=True)
-        df_updated = pandas.read_csv(updated_genecount, sep='\t', index_col=0, header=0)
+        print("Updated --genecount file was detected. Reading and aligning to the original index.", flush=True)
+        df_updated = pandas.read_csv(updated_genecount, sep="\t", index_col=0, header=0)
         df_updated.index = df_updated.index.astype(str)
         df = df_original.copy()
         extra_cols = [col for col in df_updated.columns if col not in df.columns]
         if extra_cols:
             df = pandas.concat([df, df_updated.reindex(df.index)[extra_cols]], axis=1)
     else:
-        print('Updated --genecount file was not detected. Reading the original.', flush=True)
+        print("Updated --genecount file was not detected. Reading the original.", flush=True)
         df = df_original
 
     store = GeneFamilyOutputStore(args.dir_og)
-    dir_amas = os.path.join(args.dir_og, 'amas_original')
+    dir_amas = os.path.join(args.dir_og, "amas_original")
     df = get_amas_stats(
         df,
         dir_amas,
-        'original',
+        "original",
         args.ncpu,
         store=store,
-        logical_subdir='amas_original',
+        logical_subdir="amas_original",
     )
-    dir_amas = os.path.join(args.dir_og, 'amas_cleaned')
+    dir_amas = os.path.join(args.dir_og, "amas_cleaned")
     df = get_amas_stats(
         df,
         dir_amas,
-        'clean',
+        "clean",
         args.ncpu,
         store=store,
-        logical_subdir='amas_cleaned',
+        logical_subdir="amas_cleaned",
     )
-    df.to_csv(updated_genecount, index=True, sep='\t')
+    df.to_csv(updated_genecount, index=True, sep="\t")
 
-    df.loc[:, 'GG_ARRAY_TASK_ID'] = numpy.arange(df.shape[0]) + 1
+    df.loc[:, "GG_ARRAY_TASK_ID"] = numpy.arange(df.shape[0]) + 1
 
-    subdirs = [
-        subdir
-        for subdir in store.logical_subdirs()
-        if subdir not in SHARED_OUTPUT_SUBDIRS
-    ]
+    subdirs = [subdir for subdir in store.logical_subdirs() if subdir not in SHARED_OUTPUT_SUBDIRS]
     df = pandas.concat([df, pandas.DataFrame(data=0, index=df.index, columns=subdirs, dtype=int)], axis=1)
     valid_og_ids = set(df.index.astype(str))
     for subdir in subdirs:
@@ -237,12 +227,12 @@ def run(args):
         if og_ids:
             df.loc[og_ids, subdir] = 1
         num_missing = (df.loc[:, subdir] == 0).sum()
-        txt = 'Subdirectory {}: {:,} / {:,} files are missing.'
+        txt = "Subdirectory {}: {:,} / {:,} files are missing."
         print(txt.format(subdir, num_missing, df.shape[0]))
 
-    print('Writing output file:', args.out, flush=True)
-    df.to_csv(args.out, index=True, sep='\t')
-    print('Done. Elapsed time: {:,} sec'.format(int(time.time() - start)))
+    print("Writing output file:", args.out, flush=True)
+    df.to_csv(args.out, index=True, sep="\t")
+    print("Done. Elapsed time: {:,} sec".format(int(time.time() - start)))
 
 
 def main():
@@ -252,5 +242,5 @@ def main():
     run(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

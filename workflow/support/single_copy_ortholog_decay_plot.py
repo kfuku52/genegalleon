@@ -19,13 +19,29 @@ METRIC_LABELS = {
 
 def build_arg_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--orthogroup-genecount", metavar="PATH", required=True, help="Orthogroups.GeneCount.tsv input.")
+    parser.add_argument(
+        "--orthogroup-genecount", metavar="PATH", required=True, help="Orthogroups.GeneCount.tsv input."
+    )
     parser.add_argument("--outdir", metavar="PATH", required=True, help="Output directory.")
-    parser.add_argument("--replicates", metavar="INT", default=1000, type=int, help="Random species subsets per X value.")
-    parser.add_argument("--species-counts", metavar="STR", default="auto", help="Comma-separated species counts, ranges like 1-10 or 1-10:2, or auto.")
+    parser.add_argument(
+        "--replicates", metavar="INT", default=1000, type=int, help="Random species subsets per X value."
+    )
+    parser.add_argument(
+        "--species-counts",
+        metavar="STR",
+        default="auto",
+        help="Comma-separated species counts, ranges like 1-10 or 1-10:2, or auto.",
+    )
     parser.add_argument("--seed", metavar="INT", default=1, type=int, help="Random seed.")
-    parser.add_argument("--plot-basename", metavar="STR", default="single_copy_ortholog_decay_plot", help="Output plot basename.")
-    parser.add_argument("--summary-name", metavar="STR", default="single_copy_ortholog_decay_summary.tsv", help="Output summary TSV name.")
+    parser.add_argument(
+        "--plot-basename", metavar="STR", default="single_copy_ortholog_decay_plot", help="Output plot basename."
+    )
+    parser.add_argument(
+        "--summary-name",
+        metavar="STR",
+        default="single_copy_ortholog_decay_summary.tsv",
+        help="Output summary TSV name.",
+    )
     parser.add_argument("--formats", metavar="STR", default="pdf,svg", help="Comma-separated plot formats.")
     return parser
 
@@ -149,7 +165,7 @@ def summarize_decay(species_counts, values):
     for metric, metric_values in metrics:
         means = metric_values.mean(axis=0)
         sds = metric_values.std(axis=0, ddof=1) if metric_values.shape[0] > 1 else numpy.zeros(len(species_counts))
-        for species_count, mean, sd in zip(species_counts, means, sds):
+        for species_count, mean, sd in zip(species_counts, means, sds, strict=True):
             rows.append(
                 {
                     "species_count": species_count,
@@ -264,7 +280,9 @@ def run(args):
     for outpath in plot_decay(summary, args.outdir, args.plot_basename, formats):
         print("Writing: {}".format(outpath))
 
-    print("Ending {} at {}. Elapsed time: {:,} sec".format(sys.argv[0], datetime.datetime.now(), int(time.time() - start)))
+    print(
+        "Ending {} at {}. Elapsed time: {:,} sec".format(sys.argv[0], datetime.datetime.now(), int(time.time() - start))
+    )
 
 
 def main():

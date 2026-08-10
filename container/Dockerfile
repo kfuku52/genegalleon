@@ -54,10 +54,12 @@ FROM system AS notung
 
 ARG NOTUNG_DOWNLOAD_PAGE="https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip"
 ARG NOTUNG_DOWNLOAD_HOST_IP="128.2.205.60"
+ARG NOTUNG_ZIP_SHA256="81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6"
 
 COPY container/scripts/resolve_notung_latest.sh /opt/pg/scripts/resolve_notung_latest.sh
 COPY container/scripts/download_url.sh /opt/pg/scripts/download_url.sh
 COPY container/scripts/download_url_with_fallback.sh /opt/pg/scripts/download_url_with_fallback.sh
+COPY container/scripts/verify_sha256.sh /opt/pg/scripts/verify_sha256.sh
 COPY container/scripts/extract_notung_jar.py /opt/pg/scripts/extract_notung_jar.py
 
 RUN apt-get update \
@@ -66,6 +68,7 @@ RUN apt-get update \
  && notung_url="$(/opt/pg/scripts/resolve_notung_latest.sh "${NOTUNG_DOWNLOAD_PAGE}")" \
  && tmp_zip="$(mktemp /tmp/notung.XXXXXX.zip)" \
  && NOTUNG_DOWNLOAD_HOST_IP="${NOTUNG_DOWNLOAD_HOST_IP}" /opt/pg/scripts/download_url_with_fallback.sh "${notung_url}" "${tmp_zip}" \
+ && /opt/pg/scripts/verify_sha256.sh "${tmp_zip}" "${NOTUNG_ZIP_SHA256}" \
  && python3 /opt/pg/scripts/extract_notung_jar.py --archive "${tmp_zip}" --destination /Notung.jar \
  && rm -f "${tmp_zip}" \
  && apt-get purge -y python3 \
@@ -296,9 +299,10 @@ ARG VCS_REF="unknown"
 ARG GG_VERSION="unknown"
 ARG BUILD_INPUT_HASH=""
 
-LABEL org.opencontainers.image.title="GeneGalleon multi-arch candidate container" \
-      org.opencontainers.image.description="Reproducible multi-arch build scaffold for GeneGalleon (amd64 + arm64)" \
+LABEL org.opencontainers.image.title="GeneGalleon workflow container" \
+      org.opencontainers.image.description="Reproducible multi-architecture runtime for GeneGalleon (amd64 + arm64)" \
       org.opencontainers.image.source="https://github.com/kfuku52/genegalleon" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${GG_VERSION}" \

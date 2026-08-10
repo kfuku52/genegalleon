@@ -100,11 +100,7 @@ def resolve_workspace_layout(workspace: Path) -> tuple[Path, Path, Path]:
     if (workspace / "gfe_data").is_dir() and _managed_children(workspace / "gfe_data"):
         return workspace, (workspace / "gfe_data").resolve(), (workspace / "input").resolve()
     if _managed_children(workspace):
-        input_root = (
-            workspace.parent / "input"
-            if (workspace.parent / "input").is_dir()
-            else workspace / "input"
-        )
+        input_root = workspace.parent / "input" if (workspace.parent / "input").is_dir() else workspace / "input"
         return workspace, workspace, input_root.resolve()
     raise WorkspaceStorageError(
         "Could not find output/{query2family,orthogroup,species_tree}, gfe_data, "
@@ -134,9 +130,7 @@ def discover_genecount(output_root: Path, override: Optional[Path]) -> Optional[
         return path
     orthofinder = output_root / "orthofinder"
     preferred = [
-        orthofinder
-        / "Orthogroups_filtered"
-        / "Orthogroups.GeneCount.selected.tsv",
+        orthofinder / "Orthogroups_filtered" / "Orthogroups.GeneCount.selected.tsv",
         orthofinder / "Orthogroups.GeneCount.selected.tsv",
     ]
     selected = _find_unique(preferred, "selected orthogroup gene-count table")
@@ -181,10 +175,7 @@ def _excluded_paths(output_root: Path) -> list[str]:
         paths.append(str(orthofinder.resolve()))
     genome_evolution = output_root / "genome_evolution"
     if genome_evolution.is_dir():
-        paths.extend(
-            str(path.resolve())
-            for path in sorted(genome_evolution.glob("busco_*"))
-        )
+        paths.extend(str(path.resolve()) for path in sorted(genome_evolution.glob("busco_*")))
     return paths
 
 
@@ -199,11 +190,7 @@ def _gene_context(
 ) -> tuple[list[str], Callable[[str], Optional[str]], list[str]]:
     mode = str(spec["mode"])
     primary = query_dir if mode == "query2family" else genecount
-    supplement = (
-        query_family_id_file
-        if mode == "query2family"
-        else orthogroup_family_id_file
-    )
+    supplement = query_family_id_file if mode == "query2family" else orthogroup_family_id_file
     if primary is not None or supplement is not None:
         family_ids, matcher = FAMILY.family_context_with_supplement(
             mode,
@@ -211,11 +198,7 @@ def _gene_context(
             genecount=genecount if mode == "orthogroup" else None,
             family_id_file=supplement,
         )
-        sources = [
-            str(path.resolve())
-            for path in (primary, supplement)
-            if path is not None
-        ]
+        sources = [str(path.resolve()) for path in (primary, supplement) if path is not None]
         return family_ids, matcher, sources
 
     root = Path(spec["root"])
@@ -223,11 +206,7 @@ def _gene_context(
         store = FAMILY.GeneFamilyOutputStore(root)
         store._load_archives()
         family_ids = sorted(
-            {
-                artifact.family_id
-                for artifact in store._archived.values()
-                if artifact.family_id is not None
-            }
+            {artifact.family_id for artifact in store._archived.values() if artifact.family_id is not None}
         )
         if mode == "orthogroup":
             matcher = FAMILY.orthogroup_id_from_name
@@ -286,14 +265,10 @@ def _gene_preflight(
         ]
     )
     summary["required_peak_new_bytes"] = required_peak_new_bytes
-    summary["temporary_space_sufficient"] = (
-        required_peak_new_bytes <= int(summary["effective_available_bytes"])
-    )
+    summary["temporary_space_sufficient"] = required_peak_new_bytes <= int(summary["effective_available_bytes"])
     summary["catalog_sources"] = catalog_sources
     summary["unmatched_examples"] = [str(path) for path in unmatched[:20]]
-    summary["conversion_status"] = FAMILY.storage_conversion_status(
-        Path(spec["root"])
-    )
+    summary["conversion_status"] = FAMILY.storage_conversion_status(Path(spec["root"]))
     issues = []
     if int(summary["unsupported_symlinks"]):
         issues.append("unsupported-symlinks")
@@ -302,11 +277,7 @@ def _gene_preflight(
     if args.command == "convert":
         if not summary["temporary_space_sufficient"]:
             issues.append("insufficient-temporary-space")
-        if (
-            args.to == "zip"
-            and args.strict_unmatched
-            and int(summary["unmatched_live_files"])
-        ):
+        if args.to == "zip" and args.strict_unmatched and int(summary["unmatched_live_files"]):
             issues.append("unmatched-live-files")
     conversion_status = summary["conversion_status"]
     if args.command == "audit":
@@ -332,23 +303,16 @@ def _species_preflight(spec: dict, args: argparse.Namespace) -> dict:
             ]
         )
         record["required_peak_new_bytes"] = required_peak_new_bytes
-        record["temporary_space_sufficient"] = (
-            required_peak_new_bytes <= int(record["effective_available_bytes"])
-        )
+        record["temporary_space_sufficient"] = required_peak_new_bytes <= int(record["effective_available_bytes"])
     partials = sorted(
-        str(path)
-        for pattern in (".*.zip.partial.*", ".*.materialize.partial.*")
-        for path in root.glob(pattern)
+        str(path) for pattern in (".*.zip.partial.*", ".*.materialize.partial.*") for path in root.glob(pattern)
     )
     issues = []
     if any(record["state"] == "mixed" for record in records):
         issues.append("mixed-raw-and-zip")
     if partials:
         issues.append("partial-paths")
-    if (
-        args.command == "convert"
-        and any(not record["temporary_space_sufficient"] for record in records)
-    ):
+    if args.command == "convert" and any(not record["temporary_space_sufficient"] for record in records):
         issues.append("insufficient-temporary-space")
     return {"directories": records, "partial_paths": partials, "issues": issues}
 
@@ -371,20 +335,14 @@ def _workspace_quota_plan(
         if target["kind"] == "gene-family":
             if args.to == "zip":
                 temporary_bytes = int(preflight["raw_zip_peak_new_bytes"])
-                maximum_net_growth = int(
-                    preflight["raw_zip_max_net_growth_bytes"]
-                )
+                maximum_net_growth = int(preflight["raw_zip_max_net_growth_bytes"])
             else:
-                temporary_bytes = int(
-                    preflight["raw_materialize_allocated_bytes"]
-                )
+                temporary_bytes = int(preflight["raw_materialize_allocated_bytes"])
                 maximum_net_growth = max(
                     0,
                     temporary_bytes - int(preflight["zip_bytes"]),
                 )
-            operation_specs = [
-                (str(target["name"]), temporary_bytes, maximum_net_growth)
-            ]
+            operation_specs = [(str(target["name"]), temporary_bytes, maximum_net_growth)]
         else:
             operation_specs = []
             for record in preflight["directories"]:
@@ -395,9 +353,7 @@ def _workspace_quota_plan(
                         temporary_bytes - int(record["raw_bytes"]),
                     )
                 else:
-                    temporary_bytes = int(
-                        record["raw_materialize_allocated_bytes"]
-                    )
+                    temporary_bytes = int(record["raw_materialize_allocated_bytes"])
                     maximum_net_growth = max(
                         0,
                         temporary_bytes - int(record["zip_bytes"]),
@@ -464,9 +420,7 @@ def _verify_species(
             root,
             name,
             check_crc=(verification == "deep"),
-            progress_callback=(
-                reporter.update if verification == "deep" else None
-            ),
+            progress_callback=(reporter.update if verification == "deep" else None),
         ),
     )
     if errors:
@@ -575,22 +529,16 @@ def _tsv_rows(report: dict) -> list[dict]:
             before_dirs = before.get("directories", [])
             after_dirs = after.get("directories", [])
             before_logical_files = sum(
-                max(int(row.get("raw_files", 0)), int(row.get("archived_files", 0)))
-                for row in before_dirs
+                max(int(row.get("raw_files", 0)), int(row.get("archived_files", 0))) for row in before_dirs
             )
             after_physical_files = sum(
-                int(row.get("raw_files", 0))
-                + int(row.get("state") == "archived")
-                for row in after_dirs
+                int(row.get("raw_files", 0)) + int(row.get("state") == "archived") for row in after_dirs
             )
             before_logical_bytes = sum(
-                int(row.get("raw_bytes", 0))
-                or int(row.get("archived_logical_bytes", 0))
-                for row in before_dirs
+                int(row.get("raw_bytes", 0)) or int(row.get("archived_logical_bytes", 0)) for row in before_dirs
             )
             after_physical_bytes = sum(
-                int(row.get("raw_bytes", 0)) + int(row.get("zip_bytes", 0))
-                for row in after_dirs
+                int(row.get("raw_bytes", 0)) + int(row.get("zip_bytes", 0)) for row in after_dirs
             )
             issues = after.get("issues", [])
         else:
@@ -623,18 +571,10 @@ def _tsv_rows(report: dict) -> list[dict]:
                 "kind": "workspace",
                 "root": report["output_root"],
                 "status": report["status"],
-                "before_managed_logical_files": totals[
-                    "before_managed_logical_files"
-                ],
-                "after_managed_physical_files": totals[
-                    "after_managed_physical_files"
-                ],
-                "before_managed_logical_bytes": totals[
-                    "before_managed_logical_bytes"
-                ],
-                "after_managed_physical_bytes": totals[
-                    "after_managed_physical_bytes"
-                ],
+                "before_managed_logical_files": totals["before_managed_logical_files"],
+                "after_managed_physical_files": totals["after_managed_physical_files"],
+                "before_managed_logical_bytes": totals["before_managed_logical_bytes"],
+                "after_managed_physical_bytes": totals["after_managed_physical_bytes"],
                 "elapsed_seconds": report.get("elapsed_seconds", 0),
                 "verification": report.get("verification", "none"),
                 "issues": "",
@@ -657,17 +597,13 @@ def _report_totals(report: dict) -> dict:
         "after_managed_physical_files": after_files,
         "file_reduction": before_files - after_files,
         "file_reduction_percent": (
-            round((before_files - after_files) * 100 / before_files, 4)
-            if before_files
-            else 0.0
+            round((before_files - after_files) * 100 / before_files, 4) if before_files else 0.0
         ),
         "before_managed_logical_bytes": before_bytes,
         "after_managed_physical_bytes": after_bytes,
         "byte_reduction": before_bytes - after_bytes,
         "byte_reduction_percent": (
-            round((before_bytes - after_bytes) * 100 / before_bytes, 4)
-            if before_bytes
-            else 0.0
+            round((before_bytes - after_bytes) * 100 / before_bytes, 4) if before_bytes else 0.0
         ),
     }
 
@@ -681,23 +617,25 @@ def write_report(report: dict, report_dir: Path, prefix: Optional[str]) -> tuple
     tsv_path = report_dir / f"{stem}.tsv"
     _atomic_write(json_path, json.dumps(report, indent=2, sort_keys=True) + "\n")
     rows = _tsv_rows(report)
-    columns = list(rows[0]) if rows else [
-        "target",
-        "kind",
-        "root",
-        "status",
-        "before_managed_logical_files",
-        "after_managed_physical_files",
-        "before_managed_logical_bytes",
-        "after_managed_physical_bytes",
-        "elapsed_seconds",
-        "verification",
-        "issues",
-        "error",
-    ]
-    temporary = tsv_path.with_name(
-        f".{tsv_path.name}.partial.{os.getpid()}.{uuid.uuid4().hex}"
+    columns = (
+        list(rows[0])
+        if rows
+        else [
+            "target",
+            "kind",
+            "root",
+            "status",
+            "before_managed_logical_files",
+            "after_managed_physical_files",
+            "before_managed_logical_bytes",
+            "after_managed_physical_bytes",
+            "elapsed_seconds",
+            "verification",
+            "issues",
+            "error",
+        ]
     )
+    temporary = tsv_path.with_name(f".{tsv_path.name}.partial.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         temporary.parent.mkdir(parents=True, exist_ok=True)
         with temporary.open("w", encoding="utf-8", newline="") as handle:
@@ -725,10 +663,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--workspace",
             required=True,
             type=Path,
-            help=(
-                "Project root, workspace root, output root, or legacy gfe_data "
-                "root to discover and manage"
-            ),
+            help=("Project root, workspace root, output root, or legacy gfe_data root to discover and manage"),
         )
         subparser.add_argument(
             "--target",
@@ -794,8 +729,7 @@ def build_parser() -> argparse.ArgumentParser:
                 0,
             ),
             help=(
-                "Retain readable subdir.part-N.zip shards above this logical "
-                "size; 0 permits one final ZIP of any size"
+                "Retain readable subdir.part-N.zip shards above this logical size; 0 permits one final ZIP of any size"
             ),
         )
         subparser.add_argument(
@@ -903,18 +837,14 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
     selected = set(args.target or TARGET_NAMES)
     specs = _target_specs(output_root, selected)
     if not specs:
-        raise WorkspaceStorageError(
-            f"No selected managed output roots were found below {output_root}"
-        )
+        raise WorkspaceStorageError(f"No selected managed output roots were found below {output_root}")
     query_dir = discover_query_dir(input_root, args.query_dir)
     genecount = discover_genecount(output_root, args.genecount)
     started = time.monotonic()
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "command": args.command,
-        "requested_target_storage": (
-            args.to if args.command == "convert" else None
-        ),
+        "requested_target_storage": (args.to if args.command == "convert" else None),
         "dry_run": bool(getattr(args, "dry_run", False)),
         "status": "running",
         "started_utc": _utc_timestamp(),
@@ -954,10 +884,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
                     genecount=genecount,
                     query_family_id_file=args.query_family_id_file,
                     orthogroup_family_id_file=args.orthogroup_family_id_file,
-                    require_catalog=(
-                        args.command == "convert"
-                        and getattr(args, "to", None) == "zip"
-                    ),
+                    require_catalog=(args.command == "convert" and getattr(args, "to", None) == "zip"),
                 )
                 contexts[str(spec["name"])] = context
                 target["preflight"] = _gene_preflight(spec, args, context)
@@ -966,9 +893,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
             issues = target["preflight"].get("issues", [])
             blocking_issues = set(issues)
             if blocking_issues:
-                raise WorkspaceStorageError(
-                    "preflight issues: " + ", ".join(sorted(blocking_issues))
-                )
+                raise WorkspaceStorageError("preflight issues: " + ", ".join(sorted(blocking_issues)))
             target["status"] = "preflight-ok"
         except Exception as exc:
             target["status"] = "failed"
@@ -990,23 +915,17 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
             for target in report["targets"]:
                 if target["status"] != "preflight-ok":
                     continue
-                target["preflight"].setdefault("issues", []).append(
-                    "insufficient-workspace-temporary-space"
-                )
+                target["preflight"].setdefault("issues", []).append("insufficient-workspace-temporary-space")
                 target["status"] = "failed"
                 target["error"] = message
 
-    should_convert = (
-        args.command == "convert"
-        and not args.dry_run
-        and (not preflight_failed or args.continue_on_error)
-    )
+    should_convert = args.command == "convert" and not args.dry_run and (not preflight_failed or args.continue_on_error)
     if args.command == "convert" and preflight_failed and not args.continue_on_error:
         for target in report["targets"]:
             if target["status"] == "preflight-ok":
                 target["status"] = "not-run"
 
-    for spec, target in zip(specs, report["targets"]):
+    for spec, target in zip(specs, report["targets"], strict=True):
         if target["status"] in {"failed", "not-run"}:
             continue
         if args.command == "convert" and not args.dry_run and not should_convert:
@@ -1048,9 +967,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
                     target["postflight"] = _species_preflight(spec, args)
             else:
                 target["postflight"] = target["preflight"]
-            target["status"] = (
-                "dry-run" if args.command == "convert" and args.dry_run else "complete"
-            )
+            target["status"] = "dry-run" if args.command == "convert" and args.dry_run else "complete"
         except Exception as exc:
             target["status"] = "failed"
             target["error"] = str(exc)
@@ -1065,9 +982,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
     report["status"] = "failed" if failed else "complete"
     report["totals"] = _report_totals(report)
     report_dir = (
-        args.report_dir.resolve()
-        if args.report_dir is not None
-        else (output_root.parent / "storage_reports").resolve()
+        args.report_dir.resolve() if args.report_dir is not None else (output_root.parent / "storage_reports").resolve()
     )
     json_path, tsv_path = write_report(report, report_dir, args.report_prefix)
     return (1 if failed else 0), report, json_path, tsv_path
@@ -1077,18 +992,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         exit_code, report, json_path, tsv_path = run(args)
-    except (WorkspaceStorageError, FAMILY.ArchiveStoreError, SPECIES.SpeciesTreeArchiveError, OSError, ValueError) as exc:
+    except (
+        WorkspaceStorageError,
+        FAMILY.ArchiveStoreError,
+        SPECIES.SpeciesTreeArchiveError,
+        OSError,
+        ValueError,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     print(f"status\t{report['status']}")
     print(f"report_json\t{json_path}")
     print(f"report_tsv\t{tsv_path}")
     for target in report["targets"]:
-        print(
-            "target\t"
-            f"{target['name']}\t{target['status']}\t"
-            f"{target.get('error', '')}"
-        )
+        print(f"target\t{target['name']}\t{target['status']}\t{target.get('error', '')}")
     return exit_code
 
 

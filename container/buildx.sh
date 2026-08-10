@@ -16,6 +16,7 @@ PLATFORMS=${PLATFORMS:-linux/amd64,linux/arm64}
 MODE=${MODE:-push} # push | load
 NOTUNG_DOWNLOAD_PAGE=${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}
 NOTUNG_DOWNLOAD_HOST_IP=${NOTUNG_DOWNLOAD_HOST_IP:-128.2.205.60}
+NOTUNG_ZIP_SHA256=${NOTUNG_ZIP_SHA256:-81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6}
 KFU52_REPO_REF=${KFU52_REPO_REF:-master}
 KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}
 KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
@@ -117,69 +118,7 @@ if [[ -z "${gg_version}" ]]; then
   gg_version="unknown"
 fi
 
-sha256_stream() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum | awk '{print $1}'
-  else
-    shasum -a 256 | awk '{print $1}'
-  fi
-}
-
-sha256_file() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-
-context_digest="$({
-  printf '%s\n' .dockerignore container/Dockerfile container/pip-compatibility.requirements.txt container/source_pins.env
-  find container/env container/spec container/testdata container/scripts -type f -print
-  find workflow/support/treevis -type f -print
-} | LC_ALL=C sort | while IFS= read -r path; do
-  printf '%s\t%s\n' "${path}" "$(sha256_file "${path}")"
-done | sha256_stream)"
-
-build_input_hash="$({
-  printf '%s\n' \
-    "context=${context_digest}" \
-    "platforms=${PLATFORMS}" \
-    "vcs_ref=${vcs_ref}" \
-    "gg_version=${gg_version}" \
-    "notung_page=${NOTUNG_DOWNLOAD_PAGE}" \
-    "notung_host=${NOTUNG_DOWNLOAD_HOST_IP}" \
-    "kfu52_ref=${KFU52_REPO_REF}" \
-    "amalgkit_auto=${KFU52_AMALGKIT_AUTO_SELECT_REF}" \
-    "amalgkit_candidates=${KFU52_AMALGKIT_BRANCH_CANDIDATES}" \
-    "amalgkit_ref=${KFU52_AMALGKIT_REPO_REF}" \
-    "amalgkit_sha=${KFU52_AMALGKIT_REPO_SHA}" \
-    "cdskit_sha=${KFU52_CDSKIT_REPO_SHA}" \
-    "csubst_ref=${KFU52_CSUBST_REPO_REF}" \
-    "csubst_sha=${KFU52_CSUBST_REPO_SHA}" \
-    "nwkit_sha=${KFU52_NWKIT_REPO_SHA}" \
-    "busco_url=${BUSCO_REPO_URL}" \
-    "busco_mirror=${BUSCO_MIRROR_REPO_URL}" \
-    "busco_ref=${BUSCO_REPO_REF}" \
-    "busco_sha=${BUSCO_REPO_SHA}" \
-    "paml_url=${PAML_REPO_URL}" \
-    "paml_ref=${PAML_REPO_REF}" \
-    "paml_sha=${PAML_REPO_SHA}" \
-    "kfl1ou_url=${KFL1OU_REPO_URL}" \
-    "kfl1ou_ref=${KFL1OU_REPO_REF}" \
-    "kfl1ou_sha=${KFL1OU_REPO_SHA}" \
-    "kftools_url=${KFTOOLS_REPO_URL}" \
-    "kftools_ref=${KFTOOLS_REPO_REF}" \
-    "kftools_sha=${KFTOOLS_REPO_SHA}" \
-    "rkftools_url=${RKFTOOLS_REPO_URL}" \
-    "rkftools_ref=${RKFTOOLS_REPO_REF}" \
-    "rkftools_sha=${RKFTOOLS_REPO_SHA}" \
-    "radte_url=${RADTE_REPO_URL}" \
-    "radte_ref=${RADTE_REPO_REF}" \
-    "radte_sha=${RADTE_REPO_SHA}" \
-    "testnh_sha=${TESTNH_TARBALL_SHA256}" \
-    "cafe5_sha=${CAFE5_TARBALL_SHA256}"
-} | sha256_stream)"
+build_input_hash="$(source container/scripts/compute_build_input_hash.sh)"
 
 if [[ "${PRINT_BUILD_INPUT_HASH}" == "1" ]]; then
   printf '%s\n' "${build_input_hash}"
@@ -242,6 +181,7 @@ run_build() {
     --build-arg BUILD_INPUT_HASH="${build_input_hash}" \
     --build-arg NOTUNG_DOWNLOAD_PAGE="${NOTUNG_DOWNLOAD_PAGE}" \
     --build-arg NOTUNG_DOWNLOAD_HOST_IP="${NOTUNG_DOWNLOAD_HOST_IP}" \
+    --build-arg NOTUNG_ZIP_SHA256="${NOTUNG_ZIP_SHA256}" \
     --build-arg KFU52_REPO_REF="${KFU52_REPO_REF}" \
     --build-arg KFU52_AMALGKIT_AUTO_SELECT_REF="${KFU52_AMALGKIT_AUTO_SELECT_REF}" \
     --build-arg KFU52_AMALGKIT_BRANCH_CANDIDATES="${KFU52_AMALGKIT_BRANCH_CANDIDATES}" \

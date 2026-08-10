@@ -157,6 +157,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
+      - name: Compute build input hash
+        id: build-input
+        shell: bash
+        env:
+          GG_BUILD_PLATFORMS: ${{ matrix.platform }}
+          GG_BUILD_VCS_REF: ${{ needs.prepare-release.outputs.release_sha }}
+          GG_BUILD_VERSION: ${{ needs.prepare-release.outputs.gg_version }}
+          KFU52_AMALGKIT_REPO_SHA: ${{ needs.prepare-release.outputs.amalgkit_repo_sha }}
+          KFU52_CDSKIT_REPO_SHA: ${{ needs.prepare-release.outputs.cdskit_repo_sha }}
+          KFU52_CSUBST_REPO_SHA: ${{ needs.prepare-release.outputs.csubst_repo_sha }}
+          KFU52_NWKIT_REPO_SHA: ${{ needs.prepare-release.outputs.nwkit_repo_sha }}
+          KFL1OU_REPO_SHA: ${{ needs.prepare-release.outputs.kfl1ou_repo_sha }}
+          KFTOOLS_REPO_SHA: ${{ needs.prepare-release.outputs.kftools_repo_sha }}
+          RKFTOOLS_REPO_SHA: ${{ needs.prepare-release.outputs.rkftools_repo_sha }}
+          RADTE_REPO_SHA: ${{ needs.prepare-release.outputs.radte_repo_sha }}
+        run: echo "value=$(bash container/scripts/compute_build_input_hash.sh)" >> "${GITHUB_OUTPUT}"
+
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -180,6 +197,7 @@ jobs:
             BUILD_DATE=${{ needs.prepare-release.outputs.build_date }}
             VCS_REF=${{ needs.prepare-release.outputs.release_sha }}
             GG_VERSION=${{ needs.prepare-release.outputs.gg_version }}
+            BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}
             KFU52_REPO_REF=master
             KFU52_AMALGKIT_REPO_REF=master
             KFU52_AMALGKIT_REPO_SHA=${{ needs.prepare-release.outputs.amalgkit_repo_sha }}

@@ -25,15 +25,6 @@ run_collect_gff_info="${run_collect_gff_info:-0}"
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
-gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 0 1
-# shellcheck disable=SC1090
-source "${gg_support_dir}/gg_busco.sh"
-delete_tmp_dir=${delete_tmp_dir:-1}
-busco_lineage_resolved=""
-contamination_removal_rank_for_remove_contaminated_sequences="$(
-  gg_normalize_contamination_removal_rank_for_remove_contaminated_sequences "${contamination_removal_rank}"
-)"
-
 resolve_busco_lineage_for_current_species() {
   if [[ -n "${busco_lineage_resolved}" ]]; then
     return 0
@@ -44,14 +35,6 @@ resolve_busco_lineage_for_current_species() {
   fi
   echo "Resolved BUSCO lineage for ${sp_ub}: ${busco_lineage_resolved}"
 }
-
-enable_all_run_flags_for_debug_mode
-uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
-if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method}" != "mmseqs2" ]]; then
-  echo "Invalid uniprot_annotation_method: ${uniprot_annotation_method}"
-  echo 'uniprot_annotation_method must be either "blastp" or "mmseqs2". Exiting.'
-  exit 1
-fi
 
 resolve_species_file() {
   local search_dir=$1
@@ -83,6 +66,24 @@ resolve_species_file() {
   fi
   echo "${matches[0]}"
 }
+
+gg_genome_annotation_main() {
+gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 0 1
+# shellcheck disable=SC1090
+source "${gg_support_dir}/gg_busco.sh"
+delete_tmp_dir=${delete_tmp_dir:-1}
+busco_lineage_resolved=""
+contamination_removal_rank_for_remove_contaminated_sequences="$(
+  gg_normalize_contamination_removal_rank_for_remove_contaminated_sequences "${contamination_removal_rank}"
+)"
+
+enable_all_run_flags_for_debug_mode
+uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
+if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method}" != "mmseqs2" ]]; then
+  echo "Invalid uniprot_annotation_method: ${uniprot_annotation_method}"
+  echo 'uniprot_annotation_method must be either "blastp" or "mmseqs2". Exiting.'
+  exit 1
+fi
 
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
 dir_sp_dnaseq="${gg_workspace_input_dir}/species_dnaseq"
@@ -1198,3 +1199,8 @@ if [[ ${delete_tmp_dir} -eq 1 ]]; then
 fi
 
 echo "$(date): Exiting Singularity environment"
+}
+
+if [[ "${GG_CORE_SOURCE_ONLY:-0}" != "1" ]]; then
+  gg_genome_annotation_main "$@"
+fi

@@ -18,6 +18,7 @@ NATIVE_BUILD_KEEP_WORKDIR=${NATIVE_BUILD_KEEP_WORKDIR:-0} # 0 | 1
 
 NOTUNG_DOWNLOAD_PAGE=${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}
 NOTUNG_DOWNLOAD_HOST_IP=${NOTUNG_DOWNLOAD_HOST_IP:-128.2.205.60}
+NOTUNG_ZIP_SHA256=${NOTUNG_ZIP_SHA256:-81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6}
 KFU52_REPO_REF=${KFU52_REPO_REF:-master}
 KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}
 KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
@@ -90,10 +91,12 @@ render_definition() {
     -e "s|@@BUILD_DATE@@|$(escape_sed_replacement "${build_date}")|g" \
     -e "s|@@VCS_REF@@|$(escape_sed_replacement "${vcs_ref}")|g" \
     -e "s|@@GG_VERSION@@|$(escape_sed_replacement "${gg_version}")|g" \
+    -e "s|@@BUILD_INPUT_HASH@@|$(escape_sed_replacement "${build_input_hash}")|g" \
     -e "s|@@LOCAL_IMAGE_REF@@|$(escape_sed_replacement "${IMAGE}")|g" \
     -e "s|@@LOCAL_IMAGE_TAG@@|$(escape_sed_replacement "${TAG}")|g" \
     -e "s|@@NOTUNG_DOWNLOAD_PAGE@@|$(escape_sed_replacement "${NOTUNG_DOWNLOAD_PAGE}")|g" \
     -e "s|@@NOTUNG_DOWNLOAD_HOST_IP@@|$(escape_sed_replacement "${NOTUNG_DOWNLOAD_HOST_IP}")|g" \
+    -e "s|@@NOTUNG_ZIP_SHA256@@|$(escape_sed_replacement "${NOTUNG_ZIP_SHA256}")|g" \
     -e "s|@@KFU52_REPO_REF@@|$(escape_sed_replacement "${KFU52_REPO_REF}")|g" \
     -e "s|@@KFU52_AMALGKIT_AUTO_SELECT_REF@@|$(escape_sed_replacement "${KFU52_AMALGKIT_AUTO_SELECT_REF}")|g" \
     -e "s|@@KFU52_AMALGKIT_BRANCH_CANDIDATES@@|$(escape_sed_replacement "${KFU52_AMALGKIT_BRANCH_CANDIDATES}")|g" \
@@ -229,6 +232,10 @@ resolve_source_sha KFTOOLS_REPO_SHA "${KFTOOLS_REPO_URL}" "${KFTOOLS_REPO_REF}" 
 resolve_source_sha RKFTOOLS_REPO_SHA "${RKFTOOLS_REPO_URL}" "${RKFTOOLS_REPO_REF}" rkftools
 resolve_source_sha RADTE_REPO_SHA "${RADTE_REPO_URL}" "${RADTE_REPO_REF}" RADTE
 
+GG_BUILD_PLATFORMS="${platform}"
+GG_BUILD_VCS_REF="${vcs_ref}"
+GG_BUILD_VERSION="${gg_version}"
+build_input_hash="$(source "${repo_root}/container/scripts/compute_build_input_hash.sh")"
 render_definition
 
 build_args=()

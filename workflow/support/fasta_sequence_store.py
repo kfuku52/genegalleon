@@ -206,7 +206,7 @@ def refresh_signatures_if_content_current(
             return False
         current_identity: list[dict[str, object]] = []
         signatures: list[dict[str, object]] = []
-        for (source, species), entry in zip(sources, recorded):
+        for (source, species), entry in zip(sources, recorded, strict=True):
             if not isinstance(entry, dict) or entry.get("species") != species:
                 return False
             signature_before = source_signature(source, species)

@@ -17,12 +17,14 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     export R_LIBS_SITE=/opt/conda/lib/R/library
 
 %labels
-    org.opencontainers.image.title GeneGalleon native build scaffold
-    org.opencontainers.image.description Native Apptainer or Singularity build scaffold for GeneGalleon
+    org.opencontainers.image.title GeneGalleon workflow container
+    org.opencontainers.image.description Reproducible native Apptainer or Singularity runtime for GeneGalleon
     org.opencontainers.image.source https://github.com/kfuku52/genegalleon
+    org.opencontainers.image.licenses MIT
     org.opencontainers.image.created @@BUILD_DATE@@
     org.opencontainers.image.revision @@VCS_REF@@
     org.opencontainers.image.version @@GG_VERSION@@
+    io.genegalleon.build-input @@BUILD_INPUT_HASH@@
     io.genegalleon.local_image_ref @@LOCAL_IMAGE_REF@@
     io.genegalleon.local_image_tag @@LOCAL_IMAGE_TAG@@
 
@@ -37,6 +39,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     target_arch="@@TARGET_ARCH@@"
     notung_download_page="@@NOTUNG_DOWNLOAD_PAGE@@"
     notung_download_host_ip="@@NOTUNG_DOWNLOAD_HOST_IP@@"
+    notung_zip_sha256="@@NOTUNG_ZIP_SHA256@@"
     kfu52_repo_ref="@@KFU52_REPO_REF@@"
     kfu52_amalgkit_auto_select_ref="@@KFU52_AMALGKIT_AUTO_SELECT_REF@@"
     kfu52_amalgkit_branch_candidates="@@KFU52_AMALGKIT_BRANCH_CANDIDATES@@"
@@ -238,6 +241,7 @@ EOF_BASHRC
     notung_url="$("/opt/pg/scripts/resolve_notung_latest.sh" "${notung_download_page}")"
     tmp_zip="$(mktemp /tmp/notung.XXXXXX.zip)"
     NOTUNG_DOWNLOAD_HOST_IP="${notung_download_host_ip}" /opt/pg/scripts/download_url_with_fallback.sh "${notung_url}" "${tmp_zip}"
+    /opt/pg/scripts/verify_sha256.sh "${tmp_zip}" "${notung_zip_sha256}"
     python /opt/pg/scripts/extract_notung_jar.py \
         --archive "${tmp_zip}" \
         --destination /usr/local/bin/Notung.jar

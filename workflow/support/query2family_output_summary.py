@@ -20,35 +20,39 @@ from gene_family_output_store import SHARED_OUTPUT_SUBDIRS, GeneFamilyOutputStor
 
 def build_arg_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dir_query2family', metavar='PATH', type=str, required=True, help='')
-    parser.add_argument('--dir_query_gene', metavar='PATH', type=str, required=True, help='')
-    parser.add_argument('--out', metavar='PATH', type=str, required=True, help='')
-    parser.add_argument('--ncpu', metavar='INT', default=1, type=int, help='Number of worker threads.')
+    parser.add_argument(
+        "--dir_query2family", metavar="PATH", type=str, required=True, help="Path used by --dir_query2family."
+    )
+    parser.add_argument(
+        "--dir_query_gene", metavar="PATH", type=str, required=True, help="Path used by --dir_query_gene."
+    )
+    parser.add_argument("--out", metavar="PATH", type=str, required=True, help="Path used by --out.")
+    parser.add_argument("--ncpu", metavar="INT", default=1, type=int, help="Number of worker threads.")
     return parser
 
 
 def _amas_columns():
     return [
-        'No_of_taxa',
-        'Alignment_length',
-        'Total_matrix_cells',
-        'Undetermined_characters',
-        'Missing_percent',
-        'No_variable_sites',
-        'Parsimony_informative_sites',
-        'GC_content',
+        "No_of_taxa",
+        "Alignment_length",
+        "Total_matrix_cells",
+        "Undetermined_characters",
+        "Missing_percent",
+        "No_variable_sites",
+        "Parsimony_informative_sites",
+        "GC_content",
     ]
 
 
 def _visible_entries(path):
-    return [entry for entry in os.listdir(path) if not entry.startswith('.')]
+    return [entry for entry in os.listdir(path) if not entry.startswith(".")]
 
 
 def _query_ids_from_input_dir(path):
     query_dir = Path(path)
     if not query_dir.is_dir():
-        raise FileNotFoundError(f'Input query_gene directory was not found: {query_dir}')
-    return sorted(entry.name for entry in query_dir.iterdir() if entry.is_file() and not entry.name.startswith('.'))
+        raise FileNotFoundError(f"Input query_gene directory was not found: {query_dir}")
+    return sorted(entry.name for entry in query_dir.iterdir() if entry.is_file() and not entry.name.startswith("."))
 
 
 def _query_id_matchers(query_ids):
@@ -60,19 +64,19 @@ def _extract_query_id(file_name, query_id_matchers):
     for query_id in query_id_matchers:
         if basename == query_id:
             return query_id
-        if basename.startswith(query_id + '_') or basename.startswith(query_id + '.'):
+        if basename.startswith(query_id + "_") or basename.startswith(query_id + "."):
             return query_id
     return None
 
 
 def _read_amas_file(file_path, query_id, amas_cols):
-    tmp = pandas.read_csv(file_path, sep='\t', header=0, usecols=amas_cols, nrows=1, low_memory=False)
+    tmp = pandas.read_csv(file_path, sep="\t", header=0, usecols=amas_cols, nrows=1, low_memory=False)
     return query_id, tmp.iloc[0].to_list()
 
 
 def _read_amas_store_file(store, subdir, file_name, query_id, amas_cols):
     with store.open_binary(subdir, file_name) as handle:
-        tmp = pandas.read_csv(handle, sep='\t', header=0, usecols=amas_cols, nrows=1, low_memory=False)
+        tmp = pandas.read_csv(handle, sep="\t", header=0, usecols=amas_cols, nrows=1, low_memory=False)
     return query_id, tmp.iloc[0].to_list()
 
 
@@ -86,25 +90,21 @@ def get_amas_stats(
     logical_subdir=None,
 ):
     if store is None and not os.path.isdir(dir_amas):
-        print(f'{extension}: {dir_amas} was not found. Skipping.', flush=True)
+        print(f"{extension}: {dir_amas} was not found. Skipping.", flush=True)
         return df
     if store is not None and logical_subdir not in store.logical_subdirs():
-        print(f'{extension}: logical subdirectory {logical_subdir} was not found. Skipping.', flush=True)
+        print(f"{extension}: logical subdirectory {logical_subdir} was not found. Skipping.", flush=True)
         return df
 
     amas_cols = _amas_columns()
-    amas_new_cols = [f'{col}_{extension}' for col in amas_cols]
+    amas_new_cols = [f"{col}_{extension}" for col in amas_cols]
     for ncol in amas_new_cols:
         if ncol not in df.columns:
             df.loc[:, ncol] = numpy.nan
 
-    is_prefilled = ~df[f'No_of_taxa_{extension}'].isna()
+    is_prefilled = ~df[f"No_of_taxa_{extension}"].isna()
     prefilled_query_ids = set(df.index[is_prefilled])
-    files = (
-        sorted(_visible_entries(dir_amas))
-        if store is None
-        else store.file_names(logical_subdir)
-    )
+    files = sorted(_visible_entries(dir_amas)) if store is None else store.file_names(logical_subdir)
     queued = []
     seen_query_ids = set()
     valid_query_ids = set(df.index.astype(str))
@@ -174,49 +174,45 @@ def get_amas_stats(
         )
         df.loc[result_df.index, amas_new_cols] = result_df
 
-    print(f'{extension}: {counter} AMAS results were appended.', flush=True)
+    print(f"{extension}: {counter} AMAS results were appended.", flush=True)
     return df
 
 
 def run(args):
-    print('args:', vars(args))
+    print("args:", vars(args))
 
     start = time.time()
     query_ids = _query_ids_from_input_dir(args.dir_query_gene)
     if len(query_ids) == 0:
-        raise ValueError(f'Input query_gene directory is empty: {args.dir_query_gene}')
+        raise ValueError(f"Input query_gene directory is empty: {args.dir_query_gene}")
 
     query_id_matchers = _query_id_matchers(query_ids)
     df = pandas.DataFrame(index=query_ids)
-    df.index.name = 'query'
+    df.index.name = "query"
     store = GeneFamilyOutputStore(args.dir_query2family)
 
     df = get_amas_stats(
         df,
-        os.path.join(args.dir_query2family, 'amas_original'),
-        'original',
+        os.path.join(args.dir_query2family, "amas_original"),
+        "original",
         query_id_matchers,
         args.ncpu,
         store=store,
-        logical_subdir='amas_original',
+        logical_subdir="amas_original",
     )
     df = get_amas_stats(
         df,
-        os.path.join(args.dir_query2family, 'amas_cleaned'),
-        'clean',
+        os.path.join(args.dir_query2family, "amas_cleaned"),
+        "clean",
         query_id_matchers,
         args.ncpu,
         store=store,
-        logical_subdir='amas_cleaned',
+        logical_subdir="amas_cleaned",
     )
 
-    df.insert(0, 'GG_ARRAY_TASK_ID', numpy.arange(df.shape[0]) + 1)
+    df.insert(0, "GG_ARRAY_TASK_ID", numpy.arange(df.shape[0]) + 1)
 
-    subdirs = [
-        subdir
-        for subdir in store.logical_subdirs()
-        if subdir not in SHARED_OUTPUT_SUBDIRS
-    ]
+    subdirs = [subdir for subdir in store.logical_subdirs() if subdir not in SHARED_OUTPUT_SUBDIRS]
     df = pandas.concat([df, pandas.DataFrame(data=0, index=df.index, columns=subdirs, dtype=int)], axis=1)
     valid_query_ids = set(df.index.astype(str))
     for subdir in subdirs:
@@ -231,12 +227,12 @@ def run(args):
         if query_ids_in_files:
             df.loc[query_ids_in_files, subdir] = 1
         num_missing = (df.loc[:, subdir] == 0).sum()
-        txt = 'Subdirectory {}: {:,} / {:,} files are missing.'
+        txt = "Subdirectory {}: {:,} / {:,} files are missing."
         print(txt.format(subdir, num_missing, df.shape[0]))
 
-    print('Writing output file:', args.out, flush=True)
-    df.to_csv(args.out, index=True, sep='\t')
-    print('Done. Elapsed time: {:,} sec'.format(int(time.time() - start)))
+    print("Writing output file:", args.out, flush=True)
+    df.to_csv(args.out, index=True, sep="\t")
+    print("Done. Elapsed time: {:,} sec".format(int(time.time() - start)))
 
 
 def main():
@@ -246,5 +242,5 @@ def main():
     run(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -1,5 +1,14 @@
 version: 2
 updates:
+  - package-ecosystem: pip
+    directory: /workflow/tests
+    schedule:
+      interval: weekly
+    groups:
+      python-test-dependencies:
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
