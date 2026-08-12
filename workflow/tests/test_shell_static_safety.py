@@ -2462,6 +2462,11 @@ def test_genome_evolution_core_requires_requested_species_tree_before_orthofinde
         "Refusing to run OrthoFinder without species tree constraints because a species tree was found but does not match the current OrthoFinder species set."
         in text
     )
+    assert "from nwkit.species_parser import get_species_parser" in text
+    assert "species_regex = sys.argv[3] or None" in text
+    assert "species_map_tsv = sys.argv[4] or None" in text
+    assert "protein_by_query = index_unmatched_by_taxonomy_query" in text
+    assert "species mapping is not one-to-one" in text
 
 
 def test_genome_evolution_core_only_uses_orthofinder_core_tree_when_species_tree_is_available():

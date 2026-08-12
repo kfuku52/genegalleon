@@ -4084,26 +4084,127 @@ if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then
       species_base=${species_base%.*}
       species_ids+=("${species_base}")
     done
-    mapfile -t missing_species < <(
-      python - "${species_tree}" "${species_ids[@]}" << 'PY'
-import re
+    if ! python - "${species_tree}" "${species_label_parser}" "${species_label_regex}" "${species_label_map_tsv}" "${species_ids[@]}" << 'PY'
 import sys
+from collections import defaultdict
+
+from Bio import Phylo
+from nwkit.species_parser import get_species_parser
 
 tree_file = sys.argv[1]
-species = sys.argv[2:]
-with open(tree_file) as f:
-    tree = f.read().strip()
+species_parser_name = sys.argv[2]
+species_regex = sys.argv[3] or None
+species_map_tsv = sys.argv[4] or None
+protein_species = sys.argv[5:]
 
-leaves = set(re.findall(r'(?<=[(,])([^:(),]+?)(?=[:),])', tree))
-missing = [sp for sp in species if sp not in leaves]
-for sp in missing:
-    print(sp)
-PY
+
+def fail(message):
+    print("OrthoFinder species-tree validation failed: {}".format(message), file=sys.stderr)
+    raise SystemExit(1)
+
+
+try:
+    parser = get_species_parser(
+        species_parser=species_parser_name,
+        species_regex=species_regex,
+        species_map_tsv=species_map_tsv,
     )
-    if [[ ${#missing_species[@]} -gt 0 ]]; then
-      echo "Species tree is missing ${#missing_species[@]} species: ${missing_species[*]}"
+except Exception as exc:
+    fail("could not initialize the configured species parser: {}".format(exc))
+
+
+def parse_records(raw_labels, source_name):
+    records = []
+    seen_raw = set()
+    for raw_label in raw_labels:
+        raw_label = str(raw_label or "").strip()
+        if raw_label == "":
+            fail("{} contains an empty label".format(source_name))
+        if raw_label in seen_raw:
+            fail("{} contains a duplicate raw label: {}".format(source_name, raw_label))
+        seen_raw.add(raw_label)
+        try:
+            parsed = parser.parse(raw_label)
+        except Exception as exc:
+            fail("could not parse {} label {}: {}".format(source_name, raw_label, exc))
+        species_label = str(parsed.species_label or "").strip()
+        taxonomy_query = str(parsed.taxonomy_query or "").strip()
+        if species_label == "":
+            fail("the configured species parser returned no species label for {}: {}".format(source_name, raw_label))
+        records.append((raw_label, species_label, taxonomy_query))
+    return records
+
+
+try:
+    tree = Phylo.read(tree_file, "newick")
+except Exception as exc:
+    fail("could not parse species tree {}: {}".format(tree_file, exc))
+tree_leaves = [terminal.name for terminal in tree.get_terminals()]
+if not tree_leaves:
+    fail("species tree contains no leaves")
+
+protein_records = parse_records(protein_species, "protein inputs")
+tree_records = parse_records(tree_leaves, "species tree")
+
+
+def index_by_species_label(records, source_name):
+    indexed = defaultdict(list)
+    for record in records:
+        indexed[record[1]].append(record)
+    collisions = {label: rows for label, rows in indexed.items() if len(rows) > 1}
+    if collisions:
+        details = "; ".join(
+            "{} <- {}".format(label, ", ".join(row[0] for row in rows))
+            for label, rows in sorted(collisions.items())
+        )
+        fail("{} has non-unique parsed species labels: {}".format(source_name, details))
+    return {label: rows[0] for label, rows in indexed.items()}
+
+
+protein_by_label = index_by_species_label(protein_records, "protein inputs")
+tree_by_label = index_by_species_label(tree_records, "species tree")
+exact_labels = set(protein_by_label).intersection(tree_by_label)
+protein_unmatched = [record for label, record in protein_by_label.items() if label not in exact_labels]
+tree_unmatched = [record for label, record in tree_by_label.items() if label not in exact_labels]
+
+
+def index_unmatched_by_taxonomy_query(records, source_name):
+    indexed = defaultdict(list)
+    for record in records:
+        taxonomy_query = record[2]
+        if taxonomy_query == "":
+            fail("{} label {} has no taxonomy query for safe fallback matching".format(source_name, record[0]))
+        indexed[taxonomy_query].append(record)
+    collisions = {query: rows for query, rows in indexed.items() if len(rows) > 1}
+    if collisions:
+        details = "; ".join(
+            "{} <- {}".format(query, ", ".join(row[0] for row in rows))
+            for query, rows in sorted(collisions.items())
+        )
+        fail("{} has ambiguous unmatched taxonomy queries: {}".format(source_name, details))
+    return {query: rows[0] for query, rows in indexed.items()}
+
+
+protein_by_query = index_unmatched_by_taxonomy_query(protein_unmatched, "protein inputs")
+tree_by_query = index_unmatched_by_taxonomy_query(tree_unmatched, "species tree")
+missing_queries = sorted(set(protein_by_query).difference(tree_by_query))
+unexpected_queries = sorted(set(tree_by_query).difference(protein_by_query))
+if missing_queries or unexpected_queries:
+    messages = []
+    if missing_queries:
+        messages.append("tree is missing parsed protein taxa: {}".format(", ".join(missing_queries)))
+    if unexpected_queries:
+        messages.append("tree has unmatched parsed taxa: {}".format(", ".join(unexpected_queries)))
+    fail("; ".join(messages))
+
+matched_count = len(exact_labels) + len(protein_by_query)
+if matched_count != len(protein_records) or matched_count != len(tree_records):
+    fail("species mapping is not one-to-one")
+print("Validated one-to-one OrthoFinder species-tree mapping for {} species.".format(matched_count))
+PY
+    then
       echo "Refusing to run OrthoFinder without species tree constraints because a species tree was found but does not match the current OrthoFinder species set."
-      echo "Please regenerate workspace/output/species_tree for the current inputs or update the species inputs to match the existing tree."
+      echo "Please regenerate workspace/output/species_tree, update the species inputs, or provide an unambiguous species-label map for the current inputs."
       exit 1
     fi
   fi

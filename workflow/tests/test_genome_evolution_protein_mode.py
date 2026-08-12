@@ -671,6 +671,77 @@ if __name__ == "__main__":
 """,
     )
 
+    nwkit_package = tmp_path / "python_stubs" / "nwkit"
+    nwkit_package.mkdir(parents=True, exist_ok=True)
+    (nwkit_package / "__init__.py").write_text("", encoding="utf-8")
+    (nwkit_package / "species_parser.py").write_text(
+        r"""import csv
+import re
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ParsedSpecies:
+    species_label: str | None = None
+    taxonomy_query: str | None = None
+
+
+def _normalized(value):
+    return re.sub(r"_+", "_", re.sub(r"\s+", "_", str(value or "").strip())).strip("_")
+
+
+class SpeciesParser:
+    def __init__(self, preset, species_regex, species_map_tsv):
+        self.preset = preset
+        self.pattern = re.compile(species_regex or r"^([^_]+_[^_]+)(?:_|$)")
+        self.overrides = {}
+        if species_map_tsv:
+            with open(species_map_tsv, encoding="utf-8", newline="") as handle:
+                for row in csv.DictReader(handle, delimiter="\t"):
+                    self.overrides[row["leaf_name"]] = ParsedSpecies(
+                        species_label=_normalized(row.get("species_label")) or None,
+                        taxonomy_query=str(row.get("taxonomy_query") or "").strip() or None,
+                    )
+
+    def parse(self, label):
+        label = str(label or "")
+        if self.preset == "legacy":
+            match = self.pattern.search(label)
+            species_label = _normalized(match.group(1)) if match else None
+            parsed = ParsedSpecies(
+                species_label=species_label,
+                taxonomy_query=species_label.replace("_", " ") if species_label else None,
+            )
+        elif self.preset == "taxonomic":
+            parts = [part for part in _normalized(label).split("_") if part]
+            if len(parts) < 2:
+                parsed = ParsedSpecies()
+            elif parts[1].lower().rstrip(".") in {"sp", "spp"}:
+                species_label = "_".join(parts[:3] if len(parts) >= 3 else parts[:2])
+                parsed = ParsedSpecies(species_label=species_label, taxonomy_query=parts[0])
+            elif len(parts) >= 3 and parts[1].lower().rstrip(".") in {"cf", "aff", "nr"}:
+                parsed = ParsedSpecies(species_label="_".join(parts[:3]), taxonomy_query=f"{parts[0]} {parts[2]}")
+            elif len(parts) >= 3 and parts[2].lower().rstrip(".") in {"cf", "aff", "nr"}:
+                parsed = ParsedSpecies(species_label="_".join(parts[:3]), taxonomy_query=f"{parts[0]} {parts[1]}")
+            else:
+                parsed = ParsedSpecies(species_label="_".join(parts[:2]), taxonomy_query=f"{parts[0]} {parts[1]}")
+        else:
+            raise ValueError("unsupported parser")
+        override = self.overrides.get(label)
+        if override is None:
+            return parsed
+        return ParsedSpecies(
+            species_label=override.species_label or parsed.species_label,
+            taxonomy_query=override.taxonomy_query or parsed.taxonomy_query,
+        )
+
+
+def get_species_parser(*, species_parser, species_regex=None, species_map_tsv=None):
+    return SpeciesParser(species_parser, species_regex, species_map_tsv)
+""",
+        encoding="utf-8",
+    )
+
     return bin_dir
 
 
@@ -708,11 +779,12 @@ def _run_core(
     workspace.mkdir(parents=True, exist_ok=True)
     bin_dir = _prepare_stub_binaries(tmp_path)
     env = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith("CONDA") and not key.startswith("_CE_")
+        key: value for key, value in os.environ.items() if not key.startswith("CONDA") and not key.startswith("_CE_")
     }
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    python_stub_dir = tmp_path / "python_stubs"
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(python_stub_dir) + (os.pathsep + existing_pythonpath if existing_pythonpath else "")
     env["gg_workspace_dir"] = str(workspace)
     env["GG_TASK_CPUS"] = "1"
     env["GG_MEM_PER_CPU_GB"] = "1"
@@ -780,9 +852,9 @@ def _run_core(
         "  if [[ ${1:-} == '-t' ]]; then shift; fi; "
         "  local target_array=${1:?}; "
         "  local line=''; "
-        "  eval \"${target_array}=()\"; "
+        '  eval "${target_array}=()"; '
         "  while IFS= read -r line; do "
-        "    eval \"${target_array}+=(\\\"\\${line}\\\")\"; "
+        '    eval "${target_array}+=(\\"\\${line}\\")"; '
         "  done; "
         "}; "
         "enable -n ulimit; "
@@ -798,7 +870,9 @@ def _run_core(
     )
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_protein_mode_prefers_species_protein_inputs(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -833,7 +907,9 @@ def test_genome_evolution_protein_mode_prefers_species_protein_inputs(tmp_path: 
     assert "M*" not in proteins
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_protein_mode_translates_species_cds_with_species_specific_codes(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_cds_dir = workspace / "input" / "species_cds"
@@ -866,7 +942,9 @@ def test_genome_evolution_protein_mode_translates_species_cds_with_species_speci
     assert "M*" in proteins
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_protein_mode_preserves_qualified_species_labels_in_genetic_code_lookup(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_cds_dir = workspace / "input" / "species_cds"
@@ -892,7 +970,9 @@ def test_genome_evolution_protein_mode_preserves_qualified_species_labels_in_gen
     assert "MQ" in proteins
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launchers(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_cds_dir = workspace / "input" / "species_cds"
@@ -916,7 +996,9 @@ def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launcher
     assert "unbound variable" not in completed.stderr
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_archives_and_reuses_high_count_species_tree_stages(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -949,10 +1031,7 @@ def test_genome_evolution_archives_and_reuses_high_count_species_tree_stages(tmp
         assert (species_tree_dir / f"{name}.zip").is_file()
     assert (summary_dir / "preserved.txt").read_text(encoding="utf-8") == "visible"
     assert not (species_tree_dir / "species_tree_summary.zip").exists()
-    first_archive_stats = {
-        name: (species_tree_dir / f"{name}.zip").stat()
-        for name in managed
-    }
+    first_archive_stats = {name: (species_tree_dir / f"{name}.zip").stat() for name in managed}
 
     second = _run_core(tmp_path, {"run_orthofinder": "0"})
 
@@ -968,7 +1047,9 @@ def test_genome_evolution_archives_and_reuses_high_count_species_tree_stages(tmp
     assert (summary_dir / "preserved.txt").read_text(encoding="utf-8") == "visible"
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_files_mode_materializes_existing_species_tree_zips(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1009,7 +1090,9 @@ def test_genome_evolution_files_mode_materializes_existing_species_tree_zips(tmp
     assert not (species_tree_dir / "single_copy_iqtree_dna.zip").exists()
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_zip_mode_recovers_mixed_species_tree_state(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1051,7 +1134,9 @@ def test_genome_evolution_zip_mode_recovers_mixed_species_tree_state(tmp_path: P
         assert archive.read("single_copy_iqtree_dna/BUSCO2.dna.nwk") == b"new live\n"
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_files_mode_materializes_all_before_later_failure(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1096,7 +1181,9 @@ def test_genome_evolution_files_mode_materializes_all_before_later_failure(tmp_p
         assert not (species_tree_dir / f"{name}.zip").exists()
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_failure_archives_live_species_tree_stages(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1136,7 +1223,9 @@ def test_genome_evolution_failure_archives_live_species_tree_stages(tmp_path: Pa
         ({"species_tree_zip_compression_level": "10"}, "Invalid species_tree_zip_compression_level"),
     ],
 )
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_rejects_invalid_species_tree_storage_settings_without_modifying_outputs(
     tmp_path: Path,
     extra_env: dict[str, str],
@@ -1156,7 +1245,9 @@ def test_genome_evolution_rejects_invalid_species_tree_storage_settings_without_
     assert not (species_tree_dir / "single_copy_iqtree_dna.zip").exists()
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_accepts_legacy_species_tree_rooting_outgroup_lists(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1185,7 +1276,9 @@ def test_genome_evolution_accepts_legacy_species_tree_rooting_outgroup_lists(tmp
     assert "Resolved species_tree_rooting value: Arabidopsis_thaliana,Oryza_sativa" in completed.stdout
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_refuses_orthofinder_when_requested_species_tree_is_missing(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1202,7 +1295,9 @@ def test_genome_evolution_refuses_orthofinder_when_requested_species_tree_is_mis
     assert "Species-tree generation was requested, but no summary tree is available." in completed.stdout
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_rebuilds_missing_summary_from_cached_astral_tree(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1230,7 +1325,9 @@ def test_genome_evolution_rebuilds_missing_summary_from_cached_astral_tree(tmp_p
     assert "OrthoFinder will use the species tree:" in completed.stdout
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_refuses_orthofinder_when_species_tree_lacks_input_species(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1253,11 +1350,64 @@ def test_genome_evolution_refuses_orthofinder_when_species_tree_lacks_input_spec
     completed = _run_core(tmp_path)
 
     assert completed.returncode != 0
-    assert "Species tree is missing 1 species: Oryza_sativa" in completed.stdout
+    assert "tree is missing parsed protein taxa: Oryza sativa" in completed.stderr
     assert "Refusing to run OrthoFinder without species tree constraints" in completed.stdout
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
+def test_genome_evolution_matches_genus_only_placeholder_by_shared_taxonomy_query(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_tree_summary_dir = workspace / "output" / "species_tree" / "species_tree_summary"
+    species_protein_dir.mkdir(parents=True)
+    species_tree_summary_dir.mkdir(parents=True)
+    (species_protein_dir / "Ficus_sp_unknown_pep.fa").write_text(
+        ">Ficus_sp_unknown_gene1\nMPEP\n",
+        encoding="utf-8",
+    )
+    (species_tree_summary_dir / "undated_species_tree.nwk").write_text(
+        "(Ficus_sp:0.1);\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_core(tmp_path, {"species_label_parser": "taxonomic"})
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "Validated one-to-one OrthoFinder species-tree mapping for 1 species." in completed.stdout
+    assert "-s " in (tmp_path / "capture" / "orthofinder_args.txt").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
+def test_genome_evolution_rejects_ambiguous_genus_only_taxonomy_fallback(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_protein_dir = workspace / "input" / "species_protein"
+    species_tree_summary_dir = workspace / "output" / "species_tree" / "species_tree_summary"
+    species_protein_dir.mkdir(parents=True)
+    species_tree_summary_dir.mkdir(parents=True)
+    for species in ("Ficus_sp_unknown", "Ficus_sp_sample"):
+        (species_protein_dir / f"{species}_pep.fa").write_text(
+            f">{species}_gene1\nMPEP\n",
+            encoding="utf-8",
+        )
+    (species_tree_summary_dir / "undated_species_tree.nwk").write_text(
+        "(Ficus_sp:0.1,Ficus_carica:0.1);\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_core(tmp_path, {"species_label_parser": "taxonomic"})
+
+    assert completed.returncode != 0
+    assert "protein inputs has ambiguous unmatched taxonomy queries: Ficus" in completed.stderr
+    assert not (tmp_path / "capture" / "orthofinder_args.txt").exists()
+
+
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_keeps_species_tree_outputs_when_generation_disabled_and_signature_changes(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1279,19 +1429,14 @@ def test_genome_evolution_keeps_species_tree_outputs_when_generation_disabled_an
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert existing_tree.read_text(encoding="utf-8") == "(Arabidopsis_thaliana:0.1);\n"
     assert stamp.read_text(encoding="utf-8") == "v3:old-signature\n"
-    assert (
-        "Keeping existing species_tree outputs until a species-tree stage is requested"
-        in completed.stdout
-    )
+    assert "Keeping existing species_tree outputs until a species-tree stage is requested" in completed.stdout
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
-@pytest.mark.parametrize(
-    "legacy_signature", ["123456789", "v1:123456789", "v2:123456789"]
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
 )
-def test_genome_evolution_upgrades_legacy_signatures_without_clearing_outputs(
-    tmp_path: Path, legacy_signature: str
-):
+@pytest.mark.parametrize("legacy_signature", ["123456789", "v1:123456789", "v2:123456789"])
+def test_genome_evolution_upgrades_legacy_signatures_without_clearing_outputs(tmp_path: Path, legacy_signature: str):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
     species_protein_dir.mkdir(parents=True)
@@ -1309,9 +1454,7 @@ def test_genome_evolution_upgrades_legacy_signatures_without_clearing_outputs(
         output_dir = workspace / "output" / directory_name
         output_dir.mkdir(parents=True)
         (output_dir / marker_name).write_text("preserve me\n", encoding="utf-8")
-        (output_dir / ".shared_protein_input_signature").write_text(
-            f"{legacy_signature}\n", encoding="utf-8"
-        )
+        (output_dir / ".shared_protein_input_signature").write_text(f"{legacy_signature}\n", encoding="utf-8")
 
     completed = _run_core(tmp_path, {"run_orthofinder": "0"})
 
@@ -1319,15 +1462,15 @@ def test_genome_evolution_upgrades_legacy_signatures_without_clearing_outputs(
     for directory_name, marker_name in managed_outputs.items():
         output_dir = workspace / "output" / directory_name
         assert (output_dir / marker_name).read_text(encoding="utf-8") == "preserve me\n"
-        signature = (output_dir / ".shared_protein_input_signature").read_text(
-            encoding="utf-8"
-        )
+        signature = (output_dir / ".shared_protein_input_signature").read_text(encoding="utf-8")
         assert signature.startswith("v3:")
     assert completed.stdout.count("Legacy shared protein input signature found") == 3
     assert "Clearing derived outputs" not in completed.stdout
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_input_signature_is_independent_of_workspace_location(tmp_path: Path):
     signatures = []
     fixed_mtime = 1_700_000_000
@@ -1347,19 +1490,19 @@ def test_genome_evolution_input_signature_is_independent_of_workspace_location(t
 
         assert completed.returncode == 0, completed.stdout + completed.stderr
         stamp = (
-            run_root
-            / "workspace"
-            / "output"
-            / "species_tree"
-            / ".shared_protein_input_signature"
-        ).read_text(encoding="utf-8").strip()
+            (run_root / "workspace" / "output" / "species_tree" / ".shared_protein_input_signature")
+            .read_text(encoding="utf-8")
+            .strip()
+        )
         assert stamp.startswith("v3:")
         signatures.append(stamp)
 
     assert signatures[0] == signatures[1]
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_invalidates_zip_backed_species_tree_outputs_when_generation_enabled(
     tmp_path: Path,
 ):
@@ -1388,9 +1531,7 @@ def test_genome_evolution_invalidates_zip_backed_species_tree_outputs_when_gener
         capture_output=True,
         text=True,
     )
-    (species_tree_dir / ".shared_protein_input_signature").write_text(
-        "v3:old-signature\n", encoding="utf-8"
-    )
+    (species_tree_dir / ".shared_protein_input_signature").write_text("v3:old-signature\n", encoding="utf-8")
 
     completed = _run_core(
         tmp_path,
@@ -1412,7 +1553,9 @@ def test_genome_evolution_invalidates_zip_backed_species_tree_outputs_when_gener
     assert not (species_tree_dir / "single_copy_iqtree_dna" / "stale.nwk").exists()
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_two_round_orthofinder_can_run_without_species_tree_when_generation_disabled(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1434,7 +1577,9 @@ def test_genome_evolution_two_round_orthofinder_can_run_without_species_tree_whe
     assert "No species tree summary was found. Species-tree generation flags are disabled" in completed.stdout
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_two_round_orthofinder_uses_nwkit_sample_default_filters(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1463,8 +1608,7 @@ def test_genome_evolution_two_round_orthofinder_uses_nwkit_sample_default_filter
     write_busco("Nepenthes_gracilis", 70.0)
     write_busco("Dionaea_muscipula", 99.0)
     (species_tree_summary_dir / "undated_species_tree.nwk").write_text(
-        "((Arabidopsis_thaliana:0.1,Oryza_sativa:0.1):0.1,"
-        "(Nepenthes_gracilis:0.1,Dionaea_muscipula:0.1):0.1);\n",
+        "((Arabidopsis_thaliana:0.1,Oryza_sativa:0.1):0.1,(Nepenthes_gracilis:0.1,Dionaea_muscipula:0.1):0.1);\n",
         encoding="utf-8",
     )
 
@@ -1488,7 +1632,9 @@ def test_genome_evolution_two_round_orthofinder_uses_nwkit_sample_default_filter
     assert "species_tree_core.nwk" in args
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_reuses_existing_busco_outputs_without_retranslation(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_cds_dir = workspace / "input" / "species_cds"
@@ -1541,7 +1687,9 @@ def test_genome_evolution_reuses_existing_busco_outputs_without_retranslation(tm
     assert "Translation started:" not in completed.stdout
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_reuses_existing_omark_outputs_without_retranslation(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_cds_dir = workspace / "input" / "species_cds"
@@ -1580,7 +1728,9 @@ def test_genome_evolution_reuses_existing_omark_outputs_without_retranslation(tm
     assert "Translation started:" not in completed.stdout
 
 
-@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n")
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_omark_auto_downloads_database_and_summarizes_results(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"

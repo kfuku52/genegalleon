@@ -228,6 +228,12 @@ Notable defaults:
 - `run_single_copy_ortholog_decay_plot=1`
 - `orthogroup_decay_replicates=1000`
 - species-tree-aware OrthoFinder is used when species tree exists.
+- before OrthoFinder starts, protein-input species and species-tree leaves are
+  parsed with the same configured species-label parser, regex, and mapping.
+  Exact parsed labels are matched first; remaining labels may match by the
+  parser's taxonomy query only when that mapping is one-to-one. True omissions,
+  duplicate parsed labels, and ambiguous genus-level matches stop before
+  OrthoFinder.
 - when the species count exceeds `max_orthofinder_core_species`, the core
   species set is selected with size and BUSCO filters by default:
   `orthofinder_core_filters="busco_complete_pct:ge:80,num_seq:le:100000"`.
