@@ -229,7 +229,9 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     assert 'gg_artifact_prepare_stage getfastq_needs_update run_amalgkit_getfastq' in text
     assert 'if [[ ${run_amalgkit_getfastq} -eq 1 && ${getfastq_needs_update} -eq 1 ]]; then' in text
     assert 'run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"' in text
-    assert "Exiting without fallback download so partial outputs do not reach downstream steps." in text
+    assert "return 3" in attempt_body
+    assert "The fatal-condition retry produced an incomplete all-run manifest." in text
+    assert 'if [[ ${fatal_retry_incomplete_manifest} -eq 0 ]] && has_resumable_getfastq_run_state' in text
     assert 'mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"' in text
     assert "Fallback direct FASTQ recovery finished without a valid all-run completion manifest." in text
 

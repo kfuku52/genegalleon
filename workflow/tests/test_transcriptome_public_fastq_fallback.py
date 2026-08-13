@@ -2,6 +2,7 @@ import gzip
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import urllib.request
 from pathlib import Path
@@ -33,6 +34,17 @@ def _fallback_python_source() -> str:
     match = re.search(r"<<'PY'\n(.*?)\nPY\n", function_body, re.DOTALL)
     assert match is not None
     return match.group(1)
+
+
+def _shell_function_source(name: str) -> str:
+    text = CORE_PATH.read_text(encoding="utf-8")
+    match = re.search(
+        rf"^{re.escape(name)}\(\) \{{\n.*?^\}}$",
+        text,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert match is not None
+    return match.group(0)
 
 
 def _run_fallback(monkeypatch, metadata_path: Path, output_dir: Path, responses: dict[str, bytes]):
@@ -122,3 +134,75 @@ def test_public_fallback_preserves_existing_outputs_and_prior_manifest_on_failur
     preserved = output_dir / "getfastq_completion.pre_public_fallback.json"
     assert json.loads(preserved.read_text(encoding="utf-8")) == previous_manifest
     assert not list(output_dir.rglob("*.part"))
+
+
+def test_fatal_then_incomplete_retry_routes_through_public_fallback(tmp_path):
+    trace_path = tmp_path / "trace.txt"
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    script = "\n".join(
+        [
+            "set -u",
+            _shell_function_source("run_amalgkit_getfastq_or_fallback"),
+            r'''
+trace_path=$1
+dir_tmp=$2
+file_amalgkit_metadata="${dir_tmp}/metadata.tsv"
+dir_amalgkit_getfastq_sp="${dir_tmp}/published"
+amalgkit_rrna_filter=yes
+attempt_count=0
+
+run_amalgkit_getfastq_attempt() {
+  attempt_count=$((attempt_count + 1))
+  printf 'attempt:%s:%s\n' "$1" "$2" >> "${trace_path}"
+  if [[ ${attempt_count} -eq 1 ]]; then
+    return 2
+  fi
+  return 3
+}
+has_resumable_getfastq_run_state() {
+  printf 'resume-state-present\n' >> "${trace_path}"
+  return 0
+}
+prepare_getfastq_outputs_for_public_fallback() {
+  printf 'prepare\n' >> "${trace_path}"
+}
+download_public_original_fastqs_for_metadata() {
+  printf 'download:%s:%s\n' "$1" "$2" >> "${trace_path}"
+  return 0
+}
+validate_amalgkit_getfastq_completion_manifest() {
+  printf 'validate:%s:%s\n' "$1" "$2" >> "${trace_path}"
+  return 0
+}
+mv_out_replace_dir() {
+  printf 'publish:%s:%s\n' "$1" "$2" >> "${trace_path}"
+}
+rm() {
+  printf 'cleanup:%s\n' "$*" >> "${trace_path}"
+}
+
+run_amalgkit_getfastq_or_fallback
+''',
+        ]
+    )
+
+    completed = subprocess.run(
+        ["bash", "-s", "--", str(trace_path), str(work_dir)],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    assert trace_path.read_text(encoding="utf-8").splitlines() == [
+        "attempt:yes:initial",
+        "attempt:no:retry_rrna_filter_no",
+        "prepare",
+        f"download:{work_dir / 'metadata.tsv'}:{work_dir / 'getfastq'}",
+        f"validate:{work_dir / 'getfastq/getfastq_completion.json'}:{work_dir / 'metadata.tsv'}",
+        f"publish:{work_dir / 'getfastq'}:{work_dir / 'published'}",
+        f"cleanup:-rf -- {work_dir / 'getfastq'}",
+    ]
+    assert "incomplete all-run manifest" in completed.stdout

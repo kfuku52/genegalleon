@@ -998,7 +998,7 @@ run_amalgkit_getfastq_attempt() {
       "${file_amalgkit_metadata}"
     then
       echo "amalgkit getfastq finished without a valid all-run completion manifest."
-      return 1
+      return 3
     fi
     mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"
     rm -rf -- "${dir_tmp}/getfastq"
@@ -1373,6 +1373,7 @@ PY
 run_amalgkit_getfastq_or_fallback() {
   local status_amalgkit=0
   local fatal_retry_suffix=""
+  local fatal_retry_incomplete_manifest=0
 
   if run_amalgkit_getfastq_attempt "${amalgkit_rrna_filter}" "initial"; then
     return 0
@@ -1389,12 +1390,18 @@ run_amalgkit_getfastq_or_fallback() {
       else
         status_amalgkit=$?
       fi
+      if [[ ${status_amalgkit} -eq 3 ]]; then
+        fatal_retry_incomplete_manifest=1
+        echo "The fatal-condition retry produced an incomplete all-run manifest. Routing retained FASTQs through the bounded public-original fallback."
+      fi
     fi
-    echo "amalgkit getfastq encountered a fatal error${fatal_retry_suffix}. Exiting without fallback download so partial outputs do not reach downstream steps."
-    return 1
+    if [[ ${fatal_retry_incomplete_manifest} -eq 0 ]]; then
+      echo "amalgkit getfastq encountered a fatal error${fatal_retry_suffix}. Exiting without fallback download so partial outputs do not reach downstream steps."
+      return 1
+    fi
   fi
 
-  if has_resumable_getfastq_run_state; then
+  if [[ ${fatal_retry_incomplete_manifest} -eq 0 ]] && has_resumable_getfastq_run_state; then
     echo "amalgkit getfastq left validated run-level resume state. Preserving it and exiting for a resumable retry instead of replacing it with unfiltered original FASTQ files."
     return 1
   fi
