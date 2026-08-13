@@ -33,8 +33,8 @@ resource examples.
 
 ### `nig`
 
-- detected from known National Institute of Genetics hostnames, or selected
-  with `GG_SITE_PROFILE=nig`,
+- detected from known National Institute of Genetics hostnames, including
+  Slurm compute nodes such as `a022`, or selected with `GG_SITE_PROFILE=nig`,
 - changes to `PBS_O_WORKDIR` for scheduler-spooled jobs,
 - discovers versioned `apptainer` or `singularity` installations under
   `/opt/pkg`, with the legacy Singularity path as a fallback,

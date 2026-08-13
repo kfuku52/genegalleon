@@ -24,13 +24,17 @@ Typical execution path:
 
 ## Host-side bootstrap
 
-Each entrypoint searches for `gg_entrypoint_bootstrap.sh` in this order:
+Each entrypoint searches the non-empty, non-duplicate scheduler and working
+directory candidates (`SLURM_SUBMIT_DIR`, `PBS_O_WORKDIR`, `PWD`, and the
+entrypoint directory) in order. For each candidate it probes:
 
-1. `<submit-dir>/support/gg_entrypoint_bootstrap.sh`
-2. `<submit-dir>/workflow/support/gg_entrypoint_bootstrap.sh`
-3. `<entrypoint-dir>/support/gg_entrypoint_bootstrap.sh`
+1. `<candidate>/support/gg_entrypoint_bootstrap.sh`
+2. `<candidate>/workflow/support/gg_entrypoint_bootstrap.sh`
 
-This makes the wrappers resilient to scheduler spool directories and direct execution from either the repo root or the `workflow/` directory.
+The first non-empty scheduler variable is not assumed to be correct. This makes
+the wrappers resilient when a scheduler spool provides an unrelated
+`SLURM_SUBMIT_DIR` but a later candidate still points at the project, as well as
+for direct execution from either the repo root or the `workflow/` directory.
 
 Bootstrap then loads:
 

@@ -141,3 +141,69 @@ def test_nig_scheduler_prelude_discovers_runtime_without_pbs_workdir(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     assert marker.is_file()
+
+
+def test_nig_slurm_compute_hostname_selects_nig_and_discovers_runtime(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    hostname = fake_bin / "hostname"
+    hostname.write_text("#!/usr/bin/env bash\nprintf 'a022\\n'\n", encoding="utf-8")
+    hostname.chmod(0o755)
+    marker = tmp_path / "runtime-discovery-called"
+
+    command = (
+        f"export PATH={shlex.quote(str(fake_bin))}:/usr/bin:/bin; "
+        "unset GG_SITE_PROFILE SGE_ROOT PBS_O_WORKDIR; "
+        f"source {shlex.quote(str(SITE_RUNTIME_PATH))}; "
+        "gg_nig_prepend_container_runtime_path() { "
+        f": > {shlex.quote(str(marker))}; "
+        "}; "
+        'printf "profile=%s\\n" "$(gg_detect_site_profile)"; '
+        "gg_site_scheduler_prelude"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "profile=nig"
+    assert marker.is_file()
+
+
+def test_unrelated_a_prefixed_hostname_keeps_default_profile(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    hostname = fake_bin / "hostname"
+    hostname.write_text("#!/usr/bin/env bash\nprintf 'analysis-node\\n'\n", encoding="utf-8")
+    hostname.chmod(0o755)
+
+    command = (
+        f"export PATH={shlex.quote(str(fake_bin))}:/usr/bin:/bin; "
+        "unset GG_SITE_PROFILE SGE_ROOT; "
+        f"source {shlex.quote(str(SITE_RUNTIME_PATH))}; "
+        "gg_detect_site_profile"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "default"
+
+
+def test_a_prefixed_hostname_with_suffix_keeps_default_profile(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    hostname = fake_bin / "hostname"
+    hostname.write_text("#!/usr/bin/env bash\nprintf 'a022-debug\\n'\n", encoding="utf-8")
+    hostname.chmod(0o755)
+
+    command = (
+        f"export PATH={shlex.quote(str(fake_bin))}:/usr/bin:/bin; "
+        "unset GG_SITE_PROFILE SGE_ROOT; "
+        f"source {shlex.quote(str(SITE_RUNTIME_PATH))}; "
+        "gg_detect_site_profile"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "default"

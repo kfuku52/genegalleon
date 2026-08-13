@@ -15,6 +15,10 @@ gg_detect_site_profile() {
   fi
 
   hostname_text="$(hostname 2>/dev/null || true)"
+  if [[ "${hostname_text}" =~ ^a[0-9]+$ ]]; then
+    echo "nig"
+    return 0
+  fi
   case "${hostname_text}" in
     at*|m*|igt*|it*)
       echo "nig"

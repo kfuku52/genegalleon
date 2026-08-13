@@ -56,20 +56,34 @@ set -euo pipefail
 echo "$(date): Starting"
 
 # Resolve workflow paths for local and scheduler-spooled execution.
-gg_bootstrap_submit_dir="${SLURM_SUBMIT_DIR:-${PBS_O_WORKDIR:-${PWD:-}}}"
 gg_bootstrap_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for bootstrap_path in \
-  "${gg_bootstrap_submit_dir}/support/gg_entrypoint_bootstrap.sh" \
-  "${gg_bootstrap_submit_dir}/workflow/support/gg_entrypoint_bootstrap.sh" \
-  "${gg_bootstrap_script_dir}/support/gg_entrypoint_bootstrap.sh"
+gg_bootstrap_checked_bases=""
+for gg_bootstrap_base in \
+  "${SLURM_SUBMIT_DIR:-}" \
+  "${PBS_O_WORKDIR:-}" \
+  "${PWD:-}" \
+  "${gg_bootstrap_script_dir}"
 do
-  if [[ -s "${bootstrap_path}" ]]; then
-    # shellcheck disable=SC1090
-    source "${bootstrap_path}"
+  [[ -n "${gg_bootstrap_base}" ]] || continue
+  case ":${gg_bootstrap_checked_bases}:" in
+    *":${gg_bootstrap_base}:"*) continue ;;
+  esac
+  gg_bootstrap_checked_bases="${gg_bootstrap_checked_bases:+${gg_bootstrap_checked_bases}:}${gg_bootstrap_base}"
+  for bootstrap_path in \
+    "${gg_bootstrap_base}/support/gg_entrypoint_bootstrap.sh" \
+    "${gg_bootstrap_base}/workflow/support/gg_entrypoint_bootstrap.sh"
+  do
+    if [[ -s "${bootstrap_path}" ]]; then
+      # shellcheck disable=SC1090
+      source "${bootstrap_path}"
+      break
+    fi
+  done
+  if declare -F gg_entrypoint_initialize >/dev/null 2>&1; then
     break
   fi
 done
-unset gg_bootstrap_submit_dir gg_bootstrap_script_dir bootstrap_path
+unset gg_bootstrap_base gg_bootstrap_checked_bases gg_bootstrap_script_dir bootstrap_path
 if ! declare -F gg_entrypoint_initialize >/dev/null 2>&1; then
   echo "Failed to locate gg_entrypoint_bootstrap.sh from BASH_SOURCE[0]=${BASH_SOURCE[0]}" >&2
   exit 1

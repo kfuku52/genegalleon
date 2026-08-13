@@ -541,6 +541,41 @@ def test_entrypoint_bootstrap_resolves_workflow_dir_from_sourced_bootstrap_when_
     assert completed.stdout.strip() == str(expected_workflow_dir)
 
 
+def test_all_entrypoint_locators_try_later_project_directory_for_spooled_scripts(tmp_path):
+    workflow_dir = GG_ENTRYPOINT_BOOTSTRAP_PATH.parents[1]
+    repo_root = workflow_dir.parent
+    unrelated_submit_dir = tmp_path / "submit"
+    unrelated_submit_dir.mkdir()
+
+    for entrypoint in sorted(workflow_dir.glob("gg_*_entrypoint.sh")):
+        text = entrypoint.read_text(encoding="utf-8")
+        start = text.index(
+            "# Resolve workflow paths for local and scheduler-spooled execution."
+        )
+        end = text.index("gg_entrypoint_name=", start)
+        spooled_script = tmp_path / f"{entrypoint.stem}-slurm_script"
+        spooled_script.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            + text[start:end]
+            + 'printf "resolved=%s\\n" "${gg_workflow_dir}"\n',
+            encoding="utf-8",
+        )
+        command = (
+            f"export SLURM_SUBMIT_DIR={shlex.quote(str(unrelated_submit_dir))}; "
+            f"export PBS_O_WORKDIR={shlex.quote(str(repo_root))}; "
+            f"cd {shlex.quote(str(repo_root))}; "
+            f"bash {shlex.quote(str(spooled_script))}"
+        )
+
+        completed = run_bash(command, cwd=tmp_path)
+
+        assert completed.returncode == 0, (
+            f"{entrypoint.name}: {completed.stderr}"
+        )
+        assert completed.stdout.strip() == f"resolved={workflow_dir}"
+
+
 def test_add_container_bind_mount_uses_only_singularity_bindpath_for_singularity_runtime(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
