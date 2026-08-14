@@ -2,11 +2,13 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-KFUKU52_SHA_VARS = (
+PROGRAM_SHA_VARS = (
     "KFU52_AMALGKIT_REPO_SHA",
     "KFU52_CDSKIT_REPO_SHA",
     "KFU52_CSUBST_REPO_SHA",
     "KFU52_NWKIT_REPO_SHA",
+    "BUSCO_REPO_SHA",
+    "PAML_REPO_SHA",
     "KFL1OU_REPO_SHA",
     "KFTOOLS_REPO_SHA",
     "RKFTOOLS_REPO_SHA",
@@ -14,47 +16,54 @@ KFUKU52_SHA_VARS = (
 )
 
 
-def test_kfuku52_sources_share_validated_default_pins():
+def test_program_source_defaults_are_moving_branches_not_commit_pins():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
     apptainer = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(encoding="utf-8")
+    branches_path = REPO_ROOT / "container" / "source_branches.env"
+    branches = branches_path.read_text(encoding="utf-8")
 
-    pins_path = REPO_ROOT / "container" / "source_pins.env"
-    pins = pins_path.read_text(encoding="utf-8")
-    assert "COPY container/source_pins.env /opt/pg/source_pins.env" in dockerfile
-    assert 'source "${script_dir}/source_pins.env"' in buildx
-    assert 'source "${script_dir}/source_pins.env"' in apptainer
-    pin_names = (
-        "GG_PIN_AMALGKIT_REPO_SHA",
-        "GG_PIN_CDSKIT_REPO_SHA",
-        "GG_PIN_CSUBST_REPO_SHA",
-        "GG_PIN_NWKIT_REPO_SHA",
-        "GG_PIN_KFL1OU_REPO_SHA",
-        "GG_PIN_KFTOOLS_REPO_SHA",
-        "GG_PIN_RKFTOOLS_REPO_SHA",
-        "GG_PIN_RADTE_REPO_SHA",
-    )
-    for sha_var, pin_name in zip(KFUKU52_SHA_VARS, pin_names, strict=True):
+    assert not (REPO_ROOT / "container" / "source_pins.env").exists()
+    assert 'source "${script_dir}/source_branches.env"' in buildx
+    assert 'source "${script_dir}/source_branches.env"' in apptainer
+    assert "GG_PIN_" not in branches
+    assert "_REPO_SHA=" not in branches
+    branch_assignments = re.findall(r"^GG_SOURCE_[A-Z0-9_]+_REPO_REF=(\S+)$", branches, re.MULTILINE)
+    assert len(branch_assignments) == len(PROGRAM_SHA_VARS)
+    assert set(branch_assignments) <= {"main", "master"}
+
+    for sha_var in PROGRAM_SHA_VARS:
         assert f'ARG {sha_var}=""' in dockerfile
-        assert re.search(rf"^{pin_name}=[0-9a-f]{{40}}$", pins, re.MULTILINE)
-        assert f"{sha_var}=${{{sha_var}:-${{{pin_name}}}}}" in buildx
-        assert f"{sha_var}=${{{sha_var}:-${{{pin_name}}}}}" in apptainer
+        assert f"{sha_var}=${{{sha_var}:-}}" in buildx
+        assert f"{sha_var}=${{{sha_var}:-}}" in apptainer
+
+    policy_files = [
+        REPO_ROOT / "container" / "Dockerfile",
+        REPO_ROOT / "container" / "buildx.sh",
+        REPO_ROOT / "container" / "apptainer_local_build.sh",
+        REPO_ROOT / "container" / "scripts" / "compute_build_input_hash.sh",
+        REPO_ROOT / ".github" / "workflows" / "container-ghcr.yml",
+        REPO_ROOT / ".github" / "workflows" / "release-sif.yml",
+    ]
+    for path in policy_files:
+        text = path.read_text(encoding="utf-8")
+        assert "source_pins" not in text
+        assert "GG_PIN_" not in text
+        assert not re.search(r'(?:ARG\s+)?[A-Z0-9_]+_REPO_SHA=(?:"?)[0-9a-f]{40}(?:"?)', text)
 
 
-def test_all_container_build_paths_resolve_explicit_upstream_revisions():
+def test_all_container_build_paths_resolve_one_snapshot_per_build():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
     apptainer = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(encoding="utf-8")
 
-    assert 'ARG KFU52_REPO_REF="master"' in dockerfile
-    assert 'ARG KFU52_AMALGKIT_REPO_REF="master"' in dockerfile
-    assert 'ARG KFU52_CSUBST_REPO_REF="master"' in dockerfile
-    assert 'ARG KFL1OU_REPO_REF="main"' in dockerfile
-    assert "KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-main}" in buildx
-    assert "KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-main}" in apptainer
-    assert buildx.count("resolve_source_sha ") == 8
-    assert apptainer.count("resolve_source_sha ") == 8
-    for source in ("amalgkit", "cdskit", "csubst", "nwkit", "kfl1ou", "kftools", "rkftools", "RADTE"):
+    assert 'ARG KFU52_REPO_REF=""' in dockerfile
+    assert 'ARG KFU52_AMALGKIT_REPO_REF=""' in dockerfile
+    assert 'ARG KFU52_CSUBST_REPO_REF=""' in dockerfile
+    assert 'ARG KFL1OU_REPO_REF=""' in dockerfile
+    assert buildx.count("resolve_source_sha ") == 10
+    assert apptainer.count("resolve_source_sha ") == 10
+    for source in ("amalgkit", "cdskit", "csubst", "nwkit", "BUSCO", "paml", "kfl1ou", "kftools", "rkftools", "RADTE"):
         assert f" {source}" in buildx
         assert f" {source}" in apptainer
     assert "> /opt/pg/logs/source_revisions.tsv" in dockerfile
@@ -99,6 +108,8 @@ def test_native_apptainer_build_records_source_revisions():
         "cdskit",
         "csubst",
         "nwkit",
+        "BUSCO",
+        "paml",
         "kfl1ou",
         "kftools",
         "rkftools",

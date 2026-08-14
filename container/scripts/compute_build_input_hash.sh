@@ -3,8 +3,8 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
-# shellcheck source=../source_pins.env
-source "${repo_root}/container/source_pins.env"
+# shellcheck source=../source_branches.env
+source "${repo_root}/container/source_branches.env"
 
 sha256_stream() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -29,34 +29,36 @@ version="${GG_BUILD_VERSION:-${gg_version:-unknown}}"
 notung_download_page="${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}"
 notung_download_host_ip="${NOTUNG_DOWNLOAD_HOST_IP:-128.2.205.60}"
 notung_zip_sha256="${NOTUNG_ZIP_SHA256:-81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6}"
-kfu52_repo_ref="${KFU52_REPO_REF:-master}"
+kfu52_repo_ref="${KFU52_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}"
 amalgkit_auto="${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}"
 amalgkit_candidates="${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}"
-amalgkit_ref="${KFU52_AMALGKIT_REPO_REF-master}"
-amalgkit_sha="${KFU52_AMALGKIT_REPO_SHA:-${GG_PIN_AMALGKIT_REPO_SHA}}"
-cdskit_sha="${KFU52_CDSKIT_REPO_SHA:-${GG_PIN_CDSKIT_REPO_SHA}}"
-csubst_ref="${KFU52_CSUBST_REPO_REF:-master}"
-csubst_sha="${KFU52_CSUBST_REPO_SHA:-${GG_PIN_CSUBST_REPO_SHA}}"
-nwkit_sha="${KFU52_NWKIT_REPO_SHA:-${GG_PIN_NWKIT_REPO_SHA}}"
+amalgkit_ref="${KFU52_AMALGKIT_REPO_REF:-${GG_SOURCE_AMALGKIT_REPO_REF}}"
+amalgkit_sha="${KFU52_AMALGKIT_REPO_SHA:-}"
+cdskit_ref="${KFU52_CDSKIT_REPO_REF:-${GG_SOURCE_CDSKIT_REPO_REF}}"
+cdskit_sha="${KFU52_CDSKIT_REPO_SHA:-}"
+csubst_ref="${KFU52_CSUBST_REPO_REF:-${GG_SOURCE_CSUBST_REPO_REF}}"
+csubst_sha="${KFU52_CSUBST_REPO_SHA:-}"
+nwkit_ref="${KFU52_NWKIT_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}"
+nwkit_sha="${KFU52_NWKIT_REPO_SHA:-}"
 busco_url="${BUSCO_REPO_URL:-https://gitlab.com/ezlab/busco.git}"
 busco_mirror="${BUSCO_MIRROR_REPO_URL:-}"
-busco_ref="${BUSCO_REPO_REF:-6.0.0}"
-busco_sha="${BUSCO_REPO_SHA:-6278721a1916f6da310e03ec9674099028c927a4}"
+busco_ref="${BUSCO_REPO_REF:-${GG_SOURCE_BUSCO_REPO_REF}}"
+busco_sha="${BUSCO_REPO_SHA:-}"
 paml_url="${PAML_REPO_URL:-https://github.com/iqtree/paml.git}"
-paml_ref="${PAML_REPO_REF:-master}"
-paml_sha="${PAML_REPO_SHA:-8daeead6b55523f375d9ac56dcfac38373ef8a2e}"
+paml_ref="${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}"
+paml_sha="${PAML_REPO_SHA:-}"
 kfl1ou_url="${KFL1OU_REPO_URL:-https://github.com/kfuku52/kfl1ou.git}"
-kfl1ou_ref="${KFL1OU_REPO_REF:-main}"
-kfl1ou_sha="${KFL1OU_REPO_SHA:-${GG_PIN_KFL1OU_REPO_SHA}}"
+kfl1ou_ref="${KFL1OU_REPO_REF:-${GG_SOURCE_KFL1OU_REPO_REF}}"
+kfl1ou_sha="${KFL1OU_REPO_SHA:-}"
 kftools_url="${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}"
 rkftools_url="${RKFTOOLS_REPO_URL:-https://github.com/kfuku52/rkftools.git}"
 radte_url="${RADTE_REPO_URL:-https://github.com/kfuku52/RADTE.git}"
-kftools_ref="${KFTOOLS_REPO_REF:-${kfu52_repo_ref}}"
-rkftools_ref="${RKFTOOLS_REPO_REF:-${kfu52_repo_ref}}"
-radte_ref="${RADTE_REPO_REF:-${kfu52_repo_ref}}"
-kftools_sha="${KFTOOLS_REPO_SHA:-${GG_PIN_KFTOOLS_REPO_SHA}}"
-rkftools_sha="${RKFTOOLS_REPO_SHA:-${GG_PIN_RKFTOOLS_REPO_SHA}}"
-radte_sha="${RADTE_REPO_SHA:-${GG_PIN_RADTE_REPO_SHA}}"
+kftools_ref="${KFTOOLS_REPO_REF:-${GG_SOURCE_KFTOOLS_REPO_REF}}"
+rkftools_ref="${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}"
+radte_ref="${RADTE_REPO_REF:-${GG_SOURCE_RADTE_REPO_REF}}"
+kftools_sha="${KFTOOLS_REPO_SHA:-}"
+rkftools_sha="${RKFTOOLS_REPO_SHA:-}"
+radte_sha="${RADTE_REPO_SHA:-}"
 testnh_sha="${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}"
 cafe5_sha="${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}"
 
@@ -67,7 +69,7 @@ context_digest="$(
       .dockerignore \
       container/Dockerfile \
       container/pip-compatibility.requirements.txt \
-      container/source_pins.env
+      container/source_branches.env
     find container/env container/spec container/testdata container/scripts -type f -print
     find workflow/support/treevis -type f -print
   } | LC_ALL=C sort | while IFS= read -r path; do
@@ -89,9 +91,11 @@ context_digest="$(
     "amalgkit_candidates=${amalgkit_candidates}" \
     "amalgkit_ref=${amalgkit_ref}" \
     "amalgkit_sha=${amalgkit_sha}" \
+    "cdskit_ref=${cdskit_ref}" \
     "cdskit_sha=${cdskit_sha}" \
     "csubst_ref=${csubst_ref}" \
     "csubst_sha=${csubst_sha}" \
+    "nwkit_ref=${nwkit_ref}" \
     "nwkit_sha=${nwkit_sha}" \
     "busco_url=${busco_url}" \
     "busco_mirror=${busco_mirror}" \

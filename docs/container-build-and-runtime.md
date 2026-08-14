@@ -86,10 +86,13 @@ bash ./gg_container_build_entrypoint.sh
 IMAGE=ghcr.io/<your-org>/genegalleon TAG=dev MODE=push ./container/buildx.sh
 ```
 
-By default, the container build now hard-pins upstream source installs to validated
-commit SHAs (`amalgkit`, `cdskit`, `csubst`, `nwkit`, `BUSCO`, `paml`,
-`kfl1ou`, `kftools`, `rkftools`, `RADTE`) and verifies SHA-256 checksums for the
-downloaded `BioPP/testnh` and `CAFE5` tarballs.
+By default, upstream source installs follow the moving branches in
+`container/source_branches.env` (`amalgkit`, `cdskit`, `csubst`, `nwkit`,
+`BUSCO`, `paml`, `kfl1ou`, `kftools`, `rkftools`, `RADTE`). The wrapper resolves
+each branch once at build start so all architectures use one internally
+consistent snapshot, without writing those commits back as repository
+defaults. Downloaded `BioPP/testnh` and `CAFE5` tarballs are still verified by
+SHA-256.
 
 To test a different revision, set the matching `*_REPO_SHA` to a full commit
 SHA. When overriding a repository URL to a fork, also supply a commit SHA that
@@ -184,12 +187,15 @@ Runtime profile highlights in the current container scaffold:
 - single conda runtime env: `base` (`biotools`/`r` split envs are obsolete),
 - `iqtree` is conda-pinned to `3.*`,
 - `pigz` is included for fast compression/decompression,
-- `Notung.jar` is installed during image build from the pinned official Notung 2.9 ZIP by default,
+- `Notung.jar` is installed during image build from the checksum-verified configured official Notung 2.9 ZIP,
 - `NOTUNG_DOWNLOAD_PAGE` can still point at the legacy Notung HTML download
   page when you want build-time ZIP auto-resolution; any override must also set
   the matching `NOTUNG_ZIP_SHA256`, and
   `NOTUNG_DOWNLOAD_HOST_IP` can be used to override the fallback IP for the
   official `amberjack.compbio.cs.cmu.edu` host,
-- `BUSCO`, `paml`, `kfl1ou`, `kftools`, `rkftools`, and `RADTE` are installed from pinned upstream source snapshots during image build,
+- Git-sourced programs, including `BUSCO`, `paml`, `kfl1ou`, `kftools`,
+  `rkftools`, and `RADTE`, follow their configured moving branches; the
+  effective per-build revisions are recorded in
+  `/opt/pg/logs/source_revisions.tsv`,
 - GitHub/GitLab source fetches prefer tarball/archive downloads and fall back to `git` retry logic when archive fetches fail,
 - downloaded `Notung`, `BioPP/testnh`, and `CAFE5` archives are SHA-256 verified before extraction.

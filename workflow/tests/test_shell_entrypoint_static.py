@@ -94,7 +94,7 @@ def test_container_build_metadata_includes_repo_version_label():
     assert "org.opencontainers.image.version @@GG_VERSION@@" in definition_template
 
 
-def test_container_defaults_install_all_kfuku52_sources_from_validated_pins():
+def test_container_defaults_install_program_sources_from_moving_branches():
     dockerfile = read_text(REPO_ROOT / "container" / "Dockerfile")
     buildx = read_text(REPO_ROOT / "container" / "buildx.sh")
     local_build = read_text(REPO_ROOT / "container" / "apptainer_local_build.sh")
@@ -102,33 +102,37 @@ def test_container_defaults_install_all_kfuku52_sources_from_validated_pins():
     capability_matrix = read_text(REPO_ROOT / "container" / "CAPABILITY_MATRIX.md")
 
     assert 'ARG KFU52_AMALGKIT_AUTO_SELECT_REF="0"' in dockerfile
-    assert 'ARG KFU52_AMALGKIT_REPO_REF="master"' in dockerfile
+    source_branches = read_text(REPO_ROOT / "container" / "source_branches.env")
+    assert 'ARG KFU52_AMALGKIT_REPO_REF=""' in dockerfile
     assert "KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}" in buildx
-    assert "KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF-master}" in buildx
+    assert "KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF:-${GG_SOURCE_AMALGKIT_REPO_REF}}" in buildx
     assert "KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}" in local_build
-    assert "KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF-master}" in local_build
+    assert "KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF:-${GG_SOURCE_AMALGKIT_REPO_REF}}" in local_build
     assert "amalgkit_auto_select_ref=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}" in ensure_latest
     assert "amalgkit_repo_ref_override=${KFU52_AMALGKIT_REPO_REF-master}" in ensure_latest
-    assert "all `kfuku52` tools install from validated commit pins by default" in capability_matrix
+    assert "Git-sourced programs follow the moving branches" in capability_matrix
     assert "auto-selects newer commit among `master`, `kfdevel`, and `devel`" not in capability_matrix
-    assert 'ARG KFU52_CSUBST_REPO_REF="master"' in dockerfile
-    assert "KFU52_CSUBST_REPO_REF=${KFU52_CSUBST_REPO_REF:-master}" in buildx
-    assert "KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-${GG_PIN_CSUBST_REPO_SHA}}" in buildx
-    assert "KFU52_CSUBST_REPO_REF=${KFU52_CSUBST_REPO_REF:-master}" in local_build
-    assert "KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-${GG_PIN_CSUBST_REPO_SHA}}" in local_build
+    assert 'ARG KFU52_CSUBST_REPO_REF=""' in dockerfile
+    assert "KFU52_CSUBST_REPO_REF=${KFU52_CSUBST_REPO_REF:-${GG_SOURCE_CSUBST_REPO_REF}}" in buildx
+    assert "KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-}" in buildx
+    assert "KFU52_CSUBST_REPO_REF=${KFU52_CSUBST_REPO_REF:-${GG_SOURCE_CSUBST_REPO_REF}}" in local_build
+    assert "KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-}" in local_build
     assert "csubst_repo_ref=${KFU52_CSUBST_REPO_REF:-master}" in ensure_latest
-    sha_pins = {
-        "KFU52_AMALGKIT_REPO_SHA": "GG_PIN_AMALGKIT_REPO_SHA",
-        "KFU52_CDSKIT_REPO_SHA": "GG_PIN_CDSKIT_REPO_SHA",
-        "KFU52_CSUBST_REPO_SHA": "GG_PIN_CSUBST_REPO_SHA",
-        "KFU52_NWKIT_REPO_SHA": "GG_PIN_NWKIT_REPO_SHA",
-        "KFL1OU_REPO_SHA": "GG_PIN_KFL1OU_REPO_SHA",
-        "KFTOOLS_REPO_SHA": "GG_PIN_KFTOOLS_REPO_SHA",
-        "RKFTOOLS_REPO_SHA": "GG_PIN_RKFTOOLS_REPO_SHA",
-        "RADTE_REPO_SHA": "GG_PIN_RADTE_REPO_SHA",
-    }
-    for sha_var, pin_var in sha_pins.items():
-        expected = f"{sha_var}=${{{sha_var}:-${{{pin_var}}}}}"
+    assert "GG_SOURCE_NWKIT_REPO_REF=master" in source_branches
+    sha_overrides = (
+        "KFU52_AMALGKIT_REPO_SHA",
+        "KFU52_CDSKIT_REPO_SHA",
+        "KFU52_CSUBST_REPO_SHA",
+        "KFU52_NWKIT_REPO_SHA",
+        "BUSCO_REPO_SHA",
+        "PAML_REPO_SHA",
+        "KFL1OU_REPO_SHA",
+        "KFTOOLS_REPO_SHA",
+        "RKFTOOLS_REPO_SHA",
+        "RADTE_REPO_SHA",
+    )
+    for sha_var in sha_overrides:
+        expected = f"{sha_var}=${{{sha_var}:-}}"
         assert expected in buildx
         assert expected in local_build
 

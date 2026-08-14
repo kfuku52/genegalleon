@@ -12,9 +12,10 @@ From the project README and Wiki (`gg_versions`):
 - The runtime now uses a single conda `base` env, with selected tools installed from upstream GitHub at build time
   (`kfuku52/amalgkit`, `kfuku52/cdskit`, `kfuku52/csubst`, `kfuku52/nwkit`,
   `kfuku52/kfl1ou`, `kfuku52/kftools`, `kfuku52/rkftools`, `kfuku52/RADTE`).
-  Standard builds use the validated revisions in `source_pins.env` for every
-  one of these repositories. Explicit `*_REPO_SHA` variables remain available
-  as overrides.
+  Standard builds follow the moving branches in `source_branches.env` for every
+  one of these repositories. Build wrappers resolve those branches once at the
+  start of a build so all target architectures use the same snapshot. Explicit
+  `*_REPO_SHA` variables remain available only as one-off overrides.
 
 So this Dockerfile is designed as:
 1. controlled and auditable base build,
@@ -40,28 +41,29 @@ Exact source commits and checksums can be overridden at build time:
 
 ```bash
 KFU52_CSUBST_REPO_SHA=<40-character-commit-sha> \
-BUSCO_REPO_SHA=6278721a1916f6da310e03ec9674099028c927a4 \
-PAML_REPO_SHA=8daeead6b55523f375d9ac56dcfac38373ef8a2e \
+BUSCO_REPO_SHA=<40-character-commit-sha> \
+PAML_REPO_SHA=<40-character-commit-sha> \
 TESTNH_TARBALL_SHA256=598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2 \
 CAFE5_TARBALL_SHA256=71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8 \
 IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.sh
 ```
 
-Default hardening behavior:
-- every `kfuku52` source installs the validated commit recorded in `source_pins.env`
-- build wrappers pass those commits into Docker so pin updates invalidate the corresponding build cache
+Default source behavior:
+- Git-sourced programs follow the moving branches recorded in `source_branches.env`
+- build wrappers resolve every branch once per build and pass the resulting commits into Docker, preventing architecture-to-architecture drift without creating persistent version pins
 - `/opt/pg/logs/source_revisions.tsv` records the effective source revision in both Docker and native Apptainer images
-- `BUSCO` and `paml` remain pinned by default
+- `BUSCO` and `paml` follow their upstream `master` branches too
 - `Notung`, `BioPP/testnh`, and `CAFE5` release archives are verified with SHA-256 before extraction
 - GitHub/GitLab source fetches prefer release/archive downloads and fall back to `git` retry logic only when needed
 
 Override rules:
-- an explicitly supplied `*_REPO_SHA` takes precedence over the repository pin
+- an explicitly supplied `*_REPO_SHA` takes precedence over the moving branch for that one build
 - source SHA overrides should be full 40-character commit SHAs
 - `BUSCO_MIRROR_REPO_URL` is optional and is only used as a secondary source if the primary `BUSCO_REPO_URL` fetch fails.
 - if you override a repo URL to a fork, also supply a commit SHA that exists in that fork
 
-Update `source_pins.env` deliberately after a new upstream revision passes the
+Do not copy a resolved build commit into repository defaults. To change which
+moving branch standard builds follow, edit `source_branches.env` and run the
 full multi-architecture container validation suite.
 
 `buildx.sh` runs a preflight check to ensure the conda env set used in
@@ -210,11 +212,11 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
 - `Notung` is downloaded at build time from the official Notung 2.9 source
   and installed as:
   - `/usr/local/bin/Notung.jar`
-- `BUSCO` and `paml` are fetched from pinned upstream source snapshots by default.
+- `BUSCO` and `paml` are fetched from the current tips of their configured branches by default.
 - `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and
-  `RADTE` install from the validated revisions in `source_pins.env` by default.
+  `RADTE` install from the moving branches in `source_branches.env` by default.
 - `Notung`, `BioPP/testnh`, and `CAFE5` archives are checksum-verified during build.
-- The default source is the pinned stable ZIP:
+- The configured source is a checksum-verified upstream ZIP:
   - `NOTUNG_DOWNLOAD_PAGE=https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip`
 - The corresponding default checksum is:
   - `NOTUNG_ZIP_SHA256=81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6`

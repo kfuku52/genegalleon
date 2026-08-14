@@ -3,7 +3,7 @@ Title: Tree visualization helpers for GeneGalleon
 Version: 0.1.0
 Authors@R: person("Kenji", "Fukushima", email = "kfuku52@gmail.com", role = c("aut", "cre"))
 Description: Tree visualization helpers for GeneGalleon workflows.
-Depends: R (>= 4.5.0)
+Depends: R (>= 4.4.0)
 License: BSD_3_clause + file LICENSE
 Encoding: UTF-8
 Imports: ape, colorspace, ggplot2, ggrepel, ggtree, grDevices, grid, RColorBrewer, rkftools, scales, stats, utils, viridis, rlang

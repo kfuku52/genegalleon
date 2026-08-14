@@ -57,7 +57,7 @@ trimal
 trinity
 
 # BUSCO runtime dependency toolchain (BUSCO itself is installed
-# from upstream git tag 6.0.0 via pip to avoid conda sepp/gsl solver conflicts).
+# from the current upstream branch via pip to avoid conda sepp/gsl solver conflicts).
 hmmer
 metaeuk
 prodigal

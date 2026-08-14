@@ -28,9 +28,63 @@ run_extract_primary_fasta="${run_extract_primary_fasta:-1}"
 run_generate_expression_matrix="${run_generate_expression_matrix:-0}"
 run_collect_gff_info="${run_collect_gff_info:-0}"
 run_extract_promoter_fasta="${run_extract_promoter_fasta:-0}"
+run_expression_trait_pgls="${run_expression_trait_pgls:-0}"
 treevis_query_marker="${treevis_query_marker:-1}"
 query_blast_evalue="${query_blast_evalue:-auto}"
 query_blast_auto_evalue_maxlen_cutoffs="${query_blast_auto_evalue_maxlen_cutoffs:-40:1000,80:100,150:10,300:1,inf:0.01}"
+
+# Unified RSC/species-tree expression-trait PGLS. Defaults are repeated here so
+# direct core-script invocations remain safe under set -u.
+pgls_methods="${pgls_methods:-rsc}"
+species_expression_aggregation="${species_expression_aggregation:-sum}"
+species_paralog_missing="${species_paralog_missing:-error}"
+rphylopars_sampling_covariance="${rphylopars_sampling_covariance:-require-diagonal}"
+rsc_responses="${rsc_responses:-all}"
+rsc_predictors="${rsc_predictors:-all}"
+rsc_predictor_mode="${rsc_predictor_mode:-separate}"
+rsc_event_source="${rsc_event_source:-auto}"
+rsc_speciation_coverage="${rsc_speciation_coverage:-complete}"
+rsc_event_weighting="${rsc_event_weighting:-equal}"
+rsc_model="${rsc_model:-hierarchical}"
+rsc_gene_branch_length="${rsc_gene_branch_length:-original}"
+rsc_gene_evolution_model="${rsc_gene_evolution_model:-brownian}"
+rsc_gene_evolution_parameter="${rsc_gene_evolution_parameter:-auto}"
+rsc_species_branch_length="${rsc_species_branch_length:-original}"
+rsc_species_evolution_model="${rsc_species_evolution_model:-brownian}"
+rsc_species_evolution_parameter="${rsc_species_evolution_parameter:-auto}"
+rsc_inference="${rsc_inference:-wald}"
+rsc_bootstrap_replicates="${rsc_bootstrap_replicates:-1000}"
+rsc_seed="${rsc_seed:-1}"
+rsc_confidence_level="${rsc_confidence_level:-0.95}"
+rsc_reml="${rsc_reml:-yes}"
+rsc_min_species_events="${rsc_min_species_events:-2}"
+rsc_unmatched="${rsc_unmatched:-error}"
+rsc_replicate_separator="${rsc_replicate_separator:-_}"
+rsc_expression_sample_metadata="${rsc_expression_sample_metadata:-}"
+rsc_within_variance="${rsc_within_variance:-pooled}"
+rsc_technical_aggregation="${rsc_technical_aggregation:-error}"
+rsc_predictor_biological_id="${rsc_predictor_biological_id:-}"
+rsc_predictor_technical_id="${rsc_predictor_technical_id:-}"
+rsc_predictor_batch="${rsc_predictor_batch:-}"
+rsc_predictor_within_variance="${rsc_predictor_within_variance:-pooled}"
+rsc_predictor_technical_aggregation="${rsc_predictor_technical_aggregation:-error}"
+rsc_predictor_standard_error_columns="${rsc_predictor_standard_error_columns:-}"
+rsc_predictor_sample_size_columns="${rsc_predictor_sample_size_columns:-}"
+rsc_categorical_predictors="${rsc_categorical_predictors:-}"
+rsc_ordered_predictors="${rsc_ordered_predictors:-}"
+rsc_factor_reference="${rsc_factor_reference:-}"
+rsc_factor_coding="${rsc_factor_coding:-treatment}"
+rsc_categorical_replicate_policy="${rsc_categorical_replicate_policy:-latent}"
+rsc_event_random_effect="${rsc_event_random_effect:-auto}"
+rsc_lineage_random_slope="${rsc_lineage_random_slope:-auto}"
+rsc_lineage_inference="${rsc_lineage_inference:-none}"
+rsc_lineage_leave_one_out="${rsc_lineage_leave_one_out:-no}"
+rsc_categorical_origin_diagnostics="${rsc_categorical_origin_diagnostics:-none}"
+rsc_origin_map_replicates="${rsc_origin_map_replicates:-200}"
+rsc_origin_map_threads="${rsc_origin_map_threads:-1}"
+rsc_origin_min_posterior="${rsc_origin_min_posterior:-0.5}"
+rsc_origin_leave_one_out="${rsc_origin_leave_one_out:-no}"
+rsc_allow_large_dense="${rsc_allow_large_dense:-no}"
 
 # Substitution model in CSUBST and mapdNdS
 if [[ ${genetic_code} -eq 1 ]]; then
@@ -979,6 +1033,68 @@ detect_hyphy_relax_multiple_hits_off_value() {
   echo ""
 }
 
+rsc_validate_choice() {
+  local variable_name=$1
+  local value=$2
+  shift 2
+  local choice
+  for choice in "$@"; do
+    if [[ "${value}" == "${choice}" ]]; then
+      return 0
+    fi
+  done
+  echo "Invalid ${variable_name}: ${value}; expected one of: $*." >&2
+  exit 1
+}
+
+rsc_validate_nonnegative_integer() {
+  local variable_name=$1
+  local value=$2
+  if [[ ! "${value}" =~ ^[0-9]+$ ]]; then
+    echo "Invalid ${variable_name}: ${value}; expected a non-negative integer." >&2
+    exit 1
+  fi
+}
+
+rsc_validate_positive_integer() {
+  local variable_name=$1
+  local value=$2
+  rsc_validate_nonnegative_integer "${variable_name}" "${value}"
+  if [[ ${value} -lt 1 ]]; then
+    echo "Invalid ${variable_name}: ${value}; expected a positive integer." >&2
+    exit 1
+  fi
+}
+
+rsc_validate_probability() {
+  local variable_name=$1
+  local value=$2
+  if [[ ! "${value}" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][-+]?[0-9]+)?$ ]] ||
+    ! awk -v value="${value}" 'BEGIN { exit !(value > 0 && value < 1) }'
+  then
+    echo "Invalid ${variable_name}: ${value}; expected a number strictly between 0 and 1." >&2
+    exit 1
+  fi
+}
+
+rsc_validate_evolution_parameter() {
+  local variable_name=$1
+  local value=$2
+  if [[ "${value}" == "auto" ]]; then
+    return 0
+  fi
+  if [[ ! "${value}" =~ ^[-+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][-+]?[0-9]+)?$ ]]; then
+    echo "Invalid ${variable_name}: ${value}; expected auto or a finite numeric value." >&2
+    exit 1
+  fi
+}
+
+rsc_read_metadata_value() {
+  local metadata_path=$1
+  local requested_key=$2
+  awk -F '\t' -v key="${requested_key}" '$1 == key { print $2; exit }' "${metadata_path}"
+}
+
 
 
 
@@ -1000,6 +1116,8 @@ if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
   echo "gg debug mode: run_hyphy_relax=${run_hyphy_relax}"
   run_hyphy_relax_reversed=0
   echo "gg debug mode: run_hyphy_relax_reversed=${run_hyphy_relax_reversed}"
+  run_expression_trait_pgls=0
+  echo "gg debug mode: run_expression_trait_pgls=${run_expression_trait_pgls}"
   csubst_cutoff_stat="OCNany2spe,0|omegaCany2spe,1"
   echo "gg debug mode: csubst_cutoff_stat=${csubst_cutoff_stat}"
 fi
@@ -1024,7 +1142,181 @@ csubst_scan_tree_site_plot_format=$(echo "${csubst_scan_tree_site_plot_format:-p
 csubst_scan_tree_site_plot_max_sites="${csubst_scan_tree_site_plot_max_sites:-30}"
 uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
 tree_rooting_method=$(echo "${tree_rooting_method}" | tr '[:upper:]' '[:lower:]')
+pgls_methods=$(printf '%s' "${pgls_methods}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+species_expression_aggregation=$(printf '%s' "${species_expression_aggregation}" | tr '[:upper:]' '[:lower:]')
+species_paralog_missing=$(printf '%s' "${species_paralog_missing}" | tr '[:upper:]' '[:lower:]')
+rphylopars_sampling_covariance=$(printf '%s' "${rphylopars_sampling_covariance}" | tr '[:upper:]' '[:lower:]')
+rsc_predictor_mode=$(printf '%s' "${rsc_predictor_mode}" | tr '[:upper:]' '[:lower:]')
+rsc_event_source=$(printf '%s' "${rsc_event_source}" | tr '[:upper:]' '[:lower:]')
+rsc_speciation_coverage=$(printf '%s' "${rsc_speciation_coverage}" | tr '[:upper:]' '[:lower:]')
+rsc_event_weighting=$(printf '%s' "${rsc_event_weighting}" | tr '[:upper:]' '[:lower:]')
+rsc_model=$(printf '%s' "${rsc_model}" | tr '[:upper:]' '[:lower:]')
+rsc_gene_branch_length=$(printf '%s' "${rsc_gene_branch_length}" | tr '[:upper:]' '[:lower:]')
+rsc_gene_evolution_model=$(printf '%s' "${rsc_gene_evolution_model}" | tr '[:upper:]' '[:lower:]')
+rsc_gene_evolution_parameter=$(printf '%s' "${rsc_gene_evolution_parameter}" | tr '[:upper:]' '[:lower:]')
+rsc_species_branch_length=$(printf '%s' "${rsc_species_branch_length}" | tr '[:upper:]' '[:lower:]')
+rsc_species_evolution_model=$(printf '%s' "${rsc_species_evolution_model}" | tr '[:upper:]' '[:lower:]')
+rsc_species_evolution_parameter=$(printf '%s' "${rsc_species_evolution_parameter}" | tr '[:upper:]' '[:lower:]')
+rsc_inference=$(printf '%s' "${rsc_inference}" | tr '[:upper:]' '[:lower:]')
+rsc_reml=$(printf '%s' "${rsc_reml}" | tr '[:upper:]' '[:lower:]')
+rsc_unmatched=$(printf '%s' "${rsc_unmatched}" | tr '[:upper:]' '[:lower:]')
+rsc_within_variance=$(printf '%s' "${rsc_within_variance}" | tr '[:upper:]' '[:lower:]')
+rsc_technical_aggregation=$(printf '%s' "${rsc_technical_aggregation}" | tr '[:upper:]' '[:lower:]')
+rsc_predictor_within_variance=$(printf '%s' "${rsc_predictor_within_variance}" | tr '[:upper:]' '[:lower:]')
+rsc_predictor_technical_aggregation=$(printf '%s' "${rsc_predictor_technical_aggregation}" | tr '[:upper:]' '[:lower:]')
+rsc_factor_coding=$(printf '%s' "${rsc_factor_coding}" | tr '[:upper:]' '[:lower:]')
+rsc_categorical_replicate_policy=$(printf '%s' "${rsc_categorical_replicate_policy}" | tr '[:upper:]' '[:lower:]')
+rsc_event_random_effect=$(printf '%s' "${rsc_event_random_effect}" | tr '[:upper:]' '[:lower:]')
+rsc_lineage_random_slope=$(printf '%s' "${rsc_lineage_random_slope}" | tr '[:upper:]' '[:lower:]')
+rsc_lineage_inference=$(printf '%s' "${rsc_lineage_inference}" | tr '[:upper:]' '[:lower:]')
+rsc_lineage_leave_one_out=$(printf '%s' "${rsc_lineage_leave_one_out}" | tr '[:upper:]' '[:lower:]')
+rsc_categorical_origin_diagnostics=$(printf '%s' "${rsc_categorical_origin_diagnostics}" | tr '[:upper:]' '[:lower:]')
+rsc_origin_leave_one_out=$(printf '%s' "${rsc_origin_leave_one_out}" | tr '[:upper:]' '[:lower:]')
+rsc_allow_large_dense=$(printf '%s' "${rsc_allow_large_dense}" | tr '[:upper:]' '[:lower:]')
 apply_gene_evolution_profile
+pgls_run_rsc=0
+pgls_run_species_rphylopars=0
+if [[ "${pgls_methods}" == "all" ]]; then
+  pgls_methods="rsc,species-nwkit,species-rphylopars"
+fi
+if [[ -z "${pgls_methods}" ]]; then
+  echo "pgls_methods must select at least one method." >&2
+  exit 1
+fi
+pgls_seen_methods=","
+IFS=',' read -r -a pgls_method_items <<< "${pgls_methods}"
+for pgls_method in "${pgls_method_items[@]}"; do
+  if [[ "${pgls_seen_methods}" == *",${pgls_method},"* ]]; then
+    echo "pgls_methods contains a duplicate method: ${pgls_method}" >&2
+    exit 1
+  fi
+  pgls_seen_methods+="${pgls_method},"
+  case "${pgls_method}" in
+    rsc) pgls_run_rsc=1 ;;
+    species-nwkit) : ;;
+    species-rphylopars) pgls_run_species_rphylopars=1 ;;
+    *)
+      echo "Invalid pgls_methods entry: ${pgls_method}. Use rsc, species-nwkit, species-rphylopars, or all." >&2
+      exit 1
+      ;;
+  esac
+done
+unset pgls_method pgls_method_items pgls_seen_methods
+if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
+  rsc_validate_choice species_expression_aggregation "${species_expression_aggregation}" sum mean max all
+  rsc_validate_choice species_paralog_missing "${species_paralog_missing}" error ignore
+  rsc_validate_choice rphylopars_sampling_covariance "${rphylopars_sampling_covariance}" require-diagonal diagonalize
+  rsc_validate_choice rsc_predictor_mode "${rsc_predictor_mode}" separate joint
+  rsc_validate_choice rsc_event_source "${rsc_event_source}" auto nhx lca species-overlap
+  rsc_validate_choice rsc_speciation_coverage "${rsc_speciation_coverage}" complete any
+  rsc_validate_choice rsc_event_weighting "${rsc_event_weighting}" equal observation
+  rsc_validate_choice rsc_model "${rsc_model}" hierarchical replicate-reml legacy
+  rsc_validate_choice rsc_gene_branch_length "${rsc_gene_branch_length}" original unit
+  rsc_validate_choice rsc_species_branch_length "${rsc_species_branch_length}" original unit
+  rsc_validate_choice rsc_gene_evolution_model "${rsc_gene_evolution_model}" brownian lambda ou kappa delta eb acdc independent
+  rsc_validate_choice rsc_species_evolution_model "${rsc_species_evolution_model}" brownian lambda ou kappa delta eb acdc independent
+  rsc_validate_choice rsc_inference "${rsc_inference}" wald parametric-bootstrap
+  rsc_validate_choice rsc_reml "${rsc_reml}" yes no
+  rsc_validate_choice rsc_unmatched "${rsc_unmatched}" error warn ignore
+  rsc_validate_choice rsc_within_variance "${rsc_within_variance}" pooled leaf known-se
+  rsc_validate_choice rsc_technical_aggregation "${rsc_technical_aggregation}" error mean
+  rsc_validate_choice rsc_predictor_within_variance "${rsc_predictor_within_variance}" pooled leaf known-se
+  rsc_validate_choice rsc_predictor_technical_aggregation "${rsc_predictor_technical_aggregation}" error mean
+  rsc_validate_choice rsc_factor_coding "${rsc_factor_coding}" treatment sum
+  rsc_validate_choice rsc_categorical_replicate_policy "${rsc_categorical_replicate_policy}" error latent
+  rsc_validate_choice rsc_event_random_effect "${rsc_event_random_effect}" auto yes no
+  rsc_validate_choice rsc_lineage_random_slope "${rsc_lineage_random_slope}" auto yes no
+  rsc_validate_choice rsc_lineage_inference "${rsc_lineage_inference}" none likelihood-ratio parametric-bootstrap
+  rsc_validate_choice rsc_lineage_leave_one_out "${rsc_lineage_leave_one_out}" yes no
+  rsc_validate_choice rsc_categorical_origin_diagnostics "${rsc_categorical_origin_diagnostics}" none stochastic-map
+  rsc_validate_choice rsc_origin_leave_one_out "${rsc_origin_leave_one_out}" yes no
+  rsc_validate_choice rsc_allow_large_dense "${rsc_allow_large_dense}" yes no
+  rsc_validate_evolution_parameter rsc_gene_evolution_parameter "${rsc_gene_evolution_parameter}"
+  rsc_validate_evolution_parameter rsc_species_evolution_parameter "${rsc_species_evolution_parameter}"
+  if [[ "${rsc_gene_evolution_model}" =~ ^(brownian|independent)$ && "${rsc_gene_evolution_parameter}" != "auto" ]]; then
+    echo "${rsc_gene_evolution_model} has no gene-evolution shape parameter; set rsc_gene_evolution_parameter=auto." >&2
+    exit 1
+  fi
+  if [[ "${rsc_species_evolution_model}" =~ ^(brownian|independent)$ && "${rsc_species_evolution_parameter}" != "auto" ]]; then
+    echo "${rsc_species_evolution_model} has no species-evolution shape parameter; set rsc_species_evolution_parameter=auto." >&2
+    exit 1
+  fi
+  rsc_validate_positive_integer rsc_bootstrap_replicates "${rsc_bootstrap_replicates}"
+  if (( rsc_bootstrap_replicates < 2 )); then
+    echo "rsc_bootstrap_replicates must be at least 2." >&2
+    exit 1
+  fi
+  rsc_validate_nonnegative_integer rsc_seed "${rsc_seed}"
+  rsc_validate_positive_integer rsc_min_species_events "${rsc_min_species_events}"
+  rsc_validate_positive_integer rsc_origin_map_replicates "${rsc_origin_map_replicates}"
+  rsc_validate_positive_integer rsc_origin_map_threads "${rsc_origin_map_threads}"
+  rsc_validate_probability rsc_confidence_level "${rsc_confidence_level}"
+  rsc_validate_probability rsc_origin_min_posterior "${rsc_origin_min_posterior}"
+  if [[ -z "${rsc_responses//[[:space:]]/}" || -z "${rsc_predictors//[[:space:]]/}" ]]; then
+    echo "rsc_responses and rsc_predictors must not be empty when run_expression_trait_pgls=1." >&2
+    exit 1
+  fi
+  if [[ "${rsc_within_variance}" == "known-se" && -z "${rsc_expression_sample_metadata}" ]]; then
+    echo "rsc_within_variance=known-se requires rsc_expression_sample_metadata." >&2
+    exit 1
+  fi
+  if [[ "${rsc_within_variance}" == "known-se" && "${rsc_technical_aggregation}" != "error" ]]; then
+    echo "rsc_within_variance=known-se cannot use rsc_technical_aggregation; provide one summarized mean and SE per gene/response." >&2
+    exit 1
+  fi
+  if [[ -n "${rsc_predictor_technical_id}${rsc_predictor_batch}" && -z "${rsc_predictor_biological_id}" ]]; then
+    echo "RSC predictor technical-replicate and batch columns require rsc_predictor_biological_id." >&2
+    exit 1
+  fi
+  if [[ "${rsc_predictor_within_variance}" == "known-se" && -z "${rsc_predictor_standard_error_columns}" ]]; then
+    echo "rsc_predictor_within_variance=known-se requires rsc_predictor_standard_error_columns." >&2
+    exit 1
+  fi
+  if [[ "${rsc_predictor_within_variance}" == "known-se" && -n "${rsc_predictor_biological_id}${rsc_predictor_technical_id}${rsc_predictor_batch}" ]]; then
+    echo "rsc_predictor_within_variance=known-se requires one summarized row per species and cannot use predictor replicate IDs or batch." >&2
+    exit 1
+  fi
+  if [[ "${rsc_predictor_within_variance}" == "known-se" && "${rsc_predictor_technical_aggregation}" != "error" ]]; then
+    echo "rsc_predictor_within_variance=known-se cannot use rsc_predictor_technical_aggregation." >&2
+    exit 1
+  fi
+  if [[ -n "${rsc_predictor_standard_error_columns}${rsc_predictor_sample_size_columns}" && "${rsc_predictor_within_variance}" != "known-se" ]]; then
+    echo "RSC predictor standard-error/sample-size columns require rsc_predictor_within_variance=known-se." >&2
+    exit 1
+  fi
+  if [[ "${rsc_origin_leave_one_out}" == "yes" && "${rsc_categorical_origin_diagnostics}" != "stochastic-map" ]]; then
+    echo "rsc_origin_leave_one_out=yes requires rsc_categorical_origin_diagnostics=stochastic-map." >&2
+    exit 1
+  fi
+  if [[ "${rsc_model}" == "legacy" && "${rsc_inference}" != "wald" ]]; then
+    echo "rsc_model=legacy supports only rsc_inference=wald." >&2
+    exit 1
+  fi
+  if [[ "${rsc_model}" == "legacy" && ! "${rsc_gene_evolution_model}" =~ ^(brownian|independent)$ && "${rsc_gene_evolution_parameter}" == "auto" ]]; then
+    echo "Automatic gene evolution-parameter estimation requires a likelihood-based RSC model." >&2
+    exit 1
+  fi
+  if [[ "${rsc_model}" != "hierarchical" && ( "${rsc_event_random_effect}" == "yes" || "${rsc_lineage_random_slope}" == "yes" ) ]]; then
+    echo "Explicit RSC random effects require rsc_model=hierarchical." >&2
+    exit 1
+  fi
+  if [[ "${rsc_model}" != "hierarchical" && "${rsc_lineage_inference}" != "none" ]]; then
+    echo "rsc_lineage_inference requires rsc_model=hierarchical." >&2
+    exit 1
+  fi
+  if [[ "${rsc_lineage_random_slope}" == "no" && "${rsc_lineage_inference}" != "none" ]]; then
+    echo "rsc_lineage_inference requires lineage random slopes." >&2
+    exit 1
+  fi
+  if [[ "${rsc_model}" == "legacy" && "${rsc_lineage_leave_one_out}" == "yes" ]]; then
+    echo "rsc_lineage_leave_one_out requires a likelihood-based RSC model." >&2
+    exit 1
+  fi
+  if [[ "${rsc_model}" == "legacy" && ( "${rsc_within_variance}" == "known-se" || "${rsc_predictor_within_variance}" == "known-se" || -n "${rsc_predictor_biological_id}" ) ]]; then
+    echo "rsc_model=legacy cannot use response or predictor sampling uncertainty." >&2
+    exit 1
+  fi
+fi
 if [[ "${mode_gene_evolution}" != "orthogroup" && "${mode_gene_evolution}" != "query2family" ]]; then
   echo "Invalid mode_gene_evolution: ${mode_gene_evolution}"
   echo 'mode_gene_evolution must be either "orthogroup" or "query2family". Exiting.'
@@ -1316,6 +1608,9 @@ if annotation_species_resolved=$(gg_resolve_annotation_species "${annotation_spe
   fi
 fi
 file_sp_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
+if [[ -n "${rsc_expression_sample_metadata}" && "${rsc_expression_sample_metadata}" != /* ]]; then
+  rsc_expression_sample_metadata="${gg_workspace_dir}/${rsc_expression_sample_metadata}"
+fi
 file_og="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.selected.tsv"
 file_og_parameters_dir="${dir_output_active}/parameters"
 dir_species_tree="${gg_workspace_output_dir}/species_tree"
@@ -1414,8 +1709,33 @@ fi
 # PGLS output
 file_og_gene_pgls="${dir_output_active}/pgls_gene_tree/${og_id}_gene_tree_PGLS.tsv"
 file_og_gene_pgls_plot="${dir_output_active}/pgls_gene_tree_plot/${og_id}_gene_PGLS.barplot.pdf"
-file_og_species_pgls="${dir_output_active}/pgls_species_tree/${og_id}_species_PGLS.tsv"
-file_og_species_pgls_plot="${dir_output_active}/pgls_species_tree_plot/${og_id}_species_PGLS.barplot.pdf"
+file_og_species_nwkit_pgls="${dir_output_active}/pgls_species_nwkit/${og_id}_species_nwkit.pgls.tsv"
+file_og_species_rphylopars_pgls="${dir_output_active}/pgls_species_rphylopars/${og_id}_species_rphylopars.pgls.tsv"
+file_og_pgls_comparison="${dir_output_active}/pgls_comparison/${og_id}_pgls.comparison.tsv"
+file_og_pgls_method_status="${dir_output_active}/pgls_method_status/${og_id}_pgls.method-status.tsv"
+file_og_pgls_method_audit="${dir_output_active}/pgls_method_audit/${og_id}_pgls.method-audit.jsonl"
+file_og_species_expression_summary="${dir_output_active}/pgls_species_expression_summary/${og_id}_species_expression.tsv"
+file_og_species_expression_audit="${dir_output_active}/pgls_species_expression_audit/${og_id}_species_expression.audit.tsv"
+file_og_species_response_tip_summary="${dir_output_active}/pgls_species_response_tip_summary/${og_id}_response-tip-summary.tsv"
+file_og_species_response_sampling_covariance="${dir_output_active}/pgls_species_response_sampling_covariance/${og_id}_response-sampling-covariance.tsv"
+file_og_species_predictor_tip_summary="${dir_output_active}/pgls_species_predictor_tip_summary/${og_id}_predictor-tip-summary.tsv"
+file_og_species_predictor_sampling_covariance="${dir_output_active}/pgls_species_predictor_sampling_covariance/${og_id}_predictor-sampling-covariance.tsv"
+file_og_rsc_status="${dir_output_active}/rsc_status/${og_id}_rsc.status.tsv"
+file_og_rsc_pgls="${dir_output_active}/rsc_pgls/${og_id}_rsc.pgls.tsv"
+file_og_rsc_reconciliation="${dir_output_active}/rsc_reconciliation/${og_id}_rsc.reconciliation.tsv"
+file_og_rsc_gene_contrasts="${dir_output_active}/rsc_gene_contrasts/${og_id}_rsc.gene-contrasts.tsv"
+file_og_rsc_species_contrasts="${dir_output_active}/rsc_species_contrasts/${og_id}_rsc.species-contrasts.tsv"
+file_og_rsc_response_sampling_covariance="${dir_output_active}/rsc_response_sampling_covariance/${og_id}_rsc.response-sampling-covariance.tsv"
+file_og_rsc_response_tip_summary="${dir_output_active}/rsc_response_tip_summary/${og_id}_rsc.response-tip-summary.tsv"
+file_og_rsc_predictor_sampling_covariance="${dir_output_active}/rsc_predictor_sampling_covariance/${og_id}_rsc.predictor-sampling-covariance.tsv"
+file_og_rsc_predictor_tip_summary="${dir_output_active}/rsc_predictor_tip_summary/${og_id}_rsc.predictor-tip-summary.tsv"
+file_og_rsc_random_effects="${dir_output_active}/rsc_random_effects/${og_id}_rsc.random-effects.tsv"
+file_og_rsc_sensitivity="${dir_output_active}/rsc_sensitivity/${og_id}_rsc.sensitivity.tsv"
+file_og_rsc_trait_origins="${dir_output_active}/rsc_trait_origins/${og_id}_rsc.trait-origins.tsv"
+file_og_rsc_audit="${dir_output_active}/rsc_audit/${og_id}_rsc.audit.jsonl"
+file_og_rsc_log="${dir_output_active}/rsc_log/${og_id}_rsc.log"
+file_og_expression_trait_pgls_log="${dir_output_active}/pgls_log/${og_id}_expression_trait_pgls.log"
+file_og_expression_trait_pgls_provenance="${dir_output_active}/artifact_provenance/${og_id}.expression_trait_pgls.json"
 # Summary
 file_og_stat_branch="${dir_output_active}/stat_branch/${og_id}_stat.branch.tsv"
 file_og_stat_tree="${dir_output_active}/stat_tree/${og_id}_stat.tree.tsv"
@@ -3888,10 +4208,11 @@ if [[ ${tree_pruning_needs_update} -eq 1 && ${run_tree_pruning} -eq 1 ]]; then
       nwkit prune \
         --infile "${file_og_rooted_tree_analysis}" \
         --pattern "^(${prune_pattern})$" \
-        --invert-match yes
+        --invert-match yes \
+        --preserve-properties yes
     fi |
-      nwkit drop --target root --length yes |
-      nwkit sanitize --remove-singleton yes --resolve-polytomy no \
+      nwkit drop --target root --length yes --preserve-properties yes |
+      nwkit sanitize --remove-singleton yes --resolve-polytomy no --preserve-properties yes \
         > "${og_id}.rooted.pruned.tmp.nwk"
     mv_out "${og_id}.rooted.pruned.tmp.nwk" "${file_og_rooted_tree_pruned}"
   fi
@@ -3976,8 +4297,32 @@ if [[ ${check_pruned} -eq 1 ]]; then
     "${file_og_csubst_scan_log}"
     "${file_og_gene_pgls}"
     "${file_og_gene_pgls_plot}"
-    "${file_og_species_pgls}"
-    "${file_og_species_pgls_plot}"
+    "${file_og_species_nwkit_pgls}"
+    "${file_og_species_rphylopars_pgls}"
+    "${file_og_pgls_comparison}"
+    "${file_og_pgls_method_status}"
+    "${file_og_pgls_method_audit}"
+    "${file_og_species_expression_summary}"
+    "${file_og_species_expression_audit}"
+    "${file_og_species_response_tip_summary}"
+    "${file_og_species_response_sampling_covariance}"
+    "${file_og_species_predictor_tip_summary}"
+    "${file_og_species_predictor_sampling_covariance}"
+    "${file_og_rsc_status}"
+    "${file_og_rsc_pgls}"
+    "${file_og_rsc_reconciliation}"
+    "${file_og_rsc_gene_contrasts}"
+    "${file_og_rsc_species_contrasts}"
+    "${file_og_rsc_response_sampling_covariance}"
+    "${file_og_rsc_response_tip_summary}"
+    "${file_og_rsc_predictor_sampling_covariance}"
+    "${file_og_rsc_predictor_tip_summary}"
+    "${file_og_rsc_random_effects}"
+    "${file_og_rsc_sensitivity}"
+    "${file_og_rsc_trait_origins}"
+    "${file_og_rsc_audit}"
+    "${file_og_rsc_log}"
+    "${file_og_expression_trait_pgls_log}"
   )
   for ((i = 2; i <= csubst_max_arity; i++)); do
     varname="file_og_csubst_cb_${i}"
@@ -4534,46 +4879,591 @@ fi
 # shellcheck shell=bash
 # Sourced by gg_gene_evolution_core.sh.
 
-task="Gene tree E-PGLS analysis"
-gg_step_skip "${task}"
+task="Expression-trait phylogenetic regression"
+rsc_gene_tree="${file_og_dated_tree_analysis}"
+if [[ "${rsc_gene_branch_length}" == "unit" && ! -s "${rsc_gene_tree}" ]]; then
+  rsc_gene_tree="${file_og_rooted_tree_analysis}"
+fi
+rsc_reconciliation_tree="${file_og_rooted_tree_analysis}"
+if [[ ! -s "${rsc_reconciliation_tree}" ]]; then
+  rsc_reconciliation_tree="${rsc_gene_tree}"
+fi
+rsc_effective_event_source="${rsc_event_source}"
+if [[ "${rsc_effective_event_source}" == "auto" ]]; then
+  rsc_effective_event_source="lca"
+  if [[ ${run_expression_trait_pgls} -eq 1 || -s "${file_og_rsc_status}" || -s "${file_og_expression_trait_pgls_provenance}" ]] &&
+    [[ -s "${rsc_reconciliation_tree}" ]] &&
+    python "${gg_support_dir}/reconciled_speciation_contrast.py" has-nhx \
+      --tree "${rsc_reconciliation_tree}"
+  then
+    rsc_effective_event_source="nhx"
+  fi
+fi
 
-task="Species tree PGLS analysis"
-disable_if_no_input_file "run_pgls_species_tree" "${file_sp_trait}" "${species_tree_pruned}" "${file_og_expression}"
-pgls_species_tree_needs_update=0
-pgls_species_tree_provenance_args=(
-  --manifest "${dir_output_active}/artifact_provenance/${og_id}.pgls_species_tree.json"
-  --step "pgls_species_tree"
+if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
+  if ! command -v nwkit >/dev/null 2>&1; then
+    echo "run_expression_trait_pgls=1 requires nwkit with the pgls and reconcile commands." >&2
+    exit 1
+  fi
+  if [[ ${pgls_run_species_rphylopars} -eq 1 ]]; then
+    if ! command -v Rscript >/dev/null 2>&1; then
+      echo "pgls_methods includes species-rphylopars, but Rscript is unavailable." >&2
+      exit 1
+    fi
+  fi
+  if [[ -s "${file_og_expression}" ]]; then
+    if [[ ! -s "${file_sp_trait}" ]]; then
+      echo "run_expression_trait_pgls=1 requires the species-trait table: ${file_sp_trait}" >&2
+      exit 1
+    fi
+    if [[ ! -s "${species_tree_pruned}" ]]; then
+      echo "run_expression_trait_pgls=1 requires the pruned species tree: ${species_tree_pruned}" >&2
+      exit 1
+    fi
+    if [[ ${pgls_run_rsc} -eq 1 && ! -s "${rsc_gene_tree}" ]]; then
+      echo "The RSC method requires a rooted gene tree: ${rsc_gene_tree}" >&2
+      if [[ "${rsc_gene_branch_length}" == "original" ]]; then
+        echo "rsc_gene_branch_length=original requires run_tree_dating=1 or an existing dated gene tree." >&2
+      fi
+      exit 1
+    fi
+    if [[ ! -s "${rsc_reconciliation_tree}" ]]; then
+      echo "Expression-trait PGLS requires a rooted reconciliation tree to map genes to species: ${rsc_reconciliation_tree}" >&2
+      exit 1
+    fi
+    if [[ "${rsc_species_branch_length}" == "original" && "${species_tree_basename}" != "dated_species_tree" ]]; then
+      echo "rsc_species_branch_length=original requires output/species_tree/species_tree_summary/dated_species_tree.nwk." >&2
+      echo "Use rsc_species_branch_length=unit only when a dated species tree is unavailable." >&2
+      exit 1
+    fi
+    if [[ -n "${rsc_expression_sample_metadata}" && ! -s "${rsc_expression_sample_metadata}" ]]; then
+      echo "RSC expression-sample metadata was not found: ${rsc_expression_sample_metadata}" >&2
+      exit 1
+    fi
+    if [[ "${rsc_effective_event_source}" == "nhx" ]] &&
+      ! python "${gg_support_dir}/reconciled_speciation_contrast.py" has-nhx \
+        --tree "${rsc_reconciliation_tree}"
+    then
+      echo "rsc_event_source=nhx requires GeneRax-style NHX D annotations: ${rsc_reconciliation_tree}" >&2
+      exit 1
+    fi
+  fi
+fi
+
+rsc_needs_update=0
+rsc_provenance_args=(
+  --manifest "${file_og_expression_trait_pgls_provenance}"
+  --step "expression_trait_pgls"
   --family-id "${og_id}"
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
-  --input "species_trait=${file_sp_trait}"
-  --input "species_tree=${species_tree_pruned}"
-  --input "expression=${file_og_expression}"
-  --output "pgls=${file_og_species_pgls}"
-  --output "pgls_plot=${file_og_species_pgls_plot}"
-  --parameter "expression_value_type=${exp_value_type}"
-  --parameter "use_phenotype_covariance=${pgls_use_phenocov}"
+  --input "adapter=${gg_support_dir}/reconciled_speciation_contrast.py"
+  --input "species_comparator=${gg_support_dir}/species_tree_pgls.py"
+  --input "rphylopars_adapter=${gg_support_dir}/species_tree_rphylopars.R"
+  --output "status=${file_og_rsc_status}"
+  --output "pgls=${file_og_rsc_pgls}"
+  --output "reconciliation=${file_og_rsc_reconciliation}"
+  --output "gene_contrasts=${file_og_rsc_gene_contrasts}"
+  --output "species_contrasts=${file_og_rsc_species_contrasts}"
+  --output "response_sampling_covariance=${file_og_rsc_response_sampling_covariance}"
+  --output "response_tip_summary=${file_og_rsc_response_tip_summary}"
+  --output "predictor_sampling_covariance=${file_og_rsc_predictor_sampling_covariance}"
+  --output "predictor_tip_summary=${file_og_rsc_predictor_tip_summary}"
+  --output "random_effects=${file_og_rsc_random_effects}"
+  --output "sensitivity=${file_og_rsc_sensitivity}"
+  --output "trait_origins=${file_og_rsc_trait_origins}"
+  --output "audit=${file_og_rsc_audit}"
+  --output "log=${file_og_rsc_log}"
+  --output "species_nwkit=${file_og_species_nwkit_pgls}"
+  --output "species_rphylopars=${file_og_species_rphylopars_pgls}"
+  --output "comparison=${file_og_pgls_comparison}"
+  --output "method_status=${file_og_pgls_method_status}"
+  --output "method_audit=${file_og_pgls_method_audit}"
+  --output "species_expression_summary=${file_og_species_expression_summary}"
+  --output "species_expression_audit=${file_og_species_expression_audit}"
+  --output "species_response_tip_summary=${file_og_species_response_tip_summary}"
+  --output "species_response_sampling_covariance=${file_og_species_response_sampling_covariance}"
+  --output "species_predictor_tip_summary=${file_og_species_predictor_tip_summary}"
+  --output "species_predictor_sampling_covariance=${file_og_species_predictor_sampling_covariance}"
+  --output "combined_log=${file_og_expression_trait_pgls_log}"
+  --parameter "methods=${pgls_methods}"
+  --parameter "species_expression_aggregation=${species_expression_aggregation}"
+  --parameter "species_paralog_missing=${species_paralog_missing}"
+  --parameter "rphylopars_sampling_covariance=${rphylopars_sampling_covariance}"
+  --parameter "responses=${rsc_responses}"
+  --parameter "predictors=${rsc_predictors}"
+  --parameter "predictor_mode=${rsc_predictor_mode}"
+  --parameter "requested_event_source=${rsc_event_source}"
+  --parameter "effective_event_source=${rsc_effective_event_source}"
+  --parameter "speciation_coverage=${rsc_speciation_coverage}"
+  --parameter "event_weighting=${rsc_event_weighting}"
+  --parameter "model=${rsc_model}"
+  --parameter "gene_branch_length=${rsc_gene_branch_length}"
+  --parameter "gene_evolution_model=${rsc_gene_evolution_model}"
+  --parameter "gene_evolution_parameter=${rsc_gene_evolution_parameter}"
+  --parameter "species_branch_length=${rsc_species_branch_length}"
+  --parameter "species_evolution_model=${rsc_species_evolution_model}"
+  --parameter "species_evolution_parameter=${rsc_species_evolution_parameter}"
+  --parameter "inference=${rsc_inference}"
+  --parameter "bootstrap_replicates=${rsc_bootstrap_replicates}"
+  --parameter "seed=${rsc_seed}"
+  --parameter "confidence_level=${rsc_confidence_level}"
+  --parameter "reml=${rsc_reml}"
+  --parameter "min_species_events=${rsc_min_species_events}"
+  --parameter "unmatched=${rsc_unmatched}"
+  --parameter "replicate_separator=${rsc_replicate_separator}"
+  --parameter "within_variance=${rsc_within_variance}"
+  --parameter "technical_aggregation=${rsc_technical_aggregation}"
+  --parameter "predictor_biological_id=${rsc_predictor_biological_id}"
+  --parameter "predictor_technical_id=${rsc_predictor_technical_id}"
+  --parameter "predictor_batch=${rsc_predictor_batch}"
+  --parameter "predictor_within_variance=${rsc_predictor_within_variance}"
+  --parameter "predictor_technical_aggregation=${rsc_predictor_technical_aggregation}"
+  --parameter "predictor_standard_error_columns=${rsc_predictor_standard_error_columns}"
+  --parameter "predictor_sample_size_columns=${rsc_predictor_sample_size_columns}"
+  --parameter "categorical_predictors=${rsc_categorical_predictors}"
+  --parameter "ordered_predictors=${rsc_ordered_predictors}"
+  --parameter "factor_reference=${rsc_factor_reference}"
+  --parameter "factor_coding=${rsc_factor_coding}"
+  --parameter "categorical_replicate_policy=${rsc_categorical_replicate_policy}"
+  --parameter "event_random_effect=${rsc_event_random_effect}"
+  --parameter "lineage_random_slope=${rsc_lineage_random_slope}"
+  --parameter "lineage_inference=${rsc_lineage_inference}"
+  --parameter "lineage_leave_one_out=${rsc_lineage_leave_one_out}"
+  --parameter "categorical_origin_diagnostics=${rsc_categorical_origin_diagnostics}"
+  --parameter "origin_map_replicates=${rsc_origin_map_replicates}"
+  --parameter "origin_map_threads=${rsc_origin_map_threads}"
+  --parameter "origin_min_posterior=${rsc_origin_min_posterior}"
+  --parameter "origin_leave_one_out=${rsc_origin_leave_one_out}"
+  --parameter "allow_large_dense=${rsc_allow_large_dense}"
+  --parameter "species_parser=${species_label_parser}"
+  --parameter "species_regex=${species_label_regex}"
 )
-gg_artifact_prepare_stage pgls_species_tree_needs_update run_pgls_species_tree "${pgls_species_tree_provenance_args[@]}" || exit $?
-if [[ ${pgls_species_tree_needs_update} -eq 1 && ${run_pgls_species_tree} -eq 1 ]]; then
+if [[ -s "${file_og_expression}" ]]; then
+  rsc_provenance_args+=(
+    --input "reconciliation_tree=${rsc_reconciliation_tree}"
+    --input "species_tree=${species_tree_pruned}"
+    --input "expression=${file_og_expression}"
+    --input "species_traits=${file_sp_trait}"
+  )
+  if [[ ${pgls_run_rsc} -eq 1 ]]; then
+    rsc_provenance_args+=(--input "gene_tree=${rsc_gene_tree}")
+  fi
+else
+  rsc_provenance_args+=(--parameter "expression_input=unavailable")
+fi
+if [[ -s "${file_og_expression}" && -n "${rsc_expression_sample_metadata}" ]]; then
+  rsc_provenance_args+=(--input "expression_sample_metadata=${rsc_expression_sample_metadata}")
+fi
+if [[ -s "${file_og_expression}" && -n "${species_label_map_tsv}" ]]; then
+  rsc_provenance_args+=(--input "species_map=${species_label_map_tsv}")
+fi
+gg_artifact_prepare_stage rsc_needs_update run_expression_trait_pgls "${rsc_provenance_args[@]}" || exit $?
+if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
   gg_step_start "${task}"
-  pgls_merge_replicates="yes"
-  if [[ ${pgls_use_phenocov} -eq 1 ]]; then
-    pgls_merge_replicates="no"
+  rsc_work_dir="${og_id}.rsc"
+  rsc_prepared_expression="${rsc_work_dir}/expression.tsv"
+  rsc_prepared_traits="${rsc_work_dir}/species_traits.tsv"
+  rsc_analysis_plan="${rsc_work_dir}/analysis_plan.tsv"
+  rsc_metadata="${rsc_work_dir}/metadata.tsv"
+  rsc_preflight_reconciliation="${rsc_work_dir}/preflight.reconciliation.tsv"
+  rsc_preflight_audit="${rsc_work_dir}/preflight.audit.jsonl"
+  rsc_preflight_metadata="${rsc_work_dir}/preflight.metadata.tsv"
+  rsc_bundle_list="${rsc_work_dir}/bundle_list.tsv"
+  rsc_combined_prefix="${rsc_work_dir}/${og_id}_rsc"
+  rsc_combined_status="${rsc_work_dir}/${og_id}_rsc.status.tsv"
+  rsc_combined_audit="${rsc_work_dir}/${og_id}_rsc.audit.jsonl"
+  rsc_log_tmp="${rsc_work_dir}/${og_id}_rsc.log"
+  pgls_log_tmp="${rsc_work_dir}/${og_id}_expression_trait_pgls.log"
+  species_nwkit_tmp="${rsc_work_dir}/${og_id}_species_nwkit.pgls.tsv"
+  species_rphylopars_tmp="${rsc_work_dir}/${og_id}_species_rphylopars.pgls.tsv"
+  pgls_comparison_tmp="${rsc_work_dir}/${og_id}_pgls.comparison.tsv"
+  pgls_method_status_tmp="${rsc_work_dir}/${og_id}_pgls.method-status.tsv"
+  pgls_method_audit_tmp="${rsc_work_dir}/${og_id}_pgls.method-audit.jsonl"
+  species_expression_summary_tmp="${rsc_work_dir}/${og_id}_species_expression.tsv"
+  species_expression_audit_tmp="${rsc_work_dir}/${og_id}_species_expression.audit.tsv"
+  species_response_tip_summary_tmp="${rsc_work_dir}/${og_id}_species.response-tip-summary.tsv"
+  species_response_sampling_covariance_tmp="${rsc_work_dir}/${og_id}_species.response-sampling-covariance.tsv"
+  species_predictor_tip_summary_tmp="${rsc_work_dir}/${og_id}_species.predictor-tip-summary.tsv"
+  species_predictor_sampling_covariance_tmp="${rsc_work_dir}/${og_id}_species.predictor-sampling-covariance.tsv"
+  rm -rf -- "${rsc_work_dir}"
+  mkdir -p "${rsc_work_dir}/bundles"
+  : > "${rsc_log_tmp}"
+  : > "${pgls_log_tmp}"
+
+  rsc_preparation_status="not_estimable"
+  rsc_preparation_reason="expression_input_unavailable"
+  rsc_effective_responses=""
+  rsc_response_biological_id=""
+  rsc_response_technical_id=""
+  rsc_response_batch=""
+  rsc_response_standard_error_columns=""
+  rsc_response_sample_size_columns=""
+  if [[ -s "${file_og_expression}" ]]; then
+    rsc_prepare_args=(
+      prepare
+      --expression "${file_og_expression}"
+      --species-traits "${file_sp_trait}"
+      --responses "${rsc_responses}"
+      --predictors "${rsc_predictors}"
+      --predictor-mode "${rsc_predictor_mode}"
+      --replicate-separator "${rsc_replicate_separator}"
+      --within-variance "${rsc_within_variance}"
+      --predictor-biological-id "${rsc_predictor_biological_id}"
+      --predictor-technical-id "${rsc_predictor_technical_id}"
+      --predictor-batch "${rsc_predictor_batch}"
+      --predictor-within-variance "${rsc_predictor_within_variance}"
+      --predictor-standard-error-columns "${rsc_predictor_standard_error_columns}"
+      --predictor-sample-size-columns "${rsc_predictor_sample_size_columns}"
+      --categorical-predictors "${rsc_categorical_predictors}"
+      --ordered-predictors "${rsc_ordered_predictors}"
+      --factor-reference "${rsc_factor_reference}"
+      --expression-output "${rsc_prepared_expression}"
+      --species-traits-output "${rsc_prepared_traits}"
+      --analysis-plan-output "${rsc_analysis_plan}"
+      --metadata-output "${rsc_metadata}"
+    )
+    if [[ -n "${rsc_expression_sample_metadata}" ]]; then
+      rsc_prepare_args+=(--sample-metadata "${rsc_expression_sample_metadata}")
+    fi
+    python "${gg_support_dir}/reconciled_speciation_contrast.py" "${rsc_prepare_args[@]}" \
+      2>&1 | tee -a "${rsc_log_tmp}"
+
+    rsc_preparation_status=$(rsc_read_metadata_value "${rsc_metadata}" status)
+    rsc_preparation_reason=$(rsc_read_metadata_value "${rsc_metadata}" reason)
+    rsc_effective_responses=$(rsc_read_metadata_value "${rsc_metadata}" responses)
+    rsc_response_biological_id=$(rsc_read_metadata_value "${rsc_metadata}" response_biological_id)
+    rsc_response_technical_id=$(rsc_read_metadata_value "${rsc_metadata}" response_technical_id)
+    rsc_response_batch=$(rsc_read_metadata_value "${rsc_metadata}" response_batch)
+    rsc_response_standard_error_columns=$(rsc_read_metadata_value "${rsc_metadata}" standard_error_columns)
+    rsc_response_sample_size_columns=$(rsc_read_metadata_value "${rsc_metadata}" sample_size_columns)
+    rsc_response_sampling_uncertainty=$(rsc_read_metadata_value "${rsc_metadata}" response_sampling_uncertainty)
+    rsc_predictor_sampling_uncertainty=$(rsc_read_metadata_value "${rsc_metadata}" predictor_sampling_uncertainty)
+    if [[ ${pgls_run_rsc} -eq 1 && "${rsc_model}" == "legacy" && ( "${rsc_response_sampling_uncertainty}" == "yes" || "${rsc_predictor_sampling_uncertainty}" == "yes" ) ]]; then
+      echo "rsc_model=legacy cannot use response or predictor sampling uncertainty after input preparation." >&2
+      exit 1
+    fi
+  else
+    echo "Expression-trait PGLS not estimable for ${og_id}: ${rsc_preparation_reason}" | tee -a "${rsc_log_tmp}"
   fi
 
-  Rscript "${gg_support_dir}/species_tree_pgls.r" \
-    --file_sptree="${species_tree_pruned}" \
-    --file_exp="${file_og_expression}" \
-    --file_trait="${file_sp_trait}" \
-    --replicate_sep="_" \
-    --exp_value_type="${exp_value_type}" \
-    --merge_replicates="${pgls_merge_replicates}" \
-    2>&1 | tee pgls.log
+  rsc_not_estimable_reason="${rsc_preparation_reason}"
 
-  mv_out species_tree_PGLS.tsv "${file_og_species_pgls}"
-  mv_out species_tree_PGLS.barplot.pdf "${file_og_species_pgls_plot}"
-  gg_artifact_record "${pgls_species_tree_provenance_args[@]}"
+  if [[ "${rsc_preparation_status}" == "ready" ]]; then
+    rsc_reconcile_args=(
+      reconcile
+      --infile "${rsc_reconciliation_tree}"
+      --species-tree "${species_tree_pruned}"
+      --tree-id "${og_id}"
+      --event-source "${rsc_effective_event_source}"
+      --species-parser "${species_label_parser}"
+      --unmatched "${rsc_unmatched}"
+      --outfile "${rsc_preflight_reconciliation}"
+      --audit "${rsc_preflight_audit}"
+    )
+    if [[ -n "${species_label_regex}" ]]; then
+      rsc_reconcile_args+=(--species-regex "${species_label_regex}")
+    fi
+    if [[ -n "${species_label_map_tsv}" ]]; then
+      rsc_reconcile_args+=(--species-map-tsv "${species_label_map_tsv}")
+    fi
+    nwkit "${rsc_reconcile_args[@]}" 2>&1 | tee -a "${rsc_log_tmp}"
+    if [[ ${pgls_run_rsc} -eq 1 ]]; then
+      python "${gg_support_dir}/reconciled_speciation_contrast.py" inspect-reconciliation \
+        --reconciliation "${rsc_preflight_reconciliation}" \
+        --coverage "${rsc_speciation_coverage}" \
+        --min-species-events "${rsc_min_species_events}" \
+        --output "${rsc_preflight_metadata}" \
+        2>&1 | tee -a "${rsc_log_tmp}"
+      rsc_preflight_status=$(rsc_read_metadata_value "${rsc_preflight_metadata}" status)
+      rsc_preflight_reason=$(rsc_read_metadata_value "${rsc_preflight_metadata}" reason)
+      if [[ -n "${rsc_preflight_reason}" ]]; then
+        if [[ -n "${rsc_not_estimable_reason}" ]]; then
+          rsc_not_estimable_reason+=";${rsc_preflight_reason}"
+        else
+          rsc_not_estimable_reason="${rsc_preflight_reason}"
+        fi
+      fi
+    else
+      rsc_preflight_status="not_requested"
+      rsc_not_estimable_reason="method_not_requested"
+    fi
+  else
+    rsc_preflight_status="not_estimable"
+  fi
+
+  if [[ ${pgls_run_rsc} -eq 0 || "${rsc_preflight_status}" != "ready" ]]; then
+    if [[ -z "${rsc_not_estimable_reason}" ]]; then
+      rsc_not_estimable_reason="rsc_preflight_not_estimable"
+    fi
+    rsc_empty_args=(
+      empty-bundle
+      --output-prefix "${rsc_combined_prefix}"
+      --status-output "${rsc_combined_status}"
+      --audit-output "${rsc_combined_audit}"
+      --tree-id "${og_id}"
+      --reason "${rsc_not_estimable_reason}"
+    )
+    if [[ -s "${rsc_preflight_reconciliation}" ]]; then
+      rsc_empty_args+=(--reconciliation "${rsc_preflight_reconciliation}")
+    fi
+    if [[ -s "${rsc_preflight_audit}" ]]; then
+      rsc_empty_args+=(--source-audit "${rsc_preflight_audit}")
+    fi
+    python "${gg_support_dir}/reconciled_speciation_contrast.py" "${rsc_empty_args[@]}" \
+      2>&1 | tee -a "${rsc_log_tmp}"
+    echo "RSC not estimable for ${og_id}: ${rsc_not_estimable_reason}" | tee -a "${rsc_log_tmp}"
+  else
+    printf 'analysis_id\tprefix\taudit\n' > "${rsc_bundle_list}"
+    while IFS=$'\t' read -r \
+      rsc_analysis_id \
+      rsc_analysis_predictors \
+      rsc_analysis_categorical \
+      rsc_analysis_ordered \
+      rsc_analysis_reference \
+      rsc_analysis_predictor_se \
+      rsc_analysis_predictor_n \
+      rsc_origin_applicable
+    do
+      [[ -n "${rsc_analysis_id}" ]] || continue
+      rsc_analysis_prefix="${rsc_work_dir}/bundles/${rsc_analysis_id}"
+      rsc_analysis_audit="${rsc_analysis_prefix}.audit.jsonl"
+      rsc_pgls_args=(
+        pgls
+        --gene-tree "${rsc_gene_tree}"
+        --reconciliation-tree "${rsc_reconciliation_tree}"
+        --species-tree "${species_tree_pruned}"
+        --expression "${rsc_prepared_expression}"
+        --species-traits "${rsc_prepared_traits}"
+        --responses "${rsc_effective_responses}"
+        --predictors "${rsc_analysis_predictors}"
+        --tree-id "${og_id}"
+        --out-prefix "${rsc_analysis_prefix}"
+        --audit "${rsc_analysis_audit}"
+        --event-source "${rsc_effective_event_source}"
+        --species-parser "${species_label_parser}"
+        --unmatched "${rsc_unmatched}"
+        --gene-branch-length "${rsc_gene_branch_length}"
+        --gene-evolution-model "${rsc_gene_evolution_model}"
+        --species-branch-length "${rsc_species_branch_length}"
+        --species-evolution-model "${rsc_species_evolution_model}"
+        --event-weighting "${rsc_event_weighting}"
+        --speciation-coverage "${rsc_speciation_coverage}"
+        --confidence-level "${rsc_confidence_level}"
+        --model "${rsc_model}"
+        --inference "${rsc_inference}"
+        --bootstrap-replicates "${rsc_bootstrap_replicates}"
+        --seed "${rsc_seed}"
+        --reml "${rsc_reml}"
+        --factor-coding "${rsc_factor_coding}"
+        --categorical-replicate-policy "${rsc_categorical_replicate_policy}"
+        --event-random-effect "${rsc_event_random_effect}"
+        --lineage-random-slope "${rsc_lineage_random_slope}"
+        --lineage-inference "${rsc_lineage_inference}"
+        --lineage-leave-one-out "${rsc_lineage_leave_one_out}"
+        --allow-large-dense "${rsc_allow_large_dense}"
+      )
+      if [[ ! "${rsc_gene_evolution_model}" =~ ^(brownian|independent)$ ]]; then
+        rsc_pgls_args+=(--gene-evolution-parameter "${rsc_gene_evolution_parameter}")
+      fi
+      if [[ ! "${rsc_species_evolution_model}" =~ ^(brownian|independent)$ ]]; then
+        rsc_pgls_args+=(--species-evolution-parameter "${rsc_species_evolution_parameter}")
+      fi
+      if [[ -n "${species_label_regex}" ]]; then
+        rsc_pgls_args+=(--species-regex "${species_label_regex}")
+      fi
+      if [[ -n "${species_label_map_tsv}" ]]; then
+        rsc_pgls_args+=(--species-map-tsv "${species_label_map_tsv}")
+      fi
+      if [[ -n "${rsc_response_biological_id}" ]]; then
+        rsc_pgls_args+=(
+          --biological-id "${rsc_response_biological_id}"
+          --technical-aggregation "${rsc_technical_aggregation}"
+          --within-variance "${rsc_within_variance}"
+        )
+      elif [[ "${rsc_within_variance}" == "known-se" ]]; then
+        rsc_pgls_args+=(--within-variance known-se)
+      fi
+      if [[ -n "${rsc_response_technical_id}" ]]; then
+        rsc_pgls_args+=(--technical-id "${rsc_response_technical_id}")
+      fi
+      if [[ -n "${rsc_response_batch}" ]]; then
+        rsc_pgls_args+=(--batch "${rsc_response_batch}")
+      fi
+      if [[ -n "${rsc_response_standard_error_columns}" ]]; then
+        rsc_pgls_args+=(--standard-error-columns "${rsc_response_standard_error_columns}")
+      fi
+      if [[ -n "${rsc_response_sample_size_columns}" ]]; then
+        rsc_pgls_args+=(--sample-size-columns "${rsc_response_sample_size_columns}")
+      fi
+      if [[ -n "${rsc_predictor_biological_id}" ]]; then
+        rsc_pgls_args+=(
+          --predictor-biological-id "${rsc_predictor_biological_id}"
+          --predictor-technical-aggregation "${rsc_predictor_technical_aggregation}"
+          --predictor-within-variance "${rsc_predictor_within_variance}"
+        )
+      elif [[ "${rsc_predictor_within_variance}" == "known-se" ]]; then
+        rsc_pgls_args+=(--predictor-within-variance known-se)
+      fi
+      if [[ -n "${rsc_predictor_technical_id}" ]]; then
+        rsc_pgls_args+=(--predictor-technical-id "${rsc_predictor_technical_id}")
+      fi
+      if [[ -n "${rsc_predictor_batch}" ]]; then
+        rsc_pgls_args+=(--predictor-batch "${rsc_predictor_batch}")
+      fi
+      if [[ "${rsc_analysis_predictor_se}" != "." ]]; then
+        rsc_pgls_args+=(--predictor-standard-error-columns "${rsc_analysis_predictor_se}")
+      fi
+      if [[ "${rsc_analysis_predictor_n}" != "." ]]; then
+        rsc_pgls_args+=(--predictor-sample-size-columns "${rsc_analysis_predictor_n}")
+      fi
+      if [[ "${rsc_analysis_categorical}" != "." ]]; then
+        rsc_pgls_args+=(--categorical-predictors "${rsc_analysis_categorical}")
+      fi
+      if [[ "${rsc_analysis_ordered}" != "." ]]; then
+        rsc_pgls_args+=(--ordered-predictors "${rsc_analysis_ordered}")
+      fi
+      if [[ "${rsc_analysis_reference}" != "." ]]; then
+        rsc_pgls_args+=(--factor-reference "${rsc_analysis_reference}")
+      fi
+      if [[ "${rsc_origin_applicable}" == "yes" && "${rsc_categorical_origin_diagnostics}" == "stochastic-map" ]]; then
+        rsc_pgls_args+=(
+          --categorical-origin-diagnostics stochastic-map
+          --origin-map-replicates "${rsc_origin_map_replicates}"
+          --origin-map-threads "${rsc_origin_map_threads}"
+          --origin-min-posterior "${rsc_origin_min_posterior}"
+          --origin-leave-one-out "${rsc_origin_leave_one_out}"
+        )
+      else
+        rsc_pgls_args+=(--categorical-origin-diagnostics none)
+      fi
+      if nwkit "${rsc_pgls_args[@]}" 2>&1 | tee -a "${rsc_log_tmp}"; then
+        rsc_analysis_result="ready"
+      else
+        rsc_nwkit_status=${PIPESTATUS[0]}
+        rsc_error_metadata="${rsc_analysis_prefix}.error.tsv"
+        python "${gg_support_dir}/reconciled_speciation_contrast.py" inspect-audit-error \
+          --audit "${rsc_analysis_audit}" \
+          --output "${rsc_error_metadata}"
+        rsc_analysis_result=$(rsc_read_metadata_value "${rsc_error_metadata}" status)
+        rsc_analysis_reason=$(rsc_read_metadata_value "${rsc_error_metadata}" reason)
+        if [[ "${rsc_analysis_result}" != "not_estimable" ]]; then
+          echo "Fatal NWKIT failure in RSC analysis ${rsc_analysis_id}: ${rsc_analysis_reason}" >&2
+          exit "${rsc_nwkit_status}"
+        fi
+        echo "RSC analysis ${rsc_analysis_id} is not estimable: ${rsc_analysis_reason}" | tee -a "${rsc_log_tmp}"
+        python "${gg_support_dir}/reconciled_speciation_contrast.py" empty-bundle \
+          --output-prefix "${rsc_analysis_prefix}" \
+          --status-output "${rsc_analysis_prefix}.status.tsv" \
+          --audit-output "${rsc_analysis_prefix}.empty.audit.jsonl" \
+          --tree-id "${og_id}" \
+          --reason "analysis_not_estimable:${rsc_analysis_reason}"
+      fi
+      printf '%s\t%s\t%s\n' \
+        "${rsc_analysis_id}" \
+        "${rsc_analysis_prefix}" \
+        "${rsc_analysis_audit}" \
+        >> "${rsc_bundle_list}"
+    done < <(tail -n +2 "${rsc_analysis_plan}")
+
+    python "${gg_support_dir}/reconciled_speciation_contrast.py" aggregate \
+      --bundle-list "${rsc_bundle_list}" \
+      --output-prefix "${rsc_combined_prefix}" \
+      --status-output "${rsc_combined_status}" \
+      --audit-output "${rsc_combined_audit}" \
+      --source-audit "${rsc_preflight_audit}" \
+      --tree-id "${og_id}" \
+      --reason "${rsc_preparation_reason}" \
+      2>&1 | tee -a "${rsc_log_tmp}"
+  fi
+
+  species_pgls_args=(
+    --methods "${pgls_methods}"
+    --tree-id "${og_id}"
+    --species-tree "${species_tree_pruned}"
+    --reconciliation "${rsc_preflight_reconciliation}"
+    --expression "${rsc_prepared_expression}"
+    --species-traits "${rsc_prepared_traits}"
+    --analysis-plan "${rsc_analysis_plan}"
+    --metadata "${rsc_metadata}"
+    --aggregation "${species_expression_aggregation}"
+    --expression-value-type "${exp_value_type}"
+    --paralog-missing "${species_paralog_missing}"
+    --within-variance "${rsc_within_variance}"
+    --technical-aggregation "${rsc_technical_aggregation}"
+    --predictor-biological-id "${rsc_predictor_biological_id}"
+    --predictor-technical-id "${rsc_predictor_technical_id}"
+    --predictor-batch "${rsc_predictor_batch}"
+    --predictor-within-variance "${rsc_predictor_within_variance}"
+    --predictor-technical-aggregation "${rsc_predictor_technical_aggregation}"
+    --categorical-replicate-policy "${rsc_categorical_replicate_policy}"
+    --factor-coding "${rsc_factor_coding}"
+    --branch-length "${rsc_species_branch_length}"
+    --response-evolution-model "${rsc_gene_evolution_model}"
+    --response-evolution-parameter "${rsc_gene_evolution_parameter}"
+    --predictor-evolution-model "${rsc_species_evolution_model}"
+    --predictor-evolution-parameter "${rsc_species_evolution_parameter}"
+    --predictor-branch-length "${rsc_species_branch_length}"
+    --inference "${rsc_inference}"
+    --bootstrap-replicates "${rsc_bootstrap_replicates}"
+    --seed "${rsc_seed}"
+    --confidence-level "${rsc_confidence_level}"
+    --reml "${rsc_reml}"
+    --allow-large-dense "${rsc_allow_large_dense}"
+    --rphylopars-sampling-covariance "${rphylopars_sampling_covariance}"
+    --rphylopars-script "${gg_support_dir}/species_tree_rphylopars.R"
+    --rsc-results "${rsc_combined_prefix}.pgls.tsv"
+    --rsc-status "${rsc_combined_status}"
+    --native-out "${species_nwkit_tmp}"
+    --rphylopars-out "${species_rphylopars_tmp}"
+    --comparison-out "${pgls_comparison_tmp}"
+    --status-out "${pgls_method_status_tmp}"
+    --audit-out "${pgls_method_audit_tmp}"
+    --expression-summary-out "${species_expression_summary_tmp}"
+    --expression-audit-out "${species_expression_audit_tmp}"
+    --response-tip-summary-out "${species_response_tip_summary_tmp}"
+    --response-sampling-covariance-out "${species_response_sampling_covariance_tmp}"
+    --predictor-tip-summary-out "${species_predictor_tip_summary_tmp}"
+    --predictor-sampling-covariance-out "${species_predictor_sampling_covariance_tmp}"
+  )
+  if [[ "${rsc_preparation_status}" != "ready" || ! -s "${rsc_preflight_reconciliation}" ]]; then
+    species_pgls_args+=(--empty-reason "${rsc_not_estimable_reason:-expression_trait_inputs_not_estimable}")
+  fi
+  python "${gg_support_dir}/species_tree_pgls.py" "${species_pgls_args[@]}" \
+    2>&1 | tee -a "${pgls_log_tmp}"
+
+  mv_out "${rsc_combined_status}" "${file_og_rsc_status}"
+  mv_out "${rsc_combined_prefix}.pgls.tsv" "${file_og_rsc_pgls}"
+  mv_out "${rsc_combined_prefix}.reconciliation.tsv" "${file_og_rsc_reconciliation}"
+  mv_out "${rsc_combined_prefix}.gene-contrasts.tsv" "${file_og_rsc_gene_contrasts}"
+  mv_out "${rsc_combined_prefix}.species-contrasts.tsv" "${file_og_rsc_species_contrasts}"
+  mv_out "${rsc_combined_prefix}.response-sampling-covariance.tsv" "${file_og_rsc_response_sampling_covariance}"
+  mv_out "${rsc_combined_prefix}.response-tip-summary.tsv" "${file_og_rsc_response_tip_summary}"
+  mv_out "${rsc_combined_prefix}.predictor-sampling-covariance.tsv" "${file_og_rsc_predictor_sampling_covariance}"
+  mv_out "${rsc_combined_prefix}.predictor-tip-summary.tsv" "${file_og_rsc_predictor_tip_summary}"
+  mv_out "${rsc_combined_prefix}.random-effects.tsv" "${file_og_rsc_random_effects}"
+  mv_out "${rsc_combined_prefix}.sensitivity.tsv" "${file_og_rsc_sensitivity}"
+  mv_out "${rsc_combined_prefix}.trait-origins.tsv" "${file_og_rsc_trait_origins}"
+  mv_out "${rsc_combined_audit}" "${file_og_rsc_audit}"
+  mv_out "${rsc_log_tmp}" "${file_og_rsc_log}"
+  mv_out "${species_nwkit_tmp}" "${file_og_species_nwkit_pgls}"
+  mv_out "${species_rphylopars_tmp}" "${file_og_species_rphylopars_pgls}"
+  mv_out "${pgls_comparison_tmp}" "${file_og_pgls_comparison}"
+  mv_out "${pgls_method_status_tmp}" "${file_og_pgls_method_status}"
+  mv_out "${pgls_method_audit_tmp}" "${file_og_pgls_method_audit}"
+  mv_out "${species_expression_summary_tmp}" "${file_og_species_expression_summary}"
+  mv_out "${species_expression_audit_tmp}" "${file_og_species_expression_audit}"
+  mv_out "${species_response_tip_summary_tmp}" "${file_og_species_response_tip_summary}"
+  mv_out "${species_response_sampling_covariance_tmp}" "${file_og_species_response_sampling_covariance}"
+  mv_out "${species_predictor_tip_summary_tmp}" "${file_og_species_predictor_tip_summary}"
+  mv_out "${species_predictor_sampling_covariance_tmp}" "${file_og_species_predictor_sampling_covariance}"
+  mv_out "${pgls_log_tmp}" "${file_og_expression_trait_pgls_log}"
+  nwkit_version_text=$(nwkit --version 2>&1 | tail -n 1 || true)
+  gg_artifact_record \
+    "${rsc_provenance_args[@]}" \
+    --diagnostic "nwkit_version=${nwkit_version_text:-unknown}" \
+    --diagnostic "rphylopars_version=recorded_in_method_status"
+  rm -rf -- "${rsc_work_dir}"
 else
   gg_step_skip "${task}"
 fi
@@ -5003,7 +5893,10 @@ summary_input_files=(
   "${file_og_scm_intron_summary}"
   "${file_og_csubst_b}"
   "${file_og_gene_pgls}"
-  "${file_og_species_pgls}"
+  "${file_og_pgls_comparison}"
+  "${file_og_pgls_method_status}"
+  "${file_og_rsc_status}"
+  "${file_og_rsc_pgls}"
   "${file_og_rpsblast}"
   "${file_og_uniprot_annotation}"
   "${file_og_cdskit_localize}"
@@ -5206,7 +6099,10 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
     --scm_intron "${file_og_scm_intron_summary}" \
     --csubst_b "${file_og_csubst_b}" \
     --gene_pgls_stats "${file_og_gene_pgls}" \
-    --species_pgls_stats "${file_og_species_pgls}" \
+    --pgls_comparison "${file_og_pgls_comparison}" \
+    --pgls_method_status "${file_og_pgls_method_status}" \
+    --rsc_status "${file_og_rsc_status}" \
+    --rsc_pgls "${file_og_rsc_pgls}" \
     --rpsblast "${file_og_rpsblast}" \
     --uniprot "${file_og_uniprot_annotation}" \
     --cdskit_localize "${file_og_cdskit_localize}" \

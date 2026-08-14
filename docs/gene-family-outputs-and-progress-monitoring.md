@@ -41,6 +41,57 @@ typically written under `workspace/output/query2family/` as:
 - `stat_tree/2_WOX_stat.tree.tsv`
 - `tree_plot/2_WOX_tree_plot.pdf`
 
+When `run_expression_trait_pgls=1`, the same family receives the methods named
+by `pgls_methods` plus common comparison and audit files. RSC members are:
+
+- `rsc_status/2_WOX_rsc.status.tsv`: `ok` or `not_estimable`, with the reason
+  and counts used for screening,
+- `rsc_pgls/2_WOX_rsc.pgls.tsv`: coefficients, uncertainty, inference status,
+  evolutionary-model parameters, and event counts,
+- `rsc_reconciliation/`, `rsc_gene_contrasts/`, and
+  `rsc_species_contrasts/`: the event mapping and both sides of the contrast,
+- `rsc_response_*` and `rsc_predictor_*`: replicate summaries and propagated
+  sampling covariance,
+- `rsc_random_effects/`, `rsc_sensitivity/`, and `rsc_trait_origins/`:
+  hierarchical effects and optional lineage/origin diagnostics,
+- `rsc_audit/` and `rsc_log/`: NWKIT provenance and execution diagnostics.
+
+Species-tree comparison members are:
+
+- `pgls_species_nwkit/`: NWKIT ordinary PGLS after within-sample paralog
+  aggregation,
+- `pgls_species_rphylopars/`: the matched Rphylopars comparator; unsupported
+  categorical or covariance combinations remain header-only and are explained
+  in the status table,
+- `pgls_comparison/`: long-form coefficient rows from RSC and both species
+  methods, with `analysis_method`, `aggregation`, `estimand`, and explicit
+  comparability notes,
+- `pgls_method_status/` and `pgls_method_audit/`: one place to distinguish
+  successful, non-estimable, and unrequested methods and to record engine
+  versions,
+- `pgls_species_expression_summary/` and
+  `pgls_species_expression_audit/`: the actual species/sample expression used,
+  paralog coverage, and aggregation rule,
+- `pgls_species_response_*` and `pgls_species_predictor_*`: species-tip
+  replicate summaries and propagated sampling covariance.
+
+Every combined bundle table carries `analysis_id`, so predictor-specific
+shape-parameter estimates, contrasts, and sampling covariances remain
+distinguishable when predictors are screened separately.
+
+All members are written even when a family is not estimable; optional tables
+then contain headers only. This makes family completion and ZIP-backed storage
+unambiguous. `stat_tree/*.tsv` includes the family status and best overall RSC
+summary plus namespaced per-response/per-term fields, all beginning with
+`rsc_`. It also includes bounded `pgls_species_nwkit_*` and
+`pgls_species_rphylopars_*` status/best-row fields. To keep `stat_tree` bounded
+for large screens, it contains counts and
+fields from the best usable (successfully converged) row only, under
+`rsc_best_*`; it does not flatten every RSC result row into a new group of
+columns. The full `rsc_pgls` table remains the authoritative result when
+several responses or predictors were fitted. Rows with failed inference or
+failed optimizers cannot become the reported best row.
+
 In `mode_gene_evolution=orthogroup`, the same style of per-family outputs is
 written under `workspace/output/orthogroup/`.
 

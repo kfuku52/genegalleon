@@ -2169,7 +2169,8 @@ def test_gene_evolution_core_quotes_trait_promoter_and_summary_path_options():
         '--scm_intron "${file_og_scm_intron_summary}"',
         '--csubst_b "${file_og_csubst_b}"',
         '--gene_pgls_stats "${file_og_gene_pgls}"',
-        '--species_pgls_stats "${file_og_species_pgls}"',
+        '--pgls_comparison "${file_og_pgls_comparison}"',
+        '--pgls_method_status "${file_og_pgls_method_status}"',
         '--rpsblast "${file_og_rpsblast}"',
         '--uniprot "${file_og_uniprot_annotation}"',
         '--cdskit_localize "${file_og_cdskit_localize}"',
@@ -2940,34 +2941,34 @@ def test_container_ghcr_builds_arm64_on_native_runner_without_qemu():
     assert "docker/setup-qemu-action" not in build_block
 
 
-def test_container_ghcr_builds_validated_kfuku52_source_revisions():
+def test_container_ghcr_resolves_moving_source_branches_once_per_build():
     workflow = _read_text(GITHUB_WORKFLOWS_DIR / "container-ghcr.yml")
 
-    pin_names = {
-        "amalgkit": "AMALGKIT",
-        "cdskit": "CDSKIT",
-        "csubst": "CSUBST",
-        "nwkit": "NWKIT",
-        "kfl1ou": "KFL1OU",
-        "kftools": "KFTOOLS",
-        "rkftools": "RKFTOOLS",
-        "radte": "RADTE",
-    }
-    for output_name, pin_name in pin_names.items():
+    source_names = (
+        "amalgkit",
+        "cdskit",
+        "csubst",
+        "nwkit",
+        "busco",
+        "paml",
+        "kfl1ou",
+        "kftools",
+        "rkftools",
+        "radte",
+    )
+    for output_name in source_names:
         assert f"{output_name}_repo_sha: ${{{{ steps.vars.outputs.{output_name}_repo_sha }}}}" in workflow
-        assert f'{output_name}_repo_sha="${{GG_PIN_{pin_name}_REPO_SHA}}"' in workflow
 
-    assert "source container/source_pins.env" in workflow
-    assert 'f"/repos/kfuku52/{upstream_repo}/commits"' not in workflow
-    assert "KFU52_REPO_REF=master" in workflow
-    assert "KFU52_AMALGKIT_REPO_REF=master" in workflow
-    assert "KFU52_CSUBST_REPO_REF=master" in workflow
-    assert "KFL1OU_REPO_REF=main" in workflow
+    assert "source container/source_branches.env" in workflow
+    assert "container/scripts/resolve_git_branch_sha.sh" in workflow
+    assert "GG_PIN_" not in workflow
     for build_arg, output_name in (
         ("KFU52_AMALGKIT_REPO_SHA", "amalgkit_repo_sha"),
         ("KFU52_CDSKIT_REPO_SHA", "cdskit_repo_sha"),
         ("KFU52_CSUBST_REPO_SHA", "csubst_repo_sha"),
         ("KFU52_NWKIT_REPO_SHA", "nwkit_repo_sha"),
+        ("BUSCO_REPO_SHA", "busco_repo_sha"),
+        ("PAML_REPO_SHA", "paml_repo_sha"),
         ("KFL1OU_REPO_SHA", "kfl1ou_repo_sha"),
         ("KFTOOLS_REPO_SHA", "kftools_repo_sha"),
         ("RKFTOOLS_REPO_SHA", "rkftools_repo_sha"),
@@ -2988,8 +2989,8 @@ def test_release_sif_builds_platforms_concurrently_on_native_runners():
     assert "docker/setup-qemu-action" not in workflow
     assert "scope=container-${{ steps.platform.outputs.pair }}" in build_block
     assert "push-by-digest=true" in build_block
-    assert 'kfl1ou_repo_sha="${GG_PIN_KFL1OU_REPO_SHA}"' in workflow
-    assert "KFL1OU_REPO_REF=main" in workflow
+    assert "source container/source_branches.env" in workflow
+    assert "GG_PIN_" not in workflow
 
 
 def test_local_buildx_skips_an_unchanged_loaded_image_by_fingerprint():
@@ -3085,6 +3086,19 @@ def test_gene_evolution_core_tree_pruning_uses_awk_id_match_instead_of_python_sp
     assert "keep_seq = (id in keep)" in text
     assert '\' target_genes.txt "${og_id}.untrimmed.input.fasta" > "${og_id}.untrimmed.pruned.tmp.fasta"' in text
     assert '\' target_genes.txt "${og_id}.trimmed.input.fasta" > "${og_id}.trimmed.pruned.tmp.fasta"' in text
+
+
+def test_gene_evolution_rooted_pruning_preserves_reconciliation_properties():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    pruning_start = text.index('task="Tree pruning"')
+    rooted_start = text.index('if [[ -s "${file_og_rooted_tree_analysis}" ]]; then', pruning_start)
+    rooted_end = text.index('if [[ -s "${file_og_dated_tree_analysis}" ]]; then', rooted_start)
+    rooted_block = text[rooted_start:rooted_end]
+
+    assert "--preserve-properties yes" in rooted_block
+    assert "nwkit drop --target root --length yes --preserve-properties yes" in rooted_block
+    assert "nwkit sanitize --remove-singleton yes --resolve-polytomy no --preserve-properties yes" in rooted_block
 
 
 def test_gg_util_python_package_check_uses_importlib_with_argv():
@@ -3629,3 +3643,50 @@ def test_genome_evolution_core_does_not_generate_unused_partitions_txt():
     ]
     for token in banned_tokens:
         assert token not in text
+
+
+def test_gene_evolution_wires_matched_expression_trait_pgls_through_stat_tree():
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_gene_evolution_entrypoint.sh")
+    config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+    statistics = _read_text(WORKFLOW_DIR / "support" / "orthogroup_statistics.py")
+
+    assert "run_expression_trait_pgls=0 # Unified expression ~ species-trait analysis" in entrypoint
+    assert 'pgls_methods="rsc"' in entrypoint
+    assert 'species_expression_aggregation="sum"' in entrypoint
+    assert "run_expression_trait_pgls" in config_vars
+    assert "pgls_methods" in config_vars
+    assert "species_expression_aggregation" in config_vars
+    assert "rsc_categorical_replicate_policy" in config_vars
+    assert "rsc_allow_large_dense" in config_vars
+    assert 'task="Expression-trait phylogenetic regression"' in core
+    assert 'task="Gene tree E-PGLS analysis"' not in core
+    assert 'gg_artifact_prepare_stage rsc_needs_update run_expression_trait_pgls "${rsc_provenance_args[@]}"' in core
+    assert 'nwkit "${rsc_reconcile_args[@]}"' in core
+    assert 'nwkit "${rsc_pgls_args[@]}"' in core
+    assert '--allow-large-dense "${rsc_allow_large_dense}"' in core
+    assert '--parameter "expression_input=unavailable"' in core
+    assert "requires the gene-expression matrix" not in core
+    assert 'inspect-audit-error' in core
+    assert '--output "status=${file_og_rsc_status}"' in core
+    assert '--output "pgls=${file_og_rsc_pgls}"' in core
+    assert '--output "reconciliation=${file_og_rsc_reconciliation}"' in core
+    assert '--output "response_sampling_covariance=${file_og_rsc_response_sampling_covariance}"' in core
+    assert '--output "predictor_sampling_covariance=${file_og_rsc_predictor_sampling_covariance}"' in core
+    assert '--output "species_nwkit=${file_og_species_nwkit_pgls}"' in core
+    assert '--output "species_rphylopars=${file_og_species_rphylopars_pgls}"' in core
+    assert '--output "comparison=${file_og_pgls_comparison}"' in core
+    assert 'python "${gg_support_dir}/species_tree_pgls.py" "${species_pgls_args[@]}"' in core
+    assert '--rphylopars-script "${gg_support_dir}/species_tree_rphylopars.R"' in core
+    assert '--rsc_status "${file_og_rsc_status}"' in core
+    assert '--rsc_pgls "${file_og_rsc_pgls}"' in core
+    assert '--pgls_comparison "${file_og_pgls_comparison}"' in core
+    assert '--pgls_method_status "${file_og_pgls_method_status}"' in core
+    assert 'task="Species tree PGLS analysis"' not in core
+    assert "species_tree_pgls.r" not in core
+    assert 'parser.add_argument("--rsc_pgls"' in statistics
+    assert 'parser.add_argument("--rsc_status"' in statistics
+    assert '"--pgls_comparison",' in statistics
+    assert '"--pgls_method_status",' in statistics
+    assert "summarize_rsc_for_stat_tree" in statistics
+    assert "summarize_species_pgls_for_stat_tree" in statistics

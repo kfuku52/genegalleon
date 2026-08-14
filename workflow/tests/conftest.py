@@ -21,6 +21,7 @@ INTEGRATION_WORKFLOW_FILES = {
 }
 RUNTIME_FILES = {
     "test_csubst_scan_runtime_integration.py",
+    "test_rsc_runtime_integration.py",
 }
 SMOKE_NODE_IDS = {
     "workflow/tests/test_busco_hmmsearch_wrapper.py::test_busco_output_exists_uses_canonical_path_without_directory_rescan",

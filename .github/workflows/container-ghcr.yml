@@ -167,6 +167,8 @@ jobs:
       cdskit_repo_sha: ${{ steps.vars.outputs.cdskit_repo_sha }}
       csubst_repo_sha: ${{ steps.vars.outputs.csubst_repo_sha }}
       nwkit_repo_sha: ${{ steps.vars.outputs.nwkit_repo_sha }}
+      busco_repo_sha: ${{ steps.vars.outputs.busco_repo_sha }}
+      paml_repo_sha: ${{ steps.vars.outputs.paml_repo_sha }}
       kfl1ou_repo_sha: ${{ steps.vars.outputs.kfl1ou_repo_sha }}
       kftools_repo_sha: ${{ steps.vars.outputs.kftools_repo_sha }}
       rkftools_repo_sha: ${{ steps.vars.outputs.rkftools_repo_sha }}
@@ -195,21 +197,28 @@ jobs:
           build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           gg_version="$(sed -n '1p' VERSION | tr -d '\r')"
 
-          source container/source_pins.env
-          amalgkit_repo_sha="${GG_PIN_AMALGKIT_REPO_SHA}"
-          cdskit_repo_sha="${GG_PIN_CDSKIT_REPO_SHA}"
-          csubst_repo_sha="${GG_PIN_CSUBST_REPO_SHA}"
-          nwkit_repo_sha="${GG_PIN_NWKIT_REPO_SHA}"
-          kfl1ou_repo_sha="${GG_PIN_KFL1OU_REPO_SHA}"
-          kftools_repo_sha="${GG_PIN_KFTOOLS_REPO_SHA}"
-          rkftools_repo_sha="${GG_PIN_RKFTOOLS_REPO_SHA}"
-          radte_repo_sha="${GG_PIN_RADTE_REPO_SHA}"
+          source container/source_branches.env
+          resolve_source_sha() {
+            bash container/scripts/resolve_git_branch_sha.sh "$1" "$2"
+          }
+          amalgkit_repo_sha="$(resolve_source_sha https://github.com/kfuku52/amalgkit.git "${GG_SOURCE_AMALGKIT_REPO_REF}")"
+          cdskit_repo_sha="$(resolve_source_sha https://github.com/kfuku52/cdskit.git "${GG_SOURCE_CDSKIT_REPO_REF}")"
+          csubst_repo_sha="$(resolve_source_sha https://github.com/kfuku52/csubst.git "${GG_SOURCE_CSUBST_REPO_REF}")"
+          nwkit_repo_sha="$(resolve_source_sha https://github.com/kfuku52/nwkit.git "${GG_SOURCE_NWKIT_REPO_REF}")"
+          busco_repo_sha="$(resolve_source_sha https://gitlab.com/ezlab/busco.git "${GG_SOURCE_BUSCO_REPO_REF}")"
+          paml_repo_sha="$(resolve_source_sha https://github.com/iqtree/paml.git "${GG_SOURCE_PAML_REPO_REF}")"
+          kfl1ou_repo_sha="$(resolve_source_sha https://github.com/kfuku52/kfl1ou.git "${GG_SOURCE_KFL1OU_REPO_REF}")"
+          kftools_repo_sha="$(resolve_source_sha https://github.com/kfuku52/kftools.git "${GG_SOURCE_KFTOOLS_REPO_REF}")"
+          rkftools_repo_sha="$(resolve_source_sha https://github.com/kfuku52/rkftools.git "${GG_SOURCE_RKFTOOLS_REPO_REF}")"
+          radte_repo_sha="$(resolve_source_sha https://github.com/kfuku52/RADTE.git "${GG_SOURCE_RADTE_REPO_REF}")"
           source_revision_hash="$(
             printf '%s\n' \
               "${amalgkit_repo_sha}" \
               "${cdskit_repo_sha}" \
               "${csubst_repo_sha}" \
               "${nwkit_repo_sha}" \
+              "${busco_repo_sha}" \
+              "${paml_repo_sha}" \
               "${kfl1ou_repo_sha}" \
               "${kftools_repo_sha}" \
               "${rkftools_repo_sha}" \
@@ -228,6 +237,8 @@ jobs:
             echo "cdskit_repo_sha=${cdskit_repo_sha}"
             echo "csubst_repo_sha=${csubst_repo_sha}"
             echo "nwkit_repo_sha=${nwkit_repo_sha}"
+            echo "busco_repo_sha=${busco_repo_sha}"
+            echo "paml_repo_sha=${paml_repo_sha}"
             echo "kfl1ou_repo_sha=${kfl1ou_repo_sha}"
             echo "kftools_repo_sha=${kftools_repo_sha}"
             echo "rkftools_repo_sha=${rkftools_repo_sha}"
@@ -277,6 +288,8 @@ jobs:
           KFU52_CDSKIT_REPO_SHA: ${{ needs.prepare-build.outputs.cdskit_repo_sha }}
           KFU52_CSUBST_REPO_SHA: ${{ needs.prepare-build.outputs.csubst_repo_sha }}
           KFU52_NWKIT_REPO_SHA: ${{ needs.prepare-build.outputs.nwkit_repo_sha }}
+          BUSCO_REPO_SHA: ${{ needs.prepare-build.outputs.busco_repo_sha }}
+          PAML_REPO_SHA: ${{ needs.prepare-build.outputs.paml_repo_sha }}
           KFL1OU_REPO_SHA: ${{ needs.prepare-build.outputs.kfl1ou_repo_sha }}
           KFTOOLS_REPO_SHA: ${{ needs.prepare-build.outputs.kftools_repo_sha }}
           RKFTOOLS_REPO_SHA: ${{ needs.prepare-build.outputs.rkftools_repo_sha }}
@@ -310,10 +323,16 @@ jobs:
             KFU52_REPO_REF=master
             KFU52_AMALGKIT_REPO_REF=master
             KFU52_AMALGKIT_REPO_SHA=${{ needs.prepare-build.outputs.amalgkit_repo_sha }}
+            KFU52_CDSKIT_REPO_REF=master
             KFU52_CDSKIT_REPO_SHA=${{ needs.prepare-build.outputs.cdskit_repo_sha }}
             KFU52_CSUBST_REPO_REF=master
             KFU52_CSUBST_REPO_SHA=${{ needs.prepare-build.outputs.csubst_repo_sha }}
+            KFU52_NWKIT_REPO_REF=master
             KFU52_NWKIT_REPO_SHA=${{ needs.prepare-build.outputs.nwkit_repo_sha }}
+            BUSCO_REPO_REF=master
+            BUSCO_REPO_SHA=${{ needs.prepare-build.outputs.busco_repo_sha }}
+            PAML_REPO_REF=master
+            PAML_REPO_SHA=${{ needs.prepare-build.outputs.paml_repo_sha }}
             KFL1OU_REPO_REF=main
             KFL1OU_REPO_SHA=${{ needs.prepare-build.outputs.kfl1ou_repo_sha }}
             KFTOOLS_REPO_SHA=${{ needs.prepare-build.outputs.kftools_repo_sha }}

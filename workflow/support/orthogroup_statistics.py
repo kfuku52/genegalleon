@@ -21,7 +21,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from reconciled_speciation_contrast import summarize_for_stat_tree as summarize_rsc_for_stat_tree
 from species_labeling import extract_species_label, scientific_name_from_label, strip_species_label
+from species_tree_pgls import summarize_for_stat_tree as summarize_species_pgls_for_stat_tree
 
 
 def new_tree(newick_or_path, format=1, quoted_node_names=False):
@@ -163,8 +165,17 @@ def build_arg_parser():
     parser.add_argument(
         "--gene_pgls_stats", metavar="PATH", default="", type=str, help="Path used by --gene_pgls_stats."
     )
+    parser.add_argument("--rsc_pgls", metavar="PATH", default="", type=str, help="Reconciled PGLS result table.")
+    parser.add_argument("--rsc_status", metavar="PATH", default="", type=str, help="Reconciled PGLS family status.")
     parser.add_argument(
-        "--species_pgls_stats", metavar="PATH", default="", type=str, help="Path used by --species_pgls_stats."
+        "--pgls_comparison",
+        metavar="PATH",
+        default="",
+        type=str,
+        help="Matched RSC/species-tree PGLS comparison table.",
+    )
+    parser.add_argument(
+        "--pgls_method_status", metavar="PATH", default="", type=str, help="Species-tree PGLS method status table."
     )
 
     parser.add_argument(
@@ -1561,13 +1572,10 @@ def main():
                 ["trait", "variable"] + [col for col in df_tmp.columns if col not in ["trait", "variable"]],
             ]
             tree_info.update(flatten_trait_variable_stats(df_tmp, "pgls_geneTree_"))
-    if os.path.exists(params["species_pgls_stats"]):
-        df_tmp = pandas.read_csv(params["species_pgls_stats"], sep="\t", header=0, index_col=None, low_memory=False)
-        df_tmp = df_tmp.loc[
-            ~df_tmp.isna().all(axis=1),
-            ["trait", "variable"] + [col for col in df_tmp.columns if col not in ["trait", "variable"]],
-        ]
-        tree_info.update(flatten_trait_variable_stats(df_tmp, "pgls_speciesTree_"))
+    if os.path.exists(params["rsc_status"]) or os.path.exists(params["rsc_pgls"]):
+        tree_info.update(summarize_rsc_for_stat_tree(params["rsc_pgls"], params["rsc_status"]))
+    if os.path.exists(params["pgls_method_status"]) or os.path.exists(params["pgls_comparison"]):
+        tree_info.update(summarize_species_pgls_for_stat_tree(params["pgls_comparison"], params["pgls_method_status"]))
     if all([os.path.exists(params[key]) for key in ["hyphy_relax_json"]]):
         if hyphy_relax_json_data is None:
             with open(params["hyphy_relax_json"], "r") as json_file:

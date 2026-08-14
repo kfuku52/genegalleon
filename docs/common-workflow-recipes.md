@@ -220,7 +220,105 @@ Use this mode when you want to start from hand-picked genes or families rather t
 For concrete query-file examples and the resulting per-family output layout, see
 [Gene-Family Outputs and Progress Monitoring](gene-family-outputs-and-progress-monitoring.md).
 
-## 7. Run gene-family analyses in orthogroup mode
+## 7. Run matched RSC and species-tree PGLS
+
+RSC tests whether species traits predict gene-expression contrasts while
+reconciling paralogous gene-tree events with the species tree. Prepare
+`workspace/input/species_expression`,
+`workspace/input/species_trait/species_trait.tsv`, and the upstream species
+tree, then enable expression generation, matched tree pruning, dating, and the
+unified expression-trait stage:
+
+```bash
+cd workflow
+GG_GENE_EVOLUTION_RUN_GENERATE_EXPRESSION_MATRIX=1 \
+GG_GENE_EVOLUTION_RUN_TREE_PRUNING=1 \
+GG_GENE_EVOLUTION_RUN_TREE_DATING=1 \
+GG_GENE_EVOLUTION_RUN_EXPRESSION_TRAIT_PGLS=1 \
+GG_GENE_EVOLUTION_PGLS_METHODS=rsc,species-nwkit,species-rphylopars \
+bash gg_gene_evolution_entrypoint.sh
+```
+
+`pgls_methods` accepts `rsc`, `species-nwkit`, `species-rphylopars`, any
+comma-separated subset, or `all`. `rsc` is the default. All selected methods
+use one prepared input and the same direction, `expression ~ species trait`.
+The estimands nevertheless differ: RSC models reconciled gene-lineage changes,
+whereas both species-tree methods model one expression value per species after
+within-biological-sample paralog aggregation. They are complementary analyses,
+not interchangeable likelihood implementations.
+
+The default response set and predictor set are both `all`; predictors are fit
+separately by default. A parameterized covariance-model example is:
+
+```bash
+GG_GENE_EVOLUTION_RUN_EXPRESSION_TRAIT_PGLS=1 \
+GG_GENE_EVOLUTION_PGLS_METHODS=all \
+GG_GENE_EVOLUTION_RSC_RESPONSES=root,leaf \
+GG_GENE_EVOLUTION_RSC_PREDICTORS=habitat,body_size \
+GG_GENE_EVOLUTION_RSC_GENE_EVOLUTION_MODEL=lambda \
+GG_GENE_EVOLUTION_RSC_GENE_EVOLUTION_PARAMETER=auto \
+GG_GENE_EVOLUTION_RSC_SPECIES_EVOLUTION_MODEL=lambda \
+GG_GENE_EVOLUTION_RSC_SPECIES_EVOLUTION_PARAMETER=auto \
+bash gg_gene_evolution_entrypoint.sh
+```
+
+For species-tree PGLS, `species_expression_aggregation` selects `sum`, `mean`,
+`max`, or `all`. Aggregation occurs separately within each biological sample,
+before replicate uncertainty is estimated, and on the linear expression scale;
+the result is transformed back according to `exp_value_type`. Thus paralogs
+are never misclassified as biological replicates. The default
+`species_paralog_missing=error` also prevents a partly measured paralog set
+from silently changing the species-level estimand.
+
+`auto` estimates the shape parameter for lambda, OU, kappa, delta, EB, and
+ACDC models. Brownian and independent models have no shape parameter, so their
+default `auto` setting means that no shape-parameter argument is supplied.
+With the default original branch-length modes, both dated trees must exist;
+use `rsc_gene_branch_length=unit` or `rsc_species_branch_length=unit` only as an
+explicit alternative.
+
+GeneGalleon's RSC responses are continuous expression values, so
+`rsc_inference` accepts `wald` or `parametric-bootstrap`. Likelihood-ratio and
+profile-likelihood options used by other NWKIT response families are not valid
+for this integration. Bootstrap inference requires at least two replicates.
+The `legacy` model cannot propagate response/predictor sampling uncertainty or
+automatically estimate a parameterized gene-evolution transform; use
+`hierarchical` or `replicate-reml` for those combinations.
+
+NWKIT normally protects large jobs from accidental dense-matrix allocation.
+Set `rsc_allow_large_dense=yes` only when the normal sparse/structured route is
+unavailable and the host has enough memory; this asks NWKIT to attempt the
+allocation rather than guaranteeing that it will fit.
+
+The RSC result is under `rsc_pgls/`, and the species comparators are under
+`pgls_species_nwkit/` and `pgls_species_rphylopars/`. The long-form
+`pgls_comparison/` table places their coefficient rows together while retaining
+the method and aggregation. It explicitly labels species-tip estimates as not
+directly comparable to the RSC event-level estimand. `pgls_method_status/` and
+`pgls_method_audit/` report requested, non-estimable, and successful methods
+without silently changing models.
+
+Rphylopars receives the same species means and available diagonal sampling
+variances as NWKIT. It does not support categorical predictors in this
+comparator, separate response/predictor evolutionary transformations, or full
+cross-species sampling covariance. Such fits are recorded as `not_estimable`;
+`rphylopars_sampling_covariance=diagonalize` is an explicit opt-in to discard
+off-diagonal sampling covariance. Coefficients can then be compared, but
+log-likelihood, AIC, BIC, optimizer reporting, and parameter counting remain
+engine-specific.
+
+The RSC family-level outcome is under
+`rsc_status/`, and the full reconciliation/contrast/replicate audit is spread
+across the other `rsc_*` directories. The summary step also writes compact
+`rsc_*` and bounded `pgls_species_*` columns into `stat_tree/`. See [Input Conventions](input-conventions.md)
+for biological/technical replicate and categorical-predictor metadata.
+If a family has no expression rows, it receives a complete header-only RSC
+bundle and `not_estimable` status instead of aborting the array. A statistical
+`ValueError` confined to one predictor analysis is likewise recorded in its
+NWKIT audit and the remaining predictor analyses continue; non-statistical
+failures remain fatal.
+
+## 8. Run gene-family analyses in orthogroup mode
 
 This mode depends on prior orthogroup selection output from `gg_genome_evolution_entrypoint.sh`.
 
@@ -238,7 +336,7 @@ Important note:
 - scoped environment variables are intended for one-off runs; edit the top
   config block when the mode is part of the persistent project configuration.
 
-## 8. Build the orthogroup SQLite database
+## 9. Build the orthogroup SQLite database
 
 After orthogroup-mode downstream outputs exist:
 
@@ -294,7 +392,7 @@ GG_GENE_SUMMARY_RUN_CSUBST_SCAN_AA_CHANGE_SUMMARY=1 \
 bash gg_gene_summary_entrypoint.sh
 ```
 
-## 9. Run site-level convergence analysis
+## 10. Run site-level convergence analysis
 
 After orthogroup outputs and the database are available:
 
@@ -318,7 +416,7 @@ Main output root:
 The same post-analysis can be run for either gene-family mode by setting
 `gene_family_source` and `run_csubst_site_convergence_summary=1`.
 
-## 10. Generate gene-family summary figures
+## 11. Generate gene-family summary figures
 
 To combine query2family outputs into a species-tree presence/absence summary:
 
@@ -360,7 +458,7 @@ files with `presence_absence_species_tree`, `presence_absence_species_tree_ci`,
 `presence_absence_species_tree_support`, or `presence_absence_busco_table` when needed.
 See [Example Plots](example-plots.md) for a compact generated figure.
 
-## 11. Generate summary TSVs
+## 12. Generate summary TSVs
 
 To create summary tables for completed transcriptome, orthogroup, or
 query2family runs:
@@ -386,7 +484,7 @@ Current scope:
 - transcriptome summary is generated when
   `workspace/output/transcriptome_assembly` exists.
 
-## 12. Full end-to-end order
+## 13. Full end-to-end order
 
 Not every project needs every step, but the common broad order is:
 
@@ -403,7 +501,7 @@ Not every project needs every step, but the common broad order is:
 9. optionally run `gg_gene_summary_entrypoint.sh`
 10. optionally run `gg_progress_summary_entrypoint.sh`
 
-## 13. Dry-run and debug the full wrapper chain
+## 14. Dry-run and debug the full wrapper chain
 
 For a dependency-aware wrapper sanity check:
 

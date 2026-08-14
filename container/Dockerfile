@@ -108,17 +108,20 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && /opt/pg/scripts/ensure_generax_stable.sh base
 
 ARG PAML_REPO_URL="https://github.com/iqtree/paml.git"
-ARG PAML_REPO_REF="master"
-ARG PAML_REPO_SHA="8daeead6b55523f375d9ac56dcfac38373ef8a2e"
+ARG PAML_REPO_REF=""
+ARG PAML_REPO_SHA=""
 
+COPY container/source_branches.env /opt/pg/source_branches.env
 COPY container/scripts/ensure_iq2mc_toolchain.sh /opt/pg/scripts/ensure_iq2mc_toolchain.sh
 COPY container/scripts/download_url.sh /opt/pg/scripts/download_url.sh
 COPY container/scripts/verify_sha256.sh /opt/pg/scripts/verify_sha256.sh
 COPY container/scripts/fetch_git_repo.sh /opt/pg/scripts/fetch_git_repo.sh
 
 RUN chmod +x /opt/pg/scripts/*.sh \
+ && source /opt/pg/source_branches.env \
+ && paml_repo_ref="${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}" \
  && PAML_REPO_URL="${PAML_REPO_URL}" \
-    PAML_REPO_REF="${PAML_REPO_REF}" \
+    PAML_REPO_REF="${paml_repo_ref}" \
     PAML_REPO_SHA="${PAML_REPO_SHA}" \
     /opt/pg/scripts/ensure_iq2mc_toolchain.sh base
 
@@ -161,21 +164,23 @@ RUN mkdir -p /home /usr/local/db/Pfam_LE /usr/local/db/jaspar /opt/pg/logs /opt/
 # Declare mutable source inputs only immediately before their install layer.
 # BuildKit includes in-scope ARGs in RUN cache keys even when a command does
 # not reference them, so early declarations would invalidate the conda layer.
-ARG KFU52_REPO_REF="master"
+ARG KFU52_REPO_REF=""
 ARG KFU52_AMALGKIT_AUTO_SELECT_REF="0"
 ARG KFU52_AMALGKIT_BRANCH_CANDIDATES="master,kfdevel,devel"
-ARG KFU52_AMALGKIT_REPO_REF="master"
+ARG KFU52_AMALGKIT_REPO_REF=""
 ARG KFU52_AMALGKIT_REPO_SHA=""
+ARG KFU52_CDSKIT_REPO_REF=""
 ARG KFU52_CDSKIT_REPO_SHA=""
-ARG KFU52_CSUBST_REPO_REF="master"
+ARG KFU52_CSUBST_REPO_REF=""
 ARG KFU52_CSUBST_REPO_SHA=""
+ARG KFU52_NWKIT_REPO_REF=""
 ARG KFU52_NWKIT_REPO_SHA=""
 ARG BUSCO_REPO_URL="https://gitlab.com/ezlab/busco.git"
 ARG BUSCO_MIRROR_REPO_URL=""
-ARG BUSCO_REPO_REF="6.0.0"
-ARG BUSCO_REPO_SHA="6278721a1916f6da310e03ec9674099028c927a4"
+ARG BUSCO_REPO_REF=""
+ARG BUSCO_REPO_SHA=""
 ARG KFL1OU_REPO_URL="https://github.com/kfuku52/kfl1ou.git"
-ARG KFL1OU_REPO_REF="main"
+ARG KFL1OU_REPO_REF=""
 ARG KFL1OU_REPO_SHA=""
 ARG KFTOOLS_REPO_URL="https://github.com/kfuku52/kftools.git"
 ARG RKFTOOLS_REPO_URL="https://github.com/kfuku52/rkftools.git"
@@ -187,7 +192,6 @@ ARG KFTOOLS_REPO_SHA=""
 ARG RKFTOOLS_REPO_SHA=""
 ARG RADTE_REPO_SHA=""
 
-COPY container/source_pins.env /opt/pg/source_pins.env
 COPY container/scripts/ensure_kfuku52_tools_latest.sh /opt/pg/scripts/ensure_kfuku52_tools_latest.sh
 COPY container/scripts/install_helvetica_compat_font.sh /opt/pg/scripts/install_helvetica_compat_font.sh
 
@@ -196,38 +200,47 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  --mount=type=cache,target=/root/.cache/pip \
  chmod +x /opt/pg/scripts/*.sh \
  && export USE_DEFAULTS_CHANNEL=0 STRICT_CHANNEL_PRIORITY=1 MAMBA_NO_LOW_SPEED_LIMIT=1 \
- && source /opt/pg/source_pins.env \
+ && source /opt/pg/source_branches.env \
  && mkdir -p /opt/pg/logs \
- && kftools_repo_ref="${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
- && rkftools_repo_ref="${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}" \
- && radte_repo_ref="${RADTE_REPO_REF:-${KFU52_REPO_REF}}" \
- && kfl1ou_repo_ref="${KFL1OU_REPO_REF:-main}" \
- && amalgkit_repo_sha="${KFU52_AMALGKIT_REPO_SHA:-${GG_PIN_AMALGKIT_REPO_SHA}}" \
- && cdskit_repo_sha="${KFU52_CDSKIT_REPO_SHA:-${GG_PIN_CDSKIT_REPO_SHA}}" \
- && csubst_repo_ref="${KFU52_CSUBST_REPO_REF:-master}" \
- && csubst_repo_sha="${KFU52_CSUBST_REPO_SHA:-${GG_PIN_CSUBST_REPO_SHA}}" \
- && nwkit_repo_sha="${KFU52_NWKIT_REPO_SHA:-${GG_PIN_NWKIT_REPO_SHA}}" \
- && kfl1ou_repo_sha="${KFL1OU_REPO_SHA:-${GG_PIN_KFL1OU_REPO_SHA}}" \
- && kftools_repo_sha="${KFTOOLS_REPO_SHA:-${GG_PIN_KFTOOLS_REPO_SHA}}" \
- && rkftools_repo_sha="${RKFTOOLS_REPO_SHA:-${GG_PIN_RKFTOOLS_REPO_SHA}}" \
- && radte_repo_sha="${RADTE_REPO_SHA:-${GG_PIN_RADTE_REPO_SHA}}" \
- && amalgkit_source_ref="${amalgkit_repo_sha:-${KFU52_AMALGKIT_REPO_REF}}" \
- && cdskit_source_ref="${cdskit_repo_sha:-${KFU52_REPO_REF}}" \
+ && kfu52_repo_ref="${KFU52_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}" \
+ && amalgkit_repo_ref="${KFU52_AMALGKIT_REPO_REF:-${GG_SOURCE_AMALGKIT_REPO_REF}}" \
+ && cdskit_repo_ref="${KFU52_CDSKIT_REPO_REF:-${GG_SOURCE_CDSKIT_REPO_REF}}" \
+ && csubst_repo_ref="${KFU52_CSUBST_REPO_REF:-${GG_SOURCE_CSUBST_REPO_REF}}" \
+ && nwkit_repo_ref="${KFU52_NWKIT_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}" \
+ && busco_repo_ref="${BUSCO_REPO_REF:-${GG_SOURCE_BUSCO_REPO_REF}}" \
+ && paml_repo_ref="${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}" \
+ && kfl1ou_repo_ref="${KFL1OU_REPO_REF:-${GG_SOURCE_KFL1OU_REPO_REF}}" \
+ && kftools_repo_ref="${KFTOOLS_REPO_REF:-${GG_SOURCE_KFTOOLS_REPO_REF}}" \
+ && rkftools_repo_ref="${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}" \
+ && radte_repo_ref="${RADTE_REPO_REF:-${GG_SOURCE_RADTE_REPO_REF}}" \
+ && amalgkit_repo_sha="${KFU52_AMALGKIT_REPO_SHA:-}" \
+ && cdskit_repo_sha="${KFU52_CDSKIT_REPO_SHA:-}" \
+ && csubst_repo_sha="${KFU52_CSUBST_REPO_SHA:-}" \
+ && nwkit_repo_sha="${KFU52_NWKIT_REPO_SHA:-}" \
+ && kfl1ou_repo_sha="${KFL1OU_REPO_SHA:-}" \
+ && kftools_repo_sha="${KFTOOLS_REPO_SHA:-}" \
+ && rkftools_repo_sha="${RKFTOOLS_REPO_SHA:-}" \
+ && radte_repo_sha="${RADTE_REPO_SHA:-}" \
+ && amalgkit_source_ref="${amalgkit_repo_sha:-${amalgkit_repo_ref}}" \
+ && cdskit_source_ref="${cdskit_repo_sha:-${cdskit_repo_ref}}" \
  && csubst_source_ref="${csubst_repo_sha:-${csubst_repo_ref}}" \
- && nwkit_source_ref="${nwkit_repo_sha:-${KFU52_REPO_REF}}" \
+ && nwkit_source_ref="${nwkit_repo_sha:-${nwkit_repo_ref}}" \
  && kfl1ou_source_ref="${kfl1ou_repo_sha:-${kfl1ou_repo_ref}}" \
- && busco_source_ref="${BUSCO_REPO_SHA:-${BUSCO_REPO_REF}}" \
+ && busco_source_ref="${BUSCO_REPO_SHA:-${busco_repo_ref}}" \
+ && paml_source_ref="${PAML_REPO_SHA:-${paml_repo_ref}}" \
  && kftools_source_ref="${kftools_repo_sha:-${kftools_repo_ref}}" \
  && rkftools_source_ref="${rkftools_repo_sha:-${rkftools_repo_ref}}" \
  && radte_source_ref="${radte_repo_sha:-${radte_repo_ref}}" \
- && KFU52_REPO_REF="${KFU52_REPO_REF}" \
+ && KFU52_REPO_REF="${kfu52_repo_ref}" \
     KFU52_AMALGKIT_AUTO_SELECT_REF="${KFU52_AMALGKIT_AUTO_SELECT_REF}" \
     KFU52_AMALGKIT_BRANCH_CANDIDATES="${KFU52_AMALGKIT_BRANCH_CANDIDATES}" \
-    KFU52_AMALGKIT_REPO_REF="${KFU52_AMALGKIT_REPO_REF}" \
+    KFU52_AMALGKIT_REPO_REF="${amalgkit_repo_ref}" \
     KFU52_AMALGKIT_REPO_SHA="${amalgkit_repo_sha}" \
+    KFU52_CDSKIT_REPO_REF="${cdskit_repo_ref}" \
     KFU52_CDSKIT_REPO_SHA="${cdskit_repo_sha}" \
     KFU52_CSUBST_REPO_REF="${csubst_repo_ref}" \
     KFU52_CSUBST_REPO_SHA="${csubst_repo_sha}" \
+    KFU52_NWKIT_REPO_REF="${nwkit_repo_ref}" \
     KFU52_NWKIT_REPO_SHA="${nwkit_repo_sha}" \
     /opt/pg/scripts/ensure_kfuku52_tools_latest.sh base \
  && KFU52_REPO_REF="${KFU52_REPO_REF}" \
@@ -262,6 +275,8 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
       cdskit "${cdskit_source_ref}" \
       csubst "${csubst_source_ref}" \
       nwkit "${nwkit_source_ref}" \
+      BUSCO "${busco_source_ref}" \
+      paml "${paml_source_ref}" \
       kfl1ou "${kfl1ou_source_ref}" \
       kftools "${kftools_source_ref}" \
       rkftools "${rkftools_source_ref}" \

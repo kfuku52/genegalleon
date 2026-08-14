@@ -32,6 +32,19 @@ Repository-specific instructions override these defaults.
 
 # Agent / Developer Validation Policy
 
+## Upstream program version policy
+
+Do not commit default versions, tags, or commit SHAs for upstream programs.
+Container source defaults must follow the moving branches declared in
+`container/source_branches.env`. Build wrappers may resolve those branches to
+commits in memory so all platforms in one build use the same snapshot, and
+callers may provide a `*_REPO_SHA` for a one-off reproduction or debugging
+build, but resolved SHAs must never be copied back into repository defaults.
+
+Cryptographic hashes used only to verify downloaded artifacts, digest-pinned
+base images and GitHub Actions, and compatibility constraints with a documented
+demonstrated incompatibility are outside this rule.
+
 Use a GeneGalleon container runtime for workflow validation, integration tests, R helper checks, and toolchain-dependent behavior.
 
 On Linux/HPC hosts with Apptainer or Singularity, prefer the repository `genegalleon.sif` runtime.

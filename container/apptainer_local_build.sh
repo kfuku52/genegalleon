@@ -5,8 +5,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 template_path="${script_dir}/apptainer_local_build.def.template"
 coverage_script="${script_dir}/scripts/check_env_coverage.sh"
-# shellcheck source=source_pins.env
-source "${script_dir}/source_pins.env"
+# shellcheck source=source_branches.env
+source "${script_dir}/source_branches.env"
 
 IMAGE=${IMAGE:-local/genegalleon}
 TAG=${TAG:-dev}
@@ -19,34 +19,36 @@ NATIVE_BUILD_KEEP_WORKDIR=${NATIVE_BUILD_KEEP_WORKDIR:-0} # 0 | 1
 NOTUNG_DOWNLOAD_PAGE=${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}
 NOTUNG_DOWNLOAD_HOST_IP=${NOTUNG_DOWNLOAD_HOST_IP:-128.2.205.60}
 NOTUNG_ZIP_SHA256=${NOTUNG_ZIP_SHA256:-81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6}
-KFU52_REPO_REF=${KFU52_REPO_REF:-master}
+KFU52_REPO_REF=${KFU52_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}
 KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}
 KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
-KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF-master}
-KFU52_AMALGKIT_REPO_SHA=${KFU52_AMALGKIT_REPO_SHA:-${GG_PIN_AMALGKIT_REPO_SHA}}
-KFU52_CDSKIT_REPO_SHA=${KFU52_CDSKIT_REPO_SHA:-${GG_PIN_CDSKIT_REPO_SHA}}
-KFU52_CSUBST_REPO_REF=${KFU52_CSUBST_REPO_REF:-master}
-KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-${GG_PIN_CSUBST_REPO_SHA}}
-KFU52_NWKIT_REPO_SHA=${KFU52_NWKIT_REPO_SHA:-${GG_PIN_NWKIT_REPO_SHA}}
+KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF:-${GG_SOURCE_AMALGKIT_REPO_REF}}
+KFU52_CDSKIT_REPO_REF=${KFU52_CDSKIT_REPO_REF:-${GG_SOURCE_CDSKIT_REPO_REF}}
+KFU52_CSUBST_REPO_REF=${KFU52_CSUBST_REPO_REF:-${GG_SOURCE_CSUBST_REPO_REF}}
+KFU52_NWKIT_REPO_REF=${KFU52_NWKIT_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}
+KFU52_AMALGKIT_REPO_SHA=${KFU52_AMALGKIT_REPO_SHA:-}
+KFU52_CDSKIT_REPO_SHA=${KFU52_CDSKIT_REPO_SHA:-}
+KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-}
+KFU52_NWKIT_REPO_SHA=${KFU52_NWKIT_REPO_SHA:-}
 BUSCO_REPO_URL=${BUSCO_REPO_URL:-https://gitlab.com/ezlab/busco.git}
 BUSCO_MIRROR_REPO_URL=${BUSCO_MIRROR_REPO_URL:-}
-BUSCO_REPO_REF=${BUSCO_REPO_REF:-6.0.0}
-BUSCO_REPO_SHA=${BUSCO_REPO_SHA:-6278721a1916f6da310e03ec9674099028c927a4}
+BUSCO_REPO_REF=${BUSCO_REPO_REF:-${GG_SOURCE_BUSCO_REPO_REF}}
+BUSCO_REPO_SHA=${BUSCO_REPO_SHA:-}
 PAML_REPO_URL=${PAML_REPO_URL:-https://github.com/iqtree/paml.git}
-PAML_REPO_REF=${PAML_REPO_REF:-master}
-PAML_REPO_SHA=${PAML_REPO_SHA:-8daeead6b55523f375d9ac56dcfac38373ef8a2e}
+PAML_REPO_REF=${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}
+PAML_REPO_SHA=${PAML_REPO_SHA:-}
 KFL1OU_REPO_URL=${KFL1OU_REPO_URL:-https://github.com/kfuku52/kfl1ou.git}
-KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-main}
-KFL1OU_REPO_SHA=${KFL1OU_REPO_SHA:-${GG_PIN_KFL1OU_REPO_SHA}}
+KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-${GG_SOURCE_KFL1OU_REPO_REF}}
+KFL1OU_REPO_SHA=${KFL1OU_REPO_SHA:-}
 KFTOOLS_REPO_URL=${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}
 RKFTOOLS_REPO_URL=${RKFTOOLS_REPO_URL:-https://github.com/kfuku52/rkftools.git}
 RADTE_REPO_URL=${RADTE_REPO_URL:-https://github.com/kfuku52/RADTE.git}
-KFTOOLS_REPO_REF=${KFTOOLS_REPO_REF:-${KFU52_REPO_REF}}
-RKFTOOLS_REPO_REF=${RKFTOOLS_REPO_REF:-${KFU52_REPO_REF}}
-RADTE_REPO_REF=${RADTE_REPO_REF:-${KFU52_REPO_REF}}
-KFTOOLS_REPO_SHA=${KFTOOLS_REPO_SHA:-${GG_PIN_KFTOOLS_REPO_SHA}}
-RKFTOOLS_REPO_SHA=${RKFTOOLS_REPO_SHA:-${GG_PIN_RKFTOOLS_REPO_SHA}}
-RADTE_REPO_SHA=${RADTE_REPO_SHA:-${GG_PIN_RADTE_REPO_SHA}}
+KFTOOLS_REPO_REF=${KFTOOLS_REPO_REF:-${GG_SOURCE_KFTOOLS_REPO_REF}}
+RKFTOOLS_REPO_REF=${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}
+RADTE_REPO_REF=${RADTE_REPO_REF:-${GG_SOURCE_RADTE_REPO_REF}}
+KFTOOLS_REPO_SHA=${KFTOOLS_REPO_SHA:-}
+RKFTOOLS_REPO_SHA=${RKFTOOLS_REPO_SHA:-}
+RADTE_REPO_SHA=${RADTE_REPO_SHA:-}
 TESTNH_TARBALL_SHA256=${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}
 CAFE5_TARBALL_SHA256=${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}
 
@@ -102,9 +104,11 @@ render_definition() {
     -e "s|@@KFU52_AMALGKIT_BRANCH_CANDIDATES@@|$(escape_sed_replacement "${KFU52_AMALGKIT_BRANCH_CANDIDATES}")|g" \
     -e "s|@@KFU52_AMALGKIT_REPO_REF@@|$(escape_sed_replacement "${KFU52_AMALGKIT_REPO_REF}")|g" \
     -e "s|@@KFU52_AMALGKIT_REPO_SHA@@|$(escape_sed_replacement "${KFU52_AMALGKIT_REPO_SHA}")|g" \
+    -e "s|@@KFU52_CDSKIT_REPO_REF@@|$(escape_sed_replacement "${KFU52_CDSKIT_REPO_REF}")|g" \
     -e "s|@@KFU52_CDSKIT_REPO_SHA@@|$(escape_sed_replacement "${KFU52_CDSKIT_REPO_SHA}")|g" \
     -e "s|@@KFU52_CSUBST_REPO_REF@@|$(escape_sed_replacement "${KFU52_CSUBST_REPO_REF}")|g" \
     -e "s|@@KFU52_CSUBST_REPO_SHA@@|$(escape_sed_replacement "${KFU52_CSUBST_REPO_SHA}")|g" \
+    -e "s|@@KFU52_NWKIT_REPO_REF@@|$(escape_sed_replacement "${KFU52_NWKIT_REPO_REF}")|g" \
     -e "s|@@KFU52_NWKIT_REPO_SHA@@|$(escape_sed_replacement "${KFU52_NWKIT_REPO_SHA}")|g" \
     -e "s|@@BUSCO_REPO_URL@@|$(escape_sed_replacement "${BUSCO_REPO_URL}")|g" \
     -e "s|@@BUSCO_MIRROR_REPO_URL@@|$(escape_sed_replacement "${BUSCO_MIRROR_REPO_URL}")|g" \
@@ -199,7 +203,6 @@ cp -R "${repo_root}/container/testdata" "${staging_root}/"
 cp -R "${repo_root}/container/scripts" "${staging_root}/"
 cp -R "${repo_root}/workflow/support/treevis" "${staging_root}/"
 cp "${repo_root}/container/pip-compatibility.requirements.txt" "${staging_root}/"
-cp "${repo_root}/container/source_pins.env" "${staging_root}/"
 
 (
   cd "${repo_root}"
@@ -224,9 +227,11 @@ resolve_source_sha() {
 }
 
 resolve_source_sha KFU52_AMALGKIT_REPO_SHA https://github.com/kfuku52/amalgkit.git "${KFU52_AMALGKIT_REPO_REF}" amalgkit
-resolve_source_sha KFU52_CDSKIT_REPO_SHA https://github.com/kfuku52/cdskit.git "${KFU52_REPO_REF}" cdskit
+resolve_source_sha KFU52_CDSKIT_REPO_SHA https://github.com/kfuku52/cdskit.git "${KFU52_CDSKIT_REPO_REF}" cdskit
 resolve_source_sha KFU52_CSUBST_REPO_SHA https://github.com/kfuku52/csubst.git "${KFU52_CSUBST_REPO_REF}" csubst
-resolve_source_sha KFU52_NWKIT_REPO_SHA https://github.com/kfuku52/nwkit.git "${KFU52_REPO_REF}" nwkit
+resolve_source_sha KFU52_NWKIT_REPO_SHA https://github.com/kfuku52/nwkit.git "${KFU52_NWKIT_REPO_REF}" nwkit
+resolve_source_sha BUSCO_REPO_SHA "${BUSCO_REPO_URL}" "${BUSCO_REPO_REF}" BUSCO
+resolve_source_sha PAML_REPO_SHA "${PAML_REPO_URL}" "${PAML_REPO_REF}" paml
 resolve_source_sha KFL1OU_REPO_SHA "${KFL1OU_REPO_URL}" "${KFL1OU_REPO_REF}" kfl1ou
 resolve_source_sha KFTOOLS_REPO_SHA "${KFTOOLS_REPO_URL}" "${KFTOOLS_REPO_REF}" kftools
 resolve_source_sha RKFTOOLS_REPO_SHA "${RKFTOOLS_REPO_URL}" "${RKFTOOLS_REPO_REF}" rkftools

@@ -311,8 +311,33 @@ Current behavior notes:
   recomputed after GeneRax on the GeneRax topology,
 - Pfam RPS-BLAST DB (`Pfam_LE`) is auto-prepared when missing, with lock-based
   synchronization for array jobs,
-- gene-tree/species-tree PGLS outputs are `gene_tree_PGLS.tsv` and
-  `species_tree_PGLS.tsv`,
+- gene-tree PGLS remains a separate legacy analysis; matched expression-trait
+  results are written to `rsc_pgls`, `pgls_species_nwkit`,
+  `pgls_species_rphylopars`, and `pgls_comparison`,
+- `run_expression_trait_pgls=1` runs the methods selected by `pgls_methods`
+  (`rsc`, `species-nwkit`, `species-rphylopars`, or `all`) with gene expression
+  as the response and species traits as predictors; repeated paralog contrasts
+  mapping to one species-tree event are handled by event weighting and the
+  hierarchical model instead of being treated as independent species
+  observations,
+- species-tree methods aggregate paralogs within each biological sample before
+  replicate modeling. `species_expression_aggregation` controls sum, mean,
+  max, or all, and `species_paralog_missing=error` prevents incomplete copy
+  coverage from being silently accepted,
+- RSC uses a dated gene tree and dated species tree with the default
+  `original` branch-length modes. Set the corresponding mode to `unit` only
+  when the dated tree is intentionally unavailable. `rsc_event_source="auto"`
+  uses preserved GeneRax NHX speciation/duplication annotations when present
+  and otherwise performs LCA reconciliation,
+- RSC records families with missing/empty expression and statistically
+  non-estimable predictor fits with explicit reasons rather than aborting the
+  family array. Its inspectable tables are written under the
+  `rsc_*` output directories. Species-method statuses, aggregation audits, and
+  side-by-side coefficients are written under `pgls_*`; compact `rsc_*` and
+  `pgls_species_*` fields are copied into each
+  family's `stat_tree` row. This summary has a fixed-width status/count schema
+  plus the best converged `rsc_best_*` row; all fitted rows remain in
+  `rsc_pgls`,
 - `run_csubst_scan=1` uses existing CSUBST ancestral-reconstruction inputs and
   writes candidate amino-acid/state changes; it is independent from
   `run_csubst`, which runs branch-combination search.

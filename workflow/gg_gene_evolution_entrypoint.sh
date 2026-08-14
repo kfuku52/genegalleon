@@ -152,7 +152,7 @@ run_hyphy_relax_reversed="${run_hyphy_relax_reversed:-0}" # Run HyPhy RELAX with
 # Comparative-analysis workflow flags
 run_scm_intron=0 # Stochastic character mapping of intron traits.
 run_l1ou=0 # OU modeling of gene expression using the kfl1ou-backed l1ou-compatible outputs.
-run_pgls_species_tree=0 # PGLS with species tree.
+run_expression_trait_pgls=0 # Unified expression ~ species-trait analysis with selectable RSC and species-tree PGLS methods.
 run_iqtree_anc=0 # Ancestral state reconstruction required for CSUBST.
 run_csubst=0 # Protein convergence analysis with CSUBST.
 run_csubst_scan=0 # Direct recurrent amino-acid/state-change scan with CSUBST.
@@ -183,7 +183,62 @@ radte_max_age=1000 # Upper limit of estimated divergence time in MY.
 
 # species_expression data (value in input files)
 exp_value_type="log2p1" # Expression scale used in species_expression input tables.
-pgls_use_phenocov=0 # If 1, keep replicate expression columns separate for phenotype-covariance-aware species-tree PGLS; if 0, merge replicates before PGLS.
+pgls_methods="rsc" # rsc,species-nwkit,species-rphylopars, or all; selected methods share the same prepared expression/trait inputs.
+species_expression_aggregation="sum" # sum|mean|max|all; paralogs are combined within each biological sample on the linear expression scale before species-tree PGLS.
+species_paralog_missing="error" # error|ignore for incomplete paralog measurements within a species/sample.
+rphylopars_sampling_covariance="require-diagonal" # require-diagonal|diagonalize; Rphylopars cannot represent cross-species sampling covariance exactly.
+
+# Reconciled speciation contrast (RSC) PGLS
+rsc_responses="all" # all or comma-separated expression response names after removing the replicate suffix (for example root,leaf).
+rsc_predictors="all" # all or comma-separated species-trait columns.
+rsc_predictor_mode="separate" # separate|joint; separate fits one predictor at a time and is the recommended screening mode.
+rsc_event_source="auto" # auto|nhx|lca|species-overlap; auto uses NHX only when the selected reconciliation tree contains GeneRax D annotations.
+rsc_speciation_coverage="complete" # complete|any; complete excludes partially sampled daughter clades.
+rsc_event_weighting="equal" # equal|observation; equal gives each species-tree event equal total weight across repeated paralog contrasts.
+rsc_model="hierarchical" # hierarchical|replicate-reml|legacy.
+rsc_gene_branch_length="original" # original|unit; original requires a dated gene tree.
+rsc_gene_evolution_model="brownian" # brownian|lambda|ou|kappa|delta|eb|acdc|independent.
+rsc_gene_evolution_parameter="auto" # auto or a fixed numeric shape parameter where the selected model has one.
+rsc_species_branch_length="original" # original|unit; original requires the dated species tree.
+rsc_species_evolution_model="brownian" # Evolutionary covariance model for species-trait contrasts.
+rsc_species_evolution_parameter="auto" # auto or a fixed numeric shape parameter.
+rsc_inference="wald" # wald|parametric-bootstrap (continuous expression responses).
+rsc_bootstrap_replicates=1000 # Simulations used only for parametric-bootstrap inference.
+rsc_seed=1 # Reproducible NWKIT simulation seed.
+rsc_confidence_level="0.95" # Two-sided confidence interval level.
+rsc_reml="yes" # yes|no; REML for Gaussian variance components.
+rsc_min_species_events=2 # Families below this number of eligible independent species events are recorded as not_estimable.
+rsc_unmatched="error" # error|warn|ignore for unmatched tree/table labels.
+
+# RSC response/predictor replicate and factor metadata
+rsc_replicate_separator="_" # Numeric suffix delimiter in wide expression columns, for example root_1 and root_2.
+rsc_expression_sample_metadata="" # Optional workspace-relative or absolute TSV mapping expression column,response,biological_id and optional technical_id,batch,SE columns.
+rsc_within_variance="pooled" # pooled|leaf|known-se for biological expression replicates.
+rsc_technical_aggregation="error" # error|mean for technical expression replicates.
+rsc_predictor_biological_id="" # Optional species-trait table column identifying biological predictor replicates.
+rsc_predictor_technical_id="" # Optional technical-replicate column nested within predictor biological IDs.
+rsc_predictor_batch="" # Optional predictor batch column.
+rsc_predictor_within_variance="pooled" # pooled|leaf|known-se for predictor replicates.
+rsc_predictor_technical_aggregation="error" # error|mean for technical predictor replicates.
+rsc_predictor_standard_error_columns="" # Comma-separated known-SE columns corresponding to rsc_predictors.
+rsc_predictor_sample_size_columns="" # Optional comma-separated sample-size columns corresponding to known predictor SEs.
+rsc_categorical_predictors="" # Numeric-coded unordered predictor columns; string predictors are detected automatically.
+rsc_ordered_predictors="" # TRAIT=LOW|MIDDLE|HIGH entries, comma-separated.
+rsc_factor_reference="" # TRAIT=REFERENCE entries for unordered factors, comma-separated.
+rsc_factor_coding="treatment" # treatment|sum.
+rsc_categorical_replicate_policy="latent" # error|latent; latent propagates uncertainty when categorical predictor replicates disagree within a species.
+
+# RSC hierarchical and delayed-origin diagnostics
+rsc_event_random_effect="auto" # auto|yes|no.
+rsc_lineage_random_slope="auto" # auto|yes|no.
+rsc_lineage_inference="none" # none|likelihood-ratio|parametric-bootstrap.
+rsc_lineage_leave_one_out="no" # yes|no.
+rsc_categorical_origin_diagnostics="none" # none|stochastic-map; applied only to categorical-predictor analyses.
+rsc_origin_map_replicates=200 # Stochastic maps per categorical predictor.
+rsc_origin_map_threads=1 # Parallel workers for stochastic mapping.
+rsc_origin_min_posterior="0.5" # Minimum transition posterior used for origin leave-one-out.
+rsc_origin_leave_one_out="no" # yes|no.
+rsc_allow_large_dense="no" # yes attempts dense fits beyond NWKIT's normal memory guard.
 
 # Promoter cis-element analysis
 promoter_bp=2000 # Upstream promoter length in bp extracted from reference genomes for FIMO motif scans.
