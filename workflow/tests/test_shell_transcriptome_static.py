@@ -220,6 +220,8 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     assert '--ncbi_download_max_concurrency "${amalgkit_ncbi_download_max_concurrency}"' in attempt_body
     assert '--aws_download_max_concurrency "${amalgkit_aws_download_max_concurrency}"' in attempt_body
     assert '--gcp_download_max_concurrency "${amalgkit_gcp_download_max_concurrency}"' in attempt_body
+    assert '"--ena"' in attempt_body
+    assert '--ena yes' in attempt_body
     assert '--rrna_filter_jobs "${amalgkit_rrna_filter_jobs}"' in attempt_body
     assert '--rrna_filter_chunk_spots "${amalgkit_rrna_filter_chunk_spots}"' in attempt_body
     assert '--rrna_filter_memory_limit "${amalgkit_rrna_filter_memory_limit}"' in attempt_body
@@ -228,6 +230,7 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     assert '(${#amalgkit_fastq_files[@]} -eq 0 && ${run_amalgkit_getfastq} -eq 1)' not in text
     assert 'gg_artifact_prepare_stage getfastq_needs_update run_amalgkit_getfastq' in text
     assert 'if [[ ${run_amalgkit_getfastq} -eq 1 && ${getfastq_needs_update} -eq 1 ]]; then' in text
+    assert 'if ! stage_getfastq_outputs_for_resume; then' in text
     assert 'run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"' in text
     assert "return 3" in attempt_body
     assert "The fatal-condition retry produced an incomplete all-run manifest." in text

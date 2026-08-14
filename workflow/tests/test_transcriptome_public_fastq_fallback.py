@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -72,6 +73,19 @@ def _xml(filename: str, url: str) -> bytes:
     ).encode()
 
 
+def _ena_report_url(run: str) -> str:
+    return "https://www.ebi.ac.uk/ena/portal/api/filereport?{}".format(
+        urllib.parse.urlencode(
+            {
+                "accession": run,
+                "result": "read_run",
+                "fields": "run_accession,fastq_ftp,fastq_md5",
+                "format": "json",
+            }
+        )
+    )
+
+
 def test_public_fallback_reuses_valid_fastq_and_atomically_completes_missing_run(monkeypatch, tmp_path):
     metadata_path = tmp_path / "metadata.tsv"
     output_dir = tmp_path / "getfastq"
@@ -124,9 +138,10 @@ def test_public_fallback_preserves_existing_outputs_and_prior_manifest_on_failur
     responses = {
         "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=RUN1": _xml("RUN1.fastq.gz", run1_url),
         "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=RUN2": b"<ROOT />",
+        _ena_report_url("RUN2"): b"[]",
     }
 
-    with pytest.raises(SystemExit, match="No public original FASTQ URLs were found for run: RUN2"):
+    with pytest.raises(SystemExit, match="No supported public FASTQ URLs were found for run: RUN2"):
         _run_fallback(monkeypatch, metadata_path, output_dir, responses)
 
     assert hashlib.sha256(existing.read_bytes()).hexdigest() == existing_hash
@@ -134,6 +149,188 @@ def test_public_fallback_preserves_existing_outputs_and_prior_manifest_on_failur
     preserved = output_dir / "getfastq_completion.pre_public_fallback.json"
     assert json.loads(preserved.read_text(encoding="utf-8")) == previous_manifest
     assert not list(output_dir.rglob("*.part"))
+
+
+def test_public_fallback_uses_ena_fastq_when_trace_has_no_original(monkeypatch, tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["ERR123456"])
+
+    fastq_payload = gzip.compress(b"@ena\nACGT\n+\n!!!!\n")
+    fastq_url = "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR123/ERR123456.fastq.gz"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=ERR123456": b"<ROOT />",
+        _ena_report_url("ERR123456"): json.dumps(
+            [
+                {
+                    "run_accession": "ERR123456",
+                    "fastq_ftp": fastq_url.removeprefix("https://"),
+                    "fastq_md5": hashlib.md5(fastq_payload).hexdigest(),
+                }
+            ]
+        ).encode(),
+        fastq_url: fastq_payload,
+    }
+
+    _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+
+    recovered = output_dir / "ERR123456" / "ERR123456.amalgkit.fastq.gz"
+    assert recovered.read_bytes() == fastq_payload
+    manifest = json.loads(
+        (output_dir / "getfastq_completion.json").read_text(encoding="utf-8")
+    )
+    assert manifest["runs"] == [
+        {
+            "files": ["ERR123456/ERR123456.amalgkit.fastq.gz"],
+            "run": "ERR123456",
+            "status": "complete",
+        }
+    ]
+
+
+def test_public_fallback_reuses_one_valid_mate_and_recovers_the_other(monkeypatch, tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["ERR123456"])
+
+    run_dir = output_dir / "ERR123456"
+    run_dir.mkdir(parents=True)
+    existing = run_dir / "ERR123456_1.amalgkit.fastq.gz"
+    with gzip.open(existing, "wb") as handle:
+        handle.write(b"@existing\nACGT\n+\n!!!!\n")
+    existing_hash = hashlib.sha256(existing.read_bytes()).hexdigest()
+    first_payload = existing.read_bytes()
+    second_payload = gzip.compress(b"@ena2\nTGCA\n+\n!!!!\n")
+    first_url = "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR123/ERR123456_1.fastq.gz"
+    second_url = "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR123/ERR123456_2.fastq.gz"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=ERR123456": b"<ROOT />",
+        _ena_report_url("ERR123456"): json.dumps(
+            [
+                {
+                    "run_accession": "ERR123456",
+                    "fastq_ftp": ";".join(
+                        [
+                            first_url.removeprefix("https://"),
+                            second_url.removeprefix("https://"),
+                        ]
+                    ),
+                    "fastq_md5": ";".join(
+                        [
+                            hashlib.md5(first_payload).hexdigest(),
+                            hashlib.md5(second_payload).hexdigest(),
+                        ]
+                    ),
+                }
+            ]
+        ).encode(),
+        second_url: second_payload,
+    }
+
+    _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+
+    assert hashlib.sha256(existing.read_bytes()).hexdigest() == existing_hash
+    assert (run_dir / "ERR123456_2.amalgkit.fastq.gz").read_bytes() == second_payload
+    manifest = json.loads(
+        (output_dir / "getfastq_completion.json").read_text(encoding="utf-8")
+    )
+    assert manifest["run_count"] == 1
+    assert manifest["runs"][0]["files"] == [
+        "ERR123456/ERR123456_1.amalgkit.fastq.gz",
+        "ERR123456/ERR123456_2.amalgkit.fastq.gz",
+    ]
+
+
+def test_public_fallback_rejects_ena_checksum_mismatch(monkeypatch, tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["ERR123456"])
+
+    fastq_payload = gzip.compress(b"@ena\nACGT\n+\n!!!!\n")
+    fastq_url = "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR123/ERR123456.fastq.gz"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=ERR123456": b"<ROOT />",
+        _ena_report_url("ERR123456"): json.dumps(
+            [
+                {
+                    "run_accession": "ERR123456",
+                    "fastq_ftp": fastq_url.removeprefix("https://"),
+                    "fastq_md5": "0" * 32,
+                }
+            ]
+        ).encode(),
+        fastq_url: fastq_payload,
+    }
+
+    with pytest.raises(SystemExit, match="Downloaded FASTQ checksum mismatch"):
+        _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+
+    assert not (output_dir / "getfastq_completion.json").exists()
+    assert not list(output_dir.rglob("*.part"))
+
+
+def _run_resume_staging(work_dir: Path, published_dir: Path) -> subprocess.CompletedProcess[str]:
+    script = "\n".join(
+        [
+            "set -u",
+            _shell_function_source("stage_getfastq_outputs_for_resume"),
+            r'''
+dir_tmp=$1
+dir_amalgkit_getfastq_sp=$2
+ensure_dir() { mkdir -p -- "$1"; }
+ensure_parent_dir() { mkdir -p -- "$(dirname -- "$1")"; }
+stage_getfastq_outputs_for_resume
+''',
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-s", "--", str(work_dir), str(published_dir)],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_resume_staging_materializes_exact_published_symlink(tmp_path):
+    work_dir = tmp_path / "work"
+    published_dir = tmp_path / "published"
+    run_dir = published_dir / "RUN1"
+    run_dir.mkdir(parents=True)
+    state = run_dir / "getfastq_run_state.json"
+    state.write_text('{"status":"validated"}\n', encoding="utf-8")
+    expected_state = state.read_bytes()
+    work_dir.mkdir()
+    (work_dir / "getfastq").symlink_to(published_dir, target_is_directory=True)
+
+    completed = _run_resume_staging(work_dir, published_dir)
+
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    resume_dir = work_dir / "getfastq"
+    assert resume_dir.is_dir()
+    assert not resume_dir.is_symlink()
+    assert (resume_dir / "RUN1" / state.name).read_bytes() == expected_state
+    assert "Materialized the exact published getfastq symlink" in completed.stdout
+
+
+def test_resume_staging_rejects_symlink_outside_published_root(tmp_path):
+    work_dir = tmp_path / "work"
+    published_dir = tmp_path / "published"
+    outside_dir = tmp_path / "outside"
+    published_dir.mkdir()
+    outside_dir.mkdir()
+    marker = outside_dir / "keep.txt"
+    marker.write_text("keep\n", encoding="utf-8")
+    work_dir.mkdir()
+    resume_link = work_dir / "getfastq"
+    resume_link.symlink_to(outside_dir, target_is_directory=True)
+
+    completed = _run_resume_staging(work_dir, published_dir)
+
+    assert completed.returncode != 0
+    assert resume_link.is_symlink()
+    assert marker.read_text(encoding="utf-8") == "keep\n"
+    assert "does not resolve to the exact published output directory" in completed.stderr
 
 
 def test_fatal_then_incomplete_retry_routes_through_public_fallback(tmp_path):

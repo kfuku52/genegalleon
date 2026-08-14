@@ -815,6 +815,39 @@ stage_getfastq_outputs_for_resume() {
   local published_entry=""
   local resume_entry=""
 
+  if [[ -L "${dir_tmp}/getfastq" ]]; then
+    if ! python - "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}" <<'PY'
+import pathlib
+import sys
+
+resume_link = pathlib.Path(sys.argv[1])
+published_dir = pathlib.Path(sys.argv[2])
+if published_dir.is_symlink():
+    raise SystemExit("The published getfastq output path must not be a symlink: {}".format(published_dir))
+try:
+    resolved_resume = resume_link.resolve(strict=True)
+    resolved_published = published_dir.resolve(strict=True)
+except (OSError, RuntimeError) as exc:
+    raise SystemExit("Cannot safely resolve the getfastq resume symlink: {}".format(exc))
+if not resolved_published.is_dir() or resolved_resume != resolved_published:
+    raise SystemExit(
+        "The getfastq resume symlink does not resolve to the exact published output directory: {} -> {}".format(
+            resume_link,
+            resolved_resume,
+        )
+    )
+PY
+    then
+      return 1
+    fi
+    rm -f -- "${dir_tmp}/getfastq"
+    ensure_dir "${dir_tmp}/getfastq"
+    echo "Materialized the exact published getfastq symlink as a real resumable work directory."
+  elif [[ -e "${dir_tmp}/getfastq" && ! -d "${dir_tmp}/getfastq" ]]; then
+    echo "The getfastq resume path exists but is not a directory: ${dir_tmp}/getfastq" >&2
+    return 1
+  fi
+
   if [[ ! -d "${dir_tmp}/getfastq" ]]; then
     if [[ -d "${dir_amalgkit_getfastq_sp}" ]]; then
       shopt -s nullglob dotglob
@@ -954,6 +987,7 @@ run_amalgkit_getfastq_attempt() {
     "--ncbi_download_max_concurrency" \
     "--aws_download_max_concurrency" \
     "--gcp_download_max_concurrency" \
+    "--ena" \
     "--rrna_filter_jobs" \
     "--rrna_filter_chunk_spots" \
     "--rrna_filter_memory_limit"
@@ -982,6 +1016,7 @@ run_amalgkit_getfastq_attempt() {
     --read_name 'trinity'
     --aws yes
     --ncbi yes
+    --ena yes
     --redo no
   )
 
@@ -1194,8 +1229,10 @@ download_public_original_fastqs_for_metadata() {
   python - "${metadata_tsv}" "${output_dir}" <<'PY'
 import csv
 import gzip
+import hashlib
 import json
 import os
+import re
 import sys
 import time
 import urllib.parse
@@ -1236,14 +1273,113 @@ def sort_key(item):
 
 
 def is_valid_gzip(path: Path) -> bool:
-    if not path.is_file() or path.stat().st_size == 0:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
         return False
     try:
         with gzip.open(path, "rb") as handle:
-            handle.read(1)
+            payload = handle.read(4096)
     except (EOFError, OSError):
         return False
-    return True
+    return bool(payload)
+
+
+def normalize_ena_fastq_url(value: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    if value.startswith("ftp://ftp.sra.ebi.ac.uk/"):
+        value = "https://" + value[len("ftp://"):]
+    elif value.startswith("ftp.sra.ebi.ac.uk/"):
+        value = "https://" + value
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme != "https" or parsed.hostname != "ftp.sra.ebi.ac.uk":
+        return ""
+    return urllib.parse.urlunparse(parsed)
+
+
+def unique_source_files(files):
+    unique = []
+    seen_urls = set()
+    for item in files:
+        if item[1] in seen_urls:
+            continue
+        seen_urls.add(item[1])
+        unique.append(item)
+    return unique
+
+
+def ena_fastq_files(run: str):
+    report_url = "https://www.ebi.ac.uk/ena/portal/api/filereport?{}".format(
+        urllib.parse.urlencode(
+            {
+                "accession": run,
+                "result": "read_run",
+                "fields": "run_accession,fastq_ftp,fastq_md5",
+                "format": "json",
+            }
+        )
+    )
+    try:
+        report = json.loads(fetch_text(report_url))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise SystemExit("ENA FASTQ report is invalid for run {}: {}".format(run, exc))
+    rows = [
+        row
+        for row in report
+        if isinstance(row, dict) and str(row.get("run_accession", "")).strip() == run
+    ] if isinstance(report, list) else []
+    if len(rows) > 1:
+        raise SystemExit("ENA returned multiple FASTQ report rows for run: {}".format(run))
+    if not rows:
+        return []
+    urls = [normalize_ena_fastq_url(item) for item in str(rows[0].get("fastq_ftp", "") or "").split(";")]
+    urls = [item for item in urls if item]
+    md5_values = [item.strip().lower() for item in str(rows[0].get("fastq_md5", "") or "").split(";")]
+    if md5_values == [""]:
+        md5_values = []
+    if md5_values and len(md5_values) != len(urls):
+        raise SystemExit("ENA FASTQ URL/checksum count mismatch for run: {}".format(run))
+    files = []
+    for index, url in enumerate(urls):
+        expected_md5 = md5_values[index] if md5_values else ""
+        if expected_md5 and (len(expected_md5) != 32 or any(char not in "0123456789abcdef" for char in expected_md5)):
+            raise SystemExit("ENA returned an invalid FASTQ checksum for run: {}".format(run))
+        files.append((Path(urllib.parse.urlparse(url).path).name, url, expected_md5, "ena"))
+    return unique_source_files(files)
+
+
+def metadata_fastq_files(row):
+    files = []
+    for fieldname in ("fastq_ftp", "fastq_url", "ENA_FASTQ_URL"):
+        for value in str(row.get(fieldname, "") or "").split(";"):
+            url = normalize_ena_fastq_url(value)
+            if url:
+                files.append((Path(urllib.parse.urlparse(url).path).name, url, "", "metadata"))
+    return unique_source_files(files)
+
+
+def trace_fastq_files(run: str):
+    xml_url = "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}".format(
+        urllib.parse.quote(run, safe="")
+    )
+    root = ET.fromstring(fetch_text(xml_url))
+    files = []
+    for node in root.iter("SRAFile"):
+        if node.attrib.get("semantic_name") != "fastq":
+            continue
+        if node.attrib.get("supertype") != "Original":
+            continue
+        url = str(node.attrib.get("url", "") or "").strip()
+        filename = str(node.attrib.get("filename", "") or "").strip()
+        if not url.startswith("https://"):
+            for alt in node.findall("Alternatives"):
+                alt_url = str(alt.attrib.get("url", "") or "").strip()
+                if alt_url.startswith("https://"):
+                    url = alt_url
+                    break
+        if url.startswith("https://"):
+            files.append((filename, url, "", "ncbi-trace"))
+    return unique_source_files(files)
 
 
 def preserve_previous_completion_manifest() -> None:
@@ -1261,11 +1397,13 @@ def preserve_previous_completion_manifest() -> None:
         suffix = "_{}".format(counter)
 
 
-def write_fastq_atomically(dest: Path, payload: bytes) -> None:
+def write_fastq_atomically(dest: Path, payload: bytes, expected_md5: str = "") -> None:
     part = dest.with_name(dest.name + ".part")
     if part.exists() or part.is_symlink():
         part.unlink()
     try:
+        if expected_md5 and hashlib.md5(payload).hexdigest() != expected_md5:
+            raise SystemExit("Downloaded FASTQ checksum mismatch: {}".format(dest))
         if payload[:2] == b"\x1f\x8b":
             part.write_bytes(payload)
         else:
@@ -1285,54 +1423,65 @@ with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
     if "run" not in fieldnames:
         raise SystemExit("Metadata is missing required 'run' column: {}".format(metadata_path))
     runs = []
-    seen = set()
+    rows_by_run = {}
     for row in reader:
         run = str(row.get("run", "") or "").strip()
-        if not run or run in seen:
+        if not run or run in rows_by_run:
             continue
-        seen.add(run)
+        if len(run) > 128 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", run):
+            raise SystemExit("Metadata contains an unsafe run accession: {!r}".format(run))
+        rows_by_run[run] = row
         runs.append(run)
 
 if not runs:
     raise SystemExit("No run accessions were found in metadata: {}".format(metadata_path))
 
+if output_root.is_symlink():
+    raise SystemExit("Fallback output root must not be a symlink: {}".format(output_root))
 output_root.mkdir(parents=True, exist_ok=True)
 preserve_previous_completion_manifest()
 manifest_runs = []
 
 for run in runs:
-    xml_url = "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}".format(
-        urllib.parse.quote(run, safe="")
-    )
-    root = ET.fromstring(fetch_text(xml_url))
-    fastq_files = []
-    for node in root.iter("SRAFile"):
-        if node.attrib.get("semantic_name") != "fastq":
-            continue
-        if node.attrib.get("supertype") != "Original":
-            continue
-        url = str(node.attrib.get("url", "") or "").strip()
-        filename = str(node.attrib.get("filename", "") or "").strip()
-        if not url.startswith("https://"):
-            for alt in node.findall("Alternatives"):
-                alt_url = str(alt.attrib.get("url", "") or "").strip()
-                if alt_url.startswith("https://"):
-                    url = alt_url
-                    break
-        if url.startswith("https://"):
-            fastq_files.append((filename, url))
-
-    if not fastq_files:
-        raise SystemExit("No public original FASTQ URLs were found for run: {}".format(run))
-    if len(fastq_files) > 2:
-        raise SystemExit("Unexpected number of original FASTQ files for run {}: {}".format(run, len(fastq_files)))
-
     run_dir = output_root / run
+    if run_dir.is_symlink():
+        raise SystemExit("Fallback run directory must not be a symlink: {}".format(run_dir))
     run_dir.mkdir(parents=True, exist_ok=True)
+    existing_single = run_dir / "{}.amalgkit.fastq.gz".format(run)
+    existing_paired = [
+        run_dir / "{}_1.amalgkit.fastq.gz".format(run),
+        run_dir / "{}_2.amalgkit.fastq.gz".format(run),
+    ]
+    present_paired = [path for path in existing_paired if path.exists() or path.is_symlink()]
+    if (existing_single.exists() or existing_single.is_symlink()) and present_paired:
+        raise SystemExit("Existing fallback FASTQ set mixes single and paired layouts for run: {}".format(run))
+    existing_fastqs = []
+    if existing_single.exists() or existing_single.is_symlink():
+        existing_fastqs = [existing_single]
+    elif len(present_paired) == 2:
+        existing_fastqs = existing_paired
+    if existing_fastqs:
+        if any(not is_valid_gzip(path) for path in existing_fastqs):
+            raise SystemExit("Existing fallback FASTQ set is invalid for run: {}".format(run))
+        completed_files = [str(path.relative_to(output_root)) for path in existing_fastqs]
+        print("Reusing validated fallback FASTQ set for {}: {}".format(run, ",".join(completed_files)))
+        manifest_runs.append({"run": run, "status": "complete", "files": completed_files})
+        continue
+
+    fastq_files = metadata_fastq_files(rows_by_run[run])
+    if not fastq_files:
+        fastq_files = trace_fastq_files(run)
+    if not fastq_files:
+        fastq_files = ena_fastq_files(run)
+    if not fastq_files:
+        raise SystemExit("No supported public FASTQ URLs were found for run: {}".format(run))
+    if len(fastq_files) > 2:
+        raise SystemExit("Unexpected number of public FASTQ files for run {}: {}".format(run, len(fastq_files)))
+
     fastq_files.sort(key=sort_key)
     completed_files = []
 
-    for idx, (filename, url) in enumerate(fastq_files, start=1):
+    for idx, (filename, url, expected_md5, provider) in enumerate(fastq_files, start=1):
         if len(fastq_files) == 1:
             dest = run_dir / "{}.amalgkit.fastq.gz".format(run)
         else:
@@ -1344,8 +1493,8 @@ for run in runs:
             completed_files.append(str(dest.relative_to(output_root)))
             continue
         payload = fetch_bytes(url)
-        write_fastq_atomically(dest, payload)
-        print("Recovered original FASTQ for {}: {} -> {}".format(run, filename or url, dest))
+        write_fastq_atomically(dest, payload, expected_md5)
+        print("Recovered public FASTQ for {} via {}: {} -> {}".format(run, provider, filename or url, dest))
         completed_files.append(str(dest.relative_to(output_root)))
     manifest_runs.append({"run": run, "status": "complete", "files": completed_files})
 
@@ -1794,6 +1943,7 @@ getfastq_provenance_args+=(
   --parameter "dump_print=yes"
   --parameter "aws=yes"
   --parameter "ncbi=yes"
+  --parameter "ena=yes"
   --parameter "redo=no"
 )
 gg_artifact_add_input_if_present getfastq_provenance_args "contam_filter_db" "${dir_mmseqs2_db}/UniRef90_DB"
@@ -1803,7 +1953,10 @@ if [[ ${run_amalgkit_getfastq} -eq 1 && ${getfastq_needs_update} -eq 1 ]]; then
   ensure_dir "${dir_amalgkit_getfastq_sp}"
 
   clear_getfastq_safely_removed_markers
-  stage_getfastq_outputs_for_resume
+  if ! stage_getfastq_outputs_for_resume; then
+    echo "Failed to stage getfastq outputs into a safe resumable work directory. Exiting." >&2
+    exit 1
+  fi
 
   if [[ "${amalgkit_contam_filter}" == "yes" ]]; then
     if ! awk -F '\t' 'NR==1 {found=0; for (i=1; i<=NF; i++) if ($i=="taxid") found=1; exit(found ? 0 : 1)}' "${file_amalgkit_metadata}"; then
