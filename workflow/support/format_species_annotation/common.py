@@ -218,11 +218,6 @@ def normalize_gff_attribute_value(raw_value):
     value = str(raw_value or "").strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
         value = value[1:-1]
-    else:
-        if value.startswith(("'", '"')):
-            value = value[1:]
-        if value.endswith(("'", '"')):
-            value = value[:-1]
     return unquote(value.strip())
 
 

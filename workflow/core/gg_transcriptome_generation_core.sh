@@ -542,8 +542,12 @@ stage_quant_reference_fasta_aliases() {
 
   python - "${metadata_file}" "${reference_fasta}" "${output_dir}" "${canonical_prefix}" "${support_dir}" "${taxonomy_dbfile}" "${audit_file}" <<'PY'
 import csv
+import errno
+import hashlib
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 metadata_path = Path(sys.argv[1])
@@ -560,6 +564,23 @@ if output_dir.exists() and (not output_dir.is_dir()):
     raise SystemExit("Quant fasta staging path is not a directory: {}".format(output_dir))
 if not support_dir.exists():
     raise SystemExit("Support directory was not found: {}".format(support_dir))
+
+reference_real_path = reference_path.resolve()
+if not reference_real_path.is_file():
+    raise SystemExit("Reference fasta path is not a regular file: {}".format(reference_path))
+if reference_real_path.stat().st_size == 0:
+    raise SystemExit("Reference fasta file is empty: {}".format(reference_path))
+
+fasta_suffixes = (".fasta.gz", ".fa.gz", ".fasta", ".fa")
+reference_name_lower = reference_path.name.lower()
+reference_suffix = next(
+    (suffix for suffix in fasta_suffixes if reference_name_lower.endswith(suffix)),
+    "",
+)
+if reference_suffix == "":
+    raise SystemExit(
+        "Reference fasta filename has no supported quant suffix: {}".format(reference_path)
+    )
 
 sys.path.insert(0, str(support_dir))
 from transcriptome_species_aliases import (
@@ -617,14 +638,106 @@ except SpeciesAliasError as exc:
     raise SystemExit(str(exc))
 
 output_dir.mkdir(parents=True, exist_ok=True)
+
+
+def file_digest(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+reference_digest = None
+
+
+def verify_existing_alias(alias_path):
+    global reference_digest
+    if alias_path.is_symlink():
+        raise SystemExit("Quant reference alias must not be a symlink: {}".format(alias_path))
+    if not alias_path.is_file():
+        raise SystemExit("Quant reference alias is not a regular file: {}".format(alias_path))
+    if alias_path.stat().st_size == 0:
+        raise SystemExit("Quant reference alias is empty: {}".format(alias_path))
+    if os.path.samefile(reference_real_path, alias_path):
+        return
+    if alias_path.stat().st_size != reference_real_path.stat().st_size:
+        raise SystemExit("Quant reference path already exists with different content: {}".format(alias_path))
+    if reference_digest is None:
+        reference_digest = file_digest(reference_real_path)
+    if file_digest(alias_path) != reference_digest:
+        raise SystemExit("Quant reference path already exists with different content: {}".format(alias_path))
+
+
+def materialize_regular_alias(alias_path):
+    global reference_digest
+    if alias_path.exists() or alias_path.is_symlink():
+        verify_existing_alias(alias_path)
+        return
+    try:
+        os.link(reference_real_path, alias_path, follow_symlinks=False)
+        return
+    except FileExistsError:
+        verify_existing_alias(alias_path)
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise SystemExit(
+                "Could not create quant reference hard link {}: {}".format(alias_path, exc)
+            )
+
+    temporary_fd, temporary_name = tempfile.mkstemp(
+        prefix=".{}.".format(alias_path.name),
+        suffix=".tmp",
+        dir=str(output_dir),
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with reference_real_path.open("rb") as source_handle:
+            with os.fdopen(temporary_fd, "wb") as destination_handle:
+                temporary_fd = -1
+                shutil.copyfileobj(source_handle, destination_handle, 1024 * 1024)
+                destination_handle.flush()
+                os.fsync(destination_handle.fileno())
+        os.chmod(temporary_path, reference_real_path.stat().st_mode & 0o777)
+        if temporary_path.stat().st_size != reference_real_path.stat().st_size:
+            raise SystemExit("Atomic quant reference copy has the wrong size: {}".format(alias_path))
+        if reference_digest is None:
+            reference_digest = file_digest(reference_real_path)
+        if file_digest(temporary_path) != reference_digest:
+            raise SystemExit("Atomic quant reference copy has different content: {}".format(alias_path))
+        try:
+            os.link(temporary_path, alias_path, follow_symlinks=False)
+        except FileExistsError:
+            verify_existing_alias(alias_path)
+        except OSError as exc:
+            raise SystemExit(
+                "Could not atomically publish quant reference copy {}: {}".format(alias_path, exc)
+            )
+        else:
+            try:
+                verify_existing_alias(alias_path)
+            except BaseException:
+                if alias_path.exists() and os.path.samefile(temporary_path, alias_path):
+                    alias_path.unlink()
+                raise
+    finally:
+        if temporary_fd >= 0:
+            os.close(temporary_fd)
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
 audit_rows = []
 for resolution in resolutions:
-    alias_path = output_dir / "{}_for_kallisto_index.fasta".format(resolution.metadata_prefix)
-    if alias_path.exists() or alias_path.is_symlink():
-        if alias_path.resolve() != reference_path.resolve():
-            raise SystemExit("Quant reference path already exists for a different target: {}".format(alias_path))
-    else:
-        os.symlink(reference_path, alias_path)
+    alias_path = output_dir / "{}_for_kallisto_index{}".format(
+        resolution.metadata_prefix,
+        reference_suffix,
+    )
+    materialize_regular_alias(alias_path)
     audit_rows.append(
         {
             "canonical_species_key": resolution.canonical_prefix,

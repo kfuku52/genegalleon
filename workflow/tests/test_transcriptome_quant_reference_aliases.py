@@ -1,11 +1,14 @@
 import csv
+import os
 import re
 import shlex
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
+import pytest
 from shell_static_helpers import read_text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -99,12 +102,13 @@ def test_stage_quant_reference_fasta_aliases_uses_exact_metadata_scientific_name
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
 
-    exact_scientific_name_path = output_dir / "Asimitellaria_furusei_var._furusei_for_kallisto_index.fasta"
-    canonical_alias = output_dir / "Asimitellaria_furusei_for_kallisto_index.fasta"
-    original_name_alias = output_dir / "Species_one_original_for_kallisto_index.fasta"
+    exact_scientific_name_path = output_dir / "Asimitellaria_furusei_var._furusei_for_kallisto_index.fa.gz"
+    canonical_alias = output_dir / "Asimitellaria_furusei_for_kallisto_index.fa.gz"
+    original_name_alias = output_dir / "Species_one_original_for_kallisto_index.fa.gz"
 
-    assert exact_scientific_name_path.is_symlink()
-    assert exact_scientific_name_path.resolve() == reference_path.resolve()
+    assert exact_scientific_name_path.is_file()
+    assert not exact_scientific_name_path.is_symlink()
+    assert exact_scientific_name_path.read_bytes() == reference_path.read_bytes()
     assert not canonical_alias.exists()
     assert not original_name_alias.exists()
 
@@ -135,9 +139,168 @@ def test_stage_quant_reference_fasta_aliases_still_stages_canonical_prefix_witho
     )
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    canonical_alias = output_dir / "Species_one_for_kallisto_index.fasta"
-    assert canonical_alias.is_symlink()
-    assert canonical_alias.resolve() == reference_path.resolve()
+    canonical_alias = output_dir / "Species_one_for_kallisto_index.fa.gz"
+    assert canonical_alias.is_file()
+    assert not canonical_alias.is_symlink()
+    assert canonical_alias.read_bytes() == reference_path.read_bytes()
+
+
+def test_stage_quant_reference_fasta_aliases_materializes_discoverable_regular_file(tmp_path):
+    quant = pytest.importorskip("amalgkit.quant")
+    metadata_path = tmp_path / "metadata.tsv"
+    reference_path = tmp_path / "Species_one_longestCDS.fa.gz"
+    output_dir = tmp_path / "fasta"
+    source_content = b">seq\nAAAA\n"
+
+    metadata_path.write_text(
+        "run\tlib_layout\nSRR1\tpaired\n",
+        encoding="utf-8",
+    )
+    reference_path.write_bytes(source_content)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-",
+            str(metadata_path),
+            str(reference_path),
+            str(output_dir),
+            "Species_one",
+            str(SUPPORT_DIR),
+        ],
+        input=_embedded_python("stage_quant_reference_fasta_aliases"),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    alias_path = output_dir / "Species_one_for_kallisto_index.fa.gz"
+    assert alias_path.is_file()
+    assert not alias_path.is_symlink()
+    assert alias_path.read_bytes() == source_content
+    assert reference_path.read_bytes() == source_content
+    assert quant.find_species_fasta_files(
+        str(output_dir),
+        "Species one",
+    ) == [str(alias_path)]
+
+
+def test_stage_quant_reference_fasta_aliases_copies_across_filesystems(tmp_path):
+    shared_memory_root = Path("/dev/shm")
+    if not shared_memory_root.is_dir():
+        pytest.skip("cross-filesystem fixture root is unavailable")
+    if shared_memory_root.stat().st_dev == tmp_path.stat().st_dev:
+        pytest.skip("cross-filesystem fixture root shares the test filesystem")
+
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "fasta"
+    source_content = b">seq\nAAAA\n"
+    metadata_path.write_text(
+        "run\tlib_layout\nSRR1\tpaired\n",
+        encoding="utf-8",
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix="genegalleon-quant-reference-",
+        dir=shared_memory_root,
+    ) as source_dir:
+        reference_path = Path(source_dir) / "Species_one_longestCDS.fa.gz"
+        reference_path.write_bytes(source_content)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-",
+                str(metadata_path),
+                str(reference_path),
+                str(output_dir),
+                "Species_one",
+                str(SUPPORT_DIR),
+            ],
+            input=_embedded_python("stage_quant_reference_fasta_aliases"),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+        alias_path = output_dir / "Species_one_for_kallisto_index.fa.gz"
+        assert alias_path.is_file()
+        assert not alias_path.is_symlink()
+        assert alias_path.read_bytes() == source_content
+        assert reference_path.read_bytes() == source_content
+        assert os.stat(alias_path).st_dev != os.stat(reference_path).st_dev
+
+
+def test_stage_quant_reference_fasta_aliases_rejects_colliding_regular_file(tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    reference_path = tmp_path / "Species_one_longestCDS.fa.gz"
+    output_dir = tmp_path / "fasta"
+    alias_path = output_dir / "Species_one_for_kallisto_index.fa.gz"
+    metadata_path.write_text(
+        "run\tlib_layout\nSRR1\tpaired\n",
+        encoding="utf-8",
+    )
+    source_content = b">source\nAAAA\n"
+    collision_content = b">collision\nCCCC\n"
+    reference_path.write_bytes(source_content)
+    output_dir.mkdir()
+    alias_path.write_bytes(collision_content)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-",
+            str(metadata_path),
+            str(reference_path),
+            str(output_dir),
+            "Species_one",
+            str(SUPPORT_DIR),
+        ],
+        input=_embedded_python("stage_quant_reference_fasta_aliases"),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "already exists with different content" in completed.stderr
+    assert reference_path.read_bytes() == source_content
+    assert alias_path.read_bytes() == collision_content
+
+
+def test_stage_quant_reference_fasta_aliases_rejects_symlink_collision(tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    reference_path = tmp_path / "Species_one_longestCDS.fa.gz"
+    output_dir = tmp_path / "fasta"
+    alias_path = output_dir / "Species_one_for_kallisto_index.fa.gz"
+    metadata_path.write_text(
+        "run\tlib_layout\nSRR1\tpaired\n",
+        encoding="utf-8",
+    )
+    reference_path.write_text(">seq\nAAAA\n", encoding="utf-8")
+    output_dir.mkdir()
+    alias_path.symlink_to(reference_path)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-",
+            str(metadata_path),
+            str(reference_path),
+            str(output_dir),
+            "Species_one",
+            str(SUPPORT_DIR),
+        ],
+        input=_embedded_python("stage_quant_reference_fasta_aliases"),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "must not be a symlink" in completed.stderr
+    assert alias_path.is_symlink()
 
 
 def test_stage_quant_reference_fasta_aliases_stages_base_and_infraspecific_prefixes(tmp_path):
@@ -167,12 +330,14 @@ def test_stage_quant_reference_fasta_aliases_stages_base_and_infraspecific_prefi
     )
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    base_alias = output_dir / "Abies_pinsapo_for_kallisto_index.fasta"
-    var_alias = output_dir / "Abies_pinsapo_var._marocana_for_kallisto_index.fasta"
-    assert base_alias.is_symlink()
-    assert var_alias.is_symlink()
-    assert base_alias.resolve() == reference_path.resolve()
-    assert var_alias.resolve() == reference_path.resolve()
+    base_alias = output_dir / "Abies_pinsapo_for_kallisto_index.fa.gz"
+    var_alias = output_dir / "Abies_pinsapo_var._marocana_for_kallisto_index.fa.gz"
+    assert base_alias.is_file()
+    assert var_alias.is_file()
+    assert not base_alias.is_symlink()
+    assert not var_alias.is_symlink()
+    assert base_alias.read_bytes() == reference_path.read_bytes()
+    assert var_alias.read_bytes() == reference_path.read_bytes()
 
 
 def test_stage_quant_reference_fasta_aliases_rejects_different_species_names(tmp_path):
@@ -249,9 +414,10 @@ def test_stage_quant_reference_fasta_aliases_accepts_cross_genus_shared_taxid_an
     )
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    alias_path = output_dir / "Dracocephalum_officinale_for_kallisto_index.fasta"
-    assert alias_path.is_symlink()
-    assert alias_path.resolve() == reference_path.resolve()
+    alias_path = output_dir / "Dracocephalum_officinale_for_kallisto_index.fa.gz"
+    assert alias_path.is_file()
+    assert not alias_path.is_symlink()
+    assert alias_path.read_bytes() == reference_path.read_bytes()
     with audit_path.open("rt", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle, delimiter="\t"))
     assert len(rows) == 1

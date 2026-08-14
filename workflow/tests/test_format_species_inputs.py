@@ -1662,6 +1662,50 @@ def test_gff_grouping_rescue_overlap_applies_to_provided_cds_aliases(tmp_path):
     assert rescue_index["coordinate_rescued_groups"] == 1
 
 
+def test_gff_grouping_preserves_unmatched_terminal_quotes_in_feature_ids(tmp_path):
+    module = load_module()
+    attrs = module.parse_gff_attributes(
+        "ID=gene-TIL';Name=gene-TIL%27;Alias=\"balanced value\";gene_id='quoted-gene'"
+    )
+    assert attrs["ID"] == ("gene-TIL'",)
+    assert attrs["Name"] == ("gene-TIL'",)
+    assert attrs["Alias"] == ("balanced value",)
+    assert attrs["gene_id"] == ("quoted-gene",)
+
+    gff_path = tmp_path / "literal-apostrophe.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-TIL;gene=gene-TIL",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=tx-plain;Parent=gene-TIL",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=tx-plain",
+                "chr1\tsrc\tgene\t20\t28\t.\t+\t.\tID=gene-TIL';gene=gene-TIL'",
+                "chr1\tsrc\tmRNA\t20\t28\t.\t+\t.\tID=tx-apostrophe;Parent=gene-TIL'",
+                "chr1\tsrc\tCDS\t20\t28\t.\t+\t0\tParent=tx-apostrophe",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_prefix": "Test_species",
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+    }
+
+    index = module.build_gff_cds_grouping_index(task)
+
+    plain = module.resolve_cds_header_gff_gene(task, "tx-plain", index)
+    apostrophe = module.resolve_cds_header_gff_gene(
+        task,
+        "tx-apostrophe",
+        index,
+    )
+    assert plain["gene_token"] == "TIL"
+    assert apostrophe["gene_token"] == "TIL'"
+
+
 def test_gff_grouping_rescue_preserves_distinct_authoritative_loci(tmp_path):
     module = load_module()
     gff_path = tmp_path / "distinct-loci.gff3"
