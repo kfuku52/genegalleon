@@ -428,6 +428,7 @@ extract_transcriptomic_rows_for_requested_accessions() {
   local accession_file=$2
   local output_file=$3
   local raw_output_file="${output_file}.raw.$$"
+  local normalized_output_file="${output_file}.normalized.$$"
 
   python "${gg_support_dir}/amalgkit_metadata_accessions.py" \
     extract-transcriptomic \
@@ -435,7 +436,16 @@ extract_transcriptomic_rows_for_requested_accessions() {
     "${accession_file}" \
     "${raw_output_file}"
 
-  mv_out < <(sed -e "s/\t\t\tno\t/\tyes\tyes\tno\t/g" "${raw_output_file}") "${output_file}"
+  if ! sed -e "s/\t\t\tno\t/\tyes\tyes\tno\t/g" "${raw_output_file}" > "${normalized_output_file}"; then
+    rm -f -- "${normalized_output_file}"
+    echo "Failed to normalize extracted transcriptomic metadata: ${raw_output_file}" >&2
+    return 1
+  fi
+  if ! mv_out "${normalized_output_file}" "${output_file}"; then
+    rm -f -- "${normalized_output_file}"
+    echo "Failed to publish extracted transcriptomic metadata: ${output_file}" >&2
+    return 1
+  fi
   rm -f -- "${raw_output_file}"
 }
 
@@ -1374,22 +1384,38 @@ output_root = Path(sys.argv[2])
 completion_manifest = output_root / "getfastq_completion.json"
 
 
-def fetch_bytes(url: str) -> bytes:
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+METADATA_MAX_BYTES = 16 * 1024 * 1024
+
+
+def fetch_text(url: str) -> str:
     last_exc = None
     for attempt in range(1, 6):
         try:
             with urllib.request.urlopen(url, timeout=120) as response:
-                return response.read()
+                chunks = []
+                total = 0
+                while True:
+                    chunk = response.read(
+                        min(DOWNLOAD_CHUNK_BYTES, METADATA_MAX_BYTES + 1 - total)
+                    )
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total > METADATA_MAX_BYTES:
+                        raise ValueError(
+                            "Public FASTQ metadata response exceeded {} bytes: {}".format(
+                                METADATA_MAX_BYTES, url
+                            )
+                        )
+                return b"".join(chunks).decode("utf-8", "replace")
         except Exception as exc:  # pragma: no cover - exercised via shell integration
             last_exc = exc
             if attempt == 5:
                 raise
             time.sleep(2)
     raise last_exc  # pragma: no cover
-
-
-def fetch_text(url: str) -> str:
-    return fetch_bytes(url).decode("utf-8", "replace")
 
 
 def sort_key(item):
@@ -1401,15 +1427,42 @@ def sort_key(item):
     return (2, name)
 
 
-def is_valid_gzip(path: Path) -> bool:
+def is_valid_fastq_gzip(path: Path) -> bool:
     if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
         return False
     try:
         with gzip.open(path, "rb") as handle:
-            payload = handle.read(4096)
-    except (EOFError, OSError):
+            record_count = 0
+            while True:
+                header = handle.readline()
+                if not header:
+                    break
+                if not header.startswith(b"@") or len(header.rstrip(b"\r\n")) < 2:
+                    return False
+
+                sequence_length = 0
+                while True:
+                    line = handle.readline()
+                    if not line:
+                        return False
+                    if line.startswith(b"+"):
+                        break
+                    sequence_length += len(line.rstrip(b"\r\n"))
+                if sequence_length == 0:
+                    return False
+
+                quality_length = 0
+                while quality_length < sequence_length:
+                    line = handle.readline()
+                    if not line:
+                        return False
+                    quality_length += len(line.rstrip(b"\r\n"))
+                if quality_length != sequence_length:
+                    return False
+                record_count += 1
+    except (EOFError, OSError, ValueError):
         return False
-    return bool(payload)
+    return record_count > 0
 
 
 def normalize_ena_fastq_url(value: str) -> str:
@@ -1562,20 +1615,53 @@ def preserve_previous_completion_manifest() -> None:
         suffix = "_{}".format(counter)
 
 
-def write_fastq_atomically(dest: Path, payload: bytes, expected_md5: str = "") -> None:
-    part = dest.with_name(dest.name + ".part")
+def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> None:
+    part = dest.with_name(
+        ".{}.part.{}.{}".format(dest.name, os.getpid(), time.time_ns())
+    )
     if part.exists() or part.is_symlink():
         part.unlink()
+    last_exc = None
     try:
-        if expected_md5 and hashlib.md5(payload).hexdigest() != expected_md5:
+        for attempt in range(1, 6):
+            digest = hashlib.md5()
+            try:
+                with urllib.request.urlopen(url, timeout=120) as response:
+                    first_chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                    if not first_chunk:
+                        raise ValueError("Downloaded FASTQ response was empty: {}".format(url))
+                    source_is_gzip = first_chunk.startswith(b"\x1f\x8b")
+                    with part.open("wb") as raw_out:
+                        if source_is_gzip:
+                            chunk = first_chunk
+                            while chunk:
+                                digest.update(chunk)
+                                raw_out.write(chunk)
+                                chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                        else:
+                            with gzip.GzipFile(fileobj=raw_out, mode="wb") as gzip_out:
+                                chunk = first_chunk
+                                while chunk:
+                                    digest.update(chunk)
+                                    gzip_out.write(chunk)
+                                    chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                        raw_out.flush()
+                        os.fsync(raw_out.fileno())
+                last_exc = None
+                break
+            except Exception as exc:  # pragma: no cover - network retry integration
+                last_exc = exc
+                if part.exists() or part.is_symlink():
+                    part.unlink()
+                if attempt == 5:
+                    raise
+                time.sleep(2)
+        if last_exc is not None:  # pragma: no cover
+            raise last_exc
+        if expected_md5 and digest.hexdigest() != expected_md5:
             raise SystemExit("Downloaded FASTQ checksum mismatch: {}".format(dest))
-        if payload[:2] == b"\x1f\x8b":
-            part.write_bytes(payload)
-        else:
-            with gzip.open(part, "wb") as handle_out:
-                handle_out.write(payload)
-        if not is_valid_gzip(part):
-            raise SystemExit("Downloaded FASTQ is not a valid gzip file: {}".format(dest))
+        if not is_valid_fastq_gzip(part):
+            raise SystemExit("Downloaded file is not a complete FASTQ gzip: {}".format(dest))
         os.replace(part, dest)
     finally:
         if part.exists() or part.is_symlink():
@@ -1626,7 +1712,7 @@ for run in runs:
     elif len(present_paired) == 2:
         existing_fastqs = existing_paired
     if existing_fastqs:
-        if any(not is_valid_gzip(path) for path in existing_fastqs):
+        if any(not is_valid_fastq_gzip(path) for path in existing_fastqs):
             raise SystemExit("Existing fallback FASTQ set is invalid for run: {}".format(run))
         completed_files = [str(path.relative_to(output_root)) for path in existing_fastqs]
         print("Reusing validated fallback FASTQ set for {}: {}".format(run, ",".join(completed_files)))
@@ -1652,13 +1738,12 @@ for run in runs:
         else:
             dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)
         if dest.exists() or dest.is_symlink():
-            if not is_valid_gzip(dest):
+            if not is_valid_fastq_gzip(dest):
                 raise SystemExit("Existing fallback FASTQ is invalid; refusing to replace it: {}".format(dest))
             print("Reusing validated fallback FASTQ for {}: {}".format(run, dest))
             completed_files.append(str(dest.relative_to(output_root)))
             continue
-        payload = fetch_bytes(url)
-        write_fastq_atomically(dest, payload, expected_md5)
+        download_fastq_atomically(dest, url, expected_md5)
         print("Recovered public FASTQ for {} via {}: {} -> {}".format(run, provider, filename or url, dest))
         completed_files.append(str(dest.relative_to(output_root)))
     manifest_runs.append({"run": run, "status": "complete", "files": completed_files})

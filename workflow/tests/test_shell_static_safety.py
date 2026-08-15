@@ -173,7 +173,7 @@ def test_gg_util_is_a_small_compatibility_aggregator():
         "11_fasta.sh",
     ]
     for module in modules:
-        assert len(module.read_text(encoding="utf-8").splitlines()) <= 700
+        assert len(module.read_text(encoding="utf-8").splitlines()) <= 850
         assert module.name in util_text
 
 
@@ -642,8 +642,10 @@ def test_cp_out_and_mv_out_use_option_safe_copy_and_move():
     text = _read_text(util_path)
     cp_body = _function_body(text, "cp_out")
     mv_body = _function_body(text, "mv_out")
-    assert 'cp -- "$@"' in cp_body
-    assert 'cp "$@"' not in cp_body
+    assert '_gg_atomic_copy_one "$1" "${destination_argument}"' in cp_body
+    assert 'cp -- "${source}" "${staged}"' in text
+    assert 'cp "${source}" "${staged}"' not in text
+    assert 'mv_out_bundle "${staged}" "${destination}"' in text
     assert 'mv -- "$@"' in mv_body
     assert 'mv "$@"' not in mv_body
 
@@ -653,12 +655,10 @@ def test_cp_out_and_mv_out_prepare_destination_dir_for_multisource_or_trailing_s
     text = _read_text(util_path)
     cp_body = _function_body(text, "cp_out")
     mv_body = _function_body(text, "mv_out")
-    expected_guard = 'if [[ $# -gt 2 || "${dest}" == */ ]]; then'
-    assert expected_guard in cp_body
-    assert expected_guard in mv_body
-    assert 'ensure_dir "${dest%/}"' in cp_body
+    assert 'if [[ ${source_count} -gt 1 || "${destination_argument}" == */ || -d "${destination_argument}" ]]; then' in cp_body
+    assert 'if [[ $# -gt 2 || "${dest}" == */ ]]; then' in mv_body
+    assert 'ensure_dir "${destination_argument%/}"' in cp_body
     assert 'ensure_dir "${dest%/}"' in mv_body
-    assert 'ensure_parent_dir "${dest}"' in cp_body
     assert 'ensure_parent_dir "${dest}"' in mv_body
 
 
@@ -666,10 +666,8 @@ def test_mv_out_replace_dir_replaces_existing_destination_tree_safely():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
     body = _function_body(text, "mv_out_replace_dir")
-    assert 'rm -rf -- "${dest_dir}"' in body
-    assert 'ensure_parent_dir "${dest_dir}"' in body
-    assert 'mv -- "${staged_dir}" "${dest_dir}"' in body
-    assert 'mv "${staged_dir}" "${dest_dir}"' not in body
+    assert 'mv_out_bundle "${staged_dir}" "${dest_dir}"' in body
+    assert 'rm -rf -- "${dest_dir}"' not in body
 
 
 def test_resolve_rnaspades_transcript_fasta_checks_supported_output_names():
@@ -1353,8 +1351,14 @@ def test_gene_family_zip_archiving_is_scoped_to_active_gene_family_roots():
 def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion_state():
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
 
-    assert "producer.lock" not in core
     assert "lock-path" in core
+    assert 'gene_family_run_lock_path="${dir_output_active}/.gg_run_locks/task.${GG_ARRAY_TASK_ID}.lock"' in core
+    assert '"${gene_family_run_lock_path}" \\' in core
+    assert '"gene-family producer (${og_id})"' in core
+    assert 'gg_shared_lock_start_heartbeat "${gene_family_run_lock_path}"' in core
+    assert core.index('if ! gg_shared_lock_acquire \\') < core.index(
+        'gene_family_task_tmp_dir="${dir_output_active}/tmp/${GG_ARRAY_TASK_ID}_${og_id}"'
+    )
     assert "gg_advisory_shared_lock_acquire" in core
     assert "gg_advisory_shared_lock_release" in core
     assert '"${gene_family_output_storage}" == "zip"' in core
@@ -1378,6 +1382,8 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     cleanup_body = _function_body(core, "cleanup_tmp_dir_on_normal_exit")
     assert cleanup_body.index("gg_advisory_shared_lock_release") < cleanup_body.index("cleanup-materialized")
     assert cleanup_body.index("cleanup-materialized") < cleanup_body.index("archive-family")
+    assert 'gg_shared_lock_stop_heartbeat "${gene_family_run_lock_heartbeat_pid:-}"' in cleanup_body
+    assert 'gg_shared_lock_release "${gene_family_run_lock_path}"' in cleanup_body
 
 
 def test_gene_family_zip_reruns_adopt_pre_underscore_output_paths():

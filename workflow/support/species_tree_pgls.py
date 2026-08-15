@@ -253,7 +253,9 @@ def _validated_paralog_covariance(
             float(numpy.max(numpy.abs(full_covariance.data))) if full_covariance.nnz else 0.0,
         )
         tolerance = numpy.finfo(float).eps * scale * max(1, len(errors)) * 100.0
-        if len(errors) <= 256:
+        if full_covariance.nnz == 0:
+            minimum_eigenvalue = 0.0
+        elif len(errors) <= 256:
             minimum_eigenvalue = float(numpy.linalg.eigvalsh(full_covariance.toarray()).min())
         else:
             minimum_eigenvalue = float(
@@ -516,6 +518,14 @@ def aggregate_species_expression(
     working.insert(1, "species", working["leaf_name"].astype(str).map(mapping))
     expected = pandas.Series(list(mapping.values()), dtype=str).value_counts().to_dict()
     metadata_columns = [column for column in ("biological_id", "technical_id", "batch") if column in working]
+    replicate_key = ["leaf_name", *metadata_columns]
+    duplicate_mask = working.duplicated(replicate_key, keep=False)
+    if duplicate_mask.any():
+        duplicate = working.loc[duplicate_mask, replicate_key].iloc[0].to_dict()
+        raise ValueError(
+            "Prepared expression contains duplicate gene/replicate identity: "
+            + ", ".join(f"{key}={value!r}" for key, value in duplicate.items())
+        )
     group_columns = ["species", *metadata_columns]
     se_by_response = {
         response: f"{response}__standard_error" for response in responses if f"{response}__standard_error" in working

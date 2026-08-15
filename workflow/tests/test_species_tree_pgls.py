@@ -87,6 +87,20 @@ def test_sparse_cross_paralog_covariance_is_propagated_exactly():
     assert total_se == pytest.approx(math.sqrt(0.37))
 
 
+def test_all_zero_sparse_covariance_is_valid_above_dense_threshold():
+    paralog_count = 257
+    total, total_se = _aggregate_values(
+        numpy.ones(paralog_count),
+        numpy.zeros(paralog_count),
+        "sum",
+        "identity",
+        sparse.csr_matrix((paralog_count, paralog_count)),
+    )
+
+    assert total == 257.0
+    assert total_se == 0.0
+
+
 def test_invalid_cross_paralog_covariance_is_rejected():
     with pytest.raises(ValueError, match="positive-semidefinite"):
         _aggregate_values(
@@ -190,6 +204,33 @@ def test_species_aggregation_never_treats_paralogs_as_replicates():
     assert summed.loc[("A", "a2")] == 6.0
     assert averaged.loc[("A", "a1")] == 2.0
     assert set(audit.loc[audit["species"] == "A", "expected_paralog_count"]) == {2}
+
+
+def test_species_aggregation_rejects_duplicate_gene_replicate_identity():
+    expression = pandas.DataFrame(
+        {
+            "leaf_name": ["A_g1", "A_g1"],
+            "expression": [1.0, 2.0],
+        }
+    )
+    reconciliation = pandas.DataFrame(
+        {
+            "node_class": ["tip"],
+            "gene_name": ["A_g1"],
+            "species_name": ["A"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="duplicate gene/replicate identity"):
+        aggregate_species_expression(
+            expression,
+            reconciliation,
+            ["expression"],
+            ["sum"],
+            value_type="identity",
+            missing_policy="error",
+            tree_id="OG1",
+        )
 
 
 def test_species_aggregation_uses_declared_paralog_sampling_covariance():

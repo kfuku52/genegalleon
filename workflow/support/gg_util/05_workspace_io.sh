@@ -344,47 +344,94 @@ shutil.copytree(source_dir, dest_dir, dirs_exist_ok=True)
 PY
 }
 
+_gg_atomic_stream_to_path() (
+	local destination=$1
+	local parent
+	local basename
+	local token
+	local staged
+	parent=$(dirname -- "${destination}")
+	basename=$(basename -- "${destination}")
+	ensure_dir "${parent}" || return 1
+	token="${BASHPID:-$$}.${RANDOM}"
+	staged="${parent}/.${basename}.gg-stream.${token}"
+	if [[ -e "${staged}" || -L "${staged}" ]]; then
+		echo "Atomic stream staging path already exists: ${staged}" >&2
+		return 1
+	fi
+	trap 'rm -f -- "${staged}"' EXIT HUP INT TERM
+	cat > "${staged}" || return 1
+	mv_out_bundle "${staged}" "${destination}" || return 1
+	trap - EXIT HUP INT TERM
+)
+
+_gg_atomic_copy_one() (
+	local source=$1
+	local destination=$2
+	local parent
+	local basename
+	local token
+	local staged
+	parent=$(dirname -- "${destination}")
+	basename=$(basename -- "${destination}")
+	ensure_dir "${parent}" || return 1
+	token="${BASHPID:-$$}.${RANDOM}"
+	staged="${parent}/.${basename}.gg-copy.${token}"
+	if [[ -e "${staged}" || -L "${staged}" ]]; then
+		echo "Atomic copy staging path already exists: ${staged}" >&2
+		return 1
+	fi
+	trap 'rm -rf -- "${staged}"' EXIT HUP INT TERM
+	cp -- "${source}" "${staged}" || return 1
+	mv_out_bundle "${staged}" "${destination}" || return 1
+	trap - EXIT HUP INT TERM
+)
+
 cp_out() {
 	if [[ $# -eq 1 ]]; then
 		if [[ -p /dev/stdin ]]; then
-			ensure_parent_dir "$1"
-			cat > "$1"
+			_gg_atomic_stream_to_path "$1"
 			return $?
 		fi
 		echo "cp_out: at least 2 arguments are required unless stdin is piped."
 		return 1
 	fi
 	if [[ $# -eq 2 && "$1" == "-" ]]; then
-		ensure_parent_dir "$2"
-		cat > "$2"
+		_gg_atomic_stream_to_path "$2"
 		return $?
 	fi
 	if [[ $# -lt 2 ]]; then
 		echo "cp_out: at least 2 arguments are required."
 		return 1
 	fi
-	local dest="${!#}"
-	if [[ $# -gt 2 || "${dest}" == */ ]]; then
-		ensure_dir "${dest%/}"
-	else
-		ensure_parent_dir "${dest}"
+	local destination_argument="${!#}"
+	local source_count=$(( $# - 1 ))
+	local source_index
+	local source
+	local destination
+	if [[ ${source_count} -gt 1 || "${destination_argument}" == */ || -d "${destination_argument}" ]]; then
+		ensure_dir "${destination_argument%/}" || return 1
+		for ((source_index = 1; source_index <= source_count; source_index++)); do
+			source=${!source_index}
+			destination="${destination_argument%/}/$(basename -- "${source}")"
+			_gg_atomic_copy_one "${source}" "${destination}" || return 1
+		done
+		return 0
 	fi
-	cp -- "$@"
+	_gg_atomic_copy_one "$1" "${destination_argument}"
 }
 
 mv_out() {
 	if [[ $# -eq 1 ]]; then
 		if [[ -p /dev/stdin ]]; then
-			ensure_parent_dir "$1"
-			cat > "$1"
+			_gg_atomic_stream_to_path "$1"
 			return $?
 		fi
 		echo "mv_out: at least 2 arguments are required unless stdin is piped."
 		return 1
 	fi
 	if [[ $# -eq 2 && "$1" == "-" ]]; then
-		ensure_parent_dir "$2"
-		cat > "$2"
+		_gg_atomic_stream_to_path "$2"
 		return $?
 	fi
 	if [[ $# -lt 2 ]]; then
@@ -398,6 +445,50 @@ mv_out() {
 		ensure_parent_dir "${dest}"
 	fi
 	mv -- "$@"
+}
+
+_gg_publish_lock_acquire() {
+	local lock_dir=$1
+	local description=$2
+	local poll_seconds
+	local timeout_seconds
+	local stale_seconds
+	local wait_started
+	local wait_logged=0
+	poll_seconds=$(gg_lock_poll_seconds)
+	timeout_seconds=$(gg_lock_acquire_timeout_seconds)
+	stale_seconds=$(gg_lock_stale_seconds)
+	wait_started=$(date +%s)
+	ensure_parent_dir "${lock_dir}" || return 1
+	while true; do
+		if mkdir -- "${lock_dir}" 2>/dev/null; then
+			return 0
+		fi
+		local now_epoch
+		local lock_mtime
+		now_epoch=$(date +%s)
+		lock_mtime=$(gg_stat_mtime_epoch "${lock_dir}")
+		if [[ "${lock_mtime}" =~ ^[0-9]+$ ]] && (( now_epoch - lock_mtime >= stale_seconds )); then
+			if rmdir -- "${lock_dir}" 2>/dev/null; then
+				echo "Recovered stale publication lock: ${description}" >&2
+				continue
+			fi
+		fi
+		if [[ ${wait_logged} -eq 0 ]]; then
+			echo "Waiting for publication lock: ${description}" >&2
+			wait_logged=1
+		fi
+		if (( now_epoch - wait_started >= timeout_seconds )); then
+			echo "Timed out waiting for publication lock: ${description}" >&2
+			return 1
+		fi
+		sleep "${poll_seconds}"
+	done
+}
+
+_gg_publish_lock_release() {
+	local lock_dir=$1
+	rmdir -- "${lock_dir}"
 }
 
 mv_out_bundle() (
@@ -418,7 +509,9 @@ mv_out_bundle() (
 	local -a had_destination=()
 	local -a stage_attempted=()
 	local -a publish_attempted=()
-	local argument_index pair_index previous_index source destination parent basename token canonical_source canonical_destination
+	local -a bundle_lock_paths=()
+	local -a bundle_acquired_paths=()
+	local argument_index pair_index previous_index source destination parent basename token canonical_source canonical_destination lock_path swap_path
 	local pair_count=$(( $# / 2 ))
 	for ((argument_index = 1; argument_index <= $#; argument_index += 2)); do
 		source=${!argument_index}
@@ -474,13 +567,31 @@ mv_out_bundle() (
 		had_destination+=("no")
 		stage_attempted+=("no")
 		publish_attempted+=("no")
+		bundle_lock_paths+=("${parent}/.${basename}.gg-bundle.lock")
 		if [[ -e "${staged[pair_index]}" || -L "${staged[pair_index]}" || -e "${backups[pair_index]}" || -L "${backups[pair_index]}" ]]; then
 			echo "mv_out_bundle: transaction path collision for destination: ${destination}"
 			return 1
 		fi
 	done
-
+	# Acquire every destination lock in a deterministic order so overlapping
+	# bundles cannot race even when their first destinations differ.
+	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
+		for ((previous_index = pair_index + 1; previous_index < pair_count; previous_index++)); do
+			if [[ "${bundle_lock_paths[pair_index]}" > "${bundle_lock_paths[previous_index]}" ]]; then
+				swap_path=${bundle_lock_paths[pair_index]}
+				bundle_lock_paths[pair_index]="${bundle_lock_paths[previous_index]}"
+				bundle_lock_paths[previous_index]="${swap_path}"
+			fi
+		done
+	done
 	local committed=0
+	_mv_out_bundle_release_lock() {
+		local release_index
+		for ((release_index = ${#bundle_acquired_paths[@]} - 1; release_index >= 0; release_index--)); do
+			_gg_publish_lock_release "${bundle_acquired_paths[release_index]}" || true
+		done
+		bundle_acquired_paths=()
+	}
 	_mv_out_bundle_rollback() {
 		local rollback_index
 		if [[ ${committed} -eq 1 ]]; then
@@ -513,12 +624,23 @@ mv_out_bundle() (
 			fi
 		done
 	}
-	trap '_mv_out_bundle_rollback' EXIT
+	_mv_out_bundle_cleanup() {
+		_mv_out_bundle_rollback
+		_mv_out_bundle_release_lock
+	}
+	trap '_mv_out_bundle_cleanup' EXIT
 	trap 'exit 130' HUP INT TERM
 
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
 		stage_attempted[pair_index]="yes"
 		mv -- "${sources[pair_index]}" "${staged[pair_index]}" || return 1
+	done
+	for lock_path in "${bundle_lock_paths[@]}"; do
+		if ! _gg_publish_lock_acquire "${lock_path}" "output bundle publication (${lock_path})"; then
+			echo "mv_out_bundle: failed to acquire publication lock: ${lock_path}" >&2
+			return 1
+		fi
+		bundle_acquired_paths+=("${lock_path}")
 	done
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
 		if [[ -e "${destinations[pair_index]}" || -L "${destinations[pair_index]}" ]]; then
@@ -531,12 +653,13 @@ mv_out_bundle() (
 		mv -- "${staged[pair_index]}" "${destinations[pair_index]}" || return 1
 	done
 	committed=1
-	trap - EXIT HUP INT TERM
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
 		if [[ "${had_destination[pair_index]}" == "yes" ]]; then
 			rm -rf -- "${backups[pair_index]}" || return 1
 		fi
 	done
+	_mv_out_bundle_release_lock
+	trap - EXIT HUP INT TERM
 )
 
 mv_out_replace_dir() {
@@ -550,11 +673,7 @@ mv_out_replace_dir() {
 		echo "mv_out_replace_dir: source directory not found: ${staged_dir}"
 		return 1
 	fi
-	if [[ -e "${dest_dir}" || -L "${dest_dir}" ]]; then
-		rm -rf -- "${dest_dir}" || return 1
-	fi
-	ensure_parent_dir "${dest_dir}"
-	mv -- "${staged_dir}" "${dest_dir}"
+	mv_out_bundle "${staged_dir}" "${dest_dir}"
 }
 
 resolve_rnaspades_transcript_fasta() {

@@ -16,6 +16,7 @@ CORE_PATH = Path(__file__).resolve().parents[1] / "core" / "gg_transcriptome_gen
 class _Response:
     def __init__(self, payload: bytes):
         self.payload = payload
+        self.offset = 0
 
     def __enter__(self):
         return self
@@ -23,8 +24,11 @@ class _Response:
     def __exit__(self, exc_type, exc_value, traceback):
         return False
 
-    def read(self):
-        return self.payload
+    def read(self, size=-1):
+        assert size >= 0, "fallback downloads must use bounded reads"
+        chunk = self.payload[self.offset : self.offset + size]
+        self.offset += len(chunk)
+        return chunk
 
 
 def _fallback_python_source() -> str:
@@ -64,6 +68,10 @@ def _run_fallback(monkeypatch, metadata_path: Path, output_dir: Path, responses:
 
 def _metadata(path: Path, runs: list[str]):
     path.write_text("run\n" + "\n".join(runs) + "\n", encoding="utf-8")
+
+
+def _partial_files(root: Path) -> list[Path]:
+    return [path for path in root.rglob("*") if ".part." in path.name or path.name.endswith(".part")]
 
 
 def _xml(filename: str, url: str) -> bytes:
@@ -111,7 +119,7 @@ def test_public_fallback_reuses_valid_fastq_and_atomically_completes_missing_run
     downloaded = output_dir / "RUN2" / "RUN2.amalgkit.fastq.gz"
     with gzip.open(downloaded, "rb") as handle:
         assert handle.read() == b"@downloaded\nTGCA\n+\n!!!!\n"
-    assert not list(output_dir.rglob("*.part"))
+    assert not _partial_files(output_dir)
     manifest = json.loads((output_dir / "getfastq_completion.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "complete"
     assert manifest["run_count"] == 2
@@ -148,7 +156,7 @@ def test_public_fallback_preserves_existing_outputs_and_prior_manifest_on_failur
     assert not (output_dir / "getfastq_completion.json").exists()
     preserved = output_dir / "getfastq_completion.pre_public_fallback.json"
     assert json.loads(preserved.read_text(encoding="utf-8")) == previous_manifest
-    assert not list(output_dir.rglob("*.part"))
+    assert not _partial_files(output_dir)
 
 
 def test_public_fallback_uses_ena_fastq_when_trace_has_no_original(monkeypatch, tmp_path):
@@ -229,7 +237,7 @@ def test_public_fallback_uses_checksum_validated_ena_submitted_fastq_pair(monkey
         "ERR4643641/ERR4643641_1.amalgkit.fastq.gz",
         "ERR4643641/ERR4643641_2.amalgkit.fastq.gz",
     ]
-    assert not list(output_dir.rglob("*.part"))
+    assert not _partial_files(output_dir)
 
 
 @pytest.mark.parametrize(
@@ -265,7 +273,7 @@ def test_public_fallback_rejects_non_fastq_ena_submitted_files(
         _run_fallback(monkeypatch, metadata_path, output_dir, responses)
 
     assert not (output_dir / "getfastq_completion.json").exists()
-    assert not list(output_dir.rglob("*.part"))
+    assert not _partial_files(output_dir)
 
 
 def test_public_fallback_reuses_one_valid_mate_and_recovers_the_other(monkeypatch, tmp_path):
@@ -346,7 +354,42 @@ def test_public_fallback_rejects_ena_checksum_mismatch(monkeypatch, tmp_path):
         _run_fallback(monkeypatch, metadata_path, output_dir, responses)
 
     assert not (output_dir / "getfastq_completion.json").exists()
-    assert not list(output_dir.rglob("*.part"))
+    assert not _partial_files(output_dir)
+
+
+def test_public_fallback_rejects_truncated_existing_fastq(monkeypatch, tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["RUN1"])
+    existing = output_dir / "RUN1" / "RUN1.amalgkit.fastq.gz"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(gzip.compress(b"@read\nACGT\n+\n!!!!\n" * 1000)[:-8])
+
+    with pytest.raises(SystemExit, match="Existing fallback FASTQ set is invalid"):
+        _run_fallback(monkeypatch, metadata_path, output_dir, {})
+
+    assert not (output_dir / "getfastq_completion.json").exists()
+    assert not _partial_files(output_dir)
+
+
+def test_public_fallback_rejects_non_fastq_success_response(monkeypatch, tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["RUN1"])
+    fastq_url = "https://example.invalid/RUN1.fastq"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=RUN1": _xml(
+            "RUN1.fastq", fastq_url
+        ),
+        fastq_url: b"<html>temporary upstream error</html>",
+    }
+
+    with pytest.raises(SystemExit, match="not a complete FASTQ gzip"):
+        _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+
+    assert not (output_dir / "RUN1" / "RUN1.amalgkit.fastq.gz").exists()
+    assert not (output_dir / "getfastq_completion.json").exists()
+    assert not _partial_files(output_dir)
 
 
 def _run_resume_staging(work_dir: Path, published_dir: Path) -> subprocess.CompletedProcess[str]:
@@ -580,3 +623,49 @@ def test_download_source_exhaustion_mixed_with_another_fatal_fails_closed(tmp_pa
     trace = (tmp_path / "trace.txt").read_text(encoding="utf-8").splitlines()
     assert trace == ["attempt:yes:initial", "attempt:no:retry_rrna_filter_no"]
     assert "Exiting without fallback" in completed.stdout
+
+
+def test_relaxed_metadata_normalization_preserves_old_output_when_sed_fails(tmp_path):
+    output = tmp_path / "metadata.tsv"
+    output.write_text("old\n", encoding="utf-8")
+    metadata = tmp_path / "source.tsv"
+    accessions = tmp_path / "accessions.txt"
+    metadata.write_text("run\nRUN1\n", encoding="utf-8")
+    accessions.write_text("RUN1\n", encoding="utf-8")
+    function_source = _shell_function_source(
+        "extract_transcriptomic_rows_for_requested_accessions"
+    )
+    script = "\n".join(
+        [
+            "set -u",
+            function_source,
+            r'''
+gg_support_dir=.
+python() {
+  local raw_output=$5
+  printf 'new\n' > "${raw_output}"
+}
+sed() {
+  return 7
+}
+mv_out() {
+  command mv -- "$1" "$2"
+}
+extract_transcriptomic_rows_for_requested_accessions "$1" "$2" "$3"
+''',
+        ]
+    )
+
+    completed = subprocess.run(
+        ["bash", "-s", "--", str(metadata), str(accessions), str(output)],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        cwd=tmp_path,
+    )
+
+    assert completed.returncode != 0
+    assert output.read_text(encoding="utf-8") == "old\n"
+    assert list(tmp_path.glob("metadata.tsv.raw.*"))
+    assert not list(tmp_path.glob("metadata.tsv.normalized.*"))

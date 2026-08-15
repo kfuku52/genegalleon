@@ -1,6 +1,7 @@
 import gzip
 import shlex
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -1074,6 +1075,25 @@ def test_cp_out_creates_destination_dir_when_target_has_trailing_slash(tmp_path)
     assert copied.read_text() == "abc\n"
 
 
+def test_cp_out_preserves_existing_destination_when_copy_fails(tmp_path):
+    src = tmp_path / "src.txt"
+    destination = tmp_path / "out" / "result.txt"
+    src.write_text("new\n")
+    destination.parent.mkdir()
+    destination.write_text("old\n")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        'cp() { local destination="${!#}"; printf "partial\\n" > "${destination}"; return 9; }; '
+        f"cp_out {shlex.quote(str(src))} {shlex.quote(str(destination))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode != 0
+    assert destination.read_text() == "old\n"
+    assert not list(destination.parent.glob("*.gg-copy.*"))
+
+
 def test_mv_out_creates_destination_dir_for_multi_source_move(tmp_path):
     src1 = tmp_path / "a.txt"
     src2 = tmp_path / "b.txt"
@@ -1305,6 +1325,67 @@ def test_mv_out_bundle_rejects_hardlinked_destination_aliases(tmp_path):
     assert second_source.read_text() == "second\n"
 
 
+def test_mv_out_bundle_serializes_concurrent_publishers(tmp_path):
+    destination = tmp_path / "out" / "result.txt"
+    destination.parent.mkdir()
+    destination.write_text("old\n")
+    first_source = tmp_path / "first.txt"
+    second_source = tmp_path / "second.txt"
+    first_source.write_text("first\n")
+    second_source.write_text("second\n")
+    acquired_marker = tmp_path / "first-entered.txt"
+    release_marker = tmp_path / "release-first.txt"
+    first_command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "GG_LOCK_POLL_SECONDS=1; GG_LOCK_ACQUIRE_TIMEOUT_SECONDS=10; "
+        "mkdir() { command mkdir \"$@\"; local status=$?; "
+        f"if [[ $* == *gg-bundle.lock* && ${{status}} -eq 0 ]]; then touch {shlex.quote(str(acquired_marker))}; "
+        f"while [[ ! -e {shlex.quote(str(release_marker))} ]]; do sleep 0.05; done; fi; "
+        "return ${status}; }; "
+        f"mv_out_bundle {shlex.quote(str(first_source))} {shlex.quote(str(destination))}"
+    )
+    second_command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "GG_LOCK_POLL_SECONDS=1; GG_LOCK_ACQUIRE_TIMEOUT_SECONDS=10; "
+        f"mv_out_bundle {shlex.quote(str(second_source))} {shlex.quote(str(destination))}"
+    )
+    first = subprocess.Popen(
+        ["bash", "-lc", first_command],
+        cwd=tmp_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 20
+    while not acquired_marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if not acquired_marker.exists():
+        release_marker.touch()
+        first_stdout, first_stderr = first.communicate(timeout=10)
+        pytest.fail("first publisher did not acquire lock: " + first_stderr + first_stdout)
+    second = subprocess.Popen(
+        ["bash", "-lc", second_command],
+        cwd=tmp_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    time.sleep(0.2)
+    assert second.poll() is None
+    release_marker.touch()
+    first_stdout, first_stderr = first.communicate(timeout=10)
+    second_stdout, second_stderr = second.communicate(timeout=10)
+
+    assert first.returncode == 0, first_stderr + first_stdout
+    assert second.returncode == 0, second_stderr + second_stdout
+    assert destination.read_text() == "second\n"
+    assert not first_source.exists()
+    assert not second_source.exists()
+    assert not list(destination.parent.glob("*.gg-bundle.lock"))
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
+
+
 def test_mv_out_replace_dir_replaces_existing_nonempty_directory(tmp_path):
     staged_dir = tmp_path / "staged" / "SRR000001"
     dest_dir = tmp_path / "runtime" / "SRR000001"
@@ -1325,6 +1406,31 @@ def test_mv_out_replace_dir_replaces_existing_nonempty_directory(tmp_path):
     assert not (dest_dir / "stale.txt").exists()
     assert not (dest_dir / "nested" / "old.tsv").exists()
     assert (dest_dir / "nested" / "new.tsv").read_text() == "new\n"
+
+
+def test_mv_out_replace_dir_restores_existing_directory_when_publish_fails(tmp_path):
+    staged_dir = tmp_path / "staged" / "RUN1"
+    dest_dir = tmp_path / "runtime" / "RUN1"
+    staged_dir.mkdir(parents=True)
+    dest_dir.mkdir(parents=True)
+    (staged_dir / "new.txt").write_text("new\n")
+    (dest_dir / "old.txt").write_text("old\n")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "GG_TEST_MV_COUNT=0; "
+        "mv() { GG_TEST_MV_COUNT=$((GG_TEST_MV_COUNT + 1)); "
+        'if [[ ${GG_TEST_MV_COUNT} -eq 3 ]]; then return 9; fi; command mv "$@"; }; '
+        f"mv_out_replace_dir {shlex.quote(str(staged_dir))} {shlex.quote(str(dest_dir))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode != 0
+    assert (dest_dir / "old.txt").read_text() == "old\n"
+    assert not (dest_dir / "new.txt").exists()
+    assert (staged_dir / "new.txt").read_text() == "new\n"
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
 
 
 def test_resolve_rnaspades_transcript_fasta_prefers_primary_output(tmp_path):

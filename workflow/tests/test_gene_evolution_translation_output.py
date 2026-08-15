@@ -1,9 +1,9 @@
+import gzip
 import re
 import subprocess
 from pathlib import Path
 
 import pytest
-
 
 CORE_PATH = Path(__file__).resolve().parents[1] / "core" / "gg_gene_evolution_core.sh"
 BASH_HAS_MAPFILE = subprocess.run(
@@ -102,7 +102,11 @@ seqkit() {
     printf 'partial\n' > "${destination_path}"
     return 9
   fi
-  cp -- "${source_path}" "${destination_path}"
+  if [[ "${destination_path}" == *.gz ]]; then
+    gzip -c -- "${source_path}" > "${destination_path}"
+  else
+    cp -- "${source_path}" "${destination_path}"
+  fi
 }
 
 translate_orthogroup_cds_to_protein_fasta "${cds_fasta}" "${protein_out}" ignored.tsv
@@ -152,3 +156,17 @@ def test_translation_removes_partial_output_when_seqkit_write_fails(tmp_path):
     assert not list(protein_out.parent.glob("OG0001_pep.fa.partial.*"))
     assert not (tmp_path / "OG0001.translated.pep.tmp.fasta").exists()
     assert "Failed to write translated protein FASTA" in completed.stderr
+
+
+def test_translation_keeps_gzip_suffix_on_staging_file(tmp_path):
+    cds_fasta = tmp_path / "input" / "OG0001_cds.fa"
+    cds_fasta.parent.mkdir()
+    cds_fasta.write_text(">sp1_gene1\nATG\n", encoding="utf-8")
+    protein_out = tmp_path / "output" / "protein_fasta" / "OG0001_pep.fa.gz"
+
+    completed = _run_translation(cds_fasta, protein_out, fail_final_write=False)
+
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    with gzip.open(protein_out, "rt", encoding="utf-8") as handle:
+        assert handle.read() == ">sp1_gene1\nATG\n"
+    assert not list(protein_out.parent.glob("OG0001_pep.fa.gz.partial.*"))

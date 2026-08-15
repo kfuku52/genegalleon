@@ -115,6 +115,8 @@ gene_family_run_token=""
 gene_family_state_finalized=1
 gene_family_run_succeeded=0
 gene_family_materialization_receipt=""
+gene_family_run_lock_path=""
+gene_family_run_lock_heartbeat_pid=""
 gene_family_output_storage=$(printf '%s' "${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}" | tr '[:upper:]' '[:lower:]')
 gene_family_zip_min_batch_files="${gene_family_zip_min_batch_files:-${GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES:-100}}"
 gene_family_zip_compression=$(printf '%s' "${gene_family_zip_compression:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION:-adaptive}}" | tr '[:upper:]' '[:lower:]')
@@ -694,6 +696,13 @@ translate_orthogroup_cds_to_protein_fasta() {
   local protein_out=$2
   local table_path=$3
   local protein_part="${protein_out}.partial.$$"
+  if [[ "${protein_out}" == *.gz ]]; then
+    # seqkit selects output compression from the final filename suffix.  Keep
+    # the staging file on the destination filesystem while retaining .gz as
+    # its last suffix so a compressed public artifact cannot contain plain
+    # FASTA bytes after the atomic rename.
+    protein_part="${protein_out}.partial.$$.gz"
+  fi
   local translated_tmp="${og_id}.translated.pep.tmp.fasta"
   local species_code=""
   local sp_ub=""
@@ -898,6 +907,11 @@ cleanup_tmp_dir_on_normal_exit() {
     then
       echo "Warning: Failed to clean stale or excess gene-family temporary directories." >&2
     fi
+  fi
+  gg_shared_lock_stop_heartbeat "${gene_family_run_lock_heartbeat_pid:-}"
+  if [[ -n "${gene_family_run_lock_path:-}" ]]; then
+    gg_shared_lock_release "${gene_family_run_lock_path}" 2>/dev/null || true
+    gene_family_run_lock_path=""
   fi
   return ${exit_code}
 }
@@ -1557,6 +1571,17 @@ if [[
   echo "Warning: ZIP-backed artifacts exist below ${dir_output_active}, but gene_family_output_storage=${gene_family_output_storage}." >&2
   echo "The family can resume, but new outputs will remain raw; use storage mode zip to return them to ZIP." >&2
 fi
+gene_family_run_lock_path="${dir_output_active}/.gg_run_locks/task.${GG_ARRAY_TASK_ID}.lock"
+if ! gg_shared_lock_acquire \
+  "${gene_family_run_lock_path}" \
+  "gene-family producer (${og_id})"
+then
+  echo "Failed to acquire the exclusive gene-family producer lock." >&2
+  exit 1
+fi
+trap cleanup_tmp_dir_on_normal_exit EXIT
+gg_shared_lock_start_heartbeat "${gene_family_run_lock_path}"
+gene_family_run_lock_heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
 gene_family_task_tmp_dir="${dir_output_active}/tmp/${GG_ARRAY_TASK_ID}_${og_id}"
 if [[ -e "${gene_family_task_tmp_dir}" && ${delete_preexisting_tmp_dir} -eq 1 ]]; then
   echo "$(date): Deleting preexisting ${gene_family_task_tmp_dir}"
@@ -1589,7 +1614,6 @@ if [[
     echo "Failed to acquire the gene-family lock." >&2
     exit 1
   fi
-  trap cleanup_tmp_dir_on_normal_exit EXIT
 fi
 if [[ "${gene_family_output_storage}" == "zip" ]]; then
   gene_family_run_token="${GG_JOB_ID:-local}_${GG_ARRAY_TASK_ID:-1}_$$_$(date +%s)"
