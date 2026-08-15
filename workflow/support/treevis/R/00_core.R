@@ -201,15 +201,19 @@ treevis_strip_ortholog_prefix <- function(label, ortholog_prefix) {
     if (!nzchar(prefix)) {
         return(text)
     }
-    target <- treevis_ortholog_prefix_target(prefix)
-    exact_prefix <- paste0(target, "_")
-    if (treevis_label_matches_ortholog_prefix(text, prefix) && startsWith(text, exact_prefix)) {
-        return(substr(text, nchar(exact_prefix) + 1, nchar(text)))
+    strip_one <- function(one_text) {
+        target <- treevis_ortholog_prefix_target(prefix)
+        exact_prefix <- paste0(target, "_")
+        if (treevis_label_matches_ortholog_prefix(one_text, prefix) && startsWith(one_text, exact_prefix)) {
+            return(substr(one_text, nchar(exact_prefix) + 1, nchar(one_text)))
+        }
+        if (startsWith(one_text, prefix)) {
+            return(substr(one_text, nchar(prefix) + 1, nchar(one_text)))
+        }
+        one_text
     }
-    if (startsWith(text, prefix)) {
-        return(substr(text, nchar(prefix) + 1, nchar(text)))
-    }
-    text
+    lines <- strsplit(text, "\n", fixed = TRUE)[[1]]
+    paste(vapply(lines, strip_one, character(1)), collapse = "\n")
 }
 
 reshape_long_base = function(df, id_col, value_cols, key_col, value_col) {

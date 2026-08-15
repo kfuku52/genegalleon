@@ -2,10 +2,17 @@
 
 import json
 import os
+import re
 from collections import defaultdict
 from pathlib import Path
+from urllib.parse import quote
 
-from format_species_writers import apply_common_replacements, open_text, write_gff_lines_gzip
+from format_species_writers import (
+    apply_common_replacements,
+    inspect_invalid_utf8,
+    open_text,
+    write_gff_lines_gzip,
+)
 
 from .common import (
     first_token,
@@ -15,7 +22,7 @@ from .common import (
     sanitize_identifier,
 )
 
-GFF_REPAIR_VERSION = 1
+GFF_REPAIR_VERSION = 2
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -111,7 +118,7 @@ def read_formatted_cds_gene_ids(cds_path, species_prefix):
 
 
 def iter_gff_feature_rows(gff_path):
-    with open_text(Path(gff_path), "rt") as handle:
+    with open_text(Path(gff_path), "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
             line = apply_common_replacements(raw_line.rstrip("\n\r"))
             if line == "" or line.startswith("#"):
@@ -278,6 +285,19 @@ def rewrite_attribute_value(raw_value, id_mapping, multiple=False):
 
 
 def rewrite_gff_attributes(attr_text, feature_type, id_mapping):
+    bare_fields = [field.strip() for field in str(attr_text or "").split(";") if field.strip() != ""]
+    if (
+        len(bare_fields) == 1
+        and bare_fields[0] != "."
+        and "=" not in bare_fields[0]
+        and not re.search(r"\s", bare_fields[0])
+    ):
+        token = normalize_gff_attribute_value(bare_fields[0])
+        encoded = quote(token, safe="._:-|")
+        if feature_type == "gene":
+            return "ID={};gene_id={}".format(encoded, encoded), 0, 0, 1
+        return "Parent={};gene_id={}".format(encoded, encoded), 0, 0, 1
+
     fields = str(attr_text).split(";")
     changed = 0
     reference_changes = 0
@@ -303,11 +323,11 @@ def rewrite_gff_attributes(attr_text, feature_type, id_mapping):
         changed += value_changes
         if key in GENE_REFERENCE_KEYS:
             reference_changes += value_changes
-    return ";".join(rewritten), changed, reference_changes
+    return ";".join(rewritten), changed, reference_changes, 0
 
 
 def iter_repaired_gff_lines(gff_path, id_mapping, counters):
-    with open_text(Path(gff_path), "rt") as handle:
+    with open_text(Path(gff_path), "rt", errors="replace") as handle:
         for raw_line in handle:
             line = apply_common_replacements(raw_line)
             stripped = line.rstrip("\n\r")
@@ -320,16 +340,17 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters):
                 yield line
                 continue
             feature_type = parts[2].strip().lower()
-            attributes, value_changes, reference_changes = rewrite_gff_attributes(
+            attributes, value_changes, reference_changes, normalized_bare = rewrite_gff_attributes(
                 parts[8],
                 feature_type,
                 id_mapping,
             )
-            if value_changes > 0:
+            if value_changes > 0 or normalized_bare > 0:
                 parts[8] = attributes
                 counters["changed_lines"] += 1
                 counters["changed_values"] += value_changes
                 counters["changed_references"] += reference_changes
+                counters["normalized_bare_attribute_lines"] += normalized_bare
                 line = "\t".join(parts) + newline
             yield line
 
@@ -338,6 +359,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode):
     mode = normalize_gff_repair_mode(mode)
     source_fingerprint = file_fingerprint(gff_path)
     cds_fingerprint = file_fingerprint(cds_path)
+    encoding_audit = inspect_invalid_utf8(gff_path)
     cds_gene_ids = read_formatted_cds_gene_ids(cds_path, species_prefix)
     plan = choose_gene_id_repairs(gff_path, cds_gene_ids) if mode != "off" else {
         "id_mapping": {},
@@ -361,12 +383,21 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode):
         "changed_lines": 0,
         "changed_values": 0,
         "changed_references": 0,
+        "normalized_bare_attribute_lines": 0,
     }
     line_count, _feature_count = write_gff_lines_gzip(
         Path(output_path),
         iter_repaired_gff_lines(gff_path, plan["id_mapping"], counters),
     )
-    status = "repaired" if len(plan["id_mapping"]) > 0 else "unchanged"
+    status = (
+        "repaired"
+        if (
+            len(plan["id_mapping"]) > 0
+            or counters["normalized_bare_attribute_lines"] > 0
+            or encoding_audit["invalid_utf8_bytes"] > 0
+        )
+        else "unchanged"
+    )
     if mode == "off":
         status = "off"
     audit = {
@@ -384,6 +415,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode):
         "changed_lines": counters["changed_lines"],
         "changed_values": counters["changed_values"],
         "changed_references": counters["changed_references"],
+        "normalized_bare_attribute_lines": counters["normalized_bare_attribute_lines"],
         "ambiguous_count": len(plan["ambiguous"]),
         "collision_count": len(plan["collisions"]),
         "missing_gene_id_count": len(plan["missing_gene_id_lines"]),
@@ -392,6 +424,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode):
         "collisions": plan["collisions"],
         "missing_gene_id_lines": plan["missing_gene_id_lines"],
     }
+    audit.update(encoding_audit)
     audit_path = gff_repair_audit_path(output_path)
     write_json_atomic(audit_path, audit)
     return audit
@@ -407,6 +440,11 @@ def repair_result_fields(audit, output_path):
             "repair_references": 0,
             "repair_ambiguous": 0,
             "repair_collisions": 0,
+            "normalized_bare_attribute_lines": 0,
+            "invalid_utf8_bytes": 0,
+            "invalid_utf8_sequences": 0,
+            "invalid_utf8_line_count": 0,
+            "invalid_utf8_lines": [],
         }
     return {
         "repair_mode": str(audit.get("mode") or ""),
@@ -416,4 +454,9 @@ def repair_result_fields(audit, output_path):
         "repair_references": int(audit.get("changed_references", 0) or 0),
         "repair_ambiguous": int(audit.get("ambiguous_count", 0) or 0),
         "repair_collisions": int(audit.get("collision_count", 0) or 0),
+        "normalized_bare_attribute_lines": int(audit.get("normalized_bare_attribute_lines", 0) or 0),
+        "invalid_utf8_bytes": int(audit.get("invalid_utf8_bytes", 0) or 0),
+        "invalid_utf8_sequences": int(audit.get("invalid_utf8_sequences", 0) or 0),
+        "invalid_utf8_line_count": int(audit.get("invalid_utf8_line_count", 0) or 0),
+        "invalid_utf8_lines": list(audit.get("invalid_utf8_lines", ()) or ()),
     }

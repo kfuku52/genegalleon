@@ -161,6 +161,50 @@ def test_validate_cds_gff_mapping_fails_on_missing_ids(tmp_path):
     assert "missing=1 sample=Arabidopsis_thaliana_gene2" in completed.stderr
 
 
+def test_validate_cds_gff_mapping_tolerates_low_rate_fallback_unless_strict(tmp_path):
+    cds_dir = tmp_path / "species_cds"
+    gff_dir = tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+    species = "Adiantum_capillus-veneris"
+    total_records = 1000
+    write_gzip_text(
+        cds_dir / f"{species}_demo.fa.gz",
+        "".join(f">{species}_gene{index}\nATGAAA\n" for index in range(total_records)),
+    )
+    write_gzip_text(
+        gff_dir / f"{species}_demo.gff.gz",
+        "".join(
+            "chr1\tsrc\tCDS\t{}\t{}\t.\t+\t0\tParent=gene{}\n".format(
+                index * 6 + 1,
+                index * 6 + 6,
+                index,
+            )
+            for index in range(total_records - 1)
+        ),
+    )
+
+    completed = run_script(
+        "--species-cds-dir",
+        str(cds_dir),
+        "--species-gff-dir",
+        str(gff_dir),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "(fallback=1)" in completed.stdout
+    assert "Retaining 1 low-rate CDS/GFF fallback record(s)" in completed.stderr
+
+    strict = run_script(
+        "--species-cds-dir",
+        str(cds_dir),
+        "--species-gff-dir",
+        str(gff_dir),
+        "--strict",
+    )
+    assert strict.returncode == 1
+    assert f"missing=1 sample={species}_gene999" in strict.stderr
+
+
 def test_validate_cds_gff_mapping_accepts_verified_gene_only_gff(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"

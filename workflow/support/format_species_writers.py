@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import time
+from pathlib import Path
 
 COMMON_REPLACEMENTS = (
     ("evm_27.model.", ""),
@@ -37,15 +38,56 @@ def output_compression_threads():
     return max(1, value)
 
 
-def open_text(path, mode):
+def open_text(path, mode, errors="strict"):
+    path = Path(path)
     if path.name.endswith(".gz"):
-        kwargs = {"encoding": "utf-8"}
+        kwargs = {"encoding": "utf-8", "errors": errors}
         if any(flag in mode for flag in ("w", "a", "x")):
             kwargs["compresslevel"] = output_gzip_compresslevel()
         return gzip.open(path, mode, **kwargs)
     if path.name.endswith(".bz2"):
-        return bz2.open(path, mode, encoding="utf-8")
-    return open(path, mode, encoding="utf-8")
+        return bz2.open(path, mode, encoding="utf-8", errors=errors)
+    return open(path, mode, encoding="utf-8", errors=errors)
+
+
+def open_binary(path, mode="rb"):
+    path = Path(path)
+    if path.name.endswith(".gz"):
+        return gzip.open(path, mode)
+    if path.name.endswith(".bz2"):
+        return bz2.open(path, mode)
+    return open(path, mode)
+
+
+def inspect_invalid_utf8(path, max_line_numbers=20):
+    invalid_bytes = 0
+    invalid_sequences = 0
+    affected_lines = 0
+    line_numbers = []
+    with open_binary(path, "rb") as handle:
+        for line_number, raw_line in enumerate(handle, start=1):
+            offset = 0
+            line_invalid = False
+            while offset < len(raw_line):
+                try:
+                    raw_line[offset:].decode("utf-8")
+                    break
+                except UnicodeDecodeError as exc:
+                    width = max(1, int(exc.end) - int(exc.start))
+                    invalid_bytes += width
+                    invalid_sequences += 1
+                    line_invalid = True
+                    offset += max(int(exc.end), int(exc.start) + 1)
+            if line_invalid:
+                affected_lines += 1
+                if len(line_numbers) < max(0, int(max_line_numbers)):
+                    line_numbers.append(line_number)
+    return {
+        "invalid_utf8_bytes": invalid_bytes,
+        "invalid_utf8_sequences": invalid_sequences,
+        "invalid_utf8_line_count": affected_lines,
+        "invalid_utf8_lines": line_numbers,
+    }
 
 
 def make_temporary_output_path(output_path):
@@ -173,7 +215,7 @@ def write_gff_gzip(input_path, output_path):
     line_count = 0
 
     if pigz_path is None:
-        with open_text(input_path, "rt") as fin, open_text(output_path, "wt") as fout:
+        with open_text(input_path, "rt", errors="replace") as fin, open_text(output_path, "wt") as fout:
             for line in fin:
                 fout.write(apply_common_replacements(line))
                 line_count += 1
@@ -181,7 +223,7 @@ def write_gff_gzip(input_path, output_path):
 
     def writer(handle):
         nonlocal line_count
-        with open_text(input_path, "rt") as fin:
+        with open_text(input_path, "rt", errors="replace") as fin:
             for line in fin:
                 handle.write(apply_common_replacements(line))
                 line_count += 1

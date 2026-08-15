@@ -168,6 +168,27 @@ def main():
     )
     genome_result = fsi.format_genome(task, output_genome_dir, args.overwrite, args.dry_run)
 
+    if int(gff_result.get("invalid_utf8_bytes", 0) or 0) > 0:
+        sys.stderr.write(
+            "Warning: [{}] {}: replaced {} invalid UTF-8 byte(s) in source GFF "
+            "across {} line(s); source line sample={}.\n".format(
+                task["provider"],
+                task["species_prefix"],
+                gff_result.get("invalid_utf8_bytes", 0),
+                gff_result.get("invalid_utf8_line_count", 0),
+                ",".join(str(value) for value in gff_result.get("invalid_utf8_lines", ())) or "NA",
+            )
+        )
+    if int(cds_result.get("gff_mapping_fallback_tolerated", 0) or 0) > 0:
+        sys.stderr.write(
+            "Warning: [{}] {}: retained {} low-rate CDS/GFF fallback record(s); "
+            "strict mode would reject this mismatch.\n".format(
+                task["provider"],
+                task["species_prefix"],
+                cds_result.get("gff_unexpected_mapping_records", 0),
+            )
+        )
+
     run_started_utc = fsi.utc_now_iso()
     if fsi.format_task_succeeded(cds_result, gff_result, genome_result, args.dry_run):
         taxonomy_resolver = fsi.SpeciesTaxonomyMetadataResolver.from_environment()
@@ -206,6 +227,7 @@ def main():
         "cds_gff_records_mapped": cds_result.get("gff_records_mapped", 0),
         "cds_gff_records_unmapped": cds_result.get("gff_records_unmapped", 0),
         "cds_gff_records_ambiguous": cds_result.get("gff_records_ambiguous", 0),
+        "cds_gff_fallback_records": cds_result.get("gff_unexpected_mapping_records", 0),
         "cds_gff_coordinate_rescued_transcripts": cds_result.get(
             "gff_coordinate_rescued_transcripts", 0
         ),
@@ -215,6 +237,9 @@ def main():
         "gff_repair_ambiguous": gff_result.get("repair_ambiguous", 0),
         "gff_repair_collisions": gff_result.get("repair_collisions", 0),
         "gff_repair_mode": gff_result.get("repair_mode", ""),
+        "gff_normalized_bare_attribute_lines": gff_result.get("normalized_bare_attribute_lines", 0),
+        "gff_invalid_utf8_bytes": gff_result.get("invalid_utf8_bytes", 0),
+        "gff_invalid_utf8_sequences": gff_result.get("invalid_utf8_sequences", 0),
         "dry_run": int(args.dry_run),
         "species_prefix": task["species_prefix"],
         "species_key": task["species_key"],

@@ -53,6 +53,26 @@ ORYZA_MINUTA_SUBGENOME_BUNDLES = (
 
 GENE_GROUPING_MODES = ("strict", "rescue_overlap")
 
+# Non-strict input generation may retain a very small residual set of CDS
+# records that cannot be resolved through the companion GFF.  Keep both an
+# absolute and relative ceiling so this cannot hide a wrong annotation file.
+GFF_MAPPING_FALLBACK_MAX_RECORDS = 10
+
+GFF_MAPPING_FALLBACK_MAX_FRACTION = 0.001
+
+
+def gff_mapping_fallback_is_tolerable(total_records, unmapped_records, ambiguous_records=0):
+    try:
+        total = int(total_records)
+        mismatches = int(unmapped_records) + int(ambiguous_records)
+    except (TypeError, ValueError):
+        return False
+    if mismatches <= 0:
+        return True
+    if total <= 0 or mismatches > GFF_MAPPING_FALLBACK_MAX_RECORDS:
+        return False
+    return (mismatches / float(total)) <= GFF_MAPPING_FALLBACK_MAX_FRACTION
+
 # Published CDS bundles with a small, documented set of records absent from
 # the companion GFF. Formatting and validation share this exception policy.
 KNOWN_ALLOWED_MISSING_CDS_IDS = {
@@ -125,10 +145,12 @@ GENBANK_EXTENSIONS = (
     ".gbk",
     ".gbff",
     ".genbank",
+    ".embl",
     ".gb.gz",
     ".gbk.gz",
     ".gbff.gz",
     ".genbank.gz",
+    ".embl.gz",
 )
 
 SPECIES_KEY_FILENAME_SUFFIXES = (

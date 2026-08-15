@@ -510,6 +510,9 @@ if (treevis_label_matches_ortholog_prefix("Cenchrus_americanus_x_Cenchrus_purpur
 if (treevis_strip_ortholog_prefix("Species_a_gene1", "Species_a_") != "gene1") {
   stop("treevis_strip_ortholog_prefix should strip the exact species prefix.")
 }
+if (treevis_strip_ortholog_prefix("Species_a_gene1\nSpecies_a_gene2", "Species_a_") != "gene1\ngene2") {
+  stop("treevis_strip_ortholog_prefix should strip every line in a multiline label.")
+}
 df_nested <- data.frame(
   nearests = c("x", "y"),
   ymin = c(1, 2),

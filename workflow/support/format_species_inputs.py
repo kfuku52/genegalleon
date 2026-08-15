@@ -190,7 +190,7 @@ def main():
     if args.strict and len(all_errors) > 0:
         return 1
     if len(all_tasks) == 0:
-        sys.stderr.write("No species inputs with CDS, GBFF, or GFF plus genome were discovered.\n")
+        sys.stderr.write("No species inputs with CDS, GenBank/GBFF/EMBL, or GFF plus genome were discovered.\n")
         return 1
 
     processed = 0
@@ -204,9 +204,13 @@ def main():
     total_gff_repaired_references = 0
     total_gff_repair_ambiguous = 0
     total_gff_repair_collisions = 0
+    total_gff_normalized_bare_attribute_lines = 0
+    total_gff_invalid_utf8_bytes = 0
+    total_gff_invalid_utf8_sequences = 0
     total_cds_gff_mapped = 0
     total_cds_gff_unmapped = 0
     total_cds_gff_ambiguous = 0
+    total_cds_gff_fallback_records = 0
     total_cds_gff_coordinate_rescued_transcripts = 0
     total_cds_gff_coordinate_rescued_groups = 0
     for task in all_tasks:
@@ -251,6 +255,26 @@ def main():
                     task["species_prefix"],
                 )
             )
+        if int(gff_result.get("invalid_utf8_bytes", 0) or 0) > 0:
+            sys.stderr.write(
+                "Warning: [{}] {}: replaced {} invalid UTF-8 byte(s) in source GFF "
+                "across {} line(s); source line sample={}.\n".format(
+                    task["provider"],
+                    task["species_prefix"],
+                    gff_result.get("invalid_utf8_bytes", 0),
+                    gff_result.get("invalid_utf8_line_count", 0),
+                    ",".join(str(value) for value in gff_result.get("invalid_utf8_lines", ())) or "NA",
+                )
+            )
+        if int(cds_result.get("gff_mapping_fallback_tolerated", 0) or 0) > 0:
+            sys.stderr.write(
+                "Warning: [{}] {}: retained {} low-rate CDS/GFF fallback record(s); "
+                "strict mode would reject this mismatch.\n".format(
+                    task["provider"],
+                    task["species_prefix"],
+                    cds_result.get("gff_unexpected_mapping_records", 0),
+                )
+            )
         if format_task_succeeded(cds_result, gff_result, genome_result, args.dry_run):
             key = species_row_key(task["provider"], task["species_key"], task["species_prefix"])
             taxonomy_metadata = taxonomy_resolver.resolve(task["species_prefix"])
@@ -274,9 +298,15 @@ def main():
         total_gff_repaired_references += int(gff_result.get("repair_references", 0) or 0)
         total_gff_repair_ambiguous += int(gff_result.get("repair_ambiguous", 0) or 0)
         total_gff_repair_collisions += int(gff_result.get("repair_collisions", 0) or 0)
+        total_gff_normalized_bare_attribute_lines += int(
+            gff_result.get("normalized_bare_attribute_lines", 0) or 0
+        )
+        total_gff_invalid_utf8_bytes += int(gff_result.get("invalid_utf8_bytes", 0) or 0)
+        total_gff_invalid_utf8_sequences += int(gff_result.get("invalid_utf8_sequences", 0) or 0)
         total_cds_gff_mapped += int(cds_result.get("gff_records_mapped", 0) or 0)
         total_cds_gff_unmapped += int(cds_result.get("gff_records_unmapped", 0) or 0)
         total_cds_gff_ambiguous += int(cds_result.get("gff_records_ambiguous", 0) or 0)
+        total_cds_gff_fallback_records += int(cds_result.get("gff_unexpected_mapping_records", 0) or 0)
         total_cds_gff_coordinate_rescued_transcripts += int(
             cds_result.get("gff_coordinate_rescued_transcripts", 0) or 0
         )
@@ -329,10 +359,14 @@ def main():
         "gff_repaired_references": total_gff_repaired_references,
         "gff_repair_ambiguous": total_gff_repair_ambiguous,
         "gff_repair_collisions": total_gff_repair_collisions,
+        "gff_normalized_bare_attribute_lines": total_gff_normalized_bare_attribute_lines,
+        "gff_invalid_utf8_bytes": total_gff_invalid_utf8_bytes,
+        "gff_invalid_utf8_sequences": total_gff_invalid_utf8_sequences,
         "gff_repair_mode": args.gff_repair_mode,
         "cds_gff_records_mapped": total_cds_gff_mapped,
         "cds_gff_records_unmapped": total_cds_gff_unmapped,
         "cds_gff_records_ambiguous": total_cds_gff_ambiguous,
+        "cds_gff_fallback_records": total_cds_gff_fallback_records,
         "cds_gff_coordinate_rescued_transcripts": total_cds_gff_coordinate_rescued_transcripts,
         "cds_gff_coordinate_rescued_groups": total_cds_gff_coordinate_rescued_groups,
         "dry_run": int(args.dry_run),

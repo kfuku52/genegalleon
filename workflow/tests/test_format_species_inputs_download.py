@@ -720,7 +720,7 @@ def test_download_manifest_supports_direct_with_explicit_urls(tmp_path):
     assert (out_genome / (species_key + "_direct.genome.fa.gz")).exists()
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 6
+    assert audit["version"] == 7
     assert audit["grouping_source"] == "gff"
     assert audit["stats"]["mapped"] == 2
     assert audit["stats"]["unmapped"] == 0

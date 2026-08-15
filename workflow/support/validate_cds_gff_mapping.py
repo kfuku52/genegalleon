@@ -17,7 +17,7 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
-from format_species_constants import KNOWN_ALLOWED_MISSING_CDS_IDS
+from format_species_constants import KNOWN_ALLOWED_MISSING_CDS_IDS, gff_mapping_fallback_is_tolerable
 from species_labeling import extract_species_label
 
 FASTA_EXTENSIONS = (
@@ -80,6 +80,11 @@ def build_arg_parser():
         "--stats-output",
         default="",
         help="Optional JSON path for summary stats.",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Reject every unexpected CDS/GFF mismatch instead of tolerating a very small residual set.",
     )
     return parser
 
@@ -297,13 +302,24 @@ def validate_single_species(task, missing_limit):
         allowed_missing_id_set = KNOWN_ALLOWED_MISSING_CDS_IDS.get(species_prefix, set())
         allowed_missing_ids = sorted(cds_id_set.intersection(allowed_missing_id_set) - mapped_id_set)
         unexpected_missing_ids = sorted(set(missing_ids) - set(allowed_missing_ids))
+        unexpected_mapping_count = len(unexpected_missing_ids) + len(extra_ids)
+        mapping_fallback_tolerated = (
+            unexpected_mapping_count > 0
+            and not bool(task.get("strict", False))
+            and gff_mapping_fallback_is_tolerable(
+                len(cds_ids),
+                len(unexpected_missing_ids),
+                len(extra_ids),
+            )
+        )
         stats = {
             "cds_ids": len(cds_ids),
             "mapped_ids": len(mapped_ids),
             "allowed_missing_ids": len(allowed_missing_ids),
+            "fallback_ids": unexpected_mapping_count if mapping_fallback_tolerated else 0,
         }
 
-        if len(unexpected_missing_ids) > 0 or len(extra_ids) > 0:
+        if unexpected_mapping_count > 0 and not mapping_fallback_tolerated:
             parts = []
             if len(unexpected_missing_ids) > 0:
                 parts.append(
@@ -328,19 +344,31 @@ def validate_single_species(task, missing_limit):
                 ),
             }
 
-        return {
+        result = {
             "index": task["index"],
             "species_prefix": species_prefix,
             "ok": True,
             "stats_ready": True,
             "stats": stats,
-            "message": "[{}] CDS-to-GFF mapping OK: {}/{} IDs{}".format(
+            "message": "[{}] CDS-to-GFF mapping OK: {}/{} IDs{}{}".format(
                 species_prefix,
                 len(mapped_ids),
                 len(cds_ids),
                 "" if len(allowed_missing_ids) == 0 else " (allowed_missing={})".format(len(allowed_missing_ids)),
+                "" if not mapping_fallback_tolerated else " (fallback={})".format(unexpected_mapping_count),
             ),
         }
+        if mapping_fallback_tolerated:
+            result["warning"] = (
+                "[{}] Retaining {} low-rate CDS/GFF fallback record(s): missing={} extra={}. "
+                "Use --strict to reject any unexpected mismatch."
+            ).format(
+                species_prefix,
+                unexpected_mapping_count,
+                len(unexpected_missing_ids),
+                len(extra_ids),
+            )
+        return result
     except Exception as exc:
         return {
             "index": task["index"],
@@ -416,6 +444,7 @@ def main():
         "species_passed": 0,
         "cds_ids_total": 0,
         "mapped_ids_total": 0,
+        "fallback_ids_total": 0,
         "nthreads": nthreads,
     }
 
@@ -459,14 +488,20 @@ def main():
                 }
             )
 
+    for task in tasks:
+        task["strict"] = bool(args.strict)
+
     for result in run_validation_tasks(tasks=tasks, missing_limit=args.missing_limit, nthreads=nthreads):
         if result.get("stats_ready", False):
             stats["species_checked"] += 1
             stats["cds_ids_total"] += int(result["stats"]["cds_ids"])
             stats["mapped_ids_total"] += int(result["stats"]["mapped_ids"])
+            stats["fallback_ids_total"] += int(result["stats"].get("fallback_ids", 0) or 0)
         if result["ok"]:
             stats["species_passed"] += 1
             print(result["message"])
+            if result.get("warning"):
+                warnings.append(result["warning"])
             continue
         errors.append(result["error"])
 

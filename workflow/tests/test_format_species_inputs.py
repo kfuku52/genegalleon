@@ -1339,7 +1339,7 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 6
+    assert audit["version"] == 7
     assert len(audit["cds_input"]["sha256"]) == 64
     assert len(audit["gff_input"]["sha256"]) == 64
 
@@ -1622,6 +1622,152 @@ def test_provided_cds_gff_grouping_rejects_unmapped_records_by_default(tmp_path)
     )
     assert strict.returncode != 0
     assert "unexpected_unmapped=1 ambiguous=0" in strict.stderr
+
+
+def test_provided_cds_gff_grouping_tolerates_only_low_rate_residual_mismatch(tmp_path):
+    module = load_module()
+    cds_path = tmp_path / "models.cds.fa"
+    gff_path = tmp_path / "models.gff3"
+    total_records = 1000
+    mapped_records = total_records - 1
+    cds_path.write_text(
+        "".join(">tx{}\nATG\n".format(index) for index in range(total_records)),
+        encoding="utf-8",
+    )
+    gff_path.write_text(
+        "".join(
+            "chr1\tsrc\tCDS\t{}\t{}\t.\t+\t0\tID=tx{};gene_id=gene{}\n".format(
+                index * 3 + 1,
+                index * 3 + 3,
+                index,
+                index,
+            )
+            for index in range(mapped_records)
+        ),
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_key": "Adiantum_capillus-veneris",
+        "species_prefix": "Adiantum_capillus-veneris",
+        "cds_path": cds_path,
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+        "format_strict": False,
+    }
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    result = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
+
+    assert result["status"] == "write"
+    assert result["gff_records_unmapped"] == 1
+    audit_path = Path(str(result["output_path"]) + ".gff-grouping.json")
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert audit["stats"]["mapping_fallback_tolerated"] == 1
+    assert audit["stats"]["unexpected_mapping_records"] == 1
+
+    strict_task = dict(task, format_strict=True)
+    strict_output_dir = tmp_path / "strict-out"
+    strict_output_dir.mkdir()
+    with pytest.raises(ValueError, match=r"unexpected_unmapped=1 ambiguous=0"):
+        module.format_cds(strict_task, strict_output_dir, overwrite=False, dry_run=False)
+
+
+def test_gfacs_bare_column9_ids_preserve_gene_boundaries_and_are_normalized(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Sequoiadendron_giganteum"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "Segi.2_0.cds.fa").write_text(
+        ">SEGI_00001\nATGAAATTT\n>SEGI_00002\nATGCCCTTT\n",
+        encoding="utf-8",
+    )
+    (species_dir / "Segi.2_0.gtf").write_text(
+        (
+            "chr3\tGFACS\tgene\t1\t100\t.\t+\t.\tSEGI_00001\n"
+            "chr3\tGFACS\tCDS\t1\t100\t.\t+\t0\tSEGI_00001\n"
+            "chr3\tGFACS\tgene\t5\t100\t.\t+\t.\tSEGI_00002\n"
+            "chr3\tGFACS\tCDS\t5\t100\t.\t+\t0\tSEGI_00002\n"
+        ),
+        encoding="utf-8",
+    )
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(tmp_path / "species_genome"),
+        "--gene-grouping-mode",
+        "rescue_overlap",
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = next(out_cds.glob("*.fa.gz"))
+    audit = json.loads(Path(str(formatted_cds) + ".gff-grouping.json").read_text(encoding="utf-8"))
+    assert audit["stats"]["mapped"] == 2
+    assert audit["stats"]["ambiguous"] == 0
+    assert audit["stats"]["coordinate_rescued_transcripts"] == 0
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert cds_text.count(">Sequoiadendron_giganteum_SEGI_") == 2
+
+    formatted_gff = next(out_gff.glob("*.gff.gz"))
+    with gzip.open(formatted_gff, "rt", encoding="utf-8") as handle:
+        gff_text = handle.read()
+    assert "\tgene\t1\t100\t.\t+\t.\tID=SEGI_00001;gene_id=SEGI_00001" in gff_text
+    assert "\tCDS\t1\t100\t.\t+\t0\tParent=SEGI_00001;gene_id=SEGI_00001" in gff_text
+    repair_audit = json.loads(Path(str(formatted_gff) + ".repair.json").read_text(encoding="utf-8"))
+    assert repair_audit["normalized_bare_attribute_lines"] == 4
+    validation = run_validate_mapping_script(
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+    )
+    assert validation.returncode == 0, validation.stderr + "\n" + validation.stdout
+    assert "CDS-to-GFF mapping OK: 2/2 IDs" in validation.stdout
+
+
+def test_invalid_utf8_in_gff_attributes_is_replaced_and_audited(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Pinus_tabuliformis"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    (species_dir / "models.cds.fa").write_text(">tx1\nATGAAATTT\n", encoding="utf-8")
+    (species_dir / "models.gff3").write_bytes(
+        b"chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1;Name=PtGT\xa6\xc3-N\n"
+        b"chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=tx1;Parent=gene1\n"
+        b"chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=tx1\n"
+    )
+    out_gff = tmp_path / "species_gff"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(tmp_path / "species_cds"),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(tmp_path / "species_genome"),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "replaced 2 invalid UTF-8 byte(s)" in completed.stderr
+
+    formatted_gff = next(out_gff.glob("*.gff.gz"))
+    with gzip.open(formatted_gff, "rt", encoding="utf-8") as handle:
+        assert "Name=PtGT��-N" in handle.read()
+    audit = json.loads(Path(str(formatted_gff) + ".repair.json").read_text(encoding="utf-8"))
+    assert audit["invalid_utf8_bytes"] == 2
+    assert audit["invalid_utf8_line_count"] == 1
+    assert audit["invalid_utf8_lines"] == [1]
 
 
 def test_gff_grouping_rescue_overlap_applies_to_provided_cds_aliases(tmp_path):
@@ -2462,7 +2608,7 @@ def test_provided_cds_longest_selection_compares_lengths_before_padding(tmp_path
         audit = json.load(handle)
     with open(audit_tsv_path, "rt", encoding="utf-8", newline="") as handle:
         audit_rows = list(csv.DictReader(handle, delimiter="\t"))
-    assert audit["version"] == 6
+    assert audit["version"] == 7
     assert [row["raw_sequence_length"] for row in audit_rows] == ["8", "9"]
     assert [row["sequence_length"] for row in audit_rows] == ["9", "9"]
     assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
@@ -2505,7 +2651,7 @@ def test_provided_cds_gff_grouping_regenerates_older_audit_version(tmp_path):
     skipped = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
 
     assert regenerated["status"] == "write"
-    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 6
+    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 7
     assert skipped["status"] == "skip"
 
 
@@ -3425,6 +3571,71 @@ def test_format_species_inputs_derives_from_gbff_and_genome_when_gff_and_cds_are
     assert "derived CDS" in row["cds_input_path"]
     assert str(gbff_path) in row["gff_input_path"]
     assert "derived GFF" in row["gff_input_path"]
+
+
+def test_format_species_inputs_derives_cds_gff_and_genome_from_embl(tmp_path):
+    input_dir = tmp_path / "Direct" / "species_wise_original"
+    species_dir = input_dir / "Picea_abies"
+    species_dir.mkdir(parents=True, exist_ok=True)
+    embl_path = species_dir / "Picea_abies.embl"
+    embl_path.write_text(
+        """ID   chr1; SV 1; linear; genomic DNA; STD; PLN; 9 BP.
+XX
+AC   chr1;
+XX
+DE   test
+XX
+OS   Picea abies
+XX
+FH   Key             Location/Qualifiers
+FH
+FT   source          1..9
+FT   gene            1..9
+FT                   /locus_tag="gene1"
+FT                   /gene="gene1"
+FT   CDS             join(1..3,7..9)
+FT                   /locus_tag="gene1"
+FT                   /gene="gene1"
+FT                   /protein_id="gene1.t1"
+XX
+SQ   Sequence 9 BP; 3 A; 1 C; 1 G; 4 T; 0 other;
+     atgaaattt                                                               9
+//
+""",
+        encoding="utf-8",
+    )
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert len(list(out_cds.glob("*.fa.gz"))) == 1
+    assert len(list(out_gff.glob("*.gff.gz"))) == 1
+    assert len(list(out_genome.glob("*.fa.gz"))) == 1
+    with gzip.open(next(out_cds.glob("*.fa.gz")), "rt", encoding="utf-8") as handle:
+        cds_text = handle.read()
+    assert ">Picea_abies_gene1" in cds_text
+    assert "ATGTTT" in cds_text
+    with gzip.open(next(out_genome.glob("*.fa.gz")), "rt", encoding="utf-8") as handle:
+        assert "ATGAAATTT" in handle.read()
+    validation = run_validate_mapping_script(
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+    )
+    assert validation.returncode == 0, validation.stderr + "\n" + validation.stdout
 
 
 def test_format_species_inputs_does_not_write_empty_gbff_derived_outputs(tmp_path):

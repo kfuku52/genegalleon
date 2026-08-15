@@ -997,6 +997,9 @@ run_validate_stage() {
       cmd+=(--species-summary "${species_summary_output}")
       cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
       cmd+=(--stats-output "${mapping_stats_file}")
+      if [[ ${strict} -eq 1 ]]; then
+        cmd+=(--strict)
+      fi
       echo "Running: ${cmd[*]}"
       if "${cmd[@]}"; then
         :
@@ -1057,6 +1060,9 @@ run_validate_stage_one_worker() {
   cmd+=(--species-summary "${task_summary_file}")
   cmd+=(--nthreads 1)
   cmd+=(--stats-output "${mapping_stats_file}")
+  if [[ ${strict} -eq 1 ]]; then
+    cmd+=(--strict)
+  fi
   echo "Running: ${cmd[*]}"
   if ! "${cmd[@]}"; then
     stage_validate_status="failed"

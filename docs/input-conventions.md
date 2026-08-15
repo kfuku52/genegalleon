@@ -375,8 +375,11 @@ Notes:
   aggregated to one representative CDS per gene,
 - when provided CDS and GFF files are both available, CDS headers are resolved
   through GFF/GTF feature IDs, aliases, and parent relationships before the
-  longest CDS per gene is selected; unmapped or ambiguous records fall back to
-  header grouping unless input-generation `strict=1`,
+  longest CDS per gene is selected; in non-strict mode, at most 10 unexpected
+  unmapped/ambiguous records may fall back to header grouping only when they are
+  no more than 0.1% of the CDS input. Larger mismatches are rejected as a likely
+  wrong annotation bundle, and input-generation `strict=1` rejects every
+  unexpected mismatch,
 - `--gene-grouping-mode rescue_overlap` (the entrypoint default) merges only
   compatible overlapping/fragmented models that do not cross strands or
   authoritative locus boundaries; `strict` keeps provider model boundaries,
@@ -384,6 +387,12 @@ Notes:
   `*.fa.gz.gff-grouping.tsv` audit files beside the formatted CDS, including
   mapping status and the selected representative for every input record,
 - common historical replacements are applied to CDS/GFF text,
+- malformed UTF-8 bytes in source GFF/GTF attributes are replaced during
+  formatting so structural IDs remain usable; byte/line counts and sampled
+  source line numbers are recorded in the neighboring repair audit,
+- GFACS/TreeGenes-style GTF rows whose ninth column is a lone model ID are
+  interpreted as authoritative gene boundaries and emitted as standard
+  `ID`/`Parent` plus `gene_id` attributes,
 - CDS are padded to codon-length multiples and transcript-level redundancies are collapsed at gene level.
 - formatted GFF gene IDs are conservatively repaired against the final CDS IDs by default
   (`--gff-repair-mode safe`). Only unique, collision-free mappings are applied; the
@@ -415,7 +424,7 @@ Manifest required columns:
 - `provider` (required; first column in XLSX templates)
 - `id` (required; second column in XLSX templates)
 - `species_key` is optional
-- either `cds_url`, `gbff_url`, or the pair `gff_url` + `genome_url` (or `id` to auto-resolve provider-specific URLs when supported)
+- either `cds_url`, `gbff_url`, or the pair `gff_url` + `genome_url` (or `id` to auto-resolve provider-specific URLs when supported). The legacy-named `gbff_url` field accepts GenBank/GBFF and EMBL flatfiles (`.embl[.gz]`).
   - for `provider=ncbi`, when `species_key` is omitted and `id` is given, `species_key` is inferred from NCBI species metadata (e.g. `Homo_sapiens`).
   - `provider=ncbi` accepts both `GCF_*` and `GCA_*` assembly accessions and auto-resolves NCBI assembly URLs.
   - for `provider=ddbj`, `id` can be a DDBJ BioProject accession (for example `PRJDB15739`), a WGS master accession (for example `BAAHMP000000000`), or a DDBJ BioProject URL.
@@ -464,6 +473,8 @@ Optional columns:
   (`{id}`, `{species_key}`, `{provider}` placeholders)
 - `local_cds_path`, `local_gff_path`, `local_gbff_path`, `local_genome_path`
   (for `provider=local`)
+  - `local_gbff_path` also accepts an EMBL flatfile; the field name is retained
+    for manifest compatibility.
 
 XLSX template notes:
 

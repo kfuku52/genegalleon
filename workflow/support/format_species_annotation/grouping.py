@@ -223,7 +223,7 @@ def build_gff_cds_grouping_index(task):
     use_coordinate_rescue = gene_grouping_mode_for_task(task) == "rescue_overlap"
     cds_features_by_transcript = defaultdict(list) if use_coordinate_rescue else None
 
-    with open_text(gff_path, "rt") as handle:
+    with open_text(gff_path, "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, 1):
             line = raw_line.rstrip("\n\r")
             if line == "" or line.startswith("#"):

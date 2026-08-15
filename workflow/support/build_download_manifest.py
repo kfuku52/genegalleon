@@ -154,10 +154,10 @@ HEADER_COMMENTS = {
         (
             "Optional fallback annotation source.",
             "",
-            "URL to a GenBank/GBFF annotation file.",
+            "URL to a GenBank/GBFF or EMBL annotation flatfile.",
             "Accepted schemes: https://, http://, ftp://, file://.",
             "Use this when GFF is unavailable but GBFF plus genome (or GBFF alone) can drive CDS/GFF derivation.",
-            "Typical suffixes: .gbff, .gbk, .gb with optional .gz.",
+            "Typical suffixes: .gbff, .gbk, .gb, .embl with optional .gz.",
         )
     ),
     "genome_url": "\n".join(
@@ -192,7 +192,7 @@ HEADER_COMMENTS = {
         (
             "Optional.",
             "",
-            "Path to the GBFF/GenBank file inside an archive referenced by gbff_url.",
+            "Path to the GenBank/GBFF or EMBL file inside an archive referenced by gbff_url.",
             "Use this when gbff_url points to a .zip, .tar.*, or .rar bundle instead of a plain annotation file.",
             "Example: SpeciesA/SpeciesA.genomic.gbff",
         )
@@ -228,7 +228,7 @@ HEADER_COMMENTS = {
         (
             "Optional.",
             "",
-            "Output filename used when the GBFF/GenBank file is written to the raw download directory.",
+            "Output filename used when the GenBank/GBFF or EMBL file is written to the raw download directory.",
             "Use a basename only, not a directory path.",
             "If blank, it is inferred from gbff_archive_member, gbff_url, or provider metadata.",
         )
@@ -293,7 +293,7 @@ HEADER_COMMENTS = {
             "",
             "Absolute path or path relative to this manifest file.",
             "Converted to file:// at runtime.",
-            "Use this when only a GBFF/GenBank annotation file exists locally and you do not want to write gbff_url manually.",
+            "Use this when only a GenBank/GBFF or EMBL annotation flatfile exists locally and you do not want to write gbff_url manually.",
         )
     ),
     "local_genome_path": "\n".join(

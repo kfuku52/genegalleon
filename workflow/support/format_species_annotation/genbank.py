@@ -42,13 +42,20 @@ def iter_genome_records_from_gbff(path):
 
 def require_biopython_for_gbff(path):
     if SeqIO is None:
-        raise RuntimeError("Biopython is required to process GBFF/GenBank inputs: {}".format(path))
+        raise RuntimeError("Biopython is required to process GenBank/GBFF/EMBL inputs: {}".format(path))
+
+
+def insdc_flatfile_format(path):
+    name = str(getattr(path, "name", path) or "").lower()
+    if name.endswith(".gz"):
+        name = name[: -len(".gz")]
+    return "embl" if name.endswith(".embl") else "genbank"
 
 
 def iter_genbank_records(path):
     require_biopython_for_gbff(path)
     with open_text(path, "rt") as handle:
-        for record in SeqIO.parse(handle, "genbank"):
+        for record in SeqIO.parse(handle, insdc_flatfile_format(path)):
             yield record
 
 
@@ -288,7 +295,7 @@ def derive_cds_records_from_gff_and_genome(task):
     utr_features_by_transcript = defaultdict(list)
     gene_cache = {}
 
-    with open_text(gff_path, "rt") as handle:
+    with open_text(gff_path, "rt", errors="replace") as handle:
         for raw_line in handle:
             line = raw_line.rstrip("\n\r")
             if line == "":

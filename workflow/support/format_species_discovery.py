@@ -46,7 +46,11 @@ from format_species_common import (
     is_probable_genome_filename,
     pick_single_file,
 )
-from format_species_constants import ENSEMBL_CDS_PATTERN, KNOWN_ALLOWED_MISSING_CDS_IDS
+from format_species_constants import (
+    ENSEMBL_CDS_PATTERN,
+    KNOWN_ALLOWED_MISSING_CDS_IDS,
+    gff_mapping_fallback_is_tolerable,
+)
 from format_species_provider_config import ENSEMBL_LIKE_PROVIDERS, ORYZA_MINUTA_PROVIDER
 from format_species_taxonomy import invalid_species_key_error, normalize_species_key_for_runtime
 from format_species_writers import (
@@ -56,7 +60,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 6
+CDS_GFF_GROUPING_AUDIT_VERSION = 7
 
 
 def cds_gff_grouping_audit_paths(output_path):
@@ -145,6 +149,8 @@ def cds_gff_result_fields(audit=None):
         "gff_records_mapped": int(stats.get("mapped", 0) or 0),
         "gff_records_unmapped": int(stats.get("unmapped", 0) or 0),
         "gff_records_ambiguous": int(stats.get("ambiguous", 0) or 0),
+        "gff_unexpected_mapping_records": int(stats.get("unexpected_mapping_records", 0) or 0),
+        "gff_mapping_fallback_tolerated": int(stats.get("mapping_fallback_tolerated", 0) or 0),
         "gff_coordinate_rescued_transcripts": int(stats.get("coordinate_rescued_transcripts", 0) or 0),
         "gff_coordinate_rescued_groups": int(stats.get("coordinate_rescued_groups", 0) or 0),
     }
@@ -708,9 +714,18 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
             if row["mapping_status"] == "unmapped" and row["selected_gene_id"] not in allowed_missing_ids
         }
     )
-    if grouping_index is not None and (
-        len(unexpected_unmapped_ids) > 0 or mapping_counts["ambiguous"] > 0
-    ):
+    unexpected_mapping_count = len(unexpected_unmapped_ids) + mapping_counts["ambiguous"]
+    mapping_fallback_tolerated = (
+        grouping_index is not None
+        and unexpected_mapping_count > 0
+        and not strict_mode
+        and gff_mapping_fallback_is_tolerable(
+            before_count,
+            len(unexpected_unmapped_ids),
+            mapping_counts["ambiguous"],
+        )
+    )
+    if grouping_index is not None and unexpected_mapping_count > 0 and not mapping_fallback_tolerated:
         candidate_names = ",".join(task.get("gff_selection_candidates", ())) or Path(task["gff_path"]).name
         raise ValueError(
             "GFF-backed CDS grouping for {} failed: unexpected_unmapped={} ambiguous={} "
@@ -748,7 +763,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
 
     if grouping_index is None:
         grouping_source = "header"
-    elif mapping_counts["unmapped"] > 0:
+    elif mapping_counts["unmapped"] > 0 or mapping_counts["ambiguous"] > 0:
         grouping_source = "gff_with_allowed_missing"
     else:
         grouping_source = "gff"
@@ -762,6 +777,8 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
             "mapped": mapping_counts["mapped"],
             "unmapped": mapping_counts["unmapped"],
             "ambiguous": mapping_counts["ambiguous"],
+            "unexpected_mapping_records": unexpected_mapping_count,
+            "mapping_fallback_tolerated": int(mapping_fallback_tolerated),
             "gff_transcripts_total": int((grouping_index or {}).get("transcripts_total", 0) or 0),
             "coordinate_rescued_transcripts": int(
                 (grouping_index or {}).get("coordinate_rescued_transcripts", 0) or 0

@@ -23,7 +23,7 @@ def build_arg_parser():
     parser = argparse.ArgumentParser(
         description=(
             "Format CDS/GFF inputs for genegalleon from provider-specific raw files. "
-            "Accepts CDS-only inputs, GBFF inputs, or GFF plus genome FASTA inputs. "
+            "Accepts CDS-only inputs, GenBank/GBFF/EMBL flatfiles, or GFF plus genome FASTA inputs. "
             "When CDS is missing but both GFF and genome FASTA are present, CDS is derived automatically. "
             "Current targets are based on the established species_wise_original input layout."
         )
@@ -160,7 +160,10 @@ def build_arg_parser():
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Exit with error if any species lacks a usable source bundle (CDS, GBFF, or GFF plus genome).",
+        help=(
+            "Exit with error if any species lacks a usable source bundle or if any unexpected "
+            "CDS-to-GFF mapping mismatch remains."
+        ),
     )
     parser.add_argument(
         "--gene-grouping-mode",

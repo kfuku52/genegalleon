@@ -166,7 +166,7 @@ def gff_contains_cds_feature(path):
     name = str(path.name or "").lower()
     opener = gzip.open if name.endswith(".gz") else bz2.open if name.endswith(".bz2") else open
     try:
-        with opener(path, "rt", encoding="utf-8") as handle:
+        with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
             for raw_line in handle:
                 if raw_line == "" or raw_line.startswith("#"):
                     continue

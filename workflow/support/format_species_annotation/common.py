@@ -42,7 +42,7 @@ def task_has_usable_source_bundle(cds_path, gff_path, gbff_path, genome_path):
 
 def gff_seqids(path):
     seqids = set()
-    with open_text(path, "rt") as handle:
+    with open_text(path, "rt", errors="replace") as handle:
         for raw_line in handle:
             if raw_line.startswith("#") or raw_line.strip() == "":
                 continue
@@ -223,10 +223,15 @@ def normalize_gff_attribute_value(raw_value):
 
 def parse_gff_attributes(attr_text):
     attrs = defaultdict(list)
-    for raw_field in str(attr_text or "").split(";"):
-        field = raw_field.strip()
-        if field == "":
-            continue
+    fields = [raw_field.strip() for raw_field in str(attr_text or "").split(";") if raw_field.strip() != ""]
+    if len(fields) == 1 and "=" not in fields[0] and not re.search(r"\s", fields[0]) and fields[0] != ".":
+        # GFACS/TreeGenes GTF exports use a lone identifier in column 9.
+        # It is an explicit model boundary, so expose it as both feature and
+        # authoritative gene identity instead of invoking coordinate rescue.
+        value = normalize_gff_attribute_value(fields[0])
+        if value != "":
+            return {"ID": (value,), "gene_id": (value,)}
+    for field in fields:
         equal_pos = field.find("=")
         space_pos = field.find(" ")
         if equal_pos != -1 and (space_pos == -1 or equal_pos < space_pos):
@@ -347,7 +352,7 @@ def build_coge_gff_gene_id_map(gff_path):
     feature_parents = {}
     direct_gene_tokens = {}
     alias_keys = ("ID", "Name", "Alias", "CDS", "mRNA", "transcript_id", "protein_id")
-    with open_text(gff_path, "rt") as handle:
+    with open_text(gff_path, "rt", errors="replace") as handle:
         for raw_line in handle:
             if raw_line.startswith("#") or raw_line.strip() == "":
                 continue
@@ -397,7 +402,7 @@ def build_coge_gff_gene_id_map(gff_path):
         return direct
 
     tokens_by_alias = defaultdict(set)
-    with open_text(gff_path, "rt") as handle:
+    with open_text(gff_path, "rt", errors="replace") as handle:
         for raw_line in handle:
             if raw_line.startswith("#") or raw_line.strip() == "":
                 continue
