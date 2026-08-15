@@ -79,7 +79,7 @@ def _ena_report_url(run: str) -> str:
             {
                 "accession": run,
                 "result": "read_run",
-                "fields": "run_accession,fastq_ftp,fastq_md5",
+                "fields": "run_accession,fastq_ftp,fastq_md5,submitted_ftp,submitted_md5,submitted_format",
                 "format": "json",
             }
         )
@@ -186,6 +186,86 @@ def test_public_fallback_uses_ena_fastq_when_trace_has_no_original(monkeypatch, 
             "status": "complete",
         }
     ]
+
+
+def test_public_fallback_uses_checksum_validated_ena_submitted_fastq_pair(monkeypatch, tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["ERR4643641"])
+
+    first_payload = gzip.compress(b"@ena1\nACGT\n+\n!!!!\n")
+    second_payload = gzip.compress(b"@ena2\nTGCA\n+\n!!!!\n")
+    first_url = "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR464/001/ERR4643641_1.fastq.gz"
+    second_url = "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR464/001/ERR4643641_2.fastq.gz"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=ERR4643641": b"<ROOT />",
+        _ena_report_url("ERR4643641"): json.dumps(
+            [
+                {
+                    "run_accession": "ERR4643641",
+                    "fastq_ftp": "",
+                    "fastq_md5": "",
+                    "submitted_ftp": ";".join(
+                        [first_url.removeprefix("https://"), second_url.removeprefix("https://")]
+                    ),
+                    "submitted_md5": ";".join(
+                        [hashlib.md5(first_payload).hexdigest(), hashlib.md5(second_payload).hexdigest()]
+                    ),
+                    "submitted_format": "FASTQ;FASTQ",
+                }
+            ]
+        ).encode(),
+        first_url: first_payload,
+        second_url: second_payload,
+    }
+
+    _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+
+    assert (output_dir / "ERR4643641" / "ERR4643641_1.amalgkit.fastq.gz").read_bytes() == first_payload
+    assert (output_dir / "ERR4643641" / "ERR4643641_2.amalgkit.fastq.gz").read_bytes() == second_payload
+    manifest = json.loads((output_dir / "getfastq_completion.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "complete"
+    assert manifest["runs"][0]["files"] == [
+        "ERR4643641/ERR4643641_1.amalgkit.fastq.gz",
+        "ERR4643641/ERR4643641_2.amalgkit.fastq.gz",
+    ]
+    assert not list(output_dir.rglob("*.part"))
+
+
+@pytest.mark.parametrize(
+    ("submitted_format", "submitted_name"),
+    [("BAM", "ERR4643641.bam"), ("FASTQ", "ERR4643641.cram")],
+)
+def test_public_fallback_rejects_non_fastq_ena_submitted_files(
+    monkeypatch,
+    tmp_path,
+    submitted_format,
+    submitted_name,
+):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["ERR4643641"])
+    submitted_url = "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR464/001/{}".format(submitted_name)
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=ERR4643641": b"<ROOT />",
+        _ena_report_url("ERR4643641"): json.dumps(
+            [
+                {
+                    "run_accession": "ERR4643641",
+                    "fastq_ftp": "",
+                    "submitted_ftp": submitted_url.removeprefix("https://"),
+                    "submitted_md5": "0" * 32,
+                    "submitted_format": submitted_format,
+                }
+            ]
+        ).encode(),
+    }
+
+    with pytest.raises(SystemExit, match="No supported public FASTQ URLs were found"):
+        _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+
+    assert not (output_dir / "getfastq_completion.json").exists()
+    assert not list(output_dir.rglob("*.part"))
 
 
 def test_public_fallback_reuses_one_valid_mate_and_recovers_the_other(monkeypatch, tmp_path):
@@ -403,3 +483,100 @@ run_amalgkit_getfastq_or_fallback
         f"cleanup:-rf -- {work_dir / 'getfastq'}",
     ]
     assert "incomplete all-run manifest" in completed.stdout
+
+
+def _run_fatal_route_fixture(tmp_path: Path, final_log_lines: list[str]) -> subprocess.CompletedProcess[str]:
+    trace_path = tmp_path / "trace.txt"
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    script = "\n".join(
+        [
+            "set -u",
+            _shell_function_source("amalgkit_getfastq_log_has_only_download_source_exhaustion"),
+            _shell_function_source("run_amalgkit_getfastq_or_fallback"),
+            r'''
+trace_path=$1
+dir_tmp=$2
+final_log_lines=$3
+file_amalgkit_metadata="${dir_tmp}/metadata.tsv"
+dir_amalgkit_getfastq_sp="${dir_tmp}/published"
+amalgkit_rrna_filter=yes
+attempt_count=0
+
+run_amalgkit_getfastq_attempt() {
+  attempt_count=$((attempt_count + 1))
+  local log_file="${dir_tmp}/amalgkit_getfastq.$2.log"
+  printf 'attempt:%s:%s\n' "$1" "$2" >> "${trace_path}"
+  if [[ ${attempt_count} -eq 2 ]]; then
+    printf '%s\n' "${final_log_lines}" > "${log_file}"
+  fi
+  return 2
+}
+has_resumable_getfastq_run_state() {
+  printf 'resume-state-present\n' >> "${trace_path}"
+  return 0
+}
+prepare_getfastq_outputs_for_public_fallback() {
+  printf 'prepare\n' >> "${trace_path}"
+}
+download_public_original_fastqs_for_metadata() {
+  printf 'download\n' >> "${trace_path}"
+  return 0
+}
+validate_amalgkit_getfastq_completion_manifest() {
+  printf 'validate\n' >> "${trace_path}"
+  return 0
+}
+mv_out_replace_dir() {
+  printf 'publish\n' >> "${trace_path}"
+}
+rm() {
+  printf 'cleanup\n' >> "${trace_path}"
+}
+
+run_amalgkit_getfastq_or_fallback
+''',
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-s", "--", str(trace_path), str(work_dir), "\n".join(final_log_lines)],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_download_source_exhaustion_only_routes_through_public_fallback(tmp_path):
+    completed = _run_fatal_route_fixture(
+        tmp_path,
+        ["ERROR: Configured download sources were exhausted."],
+    )
+
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    trace = (tmp_path / "trace.txt").read_text(encoding="utf-8").splitlines()
+    assert trace == [
+        "attempt:yes:initial",
+        "attempt:no:retry_rrna_filter_no",
+        "prepare",
+        "download",
+        "validate",
+        "publish",
+        "cleanup",
+    ]
+    assert "Every fatal condition" in completed.stdout
+
+
+def test_download_source_exhaustion_mixed_with_another_fatal_fails_closed(tmp_path):
+    completed = _run_fatal_route_fixture(
+        tmp_path,
+        [
+            "ERROR: Configured download sources were exhausted.",
+            "ERROR: Metadata validation failed.",
+        ],
+    )
+
+    assert completed.returncode != 0
+    trace = (tmp_path / "trace.txt").read_text(encoding="utf-8").splitlines()
+    assert trace == ["attempt:yes:initial", "attempt:no:retry_rrna_filter_no"]
+    assert "Exiting without fallback" in completed.stdout

@@ -1081,6 +1081,22 @@ amalgkit_getfastq_log_has_fatal_message() {
   grep -Eq '^ERROR: ' "${log_file}"
 }
 
+amalgkit_getfastq_log_has_only_download_source_exhaustion() {
+  local log_file=$1
+  [[ -s "${log_file}" ]] || return 1
+  awk '
+    /^ERROR: / {
+      fatal_count += 1
+      if ($0 != "ERROR: Configured download sources were exhausted.") {
+        other_fatal_count += 1
+      }
+    }
+    END {
+      exit !(fatal_count > 0 && other_fatal_count == 0)
+    }
+  ' "${log_file}"
+}
+
 run_amalgkit_getfastq_attempt() {
   local rrna_filter_value=$1
   local attempt_label=$2
@@ -1427,7 +1443,7 @@ def ena_fastq_files(run: str):
             {
                 "accession": run,
                 "result": "read_run",
-                "fields": "run_accession,fastq_ftp,fastq_md5",
+                "fields": "run_accession,fastq_ftp,fastq_md5,submitted_ftp,submitted_md5,submitted_format",
                 "format": "json",
             }
         )
@@ -1445,19 +1461,55 @@ def ena_fastq_files(run: str):
         raise SystemExit("ENA returned multiple FASTQ report rows for run: {}".format(run))
     if not rows:
         return []
-    urls = [normalize_ena_fastq_url(item) for item in str(rows[0].get("fastq_ftp", "") or "").split(";")]
+    row = rows[0]
+    urls = [normalize_ena_fastq_url(item) for item in str(row.get("fastq_ftp", "") or "").split(";")]
     urls = [item for item in urls if item]
-    md5_values = [item.strip().lower() for item in str(rows[0].get("fastq_md5", "") or "").split(";")]
+    md5_values = [item.strip().lower() for item in str(row.get("fastq_md5", "") or "").split(";")]
     if md5_values == [""]:
         md5_values = []
+    provider = "ena"
+    require_md5 = False
+    if not urls:
+        submitted_values = [
+            item.strip()
+            for item in str(row.get("submitted_ftp", "") or "").split(";")
+            if item.strip()
+        ]
+        submitted_formats = [
+            item.strip().upper()
+            for item in str(row.get("submitted_format", "") or "").split(";")
+            if item.strip()
+        ]
+        submitted_urls = [normalize_ena_fastq_url(item) for item in submitted_values]
+        if (
+            not submitted_values
+            or any(not item for item in submitted_urls)
+            or len(submitted_formats) != len(submitted_urls)
+            or any(item != "FASTQ" for item in submitted_formats)
+            or any(
+                not urllib.parse.urlparse(item).path.lower().endswith((".fastq.gz", ".fq.gz"))
+                for item in submitted_urls
+            )
+        ):
+            return []
+        urls = submitted_urls
+        md5_values = [
+            item.strip().lower()
+            for item in str(row.get("submitted_md5", "") or "").split(";")
+            if item.strip()
+        ]
+        provider = "ena-submitted"
+        require_md5 = True
     if md5_values and len(md5_values) != len(urls):
         raise SystemExit("ENA FASTQ URL/checksum count mismatch for run: {}".format(run))
+    if require_md5 and len(md5_values) != len(urls):
+        raise SystemExit("ENA submitted FASTQ URLs require matching checksums for run: {}".format(run))
     files = []
     for index, url in enumerate(urls):
         expected_md5 = md5_values[index] if md5_values else ""
         if expected_md5 and (len(expected_md5) != 32 or any(char not in "0123456789abcdef" for char in expected_md5)):
             raise SystemExit("ENA returned an invalid FASTQ checksum for run: {}".format(run))
-        files.append((Path(urllib.parse.urlparse(url).path).name, url, expected_md5, "ena"))
+        files.append((Path(urllib.parse.urlparse(url).path).name, url, expected_md5, provider))
     return unique_source_files(files)
 
 
@@ -1634,7 +1686,9 @@ PY
 
 run_amalgkit_getfastq_or_fallback() {
   local status_amalgkit=0
+  local fatal_log_file="${dir_tmp}/amalgkit_getfastq.initial.log"
   local fatal_retry_suffix=""
+  local fatal_retry_download_source_exhaustion=0
   local fatal_retry_incomplete_manifest=0
 
   if run_amalgkit_getfastq_attempt "${amalgkit_rrna_filter}" "initial"; then
@@ -1652,18 +1706,23 @@ run_amalgkit_getfastq_or_fallback() {
       else
         status_amalgkit=$?
       fi
+      fatal_log_file="${dir_tmp}/amalgkit_getfastq.retry_rrna_filter_no.log"
       if [[ ${status_amalgkit} -eq 3 ]]; then
         fatal_retry_incomplete_manifest=1
         echo "The fatal-condition retry produced an incomplete all-run manifest. Routing retained FASTQs through the bounded public-original fallback."
       fi
     fi
-    if [[ ${fatal_retry_incomplete_manifest} -eq 0 ]]; then
+    if [[ ${status_amalgkit} -eq 2 ]] && amalgkit_getfastq_log_has_only_download_source_exhaustion "${fatal_log_file}"; then
+      fatal_retry_download_source_exhaustion=1
+      echo "Every fatal condition in the final amalgkit attempt was configured download-source exhaustion. Routing retained FASTQs through the bounded public-original fallback."
+    fi
+    if [[ ${fatal_retry_incomplete_manifest} -eq 0 && ${fatal_retry_download_source_exhaustion} -eq 0 ]]; then
       echo "amalgkit getfastq encountered a fatal error${fatal_retry_suffix}. Exiting without fallback download so partial outputs do not reach downstream steps."
       return 1
     fi
   fi
 
-  if [[ ${fatal_retry_incomplete_manifest} -eq 0 ]] && has_resumable_getfastq_run_state; then
+  if [[ ${fatal_retry_incomplete_manifest} -eq 0 && ${fatal_retry_download_source_exhaustion} -eq 0 ]] && has_resumable_getfastq_run_state; then
     echo "amalgkit getfastq left validated run-level resume state. Preserving it and exiting for a resumable retry instead of replacing it with unfiltered original FASTQ files."
     return 1
   fi

@@ -208,6 +208,10 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     prepare_body = _function_body(text, "prepare_getfastq_outputs_for_public_fallback")
     stage_body = _function_body(text, "stage_getfastq_outputs_for_resume")
     detect_body = _function_body(text, "amalgkit_getfastq_log_has_fatal_message")
+    exhaustion_body = _function_body(
+        text,
+        "amalgkit_getfastq_log_has_only_download_source_exhaustion",
+    )
     attempt_body = _function_body(text, "run_amalgkit_getfastq_attempt")
 
     assert "rm -rf" not in prepare_body
@@ -215,6 +219,8 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     assert 'mv -- "${dir_amalgkit_getfastq_sp}" "${dir_tmp}/getfastq"' in stage_body
     assert "discard_partial_getfastq_outputs" not in attempt_body
     assert "grep -Eq '^ERROR: '" in detect_body
+    assert 'other_fatal_count == 0' in exhaustion_body
+    assert 'ERROR: Configured download sources were exhausted.' in exhaustion_body
     assert "Detected fatal message in amalgkit getfastq log despite a zero exit code" in attempt_body
     assert '--download_lock_dir "${dir_amalgkit_download_lock_dir}"' in attempt_body
     assert '--ncbi_download_max_concurrency "${amalgkit_ncbi_download_max_concurrency}"' in attempt_body
@@ -234,7 +240,10 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     assert 'run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"' in text
     assert "return 3" in attempt_body
     assert "The fatal-condition retry produced an incomplete all-run manifest." in text
-    assert 'if [[ ${fatal_retry_incomplete_manifest} -eq 0 ]] && has_resumable_getfastq_run_state' in text
+    assert (
+        'if [[ ${fatal_retry_incomplete_manifest} -eq 0 && ${fatal_retry_download_source_exhaustion} -eq 0 ]] && has_resumable_getfastq_run_state'
+        in text
+    )
     assert 'mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"' in text
     assert "Fallback direct FASTQ recovery finished without a valid all-run completion manifest." in text
 
