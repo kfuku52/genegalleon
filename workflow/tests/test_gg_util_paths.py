@@ -3,6 +3,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import pytest
+
 GG_UTIL_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_util.sh"
 GG_ENTRYPOINT_CONFIG_VARS_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_entrypoint_config_vars.sh"
 GG_ENTRYPOINT_BOOTSTRAP_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_entrypoint_bootstrap.sh"
@@ -357,10 +359,7 @@ def test_prepare_entrypoint_runtime_snapshot_copies_core_script_to_job_task_dir(
 def test_workspace_pfam_le_dir_is_under_downloads_dedicated_folder(tmp_path):
     project_dir = tmp_path / "project"
     project_dir.mkdir()
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"workspace_pfam_le_dir {shlex.quote(str(project_dir))}"
-    )
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; workspace_pfam_le_dir {shlex.quote(str(project_dir))}"
 
     completed = run_bash(command, cwd=tmp_path)
     assert completed.returncode == 0, completed.stderr
@@ -383,9 +382,9 @@ def test_ensure_uniprot_sprot_metadata_tsv_builds_runtime_meta_from_runtime_dat(
         'meta_path=$(ensure_uniprot_sprot_metadata_tsv "${workspace_dir}" "${runtime_prefix}"); '
         'printf "meta=%s\\n" "${meta_path}"; '
         'test -s "${meta_path}"; printf "size=%s\\n" "$?"; '
-        'python -c "import gzip,sys; t=gzip.open(sys.argv[1],\'rt\',encoding=\'utf-8\').read(); '
-        'print(\'has_taxid=\' + (\'1\' if \'taxid\' in t else \'0\')); '
-        'print(\'has_accession=\' + (\'1\' if \'P12345\' in t else \'0\'))" "${meta_path}"'
+        "python -c \"import gzip,sys; t=gzip.open(sys.argv[1],'rt',encoding='utf-8').read(); "
+        "print('has_taxid=' + ('1' if 'taxid' in t else '0')); "
+        "print('has_accession=' + ('1' if 'P12345' in t else '0'))\" \"${meta_path}\""
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -431,8 +430,8 @@ def test_gg_array_download_once_accepts_nonempty_ready_marker(tmp_path):
         "SECONDS=0; "
         f'gg_array_download_once {shlex.quote(str(lock_file))} "$marker_file" "marker artifact" '
         'gg_write_ready_marker "$marker_file"; '
-        'status=$?; '
-        'heartbeat_elapsed=$SECONDS; '
+        "status=$?; "
+        "heartbeat_elapsed=$SECONDS; "
         'printf "%s\\n%s\\n" "$status" "$heartbeat_elapsed"; '
         'wc -c < "$marker_file"; '
         'cat "$marker_file"'
@@ -469,10 +468,10 @@ def test_download_busco_lineage_to_runtime_merges_into_existing_runtime_db(tmp_p
         "printf 'versions\\n' > busco_downloads/file_versions.tsv; "
         "}; "
         f'_download_busco_lineage_to_runtime "eukaryota_odb12" '
-        f'{shlex.quote(str(runtime_db))} '
-        f'{shlex.quote(str(runtime_lineage))} '
-        f'{shlex.quote(str(ready_marker))}; '
-        'status=$?; '
+        f"{shlex.quote(str(runtime_db))} "
+        f"{shlex.quote(str(runtime_lineage))} "
+        f"{shlex.quote(str(ready_marker))}; "
+        "status=$?; "
         'printf "%s\\n" "$status"; '
         f'test -s {shlex.quote(str(runtime_lineage / "dataset.cfg"))}; printf "new=%s\\n" "$?"; '
         f'test -s {shlex.quote(str(existing_lineage / "dataset.cfg"))}; printf "existing=%s\\n" "$?"; '
@@ -498,8 +497,7 @@ def test_download_busco_lineage_to_runtime_merges_into_existing_runtime_db(tmp_p
 
 def test_contamination_rank_normalizes_superkingdom_for_amalgkit(tmp_path):
     command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        "gg_normalize_contamination_removal_rank_for_amalgkit superkingdom"
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; gg_normalize_contamination_removal_rank_for_amalgkit superkingdom"
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -548,16 +546,12 @@ def test_all_entrypoint_locators_try_later_project_directory_for_spooled_scripts
 
     for entrypoint in sorted(workflow_dir.glob("gg_*_entrypoint.sh")):
         text = entrypoint.read_text(encoding="utf-8")
-        start = text.index(
-            "# Resolve workflow paths for local and scheduler-spooled execution."
-        )
+        start = text.index("# Resolve workflow paths for local and scheduler-spooled execution.")
         end = text.index("gg_entrypoint_name=", start)
         spooled_script = tmp_path / f"{entrypoint.stem}-slurm_script"
         spooled_script.write_text(
             "#!/usr/bin/env bash\n"
-            "set -euo pipefail\n"
-            + text[start:end]
-            + 'printf "resolved=%s\\n" "${gg_workflow_dir}"\n',
+            "set -euo pipefail\n" + text[start:end] + 'printf "resolved=%s\\n" "${gg_workflow_dir}"\n',
             encoding="utf-8",
         )
         command = (
@@ -569,9 +563,7 @@ def test_all_entrypoint_locators_try_later_project_directory_for_spooled_scripts
 
         completed = run_bash(command, cwd=tmp_path)
 
-        assert completed.returncode == 0, (
-            f"{entrypoint.name}: {completed.stderr}"
-        )
+        assert completed.returncode == 0, f"{entrypoint.name}: {completed.stderr}"
         assert completed.stdout.strip() == f"resolved={workflow_dir}"
 
 
@@ -677,10 +669,7 @@ def test_resolve_annotation_species_prefers_cross_clade_model_species(tmp_path):
 
 
 def test_resolve_annotation_species_normalizes_legacy_trailing_underscore(tmp_path):
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        'gg_resolve_annotation_species "Arabidopsis_thaliana_"'
-    )
+    command = f'source {shlex.quote(str(GG_UTIL_PATH))}; gg_resolve_annotation_species "Arabidopsis_thaliana_"'
 
     completed = run_bash(command, cwd=tmp_path)
 
@@ -734,7 +723,7 @@ def test_check_species_sequences_accept_transcriptome_longest_cds_for_genus_sp(t
         "shift\n"
         "[[ ${1:-} == --name ]] && shift\n"
         "if [[ ${1:-} == --threads ]]; then shift 2; fi\n"
-        "gzip -cd -- ${1:?} | awk '/^>/ {sub(/^>/, \"\"); sub(/[[:space:]].*$/, \"\"); print}'\n",
+        'gzip -cd -- ${1:?} | awk \'/^>/ {sub(/^>/, ""); sub(/[[:space:]].*$/, ""); print}\'\n',
         encoding="utf-8",
     )
     seqkit.chmod(0o755)
@@ -753,10 +742,7 @@ def test_check_species_sequences_accept_transcriptome_longest_cds_for_genus_sp(t
         species_dir.mkdir()
         fasta_path = species_dir / "Amphizonella_sp_longestCDS.fa.gz"
         with gzip.open(fasta_path, "wt", encoding="utf-8") as handle:
-            handle.write(
-                f">Amphizonella_sp_g0\n{sequence}\n"
-                f">Amphizonella_sp_g1\n{sequence}\n"
-            )
+            handle.write(f">Amphizonella_sp_g0\n{sequence}\n>Amphizonella_sp_g1\n{sequence}\n")
 
         command = (
             f"export PATH={shlex.quote(str(bin_dir))}:$PATH; "
@@ -774,7 +760,7 @@ def test_fasta_relabel_headers_to_species_preserves_taxonomic_qualifiers(tmp_pat
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
         "printf '>Dictyostelium_cf_discoideum_gene1\\nATG\\n>Bacillus_subtilis_subsp_subtilis_gene2\\nATG\\n>Asimitellaria_furusei_var._subramosa_gene3\\nATG\\n>Arisaema_sp._aooni_gene4\\nATG\\n' "
-        '| gg_fasta_relabel_headers_to_species'
+        "| gg_fasta_relabel_headers_to_species"
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -795,18 +781,13 @@ def test_fasta_relabel_headers_to_species_preserves_taxonomic_qualifiers(tmp_pat
 def test_resolve_busco_lineage_from_lineages_prefers_deepest_mapped_taxon(tmp_path):
     mapping_dir = tmp_path / "busco_mappings"
     mapping_dir.mkdir()
-    (
-        mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb12.test.txt"
-    ).write_text(
-        "2759\teukaryota_odb12\n"
-        "33090\tviridiplantae_odb12\n"
-        "3193\tembryophyta_odb12\n"
-        "3744\trosales_odb12\n"
+    (mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb12.test.txt").write_text(
+        "2759\teukaryota_odb12\n33090\tviridiplantae_odb12\n3193\tembryophyta_odb12\n3744\trosales_odb12\n"
     )
 
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f'gg_resolve_busco_lineage_from_lineages auto {shlex.quote(str(mapping_dir))} '
+        f"gg_resolve_busco_lineage_from_lineages auto {shlex.quote(str(mapping_dir))} "
         '"1,131567,2759,33090,3193,3744"'
     )
 
@@ -819,9 +800,7 @@ def test_resolve_busco_lineage_from_lineages_prefers_deepest_mapped_taxon(tmp_pa
 def test_resolve_busco_lineage_from_lineages_uses_deepest_common_taxon(tmp_path):
     mapping_dir = tmp_path / "busco_mappings"
     mapping_dir.mkdir()
-    (
-        mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb12.test.txt"
-    ).write_text(
+    (mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb12.test.txt").write_text(
         "2759\teukaryota_odb12\n"
         "33090\tviridiplantae_odb12\n"
         "3193\tembryophyta_odb12\n"
@@ -831,7 +810,7 @@ def test_resolve_busco_lineage_from_lineages_uses_deepest_common_taxon(tmp_path)
 
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f'gg_resolve_busco_lineage_from_lineages auto {shlex.quote(str(mapping_dir))} '
+        f"gg_resolve_busco_lineage_from_lineages auto {shlex.quote(str(mapping_dir))} "
         '"1,131567,2759,33090,3193,3700" '
         '"1,131567,2759,33090,3193,4530"'
     )
@@ -848,7 +827,7 @@ def test_resolve_busco_lineage_from_lineages_passes_through_explicit_value(tmp_p
 
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f'gg_resolve_busco_lineage_from_lineages metazoa_odb13 {shlex.quote(str(mapping_dir))} '
+        f"gg_resolve_busco_lineage_from_lineages metazoa_odb13 {shlex.quote(str(mapping_dir))} "
         '"1,131567,2759,33208"'
     )
 
@@ -861,31 +840,18 @@ def test_resolve_busco_lineage_from_lineages_passes_through_explicit_value(tmp_p
 def test_resolve_busco_lineage_from_lineages_prefers_latest_common_odb_version(tmp_path):
     mapping_dir = tmp_path / "busco_mappings"
     mapping_dir.mkdir()
-    (
-        mapping_dir / "mapping_taxids-busco_dataset_name.archaea_odb13.test.txt"
-    ).write_text("2157\tarchaea_odb13\n")
-    (
-        mapping_dir / "mapping_taxids-busco_dataset_name.bacteria_odb13.test.txt"
-    ).write_text("2\tbacteria_odb13\n")
-    (
-        mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb12.test.txt"
-    ).write_text(
-        "2759\teukaryota_odb12\n"
-        "33090\tviridiplantae_odb12\n"
-        "3193\tembryophyta_odb12\n"
+    (mapping_dir / "mapping_taxids-busco_dataset_name.archaea_odb13.test.txt").write_text("2157\tarchaea_odb13\n")
+    (mapping_dir / "mapping_taxids-busco_dataset_name.bacteria_odb13.test.txt").write_text("2\tbacteria_odb13\n")
+    (mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb12.test.txt").write_text(
+        "2759\teukaryota_odb12\n33090\tviridiplantae_odb12\n3193\tembryophyta_odb12\n"
     )
-    (
-        mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb13.test.txt"
-    ).write_text(
-        "2759\teukaryota_odb13\n"
-        "33090\tviridiplantae_odb13\n"
-        "3193\tembryophyta_odb13\n"
-        "3744\trosales_odb13\n"
+    (mapping_dir / "mapping_taxids-busco_dataset_name.eukaryota_odb13.test.txt").write_text(
+        "2759\teukaryota_odb13\n33090\tviridiplantae_odb13\n3193\tembryophyta_odb13\n3744\trosales_odb13\n"
     )
 
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f'gg_resolve_busco_lineage_from_lineages auto {shlex.quote(str(mapping_dir))} '
+        f"gg_resolve_busco_lineage_from_lineages auto {shlex.quote(str(mapping_dir))} "
         '"1,131567,2759,33090,3193,3744"'
     )
 
@@ -896,10 +862,7 @@ def test_resolve_busco_lineage_from_lineages_prefers_latest_common_odb_version(t
 
 
 def test_finalize_auto_busco_lineage_name_appends_requested_odb_suffix(tmp_path):
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        'gg_finalize_auto_busco_lineage_name brassicales 13'
-    )
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; gg_finalize_auto_busco_lineage_name brassicales 13"
 
     completed = run_bash(command, cwd=tmp_path)
 
@@ -908,10 +871,7 @@ def test_finalize_auto_busco_lineage_name_appends_requested_odb_suffix(tmp_path)
 
 
 def test_finalize_auto_busco_lineage_name_preserves_existing_suffix(tmp_path):
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        'gg_finalize_auto_busco_lineage_name embryophyta_odb12'
-    )
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; gg_finalize_auto_busco_lineage_name embryophyta_odb12"
 
     completed = run_bash(command, cwd=tmp_path)
 
@@ -955,12 +915,12 @@ def test_workspace_layout_defaults_to_split_for_empty_workspace(tmp_path):
     project_dir.mkdir()
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"gg_prepare_cmd_runtime {shlex.quote(str(project_dir))} \"\" 0 0; "
+        f'gg_prepare_cmd_runtime {shlex.quote(str(project_dir))} "" 0 0; '
         "printf '%s\\n%s\\n%s\\n%s\\n' "
-        "\"${gg_workspace_layout_resolved}\" "
-        "\"${gg_workspace_input_dir}\" "
-        "\"${gg_workspace_output_dir}\" "
-        "\"${gg_workspace_downloads_dir}\""
+        '"${gg_workspace_layout_resolved}" '
+        '"${gg_workspace_input_dir}" '
+        '"${gg_workspace_output_dir}" '
+        '"${gg_workspace_downloads_dir}"'
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -984,9 +944,9 @@ def test_workspace_layout_ignores_root_level_entries_and_stays_split(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
         "printf '%s\\n%s\\n%s\\n' "
-        f"\"$(gg_resolve_workspace_layout {shlex.quote(str(project_dir))})\" "
-        f"\"$(workspace_input_root {shlex.quote(str(project_dir))})\" "
-        f"\"$(workspace_output_root {shlex.quote(str(project_dir))})\""
+        f'"$(gg_resolve_workspace_layout {shlex.quote(str(project_dir))})" '
+        f'"$(workspace_input_root {shlex.quote(str(project_dir))})" '
+        f'"$(workspace_output_root {shlex.quote(str(project_dir))})"'
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -1004,12 +964,12 @@ def test_workspace_layout_no_longer_honors_legacy_override(tmp_path):
     project_dir.mkdir()
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"gg_prepare_cmd_runtime {shlex.quote(str(project_dir))} \"\" 0 0; "
+        f'gg_prepare_cmd_runtime {shlex.quote(str(project_dir))} "" 0 0; '
         "printf '%s\\n%s\\n%s\\n%s\\n' "
-        "\"${gg_workspace_layout_resolved}\" "
-        "\"${gg_workspace_input_dir}\" "
-        "\"${gg_workspace_output_dir}\" "
-        "\"${gg_workspace_downloads_dir}\""
+        '"${gg_workspace_layout_resolved}" '
+        '"${gg_workspace_input_dir}" '
+        '"${gg_workspace_output_dir}" '
+        '"${gg_workspace_downloads_dir}"'
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -1035,10 +995,7 @@ def test_ensure_pfam_le_db_uses_new_workspace_layout_without_migrating_legacy_di
     (legacy_dir / "Pfam.pal").write_text("dummy\n")
     (new_dir / "Pfam.pal").write_text("dummy\n")
 
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"ensure_pfam_le_db {shlex.quote(str(project_dir))}"
-    )
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; ensure_pfam_le_db {shlex.quote(str(project_dir))}"
     completed = run_bash(command, cwd=tmp_path)
 
     assert completed.returncode == 0, completed.stderr
@@ -1057,7 +1014,7 @@ def test_ensure_pfam_le_db_backfills_nonempty_ready_marker(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
         f"runtime_dir=$(ensure_pfam_le_db {shlex.quote(str(project_dir))}); "
-        'status=$?; '
+        "status=$?; "
         'printf "%s\\n%s\\n" "$status" "$runtime_dir"; '
         f"wc -c < {shlex.quote(str(ready_file))}; "
         f"cat {shlex.quote(str(ready_file))}"
@@ -1074,10 +1031,7 @@ def test_ensure_pfam_le_db_backfills_nonempty_ready_marker(tmp_path):
 
 def test_mv_out_accepts_pipe_input(tmp_path):
     outfile = tmp_path / "nested" / "out.txt"
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"printf 'hello\\n' | mv_out {shlex.quote(str(outfile))}"
-    )
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; printf 'hello\\n' | mv_out {shlex.quote(str(outfile))}"
 
     completed = run_bash(command, cwd=tmp_path)
 
@@ -1087,10 +1041,7 @@ def test_mv_out_accepts_pipe_input(tmp_path):
 
 def test_cp_out_accepts_pipe_input(tmp_path):
     outfile = tmp_path / "nested" / "out.txt"
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"printf 'world\\n' | cp_out {shlex.quote(str(outfile))}"
-    )
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; printf 'world\\n' | cp_out {shlex.quote(str(outfile))}"
 
     completed = run_bash(command, cwd=tmp_path)
 
@@ -1100,10 +1051,7 @@ def test_cp_out_accepts_pipe_input(tmp_path):
 
 def test_cp_out_single_argument_without_pipe_fails(tmp_path):
     outfile = tmp_path / "out.txt"
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"cp_out {shlex.quote(str(outfile))}"
-    )
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; cp_out {shlex.quote(str(outfile))}"
 
     completed = run_bash(command, cwd=tmp_path)
 
@@ -1116,8 +1064,7 @@ def test_cp_out_creates_destination_dir_when_target_has_trailing_slash(tmp_path)
     src.write_text("abc\n")
     dest_dir = tmp_path / "nested" / "dest_dir"
     command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"cp_out {shlex.quote(str(src))} {shlex.quote(str(dest_dir) + '/')}"
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; cp_out {shlex.quote(str(src))} {shlex.quote(str(dest_dir) + '/')}"
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -1193,7 +1140,7 @@ def test_mv_out_bundle_rolls_back_every_pair_after_publish_failure(tmp_path):
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
         "GG_TEST_MV_COUNT=0; "
         "mv() { GG_TEST_MV_COUNT=$((GG_TEST_MV_COUNT + 1)); "
-        "if [[ ${GG_TEST_MV_COUNT} -eq 6 ]]; then return 1; fi; command mv \"$@\"; }; "
+        'if [[ ${GG_TEST_MV_COUNT} -eq 6 ]]; then return 1; fi; command mv "$@"; }; '
         "mv_out_bundle "
         f"{shlex.quote(str(first_source))} {shlex.quote(str(first_destination))} "
         f"{shlex.quote(str(second_source))} {shlex.quote(str(second_destination))}"
@@ -1208,6 +1155,154 @@ def test_mv_out_bundle_rolls_back_every_pair_after_publish_failure(tmp_path):
     assert second_destination.read_text() == "old-second\n"
     assert not list(tmp_path.rglob("*.gg-stage.*"))
     assert not list(tmp_path.rglob("*.gg-backup.*"))
+
+
+@pytest.mark.parametrize("failed_move", range(1, 7))
+def test_mv_out_bundle_recovers_when_mv_changes_state_then_fails(tmp_path, failed_move):
+    first_source = tmp_path / "stage" / "first.txt"
+    second_source = tmp_path / "stage" / "second.txt"
+    first_destination = tmp_path / "out-a" / "first.txt"
+    second_destination = tmp_path / "out-b" / "second.txt"
+    first_source.parent.mkdir()
+    first_destination.parent.mkdir()
+    second_destination.parent.mkdir()
+    first_source.write_text("new-first\n")
+    second_source.write_text("new-second\n")
+    first_destination.write_text("old-first\n")
+    second_destination.write_text("old-second\n")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "GG_TEST_MV_COUNT=0; "
+        "mv() { GG_TEST_MV_COUNT=$((GG_TEST_MV_COUNT + 1)); "
+        'command mv "$@" || return $?; '
+        f"if [[ ${{GG_TEST_MV_COUNT}} -eq {failed_move} ]]; then return 1; fi; }}; "
+        "mv_out_bundle "
+        f"{shlex.quote(str(first_source))} {shlex.quote(str(first_destination))} "
+        f"{shlex.quote(str(second_source))} {shlex.quote(str(second_destination))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode != 0
+    assert first_source.read_text() == "new-first\n"
+    assert second_source.read_text() == "new-second\n"
+    assert first_destination.read_text() == "old-first\n"
+    assert second_destination.read_text() == "old-second\n"
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
+
+
+def test_mv_out_bundle_removes_partial_cross_filesystem_stage(tmp_path):
+    source = tmp_path / "source.txt"
+    destination = tmp_path / "out" / "result.txt"
+    source.write_text("new\n")
+    destination.parent.mkdir()
+    destination.write_text("old\n")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        'mv() { command cp -- "$1" "$2"; return 1; }; '
+        "mv_out_bundle "
+        f"{shlex.quote(str(source))} {shlex.quote(str(destination))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode != 0
+    assert source.read_text() == "new\n"
+    assert destination.read_text() == "old\n"
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
+
+
+@pytest.mark.parametrize("interrupted_move", [1, 3, 5, 6])
+def test_mv_out_bundle_recovers_from_signal_after_completed_move(tmp_path, interrupted_move):
+    bashpid = subprocess.run(
+        ["bash", "-lc", 'printf "%s" "${BASHPID:-}"'],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if not bashpid.stdout:
+        pytest.skip("BASHPID is required to target the mv_out_bundle subshell")
+    first_source = tmp_path / "stage" / "first.txt"
+    second_source = tmp_path / "stage" / "second.txt"
+    first_destination = tmp_path / "out-a" / "first.txt"
+    second_destination = tmp_path / "out-b" / "second.txt"
+    first_source.parent.mkdir()
+    first_destination.parent.mkdir()
+    second_destination.parent.mkdir()
+    first_source.write_text("new-first\n")
+    second_source.write_text("new-second\n")
+    first_destination.write_text("old-first\n")
+    second_destination.write_text("old-second\n")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "GG_TEST_MV_COUNT=0; "
+        "mv() { GG_TEST_MV_COUNT=$((GG_TEST_MV_COUNT + 1)); "
+        'command mv "$@" || return $?; '
+        f"if [[ ${{GG_TEST_MV_COUNT}} -eq {interrupted_move} ]]; then "
+        'kill -TERM "${BASHPID}"; fi; }; '
+        "mv_out_bundle "
+        f"{shlex.quote(str(first_source))} {shlex.quote(str(first_destination))} "
+        f"{shlex.quote(str(second_source))} {shlex.quote(str(second_destination))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 130
+    assert first_source.read_text() == "new-first\n"
+    assert second_source.read_text() == "new-second\n"
+    assert first_destination.read_text() == "old-first\n"
+    assert second_destination.read_text() == "old-second\n"
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
+
+
+def test_mv_out_bundle_rejects_canonical_destination_aliases(tmp_path):
+    first_source = tmp_path / "first.txt"
+    second_source = tmp_path / "second.txt"
+    first_source.write_text("first\n")
+    second_source.write_text("second\n")
+    destination = tmp_path / "out" / "result.txt"
+    alias = tmp_path / "out" / "." / "result.txt"
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "mv_out_bundle "
+        f"{shlex.quote(str(first_source))} {shlex.quote(str(destination))} "
+        f"{shlex.quote(str(second_source))} {shlex.quote(str(alias))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode != 0
+    assert "duplicate destination" in completed.stdout
+    assert first_source.read_text() == "first\n"
+    assert second_source.read_text() == "second\n"
+    assert not destination.exists()
+
+
+def test_mv_out_bundle_rejects_hardlinked_destination_aliases(tmp_path):
+    first_source = tmp_path / "first.txt"
+    second_source = tmp_path / "second.txt"
+    first_source.write_text("first\n")
+    second_source.write_text("second\n")
+    first_destination = tmp_path / "first-destination.txt"
+    second_destination = tmp_path / "second-destination.txt"
+    first_destination.write_text("old\n")
+    second_destination.hardlink_to(first_destination)
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "mv_out_bundle "
+        f"{shlex.quote(str(first_source))} {shlex.quote(str(first_destination))} "
+        f"{shlex.quote(str(second_source))} {shlex.quote(str(second_destination))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode != 0
+    assert "duplicate destination" in completed.stdout
+    assert first_source.read_text() == "first\n"
+    assert second_source.read_text() == "second\n"
 
 
 def test_mv_out_replace_dir_replaces_existing_nonempty_directory(tmp_path):
@@ -1238,8 +1333,7 @@ def test_resolve_rnaspades_transcript_fasta_prefers_primary_output(tmp_path):
     (output_dir / "transcripts.fasta").write_text(">primary\nAAAA\n")
     (output_dir / "soft_filtered_transcripts.fasta").write_text(">soft\nCCCC\n")
     command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"resolve_rnaspades_transcript_fasta {shlex.quote(str(output_dir))}"
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; resolve_rnaspades_transcript_fasta {shlex.quote(str(output_dir))}"
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -1253,8 +1347,7 @@ def test_resolve_rnaspades_transcript_fasta_falls_back_to_soft_then_hard(tmp_pat
     output_dir.mkdir()
     (output_dir / "soft_filtered_transcripts.fasta").write_text(">soft\nCCCC\n")
     command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"resolve_rnaspades_transcript_fasta {shlex.quote(str(output_dir))}"
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; resolve_rnaspades_transcript_fasta {shlex.quote(str(output_dir))}"
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -1343,10 +1436,7 @@ def test_ensure_jaspar_file_latest_uses_cached_marker_without_remote_lookup(tmp_
 
 
 def test_recreate_dir_rejects_root_path(tmp_path):
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        "recreate_dir /"
-    )
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; recreate_dir /"
     completed = run_bash(command, cwd=tmp_path)
 
     assert completed.returncode != 0
@@ -1432,10 +1522,7 @@ def test_check_if_species_files_unique_ignores_hidden_files(tmp_path):
     (species_dir / "Arabidopsis_thaliana.fa").write_text(">a\nATG\n")
     (species_dir / ".DS_Store").write_text("x\n")
 
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"check_if_species_files_unique {shlex.quote(str(species_dir))}"
-    )
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; check_if_species_files_unique {shlex.quote(str(species_dir))}"
     completed = run_bash(command, cwd=tmp_path)
 
     assert completed.returncode == 0, completed.stderr
@@ -1450,10 +1537,7 @@ def test_gg_find_fasta_files_excludes_hidden_files(tmp_path):
     visible.write_text(">a\nATG\n")
     hidden.write_text(">h\nATG\n")
 
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"gg_find_fasta_files {shlex.quote(str(fasta_dir))} 1"
-    )
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; gg_find_fasta_files {shlex.quote(str(fasta_dir))} 1"
     completed = run_bash(command, cwd=tmp_path)
 
     assert completed.returncode == 0, completed.stderr
@@ -1494,7 +1578,7 @@ def test_genome_annotation_species_cds_contract_accepts_symlinked_search_root(tm
         "shift\n"
         "[[ ${1:-} == --name ]] && shift\n"
         "if [[ ${1:-} == --threads ]]; then shift 2; fi\n"
-        "awk '/^>/ {sub(/^>/, \"\"); sub(/[[:space:]].*$/, \"\"); print}' ${1:?}\n",
+        'awk \'/^>/ {sub(/^>/, ""); sub(/[[:space:]].*$/, ""); print}\' ${1:?}\n',
         encoding="utf-8",
     )
     seqkit.chmod(0o755)

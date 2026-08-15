@@ -411,10 +411,14 @@ mv_out_bundle() (
 	fi
 	local -a sources=()
 	local -a destinations=()
+	local -a canonical_sources=()
+	local -a canonical_destinations=()
 	local -a staged=()
 	local -a backups=()
 	local -a had_destination=()
-	local argument_index pair_index previous_index source destination parent basename token
+	local -a stage_attempted=()
+	local -a publish_attempted=()
+	local argument_index pair_index previous_index source destination parent basename token canonical_source canonical_destination
 	local pair_count=$(( $# / 2 ))
 	for ((argument_index = 1; argument_index <= $#; argument_index += 2)); do
 		source=${!argument_index}
@@ -428,22 +432,32 @@ mv_out_bundle() (
 			echo "mv_out_bundle: unsafe destination: ${destination}"
 			return 1
 		fi
+		parent=$(dirname -- "${destination}")
+		ensure_dir "${parent}" || return 1
+		canonical_source=$(gg_resolve_physical_path "${source}") || return 1
+		canonical_destination=$(gg_resolve_physical_path "${destination}") || return 1
+		if [[ "${canonical_source}" == "${canonical_destination}" || ( -e "${destination}" && "${source}" -ef "${destination}" ) ]]; then
+			echo "mv_out_bundle: source and destination must differ: ${source}"
+			return 1
+		fi
 		for ((previous_index = 0; previous_index < ${#destinations[@]}; previous_index++)); do
-			if [[ "${destinations[previous_index]}" == "${destination}" ]]; then
+			if [[ "${canonical_destinations[previous_index]}" == "${canonical_destination}" || ( -e "${destinations[previous_index]}" && -e "${destination}" && "${destinations[previous_index]}" -ef "${destination}" ) ]]; then
 				echo "mv_out_bundle: duplicate destination: ${destination}"
 				return 1
 			fi
-			if [[ "${sources[previous_index]}" == "${source}" ]]; then
+			if [[ "${canonical_sources[previous_index]}" == "${canonical_source}" || "${sources[previous_index]}" -ef "${source}" ]]; then
 				echo "mv_out_bundle: duplicate source: ${source}"
 				return 1
 			fi
 		done
 		sources+=("${source}")
 		destinations+=("${destination}")
+		canonical_sources+=("${canonical_source}")
+		canonical_destinations+=("${canonical_destination}")
 	done
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
 		for ((previous_index = 0; previous_index < pair_count; previous_index++)); do
-			if [[ "${sources[pair_index]}" == "${destinations[previous_index]}" ]]; then
+			if [[ "${canonical_sources[pair_index]}" == "${canonical_destinations[previous_index]}" || ( -e "${destinations[previous_index]}" && "${sources[pair_index]}" -ef "${destinations[previous_index]}" ) ]]; then
 				echo "mv_out_bundle: sources and destinations must not overlap: ${sources[pair_index]}"
 				return 1
 			fi
@@ -458,30 +472,44 @@ mv_out_bundle() (
 		staged+=("${parent}/.${basename}.gg-stage.${token}.${pair_index}")
 		backups+=("${parent}/.${basename}.gg-backup.${token}.${pair_index}")
 		had_destination+=("no")
+		stage_attempted+=("no")
+		publish_attempted+=("no")
+		if [[ -e "${staged[pair_index]}" || -L "${staged[pair_index]}" || -e "${backups[pair_index]}" || -L "${backups[pair_index]}" ]]; then
+			echo "mv_out_bundle: transaction path collision for destination: ${destination}"
+			return 1
+		fi
 	done
 
-	local staged_count=0
-	local backup_count=0
-	local published_count=0
 	local committed=0
 	_mv_out_bundle_rollback() {
 		local rollback_index
 		if [[ ${committed} -eq 1 ]]; then
 			return
 		fi
-		for ((rollback_index = published_count - 1; rollback_index >= 0; rollback_index--)); do
-			if [[ -e "${destinations[rollback_index]}" || -L "${destinations[rollback_index]}" ]]; then
-				mv -- "${destinations[rollback_index]}" "${sources[rollback_index]}" || true
+		# Complete one deterministic rollback even if a scheduler repeats the
+		# termination signal while the EXIT trap is restoring files.
+		trap '' HUP INT TERM
+		for ((rollback_index = pair_count - 1; rollback_index >= 0; rollback_index--)); do
+			if [[ "${publish_attempted[rollback_index]}" == "yes" && ! -e "${staged[rollback_index]}" && ! -L "${staged[rollback_index]}" && ( -e "${destinations[rollback_index]}" || -L "${destinations[rollback_index]}" ) ]]; then
+				if [[ ! -e "${sources[rollback_index]}" && ! -L "${sources[rollback_index]}" ]]; then
+					mv -- "${destinations[rollback_index]}" "${sources[rollback_index]}" || true
+				else
+					mv -- "${destinations[rollback_index]}" "${staged[rollback_index]}" || true
+				fi
 			fi
 		done
-		for ((rollback_index = backup_count - 1; rollback_index >= 0; rollback_index--)); do
-			if [[ "${had_destination[rollback_index]}" == "yes" && ( -e "${backups[rollback_index]}" || -L "${backups[rollback_index]}" ) ]]; then
+		for ((rollback_index = pair_count - 1; rollback_index >= 0; rollback_index--)); do
+			if [[ "${had_destination[rollback_index]}" == "yes" && ( -e "${backups[rollback_index]}" || -L "${backups[rollback_index]}" ) && ! -e "${destinations[rollback_index]}" && ! -L "${destinations[rollback_index]}" ]]; then
 				mv -- "${backups[rollback_index]}" "${destinations[rollback_index]}" || true
 			fi
 		done
-		for ((rollback_index = published_count; rollback_index < staged_count; rollback_index++)); do
-			if [[ -e "${staged[rollback_index]}" || -L "${staged[rollback_index]}" ]]; then
-				mv -- "${staged[rollback_index]}" "${sources[rollback_index]}" || true
+		for ((rollback_index = pair_count - 1; rollback_index >= 0; rollback_index--)); do
+			if [[ "${stage_attempted[rollback_index]}" == "yes" && ( -e "${staged[rollback_index]}" || -L "${staged[rollback_index]}" ) ]]; then
+				if [[ ! -e "${sources[rollback_index]}" && ! -L "${sources[rollback_index]}" ]]; then
+					mv -- "${staged[rollback_index]}" "${sources[rollback_index]}" || true
+				else
+					rm -rf -- "${staged[rollback_index]}" || true
+				fi
 			fi
 		done
 	}
@@ -489,19 +517,18 @@ mv_out_bundle() (
 	trap 'exit 130' HUP INT TERM
 
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
+		stage_attempted[pair_index]="yes"
 		mv -- "${sources[pair_index]}" "${staged[pair_index]}" || return 1
-		staged_count=$(( staged_count + 1 ))
 	done
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
 		if [[ -e "${destinations[pair_index]}" || -L "${destinations[pair_index]}" ]]; then
-			mv -- "${destinations[pair_index]}" "${backups[pair_index]}" || return 1
 			had_destination[pair_index]="yes"
+			mv -- "${destinations[pair_index]}" "${backups[pair_index]}" || return 1
 		fi
-		backup_count=$(( backup_count + 1 ))
 	done
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
+		publish_attempted[pair_index]="yes"
 		mv -- "${staged[pair_index]}" "${destinations[pair_index]}" || return 1
-		published_count=$(( published_count + 1 ))
 	done
 	committed=1
 	trap - EXIT HUP INT TERM

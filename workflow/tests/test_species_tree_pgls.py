@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import math
 import tracemalloc
 
@@ -55,22 +56,35 @@ def test_known_standard_errors_are_propagated_for_sum_and_mean():
     assert mean_se == pytest.approx(0.25)
 
 
+def test_independent_known_errors_stay_linear_memory_at_5000_paralogs():
+    values = numpy.ones(5_000)
+    errors = numpy.full(5_000, 0.2)
+    tracemalloc.start()
+    total, total_se = _aggregate_values(values, errors, "sum", "identity")
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert total == 5_000.0
+    assert total_se == pytest.approx(math.sqrt(5_000 * 0.2**2))
+    assert peak < 16 * 1024**2
+
+
 def test_known_cross_paralog_covariance_is_propagated_exactly():
     offdiagonal = numpy.asarray([[0.0, 0.06], [0.06, 0.0]])
-    total, total_se = _aggregate_values(
-        [2.0], [0.3], "sum", "identity"
-    )
+    total, total_se = _aggregate_values([2.0], [0.3], "sum", "identity")
     assert total_se == pytest.approx(0.3)
-    total, total_se = _aggregate_values(
-        [2.0, 6.0], [0.3, 0.4], "sum", "identity", offdiagonal
-    )
-    mean, mean_se = _aggregate_values(
-        [2.0, 6.0], [0.3, 0.4], "mean", "identity", offdiagonal
-    )
+    total, total_se = _aggregate_values([2.0, 6.0], [0.3, 0.4], "sum", "identity", offdiagonal)
+    mean, mean_se = _aggregate_values([2.0, 6.0], [0.3, 0.4], "mean", "identity", offdiagonal)
     assert total == 8.0
     assert total_se == pytest.approx(math.sqrt(0.37))
     assert mean == 4.0
     assert mean_se == pytest.approx(math.sqrt(0.37) / 2.0)
+
+
+def test_sparse_cross_paralog_covariance_is_propagated_exactly():
+    offdiagonal = sparse.csr_matrix([[0.0, 0.06], [0.06, 0.0]])
+    total, total_se = _aggregate_values([2.0, 6.0], [0.3, 0.4], "sum", "identity", offdiagonal)
+    assert total == 8.0
+    assert total_se == pytest.approx(math.sqrt(0.37))
 
 
 def test_invalid_cross_paralog_covariance_is_rejected():
@@ -91,7 +105,15 @@ def test_max_aggregation_tie_uses_order_invariant_conservative_standard_error():
     assert reverse == pytest.approx(forward)
 
 
-def test_sparse_sampling_covariance_is_inspected_without_dense_conversion():
+def test_sparse_sampling_covariance_is_inspected_without_nwkit_or_dense_conversion(monkeypatch):
+    original_import = builtins.__import__
+
+    def reject_nwkit_import(name, *args, **kwargs):
+        if name == "nwkit" or name.startswith("nwkit."):
+            raise ModuleNotFoundError("No module named 'nwkit'")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_nwkit_import)
     covariance = sparse.csr_matrix([[1.0, 0.0, 0.2], [0.0, 2.0, 0.0], [0.2, 0.0, 3.0]])
     diagonal, has_offdiagonal = _covariance_diagonal_and_offdiagonal(covariance, ["A", "B", "C"])
     assert diagonal.tolist() == [1.0, 2.0, 3.0]
@@ -99,9 +121,7 @@ def test_sparse_sampling_covariance_is_inspected_without_dense_conversion():
 
 
 def test_low_rank_covariance_inspection_has_bounded_memory_at_5000_tips():
-    DiagonalLowRankCovariance = pytest.importorskip(
-        "nwkit.gaussian"
-    ).DiagonalLowRankCovariance
+    DiagonalLowRankCovariance = pytest.importorskip("nwkit.gaussian").DiagonalLowRankCovariance
     covariance = DiagonalLowRankCovariance(
         diagonal=numpy.ones(5_000),
         low_rank=numpy.zeros((5_000, 2)),
@@ -118,9 +138,7 @@ def test_low_rank_covariance_inspection_has_bounded_memory_at_5000_tips():
 
 
 def test_sparse_low_rank_covariance_factor_stays_sparse_and_detects_offdiagonal():
-    DiagonalLowRankCovariance = pytest.importorskip(
-        "nwkit.gaussian"
-    ).DiagonalLowRankCovariance
+    DiagonalLowRankCovariance = pytest.importorskip("nwkit.gaussian").DiagonalLowRankCovariance
     covariance = DiagonalLowRankCovariance(
         diagonal=numpy.asarray([0.5, 0.5, 0.5]),
         low_rank=sparse.csr_matrix([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]),
@@ -211,9 +229,7 @@ def test_species_aggregation_uses_declared_paralog_sampling_covariance():
     )
 
     assert outputs["sum"].loc[0, "expression"] == 8.0
-    assert outputs["sum"].loc[
-        0, "expression__standard_error"
-    ] == pytest.approx(math.sqrt(0.37))
+    assert outputs["sum"].loc[0, "expression__standard_error"] == pytest.approx(math.sqrt(0.37))
     assert audit.loc[0, "paralog_covariance_mode"] == "provided"
     assert audit.loc[0, "paralog_covariance_pairs"] == 1
 
@@ -357,14 +373,10 @@ def test_species_summary_adjusts_across_all_method_associations(tmp_path):
                 "p_value": p_value,
                 "inference_status": "ok",
             }
-            for index, (aggregation, p_value) in enumerate(
-                [("sum", 0.01), ("mean", 0.03), ("max", 0.2)], start=1
-            )
+            for index, (aggregation, p_value) in enumerate([("sum", 0.01), ("mean", 0.03), ("max", 0.2)], start=1)
         ]
     ).to_csv(comparison, sep="\t", index=False)
-    pandas.DataFrame(columns=["analysis_method", "status"]).to_csv(
-        status, sep="\t", index=False
-    )
+    pandas.DataFrame(columns=["analysis_method", "status"]).to_csv(status, sep="\t", index=False)
 
     summary = summarize_for_stat_tree(comparison, status)
 

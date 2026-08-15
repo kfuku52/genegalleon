@@ -175,7 +175,7 @@ def _aggregate_values(
     standard_errors: Sequence[float] | None,
     aggregation: str,
     value_type: str,
-    sampling_covariance: numpy.ndarray | None = None,
+    sampling_covariance: numpy.ndarray | sparse.spmatrix | None = None,
 ) -> tuple[float, float | None]:
     linear = numpy.asarray([_to_linear(value, value_type) for value in values], dtype=float)
     if not numpy.isfinite(linear).all():
@@ -191,41 +191,15 @@ def _aggregate_values(
     combined = _from_linear(combined_linear, value_type)
     if standard_errors is None:
         if sampling_covariance is not None:
-            raise ValueError(
-                "Paralog sampling covariance requires aligned standard errors"
-            )
+            raise ValueError("Paralog sampling covariance requires aligned standard errors")
         return combined, None
 
     errors = numpy.asarray(standard_errors, dtype=float)
     if errors.shape != linear.shape or not numpy.isfinite(errors).all() or (errors < 0.0).any():
         raise ValueError("Paralog standard errors must be finite, non-negative, and aligned")
-    covariance = numpy.diag(numpy.square(errors))
+    validated_covariance = None
     if sampling_covariance is not None:
-        offdiagonal = numpy.asarray(sampling_covariance, dtype=float)
-        if (
-            offdiagonal.shape != covariance.shape
-            or not numpy.isfinite(offdiagonal).all()
-            or not numpy.allclose(offdiagonal, offdiagonal.T, rtol=1e-12, atol=1e-12)
-            or not numpy.allclose(numpy.diag(offdiagonal), 0.0, rtol=0.0, atol=1e-12)
-        ):
-            raise ValueError(
-                "Paralog sampling covariance must be a finite, symmetric, "
-                "zero-diagonal matrix aligned to the reported standard errors"
-            )
-        covariance += offdiagonal
-    covariance = (covariance + covariance.T) / 2.0
-    eigenvalues = numpy.linalg.eigvalsh(covariance)
-    tolerance = (
-        numpy.finfo(float).eps
-        * max(1.0, float(numpy.max(numpy.abs(covariance))))
-        * max(1, len(covariance))
-        * 100.0
-    )
-    if float(eigenvalues.min()) < -tolerance:
-        raise ValueError(
-            "Paralog standard errors and sampling covariances do not form a "
-            "positive-semidefinite covariance matrix"
-        )
+        validated_covariance = _validated_paralog_covariance(errors, sampling_covariance)
 
     if aggregation == "max":
         maxima = numpy.flatnonzero(linear == combined_linear)
@@ -244,8 +218,76 @@ def _aggregate_values(
     else:
         denominator = float(linear.sum()) + (len(linear) if aggregation == "mean" else 1.0)
         derivative = (linear + 1.0) / denominator
-    variance = float(derivative @ covariance @ derivative)
+    diagonal_variance = float(numpy.square(derivative * errors).sum())
+    if validated_covariance is None:
+        return combined, math.sqrt(max(0.0, diagonal_variance))
+
+    offdiagonal_variance = float(derivative @ validated_covariance @ derivative)
+    variance = diagonal_variance + offdiagonal_variance
     return combined, math.sqrt(max(0.0, variance))
+
+
+def _validated_paralog_covariance(
+    errors: numpy.ndarray,
+    sampling_covariance: numpy.ndarray | sparse.spmatrix,
+) -> numpy.ndarray | sparse.csr_matrix:
+    """Validate a zero-diagonal covariance update without forcing it dense."""
+
+    shape = (len(errors), len(errors))
+    if sparse.issparse(sampling_covariance):
+        offdiagonal = sparse.csr_matrix(sampling_covariance, dtype=float)
+        difference = offdiagonal - offdiagonal.T
+        if (
+            offdiagonal.shape != shape
+            or not numpy.isfinite(offdiagonal.data).all()
+            or (difference.nnz and float(numpy.max(numpy.abs(difference.data))) > 1e-12)
+            or not numpy.allclose(offdiagonal.diagonal(), 0.0, rtol=0.0, atol=1e-12)
+        ):
+            raise ValueError(
+                "Paralog sampling covariance must be a finite, symmetric, "
+                "zero-diagonal matrix aligned to the reported standard errors"
+            )
+        full_covariance = offdiagonal + sparse.diags(numpy.square(errors), format="csr")
+        scale = max(
+            1.0,
+            float(numpy.max(numpy.abs(full_covariance.data))) if full_covariance.nnz else 0.0,
+        )
+        tolerance = numpy.finfo(float).eps * scale * max(1, len(errors)) * 100.0
+        if len(errors) <= 256:
+            minimum_eigenvalue = float(numpy.linalg.eigvalsh(full_covariance.toarray()).min())
+        else:
+            minimum_eigenvalue = float(
+                sparse.linalg.eigsh(
+                    full_covariance,
+                    k=1,
+                    which="SA",
+                    return_eigenvectors=False,
+                    tol=1e-8,
+                )[0]
+            )
+        validated: numpy.ndarray | sparse.csr_matrix = offdiagonal
+    else:
+        offdiagonal = numpy.asarray(sampling_covariance, dtype=float)
+        if (
+            offdiagonal.shape != shape
+            or not numpy.isfinite(offdiagonal).all()
+            or not numpy.allclose(offdiagonal, offdiagonal.T, rtol=1e-12, atol=1e-12)
+            or not numpy.allclose(numpy.diag(offdiagonal), 0.0, rtol=0.0, atol=1e-12)
+        ):
+            raise ValueError(
+                "Paralog sampling covariance must be a finite, symmetric, "
+                "zero-diagonal matrix aligned to the reported standard errors"
+            )
+        full_covariance = offdiagonal + numpy.diag(numpy.square(errors))
+        scale = max(1.0, float(numpy.max(numpy.abs(full_covariance))))
+        tolerance = numpy.finfo(float).eps * scale * max(1, len(errors)) * 100.0
+        minimum_eigenvalue = float(numpy.linalg.eigvalsh(full_covariance).min())
+        validated = offdiagonal
+    if minimum_eigenvalue < -tolerance:
+        raise ValueError(
+            "Paralog standard errors and sampling covariances do not form a positive-semidefinite covariance matrix"
+        )
+    return validated
 
 
 def _prepare_paralog_sampling_covariance(
@@ -260,9 +302,7 @@ def _prepare_paralog_sampling_covariance(
     required = {"response", "gene_name_1", "gene_name_2", "sampling_covariance"}
     missing = sorted(required - set(frame.columns))
     if missing:
-        raise ValueError(
-            "Paralog sampling covariance is missing columns: " + ", ".join(missing)
-        )
+        raise ValueError("Paralog sampling covariance is missing columns: " + ", ".join(missing))
     selected = frame.copy()
     if "tree_id" in selected:
         selected = selected.loc[selected["tree_id"].astype(str) == str(tree_id)]
@@ -276,20 +316,17 @@ def _prepare_paralog_sampling_covariance(
         if not any(known):
             if "tree_id" in frame:
                 raise ValueError(
-                    "Paralog sampling covariance for tree {!r} contains unknown "
-                    "gene tips: {}, {}".format(tree_id, first, second)
+                    "Paralog sampling covariance for tree {!r} contains unknown gene tips: {}, {}".format(
+                        tree_id, first, second
+                    )
                 )
             continue
         if not all(known):
             raise ValueError(
-                "Paralog sampling covariance pair mixes a mapped and unmapped "
-                "gene tip: {}, {}".format(first, second)
+                "Paralog sampling covariance pair mixes a mapped and unmapped gene tip: {}, {}".format(first, second)
             )
         if response not in response_set:
-            raise ValueError(
-                "Paralog sampling covariance contains an unselected response: "
-                + response
-            )
+            raise ValueError("Paralog sampling covariance contains an unselected response: " + response)
         if first == second:
             raise ValueError(
                 "Paralog sampling covariance diagonals come from standard errors; "
@@ -297,18 +334,16 @@ def _prepare_paralog_sampling_covariance(
             )
         if gene_species[first] != gene_species[second]:
             raise ValueError(
-                "Paralog sampling covariance cannot connect different species: "
-                "{}, {}".format(first, second)
+                "Paralog sampling covariance cannot connect different species: {}, {}".format(first, second)
             )
-        value = _as_float(
-            record["sampling_covariance"], "paralog sampling covariance"
-        )
+        value = _as_float(record["sampling_covariance"], "paralog sampling covariance")
         pair = tuple(sorted((first, second)))
         by_pair = prepared.setdefault(response, {})
         if pair in by_pair:
             raise ValueError(
-                "Paralog sampling covariance contains a duplicated unordered pair "
-                "for response {!r}: {}, {}".format(response, *pair)
+                "Paralog sampling covariance contains a duplicated unordered pair for response {!r}: {}, {}".format(
+                    response, *pair
+                )
             )
         by_pair[pair] = value
     return prepared
@@ -318,22 +353,31 @@ def _paralog_covariance_for_observations(
     leaf_names: Sequence[str],
     response: str,
     covariance_by_response: dict[str, dict[tuple[str, str], float]],
-) -> tuple[numpy.ndarray | None, int]:
+) -> tuple[sparse.csr_matrix | None, int]:
     by_pair = covariance_by_response.get(response, {})
     if not by_pair:
         return None, 0
-    matrix = numpy.zeros((len(leaf_names), len(leaf_names)), dtype=float)
-    pair_count = 0
-    for first_index, first in enumerate(leaf_names):
-        for second_index in range(first_index + 1, len(leaf_names)):
-            second = leaf_names[second_index]
-            pair = tuple(sorted((str(first), str(second))))
-            if pair not in by_pair:
-                continue
-            matrix[first_index, second_index] = by_pair[pair]
-            matrix[second_index, first_index] = by_pair[pair]
-            pair_count += 1
-    return (matrix if pair_count else None), pair_count
+    index_by_leaf = {str(leaf_name): index for index, leaf_name in enumerate(leaf_names)}
+    row_indices: list[int] = []
+    column_indices: list[int] = []
+    values: list[float] = []
+    for (first, second), value in by_pair.items():
+        first_index = index_by_leaf.get(first)
+        second_index = index_by_leaf.get(second)
+        if first_index is None or second_index is None:
+            continue
+        row_indices.extend((first_index, second_index))
+        column_indices.extend((second_index, first_index))
+        values.extend((value, value))
+    pair_count = len(values) // 2
+    if not pair_count:
+        return None, 0
+    matrix = sparse.csr_matrix(
+        (values, (row_indices, column_indices)),
+        shape=(len(leaf_names), len(leaf_names)),
+        dtype=float,
+    )
+    return matrix, pair_count
 
 
 def _gene_species_map(reconciliation: pandas.DataFrame) -> dict[str, str]:
@@ -436,9 +480,7 @@ def _adjust_association_p_values(
     )
     bh_ranked = numpy.minimum(
         1.0,
-        numpy.minimum.accumulate(
-            (count / numpy.arange(count, 0, -1)) * ranked[::-1]
-        )[::-1],
+        numpy.minimum.accumulate((count / numpy.arange(count, 0, -1)) * ranked[::-1])[::-1],
     )
     holm = numpy.empty(count, dtype=float)
     bh = numpy.empty(count, dtype=float)
@@ -511,12 +553,10 @@ def aggregate_species_expression(
                     if observed[se_column].map(_is_missing).any():
                         raise ValueError(f"Missing standard error while aggregating response {response!r}")
                     errors = [_as_float(value, f"standard error for {response}") for value in observed[se_column]]
-                offdiagonal_covariance, covariance_pair_count = (
-                    _paralog_covariance_for_observations(
-                        observed["leaf_name"].astype(str).tolist(),
-                        response,
-                        covariance_by_response,
-                    )
+                offdiagonal_covariance, covariance_pair_count = _paralog_covariance_for_observations(
+                    observed["leaf_name"].astype(str).tolist(),
+                    response,
+                    covariance_by_response,
                 )
                 value, standard_error = _aggregate_values(
                     values,
@@ -541,9 +581,7 @@ def aggregate_species_expression(
                         "observed_paralog_count": observed_count,
                         "coverage_fraction": observed_count / expected_count,
                         "missing_policy": missing_policy,
-                        "paralog_covariance_mode": (
-                            "provided" if covariance_pair_count else "independent"
-                        ),
+                        "paralog_covariance_mode": ("provided" if covariance_pair_count else "independent"),
                         "paralog_covariance_pairs": covariance_pair_count,
                         "aggregated_value": value,
                         "aggregated_standard_error": "" if standard_error is None else standard_error,
@@ -667,9 +705,8 @@ def _read_trait_inputs(
 
 
 def _covariance_diagonal_and_offdiagonal(covariance: Any, leaf_names: Sequence[str]) -> tuple[numpy.ndarray, bool]:
-    from nwkit.gaussian import DiagonalLowRankCovariance
-
-    if isinstance(covariance, DiagonalLowRankCovariance):
+    covariance_type = type(covariance)
+    if covariance_type.__module__ == "nwkit.gaussian" and covariance_type.__name__ == "DiagonalLowRankCovariance":
         low_rank = covariance.low_rank
         if sparse.issparse(low_rank):
             low_rank = low_rank.tocsr()
@@ -1095,10 +1132,7 @@ def summarize_for_stat_tree(comparison_path: str | Path, status_path: str | Path
         if selected.empty or "p_value" not in selected:
             continue
         selected["_p_value"] = pandas.to_numeric(selected["p_value"], errors="coerce")
-        selected = selected.loc[
-            numpy.isfinite(selected["_p_value"])
-            & selected["_p_value"].between(0.0, 1.0)
-        ]
+        selected = selected.loc[numpy.isfinite(selected["_p_value"]) & selected["_p_value"].between(0.0, 1.0)]
         if selected.empty:
             continue
         holm, bh = _adjust_association_p_values(selected["_p_value"])
@@ -1121,9 +1155,7 @@ def summarize_for_stat_tree(comparison_path: str | Path, status_path: str | Path
                 out[f"pgls_{method}_best_{column}"] = best[column]
         prefix = f"pgls_{method}"
         out[f"{prefix}_num_tested_associations"] = int(selected.shape[0])
-        out[f"{prefix}_multiplicity_scope"] = (
-            "all_usable_family_associations_for_method"
-        )
+        out[f"{prefix}_multiplicity_scope"] = "all_usable_family_associations_for_method"
         out[f"{prefix}_best_p_value_raw"] = float(best["_p_value"])
         out[f"{prefix}_best_p_value_holm"] = float(best["_p_value_holm"])
         out[f"{prefix}_best_p_value_bh"] = float(best["_p_value_bh"])
@@ -1170,9 +1202,7 @@ def run(args: argparse.Namespace) -> int:
     expression = _read_tsv(args.expression)
     reconciliation = _read_tsv(args.reconciliation)
     paralog_sampling_covariance = (
-        None
-        if args.paralog_sampling_covariance is None
-        else _read_tsv(args.paralog_sampling_covariance)
+        None if args.paralog_sampling_covariance is None else _read_tsv(args.paralog_sampling_covariance)
     )
     plan = _read_tsv(args.analysis_plan)
     if plan.empty:
@@ -1470,10 +1500,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--paralog-sampling-covariance",
         type=Path,
-        help=(
-            "Optional TSV of known within-species cross-paralog sampling "
-            "covariances for standard-error propagation"
-        ),
+        help=("Optional TSV of known within-species cross-paralog sampling covariances for standard-error propagation"),
     )
     parser.add_argument("--within-variance", choices=["pooled", "leaf", "known-se"], default="pooled")
     parser.add_argument("--technical-aggregation", choices=["error", "mean"], default="error")
