@@ -693,6 +693,7 @@ translate_orthogroup_cds_to_protein_fasta() {
   local cds_fasta=$1
   local protein_out=$2
   local table_path=$3
+  local protein_part="${protein_out}.partial.$$"
   local translated_tmp="${og_id}.translated.pep.tmp.fasta"
   local species_code=""
   local sp_ub=""
@@ -710,6 +711,7 @@ translate_orthogroup_cds_to_protein_fasta() {
   )
   if [[ ${#species_names[@]} -eq 0 ]]; then
     echo "No species prefixes were detected in the focal CDS FASTA: ${cds_fasta}"
+    rm -f -- "${translated_tmp}"
     exit 1
   fi
 
@@ -728,9 +730,26 @@ translate_orthogroup_cds_to_protein_fasta() {
   if [[ ${num_cds} -ne ${num_protein} ]]; then
     echo "Protein translation produced a different number of sequences (${num_protein}) than the source CDS FASTA (${num_cds})."
     echo "Exiting."
+    rm -f -- "${translated_tmp}"
     exit 1
   fi
-  seqkit seq --threads "${GG_TASK_CPUS}" "${translated_tmp}" --out-file "${protein_out}"
+  ensure_parent_dir "${protein_out}"
+  rm -f -- "${protein_part}"
+  if ! seqkit seq --threads "${GG_TASK_CPUS}" "${translated_tmp}" --out-file "${protein_part}"; then
+    rm -f -- "${protein_part}" "${translated_tmp}"
+    echo "Failed to write translated protein FASTA: ${protein_out}" >&2
+    return 1
+  fi
+  if [[ ! -s "${protein_part}" ]]; then
+    rm -f -- "${protein_part}" "${translated_tmp}"
+    echo "Translated protein FASTA is empty: ${protein_out}" >&2
+    return 1
+  fi
+  if ! mv_out "${protein_part}" "${protein_out}"; then
+    rm -f -- "${protein_part}" "${translated_tmp}"
+    echo "Failed to publish translated protein FASTA: ${protein_out}" >&2
+    return 1
+  fi
   rm -f -- "${translated_tmp}"
 }
 
