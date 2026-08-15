@@ -186,6 +186,7 @@ exp_value_type="log2p1" # Expression scale used in species_expression input tabl
 pgls_methods="rsc" # rsc,species-nwkit,species-rphylopars, or all; selected methods share the same prepared expression/trait inputs.
 species_expression_aggregation="sum" # sum|mean|max|all; paralogs are combined within each biological sample on the linear expression scale before species-tree PGLS.
 species_paralog_missing="error" # error|ignore for incomplete paralog measurements within a species/sample.
+species_paralog_sampling_covariance="" # Optional workspace-relative or absolute TSV of response,gene_name_1,gene_name_2,sampling_covariance (and optional tree_id) for known-SE species PGLS aggregation.
 rphylopars_sampling_covariance="require-diagonal" # require-diagonal|diagonalize; Rphylopars cannot represent cross-species sampling covariance exactly.
 
 # Reconciled speciation contrast (RSC) PGLS

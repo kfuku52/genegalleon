@@ -274,6 +274,14 @@ uncertainty. For each gene family, the species comparators use the induced
 species subtree containing its reconciled gene tips, rather than requiring the
 family to occur in every species of the global tree.
 
+Known-SE analyses can also set `species_paralog_sampling_covariance` to a TSV
+of `response`, `gene_name_1`, `gene_name_2`, and `sampling_covariance` (plus
+optional `tree_id`). NWKIT and Rphylopars then receive the correctly propagated
+species-level diagonal uncertainty for `sum` and `mean`; invalid non-positive-
+semidefinite combinations are rejected. Raw paired replicates need no such
+file because cross-paralog co-variation is preserved in the per-sample
+aggregate before replicate variance is estimated.
+
 `auto` estimates the shape parameter for lambda, OU, kappa, delta, EB, and
 ACDC models. Brownian and independent models have no shape parameter, so their
 default `auto` setting means that no shape-parameter argument is supplied.

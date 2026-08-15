@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 from typing import Iterable, Sequence
 
+import numpy
 import pandas
 
 MISSING_VALUES = {"", "NA", "NaN", "nan", "?", "missing", "unknown", "."}
@@ -1075,6 +1076,31 @@ def _association_results(results: pandas.DataFrame) -> pandas.DataFrame:
     return results.loc[mask]
 
 
+def _adjust_association_p_values(
+    values: pandas.Series,
+) -> tuple[numpy.ndarray, numpy.ndarray]:
+    """Return Holm family-wise and Benjamini-Hochberg adjusted p-values."""
+    raw = numpy.asarray(values, dtype=float)
+    count = len(raw)
+    order = numpy.argsort(raw, kind="stable")
+    ranked = raw[order]
+    holm_ranked = numpy.minimum(
+        1.0,
+        numpy.maximum.accumulate((count - numpy.arange(count)) * ranked),
+    )
+    bh_ranked = numpy.minimum(
+        1.0,
+        numpy.minimum.accumulate(
+            (count / numpy.arange(count, 0, -1)) * ranked[::-1]
+        )[::-1],
+    )
+    holm = numpy.empty(count, dtype=float)
+    bh = numpy.empty(count, dtype=float)
+    holm[order] = holm_ranked
+    bh[order] = bh_ranked
+    return holm, bh
+
+
 def _write_bundle_frames(
     output_prefix: Path,
     frames_by_suffix: dict[str, list[pandas.DataFrame]],
@@ -1122,8 +1148,20 @@ def _status_from_results(
     p_values = pandas.to_numeric(
         association_results.get("p_value", pandas.Series(dtype=float)), errors="coerce"
     )
-    finite = p_values[p_values.notna() & pandas.Series([math.isfinite(v) for v in p_values], index=p_values.index)]
+    finite = p_values[
+        p_values.notna()
+        & pandas.Series(
+            [math.isfinite(v) for v in p_values], index=p_values.index
+        )
+        & p_values.between(0.0, 1.0)
+    ]
     best = association_results.loc[finite.idxmin()] if not finite.empty else None
+    if finite.empty:
+        holm = bh = numpy.asarray([], dtype=float)
+        best_position = 0
+    else:
+        holm, bh = _adjust_association_p_values(finite)
+        best_position = int(numpy.argmin(finite.to_numpy()))
     row = {
         "tree_id": tree_id,
         "status": status,
@@ -1142,7 +1180,13 @@ def _status_from_results(
                 else (~results["inference_status"].astype(str).str.lower().eq("ok")).sum()
             )
         ),
-        "min_p_value": "" if finite.empty else float(finite.min()),
+        "n_tested_associations": int(finite.shape[0]),
+        "multiplicity_scope": "all_usable_family_associations",
+        "min_p_value_raw": "" if finite.empty else float(finite.min()),
+        "min_p_value_holm": "" if finite.empty else float(holm[best_position]),
+        "min_p_value_bh": "" if finite.empty else float(bh[best_position]),
+        "min_p_value": "" if finite.empty else float(holm[best_position]),
+        "min_p_value_adjustment": "holm",
         "best_analysis_id": "" if best is None else best.get("analysis_id", ""),
         "best_response": "" if best is None else best.get("response", ""),
         "best_term": "" if best is None else best.get("term", ""),
@@ -1303,10 +1347,17 @@ def summarize_for_stat_tree(pgls_path: str | Path, status_path: str | Path) -> d
     if associations.empty or "p_value" not in associations:
         return out
     p_values = pandas.to_numeric(associations["p_value"], errors="coerce")
-    finite = p_values.notna() & p_values.map(math.isfinite)
+    finite = (
+        p_values.notna()
+        & p_values.map(math.isfinite)
+        & p_values.between(0.0, 1.0)
+    )
     if not finite.any():
         return out
-    best = associations.loc[p_values[finite].idxmin()]
+    finite_values = p_values[finite]
+    holm, bh = _adjust_association_p_values(finite_values)
+    best_position = int(numpy.argmin(finite_values.to_numpy()))
+    best = associations.loc[finite_values.idxmin()]
     identity_columns = (
         "analysis_id",
         "model_id",
@@ -1324,6 +1375,14 @@ def summarize_for_stat_tree(pgls_path: str | Path, status_path: str | Path) -> d
         if pandas.isna(value):
             continue
         out[f"rsc_best_{_sanitize_stat_component(column)}"] = value
+    out["rsc_num_tested_associations"] = int(finite_values.shape[0])
+    out["rsc_multiplicity_scope"] = "all_usable_family_associations"
+    out["rsc_best_p_value_raw"] = float(finite_values.iloc[best_position])
+    out["rsc_best_p_value_holm"] = float(holm[best_position])
+    out["rsc_best_p_value_bh"] = float(bh[best_position])
+    # The unsuffixed field is family-wise-error controlled for safe filtering.
+    out["rsc_best_p_value"] = float(holm[best_position])
+    out["rsc_best_p_value_adjustment"] = "holm"
     return out
 
 

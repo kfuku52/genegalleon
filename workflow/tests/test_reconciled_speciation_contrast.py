@@ -450,13 +450,15 @@ def test_aggregate_adds_analysis_ids_to_every_bundle_table_and_summarizes(tmp_pa
     assert list(results["analysis_id"]) == ["p001_size", "p002_habitat"]
     status = pandas.read_csv(tmp_path / "status.tsv", sep="\t")
     assert status.loc[0, "status"] == "ok"
-    assert status.loc[0, "min_p_value"] == 0.01
+    assert status.loc[0, "min_p_value_raw"] == 0.01
+    assert status.loc[0, "min_p_value"] == 0.02
     assert status.loc[0, "best_analysis_id"] == "p002_habitat"
     assert len((tmp_path / "audit.jsonl").read_text().splitlines()) == 2
 
     tree_stats = mod.summarize_for_stat_tree(tmp_path / "combined.pgls.tsv", tmp_path / "status.tsv")
     assert tree_stats["rsc_status"] == "ok"
-    assert tree_stats["rsc_min_p_value"] == 0.01
+    assert tree_stats["rsc_min_p_value_raw"] == 0.01
+    assert tree_stats["rsc_min_p_value"] == 0.02
     assert tree_stats["rsc_best_analysis_id"] == "p002_habitat"
     assert tree_stats["rsc_best_coefficient"] == -3.0
     assert len(tree_stats) < 100
@@ -722,6 +724,41 @@ def test_status_and_stat_tree_summary_exclude_intercepts(tmp_path: Path):
 
     intercept_only = mod._status_from_results("OG1", results.iloc[[0]], 4)
     assert intercept_only.loc[0, "status"] == "not_estimable"
+
+
+def test_status_and_stat_tree_summary_adjust_all_usable_associations(tmp_path: Path):
+    mod = load_module()
+    results = pandas.DataFrame(
+        [
+            {
+                "analysis_id": f"p{index}",
+                "model_id": f"m{index}",
+                "response": "expression",
+                "predictor_type": "continuous",
+                "term": "size",
+                "p_value": p_value,
+                "inference_status": "ok",
+                "optimizer_converged": "yes",
+            }
+            for index, p_value in enumerate((0.01, 0.03, 0.2), start=1)
+        ]
+    )
+    status = mod._status_from_results("OG1", results, 3)
+    assert status.loc[0, "n_tested_associations"] == 3
+    assert status.loc[0, "min_p_value_raw"] == pytest.approx(0.01)
+    assert status.loc[0, "min_p_value_holm"] == pytest.approx(0.03)
+    assert status.loc[0, "min_p_value_bh"] == pytest.approx(0.03)
+    assert status.loc[0, "min_p_value"] == pytest.approx(0.03)
+
+    results.to_csv(tmp_path / "pgls.tsv", sep="\t", index=False)
+    status.to_csv(tmp_path / "status.tsv", sep="\t", index=False)
+    summary = mod.summarize_for_stat_tree(
+        tmp_path / "pgls.tsv", tmp_path / "status.tsv"
+    )
+    assert summary["rsc_num_tested_associations"] == 3
+    assert summary["rsc_best_p_value_raw"] == pytest.approx(0.01)
+    assert summary["rsc_best_p_value"] == pytest.approx(0.03)
+    assert summary["rsc_best_p_value_adjustment"] == "holm"
 
 
 def test_audit_value_error_is_classified_as_analysis_not_estimable(tmp_path: Path):

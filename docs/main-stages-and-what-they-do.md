@@ -338,6 +338,10 @@ Current behavior notes:
   family's `stat_tree` row. This summary has a fixed-width status/count schema
   plus the best converged `rsc_best_*` row; all fitted rows remain in
   `rsc_pgls`,
+- the compact `stat_tree` best-p fields are multiplicity-aware: raw minima are
+  retained under `*_p_value_raw`, while unsuffixed p-values use Holm correction
+  over all usable associations for the family and method; BH-adjusted values
+  and the tested-association count/scope are reported alongside them,
 - `run_csubst_scan=1` uses existing CSUBST ancestral-reconstruction inputs and
   writes candidate amino-acid/state changes; it is independent from
   `run_csubst`, which runs branch-combination search.

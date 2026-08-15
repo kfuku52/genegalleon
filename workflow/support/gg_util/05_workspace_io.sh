@@ -400,6 +400,118 @@ mv_out() {
 	mv -- "$@"
 }
 
+mv_out_bundle() (
+	# Publish source/destination pairs as one recoverable transaction.  Every
+	# source is first staged on its destination filesystem.  Existing outputs
+	# are retained until all staging succeeds, and any ordinary error or caught
+	# signal restores the complete previous bundle.
+	if [[ $# -eq 0 || $(( $# % 2 )) -ne 0 ]]; then
+		echo "mv_out_bundle: source/destination argument pairs are required."
+		return 1
+	fi
+	local -a sources=()
+	local -a destinations=()
+	local -a staged=()
+	local -a backups=()
+	local -a had_destination=()
+	local argument_index pair_index previous_index source destination parent basename token
+	local pair_count=$(( $# / 2 ))
+	for ((argument_index = 1; argument_index <= $#; argument_index += 2)); do
+		source=${!argument_index}
+		pair_index=$(( argument_index + 1 ))
+		destination=${!pair_index}
+		if [[ ! -e "${source}" && ! -L "${source}" ]]; then
+			echo "mv_out_bundle: source not found: ${source}"
+			return 1
+		fi
+		if [[ -z "${destination}" || "${destination}" == "/" || "${destination}" == "." || "${destination}" == ".." ]]; then
+			echo "mv_out_bundle: unsafe destination: ${destination}"
+			return 1
+		fi
+		for ((previous_index = 0; previous_index < ${#destinations[@]}; previous_index++)); do
+			if [[ "${destinations[previous_index]}" == "${destination}" ]]; then
+				echo "mv_out_bundle: duplicate destination: ${destination}"
+				return 1
+			fi
+			if [[ "${sources[previous_index]}" == "${source}" ]]; then
+				echo "mv_out_bundle: duplicate source: ${source}"
+				return 1
+			fi
+		done
+		sources+=("${source}")
+		destinations+=("${destination}")
+	done
+	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
+		for ((previous_index = 0; previous_index < pair_count; previous_index++)); do
+			if [[ "${sources[pair_index]}" == "${destinations[previous_index]}" ]]; then
+				echo "mv_out_bundle: sources and destinations must not overlap: ${sources[pair_index]}"
+				return 1
+			fi
+		done
+	done
+	token="$$.${RANDOM}"
+	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
+		destination=${destinations[pair_index]}
+		parent=$(dirname -- "${destination}")
+		basename=$(basename -- "${destination}")
+		ensure_dir "${parent}" || return 1
+		staged+=("${parent}/.${basename}.gg-stage.${token}.${pair_index}")
+		backups+=("${parent}/.${basename}.gg-backup.${token}.${pair_index}")
+		had_destination+=("no")
+	done
+
+	local staged_count=0
+	local backup_count=0
+	local published_count=0
+	local committed=0
+	_mv_out_bundle_rollback() {
+		local rollback_index
+		if [[ ${committed} -eq 1 ]]; then
+			return
+		fi
+		for ((rollback_index = published_count - 1; rollback_index >= 0; rollback_index--)); do
+			if [[ -e "${destinations[rollback_index]}" || -L "${destinations[rollback_index]}" ]]; then
+				mv -- "${destinations[rollback_index]}" "${sources[rollback_index]}" || true
+			fi
+		done
+		for ((rollback_index = backup_count - 1; rollback_index >= 0; rollback_index--)); do
+			if [[ "${had_destination[rollback_index]}" == "yes" && ( -e "${backups[rollback_index]}" || -L "${backups[rollback_index]}" ) ]]; then
+				mv -- "${backups[rollback_index]}" "${destinations[rollback_index]}" || true
+			fi
+		done
+		for ((rollback_index = published_count; rollback_index < staged_count; rollback_index++)); do
+			if [[ -e "${staged[rollback_index]}" || -L "${staged[rollback_index]}" ]]; then
+				mv -- "${staged[rollback_index]}" "${sources[rollback_index]}" || true
+			fi
+		done
+	}
+	trap '_mv_out_bundle_rollback' EXIT
+	trap 'exit 130' HUP INT TERM
+
+	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
+		mv -- "${sources[pair_index]}" "${staged[pair_index]}" || return 1
+		staged_count=$(( staged_count + 1 ))
+	done
+	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
+		if [[ -e "${destinations[pair_index]}" || -L "${destinations[pair_index]}" ]]; then
+			mv -- "${destinations[pair_index]}" "${backups[pair_index]}" || return 1
+			had_destination[pair_index]="yes"
+		fi
+		backup_count=$(( backup_count + 1 ))
+	done
+	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
+		mv -- "${staged[pair_index]}" "${destinations[pair_index]}" || return 1
+		published_count=$(( published_count + 1 ))
+	done
+	committed=1
+	trap - EXIT HUP INT TERM
+	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
+		if [[ "${had_destination[pair_index]}" == "yes" ]]; then
+			rm -rf -- "${backups[pair_index]}" || return 1
+		fi
+	done
+)
+
 mv_out_replace_dir() {
 	if [[ $# -ne 2 ]]; then
 		echo "mv_out_replace_dir: exactly 2 arguments are required."

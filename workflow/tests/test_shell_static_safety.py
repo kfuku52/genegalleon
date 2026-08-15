@@ -3657,6 +3657,7 @@ def test_gene_evolution_wires_matched_expression_trait_pgls_through_stat_tree():
     assert "run_expression_trait_pgls" in config_vars
     assert "pgls_methods" in config_vars
     assert "species_expression_aggregation" in config_vars
+    assert "species_paralog_sampling_covariance" in config_vars
     assert "rsc_categorical_replicate_policy" in config_vars
     assert "rsc_allow_large_dense" in config_vars
     assert 'task="Expression-trait phylogenetic regression"' in core
@@ -3681,6 +3682,9 @@ def test_gene_evolution_wires_matched_expression_trait_pgls_through_stat_tree():
     assert '--output "comparison=${file_og_pgls_comparison}"' in core
     assert 'python "${gg_support_dir}/species_tree_pgls.py" "${species_pgls_args[@]}"' in core
     assert '--rphylopars-script "${gg_support_dir}/species_tree_rphylopars.R"' in core
+    assert '--paralog-sampling-covariance "${species_paralog_sampling_covariance}"' in core
+    assert 'mv_out_bundle \\' in core
+    assert 'mv_out "${rsc_combined_status}"' not in core
     assert '--rsc_status "${file_og_rsc_status}"' in core
     assert '--rsc_pgls "${file_og_rsc_pgls}"' in core
     assert '--pgls_comparison "${file_og_pgls_comparison}"' in core

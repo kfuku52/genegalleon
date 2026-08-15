@@ -209,6 +209,7 @@ species_label_parser
 species_label_regex
 species_label_map_tsv
 species_paralog_missing
+species_paralog_sampling_covariance
 tree_rooting_method
 treevis_branch_color
 treevis_branch_length

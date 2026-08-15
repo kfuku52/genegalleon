@@ -6,7 +6,6 @@ import tracemalloc
 import numpy
 import pandas
 import pytest
-from nwkit.gaussian import DiagonalLowRankCovariance
 from scipy import sparse
 
 from workflow.support.species_tree_pgls import (
@@ -56,6 +55,35 @@ def test_known_standard_errors_are_propagated_for_sum_and_mean():
     assert mean_se == pytest.approx(0.25)
 
 
+def test_known_cross_paralog_covariance_is_propagated_exactly():
+    offdiagonal = numpy.asarray([[0.0, 0.06], [0.06, 0.0]])
+    total, total_se = _aggregate_values(
+        [2.0], [0.3], "sum", "identity"
+    )
+    assert total_se == pytest.approx(0.3)
+    total, total_se = _aggregate_values(
+        [2.0, 6.0], [0.3, 0.4], "sum", "identity", offdiagonal
+    )
+    mean, mean_se = _aggregate_values(
+        [2.0, 6.0], [0.3, 0.4], "mean", "identity", offdiagonal
+    )
+    assert total == 8.0
+    assert total_se == pytest.approx(math.sqrt(0.37))
+    assert mean == 4.0
+    assert mean_se == pytest.approx(math.sqrt(0.37) / 2.0)
+
+
+def test_invalid_cross_paralog_covariance_is_rejected():
+    with pytest.raises(ValueError, match="positive-semidefinite"):
+        _aggregate_values(
+            [2.0, 6.0],
+            [0.3, 0.4],
+            "sum",
+            "identity",
+            numpy.asarray([[0.0, 0.2], [0.2, 0.0]]),
+        )
+
+
 def test_max_aggregation_tie_uses_order_invariant_conservative_standard_error():
     forward = _aggregate_values([4.0, 4.0, 1.0], [0.2, 0.7, 0.1], "max", "identity")
     reverse = _aggregate_values([1.0, 4.0, 4.0], [0.1, 0.7, 0.2], "max", "identity")
@@ -71,6 +99,9 @@ def test_sparse_sampling_covariance_is_inspected_without_dense_conversion():
 
 
 def test_low_rank_covariance_inspection_has_bounded_memory_at_5000_tips():
+    DiagonalLowRankCovariance = pytest.importorskip(
+        "nwkit.gaussian"
+    ).DiagonalLowRankCovariance
     covariance = DiagonalLowRankCovariance(
         diagonal=numpy.ones(5_000),
         low_rank=numpy.zeros((5_000, 2)),
@@ -87,6 +118,9 @@ def test_low_rank_covariance_inspection_has_bounded_memory_at_5000_tips():
 
 
 def test_sparse_low_rank_covariance_factor_stays_sparse_and_detects_offdiagonal():
+    DiagonalLowRankCovariance = pytest.importorskip(
+        "nwkit.gaussian"
+    ).DiagonalLowRankCovariance
     covariance = DiagonalLowRankCovariance(
         diagonal=numpy.asarray([0.5, 0.5, 0.5]),
         low_rank=sparse.csr_matrix([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]),
@@ -97,7 +131,7 @@ def test_sparse_low_rank_covariance_factor_stays_sparse_and_detects_offdiagonal(
 
 
 def test_family_species_pruning_preserves_induced_pairwise_branch_length(tmp_path):
-    from nwkit.util import read_tree
+    read_tree = pytest.importorskip("nwkit.util").read_tree
 
     path = tmp_path / "species.nwk"
     path.write_text("(((A:1,B:1):2,C:3):1,D:4);", encoding="utf-8")
@@ -138,6 +172,50 @@ def test_species_aggregation_never_treats_paralogs_as_replicates():
     assert summed.loc[("A", "a2")] == 6.0
     assert averaged.loc[("A", "a1")] == 2.0
     assert set(audit.loc[audit["species"] == "A", "expected_paralog_count"]) == {2}
+
+
+def test_species_aggregation_uses_declared_paralog_sampling_covariance():
+    expression = pandas.DataFrame(
+        {
+            "leaf_name": ["A_g1", "A_g2"],
+            "expression": [2.0, 6.0],
+            "expression__standard_error": [0.3, 0.4],
+        }
+    )
+    reconciliation = pandas.DataFrame(
+        {
+            "node_class": ["tip", "tip"],
+            "gene_name": ["A_g1", "A_g2"],
+            "species_name": ["A", "A"],
+        }
+    )
+    covariance = pandas.DataFrame(
+        {
+            "tree_id": ["OG1"],
+            "response": ["expression"],
+            "gene_name_1": ["A_g2"],
+            "gene_name_2": ["A_g1"],
+            "sampling_covariance": [0.06],
+        }
+    )
+
+    outputs, audit = aggregate_species_expression(
+        expression,
+        reconciliation,
+        ["expression"],
+        ["sum"],
+        value_type="identity",
+        missing_policy="error",
+        tree_id="OG1",
+        paralog_sampling_covariance=covariance,
+    )
+
+    assert outputs["sum"].loc[0, "expression"] == 8.0
+    assert outputs["sum"].loc[
+        0, "expression__standard_error"
+    ] == pytest.approx(math.sqrt(0.37))
+    assert audit.loc[0, "paralog_covariance_mode"] == "provided"
+    assert audit.loc[0, "paralog_covariance_pairs"] == 1
 
 
 def test_incomplete_paralog_measurement_is_not_silently_ignored():
@@ -263,6 +341,39 @@ def test_species_comparison_summary_is_bounded_and_method_specific(tmp_path):
     assert summary["pgls_species_nwkit_best_term"] == "size"
     assert summary["pgls_species_rphylopars_best_coefficient"] == pytest.approx(2.1)
     assert summary["pgls_nwkit_rphylopars_max_abs_coefficient_difference"] == pytest.approx(0.1)
+
+
+def test_species_summary_adjusts_across_all_method_associations(tmp_path):
+    comparison = tmp_path / "comparison.tsv"
+    status = tmp_path / "status.tsv"
+    pandas.DataFrame(
+        [
+            {
+                "analysis_method": "species_nwkit",
+                "aggregation": aggregation,
+                "analysis_id": f"p{index}",
+                "response": "expression",
+                "term": "size",
+                "p_value": p_value,
+                "inference_status": "ok",
+            }
+            for index, (aggregation, p_value) in enumerate(
+                [("sum", 0.01), ("mean", 0.03), ("max", 0.2)], start=1
+            )
+        ]
+    ).to_csv(comparison, sep="\t", index=False)
+    pandas.DataFrame(columns=["analysis_method", "status"]).to_csv(
+        status, sep="\t", index=False
+    )
+
+    summary = summarize_for_stat_tree(comparison, status)
+
+    assert summary["pgls_species_nwkit_num_tested_associations"] == 3
+    assert summary["pgls_species_nwkit_best_p_value_raw"] == pytest.approx(0.01)
+    assert summary["pgls_species_nwkit_best_p_value_holm"] == pytest.approx(0.03)
+    assert summary["pgls_species_nwkit_best_p_value_bh"] == pytest.approx(0.03)
+    assert summary["pgls_species_nwkit_best_p_value"] == pytest.approx(0.03)
+    assert summary["pgls_species_nwkit_best_p_value_adjustment"] == "holm"
 
 
 def test_native_status_requires_an_estimable_association_not_only_an_intercept():

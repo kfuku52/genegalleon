@@ -38,6 +38,7 @@ query_blast_auto_evalue_maxlen_cutoffs="${query_blast_auto_evalue_maxlen_cutoffs
 pgls_methods="${pgls_methods:-rsc}"
 species_expression_aggregation="${species_expression_aggregation:-sum}"
 species_paralog_missing="${species_paralog_missing:-error}"
+species_paralog_sampling_covariance="${species_paralog_sampling_covariance:-}"
 rphylopars_sampling_covariance="${rphylopars_sampling_covariance:-require-diagonal}"
 rsc_responses="${rsc_responses:-all}"
 rsc_predictors="${rsc_predictors:-all}"
@@ -1260,6 +1261,10 @@ if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
     echo "rsc_within_variance=known-se requires rsc_expression_sample_metadata." >&2
     exit 1
   fi
+  if [[ -n "${species_paralog_sampling_covariance}" && "${rsc_within_variance}" != "known-se" ]]; then
+    echo "species_paralog_sampling_covariance requires rsc_within_variance=known-se; raw paired biological replicates already preserve cross-paralog covariance after aggregation." >&2
+    exit 1
+  fi
   if [[ "${rsc_within_variance}" == "known-se" && "${rsc_technical_aggregation}" != "error" ]]; then
     echo "rsc_within_variance=known-se cannot use rsc_technical_aggregation; provide one summarized mean and SE per gene/response." >&2
     exit 1
@@ -1610,6 +1615,9 @@ fi
 file_sp_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
 if [[ -n "${rsc_expression_sample_metadata}" && "${rsc_expression_sample_metadata}" != /* ]]; then
   rsc_expression_sample_metadata="${gg_workspace_dir}/${rsc_expression_sample_metadata}"
+fi
+if [[ -n "${species_paralog_sampling_covariance}" && "${species_paralog_sampling_covariance}" != /* ]]; then
+  species_paralog_sampling_covariance="${gg_workspace_dir}/${species_paralog_sampling_covariance}"
 fi
 file_og="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.selected.tsv"
 file_og_parameters_dir="${dir_output_active}/parameters"
@@ -4940,6 +4948,10 @@ if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
       echo "RSC expression-sample metadata was not found: ${rsc_expression_sample_metadata}" >&2
       exit 1
     fi
+    if [[ -n "${species_paralog_sampling_covariance}" && ! -s "${species_paralog_sampling_covariance}" ]]; then
+      echo "Species-PGLS paralog sampling covariance was not found: ${species_paralog_sampling_covariance}" >&2
+      exit 1
+    fi
     if [[ "${rsc_effective_event_source}" == "nhx" ]] &&
       ! python "${gg_support_dir}/reconciled_speciation_contrast.py" has-nhx \
         --tree "${rsc_reconciliation_tree}"
@@ -5070,6 +5082,9 @@ else
 fi
 if [[ -s "${file_og_expression}" && -n "${rsc_expression_sample_metadata}" ]]; then
   rsc_provenance_args+=(--input "expression_sample_metadata=${rsc_expression_sample_metadata}")
+fi
+if [[ -s "${file_og_expression}" && -n "${species_paralog_sampling_covariance}" ]]; then
+  rsc_provenance_args+=(--input "paralog_sampling_covariance=${species_paralog_sampling_covariance}")
 fi
 if [[ -s "${file_og_expression}" && -n "${species_label_map_tsv}" ]]; then
   rsc_provenance_args+=(--input "species_map=${species_label_map_tsv}")
@@ -5442,38 +5457,42 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
     --predictor-tip-summary-out "${species_predictor_tip_summary_tmp}"
     --predictor-sampling-covariance-out "${species_predictor_sampling_covariance_tmp}"
   )
+  if [[ -n "${species_paralog_sampling_covariance}" ]]; then
+    species_pgls_args+=(--paralog-sampling-covariance "${species_paralog_sampling_covariance}")
+  fi
   if [[ "${rsc_preparation_status}" != "ready" || ! -s "${rsc_preflight_reconciliation}" ]]; then
     species_pgls_args+=(--empty-reason "${rsc_not_estimable_reason:-expression_trait_inputs_not_estimable}")
   fi
   python "${gg_support_dir}/species_tree_pgls.py" "${species_pgls_args[@]}" \
     2>&1 | tee -a "${pgls_log_tmp}"
 
-  mv_out "${rsc_combined_status}" "${file_og_rsc_status}"
-  mv_out "${rsc_combined_prefix}.pgls.tsv" "${file_og_rsc_pgls}"
-  mv_out "${rsc_combined_prefix}.reconciliation.tsv" "${file_og_rsc_reconciliation}"
-  mv_out "${rsc_combined_prefix}.gene-contrasts.tsv" "${file_og_rsc_gene_contrasts}"
-  mv_out "${rsc_combined_prefix}.species-contrasts.tsv" "${file_og_rsc_species_contrasts}"
-  mv_out "${rsc_combined_prefix}.response-sampling-covariance.tsv" "${file_og_rsc_response_sampling_covariance}"
-  mv_out "${rsc_combined_prefix}.response-tip-summary.tsv" "${file_og_rsc_response_tip_summary}"
-  mv_out "${rsc_combined_prefix}.predictor-sampling-covariance.tsv" "${file_og_rsc_predictor_sampling_covariance}"
-  mv_out "${rsc_combined_prefix}.predictor-tip-summary.tsv" "${file_og_rsc_predictor_tip_summary}"
-  mv_out "${rsc_combined_prefix}.random-effects.tsv" "${file_og_rsc_random_effects}"
-  mv_out "${rsc_combined_prefix}.sensitivity.tsv" "${file_og_rsc_sensitivity}"
-  mv_out "${rsc_combined_prefix}.trait-origins.tsv" "${file_og_rsc_trait_origins}"
-  mv_out "${rsc_combined_audit}" "${file_og_rsc_audit}"
-  mv_out "${rsc_log_tmp}" "${file_og_rsc_log}"
-  mv_out "${species_nwkit_tmp}" "${file_og_species_nwkit_pgls}"
-  mv_out "${species_rphylopars_tmp}" "${file_og_species_rphylopars_pgls}"
-  mv_out "${pgls_comparison_tmp}" "${file_og_pgls_comparison}"
-  mv_out "${pgls_method_status_tmp}" "${file_og_pgls_method_status}"
-  mv_out "${pgls_method_audit_tmp}" "${file_og_pgls_method_audit}"
-  mv_out "${species_expression_summary_tmp}" "${file_og_species_expression_summary}"
-  mv_out "${species_expression_audit_tmp}" "${file_og_species_expression_audit}"
-  mv_out "${species_response_tip_summary_tmp}" "${file_og_species_response_tip_summary}"
-  mv_out "${species_response_sampling_covariance_tmp}" "${file_og_species_response_sampling_covariance}"
-  mv_out "${species_predictor_tip_summary_tmp}" "${file_og_species_predictor_tip_summary}"
-  mv_out "${species_predictor_sampling_covariance_tmp}" "${file_og_species_predictor_sampling_covariance}"
-  mv_out "${pgls_log_tmp}" "${file_og_expression_trait_pgls_log}"
+  mv_out_bundle \
+    "${rsc_combined_status}" "${file_og_rsc_status}" \
+    "${rsc_combined_prefix}.pgls.tsv" "${file_og_rsc_pgls}" \
+    "${rsc_combined_prefix}.reconciliation.tsv" "${file_og_rsc_reconciliation}" \
+    "${rsc_combined_prefix}.gene-contrasts.tsv" "${file_og_rsc_gene_contrasts}" \
+    "${rsc_combined_prefix}.species-contrasts.tsv" "${file_og_rsc_species_contrasts}" \
+    "${rsc_combined_prefix}.response-sampling-covariance.tsv" "${file_og_rsc_response_sampling_covariance}" \
+    "${rsc_combined_prefix}.response-tip-summary.tsv" "${file_og_rsc_response_tip_summary}" \
+    "${rsc_combined_prefix}.predictor-sampling-covariance.tsv" "${file_og_rsc_predictor_sampling_covariance}" \
+    "${rsc_combined_prefix}.predictor-tip-summary.tsv" "${file_og_rsc_predictor_tip_summary}" \
+    "${rsc_combined_prefix}.random-effects.tsv" "${file_og_rsc_random_effects}" \
+    "${rsc_combined_prefix}.sensitivity.tsv" "${file_og_rsc_sensitivity}" \
+    "${rsc_combined_prefix}.trait-origins.tsv" "${file_og_rsc_trait_origins}" \
+    "${rsc_combined_audit}" "${file_og_rsc_audit}" \
+    "${rsc_log_tmp}" "${file_og_rsc_log}" \
+    "${species_nwkit_tmp}" "${file_og_species_nwkit_pgls}" \
+    "${species_rphylopars_tmp}" "${file_og_species_rphylopars_pgls}" \
+    "${pgls_comparison_tmp}" "${file_og_pgls_comparison}" \
+    "${pgls_method_status_tmp}" "${file_og_pgls_method_status}" \
+    "${pgls_method_audit_tmp}" "${file_og_pgls_method_audit}" \
+    "${species_expression_summary_tmp}" "${file_og_species_expression_summary}" \
+    "${species_expression_audit_tmp}" "${file_og_species_expression_audit}" \
+    "${species_response_tip_summary_tmp}" "${file_og_species_response_tip_summary}" \
+    "${species_response_sampling_covariance_tmp}" "${file_og_species_response_sampling_covariance}" \
+    "${species_predictor_tip_summary_tmp}" "${file_og_species_predictor_tip_summary}" \
+    "${species_predictor_sampling_covariance_tmp}" "${file_og_species_predictor_sampling_covariance}" \
+    "${pgls_log_tmp}" "${file_og_expression_trait_pgls_log}"
   nwkit_version_text=$(nwkit --version 2>&1 | tail -n 1 || true)
   gg_artifact_record \
     "${rsc_provenance_args[@]}" \

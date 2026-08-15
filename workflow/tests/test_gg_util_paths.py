@@ -1,7 +1,6 @@
 import gzip
 import shlex
 import subprocess
-import time
 from pathlib import Path
 
 GG_UTIL_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_util.sh"
@@ -429,24 +428,24 @@ def test_gg_array_download_once_accepts_nonempty_ready_marker(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
         f"marker_file={shlex.quote(str(marker_file))}; "
+        "SECONDS=0; "
         f'gg_array_download_once {shlex.quote(str(lock_file))} "$marker_file" "marker artifact" '
         'gg_write_ready_marker "$marker_file"; '
         'status=$?; '
-        'printf "%s\\n" "$status"; '
+        'heartbeat_elapsed=$SECONDS; '
+        'printf "%s\\n%s\\n" "$status" "$heartbeat_elapsed"; '
         'wc -c < "$marker_file"; '
         'cat "$marker_file"'
     )
 
-    started = time.monotonic()
     completed = run_bash(command, cwd=tmp_path)
-    elapsed = time.monotonic() - started
 
     assert completed.returncode == 0, completed.stderr
-    assert elapsed < 5, f"heartbeat shutdown took {elapsed:.2f}s"
     lines = completed.stdout.strip().splitlines()
     assert lines[0] == "0"
-    assert int(lines[1]) > 0
-    assert lines[2] == "ready"
+    assert int(lines[1]) < 5, f"heartbeat shutdown took {lines[1]}s"
+    assert int(lines[2]) > 0
+    assert lines[3] == "ready"
 
 
 def test_download_busco_lineage_to_runtime_merges_into_existing_runtime_db(tmp_path):
@@ -1146,6 +1145,69 @@ def test_mv_out_creates_destination_dir_for_multi_source_move(tmp_path):
     assert not src2.exists()
     assert (dest_dir / "a.txt").read_text() == "a\n"
     assert (dest_dir / "b.txt").read_text() == "b\n"
+
+
+def test_mv_out_bundle_publishes_all_pairs_after_complete_staging(tmp_path):
+    first_source = tmp_path / "stage" / "first.txt"
+    second_source = tmp_path / "stage" / "second.txt"
+    first_destination = tmp_path / "out-a" / "first.txt"
+    second_destination = tmp_path / "out-b" / "second.txt"
+    first_source.parent.mkdir()
+    first_destination.parent.mkdir()
+    second_destination.parent.mkdir()
+    first_source.write_text("new-first\n")
+    second_source.write_text("new-second\n")
+    first_destination.write_text("old-first\n")
+    second_destination.write_text("old-second\n")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "mv_out_bundle "
+        f"{shlex.quote(str(first_source))} {shlex.quote(str(first_destination))} "
+        f"{shlex.quote(str(second_source))} {shlex.quote(str(second_destination))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert first_destination.read_text() == "new-first\n"
+    assert second_destination.read_text() == "new-second\n"
+    assert not first_source.exists()
+    assert not second_source.exists()
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
+
+
+def test_mv_out_bundle_rolls_back_every_pair_after_publish_failure(tmp_path):
+    first_source = tmp_path / "stage" / "first.txt"
+    second_source = tmp_path / "stage" / "second.txt"
+    first_destination = tmp_path / "out-a" / "first.txt"
+    second_destination = tmp_path / "out-b" / "second.txt"
+    first_source.parent.mkdir()
+    first_destination.parent.mkdir()
+    second_destination.parent.mkdir()
+    first_source.write_text("new-first\n")
+    second_source.write_text("new-second\n")
+    first_destination.write_text("old-first\n")
+    second_destination.write_text("old-second\n")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "GG_TEST_MV_COUNT=0; "
+        "mv() { GG_TEST_MV_COUNT=$((GG_TEST_MV_COUNT + 1)); "
+        "if [[ ${GG_TEST_MV_COUNT} -eq 6 ]]; then return 1; fi; command mv \"$@\"; }; "
+        "mv_out_bundle "
+        f"{shlex.quote(str(first_source))} {shlex.quote(str(first_destination))} "
+        f"{shlex.quote(str(second_source))} {shlex.quote(str(second_destination))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode != 0
+    assert first_source.read_text() == "new-first\n"
+    assert second_source.read_text() == "new-second\n"
+    assert first_destination.read_text() == "old-first\n"
+    assert second_destination.read_text() == "old-second\n"
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
 
 
 def test_mv_out_replace_dir_replaces_existing_nonempty_directory(tmp_path):

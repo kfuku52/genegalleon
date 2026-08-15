@@ -261,6 +261,19 @@ for each retained species/sample; `ignore` is an explicit change of estimand
 and is recorded in the aggregation audit. If multiple paralogs tie for the
 maximum and known standard errors are supplied, `max` uses the largest tied
 standard error so the result is conservative and independent of input order.
+For `sum` and `mean`, known-SE inputs are independent across paralogs unless
+`species_paralog_sampling_covariance` names a TSV with columns `response`,
+`gene_name_1`, `gene_name_2`, and `sampling_covariance`; an optional `tree_id`
+column permits a single file to cover many families. Each unordered gene pair
+may occur once, must map to the same species, and supplies an off-diagonal
+covariance on the input expression scale. Diagonal variances continue to come
+from each response's `standard_error_column`, and the resulting matrix must be
+positive semidefinite. The path may be absolute or workspace-relative and is
+valid only with `rsc_within_variance="known-se"`. With raw paired biological
+replicates, aggregate each sample first as usual: the variance among those
+aggregates already retains cross-paralog co-variation and no covariance file
+is needed. The expression aggregation audit states whether declared pairs were
+used.
 For each family, both species-tree comparators prune the global species tree
 and trait table to the species represented by reconciled gene tips; unrelated
 species therefore do not make an otherwise complete family fail.

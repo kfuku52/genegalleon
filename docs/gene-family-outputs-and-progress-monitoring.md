@@ -71,7 +71,8 @@ Species-tree comparison members are:
   versions,
 - `pgls_species_expression_summary/` and
   `pgls_species_expression_audit/`: the actual species/sample expression used,
-  paralog coverage, and aggregation rule,
+  paralog coverage, aggregation rule, and number of declared cross-paralog
+  sampling-covariance pairs used,
 - `pgls_species_response_*` and `pgls_species_predictor_*`: species-tip
   replicate summaries and propagated sampling covariance.
 
@@ -81,7 +82,10 @@ distinguishable when predictors are screened separately.
 
 All members are written even when a family is not estimable; optional tables
 then contain headers only. This makes family completion and ZIP-backed storage
-unambiguous. `stat_tree/*.tsv` includes the family status and best overall RSC
+unambiguous. The expression-trait bundle is staged completely and published as
+a recoverable transaction; a failed move or caught interruption restores the
+previous complete bundle before provenance is recorded. `stat_tree/*.tsv`
+includes the family status and best overall RSC
 summary plus namespaced per-response/per-term fields, all beginning with
 `rsc_`. It also includes bounded `pgls_species_nwkit_*` and
 `pgls_species_rphylopars_*` status/best-row fields. To keep `stat_tree` bounded
@@ -90,7 +94,14 @@ fields from the best usable (successfully converged) row only, under
 `rsc_best_*`; it does not flatten every RSC result row into a new group of
 columns. The full `rsc_pgls` table remains the authoritative result when
 several responses or predictors were fitted. Rows with failed inference or
-failed optimizers cannot become the reported best row.
+failed optimizers cannot become the reported best row. The best row is still
+chosen by its raw p-value, recorded as `rsc_best_p_value_raw` (and the analogous
+species-method field). The unsuffixed `*_best_p_value` and `rsc_min_p_value`
+fields are Holm-adjusted across every usable response, predictor term,
+analysis, and paralog aggregation represented by that family/method. The same
+summary also records the number and scope of tests plus Holm and
+Benjamini-Hochberg values explicitly; use the full result tables for a
+different prespecified multiplicity family.
 
 In `mode_gene_evolution=orthogroup`, the same style of per-family outputs is
 written under `workspace/output/orthogroup/`.
