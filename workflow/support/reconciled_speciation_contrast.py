@@ -787,11 +787,17 @@ def _prepare_predictors(args: argparse.Namespace) -> tuple[pandas.DataFrame, dic
     skipped: list[str] = []
     inferred_categorical: set[str] = set(explicit_categorical) | set(references)
     for predictor in predictors:
-        values = [str(value).strip() for value in traits[predictor] if not _is_missing(value)]
+        observed = ~traits[predictor].map(_is_missing)
+        values = [str(value).strip() for value in traits.loc[observed, predictor]]
         if len(set(values)) < 2:
             skipped.append(f"{predictor}:constant_or_empty")
             continue
-        if len(values) != traits.shape[0]:
+        if args.predictor_biological_id:
+            observed_species = set(traits.loc[observed, leaf_column].astype(str))
+            missing_species = set(traits[leaf_column].astype(str)) - observed_species
+        else:
+            missing_species = set(traits.loc[~observed, leaf_column].astype(str))
+        if missing_species:
             skipped.append(f"{predictor}:missing_species_values")
             continue
         if predictor not in ordered:
@@ -1055,6 +1061,20 @@ def _usable_result_mask(results: pandas.DataFrame) -> pandas.Series:
     return mask
 
 
+def _association_results(results: pandas.DataFrame) -> pandas.DataFrame:
+    """Return predictor-association rows, excluding model intercepts."""
+    if results.empty:
+        return results
+    mask = pandas.Series(True, index=results.index, dtype=bool)
+    intercept_labels = {"intercept", "(intercept)"}
+    if "predictor_type" in results:
+        mask &= ~results["predictor_type"].astype(str).str.strip().str.lower().isin(intercept_labels)
+    for column in ("term", "source_term"):
+        if column in results:
+            mask &= ~results[column].astype(str).str.strip().str.lower().isin(intercept_labels)
+    return results.loc[mask]
+
+
 def _write_bundle_frames(
     output_prefix: Path,
     frames_by_suffix: dict[str, list[pandas.DataFrame]],
@@ -1089,7 +1109,7 @@ def _status_from_results(
     else:
         model_keys = [column for column in ("analysis_id", "model_id") if column in results]
         model_count = int(results[model_keys].drop_duplicates().shape[0]) if model_keys else len(results)
-        estimable = results[_usable_result_mask(results)]
+        estimable = _association_results(results[_usable_result_mask(results)])
         estimable_count = int(estimable[model_keys].drop_duplicates().shape[0]) if model_keys else len(estimable)
         if estimable_count > 0:
             status = "ok"
@@ -1098,9 +1118,12 @@ def _status_from_results(
             reason = add_reason(reason, "nwkit_returned_no_estimable_models")
 
     usable_results = results[_usable_result_mask(results)]
-    p_values = pandas.to_numeric(usable_results.get("p_value", pandas.Series(dtype=float)), errors="coerce")
+    association_results = _association_results(usable_results)
+    p_values = pandas.to_numeric(
+        association_results.get("p_value", pandas.Series(dtype=float)), errors="coerce"
+    )
     finite = p_values[p_values.notna() & pandas.Series([math.isfinite(v) for v in p_values], index=p_values.index)]
-    best = usable_results.loc[finite.idxmin()] if not finite.empty else None
+    best = association_results.loc[finite.idxmin()] if not finite.empty else None
     row = {
         "tree_id": tree_id,
         "status": status,
@@ -1276,13 +1299,14 @@ def summarize_for_stat_tree(pgls_path: str | Path, status_path: str | Path) -> d
     usable = results[_usable_result_mask(results)]
     out["rsc_num_usable_result_rows"] = int(usable.shape[0])
     out["rsc_num_nonusable_result_rows"] = int(results.shape[0] - usable.shape[0])
-    if usable.empty or "p_value" not in usable:
+    associations = _association_results(usable)
+    if associations.empty or "p_value" not in associations:
         return out
-    p_values = pandas.to_numeric(usable["p_value"], errors="coerce")
+    p_values = pandas.to_numeric(associations["p_value"], errors="coerce")
     finite = p_values.notna() & p_values.map(math.isfinite)
     if not finite.any():
         return out
-    best = usable.loc[p_values[finite].idxmin()]
+    best = associations.loc[p_values[finite].idxmin()]
     identity_columns = (
         "analysis_id",
         "model_id",

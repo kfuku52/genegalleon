@@ -241,11 +241,15 @@ Columns from different responses with the same biological/technical IDs are
 treated as paired measurements and are emitted on the same observation row.
 Metadata containing one biological measurement per response does not by
 itself turn the data into replicate mode; it is treated like an ordinary tip
-value. When replicate mode is active, the selected NWKIT within-variance model
-must be estimable for every analyzed response; in particular, `pooled` needs
-residual biological-replicate degrees of freedom. Response and predictor names
-must not reuse NWKIT role names (`leaf_name`, `biological_id`, `technical_id`,
-or `batch`) or generated `__standard_error`/`__sample_size` names.
+value. When a shared replicate table contains a response with exactly one
+observation per species, NWKIT treats that response as ordinary exact tip
+values while estimating sampling uncertainty for responses that are actually
+replicated. Otherwise, the selected within-variance model must be estimable for
+every analyzed response; in particular, `pooled` needs residual
+biological-replicate degrees of freedom when within-species variance is being
+estimated. Response and predictor names must not reuse NWKIT role names
+(`leaf_name`, `biological_id`, `technical_id`, or `batch`) or generated
+`__standard_error`/`__sample_size` names.
 
 RSC retains gene copies as separate reconciled lineages. Species-tree methods
 must instead produce one response per species. GeneGalleon first groups gene
@@ -254,7 +258,12 @@ copies within each biological sample, applies `species_expression_aggregation`
 `exp_value_type`, and only then estimates replicate uncertainty. The default
 `species_paralog_missing="error"` requires every mapped paralog to be measured
 for each retained species/sample; `ignore` is an explicit change of estimand
-and is recorded in the aggregation audit.
+and is recorded in the aggregation audit. If multiple paralogs tie for the
+maximum and known standard errors are supplied, `max` uses the largest tied
+standard error so the result is conservative and independent of input order.
+For each family, both species-tree comparators prune the global species tree
+and trait table to the species represented by reconciled gene tips; unrelated
+species therefore do not make an otherwise complete family fail.
 
 ### `workspace/input/species_trait/species_trait.tsv`
 
@@ -268,7 +277,10 @@ One row per species is sufficient for ordinary trait data. Repeated species
 rows are accepted by the unified stage only when `rsc_predictor_biological_id` names a column
 that identifies independent predictor measurements. Technical-replicate and
 batch columns can then be named by `rsc_predictor_technical_id` and
-`rsc_predictor_batch`. For known predictor errors, use one summarized row per
+`rsc_predictor_batch`. A missing value in one raw replicate is retained as
+missing for that predictor as long as every analyzed species has at least one
+observed biological measurement; a predictor is rejected when any species has
+no observation. For known predictor errors, use one summarized row per
 species, set `rsc_predictor_within_variance="known-se"`, and list one
 standard-error column per selected predictor in
 `rsc_predictor_standard_error_columns`, in the same order as `rsc_predictors`;

@@ -193,8 +193,11 @@ def _aggregate_values(
     if errors.shape != linear.shape or not numpy.isfinite(errors).all() or (errors < 0.0).any():
         raise ValueError("Paralog standard errors must be finite, non-negative, and aligned")
     if aggregation == "max":
-        maximum = int(numpy.argmax(linear))
-        return combined, float(errors[maximum])
+        maxima = numpy.flatnonzero(linear == combined_linear)
+        # The max function is not differentiable at a tie.  Using the largest
+        # reported SE is deterministic under row reordering and is a
+        # conservative approximation to selecting one of the tied paralogs.
+        return combined, float(errors[maxima].max())
 
     if value_type == "identity":
         derivative = numpy.ones(len(linear), dtype=float)
@@ -224,6 +227,76 @@ def _gene_species_map(reconciliation: pandas.DataFrame) -> dict[str, str]:
     if not conflicts.empty:
         raise ValueError("Reconciliation assigns a gene tip to multiple species: " + str(conflicts.index[0]))
     return dict(zip(tips["gene_name"].astype(str), tips["species_name"].astype(str), strict=True))
+
+
+def _prune_tree_to_family_species(tree: Any, gene_species: dict[str, str]) -> list[str]:
+    family_species = set(gene_species.values())
+    tree_species = {str(name) for name in tree.leaf_names()}
+    missing = sorted(family_species - tree_species)
+    if missing:
+        raise ValueError("Reconciliation contains species absent from the species tree: " + ", ".join(missing))
+    if not family_species:
+        raise ValueError("Reconciliation contains no family species")
+    if family_species != tree_species:
+        tree.prune(sorted(family_species), preserve_branch_length=True)
+    return [str(name) for name in tree.leaf_names()]
+
+
+def _subset_species_traits(frame: pandas.DataFrame, leaf_names: Sequence[str]) -> pandas.DataFrame:
+    if "leaf_name" not in frame:
+        raise ValueError("Prepared species traits require a leaf_name column")
+    available = set(frame["leaf_name"].astype(str))
+    missing = sorted(set(leaf_names) - available)
+    if missing:
+        raise ValueError("Prepared species traits lack family species: " + ", ".join(missing))
+    return frame.loc[frame["leaf_name"].astype(str).isin(set(leaf_names))].copy()
+
+
+def _write_tree(tree: Any, path: Path) -> None:
+    from nwkit.util import write_tree
+
+    write_tree(
+        tree,
+        SimpleNamespace(outfile=str(path), name_quote="auto"),
+        format="auto",
+        quiet=True,
+    )
+
+
+def _association_rows(frame: pandas.DataFrame) -> pandas.DataFrame:
+    """Exclude intercept-only rows from association status and ranking."""
+    if frame.empty:
+        return frame
+    mask = pandas.Series(True, index=frame.index, dtype=bool)
+    intercept_labels = {"intercept", "(intercept)"}
+    if "predictor_type" in frame:
+        mask &= ~frame["predictor_type"].astype(str).str.strip().str.lower().isin(intercept_labels)
+    for column in ("term", "source_term"):
+        if column in frame:
+            mask &= ~frame[column].astype(str).str.strip().str.lower().isin(intercept_labels)
+    return frame.loc[mask]
+
+
+def _usable_association_rows(frame: pandas.DataFrame) -> pandas.DataFrame:
+    """Return converged, successful predictor-association rows."""
+    selected = _association_rows(frame)
+    if selected.empty:
+        return selected
+    mask = pandas.Series(True, index=selected.index, dtype=bool)
+    if "inference_status" in selected:
+        mask &= selected["inference_status"].astype(str).str.lower().eq("ok")
+    false_values = {"no", "false", "0"}
+    if "optimizer_converged" in selected:
+        mask &= ~selected["optimizer_converged"].astype(str).str.lower().isin(false_values)
+    for prefix in ("response_evolution", "predictor_evolution"):
+        status_column = f"{prefix}_parameter_status"
+        convergence_column = f"{prefix}_optimizer_converged"
+        if status_column not in selected or convergence_column not in selected:
+            continue
+        estimated = selected[status_column].astype(str).str.lower().eq("estimated")
+        failed = selected[convergence_column].astype(str).str.lower().isin(false_values)
+        mask &= ~(estimated & failed)
+    return selected.loc[mask]
 
 
 def aggregate_species_expression(
@@ -382,6 +455,7 @@ def _read_trait_inputs(
     standard_error_columns: str = "",
     sample_size_columns: str = "",
     categorical: Iterable[str] = (),
+    ordered: Iterable[str] = (),
     categorical_policy: str = "latent",
 ):
     from nwkit.contrast import _read_mixed_replicate_traits
@@ -398,13 +472,14 @@ def _read_trait_inputs(
         standard_error_columns=standard_error_columns,
         sample_size_columns=sample_size_columns,
     )
+    discrete = set(categorical) | set(ordered)
     replicate_requested = bool(biological_id) or within_variance == "known-se"
     if replicate_requested:
         return _read_mixed_replicate_traits(
             arguments,
             tree,
             list(traits),
-            set(categorical),
+            discrete,
             tree_id,
             categorical_policy=categorical_policy,
             option_name="GeneGalleon species-PGLS input",
@@ -416,6 +491,7 @@ def _read_trait_inputs(
             list(traits),
             duplicate_leaf_names="error",
             categorical=set(categorical),
+            ordered=set(ordered),
         ),
         sampling_covariance_by_trait={},
         tip_summary=pandas.DataFrame(columns=TIP_SUMMARY_COLUMNS),
@@ -427,11 +503,33 @@ def _covariance_diagonal_and_offdiagonal(covariance: Any, leaf_names: Sequence[s
     from nwkit.gaussian import DiagonalLowRankCovariance
 
     if isinstance(covariance, DiagonalLowRankCovariance):
-        low_rank = numpy.asarray(covariance.low_rank, dtype=float)
-        diagonal = numpy.asarray(covariance.diagonal, dtype=float) + numpy.sum(low_rank * low_rank, axis=1)
-        gram = low_rank @ low_rank.T
-        numpy.fill_diagonal(gram, 0.0)
-        return diagonal, bool(numpy.any(numpy.abs(gram) > 1e-12))
+        low_rank = covariance.low_rank
+        if sparse.issparse(low_rank):
+            low_rank = low_rank.tocsr()
+            squared_norm = numpy.asarray(low_rank.multiply(low_rank).sum(axis=1)).ravel()
+        else:
+            low_rank = numpy.asarray(low_rank, dtype=float)
+            squared_norm = numpy.sum(low_rank * low_rank, axis=1)
+        diagonal = numpy.asarray(covariance.diagonal, dtype=float) + squared_norm
+        # Inspect the low-rank Gram matrix in bounded blocks.  Materializing
+        # the complete n-by-n product defeats the representation and used
+        # hundreds of MiB for only 5,000 tips.
+        n_rows = low_rank.shape[0]
+        target_entries = 1_000_000
+        block_size = max(1, min(n_rows, target_entries // max(1, n_rows)))
+        for start in range(0, n_rows, block_size):
+            stop = min(n_rows, start + block_size)
+            gram = low_rank[start:stop] @ low_rank.T
+            if sparse.issparse(gram):
+                coordinates = gram.tocoo()
+                offdiagonal = coordinates.col != coordinates.row + start
+                has_offdiagonal = numpy.any(numpy.abs(coordinates.data[offdiagonal]) > 1e-12)
+            else:
+                gram[numpy.arange(stop - start), numpy.arange(start, stop)] = 0.0
+                has_offdiagonal = numpy.any(numpy.abs(gram) > 1e-12)
+            if has_offdiagonal:
+                return diagonal, True
+        return diagonal, False
     if isinstance(covariance, pandas.DataFrame):
         matrix = covariance.loc[list(leaf_names), list(leaf_names)].to_numpy(dtype=float)
     elif sparse.issparse(covariance):
@@ -509,16 +607,17 @@ def _native_status(
     rows = []
     for response in responses:
         selected = pandas.DataFrame() if frame is None else frame.loc[frame["response"].astype(str) == response]
-        usable = selected
-        if not usable.empty and "inference_status" in usable:
-            usable = usable.loc[usable["inference_status"].astype(str) == "ok"]
+        usable = _usable_association_rows(selected)
         response_reason = reason
         if usable.empty and not response_reason:
             if selected.empty:
                 response_reason = "nwkit_returned_no_response_rows"
             elif "inference_status" in selected:
                 states = sorted(set(selected["inference_status"].dropna().astype(str)))
-                response_reason = "nwkit_inference_status:" + ",".join(states or ["unknown"])
+                if states and set(states) != {"ok"}:
+                    response_reason = "nwkit_inference_status:" + ",".join(states)
+                else:
+                    response_reason = "nwkit_returned_no_usable_association_rows"
             else:
                 response_reason = "nwkit_returned_no_usable_rows"
         rows.append(
@@ -540,6 +639,7 @@ def _native_status(
 
 def _run_rphylopars(
     args: argparse.Namespace,
+    tree: Any,
     summary_long: pandas.DataFrame,
     plan: pandas.DataFrame,
     responses: Sequence[str],
@@ -548,14 +648,16 @@ def _run_rphylopars(
         directory = Path(temporary)
         summary_path = directory / "summary.tsv"
         plan_path = directory / "plan.tsv"
+        tree_path = directory / "family-species-tree.nwk"
         results_path = directory / "results.tsv"
         status_path = directory / "status.tsv"
         summary_long.to_csv(summary_path, sep="\t", index=False, na_rep="NA")
         plan.to_csv(plan_path, sep="\t", index=False, na_rep="NA")
+        _write_tree(tree, tree_path)
         command = [
             "Rscript",
             str(args.rphylopars_script),
-            f"--tree={args.species_tree}",
+            f"--tree={tree_path}",
             f"--summary={summary_path}",
             f"--plan={plan_path}",
             f"--responses={','.join(responses)}",
@@ -568,6 +670,7 @@ def _run_rphylopars(
             f"--predictor_branch_length={args.predictor_branch_length}",
             f"--reml={args.reml}",
             f"--confidence_level={args.confidence_level}",
+            f"--inference={args.inference}",
             f"--sampling_covariance={args.rphylopars_sampling_covariance}",
             f"--outfile={results_path}",
             f"--status_out={status_path}",
@@ -821,8 +924,7 @@ def summarize_for_stat_tree(comparison_path: str | Path, status_path: str | Path
         return out
     for method in ("species_nwkit", "species_rphylopars"):
         selected = comparison.loc[comparison["analysis_method"].astype(str) == method].copy()
-        if "inference_status" in selected:
-            selected = selected.loc[selected["inference_status"].astype(str) == "ok"]
+        selected = _usable_association_rows(selected)
         if selected.empty or "p_value" not in selected:
             continue
         selected["_p_value"] = pandas.to_numeric(selected["p_value"], errors="coerce")
@@ -886,7 +988,8 @@ def run(args: argparse.Namespace) -> int:
     if plan.empty:
         raise ValueError("Prepared RSC analysis plan is empty")
     tree = read_tree(str(args.species_tree), "auto", True)
-    leaf_names = [str(name) for name in tree.leaf_names()]
+    leaf_names = _prune_tree_to_family_species(tree, _gene_species_map(reconciliation))
+    species_traits = _subset_species_traits(_read_tsv(args.species_traits), leaf_names)
     aggregated, aggregation_audit = aggregate_species_expression(
         expression,
         reconciliation,
@@ -919,7 +1022,9 @@ def run(args: argparse.Namespace) -> int:
     for aggregation, frame in aggregated.items():
         with tempfile.TemporaryDirectory(prefix="genegalleon-species-pgls-") as temporary:
             expression_path = Path(temporary) / "species-expression.tsv"
+            species_traits_path = Path(temporary) / "species-traits.tsv"
             frame.to_csv(expression_path, sep="\t", index=False, na_rep="NA")
+            species_traits.to_csv(species_traits_path, sep="\t", index=False, na_rep="NA")
             response_estimates = _read_trait_inputs(
                 expression_path,
                 tree,
@@ -945,8 +1050,9 @@ def run(args: argparse.Namespace) -> int:
                 analysis_id = str(plan_row["analysis_id"])
                 predictors = _csv(plan_row["predictors"])
                 categorical = _csv(plan_row.get("categorical_predictors", ""))
+                ordered = _ordered(str(plan_row.get("ordered_predictors", ".")))
                 predictor_estimates = _read_trait_inputs(
-                    args.species_traits,
+                    species_traits_path,
                     tree,
                     predictors,
                     tree_id=args.tree_id,
@@ -966,6 +1072,7 @@ def run(args: argparse.Namespace) -> int:
                         else str(plan_row["predictor_sample_size_columns"])
                     ),
                     categorical=categorical,
+                    ordered=ordered,
                     categorical_policy=args.categorical_replicate_policy,
                 )
                 predictor_estimates_by_analysis[analysis_id] = predictor_estimates
@@ -1006,7 +1113,7 @@ def run(args: argparse.Namespace) -> int:
                         predictor_evolution_parameter=_parameter(args.predictor_evolution_parameter),
                         predictor_branch_length=args.predictor_branch_length,
                         categorical_predictors=categorical,
-                        ordered_predictors=_ordered(str(plan_row.get("ordered_predictors", "."))),
+                        ordered_predictors=ordered,
                         factor_references=_references(str(plan_row.get("factor_reference", "."))),
                         factor_coding=args.factor_coding,
                         allow_large_dense=args.allow_large_dense == "yes",
@@ -1093,6 +1200,7 @@ def run(args: argparse.Namespace) -> int:
     if "species-rphylopars" in methods:
         rphylopars, r_status, r_audit = _run_rphylopars(
             args,
+            tree,
             pandas.concat(rphylopars_summary_frames, ignore_index=True, sort=False),
             plan,
             responses,

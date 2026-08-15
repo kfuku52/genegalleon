@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import math
+import tracemalloc
 
+import numpy
 import pandas
 import pytest
+from nwkit.gaussian import DiagonalLowRankCovariance
 from scipy import sparse
 
 from workflow.support.species_tree_pgls import (
     _aggregate_values,
     _covariance_diagonal_and_offdiagonal,
+    _native_status,
     _parse_aggregations,
     _parse_methods,
+    _prune_tree_to_family_species,
     aggregate_species_expression,
     summarize_for_stat_tree,
 )
@@ -51,11 +56,56 @@ def test_known_standard_errors_are_propagated_for_sum_and_mean():
     assert mean_se == pytest.approx(0.25)
 
 
+def test_max_aggregation_tie_uses_order_invariant_conservative_standard_error():
+    forward = _aggregate_values([4.0, 4.0, 1.0], [0.2, 0.7, 0.1], "max", "identity")
+    reverse = _aggregate_values([1.0, 4.0, 4.0], [0.1, 0.7, 0.2], "max", "identity")
+    assert forward == pytest.approx((4.0, 0.7))
+    assert reverse == pytest.approx(forward)
+
+
 def test_sparse_sampling_covariance_is_inspected_without_dense_conversion():
     covariance = sparse.csr_matrix([[1.0, 0.0, 0.2], [0.0, 2.0, 0.0], [0.2, 0.0, 3.0]])
     diagonal, has_offdiagonal = _covariance_diagonal_and_offdiagonal(covariance, ["A", "B", "C"])
     assert diagonal.tolist() == [1.0, 2.0, 3.0]
     assert has_offdiagonal is True
+
+
+def test_low_rank_covariance_inspection_has_bounded_memory_at_5000_tips():
+    covariance = DiagonalLowRankCovariance(
+        diagonal=numpy.ones(5_000),
+        low_rank=numpy.zeros((5_000, 2)),
+    )
+    tracemalloc.start()
+    diagonal, has_offdiagonal = _covariance_diagonal_and_offdiagonal(
+        covariance, [f"S{index}" for index in range(5_000)]
+    )
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    numpy.testing.assert_allclose(diagonal, numpy.ones(5_000))
+    assert has_offdiagonal is False
+    assert peak < 64 * 1024**2
+
+
+def test_sparse_low_rank_covariance_factor_stays_sparse_and_detects_offdiagonal():
+    covariance = DiagonalLowRankCovariance(
+        diagonal=numpy.asarray([0.5, 0.5, 0.5]),
+        low_rank=sparse.csr_matrix([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]),
+    )
+    diagonal, has_offdiagonal = _covariance_diagonal_and_offdiagonal(covariance, ["A", "B", "C"])
+    numpy.testing.assert_allclose(diagonal, [1.5, 1.5, 1.5])
+    assert has_offdiagonal is True
+
+
+def test_family_species_pruning_preserves_induced_pairwise_branch_length(tmp_path):
+    from nwkit.util import read_tree
+
+    path = tmp_path / "species.nwk"
+    path.write_text("(((A:1,B:1):2,C:3):1,D:4);", encoding="utf-8")
+    tree = read_tree(str(path), "auto", True)
+    original_distance = tree.get_distance("A", "C")
+    leaf_names = _prune_tree_to_family_species(tree, {"A_g1": "A", "C_g1": "C"})
+    assert set(leaf_names) == {"A", "C"}
+    assert tree.get_distance("A", "C") == pytest.approx(original_distance)
 
 
 def test_species_aggregation_never_treats_paralogs_as_replicates():
@@ -148,6 +198,35 @@ def test_species_comparison_summary_is_bounded_and_method_specific(tmp_path):
                 "aggregation": "sum",
                 "analysis_id": "p001_size",
                 "response": "expression",
+                "predictor_type": "intercept",
+                "term": "Intercept",
+                "coefficient": 100.0,
+                "standard_error": 0.01,
+                "p_value": 1e-20,
+                "inference_status": "ok",
+                "evolution_model": "brownian",
+                "n_species": 20,
+            },
+            {
+                "analysis_method": "species_nwkit",
+                "aggregation": "sum",
+                "analysis_id": "failed",
+                "response": "expression",
+                "predictor_type": "continuous",
+                "term": "bad_predictor",
+                "coefficient": 50.0,
+                "standard_error": 0.01,
+                "p_value": 1e-25,
+                "inference_status": "ok",
+                "optimizer_converged": "no",
+                "evolution_model": "brownian",
+                "n_species": 20,
+            },
+            {
+                "analysis_method": "species_nwkit",
+                "aggregation": "sum",
+                "analysis_id": "p001_size",
+                "response": "expression",
                 "term": "size",
                 "coefficient": 2.0,
                 "standard_error": 0.2,
@@ -184,3 +263,27 @@ def test_species_comparison_summary_is_bounded_and_method_specific(tmp_path):
     assert summary["pgls_species_nwkit_best_term"] == "size"
     assert summary["pgls_species_rphylopars_best_coefficient"] == pytest.approx(2.1)
     assert summary["pgls_nwkit_rphylopars_max_abs_coefficient_difference"] == pytest.approx(0.1)
+
+
+def test_native_status_requires_an_estimable_association_not_only_an_intercept():
+    results = pandas.DataFrame(
+        [
+            {
+                "response": "expression",
+                "predictor_type": "intercept",
+                "term": "Intercept",
+                "inference_status": "ok",
+            },
+            {
+                "response": "expression",
+                "predictor_type": "continuous",
+                "term": "size",
+                "inference_status": "ok",
+                "optimizer_converged": "no",
+            },
+        ]
+    )
+    status = _native_status("OG1", "sum", "p001_size", ["expression"], results, "test")
+    assert status[0]["status"] == "not_estimable"
+    assert status[0]["n_result_rows"] == 2
+    assert status[0]["reason"] == "nwkit_returned_no_usable_association_rows"

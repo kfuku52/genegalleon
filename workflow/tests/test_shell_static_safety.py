@@ -3665,6 +3665,9 @@ def test_gene_evolution_wires_matched_expression_trait_pgls_through_stat_tree():
     assert 'nwkit "${rsc_reconcile_args[@]}"' in core
     assert 'nwkit "${rsc_pgls_args[@]}"' in core
     assert '--allow-large-dense "${rsc_allow_large_dense}"' in core
+    assert "/opt/pg/logs/source_revisions.tsv" in core
+    assert '--parameter "nwkit_identity=${rsc_nwkit_identity}"' in core
+    assert '--parameter "rphylopars_identity=${rsc_rphylopars_identity}"' in core
     assert '--parameter "expression_input=unavailable"' in core
     assert "requires the gene-expression matrix" not in core
     assert 'inspect-audit-error' in core

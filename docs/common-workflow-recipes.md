@@ -268,7 +268,11 @@ before replicate uncertainty is estimated, and on the linear expression scale;
 the result is transformed back according to `exp_value_type`. Thus paralogs
 are never misclassified as biological replicates. The default
 `species_paralog_missing=error` also prevents a partly measured paralog set
-from silently changing the species-level estimand.
+from silently changing the species-level estimand. A tied `max` uses the
+largest standard error among the tied paralogs, avoiding row-order-dependent
+uncertainty. For each gene family, the species comparators use the induced
+species subtree containing its reconciled gene tips, rather than requiring the
+family to occur in every species of the global tree.
 
 `auto` estimates the shape parameter for lambda, OU, kappa, delta, EB, and
 ACDC models. Brownian and independent models have no shape parameter, so their
@@ -303,9 +307,20 @@ variances as NWKIT. It does not support categorical predictors in this
 comparator, separate response/predictor evolutionary transformations, or full
 cross-species sampling covariance. Such fits are recorded as `not_estimable`;
 `rphylopars_sampling_covariance=diagonalize` is an explicit opt-in to discard
-off-diagonal sampling covariance. Coefficients can then be compared, but
+off-diagonal sampling covariance. Rphylopars 0.3.10 also fails on a singular
+`phenocov_list`, so a comparison that mixes positive sampling variances with
+exact zero-variance trait/species values is reported as `not_estimable` instead
+of applying an artificial variance floor. Coefficients can then be compared, but
 log-likelihood, AIC, BIC, optimizer reporting, and parameter counting remain
-engine-specific.
+engine-specific. The adapter implements Wald inference only. If
+`rsc_inference=parametric-bootstrap` is requested, the Rphylopars comparator is
+reported as `not_estimable`; it is never relabeled as a successful bootstrap
+or silently replaced by Wald inference.
+
+The unified stage records the resolved NWKIT revision (and the Rphylopars
+package version when requested) in its artifact manifest. Updating a moving
+upstream branch therefore invalidates cached RSC/species-comparator outputs
+without pinning that branch in GeneGalleon configuration.
 
 The RSC family-level outcome is under
 `rsc_status/`, and the full reconciliation/contrast/replicate audit is spread

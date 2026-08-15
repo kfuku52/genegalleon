@@ -322,9 +322,12 @@ def test_reconciled_speciation_contrast_end_to_end_with_nwkit(tmp_path: Path):
 
 def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path):
     species = [f"Genus_{letter}" for letter in "abcde"]
+    outgroup = "Genus_f"
     species_tree = tmp_path / "species.nwk"
     species_tree.write_text(
-        "((({}:1,{}:1):1,{}:2):1,({}:1,{}:1):2);".format(*species),
+        "(((({}:1,{}:1):1,{}:2):1,({}:1,{}:1):2):1,{}:4);".format(
+            *species, outgroup
+        ),
         encoding="utf-8",
     )
     genes = [f"{name}_g{copy}" for name in species for copy in (1, 2)]
@@ -339,23 +342,22 @@ def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path):
 
     expression_rows = []
     for species_index, name in enumerate(species):
-        for replicate, replicate_shift in (("r1", -0.2), ("r2", 0.2)):
-            for copy, copy_shift in ((1, 0.1), (2, 0.6)):
-                expression_rows.append(
-                    {
-                        "leaf_name": f"{name}_g{copy}",
-                        "expression": 1.0 + species_index + replicate_shift + copy_shift,
-                        "biological_id": f"{name}:{replicate}",
-                    }
-                )
+        for copy, copy_shift in ((1, 0.1), (2, 0.6)):
+            expression_rows.append(
+                {
+                    "leaf_name": f"{name}_g{copy}",
+                    "expression": 1.0 + species_index + copy_shift,
+                }
+            )
     expression = tmp_path / "prepared-expression.tsv"
     pandas.DataFrame(expression_rows).to_csv(expression, sep="\t", index=False)
     traits = tmp_path / "prepared-traits.tsv"
     pandas.DataFrame(
         {
-            "leaf_name": species,
-            "body_size": [1.0, 2.2, 3.7, 4.1, 6.4],
-            "habitat": ["land", "water", "land", "water", "land"],
+            "leaf_name": [*species, outgroup],
+            "body_size": [1.0, 2.2, 3.7, 4.1, 6.4, 9.0],
+            "habitat": ["land", "water", "land", "water", "land", "water"],
+            "stage": [0, 1, 2, 1, 2, 0],
         }
     ).to_csv(traits, sep="\t", index=False)
     plan = tmp_path / "plan.tsv"
@@ -381,13 +383,23 @@ def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path):
                 "predictor_sample_size_columns": ".",
                 "origin_applicable": "yes",
             },
+            {
+                "analysis_id": "p003_stage",
+                "predictors": "stage",
+                "categorical_predictors": ".",
+                "ordered_predictors": "stage=0|1|2",
+                "factor_reference": ".",
+                "predictor_standard_error_columns": ".",
+                "predictor_sample_size_columns": ".",
+                "origin_applicable": "yes",
+            },
         ]
     ).to_csv(plan, sep="\t", index=False)
     metadata = tmp_path / "metadata.tsv"
     pandas.DataFrame(
         [
             ("responses", "expression"),
-            ("response_biological_id", "biological_id"),
+            ("response_biological_id", ""),
             ("response_technical_id", ""),
             ("response_batch", ""),
             ("standard_error_columns", ""),
@@ -456,6 +468,10 @@ def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path):
     status = pandas.read_csv(f"{prefix}.status.tsv", sep="\t")
     assert "body_size" in set(native["term"])
     assert native["term"].astype(str).str.contains("habitat").any()
+    assert native["term"].astype(str).str.contains("stage").any()
+    stage_rows = native.query("analysis_id == 'p003_stage' and predictor_type != 'intercept'")
+    assert set(stage_rows["predictor_type"]) == {"ordered"}
+    assert set(native["n_species"]) == {len(species)}
     assert "body_size" in set(rphylopars["term"])
     assert set(comparison["analysis_method"]) == {
         "species_nwkit",
@@ -465,6 +481,7 @@ def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path):
     rphylopars_status = status.query("analysis_method == 'species_rphylopars'")
     assert rphylopars_status.query("analysis_id == 'p001_body_size'")["status"].tolist() == ["ok"]
     assert rphylopars_status.query("analysis_id == 'p002_habitat'")["status"].tolist() == ["not_estimable"]
+    assert rphylopars_status.query("analysis_id == 'p003_stage'")["status"].tolist() == ["not_estimable"]
     assert (
         rphylopars_status.query("analysis_id == 'p002_habitat'")["reason"].str.contains("continuous predictors").all()
     )
@@ -561,12 +578,53 @@ def test_rsc_only_method_does_not_require_species_aggregation_inputs(tmp_path: P
         "expected_parameter",
         "expected_parameter_status",
         "expected_status",
+        "inference",
+        "expected_reason",
+        "predictor_sampling_variance",
     ),
     [
-        ("lambda", "0.6", "lambda", "0.6", "lambda", 0.6, "fixed", "ok"),
-        ("eb", "-0.1", "eb", "-0.1", "rate_change", -0.1, "fixed", "ok"),
-        ("lambda", "auto", "lambda", "auto", "lambda", None, "estimated", "ok"),
-        ("lambda", "0.6", "brownian", "auto", "", None, "", "not_estimable"),
+        ("lambda", "0.6", "lambda", "0.6", "lambda", 0.6, "fixed", "ok", "wald", "", 0.02),
+        ("eb", "-0.1", "eb", "-0.1", "rate_change", -0.1, "fixed", "ok", "wald", "", 0.02),
+        ("lambda", "auto", "lambda", "auto", "lambda", None, "estimated", "ok", "wald", "", 0.02),
+        (
+            "lambda",
+            "0.6",
+            "brownian",
+            "auto",
+            "",
+            None,
+            "",
+            "not_estimable",
+            "wald",
+            "joint evolutionary model",
+            0.02,
+        ),
+        (
+            "brownian",
+            "auto",
+            "brownian",
+            "auto",
+            "",
+            None,
+            "",
+            "not_estimable",
+            "parametric-bootstrap",
+            "does not implement requested inference",
+            0.02,
+        ),
+        (
+            "brownian",
+            "auto",
+            "brownian",
+            "auto",
+            "",
+            None,
+            "",
+            "not_estimable",
+            "wald",
+            "cannot fit a singular sampling-error matrix",
+            0.0,
+        ),
     ],
 )
 def test_rphylopars_comparator_handles_shape_parameters_and_rejects_unmatched_models(
@@ -579,6 +637,9 @@ def test_rphylopars_comparator_handles_shape_parameters_and_rejects_unmatched_mo
     expected_parameter: float | None,
     expected_parameter_status: str,
     expected_status: str,
+    inference: str,
+    expected_reason: str,
+    predictor_sampling_variance: float,
 ):
     species = list("ABCDEFGH")
     tree = tmp_path / "species.nwk"
@@ -605,7 +666,7 @@ def test_rphylopars_comparator_handles_shape_parameters_and_rejects_unmatched_mo
                     "leaf_name": name,
                     "trait": "size",
                     "value": float(index),
-                    "sampling_variance": 0.02,
+                    "sampling_variance": predictor_sampling_variance,
                     "has_offdiagonal_sampling_covariance": "no",
                 },
             ]
@@ -641,6 +702,7 @@ def test_rphylopars_comparator_handles_shape_parameters_and_rejects_unmatched_mo
         "--predictor_branch_length=original",
         "--reml=yes",
         "--confidence_level=0.95",
+        f"--inference={inference}",
         "--sampling_covariance=require-diagonal",
         f"--outfile={result}",
         f"--status_out={status}",
@@ -650,7 +712,7 @@ def test_rphylopars_comparator_handles_shape_parameters_and_rejects_unmatched_mo
     assert set(method_status["status"]) == {expected_status}
     if expected_status == "not_estimable":
         assert fitted.empty
-        assert method_status["reason"].str.contains("joint evolutionary model").all()
+        assert method_status["reason"].str.contains(expected_reason).all()
         return
     assert set(fitted["evolution_parameter_name"]) == {parameter_name}
     assert set(fitted["evolution_parameter_status"]) == {expected_parameter_status}

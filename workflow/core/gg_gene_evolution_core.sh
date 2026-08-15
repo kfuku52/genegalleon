@@ -4950,6 +4950,20 @@ if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
   fi
 fi
 
+rsc_nwkit_identity=""
+if [[ -r /opt/pg/logs/source_revisions.tsv ]]; then
+  rsc_nwkit_identity=$(awk -F '\t' '$1 == "nwkit" { print $2; exit }' /opt/pg/logs/source_revisions.tsv)
+fi
+if [[ -z "${rsc_nwkit_identity}" ]] && command -v nwkit >/dev/null 2>&1; then
+  rsc_nwkit_identity=$(nwkit --version 2>&1 | tail -n 1 || true)
+fi
+rsc_nwkit_identity="${rsc_nwkit_identity:-unavailable}"
+rsc_rphylopars_identity="not-requested"
+if [[ ${pgls_run_species_rphylopars} -eq 1 ]]; then
+  rsc_rphylopars_identity=$(Rscript -e 'cat(as.character(utils::packageVersion("Rphylopars")))' 2>/dev/null || true)
+  rsc_rphylopars_identity="${rsc_rphylopars_identity:-unavailable}"
+fi
+
 rsc_needs_update=0
 rsc_provenance_args=(
   --manifest "${file_og_expression_trait_pgls_provenance}"
@@ -5038,6 +5052,8 @@ rsc_provenance_args=(
   --parameter "allow_large_dense=${rsc_allow_large_dense}"
   --parameter "species_parser=${species_label_parser}"
   --parameter "species_regex=${species_label_regex}"
+  --parameter "nwkit_identity=${rsc_nwkit_identity}"
+  --parameter "rphylopars_identity=${rsc_rphylopars_identity}"
 )
 if [[ -s "${file_og_expression}" ]]; then
   rsc_provenance_args+=(

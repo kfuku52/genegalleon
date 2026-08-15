@@ -297,6 +297,59 @@ def test_prepare_routes_predictor_replicates_and_known_se_per_analysis(tmp_path:
         )
 
 
+def test_prepare_allows_partial_missing_raw_predictor_replicates(tmp_path: Path):
+    mod = load_module()
+    write_tsv(
+        tmp_path / "expression.tsv",
+        [
+            {"gene": "Genus_a_g1", "expression": 1.0},
+            {"gene": "Genus_b_g1", "expression": 2.0},
+        ],
+    )
+    write_tsv(
+        tmp_path / "traits.tsv",
+        [
+            {"species": "Genus_a", "sample": "a1", "size": 1.0},
+            {"species": "Genus_a", "sample": "a2", "size": "NA"},
+            {"species": "Genus_b", "sample": "b1", "size": 2.0},
+            {"species": "Genus_b", "sample": "b2", "size": 2.4},
+        ],
+    )
+    assert (
+        mod.main(
+            [
+                "prepare",
+                "--expression",
+                str(tmp_path / "expression.tsv"),
+                "--species-traits",
+                str(tmp_path / "traits.tsv"),
+                "--predictors",
+                "size",
+                "--predictor-biological-id",
+                "sample",
+                "--expression-output",
+                str(tmp_path / "expression.out.tsv"),
+                "--species-traits-output",
+                str(tmp_path / "traits.out.tsv"),
+                "--analysis-plan-output",
+                str(tmp_path / "plan.tsv"),
+                "--metadata-output",
+                str(tmp_path / "metadata.tsv"),
+            ]
+        )
+        == 0
+    )
+    metadata = dict(
+        pandas.read_csv(tmp_path / "metadata.tsv", sep="\t", keep_default_na=False).itertuples(
+            index=False, name=None
+        )
+    )
+    assert metadata["status"] == "ready"
+    assert metadata["predictors"] == "size"
+    prepared = pandas.read_csv(tmp_path / "traits.out.tsv", sep="\t", keep_default_na=False)
+    assert prepared.loc[prepared["sample"] == "a2", "size"].tolist() == ["NA"]
+
+
 def test_prepare_reports_not_estimable_for_incomplete_or_constant_responses(tmp_path: Path):
     mod = load_module()
     write_tsv(
@@ -626,6 +679,49 @@ def test_status_excludes_nonconverged_rows_from_best_result(tmp_path: Path):
     assert status.loc[0, "min_p_value"] == 0.02
     assert status.loc[0, "n_estimable_models"] == 1
     assert status.loc[0, "n_nonconverged_result_rows"] == 1
+
+
+def test_status_and_stat_tree_summary_exclude_intercepts(tmp_path: Path):
+    mod = load_module()
+    results = pandas.DataFrame(
+        [
+            {
+                "analysis_id": "p001_size",
+                "model_id": "m1",
+                "response": "expression",
+                "predictor_type": "intercept",
+                "term": "Intercept",
+                "coefficient": 20.0,
+                "p_value": 1e-30,
+                "inference_status": "ok",
+                "optimizer_converged": "yes",
+            },
+            {
+                "analysis_id": "p001_size",
+                "model_id": "m1",
+                "response": "expression",
+                "predictor_type": "continuous",
+                "term": "size",
+                "coefficient": 1.5,
+                "p_value": 0.03,
+                "inference_status": "ok",
+                "optimizer_converged": "yes",
+            },
+        ]
+    )
+    status = mod._status_from_results("OG1", results, 4)
+    assert status.loc[0, "status"] == "ok"
+    assert status.loc[0, "best_term"] == "size"
+    assert status.loc[0, "min_p_value"] == 0.03
+
+    results.to_csv(tmp_path / "pgls.tsv", sep="\t", index=False)
+    status.to_csv(tmp_path / "status.tsv", sep="\t", index=False)
+    summary = mod.summarize_for_stat_tree(tmp_path / "pgls.tsv", tmp_path / "status.tsv")
+    assert summary["rsc_best_term"] == "size"
+    assert summary["rsc_min_p_value"] == 0.03
+
+    intercept_only = mod._status_from_results("OG1", results.iloc[[0]], 4)
+    assert intercept_only.loc[0, "status"] == "not_estimable"
 
 
 def test_audit_value_error_is_classified_as_analysis_not_estimable(tmp_path: Path):

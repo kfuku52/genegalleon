@@ -27,7 +27,7 @@ args <- parse_args(commandArgs(trailingOnly = TRUE))
 required <- c(
   "tree", "summary", "plan", "responses", "tree_id", "model", "parameter",
   "predictor_model", "predictor_parameter", "branch_length", "predictor_branch_length",
-  "reml", "confidence_level", "sampling_covariance", "outfile", "status_out"
+  "reml", "confidence_level", "inference", "sampling_covariance", "outfile", "status_out"
 )
 missing <- required[!required %in% names(args)]
 if (length(missing) > 0) {
@@ -72,6 +72,10 @@ if (!is.finite(confidence_level) || confidence_level <= 0 || confidence_level >=
   stop("confidence_level must lie strictly between zero and one.", call. = FALSE)
 }
 reml <- identical(tolower(args$reml), "yes")
+requested_inference <- tolower(args$inference)
+if (!requested_inference %in% c("wald", "parametric-bootstrap")) {
+  stop("inference must be wald or parametric-bootstrap.", call. = FALSE)
+}
 package_version <- as.character(utils::packageVersion("Rphylopars"))
 
 model_map <- c(
@@ -183,7 +187,13 @@ for (aggregation in unique(summary_long$aggregation)) {
     ordered <- split_setting(as.character(plan$ordered_predictors[[plan_index]]))
     for (response in responses) {
       unsupported_reason <- ""
-      if (!model_supported) {
+      if (!identical(requested_inference, "wald")) {
+        unsupported_reason <- paste0(
+          "Rphylopars comparator does not implement requested inference '",
+          requested_inference,
+          "'"
+        )
+      } else if (!model_supported) {
         unsupported_reason <- sprintf("Rphylopars does not support evolution model '%s'", args$model)
       } else if (nzchar(shared_model_reason)) {
         unsupported_reason <- shared_model_reason
@@ -246,6 +256,21 @@ for (aggregation in unique(summary_long$aggregation)) {
       }
       if (!valid) {
         add_status(aggregation, analysis_id, response, "not_estimable", "species summary contains missing or invalid values")
+        next
+      }
+
+      if (any(variances > 0) && any(variances == 0)) {
+        add_status(
+          aggregation,
+          analysis_id,
+          response,
+          "not_estimable",
+          paste(
+            "Rphylopars phenocov_list cannot fit a singular sampling-error matrix;",
+            "every selected trait/species variance must be positive when any sampling variance is supplied"
+          ),
+          n_species = length(species)
+        )
         next
       }
 
