@@ -56,6 +56,13 @@ treevis_wrap_axis_label <- function(label, width = 12) {
     paste(wrapped_parts, collapse = '\n')
 }
 
+treevis_ortholog_axis_label <- function(ortholog_prefix) {
+    label <- treevis_ortholog_prefix_target(ortholog_prefix)
+    words <- strsplit(label, "[_[:space:]]+")[[1]]
+    words <- words[nzchar(words)]
+    paste(c(words, "closest", "gene"), collapse = "\n")
+}
+
 treevis_site_panel_width <- function(num_sites) {
     num_sites <- suppressWarnings(as.numeric(num_sites))
     if (!is.finite(num_sites) || is.na(num_sites) || (num_sites < 0)) {
@@ -423,7 +430,7 @@ get_rel_widths = function(g, args_rel_widths) {
             num_amino_acid_site = floor(xmax) - 1
             rel_widths[gname] = treevis_site_panel_width(num_amino_acid_site)
         } else if (grepl('^ortholog,', gname)) {
-            rel_widths[gname] = 0.7
+            rel_widths[gname] = 0.76
         } else {
             rel_widths[gname] = 1
         }

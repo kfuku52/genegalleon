@@ -96,10 +96,7 @@ add_ortholog_column <- function(g,
   df_clade <- split_nested_clade(df_clade)
   
   # Axis label
-  xlabel <- ortholog_prefix
-  xlabel <- sub('_$', '', xlabel)
-  xlabel <- sub('_', ' ', xlabel)
-  xlabel <- paste0(xlabel, '\nclosest gene')
+  xlabel <- treevis_ortholog_axis_label(ortholog_prefix)
   
   gname <- paste0('ortholog,', ortholog_prefix)
   

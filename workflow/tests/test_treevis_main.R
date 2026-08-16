@@ -42,14 +42,26 @@ if (!identical(wrapped_site_xlab, "Recoded\nstate\n(dayhoff6)")) stop("treevis_w
 if (!treevis_should_wrap_site_axis_label("Amino acid position (aa)", c(130, 323))) stop("Narrow site panels should wrap long x-axis labels.")
 if (treevis_should_wrap_site_axis_label("Amino acid position (aa)", seq_len(12))) stop("Wide site panels should keep x-axis labels unwrapped.")
 
-# 2d) read_site_state_alignment: recoded symbols are preserved as plain characters.
+# 2d) Ortholog panels reserve enough width for abbreviated labels and wrap every axis-label word.
+g_ortholog <- list(tree = ggplot(), "ortholog,Arabidopsis_thaliana_" = ggplot())
+w_ortholog <- get_rel_widths(g_ortholog, "")
+expected_ortholog_width <- 0.76 / (1.5 + 0.76)
+if (abs(unname(w_ortholog["ortholog,Arabidopsis_thaliana_"]) - expected_ortholog_width) > 1e-9) {
+  stop("get_rel_widths should allocate the expanded default width to ortholog panels.")
+}
+expected_ortholog_xlab <- "Arabidopsis\nthaliana\nclosest\ngene"
+if (!identical(treevis_ortholog_axis_label("Arabidopsis_thaliana_"), expected_ortholog_xlab)) {
+  stop("treevis_ortholog_axis_label should put every word on its own line.")
+}
+
+# 2e) read_site_state_alignment: recoded symbols are preserved as plain characters.
 site_state_fasta <- tempfile(fileext = ".fa")
 writeLines(c(">g1", "ABZ09", ">g2", "CFY18"), site_state_fasta)
 site_state_tidy <- read_site_state_alignment(site_state_fasta)
 if (!all(colnames(site_state_tidy) == c("name", "position", "character"))) stop("read_site_state_alignment returned unexpected columns.")
 if (!all(c("B", "Z", "0", "9") %in% site_state_tidy$character)) stop("read_site_state_alignment should preserve recoded symbols.")
 
-# 2e) treevis_tidy_msa: ggmsa-free alignment tidying preserves names, positions, and characters.
+# 2f) treevis_tidy_msa: ggmsa-free alignment tidying preserves names, positions, and characters.
 aa_tidy <- treevis_tidy_msa(list(g1 = c("A", "d", "-"), g2 = "CEG"))
 if (!all(colnames(aa_tidy) == c("name", "position", "character"))) stop("treevis_tidy_msa returned unexpected columns.")
 if (!all(aa_tidy$character %in% c("A", "D", "-", "C", "E", "G"))) stop("treevis_tidy_msa should uppercase amino-acid symbols.")
