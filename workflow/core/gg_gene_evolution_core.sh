@@ -1940,6 +1940,7 @@ else
 fi
 
 task="Query fasta generation"
+if [[ "${mode_gene_evolution}" == "query2family" ]]; then
 query_fasta_needs_update=0
 query_fasta_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.query_fasta.json"
@@ -2041,6 +2042,9 @@ if [[ ${query_fasta_needs_update} -eq 1 && ${run_extract_query_fasta} -eq 1 ]]; 
     fi
   fi
   gg_artifact_record "${query_fasta_provenance_args[@]}"
+else
+  gg_step_skip "${task}"
+fi
 else
   gg_step_skip "${task}"
 fi
@@ -3386,7 +3390,7 @@ gg_artifact_prepare_stage orthogroup_extraction_needs_update run_orthogroup_extr
 if [[ ${run_orthogroup_extraction} -eq 1 ]]; then
   run_orthogroup_extraction_original=1
 fi
-if [[ ${orthogroup_extraction_needs_update} -eq 1 && ${run_orthogroup_extraction} -eq 1 ]]; then
+if [[ "${mode_gene_evolution}" == "query2family" && ${orthogroup_extraction_needs_update} -eq 1 && ${run_orthogroup_extraction} -eq 1 ]]; then
   gg_step_start "${task}"
 
   if [[ "$(head -c 1 "${file_query_gene}")" == ">" ]]; then
