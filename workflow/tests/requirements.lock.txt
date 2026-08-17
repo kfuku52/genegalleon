@@ -3,7 +3,7 @@
 # Regenerate intentionally after validating the new set in a GeneGalleon container.
 pytest==9.1.1
 PyYAML==6.0.3
-ruff==0.15.22
+ruff==0.16.1
 numpy==1.26.4
 pandas==3.0.5
 biopython==1.88
