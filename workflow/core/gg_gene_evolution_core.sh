@@ -5950,7 +5950,7 @@ fi
 task="summary statistics"
 summary_input_files=(
   "${species_tree_pruned}"
-  "${file_og_primary_fasta}"
+  "${file_og_untrimmed_aln_analysis}"
   "${file_og_trimmed_aln_analysis}"
   "${file_og_unrooted_tree_analysis}"
   "${file_og_rooted_tree_analysis}"
@@ -6133,14 +6133,14 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
   else
     generax2orthogroup_statistics=${file_og_generax_nhx}
   fi
-  summary_unaligned_fasta="PLACEHOLDER"
+  summary_untrimmed_fasta="PLACEHOLDER"
   summary_trimmed_fasta="PLACEHOLDER"
   summary_promoter_fasta="PLACEHOLDER"
   summary_tmp_files=()
-  if [[ -s "${file_og_primary_fasta}" ]]; then
-    summary_unaligned_fasta="${og_id}.summary.unaligned.fasta"
-    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${summary_unaligned_fasta}"
-    summary_tmp_files+=("${summary_unaligned_fasta}")
+  if [[ -s "${file_og_untrimmed_aln_analysis}" ]]; then
+    summary_untrimmed_fasta="${og_id}.summary.untrimmed.fasta"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${summary_untrimmed_fasta}"
+    summary_tmp_files+=("${summary_untrimmed_fasta}")
   fi
   if [[ -s "${file_og_trimmed_aln_analysis}" ]]; then
     summary_trimmed_fasta="${og_id}.summary.trimmed.fasta"
@@ -6155,8 +6155,8 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
 
   python "${gg_support_dir}/orthogroup_statistics.py" \
     --species_tree "${species_tree_pruned}" \
-    --unaligned_aln "${summary_unaligned_fasta}" \
-    --trimal_aln "${summary_trimmed_fasta}" \
+    --untrimmed_aln "${summary_untrimmed_fasta}" \
+    --trimmed_aln "${summary_trimmed_fasta}" \
     --unrooted_tree "${file_og_unrooted_tree_analysis}" \
     --rooted_tree "${file_og_rooted_tree_analysis}" \
     --rooting_log "${file_og_rooted_log}" \

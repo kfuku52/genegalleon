@@ -15,8 +15,13 @@ def test_gene_evolution_core_passes_uniprot_metadata_and_synteny_to_summary():
     text = read_text(GENE_EVOLUTION_CORE)
     assert '--uniprot_meta_tsv "${uniprot_meta_tsv}"' in text
     assert '--synteny "${file_og_synteny}"' in text
-    assert 'summary_unaligned_fasta="${og_id}.summary.unaligned.fasta"' in text
-    assert 'seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${summary_unaligned_fasta}"' in text
+    assert 'summary_untrimmed_fasta="${og_id}.summary.untrimmed.fasta"' in text
+    assert (
+        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" '
+        '--out-file "${summary_untrimmed_fasta}"' in text
+    )
+    assert '--untrimmed_aln "${summary_untrimmed_fasta}"' in text
+    assert '--trimmed_aln "${summary_trimmed_fasta}"' in text
     assert 'synteny_source_dir="${dir_sp_cds}"' in text
     assert '--input_sequence_mode "${synteny_sequence_mode}"' in text
     assert 'if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then' in text

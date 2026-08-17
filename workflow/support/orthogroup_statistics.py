@@ -100,52 +100,11 @@ def node_is_root(node):
     return bool(node.is_root)
 
 
-def get_unaligned_fasta_stats(path):
-    """Return sequence-count and length statistics for a possibly ragged FASTA."""
-    sequence_lengths_with_gaps = []
-    sequence_lengths = []
-    sequence_length_with_gaps = 0
-    sequence_length = 0
-    has_sequence = False
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            for line in handle:
-                if line.startswith(">"):
-                    if has_sequence:
-                        sequence_lengths_with_gaps.append(sequence_length_with_gaps)
-                        sequence_lengths.append(sequence_length)
-                    sequence_length_with_gaps = 0
-                    sequence_length = 0
-                    has_sequence = True
-                    continue
-                sequence_line = line.strip()
-                if not sequence_line:
-                    continue
-                if not has_sequence:
-                    raise ValueError("unaligned FASTA must contain header lines starting with '>'")
-                sequence_length_with_gaps += len(sequence_line)
-                sequence_length += len(sequence_line) - sequence_line.count("-")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise ValueError(f"Failed to read unaligned FASTA: {path}") from exc
-
-    if has_sequence:
-        sequence_lengths_with_gaps.append(sequence_length_with_gaps)
-        sequence_lengths.append(sequence_length)
-    if len(sequence_lengths_with_gaps) == 0:
-        return {"num_site": 0, "num_seq": 0, "len_max": 0, "len_min": 0}
-    return {
-        "num_site": max(sequence_lengths_with_gaps),
-        "num_seq": len(sequence_lengths),
-        "len_max": max(sequence_lengths),
-        "len_min": min(sequence_lengths),
-    }
-
-
-def collect_sequence_stats(unaligned_fasta, trimmed_alignment):
-    """Collect original raw-sequence and cleaned alignment statistics."""
+def collect_sequence_stats(untrimmed_alignment, trimmed_alignment):
+    """Collect statistics before and after alignment trimming."""
     out = {}
-    if os.path.exists(unaligned_fasta):
-        out.update({f"original_{key}": value for key, value in get_unaligned_fasta_stats(unaligned_fasta).items()})
+    if os.path.exists(untrimmed_alignment):
+        out.update({f"original_{key}": value for key, value in kfog.get_aln_stats(untrimmed_alignment).items()})
     if os.path.exists(trimmed_alignment):
         out.update({f"cleaned_{key}": value for key, value in kfog.get_aln_stats(trimmed_alignment).items()})
     return out
@@ -155,14 +114,14 @@ def build_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--species_tree", metavar="PATH", default="", type=str, help="Path used by --species_tree.")
     parser.add_argument(
-        "--unaligned_aln",
+        "--untrimmed_aln",
         metavar="PATH",
         default="",
         type=str,
-        help="Unaligned FASTA used for original sequence-length statistics.",
+        help="FASTA alignment before site trimming, used for original alignment statistics.",
     )
     parser.add_argument(
-        "--trimal_aln",
+        "--trimmed_aln",
         metavar="PATH",
         default="",
         type=str,
@@ -1576,7 +1535,7 @@ def main():
     tree_info.update(branch2tree(df_branch))
     if os.path.exists(params["dated_log"]):
         tree_info["dating_method"] = kfog.get_dating_method(params["dated_log"])
-    tree_info.update(collect_sequence_stats(params["unaligned_aln"], params["trimal_aln"]))
+    tree_info.update(collect_sequence_stats(params["untrimmed_aln"], params["trimmed_aln"]))
     if os.path.exists(params["rooting_log"]):
         tree_tmp = kfog.get_root_stats(params["rooting_log"])
         tree_info.update(tree_tmp)

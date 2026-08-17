@@ -110,34 +110,47 @@ def test_orthogroup_statistics_preserves_qualified_species_prefixes():
     assert mod.scientific_name_from_label("Dictyostelium_cf_discoideum_geneA") == "Dictyostelium cf. discoideum"
 
 
-def test_sequence_stats_accept_ragged_unaligned_fasta_and_validate_only_alignment(tmp_path, monkeypatch):
+def test_sequence_stats_validate_untrimmed_and_trimmed_alignments(tmp_path, monkeypatch):
     mod = load_module()
-    unaligned = tmp_path / "original.fasta"
-    unaligned.write_text(">geneA\nAAAAA\n>geneB\nA-A\nA\n", encoding="utf-8")
+    untrimmed = tmp_path / "untrimmed.fasta"
+    untrimmed.write_text(">geneA\nAAAAA\n>geneB\nA-AA-\n", encoding="utf-8")
     trimmed = tmp_path / "cleaned.fasta"
-    trimmed.write_text(">geneA\nAAAA\n>geneB\nA-AA\n", encoding="utf-8")
+    trimmed.write_text(">geneA\nAAA\n>geneB\nA-A\n", encoding="utf-8")
 
     alignment_calls = []
 
     def strict_alignment_stats(path):
         alignment_calls.append(path)
-        return {"num_site": 4, "num_seq": 2, "len_max": 4, "len_min": 3}
+        if path == str(untrimmed):
+            return {"num_site": 5, "num_seq": 2, "len_max": 5, "len_min": 3}
+        return {"num_site": 3, "num_seq": 2, "len_max": 3, "len_min": 2}
 
     monkeypatch.setattr(mod.kfog, "get_aln_stats", strict_alignment_stats, raising=False)
 
-    out = mod.collect_sequence_stats(str(unaligned), str(trimmed))
+    out = mod.collect_sequence_stats(str(untrimmed), str(trimmed))
 
-    assert alignment_calls == [str(trimmed)]
+    assert alignment_calls == [str(untrimmed), str(trimmed)]
     assert out == {
         "original_num_site": 5,
         "original_num_seq": 2,
         "original_len_max": 5,
         "original_len_min": 3,
-        "cleaned_num_site": 4,
+        "cleaned_num_site": 3,
         "cleaned_num_seq": 2,
-        "cleaned_len_max": 4,
-        "cleaned_len_min": 3,
+        "cleaned_len_max": 3,
+        "cleaned_len_min": 2,
     }
+
+
+def test_sequence_stats_parser_names_alignment_inputs_explicitly():
+    mod = load_module()
+
+    args = mod.build_arg_parser().parse_args(["--untrimmed_aln", "before.fa", "--trimmed_aln", "after.fa"])
+
+    assert args.untrimmed_aln == "before.fa"
+    assert args.trimmed_aln == "after.fa"
+    assert not hasattr(args, "unaligned_aln")
+    assert not hasattr(args, "trimal_aln")
 
 
 def test_new_unrooted_tree_preserves_numeric_iqtree_support():

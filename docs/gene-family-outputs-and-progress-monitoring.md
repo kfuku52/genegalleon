@@ -630,6 +630,10 @@ Practical interpretation:
 
 `stat.branch.tsv` is the master table that collects per-branch and per-tip
 annotations for plotting. `stat.tree.tsv` is the paired tree-level summary.
+Its `original_num_site` and `cleaned_num_site` fields are the alignment-column
+counts before and after site trimming, respectively. The corresponding
+`original_num_seq`, `original_len_*`, `cleaned_num_seq`, and `cleaned_len_*`
+fields likewise summarize the untrimmed and trimmed analysis alignments.
 See [Example Plots](example-plots.md) for a compact generated tree-plot
 example from the bundled quick-start data.
 
