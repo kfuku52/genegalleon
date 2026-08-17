@@ -182,6 +182,9 @@ ARG BUSCO_REPO_SHA=""
 ARG KFL1OU_REPO_URL="https://github.com/kfuku52/kfl1ou.git"
 ARG KFL1OU_REPO_REF=""
 ARG KFL1OU_REPO_SHA=""
+ARG KFFRACTBIAS_REPO_URL="https://github.com/kfuku52/kfFractBias.git"
+ARG KFFRACTBIAS_REPO_REF=""
+ARG KFFRACTBIAS_REPO_SHA=""
 ARG KFTOOLS_REPO_URL="https://github.com/kfuku52/kftools.git"
 ARG RKFTOOLS_REPO_URL="https://github.com/kfuku52/rkftools.git"
 ARG RADTE_REPO_URL="https://github.com/kfuku52/RADTE.git"
@@ -210,6 +213,7 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && busco_repo_ref="${BUSCO_REPO_REF:-${GG_SOURCE_BUSCO_REPO_REF}}" \
  && paml_repo_ref="${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}" \
  && kfl1ou_repo_ref="${KFL1OU_REPO_REF:-${GG_SOURCE_KFL1OU_REPO_REF}}" \
+ && kffractbias_repo_ref="${KFFRACTBIAS_REPO_REF:-${GG_SOURCE_KFFRACTBIAS_REPO_REF}}" \
  && kftools_repo_ref="${KFTOOLS_REPO_REF:-${GG_SOURCE_KFTOOLS_REPO_REF}}" \
  && rkftools_repo_ref="${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}" \
  && radte_repo_ref="${RADTE_REPO_REF:-${GG_SOURCE_RADTE_REPO_REF}}" \
@@ -218,6 +222,7 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && csubst_repo_sha="${KFU52_CSUBST_REPO_SHA:-}" \
  && nwkit_repo_sha="${KFU52_NWKIT_REPO_SHA:-}" \
  && kfl1ou_repo_sha="${KFL1OU_REPO_SHA:-}" \
+ && kffractbias_repo_sha="${KFFRACTBIAS_REPO_SHA:-}" \
  && kftools_repo_sha="${KFTOOLS_REPO_SHA:-}" \
  && rkftools_repo_sha="${RKFTOOLS_REPO_SHA:-}" \
  && radte_repo_sha="${RADTE_REPO_SHA:-}" \
@@ -226,6 +231,7 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && csubst_source_ref="${csubst_repo_sha:-${csubst_repo_ref}}" \
  && nwkit_source_ref="${nwkit_repo_sha:-${nwkit_repo_ref}}" \
  && kfl1ou_source_ref="${kfl1ou_repo_sha:-${kfl1ou_repo_ref}}" \
+ && kffractbias_source_ref="${kffractbias_repo_sha:-${kffractbias_repo_ref}}" \
  && busco_source_ref="${BUSCO_REPO_SHA:-${busco_repo_ref}}" \
  && paml_source_ref="${PAML_REPO_SHA:-${paml_repo_ref}}" \
  && kftools_source_ref="${kftools_repo_sha:-${kftools_repo_ref}}" \
@@ -256,6 +262,10 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && /opt/pg/scripts/fetch_git_repo.sh "${KFTOOLS_REPO_URL}" "${kftools_source_ref}" /tmp/kftools \
  && micromamba run -n base pip install --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/kftools \
  && rm -rf /tmp/kftools \
+ && rm -rf /tmp/kffractbias \
+ && /opt/pg/scripts/fetch_git_repo.sh "${KFFRACTBIAS_REPO_URL}" "${kffractbias_source_ref}" /tmp/kffractbias \
+ && micromamba run -n base pip install --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/kffractbias \
+ && rm -rf /tmp/kffractbias \
  && /opt/pg/scripts/install_helvetica_compat_font.sh base \
  && rm -rf /tmp/rkftools \
  && /opt/pg/scripts/fetch_git_repo.sh "${RKFTOOLS_REPO_URL}" "${rkftools_source_ref}" /tmp/rkftools \
@@ -278,6 +288,7 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
       BUSCO "${busco_source_ref}" \
       paml "${paml_source_ref}" \
       kfl1ou "${kfl1ou_source_ref}" \
+      kfFractBias "${kffractbias_source_ref}" \
       kftools "${kftools_source_ref}" \
       rkftools "${rkftools_source_ref}" \
       RADTE "${radte_source_ref}" \

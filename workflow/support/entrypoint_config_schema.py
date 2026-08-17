@@ -18,6 +18,7 @@ ASSIGNMENT_RE = re.compile(r"^([a-z][a-z0-9_]*)=(.*?)(?:\s+#\s*(.*))?$")
 COMMON_RE = re.compile(r'^: "\$\{(GG_COMMON_[A-Z0-9_]+):=(.*)\}"\s+#\s*(.*)$')
 CHOICES_RE = re.compile(r"\{([^{}]+)\}")
 PREFIXES = {
+    "gg_fractionation_bias_entrypoint.sh": "GG_FRACTIONATION_BIAS_",
     "gg_input_generation_entrypoint.sh": "GG_INPUT_",
     "gg_transcriptome_generation_entrypoint.sh": "GG_TRANSCRIPTOME_",
     "gg_genome_annotation_entrypoint.sh": "GG_GENOME_ANNOTATION_",

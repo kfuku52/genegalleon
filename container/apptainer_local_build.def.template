@@ -60,6 +60,9 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     kfl1ou_repo_url="@@KFL1OU_REPO_URL@@"
     kfl1ou_repo_ref="@@KFL1OU_REPO_REF@@"
     kfl1ou_repo_sha="@@KFL1OU_REPO_SHA@@"
+    kffractbias_repo_url="@@KFFRACTBIAS_REPO_URL@@"
+    kffractbias_repo_ref="@@KFFRACTBIAS_REPO_REF@@"
+    kffractbias_repo_sha="@@KFFRACTBIAS_REPO_SHA@@"
     kftools_repo_url="@@KFTOOLS_REPO_URL@@"
     rkftools_repo_url="@@RKFTOOLS_REPO_URL@@"
     radte_repo_url="@@RADTE_REPO_URL@@"
@@ -167,6 +170,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     nwkit_source_ref="${kfu52_nwkit_repo_sha:-${kfu52_nwkit_repo_ref}}"
     paml_source_ref="${paml_repo_sha:-${paml_repo_ref}}"
     kfl1ou_source_ref="${kfl1ou_repo_sha:-${kfl1ou_repo_ref}}"
+    kffractbias_source_ref="${kffractbias_repo_sha:-${kffractbias_repo_ref}}"
     kftools_source_ref="${kftools_repo_sha:-${kftools_repo_ref}}"
     rkftools_source_ref="${rkftools_repo_sha:-${rkftools_repo_ref}}"
     radte_source_ref="${radte_repo_sha:-${radte_repo_ref}}"
@@ -193,6 +197,11 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     /opt/pg/scripts/fetch_git_repo.sh "${kftools_repo_url}" "${kftools_source_ref}" /tmp/kftools
     micromamba run -n base pip install --no-cache-dir --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/kftools
     rm -rf /tmp/kftools
+
+    rm -rf /tmp/kffractbias
+    /opt/pg/scripts/fetch_git_repo.sh "${kffractbias_repo_url}" "${kffractbias_source_ref}" /tmp/kffractbias
+    micromamba run -n base pip install --no-cache-dir --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/kffractbias
+    rm -rf /tmp/kffractbias
     /opt/pg/scripts/install_helvetica_compat_font.sh base
 
     rm -rf /tmp/rkftools
@@ -222,6 +231,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
         BUSCO "${busco_source_ref}" \
         paml "${paml_source_ref}" \
         kfl1ou "${kfl1ou_source_ref}" \
+        kfFractBias "${kffractbias_source_ref}" \
         kftools "${kftools_source_ref}" \
         rkftools "${rkftools_source_ref}" \
         RADTE "${radte_source_ref}" \

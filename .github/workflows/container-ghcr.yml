@@ -170,6 +170,7 @@ jobs:
       busco_repo_sha: ${{ steps.vars.outputs.busco_repo_sha }}
       paml_repo_sha: ${{ steps.vars.outputs.paml_repo_sha }}
       kfl1ou_repo_sha: ${{ steps.vars.outputs.kfl1ou_repo_sha }}
+      kffractbias_repo_sha: ${{ steps.vars.outputs.kffractbias_repo_sha }}
       kftools_repo_sha: ${{ steps.vars.outputs.kftools_repo_sha }}
       rkftools_repo_sha: ${{ steps.vars.outputs.rkftools_repo_sha }}
       radte_repo_sha: ${{ steps.vars.outputs.radte_repo_sha }}
@@ -208,6 +209,7 @@ jobs:
           busco_repo_sha="$(resolve_source_sha https://gitlab.com/ezlab/busco.git "${GG_SOURCE_BUSCO_REPO_REF}")"
           paml_repo_sha="$(resolve_source_sha https://github.com/iqtree/paml.git "${GG_SOURCE_PAML_REPO_REF}")"
           kfl1ou_repo_sha="$(resolve_source_sha https://github.com/kfuku52/kfl1ou.git "${GG_SOURCE_KFL1OU_REPO_REF}")"
+          kffractbias_repo_sha="$(resolve_source_sha https://github.com/kfuku52/kfFractBias.git "${GG_SOURCE_KFFRACTBIAS_REPO_REF}")"
           kftools_repo_sha="$(resolve_source_sha https://github.com/kfuku52/kftools.git "${GG_SOURCE_KFTOOLS_REPO_REF}")"
           rkftools_repo_sha="$(resolve_source_sha https://github.com/kfuku52/rkftools.git "${GG_SOURCE_RKFTOOLS_REPO_REF}")"
           radte_repo_sha="$(resolve_source_sha https://github.com/kfuku52/RADTE.git "${GG_SOURCE_RADTE_REPO_REF}")"
@@ -220,6 +222,7 @@ jobs:
               "${busco_repo_sha}" \
               "${paml_repo_sha}" \
               "${kfl1ou_repo_sha}" \
+              "${kffractbias_repo_sha}" \
               "${kftools_repo_sha}" \
               "${rkftools_repo_sha}" \
               "${radte_repo_sha}" \
@@ -240,6 +243,7 @@ jobs:
             echo "busco_repo_sha=${busco_repo_sha}"
             echo "paml_repo_sha=${paml_repo_sha}"
             echo "kfl1ou_repo_sha=${kfl1ou_repo_sha}"
+            echo "kffractbias_repo_sha=${kffractbias_repo_sha}"
             echo "kftools_repo_sha=${kftools_repo_sha}"
             echo "rkftools_repo_sha=${rkftools_repo_sha}"
             echo "radte_repo_sha=${radte_repo_sha}"
@@ -291,6 +295,7 @@ jobs:
           BUSCO_REPO_SHA: ${{ needs.prepare-build.outputs.busco_repo_sha }}
           PAML_REPO_SHA: ${{ needs.prepare-build.outputs.paml_repo_sha }}
           KFL1OU_REPO_SHA: ${{ needs.prepare-build.outputs.kfl1ou_repo_sha }}
+          KFFRACTBIAS_REPO_SHA: ${{ needs.prepare-build.outputs.kffractbias_repo_sha }}
           KFTOOLS_REPO_SHA: ${{ needs.prepare-build.outputs.kftools_repo_sha }}
           RKFTOOLS_REPO_SHA: ${{ needs.prepare-build.outputs.rkftools_repo_sha }}
           RADTE_REPO_SHA: ${{ needs.prepare-build.outputs.radte_repo_sha }}
@@ -335,6 +340,8 @@ jobs:
             PAML_REPO_SHA=${{ needs.prepare-build.outputs.paml_repo_sha }}
             KFL1OU_REPO_REF=main
             KFL1OU_REPO_SHA=${{ needs.prepare-build.outputs.kfl1ou_repo_sha }}
+            KFFRACTBIAS_REPO_REF=master
+            KFFRACTBIAS_REPO_SHA=${{ needs.prepare-build.outputs.kffractbias_repo_sha }}
             KFTOOLS_REPO_SHA=${{ needs.prepare-build.outputs.kftools_repo_sha }}
             RKFTOOLS_REPO_SHA=${{ needs.prepare-build.outputs.rkftools_repo_sha }}
             RADTE_REPO_SHA=${{ needs.prepare-build.outputs.radte_repo_sha }}

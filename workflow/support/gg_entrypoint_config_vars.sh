@@ -5,6 +5,13 @@ gg_print_entrypoint_config_vars() {
   local entrypoint_name=${1:-}
 
   case "${entrypoint_name}" in
+    gg_fractionation_bias_entrypoint.sh)
+      cat <<'EOF'
+delete_tmp_dir
+kffractbias_pairs_file
+run_kffractbias
+EOF
+      ;;
     gg_gene_summary_entrypoint.sh)
       cat <<'EOF'
 csubst_site_arity_range

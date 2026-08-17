@@ -1,0 +1,2 @@
+analysis_id	target_species	query_species	quota	window_size	step_size	denominator	target_seqids	query_seqids	exclude_seqid_regex	cscore	aligner	target_feature	target_attribute	query_feature	query_attribute	minimum_mapping_fraction
+sorghum_maize	Sorghum_bicolor	Zea_mays	1:2	100	1	all				0.7	last					0.5

@@ -38,6 +38,9 @@ PAML_REPO_SHA=${PAML_REPO_SHA:-}
 KFL1OU_REPO_URL=${KFL1OU_REPO_URL:-https://github.com/kfuku52/kfl1ou.git}
 KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-${GG_SOURCE_KFL1OU_REPO_REF}}
 KFL1OU_REPO_SHA=${KFL1OU_REPO_SHA:-}
+KFFRACTBIAS_REPO_URL=${KFFRACTBIAS_REPO_URL:-https://github.com/kfuku52/kfFractBias.git}
+KFFRACTBIAS_REPO_REF=${KFFRACTBIAS_REPO_REF:-${GG_SOURCE_KFFRACTBIAS_REPO_REF}}
+KFFRACTBIAS_REPO_SHA=${KFFRACTBIAS_REPO_SHA:-}
 KFTOOLS_REPO_URL=${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}
 RKFTOOLS_REPO_URL=${RKFTOOLS_REPO_URL:-https://github.com/kfuku52/rkftools.git}
 RADTE_REPO_URL=${RADTE_REPO_URL:-https://github.com/kfuku52/RADTE.git}
@@ -107,6 +110,7 @@ resolve_source_sha KFU52_NWKIT_REPO_SHA https://github.com/kfuku52/nwkit.git "${
 resolve_source_sha BUSCO_REPO_SHA "${BUSCO_REPO_URL}" "${BUSCO_REPO_REF}" BUSCO
 resolve_source_sha PAML_REPO_SHA "${PAML_REPO_URL}" "${PAML_REPO_REF}" paml
 resolve_source_sha KFL1OU_REPO_SHA "${KFL1OU_REPO_URL}" "${KFL1OU_REPO_REF}" kfl1ou
+resolve_source_sha KFFRACTBIAS_REPO_SHA "${KFFRACTBIAS_REPO_URL}" "${KFFRACTBIAS_REPO_REF}" kfFractBias
 resolve_source_sha KFTOOLS_REPO_SHA "${KFTOOLS_REPO_URL}" "${KFTOOLS_REPO_REF}" kftools
 resolve_source_sha RKFTOOLS_REPO_SHA "${RKFTOOLS_REPO_URL}" "${RKFTOOLS_REPO_REF}" rkftools
 resolve_source_sha RADTE_REPO_SHA "${RADTE_REPO_URL}" "${RADTE_REPO_REF}" RADTE
@@ -207,6 +211,9 @@ run_build() {
     --build-arg KFL1OU_REPO_URL="${KFL1OU_REPO_URL}" \
     --build-arg KFL1OU_REPO_REF="${KFL1OU_REPO_REF}" \
     --build-arg KFL1OU_REPO_SHA="${KFL1OU_REPO_SHA}" \
+    --build-arg KFFRACTBIAS_REPO_URL="${KFFRACTBIAS_REPO_URL}" \
+    --build-arg KFFRACTBIAS_REPO_REF="${KFFRACTBIAS_REPO_REF}" \
+    --build-arg KFFRACTBIAS_REPO_SHA="${KFFRACTBIAS_REPO_SHA}" \
     --build-arg KFTOOLS_REPO_URL="${KFTOOLS_REPO_URL}" \
     --build-arg RKFTOOLS_REPO_URL="${RKFTOOLS_REPO_URL}" \
     --build-arg RADTE_REPO_URL="${RADTE_REPO_URL}" \

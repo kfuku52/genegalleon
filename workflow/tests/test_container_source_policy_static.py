@@ -10,6 +10,7 @@ PROGRAM_SHA_VARS = (
     "BUSCO_REPO_SHA",
     "PAML_REPO_SHA",
     "KFL1OU_REPO_SHA",
+    "KFFRACTBIAS_REPO_SHA",
     "KFTOOLS_REPO_SHA",
     "RKFTOOLS_REPO_SHA",
     "RADTE_REPO_SHA",
@@ -61,9 +62,9 @@ def test_all_container_build_paths_resolve_one_snapshot_per_build():
     assert 'ARG KFU52_AMALGKIT_REPO_REF=""' in dockerfile
     assert 'ARG KFU52_CSUBST_REPO_REF=""' in dockerfile
     assert 'ARG KFL1OU_REPO_REF=""' in dockerfile
-    assert buildx.count("resolve_source_sha ") == 10
-    assert apptainer.count("resolve_source_sha ") == 10
-    for source in ("amalgkit", "cdskit", "csubst", "nwkit", "BUSCO", "paml", "kfl1ou", "kftools", "rkftools", "RADTE"):
+    assert buildx.count("resolve_source_sha ") == 11
+    assert apptainer.count("resolve_source_sha ") == 11
+    for source in ("amalgkit", "cdskit", "csubst", "nwkit", "BUSCO", "paml", "kfl1ou", "kfFractBias", "kftools", "rkftools", "RADTE"):
         assert f" {source}" in buildx
         assert f" {source}" in apptainer
     assert "> /opt/pg/logs/source_revisions.tsv" in dockerfile
@@ -111,6 +112,7 @@ def test_native_apptainer_build_records_source_revisions():
         "BUSCO",
         "paml",
         "kfl1ou",
+        "kfFractBias",
         "kftools",
         "rkftools",
         "RADTE",

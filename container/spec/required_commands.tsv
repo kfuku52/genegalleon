@@ -17,6 +17,9 @@ base	grampa.py
 base	iqtree3
 base	jellyfish
 base	kallisto
+base	kffractbias
+base	lastal
+base	lastdb
 base	mafft
 base	makeblastdb
 base	mapnh

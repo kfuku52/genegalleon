@@ -180,6 +180,7 @@ ordered_steps=(
   "gg_input_generation|gg_input_generation_entrypoint.sh|"
   "gg_transcriptome_generation|gg_transcriptome_generation_entrypoint.sh|"
   "gg_genome_annotation|gg_genome_annotation_entrypoint.sh|"
+  "gg_fractionation_bias|gg_fractionation_bias_entrypoint.sh|run_kffractbias=0"
   "gg_genome_evolution|gg_genome_evolution_entrypoint.sh|"
   "gg_gene_evolution_mode_orthogroup|gg_gene_evolution_entrypoint.sh|mode_gene_evolution=orthogroup run_hyphy_relax=0 run_hyphy_relax_reversed=0"
   "gg_gene_evolution_mode_query2family|gg_gene_evolution_entrypoint.sh|mode_gene_evolution=query2family run_hyphy_relax=0 run_hyphy_relax_reversed=0"

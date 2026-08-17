@@ -176,6 +176,55 @@ Notable defaults:
 - `cdskit_localize_organism_group="auto"` infers plant/non-plant mode from `busco_lineage` where possible,
 - `run_multispecies_summary=1` by default.
 
+### `gg_fractionation_bias_entrypoint.sh`
+
+Runs fully local pairwise fractionation-bias analyses with
+[`kfFractBias`](https://github.com/kfuku52/kfFractBias). Each scheduler array
+task selects one data row from
+`workspace/input/fractionation_bias_pairs.tsv`, resolves that row's target and
+query files from `workspace/input/species_cds` and
+`workspace/input/species_gff`, and runs `kffractbias compare`. The analysis
+uses local JCVI MCscan, LAST (or BLAST), and QUOTA-ALIGN; it does not contact
+CoGe or another analysis service at runtime.
+
+Required TSV columns:
+
+- `analysis_id`: unique output-safe identifier,
+- `target_species` and `query_species`: GeneGalleon species labels matching
+  the corresponding CDS and GFF filenames,
+- `quota`: explicit target:query syntenic depth such as `1:2`.
+
+Optional columns and defaults are:
+`window_size=100`, `step_size=1`, `denominator=all`, empty
+`target_seqids`, empty `query_seqids`, empty `exclude_seqid_regex`,
+`cscore=0.7`, `aligner=last`, empty target/query GFF feature and attribute
+overrides, and `minimum_mapping_fraction=0.5`. Feature and attribute overrides
+must be supplied as a pair. A complete template is available at
+`workspace/input/fractionation_bias_pairs.example.tsv`.
+
+For a row whose `analysis_id` is `sorghum_maize`, outputs are written below
+`workspace/output/kffractbias/sorghum_maize/`:
+
+- `sorghum_maize.genes.tsv`: one row per analyzed target gene and query
+  sequence combination,
+- `sorghum_maize.windows.tsv`: sliding-window retention statistics,
+- `sorghum_maize.summary.json`: parameters, counts, hashes, and metadata,
+- `sorghum_maize.plot.pdf` and `sorghum_maize.plot.png`,
+- `sorghum_maize.synteny.zip`: the local JCVI working data needed to inspect
+  or reproduce the retained synteny result.
+
+Set each scheduler's array range to the number of data rows in the TSV. For a
+single local row, the default is sufficient:
+
+```bash
+cp workspace/input/fractionation_bias_pairs.example.tsv \
+  workspace/input/fractionation_bias_pairs.tsv
+bash workflow/gg_fractionation_bias_entrypoint.sh
+```
+
+`artifact_stale_policy` applies in the same way as other GeneGalleon stages;
+the six published outputs are replaced as one recoverable transaction.
+
 ### `gg_genome_evolution_entrypoint.sh`
 
 Purpose:

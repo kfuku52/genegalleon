@@ -127,6 +127,7 @@ def test_container_defaults_install_program_sources_from_moving_branches():
         "BUSCO_REPO_SHA",
         "PAML_REPO_SHA",
         "KFL1OU_REPO_SHA",
+        "KFFRACTBIAS_REPO_SHA",
         "KFTOOLS_REPO_SHA",
         "RKFTOOLS_REPO_SHA",
         "RADTE_REPO_SHA",
