@@ -268,16 +268,27 @@ for (col in unlist(args[grep("^panel", names(args))])) {
     trait_prefix = strsplit(col, ',')[[1]][5]
     trait_label = ifelse(length(strsplit(col, ',')[[1]]) >= 6, strsplit(col, ',')[[1]][6], 'Expression')
     df_trait = get_df_trait(b, transform, scale, trait_prefix)
-    df_trait = merge_replicates(trait_table = df_trait, replicate_sep = replicate_sep)
+    if (ncol(df_trait) > 0L) {
+      df_trait = merge_replicates(trait_table = df_trait, replicate_sep = replicate_sep)
+    }
     args[['trait_colors']] = get_trait_colors(ncol(df_trait), method = 'continuous')
-    g = add_heatmap_column(g, args, df_trait, fill_label = trait_label)
+    g = add_heatmap_column(
+      g,
+      args,
+      df_trait,
+      fill_label = trait_label,
+      gname = paste0('heatmap,', trait_prefix)
+    )
   } else if (grepl('^pointplot', col)) {
     transform = strsplit(col, ',')[[1]][2]
     scale = strsplit(col, ',')[[1]][3]
     replicate_sep = strsplit(col, ',')[[1]][4]
     trait_prefix = strsplit(col, ',')[[1]][5]
     df_trait = get_df_trait(b, transform, scale, trait_prefix)
-    num_color = ncol(merge_replicates(trait_table = df_trait, replicate_sep = replicate_sep))
+    num_color = 0L
+    if (ncol(df_trait) > 0L) {
+      num_color = ncol(merge_replicates(trait_table = df_trait, replicate_sep = replicate_sep))
+    }
     args[['trait_colors']] = get_trait_colors(num_color, method = 'continuous')
     g = add_pointplot_column(g, args, df_trait, replicate_sep)
   } else if (grepl('^tiplabel', col)) {

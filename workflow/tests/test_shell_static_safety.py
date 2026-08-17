@@ -578,6 +578,18 @@ def test_detect_ou_shift_kfl1ou_enables_measurement_error_by_default():
     assert "input_error = input_error_fit" in text
 
 
+def test_expression_matrix_allows_a_valid_no_data_result():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    block_start = text.index('task="Expression matrix preparation"')
+    block_end = text.index('task="Promoter fasta generation"', block_start)
+    expression_block = text[block_start:block_end]
+
+    assert '--optional-output "expression_matrix=${file_og_expression}"' in expression_block
+    assert '--output "expression_matrix=${file_og_expression}"' not in expression_block
+    assert 'rm -f -- "${file_og_expression}" expression_matrix.tsv' in expression_block
+
+
 def test_gene_evolution_core_uses_explicit_ne_and_grouped_logic_for_tree_pruning_gate():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)

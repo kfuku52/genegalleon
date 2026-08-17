@@ -20,6 +20,7 @@ tree = ape::read.tree(args[['file_tree']])
 trait = read.table(args[['file_trait']], header=TRUE, sep='\t')
 trait[,'species'] = sub(' ', '_', trait[,'species'])
 exp = read.table(args[['file_exp']], header=TRUE, sep='\t')
+expression_bases = get_expression_bases(exp, args[['replicate_sep']])
 if (args[['merge_replicates']]=='yes') {
     cat('Expression replicates will be merged. Within-species variation will not be taken into account.\n')
     rownames(exp) = exp[,1]
@@ -31,7 +32,6 @@ if (args[['merge_replicates']]=='yes') {
     cat('Expression replicates will not be merged. Within-species variation will be taken into account.\n')
 }
 exp = sort_exp(exp, tree)
-expression_bases = get_expression_bases(exp, args[['replicate_sep']])
 output_cols = c("R2", "R2adj", "sigma", "Fstat", "pval", "logLik", "AIC", "BIC", "PCC", "p.adj", "trait", "variable", "fit_mode")
 
 #extract trait names

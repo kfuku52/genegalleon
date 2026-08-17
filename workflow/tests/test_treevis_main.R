@@ -130,6 +130,23 @@ trait <- get_df_trait(b, transform = "no", scale = "rel", trait_prefix = "expres
 if (any(is.infinite(as.matrix(trait)))) stop("get_df_trait generated Inf values.")
 if (any(is.nan(as.matrix(trait)))) stop("get_df_trait generated NaN values.")
 
+# 3b) get_df_trait: undefined logarithms should become missing values before
+# replicate processing rather than reaching rkftools as non-finite values.
+b_log <- data.frame(
+  so_event = c("L", "L"),
+  node_name = c("n1", "n2"),
+  expression_A_rep1 = c(0, 1),
+  expression_A_rep2 = c(0, 4),
+  stringsAsFactors = FALSE
+)
+trait_log <- get_df_trait(b_log, transform = "log2", scale = "abs", trait_prefix = "expression_", negative2zero = TRUE)
+if (any(!is.finite(as.matrix(trait_log)[!is.na(as.matrix(trait_log))]))) {
+  stop("get_df_trait should replace non-finite transformed values with NA.")
+}
+trait_log_merged <- rkftools::merge_replicates(trait_log, "_")
+if (!is.na(trait_log_merged["n1", "A"])) stop("Undefined logarithms should remain missing after replicate merging.")
+if (abs(trait_log_merged["n2", "A"] - 1) > 1e-9) stop("Finite logarithms should be preserved during replicate merging.")
+
 # 4) get_df_N: N-slice parser returns expected rows.
 df_tip_n <- data.frame(
   promoter_N = c("1,3:5", "", NA),
@@ -304,6 +321,38 @@ df_trait_heat <- data.frame(hgt_Cand = c(1, 0), row.names = c("g1", "g2"))
 g_heatmap_out <- add_heatmap_column(g_heatmap_in, args_heat, df_trait_heat, fill_label = "HGT evidence")
 if (g_heatmap_out$heatmap$labels$fill != "HGT evidence") stop("add_heatmap_column should retain the requested fill label.")
 
+# 8ea) add_heatmap_column: independently named heatmaps should coexist and
+# retain the standard heatmap width.
+df_trait_expression <- data.frame(expression = c(2, 4), row.names = c("g1", "g2"))
+g_multi_heatmap <- add_heatmap_column(
+  g_heatmap_in,
+  args_heat,
+  df_trait_expression,
+  fill_label = "Expression",
+  gname = "heatmap,expression_"
+)
+g_multi_heatmap <- add_heatmap_column(
+  g_multi_heatmap,
+  args_heat,
+  df_trait_heat,
+  fill_label = "HGT evidence",
+  gname = "heatmap,hgt_"
+)
+if (!all(c("heatmap,expression_", "heatmap,hgt_") %in% names(g_multi_heatmap))) {
+  stop("Independently named heatmaps should coexist in the plot list.")
+}
+if (g_multi_heatmap[["heatmap,expression_"]]$labels$fill != "Expression") {
+  stop("The expression heatmap should not be overwritten by a later heatmap.")
+}
+if (g_multi_heatmap[["heatmap,hgt_"]]$labels$fill != "HGT evidence") {
+  stop("The HGT heatmap should retain its fill label.")
+}
+multi_heatmap_widths <- get_rel_widths(g_multi_heatmap, "")
+if (abs(unname(multi_heatmap_widths[["heatmap,expression_"]]) - 0.2) > 1e-9 ||
+    abs(unname(multi_heatmap_widths[["heatmap,hgt_"]]) - 0.2) > 1e-9) {
+  stop("Dynamically named heatmaps should retain the standard heatmap width.")
+}
+
 # 8f) add_text_column: values are truncated and panel is created.
 g_text_in <- list(
   tree = list(
@@ -440,6 +489,85 @@ args_hm <- list(
 )
 g_hm_na <- add_heatmap_column(g_in, args_hm, df_trait_na)
 if ("heatmap" %in% names(g_hm_na)) stop("add_heatmap_column should skip panel when all values are NA.")
+
+# 10b) stat_branch2tree_plot: missing optional traits should skip their panels,
+# while non-empty replicated traits should still render successfully.
+run_tree_plot_trait_case <- function(include_expression, heatmap_transform = "no") {
+  test_file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  if (length(test_file_arg) != 1L) stop("Unable to locate test_treevis_main.R for the tree-plot integration test.")
+  test_file <- normalizePath(sub("^--file=", "", test_file_arg[[1]]), mustWork = TRUE)
+  repo_root <- normalizePath(file.path(dirname(test_file), "..", ".."), mustWork = TRUE)
+  plot_script <- file.path(repo_root, "workflow", "support", "stat_branch2tree_plot.r")
+
+  b_plot <- data.frame(
+    branch_id = c(4L, 2L, 0L, 1L, 3L),
+    parent = c(-999L, 4L, 2L, 2L, 4L),
+    sister = c(-999L, 3L, 1L, 0L, 2L),
+    child1 = c(2L, 0L, NA, NA, NA),
+    child2 = c(3L, 1L, NA, NA, NA),
+    node_name = c("root", "n4", "g1", "g2", "g3"),
+    bl_rooted = c(0, 1, 1, 1, 2),
+    so_event = c("S", "S", "L", "L", "L"),
+    so_event_parent = rep("S", 5),
+    stringsAsFactors = FALSE
+  )
+  if (include_expression) {
+    b_plot[["expression_A_rep1"]] <- c(NA, NA, 0, 2, 3)
+    b_plot[["expression_A_rep2"]] <- c(NA, NA, 0, 4, 5)
+  }
+
+  case_dir <- tempfile(if (include_expression) "treevis-traits-" else "treevis-empty-traits-")
+  dir.create(case_dir)
+  stat_branch <- file.path(case_dir, "stat_branch.tsv")
+  write.table(b_plot, stat_branch, sep = "\t", row.names = FALSE, quote = FALSE)
+
+  old_wd <- setwd(case_dir)
+  on.exit(setwd(old_wd), add = TRUE)
+  command_args <- c(
+    plot_script,
+    paste0("--stat_branch=", stat_branch),
+    "--max_delta_intron_present=-0.5",
+    "--width=7.2",
+    "--rel_widths=",
+    "--panel1=tree,bl_rooted,no,no,L",
+    paste0("--panel2=heatmap,", heatmap_transform, ",abs,_,expression_"),
+    "--panel3=pointplot,no,rel,_,expression_",
+    "--show_branch_id=no",
+    "--event_method=species_overlap",
+    "--species_color_table=PLACEHOLDER",
+    "--pie_chart_value_transformation=identity",
+    "--long_branch_display=no"
+  )
+  output <- suppressWarnings(system2("Rscript", command_args, stdout = TRUE, stderr = TRUE))
+  status <- attr(output, "status")
+  if (is.null(status)) status <- 0L
+  if (status != 0L) {
+    stop(
+      "stat_branch2tree_plot.r failed for include_expression=", include_expression,
+      ", heatmap_transform=", heatmap_transform, ":\n", paste(output, collapse = "\n")
+    )
+  }
+  output_pdf <- file.path(case_dir, "stat_branch2tree_plot.pdf")
+  if (!file.exists(output_pdf) || is.na(file.info(output_pdf)$size) || file.info(output_pdf)$size == 0L) {
+    stop("stat_branch2tree_plot.r did not create a non-empty PDF for include_expression=", include_expression, ".")
+  }
+  if (!include_expression) {
+    output_text <- paste(output, collapse = "\n")
+    if (!grepl("Trait columns not found in the stat_branch table", output_text, fixed = TRUE)) {
+      stop("The empty-trait integration test did not exercise the missing-trait path.")
+    }
+    if (!grepl("Heatmap panel will not be added", output_text, fixed = TRUE)) {
+      stop("The empty-trait integration test did not skip the heatmap panel.")
+    }
+    if (!grepl("Pointplot panel will not be added", output_text, fixed = TRUE)) {
+      stop("The empty-trait integration test did not skip the pointplot panel.")
+    }
+  }
+}
+
+run_tree_plot_trait_case(include_expression = FALSE)
+run_tree_plot_trait_case(include_expression = TRUE)
+run_tree_plot_trait_case(include_expression = TRUE, heatmap_transform = "log2")
 
 # 11) enhance_branch_table: one subroot support should be masked.
 b_min <- data.frame(

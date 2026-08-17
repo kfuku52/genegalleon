@@ -128,7 +128,13 @@ def main():
         df_trait_all = pandas.DataFrame()
     print("Number of input genes: {:,}".format(len(seq_names)))
     print("Number of output genes with traits: {:,}".format(df_trait_all.shape[0]))
-    df_trait_all.to_csv(args.outfile, sep="\t", header=True, index=False)
+    output_path = Path(args.outfile)
+    has_trait_values = df_trait_all.shape[0] > 0 and df_trait_all.shape[1] > 1
+    if has_trait_values:
+        df_trait_all.to_csv(output_path, sep="\t", header=True, index=False)
+    else:
+        output_path.unlink(missing_ok=True)
+        print("No usable trait matrix was generated. The output file will be omitted.")
     print("get_trait_matrix.py done!")
 
 

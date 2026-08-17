@@ -263,6 +263,11 @@ get_df_trait = function(b, transform, scale, trait_prefix, negative2zero=TRUE) {
     } else {
         cat('Trait data are not transformed.', '\n')
     }
+    non_finite = !is.finite(as.matrix(df_trait))
+    if (any(non_finite)) {
+        cat('Non-finite trait values will be treated as missing.\n')
+        df_trait[non_finite] = NA_real_
+    }
     if (scale=='abs') {
         cat('Absolute trait values will be displayed.\n')
     } else if (scale=='rel') {
@@ -278,10 +283,10 @@ get_df_trait = function(b, transform, scale, trait_prefix, negative2zero=TRUE) {
     return(df_trait)
 }
 
-add_heatmap_column = function(g, args, df_trait, fill_label='Expression') {
+add_heatmap_column = function(g, args, df_trait, fill_label='Expression', gname='heatmap') {
     cat(as.character(Sys.time()), 'Adding heatmap column.\n')
     if ((is.null(ncol(df_trait)))|(ncol(df_trait)==0)) {
-        cat('df_trait is emply. Heatmap panel will not be added.\n')
+        cat('df_trait is empty. Heatmap panel will not be added.\n')
         return(g)
     }
     font_size = args[['font_size']]
@@ -304,12 +309,12 @@ add_heatmap_column = function(g, args, df_trait, fill_label='Expression') {
         max_val = 1
     }
     grid_color = ifelse(any(is.na(df_tip_tidy[['value']])), rgb(0,0,0,0), rgb(0,0,0,1))
-    g[['heatmap']] = ggplot(data=df_tip_tidy)
+    g[[gname]] = ggplot(data=df_tip_tidy)
     if (any(apply(df_tip[, colnames(df_trait), drop = FALSE], 1, function(x){all(is.na(x))}))) {
         df_tip_tidy_seg = unique(df_tip_tidy[,c('label','y')])
         df_tip_tidy_seg[,'xmin'] = df_tip_tidy[which.min(df_tip_tidy[['group']]),'group']
         df_tip_tidy_seg[,'xmax'] = df_tip_tidy[which.max(df_tip_tidy[['group']]),'group']
-        g[['heatmap']] = g[['heatmap']] + geom_segment(
+        g[[gname]] = g[[gname]] + geom_segment(
             data=df_tip_tidy_seg, 
             mapping=aes(y=label, yend=label, x=xmin, xend=xmax), 
             linewidth=0.25, 
@@ -317,7 +322,7 @@ add_heatmap_column = function(g, args, df_trait, fill_label='Expression') {
             linetype=3
         )
     }
-    g[['heatmap']] = g[['heatmap']] + 
+    g[[gname]] = g[[gname]] +
         geom_tile(mapping=aes(x=group, y=label, fill=value), color=grid_color) +
         scale_fill_gradient2(
             low="#00204c", 

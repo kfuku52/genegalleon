@@ -212,6 +212,11 @@ Related runtime setting:
   downstream plots and models how to interpret the input scale
   (`log2p1` by default).
 
+For a gene family with no matched expression rows or no columns beyond the
+gene identifier, GeneGalleon omits the family-level expression matrix and
+skips expression-dependent downstream stages. An identifier-only or empty TSV
+is not published as a usable expression artifact.
+
 For the unified expression-trait PGLS stage, including reconciled speciation
 contrast (RSC) and species-tree comparators, expression is the continuous
 response and columns in `workspace/input/species_trait/species_trait.tsv` are

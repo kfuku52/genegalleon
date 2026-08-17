@@ -4037,12 +4037,13 @@ expression_provenance_args=(
   --workspace-root "${gg_workspace_dir}"
   --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
   --input "species_expression=${dir_sp_expression}"
-  --output "expression_matrix=${file_og_expression}"
+  --optional-output "expression_matrix=${file_og_expression}"
   --parameter "expression_value_type=${exp_value_type}"
 )
 gg_artifact_prepare_stage expression_needs_update run_generate_expression_matrix "${expression_provenance_args[@]}" || exit $?
 if [[ ${expression_needs_update} -eq 1 && ${run_generate_expression_matrix} -eq 1 ]]; then
   gg_step_start "${task}"
+  rm -f -- "${file_og_expression}" expression_matrix.tsv
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.trait_matrix_input.fasta"
 
   python "${gg_support_dir}/get_trait_matrix.py" \

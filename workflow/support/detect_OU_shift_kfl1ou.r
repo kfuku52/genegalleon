@@ -131,7 +131,11 @@ merge_replicates_with_input_error = function(raw_trait_table, replicate_sep = "_
         trait_table[[j]] = suppressWarnings(as.numeric(trait_table[[j]]))
     }
 
-    merged_trait_table = merge_replicates(trait_table, replicate_sep)
+    if (ncol(trait_table) == 0L) {
+        merged_trait_table = trait_table
+    } else {
+        merged_trait_table = merge_replicates(trait_table, replicate_sep)
+    }
     input_error = matrix(
         0,
         nrow = nrow(merged_trait_table),
@@ -453,6 +457,7 @@ write_placeholder_outputs = function(tree, trait_table,
                                      fit_ind_obj = NA,
                                      fit_conv_obj = NA,
                                      reason = "",
+                                     nbootstrap = 0L,
                                      quit_after = FALSE) {
     if (nzchar(reason)) {
         cat(reason, "\n")
@@ -466,6 +471,22 @@ write_placeholder_outputs = function(tree, trait_table,
     )
     save_named_object("fit_ind", fit_ind_obj, "fit_ind.RData")
     save_named_object("fit_conv", fit_conv_obj, "fit_conv.RData")
+    if (nbootstrap > 0L) {
+        bootstrap_tree = fill_node_labels(tree)
+        bootstrap_table = data.frame(
+            node_name = c(bootstrap_tree$tip.label, bootstrap_tree$node.label),
+            bootstrap_support = 0,
+            stringsAsFactors = FALSE
+        )
+        bootstrap_table$bootstrap_support[get_root_num(bootstrap_tree)] = NA_real_
+        write.table(
+            bootstrap_table,
+            file = "l1ou_bootstrap.tsv",
+            sep = "\t",
+            quote = FALSE,
+            row.names = FALSE
+        )
+    }
     if (quit_after) {
         cat("Placeholder outputs were generated. Exiting.\n")
         quit(save = "no", status = 0)
@@ -600,8 +621,12 @@ validate_args(
     ),
     required = c("tree_file", "trait_file")
 )
+nbootstrap = parse_integer_arg(args[["nbootstrap"]], default = 0L)
+if (is.na(nbootstrap) || (nbootstrap < 0L)) {
+    nbootstrap = 0L
+}
 
-tree_input = read.tree(tree_file)
+tree_input = ape::read.tree(tree_file)
 if (!isTRUE(ape::is.binary(tree_input))) {
     stop("Input tree is not binary. Resolve tree polytomies upstream before running detect_OU_shift_kfl1ou.r.")
 }
@@ -611,6 +636,15 @@ cat("replicate_sep =", replicate_sep, "\n")
 
 raw_trait_table = read.table(trait_file, header = TRUE, row.names = 1, sep = "\t")
 replicate_prep = merge_replicates_with_input_error(raw_trait_table, replicate_sep = replicate_sep)
+if (ncol(replicate_prep$trait_table) == 0L) {
+    write_placeholder_outputs(
+        tree = tree_input,
+        trait_table = replicate_prep$trait_table,
+        reason = "No trait columns were found. Generating placeholder outputs without running kfl1ou.",
+        nbootstrap = nbootstrap,
+        quit_after = TRUE
+    )
+}
 trait_table = align_trait_table_to_tree(tree_input, replicate_prep$trait_table, context = "trait_table")
 input_error = align_input_error_to_tree(
     tree_input,
@@ -666,6 +700,7 @@ if (inherits(adj_data, "try-error")) {
             tree = tree_full,
             trait_table = original_trait_table,
             reason = "All traits are invariant after kfl1ou preprocessing. Generating placeholder outputs without running kfl1ou.",
+            nbootstrap = nbootstrap,
             quit_after = TRUE
         )
     }
@@ -702,6 +737,7 @@ if (ncol(trait_matrix) >= (length(adj_data$tree$tip.label) - 1L)) {
             "Too many traits for stable kfl1ou optimization (num_traits=%d, num_tips=%d). Falling back to placeholder outputs.",
             ncol(trait_matrix), length(adj_data$tree$tip.label)
         ),
+        nbootstrap = nbootstrap,
         quit_after = TRUE
     )
 }
@@ -716,10 +752,6 @@ cat("maximum number of shifts =", max_shift_info$reported, "\n")
 nslots = parse_integer_arg(args[["nslots"]], default = 1L)
 if (is.na(nslots) || (nslots < 1L)) {
     nslots = 1L
-}
-nbootstrap = parse_integer_arg(args[["nbootstrap"]], default = 0L)
-if (is.na(nbootstrap) || (nbootstrap < 0L)) {
-    nbootstrap = 0L
 }
 detect_convergence = (parse_bool_flag(args[["detect_convergence"]], default = 1L) == 1L)
 criterion = parse_string_arg(args[["criterion"]], default = "pBIC")
@@ -904,6 +936,7 @@ if (inherits(fit_conv, "l1ou")) {
         fit_ind_obj = fit_ind,
         fit_conv_obj = fit_conv,
         reason = "kfl1ou fit did not converge to a valid object. Placeholder outputs were written.",
+        nbootstrap = nbootstrap,
         quit_after = FALSE
     )
 }

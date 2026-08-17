@@ -400,7 +400,7 @@ get_rel_widths = function(g, args_rel_widths) {
     for (gname in names(rel_widths)) {
         if (grepl('^tree', gname)) {
             rel_widths[gname] = 1.5
-        } else if (grepl('^heatmap$', gname)) {
+        } else if (grepl('^heatmap($|,)', gname)) {
             rel_widths[gname] = 0.5
         } else if (grepl('^pointplot$', gname)) {
             rel_widths[gname] = 0.5
@@ -460,7 +460,7 @@ get_rel_widths = function(g, args_rel_widths) {
 add_pointplot_column = function(g, args, df_trait, replicate_sep) {
     cat(as.character(Sys.time()), 'Adding point plot column.\n')
     if ((is.null(ncol(df_trait)))|(ncol(df_trait)==0)) {
-        cat('df_trait is emply. Pointplot panel will not be added.\n')
+        cat('df_trait is empty. Pointplot panel will not be added.\n')
         return(g)
     }
     font_size = args[['font_size']]
