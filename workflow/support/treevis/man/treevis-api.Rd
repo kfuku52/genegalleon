@@ -74,6 +74,7 @@
 \alias{treevis_is_hybrid_binomial_connector}
 \alias{treevis_is_hybrid_connector_token}
 \alias{treevis_label_matches_ortholog_prefix}
+\alias{treevis_ortholog_axis_label}
 \alias{treevis_ortholog_prefix_target}
 \alias{treevis_should_wrap_site_axis_label}
 \alias{treevis_site_panel_width}
