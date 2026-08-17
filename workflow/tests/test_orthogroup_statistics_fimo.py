@@ -110,6 +110,36 @@ def test_orthogroup_statistics_preserves_qualified_species_prefixes():
     assert mod.scientific_name_from_label("Dictyostelium_cf_discoideum_geneA") == "Dictyostelium cf. discoideum"
 
 
+def test_sequence_stats_accept_ragged_unaligned_fasta_and_validate_only_alignment(tmp_path, monkeypatch):
+    mod = load_module()
+    unaligned = tmp_path / "original.fasta"
+    unaligned.write_text(">geneA\nAAAAA\n>geneB\nA-A\nA\n", encoding="utf-8")
+    trimmed = tmp_path / "cleaned.fasta"
+    trimmed.write_text(">geneA\nAAAA\n>geneB\nA-AA\n", encoding="utf-8")
+
+    alignment_calls = []
+
+    def strict_alignment_stats(path):
+        alignment_calls.append(path)
+        return {"num_site": 4, "num_seq": 2, "len_max": 4, "len_min": 3}
+
+    monkeypatch.setattr(mod.kfog, "get_aln_stats", strict_alignment_stats, raising=False)
+
+    out = mod.collect_sequence_stats(str(unaligned), str(trimmed))
+
+    assert alignment_calls == [str(trimmed)]
+    assert out == {
+        "original_num_site": 5,
+        "original_num_seq": 2,
+        "original_len_max": 5,
+        "original_len_min": 3,
+        "cleaned_num_site": 4,
+        "cleaned_num_seq": 2,
+        "cleaned_len_max": 4,
+        "cleaned_len_min": 3,
+    }
+
+
 def test_new_unrooted_tree_preserves_numeric_iqtree_support():
     mod = load_module()
 
