@@ -99,6 +99,7 @@ def test_format_species_facade_stays_small_and_implementation_is_partitioned():
         "format_species_discovery.py",
         "format_species_download_runtime.py",
         "format_species_provider_resolvers.py",
+        "format_species_run_summary.py",
         "format_species_summary.py",
         "format_species_taxonomy.py",
     }

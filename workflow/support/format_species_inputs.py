@@ -8,7 +8,7 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
-import json
+import json  # noqa: F401 - retained as part of the facade's public import surface
 
 import format_species_annotations as _annotations
 import format_species_cli as _cli
@@ -43,6 +43,7 @@ from format_species_provider_inputs import (
     resolve_provider_inputs,
 )
 from format_species_provider_resolvers import remove_stale_ensembl_like_partial_gff_outputs
+from format_species_run_summary import finalize_run as _finalize_run
 from format_species_summary import (
     build_species_summary_row,
     format_task_succeeded,
@@ -371,31 +372,16 @@ def main():
         "cds_gff_coordinate_rescued_groups": total_cds_gff_coordinate_rescued_groups,
         "dry_run": int(args.dry_run),
     }
-    if args.stats_output != "":
-        stats_path = Path(args.stats_output).expanduser().resolve()
-        stats_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(stats_path, "wt", encoding="utf-8") as handle:
-            json.dump(stats, handle, ensure_ascii=True, indent=2, sort_keys=True)
-
-    print(
-        "Finished. species processed: {}, CDS aggregated away: {}, CDS before/after: {}/{}, first CDS sequence: {}, output CDS dir: {}, output GFF dir: {}, output genome dir: {}, species summary: {}, dry_run={}".format(
-            processed,
-            total_duplicates,
-            total_cds_before,
-            total_cds_after,
-            first_cds_sequence_name if first_cds_sequence_name != "" else "NA",
-            output_cds_dir,
-            output_gff_dir,
-            output_genome_dir,
-            species_summary_path,
-            int(args.dry_run),
-        )
+    return _finalize_run(
+        args=args,
+        stats=stats,
+        output_cds_dir=output_cds_dir,
+        output_gff_dir=output_gff_dir,
+        output_genome_dir=output_genome_dir,
+        species_summary_path=species_summary_path,
+        error_count=len(all_errors),
+        failed_format_tasks=failed_format_tasks,
     )
-    if len(all_errors) > 0:
-        return 2
-    if failed_format_tasks > 0:
-        return 2
-    return 0
 
 
 if __name__ == "__main__":
