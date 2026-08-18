@@ -398,7 +398,7 @@ def test_aggregate_adds_analysis_ids_to_every_bundle_table_and_summarizes(tmp_pa
         prefix = tmp_path / analysis_id
         shared = pandas.DataFrame([{"tree_id": "OG1", "gene_clade_id": "a|b", "event_type": "speciation"}])
         for suffix in mod.REQUIRED_NWKIT_SUFFIXES:
-            if suffix == ".pgls.tsv":
+            if suffix == ".regression.tsv":
                 frame = pandas.DataFrame(
                     [
                         {
@@ -421,7 +421,7 @@ def test_aggregate_adds_analysis_ids_to_every_bundle_table_and_summarizes(tmp_pa
                 frame = shared
             frame.to_csv(f"{prefix}{suffix}", sep="\t", index=False)
         audit = tmp_path / f"{analysis_id}.audit.jsonl"
-        audit.write_text(json.dumps({"command": "pgls"}) + "\n", encoding="utf-8")
+        audit.write_text(json.dumps({"command": "regress"}) + "\n", encoding="utf-8")
         bundle_rows.append({"analysis_id": analysis_id, "prefix": prefix, "audit": audit})
     write_tsv(tmp_path / "bundles.tsv", bundle_rows)
 
@@ -446,7 +446,7 @@ def test_aggregate_adds_analysis_ids_to_every_bundle_table_and_summarizes(tmp_pa
     reconciliation = pandas.read_csv(tmp_path / "combined.reconciliation.tsv", sep="\t")
     assert reconciliation.shape[0] == 2
     assert set(reconciliation["analysis_id"]) == {"p001_size", "p002_habitat"}
-    results = pandas.read_csv(tmp_path / "combined.pgls.tsv", sep="\t")
+    results = pandas.read_csv(tmp_path / "combined.regression.tsv", sep="\t")
     assert list(results["analysis_id"]) == ["p001_size", "p002_habitat"]
     status = pandas.read_csv(tmp_path / "status.tsv", sep="\t")
     assert status.loc[0, "status"] == "ok"
@@ -455,7 +455,7 @@ def test_aggregate_adds_analysis_ids_to_every_bundle_table_and_summarizes(tmp_pa
     assert status.loc[0, "best_analysis_id"] == "p002_habitat"
     assert len((tmp_path / "audit.jsonl").read_text().splitlines()) == 2
 
-    tree_stats = mod.summarize_for_stat_tree(tmp_path / "combined.pgls.tsv", tmp_path / "status.tsv")
+    tree_stats = mod.summarize_for_stat_tree(tmp_path / "combined.regression.tsv", tmp_path / "status.tsv")
     assert tree_stats["rsc_status"] == "ok"
     assert tree_stats["rsc_min_p_value_raw"] == 0.01
     assert tree_stats["rsc_min_p_value"] == 0.02
@@ -856,7 +856,7 @@ def test_nhx_detection_and_reconciliation_preflight(tmp_path: Path):
             str(tmp_path / "reconciliation.tsv"),
         ]
     )
-    for suffix in mod.PGLS_BUNDLE_SUFFIXES:
+    for suffix in mod.REGRESSION_BUNDLE_SUFFIXES:
         assert pandas.read_csv(tmp_path / f"empty{suffix}", sep="\t").columns[0] == "analysis_id"
     empty_reconciliation = pandas.read_csv(tmp_path / "empty.reconciliation.tsv", sep="\t")
     assert set(empty_reconciliation["analysis_id"]) == {"preflight"}

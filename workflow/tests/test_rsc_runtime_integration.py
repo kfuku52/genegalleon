@@ -138,19 +138,19 @@ def test_reconciled_speciation_contrast_end_to_end_with_nwkit(tmp_path: Path):
         "lambda",
         "--species-evolution-parameter",
         "auto",
-        "--biological-id",
+        "--response-biological-id",
         "biological_id",
-        "--within-variance",
+        "--response-within-variance",
         "pooled",
         "--event-weighting",
-        "equal",
+        "event",
         "--speciation-coverage",
         "complete",
-        "--model",
+        "--reconciled-model",
         "hierarchical",
         "--inference",
         "wald",
-        "--categorical-replicate-policy",
+        "--predictor-categorical-replicate-policy",
         "latent",
         "--categorical-origin-diagnostics",
         "none",
@@ -164,7 +164,7 @@ def test_reconciled_speciation_contrast_end_to_end_with_nwkit(tmp_path: Path):
         audit = tmp_path / f"{analysis_id}.audit.jsonl"
         args = [
             "nwkit",
-            "pgls",
+            "regress",
             *pgls_common,
             "--predictors",
             predictor,
@@ -201,7 +201,7 @@ def test_reconciled_speciation_contrast_end_to_end_with_nwkit(tmp_path: Path):
         "OG1",
     )
 
-    result = pandas.read_csv(tmp_path / "combined.pgls.tsv", sep="\t")
+    result = pandas.read_csv(tmp_path / "combined.regression.tsv", sep="\t")
     assert not result.empty
     assert set(result["analysis_id"]) == {"p001_body_size", "p002_habitat"}
     family_status = pandas.read_csv(status, sep="\t")
@@ -272,7 +272,7 @@ def test_reconciled_speciation_contrast_end_to_end_with_nwkit(tmp_path: Path):
     known_prefix = tmp_path / "known-se"
     run(
         "nwkit",
-        "pgls",
+        "regress",
         "--gene-tree",
         gene_tree,
         "--reconciliation-tree",
@@ -295,11 +295,11 @@ def test_reconciled_speciation_contrast_end_to_end_with_nwkit(tmp_path: Path):
         "lca",
         "--species-parser",
         "legacy",
-        "--within-variance",
+        "--response-within-variance",
         "known-se",
-        "--standard-error-columns",
+        "--response-standard-error-columns",
         "expression__standard_error",
-        "--sample-size-columns",
+        "--response-sample-size-columns",
         "expression__sample_size",
         "--predictor-within-variance",
         "known-se",

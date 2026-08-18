@@ -3684,7 +3684,17 @@ def test_gene_evolution_wires_matched_expression_trait_pgls_through_stat_tree():
     assert 'task="Gene tree E-PGLS analysis"' not in core
     assert 'gg_artifact_prepare_stage rsc_needs_update run_expression_trait_pgls "${rsc_provenance_args[@]}"' in core
     assert 'nwkit "${rsc_reconcile_args[@]}"' in core
-    assert 'nwkit "${rsc_pgls_args[@]}"' in core
+    assert 'nwkit "${rsc_regress_args[@]}"' in core
+    assert "rsc_regress_args=(\n        regress" in core
+    assert '--reconciled-model "${rsc_model}"' in core
+    assert '--parameter "reconciled_model=${rsc_model}"' in core
+    assert '--response-biological-id "${rsc_response_biological_id}"' in core
+    assert '--predictor-reference "${rsc_analysis_reference}"' in core
+    assert '--event-weighting "${rsc_event_weighting}"' in core
+    assert 'rsc_validate_choice rsc_event_weighting "${rsc_event_weighting}" event contrast' in core
+    assert 'rsc_validate_choice rsc_model "${rsc_model}" hierarchical replicate-reml cluster-hc1' in core
+    assert 'rsc_regress_args=(\n        pgls' not in core
+    assert '--model "${rsc_model}"' not in core
     assert '--allow-large-dense "${rsc_allow_large_dense}"' in core
     assert "/opt/pg/logs/source_revisions.tsv" in core
     assert '--parameter "nwkit_identity=${rsc_nwkit_identity}"' in core

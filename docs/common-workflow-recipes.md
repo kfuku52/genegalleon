@@ -293,7 +293,11 @@ GeneGalleon's RSC responses are continuous expression values, so
 `rsc_inference` accepts `wald` or `parametric-bootstrap`. Likelihood-ratio and
 profile-likelihood options used by other NWKIT response families are not valid
 for this integration. Bootstrap inference requires at least two replicates.
-The `legacy` model cannot propagate response/predictor sampling uncertainty or
+GeneGalleon invokes the current `nwkit regress` interface for RSC. The
+`rsc_event_weighting` values are `event` (the default, equal total weight per
+species-tree event) and `contrast` (equal weight per gene contrast).
+`rsc_model=cluster-hc1` selects the earlier cluster-robust estimator; it cannot
+propagate response/predictor sampling uncertainty or
 automatically estimate a parameterized gene-evolution transform; use
 `hierarchical` or `replicate-reml` for those combinations.
 

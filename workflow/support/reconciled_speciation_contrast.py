@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GeneGalleon adapters and summaries for NWKIT reconciled PGLS.
+"""GeneGalleon adapters and summaries for NWKIT reconciled regression.
 
 The gene-evolution workflow stores expression in a gene-by-sample wide table,
 whereas NWKIT consumes a leaf table and explicit replicate identifiers.  This
@@ -23,7 +23,7 @@ import pandas
 
 MISSING_VALUES = {"", "NA", "NaN", "nan", "?", "missing", "unknown", "."}
 
-PGLS_BUNDLE_SUFFIXES = (
+REGRESSION_BUNDLE_SUFFIXES = (
     ".reconciliation.tsv",
     ".gene-contrasts.tsv",
     ".species-contrasts.tsv",
@@ -34,7 +34,7 @@ PGLS_BUNDLE_SUFFIXES = (
     ".random-effects.tsv",
     ".sensitivity.tsv",
     ".trait-origins.tsv",
-    ".pgls.tsv",
+    ".regression.tsv",
 )
 
 REQUIRED_NWKIT_SUFFIXES = {
@@ -42,7 +42,7 @@ REQUIRED_NWKIT_SUFFIXES = {
     ".gene-contrasts.tsv",
     ".species-contrasts.tsv",
     ".random-effects.tsv",
-    ".pgls.tsv",
+    ".regression.tsv",
 }
 
 EMPTY_BUNDLE_COLUMNS = {
@@ -165,7 +165,7 @@ EMPTY_BUNDLE_COLUMNS = {
         "posterior_frequency",
         "credible",
     ],
-    ".pgls.tsv": [
+    ".regression.tsv": [
         "analysis_id",
         "model_id",
         "tree_id",
@@ -1001,8 +1001,8 @@ def _runtime_empty_bundle_columns() -> dict[str, list[str]]:
             REPLICATE_CONTRAST_COLUMNS,
             SAMPLING_COVARIANCE_COLUMNS,
         )
-        from nwkit.pgls import RANDOM_EFFECT_COLUMNS, RESULT_COLUMNS, SENSITIVITY_COLUMNS
         from nwkit.reconcile import RECONCILIATION_COLUMNS
+        from nwkit.regress import RANDOM_EFFECT_COLUMNS, RESULT_COLUMNS, SENSITIVITY_COLUMNS
         from nwkit.replicates import TIP_SUMMARY_COLUMNS
         from nwkit.rsc_diagnostics import ORIGIN_DIAGNOSTIC_COLUMNS
     except ImportError:
@@ -1024,7 +1024,7 @@ def _runtime_empty_bundle_columns() -> dict[str, list[str]]:
         ".random-effects.tsv": ["analysis_id", *RANDOM_EFFECT_COLUMNS],
         ".sensitivity.tsv": ["analysis_id", *SENSITIVITY_COLUMNS],
         ".trait-origins.tsv": ["analysis_id", *ORIGIN_DIAGNOSTIC_COLUMNS],
-        ".pgls.tsv": ["analysis_id", *RESULT_COLUMNS],
+        ".regression.tsv": ["analysis_id", *RESULT_COLUMNS],
     }
 
 
@@ -1107,7 +1107,7 @@ def _write_bundle_frames(
 ) -> dict[str, pandas.DataFrame]:
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
     combined: dict[str, pandas.DataFrame] = {}
-    for suffix in PGLS_BUNDLE_SUFFIXES:
+    for suffix in REGRESSION_BUNDLE_SUFFIXES:
         frames = frames_by_suffix.get(suffix, [])
         if frames:
             frame = pandas.concat(frames, ignore_index=True, sort=False)
@@ -1220,7 +1220,7 @@ def aggregate(args: argparse.Namespace) -> int:
     for bundle in bundle_rows:
         analysis_id = str(bundle["analysis_id"])
         prefix = Path(str(bundle["prefix"]))
-        for suffix in PGLS_BUNDLE_SUFFIXES:
+        for suffix in REGRESSION_BUNDLE_SUFFIXES:
             bundle_path = Path(f"{prefix}{suffix}")
             frame = _read_bundle_frame(bundle_path, suffix, suffix in REQUIRED_NWKIT_SUFFIXES)
             if frame is None:
@@ -1241,7 +1241,7 @@ def aggregate(args: argparse.Namespace) -> int:
                 mode="w" if first_frame else "a",
                 header=first_frame,
             )
-            if suffix == ".pgls.tsv":
+            if suffix == ".regression.tsv":
                 result_frames.append(frame)
 
         audit_path = Path(str(bundle["audit"]))
@@ -1260,11 +1260,13 @@ def aggregate(args: argparse.Namespace) -> int:
                 analysis_reasons.append(f"{analysis_id}:{message or 'not_estimable'}")
             audit_records.append(json.dumps(record, sort_keys=True))
 
-    for suffix in PGLS_BUNDLE_SUFFIXES:
+    for suffix in REGRESSION_BUNDLE_SUFFIXES:
         if suffix not in output_columns:
             _empty_frame(suffix).to_csv(f"{args.output_prefix}{suffix}", sep="\t", index=False, na_rep="NA")
     results = (
-        pandas.concat(result_frames, ignore_index=True, sort=False) if result_frames else _empty_frame(".pgls.tsv")
+        pandas.concat(result_frames, ignore_index=True, sort=False)
+        if result_frames
+        else _empty_frame(".regression.tsv")
     )
     args.audit_output.parent.mkdir(parents=True, exist_ok=True)
     args.audit_output.write_text("\n".join(audit_records) + ("\n" if audit_records else ""), encoding="utf-8")
@@ -1280,7 +1282,7 @@ def aggregate(args: argparse.Namespace) -> int:
 
 
 def empty_bundle(args: argparse.Namespace) -> int:
-    frames = {suffix: [] for suffix in PGLS_BUNDLE_SUFFIXES}
+    frames = {suffix: [] for suffix in REGRESSION_BUNDLE_SUFFIXES}
     if args.reconciliation and args.reconciliation.is_file():
         reconciliation = pandas.read_csv(args.reconciliation, sep="\t", low_memory=False)
         if "analysis_id" in reconciliation.columns:
@@ -1290,7 +1292,7 @@ def empty_bundle(args: argparse.Namespace) -> int:
     _write_bundle_frames(args.output_prefix, frames)
     status = _status_from_results(
         args.tree_id,
-        _empty_frame(".pgls.tsv"),
+        _empty_frame(".regression.tsv"),
         0,
         reason=args.reason,
     )

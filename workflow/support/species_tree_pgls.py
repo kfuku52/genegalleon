@@ -674,7 +674,7 @@ def _read_trait_inputs(
     categorical_policy: str = "latent",
 ):
     from nwkit.contrast import _read_mixed_replicate_traits
-    from nwkit.ordinary_pgls import _ordinary_predictor_values
+    from nwkit.ordinary_regression import _ordinary_predictor_values
     from nwkit.replicates import TIP_SUMMARY_COLUMNS, ReplicateEstimates
 
     arguments = _replicate_arguments(
@@ -764,7 +764,7 @@ def _covariance_diagonal_and_offdiagonal(covariance: Any, leaf_names: Sequence[s
 def _sampling_table(
     covariance_by_trait: dict[str, Any], leaf_names: Sequence[str], aggregation: str
 ) -> pandas.DataFrame:
-    from nwkit.ordinary_pgls import _sampling_covariance_table
+    from nwkit.ordinary_regression import _sampling_covariance_table
 
     table = _sampling_covariance_table(covariance_by_trait, list(leaf_names))
     table.insert(0, "aggregation", aggregation)
@@ -1182,7 +1182,7 @@ def summarize_for_stat_tree(comparison_path: str | Path, status_path: str | Path
 
 
 def run(args: argparse.Namespace) -> int:
-    from nwkit.ordinary_pgls import fit_ordinary_pgls
+    from nwkit.ordinary_regression import fit_ordinary_regression
     from nwkit.util import read_tree
 
     methods = _parse_methods(args.methods)
@@ -1323,7 +1323,7 @@ def run(args: argparse.Namespace) -> int:
                 if "species-nwkit" not in methods:
                     continue
                 try:
-                    result = fit_ordinary_pgls(
+                    result = fit_ordinary_regression(
                         tree,
                         response_estimates.values_by_trait,
                         predictor_estimates.values_by_trait,

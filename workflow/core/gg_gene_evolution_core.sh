@@ -45,7 +45,7 @@ rsc_predictors="${rsc_predictors:-all}"
 rsc_predictor_mode="${rsc_predictor_mode:-separate}"
 rsc_event_source="${rsc_event_source:-auto}"
 rsc_speciation_coverage="${rsc_speciation_coverage:-complete}"
-rsc_event_weighting="${rsc_event_weighting:-equal}"
+rsc_event_weighting="${rsc_event_weighting:-event}"
 rsc_model="${rsc_model:-hierarchical}"
 rsc_gene_branch_length="${rsc_gene_branch_length:-original}"
 rsc_gene_evolution_model="${rsc_gene_evolution_model:-brownian}"
@@ -1243,8 +1243,8 @@ if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
   rsc_validate_choice rsc_predictor_mode "${rsc_predictor_mode}" separate joint
   rsc_validate_choice rsc_event_source "${rsc_event_source}" auto nhx lca species-overlap
   rsc_validate_choice rsc_speciation_coverage "${rsc_speciation_coverage}" complete any
-  rsc_validate_choice rsc_event_weighting "${rsc_event_weighting}" equal observation
-  rsc_validate_choice rsc_model "${rsc_model}" hierarchical replicate-reml legacy
+  rsc_validate_choice rsc_event_weighting "${rsc_event_weighting}" event contrast
+  rsc_validate_choice rsc_model "${rsc_model}" hierarchical replicate-reml cluster-hc1
   rsc_validate_choice rsc_gene_branch_length "${rsc_gene_branch_length}" original unit
   rsc_validate_choice rsc_species_branch_length "${rsc_species_branch_length}" original unit
   rsc_validate_choice rsc_gene_evolution_model "${rsc_gene_evolution_model}" brownian lambda ou kappa delta eb acdc independent
@@ -1326,11 +1326,11 @@ if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
     echo "rsc_origin_leave_one_out=yes requires rsc_categorical_origin_diagnostics=stochastic-map." >&2
     exit 1
   fi
-  if [[ "${rsc_model}" == "legacy" && "${rsc_inference}" != "wald" ]]; then
-    echo "rsc_model=legacy supports only rsc_inference=wald." >&2
+  if [[ "${rsc_model}" == "cluster-hc1" && "${rsc_inference}" != "wald" ]]; then
+    echo "rsc_model=cluster-hc1 supports only rsc_inference=wald." >&2
     exit 1
   fi
-  if [[ "${rsc_model}" == "legacy" && ! "${rsc_gene_evolution_model}" =~ ^(brownian|independent)$ && "${rsc_gene_evolution_parameter}" == "auto" ]]; then
+  if [[ "${rsc_model}" == "cluster-hc1" && ! "${rsc_gene_evolution_model}" =~ ^(brownian|independent)$ && "${rsc_gene_evolution_parameter}" == "auto" ]]; then
     echo "Automatic gene evolution-parameter estimation requires a likelihood-based RSC model." >&2
     exit 1
   fi
@@ -1346,12 +1346,12 @@ if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
     echo "rsc_lineage_inference requires lineage random slopes." >&2
     exit 1
   fi
-  if [[ "${rsc_model}" == "legacy" && "${rsc_lineage_leave_one_out}" == "yes" ]]; then
+  if [[ "${rsc_model}" == "cluster-hc1" && "${rsc_lineage_leave_one_out}" == "yes" ]]; then
     echo "rsc_lineage_leave_one_out requires a likelihood-based RSC model." >&2
     exit 1
   fi
-  if [[ "${rsc_model}" == "legacy" && ( "${rsc_within_variance}" == "known-se" || "${rsc_predictor_within_variance}" == "known-se" || -n "${rsc_predictor_biological_id}" ) ]]; then
-    echo "rsc_model=legacy cannot use response or predictor sampling uncertainty." >&2
+  if [[ "${rsc_model}" == "cluster-hc1" && ( "${rsc_within_variance}" == "known-se" || "${rsc_predictor_within_variance}" == "known-se" || -n "${rsc_predictor_biological_id}" ) ]]; then
+    echo "rsc_model=cluster-hc1 cannot use response or predictor sampling uncertainty." >&2
     exit 1
   fi
 fi
@@ -4958,7 +4958,7 @@ fi
 
 if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
   if ! command -v nwkit >/dev/null 2>&1; then
-    echo "run_expression_trait_pgls=1 requires nwkit with the pgls and reconcile commands." >&2
+    echo "run_expression_trait_pgls=1 requires nwkit with the regress and reconcile commands." >&2
     exit 1
   fi
   if [[ ${pgls_run_species_rphylopars} -eq 1 ]]; then
@@ -5071,7 +5071,7 @@ rsc_provenance_args=(
   --parameter "effective_event_source=${rsc_effective_event_source}"
   --parameter "speciation_coverage=${rsc_speciation_coverage}"
   --parameter "event_weighting=${rsc_event_weighting}"
-  --parameter "model=${rsc_model}"
+  --parameter "reconciled_model=${rsc_model}"
   --parameter "gene_branch_length=${rsc_gene_branch_length}"
   --parameter "gene_evolution_model=${rsc_gene_evolution_model}"
   --parameter "gene_evolution_parameter=${rsc_gene_evolution_parameter}"
@@ -5218,8 +5218,8 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
     rsc_response_sample_size_columns=$(rsc_read_metadata_value "${rsc_metadata}" sample_size_columns)
     rsc_response_sampling_uncertainty=$(rsc_read_metadata_value "${rsc_metadata}" response_sampling_uncertainty)
     rsc_predictor_sampling_uncertainty=$(rsc_read_metadata_value "${rsc_metadata}" predictor_sampling_uncertainty)
-    if [[ ${pgls_run_rsc} -eq 1 && "${rsc_model}" == "legacy" && ( "${rsc_response_sampling_uncertainty}" == "yes" || "${rsc_predictor_sampling_uncertainty}" == "yes" ) ]]; then
-      echo "rsc_model=legacy cannot use response or predictor sampling uncertainty after input preparation." >&2
+    if [[ ${pgls_run_rsc} -eq 1 && "${rsc_model}" == "cluster-hc1" && ( "${rsc_response_sampling_uncertainty}" == "yes" || "${rsc_predictor_sampling_uncertainty}" == "yes" ) ]]; then
+      echo "rsc_model=cluster-hc1 cannot use response or predictor sampling uncertainty after input preparation." >&2
       exit 1
     fi
   else
@@ -5307,8 +5307,8 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
       [[ -n "${rsc_analysis_id}" ]] || continue
       rsc_analysis_prefix="${rsc_work_dir}/bundles/${rsc_analysis_id}"
       rsc_analysis_audit="${rsc_analysis_prefix}.audit.jsonl"
-      rsc_pgls_args=(
-        pgls
+      rsc_regress_args=(
+        regress
         --gene-tree "${rsc_gene_tree}"
         --reconciliation-tree "${rsc_reconciliation_tree}"
         --species-tree "${species_tree_pruned}"
@@ -5329,13 +5329,13 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
         --event-weighting "${rsc_event_weighting}"
         --speciation-coverage "${rsc_speciation_coverage}"
         --confidence-level "${rsc_confidence_level}"
-        --model "${rsc_model}"
+        --reconciled-model "${rsc_model}"
         --inference "${rsc_inference}"
         --bootstrap-replicates "${rsc_bootstrap_replicates}"
         --seed "${rsc_seed}"
         --reml "${rsc_reml}"
-        --factor-coding "${rsc_factor_coding}"
-        --categorical-replicate-policy "${rsc_categorical_replicate_policy}"
+        --predictor-factor-coding "${rsc_factor_coding}"
+        --predictor-categorical-replicate-policy "${rsc_categorical_replicate_policy}"
         --event-random-effect "${rsc_event_random_effect}"
         --lineage-random-slope "${rsc_lineage_random_slope}"
         --lineage-inference "${rsc_lineage_inference}"
@@ -5343,70 +5343,70 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
         --allow-large-dense "${rsc_allow_large_dense}"
       )
       if [[ ! "${rsc_gene_evolution_model}" =~ ^(brownian|independent)$ ]]; then
-        rsc_pgls_args+=(--gene-evolution-parameter "${rsc_gene_evolution_parameter}")
+        rsc_regress_args+=(--gene-evolution-parameter "${rsc_gene_evolution_parameter}")
       fi
       if [[ ! "${rsc_species_evolution_model}" =~ ^(brownian|independent)$ ]]; then
-        rsc_pgls_args+=(--species-evolution-parameter "${rsc_species_evolution_parameter}")
+        rsc_regress_args+=(--species-evolution-parameter "${rsc_species_evolution_parameter}")
       fi
       if [[ -n "${species_label_regex}" ]]; then
-        rsc_pgls_args+=(--species-regex "${species_label_regex}")
+        rsc_regress_args+=(--species-regex "${species_label_regex}")
       fi
       if [[ -n "${species_label_map_tsv}" ]]; then
-        rsc_pgls_args+=(--species-map-tsv "${species_label_map_tsv}")
+        rsc_regress_args+=(--species-map-tsv "${species_label_map_tsv}")
       fi
       if [[ -n "${rsc_response_biological_id}" ]]; then
-        rsc_pgls_args+=(
-          --biological-id "${rsc_response_biological_id}"
-          --technical-aggregation "${rsc_technical_aggregation}"
-          --within-variance "${rsc_within_variance}"
+        rsc_regress_args+=(
+          --response-biological-id "${rsc_response_biological_id}"
+          --response-technical-aggregation "${rsc_technical_aggregation}"
+          --response-within-variance "${rsc_within_variance}"
         )
       elif [[ "${rsc_within_variance}" == "known-se" ]]; then
-        rsc_pgls_args+=(--within-variance known-se)
+        rsc_regress_args+=(--response-within-variance known-se)
       fi
       if [[ -n "${rsc_response_technical_id}" ]]; then
-        rsc_pgls_args+=(--technical-id "${rsc_response_technical_id}")
+        rsc_regress_args+=(--response-technical-id "${rsc_response_technical_id}")
       fi
       if [[ -n "${rsc_response_batch}" ]]; then
-        rsc_pgls_args+=(--batch "${rsc_response_batch}")
+        rsc_regress_args+=(--response-batch "${rsc_response_batch}")
       fi
       if [[ -n "${rsc_response_standard_error_columns}" ]]; then
-        rsc_pgls_args+=(--standard-error-columns "${rsc_response_standard_error_columns}")
+        rsc_regress_args+=(--response-standard-error-columns "${rsc_response_standard_error_columns}")
       fi
       if [[ -n "${rsc_response_sample_size_columns}" ]]; then
-        rsc_pgls_args+=(--sample-size-columns "${rsc_response_sample_size_columns}")
+        rsc_regress_args+=(--response-sample-size-columns "${rsc_response_sample_size_columns}")
       fi
       if [[ -n "${rsc_predictor_biological_id}" ]]; then
-        rsc_pgls_args+=(
+        rsc_regress_args+=(
           --predictor-biological-id "${rsc_predictor_biological_id}"
           --predictor-technical-aggregation "${rsc_predictor_technical_aggregation}"
           --predictor-within-variance "${rsc_predictor_within_variance}"
         )
       elif [[ "${rsc_predictor_within_variance}" == "known-se" ]]; then
-        rsc_pgls_args+=(--predictor-within-variance known-se)
+        rsc_regress_args+=(--predictor-within-variance known-se)
       fi
       if [[ -n "${rsc_predictor_technical_id}" ]]; then
-        rsc_pgls_args+=(--predictor-technical-id "${rsc_predictor_technical_id}")
+        rsc_regress_args+=(--predictor-technical-id "${rsc_predictor_technical_id}")
       fi
       if [[ -n "${rsc_predictor_batch}" ]]; then
-        rsc_pgls_args+=(--predictor-batch "${rsc_predictor_batch}")
+        rsc_regress_args+=(--predictor-batch "${rsc_predictor_batch}")
       fi
       if [[ "${rsc_analysis_predictor_se}" != "." ]]; then
-        rsc_pgls_args+=(--predictor-standard-error-columns "${rsc_analysis_predictor_se}")
+        rsc_regress_args+=(--predictor-standard-error-columns "${rsc_analysis_predictor_se}")
       fi
       if [[ "${rsc_analysis_predictor_n}" != "." ]]; then
-        rsc_pgls_args+=(--predictor-sample-size-columns "${rsc_analysis_predictor_n}")
+        rsc_regress_args+=(--predictor-sample-size-columns "${rsc_analysis_predictor_n}")
       fi
       if [[ "${rsc_analysis_categorical}" != "." ]]; then
-        rsc_pgls_args+=(--categorical-predictors "${rsc_analysis_categorical}")
+        rsc_regress_args+=(--categorical-predictors "${rsc_analysis_categorical}")
       fi
       if [[ "${rsc_analysis_ordered}" != "." ]]; then
-        rsc_pgls_args+=(--ordered-predictors "${rsc_analysis_ordered}")
+        rsc_regress_args+=(--ordered-predictors "${rsc_analysis_ordered}")
       fi
       if [[ "${rsc_analysis_reference}" != "." ]]; then
-        rsc_pgls_args+=(--factor-reference "${rsc_analysis_reference}")
+        rsc_regress_args+=(--predictor-reference "${rsc_analysis_reference}")
       fi
       if [[ "${rsc_origin_applicable}" == "yes" && "${rsc_categorical_origin_diagnostics}" == "stochastic-map" ]]; then
-        rsc_pgls_args+=(
+        rsc_regress_args+=(
           --categorical-origin-diagnostics stochastic-map
           --origin-map-replicates "${rsc_origin_map_replicates}"
           --origin-map-threads "${rsc_origin_map_threads}"
@@ -5414,9 +5414,9 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
           --origin-leave-one-out "${rsc_origin_leave_one_out}"
         )
       else
-        rsc_pgls_args+=(--categorical-origin-diagnostics none)
+        rsc_regress_args+=(--categorical-origin-diagnostics none)
       fi
-      if nwkit "${rsc_pgls_args[@]}" 2>&1 | tee -a "${rsc_log_tmp}"; then
+      if nwkit "${rsc_regress_args[@]}" 2>&1 | tee -a "${rsc_log_tmp}"; then
         rsc_analysis_result="ready"
       else
         rsc_nwkit_status=${PIPESTATUS[0]}
@@ -5491,7 +5491,7 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
     --allow-large-dense "${rsc_allow_large_dense}"
     --rphylopars-sampling-covariance "${rphylopars_sampling_covariance}"
     --rphylopars-script "${gg_support_dir}/species_tree_rphylopars.R"
-    --rsc-results "${rsc_combined_prefix}.pgls.tsv"
+    --rsc-results "${rsc_combined_prefix}.regression.tsv"
     --rsc-status "${rsc_combined_status}"
     --native-out "${species_nwkit_tmp}"
     --rphylopars-out "${species_rphylopars_tmp}"
@@ -5516,7 +5516,7 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
 
   mv_out_bundle \
     "${rsc_combined_status}" "${file_og_rsc_status}" \
-    "${rsc_combined_prefix}.pgls.tsv" "${file_og_rsc_pgls}" \
+    "${rsc_combined_prefix}.regression.tsv" "${file_og_rsc_pgls}" \
     "${rsc_combined_prefix}.reconciliation.tsv" "${file_og_rsc_reconciliation}" \
     "${rsc_combined_prefix}.gene-contrasts.tsv" "${file_og_rsc_gene_contrasts}" \
     "${rsc_combined_prefix}.species-contrasts.tsv" "${file_og_rsc_species_contrasts}" \
