@@ -3535,11 +3535,12 @@ else
 fi
 
 task="Species tree plotting"
-if [[ ${run_plot_species_trees} -eq 1 ]]; then
+run_species_tree_comparison_plot=${run_plot_species_trees}
+if [[ ${run_species_tree_comparison_plot} -eq 1 ]]; then
   if [[ "${input_sequence_mode}" == "protein" ]]; then
-    disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_pep_root}" "${file_astral_tree_pep}"
+    disable_if_no_nonempty_input_file "run_species_tree_comparison_plot" "${file_concat_iqtree_pep_root}" "${file_astral_tree_pep}"
   else
-    disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"
+    disable_if_no_nonempty_input_file "run_species_tree_comparison_plot" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"
   fi
 fi
 species_tree_plot_needs_update=0
@@ -3553,8 +3554,8 @@ gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_pep" 
 gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_dna_log" "${file_astral_log_dna}"
 gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_pep_log" "${file_astral_log_pep}"
 species_tree_plot_provenance_args+=(--output "plot=${file_plot_species_trees}")
-gg_artifact_prepare_stage species_tree_plot_needs_update run_plot_species_trees "${species_tree_plot_provenance_args[@]}" || exit $?
-if [[ ${species_tree_plot_needs_update} -eq 1 && ${run_plot_species_trees} -eq 1 ]]; then
+gg_artifact_prepare_stage species_tree_plot_needs_update run_species_tree_comparison_plot "${species_tree_plot_provenance_args[@]}" || exit $?
+if [[ ${species_tree_plot_needs_update} -eq 1 && ${run_species_tree_comparison_plot} -eq 1 ]]; then
   gg_step_start "${task}"
 
   Rscript "${gg_support_dir}/plot_species_trees.r" \
@@ -3577,7 +3578,9 @@ else
 fi
 
 task="BUSCO stacked bar species tree plotting"
-disable_if_no_input_file "run_plot_species_trees" "${file_undated_species_tree}" "${dir_species_busco_full}"
+run_species_tree_busco_plot=${run_plot_species_trees}
+disable_if_no_input_file "run_species_tree_busco_plot" "${file_undated_species_tree}"
+disable_if_no_matching_input_file "run_species_tree_busco_plot" "${dir_species_busco_full}" "*busco.full.tsv"
 species_tree_busco_plot_needs_update=0
 gg_artifact_contract_init species_tree_busco_plot_provenance_args "species_tree_busco_plot" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.busco_plot.json"
 species_tree_busco_plot_provenance_args+=(
@@ -3588,8 +3591,8 @@ species_tree_busco_plot_provenance_args+=(
   --output "summary=${file_species_tree_busco_summary}"
   --parameter "min_og_species=auto"
 )
-gg_artifact_prepare_stage species_tree_busco_plot_needs_update run_plot_species_trees "${species_tree_busco_plot_provenance_args[@]}" || exit $?
-if [[ ${species_tree_busco_plot_needs_update} -eq 1 && ${run_plot_species_trees} -eq 1 ]]; then
+gg_artifact_prepare_stage species_tree_busco_plot_needs_update run_species_tree_busco_plot "${species_tree_busco_plot_provenance_args[@]}" || exit $?
+if [[ ${species_tree_busco_plot_needs_update} -eq 1 && ${run_species_tree_busco_plot} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_species_tree_summary}"
   cd "${dir_species_tree_summary}" || exit 1

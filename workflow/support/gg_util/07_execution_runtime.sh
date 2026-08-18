@@ -51,6 +51,44 @@ disable_if_no_input_file() {
   fi
 }
 
+disable_if_no_nonempty_input_file() {
+  local run_variable_txt=$1
+  shift
+  local run_variable_value="${!run_variable_txt:-0}"
+  local input_file
+  if [[ ${run_variable_value} -eq 0 ]]; then
+    return
+  fi
+  for input_file in "$@"; do
+    if [[ -s "${input_file}" ]]; then
+      return
+    fi
+  done
+  echo "Required input file undetected: at least one nonempty file is required from: $*"
+  printf -v "${run_variable_txt}" '%s' 0
+  echo "Disabled ${run_variable_txt}"
+}
+
+disable_if_no_matching_input_file() {
+  local run_variable_txt=$1
+  local input_dir=$2
+  local name_pattern=$3
+  local run_variable_value="${!run_variable_txt:-0}"
+  local matching_input=""
+  if [[ ${run_variable_value} -eq 0 ]]; then
+    return
+  fi
+  if [[ -d "${input_dir}" ]]; then
+    matching_input=$(find "${input_dir}" -maxdepth 1 -type f -name "${name_pattern}" -size +0c -print -quit)
+  fi
+  if [[ -n "${matching_input}" ]]; then
+    return
+  fi
+  echo "Required input file undetected: no nonempty ${name_pattern} file in ${input_dir}"
+  printf -v "${run_variable_txt}" '%s' 0
+  echo "Disabled ${run_variable_txt}"
+}
+
 check_if_species_files_unique() {
   local species_dir=$1
   local files=()

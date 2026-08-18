@@ -1968,17 +1968,23 @@ def test_genome_evolution_runs_omark_after_orthofinder_and_before_og_selection()
     assert omark_summary_index < og_selection_index
 
 
-def test_genome_evolution_protein_mode_allows_species_tree_plotting_with_pep_trees_only():
+def test_genome_evolution_species_tree_plotting_uses_independent_stage_flags():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
     assert (
-        'if [[ "${input_sequence_mode}" == "protein" ]]; then\n    disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_pep_root}" "${file_astral_tree_pep}"'
+        'run_species_tree_comparison_plot=${run_plot_species_trees}\nif [[ ${run_species_tree_comparison_plot} -eq 1 ]]; then'
         in core
     )
     assert (
-        'disable_if_no_input_file "run_plot_species_trees" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"'
+        'disable_if_no_nonempty_input_file "run_species_tree_comparison_plot" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"'
         in core
     )
+    assert 'run_species_tree_busco_plot=${run_plot_species_trees}' in core
+    assert (
+        'disable_if_no_matching_input_file "run_species_tree_busco_plot" "${dir_species_busco_full}" "*busco.full.tsv"'
+        in core
+    )
+    assert 'disable_if_no_input_file "run_plot_species_trees"' not in core
 
 
 def test_plot_species_trees_r_filters_missing_tree_inputs():

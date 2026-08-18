@@ -362,6 +362,10 @@ Notable defaults:
   OrthoFinder so it can reuse the current effective protein inputs,
 - shared defaults such as `busco_lineage` and `genetic_code` are loaded from `workflow/gg_common_params.sh`,
 - species-tree rooting is configured locally in `workflow/gg_genome_evolution_entrypoint.sh` via `species_tree_rooting`,
+- `run_plot_species_trees=1` plots whichever concatenated/ASTRAL candidate trees
+  are available and independently builds the selected-tree BUSCO summary plot
+  when nonempty per-species BUSCO full tables are available; a missing candidate
+  tree does not suppress the BUSCO plot,
 - single-copy FASTA/alignment outputs are standardized to `.fa.gz`, and legacy
   plain `.fasta` files in species-tree intermediate directories are auto-migrated.
 
