@@ -1,7 +1,7 @@
 pytest
 PyYAML
 ruff
-numpy<2
+numpy<3
 pandas
 biopython
 csubst @ git+https://github.com/kfuku52/csubst.git@f83c13134d5d7bd58ff76da192dae703e604ba81
@@ -10,6 +10,6 @@ sqlalchemy
 tenacity
 tqdm
 openpyxl
-matplotlib<3.11
-pypdf>=6.15.0
+matplotlib<3.12
+pypdf>=6.16.1
 reportlab

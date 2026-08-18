@@ -3,15 +3,15 @@
 # Regenerate intentionally after validating the new set in a GeneGalleon container.
 pytest==9.1.1
 PyYAML==6.0.3
-ruff==0.16.1
-numpy==1.26.4
+ruff==0.16.3
+numpy==2.5.2
 pandas==3.0.5
 biopython==1.88
 ete4==4.4.0
-sqlalchemy==2.0.51
+sqlalchemy==2.0.52
 tenacity==9.1.4
 tqdm==4.70.0
 openpyxl==3.1.5
-matplotlib==3.10.9
-pypdf==6.15.0
+matplotlib==3.11.1
+pypdf==6.16.1
 reportlab==5.0.0
