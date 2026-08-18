@@ -40,6 +40,8 @@ run_build_species_busco_summary="${run_build_species_busco_summary:-1}"
 run_build_species_omark_summary="${run_build_species_omark_summary:-1}"
 run_extract_species_tree_fasta="${run_extract_species_tree_fasta:-1}"
 run_single_copy_ortholog_decay_plot="${run_single_copy_ortholog_decay_plot:-1}"
+run_self_fractionation_bias="${run_self_fractionation_bias:-0}"
+self_fractionation_bias_table="${self_fractionation_bias_table:-}"
 orthogroup_decay_replicates="${orthogroup_decay_replicates:-1000}"
 orthogroup_decay_species_counts="${orthogroup_decay_species_counts:-auto}"
 orthogroup_decay_seed="${orthogroup_decay_seed:-1}"
@@ -87,6 +89,9 @@ gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 # shellcheck disable=SC1090
 source "${gg_support_dir}/gg_busco.sh"
 delete_tmp_dir=${delete_tmp_dir:-1}
+if [[ -z "${self_fractionation_bias_table}" ]]; then
+  self_fractionation_bias_table="${gg_workspace_input_dir}/fractionation_bias_pairs.tsv"
+fi
 busco_lineage_resolved=""
 omark_db_resolved=""
 
@@ -1101,7 +1106,9 @@ print_effective_genome_evolution_config_summary() {
     species_tree_sequence_label \
     species_protein_input_available \
     species_cds_input_available \
-    species_genetic_code_table_present
+    species_genetic_code_table_present \
+    run_self_fractionation_bias \
+    self_fractionation_bias_table
 }
 
 refresh_dir_for_shared_protein_input_signature() {
@@ -2386,6 +2393,8 @@ dir_orthogroup_decay="${dir_orthofinder}/single_copy_ortholog_decay"
 
 # Genome evolution
 dir_genome_evolution="${gg_workspace_output_dir}/genome_evolution"
+dir_self_fractionation_bias="${dir_genome_evolution}/self_fractionation_bias"
+dir_self_fractionation_bias_summary="${dir_genome_evolution}/self_fractionation_bias_summary"
 dir_species_omamer="${dir_genome_evolution}/omamer_search"
 dir_species_omark="${dir_genome_evolution}/omark"
 dir_busco_fasta="${dir_genome_evolution}/busco_cds_fasta"
@@ -2455,6 +2464,9 @@ file_single_copy_ortholog_decay_summary="${dir_orthogroup_decay}/single_copy_ort
 # Genome evolution
 file_orthogroup_genecount_selected="${dir_orthofinder_filtered}/Orthogroups.GeneCount.selected.tsv"
 file_genome_busco_summary_table="${dir_genome_evolution}/busco_summary_table/busco_summary.tsv"
+file_self_fractionation_bias_summary="${dir_self_fractionation_bias_summary}/self_fractionation_bias_summary.tsv"
+file_self_fractionation_bias_summary_pdf="${dir_self_fractionation_bias_summary}/self_fractionation_bias_summary.pdf"
+file_self_fractionation_bias_summary_png="${dir_self_fractionation_bias_summary}/self_fractionation_bias_summary.png"
 file_species_omark_summary_table="${dir_genome_evolution}/omark_summary_table/omark_summary.tsv"
 file_busco_grampa_dna="${dir_genome_evolution}/grampa_busco_dna/grampa_summary.tsv"
 file_busco_grampa_pep="${dir_genome_evolution}/grampa_busco_pep/grampa_summary.tsv"
@@ -4656,6 +4668,55 @@ fi
 
 ensure_dir "${dir_tmp}"
 cd "${dir_tmp}" || exit 1
+
+task="Summarizing kfFractBias self-synteny retention across species"
+if [[ ${run_self_fractionation_bias} -eq 1 ]]; then
+  if [[ ! -s "${self_fractionation_bias_table}" ]]; then
+    echo "Self-fractionation configuration table not found or empty: ${self_fractionation_bias_table}" >&2
+    exit 1
+  fi
+  if [[ ! -d "${dir_self_fractionation_bias}" ]]; then
+    echo "Self-fractionation result directory not found: ${dir_self_fractionation_bias}" >&2
+    echo "Run mode=self rows with gg_fractionation_bias_entrypoint.sh before requesting this summary." >&2
+    exit 1
+  fi
+  self_fractionation_summary_needs_update=0
+  gg_artifact_contract_init self_fractionation_summary_provenance_args \
+    "genome_evolution_self_fractionation_bias_summary" "all_self_comparisons" \
+    "${genome_evolution_provenance_dir}/self_fractionation_bias.summary.json"
+  self_fractionation_summary_provenance_args+=(
+    --input "configuration=${self_fractionation_bias_table}"
+    --input "self_results=${dir_self_fractionation_bias}"
+    --output "summary=${file_self_fractionation_bias_summary}"
+    --output "plot_pdf=${file_self_fractionation_bias_summary_pdf}"
+    --output "plot_png=${file_self_fractionation_bias_summary_png}"
+    --parameter "metric=best_interchromosomal_retention_per_target_window"
+    --parameter "intrachromosomal_tracks=reported_separately"
+  )
+  gg_artifact_prepare_stage self_fractionation_summary_needs_update run_self_fractionation_bias \
+    "${self_fractionation_summary_provenance_args[@]}" || exit $?
+  if [[ ${self_fractionation_summary_needs_update} -eq 1 ]]; then
+    gg_step_start "${task}"
+    self_fractionation_summary_tmp=$(mktemp -d "${dir_tmp}/self_fractionation_summary.XXXXXX")
+    python "${gg_support_dir}/summarize_self_fractionation_bias.py" \
+      --table "${self_fractionation_bias_table}" \
+      --results-dir "${dir_self_fractionation_bias}" \
+      --output-tsv "${self_fractionation_summary_tmp}/summary.tsv" \
+      --output-pdf "${self_fractionation_summary_tmp}/summary.pdf" \
+      --output-png "${self_fractionation_summary_tmp}/summary.png"
+    mv_out_bundle \
+      "${self_fractionation_summary_tmp}/summary.tsv" "${file_self_fractionation_bias_summary}" \
+      "${self_fractionation_summary_tmp}/summary.pdf" "${file_self_fractionation_bias_summary_pdf}" \
+      "${self_fractionation_summary_tmp}/summary.png" "${file_self_fractionation_bias_summary_png}"
+    rm -rf -- "${self_fractionation_summary_tmp}"
+    gg_artifact_record "${self_fractionation_summary_provenance_args[@]}"
+  else
+    gg_step_skip "${task}"
+  fi
+else
+  gg_step_skip "${task}"
+fi
+
 # shellcheck shell=bash
 # Sourced by gg_genome_evolution_core.sh.
 

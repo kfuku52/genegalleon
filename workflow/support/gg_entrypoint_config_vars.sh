@@ -343,6 +343,7 @@ run_build_species_omark_summary
 run_og_selection
 run_orthogroup_method_comparison
 run_single_copy_ortholog_decay_plot
+run_self_fractionation_bias
 run_busco_dupaware_extract_fasta
 run_busco_dupaware_mafft
 run_busco_dupaware_trimal
@@ -358,6 +359,7 @@ run_orthogroup_grampa
 run_cafe
 run_orthogroup_copy_number_trait_pgls
 run_go_enrichment
+self_fractionation_bias_table
 species_label_parser
 species_label_regex
 species_label_map_tsv

@@ -118,6 +118,7 @@ run_orthogroup_method_comparison=1 # Plot comparison among orthogroup/species-tr
 run_single_copy_ortholog_decay_plot=1 # Line plot with SD of orthogroup retention when randomly subsampling species.
 
 # Genome-evolution workflow flags
+run_self_fractionation_bias=0 # Incorporate completed mode=self kfFractBias array results by validating and building a multi-species summary.
 run_busco_dupaware_extract_fasta=0 # Extract duplicate-aware BUSCO ortholog FASTA files from genome annotations.
 run_busco_dupaware_mafft=0 # Align duplicate-aware BUSCO ortholog FASTA files with MAFFT.
 run_busco_dupaware_trimal=0 # Trim duplicate-aware BUSCO ortholog alignments.
@@ -177,6 +178,7 @@ orthogroup_decay_species_counts="auto" # Species-count values for single-copy or
 orthogroup_decay_seed=1 # Random seed for single-copy ortholog decay plotting.
 
 # Genome-evolution parameters
+self_fractionation_bias_table="" # Empty uses workspace/input/fractionation_bias_pairs.tsv; self analyses must first be run as gg_fractionation_bias array tasks.
 min_gene_orthogroup_grampa=5 # Minimum gene count required for GRAMPA-ready orthogroups.
 max_gene_orthogroup_grampa=50 # Maximum gene count allowed for GRAMPA-ready orthogroups.
 grampa_h1="" # Optional GRAMPA H1 hypothesis. Leave empty to skip GRAMPA steps. Example: "2" or "x,y,z".

@@ -7,7 +7,7 @@ It provides scheduler-ready staged pipelines for:
 
 - transcriptome assembly and expression quantification,
 - CDS/genome annotation and contamination filtering,
-- local pairwise synteny and fractionation-bias analysis with kfFractBias,
+- local pairwise fractionation-bias and within-genome self-synteny retention analysis with kfFractBias,
 - orthogroup inference,
 - species-tree inference and dating,
 - gene-family phylogeny and trait/evolutionary annotation,

@@ -178,12 +178,14 @@ Notable defaults:
 
 ### `gg_fractionation_bias_entrypoint.sh`
 
-Runs fully local pairwise fractionation-bias analyses with
+Runs fully local pairwise fractionation-bias and within-genome self-synteny
+retention analyses with
 [`kfFractBias`](https://github.com/kfuku52/kfFractBias). Each scheduler array
 task selects one data row from
 `workspace/input/fractionation_bias_pairs.tsv`, resolves that row's target and
 query files from `workspace/input/species_cds` and
-`workspace/input/species_gff`, and runs `kffractbias compare`. The analysis
+`workspace/input/species_gff`. Rows with `mode=compare` run `kffractbias
+compare`; rows with `mode=self` run `kffractbias selfcompare`. The analysis
 uses local JCVI MCscan, LAST (or BLAST), and QUOTA-ALIGN; it does not contact
 CoGe or another analysis service at runtime.
 
@@ -194,12 +196,21 @@ Required TSV columns:
   the corresponding CDS and GFF filenames,
 - `quota`: explicit target:query syntenic depth such as `1:2`.
 
+`mode` is optional and defaults to `compare`. For `mode=self`, set the same
+species in `target_species` and `query_species` and use a symmetric quota such
+as `1:1` or `2:2`. Its common value is passed to `selfcompare --depth`. The
+target GFF override and `target_seqids` are used for the shared genome;
+`query_feature`, `query_attribute`, and `query_seqids` must be empty.
+
 Optional columns and defaults are:
-`window_size=100`, `step_size=1`, `denominator=all`, empty
+`mode=compare`, `window_size=100`, `step_size=1`, `denominator=all`, empty
 `target_seqids`, empty `query_seqids`, empty `exclude_seqid_regex`,
 `cscore=0.7`, `aligner=last`, empty target/query GFF feature and attribute
-overrides, and `minimum_mapping_fraction=0.5`. Feature and attribute overrides
-must be supplied as a pair. A complete template is available at
+overrides, `minimum_mapping_fraction=0.5`, `self_hit_percent=98`, and
+`diagonal_bound=300`. The last two values apply only to self mode and control
+JCVI's near-self percent-identity filtering and minimum intrachromosomal
+gene-rank distance from the self diagonal. Feature and attribute overrides must
+be supplied as a pair. A complete template is available at
 `workspace/input/fractionation_bias_pairs.example.tsv`.
 
 For a row whose `analysis_id` is `sorghum_maize`, outputs are written below
@@ -212,6 +223,12 @@ For a row whose `analysis_id` is `sorghum_maize`, outputs are written below
 - `sorghum_maize.plot.pdf` and `sorghum_maize.plot.png`,
 - `sorghum_maize.synteny.zip`: the local JCVI working data needed to inspect
   or reproduce the retained synteny result.
+
+Self rows publish the same six-file bundle below
+`workspace/output/genome_evolution/self_fractionation_bias/<analysis_id>/`.
+Their summaries label the result as `self_synteny_retention`: it is a
+within-genome retention-asymmetry measurement conditional on extant annotated
+genes, not an outgroup-based estimate of ancestral losses.
 
 Set each scheduler's array range to the number of data rows in the TSV. For a
 single local row, the default is sufficient:
@@ -233,6 +250,23 @@ Purpose:
   - inlined species-tree stage (formerly `gg_speciesTree_core.sh`)
   - inlined orthofinder stage (formerly `gg_orthofinder_core.sh`)
   - inlined genome-evolution stage (formerly `gg_genomeEvolution_core.sh`)
+
+The optional `run_self_fractionation_bias=1` stage incorporates and aggregates
+completed `mode=self` array results. Heavy LAST/JCVI jobs remain scheduler-array tasks in
+`gg_fractionation_bias_entrypoint.sh`; the unified genome-evolution job only
+validates and summarizes them. The default configuration table is
+`workspace/input/fractionation_bias_pairs.tsv` and can be overridden with
+`self_fractionation_bias_table`.
+
+The aggregation writes:
+
+- `workspace/output/genome_evolution/self_fractionation_bias_summary/self_fractionation_bias_summary.tsv`,
+- matching PDF and PNG summary plots.
+
+The headline metric takes the best interchromosomal retention track for each
+target window, then averages those window values. Intrachromosomal retention is
+reported separately so a residual same-sequence track cannot inflate the main
+within-genome cross-sequence summary.
 - preserves output-exists skip behavior at step level and aborts on real failures.
 - accepts either CDS-first input (`input_sequence_mode=cds`) or protein-only
   input (`input_sequence_mode=protein`); protein-only input can include

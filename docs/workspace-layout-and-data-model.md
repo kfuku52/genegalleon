@@ -58,6 +58,8 @@ Typical contents:
 - `species_gff/` and `species_genome/`: optional annotation/genome companions
 - `species_expression/`: expression matrices used by gene-family downstream analyses
 - `species_trait/`: trait tables such as `species_trait.tsv`
+- `fractionation_bias_pairs.tsv`: scheduler-array manifest for pairwise
+  `compare` and within-genome `self` kfFractBias analyses
 - `species_rnaseq/`, `query_sra_id/`, `amalgkit_metadata/`: transcriptome-generation inputs
 - `query_gene/`: per-family query files for query2family runs
 - `input_generation/`: manifests and trait-plan inputs for input-generation runs
