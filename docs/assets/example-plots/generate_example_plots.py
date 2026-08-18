@@ -9,7 +9,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 SCRIPT = Path(__file__).resolve()
 REPO_ROOT = SCRIPT.parents[3]
 ASSET_DIR = SCRIPT.parent
@@ -31,10 +30,20 @@ def run(cmd: list[str], cwd: Path = REPO_ROOT) -> None:
     subprocess.run(cmd, cwd=cwd, check=True)
 
 
-def write_tsv(path: Path, rows: list[dict[str, object]], fieldnames: list[str]) -> None:
+def write_tsv(
+    path: Path,
+    rows: list[dict[str, object]],
+    fieldnames: list[str],
+    lineterminator: str = "\r\n",
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=fieldnames,
+            delimiter="\t",
+            lineterminator=lineterminator,
+        )
         writer.writeheader()
         writer.writerows(rows)
 
@@ -308,6 +317,7 @@ def generate_query2family_presence_absence() -> None:
 def generate_single_copy_ortholog_decay() -> None:
     base = TEST_DATA_DIR / "single-copy-ortholog-decay"
     genecount = base / "Orthogroups.GeneCount.tsv"
+    selected_genecount = base / "Orthogroups.GeneCount.selected.tsv"
     species = [
         "Amborella_trichopoda",
         "Arabidopsis_thaliana",
@@ -333,17 +343,34 @@ def generate_single_copy_ortholog_decay() -> None:
     ]
     dict_rows = []
     for row in rows:
-        counts = dict(zip(species, row[1:]))
+        counts = dict(zip(species, row[1:], strict=True))
         counts["Orthogroup"] = row[0]
         counts["Total"] = sum(row[1:])
         dict_rows.append(counts)
-    write_tsv(genecount, dict_rows, ["Orthogroup", *species, "Total"])
+    fields = ["Orthogroup", *species, "Total"]
+    write_tsv(genecount, dict_rows, fields)
+    selected_ids = {
+        "OG0000001",
+        "OG0000003",
+        "OG0000005",
+        "OG0000007",
+        "OG0000009",
+        "OG0000011",
+    }
+    write_tsv(
+        selected_genecount,
+        [row for row in dict_rows if row["Orthogroup"] in selected_ids],
+        fields,
+        lineterminator="\n",
+    )
     run(
         [
             sys.executable,
             str(SUPPORT_DIR / "single_copy_ortholog_decay_plot.py"),
             "--orthogroup-genecount",
             str(genecount),
+            "--selected-orthogroup-genecount",
+            str(selected_genecount),
             "--outdir",
             str(base / "out"),
             "--replicates",
@@ -360,7 +387,13 @@ def generate_single_copy_ortholog_decay() -> None:
             "svg",
         ]
     )
-    shutil.copyfile(base / "out" / "single-copy-ortholog-decay.svg", ASSET_DIR / "single-copy-ortholog-decay.svg")
+    asset_path = ASSET_DIR / "single-copy-ortholog-decay.svg"
+    shutil.copyfile(base / "out" / "single-copy-ortholog-decay.svg", asset_path)
+    svg_text = asset_path.read_text(encoding="utf-8")
+    asset_path.write_text(
+        "\n".join(line.rstrip() for line in svg_text.splitlines()) + "\n",
+        encoding="utf-8",
+    )
 
 
 def generate_hgt_summary_plots() -> None:

@@ -1942,9 +1942,11 @@ def test_genome_evolution_exposes_single_copy_ortholog_decay_plot():
     assert "orthogroup_decay_species_counts" in config_vars
     assert "orthogroup_decay_seed" in config_vars
     assert 'run_single_copy_ortholog_decay_plot="${run_single_copy_ortholog_decay_plot:-1}"' in core
-    assert 'task="Single-copy ortholog decay plot"' in core
+    assert 'task="Orthogroup rarefaction plot"' in core
     assert 'python "${gg_support_dir}/single_copy_ortholog_decay_plot.py" \\' in core
     assert '--orthogroup-genecount "${orthogroup_decay_genecount}"' in core
+    assert '--selected-orthogroup-genecount "${file_orthogroup_genecount_selected}"' in core
+    assert '--input "selected_gene_counts=${file_orthogroup_genecount_selected}"' in core
     assert '--replicates "${orthogroup_decay_replicates}"' in core
     assert '--species-counts "${orthogroup_decay_species_counts}"' in core
     assert '--seed "${orthogroup_decay_seed}"' in core

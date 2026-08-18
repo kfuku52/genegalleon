@@ -4559,21 +4559,23 @@ else
   gg_step_skip "${task}"
 fi
 
-task="Single-copy ortholog decay plot"
+task="Orthogroup rarefaction plot"
 orthogroup_decay_genecount=""
 if [[ "${orthogroup_table}" == "OG" ]]; then
   orthogroup_decay_genecount="${dir_orthofinder_og}/Orthogroups.GeneCount.tsv"
 elif [[ "${orthogroup_table}" == "HOG" ]]; then
   orthogroup_decay_genecount="${dir_orthofinder_hog2og}/Orthogroups.GeneCount.tsv"
 elif [[ ${run_single_copy_ortholog_decay_plot} -eq 1 ]]; then
-  echo "Unsupported orthogroup_table for single-copy ortholog decay plot: ${orthogroup_table}. Allowed values are OG or HOG."
+  echo "Unsupported orthogroup_table for orthogroup rarefaction plot: ${orthogroup_table}. Allowed values are OG or HOG."
   exit 1
 fi
 disable_if_no_input_file "run_single_copy_ortholog_decay_plot" "${orthogroup_decay_genecount}"
+disable_if_no_input_file "run_single_copy_ortholog_decay_plot" "${file_orthogroup_genecount_selected}"
 orthogroup_decay_needs_update=0
 gg_artifact_contract_init orthogroup_decay_provenance_args "single_copy_ortholog_decay" "all_species" "${genome_evolution_provenance_dir}/single_copy_ortholog_decay.json"
 orthogroup_decay_provenance_args+=(
   --input "gene_counts=${orthogroup_decay_genecount}"
+  --input "selected_gene_counts=${file_orthogroup_genecount_selected}"
   --output "plot=${file_single_copy_ortholog_decay_plot}"
   --output "summary=${file_single_copy_ortholog_decay_summary}"
   --parameter "orthogroup_table=${orthogroup_table}"
@@ -4589,6 +4591,7 @@ if [[ ${orthogroup_decay_needs_update} -eq 1 && ${run_single_copy_ortholog_decay
 
   if python "${gg_support_dir}/single_copy_ortholog_decay_plot.py" \
     --orthogroup-genecount "${orthogroup_decay_genecount}" \
+    --selected-orthogroup-genecount "${file_orthogroup_genecount_selected}" \
     --outdir "${dir_orthogroup_decay}" \
     --replicates "${orthogroup_decay_replicates}" \
     --species-counts "${orthogroup_decay_species_counts}" \
@@ -4599,9 +4602,9 @@ if [[ ${orthogroup_decay_needs_update} -eq 1 && ${run_single_copy_ortholog_decay
     exit_code=$?
   fi
   if [[ ${exit_code} -eq 0 ]]; then
-    echo "Single-copy ortholog decay plot finished successfully."
+    echo "Orthogroup rarefaction plot finished successfully."
   else
-    echo "Single-copy ortholog decay plot failed. Exiting."
+    echo "Orthogroup rarefaction plot failed. Exiting."
     exit 1
   fi
   gg_artifact_record "${orthogroup_decay_provenance_args[@]}"

@@ -298,7 +298,8 @@ Purpose:
 - run OrthoFinder,
 - select orthogroups for downstream analysis,
 - compare orthogroup methods,
-- plot single-copy ortholog decay as line plots with SD across random species subsamples.
+- plot log10 rarefaction curves with SD for all, filter-selected, non-missing,
+  and strictly single-copy orthogroups across random species subsamples.
 
 Main outputs:
 

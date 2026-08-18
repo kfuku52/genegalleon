@@ -31,13 +31,15 @@ available, the right side adds per-species quality bars.
 
 ![Gene-family presence/absence example](assets/example-plots/query2family-presence-absence.png)
 
-## Single-copy ortholog decay
+## Orthogroup rarefaction
 
-`gg_genome_evolution_entrypoint.sh` can plot how strict single-copy orthogroups
-decay as more species are included in random subsamples. The shaded bands show
-one standard deviation across replicates.
+`gg_genome_evolution_entrypoint.sh` plots rarefaction curves for all,
+filter-selected, non-missing, and strictly single-copy orthogroups as more
+species are included in random subsamples. The y-axis is log10-scaled, each
+shaded band shows one standard deviation across replicates, and a curve stops
+when its mean reaches one orthogroup.
 
-![Single-copy ortholog decay example](assets/example-plots/single-copy-ortholog-decay.svg)
+![Orthogroup rarefaction example](assets/example-plots/single-copy-ortholog-decay.svg)
 
 ## HGT summary plots
 

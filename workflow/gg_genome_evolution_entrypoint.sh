@@ -121,7 +121,7 @@ run_species_omark=0 # Run OMArk proteome quality assessment for each species usi
 run_build_species_omark_summary=1 # Build the shared OMArk summary table for species-wise proteome quality assessment.
 run_og_selection=1 # Select orthogroups that pass gene-count, alignment, and annotation filters for downstream analyses.
 run_orthogroup_method_comparison=1 # Plot comparison among orthogroup/species-tree inference methods.
-run_single_copy_ortholog_decay_plot=1 # Line plot with SD of orthogroup retention when randomly subsampling species.
+run_single_copy_ortholog_decay_plot=1 # Log10 rarefaction curves with SD for all, selected, non-missing, and strictly single-copy orthogroups.
 
 # Genome-evolution workflow flags
 run_self_fractionation_bias=0 # Incorporate completed mode=self kfFractBias array results by validating and building a multi-species summary.
