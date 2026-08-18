@@ -1,5 +1,10 @@
 import gzip
+import hashlib
+import json
+import os
 import shlex
+import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -9,6 +14,8 @@ import pytest
 GG_UTIL_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_util.sh"
 GG_ENTRYPOINT_CONFIG_VARS_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_entrypoint_config_vars.sh"
 GG_ENTRYPOINT_BOOTSTRAP_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_entrypoint_bootstrap.sh"
+WORKFLOW_DIR = GG_ENTRYPOINT_BOOTSTRAP_PATH.parents[1]
+REPO_ROOT = WORKFLOW_DIR.parent
 
 
 def run_bash(cmd: str, cwd: Path):
@@ -19,6 +26,69 @@ def run_bash(cmd: str, cwd: Path):
         text=True,
         check=False,
     )
+
+
+def _canonical_sha256(payload):
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _write_runtime_release_contract(release_root: Path, workflow: str) -> str:
+    required_paths = {
+        "VERSION",
+        f"workflow/{workflow}_entrypoint.sh",
+        f"workflow/core/{workflow}_core.sh",
+        "workflow/support/artifact_provenance.py",
+        "workflow/support/gg_entrypoint_bootstrap.sh",
+        "workflow/support/gg_util.sh",
+    }
+    runtime_paths = required_paths.union(
+        {
+            "workflow/gg_path_defaults.sh",
+            "workflow/gg_common_params.sh",
+        }
+    )
+    installed_files = []
+    for relative in sorted(runtime_paths):
+        source = REPO_ROOT / relative
+        target = release_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        os.chmod(target, stat.S_IMODE(source.stat().st_mode))
+        installed_files.append(
+            {
+                "path": relative,
+                "mode": stat.S_IMODE(target.stat().st_mode),
+                "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+            }
+        )
+    release_root = release_root.resolve()
+    contract = {
+        "schema_version": 1,
+        "kind": "immutable-genegalleon-runtime-release-v1",
+        "workflow": workflow,
+        "project_root": str(release_root.parent / "project"),
+        "release_root": str(release_root),
+        "target_ref": "a" * 40,
+        "installed_files": installed_files,
+    }
+    contract["contract_sha256"] = _canonical_sha256(contract)
+    (release_root / ".kfauto-release.json").write_text(
+        json.dumps(contract, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    inventory = {item["path"]: item["sha256"] for item in installed_files}
+    snapshot = {
+        "schema_version": 1,
+        "kind": "gridengine-runtime-release-snapshot-v1",
+        "project_root": contract["project_root"],
+        "workflow": workflow,
+        "release_root": str(release_root),
+        "target_ref": contract["target_ref"],
+        "release_contract_sha256": contract["contract_sha256"],
+        "file_sha256": {path: inventory[path] for path in sorted(required_paths)},
+    }
+    return _canonical_sha256(snapshot)
 
 
 def test_forward_config_vars_trims_registry_whitespace_for_genome_evolution_entrypoint(tmp_path):
@@ -566,6 +636,65 @@ def test_all_entrypoint_locators_try_later_project_directory_for_spooled_scripts
 
         assert completed.returncode == 0, f"{entrypoint.name}: {completed.stderr}"
         assert completed.stdout.strip() == f"resolved={workflow_dir}"
+
+
+def test_spooled_entrypoint_binds_to_verified_explicit_runtime_release(tmp_path):
+    release_root = tmp_path / "release-a"
+    snapshot = _write_runtime_release_contract(release_root, "gg_genome_evolution")
+    shadow_workflow = tmp_path / "project-b" / "workflow"
+    (shadow_workflow / "support").mkdir(parents=True)
+    for relative in (
+        "support/gg_entrypoint_bootstrap.sh",
+        "support/gg_util.sh",
+        "gg_path_defaults.sh",
+        "gg_common_params.sh",
+    ):
+        source = WORKFLOW_DIR / relative
+        target = shadow_workflow / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+
+    entrypoint = WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh"
+    text = entrypoint.read_text(encoding="utf-8")
+    start = text.index("# Resolve workflow paths for local and scheduler-spooled execution.")
+    end = text.index("gg_entrypoint_name=", start)
+    spooled_script = tmp_path / "spool" / "job_script"
+    spooled_script.parent.mkdir()
+    spooled_script.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        + text[start:end]
+        + 'printf "resolved=%s\\n" "${gg_workflow_dir}"\n',
+        encoding="utf-8",
+    )
+    command = (
+        f"export KFAUTO_RUNTIME_RELEASE_ROOT={shlex.quote(str(release_root))}; "
+        f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+        f"cd {shlex.quote(str(shadow_workflow.parent))}; "
+        f"bash {shlex.quote(str(spooled_script))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == f"resolved={release_root.resolve() / 'workflow'}"
+
+    provenance = release_root / "workflow/support/artifact_provenance.py"
+    provenance.write_text(provenance.read_text(encoding="utf-8") + "# tampered\n", encoding="utf-8")
+    tampered = run_bash(command, cwd=tmp_path)
+    assert tampered.returncode != 0
+    assert "Explicit runtime release file changed" in tampered.stderr
+
+
+def test_all_entrypoints_fail_closed_to_explicit_runtime_release_locator():
+    for entrypoint in sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh")):
+        text = entrypoint.read_text(encoding="utf-8")
+        locator = text[
+            text.index("# Resolve workflow paths for local and scheduler-spooled execution.") :
+            text.index("gg_entrypoint_name=", text.index("# Resolve workflow paths"))
+        ]
+        assert 'if [[ -n "${KFAUTO_RUNTIME_RELEASE_ROOT:-}" ]]; then' in locator
+        assert 'gg_bootstrap_bases=("${KFAUTO_RUNTIME_RELEASE_ROOT}")' in locator
+        assert "gg_entrypoint_initialize" in locator
 
 
 def test_add_container_bind_mount_uses_only_singularity_bindpath_for_singularity_runtime(tmp_path):

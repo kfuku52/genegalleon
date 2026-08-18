@@ -19,6 +19,7 @@ from format_species_annotations import (
     describe_task_cds_input,
     discover_generic_species_dir_tasks,
     extract_provider_transcript_id,
+    extract_header_tag_value,
     first_token,
     gff_repair_audit_path,
     gff_repair_mode_for_task,
@@ -60,7 +61,31 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 7
+CDS_GFF_GROUPING_AUDIT_VERSION = 8
+
+NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
+ANONYMOUS_NCBI_CDS_TOKEN_RE = re.compile(r"^lcl(?:[|_]).+_cds_[0-9]+$")
+ANONYMOUS_NCBI_SEMANTIC_TAGS = (
+    "locus_tag",
+    "gene_id",
+    "gene",
+    "protein_id",
+    "transcript_id",
+    "db_xref",
+)
+
+
+def is_unlinkable_anonymous_ncbi_cds(task, header, mapping_status):
+    """Identify only NCBI placeholder CDS records with no GFF-linkable identity."""
+    if task.get("provider") not in NCBI_LIKE_PROVIDERS or mapping_status != "unmapped":
+        return False
+    token = first_token(str(header or "")).lstrip(">")
+    if ANONYMOUS_NCBI_CDS_TOKEN_RE.fullmatch(token) is None:
+        return False
+    return all(
+        str(extract_header_tag_value(header, tag) or "").strip() == ""
+        for tag in ANONYMOUS_NCBI_SEMANTIC_TAGS
+    )
 
 
 def cds_gff_grouping_audit_paths(output_path):
@@ -149,6 +174,7 @@ def cds_gff_result_fields(audit=None):
         "gff_records_mapped": int(stats.get("mapped", 0) or 0),
         "gff_records_unmapped": int(stats.get("unmapped", 0) or 0),
         "gff_records_ambiguous": int(stats.get("ambiguous", 0) or 0),
+        "gff_records_excluded_anonymous": int(stats.get("excluded_anonymous_unmapped", 0) or 0),
         "gff_unexpected_mapping_records": int(stats.get("unexpected_mapping_records", 0) or 0),
         "gff_mapping_fallback_tolerated": int(stats.get("mapping_fallback_tolerated", 0) or 0),
         "gff_coordinate_rescued_transcripts": int(stats.get("coordinate_rescued_transcripts", 0) or 0),
@@ -165,6 +191,7 @@ def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload, strict_
         "raw_cds_id",
         "formatted_transcript_id",
         "mapping_status",
+        "exclusion_reason",
         "matched_aliases",
         "candidate_gene_tokens",
         "selected_gene_id",
@@ -625,7 +652,12 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
     records_by_gene = {}
     cds_task = prepare_cds_identifier_task(task)
     grouping_index = cds_task.get("_gff_cds_grouping_index")
-    mapping_counts = {"mapped": 0, "unmapped": 0, "ambiguous": 0}
+    mapping_counts = {
+        "mapped": 0,
+        "unmapped": 0,
+        "ambiguous": 0,
+        "excluded_anonymous_unmapped": 0,
+    }
     raw_gff_tokens_by_gene_id = defaultdict(set)
     audit_rows = []
     for header, sequence in iter_task_cds_records(task):
@@ -633,6 +665,10 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
         transcript_id = build_formatted_cds_id(cds_task, header)
         gene_id, gff_match = resolve_gene_aggregate_id(cds_task, header, transcript_id)
         mapping_status = str(gff_match.get("status", "not_applicable") or "not_applicable")
+        exclusion_reason = ""
+        if is_unlinkable_anonymous_ncbi_cds(cds_task, header, mapping_status):
+            mapping_status = "excluded_anonymous_unmapped"
+            exclusion_reason = "anonymous_ncbi_cds_without_gff_link"
         if mapping_status in mapping_counts:
             mapping_counts[mapping_status] += 1
         if mapping_status == "mapped":
@@ -649,6 +685,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
                 "raw_cds_id": first_token(header),
                 "formatted_transcript_id": transcript_id,
                 "mapping_status": mapping_status,
+                "exclusion_reason": exclusion_reason,
                 "matched_aliases": ",".join(gff_match.get("matched_aliases", ())),
                 "candidate_gene_tokens": ",".join(gff_match.get("candidate_gene_tokens", ())),
                 "selected_gene_id": gene_id,
@@ -657,6 +694,9 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
                 "selected_longest": 0,
             }
         )
+
+        if mapping_status == "excluded_anonymous_unmapped":
+            continue
 
         previous = records_by_gene.get(gene_id)
         if previous is None:
@@ -765,6 +805,8 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
         grouping_source = "header"
     elif mapping_counts["unmapped"] > 0 or mapping_counts["ambiguous"] > 0:
         grouping_source = "gff_with_allowed_missing"
+    elif mapping_counts["excluded_anonymous_unmapped"] > 0:
+        grouping_source = "gff_with_anonymous_exclusions"
     else:
         grouping_source = "gff"
     audit_payload = {
@@ -777,6 +819,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
             "mapped": mapping_counts["mapped"],
             "unmapped": mapping_counts["unmapped"],
             "ambiguous": mapping_counts["ambiguous"],
+            "excluded_anonymous_unmapped": mapping_counts["excluded_anonymous_unmapped"],
             "unexpected_mapping_records": unexpected_mapping_count,
             "mapping_fallback_tolerated": int(mapping_fallback_tolerated),
             "gff_transcripts_total": int((grouping_index or {}).get("transcripts_total", 0) or 0),

@@ -211,6 +211,7 @@ def main():
     total_cds_gff_mapped = 0
     total_cds_gff_unmapped = 0
     total_cds_gff_ambiguous = 0
+    total_cds_gff_excluded_anonymous = 0
     total_cds_gff_fallback_records = 0
     total_cds_gff_coordinate_rescued_transcripts = 0
     total_cds_gff_coordinate_rescued_groups = 0
@@ -307,6 +308,7 @@ def main():
         total_cds_gff_mapped += int(cds_result.get("gff_records_mapped", 0) or 0)
         total_cds_gff_unmapped += int(cds_result.get("gff_records_unmapped", 0) or 0)
         total_cds_gff_ambiguous += int(cds_result.get("gff_records_ambiguous", 0) or 0)
+        total_cds_gff_excluded_anonymous += int(cds_result.get("gff_records_excluded_anonymous", 0) or 0)
         total_cds_gff_fallback_records += int(cds_result.get("gff_unexpected_mapping_records", 0) or 0)
         total_cds_gff_coordinate_rescued_transcripts += int(
             cds_result.get("gff_coordinate_rescued_transcripts", 0) or 0
@@ -367,6 +369,7 @@ def main():
         "cds_gff_records_mapped": total_cds_gff_mapped,
         "cds_gff_records_unmapped": total_cds_gff_unmapped,
         "cds_gff_records_ambiguous": total_cds_gff_ambiguous,
+        "cds_gff_records_excluded_anonymous": total_cds_gff_excluded_anonymous,
         "cds_gff_fallback_records": total_cds_gff_fallback_records,
         "cds_gff_coordinate_rescued_transcripts": total_cds_gff_coordinate_rescued_transcripts,
         "cds_gff_coordinate_rescued_groups": total_cds_gff_coordinate_rescued_groups,

@@ -138,6 +138,11 @@ Purpose:
 - optional contamination filtering,
 - BUSCO and expression quantification summaries.
 
+For SRA-derived inputs, `getfastq_completion.json` binds every published FASTQ
+to its relative path, byte size, SHA-256, and a complete gzip/FASTQ integrity
+check. Resume staging, assembly/subsampling, long-read reuse, and quantification
+revalidate that exact byte contract before consuming the reads.
+
 Main outputs:
 
 - `workspace/output/transcriptome_assembly/assembled_transcripts_with_isoforms`

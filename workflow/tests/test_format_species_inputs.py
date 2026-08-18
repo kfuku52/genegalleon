@@ -1339,7 +1339,7 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 7
+    assert audit["version"] == 8
     assert len(audit["cds_input"]["sha256"]) == 64
     assert len(audit["gff_input"]["sha256"]) == 64
 
@@ -2608,7 +2608,7 @@ def test_provided_cds_longest_selection_compares_lengths_before_padding(tmp_path
         audit = json.load(handle)
     with open(audit_tsv_path, "rt", encoding="utf-8", newline="") as handle:
         audit_rows = list(csv.DictReader(handle, delimiter="\t"))
-    assert audit["version"] == 7
+    assert audit["version"] == 8
     assert [row["raw_sequence_length"] for row in audit_rows] == ["8", "9"]
     assert [row["sequence_length"] for row in audit_rows] == ["9", "9"]
     assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
@@ -2651,7 +2651,7 @@ def test_provided_cds_gff_grouping_regenerates_older_audit_version(tmp_path):
     skipped = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
 
     assert regenerated["status"] == "write"
-    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 7
+    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 8
     assert skipped["status"] == "skip"
 
 
@@ -2834,6 +2834,102 @@ def test_format_species_inputs_uses_locus_tag_for_genbank_style_ncbi_cds(tmp_pat
     )
     assert mapping.returncode == 0, mapping.stderr + "\n" + mapping.stdout
     assert "[Dictyostelium_cf_discoideum] CDS-to-GFF mapping OK: 2/2 IDs" in mapping.stdout
+
+
+def test_format_species_inputs_excludes_only_unlinkable_anonymous_ncbi_cds(tmp_path):
+    input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
+    species_dir = input_dir / "Example_species"
+    species_dir.mkdir(parents=True)
+    cds_path = species_dir / "GCA_000000001.1_demo_cds_from_genomic.fna.gz"
+    gff_path = species_dir / "GCA_000000001.1_demo_genomic.gff.gz"
+    genome_path = species_dir / "GCA_000000001.1_demo_genomic.fna.gz"
+    total_mappable = 999
+    with gzip.open(cds_path, "wt", encoding="utf-8") as handle:
+        for index in range(total_mappable):
+            handle.write(
+                ">lcl|NC_000001.1_cds_XP{}.1_{} [locus_tag=LOC{}] "
+                "[protein_id=XP{}.1] [gbkey=CDS]\nATGAAA\n".format(
+                    index, index + 1, index, index
+                )
+            )
+        handle.write(
+            ">lcl|NC_000001.1_cds_1000 [location=9001..9006] [gbkey=CDS]\nATGAAA\n"
+        )
+    with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
+        for index in range(total_mappable):
+            handle.write(
+                "NC_000001.1\tsrc\tCDS\t{}\t{}\t.\t+\t0\t"
+                "ID=cds-XP{}.1;locus_tag=LOC{};protein_id=XP{}.1\n".format(
+                    index * 6 + 1,
+                    index * 6 + 6,
+                    index,
+                    index,
+                    index,
+                )
+            )
+    with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
+        handle.write(">NC_000001.1\n" + ("A" * 10000) + "\n")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    species_summary = tmp_path / "summary.tsv"
+    completed = run_script(
+        "--provider",
+        "ncbi",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--species-summary-output",
+        str(species_summary),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = next(out_cds.glob("*.fa.gz"))
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert len(headers) == total_mappable
+    assert all("NC_000001.1_cds_1000" not in header for header in headers)
+
+    audit_path = Path(str(formatted_cds) + ".gff-grouping.tsv")
+    with open(audit_path, "rt", encoding="utf-8", newline="") as handle:
+        audit_rows = list(csv.DictReader(handle, delimiter="\t"))
+    excluded = [row for row in audit_rows if row["mapping_status"] == "excluded_anonymous_unmapped"]
+    assert len(excluded) == 1
+    assert excluded[0]["exclusion_reason"] == "anonymous_ncbi_cds_without_gff_link"
+
+    mapping = run_validate_mapping_script(
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--strict",
+    )
+    assert mapping.returncode == 0, mapping.stderr + "\n" + mapping.stdout
+    assert "CDS-to-GFF mapping OK: 999/999 IDs" in mapping.stdout
+
+    with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert rows[0]["cds_gff_records_excluded_anonymous"] == "1"
+
+
+def test_format_species_inputs_does_not_exclude_named_ncbi_cds_from_unrelated_gff(tmp_path):
+    module = load_module()
+    task = {
+        "provider": "ncbi",
+        "species_prefix": "Example_species",
+    }
+    header = (
+        "lcl|NC_000001.1_cds_XP_123.1_1 [protein_id=XP_123.1] "
+        "[location=1..6] [gbkey=CDS]"
+    )
+
+    assert not module.is_unlinkable_anonymous_ncbi_cds(task, header, "unmapped")
 
 
 def test_format_species_inputs_maps_protein_id_through_gff_gene_hierarchy(tmp_path):

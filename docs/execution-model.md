@@ -98,6 +98,13 @@ Site adapters in `workflow/support/gg_site_runtime.sh` can also add extra bind m
 See [Site Runtime Profiles](site-runtime-profiles.md) for the currently
 recognized environments and the `GG_SITE_PROFILE` override.
 
+For scheduler-spooled immutable runtimes, `KFAUTO_RUNTIME_RELEASE_ROOT` and
+`KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256` form an explicit workflow-origin
+contract. Every entrypoint loads its bootstrap only from that release root,
+verifies the release manifest plus the entrypoint/core/support file snapshot,
+and fails closed instead of searching the submit directory or current working
+directory when the origin is missing, shadowed, or changed.
+
 ## Core script bootstrap
 
 Inside the container, each core script loads `workflow/support/gg_core_bootstrap.sh`, which:

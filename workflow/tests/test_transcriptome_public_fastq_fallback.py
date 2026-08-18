@@ -43,13 +43,16 @@ def _fallback_python_source() -> str:
 
 def _shell_function_source(name: str) -> str:
     text = CORE_PATH.read_text(encoding="utf-8")
-    match = re.search(
-        rf"^{re.escape(name)}\(\) \{{\n.*?^\}}$",
-        text,
-        re.DOTALL | re.MULTILINE,
-    )
-    assert match is not None
-    return match.group(0)
+    start_match = re.search(rf"^{re.escape(name)}\(\) \{{\n", text, re.MULTILINE)
+    assert start_match is not None
+    next_match = re.search(r"^[A-Za-z_][A-Za-z0-9_]*\(\) \{\n", text[start_match.end() :], re.MULTILINE)
+    if next_match is None:
+        end_match = re.search(r"^\}$", text[start_match.end() :], re.MULTILINE)
+        assert end_match is not None
+        end = start_match.end() + end_match.end()
+    else:
+        end = start_match.end() + next_match.start()
+    return text[start_match.start() : end].rstrip()
 
 
 def _run_fallback(monkeypatch, metadata_path: Path, output_dir: Path, responses: dict[str, bytes]):
@@ -72,6 +75,44 @@ def _metadata(path: Path, runs: list[str]):
 
 def _partial_files(root: Path) -> list[Path]:
     return [path for path in root.rglob("*") if ".part." in path.name or path.name.endswith(".part")]
+
+
+def _manifest_paths(manifest: dict, run_index: int = 0) -> list[str]:
+    return [item["path"] for item in manifest["runs"][run_index]["files"]]
+
+
+def _run_manifest_validator(metadata_path: Path, output_dir: Path):
+    script = "\n".join(
+        [
+            "set -u",
+            _shell_function_source("validate_amalgkit_getfastq_completion_manifest"),
+            'validate_amalgkit_getfastq_completion_manifest "$1/getfastq_completion.json" "$2"',
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-s", "--", str(output_dir), str(metadata_path)],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _run_manifest_binder(metadata_path: Path, output_dir: Path):
+    script = "\n".join(
+        [
+            "set -u",
+            _shell_function_source("bind_amalgkit_getfastq_completion_manifest"),
+            'bind_amalgkit_getfastq_completion_manifest "$1/getfastq_completion.json" "$2"',
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-s", "--", str(output_dir), str(metadata_path)],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
 
 def _xml(filename: str, url: str) -> bytes:
@@ -121,6 +162,7 @@ def test_public_fallback_reuses_valid_fastq_and_atomically_completes_missing_run
         assert handle.read() == b"@downloaded\nTGCA\n+\n!!!!\n"
     assert not _partial_files(output_dir)
     manifest = json.loads((output_dir / "getfastq_completion.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 2
     assert manifest["status"] == "complete"
     assert manifest["run_count"] == 2
     assert [entry["run"] for entry in manifest["runs"]] == ["RUN1", "RUN2"]
@@ -187,13 +229,9 @@ def test_public_fallback_uses_ena_fastq_when_trace_has_no_original(monkeypatch, 
     manifest = json.loads(
         (output_dir / "getfastq_completion.json").read_text(encoding="utf-8")
     )
-    assert manifest["runs"] == [
-        {
-            "files": ["ERR123456/ERR123456.amalgkit.fastq.gz"],
-            "run": "ERR123456",
-            "status": "complete",
-        }
-    ]
+    assert _manifest_paths(manifest) == ["ERR123456/ERR123456.amalgkit.fastq.gz"]
+    assert manifest["runs"][0]["files"][0]["size"] == recovered.stat().st_size
+    assert manifest["runs"][0]["files"][0]["sha256"] == hashlib.sha256(fastq_payload).hexdigest()
 
 
 def test_public_fallback_uses_checksum_validated_ena_submitted_fastq_pair(monkeypatch, tmp_path):
@@ -233,7 +271,7 @@ def test_public_fallback_uses_checksum_validated_ena_submitted_fastq_pair(monkey
     assert (output_dir / "ERR4643641" / "ERR4643641_2.amalgkit.fastq.gz").read_bytes() == second_payload
     manifest = json.loads((output_dir / "getfastq_completion.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "complete"
-    assert manifest["runs"][0]["files"] == [
+    assert _manifest_paths(manifest) == [
         "ERR4643641/ERR4643641_1.amalgkit.fastq.gz",
         "ERR4643641/ERR4643641_2.amalgkit.fastq.gz",
     ]
@@ -323,10 +361,85 @@ def test_public_fallback_reuses_one_valid_mate_and_recovers_the_other(monkeypatc
         (output_dir / "getfastq_completion.json").read_text(encoding="utf-8")
     )
     assert manifest["run_count"] == 1
-    assert manifest["runs"][0]["files"] == [
+    assert _manifest_paths(manifest) == [
         "ERR123456/ERR123456_1.amalgkit.fastq.gz",
         "ERR123456/ERR123456_2.amalgkit.fastq.gz",
     ]
+
+
+def test_completion_manifest_rejects_fastq_content_changed_after_publication(monkeypatch, tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["RUN1"])
+    fastq_url = "https://example.invalid/RUN1.fastq"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=RUN1": _xml(
+            "RUN1.fastq", fastq_url
+        ),
+        fastq_url: b"@read\nACGT\n+\n!!!!\n",
+    }
+    _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+
+    current = _run_manifest_validator(metadata_path, output_dir)
+    assert current.returncode == 0, current.stderr
+
+    fastq_path = output_dir / "RUN1" / "RUN1.amalgkit.fastq.gz"
+    fastq_path.write_bytes(fastq_path.read_bytes()[:-8])
+    changed = _run_manifest_validator(metadata_path, output_dir)
+
+    assert changed.returncode != 0
+    assert "content contract changed" in changed.stderr or "complete gzip/FASTQ" in changed.stderr
+
+
+def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    run_dir = output_dir / "RUN1"
+    run_dir.mkdir(parents=True)
+    _metadata(metadata_path, ["RUN1"])
+    fastq_path = run_dir / "RUN1.amalgkit.fastq.gz"
+    with gzip.open(fastq_path, "wb") as handle:
+        handle.write(b"@read\nACGT\n+\n!!!!\n")
+    (output_dir / "getfastq_completion.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "run_count": 1,
+                "runs": [
+                    {
+                        "run": "RUN1",
+                        "status": "complete",
+                        "files": ["RUN1/RUN1.amalgkit.fastq.gz"],
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    bound = _run_manifest_binder(metadata_path, output_dir)
+
+    assert bound.returncode == 0, bound.stderr
+    manifest = json.loads((output_dir / "getfastq_completion.json").read_text(encoding="utf-8"))
+    contract = manifest["runs"][0]["files"][0]
+    assert manifest["schema_version"] == 2
+    assert contract == {
+        "path": "RUN1/RUN1.amalgkit.fastq.gz",
+        "size": fastq_path.stat().st_size,
+        "sha256": hashlib.sha256(fastq_path.read_bytes()).hexdigest(),
+    }
+    validated = _run_manifest_validator(metadata_path, output_dir)
+    assert validated.returncode == 0, validated.stderr
+
+
+def test_downstream_fastq_gates_revalidate_the_completion_contract():
+    text = CORE_PATH.read_text(encoding="utf-8")
+
+    assert "Published getfastq completion contract changed before resume staging" in text
+    assert "getfastq completion contract changed before transcriptome assembly" in text
+    assert "getfastq completion contract changed before Corset read reuse" in text
+    assert "getfastq completion contract changed before quant FASTQ reuse" in text
 
 
 def test_public_fallback_rejects_ena_checksum_mismatch(monkeypatch, tmp_path):

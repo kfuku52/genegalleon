@@ -604,6 +604,10 @@ Latest template distribution:
 - can download provider files from a manifest and format inputs in one run,
 - can validate produced `species_cds` naming, `species_gff` consistency, and CDS-to-GFF mapping compatibility,
 - CDS-to-GFF mapping validation is species-parallel and accepts `validate_cds_gff_mapping.py --nthreads N` (`--ncpu` remains as a compatibility alias),
+- NCBI-like CDS records whose only identity is an anonymous `lcl..._cds_N`
+  placeholder are excluded only when they cannot link to the companion GFF;
+  the per-record grouping audit records `excluded_anonymous_unmapped`, while
+  named, ambiguous, and wrong-file mismatches remain errors,
 - can optionally generate `workspace/input/species_trait/species_trait.tsv`
   from configured trait databases.
 

@@ -411,6 +411,7 @@ SPECIES_SUMMARY_COLUMNS = (
     "cds_gff_records_mapped",
     "cds_gff_records_unmapped",
     "cds_gff_records_ambiguous",
+    "cds_gff_records_excluded_anonymous",
     "cds_gff_coordinate_rescued_transcripts",
     "cds_gff_coordinate_rescued_groups",
     "overwrite",

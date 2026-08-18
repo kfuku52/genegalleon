@@ -155,6 +155,9 @@ def build_species_summary_row(
         "cds_gff_records_mapped": str(cds_result.get("gff_records_mapped", 0)),
         "cds_gff_records_unmapped": str(cds_result.get("gff_records_unmapped", 0)),
         "cds_gff_records_ambiguous": str(cds_result.get("gff_records_ambiguous", 0)),
+        "cds_gff_records_excluded_anonymous": str(
+            cds_result.get("gff_records_excluded_anonymous", 0)
+        ),
         "cds_gff_coordinate_rescued_transcripts": str(
             cds_result.get("gff_coordinate_rescued_transcripts", 0)
         ),

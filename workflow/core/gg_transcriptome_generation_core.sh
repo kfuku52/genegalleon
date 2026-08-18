@@ -1005,25 +1005,257 @@ has_resumable_getfastq_run_state() {
   [[ -n "$(find "${dir_tmp}/getfastq" -mindepth 2 -maxdepth 2 -type f -name 'getfastq_run_state.json' -print -quit 2> /dev/null)" ]]
 }
 
+bind_amalgkit_getfastq_completion_manifest() {
+  local completion_manifest=$1
+  local metadata_tsv=$2
+
+  python - "${completion_manifest}" "${metadata_tsv}" <<'PY'
+import csv
+import gzip
+import hashlib
+import json
+import os
+import pathlib
+import sys
+
+manifest_path = pathlib.Path(sys.argv[1])
+metadata_path = pathlib.Path(sys.argv[2])
+if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
+    raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
+output_root = manifest_path.parent.resolve(strict=True)
+
+
+def validate_fastq_gzip(path):
+    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        with gzip.open(path, "rb") as handle:
+            record_count = 0
+            while True:
+                header = handle.readline()
+                if not header:
+                    break
+                if not header.startswith(b"@") or len(header.rstrip(b"\r\n")) < 2:
+                    return False
+                sequence_length = 0
+                while True:
+                    line = handle.readline()
+                    if not line:
+                        return False
+                    if line.startswith(b"+"):
+                        break
+                    sequence_length += len(line.rstrip(b"\r\n"))
+                if sequence_length == 0:
+                    return False
+                quality_length = 0
+                while quality_length < sequence_length:
+                    line = handle.readline()
+                    if not line:
+                        return False
+                    quality_length += len(line.rstrip(b"\r\n"))
+                if quality_length != sequence_length:
+                    return False
+                record_count += 1
+            return record_count > 0
+    except (EOFError, OSError, ValueError):
+        return False
+
+
+def safe_fastq_path(raw_value):
+    value = raw_value.get("path", "") if isinstance(raw_value, dict) else raw_value
+    value = str(value or "").strip()
+    relative = pathlib.PurePosixPath(value)
+    if (
+        value == ""
+        or relative.is_absolute()
+        or any(part in ("", ".", "..") for part in relative.parts)
+        or not value.endswith(".amalgkit.fastq.gz")
+    ):
+        raise SystemExit("Completion manifest contains an unsafe FASTQ path: {}".format(value))
+    path = output_root.joinpath(*relative.parts)
+    resolved = path.resolve(strict=True)
+    if os.path.commonpath((str(output_root), str(resolved))) != str(output_root):
+        raise SystemExit("Completion manifest FASTQ escapes its output root: {}".format(value))
+    if path.is_symlink() or resolved != path:
+        raise SystemExit("Completion manifest FASTQ must be a regular non-symlink path: {}".format(value))
+    return value, path
+
+
+def file_contract(raw_value):
+    value, path = safe_fastq_path(raw_value)
+    if not validate_fastq_gzip(path):
+        raise SystemExit("Completion manifest FASTQ is not a complete gzip/FASTQ: {}".format(value))
+    before = path.stat()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    after = path.stat()
+    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+        raise SystemExit("Completion manifest FASTQ changed while hashing: {}".format(value))
+    return {"path": value, "size": after.st_size, "sha256": digest.hexdigest()}
+
+
+with manifest_path.open("rt", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+if manifest.get("status") != "complete" or not isinstance(manifest.get("runs"), list):
+    raise SystemExit("amalgkit getfastq completion manifest is not complete: {}".format(manifest_path))
+with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
+    reader = csv.DictReader(handle, delimiter="\t")
+    if "run" not in (reader.fieldnames or []):
+        raise SystemExit("Metadata lacks the run column: {}".format(metadata_path))
+    expected_runs = [str(row.get("run", "") or "").strip() for row in reader]
+expected_runs = [run for run in expected_runs if run]
+if len(expected_runs) != len(set(expected_runs)):
+    raise SystemExit("Metadata contains duplicate run IDs: {}".format(metadata_path))
+
+bound_runs = []
+seen_runs = set()
+seen_paths = set()
+for entry in manifest["runs"]:
+    if not isinstance(entry, dict):
+        raise SystemExit("Completion manifest contains a non-object run entry: {}".format(manifest_path))
+    run = str(entry.get("run", "") or "").strip()
+    files = entry.get("files")
+    if run == "" or run in seen_runs or entry.get("status") != "complete" or not isinstance(files, list) or not files:
+        raise SystemExit("Completion manifest contains an incomplete or duplicate run: {}".format(run))
+    contracts = [file_contract(item) for item in files]
+    paths = [item["path"] for item in contracts]
+    if len(paths) != len(set(paths)) or any(path in seen_paths for path in paths):
+        raise SystemExit("Completion manifest contains a duplicate FASTQ path for run: {}".format(run))
+    seen_runs.add(run)
+    seen_paths.update(paths)
+    bound_runs.append({"run": run, "status": "complete", "files": contracts})
+if sorted(seen_runs) != sorted(expected_runs):
+    raise SystemExit("Completion manifest run IDs differ from metadata.")
+
+bound_manifest = {
+    "schema_version": 2,
+    "status": "complete",
+    "run_count": len(bound_runs),
+    "runs": bound_runs,
+}
+part = manifest_path.with_name(".getfastq_completion.binding.json.part")
+if part.exists() or part.is_symlink():
+    part.unlink()
+try:
+    with part.open("wt", encoding="utf-8") as handle:
+        json.dump(bound_manifest, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(part, manifest_path)
+finally:
+    if part.exists() or part.is_symlink():
+        part.unlink()
+PY
+}
+
 validate_amalgkit_getfastq_completion_manifest() {
   local completion_manifest=$1
   local metadata_tsv=$2
 
   python - "${completion_manifest}" "${metadata_tsv}" <<'PY'
 import csv
+import gzip
+import hashlib
 import json
+import os
 import pathlib
+import re
 import sys
 
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
-if not manifest_path.is_file() or manifest_path.stat().st_size == 0:
-    raise SystemExit("Missing or empty amalgkit getfastq completion manifest: {}".format(manifest_path))
-
+if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
+    raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 with manifest_path.open("rt", encoding="utf-8") as handle:
     manifest = json.load(handle)
-if manifest.get("status") != "complete":
+if manifest.get("schema_version") != 2 or manifest.get("status") != "complete":
     raise SystemExit("amalgkit getfastq completion manifest is not complete: {}".format(manifest_path))
+output_root = manifest_path.parent.resolve(strict=True)
+
+
+def validate_fastq_gzip(path):
+    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        with gzip.open(path, "rb") as handle:
+            record_count = 0
+            while True:
+                header = handle.readline()
+                if not header:
+                    break
+                if not header.startswith(b"@") or len(header.rstrip(b"\r\n")) < 2:
+                    return False
+                sequence_length = 0
+                while True:
+                    line = handle.readline()
+                    if not line:
+                        return False
+                    if line.startswith(b"+"):
+                        break
+                    sequence_length += len(line.rstrip(b"\r\n"))
+                if sequence_length == 0:
+                    return False
+                quality_length = 0
+                while quality_length < sequence_length:
+                    line = handle.readline()
+                    if not line:
+                        return False
+                    quality_length += len(line.rstrip(b"\r\n"))
+                if quality_length != sequence_length:
+                    return False
+                record_count += 1
+            return record_count > 0
+    except (EOFError, OSError, ValueError):
+        return False
+
+
+def validate_file_contract(contract, run, seen_paths):
+    if not isinstance(contract, dict) or set(contract) != {"path", "size", "sha256"}:
+        raise SystemExit("Completion manifest has an invalid FASTQ contract for run: {}".format(run))
+    value = str(contract.get("path", "") or "").strip()
+    relative = pathlib.PurePosixPath(value)
+    expected_size = contract.get("size")
+    expected_sha256 = str(contract.get("sha256", "") or "")
+    if (
+        value == ""
+        or relative.is_absolute()
+        or any(part in ("", ".", "..") for part in relative.parts)
+        or not value.endswith(".amalgkit.fastq.gz")
+        or not isinstance(expected_size, int)
+        or expected_size <= 0
+        or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+        or value in seen_paths
+    ):
+        raise SystemExit("Completion manifest has an unsafe FASTQ contract for run: {}".format(run))
+    path = output_root.joinpath(*relative.parts)
+    try:
+        resolved = path.resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        raise SystemExit("Completion manifest FASTQ is missing: {}".format(value))
+    if (
+        os.path.commonpath((str(output_root), str(resolved))) != str(output_root)
+        or path.is_symlink()
+        or resolved != path
+        or not path.is_file()
+    ):
+        raise SystemExit("Completion manifest FASTQ path changed: {}".format(value))
+    before = path.stat()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    after = path.stat()
+    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+        raise SystemExit("Completion manifest FASTQ changed while validating: {}".format(value))
+    if after.st_size != expected_size or digest.hexdigest() != expected_sha256:
+        raise SystemExit("Completion manifest FASTQ content contract changed: {}".format(value))
+    if not validate_fastq_gzip(path):
+        raise SystemExit("Completion manifest FASTQ is not a complete gzip/FASTQ: {}".format(value))
+    seen_paths.add(value)
+
 
 with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
@@ -1037,7 +1269,18 @@ if len(expected_runs) != len(set(expected_runs)):
 manifest_entries = manifest.get("runs")
 if not isinstance(manifest_entries, list):
     raise SystemExit("Completion manifest lacks a runs list: {}".format(manifest_path))
-manifest_runs = [str(entry.get("run", "") or "").strip() for entry in manifest_entries if isinstance(entry, dict)]
+manifest_runs = []
+seen_paths = set()
+for entry in manifest_entries:
+    if not isinstance(entry, dict) or set(entry) != {"run", "status", "files"}:
+        raise SystemExit("Completion manifest contains an invalid run contract: {}".format(manifest_path))
+    run = str(entry.get("run", "") or "").strip()
+    files = entry.get("files")
+    if run == "" or entry.get("status") != "complete" or not isinstance(files, list) or not files:
+        raise SystemExit("Completion manifest contains an incomplete run contract: {}".format(run))
+    for contract in files:
+        validate_file_contract(contract, run, seen_paths)
+    manifest_runs.append(run)
 if manifest.get("run_count") != len(manifest_runs):
     raise SystemExit("Completion manifest run_count does not match its runs list: {}".format(manifest_path))
 if sorted(manifest_runs) != sorted(expected_runs):
@@ -1047,6 +1290,8 @@ if sorted(manifest_runs) != sorted(expected_runs):
             ",".join(sorted(manifest_runs)),
         )
     )
+if len(manifest_runs) != len(set(manifest_runs)):
+    raise SystemExit("Completion manifest contains duplicate run IDs: {}".format(manifest_path))
 PY
 }
 
@@ -1167,7 +1412,10 @@ run_amalgkit_getfastq_attempt() {
     fi
     echo "amalgkit getfastq safely finished."
     echo "amalgkit getfastq log: ${log_file}"
-    if ! validate_amalgkit_getfastq_completion_manifest \
+    if ! bind_amalgkit_getfastq_completion_manifest \
+      "${dir_tmp}/getfastq/getfastq_completion.json" \
+      "${file_amalgkit_metadata}" || \
+      ! validate_amalgkit_getfastq_completion_manifest \
       "${dir_tmp}/getfastq/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
     then
@@ -1465,6 +1713,24 @@ def is_valid_fastq_gzip(path: Path) -> bool:
     return record_count > 0
 
 
+def manifest_file_contract(path: Path) -> dict:
+    if not is_valid_fastq_gzip(path):
+        raise SystemExit("FASTQ is not complete enough to bind into the completion manifest: {}".format(path))
+    before = path.stat()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(DOWNLOAD_CHUNK_BYTES), b""):
+            digest.update(chunk)
+    after = path.stat()
+    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+        raise SystemExit("FASTQ changed while binding its completion manifest: {}".format(path))
+    return {
+        "path": str(path.relative_to(output_root)),
+        "size": after.st_size,
+        "sha256": digest.hexdigest(),
+    }
+
+
 def normalize_ena_fastq_url(value: str) -> str:
     value = str(value or "").strip()
     if not value:
@@ -1714,8 +1980,12 @@ for run in runs:
     if existing_fastqs:
         if any(not is_valid_fastq_gzip(path) for path in existing_fastqs):
             raise SystemExit("Existing fallback FASTQ set is invalid for run: {}".format(run))
-        completed_files = [str(path.relative_to(output_root)) for path in existing_fastqs]
-        print("Reusing validated fallback FASTQ set for {}: {}".format(run, ",".join(completed_files)))
+        completed_files = [manifest_file_contract(path) for path in existing_fastqs]
+        print(
+            "Reusing validated fallback FASTQ set for {}: {}".format(
+                run, ",".join(item["path"] for item in completed_files)
+            )
+        )
         manifest_runs.append({"run": run, "status": "complete", "files": completed_files})
         continue
 
@@ -1741,14 +2011,15 @@ for run in runs:
             if not is_valid_fastq_gzip(dest):
                 raise SystemExit("Existing fallback FASTQ is invalid; refusing to replace it: {}".format(dest))
             print("Reusing validated fallback FASTQ for {}: {}".format(run, dest))
-            completed_files.append(str(dest.relative_to(output_root)))
+            completed_files.append(manifest_file_contract(dest))
             continue
         download_fastq_atomically(dest, url, expected_md5)
         print("Recovered public FASTQ for {} via {}: {} -> {}".format(run, provider, filename or url, dest))
-        completed_files.append(str(dest.relative_to(output_root)))
+        completed_files.append(manifest_file_contract(dest))
     manifest_runs.append({"run": run, "status": "complete", "files": completed_files})
 
 manifest = {
+    "schema_version": 2,
     "status": "complete",
     "run_count": len(manifest_runs),
     "runs": manifest_runs,
@@ -2210,6 +2481,14 @@ if [[ ${run_amalgkit_getfastq} -eq 1 && ${getfastq_needs_update} -eq 1 ]]; then
   ensure_dir "${dir_amalgkit_getfastq_sp}"
 
   clear_getfastq_safely_removed_markers
+  if [[ -s "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" ]] && \
+    ! validate_amalgkit_getfastq_completion_manifest \
+      "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+  then
+    echo "Published getfastq completion contract changed before resume staging. Exiting." >&2
+    exit 1
+  fi
   if ! stage_getfastq_outputs_for_resume; then
     echo "Failed to stage getfastq outputs into a safe resumable work directory. Exiting." >&2
     exit 1
@@ -2249,6 +2528,14 @@ assembly_provenance_args+=(
 gg_artifact_prepare_stage assembly_needs_update run_assembly "${assembly_provenance_args[@]}" || exit $?
 if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
   gg_step_start "${task}"
+  if [[ "${selected_transcriptome_mode}" == "sraid" ]] && \
+    ! validate_amalgkit_getfastq_completion_manifest \
+      "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+  then
+    echo "getfastq completion contract changed before transcriptome assembly. Exiting." >&2
+    exit 1
+  fi
   ensure_parent_dir "${file_isoform}"
   if [[ ! -d "${dir_amalgkit_getfastq_sp}" ]]; then
     echo "amalgkit getfastq output directory not found: ${dir_amalgkit_getfastq_sp}. Exiting."
@@ -2582,6 +2869,14 @@ if [[ "${effective_assembly_method}" == 'rna-bloom2' ]]; then
 fi
 if [[ "${effective_assembly_method}" == 'rna-bloom2' && -s "${file_isoform}" && ${corset_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
   gg_step_start "${task}"
+  if [[ "${selected_transcriptome_mode}" == "sraid" ]] && \
+    ! validate_amalgkit_getfastq_completion_manifest \
+      "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+  then
+    echo "getfastq completion contract changed before Corset read reuse. Exiting." >&2
+    exit 1
+  fi
   rm -f -- "${file_corset_clusters}" "${file_corset_counts}"
   ensure_parent_dir "${file_corset_clusters}"
   ensure_parent_dir "${file_corset_counts}"
@@ -3143,6 +3438,14 @@ quant_provenance_args+=(
 gg_artifact_prepare_stage quant_needs_update run_amalgkit_quant "${quant_provenance_args[@]}" || exit $?
 if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
   gg_step_start "${task}"
+  if [[ "${selected_transcriptome_mode}" == "sraid" ]] && \
+    ! validate_amalgkit_getfastq_completion_manifest \
+      "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+  then
+    echo "getfastq completion contract changed before quant FASTQ reuse. Exiting." >&2
+    exit 1
+  fi
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
     echo "Failed to prepare ETE taxonomy DB for quant reference alias validation. Exiting."
     exit 1

@@ -55,11 +55,17 @@ echo "$(date): Starting"
 # Resolve workflow paths for local and scheduler-spooled execution.
 gg_bootstrap_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 gg_bootstrap_checked_bases=""
-for gg_bootstrap_base in \
-  "${SLURM_SUBMIT_DIR:-}" \
-  "${PBS_O_WORKDIR:-}" \
-  "${PWD:-}" \
-  "${gg_bootstrap_script_dir}"
+if [[ -n "${KFAUTO_RUNTIME_RELEASE_ROOT:-}" ]]; then
+  gg_bootstrap_bases=("${KFAUTO_RUNTIME_RELEASE_ROOT}")
+else
+  gg_bootstrap_bases=(
+    "${SLURM_SUBMIT_DIR:-}"
+    "${PBS_O_WORKDIR:-}"
+    "${PWD:-}"
+    "${gg_bootstrap_script_dir}"
+  )
+fi
+for gg_bootstrap_base in "${gg_bootstrap_bases[@]}"
 do
   [[ -n "${gg_bootstrap_base}" ]] || continue
   case ":${gg_bootstrap_checked_bases}:" in
@@ -80,12 +86,12 @@ do
     break
   fi
 done
-unset gg_bootstrap_base gg_bootstrap_checked_bases gg_bootstrap_script_dir bootstrap_path
+unset gg_bootstrap_base gg_bootstrap_bases gg_bootstrap_checked_bases gg_bootstrap_script_dir bootstrap_path
 if ! declare -F gg_entrypoint_initialize >/dev/null 2>&1; then
   echo "Failed to locate gg_entrypoint_bootstrap.sh from BASH_SOURCE[0]=${BASH_SOURCE[0]}" >&2
   exit 1
 fi
-if ! gg_entrypoint_initialize "${BASH_SOURCE[0]}" 1; then
+if ! gg_entrypoint_initialize "${BASH_SOURCE[0]}" 1 "gg_gene_evolution"; then
   exit 1
 fi
 gg_entrypoint_name="gg_gene_evolution_entrypoint.sh"
