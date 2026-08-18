@@ -2792,11 +2792,39 @@ def test_gene_evolution_core_falls_back_to_tree_backed_query_blast_seed():
 def test_gene_evolution_core_routes_extracted_rooted_tree_to_downstream_analysis():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
+
     assert "file_og_orthogroup_extraction_rooted_nwk=" in text
     assert '--output "extracted_rooted_tree=${file_og_orthogroup_extraction_rooted_nwk}"' in text
     assert "gg_artifact_prepare_stage orthogroup_extraction_needs_update" in text
-    assert 'mv_out "${og_id}.orthogroup_seed.tmp.nwk" "${file_og_orthogroup_extraction_rooted_nwk}"' in text
+    assert 'mv_out "${og_id}.orthogroup_extraction.rooted.tmp.nwk" "${file_og_orthogroup_extraction_rooted_nwk}"' in text
     assert 'set_analysis_file rooted_tree "${file_og_orthogroup_extraction_rooted_nwk}"' in text
+
+
+def test_gene_evolution_core_uses_pre_generax_root_for_orthogroup_extraction():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    extraction_start = text.index('task="Orthogroup extraction with NWKIT"')
+    extraction_end = text.index('task="GeneRax"', extraction_start)
+    extraction_block = text[extraction_start:extraction_end]
+
+    assert 'orthogroup_extraction_input_rooted_tree="${file_og_rooted_tree}"' in extraction_block
+    assert '--input "unrooted_tree=${file_og_iqtree_tree}"' in extraction_block
+    assert '--input "rooted_tree=${orthogroup_extraction_input_rooted_tree}"' in extraction_block
+    assert 'subtree_infiles=("${orthogroup_extraction_input_rooted_tree}")' in extraction_block
+    assert "file_og_rooted_tree_analysis" not in extraction_block
+
+
+def test_gene_evolution_core_uses_writable_orthogroup_intersection_outputs():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    extraction_start = text.index('task="Orthogroup extraction with NWKIT"')
+    extraction_end = text.index('task="GeneRax"', extraction_start)
+    extraction_block = text[extraction_start:extraction_end]
+
+    assert '--outfile /dev/null' not in extraction_block
+    assert '--seqout /dev/null' not in extraction_block
+    assert '--outfile "${og_id}.orthogroup_extraction.rooted.tmp.nwk"' in extraction_block
+    assert '--seqout "${og_id}.orthogroup_extraction.intersected.tmp.fasta"' in extraction_block
 
 
 def test_gene_evolution_core_uses_array_optional_args_for_iqtree_and_csubst():

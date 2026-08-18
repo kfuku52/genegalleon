@@ -3365,7 +3365,12 @@ fi
 
 task="Orthogroup extraction with NWKIT"
 run_orthogroup_extraction_original="${run_orthogroup_extraction}" # This variable may be disabled by disable_if_no_input_file but the original value is necessary to properly update file_og_*_analysis
-disable_if_no_input_file "run_orthogroup_extraction" "${file_query_gene:-}" "${file_og_trimmed_aln_analysis}" "${file_og_rooted_tree_analysis}"
+orthogroup_extraction_input_rooted_tree="${file_og_rooted_tree}"
+disable_if_no_input_file "run_orthogroup_extraction" "${file_query_gene:-}" "${file_og_trimmed_aln_analysis}" "${file_og_iqtree_tree}" "${orthogroup_extraction_input_rooted_tree}"
+if [[ "${mode_gene_evolution}" == "query2family" && ${run_orthogroup_extraction_original} -eq 1 && ${run_orthogroup_extraction} -eq 0 ]]; then
+  echo "Orthogroup extraction was requested but its required inputs are unavailable. Refusing to continue without extraction." >&2
+  exit 1
+fi
 orthogroup_extraction_needs_update=0
 orthogroup_extraction_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.orthogroup_extraction.json"
@@ -3375,7 +3380,8 @@ orthogroup_extraction_provenance_args=(
   --workspace-root "${gg_workspace_dir}"
   --input "query=${file_query_gene:-}"
   --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
-  --input "rooted_tree=${file_og_rooted_tree_analysis}"
+  --input "unrooted_tree=${file_og_iqtree_tree}"
+  --input "rooted_tree=${orthogroup_extraction_input_rooted_tree}"
   --output "extracted_unrooted_tree=${file_og_orthogroup_extraction_nwk}"
   --output "extracted_rooted_tree=${file_og_orthogroup_extraction_rooted_nwk}"
   --output "extracted_fasta=${file_og_orthogroup_extraction_fasta}"
@@ -3420,8 +3426,8 @@ if [[ "${mode_gene_evolution}" == "query2family" && ${orthogroup_extraction_need
     )
   fi
   if [[ ${#subtree_infiles[@]} -eq 0 ]]; then
-    if [[ -s "${file_og_rooted_tree_analysis}" ]]; then
-      subtree_infiles=("${file_og_rooted_tree_analysis}")
+    if [[ -s "${orthogroup_extraction_input_rooted_tree}" ]]; then
+      subtree_infiles=("${orthogroup_extraction_input_rooted_tree}")
     else
       echo "No rooted tree is available for orthogroup extraction."
       exit 1
@@ -3623,9 +3629,9 @@ PY
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file tmp.trimmed.input.fasta
   nwkit intersection \
     --infile "${og_id}.orthogroup_seed.tmp.nwk" \
-    --outfile /dev/null \
+    --outfile "${og_id}.orthogroup_extraction.rooted.tmp.nwk" \
     --seqin tmp.trimmed.input.fasta \
-    --seqout tmp.fasta \
+    --seqout "${og_id}.orthogroup_extraction.seed.tmp.fasta" \
     --match "complete"
   rm -f -- tmp.trimmed.input.fasta
 
@@ -3633,20 +3639,21 @@ PY
   nwkit intersection \
     --infile "${file_og_iqtree_tree}" \
     --outfile "${og_id}.orthogroup_extraction.tmp.nwk" \
-    --seqin tmp.fasta \
-    --seqout /dev/null \
+    --seqin "${og_id}.orthogroup_extraction.seed.tmp.fasta" \
+    --seqout "${og_id}.orthogroup_extraction.intersected.tmp.fasta" \
     --match "complete"
   mv_out "${og_id}.orthogroup_extraction.tmp.nwk" "${file_og_orthogroup_extraction_nwk}"
-  mv_out "${og_id}.orthogroup_seed.tmp.nwk" "${file_og_orthogroup_extraction_rooted_nwk}"
+  mv_out "${og_id}.orthogroup_extraction.rooted.tmp.nwk" "${file_og_orthogroup_extraction_rooted_nwk}"
+  rm -f -- "${og_id}.orthogroup_seed.tmp.nwk" "${og_id}.orthogroup_extraction.seed.tmp.fasta"
 
   if [[ "${input_sequence_mode}" == "protein" ]]; then
-    seqkit seq --threads "${GG_TASK_CPUS}" tmp.fasta --out-file "${og_id}.orthogroup_extraction.tmp.fasta"
+    seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.orthogroup_extraction.intersected.tmp.fasta" --out-file "${og_id}.orthogroup_extraction.tmp.fasta"
   else
-    cdskit hammer --nail 4 -s tmp.fasta -o "${og_id}.orthogroup_extraction.tmp.fasta"
+    cdskit hammer --nail 4 -s "${og_id}.orthogroup_extraction.intersected.tmp.fasta" -o "${og_id}.orthogroup_extraction.tmp.fasta"
   fi
   seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.orthogroup_extraction.tmp.fasta" --out-file "${og_id}.orthogroup_extraction.out.fa.gz"
   mv_out "${og_id}.orthogroup_extraction.out.fa.gz" "${file_og_orthogroup_extraction_fasta}"
-  rm -f -- "${og_id}.orthogroup_extraction.tmp.fasta"
+  rm -f -- "${og_id}.orthogroup_extraction.intersected.tmp.fasta" "${og_id}.orthogroup_extraction.tmp.fasta"
   gg_artifact_record "${orthogroup_extraction_provenance_args[@]}"
 else
   gg_step_skip "${task}"

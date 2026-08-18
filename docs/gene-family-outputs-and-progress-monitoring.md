@@ -41,6 +41,14 @@ typically written under `workspace/output/query2family/` as:
 - `stat_tree/2_WOX_stat.tree.tsv`
 - `tree_plot/2_WOX_tree_plot.pdf`
 
+When `run_orthogroup_extraction=1`, GeneGalleon extracts the seed-containing
+orthogroup from the rooted homolog tree before GeneRax. The extracted tree and
+FASTA are written below `orthogroup_extraction_nwk/`,
+`orthogroup_extraction_rooted_nwk/`, and `orthogroup_extraction_fasta/` and are
+then used as the GeneRax inputs in the same run when `run_generax=1`. A missing
+required extraction input is an error rather than a silently skipped
+refinement.
+
 When `run_expression_trait_pgls=1`, the same family receives the methods named
 by `pgls_methods` plus common comparison and audit files. RSC members are:
 

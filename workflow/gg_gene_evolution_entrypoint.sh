@@ -132,7 +132,7 @@ run_iqtree=1 # Maximum-likelihood phylogenetic reconstruction.
 run_tree_root=1 # Root gene tree using tree_rooting_method.
 
 # Reconciliation and dating workflow flags
-run_orthogroup_extraction=0 # Optional query2family refinement; extract the subtree and FASTA subset containing the seed query genes from the rooted homolog tree.
+run_orthogroup_extraction=0 # Optional query2family refinement; extract from the pre-GeneRax rooted homolog tree, then run GeneRax on the extracted tree and FASTA when enabled.
 run_generax=0 # GeneRax off by default for local/smoke environments without MPI setup.
 run_notung_reconcil=0 # Run NOTUNG for RADTE.
 run_tree_dating=0 # Species-tree-guided divergence time estimation with RADTE.
