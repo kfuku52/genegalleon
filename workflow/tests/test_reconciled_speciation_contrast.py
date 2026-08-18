@@ -716,9 +716,9 @@ def test_status_and_stat_tree_summary_exclude_intercepts(tmp_path: Path):
     assert status.loc[0, "best_term"] == "size"
     assert status.loc[0, "min_p_value"] == 0.03
 
-    results.to_csv(tmp_path / "pgls.tsv", sep="\t", index=False)
+    results.to_csv(tmp_path / "regression.tsv", sep="\t", index=False)
     status.to_csv(tmp_path / "status.tsv", sep="\t", index=False)
-    summary = mod.summarize_for_stat_tree(tmp_path / "pgls.tsv", tmp_path / "status.tsv")
+    summary = mod.summarize_for_stat_tree(tmp_path / "regression.tsv", tmp_path / "status.tsv")
     assert summary["rsc_best_term"] == "size"
     assert summary["rsc_min_p_value"] == 0.03
 
@@ -750,11 +750,9 @@ def test_status_and_stat_tree_summary_adjust_all_usable_associations(tmp_path: P
     assert status.loc[0, "min_p_value_bh"] == pytest.approx(0.03)
     assert status.loc[0, "min_p_value"] == pytest.approx(0.03)
 
-    results.to_csv(tmp_path / "pgls.tsv", sep="\t", index=False)
+    results.to_csv(tmp_path / "regression.tsv", sep="\t", index=False)
     status.to_csv(tmp_path / "status.tsv", sep="\t", index=False)
-    summary = mod.summarize_for_stat_tree(
-        tmp_path / "pgls.tsv", tmp_path / "status.tsv"
-    )
+    summary = mod.summarize_for_stat_tree(tmp_path / "regression.tsv", tmp_path / "status.tsv")
     assert summary["rsc_num_tested_associations"] == 3
     assert summary["rsc_best_p_value_raw"] == pytest.approx(0.01)
     assert summary["rsc_best_p_value"] == pytest.approx(0.03)

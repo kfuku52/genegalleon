@@ -306,7 +306,7 @@ Set `rsc_allow_large_dense=yes` only when the normal sparse/structured route is
 unavailable and the host has enough memory; this asks NWKIT to attempt the
 allocation rather than guaranteeing that it will fit.
 
-The RSC result is under `rsc_pgls/`, and the species comparators are under
+The RSC result is under `rsc_regression/`, and the species comparators are under
 `pgls_species_nwkit/` and `pgls_species_rphylopars/`. The long-form
 `pgls_comparison/` table places their coefficient rows together while retaining
 the method and aggregation. It explicitly labels species-tip estimates as not

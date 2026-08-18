@@ -400,7 +400,7 @@ Current behavior notes:
 - Pfam RPS-BLAST DB (`Pfam_LE`) is auto-prepared when missing, with lock-based
   synchronization for array jobs,
 - gene-tree PGLS remains a separate legacy analysis; matched expression-trait
-  results are written to `rsc_pgls`, `pgls_species_nwkit`,
+  results are written to `rsc_regression`, `pgls_species_nwkit`,
   `pgls_species_rphylopars`, and `pgls_comparison`,
 - `run_expression_trait_pgls=1` runs the methods selected by `pgls_methods`
   (`rsc`, `species-nwkit`, `species-rphylopars`, or `all`) with gene expression
@@ -425,7 +425,7 @@ Current behavior notes:
   `pgls_species_*` fields are copied into each
   family's `stat_tree` row. This summary has a fixed-width status/count schema
   plus the best converged `rsc_best_*` row; all fitted rows remain in
-  `rsc_pgls`,
+  `rsc_regression`,
 - the compact `stat_tree` best-p fields are multiplicity-aware: raw minima are
   retained under `*_p_value_raw`, while unsuffixed p-values use Holm correction
   over all usable associations for the family and method; BH-adjusted values

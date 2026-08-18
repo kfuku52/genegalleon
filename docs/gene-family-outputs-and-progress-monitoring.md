@@ -46,8 +46,8 @@ by `pgls_methods` plus common comparison and audit files. RSC members are:
 
 - `rsc_status/2_WOX_rsc.status.tsv`: `ok` or `not_estimable`, with the reason
   and counts used for screening,
-- `rsc_pgls/2_WOX_rsc.pgls.tsv`: coefficients, uncertainty, inference status,
-  evolutionary-model parameters, and event counts,
+- `rsc_regression/2_WOX_rsc.regression.tsv`: coefficients, uncertainty,
+  inference status, evolutionary-model parameters, and event counts,
 - `rsc_reconciliation/`, `rsc_gene_contrasts/`, and
   `rsc_species_contrasts/`: the event mapping and both sides of the contrast,
 - `rsc_response_*` and `rsc_predictor_*`: replicate summaries and propagated
@@ -92,7 +92,7 @@ summary plus namespaced per-response/per-term fields, all beginning with
 for large screens, it contains counts and
 fields from the best usable (successfully converged) row only, under
 `rsc_best_*`; it does not flatten every RSC result row into a new group of
-columns. The full `rsc_pgls` table remains the authoritative result when
+columns. The full `rsc_regression` table remains the authoritative result when
 several responses or predictors were fitted. Rows with failed inference or
 failed optimizers cannot become the reported best row. The best row is still
 chosen by its raw p-value, recorded as `rsc_best_p_value_raw` (and the analogous

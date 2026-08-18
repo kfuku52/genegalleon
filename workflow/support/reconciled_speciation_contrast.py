@@ -1321,7 +1321,7 @@ def _sanitize_stat_component(value: object, maximum: int = 80) -> str:
     return f"{normalized[: maximum - 11]}_{digest}"
 
 
-def summarize_for_stat_tree(pgls_path: str | Path, status_path: str | Path) -> dict[str, object]:
+def summarize_for_stat_tree(regression_path: str | Path, status_path: str | Path) -> dict[str, object]:
     """Return stable, one-row RSC metrics for orthogroup ``stat_tree``."""
     out: dict[str, object] = {}
     status_file = Path(status_path)
@@ -1335,7 +1335,7 @@ def summarize_for_stat_tree(pgls_path: str | Path, status_path: str | Path) -> d
                     continue
                 out[f"rsc_{_sanitize_stat_component(column)}"] = value
 
-    result_file = Path(pgls_path)
+    result_file = Path(regression_path)
     if not result_file.is_file() or result_file.stat().st_size == 0:
         return out
     results = pandas.read_csv(result_file, sep="\t", low_memory=False)

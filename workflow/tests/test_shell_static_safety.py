@@ -3703,7 +3703,10 @@ def test_gene_evolution_wires_matched_expression_trait_pgls_through_stat_tree():
     assert "requires the gene-expression matrix" not in core
     assert 'inspect-audit-error' in core
     assert '--output "status=${file_og_rsc_status}"' in core
-    assert '--output "pgls=${file_og_rsc_pgls}"' in core
+    assert (
+        'file_og_rsc_regression="${dir_output_active}/rsc_regression/${og_id}_rsc.regression.tsv"' in core
+    )
+    assert '--output "regression=${file_og_rsc_regression}"' in core
     assert '--output "reconciliation=${file_og_rsc_reconciliation}"' in core
     assert '--output "response_sampling_covariance=${file_og_rsc_response_sampling_covariance}"' in core
     assert '--output "predictor_sampling_covariance=${file_og_rsc_predictor_sampling_covariance}"' in core
@@ -3716,12 +3719,15 @@ def test_gene_evolution_wires_matched_expression_trait_pgls_through_stat_tree():
     assert 'mv_out_bundle \\' in core
     assert 'mv_out "${rsc_combined_status}"' not in core
     assert '--rsc_status "${file_og_rsc_status}"' in core
-    assert '--rsc_pgls "${file_og_rsc_pgls}"' in core
+    assert '--rsc_regression "${file_og_rsc_regression}"' in core
     assert '--pgls_comparison "${file_og_pgls_comparison}"' in core
     assert '--pgls_method_status "${file_og_pgls_method_status}"' in core
     assert 'task="Species tree PGLS analysis"' not in core
     assert "species_tree_pgls.r" not in core
-    assert 'parser.add_argument("--rsc_pgls"' in statistics
+    assert '"--rsc_regression"' in statistics
+    retired_rsc_result_name = "rsc_" + "pgls"
+    assert retired_rsc_result_name not in core
+    assert retired_rsc_result_name not in statistics
     assert 'parser.add_argument("--rsc_status"' in statistics
     assert '"--pgls_comparison",' in statistics
     assert '"--pgls_method_status",' in statistics

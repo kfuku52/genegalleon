@@ -1772,7 +1772,7 @@ file_og_species_response_sampling_covariance="${dir_output_active}/pgls_species_
 file_og_species_predictor_tip_summary="${dir_output_active}/pgls_species_predictor_tip_summary/${og_id}_predictor-tip-summary.tsv"
 file_og_species_predictor_sampling_covariance="${dir_output_active}/pgls_species_predictor_sampling_covariance/${og_id}_predictor-sampling-covariance.tsv"
 file_og_rsc_status="${dir_output_active}/rsc_status/${og_id}_rsc.status.tsv"
-file_og_rsc_pgls="${dir_output_active}/rsc_pgls/${og_id}_rsc.pgls.tsv"
+file_og_rsc_regression="${dir_output_active}/rsc_regression/${og_id}_rsc.regression.tsv"
 file_og_rsc_reconciliation="${dir_output_active}/rsc_reconciliation/${og_id}_rsc.reconciliation.tsv"
 file_og_rsc_gene_contrasts="${dir_output_active}/rsc_gene_contrasts/${og_id}_rsc.gene-contrasts.tsv"
 file_og_rsc_species_contrasts="${dir_output_active}/rsc_species_contrasts/${og_id}_rsc.species-contrasts.tsv"
@@ -4365,7 +4365,7 @@ if [[ ${check_pruned} -eq 1 ]]; then
     "${file_og_species_predictor_tip_summary}"
     "${file_og_species_predictor_sampling_covariance}"
     "${file_og_rsc_status}"
-    "${file_og_rsc_pgls}"
+    "${file_og_rsc_regression}"
     "${file_og_rsc_reconciliation}"
     "${file_og_rsc_gene_contrasts}"
     "${file_og_rsc_species_contrasts}"
@@ -5035,7 +5035,7 @@ rsc_provenance_args=(
   --input "species_comparator=${gg_support_dir}/species_tree_pgls.py"
   --input "rphylopars_adapter=${gg_support_dir}/species_tree_rphylopars.R"
   --output "status=${file_og_rsc_status}"
-  --output "pgls=${file_og_rsc_pgls}"
+  --output "regression=${file_og_rsc_regression}"
   --output "reconciliation=${file_og_rsc_reconciliation}"
   --output "gene_contrasts=${file_og_rsc_gene_contrasts}"
   --output "species_contrasts=${file_og_rsc_species_contrasts}"
@@ -5516,7 +5516,7 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
 
   mv_out_bundle \
     "${rsc_combined_status}" "${file_og_rsc_status}" \
-    "${rsc_combined_prefix}.regression.tsv" "${file_og_rsc_pgls}" \
+    "${rsc_combined_prefix}.regression.tsv" "${file_og_rsc_regression}" \
     "${rsc_combined_prefix}.reconciliation.tsv" "${file_og_rsc_reconciliation}" \
     "${rsc_combined_prefix}.gene-contrasts.tsv" "${file_og_rsc_gene_contrasts}" \
     "${rsc_combined_prefix}.species-contrasts.tsv" "${file_og_rsc_species_contrasts}" \
@@ -5979,7 +5979,7 @@ summary_input_files=(
   "${file_og_pgls_comparison}"
   "${file_og_pgls_method_status}"
   "${file_og_rsc_status}"
-  "${file_og_rsc_pgls}"
+  "${file_og_rsc_regression}"
   "${file_og_rpsblast}"
   "${file_og_uniprot_annotation}"
   "${file_og_cdskit_localize}"
@@ -6185,7 +6185,7 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
     --pgls_comparison "${file_og_pgls_comparison}" \
     --pgls_method_status "${file_og_pgls_method_status}" \
     --rsc_status "${file_og_rsc_status}" \
-    --rsc_pgls "${file_og_rsc_pgls}" \
+    --rsc_regression "${file_og_rsc_regression}" \
     --rpsblast "${file_og_rpsblast}" \
     --uniprot "${file_og_uniprot_annotation}" \
     --cdskit_localize "${file_og_cdskit_localize}" \

@@ -187,8 +187,10 @@ def build_arg_parser():
     parser.add_argument(
         "--gene_pgls_stats", metavar="PATH", default="", type=str, help="Path used by --gene_pgls_stats."
     )
-    parser.add_argument("--rsc_pgls", metavar="PATH", default="", type=str, help="Reconciled PGLS result table.")
-    parser.add_argument("--rsc_status", metavar="PATH", default="", type=str, help="Reconciled PGLS family status.")
+    parser.add_argument(
+        "--rsc_regression", metavar="PATH", default="", type=str, help="RSC regression result table."
+    )
+    parser.add_argument("--rsc_status", metavar="PATH", default="", type=str, help="RSC regression family status.")
     parser.add_argument(
         "--pgls_comparison",
         metavar="PATH",
@@ -1587,8 +1589,8 @@ def main():
                 ["trait", "variable"] + [col for col in df_tmp.columns if col not in ["trait", "variable"]],
             ]
             tree_info.update(flatten_trait_variable_stats(df_tmp, "pgls_geneTree_"))
-    if os.path.exists(params["rsc_status"]) or os.path.exists(params["rsc_pgls"]):
-        tree_info.update(summarize_rsc_for_stat_tree(params["rsc_pgls"], params["rsc_status"]))
+    if os.path.exists(params["rsc_status"]) or os.path.exists(params["rsc_regression"]):
+        tree_info.update(summarize_rsc_for_stat_tree(params["rsc_regression"], params["rsc_status"]))
     if os.path.exists(params["pgls_method_status"]) or os.path.exists(params["pgls_comparison"]):
         tree_info.update(summarize_species_pgls_for_stat_tree(params["pgls_comparison"], params["pgls_method_status"]))
     if all([os.path.exists(params[key]) for key in ["hyphy_relax_json"]]):
