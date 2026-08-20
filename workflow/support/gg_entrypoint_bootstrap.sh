@@ -54,7 +54,7 @@ import pathlib
 import stat
 import sys
 
-release_root = pathlib.Path(sys.argv[1])
+requested_release_root = pathlib.Path(sys.argv[1])
 expected_workflow = sys.argv[2]
 bootstrap_path = pathlib.Path(sys.argv[3])
 expected_snapshot = sys.argv[4]
@@ -69,9 +69,13 @@ def canonical_sha256(payload):
     return hashlib.sha256(encoded).hexdigest()
 
 
-if release_root.is_symlink() or not release_root.is_dir():
-    fail("Explicit runtime release root is unavailable or symlinked: {}".format(release_root))
-release_root = release_root.resolve(strict=True)
+if requested_release_root.is_symlink() or not requested_release_root.is_dir():
+    fail(
+        "Explicit runtime release root is unavailable or symlinked: {}".format(
+            requested_release_root
+        )
+    )
+release_root = requested_release_root.resolve(strict=True)
 workflow_dir = release_root / "workflow"
 expected_bootstrap = workflow_dir / "support/gg_entrypoint_bootstrap.sh"
 manifest_path = release_root / ".kfauto-release.json"
@@ -93,7 +97,17 @@ if manifest.get("workflow") != expected_workflow:
             expected_workflow, manifest.get("workflow")
         )
     )
-if pathlib.Path(str(manifest.get("release_root", ""))).resolve() != release_root:
+manifest_release_root_text = manifest.get("release_root")
+if not isinstance(manifest_release_root_text, str) or not manifest_release_root_text:
+    fail("Explicit runtime release manifest root is invalid.")
+manifest_release_root = pathlib.Path(manifest_release_root_text)
+if not manifest_release_root.is_absolute():
+    fail("Explicit runtime release manifest root is not absolute.")
+try:
+    manifest_physical_release_root = manifest_release_root.resolve(strict=True)
+except OSError as exc:
+    fail("Explicit runtime release manifest root is unavailable: {}".format(exc))
+if manifest_physical_release_root != release_root:
     fail("Explicit runtime release manifest root changed.")
 target_ref = str(manifest.get("target_ref", ""))
 if len(target_ref) != 40 or any(char not in "0123456789abcdef" for char in target_ref):
@@ -145,13 +159,18 @@ snapshot = {
     "kind": "gridengine-runtime-release-snapshot-v1",
     "project_root": manifest.get("project_root"),
     "workflow": expected_workflow,
-    "release_root": str(release_root),
+    "release_root": manifest_release_root_text,
     "target_ref": target_ref,
     "release_contract_sha256": contract_sha256,
     "file_sha256": file_sha256,
 }
-if canonical_sha256(snapshot) != expected_snapshot:
-    fail("Explicit runtime release snapshot hash changed.")
+observed_snapshot = canonical_sha256(snapshot)
+if observed_snapshot != expected_snapshot:
+    fail(
+        "Explicit runtime release snapshot hash changed: expected={} observed={}".format(
+            expected_snapshot, observed_snapshot
+        )
+    )
 print(workflow_dir)
 PY
 }
@@ -166,7 +185,7 @@ gg_find_workflow_dir() {
     gg_validate_explicit_runtime_release \
       "${KFAUTO_RUNTIME_RELEASE_ROOT}" \
       "${expected_workflow}" \
-      "${bootstrap_path}"
+      "${BASH_SOURCE[0]:-}"
     return $?
   fi
 

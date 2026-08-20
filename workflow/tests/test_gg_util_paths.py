@@ -8,6 +8,7 @@ import stat
 import subprocess
 import time
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -33,7 +34,12 @@ def _canonical_sha256(payload):
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _write_runtime_release_contract(release_root: Path, workflow: str) -> str:
+def _write_runtime_release_contract(
+    release_root: Path,
+    workflow: str,
+    *,
+    manifest_release_root: Optional[Path] = None,
+) -> str:
     required_paths = {
         "VERSION",
         f"workflow/{workflow}_entrypoint.sh",
@@ -62,13 +68,18 @@ def _write_runtime_release_contract(release_root: Path, workflow: str) -> str:
                 "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
             }
         )
-    release_root = release_root.resolve()
+    physical_release_root = release_root.resolve()
+    declared_release_root = (
+        manifest_release_root
+        if manifest_release_root is not None
+        else physical_release_root
+    )
     contract = {
         "schema_version": 1,
         "kind": "immutable-genegalleon-runtime-release-v1",
         "workflow": workflow,
-        "project_root": str(release_root.parent / "project"),
-        "release_root": str(release_root),
+        "project_root": str(declared_release_root.parent / "project"),
+        "release_root": str(declared_release_root),
         "target_ref": "a" * 40,
         "installed_files": installed_files,
     }
@@ -83,7 +94,7 @@ def _write_runtime_release_contract(release_root: Path, workflow: str) -> str:
         "kind": "gridengine-runtime-release-snapshot-v1",
         "project_root": contract["project_root"],
         "workflow": workflow,
-        "release_root": str(release_root),
+        "release_root": str(declared_release_root),
         "target_ref": contract["target_ref"],
         "release_contract_sha256": contract["contract_sha256"],
         "file_sha256": {path: inventory[path] for path in sorted(required_paths)},
@@ -683,6 +694,74 @@ def test_spooled_entrypoint_binds_to_verified_explicit_runtime_release(tmp_path)
     tampered = run_bash(command, cwd=tmp_path)
     assert tampered.returncode != 0
     assert "Explicit runtime release file changed" in tampered.stderr
+
+
+def test_explicit_runtime_release_ignores_spooled_bootstrap_hint(tmp_path):
+    release_root = tmp_path / "release-a"
+    snapshot = _write_runtime_release_contract(release_root, "gg_genome_evolution")
+    bootstrap = release_root / "workflow/support/gg_entrypoint_bootstrap.sh"
+    spooled_path = "/var/spool/ge/kf52/job_scripts/125396259"
+    command = (
+        f"export KFAUTO_RUNTIME_RELEASE_ROOT={shlex.quote(str(release_root))}; "
+        f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+        f"source {shlex.quote(str(bootstrap))}; "
+        f"gg_set_workflow_dir {shlex.quote(spooled_path)} "
+        f"{shlex.quote(spooled_path)} gg_genome_evolution; "
+        'printf "resolved=%s\\n" "${gg_workflow_dir}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == f"resolved={release_root.resolve() / 'workflow'}"
+
+    shadowed_command = (
+        f"export KFAUTO_RUNTIME_RELEASE_ROOT={shlex.quote(str(release_root))}; "
+        f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+        f"source {shlex.quote(str(GG_ENTRYPOINT_BOOTSTRAP_PATH))}; "
+        f"gg_set_workflow_dir {shlex.quote(spooled_path)} "
+        f"{shlex.quote(spooled_path)} gg_genome_evolution"
+    )
+    shadowed = run_bash(shadowed_command, cwd=tmp_path)
+    assert shadowed.returncode != 0
+    assert "Explicit runtime release bootstrap was shadowed" in shadowed.stderr
+
+
+def test_explicit_runtime_snapshot_uses_manifest_logical_release_root(tmp_path):
+    physical_parent = tmp_path / "physical"
+    physical_parent.mkdir()
+    logical_parent = tmp_path / "logical"
+    logical_parent.symlink_to(physical_parent, target_is_directory=True)
+    logical_release_root = logical_parent / "release-a"
+    snapshot = _write_runtime_release_contract(
+        logical_release_root,
+        "gg_gene_evolution",
+        manifest_release_root=logical_release_root,
+    )
+    bootstrap = logical_release_root / "workflow/support/gg_entrypoint_bootstrap.sh"
+    command = (
+        f"export KFAUTO_RUNTIME_RELEASE_ROOT={shlex.quote(str(logical_release_root))}; "
+        f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+        f"source {shlex.quote(str(bootstrap))}; "
+        "gg_set_workflow_dir /var/spool/ge/kf52/job_scripts/125992353 "
+        f"{shlex.quote(str(bootstrap))} gg_gene_evolution; "
+        'printf "resolved=%s\\n" "${gg_workflow_dir}"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == (
+        f"resolved={logical_release_root.resolve() / 'workflow'}"
+    )
+
+    mismatched = run_bash(
+        command.replace(snapshot, "0" * 64),
+        cwd=tmp_path,
+    )
+    assert mismatched.returncode != 0
+    assert f"expected={'0' * 64}" in mismatched.stderr
+    assert f"observed={snapshot}" in mismatched.stderr
 
 
 def test_all_entrypoints_fail_closed_to_explicit_runtime_release_locator():
