@@ -8,6 +8,13 @@ updates:
       python-test-dependencies:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: numpy
+        versions:
+          - ">=2"
+      - dependency-name: matplotlib
+        versions:
+          - ">=3.11"
 
   - package-ecosystem: github-actions
     directory: /

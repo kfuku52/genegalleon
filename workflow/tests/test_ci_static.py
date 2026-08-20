@@ -120,6 +120,10 @@ def test_dependabot_updates_pinned_github_actions():
     pip_updates = [update for update in config["updates"] if update.get("package-ecosystem") == "pip"]
     assert len(pip_updates) == 1
     assert pip_updates[0]["directory"] == "/workflow/tests"
+    assert pip_updates[0]["ignore"] == [
+        {"dependency-name": "numpy", "versions": [">=2"]},
+        {"dependency-name": "matplotlib", "versions": [">=3.11"]},
+    ]
 
 
 def test_immutable_image_tags_fingerprint_resolved_upstream_sources():
