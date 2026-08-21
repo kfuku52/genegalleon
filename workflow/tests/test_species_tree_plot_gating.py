@@ -1,7 +1,6 @@
 import subprocess
 from pathlib import Path
 
-
 WORKFLOW_DIR = Path(__file__).resolve().parents[1]
 CORE_PATH = WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh"
 EXECUTION_RUNTIME_PATH = WORKFLOW_DIR / "support" / "gg_util" / "07_execution_runtime.sh"
