@@ -273,6 +273,18 @@ GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION=orthogroup \
 bash workflow/gg_gene_evolution_entrypoint.sh
 ```
 
+Gene-tree rooting keeps MAD as the default. The selectable
+`tree_rooting_method` values are `mad`, `reconciliation`, `notung`, `midpoint`,
+and `md` (`md` maps to NWKIT's `mv` method). `reconciliation` uses NWKIT's
+duplication/loss-assisted rooting with the pruned species tree and the configured
+species-label parser, regular expression, or mapping TSV. It does not invoke
+NOTUNG. For a one-off run:
+
+```bash
+GG_GENE_EVOLUTION_TREE_ROOTING_METHOD=reconciliation \
+bash workflow/gg_gene_evolution_entrypoint.sh
+```
+
 Input generation uses the shorter `GG_INPUT_` prefix. Common overrides include:
 
 - `GG_INPUT_PROVIDER`

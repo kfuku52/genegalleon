@@ -450,6 +450,9 @@ Wrapper-specific note:
 - persistent changes belong in the top config block,
 - one-off changes can use the `GG_GENE_EVOLUTION_` prefix, for example
   `GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION=orthogroup`.
+- gene-tree rooting defaults to MAD; set
+  `GG_GENE_EVOLUTION_TREE_ROOTING_METHOD=reconciliation` to select NWKIT's
+  species-tree-assisted duplication/loss rooting without NOTUNG.
 
 ### Inlined Stage: Genome Evolution
 

@@ -1360,9 +1360,9 @@ if [[ "${mode_gene_evolution}" != "orthogroup" && "${mode_gene_evolution}" != "q
   echo 'mode_gene_evolution must be either "orthogroup" or "query2family". Exiting.'
   exit 1
 fi
-if [[ "${tree_rooting_method}" != "notung" && "${tree_rooting_method}" != "midpoint" && "${tree_rooting_method}" != "mad" && "${tree_rooting_method}" != "md" ]]; then
+if [[ "${tree_rooting_method}" != "notung" && "${tree_rooting_method}" != "midpoint" && "${tree_rooting_method}" != "mad" && "${tree_rooting_method}" != "md" && "${tree_rooting_method}" != "reconciliation" ]]; then
   echo "Invalid tree_rooting_method: ${tree_rooting_method}"
-  echo "tree_rooting_method must be one of notung, midpoint, mad, md. Exiting."
+  echo "tree_rooting_method must be one of mad, reconciliation, notung, midpoint, md. Exiting."
   exit 1
 fi
 if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method}" != "mmseqs2" ]]; then
@@ -3262,6 +3262,10 @@ fi
 
 task="Gene tree rooting"
 disable_if_no_input_file "run_tree_root" "${file_og_unrooted_tree_analysis}"
+if [[ ${run_tree_root} -eq 1 && "${tree_rooting_method}" == "reconciliation" && ! -s "${species_tree_pruned}" ]]; then
+  echo "tree_rooting_method=reconciliation requires species tree: ${species_tree_pruned}"
+  exit 1
+fi
 tree_root_needs_update=0
 tree_root_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.tree_root.json"
@@ -3277,7 +3281,7 @@ tree_root_provenance_args=(
   --parameter "species_regex=${species_label_regex}"
   --parameter "species_map_present=$([[ -n "${species_label_map_tsv}" ]] && echo 1 || echo 0)"
 )
-if [[ "${tree_rooting_method}" == "notung" ]]; then
+if [[ "${tree_rooting_method}" == "notung" || "${tree_rooting_method}" == "reconciliation" ]]; then
   tree_root_provenance_args+=(--input "species_tree=${species_tree_pruned}")
 fi
 if [[ -n "${species_label_map_tsv}" ]]; then
@@ -3340,7 +3344,14 @@ if [[ ${tree_root_needs_update} -eq 1 && ${run_tree_root} -eq 1 ]]; then
       nwkit_root_method="mv"
     fi
     nwkit_root_args=(root --method "${nwkit_root_method}" --infile "${file_og_unrooted_tree_analysis}")
-    if [[ "${nwkit_root_method}" == "taxonomy" ]]; then
+    if [[ "${nwkit_root_method}" == "reconciliation" ]]; then
+      if [[ ! -s "${species_tree_pruned}" ]]; then
+        echo "tree_rooting_method=reconciliation requires species tree: ${species_tree_pruned}"
+        exit 1
+      fi
+      nwkit_root_args+=(--species-tree "${species_tree_pruned}")
+    fi
+    if [[ "${nwkit_root_method}" == "taxonomy" || "${nwkit_root_method}" == "reconciliation" ]]; then
       nwkit_root_args+=(--species-parser "${species_label_parser}")
       if [[ -n "${species_label_regex}" ]]; then
         nwkit_root_args+=(--species-regex "${species_label_regex}")

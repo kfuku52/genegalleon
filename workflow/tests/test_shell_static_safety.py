@@ -1909,6 +1909,28 @@ def test_nwkit_call_sites_receive_species_label_parser_options():
     assert 'nwkit_args+=(--species-map-tsv "${species_label_map_tsv}")' in genome_core
 
 
+def test_gene_evolution_offers_reconciliation_rooting_without_changing_default():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_gene_evolution_entrypoint.sh")
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+
+    assert 'tree_rooting_method="mad"' in entrypoint
+    assert "mad|reconciliation|notung|midpoint|md" in entrypoint
+    assert '"${tree_rooting_method}" != "reconciliation"' in core
+    assert (
+        '"${tree_rooting_method}" == "notung" || '
+        '"${tree_rooting_method}" == "reconciliation"'
+    ) in core
+    assert 'nwkit_root_args+=(--species-tree "${species_tree_pruned}")' in core
+    assert (
+        '"${nwkit_root_method}" == "taxonomy" || '
+        '"${nwkit_root_method}" == "reconciliation"'
+    ) in core
+    assert (
+        "tree_rooting_method=reconciliation requires species tree: "
+        "${species_tree_pruned}"
+    ) in core
+
+
 def test_genome_evolution_reuse_check_precedes_busco_lineage_resolution():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
