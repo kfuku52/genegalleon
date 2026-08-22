@@ -3262,6 +3262,7 @@ fi
 
 task="Gene tree rooting"
 disable_if_no_input_file "run_tree_root" "${file_og_unrooted_tree_analysis}"
+# gg-cache-guard: audited - required input validation, not artifact reuse.
 if [[ ${run_tree_root} -eq 1 && "${tree_rooting_method}" == "reconciliation" && ! -s "${species_tree_pruned}" ]]; then
   echo "tree_rooting_method=reconciliation requires species tree: ${species_tree_pruned}"
   exit 1
@@ -3345,10 +3346,6 @@ if [[ ${tree_root_needs_update} -eq 1 && ${run_tree_root} -eq 1 ]]; then
     fi
     nwkit_root_args=(root --method "${nwkit_root_method}" --infile "${file_og_unrooted_tree_analysis}")
     if [[ "${nwkit_root_method}" == "reconciliation" ]]; then
-      if [[ ! -s "${species_tree_pruned}" ]]; then
-        echo "tree_rooting_method=reconciliation requires species tree: ${species_tree_pruned}"
-        exit 1
-      fi
       nwkit_root_args+=(--species-tree "${species_tree_pruned}")
     fi
     if [[ "${nwkit_root_method}" == "taxonomy" || "${nwkit_root_method}" == "reconciliation" ]]; then
