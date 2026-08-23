@@ -4,9 +4,11 @@ import json
 import re
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Union
 
 import pytest
 
@@ -55,18 +57,35 @@ def _shell_function_source(name: str) -> str:
     return text[start_match.start() : end].rstrip()
 
 
-def _run_fallback(monkeypatch, metadata_path: Path, output_dir: Path, responses: dict[str, bytes]):
+def _run_fallback(
+    monkeypatch,
+    metadata_path: Path,
+    output_dir: Path,
+    responses: dict[str, Union[bytes, list[bytes]]],
+    attempt_counts=None,
+):
+    attempts: dict[str, int] = attempt_counts if attempt_counts is not None else {}
+
     def fake_urlopen(url, timeout):
         assert timeout == 120
-        return _Response(responses[url])
+        attempts[url] = attempts.get(url, 0) + 1
+        response = responses[url]
+        if isinstance(response, list):
+            assert response, "response sequence was exhausted"
+            payload = response.pop(0)
+        else:
+            payload = response
+        return _Response(payload)
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     old_argv = sys.argv
     sys.argv = ["fallback", str(metadata_path), str(output_dir)]
     try:
         exec(compile(_fallback_python_source(), str(CORE_PATH), "exec"), {"__name__": "__main__"})
     finally:
         sys.argv = old_argv
+    return attempts
 
 
 def _metadata(path: Path, runs: list[str]):
@@ -91,6 +110,40 @@ def _run_manifest_validator(metadata_path: Path, output_dir: Path):
     )
     return subprocess.run(
         ["bash", "-s", "--", str(output_dir), str(metadata_path)],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _run_manifest_index_validator(metadata_path: Path, output_dir: Path):
+    script = "\n".join(
+        [
+            "set -u",
+            _shell_function_source("validate_amalgkit_getfastq_completion_manifest_index"),
+            'validate_amalgkit_getfastq_completion_manifest_index "$1/getfastq_completion.json" "$2"',
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-s", "--", str(output_dir), str(metadata_path)],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _run_contract_recovery(output_dir: Path):
+    script = "\n".join(
+        [
+            "set -u",
+            _shell_function_source("prepare_amalgkit_getfastq_contract_recovery"),
+            'prepare_amalgkit_getfastq_contract_recovery "$1/getfastq_completion.json"',
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-s", "--", str(output_dir)],
         input=script,
         text=True,
         capture_output=True,
@@ -391,6 +444,62 @@ def test_completion_manifest_rejects_fastq_content_changed_after_publication(mon
     assert "content contract changed" in changed.stderr or "complete gzip/FASTQ" in changed.stderr
 
 
+def test_skip_index_validator_rejects_truncated_bound_fastq_without_full_content_scan(
+    monkeypatch,
+    tmp_path,
+):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["RUN1"])
+    fastq_url = "https://example.invalid/RUN1.fastq"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=RUN1": _xml(
+            "RUN1.fastq", fastq_url
+        ),
+        fastq_url: b"@read\nACGT\n+\n!!!!\n",
+    }
+    _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+
+    current = _run_manifest_index_validator(metadata_path, output_dir)
+    assert current.returncode == 0, current.stderr
+
+    fastq_path = output_dir / "RUN1" / "RUN1.amalgkit.fastq.gz"
+    fastq_path.write_bytes(fastq_path.read_bytes()[:-8])
+    changed = _run_manifest_index_validator(metadata_path, output_dir)
+
+    assert changed.returncode != 0
+    assert "FASTQ size changed" in changed.stderr
+    source = _shell_function_source("validate_amalgkit_getfastq_completion_manifest_index")
+    assert 'path.open("rb")' not in source
+    assert "gzip.open" not in source
+    assert "hashlib" not in source
+
+
+def test_drifted_bound_fastq_and_manifest_are_preserved_for_recovery(monkeypatch, tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["RUN1"])
+    fastq_url = "https://example.invalid/RUN1.fastq"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=RUN1": _xml(
+            "RUN1.fastq", fastq_url
+        ),
+        fastq_url: b"@read\nACGT\n+\n!!!!\n",
+    }
+    _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+    fastq_path = output_dir / "RUN1" / "RUN1.amalgkit.fastq.gz"
+    truncated = fastq_path.read_bytes()[:-8]
+    fastq_path.write_bytes(truncated)
+
+    recovered = _run_contract_recovery(output_dir)
+
+    assert recovered.returncode == 0, recovered.stderr
+    assert not fastq_path.exists()
+    assert (fastq_path.with_name(fastq_path.name + ".pre_integrity_recovery")).read_bytes() == truncated
+    assert not (output_dir / "getfastq_completion.json").exists()
+    assert (output_dir / "getfastq_completion.json.pre_integrity_recovery").is_file()
+
+
 def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path):
     metadata_path = tmp_path / "metadata.tsv"
     output_dir = tmp_path / "getfastq"
@@ -436,10 +545,18 @@ def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path):
 def test_downstream_fastq_gates_revalidate_the_completion_contract():
     text = CORE_PATH.read_text(encoding="utf-8")
 
-    assert "Published getfastq completion contract changed before resume staging" in text
+    assert "Published getfastq completion index changed; routing the exact run through bounded recovery" in text
+    assert "Published getfastq completion contract changed before resume staging; preserving drifted bytes" in text
     assert "getfastq completion contract changed before transcriptome assembly" in text
     assert "getfastq completion contract changed before Corset read reuse" in text
     assert "getfastq completion contract changed before quant FASTQ reuse" in text
+    prepare = text.index("gg_artifact_prepare_stage getfastq_needs_update run_amalgkit_getfastq")
+    skip_gate = text.index("validate_amalgkit_getfastq_completion_manifest_index", prepare)
+    recovery = text.index("prepare_amalgkit_getfastq_contract_recovery", skip_gate)
+    assembly = text.index("task='De novo transcriptome assembly'", recovery)
+    assembly_gate = text.index("getfastq completion contract changed before transcriptome assembly", assembly)
+    first_assembly_fastq_read = text.index("seqkit sample", assembly)
+    assert prepare < skip_gate < recovery < assembly < assembly_gate < first_assembly_fastq_read
 
 
 def test_public_fallback_rejects_ena_checksum_mismatch(monkeypatch, tmp_path):
@@ -463,26 +580,84 @@ def test_public_fallback_rejects_ena_checksum_mismatch(monkeypatch, tmp_path):
         fastq_url: fastq_payload,
     }
 
-    with pytest.raises(SystemExit, match="Downloaded FASTQ checksum mismatch"):
-        _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+    attempts = {}
+    with pytest.raises(SystemExit, match="failed bounded integrity retries") as exc_info:
+        _run_fallback(monkeypatch, metadata_path, output_dir, responses, attempts)
 
+    assert "checksum mismatch expected={}".format("0" * 32) in str(exc_info.value)
+    assert "actual={}".format(hashlib.md5(fastq_payload).hexdigest()) in str(exc_info.value)
+    assert "bytes={}".format(len(fastq_payload)) in str(exc_info.value)
+    assert attempts[fastq_url] == 5
     assert not (output_dir / "getfastq_completion.json").exists()
     assert not _partial_files(output_dir)
 
 
-def test_public_fallback_rejects_truncated_existing_fastq(monkeypatch, tmp_path):
+@pytest.mark.parametrize("first_failure", ["checksum", "gzip"])
+def test_public_fallback_retries_integrity_failure_before_atomic_publication(
+    monkeypatch,
+    tmp_path,
+    first_failure,
+):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["ERR123456"])
+
+    valid_payload = gzip.compress(b"@ena\nACGT\n+\n!!!!\n")
+    if first_failure == "checksum":
+        first_payload = gzip.compress(b"@wrong\nTGCA\n+\n!!!!\n")
+    else:
+        first_payload = valid_payload[:-8]
+    fastq_url = "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR123/ERR123456.fastq.gz"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=ERR123456": b"<ROOT />",
+        _ena_report_url("ERR123456"): json.dumps(
+            [
+                {
+                    "run_accession": "ERR123456",
+                    "fastq_ftp": fastq_url.removeprefix("https://"),
+                    "fastq_md5": hashlib.md5(valid_payload).hexdigest(),
+                }
+            ]
+        ).encode(),
+        fastq_url: [first_payload, valid_payload],
+    }
+
+    attempts = _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+
+    recovered = output_dir / "ERR123456" / "ERR123456.amalgkit.fastq.gz"
+    assert recovered.read_bytes() == valid_payload
+    assert attempts[fastq_url] == 2
+    assert not _partial_files(output_dir)
+    validated = _run_manifest_validator(metadata_path, output_dir)
+    assert validated.returncode == 0, validated.stderr
+
+
+def test_public_fallback_preserves_and_recovers_truncated_existing_fastq(monkeypatch, tmp_path):
     metadata_path = tmp_path / "metadata.tsv"
     output_dir = tmp_path / "getfastq"
     _metadata(metadata_path, ["RUN1"])
     existing = output_dir / "RUN1" / "RUN1.amalgkit.fastq.gz"
     existing.parent.mkdir(parents=True)
-    existing.write_bytes(gzip.compress(b"@read\nACGT\n+\n!!!!\n" * 1000)[:-8])
+    truncated = gzip.compress(b"@read\nACGT\n+\n!!!!\n" * 1000)[:-8]
+    existing.write_bytes(truncated)
+    valid_payload = gzip.compress(b"@replacement\nTGCA\n+\n!!!!\n")
+    fastq_url = "https://example.invalid/RUN1.fastq.gz"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=RUN1": _xml(
+            "RUN1.fastq.gz", fastq_url
+        ),
+        fastq_url: valid_payload,
+    }
 
-    with pytest.raises(SystemExit, match="Existing fallback FASTQ set is invalid"):
-        _run_fallback(monkeypatch, metadata_path, output_dir, {})
+    attempts = _run_fallback(monkeypatch, metadata_path, output_dir, responses)
 
-    assert not (output_dir / "getfastq_completion.json").exists()
+    preserved = existing.with_name(existing.name + ".pre_integrity_recovery")
+    assert preserved.read_bytes() == truncated
+    assert existing.read_bytes() == valid_payload
+    assert attempts[fastq_url] == 1
     assert not _partial_files(output_dir)
+    validated = _run_manifest_validator(metadata_path, output_dir)
+    assert validated.returncode == 0, validated.stderr
 
 
 def test_public_fallback_rejects_non_fastq_success_response(monkeypatch, tmp_path):
@@ -497,9 +672,12 @@ def test_public_fallback_rejects_non_fastq_success_response(monkeypatch, tmp_pat
         fastq_url: b"<html>temporary upstream error</html>",
     }
 
-    with pytest.raises(SystemExit, match="not a complete FASTQ gzip"):
-        _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+    attempts = {}
+    with pytest.raises(SystemExit, match="failed bounded integrity retries") as exc_info:
+        _run_fallback(monkeypatch, metadata_path, output_dir, responses, attempts)
 
+    assert "incomplete FASTQ gzip" in str(exc_info.value)
+    assert attempts[fastq_url] == 5
     assert not (output_dir / "RUN1" / "RUN1.amalgkit.fastq.gz").exists()
     assert not (output_dir / "getfastq_completion.json").exists()
     assert not _partial_files(output_dir)
