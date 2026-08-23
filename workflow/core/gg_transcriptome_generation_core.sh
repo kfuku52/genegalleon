@@ -3435,7 +3435,17 @@ quant_provenance_args+=(
   --parameter "clean_fastq=no"
   --parameter "build_index=yes"
 )
-gg_artifact_prepare_stage quant_needs_update run_amalgkit_quant "${quant_provenance_args[@]}" || exit $?
+quant_output_validation=""
+if [[ ${run_amalgkit_quant} -eq 1 ]] && ! quant_output_validation=$(python \
+  "${gg_support_dir}/validate_transcriptome_quant_outputs.py" \
+  --metadata "${file_amalgkit_metadata}" \
+  --quant-root "${dir_amalgkit_quant}/${sp_ub}" 2>&1)
+then
+  echo "Existing amalgkit quant output is unavailable or invalid; rebuilding: ${quant_output_validation}" >&2
+  quant_needs_update=1
+else
+  gg_artifact_prepare_stage quant_needs_update run_amalgkit_quant "${quant_provenance_args[@]}" || exit $?
+fi
 if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ "${selected_transcriptome_mode}" == "sraid" ]] && \
@@ -3524,11 +3534,11 @@ if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
     exit 1
   else
     echo "amalgkit quant finished successfully"
-    shopt -s nullglob
-    quant_outputs=(./quant/*)
-    shopt -u nullglob
-    if [[ ${#quant_outputs[@]} -eq 0 ]]; then
-      echo "amalgkit quant finished but no files were found in ./quant."
+    if ! python "${gg_support_dir}/validate_transcriptome_quant_outputs.py" \
+      --metadata "${file_amalgkit_metadata}" \
+      --quant-root "./quant"
+    then
+      echo "amalgkit quant finished but its per-run output contract is incomplete or invalid."
       exit 1
     fi
     if [[ -s "${quant_reference_alias_audit}" ]]; then
