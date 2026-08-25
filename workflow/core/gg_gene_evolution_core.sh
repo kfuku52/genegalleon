@@ -3673,7 +3673,18 @@ if [[ ${run_orthogroup_extraction_original} -eq 1 && -s "${file_og_orthogroup_ex
 fi
 
 task="GeneRax"
-disable_if_no_input_file "run_generax" "${file_og_trimmed_aln_analysis}" "${file_og_unrooted_tree_analysis}" "${species_tree_pruned}"
+generax_starting_tree="${file_og_unrooted_tree_analysis}"
+generax_rooting_mode="mad"
+generax_rooting_args=(--mad-rooting)
+if [[ "${tree_rooting_method}" == "reconciliation" ]]; then
+  generax_starting_tree="${file_og_rooted_tree}"
+  if [[ ${run_orthogroup_extraction_original} -eq 1 && -s "${file_og_orthogroup_extraction_rooted_nwk}" ]]; then
+    generax_starting_tree="${file_og_orthogroup_extraction_rooted_nwk}"
+  fi
+  generax_rooting_mode="enforced_reconciliation"
+  generax_rooting_args=(--enforce-gene-tree-root)
+fi
+disable_if_no_input_file "run_generax" "${file_og_trimmed_aln_analysis}" "${generax_starting_tree}" "${species_tree_pruned}"
 generax_needs_update=0
 generax_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.generax.json"
@@ -3682,13 +3693,14 @@ generax_provenance_args=(
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
-  --input "unrooted_tree=${file_og_unrooted_tree_analysis}"
+  --input "starting_tree=${generax_starting_tree}"
   --input "species_tree=${species_tree_pruned}"
   --output "generax_nwk=${file_og_generax_nwk}"
   --output "generax_xml=${file_og_generax_xml}"
   --output "generax_nhx=${file_og_generax_nhx}"
   --parameter "model=${generax_model}"
   --parameter "reconciliation_model=${generax_rec_model}"
+  --parameter "rooting_mode=${generax_rooting_mode}"
   --parameter "input_sequence_mode=${input_sequence_mode}"
   --parameter "genetic_code=${genetic_code}"
 )
@@ -3710,7 +3722,7 @@ if [[ ${generax_needs_update} -eq 1 && ${run_generax} -eq 1 ]]; then
   fi
 
   nwkit drop --target intnode --support yes --name yes \
-    --infile "${file_og_unrooted_tree_analysis}" \
+    --infile "${generax_starting_tree}" \
     --outfile generax_input_gene_tree.nwk
 
   #avoid multifurcating tree
@@ -3749,7 +3761,7 @@ if [[ ${generax_needs_update} -eq 1 && ${run_generax} -eq 1 ]]; then
     --prefix "generax_${og_id}" \
     --per-family-rates \
     --skip-family-filtering \
-    --mad-rooting \
+    "${generax_rooting_args[@]}" \
     --seed 12345 < /dev/null
 
   echo "GeneRax exit code = $?"

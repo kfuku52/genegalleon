@@ -148,7 +148,9 @@ in the relevant dataset and falls back to the first available species when none 
 models are present. The current priority list keeps only `Arabidopsis_thaliana` and `Oryza_sativa`
 on the plant side, then checks standard cross-clade model species such as human, mouse, zebrafish,
 fly, nematode, yeasts, and `Escherichia_coli`. Tree-visualization ortholog prefixes derive from
-that species name downstream, so the shared common variable no longer includes a trailing underscore.
+that species name downstream, and query2family reference-gene orthology plots
+use every family-tree tip assigned to the resolved species. The shared common
+variable therefore does not include a trailing underscore.
 
 `species_tree_rooting`, `grampa_h1`, and `target_branch_go` are no longer shared `GG_COMMON_*` values.
 They are now configured directly in `workflow/gg_genome_evolution_entrypoint.sh`
@@ -278,7 +280,9 @@ Gene-tree rooting keeps MAD as the default. The selectable
 and `md` (`md` maps to NWKIT's `mv` method). `reconciliation` uses NWKIT's
 duplication/loss-assisted rooting with the pruned species tree and the configured
 species-label parser, regular expression, or mapping TSV. It does not invoke
-NOTUNG. For a one-off run:
+NOTUNG. When GeneRax is enabled, the reconciliation-rooted input is preserved
+with GeneRax's `--enforce-gene-tree-root`; other rooting modes retain the
+existing GeneRax MAD-rooting behavior. For a one-off run:
 
 ```bash
 GG_GENE_EVOLUTION_TREE_ROOTING_METHOD=reconciliation \

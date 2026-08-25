@@ -42,6 +42,7 @@ hgt_summary_taxonomy_flow_rank
 hgt_summary_tree_plot_width
 hgt_summary_use_taxonomy_db
 presence_absence_busco_table
+presence_absence_evidence_layout
 presence_absence_family_file
 presence_absence_family_ids
 presence_absence_heatmap_value

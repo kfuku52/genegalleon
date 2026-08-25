@@ -154,6 +154,13 @@ Current examples:
 - `workspace/output/gene_summary/query2family/query2family_presence_absence.tsv`
 - `workspace/output/gene_summary/query2family/query2family_presence_absence.pdf`
 - `workspace/output/gene_summary/query2family/query2family_presence_absence.svg`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.pdf`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.svg`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.columns.tsv`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.glyphs.tsv`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.tree.tsv`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.synteny.tsv`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.ufboot.tsv`
 - `workspace/orthogroup_summary.tsv`
 - `workspace/query2family_summary.tsv`
 - `workspace/transcriptome_assembly_summary.tsv`
@@ -164,7 +171,42 @@ branch support/dated-tree uncertainty when available, a detected/undetected
 gene-family matrix, and per-species BUSCO stacked bars when BUSCO full tables
 or a BUSCO summary table are available. For large orthogroup sets, full TSV
 matrices are retained while `.plot.*` files record the default or user-selected
-subset used for the PDF/SVG. The workspace-root summary TSVs are produced by
+subset used for the PDF/SVG. Query2family summaries additionally expand each
+family into every gene from `GG_COMMON_REFERENCE_SPECIES`; a light multi-column
+glyph represents a copy inferred to predate the duplication of those reference
+genes, and every detected glyph
+contains its copy count. The compact reference-gene tree above those columns is
+derived from the reconciled family tree. Duplication nodes use family-colored
+circles in the compact query trees and matching family-colored bars in the
+species-tree mapping.
+The species tree receives every reconciled duplication from the complete gene
+tree, not only duplication nodes in the reference-gene subtree, using
+`spnode_generax` when available and `spnode_coverage` otherwise. The
+`.tree.tsv` records the target as `mapped_species_node`; `in_reference_tree`
+distinguishes nodes used in the compact reference-gene tree from mapping-only
+duplication rows. Events from one family mapped to the same species-tree branch
+are collapsed into one bar whose height is proportional to their count, while
+bars for different families are distributed along the branch. Both the
+color key and reference-gene tree titles use the input query filename directly.
+For dated display trees, reconciled internal-node labels are transferred from
+the matching undated species tree by descendant clade before the duplication
+rows are mapped.
+Column labels use gene IDs verified against `cds_fasta`, and multiple families
+are isolated into titled blocks with separate query-tree topologies.
+By default, a thin upper viridis band records the largest per-copy
+local-synteny anchor count in a cell and a thin lower viridis band records the
+smallest per-copy Gene tree UFBoot value for the non-root speciation-MRCA branch
+used by the orthology assignment. Reference-self cells omit both bands, and a
+numeric support band is shown only when every non-reference copy in the cell is
+evaluable. The optional `glyph` layout instead uses an upper-right viridis
+diamond and a lower-right Inferno circle. Pair-level values and explicit
+unavailability reasons are stored in `.synteny.tsv` and `.ufboot.tsv`,
+respectively; the latter also records whether `support_generax_ufboot` or the
+generic `support_unrooted` fallback was used. `stat_branch` stores the explicit
+post-GeneRax percentage in
+`support_generax_ufboot`, mapped by unrooted split onto the rooted GeneRax
+branch-table topology.
+The workspace-root summary TSVs are produced by
 `gg_progress_summary_entrypoint.sh`.
 
 ## Common relocation scenario

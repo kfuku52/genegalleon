@@ -1498,9 +1498,12 @@ def test_core_scripts_resolve_busco_lineage_through_shared_helper():
 def test_core_scripts_resolve_reference_species_through_shared_helper():
     gene_evolution = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
     genome_evolution = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
+    gene_summary = _read_text(CORE_DIR / "gg_gene_summary_core.sh")
 
     assert 'annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"' in gene_evolution
     assert 'annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"' in genome_evolution
+    assert 'reference_species_requested="${GG_COMMON_REFERENCE_SPECIES:-auto}"' in gene_summary
+    assert "gg_resolve_annotation_species" in gene_summary
     assert "GG_COMMON_ANNOTATION_SPECIES" not in gene_evolution
     assert "GG_COMMON_ANNOTATION_SPECIES" not in genome_evolution
 
@@ -1913,7 +1916,7 @@ def test_gene_evolution_offers_reconciliation_rooting_without_changing_default()
     entrypoint = _read_text(WORKFLOW_DIR / "gg_gene_evolution_entrypoint.sh")
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
 
-    assert 'tree_rooting_method="mad"' in entrypoint
+    assert 'tree_rooting_method="${tree_rooting_method:-mad}"' in entrypoint
     assert "mad|reconciliation|notung|midpoint|md" in entrypoint
     assert '"${tree_rooting_method}" != "reconciliation"' in core
     assert (
@@ -3018,6 +3021,27 @@ def test_gene_evolution_core_uses_container_safe_generax_mpi_launcher():
         in generax_block
     )
     assert "running_under_scheduler" not in generax_block
+
+
+def test_generax_enforces_nwkit_reconciliation_root():
+    script = CORE_DIR / "gg_gene_evolution_core.sh"
+    text = _read_text(script)
+    generax_block_start = text.index('task="GeneRax"')
+    generax_block_end = text.index(
+        'task="Unconstrained IQ-TREE UFBOOT mapped onto GeneRax topology"',
+        generax_block_start,
+    )
+    generax_block = text[generax_block_start:generax_block_end]
+
+    assert 'if [[ "${tree_rooting_method}" == "reconciliation" ]]; then' in generax_block
+    assert 'generax_starting_tree="${file_og_rooted_tree}"' in generax_block
+    assert 'generax_starting_tree="${file_og_orthogroup_extraction_rooted_nwk}"' in generax_block
+    assert 'generax_rooting_args=(--enforce-gene-tree-root)' in generax_block
+    assert 'generax_rooting_args=(--mad-rooting)' in generax_block
+    assert '--input "starting_tree=${generax_starting_tree}"' in generax_block
+    assert '--parameter "rooting_mode=${generax_rooting_mode}"' in generax_block
+    assert '--infile "${generax_starting_tree}"' in generax_block
+    assert '"${generax_rooting_args[@]}" \\' in generax_block
 
 
 def test_generax_container_smoke_test_uses_runtime_mpi_launcher():

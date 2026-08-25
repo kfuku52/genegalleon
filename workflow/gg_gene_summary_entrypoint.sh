@@ -121,6 +121,7 @@ presence_absence_species_tree_support="${presence_absence_species_tree_support:-
 presence_absence_busco_table="${presence_absence_busco_table:-auto}" # BUSCO full-table directory or species summary table for the right-side stacked bars, or auto to use workspace outputs.
 presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}" # Include query files without stat_branch as NA columns.
 presence_absence_heatmap_value="${presence_absence_heatmap_value:-presence}" # presence|copy_number for the PDF/SVG heatmap fill.
+presence_absence_evidence_layout="${presence_absence_evidence_layout:-band}" # band|rail|glyph|off; band preserves the continuous center of pre-duplication glyphs.
 presence_absence_plot_width="${presence_absence_plot_width:-7.2}" # Width in inches for the presence/absence summary plot.
 presence_absence_max_families="${presence_absence_max_families:-auto}" # Maximum plotted families; auto means all query2family queries and first 100 orthogroups. Use 0/all for no cap.
 presence_absence_family_ids="${presence_absence_family_ids:-}" # Optional comma/space-separated family IDs to plot, overriding the default subset.

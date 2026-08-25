@@ -456,7 +456,9 @@ Wrapper-specific note:
   `GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION=orthogroup`.
 - gene-tree rooting defaults to MAD; set
   `GG_GENE_EVOLUTION_TREE_ROOTING_METHOD=reconciliation` to select NWKIT's
-  species-tree-assisted duplication/loss rooting without NOTUNG.
+  species-tree-assisted duplication/loss rooting without NOTUNG. If GeneRax is
+  enabled, this selected root is passed as a rooted starting tree and enforced
+  during GeneRax correction instead of being replaced by GeneRax MAD rooting.
 
 ### Inlined Stage: Genome Evolution
 
@@ -505,6 +507,12 @@ Main presence/absence outputs:
 - `workspace/output/gene_summary/query2family/query2family_presence_absence.tsv`
 - `workspace/output/gene_summary/query2family/query2family_copy_number.tsv`
 - `workspace/output/gene_summary/query2family/query2family_presence_absence.pdf`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.pdf`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.columns.tsv`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.glyphs.tsv`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.tree.tsv`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.synteny.tsv`
+- `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.ufboot.tsv`
 - `workspace/output/gene_summary/*/*_presence_absence.plot_selection.tsv`
 - `workspace/output/gene_summary/*/*_presence_absence.plot.long.tsv`
 
@@ -513,6 +521,40 @@ Notable defaults:
 - `run_presence_absence_summary=1`
 - query-gene names in the presence/absence plot come from
   `workspace/input/query_gene` file basenames
+- query2family also plots every gene from the species selected by
+  `GG_COMMON_REFERENCE_SPECIES` (`auto` resolves a model species present in the
+  dataset): dark cells show copies specific to one reference gene, light bars
+  spanning adjacent reference genes show inferred
+  pre-duplication copies, and the printed number is the copy count; plot labels
+  are gene IDs verified against the family `cds_fasta` output, with the species
+  prefix omitted for display and the exact CDS FASTA ID retained in the TSV;
+  local-synteny evidence reports the maximum independent shared anchor count
+  among copies represented by a cell;
+  each candidate/reference-gene pair has its own anchor count, and the legend states
+  how many upstream and downstream gene models are inspected per side;
+  one anchor is single-anchor evidence and two or more are classified as supported;
+  the evidence table retains the per-copy anchor
+  count, normalized local-synteny score, flank coverage, and collinearity
+  diagnostics; Gene tree UFBoot support (falling back to generic unrooted
+  support when GeneRax values are unavailable) is taken from the non-root
+  speciation-MRCA branch used by each orthology assignment. Multi-copy cells
+  show the lowest per-copy value only when every non-reference copy is
+  evaluable; `.ufboot.tsv` retains exact
+  pairwise values and reasons for unavailable support. This value measures gene-tree
+  branch-topology support, not confidence in the reconciliation event label; a
+  column-aligned reference-gene tree is drawn above the matrix. Duplication nodes in
+  the compact query trees use family-colored filled circles, while mapped
+  duplications on the species tree use family-colored bars; the input query
+  filenames are written directly in the reference-gene tree titles and color
+  key. Species-tree mapping includes every
+  reconciled duplication in each complete family gene tree, including events
+  outside the lineage containing the reference genes. Events from the same family
+  on the same species-tree branch are collapsed into one bar whose height is
+  proportional to the duplication count; bars for different families are
+  distributed along that branch. If a dated species tree has different
+  internal labels, reconciliation labels are transferred from the matching
+  undated tree by clade before mapping. Multiple families remain separated into
+  titled column blocks
 - `presence_absence_max_families=auto` plots all query2family queries but only the first 100 orthogroups by default
 - `presence_absence_family_ids` and `presence_absence_family_file` select an explicit plotted subset for either mode
 - `presence_absence_species_tree=auto` prefers query2family-pruned dated species
@@ -524,6 +566,13 @@ Notable defaults:
 - `presence_absence_busco_table=auto` adds per-species BUSCO stacked bars when
   BUSCO full tables or `workspace/output/species_tree/busco_summary_table/busco_summary.tsv`
   are available; full tables include Fragmented counts
+- `presence_absence_evidence_layout=band` uses thin upper local-synteny and
+  lower Gene tree UFBoot bands so the center of multi-column pre-duplication
+  glyphs remains continuous; both use viridis, map zero to the same darkest
+  color, and map their maxima to the same lightest color; reference-self cells
+  omit both bands while retaining the central presence/copy-number glyph; use
+  `rail` for the earlier right-edge layout, `glyph` for diamond/circle overlays,
+  or `off` to hide evidence
 - `presence_absence_plot_width=7.2`; the plotter caps figure width at 7.2 inches
 - `run_gene_family_database_build=0`, `run_csubst_scan_aa_change_summary=0`, `run_csubst_scan_candidate_sites=0`, `run_hgt_candidate_summary=0`, `run_hgt_summary_plots=0`, and `run_csubst_site_convergence_summary=0`
 - database, CSUBST scan AA-change summary, HGT, and CSUBST site convergence flags are valid for both sources and use the selected source's gene-family output directory,

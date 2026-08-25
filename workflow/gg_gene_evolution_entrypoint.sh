@@ -182,7 +182,7 @@ cdskit_localize_no_model_download=0 # Set 1 to require the localize model to alr
 
 # Phylogeny reconstruction and reconciliation parameters
 iqtree_fast_mode_gt=2000 # Sequence-count threshold above which IQ-TREE runs with --fast and disables UFBOOT for large alignments.
-tree_rooting_method="mad" # mad|reconciliation|notung|midpoint|md; reconciliation uses the pruned species tree with NWKIT, and md maps to NWKIT method "mv".
+tree_rooting_method="${tree_rooting_method:-mad}" # mad|reconciliation|notung|midpoint|md; reconciliation uses the pruned species tree with NWKIT, and md maps to NWKIT method "mv".
 generax_model="GTR+G4" # GeneRax substitution model.
 generax_rec_model="UndatedDL" # "UndatedDTL" or "UndatedDL"; GeneRax reconciliation model, with DL modeling duplication/loss and DTL also allowing transfer events for HGT-oriented analyses.
 radte_max_age=1000 # Upper limit of estimated divergence time in MY.

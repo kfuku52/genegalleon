@@ -465,14 +465,75 @@ GG_GENE_SUMMARY_GENE_FAMILY_SOURCE=orthogroup \
 bash gg_gene_summary_entrypoint.sh
 ```
 
-The PDF/SVG figure combines the species tree with the gene-family
-detected/undetected matrix. The full TSV matrices are written for all detected
-families, while `.plot.*` files record the subset used for the figure. By
+The standard PDF/SVG figure combines the species tree with the gene-family
+detected/undetected matrix. In query2family mode, a second
+`query2family_reference_gene_orthologs.pdf`/`.svg` figure expands each family
+into every gene from the selected reference species. The reference species is
+resolved from `GG_COMMON_REFERENCE_SPECIES`; `auto` prefers a supported model
+species present in the plotted dataset. Dark cells are orthologs specific to
+one reference gene, while a light bar spanning adjacent reference-gene cells
+marks a copy inferred to predate their duplication; the printed number is the
+copy count. A non-contiguous assignment is shown in orange and identified in
+the legend rather than being presented as an ordinary pre-duplication span.
+Local-synteny evidence is calculated separately for every
+candidate/reference-gene pair. A cell can contain multiple copies, so its
+summary uses the highest number of distinct shared flanking-gene similarity
+groups while the exact per-copy values remain in `.synteny.tsv`. One shared
+anchor is single-anchor evidence, while two or more are classified as supported
+in the evidence table. The legend reports the evaluated neighborhood radius as
+the number of upstream and downstream gene models inspected on each side.
+Missing local-synteny support does not override the reconciled-tree orthology
+assignment. Gene-tree UFBoot evidence uses the non-root speciation-MRCA branch
+that underlies each candidate/reference assignment. A multi-copy cell uses the
+lowest per-copy value and is numeric only when every non-reference copy has an
+evaluable branch; missing `support_generax_ufboot` values (or the generic
+`support_unrooted` fallback) and root MRCAs make the summary unavailable. Exact
+pairwise values and unavailability reasons remain in `.ufboot.tsv`, together
+with the support-column source. GeneRax values come from
+an unconstrained IQ-TREE UFBoot search whose split frequencies are subsequently
+mapped onto the GeneRax topology. This is branch-topology support, not a confidence score for the
+reconciliation event classification itself. A
+compact reference-gene tree above the matrix is aligned to the
+same columns. Duplication nodes in this compact tree remain family-colored
+filled circles. On the reconciled species tree, each mapped branch instead gets
+a small family-colored bar plot: events from one family on the same branch are
+collapsed into one bar, and bar height is proportional to their duplication
+count. Bars for different families are spread along that branch. The color key
+and compact trees use the input query filename. When the plotted tree is dated,
+internal reconciliation labels are transferred by matching clades from the
+corresponding undated mapping tree, so mapped events are not lost when its node
+labels differ. The
+column labels are gene IDs verified against each family's `cds_fasta` output;
+the species prefix is omitted for display while the exact CDS FASTA ID remains
+in the tables. Multiple families remain separate column blocks, with a family
+title above each reference-gene tree and a vertical separator between matrices. The
+corresponding `.columns.tsv`, `.glyphs.tsv`, `.tree.tsv`, `.synteny.tsv`, and
+`.ufboot.tsv` files record the
+reference-gene order, plotted inference, compact tree topology, family-local
+duplication index, reconciled species-node mapping, and candidate/reference
+local-synteny and gene-tree branch-support evidence. The full TSV matrices are written for all detected families,
+while `.plot.*` files record the subset used for the figures. By
 default, query2family plots all query files and orthogroup plots the first
 100 orthogroups. Use `presence_absence_max_families=0` or `all` to remove the cap,
 or set `presence_absence_family_ids=OG0000001,OG0000042` /
 `presence_absence_family_file=selected_ogs.txt` to plot an explicit subset in the
 requested order.
+
+Detected cells reserve narrow evidence bands along their upper and lower edges
+by default. The upper band shows the highest per-copy local-synteny anchor count,
+and the lower band shows the lowest per-copy decisive-branch Gene tree UFBoot
+support. This leaves the center of a multi-column pre-duplication glyph
+continuous and keeps its copy number unobstructed. Both numeric scales map zero
+to the same darkest viridis color and their respective maxima to the same
+lightest color. A gray slash marks unavailable evidence. Reference-self cells
+omit both edge bands; their central presence/copy-number glyph is unchanged.
+Set `presence_absence_evidence_layout=rail`
+for the earlier right-edge rail, `glyph` for the diamond/circle overlay, or
+`off` to suppress both evidence encodings and their legends. The legacy `rail`
+layout continues to mark the reference gene itself with a white dash. In the
+optional `glyph` layout, a viridis diamond shows local-synteny anchors and an
+Inferno circle shows Gene tree UFBoot; reference-self and unavailable UFBoot
+cells have no circle.
 
 If the selected species tree is dated and
 `workspace/output/species_tree/mcmctree_main/mcmctree_95CI.nwk` exists, the
