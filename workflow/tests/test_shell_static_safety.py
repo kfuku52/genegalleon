@@ -2953,35 +2953,63 @@ def test_gene_evolution_core_disables_initial_ufboot_when_fast_mode_is_enabled()
 def test_gene_evolution_core_keeps_generax_ufboot_task_free_of_fast_flag():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    assert "Skipping IQ-TREE --fast in UFBOOT-on-GeneRax mode because the options are incompatible." in text
+    assert "Skipping IQ-TREE --fast because this stage must generate UFBoot replicate trees." in text
 
-    ufboot_block_start = text.index('task="IQ-TREE UFBOOT on GeneRax topology"')
-    ufboot_block_end = text.index("build_iqtree_mem_args", ufboot_block_start)
+    ufboot_block_start = text.index(
+        'task="Unconstrained IQ-TREE UFBOOT mapped onto GeneRax topology"'
+    )
+    ufboot_block_end = text.index('task="NOTUNG reconciliation"', ufboot_block_start)
     ufboot_block = text[ufboot_block_start:ufboot_block_end]
-    assert "other_iqtree_params+=( --fast )" not in ufboot_block
+    assert "--fast" not in ufboot_block.replace(
+        "Skipping IQ-TREE --fast because this stage must generate UFBoot replicate trees.",
+        "",
+    )
 
 
-def test_gene_evolution_core_drops_all_branch_lengths_from_generax_constraint_tree():
+def test_gene_evolution_core_maps_unconstrained_bootstrap_splits_to_generax_tree():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    ufboot_block_start = text.index('task="IQ-TREE UFBOOT on GeneRax topology"')
-    ufboot_block_end = text.index("build_iqtree_mem_args", ufboot_block_start)
+    ufboot_block_start = text.index(
+        'task="Unconstrained IQ-TREE UFBOOT mapped onto GeneRax topology"'
+    )
+    ufboot_block_end = text.index('task="NOTUNG reconciliation"', ufboot_block_start)
     ufboot_block = text[ufboot_block_start:ufboot_block_end]
 
-    assert (
-        'nwkit drop --target all --length yes --outformat 9 --outfile "${og_id}.generax_ufboot.constraint.nwk"'
-        in ufboot_block
-    )
-    assert (
-        'nwkit drop --target root --length yes --outfile "${og_id}.generax_ufboot.constraint.nwk"' not in ufboot_block
-    )
+    assert 'other_iqtree_params=(--ufboot 1000 --bnni --boot-trees --keep-ident)' in ufboot_block
+    assert '--parameter "bootstrap_topology_search=unconstrained"' in ufboot_block
+    assert '--parameter "bootstrap_identical_sequences=keep"' in ufboot_block
+    assert ' -g "${og_id}.generax_ufboot' not in ufboot_block
+    assert 'prepare_generax_ufboot_target.py" \\' in ufboot_block
+    assert '--prefix "${og_id}.generax_ufboot.unconstrained"' in ufboot_block
+    assert '-t "${og_id}.generax_ufboot.unconstrained.ufboot"' in ufboot_block
+    assert '--support "${og_id}.generax_ufboot.target.nwk"' in ufboot_block
+    assert '"${og_id}.generax_ufboot.mapped.suptree"' in ufboot_block
+    assert 'set_analysis_file rooted_tree "${file_og_generax_nhx}"' in ufboot_block
+    assert 'set_analysis_file unrooted_tree "${file_og_iqtree_generax_ufboot}"' in ufboot_block
+
+
+def test_generax_ufboot_is_written_to_stat_branch_and_preferred_by_tree_plot():
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_gene_evolution_entrypoint.sh")
+    statistics = _read_text(WORKFLOW_DIR / "support" / "orthogroup_statistics.py")
+
+    assert '--generax_ufboot_tree "${generax_ufboot_for_summary}"' in core
+    assert '"--generax_ufboot_tree"' in statistics
+    assert 'df_tmp_generax_ufboot.loc[:, "support_generax_ufboot"]' in statistics
+    assert 'treevis_support_value="auto"' in entrypoint
+    assert "stat_branch_column_has_value support_generax_ufboot" in core
+    assert 'treevis_support_value_resolved="support_generax_ufboot"' in core
+    assert "${treevis_support_value_resolved}" in core
 
 
 def test_gene_evolution_core_uses_container_safe_generax_mpi_launcher():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     generax_block_start = text.index('task="GeneRax"')
-    generax_block_end = text.index('task="IQ-TREE UFBOOT on GeneRax topology"', generax_block_start)
+    generax_block_end = text.index(
+        'task="Unconstrained IQ-TREE UFBOOT mapped onto GeneRax topology"',
+        generax_block_start,
+    )
     generax_block = text[generax_block_start:generax_block_end]
 
     assert 'mpiexec_args=(mpiexec -oversubscribe -np "${GG_TASK_CPUS}")' in generax_block
@@ -3209,7 +3237,8 @@ def test_orthogroup_statistics_skips_unrooted_annotation_transfer_failures():
     script = WORKFLOW_DIR / "support" / "orthogroup_statistics.py"
     text = _read_text(script)
     assert "Failed to transfer unrooted-tree branch annotations to the rooted tree" in text
-    assert "Leaving support_unrooted and bl_unrooted as NA" in text
+    assert "Leaving support_unrooted as NA" in text
+    assert "Leaving bl_unrooted as NA" in text
 
 
 def test_orthogroup_statistics_skips_invalid_regime2tree_summary_instead_of_aborting():

@@ -285,6 +285,17 @@ GG_GENE_EVOLUTION_TREE_ROOTING_METHOD=reconciliation \
 bash workflow/gg_gene_evolution_entrypoint.sh
 ```
 
+When GeneRax is enabled, post-GeneRax UFBoot is calculated from an
+**unconstrained** IQ-TREE bootstrap search. GeneGalleon then counts those
+replicate-tree splits on the GeneRax target topology; it does not use the fully
+resolved GeneRax tree as an IQ-TREE topology constraint. The resulting
+percentages are stored in `stat_branch` as `support_generax_ufboot`.
+Identical sequences are retained in the replicate trees so their tip set
+remains identical to the GeneRax target.
+`treevis_support_value="auto"` prefers that column, falls back to
+`support_unrooted`, and suppresses node labels when neither contains values.
+An explicit column name or `no` can still be configured instead of `auto`.
+
 Input generation uses the shorter `GG_INPUT_` prefix. Common overrides include:
 
 - `GG_INPUT_PROVIDER`

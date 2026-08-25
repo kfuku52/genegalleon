@@ -5,9 +5,11 @@ import argparse
 import copy
 import gzip
 import json
+import math
 import os
 import re
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -100,6 +102,154 @@ def node_is_root(node):
     return bool(node.is_root)
 
 
+def _tree_descendant_tip_sets(tree):
+    """Return descendant-tip sets and reject duplicate/empty leaf labels."""
+
+    leaf_names = [str(leaf.name) for leaf in iter_leaves(tree)]
+    if any(not name for name in leaf_names):
+        raise ValueError("Tree contains an empty leaf label.")
+    duplicate_names = sorted(name for name, count in Counter(leaf_names).items() if count > 1)
+    if duplicate_names:
+        raise ValueError(f"Tree contains duplicate leaf labels: {duplicate_names[:5]}")
+
+    descendants = {}
+    for node in tree.traverse(strategy="postorder"):
+        if node_is_leaf(node):
+            descendants[node] = frozenset([str(node.name)])
+        else:
+            descendants[node] = frozenset().union(
+                *(descendants[child] for child in node.get_children())
+            )
+    return frozenset(leaf_names), descendants
+
+
+def _canonical_internal_split(descendant_tips, all_tips):
+    """Return an orientation-independent key for a non-trivial tree edge."""
+
+    side_a = frozenset(descendant_tips)
+    side_b = frozenset(all_tips.difference(side_a))
+    if len(side_a) < 2 or len(side_b) < 2:
+        return None
+    ordered_a = tuple(sorted(side_a))
+    ordered_b = tuple(sorted(side_b))
+    if len(side_a) < len(side_b):
+        return ordered_a
+    if len(side_b) < len(side_a):
+        return ordered_b
+    return min(ordered_a, ordered_b)
+
+
+def _internal_split_nodes(tree):
+    all_tips, descendants = _tree_descendant_tip_sets(tree)
+    nodes_by_split = {}
+    for node in tree.traverse():
+        if node_is_root(node) or node_is_leaf(node):
+            continue
+        split = _canonical_internal_split(descendants[node], all_tips)
+        if split is not None:
+            nodes_by_split.setdefault(split, []).append(node)
+    return all_tips, nodes_by_split
+
+
+def map_internal_support_by_split(
+    rooted_tree,
+    support_tree,
+    support_max=None,
+    require_support=False,
+):
+    """Map edge support by canonical unrooted bipartition.
+
+    A rooted binary representation contains the root split twice (once on each
+    root-child edge), whereas an unrooted tree contains it once.  Canonical
+    split keys make the mapping independent of root placement and avoid
+    silently assigning values by incompatible rooted clades.
+    """
+
+    rooted_tips, rooted_nodes = _internal_split_nodes(rooted_tree)
+    support_tips, support_nodes = _internal_split_nodes(support_tree)
+    if rooted_tips != support_tips:
+        only_rooted = sorted(rooted_tips.difference(support_tips))
+        only_support = sorted(support_tips.difference(rooted_tips))
+        raise ValueError(
+            "Support and rooted trees have different leaf sets: "
+            f"only_in_rooted={only_rooted[:5]}, only_in_support={only_support[:5]}"
+        )
+
+    rooted_splits = set(rooted_nodes)
+    support_splits = set(support_nodes)
+    if rooted_splits != support_splits:
+        only_rooted = sorted(rooted_splits.difference(support_splits))
+        only_support = sorted(support_splits.difference(rooted_splits))
+        raise ValueError(
+            "Support and rooted trees have incompatible unrooted topologies: "
+            f"only_in_rooted={len(only_rooted)}, only_in_support={len(only_support)}; "
+            f"rooted_preview={only_rooted[:2]}, support_preview={only_support[:2]}"
+        )
+
+    support_by_split = {}
+    for split, nodes in support_nodes.items():
+        values = []
+        for node in nodes:
+            value = getattr(node, "support", None)
+            if value is None and hasattr(node, "props"):
+                value = node.props.get("support")
+            if value is None:
+                continue
+            value = float(value)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"Tree contains an invalid support value: {value!r}")
+            if support_max is not None and value > support_max + 1e-8:
+                raise ValueError(
+                    f"Tree support value {value!r} exceeds the expected maximum {support_max}."
+                )
+            values.append(value)
+        if not values:
+            continue
+        if max(values) - min(values) > 1e-8:
+            raise ValueError(
+                "The two rooted representations of one unrooted split carry "
+                f"different support values: {values}"
+            )
+        support_by_split[split] = values[0]
+
+    # A partially labelled support tree is more dangerous than a completely
+    # unlabelled tree (the latter is expected for families with <4 sequences).
+    if support_by_split and set(support_by_split) != support_splits:
+        missing = sorted(support_splits.difference(support_by_split))
+        raise ValueError(
+            "Support tree labels only a subset of its internal splits: "
+            f"supported={len(support_by_split)}, total={len(support_splits)}, "
+            f"missing_preview={missing[:2]}"
+        )
+    if require_support and support_splits and not support_by_split:
+        raise ValueError(
+            "Support tree has internal splits but no explicit support labels: "
+            f"total={len(support_splits)}"
+        )
+
+    branch_support = {}
+    for split, nodes in rooted_nodes.items():
+        if split not in support_by_split:
+            continue
+        for node in nodes:
+            branch_id = node.props.get("branch_id") if hasattr(node, "props") else None
+            if branch_id is None:
+                branch_id = getattr(node, "branch_id", None)
+            if branch_id is None:
+                raise ValueError("Rooted tree node is missing branch_id during support mapping.")
+            branch_support[int(branch_id)] = support_by_split[split]
+
+    values = list(support_by_split.values())
+    diagnostics = {
+        "internal_split_count": len(rooted_splits),
+        "supported_split_count": len(support_by_split),
+        "support_min": min(values) if values else None,
+        "support_max": max(values) if values else None,
+        "all_support_100": bool(values) and all(abs(value - 100.0) <= 1e-8 for value in values),
+    }
+    return branch_support, diagnostics
+
+
 def collect_sequence_stats(untrimmed_alignment, trimmed_alignment):
     """Collect statistics before and after alignment trimming."""
     out = {}
@@ -128,6 +278,13 @@ def build_arg_parser():
         help="Trimmed FASTA alignment used for cleaned alignment statistics.",
     )
     parser.add_argument("--unrooted_tree", metavar="PATH", default="", type=str, help="Path used by --unrooted_tree.")
+    parser.add_argument(
+        "--generax_ufboot_tree",
+        metavar="PATH",
+        default="",
+        type=str,
+        help="Unconstrained UFBoot split frequencies mapped onto the GeneRax topology.",
+    )
     parser.add_argument("--iqtree_model", metavar="PATH", default="", type=str, help="Path used by --iqtree_model.")
     parser.add_argument("--rooted_tree", metavar="PATH", default="", type=str, help="Path used by --rooted_tree.")
     parser.add_argument("--rooting_log", metavar="PATH", default="", type=str, help="Path used by --rooting_log.")
@@ -1251,31 +1408,80 @@ def main():
         if rooted_merged is not None:
             df_branch = pandas.merge(df_branch, rooted_merged, on="branch_id", how="outer")
     if os.path.exists(params["unrooted_tree"]) and os.path.exists(params["rooted_tree"]):
-        # If a rooted tree was reconciled, unrooted tree may have inconsistent branch_id,
-        # so branch matching cannot rely on it.
+        # If a rooted tree was reconciled, branch IDs and root placement may
+        # differ.  Map support by canonical unrooted split, never by node ID or
+        # by a root-dependent descendant clade.
         nlabels = numpy.arange(len(list(rooted_tree.traverse())))
         df_tmp = pandas.DataFrame({"branch_id": nlabels})
         df_tmp.loc[:, "support_unrooted"] = numpy.nan
         df_tmp.loc[:, "bl_unrooted"] = numpy.nan
         unrooted = new_unrooted_tree(params["unrooted_tree"])
         try:
-            unrooted = transfer_root(tree_to=unrooted, tree_from=rooted_tree)
-            unrooted = annotate_clade_signatures(unrooted)
-            unrooted_by_clade = {unode.props.get("clade_sig"): unode for unode in unrooted.traverse()}
+            mapped_support, support_diagnostics = map_internal_support_by_split(
+                rooted_tree, unrooted
+            )
+            for branch_id, support in mapped_support.items():
+                df_tmp.at[branch_id, "support_unrooted"] = support
+            print(
+                "Mapped generic unrooted support by split: "
+                f"{support_diagnostics['supported_split_count']}/"
+                f"{support_diagnostics['internal_split_count']} internal splits."
+            )
+        except Exception as exc:
+            print(
+                "Warning: Failed to transfer unrooted-tree branch annotations to the rooted tree. "
+                f"Leaving support_unrooted as NA: {exc}",
+                file=sys.stderr,
+            )
+        try:
+            unrooted_for_length = transfer_root(tree_to=unrooted, tree_from=rooted_tree)
+            unrooted_for_length = annotate_clade_signatures(unrooted_for_length)
+            unrooted_by_clade = {
+                unode.props.get("clade_sig"): unode for unode in unrooted_for_length.traverse()
+            }
             for rnode in rooted_tree.traverse():
                 unode = unrooted_by_clade.get(rnode.props.get("clade_sig"))
                 if unode is not None:
                     df_tmp.at[get_node_label(rnode), "bl_unrooted"] = unode.dist
-                    support = getattr(unode, "support", None)
-                    if support is not None and support != 1.0:
-                        df_tmp.at[get_node_label(rnode), "support_unrooted"] = support
         except Exception as exc:
             print(
-                "Warning: Failed to transfer unrooted-tree branch annotations to the rooted tree. "
-                f"Leaving support_unrooted and bl_unrooted as NA: {exc}",
+                "Warning: Failed to transfer unrooted-tree branch lengths to the rooted tree. "
+                f"Leaving bl_unrooted as NA: {exc}",
                 file=sys.stderr,
             )
         numlabel_merge_tables.append(df_tmp)
+    generax_branch_ids = (
+        numpy.arange(len(list(rooted_tree.traverse())))
+        if os.path.exists(params["rooted_tree"])
+        else df_branch["branch_id"].to_numpy()
+    )
+    df_tmp_generax_ufboot = pandas.DataFrame({"branch_id": generax_branch_ids})
+    df_tmp_generax_ufboot.loc[:, "support_generax_ufboot"] = numpy.nan
+    if os.path.exists(params["generax_ufboot_tree"]) and os.path.exists(params["rooted_tree"]):
+        generax_ufboot_tree = new_unrooted_tree(params["generax_ufboot_tree"])
+        mapped_support, support_diagnostics = map_internal_support_by_split(
+            rooted_tree,
+            generax_ufboot_tree,
+            support_max=100.0,
+            require_support=True,
+        )
+        for branch_id, support in mapped_support.items():
+            df_tmp_generax_ufboot.at[branch_id, "support_generax_ufboot"] = support
+        print(
+            "Mapped GeneRax-topology UFBoot by split: "
+            f"{support_diagnostics['supported_split_count']}/"
+            f"{support_diagnostics['internal_split_count']} internal splits; "
+            f"range={support_diagnostics['support_min']}-"
+            f"{support_diagnostics['support_max']}."
+        )
+        if support_diagnostics["all_support_100"]:
+            print(
+                "Warning: every mapped GeneRax-topology UFBoot value is 100. "
+                "This can be genuine, but it is only interpretable when the bootstrap "
+                "replicate trees were searched without a topology constraint.",
+                file=sys.stderr,
+            )
+    numlabel_merge_tables.append(df_tmp_generax_ufboot)
     if os.path.exists(params["dated_tree"]):
         df_tmp = nwk2table(tree=params["dated_tree"], attr="dist", age=True)
         df_tmp.columns = ["branch_id", "bl_dated", "age"]

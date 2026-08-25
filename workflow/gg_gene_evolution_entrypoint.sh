@@ -291,7 +291,7 @@ retrotransposition_rate="0.001" # Prior retrotransposition rate used by stochast
 # Tree visualization
 treevis_event_method="species_overlap" # "auto", "generax", or "species_overlap"; source for duplication/transfer/loss event labels in treevis plots.
 treevis_clade_ortholog=1 # Prefix clade-ortholog labels in treevis plots with the resolved annotation species when available.
-treevis_support_value="support_unrooted" # "support_unrooted", "dup_conf_score", "no"; branch/node support annotation shown on treevis trees.
+treevis_support_value="auto" # "auto", "support_generax_ufboot", "support_unrooted", "dup_conf_score", "no"; auto prefers GeneRax-topology UFBoot when available.
 treevis_branch_length="bl_rooted" # "bl_dated", "bl_rooted", "mapdnds_omega"; branch-length metric used for treevis tree geometry.
 treevis_branch_color="l1ou_regime" # "species", "no", or *_regime; branch color source for treevis, including species colors or inferred regime assignments.
 treevis_retrotransposition_delta_intron="-0.5" # Delta-intron cutoff used to flag retrotransposition candidates in plots.

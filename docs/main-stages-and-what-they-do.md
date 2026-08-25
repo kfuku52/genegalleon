@@ -400,8 +400,12 @@ Notable defaults:
 
 Current behavior notes:
 
-- if `run_generax=1`, initial IQ-TREE disables UFBOOT and support is
-  recomputed after GeneRax on the GeneRax topology,
+- if `run_generax=1`, initial IQ-TREE disables UFBOOT; after GeneRax,
+  IQ-TREE performs an unconstrained UFBoot search and the resulting bootstrap
+  split frequencies are mapped onto the GeneRax topology. The GeneRax tree is
+  never supplied as a fully resolved bootstrap constraint. The rooted GeneRax
+  topology is also the branch-table topology, and mapped percentages are stored
+  explicitly as `support_generax_ufboot`,
 - Pfam RPS-BLAST DB (`Pfam_LE`) is auto-prepared when missing, with lock-based
   synchronization for array jobs,
 - gene-tree PGLS remains a separate legacy analysis; matched expression-trait

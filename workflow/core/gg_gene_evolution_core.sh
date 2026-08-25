@@ -3795,7 +3795,7 @@ else
   gg_step_skip "${task}"
 fi
 
-task="IQ-TREE UFBOOT on GeneRax topology"
+task="Unconstrained IQ-TREE UFBOOT mapped onto GeneRax topology"
 generax_ufboot_needs_update=0
 generax_ufboot_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.generax_ufboot.json"
@@ -3811,6 +3811,10 @@ generax_ufboot_provenance_args=(
   --parameter "genetic_code=${genetic_code}"
   --parameter "ufboot=1000"
   --parameter "bnni=yes"
+  --parameter "bootstrap_topology_search=unconstrained"
+  --parameter "bootstrap_identical_sequences=keep"
+  --parameter "support_mapping_target=generax_topology"
+  --parameter "support_mapping_target_rooting=unrooted"
   --parameter "seed=12345"
 )
 if [[ ${run_generax} -eq 1 ]]; then
@@ -3826,8 +3830,10 @@ if [[ ${run_generax} -eq 1 ]]; then
     num_seq=$(gg_count_fasta_records "${file_og_trimmed_aln_analysis}")
     if [[ ${num_seq} -lt 4 ]]; then
       echo "UFBOOT requires >=4 sequences. Using the GeneRax topology without bootstrap support."
-      nwkit drop --target root --length yes --infile "${file_og_generax_nwk}" --outfile "${og_id}.generax_ufboot.tmp.nwk"
-      mv_out "${og_id}.generax_ufboot.tmp.nwk" "${file_og_iqtree_generax_ufboot}"
+      nwkit drop --target intnode --support yes --name yes \
+        --infile "${file_og_generax_nwk}" \
+        --outfile "${og_id}.generax_ufboot.target.nwk"
+      mv_out "${og_id}.generax_ufboot.target.nwk" "${file_og_iqtree_generax_ufboot}"
     else
       if [[ "${input_sequence_mode}" == "protein" ]]; then
         assert_gene_evolution_aa_model_for_protein_mode "${task}"
@@ -3842,36 +3848,50 @@ if [[ ${run_generax} -eq 1 ]]; then
         seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.generax_ufboot.input.fa"
       fi
 
-      nwkit drop --target intnode --support yes --name yes --infile "${file_og_generax_nwk}" |
-        nwkit drop --target all --length yes --outformat 9 --outfile "${og_id}.generax_ufboot.constraint.nwk"
+      python "${gg_support_dir}/prepare_generax_ufboot_target.py" \
+        --input "${file_og_generax_nwk}" \
+        --output "${og_id}.generax_ufboot.target.nwk"
 
-      other_iqtree_params=(--ufboot 1000 --bnni)
+      # Support mapping requires the bootstrap trees and GeneRax target to have
+      # identical tip sets.  Keep identical sequences in every replicate.
+      other_iqtree_params=(--ufboot 1000 --bnni --boot-trees --keep-ident)
       if [[ ${num_seq} -gt ${iqtree_fast_mode_gt} ]]; then
-        echo "Skipping IQ-TREE --fast in UFBOOT-on-GeneRax mode because the options are incompatible."
+        echo "Skipping IQ-TREE --fast because this stage must generate UFBoot replicate trees."
       fi
 
       build_iqtree_mem_args
       iqtree \
         -s "${og_id}.generax_ufboot.input.fa" \
-        -g "${og_id}.generax_ufboot.constraint.nwk" \
         -m "${generax_model}" \
         -T AUTO \
         --threads-max "${GG_TASK_CPUS}" \
-        --prefix "${og_id}.generax_ufboot" \
+        --prefix "${og_id}.generax_ufboot.unconstrained" \
         "${IQTREE_MEM_ARGS[@]}" \
         --seed 12345 \
         --redo \
         "${other_iqtree_params[@]}"
 
-      if [[ -s "${og_id}.generax_ufboot.contree" ]]; then
-        cp_out "${og_id}.generax_ufboot.contree" "${file_og_iqtree_generax_ufboot}"
-      elif [[ -s "${og_id}.generax_ufboot.treefile" ]]; then
-        cp_out "${og_id}.generax_ufboot.treefile" "${file_og_iqtree_generax_ufboot}"
-      else
-        echo "IQ-TREE UFBOOT on GeneRax topology failed to generate a tree file."
+      if [[ ! -s "${og_id}.generax_ufboot.unconstrained.ufboot" ]]; then
+        echo "Unconstrained IQ-TREE UFBOOT failed to generate bootstrap replicate trees."
         exit 1
       fi
-      rm -f -- "${og_id}.generax_ufboot.input.fa" "${og_id}.generax_ufboot.constraint.nwk"
+
+      # IQ-TREE's support-mapping mode counts the unconstrained bootstrap
+      # bipartitions on the supplied GeneRax target.  The target topology is
+      # not used to constrain any bootstrap replicate.
+      iqtree \
+        -t "${og_id}.generax_ufboot.unconstrained.ufboot" \
+        --support "${og_id}.generax_ufboot.target.nwk" \
+        --prefix "${og_id}.generax_ufboot.mapped" \
+        --redo
+
+      if [[ -s "${og_id}.generax_ufboot.mapped.suptree" ]]; then
+        cp_out "${og_id}.generax_ufboot.mapped.suptree" "${file_og_iqtree_generax_ufboot}"
+      else
+        echo "IQ-TREE failed to map UFBoot split frequencies onto the GeneRax topology."
+        exit 1
+      fi
+      rm -f -- "${og_id}.generax_ufboot.input.fa" "${og_id}.generax_ufboot.target.nwk"
     fi
     gg_artifact_record "${generax_ufboot_provenance_args[@]}"
   else
@@ -3879,6 +3899,12 @@ if [[ ${run_generax} -eq 1 ]]; then
   fi
 else
   gg_step_skip "${task}"
+fi
+if [[ ${run_generax} -eq 1 && -s "${file_og_generax_nhx}" ]]; then
+  # GeneRax may change both topology and root.  All post-reconciliation branch
+  # tables must therefore use its rooted topology, rather than the earlier
+  # orthogroup-extraction/rooting result.
+  set_analysis_file rooted_tree "${file_og_generax_nhx}"
 fi
 if [[ ${run_generax} -eq 1 && -s "${file_og_iqtree_generax_ufboot}" ]]; then
   set_analysis_file unrooted_tree "${file_og_iqtree_generax_ufboot}"
@@ -6149,6 +6175,13 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
   else
     generax2orthogroup_statistics=${file_og_generax_nhx}
   fi
+  generax_ufboot_for_summary="PLACEHOLDER"
+  if [[ ${run_generax} -eq 1 ]] &&
+    [[ -s "${file_og_iqtree_generax_ufboot}" && -s "${file_og_unrooted_tree_analysis}" ]]; then
+    # After optional pruning this slot is the matching pruned descendant of
+    # the GeneRax-topology support tree.
+    generax_ufboot_for_summary=${file_og_unrooted_tree_analysis}
+  fi
   summary_untrimmed_fasta="PLACEHOLDER"
   summary_trimmed_fasta="PLACEHOLDER"
   summary_promoter_fasta="PLACEHOLDER"
@@ -6174,6 +6207,7 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
     --untrimmed_aln "${summary_untrimmed_fasta}" \
     --trimmed_aln "${summary_trimmed_fasta}" \
     --unrooted_tree "${file_og_unrooted_tree_analysis}" \
+    --generax_ufboot_tree "${generax_ufboot_for_summary}" \
     --rooted_tree "${file_og_rooted_tree_analysis}" \
     --rooting_log "${file_og_rooted_log}" \
     --notung_root_log "${notung_root_log_for_summary}" \
@@ -6267,6 +6301,43 @@ fi
 
 task="stat_branch2tree_plot"
 disable_if_no_input_file "run_tree_plot" "${file_og_stat_branch}" "${file_og_stat_tree}"
+stat_branch_column_has_value() {
+  local column_name=$1
+  local table_path=$2
+  awk -F $'\t' -v target="${column_name}" '
+    NR == 1 {
+      column = 0
+      for (i = 1; i <= NF; i++) {
+        if ($i == target) {
+          column = i
+          break
+        }
+      }
+      next
+    }
+    column > 0 {
+      value = $column
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      lowered = tolower(value)
+      if (value != "" && lowered != "na" && lowered != "nan") {
+        has_value = 1
+        exit
+      }
+    }
+    END { exit(has_value ? 0 : 1) }
+  ' "${table_path}"
+}
+treevis_support_value_resolved=${treevis_support_value}
+if [[ "${treevis_support_value_resolved}" == "auto" ]]; then
+  if stat_branch_column_has_value support_generax_ufboot "${file_og_stat_branch}"; then
+    treevis_support_value_resolved="support_generax_ufboot"
+  elif stat_branch_column_has_value support_unrooted "${file_og_stat_branch}"; then
+    treevis_support_value_resolved="support_unrooted"
+  else
+    treevis_support_value_resolved="no"
+  fi
+fi
+echo "Tree plot support annotation: requested=${treevis_support_value}, resolved=${treevis_support_value_resolved}"
 tree_plot_needs_update=0
 tree_plot_provenance_args=(
   --manifest "${file_og_tree_plot_provenance}"
@@ -6276,7 +6347,8 @@ tree_plot_provenance_args=(
   --workspace-root "${gg_workspace_dir}"
   --output "tree_plot=${file_og_tree_plot}"
   --parameter "branch_length=${treevis_branch_length}"
-  --parameter "support_value=${treevis_support_value}"
+  --parameter "support_value_requested=${treevis_support_value}"
+  --parameter "support_value_resolved=${treevis_support_value_resolved}"
   --parameter "branch_color=${treevis_branch_color}"
   --parameter "heatmap_transform=${treevis_heatmap_transform}"
   --parameter "max_intergenic_dist=${treevis_max_intergenic_dist}"
@@ -6393,7 +6465,7 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
   cb_path=${file_og_csubst_cb_2/cb_2/cb_ARITY}
 
   tree_plot_panel_args=(
-    "--panel1=tree,${treevis_branch_length},${treevis_support_value},${treevis_branch_color},L"
+    "--panel1=tree,${treevis_branch_length},${treevis_support_value_resolved},${treevis_branch_color},L"
     "--panel2=heatmap,${treevis_heatmap_transform},abs,_,expression_"
     "--panel3=pointplot,no,rel,_,expression_"
     "--panel4=cluster_membership,${treevis_max_intergenic_dist}"
