@@ -2826,6 +2826,11 @@ mafft_provenance_args=(
   --parameter "input_sequence_mode=${input_sequence_mode}"
   --parameter "genetic_code=${genetic_code}"
 )
+mafft_output_fasta_type="codon"
+if [[ "${input_sequence_mode}" == "protein" ]]; then
+  mafft_output_fasta_type="protein"
+fi
+mafft_provenance_args+=(--output-fasta-type "mafft=${mafft_output_fasta_type}")
 gg_artifact_prepare_stage mafft_needs_update run_mafft "${mafft_provenance_args[@]}" || exit $?
 if [[ ${mafft_needs_update} -eq 1 && ${run_mafft} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -3706,6 +3711,16 @@ generax_provenance_args=(
 )
 gg_artifact_prepare_stage generax_needs_update run_generax "${generax_provenance_args[@]}" || exit $?
 if [[ ${generax_needs_update} -eq 1 && ${run_generax} -eq 1 ]]; then
+  generax_input_fasta_type="codon"
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    generax_input_fasta_type="protein"
+  fi
+  if ! python "${gg_support_dir}/fasta_sequence_contract.py" \
+    --input "${file_og_trimmed_aln_analysis}" \
+    --expected "${generax_input_fasta_type}"; then
+    echo "GeneRax input contract failed before launching GeneRax."
+    exit 1
+  fi
   gg_step_start "${task}"
 
   if [[ "${input_sequence_mode}" == "protein" ]]; then

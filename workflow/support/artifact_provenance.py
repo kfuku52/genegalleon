@@ -31,6 +31,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from content_digest_cache import cache as digest_cache
 from content_digest_cache import cached_sha256_file
 from content_digest_cache import configure as configure_digest_cache
+from fasta_sequence_contract import SequenceContractError, validate_fasta
 from gene_family_output_store import (
     GeneFamilyOutputStore,
     query_id_from_name,
@@ -83,6 +84,32 @@ def parse_path_pairs(values: Iterable[str], option: str) -> list[tuple[str, str]
     if empty:
         raise ProvenanceError(f"{option} path must not be empty for key(s): {', '.join(empty)}")
     return pairs
+
+
+def declared_output_fasta_contracts(args: argparse.Namespace) -> list[tuple[str, Path, str]]:
+    specifications = parse_unique_pairs(args.output_fasta_type, "--output-fasta-type")
+    declared = dict(
+        parse_path_pairs(args.output, "--output") + parse_path_pairs(args.optional_output, "--optional-output")
+    )
+    contracts: list[tuple[str, Path, str]] = []
+    for label, expected in specifications:
+        if label not in declared:
+            raise ProvenanceError(f"--output-fasta-type references undeclared output label {label!r}")
+        if expected not in {"dna", "codon", "protein"}:
+            raise ProvenanceError(f"Unsupported --output-fasta-type for {label!r}: {expected!r}")
+        contracts.append((label, Path(declared[label]), expected))
+    return contracts
+
+
+def output_fasta_contract_failure(args: argparse.Namespace) -> str:
+    for label, path, expected in declared_output_fasta_contracts(args):
+        if not path.exists() and not path.is_symlink():
+            continue
+        try:
+            validate_fasta(path, expected)
+        except (OSError, UnicodeError, SequenceContractError) as exc:
+            return f"output {label!r} violates its {expected} FASTA contract: {exc}"
+    return ""
 
 
 def sha256_stream(handle: BinaryIO) -> tuple[str, int]:
@@ -664,6 +691,9 @@ def write_manifest_atomic(path: Path, payload: dict[str, object]) -> None:
 
 
 def needs_run(args: argparse.Namespace) -> int:
+    fasta_failure = output_fasta_contract_failure(args)
+    if fasta_failure:
+        return stale_policy_result(args, fasta_failure, reusable=False)
     if not args.manifest.is_file():
         output_pairs = parse_path_pairs(args.output, "--output")
         logical_output_pairs = parse_path_pairs(
@@ -802,6 +832,9 @@ def needs_run(args: argparse.Namespace) -> int:
 
 
 def record(args: argparse.Namespace) -> int:
+    fasta_failure = output_fasta_contract_failure(args)
+    if fasta_failure:
+        raise ProvenanceError(fasta_failure)
     payload = build_contract(args, include_diagnostics=True)
     write_manifest_atomic(args.manifest, payload)
     print(f"Recorded artifact provenance: {args.manifest}")
@@ -1179,6 +1212,13 @@ def add_contract_arguments(parser: argparse.ArgumentParser) -> None:
         default=[],
         metavar="LABEL=PATH",
         help="Manage an output whose recorded absence is a valid completed result",
+    )
+    parser.add_argument(
+        "--output-fasta-type",
+        action="append",
+        default=[],
+        metavar="LABEL={dna,codon,protein}",
+        help="Validate a declared FASTA output before adoption, reuse, or recording",
     )
     parser.add_argument("--parameter", action="append", default=[], metavar="KEY=VALUE")
 

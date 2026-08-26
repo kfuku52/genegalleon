@@ -107,6 +107,41 @@ def test_manifest_detects_content_and_parameter_changes_but_ignores_versions(tmp
     assert run_cli("needs-run", *args).returncode == 3
 
 
+def test_legacy_fasta_output_must_match_declared_sequence_type_before_adoption(tmp_path):
+    workspace = tmp_path / "workspace"
+    logical_root = workspace / "output" / "orthogroup"
+    input_path = logical_root / "cds_fasta" / "OG0001.fa"
+    output_path = logical_root / "mafft" / "OG0001.aln.fa"
+    manifest = logical_root / "artifact_provenance" / "OG0001.mafft.json"
+    input_path.parent.mkdir(parents=True)
+    output_path.parent.mkdir(parents=True)
+    input_path.write_text(">a\nATGAAATTT\n>b\nATGCCCTTT\n", encoding="utf-8")
+    output_path.write_text(">a\nMPEPTIDE\n>b\nMPEPTIDQ\n", encoding="utf-8")
+    args = contract_args(workspace, manifest, input_path, output_path) + [
+        "--output-fasta-type",
+        "stat_branch=codon",
+    ]
+
+    stopped = run_cli("needs-run", *args)
+    assert stopped.returncode == 3
+    assert "violates its codon FASTA contract" in stopped.stderr
+    assert not manifest.exists()
+
+    rebuilt = run_cli("needs-run", *args, "--stale-policy", "rebuild")
+    assert rebuilt.returncode == 0
+    assert not manifest.exists()
+
+    output_path.write_text(">a\nATG---TTT\n>b\nATGCCCTTT\n", encoding="utf-8")
+    adopted = run_cli("needs-run", *args)
+    assert adopted.returncode == 1
+    assert manifest.exists()
+
+    output_path.write_text(">a\nMPEPTIDE\n>b\nMPEPTIDQ\n", encoding="utf-8")
+    recorded = run_cli("record", *args)
+    assert recorded.returncode == 2
+    assert "violates its codon FASTA contract" in recorded.stderr
+
+
 def test_stale_policy_stop_reuse_and_rebuild(tmp_path):
     workspace = tmp_path / "workspace"
     logical_root = workspace / "output" / "orthogroup"

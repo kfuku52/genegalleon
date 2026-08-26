@@ -413,6 +413,30 @@ Notes:
   - `mitochondrial_genetic_code_id` / `mitochondrial_genetic_code_name`
   - `plastid_genetic_code_id` / `plastid_genetic_code_name`
 
+### Materializing generated inputs for downstream workflows
+
+Artifact provenance intentionally rejects symlinked input directories. When
+generated input directories were linked from `workspace/input` to
+`workspace/output/input_generation`, replace those links with verified regular
+directories before running a downstream workflow:
+
+```bash
+python workflow/support/materialize_workspace_inputs.py apply \
+  --workspace workspace \
+  --backup-root .recovery/input-materialization \
+  --name species_cds \
+  --name species_cds_fx2tab \
+  --name species_gff \
+  --name species_genome
+```
+
+The helper accepts only the tracked input names and their corresponding
+generated sources inside the same workspace. It rejects redirected or nested
+symlinks, stages regular hardlinks (or copies across filesystems), verifies a
+content digest before and after the atomic switch, and preserves every original
+symlink plus a receipt under `--backup-root`. Run the same command with
+`verify` in place of `apply` before submitting the downstream workflow.
+
 Download-first workflow (manifest driven):
 
 ```bash
