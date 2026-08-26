@@ -194,11 +194,13 @@ rows are mapped.
 Column labels use gene IDs verified against `cds_fasta`, and multiple families
 are isolated into titled blocks with separate query-tree topologies.
 By default, a thin upper viridis band records the largest per-copy
-local-synteny anchor count in a cell and a thin lower viridis band records the
-smallest per-copy Gene tree UFBoot value for the non-root speciation-MRCA branch
-used by the orthology assignment. Reference-self cells show white upper and
-lower bands with a short horizontal state mark. A numeric support band is shown
-only when every non-reference copy in the cell is evaluable. The optional
+local-synteny anchor count separately in each reference-gene column. A thin
+lower viridis band runs across the complete ortholog glyph and records the Gene
+tree UFBoot value for its single non-root, orthology-defining speciation-MRCA
+branch. All candidate/reference rows expanded from one glyph must agree on that
+branch, availability state, and support value; producers and plotters reject
+inconsistent tables. Reference-self glyphs show white upper and lower bands
+with a short horizontal state mark. The optional
 `glyph` layout instead uses an upper-right viridis
 diamond and a lower-right Inferno circle. Pair-level values and explicit
 unavailability reasons are stored in `.synteny.tsv` and `.ufboot.tsv`,

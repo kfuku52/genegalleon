@@ -536,11 +536,13 @@ Notable defaults:
   the evidence table retains the per-copy anchor
   count, normalized local-synteny score, flank coverage, and collinearity
   diagnostics; Gene tree UFBoot support (falling back to generic unrooted
-  support when GeneRax values are unavailable) is taken from the non-root
-  speciation-MRCA branch used by each orthology assignment. Multi-copy cells
-  show the lowest per-copy value only when every non-reference copy is
-  evaluable; `.ufboot.tsv` retains exact
-  pairwise values and reasons for unavailable support. This value measures gene-tree
+  support when GeneRax values are unavailable) is taken from the single
+  non-root speciation-MRCA branch that defines each plotted ortholog glyph.
+  Every expanded candidate/reference pair in a glyph must resolve to the same
+  branch, availability state, and support value; generation and plotting stop
+  on inconsistent input. The lower evidence band displays that value once
+  across the full glyph, while `.ufboot.tsv` retains exact pairwise provenance
+  and reasons for unavailable support. This value measures gene-tree
   branch-topology support, not confidence in the reconciliation event label; a
   column-aligned reference-gene tree is drawn above the matrix. Duplication nodes in
   the compact query trees use family-colored filled circles, while mapped

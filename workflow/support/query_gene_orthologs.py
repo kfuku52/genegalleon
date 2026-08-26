@@ -14,6 +14,9 @@ each plotted copy with each covered reference gene using the family's local
 synteny neighborhoods. Two or more distinct shared neighbor-similarity groups
 provide local-synteny support; a single shared group is retained as
 single-anchor evidence but is not called supported.
+A fifth table retains candidate/reference pair provenance for Gene tree UFBoot,
+while requiring every pair represented by one glyph to resolve to the same
+orthology-defining speciation branch and support value.
 """
 
 import argparse
@@ -1017,14 +1020,74 @@ def normalized_ufboot_by_branch(by_id, family_id):
     return normalized, support_field
 
 
+def validate_glyph_ufboot_evidence(rows, glyph):
+    """Require one orthology-defining speciation branch per plotted glyph."""
+
+    family_id = str(glyph["family_id"])
+    species = str(glyph["species"])
+    glyph_span = f"{glyph['start_order']}-{glyph['end_order']}"
+    if not rows:
+        raise ValueError(
+            "Ortholog glyph produced no UFBoot evidence rows: "
+            f"family={family_id}, species={species}, glyph_span={glyph_span}"
+        )
+
+    statuses = {str(row["orthology_ufboot_status"]) for row in rows}
+    if "reference_self" in statuses:
+        if statuses != {"reference_self"}:
+            raise ValueError(
+                "Ortholog glyph cannot mix reference-self and non-self UFBoot evidence: "
+                f"family={family_id}, species={species}, glyph_span={glyph_span}"
+            )
+        return
+
+    mrca_branch_ids = {
+        int(row["orthology_mrca_branch_id"])
+        for row in rows
+        if row["orthology_mrca_branch_id"] != ""
+    }
+    if len(mrca_branch_ids) != 1:
+        raise ValueError(
+            "Ortholog glyph candidate/reference pairs do not share one "
+            "orthology-defining speciation branch: "
+            f"family={family_id}, species={species}, glyph_span={glyph_span}, "
+            f"mrca_branch_ids={sorted(mrca_branch_ids)}"
+        )
+
+    unavailable_reasons = {
+        str(row["orthology_ufboot_unavailable_reason"]) for row in rows
+    }
+    if len(statuses) != 1 or len(unavailable_reasons) != 1:
+        raise ValueError(
+            "Ortholog glyph candidate/reference pairs do not share one UFBoot "
+            "availability state: "
+            f"family={family_id}, species={species}, glyph_span={glyph_span}"
+        )
+
+    if statuses == {"evaluated"}:
+        support_values = {
+            float(row["decisive_branch_ufboot"])
+            for row in rows
+            if row["decisive_branch_ufboot"] != ""
+        }
+        if len(support_values) != 1:
+            raise ValueError(
+                "Ortholog glyph candidate/reference pairs do not share one "
+                "orthology-defining branch UFBoot value: "
+                f"family={family_id}, species={species}, glyph_span={glyph_span}, "
+                f"ufboot_values={sorted(support_values)}"
+            )
+
+
 def collect_reference_ufboot_evidence(store, columns, glyphs):
-    """Collect decisive MRCA-branch UFBoot for every plotted candidate/reference pair.
+    """Collect orthology-defining branch UFBoot for each plotted glyph.
 
     The current orthology assignment includes a non-reference tip in a reference
     column when their MRCA is reconciled as a speciation. The branch entering
     that MRCA is therefore the gene-tree branch most directly associated with
-    the assignment. Root MRCAs have no corresponding unrooted bipartition and
-    are retained as not evaluable.
+    the assignment. Every pair represented by one glyph must resolve to that
+    same branch; pairwise rows are retained for provenance. Root MRCAs have no
+    corresponding unrooted bipartition and are retained as not evaluable.
     """
 
     column_by_reference = {
@@ -1086,6 +1149,7 @@ def collect_reference_ufboot_evidence(store, columns, glyphs):
             for value in str(glyph.get("reference_cds_fasta_ids") or "").split(";")
             if value
         ]
+        glyph_evidence_rows = []
         for reference_cds_fasta_id in reference_ids:
             column_key = (family_id, reference_cds_fasta_id)
             if column_key not in column_by_reference:
@@ -1156,7 +1220,9 @@ def collect_reference_ufboot_evidence(store, columns, glyphs):
                             row["decisive_branch_ufboot"] = support
                             row["orthology_ufboot_status"] = "evaluated"
                             row["orthology_ufboot_unavailable_reason"] = ""
-                evidence_rows.append(row)
+                glyph_evidence_rows.append(row)
+        validate_glyph_ufboot_evidence(glyph_evidence_rows, glyph)
+        evidence_rows.extend(glyph_evidence_rows)
     evidence_rows.sort(
         key=lambda row: (
             int(row["family_order"]),

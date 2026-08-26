@@ -389,6 +389,63 @@ def test_reference_ufboot_prefers_explicit_generax_support_and_keeps_one_percent
     assert evidence[0]["decisive_branch_ufboot"] == pytest.approx(1)
 
 
+def test_reference_ufboot_rejects_multiple_mrca_branches_within_one_glyph(
+    tmp_path: Path,
+):
+    mod = load_module("query_gene_orthologs.py")
+    output_root = tmp_path / "query2family"
+    stat_dir = output_root / "stat_branch"
+    stat_dir.mkdir(parents=True)
+    rows = [
+        stat_row(0, -1, 1, 5, "S", "root"),
+        stat_row(1, 0, 3, 2, "S", "outer_mrca", support=87),
+        stat_row(2, 1, 4, 6, "S", "inner_mrca", support=96),
+        stat_row(3, 1, -1, -1, "L", "Other_species_COPY_A", "Other_species"),
+        stat_row(4, 2, -1, -1, "L", "Reference_species_REF1", "Reference_species"),
+        stat_row(5, 0, -1, -1, "L", "Outgroup_species_COPY", "Outgroup_species"),
+        stat_row(6, 2, -1, -1, "L", "Other_species_COPY_B", "Other_species"),
+    ]
+    pandas.DataFrame(rows).to_csv(
+        stat_dir / "FAM_stat.branch.tsv", sep="\t", index=False
+    )
+    columns = [
+        {
+            "column_order": 1,
+            "family_id": "FAM",
+            "family_order": 1,
+            "reference_species": "Reference_species",
+            "cds_fasta_id": "Reference_species_REF1",
+            "gene_id": "REF1",
+            "plot_label": "REF1",
+            "reference_tip_branch_id": 4,
+        }
+    ]
+    glyphs = [
+        {
+            "species": "Other_species",
+            "family_id": "FAM",
+            "family_order": 1,
+            "reference_species": "Reference_species",
+            "relation": "specific",
+            "reference_cds_fasta_ids": "Reference_species_REF1",
+            "copy_number": 2,
+            "gene_ids": "Other_species_COPY_A;Other_species_COPY_B",
+            "start_order": 1,
+            "end_order": 1,
+            "lane_index": 1,
+            "lane_count": 1,
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="do not share one orthology-defining speciation branch",
+    ):
+        mod.collect_reference_ufboot_evidence(
+            mod.GeneFamilyOutputStore(output_root), columns, glyphs
+        )
+
+
 def test_stat_branch_duplicate_branch_id_is_a_hard_error():
     mod = load_module("query_gene_orthologs.py")
     rows = [

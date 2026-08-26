@@ -484,12 +484,14 @@ in the evidence table. The legend reports the evaluated neighborhood radius as
 the number of upstream and downstream gene models inspected on each side.
 Missing local-synteny support does not override the reconciled-tree orthology
 assignment. Gene-tree UFBoot evidence uses the non-root speciation-MRCA branch
-that underlies each candidate/reference assignment. A multi-copy cell uses the
-lowest per-copy value and is numeric only when every non-reference copy has an
-evaluable branch; missing `support_generax_ufboot` values (or the generic
-`support_unrooted` fallback) and root MRCAs make the summary unavailable. Exact
-pairwise values and unavailability reasons remain in `.ufboot.tsv`, together
-with the support-column source. GeneRax values come from
+that defines the orthology assignment represented by each glyph. All
+candidate/reference pairs expanded from one glyph must resolve to the same
+branch, availability state, and UFBoot value; table generation and plotting
+stop on a disagreement rather than collapsing conflicting values. A numeric
+value is therefore shown once per glyph. Missing `support_generax_ufboot`
+values (or the generic `support_unrooted` fallback) and root MRCAs make that
+glyph unavailable. Exact pairwise provenance and unavailability reasons remain
+in `.ufboot.tsv`, together with the support-column source. GeneRax values come from
 an unconstrained IQ-TREE UFBoot search whose split frequencies are subsequently
 mapped onto the GeneRax topology. This is branch-topology support, not a confidence score for the
 reconciliation event classification itself. A
@@ -520,10 +522,12 @@ or set `presence_absence_family_ids=OG0000001,OG0000042` /
 requested order.
 
 Detected cells reserve narrow evidence bands along their upper and lower edges
-by default. The upper band shows the highest per-copy local-synteny anchor count,
-and the lower band shows the lowest per-copy decisive-branch Gene tree UFBoot
-support. This leaves the center of a multi-column pre-duplication glyph
-continuous and keeps its copy number unobstructed. Both numeric scales map zero
+by default. The upper band shows the highest per-copy local-synteny anchor count
+separately for each reference-gene column. The lower band shows the Gene tree
+UFBoot support of the glyph's single orthology-defining speciation branch and
+runs continuously across the full glyph, including a multi-column
+pre-duplication glyph. This leaves the center continuous and keeps its copy
+number unobstructed. Both numeric scales map zero
 to the same darkest viridis color and their respective maxima to the same
 lightest color. A gray slash marks unavailable evidence. Reference-self cells
 show white edge bands with a short horizontal state mark; their central
@@ -532,9 +536,9 @@ Set `presence_absence_evidence_layout=rail`
 for the earlier right-edge rail, `glyph` for the diamond/circle overlay, or
 `off` to suppress both evidence encodings and their legends. The legacy `rail`
 layout also marks the reference gene itself with a white dash. In the
-optional `glyph` layout, a viridis diamond shows local-synteny anchors and an
-Inferno circle shows Gene tree UFBoot; reference-self and unavailable UFBoot
-cells have no circle.
+optional `glyph` layout, a viridis diamond shows local-synteny anchors and one
+Inferno circle per glyph shows Gene tree UFBoot; reference-self and unavailable
+UFBoot glyphs have no circle.
 
 If the selected species tree is dated and
 `workspace/output/species_tree/mcmctree_main/mcmctree_95CI.nwk` exists, the

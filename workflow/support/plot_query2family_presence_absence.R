@@ -1363,6 +1363,52 @@ if (glyph_mode) {
     if (any(!ufboot_glyph_keys %in% glyph_keys)) {
       stop("Ortholog UFBoot rows do not map to an ortholog glyph")
     }
+    ufboot_glyph_row_groups <- split(
+      seq_len(nrow(ortholog_ufboot)),
+      factor(ufboot_glyph_keys, levels = unique(ufboot_glyph_keys))
+    )
+    for (row_indices in ufboot_glyph_row_groups) {
+      glyph_rows <- ortholog_ufboot[row_indices, , drop = FALSE]
+      glyph_is_reference_self <-
+        glyph_rows$orthology_ufboot_status == "reference_self"
+      if (any(glyph_is_reference_self)) {
+        if (!all(glyph_is_reference_self)) {
+          stop(
+            "Ortholog UFBoot rows for one glyph cannot mix reference-self ",
+            "and non-self evidence"
+          )
+        }
+        next
+      }
+      glyph_mrca_branch_ids <- suppressWarnings(as.numeric(
+        glyph_rows$orthology_mrca_branch_id
+      ))
+      if (length(unique(glyph_mrca_branch_ids)) != 1) {
+        stop(
+          "Ortholog UFBoot rows for one glyph must share one ",
+          "orthology-defining speciation branch"
+        )
+      }
+      if (
+        length(unique(glyph_rows$relation)) != 1 ||
+          length(unique(glyph_rows$ufboot_support_source)) != 1 ||
+          length(unique(glyph_rows$orthology_ufboot_status)) != 1 ||
+          length(unique(glyph_rows$orthology_ufboot_unavailable_reason)) != 1
+      ) {
+        stop(
+          "Ortholog UFBoot rows for one glyph must share one availability state"
+        )
+      }
+      if (
+        glyph_rows$orthology_ufboot_status[[1]] == "evaluated" &&
+          length(unique(glyph_rows$decisive_branch_ufboot)) != 1
+      ) {
+        stop(
+          "Ortholog UFBoot rows for one glyph must share one ",
+          "orthology-defining branch UFBoot value"
+        )
+      }
+    }
   }
 
   if (nrow(ortholog_tree_nodes) > 0) {
@@ -1806,7 +1852,11 @@ evidence_group_fields <- c(
   "glyph_copy_number", "glyph_start_order", "glyph_end_order",
   "glyph_lane_index", "glyph_lane_count"
 )
-add_evidence_geometry <- function(evidence_df, evidence_half = c("top", "bottom")) {
+add_evidence_geometry <- function(
+  evidence_df,
+  evidence_half = c("top", "bottom"),
+  span_glyph = FALSE
+) {
   evidence_half <- match.arg(evidence_half)
   if (nrow(evidence_df) == 0) {
     return(evidence_df)
@@ -1839,16 +1889,21 @@ add_evidence_geometry <- function(evidence_df, evidence_half = c("top", "bottom"
       (as.numeric(evidence_df$column_order) - 1) * heatmap_cell_pitch
     logical_cell_xmax <- heatmap_left +
       as.numeric(evidence_df$column_order) * heatmap_cell_pitch
-    evidence_df$evidence_xmin <- ifelse(
-      evidence_df$column_order == evidence_df$glyph_start_order,
-      glyph_xmin + 0.014,
-      logical_cell_xmin
-    )
-    evidence_df$evidence_xmax <- ifelse(
-      evidence_df$column_order == evidence_df$glyph_end_order,
-      glyph_xmax - 0.014,
-      logical_cell_xmax
-    )
+    if (isTRUE(span_glyph)) {
+      evidence_df$evidence_xmin <- glyph_xmin + 0.014
+      evidence_df$evidence_xmax <- glyph_xmax - 0.014
+    } else {
+      evidence_df$evidence_xmin <- ifelse(
+        evidence_df$column_order == evidence_df$glyph_start_order,
+        glyph_xmin + 0.014,
+        logical_cell_xmin
+      )
+      evidence_df$evidence_xmax <- ifelse(
+        evidence_df$column_order == evidence_df$glyph_end_order,
+        glyph_xmax - 0.014,
+        logical_cell_xmax
+      )
+    }
   } else {
     lane_mid <- (lane_ymin + lane_ymax) / 2
     rail_gap <- pmin(0.006, lane_height * 0.03)
@@ -2030,56 +2085,59 @@ if (glyph_mode && nrow(ortholog_ufboot) > 0) {
     drop = FALSE
   ]
   if (nrow(ufboot_plot_rows) > 0) {
-    ufboot_plot_rows$pair_count <- 1L
-    ufboot_plot_rows$evaluated_count <- as.integer(
-      ufboot_plot_rows$orthology_ufboot_status == "evaluated"
+    ufboot_glyph_group_fields <- setdiff(
+      evidence_group_fields,
+      "column_order"
     )
-    ufboot_plot_rows$reference_self_count <- as.integer(
-      ufboot_plot_rows$orthology_ufboot_status == "reference_self"
+    ufboot_plot_glyph_keys <- do.call(
+      paste,
+      c(ufboot_plot_rows[, ufboot_glyph_group_fields, drop = FALSE], sep = "::")
     )
-    ufboot_plot_rows$support_for_min <- ifelse(
-      ufboot_plot_rows$orthology_ufboot_status == "evaluated",
-      ufboot_plot_rows$decisive_branch_ufboot,
-      Inf
+    ufboot_plot_row_groups <- split(
+      seq_len(nrow(ufboot_plot_rows)),
+      factor(ufboot_plot_glyph_keys, levels = unique(ufboot_plot_glyph_keys))
     )
-    ufboot_count_df <- stats::aggregate(
-      ufboot_plot_rows[
-        , c("pair_count", "evaluated_count", "reference_self_count"),
-        drop = FALSE
-      ],
-      by = ufboot_plot_rows[, evidence_group_fields, drop = FALSE],
-      FUN = sum
-    )
-    ufboot_support_df <- stats::aggregate(
-      ufboot_plot_rows[, "support_for_min", drop = FALSE],
-      by = ufboot_plot_rows[, evidence_group_fields, drop = FALSE],
-      FUN = min
-    )
-    ufboot_evidence_df <- merge(
-      ufboot_count_df,
-      ufboot_support_df,
-      by = evidence_group_fields,
-      all = TRUE,
-      sort = FALSE
-    )
-    if (any(ufboot_evidence_df$pair_count != ufboot_evidence_df$glyph_copy_number)) {
-      stop("Ortholog UFBoot pair counts must equal the corresponding glyph copy number")
-    }
-    ufboot_evidence_df$evidence_status <- ifelse(
-      ufboot_evidence_df$reference_self_count == ufboot_evidence_df$pair_count,
-      "reference_self",
-      ifelse(
-        ufboot_evidence_df$evaluated_count == ufboot_evidence_df$pair_count &
-          is.finite(ufboot_evidence_df$support_for_min),
-        "evaluated",
-        "unavailable"
+    ufboot_evidence_rows <- lapply(ufboot_plot_row_groups, function(row_indices) {
+      glyph_rows <- ufboot_plot_rows[row_indices, , drop = FALSE]
+      candidate_count <- length(unique(glyph_rows$candidate_cds_fasta_id))
+      reference_count <- length(unique(glyph_rows$reference_cds_fasta_id))
+      expected_pair_count <- candidate_count * reference_count
+      if (nrow(glyph_rows) != expected_pair_count) {
+        stop(
+          "Ortholog UFBoot candidate/reference rows must form a complete ",
+          "pair set within each glyph"
+        )
+      }
+      if (candidate_count != glyph_rows$glyph_copy_number[[1]]) {
+        stop(
+          "Ortholog UFBoot candidate counts must equal the corresponding ",
+          "glyph copy number"
+        )
+      }
+
+      summary_row <- glyph_rows[1, ufboot_glyph_group_fields, drop = FALSE]
+      summary_row$column_order <- as.integer(summary_row$glyph_end_order)
+      summary_row$pair_count <- nrow(glyph_rows)
+      summary_row$evaluated_count <- sum(
+        glyph_rows$orthology_ufboot_status == "evaluated"
       )
-    )
-    ufboot_evidence_df$ufboot <- ifelse(
-      ufboot_evidence_df$evidence_status == "evaluated",
-      ufboot_evidence_df$support_for_min,
-      NA_real_
-    )
+      summary_row$reference_self_count <- sum(
+        glyph_rows$orthology_ufboot_status == "reference_self"
+      )
+      if (summary_row$reference_self_count == summary_row$pair_count) {
+        summary_row$evidence_status <- "reference_self"
+        summary_row$ufboot <- NA_real_
+      } else if (summary_row$evaluated_count == summary_row$pair_count) {
+        summary_row$evidence_status <- "evaluated"
+        summary_row$ufboot <- glyph_rows$decisive_branch_ufboot[[1]]
+      } else {
+        summary_row$evidence_status <- "unavailable"
+        summary_row$ufboot <- NA_real_
+      }
+      summary_row
+    })
+    ufboot_evidence_df <- do.call(rbind, ufboot_evidence_rows)
+    rownames(ufboot_evidence_df) <- NULL
     ufboot_evidence_df$marker_fill <- ifelse(
       ufboot_evidence_df$evidence_status == "reference_self",
       "#ffffff",
@@ -2091,7 +2149,8 @@ if (glyph_mode && nrow(ortholog_ufboot) > 0) {
     )
     ufboot_evidence_df <- add_evidence_geometry(
       ufboot_evidence_df,
-      "bottom"
+      "bottom",
+      span_glyph = TRUE
     )
     ufboot_legend_visible <- any(
       ufboot_evidence_df$evidence_status == "evaluated" &
@@ -2614,12 +2673,12 @@ if (glyph_mode && ufboot_legend_visible && !identical(evidence_layout, "off")) {
         "Gene tree UFBoot (%)"
       ),
       if (evidence_strip_mode) {
-        "Fill: lowest per-copy MRCA-branch support"
+        "Fill: orthology-defining speciation-branch support"
       } else {
-        "Color: lowest per-copy MRCA-branch support"
+        "Color: orthology-defining speciation-branch support"
       },
       if (evidence_strip_mode) {
-        "Numeric fill requires support for every copy"
+        "One value spans each ortholog glyph"
       } else {
         "No circle: unavailable or reference self"
       }

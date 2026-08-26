@@ -76,6 +76,59 @@ def count_svg_matrix_edge_bands(svg_path: Path, species_label: str, column_count
     )
 
 
+def assert_svg_has_glyph_spanning_edge_band(
+    svg_path: Path,
+    species_label: str,
+    column_count: int,
+) -> None:
+    root = ElementTree.parse(svg_path).getroot()
+    species_baselines = [
+        float(element.attrib["y"])
+        for element in root.iter()
+        if element.tag.endswith("text")
+        and (element.text or "") == species_label
+        and "y" in element.attrib
+    ]
+    assert len(species_baselines) == 1
+    species_baseline = species_baselines[0]
+    rectangles = [
+        {
+            "x": svg_number(element, "x", float("nan")),
+            "y": svg_number(element, "y", float("nan")),
+            "width": svg_number(element, "width", float("nan")),
+            "height": svg_number(element, "height", float("nan")),
+            "style": element.attrib.get("style", ""),
+        }
+        for element in root.iter()
+        if element.tag.endswith("rect")
+    ]
+    row_tiles = [
+        rectangle
+        for rectangle in rectangles
+        if "stroke: #D9D9D9" in rectangle["style"]
+        and rectangle["y"] <= species_baseline <= rectangle["y"] + rectangle["height"]
+    ]
+    assert len(row_tiles) == column_count
+    row_ymin = min(rectangle["y"] for rectangle in row_tiles)
+    row_ymax = max(rectangle["y"] + rectangle["height"] for rectangle in row_tiles)
+    matrix_xmin = min(rectangle["x"] for rectangle in row_tiles)
+    matrix_xmax = max(rectangle["x"] + rectangle["width"] for rectangle in row_tiles)
+    tile_width = min(rectangle["width"] for rectangle in row_tiles)
+    tile_height = min(rectangle["height"] for rectangle in row_tiles)
+    tolerance = 0.05
+    spanning_bands = [
+        rectangle
+        for rectangle in rectangles
+        if rectangle["height"] < tile_height * 0.3
+        and rectangle["width"] > tile_width * 1.5
+        and rectangle["x"] >= matrix_xmin - tolerance
+        and rectangle["x"] + rectangle["width"] <= matrix_xmax + tolerance
+        and rectangle["y"] >= row_ymin - tolerance
+        and rectangle["y"] + rectangle["height"] <= row_ymax + tolerance
+    ]
+    assert spanning_bands, "Expected one evidence band to span a multi-column glyph"
+
+
 def assert_svg_copy_numbers_above_edge_bands(svg_path: Path, species_label: str) -> None:
     root = ElementTree.parse(svg_path).getroot()
     elements = list(root.iter())
@@ -271,15 +324,15 @@ def create_multifamily_fixture(tmp_path: Path):
             stat_row(0, -1, 1, 2, "S", "root"),
             stat_row(1, 0, 5, 6, "D", "ancestral_duplication_1", "Ancestor_species"),
             stat_row(2, 0, 3, 4, "D", "XY_duplication", "Reference_species"),
-            stat_row(3, 2, 10, 11, "S", "X_speciation_outer", support=87),
+            stat_row(3, 2, 9, 11, "S", "X_speciation", support=87),
             stat_row(4, 2, -1, -1, "L", "Reference_species_GENE_Y", "Reference_species", "direct:qY"),
             stat_row(5, 1, 7, 8, "D", "ancestral_duplication_2", "Ancestor_species"),
             stat_row(6, 1, -1, -1, "L", "Ancestor_species_copy_1", "Ancestor_species"),
             stat_row(7, 5, -1, -1, "L", "Ancestor_species_copy_2", "Ancestor_species"),
             stat_row(8, 5, -1, -1, "L", "Ancestor_species_copy_3", "Ancestor_species"),
-            stat_row(9, 11, -1, -1, "L", "Reference_species_GENE_X", "Reference_species", "direct:qX"),
-            stat_row(10, 3, -1, -1, "L", "Ancestor_species_X_sister", "Ancestor_species"),
-            stat_row(11, 3, 9, 12, "S", "X_speciation_inner", support=96),
+            stat_row(9, 3, -1, -1, "L", "Reference_species_GENE_X", "Reference_species", "direct:qX"),
+            stat_row(10, 11, -1, -1, "L", "Ancestor_species_X_sister", "Ancestor_species"),
+            stat_row(11, 3, 10, 12, "D", "X_candidate_duplication", "Ancestor_species"),
             stat_row(12, 11, -1, -1, "L", "Ancestor_species_X_sister_2", "Ancestor_species"),
         ],
         ["Reference_species_GENE_X", "Reference_species_GENE_Y"],
@@ -392,9 +445,14 @@ def test_multifamily_columns_glyphs_and_trees_remain_family_scoped(tmp_path: Pat
     assert two_duplications["mapped_species_node"].tolist() == ["n0", "Reference_species"]
     assert sorted(two_duplications["duplication_index"].astype(int).tolist()) == [1, 2]
     one_duplications = tree.loc[(tree["family_id"] == "ONE") & (tree["event"] == "D")]
-    assert one_duplications["mapped_species_node"].tolist() == ["Ancestor_species", "Reference_species", "Ancestor_species"]
-    assert one_duplications["duplication_index"].astype(int).tolist() == [1, 2, 3]
-    assert one_duplications["in_reference_tree"].astype(int).tolist() == [0, 1, 0]
+    assert one_duplications["mapped_species_node"].tolist() == [
+        "Ancestor_species",
+        "Reference_species",
+        "Ancestor_species",
+        "Ancestor_species",
+    ]
+    assert one_duplications["duplication_index"].astype(int).tolist() == [1, 2, 3, 4]
+    assert one_duplications["in_reference_tree"].astype(int).tolist() == [0, 1, 0, 0]
     one_ancestor_synteny = synteny.loc[
         (synteny["family_id"] == "ONE") &
         (synteny["species"] == "Ancestor_species")
@@ -413,7 +471,8 @@ def test_multifamily_columns_glyphs_and_trees_remain_family_scoped(tmp_path: Pat
     }
     assert set(evaluated_ufboot["orthology_mrca_event"]) == {"S"}
     assert set(evaluated_ufboot["ufboot_support_source"]) == {"support_unrooted"}
-    assert sorted(evaluated_ufboot["decisive_branch_ufboot"].tolist()) == [87, 96]
+    assert set(evaluated_ufboot["orthology_mrca_branch_id"].astype(int)) == {3}
+    assert set(evaluated_ufboot["decisive_branch_ufboot"].astype(int)) == {87}
     assert "mrca_is_root" in set(
         ufboot.loc[
             ufboot["orthology_ufboot_status"] == "not_evaluable",
@@ -492,8 +551,8 @@ def test_multifamily_tables_render_to_pdf_and_svg(tmp_path: Path):
     assert "Color: highest per-copy A in cell" not in svg_text
     assert "Window: 3 upstream + 3 downstream gene models" in svg_text
     assert "Evidence band (bottom): Gene tree UFBoot (%)" in svg_text
-    assert "Fill: lowest per-copy MRCA-branch support" in svg_text
-    assert "Numeric fill requires support for every copy" in svg_text
+    assert "Fill: orthology-defining speciation-branch support" in svg_text
+    assert "One value spans each ortholog glyph" in svg_text
     assert "Evidence band states" in svg_text
     assert "unavailable" in svg_text
     assert "reference self" in svg_text
@@ -509,6 +568,11 @@ def test_multifamily_tables_render_to_pdf_and_svg(tmp_path: Path):
         "Ancestor species",
         column_count=6,
     ) > 0
+    assert_svg_has_glyph_spanning_edge_band(
+        svg_path,
+        "Ancestor species",
+        column_count=6,
+    )
     assert_svg_copy_numbers_above_edge_bands(svg_path, "Reference species")
     assert_svg_copy_numbers_above_edge_bands(svg_path, "Ancestor species")
     glyph_svg_path = out_dir / "multifamily.glyph.svg"
@@ -559,7 +623,71 @@ def test_multifamily_tables_render_to_pdf_and_svg(tmp_path: Path):
     assert "Local synteny anchors" not in off_svg_text
     assert "Gene tree UFBoot" not in off_svg_text
     assert "Evidence band states" not in off_svg_text
-    expected_min_ufboot_color = subprocess.run(
+
+    ufboot_table = pandas.read_csv(out_dir / "ufboot.tsv", sep="\t")
+    evaluated_ufboot_rows = ufboot_table.loc[
+        ufboot_table["orthology_ufboot_status"] == "evaluated"
+    ]
+    glyph_group_fields = [
+        "family_id",
+        "species",
+        "glyph_start_order",
+        "glyph_end_order",
+        "glyph_lane_index",
+        "glyph_lane_count",
+        "glyph_copy_number",
+    ]
+    multi_pair_group = next(
+        group
+        for _, group in evaluated_ufboot_rows.groupby(glyph_group_fields, sort=False)
+        if group.shape[0] > 1
+    )
+    conflicting_row_index = multi_pair_group.index[1]
+    invalid_ufboot_cases = []
+    invalid_branch = ufboot_table.copy()
+    invalid_branch.loc[
+        conflicting_row_index, "orthology_mrca_branch_id"
+    ] = int(multi_pair_group.iloc[0]["orthology_mrca_branch_id"]) + 1000
+    invalid_ufboot_cases.append(
+        (
+            "branch",
+            invalid_branch,
+            "must share one orthology-defining speciation branch",
+        )
+    )
+    invalid_support = ufboot_table.copy()
+    invalid_support.loc[
+        conflicting_row_index, "decisive_branch_ufboot"
+    ] = float(multi_pair_group.iloc[0]["decisive_branch_ufboot"]) + 1
+    invalid_ufboot_cases.append(
+        (
+            "support",
+            invalid_support,
+            "must share one orthology-defining branch UFBoot value",
+        )
+    )
+    for case_name, invalid_ufboot, expected_error in invalid_ufboot_cases:
+        invalid_ufboot_path = out_dir / f"ufboot.{case_name}.tsv"
+        invalid_ufboot.to_csv(invalid_ufboot_path, sep="\t", index=False)
+        invalid_result = subprocess.run(
+            [
+                argument
+                for argument in plot_command
+                if not argument.startswith("--out_")
+                and not argument.startswith("--ortholog_ufboot_table=")
+            ]
+            + [
+                f"--ortholog_ufboot_table={invalid_ufboot_path}",
+                f"--out_svg={out_dir / f'invalid_ufboot.{case_name}.svg'}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert invalid_result.returncode != 0
+        assert expected_error in (invalid_result.stdout + invalid_result.stderr)
+
+    expected_ufboot_color = subprocess.run(
         [
             "Rscript",
             "-e",
@@ -569,7 +697,7 @@ def test_multifamily_tables_render_to_pdf_and_svg(tmp_path: Path):
         capture_output=True,
         text=True,
     ).stdout.strip()
-    assert svg_text.count(f"fill: {expected_min_ufboot_color};") == 1
+    assert svg_text.count(f"fill: {expected_ufboot_color};") == 1
     expected_zero_support_color = subprocess.run(
         [
             "Rscript",

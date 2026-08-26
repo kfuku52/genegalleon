@@ -90,10 +90,10 @@ def test_query2family_plot_supports_query_gene_orthology_glyphs():
     assert '"Gene tree UFBoot (%)"' in text
     assert '"GeneRax-topology UFBoot (%)"' not in text
     assert '"ufboot_support_source"' in text
-    assert '"Color: lowest per-copy MRCA-branch support"' in text
+    assert '"Color: orthology-defining speciation-branch support"' in text
     assert '"No circle: unavailable or reference self"' in text
     assert 'paste0(evidence_layout_label, " (bottom): ")' in text
-    assert '"Numeric fill requires support for every copy"' in text
+    assert '"One value spans each ortholog glyph"' in text
     assert 'label = paste0(evidence_layout_label, " states")' in text
     assert 'displayed_evidence_statuses <- c("unavailable", "reference_self")' in text
     assert 'length(displayed_evidence_statuses) > 0' in text
@@ -108,17 +108,21 @@ def test_query2family_plot_supports_query_gene_orthology_glyphs():
     assert 'evidence_df$evidence_status != "reference_self"' not in text
     assert "synteny_display_df <- synteny_evidence_df" in text
     assert "ufboot_display_df <- ufboot_evidence_df" in text
-    assert "ufboot_evidence_df$evaluated_count == ufboot_evidence_df$pair_count" in text
-    assert "ufboot_evidence_df$pair_count != ufboot_evidence_df$glyph_copy_number" in text
+    assert "candidate_count != glyph_rows$glyph_copy_number[[1]]" in text
+    assert "expected_pair_count <- candidate_count * reference_count" in text
+    assert "summary_row$ufboot <- glyph_rows$decisive_branch_ufboot[[1]]" in text
+    assert '"orthology-defining speciation branch"' in text
+    assert '"orthology-defining branch UFBoot value"' in text
     assert 'synteny_evidence_df$pair_count != synteny_evidence_df$glyph_copy_number' in text
     assert 'evidence_strip_mode && nrow(synteny_evidence_df) > 0' in text
     assert 'identical(evidence_layout, "glyph") && nrow(synteny_marker_df) > 0' in text
-    assert 'add_evidence_geometry <- function(evidence_df, evidence_half' in text
+    assert 'span_glyph = FALSE' in text
+    assert 'span_glyph = TRUE' in text
     assert 'band_height <- (lane_ymax - lane_ymin) * 0.18' in text
     assert 'evidence_df$evidence_xmin <- ifelse(' in text
     assert 'evidence_df$evidence_xmax <- ifelse(' in text
     assert 'glyph_rect_df$x <- (glyph_rect_df$xmin + glyph_rect_df$xmax) / 2' in text
-    assert "FUN = min" in text
+    assert "support_for_min" not in text
     assert 'paste0(reference_species_display, " orthologs")' in text
     assert 'paste0(reference_species_display, " genes")' not in text
     assert 'paste0(reference_species_display, " gene tree")' in text
