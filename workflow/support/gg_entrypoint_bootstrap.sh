@@ -126,13 +126,34 @@ inventory = {}
 for item in installed:
     if not isinstance(item, dict) or set(item) != {"path", "mode", "sha256"}:
         fail("Explicit runtime release file inventory is invalid.")
-    relative = str(item["path"])
-    digest = str(item["sha256"])
-    if relative in inventory or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+    relative = item["path"]
+    mode = item["mode"]
+    digest = item["sha256"]
+    if not isinstance(relative, str) or not relative or "\x00" in relative:
+        fail("Explicit runtime release file inventory contains an invalid path.")
+    relative_path = pathlib.PurePosixPath(relative)
+    if (
+        relative_path.is_absolute()
+        or relative_path.as_posix() != relative
+        or any(part in {"", ".", ".."} for part in relative_path.parts)
+    ):
+        fail("Explicit runtime release file inventory contains an unsafe path: {}".format(relative))
+    if not isinstance(mode, int) or isinstance(mode, bool) or not 0 <= mode <= 0o7777:
+        fail("Explicit runtime release file inventory contains an invalid mode: {}".format(relative))
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(char not in "0123456789abcdef" for char in digest)
+        or relative in inventory
+    ):
         fail("Explicit runtime release file inventory contains an invalid entry.")
-    inventory[relative] = item
+    inventory[relative] = {
+        "mode": mode,
+        "sha256": digest,
+        "parts": relative_path.parts,
+    }
 
-required_paths = {
+snapshot_paths = {
     "VERSION",
     "workflow/{}_entrypoint.sh".format(expected_workflow),
     "workflow/core/{}_core.sh".format(expected_workflow),
@@ -140,19 +161,62 @@ required_paths = {
     "workflow/support/gg_entrypoint_bootstrap.sh",
     "workflow/support/gg_util.sh",
 }
+required_paths = snapshot_paths.union(
+    {
+        "workflow/gg_common_params.sh",
+        "workflow/gg_path_defaults.sh",
+        "workflow/support/gg_core_bootstrap.sh",
+        "workflow/support/gg_entrypoint_config_vars.sh",
+        "workflow/support/gg_shared_lock.sh",
+        "workflow/support/gg_site_runtime.sh",
+    }
+)
+required_paths.update(
+    "workflow/support/gg_util/{:02d}_{}.sh".format(number, name)
+    for number, name in enumerate(
+        (
+            "runtime_config",
+            "container_scheduler",
+            "species_helpers",
+            "busco_runtime",
+            "workspace_io",
+            "workspace_validation",
+            "execution_runtime",
+            "execution_reporting",
+            "sequence_databases",
+            "reference_databases",
+            "fasta",
+        ),
+        start=1,
+    )
+)
 if not required_paths.issubset(inventory):
     fail("Explicit runtime release support closure is incomplete.")
-file_sha256 = {}
-for relative in sorted(required_paths):
-    path = release_root / relative
+
+verified_sha256 = {}
+for relative in sorted(inventory):
     item = inventory[relative]
-    if path.is_symlink() or not path.is_file():
+    path = release_root.joinpath(*item["parts"])
+    current = release_root
+    for part in item["parts"]:
+        current /= part
+        if current.is_symlink():
+            fail("Explicit runtime release file is unavailable or symlinked: {}".format(relative))
+    if not path.is_file():
         fail("Explicit runtime release file is unavailable or symlinked: {}".format(relative))
-    payload = path.read_bytes()
+    try:
+        resolved_path = path.resolve(strict=True)
+        resolved_path.relative_to(release_root)
+        payload = path.read_bytes()
+        observed_mode = stat.S_IMODE(path.stat().st_mode)
+    except (OSError, ValueError) as exc:
+        fail("Explicit runtime release file is unsafe or unreadable: {} ({})".format(relative, exc))
     observed = hashlib.sha256(payload).hexdigest()
-    if observed != item["sha256"] or stat.S_IMODE(path.stat().st_mode) != int(item["mode"]):
+    if observed != item["sha256"] or observed_mode != item["mode"]:
         fail("Explicit runtime release file changed: {}".format(relative))
-    file_sha256[relative] = observed
+    verified_sha256[relative] = observed
+
+file_sha256 = {relative: verified_sha256[relative] for relative in sorted(snapshot_paths)}
 
 snapshot = {
     "schema_version": 1,

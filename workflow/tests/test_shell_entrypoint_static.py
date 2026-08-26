@@ -90,8 +90,11 @@ def test_container_build_metadata_includes_repo_version_label():
 
     assert 'org.opencontainers.image.version="${GG_VERSION}"' in dockerfile
     assert '--build-arg GG_VERSION="${gg_version}"' in buildx
+    assert '--build-arg SECURITY_REFRESH_EPOCH="${SECURITY_REFRESH_EPOCH}"' in buildx
     assert "s|@@GG_VERSION@@|" in local_build
+    assert "s|@@SECURITY_REFRESH_EPOCH@@|" in local_build
     assert "org.opencontainers.image.version @@GG_VERSION@@" in definition_template
+    assert "io.genegalleon.security-refresh-epoch @@SECURITY_REFRESH_EPOCH@@" in definition_template
 
 
 def test_container_defaults_install_program_sources_from_moving_branches():

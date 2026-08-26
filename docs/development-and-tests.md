@@ -72,7 +72,9 @@ as SIF or Docker/container validation according to the runtime actually used.
 Python-side test dependencies are listed in:
 
 - `workflow/tests/requirements.txt`
-- `workflow/tests/requirements.lock.txt` (validated exact direct-dependency constraints)
+- `workflow/tests/requirements.lock.txt` (validated exact constraints for stable
+  third-party dependencies; `csubst` intentionally follows its moving `master`
+  branch to match the container runtime)
 
 Typical setup:
 

@@ -97,16 +97,17 @@ def test_query2family_plot_supports_query_gene_orthology_glyphs():
     assert 'label = paste0(evidence_layout_label, " states")' in text
     assert 'displayed_evidence_statuses <- c("unavailable", "reference_self")' in text
     assert 'length(displayed_evidence_statuses) > 0' in text
-    assert '"No band: reference self"' in text
+    assert '"No band: reference self"' not in text
+    assert 'evidence_state_legend_df$draw_swatch <- rep(' in text
     assert 'synteny_legend_visible <- any(' in text
     assert 'ufboot_legend_visible <- any(' in text
     assert (
         'stop("Ortholog synteny reference_self status disagrees with candidate/reference IDs")'
         in text
     )
-    assert 'evidence_df$evidence_status != "reference_self"' in text
-    assert "synteny_display_df <- evidence_rows_for_layout(synteny_evidence_df)" in text
-    assert "ufboot_display_df <- evidence_rows_for_layout(ufboot_evidence_df)" in text
+    assert 'evidence_df$evidence_status != "reference_self"' not in text
+    assert "synteny_display_df <- synteny_evidence_df" in text
+    assert "ufboot_display_df <- ufboot_evidence_df" in text
     assert "ufboot_evidence_df$evaluated_count == ufboot_evidence_df$pair_count" in text
     assert "ufboot_evidence_df$pair_count != ufboot_evidence_df$glyph_copy_number" in text
     assert 'synteny_evidence_df$pair_count != synteny_evidence_df$glyph_copy_number' in text
@@ -191,6 +192,22 @@ def test_query2family_tree_axis_uses_bar_by_default():
     assert 'tree_axis_label <- "Million years ago"' in text
     assert "if (dated_ruler_mode)" in text
     assert "label = tree_axis_label" in text
+
+
+def test_query2family_copy_numbers_are_layered_above_evidence_bands():
+    text = (SUPPORT_DIR / "plot_query2family_presence_absence.R").read_text(encoding="utf-8")
+
+    glyph_rect_layer = text.index(
+        "geom_rect(data = glyph_rect_df, aes(xmin = xmin, xmax = xmax,"
+    )
+    synteny_band_layer = text.index("data = synteny_display_df", glyph_rect_layer)
+    ufboot_band_layer = text.index("data = ufboot_display_df", synteny_band_layer)
+    copy_number_layer = text.index(
+        "aes(x = x, y = text_y, label = copy_label, color = text_color)",
+        ufboot_band_layer,
+    )
+
+    assert glyph_rect_layer < synteny_band_layer < ufboot_band_layer < copy_number_layer
 
 
 def test_tree_plot_consumers_load_the_installed_treevis_package():

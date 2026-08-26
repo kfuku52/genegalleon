@@ -17,6 +17,33 @@ GG_ENTRYPOINT_CONFIG_VARS_PATH = Path(__file__).resolve().parents[1] / "support"
 GG_ENTRYPOINT_BOOTSTRAP_PATH = Path(__file__).resolve().parents[1] / "support" / "gg_entrypoint_bootstrap.sh"
 WORKFLOW_DIR = GG_ENTRYPOINT_BOOTSTRAP_PATH.parents[1]
 REPO_ROOT = WORKFLOW_DIR.parent
+RUNTIME_SUPPORT_PATHS = {
+    "workflow/gg_common_params.sh",
+    "workflow/gg_path_defaults.sh",
+    "workflow/support/gg_core_bootstrap.sh",
+    "workflow/support/gg_entrypoint_config_vars.sh",
+    "workflow/support/gg_shared_lock.sh",
+    "workflow/support/gg_site_runtime.sh",
+    *{
+        f"workflow/support/gg_util/{number:02d}_{name}.sh"
+        for number, name in enumerate(
+            (
+                "runtime_config",
+                "container_scheduler",
+                "species_helpers",
+                "busco_runtime",
+                "workspace_io",
+                "workspace_validation",
+                "execution_runtime",
+                "execution_reporting",
+                "sequence_databases",
+                "reference_databases",
+                "fasta",
+            ),
+            start=1,
+        )
+    },
+}
 
 
 def run_bash(cmd: str, cwd: Path):
@@ -49,10 +76,8 @@ def _write_runtime_release_contract(
         "workflow/support/gg_util.sh",
     }
     runtime_paths = required_paths.union(
-        {
-            "workflow/gg_path_defaults.sh",
-            "workflow/gg_common_params.sh",
-        }
+        RUNTIME_SUPPORT_PATHS,
+        {"workflow/support/format_species_constants.py"},
     )
     installed_files = []
     for relative in sorted(runtime_paths):
@@ -694,6 +719,69 @@ def test_spooled_entrypoint_binds_to_verified_explicit_runtime_release(tmp_path)
     tampered = run_bash(command, cwd=tmp_path)
     assert tampered.returncode != 0
     assert "Explicit runtime release file changed" in tampered.stderr
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
+        "workflow/gg_path_defaults.sh",
+        "workflow/gg_common_params.sh",
+        "workflow/support/gg_core_bootstrap.sh",
+        "workflow/support/gg_site_runtime.sh",
+        "workflow/support/gg_entrypoint_config_vars.sh",
+        "workflow/support/gg_shared_lock.sh",
+        "workflow/support/gg_util/01_runtime_config.sh",
+        "workflow/support/gg_util/11_fasta.sh",
+    ),
+)
+def test_explicit_runtime_release_rejects_tampered_shell_execution_closure(tmp_path, relative):
+    release_root = tmp_path / "release-a"
+    snapshot = _write_runtime_release_contract(release_root, "gg_genome_evolution")
+    marker = tmp_path / "tampered-code-executed"
+    tampered_path = release_root / relative
+    tampered_path.write_text(
+        tampered_path.read_text(encoding="utf-8")
+        + f"\nprintf tampered > {shlex.quote(str(marker))}\n",
+        encoding="utf-8",
+    )
+    bootstrap = release_root / "workflow/support/gg_entrypoint_bootstrap.sh"
+    command = (
+        f"export KFAUTO_RUNTIME_RELEASE_ROOT={shlex.quote(str(release_root))}; "
+        f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+        f"source {shlex.quote(str(bootstrap))} && "
+        "gg_entrypoint_initialize /var/spool/ge/job 1 gg_genome_evolution && "
+        'source "${gg_workflow_dir}/support/gg_util.sh"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode != 0
+    assert f"Explicit runtime release file changed: {relative}" in completed.stderr
+    assert not marker.exists()
+
+
+def test_explicit_runtime_release_rejects_tampered_nonclosure_inventory_file(tmp_path):
+    release_root = tmp_path / "release-a"
+    snapshot = _write_runtime_release_contract(release_root, "gg_genome_evolution")
+    relative = "workflow/support/format_species_constants.py"
+    tampered_path = release_root / relative
+    tampered_path.write_text(
+        tampered_path.read_text(encoding="utf-8") + "# tampered\n",
+        encoding="utf-8",
+    )
+    bootstrap = release_root / "workflow/support/gg_entrypoint_bootstrap.sh"
+    command = (
+        f"export KFAUTO_RUNTIME_RELEASE_ROOT={shlex.quote(str(release_root))}; "
+        f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+        f"source {shlex.quote(str(bootstrap))}; "
+        "gg_set_workflow_dir /var/spool/ge/job "
+        f"{shlex.quote(str(bootstrap))} gg_genome_evolution"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode != 0
+    assert f"Explicit runtime release file changed: {relative}" in completed.stderr
 
 
 def test_explicit_runtime_release_ignores_spooled_bootstrap_hint(tmp_path):

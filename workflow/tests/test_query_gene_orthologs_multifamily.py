@@ -18,6 +18,13 @@ from workflow.support.gene_family_output_store import (
 SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 
 
+def svg_number(element: ElementTree.Element, attribute: str, default: float) -> float:
+    try:
+        return float(element.attrib[attribute])
+    except (KeyError, ValueError):
+        return default
+
+
 def count_svg_matrix_edge_bands(svg_path: Path, species_label: str, column_count: int) -> int:
     root = ElementTree.parse(svg_path).getroot()
     species_baselines = [
@@ -66,6 +73,72 @@ def count_svg_matrix_edge_bands(svg_path: Path, species_label: str, column_count
         and rectangle["y"] >= row_ymin - tolerance
         and rectangle["y"] + rectangle["height"] <= row_ymax + tolerance
         for rectangle in rectangles
+    )
+
+
+def assert_svg_copy_numbers_above_edge_bands(svg_path: Path, species_label: str) -> None:
+    root = ElementTree.parse(svg_path).getroot()
+    elements = list(root.iter())
+    element_order = {id(element): index for index, element in enumerate(elements)}
+    species_baselines = [
+        float(element.attrib["y"])
+        for element in elements
+        if element.tag.endswith("text")
+        and (element.text or "") == species_label
+        and "y" in element.attrib
+    ]
+    assert len(species_baselines) == 1
+    species_baseline = species_baselines[0]
+
+    row_tiles = [
+        element
+        for element in elements
+        if element.tag.endswith("rect")
+        and "stroke: #D9D9D9" in element.attrib.get("style", "")
+        and svg_number(element, "y", float("inf"))
+        <= species_baseline
+        <= svg_number(element, "y", float("-inf"))
+        + svg_number(element, "height", 0.0)
+    ]
+    assert row_tiles
+    row_ymin = min(svg_number(element, "y", float("inf")) for element in row_tiles)
+    row_ymax = max(
+        svg_number(element, "y", float("-inf"))
+        + svg_number(element, "height", 0.0)
+        for element in row_tiles
+    )
+    matrix_xmin = min(svg_number(element, "x", float("inf")) for element in row_tiles)
+    matrix_xmax = max(
+        svg_number(element, "x", float("-inf"))
+        + svg_number(element, "width", 0.0)
+        for element in row_tiles
+    )
+    tile_height = min(svg_number(element, "height", float("inf")) for element in row_tiles)
+    edge_bands = [
+        element
+        for element in elements
+        if element.tag.endswith("rect")
+        and svg_number(element, "height", float("inf")) < tile_height * 0.3
+        and matrix_xmin <= svg_number(element, "x", float("-inf")) <= matrix_xmax
+        and row_ymin
+        <= svg_number(element, "y", float("-inf"))
+        <= row_ymax
+    ]
+    assert edge_bands
+
+    copy_numbers = [
+        element
+        for element in elements
+        if element.tag.endswith("text")
+        and re.fullmatch(r"[0-9]+", element.text or "")
+        and matrix_xmin <= svg_number(element, "x", float("-inf")) <= matrix_xmax
+        and row_ymin - 1.0
+        <= svg_number(element, "y", float("-inf"))
+        <= row_ymax + 1.0
+    ]
+    assert copy_numbers
+    assert min(element_order[id(element)] for element in copy_numbers) > max(
+        element_order[id(element)] for element in edge_bands
     )
 
 
@@ -423,18 +496,21 @@ def test_multifamily_tables_render_to_pdf_and_svg(tmp_path: Path):
     assert "Numeric fill requires support for every copy" in svg_text
     assert "Evidence band states" in svg_text
     assert "unavailable" in svg_text
-    assert "No band: reference self" in svg_text
+    assert "reference self" in svg_text
+    assert "No band: reference self" not in svg_text
     assert "No circle: unavailable or reference self" not in svg_text
     assert count_svg_matrix_edge_bands(
         svg_path,
         "Reference species",
         column_count=6,
-    ) == 0
+    ) == 12
     assert count_svg_matrix_edge_bands(
         svg_path,
         "Ancestor species",
         column_count=6,
     ) > 0
+    assert_svg_copy_numbers_above_edge_bands(svg_path, "Reference species")
+    assert_svg_copy_numbers_above_edge_bands(svg_path, "Ancestor species")
     glyph_svg_path = out_dir / "multifamily.glyph.svg"
     glyph_command = [
         argument for argument in plot_command if not argument.startswith("--out_")
@@ -756,12 +832,14 @@ def test_eight_families_and_twenty_three_query_columns_render_without_cross_fami
     assert "Evidence band (bottom): Gene tree UFBoot (%)" not in svg_text
     assert "unavailable" not in svg_text
     assert "Evidence band states" in svg_text
-    assert "No band: reference self" in svg_text
+    assert "reference self" in svg_text
+    assert "No band: reference self" not in svg_text
     assert count_svg_matrix_edge_bands(
         svg_path,
         "Reference species",
         column_count=sum(query_counts),
-    ) == 0
+    ) == 2 * sum(query_counts)
+    assert_svg_copy_numbers_above_edge_bands(svg_path, "Reference species")
 
     vertical_family_title_boxes = []
     family_legend_x = []

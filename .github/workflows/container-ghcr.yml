@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: read
   contents: read
 
 concurrency:
@@ -16,140 +15,142 @@ concurrency:
 jobs:
   check-trigger:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     outputs:
       should_build: ${{ steps.decision.outputs.should_build }}
       decision_reason: ${{ steps.decision.outputs.decision_reason }}
-      baseline_sha: ${{ steps.decision.outputs.baseline_sha }}
-      matched_files: ${{ steps.decision.outputs.matched_files }}
+      security_refresh_epoch: ${{ steps.decision.outputs.security_refresh_epoch }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Login to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Decide whether a scheduled build is needed
         id: decision
         env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_NAME: ${{ github.event_name }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import urllib.parse
-          import urllib.request
 
-          owner, repo = os.environ["GITHUB_REPOSITORY"].split("/", 1)
-          default_branch = os.environ["DEFAULT_BRANCH"]
-          event_name = os.environ["EVENT_NAME"]
-          output_path = os.environ["GITHUB_OUTPUT"]
-          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
-          token = os.environ["GITHUB_TOKEN"]
+          security_refresh_epoch="$(date -u +%F)"
+          echo "security_refresh_epoch=${security_refresh_epoch}" >> "${GITHUB_OUTPUT}"
 
-          def set_output(key: str, value: str) -> None:
-              with open(output_path, "a", encoding="utf-8") as fh:
-                  fh.write(f"{key}={value}\n")
-
-          def append_summary(lines: list[str]) -> None:
-              with open(summary_path, "a", encoding="utf-8") as fh:
-                  fh.write("\n".join(lines) + "\n")
-
-          def github_api(path: str, params: dict[str, str] | None = None):
-              url = f"https://api.github.com{path}"
-              if params:
-                  url += "?" + urllib.parse.urlencode(params)
-              request = urllib.request.Request(
-                  url,
-                  headers={
-                      "Authorization": f"Bearer {token}",
-                      "Accept": "application/vnd.github+json",
-                      "User-Agent": "genegalleon-container-ghcr",
-                      "X-GitHub-Api-Version": "2022-11-28",
-                  },
-              )
-              with urllib.request.urlopen(request) as response:
-                  return json.load(response)
-
-          if event_name == "workflow_dispatch":
-              set_output("should_build", "1")
-              set_output("decision_reason", "manual dispatch")
-              set_output("baseline_sha", "manual")
-              set_output("matched_files", "manual dispatch")
-              append_summary(
-                  [
-                      "Manual dispatch requested.",
-                      "",
-                      "- Build decision: run",
-                      "- Reason: workflow_dispatch bypasses the scheduled-change filter",
-                  ]
-              )
-              raise SystemExit(0)
-
-          watched_paths = {
-              ".dockerignore",
-              ".github/workflows/container-ghcr.yml",
-              "VERSION",
+          decide() {
+            local should_build="$1"
+            local reason="$2"
+            local action="skip"
+            if [[ "${should_build}" == "1" ]]; then
+              action="run"
+            fi
+            {
+              echo "should_build=${should_build}"
+              echo "decision_reason=${reason}"
+            } >> "${GITHUB_OUTPUT}"
+            {
+              echo "Scheduled publish preflight:"
+              echo
+              echo "- Build decision: ${action}"
+              echo "- Reason: ${reason}"
+            } >> "${GITHUB_STEP_SUMMARY}"
           }
-          watched_prefixes = ("container/", "workflow/support/treevis/")
 
-          def decide(should_build: bool, reason: str, baseline: str, files: list[str]) -> None:
-              set_output("should_build", "1" if should_build else "0")
-              set_output("decision_reason", reason)
-              set_output("baseline_sha", baseline[:7] if baseline else "none")
-              set_output("matched_files", ",".join(files) if files else "none")
-              append_summary(
-                  [
-                      "Scheduled publish preflight:",
-                      "",
-                      f"- Build decision: {'run' if should_build else 'skip'}",
-                      f"- Baseline: `{baseline[:7]}`" if baseline else "- Baseline: none",
-                      f"- Reason: {reason}",
-                      f"- Matching paths: {', '.join(files)}" if files else "- Matching paths: none",
-                  ]
-              )
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            decide 1 "manual dispatch"
+            exit 0
+          fi
 
-          try:
-              runs = github_api(
-                  f"/repos/{owner}/{repo}/actions/workflows/container-ghcr.yml/runs",
-                  {
-                      "branch": default_branch,
-                      "status": "success",
-                      "per_page": "20",
-                  },
-              ).get("workflow_runs", [])
-              baseline = next(
-                  (run["head_sha"] for run in runs if run.get("head_sha")),
-                  "",
-              )
-              if not baseline:
-                  decide(True, "no previous successful publish run was found", "", [])
-                  raise SystemExit(0)
+          if ! source container/source_branches.env; then
+            decide 1 "source branch policy could not be loaded during preflight"
+            exit 0
+          fi
+          resolve_source_sha() {
+            bash container/scripts/resolve_git_branch_sha.sh "$1" "$2"
+          }
+          resolution_failed=0
+          KFU52_AMALGKIT_REPO_SHA="$(resolve_source_sha https://github.com/kfuku52/amalgkit.git "${GG_SOURCE_AMALGKIT_REPO_REF}")" || resolution_failed=1
+          KFU52_CDSKIT_REPO_SHA="$(resolve_source_sha https://github.com/kfuku52/cdskit.git "${GG_SOURCE_CDSKIT_REPO_REF}")" || resolution_failed=1
+          KFU52_CSUBST_REPO_SHA="$(resolve_source_sha https://github.com/kfuku52/csubst.git "${GG_SOURCE_CSUBST_REPO_REF}")" || resolution_failed=1
+          KFU52_NWKIT_REPO_SHA="$(resolve_source_sha https://github.com/kfuku52/nwkit.git "${GG_SOURCE_NWKIT_REPO_REF}")" || resolution_failed=1
+          BUSCO_REPO_SHA="$(resolve_source_sha https://gitlab.com/ezlab/busco.git "${GG_SOURCE_BUSCO_REPO_REF}")" || resolution_failed=1
+          PAML_REPO_SHA="$(resolve_source_sha https://github.com/iqtree/paml.git "${GG_SOURCE_PAML_REPO_REF}")" || resolution_failed=1
+          KFL1OU_REPO_SHA="$(resolve_source_sha https://github.com/kfuku52/kfl1ou.git "${GG_SOURCE_KFL1OU_REPO_REF}")" || resolution_failed=1
+          KFFRACTBIAS_REPO_SHA="$(resolve_source_sha https://github.com/kfuku52/kfFractBias.git "${GG_SOURCE_KFFRACTBIAS_REPO_REF}")" || resolution_failed=1
+          KFTOOLS_REPO_SHA="$(resolve_source_sha https://github.com/kfuku52/kftools.git "${GG_SOURCE_KFTOOLS_REPO_REF}")" || resolution_failed=1
+          RKFTOOLS_REPO_SHA="$(resolve_source_sha https://github.com/kfuku52/rkftools.git "${GG_SOURCE_RKFTOOLS_REPO_REF}")" || resolution_failed=1
+          RADTE_REPO_SHA="$(resolve_source_sha https://github.com/kfuku52/RADTE.git "${GG_SOURCE_RADTE_REPO_REF}")" || resolution_failed=1
+          if [[ "${resolution_failed}" == "1" ]]; then
+            decide 1 "upstream source resolution failed during preflight"
+            exit 0
+          fi
+          export \
+            KFU52_AMALGKIT_REPO_SHA \
+            KFU52_CDSKIT_REPO_SHA \
+            KFU52_CSUBST_REPO_SHA \
+            KFU52_NWKIT_REPO_SHA \
+            BUSCO_REPO_SHA \
+            PAML_REPO_SHA \
+            KFL1OU_REPO_SHA \
+            KFFRACTBIAS_REPO_SHA \
+            KFTOOLS_REPO_SHA \
+            RKFTOOLS_REPO_SHA \
+            RADTE_REPO_SHA
 
-              comparison = github_api(
-                  f"/repos/{owner}/{repo}/compare/{baseline}...{os.environ['GITHUB_SHA']}"
-              )
-              if comparison.get("status") not in {"ahead", "identical"}:
-                  decide(True, "the successful baseline is not an ancestor of the current revision", baseline, [])
-                  raise SystemExit(0)
-              if comparison.get("total_commits", 0) > 250:
-                  decide(True, "the comparison is too large to inspect safely", baseline, [])
-                  raise SystemExit(0)
+          image="ghcr.io/$(printf '%s' "${REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
 
-              changed_files = [item["filename"] for item in comparison.get("files", [])]
-              matched_files = sorted(
-                  path
-                  for path in changed_files
-                  if path in watched_paths
-                  or any(path.startswith(prefix) for prefix in watched_prefixes)
-              )
-              if matched_files:
-                  decide(True, "container inputs changed since the last successful publish", baseline, matched_files)
-              else:
-                  decide(False, "container inputs are unchanged since the last successful publish", baseline, [])
-          except SystemExit:
-              raise
-          except Exception as exc:
-              # A transient API or comparison failure must not permanently hide a build.
-              decide(True, f"preflight failed conservatively: {type(exc).__name__}: {exc}", "", [])
-          PY
+          if ! published_images="$(
+            docker buildx imagetools inspect --format '{{json .Image}}' "${image}:latest" 2>/dev/null
+          )"; then
+            decide 1 "published latest image metadata is unavailable"
+            exit 0
+          fi
+          if ! published_revision="$(
+            printf '%s\n' "${published_images}" | python container/scripts/check_published_build_input.py \
+              --print-common-revision linux/amd64 \
+              --print-common-revision linux/arm64
+          )"; then
+            decide 1 "published latest image revision metadata is missing or inconsistent"
+            exit 0
+          fi
+
+          gg_version="$(sed -n '1p' VERSION | tr -d '\r')"
+          hash_failed=0
+          expected_amd64="$(
+            GG_BUILD_PLATFORMS=linux/amd64 \
+            GG_BUILD_VCS_REF="${published_revision}" \
+            GG_BUILD_VERSION="${gg_version}" \
+              bash container/scripts/compute_build_input_hash.sh "${security_refresh_epoch}"
+          )" || hash_failed=1
+          expected_arm64="$(
+            GG_BUILD_PLATFORMS=linux/arm64 \
+            GG_BUILD_VCS_REF="${published_revision}" \
+            GG_BUILD_VERSION="${gg_version}" \
+              bash container/scripts/compute_build_input_hash.sh "${security_refresh_epoch}"
+          )" || hash_failed=1
+          if [[ "${hash_failed}" == "1" ]]; then
+            decide 1 "build-input hash calculation failed during preflight"
+            exit 0
+          fi
+
+          if printf '%s\n' "${published_images}" | python container/scripts/check_published_build_input.py \
+              --expected "linux/amd64=${expected_amd64}" \
+              --expected "linux/arm64=${expected_arm64}"; then
+            decide 0 "repository and resolved upstream build inputs match the published image"
+          else
+            decide 1 "repository or resolved upstream build inputs differ from the published image"
+          fi
 
   prepare-build:
     needs: check-trigger
@@ -163,6 +164,7 @@ jobs:
       sha_tag: ${{ steps.vars.outputs.sha_tag }}
       build_date: ${{ steps.vars.outputs.build_date }}
       gg_version: ${{ steps.vars.outputs.gg_version }}
+      security_refresh_epoch: ${{ steps.vars.outputs.security_refresh_epoch }}
       amalgkit_repo_sha: ${{ steps.vars.outputs.amalgkit_repo_sha }}
       cdskit_repo_sha: ${{ steps.vars.outputs.cdskit_repo_sha }}
       csubst_repo_sha: ${{ steps.vars.outputs.csubst_repo_sha }}
@@ -187,9 +189,15 @@ jobs:
 
       - name: Resolve image tags
         id: vars
+        env:
+          SECURITY_REFRESH_EPOCH: ${{ needs.check-trigger.outputs.security_refresh_epoch }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ ! "${SECURITY_REFRESH_EPOCH}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "Invalid security refresh epoch: ${SECURITY_REFRESH_EPOCH}"
+            exit 1
+          fi
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           repo_name="$(basename "${GITHUB_REPOSITORY}")"
           image="ghcr.io/${owner}/${repo_name}"
@@ -236,6 +244,7 @@ jobs:
             echo "sha_tag=sha-${short_sha}"
             echo "build_date=${build_date}"
             echo "gg_version=${gg_version}"
+            echo "security_refresh_epoch=${SECURITY_REFRESH_EPOCH}"
             echo "amalgkit_repo_sha=${amalgkit_repo_sha}"
             echo "cdskit_repo_sha=${cdskit_repo_sha}"
             echo "csubst_repo_sha=${csubst_repo_sha}"
@@ -288,6 +297,7 @@ jobs:
           GG_BUILD_PLATFORMS: ${{ matrix.platform }}
           GG_BUILD_VCS_REF: ${{ github.sha }}
           GG_BUILD_VERSION: ${{ needs.prepare-build.outputs.gg_version }}
+          GG_BUILD_SECURITY_REFRESH_EPOCH: ${{ needs.prepare-build.outputs.security_refresh_epoch }}
           KFU52_AMALGKIT_REPO_SHA: ${{ needs.prepare-build.outputs.amalgkit_repo_sha }}
           KFU52_CDSKIT_REPO_SHA: ${{ needs.prepare-build.outputs.cdskit_repo_sha }}
           KFU52_CSUBST_REPO_SHA: ${{ needs.prepare-build.outputs.csubst_repo_sha }}
@@ -299,7 +309,7 @@ jobs:
           KFTOOLS_REPO_SHA: ${{ needs.prepare-build.outputs.kftools_repo_sha }}
           RKFTOOLS_REPO_SHA: ${{ needs.prepare-build.outputs.rkftools_repo_sha }}
           RADTE_REPO_SHA: ${{ needs.prepare-build.outputs.radte_repo_sha }}
-        run: echo "value=$(bash container/scripts/compute_build_input_hash.sh)" >> "${GITHUB_OUTPUT}"
+        run: echo "value=$(bash container/scripts/compute_build_input_hash.sh "${GG_BUILD_SECURITY_REFRESH_EPOCH}")" >> "${GITHUB_OUTPUT}"
 
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -325,6 +335,7 @@ jobs:
             VCS_REF=${{ github.sha }}
             GG_VERSION=${{ needs.prepare-build.outputs.gg_version }}
             BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}
+            SECURITY_REFRESH_EPOCH=${{ needs.prepare-build.outputs.security_refresh_epoch }}
             KFU52_REPO_REF=master
             KFU52_AMALGKIT_REPO_REF=master
             KFU52_AMALGKIT_REPO_SHA=${{ needs.prepare-build.outputs.amalgkit_repo_sha }}
@@ -468,8 +479,6 @@ jobs:
           {
             echo "Build trigger:"
             echo "- ${{ needs.check-trigger.outputs.decision_reason }}"
-            echo "- successful baseline: ${{ needs.check-trigger.outputs.baseline_sha }}"
-            echo "- matched paths: ${{ needs.check-trigger.outputs.matched_files }}"
             echo ""
             echo "Pushed image tags:"
             echo "- ${{ needs.prepare-build.outputs.image }}:${{ needs.prepare-build.outputs.immutable_tag }}"
@@ -479,4 +488,6 @@ jobs:
             echo "Platforms:"
             echo "- linux/amd64"
             echo "- linux/arm64"
+            echo ""
+            echo "Ubuntu security refresh epoch: ${{ needs.prepare-build.outputs.security_refresh_epoch }}"
           } >> "${GITHUB_STEP_SUMMARY}"

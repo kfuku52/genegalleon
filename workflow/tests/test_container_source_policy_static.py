@@ -96,8 +96,45 @@ def test_container_build_paths_share_python_compatibility_constraints():
         "defusedxml",
     ):
         assert f"{package}==" in requirements
-    assert "pypdf>=6.15.0" in requirements
+    assert "pypdf>=6.16.1" in requirements
     assert "setuptools<83" in requirements
+
+
+def test_container_build_paths_refresh_system_security_packages_daily():
+    dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
+    buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
+    build_hash = (
+        REPO_ROOT / "container" / "scripts" / "compute_build_input_hash.sh"
+    ).read_text(encoding="utf-8")
+    apptainer_template = (
+        REPO_ROOT / "container" / "apptainer_local_build.def.template"
+    ).read_text(encoding="utf-8")
+    apptainer_build = (
+        REPO_ROOT / "container" / "apptainer_local_build.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'ARG SECURITY_REFRESH_EPOCH=""' in dockerfile
+    assert "apt-get upgrade --with-new-pkgs -y" in dockerfile
+    assert "apt-get --simulate dist-upgrade" in dockerfile
+    assert "Upgradeable system packages remain after the security refresh" in dockerfile
+    assert 'io.genegalleon.security-refresh-epoch="${SECURITY_REFRESH_EPOCH}"' in dockerfile
+    assert "gg_version=${version};security_refresh_epoch=${1}" in build_hash
+    assert 'SECURITY_REFRESH_EPOCH="$(date -u +%F)"' in buildx
+    assert '--build-arg SECURITY_REFRESH_EPOCH="${SECURITY_REFRESH_EPOCH}"' in buildx
+    assert 'SECURITY_REFRESH_EPOCH="$(date -u +%F)"' in apptainer_build
+    assert "s|@@SECURITY_REFRESH_EPOCH@@|" in apptainer_build
+    assert "io.genegalleon.security-refresh-epoch @@SECURITY_REFRESH_EPOCH@@" in apptainer_template
+    assert "security_refresh_epoch.txt" in dockerfile
+    assert "security_refresh_epoch.txt" in apptainer_template
+
+
+def test_python_ci_follows_current_csubst_branch_without_a_commit_pin():
+    requirements = (REPO_ROOT / "workflow/tests/requirements.txt").read_text(encoding="utf-8")
+    lock = (REPO_ROOT / "workflow/tests/requirements.lock.txt").read_text(encoding="utf-8")
+
+    assert "csubst @ git+https://github.com/kfuku52/csubst.git@master" in requirements
+    assert not re.search(r"csubst[^\n]*@[0-9a-f]{40}", requirements)
+    assert not re.search(r"csubst[^\n]*@[0-9a-f]{40}", lock)
 
 
 def test_native_apptainer_build_records_source_revisions():
@@ -134,7 +171,7 @@ def test_treevis_package_is_part_of_every_repository_owned_image_context():
     assert "find workflow/support/treevis -type f -print" in build_hash
     assert 'cp -R "${repo_root}/workflow/support/treevis" "${staging_root}/"' in apptainer_build
     assert "@@STAGING_ROOT@@/treevis /opt/pg/src/genegalleon.treevis" in apptainer_template
-    assert '"workflow/support/treevis/"' in publish_workflow
+    assert "container/scripts/compute_build_input_hash.sh" in publish_workflow
 
 
 def test_container_build_paths_pin_the_same_base_image_digest():

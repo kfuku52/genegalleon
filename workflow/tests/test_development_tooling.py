@@ -109,16 +109,22 @@ def test_runtime_runner_dispatches_to_requested_docker_image(tmp_path: Path):
 def test_build_input_hash_is_deterministic_and_tracks_version():
     env = os.environ.copy()
     env["GG_BUILD_VERSION"] = "1.2.3"
-    first = _run("bash", str(BUILD_HASH_TOOL), env=env)
-    second = _run("bash", str(BUILD_HASH_TOOL), env=env)
+    first = _run("bash", str(BUILD_HASH_TOOL), "2026-08-26", env=env)
+    second = _run("bash", str(BUILD_HASH_TOOL), "2026-08-26", env=env)
     assert first.returncode == second.returncode == 0
     assert re.fullmatch(r"[0-9a-f]{64}", first.stdout.strip())
     assert first.stdout == second.stdout
 
     env["GG_BUILD_VERSION"] = "1.2.4"
-    changed = _run("bash", str(BUILD_HASH_TOOL), env=env)
+    changed = _run("bash", str(BUILD_HASH_TOOL), "2026-08-26", env=env)
     assert changed.returncode == 0
     assert changed.stdout != first.stdout
+
+    env["GG_BUILD_VERSION"] = "1.2.3"
+    next_security_epoch = _run("bash", str(BUILD_HASH_TOOL), "2026-08-27", env=env)
+    assert next_security_epoch.returncode == 0
+    assert next_security_epoch.stdout != first.stdout
+
 
 
 def test_python_cli_arguments_do_not_publish_empty_help_text():

@@ -304,6 +304,26 @@ RUN micromamba run -n base R CMD INSTALL /opt/pg/src/genegalleon.treevis \
 
 # Validation is intentionally last and isolated: editing checks must not force
 # package solving or source builds to run again.
+ARG SECURITY_REFRESH_EPOCH=""
+
+# The system-package layer near the start of this image is intentionally highly
+# cacheable. Refresh the Ubuntu security index again in a small late layer whose
+# daily epoch participates in the shared build-input fingerprint.
+RUN [[ "${SECURITY_REFRESH_EPOCH}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+ || { echo "SECURITY_REFRESH_EPOCH must use YYYY-MM-DD format" >&2; exit 1; } \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archives/partial/* \
+ && apt-get update \
+ && apt-get upgrade --with-new-pkgs -y \
+ && apt-get --simulate dist-upgrade > /tmp/gg-apt-upgrade-simulation.txt \
+ && if awk '/^Inst / { found = 1 } END { exit found ? 0 : 1 }' /tmp/gg-apt-upgrade-simulation.txt; then \
+      echo "Upgradeable system packages remain after the security refresh." >&2; \
+      exit 1; \
+    fi \
+ && rm -f /tmp/gg-apt-upgrade-simulation.txt \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archives/partial/* \
+ && printf '%s\n' "${SECURITY_REFRESH_EPOCH}" > /opt/pg/logs/security_refresh_epoch.txt
+
 COPY container/spec /opt/pg/spec
 COPY container/scripts/validate_runtime.sh /opt/pg/scripts/validate_runtime.sh
 COPY container/scripts/post_install_notes.sh /opt/pg/scripts/post_install_notes.sh
@@ -332,7 +352,8 @@ LABEL org.opencontainers.image.title="GeneGalleon workflow container" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${GG_VERSION}" \
-      io.genegalleon.build-input="${BUILD_INPUT_HASH}"
+      io.genegalleon.build-input="${BUILD_INPUT_HASH}" \
+      io.genegalleon.security-refresh-epoch="${SECURITY_REFRESH_EPOCH}"
 
 WORKDIR /workspace
 ENTRYPOINT ["/usr/bin/tini", "--"]

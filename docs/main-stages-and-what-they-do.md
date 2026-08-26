@@ -570,7 +570,8 @@ Notable defaults:
   lower Gene tree UFBoot bands so the center of multi-column pre-duplication
   glyphs remains continuous; both use viridis, map zero to the same darkest
   color, and map their maxima to the same lightest color; reference-self cells
-  omit both bands while retaining the central presence/copy-number glyph; use
+  use white bands with a short horizontal state mark while retaining the
+  central presence/copy-number glyph; use
   `rail` for the earlier right-edge layout, `glyph` for diamond/circle overlays,
   or `off` to hide evidence
 - `presence_absence_plot_width=7.2`; the plotter caps figure width at 7.2 inches

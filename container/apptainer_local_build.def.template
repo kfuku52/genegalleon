@@ -24,6 +24,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     org.opencontainers.image.revision @@VCS_REF@@
     org.opencontainers.image.version @@GG_VERSION@@
     io.genegalleon.build-input @@BUILD_INPUT_HASH@@
+    io.genegalleon.security-refresh-epoch @@SECURITY_REFRESH_EPOCH@@
     io.genegalleon.local_image_ref @@LOCAL_IMAGE_REF@@
     io.genegalleon.local_image_tag @@LOCAL_IMAGE_TAG@@
 
@@ -36,6 +37,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     export R_LIBS_SITE=/opt/conda/lib/R/library
 
     target_arch="@@TARGET_ARCH@@"
+    security_refresh_epoch="@@SECURITY_REFRESH_EPOCH@@"
     notung_download_page="@@NOTUNG_DOWNLOAD_PAGE@@"
     notung_download_host_ip="@@NOTUNG_DOWNLOAD_HOST_IP@@"
     notung_zip_sha256="@@NOTUNG_ZIP_SHA256@@"
@@ -222,6 +224,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     rm -rf /tmp/radte
 
     mkdir -p /opt/pg/logs
+    printf '%s\n' "${security_refresh_epoch}" > /opt/pg/logs/security_refresh_epoch.txt
     printf '%s\t%s\n' \
         source revision \
         amalgkit "${amalgkit_source_ref}" \

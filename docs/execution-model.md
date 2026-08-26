@@ -101,9 +101,10 @@ recognized environments and the `GG_SITE_PROFILE` override.
 For scheduler-spooled immutable runtimes, `KFAUTO_RUNTIME_RELEASE_ROOT` and
 `KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256` form an explicit workflow-origin
 contract. Every entrypoint loads its bootstrap only from that release root,
-verifies the release manifest plus the entrypoint/core/support file snapshot,
-and fails closed instead of searching the submit directory or current working
-directory when the origin is missing, shadowed, or changed.
+requires the complete shell support closure, verifies the path, mode, and
+SHA-256 of every file in the manifest before sourcing any release code, and
+fails closed instead of searching the submit directory or current working
+directory when the origin is missing, shadowed, incomplete, or changed.
 
 ## Core script bootstrap
 

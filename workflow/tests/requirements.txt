@@ -4,7 +4,7 @@ ruff
 numpy<2
 pandas
 biopython
-csubst @ git+https://github.com/kfuku52/csubst.git@f83c13134d5d7bd58ff76da192dae703e604ba81
+csubst @ git+https://github.com/kfuku52/csubst.git@master
 ete4
 sqlalchemy
 tenacity

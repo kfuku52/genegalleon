@@ -1,5 +1,6 @@
-# Exact direct-dependency constraints for reproducible developer and CI tests.
-# The csubst source is already locked to a commit in requirements.txt.
+# Exact constraints for stable third-party developer and CI test dependencies.
+# csubst intentionally follows its moving master branch in requirements.txt,
+# matching the authoritative GeneGalleon runtime instead of this lock snapshot.
 # Regenerate intentionally after validating the new set in a GeneGalleon container.
 pytest==9.1.1
 PyYAML==6.0.3

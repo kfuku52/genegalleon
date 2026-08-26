@@ -526,11 +526,12 @@ support. This leaves the center of a multi-column pre-duplication glyph
 continuous and keeps its copy number unobstructed. Both numeric scales map zero
 to the same darkest viridis color and their respective maxima to the same
 lightest color. A gray slash marks unavailable evidence. Reference-self cells
-omit both edge bands; their central presence/copy-number glyph is unchanged.
+show white edge bands with a short horizontal state mark; their central
+presence/copy-number glyph is unchanged.
 Set `presence_absence_evidence_layout=rail`
 for the earlier right-edge rail, `glyph` for the diamond/circle overlay, or
 `off` to suppress both evidence encodings and their legends. The legacy `rail`
-layout continues to mark the reference gene itself with a white dash. In the
+layout also marks the reference gene itself with a white dash. In the
 optional `glyph` layout, a viridis diamond shows local-synteny anchors and an
 Inferno circle shows Gene tree UFBoot; reference-self and unavailable UFBoot
 cells have no circle.

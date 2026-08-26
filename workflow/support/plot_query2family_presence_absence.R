@@ -2662,18 +2662,13 @@ if (
   evidence_state_legend_df <- data.frame(
     evidence_status = displayed_evidence_statuses,
     label = ifelse(
-      displayed_evidence_statuses == "reference_self" &
-        identical(evidence_layout, "band"),
-      "No band: reference self",
-      ifelse(
-        displayed_evidence_statuses == "reference_self",
-        "reference self",
-        "unavailable"
-      )
+      displayed_evidence_statuses == "reference_self",
+      "reference self",
+      "unavailable"
     ),
     fill = ifelse(
       displayed_evidence_statuses == "reference_self",
-      if (identical(evidence_layout, "band")) NA_character_ else "#ffffff",
+      "#ffffff",
       "#e5e7eb"
     ),
     x = heatmap_left + 0.28,
@@ -2689,15 +2684,11 @@ if (
   evidence_state_legend_df$ymin <- evidence_state_legend_df$y - 0.20
   evidence_state_legend_df$ymax <- evidence_state_legend_df$y + 0.20
   is_unavailable <- evidence_state_legend_df$evidence_status == "unavailable"
-  evidence_state_legend_df$draw_swatch <- !(
-    identical(evidence_layout, "band") &
-      evidence_state_legend_df$evidence_status == "reference_self"
+  evidence_state_legend_df$draw_swatch <- rep(
+    TRUE,
+    nrow(evidence_state_legend_df)
   )
-  evidence_state_legend_df$label_x <- ifelse(
-    evidence_state_legend_df$draw_swatch,
-    evidence_state_legend_df$xmax + 0.16,
-    evidence_state_legend_df$xmin
-  )
+  evidence_state_legend_df$label_x <- evidence_state_legend_df$xmax + 0.16
   evidence_state_legend_df$status_x <- evidence_state_legend_df$xmin + 0.035
   evidence_state_legend_df$status_xend <- evidence_state_legend_df$xmax - 0.035
   evidence_state_legend_df$status_y <- ifelse(
@@ -2830,21 +2821,10 @@ combined <- combined +
   geom_rect(data = heatmap_df, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = tile_fill), color = ifelse(glyph_mode, "#d9d9d9", "white"), linewidth = 0.18)
 if (nrow(glyph_rect_df) > 0) {
   combined <- combined +
-    geom_rect(data = glyph_rect_df, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = fill, color = border), linewidth = 0.18) +
-    geom_text(data = glyph_rect_df, aes(x = x, y = text_y, label = copy_label, color = text_color), size = font_size_mm, fontface = "bold")
-}
-evidence_rows_for_layout <- function(evidence_df) {
-  if (identical(evidence_layout, "band")) {
-    return(evidence_df[
-      evidence_df$evidence_status != "reference_self",
-      ,
-      drop = FALSE
-    ])
-  }
-  evidence_df
+    geom_rect(data = glyph_rect_df, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = fill, color = border), linewidth = 0.18)
 }
 if (evidence_strip_mode && nrow(synteny_evidence_df) > 0) {
-  synteny_display_df <- evidence_rows_for_layout(synteny_evidence_df)
+  synteny_display_df <- synteny_evidence_df
   synteny_status_df <- synteny_display_df[
     synteny_display_df$evidence_status != "evaluated",
     ,
@@ -2875,7 +2855,7 @@ if (evidence_strip_mode && nrow(synteny_evidence_df) > 0) {
   }
 }
 if (evidence_strip_mode && nrow(ufboot_evidence_df) > 0) {
-  ufboot_display_df <- evidence_rows_for_layout(ufboot_evidence_df)
+  ufboot_display_df <- ufboot_evidence_df
   ufboot_status_df <- ufboot_display_df[
     ufboot_display_df$evidence_status != "evaluated",
     ,
@@ -2943,6 +2923,18 @@ if (identical(evidence_layout, "glyph") && nrow(ufboot_marker_df) > 0) {
       size = 0.82,
       stroke = 0.15,
       color = "#111827"
+    )
+}
+# Keep copy-number labels above every evidence representation. In particular,
+# edge bands occupy part of the presence/absence cell and must never obscure
+# the primary numeric value.
+if (nrow(glyph_rect_df) > 0) {
+  combined <- combined +
+    geom_text(
+      data = glyph_rect_df,
+      aes(x = x, y = text_y, label = copy_label, color = text_color),
+      size = font_size_mm,
+      fontface = "bold"
     )
 }
 if (nrow(family_boundary_df) > 0) {

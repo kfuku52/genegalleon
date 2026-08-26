@@ -5,6 +5,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 template_path="${script_dir}/apptainer_local_build.def.template"
 coverage_script="${script_dir}/scripts/check_env_coverage.sh"
+set -a
 # shellcheck source=source_branches.env
 source "${script_dir}/source_branches.env"
 
@@ -54,6 +55,15 @@ RKFTOOLS_REPO_SHA=${RKFTOOLS_REPO_SHA:-}
 RADTE_REPO_SHA=${RADTE_REPO_SHA:-}
 TESTNH_TARBALL_SHA256=${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}
 CAFE5_TARBALL_SHA256=${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}
+if [[ -z "${SECURITY_REFRESH_EPOCH:-}" ]]; then
+  SECURITY_REFRESH_EPOCH="$(date -u +%F)"
+fi
+
+if [[ ! "${SECURITY_REFRESH_EPOCH}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  echo "SECURITY_REFRESH_EPOCH must use YYYY-MM-DD format: ${SECURITY_REFRESH_EPOCH}"
+  exit 1
+fi
+set +a
 
 if [[ ! -f "${template_path}" ]]; then
   echo "Definition template not found: ${template_path}"
@@ -97,6 +107,7 @@ render_definition() {
     -e "s|@@VCS_REF@@|$(escape_sed_replacement "${vcs_ref}")|g" \
     -e "s|@@GG_VERSION@@|$(escape_sed_replacement "${gg_version}")|g" \
     -e "s|@@BUILD_INPUT_HASH@@|$(escape_sed_replacement "${build_input_hash}")|g" \
+    -e "s|@@SECURITY_REFRESH_EPOCH@@|$(escape_sed_replacement "${SECURITY_REFRESH_EPOCH}")|g" \
     -e "s|@@LOCAL_IMAGE_REF@@|$(escape_sed_replacement "${IMAGE}")|g" \
     -e "s|@@LOCAL_IMAGE_TAG@@|$(escape_sed_replacement "${TAG}")|g" \
     -e "s|@@NOTUNG_DOWNLOAD_PAGE@@|$(escape_sed_replacement "${NOTUNG_DOWNLOAD_PAGE}")|g" \
@@ -244,10 +255,10 @@ resolve_source_sha KFTOOLS_REPO_SHA "${KFTOOLS_REPO_URL}" "${KFTOOLS_REPO_REF}" 
 resolve_source_sha RKFTOOLS_REPO_SHA "${RKFTOOLS_REPO_URL}" "${RKFTOOLS_REPO_REF}" rkftools
 resolve_source_sha RADTE_REPO_SHA "${RADTE_REPO_URL}" "${RADTE_REPO_REF}" RADTE
 
-GG_BUILD_PLATFORMS="${platform}"
-GG_BUILD_VCS_REF="${vcs_ref}"
-GG_BUILD_VERSION="${gg_version}"
-build_input_hash="$(source "${repo_root}/container/scripts/compute_build_input_hash.sh")"
+export GG_BUILD_PLATFORMS="${platform}"
+export GG_BUILD_VCS_REF="${vcs_ref}"
+export GG_BUILD_VERSION="${gg_version}"
+build_input_hash="$(bash "${repo_root}/container/scripts/compute_build_input_hash.sh" "${SECURITY_REFRESH_EPOCH}")"
 render_definition
 
 build_args=()

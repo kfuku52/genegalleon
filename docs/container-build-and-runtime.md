@@ -49,7 +49,10 @@ This repository now includes CI workflows that publish container images to GHCR:
 
 - periodic publish: `.github/workflows/container-ghcr.yml`
   - schedule: daily at 04:00 JST
-  - runs only when the previous JST day had container-related changes on the default branch
+  - compares repository files, resolved moving branches, and the UTC daily
+    security-refresh epoch with both published platform images
+  - the new daily epoch forces a small final Ubuntu package refresh even when
+    the earlier, expensive image layers remain cached
   - tags: `YYYYMMDD-<sha7>-<source-hash12>`, `sha-<sha7>`, `latest`
 - release publish + SIF build/upload workflow: `.github/workflows/release-sif.yml`
   - tags: `<release-tag>`, `YYYYMMDD-<sha7>-<source-hash12>`, `sha-<sha7>`
@@ -110,7 +113,12 @@ large and exporting it on every invocation can dominate a warm build.
 Unchanged `MODE=load` invocations are skipped using a shared build-input
 fingerprint; scheduled and release builds calculate the same value and embed it
 in `io.genegalleon.build-input`. Set `SKIP_UNCHANGED_LOAD=0` when BuildKit must
-be forced to run. OCI labels also carry the repository version and MIT license.
+be forced to run. The fingerprint includes `SECURITY_REFRESH_EPOCH`, which
+defaults to the current UTC date (`YYYY-MM-DD`). The final image layer updates
+Ubuntu packages, verifies that no further distribution upgrade is available,
+and records the value in `io.genegalleon.security-refresh-epoch` and
+`/opt/pg/logs/security_refresh_epoch.txt`. OCI labels also carry the repository
+version and MIT license.
 
 ### Convert registry or Docker-daemon image to SIF
 

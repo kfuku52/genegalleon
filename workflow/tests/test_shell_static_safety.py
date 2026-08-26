@@ -3129,8 +3129,11 @@ def test_local_buildx_skips_an_unchanged_loaded_image_by_fingerprint():
 
     assert 'ARG BUILD_INPUT_HASH=""' in dockerfile
     assert 'io.genegalleon.build-input="${BUILD_INPUT_HASH}"' in dockerfile
+    assert 'ARG SECURITY_REFRESH_EPOCH=""' in dockerfile
+    assert 'io.genegalleon.security-refresh-epoch="${SECURITY_REFRESH_EPOCH}"' in dockerfile
     assert "SKIP_UNCHANGED_LOAD=${SKIP_UNCHANGED_LOAD:-1}" in buildx
     assert '--build-arg BUILD_INPUT_HASH="${build_input_hash}"' in buildx
+    assert '--build-arg SECURITY_REFRESH_EPOCH="${SECURITY_REFRESH_EPOCH}"' in buildx
     assert '"${image_hash}" == "${build_input_hash}"' in buildx
     assert "USE_LOCAL_CACHE=${USE_LOCAL_CACHE:-0}" in buildx
 

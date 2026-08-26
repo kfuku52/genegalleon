@@ -88,8 +88,12 @@ def test_workflows_limit_github_token_permissions_by_default():
     release = load_workflow("release-sif.yml")
 
     assert tests["permissions"] == {"contents": "read"}
-    assert container["permissions"] == {"actions": "read", "contents": "read"}
+    assert container["permissions"] == {"contents": "read"}
     assert release["permissions"] == {"contents": "read"}
+    assert container["jobs"]["check-trigger"]["permissions"] == {
+        "contents": "read",
+        "packages": "read",
+    }
     assert container["jobs"]["build-and-push"]["permissions"] == {
         "contents": "read",
         "packages": "write",
@@ -304,16 +308,42 @@ def test_container_workflows_embed_version_and_shared_build_input_hash():
 
         assert "container/scripts/compute_build_input_hash.sh" in hash_step["run"]
         assert "GG_BUILD_VERSION" in hash_step["env"]
+        assert "GG_BUILD_SECURITY_REFRESH_EPOCH" in hash_step["env"]
         assert "GG_VERSION=${{ needs." + prepare_job_name + ".outputs.gg_version }}" in build_args
         assert "BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}" in build_args
+        assert (
+            "SECURITY_REFRESH_EPOCH=${{ needs."
+            + prepare_job_name
+            + ".outputs.security_refresh_epoch }}"
+        ) in build_args
 
 
-def test_scheduled_container_build_compares_with_last_successful_run():
+def test_scheduled_container_build_compares_resolved_inputs_with_published_image():
     workflow = load_workflow("container-ghcr.yml")
-    decision = step_run(workflow["jobs"]["check-trigger"], "Decide whether a scheduled build is needed")
+    check_job = workflow["jobs"]["check-trigger"]
+    decision = step_run(check_job, "Decide whether a scheduled build is needed")
 
-    assert "/actions/workflows/container-ghcr.yml/runs" in decision
-    assert '"status": "success"' in decision
-    assert "/compare/{baseline}...{os.environ['GITHUB_SHA']}" in decision
-    assert "previous JST day" not in decision
-    assert "preflight failed conservatively" in decision
+    assert named_step(check_job, "Checkout")["uses"].startswith("actions/checkout@")
+    assert named_step(check_job, "Set up Docker Buildx")["uses"].startswith(
+        "docker/setup-buildx-action@"
+    )
+    assert named_step(check_job, "Login to GHCR")["uses"].startswith("docker/login-action@")
+    assert decision.count("resolve_source_sha https://") == 11
+    assert decision.count("resolve_source_sha https://gitlab.com/") == 1
+    assert "GG_BUILD_PLATFORMS=linux/amd64" in decision
+    assert "GG_BUILD_PLATFORMS=linux/arm64" in decision
+    assert decision.count("--print-common-revision") == 2
+    assert 'GG_BUILD_VCS_REF="${published_revision}"' in decision
+    assert 'security_refresh_epoch="$(date -u +%F)"' in decision
+    assert 'compute_build_input_hash.sh "${security_refresh_epoch}"' in decision
+    assert (
+        check_job["outputs"]["security_refresh_epoch"]
+        == "${{ steps.decision.outputs.security_refresh_epoch }}"
+    )
+    assert "container/scripts/compute_build_input_hash.sh" in decision
+    assert "docker buildx imagetools inspect --format '{{json .Image}}'" in decision
+    assert "container/scripts/check_published_build_input.py" in decision
+    assert "needs.check-trigger.outputs.should_build == '1'" in workflow["jobs"]["prepare-build"]["if"]
+    assert "upstream source resolution failed during preflight" in decision
+    assert "build-input hash calculation failed during preflight" in decision
+    assert "/actions/workflows/container-ghcr.yml/runs" not in decision

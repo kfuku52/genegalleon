@@ -13,4 +13,4 @@ defusedxml==0.7.1
 # module was removed in setuptools 83. Upgrade this only after genomepy no
 # longer requires norns while remaining compatible with mysql-connector 9.x.
 setuptools<83
-pypdf>=6.15.0
+pypdf>=6.16.1

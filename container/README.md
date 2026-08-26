@@ -85,7 +85,12 @@ BuildKit entirely when the tagged local image already has the same fingerprint.
 Set `SKIP_UNCHANGED_LOAD=0` to force a rebuild.
 The same shared fingerprint is embedded by local, scheduled, and release builds
 as `io.genegalleon.build-input`; OCI labels also record the repository version
-and MIT license.
+and MIT license. The fingerprint includes a UTC daily
+`SECURITY_REFRESH_EPOCH` (default: the current `YYYY-MM-DD`). A small final
+image layer refreshes Ubuntu package indexes, installs all available upgrades,
+and fails if an upgrade would still remain. The epoch is also recorded as
+`io.genegalleon.security-refresh-epoch` and in
+`/opt/pg/logs/security_refresh_epoch.txt`.
 
 ## One-command build (local/public selectable)
 
@@ -155,7 +160,11 @@ GitHub Actions now publishes GHCR images and release SIF assets:
 
 - `.github/workflows/container-ghcr.yml`
   - schedule: daily at 04:00 JST
-  - compares the default branch with the last successful publish, so a failed scheduled build is retried rather than forgotten
+  - resolves every moving upstream branch, computes the expected build-input
+    label for both architectures, and skips only when both match the published
+    `latest` image; missing or stale published metadata triggers a rebuild
+  - advances the security-refresh epoch daily, so cached system-package layers
+    cannot indefinitely retain superseded Ubuntu security packages
   - tags: `YYYYMMDD-<sha7>-<source-hash12>`, `sha-<sha7>`, `latest`
 - `.github/workflows/release-sif.yml`
   - trigger: Release `published`

@@ -196,9 +196,10 @@ are isolated into titled blocks with separate query-tree topologies.
 By default, a thin upper viridis band records the largest per-copy
 local-synteny anchor count in a cell and a thin lower viridis band records the
 smallest per-copy Gene tree UFBoot value for the non-root speciation-MRCA branch
-used by the orthology assignment. Reference-self cells omit both bands, and a
-numeric support band is shown only when every non-reference copy in the cell is
-evaluable. The optional `glyph` layout instead uses an upper-right viridis
+used by the orthology assignment. Reference-self cells show white upper and
+lower bands with a short horizontal state mark. A numeric support band is shown
+only when every non-reference copy in the cell is evaluable. The optional
+`glyph` layout instead uses an upper-right viridis
 diamond and a lower-right Inferno circle. Pair-level values and explicit
 unavailability reasons are stored in `.synteny.tsv` and `.ufboot.tsv`,
 respectively; the latter also records whether `support_generax_ufboot` or the
