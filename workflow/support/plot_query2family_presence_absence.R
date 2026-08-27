@@ -734,6 +734,7 @@ ortholog_glyph_path <- get_arg(args, "ortholog_glyph_table")
 ortholog_tree_path <- get_arg(args, "ortholog_tree_table")
 ortholog_synteny_path <- get_arg(args, "ortholog_synteny_table")
 ortholog_ufboot_path <- get_arg(args, "ortholog_ufboot_table")
+ortholog_basis <- tolower(get_arg(args, "ortholog_basis", "reference_species"))
 reference_species <- get_arg(args, "reference_species")
 out_pdf <- get_arg(args, "out_pdf")
 out_svg <- get_arg(args, "out_svg")
@@ -743,12 +744,33 @@ plot_width <- as.numeric(get_arg(args, "width", "7.2"))
 plot_height_arg <- get_arg(args, "height", "auto")
 evidence_layout <- tolower(get_arg(args, "evidence_layout", "band"))
 glyph_mode <- has_nonempty_file(ortholog_column_path) && has_nonempty_file(ortholog_glyph_path)
+if (!ortholog_basis %in% c("reference_species", "query_gene")) {
+  stop("--ortholog_basis must be reference_species or query_gene: ", ortholog_basis)
+}
+query_ortholog_mode <- identical(ortholog_basis, "query_gene")
 reference_species_display <- ""
+ortholog_scope_label <- ""
+ortholog_specific_label <- "reference-gene-specific"
+ortholog_shared_label <- "pre-duplication copy"
+ortholog_self_label <- "reference self"
+ortholog_tree_label <- ""
 if (glyph_mode) {
-  if (!nzchar(reference_species)) {
+  if (!query_ortholog_mode && !nzchar(reference_species)) {
     stop("--reference_species is required with ortholog tables")
   }
-  reference_species_display <- gg_species_display_from_key(reference_species)
+  if (query_ortholog_mode) {
+    reference_species <- "query_gene"
+    reference_species_display <- "Query-gene anchor"
+    ortholog_scope_label <- "Query-gene orthologs"
+    ortholog_specific_label <- "query-anchor-specific"
+    ortholog_shared_label <- "shared across query anchors"
+    ortholog_self_label <- "anchor self"
+    ortholog_tree_label <- "Query-anchor gene tree"
+  } else {
+    reference_species_display <- gg_species_display_from_key(reference_species)
+    ortholog_scope_label <- paste0(reference_species_display, " orthologs")
+    ortholog_tree_label <- paste0(reference_species_display, " gene tree")
+  }
 }
 
 if (!nzchar(tree_path) || !file.exists(tree_path)) {
@@ -819,6 +841,114 @@ if (glyph_mode) {
   }
   if (has_nonempty_file(ortholog_ufboot_path)) {
     ortholog_ufboot <- read.table(ortholog_ufboot_path, sep = "\t", header = TRUE, quote = "", comment.char = "", check.names = FALSE)
+  }
+  if (query_ortholog_mode) {
+    require_query_fields <- function(table, required, path, label) {
+      missing <- setdiff(required, colnames(table))
+      if (length(missing) > 0) {
+        stop(
+          "Query-gene ", label, " table is missing required columns: ",
+          paste(missing, collapse = ", "), "; path=", path
+        )
+      }
+      if (nrow(table) > 0 && any(as.character(table$basis) != "query_gene")) {
+        stop("Query-gene ", label, " basis values must all be query_gene: ", path)
+      }
+    }
+    require_query_fields(
+      ortholog_columns,
+      c(
+        "column_order", "family_id", "family_order", "basis", "query_ids",
+        "query_count", "anchor_species", "anchor_cds_fasta_id",
+        "anchor_gene_id", "plot_label", "anchor_tip_branch_id"
+      ),
+      ortholog_column_path,
+      "column"
+    )
+    require_query_fields(
+      ortholog_glyphs,
+      c(
+        "species", "family_id", "family_order", "basis", "relation",
+        "anchor_cds_fasta_ids", "anchor_gene_ids", "anchor_count",
+        "copy_number", "start_order", "end_order", "lane_index", "lane_count"
+      ),
+      ortholog_glyph_path,
+      "glyph"
+    )
+    ortholog_columns$reference_species <- reference_species
+    ortholog_columns$cds_fasta_id <- ortholog_columns$anchor_cds_fasta_id
+    ortholog_columns$gene_id <- ortholog_columns$anchor_gene_id
+    ortholog_columns$reference_tip_branch_id <- ortholog_columns$anchor_tip_branch_id
+    ortholog_glyphs$reference_species <- reference_species
+    ortholog_glyphs$reference_cds_fasta_ids <- ortholog_glyphs$anchor_cds_fasta_ids
+    ortholog_glyphs$reference_gene_ids <- ortholog_glyphs$anchor_gene_ids
+    ortholog_glyphs$reference_gene_count <- ortholog_glyphs$anchor_count
+
+    if (nrow(ortholog_tree_nodes) > 0) {
+      require_query_fields(
+        ortholog_tree_nodes,
+        c(
+          "family_id", "family_order", "basis", "node_id", "parent_node_id",
+          "is_tip", "event", "anchor_cds_fasta_id", "anchor_gene_id",
+          "column_order", "node_height", "plot_order", "mapped_species_node",
+          "duplication_index", "in_anchor_tree"
+        ),
+        ortholog_tree_path,
+        "tree"
+      )
+      ortholog_tree_nodes$reference_species <- reference_species
+      ortholog_tree_nodes$cds_fasta_id <- ortholog_tree_nodes$anchor_cds_fasta_id
+      ortholog_tree_nodes$gene_id <- ortholog_tree_nodes$anchor_gene_id
+      ortholog_tree_nodes$in_reference_tree <- ortholog_tree_nodes$in_anchor_tree
+    }
+    if (nrow(ortholog_synteny) > 0) {
+      require_query_fields(
+        ortholog_synteny,
+        c(
+          "family_id", "family_order", "species", "basis", "relation",
+          "anchor_cds_fasta_id", "anchor_gene_id", "column_order",
+          "candidate_cds_fasta_id", "synteny_status"
+        ),
+        ortholog_synteny_path,
+        "synteny"
+      )
+      ortholog_synteny$reference_species <- reference_species
+      ortholog_synteny$reference_cds_fasta_id <- ortholog_synteny$anchor_cds_fasta_id
+      ortholog_synteny$reference_gene_id <- ortholog_synteny$anchor_gene_id
+      if ("anchor_neighbor_count" %in% colnames(ortholog_synteny)) {
+        ortholog_synteny$reference_neighbor_count <- ortholog_synteny$anchor_neighbor_count
+      }
+      ortholog_synteny$synteny_status[
+        ortholog_synteny$synteny_status == "anchor_self"
+      ] <- "reference_self"
+      if ("collinear_orientation" %in% colnames(ortholog_synteny)) {
+        ortholog_synteny$collinear_orientation[
+          ortholog_synteny$collinear_orientation == "anchor_self"
+        ] <- "reference_self"
+      }
+    }
+    if (nrow(ortholog_ufboot) > 0) {
+      require_query_fields(
+        ortholog_ufboot,
+        c(
+          "family_id", "family_order", "species", "basis", "relation",
+          "anchor_cds_fasta_id", "anchor_gene_id", "column_order",
+          "candidate_cds_fasta_id", "orthology_ufboot_status",
+          "orthology_ufboot_unavailable_reason"
+        ),
+        ortholog_ufboot_path,
+        "UFBoot"
+      )
+      ortholog_ufboot$reference_species <- reference_species
+      ortholog_ufboot$reference_cds_fasta_id <- ortholog_ufboot$anchor_cds_fasta_id
+      ortholog_ufboot$reference_gene_id <- ortholog_ufboot$anchor_gene_id
+      ortholog_ufboot$orthology_ufboot_status[
+        ortholog_ufboot$orthology_ufboot_status == "anchor_self"
+      ] <- "reference_self"
+      ortholog_ufboot$orthology_ufboot_unavailable_reason[
+        ortholog_ufboot$orthology_ufboot_unavailable_reason == "anchor_self"
+      ] <- "reference_self"
+    }
   }
   required_column_fields <- c(
     "column_order", "family_id", "family_order", "reference_species",
@@ -1371,6 +1501,18 @@ if (glyph_mode) {
       glyph_rows <- ortholog_ufboot[row_indices, , drop = FALSE]
       glyph_is_reference_self <-
         glyph_rows$orthology_ufboot_status == "reference_self"
+      if (query_ortholog_mode) {
+        if (
+          length(unique(glyph_rows$relation)) != 1 ||
+            length(unique(glyph_rows$ufboot_support_source)) != 1
+        ) {
+          stop(
+            "Query-gene ortholog UFBoot rows for one glyph must share ",
+            "one relation and support source"
+          )
+        }
+        next
+      }
       if (any(glyph_is_reference_self)) {
         if (!all(glyph_is_reference_self)) {
           stop(
@@ -2018,7 +2160,13 @@ if (glyph_mode && nrow(ortholog_synteny) > 0) {
       synteny_evidence_df$reference_self_count == synteny_evidence_df$pair_count,
       "reference_self",
       ifelse(
-        synteny_evidence_df$evaluated_count == synteny_evidence_df$pair_count,
+        if (query_ortholog_mode) {
+          synteny_evidence_df$evaluated_count +
+            synteny_evidence_df$reference_self_count ==
+            synteny_evidence_df$pair_count
+        } else {
+          synteny_evidence_df$evaluated_count == synteny_evidence_df$pair_count
+        },
         "evaluated",
         "unavailable"
       )
@@ -2127,9 +2275,23 @@ if (glyph_mode && nrow(ortholog_ufboot) > 0) {
       if (summary_row$reference_self_count == summary_row$pair_count) {
         summary_row$evidence_status <- "reference_self"
         summary_row$ufboot <- NA_real_
-      } else if (summary_row$evaluated_count == summary_row$pair_count) {
+      } else if (
+        if (query_ortholog_mode) {
+          summary_row$evaluated_count + summary_row$reference_self_count ==
+            summary_row$pair_count
+        } else {
+          summary_row$evaluated_count == summary_row$pair_count
+        }
+      ) {
         summary_row$evidence_status <- "evaluated"
-        summary_row$ufboot <- glyph_rows$decisive_branch_ufboot[[1]]
+        evaluated_support <- glyph_rows$decisive_branch_ufboot[
+          glyph_rows$orthology_ufboot_status == "evaluated"
+        ]
+        summary_row$ufboot <- if (query_ortholog_mode) {
+          min(evaluated_support, na.rm = TRUE)
+        } else {
+          evaluated_support[[1]]
+        }
       } else {
         summary_row$evidence_status <- "unavailable"
         summary_row$ufboot <- NA_real_
@@ -2257,7 +2419,7 @@ if (glyph_mode && nrow(ortholog_tree_nodes) > 0) {
   query_tree_title_df <- root_nodes
   single_family_plot <- length(unique(query_tree_nodes_df$family_id)) == 1
   query_tree_title_df$label <- if (single_family_plot) {
-    paste0(reference_species_display, " gene tree")
+    ortholog_tree_label
   } else {
     query_tree_title_df$family_id
   }
@@ -2563,8 +2725,8 @@ if (glyph_mode) {
   }
   glyph_legend_labels <- c(
     "undetected",
-    "reference-gene-specific",
-    "pre-duplication copy"
+    ortholog_specific_label,
+    ortholog_shared_label
   )
   glyph_legend_fills <- c("#ffffff", "#2166ac", "#9ecae1")
   if (nrow(glyph_rect_df) > 0 && any(glyph_rect_df$relation == "ambiguous")) {
@@ -2673,14 +2835,26 @@ if (glyph_mode && ufboot_legend_visible && !identical(evidence_layout, "off")) {
         "Gene tree UFBoot (%)"
       ),
       if (evidence_strip_mode) {
-        "Fill: orthology-defining speciation-branch support"
+        if (query_ortholog_mode) {
+          "Fill: minimum support across evaluable anchor pairs"
+        } else {
+          "Fill: orthology-defining speciation-branch support"
+        }
       } else {
-        "Color: orthology-defining speciation-branch support"
+        if (query_ortholog_mode) {
+          "Color: minimum support across evaluable anchor pairs"
+        } else {
+          "Color: orthology-defining speciation-branch support"
+        }
       },
       if (evidence_strip_mode) {
-        "One value spans each ortholog glyph"
+        if (query_ortholog_mode) {
+          "One conservative value spans each ortholog glyph"
+        } else {
+          "One value spans each ortholog glyph"
+        }
       } else {
-        "No circle: unavailable or reference self"
+        paste0("No circle: unavailable or ", ortholog_self_label)
       }
     ),
     stringsAsFactors = FALSE
@@ -2722,7 +2896,7 @@ if (
     evidence_status = displayed_evidence_statuses,
     label = ifelse(
       displayed_evidence_statuses == "reference_self",
-      "reference self",
+      ortholog_self_label,
       "unavailable"
     ),
     fill = ifelse(
@@ -2784,7 +2958,7 @@ if (nrow(busco_df) > 0) {
 }
 if (nrow(legend_df) > 0) {
   ortholog_legend_right <- max(
-    heatmap_left + 0.05 + nchar(ifelse(glyph_mode, paste0(reference_species_display, " orthologs"), "Ortholog"), type = "width") * 0.33,
+    heatmap_left + 0.05 + nchar(ifelse(glyph_mode, ortholog_scope_label, "Ortholog"), type = "width") * 0.33,
     legend_df$x + 0.62 + nchar(legend_df$label, type = "width") * 0.33
   )
   x_max <- max(x_max, ortholog_legend_right + 0.15)
@@ -3099,7 +3273,7 @@ if (nrow(busco_rect_df) > 0) {
 
 if (glyph_mode) {
   combined <- combined +
-    annotate("text", x = heatmap_left, y = y_legend + 0.75, label = paste0(reference_species_display, " orthologs"), hjust = 0, size = font_size_mm, color = "black") +
+    annotate("text", x = heatmap_left, y = y_legend + 0.75, label = ortholog_scope_label, hjust = 0, size = font_size_mm, color = "black") +
     geom_rect(data = legend_df, aes(xmin = x, xmax = x + 0.36, ymin = y - 0.18, ymax = y + 0.18, fill = fill), color = "#808080", linewidth = 0.14) +
     geom_text(data = legend_df, aes(x = x + 0.62, y = y, label = label), hjust = 0, size = font_size_mm, color = "black")
 } else if (value_mode == "presence") {

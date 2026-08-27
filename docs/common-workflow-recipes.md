@@ -521,6 +521,27 @@ or set `presence_absence_family_ids=OG0000001,OG0000042` /
 `presence_absence_family_file=selected_ogs.txt` to plot an explicit subset in the
 requested order.
 
+Choose the ortholog-column basis with
+`presence_absence_ortholog_basis=reference_species|query_gene|both`; the default
+is `reference_species`, so existing output is unchanged. For example, generate
+both views with:
+
+```bash
+presence_absence_ortholog_basis=both bash workflow/gg_gene_summary_entrypoint.sh
+```
+
+The query-gene view is written as
+`query2family_query_gene_orthologs.pdf`/`.svg` plus matching `.columns.tsv`,
+`.glyphs.tsv`, `.tree.tsv`, `.synteny.tsv`, and `.ufboot.tsv` tables. Direct
+query markers take precedence over best-hit markers. Query records selecting
+the same gene-tree tip are indistinguishable in the reconciled tree and are
+therefore drawn as one anchor column rather than duplicated; every original
+record, marker source, selected tip, and output column remains explicit in
+`query2family_query_gene_orthologs.query_map.tsv`. A light span means a copy is
+shared across query anchors. For multi-anchor glyphs, the UFBoot band uses the
+minimum across all evaluable non-self anchor/candidate pairs and thus remains a
+conservative one-value summary; the pairwise table retains every value.
+
 Detected cells reserve narrow evidence bands along their upper and lower edges
 by default. The upper band shows the highest per-copy local-synteny anchor count
 separately for each reference-gene column. The lower band shows the Gene tree

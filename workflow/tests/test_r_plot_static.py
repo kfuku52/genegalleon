@@ -54,6 +54,8 @@ def test_query2family_plot_supports_query_gene_orthology_glyphs():
     assert 'ortholog_ufboot_path <- get_arg(args, "ortholog_ufboot_table")' in text
     assert 'species_mapping_tree_path <- get_arg(args, "species_mapping_tree")' in text
     assert 'reference_species <- get_arg(args, "reference_species")' in text
+    assert 'ortholog_basis <- tolower(get_arg(args, "ortholog_basis", "reference_species"))' in text
+    assert 'query_ortholog_mode <- identical(ortholog_basis, "query_gene")' in text
     assert 'evidence_layout <- tolower(get_arg(args, "evidence_layout", "band"))' in text
     assert 'evidence_layout %in% c("band", "rail", "glyph", "off")' in text
     assert 'evidence_strip_mode <- evidence_layout %in% c("band", "rail")' in text
@@ -91,7 +93,7 @@ def test_query2family_plot_supports_query_gene_orthology_glyphs():
     assert '"GeneRax-topology UFBoot (%)"' not in text
     assert '"ufboot_support_source"' in text
     assert '"Color: orthology-defining speciation-branch support"' in text
-    assert '"No circle: unavailable or reference self"' in text
+    assert 'paste0("No circle: unavailable or ", ortholog_self_label)' in text
     assert 'paste0(evidence_layout_label, " (bottom): ")' in text
     assert '"One value spans each ortholog glyph"' in text
     assert 'label = paste0(evidence_layout_label, " states")' in text
@@ -110,7 +112,8 @@ def test_query2family_plot_supports_query_gene_orthology_glyphs():
     assert "ufboot_display_df <- ufboot_evidence_df" in text
     assert "candidate_count != glyph_rows$glyph_copy_number[[1]]" in text
     assert "expected_pair_count <- candidate_count * reference_count" in text
-    assert "summary_row$ufboot <- glyph_rows$decisive_branch_ufboot[[1]]" in text
+    assert "min(evaluated_support, na.rm = TRUE)" in text
+    assert '"Fill: minimum support across evaluable anchor pairs"' in text
     assert '"orthology-defining speciation branch"' in text
     assert '"orthology-defining branch UFBoot value"' in text
     assert 'synteny_evidence_df$pair_count != synteny_evidence_df$glyph_copy_number' in text
@@ -126,9 +129,12 @@ def test_query2family_plot_supports_query_gene_orthology_glyphs():
     assert 'paste0(reference_species_display, " orthologs")' in text
     assert 'paste0(reference_species_display, " genes")' not in text
     assert 'paste0(reference_species_display, " gene tree")' in text
-    assert "Query orthology" not in text
+    assert 'ortholog_scope_label <- "Query-gene orthologs"' in text
+    assert 'ortholog_tree_label <- "Query-anchor gene tree"' in text
     assert '"reference-gene-specific"' in text
-    assert '"query-specific"' not in text
+    assert 'ortholog_specific_label <- "query-anchor-specific"' in text
+    assert 'ortholog_shared_label <- "shared across query anchors"' in text
+    assert 'ortholog_self_label <- "anchor self"' in text
     assert 'query_tree_nodes_df$event == "D"' in text
     assert '"D#: mapped duplication"' in text
     assert '"mapped_species_node"' in text

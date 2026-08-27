@@ -161,6 +161,14 @@ Current examples:
 - `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.tree.tsv`
 - `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.synteny.tsv`
 - `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.ufboot.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.pdf`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.svg`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.columns.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.glyphs.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.tree.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.synteny.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.ufboot.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.query_map.tsv`
 - `workspace/orthogroup_summary.tsv`
 - `workspace/query2family_summary.tsv`
 - `workspace/transcriptome_assembly_summary.tsv`
@@ -179,6 +187,10 @@ contains its copy count. The compact reference-gene tree above those columns is
 derived from the reconciled family tree. Duplication nodes use family-colored
 circles in the compact query trees and matching family-colored bars in the
 species-tree mapping.
+When `presence_absence_ortholog_basis=query_gene` or `both`, the parallel
+`query2family_query_gene_orthologs.*` artifacts instead use unique mapped query
+anchors as columns. `query_map.tsv` preserves all original query records when
+several resolve to the same tip.
 The species tree receives every reconciled duplication from the complete gene
 tree, not only duplication nodes in the reference-gene subtree, using
 `spnode_generax` when available and `spnode_coverage` otherwise. The
