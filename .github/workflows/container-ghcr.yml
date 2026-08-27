@@ -309,7 +309,9 @@ jobs:
           KFTOOLS_REPO_SHA: ${{ needs.prepare-build.outputs.kftools_repo_sha }}
           RKFTOOLS_REPO_SHA: ${{ needs.prepare-build.outputs.rkftools_repo_sha }}
           RADTE_REPO_SHA: ${{ needs.prepare-build.outputs.radte_repo_sha }}
-        run: echo "value=$(bash container/scripts/compute_build_input_hash.sh "${GG_BUILD_SECURITY_REFRESH_EPOCH}")" >> "${GITHUB_OUTPUT}"
+        run: |
+          echo "value=$(bash container/scripts/compute_build_input_hash.sh "${GG_BUILD_SECURITY_REFRESH_EPOCH}")" >> "${GITHUB_OUTPUT}"
+          echo "runtime_value=$(bash container/scripts/compute_build_input_hash.sh --runtime "${GG_BUILD_SECURITY_REFRESH_EPOCH}")" >> "${GITHUB_OUTPUT}"
 
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -335,6 +337,7 @@ jobs:
             VCS_REF=${{ github.sha }}
             GG_VERSION=${{ needs.prepare-build.outputs.gg_version }}
             BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}
+            RUNTIME_INPUT_HASH=${{ steps.build-input.outputs.runtime_value }}
             SECURITY_REFRESH_EPOCH=${{ needs.prepare-build.outputs.security_refresh_epoch }}
             KFU52_REPO_REF=master
             KFU52_AMALGKIT_REPO_REF=master
@@ -359,7 +362,7 @@ jobs:
           cache-from: type=gha,scope=container-${{ steps.platform.outputs.pair }}
           cache-to: type=gha,mode=max,scope=container-${{ steps.platform.outputs.pair }}
 
-      - name: Validate current csubst scan runtime and database import
+      - name: Validate repository-owned runtime contracts
         shell: bash
         env:
           IMAGE: ${{ needs.prepare-build.outputs.image }}
@@ -374,7 +377,7 @@ jobs:
             -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
             -w "${GITHUB_WORKSPACE}" \
             "${IMAGE}@${DIGEST}" \
-            python -m pytest -q workflow/tests/test_csubst_scan_runtime_integration.py
+            python -m pytest -q --gg-suite runtime workflow/tests
 
       - name: Export digest
         shell: bash

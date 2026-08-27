@@ -22,6 +22,28 @@ sha256_file() {
   fi
 }
 
+usage() {
+  cat <<'EOF'
+Usage:
+  bash container/scripts/compute_build_input_hash.sh [--runtime] SECURITY_REFRESH_EPOCH
+
+The default hash includes release metadata (GeneGalleon revision and version).
+--runtime omits that metadata so an identical runtime can be reused while the
+mounted GeneGalleon workflow changes.
+EOF
+}
+
+hash_mode="full"
+if [[ "${1:-}" == "--runtime" ]]; then
+  hash_mode="runtime"
+  shift
+fi
+if [[ $# -ne 1 || ! "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  usage >&2
+  exit 2
+fi
+security_refresh_epoch="$1"
+
 platforms="${GG_BUILD_PLATFORMS:-${PLATFORMS:-linux/amd64,linux/arm64}}"
 vcs_revision="${GG_BUILD_VCS_REF:-${vcs_ref:-unknown}}"
 version="${GG_BUILD_VERSION:-${gg_version:-unknown}}"
@@ -81,10 +103,16 @@ context_digest="$(
 
 {
   printf '%s\n' \
+    "hash_mode=${hash_mode}" \
     "context=${context_digest}" \
-    "platforms=${platforms}" \
-    "vcs_ref=${vcs_revision}" \
-    "gg_version=${version};security_refresh_epoch=${1}" \
+    "platforms=${platforms}"
+  if [[ "${hash_mode}" == "full" ]]; then
+    printf '%s\n' \
+      "vcs_ref=${vcs_revision}" \
+      "gg_version=${version}"
+  fi
+  printf '%s\n' \
+    "security_refresh_epoch=${security_refresh_epoch}" \
     "notung_page=${notung_download_page}" \
     "notung_host=${notung_download_host_ip}" \
     "notung_sha256=${notung_zip_sha256}" \

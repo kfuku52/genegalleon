@@ -5,6 +5,8 @@ import yaml
 from shell_static_helpers import GITHUB_WORKFLOWS_DIR
 
 REVIEWED_ACTIONS = {
+    "actions/cache/restore",
+    "actions/cache/save",
     "actions/checkout",
     "actions/download-artifact",
     "actions/setup-python",
@@ -161,26 +163,48 @@ def test_immutable_image_tags_fingerprint_resolved_upstream_sources():
         assert "Refusing to overwrite immutable image tag with different content" in publish_run
 
 
-def test_sif_runtime_validation_builds_the_current_repository_image():
+def test_sif_runtime_validation_reuses_only_an_exact_runtime_image_or_builds_current():
     jobs = load_workflow("tests.yml")["jobs"]
     sif_job = jobs["sif-runtime-validation"]
+    runtime_input = step_run(sif_job, "Resolve exact validation runtime input")
+    restore_step = named_step(sif_job, "Restore exact validation SIF")
+    selection_step = named_step(sif_job, "Select published or local validation image")
     build_run = step_run(sif_job, "Build current GeneGalleon image")
     build_step = named_step(sif_job, "Build current GeneGalleon image")
     conversion_run = step_run(sif_job, "Build validation SIF from current image")
+    identity_run = step_run(sif_job, "Verify exact validation SIF identity")
+    save_step = named_step(sif_job, "Save validated SIF by exact runtime input")
 
+    assert "resolve_source_revisions.sh" in runtime_input
+    assert "--scope all" in runtime_input
+    assert "compute_build_input_hash.sh" in runtime_input
+    assert "--runtime" in runtime_input
+    assert restore_step["uses"].startswith("actions/cache/restore@")
+    assert "steps.runtime-input.outputs.value" in restore_step["with"]["key"]
+    assert "io.genegalleon.runtime-input" in selection_step["run"]
+    assert "check_published_build_input.py" in selection_step["run"]
     assert "IMAGE_SOURCE=local" in build_run
     assert "IMAGE=local/genegalleon" in build_run
     assert "TAG=ci" in build_run
     assert "FORCE_LOAD_IN_CI=1" in build_run
     assert "bash ./gg_container_build_entrypoint.sh" in build_run
+    assert "validation-image.outputs.source == 'local'" in build_step["if"]
     assert build_step["env"]["CACHE_FROM"] == "type=gha,scope=container-linux-amd64"
     assert "type=gha,mode=max,scope=container-linux-amd64" in build_step["env"]["CACHE_TO"]
     assert "event_name != 'pull_request'" in build_step["env"]["CACHE_TO"]
     assert named_step(sif_job, "Expose GitHub runtime for BuildKit cache")["uses"].startswith(
         "crazy-max/ghaction-github-runtime@"
     )
-    assert "SOURCE=docker-daemon" in conversion_run
-    assert "latest" not in conversion_run.lower()
+    assert "source_type=docker-daemon" in conversion_run
+    assert "source_type=docker" in conversion_run
+    assert 'SOURCE="${source_type}"' in conversion_run
+    assert "steps.validation-image.outputs.source" in conversion_run
+    assert "check_runtime_freshness.sh" in identity_run
+    assert "--expected-hash" in identity_run
+    assert "steps.runtime-input.outputs.value" in identity_run
+    assert save_step["uses"].startswith("actions/cache/save@")
+    assert save_step["with"]["key"] == "${{ steps.sif-cache.outputs.cache-primary-key }}"
+    assert "github.event_name != 'pull_request'" in save_step["if"]
 
 
 def test_sif_runtime_validation_starts_after_fast_preflight_guards():
@@ -216,7 +240,8 @@ def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
     assert "runner.temp" in conversion["env"]["SINGULARITY_TMPDIR"]
     assert "runner.temp" in conversion["env"]["TMPDIR"]
     assert "2 * image_bytes + reserve_bytes" in buildkit_cleanup
-    assert disk_report["if"] == "always()"
+    assert "always()" in disk_report["if"]
+    assert "sif-cache.outputs.cache-hit != 'true'" in disk_report["if"]
     assert "df -h /" in disk_report["run"]
     assert "singularity-transport-tmp" in disk_report["run"]
 
@@ -260,6 +285,15 @@ def test_runtime_python_suite_runs_in_authoritative_sif_job():
     commands = "\n".join(str(step.get("run", "")) for step in sif_job["steps"])
 
     assert "run_in_sif.sh python -m pytest -q --gg-suite runtime workflow/tests" in commands
+
+
+def test_runtime_suite_contains_real_owned_upstream_contracts():
+    conftest = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
+    contracts = (Path(__file__).parent / "test_owned_runtime_contracts.py").read_text(encoding="utf-8")
+
+    assert '"test_owned_runtime_contracts.py"' in conftest
+    assert "select_orthofinder_core_species.py" in contracts
+    assert "SOURCE_REVISIONS" in contracts
 
 
 def test_treevis_package_validation_runs_only_in_the_container_job():
@@ -311,6 +345,7 @@ def test_container_workflows_embed_version_and_shared_build_input_hash():
         assert "GG_BUILD_SECURITY_REFRESH_EPOCH" in hash_step["env"]
         assert "GG_VERSION=${{ needs." + prepare_job_name + ".outputs.gg_version }}" in build_args
         assert "BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}" in build_args
+        assert "RUNTIME_INPUT_HASH=${{ steps.build-input.outputs.runtime_value }}" in build_args
         assert (
             "SECURITY_REFRESH_EPOCH=${{ needs."
             + prepare_job_name
@@ -322,7 +357,13 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
     workflow = load_workflow("container-ghcr.yml")
     check_job = workflow["jobs"]["check-trigger"]
     decision = step_run(check_job, "Decide whether a scheduled build is needed")
+    runtime_contracts = step_run(
+        workflow["jobs"]["build-and-push"],
+        "Validate repository-owned runtime contracts",
+    )
 
+    assert set(workflow["on"]) == {"schedule", "workflow_dispatch"}
+    assert workflow["on"]["schedule"] == [{"cron": "0 19 * * *"}]
     assert named_step(check_job, "Checkout")["uses"].startswith("actions/checkout@")
     assert named_step(check_job, "Set up Docker Buildx")["uses"].startswith(
         "docker/setup-buildx-action@"
@@ -347,3 +388,5 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
     assert "upstream source resolution failed during preflight" in decision
     assert "build-input hash calculation failed during preflight" in decision
     assert "/actions/workflows/container-ghcr.yml/runs" not in decision
+    assert "--gg-suite runtime workflow/tests" in runtime_contracts
+    assert '"${IMAGE}@${DIGEST}"' in runtime_contracts

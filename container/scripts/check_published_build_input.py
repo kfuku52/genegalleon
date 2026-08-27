@@ -26,7 +26,11 @@ def parse_expected(values: list[str]) -> dict[str, str]:
     return expected
 
 
-def compare_build_inputs(image_payload: object, expected: dict[str, str]) -> list[str]:
+def compare_build_inputs(
+    image_payload: object,
+    expected: dict[str, str],
+    label: str = BUILD_INPUT_LABEL,
+) -> list[str]:
     if not isinstance(image_payload, dict):
         return ["Published image metadata is not a platform mapping."]
 
@@ -38,9 +42,9 @@ def compare_build_inputs(image_payload: object, expected: dict[str, str]) -> lis
             continue
         config = image.get("config")
         labels = config.get("Labels") if isinstance(config, dict) else None
-        observed = labels.get(BUILD_INPUT_LABEL) if isinstance(labels, dict) else None
+        observed = labels.get(label) if isinstance(labels, dict) else None
         if not isinstance(observed, str) or not SHA256_RE.fullmatch(observed):
-            problems.append(f"Published image {platform} lacks a valid {BUILD_INPUT_LABEL} label.")
+            problems.append(f"Published image {platform} lacks a valid {label} label.")
         elif observed != expected_digest:
             problems.append(
                 f"Published image {platform} build input changed: published={observed} expected={expected_digest}."
@@ -81,6 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
             "JSON from stdin and compare io.genegalleon.build-input labels."
         )
     )
+    parser.add_argument(
+        "--label",
+        default=BUILD_INPUT_LABEL,
+        help=f"SHA-256 image label to compare (default: {BUILD_INPUT_LABEL}).",
+    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument(
         "--expected",
@@ -120,14 +129,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Published image build-input comparison failed: {exc}", file=sys.stderr)
         return 1
 
-    problems = compare_build_inputs(image_payload, expected)
+    problems = compare_build_inputs(image_payload, expected, label=args.label)
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)
         return 1
 
     print(
-        "Published image build inputs match: " + ", ".join(sorted(expected)),
+        f"Published image {args.label} values match: " + ", ".join(sorted(expected)),
         file=sys.stderr,
     )
     return 0

@@ -107,6 +107,7 @@ render_definition() {
     -e "s|@@VCS_REF@@|$(escape_sed_replacement "${vcs_ref}")|g" \
     -e "s|@@GG_VERSION@@|$(escape_sed_replacement "${gg_version}")|g" \
     -e "s|@@BUILD_INPUT_HASH@@|$(escape_sed_replacement "${build_input_hash}")|g" \
+    -e "s|@@RUNTIME_INPUT_HASH@@|$(escape_sed_replacement "${runtime_input_hash}")|g" \
     -e "s|@@SECURITY_REFRESH_EPOCH@@|$(escape_sed_replacement "${SECURITY_REFRESH_EPOCH}")|g" \
     -e "s|@@LOCAL_IMAGE_REF@@|$(escape_sed_replacement "${IMAGE}")|g" \
     -e "s|@@LOCAL_IMAGE_TAG@@|$(escape_sed_replacement "${TAG}")|g" \
@@ -259,6 +260,7 @@ export GG_BUILD_PLATFORMS="${platform}"
 export GG_BUILD_VCS_REF="${vcs_ref}"
 export GG_BUILD_VERSION="${gg_version}"
 build_input_hash="$(bash "${repo_root}/container/scripts/compute_build_input_hash.sh" "${SECURITY_REFRESH_EPOCH}")"
+runtime_input_hash="$(bash "${repo_root}/container/scripts/compute_build_input_hash.sh" --runtime "${SECURITY_REFRESH_EPOCH}")"
 render_definition
 
 build_args=()

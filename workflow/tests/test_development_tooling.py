@@ -12,6 +12,20 @@ RUN_IN_RUNTIME = REPO_ROOT / "workflow" / "tests" / "run_in_runtime.sh"
 SCHEMA_TOOL = REPO_ROOT / "workflow" / "support" / "entrypoint_config_schema.py"
 VERSION_TOOL = REPO_ROOT / "workflow" / "support" / "bump_version.py"
 BUILD_HASH_TOOL = REPO_ROOT / "container" / "scripts" / "compute_build_input_hash.sh"
+RUNTIME_FRESHNESS_TOOL = REPO_ROOT / "container" / "scripts" / "check_runtime_freshness.sh"
+SOURCE_SHA_VARS = (
+    "KFU52_AMALGKIT_REPO_SHA",
+    "KFU52_CDSKIT_REPO_SHA",
+    "KFU52_CSUBST_REPO_SHA",
+    "KFU52_NWKIT_REPO_SHA",
+    "BUSCO_REPO_SHA",
+    "PAML_REPO_SHA",
+    "KFL1OU_REPO_SHA",
+    "KFFRACTBIAS_REPO_SHA",
+    "KFTOOLS_REPO_SHA",
+    "RKFTOOLS_REPO_SHA",
+    "RADTE_REPO_SHA",
+)
 
 
 def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -94,6 +108,7 @@ def test_runtime_runner_dispatches_to_requested_docker_image(tmp_path: Path):
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "GG_TEST_RUNTIME": "docker",
             "GG_CONTAINER_DOCKER_IMAGE": "local/genegalleon:test",
+            "GG_RUNTIME_FRESHNESS": "off",
         }
     )
 
@@ -124,6 +139,133 @@ def test_build_input_hash_is_deterministic_and_tracks_version():
     next_security_epoch = _run("bash", str(BUILD_HASH_TOOL), "2026-08-27", env=env)
     assert next_security_epoch.returncode == 0
     assert next_security_epoch.stdout != first.stdout
+
+
+def test_runtime_input_hash_tracks_runtime_content_but_not_release_metadata():
+    env = os.environ.copy()
+    env.update(
+        {
+            "GG_BUILD_VERSION": "1.2.3",
+            "GG_BUILD_VCS_REF": "a" * 40,
+            "KFU52_NWKIT_REPO_SHA": "b" * 40,
+        }
+    )
+    first = _run("bash", str(BUILD_HASH_TOOL), "--runtime", "2026-08-27", env=env)
+    assert first.returncode == 0, first.stderr
+    assert re.fullmatch(r"[0-9a-f]{64}", first.stdout.strip())
+
+    env["GG_BUILD_VERSION"] = "9.9.9"
+    env["GG_BUILD_VCS_REF"] = "c" * 40
+    metadata_changed = _run("bash", str(BUILD_HASH_TOOL), "--runtime", "2026-08-27", env=env)
+    assert metadata_changed.returncode == 0, metadata_changed.stderr
+    assert metadata_changed.stdout == first.stdout
+
+    env["KFU52_NWKIT_REPO_SHA"] = "d" * 40
+    upstream_changed = _run("bash", str(BUILD_HASH_TOOL), "--runtime", "2026-08-27", env=env)
+    assert upstream_changed.returncode == 0, upstream_changed.stderr
+    assert upstream_changed.stdout != first.stdout
+
+    env["KFU52_NWKIT_REPO_SHA"] = "b" * 40
+    next_security_epoch = _run("bash", str(BUILD_HASH_TOOL), "--runtime", "2026-08-28", env=env)
+    assert next_security_epoch.returncode == 0, next_security_epoch.stderr
+    assert next_security_epoch.stdout != first.stdout
+
+
+def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_path: Path):
+    env = os.environ.copy()
+    for index, variable in enumerate(SOURCE_SHA_VARS, start=1):
+        env[variable] = f"{index:040x}"
+    env.update(
+        {
+            "GG_BUILD_PLATFORMS": "linux/amd64",
+            "GG_BUILD_VCS_REF": "runtime-test",
+            "GG_BUILD_VERSION": "runtime-test",
+        }
+    )
+    expected = _run("bash", str(BUILD_HASH_TOOL), "--runtime", "2026-08-27", env=env)
+    assert expected.returncode == 0, expected.stderr
+    busco_sha = env.pop("BUSCO_REPO_SHA")
+    paml_sha = env.pop("PAML_REPO_SHA")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'case "${1:-}" in\n'
+        f"  image) printf '%s\\n' 'amd64|{expected.stdout.strip()}|2026-08-27' ;;\n"
+        "  run)\n"
+        "    printf 'source\\trevision\\n'\n"
+        f"    printf 'BUSCO\\t%s\\n' '{busco_sha}'\n"
+        f"    printf 'paml\\t%s\\n' '{paml_sha}'\n"
+        "    ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+    env.update(
+        {
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "GG_RUNTIME_FRESHNESS": "always",
+            "GG_RUNTIME_FRESHNESS_CACHE_DIR": str(tmp_path / "cache"),
+        }
+    )
+
+    current = _run("bash", str(RUNTIME_FRESHNESS_TOOL), "--docker", "local/test:dev", env=env)
+    assert current.returncode == 0, current.stderr
+    assert "matches the daily owned upstream snapshot" in current.stdout
+
+    env["KFU52_NWKIT_REPO_SHA"] = "f" * 40
+    stale = _run("bash", str(RUNTIME_FRESHNESS_TOOL), "--docker", "local/test:dev", env=env)
+    assert stale.returncode == 1
+    assert "runtime is stale" in stale.stderr
+    assert expected.stdout.strip() in stale.stderr
+
+
+def test_sif_runtime_identity_check_uses_embedded_exact_hash(tmp_path: Path):
+    runtime_hash = "a" * 64
+    engine = tmp_path / "singularity"
+    engine.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "[[ \"${1:-}\" == inspect && \"${2:-}\" == --json ]]\n"
+        "printf '%s\\n' "
+        f"'{{\"data\":{{\"attributes\":{{\"labels\":{{\"io.genegalleon.runtime-input\":\"{runtime_hash}\",\"io.genegalleon.security-refresh-epoch\":\"2026-08-27\"}}}}}}}}'\n",
+        encoding="utf-8",
+    )
+    engine.chmod(engine.stat().st_mode | stat.S_IXUSR)
+    env = os.environ.copy()
+    env["GG_RUNTIME_FRESHNESS"] = "off"
+
+    current = _run(
+        "bash",
+        str(RUNTIME_FRESHNESS_TOOL),
+        "--sif",
+        str(tmp_path / "runtime.sif"),
+        "--engine",
+        str(engine),
+        "--expected-hash",
+        runtime_hash,
+        env=env,
+    )
+    assert current.returncode == 0, current.stderr
+    assert f"has exact runtime input {runtime_hash}" in current.stdout
+
+    stale = _run(
+        "bash",
+        str(RUNTIME_FRESHNESS_TOOL),
+        "--sif",
+        str(tmp_path / "runtime.sif"),
+        "--engine",
+        str(engine),
+        "--expected-hash",
+        "b" * 64,
+        env=env,
+    )
+    assert stale.returncode == 1
+    assert "runtime identity mismatch" in stale.stderr
 
 
 

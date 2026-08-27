@@ -21,6 +21,7 @@ INTEGRATION_WORKFLOW_FILES = {
 }
 RUNTIME_FILES = {
     "test_csubst_scan_runtime_integration.py",
+    "test_owned_runtime_contracts.py",
     "test_rsc_runtime_integration.py",
 }
 SMOKE_NODE_IDS = {

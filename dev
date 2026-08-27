@@ -19,8 +19,19 @@ Commands:
   version                               Print VERSION.
   bump major|minor|patch                Update VERSION using Semantic Versioning.
   build                                 Build local/genegalleon:dev from this checkout.
+
+Environment:
+  GG_PYTEST_WORKERS=N                   Parallel workers for fast/integration/full checks (default: 2).
+  GG_RUNTIME_FRESHNESS=daily|always|off Runtime/upstream freshness policy (default: daily).
+  GG_RUNTIME_FRESHNESS_SCOPE=owned|all  Upstreams checked locally (default: owned).
 EOF
 }
+
+pytest_workers="${GG_PYTEST_WORKERS:-2}"
+if [[ ! "${pytest_workers}" =~ ^[1-9][0-9]*$ && "${pytest_workers}" != "auto" ]]; then
+  echo "GG_PYTEST_WORKERS must be a positive integer or auto." >&2
+  exit 2
+fi
 
 command_name="${1:-}"
 if [[ -z "${command_name}" ]]; then
@@ -33,11 +44,21 @@ case "${command_name}" in
   check)
     suite="${1:-fast}"
     case "${suite}" in
-      smoke|fast|static|runtime|integration-download|integration-workflow)
+      smoke|static|runtime)
         exec bash "${runtime_runner}" python -m pytest -q --gg-suite "${suite}" workflow/tests
         ;;
+      fast|integration-download|integration-workflow)
+        exec bash "${runtime_runner}" python -m pytest -q \
+          -n "${pytest_workers}" \
+          --dist load \
+          --gg-suite "${suite}" \
+          workflow/tests
+        ;;
       full)
-        bash "${runtime_runner}" python -m pytest -q workflow/tests
+        bash "${runtime_runner}" python -m pytest -q \
+          -n "${pytest_workers}" \
+          --dist load \
+          workflow/tests
         bash "${runtime_runner}" Rscript workflow/tests/test_r_scripts_parse.R
         exec bash "${runtime_runner}" Rscript workflow/tests/test_treevis_main.R
         ;;

@@ -1,4 +1,5 @@
 pytest
+pytest-xdist
 PyYAML
 ruff
 numpy<2

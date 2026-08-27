@@ -140,6 +140,7 @@ export GG_BUILD_PLATFORMS="${PLATFORMS}"
 export GG_BUILD_VCS_REF="${vcs_ref}"
 export GG_BUILD_VERSION="${gg_version}"
 build_input_hash="$(bash container/scripts/compute_build_input_hash.sh "${SECURITY_REFRESH_EPOCH}")"
+runtime_input_hash="$(bash container/scripts/compute_build_input_hash.sh --runtime "${SECURITY_REFRESH_EPOCH}")"
 
 if [[ "${PRINT_BUILD_INPUT_HASH}" == "1" ]]; then
   printf '%s\n' "${build_input_hash}"
@@ -200,6 +201,7 @@ run_build() {
     --build-arg VCS_REF="${vcs_ref}" \
     --build-arg GG_VERSION="${gg_version}" \
     --build-arg BUILD_INPUT_HASH="${build_input_hash}" \
+    --build-arg RUNTIME_INPUT_HASH="${runtime_input_hash}" \
     --build-arg SECURITY_REFRESH_EPOCH="${SECURITY_REFRESH_EPOCH}" \
     --build-arg NOTUNG_DOWNLOAD_PAGE="${NOTUNG_DOWNLOAD_PAGE}" \
     --build-arg NOTUNG_DOWNLOAD_HOST_IP="${NOTUNG_DOWNLOAD_HOST_IP}" \

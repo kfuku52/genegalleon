@@ -16,6 +16,20 @@ bash ./dev check r
 Linux/HPC and otherwise uses `local/genegalleon:dev` through Docker. Force the
 selection with `GG_TEST_RUNTIME=sif` or `GG_TEST_RUNTIME=docker`. The command
 reports an error rather than treating host-local behavior as runtime evidence.
+Before dispatch, it also compares the runtime's
+`io.genegalleon.runtime-input` label with the current container inputs and the
+repository-owned moving upstream revisions. Upstream resolution is cached for one UTC day, so
+normal focused checks do not repeatedly query every repository. A mismatch
+fails with the rebuild command instead of silently using an old `nwkit`,
+`csubst`, or other source snapshot.
+
+Use `GG_RUNTIME_FRESHNESS=always` to force a new upstream resolution or
+`GG_RUNTIME_FRESHNESS=off` for an intentional offline check with a known older
+runtime. The latter is an explicit escape hatch and is not compatibility
+evidence. BUSCO and PAML remain accepted at the revisions embedded in the
+runtime by default; set `GG_RUNTIME_FRESHNESS_SCOPE=all` to compare their
+branch tips as well. Scheduled publishing and CI runtime-cache keys always
+resolve all sources exactly.
 
 On Linux/HPC hosts with Apptainer or Singularity, the preferred wrapper is:
 
@@ -72,6 +86,7 @@ as SIF or Docker/container validation according to the runtime actually used.
 Python-side test dependencies are listed in:
 
 - `workflow/tests/requirements.txt`
+- `workflow/tests/requirements-smoke.txt` (minimal fail-fast CI lane)
 - `workflow/tests/requirements.lock.txt` (validated exact constraints for stable
   third-party dependencies; `csubst` intentionally follows its moving `master`
   branch to match the container runtime)
@@ -154,6 +169,24 @@ Use `--gg-suite smoke` for the minimal CI preflight. Suite membership is
 defined in `workflow/tests/conftest.py`; pytest markers expose the same lane
 metadata during full-suite collection. Strict marker and configuration checks
 are enabled, so new marker names must be registered in `pyproject.toml`.
+The fast and integration CI lanes use two pytest-xdist workers. `bash ./dev`
+uses the same default; override it with `GG_PYTEST_WORKERS=N` or
+`GG_PYTEST_WORKERS=auto`.
+
+The runtime lane includes real integration contracts for repository-owned
+upstreams. In particular, core-species selection executes the installed
+`nwkit sample` command rather than a mock, and the test verifies that the
+container records exact revisions for every moving source. The daily container
+publisher runs this lane against each newly built architecture, so an
+upstream-only change is checked without requiring a GeneGalleon commit.
+
+CI caches a validated SIF by an exact runtime-content hash. The key includes
+the platform, daily security epoch, all resolved upstream commits, and every
+file copied into the container, but excludes GeneGalleon revision/version
+metadata because the checkout is mounted at test time. A cache miss may reuse
+the published daily image only when its runtime label matches exactly;
+otherwise CI builds the current container before conversion. The cache is
+saved only after all SIF validation checks succeed on the default branch.
 
 ## Run R-side parse checks
 

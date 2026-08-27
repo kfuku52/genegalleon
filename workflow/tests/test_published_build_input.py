@@ -22,6 +22,19 @@ def run_check(payload, *expected):
     )
 
 
+def run_label_check(payload, label, *expected):
+    arguments = [sys.executable, str(SCRIPT), "--label", label]
+    for value in expected:
+        arguments.extend(("--expected", value))
+    return subprocess.run(
+        arguments,
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def image_payload(amd64_hash=AMD64_HASH, arm64_hash=ARM64_HASH, revision="c" * 40):
     return {
         "linux/amd64": {
@@ -65,6 +78,20 @@ def test_changed_upstream_build_input_requires_rebuild():
     assert "linux/amd64 build input changed" in completed.stderr
     assert f"published={'c' * 64}" in completed.stderr
     assert f"expected={AMD64_HASH}" in completed.stderr
+
+
+def test_runtime_input_label_can_be_compared_independently_of_release_metadata():
+    payload = image_payload(amd64_hash="c" * 64)
+    payload["linux/amd64"]["config"]["Labels"]["io.genegalleon.runtime-input"] = AMD64_HASH
+
+    completed = run_label_check(
+        payload,
+        "io.genegalleon.runtime-input",
+        f"linux/amd64={AMD64_HASH}",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "io.genegalleon.runtime-input values match" in completed.stderr
 
 
 def test_missing_platform_or_label_requires_rebuild():

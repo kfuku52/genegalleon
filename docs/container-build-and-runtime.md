@@ -120,6 +120,14 @@ and records the value in `io.genegalleon.security-refresh-epoch` and
 `/opt/pg/logs/security_refresh_epoch.txt`. OCI labels also carry the repository
 version and MIT license.
 
+Images additionally carry `io.genegalleon.runtime-input`. This second
+fingerprint contains the platform, security epoch, exact moving-source
+revisions, and container context, while intentionally excluding the
+GeneGalleon Git revision and version metadata. CI uses it to reuse a validated
+SIF when only mounted workflow code changed. It never reuses a SIF after an
+`nwkit`, `csubst`, other upstream, Dockerfile, environment, validation-script,
+or bundled `treevis` change.
+
 ### Convert registry or Docker-daemon image to SIF
 
 ```bash

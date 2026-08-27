@@ -2,6 +2,7 @@
 python
 pip
 pytest
+pytest-xdist
 biopython
 cython
 matplotlib

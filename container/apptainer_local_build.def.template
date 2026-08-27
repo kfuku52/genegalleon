@@ -24,6 +24,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     org.opencontainers.image.revision @@VCS_REF@@
     org.opencontainers.image.version @@GG_VERSION@@
     io.genegalleon.build-input @@BUILD_INPUT_HASH@@
+    io.genegalleon.runtime-input @@RUNTIME_INPUT_HASH@@
     io.genegalleon.security-refresh-epoch @@SECURITY_REFRESH_EPOCH@@
     io.genegalleon.local_image_ref @@LOCAL_IMAGE_REF@@
     io.genegalleon.local_image_tag @@LOCAL_IMAGE_TAG@@

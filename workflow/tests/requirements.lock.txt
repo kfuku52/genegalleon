@@ -3,6 +3,7 @@
 # matching the authoritative GeneGalleon runtime instead of this lock snapshot.
 # Regenerate intentionally after validating the new set in a GeneGalleon container.
 pytest==9.1.1
+pytest-xdist==3.8.0
 PyYAML==6.0.3
 ruff==0.16.3
 numpy==1.26.4

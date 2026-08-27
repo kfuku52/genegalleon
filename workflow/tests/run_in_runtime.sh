@@ -17,6 +17,14 @@ Selects an authoritative GeneGalleon validation runtime:
   GG_TEST_RUNTIME=sif     Require Apptainer/Singularity and a GeneGalleon SIF.
   GG_TEST_RUNTIME=docker  Require Docker and GG_CONTAINER_DOCKER_IMAGE.
 
+Runtime freshness:
+  GG_RUNTIME_FRESHNESS=daily  Check current container inputs and resolve moving
+                              upstream branches at most once per UTC day (default).
+  GG_RUNTIME_FRESHNESS=always Resolve upstream branches for every invocation.
+  GG_RUNTIME_FRESHNESS=off    Explicitly allow a known older runtime offline.
+  GG_RUNTIME_FRESHNESS_SCOPE=owned|all
+                              Check owned sources only (default) or all sources.
+
 Docker defaults to local/genegalleon:dev. SIF defaults to ./genegalleon.sif.
 EOF
 }
@@ -61,6 +69,15 @@ EOF
 fi
 
 if [[ "${runtime}" == "sif" ]]; then
+  container_engine=""
+  if command -v apptainer >/dev/null 2>&1; then
+    container_engine="$(command -v apptainer)"
+  elif command -v singularity >/dev/null 2>&1; then
+    container_engine="$(command -v singularity)"
+  fi
+  bash "${repo_root}/container/scripts/check_runtime_freshness.sh" \
+    --sif "${sif_path}" \
+    --engine "${container_engine}"
   exec bash "${script_dir}/run_in_sif.sh" "$@"
 fi
 
@@ -77,6 +94,8 @@ Build the current repository with:
 EOF
   exit 1
 fi
+
+bash "${repo_root}/container/scripts/check_runtime_freshness.sh" --docker "${docker_image}"
 
 bind_args=(--volume "${repo_root}:${repo_root}")
 if [[ -n "${GENEGALLEON_DOCKER_EXTRA_BINDS:-}" ]]; then

@@ -344,6 +344,7 @@ ARG BUILD_DATE=""
 ARG VCS_REF="unknown"
 ARG GG_VERSION="unknown"
 ARG BUILD_INPUT_HASH=""
+ARG RUNTIME_INPUT_HASH=""
 
 LABEL org.opencontainers.image.title="GeneGalleon workflow container" \
       org.opencontainers.image.description="Reproducible multi-architecture runtime for GeneGalleon (amd64 + arm64)" \
@@ -353,6 +354,7 @@ LABEL org.opencontainers.image.title="GeneGalleon workflow container" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${GG_VERSION}" \
       io.genegalleon.build-input="${BUILD_INPUT_HASH}" \
+      io.genegalleon.runtime-input="${RUNTIME_INPUT_HASH}" \
       io.genegalleon.security-refresh-epoch="${SECURITY_REFRESH_EPOCH}"
 
 WORKDIR /workspace

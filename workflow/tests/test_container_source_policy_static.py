@@ -1,4 +1,6 @@
+import os
 import re
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -118,7 +120,8 @@ def test_container_build_paths_refresh_system_security_packages_daily():
     assert "apt-get --simulate dist-upgrade" in dockerfile
     assert "Upgradeable system packages remain after the security refresh" in dockerfile
     assert 'io.genegalleon.security-refresh-epoch="${SECURITY_REFRESH_EPOCH}"' in dockerfile
-    assert "gg_version=${version};security_refresh_epoch=${1}" in build_hash
+    assert '"security_refresh_epoch=${security_refresh_epoch}"' in build_hash
+    assert 'hash_mode="runtime"' in build_hash
     assert 'SECURITY_REFRESH_EPOCH="$(date -u +%F)"' in buildx
     assert '--build-arg SECURITY_REFRESH_EPOCH="${SECURITY_REFRESH_EPOCH}"' in buildx
     assert 'SECURITY_REFRESH_EPOCH="$(date -u +%F)"' in apptainer_build
@@ -155,6 +158,39 @@ def test_native_apptainer_build_records_source_revisions():
         "RADTE",
     ):
         assert source in apptainer_template
+
+
+def test_shared_source_resolver_preserves_exact_overrides_and_owned_scope():
+    resolver = REPO_ROOT / "container" / "scripts" / "resolve_source_revisions.sh"
+    env = os.environ.copy()
+    for index, variable in enumerate(PROGRAM_SHA_VARS, start=1):
+        env[variable] = f"{index:040x}"
+
+    all_sources = subprocess.run(
+        ["bash", str(resolver), "--format", "env", "--scope", "all"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert all_sources.returncode == 0, all_sources.stderr
+    assert all_sources.stdout.splitlines() == [f"{variable}={env[variable]}" for variable in PROGRAM_SHA_VARS]
+
+    owned_sources = subprocess.run(
+        ["bash", str(resolver), "--format", "tsv", "--scope", "owned"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert owned_sources.returncode == 0, owned_sources.stderr
+    assert owned_sources.stdout.splitlines()[0] == "source\trevision"
+    assert "BUSCO\t" not in owned_sources.stdout
+    assert "paml\t" not in owned_sources.stdout
+    assert "nwkit\t" in owned_sources.stdout
+    assert "csubst\t" in owned_sources.stdout
 
 
 def test_treevis_package_is_part_of_every_repository_owned_image_context():

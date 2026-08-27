@@ -1,0 +1,5 @@
+# Minimal dependencies for the fail-fast smoke lane.
+pytest
+openpyxl
+numpy<2
+pandas

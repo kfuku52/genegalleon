@@ -91,6 +91,11 @@ image layer refreshes Ubuntu package indexes, installs all available upgrades,
 and fails if an upgrade would still remain. The epoch is also recorded as
 `io.genegalleon.security-refresh-epoch` and in
 `/opt/pg/logs/security_refresh_epoch.txt`.
+An additional `io.genegalleon.runtime-input` label omits only repository
+revision/version metadata. Validation CI keys its SIF cache by this exact
+runtime fingerprint, including platform, security epoch, every resolved source
+revision, and the complete copied container context. Cached SIFs are saved only
+after authoritative runtime tests succeed.
 
 ## One-command build (local/public selectable)
 
