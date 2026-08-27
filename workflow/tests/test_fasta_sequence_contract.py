@@ -53,3 +53,16 @@ def test_gene_evolution_enforces_legacy_mafft_and_generax_contracts():
     assert 'mafft_provenance_args+=(--output-fasta-type "mafft=${mafft_output_fasta_type}")' in core
     assert 'python "${gg_support_dir}/fasta_sequence_contract.py"' in core
     assert '--expected "${generax_input_fasta_type}"' in core
+
+
+def test_gene_evolution_serializes_only_mafft_iterative_refinement():
+    core = (Path(__file__).resolve().parents[1] / "core" / "gg_gene_evolution_core.sh").read_text(encoding="utf-8")
+    start = core.index('task="In-frame mafft alignment"')
+    end = core.index('task="AMAS for original alignment"', start)
+    mafft_block = core[start:end]
+
+    assert "mafft_threadit=0" in mafft_block
+    assert mafft_block.count('--thread "${GG_TASK_CPUS}"') == 2
+    assert mafft_block.count('--threadit "${mafft_threadit}"') == 2
+    assert '--parameter "mafft_threads=${GG_TASK_CPUS}"' in mafft_block
+    assert '--parameter "mafft_threadit=${mafft_threadit}"' in mafft_block

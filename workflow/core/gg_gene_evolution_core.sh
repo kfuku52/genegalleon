@@ -2815,6 +2815,9 @@ fi
 task="In-frame mafft alignment"
 disable_if_no_input_file "run_mafft" "${file_og_primary_fasta}"
 mafft_needs_update=0
+# MAFFT iterative refinement is non-deterministic when multithreaded. Keep the
+# other alignment stages parallel while running iterative refinement serially.
+mafft_threadit=0
 mafft_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.mafft.json"
   --step "mafft"
@@ -2825,6 +2828,8 @@ mafft_provenance_args=(
   --output "mafft=${file_og_mafft}"
   --parameter "input_sequence_mode=${input_sequence_mode}"
   --parameter "genetic_code=${genetic_code}"
+  --parameter "mafft_threads=${GG_TASK_CPUS}"
+  --parameter "mafft_threadit=${mafft_threadit}"
 )
 mafft_output_fasta_type="codon"
 if [[ "${input_sequence_mode}" == "protein" ]]; then
@@ -2841,6 +2846,7 @@ if [[ ${mafft_needs_update} -eq 1 && ${run_mafft} -eq 1 ]]; then
       --auto \
       --amino \
       --thread "${GG_TASK_CPUS}" \
+      --threadit "${mafft_threadit}" \
       --quiet \
       tmp.pep.input.fasta \
       > "${og_id}.cds.aln.fasta"
@@ -2859,6 +2865,7 @@ if [[ ${mafft_needs_update} -eq 1 && ${run_mafft} -eq 1 ]]; then
       --auto \
       --amino \
       --thread "${GG_TASK_CPUS}" \
+      --threadit "${mafft_threadit}" \
       --quiet \
       tmp.pep.fasta \
       > tmp.pep.aln.fasta
