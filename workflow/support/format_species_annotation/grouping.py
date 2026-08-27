@@ -34,12 +34,15 @@ from .grouping_identity import (
     gff_alias_values_from_attributes,
     gff_alias_variants,
     gff_authoritative_gene_token,
+    gff_identity_dbxref_values,
     gff_stable_gene_token,
     reject_gff_gene_prefix_normalization_collisions,
     resolve_grouping_feature_authoritative_gene_tokens,
     resolve_grouping_feature_gene_feature_ids,
     strip_gff_feature_prefix,
 )
+
+NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 
 CDS_HEADER_PRIMARY_TAGS = (
     "protein_id",
@@ -89,6 +92,59 @@ def gff_grouping_parent_feature_type(feature_type):
         or feature_type_lower.endswith("gene")
         or feature_type_lower.endswith("rna")
     )
+
+
+def ncbi_cds_location_signature(task, header):
+    """Parse an NCBI CDS FASTA location into the exact GFF CDS feature signature."""
+    if task.get("provider") not in NCBI_LIKE_PROVIDERS:
+        return None
+    raw_token = first_token(str(header or "")).lstrip(">")
+    if raw_token.startswith("lcl|"):
+        raw_token = raw_token[len("lcl|") :]
+    if "_cds_" not in raw_token:
+        return None
+    seqid, _cds_suffix = raw_token.rsplit("_cds_", 1)
+    if seqid == "":
+        return None
+
+    location = re.sub(r"\s+", "", extract_header_tag_value(header, "location"))
+    if location == "":
+        return None
+    wrappers = []
+    while True:
+        wrapper_match = re.fullmatch(r"(complement|join|order)\((.*)\)", location, flags=re.IGNORECASE)
+        if wrapper_match is None:
+            break
+        wrappers.append(wrapper_match.group(1).lower())
+        location = wrapper_match.group(2)
+    if "(" in location or ")" in location:
+        return None
+    strand = "-" if wrappers.count("complement") % 2 == 1 else "+"
+    intervals = []
+    for raw_part in location.split(","):
+        part = raw_part.strip()
+        match = re.fullmatch(r"[<>]?(\d+)(?:\.\.[<>]?(\d+))?", part)
+        if match is None:
+            return None
+        start = int(match.group(1))
+        end = int(match.group(2) or match.group(1))
+        if start > end:
+            start, end = end, start
+        intervals.append((start, end))
+    if len(intervals) == 0:
+        return None
+    return (seqid, strand, tuple(sorted(intervals)))
+
+
+def gff_cds_location_signature(features):
+    if len(features) == 0:
+        return None
+    seqids = {str(feature.get("seqid", "") or "").strip() for feature in features}
+    strands = {str(feature.get("strand", "") or "").strip() or "+" for feature in features}
+    if "" in seqids or len(seqids) != 1 or len(strands) != 1:
+        return None
+    intervals = tuple(sorted((int(feature["start"]), int(feature["end"])) for feature in features))
+    return (next(iter(seqids)), next(iter(strands)), intervals)
 
 
 def resolve_grouping_feature_gene_tokens(feature_id, feature_records, provider, cache):
@@ -221,7 +277,7 @@ def build_gff_cds_grouping_index(task):
     authoritative_gene_tokens_by_transcript = defaultdict(set)
     gene_alias_to_gene_tokens = defaultdict(set)
     use_coordinate_rescue = gene_grouping_mode_for_task(task) == "rescue_overlap"
-    cds_features_by_transcript = defaultdict(list) if use_coordinate_rescue else None
+    cds_features_by_transcript = defaultdict(list)
 
     with open_text(gff_path, "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, 1):
@@ -308,16 +364,15 @@ def build_gff_cds_grouping_index(task):
                         fallback_gene_tokens[transcript_text] = fallback_gene
                 if authoritative_gene != "":
                     authoritative_gene_tokens_by_transcript[transcript_text].add(authoritative_gene)
-                if use_coordinate_rescue:
-                    cds_features_by_transcript[transcript_text].append(
-                        {
-                            "seqid": str(seqid or "").strip(),
-                            "start": start,
-                            "end": end,
-                            "strand": str(strand or "").strip() or "+",
-                            "gene_token": fallback_gene,
-                        }
-                    )
+                cds_features_by_transcript[transcript_text].append(
+                    {
+                        "seqid": str(seqid or "").strip(),
+                        "start": start,
+                        "end": end,
+                        "strand": str(strand or "").strip() or "+",
+                        "gene_token": fallback_gene,
+                    }
+                )
 
     gene_cache = {}
     authoritative_gene_cache = {}
@@ -394,6 +449,18 @@ def build_gff_cds_grouping_index(task):
         resolved_authoritative_gene_tokens,
     )
 
+    location_to_gene_tokens = defaultdict(set)
+    for transcript_id, features in cds_features_by_transcript.items():
+        signature = gff_cds_location_signature(features)
+        if signature is None:
+            continue
+        gene_tokens = ambiguous_gene_tokens_by_transcript.get(transcript_id, ())
+        if len(gene_tokens) == 0:
+            gene_token = str(resolved_gene_tokens.get(transcript_id, "") or "").strip()
+            if gene_token != "":
+                gene_tokens = (gene_token,)
+        location_to_gene_tokens[signature].update(gene_tokens)
+
     for transcript_id in aliases_by_transcript:
         pending = [transcript_id]
         visited = set()
@@ -440,8 +507,7 @@ def build_gff_cds_grouping_index(task):
     authoritative_gene_tokens_by_transcript.clear()
     gene_feature_ids_by_transcript.clear()
     resolved_authoritative_gene_tokens.clear()
-    if cds_features_by_transcript is not None:
-        cds_features_by_transcript.clear()
+    cds_features_by_transcript.clear()
 
     alias_to_gene_tokens = defaultdict(set)
     for transcript_id, aliases in aliases_by_transcript.items():
@@ -466,6 +532,10 @@ def build_gff_cds_grouping_index(task):
         "gff_path": str(gff_path),
         "alias_to_gene_tokens": {
             alias: tuple(sorted(gene_tokens)) for alias, gene_tokens in alias_to_gene_tokens.items()
+        },
+        "location_to_gene_tokens": {
+            signature: tuple(sorted(gene_tokens))
+            for signature, gene_tokens in location_to_gene_tokens.items()
         },
         "transcript_gene_tokens": dict(resolved_gene_tokens),
         "ambiguous_transcript_gene_tokens": dict(ambiguous_gene_tokens_by_transcript),
@@ -520,7 +590,7 @@ def extract_cds_header_alias_tiers(task, header):
 
     for dbxref_tag in ("db_xref", "Dbxref"):
         raw_dbxref = extract_header_tag_value(header, dbxref_tag)
-        for token in str(raw_dbxref or "").split(","):
+        for token in gff_identity_dbxref_values(raw_dbxref):
             add(primary, token)
 
     raw_token = first_token(header)
@@ -544,6 +614,14 @@ def resolve_cds_header_gff_gene(task, header, grouping_index=None):
     seen_aliases = set()
     unique_gene_tokens = set()
     candidate_gene_tokens = set()
+    location_signature = ncbi_cds_location_signature(task, header)
+    if location_signature is not None:
+        candidates = tuple(index.get("location_to_gene_tokens", {}).get(location_signature, ()))
+        if len(candidates) > 0:
+            evidence.append(("location", candidates))
+            candidate_gene_tokens.update(candidates)
+        if len(candidates) == 1:
+            unique_gene_tokens.add(candidates[0])
     for aliases in extract_cds_header_alias_tiers(task, header):
         for alias in aliases:
             if alias in seen_aliases:

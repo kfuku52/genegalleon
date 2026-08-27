@@ -21,6 +21,7 @@ from format_species_annotations import (
     extract_header_tag_value,
     extract_provider_transcript_id,
     first_token,
+    gff_identity_dbxref_values,
     gff_repair_audit_path,
     gff_repair_mode_for_task,
     iter_fasta_records,
@@ -61,7 +62,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 8
+CDS_GFF_GROUPING_AUDIT_VERSION = 9
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 ANONYMOUS_NCBI_CDS_TOKEN_RE = re.compile(r"^lcl(?:[|_]).+_cds_[0-9]+$")
@@ -71,7 +72,6 @@ ANONYMOUS_NCBI_SEMANTIC_TAGS = (
     "gene",
     "protein_id",
     "transcript_id",
-    "db_xref",
 )
 
 
@@ -82,10 +82,12 @@ def is_unlinkable_anonymous_ncbi_cds(task, header, mapping_status):
     token = first_token(str(header or "")).lstrip(">")
     if ANONYMOUS_NCBI_CDS_TOKEN_RE.fullmatch(token) is None:
         return False
-    return all(
+    semantic_tags_absent = all(
         str(extract_header_tag_value(header, tag) or "").strip() == ""
         for tag in ANONYMOUS_NCBI_SEMANTIC_TAGS
     )
+    identity_dbxrefs = gff_identity_dbxref_values(extract_header_tag_value(header, "db_xref"))
+    return semantic_tags_absent and len(identity_dbxrefs) == 0
 
 
 def cds_gff_grouping_audit_paths(output_path):

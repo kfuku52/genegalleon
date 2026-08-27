@@ -46,6 +46,24 @@ GFF_CDS_ALIAS_KEYS = frozenset(
     )
 )
 
+GFF_IDENTITY_DBXREF_NAMESPACES = frozenset(
+    (
+        "araport",
+        "dictybase",
+        "ensembl",
+        "flybase",
+        "genbank",
+        "geneid",
+        "ncbi_gene",
+        "ncbi_gp",
+        "phytozome",
+        "refseq",
+        "tair",
+        "vectorbase",
+        "wormbase",
+    )
+)
+
 
 def gff_alias_variants(value):
     text = str(value or "").strip()
@@ -95,13 +113,36 @@ def gff_alias_variants(value):
 def gff_alias_values_from_attributes(attrs):
     aliases = []
     for key, values in attrs.items():
-        if str(key or "").strip().lower() not in GFF_CDS_ALIAS_KEYS:
+        normalized_key = str(key or "").strip().lower()
+        if normalized_key not in GFF_CDS_ALIAS_KEYS:
             continue
         for value in values:
             alias = str(value or "").strip()
+            if normalized_key in ("dbxref", "db_xref") and not gff_identity_dbxref_value(alias):
+                continue
             if alias != "" and alias not in aliases:
                 aliases.append(alias)
     return tuple(aliases)
+
+
+def gff_identity_dbxref_value(value):
+    """Return whether a Dbxref names a sequence/gene identity rather than an annotation."""
+    text = str(value or "").strip()
+    if ":" not in text:
+        return False
+    namespace, identifier = text.split(":", 1)
+    return (
+        namespace.strip().lower() in GFF_IDENTITY_DBXREF_NAMESPACES
+        and identifier.strip() != ""
+    )
+
+
+def gff_identity_dbxref_values(value):
+    return tuple(
+        token
+        for token in (str(part or "").strip() for part in str(value or "").split(","))
+        if gff_identity_dbxref_value(token)
+    )
 
 
 def gff_dbxref_gene_token(attrs):

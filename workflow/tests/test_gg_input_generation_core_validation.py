@@ -12,6 +12,8 @@ def test_gg_input_generation_core_validates_configured_species_cds_dir():
     assert '--gene-grouping-mode "${gene_grouping_mode}"' in text
     assert 'gff_repair_mode="${gff_repair_mode:-safe}"' in text
     assert '--gff-repair-mode "${gff_repair_mode}"' in text
+    assert 'format_contract_version=9' in text
+    assert text.count('--parameter "format_contract_version=${format_contract_version}"') == 2
     assert 'validate_longest_cds_selection.py' in text
 
 

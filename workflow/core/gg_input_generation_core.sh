@@ -56,6 +56,7 @@ gbif_max_coordinate_uncertainty_m="${gbif_max_coordinate_uncertainty_m:-}"
 gbif_max_distance_from_centroid_m="${gbif_max_distance_from_centroid_m:-}"
 gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
 gff_repair_mode="${gff_repair_mode:-safe}"
+format_contract_version=9
 
 enable_all_run_flags_for_debug_mode
 
@@ -808,6 +809,7 @@ run_format_stage_single() {
       --parameter "provider=${provider}"
       --parameter "gene_grouping_mode=${gene_grouping_mode}"
       --parameter "gff_repair_mode=${gff_repair_mode}"
+      --parameter "format_contract_version=${format_contract_version}"
       --parameter "strict=${strict}"
     )
     if [[ -n "${download_manifest}" ]]; then
@@ -1876,6 +1878,7 @@ run_array_worker_mode() {
     --parameter "provider=${provider}"
     --parameter "gene_grouping_mode=${gene_grouping_mode}"
     --parameter "gff_repair_mode=${gff_repair_mode}"
+    --parameter "format_contract_version=${format_contract_version}"
     --parameter "strict=${strict}"
   )
   if [[ -n "${genome_output_path}" ]]; then

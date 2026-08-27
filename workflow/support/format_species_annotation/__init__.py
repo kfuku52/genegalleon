@@ -83,6 +83,7 @@ from .grouping import (
     resolve_cds_header_gff_gene,
     should_rescue_overlapping_transcripts,
 )
+from .grouping_identity import gff_identity_dbxref_values
 from .tasks import (
     build_derived_cds_output_basename,
     build_derived_genome_output_basename,
@@ -130,6 +131,7 @@ __all__ = [
     'compute_interval_overlap_bases',
     'transcript_feature_gene_token',
     'gff_alias_variants',
+    'gff_identity_dbxref_values',
     'extract_cds_header_alias_tiers',
     'build_gff_cds_grouping_index',
     'resolve_cds_header_gff_gene',

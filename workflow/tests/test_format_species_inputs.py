@@ -1339,7 +1339,7 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 8
+    assert audit["version"] == 9
     assert len(audit["cds_input"]["sha256"]) == 64
     assert len(audit["gff_input"]["sha256"]) == 64
 
@@ -2608,7 +2608,7 @@ def test_provided_cds_longest_selection_compares_lengths_before_padding(tmp_path
         audit = json.load(handle)
     with open(audit_tsv_path, "rt", encoding="utf-8", newline="") as handle:
         audit_rows = list(csv.DictReader(handle, delimiter="\t"))
-    assert audit["version"] == 8
+    assert audit["version"] == 9
     assert [row["raw_sequence_length"] for row in audit_rows] == ["8", "9"]
     assert [row["sequence_length"] for row in audit_rows] == ["9", "9"]
     assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
@@ -2651,7 +2651,7 @@ def test_provided_cds_gff_grouping_regenerates_older_audit_version(tmp_path):
     skipped = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
 
     assert regenerated["status"] == "write"
-    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 8
+    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 9
     assert skipped["status"] == "skip"
 
 
@@ -2916,6 +2916,86 @@ def test_format_species_inputs_excludes_only_unlinkable_anonymous_ncbi_cds(tmp_p
     with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle, delimiter="\t"))
     assert rows[0]["cds_gff_records_excluded_anonymous"] == "1"
+
+
+def test_format_species_inputs_maps_anonymous_ncbi_cds_by_exact_location(tmp_path):
+    input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
+    species_dir = input_dir / "Clitoria_ternatea"
+    species_dir.mkdir(parents=True)
+    cds_path = species_dir / "GCA_037962975.1_Cter_1_cds_from_genomic.fna.gz"
+    gff_path = species_dir / "GCA_037962975.1_Cter_1_genomic.gff.gz"
+    genome_path = species_dir / "GCA_037962975.1_Cter_1_genomic.fna.gz"
+    with gzip.open(cds_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            ">lcl|CM075669.1_cds_1 "
+            "[db_xref=InterPro:IPR000504,InterPro:IPR035979] "
+            "[protein=hypothetical protein] [pseudo=true] "
+            "[location=complement(join(101..109,201..209))] [gbkey=CDS]\n"
+            "ATGAAATTTATGAAATTT\n"
+            ">lcl|CM075669.1_cds_2 [location=join(301..309,401..409)] [gbkey=CDS]\n"
+            "ATGCCCTTTATGCCCTTT\n"
+        )
+    with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "\n".join(
+                [
+                    "##gff-version 3",
+                    "CM075669.1\tGenbank\tgene\t101\t209\t.\t-\t.\tID=gene-RJT34_00001;Name=RJT34_00001;locus_tag=RJT34_00001;pseudo=true",
+                    "CM075669.1\tGenbank\tmRNA\t101\t209\t.\t-\t.\tID=rna-RJT34_mrna00001;Parent=gene-RJT34_00001;locus_tag=RJT34_00001;pseudo=true",
+                    "CM075669.1\tGenbank\tCDS\t201\t209\t.\t-\t0\tID=cds-RJT34_00001;Parent=rna-RJT34_mrna00001;Dbxref=InterPro:IPR000504,InterPro:IPR035979;locus_tag=RJT34_00001;pseudo=true",
+                    "CM075669.1\tGenbank\tCDS\t101\t109\t.\t-\t0\tID=cds-RJT34_00001;Parent=rna-RJT34_mrna00001;Dbxref=InterPro:IPR000504,InterPro:IPR035979;locus_tag=RJT34_00001;pseudo=true",
+                    "CM075669.1\tGenbank\tgene\t301\t409\t.\t+\t.\tID=gene-RJT34_00002;Name=RJT34_00002;locus_tag=RJT34_00002",
+                    "CM075669.1\tGenbank\tmRNA\t301\t409\t.\t+\t.\tID=rna-RJT34_mrna00002;Parent=gene-RJT34_00002;locus_tag=RJT34_00002",
+                    "CM075669.1\tGenbank\tCDS\t301\t309\t.\t+\t0\tID=cds-RJT34_00002;Parent=rna-RJT34_mrna00002;locus_tag=RJT34_00002;pseudo=true",
+                    "CM075669.1\tGenbank\tCDS\t401\t409\t.\t+\t0\tID=cds-RJT34_00002;Parent=rna-RJT34_mrna00002;locus_tag=RJT34_00002;pseudo=true",
+                    "",
+                ]
+            )
+        )
+    with gzip.open(genome_path, "wt", encoding="utf-8") as handle:
+        handle.write(">CM075669.1\n" + ("A" * 500) + "\n")
+
+    out_cds = tmp_path / "species_cds"
+    out_gff = tmp_path / "species_gff"
+    out_genome = tmp_path / "species_genome"
+    completed = run_script(
+        "--provider",
+        "ncbi",
+        "--input-dir",
+        str(input_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+        "--strict",
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    formatted_cds = next(out_cds.glob("*.fa.gz"))
+    with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert headers == [
+        ">Clitoria_ternatea_RJT34_00001",
+        ">Clitoria_ternatea_RJT34_00002",
+    ]
+
+    with open(str(formatted_cds) + ".gff-grouping.tsv", "rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert [row["mapping_status"] for row in rows] == ["mapped", "mapped"]
+    assert [row["matched_aliases"] for row in rows] == ["location", "location"]
+    assert all("InterPro" not in row["matched_aliases"] for row in rows)
+
+    mapping = run_validate_mapping_script(
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--strict",
+    )
+    assert mapping.returncode == 0, mapping.stderr + "\n" + mapping.stdout
+    assert "CDS-to-GFF mapping OK: 2/2 IDs" in mapping.stdout
 
 
 def test_format_species_inputs_does_not_exclude_named_ncbi_cds_from_unrelated_gff(tmp_path):
