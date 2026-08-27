@@ -6,6 +6,8 @@ import pytest
 
 SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 CORE_SCRIPT = Path(__file__).resolve().parents[1] / "core" / "gg_gene_summary_core.sh"
+ENTRYPOINT_SCRIPT = Path(__file__).resolve().parents[1] / "gg_gene_summary_entrypoint.sh"
+CONFIG_REGISTRY = SUPPORT_DIR / "gg_entrypoint_config_vars.sh"
 
 
 def load_module(name: str):
@@ -559,8 +561,68 @@ def test_duplicate_cds_fasta_ids_are_a_hard_error(tmp_path: Path):
         )
 
 
+def test_query_gene_basis_coalesces_shared_tips_and_retains_query_mapping():
+    mod = load_module("query_gene_orthologs.py")
+    rows = [
+        stat_row(0, -1, 1, 2, "S", "root"),
+        stat_row(1, 0, -1, -1, "L", "Other_species_COPY", "Other_species"),
+        stat_row(2, 0, 3, 4, "D", "query_duplication", "n1"),
+        stat_row(
+            3,
+            2,
+            -1,
+            -1,
+            "L",
+            "Species_A_GENE_A",
+            "Species_A",
+            "direct:q1|best:q2",
+        ),
+        stat_row(4, 2, -1, -1, "L", "Species_B_GENE_B", "Species_B", "best:q3"),
+    ]
+    definitions = [
+        {"query_id": "q1", "query_label": "Query one"},
+        {"query_id": "q2", "query_label": "Query two"},
+        {"query_id": "q3", "query_label": "Query three"},
+    ]
+
+    columns, glyphs, tree_nodes, query_map = mod.collect_family_query_anchor_orthologs(
+        rows=rows,
+        cds_fasta_ids=["Species_A_GENE_A", "Species_B_GENE_B", "Other_species_COPY"],
+        query_definitions=definitions,
+        family_id="FAM",
+        family_order=1,
+        first_column_order=1,
+        first_query_order=1,
+    )
+
+    assert len(columns) == 2
+    assert columns[0]["query_ids"] == "q1;q2"
+    assert columns[0]["query_count"] == 2
+    assert columns[0]["anchor_source"] == "mixed"
+    assert columns[0]["plot_label"] == "q1 (+1)"
+    assert [row["column_order"] for row in query_map] == [1, 1, 2]
+    assert [row["marker_source"] for row in query_map] == ["direct", "best", "best"]
+    assert [row["merged_query_count"] for row in query_map] == [2, 2, 1]
+    shared = [row for row in glyphs if row["species"] == "Other_species"]
+    assert len(shared) == 1
+    assert shared[0]["relation"] == "shared_ancestral"
+    assert shared[0]["anchor_query_ids"] == "q1;q2;q3"
+    assert {row["reference_species"] for row in tree_nodes} == {"query_gene"}
+
+    output_columns = mod.query_columns_for_output(columns)
+    output_glyphs = mod.query_glyphs_for_output(glyphs)
+    output_tree = mod.query_tree_for_output(tree_nodes)
+    assert set(output_columns[0]) == set(mod.QUERY_COLUMN_FIELDS)
+    assert set(output_glyphs[0]) == set(mod.QUERY_GLYPH_FIELDS)
+    assert set(output_tree[0]) == set(mod.QUERY_TREE_FIELDS)
+    assert output_columns[0]["anchor_cds_fasta_id"] == "Species_A_GENE_A"
+    assert output_tree[0]["basis"] == "query_gene"
+
+
 def test_gene_summary_wires_query_gene_ortholog_tables_and_plot():
     text = CORE_SCRIPT.read_text(encoding="utf-8")
+    entrypoint_text = ENTRYPOINT_SCRIPT.read_text(encoding="utf-8")
+    registry_text = CONFIG_REGISTRY.read_text(encoding="utf-8")
 
     assert 'query_gene_orthologs.py"' in text
     assert "query2family_reference_gene_orthologs.columns.tsv" in text
@@ -568,6 +630,12 @@ def test_gene_summary_wires_query_gene_ortholog_tables_and_plot():
     assert "query2family_reference_gene_orthologs.tree.tsv" in text
     assert "query2family_reference_gene_orthologs.synteny.tsv" in text
     assert "query2family_reference_gene_orthologs.ufboot.tsv" in text
+    assert "query2family_query_gene_orthologs.columns.tsv" in text
+    assert "query2family_query_gene_orthologs.glyphs.tsv" in text
+    assert "query2family_query_gene_orthologs.tree.tsv" in text
+    assert "query2family_query_gene_orthologs.synteny.tsv" in text
+    assert "query2family_query_gene_orthologs.ufboot.tsv" in text
+    assert "query2family_query_gene_orthologs.query_map.tsv" in text
     assert '--ortholog_column_table="${file_query_columns}"' in text
     assert '--ortholog_glyph_table="${file_query_glyphs}"' in text
     assert '--ortholog_tree_table="${file_query_tree}"' in text
@@ -576,8 +644,12 @@ def test_gene_summary_wires_query_gene_ortholog_tables_and_plot():
     assert '--species_mapping_tree="${file_species_mapping_tree}"' in text
     assert '--evidence_layout="${presence_absence_evidence_layout}"' in text
     assert 'presence_absence_evidence_layout must be "band", "rail", "glyph", or "off"' in text
+    assert '--ortholog_basis=query_gene' in text
+    assert 'presence_absence_ortholog_basis must be "reference_species", "query_gene", or "both"' in text
     assert "resolve_presence_absence_species_mapping_tree" in text
     assert '--reference_species "${reference_species_resolved}"' in text
     assert '--reference_species="${reference_species_resolved}"' in text
     assert 'GG_COMMON_REFERENCE_SPECIES:-auto' in text
     assert "query2family_reference_gene_orthologs.pdf" in text
+    assert 'presence_absence_ortholog_basis="${presence_absence_ortholog_basis:-reference_species}"' in entrypoint_text
+    assert "presence_absence_ortholog_basis" in registry_text

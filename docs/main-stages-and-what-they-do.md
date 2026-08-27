@@ -513,12 +513,25 @@ Main presence/absence outputs:
 - `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.tree.tsv`
 - `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.synteny.tsv`
 - `workspace/output/gene_summary/query2family/query2family_reference_gene_orthologs.ufboot.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.pdf`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.columns.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.glyphs.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.tree.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.synteny.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.ufboot.tsv`
+- `workspace/output/gene_summary/query2family/query2family_query_gene_orthologs.query_map.tsv`
 - `workspace/output/gene_summary/*/*_presence_absence.plot_selection.tsv`
 - `workspace/output/gene_summary/*/*_presence_absence.plot.long.tsv`
 
 Notable defaults:
 
 - `run_presence_absence_summary=1`
+- `presence_absence_ortholog_basis=reference_species` preserves the existing
+  reference-species view; use `query_gene` for query-anchor columns or `both`
+  for both figures. Query records mapped to one gene-tree tip share one plotted
+  anchor column, while `.query_map.tsv` retains every original query and marker
+  source. Multi-anchor query glyphs display the minimum evaluable pairwise
+  UFBoot value as a conservative glyph summary
 - query-gene names in the presence/absence plot come from
   `workspace/input/query_gene` file basenames
 - query2family also plots every gene from the species selected by

@@ -33,6 +33,7 @@ csubst_scan_candidate_sites_pdb=$(echo "${csubst_scan_candidate_sites_pdb:-none}
 presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}"
 presence_absence_heatmap_value=$(echo "${presence_absence_heatmap_value:-presence}" | tr '[:upper:]' '[:lower:]')
 presence_absence_evidence_layout=$(echo "${presence_absence_evidence_layout:-band}" | tr '[:upper:]' '[:lower:]')
+presence_absence_ortholog_basis=$(echo "${presence_absence_ortholog_basis:-reference_species}" | tr '[:upper:]' '[:lower:]')
 presence_absence_species_tree="${presence_absence_species_tree:-auto}"
 presence_absence_species_tree_ci="${presence_absence_species_tree_ci:-auto}"
 presence_absence_species_tree_support="${presence_absence_species_tree_support:-auto}"
@@ -123,6 +124,16 @@ case "${presence_absence_evidence_layout}" in
   *)
     echo "Invalid presence_absence_evidence_layout: ${presence_absence_evidence_layout}"
     echo 'presence_absence_evidence_layout must be "band", "rail", "glyph", or "off". Exiting.'
+    exit 1
+    ;;
+esac
+
+case "${presence_absence_ortholog_basis}" in
+  reference_species|query_gene|both)
+    ;;
+  *)
+    echo "Invalid presence_absence_ortholog_basis: ${presence_absence_ortholog_basis}"
+    echo 'presence_absence_ortholog_basis must be "reference_species", "query_gene", or "both". Exiting.'
     exit 1
     ;;
 esac
@@ -511,84 +522,143 @@ run_presence_absence_summary_for_source() {
   Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" "${plot_args[@]}"
 
   if [[ "${gene_family_source}" == "query2family" ]]; then
-    local reference_species_requested="${GG_COMMON_REFERENCE_SPECIES:-auto}"
-    local reference_species_resolved=""
-    local reference_species_candidate=""
-    local reference_species_found=0
-    local -a reference_species_candidates=()
-    mapfile -t reference_species_candidates < <(
-      awk -F '\t' 'NR > 1 && $1 != "" {print $1}' "${file_plot_long}" | sort -u
-    )
-    if ! reference_species_resolved=$(gg_resolve_annotation_species \
-      "${reference_species_requested}" "${reference_species_candidates[@]}")
-    then
-      echo "Could not resolve a reference species for the reference-gene ortholog plot."
-      return 1
-    fi
-    for reference_species_candidate in "${reference_species_candidates[@]}"; do
-      if [[ "${reference_species_candidate}" == "${reference_species_resolved}" ]]; then
-        reference_species_found=1
-        break
-      fi
-    done
-    if [[ ${reference_species_found} -ne 1 ]]; then
-      echo "Selected reference species is absent from the plotted species set: ${reference_species_resolved}"
-      return 1
-    fi
-    echo "Reference species for query2family gene orthology: ${reference_species_resolved}"
-
-    local file_query_columns="${summary_output_dir}/query2family_reference_gene_orthologs.columns.tsv"
-    local file_query_glyphs="${summary_output_dir}/query2family_reference_gene_orthologs.glyphs.tsv"
-    local file_query_tree="${summary_output_dir}/query2family_reference_gene_orthologs.tree.tsv"
-    local file_query_synteny="${summary_output_dir}/query2family_reference_gene_orthologs.synteny.tsv"
-    local file_query_ufboot="${summary_output_dir}/query2family_reference_gene_orthologs.ufboot.tsv"
-    local file_query_pdf="${summary_output_dir}/query2family_reference_gene_orthologs.pdf"
-    local file_query_svg="${summary_output_dir}/query2family_reference_gene_orthologs.svg"
     local file_species_mapping_tree="${file_species_tree}"
     if file_species_mapping_tree=$(resolve_presence_absence_species_mapping_tree "${file_species_tree}"); then
       echo "Using species-node mapping tree for reconciled duplications: ${file_species_mapping_tree}"
     fi
 
-    python "${gg_support_dir}/query_gene_orthologs.py" \
-      --dir_gene_family "${dir_gene_family}" \
-      --dir_query_gene "${dir_query_gene}" \
-      --family_file "${file_selection}" \
-      --reference_species "${reference_species_resolved}" \
-      --out_columns "${file_query_columns}" \
-      --out_glyphs "${file_query_glyphs}" \
-      --out_tree "${file_query_tree}" \
-      --out_synteny "${file_query_synteny}" \
-      --out_ufboot "${file_query_ufboot}"
-
-    if [[ $(wc -l < "${file_query_columns}") -gt 1 && $(wc -l < "${file_query_glyphs}") -gt 1 ]]; then
-      local query_plot_args=(
-        --species_tree="${file_species_tree}"
-        --long_table="${file_plot_long}"
-        --ortholog_column_table="${file_query_columns}"
-        --ortholog_glyph_table="${file_query_glyphs}"
-        --ortholog_tree_table="${file_query_tree}"
-        --ortholog_synteny_table="${file_query_synteny}"
-        --ortholog_ufboot_table="${file_query_ufboot}"
-        --species_mapping_tree="${file_species_mapping_tree}"
-        --reference_species="${reference_species_resolved}"
-        --evidence_layout="${presence_absence_evidence_layout}"
-        --value=presence
-        --width="${presence_absence_plot_width}"
-        --out_pdf="${file_query_pdf}"
-        --out_svg="${file_query_svg}"
+    if [[ "${presence_absence_ortholog_basis}" == "reference_species" || "${presence_absence_ortholog_basis}" == "both" ]]; then
+      local reference_species_requested="${GG_COMMON_REFERENCE_SPECIES:-auto}"
+      local reference_species_resolved=""
+      local reference_species_candidate=""
+      local reference_species_found=0
+      local -a reference_species_candidates=()
+      mapfile -t reference_species_candidates < <(
+        awk -F '\t' 'NR > 1 && $1 != "" {print $1}' "${file_plot_long}" | sort -u
       )
-      if [[ -n "${file_species_tree_ci}" ]]; then
-        query_plot_args+=(--species_tree_ci="${file_species_tree_ci}")
+      if ! reference_species_resolved=$(gg_resolve_annotation_species \
+        "${reference_species_requested}" "${reference_species_candidates[@]}")
+      then
+        echo "Could not resolve a reference species for the reference-gene ortholog plot."
+        return 1
       fi
-      if [[ -n "${file_species_tree_support}" ]]; then
-        query_plot_args+=(--support_tree="${file_species_tree_support}")
+      for reference_species_candidate in "${reference_species_candidates[@]}"; do
+        if [[ "${reference_species_candidate}" == "${reference_species_resolved}" ]]; then
+          reference_species_found=1
+          break
+        fi
+      done
+      if [[ ${reference_species_found} -ne 1 ]]; then
+        echo "Selected reference species is absent from the plotted species set: ${reference_species_resolved}"
+        return 1
       fi
-      if [[ -n "${file_busco_table}" ]]; then
-        query_plot_args+=(--busco_table="${file_busco_table}")
+      echo "Reference species for query2family gene orthology: ${reference_species_resolved}"
+
+      local file_reference_columns="${summary_output_dir}/query2family_reference_gene_orthologs.columns.tsv"
+      local file_reference_glyphs="${summary_output_dir}/query2family_reference_gene_orthologs.glyphs.tsv"
+      local file_reference_tree="${summary_output_dir}/query2family_reference_gene_orthologs.tree.tsv"
+      local file_reference_synteny="${summary_output_dir}/query2family_reference_gene_orthologs.synteny.tsv"
+      local file_reference_ufboot="${summary_output_dir}/query2family_reference_gene_orthologs.ufboot.tsv"
+      local file_reference_pdf="${summary_output_dir}/query2family_reference_gene_orthologs.pdf"
+      local file_reference_svg="${summary_output_dir}/query2family_reference_gene_orthologs.svg"
+
+      python "${gg_support_dir}/query_gene_orthologs.py" \
+        --basis reference_species \
+        --dir_gene_family "${dir_gene_family}" \
+        --dir_query_gene "${dir_query_gene}" \
+        --family_file "${file_selection}" \
+        --reference_species "${reference_species_resolved}" \
+        --out_columns "${file_reference_columns}" \
+        --out_glyphs "${file_reference_glyphs}" \
+        --out_tree "${file_reference_tree}" \
+        --out_synteny "${file_reference_synteny}" \
+        --out_ufboot "${file_reference_ufboot}"
+
+      if [[ $(wc -l < "${file_reference_columns}") -gt 1 && $(wc -l < "${file_reference_glyphs}") -gt 1 ]]; then
+        local reference_plot_args=(
+          --species_tree="${file_species_tree}"
+          --long_table="${file_plot_long}"
+          --ortholog_column_table="${file_reference_columns}"
+          --ortholog_glyph_table="${file_reference_glyphs}"
+          --ortholog_tree_table="${file_reference_tree}"
+          --ortholog_synteny_table="${file_reference_synteny}"
+          --ortholog_ufboot_table="${file_reference_ufboot}"
+          --species_mapping_tree="${file_species_mapping_tree}"
+          --ortholog_basis=reference_species
+          --reference_species="${reference_species_resolved}"
+          --evidence_layout="${presence_absence_evidence_layout}"
+          --value=presence
+          --width="${presence_absence_plot_width}"
+          --out_pdf="${file_reference_pdf}"
+          --out_svg="${file_reference_svg}"
+        )
+        if [[ -n "${file_species_tree_ci}" ]]; then
+          reference_plot_args+=(--species_tree_ci="${file_species_tree_ci}")
+        fi
+        if [[ -n "${file_species_tree_support}" ]]; then
+          reference_plot_args+=(--support_tree="${file_species_tree_support}")
+        fi
+        if [[ -n "${file_busco_table}" ]]; then
+          reference_plot_args+=(--busco_table="${file_busco_table}")
+        fi
+        Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" "${reference_plot_args[@]}"
+      else
+        echo "Skipping reference-gene ortholog plot because no mapped reference-gene glyphs were found."
       fi
-      Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" "${query_plot_args[@]}"
-    else
-      echo "Skipping reference-gene ortholog plot because no mapped reference-gene glyphs were found."
+    fi
+
+    if [[ "${presence_absence_ortholog_basis}" == "query_gene" || "${presence_absence_ortholog_basis}" == "both" ]]; then
+      local file_query_columns="${summary_output_dir}/query2family_query_gene_orthologs.columns.tsv"
+      local file_query_glyphs="${summary_output_dir}/query2family_query_gene_orthologs.glyphs.tsv"
+      local file_query_tree="${summary_output_dir}/query2family_query_gene_orthologs.tree.tsv"
+      local file_query_synteny="${summary_output_dir}/query2family_query_gene_orthologs.synteny.tsv"
+      local file_query_ufboot="${summary_output_dir}/query2family_query_gene_orthologs.ufboot.tsv"
+      local file_query_map="${summary_output_dir}/query2family_query_gene_orthologs.query_map.tsv"
+      local file_query_pdf="${summary_output_dir}/query2family_query_gene_orthologs.pdf"
+      local file_query_svg="${summary_output_dir}/query2family_query_gene_orthologs.svg"
+
+      python "${gg_support_dir}/query_gene_orthologs.py" \
+        --basis query_gene \
+        --dir_gene_family "${dir_gene_family}" \
+        --dir_query_gene "${dir_query_gene}" \
+        --family_file "${file_selection}" \
+        --out_columns "${file_query_columns}" \
+        --out_glyphs "${file_query_glyphs}" \
+        --out_tree "${file_query_tree}" \
+        --out_synteny "${file_query_synteny}" \
+        --out_ufboot "${file_query_ufboot}" \
+        --out_query_map "${file_query_map}"
+
+      if [[ $(wc -l < "${file_query_columns}") -gt 1 && $(wc -l < "${file_query_glyphs}") -gt 1 ]]; then
+        local query_gene_plot_args=(
+          --species_tree="${file_species_tree}"
+          --long_table="${file_plot_long}"
+          --ortholog_column_table="${file_query_columns}"
+          --ortholog_glyph_table="${file_query_glyphs}"
+          --ortholog_tree_table="${file_query_tree}"
+          --ortholog_synteny_table="${file_query_synteny}"
+          --ortholog_ufboot_table="${file_query_ufboot}"
+          --species_mapping_tree="${file_species_mapping_tree}"
+          --ortholog_basis=query_gene
+          --evidence_layout="${presence_absence_evidence_layout}"
+          --value=presence
+          --width="${presence_absence_plot_width}"
+          --out_pdf="${file_query_pdf}"
+          --out_svg="${file_query_svg}"
+        )
+        if [[ -n "${file_species_tree_ci}" ]]; then
+          query_gene_plot_args+=(--species_tree_ci="${file_species_tree_ci}")
+        fi
+        if [[ -n "${file_species_tree_support}" ]]; then
+          query_gene_plot_args+=(--support_tree="${file_species_tree_support}")
+        fi
+        if [[ -n "${file_busco_table}" ]]; then
+          query_gene_plot_args+=(--busco_table="${file_busco_table}")
+        fi
+        Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" "${query_gene_plot_args[@]}"
+      else
+        echo "Skipping query-gene ortholog plot because no mapped query-anchor glyphs were found."
+      fi
     fi
   fi
 }

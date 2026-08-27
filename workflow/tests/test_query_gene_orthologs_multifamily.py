@@ -837,6 +837,86 @@ def test_multifamily_tables_render_to_pdf_and_svg(tmp_path: Path):
     )
 
 
+def test_query_gene_basis_tables_render_with_query_specific_labels(tmp_path: Path):
+    if shutil.which("Rscript") is None:
+        pytest.skip("Rscript is unavailable")
+    mod = load_module("query_gene_orthologs.py")
+    query_dir, output_root, selection = create_multifamily_fixture(tmp_path)
+    out_dir = tmp_path / "query_summary"
+    mod.run(
+        SimpleNamespace(
+            basis="query_gene",
+            dir_gene_family=str(output_root),
+            dir_query_gene=str(query_dir),
+            family_file=str(selection),
+            reference_species="",
+            out_columns=str(out_dir / "columns.tsv"),
+            out_glyphs=str(out_dir / "glyphs.tsv"),
+            out_tree=str(out_dir / "tree.tsv"),
+            out_synteny=str(out_dir / "synteny.tsv"),
+            out_ufboot=str(out_dir / "ufboot.tsv"),
+            out_query_map=str(out_dir / "query_map.tsv"),
+        )
+    )
+    columns = pandas.read_csv(out_dir / "columns.tsv", sep="\t")
+    query_map = pandas.read_csv(out_dir / "query_map.tsv", sep="\t")
+    assert set(columns["basis"]) == {"query_gene"}
+    assert len(query_map) == 6
+    assert set(query_map["marker_source"]) == {"direct"}
+
+    tree_path = tmp_path / "query_species.nwk"
+    tree_path.write_text(
+        "(Ancestor_species:1,Reference_species:1)n0;\n",
+        encoding="utf-8",
+    )
+    long_table = tmp_path / "query_long.tsv"
+    pandas.DataFrame(
+        {
+            "species": ["Ancestor_species", "Reference_species"],
+            "species_display": ["Ancestor species", "Reference species"],
+            "query": ["ONE", "TWO"],
+            "query_order": [1, 2],
+            "presence": [1, 1],
+            "copy_number": [1, 1],
+            "status": ["complete", "complete"],
+        }
+    ).to_csv(long_table, sep="\t", index=False)
+    pdf_path = out_dir / "query_gene.pdf"
+    svg_path = out_dir / "query_gene.svg"
+    subprocess.run(
+        [
+            "Rscript",
+            str(SUPPORT_DIR / "plot_query2family_presence_absence.R"),
+            f"--species_tree={tree_path}",
+            f"--species_mapping_tree={tree_path}",
+            f"--long_table={long_table}",
+            f"--ortholog_column_table={out_dir / 'columns.tsv'}",
+            f"--ortholog_glyph_table={out_dir / 'glyphs.tsv'}",
+            f"--ortholog_tree_table={out_dir / 'tree.tsv'}",
+            f"--ortholog_synteny_table={out_dir / 'synteny.tsv'}",
+            f"--ortholog_ufboot_table={out_dir / 'ufboot.tsv'}",
+            "--ortholog_basis=query_gene",
+            f"--out_pdf={pdf_path}",
+            f"--out_svg={svg_path}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert pdf_path.stat().st_size > 1000
+    svg_text = svg_path.read_text(encoding="utf-8")
+    for expected in (
+        "Query-gene orthologs",
+        "query-anchor-specific",
+        "shared across query anchors",
+        "anchor self",
+        "qA",
+        "qX",
+    ):
+        assert expected in svg_text
+
+
 def test_eight_families_and_twenty_three_query_columns_render_without_cross_family_failure(
     tmp_path: Path,
 ):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize reference-species genes and their ortholog copies.
+"""Summarize anchor genes and their ortholog copies.
 
 A gene-tree tip belongs to a reference-gene column when its MRCA with that
 reference-species tip is a speciation node (or when it is the reference tip
@@ -17,6 +17,11 @@ single-anchor evidence but is not called supported.
 A fifth table retains candidate/reference pair provenance for Gene tree UFBoot,
 while requiring every pair represented by one glyph to resolve to the same
 orthology-defining speciation branch and support value.
+
+The default reference-species basis preserves the historical output schema.
+The query-gene basis coalesces query records that select the same gene-tree
+tip, retains every original record in a query-to-anchor mapping table, and
+writes semantically explicit ``anchor_*`` fields.
 """
 
 import argparse
@@ -126,6 +131,80 @@ UFBOOT_FIELDS = [
     "orthology_ufboot_status",
     "orthology_ufboot_unavailable_reason",
 ]
+QUERY_COLUMN_FIELDS = [
+    "column_order",
+    "family_id",
+    "family_order",
+    "basis",
+    "query_ids",
+    "query_labels",
+    "query_count",
+    "anchor_source",
+    "anchor_species",
+    "anchor_cds_fasta_id",
+    "anchor_gene_id",
+    "plot_label",
+    "anchor_tip_branch_id",
+]
+QUERY_GLYPH_FIELDS = [
+    "species",
+    "family_id",
+    "family_order",
+    "basis",
+    "relation",
+    "anchor_cds_fasta_ids",
+    "anchor_gene_ids",
+    "anchor_query_ids",
+    "anchor_count",
+    "copy_number",
+    "gene_ids",
+    "start_order",
+    "end_order",
+    "is_contiguous",
+    "lane_index",
+    "lane_count",
+]
+QUERY_TREE_FIELDS = [
+    "family_id",
+    "family_order",
+    "basis",
+    "node_id",
+    "parent_node_id",
+    "is_tip",
+    "event",
+    "anchor_cds_fasta_id",
+    "anchor_gene_id",
+    "column_order",
+    "node_height",
+    "plot_order",
+    "mapped_species_node",
+    "duplication_index",
+    "in_anchor_tree",
+]
+QUERY_SYNTENY_FIELDS = [
+    field.replace("reference_", "anchor_") if field.startswith("reference_") else field
+    for field in SYNTENY_FIELDS
+]
+QUERY_SYNTENY_FIELDS[QUERY_SYNTENY_FIELDS.index("anchor_species")] = "basis"
+QUERY_UFBOOT_FIELDS = [
+    field.replace("reference_", "anchor_") if field.startswith("reference_") else field
+    for field in UFBOOT_FIELDS
+]
+QUERY_UFBOOT_FIELDS[QUERY_UFBOOT_FIELDS.index("anchor_species")] = "basis"
+QUERY_MAP_FIELDS = [
+    "family_id",
+    "family_order",
+    "query_order",
+    "query_id",
+    "query_label",
+    "marker_source",
+    "anchor_species",
+    "anchor_cds_fasta_id",
+    "anchor_gene_id",
+    "anchor_tip_branch_id",
+    "column_order",
+    "merged_query_count",
+]
 
 
 def build_arg_parser():
@@ -133,12 +212,18 @@ def build_arg_parser():
     parser.add_argument("--dir_gene_family", metavar="PATH", required=True)
     parser.add_argument("--dir_query_gene", metavar="PATH", required=True)
     parser.add_argument("--family_file", metavar="PATH", default="")
-    parser.add_argument("--reference_species", metavar="SPECIES", required=True)
+    parser.add_argument(
+        "--basis",
+        choices=("reference_species", "query_gene"),
+        default="reference_species",
+    )
+    parser.add_argument("--reference_species", metavar="SPECIES", default="")
     parser.add_argument("--out_columns", metavar="PATH", required=True)
     parser.add_argument("--out_glyphs", metavar="PATH", required=True)
     parser.add_argument("--out_tree", metavar="PATH", required=True)
     parser.add_argument("--out_synteny", metavar="PATH", required=True)
     parser.add_argument("--out_ufboot", metavar="PATH", required=True)
+    parser.add_argument("--out_query_map", metavar="PATH", default="")
     return parser
 
 
@@ -465,7 +550,14 @@ def gene_id_from_cds_fasta_id(cds_fasta_id, species):
     return cds_fasta_id
 
 
-def resolve_query_cds_definitions(by_id, query_tip_by_id, definitions, cds_fasta_ids, family_id):
+def resolve_query_cds_definitions(
+    by_id,
+    query_tip_by_id,
+    definitions,
+    cds_fasta_ids,
+    family_id,
+    preserve_query_label=False,
+):
     definition_by_id = {definition["query_id"]: dict(definition) for definition in definitions}
     cds_fasta_id_set = set(cds_fasta_ids)
     query_ids_by_tip = defaultdict(list)
@@ -490,7 +582,8 @@ def resolve_query_cds_definitions(by_id, query_tip_by_id, definitions, cds_fasta
         definition = definition_by_id[query_id]
         definition["cds_fasta_id"] = cds_fasta_id
         definition["gene_id"] = gene_id_from_cds_fasta_id(cds_fasta_id, species)
-        definition["query_label"] = definition["gene_id"]
+        if not preserve_query_label:
+            definition["query_label"] = definition["gene_id"]
     if missing:
         raise ValueError(
             f"Query gene-tree tips were not found in the family CDS FASTA: family={family_id}, "
@@ -499,7 +592,7 @@ def resolve_query_cds_definitions(by_id, query_tip_by_id, definitions, cds_fasta
     return definition_by_id
 
 
-def select_query_tip_nodes(rows, definitions):
+def select_query_tip_assignments(rows, definitions):
     definition_ids = {definition["query_id"] for definition in definitions}
     candidates = defaultdict(list)
     for row in rows:
@@ -509,7 +602,7 @@ def select_query_tip_nodes(rows, definitions):
         for source_type, query_id in parse_query_marker_sources(row.get("query_marker_source")):
             if query_id in definition_ids:
                 priority = 0 if source_type == "direct" else 1
-                candidates[query_id].append((priority, branch_id))
+                candidates[query_id].append((priority, branch_id, source_type))
 
     selected = {}
     for definition in definitions:
@@ -517,13 +610,25 @@ def select_query_tip_nodes(rows, definitions):
         options = candidates.get(query_id, [])
         if not options:
             continue
-        best_priority = min(priority for priority, _ in options)
-        nodes = sorted({node for priority, node in options if priority == best_priority})
+        best_priority = min(priority for priority, _, _ in options)
+        nodes = sorted(
+            {node for priority, node, _ in options if priority == best_priority}
+        )
         if len(nodes) != 1:
             raise ValueError(
                 f"Query marker maps to multiple equally preferred gene-tree tips: query={query_id}, tips={nodes}"
             )
-        selected[query_id] = nodes[0]
+        selected_sources = sorted(
+            {
+                source_type
+                for priority, node, source_type in options
+                if priority == best_priority and node == nodes[0]
+            }
+        )
+        selected[query_id] = {
+            "tip": nodes[0],
+            "marker_source": selected_sources[0],
+        }
     missing_query_ids = [
         definition["query_id"]
         for definition in definitions
@@ -535,6 +640,15 @@ def select_query_tip_nodes(rows, definitions):
             f"queries={missing_query_ids}"
         )
     return selected
+
+
+def select_query_tip_nodes(rows, definitions):
+    """Return the historical query-to-tip mapping without marker provenance."""
+
+    return {
+        query_id: assignment["tip"]
+        for query_id, assignment in select_query_tip_assignments(rows, definitions).items()
+    }
 
 
 def normalize_species_label(value):
@@ -1079,7 +1193,12 @@ def validate_glyph_ufboot_evidence(rows, glyph):
             )
 
 
-def collect_reference_ufboot_evidence(store, columns, glyphs):
+def collect_reference_ufboot_evidence(
+    store,
+    columns,
+    glyphs,
+    require_one_branch_per_glyph=True,
+):
     """Collect orthology-defining branch UFBoot for each plotted glyph.
 
     The current orthology assignment includes a non-reference tip in a reference
@@ -1221,7 +1340,8 @@ def collect_reference_ufboot_evidence(store, columns, glyphs):
                             row["orthology_ufboot_status"] = "evaluated"
                             row["orthology_ufboot_unavailable_reason"] = ""
                 glyph_evidence_rows.append(row)
-        validate_glyph_ufboot_evidence(glyph_evidence_rows, glyph)
+        if require_one_branch_per_glyph:
+            validate_glyph_ufboot_evidence(glyph_evidence_rows, glyph)
         evidence_rows.extend(glyph_evidence_rows)
     evidence_rows.sort(
         key=lambda row: (
@@ -1235,16 +1355,19 @@ def collect_reference_ufboot_evidence(store, columns, glyphs):
     return evidence_rows
 
 
-def collect_family_orthologs(
+def _collect_family_orthologs_for_anchors(
     rows,
     cds_fasta_ids,
-    reference_species,
+    query_tip_by_id,
+    definitions,
+    anchor_basis_label,
     family_id,
     family_order,
     first_column_order,
+    preserve_query_label=False,
+    enforce_identity_species="",
 ):
     by_id, children, root = build_tree_index(rows)
-    query_tip_by_id, definitions = select_reference_tip_nodes(rows, reference_species)
     if not query_tip_by_id:
         return [], [], []
 
@@ -1260,6 +1383,7 @@ def collect_family_orthologs(
         definitions=definitions,
         cds_fasta_ids=cds_fasta_ids,
         family_id=family_id,
+        preserve_query_label=preserve_query_label,
     )
     local_order = {query_id: idx + 1 for idx, query_id in enumerate(ordered_query_ids)}
     global_order = {
@@ -1340,41 +1464,69 @@ def collect_family_orthologs(
                 "lane_count": 1,
             }
         )
-    normalized_reference_species = normalize_species_label(reference_species)
-    reference_glyphs = [
-        glyph
-        for glyph in glyphs
-        if normalize_species_label(glyph["species"]) == normalized_reference_species
-    ]
-    observed_reference_cds_ids = []
-    reference_glyph_is_one_to_one = len(reference_glyphs) == len(ordered_query_ids)
-    for glyph in reference_glyphs:
-        glyph_reference_ids = [
-            value for value in str(glyph["reference_cds_fasta_ids"]).split(";") if value
+    normalized_anchor_basis_label = normalize_species_label(anchor_basis_label)
+    if enforce_identity_species:
+        normalized_reference_species = normalize_species_label(enforce_identity_species)
+        reference_glyphs = [
+            glyph
+            for glyph in glyphs
+            if normalize_species_label(glyph["species"]) == normalized_reference_species
         ]
-        glyph_gene_ids = [value for value in str(glyph["gene_ids"]).split(";") if value]
-        observed_reference_cds_ids.extend(glyph_reference_ids)
+        observed_reference_cds_ids = []
+        reference_glyph_is_one_to_one = len(reference_glyphs) == len(ordered_query_ids)
+        for glyph in reference_glyphs:
+            glyph_reference_ids = [
+                value
+                for value in str(glyph["reference_cds_fasta_ids"]).split(";")
+                if value
+            ]
+            glyph_gene_ids = [
+                value for value in str(glyph["gene_ids"]).split(";") if value
+            ]
+            observed_reference_cds_ids.extend(glyph_reference_ids)
+            reference_glyph_is_one_to_one = reference_glyph_is_one_to_one and (
+                glyph["relation"] == "specific"
+                and glyph["reference_gene_count"] == 1
+                and glyph["copy_number"] == 1
+                and len(glyph_reference_ids) == 1
+                and glyph_gene_ids == glyph_reference_ids
+            )
+        expected_reference_cds_ids = sorted(ordered_query_ids)
         reference_glyph_is_one_to_one = reference_glyph_is_one_to_one and (
-            glyph["relation"] == "specific"
-            and glyph["reference_gene_count"] == 1
-            and glyph["copy_number"] == 1
-            and len(glyph_reference_ids) == 1
-            and glyph_gene_ids == glyph_reference_ids
+            sorted(observed_reference_cds_ids) == expected_reference_cds_ids
         )
-    expected_reference_cds_ids = sorted(ordered_query_ids)
-    reference_glyph_is_one_to_one = reference_glyph_is_one_to_one and (
-        sorted(observed_reference_cds_ids) == expected_reference_cds_ids
-    )
-    if not reference_glyph_is_one_to_one:
-        raise ValueError(
-            "Reference-species genes did not produce a one-to-one identity row; "
-            "the reconciled gene tree is inconsistent with reference-gene columns: "
-            f"family={family_id}, reference_species={normalized_reference_species}"
-        )
+        if not reference_glyph_is_one_to_one:
+            raise ValueError(
+                "Reference-species genes did not produce a one-to-one identity row; "
+                "the reconciled gene tree is inconsistent with reference-gene columns: "
+                f"family={family_id}, reference_species={normalized_reference_species}"
+            )
     for output_rows in (columns, glyphs, tree_nodes):
         for output_row in output_rows:
-            output_row["reference_species"] = normalized_reference_species
+            output_row["reference_species"] = normalized_anchor_basis_label
     return columns, glyphs, tree_nodes
+
+
+def collect_family_orthologs(
+    rows,
+    cds_fasta_ids,
+    reference_species,
+    family_id,
+    family_order,
+    first_column_order,
+):
+    query_tip_by_id, definitions = select_reference_tip_nodes(rows, reference_species)
+    return _collect_family_orthologs_for_anchors(
+        rows=rows,
+        cds_fasta_ids=cds_fasta_ids,
+        query_tip_by_id=query_tip_by_id,
+        definitions=definitions,
+        anchor_basis_label=reference_species,
+        family_id=family_id,
+        family_order=family_order,
+        first_column_order=first_column_order,
+        enforce_identity_species=reference_species,
+    )
 
 
 def write_tsv(path, fieldnames, rows):
@@ -1440,14 +1592,329 @@ def collect_query_gene_orthologs(
     return columns, glyphs, tree_nodes
 
 
+def collect_family_query_anchor_orthologs(
+    rows,
+    cds_fasta_ids,
+    query_definitions,
+    family_id,
+    family_order,
+    first_column_order,
+    first_query_order,
+):
+    """Collect query-anchored orthologs, coalescing records on one tree tip."""
+
+    assignments = select_query_tip_assignments(rows, query_definitions)
+    by_id, _children, _root = build_tree_index(rows)
+    definitions_by_id = {
+        definition["query_id"]: definition for definition in query_definitions
+    }
+    query_ids_by_tip = defaultdict(list)
+    for definition in query_definitions:
+        query_id = definition["query_id"]
+        query_ids_by_tip[assignments[query_id]["tip"]].append(query_id)
+
+    anchor_tip_by_id = {}
+    anchor_definitions = []
+    anchor_metadata_by_id = {}
+    for tip, query_ids in query_ids_by_tip.items():
+        anchor_cds_fasta_id = str(by_id[tip].get("node_name") or "").strip()
+        if not anchor_cds_fasta_id:
+            raise ValueError(
+                "A query marker selected a gene-tree tip without node_name: "
+                f"family={family_id}, branch_id={tip}, queries={query_ids}"
+            )
+        if anchor_cds_fasta_id in anchor_tip_by_id:
+            raise ValueError(
+                "Query anchors have duplicate CDS FASTA IDs: "
+                f"family={family_id}, cds_fasta_id={anchor_cds_fasta_id}"
+            )
+        query_labels = [definitions_by_id[query_id]["query_label"] for query_id in query_ids]
+        marker_sources = [assignments[query_id]["marker_source"] for query_id in query_ids]
+        distinct_sources = sorted(set(marker_sources))
+        anchor_source = distinct_sources[0] if len(distinct_sources) == 1 else "mixed"
+        anchor_species = normalize_species_label(by_id[tip].get("spnode_coverage"))
+        if not anchor_species:
+            raise ValueError(
+                "A query marker selected a gene-tree tip without species coverage: "
+                f"family={family_id}, branch_id={tip}, queries={query_ids}"
+            )
+        plot_label = query_ids[0]
+        if len(query_ids) > 1:
+            plot_label = f"{plot_label} (+{len(query_ids) - 1})"
+        anchor_tip_by_id[anchor_cds_fasta_id] = tip
+        anchor_definitions.append(
+            {
+                "query_id": anchor_cds_fasta_id,
+                "query_label": plot_label,
+            }
+        )
+        anchor_metadata_by_id[anchor_cds_fasta_id] = {
+            "query_ids": list(query_ids),
+            "query_labels": query_labels,
+            "marker_sources": marker_sources,
+            "anchor_source": anchor_source,
+            "anchor_species": anchor_species,
+            "anchor_tip_branch_id": tip,
+        }
+
+    columns, glyphs, tree_nodes = _collect_family_orthologs_for_anchors(
+        rows=rows,
+        cds_fasta_ids=cds_fasta_ids,
+        query_tip_by_id=anchor_tip_by_id,
+        definitions=anchor_definitions,
+        anchor_basis_label="query_gene",
+        family_id=family_id,
+        family_order=family_order,
+        first_column_order=first_column_order,
+        preserve_query_label=True,
+    )
+    column_by_anchor = {}
+    for column in columns:
+        anchor_cds_fasta_id = str(column["cds_fasta_id"])
+        metadata = anchor_metadata_by_id[anchor_cds_fasta_id]
+        column.update(
+            {
+                "query_ids": ";".join(metadata["query_ids"]),
+                "query_labels": ";".join(metadata["query_labels"]),
+                "query_count": len(metadata["query_ids"]),
+                "anchor_source": metadata["anchor_source"],
+                "anchor_species": metadata["anchor_species"],
+            }
+        )
+        column_by_anchor[anchor_cds_fasta_id] = column
+
+    for glyph in glyphs:
+        anchor_ids = [
+            value
+            for value in str(glyph["reference_cds_fasta_ids"]).split(";")
+            if value
+        ]
+        glyph["anchor_query_ids"] = ";".join(
+            query_id
+            for anchor_id in anchor_ids
+            for query_id in anchor_metadata_by_id[anchor_id]["query_ids"]
+        )
+
+    query_map = []
+    for query_index, definition in enumerate(query_definitions, start=first_query_order):
+        query_id = definition["query_id"]
+        assignment = assignments[query_id]
+        tip = assignment["tip"]
+        anchor_cds_fasta_id = str(by_id[tip].get("node_name") or "").strip()
+        column = column_by_anchor[anchor_cds_fasta_id]
+        metadata = anchor_metadata_by_id[anchor_cds_fasta_id]
+        query_map.append(
+            {
+                "family_id": family_id,
+                "family_order": family_order,
+                "query_order": query_index,
+                "query_id": query_id,
+                "query_label": definition["query_label"],
+                "marker_source": assignment["marker_source"],
+                "anchor_species": metadata["anchor_species"],
+                "anchor_cds_fasta_id": anchor_cds_fasta_id,
+                "anchor_gene_id": column["gene_id"],
+                "anchor_tip_branch_id": tip,
+                "column_order": column["column_order"],
+                "merged_query_count": len(metadata["query_ids"]),
+            }
+        )
+    return columns, glyphs, tree_nodes, query_map
+
+
+def collect_query_anchor_orthologs(
+    dir_gene_family,
+    dir_query_gene,
+    family_file="",
+):
+    query_dir = Path(dir_query_gene)
+    family_ids = read_family_ids(query_dir, family_file=family_file)
+    store = GeneFamilyOutputStore(dir_gene_family)
+    columns = []
+    glyphs = []
+    tree_nodes = []
+    query_map = []
+    next_column_order = 1
+    next_family_order = 1
+    next_query_order = 1
+    for family_id in family_ids:
+        rows = read_stat_branch(store, family_id)
+        if not rows:
+            continue
+        query_definitions = read_query_definitions(query_dir / family_id)
+        if not query_definitions:
+            continue
+        cds_fasta_ids = read_family_cds_fasta_ids(store, family_id)
+        (
+            family_columns,
+            family_glyphs,
+            family_tree_nodes,
+            family_query_map,
+        ) = collect_family_query_anchor_orthologs(
+            rows=rows,
+            cds_fasta_ids=cds_fasta_ids,
+            query_definitions=query_definitions,
+            family_id=family_id,
+            family_order=next_family_order,
+            first_column_order=next_column_order,
+            first_query_order=next_query_order,
+        )
+        columns.extend(family_columns)
+        glyphs.extend(family_glyphs)
+        tree_nodes.extend(family_tree_nodes)
+        query_map.extend(family_query_map)
+        next_column_order += len(family_columns)
+        next_query_order += len(family_query_map)
+        next_family_order += 1
+
+    assign_lanes(glyphs)
+    columns.sort(key=lambda row: int(row["column_order"]))
+    glyphs.sort(
+        key=lambda row: (
+            str(row["species"]),
+            int(row["start_order"]),
+            int(row["end_order"]),
+            str(row["relation"]),
+        )
+    )
+    tree_nodes.sort(key=lambda row: (int(row["family_order"]), int(row["node_id"])))
+    query_map.sort(key=lambda row: int(row["query_order"]))
+    if family_ids and not columns:
+        raise ValueError(
+            "No query records with gene-tree tip markers were found in the selected gene families"
+        )
+    return columns, glyphs, tree_nodes, query_map
+
+
+def query_columns_for_output(columns):
+    return [
+        {
+            "column_order": row["column_order"],
+            "family_id": row["family_id"],
+            "family_order": row["family_order"],
+            "basis": "query_gene",
+            "query_ids": row["query_ids"],
+            "query_labels": row["query_labels"],
+            "query_count": row["query_count"],
+            "anchor_source": row["anchor_source"],
+            "anchor_species": row["anchor_species"],
+            "anchor_cds_fasta_id": row["cds_fasta_id"],
+            "anchor_gene_id": row["gene_id"],
+            "plot_label": row["plot_label"],
+            "anchor_tip_branch_id": row["reference_tip_branch_id"],
+        }
+        for row in columns
+    ]
+
+
+def query_glyphs_for_output(glyphs):
+    return [
+        {
+            "species": row["species"],
+            "family_id": row["family_id"],
+            "family_order": row["family_order"],
+            "basis": "query_gene",
+            "relation": row["relation"],
+            "anchor_cds_fasta_ids": row["reference_cds_fasta_ids"],
+            "anchor_gene_ids": row["reference_gene_ids"],
+            "anchor_query_ids": row["anchor_query_ids"],
+            "anchor_count": row["reference_gene_count"],
+            "copy_number": row["copy_number"],
+            "gene_ids": row["gene_ids"],
+            "start_order": row["start_order"],
+            "end_order": row["end_order"],
+            "is_contiguous": row["is_contiguous"],
+            "lane_index": row["lane_index"],
+            "lane_count": row["lane_count"],
+        }
+        for row in glyphs
+    ]
+
+
+def query_tree_for_output(tree_nodes):
+    output = []
+    for row in tree_nodes:
+        converted = dict(row)
+        converted.pop("reference_species", None)
+        converted["basis"] = "query_gene"
+        converted["anchor_cds_fasta_id"] = converted.pop("cds_fasta_id")
+        converted["anchor_gene_id"] = converted.pop("gene_id")
+        converted["in_anchor_tree"] = converted.pop("in_reference_tree")
+        output.append(converted)
+    return output
+
+
+def query_evidence_for_output(rows):
+    output = []
+    for row in rows:
+        converted = {}
+        for field, value in row.items():
+            if field == "reference_species":
+                converted["basis"] = "query_gene"
+            elif field.startswith("reference_"):
+                converted[field.replace("reference_", "anchor_", 1)] = value
+            else:
+                converted[field] = value
+        if converted.get("synteny_status") == "reference_self":
+            converted["synteny_status"] = "anchor_self"
+        if converted.get("collinear_orientation") == "reference_self":
+            converted["collinear_orientation"] = "anchor_self"
+        if converted.get("orthology_ufboot_status") == "reference_self":
+            converted["orthology_ufboot_status"] = "anchor_self"
+        if converted.get("orthology_ufboot_unavailable_reason") == "reference_self":
+            converted["orthology_ufboot_unavailable_reason"] = "anchor_self"
+        output.append(converted)
+    return output
+
+
 def run(args):
-    columns, glyphs, tree_nodes = collect_query_gene_orthologs(
+    store = GeneFamilyOutputStore(args.dir_gene_family)
+    basis = getattr(args, "basis", "reference_species")
+    if basis == "reference_species":
+        if not str(args.reference_species).strip():
+            raise ValueError("--reference_species is required when --basis=reference_species")
+        columns, glyphs, tree_nodes = collect_query_gene_orthologs(
+            dir_gene_family=args.dir_gene_family,
+            dir_query_gene=args.dir_query_gene,
+            reference_species=args.reference_species,
+            family_file=args.family_file,
+        )
+        synteny_evidence = collect_reference_synteny_evidence(
+            store=store,
+            columns=columns,
+            glyphs=glyphs,
+        )
+        ufboot_evidence = collect_reference_ufboot_evidence(
+            store=store,
+            columns=columns,
+            glyphs=glyphs,
+        )
+        write_tsv(args.out_columns, COLUMN_FIELDS, columns)
+        write_tsv(args.out_glyphs, GLYPH_FIELDS, glyphs)
+        write_tsv(args.out_tree, TREE_FIELDS, tree_nodes)
+        write_tsv(args.out_synteny, SYNTENY_FIELDS, synteny_evidence)
+        write_tsv(args.out_ufboot, UFBOOT_FIELDS, ufboot_evidence)
+        print(
+            "Reference-species ortholog summary: "
+            f"reference_species={normalize_species_label(args.reference_species)}, "
+            f"columns={len(columns)}, glyphs={len(glyphs)}, tree_nodes={len(tree_nodes)}, "
+            f"shared_ancestral={sum(row['relation'] == 'shared_ancestral' for row in glyphs)}, "
+            f"synteny_supported={sum(row['synteny_status'] == 'supported' for row in synteny_evidence)}, "
+            f"synteny_single_anchor={sum(row['synteny_status'] == 'single_anchor' for row in synteny_evidence)}, "
+            f"ufboot_evaluated={sum(row['orthology_ufboot_status'] == 'evaluated' for row in ufboot_evidence)}, "
+            f"ufboot_not_evaluable={sum(row['orthology_ufboot_status'] == 'not_evaluable' for row in ufboot_evidence)}",
+            flush=True,
+        )
+        return
+
+    out_query_map = str(getattr(args, "out_query_map", "")).strip()
+    if not out_query_map:
+        raise ValueError("--out_query_map is required when --basis=query_gene")
+    columns, glyphs, tree_nodes, query_map = collect_query_anchor_orthologs(
         dir_gene_family=args.dir_gene_family,
         dir_query_gene=args.dir_query_gene,
-        reference_species=args.reference_species,
         family_file=args.family_file,
     )
-    store = GeneFamilyOutputStore(args.dir_gene_family)
     synteny_evidence = collect_reference_synteny_evidence(
         store=store,
         columns=columns,
@@ -1457,21 +1924,30 @@ def run(args):
         store=store,
         columns=columns,
         glyphs=glyphs,
+        require_one_branch_per_glyph=False,
     )
-    write_tsv(args.out_columns, COLUMN_FIELDS, columns)
-    write_tsv(args.out_glyphs, GLYPH_FIELDS, glyphs)
-    write_tsv(args.out_tree, TREE_FIELDS, tree_nodes)
-    write_tsv(args.out_synteny, SYNTENY_FIELDS, synteny_evidence)
-    write_tsv(args.out_ufboot, UFBOOT_FIELDS, ufboot_evidence)
+    write_tsv(args.out_columns, QUERY_COLUMN_FIELDS, query_columns_for_output(columns))
+    write_tsv(args.out_glyphs, QUERY_GLYPH_FIELDS, query_glyphs_for_output(glyphs))
+    write_tsv(args.out_tree, QUERY_TREE_FIELDS, query_tree_for_output(tree_nodes))
+    write_tsv(
+        args.out_synteny,
+        QUERY_SYNTENY_FIELDS,
+        query_evidence_for_output(synteny_evidence),
+    )
+    write_tsv(
+        args.out_ufboot,
+        QUERY_UFBOOT_FIELDS,
+        query_evidence_for_output(ufboot_evidence),
+    )
+    write_tsv(out_query_map, QUERY_MAP_FIELDS, query_map)
     print(
-        "Reference-species ortholog summary: "
-        f"reference_species={normalize_species_label(args.reference_species)}, "
-        f"columns={len(columns)}, glyphs={len(glyphs)}, tree_nodes={len(tree_nodes)}, "
-        f"shared_ancestral={sum(row['relation'] == 'shared_ancestral' for row in glyphs)}, "
+        "Query-gene ortholog summary: "
+        f"query_records={len(query_map)}, anchors={len(columns)}, "
+        f"coalesced_records={len(query_map) - len(columns)}, glyphs={len(glyphs)}, "
+        f"tree_nodes={len(tree_nodes)}, "
+        f"shared_across_anchors={sum(row['relation'] == 'shared_ancestral' for row in glyphs)}, "
         f"synteny_supported={sum(row['synteny_status'] == 'supported' for row in synteny_evidence)}, "
-        f"synteny_single_anchor={sum(row['synteny_status'] == 'single_anchor' for row in synteny_evidence)}, "
-        f"ufboot_evaluated={sum(row['orthology_ufboot_status'] == 'evaluated' for row in ufboot_evidence)}, "
-        f"ufboot_not_evaluable={sum(row['orthology_ufboot_status'] == 'not_evaluable' for row in ufboot_evidence)}",
+        f"ufboot_evaluated={sum(row['orthology_ufboot_status'] == 'evaluated' for row in ufboot_evidence)}",
         flush=True,
     )
 
