@@ -1,3 +1,5 @@
+import sys
+import types
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -12,6 +14,12 @@ TARGET_MODULE_PATH = (
 
 
 def load_module():
+    if "kftools" not in sys.modules:
+        package = types.ModuleType("kftools")
+        package.__path__ = []
+        sys.modules["kftools"] = package
+    if "kftools.kfog" not in sys.modules:
+        sys.modules["kftools.kfog"] = types.ModuleType("kftools.kfog")
     spec = spec_from_file_location("orthogroup_statistics_support_test", MODULE_PATH)
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
