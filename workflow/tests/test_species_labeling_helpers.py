@@ -38,6 +38,22 @@ def test_synteny_neighbors_find_species_file_uses_exact_species_label(tmp_path):
     assert mod.find_species_file(str(tmp_path), "Species_a", mod.FASTA_EXTENSIONS) == str(target)
 
 
+def test_synteny_neighbors_load_gene_info_replaces_numeric_chromosome_dtype(tmp_path):
+    mod = load_module("synteny_neighbors.py", "synteny_neighbors_dtype_module")
+    cache = tmp_path / "species.gff_info.tsv"
+    cache.write_text(
+        "gene_id\tchromosome\tstart\tend\tstrand\n"
+        "gene_2\t2\t20\t29\t-\n"
+        "gene_1\t1\t10\t19\t+\n",
+        encoding="utf-8",
+    )
+
+    observed = mod.load_gene_info(str(cache))
+
+    assert observed["chromosome"].tolist() == ["1", "2"]
+    assert observed["gene_id"].tolist() == ["gene_1", "gene_2"]
+
+
 def test_synteny_species_gene_cache_tracks_input_and_output_content(tmp_path):
     mod = load_module("synteny_neighbors.py", "synteny_neighbors_cache_module")
     cds = tmp_path / "Species_a.fa"

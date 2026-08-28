@@ -147,9 +147,13 @@ def load_gene_info(path):
         return pandas.DataFrame(columns=["gene_id", "chromosome", "start", "end", "strand"])
     out = df.loc[:, [c for c in ["gene_id", "chromosome", "start", "end", "strand"] if c in df.columns]].copy()
     if "strand" not in out.columns:
-        out.loc[:, "strand"] = "+"
-    out.loc[:, "gene_id"] = out["gene_id"].astype(str)
-    out.loc[:, "chromosome"] = out["chromosome"].fillna("").astype(str)
+        out["strand"] = "+"
+    # Whole-column assignment must be allowed to replace the inferred dtype.
+    # ``.loc[:, column] = ...`` attempts an in-place write on recent pandas
+    # releases and rejects numeric chromosome columns when the normalized
+    # values are strings.
+    out["gene_id"] = out["gene_id"].astype(str)
+    out["chromosome"] = out["chromosome"].fillna("").astype(str)
     out.loc[:, "start"] = pandas.to_numeric(out["start"], errors="coerce")
     out.loc[:, "end"] = pandas.to_numeric(out["end"], errors="coerce")
     out = out.dropna(subset=["start", "end"])
