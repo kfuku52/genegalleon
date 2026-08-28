@@ -901,12 +901,55 @@ def test_download_source_exhaustion_only_routes_through_public_fallback(tmp_path
     assert "Every fatal condition" in completed.stdout
 
 
+def test_aggregate_download_source_exhaustion_routes_through_public_fallback(tmp_path):
+    completed = _run_fatal_route_fixture(
+        tmp_path,
+        [
+            "ERROR: getfastq failed for 1/56 SRA runs. "
+            "ERR4643641: SRA file download failed for ERR4643641. "
+            "Expected PATH: /tmp/ERR4643641.sra. "
+            "Configured download sources were exhausted."
+        ],
+    )
+
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    trace = (tmp_path / "trace.txt").read_text(encoding="utf-8").splitlines()
+    assert trace == [
+        "attempt:yes:initial",
+        "attempt:no:retry_rrna_filter_no",
+        "prepare",
+        "download",
+        "validate",
+        "publish",
+        "cleanup",
+    ]
+    assert "Every fatal condition" in completed.stdout
+
+
 def test_download_source_exhaustion_mixed_with_another_fatal_fails_closed(tmp_path):
     completed = _run_fatal_route_fixture(
         tmp_path,
         [
             "ERROR: Configured download sources were exhausted.",
             "ERROR: Metadata validation failed.",
+        ],
+    )
+
+    assert completed.returncode != 0
+    trace = (tmp_path / "trace.txt").read_text(encoding="utf-8").splitlines()
+    assert trace == ["attempt:yes:initial", "attempt:no:retry_rrna_filter_no"]
+    assert "Exiting without fallback" in completed.stdout
+
+
+def test_aggregate_exhaustion_mixed_with_another_run_failure_fails_closed(tmp_path):
+    completed = _run_fatal_route_fixture(
+        tmp_path,
+        [
+            "ERROR: getfastq failed for 2/56 SRA runs. "
+            "ERR4643641: SRA file download failed for ERR4643641. "
+            "Expected PATH: /tmp/ERR4643641.sra. "
+            "Configured download sources were exhausted. "
+            "SRR0000001: Metadata validation failed."
         ],
     )
 

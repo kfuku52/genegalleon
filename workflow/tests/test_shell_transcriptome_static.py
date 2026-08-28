@@ -222,7 +222,8 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     assert 'mv -- "${dir_amalgkit_getfastq_sp}" "${dir_tmp}/getfastq"' in stage_body
     assert "discard_partial_getfastq_outputs" not in attempt_body
     assert "grep -Eq '^ERROR: '" in detect_body
-    assert 'other_fatal_count == 0' in exhaustion_body
+    assert 'entries != failed or failed > total' in exhaustion_body
+    assert 'match.start() != position' in exhaustion_body
     assert 'ERROR: Configured download sources were exhausted.' in exhaustion_body
     assert "Detected fatal message in amalgkit getfastq log despite a zero exit code" in attempt_body
     assert '--download_lock_dir "${dir_amalgkit_download_lock_dir}"' in attempt_body

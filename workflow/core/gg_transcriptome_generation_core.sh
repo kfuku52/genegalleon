@@ -1499,17 +1499,51 @@ amalgkit_getfastq_log_has_fatal_message() {
 amalgkit_getfastq_log_has_only_download_source_exhaustion() {
   local log_file=$1
   [[ -s "${log_file}" ]] || return 1
-  awk '
-    /^ERROR: / {
-      fatal_count += 1
-      if ($0 != "ERROR: Configured download sources were exhausted.") {
-        other_fatal_count += 1
-      }
-    }
-    END {
-      exit !(fatal_count > 0 && other_fatal_count == 0)
-    }
-  ' "${log_file}"
+  python - "${log_file}" <<'PY'
+import pathlib
+import re
+import sys
+
+log_path = pathlib.Path(sys.argv[1])
+fatal_lines = [
+    line.rstrip("\n")
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if line.startswith("ERROR: ")
+]
+if not fatal_lines:
+    raise SystemExit(1)
+
+legacy_exhaustion = "ERROR: Configured download sources were exhausted."
+summary_pattern = re.compile(
+    r"^ERROR: getfastq failed for (?P<failed>[1-9][0-9]*)/"
+    r"(?P<total>[1-9][0-9]*) SRA runs\. (?P<details>.+)$"
+)
+entry_pattern = re.compile(
+    r"(?P<run>[A-Za-z0-9][A-Za-z0-9._-]*): "
+    r"SRA file download failed for (?P=run)\. "
+    r"Expected PATH: \S+\. Configured download sources were exhausted\."
+    r"(?: |$)"
+)
+
+for line in fatal_lines:
+    if line == legacy_exhaustion:
+        continue
+    summary = summary_pattern.fullmatch(line)
+    if summary is None:
+        raise SystemExit(1)
+    failed = int(summary.group("failed"))
+    total = int(summary.group("total"))
+    details = summary.group("details")
+    position = 0
+    entries = 0
+    for match in entry_pattern.finditer(details):
+        if match.start() != position:
+            raise SystemExit(1)
+        position = match.end()
+        entries += 1
+    if position != len(details) or entries != failed or failed > total:
+        raise SystemExit(1)
+PY
 }
 
 run_amalgkit_getfastq_attempt() {
