@@ -1440,6 +1440,38 @@ def test_mv_out_bundle_publishes_all_pairs_after_complete_staging(tmp_path):
     assert not list(tmp_path.rglob("*.gg-backup.*"))
 
 
+def test_mv_out_bundle_replaces_nonempty_orthofinder_working_directories(tmp_path):
+    orthofinder = tmp_path / "orthofinder"
+    all_source = orthofinder / "core" / "Results_all" / "WorkingDirectory"
+    core_source = orthofinder / "core" / "Results_core" / "WorkingDirectory"
+    all_destination = orthofinder / "WorkingDirectory"
+    core_destination = orthofinder / "core" / "WorkingDirectory"
+    for directory, marker in (
+        (all_source, "new-all\n"),
+        (core_source, "new-core\n"),
+        (all_destination, "old-all\n"),
+        (core_destination, "old-core\n"),
+    ):
+        directory.mkdir(parents=True)
+        (directory / "marker.txt").write_text(marker)
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "mv_out_bundle "
+        f"{shlex.quote(str(all_source))} {shlex.quote(str(all_destination))} "
+        f"{shlex.quote(str(core_source))} {shlex.quote(str(core_destination))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert (all_destination / "marker.txt").read_text() == "new-all\n"
+    assert (core_destination / "marker.txt").read_text() == "new-core\n"
+    assert not all_source.exists()
+    assert not core_source.exists()
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
+
+
 def test_mv_out_bundle_rolls_back_every_pair_after_publish_failure(tmp_path):
     first_source = tmp_path / "stage" / "first.txt"
     second_source = tmp_path / "stage" / "second.txt"

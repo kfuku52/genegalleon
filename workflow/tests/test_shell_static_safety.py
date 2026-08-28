@@ -2330,6 +2330,24 @@ def test_no_cp_out_or_mv_out_glob_arguments_in_core_scripts():
         assert pattern.search(text) is None, f"Use nullglob+array guard instead of cp_out/mv_out glob in {script}"
 
 
+def test_orthofinder_core_result_publication_replaces_existing_trees_transactionally():
+    core = (WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh").read_text()
+    start = core.index("    orthofinder_all_outputs=(")
+    end = core.index(
+        '    orthofinder_output_directory_cleanup "${dir_orthofinder}/core"',
+        start,
+    )
+    block = core[start:end]
+
+    assert "orthofinder_publication_pairs=()" in block
+    assert block.count('orthofinder_publication_pairs+=(') == 2
+    assert '"${dir_orthofinder}/${orthofinder_output##*/}"' in block
+    assert '"${dir_orthofinder}/core/${orthofinder_output##*/}"' in block
+    assert 'mv_out_bundle "${orthofinder_publication_pairs[@]}"' in block
+    assert 'mv_out "${orthofinder_all_outputs[@]}"' not in block
+    assert 'mv_out "${orthofinder_core_outputs[@]}"' not in block
+
+
 def test_gene_evolution_core_quotes_notung_zip_and_provenances_summary_outputs():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)

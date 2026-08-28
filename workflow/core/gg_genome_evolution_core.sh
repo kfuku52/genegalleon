@@ -4334,8 +4334,20 @@ PY
       echo "OrthoFinder core/main output files were expected but not found after completion."
       exit 1
     fi
-    mv_out "${orthofinder_all_outputs[@]}" "${dir_orthofinder}"
-    mv_out "${orthofinder_core_outputs[@]}" "${dir_orthofinder}/core"
+    orthofinder_publication_pairs=()
+    for orthofinder_output in "${orthofinder_all_outputs[@]}"; do
+      orthofinder_publication_pairs+=(
+        "${orthofinder_output}"
+        "${dir_orthofinder}/${orthofinder_output##*/}"
+      )
+    done
+    for orthofinder_output in "${orthofinder_core_outputs[@]}"; do
+      orthofinder_publication_pairs+=(
+        "${orthofinder_output}"
+        "${dir_orthofinder}/core/${orthofinder_output##*/}"
+      )
+    done
+    mv_out_bundle "${orthofinder_publication_pairs[@]}"
     shopt -s nullglob
     orthofinder_result_dirs=("${dir_orthofinder}/core/Results_"*)
     shopt -u nullglob
