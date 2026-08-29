@@ -235,6 +235,7 @@ jobs:
           extra-packages: |
             any::ggplot2
             any::ape
+            kfuku52/rkftools@master
 
       - name: Parse-check workflow R scripts
         run: |

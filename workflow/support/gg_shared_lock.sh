@@ -286,7 +286,26 @@ gg_shared_lock_helper_script() {
 }
 
 gg_shared_lock_python() {
-  gg_find_python_exec
+  if declare -F gg_find_python_exec >/dev/null 2>&1; then
+    gg_find_python_exec
+    return $?
+  fi
+
+  # gg_shared_lock.sh is also sourced directly by lightweight utilities and
+  # tests, without the rest of gg_util.sh. Keep lock coordination usable in
+  # that mode instead of spinning forever when the shared helper cannot run.
+  local candidate
+  for candidate in python python3 /opt/conda/bin/python /usr/bin/python3; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      command -v "${candidate}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 gg_lock_hostname() {
