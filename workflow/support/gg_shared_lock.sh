@@ -230,6 +230,49 @@ gg_array_finalizer_release() {
   GG_ARRAY_FINALIZER_RUN_DIR=""
 }
 
+gg_stage_transaction_lock_acquire() {
+  local state_root=${1:-}
+  local stage_name=${2:-}
+  local safe_stage_name=""
+  local lock_file=""
+  if [[ -z "${state_root}" || "${state_root}" == "/" || "${state_root}" == "." \
+    || "${state_root}" == ".." || -z "${stage_name}" ]]; then
+    echo "gg_stage_transaction_lock_acquire requires a safe STATE_ROOT and STAGE_NAME." >&2
+    return 2
+  fi
+  if [[ -n "${GG_STAGE_TRANSACTION_LOCK_FILE:-}" ]]; then
+    echo "A stage transaction lock is already held: ${GG_STAGE_TRANSACTION_LOCK_FILE}" >&2
+    return 2
+  fi
+  safe_stage_name=$(printf '%s' "${stage_name}" | sed 's/[^[:alnum:]._-]/_/g')
+  if [[ -z "${safe_stage_name}" ]]; then
+    echo "The stage transaction name is empty after normalization." >&2
+    return 2
+  fi
+  lock_file="${state_root%/}/stage_transactions/${safe_stage_name}.lock"
+  if ! gg_shared_lock_acquire "${lock_file}" "${safe_stage_name} stage transaction"; then
+    return 1
+  fi
+  gg_shared_lock_start_heartbeat "${lock_file}"
+  GG_STAGE_TRANSACTION_LOCK_FILE="${lock_file}"
+  GG_STAGE_TRANSACTION_LOCK_HEARTBEAT_PID="${GG_SHARED_LOCK_HEARTBEAT_PID:-}"
+  echo "Acquired stage transaction lock: ${safe_stage_name}" >&2
+}
+
+gg_stage_transaction_lock_release() {
+  local lock_file=${GG_STAGE_TRANSACTION_LOCK_FILE:-}
+  local heartbeat_pid=${GG_STAGE_TRANSACTION_LOCK_HEARTBEAT_PID:-}
+  local release_status=0
+  if [[ -z "${lock_file}" ]]; then
+    return 0
+  fi
+  gg_shared_lock_stop_heartbeat "${heartbeat_pid}" || release_status=$?
+  gg_shared_lock_release "${lock_file}" || release_status=$?
+  GG_STAGE_TRANSACTION_LOCK_FILE=""
+  GG_STAGE_TRANSACTION_LOCK_HEARTBEAT_PID=""
+  return "${release_status}"
+}
+
 gg_shared_lock_helper_script() {
   local helper_dir="${gg_support_dir:-}"
   if [[ -z "${helper_dir}" ]]; then

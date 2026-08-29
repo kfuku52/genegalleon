@@ -193,13 +193,15 @@ def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_fa
     assert 'xml_url = "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}".format(' in body
     assert 'if node.attrib.get("semantic_name") != "fastq":' in body
     assert 'if node.attrib.get("supertype") != "Original":' in body
-    assert 'source_is_gzip = first_chunk.startswith(b"\\x1f\\x8b")' in body
+    assert 'source_is_gzip = append_response or first_chunk.startswith(b"\\x1f\\x8b")' in body
     assert "response.read(DOWNLOAD_CHUNK_BYTES)" in body
     assert "return response.read()" not in body
     assert "is_valid_fastq_gzip(part)" in body
     assert 'dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)' in body
     assert 'print("Reusing validated fallback FASTQ for {}: {}".format(run, dest))' in body
-    assert '".{}.part.{}.{}".format(dest.name, os.getpid(), time.time_ns())' in body
+    assert '".{}.download.part".format(dest.name)' in body
+    assert '"Range": "bytes={}-".format(resume_offset)' in body
+    assert 'response_header(response, "Content-Range")' in body
     assert "os.replace(part, dest)" in body
     assert "preserve_previous_completion_manifest()" in body
     assert "os.replace(manifest_part, completion_manifest)" in body

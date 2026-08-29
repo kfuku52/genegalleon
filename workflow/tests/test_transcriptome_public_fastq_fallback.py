@@ -1,3 +1,4 @@
+import ast
 import gzip
 import hashlib
 import json
@@ -16,9 +17,11 @@ CORE_PATH = Path(__file__).resolve().parents[1] / "core" / "gg_transcriptome_gen
 
 
 class _Response:
-    def __init__(self, payload: bytes):
+    def __init__(self, payload: bytes, *, status=None, headers=None):
         self.payload = payload
         self.offset = 0
+        self.status = status
+        self.headers = headers or {}
 
     def __enter__(self):
         return self
@@ -31,6 +34,9 @@ class _Response:
         chunk = self.payload[self.offset : self.offset + size]
         self.offset += len(chunk)
         return chunk
+
+    def getcode(self):
+        return self.status
 
 
 def _fallback_python_source() -> str:
@@ -66,8 +72,9 @@ def _run_fallback(
 ):
     attempts: dict[str, int] = attempt_counts if attempt_counts is not None else {}
 
-    def fake_urlopen(url, timeout):
+    def fake_urlopen(request, timeout):
         assert timeout == 120
+        url = request.full_url if isinstance(request, urllib.request.Request) else request
         attempts[url] = attempts.get(url, 0) + 1
         response = responses[url]
         if isinstance(response, list):
@@ -86,6 +93,22 @@ def _run_fallback(
     finally:
         sys.argv = old_argv
     return attempts
+
+
+def _fallback_definition_namespace() -> dict:
+    tree = ast.parse(_fallback_python_source())
+    selected = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef)):
+            selected.append(node)
+        elif isinstance(node, ast.Assign) and all(
+            isinstance(target, ast.Name) and target.id.isupper()
+            for target in node.targets
+        ):
+            selected.append(node)
+    namespace = {"__name__": "fallback_definitions"}
+    exec(compile(ast.Module(selected, type_ignores=[]), str(CORE_PATH), "exec"), namespace)
+    return namespace
 
 
 def _metadata(path: Path, runs: list[str]):
@@ -849,6 +872,128 @@ def test_public_fallback_retries_integrity_failure_before_atomic_publication(
     assert not _partial_files(output_dir)
     validated = _run_manifest_validator(metadata_path, output_dir)
     assert validated.returncode == 0, validated.stderr
+
+
+def test_public_fallback_resumes_interrupted_gzip_with_validated_http_range(
+    monkeypatch,
+    tmp_path,
+):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["ERR4643641"])
+    payload = gzip.compress(b"@read\nACGT\n+\n!!!!\n" * 100)
+    split = len(payload) // 2
+    fastq_url = "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR464/001/ERR4643641.fastq.gz"
+    report = json.dumps(
+        [
+            {
+                "run_accession": "ERR4643641",
+                "fastq_ftp": fastq_url.removeprefix("https://"),
+                "fastq_md5": hashlib.md5(payload).hexdigest(),
+            }
+        ]
+    ).encode()
+    calls = []
+
+    class DisconnectAfterPrefix(_Response):
+        def read(self, size=-1):
+            if self.offset == 0:
+                chunk = self.payload[:split]
+                self.offset = len(chunk)
+                return chunk
+            raise ConnectionResetError("simulated transport interruption")
+
+    def fake_urlopen(request, timeout):
+        assert timeout == 120
+        url = request.full_url if isinstance(request, urllib.request.Request) else request
+        if url.endswith("run_new?acc=ERR4643641"):
+            return _Response(b"<ROOT />")
+        if url == _ena_report_url("ERR4643641"):
+            return _Response(report)
+        assert url == fastq_url
+        calls.append(request)
+        if len(calls) == 1:
+            assert not isinstance(request, urllib.request.Request)
+            return DisconnectAfterPrefix(
+                payload,
+                status=200,
+                headers={"Content-Length": str(len(payload))},
+            )
+        assert isinstance(request, urllib.request.Request)
+        assert request.get_header("Range") == "bytes={}-".format(split)
+        assert request.get_header("Accept-encoding") == "identity"
+        return _Response(
+            payload[split:],
+            status=206,
+            headers={
+                "Content-Length": str(len(payload) - split),
+                "Content-Range": "bytes {}-{}/{}".format(
+                    split,
+                    len(payload) - 1,
+                    len(payload),
+                ),
+            },
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    old_argv = sys.argv
+    sys.argv = ["fallback", str(metadata_path), str(output_dir)]
+    try:
+        exec(compile(_fallback_python_source(), str(CORE_PATH), "exec"), {"__name__": "__main__"})
+    finally:
+        sys.argv = old_argv
+
+    recovered = output_dir / "ERR4643641" / "ERR4643641.amalgkit.fastq.gz"
+    assert recovered.read_bytes() == payload
+    assert len(calls) == 2
+    assert not _partial_files(output_dir)
+
+
+def test_fastq_range_resume_preserves_offsets_larger_than_four_gib(
+    monkeypatch,
+    tmp_path,
+):
+    namespace = _fallback_definition_namespace()
+    dest = tmp_path / "ERR4643641_2.amalgkit.fastq.gz"
+    part = dest.with_name(".{}.download.part".format(dest.name))
+    resume_offset = (1 << 32) + 17
+    with part.open("wb") as handle:
+        handle.write(b"\x1f\x8b")
+        handle.truncate(resume_offset)
+    validity = iter((False, True))
+    namespace["is_valid_fastq_gzip"] = lambda _path: next(validity)
+    expected_md5 = "a" * 32
+    namespace["file_md5"] = lambda _path: expected_md5
+    observed_requests = []
+
+    def fake_urlopen(request, timeout):
+        assert timeout == 120
+        observed_requests.append(request)
+        assert isinstance(request, urllib.request.Request)
+        assert request.get_header("Range") == "bytes={}-".format(resume_offset)
+        return _Response(
+            b"x",
+            status=206,
+            headers={
+                "Content-Length": "1",
+                "Content-Range": "bytes {0}-{0}/{1}".format(
+                    resume_offset,
+                    resume_offset + 1,
+                ),
+            },
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    namespace["download_fastq_atomically"](
+        dest,
+        "https://ftp.sra.ebi.ac.uk/large.fastq.gz",
+        expected_md5,
+    )
+
+    assert len(observed_requests) == 1
+    assert dest.stat().st_size == resume_offset + 1
+    assert not part.exists()
 
 
 def test_public_fallback_preserves_and_recovers_truncated_existing_fastq(monkeypatch, tmp_path):

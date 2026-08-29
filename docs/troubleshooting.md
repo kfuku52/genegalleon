@@ -236,6 +236,27 @@ What to check:
 - if GeneGalleon reports that advisory locking failed, move the workspace to a
   filesystem with cross-node POSIX `flock` semantics before retrying.
 
+### A replacement transcriptome task reaches the shared summary concurrently
+
+Current GeneGalleon releases serialize the complete multispecies-summary
+transaction across scheduler job IDs. Each writer builds in a private sibling
+directory and atomically publishes the finished `annotation_summary` tree.
+Seeing `getcwd() failed` together with a missing `expression.imputed.tsv`
+indicates an older workflow release that allowed one replacement job to remove
+another writer's current directory. Update the immutable workflow release
+before retrying; repeatedly resubmitting that older release can reproduce the
+same race.
+
+### A large public FASTQ download stops at the same byte offset
+
+The public-original fallback keeps a hidden `*.download.part` file and resumes
+gzip downloads with a validated HTTPS byte range. Do not delete that partial
+file between bounded retries. GeneGalleon verifies `Content-Range`, total size,
+the provider checksum when available, gzip/FASTQ structure, and then atomically
+publishes the completed file. A server that ignores Range is handled as a full
+restart; a checksum mismatch or non-FASTQ response is never appended to the
+saved partial file.
+
 ### `gg_genome_evolution` protein mode does not behave as expected
 
 Symptoms:

@@ -1942,6 +1942,25 @@ configure_transcriptome_runtime_from_detected_metadata() {
   echo "Effective assembly method: ${effective_assembly_method}"
 }
 
+cleanup_transcriptome_summary_transaction() {
+  local cleanup_status=$?
+  if [[ -n "${transcriptome_summary_stage_parent:-}" \
+    && "${transcriptome_summary_stage_parent}" == "${dir_transcriptome_assembly_output%/}/.annotation_summary.gg-work."* \
+    && -d "${transcriptome_summary_stage_parent}" ]]; then
+    rm -rf -- "${transcriptome_summary_stage_parent}" || true
+  fi
+  transcriptome_summary_stage_parent=""
+  if [[ ${transcriptome_summary_transaction_lock_acquired:-0} -eq 1 ]]; then
+    gg_stage_transaction_lock_release || true
+    transcriptome_summary_transaction_lock_acquired=0
+  fi
+  if [[ ${transcriptome_summary_finalizer_claimed:-0} -eq 1 ]]; then
+    gg_array_finalizer_release || true
+    transcriptome_summary_finalizer_claimed=0
+  fi
+  return "${cleanup_status}"
+}
+
 download_public_original_fastqs_for_metadata() {
   local metadata_tsv="$1"
   local output_dir="$2"
@@ -1954,6 +1973,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -2247,75 +2267,206 @@ def preserve_invalid_fastq(path: Path) -> None:
         counter += 1
 
 
-def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> None:
-    part = dest.with_name(
-        ".{}.part.{}.{}".format(dest.name, os.getpid(), time.time_ns())
-    )
-    if part.exists() or part.is_symlink():
-        part.unlink()
-    last_exc = None
+def file_md5(path: Path) -> str:
+    digest = hashlib.md5()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(DOWNLOAD_CHUNK_BYTES), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def response_status(response):
+    status = getattr(response, "status", None)
+    if status is None and hasattr(response, "getcode"):
+        status = response.getcode()
+    return status
+
+
+def response_header(response, name: str) -> str:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return ""
     try:
-        for attempt in range(1, 6):
-            digest = hashlib.md5()
-            source_bytes = 0
-            try:
-                with urllib.request.urlopen(url, timeout=120) as response:
-                    first_chunk = response.read(DOWNLOAD_CHUNK_BYTES)
-                    if not first_chunk:
-                        raise ValueError("Downloaded FASTQ response was empty: {}".format(url))
-                    source_is_gzip = first_chunk.startswith(b"\x1f\x8b")
-                    with part.open("wb") as raw_out:
-                        if source_is_gzip:
-                            chunk = first_chunk
-                            while chunk:
-                                digest.update(chunk)
-                                source_bytes += len(chunk)
-                                raw_out.write(chunk)
-                                chunk = response.read(DOWNLOAD_CHUNK_BYTES)
-                        else:
-                            with gzip.GzipFile(fileobj=raw_out, mode="wb") as gzip_out:
-                                chunk = first_chunk
-                                while chunk:
-                                    digest.update(chunk)
-                                    source_bytes += len(chunk)
-                                    gzip_out.write(chunk)
-                                    chunk = response.read(DOWNLOAD_CHUNK_BYTES)
-                        raw_out.flush()
-                        os.fsync(raw_out.fileno())
-                actual_md5 = digest.hexdigest()
-                if expected_md5 and actual_md5 != expected_md5:
-                    raise ValueError(
-                        "checksum mismatch expected={} actual={} bytes={}".format(
-                            expected_md5,
-                            actual_md5,
-                            source_bytes,
-                        )
-                    )
-                if not is_valid_fastq_gzip(part):
-                    raise ValueError(
-                        "incomplete FASTQ gzip actual_md5={} bytes={}".format(
-                            actual_md5,
-                            source_bytes,
-                        )
-                    )
+        return str(headers.get(name, "") or "").strip()
+    except (AttributeError, TypeError):
+        return ""
+
+
+def content_range_contract(value: str):
+    match = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", value, re.I)
+    if not match:
+        return None
+    start = int(match.group(1))
+    end = int(match.group(2))
+    total = None if match.group(3) == "*" else int(match.group(3))
+    if end < start or (total is not None and (total <= end or total <= 0)):
+        return None
+    return start, end, total
+
+
+def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> None:
+    part = dest.with_name(".{}.download.part".format(dest.name))
+    if part.is_symlink() or (part.exists() and not part.is_file()):
+        raise SystemExit("Resumable FASTQ partial path is unsafe: {}".format(part))
+    if part.exists() and part.stat().st_size > 0:
+        with part.open("rb") as handle:
+            resumable_gzip = handle.read(2) == b"\x1f\x8b"
+        if not resumable_gzip:
+            part.unlink()
+        elif is_valid_fastq_gzip(part):
+            actual_md5 = file_md5(part)
+            if not expected_md5 or actual_md5 == expected_md5:
                 os.replace(part, dest)
                 return
-            except Exception as exc:  # pragma: no cover - network retry integration
-                last_exc = exc
-                if part.exists() or part.is_symlink():
-                    part.unlink()
-                if attempt == 5:
-                    break
-                time.sleep(2)
-        raise SystemExit(
-            "Downloaded FASTQ failed bounded integrity retries: {} ({})".format(
-                dest,
-                last_exc,
-            )
-        )
-    finally:
-        if part.exists() or part.is_symlink():
             part.unlink()
+
+    last_exc = None
+    for attempt in range(1, 6):
+        source_digest = hashlib.md5()
+        source_bytes = 0
+        retain_resumable_part = False
+        try:
+            resume_offset = part.stat().st_size if part.exists() else 0
+            retain_resumable_part = bool(resume_offset)
+            request = url
+            if resume_offset:
+                request = urllib.request.Request(
+                    url,
+                    headers={
+                        "Accept-Encoding": "identity",
+                        "Range": "bytes={}-".format(resume_offset),
+                    },
+                )
+            with urllib.request.urlopen(request, timeout=120) as response:
+                status = response_status(response)
+                content_range = content_range_contract(
+                    response_header(response, "Content-Range")
+                )
+                content_length_text = response_header(response, "Content-Length")
+                content_length = (
+                    int(content_length_text)
+                    if re.fullmatch(r"\d+", content_length_text)
+                    else None
+                )
+                append_response = False
+                expected_total = None
+                expected_response_bytes = content_length
+                if resume_offset and status == 206:
+                    if content_range is None or content_range[0] != resume_offset:
+                        retain_resumable_part = False
+                        raise ValueError(
+                            "invalid resumed Content-Range for offset {}: {!r}".format(
+                                resume_offset,
+                                response_header(response, "Content-Range"),
+                            )
+                        )
+                    append_response = True
+                    expected_response_bytes = content_range[1] - content_range[0] + 1
+                    expected_total = content_range[2]
+                    if content_length is not None and content_length != expected_response_bytes:
+                        raise ValueError(
+                            "resumed Content-Length disagrees with Content-Range: {} != {}".format(
+                                content_length,
+                                expected_response_bytes,
+                            )
+                        )
+                elif resume_offset:
+                    if status not in (None, 200):
+                        retain_resumable_part = False
+                        raise ValueError(
+                            "FASTQ server rejected byte-range resume with HTTP status {}".format(
+                                status
+                            )
+                        )
+                    part.unlink()
+                    resume_offset = 0
+                    retain_resumable_part = False
+
+                first_chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                if not first_chunk:
+                    raise ValueError("Downloaded FASTQ response was empty: {}".format(url))
+                source_is_gzip = append_response or first_chunk.startswith(b"\x1f\x8b")
+                retain_resumable_part = source_is_gzip
+                output_mode = "ab" if append_response else "wb"
+                with part.open(output_mode) as raw_out:
+                    if source_is_gzip:
+                        chunk = first_chunk
+                        while chunk:
+                            source_bytes += len(chunk)
+                            raw_out.write(chunk)
+                            chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                    else:
+                        with gzip.GzipFile(fileobj=raw_out, mode="wb") as gzip_out:
+                            chunk = first_chunk
+                            while chunk:
+                                source_digest.update(chunk)
+                                source_bytes += len(chunk)
+                                gzip_out.write(chunk)
+                                chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                    raw_out.flush()
+                    os.fsync(raw_out.fileno())
+
+                if expected_response_bytes is not None and source_bytes != expected_response_bytes:
+                    raise ValueError(
+                        "truncated FASTQ response expected={} received={} total_part_bytes={}".format(
+                            expected_response_bytes,
+                            source_bytes,
+                            part.stat().st_size,
+                        )
+                    )
+                if expected_total is not None and part.stat().st_size != expected_total:
+                    raise ValueError(
+                        "incomplete resumed FASTQ expected_total={} actual={}".format(
+                            expected_total,
+                            part.stat().st_size,
+                        )
+                    )
+
+            if source_is_gzip:
+                source_bytes = part.stat().st_size
+                actual_md5 = file_md5(part)
+            else:
+                actual_md5 = source_digest.hexdigest()
+            if expected_md5 and actual_md5 != expected_md5:
+                retain_resumable_part = False
+                raise ValueError(
+                    "checksum mismatch expected={} actual={} bytes={}".format(
+                        expected_md5,
+                        actual_md5,
+                        source_bytes,
+                    )
+                )
+            if not is_valid_fastq_gzip(part):
+                raise ValueError(
+                    "incomplete FASTQ gzip actual_md5={} bytes={}".format(
+                        actual_md5,
+                        source_bytes,
+                    )
+                )
+            os.replace(part, dest)
+            return
+        except Exception as exc:  # pragma: no cover - network retry integration
+            last_exc = exc
+            if isinstance(exc, urllib.error.HTTPError) and exc.code == 416:
+                retain_resumable_part = False
+            if part.exists() and not retain_resumable_part:
+                part.unlink()
+            if attempt == 5:
+                break
+            time.sleep(2)
+    partial_detail = ""
+    if part.exists():
+        partial_detail = "; resumable_part={} bytes={}".format(
+            part,
+            part.stat().st_size,
+        )
+    raise SystemExit(
+        "Downloaded FASTQ failed bounded integrity retries: {} ({}{})".format(
+            dest,
+            last_exc,
+            partial_detail,
+        )
+    )
 
 
 with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
@@ -4043,18 +4194,28 @@ case "${selected_transcriptome_mode}" in
 esac
 transcriptome_summary_finalizer_should_run=0
 transcriptome_summary_finalizer_claimed=0
+transcriptome_summary_transaction_lock_acquired=0
+transcriptome_summary_stage_parent=""
 if gg_array_finalizer_claim \
   "${transcriptome_provenance_dir}/array_finalizers" \
   "multispecies_summary" \
   "${transcriptome_expected_tasks}"; then
   transcriptome_summary_finalizer_should_run=1
   transcriptome_summary_finalizer_claimed=1
-  trap 'gg_array_finalizer_release' EXIT
+  trap 'cleanup_transcriptome_summary_transaction' EXIT
 else
   transcriptome_summary_finalizer_status=$?
   if [[ ${transcriptome_summary_finalizer_status} -ne 1 ]]; then
     exit "${transcriptome_summary_finalizer_status}"
   fi
+fi
+if [[ ${transcriptome_summary_finalizer_should_run} -eq 1 ]]; then
+  if ! gg_stage_transaction_lock_acquire \
+    "${transcriptome_provenance_dir}/array_finalizers" \
+    "multispecies_summary"; then
+    exit 1
+  fi
+  transcriptome_summary_transaction_lock_acquired=1
 fi
 transcriptome_summary_needs_update=0
 gg_artifact_contract_init transcriptome_summary_provenance_args "transcriptome_multispecies_summary" "all_species" "${transcriptome_provenance_dir}/all_species.summary.json"
@@ -4077,12 +4238,15 @@ if [[ ${transcriptome_summary_finalizer_should_run} -eq 1 && ${run_multispecies_
   transcriptome_summary_output_dir=$(dirname "${file_multispecies_summary}")
   if [[ -z "${dir_transcriptome_assembly_output}" || "${dir_transcriptome_assembly_output}" == "/" \
     || "${transcriptome_summary_output_dir}" != "${dir_transcriptome_assembly_output%/}/annotation_summary" ]]; then
-    echo "Refusing to clear an unsafe transcriptome summary output path: ${transcriptome_summary_output_dir}" >&2
+    echo "Refusing to publish to an unsafe transcriptome summary output path: ${transcriptome_summary_output_dir}" >&2
     exit 1
   fi
-  rm -rf -- "${transcriptome_summary_output_dir}"
-  ensure_dir "${transcriptome_summary_output_dir}"
-  cd "$(dirname "${file_multispecies_summary}")" || exit 1
+  ensure_dir "${dir_transcriptome_assembly_output}"
+  transcriptome_summary_stage_parent=$(mktemp -d \
+    "${dir_transcriptome_assembly_output%/}/.annotation_summary.gg-work.XXXXXX")
+  transcriptome_summary_stage_dir="${transcriptome_summary_stage_parent}/annotation_summary"
+  ensure_dir "${transcriptome_summary_stage_dir}"
+  cd "${transcriptome_summary_stage_dir}" || exit 1
 
   python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
     --busco_outdir "$(dirname "${file_busco_full_longest_cds}")" \
@@ -4116,8 +4280,17 @@ if [[ ${transcriptome_summary_finalizer_should_run} -eq 1 && ${run_multispecies_
   if [[ -e "Rplots.pdf" ]]; then
     rm -f -- "Rplots.pdf"
   fi
-  gg_artifact_record "${transcriptome_summary_provenance_args[@]}"
   cd "${dir_tmp}" || exit 1
+  if [[ ! -s "${transcriptome_summary_stage_dir}/$(basename "${file_multispecies_summary}")" ]]; then
+    echo "Transcriptome multispecies summary did not create its required PDF in private staging." >&2
+    exit 1
+  fi
+  mv_out_replace_dir \
+    "${transcriptome_summary_stage_dir}" \
+    "${transcriptome_summary_output_dir}"
+  rmdir -- "${transcriptome_summary_stage_parent}"
+  transcriptome_summary_stage_parent=""
+  gg_artifact_record "${transcriptome_summary_provenance_args[@]}"
 
   echo "$(date): End: ${task}"
 else
@@ -4126,6 +4299,12 @@ fi
 if [[ ${transcriptome_summary_finalizer_claimed} -eq 1 ]]; then
   gg_array_finalizer_complete
   transcriptome_summary_finalizer_claimed=0
+fi
+if [[ ${transcriptome_summary_transaction_lock_acquired} -eq 1 ]]; then
+  gg_stage_transaction_lock_release
+  transcriptome_summary_transaction_lock_acquired=0
+fi
+if [[ ${transcriptome_summary_finalizer_should_run} -eq 1 ]]; then
   trap - EXIT
 fi
 
