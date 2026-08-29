@@ -114,6 +114,26 @@ def test_workflows_limit_github_token_permissions_by_default():
     }
 
 
+def test_tests_workflow_avoids_duplicate_branch_push_and_pull_request_runs():
+    triggers = load_workflow("tests.yml")["on"]
+
+    assert triggers["push"]["branches"] == ["main"]
+    assert "pull_request" in triggers
+    assert "workflow_dispatch" in triggers
+
+
+def test_workflow_run_blocks_do_not_interpolate_untrusted_event_data():
+    unsafe_expression = re.compile(r"\$\{\{\s*(?:github\.event\.|github\.head_ref\b|inputs\.)")
+    offenders = []
+    for path in sorted(GITHUB_WORKFLOWS_DIR.glob("*.yml")):
+        for step in workflow_steps(load_workflow(path.name)):
+            run = str(step.get("run", ""))
+            if unsafe_expression.search(run):
+                offenders.append(f"{path.name}: {step.get('name', '<unnamed>')}")
+
+    assert offenders == []
+
+
 def test_dependabot_updates_pinned_github_actions():
     dependabot_path = GITHUB_WORKFLOWS_DIR.parent / "dependabot.yml"
     config = yaml.load(dependabot_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
@@ -152,6 +172,7 @@ def test_immutable_image_tags_fingerprint_resolved_upstream_sources():
         metadata_run = step_run(jobs[metadata_job], metadata_step)
         publish_run = step_run(jobs[publish_job], publish_step)
 
+        assert 'repo_name="$(basename "${GITHUB_REPOSITORY}" | tr \'[:upper:]\' \'[:lower:]\')"' in metadata_run
         assert 'source_revision_hash="$(' in metadata_run
         assert "| sha256sum | cut -c1-12" in metadata_run
         assert 'immutable_tag="${date_tag}-${short_sha}-${source_revision_hash}"' in metadata_run
@@ -250,7 +271,7 @@ def test_release_sif_conversion_has_matching_disk_safeguards():
     release_job = load_workflow("release-sif.yml")["jobs"]["publish-manifest-and-sif"]
     runner_cleanup = step_run(release_job, "Reclaim runner disk space for SIF conversion")
     runtime_install = named_step(release_job, "Install Singularity runtime")
-    conversion = named_step(release_job, "Build SIF from GHCR release tag")
+    conversion = named_step(release_job, "Build SIF from immutable GHCR tag")
     disk_report = named_step(release_job, "Report SIF conversion disk usage")
 
     assert "docker system prune --all --force --volumes" in runner_cleanup
@@ -265,6 +286,31 @@ def test_release_sif_conversion_has_matching_disk_safeguards():
     assert "runner.temp" in conversion["env"]["TMPDIR"]
     assert disk_report["if"] == "always()"
     assert "singularity-transport-tmp" in disk_report["run"]
+
+
+def test_release_images_and_sif_are_validated_before_publication():
+    jobs = load_workflow("release-sif.yml")["jobs"]
+    release_resolution = step_run(
+        jobs["prepare-release"],
+        "Resolve release, image tags, and source revisions",
+    )
+    image_validation = named_step(jobs["build-platform"], "Validate release runtime contracts")
+    conversion = named_step(jobs["publish-manifest-and-sif"], "Build SIF from immutable GHCR tag")
+    identity = named_step(jobs["publish-manifest-and-sif"], "Verify exact release SIF identity")
+    sif_validation = named_step(jobs["publish-manifest-and-sif"], "Validate release SIF runtime contracts")
+
+    assert '"${IMAGE}@${DIGEST}"' in image_validation["run"]
+    assert '--user "$(id -u):$(id -g)"' in image_validation["run"]
+    assert 'git show-ref --verify --quiet "refs/tags/${release_tag}"' in release_resolution
+    assert 'git rev-list -n 1 "refs/tags/${release_tag}"' in release_resolution
+    assert "--gg-suite runtime workflow/tests" in image_validation["run"]
+    assert conversion["env"]["TAG"] == "${{ needs.prepare-release.outputs.immutable_tag }}"
+    assert "release_tag" not in conversion["env"]["TAG"]
+    assert "check_runtime_freshness.sh" in identity["run"]
+    assert "--expected-hash" in identity["run"]
+    assert "steps.runtime-input.outputs.value" in identity["env"]["EXPECTED_RUNTIME_INPUT"]
+    assert "run_in_sif.sh" in sif_validation["run"]
+    assert "--gg-suite runtime workflow/tests" in sif_validation["run"]
 
 
 def test_toolchain_dependent_r_integration_test_runs_in_sif_job():
@@ -343,6 +389,11 @@ def test_container_workflows_embed_version_and_shared_build_input_hash():
         assert "container/scripts/compute_build_input_hash.sh" in hash_step["run"]
         assert "GG_BUILD_VERSION" in hash_step["env"]
         assert "GG_BUILD_SECURITY_REFRESH_EPOCH" in hash_step["env"]
+        assert 'build_input_hash="$(bash container/scripts/compute_build_input_hash.sh ' in hash_step["run"]
+        assert 'runtime_input_hash="$(bash container/scripts/compute_build_input_hash.sh --runtime ' in hash_step["run"]
+        assert "^[0-9a-f]{64}$" in hash_step["run"]
+        assert 'echo "value=$(' not in hash_step["run"]
+        assert 'echo "runtime_value=$(' not in hash_step["run"]
         assert "GG_VERSION=${{ needs." + prepare_job_name + ".outputs.gg_version }}" in build_args
         assert "BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}" in build_args
         assert "RUNTIME_INPUT_HASH=${{ steps.build-input.outputs.runtime_value }}" in build_args

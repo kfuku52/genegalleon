@@ -36,6 +36,33 @@ def run_cli(*args):
     )
 
 
+def test_server_isolates_malformed_requests_and_continues():
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "serve"],
+        input=b"not-a-command\0\0also-invalid\0\0",
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.splitlines() == [b"2", b"2"]
+    assert completed.stderr.count(b"argument parsing") == 2
+
+
+def test_server_rejects_non_utf8_token_without_exiting_before_next_request():
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "serve"],
+        input=b"needs-run\0\xff\0ignored-token\0\0still-invalid\0\0",
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.splitlines() == [b"2", b"2"]
+    assert b"non-UTF-8 request token" in completed.stderr
+    assert b"argument parsing" in completed.stderr
+
+
 def contract_args(
     workspace,
     manifest,

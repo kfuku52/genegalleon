@@ -1292,6 +1292,7 @@ def serve() -> int:
 
     pending = bytearray()
     arguments: list[str] = []
+    discarding_request = False
     while chunk := sys.stdin.buffer.read1(65536):
         pending.extend(chunk)
         while True:
@@ -1299,8 +1300,20 @@ def serve() -> int:
                 end = pending.index(0)
             except ValueError:
                 break
-            token = bytes(pending[:end]).decode("utf-8")
+            raw_token = bytes(pending[:end])
             del pending[: end + 1]
+            if discarding_request:
+                if not raw_token:
+                    discarding_request = False
+                continue
+            try:
+                token = raw_token.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                print(f"Artifact provenance server rejected a non-UTF-8 request token: {exc}", file=sys.stderr)
+                print(ERROR, flush=True)
+                arguments = []
+                discarding_request = True
+                continue
             if token:
                 arguments.append(token)
                 continue
@@ -1308,8 +1321,22 @@ def serve() -> int:
                 continue
             # Stdout is reserved for the one-line status protocol. Normal
             # provenance diagnostics remain visible through stderr.
-            with contextlib.redirect_stdout(sys.stderr):
-                status = dispatch(arguments)
+            try:
+                with contextlib.redirect_stdout(sys.stderr):
+                    status = dispatch(arguments)
+            except SystemExit as exc:
+                print(
+                    f"Artifact provenance server request was rejected by argument parsing: {exc}",
+                    file=sys.stderr,
+                )
+                status = ERROR
+            except Exception as exc:
+                print(
+                    "Artifact provenance server request failed unexpectedly: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                status = ERROR
             print(status, flush=True)
             arguments = []
     return 0

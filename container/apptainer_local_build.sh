@@ -206,6 +206,9 @@ staging_root="${work_dir}/context"
 definition_path="${work_dir}/genegalleon_local.def"
 
 cleanup() {
+  if [[ -n "${sif_stage_dir:-}" ]]; then
+    rm -rf -- "${sif_stage_dir}"
+  fi
   if [[ "${NATIVE_BUILD_KEEP_WORKDIR}" == "1" ]]; then
     echo "[apptainer_local_build] kept workdir: ${work_dir}"
     return
@@ -269,19 +272,21 @@ if [[ "${NATIVE_BUILD_FAKEROOT}" == "always" ]]; then
 fi
 
 mkdir -p "$(dirname "${OUT}")"
+sif_stage_dir="$(mktemp -d "$(dirname "${OUT}")/.gg-sif-build.XXXXXX")"
+staged_out="${sif_stage_dir}/$(basename "${OUT}")"
 echo "[apptainer_local_build] engine=${resolved_engine}"
 echo "[apptainer_local_build] platform=${platform}"
 echo "[apptainer_local_build] definition=${definition_path}"
 
 if [[ ${#build_args[@]} -gt 0 ]]; then
-  if ! "${resolved_engine}" build "${build_args[@]}" "${OUT}" "${definition_path}"; then
+  if ! "${resolved_engine}" build "${build_args[@]}" "${staged_out}" "${definition_path}"; then
     echo "[apptainer_local_build] Native local build failed."
     echo "[apptainer_local_build] Retry with NATIVE_BUILD_FAKEROOT=always if your site supports fakeroot,"
     echo "[apptainer_local_build] or use IMAGE_SOURCE=public to pull the published image."
     exit 1
   fi
 else
-  if ! "${resolved_engine}" build "${OUT}" "${definition_path}"; then
+  if ! "${resolved_engine}" build "${staged_out}" "${definition_path}"; then
     echo "[apptainer_local_build] Native local build failed."
     echo "[apptainer_local_build] Retry with NATIVE_BUILD_FAKEROOT=always if your site supports fakeroot,"
     echo "[apptainer_local_build] or use IMAGE_SOURCE=public to pull the published image."
@@ -289,4 +294,7 @@ else
   fi
 fi
 
+mv -f -- "${staged_out}" "${OUT}"
+rm -rf -- "${sif_stage_dir}"
+sif_stage_dir=""
 echo "Generated ${OUT}"

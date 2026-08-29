@@ -61,6 +61,7 @@ gg_scheduler_runtime_prelude() {
 
 gg_resolve_physical_path() {
 	local path=${1:-}
+	local parent=""
 	local resolved_path=""
 
 	if [[ -z "${path}" ]]; then
@@ -72,7 +73,8 @@ gg_resolve_physical_path() {
 			return 0
 		fi
 	fi
-	resolved_path=$(cd "$(dirname "${path}")" && pwd -P)/$(basename "${path}")
+	parent=$(cd "$(dirname "${path}")" && pwd -P) || return 1
+	resolved_path="${parent}/$(basename -- "${path}")"
 	printf '%s\n' "${resolved_path}"
 }
 
@@ -424,11 +426,16 @@ gg_entrypoint_runtime_snapshot_dir() {
 	local job_id=""
 	local task_id=""
 	local output_root=""
+	local scheduler_kind=""
 
 	entrypoint_stem="$(basename "${entrypoint_name}")"
 	entrypoint_stem="${entrypoint_stem%.sh}"
 	job_id="${GG_JOB_ID:-${SLURM_JOB_ID:-${PBS_JOBID:-${JOB_ID:-local_$$}}}}"
 	task_id="${GG_ARRAY_TASK_ID:-${SLURM_ARRAY_TASK_ID:-${PBS_ARRAY_INDEX:-${PBS_ARRAYID:-${SGE_TASK_ID:-1}}}}}"
+	scheduler_kind="${GG_SCHEDULER_KIND:-$(gg_detect_scheduler_kind)}"
+	if [[ "${scheduler_kind}" == "local" ]]; then
+		job_id="${job_id}.${BASHPID:-$$}"
+	fi
 
 	output_root="${gg_workspace_output_dir:-}"
 	if [[ -z "${output_root}" && -n "${gg_workspace_dir:-}" ]]; then

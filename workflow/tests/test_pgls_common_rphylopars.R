@@ -92,6 +92,21 @@ stopifnot(isTRUE(res_with_var$has_within_species_variation))
 prefix_cols <- c("species", "OG1_1", "OG1_2", "OG10_1", "OG10_2", "trait")
 stopifnot(identical(expression_replicate_columns(prefix_cols, "OG1", "_"), c("OG1_1", "OG1_2")))
 stopifnot(identical(expression_replicate_columns(prefix_cols, "OG10", "_"), c("OG10_1", "OG10_2")))
+overlapping_base_cols <- c("leaf_1", "leaf_2", "leaf_bud_1", "leaf_bud_2")
+stopifnot(identical(expression_replicate_columns(overlapping_base_cols, "leaf", "_"), c("leaf_1", "leaf_2")))
+stopifnot(identical(expression_replicate_columns(overlapping_base_cols, "leaf_bud", "_"), c("leaf_bud_1", "leaf_bud_2")))
+named_suffix_cols <- c("A_rep1", "A_rep2", "A_bud_rep1")
+stopifnot(identical(expression_replicate_columns(named_suffix_cols, "A", "_"), c("A_rep1", "A_rep2")))
+stopifnot(identical(expression_replicate_columns(named_suffix_cols, "A_bud", "_"), "A_bud_rep1"))
+stopifnot(identical(expression_replicate_columns(c("leaf1", "leaf2"), "leaf1", ""), "leaf1"))
+rkftools_contract <- data.frame(
+  A_rep1 = 1,
+  A_rep2 = 2,
+  A_bud_rep1 = 3,
+  check.names = FALSE
+)
+stopifnot(identical(rkftools::get_expression_bases(rkftools_contract, "_"), c("A", "A_bud")))
+stopifnot(identical(rkftools::get_expression_bases(rkftools_contract, ""), colnames(rkftools_contract)))
 
 df_prefix <- data.frame(
   species = c("sp1", "sp2"),
@@ -199,5 +214,42 @@ fit_fail <- fit_phylopars_lm_with_retries(
 )
 stopifnot(is.null(fit_fail$fit))
 stopifnot(grepl("always fail", fit_fail$error_message, fixed = TRUE))
+
+# run_phylopars_regression: named fit statistics must not depend on output-column order.
+fit_phylopars_lm_with_retries <- function(...) {
+  list(
+    fit = structure(
+      list(R2 = 0.51, R2adj = 0.41, sigma = 1.1, Fstat = 3.2, pval = 0.03, logLik = -9.5),
+      class = "mock_phylopars"
+    ),
+    fit_mode = "mock",
+    error_message = ""
+  )
+}
+reordered_cols <- c(
+  "trait", "pval", "R2", "variable", "logLik", "sigma", "R2adj",
+  "Fstat", "AIC", "BIC", "PCC", "p.adj", "fit_mode"
+)
+reordered_input <- data.frame(
+  species = c("sp1", "sp2", "sp3"),
+  trait_value = c(1, 2, 3),
+  expr = c(3, 2, 1),
+  mean_expr = c(3, 2, 1),
+  stringsAsFactors = FALSE
+)
+reordered_stats <- run_phylopars_regression(
+  df_trait_exp = reordered_input,
+  tree = dummy_tree,
+  trait_cols = "trait_value",
+  expression_bases = "expr",
+  output_cols = reordered_cols,
+  use_phenocov = FALSE
+)
+stopifnot(isTRUE(all.equal(reordered_stats$R2[[1]], 0.51)))
+stopifnot(isTRUE(all.equal(reordered_stats$R2adj[[1]], 0.41)))
+stopifnot(isTRUE(all.equal(reordered_stats$sigma[[1]], 1.1)))
+stopifnot(isTRUE(all.equal(reordered_stats$Fstat[[1]], 3.2)))
+stopifnot(isTRUE(all.equal(reordered_stats$pval[[1]], 0.03)))
+stopifnot(isTRUE(all.equal(reordered_stats$logLik[[1]], -9.5)))
 
 cat("test_pgls_common_rphylopars.R: OK\n")

@@ -52,5 +52,18 @@ case "${SOURCE}" in
     ;;
 esac
 
-"${resolved_engine}" build "${OUT}" "${source_uri}"
+out_dir="$(dirname "${OUT}")"
+out_basename="$(basename "${OUT}")"
+mkdir -p "${out_dir}"
+stage_dir="$(mktemp -d "${out_dir}/.gg-sif-build.XXXXXX")"
+staged_out="${stage_dir}/${out_basename}"
+cleanup() {
+  rm -rf -- "${stage_dir}"
+}
+trap cleanup EXIT HUP INT TERM
+
+"${resolved_engine}" build "${staged_out}" "${source_uri}"
+mv -f -- "${staged_out}" "${OUT}"
+rm -rf -- "${stage_dir}"
+trap - EXIT HUP INT TERM
 echo "Generated ${OUT}"

@@ -122,6 +122,25 @@ normalize_replicate_sep = function(x, default = "_") {
     return(out)
 }
 
+replicate_column_mask = function(column_names, trait_name, replicate_sep = "_") {
+    exact = !is.na(column_names) & (column_names == trait_name)
+    separator = if (is.null(replicate_sep) || is.na(replicate_sep)) "" else replicate_sep
+    if (separator == "") {
+        return(exact)
+    }
+    replicated = vapply(column_names, function(column_name) {
+        if (is.na(column_name)) {
+            return(FALSE)
+        }
+        parts = strsplit(column_name, separator, fixed = TRUE)[[1]]
+        length(parts) > 1 && identical(
+            paste(parts[-length(parts)], collapse = separator),
+            trait_name
+        )
+    }, logical(1))
+    exact | replicated
+}
+
 merge_replicates_with_input_error = function(raw_trait_table, replicate_sep = "_") {
     trait_table = as.data.frame(raw_trait_table, check.names = FALSE, stringsAsFactors = FALSE)
     if (is.null(rownames(trait_table))) {
@@ -148,10 +167,7 @@ merge_replicates_with_input_error = function(raw_trait_table, replicate_sep = "_
 
     original_cols = colnames(trait_table)
     for (trait_name in colnames(merged_trait_table)) {
-        is_col = (original_cols == trait_name)
-        if (!(isTRUE(replicate_sep == "") || is.na(replicate_sep))) {
-            is_col = is_col | startsWith(original_cols, paste0(trait_name, replicate_sep))
-        }
+        is_col = replicate_column_mask(original_cols, trait_name, replicate_sep)
         values = as.matrix(trait_table[, is_col, drop = FALSE])
         if (!length(values)) {
             next
@@ -177,10 +193,7 @@ merge_replicates_with_input_error = function(raw_trait_table, replicate_sep = "_
     num_groups_with_replicates = sum(vapply(
         colnames(merged_trait_table),
         function(trait_name) {
-            is_col = (original_cols == trait_name)
-            if (!(isTRUE(replicate_sep == "") || is.na(replicate_sep))) {
-                is_col = is_col | startsWith(original_cols, paste0(trait_name, replicate_sep))
-            }
+            is_col = replicate_column_mask(original_cols, trait_name, replicate_sep)
             sum(is_col) > 1L
         },
         logical(1)

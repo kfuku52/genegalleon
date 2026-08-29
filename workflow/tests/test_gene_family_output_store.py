@@ -1,4 +1,5 @@
 import concurrent.futures
+import errno
 import fcntl
 import json
 import os
@@ -1069,6 +1070,25 @@ def test_active_family_shared_lock_prevents_nonblocking_archive(tmp_path: Path):
     finally:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
         lock_handle.close()
+
+
+def test_bucket_lock_reports_unsupported_shared_filesystem_locking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    def unsupported_flock(_descriptor, _operation):
+        raise OSError(errno.ENOSYS, "Function not implemented")
+
+    monkeypatch.setattr(output_store_module.fcntl, "flock", unsupported_flock)
+
+    with pytest.raises(ArchiveStoreError, match="cross-node POSIX flock semantics"):
+        with output_store_module._bucket_lock(
+            tmp_path / "locks" / "00.lock",
+            exclusive=True,
+        ):
+            pass
 
 
 def test_active_family_does_not_block_archiving_an_unrelated_family(tmp_path: Path):
@@ -3205,6 +3225,39 @@ def test_zip_to_raw_conversion_treats_zero_available_inodes_as_exhausted(
 
     assert not paths["mafft"].exists()
     assert GeneFamilyOutputStore(root).logical_exists("mafft/A_cds.aln.fa.gz")
+
+
+def test_zip_to_raw_conversion_accepts_missing_inode_accounting(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "query2family"
+    query_dir = tmp_path / "query_gene"
+    query_dir.mkdir()
+    (query_dir / "A").write_text("geneA\n", encoding="utf-8")
+    paths = _write_family_outputs(root, "A", complete=True)
+    family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
+    archive_completed_outputs(root, "query2family", family_ids, family_from_name)
+    real_stats = os.statvfs(root)
+    unavailable = SimpleNamespace(
+        **{
+            field: (
+                0
+                if field in {"f_files", "f_favail"}
+                else getattr(real_stats, field)
+            )
+            for field in dir(real_stats)
+            if field.startswith("f_")
+        }
+    )
+    monkeypatch.setattr(output_store_module.os, "statvfs", lambda _path: unavailable)
+
+    convert_storage_to_raw(root, "query2family")
+
+    assert paths["mafft"].exists()
+    assert paths["mafft"].read_bytes() == b"mafft:A\n"
 
 
 def test_storage_status_cli_can_inspect_physical_store_without_catalog(

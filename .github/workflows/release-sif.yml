@@ -51,14 +51,17 @@ jobs:
       - name: Resolve release, image tags, and source revisions
         id: vars
         shell: bash
+        env:
+          RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
+          DISPATCH_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
         run: |
           set -euo pipefail
           git fetch --force --tags origin
 
           if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
-            release_tag="${{ github.event.release.tag_name }}"
+            release_tag="${RELEASE_EVENT_TAG}"
           else
-            release_tag="${{ github.event.inputs.release_tag }}"
+            release_tag="${DISPATCH_RELEASE_TAG}"
           fi
 
           if [[ -z "${release_tag}" ]]; then
@@ -69,16 +72,20 @@ jobs:
             echo "Release tag contains unsupported characters for container tags: ${release_tag}"
             exit 1
           fi
-          release_sha="$(git rev-list -n 1 "${release_tag}" 2>/dev/null || true)"
-          if [[ -z "${release_sha}" ]]; then
+          if ! git show-ref --verify --quiet "refs/tags/${release_tag}"; then
             echo "Release tag was not found in this repository: ${release_tag}"
+            exit 1
+          fi
+          release_sha="$(git rev-list -n 1 "refs/tags/${release_tag}" 2>/dev/null || true)"
+          if [[ -z "${release_sha}" ]]; then
+            echo "Release tag did not resolve to a commit: ${release_tag}"
             exit 1
           fi
           git checkout --detach "${release_sha}"
           container/scripts/check_env_coverage.sh .
 
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-          repo_name="$(basename "${GITHUB_REPOSITORY}")"
+          repo_name="$(basename "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/${repo_name}"
           date_tag="$(date -u +%Y%m%d)"
           short_sha="${release_sha:0:7}"
@@ -195,8 +202,15 @@ jobs:
           RKFTOOLS_REPO_SHA: ${{ needs.prepare-release.outputs.rkftools_repo_sha }}
           RADTE_REPO_SHA: ${{ needs.prepare-release.outputs.radte_repo_sha }}
         run: |
-          echo "value=$(bash container/scripts/compute_build_input_hash.sh "${GG_BUILD_SECURITY_REFRESH_EPOCH}")" >> "${GITHUB_OUTPUT}"
-          echo "runtime_value=$(bash container/scripts/compute_build_input_hash.sh --runtime "${GG_BUILD_SECURITY_REFRESH_EPOCH}")" >> "${GITHUB_OUTPUT}"
+          set -euo pipefail
+          build_input_hash="$(bash container/scripts/compute_build_input_hash.sh "${GG_BUILD_SECURITY_REFRESH_EPOCH}")"
+          runtime_input_hash="$(bash container/scripts/compute_build_input_hash.sh --runtime "${GG_BUILD_SECURITY_REFRESH_EPOCH}")"
+          if [[ ! "${build_input_hash}" =~ ^[0-9a-f]{64}$ || ! "${runtime_input_hash}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Build input hash calculation returned an invalid digest." >&2
+            exit 1
+          fi
+          printf 'value=%s\nruntime_value=%s\n' \
+            "${build_input_hash}" "${runtime_input_hash}" >> "${GITHUB_OUTPUT}"
 
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -247,6 +261,24 @@ jobs:
           # Reuse the same per-platform cache scopes as container-ghcr.yml.
           cache-from: type=gha,scope=container-${{ steps.platform.outputs.pair }}
           cache-to: type=gha,mode=max,scope=container-${{ steps.platform.outputs.pair }}
+
+      - name: Validate release runtime contracts
+        shell: bash
+        env:
+          IMAGE: ${{ needs.prepare-release.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DIGEST}" ]]; then
+            echo "docker/build-push-action did not return an image digest."
+            exit 1
+          fi
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -w "${GITHUB_WORKSPACE}" \
+            "${IMAGE}@${DIGEST}" \
+            python -m pytest -q --gg-suite runtime workflow/tests
 
       - name: Export digest
         shell: bash
@@ -314,6 +346,31 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute expected release runtime input
+        id: runtime-input
+        shell: bash
+        env:
+          GG_BUILD_SECURITY_REFRESH_EPOCH: ${{ needs.prepare-release.outputs.security_refresh_epoch }}
+          KFU52_AMALGKIT_REPO_SHA: ${{ needs.prepare-release.outputs.amalgkit_repo_sha }}
+          KFU52_CDSKIT_REPO_SHA: ${{ needs.prepare-release.outputs.cdskit_repo_sha }}
+          KFU52_CSUBST_REPO_SHA: ${{ needs.prepare-release.outputs.csubst_repo_sha }}
+          KFU52_NWKIT_REPO_SHA: ${{ needs.prepare-release.outputs.nwkit_repo_sha }}
+          BUSCO_REPO_SHA: ${{ needs.prepare-release.outputs.busco_repo_sha }}
+          PAML_REPO_SHA: ${{ needs.prepare-release.outputs.paml_repo_sha }}
+          KFL1OU_REPO_SHA: ${{ needs.prepare-release.outputs.kfl1ou_repo_sha }}
+          KFFRACTBIAS_REPO_SHA: ${{ needs.prepare-release.outputs.kffractbias_repo_sha }}
+          KFTOOLS_REPO_SHA: ${{ needs.prepare-release.outputs.kftools_repo_sha }}
+          RKFTOOLS_REPO_SHA: ${{ needs.prepare-release.outputs.rkftools_repo_sha }}
+          RADTE_REPO_SHA: ${{ needs.prepare-release.outputs.radte_repo_sha }}
+        run: |
+          set -euo pipefail
+          value="$(bash container/scripts/compute_build_input_hash.sh --runtime "${GG_BUILD_SECURITY_REFRESH_EPOCH}")"
+          if [[ ! "${value}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Release runtime input calculation returned an invalid digest." >&2
+            exit 1
+          fi
+          printf 'value=%s\n' "${value}" >> "${GITHUB_OUTPUT}"
 
       - name: Create and push multi-arch release manifest
         shell: bash
@@ -400,7 +457,7 @@ jobs:
           echo "SingularityCE ${installed_version}"
           echo "engine=singularity" >> "${GITHUB_OUTPUT}"
 
-      - name: Build SIF from GHCR release tag
+      - name: Build SIF from immutable GHCR tag
         shell: bash
         env:
           APPTAINER_CACHEDIR: ${{ runner.temp }}/apptainer-cache
@@ -410,6 +467,10 @@ jobs:
           SINGULARITY_DISABLE_CACHE: "1"
           SINGULARITY_TMPDIR: ${{ runner.temp }}/singularity-tmp
           TMPDIR: ${{ runner.temp }}/singularity-transport-tmp
+          IMAGE: ${{ needs.prepare-release.outputs.image }}
+          TAG: ${{ needs.prepare-release.outputs.immutable_tag }}
+          ENGINE: ${{ steps.runtime.outputs.engine }}
+          OUT: ${{ needs.prepare-release.outputs.sif_name }}
         run: |
           set -euo pipefail
           mkdir -p \
@@ -428,12 +489,31 @@ jobs:
           fi
           df -h /
           free -h
-          IMAGE="${{ needs.prepare-release.outputs.image }}" \
-          TAG="${{ needs.prepare-release.outputs.release_tag }}" \
-          ENGINE="${{ steps.runtime.outputs.engine }}" \
-          OUT="${{ needs.prepare-release.outputs.sif_name }}" \
-            bash container/apptainer_from_docker.sh
-          sha256sum "${{ needs.prepare-release.outputs.sif_name }}" > "${{ needs.prepare-release.outputs.sif_name }}.sha256"
+          bash container/apptainer_from_docker.sh
+          sha256sum "${OUT}" > "${OUT}.sha256"
+
+      - name: Verify exact release SIF identity
+        shell: bash
+        env:
+          SIF_PATH: ${{ needs.prepare-release.outputs.sif_name }}
+          SIF_ENGINE: ${{ steps.runtime.outputs.engine }}
+          EXPECTED_RUNTIME_INPUT: ${{ steps.runtime-input.outputs.value }}
+        run: |
+          set -euo pipefail
+          GG_RUNTIME_FRESHNESS=off \
+          bash container/scripts/check_runtime_freshness.sh \
+            --sif "${SIF_PATH}" \
+            --engine "${SIF_ENGINE}" \
+            --expected-hash "${EXPECTED_RUNTIME_INPUT}"
+
+      - name: Validate release SIF runtime contracts
+        shell: bash
+        env:
+          GENEGALLEON_SIF: ${{ needs.prepare-release.outputs.sif_name }}
+        run: |
+          set -euo pipefail
+          bash workflow/tests/run_in_sif.sh \
+            python -m pytest -q --gg-suite runtime workflow/tests
 
       - name: Report SIF conversion disk usage
         if: always()

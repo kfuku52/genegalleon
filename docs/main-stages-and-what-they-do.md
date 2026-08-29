@@ -138,10 +138,23 @@ Purpose:
 - optional contamination filtering,
 - BUSCO and expression quantification summaries.
 
-For SRA-derived inputs, `getfastq_completion.json` binds every published FASTQ
+For SRA-derived inputs, schema-3 `getfastq_completion.json` binds every published FASTQ
 to its relative path, byte size, SHA-256, and a complete gzip/FASTQ integrity
-check. Resume staging, assembly/subsampling, long-read reuse, and quantification
-revalidate that exact byte contract before consuming the reads.
+check. GeneGalleon performs one full byte/integrity validation per invocation
+that consumes the reads. Later consumers in the same invocation verify the
+manifest index and file identity (device, inode, size, mtime, and ctime); any
+identity change triggers another full byte/integrity validation.
+
+If amalgkit exhausts its configured download sources, GeneGalleon can recover
+the public original FASTQs from bounded ENA/SRA endpoints. That recovery is
+built in a directory isolated from any partially completed, filtered amalgkit
+files, so a published read set cannot mix filtered and original reads. The
+completion manifest records `read_source=amalgkit` or
+`read_source=public-original`; the latter means all runs use public originals
+and have not passed through amalgkit's rRNA/contamination filters. FASTQ files
+not referenced by the current metadata are quarantined outside the
+`*.amalgkit.fastq.gz` namespace, and validation rejects any extra FASTQ that is
+not bound by the manifest.
 
 Main outputs:
 
@@ -334,6 +347,13 @@ Notable defaults:
   falls back to the root-level `Phylogenetic_Hierarchical_Orthogroups/N0.tsv`
   when required by OrthoFinder 3.1+ output differences, and rejects clade-level
   `N*.tsv` files as substitutes for the root table.
+- the complete validated OrthoFinder directory is published as one recoverable
+  replacement. Failed runs leave the previous public directory intact, and
+  outputs that disappeared in a newer OrthoFinder run cannot survive as stale
+  top-level entries.
+- core-species selection reports the selected, requested, candidate, and
+  filter-passing counts when fewer species are retained. Ambiguous BUSCO summary
+  matches stop selection instead of being treated as missing completeness data.
 
 ### Inlined Stage: Species Tree
 

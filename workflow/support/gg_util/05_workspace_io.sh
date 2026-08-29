@@ -511,8 +511,10 @@ mv_out_bundle() (
 	local -a publish_attempted=()
 	local -a bundle_lock_paths=()
 	local -a bundle_acquired_paths=()
+	local -a bundle_lock_heartbeat_pids=()
 	local argument_index pair_index previous_index source destination parent basename token canonical_source canonical_destination lock_path swap_path
 	local pair_count=$(( $# / 2 ))
+	local LC_ALL=C
 	for ((argument_index = 1; argument_index <= $#; argument_index += 2)); do
 		source=${!argument_index}
 		pair_index=$(( argument_index + 1 ))
@@ -556,7 +558,7 @@ mv_out_bundle() (
 			fi
 		done
 	done
-	token="$$.${RANDOM}"
+	token="${BASHPID:-$$}.${RANDOM}"
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
 		destination=${destinations[pair_index]}
 		parent=$(dirname -- "${destination}")
@@ -588,9 +590,11 @@ mv_out_bundle() (
 	_mv_out_bundle_release_lock() {
 		local release_index
 		for ((release_index = ${#bundle_acquired_paths[@]} - 1; release_index >= 0; release_index--)); do
+			gg_shared_lock_stop_heartbeat "${bundle_lock_heartbeat_pids[release_index]:-}"
 			_gg_publish_lock_release "${bundle_acquired_paths[release_index]}" || true
 		done
 		bundle_acquired_paths=()
+		bundle_lock_heartbeat_pids=()
 	}
 	_mv_out_bundle_rollback() {
 		local rollback_index
@@ -641,6 +645,8 @@ mv_out_bundle() (
 			return 1
 		fi
 		bundle_acquired_paths+=("${lock_path}")
+		gg_shared_lock_start_heartbeat "${lock_path}"
+		bundle_lock_heartbeat_pids+=("${GG_SHARED_LOCK_HEARTBEAT_PID:-}")
 	done
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
 		if [[ -e "${destinations[pair_index]}" || -L "${destinations[pair_index]}" ]]; then

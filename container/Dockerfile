@@ -346,6 +346,10 @@ ARG GG_VERSION="unknown"
 ARG BUILD_INPUT_HASH=""
 ARG RUNTIME_INPUT_HASH=""
 
+RUN [[ "${BUILD_INPUT_HASH}" =~ ^[0-9a-f]{64}$ ]] \
+ && [[ "${RUNTIME_INPUT_HASH}" =~ ^[0-9a-f]{64}$ ]] \
+ || { echo "BUILD_INPUT_HASH and RUNTIME_INPUT_HASH must be lowercase SHA-256 digests" >&2; exit 1; }
+
 LABEL org.opencontainers.image.title="GeneGalleon workflow container" \
       org.opencontainers.image.description="Reproducible multi-architecture runtime for GeneGalleon (amd64 + arm64)" \
       org.opencontainers.image.source="https://github.com/kfuku52/genegalleon" \

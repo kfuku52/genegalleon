@@ -82,6 +82,11 @@ _download_uniprot_sprot_dat_to_file() {
     rm -rf -- "${tmp_dir}"
     return 1
   fi
+  if ! gzip -t -- "${dat_tmp}" >/dev/null 2>&1; then
+    echo "Downloaded UniProt Swiss-Prot DAT failed gzip validation: ${uniprot_dat_url}" >&2
+    rm -rf -- "${tmp_dir}"
+    return 1
+  fi
 
   mv -- "${dat_tmp}" "${output_file}"
   rm -rf -- "${tmp_dir}"
@@ -121,6 +126,11 @@ _build_uniprot_sprot_metadata_from_dat() {
   mv -- "${out_tmp}" "${out_path}"
 }
 
+_uniprot_sprot_dat_is_readable() {
+  local dat_path=$1
+  [[ -s "${dat_path}" ]] && gzip -t -- "${dat_path}" >/dev/null 2>&1
+}
+
 _prepare_uniprot_sprot_meta_to_file() {
   local output_meta=$1
   local sys_prefix=$2
@@ -142,9 +152,9 @@ _prepare_uniprot_sprot_meta_to_file() {
   tmp_dir=$(mktemp -d "$(dirname "${output_meta}")/tmp.uniprot_sprot_meta.XXXXXX")
   local dat_source=""
 
-  if [[ -s "${runtime_prefix}.dat.gz" ]]; then
+  if _uniprot_sprot_dat_is_readable "${runtime_prefix}.dat.gz"; then
     dat_source="${runtime_prefix}.dat.gz"
-  elif [[ -s "${sys_prefix}.dat.gz" ]]; then
+  elif _uniprot_sprot_dat_is_readable "${sys_prefix}.dat.gz"; then
     dat_source="${sys_prefix}.dat.gz"
   else
     dat_source="${tmp_dir}/uniprot_sprot.dat.gz"
@@ -152,8 +162,10 @@ _prepare_uniprot_sprot_meta_to_file() {
       rm -rf -- "${tmp_dir}"
       return 1
     fi
-    if [[ ! -s "${runtime_prefix}.dat.gz" ]]; then
-      cp -- "${dat_source}" "${runtime_prefix}.dat.gz" || true
+    if ! _uniprot_sprot_dat_is_readable "${runtime_prefix}.dat.gz"; then
+      if ! cp_out "${dat_source}" "${runtime_prefix}.dat.gz"; then
+        echo "Could not cache the downloaded UniProt Swiss-Prot DAT; continuing with the validated temporary copy." >&2
+      fi
     fi
   fi
 

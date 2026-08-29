@@ -72,7 +72,7 @@ bind_args=(--bind "${repo_root}:${repo_root}")
 if [[ -n "${GENEGALLEON_SIF_EXTRA_BINDS:-}" ]]; then
   while IFS= read -r bind_path; do
     [[ -z "${bind_path}" ]] && continue
-    if [[ "${bind_path}" != /* || "${bind_path}" == *:* || ! -e "${bind_path}" ]]; then
+    if [[ "${bind_path}" != /* || "${bind_path}" == *:* || "${bind_path}" == *,* || ! -e "${bind_path}" ]]; then
       echo "Invalid GENEGALLEON_SIF_EXTRA_BINDS path: ${bind_path}" >&2
       exit 1
     fi

@@ -54,6 +54,21 @@ def test_synteny_neighbors_load_gene_info_replaces_numeric_chromosome_dtype(tmp_
     assert observed["gene_id"].tolist() == ["gene_1", "gene_2"]
 
 
+def test_synteny_neighbors_load_gene_info_preserves_both_reversed_interval_bounds(tmp_path):
+    mod = load_module("synteny_neighbors.py", "synteny_neighbors_reversed_interval_module")
+    cache = tmp_path / "species.gff_info.tsv"
+    cache.write_text(
+        "gene_id\tchromosome\tstart\tend\tstrand\n"
+        "gene_reversed\tchr1\t20\t10\t-\n",
+        encoding="utf-8",
+    )
+
+    observed = mod.load_gene_info(str(cache))
+
+    assert observed.loc[0, "start"] == 10
+    assert observed.loc[0, "end"] == 20
+
+
 def test_synteny_species_gene_cache_tracks_input_and_output_content(tmp_path):
     mod = load_module("synteny_neighbors.py", "synteny_neighbors_cache_module")
     cds = tmp_path / "Species_a.fa"

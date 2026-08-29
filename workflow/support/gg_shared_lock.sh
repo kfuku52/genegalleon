@@ -178,6 +178,7 @@ gg_array_finalizer_claim() {
   mkdir -p "${run_dir}"
   exec {GG_ARRAY_FINALIZER_LOCK_FD}>"${lock_file}" || return 2
   if ! flock -x "${GG_ARRAY_FINALIZER_LOCK_FD}"; then
+    echo "Failed to acquire the array finalizer lock: ${lock_file}. Verify that the shared workspace provides cross-node flock semantics." >&2
     exec {GG_ARRAY_FINALIZER_LOCK_FD}>&-
     GG_ARRAY_FINALIZER_LOCK_FD=""
     return 2

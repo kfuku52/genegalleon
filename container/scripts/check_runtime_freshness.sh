@@ -149,14 +149,39 @@ sha256_file() {
   fi
 }
 
+sha256_stream() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  else
+    shasum -a 256 | awk '{print $1}'
+  fi
+}
+
 git_dir="$(git -C "${repo_root}" rev-parse --git-dir 2>/dev/null || true)"
 if [[ -n "${git_dir}" && "${git_dir}" != /* ]]; then
   git_dir="${repo_root}/${git_dir}"
 fi
-cache_root="${GG_RUNTIME_FRESHNESS_CACHE_DIR:-${git_dir:-${TMPDIR:-/tmp}/genegalleon}/gg-runtime-freshness}"
+private_cache_parent=""
+if [[ -n "${GG_RUNTIME_FRESHNESS_CACHE_DIR:-}" ]]; then
+  cache_root="${GG_RUNTIME_FRESHNESS_CACHE_DIR}"
+elif [[ -n "${git_dir}" ]]; then
+  cache_root="${git_dir}/gg-runtime-freshness"
+else
+  private_cache_parent="${TMPDIR:-/tmp}/genegalleon_$(id -u)"
+  if [[ -L "${private_cache_parent}" || ( -e "${private_cache_parent}" && ( ! -d "${private_cache_parent}" || ! -O "${private_cache_parent}" ) ) ]]; then
+    echo "Refusing unsafe runtime freshness cache parent: ${private_cache_parent}" >&2
+    exit 1
+  fi
+  (umask 077; mkdir -p -- "${private_cache_parent}")
+  if [[ -L "${private_cache_parent}" || ! -d "${private_cache_parent}" || ! -O "${private_cache_parent}" ]]; then
+    echo "Runtime freshness cache parent is not an owned directory: ${private_cache_parent}" >&2
+    exit 1
+  fi
+  chmod 700 "${private_cache_parent}"
+  cache_root="${private_cache_parent}/gg-runtime-freshness"
+fi
 source_config_hash="$(sha256_file "${repo_root}/container/source_branches.env")"
 resolver_hash="$(sha256_file "${script_dir}/resolve_source_revisions.sh")"
-cache_file="${cache_root}/$(date -u +%F)-${source_config_hash}-${resolver_hash}-${scope}.env"
 sha_variables=(
   KFU52_AMALGKIT_REPO_SHA
   KFU52_CDSKIT_REPO_SHA
@@ -170,16 +195,51 @@ sha_variables=(
   RKFTOOLS_REPO_SHA
   RADTE_REPO_SHA
 )
+resolution_variables=(
+  "${sha_variables[@]}"
+  KFU52_AMALGKIT_REPO_REF
+  KFU52_CDSKIT_REPO_REF
+  KFU52_CSUBST_REPO_REF
+  KFU52_NWKIT_REPO_REF
+  BUSCO_REPO_URL
+  BUSCO_REPO_REF
+  PAML_REPO_URL
+  PAML_REPO_REF
+  KFL1OU_REPO_URL
+  KFL1OU_REPO_REF
+  KFFRACTBIAS_REPO_URL
+  KFFRACTBIAS_REPO_REF
+  KFTOOLS_REPO_URL
+  KFTOOLS_REPO_REF
+  RKFTOOLS_REPO_URL
+  RKFTOOLS_REPO_REF
+  RADTE_REPO_URL
+  RADTE_REPO_REF
+)
+override_fingerprint="$(
+  for variable in "${resolution_variables[@]}"; do
+    if [[ "${scope}" == "owned" && ( "${variable}" == BUSCO_REPO_* || "${variable}" == PAML_REPO_* ) ]]; then
+      continue
+    fi
+    printf '%s=%s\n' "${variable}" "${!variable:-}"
+  done | sha256_stream
+)"
+cache_file="${cache_root}/$(date -u +%F)-${source_config_hash}-${resolver_hash}-${scope}-${override_fingerprint}.env"
 
 mkdir -p "${cache_root}"
 if [[ "${mode}" == "always" || ! -s "${cache_file}" ]]; then
   cache_tmp="${cache_file}.tmp.$$"
-  if ! bash "${script_dir}/resolve_source_revisions.sh" --format env --scope "${scope}" > "${cache_tmp}"; then
+  cleanup_cache_tmp() {
     rm -f -- "${cache_tmp}"
+  }
+  trap cleanup_cache_tmp EXIT HUP INT TERM
+  if ! bash "${script_dir}/resolve_source_revisions.sh" --format env --scope "${scope}" > "${cache_tmp}"; then
     echo "Runtime freshness check failed while resolving upstream sources." >&2
     exit 1
   fi
   mv -f -- "${cache_tmp}" "${cache_file}"
+  cache_tmp=""
+  trap - EXIT HUP INT TERM
 fi
 
 # The resolver has already captured any explicit overrides that belong to the

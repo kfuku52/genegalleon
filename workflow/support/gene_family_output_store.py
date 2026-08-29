@@ -363,11 +363,22 @@ def _bucket_lock(
                 operation |= fcntl.LOCK_NB
             fcntl.flock(descriptor, operation)
             acquired = True
-        except BlockingIOError:
+        except BlockingIOError as exc:
             if nonblocking:
                 yield False
                 return
-            raise
+            raise ArchiveStoreError(
+                f"GeneGalleon lock acquisition unexpectedly blocked for {lock_path}: {exc}"
+            ) from exc
+        except OSError as exc:
+            raise ArchiveStoreError(
+                "Filesystem advisory locking failed for {}: {}. Verify that the "
+                "shared workspace provides cross-node POSIX flock semantics; "
+                "node-local locking is unsafe for concurrent array tasks.".format(
+                    lock_path,
+                    exc,
+                )
+            ) from exc
         yield True
     finally:
         if acquired:
@@ -5091,8 +5102,13 @@ def convert_storage_to_raw(
                         "Pass quota remaining as --available-bytes for a "
                         "quota-aware preflight."
                     )
+                total_inodes = int(filesystem_stats.f_files)
                 available_inodes = int(filesystem_stats.f_favail)
-                if available_inodes >= 0 and required_inodes > available_inodes:
+                if (
+                    total_inodes > 0
+                    and available_inodes >= 0
+                    and required_inodes > available_inodes
+                ):
                     raise ArchiveStoreError(
                         "Insufficient filesystem inodes for ZIP-to-raw conversion: "
                         f"required={required_inodes}, available={available_inodes}. "

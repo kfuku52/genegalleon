@@ -194,8 +194,9 @@ def test_gg_versions_uses_shared_core_bootstrap_runtime():
 def test_entrypoint_bootstrap_sets_python_pycacheprefix_outside_repo():
     text = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_bootstrap.sh")
     body = _function_body(text, "gg_configure_python_pycacheprefix")
-    assert 'default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache"' in body
-    assert 'mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true' in body
+    assert 'default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache_${pycache_uid}"' in body
+    assert '! -O "${default_pycache_prefix}"' in body
+    assert 'chmod 700 "${default_pycache_prefix}"' in body
     assert 'export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"' in body
     init_body = _function_body(text, "gg_entrypoint_initialize")
     assert "gg_configure_python_pycacheprefix" in init_body
@@ -204,8 +205,9 @@ def test_entrypoint_bootstrap_sets_python_pycacheprefix_outside_repo():
 def test_core_bootstrap_sets_python_pycacheprefix_under_tmp():
     text = _read_text(WORKFLOW_DIR / "support" / "gg_core_bootstrap.sh")
     body = _function_body(text, "gg_configure_python_pycacheprefix_from_core")
-    assert 'default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache"' in body
-    assert 'mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true' in body
+    assert 'default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache_${pycache_uid}"' in body
+    assert '! -O "${default_pycache_prefix}"' in body
+    assert 'chmod 700 "${default_pycache_prefix}"' in body
     assert 'export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"' in body
     runtime_body = _function_body(text, "gg_bootstrap_core_runtime")
     assert "export PYTHONNOUSERSITE=1" in runtime_body
@@ -576,6 +578,8 @@ def test_detect_ou_shift_kfl1ou_enables_measurement_error_by_default():
     text = _read_text(script)
     assert "measurement_error = TRUE" in text
     assert "input_error = input_error_fit" in text
+    assert "replicate_column_mask(original_cols, trait_name, replicate_sep)" in text
+    assert "startsWith(original_cols, paste0(trait_name, replicate_sep))" not in text
 
 
 def test_expression_matrix_allows_a_valid_no_data_result():
@@ -640,8 +644,12 @@ def test_set_singularityenv_forwards_gg_common_variables():
     assert 'gg_workflow_dir="${resolved_workflow_dir}"' in body
     assert 'gg_container_image_path="${resolved_container_image_path}"' in body
     assert 'resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")' in body
-    assert "export SINGULARITYENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache" in body
-    assert "export APPTAINERENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache" in body
+    assert 'container_pycache_prefix="/tmp/genegalleon_pycache_$(id -u)"' in body
+    assert 'export SINGULARITYENV_PYTHONPYCACHEPREFIX="${container_pycache_prefix}"' in body
+    assert 'export APPTAINERENV_PYTHONPYCACHEPREFIX="${container_pycache_prefix}"' in body
+    assert '[[ -L "${container_pycache_prefix}"' in body
+    assert '! -O "${container_pycache_prefix}"' in body
+    assert 'chmod 700 "${container_pycache_prefix}"' in body
     assert "export SINGULARITYENV_PYTHONNOUSERSITE=1" in body
     assert "export APPTAINERENV_PYTHONNOUSERSITE=1" in body
     assert "for gg_common_var_name in ${!GG_COMMON_@}; do" in body
@@ -2346,6 +2354,35 @@ def test_orthofinder_core_result_publication_replaces_existing_trees_transaction
     assert 'mv_out_bundle "${orthofinder_publication_pairs[@]}"' in block
     assert 'mv_out "${orthofinder_all_outputs[@]}"' not in block
     assert 'mv_out "${orthofinder_core_outputs[@]}"' not in block
+
+
+def test_orthofinder_single_round_publication_replaces_existing_trees_transactionally():
+    core = (WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh").read_text()
+    start = core.index("    orthofinder_main_outputs=(")
+    end = core.index('    rm -rf -- "${dir_orthofinder}/main"', start)
+    block = core[start:end]
+
+    assert "orthofinder_publication_pairs=()" in block
+    assert block.count('orthofinder_publication_pairs+=(') == 1
+    assert '"${dir_orthofinder}/${orthofinder_output##*/}"' in block
+    assert 'mv_out_bundle "${orthofinder_publication_pairs[@]}"' in block
+    assert 'mv_out "${orthofinder_main_outputs[@]}"' not in block
+
+
+def test_orthofinder_replaces_complete_publication_to_remove_stale_outputs():
+    core = (WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh").read_text()
+    start = core.index(
+        'if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then'
+    )
+    end = core.index('  gg_artifact_record "${orthofinder_provenance_args[@]}"', start)
+    block = core[start:end]
+
+    assert 'orthofinder_stage_parent=$(mktemp -d "${dir_tmp}/orthofinder.publish.XXXXXX")' in block
+    assert 'dir_orthofinder="${orthofinder_stage_parent}/orthofinder"' in block
+    assert 'mv_out_bundle "${dir_orthofinder}" "${orthofinder_public_dir}"' in block
+    assert block.index('mv_out_bundle "${dir_orthofinder}" "${orthofinder_public_dir}"') > block.index(
+        'Required root-level HOG table was not found'
+    )
 
 
 def test_gene_evolution_core_quotes_notung_zip_and_provenances_summary_outputs():

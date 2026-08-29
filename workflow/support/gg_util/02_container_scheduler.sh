@@ -670,8 +670,20 @@ set_singularityenv() {
 	export APPTAINERENV_MEM_PER_SLOT=${MEM_PER_SLOT:-3}
 	export SINGULARITYENV_MEM_PER_HOST=${MEM_PER_HOST:-3}
 	export APPTAINERENV_MEM_PER_HOST=${MEM_PER_HOST:-3}
-	export SINGULARITYENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache
-	export APPTAINERENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache
+	local container_pycache_prefix=""
+	container_pycache_prefix="/tmp/genegalleon_pycache_$(id -u)"
+	if [[ -L "${container_pycache_prefix}" || ( -e "${container_pycache_prefix}" && ( ! -d "${container_pycache_prefix}" || ! -O "${container_pycache_prefix}" ) ) ]]; then
+		echo "Refusing unsafe container Python bytecode cache path: ${container_pycache_prefix}" >&2
+		return 1
+	fi
+	(umask 077; mkdir -p -- "${container_pycache_prefix}") || return 1
+	if [[ -L "${container_pycache_prefix}" || ! -d "${container_pycache_prefix}" || ! -O "${container_pycache_prefix}" ]]; then
+		echo "Container Python bytecode cache path is not an owned directory: ${container_pycache_prefix}" >&2
+		return 1
+	fi
+	chmod 700 "${container_pycache_prefix}" || return 1
+	export SINGULARITYENV_PYTHONPYCACHEPREFIX="${container_pycache_prefix}"
+	export APPTAINERENV_PYTHONPYCACHEPREFIX="${container_pycache_prefix}"
 	export SINGULARITYENV_PYTHONNOUSERSITE=1
 	export APPTAINERENV_PYTHONNOUSERSITE=1
   local gg_common_var_name

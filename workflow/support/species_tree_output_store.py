@@ -771,8 +771,13 @@ def materialize_directory(
                 "preflight."
             )
         filesystem_stats = os.statvfs(root)
+        total_inodes = int(filesystem_stats.f_files)
         available_inodes = int(filesystem_stats.f_favail)
-        if available_inodes >= 0 and required_inodes > available_inodes:
+        if (
+            total_inodes > 0
+            and available_inodes >= 0
+            and required_inodes > available_inodes
+        ):
             raise SpeciesTreeArchiveError(
                 "Insufficient filesystem inodes for ZIP-to-raw conversion: "
                 f"required={required_inodes}, available={available_inodes}"

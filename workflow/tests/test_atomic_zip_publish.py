@@ -41,6 +41,25 @@ def test_publish_zip_remove_source_happens_after_success(tmp_path: Path):
     assert not source.exists()
 
 
+def test_remove_source_preserves_destination_reached_through_symlinked_parent(
+    tmp_path: Path,
+):
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    alias_parent = tmp_path / "alias"
+    alias_parent.symlink_to(real_parent, target_is_directory=True)
+    source = real_parent / "result.zip"
+    destination = alias_parent / "result.zip"
+    _write_zip(source)
+
+    PUBLISH.publish_zip(source, destination, remove_source=True)
+
+    assert source.is_file()
+    assert destination.is_file()
+    with zipfile.ZipFile(destination) as archive:
+        assert archive.read("result/value.txt") == b"payload\n"
+
+
 def test_corrupt_source_does_not_replace_destination(tmp_path: Path):
     source = tmp_path / "source.zip"
     destination = tmp_path / "result.zip"

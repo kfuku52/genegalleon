@@ -41,15 +41,13 @@ parse_amino_acid_site_list = function(site_text) {
 }
 
 add_named_heatmap_column = function(g, args, df_trait, fill_label, gname) {
-  # The workflow script can be newer than the treevis package embedded in an
-  # existing project SIF.  Keep the call compatible with the legacy four-
-  # argument API, then rename its default panel key for multi-heatmap layouts.
-  g = add_heatmap_column(g, args, df_trait, fill_label = fill_label)
-  if ('heatmap' %in% names(g)) {
-    g[[gname]] = g[['heatmap']]
-    g[['heatmap']] = NULL
-  }
-  return(g)
+  return(add_heatmap_column(
+    g,
+    args,
+    df_trait,
+    fill_label = fill_label,
+    gname = gname
+  ))
 }
 
 ensure_plot_topology_columns = function(b) {

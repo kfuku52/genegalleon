@@ -1,4 +1,5 @@
 import os
+import shlex
 import stat
 import subprocess
 from pathlib import Path
@@ -137,6 +138,19 @@ def _run_entrypoint_with_buildx(tmp_path: Path, runtime_name: str, extra_env: di
     return completed, runtime_log, docker_log, Path(env["OUT"])
 
 
+def _assert_atomic_sif_build(runtime_log: Path, out_path: Path, source: str) -> None:
+    lines = runtime_log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    args = shlex.split(lines[0])
+    assert args[0] == "build"
+    staged_out = Path(args[1])
+    assert staged_out.name == out_path.name
+    assert staged_out.parent.parent == out_path.parent
+    assert staged_out.parent.name.startswith(".gg-sif-build.")
+    assert args[2:] == [source]
+    assert not staged_out.parent.exists()
+
+
 def test_container_build_entrypoint_uses_public_image_without_docker_with_apptainer(tmp_path: Path):
     completed, runtime_log, out_path = _run_entrypoint(
         tmp_path,
@@ -153,9 +167,11 @@ def test_container_build_entrypoint_uses_public_image_without_docker_with_apptai
     assert "[gg_container_build] image_source=public" in completed.stdout
     assert "[gg_container_build] engine=apptainer" in completed.stdout
     assert "[gg_container_build] step 1/1: build SIF from registry image" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker://ghcr.io/example/genegalleon:20260306-test"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker://ghcr.io/example/genegalleon:20260306-test",
+    )
 
 
 def test_container_build_entrypoint_auto_detects_singularity_without_docker(tmp_path: Path):
@@ -172,9 +188,11 @@ def test_container_build_entrypoint_auto_detects_singularity_without_docker(tmp_
     assert completed.returncode == 0, completed.stderr
     assert out_path.is_file()
     assert "[gg_container_build] engine=singularity" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker://ghcr.io/example/genegalleon:latest"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker://ghcr.io/example/genegalleon:latest",
+    )
 
 
 def test_container_build_entrypoint_falls_back_to_official_registry_image_when_defaults_are_used(tmp_path: Path):
@@ -184,9 +202,11 @@ def test_container_build_entrypoint_falls_back_to_official_registry_image_when_d
     assert out_path.is_file()
     assert "[gg_container_build] image_source=auto" in completed.stdout
     assert "falling back to published image ghcr.io/kfuku52/genegalleon:latest" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker://ghcr.io/kfuku52/genegalleon:latest"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker://ghcr.io/kfuku52/genegalleon:latest",
+    )
 
 
 def test_container_build_entrypoint_falls_back_to_latest_when_local_default_tag_is_explicit(tmp_path: Path):
@@ -201,9 +221,11 @@ def test_container_build_entrypoint_falls_back_to_latest_when_local_default_tag_
     assert completed.returncode == 0, completed.stderr
     assert out_path.is_file()
     assert "falling back to published image ghcr.io/kfuku52/genegalleon:latest" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker://ghcr.io/kfuku52/genegalleon:latest"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker://ghcr.io/kfuku52/genegalleon:latest",
+    )
 
 
 def test_container_build_entrypoint_prefers_public_pull_for_remote_image_in_auto_mode_even_with_buildx(tmp_path: Path):
@@ -220,9 +242,11 @@ def test_container_build_entrypoint_prefers_public_pull_for_remote_image_in_auto
     assert out_path.is_file()
     assert "[gg_container_build] resolved_image_source=public" in completed.stdout
     assert "skipping local Docker build" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker://ghcr.io/example/genegalleon:20260306-test"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker://ghcr.io/example/genegalleon:20260306-test",
+    )
     assert not docker_log.exists()
 
 
@@ -241,10 +265,15 @@ def test_container_build_entrypoint_uses_native_local_build_without_docker(tmp_p
     assert out_path.is_file()
     assert "step 1/1: native local build from repository" in completed.stdout
     assert "[apptainer_local_build] definition=" in completed.stdout
-    runtime_log_lines = runtime_log.read_text(encoding="utf-8").strip().splitlines()
-    assert len(runtime_log_lines) == 1
-    assert runtime_log_lines[0].startswith(f"build {out_path} ")
-    assert runtime_log_lines[0].endswith(".def")
+    runtime_log_args = shlex.split(runtime_log.read_text(encoding="utf-8").strip())
+    assert len(runtime_log_args) == 3
+    staged_out = Path(runtime_log_args[1])
+    assert runtime_log_args[0] == "build"
+    assert staged_out.name == out_path.name
+    assert staged_out.parent.parent == out_path.parent
+    assert staged_out.parent.name.startswith(".gg-sif-build.")
+    assert not staged_out.parent.exists()
+    assert runtime_log_args[2].endswith(".def")
 
 
 def test_container_build_entrypoint_native_local_build_renders_repo_version_label(tmp_path: Path):
@@ -292,9 +321,11 @@ def test_container_build_entrypoint_uses_docker_daemon_for_local_buildx_image(tm
     assert completed.returncode == 0, completed.stderr
     assert out_path.is_file()
     assert "[gg_container_build] sif_source=docker-daemon" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker-daemon:local/genegalleon:dev"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker-daemon:local/genegalleon:dev",
+    )
     docker_log_text = docker_log.read_text(encoding="utf-8")
     assert "buildx build" in docker_log_text
     assert f"--build-arg GG_VERSION={REPO_VERSION}" in docker_log_text

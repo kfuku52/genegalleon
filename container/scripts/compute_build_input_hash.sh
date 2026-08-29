@@ -44,7 +44,9 @@ if [[ $# -ne 1 || ! "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
 fi
 security_refresh_epoch="$1"
 
-platforms="${GG_BUILD_PLATFORMS:-${PLATFORMS:-linux/amd64,linux/arm64}}"
+# The image architecture is validated independently from Docker/SIF metadata.
+# Excluding the requested platform list lets each image from one multi-platform
+# Buildx invocation carry the same content-input identity.
 vcs_revision="${GG_BUILD_VCS_REF:-${vcs_ref:-unknown}}"
 version="${GG_BUILD_VERSION:-${gg_version:-unknown}}"
 notung_download_page="${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}"
@@ -104,8 +106,7 @@ context_digest="$(
 {
   printf '%s\n' \
     "hash_mode=${hash_mode}" \
-    "context=${context_digest}" \
-    "platforms=${platforms}"
+    "context=${context_digest}"
   if [[ "${hash_mode}" == "full" ]]; then
     printf '%s\n' \
       "vcs_ref=${vcs_revision}" \

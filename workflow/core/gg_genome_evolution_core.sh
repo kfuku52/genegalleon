@@ -4043,6 +4043,16 @@ orthofinder_provenance_args+=(
 )
 gg_artifact_prepare_stage orthofinder_needs_update run_orthofinder "${orthofinder_provenance_args[@]}" || exit $?
 if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then
+  orthofinder_public_dir="${dir_orthofinder}"
+  orthofinder_stage_parent=$(mktemp -d "${dir_tmp}/orthofinder.publish.XXXXXX")
+  dir_orthofinder="${orthofinder_stage_parent}/orthofinder"
+  dir_orthofinder_og="${dir_orthofinder}/Orthogroups"
+  dir_orthofinder_hog2og="${dir_orthofinder}/hog2og"
+  file_orthofinder_done_marker="${dir_orthofinder_hog2og}/README.txt"
+  file_orthofinder_core_candidates="${dir_orthofinder}/orthofinder_core_species.candidates.tsv"
+  file_orthofinder_core_selected="${dir_orthofinder}/orthofinder_core_species.selected.tsv"
+  file_orthofinder_core_selected_list="${dir_orthofinder}/orthofinder_core_species.selected_files.txt"
+  file_orthofinder_core_species_tree="${dir_orthofinder}/species_tree_core.nwk"
   dir_sp_protein_orthofinder="${dir_sp_protein}_orthofinder"
   gg_step_start "${task}"
   prepare_species_protein_tmp
@@ -4385,7 +4395,14 @@ PY
       echo "OrthoFinder main output files were expected but not found after completion."
       exit 1
     fi
-    mv_out "${orthofinder_main_outputs[@]}" "${dir_orthofinder}"
+    orthofinder_publication_pairs=()
+    for orthofinder_output in "${orthofinder_main_outputs[@]}"; do
+      orthofinder_publication_pairs+=(
+        "${orthofinder_output}"
+        "${dir_orthofinder}/${orthofinder_output##*/}"
+      )
+    done
+    mv_out_bundle "${orthofinder_publication_pairs[@]}"
     rm -rf -- "${dir_orthofinder}/main"
   fi
 
@@ -4431,6 +4448,16 @@ PY
     fi
     exit 1
   fi
+  mv_out_bundle "${dir_orthofinder}" "${orthofinder_public_dir}"
+  rmdir -- "${orthofinder_stage_parent}" 2>/dev/null || true
+  dir_orthofinder="${orthofinder_public_dir}"
+  dir_orthofinder_og="${dir_orthofinder}/Orthogroups"
+  dir_orthofinder_hog2og="${dir_orthofinder}/hog2og"
+  file_orthofinder_done_marker="${dir_orthofinder_hog2og}/README.txt"
+  file_orthofinder_core_candidates="${dir_orthofinder}/orthofinder_core_species.candidates.tsv"
+  file_orthofinder_core_selected="${dir_orthofinder}/orthofinder_core_species.selected.tsv"
+  file_orthofinder_core_selected_list="${dir_orthofinder}/orthofinder_core_species.selected_files.txt"
+  file_orthofinder_core_species_tree="${dir_orthofinder}/species_tree_core.nwk"
   echo "OrthoFinder finished successfully."
   gg_artifact_record "${orthofinder_provenance_args[@]}"
 else

@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "workflow" / "support" / "select_orthofinder_core_species.py"
 
@@ -77,6 +79,19 @@ def test_find_busco_short_file_does_not_match_longer_species_label(tmp_path: Pat
     _write_busco(tmp_path / "busco" / "Species_a_subsp_x.busco.short.txt", 95.0)
 
     assert mod.find_busco_short_file(tmp_path / "busco", "Species_a") is None
+
+
+def test_find_busco_short_file_rejects_ambiguous_species_matches(tmp_path: Path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("select_orthofinder_core_species", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _write_busco(tmp_path / "busco" / "Species_a.first.busco.short.txt", 95.0)
+    _write_busco(tmp_path / "busco" / "Species_a.second.busco.short.txt", 96.0)
+
+    with pytest.raises(SystemExit, match="Refusing to treat this ambiguity"):
+        mod.find_busco_short_file(tmp_path / "busco", "Species_a")
 
 
 def test_select_orthofinder_core_species_calls_nwkit_sample_with_default_filters(tmp_path: Path):

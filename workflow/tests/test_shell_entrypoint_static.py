@@ -1,4 +1,5 @@
 import re
+import subprocess
 
 from shell_static_helpers import (
     REPO_ROOT,
@@ -249,6 +250,48 @@ def test_entrypoint_config_var_registry_covers_all_entrypoints():
     assert entrypoints
     for entrypoint_name in entrypoints:
         assert f"{entrypoint_name})" in registry_text
+
+
+def test_registered_config_vars_are_consumed_by_core_or_shared_runtime():
+    registry = WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh"
+    shared_consumers = {
+        "artifact_stale_policy": read_text(
+            WORKFLOW_DIR / "support" / "gg_util" / "06_workspace_validation.sh"
+        ),
+    }
+    for variable, consumer in shared_consumers.items():
+        assert variable in consumer
+
+    for entrypoint in sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh")):
+        core = WORKFLOW_DIR / "core" / entrypoint.name.replace(
+            "_entrypoint.sh",
+            "_core.sh",
+        )
+        assert core.is_file(), f"Missing core script for {entrypoint.name}"
+        completed = subprocess.run(
+            [
+                "bash",
+                "-lc",
+                'source "$1"; gg_print_entrypoint_config_vars "$2"',
+                "bash",
+                str(registry),
+                entrypoint.name,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        core_text = read_text(core)
+        unused = [
+            variable
+            for variable in completed.stdout.splitlines()
+            if variable and variable not in core_text and variable not in shared_consumers
+        ]
+        assert not unused, (
+            f"Registered variables are not consumed by {core.name} or an explicit "
+            f"shared runtime consumer: {', '.join(unused)}"
+        )
 
 
 def test_entrypoints_define_scheduler_sections_in_canonical_order():

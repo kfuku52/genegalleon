@@ -199,7 +199,7 @@ jobs:
             exit 1
           fi
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-          repo_name="$(basename "${GITHUB_REPOSITORY}")"
+          repo_name="$(basename "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/${repo_name}"
           date_tag="$(date -u +%Y%m%d)"
           short_sha="${GITHUB_SHA::7}"
@@ -310,8 +310,15 @@ jobs:
           RKFTOOLS_REPO_SHA: ${{ needs.prepare-build.outputs.rkftools_repo_sha }}
           RADTE_REPO_SHA: ${{ needs.prepare-build.outputs.radte_repo_sha }}
         run: |
-          echo "value=$(bash container/scripts/compute_build_input_hash.sh "${GG_BUILD_SECURITY_REFRESH_EPOCH}")" >> "${GITHUB_OUTPUT}"
-          echo "runtime_value=$(bash container/scripts/compute_build_input_hash.sh --runtime "${GG_BUILD_SECURITY_REFRESH_EPOCH}")" >> "${GITHUB_OUTPUT}"
+          set -euo pipefail
+          build_input_hash="$(bash container/scripts/compute_build_input_hash.sh "${GG_BUILD_SECURITY_REFRESH_EPOCH}")"
+          runtime_input_hash="$(bash container/scripts/compute_build_input_hash.sh --runtime "${GG_BUILD_SECURITY_REFRESH_EPOCH}")"
+          if [[ ! "${build_input_hash}" =~ ^[0-9a-f]{64}$ || ! "${runtime_input_hash}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Build input hash calculation returned an invalid digest." >&2
+            exit 1
+          fi
+          printf 'value=%s\nruntime_value=%s\n' \
+            "${build_input_hash}" "${runtime_input_hash}" >> "${GITHUB_OUTPUT}"
 
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

@@ -157,8 +157,9 @@ def load_gene_info(path):
     out.loc[:, "start"] = pandas.to_numeric(out["start"], errors="coerce")
     out.loc[:, "end"] = pandas.to_numeric(out["end"], errors="coerce")
     out = out.dropna(subset=["start", "end"])
-    out.loc[:, "start"] = out[["start", "end"]].min(axis=1).astype(int)
-    out.loc[:, "end"] = out[["start", "end"]].max(axis=1).astype(int)
+    interval_bounds = out[["start", "end"]].agg(["min", "max"], axis=1)
+    out.loc[:, "start"] = interval_bounds["min"].astype(int)
+    out.loc[:, "end"] = interval_bounds["max"].astype(int)
     out = out.loc[out["chromosome"] != "", :]
     out = out.drop_duplicates(subset=["gene_id"], keep="first")
     out = out.sort_values(["chromosome", "start", "end", "gene_id"], kind="mergesort").reset_index(drop=True)

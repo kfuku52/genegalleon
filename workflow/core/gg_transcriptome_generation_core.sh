@@ -65,6 +65,8 @@ classified_short_right_fastq_files=()
 classified_long_fastq_files=()
 classified_pacbio_fastq_files=()
 classified_ont_fastq_files=()
+getfastq_content_validated=0
+getfastq_content_validation_fingerprint=""
 
 # Named stage functions for gg_transcriptome_generation_core.sh.
 # This file is sourced by workflow/core/gg_transcriptome_generation_core.sh.
@@ -930,7 +932,9 @@ run_amalgkit_metadata_query() {
 }
 
 prepare_getfastq_outputs_for_public_fallback() {
-  ensure_dir "${dir_tmp}/getfastq"
+  # Keep public-original recovery isolated from amalgkit's potentially filtered
+  # resumable files so one completion manifest can never mix both sources.
+  ensure_dir "${dir_tmp}/getfastq_public_original"
 }
 
 stage_getfastq_outputs_for_resume() {
@@ -1096,6 +1100,26 @@ def file_contract(raw_value):
     return {"path": value, "size": after.st_size, "sha256": digest.hexdigest()}
 
 
+def quarantine_unbound_fastqs(bound_paths):
+    for path in sorted(output_root.rglob("*.amalgkit.fastq.gz")):
+        if not path.is_file() and not path.is_symlink():
+            continue
+        relative = path.relative_to(output_root).as_posix()
+        if relative in bound_paths:
+            continue
+        counter = 0
+        while True:
+            suffix = ".not_in_completion_manifest"
+            if counter:
+                suffix += ".{}".format(counter)
+            backup = path.with_name(path.name + suffix)
+            if not backup.exists() and not backup.is_symlink():
+                break
+            counter += 1
+        os.replace(path, backup)
+        print("Quarantined FASTQ not referenced by current metadata: {}".format(backup))
+
+
 with manifest_path.open("rt", encoding="utf-8") as handle:
     manifest = json.load(handle)
 if manifest.get("status") != "complete" or not isinstance(manifest.get("runs"), list):
@@ -1128,10 +1152,12 @@ for entry in manifest["runs"]:
     bound_runs.append({"run": run, "status": "complete", "files": contracts})
 if sorted(seen_runs) != sorted(expected_runs):
     raise SystemExit("Completion manifest run IDs differ from metadata.")
+quarantine_unbound_fastqs(seen_paths)
 
 bound_manifest = {
-    "schema_version": 2,
+    "schema_version": 3,
     "status": "complete",
+    "read_source": "amalgkit",
     "run_count": len(bound_runs),
     "runs": bound_runs,
 }
@@ -1171,7 +1197,11 @@ if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.st
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 with manifest_path.open("rt", encoding="utf-8") as handle:
     manifest = json.load(handle)
-if manifest.get("schema_version") != 2 or manifest.get("status") != "complete":
+if (
+    manifest.get("schema_version") != 3
+    or manifest.get("status") != "complete"
+    or manifest.get("read_source") not in {"amalgkit", "public-original"}
+):
     raise SystemExit("amalgkit getfastq completion manifest is not complete: {}".format(manifest_path))
 output_root = manifest_path.parent.resolve(strict=True)
 
@@ -1292,14 +1322,27 @@ if sorted(manifest_runs) != sorted(expected_runs):
     )
 if len(manifest_runs) != len(set(manifest_runs)):
     raise SystemExit("Completion manifest contains duplicate run IDs: {}".format(manifest_path))
+actual_paths = {
+    path.relative_to(output_root).as_posix()
+    for path in output_root.rglob("*.amalgkit.fastq.gz")
+    if path.is_file() or path.is_symlink()
+}
+if actual_paths != seen_paths:
+    raise SystemExit(
+        "Completion manifest FASTQ set differs from files on disk. extra={} missing={}".format(
+            ",".join(sorted(actual_paths - seen_paths)),
+            ",".join(sorted(seen_paths - actual_paths)),
+        )
+    )
 PY
 }
 
 validate_amalgkit_getfastq_completion_manifest_index() {
   local completion_manifest=$1
   local metadata_tsv=$2
+  local print_stat_fingerprint=${3:-no}
 
-  python - "${completion_manifest}" "${metadata_tsv}" <<'PY'
+  python - "${completion_manifest}" "${metadata_tsv}" "${print_stat_fingerprint}" <<'PY'
 import csv
 import json
 import os
@@ -1309,11 +1352,16 @@ import sys
 
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
+print_stat_fingerprint = sys.argv[3] == "yes"
 if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 with manifest_path.open("rt", encoding="utf-8") as handle:
     manifest = json.load(handle)
-if manifest.get("schema_version") != 2 or manifest.get("status") != "complete":
+if (
+    manifest.get("schema_version") != 3
+    or manifest.get("status") != "complete"
+    or manifest.get("read_source") not in {"amalgkit", "public-original"}
+):
     raise SystemExit("amalgkit getfastq completion manifest is not content-bound: {}".format(manifest_path))
 output_root = manifest_path.parent.resolve(strict=True)
 
@@ -1331,6 +1379,7 @@ if not isinstance(entries, list):
     raise SystemExit("Completion manifest lacks a runs list: {}".format(manifest_path))
 manifest_runs = []
 seen_paths = set()
+stat_fingerprint = []
 for entry in entries:
     if not isinstance(entry, dict) or set(entry) != {"run", "status", "files"}:
         raise SystemExit("Completion manifest contains an invalid run contract: {}".format(manifest_path))
@@ -1368,8 +1417,19 @@ for entry in entries:
             or not path.is_file()
         ):
             raise SystemExit("Completion manifest FASTQ path changed: {}".format(value))
-        if path.stat().st_size != expected_size:
+        stat_result = path.stat()
+        if stat_result.st_size != expected_size:
             raise SystemExit("Completion manifest FASTQ size changed: {}".format(value))
+        stat_fingerprint.append(
+            [
+                value,
+                stat_result.st_dev,
+                stat_result.st_ino,
+                stat_result.st_size,
+                stat_result.st_mtime_ns,
+                stat_result.st_ctime_ns,
+            ]
+        )
         seen_paths.add(value)
     manifest_runs.append(run)
 if manifest.get("run_count") != len(manifest_runs):
@@ -1378,7 +1438,69 @@ if sorted(manifest_runs) != sorted(expected_runs):
     raise SystemExit("Completion manifest run IDs differ from metadata.")
 if len(manifest_runs) != len(set(manifest_runs)):
     raise SystemExit("Completion manifest contains duplicate run IDs: {}".format(manifest_path))
+actual_paths = {
+    path.relative_to(output_root).as_posix()
+    for path in output_root.rglob("*.amalgkit.fastq.gz")
+    if path.is_file() or path.is_symlink()
+}
+if actual_paths != seen_paths:
+    raise SystemExit(
+        "Completion manifest FASTQ set differs from files on disk. extra={} missing={}".format(
+            ",".join(sorted(actual_paths - seen_paths)),
+            ",".join(sorted(seen_paths - actual_paths)),
+        )
+    )
+if print_stat_fingerprint:
+    print(json.dumps(stat_fingerprint, separators=(",", ":")))
 PY
+}
+
+mark_amalgkit_getfastq_content_validated() {
+  local completion_manifest=$1
+  local metadata_tsv=$2
+  local stat_fingerprint=""
+
+  if ! stat_fingerprint=$(validate_amalgkit_getfastq_completion_manifest_index \
+    "${completion_manifest}" \
+    "${metadata_tsv}" \
+    yes)
+  then
+    return 1
+  fi
+  if [[ -z "${stat_fingerprint}" ]]; then
+    echo "Failed to capture the getfastq FASTQ filesystem identity." >&2
+    return 1
+  fi
+  getfastq_content_validation_fingerprint=${stat_fingerprint}
+  getfastq_content_validated=1
+}
+
+validate_amalgkit_getfastq_completion_manifest_once() {
+  local completion_manifest=$1
+  local metadata_tsv=$2
+  local current_stat_fingerprint=""
+
+  if [[ ${getfastq_content_validated:-0} -eq 1 && -n "${getfastq_content_validation_fingerprint:-}" ]]; then
+    if ! current_stat_fingerprint=$(validate_amalgkit_getfastq_completion_manifest_index \
+      "${completion_manifest}" \
+      "${metadata_tsv}" \
+      yes)
+    then
+      return 1
+    fi
+    if [[ "${current_stat_fingerprint}" == "${getfastq_content_validation_fingerprint}" ]]; then
+      return 0
+    fi
+    echo "getfastq FASTQ filesystem identity changed; repeating the full content check." >&2
+  fi
+
+  if ! validate_amalgkit_getfastq_completion_manifest \
+    "${completion_manifest}" \
+    "${metadata_tsv}"
+  then
+    return 1
+  fi
+  mark_amalgkit_getfastq_content_validated "${completion_manifest}" "${metadata_tsv}"
 }
 
 prepare_amalgkit_getfastq_contract_recovery() {
@@ -1414,7 +1536,7 @@ try:
 except (json.JSONDecodeError, UnicodeDecodeError):
     manifest = {}
 
-if manifest.get("schema_version") == 2 and isinstance(manifest.get("runs"), list):
+if manifest.get("schema_version") in {2, 3} and isinstance(manifest.get("runs"), list):
     for entry in manifest["runs"]:
         files = entry.get("files", []) if isinstance(entry, dict) else []
         for contract in files:
@@ -1551,6 +1673,7 @@ run_amalgkit_getfastq_attempt() {
   local attempt_label=$2
   local log_file="${dir_tmp}/amalgkit_getfastq.${attempt_label}.log"
   local getfastq_cmd=()
+  local status_amalgkit_attempt=0
 
   rm -f -- "${log_file}"
   echo "Running amalgkit getfastq attempt '${attempt_label}' with --rrna_filter ${rrna_filter_value}"
@@ -1608,20 +1731,35 @@ run_amalgkit_getfastq_attempt() {
     echo "amalgkit getfastq log: ${log_file}"
     if ! bind_amalgkit_getfastq_completion_manifest \
       "${dir_tmp}/getfastq/getfastq_completion.json" \
-      "${file_amalgkit_metadata}" || \
-      ! validate_amalgkit_getfastq_completion_manifest \
-      "${dir_tmp}/getfastq/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
     then
       echo "amalgkit getfastq finished without a valid all-run completion manifest."
       return 3
     fi
-    mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"
+    if ! validate_amalgkit_getfastq_completion_manifest_index \
+      "${dir_tmp}/getfastq/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+    then
+      echo "amalgkit getfastq produced an invalid completion index." >&2
+      return 3
+    fi
+    if ! mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"; then
+      echo "Failed to atomically publish the completed amalgkit getfastq output." >&2
+      return 3
+    fi
+    if ! mark_amalgkit_getfastq_content_validated \
+      "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+    then
+      echo "Published amalgkit getfastq output failed its completion-index check." >&2
+      return 3
+    fi
     rm -rf -- "${dir_tmp}/getfastq"
     return 0
+  else
+    status_amalgkit_attempt=$?
   fi
 
-  local status_amalgkit_attempt=$?
   echo "amalgkit getfastq exit code: ${status_amalgkit_attempt}"
   echo "amalgkit getfastq log: ${log_file}"
   if amalgkit_getfastq_log_has_fatal_message "${log_file}"; then
@@ -1923,6 +2061,26 @@ def manifest_file_contract(path: Path) -> dict:
         "size": after.st_size,
         "sha256": digest.hexdigest(),
     }
+
+
+def quarantine_unbound_fastqs(bound_paths) -> None:
+    for path in sorted(output_root.rglob("*.amalgkit.fastq.gz")):
+        if not path.is_file() and not path.is_symlink():
+            continue
+        relative = path.relative_to(output_root).as_posix()
+        if relative in bound_paths:
+            continue
+        counter = 0
+        while True:
+            suffix = ".not_in_completion_manifest"
+            if counter:
+                suffix += ".{}".format(counter)
+            backup = path.with_name(path.name + suffix)
+            if not backup.exists() and not backup.is_symlink():
+                break
+            counter += 1
+        os.replace(path, backup)
+        print("Quarantined fallback FASTQ not referenced by current metadata: {}".format(backup))
 
 
 def normalize_ena_fastq_url(value: str) -> str:
@@ -2248,9 +2406,16 @@ for run in runs:
         completed_files.append(manifest_file_contract(dest))
     manifest_runs.append({"run": run, "status": "complete", "files": completed_files})
 
+bound_paths = {
+    contract["path"]
+    for entry in manifest_runs
+    for contract in entry["files"]
+}
+quarantine_unbound_fastqs(bound_paths)
 manifest = {
-    "schema_version": 2,
+    "schema_version": 3,
     "status": "complete",
+    "read_source": "public-original",
     "run_count": len(manifest_runs),
     "runs": manifest_runs,
 }
@@ -2314,16 +2479,26 @@ run_amalgkit_getfastq_or_fallback() {
   fi
   echo "amalgkit getfastq did not safely finish. Attempting fallback download of public original FASTQ files."
   prepare_getfastq_outputs_for_public_fallback
-  if download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_tmp}/getfastq"; then
-    if ! validate_amalgkit_getfastq_completion_manifest \
-      "${dir_tmp}/getfastq/getfastq_completion.json" \
+  if download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_tmp}/getfastq_public_original"; then
+    if ! validate_amalgkit_getfastq_completion_manifest_index \
+      "${dir_tmp}/getfastq_public_original/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
     then
-      echo "Fallback direct FASTQ recovery finished without a valid all-run completion manifest. Exiting."
+      echo "Fallback direct FASTQ recovery finished without a valid all-run completion index. Exiting." >&2
       return 1
     fi
-    mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"
-    rm -rf -- "${dir_tmp}/getfastq"
+    if ! mv_out_replace_dir "${dir_tmp}/getfastq_public_original" "${dir_amalgkit_getfastq_sp}"; then
+      echo "Failed to atomically publish fallback direct FASTQ recovery. Exiting." >&2
+      return 1
+    fi
+    if ! mark_amalgkit_getfastq_content_validated \
+      "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+    then
+      echo "Fallback direct FASTQ recovery finished without a valid all-run completion index. Exiting." >&2
+      return 1
+    fi
+    rm -rf -- "${dir_tmp}/getfastq_public_original"
     echo "Fallback download of public original FASTQ files succeeded and was atomically published."
     return 0
   fi
@@ -2720,7 +2895,7 @@ if [[ ${run_amalgkit_getfastq} -eq 1 && ${getfastq_needs_update} -eq 1 ]]; then
 
   clear_getfastq_safely_removed_markers
   if [[ -s "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" ]] && \
-    ! validate_amalgkit_getfastq_completion_manifest \
+    ! validate_amalgkit_getfastq_completion_manifest_once \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
   then
@@ -2772,7 +2947,7 @@ gg_artifact_prepare_stage assembly_needs_update run_assembly "${assembly_provena
 if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ "${selected_transcriptome_mode}" == "sraid" ]] && \
-    ! validate_amalgkit_getfastq_completion_manifest \
+    ! validate_amalgkit_getfastq_completion_manifest_once \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
   then
@@ -3113,7 +3288,7 @@ fi
 if [[ "${effective_assembly_method}" == 'rna-bloom2' && -s "${file_isoform}" && ${corset_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ "${selected_transcriptome_mode}" == "sraid" ]] && \
-    ! validate_amalgkit_getfastq_completion_manifest \
+    ! validate_amalgkit_getfastq_completion_manifest_once \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
   then
@@ -3692,7 +3867,7 @@ fi
 if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ "${selected_transcriptome_mode}" == "sraid" ]] && \
-    ! validate_amalgkit_getfastq_completion_manifest \
+    ! validate_amalgkit_getfastq_completion_manifest_once \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
   then

@@ -124,6 +124,36 @@ def test_materialize_inode_preflight_treats_zero_as_exhausted(
     assert (root / f"{name}.zip").is_file()
 
 
+def test_materialize_accepts_filesystem_without_inode_accounting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path / "species_tree"
+    name = "single_copy_iqtree_dna"
+    raw = root / name
+    raw.mkdir(parents=True)
+    expected = raw / "BUSCO1.dna.nwk"
+    expected.write_text("(A,B);\n", encoding="utf-8")
+    STORE.pack_directory(root, name)
+    real_stats = os.statvfs(root)
+    unavailable = SimpleNamespace(
+        **{
+            field: (
+                0
+                if field in {"f_files", "f_favail"}
+                else getattr(real_stats, field)
+            )
+            for field in dir(real_stats)
+            if field.startswith("f_")
+        }
+    )
+    monkeypatch.setattr(STORE.os, "statvfs", lambda _path: unavailable)
+
+    STORE.materialize_directory(root, name)
+
+    assert expected.read_text(encoding="utf-8") == "(A,B);\n"
+
+
 def test_manual_delete_and_add_are_preserved_after_unpack_and_repack(tmp_path: Path):
     root = tmp_path / "species_tree"
     raw = root / "single_copy_trimal"

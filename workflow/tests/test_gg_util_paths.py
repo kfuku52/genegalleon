@@ -441,6 +441,7 @@ def test_prepare_entrypoint_runtime_snapshot_copies_core_script_to_job_task_dir(
         f"gg_workflow_dir={shlex.quote(str(workflow_dir))}; "
         f"gg_workspace_dir={shlex.quote(str(workspace_dir))}; "
         f"gg_workspace_output_dir={shlex.quote(str(workspace_dir / 'output'))}; "
+        "GG_SCHEDULER_KIND='sge'; "
         "GG_JOB_ID='job:42'; "
         "GG_ARRAY_TASK_ID='task/7'; "
         f"snapshot=$(gg_prepare_entrypoint_runtime_snapshot gg_test_entrypoint.sh {shlex.quote(str(core_script))}); "
@@ -461,6 +462,81 @@ def test_prepare_entrypoint_runtime_snapshot_copies_core_script_to_job_task_dir(
         "entrypoint=1",
         "version=1",
     ]
+
+
+def test_local_entrypoint_runtime_snapshot_dirs_are_process_unique(tmp_path):
+    workspace_dir = tmp_path / "workspace"
+    (workspace_dir / "output").mkdir(parents=True)
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"gg_workspace_dir={shlex.quote(str(workspace_dir))}; "
+        f"gg_workspace_output_dir={shlex.quote(str(workspace_dir / 'output'))}; "
+        "GG_SCHEDULER_KIND=local; GG_JOB_ID=1; GG_ARRAY_TASK_ID=1; "
+        "gg_entrypoint_runtime_snapshot_dir gg_test_entrypoint.sh"
+    )
+
+    first_completed = run_bash(command, cwd=tmp_path)
+    second_completed = run_bash(command, cwd=tmp_path)
+
+    assert first_completed.returncode == 0, first_completed.stderr
+    assert second_completed.returncode == 0, second_completed.stderr
+    first = first_completed.stdout.strip()
+    second = second_completed.stdout.strip()
+    assert first != second
+    assert first.endswith("_1")
+    assert second.endswith("_1")
+
+
+def test_entrypoint_pycache_rejects_a_precreated_symlink(tmp_path):
+    tmp_root = tmp_path / "tmp"
+    attacker_dir = tmp_path / "attacker"
+    tmp_root.mkdir()
+    attacker_dir.mkdir()
+    cache_path = tmp_root / f"genegalleon_pycache_{os.getuid()}"
+    cache_path.symlink_to(attacker_dir, target_is_directory=True)
+    command = (
+        "unset PYTHONPYCACHEPREFIX; "
+        f"TMPDIR={shlex.quote(str(tmp_root))}; "
+        f"source {shlex.quote(str(GG_ENTRYPOINT_BOOTSTRAP_PATH))}; "
+        "gg_configure_python_pycacheprefix"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode != 0
+    assert "Refusing unsafe Python bytecode cache path" in completed.stderr
+
+
+def test_entrypoint_pycache_creates_an_owned_private_directory(tmp_path):
+    tmp_root = tmp_path / "tmp"
+    tmp_root.mkdir()
+    command = (
+        "unset PYTHONPYCACHEPREFIX; "
+        f"TMPDIR={shlex.quote(str(tmp_root))}; "
+        f"source {shlex.quote(str(GG_ENTRYPOINT_BOOTSTRAP_PATH))}; "
+        "gg_configure_python_pycacheprefix; "
+        "printf '%s\\n' \"${PYTHONPYCACHEPREFIX}\""
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    cache_path = Path(completed.stdout.strip())
+    assert cache_path == tmp_root / f"genegalleon_pycache_{os.getuid()}"
+    assert stat.S_IMODE(cache_path.stat().st_mode) == 0o700
+
+
+def test_resolve_physical_path_fails_when_the_parent_does_not_exist(tmp_path):
+    missing_path = tmp_path / "missing" / "result.txt"
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"gg_resolve_physical_path {shlex.quote(str(missing_path))}"
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode != 0
+    assert completed.stdout == ""
 
 
 def test_workspace_pfam_le_dir_is_under_downloads_dedicated_folder(tmp_path):
@@ -526,6 +602,58 @@ def test_ensure_uniprot_sprot_metadata_tsv_falls_back_to_runtime_path_for_sys_pr
     lines = completed.stdout.strip().splitlines()
     assert lines[0] == f"meta={runtime_prefix}.meta.tsv.gz"
     assert lines[1] == "size=0"
+
+
+def test_uniprot_metadata_replaces_a_truncated_runtime_dat_cache(tmp_path):
+    workspace_dir = tmp_path / "workspace"
+    runtime_prefix = workspace_dir / "downloads" / "uniprot_sprot" / "uniprot_sprot"
+    runtime_dat = runtime_prefix.with_suffix(".dat.gz")
+    runtime_dat.parent.mkdir(parents=True)
+    runtime_dat.write_bytes(b"truncated gzip cache")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"workspace_dir={shlex.quote(str(workspace_dir))}; "
+        f"runtime_prefix={shlex.quote(str(runtime_prefix))}; "
+        f"runtime_dat={shlex.quote(str(runtime_dat))}; "
+        "_download_uniprot_sprot_dat_to_file() { "
+        "printf 'ID   REPLACED_HUMAN           Reviewed;         100 AA.\\nAC   R12345;\\n//\\n' "
+        '| gzip -c > "$1"; }; '
+        'meta_path=$(ensure_uniprot_sprot_metadata_tsv "${workspace_dir}" "${runtime_prefix}"); '
+        'gzip -t "${runtime_dat}"; '
+        "python -c \"import gzip,sys; t=gzip.open(sys.argv[1],'rt',encoding='utf-8').read(); "
+        "print('has_replacement=' + ('1' if 'R12345' in t else '0'))\" \"${meta_path}\""
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "has_replacement=1"
+
+
+def test_uniprot_dat_download_rejects_corrupt_gzip_without_replacing_output(tmp_path):
+    output = tmp_path / "uniprot_sprot.dat.gz"
+    output.write_bytes(b"known-good-placeholder")
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"output={shlex.quote(str(output))}; "
+        "curl() { "
+        "local previous='' argument output_path=''; "
+        'for argument in "$@"; do '
+        'if [[ "${previous}" == -o ]]; then output_path=${argument}; fi; '
+        "previous=${argument}; "
+        "done; "
+        "printf 'not-gzip' > \"${output_path}\"; "
+        "}; "
+        'if _download_uniprot_sprot_dat_to_file "${output}"; then exit 91; fi; '
+        'printf "content=%s\\n" "$(cat "${output}")"; '
+        'find "$(dirname "${output}")" -maxdepth 1 -name "tmp.uniprot_sprot_dat.*" -print'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "content=known-good-placeholder"
+    assert "failed gzip validation" in completed.stderr
 
 
 def test_gg_array_download_once_accepts_nonempty_ready_marker(tmp_path):
@@ -1709,6 +1837,101 @@ def test_mv_out_bundle_serializes_concurrent_publishers(tmp_path):
     assert destination.read_text() == "second\n"
     assert not first_source.exists()
     assert not second_source.exists()
+
+
+def test_mv_out_bundle_lock_order_is_locale_independent(tmp_path):
+    observed_orders = []
+    for locale_name in ("C", "en_US.UTF-8"):
+        run_dir = tmp_path / locale_name.replace(".", "_")
+        run_dir.mkdir()
+        underscore_source = run_dir / "underscore.txt"
+        hyphen_source = run_dir / "hyphen.txt"
+        underscore_source.write_text("underscore\n")
+        hyphen_source.write_text("hyphen\n")
+        underscore_destination = run_dir / "_result"
+        hyphen_destination = run_dir / "-result"
+        lock_log = run_dir / "locks.txt"
+        command = (
+            f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+            f"export LC_ALL={shlex.quote(locale_name)}; "
+            f"lock_log={shlex.quote(str(lock_log))}; "
+            "_gg_publish_lock_acquire() { printf '%s\\n' \"$1\" >> \"${lock_log}\"; command mkdir -- \"$1\"; }; "
+            "_gg_publish_lock_release() { command rmdir -- \"$1\"; }; "
+            "mv_out_bundle "
+            f"{shlex.quote(str(underscore_source))} {shlex.quote(str(underscore_destination))} "
+            f"{shlex.quote(str(hyphen_source))} {shlex.quote(str(hyphen_destination))}"
+        )
+
+        completed = run_bash(command, cwd=run_dir)
+
+        assert completed.returncode == 0, completed.stderr + completed.stdout
+        observed_orders.append([Path(line).name for line in lock_log.read_text().splitlines()])
+
+    assert observed_orders[0] == observed_orders[1]
+    assert observed_orders[0] == sorted(observed_orders[0])
+
+
+def test_mv_out_bundle_heartbeat_prevents_reclaiming_a_live_publisher(tmp_path):
+    destination = tmp_path / "out" / "result.txt"
+    destination.parent.mkdir()
+    destination.write_text("old\n")
+    first_source = tmp_path / "first.txt"
+    second_source = tmp_path / "second.txt"
+    first_source.write_text("first\n")
+    second_source.write_text("second\n")
+    publish_marker = tmp_path / "first-published.txt"
+    release_marker = tmp_path / "release-first.txt"
+    shared_settings = (
+        "GG_LOCK_POLL_SECONDS=1; GG_LOCK_ACQUIRE_TIMEOUT_SECONDS=10; "
+        "GG_LOCK_STALE_SECONDS=2; GG_LOCK_HEARTBEAT_SECONDS=1; "
+    )
+    first_command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        + shared_settings
+        + f"target_destination={shlex.quote(str(destination))}; "
+        + "mv() { command mv \"$@\"; local status=$?; "
+        + 'if [[ "${2:-}" == *.gg-stage.* && "${3:-}" == "${target_destination}" ]]; then '
+        + f"touch {shlex.quote(str(publish_marker))}; "
+        + f"while [[ ! -e {shlex.quote(str(release_marker))} ]]; do sleep 0.05; done; fi; "
+        + "return ${status}; }; "
+        + f"mv_out_bundle {shlex.quote(str(first_source))} {shlex.quote(str(destination))}"
+    )
+    second_command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        + shared_settings
+        + f"mv_out_bundle {shlex.quote(str(second_source))} {shlex.quote(str(destination))}"
+    )
+    first = subprocess.Popen(
+        ["bash", "-lc", first_command],
+        cwd=tmp_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 20
+    while not publish_marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if not publish_marker.exists():
+        release_marker.touch()
+        first_stdout, first_stderr = first.communicate(timeout=10)
+        pytest.fail("first publisher did not enter the critical section: " + first_stderr + first_stdout)
+    second = subprocess.Popen(
+        ["bash", "-lc", second_command],
+        cwd=tmp_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    time.sleep(3.2)
+    assert second.poll() is None
+    release_marker.touch()
+    first_stdout, first_stderr = first.communicate(timeout=10)
+    second_stdout, second_stderr = second.communicate(timeout=10)
+
+    assert first.returncode == 0, first_stderr + first_stdout
+    assert second.returncode == 0, second_stderr + second_stdout
+    assert "Recovered stale publication lock" not in second_stderr
+    assert destination.read_text() == "second\n"
     assert not list(destination.parent.glob("*.gg-bundle.lock"))
     assert not list(tmp_path.rglob("*.gg-stage.*"))
     assert not list(tmp_path.rglob("*.gg-backup.*"))

@@ -15,11 +15,12 @@ connect_timeout_sec=${DOWNLOAD_URL_CONNECT_TIMEOUT_SEC:-30}
 max_time_sec=${DOWNLOAD_URL_MAX_TIME_SEC:-600}
 
 tmp_output=""
-output_path="${dest}"
-if [[ -z "${output_path}" ]]; then
+if [[ -n "${dest}" ]]; then
+  tmp_output="$(mktemp "${dest}.tmp.XXXXXX")"
+else
   tmp_output="$(mktemp)"
-  output_path="${tmp_output}"
 fi
+output_path="${tmp_output}"
 
 cleanup() {
   if [[ -n "${tmp_output}" ]]; then
@@ -68,4 +69,7 @@ fi
 
 if [[ -z "${dest}" ]]; then
   cat "${output_path}"
+else
+  mv -f -- "${output_path}" "${dest}"
+  tmp_output=""
 fi

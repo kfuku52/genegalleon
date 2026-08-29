@@ -110,6 +110,7 @@ if [[ -n "${GENEGALLEON_DOCKER_EXTRA_BINDS:-}" ]]; then
 fi
 
 exec docker run --rm -i \
+  --user "$(id -u):$(id -g)" \
   "${bind_args[@]}" \
   --workdir "${repo_root}" \
   "${docker_image}" \

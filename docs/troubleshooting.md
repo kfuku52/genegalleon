@@ -220,6 +220,22 @@ What to do:
 - remove stale lock files only when you are sure no active job is using the cache,
 - rerun after cleaning only the specific broken cache subtree rather than the whole workspace.
 
+### Shared-filesystem locking fails or behaves inconsistently
+
+GeneGalleon array finalization and ZIP-backed gene-family output stores require
+advisory `flock` locks that are visible across compute nodes. A filesystem that
+returns `ENOSYS`/`EINVAL`, or a mount configured for node-local locks, is not
+safe for concurrent tasks even if a single-node test succeeds.
+
+What to check:
+
+- acquire the same test lock from two compute nodes on the actual workspace
+  filesystem and verify that the second process blocks,
+- confirm the Lustre, BeeGFS, or NFS mount options with the site administrator;
+  do not use a node-local locking mode for a shared GeneGalleon workspace,
+- if GeneGalleon reports that advisory locking failed, move the workspace to a
+  filesystem with cross-node POSIX `flock` semantics before retrying.
+
 ### `gg_genome_evolution` protein mode does not behave as expected
 
 Symptoms:

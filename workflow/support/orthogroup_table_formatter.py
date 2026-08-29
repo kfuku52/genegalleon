@@ -45,7 +45,7 @@ def build_gene_count_table(df, sp_cols):
     for sp_col in sp_cols:
         # Count one column at a time so giant cells do not force a single
         # fixed-width NumPy Unicode array for the full orthogroup table.
-        series = df.loc[:, sp_col]
+        series = df.loc[:, sp_col].fillna("").astype(str)
         comma_counts = series.str.count(",")
         gene_counts[sp_col] = (comma_counts + series.ne("")).astype(int)
 
@@ -65,22 +65,29 @@ def run(args):
         print("Creating --out_dir: {}".format(args.dir_out))
         os.makedirs(args.dir_out)
 
-    df = pandas.read_csv(args.file_orthogroup_table, sep="\t", header=0, low_memory=False)
+    df = pandas.read_csv(
+        args.file_orthogroup_table,
+        sep="\t",
+        header=0,
+        low_memory=False,
+        dtype=str,
+        keep_default_na=False,
+    )
     if args.mode == "hog2og":
         df = df.drop(["OG", "Gene Tree Parent Clade"], axis=1)
         df.columns = df.columns.str.replace("^HOG$", "Orthogroup", regex=True)
-        pref = os.path.basename(args.file_orthogroup_table).replace("tsv", "")
-        df["Orthogroup"] = df["Orthogroup"].str.replace(pref, "", regex=False)
+        pref = os.path.splitext(os.path.basename(args.file_orthogroup_table))[0] + "."
+        has_pref = df["Orthogroup"].str.startswith(pref, na=False)
+        df.loc[has_pref, "Orthogroup"] = df.loc[has_pref, "Orthogroup"].str[len(pref) :]
     elif args.mode == "sp2og":
         df.columns = df.columns.str.replace("^group_id$", "Orthogroup", regex=True)
         df.columns = df.columns.str.replace(r"\..*", "", regex=True)
         df["Orthogroup"] = "SP" + df["Orthogroup"].astype(str).str.zfill(7)
         species_cols = [c for c in df.columns if c != "Orthogroup"]
         df.loc[:, species_cols] = df.loc[:, species_cols].apply(
-            lambda col: col.str.replace("*", "", regex=False).str.replace(",", ", ", regex=False)
+            lambda col: col.astype(str).str.replace("*", "", regex=False).str.replace(",", ", ", regex=False)
         )
 
-    df = df.fillna("")
     outpath_og = os.path.join(args.dir_out, "Orthogroups.tsv")
     print("Writing: {}".format(outpath_og))
     df.to_csv(outpath_og, sep="\t", index=False)
