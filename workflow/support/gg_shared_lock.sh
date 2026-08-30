@@ -390,10 +390,15 @@ gg_shared_lock_start_heartbeat() {
     local heartbeat_sleep_pid=""
 
     stop_heartbeat_process() {
-      if [[ "${heartbeat_sleep_pid}" =~ ^[0-9]+$ ]]; then
-        kill "${heartbeat_sleep_pid}" 2>/dev/null || true
-        wait "${heartbeat_sleep_pid}" 2>/dev/null || true
-      fi
+      local child_pid
+      trap '' HUP INT TERM
+      # TERM may arrive after sleep was forked but before $! was assigned.
+      # The shell job table already owns that child; reap it there so it cannot
+      # retain the workflow's output pipes or inherited advisory-lock fd.
+      while IFS= read -r child_pid; do
+        kill "${child_pid}" 2>/dev/null || true
+        wait "${child_pid}" 2>/dev/null || true
+      done < <(jobs -pr)
       exit 0
     }
 

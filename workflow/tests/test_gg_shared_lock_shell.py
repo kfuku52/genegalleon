@@ -16,6 +16,34 @@ if str(SUPPORT_DIR) not in sys.path:
 from shared_lock import FIELD_SEPARATOR, read_lock_metadata, try_create_lock  # noqa: E402
 
 
+def test_heartbeat_stop_during_child_pid_assignment_reaps_sleep(tmp_path):
+    lock_path = tmp_path / "heartbeat.lock"
+    lock_path.touch()
+    script = f'''
+source "{SUPPORT_DIR / 'gg_shared_lock.sh'}"
+set -T
+trap 'case "$BASH_COMMAND" in heartbeat_sleep_pid=*) kill -TERM "$BASHPID";; esac' DEBUG
+gg_shared_lock_start_heartbeat "{lock_path}"
+wait "$GG_SHARED_LOCK_HEARTBEAT_PID"
+'''
+    process = subprocess.Popen(
+        ["bash", "-c", script],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=3)
+        assert process.returncode == 0, (stdout, stderr)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
 def test_python_and_shell_shared_lock_helpers_use_same_metadata_format(tmp_path):
     lock_path = tmp_path / "shared.lock"
     assert try_create_lock(lock_path, pid=12345, hostname="lock-host", boot_id="boot-1")
