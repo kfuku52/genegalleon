@@ -22,7 +22,9 @@ def test_shared_lock_helpers_delegate_metadata_to_shared_python_module():
     assert "waiting for shared lock: ${description} (${owner_summary})" in lock_text
     assert "timed out waiting for shared lock: ${description} (${owner_summary})" in lock_text
     assert "gg_advisory_shared_lock_acquire()" in lock_text
-    assert 'flock -s "${GG_ADVISORY_SHARED_LOCK_FD}"' in lock_text
+    assert 'shared_namespace_lock.py' in lock_text
+    assert 'GG_ADVISORY_SHARED_LOCK_TOKEN' in lock_text
+    assert 'flock' not in function_body(lock_text, "gg_advisory_shared_lock_acquire")
     assert "gg_advisory_shared_lock_release()" in lock_text
 
 

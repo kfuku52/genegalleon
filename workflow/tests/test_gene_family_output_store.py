@@ -1,5 +1,4 @@
 import concurrent.futures
-import errno
 import fcntl
 import json
 import os
@@ -12,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from workflow.support.shared_namespace_lock import acquire, release
 
 from workflow.support.gene_family_output_store import (
     MANIFEST_MEMBER,
@@ -1056,8 +1056,7 @@ def test_active_family_shared_lock_prevents_nonblocking_archive(tmp_path: Path):
     archive_root = root / ".gg_store"
     lock_path = family_lock_path(archive_root, "OG0000001")
     lock_path.parent.mkdir(parents=True)
-    lock_handle = lock_path.open("a+b")
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_SH)
+    token = acquire(lock_path, exclusive=False)
     try:
         assert archive_completed_outputs(
             root,
@@ -1068,27 +1067,21 @@ def test_active_family_shared_lock_prevents_nonblocking_archive(tmp_path: Path):
         ) == []
         assert paths["stat_branch"].is_file()
     finally:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        lock_handle.close()
+        release(lock_path, token, exclusive=False)
 
 
-def test_bucket_lock_reports_unsupported_shared_filesystem_locking(
+def test_bucket_lock_does_not_depend_on_node_local_flock(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     import workflow.support.gene_family_output_store as output_store_module
 
-    def unsupported_flock(_descriptor, _operation):
-        raise OSError(errno.ENOSYS, "Function not implemented")
-
-    monkeypatch.setattr(output_store_module.fcntl, "flock", unsupported_flock)
-
-    with pytest.raises(ArchiveStoreError, match="cross-node POSIX flock semantics"):
-        with output_store_module._bucket_lock(
-            tmp_path / "locks" / "00.lock",
-            exclusive=True,
-        ):
-            pass
+    monkeypatch.setattr(fcntl, "flock", lambda *_: None)
+    path = tmp_path / "locks" / "00.lock"
+    with output_store_module._bucket_lock(path, exclusive=False) as shared:
+        assert shared
+        with output_store_module._bucket_lock(path, exclusive=True, nonblocking=True) as writer:
+            assert not writer
 
 
 def test_active_family_does_not_block_archiving_an_unrelated_family(tmp_path: Path):
@@ -1105,8 +1098,7 @@ def test_active_family_does_not_block_archiving_an_unrelated_family(tmp_path: Pa
     archive_root = root / ".gg_store"
     lock_path = family_lock_path(archive_root, active_family)
     lock_path.parent.mkdir(parents=True)
-    lock_handle = lock_path.open("a+b")
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_SH)
+    token = acquire(lock_path, exclusive=False)
     try:
         archived = archive_completed_outputs(
             root,
@@ -1116,8 +1108,7 @@ def test_active_family_does_not_block_archiving_an_unrelated_family(tmp_path: Pa
             nonblocking=True,
         )
     finally:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        lock_handle.close()
+        release(lock_path, token, exclusive=False)
 
     assert archived
     assert active_paths["stat_branch"].is_file()
@@ -1136,8 +1127,7 @@ def test_managed_delete_waits_for_the_active_family_lock(tmp_path: Path):
     live_path.write_text("active output\n", encoding="utf-8")
     lock_path = family_lock_path(root / ".gg_store", family_id)
     lock_path.parent.mkdir(parents=True)
-    lock_handle = lock_path.open("a+b")
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_SH)
+    token = acquire(lock_path, exclusive=False)
     started = threading.Event()
     finished = threading.Event()
     failures = []
@@ -1160,8 +1150,7 @@ def test_managed_delete_waits_for_the_active_family_lock(tmp_path: Path):
     time.sleep(0.05)
     assert not finished.is_set()
     assert live_path.is_file()
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-    lock_handle.close()
+    release(lock_path, token, exclusive=False)
     worker.join(timeout=2)
 
     assert finished.is_set()
@@ -1520,8 +1509,7 @@ def test_stale_tmp_cleanup_skips_only_the_active_family(tmp_path: Path):
     archive_root = root / ".gg_store"
     lock_path = family_lock_path(archive_root, "OG0000001")
     lock_path.parent.mkdir(parents=True)
-    lock_handle = lock_path.open("a+b")
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_SH)
+    token = acquire(lock_path, exclusive=False)
     try:
         removed = cleanup_stale_tmp(
             root,
@@ -1532,8 +1520,7 @@ def test_stale_tmp_cleanup_skips_only_the_active_family(tmp_path: Path):
         assert old_dir.is_dir()
         assert not unrelated_dir.exists()
     finally:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        lock_handle.close()
+        release(lock_path, token, exclusive=False)
 
 
 def test_tmp_cleanup_caps_failed_directories_and_ignores_manual_directories(

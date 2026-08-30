@@ -6,32 +6,31 @@ gg_advisory_shared_lock_acquire() {
     echo "Advisory shared lock path is empty." >&2
     return 1
   fi
-  if [[ -n "${GG_ADVISORY_SHARED_LOCK_FD:-}" ]]; then
-    echo "An advisory shared lock is already held on fd ${GG_ADVISORY_SHARED_LOCK_FD}." >&2
+  if [[ -n "${GG_ADVISORY_SHARED_LOCK_TOKEN:-}" ]]; then
+    echo "A gene-family shared lock is already held." >&2
     return 1
   fi
-  if ! command -v flock >/dev/null 2>&1; then
-    echo "Advisory shared locking requires flock inside the runtime." >&2
-    return 1
-  fi
-  mkdir -p "$(dirname "${lock_file}")"
-  exec {GG_ADVISORY_SHARED_LOCK_FD}>"${lock_file}" || return 1
-  if ! flock -s "${GG_ADVISORY_SHARED_LOCK_FD}"; then
-    exec {GG_ADVISORY_SHARED_LOCK_FD}>&-
-    GG_ADVISORY_SHARED_LOCK_FD=""
-    return 1
-  fi
+  local py_exec helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  helper_script="$(dirname "${helper_script}")/shared_namespace_lock.py"
+  GG_ADVISORY_SHARED_LOCK_TOKEN=$("${py_exec}" "${helper_script}" acquire-shared \
+    "${lock_file}" --owner-pid "$$" --timeout "$(gg_lock_acquire_timeout_seconds)") || return 1
+  GG_ADVISORY_SHARED_LOCK_PATH=${lock_file}
 }
 
 gg_advisory_shared_lock_release() {
-  local release_status=0
-  if [[ -z "${GG_ADVISORY_SHARED_LOCK_FD:-}" ]]; then
+  if [[ -z "${GG_ADVISORY_SHARED_LOCK_TOKEN:-}" ]]; then
     return 0
   fi
-  flock -u "${GG_ADVISORY_SHARED_LOCK_FD}" || release_status=$?
-  exec {GG_ADVISORY_SHARED_LOCK_FD}>&- || release_status=$?
-  GG_ADVISORY_SHARED_LOCK_FD=""
-  return "${release_status}"
+  local py_exec helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  helper_script="$(dirname "${helper_script}")/shared_namespace_lock.py"
+  "${py_exec}" "${helper_script}" release-shared "${GG_ADVISORY_SHARED_LOCK_PATH}" \
+    --token "${GG_ADVISORY_SHARED_LOCK_TOKEN}" || return 1
+  GG_ADVISORY_SHARED_LOCK_TOKEN=""
+  GG_ADVISORY_SHARED_LOCK_PATH=""
 }
 
 gg_lock_stale_seconds() {

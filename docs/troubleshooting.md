@@ -222,19 +222,25 @@ What to do:
 
 ### Shared-filesystem locking fails or behaves inconsistently
 
-GeneGalleon array finalization and ZIP-backed gene-family output stores require
-advisory `flock` locks that are visible across compute nodes. A filesystem that
-returns `ENOSYS`/`EINVAL`, or a mount configured for node-local locks, is not
-safe for concurrent tasks even if a single-node test succeeds.
+ZIP-backed gene-family stores and their active-task/temporary-directory guards
+use atomic shared-filesystem namespace locks, not `flock`. This protects active
+tasks even on Lustre `localflock` mounts. The `.gg_store_locks/` tree (including
+`.lock.namespace-v1` sidecars) is persistent coordination state outside the
+movable store metadata and must not be deleted by cleanup tools.
+Other workflows' array finalizers still require cross-node `flock` semantics.
 
 What to check:
 
-- acquire the same test lock from two compute nodes on the actual workspace
-  filesystem and verify that the second process blocks,
+- verify the same namespace lock from two compute nodes on the actual workspace
+  filesystem; a writer must block while any reader is active,
 - confirm the Lustre, BeeGFS, or NFS mount options with the site administrator;
-  do not use a node-local locking mode for a shared GeneGalleon workspace,
-- if GeneGalleon reports that advisory locking failed, move the workspace to a
-  filesystem with cross-node POSIX `flock` semantics before retrying.
+  workflows still using `flock` cannot use node-local locking,
+- stop all users of a gene-family store before switching from a flock-only
+  runtime; old and new protocols must never run concurrently,
+- namespace locks are never stolen based on age or a remote PID. After a crash,
+  timeout is fail-closed: verify that every job and reader using that exact
+  store has stopped, retain the owner records for audit, and reconcile only the
+  abandoned lock. Never remove a lock just to make a retry proceed.
 
 ### A replacement transcriptome task reaches the shared summary concurrently
 

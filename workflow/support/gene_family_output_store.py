@@ -13,7 +13,6 @@ import argparse
 import concurrent.futures
 import contextlib
 import csv
-import fcntl
 import hashlib
 import json
 import os
@@ -36,6 +35,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from content_digest_cache import cached_sha256_file
+from shared_namespace_lock import NamespaceLockError, namespace_lock
 
 STORE_DIR_NAME = ".gg_store"
 ACTIVE_ARCHIVE_DIR_NAME = "archives"
@@ -334,8 +334,17 @@ def _subdir_index_name(subdir: str) -> str:
     return f"{digest}.json"
 
 
+def _store_lock_path(path: Path) -> Path:
+    # Store migration and pure-raw conversion move/remove the metadata tree
+    # while locks are held. Coordination must outlive both representations.
+    for parent in path.parents:
+        if parent.name in {STORE_DIR_NAME, LEGACY_ARCHIVE_DIR_NAME}:
+            return parent.parent / ".gg_store_locks" / path.relative_to(parent)
+    return path
+
+
 def family_lock_path(archive_root: Path, family_id: str) -> Path:
-    return archive_root / FAMILY_LOCK_DIR_NAME / f"{_family_lock_bucket(family_id)}.lock"
+    return _store_lock_path(archive_root / FAMILY_LOCK_DIR_NAME / f"{_family_lock_bucket(family_id)}.lock")
 
 
 @contextlib.contextmanager
@@ -345,45 +354,11 @@ def _bucket_lock(
     exclusive: bool,
     nonblocking: bool = False,
 ) -> Iterator[bool]:
-    if lock_path.parent.is_symlink():
-        raise ArchiveStoreError(f"Symlinked lock directories are not supported: {lock_path.parent}")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    open_flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        open_flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(lock_path, open_flags, 0o600)
-    except OSError as exc:
-        raise ArchiveStoreError(f"Failed to open GeneGalleon lock {lock_path}: {exc}") from exc
-    acquired = False
-    try:
-        try:
-            operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-            if nonblocking:
-                operation |= fcntl.LOCK_NB
-            fcntl.flock(descriptor, operation)
-            acquired = True
-        except BlockingIOError as exc:
-            if nonblocking:
-                yield False
-                return
-            raise ArchiveStoreError(
-                f"GeneGalleon lock acquisition unexpectedly blocked for {lock_path}: {exc}"
-            ) from exc
-        except OSError as exc:
-            raise ArchiveStoreError(
-                "Filesystem advisory locking failed for {}: {}. Verify that the "
-                "shared workspace provides cross-node POSIX flock semantics; "
-                "node-local locking is unsafe for concurrent array tasks.".format(
-                    lock_path,
-                    exc,
-                )
-            ) from exc
-        yield True
-    finally:
-        if acquired:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
+        with namespace_lock(_store_lock_path(lock_path), exclusive=exclusive, nonblocking=nonblocking) as acquired:
+            yield acquired
+    except NamespaceLockError as exc:
+        raise ArchiveStoreError(str(exc)) from exc
 
 
 def family_bucket_lock(
@@ -630,7 +605,8 @@ def _write_archive_readme(root: Path | str) -> None:
         "New or manually changed files remain in <subdirectory>/ and override ZIP members.\n"
         "While a run is active, immutable ZIP parts are visible below archives/<subdirectory>/.\n"
         "ARCHIVE_STATUS.tsv is a snapshot of the physical location of every logical output set.\n"
-        "Internal indexes, locks, and deletion records are under .gg_store/; do not edit them.\n"
+        "Internal indexes and deletion records are under .gg_store/; locks are under .gg_store_locks/.\n"
+        "Do not edit or remove either internal tree.\n"
         "After manual file changes, run gg_gene_family_archive.sh refresh-status --root THIS_DIRECTORY.\n"
         "Use gg_gene_family_archive.sh list, verify, restore, delete, or finalize to manage files.\n"
     )
@@ -747,20 +723,8 @@ def producer_read_lock(archive_root: Path) -> Iterator[None]:
     if not archive_root.is_dir():
         yield
         return
-    lock_path = archive_root / PRODUCER_LOCK_FILE
-    open_flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        open_flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(lock_path, open_flags, 0o600)
-    except OSError as exc:
-        raise ArchiveStoreError(f"Failed to open GeneGalleon archive maintenance lock {lock_path}: {exc}") from exc
-    try:
-        fcntl.flock(descriptor, fcntl.LOCK_SH)
+    with _bucket_lock(archive_root / PRODUCER_LOCK_FILE, exclusive=False):
         yield
-    finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
 
 
 class GeneFamilyOutputStore:
@@ -2892,42 +2856,8 @@ class GeneFamilyOutputStore:
 def archive_lock(archive_root: Path, nonblocking: bool = False) -> Iterator[bool]:
     _validate_archive_root(archive_root)
     archive_root.mkdir(parents=True, exist_ok=True)
-    lock_path = archive_root / LOCK_FILE
-    acquired = False
-    open_flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        open_flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(lock_path, open_flags, 0o600)
-    except OSError as exc:
-        raise ArchiveStoreError(f"Failed to open GeneGalleon archive lock {lock_path}: {exc}") from exc
-    try:
-        try:
-            flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
-            fcntl.flock(descriptor, flags)
-            os.ftruncate(descriptor, 0)
-            os.write(
-                descriptor,
-                json.dumps(
-                    {
-                        "pid": os.getpid(),
-                        "hostname": os.uname().nodename,
-                        "created_ns": time.time_ns(),
-                    }
-                ).encode("utf-8"),
-            )
-            os.fsync(descriptor)
-            acquired = True
-        except BlockingIOError:
-            if nonblocking:
-                yield False
-                return
-            raise
+    with _bucket_lock(archive_root / LOCK_FILE, exclusive=True, nonblocking=nonblocking) as acquired:
         yield acquired
-    finally:
-        if acquired:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
 
 
 @contextlib.contextmanager
@@ -2944,30 +2874,8 @@ def producer_quiescence_lock(
 
     _validate_archive_root(archive_root)
     archive_root.mkdir(parents=True, exist_ok=True)
-    lock_path = archive_root / PRODUCER_LOCK_FILE
-    open_flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        open_flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(lock_path, open_flags, 0o600)
-    except OSError as exc:
-        raise ArchiveStoreError(f"Failed to open GeneGalleon archive maintenance lock {lock_path}: {exc}") from exc
-    acquired = False
-    try:
-        try:
-            flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
-            fcntl.flock(descriptor, flags)
-            acquired = True
-        except BlockingIOError:
-            if nonblocking:
-                yield False
-                return
-            raise
-        yield True
-    finally:
-        if acquired:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
+    with _bucket_lock(archive_root / PRODUCER_LOCK_FILE, exclusive=True, nonblocking=nonblocking) as acquired:
+        yield acquired
 
 
 def default_completion_paths(family_id: str) -> List[str]:
