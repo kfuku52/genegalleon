@@ -11,7 +11,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from workflow.support.shared_namespace_lock import acquire, release
 
 from workflow.support.gene_family_output_store import (
     MANIFEST_MEMBER,
@@ -42,6 +41,7 @@ from workflow.support.gene_family_output_store import (
     storage_conversion_status,
     storage_conversion_summary,
 )
+from workflow.support.shared_namespace_lock import acquire, release
 
 
 def _write_family_outputs(root: Path, family_id: str, complete: bool = True):

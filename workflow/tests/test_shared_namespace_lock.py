@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 from workflow.support.shared_namespace_lock import (
-    NamespaceLockError, acquire, namespace_lock, release,
+    NamespaceLockError,
+    acquire,
+    namespace_lock,
+    release,
 )
 
 HELPER = Path(__file__).resolve().parents[1] / "support" / "shared_namespace_lock.py"

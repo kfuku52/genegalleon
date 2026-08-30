@@ -67,9 +67,9 @@ def acquire(path: Path, *, exclusive: bool, nonblocking: bool = False,
     while True:
         try:
             gate.mkdir(mode=0o700)
-        except FileExistsError:
+        except FileExistsError as exc:
             if gate.is_symlink() or not gate.is_dir():
-                raise NamespaceLockError(f"Invalid lock gate: {gate}")
+                raise NamespaceLockError(f"Invalid lock gate: {gate}") from exc
         else:
             keep_gate = False
             owner_written = False
