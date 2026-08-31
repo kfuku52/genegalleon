@@ -136,13 +136,15 @@ part of the SIF cache key. Cached SIFs are saved only
 after authoritative runtime tests succeed.
 
 Commit validation temporarily selects the dependency-qualified runtime
-`ghcr.io/kfuku52/genegalleon:20260831-2c1e5fd-1f6ad14c41e0`. Its only
+`ghcr.io/kfuku52/genegalleon:20260901-2c1e5fd-1f6ad14c41e0`. Its only
 dependency correction replaces Bioconda ASTER 1.25 build 0, whose activation
 hooks override the library search path and break the OR-Tools SCIP import,
 with the hook-free package prepared by
 [bioconda-recipes#68643](https://github.com/bioconda/bioconda-recipes/pull/68643).
 The validation action still mounts and tests the current checkout with the
-complete SIF runtime suite. Remove this prepared-runtime selection only after
+complete SIF runtime suite. Registry reuse checks the runtime input, runtime
+build target, and security epoch before the expensive SIF conversion. Remove
+this prepared-runtime selection only after
 the normal Bioconda channel publishes the hook-free ASTER build and a normal
 GeneGalleon solve passes both the ASTER and OR-Tools runtime checks. Do not
 work around the conflict by unsetting loader variables in GeneGalleon jobs.

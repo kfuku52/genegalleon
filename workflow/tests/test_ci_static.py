@@ -276,6 +276,9 @@ def test_sif_runtime_validation_reuses_only_an_exact_runtime_image_or_builds_cur
     assert restore_step["uses"].startswith("actions/cache/restore@")
     assert "steps.runtime-input.outputs.value" in restore_step["with"]["key"]
     assert "io.genegalleon.runtime-input" in selection_step["run"]
+    assert "io.genegalleon.build-target" in selection_step["run"]
+    assert "io.genegalleon.security-refresh-epoch" in selection_step["run"]
+    assert "--expected-value" in selection_step["run"]
     assert "check_published_build_input.py" in selection_step["run"]
     assert "IMAGE_SOURCE=local" in build_run
     assert "IMAGE=local/genegalleon" in build_run
@@ -317,7 +320,7 @@ def test_sif_runtime_validation_uses_exact_temporary_aster_runtime():
     prepared = named_step(sif_job, "Validate exact runtime and reuse the shared SIF cache")
 
     assert prepared["with"] == {
-        "image-ref": "ghcr.io/kfuku52/genegalleon:20260831-2c1e5fd-1f6ad14c41e0",
+        "image-ref": "ghcr.io/kfuku52/genegalleon:20260901-2c1e5fd-1f6ad14c41e0",
         "runtime-input": "1f6ad14c41e03cc13d84e096c7672f54ac0d6698efd42198809e320d1d72f2fe",
         "security-refresh-epoch": "2026-08-31",
     }

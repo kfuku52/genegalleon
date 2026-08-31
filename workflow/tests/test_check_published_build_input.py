@@ -16,13 +16,15 @@ def load_module():
     return module
 
 
-def image(runtime_input="a" * 64, revision="b" * 40):
+def image(runtime_input="a" * 64, revision="b" * 40, build_target="runtime"):
     return {
         "os": "linux",
         "architecture": "amd64",
         "config": {
             "Labels": {
                 "io.genegalleon.runtime-input": runtime_input,
+                "io.genegalleon.build-target": build_target,
+                "io.genegalleon.security-refresh-epoch": "2026-08-31",
                 "org.opencontainers.image.revision": revision,
             }
         },
@@ -56,3 +58,21 @@ def test_multi_platform_mapping_remains_unchanged():
     payload = {"linux/amd64": image()}
 
     assert module.platform_mapping(payload) is payload
+
+
+def test_single_platform_exact_contract_labels_are_compared():
+    module = load_module()
+
+    assert module.compare_label_values(
+        image(),
+        {"linux/amd64": "runtime"},
+        label="io.genegalleon.build-target",
+    ) == []
+    assert module.compare_label_values(
+        image(build_target="development"),
+        {"linux/amd64": "runtime"},
+        label="io.genegalleon.build-target",
+    ) == [
+        "Published image linux/amd64 io.genegalleon.build-target changed: "
+        "published=development expected=runtime."
+    ]

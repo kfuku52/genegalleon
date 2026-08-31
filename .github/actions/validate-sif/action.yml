@@ -106,6 +106,7 @@ runs:
       shell: bash
       env:
         EXPECTED_RUNTIME_INPUT: ${{ steps.runtime-input.outputs.value }}
+        EXPECTED_SECURITY_EPOCH: ${{ steps.runtime-input.outputs.security_refresh_epoch }}
         PUBLISHED_IMAGE: ${{ steps.runtime-input.outputs.published_image }}
         PUBLISHED_TAG: ${{ steps.runtime-input.outputs.published_tag }}
         PREPARED_IMAGE_REF: ${{ inputs.image-ref }}
@@ -121,12 +122,20 @@ runs:
            python container/scripts/check_published_build_input.py \
              --label io.genegalleon.runtime-input \
              --expected "linux/amd64=${EXPECTED_RUNTIME_INPUT}" \
+             <<< "${image_metadata}" && \
+           python container/scripts/check_published_build_input.py \
+             --label io.genegalleon.build-target \
+             --expected-value "linux/amd64=runtime" \
+             <<< "${image_metadata}" && \
+           python container/scripts/check_published_build_input.py \
+             --label io.genegalleon.security-refresh-epoch \
+             --expected-value "linux/amd64=${EXPECTED_SECURITY_EPOCH}" \
              <<< "${image_metadata}"; then
           echo "source=registry" >> "${GITHUB_OUTPUT}"
-          echo "Published image has the exact validation runtime input."
+          echo "Published image has the exact validation runtime contract."
         else
           if [[ -n "${PREPARED_IMAGE_REF}" ]]; then
-            echo "The prepared image does not match its exact runtime identity."
+            echo "The prepared image does not match its exact runtime contract."
             exit 1
           fi
           echo "source=local" >> "${GITHUB_OUTPUT}"
