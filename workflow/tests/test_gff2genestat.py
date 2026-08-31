@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pandas
+import pytest
 
 from workflow.support.gff2genestat import (
     add_id_column,
@@ -14,6 +15,71 @@ from workflow.support.gff2genestat import (
 )
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "gff2genestat.py"
+OUT_COLS = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand"]
+
+
+def test_longest_selects_one_transcript_before_summarizing():
+    gff = pandas.DataFrame(
+        [
+            ["chr1", "gene", 1, 500, "+", "ID=gene1;"],
+            ["chr1", "mRNA", 1, 500, "+", "ID=long;Parent=gene1;"],
+            ["chr1", "mRNA", 1, 60, "+", "ID=short;Parent=gene1;"],
+            ["chr1", "CDS", 401, 500, "+", "ID=long.c2;Parent=long;"],
+            ["chr1", "CDS", 1, 200, "+", "ID=long.c1;Parent=long;"],
+            ["chr1", "CDS", 1, 60, "+", "ID=short.c1;Parent=short;"],
+            ["chr1", "CDS", 1, 200, "+", "ID=long.duplicate;Parent=long;"],
+        ], columns=["sequence", "feature", "start", "end", "strand", "attributes"]
+    )
+    for ordered in (gff, gff.iloc[::-1]):
+        selected = extract_by_ids(ordered, pandas.Series(["Species_a_gene1"]), "CDS", "longest")
+        out = summarize_gene_features(selected, OUT_COLS)
+        assert len(out) == 1
+        assert out.iloc[0]["feature_size"] == 300
+        assert out.iloc[0]["num_intron"] == 1
+        assert out.iloc[0]["intron_positions"] == "200"
+
+
+def test_longest_gtf_transcripts_do_not_merge_isoforms():
+    gff = pandas.DataFrame(
+        [
+            ["chr1", "CDS", 1, 90, "+", 'gene_id "gene1"; transcript_id "t1";'],
+            ["chr1", "CDS", 1, 30, "+", 'gene_id "gene1"; transcript_id "t2";'],
+        ], columns=["sequence", "feature", "start", "end", "strand", "attributes"]
+    )
+    out = extract_by_ids(gff, pandas.Series(["Species_a_gene1"]), "CDS", "longest")
+    assert out["end"].tolist() == [90]
+
+
+def test_longest_rejects_equal_length_conflicting_transcripts():
+    gff = pandas.DataFrame(
+        [
+            ["chr1", "CDS", 1, 90, "+", "Parent=gene1.t1;"],
+            ["chr1", "CDS", 101, 190, "+", "Parent=gene1.t2;"],
+        ], columns=["sequence", "feature", "start", "end", "strand", "attributes"]
+    )
+    with pytest.raises(ValueError, match="Ambiguous longest transcript"):
+        extract_by_ids(gff, pandas.Series(["Species_a_gene1"]), "CDS", "longest")
+
+
+def test_reverse_strand_cds_uses_transcript_order_and_genomic_bounds():
+    gff = pandas.DataFrame(
+        {"gene_id": ["gene1"] * 3, "sequence": ["chr1"] * 3,
+         "strand": ["-"] * 3, "start": [1, 201, 101], "end": [10, 230, 120]}
+    )
+    out = summarize_gene_features(gff, OUT_COLS).iloc[0]
+    assert out["feature_size"] == 60
+    assert out["intron_positions"] == "30;50"
+    assert (out["start"], out["end"]) == (1, 230)
+
+
+@pytest.mark.parametrize("sequence,strand", [("chr2", "+"), ("chr1", "-")])
+def test_summary_rejects_mixed_coordinate_systems(sequence, strand):
+    gff = pandas.DataFrame(
+        {"gene_id": ["gene1", "gene1"], "sequence": ["chr1", sequence],
+         "strand": ["+", strand], "start": [1, 101], "end": [10, 120]}
+    )
+    with pytest.raises(ValueError, match="coordinate"):
+        summarize_gene_features(gff, OUT_COLS)
 
 
 def test_add_intron_info_uses_semicolon_delimiter():

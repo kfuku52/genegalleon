@@ -80,7 +80,9 @@ def test_synteny_species_gene_cache_tracks_input_and_output_content(tmp_path):
     output.write_text("gene_id\nA\n", encoding="utf-8")
     contract = mod.species_gene_cache_contract("Species_a", str(cds), str(gff))
 
-    assert mod.species_gene_cache_is_current(str(output), str(manifest), contract)
+    assert not mod.species_gene_cache_is_current(str(output), str(manifest), contract)
+    recorded = dict(contract, output_sha256=mod.sha256_file(str(output)))
+    mod.write_species_gene_cache_manifest(str(manifest), recorded)
     assert manifest.is_file()
     assert mod.species_gene_cache_is_current(str(output), str(manifest), contract)
 

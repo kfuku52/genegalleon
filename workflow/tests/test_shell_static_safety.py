@@ -1717,6 +1717,9 @@ def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_suppor
     )
     assert 'assert_gene_evolution_aa_model_for_protein_mode "${task}"' in core
     assert 'disable_if_no_input_file "run_collect_gff_info" "${file_og_primary_fasta}"' in core
+    assert '--parameter "gff_annotation_schema=2"' in core
+    assert '--input "sequence_source_index=${gff_info_sequence_manifest}"' in core
+    assert '--sequence-store "${gff_info_sequence_store}"' in core
     assert (
         'seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"'
         in core

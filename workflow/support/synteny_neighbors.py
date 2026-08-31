@@ -182,7 +182,7 @@ def species_gene_cache_contract(species_name, species_cds_path, species_gff_path
             "cds_sha256": sha256_file(species_cds_path),
             "gff_sha256": sha256_file(species_gff_path),
         },
-        "parameters": {"feature": "CDS", "multiple_hits": "longest"},
+        "parameters": {"feature": "CDS", "multiple_hits": "longest", "gff_annotation_schema": 2},
     }
 
 
@@ -190,11 +190,8 @@ def species_gene_cache_is_current(out_path, manifest_path, contract):
     if not os.path.isfile(out_path) or os.path.getsize(out_path) == 0:
         return False
     if not os.path.isfile(manifest_path):
-        adopted = dict(contract)
-        adopted["output_sha256"] = sha256_file(out_path)
-        adopted["provenance_state"] = "adopted_legacy_output_without_rebuild"
-        write_species_gene_cache_manifest(manifest_path, adopted)
-        return True
+        # An unversioned cache may contain summed alternative transcripts.
+        return False
     try:
         with open(manifest_path, "r", encoding="utf-8") as handle:
             recorded = json.load(handle)

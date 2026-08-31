@@ -9,13 +9,18 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import numpy
 import pandas
 
 try:
+    from fasta_sequence_store import fasta_records
+    from gff_source_contract import source_bound_gff_names
     from species_labeling import extract_species_label, strip_species_label
 except ImportError:  # pragma: no cover - package import path used in tests
+    from .fasta_sequence_store import fasta_records
+    from .gff_source_contract import source_bound_gff_names
     from .species_labeling import extract_species_label, strip_species_label
 
 pandas.options.mode.chained_assignment = None
@@ -73,11 +78,16 @@ def build_arg_parser():
     parser.add_argument("--dir_gff", metavar="PATH", default="", type=str, help="Path used by --dir_gff.")
     parser.add_argument("--seqfile", metavar="PATH", default="", type=str, help="Path used by --seqfile.")
     parser.add_argument(
+        "--sequence-store", default="", metavar="PATH",
+        help="Read-only FASTA sequence store binding duplicated species GFFs to the exact source CDS/protein.",
+    )
+    parser.add_argument(
         "--outfile", metavar="PATH", default="gff2genestat.tsv", type=str, help="Path used by --outfile."
     )
     parser.add_argument("--feature", metavar="STR", default="CDS", type=str, help="Value used by --feature.")
     parser.add_argument(
-        "--multiple_hits", metavar="STR", default="longest", type=str, help="Value used by --multiple_hits."
+        "--multiple_hits", default="longest", choices=["longest"],
+        help="Select one longest CDS transcript per gene; reject conflicting equal-length ties.",
     )
     parser.add_argument("--ncpu", metavar="INT", default=1, type=int, help="Number of worker threads.")
     return parser
@@ -416,6 +426,8 @@ def resolve_feature_match(feature_id, id_info, resolved_cache, active_stack, loo
 
 
 def extract_by_ids(gff, seq_names, feature, multiple_hits):
+    if multiple_hits != "longest":
+        raise ValueError("Unsupported multiple_hits policy: {}".format(multiple_hits))
     print("Extracting gene IDs: {}".format(datetime.datetime.now()), flush=True)
     lookup, min_len, max_len = build_search_term_lookup(seq_names)
     gff_feat = gff.loc[(gff.loc[:, "feature"] == feature), :].copy()
@@ -486,7 +498,65 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits):
     out = gff_feat.loc[gff_feat.loc[:, "gene_id"] != "", :]
     if out.shape[0] == 0:
         print("No match was found.")
-    return out
+        return out
+    return select_longest_transcripts(out) if feature == "CDS" else out
+
+
+def transcript_ids(attributes, gene_id):
+    _, parents, _ = parse_attribute_fields(attributes)
+    if parents:
+        return parents
+    match = re.search(r'(?:^|;)\s*transcript_id(?:=|\s+)\s*([^;]+)', str(attributes))
+    if match:
+        return (normalize_attribute_value(match.group(1)),)
+    # Some prokaryotic CDS features attach directly to their gene.
+    return (gene_id,)
+
+
+def ordered_feature_blocks(rows, gene_id):
+    blocks = {(str(sequence), str(strand), int(start), int(end)) for sequence, strand, start, end in rows}
+    if len({(sequence, strand) for sequence, strand, _start, _end in blocks}) != 1:
+        raise ValueError("Conflicting GFF coordinate systems for {}".format(gene_id))
+    if any(start < 1 or end < start for _sequence, _strand, start, end in blocks):
+        raise ValueError("Invalid GFF coordinates for {}".format(gene_id))
+    blocks = sorted(blocks, key=lambda block: (block[2], block[3]))
+    if any(right[2] <= left[3] for left, right in zip(blocks, blocks[1:], strict=False)):
+        raise ValueError("Overlapping GFF feature blocks for {}".format(gene_id))
+    return blocks[::-1] if blocks[0][1] == "-" else blocks
+
+
+def select_longest_transcripts(gff):
+    gff = gff.reset_index(drop=True)
+    by_gene = {}
+    for index, (gene_id, attributes) in enumerate(zip(gff["gene_id"], gff["attributes"], strict=True)):
+        candidates = by_gene.setdefault(gene_id, {})
+        for transcript in transcript_ids(attributes, gene_id):
+            candidates.setdefault(transcript, []).append(index)
+    coordinate_rows = None
+    selected = []
+    for gene_id, candidates in by_gene.items():
+        if len(candidates) == 1:
+            selected.extend(next(iter(candidates.values())))
+            continue
+        if coordinate_rows is None:
+            coordinate_rows = list(gff[["sequence", "strand", "start", "end"]].itertuples(index=False, name=None))
+        best_length = -1
+        best_indices = None
+        best_signature = None
+        tied_conflict = False
+        for transcript in sorted(candidates):
+            blocks = ordered_feature_blocks((coordinate_rows[index] for index in candidates[transcript]), gene_id)
+            length = sum(end - start + 1 for _sequence, _strand, start, end in blocks)
+            signature = tuple(blocks)
+            if length > best_length:
+                best_length, best_indices, best_signature = length, candidates[transcript], signature
+                tied_conflict = False
+            elif length == best_length and signature != best_signature:
+                tied_conflict = True
+        if tied_conflict:
+            raise ValueError("Ambiguous longest transcript for {}".format(gene_id))
+        selected.extend(best_indices)
+    return gff.iloc[selected]
 
 
 def add_id_column(gff, seq_names, new_col="gene_id"):
@@ -503,61 +573,31 @@ def add_id_column(gff, seq_names, new_col="gene_id"):
 
 
 def summarize_gene_features(gff, out_cols, id_col="gene_id"):
-    gene_ids = gff.loc[:, id_col].fillna("").astype(str).to_numpy()
-    if gene_ids.size == 0:
+    if gff.empty:
         return pandas.DataFrame(columns=out_cols)
-    sequences = gff.loc[:, "sequence"].to_numpy()
-    strands = gff.loc[:, "strand"].to_numpy()
-    starts = gff.loc[:, "start"].to_numpy()
-    ends = gff.loc[:, "end"].to_numpy()
-
-    order = []
     by_gene = {}
-    for gene_id, sequence, strand, start, end in zip(gene_ids, sequences, strands, starts, ends, strict=True):
+    for gene_id, sequence, strand, start, end in gff[[id_col, "sequence", "strand", "start", "end"]].itertuples(index=False, name=None):
         if gene_id == "":
             continue
-        start = int(start)
-        end = int(end)
-        feature_len = end - start + 1
-        rec = by_gene.get(gene_id)
-        if rec is None:
-            by_gene[gene_id] = {
-                "gene_id": gene_id,
-                "feature_size": feature_len,
-                "num_intron": 0,
-                "intron_offsets": [],
-                "chromosome": sequence,
-                "start": start,
-                "end": end,
-                "strand": strand,
-            }
-            order.append(gene_id)
-            continue
-        rec["intron_offsets"].append(rec["feature_size"])
-        rec["feature_size"] += feature_len
-        rec["num_intron"] += 1
-        rec["end"] = end
-
-    if len(order) == 0:
-        return pandas.DataFrame(columns=out_cols)
+        by_gene.setdefault(gene_id, []).append((sequence, strand, start, end))
     rows = []
-    for gene_id in order:
-        rec = by_gene[gene_id]
-        intron_offsets = rec["intron_offsets"]
-        max_intron_pos = int(intron_offsets[-1]) if len(intron_offsets) > 0 else 0
-        if max_intron_pos > rec["feature_size"]:
-            txt = "Intron position cannot be greater than feature size: {}, feature_size={}, max intron position = {}"
-            raise Exception(txt.format(gene_id, rec["feature_size"], max_intron_pos))
+    for gene_id, group in by_gene.items():
+        blocks = ordered_feature_blocks(group, gene_id)
+        length = 0
+        intron_offsets = []
+        for _sequence, _strand, start, end in blocks:
+            length += end - start + 1
+            intron_offsets.append(length)
         rows.append(
             {
                 "gene_id": gene_id,
-                "feature_size": int(rec["feature_size"]),
-                "num_intron": int(rec["num_intron"]),
-                "intron_positions": ";".join(str(int(pos)) for pos in intron_offsets),
-                "chromosome": rec["chromosome"],
-                "start": int(rec["start"]),
-                "end": int(rec["end"]),
-                "strand": rec["strand"],
+                "feature_size": length,
+                "num_intron": len(blocks) - 1,
+                "intron_positions": ";".join(str(pos) for pos in intron_offsets[:-1]),
+                "chromosome": blocks[0][0],
+                "start": min(block[2] for block in blocks),
+                "end": max(block[3] for block in blocks),
+                "strand": blocks[0][1],
             }
         )
     return pandas.DataFrame(rows, columns=out_cols)
@@ -672,9 +712,12 @@ def main():
 
     out_cols = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand"]
     gff_cols = ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
-    seq_names = read_fasta_seqname(file_path=args.seqfile)
+    records = list(fasta_records(Path(args.seqfile)))
+    seq_names = pandas.Series([identifier for identifier, _header, _sequence in records], dtype=str)
+    if seq_names.duplicated().any():
+        raise ValueError("Duplicate FASTA identifier in GFF input")
     seq_species_labels = seq_names.map(extract_species_label)
-    gff_files = [gff for gff in os.listdir(args.dir_gff) if not gff.startswith(".")]
+    gff_files = sorted(gff for gff in os.listdir(args.dir_gff) if not gff.startswith("."))
     gff_files = [gff for gff in gff_files if gff.endswith((".gff", ".gtf", ".gff3", ".gff.gz", ".gtf.gz", ".gff3.gz"))]
     tasks = []
     for gff_file in gff_files:
@@ -685,6 +728,21 @@ def main():
         if seq_sp.shape[0] == 0:
             continue
         tasks.append((gff_file, seq_sp.tolist()))
+
+    if args.sequence_store:
+        candidates = {}
+        for gff_file, identifiers in tasks:
+            for identifier in identifiers:
+                candidates.setdefault(identifier, []).append(gff_file)
+        duplicate_sources = {identifier: names for identifier, names in candidates.items() if len(names) > 1}
+        if duplicate_sources:
+            sequences = {identifier: sequence for identifier, _header, sequence in records if identifier in duplicate_sources}
+            selected_sources = source_bound_gff_names(args.sequence_store, sequences, duplicate_sources)
+            tasks = [(name, [identifier for identifier in identifiers if selected_sources.get(identifier, name) == name])
+                     for name, identifiers in tasks]
+            tasks = [(name, identifiers) for name, identifiers in tasks if identifiers]
+            for identifier, name in sorted(selected_sources.items()):
+                print("GFF source binding: {} -> {}".format(identifier, name), flush=True)
 
     frames = []
     if args.ncpu == 1 or len(tasks) <= 1:
@@ -735,6 +793,11 @@ def main():
         df_all = pandas.DataFrame(columns=out_cols)
 
     df_all = df_all.drop_duplicates()
+    conflicts = sorted(df_all.loc[df_all["gene_id"].duplicated(keep=False), "gene_id"].unique())
+    if conflicts:
+        raise ValueError("Ambiguous GFF source for genes: {}. Supply the exact indexed FASTA source.".format(
+            ", ".join(conflicts[:20])
+        ))
     num_input = len(seq_names)
     num_output = df_all.shape[0]
     print("Number of input genes: {}".format(num_input), flush=True)

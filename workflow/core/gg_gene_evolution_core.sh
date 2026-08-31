@@ -2628,7 +2628,15 @@ gff_info_provenance_args=(
   --output "gff_info=${file_og_gff_info}"
   --parameter "feature=CDS"
   --parameter "multiple_hits=longest"
+  --parameter "gff_annotation_schema=2"
 )
+gff_info_sequence_store="${file_species_cds_store_db}"
+gff_info_sequence_manifest="${file_species_cds_store_manifest}"
+if [[ "${input_sequence_mode}" == "protein" ]]; then
+  gff_info_sequence_store="${file_species_protein_store_db}"
+  gff_info_sequence_manifest="${file_species_protein_store_manifest}"
+fi
+gff_info_provenance_args+=(--input "sequence_source_index=${gff_info_sequence_manifest}")
 gg_artifact_prepare_stage gff_info_needs_update run_collect_gff_info "${gff_info_provenance_args[@]}" || exit $?
 if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -2642,6 +2650,7 @@ if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
     --feature "CDS" \
     --multiple_hits "longest" \
     --seqfile "${og_id}.gff2genestat_input.fasta" \
+    --sequence-store "${gff_info_sequence_store}" \
     --ncpu "${GG_TASK_CPUS}" \
     --outfile gff2genestat.tsv
   rm -f -- "${og_id}.gff2genestat_input.fasta"

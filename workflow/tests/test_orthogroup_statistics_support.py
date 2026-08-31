@@ -39,6 +39,18 @@ def add_branch_ids(tree):
     return tree
 
 
+def test_gff_join_rejects_duplicate_gene_rows_before_multiplying_branches(tmp_path):
+    module = load_module()
+    path = tmp_path / "gff.tsv"
+    path.write_text("gene_id\tfeature_size\tnum_intron\nGene1\t6\t0\nGene1\t9\t1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unique before branch join"):
+        module.load_gff_gene_traits(path)
+    path.write_text("gene_id\tfeature_size\tnum_intron\nGene1\t6\t0\n", encoding="utf-8")
+    traits = module.load_gff_gene_traits(path)
+    assert traits.columns.tolist() == ["node_name", "intron_feature_size"]
+    assert traits.iloc[0]["node_name"] == "Gene1"
+
+
 def test_prepared_generax_target_is_unrooted_and_preserves_tips_and_tree_length(
     tmp_path: Path,
 ):

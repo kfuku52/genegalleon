@@ -579,6 +579,60 @@ def test_materialize_family_restores_only_requested_family(tmp_path: Path):
     assert not (root / "mafft" / "HOG0000002_cds.aln.fa.gz").exists()
 
 
+def test_materialize_family_never_stats_unselected_live_files(tmp_path: Path, monkeypatch):
+    root = tmp_path / "orthogroup"
+    _write_family_outputs(root, "OG0000001", complete=True)
+    unrelated = root / "artifact_provenance" / "OG0000002.generax_ufboot.json"
+    shared_lock = root / "parameters" / "undated_species_tree.pruned.nwk.lock"
+    for path in (unrelated, shared_lock):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("concurrent producer metadata\n", encoding="utf-8")
+    original_stat = Path.stat
+
+    def fail_if_unselected(path, *args, **kwargs):
+        if path in (unrelated, shared_lock):
+            raise FileNotFoundError("unselected metadata disappeared concurrently")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_if_unselected)
+    destination = tmp_path / "selected"
+    restored = GeneFamilyOutputStore(root).materialize_family(
+        "OG0000001", orthogroup_id_from_name, destination_root=destination
+    )
+
+    assert len(restored) == 4
+    assert (destination / "stat_branch" / "OG0000001_stat.branch.tsv").is_file()
+
+
+def test_materialize_family_does_not_hide_selected_source_errors(tmp_path: Path, monkeypatch):
+    root = tmp_path / "orthogroup"
+    paths = _write_family_outputs(root, "OG0000001", complete=True)
+    original_stat = Path.stat
+
+    def fail_selected(path, *args, **kwargs):
+        if path == paths["stat_branch"]:
+            raise OSError("selected artifact is unreadable")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_selected)
+    with pytest.raises(OSError, match="selected artifact is unreadable"):
+        GeneFamilyOutputStore(root).materialize_family(
+            "OG0000001", orthogroup_id_from_name, destination_root=tmp_path / "selected"
+        )
+
+
+def test_materialize_family_preserves_archive_record_family_identity(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    _write_family_outputs(root, "OG0000001", complete=True)
+    archive_completed_outputs(root, "orthogroup", ["OG0000001"], orthogroup_id_from_name)
+    # The index is authoritative even if the caller cannot infer an archived name.
+    restored = GeneFamilyOutputStore(root).materialize_family(
+        "OG0000001", lambda _name: None, destination_root=tmp_path / "selected"
+    )
+
+    assert len(restored) == 4
+
+
 def test_materialize_family_cli_does_not_require_full_family_catalog(tmp_path: Path):
     root = tmp_path / "orthogroup"
     genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"

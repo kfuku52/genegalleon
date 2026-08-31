@@ -102,6 +102,30 @@ Important behavior:
   because GeneGalleon does not translate CDS in that path; the trade-off is
   that codon-sequence-based analyses are unavailable.
 
+### GFF source and transcript identity
+
+`gff2genestat.py --multiple_hits longest` selects a single transcript by its
+unique CDS length, orders blocks in transcription direction, and reports genomic
+start/end bounds. Identical blocks are counted once. Conflicting equal-length
+transcripts, mixed coordinate systems, or duplicate gene summaries are errors;
+they must not multiply rows in the downstream branch table.
+
+Prefer one annotation source per species. Where a workflow retains multiple
+sources, `gg_gene_evolution` passes its read-only FASTA sequence store to
+`gff2genestat.py --sequence-store`. The requested identifier and sequence must
+match the indexed record and its unchanged input file. Conventional pairs share
+the basename before `.cds`, `.pep`, or `.protein`: for example,
+`Species_name_ASM1.cds.all.fa.gz` pairs with `Species_name_ASM1.62.gff.gz`.
+An optional numeric annotation version and `.gene`/`.gene_exons` suffix are
+accepted only when exactly one annotation matches. Unknown naming schemes or
+multiple matching releases fail closed; filenames are not ranked by similarity.
+Without that source binding, conflicting summaries require an input correction.
+
+GFF annotation schema 2 invalidates old per-family and synteny summaries that
+could contain summed isoforms. Follow the existing artifact-staleness policy;
+an authorized `rebuild` regenerates stale outputs, while `stop` remains the
+default. Do not adopt an unversioned GFF cache as a verified schema-2 result.
+
 ### `workspace/input/species_genetic_code/species_genetic_code.tsv`
 
 This file is optional and is consulted only when GeneGalleon translates CDS to proteins.

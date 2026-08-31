@@ -708,6 +708,16 @@ def flatten_trait_variable_stats(df, key_prefix):
     return out
 
 
+def load_gff_gene_traits(path):
+    traits = pandas.read_csv(path, sep="\t", header=0, index_col=None, usecols=lambda col: col != "num_intron")
+    duplicates = sorted(traits.loc[traits["gene_id"].duplicated(keep=False), "gene_id"].astype(str).unique())
+    if duplicates:
+        raise ValueError("GFF gene traits must be unique before branch join: {}".format(
+            ", ".join(duplicates[:20])
+        ))
+    return traits.rename(columns={"gene_id": "node_name", "feature_size": "intron_feature_size"})
+
+
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
@@ -1556,16 +1566,8 @@ def main():
         if relax_merged is not None:
             numlabel_merge_tables.append(relax_merged)
     if all([os.path.exists(params[key]) for key in ["character_gff"]]):
-        df_tmp = pandas.read_csv(
-            params["character_gff"],
-            sep="\t",
-            header=0,
-            index_col=None,
-            usecols=lambda col: col != "num_intron",
-        )
-        df_tmp = df_tmp.rename(columns={"gene_id": "node_name"})
-        df_tmp = df_tmp.rename(columns={"feature_size": "intron_feature_size"})
-        df_branch = pandas.merge(df_branch, df_tmp, on="node_name", how="left")
+        df_tmp = load_gff_gene_traits(params["character_gff"])
+        df_branch = pandas.merge(df_branch, df_tmp, on="node_name", how="left", validate="many_to_one")
     if all([os.path.exists(params[key]) for key in ["scm_intron"]]):
         df_tmp = load_scm_intron_branch_table(params["scm_intron"], params["dated_tree"])
         if "branch_id" in df_tmp.columns:

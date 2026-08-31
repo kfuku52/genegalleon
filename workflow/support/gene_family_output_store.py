@@ -1829,15 +1829,32 @@ class GeneFamilyOutputStore:
             self._refresh_if_index_changed()
             return self._artifact_unchecked(subdir, name)
 
-    def _physical_file_names_unlocked(self, subdir: str) -> List[str]:
+    def _physical_file_names_unlocked(
+        self,
+        subdir: str,
+        *,
+        family_ids: Optional[Set[str]] = None,
+        family_from_name: Optional[Callable[[str], Optional[str]]] = None,
+    ) -> List[str]:
         self._refresh_if_index_changed()
+
+        def selected_name(name: str) -> bool:
+            if family_ids is None:
+                return True
+            assert family_from_name is not None
+            _, canonical_name = _canonical_output_path(subdir, name)
+            return family_from_name(canonical_name) in family_ids
+
         live_names: Set[str] = set()
         live_dir = self.root / subdir
         if live_dir.is_dir():
             live_names.update(
                 entry.name
                 for entry in live_dir.iterdir()
-                if entry.is_file() and not entry.is_symlink() and not entry.name.startswith(".")
+                if not entry.name.startswith(".")
+                and selected_name(entry.name)
+                and entry.is_file()
+                and not entry.is_symlink()
             )
         if self.family_filter is None:
             archived_values = self._load_subdir_artifacts(subdir).values()
@@ -1845,11 +1862,23 @@ class GeneFamilyOutputStore:
             self._load_archives()
             archived_values = (artifact for artifact in self._archived.values() if artifact.subdir == subdir)
         archived_names = {
-            artifact.name for artifact in archived_values if not self._archived_artifact_is_deleted(artifact)
+            artifact.name
+            for artifact in archived_values
+            if (
+                family_ids is None
+                or (artifact.family_id in family_ids if artifact.family_id is not None else selected_name(artifact.name))
+            )
+            and not self._archived_artifact_is_deleted(artifact)
         }
         return sorted(live_names | archived_names)
 
-    def _file_names_unlocked(self, subdir: str) -> List[str]:
+    def _file_names_unlocked(
+        self,
+        subdir: str,
+        *,
+        family_ids: Optional[Set[str]] = None,
+        family_from_name: Optional[Callable[[str], Optional[str]]] = None,
+    ) -> List[str]:
         self._refresh_if_index_changed()
         physical_subdirs = {subdir}
         physical_subdirs.update(
@@ -1857,7 +1886,9 @@ class GeneFamilyOutputStore:
         )
         names: Set[str] = set()
         for physical_subdir in physical_subdirs:
-            for physical_name in self._physical_file_names_unlocked(physical_subdir):
+            for physical_name in self._physical_file_names_unlocked(
+                physical_subdir, family_ids=family_ids, family_from_name=family_from_name
+            ):
                 canonical_subdir, canonical_name = _canonical_output_path(
                     physical_subdir,
                     physical_name,
@@ -2028,7 +2059,11 @@ class GeneFamilyOutputStore:
             for subdir in logical_subdirs:
                 if subdirs is not None and subdir not in subdirs:
                     continue
-                for name in self._file_names_unlocked(subdir):
+                # Filter names before stat/hash: another family (or a shared
+                # lockfile) can disappear while its producer is running.
+                for name in self._file_names_unlocked(
+                    subdir, family_ids=family_ids, family_from_name=family_from_name
+                ):
                     artifact = self._artifact_unchecked(subdir, name)
                     if artifact is None:
                         continue

@@ -25,6 +25,12 @@ Accepted query-file forms are:
 
 See [Input Conventions](input-conventions.md) for concrete examples.
 
+Family-scoped materialization checks a live filename's family before reading
+its metadata or content. Other families' transient provenance files and shared
+lockfiles cannot abort a selected family's restoration. Archived records retain
+their explicit family identity; corruption or unreadability of a selected
+artifact remains an error rather than being silently skipped.
+
 ## Main per-family outputs
 
 If the input file is `workspace/input/query_gene/2_WOX`, the main outputs are
