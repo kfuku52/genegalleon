@@ -62,7 +62,12 @@ def build_arg_parser():
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Overwrite existing outputs.",
+        help="Overwrite existing downloaded inputs and formatted outputs.",
+    )
+    parser.add_argument(
+        "--overwrite-formatted",
+        action="store_true",
+        help="Regenerate formatted outputs while reusing valid cached downloads.",
     )
     parser.add_argument(
         "--download-manifest",

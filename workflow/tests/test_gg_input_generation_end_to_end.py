@@ -1,4 +1,5 @@
 import csv
+import gzip
 import json
 import os
 import sqlite3
@@ -631,6 +632,69 @@ def test_gg_input_generation_auto_selects_single_versioned_tsv_manifest(tmp_path
     output_root = workspace / "output" / "input_generation"
     runs = _read_tsv_rows(output_root / "gg_input_generation_runs.tsv")
     assert runs[-1]["download_manifest"] == str(manifest_path)
+
+
+def test_provenance_rebuild_reuses_verified_download_cache(tmp_path: Path):
+    """Reformat stale derived outputs without redownloading unchanged inputs."""
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "cache_rebuild_workspace"
+    _write_tsv_download_manifest(workspace, input_dir)
+    _write_minimal_ete_taxonomy_db(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    env = _core_env(workspace, None, fake_bin, "single")
+    env.update(
+        overwrite="0",
+        artifact_stale_policy="rebuild",
+        download_dir=str(workspace / "downloads" / "input_cache"),
+        run_validate_inputs="0",
+        run_cds_fx2tab="0",
+        run_species_busco="0",
+        run_multispecies_summary="0",
+    )
+
+    def run():
+        result = subprocess.run(
+            ["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+            capture_output=True, text=True, timeout=180, check=False,
+        )
+        assert result.returncode == 0, result.stdout + "\n" + result.stderr
+        return result
+
+    first = run()
+    assert "files downloaded=6" in first.stdout
+    root = workspace / "output" / "input_generation"
+    cache = Path(env["download_dir"])
+    cached = {
+        path: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in cache.rglob("*") if path.is_file() and not path.name.endswith(".lock")
+    }
+    assert len(cached) == 6
+    formatted = {
+        path.relative_to(root): gzip.decompress(path.read_bytes())
+        for dirname in ("species_cds", "species_gff", "species_genome")
+        for path in (root / dirname).glob("*.gz")
+    }
+    manifest = root / "artifact_provenance" / "format.single.json"
+    payload = json.loads(manifest.read_text())
+    payload["parameters"]["format_contract_version"] = "8"
+    manifest.write_text(json.dumps(payload))
+
+    rebuilt = run()
+    assert "Clearing managed formatted-input outputs" in rebuilt.stdout
+    assert "files downloaded=0" in rebuilt.stdout
+    assert cached == {
+        path: (path.read_bytes(), path.stat().st_mtime_ns) for path in cached
+    }
+    assert json.loads(manifest.read_text())["parameters"]["format_contract_version"] == "9"
+    assert len(list((root / "species_cds").glob("*.fa.gz"))) == 2
+    assert formatted == {
+        path: gzip.decompress((root / path).read_bytes()) for path in formatted
+    }
+
+    env["overwrite"] = "1"
+    explicit_refresh = run()
+    assert "files downloaded=6" in explicit_refresh.stdout
+    assert any(path.stat().st_mtime_ns != value[1] for path, value in cached.items())
 
 
 def test_gg_input_generation_rejects_ambiguous_auto_discovered_manifests(tmp_path: Path):

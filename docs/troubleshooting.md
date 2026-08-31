@@ -145,6 +145,14 @@ diagnostics and do not cause regeneration. Raw and ZIP-backed managed output
 directories use the same logical content digest, so storage conversion alone
 does not cause regeneration.
 
+An input-generation provenance rebuild regenerates formatted outputs without
+forcing a download of every raw input again. The formatter's
+`--overwrite-formatted` option reuses valid cached downloads while still
+fetching missing or corrupt inputs through the normal integrity checks.
+Explicit `overwrite=1` (CLI `--overwrite`) continues to refresh both raw
+downloads and formatted outputs. A changed format contract alone must not
+discard download progress or turn a restart into a full network refresh.
+
 When `run_gene_family_database_build=1`, inspect
 `gene_summary/<source>/<source>_artifact_provenance_audit.tsv` for the exact HOG,
 step, status, and reason. `legacy_untracked` is informational and does not stop

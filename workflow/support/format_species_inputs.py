@@ -134,6 +134,9 @@ def main():
             return 1
 
     apply_download_input_dir(args)
+    # A provenance rebuild changes derived outputs, not their raw source cache.
+    # Preserve the explicit --overwrite download behavior until this point.
+    args.overwrite = args.overwrite or args.overwrite_formatted
 
     manifest_rows_for_provider_inputs = None
     if download_report is not None:

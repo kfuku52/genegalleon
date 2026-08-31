@@ -868,8 +868,10 @@ run_format_stage_single() {
   if [[ -n "${input_dir}" ]]; then
     cmd+=(--input-dir "${input_dir}")
   fi
-  if [[ ${format_force_overwrite} -eq 1 ]]; then
+  if [[ ${overwrite} -eq 1 ]]; then
     cmd+=(--overwrite)
+  elif [[ ${format_force_overwrite} -eq 1 ]]; then
+    cmd+=(--overwrite-formatted)
   fi
   if [[ ${strict} -eq 1 ]]; then
     cmd+=(--strict)
