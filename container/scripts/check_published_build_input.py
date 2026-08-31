@@ -12,6 +12,21 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}")
 GIT_REVISION_RE = re.compile(r"[0-9a-f]{40}")
 
 
+def platform_mapping(image_payload: object) -> object:
+    """Normalize Buildx's single-platform and multi-platform JSON shapes."""
+    if not isinstance(image_payload, dict):
+        return image_payload
+    operating_system = image_payload.get("os")
+    architecture = image_payload.get("architecture")
+    if isinstance(operating_system, str) and isinstance(architecture, str):
+        platform = f"{operating_system}/{architecture}"
+        variant = image_payload.get("variant")
+        if isinstance(variant, str) and variant:
+            platform = f"{platform}/{variant}"
+        return {platform: image_payload}
+    return image_payload
+
+
 def parse_expected(values: list[str]) -> dict[str, str]:
     expected: dict[str, str] = {}
     for value in values:
@@ -31,6 +46,7 @@ def compare_build_inputs(
     expected: dict[str, str],
     label: str = BUILD_INPUT_LABEL,
 ) -> list[str]:
+    image_payload = platform_mapping(image_payload)
     if not isinstance(image_payload, dict):
         return ["Published image metadata is not a platform mapping."]
 
@@ -53,6 +69,7 @@ def compare_build_inputs(
 
 
 def common_revision(image_payload: object, platforms: list[str]) -> tuple[str | None, list[str]]:
+    image_payload = platform_mapping(image_payload)
     if not isinstance(image_payload, dict):
         return None, ["Published image metadata is not a platform mapping."]
 
