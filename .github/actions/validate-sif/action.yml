@@ -138,6 +138,7 @@ runs:
       shell: bash
       env:
         CACHE_FROM: type=gha,scope=container-linux-amd64
+        BUILD_TARGET: runtime
         CACHE_TO: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'type=gha,mode=max,scope=container-linux-amd64,ignore-error=true' || '' }}
         SECURITY_REFRESH_EPOCH: ${{ steps.runtime-input.outputs.security_refresh_epoch }}
       run: |

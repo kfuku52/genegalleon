@@ -3144,7 +3144,7 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         assert f"{output_name}_repo_sha: ${{{{ steps.vars.outputs.{output_name}_repo_sha }}}}" in workflow
 
     assert "source container/source_branches.env" in workflow
-    assert "container/scripts/resolve_git_branch_sha.sh" in workflow
+    assert "container/scripts/resolve_source_revisions.sh --format env --scope all" in workflow
     assert "GG_PIN_" not in workflow
     for build_arg, output_name in (
         ("KFU52_AMALGKIT_REPO_SHA", "amalgkit_repo_sha"),
@@ -3174,7 +3174,7 @@ def test_release_sif_builds_platforms_concurrently_on_native_runners():
     assert "docker/setup-qemu-action" not in workflow
     assert "scope=container-${{ steps.platform.outputs.pair }}" in build_block
     assert "push-by-digest=true" in build_block
-    assert "source container/source_branches.env" in workflow
+    assert "container/scripts/resolve_source_revisions.sh --format env --scope all" in workflow
     assert "GG_PIN_" not in workflow
 
 

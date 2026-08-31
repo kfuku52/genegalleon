@@ -15,6 +15,8 @@ IMAGE=${IMAGE:-ghcr.io/example/genegalleon}
 TAG=${TAG:-dev}
 PLATFORMS=${PLATFORMS:-linux/amd64,linux/arm64}
 MODE=${MODE:-push} # push | load
+BUILD_TARGET=${BUILD_TARGET:-runtime} # runtime | development
+GG_BUILD_JOBS=${GG_BUILD_JOBS:-2}
 NOTUNG_DOWNLOAD_PAGE=${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}
 NOTUNG_DOWNLOAD_HOST_IP=${NOTUNG_DOWNLOAD_HOST_IP:-128.2.205.60}
 NOTUNG_ZIP_SHA256=${NOTUNG_ZIP_SHA256:-81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6}
@@ -76,6 +78,14 @@ if [[ "${MODE}" != "push" && "${MODE}" != "load" ]]; then
   echo "MODE must be one of: push, load"
   exit 1
 fi
+if [[ "${BUILD_TARGET}" != "runtime" && "${BUILD_TARGET}" != "development" ]]; then
+  echo "BUILD_TARGET must be runtime or development."
+  exit 1
+fi
+if [[ ! "${GG_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "GG_BUILD_JOBS must be a positive integer."
+  exit 1
+fi
 
 if [[ "${MODE}" == "load" ]]; then
   echo "[buildx] MODE=load exports a local image tarball and is typically slower than MODE=push."
@@ -99,31 +109,13 @@ fi
 # Ensure conda env coverage stays consistent with pipeline script usage.
 container/scripts/check_env_coverage.sh .
 
-resolve_source_sha() {
-  local sha_var="$1"
-  local repo_url="$2"
-  local repo_ref="$3"
-  local source_name="$4"
-  local resolved_sha="${!sha_var}"
-
-  if [[ -z "${resolved_sha}" ]]; then
-    resolved_sha="$(bash container/scripts/resolve_git_branch_sha.sh "${repo_url}" "${repo_ref}")"
-    printf -v "${sha_var}" '%s' "${resolved_sha}"
-  fi
-  echo "[buildx] Resolved ${source_name} ${repo_ref}: ${resolved_sha}"
-}
-
-resolve_source_sha KFU52_AMALGKIT_REPO_SHA https://github.com/kfuku52/amalgkit.git "${KFU52_AMALGKIT_REPO_REF}" amalgkit
-resolve_source_sha KFU52_CDSKIT_REPO_SHA https://github.com/kfuku52/cdskit.git "${KFU52_CDSKIT_REPO_REF}" cdskit
-resolve_source_sha KFU52_CSUBST_REPO_SHA https://github.com/kfuku52/csubst.git "${KFU52_CSUBST_REPO_REF}" csubst
-resolve_source_sha KFU52_NWKIT_REPO_SHA https://github.com/kfuku52/nwkit.git "${KFU52_NWKIT_REPO_REF}" nwkit
-resolve_source_sha BUSCO_REPO_SHA "${BUSCO_REPO_URL}" "${BUSCO_REPO_REF}" BUSCO
-resolve_source_sha PAML_REPO_SHA "${PAML_REPO_URL}" "${PAML_REPO_REF}" paml
-resolve_source_sha KFL1OU_REPO_SHA "${KFL1OU_REPO_URL}" "${KFL1OU_REPO_REF}" kfl1ou
-resolve_source_sha KFFRACTBIAS_REPO_SHA "${KFFRACTBIAS_REPO_URL}" "${KFFRACTBIAS_REPO_REF}" kfFractBias
-resolve_source_sha KFTOOLS_REPO_SHA "${KFTOOLS_REPO_URL}" "${KFTOOLS_REPO_REF}" kftools
-resolve_source_sha RKFTOOLS_REPO_SHA "${RKFTOOLS_REPO_URL}" "${RKFTOOLS_REPO_REF}" rkftools
-resolve_source_sha RADTE_REPO_SHA "${RADTE_REPO_URL}" "${RADTE_REPO_REF}" RADTE
+# Resolve concurrently, but publish no partial snapshot if any source fails.
+# Capture before reading: a failure in process substitution would be lost.
+resolved_sources="$(bash "${script_dir}/scripts/resolve_source_revisions.sh" --format env --scope all)"
+while IFS='=' read -r variable revision; do
+  export "${variable}=${revision}"
+  echo "[buildx] Resolved ${variable}: ${revision}"
+done <<< "${resolved_sources}"
 
 output_flag="--push"
 if [[ "${MODE}" == "load" ]]; then
@@ -139,6 +131,7 @@ fi
 export GG_BUILD_PLATFORMS="${PLATFORMS}"
 export GG_BUILD_VCS_REF="${vcs_ref}"
 export GG_BUILD_VERSION="${gg_version}"
+export GG_BUILD_TARGET="${BUILD_TARGET}"
 build_input_hash="$(bash container/scripts/compute_build_input_hash.sh "${SECURITY_REFRESH_EPOCH}")"
 runtime_input_hash="$(bash container/scripts/compute_build_input_hash.sh --runtime "${SECURITY_REFRESH_EPOCH}")"
 
@@ -197,6 +190,9 @@ run_build() {
   docker buildx build \
     --platform "${PLATFORMS}" \
     --file container/Dockerfile \
+    --target "${BUILD_TARGET}" \
+    --build-arg BUILD_TARGET="${BUILD_TARGET}" \
+    --build-arg GG_BUILD_JOBS="${GG_BUILD_JOBS}" \
     --build-arg BUILD_DATE="${build_date}" \
     --build-arg VCS_REF="${vcs_ref}" \
     --build-arg GG_VERSION="${gg_version}" \

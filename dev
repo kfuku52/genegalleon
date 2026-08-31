@@ -19,12 +19,14 @@ Commands:
   config-schema [json|markdown]         Print generated config documentation.
   version                               Print VERSION.
   bump major|minor|patch                Update VERSION using Semantic Versioning.
-  build                                 Build local/genegalleon:dev from this checkout.
+  build                                 Build local/genegalleon:dev with development tools.
 
 Environment:
   GG_PYTEST_WORKERS=N                   Parallel workers for fast/integration/full checks (default: 2).
   GG_RUNTIME_FRESHNESS=daily|always|off Runtime/upstream freshness policy (default: daily).
   GG_RUNTIME_FRESHNESS_SCOPE=owned|all  Upstreams checked locally (default: owned).
+  BUILD_TARGET=development|runtime     Target for dev build (default: development).
+  GG_BUILD_JOBS=N                      Jobs per native Make/R build (default: 2).
 EOF
 }
 
@@ -73,6 +75,7 @@ case "${command_name}" in
     ;;
   build)
     exec env BUILD_SIF=0 IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev \
+      BUILD_TARGET="${BUILD_TARGET:-development}" \
       bash "${repo_root}/gg_container_build_entrypoint.sh"
     ;;
   -h|--help|help)

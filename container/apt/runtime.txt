@@ -1,0 +1,23 @@
+# Packages needed by installed tools, including mapnh's Bio++ shared libraries.
+augustus
+ca-certificates
+curl
+default-jre-headless
+fastp
+gawk
+git
+less
+libarchive-tools
+libbpp-phyl12
+libgomp1
+locales
+parallel
+pigz
+perl
+procps
+rsync
+tini
+unzip
+util-linux
+wget
+zip

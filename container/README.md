@@ -11,10 +11,10 @@ From the project README and Wiki (`gg_versions`):
 - `GeneGalleon` was originally assembled interactively from a miniconda3 Singularity sandbox.
 - The runtime now uses a single conda `base` env, with selected tools installed from upstream GitHub at build time
   (`kfuku52/amalgkit`, `kfuku52/cdskit`, `kfuku52/csubst`, `kfuku52/nwkit`,
-  `kfuku52/kfl1ou`, `kfuku52/kftools`, `kfuku52/rkftools`, `kfuku52/RADTE`).
+  `kfuku52/kfl1ou`, `kfuku52/kfFractBias`, `kfuku52/kftools`, `kfuku52/rkftools`, `kfuku52/RADTE`).
   Standard builds follow the moving branches in `source_branches.env` for every
   one of these repositories. Build wrappers resolve those branches once at the
-  start of a build so all target architectures use the same snapshot. Explicit
+  start of a build, in parallel, so all target architectures use the same snapshot. Explicit
   `*_REPO_SHA` variables remain available only as one-off overrides.
 
 So this Dockerfile is designed as:
@@ -29,6 +29,41 @@ APT and conda packages are still resolved from their current repositories, so
 builds are not claimed to be bit-for-bit reproducible.
 
 See `container/CAPABILITY_MATRIX.md` for expected parity by architecture.
+
+## Development and distribution targets
+
+`BUILD_TARGET=runtime` is the default for build wrappers and CI publication.
+It contains the scientific runtime without the APT development packages in
+`apt/development.txt`. `bash ./dev build` selects `development`, which adds
+those compilers, headers, and build utilities to the same runtime. Conda
+packages required by R and other scientific tools remain in both targets,
+including their compiler dependencies.
+
+```bash
+# Development image: local/genegalleon:dev, without SIF conversion.
+bash ./dev build
+
+# Distribution image, with a separate local tag.
+BUILD_TARGET=runtime BUILD_SIF=0 IMAGE_SOURCE=local \
+IMAGE=local/genegalleon TAG=runtime bash ./gg_container_build_entrypoint.sh
+```
+
+Each of the eleven moving upstream sources has an independent build stage.
+With the BuildKit cache retained, changing one source revision rebuilds its
+wheel, R package, or binary, then assembles and validates the runtime without
+rebuilding the other sources.
+The runtime receives one shared Conda environment and the small artifacts,
+without source checkouts or wheel archives. Intermediate stages can stay in
+the builder cache and are not shipped in Docker or SIF images. Builder disk use
+can increase even when the distribution image shrinks.
+
+`GG_BUILD_JOBS` limits native Make/R builds to two jobs by default. BuildKit
+schedules independent stages separately; this is not a global concurrency
+limit. Native Apptainer builds use the same artifact scripts sequentially and
+remove APT development packages for `BUILD_TARGET=runtime` before validation.
+
+See [container development](../docs/container-development.md) for cache behavior,
+resource controls, and measured image sizes and rebuild times.
 
 ## Build multi-arch image with Docker Buildx
 
@@ -50,7 +85,7 @@ IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.s
 
 Default source behavior:
 - Git-sourced programs follow the moving branches recorded in `source_branches.env`
-- build wrappers resolve every branch once per build and pass the resulting commits into Docker, preventing architecture-to-architecture drift without creating persistent version pins
+- build wrappers resolve every branch once per build in parallel and pass the resulting commits into Docker; resolution fails before building if any source is unavailable
 - `/opt/pg/logs/source_revisions.tsv` records the effective source revision in both Docker and native Apptainer images
 - `BUSCO` and `paml` follow their upstream `master` branches too
 - `Notung`, `BioPP/testnh`, and `CAFE5` release archives are verified with SHA-256 before extraction
@@ -85,7 +120,9 @@ BuildKit entirely when the tagged local image already has the same fingerprint.
 Set `SKIP_UNCHANGED_LOAD=0` to force a rebuild.
 The same shared fingerprint is embedded by local, scheduled, and release builds
 as `io.genegalleon.build-input`; OCI labels also record the repository version
-and MIT license. The fingerprint includes a UTC daily
+and MIT license. Both fingerprints include the target, also recorded as
+`io.genegalleon.build-target`, so development and runtime images cannot be
+mistaken for each other. The fingerprint includes a UTC daily
 `SECURITY_REFRESH_EPOCH` (default: the current `YYYY-MM-DD`). A small final
 image layer refreshes Ubuntu package indexes, installs all available upgrades,
 and fails if an upgrade would still remain. The epoch is also recorded as
@@ -93,8 +130,9 @@ and fails if an upgrade would still remain. The epoch is also recorded as
 `/opt/pg/logs/security_refresh_epoch.txt`.
 An additional `io.genegalleon.runtime-input` label omits only repository
 revision/version metadata. Validation CI keys its SIF cache by this exact
-runtime fingerprint, including platform, security epoch, every resolved source
-revision, and the complete copied container context. Cached SIFs are saved only
+runtime fingerprint, including target, security epoch, every resolved source
+revision, and the complete copied container context. Platform is a separate
+part of the SIF cache key. Cached SIFs are saved only
 after authoritative runtime tests succeed.
 
 ## One-command build (local/public selectable)
@@ -106,6 +144,7 @@ IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_ent
 Defaults:
 - `IMAGE_SOURCE=auto`
 - `MODE=load`
+- `BUILD_TARGET=runtime` (`development` adds APT build tools for local builds)
 - `PLATFORMS`: inferred from host arch (`linux/amd64` or `linux/arm64`)
 - `OUT=./genegalleon.sif`
 - `IMAGE_SOURCE=local`: build from `container/Dockerfile` via Docker Buildx, or build a SIF natively with Apptainer/Singularity when Docker is unavailable
@@ -227,7 +266,7 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
   and installed as:
   - `/usr/local/bin/Notung.jar`
 - `BUSCO` and `paml` are fetched from the current tips of their configured branches by default.
-- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kftools`, `rkftools`, and
+- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kfFractBias`, `kftools`, `rkftools`, and
   `RADTE` install from the moving branches in `source_branches.env` by default.
 - `Notung`, `BioPP/testnh`, and `CAFE5` archives are checksum-verified during build.
 - The configured source is a checksum-verified upstream ZIP:

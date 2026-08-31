@@ -64,5 +64,5 @@ metaeuk
 prodigal
 
 # Installed from GitHub refs by
-# container/scripts/ensure_kfuku52_tools_latest.sh
+# container/scripts/build_source_artifact.sh and install_source_artifacts.sh
 # (amalgkit installs from master by default)

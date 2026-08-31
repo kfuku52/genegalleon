@@ -94,21 +94,21 @@ jobs:
           gg_version="$(sed -n '1p' VERSION | tr -d '\r')"
           sif_name="${repo_name}_${release_tag}_amd64.sif"
 
-          source container/source_branches.env
-          resolve_source_sha() {
-            bash container/scripts/resolve_git_branch_sha.sh "$1" "$2"
-          }
-          amalgkit_repo_sha="$(resolve_source_sha https://github.com/kfuku52/amalgkit.git "${GG_SOURCE_AMALGKIT_REPO_REF}")"
-          cdskit_repo_sha="$(resolve_source_sha https://github.com/kfuku52/cdskit.git "${GG_SOURCE_CDSKIT_REPO_REF}")"
-          csubst_repo_sha="$(resolve_source_sha https://github.com/kfuku52/csubst.git "${GG_SOURCE_CSUBST_REPO_REF}")"
-          nwkit_repo_sha="$(resolve_source_sha https://github.com/kfuku52/nwkit.git "${GG_SOURCE_NWKIT_REPO_REF}")"
-          busco_repo_sha="$(resolve_source_sha https://gitlab.com/ezlab/busco.git "${GG_SOURCE_BUSCO_REPO_REF}")"
-          paml_repo_sha="$(resolve_source_sha https://github.com/iqtree/paml.git "${GG_SOURCE_PAML_REPO_REF}")"
-          kfl1ou_repo_sha="$(resolve_source_sha https://github.com/kfuku52/kfl1ou.git "${GG_SOURCE_KFL1OU_REPO_REF}")"
-          kffractbias_repo_sha="$(resolve_source_sha https://github.com/kfuku52/kfFractBias.git "${GG_SOURCE_KFFRACTBIAS_REPO_REF}")"
-          kftools_repo_sha="$(resolve_source_sha https://github.com/kfuku52/kftools.git "${GG_SOURCE_KFTOOLS_REPO_REF}")"
-          rkftools_repo_sha="$(resolve_source_sha https://github.com/kfuku52/rkftools.git "${GG_SOURCE_RKFTOOLS_REPO_REF}")"
-          radte_repo_sha="$(resolve_source_sha https://github.com/kfuku52/RADTE.git "${GG_SOURCE_RADTE_REPO_REF}")"
+          resolved_sources="$(bash container/scripts/resolve_source_revisions.sh --format env --scope all)"
+          while IFS='=' read -r variable revision; do
+            export "${variable}=${revision}"
+          done <<< "${resolved_sources}"
+          amalgkit_repo_sha="${KFU52_AMALGKIT_REPO_SHA}"
+          cdskit_repo_sha="${KFU52_CDSKIT_REPO_SHA}"
+          csubst_repo_sha="${KFU52_CSUBST_REPO_SHA}"
+          nwkit_repo_sha="${KFU52_NWKIT_REPO_SHA}"
+          busco_repo_sha="${BUSCO_REPO_SHA}"
+          paml_repo_sha="${PAML_REPO_SHA}"
+          kfl1ou_repo_sha="${KFL1OU_REPO_SHA}"
+          kffractbias_repo_sha="${KFFRACTBIAS_REPO_SHA}"
+          kftools_repo_sha="${KFTOOLS_REPO_SHA}"
+          rkftools_repo_sha="${RKFTOOLS_REPO_SHA}"
+          radte_repo_sha="${RADTE_REPO_SHA}"
           source_revision_hash="$(
             printf '%s\n' \
               "${amalgkit_repo_sha}" \
@@ -225,6 +225,7 @@ jobs:
         with:
           context: .
           file: container/Dockerfile
+          target: runtime
           platforms: ${{ matrix.platform }}
           outputs: >-
             type=image,name=${{ needs.prepare-release.outputs.image }},push-by-digest=true,name-canonical=true,push=true
@@ -232,6 +233,7 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.prepare-release.outputs.release_sha }}
           build-args: |
+            BUILD_TARGET=runtime
             BUILD_DATE=${{ needs.prepare-release.outputs.build_date }}
             VCS_REF=${{ needs.prepare-release.outputs.release_sha }}
             GG_VERSION=${{ needs.prepare-release.outputs.gg_version }}

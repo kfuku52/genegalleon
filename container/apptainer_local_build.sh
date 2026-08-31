@@ -16,6 +16,8 @@ ENGINE=${ENGINE:-auto} # auto | apptainer | singularity
 OUT=${OUT:-${repo_root}/genegalleon.sif}
 NATIVE_BUILD_FAKEROOT=${NATIVE_BUILD_FAKEROOT:-auto} # auto | always | never
 NATIVE_BUILD_KEEP_WORKDIR=${NATIVE_BUILD_KEEP_WORKDIR:-0} # 0 | 1
+BUILD_TARGET=${BUILD_TARGET:-runtime} # runtime | development
+GG_BUILD_JOBS=${GG_BUILD_JOBS:-2}
 
 NOTUNG_DOWNLOAD_PAGE=${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}
 NOTUNG_DOWNLOAD_HOST_IP=${NOTUNG_DOWNLOAD_HOST_IP:-128.2.205.60}
@@ -103,6 +105,8 @@ render_definition() {
   sed \
     -e "s|@@STAGING_ROOT@@|$(escape_sed_replacement "${staging_root}")|g" \
     -e "s|@@TARGET_ARCH@@|$(escape_sed_replacement "${target_arch}")|g" \
+    -e "s|@@BUILD_TARGET@@|${BUILD_TARGET}|g" \
+    -e "s|@@GG_BUILD_JOBS@@|${GG_BUILD_JOBS}|g" \
     -e "s|@@BUILD_DATE@@|$(escape_sed_replacement "${build_date}")|g" \
     -e "s|@@VCS_REF@@|$(escape_sed_replacement "${vcs_ref}")|g" \
     -e "s|@@GG_VERSION@@|$(escape_sed_replacement "${gg_version}")|g" \
@@ -162,6 +166,14 @@ case "${NATIVE_BUILD_FAKEROOT}" in
 esac
 if [[ "${NATIVE_BUILD_KEEP_WORKDIR}" != "0" && "${NATIVE_BUILD_KEEP_WORKDIR}" != "1" ]]; then
   echo "NATIVE_BUILD_KEEP_WORKDIR must be 0 or 1."
+  exit 1
+fi
+if [[ "${BUILD_TARGET}" != "runtime" && "${BUILD_TARGET}" != "development" ]]; then
+  echo "BUILD_TARGET must be runtime or development."
+  exit 1
+fi
+if [[ ! "${GG_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "GG_BUILD_JOBS must be a positive integer."
   exit 1
 fi
 
@@ -226,38 +238,16 @@ python3 "${repo_root}/container/scripts/list_build_inputs.py" \
   bash "${coverage_script}" .
 )
 
-resolve_source_sha() {
-  local sha_var="$1"
-  local repo_url="$2"
-  local repo_ref="$3"
-  local source_name="$4"
-  local resolved_sha="${!sha_var}"
-
-  if [[ -z "${resolved_sha}" ]]; then
-    resolved_sha="$(
-      bash "${repo_root}/container/scripts/resolve_git_branch_sha.sh" \
-        "${repo_url}" "${repo_ref}"
-    )"
-    printf -v "${sha_var}" '%s' "${resolved_sha}"
-  fi
-  echo "[apptainer_local_build] Resolved ${source_name} ${repo_ref}: ${resolved_sha}"
-}
-
-resolve_source_sha KFU52_AMALGKIT_REPO_SHA https://github.com/kfuku52/amalgkit.git "${KFU52_AMALGKIT_REPO_REF}" amalgkit
-resolve_source_sha KFU52_CDSKIT_REPO_SHA https://github.com/kfuku52/cdskit.git "${KFU52_CDSKIT_REPO_REF}" cdskit
-resolve_source_sha KFU52_CSUBST_REPO_SHA https://github.com/kfuku52/csubst.git "${KFU52_CSUBST_REPO_REF}" csubst
-resolve_source_sha KFU52_NWKIT_REPO_SHA https://github.com/kfuku52/nwkit.git "${KFU52_NWKIT_REPO_REF}" nwkit
-resolve_source_sha BUSCO_REPO_SHA "${BUSCO_REPO_URL}" "${BUSCO_REPO_REF}" BUSCO
-resolve_source_sha PAML_REPO_SHA "${PAML_REPO_URL}" "${PAML_REPO_REF}" paml
-resolve_source_sha KFL1OU_REPO_SHA "${KFL1OU_REPO_URL}" "${KFL1OU_REPO_REF}" kfl1ou
-resolve_source_sha KFFRACTBIAS_REPO_SHA "${KFFRACTBIAS_REPO_URL}" "${KFFRACTBIAS_REPO_REF}" kfFractBias
-resolve_source_sha KFTOOLS_REPO_SHA "${KFTOOLS_REPO_URL}" "${KFTOOLS_REPO_REF}" kftools
-resolve_source_sha RKFTOOLS_REPO_SHA "${RKFTOOLS_REPO_URL}" "${RKFTOOLS_REPO_REF}" rkftools
-resolve_source_sha RADTE_REPO_SHA "${RADTE_REPO_URL}" "${RADTE_REPO_REF}" RADTE
+resolved_sources="$(bash "${script_dir}/scripts/resolve_source_revisions.sh" --format env --scope all)"
+while IFS='=' read -r variable revision; do
+  export "${variable}=${revision}"
+  echo "[apptainer_local_build] Resolved ${variable}: ${revision}"
+done <<< "${resolved_sources}"
 
 export GG_BUILD_PLATFORMS="${platform}"
 export GG_BUILD_VCS_REF="${vcs_ref}"
 export GG_BUILD_VERSION="${gg_version}"
+export GG_BUILD_TARGET="${BUILD_TARGET}"
 build_input_hash="$(bash "${repo_root}/container/scripts/compute_build_input_hash.sh" "${SECURITY_REFRESH_EPOCH}")"
 runtime_input_hash="$(bash "${repo_root}/container/scripts/compute_build_input_hash.sh" --runtime "${SECURITY_REFRESH_EPOCH}")"
 render_definition

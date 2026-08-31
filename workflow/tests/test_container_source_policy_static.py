@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROGRAM_SHA_VARS = (
     "KFU52_AMALGKIT_REPO_SHA",
@@ -71,12 +73,12 @@ def test_all_container_build_paths_resolve_one_snapshot_per_build():
     assert 'ARG KFU52_AMALGKIT_REPO_REF=""' in dockerfile
     assert 'ARG KFU52_CSUBST_REPO_REF=""' in dockerfile
     assert 'ARG KFL1OU_REPO_REF=""' in dockerfile
-    assert buildx.count("resolve_source_sha ") == 11
-    assert apptainer.count("resolve_source_sha ") == 11
-    for source in ("amalgkit", "cdskit", "csubst", "nwkit", "BUSCO", "paml", "kfl1ou", "kfFractBias", "kftools", "rkftools", "RADTE"):
-        assert f" {source}" in buildx
-        assert f" {source}" in apptainer
-    assert "> /opt/pg/logs/source_revisions.tsv" in dockerfile
+    for wrapper in (buildx, apptainer):
+        assert "resolve_source_revisions.sh\" --format env --scope all" in wrapper
+        assert "resolve_source_sha " not in wrapper
+    installer = (REPO_ROOT / "container/scripts/install_source_artifacts.sh").read_text()
+    assert "> /opt/pg/logs/source_revisions.tsv" in installer
+    assert "install_source_artifacts.sh" in dockerfile
 
 
 def test_container_build_paths_share_python_compatibility_constraints():
@@ -151,7 +153,7 @@ def test_python_ci_follows_current_csubst_branch_without_a_commit_pin():
 def test_native_apptainer_build_records_source_revisions():
     apptainer_template = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")
 
-    assert "> /opt/pg/logs/source_revisions.tsv" in apptainer_template
+    assert "install_source_artifacts.sh" in apptainer_template
     for source in (
         "amalgkit",
         "cdskit",
@@ -201,6 +203,96 @@ def test_shared_source_resolver_preserves_exact_overrides_and_owned_scope():
     assert "csubst\t" in owned_sources.stdout
 
 
+@pytest.mark.parametrize("fail_source", ["", "csubst"])
+def test_source_resolution_runs_concurrently_and_publishes_only_complete_snapshots(tmp_path, fail_source):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    barrier = tmp_path / "barrier"
+    barrier.mkdir()
+    git = bin_dir / "git"
+    # Every lookup waits for all eleven to start. A serial implementation fails
+    # at this barrier instead of relying on a timing-sensitive speed assertion.
+    git.write_text(f"""#!{sys.executable}
+import hashlib
+import os
+from pathlib import Path
+import sys
+import time
+
+assert sys.argv[1:3] == ["ls-remote", "--exit-code"]
+name = sys.argv[3].rsplit("/", 1)[-1].removesuffix(".git")
+barrier = Path(os.environ["MOCK_GIT_BARRIER"])
+(barrier / name).touch()
+deadline = time.monotonic() + 10
+while len(list(barrier.iterdir())) != 11:
+    if time.monotonic() >= deadline:
+        sys.exit("source lookups did not start concurrently")
+    time.sleep(0.01)
+if name == os.environ["MOCK_GIT_FAIL_SOURCE"]:
+    sys.exit(1)
+print(hashlib.sha1(name.encode()).hexdigest(), sys.argv[4], sep="\\t")
+""")
+    git.chmod(0o755)
+    env = os.environ.copy()
+    for variable in PROGRAM_SHA_VARS:
+        env.pop(variable, None)
+    env.update({
+        "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+        "MOCK_GIT_BARRIER": str(barrier),
+        "MOCK_GIT_FAIL_SOURCE": fail_source,
+    })
+    completed = subprocess.run(
+        ["bash", str(REPO_ROOT / "container/scripts/resolve_source_revisions.sh")],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=20,
+    )
+    assert len(list(barrier.iterdir())) == 11
+    if fail_source:
+        assert completed.returncode != 0
+        assert completed.stdout == ""
+        assert "One or more upstream source revisions could not be resolved" in completed.stderr
+    else:
+        assert completed.returncode == 0, completed.stderr
+        records = dict(line.split("=", 1) for line in completed.stdout.splitlines())
+        assert list(records) == list(PROGRAM_SHA_VARS)
+        assert all(re.fullmatch("[0-9a-f]{40}", sha) for sha in records.values())
+
+
+def test_source_stages_have_independent_revision_inputs_and_no_runtime_ancestry():
+    dockerfile = (REPO_ROOT / "container/Dockerfile").read_text()
+    declarations = list(re.finditer(r"^FROM (\S+) AS (\S+)$", dockerfile, re.MULTILINE))
+    stages = {}
+    for index, declaration in enumerate(declarations):
+        end = declarations[index + 1].start() if index + 1 < len(declarations) else len(dockerfile)
+        stages[declaration[2]] = (declaration[1], dockerfile[declaration.end():end])
+
+    def ancestry(name, target="runtime"):
+        while name in stages:
+            yield name
+            name = stages[name][0].replace("${BUILD_TARGET}", target)
+
+    source_stages = {
+        name: set(re.findall(r"^ARG ([A-Z0-9_]+_REPO_SHA)=", body, re.MULTILINE))
+        for name, (_, body) in stages.items()
+        if re.search(r"^ARG [A-Z0-9_]+_REPO_SHA=", body, re.MULTILINE)
+    }
+    assert len(source_stages) == len(PROGRAM_SHA_VARS)
+    assert set.union(*source_stages.values()) == set(PROGRAM_SHA_VARS)
+    for name, revisions in source_stages.items():
+        assert len(revisions) == 1
+        assert set(ancestry(name)) & source_stages.keys() == {name}
+    for target in ("runtime", "development"):
+        parents = set(ancestry(target, target))
+        assert not parents.intersection(source_stages)
+        assert not parents.intersection({"dependencies", "source-builder"})
+        assert f"{target}-system" in parents
+        if target == "runtime":
+            assert "system" not in parents
+        else:
+            assert "system" in parents
+        assert f'[[ "${{BUILD_TARGET}}" == "{target}" ]]' in stages[target][1]
+    assert dockerfile.count("COPY --from=dependencies /opt/conda /opt/conda") == 1
+
+
 def test_treevis_package_is_part_of_every_repository_owned_image_context():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
@@ -241,11 +333,13 @@ def test_container_build_paths_include_archive_interoperability_commands():
         encoding="utf-8"
     )
 
-    assert "libarchive-tools" in dockerfile
-    assert "libarchive-tools" in apptainer_template
+    apt_runtime = (REPO_ROOT / "container/apt/runtime.txt").read_text().splitlines()
+    assert "libarchive-tools" in apt_runtime
+    assert "install_system_packages.sh runtime" in dockerfile
+    assert "install_system_packages.sh development" in apptainer_template
     assert "base\tbsdtar" in required_commands
     assert "base\tbsdtar" in arm64_required_commands
     assert "apt-get install -y --no-install-recommends unzip" in dockerfile
-    assert "        unzip \\" in apptainer_template
+    assert "unzip" in apt_runtime
     assert "base\tunzip" in required_commands
     assert "base\tunzip" in arm64_required_commands

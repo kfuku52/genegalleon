@@ -70,14 +70,22 @@ On macOS, build an image from the current checkout and run validation through
 the same wrapper:
 
 ```bash
-BUILD_SIF=0 IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev \
-bash ./gg_container_build_entrypoint.sh
+bash ./dev build
 ```
 
 ```bash
 GG_TEST_RUNTIME=docker bash workflow/tests/run_in_runtime.sh \
   python -m pytest -q workflow/tests/test_hgt_end_to_end.py
 ```
+
+`dev build` selects `BUILD_TARGET=development`, adding APT compilers and
+headers to the distribution runtime. Direct container build wrappers and CI
+default to `BUILD_TARGET=runtime`; either target can run these tests. Their
+fingerprints include the target so switching profiles cannot silently reuse
+the other image. Use separate tags when retaining both locally.
+See [container development](container-development.md) for the independent
+source stages and build-cache tradeoffs. Workflow-only edits continue to use
+the mounted checkout and do not require an image rebuild.
 
 Host-local checks are useful for quick syntax or narrow static feedback, but do
 not use them as evidence of container runtime compatibility. Report validation

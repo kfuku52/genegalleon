@@ -75,6 +75,7 @@ IMAGE=${IMAGE:-${default_image}}
 TAG=${TAG:-${default_tag}}
 PLATFORMS=${PLATFORMS:-${default_platform}}
 MODE=${MODE:-load} # push | load
+export BUILD_TARGET=${BUILD_TARGET:-runtime} # runtime | development (local builds)
 BUILD_SIF=${BUILD_SIF:-${default_build_sif}} # 1 | 0
 ENGINE=${ENGINE:-auto} # auto | apptainer | singularity
 OUT=${OUT:-${repo_root}/genegalleon.sif}
@@ -83,6 +84,10 @@ FALLBACK_REMOTE_TAG=${FALLBACK_REMOTE_TAG:-${PUBLIC_TAG_DEFAULT}}
 
 if [[ "${MODE}" != "push" && "${MODE}" != "load" ]]; then
   echo "MODE must be one of: push, load"
+  exit 1
+fi
+if [[ "${BUILD_TARGET}" != "runtime" && "${BUILD_TARGET}" != "development" ]]; then
+  echo "BUILD_TARGET must be runtime or development."
   exit 1
 fi
 if [[ "${MODE}" == "load" && "${PLATFORMS}" == *","* ]]; then
@@ -132,7 +137,7 @@ image_looks_remote() {
 echo "[gg_container_build] repo_root=${repo_root}"
 echo "[gg_container_build] image=${IMAGE}:${TAG}"
 echo "[gg_container_build] image_source=${IMAGE_SOURCE}"
-echo "[gg_container_build] platforms=${PLATFORMS} mode=${MODE}"
+echo "[gg_container_build] platforms=${PLATFORMS} mode=${MODE} build_target=${BUILD_TARGET}"
 
 did_buildx=0
 did_native_local_build=0

@@ -129,6 +129,21 @@ def test_runtime_runner_dispatches_to_requested_docker_image(tmp_path: Path):
     assert f"--workdir {REPO_ROOT} local/genegalleon:test python --version" in calls
 
 
+@pytest.mark.parametrize("target", [None, "runtime"])
+def test_dev_build_selects_development_unless_overridden(tmp_path, target):
+    shutil.copy2(REPO_ROOT / "dev", tmp_path / "dev")
+    (tmp_path / "gg_container_build_entrypoint.sh").write_text(
+        'printf "%s %s %s %s\\n" "$BUILD_TARGET" "$IMAGE_SOURCE" "$IMAGE:$TAG" "$BUILD_SIF"\n'
+    )
+    env = os.environ.copy()
+    env.pop("BUILD_TARGET", None)
+    if target:
+        env["BUILD_TARGET"] = target
+    completed = _run("bash", str(tmp_path / "dev"), "build", env=env)
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == f"{target or 'development'} local local/genegalleon:dev 0"
+
+
 @pytest.mark.parametrize("runtime", ["auto", "sif"])
 @pytest.mark.parametrize("entrypoint", ["sif", "runtime", "dev"])
 def test_validation_entrypoints_discover_versioned_hpc_runtime(tmp_path, runtime, entrypoint):
@@ -271,7 +286,24 @@ def test_runtime_input_hash_is_platform_agnostic():
     assert multi_arch.stdout == amd64.stdout
 
 
-def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_path: Path):
+@pytest.mark.parametrize("hash_args", [[], ["--runtime"]])
+def test_build_hash_distinguishes_targets_but_ignores_build_parallelism(hash_args):
+    env = os.environ.copy()
+    env.pop("GG_BUILD_TARGET", None)
+    env["BUILD_TARGET"] = "runtime"
+    runtime = _run("bash", str(BUILD_HASH_TOOL), *hash_args, "2026-08-27", env=env)
+    env["BUILD_TARGET"] = "development"
+    development = _run("bash", str(BUILD_HASH_TOOL), *hash_args, "2026-08-27", env=env)
+    assert runtime.returncode == development.returncode == 0
+    assert development.stdout != runtime.stdout
+    env["GG_BUILD_JOBS"] = "7"
+    more_jobs = _run("bash", str(BUILD_HASH_TOOL), *hash_args, "2026-08-27", env=env)
+    assert more_jobs.returncode == 0, more_jobs.stderr
+    assert more_jobs.stdout == development.stdout
+
+
+@pytest.mark.parametrize("target", ["runtime", "development"])
+def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_path: Path, target: str):
     env = os.environ.copy()
     for index, variable in enumerate(SOURCE_SHA_VARS, start=1):
         env[variable] = f"{index:040x}"
@@ -280,6 +312,7 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
             "GG_BUILD_PLATFORMS": "linux/amd64",
             "GG_BUILD_VCS_REF": "runtime-test",
             "GG_BUILD_VERSION": "runtime-test",
+            "GG_BUILD_TARGET": target,
         }
     )
     expected = _run("bash", str(BUILD_HASH_TOOL), "--runtime", "2026-08-27", env=env)
@@ -295,7 +328,7 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'case "${1:-}" in\n'
-        f"  image) printf '%s\\n' 'amd64|{expected.stdout.strip()}|2026-08-27' ;;\n"
+        f"  image) printf '%s\\n' 'amd64|{expected.stdout.strip()}|2026-08-27|{target}' ;;\n"
         "  run)\n"
         "    printf 'source\\trevision\\n'\n"
         f"    printf 'BUSCO\\t%s\\n' '{busco_sha}'\n"
@@ -311,6 +344,9 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "GG_RUNTIME_FRESHNESS": "always",
             "GG_RUNTIME_FRESHNESS_CACHE_DIR": str(tmp_path / "cache"),
+            # Freshness must use the image's target even if the caller requests
+            # a different target for their next build.
+            "GG_BUILD_TARGET": "development" if target == "runtime" else "runtime",
         }
     )
 
@@ -359,7 +395,7 @@ def test_docker_runtime_freshness_daily_cache_honors_one_off_revision_overrides(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         '[[ "${1:-}" == image && "${2:-}" == inspect ]]\n'
-        "printf 'amd64|%s|2026-08-27\\n' \"${MOCK_RUNTIME_HASH}\"\n",
+        "printf 'amd64|%s|2026-08-27|runtime\\n' \"${MOCK_RUNTIME_HASH}\"\n",
         encoding="utf-8",
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
@@ -446,7 +482,7 @@ def test_docker_runtime_freshness_daily_cache_honors_source_ref_overrides(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         '[[ "${1:-}" == image && "${2:-}" == inspect ]]\n'
-        "printf 'amd64|%s|2026-08-27\\n' \"${MOCK_RUNTIME_HASH}\"\n",
+        "printf 'amd64|%s|2026-08-27|runtime\\n' \"${MOCK_RUNTIME_HASH}\"\n",
         encoding="utf-8",
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
@@ -501,7 +537,7 @@ def test_runtime_freshness_fallback_cache_is_private_and_scoped_by_uid(tmp_path:
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         '[[ "${1:-}" == image && "${2:-}" == inspect ]]\n'
-        f"printf 'amd64|{expected.stdout.strip()}|2026-08-27\\n'\n",
+        f"printf 'amd64|{expected.stdout.strip()}|2026-08-27|runtime\\n'\n",
         encoding="utf-8",
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
@@ -533,7 +569,7 @@ def test_sif_runtime_identity_check_uses_embedded_exact_hash(tmp_path: Path):
         "set -euo pipefail\n"
         "[[ \"${1:-}\" == inspect && \"${2:-}\" == --json ]]\n"
         "printf '%s\\n' "
-        f"'{{\"data\":{{\"attributes\":{{\"labels\":{{\"io.genegalleon.runtime-input\":\"{runtime_hash}\",\"io.genegalleon.security-refresh-epoch\":\"2026-08-27\"}}}}}}}}'\n",
+        f"'{{\"data\":{{\"attributes\":{{\"labels\":{{\"io.genegalleon.runtime-input\":\"{runtime_hash}\",\"io.genegalleon.security-refresh-epoch\":\"2026-08-27\",\"io.genegalleon.build-target\":\"runtime\"}}}}}}}}'\n",
         encoding="utf-8",
     )
     engine.chmod(engine.stat().st_mode | stat.S_IXUSR)

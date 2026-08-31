@@ -87,9 +87,10 @@ fi
 runtime_hash=""
 security_epoch=""
 runtime_arch=""
+build_target=""
 if [[ "${runtime_kind}" == "docker" ]]; then
-  metadata="$(docker image inspect --format '{{.Architecture}}|{{index .Config.Labels "io.genegalleon.runtime-input"}}|{{index .Config.Labels "io.genegalleon.security-refresh-epoch"}}' "${runtime_ref}")"
-  IFS='|' read -r runtime_arch runtime_hash security_epoch <<< "${metadata}"
+  metadata="$(docker image inspect --format '{{.Architecture}}|{{index .Config.Labels "io.genegalleon.runtime-input"}}|{{index .Config.Labels "io.genegalleon.security-refresh-epoch"}}|{{index .Config.Labels "io.genegalleon.build-target"}}' "${runtime_ref}")"
+  IFS='|' read -r runtime_arch runtime_hash security_epoch build_target <<< "${metadata}"
 else
   if [[ -z "${engine}" ]]; then
     echo "--engine is required with --sif" >&2
@@ -103,16 +104,17 @@ found = {}
 def visit(value):
     if isinstance(value, dict):
         for key, child in value.items():
-            if key in {"io.genegalleon.runtime-input", "io.genegalleon.security-refresh-epoch"}:
+            if key in {"io.genegalleon.runtime-input", "io.genegalleon.security-refresh-epoch", "io.genegalleon.build-target"}:
                 found[key] = child
             visit(child)
     elif isinstance(value, list):
         for child in value:
             visit(child)
 visit(payload)
-print(str(found.get("io.genegalleon.runtime-input", "")) + "|" + str(found.get("io.genegalleon.security-refresh-epoch", "")))
+print("|".join(str(found.get(key, "")) for key in (
+    "io.genegalleon.runtime-input", "io.genegalleon.security-refresh-epoch", "io.genegalleon.build-target")))
 ' <<< "${inspect_json}")"
-  IFS='|' read -r runtime_hash security_epoch <<< "${metadata}"
+  IFS='|' read -r runtime_hash security_epoch build_target <<< "${metadata}"
   case "$(uname -m)" in
     x86_64|amd64) runtime_arch="amd64" ;;
     aarch64|arm64) runtime_arch="arm64" ;;
@@ -123,7 +125,8 @@ print(str(found.get("io.genegalleon.runtime-input", "")) + "|" + str(found.get("
   esac
 fi
 
-if [[ ! "${runtime_hash}" =~ ^[0-9a-f]{64}$ || ! "${security_epoch}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+if [[ ! "${runtime_hash}" =~ ^[0-9a-f]{64}$ || ! "${security_epoch}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ \
+   || ( "${build_target}" != "runtime" && "${build_target}" != "development" ) ]]; then
   cat >&2 <<EOF
 GeneGalleon runtime freshness metadata is missing or invalid: ${runtime_ref}
 
@@ -319,6 +322,7 @@ done
 export GG_BUILD_PLATFORMS="linux/${runtime_arch}"
 export GG_BUILD_VCS_REF="runtime-freshness"
 export GG_BUILD_VERSION="runtime-freshness"
+export GG_BUILD_TARGET="${build_target}"
 expected_hash="$(bash "${script_dir}/compute_build_input_hash.sh" --runtime "${security_epoch}")"
 
 if [[ "${runtime_hash}" != "${expected_hash}" ]]; then

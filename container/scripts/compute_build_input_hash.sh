@@ -43,6 +43,11 @@ if [[ $# -ne 1 || ! "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
   exit 2
 fi
 security_refresh_epoch="$1"
+build_target="${GG_BUILD_TARGET:-${BUILD_TARGET:-runtime}}"
+if [[ "${build_target}" != "runtime" && "${build_target}" != "development" ]]; then
+  echo "BUILD_TARGET must be runtime or development." >&2
+  exit 2
+fi
 
 # The image architecture is validated independently from Docker/SIF metadata.
 # Excluding the requested platform list lets each image from one multi-platform
@@ -98,6 +103,7 @@ context_digest="$(
 {
   printf '%s\n' \
     "hash_mode=${hash_mode}" \
+    "build_target=${build_target}" \
     "context=${context_digest}"
   if [[ "${hash_mode}" == "full" ]]; then
     printf '%s\n' \

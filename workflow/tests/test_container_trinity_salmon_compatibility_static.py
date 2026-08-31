@@ -12,10 +12,13 @@ def test_amd64_container_pins_trinity_compatible_salmon():
 def test_container_builds_generate_salmon_locale():
     dockerfile = read_text(REPO_ROOT / "container" / "Dockerfile")
     definition = read_text(REPO_ROOT / "container" / "apptainer_local_build.def.template")
+    system_installer = read_text(REPO_ROOT / "container/scripts/install_system_packages.sh")
+    runtime_packages = read_text(REPO_ROOT / "container/apt/runtime.txt")
 
+    assert "locales" in runtime_packages.splitlines()
+    assert "locale-gen en_US.UTF-8" in system_installer
     for build_file in (dockerfile, definition):
-        assert "locales" in build_file
-        assert "locale-gen en_US.UTF-8" in build_file
+        assert "bash /opt/pg/scripts/install_system_packages.sh" in build_file
 
 
 def test_runtime_validation_exercises_trinity_salmon_interface():

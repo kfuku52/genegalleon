@@ -9,6 +9,7 @@ IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_ent
 Defaults:
 - `IMAGE_SOURCE=auto`
 - `MODE=load`
+- `BUILD_TARGET=runtime` for local builds; `development` adds APT compilers and headers
 - `PLATFORMS`: inferred from host arch (`linux/amd64` or `linux/arm64`)
 - `BUILD_SIF`: `1` on Linux, `0` on macOS hosts where Apptainer/Singularity is typically unavailable
 - `OUT=<repo-root>/genegalleon.sif`
@@ -18,6 +19,8 @@ Defaults:
 
 Useful overrides:
 - `BUILD_SIF=0` to skip `.sif` conversion
+- `BUILD_TARGET=development` to build a development image, or use `bash ./dev build`
+- `GG_BUILD_JOBS=N` to limit jobs per native Make/R build (default: `2`)
 - `ENGINE=singularity` to force Singularity instead of automatic runtime detection
 - `NATIVE_BUILD_FAKEROOT=always` to force `--fakeroot` for native local builds on sites that support it
 
@@ -103,11 +106,20 @@ IMAGE=ghcr.io/<your-org>/genegalleon TAG=dev MODE=push ./container/buildx.sh
 
 By default, upstream source installs follow the moving branches in
 `container/source_branches.env` (`amalgkit`, `cdskit`, `csubst`, `nwkit`,
-`BUSCO`, `paml`, `kfl1ou`, `kftools`, `rkftools`, `RADTE`). The wrapper resolves
-each branch once at build start so all architectures use one internally
+`BUSCO`, `paml`, `kfl1ou`, `kfFractBias`, `kftools`, `rkftools`, `RADTE`). The wrapper resolves
+each branch once, concurrently, at build start so all architectures use one internally
 consistent snapshot, without writing those commits back as repository
 defaults. Downloaded `BioPP/testnh` and `CAFE5` tarballs are still verified by
 SHA-256.
+
+Docker builds each moving source in an independent stage and transfers only
+its wheel, R package, or binary into the shared runtime. `runtime` is the
+published target; `development` adds APT build dependencies without changing
+the scientific package set. Native Apptainer uses the same artifact scripts,
+then removes APT build dependencies for the runtime target. See
+[container development](container-development.md) for the build graph, size
+tradeoffs, and rebuild measurements. `BUILD_TARGET` does not modify images
+pulled with `IMAGE_SOURCE=public`.
 
 To test a different revision, set the matching `*_REPO_SHA` to a full commit
 SHA. When overriding a repository URL to a fork, also supply a commit SHA that
@@ -133,12 +145,15 @@ and records the value in `io.genegalleon.security-refresh-epoch` and
 version and MIT license.
 
 Images additionally carry `io.genegalleon.runtime-input`. This second
-fingerprint contains the security epoch, exact moving-source
+fingerprint contains the build target, security epoch, exact moving-source
 revisions, and container context, while intentionally excluding the
 GeneGalleon Git revision and version metadata. CI uses it to reuse a validated
 SIF when only mounted workflow code changed. It never reuses a SIF after an
 `nwkit`, `csubst`, other upstream, Dockerfile, environment, validation-script,
 or bundled `treevis` change.
+The target is also recorded as `io.genegalleon.build-target`; freshness checks
+read it from the image rather than assuming every local image is a development
+build. Both targets can run the same workflow validation suite.
 Platform and Singularity version are separate parts of the SIF cache key;
 the runtime-content hash itself is platform independent. Both amd64 and arm64
 published Docker images run the shared runtime validation manifest. Local

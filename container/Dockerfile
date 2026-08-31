@@ -1,6 +1,11 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023bb127baade7e8faca AS system
+# Select the OS package profile before the scientific payload. Development
+# tools then stay cached when one upstream changes, just like runtime packages.
+ARG BUILD_TARGET=runtime
+
+# The distribution target copies artifacts without inheriting APT build tools.
+FROM mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023bb127baade7e8faca AS base
 
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -10,43 +15,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/opt/conda/bin:/usr/local/bin:${PATH} \
     R_LIBS_SITE=/opt/conda/lib/R/library
 
-RUN rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archives/partial/* \
- && apt-get update \
- && apt-get upgrade -y \
- && apt-get install -y --no-install-recommends \
-    augustus \
-    build-essential \
-    ca-certificates \
-    cmake \
-    curl \
-    default-jre-headless \
-    fastp \
-    gawk \
-    gfortran \
-    git \
-    less \
-    libarchive-tools \
-    libboost-dev \
-    libbpp-phyl-dev \
-    libcurl4-openssl-dev \
-    libeigen3-dev \
-    libssl-dev \
-    libxml2-dev \
-    locales \
-    parallel \
-    pigz \
-    perl \
-    pkg-config \
-    procps \
-    rsync \
-    tini \
-    util-linux \
-    wget \
-    zip \
- && sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
- && locale-gen en_US.UTF-8 \
- && apt-get clean \
- && rm -rf /var/lib/apt/lists/*
+COPY container/apt /opt/pg/apt
+COPY container/scripts/install_system_packages.sh /opt/pg/scripts/install_system_packages.sh
+
+FROM base AS system
+RUN bash /opt/pg/scripts/install_system_packages.sh development
 
 # Isolate the Notung download so Git source revisions in the runtime stage do
 # not invalidate it.
@@ -75,7 +48,7 @@ RUN apt-get update \
  && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
 
-FROM system AS runtime
+FROM system AS dependencies
 
 ARG TARGETARCH
 ARG TARGETPLATFORM
@@ -107,23 +80,9 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  chmod +x /opt/pg/scripts/ensure_generax_stable.sh \
  && /opt/pg/scripts/ensure_generax_stable.sh base
 
-ARG PAML_REPO_URL="https://github.com/iqtree/paml.git"
-ARG PAML_REPO_REF=""
-ARG PAML_REPO_SHA=""
-
-COPY container/source_branches.env /opt/pg/source_branches.env
-COPY container/scripts/ensure_iq2mc_toolchain.sh /opt/pg/scripts/ensure_iq2mc_toolchain.sh
 COPY container/scripts/download_url.sh /opt/pg/scripts/download_url.sh
 COPY container/scripts/verify_sha256.sh /opt/pg/scripts/verify_sha256.sh
 COPY container/scripts/fetch_git_repo.sh /opt/pg/scripts/fetch_git_repo.sh
-
-RUN chmod +x /opt/pg/scripts/*.sh \
- && source /opt/pg/source_branches.env \
- && paml_repo_ref="${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}" \
- && PAML_REPO_URL="${PAML_REPO_URL}" \
-    PAML_REPO_REF="${paml_repo_ref}" \
-    PAML_REPO_SHA="${PAML_REPO_SHA}" \
-    /opt/pg/scripts/ensure_iq2mc_toolchain.sh base
 
 # Install Python-only compatibility/security updates once, after the conda
 # solver has finished, so wheels cannot pull the scientific stack away from
@@ -140,6 +99,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # sources below, so give them an independent reusable layer.
 ARG TESTNH_TARBALL_SHA256="598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2"
 ARG CAFE5_TARBALL_SHA256="71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8"
+ARG GG_BUILD_JOBS=2
 
 COPY container/scripts/install_nonconda_fallbacks.sh /opt/pg/scripts/install_nonconda_fallbacks.sh
 
@@ -149,7 +109,178 @@ RUN --mount=type=cache,target=/root/.cache/pip \
  CAFE5_TARBALL_SHA256="${CAFE5_TARBALL_SHA256}" \
  /opt/pg/scripts/install_nonconda_fallbacks.sh cafe5 mapnh astral r-cran verify-r
 
+# Each moving source starts from this same environment. Only its own revision
+# is in scope; updating one source cannot invalidate another source's build.
+FROM dependencies AS source-builder
+
+COPY container/source_branches.env /opt/pg/source_branches.env
+COPY container/scripts/resolve_git_branch_sha.sh /opt/pg/scripts/resolve_git_branch_sha.sh
+COPY container/scripts/build_source_artifact.sh /opt/pg/scripts/build_source_artifact.sh
+
+FROM source-builder AS amalgkit-build
+
+ARG KFU52_AMALGKIT_REPO_REF=""
+ARG KFU52_AMALGKIT_REPO_SHA=""
+ARG KFU52_REPO_REF=""
+ARG KFU52_AMALGKIT_AUTO_SELECT_REF="0"
+ARG KFU52_AMALGKIT_BRANCH_CANDIDATES="master,kfdevel,devel"
+
+RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh python amalgkit \
+      "https://github.com/kfuku52/amalgkit.git" \
+      "${KFU52_AMALGKIT_REPO_SHA:-${KFU52_AMALGKIT_REPO_REF:-${GG_SOURCE_AMALGKIT_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM source-builder AS cdskit-build
+
+ARG KFU52_CDSKIT_REPO_REF=""
+ARG KFU52_CDSKIT_REPO_SHA=""
+
+RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh python cdskit \
+      "https://github.com/kfuku52/cdskit.git" \
+      "${KFU52_CDSKIT_REPO_SHA:-${KFU52_CDSKIT_REPO_REF:-${GG_SOURCE_CDSKIT_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM source-builder AS csubst-build
+
+ARG KFU52_CSUBST_REPO_REF=""
+ARG KFU52_CSUBST_REPO_SHA=""
+
+RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh python csubst \
+      "https://github.com/kfuku52/csubst.git" \
+      "${KFU52_CSUBST_REPO_SHA:-${KFU52_CSUBST_REPO_REF:-${GG_SOURCE_CSUBST_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM source-builder AS nwkit-build
+
+ARG KFU52_NWKIT_REPO_REF=""
+ARG KFU52_NWKIT_REPO_SHA=""
+
+RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh python nwkit \
+      "https://github.com/kfuku52/nwkit.git" \
+      "${KFU52_NWKIT_REPO_SHA:-${KFU52_NWKIT_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM source-builder AS busco-build
+
+ARG BUSCO_REPO_URL="https://gitlab.com/ezlab/busco.git"
+ARG BUSCO_MIRROR_REPO_URL=""
+ARG BUSCO_REPO_REF=""
+ARG BUSCO_REPO_SHA=""
+
+RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh python BUSCO \
+      "${BUSCO_REPO_URL}" \
+      "${BUSCO_REPO_SHA:-${BUSCO_REPO_REF:-${GG_SOURCE_BUSCO_REPO_REF}}}" \
+      /opt/pg/artifact "${BUSCO_MIRROR_REPO_URL}"
+
+FROM source-builder AS paml-build
+
+ARG PAML_REPO_URL="https://github.com/iqtree/paml.git"
+ARG PAML_REPO_REF=""
+ARG PAML_REPO_SHA=""
+
+RUN source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh paml paml \
+      "${PAML_REPO_URL}" \
+      "${PAML_REPO_SHA:-${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM source-builder AS kfl1ou-build
+
+ARG KFL1OU_REPO_URL="https://github.com/kfuku52/kfl1ou.git"
+ARG KFL1OU_REPO_REF=""
+ARG KFL1OU_REPO_SHA=""
+
+RUN source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh r kfl1ou \
+      "${KFL1OU_REPO_URL}" \
+      "${KFL1OU_REPO_SHA:-${KFL1OU_REPO_REF:-${GG_SOURCE_KFL1OU_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM source-builder AS kffractbias-build
+
+ARG KFFRACTBIAS_REPO_URL="https://github.com/kfuku52/kfFractBias.git"
+ARG KFFRACTBIAS_REPO_REF=""
+ARG KFFRACTBIAS_REPO_SHA=""
+
+RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh python kfFractBias \
+      "${KFFRACTBIAS_REPO_URL}" \
+      "${KFFRACTBIAS_REPO_SHA:-${KFFRACTBIAS_REPO_REF:-${GG_SOURCE_KFFRACTBIAS_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM source-builder AS kftools-build
+
+ARG KFTOOLS_REPO_URL="https://github.com/kfuku52/kftools.git"
+ARG KFTOOLS_REPO_REF=""
+ARG KFTOOLS_REPO_SHA=""
+
+RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh python kftools \
+      "${KFTOOLS_REPO_URL}" \
+      "${KFTOOLS_REPO_SHA:-${KFTOOLS_REPO_REF:-${GG_SOURCE_KFTOOLS_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM source-builder AS rkftools-build
+
+ARG RKFTOOLS_REPO_URL="https://github.com/kfuku52/rkftools.git"
+ARG RKFTOOLS_REPO_REF=""
+ARG RKFTOOLS_REPO_SHA=""
+
+RUN source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh r rkftools \
+      "${RKFTOOLS_REPO_URL}" \
+      "${RKFTOOLS_REPO_SHA:-${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM source-builder AS radte-build
+
+ARG RADTE_REPO_URL="https://github.com/kfuku52/RADTE.git"
+ARG RADTE_REPO_REF=""
+ARG RADTE_REPO_SHA=""
+
+RUN source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh radte RADTE \
+      "${RADTE_REPO_URL}" \
+      "${RADTE_REPO_SHA:-${RADTE_REPO_REF:-${GG_SOURCE_RADTE_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM base AS runtime-system
+RUN bash /opt/pg/scripts/install_system_packages.sh runtime
+
+FROM system AS development-system
+
+FROM ${BUILD_TARGET}-system AS runtime-content
+
+ARG TARGETARCH
+ARG TARGETPLATFORM
+# Copy the solved environment exactly once. All upstream artifacts below are
+# small additions to this shared prefix, not copies of whole environments.
+COPY --from=dependencies /opt/conda /opt/conda
+COPY --from=dependencies /usr/local/bin /usr/local/bin
+COPY --from=dependencies /opt/pg/logs /opt/pg/logs
 COPY --from=notung /Notung.jar /usr/local/bin/Notung.jar
+COPY container/scripts/install_source_artifacts.sh /opt/pg/scripts/install_source_artifacts.sh
+COPY container/scripts/install_helvetica_compat_font.sh /opt/pg/scripts/install_helvetica_compat_font.sh
+COPY container/testdata /opt/pg/testdata
+
+RUN --mount=from=amalgkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/amalgkit \
+ --mount=from=cdskit-build,source=/opt/pg/artifact,target=/tmp/artifacts/cdskit \
+ --mount=from=csubst-build,source=/opt/pg/artifact,target=/tmp/artifacts/csubst \
+ --mount=from=nwkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/nwkit \
+ --mount=from=busco-build,source=/opt/pg/artifact,target=/tmp/artifacts/BUSCO \
+ --mount=from=paml-build,source=/opt/pg/artifact,target=/tmp/artifacts/paml \
+ --mount=from=kfl1ou-build,source=/opt/pg/artifact,target=/tmp/artifacts/kfl1ou \
+ --mount=from=kffractbias-build,source=/opt/pg/artifact,target=/tmp/artifacts/kfFractBias \
+ --mount=from=kftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/kftools \
+ --mount=from=rkftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/rkftools \
+ --mount=from=radte-build,source=/opt/pg/artifact,target=/tmp/artifacts/RADTE \
+ bash /opt/pg/scripts/install_source_artifacts.sh /tmp/artifacts \
+ && bash /opt/pg/scripts/install_helvetica_compat_font.sh base
 
 RUN mkdir -p /home /usr/local/db/Pfam_LE /usr/local/db/jaspar /opt/pg/logs /opt/conda/envs \
  && ln -sfn /opt/conda /opt/conda/envs/base \
@@ -160,139 +291,6 @@ RUN mkdir -p /home /usr/local/db/Pfam_LE /usr/local/db/jaspar /opt/pg/logs /opt/
    'export PATH=/usr/local/bin:${PATH}' \
    > /home/.bashrc \
  && cp /home/.bashrc /root/.bashrc
-
-# Declare mutable source inputs only immediately before their install layer.
-# BuildKit includes in-scope ARGs in RUN cache keys even when a command does
-# not reference them, so early declarations would invalidate the conda layer.
-ARG KFU52_REPO_REF=""
-ARG KFU52_AMALGKIT_AUTO_SELECT_REF="0"
-ARG KFU52_AMALGKIT_BRANCH_CANDIDATES="master,kfdevel,devel"
-ARG KFU52_AMALGKIT_REPO_REF=""
-ARG KFU52_AMALGKIT_REPO_SHA=""
-ARG KFU52_CDSKIT_REPO_REF=""
-ARG KFU52_CDSKIT_REPO_SHA=""
-ARG KFU52_CSUBST_REPO_REF=""
-ARG KFU52_CSUBST_REPO_SHA=""
-ARG KFU52_NWKIT_REPO_REF=""
-ARG KFU52_NWKIT_REPO_SHA=""
-ARG BUSCO_REPO_URL="https://gitlab.com/ezlab/busco.git"
-ARG BUSCO_MIRROR_REPO_URL=""
-ARG BUSCO_REPO_REF=""
-ARG BUSCO_REPO_SHA=""
-ARG KFL1OU_REPO_URL="https://github.com/kfuku52/kfl1ou.git"
-ARG KFL1OU_REPO_REF=""
-ARG KFL1OU_REPO_SHA=""
-ARG KFFRACTBIAS_REPO_URL="https://github.com/kfuku52/kfFractBias.git"
-ARG KFFRACTBIAS_REPO_REF=""
-ARG KFFRACTBIAS_REPO_SHA=""
-ARG KFTOOLS_REPO_URL="https://github.com/kfuku52/kftools.git"
-ARG RKFTOOLS_REPO_URL="https://github.com/kfuku52/rkftools.git"
-ARG RADTE_REPO_URL="https://github.com/kfuku52/RADTE.git"
-ARG KFTOOLS_REPO_REF=""
-ARG RKFTOOLS_REPO_REF=""
-ARG RADTE_REPO_REF=""
-ARG KFTOOLS_REPO_SHA=""
-ARG RKFTOOLS_REPO_SHA=""
-ARG RADTE_REPO_SHA=""
-
-COPY container/scripts/ensure_kfuku52_tools_latest.sh /opt/pg/scripts/ensure_kfuku52_tools_latest.sh
-COPY container/scripts/install_helvetica_compat_font.sh /opt/pg/scripts/install_helvetica_compat_font.sh
-
-RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
- --mount=type=cache,target=/root/.mamba/pkgs,sharing=locked \
- --mount=type=cache,target=/root/.cache/pip \
- chmod +x /opt/pg/scripts/*.sh \
- && export USE_DEFAULTS_CHANNEL=0 STRICT_CHANNEL_PRIORITY=1 MAMBA_NO_LOW_SPEED_LIMIT=1 \
- && source /opt/pg/source_branches.env \
- && mkdir -p /opt/pg/logs \
- && kfu52_repo_ref="${KFU52_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}" \
- && amalgkit_repo_ref="${KFU52_AMALGKIT_REPO_REF:-${GG_SOURCE_AMALGKIT_REPO_REF}}" \
- && cdskit_repo_ref="${KFU52_CDSKIT_REPO_REF:-${GG_SOURCE_CDSKIT_REPO_REF}}" \
- && csubst_repo_ref="${KFU52_CSUBST_REPO_REF:-${GG_SOURCE_CSUBST_REPO_REF}}" \
- && nwkit_repo_ref="${KFU52_NWKIT_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}" \
- && busco_repo_ref="${BUSCO_REPO_REF:-${GG_SOURCE_BUSCO_REPO_REF}}" \
- && paml_repo_ref="${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}" \
- && kfl1ou_repo_ref="${KFL1OU_REPO_REF:-${GG_SOURCE_KFL1OU_REPO_REF}}" \
- && kffractbias_repo_ref="${KFFRACTBIAS_REPO_REF:-${GG_SOURCE_KFFRACTBIAS_REPO_REF}}" \
- && kftools_repo_ref="${KFTOOLS_REPO_REF:-${GG_SOURCE_KFTOOLS_REPO_REF}}" \
- && rkftools_repo_ref="${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}" \
- && radte_repo_ref="${RADTE_REPO_REF:-${GG_SOURCE_RADTE_REPO_REF}}" \
- && amalgkit_repo_sha="${KFU52_AMALGKIT_REPO_SHA:-}" \
- && cdskit_repo_sha="${KFU52_CDSKIT_REPO_SHA:-}" \
- && csubst_repo_sha="${KFU52_CSUBST_REPO_SHA:-}" \
- && nwkit_repo_sha="${KFU52_NWKIT_REPO_SHA:-}" \
- && kfl1ou_repo_sha="${KFL1OU_REPO_SHA:-}" \
- && kffractbias_repo_sha="${KFFRACTBIAS_REPO_SHA:-}" \
- && kftools_repo_sha="${KFTOOLS_REPO_SHA:-}" \
- && rkftools_repo_sha="${RKFTOOLS_REPO_SHA:-}" \
- && radte_repo_sha="${RADTE_REPO_SHA:-}" \
- && amalgkit_source_ref="${amalgkit_repo_sha:-${amalgkit_repo_ref}}" \
- && cdskit_source_ref="${cdskit_repo_sha:-${cdskit_repo_ref}}" \
- && csubst_source_ref="${csubst_repo_sha:-${csubst_repo_ref}}" \
- && nwkit_source_ref="${nwkit_repo_sha:-${nwkit_repo_ref}}" \
- && kfl1ou_source_ref="${kfl1ou_repo_sha:-${kfl1ou_repo_ref}}" \
- && kffractbias_source_ref="${kffractbias_repo_sha:-${kffractbias_repo_ref}}" \
- && busco_source_ref="${BUSCO_REPO_SHA:-${busco_repo_ref}}" \
- && paml_source_ref="${PAML_REPO_SHA:-${paml_repo_ref}}" \
- && kftools_source_ref="${kftools_repo_sha:-${kftools_repo_ref}}" \
- && rkftools_source_ref="${rkftools_repo_sha:-${rkftools_repo_ref}}" \
- && radte_source_ref="${radte_repo_sha:-${radte_repo_ref}}" \
- && KFU52_REPO_REF="${kfu52_repo_ref}" \
-    KFU52_AMALGKIT_AUTO_SELECT_REF="${KFU52_AMALGKIT_AUTO_SELECT_REF}" \
-    KFU52_AMALGKIT_BRANCH_CANDIDATES="${KFU52_AMALGKIT_BRANCH_CANDIDATES}" \
-    KFU52_AMALGKIT_REPO_REF="${amalgkit_repo_ref}" \
-    KFU52_AMALGKIT_REPO_SHA="${amalgkit_repo_sha}" \
-    KFU52_CDSKIT_REPO_REF="${cdskit_repo_ref}" \
-    KFU52_CDSKIT_REPO_SHA="${cdskit_repo_sha}" \
-    KFU52_CSUBST_REPO_REF="${csubst_repo_ref}" \
-    KFU52_CSUBST_REPO_SHA="${csubst_repo_sha}" \
-    KFU52_NWKIT_REPO_REF="${nwkit_repo_ref}" \
-    KFU52_NWKIT_REPO_SHA="${nwkit_repo_sha}" \
-    /opt/pg/scripts/ensure_kfuku52_tools_latest.sh base \
- && KFU52_REPO_REF="${KFU52_REPO_REF}" \
-    KFL1OU_REPO_URL="${KFL1OU_REPO_URL}" \
-    KFL1OU_REPO_REF="${kfl1ou_repo_ref}" \
-    KFL1OU_REPO_SHA="${kfl1ou_repo_sha}" \
-    /opt/pg/scripts/install_nonconda_fallbacks.sh kfl1ou \
- && rm -rf /tmp/busco \
- && /opt/pg/scripts/fetch_git_repo.sh "${BUSCO_REPO_URL}" "${busco_source_ref}" /tmp/busco "${BUSCO_MIRROR_REPO_URL}" \
- && micromamba run -n base pip install --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/busco \
- && rm -rf /tmp/busco \
- && rm -rf /tmp/kftools \
- && /opt/pg/scripts/fetch_git_repo.sh "${KFTOOLS_REPO_URL}" "${kftools_source_ref}" /tmp/kftools \
- && micromamba run -n base pip install --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/kftools \
- && rm -rf /tmp/kftools \
- && rm -rf /tmp/kffractbias \
- && /opt/pg/scripts/fetch_git_repo.sh "${KFFRACTBIAS_REPO_URL}" "${kffractbias_source_ref}" /tmp/kffractbias \
- && micromamba run -n base pip install --upgrade --force-reinstall --no-deps --no-build-isolation /tmp/kffractbias \
- && rm -rf /tmp/kffractbias \
- && /opt/pg/scripts/install_helvetica_compat_font.sh base \
- && rm -rf /tmp/rkftools \
- && /opt/pg/scripts/fetch_git_repo.sh "${RKFTOOLS_REPO_URL}" "${rkftools_source_ref}" /tmp/rkftools \
- && micromamba run -n base R CMD INSTALL /tmp/rkftools \
- && rm -rf /tmp/rkftools \
- && rm -rf /tmp/radte \
- && /opt/pg/scripts/fetch_git_repo.sh "${RADTE_REPO_URL}" "${radte_source_ref}" /tmp/radte \
- && if [[ ! -s /tmp/radte/radte.r ]]; then \
-      echo "RADTE script was not found in ${RADTE_REPO_URL}"; \
-      exit 1; \
-    fi \
- && install -m 0755 /tmp/radte/radte.r /usr/local/bin/radte.r \
- && rm -rf /tmp/radte \
- && printf '%s\t%s\n' \
-      source revision \
-      amalgkit "${amalgkit_source_ref}" \
-      cdskit "${cdskit_source_ref}" \
-      csubst "${csubst_source_ref}" \
-      nwkit "${nwkit_source_ref}" \
-      BUSCO "${busco_source_ref}" \
-      paml "${paml_source_ref}" \
-      kfl1ou "${kfl1ou_source_ref}" \
-      kfFractBias "${kffractbias_source_ref}" \
-      kftools "${kftools_source_ref}" \
-      rkftools "${rkftools_source_ref}" \
-      RADTE "${radte_source_ref}" \
-      > /opt/pg/logs/source_revisions.tsv
 
 # Install GeneGalleon's repository-owned R package after its external R
 # dependencies. Keeping this in its own layer makes treevis-only edits cheap to
@@ -341,15 +339,22 @@ RUN chmod +x /opt/pg/scripts/validate_runtime.sh \
  && micromamba clean -i -l -y \
  && bash /opt/pg/scripts/post_install_notes.sh "${TARGETARCH}"
 
+# Both profiles use the same scientific assembly and validation instructions.
+# Wrappers pass matching --target and BUILD_TARGET values. A direct Docker
+# invocation must do the same; mismatches fail before an image is published.
+FROM runtime-content AS development
+
+ARG BUILD_TARGET
 ARG BUILD_DATE=""
 ARG VCS_REF="unknown"
 ARG GG_VERSION="unknown"
 ARG BUILD_INPUT_HASH=""
 ARG RUNTIME_INPUT_HASH=""
 
-RUN [[ "${BUILD_INPUT_HASH}" =~ ^[0-9a-f]{64}$ ]] \
+RUN [[ "${BUILD_TARGET}" == "development" ]] \
+ && [[ "${BUILD_INPUT_HASH}" =~ ^[0-9a-f]{64}$ ]] \
  && [[ "${RUNTIME_INPUT_HASH}" =~ ^[0-9a-f]{64}$ ]] \
- || { echo "BUILD_INPUT_HASH and RUNTIME_INPUT_HASH must be lowercase SHA-256 digests" >&2; exit 1; }
+ || { echo "BUILD_TARGET must be development, and input hashes must be lowercase SHA-256 digests" >&2; exit 1; }
 
 LABEL org.opencontainers.image.title="GeneGalleon workflow container" \
       org.opencontainers.image.description="Reproducible multi-architecture runtime for GeneGalleon (amd64 + arm64)" \
@@ -360,6 +365,37 @@ LABEL org.opencontainers.image.title="GeneGalleon workflow container" \
       org.opencontainers.image.version="${GG_VERSION}" \
       io.genegalleon.build-input="${BUILD_INPUT_HASH}" \
       io.genegalleon.runtime-input="${RUNTIME_INPUT_HASH}" \
+      io.genegalleon.build-target="development" \
+      io.genegalleon.security-refresh-epoch="${SECURITY_REFRESH_EPOCH}"
+
+WORKDIR /workspace
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["bash"]
+
+FROM runtime-content AS runtime
+
+ARG BUILD_TARGET
+ARG BUILD_DATE=""
+ARG VCS_REF="unknown"
+ARG GG_VERSION="unknown"
+ARG BUILD_INPUT_HASH=""
+ARG RUNTIME_INPUT_HASH=""
+
+RUN [[ "${BUILD_TARGET}" == "runtime" ]] \
+ && [[ "${BUILD_INPUT_HASH}" =~ ^[0-9a-f]{64}$ ]] \
+ && [[ "${RUNTIME_INPUT_HASH}" =~ ^[0-9a-f]{64}$ ]] \
+ || { echo "BUILD_TARGET must be runtime, and input hashes must be lowercase SHA-256 digests" >&2; exit 1; }
+
+LABEL org.opencontainers.image.title="GeneGalleon workflow container" \
+      org.opencontainers.image.description="Reproducible multi-architecture runtime for GeneGalleon (amd64 + arm64)" \
+      org.opencontainers.image.source="https://github.com/kfuku52/genegalleon" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${GG_VERSION}" \
+      io.genegalleon.build-input="${BUILD_INPUT_HASH}" \
+      io.genegalleon.runtime-input="${RUNTIME_INPUT_HASH}" \
+      io.genegalleon.build-target="runtime" \
       io.genegalleon.security-refresh-epoch="${SECURITY_REFRESH_EPOCH}"
 
 WORKDIR /workspace

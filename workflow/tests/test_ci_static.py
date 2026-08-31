@@ -63,6 +63,57 @@ def step_run(job: dict, name: str) -> str:
     return str(named_step(job, name).get("run", ""))
 
 
+@pytest.mark.parametrize("workflow_name,job_name,step_name", [
+    ("container-ghcr.yml", "prepare-build", "Resolve image tags"),
+    ("release-sif.yml", "prepare-release", "Resolve release, image tags, and source revisions"),
+])
+@pytest.mark.parametrize("resolution_fails", [False, True])
+def test_publish_preparation_forwards_one_complete_source_snapshot(
+    tmp_path, workflow_name, job_name, step_name, resolution_fails,
+):
+    variables = (
+        "KFU52_AMALGKIT_REPO_SHA", "KFU52_CDSKIT_REPO_SHA", "KFU52_CSUBST_REPO_SHA",
+        "KFU52_NWKIT_REPO_SHA", "BUSCO_REPO_SHA", "PAML_REPO_SHA", "KFL1OU_REPO_SHA",
+        "KFFRACTBIAS_REPO_SHA", "KFTOOLS_REPO_SHA", "RKFTOOLS_REPO_SHA", "RADTE_REPO_SHA",
+    )
+    values = {variable: f"{index:040x}" for index, variable in enumerate(variables, start=1)}
+    scripts = tmp_path / "container/scripts"
+    scripts.mkdir(parents=True)
+    resolver = scripts / "resolve_source_revisions.sh"
+    resolver.write_text(
+        "printf '%s\\n' " + " ".join(f"'{variable}={value}'" for variable, value in values.items())
+        + f"\nexit {int(resolution_fails)}\n"
+    )
+    coverage = scripts / "check_env_coverage.sh"
+    coverage.write_text("#!/bin/bash\nexit 0\n")
+    coverage.chmod(0o755)
+    (tmp_path / "VERSION").write_text("1.2.3\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    git = bin_dir / "git"
+    git.write_text('#!/bin/bash\nif [[ "$1" == rev-list ]]; then printf "%040d\\n" 1; fi\nexit 0\n')
+    git.chmod(0o755)
+    output = tmp_path / "outputs"
+    env = os.environ.copy()
+    env.update({
+        "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+        "GITHUB_OUTPUT": str(output), "GITHUB_REPOSITORY_OWNER": "example",
+        "GITHUB_REPOSITORY": "example/genegalleon", "GITHUB_SHA": "a" * 40,
+        "GITHUB_EVENT_NAME": "release", "RELEASE_EVENT_TAG": "v1.2.3",
+        "SECURITY_REFRESH_EPOCH": "2026-08-31",
+    })
+    step = step_run(load_workflow(workflow_name)["jobs"][job_name], step_name)
+    completed = subprocess.run(["bash", "-c", step], cwd=tmp_path, env=env, capture_output=True, text=True)
+    if resolution_fails:
+        assert completed.returncode != 0
+        assert not output.exists()
+    else:
+        assert completed.returncode == 0, completed.stderr
+        actual = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        for variable, value in values.items():
+            assert actual[variable.removeprefix("KFU52_").lower()] == value
+
+
 def assert_pinned_singularity_runtime(step: dict) -> None:
     run = str(step.get("run", ""))
     env = step.get("env", {})
@@ -444,8 +495,9 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
         "docker/setup-buildx-action@"
     )
     assert named_step(check_job, "Login to GHCR")["uses"].startswith("docker/login-action@")
-    assert decision.count("resolve_source_sha https://") == 11
-    assert decision.count("resolve_source_sha https://gitlab.com/") == 1
+    assert decision.count("resolve_source_revisions.sh --format env --scope all") == 1
+    assert "if ! resolved_sources=" in decision
+    assert 'export "${variable}=${revision}"' in decision
     assert "GG_BUILD_PLATFORMS=linux/amd64" in decision
     assert "GG_BUILD_PLATFORMS=linux/arm64" in decision
     assert decision.count("--print-common-revision") == 2
