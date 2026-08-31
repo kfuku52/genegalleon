@@ -312,6 +312,17 @@ def test_sif_runtime_validation_starts_after_fast_preflight_guards():
     assert "runtime-change-filter.outputs.should_run == '1'" in sif_job["if"]
 
 
+def test_sif_runtime_validation_uses_exact_temporary_aster_runtime():
+    sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    prepared = named_step(sif_job, "Validate exact runtime and reuse the shared SIF cache")
+
+    assert prepared["with"] == {
+        "image-ref": "ghcr.io/kfuku52/genegalleon:20260831-2c1e5fd-1f6ad14c41e0",
+        "runtime-input": "1f6ad14c41e03cc13d84e096c7672f54ac0d6698efd42198809e320d1d72f2fe",
+        "security-refresh-epoch": "2026-08-31",
+    }
+
+
 def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
     sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
     runner_cleanup = step_run(sif_job, "Reclaim runner disk space for SIF conversion")
@@ -413,6 +424,10 @@ def test_runtime_suite_contains_real_owned_upstream_contracts():
     assert "test_owned_runtime_contracts.py" in validation_manifest()["runtime_python_files"]
     assert "select_orthofinder_core_species.py" in contracts
     assert "SOURCE_REVISIONS" in contracts
+
+
+def test_runtime_suite_guards_aster_and_ortools_loader_compatibility():
+    assert "test_aster_ortools_runtime.py" in validation_manifest()["runtime_python_files"]
 
 
 def test_treevis_package_validation_runs_only_in_the_container_job():

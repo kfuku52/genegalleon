@@ -330,3 +330,11 @@ jobs:
 
       - name: Validate exact runtime and reuse the shared SIF cache
         uses: ./.github/actions/validate-sif
+        with:
+          # Temporary dependency-qualified runtime while Bioconda PR #68643
+          # awaits merge. It contains the exact hook-free ASTER build verified
+          # by the authoritative runtime suite; the checked-out source remains
+          # mounted and tested by the composite action.
+          image-ref: ghcr.io/kfuku52/genegalleon:20260831-2c1e5fd-1f6ad14c41e0
+          runtime-input: 1f6ad14c41e03cc13d84e096c7672f54ac0d6698efd42198809e320d1d72f2fe
+          security-refresh-epoch: "2026-08-31"

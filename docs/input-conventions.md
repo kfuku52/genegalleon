@@ -126,6 +126,13 @@ could contain summed isoforms. Follow the existing artifact-staleness policy;
 an authorized `rebuild` regenerates stale outputs, while `stop` remains the
 default. Do not adopt an unversioned GFF cache as a verified schema-2 result.
 
+A synteny gene-position table can legitimately contain only its header when
+no annotation matches the species' sequences. It must reach the existing
+empty-gene-info warning and omit that species' neighborhood rows, not crash
+during interval normalization. This does not supply missing annotations or
+relax source/provenance checks; normal and reversed intervals retain both
+original coordinate bounds.
+
 ### `workspace/input/species_genetic_code/species_genetic_code.tsv`
 
 This file is optional and is consulted only when GeneGalleon translates CDS to proteins.

@@ -154,12 +154,16 @@ def load_gene_info(path):
     # values are strings.
     out["gene_id"] = out["gene_id"].astype(str)
     out["chromosome"] = out["chromosome"].fillna("").astype(str)
-    out.loc[:, "start"] = pandas.to_numeric(out["start"], errors="coerce")
-    out.loc[:, "end"] = pandas.to_numeric(out["end"], errors="coerce")
+    out["start"] = pandas.to_numeric(out["start"], errors="coerce")
+    out["end"] = pandas.to_numeric(out["end"], errors="coerce")
     out = out.dropna(subset=["start", "end"])
-    interval_bounds = out[["start", "end"]].agg(["min", "max"], axis=1)
-    out.loc[:, "start"] = interval_bounds["min"].astype(int)
-    out.loc[:, "end"] = interval_bounds["max"].astype(int)
+    # Row-wise agg cannot concatenate results from a header-only annotation
+    # table. Compute both bounds before assignment, including for zero rows,
+    # so main() can handle empty gene information with its existing warning.
+    interval_start = out[["start", "end"]].min(axis=1)
+    interval_end = out[["start", "end"]].max(axis=1)
+    out["start"] = interval_start.astype(int)
+    out["end"] = interval_end.astype(int)
     out = out.loc[out["chromosome"] != "", :]
     out = out.drop_duplicates(subset=["gene_id"], keep="first")
     out = out.sort_values(["chromosome", "start", "end", "gene_id"], kind="mergesort").reset_index(drop=True)
