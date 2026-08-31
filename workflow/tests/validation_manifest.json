@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "environment": {
+    "KFFRACTBIAS_RUN_INTEGRATION": "1",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "runtime_python_files": [
+    "test_csubst_scan_runtime_integration.py",
+    "test_owned_runtime_contracts.py",
+    "test_rsc_runtime_integration.py",
+    "test_fractionation_bias_integration.py"
+  ],
+  "runtime_extra_python": [
+    "workflow/tests/test_hgt_end_to_end.py",
+    "workflow/tests/test_format_species_inputs_provider_pages.py::test_download_manifest_figshare_extracts_rar_member_from_extensionless_url"
+  ],
+  "r_commands": [
+    ["bash", "workflow/tests/check_treevis_package.sh"],
+    ["Rscript", "workflow/tests/test_r_scripts_parse.R"],
+    ["Rscript", "workflow/tests/test_pgls_common_rphylopars.R"],
+    ["Rscript", "workflow/tests/test_r_species_label_utils.R"],
+    ["Rscript", "workflow/tests/test_orthogroup_copy_number_trait_pgls.R"],
+    ["Rscript", "workflow/tests/test_treevis_main.R"],
+    ["Rscript", "workflow/tests/test_kf_dependency_integrations.R"]
+  ],
+  "allowed_skips": {}
+}

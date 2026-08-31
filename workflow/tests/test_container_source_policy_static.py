@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +18,12 @@ PROGRAM_SHA_VARS = (
     "RKFTOOLS_REPO_SHA",
     "RADTE_REPO_SHA",
 )
+
+
+def declared_context_inputs():
+    return subprocess.check_output(
+        [sys.executable, str(REPO_ROOT / "container/scripts/list_build_inputs.py")], text=True
+    ).splitlines()
 
 
 def test_program_source_defaults_are_moving_branches_not_commit_pins():
@@ -84,7 +91,8 @@ def test_container_build_paths_share_python_compatibility_constraints():
     assert (
         "@@STAGING_ROOT@@/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt"
     ) in apptainer_template
-    assert ('cp "${repo_root}/container/pip-compatibility.requirements.txt" "${staging_root}/"') in apptainer_build
+    assert "--stage-native-context" in apptainer_build
+    assert "container/pip-compatibility.requirements.txt" in declared_context_inputs()
     assert "python -m pip check" in dockerfile
     assert "python -m pip check" in apptainer_template
     for package in (
@@ -204,8 +212,11 @@ def test_treevis_package_is_part_of_every_repository_owned_image_context():
     assert "R CMD INSTALL /opt/pg/src/genegalleon.treevis" in dockerfile
     build_hash = (REPO_ROOT / "container" / "scripts" / "compute_build_input_hash.sh").read_text(encoding="utf-8")
     assert "compute_build_input_hash.sh" in buildx
-    assert "find workflow/support/treevis -type f -print" in build_hash
-    assert 'cp -R "${repo_root}/workflow/support/treevis" "${staging_root}/"' in apptainer_build
+    assert "list_build_inputs.py" in build_hash
+    inputs = declared_context_inputs()
+    assert "workflow/support/treevis/DESCRIPTION" in inputs
+    assert "workflow/support/treevis/NAMESPACE" in inputs
+    assert "--stage-native-context" in apptainer_build
     assert "@@STAGING_ROOT@@/treevis /opt/pg/src/genegalleon.treevis" in apptainer_template
     assert "container/scripts/compute_build_input_hash.sh" in publish_workflow
 
@@ -222,7 +233,7 @@ def test_container_build_paths_pin_the_same_base_image_digest():
     assert docker_base.group(0) == apptainer_base.group(0)
 
 
-def test_container_build_paths_include_rar_extraction_runtime():
+def test_container_build_paths_include_archive_interoperability_commands():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     apptainer_template = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")
     required_commands = (REPO_ROOT / "container" / "spec" / "required_commands.tsv").read_text(encoding="utf-8")
@@ -234,3 +245,7 @@ def test_container_build_paths_include_rar_extraction_runtime():
     assert "libarchive-tools" in apptainer_template
     assert "base\tbsdtar" in required_commands
     assert "base\tbsdtar" in arm64_required_commands
+    assert "apt-get install -y --no-install-recommends unzip" in dockerfile
+    assert "        unzip \\" in apptainer_template
+    assert "base\tunzip" in required_commands
+    assert "base\tunzip" in arm64_required_commands

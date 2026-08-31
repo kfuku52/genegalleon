@@ -1,3 +1,5 @@
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,11 +21,8 @@ INTEGRATION_WORKFLOW_FILES = {
     "test_gg_input_generation_end_to_end.py",
     "test_hgt_end_to_end.py",
 }
-RUNTIME_FILES = {
-    "test_csubst_scan_runtime_integration.py",
-    "test_owned_runtime_contracts.py",
-    "test_rsc_runtime_integration.py",
-}
+VALIDATION_MANIFEST = json.loads(Path(__file__).with_name("validation_manifest.json").read_text())
+RUNTIME_FILES = set(VALIDATION_MANIFEST["runtime_python_files"])
 SMOKE_NODE_IDS = {
     "workflow/tests/test_busco_hmmsearch_wrapper.py::test_busco_output_exists_uses_canonical_path_without_directory_rescan",
     "workflow/tests/test_busco_hmmsearch_wrapper.py::test_hmmsearch_wrapper_creates_modified_fas_symlink_when_missing",
@@ -48,6 +47,8 @@ def _test_lane(filename: str) -> str:
 
 
 def pytest_addoption(parser):
+    parser.addoption("--gg-strict-runtime", action="store_true",
+                     help="Enable required integrations and fail on undeclared runtime skips")
     parser.addoption(
         "--gg-suite",
         action="store",
@@ -61,6 +62,35 @@ def pytest_addoption(parser):
         ),
         help="Collect one non-overlapping GeneGalleon test suite.",
     )
+
+
+class RuntimeSkipGuard:
+    def __init__(self, config):
+        self.config = config
+        self.unexpected = set()
+
+    def pytest_runtest_logreport(self, report):
+        if report.skipped:
+            allowed_reason = VALIDATION_MANIFEST["allowed_skips"].get(report.nodeid)
+            if not allowed_reason or allowed_reason not in str(report.longrepr):
+                self.unexpected.add(report.nodeid)
+
+    def pytest_collectreport(self, report):
+        if report.skipped:
+            self.unexpected.add(report.nodeid)
+
+    def pytest_sessionfinish(self, session):
+        if self.unexpected and not hasattr(self.config, "workerinput"):
+            terminal = self.config.pluginmanager.get_plugin("terminalreporter")
+            if terminal:
+                terminal.write_sep("!", "Required runtime checks were skipped: " + ", ".join(sorted(self.unexpected)))
+            session.exitstatus = 1
+
+
+def pytest_configure(config):
+    if config.getoption("--gg-strict-runtime") or config.getoption("--gg-suite") == "runtime":
+        os.environ.update(VALIDATION_MANIFEST["environment"])
+        config.pluginmanager.register(RuntimeSkipGuard(config), "gg-runtime-skip-guard")
 
 
 def pytest_ignore_collect(collection_path: Path, config):

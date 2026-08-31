@@ -90,15 +90,7 @@ cafe5_sha="${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba7
 
 context_digest="$(
   cd "${repo_root}"
-  {
-    printf '%s\n' \
-      .dockerignore \
-      container/Dockerfile \
-      container/pip-compatibility.requirements.txt \
-      container/source_branches.env
-    find container/env container/spec container/testdata container/scripts -type f -print
-    find workflow/support/treevis -type f -print
-  } | LC_ALL=C sort | while IFS= read -r path; do
+  python3 "${script_dir}/list_build_inputs.py" | while IFS= read -r path; do
     printf '%s\t%s\n' "${path}" "$(sha256_file "${path}")"
   done | sha256_stream
 )"

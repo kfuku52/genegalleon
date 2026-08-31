@@ -68,6 +68,45 @@ def test_nested_readers_and_exception_release(tmp_path):
         assert acquired
 
 
+@pytest.mark.parametrize("nonblocking", [False, True])
+def test_owner_releases_gate_between_mkdir_and_inspection(tmp_path, monkeypatch, nonblocking):
+    path = tmp_path / "family.lock"
+    owner = acquire(path, exclusive=True)
+    gate = Path(str(path) + ".namespace-v1/gate")
+    original_mkdir = Path.mkdir
+    released = False
+
+    def release_after_collision(directory, *args, **kwargs):
+        nonlocal released
+        try:
+            return original_mkdir(directory, *args, **kwargs)
+        except FileExistsError:
+            if directory == gate and not released:
+                release(path, owner, exclusive=True)
+                released = True
+            raise
+
+    monkeypatch.setattr(Path, "mkdir", release_after_collision)
+    contender = acquire(path, exclusive=True, nonblocking=nonblocking, timeout=1)
+    assert released
+    if nonblocking:
+        assert contender is None
+        contender = acquire(path, exclusive=True, nonblocking=True)
+    assert contender is not None
+    release(path, contender, exclusive=True)
+
+
+def test_regular_file_at_gate_remains_an_error(tmp_path):
+    path = tmp_path / "family.lock"
+    with namespace_lock(path, exclusive=True):
+        pass
+    gate = Path(str(path) + ".namespace-v1/gate")
+    gate.write_text("not a lock directory")
+    with pytest.raises(NamespaceLockError, match="Invalid lock gate"):
+        acquire(path, exclusive=True, nonblocking=True)
+    assert gate.read_text() == "not a lock directory"
+
+
 @pytest.mark.parametrize("part", ["marker", "root", "readers", "gate"])
 def test_symlinked_coordination_state_is_rejected(tmp_path, part):
     path = tmp_path / "family.lock"

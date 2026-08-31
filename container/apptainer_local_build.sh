@@ -218,12 +218,8 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "${staging_root}"
-cp -R "${repo_root}/container/env" "${staging_root}/"
-cp -R "${repo_root}/container/spec" "${staging_root}/"
-cp -R "${repo_root}/container/testdata" "${staging_root}/"
-cp -R "${repo_root}/container/scripts" "${staging_root}/"
-cp -R "${repo_root}/workflow/support/treevis" "${staging_root}/"
-cp "${repo_root}/container/pip-compatibility.requirements.txt" "${staging_root}/"
+python3 "${repo_root}/container/scripts/list_build_inputs.py" \
+  --stage-native-context "${staging_root}"
 
 (
   cd "${repo_root}"

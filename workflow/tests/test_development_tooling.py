@@ -2,10 +2,13 @@ import ast
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 from shell_static_helpers import REPO_ROOT
 
 RUN_IN_RUNTIME = REPO_ROOT / "workflow" / "tests" / "run_in_runtime.sh"
@@ -90,6 +93,7 @@ def test_version_helper_previews_and_updates_semver_atomically(tmp_path: Path):
 def test_runtime_runner_dispatches_to_requested_docker_image(tmp_path: Path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
     docker_log = tmp_path / "docker.log"
     docker = bin_dir / "docker"
     docker.write_text(
@@ -123,6 +127,85 @@ def test_runtime_runner_dispatches_to_requested_docker_image(tmp_path: Path):
     assert f"--user {os.getuid()}:{os.getgid()}" in calls
     assert f"--volume {REPO_ROOT}:{REPO_ROOT}" in calls
     assert f"--workdir {REPO_ROOT} local/genegalleon:test python --version" in calls
+
+
+@pytest.mark.parametrize("runtime", ["auto", "sif"])
+@pytest.mark.parametrize("entrypoint", ["sif", "runtime", "dev"])
+def test_validation_entrypoints_discover_versioned_hpc_runtime(tmp_path, runtime, entrypoint):
+    package_root = tmp_path / "packages"
+    engine = package_root / "apptainer" / "1.4.5" / "bin" / "apptainer"
+    engine.parent.mkdir(parents=True)
+    engine.write_text('#!/bin/bash\nprintf "%s\\n" "$@"\n')
+    engine.chmod(0o755)
+    sif = tmp_path / "genegalleon.sif"
+    sif.touch()
+    env = os.environ.copy()
+    env.update({"PATH": "/usr/bin:/bin", "GENEGALLEON_SIF": str(sif), "GG_TEST_RUNTIME": runtime,
+                "GG_CONTAINER_RUNTIME_PACKAGE_ROOT": str(package_root), "GG_CONTAINER_RUNTIME_LEGACY_DIR": str(tmp_path / "none"),
+                "GG_RUNTIME_FRESHNESS": "off"})
+    if entrypoint == "dev":
+        command = ["bash", str(REPO_ROOT / "dev"), "check", "fast"]
+    else:
+        script = RUN_IN_RUNTIME if entrypoint == "runtime" else RUN_IN_RUNTIME.with_name("run_in_sif.sh")
+        command = ["bash", str(script), "python", "--version"]
+    completed = _run(*command, env=env)
+    assert completed.returncode == 0, completed.stderr
+    assert "--cleanenv\n" in completed.stdout
+    assert str(sif) in completed.stdout
+    assert "PYTHONDONTWRITEBYTECODE=1" in completed.stdout
+
+
+def test_build_hash_ignores_import_and_editor_artifacts_but_tracks_copied_inputs(tmp_path):
+    root = tmp_path / "repo"
+    shutil.copytree(REPO_ROOT / "container", root / "container", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(REPO_ROOT / "workflow/support/treevis", root / "workflow/support/treevis")
+    shutil.copy2(REPO_ROOT / ".dockerignore", root / ".dockerignore")
+    tool = root / "container/scripts/compute_build_input_hash.sh"
+
+    def compute():
+        completed = _run("bash", str(tool), "--runtime", "2026-08-30")
+        assert completed.returncode == 0, completed.stderr
+        return completed.stdout
+
+    before = compute()
+    imported = _run("python3", "-c", "import importlib.util, sys; sys.dont_write_bytecode=False; "
+                    "s=importlib.util.spec_from_file_location('extract',sys.argv[1]); "
+                    "s.loader.exec_module(importlib.util.module_from_spec(s))",
+                    str(root / "container/scripts/extract_notung_jar.py"))
+    assert imported.returncode == 0, imported.stderr
+    assert list((root / "container/scripts/__pycache__").glob("*.pyc"))
+    (root / "container/env/.DS_Store").write_text("finder metadata")
+    (root / "container/env/base.required.txt~").write_text("editor backup")
+    editor_cache = root / "container/env/editor.swp/content.txt"
+    editor_cache.parent.mkdir()
+    editor_cache.write_text("ignored directory contents")
+    (root / "container/scripts/not-copied-into-image.sh").write_text("not a Docker input")
+    assert compute() == before
+    (root / "container/env/new-untracked-input.txt").write_text("new runtime input")
+    added = compute()
+    assert added != before
+    with (root / "container/env/base.required.txt").open("a") as handle:
+        handle.write("\n# actual copied source edit\n")
+    assert compute() != added
+    staging = tmp_path / "native-context"
+    staged = _run("python3", str(root / "container/scripts/list_build_inputs.py"),
+                  "--stage-native-context", str(staging))
+    assert staged.returncode == 0, staged.stderr
+    assert (staging / "env/new-untracked-input.txt").is_file()
+    assert (staging / "treevis/DESCRIPTION").is_file()
+    assert (staging / "source_branches.env").read_bytes() == (root / "container/source_branches.env").read_bytes()
+    assert (staging / "pip-compatibility.requirements.txt").read_bytes() == (
+        root / "container/pip-compatibility.requirements.txt"
+    ).read_bytes()
+    assert not list(staging.rglob("*.pyc"))
+    assert not list(staging.rglob(".DS_Store"))
+    assert not (staging / "scripts/not-copied-into-image.sh").exists()
+
+
+def test_docker_context_excludes_the_same_generated_files_as_build_hash():
+    patterns = set((REPO_ROOT / ".dockerignore").read_text().splitlines())
+    assert {"**/__pycache__", "**/.pytest_cache", "**/.ruff_cache", "**/*.pyc", "**/*.pyo",
+            "**/.DS_Store", "**/*.swp", "**/*.swo", "**/*~"} <= patterns
 
 
 def test_build_input_hash_is_deterministic_and_tracks_version():
@@ -206,6 +289,7 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
     docker = bin_dir / "docker"
     docker.write_text(
         "#!/usr/bin/env bash\n"
@@ -269,6 +353,7 @@ def test_docker_runtime_freshness_daily_cache_honors_one_off_revision_overrides(
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
     docker = bin_dir / "docker"
     docker.write_text(
         "#!/usr/bin/env bash\n"
@@ -337,6 +422,7 @@ def test_docker_runtime_freshness_daily_cache_honors_source_ref_overrides(
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
     git = bin_dir / "git"
     git.write_text(
         "#!/usr/bin/env bash\n"
@@ -406,6 +492,7 @@ def test_runtime_freshness_fallback_cache_is_private_and_scoped_by_uid(tmp_path:
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
     git = bin_dir / "git"
     git.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
     git.chmod(git.stat().st_mode | stat.S_IXUSR)
@@ -559,6 +646,7 @@ def test_container_image_rejects_invalid_input_hash_labels():
 def test_fetch_git_repo_propagates_clone_failures_with_or_without_a_ref(tmp_path: Path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
     git = bin_dir / "git"
     git.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
     git.chmod(git.stat().st_mode | stat.S_IXUSR)
@@ -590,6 +678,7 @@ def test_fetch_git_repo_propagates_clone_failures_with_or_without_a_ref(tmp_path
 def test_docker_to_sif_conversion_preserves_existing_output_on_failure(tmp_path: Path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
     engine = bin_dir / "apptainer"
     engine.write_text(
         "#!/usr/bin/env bash\n"
@@ -633,6 +722,7 @@ def test_sif_build_wrappers_publish_from_an_adjacent_staging_path():
 def test_download_url_preserves_existing_destination_when_transfers_fail(tmp_path: Path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
     for command_name in ("curl", "wget"):
         command = bin_dir / command_name
         command.write_text(

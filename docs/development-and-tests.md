@@ -10,6 +10,7 @@ host-local Python, R, or command-line tools.
 bash ./dev check fast
 bash ./dev check runtime
 bash ./dev check r
+bash ./dev check full
 ```
 
 `workflow/tests/run_in_runtime.sh`, used by `dev`, prefers a usable SIF on
@@ -51,8 +52,9 @@ bash workflow/tests/run_in_sif.sh bash workflow/tests/check_treevis_package.sh
 
 `workflow/tests/run_in_sif.sh` expects `./genegalleon.sif` at the repository
 root. Set `GENEGALLEON_SIF=/path/to/genegalleon.sif` when using a different SIF
-path. The wrapper also discovers versioned Apptainer/Singularity installations
-under `/opt/pkg` and the legacy NIG package path.
+path. Both validation wrappers and `dev` discover versioned
+Apptainer/Singularity installations under `/opt/pkg` and the legacy NIG
+package path, using the same discovery helper as workflow entrypoints.
 
 To expose an external read-only fixture or data directory at the same absolute
 path inside the SIF, provide one absolute path per line:
@@ -107,11 +109,43 @@ export PYTHONPYCACHEPREFIX="${TMPDIR:-/tmp}/genegalleon_pycache"
 ```
 
 GeneGalleon entrypoints and core bootstraps now do this automatically for wrapper-driven runs.
+The validation wrappers instead set `PYTHONDONTWRITEBYTECODE=1`, so their
+imports do not write bytecode into the mounted checkout.
 
-## Run the full Python test suite
+CI resolves the moving `csubst` branch once for its Python wheel preparation
+job. Fast and integration lanes install the resulting shared artifact with
+`--no-index`; they do not rebuild the same VCS dependency independently. The
+wheel cache includes the resolved source, Python/platform identity, requirements,
+constraints, and preparation script. Only trusted default-branch runs save this
+cache, without fallback cache keys; run artifacts expire after one day. Resolved
+commits remain temporary build metadata, never repository defaults.
+
+## Run all Python and R checks
 
 ```bash
-bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests
+bash ./dev check full
+```
+
+`workflow/tests/validation_manifest.json` declares the required runtime Python
+files, extra runtime scenarios, integration environment, and all seven R
+commands. `run_checks.py` executes this same list for `dev`, Docker image
+publication, release SIFs, and the CI SIF job. `dev check full` runs all Python
+tests and every declared R check; `dev check r` runs the complete R list.
+`dev check runtime` also enables the real kfFractBias JCVI/LAST integrations.
+Required Python checks fail the validation if they are skipped unexpectedly.
+The manifest currently permits no skips, and the image includes system `unzip`
+for archive interoperability checks.
+
+To inspect the commands without starting a container:
+
+```bash
+python3 workflow/tests/run_checks.py runtime --list
+```
+
+For just the full Python suite, with the same mandatory integration policy:
+
+```bash
+bash workflow/tests/run_in_sif.sh python -m pytest -q --gg-strict-runtime workflow/tests
 ```
 
 This covers a mix of:
@@ -131,6 +165,15 @@ working tree.
 ## Run focused test subsets
 
 Useful targeted commands:
+
+```bash
+bash ./dev check fast workflow/tests/test_shared_namespace_lock.py -k release -x
+```
+
+Arguments after the suite are forwarded to pytest, including explicit paths,
+`-k`, `-x`, and `--lf`; no extra test-directory argument expands an explicitly
+selected file back to the full suite. Runtime/full commands still run their
+declared R checks; use a focused Python lane when only Python feedback is needed.
 
 ```bash
 bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_shell_static_safety.py
@@ -166,7 +209,8 @@ bash workflow/tests/run_in_sif.sh python -m pytest -q --gg-suite runtime workflo
 ```
 
 Use `--gg-suite smoke` for the minimal CI preflight. Suite membership is
-defined in `workflow/tests/conftest.py`; pytest markers expose the same lane
+defined in `workflow/tests/conftest.py`, with runtime files coming from the
+shared validation manifest; pytest markers expose the same lane
 metadata during full-suite collection. Strict marker and configuration checks
 are enabled, so new marker names must be registered in `pyproject.toml`.
 The fast and integration CI lanes use two pytest-xdist workers. `bash ./dev`
@@ -181,12 +225,21 @@ publisher runs this lane against each newly built architecture, so an
 upstream-only change is checked without requiring a GeneGalleon commit.
 
 CI caches a validated SIF by an exact runtime-content hash. The key includes
-the platform, daily security epoch, all resolved upstream commits, and every
+the platform, Singularity version, daily security epoch, all resolved upstream commits, and every
 file copied into the container, but excludes GeneGalleon revision/version
 metadata because the checkout is mounted at test time. A cache miss may reuse
 the published daily image only when its runtime label matches exactly;
 otherwise CI builds the current container before conversion. The cache is
 saved only after all SIF validation checks succeed on the default branch.
+The daily publisher primes that same cache from its immutable multi-architecture
+image, passing the already resolved runtime identity and security epoch. It
+does not resolve moving branches a second time during SIF preparation. Each
+commit still validates its mounted workflow source, even on a cache hit.
+Version-only and documentation-only changes do not launch the heavy SIF job.
+After the SIF's embedded identity is checked against that exact input, the
+validation wrapper does not re-query branch tips; a branch moving midway
+through the run cannot replace the snapshot being validated. A new security
+epoch or different source revision still requires a different cache entry.
 
 ## Run R-side parse checks
 
@@ -220,10 +273,23 @@ bash ./dev config-schema markdown
 Use `bash ./dev bump patch` (or `minor`/`major`) for an atomic Semantic Version
 update; `python workflow/support/bump_version.py patch --dry-run` previews it.
 
-`gg_genome_annotation_core.sh` also supports `GG_CORE_SOURCE_ONLY=1` when a
+`gg_genome_annotation_core.sh` and `gg_transcriptome_generation_core.sh`
+support `GG_CORE_SOURCE_ONLY=1` when a
 focused shell test needs to load its helper functions without starting a
 workflow. Its functions and ordered stages remain in the self-contained core
 file; the switch is a test boundary, not a sourced production architecture.
+FASTQ recovery tests load the real transcriptome helper this way and exercise
+connection interruption, process restart, changed objects, and invalid HTTP
+ranges against a loopback server.
+
+For immediate host-only syntax, Ruff, and configuration checks:
+
+```bash
+bash ./dev lint
+```
+
+This needs Python 3 and Ruff on the host and does not establish runtime
+compatibility. Use the container checks above before publishing changes.
 
 CI also runs `actionlint` against parsed GitHub Actions workflows and runs
 ShellCheck at warning severity against every tracked shell script. Local
@@ -231,6 +297,7 @@ equivalents are:
 
 ```bash
 actionlint
+python3 workflow/tests/check_composite_actions.py
 ```
 
 ```bash
@@ -238,6 +305,25 @@ mapfile -d '' -t scripts < <(git ls-files -z '*.sh')
 scripts+=(dev)
 shellcheck -S warning -x -e SC1091,SC2034,SC2154,SC2317 "${scripts[@]}"
 ```
+
+## Database memory and timing comparisons
+
+`benchmark_orthogroup_database.py` creates deterministic many-family and
+single-large-file workloads (131,072 branch rows each), runs each build in a
+fresh process, and records wall time, Linux peak RSS, row counts, and a digest
+of sorted SQLite contents and schema. Run both revisions in the same container,
+without concurrent builds or tests, and compare the logical digests before
+interpreting performance differences:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/tests/benchmark_orthogroup_database.py \
+  --output /tmp/database-current.json
+```
+
+Use `--source /path/to/generate_orthogroup_database.py` to measure a saved
+baseline script; ensure that path is mounted in the runtime. These synthetic
+workloads exercise bounded input buffering, not the peak memory of the global
+BH-FDR calculation or a production workload of arbitrary size.
 
 ## Dependency-aware debug harness
 

@@ -278,7 +278,7 @@ jobs:
             -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
             -w "${GITHUB_WORKSPACE}" \
             "${IMAGE}@${DIGEST}" \
-            python -m pytest -q --gg-suite runtime workflow/tests
+            python workflow/tests/run_checks.py runtime
 
       - name: Export digest
         shell: bash
@@ -510,10 +510,12 @@ jobs:
         shell: bash
         env:
           GENEGALLEON_SIF: ${{ needs.prepare-release.outputs.sif_name }}
+          # Exact release identity was verified immediately above.
+          GG_RUNTIME_FRESHNESS: "off"
         run: |
           set -euo pipefail
           bash workflow/tests/run_in_sif.sh \
-            python -m pytest -q --gg-suite runtime workflow/tests
+            python workflow/tests/run_checks.py runtime
 
       - name: Report SIF conversion disk usage
         if: always()

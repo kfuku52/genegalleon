@@ -82,6 +82,7 @@ fi
 
 exec "${container_engine}" exec \
   --cleanenv \
+  --env PYTHONDONTWRITEBYTECODE=1 \
   "${bind_args[@]}" \
   --pwd "${repo_root}" \
   "${sif_path}" \

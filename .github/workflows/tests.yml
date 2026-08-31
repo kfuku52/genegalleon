@@ -41,7 +41,7 @@ jobs:
           else
             while IFS= read -r path; do
               case "${path}" in
-                .dockerignore|VERSION|gg_container_build_entrypoint.sh|container/*|workflow/*|.github/workflows/tests.yml)
+                .dockerignore|dev|pyproject.toml|gg_container_build_entrypoint.sh|container/*|workflow/*|.github/workflows/tests.yml|.github/actions/*)
                   should_run=1
                   break
                   ;;
@@ -81,8 +81,70 @@ jobs:
             --durations-min=0.5 \
             workflow/tests
 
+  python-wheels:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Resolve moving test dependency once
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source container/source_branches.env
+          csubst_sha="$(bash container/scripts/resolve_git_branch_sha.sh https://github.com/kfuku52/csubst.git "${GG_SOURCE_CSUBST_REPO_REF}")"
+          [[ "${csubst_sha}" =~ ^[0-9a-f]{40}$ ]]
+          echo "csubst_sha=${csubst_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore test wheels by resolved source and constraints
+        id: wheels-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/gg-test-wheels
+          key: test-wheels-${{ runner.os }}-${{ runner.arch }}-py312-${{ hashFiles('workflow/tests/requirements.txt', 'workflow/tests/requirements.lock.txt', 'workflow/tests/prepare_test_wheels.py') }}-${{ steps.source.outputs.csubst_sha }}
+
+      - name: Build missing test wheels
+        if: steps.wheels-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          CSUBST_SHA: ${{ steps.source.outputs.csubst_sha }}
+        run: |
+          set -euo pipefail
+          python workflow/tests/prepare_test_wheels.py \
+            --directory "${RUNNER_TEMP}/gg-test-wheels" --csubst-sha "${CSUBST_SHA}"
+          python -m pip wheel \
+            --constraint workflow/tests/requirements.lock.txt \
+            --requirement "${RUNNER_TEMP}/gg-test-wheels/build-requirements.txt" \
+            --wheel-dir "${RUNNER_TEMP}/gg-test-wheels"
+
+      - name: Save trusted test wheels
+        if: >-
+          steps.wheels-cache.outputs.cache-hit != 'true' &&
+          github.event_name != 'pull_request' &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/gg-test-wheels
+          key: ${{ steps.wheels-cache.outputs.cache-primary-key }}
+
+      - name: Share exact wheels with parallel test lanes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-test-wheels
+          path: ${{ runner.temp }}/gg-test-wheels
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   python-fast:
-    needs: python-smoke
+    needs: [python-smoke, python-wheels]
     name: python-fast (Python 3.12)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -95,16 +157,19 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: |
-            workflow/tests/requirements.txt
-            workflow/tests/requirements.lock.txt
+
+      - name: Download exact test wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-test-wheels
+          path: ${{ runner.temp }}/gg-test-wheels
 
       - name: Install test dependencies
         run: |
-          python -m pip install \
+          python -m pip install --no-index \
+            --find-links "${RUNNER_TEMP}/gg-test-wheels" \
             --constraint workflow/tests/requirements.lock.txt \
-            --requirement workflow/tests/requirements.txt
+            --requirement "${RUNNER_TEMP}/gg-test-wheels/install-requirements.txt"
 
       - name: Run fast Python tests
         run: |
@@ -117,7 +182,7 @@ jobs:
             workflow/tests
 
   python-heavy:
-    needs: python-smoke
+    needs: [python-smoke, python-wheels]
     name: python-heavy (${{ matrix.shard.name }})
     runs-on: ubuntu-24.04
     timeout-minutes: 75
@@ -138,16 +203,19 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: |
-            workflow/tests/requirements.txt
-            workflow/tests/requirements.lock.txt
+
+      - name: Download exact test wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-test-wheels
+          path: ${{ runner.temp }}/gg-test-wheels
 
       - name: Install test dependencies
         run: |
-          python -m pip install \
+          python -m pip install --no-index \
+            --find-links "${RUNNER_TEMP}/gg-test-wheels" \
             --constraint workflow/tests/requirements.lock.txt \
-            --requirement workflow/tests/requirements.txt
+            --requirement "${RUNNER_TEMP}/gg-test-wheels/install-requirements.txt"
 
       - name: Run heavy Python tests
         run: |
@@ -187,6 +255,7 @@ jobs:
       - name: Validate GitHub Actions workflows
         run: |
           "$(go env GOPATH)/bin/actionlint"
+          python workflow/tests/check_composite_actions.py --actionlint "$(go env GOPATH)/bin/actionlint"
 
       - name: Bash syntax check for workflow scripts
         run: |
@@ -206,7 +275,7 @@ jobs:
 
       - name: Ruff check all Python sources
         run: |
-          python -m ruff check workflow
+          python -m ruff check workflow container/scripts
 
       - name: Shell static safety checks
         run: |
@@ -259,263 +328,5 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Resolve exact validation runtime input
-        id: runtime-input
-        shell: bash
-        run: |
-          set -euo pipefail
-          security_refresh_epoch="$(date -u +%F)"
-          resolved_sources="${RUNNER_TEMP}/resolved-sources.env"
-          bash container/scripts/resolve_source_revisions.sh \
-            --format env \
-            --scope all \
-            > "${resolved_sources}"
-          set -a
-          # shellcheck disable=SC1090
-          source "${resolved_sources}"
-          set +a
-          export GG_BUILD_PLATFORMS=linux/amd64
-          export GG_BUILD_VCS_REF=runtime-validation
-          export GG_BUILD_VERSION=runtime-validation
-          runtime_input="$(
-            bash container/scripts/compute_build_input_hash.sh \
-              --runtime \
-              "${security_refresh_epoch}"
-          )"
-          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-          repo_name="$(basename "${GITHUB_REPOSITORY}")"
-          {
-            echo "value=${runtime_input}"
-            echo "security_refresh_epoch=${security_refresh_epoch}"
-            echo "published_image=ghcr.io/${owner}/${repo_name}"
-          } >> "${GITHUB_OUTPUT}"
-
-      - name: Restore exact validation SIF
-        id: sif-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: genegalleon.sif
-          key: sif-runtime-${{ runner.os }}-${{ runner.arch }}-singularity-4.5.0-${{ steps.runtime-input.outputs.value }}
-
-      - name: Reclaim runner disk space for SIF conversion
-        if: steps.sif-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Disk usage before cleanup:"
-          df -h /
-          sudo rm -rf -- \
-            /opt/ghc \
-            /usr/local/lib/android \
-            /usr/share/dotnet
-          sudo apt-get clean
-          docker system prune --all --force --volumes
-          echo "Disk usage after cleanup:"
-          df -h /
-
-      - name: Set up Docker Buildx
-        if: steps.sif-cache.outputs.cache-hit != 'true'
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-
-      - name: Expose GitHub runtime for BuildKit cache
-        if: steps.sif-cache.outputs.cache-hit != 'true'
-        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4
-
-      - name: Select published or local validation image
-        if: steps.sif-cache.outputs.cache-hit != 'true'
-        id: validation-image
-        shell: bash
-        env:
-          EXPECTED_RUNTIME_INPUT: ${{ steps.runtime-input.outputs.value }}
-          PUBLISHED_IMAGE: ${{ steps.runtime-input.outputs.published_image }}
-        run: |
-          set -euo pipefail
-          image_metadata="$(
-            docker buildx imagetools inspect \
-              --format '{{json .Image}}' \
-              "${PUBLISHED_IMAGE}:latest" \
-              2>/dev/null || true
-          )"
-          if [[ -n "${image_metadata}" ]] && \
-             python container/scripts/check_published_build_input.py \
-               --label io.genegalleon.runtime-input \
-               --expected "linux/amd64=${EXPECTED_RUNTIME_INPUT}" \
-               <<< "${image_metadata}"; then
-            echo "source=registry" >> "${GITHUB_OUTPUT}"
-            echo "Published image has the exact validation runtime input."
-          else
-            echo "source=local" >> "${GITHUB_OUTPUT}"
-            echo "Published runtime is missing or stale; building the current runtime."
-          fi
-
-      - name: Build current GeneGalleon image
-        if: steps.sif-cache.outputs.cache-hit != 'true' && steps.validation-image.outputs.source == 'local'
-        shell: bash
-        env:
-          CACHE_FROM: type=gha,scope=container-linux-amd64
-          CACHE_TO: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'type=gha,mode=max,scope=container-linux-amd64,ignore-error=true' || '' }}
-          SECURITY_REFRESH_EPOCH: ${{ steps.runtime-input.outputs.security_refresh_epoch }}
-        run: |
-          set -euo pipefail
-          set -a
-          # shellcheck disable=SC1090
-          source "${RUNNER_TEMP}/resolved-sources.env"
-          set +a
-          BUILD_SIF=0 \
-          IMAGE_SOURCE=local \
-          IMAGE=local/genegalleon \
-          TAG=ci \
-          MODE=load \
-          PLATFORMS=linux/amd64 \
-          FORCE_LOAD_IN_CI=1 \
-            bash ./gg_container_build_entrypoint.sh
-
-      - name: Reclaim BuildKit cache before SIF conversion
-        if: steps.sif-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Container storage before BuildKit cleanup:"
-          docker system df
-          docker buildx prune --all --force
-          echo "Disk usage after BuildKit cleanup:"
-          df -h /
-          if [[ "${{ steps.validation-image.outputs.source }}" == "local" ]]; then
-            docker system df
-            image_bytes="$(docker image inspect --format '{{.Size}}' local/genegalleon:ci)"
-            reserve_bytes=$((6 * 1024 * 1024 * 1024))
-            required_bytes=$((2 * image_bytes + reserve_bytes))
-            available_bytes="$(df --output=avail -B1 "${RUNNER_TEMP}" | awk 'NR == 2 { print $1 }')"
-            printf 'SIF disk preflight: image=%s required_free=%s available=%s bytes\n' \
-              "${image_bytes}" "${required_bytes}" "${available_bytes}"
-            if (( available_bytes < required_bytes )); then
-              echo "::error::Insufficient disk space for SIF conversion: need ${required_bytes} bytes, have ${available_bytes} bytes."
-              exit 1
-            fi
-          fi
-          free -h
-
-      - name: Install Singularity runtime
-        id: runtime
-        shell: bash
-        env:
-          SINGULARITY_CE_VERSION: "4.5.0"
-          SINGULARITY_CE_DEB_SHA256: "85e6f7af5e7aad5b1bf28183ce333998bd37eb8f4769af352c47a5153f3373fb"
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y ca-certificates curl
-          deb_name="singularity-ce_${SINGULARITY_CE_VERSION}-noble_amd64.deb"
-          deb_path="${RUNNER_TEMP}/${deb_name}"
-          curl \
-            --fail \
-            --location \
-            --proto '=https' \
-            --retry 5 \
-            --retry-all-errors \
-            --show-error \
-            --silent \
-            --tlsv1.2 \
-            --output "${deb_path}" \
-            "https://github.com/sylabs/singularity/releases/download/v${SINGULARITY_CE_VERSION}/${deb_name}"
-          printf '%s  %s\n' "${SINGULARITY_CE_DEB_SHA256}" "${deb_path}" \
-            | sha256sum --check --strict
-          sudo apt-get install -y "${deb_path}"
-          if ! command -v singularity >/dev/null 2>&1; then
-            echo "SingularityCE installation did not provide the singularity command."
-            exit 1
-          fi
-          installed_version="$(singularity version)"
-          expected_version="${SINGULARITY_CE_VERSION}-noble"
-          if [[ "${installed_version}" != "${expected_version}" ]]; then
-            echo "Expected SingularityCE ${expected_version}, found ${installed_version}."
-            exit 1
-          fi
-          echo "SingularityCE ${installed_version}"
-          echo "engine=singularity" >> "${GITHUB_OUTPUT}"
-
-      - name: Build validation SIF from current image
-        if: steps.sif-cache.outputs.cache-hit != 'true'
-        shell: bash
-        env:
-          APPTAINER_CACHEDIR: ${{ runner.temp }}/apptainer-cache
-          APPTAINER_DISABLE_CACHE: "1"
-          APPTAINER_TMPDIR: ${{ runner.temp }}/apptainer-tmp
-          SINGULARITY_CACHEDIR: ${{ runner.temp }}/singularity-cache
-          SINGULARITY_DISABLE_CACHE: "1"
-          SINGULARITY_TMPDIR: ${{ runner.temp }}/singularity-tmp
-          TMPDIR: ${{ runner.temp }}/singularity-transport-tmp
-        run: |
-          set -euo pipefail
-          mkdir -p \
-            "${APPTAINER_CACHEDIR}" \
-            "${APPTAINER_TMPDIR}" \
-            "${SINGULARITY_CACHEDIR}" \
-            "${SINGULARITY_TMPDIR}" \
-            "${TMPDIR}"
-          echo "Disk usage before SIF conversion:"
-          df -h /
-          if [[ "${{ steps.validation-image.outputs.source }}" == "registry" ]]; then
-            source_type=docker
-            image="${{ steps.runtime-input.outputs.published_image }}"
-            tag=latest
-          else
-            source_type=docker-daemon
-            image=local/genegalleon
-            tag=ci
-          fi
-          SOURCE="${source_type}" \
-          IMAGE="${image}" \
-          TAG="${tag}" \
-          ENGINE="${{ steps.runtime.outputs.engine }}" \
-          OUT="${GITHUB_WORKSPACE}/genegalleon.sif" \
-            bash container/apptainer_from_docker.sh
-          {
-            echo "SIF validation image:"
-            echo "- ${image}:${tag}"
-            echo "- runtime input: ${{ steps.runtime-input.outputs.value }}"
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Verify exact validation SIF identity
-        shell: bash
-        run: |
-          GG_RUNTIME_FRESHNESS=off \
-          bash container/scripts/check_runtime_freshness.sh \
-            --sif "${GITHUB_WORKSPACE}/genegalleon.sif" \
-            --engine "${{ steps.runtime.outputs.engine }}" \
-            --expected-hash "${{ steps.runtime-input.outputs.value }}"
-
-      - name: Report SIF conversion disk usage
-        if: always() && steps.sif-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          set -u
-          df -h /
-          free -h
-          docker system df || true
-          du -sh \
-            "${RUNNER_TEMP}/apptainer-cache" \
-            "${RUNNER_TEMP}/apptainer-tmp" \
-            "${RUNNER_TEMP}/singularity-cache" \
-            "${RUNNER_TEMP}/singularity-tmp" \
-            "${RUNNER_TEMP}/singularity-transport-tmp" \
-            2>/dev/null || true
-
-      - name: Run SIF validation checks
-        run: |
-          bash workflow/tests/run_in_sif.sh python -m pytest -q --gg-suite runtime workflow/tests
-          bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_end_to_end.py
-          bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_format_species_inputs_provider_pages.py::test_download_manifest_figshare_extracts_rar_member_from_extensionless_url
-          bash workflow/tests/run_in_sif.sh bash workflow/tests/check_treevis_package.sh
-          bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_orthogroup_copy_number_trait_pgls.R
-          bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_treevis_main.R
-
-      - name: Save validated SIF by exact runtime input
-        if: >-
-          steps.sif-cache.outputs.cache-hit != 'true' &&
-          github.event_name != 'pull_request' &&
-          github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: genegalleon.sif
-          key: ${{ steps.sif-cache.outputs.cache-primary-key }}
+      - name: Validate exact runtime and reuse the shared SIF cache
+        uses: ./.github/actions/validate-sif

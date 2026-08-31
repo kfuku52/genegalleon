@@ -6,6 +6,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     @@STAGING_ROOT@@/spec /opt/pg/spec
     @@STAGING_ROOT@@/testdata /opt/pg/testdata
     @@STAGING_ROOT@@/scripts /opt/pg/scripts
+    @@STAGING_ROOT@@/source_branches.env /opt/pg/source_branches.env
     @@STAGING_ROOT@@/treevis /opt/pg/src/genegalleon.treevis
     @@STAGING_ROOT@@/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt
 
@@ -108,6 +109,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
         procps \
         rsync \
         tini \
+        unzip \
         wget \
         zip
     sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen

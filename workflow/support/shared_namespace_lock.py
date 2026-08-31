@@ -15,6 +15,7 @@ import json
 import os
 import re
 import socket
+import stat
 import time
 import uuid
 from pathlib import Path
@@ -68,7 +69,14 @@ def acquire(path: Path, *, exclusive: bool, nonblocking: bool = False,
         try:
             gate.mkdir(mode=0o700)
         except FileExistsError as exc:
-            if gate.is_symlink() or not gate.is_dir():
+            # The owner can release the gate after mkdir observes EEXIST.
+            # Inspect once without following symlinks; disappearance is normal
+            # contention, while an existing non-directory remains unsafe.
+            try:
+                gate_mode = gate.lstat().st_mode
+            except FileNotFoundError:
+                gate_mode = None
+            if gate_mode is not None and not stat.S_ISDIR(gate_mode):
                 raise NamespaceLockError(f"Invalid lock gate: {gate}") from exc
         else:
             keep_gate = False

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+if [[ "${GG_CORE_SOURCE_ONLY:-0}" != "1" ]]; then
+  set -euo pipefail
+fi
 
 gg_core_bootstrap="/script/support/gg_core_bootstrap.sh"
 if [[ ! -s "${gg_core_bootstrap}" ]]; then
@@ -8,6 +10,7 @@ fi
 # shellcheck disable=SC1090
 source "${gg_core_bootstrap}"
 unset gg_core_bootstrap
+if [[ "${GG_CORE_SOURCE_ONLY:-0}" != "1" ]]; then
 gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 ### Start: Job-supplied configuration ###
@@ -67,6 +70,7 @@ classified_pacbio_fastq_files=()
 classified_ont_fastq_files=()
 getfastq_content_validated=0
 getfastq_content_validation_fingerprint=""
+fi
 
 # Named stage functions for gg_transcriptome_generation_core.sh.
 # This file is sourced by workflow/core/gg_transcriptome_generation_core.sh.
@@ -1972,6 +1976,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -2306,19 +2311,63 @@ def content_range_contract(value: str):
 
 def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> None:
     part = dest.with_name(".{}.download.part".format(dest.name))
-    if part.is_symlink() or (part.exists() and not part.is_file()):
-        raise SystemExit("Resumable FASTQ partial path is unsafe: {}".format(part))
+    state_path = part.with_name(part.name + ".json")
+    for path in (part, state_path):
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise SystemExit("Resumable FASTQ partial path is unsafe: {}".format(path))
+
+    def discard_partial():
+        part.unlink(missing_ok=True)
+        state_path.unlink(missing_ok=True)
+
+    def publish_partial():
+        os.replace(part, dest)
+        state_path.unlink(missing_ok=True)
+
+    def save_state(state):
+        fd, temporary = tempfile.mkstemp(prefix=state_path.name + ".", dir=state_path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(state, handle, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, state_path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+
+    resume_state = {}
+    if state_path.exists():
+        try:
+            if state_path.stat().st_size <= 16384:
+                resume_state = json.loads(state_path.read_text(encoding="utf-8"))
+            if not isinstance(resume_state, dict):
+                resume_state = {}
+        except (ValueError, UnicodeError):
+            resume_state = {}
     if part.exists() and part.stat().st_size > 0:
         with part.open("rb") as handle:
             resumable_gzip = handle.read(2) == b"\x1f\x8b"
-        if not resumable_gzip:
-            part.unlink()
-        elif is_valid_fastq_gzip(part):
-            actual_md5 = file_md5(part)
-            if not expected_md5 or actual_md5 == expected_md5:
-                os.replace(part, dest)
+        # A complete gzip member can still be a prefix of a larger FASTQ.
+        # Only an externally supplied digest can prove offline completion.
+        if resumable_gzip and expected_md5 and is_valid_fastq_gzip(part):
+            if file_md5(part) == expected_md5:
+                publish_partial()
                 return
-            part.unlink()
+        total = resume_state.get("total_bytes")
+        if (
+            not resumable_gzip
+            or resume_state.get("version") != 1
+            or resume_state.get("url") != url
+            or resume_state.get("expected_md5") != expected_md5
+            or not isinstance(resume_state.get("validator", ""), str)
+            or not (expected_md5 or resume_state.get("validator"))
+            or (total is not None and (type(total) is not int or total <= 0 or part.stat().st_size > total))
+        ):
+            discard_partial()
+            resume_state = {}
+    else:
+        discard_partial()
+        resume_state = {}
 
     last_exc = None
     for attempt in range(1, 6):
@@ -2330,12 +2379,12 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
             retain_resumable_part = bool(resume_offset)
             request = url
             if resume_offset:
+                headers = {"Accept-Encoding": "identity", "Range": "bytes={}-".format(resume_offset)}
+                if resume_state.get("validator"):
+                    headers["If-Range"] = resume_state["validator"]
                 request = urllib.request.Request(
                     url,
-                    headers={
-                        "Accept-Encoding": "identity",
-                        "Range": "bytes={}-".format(resume_offset),
-                    },
+                    headers=headers,
                 )
             with urllib.request.urlopen(request, timeout=120) as response:
                 status = response_status(response)
@@ -2349,8 +2398,10 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
                     else None
                 )
                 append_response = False
-                expected_total = None
+                expected_total = content_length
                 expected_response_bytes = content_length
+                etag = response_header(response, "ETag")
+                validator = etag if etag and not etag.startswith("W/") else response_header(response, "Last-Modified")
                 if resume_offset and status == 206:
                     if content_range is None or content_range[0] != resume_offset:
                         retain_resumable_part = False
@@ -2363,7 +2414,15 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
                     append_response = True
                     expected_response_bytes = content_range[1] - content_range[0] + 1
                     expected_total = content_range[2]
+                    if (
+                        (resume_state.get("total_bytes") is not None and expected_total != resume_state["total_bytes"])
+                        or (resume_state.get("validator") and validator and validator != resume_state["validator"])
+                        or (expected_total is None and not expected_md5)
+                    ):
+                        retain_resumable_part = False
+                        raise ValueError("Resumed FASTQ source identity or total size changed")
                     if content_length is not None and content_length != expected_response_bytes:
+                        retain_resumable_part = False
                         raise ValueError(
                             "resumed Content-Length disagrees with Content-Range: {} != {}".format(
                                 content_length,
@@ -2378,18 +2437,30 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
                                 status
                             )
                         )
-                    part.unlink()
+                    discard_partial()
                     resume_offset = 0
                     retain_resumable_part = False
+                elif status not in (None, 200):
+                    raise ValueError("Expected a complete FASTQ response, received HTTP {}".format(status))
 
                 first_chunk = response.read(DOWNLOAD_CHUNK_BYTES)
                 if not first_chunk:
                     raise ValueError("Downloaded FASTQ response was empty: {}".format(url))
                 source_is_gzip = append_response or first_chunk.startswith(b"\x1f\x8b")
-                retain_resumable_part = source_is_gzip
+                resume_state = {
+                    "version": 1,
+                    "url": url,
+                    "expected_md5": expected_md5,
+                    "validator": validator or (resume_state.get("validator", "") if append_response else ""),
+                    "total_bytes": expected_total,
+                }
+                retain_resumable_part = source_is_gzip and bool(expected_md5 or resume_state["validator"])
                 output_mode = "ab" if append_response else "wb"
                 with part.open(output_mode) as raw_out:
+                    # Truncate before assigning a new source identity. A crash
+                    # must never associate old bytes with a new URL/validator.
                     if source_is_gzip:
+                        save_state(resume_state)
                         chunk = first_chunk
                         while chunk:
                             source_bytes += len(chunk)
@@ -2414,7 +2485,7 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
                             part.stat().st_size,
                         )
                     )
-                if expected_total is not None and part.stat().st_size != expected_total:
+                if source_is_gzip and expected_total is not None and part.stat().st_size != expected_total:
                     raise ValueError(
                         "incomplete resumed FASTQ expected_total={} actual={}".format(
                             expected_total,
@@ -2443,14 +2514,15 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
                         source_bytes,
                     )
                 )
-            os.replace(part, dest)
+            publish_partial()
             return
         except Exception as exc:  # pragma: no cover - network retry integration
             last_exc = exc
             if isinstance(exc, urllib.error.HTTPError) and exc.code == 416:
                 retain_resumable_part = False
             if part.exists() and not retain_resumable_part:
-                part.unlink()
+                discard_partial()
+                resume_state = {}
             if attempt == 5:
                 break
             time.sleep(2)
@@ -2688,6 +2760,10 @@ run_amalgkit_getfastq_or_fallback() {
 
 
 
+
+if [[ "${GG_CORE_SOURCE_ONLY:-0}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 # Setting modes
 if [[ ${gg_debug_mode:-0} -eq 1 ]]; then

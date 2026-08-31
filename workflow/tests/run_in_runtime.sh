@@ -43,9 +43,24 @@ case "${runtime}" in
     ;;
 esac
 
+container_engine=""
+if [[ "${runtime}" != "docker" ]]; then
+  # Use the same site/package discovery before selection and freshness checks
+  # as the SIF dispatcher, including versioned HPC package installations.
+  # shellcheck source=../support/gg_site_runtime.sh
+  source "${repo_root}/workflow/support/gg_site_runtime.sh"
+  gg_prepend_container_runtime_path \
+    "${GG_CONTAINER_RUNTIME_PACKAGE_ROOT:-/opt/pkg}" \
+    "${GG_CONTAINER_RUNTIME_LEGACY_DIR:-/bio/package/singularity/singularity_3.0/bin}"
+  if command -v apptainer >/dev/null 2>&1; then
+    container_engine="$(command -v apptainer)"
+  elif command -v singularity >/dev/null 2>&1; then
+    container_engine="$(command -v singularity)"
+  fi
+fi
+
 has_sif_runtime() {
-  [[ -f "${sif_path}" ]] \
-    && { command -v apptainer >/dev/null 2>&1 || command -v singularity >/dev/null 2>&1; }
+  [[ -f "${sif_path}" && -n "${container_engine}" ]]
 }
 
 has_docker_runtime() {
@@ -69,11 +84,9 @@ EOF
 fi
 
 if [[ "${runtime}" == "sif" ]]; then
-  container_engine=""
-  if command -v apptainer >/dev/null 2>&1; then
-    container_engine="$(command -v apptainer)"
-  elif command -v singularity >/dev/null 2>&1; then
-    container_engine="$(command -v singularity)"
+  if ! has_sif_runtime; then
+    echo "The requested GeneGalleon SIF or Apptainer/Singularity runtime is unavailable: ${sif_path}" >&2
+    exit 1
   fi
   bash "${repo_root}/container/scripts/check_runtime_freshness.sh" \
     --sif "${sif_path}" \
@@ -111,6 +124,7 @@ fi
 
 exec docker run --rm -i \
   --user "$(id -u):$(id -g)" \
+  --env PYTHONDONTWRITEBYTECODE=1 \
   "${bind_args[@]}" \
   --workdir "${repo_root}" \
   "${docker_image}" \

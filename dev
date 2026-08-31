@@ -12,8 +12,9 @@ Commands:
   check smoke|fast|static|runtime       Run one focused test lane.
   check integration-download           Run provider/download integration tests.
   check integration-workflow           Run workflow integration tests.
-  check full                            Run the complete Python and key R tests.
-  check r                               Run R parse and unit checks in the runtime.
+  check full                            Run all Python and declared R checks.
+  check r                               Run all declared R checks in the runtime.
+  lint                                  Run host syntax, Ruff, and config checks.
   config-check                          Validate entrypoint config metadata.
   config-schema [json|markdown]         Print generated config documentation.
   version                               Print VERSION.
@@ -43,35 +44,19 @@ shift
 case "${command_name}" in
   check)
     suite="${1:-fast}"
-    case "${suite}" in
-      smoke|static|runtime)
-        exec bash "${runtime_runner}" python -m pytest -q --gg-suite "${suite}" workflow/tests
-        ;;
-      fast|integration-download|integration-workflow)
-        exec bash "${runtime_runner}" python -m pytest -q \
-          -n "${pytest_workers}" \
-          --dist load \
-          --gg-suite "${suite}" \
-          workflow/tests
-        ;;
-      full)
-        bash "${runtime_runner}" python -m pytest -q \
-          -n "${pytest_workers}" \
-          --dist load \
-          workflow/tests
-        bash "${runtime_runner}" Rscript workflow/tests/test_r_scripts_parse.R
-        exec bash "${runtime_runner}" Rscript workflow/tests/test_treevis_main.R
-        ;;
-      r)
-        bash "${runtime_runner}" Rscript workflow/tests/test_r_scripts_parse.R
-        bash "${runtime_runner}" Rscript workflow/tests/test_pgls_common_rphylopars.R
-        exec bash "${runtime_runner}" Rscript workflow/tests/test_r_species_label_utils.R
-        ;;
-      *)
-        echo "Unknown check suite: ${suite}" >&2
-        exit 2
-        ;;
-    esac
+    if [[ $# -gt 0 ]]; then shift; fi
+    exec bash "${runtime_runner}" python "${repo_root}/workflow/tests/run_checks.py" \
+      "${suite}" --workers "${pytest_workers}" "$@"
+    ;;
+  lint)
+    cd "${repo_root}"
+    while IFS= read -r -d '' script; do
+      bash -n "${script}"
+    done < <(git ls-files -z '*.sh')
+    bash -n dev
+    ruff check workflow container/scripts
+    python3 workflow/support/entrypoint_config_schema.py --check
+    echo "Host static checks passed; runtime compatibility still requires container checks."
     ;;
   config-check)
     exec python "${repo_root}/workflow/support/entrypoint_config_schema.py" --check

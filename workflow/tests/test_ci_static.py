@@ -1,6 +1,10 @@
+import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 from shell_static_helpers import GITHUB_WORKFLOWS_DIR
 
@@ -21,11 +25,27 @@ REVIEWED_ACTIONS = {
 
 SINGULARITY_CE_VERSION = "4.5.0"
 SINGULARITY_CE_DEB_SHA256 = "85e6f7af5e7aad5b1bf28183ce333998bd37eb8f4769af352c47a5153f3373fb"
+LOCAL_ACTIONS = {"./.github/actions/validate-sif"}
+
+
+def validation_manifest():
+    return json.loads(Path(__file__).with_name("validation_manifest.json").read_text())
 
 
 def load_workflow(name: str) -> dict:
     path = GITHUB_WORKFLOWS_DIR / name
-    return yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    workflow = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    for job in workflow.get("jobs", {}).values():
+        expanded = []
+        for step in job.get("steps", []):
+            expanded.append(step)
+            if step.get("uses") in LOCAL_ACTIONS:
+                action_path = GITHUB_WORKFLOWS_DIR.parent.parent / step["uses"] / "action.yml"
+                action = yaml.load(action_path.read_text(), Loader=yaml.BaseLoader)
+                assert action["runs"]["using"] == "composite"
+                expanded.extend(action["runs"]["steps"])
+        job["steps"] = expanded
+    return workflow
 
 
 def workflow_steps(workflow: dict):
@@ -69,6 +89,8 @@ def test_workflows_pin_all_actions_to_reviewed_full_commit_shas():
 
     assert uses
     for value in uses:
+        if value in LOCAL_ACTIONS:
+            continue
         action, separator, revision = value.rpartition("@")
         assert separator == "@", f"Action reference lacks a revision: {value}"
         assert action in REVIEWED_ACTIONS, f"Unreviewed action reference: {value}"
@@ -303,14 +325,14 @@ def test_release_images_and_sif_are_validated_before_publication():
     assert '--user "$(id -u):$(id -g)"' in image_validation["run"]
     assert 'git show-ref --verify --quiet "refs/tags/${release_tag}"' in release_resolution
     assert 'git rev-list -n 1 "refs/tags/${release_tag}"' in release_resolution
-    assert "--gg-suite runtime workflow/tests" in image_validation["run"]
+    assert "workflow/tests/run_checks.py runtime" in image_validation["run"]
     assert conversion["env"]["TAG"] == "${{ needs.prepare-release.outputs.immutable_tag }}"
     assert "release_tag" not in conversion["env"]["TAG"]
     assert "check_runtime_freshness.sh" in identity["run"]
     assert "--expected-hash" in identity["run"]
     assert "steps.runtime-input.outputs.value" in identity["env"]["EXPECTED_RUNTIME_INPUT"]
     assert "run_in_sif.sh" in sif_validation["run"]
-    assert "--gg-suite runtime workflow/tests" in sif_validation["run"]
+    assert "workflow/tests/run_checks.py runtime" in sif_validation["run"]
 
 
 def test_toolchain_dependent_r_integration_test_runs_in_sif_job():
@@ -323,21 +345,21 @@ def test_toolchain_dependent_r_integration_test_runs_in_sif_job():
 
     assert not any(str(step.get("uses", "")).startswith("actions/setup-python@") for step in r_job["steps"])
     assert integration_test not in r_commands
-    assert f"bash workflow/tests/run_in_sif.sh Rscript {integration_test}" in sif_commands
+    assert "run_in_sif.sh python workflow/tests/run_checks.py runtime" in sif_commands
+    assert ["Rscript", integration_test] in validation_manifest()["r_commands"]
 
 
 def test_runtime_python_suite_runs_in_authoritative_sif_job():
     sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
     commands = "\n".join(str(step.get("run", "")) for step in sif_job["steps"])
 
-    assert "run_in_sif.sh python -m pytest -q --gg-suite runtime workflow/tests" in commands
+    assert "run_in_sif.sh python workflow/tests/run_checks.py runtime" in commands
 
 
 def test_runtime_suite_contains_real_owned_upstream_contracts():
-    conftest = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
     contracts = (Path(__file__).parent / "test_owned_runtime_contracts.py").read_text(encoding="utf-8")
 
-    assert '"test_owned_runtime_contracts.py"' in conftest
+    assert "test_owned_runtime_contracts.py" in validation_manifest()["runtime_python_files"]
     assert "select_orthofinder_core_species.py" in contracts
     assert "SOURCE_REVISIONS" in contracts
 
@@ -348,8 +370,9 @@ def test_treevis_package_validation_runs_only_in_the_container_job():
     sif_commands = "\n".join(str(step.get("run", "")) for step in jobs["sif-runtime-validation"]["steps"])
 
     assert "test_treevis_main.R" not in r_commands
-    assert "workflow/tests/check_treevis_package.sh" in sif_commands
-    assert "workflow/tests/test_treevis_main.R" in sif_commands
+    assert "workflow/tests/run_checks.py runtime" in sif_commands
+    assert ["bash", "workflow/tests/check_treevis_package.sh"] in validation_manifest()["r_commands"]
+    assert ["Rscript", "workflow/tests/test_treevis_main.R"] in validation_manifest()["r_commands"]
 
 
 def test_workflow_files_parse_to_job_mappings():
@@ -367,6 +390,7 @@ def test_shell_job_uses_structural_workflow_and_shell_linters():
 
     assert "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12" in install_run
     assert "actionlint" in actionlint_run
+    assert "check_composite_actions.py" in actionlint_run
     assert "shellcheck -S warning" in shellcheck_run
     assert "git ls-files -z '*.sh'" in shellcheck_run
     assert "scripts+=(dev)" in shellcheck_run
@@ -439,5 +463,92 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
     assert "upstream source resolution failed during preflight" in decision
     assert "build-input hash calculation failed during preflight" in decision
     assert "/actions/workflows/container-ghcr.yml/runs" not in decision
-    assert "--gg-suite runtime workflow/tests" in runtime_contracts
+    assert "workflow/tests/run_checks.py runtime" in runtime_contracts
     assert '"${IMAGE}@${DIGEST}"' in runtime_contracts
+
+
+def test_daily_publisher_primes_the_same_exact_sif_cache_used_by_commit_checks():
+    daily = load_workflow("container-ghcr.yml")["jobs"]
+    prime = daily["prime-sif-cache"]
+    commit = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    prepared = named_step(prime, "Prepare validated SIF for subsequent commit checks")
+    assert prepared["uses"] == "./.github/actions/validate-sif"
+    assert "immutable_tag" in prepared["with"]["image-ref"]
+    assert prepared["with"]["runtime-input"] == "${{ needs.build-and-push.outputs.runtime_input }}"
+    assert "steps.build-input.outputs.runtime_value" in daily["build-and-push"]["outputs"]["runtime_input"]
+    assert named_step(prime, "Restore exact validation SIF")["with"] == named_step(
+        commit, "Restore exact validation SIF"
+    )["with"]
+    assert "resolve_source_revisions.sh" not in step_run(prime, "Select published or local validation image")
+    for job in (prime, commit):
+        save = named_step(job, "Save validated SIF by exact runtime input")
+        assert "github.event_name != 'pull_request'" in save["if"]
+        assert "github.event.repository.default_branch" in save["if"]
+        assert "restore-keys" not in named_step(job, "Restore exact validation SIF")["with"]
+
+
+def test_parallel_python_lanes_install_the_same_prebuilt_offline_wheels():
+    jobs = load_workflow("tests.yml")["jobs"]
+    wheel_job = jobs["python-wheels"]
+    artifact = named_step(wheel_job, "Share exact wheels with parallel test lanes")["with"]
+    assert artifact["retention-days"] == "1"
+    key = named_step(wheel_job, "Restore test wheels by resolved source and constraints")["with"]
+    assert "steps.source.outputs.csubst_sha" in key["key"]
+    assert "requirements.lock.txt" in key["key"]
+    assert "restore-keys" not in key
+    save = named_step(wheel_job, "Save trusted test wheels")
+    assert "event_name != 'pull_request'" in save["if"]
+    assert "github.event.repository.default_branch" in save["if"]
+    for lane in ("python-fast", "python-heavy"):
+        assert "python-wheels" in jobs[lane]["needs"]
+        download = named_step(jobs[lane], "Download exact test wheels")["with"]
+        assert download["name"] == artifact["name"]
+        install = step_run(jobs[lane], "Install test dependencies")
+        assert "--no-index" in install
+        assert "--find-links" in install
+        assert "install-requirements.txt" in install
+        assert "git+" not in install
+
+
+@pytest.mark.parametrize("invalid", [None, "mutable_tag", "sha_alias", "missing_hash", "missing_image", "unsafe_image"])
+def test_prepared_sif_metadata_is_validated_without_resolving_new_upstream_tips(tmp_path, invalid):
+    job = load_workflow("container-ghcr.yml")["jobs"]["prime-sif-cache"]
+    run = step_run(job, "Resolve exact validation runtime input")
+    output = tmp_path / "github-output"
+    env = os.environ | {
+        "PREPARED_IMAGE_REF": "ghcr.io/example/genegalleon:20260831-abcdef0-fedcba987654",
+        "PREPARED_RUNTIME_INPUT": "a" * 64,
+        "PREPARED_SECURITY_EPOCH": "2026-08-31",
+        "GITHUB_OUTPUT": str(output),
+    }
+    if invalid == "mutable_tag":
+        env["PREPARED_IMAGE_REF"] = "ghcr.io/example/genegalleon:latest"
+    elif invalid == "sha_alias":
+        env["PREPARED_IMAGE_REF"] = "ghcr.io/example/genegalleon:sha-abcdef0"
+    elif invalid == "missing_hash":
+        env["PREPARED_RUNTIME_INPUT"] = ""
+    elif invalid == "missing_image":
+        env["PREPARED_IMAGE_REF"] = ""
+    elif invalid == "unsafe_image":
+        env["PREPARED_IMAGE_REF"] += "\nsource=local"
+    # This empty cwd has no resolver scripts: a valid prepared snapshot must
+    # succeed without querying a potentially newer branch or rebuilding.
+    result = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env,
+                            capture_output=True, text=True, check=False)
+    if invalid:
+        assert result.returncode != 0
+        assert not output.exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        assert "value=" + "a" * 64 in output.read_text()
+        assert "published_tag=20260831-abcdef0-fedcba987654" in output.read_text()
+
+
+def test_sif_checks_skip_re_resolution_only_after_verifying_exact_identity():
+    job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    steps = job["steps"]
+    identity = named_step(job, "Verify exact validation SIF identity")
+    validate = named_step(job, "Run SIF validation checks")
+    assert steps.index(identity) < steps.index(validate)
+    assert "--expected-hash" in identity["run"]
+    assert validate["env"]["GG_RUNTIME_FRESHNESS"] == "off"

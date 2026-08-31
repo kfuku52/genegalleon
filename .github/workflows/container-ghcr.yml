@@ -263,6 +263,8 @@ jobs:
     if: needs.prepare-build.result == 'success'
     name: build-and-push (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    outputs:
+      runtime_input: ${{ steps.build-input.outputs.runtime_value }}
     permissions:
       contents: read
       packages: write
@@ -381,10 +383,11 @@ jobs:
             exit 1
           fi
           docker run --rm \
+            --env PYTHONDONTWRITEBYTECODE=1 \
             -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
             -w "${GITHUB_WORKSPACE}" \
             "${IMAGE}@${DIGEST}" \
-            python -m pytest -q --gg-suite runtime workflow/tests
+            python workflow/tests/run_checks.py runtime
 
       - name: Export digest
         shell: bash
@@ -501,3 +504,25 @@ jobs:
             echo ""
             echo "Ubuntu security refresh epoch: ${{ needs.prepare-build.outputs.security_refresh_epoch }}"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+  prime-sif-cache:
+    needs:
+      - prepare-build
+      - build-and-push
+      - publish-manifest
+    if: needs.publish-manifest.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Prepare validated SIF for subsequent commit checks
+        uses: ./.github/actions/validate-sif
+        with:
+          image-ref: ${{ needs.prepare-build.outputs.image }}:${{ needs.prepare-build.outputs.immutable_tag }}
+          runtime-input: ${{ needs.build-and-push.outputs.runtime_input }}
+          security-refresh-epoch: ${{ needs.prepare-build.outputs.security_refresh_epoch }}

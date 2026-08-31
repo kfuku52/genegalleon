@@ -5,9 +5,12 @@ import json
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
+from functools import lru_cache
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Union
 
@@ -39,28 +42,29 @@ class _Response:
         return self.status
 
 
+@lru_cache(maxsize=1)
 def _fallback_python_source() -> str:
-    text = CORE_PATH.read_text(encoding="utf-8")
-    function_start = text.index("download_public_original_fastqs_for_metadata() {")
-    function_end = text.index("\nrun_amalgkit_getfastq_or_fallback() {", function_start)
-    function_body = text[function_start:function_end]
-    match = re.search(r"<<'PY'\n(.*?)\nPY\n", function_body, re.DOTALL)
-    assert match is not None
-    return match.group(1)
+    completed = subprocess.run(
+        ["bash", "-c", 'GG_CORE_SOURCE_ONLY=1 source "$1"; python() { cat; }; '
+         'download_public_original_fastqs_for_metadata unused unused', "test", str(CORE_PATH)],
+        capture_output=True, text=True, check=True,
+    )
+    return completed.stdout
 
 
+@lru_cache(maxsize=None)
 def _shell_function_source(name: str) -> str:
-    text = CORE_PATH.read_text(encoding="utf-8")
-    start_match = re.search(rf"^{re.escape(name)}\(\) \{{\n", text, re.MULTILINE)
-    assert start_match is not None
-    next_match = re.search(r"^[A-Za-z_][A-Za-z0-9_]*\(\) \{\n", text[start_match.end() :], re.MULTILINE)
-    if next_match is None:
-        end_match = re.search(r"^\}$", text[start_match.end() :], re.MULTILINE)
-        assert end_match is not None
-        end = start_match.end() + end_match.end()
-    else:
-        end = start_match.end() + next_match.start()
-    return text[start_match.start() : end].rstrip()
+    completed = subprocess.run(
+        ["bash", "-c", 'GG_CORE_SOURCE_ONLY=1 source "$1"; declare -f "$2"',
+         "test", str(CORE_PATH), name], capture_output=True, text=True, check=True,
+    )
+    return completed.stdout.rstrip()
+
+
+def _source_core() -> str:
+    # Execute the real definitions, including heredocs that declare -f cannot
+    # reliably serialize back into executable shell source.
+    return f'GG_CORE_SOURCE_ONLY=1 source "{CORE_PATH}"'
 
 
 def _run_fallback(
@@ -111,6 +115,114 @@ def _fallback_definition_namespace() -> dict:
     return namespace
 
 
+@pytest.fixture
+def interrupted_fastq_server():
+    first = gzip.compress(b"@read1\nACGT\n+\n!!!!\n", mtime=0)
+    payload = first + gzip.compress(b"@read2\nTGCA\n+\n!!!!\n", mtime=0)
+    replacement = gzip.compress(b"@new\nCCCC\n+\n!!!!\n", mtime=0)
+    state = {"mode": "interrupt", "requests": [], "payload": payload, "prefix": first}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_GET(self):
+            state["requests"].append((self.path, self.headers.get("Range"), self.headers.get("If-Range")))
+            mode = state["mode"]
+            if mode == "interrupt":
+                if len(state["requests"]) > 1:
+                    self.send_error(503)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("ETag", '"snapshot-1"')
+                self.end_headers()
+                self.wfile.write(first)
+                self.wfile.flush()
+                self.close_connection = True
+                return
+            range_header = self.headers.get("Range")
+            if mode == "416" and range_header:
+                state["mode"] = "recover"
+                self.send_error(416)
+                return
+            body = replacement if mode == "changed" else payload
+            offset = int(range_header.split("=")[1].split("-")[0]) if range_header and mode != "changed" else 0
+            self.send_response(206 if offset else 200)
+            self.send_header("Content-Length", str(len(body) - offset))
+            self.send_header("ETag", '"snapshot-2"' if mode == "changed" else '"snapshot-1"')
+            if offset:
+                total = len(body) + (1 if mode == "wrong-total" else 0)
+                self.send_header("Content-Range", f"bytes {offset}-{len(body) - 1}/{total}")
+            self.end_headers()
+            self.wfile.write(body[offset:])
+            if mode == "wrong-total":
+                state["mode"] = "recover"
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    state["url"] = f"http://127.0.0.1:{server.server_port}/reads.fastq.gz"
+    state["replacement"] = replacement
+    try:
+        yield state
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("checksum", [False, True])
+@pytest.mark.parametrize("recovery", ["recover", "416", "wrong-total", "changed", "changed-url"])
+def test_fastq_restart_at_gzip_member_boundary_requires_complete_source(
+    tmp_path, monkeypatch, interrupted_fastq_server, checksum, recovery,
+):
+    namespace = _fallback_definition_namespace()
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    server = interrupted_fastq_server
+    dest = tmp_path / "reads.fastq.gz"
+    digest = hashlib.md5(server["payload"]).hexdigest() if checksum else ""
+    with pytest.raises(SystemExit, match="bounded integrity retries"):
+        namespace["download_fastq_atomically"](dest, server["url"], digest)
+    part = dest.with_name(".reads.fastq.gz.download.part")
+    assert part.read_bytes() == server["prefix"]
+    assert not dest.exists()
+    assert len(server["requests"]) == 5
+
+    server["mode"] = "recover" if recovery == "changed-url" else recovery
+    url = server["url"] + "?new-source=1" if recovery == "changed-url" else server["url"]
+    expected = server["replacement"] if recovery == "changed" else server["payload"]
+    if checksum and recovery == "changed":
+        digest = hashlib.md5(expected).hexdigest()
+    namespace = _fallback_definition_namespace()  # No in-memory state survives the restart.
+    namespace["download_fastq_atomically"](dest, url, digest)
+    assert dest.read_bytes() == expected
+    assert gzip.decompress(dest.read_bytes()) == gzip.decompress(expected)
+    assert len(server["requests"]) > 5
+    if recovery == "recover":
+        assert server["requests"][5][1:] == (f"bytes={len(server['prefix'])}-", '"snapshot-1"')
+    if recovery in {"changed-url"} or (checksum and recovery == "changed"):
+        assert server["requests"][5][1] is None
+    assert not _partial_files(tmp_path)
+
+
+@pytest.mark.parametrize("state_text", [None, "{broken", "{}"])
+def test_fastq_prefix_without_source_identity_is_downloaded_again(
+    tmp_path, interrupted_fastq_server, state_text,
+):
+    server = interrupted_fastq_server
+    server["mode"] = "recover"
+    dest = tmp_path / "reads.fastq.gz"
+    part = dest.with_name(".reads.fastq.gz.download.part")
+    part.write_bytes(server["prefix"])
+    if state_text is not None:
+        part.with_name(part.name + ".json").write_text(state_text)
+    _fallback_definition_namespace()["download_fastq_atomically"](dest, server["url"])
+    assert dest.read_bytes() == server["payload"]
+    assert server["requests"][0][1] is None
+    assert not _partial_files(tmp_path)
+
+
 def _metadata(path: Path, runs: list[str]):
     path.write_text("run\n" + "\n".join(runs) + "\n", encoding="utf-8")
 
@@ -127,7 +239,7 @@ def _run_manifest_validator(metadata_path: Path, output_dir: Path):
     script = "\n".join(
         [
             "set -u",
-            _shell_function_source("validate_amalgkit_getfastq_completion_manifest"),
+            _source_core(),
             'validate_amalgkit_getfastq_completion_manifest "$1/getfastq_completion.json" "$2"',
         ]
     )
@@ -144,7 +256,7 @@ def _run_manifest_index_validator(metadata_path: Path, output_dir: Path):
     script = "\n".join(
         [
             "set -u",
-            _shell_function_source("validate_amalgkit_getfastq_completion_manifest_index"),
+            _source_core(),
             'validate_amalgkit_getfastq_completion_manifest_index "$1/getfastq_completion.json" "$2"',
         ]
     )
@@ -161,7 +273,7 @@ def _run_contract_recovery(output_dir: Path):
     script = "\n".join(
         [
             "set -u",
-            _shell_function_source("prepare_amalgkit_getfastq_contract_recovery"),
+            _source_core(),
             'prepare_amalgkit_getfastq_contract_recovery "$1/getfastq_completion.json"',
         ]
     )
@@ -178,7 +290,7 @@ def _run_manifest_binder(metadata_path: Path, output_dir: Path):
     script = "\n".join(
         [
             "set -u",
-            _shell_function_source("bind_amalgkit_getfastq_completion_manifest"),
+            _source_core(),
             'bind_amalgkit_getfastq_completion_manifest "$1/getfastq_completion.json" "$2"',
         ]
     )
@@ -687,8 +799,8 @@ def test_downstream_fastq_gates_revalidate_the_completion_contract():
     )
     attempt_body = _shell_function_source("run_amalgkit_getfastq_attempt")
     assert "validate_amalgkit_getfastq_completion_manifest_index" in once_body
-    assert "validate_amalgkit_getfastq_completion_manifest \\" in once_body
-    assert "validate_amalgkit_getfastq_completion_manifest \\" not in attempt_body
+    assert re.search(r'\bvalidate_amalgkit_getfastq_completion_manifest\s+"', once_body)
+    assert not re.search(r'\bvalidate_amalgkit_getfastq_completion_manifest\s+"', attempt_body)
     assert "mark_amalgkit_getfastq_content_validated" in attempt_body
     assert text.count("! validate_amalgkit_getfastq_completion_manifest_once \\") == 4
     prepare = text.index("gg_artifact_prepare_stage getfastq_needs_update run_amalgkit_getfastq")
@@ -705,10 +817,7 @@ def test_content_validator_reuses_stat_identity_and_rescans_after_change(tmp_pat
     script = "\n".join(
         [
             "set -u",
-            _shell_function_source("mark_amalgkit_getfastq_content_validated"),
-            _shell_function_source(
-                "validate_amalgkit_getfastq_completion_manifest_once"
-            ),
+            _source_core(),
             r'''
 trace_path=$1
 mock_fingerprint=stable
@@ -764,12 +873,7 @@ def test_content_validator_rejects_same_size_fastq_mutation(monkeypatch, tmp_pat
     script = "\n".join(
         [
             "set -u",
-            _shell_function_source("validate_amalgkit_getfastq_completion_manifest"),
-            _shell_function_source("validate_amalgkit_getfastq_completion_manifest_index"),
-            _shell_function_source("mark_amalgkit_getfastq_content_validated"),
-            _shell_function_source(
-                "validate_amalgkit_getfastq_completion_manifest_once"
-            ),
+            _source_core(),
             r'''
 getfastq_content_validated=0
 getfastq_content_validation_fingerprint=""
@@ -965,6 +1069,10 @@ def test_fastq_range_resume_preserves_offsets_larger_than_four_gib(
     namespace["is_valid_fastq_gzip"] = lambda _path: next(validity)
     expected_md5 = "a" * 32
     namespace["file_md5"] = lambda _path: expected_md5
+    part.with_name(part.name + ".json").write_text(json.dumps({
+        "version": 1, "url": "https://ftp.sra.ebi.ac.uk/large.fastq.gz",
+        "expected_md5": expected_md5, "validator": "", "total_bytes": resume_offset + 1,
+    }))
     observed_requests = []
 
     def fake_urlopen(request, timeout):
@@ -1051,7 +1159,7 @@ def _run_resume_staging(work_dir: Path, published_dir: Path) -> subprocess.Compl
     script = "\n".join(
         [
             "set -u",
-            _shell_function_source("stage_getfastq_outputs_for_resume"),
+            _source_core(),
             r'''
 dir_tmp=$1
 dir_amalgkit_getfastq_sp=$2
@@ -1118,7 +1226,7 @@ def test_fatal_then_incomplete_retry_routes_through_public_fallback(tmp_path):
     script = "\n".join(
         [
             "set -u",
-            _shell_function_source("run_amalgkit_getfastq_or_fallback"),
+            _source_core(),
             r'''
 trace_path=$1
 dir_tmp=$2
@@ -1195,8 +1303,7 @@ def _run_fatal_route_fixture(tmp_path: Path, final_log_lines: list[str]) -> subp
     script = "\n".join(
         [
             "set -u",
-            _shell_function_source("amalgkit_getfastq_log_has_only_download_source_exhaustion"),
-            _shell_function_source("run_amalgkit_getfastq_or_fallback"),
+            _source_core(),
             r'''
 trace_path=$1
 dir_tmp=$2
@@ -1341,9 +1448,7 @@ def test_relaxed_metadata_normalization_preserves_old_output_when_sed_fails(tmp_
     accessions = tmp_path / "accessions.txt"
     metadata.write_text("run\nRUN1\n", encoding="utf-8")
     accessions.write_text("RUN1\n", encoding="utf-8")
-    function_source = _shell_function_source(
-        "extract_transcriptomic_rows_for_requested_accessions"
-    )
+    function_source = _source_core()
     script = "\n".join(
         [
             "set -u",

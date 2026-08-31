@@ -1,0 +1,306 @@
+name: Validate and cache GeneGalleon SIF
+description: Restore or build an exact runtime, validate mounted sources, and cache trusted results.
+inputs:
+  image-ref:
+    description: Immutable image prepared by the daily publisher; empty resolves current sources.
+    default: ""
+  runtime-input:
+    description: Exact runtime-input hash of image-ref.
+    default: ""
+  security-refresh-epoch:
+    description: Security epoch used to build image-ref.
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Resolve exact validation runtime input
+      id: runtime-input
+      shell: bash
+      env:
+        PREPARED_IMAGE_REF: ${{ inputs.image-ref }}
+        PREPARED_RUNTIME_INPUT: ${{ inputs.runtime-input }}
+        PREPARED_SECURITY_EPOCH: ${{ inputs.security-refresh-epoch }}
+      run: |
+        set -euo pipefail
+        if [[ -n "${PREPARED_IMAGE_REF}" ]]; then
+          if [[ ! "${PREPARED_IMAGE_REF}" =~ ^ghcr\.io/[a-z0-9._/-]+:[A-Za-z0-9._-]+$ \
+             || ! "${PREPARED_RUNTIME_INPUT}" =~ ^[0-9a-f]{64}$ \
+             || ! "${PREPARED_SECURITY_EPOCH}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ \
+             || ! "${PREPARED_IMAGE_REF##*:}" =~ ^[0-9]{8}-[0-9a-f]{7}-[0-9a-f]{12}$ ]]; then
+            echo "The publisher must supply an immutable image tag, exact runtime input, and security epoch."
+            exit 1
+          fi
+          {
+            echo "value=${PREPARED_RUNTIME_INPUT}"
+            echo "security_refresh_epoch=${PREPARED_SECURITY_EPOCH}"
+            echo "published_image=${PREPARED_IMAGE_REF%:*}"
+            echo "published_tag=${PREPARED_IMAGE_REF##*:}"
+          } >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+        if [[ -n "${PREPARED_RUNTIME_INPUT}" || -n "${PREPARED_SECURITY_EPOCH}" ]]; then
+          echo "Prepared runtime metadata requires image-ref."
+          exit 1
+        fi
+        security_refresh_epoch="$(date -u +%F)"
+        resolved_sources="${RUNNER_TEMP}/resolved-sources.env"
+        bash container/scripts/resolve_source_revisions.sh \
+          --format env \
+          --scope all \
+          > "${resolved_sources}"
+        set -a
+        # shellcheck disable=SC1090
+        source "${resolved_sources}"
+        set +a
+        export GG_BUILD_PLATFORMS=linux/amd64
+        export GG_BUILD_VCS_REF=runtime-validation
+        export GG_BUILD_VERSION=runtime-validation
+        runtime_input="$(
+          bash container/scripts/compute_build_input_hash.sh \
+            --runtime \
+            "${security_refresh_epoch}"
+        )"
+        owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+        repo_name="$(basename "${GITHUB_REPOSITORY}")"
+        {
+          echo "value=${runtime_input}"
+          echo "security_refresh_epoch=${security_refresh_epoch}"
+          echo "published_image=ghcr.io/${owner}/${repo_name}"
+          echo "published_tag=latest"
+        } >> "${GITHUB_OUTPUT}"
+
+    - name: Restore exact validation SIF
+      id: sif-cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: genegalleon.sif
+        key: sif-runtime-${{ runner.os }}-${{ runner.arch }}-singularity-4.5.0-${{ steps.runtime-input.outputs.value }}
+
+    - name: Reclaim runner disk space for SIF conversion
+      if: steps.sif-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Disk usage before cleanup:"
+        df -h /
+        sudo rm -rf -- \
+          /opt/ghc \
+          /usr/local/lib/android \
+          /usr/share/dotnet
+        sudo apt-get clean
+        docker system prune --all --force --volumes
+        echo "Disk usage after cleanup:"
+        df -h /
+
+    - name: Set up Docker Buildx
+      if: steps.sif-cache.outputs.cache-hit != 'true'
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+    - name: Expose GitHub runtime for BuildKit cache
+      if: steps.sif-cache.outputs.cache-hit != 'true'
+      uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4
+
+    - name: Select published or local validation image
+      if: steps.sif-cache.outputs.cache-hit != 'true'
+      id: validation-image
+      shell: bash
+      env:
+        EXPECTED_RUNTIME_INPUT: ${{ steps.runtime-input.outputs.value }}
+        PUBLISHED_IMAGE: ${{ steps.runtime-input.outputs.published_image }}
+        PUBLISHED_TAG: ${{ steps.runtime-input.outputs.published_tag }}
+        PREPARED_IMAGE_REF: ${{ inputs.image-ref }}
+      run: |
+        set -euo pipefail
+        image_metadata="$(
+          docker buildx imagetools inspect \
+            --format '{{json .Image}}' \
+            "${PUBLISHED_IMAGE}:${PUBLISHED_TAG}" \
+            2>/dev/null || true
+        )"
+        if [[ -n "${image_metadata}" ]] && \
+           python container/scripts/check_published_build_input.py \
+             --label io.genegalleon.runtime-input \
+             --expected "linux/amd64=${EXPECTED_RUNTIME_INPUT}" \
+             <<< "${image_metadata}"; then
+          echo "source=registry" >> "${GITHUB_OUTPUT}"
+          echo "Published image has the exact validation runtime input."
+        else
+          if [[ -n "${PREPARED_IMAGE_REF}" ]]; then
+            echo "The prepared image does not match its exact runtime identity."
+            exit 1
+          fi
+          echo "source=local" >> "${GITHUB_OUTPUT}"
+          echo "Published runtime is missing or stale; building the current runtime."
+        fi
+
+    - name: Build current GeneGalleon image
+      if: steps.sif-cache.outputs.cache-hit != 'true' && steps.validation-image.outputs.source == 'local'
+      shell: bash
+      env:
+        CACHE_FROM: type=gha,scope=container-linux-amd64
+        CACHE_TO: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'type=gha,mode=max,scope=container-linux-amd64,ignore-error=true' || '' }}
+        SECURITY_REFRESH_EPOCH: ${{ steps.runtime-input.outputs.security_refresh_epoch }}
+      run: |
+        set -euo pipefail
+        set -a
+        # shellcheck disable=SC1090
+        source "${RUNNER_TEMP}/resolved-sources.env"
+        set +a
+        BUILD_SIF=0 \
+        IMAGE_SOURCE=local \
+        IMAGE=local/genegalleon \
+        TAG=ci \
+        MODE=load \
+        PLATFORMS=linux/amd64 \
+        FORCE_LOAD_IN_CI=1 \
+          bash ./gg_container_build_entrypoint.sh
+
+    - name: Reclaim BuildKit cache before SIF conversion
+      if: steps.sif-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Container storage before BuildKit cleanup:"
+        docker system df
+        docker buildx prune --all --force
+        echo "Disk usage after BuildKit cleanup:"
+        df -h /
+        if [[ "${{ steps.validation-image.outputs.source }}" == "local" ]]; then
+          docker system df
+          image_bytes="$(docker image inspect --format '{{.Size}}' local/genegalleon:ci)"
+          reserve_bytes=$((6 * 1024 * 1024 * 1024))
+          required_bytes=$((2 * image_bytes + reserve_bytes))
+          available_bytes="$(df --output=avail -B1 "${RUNNER_TEMP}" | awk 'NR == 2 { print $1 }')"
+          printf 'SIF disk preflight: image=%s required_free=%s available=%s bytes\n' \
+            "${image_bytes}" "${required_bytes}" "${available_bytes}"
+          if (( available_bytes < required_bytes )); then
+            echo "::error::Insufficient disk space for SIF conversion: need ${required_bytes} bytes, have ${available_bytes} bytes."
+            exit 1
+          fi
+        fi
+        free -h
+
+    - name: Install Singularity runtime
+      id: runtime
+      shell: bash
+      env:
+        SINGULARITY_CE_VERSION: "4.5.0"
+        SINGULARITY_CE_DEB_SHA256: "85e6f7af5e7aad5b1bf28183ce333998bd37eb8f4769af352c47a5153f3373fb"
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y ca-certificates curl
+        deb_name="singularity-ce_${SINGULARITY_CE_VERSION}-noble_amd64.deb"
+        deb_path="${RUNNER_TEMP}/${deb_name}"
+        curl \
+          --fail \
+          --location \
+          --proto '=https' \
+          --retry 5 \
+          --retry-all-errors \
+          --show-error \
+          --silent \
+          --tlsv1.2 \
+          --output "${deb_path}" \
+          "https://github.com/sylabs/singularity/releases/download/v${SINGULARITY_CE_VERSION}/${deb_name}"
+        printf '%s  %s\n' "${SINGULARITY_CE_DEB_SHA256}" "${deb_path}" \
+          | sha256sum --check --strict
+        sudo apt-get install -y "${deb_path}"
+        if ! command -v singularity >/dev/null 2>&1; then
+          echo "SingularityCE installation did not provide the singularity command."
+          exit 1
+        fi
+        installed_version="$(singularity version)"
+        expected_version="${SINGULARITY_CE_VERSION}-noble"
+        if [[ "${installed_version}" != "${expected_version}" ]]; then
+          echo "Expected SingularityCE ${expected_version}, found ${installed_version}."
+          exit 1
+        fi
+        echo "SingularityCE ${installed_version}"
+        echo "engine=singularity" >> "${GITHUB_OUTPUT}"
+
+    - name: Build validation SIF from current image
+      if: steps.sif-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        APPTAINER_CACHEDIR: ${{ runner.temp }}/apptainer-cache
+        APPTAINER_DISABLE_CACHE: "1"
+        APPTAINER_TMPDIR: ${{ runner.temp }}/apptainer-tmp
+        SINGULARITY_CACHEDIR: ${{ runner.temp }}/singularity-cache
+        SINGULARITY_DISABLE_CACHE: "1"
+        SINGULARITY_TMPDIR: ${{ runner.temp }}/singularity-tmp
+        TMPDIR: ${{ runner.temp }}/singularity-transport-tmp
+      run: |
+        set -euo pipefail
+        mkdir -p \
+          "${APPTAINER_CACHEDIR}" \
+          "${APPTAINER_TMPDIR}" \
+          "${SINGULARITY_CACHEDIR}" \
+          "${SINGULARITY_TMPDIR}" \
+          "${TMPDIR}"
+        echo "Disk usage before SIF conversion:"
+        df -h /
+        if [[ "${{ steps.validation-image.outputs.source }}" == "registry" ]]; then
+          source_type=docker
+          image="${{ steps.runtime-input.outputs.published_image }}"
+          tag="${{ steps.runtime-input.outputs.published_tag }}"
+        else
+          source_type=docker-daemon
+          image=local/genegalleon
+          tag=ci
+        fi
+        SOURCE="${source_type}" \
+        IMAGE="${image}" \
+        TAG="${tag}" \
+        ENGINE="${{ steps.runtime.outputs.engine }}" \
+        OUT="${GITHUB_WORKSPACE}/genegalleon.sif" \
+          bash container/apptainer_from_docker.sh
+        {
+          echo "SIF validation image:"
+          echo "- ${image}:${tag}"
+          echo "- runtime input: ${{ steps.runtime-input.outputs.value }}"
+        } >> "${GITHUB_STEP_SUMMARY}"
+
+    - name: Verify exact validation SIF identity
+      shell: bash
+      run: |
+        GG_RUNTIME_FRESHNESS=off \
+        bash container/scripts/check_runtime_freshness.sh \
+          --sif "${GITHUB_WORKSPACE}/genegalleon.sif" \
+          --engine "${{ steps.runtime.outputs.engine }}" \
+          --expected-hash "${{ steps.runtime-input.outputs.value }}"
+
+    - name: Report SIF conversion disk usage
+      if: always() && steps.sif-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -u
+        df -h /
+        free -h
+        docker system df || true
+        du -sh \
+          "${RUNNER_TEMP}/apptainer-cache" \
+          "${RUNNER_TEMP}/apptainer-tmp" \
+          "${RUNNER_TEMP}/singularity-cache" \
+          "${RUNNER_TEMP}/singularity-tmp" \
+          "${RUNNER_TEMP}/singularity-transport-tmp" \
+          2>/dev/null || true
+
+    - name: Run SIF validation checks
+      shell: bash
+      env:
+        # The preceding identity check used the exact resolved build input.
+        # Do not re-resolve moving branches after preparing that snapshot.
+        GG_RUNTIME_FRESHNESS: "off"
+      run: |
+        bash workflow/tests/run_in_sif.sh python workflow/tests/run_checks.py runtime
+
+    - name: Save validated SIF by exact runtime input
+      if: >-
+        steps.sif-cache.outputs.cache-hit != 'true' &&
+        github.event_name != 'pull_request' &&
+        github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: genegalleon.sif
+        key: ${{ steps.sif-cache.outputs.cache-primary-key }}

@@ -156,6 +156,15 @@ not referenced by the current metadata are quarantined outside the
 `*.amalgkit.fastq.gz` namespace, and validation rejects any extra FASTQ that is
 not bound by the manifest.
 
+Interrupted public FASTQ downloads keep a `.download.part.json` sidecar next
+to the partial gzip. It records the source URL, expected checksum, remote
+validator (strong ETag or Last-Modified when available), and total byte size.
+Resumption requires matching identity and validated HTTP ranges; unidentifiable
+partials and changed objects restart from byte zero. A syntactically valid gzip
+prefix is never sufficient evidence that the remote file is complete. Publishing
+requires a verified complete transfer and gzip/FASTQ integrity, plus the expected
+MD5 when supplied. Partial plaintext downloads are restarted before recompression.
+
 Main outputs:
 
 - `workspace/output/transcriptome_assembly/assembled_transcripts_with_isoforms`
@@ -623,6 +632,13 @@ Notable defaults:
   without manifests are reported as `legacy_untracked` and remain usable,
 - overwrite builds use a temporary SQLite file and replace the published database
   only after every input has been loaded and indexed successfully,
+- database input reads keep at most twice `--ncpu` file chunks in flight and
+  release consumed results; each chunk has at most `min(--row_threshold, 50000)`
+  rows. Large TSVs, including ZIP members, use a bounded type-discovery pass
+  before insertion so later values cannot silently change a column's type.
+  Small family files retain a single-read path. SQL buffers and the subsequent
+  global BH-FDR calculation have their own memory costs; this is not a fixed
+  cap on total process memory,
 - when present, `csubst_scan/` is imported as DB table `aa_change`, and
   `csubst_scan_units/` is imported as `aa_change_unit`; `aa_change` receives
   global BH-FDR columns after all candidate substitutions are loaded,

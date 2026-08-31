@@ -21,6 +21,16 @@ Useful overrides:
 - `ENGINE=singularity` to force Singularity instead of automatic runtime detection
 - `NATIVE_BUILD_FAKEROOT=always` to force `--fakeroot` for native local builds on sites that support it
 
+Local build and freshness wrappers require Python 3.9 or newer on the host to enumerate
+Docker inputs. The runtime fingerprint covers files consumed by Docker `COPY`,
+including untracked source files, while excluding bytecode, Python test caches,
+and editor backups with the same rules as `.dockerignore`. Importing a build
+helper therefore does not invalidate an otherwise unchanged runtime. Unsupported
+`ADD` inputs and symlinked context inputs fail explicitly rather than receiving
+an incomplete fingerprint.
+Native SIF builds stage that same filtered source list, including
+`source_branches.env`, instead of copying host caches and unrelated build helpers.
+
 Use `gg_container_build_entrypoint.sh` when you want the default SIF path pinned
 to `<repo-root>/genegalleon.sif`. Bare `apptainer build ...` writes to the
 current working directory unless you pass an explicit output path.
@@ -54,6 +64,8 @@ This repository now includes CI workflows that publish container images to GHCR:
   - the new daily epoch forces a small final Ubuntu package refresh even when
     the earlier, expensive image layers remain cached
   - tags: `YYYYMMDD-<sha7>-<source-hash12>`, `sha-<sha7>`, `latest`
+  - after publication, validates an amd64 SIF from the immutable tag and primes
+    the exact SIF cache used by subsequent commit checks
 - release publish + SIF build/upload workflow: `.github/workflows/release-sif.yml`
   - tags: `<release-tag>`, `YYYYMMDD-<sha7>-<source-hash12>`, `sha-<sha7>`
   - release assets always include `.sha256`
@@ -121,12 +133,16 @@ and records the value in `io.genegalleon.security-refresh-epoch` and
 version and MIT license.
 
 Images additionally carry `io.genegalleon.runtime-input`. This second
-fingerprint contains the platform, security epoch, exact moving-source
+fingerprint contains the security epoch, exact moving-source
 revisions, and container context, while intentionally excluding the
 GeneGalleon Git revision and version metadata. CI uses it to reuse a validated
 SIF when only mounted workflow code changed. It never reuses a SIF after an
 `nwkit`, `csubst`, other upstream, Dockerfile, environment, validation-script,
 or bundled `treevis` change.
+Platform and Singularity version are separate parts of the SIF cache key;
+the runtime-content hash itself is platform independent. Both amd64 and arm64
+published Docker images run the shared runtime validation manifest. Local
+macOS Docker validation does not substitute for the amd64 SIF check on CI.
 
 ### Convert registry or Docker-daemon image to SIF
 

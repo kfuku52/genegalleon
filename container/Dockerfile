@@ -313,6 +313,7 @@ RUN [[ "${SECURITY_REFRESH_EPOCH}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
  || { echo "SECURITY_REFRESH_EPOCH must use YYYY-MM-DD format" >&2; exit 1; } \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archives/partial/* \
  && apt-get update \
+ && apt-get install -y --no-install-recommends unzip \
  && apt-get upgrade --with-new-pkgs -y \
  && apt-get --simulate dist-upgrade > /tmp/gg-apt-upgrade-simulation.txt \
  && if awk '/^Inst / { found = 1 } END { exit found ? 0 : 1 }' /tmp/gg-apt-upgrade-simulation.txt; then \
