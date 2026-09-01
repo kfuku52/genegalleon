@@ -138,9 +138,12 @@ Purpose:
 - optional contamination filtering,
 - BUSCO and expression quantification summaries.
 
-For SRA-derived inputs, schema-3 `getfastq_completion.json` binds every published FASTQ
-to its relative path, byte size, SHA-256, and a complete gzip/FASTQ integrity
-check. GeneGalleon performs one full byte/integrity validation per invocation
+For SRA-derived inputs, schema-4 `getfastq_completion.json` binds every published FASTQ
+and its per-run `getfastq_stats.tsv` to relative paths, byte sizes, and SHA-256
+digests, and also requires a complete gzip/FASTQ integrity check. The statistics
+contract must contain positive extracted spot and base counts so downstream
+quantification can recover incomplete public SRA metadata without guessing.
+GeneGalleon performs one full byte/integrity validation per invocation
 that consumes the reads. Later consumers in the same invocation verify the
 manifest index and file identity (device, inode, size, mtime, and ctime); any
 identity change triggers another full byte/integrity validation.
@@ -152,7 +155,15 @@ files, so a published read set cannot mix filtered and original reads. The
 completion manifest records `read_source=amalgkit` or
 `read_source=public-original`; the latter means all runs use public originals
 and have not passed through amalgkit's rRNA/contamination filters. FASTQ files
-not referenced by the current metadata are quarantined outside the
+from public-original recovery are scanned once per filesystem identity to derive
+the bound spot/base statistics; repeated validation in the same recovery process
+reuses those metrics. Native amalgkit schema-3 completion manifests are converted
+to the bound GeneGalleon schema only after their exact run layouts, FASTQs, and
+statistics sidecars validate, avoiding a redundant all-run public download.
+Older schema-3 `public-original` manifests are migrated before quantification by
+validating and reusing their exact FASTQ byte contracts, deriving the missing
+statistics locally, and performing no network retrieval. FASTQ files not
+referenced by the current metadata are quarantined outside the
 `*.amalgkit.fastq.gz` namespace, and validation rejects any extra FASTQ that is
 not bound by the manifest.
 

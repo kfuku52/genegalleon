@@ -726,6 +726,25 @@ def test_transcriptome_core_busco_summary_loop_guards_missing_dir_before_find():
     )
 
 
+def test_transcriptome_quant_migrates_legacy_public_manifest_offline_before_provenance():
+    text = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    migration = (
+        'is_public_original_completion_manifest_v3 \\\n'
+        '    "${dir_amalgkit_getfastq_sp}/getfastq_completion.json"'
+    )
+    assert migration in text
+    start = text.index(migration)
+    quant_contract = text.index(
+        'gg_artifact_contract_init quant_provenance_args "transcriptome_quant"',
+        start,
+    )
+    block = text[start:quant_contract]
+    assert '"reuse-only"' in block
+    assert "refusing a redundant all-run download" in block
+    assert 'gg_artifact_record "${getfastq_provenance_args[@]}"' in block
+    assert 'gg_artifact_record "${assembly_provenance_args[@]}"' in block
+
+
 def test_transcriptome_core_guards_array_task_id_range_before_array_indexing():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)

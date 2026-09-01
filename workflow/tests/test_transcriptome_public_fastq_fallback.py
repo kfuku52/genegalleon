@@ -2,6 +2,7 @@ import ast
 import gzip
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -73,6 +74,7 @@ def _run_fallback(
     output_dir: Path,
     responses: dict[str, Union[bytes, list[bytes]]],
     attempt_counts=None,
+    recovery_mode="network",
 ):
     attempts: dict[str, int] = attempt_counts if attempt_counts is not None else {}
 
@@ -91,7 +93,7 @@ def _run_fallback(
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     old_argv = sys.argv
-    sys.argv = ["fallback", str(metadata_path), str(output_dir)]
+    sys.argv = ["fallback", str(metadata_path), str(output_dir), recovery_mode]
     try:
         exec(compile(_fallback_python_source(), str(CORE_PATH), "exec"), {"__name__": "__main__"})
     finally:
@@ -350,11 +352,157 @@ def test_public_fallback_reuses_valid_fastq_and_atomically_completes_missing_run
         assert handle.read() == b"@downloaded\nTGCA\n+\n!!!!\n"
     assert not _partial_files(output_dir)
     manifest = json.loads((output_dir / "getfastq_completion.json").read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == 3
+    assert manifest["schema_version"] == 4
     assert manifest["status"] == "complete"
     assert manifest["read_source"] == "public-original"
     assert manifest["run_count"] == 2
     assert [entry["run"] for entry in manifest["runs"]] == ["RUN1", "RUN2"]
+    for run in ("RUN1", "RUN2"):
+        stats_path = output_dir / run / "getfastq_stats.tsv"
+        assert stats_path.is_file()
+        assert f"{run}\t1\t4\t4\t4\n" in stats_path.read_text(encoding="utf-8")
+
+
+def test_schema3_public_fallback_migrates_offline_with_bound_quant_stats(monkeypatch, tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["RUN1"])
+    run_dir = output_dir / "RUN1"
+    run_dir.mkdir(parents=True)
+    fastq_path = run_dir / "RUN1.amalgkit.fastq.gz"
+    with gzip.open(fastq_path, "wb") as handle:
+        handle.write(b"@read1\nACGT\n+\n!!!!\n@read2\nTGCAA\n+\n!!!!!\n")
+    fastq_bytes = fastq_path.read_bytes()
+    (output_dir / "getfastq_completion.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "status": "complete",
+                "read_source": "public-original",
+                "run_count": 1,
+                "runs": [
+                    {
+                        "run": "RUN1",
+                        "status": "complete",
+                        "files": [
+                            {
+                                "path": "RUN1/RUN1.amalgkit.fastq.gz",
+                                "size": len(fastq_bytes),
+                                "sha256": hashlib.sha256(fastq_bytes).hexdigest(),
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    attempts = {}
+    assert _run_manifest_validator(metadata_path, output_dir).returncode == 0
+    assert _run_manifest_index_validator(metadata_path, output_dir).returncode == 0
+
+    _run_fallback(
+        monkeypatch,
+        metadata_path,
+        output_dir,
+        responses={},
+        attempt_counts=attempts,
+        recovery_mode="reuse-only",
+    )
+
+    assert attempts == {}
+    assert fastq_path.read_bytes() == fastq_bytes
+    manifest = json.loads((output_dir / "getfastq_completion.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 4
+    assert manifest["runs"][0]["stats"]["path"] == "RUN1/getfastq_stats.tsv"
+    stats_text = (run_dir / "getfastq_stats.tsv").read_text(encoding="utf-8")
+    assert "RUN1\t2\t9\t9\t9\n" in stats_text
+    assert _run_manifest_validator(metadata_path, output_dir).returncode == 0
+
+
+def test_failed_offline_migration_keeps_schema3_manifest_current(monkeypatch, tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["RUN1", "RUN2"])
+    entries = []
+    for run in ("RUN1", "RUN2"):
+        run_dir = output_dir / run
+        run_dir.mkdir(parents=True)
+        fastq_path = run_dir / f"{run}.amalgkit.fastq.gz"
+        with gzip.open(fastq_path, "wb") as handle:
+            handle.write(b"@read1\nACGT\n+\n!!!!\n")
+        payload = fastq_path.read_bytes()
+        entries.append(
+            {
+                "run": run,
+                "status": "complete",
+                "files": [
+                    {
+                        "path": f"{run}/{run}.amalgkit.fastq.gz",
+                        "size": len(payload),
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                    }
+                ],
+            }
+        )
+    legacy = {
+        "schema_version": 3,
+        "status": "complete",
+        "read_source": "public-original",
+        "run_count": 2,
+        "runs": entries,
+    }
+    manifest_path = output_dir / "getfastq_completion.json"
+    manifest_path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+    original_manifest = manifest_path.read_bytes()
+    original_replace = os.replace
+
+    def fail_second_stats(source, destination):
+        if Path(destination) == output_dir / "RUN2" / "getfastq_stats.tsv":
+            raise OSError("injected statistics publication failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_second_stats)
+    with pytest.raises(OSError, match="injected statistics publication failure"):
+        _run_fallback(
+            monkeypatch,
+            metadata_path,
+            output_dir,
+            responses={},
+            recovery_mode="reuse-only",
+        )
+
+    assert manifest_path.read_bytes() == original_manifest
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["schema_version"] == 3
+    assert not list(output_dir.glob("getfastq_completion.pre_public_fallback*.json"))
+
+
+def test_manifest_contract_hash_is_cached_for_unchanged_fastq(monkeypatch, tmp_path):
+    namespace = _fallback_definition_namespace()
+    output_dir = tmp_path / "getfastq"
+    run_dir = output_dir / "RUN1"
+    run_dir.mkdir(parents=True)
+    fastq_path = run_dir / "RUN1.amalgkit.fastq.gz"
+    with gzip.open(fastq_path, "wb") as handle:
+        handle.write(b"@read1\nACGT\n+\n!!!!\n")
+    namespace["output_root"] = output_dir
+
+    original_open = Path.open
+    hash_reads = 0
+
+    def counting_open(path, *args, **kwargs):
+        nonlocal hash_reads
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if path == fastq_path and mode == "rb":
+            hash_reads += 1
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    first = namespace["manifest_file_contract"](fastq_path)
+    second = namespace["manifest_file_contract"](fastq_path)
+    assert first == second
+    assert hash_reads == 1
 
 
 def test_public_fallback_preserves_existing_outputs_and_prior_manifest_on_failure(monkeypatch, tmp_path):
@@ -582,7 +730,7 @@ def test_completion_manifest_rejects_fastq_content_changed_after_publication(mon
 
 @pytest.mark.parametrize("validator", ["full", "index"])
 @pytest.mark.parametrize("invalid_contract", ["schema2", "missing_source", "mixed_source"])
-def test_completion_manifest_requires_schema3_read_source(
+def test_completion_manifest_requires_schema4_read_source(
     monkeypatch,
     tmp_path,
     validator,
@@ -615,6 +763,39 @@ def test_completion_manifest_requires_schema3_read_source(
         completed = _run_manifest_index_validator(metadata_path, output_dir)
 
     assert completed.returncode != 0
+
+
+@pytest.mark.parametrize("validator", ["full", "index"])
+def test_completion_manifest_rejects_missing_or_changed_quant_stats(
+    monkeypatch,
+    tmp_path,
+    validator,
+):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["RUN1"])
+    fastq_url = "https://example.invalid/RUN1.fastq"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=RUN1": _xml(
+            "RUN1.fastq", fastq_url
+        ),
+        fastq_url: b"@read\nACGT\n+\n!!!!\n",
+    }
+    _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+    stats_path = output_dir / "RUN1" / "getfastq_stats.tsv"
+    stats_path.write_text(
+        "run\tnum_written\tbp_fastp_in\nRUN1\t0\t0\n",
+        encoding="utf-8",
+    )
+
+    completed = (
+        _run_manifest_validator(metadata_path, output_dir)
+        if validator == "full"
+        else _run_manifest_index_validator(metadata_path, output_dir)
+    )
+
+    assert completed.returncode != 0
+    assert "statistics" in completed.stderr or "stats" in completed.stderr
 
 
 @pytest.mark.parametrize("validator", ["full", "index"])
@@ -748,16 +929,24 @@ def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path):
     stale_path.parent.mkdir()
     with gzip.open(stale_path, "wb") as handle:
         handle.write(b"@stale\nTGCA\n+\n!!!!\n")
+    stats_path = run_dir / "getfastq_stats.tsv"
+    stats_path.write_text(
+        "run\tnum_written\tbp_fastp_in\nRUN1\t1\t4\n",
+        encoding="utf-8",
+    )
     (output_dir / "getfastq_completion.json").write_text(
         json.dumps(
             {
+                "schema_version": 3,
                 "status": "complete",
                 "run_count": 1,
+                "fingerprint": "a" * 64,
                 "runs": [
                     {
                         "run": "RUN1",
-                        "status": "complete",
-                        "files": ["RUN1/RUN1.amalgkit.fastq.gz"],
+                        "layout": "single",
+                        "fingerprint": "b" * 64,
+                        "outputs": [{"name": "RUN1.amalgkit.fastq.gz"}],
                     }
                 ],
             }
@@ -771,12 +960,17 @@ def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path):
     assert bound.returncode == 0, bound.stderr
     manifest = json.loads((output_dir / "getfastq_completion.json").read_text(encoding="utf-8"))
     contract = manifest["runs"][0]["files"][0]
-    assert manifest["schema_version"] == 3
+    assert manifest["schema_version"] == 4
     assert manifest["read_source"] == "amalgkit"
     assert contract == {
         "path": "RUN1/RUN1.amalgkit.fastq.gz",
         "size": fastq_path.stat().st_size,
         "sha256": hashlib.sha256(fastq_path.read_bytes()).hexdigest(),
+    }
+    assert manifest["runs"][0]["stats"] == {
+        "path": "RUN1/getfastq_stats.tsv",
+        "size": stats_path.stat().st_size,
+        "sha256": hashlib.sha256(stats_path.read_bytes()).hexdigest(),
     }
     assert not stale_path.exists()
     assert stale_path.with_name(
@@ -784,6 +978,45 @@ def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path):
     ).is_file()
     validated = _run_manifest_validator(metadata_path, output_dir)
     assert validated.returncode == 0, validated.stderr
+
+
+def test_amalgkit_manifest_rejects_nonfinite_quant_statistics(tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    run_dir = output_dir / "RUN1"
+    run_dir.mkdir(parents=True)
+    _metadata(metadata_path, ["RUN1"])
+    with gzip.open(run_dir / "RUN1.amalgkit.fastq.gz", "wb") as handle:
+        handle.write(b"@read\nACGT\n+\n!!!!\n")
+    (run_dir / "getfastq_stats.tsv").write_text(
+        "run\tnum_written\tbp_fastp_in\nRUN1\tinf\tinf\n",
+        encoding="utf-8",
+    )
+    (output_dir / "getfastq_completion.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "status": "complete",
+                "run_count": 1,
+                "fingerprint": "a" * 64,
+                "runs": [
+                    {
+                        "run": "RUN1",
+                        "layout": "single",
+                        "fingerprint": "b" * 64,
+                        "outputs": [{"name": "RUN1.amalgkit.fastq.gz"}],
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    bound = _run_manifest_binder(metadata_path, output_dir)
+
+    assert bound.returncode != 0
+    assert "unusable getfastq statistics" in bound.stderr
 
 
 def test_downstream_fastq_gates_revalidate_the_completion_contract():
@@ -1042,7 +1275,7 @@ def test_public_fallback_resumes_interrupted_gzip_with_validated_http_range(
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     old_argv = sys.argv
-    sys.argv = ["fallback", str(metadata_path), str(output_dir)]
+    sys.argv = ["fallback", str(metadata_path), str(output_dir), "network"]
     try:
         exec(compile(_fallback_python_source(), str(CORE_PATH), "exec"), {"__name__": "__main__"})
     finally:
