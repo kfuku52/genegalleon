@@ -50,15 +50,20 @@ def test_longest_gtf_transcripts_do_not_merge_isoforms():
     assert out["end"].tolist() == [90]
 
 
-def test_longest_rejects_equal_length_conflicting_transcripts():
+def test_longest_breaks_equal_length_ties_by_transcript_id(capsys):
     gff = pandas.DataFrame(
         [
-            ["chr1", "CDS", 1, 90, "+", "Parent=gene1.t1;"],
             ["chr1", "CDS", 101, 190, "+", "Parent=gene1.t2;"],
+            ["chr1", "CDS", 1, 90, "+", "Parent=gene1.t1;"],
         ], columns=["sequence", "feature", "start", "end", "strand", "attributes"]
     )
-    with pytest.raises(ValueError, match="Ambiguous longest transcript"):
-        extract_by_ids(gff, pandas.Series(["Species_a_gene1"]), "CDS", "longest")
+    selected = extract_by_ids(gff, pandas.Series(["Species_a_gene1"]), "CDS", "longest")
+
+    assert selected[["start", "end"]].values.tolist() == [[1, 90]]
+    assert (
+        "Equal-length longest transcripts for Species_a_gene1; "
+        "selected gene1.t1 deterministically from gene1.t1,gene1.t2."
+    ) in capsys.readouterr().err
 
 
 def test_reverse_strand_cds_uses_transcript_order_and_genomic_bounds():

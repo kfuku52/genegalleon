@@ -87,7 +87,10 @@ def build_arg_parser():
     parser.add_argument("--feature", metavar="STR", default="CDS", type=str, help="Value used by --feature.")
     parser.add_argument(
         "--multiple_hits", default="longest", choices=["longest"],
-        help="Select one longest CDS transcript per gene; reject conflicting equal-length ties.",
+        help=(
+            "Select one longest CDS transcript per gene; break equal-length ties "
+            "deterministically by transcript identifier and report the choice."
+        ),
     )
     parser.add_argument("--ncpu", metavar="INT", default=1, type=int, help="Number of worker threads.")
     return parser
@@ -543,18 +546,24 @@ def select_longest_transcripts(gff):
         best_length = -1
         best_indices = None
         best_signature = None
-        tied_conflict = False
+        tied_transcripts = []
         for transcript in sorted(candidates):
             blocks = ordered_feature_blocks((coordinate_rows[index] for index in candidates[transcript]), gene_id)
             length = sum(end - start + 1 for _sequence, _strand, start, end in blocks)
             signature = tuple(blocks)
             if length > best_length:
                 best_length, best_indices, best_signature = length, candidates[transcript], signature
-                tied_conflict = False
+                tied_transcripts = [transcript]
             elif length == best_length and signature != best_signature:
-                tied_conflict = True
-        if tied_conflict:
-            raise ValueError("Ambiguous longest transcript for {}".format(gene_id))
+                tied_transcripts.append(transcript)
+        if len(tied_transcripts) > 1:
+            sys.stderr.write(
+                "Equal-length longest transcripts for {}; selected {} deterministically from {}.\n".format(
+                    gene_id,
+                    tied_transcripts[0],
+                    ",".join(tied_transcripts),
+                )
+            )
         selected.extend(best_indices)
     return gff.iloc[selected]
 
