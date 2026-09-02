@@ -3176,7 +3176,10 @@ def test_release_sif_builds_platforms_concurrently_on_native_runners():
     assert "- platform: linux/arm64\n            runner: ubuntu-24.04-arm" in build_block
     assert "docker/setup-qemu-action" not in workflow
     assert "scope=container-${{ steps.platform.outputs.pair }}" in build_block
+    assert "cache-to:" not in build_block
     assert "push-by-digest=true" in build_block
+    assert "Build amd64 SIF from exact platform digest" in build_block
+    assert "Publish content-addressed amd64 SIF artifact" in build_block
     assert "container/scripts/resolve_source_revisions.sh --format env --scope all" in workflow
     assert "GG_PIN_" not in workflow
 

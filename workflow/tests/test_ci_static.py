@@ -19,6 +19,7 @@ REVIEWED_ACTIONS = {
     "docker/build-push-action",
     "docker/login-action",
     "docker/setup-buildx-action",
+    "oras-project/setup-oras",
     "r-lib/actions/setup-r",
     "r-lib/actions/setup-r-dependencies",
 }
@@ -351,11 +352,11 @@ def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
 
 
 def test_release_sif_conversion_has_matching_disk_safeguards():
-    release_job = load_workflow("release-sif.yml")["jobs"]["publish-manifest-and-sif"]
-    runner_cleanup = step_run(release_job, "Reclaim runner disk space for SIF conversion")
-    runtime_install = named_step(release_job, "Install Singularity runtime")
-    conversion = named_step(release_job, "Build SIF from immutable GHCR tag")
-    disk_report = named_step(release_job, "Report SIF conversion disk usage")
+    release_job = load_workflow("release-sif.yml")["jobs"]["build-platform"]
+    runner_cleanup = step_run(release_job, "Reclaim amd64 runner disk space for SIF conversion")
+    runtime_install = named_step(release_job, "Install Singularity runtime for amd64 SIF")
+    conversion = named_step(release_job, "Build amd64 SIF from exact platform digest")
+    disk_report = named_step(release_job, "Report amd64 SIF conversion disk usage")
 
     assert "docker system prune --all --force --volumes" in runner_cleanup
     for path in ("/opt/ghc", "/usr/local/lib/android", "/usr/share/dotnet"):
@@ -367,7 +368,9 @@ def test_release_sif_conversion_has_matching_disk_safeguards():
     assert_pinned_singularity_runtime(runtime_install)
     assert "apt-get install -y apptainer" not in runtime_install["run"]
     assert "runner.temp" in conversion["env"]["TMPDIR"]
-    assert disk_report["if"] == "always()"
+    assert "always()" in disk_report["if"]
+    assert "matrix.platform == 'linux/amd64'" in conversion["if"]
+    assert '"docker://${IMAGE}@${DIGEST}"' in conversion["run"]
     assert "singularity-transport-tmp" in disk_report["run"]
 
 
@@ -378,22 +381,46 @@ def test_release_images_and_sif_are_validated_before_publication():
         "Resolve release, image tags, and source revisions",
     )
     image_validation = named_step(jobs["build-platform"], "Validate release runtime contracts")
-    conversion = named_step(jobs["publish-manifest-and-sif"], "Build SIF from immutable GHCR tag")
-    identity = named_step(jobs["publish-manifest-and-sif"], "Verify exact release SIF identity")
-    sif_validation = named_step(jobs["publish-manifest-and-sif"], "Validate release SIF runtime contracts")
+    conversion = named_step(jobs["build-platform"], "Build amd64 SIF from exact platform digest")
+    identity = named_step(jobs["build-platform"], "Verify exact amd64 SIF identity")
+    sif_validation = named_step(jobs["build-platform"], "Validate amd64 SIF runtime contracts")
+    handoff = named_step(jobs["publish-manifest-and-sif"], "Verify qualified amd64 SIF handoff")
 
     assert '"${IMAGE}@${DIGEST}"' in image_validation["run"]
     assert '--user "$(id -u):$(id -g)"' in image_validation["run"]
     assert 'git show-ref --verify --quiet "refs/tags/${release_tag}"' in release_resolution
     assert 'git rev-list -n 1 "refs/tags/${release_tag}"' in release_resolution
     assert "workflow/tests/run_checks.py runtime" in image_validation["run"]
-    assert conversion["env"]["TAG"] == "${{ needs.prepare-release.outputs.immutable_tag }}"
-    assert "release_tag" not in conversion["env"]["TAG"]
+    assert conversion["env"]["DIGEST"] == "${{ steps.build.outputs.digest }}"
+    assert "@${DIGEST}" in conversion["run"]
     assert "check_runtime_freshness.sh" in identity["run"]
     assert "--expected-hash" in identity["run"]
-    assert "steps.runtime-input.outputs.value" in identity["env"]["EXPECTED_RUNTIME_INPUT"]
+    assert "steps.build-input.outputs.runtime_value" in identity["env"]["EXPECTED_RUNTIME_INPUT"]
     assert "run_in_sif.sh" in sif_validation["run"]
     assert "workflow/tests/run_checks.py runtime" in sif_validation["run"]
+    assert "sha256sum --check --strict" in handoff["run"]
+
+
+def test_release_sif_is_published_early_as_durable_content_addressed_oci():
+    jobs = load_workflow("release-sif.yml")["jobs"]
+    build = jobs["build-platform"]
+    publish = named_step(build, "Publish content-addressed amd64 SIF artifact")
+    handoff = named_step(build, "Upload qualified SIF handoff")
+    docker_build = next(
+        step for step in build["steps"]
+        if str(step.get("uses", "")).startswith("docker/build-push-action@")
+    )
+
+    assert "cache-to" not in docker_build["with"]
+    assert "matrix.platform == 'linux/amd64'" in publish["if"]
+    assert "oras push" in publish["run"]
+    assert "sif-sha256-${sif_sha256}" in publish["run"]
+    assert "oras resolve" in publish["run"]
+    assert "@${manifest_digest}" in publish["run"]
+    assert handoff["with"]["retention-days"] == "1"
+    publish_job_text = json.dumps(jobs["publish-manifest-and-sif"], sort_keys=True)
+    assert "singularity build" not in publish_job_text
+    assert "Upload large SIF as workflow artifact" not in publish_job_text
 
 
 def test_toolchain_dependent_r_integration_test_runs_in_sif_job():

@@ -24,6 +24,7 @@ jobs:
       release_tag: ${{ steps.vars.outputs.release_tag }}
       release_sha: ${{ steps.vars.outputs.release_sha }}
       image: ${{ steps.vars.outputs.image }}
+      sif_repository: ${{ steps.vars.outputs.sif_repository }}
       immutable_tag: ${{ steps.vars.outputs.immutable_tag }}
       sha_tag: ${{ steps.vars.outputs.sha_tag }}
       build_date: ${{ steps.vars.outputs.build_date }}
@@ -87,6 +88,7 @@ jobs:
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           repo_name="$(basename "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/${repo_name}"
+          sif_repository="${image}-sif"
           date_tag="$(date -u +%Y%m%d)"
           short_sha="${release_sha:0:7}"
           build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -130,6 +132,7 @@ jobs:
             echo "release_tag=${release_tag}"
             echo "release_sha=${release_sha}"
             echo "image=${image}"
+            echo "sif_repository=${sif_repository}"
             echo "immutable_tag=${immutable_tag}"
             echo "sha_tag=sha-${short_sha}"
             echo "build_date=${build_date}"
@@ -260,9 +263,9 @@ jobs:
             KFTOOLS_REPO_SHA=${{ needs.prepare-release.outputs.kftools_repo_sha }}
             RKFTOOLS_REPO_SHA=${{ needs.prepare-release.outputs.rkftools_repo_sha }}
             RADTE_REPO_SHA=${{ needs.prepare-release.outputs.radte_repo_sha }}
-          # Reuse the same per-platform cache scopes as container-ghcr.yml.
+          # Consume the regular image-build cache, but do not block the release
+          # SIF on a new cache export.
           cache-from: type=gha,scope=container-${{ steps.platform.outputs.pair }}
-          cache-to: type=gha,mode=max,scope=container-${{ steps.platform.outputs.pair }}
 
       - name: Validate release runtime contracts
         shell: bash
@@ -302,6 +305,195 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Reclaim amd64 runner disk space for SIF conversion
+        if: matrix.platform == 'linux/amd64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Disk usage before cleanup:"
+          df -h /
+          sudo rm -rf -- \
+            /opt/ghc \
+            /usr/local/lib/android \
+            /usr/share/dotnet
+          sudo apt-get clean
+          docker system prune --all --force --volumes
+          echo "Disk usage after cleanup:"
+          df -h /
+
+      - name: Install Singularity runtime for amd64 SIF
+        if: matrix.platform == 'linux/amd64'
+        id: sif_runtime
+        shell: bash
+        env:
+          SINGULARITY_CE_VERSION: "4.5.0"
+          SINGULARITY_CE_DEB_SHA256: "85e6f7af5e7aad5b1bf28183ce333998bd37eb8f4769af352c47a5153f3373fb"
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates curl
+          deb_name="singularity-ce_${SINGULARITY_CE_VERSION}-noble_amd64.deb"
+          deb_path="${RUNNER_TEMP}/${deb_name}"
+          curl \
+            --fail \
+            --location \
+            --proto '=https' \
+            --retry 5 \
+            --retry-all-errors \
+            --show-error \
+            --silent \
+            --tlsv1.2 \
+            --output "${deb_path}" \
+            "https://github.com/sylabs/singularity/releases/download/v${SINGULARITY_CE_VERSION}/${deb_name}"
+          printf '%s  %s\n' "${SINGULARITY_CE_DEB_SHA256}" "${deb_path}" \
+            | sha256sum --check --strict
+          sudo apt-get install -y "${deb_path}"
+          installed_version="$(singularity version)"
+          expected_version="${SINGULARITY_CE_VERSION}-noble"
+          if [[ "${installed_version}" != "${expected_version}" ]]; then
+            echo "Expected SingularityCE ${expected_version}, found ${installed_version}."
+            exit 1
+          fi
+          echo "engine=singularity" >> "${GITHUB_OUTPUT}"
+
+      - name: Build amd64 SIF from exact platform digest
+        if: matrix.platform == 'linux/amd64'
+        shell: bash
+        env:
+          APPTAINER_CACHEDIR: ${{ runner.temp }}/apptainer-cache
+          APPTAINER_DISABLE_CACHE: "1"
+          APPTAINER_TMPDIR: ${{ runner.temp }}/apptainer-tmp
+          SINGULARITY_CACHEDIR: ${{ runner.temp }}/singularity-cache
+          SINGULARITY_DISABLE_CACHE: "1"
+          SINGULARITY_TMPDIR: ${{ runner.temp }}/singularity-tmp
+          TMPDIR: ${{ runner.temp }}/singularity-transport-tmp
+          IMAGE: ${{ needs.prepare-release.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ENGINE: ${{ steps.sif_runtime.outputs.engine }}
+          OUT: ${{ needs.prepare-release.outputs.sif_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "amd64 image digest is invalid: ${DIGEST}"
+            exit 1
+          fi
+          mkdir -p \
+            "${APPTAINER_CACHEDIR}" \
+            "${APPTAINER_TMPDIR}" \
+            "${SINGULARITY_CACHEDIR}" \
+            "${SINGULARITY_TMPDIR}" \
+            "${TMPDIR}"
+          required_bytes=$((15 * 1024 * 1024 * 1024))
+          available_bytes="$(df --output=avail -B1 "${RUNNER_TEMP}" | awk 'NR == 2 { print $1 }')"
+          if (( available_bytes < required_bytes )); then
+            echo "::error::Insufficient disk space for SIF conversion: need ${required_bytes} bytes, have ${available_bytes} bytes."
+            exit 1
+          fi
+          "${ENGINE}" build "${OUT}" "docker://${IMAGE}@${DIGEST}"
+          sha256sum "${OUT}" > "${OUT}.sha256"
+
+      - name: Verify exact amd64 SIF identity
+        if: matrix.platform == 'linux/amd64'
+        shell: bash
+        env:
+          SIF_PATH: ${{ needs.prepare-release.outputs.sif_name }}
+          SIF_ENGINE: ${{ steps.sif_runtime.outputs.engine }}
+          EXPECTED_RUNTIME_INPUT: ${{ steps.build-input.outputs.runtime_value }}
+        run: |
+          set -euo pipefail
+          GG_RUNTIME_FRESHNESS=off \
+          bash container/scripts/check_runtime_freshness.sh \
+            --sif "${SIF_PATH}" \
+            --engine "${SIF_ENGINE}" \
+            --expected-hash "${EXPECTED_RUNTIME_INPUT}"
+
+      - name: Validate amd64 SIF runtime contracts
+        if: matrix.platform == 'linux/amd64'
+        shell: bash
+        env:
+          GENEGALLEON_SIF: ${{ needs.prepare-release.outputs.sif_name }}
+          GG_RUNTIME_FRESHNESS: "off"
+        run: |
+          set -euo pipefail
+          bash workflow/tests/run_in_sif.sh \
+            python workflow/tests/run_checks.py runtime
+
+      - name: Set up ORAS
+        if: matrix.platform == 'linux/amd64'
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+
+      - name: Publish content-addressed amd64 SIF artifact
+        if: matrix.platform == 'linux/amd64'
+        shell: bash
+        env:
+          SIF_NAME: ${{ needs.prepare-release.outputs.sif_name }}
+          SIF_REPOSITORY: ${{ needs.prepare-release.outputs.sif_repository }}
+          IMAGE: ${{ needs.prepare-release.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          RELEASE_SHA: ${{ needs.prepare-release.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
+          GG_VERSION: ${{ needs.prepare-release.outputs.gg_version }}
+          RUNTIME_INPUT_SHA256: ${{ steps.build-input.outputs.runtime_value }}
+        run: |
+          set -euo pipefail
+          sif_sha256="$(cut -d' ' -f1 "${SIF_NAME}.sha256")"
+          if [[ ! "${sif_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "SIF checksum is invalid."
+            exit 1
+          fi
+          qualification="${SIF_NAME}.qualification.json"
+          jq -n \
+            --arg image_ref "${IMAGE}@${IMAGE_DIGEST}" \
+            --arg release_sha "${RELEASE_SHA}" \
+            --arg release_tag "${RELEASE_TAG}" \
+            --arg version "${GG_VERSION}" \
+            --arg runtime_input_sha256 "${RUNTIME_INPUT_SHA256}" \
+            --arg sif_sha256 "${sif_sha256}" \
+            '{schema_version:1,platform:"linux/amd64",image_ref:$image_ref,release_sha:$release_sha,release_tag:$release_tag,version:$version,runtime_input_sha256:$runtime_input_sha256,sif_sha256:$sif_sha256}' \
+            > "${qualification}"
+          artifact_tag="sif-sha256-${sif_sha256}"
+          oras push "${SIF_REPOSITORY}:${artifact_tag}" \
+            --artifact-type application/vnd.genegalleon.sif.v1 \
+            "${SIF_NAME}:application/vnd.sylabs.sif.layer.v1.sif" \
+            "${SIF_NAME}.sha256:text/plain" \
+            "${qualification}:application/vnd.genegalleon.sif.qualification.v1+json"
+          manifest_digest="$(oras resolve "${SIF_REPOSITORY}:${artifact_tag}")"
+          if [[ ! "${manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Published SIF manifest digest is invalid: ${manifest_digest}"
+            exit 1
+          fi
+          printf '%s@%s\n' "${SIF_REPOSITORY}" "${manifest_digest}" \
+            > "${SIF_NAME}.oci.txt"
+          oras manifest fetch "${SIF_REPOSITORY}@${manifest_digest}" >/dev/null
+
+      - name: Upload qualified SIF handoff
+        if: matrix.platform == 'linux/amd64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-sif-handoff-${{ needs.prepare-release.outputs.sif_name }}
+          path: |
+            ${{ needs.prepare-release.outputs.sif_name }}
+            ${{ needs.prepare-release.outputs.sif_name }}.sha256
+            ${{ needs.prepare-release.outputs.sif_name }}.qualification.json
+            ${{ needs.prepare-release.outputs.sif_name }}.oci.txt
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Report amd64 SIF conversion disk usage
+        if: always() && matrix.platform == 'linux/amd64'
+        shell: bash
+        run: |
+          set -u
+          df -h /
+          free -h
+          du -sh \
+            "${RUNNER_TEMP}/apptainer-cache" \
+            "${RUNNER_TEMP}/apptainer-tmp" \
+            "${RUNNER_TEMP}/singularity-cache" \
+            "${RUNNER_TEMP}/singularity-tmp" \
+            "${RUNNER_TEMP}/singularity-transport-tmp" \
+            2>/dev/null || true
+
   publish-manifest-and-sif:
     needs:
       - prepare-release
@@ -317,27 +509,38 @@ jobs:
         with:
           ref: ${{ needs.prepare-release.outputs.release_sha }}
 
-      - name: Reclaim runner disk space for SIF conversion
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Disk usage before cleanup:"
-          df -h /
-          sudo rm -rf -- \
-            /opt/ghc \
-            /usr/local/lib/android \
-            /usr/share/dotnet
-          sudo apt-get clean
-          docker system prune --all --force --volumes
-          echo "Disk usage after cleanup:"
-          df -h /
-
       - name: Download platform digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: ${{ runner.temp }}/digests
           pattern: release-digests-*
           merge-multiple: true
+
+      - name: Download qualified amd64 SIF handoff
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-sif-handoff-${{ needs.prepare-release.outputs.sif_name }}
+          path: .
+
+      - name: Verify qualified amd64 SIF handoff
+        shell: bash
+        env:
+          SIF_NAME: ${{ needs.prepare-release.outputs.sif_name }}
+          SIF_REPOSITORY: ${{ needs.prepare-release.outputs.sif_repository }}
+          RELEASE_SHA: ${{ needs.prepare-release.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          sha256sum --check --strict "${SIF_NAME}.sha256"
+          jq -e \
+            --arg release_sha "${RELEASE_SHA}" \
+            '.schema_version == 1 and .platform == "linux/amd64" and .release_sha == $release_sha and (.sif_sha256 | test("^[0-9a-f]{64}$"))' \
+            "${SIF_NAME}.qualification.json" >/dev/null
+          exact_ref="$(tr -d '\r\n' < "${SIF_NAME}.oci.txt")"
+          digest="${exact_ref#"${SIF_REPOSITORY}@"}"
+          if [[ "${exact_ref}" == "${digest}" || ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "SIF OCI locator is invalid: ${exact_ref}"
+            exit 1
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -348,31 +551,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute expected release runtime input
-        id: runtime-input
-        shell: bash
-        env:
-          GG_BUILD_SECURITY_REFRESH_EPOCH: ${{ needs.prepare-release.outputs.security_refresh_epoch }}
-          KFU52_AMALGKIT_REPO_SHA: ${{ needs.prepare-release.outputs.amalgkit_repo_sha }}
-          KFU52_CDSKIT_REPO_SHA: ${{ needs.prepare-release.outputs.cdskit_repo_sha }}
-          KFU52_CSUBST_REPO_SHA: ${{ needs.prepare-release.outputs.csubst_repo_sha }}
-          KFU52_NWKIT_REPO_SHA: ${{ needs.prepare-release.outputs.nwkit_repo_sha }}
-          BUSCO_REPO_SHA: ${{ needs.prepare-release.outputs.busco_repo_sha }}
-          PAML_REPO_SHA: ${{ needs.prepare-release.outputs.paml_repo_sha }}
-          KFL1OU_REPO_SHA: ${{ needs.prepare-release.outputs.kfl1ou_repo_sha }}
-          KFFRACTBIAS_REPO_SHA: ${{ needs.prepare-release.outputs.kffractbias_repo_sha }}
-          KFTOOLS_REPO_SHA: ${{ needs.prepare-release.outputs.kftools_repo_sha }}
-          RKFTOOLS_REPO_SHA: ${{ needs.prepare-release.outputs.rkftools_repo_sha }}
-          RADTE_REPO_SHA: ${{ needs.prepare-release.outputs.radte_repo_sha }}
-        run: |
-          set -euo pipefail
-          value="$(bash container/scripts/compute_build_input_hash.sh --runtime "${GG_BUILD_SECURITY_REFRESH_EPOCH}")"
-          if [[ ! "${value}" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "Release runtime input calculation returned an invalid digest." >&2
-            exit 1
-          fi
-          printf 'value=%s\n' "${value}" >> "${GITHUB_OUTPUT}"
 
       - name: Create and push multi-arch release manifest
         shell: bash
@@ -420,120 +598,6 @@ jobs:
           fi
           docker buildx imagetools create "${manifest_tags[@]}" "${refs[@]}"
 
-      - name: Install Singularity runtime
-        id: runtime
-        shell: bash
-        env:
-          SINGULARITY_CE_VERSION: "4.5.0"
-          SINGULARITY_CE_DEB_SHA256: "85e6f7af5e7aad5b1bf28183ce333998bd37eb8f4769af352c47a5153f3373fb"
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y ca-certificates curl
-          deb_name="singularity-ce_${SINGULARITY_CE_VERSION}-noble_amd64.deb"
-          deb_path="${RUNNER_TEMP}/${deb_name}"
-          curl \
-            --fail \
-            --location \
-            --proto '=https' \
-            --retry 5 \
-            --retry-all-errors \
-            --show-error \
-            --silent \
-            --tlsv1.2 \
-            --output "${deb_path}" \
-            "https://github.com/sylabs/singularity/releases/download/v${SINGULARITY_CE_VERSION}/${deb_name}"
-          printf '%s  %s\n' "${SINGULARITY_CE_DEB_SHA256}" "${deb_path}" \
-            | sha256sum --check --strict
-          sudo apt-get install -y "${deb_path}"
-          if ! command -v singularity >/dev/null 2>&1; then
-            echo "SingularityCE installation did not provide the singularity command."
-            exit 1
-          fi
-          installed_version="$(singularity version)"
-          expected_version="${SINGULARITY_CE_VERSION}-noble"
-          if [[ "${installed_version}" != "${expected_version}" ]]; then
-            echo "Expected SingularityCE ${expected_version}, found ${installed_version}."
-            exit 1
-          fi
-          echo "SingularityCE ${installed_version}"
-          echo "engine=singularity" >> "${GITHUB_OUTPUT}"
-
-      - name: Build SIF from immutable GHCR tag
-        shell: bash
-        env:
-          APPTAINER_CACHEDIR: ${{ runner.temp }}/apptainer-cache
-          APPTAINER_DISABLE_CACHE: "1"
-          APPTAINER_TMPDIR: ${{ runner.temp }}/apptainer-tmp
-          SINGULARITY_CACHEDIR: ${{ runner.temp }}/singularity-cache
-          SINGULARITY_DISABLE_CACHE: "1"
-          SINGULARITY_TMPDIR: ${{ runner.temp }}/singularity-tmp
-          TMPDIR: ${{ runner.temp }}/singularity-transport-tmp
-          IMAGE: ${{ needs.prepare-release.outputs.image }}
-          TAG: ${{ needs.prepare-release.outputs.immutable_tag }}
-          ENGINE: ${{ steps.runtime.outputs.engine }}
-          OUT: ${{ needs.prepare-release.outputs.sif_name }}
-        run: |
-          set -euo pipefail
-          mkdir -p \
-            "${APPTAINER_CACHEDIR}" \
-            "${APPTAINER_TMPDIR}" \
-            "${SINGULARITY_CACHEDIR}" \
-            "${SINGULARITY_TMPDIR}" \
-            "${TMPDIR}"
-          required_bytes=$((15 * 1024 * 1024 * 1024))
-          available_bytes="$(df --output=avail -B1 "${RUNNER_TEMP}" | awk 'NR == 2 { print $1 }')"
-          printf 'SIF disk preflight: required_free=%s available=%s bytes\n' \
-            "${required_bytes}" "${available_bytes}"
-          if (( available_bytes < required_bytes )); then
-            echo "::error::Insufficient disk space for SIF conversion: need ${required_bytes} bytes, have ${available_bytes} bytes."
-            exit 1
-          fi
-          df -h /
-          free -h
-          bash container/apptainer_from_docker.sh
-          sha256sum "${OUT}" > "${OUT}.sha256"
-
-      - name: Verify exact release SIF identity
-        shell: bash
-        env:
-          SIF_PATH: ${{ needs.prepare-release.outputs.sif_name }}
-          SIF_ENGINE: ${{ steps.runtime.outputs.engine }}
-          EXPECTED_RUNTIME_INPUT: ${{ steps.runtime-input.outputs.value }}
-        run: |
-          set -euo pipefail
-          GG_RUNTIME_FRESHNESS=off \
-          bash container/scripts/check_runtime_freshness.sh \
-            --sif "${SIF_PATH}" \
-            --engine "${SIF_ENGINE}" \
-            --expected-hash "${EXPECTED_RUNTIME_INPUT}"
-
-      - name: Validate release SIF runtime contracts
-        shell: bash
-        env:
-          GENEGALLEON_SIF: ${{ needs.prepare-release.outputs.sif_name }}
-          # Exact release identity was verified immediately above.
-          GG_RUNTIME_FRESHNESS: "off"
-        run: |
-          set -euo pipefail
-          bash workflow/tests/run_in_sif.sh \
-            python workflow/tests/run_checks.py runtime
-
-      - name: Report SIF conversion disk usage
-        if: always()
-        shell: bash
-        run: |
-          set -u
-          df -h /
-          free -h
-          du -sh \
-            "${RUNNER_TEMP}/apptainer-cache" \
-            "${RUNNER_TEMP}/apptainer-tmp" \
-            "${RUNNER_TEMP}/singularity-cache" \
-            "${RUNNER_TEMP}/singularity-tmp" \
-            "${RUNNER_TEMP}/singularity-transport-tmp" \
-            2>/dev/null || true
-
       - name: Resolve SIF upload strategy
         id: sif_meta
         shell: bash
@@ -548,10 +612,12 @@ jobs:
           else
             echo "upload_to_release=0" >> "${GITHUB_OUTPUT}"
             notice_file="${sif_file}.download.txt"
+            exact_ref="$(tr -d '\r\n' < "${sif_file}.oci.txt")"
             {
               echo "SIF is larger than GitHub Release asset size limit (2 GiB)."
-              echo "Download it from this workflow run artifact:"
-              echo "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+              echo "It is stored durably as this content-addressed OCI artifact:"
+              echo "${exact_ref}"
+              echo "Retrieve with: oras pull ${exact_ref}"
             } > "${notice_file}"
             echo "notice_file=${notice_file}" >> "${GITHUB_OUTPUT}"
           fi
@@ -566,16 +632,9 @@ jobs:
           gh release upload "${{ needs.prepare-release.outputs.release_tag }}" \
             "${{ needs.prepare-release.outputs.sif_name }}" \
             "${{ needs.prepare-release.outputs.sif_name }}.sha256" \
+            "${{ needs.prepare-release.outputs.sif_name }}.qualification.json" \
+            "${{ needs.prepare-release.outputs.sif_name }}.oci.txt" \
             --clobber
-
-      - name: Upload large SIF as workflow artifact
-        if: steps.sif_meta.outputs.upload_to_release != '1'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ needs.prepare-release.outputs.sif_name }}
-          path: ${{ needs.prepare-release.outputs.sif_name }}
-          if-no-files-found: error
-          retention-days: 90
 
       - name: Upload checksum and download notice to GitHub Release
         if: steps.sif_meta.outputs.upload_to_release != '1'
@@ -586,6 +645,8 @@ jobs:
           set -euo pipefail
           gh release upload "${{ needs.prepare-release.outputs.release_tag }}" \
             "${{ needs.prepare-release.outputs.sif_name }}.sha256" \
+            "${{ needs.prepare-release.outputs.sif_name }}.qualification.json" \
+            "${{ needs.prepare-release.outputs.sif_name }}.oci.txt" \
             "${{ steps.sif_meta.outputs.notice_file }}" \
             --clobber
 
@@ -606,12 +667,14 @@ jobs:
               echo "Uploaded release assets:"
               echo "- ${{ needs.prepare-release.outputs.sif_name }}"
               echo "- ${{ needs.prepare-release.outputs.sif_name }}.sha256"
+              echo "- ${{ needs.prepare-release.outputs.sif_name }}.qualification.json"
+              echo "- ${{ needs.prepare-release.outputs.sif_name }}.oci.txt"
             else
-              echo "SIF exceeded GitHub Release size limit and was uploaded as a workflow artifact."
+              echo "SIF exceeded the GitHub Release limit; the durable OCI locator is published instead."
               echo "Uploaded release assets:"
               echo "- ${{ needs.prepare-release.outputs.sif_name }}.sha256"
+              echo "- ${{ needs.prepare-release.outputs.sif_name }}.qualification.json"
+              echo "- ${{ needs.prepare-release.outputs.sif_name }}.oci.txt"
               echo "- ${{ steps.sif_meta.outputs.notice_file }}"
-              echo "Workflow artifact:"
-              echo "- ${{ needs.prepare-release.outputs.sif_name }}"
             fi
           } >> "${GITHUB_STEP_SUMMARY}"

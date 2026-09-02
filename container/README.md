@@ -225,16 +225,22 @@ GitHub Actions now publishes GHCR images and release SIF assets:
 - `.github/workflows/release-sif.yml`
   - trigger: Release `published`
   - tags: `<release-tag>`, `YYYYMMDD-<sha7>-<source-hash12>`, `sha-<sha7>`
-  - release assets: `<repo>_<release-tag>_amd64.sif` and `.sha256`
-  - oversized `SIF` files fall back to a 90-day workflow artifact
+  - the native amd64 shard converts and validates one exact-digest SIF without
+    waiting for arm64 or a release-cache export
+  - every SIF is stored durably in GHCR as a manifest-digest-addressed OCI
+    artifact with checksum and qualification JSON
+  - release assets include the SIF when it fits, otherwise its checksum,
+    qualification, and exact OCI locator
 
 Retention policy:
 
-- workflow `SIF` artifacts are short-lived convenience copies
-- immutable GHCR tags are the long-term source of truth
+- the one-day workflow `SIF` handoff is only for composing release assets
+- immutable image digests and SIF OCI manifest digests are the long-term source
+  of truth
 - immutable tags include the repository SHA and resolved-source fingerprint and
   are never overwritten; `sha-*`, `latest`, and release tags are aliases
-- historical `SIF` files should be recreated from immutable GHCR tags when needed
+- historical qualified SIFs should be pulled by their `.oci.txt` manifest
+  digest; rebuilding from the image is a recovery path, not the default
 
 User-side reproducible pull example:
 
