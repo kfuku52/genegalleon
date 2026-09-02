@@ -166,8 +166,10 @@ def scale_newick_time_values(text: str, scale: Decimal, direction: str) -> str:
 
 
 def looks_like_figtree_tree_line(line: str) -> bool:
-    stripped = line.lstrip()
-    return stripped.startswith("((") or "UTREE" in line
+    stripped = line.strip()
+    if "UTREE" in line:
+        return True
+    return stripped.startswith("(") and stripped.endswith(";") and ")" in stripped
 
 
 def scale_figtree_text(text: str, scale: Decimal, direction: str) -> str:
@@ -224,7 +226,7 @@ def extract_figtree_text(text: str, scale: Decimal, direction: str) -> str:
             tree_count += 1
             if tree_count >= 3:
                 break
-    if not output_lines:
+    if tree_count == 0:
         return ""
     return "\n".join(output_lines) + "\n"
 

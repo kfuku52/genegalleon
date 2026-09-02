@@ -3892,7 +3892,7 @@ if [[ ! -s "${genome_evolution_provenance_dir}/species_tree.mcmctree.json" && ! 
   echo "Backfilling legacy ${file_mcmctree_figtree_tre} from ${file_mcmctree_raw_output} before provenance adoption."
   awk '
   /Species tree for FigTree/ {print; in_figtree=1; next}
-  in_figtree && /^\(\(/ {print; count++; if (count >= 3) exit}
+  in_figtree && /^[[:space:]]*\(/ {print; count++; if (count >= 3) exit}
   ' "${file_mcmctree_raw_output}" > "tmp.mcmctree2.txt"
   if [[ -s "tmp.mcmctree2.txt" ]]; then
     mv_out "tmp.mcmctree2.txt" "${file_mcmctree_figtree_tre}"
@@ -3929,7 +3929,7 @@ if [[ ${convert_tree_needs_update} -eq 1 && ${run_convert_tree_format} -eq 1 ]];
       sed -e "s/.*UTREE 1 = //" -e "s/;.*/;/" -e "s/[[:space:]]*\[&95%={[0-9.]*,[[:space:]][0-9.]*}\][[:space:]]*//g" -e "s/:[[:space:]]/:/g" \
         > "${dir_mcmctree2}/mcmctree_no95CI.nwk"
   else
-    tree_line="$(awk '/^\(\(/ {line=$0} END {print line}' "${file_mcmctree_figtree_tre}")"
+    tree_line="$(awk '/^[[:space:]]*\(/ {line=$0} END {print line}' "${file_mcmctree_figtree_tre}")"
     if [[ -n "${tree_line}" ]]; then
       echo "${tree_line}" > "${dir_mcmctree2}/mcmctree_95CI.nwk"
       echo "${tree_line}" |
