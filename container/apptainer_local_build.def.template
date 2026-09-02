@@ -105,6 +105,7 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     # solved the base environment, added packages explicitly, then solved the
     # combined environment again.
     /opt/pg/scripts/install_env.sh base "${reconciled_required}" "${optional_file}" python=3.12
+    /opt/pg/scripts/ensure_aster_loader_compatibility.sh /opt/conda
     /opt/pg/scripts/ensure_generax_stable.sh base
     micromamba run -n base pip install --no-cache-dir \
         -r /opt/pg/pip-compatibility.requirements.txt

@@ -72,6 +72,13 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
  && /opt/pg/scripts/install_env.sh base "${reconciled_required}" "${optional_file}" python=3.12 \
  && rm -f "${reconciled_required}"
 
+# Temporary dependency correction for Bioconda ASTER 1.25 build 0. The script
+# fails closed unless both package metadata and hook contents match PR #68643,
+# and becomes a no-op as soon as a hook-free package is selected.
+COPY container/scripts/ensure_aster_loader_compatibility.sh /opt/pg/scripts/ensure_aster_loader_compatibility.sh
+
+RUN bash /opt/pg/scripts/ensure_aster_loader_compatibility.sh /opt/conda
+
 COPY container/testdata /opt/pg/testdata
 COPY container/scripts/ensure_generax_stable.sh /opt/pg/scripts/ensure_generax_stable.sh
 

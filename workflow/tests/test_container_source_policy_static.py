@@ -325,6 +325,18 @@ def test_container_build_paths_pin_the_same_base_image_digest():
     assert docker_base.group(0) == apptainer_base.group(0)
 
 
+def test_container_build_paths_share_the_fail_closed_aster_dependency_correction():
+    dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
+    apptainer_template = (
+        REPO_ROOT / "container" / "apptainer_local_build.def.template"
+    ).read_text(encoding="utf-8")
+    script_name = "ensure_aster_loader_compatibility.sh"
+
+    assert f"COPY container/scripts/{script_name}" in dockerfile
+    assert f"bash /opt/pg/scripts/{script_name} /opt/conda" in dockerfile
+    assert f"/opt/pg/scripts/{script_name} /opt/conda" in apptainer_template
+
+
 def test_container_build_paths_include_archive_interoperability_commands():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     apptainer_template = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")

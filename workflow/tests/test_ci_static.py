@@ -315,15 +315,11 @@ def test_sif_runtime_validation_starts_after_fast_preflight_guards():
     assert "runtime-change-filter.outputs.should_run == '1'" in sif_job["if"]
 
 
-def test_sif_runtime_validation_uses_exact_temporary_aster_runtime():
+def test_sif_runtime_validation_builds_current_dependency_corrected_runtime():
     sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
-    prepared = named_step(sif_job, "Validate exact runtime and reuse the shared SIF cache")
+    validation = named_step(sif_job, "Validate exact runtime and reuse the shared SIF cache")
 
-    assert prepared["with"] == {
-        "image-ref": "ghcr.io/kfuku52/genegalleon:20260901-2c1e5fd-1f6ad14c41e0",
-        "runtime-input": "1f6ad14c41e03cc13d84e096c7672f54ac0d6698efd42198809e320d1d72f2fe",
-        "security-refresh-epoch": "2026-08-31",
-    }
+    assert "with" not in validation
 
 
 def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
