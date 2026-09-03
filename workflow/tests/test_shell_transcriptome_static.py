@@ -365,6 +365,7 @@ def test_transcriptome_entrypoint_exposes_amalgkit_rrna_resource_limits():
     core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
 
+    assert 'amalgkit_rrna_filter="no"' in entrypoint
     assert 'amalgkit_rrna_filter_jobs="${amalgkit_rrna_filter_jobs:-1}"' in entrypoint
     assert 'amalgkit_rrna_filter_chunk_spots="${amalgkit_rrna_filter_chunk_spots:-5000000}"' in entrypoint
     assert 'amalgkit_rrna_filter_memory_limit="${amalgkit_rrna_filter_memory_limit:-32G}"' in entrypoint

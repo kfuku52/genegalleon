@@ -121,7 +121,7 @@ run_amalgkit_merge=1 # Expression merge of per-run abundance outputs generated b
 run_multispecies_summary=1 # Multi-species summary.
 
 # Input-download parameters
-amalgkit_rrna_filter="yes" # read-level rRNA removal in amalgkit getfastq. Observed to finish for ~4.2 Gbp total / ~14 million reads within a 350G job before contamination filtering; exact peak RAM and elapsed time for this step alone were not logged.
+amalgkit_rrna_filter="no" # Optional read-level rRNA removal in amalgkit getfastq. Not recommended for routine use because the MMseqs2/SILVA filtering step is very slow; set to yes only when it is specifically needed.
 amalgkit_rrna_filter_jobs="${amalgkit_rrna_filter_jobs:-1}" # Maximum number of runs searched for rRNA concurrently. One run still uses all GG_TASK_CPUS internally.
 amalgkit_rrna_filter_chunk_spots="${amalgkit_rrna_filter_chunk_spots:-5000000}" # Maximum spots per synchronized MMseqs rRNA query chunk.
 amalgkit_rrna_filter_memory_limit="${amalgkit_rrna_filter_memory_limit:-32G}" # MMseqs --split-memory-limit used for SILVA index creation and rRNA searches.
