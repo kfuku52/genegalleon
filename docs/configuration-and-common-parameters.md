@@ -80,7 +80,7 @@ or `bash ./dev config-schema markdown` to render a current reference table.
 - `GG_COMMON_SPECIES_LABEL_REGEX` (default empty)
 - `GG_COMMON_SPECIES_LABEL_MAP_TSV` (default empty)
 - `GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE` (default `zip`; `zip`, `files`, or the `raw` alias for `files`)
-- `GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES` (default `100`)
+- `GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES` (default `100`; deprecated compatibility setting, no longer used by array-task cleanup)
 - `GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION` (default `adaptive`; `adaptive`, `deflate`, or `store`)
 - `GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL` (default `6`; `0` through `9`)
 - `GG_COMMON_GENE_FAMILY_ZIP_WORKERS` (default `1`; `1` through `4`)

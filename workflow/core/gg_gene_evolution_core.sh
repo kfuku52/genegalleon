@@ -6636,13 +6636,13 @@ if [[ ${gene_family_run_succeeded:-0} -eq 1 && -n "${gene_family_materialization
   rm -f -- "${gene_family_materialization_receipt}"
 fi
 if [[ "${gene_family_output_storage}" == "zip" && ${gg_debug_mode:-0} -eq 0 ]]; then
-  if ! python "${gene_family_store_script}" archive-completed \
+  if ! python "${gene_family_store_script}" archive-family \
     "${gene_family_store_context_args[@]}" \
     "${gene_family_archive_write_args[@]}" \
-    --min-files "${gene_family_zip_min_batch_files}" \
+    --family-id "${og_id}" \
     --nonblocking
   then
-    echo "Warning: Failed to archive completed gene-family outputs; live files were preserved." >&2
+    echo "Warning: Failed to archive completed outputs for ${og_id}; live files were preserved." >&2
   fi
 fi
 

@@ -168,9 +168,12 @@ raw-to-ZIP conversion without rewriting every archive member first.
 The other output subdirectories do not have to contain every expected family.
 For example, files for completed families can be moved from a partially
 complete `mafft/` directory into ZIP storage while incomplete-family files
-remain live. Array tasks archive in batches controlled by
-`GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES` (default `100`); the progress
-summary flushes smaller completed batches.
+remain live. Each array task archives only its own family so it cannot hold the
+global reader-maintenance lock while sweeping the entire catalog. The progress
+summary separately flushes any remaining completed outputs.
+
+`GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES` is retained as a deprecated
+configuration compatibility setting and no longer controls array-task cleanup.
 
 Gene-family tasks hold a shared lock for their family while they may read or
 write live outputs. Lock files use 16 fixed hash stripes, so lock

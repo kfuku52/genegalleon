@@ -1327,6 +1327,38 @@ def test_active_store_reader_prevents_nonblocking_archive(tmp_path: Path):
     )
 
 
+def test_nonblocking_archive_family_does_not_wait_to_refresh_status(
+    tmp_path: Path,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "orthogroup"
+    family_id = "OG0000001"
+    _write_family_outputs(root, family_id, complete=False)
+    args = build_parser().parse_args(
+        [
+            "archive-family",
+            "--root",
+            str(root),
+            "--mode",
+            "orthogroup",
+            "--family-id",
+            family_id,
+            "--nonblocking",
+        ]
+    )
+
+    archive_root = root / ".gg_store"
+    with output_store_module.producer_quiescence_lock(archive_root) as acquired:
+        assert acquired
+        started = time.monotonic()
+        assert run_cli(args) == 0
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 1
+    assert not (root / "ARCHIVE_STATUS.tsv").exists()
+
+
 def test_query_prefix_family_metadata_prevents_cross_family_materialization(tmp_path: Path):
     root = tmp_path / "query2family"
     query_dir = tmp_path / "query_gene"

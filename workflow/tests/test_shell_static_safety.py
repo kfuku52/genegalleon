@@ -1387,7 +1387,8 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     assert "mark-running \\" in core
     assert "mark-complete \\" in core
     assert "mark-failed \\" in core
-    assert "archive-family \\" in core
+    assert core.count("archive-family \\") == 2
+    assert "archive-completed \\" not in core
     assert "storage-conversion.pending" in core
     assert "is-complete" not in core
     assert "finalize_gene_family_run_success" in core

@@ -716,15 +716,23 @@ class ProgressReporter:
 
 
 @contextlib.contextmanager
-def producer_read_lock(archive_root: Path) -> Iterator[None]:
+def producer_read_lock(
+    archive_root: Path,
+    *,
+    nonblocking: bool = False,
+) -> Iterator[bool]:
     """Keep archive maintenance from replacing a source while it is open."""
 
     _validate_archive_root(archive_root)
     if not archive_root.is_dir():
-        yield
+        yield True
         return
-    with _bucket_lock(archive_root / PRODUCER_LOCK_FILE, exclusive=False):
-        yield
+    with _bucket_lock(
+        archive_root / PRODUCER_LOCK_FILE,
+        exclusive=False,
+        nonblocking=nonblocking,
+    ) as acquired:
+        yield acquired
 
 
 class GeneFamilyOutputStore:
@@ -5275,11 +5283,21 @@ def compact_archives(
             return [path for path in created if path.is_file()]
 
 
-def _write_archive_status(root: Path, store: Optional[GeneFamilyOutputStore] = None) -> Path:
+def _write_archive_status(
+    root: Path,
+    store: Optional[GeneFamilyOutputStore] = None,
+    *,
+    nonblocking: bool = False,
+) -> Optional[Path]:
     root = Path(root).resolve()
     store = store or GeneFamilyOutputStore(root)
     rows: List[Tuple[str, str, int, int, int, str]] = []
-    with producer_read_lock(store.archive_root):
+    with producer_read_lock(
+        store.archive_root,
+        nonblocking=nonblocking,
+    ) as acquired:
+        if not acquired:
+            return None
         store._refresh_if_index_changed()
         for subdir in store._logical_subdirs_unlocked():
             artifacts = store._load_subdir_artifacts(subdir)
@@ -6251,7 +6269,7 @@ def run_cli(args: argparse.Namespace) -> int:
         )
         for zip_path, removed in results:
             print(f"archived\t{removed}\t{zip_path}")
-        _write_archive_status(root)
+        _write_archive_status(root, nonblocking=args.nonblocking)
         if mode == "orthogroup":
             completion_store = GeneFamilyOutputStore(root)
             if completed_family_ids(completion_store, family_ids) == set(family_ids):
@@ -6314,7 +6332,7 @@ def run_cli(args: argparse.Namespace) -> int:
         )
         for zip_path, removed in results:
             print(f"archived-partial\t{removed}\t{zip_path}")
-        _write_archive_status(root)
+        _write_archive_status(root, nonblocking=args.nonblocking)
         return 0
     if args.command in {"convert-storage", "storage-status"}:
         if args.command == "convert-storage":
