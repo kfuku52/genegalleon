@@ -3086,7 +3086,11 @@ def test_strict_conversion_rejects_family_owned_parameter_outside_catalog(
     assert not (root / ".gg_store" / "storage-conversion.pending").exists()
 
 
-def test_archive_family_cli_archives_failed_partial_outputs(tmp_path: Path):
+def test_archive_family_cli_archives_failed_partial_outputs(tmp_path: Path, monkeypatch):
+    import workflow.support.gene_family_output_store as output_store_module
+    def forbid_full_status(*args, **kwargs):
+        raise AssertionError("per-family cleanup must not scan the full store")
+    monkeypatch.setattr(output_store_module, "_write_archive_status", forbid_full_status)
     root = tmp_path / "query2family"
     query_dir = tmp_path / "query_gene"
     query_dir.mkdir()

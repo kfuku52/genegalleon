@@ -277,8 +277,11 @@ cp replacement.tsv \
   workspace/output/query2family/stat_branch/2_WOX_stat.branch.tsv
 ```
 
-`ARCHIVE_STATUS.tsv` is a snapshot rather than a filesystem watcher. After
-manual `cp`, `mv`, or `rm` operations, refresh its live-file counts with:
+`ARCHIVE_STATUS.tsv` is a snapshot rather than a filesystem watcher; its file
+modification time is the snapshot publication time. Per-task `archive-family`
+does not refresh it or scan the whole store, even after successful cleanup.
+Parent/batch archive operations still refresh it. After individual task
+completions or manual `cp`, `mv`, or `rm` operations, refresh its counts once with:
 
 ```bash
 bash workflow/gg_gene_family_archive.sh refresh-status \

@@ -605,6 +605,7 @@ def _write_archive_readme(root: Path | str) -> None:
         "New or manually changed files remain in <subdirectory>/ and override ZIP members.\n"
         "While a run is active, immutable ZIP parts are visible below archives/<subdirectory>/.\n"
         "ARCHIVE_STATUS.tsv is a snapshot of the physical location of every logical output set.\n"
+        "Per-family cleanup does not refresh this snapshot; its file timestamp marks publication.\n"
         "Internal indexes and deletion records are under .gg_store/; locks are under .gg_store_locks/.\n"
         "Do not edit or remove either internal tree.\n"
         "After manual file changes, run gg_gene_family_archive.sh refresh-status --root THIS_DIRECTORY.\n"
@@ -6332,7 +6333,10 @@ def run_cli(args: argparse.Namespace) -> int:
         )
         for zip_path, removed in results:
             print(f"archived-partial\t{removed}\t{zip_path}")
-        _write_archive_status(root, nonblocking=args.nonblocking)
+        # A task finalizes only its own family. A display-only full-store census
+        # here makes N task completions perform N whole-store scans under the
+        # producer lock. Explicit refresh-status / parent archive operations
+        # remain the owners of the timestamped ARCHIVE_STATUS.tsv snapshot.
         return 0
     if args.command in {"convert-storage", "storage-status"}:
         if args.command == "convert-storage":
