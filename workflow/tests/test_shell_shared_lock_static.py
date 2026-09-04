@@ -6,8 +6,7 @@ def test_shared_lock_helpers_delegate_metadata_to_shared_python_module():
     lock_text = read_text(WORKFLOW_DIR / "support" / "gg_shared_lock.sh")
     helper_text = read_text(WORKFLOW_DIR / "support" / "shared_lock.py")
 
-    assert 'SHARED_LOCK_FORMAT = "shared-lock-v2"' in helper_text
-    assert "os.O_CREAT | os.O_EXCL | os.O_WRONLY" in helper_text
+    assert 'SHARED_LOCK_FORMAT = "shared-lock-v3"' in helper_text
     assert "def stale_lock_reason(" in helper_text
     assert "same_host_same_boot_dead_pid" in helper_text
     assert "heartbeat_timeout" in helper_text
@@ -18,7 +17,7 @@ def test_shared_lock_helpers_delegate_metadata_to_shared_python_module():
     assert '"${helper_script}" owner-summary "${lock_file}"' in lock_text
     assert '"${helper_script}" try-create "${lock_file}" --pid "${owner_pid}"' in lock_text
     assert '"${helper_script}" reclaim-if-stale "${lock_file}" --stale-seconds "${stale_seconds}"' in lock_text
-    assert 'touch -c -- "${lock_file}" 2>/dev/null || true' in lock_text
+    assert '"${helper_script}" heartbeat "${lock_file}" --token "${owner_token}"' in lock_text
     assert "waiting for shared lock: ${description} (${owner_summary})" in lock_text
     assert "timed out waiting for shared lock: ${description} (${owner_summary})" in lock_text
     assert "gg_advisory_shared_lock_acquire()" in lock_text

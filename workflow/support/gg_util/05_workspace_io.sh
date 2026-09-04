@@ -448,47 +448,11 @@ mv_out() {
 }
 
 _gg_publish_lock_acquire() {
-	local lock_dir=$1
-	local description=$2
-	local poll_seconds
-	local timeout_seconds
-	local stale_seconds
-	local wait_started
-	local wait_logged=0
-	poll_seconds=$(gg_lock_poll_seconds)
-	timeout_seconds=$(gg_lock_acquire_timeout_seconds)
-	stale_seconds=$(gg_lock_stale_seconds)
-	wait_started=$(date +%s)
-	ensure_parent_dir "${lock_dir}" || return 1
-	while true; do
-		if mkdir -- "${lock_dir}" 2>/dev/null; then
-			return 0
-		fi
-		local now_epoch
-		local lock_mtime
-		now_epoch=$(date +%s)
-		lock_mtime=$(gg_stat_mtime_epoch "${lock_dir}")
-		if [[ "${lock_mtime}" =~ ^[0-9]+$ ]] && (( now_epoch - lock_mtime >= stale_seconds )); then
-			if rmdir -- "${lock_dir}" 2>/dev/null; then
-				echo "Recovered stale publication lock: ${description}" >&2
-				continue
-			fi
-		fi
-		if [[ ${wait_logged} -eq 0 ]]; then
-			echo "Waiting for publication lock: ${description}" >&2
-			wait_logged=1
-		fi
-		if (( now_epoch - wait_started >= timeout_seconds )); then
-			echo "Timed out waiting for publication lock: ${description}" >&2
-			return 1
-		fi
-		sleep "${poll_seconds}"
-	done
+	gg_shared_lock_acquire "$1" "$2"
 }
 
 _gg_publish_lock_release() {
-	local lock_dir=$1
-	rmdir -- "${lock_dir}"
+	gg_shared_lock_release "$1"
 }
 
 mv_out_bundle() (
@@ -748,9 +712,10 @@ remove_empty_subdirs() {
 		sub_directories+=( "${d}" )
 	done < <(find "${dir_main}" -mindepth 1 -maxdepth 1 -type d -print0)
 	for d in "${sub_directories[@]}"; do
-		if [[ -z "$(find "${d}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
-			echo "${echo_header}deleting ${d}"
-				rm -rf -- "${d}"
+		# Check emptiness and remove in one filesystem operation. A concurrent
+		# publisher must never lose files written after a separate empty check.
+		if rmdir -- "${d}" 2>/dev/null; then
+			echo "${echo_header}deleted empty directory ${d}"
 		fi
 	done
 	echo ""

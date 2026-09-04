@@ -4906,7 +4906,6 @@ else
   echo "fastp fastq files will not be removed."
 fi
 
-remove_empty_subdirs "${dir_transcriptome_assembly_output}"
 if [[ ${delete_tmp_dir} -eq 1 ]]; then
   echo "delete_tmp_dir=1: Normal completion. Deleting ${dir_tmp}"
   if [[ -n "${dir_tmp:-}" && "${dir_tmp}" != "/" ]]; then

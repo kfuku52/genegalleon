@@ -188,7 +188,8 @@ def test_download_manifest_recovers_stale_lock_file(tmp_path):
     stale_lock.write_text(
         json.dumps(
             {
-                "format": "shared-lock-v2",
+                "format": "shared-lock-v3",
+                "token": "fixture-owner",
                 "pid": 999999999,
                 "hostname": socket.gethostname(),
                 "boot_id": _current_boot_id(),
@@ -250,7 +251,8 @@ def test_download_manifest_does_not_reclaim_fresh_foreign_lock_file(tmp_path):
     foreign_lock.write_text(
         json.dumps(
             {
-                "format": "shared-lock-v2",
+                "format": "shared-lock-v3",
+                "token": "fixture-owner",
                 "pid": 999999999,
                 "hostname": "foreign-node",
                 "boot_id": "foreign-boot",

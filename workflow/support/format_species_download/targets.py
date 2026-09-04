@@ -231,7 +231,7 @@ def download_ncbi_datasets_file_from_id(
         return False
 
     lock_path = Path(str(destination) + ".lock")
-    heartbeat_state = acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
+    ownership = acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
     tmp_zip = Path(str(destination) + ".datasets.tmp.{}".format(os.getpid()))
     try:
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
@@ -301,5 +301,5 @@ def download_ncbi_datasets_file_from_id(
             pass
         except OSError:
             pass
-        release_download_lock(lock_path, heartbeat_state)
+        release_download_lock(lock_path, ownership)
     return True

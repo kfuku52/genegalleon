@@ -237,6 +237,24 @@ tasks even on Lustre `localflock` mounts. The `.gg_store_locks/` tree (including
 movable store metadata and must not be deleted by cleanup tools.
 Other workflows' array finalizers still require cross-node `flock` semantics.
 
+Shared download/cache, output-publication, and stage-transaction leases use `shared-lock-v3`
+metadata with a unique token for each acquisition. An old owner's heartbeat
+or release cannot modify a replacement owner's lease. Python callers must
+retain the ownership object returned by `acquire_lock` and pass it to
+`release_lock`; shell helpers retain ownership per lock path.
+
+Lease creation, stale recovery, heartbeat updates, and release are serialized
+by a short namespace lock in `.<lease-name>.guard.namespace-v1`. Its sibling
+`.<lease-name>.guard` marker and namespace directory are persistent coordination
+state. They must not be deleted during a run. A killed process or node loss
+inside that critical section can leave an abandoned guard; stop all users of
+that exact lease before inspecting and reconciling its owner records. Lease
+heartbeat expiry does not authorize stealing the mutation guard. Stop jobs
+using older shared-lock protocols before upgrading a shared workspace. Bundle
+publication now uses token-bearing regular lock files in place of empty
+`.gg-bundle.lock` directories; reconcile any abandoned directories after the
+old publishers have stopped before starting a new publisher.
+
 What to check:
 
 - verify the same namespace lock from two compute nodes on the actual workspace

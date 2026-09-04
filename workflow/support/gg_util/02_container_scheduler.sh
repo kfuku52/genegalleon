@@ -460,6 +460,7 @@ gg_normalize_scheduler_env() {
 	local echo_header='gg_normalize_scheduler_env: '
 	local scheduler_kind
 	local pbs_slots=""
+	local explicit_memory_per_cpu="${GG_MEM_PER_CPU_GB:-${MEM_PER_SLOT:-}}"
 	scheduler_kind=$(gg_detect_scheduler_kind)
 	GG_SCHEDULER_KIND=${scheduler_kind}
 	echo ${echo_header}'Scheduler metadata is normalized to GG_* variables.'
@@ -504,6 +505,9 @@ gg_normalize_scheduler_env() {
 			GG_JOB_ID=1
 		fi
 	fi
+	if [[ -z "${GG_ARRAY_JOB_ID:-}" ]]; then
+		GG_ARRAY_JOB_ID=${SLURM_ARRAY_JOB_ID:-${GG_JOB_ID}}
+	fi
 	if [[ -z "${GG_ARRAY_TASK_ID:-}" ]]; then
 		if [[ "${SGE_TASK_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
 			echo ${echo_header}'GG_ARRAY_TASK_ID=${SGE_TASK_ID} (from legacy SGE_TASK_ID)'
@@ -547,6 +551,8 @@ gg_normalize_scheduler_env() {
 		if [[ -n "${SLURM_MEM_PER_CPU:-}" ]]; then
 			echo ${echo_header}'GG_MEM_PER_CPU_GB=$((${SLURM_MEM_PER_CPU}/1024))'
 			GG_MEM_PER_CPU_GB=$((${SLURM_MEM_PER_CPU}/1024))
+		elif [[ "${SLURM_MEM_PER_NODE:-}" =~ ^[1-9][0-9]*$ ]]; then
+			GG_MEM_PER_CPU_GB=$((SLURM_MEM_PER_NODE / 1024 / GG_TASK_CPUS))
 		else
 			echo ${echo_header}'No scheduler memory-per-CPU metadata was detected. GG_MEM_PER_CPU_GB=3'
 			GG_MEM_PER_CPU_GB=3
@@ -557,19 +563,26 @@ gg_normalize_scheduler_env() {
 		GG_MEM_TOTAL_GB=${MEM_PER_HOST}
 	fi
 	if [[ -z "${GG_MEM_TOTAL_GB:-}" ]]; then
-		GG_MEM_TOTAL_GB=$((${GG_MEM_PER_CPU_GB}*${GG_TASK_CPUS}))
+		if [[ -z "${explicit_memory_per_cpu}" && "${SLURM_MEM_PER_NODE:-}" =~ ^[1-9][0-9]*$ ]]; then
+			GG_MEM_TOTAL_GB=$((SLURM_MEM_PER_NODE / 1024))
+		elif [[ -z "${explicit_memory_per_cpu}" && "${SLURM_MEM_PER_CPU:-}" =~ ^[1-9][0-9]*$ ]]; then
+			GG_MEM_TOTAL_GB=$((SLURM_MEM_PER_CPU * GG_TASK_CPUS / 1024))
+		else
+			GG_MEM_TOTAL_GB=$((${GG_MEM_PER_CPU_GB}*${GG_TASK_CPUS}))
+		fi
 	fi
 	gg_normalize_memory_budget
 	gg_sync_legacy_scheduler_aliases
 	echo ${echo_header}"GG_TASK_CPUS=${GG_TASK_CPUS}"
 	echo ${echo_header}"GG_JOB_ID=${GG_JOB_ID}"
+	echo ${echo_header}"GG_ARRAY_JOB_ID=${GG_ARRAY_JOB_ID}"
 	echo ${echo_header}"GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID}"
 	echo ${echo_header}"GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB}"
 	echo ${echo_header}"GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB}"
 	echo ${echo_header}"GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB}"
 	echo ${echo_header}"GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB}"
 	echo ""
-	export GG_SCHEDULER_KIND GG_ARRAY_TASK_COUNT
+	export GG_SCHEDULER_KIND GG_ARRAY_TASK_COUNT GG_ARRAY_JOB_ID
 }
 
 variable_SGEnizer() {
@@ -591,7 +604,7 @@ gg_print_scheduler_runtime_summary() {
 	fi
 
 	echo "${echo_header}scheduler=${scheduler}"
-	echo "${echo_header}requested.slurm cpus_per_task=${SLURM_CPUS_PER_TASK:-NA} mem_per_cpu_mb=${SLURM_MEM_PER_CPU:-NA} array_task_id=${SLURM_ARRAY_TASK_ID:-NA} job_id=${SLURM_JOB_ID:-NA}"
+	echo "${echo_header}requested.slurm cpus_per_task=${SLURM_CPUS_PER_TASK:-NA} mem_per_cpu_mb=${SLURM_MEM_PER_CPU:-NA} mem_per_node_mb=${SLURM_MEM_PER_NODE:-NA} array_task_id=${SLURM_ARRAY_TASK_ID:-NA} array_job_id=${SLURM_ARRAY_JOB_ID:-NA} job_id=${SLURM_JOB_ID:-NA}"
 	echo "${echo_header}requested.pbs nodefile_slots=${pbs_slots} array_index=${PBS_ARRAY_INDEX:-NA} array_id=${PBS_ARRAYID:-NA} job_id=${PBS_JOBID:-NA}"
 	echo "${echo_header}legacy_aliases NSLOTS=${NSLOTS:-NA} SGE_TASK_ID=${SGE_TASK_ID:-NA} JOB_ID=${JOB_ID:-NA} MEM_PER_SLOT=${MEM_PER_SLOT:-NA} MEM_PER_HOST=${MEM_PER_HOST:-NA}"
 	echo "${echo_header}detected GG_TASK_CPUS=${GG_TASK_CPUS:-NA} GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-NA} GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-NA} GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB:-NA} GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB:-NA} GG_JOB_ID=${GG_JOB_ID:-NA} GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-NA}"
@@ -652,6 +665,8 @@ set_singularityenv() {
 	unset APPTAINERENV_KMP_TEAMS_THREAD_LIMIT
 	export SINGULARITYENV_GG_JOB_ID=${GG_JOB_ID:-1}
 	export APPTAINERENV_GG_JOB_ID=${GG_JOB_ID:-1}
+	export SINGULARITYENV_GG_ARRAY_JOB_ID=${GG_ARRAY_JOB_ID:-${GG_JOB_ID:-1}}
+	export APPTAINERENV_GG_ARRAY_JOB_ID=${GG_ARRAY_JOB_ID:-${GG_JOB_ID:-1}}
 	export SINGULARITYENV_GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-3}
 	export APPTAINERENV_GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-3}
 	export SINGULARITYENV_GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-3}

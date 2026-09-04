@@ -110,7 +110,11 @@ def test_fractionation_bias_core_runs_pair_and_publishes_bundle(tmp_path: Path) 
         "synthetic.plot.png",
         "synthetic.synteny.zip",
     }
-    assert {path.name for path in result_dir.iterdir()} == expected
+    # Persistent publication guards are coordination state, not tool outputs.
+    assert {
+        path.name for path in result_dir.iterdir()
+        if not path.name.endswith((".gg-bundle.lock.guard", ".gg-bundle.lock.guard.namespace-v1"))
+    } == expected
     assert all((result_dir / filename).stat().st_size > 0 for filename in expected)
 
     summary = json.loads((result_dir / "synthetic.summary.json").read_text(encoding="utf-8"))

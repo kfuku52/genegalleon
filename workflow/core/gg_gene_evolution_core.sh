@@ -6620,7 +6620,6 @@ for file_from in "${file_params[@]}"; do
 done
 
 cd "${gg_workspace_dir}" || exit 1
-remove_empty_subdirs "${dir_output_active}"
 
 gene_family_outputs_complete=0
 if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" ]]; then

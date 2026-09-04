@@ -18,9 +18,9 @@ from shared_lock import FIELD_SEPARATOR, read_lock_metadata, try_create_lock  # 
 
 def test_heartbeat_stop_during_child_pid_assignment_reaps_sleep(tmp_path):
     lock_path = tmp_path / "heartbeat.lock"
-    lock_path.touch()
     script = f'''
 source "{SUPPORT_DIR / 'gg_shared_lock.sh'}"
+gg_shared_lock_try_create "{lock_path}"
 set -T
 trap 'case "$BASH_COMMAND" in heartbeat_sleep_pid=*) kill -TERM "$BASHPID";; esac' DEBUG
 gg_shared_lock_start_heartbeat "{lock_path}"
@@ -65,13 +65,14 @@ def test_python_and_shell_shared_lock_helpers_use_same_metadata_format(tmp_path)
 
     assert completed.returncode == 0, completed.stderr
     fields = completed.stdout.strip().split(FIELD_SEPARATOR)
-    assert fields[:4] == ["shared-lock-v2", "12345", "lock-host", "boot-1"]
+    assert fields[:4] == ["shared-lock-v3", "12345", "lock-host", "boot-1"]
     assert fields[5] != ""
     assert fields[6] != ""
     assert fields[7] != ""
 
     metadata = read_lock_metadata(lock_path)
-    assert metadata["format"] == "shared-lock-v2"
+    assert metadata["format"] == "shared-lock-v3"
+    assert metadata["token"] == fields[8]
     assert metadata["pid"] == 12345
     assert metadata["hostname"] == "lock-host"
     assert metadata["boot_id"] == "boot-1"
@@ -96,7 +97,8 @@ def test_shell_shared_lock_try_create_writes_python_readable_metadata(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(lock_path.read_text(encoding="utf-8"))
-    assert payload["format"] == "shared-lock-v2"
+    assert payload["format"] == "shared-lock-v3"
+    assert payload["token"]
     assert payload["pid"] == 4242
     assert payload["hostname"]
     assert "created_at" in payload

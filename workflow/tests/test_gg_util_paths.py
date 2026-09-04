@@ -1794,10 +1794,10 @@ def test_mv_out_bundle_serializes_concurrent_publishers(tmp_path):
     first_command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
         "GG_LOCK_POLL_SECONDS=1; GG_LOCK_ACQUIRE_TIMEOUT_SECONDS=10; "
-        "mkdir() { command mkdir \"$@\"; local status=$?; "
-        f"if [[ $* == *gg-bundle.lock* && ${{status}} -eq 0 ]]; then touch {shlex.quote(str(acquired_marker))}; "
-        f"while [[ ! -e {shlex.quote(str(release_marker))} ]]; do sleep 0.05; done; fi; "
-        "return ${status}; }; "
+        "_gg_publish_lock_acquire() { gg_shared_lock_acquire \"$@\" || return $?; "
+        f"touch {shlex.quote(str(acquired_marker))}; "
+        f"while [[ ! -e {shlex.quote(str(release_marker))} ]]; do sleep 0.05; done; "
+        "}; "
         f"mv_out_bundle {shlex.quote(str(first_source))} {shlex.quote(str(destination))}"
     )
     second_command = (
@@ -1855,8 +1855,7 @@ def test_mv_out_bundle_lock_order_is_locale_independent(tmp_path):
             f"source {shlex.quote(str(GG_UTIL_PATH))}; "
             f"export LC_ALL={shlex.quote(locale_name)}; "
             f"lock_log={shlex.quote(str(lock_log))}; "
-            "_gg_publish_lock_acquire() { printf '%s\\n' \"$1\" >> \"${lock_log}\"; command mkdir -- \"$1\"; }; "
-            "_gg_publish_lock_release() { command rmdir -- \"$1\"; }; "
+            "_gg_publish_lock_acquire() { printf '%s\\n' \"$1\" >> \"${lock_log}\"; gg_shared_lock_acquire \"$@\"; }; "
             "mv_out_bundle "
             f"{shlex.quote(str(underscore_source))} {shlex.quote(str(underscore_destination))} "
             f"{shlex.quote(str(hyphen_source))} {shlex.quote(str(hyphen_destination))}"

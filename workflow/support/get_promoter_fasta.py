@@ -152,7 +152,11 @@ def main():
     args.ncpu = normalize_ncpu(args.ncpu)
     print("get_promoter_fasta.py started.")
 
-    df = pandas.read_csv(args.geneinfo_tsv, sep="\t", header=0)
+    df = pandas.read_csv(
+        args.geneinfo_tsv, sep="\t", header=0,
+        dtype={"gene_id": str, "chromosome": str, "strand": str},
+        keep_default_na=False,
+    )
     species_key = df.loc[:, "gene_id"].astype(str).map(extract_species_label)
     df.loc[:, "_species_key"] = species_key.fillna("")
     spp = sorted([sp for sp in df.loc[:, "_species_key"].unique() if sp != ""])

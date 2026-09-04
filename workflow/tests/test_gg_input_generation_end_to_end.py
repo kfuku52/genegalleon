@@ -666,7 +666,8 @@ def test_provenance_rebuild_reuses_verified_download_cache(tmp_path: Path):
     cache = Path(env["download_dir"])
     cached = {
         path: (path.read_bytes(), path.stat().st_mtime_ns)
-        for path in cache.rglob("*") if path.is_file() and not path.name.endswith(".lock")
+        for path in cache.rglob("*")
+        if path.is_file() and not path.name.endswith((".lock", ".lock.guard"))
     }
     assert len(cached) == 6
     formatted = {

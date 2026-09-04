@@ -77,30 +77,27 @@ def main():
     print("get_trait_matrix.py started.")
 
     seq_names = read_fasta_seqname(file_path=args.seqfile)
-    gene_names = [get_gene_name(sn) for sn in seq_names]
-    gene_species_uniq = sorted(set([get_species_name(sn) for sn in seq_names]))
-    search_ids = set(seq_names + gene_names)
-
-    id_map = {}
-    for seq_name, gene_name in zip(seq_names, gene_names, strict=True):
+    species_id_maps = {}
+    for seq_name in seq_names:
+        id_map = species_id_maps.setdefault(get_species_name(seq_name), {})
         id_map[seq_name] = seq_name
-        id_map[gene_name] = seq_name
+        id_map[get_gene_name(seq_name)] = seq_name
 
     trait_files = sorted([tf for tf in os.listdir(args.dir_trait) if not tf.startswith(".")])
     tasks = []
     for trait_file in trait_files:
         species_name = trait_filename_to_species_name(trait_file)
         print("Started processing {}: species name = {}".format(trait_file, species_name))
-        if species_name not in gene_species_uniq:
+        if species_name not in species_id_maps:
             print("Trait file for {} not found in {}. Skipping".format(species_name, args.dir_trait))
             continue
         trait_path = os.path.join(args.dir_trait, trait_file)
-        tasks.append((trait_file, trait_path))
+        tasks.append((trait_file, trait_path, species_id_maps[species_name]))
 
     frames = []
     if args.ncpu == 1 or len(tasks) <= 1:
-        for trait_file, trait_path in tasks:
-            trait2 = process_trait_file(trait_path=trait_path, search_ids=search_ids, id_map=id_map)
+        for trait_file, trait_path, id_map in tasks:
+            trait2 = process_trait_file(trait_path=trait_path, search_ids=set(id_map), id_map=id_map)
             if trait2.shape[0] > 0:
                 frames.append(trait2)
             print("Finished processing {}: Number of identified genes = {:,}".format(trait_file, trait2.shape[0]))
@@ -108,8 +105,8 @@ def main():
         max_workers = min(args.ncpu, len(tasks))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(process_trait_file, trait_path, search_ids, id_map): (idx, trait_file)
-                for idx, (trait_file, trait_path) in enumerate(tasks)
+                executor.submit(process_trait_file, trait_path, set(id_map), id_map): (idx, trait_file)
+                for idx, (trait_file, trait_path, id_map) in enumerate(tasks)
             }
             ordered_results = {}
             for future in as_completed(futures):

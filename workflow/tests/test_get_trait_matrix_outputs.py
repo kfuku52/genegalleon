@@ -2,6 +2,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[1] / "support" / "get_trait_matrix.py"
 
 
@@ -57,3 +59,24 @@ def test_get_trait_matrix_writes_matched_trait_values(tmp_path):
         "gene_id\troot_1\troot_2\n"
         "Species_a_gene1\t1.0\t2.0\n"
     )
+
+
+@pytest.mark.parametrize("ncpu", [1, 2])
+@pytest.mark.parametrize("qualified", [False, True])
+def test_get_trait_matrix_keeps_species_with_colliding_gene_ids(tmp_path, ncpu, qualified):
+    traits = tmp_path / "traits"
+    traits.mkdir()
+    for species, value in (("Species_a", 11), ("Species_b", 99)):
+        gene = species + "_gene1" if qualified else "gene1"
+        # A fully qualified ID from another species must not match this file.
+        foreign = "Species_b_gene2\t123\n" if species == "Species_a" else ""
+        (traits / (species + ".tsv")).write_text(f"gene_id\troot\n{gene}\t{value}\n{foreign}")
+    fasta = tmp_path / "genes.fa"
+    fasta.write_text(">Species_a_gene1\nATG\n>Species_b_gene1\nATG\n>Species_b_gene2\nATG\n")
+    output = tmp_path / "expression.tsv"
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--dir_trait", str(traits), "--seqfile", str(fasta),
+         "--outfile", str(output), "--ncpu", str(ncpu)], capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == "gene_id\troot\nSpecies_a_gene1\t11\nSpecies_b_gene1\t99\n"

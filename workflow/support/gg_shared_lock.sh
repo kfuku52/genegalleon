@@ -163,7 +163,7 @@ gg_array_finalizer_claim() {
     return 2
   fi
   expected_count=$(gg_array_expected_task_count "${fallback_count}")
-  run_id=$(printf '%s' "${GG_JOB_ID:-local}" | sed 's/[^[:alnum:]._-]/_/g')
+  run_id=$(printf '%s' "${GG_ARRAY_JOB_ID:-${GG_JOB_ID:-local}}" | sed 's/[^[:alnum:]._-]/_/g')
   task_id=$(printf '%s' "${GG_ARRAY_TASK_ID:-1}" | sed 's/[^[:alnum:]._-]/_/g')
   stage_name=$(printf '%s' "${stage_name}" | sed 's/[^[:alnum:]._-]/_/g')
   # Local, non-array invocations commonly reuse the synthetic job ID "1".
@@ -346,20 +346,44 @@ gg_shared_lock_try_create() {
   local owner_pid=${2:-$$}
   local py_exec
   local helper_script
-  py_exec=$(gg_shared_lock_python) || return 1
-  helper_script=$(gg_shared_lock_helper_script) || return 1
-  "${py_exec}" "${helper_script}" try-create "${lock_file}" --pid "${owner_pid}"
+  local owner_index owner_token create_status
+  py_exec=$(gg_shared_lock_python) || return 2
+  helper_script=$(gg_shared_lock_helper_script) || return 2
+  gg_shared_lock_owner_index "${lock_file}"
+  owner_index=${GG_SHARED_LOCK_OWNER_INDEX}
+  # Preserve the first acquisition if this shell tries the same path twice.
+  [[ -z "${GG_SHARED_LOCK_OWNER_TOKENS[owner_index]}" ]] || return 1
+  owner_token=$("${py_exec}" "${helper_script}" new-token) || return 2
+  GG_SHARED_LOCK_OWNER_TOKENS[owner_index]=${owner_token}
+  GG_SHARED_LOCK_PENDING_FILE=${lock_file}
+  if "${py_exec}" "${helper_script}" try-create "${lock_file}" --pid "${owner_pid}" --token "${owner_token}"; then
+    GG_SHARED_LOCK_PENDING_FILE=""
+    return 0
+  else
+    create_status=$?
+    GG_SHARED_LOCK_OWNER_TOKENS[owner_index]=""
+    GG_SHARED_LOCK_PENDING_FILE=""
+    return "${create_status}"
+  fi
 }
 
-gg_shared_lock_remove_if_unchanged() {
+gg_shared_lock_owner_index() {
   local lock_file=$1
-  local expected_device=$2
-  local expected_inode=$3
-  local py_exec
-  local helper_script
-  py_exec=$(gg_shared_lock_python) || return 1
-  helper_script=$(gg_shared_lock_helper_script) || return 1
-  "${py_exec}" "${helper_script}" remove-if-unchanged "${lock_file}" "${expected_device}" "${expected_inode}"
+  local index
+  # Indexed arrays also work in entrypoints launched by macOS's Bash 3.
+  if ! declare -p GG_SHARED_LOCK_OWNER_PATHS >/dev/null 2>&1; then
+    GG_SHARED_LOCK_OWNER_PATHS=("")
+    GG_SHARED_LOCK_OWNER_TOKENS=("")
+  fi
+  for index in "${!GG_SHARED_LOCK_OWNER_PATHS[@]}"; do
+    if [[ "${GG_SHARED_LOCK_OWNER_PATHS[index]}" == "${lock_file}" ]]; then
+      GG_SHARED_LOCK_OWNER_INDEX=${index}
+      return 0
+    fi
+  done
+  GG_SHARED_LOCK_OWNER_INDEX=${#GG_SHARED_LOCK_OWNER_PATHS[@]}
+  GG_SHARED_LOCK_OWNER_PATHS[GG_SHARED_LOCK_OWNER_INDEX]=${lock_file}
+  GG_SHARED_LOCK_OWNER_TOKENS[GG_SHARED_LOCK_OWNER_INDEX]=""
 }
 
 gg_shared_lock_reclaim_if_stale() {
@@ -378,13 +402,19 @@ gg_shared_lock_reclaim_if_stale() {
   if stale_summary=$("${py_exec}" "${helper_script}" reclaim-if-stale "${lock_file}" --stale-seconds "${stale_seconds}"); then
     echo "Recovered stale shared lock: ${description} (${stale_summary})" >&2
     return 0
+  else
+    return $?
   fi
-  return 1
 }
 
 gg_shared_lock_start_heartbeat() {
   local lock_file=$1
-  local interval_seconds
+  local interval_seconds owner_token py_exec helper_script
+  gg_shared_lock_owner_index "${lock_file}"
+  owner_token=${GG_SHARED_LOCK_OWNER_TOKENS[GG_SHARED_LOCK_OWNER_INDEX]}
+  [[ -n "${owner_token}" ]] || return 1
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
   interval_seconds=$(gg_lock_heartbeat_seconds)
   (
     local heartbeat_sleep_pid=""
@@ -408,9 +438,7 @@ gg_shared_lock_start_heartbeat() {
       heartbeat_sleep_pid=$!
       wait "${heartbeat_sleep_pid}" || exit 0
       heartbeat_sleep_pid=""
-      if [[ -e "${lock_file}" ]]; then
-        touch -c -- "${lock_file}" 2>/dev/null || true
-      fi
+      "${py_exec}" "${helper_script}" heartbeat "${lock_file}" --token "${owner_token}" || exit 0
     done
   ) &
   GG_SHARED_LOCK_HEARTBEAT_PID=$!
@@ -427,7 +455,15 @@ gg_shared_lock_stop_heartbeat() {
 
 gg_shared_lock_release() {
   local lock_file=$1
-  rm -f -- "${lock_file}"
+  local owner_index owner_token py_exec helper_script
+  gg_shared_lock_owner_index "${lock_file}"
+  owner_index=${GG_SHARED_LOCK_OWNER_INDEX}
+  owner_token=${GG_SHARED_LOCK_OWNER_TOKENS[owner_index]}
+  [[ -n "${owner_token}" ]] || return 0
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  "${py_exec}" "${helper_script}" release "${lock_file}" --token "${owner_token}" || return 1
+  GG_SHARED_LOCK_OWNER_TOKENS[owner_index]=""
 }
 
 gg_shared_lock_acquire() {
@@ -438,6 +474,7 @@ gg_shared_lock_acquire() {
   local timeout_seconds
   local wait_started
   local wait_logged=0
+  local acquire_status
   poll_seconds=$(gg_lock_poll_seconds)
   timeout_seconds=$(gg_lock_acquire_timeout_seconds)
   wait_started=$(date +%s)
@@ -445,9 +482,15 @@ gg_shared_lock_acquire() {
   while true; do
     if gg_shared_lock_try_create "${lock_file}"; then
       return 0
+    else
+      acquire_status=$?
+      [[ ${acquire_status} -eq 1 ]] || return "${acquire_status}"
     fi
     if gg_shared_lock_reclaim_if_stale "${lock_file}" "${description}"; then
       continue
+    else
+      acquire_status=$?
+      [[ ${acquire_status} -eq 1 ]] || return "${acquire_status}"
     fi
     local owner_summary
     owner_summary=$(gg_shared_lock_owner_summary "${lock_file}")
@@ -488,6 +531,7 @@ gg_shared_semaphore_acquire() {
   local wait_logged=0
   local slot_idx=0
   local slot_lock=""
+  local acquire_status
 
   max_slots=$(gg_shared_semaphore_max_slots "${requested_slots}")
   if (( max_slots < 1 )); then
@@ -509,6 +553,9 @@ gg_shared_semaphore_acquire() {
         GG_SHARED_SEMAPHORE_SLOT_INDEX="${slot_idx}"
         GG_SHARED_SEMAPHORE_MAX_SLOTS="${max_slots}"
         return 0
+      else
+        acquire_status=$?
+        [[ ${acquire_status} -eq 1 ]] || return "${acquire_status}"
       fi
       if gg_shared_lock_reclaim_if_stale "${slot_lock}" "${description} slot ${slot_idx}/${max_slots}"; then
         if gg_shared_lock_try_create "${slot_lock}"; then
@@ -516,7 +563,13 @@ gg_shared_semaphore_acquire() {
           GG_SHARED_SEMAPHORE_SLOT_INDEX="${slot_idx}"
           GG_SHARED_SEMAPHORE_MAX_SLOTS="${max_slots}"
           return 0
+        else
+          acquire_status=$?
+          [[ ${acquire_status} -eq 1 ]] || return "${acquire_status}"
         fi
+      else
+        acquire_status=$?
+        [[ ${acquire_status} -eq 1 ]] || return "${acquire_status}"
       fi
     done
     if [[ ${wait_logged} -eq 0 ]]; then
@@ -566,12 +619,13 @@ gg_run_with_shared_semaphore() {
   if (( max_slots < 1 )); then
     if "$@"; then
       return 0
+    else
+      return $?
     fi
-    return $?
   fi
 
   cleanup_shared_semaphore() {
-    local acquired_slot_lock="${slot_lock}"
+    local acquired_slot_lock="${slot_lock:-${GG_SHARED_LOCK_PENDING_FILE:-}}"
     if [[ -z "${acquired_slot_lock}" \
       && "${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}" != "${initial_slot_lock}" ]]; then
       acquired_slot_lock="${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}"

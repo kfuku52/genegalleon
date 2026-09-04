@@ -53,8 +53,23 @@ Internally, GeneGalleon normalizes SLURM/PBS metadata to scheduler-neutral varia
 - `GG_TASK_CPUS`
 - `GG_ARRAY_TASK_ID`
 - `GG_JOB_ID`
+- `GG_ARRAY_JOB_ID`
 
 Those normalized values are what core scripts use downstream, regardless of the original scheduler.
+
+`GG_JOB_ID` identifies an individual job. `GG_ARRAY_JOB_ID` identifies the
+array as a whole: on Slurm it comes from `SLURM_ARRAY_JOB_ID`, while the
+individual `SLURM_JOB_ID` can differ for every array element. Both values are
+forwarded into the container. Shared finalizers group ready markers by the
+array ID so the last completed task runs the multispecies summary once.
+
+Slurm memory can be requested with either `--mem-per-cpu` or `--mem`.
+GeneGalleon reads the corresponding `SLURM_MEM_PER_CPU` or
+`SLURM_MEM_PER_NODE` value in MiB and derives `GG_MEM_TOTAL_GB` in whole GiB,
+rounding down after summing a per-CPU allocation. Explicit `GG_MEM_TOTAL_GB`
+or `GG_MEM_PER_CPU_GB` settings, and the legacy memory aliases, take precedence
+over automatic detection. For example, `--cpus-per-task=8 --mem=8G` gives an
+8 GiB total allocation, rather than multiplying a default per-CPU value by 8.
 
 The startup log prints a runtime summary that shows:
 

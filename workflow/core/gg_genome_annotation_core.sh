@@ -1188,7 +1188,6 @@ if [[ ${summary_finalizer_claimed} -eq 1 ]]; then
   trap - EXIT
 fi
 
-remove_empty_subdirs "${gg_workspace_output_dir}"
 if [[ ${delete_tmp_dir} -eq 1 ]]; then
   echo "Deleting tmp directory: ${dir_sp_tmp}"
   if [[ -n "${dir_sp_tmp:-}" && "${dir_sp_tmp}" != "/" ]]; then

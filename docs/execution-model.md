@@ -68,6 +68,7 @@ Inside the runtime, GeneGalleon consistently uses:
 
 - `GG_TASK_CPUS`
 - `GG_JOB_ID`
+- `GG_ARRAY_JOB_ID`
 - `GG_ARRAY_TASK_ID`
 - `GG_MEM_TOTAL_GB`
 - `GG_MEM_TOOL_GB`
