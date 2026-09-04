@@ -8,6 +8,7 @@
     "test_aster_ortools_runtime.py",
     "test_csubst_scan_runtime_integration.py",
     "test_owned_runtime_contracts.py",
+    "test_get_promoter_fasta_runtime.py",
     "test_rsc_runtime_integration.py",
     "test_fractionation_bias_integration.py"
   ],

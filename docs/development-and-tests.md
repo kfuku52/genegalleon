@@ -221,6 +221,9 @@ defined in `workflow/tests/conftest.py`, with runtime files coming from the
 shared validation manifest; pytest markers expose the same lane
 metadata during full-suite collection. Strict marker and configuration checks
 are enabled, so new marker names must be registered in `pyproject.toml`.
+Adding `@pytest.mark.runtime` to a function does not change its file's lane.
+Keep tests that execute container tools in a separate file registered under
+`runtime_python_files`, leaving dependency-light unit tests in the fast lane.
 The fast and integration CI lanes use two pytest-xdist workers. `bash ./dev`
 uses the same default; override it with `GG_PYTEST_WORKERS=N` or
 `GG_PYTEST_WORKERS=auto`.

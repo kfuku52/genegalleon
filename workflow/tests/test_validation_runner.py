@@ -38,6 +38,25 @@ def test_validation_loads_suite_options_without_an_explicit_test_path(suite):
     assert ("workflow/tests/test_generate_orthogroup_database.py::" in result.stdout) == (suite == "fast")
 
 
+@pytest.mark.parametrize("suite, expected_count", [("fast", 4), ("runtime", 6)])
+def test_promoter_unit_and_tool_checks_are_collected_in_separate_lanes(tmp_path, suite, expected_count):
+    test_dir = tmp_path / "workflow/tests"
+    test_dir.mkdir(parents=True)
+    for name in ("conftest.py", "validation_manifest.json", "test_get_promoter_fasta.py",
+                 "test_get_promoter_fasta_runtime.py"):
+        shutil.copyfile(REPO_ROOT / "workflow/tests" / name, test_dir / name)
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--collect-only", f"--gg-suite={suite}",
+         "-c", str(REPO_ROOT / "pyproject.toml"), "--rootdir", str(tmp_path),
+         "--confcutdir", str(tmp_path), str(test_dir)],
+        cwd=tmp_path, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ("test_normalize_ncpu_clamps_non_positive_values" in result.stdout) == (suite == "fast")
+    assert ("test_promoter_cli_preserves_chromosome_identifiers" in result.stdout) == (suite == "runtime")
+    assert f"{expected_count} tests collected" in result.stdout
+
+
 def test_dev_forwards_focused_arguments_through_the_container(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
