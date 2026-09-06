@@ -22,6 +22,7 @@ RUNTIME_SUPPORT_PATHS = {
     "workflow/gg_path_defaults.sh",
     "workflow/support/gg_core_bootstrap.sh",
     "workflow/support/gg_entrypoint_config_vars.sh",
+    "workflow/support/resource_metrics.py",
     "workflow/support/gg_shared_lock.sh",
     "workflow/support/gg_site_runtime.sh",
     *{
@@ -857,6 +858,7 @@ def test_spooled_entrypoint_binds_to_verified_explicit_runtime_release(tmp_path)
         "workflow/support/gg_core_bootstrap.sh",
         "workflow/support/gg_site_runtime.sh",
         "workflow/support/gg_entrypoint_config_vars.sh",
+        "workflow/support/resource_metrics.py",
         "workflow/support/gg_shared_lock.sh",
         "workflow/support/gg_util/01_runtime_config.sh",
         "workflow/support/gg_util/11_fasta.sh",
