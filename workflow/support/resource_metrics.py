@@ -13,12 +13,12 @@ import json
 import math
 import os
 import re
-from pathlib import Path
 import signal
 import subprocess
 import sys
 import time
 import uuid
+from pathlib import Path
 
 
 def read_events(path):
@@ -91,7 +91,7 @@ def run(command, directory, *, workflow, input_sha256, cpus, memory_gb,
         sorted(row["stage"] for row in events) == sorted(expected_stages)
         and not set(record["skipped_stages"]).intersection(expected_stages))
     boundaries = []
-    for before, after in zip(events, events[1:]):
+    for before, after in zip(events, events[1:], strict=False):
         boundaries.append({"stage": before["stage"],
                            "wall_seconds": max(0, after["at"] - before["at"]),
                            "cpu_seconds_reaped": max(0, after["cpu"] - before["cpu"])})

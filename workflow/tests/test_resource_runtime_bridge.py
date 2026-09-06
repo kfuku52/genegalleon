@@ -1,8 +1,8 @@
 """Exercise the stdin execution bridge and its real telemetry subprocess."""
 import json
-from pathlib import Path
 import shlex
 import subprocess
+from pathlib import Path
 
 
 def test_container_profile_override_does_not_leak_between_runs():

@@ -1,17 +1,15 @@
 import gzip
-import importlib.util
 import json
-import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "support"))
-from resource_profile import profile
-from resource_metrics import run
+from resource_metrics import run  # noqa: E402 - support directory is added above
+from resource_profile import profile  # noqa: E402
 
 
 def test_profile_streams_compressed_input_and_binds_settings(tmp_path):

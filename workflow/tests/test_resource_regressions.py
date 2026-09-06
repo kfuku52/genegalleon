@@ -1,15 +1,15 @@
 """Resource contracts across planning, runtime, and optional telemetry."""
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'support'))
-from resource_metrics import run
+from resource_metrics import run  # noqa: E402 - support directory is added above
 
 
 @pytest.mark.parametrize('slots,per_slot,expected', [(32, '1056M', 33), (32, '128M', 4), (3, '1366M', 4)])
