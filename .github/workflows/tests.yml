@@ -314,6 +314,7 @@ jobs:
         run: |
           Rscript workflow/tests/test_pgls_common_rphylopars.R
           Rscript workflow/tests/test_r_species_label_utils.R
+          Rscript workflow/tests/test_plot_mcmctreer_input.R
 
   sif-runtime-validation:
     needs:
