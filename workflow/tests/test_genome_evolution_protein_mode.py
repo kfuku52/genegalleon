@@ -569,7 +569,8 @@ exit 0
         bin_dir / "mcmctree",
         """#!/usr/bin/env bash
 set -euo pipefail
-cat > mcmctree.out <<'EOF'
+outfile=$(sed -n 's/^[[:space:]]*outfile[[:space:]]*=[[:space:]]*//p' "$1" | head -n 1)
+cat > "${outfile:-mcmctree.out}" <<'EOF'
 MCMCtree test output
 Species tree for FigTree
 (a:0.1,(b:0.2,c:0.3):0.4);
@@ -1350,7 +1351,9 @@ def test_genome_evolution_rejects_invalid_cached_mcmctree_without_modifying_outp
     mcmctree_dir = workspace / "output" / "species_tree" / "mcmctree_main"
     species_cds.mkdir(parents=True)
     mcmctree_dir.mkdir(parents=True)
-    (species_cds / "a.fa").write_text(">a\nATGAAA\n", encoding="utf-8")
+    (species_cds / "Arabidopsis_thaliana_cds.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nATGAAA\n", encoding="utf-8"
+    )
     header_only = "Species tree for FigTree\n"
     figtree = mcmctree_dir / "FigTree.tre"
     public_summary = mcmctree_dir / "iq2mc.mcmctree.out"
@@ -1385,9 +1388,11 @@ def test_genome_evolution_rebuilds_only_invalid_cached_mcmctree_stage(tmp_path: 
     species_cds.mkdir(parents=True)
     iq2mc_dir.mkdir(parents=True)
     mcmctree_dir.mkdir(parents=True)
-    (species_cds / "a.fa").write_text(">a\nATGAAA\n", encoding="utf-8")
+    (species_cds / "Arabidopsis_thaliana_cds.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nATGAAA\n", encoding="utf-8"
+    )
     inputs = {
-        "iq2mc.mcmctree.ctl": "RootAge = <1\nBDparas = 1 1 0.5\n",
+        "iq2mc.mcmctree.ctl": "outfile = iq2mc.mcmctree.out\nRootAge = <1\nBDparas = 1 1 0.5\n",
         "iq2mc.mcmctree.hessian": "verified hessian\n",
         "iq2mc.rooted.nwk": "((a,b)'B(0.1,0.2,0.025,0.025)',c);\n",
         "iq2mc.dummy.phy": "3 4\na ACGT\nb ACGT\nc ACGT\n",
