@@ -2832,7 +2832,7 @@ def test_memory_limited_tool_invocations_use_tool_budget():
     transcriptome_core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
 
     expected_genome_tokens = [
-        'memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")',
+        'memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_GENOME_PARALLEL_JOBS}")',
         'iqtree_full_mem_args=(-mem "${GG_MEM_TOOL_GB}G")',
         'iqtree_parallel_mem_args=(-mem "${memory_iqtree_parallel}G")',
         '"${iqtree_full_mem_args[@]}" \\',

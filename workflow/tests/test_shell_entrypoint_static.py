@@ -147,8 +147,8 @@ def test_run_container_shell_script_uses_exec_with_bash_stdin_bridge():
     text = read_text(util_path)
     body = function_body(text, "gg_run_container_shell_script")
     assert "subcommand=$(gg_container_shell_command_subcommand || true)" in body
-    assert '"${singularity_command[@]}" "${image_path}" bash -s -- < "${script_path}"' in body
-    assert '${singularity_command} "${image_path}" bash -s -- < "${script_path}"' in body
+    assert '"${singularity_command[@]}" "${image_path}" "${shell_argv[@]}" < "${script_path}"' in body
+    assert '${singularity_command} "${image_path}" "${shell_argv[@]}" < "${script_path}"' in body
     assert '"${singularity_command[@]}" "${image_path}" < "${script_path}"' in body
 
 

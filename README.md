@@ -82,6 +82,7 @@ Detailed guides are split by topic:
 - [Input Conventions](docs/input-conventions.md)
 - [Main Stages and What They Do](docs/main-stages-and-what-they-do.md)
 - [Scheduler and Array Semantics](docs/scheduler-and-array-semantics.md)
+- [Input-Aware Resource Planning](docs/adaptive-resources.md)
 - [Site Runtime Profiles](docs/site-runtime-profiles.md)
 - [SHIROKANE AGE Guide](docs/shirokane-age.md)
 - [Configuration and Common Parameters](docs/configuration-and-common-parameters.md)

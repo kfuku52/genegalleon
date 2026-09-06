@@ -10,6 +10,7 @@ unset_singularity_envs() {
 	unset GG_CONTAINER_BIND_MOUNTS
 	unset SINGULARITYENV_GG_ARRAY_TASK_ID
 	unset SINGULARITYENV_GG_TASK_CPUS
+	unset SINGULARITYENV_GG_RESOURCE_PROFILE
 	unset SINGULARITYENV_GG_JOB_ID
 	unset SINGULARITYENV_GG_ARRAY_JOB_ID
 	unset SINGULARITYENV_GG_MEM_PER_CPU_GB
@@ -31,6 +32,7 @@ unset_singularity_envs() {
 	unset SINGULARITYENV_MEM_PER_HOST
 	unset APPTAINERENV_GG_ARRAY_TASK_ID
 	unset APPTAINERENV_GG_TASK_CPUS
+	unset APPTAINERENV_GG_RESOURCE_PROFILE
 	unset APPTAINERENV_GG_JOB_ID
 	unset APPTAINERENV_GG_ARRAY_JOB_ID
 	unset APPTAINERENV_GG_MEM_PER_CPU_GB
@@ -384,6 +386,15 @@ gg_run_container_shell_script() {
 	local image_path=$1
 	local script_path=$2
 	local subcommand=""
+	local -a shell_argv=(bash -s --)
+	if [[ "$(basename "${script_path}")" == gg_*_core.sh && "${GG_RESOURCE_METRICS:-1}" == 1 ]]; then
+		shell_argv=(python /script/support/resource_metrics.py
+			--directory /workspace/output/resource_metrics
+			--workflow "$(basename "${script_path}" _core.sh)"
+			--runtime-id "${GG_RESOURCE_RUNTIME_ID:-unidentified}"
+			--server-id "${GG_RESOURCE_SERVER_ID:-unidentified}"
+			--cpus "${GG_TASK_CPUS:-1}" --memory-gb "${GG_MEM_TOTAL_GB:-1}" -- bash -s --)
+	fi
 
 	if ! gg_container_shell_command_is_set; then
 		echo "gg_run_container_shell_script: container shell command is not initialized." >&2
@@ -397,7 +408,7 @@ gg_run_container_shell_script() {
 	case "$(declare -p singularity_command 2>/dev/null)" in
 		declare\ -a*)
 			if [[ "${subcommand}" == "exec" ]]; then
-				"${singularity_command[@]}" "${image_path}" bash -s -- < "${script_path}"
+				"${singularity_command[@]}" "${image_path}" "${shell_argv[@]}" < "${script_path}"
 			else
 				"${singularity_command[@]}" "${image_path}" < "${script_path}"
 			fi
@@ -405,7 +416,7 @@ gg_run_container_shell_script() {
 		*)
 			# Backward compatibility for external site adapters that still set a string command.
 			if [[ "${subcommand}" == "exec" ]]; then
-				${singularity_command} "${image_path}" bash -s -- < "${script_path}"
+				${singularity_command} "${image_path}" "${shell_argv[@]}" < "${script_path}"
 			else
 				${singularity_command} "${image_path}" < "${script_path}"
 			fi

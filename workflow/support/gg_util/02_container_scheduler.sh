@@ -407,12 +407,14 @@ gg_memory_fraction_gb() {
 
 gg_sge_memory_value_to_gb() {
 	local raw_value=${1:-}
+	local slots=${2:-1}
+	local rounding=${3:-ceil}
 	[[ "${raw_value}" =~ ^([0-9]+([.][0-9]+)?)([bBkKmMgGtTpP]?)$ ]] || return 1
 	local number="${BASH_REMATCH[1]}"
 	local unit
 	unit=$(printf '%s' "${BASH_REMATCH[3]}" | tr '[:lower:]' '[:upper:]')
 
-	awk -v number="${number}" -v unit="${unit}" '
+	awk -v number="${number}" -v unit="${unit}" -v slots="${slots}" -v rounding="${rounding}" '
 		BEGIN {
 			factor = 1 / 1073741824
 			if (unit == "K") factor = 1 / 1048576
@@ -420,9 +422,9 @@ gg_sge_memory_value_to_gb() {
 			else if (unit == "G") factor = 1
 			else if (unit == "T") factor = 1024
 			else if (unit == "P") factor = 1048576
-			value = number * factor
+			value = number * factor * slots
 			rounded = int(value)
-			if (rounded < value) rounded++
+			if (rounding == "ceil" && rounded < value) rounded++
 			if (rounded < 1 && value > 0) rounded = 1
 			print rounded
 		}
@@ -453,7 +455,7 @@ gg_sge_requested_mem_per_slot_gb() {
 	if [[ -z "${requested_value}" ]]; then
 		return 1
 	fi
-	gg_sge_memory_value_to_gb "${requested_value}"
+	gg_sge_memory_value_to_gb "${requested_value}" "${2:-1}" "${3:-ceil}"
 }
 
 gg_normalize_scheduler_env() {
@@ -541,6 +543,11 @@ gg_normalize_scheduler_env() {
 		GG_MEM_PER_CPU_GB=${MEM_PER_SLOT}
 	fi
 	if [[ -z "${GG_MEM_PER_CPU_GB:-}" ]] && type qstat >/dev/null 2>&1; then
+		if [[ -z "${GG_MEM_TOTAL_GB:-${MEM_PER_HOST:-}}" ]]; then
+			# Convert only after multiplying the exact per-slot request. Rounding
+			# each slot up to GiB first can substantially exceed the allocation.
+			GG_MEM_TOTAL_GB=$(gg_sge_requested_mem_per_slot_gb "${GG_JOB_ID}" "${GG_TASK_CPUS}" floor || true)
+		fi
 		GG_MEM_PER_CPU_GB=$(gg_sge_requested_mem_per_slot_gb "${GG_JOB_ID}" || true)
 		if [[ -n "${GG_MEM_PER_CPU_GB}" ]]; then
 			echo ${echo_header}'GG_MEM_PER_CPU_GB='"${GG_MEM_PER_CPU_GB}"' (from AGE s_vmem)'
@@ -645,6 +652,10 @@ set_singularityenv() {
 	gg_add_container_bind_mount "${resolved_workspace_dir}:/workspace"
 	gg_add_container_bind_mount "${resolved_workflow_dir}:/script"
 	export SINGULARITYENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1} APPTAINERENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1} SINGULARITYENV_GG_ARRAY_TASK_COUNT=${GG_ARRAY_TASK_COUNT:-} APPTAINERENV_GG_ARRAY_TASK_COUNT=${GG_ARRAY_TASK_COUNT:-} SINGULARITYENV_GG_SCHEDULER_KIND=${GG_SCHEDULER_KIND:-local} APPTAINERENV_GG_SCHEDULER_KIND=${GG_SCHEDULER_KIND:-local}
+	if [[ -n "${GG_RESOURCE_PROFILE:-}" ]]; then
+		export SINGULARITYENV_GG_RESOURCE_PROFILE=${GG_RESOURCE_PROFILE}
+		export APPTAINERENV_GG_RESOURCE_PROFILE=${GG_RESOURCE_PROFILE}
+	fi
 	export SINGULARITYENV_GG_TASK_CPUS=${GG_TASK_CPUS:-1}
 	export APPTAINERENV_GG_TASK_CPUS=${GG_TASK_CPUS:-1}
 	export SINGULARITYENV_OMP_NUM_THREADS=${GG_TASK_CPUS:-1}

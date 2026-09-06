@@ -84,6 +84,8 @@ gg_bootstrap_core_runtime() {
   # Python user site again inside the core process so host ~/.local packages
   # cannot shadow the versions installed in the GeneGalleon image.
   export PYTHONNOUSERSITE=1
+  export GG_RESOURCE_OWNER_PID=${BASHPID}
+
 
   if [[ "${GG_CORE_COMMON_PARAMS_LOADED:-0}" -ne 1 ]]; then
     gg_source_common_params_from_core "${core_script_path}"

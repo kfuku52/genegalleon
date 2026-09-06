@@ -49,6 +49,9 @@ orthofinder_core_filters="${orthofinder_core_filters:-busco_complete_pct:ge:80,n
 orthofinder_core_rank="${orthofinder_core_rank:-num_seq:asc,busco_complete_pct:desc}"
 orthofinder_core_method="${orthofinder_core_method:-max-pd}"
 orthofinder_algorithm_threads="${orthofinder_algorithm_threads:-auto}"
+orthofinder_memory_gb_per_thread="${orthofinder_memory_gb_per_thread:-4}"
+genome_parallel_jobs="${genome_parallel_jobs:-auto}"
+genome_parallel_memory_gb_per_job="${genome_parallel_memory_gb_per_job:-2}"
 run_busco_dupaware_extract_fasta="${run_busco_dupaware_extract_fasta:-0}"
 run_busco_dupaware_mafft="${run_busco_dupaware_mafft:-0}"
 run_busco_dupaware_trimal="${run_busco_dupaware_trimal:-0}"
@@ -2585,8 +2588,19 @@ if [[ "${species_tree_output_storage}" == "zip" ]]; then
 fi
 refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
 refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}" || exit $?
-memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
-memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
+GG_GENOME_PARALLEL_JOBS=${GG_TASK_CPUS}
+if [[ "${genome_parallel_jobs}" != "auto" ]]; then
+  if [[ ! "${genome_parallel_jobs}" =~ ^[0-9]+$ || ${genome_parallel_jobs} -lt 1 ]]; then
+    echo "genome_parallel_jobs must be auto or a positive integer." >&2
+    exit 2
+  fi
+  [[ ${genome_parallel_jobs} -lt ${GG_GENOME_PARALLEL_JOBS} ]] && GG_GENOME_PARALLEL_JOBS=${genome_parallel_jobs}
+fi
+genome_parallel_memory_cap=$(gg_memory_parallel_job_cap "${GG_MEM_TOOL_GB}" "${genome_parallel_memory_gb_per_job}") || exit 2
+[[ ${genome_parallel_memory_cap} -lt ${GG_GENOME_PARALLEL_JOBS} ]] && GG_GENOME_PARALLEL_JOBS=${genome_parallel_memory_cap}
+echo "Genome per-gene parallelism: jobs=${GG_GENOME_PARALLEL_JOBS}, tool_memory=${GG_MEM_TOOL_GB}G"
+memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_GENOME_PARALLEL_JOBS}")
+memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_GENOME_PARALLEL_JOBS}")
 iqtree_full_mem_args=(-mem "${GG_MEM_TOOL_GB}G")
 iqtree_parallel_mem_args=(-mem "${memory_iqtree_parallel}G")
 
@@ -2739,7 +2753,7 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
   }
   mapfile -t busco_batch_raw_files < <(find "${busco_batch_raw_dir}" -maxdepth 1 -type f -name '*.raw.fa' | sort)
   for busco_batch_raw_file in "${busco_batch_raw_files[@]}"; do
-    wait_until_jobn_le "${GG_TASK_CPUS}"
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     finalize_species_tree_busco_fasta "${busco_batch_raw_file}" &
     gg_background_register "$!"
   done
@@ -2830,7 +2844,7 @@ if [[ ${individual_mafft_needs_update} -eq 1 && ${run_individual_mafft} -eq 1 ]]
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_fasta}" "${single_copy_fasta_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_mafft "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -2895,7 +2909,7 @@ if [[ ${individual_trimal_needs_update} -eq 1 && ${run_individual_trimal} -eq 1 
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_mafft}" "${single_copy_aln_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_trimal "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -3220,7 +3234,7 @@ if [[ ${individual_iqtree_pep_needs_update} -eq 1 && ${run_individual_iqtree_pep
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}" "${single_copy_trimal_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_iqtree_pep "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -3369,7 +3383,7 @@ if [[ ${individual_iqtree_dna_needs_update} -eq 1 && ${run_individual_iqtree_dna
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}" "*.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_iqtree_dna "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -4061,7 +4075,8 @@ if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then
   ensure_dir "${dir_orthofinder_hog2og}"
 
   if [[ "${orthofinder_algorithm_threads}" == "auto" ]]; then
-    orthofinder_algorithm_threads=${GG_TASK_CPUS}
+    orthofinder_algorithm_threads=$((GG_TASK_CPUS / 8))
+    [[ ${orthofinder_algorithm_threads} -lt 1 ]] && orthofinder_algorithm_threads=1
   elif [[ ! "${orthofinder_algorithm_threads}" =~ ^[0-9]+$ || ${orthofinder_algorithm_threads} -lt 1 ]]; then
     echo "Invalid orthofinder_algorithm_threads=${orthofinder_algorithm_threads}; expected auto or a positive integer." >&2
     exit 1
@@ -4069,6 +4084,11 @@ if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then
   if [[ ${orthofinder_algorithm_threads} -gt ${GG_TASK_CPUS} ]]; then
     echo "Capping orthofinder_algorithm_threads=${orthofinder_algorithm_threads} at GG_TASK_CPUS=${GG_TASK_CPUS}."
     orthofinder_algorithm_threads=${GG_TASK_CPUS}
+  fi
+  orthofinder_memory_cap=$(gg_memory_parallel_job_cap "${GG_MEM_TOOL_GB}" "${orthofinder_memory_gb_per_thread}") || exit 2
+  if [[ ${orthofinder_algorithm_threads} -gt ${orthofinder_memory_cap} ]]; then
+    echo "Capping OrthoFinder analysis threads at ${orthofinder_memory_cap} for ${GG_MEM_TOOL_GB}G tool memory."
+    orthofinder_algorithm_threads=${orthofinder_memory_cap}
   fi
   param_species_tree=()
   species_tree=""
@@ -4812,7 +4832,7 @@ if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta}
   }
   mapfile -t genome_busco_batch_raw_files < <(find "${genome_busco_batch_raw_dir}" -maxdepth 1 -type f -name '*.raw.fa' | sort)
   for genome_busco_batch_raw_file in "${genome_busco_batch_raw_files[@]}"; do
-    wait_until_jobn_le "${GG_TASK_CPUS}"
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     finalize_genome_busco_fasta "${genome_busco_batch_raw_file}" &
     gg_background_register "$!"
   done
@@ -4915,7 +4935,7 @@ if [[ ${busco_mafft_needs_update} -eq 1 && ${run_busco_dupaware_mafft} -eq 1 ]];
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_fasta}" "${genome_busco_fasta_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_mafft "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -4975,7 +4995,7 @@ if [[ ${busco_trimal_needs_update} -eq 1 && ${run_busco_dupaware_trimal} -eq 1 ]
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_mafft}" "${genome_busco_aln_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_trimal "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -5032,7 +5052,7 @@ if [[ ${busco_iqtree_dna_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_dna}
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}" "*.busco.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_iqtree_dna "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_dna}" &
     gg_background_register "$!"
   done
@@ -5096,7 +5116,7 @@ if [[ ${busco_iqtree_pep_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_pep}
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}" "${genome_busco_trimal_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_iqtree_pep "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_pep}" &
     gg_background_register "$!"
   done
@@ -5130,7 +5150,7 @@ if [[ ${busco_notung_dna_needs_update} -eq 1 && ${run_busco_dupaware_notung_root
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_dna}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le $((${GG_TASK_CPUS} / 2))
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_notung "${infile}" "${dir_busco_iqtree_dna}" "${dir_busco_notung_dna}" &
     gg_background_register "$!"
   done
@@ -5163,7 +5183,7 @@ if [[ ${busco_notung_pep_needs_update} -eq 1 && ${run_busco_dupaware_notung_root
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_pep}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le $((${GG_TASK_CPUS} / 2))
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_notung "${infile}" "${dir_busco_iqtree_pep}" "${dir_busco_notung_pep}" &
     gg_background_register "$!"
   done
@@ -5196,7 +5216,7 @@ if [[ ${busco_root_dna_needs_update} -eq 1 && ${run_busco_dupaware_root_dna} -eq
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_dna}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_dna}" "${dir_busco_iqtree_dna}" "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}" &
     gg_background_register "$!"
   done
@@ -5228,7 +5248,7 @@ if [[ ${busco_root_pep_needs_update} -eq 1 && ${run_busco_dupaware_root_pep} -eq
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_pep}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_pep}" "${dir_busco_iqtree_pep}" "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}" &
     gg_background_register "$!"
   done

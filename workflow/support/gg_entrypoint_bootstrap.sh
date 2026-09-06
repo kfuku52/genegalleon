@@ -167,6 +167,7 @@ required_paths = snapshot_paths.union(
         "workflow/gg_path_defaults.sh",
         "workflow/support/gg_core_bootstrap.sh",
         "workflow/support/gg_entrypoint_config_vars.sh",
+        "workflow/support/resource_metrics.py",
         "workflow/support/gg_shared_lock.sh",
         "workflow/support/gg_site_runtime.sh",
     }
