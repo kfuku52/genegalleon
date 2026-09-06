@@ -21,6 +21,7 @@
     ["Rscript", "workflow/tests/test_r_scripts_parse.R"],
     ["Rscript", "workflow/tests/test_pgls_common_rphylopars.R"],
     ["Rscript", "workflow/tests/test_r_species_label_utils.R"],
+    ["Rscript", "workflow/tests/test_plot_mcmctreer_input.R"],
     ["Rscript", "workflow/tests/test_orthogroup_copy_number_trait_pgls.R"],
     ["Rscript", "workflow/tests/test_treevis_main.R"],
     ["Rscript", "workflow/tests/test_kf_dependency_integrations.R"]
