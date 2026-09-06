@@ -5,7 +5,7 @@
 pytest==9.1.1
 pytest-xdist==3.8.0
 PyYAML==6.0.3
-ruff==0.16.3
+ruff==0.16.4
 numpy==1.26.4
 pandas==3.0.5
 biopython==1.88
@@ -15,5 +15,5 @@ tenacity==9.1.4
 tqdm==4.70.0
 openpyxl==3.1.5
 matplotlib==3.10.9
-pypdf==6.16.1
-reportlab==5.0.0
+pypdf==6.16.2
+reportlab==5.0.1
