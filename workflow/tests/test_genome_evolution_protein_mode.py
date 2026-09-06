@@ -1361,7 +1361,7 @@ def test_genome_evolution_rejects_invalid_cached_mcmctree_without_modifying_outp
         tmp_path,
         {
             "artifact_stale_policy": stale_policy,
-            "input_sequence_mode": "dna",
+            "input_sequence_mode": "cds",
             "run_orthofinder": "0",
             "species_tree_output_storage": "files",
         },
@@ -1405,7 +1405,7 @@ def test_genome_evolution_rebuilds_only_invalid_cached_mcmctree_stage(tmp_path: 
         tmp_path,
         {
             "artifact_stale_policy": "rebuild",
-            "input_sequence_mode": "dna",
+            "input_sequence_mode": "cds",
             "run_orthofinder": "0",
             "species_tree_output_storage": "files",
         },
