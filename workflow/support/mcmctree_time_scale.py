@@ -231,6 +231,11 @@ def extract_figtree_text(text: str, scale: Decimal, direction: str) -> str:
     return "\n".join(output_lines) + "\n"
 
 
+def has_figtree_tree(text: str) -> bool:
+    """Return whether a FigTree section contains at least one Newick tree."""
+    return bool(extract_figtree_text(text, Decimal("1"), "up"))
+
+
 def parse_scale(value: str) -> Decimal:
     scale = parse_decimal(value)
     if scale is None or scale <= 0:
@@ -277,6 +282,16 @@ def cmd_extract_figtree(args: argparse.Namespace) -> int:
         return 1
     write_text(args.outfile, text)
     return 0
+
+
+def cmd_validate_figtree(args: argparse.Namespace) -> int:
+    if has_figtree_tree(read_text(args.infile)):
+        return 0
+    print(
+        f"No FigTree tree block was found in {args.infile}",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -332,6 +347,13 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("--scale", required=True)
     extract.add_argument("--direction", choices=["down", "up"], required=True)
     extract.set_defaults(func=cmd_extract_figtree)
+
+    validate = subparsers.add_parser(
+        "validate-figtree",
+        help="Require at least one Newick tree in a FigTree section.",
+    )
+    validate.add_argument("--infile", type=Path, required=True)
+    validate.set_defaults(func=cmd_validate_figtree)
 
     return parser
 

@@ -566,6 +566,18 @@ exit 0
     )
 
     _write_executable(
+        bin_dir / "mcmctree",
+        """#!/usr/bin/env bash
+set -euo pipefail
+cat > mcmctree.out <<'EOF'
+MCMCtree test output
+Species tree for FigTree
+(a:0.1,(b:0.2,c:0.3):0.4);
+EOF
+""",
+    )
+
+    _write_executable(
         bin_dir / "omamer",
         f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -1323,6 +1335,90 @@ def test_genome_evolution_rebuilds_missing_summary_from_cached_astral_tree(tmp_p
     assert summary_tree.read_text(encoding="utf-8") == cached_tree
     assert "Rebuilding missing undated species tree summary from cached source:" in completed.stdout
     assert "OrthoFinder will use the species tree:" in completed.stdout
+
+
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
+@pytest.mark.parametrize("stale_policy", ["stop", "reuse"])
+def test_genome_evolution_rejects_invalid_cached_mcmctree_without_modifying_outputs(
+    tmp_path: Path,
+    stale_policy: str,
+):
+    workspace = tmp_path / "workspace"
+    species_cds = workspace / "input" / "species_cds"
+    mcmctree_dir = workspace / "output" / "species_tree" / "mcmctree_main"
+    species_cds.mkdir(parents=True)
+    mcmctree_dir.mkdir(parents=True)
+    (species_cds / "a.fa").write_text(">a\nATGAAA\n", encoding="utf-8")
+    header_only = "Species tree for FigTree\n"
+    figtree = mcmctree_dir / "FigTree.tre"
+    public_summary = mcmctree_dir / "iq2mc.mcmctree.out"
+    figtree.write_text(header_only, encoding="utf-8")
+    public_summary.write_text(header_only, encoding="utf-8")
+
+    completed = _run_core(
+        tmp_path,
+        {
+            "artifact_stale_policy": stale_policy,
+            "input_sequence_mode": "dna",
+            "run_orthofinder": "0",
+            "species_tree_output_storage": "files",
+        },
+    )
+
+    assert completed.returncode == 3
+    assert "Invalid cached MCMCtree output cannot be reused" in completed.stderr
+    assert figtree.read_text(encoding="utf-8") == header_only
+    assert public_summary.read_text(encoding="utf-8") == header_only
+
+
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
+def test_genome_evolution_rebuilds_only_invalid_cached_mcmctree_stage(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_cds = workspace / "input" / "species_cds"
+    species_tree = workspace / "output" / "species_tree"
+    iq2mc_dir = species_tree / "mcmctree_parameter_estimation"
+    mcmctree_dir = species_tree / "mcmctree_main"
+    species_cds.mkdir(parents=True)
+    iq2mc_dir.mkdir(parents=True)
+    mcmctree_dir.mkdir(parents=True)
+    (species_cds / "a.fa").write_text(">a\nATGAAA\n", encoding="utf-8")
+    inputs = {
+        "iq2mc.mcmctree.ctl": "RootAge = <1\nBDparas = 1 1 0.5\n",
+        "iq2mc.mcmctree.hessian": "verified hessian\n",
+        "iq2mc.rooted.nwk": "((a,b)'B(0.1,0.2,0.025,0.025)',c);\n",
+        "iq2mc.dummy.phy": "3 4\na ACGT\nb ACGT\nc ACGT\n",
+    }
+    for name, content in inputs.items():
+        (iq2mc_dir / name).write_text(content, encoding="utf-8")
+    (mcmctree_dir / "FigTree.tre").write_text(
+        "Species tree for FigTree\n", encoding="utf-8"
+    )
+    (mcmctree_dir / "iq2mc.mcmctree.out").write_text(
+        "Species tree for FigTree\n", encoding="utf-8"
+    )
+
+    completed = _run_core(
+        tmp_path,
+        {
+            "artifact_stale_policy": "rebuild",
+            "input_sequence_mode": "dna",
+            "run_orthofinder": "0",
+            "species_tree_output_storage": "files",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "Regenerating only the invalid MCMCtree stage" in completed.stdout
+    assert "(a:0.1,(b:0.2,c:0.3):0.4);" in (
+        mcmctree_dir / "FigTree.tre"
+    ).read_text(encoding="utf-8")
+    assert (iq2mc_dir / "iq2mc.mcmctree.hessian").read_text(encoding="utf-8") == inputs[
+        "iq2mc.mcmctree.hessian"
+    ]
 
 
 @pytest.mark.skipif(

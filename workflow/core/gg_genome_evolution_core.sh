@@ -1582,6 +1582,13 @@ extract_scaled_mcmctree_figtree() {
     --direction "up"
 }
 
+validate_mcmctree_figtree() {
+  local infile=$1
+  python "${gg_support_dir}/mcmctree_time_scale.py" \
+    validate-figtree \
+    --infile "${infile}"
+}
+
 mcmctree_requires_bdparas_flag() {
   local probe_dir
   local probe_stdout
@@ -3831,6 +3838,29 @@ fi
 task="IQ2MC step 3 (MCMCtree dating run)"
 disable_if_no_input_file "run_mcmctree2" "${file_iq2mc_ctl}" "${file_iq2mc_hessian}" "${file_iq2mc_rooted_tree}" "${file_iq2mc_dummy_phy}"
 mcmctree_needs_update=0
+mcmctree_cached_tree_contract_invalid=0
+for mcmctree_cached_tree in "${file_mcmctree_figtree_tre}" "${file_mcmctree_raw_output}"; do
+  if [[ -e "${mcmctree_cached_tree}" ]] && ! validate_mcmctree_figtree "${mcmctree_cached_tree}" >/dev/null 2>&1; then
+    echo "Cached MCMCtree output contains no FigTree Newick tree: ${mcmctree_cached_tree}" >&2
+    mcmctree_cached_tree_contract_invalid=1
+  fi
+done
+if [[ ${mcmctree_cached_tree_contract_invalid} -eq 1 ]]; then
+  case "${artifact_stale_policy:-stop}" in
+    rebuild)
+      echo "Regenerating only the invalid MCMCtree stage and its dependent outputs because artifact_stale_policy=rebuild."
+      ;;
+    stop|reuse)
+      echo "Invalid cached MCMCtree output cannot be reused. No artifact files were modified." >&2
+      echo "Set artifact_stale_policy=rebuild to regenerate the MCMCtree stage from its verified inputs." >&2
+      exit 3
+      ;;
+    *)
+      echo "Invalid artifact_stale_policy=${artifact_stale_policy:-}; expected stop, reuse, or rebuild." >&2
+      exit 2
+      ;;
+  esac
+fi
 gg_artifact_contract_init mcmctree_provenance_args "species_tree_mcmctree" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.mcmctree.json"
 mcmctree_provenance_args+=(
   --input "control=${file_iq2mc_ctl}"
@@ -3843,6 +3873,10 @@ mcmctree_provenance_args+=(
   --parameter "time_scale=automatic_safe_iq2mc_unit"
 )
 gg_artifact_prepare_stage mcmctree_needs_update run_mcmctree2 "${mcmctree_provenance_args[@]}" || exit $?
+if [[ ${mcmctree_cached_tree_contract_invalid} -eq 1 ]]; then
+  mcmctree_needs_update=1
+  run_mcmctree2=1
+fi
 if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_mcmctree2}"
@@ -3904,16 +3938,12 @@ fi
 
 if [[ ! -s "${genome_evolution_provenance_dir}/species_tree.mcmctree.json" && ! -s "${file_mcmctree_figtree_tre}" && -s "${file_mcmctree_raw_output}" ]]; then
   echo "Backfilling legacy ${file_mcmctree_figtree_tre} from ${file_mcmctree_raw_output} before provenance adoption."
-  awk '
-  /Species tree for FigTree/ {print; in_figtree=1; next}
-  in_figtree && /^[[:space:]]*\(/ {print; count++; if (count >= 3) exit}
-  ' "${file_mcmctree_raw_output}" > "tmp.mcmctree2.txt"
-  if [[ -s "tmp.mcmctree2.txt" ]]; then
+  if extract_scaled_mcmctree_figtree "${file_mcmctree_raw_output}" "tmp.mcmctree2.txt" 1; then
     mv_out "tmp.mcmctree2.txt" "${file_mcmctree_figtree_tre}"
-  fi
-  if [[ ! -s "${file_mcmctree_figtree_tre}" ]]; then
-    echo "Warning: Failed to extract FigTree content from ${file_mcmctree_raw_output}. Copying raw file instead."
-    cp_out "${file_mcmctree_raw_output}" "${file_mcmctree_figtree_tre}"
+  else
+    rm -f -- "tmp.mcmctree2.txt"
+    echo "Error: Legacy MCMCtree output contains no FigTree Newick tree; refusing provenance adoption." >&2
+    exit 1
   fi
 fi
 
