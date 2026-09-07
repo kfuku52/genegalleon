@@ -2399,7 +2399,7 @@ species_tree_archive_managed_directories() {
 }
 
 # Orthogroup
-dir_sp_protein="${gg_workspace_downloads_dir}/tmp/species_protein"
+dir_sp_protein=$(gg_task_tmp_path "${gg_workspace_downloads_dir}/tmp/species_protein") || exit 1
 dir_orthofinder="${gg_workspace_output_dir}/orthofinder"
 dir_orthofinder_og="${dir_orthofinder}/Orthogroups"
 dir_orthofinder_filtered="${dir_orthofinder}/Orthogroups_filtered"

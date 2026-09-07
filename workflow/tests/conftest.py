@@ -16,6 +16,7 @@ INTEGRATION_DOWNLOAD_FILES = {
     "test_generate_species_trait.py",
 }
 INTEGRATION_WORKFLOW_FILES = {
+    "test_task_tmp_integration.py",
     "test_busco_hmmsearch_wrapper.py",
     "test_genome_evolution_protein_mode.py",
     "test_gg_input_generation_end_to_end.py",

@@ -143,30 +143,170 @@ def test_publication_failure_preserves_scratch(tmp_path):
     assert len(records(tmp_path)) == 1
 
 
-def test_input_array_workers_with_separate_scratch_roots(tmp_path, monkeypatch):
-    # Exercise the full prepare/parallel workers/finalize core flow with the
-    # existing deterministic toolchain fixture. Each job has isolated scratch,
-    # as on separate compute nodes; shared plans and shards must still work.
-    import shlex
-    import test_gg_input_generation_end_to_end as integration
+@pytest.mark.parametrize("metrics", [False, True])
+def test_signal_is_not_success_even_when_child_trap_exits_zero(tmp_path, metrics):
+    env = run_env(tmp_path)
+    ready = tmp_path / 'ready'
+    script = f'trap "exit 0" TERM; touch "{ready}"; while :; do sleep .1; done'
+    command = ['bash', '-c', script]
+    if metrics:
+        command = [sys.executable, str(SUPPORT / 'resource_metrics.py'),
+                   '--directory', str(tmp_path / 'metrics'), '--workflow', 'gg_gene_evolution',
+                   '--runtime-id', 'test', '--server-id', 'test', '--', *command]
+    child = subprocess.Popen([sys.executable, str(RUNNER), '--workflow', 'gg_gene_evolution',
+                              '--', *command], env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        for _ in range(200):
+            if ready.exists():
+                break
+            time.sleep(.02)
+        assert ready.exists()
+        child.send_signal(signal.SIGTERM)
+        stdout, stderr = child.communicate(timeout=10)
+        assert child.returncode == 143, stdout + stderr
+        assert len(records(tmp_path)) == 1
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.communicate()
 
-    original_core = integration.CORE_PATH
-    original_env = integration._core_env
-    wrapper = tmp_path / 'external-core.sh'
-    wrapper.write_text(
-        'exec ' + shlex.join([sys.executable, str(RUNNER), '--workflow',
-                             'gg_input_generation', '--', 'bash', str(original_core)]) + '\n'
-    )
 
-    def external_env(*args, **kwargs):
-        env = original_env(*args, **kwargs)
-        scratch = tmp_path / ('scratch-' + env['input_generation_mode'] + '-' + env.get('GG_ARRAY_TASK_ID', '1'))
-        scratch.mkdir(exist_ok=True)
-        env.update(GG_COMMON_TMP_ROOT=str(scratch), GG_TMP_MOUNT=str(scratch),
-                   GG_TMP_WORKSPACE_ID=env['gg_workspace_dir'])
-        return env
+@pytest.mark.parametrize("suffix", [":other", ",other", "\n"])
+def test_canonical_mount_path_is_validated(tmp_path, suffix):
+    unsafe = tmp_path / ("scratch" + suffix)
+    unsafe.mkdir()
+    alias = tmp_path / 'safe-alias'
+    alias.symlink_to(unsafe)
+    env = run_env(tmp_path, GG_COMMON_TMP_ROOT=str(alias), gg_workspace_dir='/workspace')
+    result = shell('gg_configure_task_tmp_mount', env)
+    assert result.returncode != 0
 
-    monkeypatch.setattr(integration, 'CORE_PATH', wrapper)
-    monkeypatch.setattr(integration, '_core_env', external_env)
-    integration.test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_path)
-    assert not list(tmp_path.glob('scratch-*/genegalleon-*/*/*/run-*'))
+
+def test_other_gene_mode_scratch_is_not_deleted(tmp_path):
+    env = run_env(tmp_path, mode_gene_evolution='orthogroup')
+    assert run(env, 'exit 1').returncode == 1
+    record = records(tmp_path)[0]
+    env['mode_gene_evolution'] = 'query2family'
+    assert run(env, 'true').returncode == 0
+    assert record.exists()
+
+
+def test_corrupt_record_is_preserved_without_blocking_new_job(tmp_path):
+    env = run_env(tmp_path)
+    assert run(env, 'exit 1').returncode == 1
+    record = records(tmp_path)[0]
+    record.write_text('[]')
+    result = run(env, 'true')
+    assert result.returncode == 0, result.stderr
+    assert record.read_text() == '[]'
+
+
+def test_non_exec_adapter_rejects_external_scratch(tmp_path):
+    script = tmp_path / 'gg_probe_core.sh'
+    script.write_text('exit 0\n')
+    runtime = tmp_path / 'runtime'
+    called = tmp_path / 'called'
+    runtime.write_text(f'#!/bin/sh\ntouch "{called}"\nexit 0\n')
+    runtime.chmod(0o755)
+    env = run_env(tmp_path, GG_COMMON_TMP_ROOT=str(tmp_path / 'scratch'))
+    result = shell(f'singularity_command=("{runtime}" shell); '
+                   f'gg_run_container_shell_script image "{script}"', env)
+    assert result.returncode != 0
+    assert not called.exists()
+
+
+@pytest.mark.parametrize('key,value', [
+    ('delete_tmp_dir', 'invalid'), ('delete_preexisting_tmp_dir', 'invalid'),
+    ('GG_ARRAY_TASK_ID', '0'), ('mode_gene_evolution', 'invalid'),
+    ('gene_family_tmp_max_bytes', '-1'),
+])
+def test_invalid_config_never_prunes_previous_scratch(tmp_path, key, value):
+    env = run_env(tmp_path)
+    assert run(env, 'exit 1').returncode == 1
+    record = records(tmp_path)[0]
+    before = record.read_bytes()
+    env[key] = value
+    assert run(env, 'true').returncode != 0
+    assert record.read_bytes() == before
+
+
+@pytest.mark.parametrize('limit,value', [
+    ('gene_family_tmp_max_bytes', '1'), ('gene_family_tmp_max_files', '1'),
+])
+def test_retention_budget_removes_only_owned_idle_runs(tmp_path, limit, value):
+    env = run_env(tmp_path)
+    assert run(env, 'echo payload > "$GG_TMP_TASK_ROOT/data"; exit 1').returncode == 1
+    previous = records(tmp_path)[0]
+    env.update({limit: value, 'GG_ARRAY_TASK_ID': '2'})
+    assert run(env, 'true').returncode == 0
+    assert not previous.exists()
+
+
+def test_retention_age_expires_old_inactive_run(tmp_path):
+    env = run_env(tmp_path)
+    assert run(env, 'exit 1').returncode == 1
+    record = records(tmp_path)[0]
+    data = json.loads(record.read_text())
+    data['updated'] = time.time() - 10 * 86400
+    record.write_text(json.dumps(data))
+    env['GG_ARRAY_TASK_ID'] = '2'
+    assert run(env, 'true').returncode == 0
+    assert not record.exists()
+
+
+def test_killed_metrics_parent_cannot_unlock_live_core_scratch(tmp_path):
+    env = run_env(tmp_path)
+    ready = tmp_path / 'pids'
+    script = f'echo "$PPID $$" > "{ready}"; while :; do sleep .1; done'
+    command = [sys.executable, str(RUNNER), '--workflow', 'gg_gene_evolution', '--',
+               sys.executable, str(SUPPORT / 'resource_metrics.py'),
+               '--directory', str(tmp_path / 'metrics'), '--workflow', 'gg_gene_evolution',
+               '--runtime-id', 'test', '--server-id', 'test', '--', 'bash', '-c', script]
+    core_pid = None
+    with (tmp_path / 'log').open('w') as log:
+        child = subprocess.Popen(command, env=env, stdout=log, stderr=log)
+        try:
+            for _ in range(200):
+                if ready.exists() and ready.read_text().strip():
+                    break
+                time.sleep(.02)
+            metrics_pid, core_pid = map(int, ready.read_text().split())
+            record = records(tmp_path)[0]
+            os.kill(metrics_pid, signal.SIGKILL)
+            assert child.wait(timeout=10) == 137
+            # The computation survived its monitor and still owns its scratch.
+            os.kill(core_pid, 0)
+            assert run(env, 'true').returncode == 0
+            assert record.exists()
+        finally:
+            if core_pid is not None:
+                try:
+                    os.killpg(core_pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=10)
+
+
+@pytest.mark.parametrize('mode', ['query2family', 'orthogroup'])
+def test_changed_family_assignment_preserves_other_family_scratch(tmp_path, mode):
+    workspace = tmp_path / 'workspace'
+    env = run_env(tmp_path, gg_workspace_dir=str(workspace), mode_gene_evolution=mode)
+    if mode == 'query2family':
+        inputs = workspace / 'input/query_gene'
+        inputs.mkdir(parents=True)
+        (inputs / 'family_b').write_text('query')
+    else:
+        table = workspace / 'output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv'
+        table.parent.mkdir(parents=True)
+        table.write_text('Orthogroup\tSpecies\nOG0001\t1\n')
+    assert run(env, 'exit 1').returncode == 1
+    record = records(tmp_path)[0]
+    if mode == 'query2family':
+        (inputs / 'family_a').write_text('new query')
+    else:
+        table.write_text('Orthogroup\tSpecies\nOG0002\t1\n')
+    assert run(env, 'true').returncode == 0
+    assert record.exists()

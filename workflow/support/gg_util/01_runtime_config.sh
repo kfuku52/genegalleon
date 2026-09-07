@@ -409,6 +409,10 @@ gg_run_container_shell_script() {
 		return 1
 	fi
 	subcommand=$(gg_container_shell_command_subcommand || true)
+	if [[ "$(basename "${script_path}")" == gg_*_core.sh && "${GG_COMMON_TMP_ROOT:-workspace}" != workspace && "${subcommand}" != exec ]]; then
+		echo "External scratch requires an exec container adapter." >&2
+		return 1
+	fi
 	case "$(declare -p singularity_command 2>/dev/null)" in
 		declare\ -a*)
 			if [[ "${subcommand}" == "exec" ]]; then

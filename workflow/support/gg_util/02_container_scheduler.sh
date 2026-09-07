@@ -758,7 +758,12 @@ gg_configure_task_tmp_mount() {
     echo "Scratch root must be an existing writable directory: ${requested}" >&2
     return 1
   fi
-  resolved=$(cd "${requested}" && pwd -P) || return 1
+  resolved=$(cd -P -- "${requested}" && printf '%s.' "$PWD") || return 1
+  resolved=${resolved%.}
+  if [[ "${resolved}" == *[:,]* || "${resolved}" == *$'\n'* ]]; then
+    echo "Resolved scratch root contains a container bind delimiter: ${resolved}" >&2
+    return 1
+  fi
   if gg_container_bind_destination_exists "/gg_tmp"; then
     echo "Reserved scratch mount /gg_tmp is already configured." >&2
     return 1

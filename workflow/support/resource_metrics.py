@@ -57,7 +57,10 @@ def run(command, directory, *, workflow, input_sha256, cpus, memory_gb,
     else:
         env.pop("GG_RESOURCE_EVENT_FILE", None)
         env.pop("GG_RESOURCE_TIMES_FILE", None)
-    child = subprocess.Popen(command, start_new_session=True, env=env)
+    # Keep scratch locked by the actual computation even if this monitor dies.
+    scratch_lock = env.get("GG_TMP_LOCK_FD")
+    inherited_fds = () if scratch_lock is None else (int(scratch_lock),)
+    child = subprocess.Popen(command, start_new_session=True, env=env, pass_fds=inherited_fds)
     previous = {}
 
     def forward(signum, _frame):
