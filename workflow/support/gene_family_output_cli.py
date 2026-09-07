@@ -57,6 +57,30 @@ def build_parser(
     archive_family_parser.add_argument("--max-final-zip-bytes", type=int, default=0)
     add_zip_write_options(archive_family_parser)
 
+    inventory_parser = subparsers.add_parser("inventory-path")
+    add_root(inventory_parser)
+    inventory_parser.add_argument("--family-id", required=True)
+    queue_parser = subparsers.add_parser("enqueue-family", help="Queue this family's inventoried outputs without ZIP/index contention.")
+    add_root(queue_parser)
+    add_family_context(queue_parser)
+    queue_parser.add_argument("--family-id", required=True)
+    queue_parser.add_argument("--run-token", default="")
+    add_zip_write_options(queue_parser)
+    queue_parser.add_argument("--max-final-zip-bytes", type=int, default=0)
+    drain_parser = subparsers.add_parser("drain-queue", help="Archive bounded batches of queued family outputs; never compact existing ZIPs.")
+    add_root(drain_parser)
+    add_family_context(drain_parser)
+    add_zip_write_options(drain_parser)
+    drain_parser.add_argument("--batch-families", type=int, default=100)
+    drain_parser.add_argument("--batch-bytes", type=int, default=1024 ** 3)
+    drain_parser.add_argument("--max-batches", type=int, default=1)
+    drain_parser.add_argument("--max-files-per-shard", type=int, default=5000)
+    drain_parser.add_argument("--max-final-zip-bytes", type=int, default=0,
+                              help="Shard byte target; 0 uses 1 GiB for queue collection.")
+    drain_parser.add_argument("--nonblocking", action="store_true")
+    queue_status_parser = subparsers.add_parser("queue-status")
+    add_root(queue_status_parser)
+
     convert_parser = subparsers.add_parser(
         "convert-storage",
         help="Convert a gene-family output root between raw files and ZIP storage.",
@@ -190,6 +214,7 @@ def build_parser(
     has_files_parser.add_argument("--suffix", default="")
 
     lock_path_parser = subparsers.add_parser("lock-path")
+    lock_path_parser.add_argument("--gate", action="store_true")
     add_root(lock_path_parser)
     lock_path_parser.add_argument("--family-id", required=True)
 

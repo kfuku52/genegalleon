@@ -139,12 +139,12 @@ if [[ -d "${dir_orthogroup}" ]]; then
       --updated-genecount-out orthogroup_genecount.amas.tsv \
       --out orthogroup_summary.tsv
     if [[ "${gene_family_output_storage}" == "zip" ]]; then
-      python "${gg_support_dir}/gene_family_output_store.py" archive-completed \
+      python "${gg_support_dir}/gene_family_output_store.py" drain-queue \
         --root "${dir_orthogroup}" \
         --mode orthogroup \
         --genecount "${file_orthogroup_genecount_selected}" \
         "${gene_family_archive_write_args[@]}" \
-        --min-files 1 \
+        --max-batches 100 \
         --nonblocking
     fi
   fi
@@ -166,12 +166,12 @@ if [[ -d "${dir_query2family}" ]]; then
       --ncpu "${ncpu_progress_summary}" \
       --out query2family_summary.tsv
     if [[ "${gene_family_output_storage}" == "zip" ]]; then
-      python "${gg_support_dir}/gene_family_output_store.py" archive-completed \
+      python "${gg_support_dir}/gene_family_output_store.py" drain-queue \
         --root "${dir_query2family}" \
         --mode query2family \
         --query-dir "${dir_query_gene}" \
         "${gene_family_archive_write_args[@]}" \
-        --min-files 1 \
+        --max-batches 100 \
         --nonblocking
     fi
   fi

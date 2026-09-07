@@ -14,21 +14,37 @@ gg_advisory_shared_lock_acquire() {
   py_exec=$(gg_shared_lock_python) || return 1
   helper_script=$(gg_shared_lock_helper_script) || return 1
   helper_script="$(dirname "${helper_script}")/shared_namespace_lock.py"
+  if [[ -n "${2:-}" ]]; then
+    GG_ADVISORY_GATE_PATH=$2
+    GG_ADVISORY_GATE_TOKEN=$("${py_exec}" "${helper_script}" acquire-shared \
+      "$2" --owner-pid "$$" --timeout "$(gg_lock_acquire_timeout_seconds)") || return 1
+  fi
   GG_ADVISORY_SHARED_LOCK_TOKEN=$("${py_exec}" "${helper_script}" acquire-shared \
-    "${lock_file}" --owner-pid "$$" --timeout "$(gg_lock_acquire_timeout_seconds)") || return 1
+    "${lock_file}" --owner-pid "$$" --timeout "$(gg_lock_acquire_timeout_seconds)") || {
+    gg_advisory_shared_lock_release
+    return 1
+  }
   GG_ADVISORY_SHARED_LOCK_PATH=${lock_file}
 }
 
 gg_advisory_shared_lock_release() {
-  if [[ -z "${GG_ADVISORY_SHARED_LOCK_TOKEN:-}" ]]; then
+  if [[ -z "${GG_ADVISORY_SHARED_LOCK_TOKEN:-}" && -z "${GG_ADVISORY_GATE_TOKEN:-}" ]]; then
     return 0
   fi
   local py_exec helper_script
   py_exec=$(gg_shared_lock_python) || return 1
   helper_script=$(gg_shared_lock_helper_script) || return 1
   helper_script="$(dirname "${helper_script}")/shared_namespace_lock.py"
-  "${py_exec}" "${helper_script}" release-shared "${GG_ADVISORY_SHARED_LOCK_PATH}" \
-    --token "${GG_ADVISORY_SHARED_LOCK_TOKEN}" || return 1
+  if [[ -n "${GG_ADVISORY_SHARED_LOCK_TOKEN:-}" ]]; then
+    "${py_exec}" "${helper_script}" release-shared "${GG_ADVISORY_SHARED_LOCK_PATH}" \
+      --token "${GG_ADVISORY_SHARED_LOCK_TOKEN}" || return 1
+    GG_ADVISORY_SHARED_LOCK_TOKEN=""
+  fi
+  if [[ -n "${GG_ADVISORY_GATE_TOKEN:-}" ]]; then
+    "${py_exec}" "${helper_script}" release-shared "${GG_ADVISORY_GATE_PATH}" \
+      --token "${GG_ADVISORY_GATE_TOKEN}" || return 1
+    GG_ADVISORY_GATE_TOKEN=""
+  fi
   GG_ADVISORY_SHARED_LOCK_TOKEN=""
   GG_ADVISORY_SHARED_LOCK_PATH=""
 }

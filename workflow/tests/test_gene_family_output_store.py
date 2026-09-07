@@ -3685,12 +3685,12 @@ def test_lock_striping_and_metadata_optimization_reduce_legacy_lock_files(
         family_lock_path(archive_root, f"OG{index:07d}").name
         for index in range(1000)
     }
-    assert len(stripe_names) <= 16
-    assert all(int(name.removesuffix(".lock"), 16) < 16 for name in stripe_names)
+    assert len(stripe_names) == 1000
+    assert all(len(name.removesuffix(".lock")) == 64 for name in stripe_names)
 
     result = optimize_archive_metadata(root)
-    assert result["removed_legacy_lock_files"] == 3
-    assert (family_locks / "00.lock").is_file()
-    assert (family_locks / "0f.lock").is_file()
+    assert result["removed_legacy_lock_files"] == 5
+    assert not (family_locks / "00.lock").exists()
+    assert not (family_locks / "0f.lock").exists()
     assert not (family_locks / "ff.lock").exists()
     assert not (state_locks / "fe.lock").exists()

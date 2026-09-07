@@ -387,6 +387,21 @@ _gg_atomic_copy_one() (
 	trap - EXIT HUP INT TERM
 )
 
+_gg_record_family_output() {
+    [[ -n "${GG_FAMILY_OUTPUT_INVENTORY:-}" ]] || return 0
+    local path=$1
+    [[ "${path}" == /* ]] || path="${PWD}/${path}"
+    case "${path}" in
+      "${GG_FAMILY_OUTPUT_ROOT}/"*)
+        path="${GG_FAMILY_OUTPUT_CANONICAL_ROOT:-${GG_FAMILY_OUTPUT_ROOT}}/${path#"${GG_FAMILY_OUTPUT_ROOT}/"}"
+        ;;
+      "${GG_FAMILY_OUTPUT_CANONICAL_ROOT:-${GG_FAMILY_OUTPUT_ROOT}}/"*) ;;
+      *) return 0 ;;
+    esac
+    # Per-process journals avoid concurrent NFS appends; record before publishing.
+    printf '%s\0' "${path}" >> "${GG_FAMILY_OUTPUT_INVENTORY}/${BASHPID:-$$}.paths" || return 1
+}
+
 cp_out() {
 	if [[ $# -eq 1 ]]; then
 		if [[ -p /dev/stdin ]]; then
@@ -444,6 +459,15 @@ mv_out() {
 	else
 		ensure_parent_dir "${dest}"
 	fi
+    local source_index source destination
+    for ((source_index = 1; source_index < $#; source_index++)); do
+        source=${!source_index}
+        destination=${dest}
+        if [[ -d "${dest}" || "${dest}" == */ ]]; then
+            destination="${dest%/}/$(basename -- "${source}")"
+        fi
+        _gg_record_family_output "${destination}" || return 1
+    done
 	mv -- "$@"
 }
 
@@ -513,6 +537,7 @@ mv_out_bundle() (
 		destinations+=("${destination}")
 		canonical_sources+=("${canonical_source}")
 		canonical_destinations+=("${canonical_destination}")
+        _gg_record_family_output "${canonical_destination}" || return 1
 	done
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
 		for ((previous_index = 0; previous_index < pair_count; previous_index++)); do

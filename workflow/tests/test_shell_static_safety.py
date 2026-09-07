@@ -1372,7 +1372,7 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
 
     assert "lock-path" in core
-    assert 'gene_family_run_lock_path="${dir_output_active}/.gg_run_locks/task.${GG_ARRAY_TASK_ID}.lock"' in core
+    assert 'gene_family_run_lock_path="${dir_output_active}/.gg_run_locks/family.' in core
     assert '"${gene_family_run_lock_path}" \\' in core
     assert '"gene-family producer (${og_id})"' in core
     assert 'gg_shared_lock_start_heartbeat "${gene_family_run_lock_path}"' in core
@@ -1387,7 +1387,7 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     assert "mark-running \\" in core
     assert "mark-complete \\" in core
     assert "mark-failed \\" in core
-    assert core.count("archive-family \\") == 2
+    assert core.count("enqueue-family \\") == 3
     assert "archive-completed \\" not in core
     assert "storage-conversion.pending" in core
     assert "is-complete" not in core
@@ -1402,7 +1402,7 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     assert "gene_family_run_succeeded=1" in finalize_body
     cleanup_body = _function_body(core, "cleanup_tmp_dir_on_normal_exit")
     assert cleanup_body.index("gg_advisory_shared_lock_release") < cleanup_body.index("cleanup-materialized")
-    assert cleanup_body.index("cleanup-materialized") < cleanup_body.index("archive-family")
+    assert cleanup_body.index("cleanup-materialized") < cleanup_body.index("enqueue-family")
     assert 'gg_shared_lock_stop_heartbeat "${gene_family_run_lock_heartbeat_pid:-}"' in cleanup_body
     assert 'gg_shared_lock_release "${gene_family_run_lock_path}"' in cleanup_body
 

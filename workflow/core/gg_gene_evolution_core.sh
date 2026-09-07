@@ -865,14 +865,14 @@ cleanup_tmp_dir_on_normal_exit() {
     && -n "${gene_family_store_script:-}"
     && -n "${dir_output_active:-}"
     && -n "${og_id:-}"
+    && -n "${gene_family_run_token:-}"
   ]]; then
-    if ! python "${gene_family_store_script}" archive-family \
-      "${gene_family_store_context_args[@]}" \
+    if ! python "${gene_family_store_script}" enqueue-family \
+      --root "${dir_output_active}" --mode "${mode_gene_evolution}" \
       "${gene_family_archive_write_args[@]}" \
-      --family-id "${og_id}" \
-      --nonblocking
+      --family-id "${og_id}" --run-token "${gene_family_run_token}"
     then
-      echo "Warning: Failed to archive partial outputs for ${og_id}; live files were preserved." >&2
+      echo "Warning: Failed to queue partial outputs for ${og_id}; live files were preserved." >&2
     fi
   fi
   if [[ ${delete_tmp_dir} -eq 1 && (${exit_code} -eq 0 || ${exit_code} -eq 8) ]]; then
@@ -1571,7 +1571,9 @@ if [[
   echo "Warning: ZIP-backed artifacts exist below ${dir_output_active}, but gene_family_output_storage=${gene_family_output_storage}." >&2
   echo "The family can resume, but new outputs will remain raw; use storage mode zip to return them to ZIP." >&2
 fi
-gene_family_run_lock_path="${dir_output_active}/.gg_run_locks/task.${GG_ARRAY_TASK_ID}.lock"
+gene_family_lock_path=$(python "${gene_family_store_script}" lock-path \
+  --root "${dir_output_active}" --family-id "${og_id}") || exit 1
+gene_family_run_lock_path="${dir_output_active}/.gg_run_locks/family.$(basename "${gene_family_lock_path}")"
 if ! gg_shared_lock_acquire \
   "${gene_family_run_lock_path}" \
   "gene-family producer (${og_id})"
@@ -1608,14 +1610,22 @@ if [[
   gene_family_lock_path=$(python "${gene_family_store_script}" lock-path \
     --root "${dir_output_active}" \
     --family-id "${og_id}")
+  gene_family_gate_path=$(python "${gene_family_store_script}" lock-path \
+    --root "${dir_output_active}" --family-id "${og_id}" --gate)
   if ! gg_advisory_shared_lock_acquire \
-    "${gene_family_lock_path}"
+    "${gene_family_lock_path}" "${gene_family_gate_path}"
   then
     echo "Failed to acquire the gene-family lock." >&2
     exit 1
   fi
 fi
 if [[ "${gene_family_output_storage}" == "zip" ]]; then
+  GG_FAMILY_OUTPUT_INVENTORY=$(python "${gene_family_store_script}" inventory-path \
+    --root "${dir_output_active}" --family-id "${og_id}") || exit 1
+  mkdir -p -- "${GG_FAMILY_OUTPUT_INVENTORY}" || exit 1
+  export GG_FAMILY_OUTPUT_INVENTORY GG_FAMILY_OUTPUT_ROOT="${dir_output_active}"
+  GG_FAMILY_OUTPUT_CANONICAL_ROOT=$(cd "${dir_output_active}" && pwd -P) || exit 1
+  export GG_FAMILY_OUTPUT_CANONICAL_ROOT
   gene_family_run_token="${GG_JOB_ID:-local}_${GG_ARRAY_TASK_ID:-1}_$$_$(date +%s)"
   gene_family_state_finalized=0
   if ! python "${gene_family_store_script}" mark-running \
@@ -1626,6 +1636,12 @@ if [[ "${gene_family_output_storage}" == "zip" ]]; then
     echo "Failed to record running gene-family state for ${og_id}." >&2
     exit 1
   fi
+  # Publish a durable request before computation, so a scheduler kill cannot
+  # leave a completed family absent from the collection queue.
+  python "${gene_family_store_script}" enqueue-family \
+    --root "${dir_output_active}" --mode "${mode_gene_evolution}" \
+    "${gene_family_archive_write_args[@]}" \
+    --family-id "${og_id}" --run-token "${gene_family_run_token}" || exit 1
 fi
 
 dir_sp_genome="${gg_workspace_input_dir}/species_genome"
@@ -1806,6 +1822,14 @@ amas_data_type="dna"
 if [[ "${input_sequence_mode}" == "protein" ]]; then
   file_og_primary_fasta="${file_og_pep_fasta}"
   amas_data_type="aa"
+fi
+
+# Include declared destinations even when a tool publishes directly (for
+# example atomic_zip_publish.py), without scanning other families' files.
+if [[ "${gene_family_output_storage}" == "zip" ]]; then
+  for gene_family_output_variable in "${!file_og_@}"; do
+    _gg_record_family_output "${!gene_family_output_variable}" || exit 1
+  done
 fi
 
 # Define intermediate files for downstream analysis.
@@ -6636,13 +6660,12 @@ if [[ ${gene_family_run_succeeded:-0} -eq 1 && -n "${gene_family_materialization
   rm -f -- "${gene_family_materialization_receipt}"
 fi
 if [[ "${gene_family_output_storage}" == "zip" && ${gg_debug_mode:-0} -eq 0 ]]; then
-  if ! python "${gene_family_store_script}" archive-family \
-    "${gene_family_store_context_args[@]}" \
+  if ! python "${gene_family_store_script}" enqueue-family \
+    --root "${dir_output_active}" --mode "${mode_gene_evolution}" \
     "${gene_family_archive_write_args[@]}" \
-    --family-id "${og_id}" \
-    --nonblocking
+    --family-id "${og_id}" --run-token "${gene_family_run_token}"
   then
-    echo "Warning: Failed to archive completed outputs for ${og_id}; live files were preserved." >&2
+    echo "Warning: Failed to queue completed outputs for ${og_id}; live files were preserved." >&2
   fi
 fi
 

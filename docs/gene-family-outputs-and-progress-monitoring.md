@@ -168,31 +168,27 @@ raw-to-ZIP conversion without rewriting every archive member first.
 The other output subdirectories do not have to contain every expected family.
 For example, files for completed families can be moved from a partially
 complete `mafft/` directory into ZIP storage while incomplete-family files
-remain live. Each array task archives only its own family so it cannot hold the
-global reader-maintenance lock while sweeping the entire catalog. The progress
-summary separately flushes any remaining completed outputs.
+remain live. Each array task records its own output inventory and queues a
+storage request. The progress summary collects bounded batches; array-task exit
+never scans the whole output tree or rewrites shared ZIPs. Live outputs remain
+readable until collection succeeds. Run progress summaries regularly during large
+arrays to reclaim space; no collector is started in the background.
 
-`GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES` is retained as a deprecated
-configuration compatibility setting and no longer controls array-task cleanup.
+See [large-array ZIP collection](gene-family-array-archive-queue.md) for commands,
+batching limits, diagnostics, upgrade requirements and recovery procedures.
+`GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES` remains a deprecated compatibility
+setting and does not control collection.
 
-Gene-family tasks hold a shared lock for their family while they may read or
-write live outputs. Lock files use 16 fixed hash stripes, so lock
-metadata itself cannot grow with the number of families. Archive maintenance
-takes only the relevant buckets exclusively and nonblockingly: an active
-family is skipped while completed families in other buckets can still be
-archived. A separate reader-maintenance lock prevents a ZIP shard from being
-replaced while a downstream reader has it open.
+Gene-family tasks use independent family locks, distributed across 256 directories,
+and a shared gate for offline maintenance. Lock/inventory metadata grows with
+family count; short state updates retain 16 lock stripes and 256 state-index files.
+Family indexes retain 256 buckets. Stop all workspace jobs before upgrading from
+the old striped family-lock layout; do not mix runtimes using the two protocols.
 
-The bounded internal metadata under `.gg_store/` costs at most 16 family-lock
-files, 16 state-lock files, 256 family-index JSON files, and 256 state-index
-JSON files, plus a small number of global/per-subdirectory files. Existing stores
-created by an older build can remove unused 256-way lock files with
-`optimize-metadata` after every job using that output root has stopped.
-
-Immutable shards are compacted automatically before the number of referenced
-shards in one logical subdirectory becomes large. Index updates and obsolete
-shard reclamation are committed one subdirectory at a time, bounding peak
-space during archive and compaction. A durable update marker makes readers
+The collector creates immutable ZIP shards outside the store-wide exclusive lock,
+then commits their indexes and removes verified sources under that lock. It does
+not compact existing shards. Run explicit `compact` or `finalize` maintenance
+after the array completes. A durable update marker makes readers
 fail closed if a process stops between updates to the denormalized index
 views; `repair` then rebuilds every view from the ZIP manifests. Family-bucket
 and subdirectory indexes, plus an epoch used to invalidate long-lived reader
@@ -227,7 +223,7 @@ Archives are ordinary, visible ZIP files. While a run is active, immutable
 parts are stored under
 `<gene-family-root>/archives/<subdirectory>/<subdirectory>.part-NNNNNN.zip`.
 Once an orthogroup catalog is fully complete and no family task holds a lock,
-progress-summary maintenance consolidates each logical output set once into
+explicit `finalize` maintenance can consolidate each logical output set into
 `<gene-family-root>/<subdirectory>.zip` and removes its parts. Raw-to-ZIP
 conversion writes previously raw subdirectories directly to this finalized
 layout, in parallel up to `--workers`, rather than creating parts and then
@@ -245,8 +241,8 @@ visible parts below `archives/`. The logical reader overlays the parts on the
 base, and an explicit `finalize` safely rebuilds the single ZIP when desired.
 GeneGalleon writes `README_GENE_FAMILY_OUTPUTS.txt` and `ARCHIVE_STATUS.tsv`
 at the output root so a user browsing with Finder, FileZilla, or `ls` can see
-where each logical output set is stored. Only locks, indexes, tombstones, and
-transaction markers remain hidden under `.gg_store/`.
+where each logical output set is stored. Inventories, pending requests, indexes, tombstones, and
+transaction markers remain hidden under `.gg_store/`; locks live in `.gg_store_locks/`.
 Rows whose ZIP storage also has visible overrides or shared files use a
 `+live` storage suffix (for example `finalized+live`) and report the live count
 separately.
@@ -278,9 +274,9 @@ cp replacement.tsv \
 ```
 
 `ARCHIVE_STATUS.tsv` is a snapshot rather than a filesystem watcher; its file
-modification time is the snapshot publication time. Per-task `archive-family`
-does not refresh it or scan the whole store, even after successful cleanup.
-Parent/batch archive operations still refresh it. After individual task
+modification time is the snapshot publication time. Per-task `enqueue-family`
+does not refresh it or scan the whole store. `drain-queue` refreshes it once
+after its bounded batches. After individual task
 completions or manual `cp`, `mv`, or `rm` operations, refresh its counts once with:
 
 ```bash
@@ -378,8 +374,8 @@ bash workflow/gg_gene_family_archive.sh repair \
 
 Add `--remove-orphans` only after reviewing the reported orphan paths.
 Both explicit `repair` and `finalize` commands emit the same periodic progress
-fields as conversion. The orthogroup finalization automatically triggered by
-`gg_progress_summary` does so as well.
+fields as conversion. The orthogroup finalization triggered by explicit
+`archive-completed` does so as well.
 
 ### Converting an existing workspace
 
