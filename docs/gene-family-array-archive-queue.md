@@ -194,3 +194,12 @@ do not submit new requests. The `cancel-family-archive --root ROOT --family-id I
 command performs this cancellation; callers must serialize family producers.
 Collectors hold the shared maintenance gate throughout queue enumeration and
 staging, and return `maintenance-busy` while offline conversion owns that gate.
+
+Storage conversion and queue collection exclude one another for the entire
+conversion, including the gap between materialization and purge. A conversion
+requested during active collection stops before creating a conversion marker;
+retry after the collector finishes. While an interrupted conversion marker
+remains, collection returns `conversion-pending` and new enqueue requests fail.
+Resume the conversion before resuming normal collection. A completed raw
+conversion cancels all earlier ZIP requests so later progress checks cannot
+silently turn the raw output back into ZIP storage.

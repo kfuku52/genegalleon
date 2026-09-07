@@ -143,6 +143,7 @@ def _equivalent_output_logical_paths(subdir: str, name: str) -> Set[str]:
     logical_paths = {_safe_logical_path(subdir, name)}
     canonical_subdir, canonical_name = _canonical_output_path(subdir, name)
     logical_paths.add(_safe_logical_path(canonical_subdir, canonical_name))
+    logical_paths.update(_safe_logical_path(*candidate) for candidate in _legacy_output_candidates(canonical_subdir, canonical_name))
     return logical_paths
 
 
@@ -1780,15 +1781,14 @@ class GeneFamilyOutputStore:
             sha256=_sha256_path(live_path),
         )
 
+    def _latest_tombstone(self, subdir: str, name: str) -> Optional[Tuple[int, str]]:
+        records = [self._tombstones[path] for path in _equivalent_output_logical_paths(subdir, name)
+                   if path in self._tombstones]
+        return max(records, key=lambda record: (record[0], record[1] == "delete"), default=None)
+
     def _archived_artifact_is_deleted(self, artifact: Artifact) -> bool:
-        for equivalent_path in _equivalent_output_logical_paths(
-            artifact.subdir,
-            artifact.name,
-        ):
-            tombstone = self._tombstones.get(equivalent_path)
-            if tombstone is not None and tombstone[1] == "delete" and tombstone[0] >= artifact.generation:
-                return True
-        return False
+        tombstone = self._latest_tombstone(artifact.subdir, artifact.name)
+        return tombstone is not None and tombstone[1] == "delete" and tombstone[0] >= artifact.generation
 
     def _archived_artifact_unchecked(
         self,
@@ -1829,7 +1829,7 @@ class GeneFamilyOutputStore:
             )
             if artifact is None:
                 continue
-            tombstone = self._tombstones.get(requested_logical_path)
+            tombstone = self._latest_tombstone(subdir, name)
             if tombstone is not None and tombstone[1] == "delete" and tombstone[0] >= artifact.generation:
                 return None
             return replace(
@@ -2231,24 +2231,36 @@ class GeneFamilyOutputStore:
         counter_generation = 0
         if counter_path.is_file():
             try:
-                counter_generation = int(counter_path.read_text(encoding="utf-8").strip() or "0")
+                counter_generation = int(counter_path.read_text(encoding="utf-8").strip())
+                if counter_generation < 1:
+                    raise ValueError("generation counter must be positive")
             except (OSError, ValueError) as exc:
                 raise ArchiveStoreError(f"Invalid GeneGalleon generation counter {counter_path}: {exc}") from exc
         else:
+            self._reset_cache()
             self._load_archives()
+            # Compaction preserves member generations, so indexes alone cannot
+            # recover the generation used in physical ZIP filenames/manifests.
+            for zip_path in _physical_archive_paths(self.root):
+                self._index_generation = max(self._index_generation, int(self._read_manifest(zip_path)["generation"]))
         self._index_generation = max(self._index_generation, counter_generation) + 1
+        self._write_generation_counter(self._index_generation)
+        return self._index_generation
+
+    def _write_generation_counter(self, generation: int) -> None:
+        counter_path = self.archive_root / GENERATION_FILE
+        if counter_path.is_symlink():
+            raise ArchiveStoreError(f"Symlinked generation counters are not supported: {counter_path}")
         temporary = counter_path.with_name(f".{GENERATION_FILE}.partial.{os.getpid()}.{uuid.uuid4().hex}")
         try:
             with temporary.open("w", encoding="utf-8") as handle:
-                handle.write(f"{self._index_generation}\n")
+                handle.write(f"{generation}\n")
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, counter_path)
             _fsync_directory(self.archive_root)
         finally:
-            if temporary.exists():
-                temporary.unlink()
-        return self._index_generation
+            temporary.unlink(missing_ok=True)
 
     def _index_record(self, artifact: Artifact) -> dict:
         if artifact.zip_path is None or artifact.member_name is None:
@@ -2547,15 +2559,7 @@ class GeneFamilyOutputStore:
     ) -> None:
         subdir, name = logical_path.split("/", 1)
         _safe_logical_path(subdir, name)
-        live_path = self.root / subdir / name
-        equivalent_live_paths = [live_path]
-        equivalent_live_paths.extend(
-            self.root / legacy_subdir / legacy_name
-            for legacy_subdir, legacy_name in _legacy_output_candidates(
-                subdir,
-                name,
-            )
-        )
+        equivalent_live_paths = [self.root / path for path in sorted(_equivalent_output_logical_paths(subdir, name))]
         family_id = self._managed_family_id(logical_path, family_id, "deletion")
         family_context = family_bucket_lock(
             self.archive_root,
@@ -2624,8 +2628,8 @@ class GeneFamilyOutputStore:
                     raise ArchiveStoreError("Failed to acquire the archive maintenance lock")
                 self._reset_cache()
                 self._load_archives()
-                previous_tombstone = self._tombstones.get(logical_path)
                 subdir, name = logical_path.split("/", 1)
+                previous_tombstone = self._latest_tombstone(subdir, name)
                 _safe_logical_path(subdir, name)
                 physical_candidates = [(subdir, name)]
                 physical_candidates.extend(_legacy_output_candidates(subdir, name))
@@ -3521,6 +3525,8 @@ def enqueue_family_archive(root: Path, mode: str, family_id: str, run_token: str
         raise ValueError(f"Unsupported gene-family mode: {mode}")
     store = GeneFamilyOutputStore(root, family_filter=family_id)
     with family_bucket_lock(store.archive_root, family_id, exclusive=False):
+        if _read_storage_conversion_marker(root) is not None:
+            raise ArchiveStoreError("Cannot enqueue outputs while a storage conversion is pending")
         states = store._read_state_bucket(store._state_bucket_path(family_id))
         current = states.get(family_id)
         if run_token and (current is None or current[2] != run_token):
@@ -3600,6 +3606,8 @@ def drain_archive_queue(
         ))
         if not collector:
             return {**stats, "status": "collector-busy"}
+        if _read_storage_conversion_marker(root) is not None:
+            return {**stats, "status": "conversion-pending"}
         queue_root = archive_root / ARCHIVE_QUEUE_DIR
         if queue_root.is_symlink():
             raise ArchiveStoreError(f"Symlinked archive queue: {queue_root}")
@@ -4572,11 +4580,16 @@ def storage_conversion_session(
     ) as acquired:
         if not acquired:
             raise ArchiveStoreError(f"Another storage conversion is active below {root}")
-        existing = _read_storage_conversion_marker(root)
-        if require_resume and existing is None:
-            raise ArchiveStoreError("--resume was requested, but no interrupted storage conversion exists")
-        resumed = _write_storage_conversion_marker(root, mode, target)
-        yield resumed
+        # Pin collection across all conversion phases, including gaps between
+        # extraction and purge. The collector takes this lock nonblockingly.
+        with _bucket_lock(archive_root / "collector.lock", exclusive=True, nonblocking=True) as collector_idle:
+            if not collector_idle:
+                raise ArchiveStoreError("An archive collector is active; retry conversion after it finishes")
+            existing = _read_storage_conversion_marker(root)
+            if require_resume and existing is None:
+                raise ArchiveStoreError("--resume was requested, but no interrupted storage conversion exists")
+            resumed = _write_storage_conversion_marker(root, mode, target)
+            yield resumed
 
 
 def _assert_archive_mode(store: GeneFamilyOutputStore, mode: str) -> None:
@@ -5534,6 +5547,14 @@ def convert_storage_to_raw(
             raise ArchiveStoreError(
                 "ZIP shards remained after raw conversion: " + ", ".join(str(path) for path in remaining_shards[:10])
             )
+        # A raw conversion supersedes every earlier ZIP request. Collection is
+        # still excluded by storage_conversion_session until this is durable.
+        queue_root = _archive_state_root(root) / ARCHIVE_QUEUE_DIR
+        if queue_root.is_symlink():
+            raise ArchiveStoreError(f"Symlinked archive queue: {queue_root}")
+        if queue_root.is_dir():
+            shutil.rmtree(queue_root)
+            _fsync_directory(queue_root.parent)
         if pure_raw:
             archive_root = _archive_state_root(root)
             if archive_root.is_symlink():
@@ -6166,6 +6187,7 @@ def repair_archive_index(
             rebuilt: Dict[str, Artifact] = {}
             rebuilt_ranks: Dict[str, Tuple[int, int, str]] = {}
             mode_by_path: Dict[Path, str] = {}
+            max_archive_generation = 0
             physical_paths = sorted(set(_physical_archive_paths(root)) | _indexed_final_archives_for_repair(root))
             for path in physical_paths:
                 if path.is_symlink() or path.parent.is_symlink():
@@ -6195,6 +6217,7 @@ def repair_archive_index(
                 manifest = store._read_manifest(zip_path)
                 mode_by_path[zip_path.resolve()] = str(manifest["mode"])
                 manifest_generation = int(manifest["generation"])
+                max_archive_generation = max(max_archive_generation, manifest_generation)
                 with zipfile.ZipFile(zip_path, "r") as archive:
                     for member in manifest["members"]:
                         digest = hashlib.sha256()
@@ -6268,6 +6291,24 @@ def repair_archive_index(
                     "Cannot repair indexes whose referenced ZIP shards use mixed "
                     "gene-family modes: " + ", ".join(sorted(referenced_modes))
                 )
+            # Recover the allocator too: a stale counter must never overwrite a
+            # surviving ZIP or place new outputs before deletion history.
+            store._load_tombstones()
+            store._index_generation = max(max_archive_generation, max(
+                (generation for generation, _ in store._tombstones.values()), default=0,
+            ))
+            counter_path = archive_root / GENERATION_FILE
+            if counter_path.is_symlink():
+                raise ArchiveStoreError(f"Symlinked generation counters are not supported: {counter_path}")
+            if counter_path.is_file():
+                try:
+                    existing_generation = int(counter_path.read_text(encoding="utf-8").strip())
+                except (ValueError, UnicodeError):
+                    existing_generation = 0  # Explicit repair rebuilds malformed allocator metadata.
+                store._index_generation = max(store._index_generation, existing_generation)
+            # Reserve the recovered high-water mark before replacing indexes;
+            # failed repairs may leave a harmless gap, never a reused generation.
+            store._write_generation_counter(max(1, store._index_generation))
             store._write_index(rebuilt, recover_pending=True)
             if referenced_modes and _read_store_metadata(root) is None:
                 repaired_mode = next(iter(referenced_modes))
@@ -6315,14 +6356,7 @@ def purge_archives(
                 archived = store._load_subdir_artifacts(subdir)
                 retained: List[Artifact] = []
                 for logical_path, artifact in archived.items():
-                    if any(
-                        tombstone is not None and tombstone[1] == "delete" and tombstone[0] >= artifact.generation
-                        for equivalent_path in _equivalent_output_logical_paths(
-                            artifact.subdir,
-                            artifact.name,
-                        )
-                        if (tombstone := store._tombstones.get(equivalent_path)) is not None
-                    ):
+                    if store._archived_artifact_is_deleted(artifact):
                         continue
                     family_id = artifact.family_id
                     if family_id is None and family_from_name is not None:

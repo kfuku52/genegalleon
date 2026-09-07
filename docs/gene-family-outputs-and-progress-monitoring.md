@@ -335,6 +335,11 @@ bash workflow/gg_gene_family_archive.sh restore \
   --path stat_branch/2_WOX_stat.branch.tsv
 ```
 
+Deletion and restoration through historical dotted names and current underscore
+names share one ordered history. The newest delete or undelete wins across both
+names, including during purge. If restoration fails, the previous deletion stays
+in effect even when it was recorded under the other name.
+
 Consolidate the current base and parts into one ordinary ZIP per logical
 subdirectory only while the affected gene-family jobs are stopped:
 
@@ -380,6 +385,13 @@ bash workflow/gg_gene_family_archive.sh repair \
   --root workspace/output/query2family \
   --progress-interval 10
 ```
+
+Repair restores the generation counter from ZIP manifest generations and deletion
+history, retaining a higher existing counter. Missing counters also account for
+compaction generations, which may exceed every member's original generation.
+This prevents later writes from reusing an existing ZIP generation. Empty, zero,
+negative, or malformed counters stop normal writes; explicit repair rebuilds
+them from verified ZIP manifests and deletion history.
 
 Repair also checks finalized ZIP identities retained in readable family or
 subdirectory indexes. If one of those ZIPs is missing or corrupt, repair stops
