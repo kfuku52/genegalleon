@@ -243,3 +243,71 @@ def test_scaled_tree_runs_with_real_mcmctree_and_exports_public_units(tmp_path):
     assert hpd_values
     assert max(hpd_values) == pytest.approx(max(raw_hpd_values) * float(factor))
     assert "B(0." not in public_figtree
+
+
+@pytest.mark.parametrize("tree", [
+    "UTREE placeholder", "(a:1,);", "(a:foo,b:1);", "(a:NaN,b:1);",
+    "(a:-1,b:1);", "(a:1,a:1);", "(a:1,b:1));",
+])
+def test_figtree_validation_rejects_malformed_or_invalid_dated_trees(tree):
+    assert not mcmctree_time_scale.has_figtree_tree("Species tree for FigTree\n" + tree + "\n")
+
+
+def test_figtree_validation_accepts_native_nexus_and_multiline_tree():
+    text = "#NEXUS\nBEGIN TREES;\n UTREE tree_1 = [&R] (a:0.1,\n(b:0.2,c:0.3):0.4);\nEND;\n"
+    assert mcmctree_time_scale.has_figtree_tree(text)
+
+
+def test_figtree_preserves_paml_node_indices_but_scales_dated_trees():
+    topology = "((1_a, 2_b) 5 , 3_c) 4 ;"
+    text = "Species tree for FigTree\n" + topology + "\n((a:1,b:1):1,c:2);\n"
+    result = mcmctree_time_scale.extract_figtree_text(text, mcmctree_time_scale.Decimal(1000), "up")
+    assert topology in result
+    assert "((a:1000,b:1000):1000,c:2000);" in result
+    scaled_document = mcmctree_time_scale.scale_figtree_text(text, mcmctree_time_scale.Decimal(1000), "up")
+    assert topology in scaled_document
+    assert "((a:1000,b:1000):1000,c:2000);" in scaled_document
+
+
+@pytest.mark.parametrize("annotation", ["[&95%HPD={nan,1}]", "[&95%={2,1}]", "[&95%={oops}]"])
+def test_figtree_rejects_invalid_confidence_intervals(annotation):
+    assert not mcmctree_time_scale.has_figtree_tree("Species tree for FigTree\n(a:1,b:1)" + annotation + ";\n")
+
+
+def test_native_figtree_conversion_inputs_select_one_tree_and_remove_hpd(tmp_path):
+    source = tmp_path / "FigTree.tre"
+    source.write_text("#NEXUS\nBEGIN TREES;\nUTREE tree_1 = [&R] (a:1,\nb:1)[&95%HPD={0.5,1.5}];\nEND;\n")
+    assert mcmctree_time_scale.main(["conversion-inputs", "--infile", str(source), "--outdir", str(tmp_path)]) == 0
+    with_ci = (tmp_path / "mcmctree_95CI.nwk").read_text()
+    without_ci = (tmp_path / "mcmctree_no95CI.nwk").read_text()
+    assert "UTREE" not in with_ci
+    assert "95%HPD" in with_ci
+    assert "95%HPD" not in without_ci
+    assert mcmctree_time_scale.figtree_tree_kind(with_ci) == "dated"
+    assert mcmctree_time_scale.figtree_tree_kind(without_ci) == "dated"
+
+
+def test_figtree_does_not_silently_discard_nexus_translation():
+    text = "#NEXUS\nBEGIN TREES;\nTRANSLATE 1 a, 2 b;\nUTREE tree_1 = (1:1,2:1);\nEND;\n"
+    assert not mcmctree_time_scale.has_figtree_tree(text)
+
+
+@pytest.mark.skipif(shutil.which("Rscript") is None, reason="requires the GeneGalleon R runtime")
+def test_converted_native_figtree_sidecars_are_readable_by_ape(tmp_path):
+    source = tmp_path / "FigTree.tre"
+    source.write_text("#NEXUS\nBEGIN TREES;\nUTREE tree_1 = [&R] (a:1,\nb:1)[&95%HPD={0.5,1.5}];\nEND;\n")
+    assert mcmctree_time_scale.main(["conversion-inputs", "--infile", str(source), "--outdir", str(tmp_path)]) == 0
+    result = subprocess.run([
+        "Rscript", "-e", "library(ape); for (f in commandArgs(TRUE)) { t <- read.tree(f); stopifnot(setequal(t$tip.label,c('a','b')), all(t$edge.length==1)) }",
+        str(tmp_path / "mcmctree_95CI.nwk"), str(tmp_path / "mcmctree_no95CI.nwk"),
+    ], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_figtree_validation_and_conversion_preserve_quoted_tip_annotations(tmp_path):
+    source = tmp_path / "FigTree.tre"
+    quoted_name = "'a[&95%={oops}]'"
+    source.write_text("Species tree for FigTree\n(" + quoted_name + ":1,b:1);\n")
+    assert mcmctree_time_scale.has_figtree_tree(source.read_text())
+    assert mcmctree_time_scale.main(["conversion-inputs", "--infile", str(source), "--outdir", str(tmp_path)]) == 0
+    assert quoted_name in (tmp_path / "mcmctree_no95CI.nwk").read_text()

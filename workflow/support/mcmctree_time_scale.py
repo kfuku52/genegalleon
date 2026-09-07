@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 from decimal import Decimal, InvalidOperation, localcontext
@@ -176,7 +177,7 @@ def scale_figtree_text(text: str, scale: Decimal, direction: str) -> str:
     lines = text.splitlines(keepends=True)
     scaled_lines = []
     for line in lines:
-        if looks_like_figtree_tree_line(line):
+        if looks_like_figtree_tree_line(line) and figtree_tree_kind(line) == "dated":
             scaled_lines.append(scale_newick_time_values(line, scale, direction))
         else:
             scaled_lines.append(line)
@@ -210,30 +211,168 @@ def scale_ctl_rootage_text(text: str, scale: Decimal, direction: str) -> str:
     )
 
 
-def extract_figtree_text(text: str, scale: Decimal, direction: str) -> str:
-    output_lines: list[str] = []
-    in_figtree = False
-    tree_count = 0
+TREE_ASSIGNMENT_RE = re.compile(r"^\s*(?:UTREE|TREE)\s+(?:\*\s+)?(?:'[^']*'|[^\s=]+)\s*=\s*", re.IGNORECASE)
+
+
+def uncomment_newick(text: str, comment_spans: list[tuple[int, int]] | None = None) -> str:
+    """Strip Newick annotations while preserving quoted tip/internal labels."""
+    result = []
+    depth = 0
+    comment_start = 0
+    quoted = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if depth:
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0 and comment_spans is not None:
+                    comment_spans.append((comment_start, index + 1))
+        elif char == "'":
+            result.append(char)
+            if quoted and index + 1 < len(text) and text[index + 1] == "'":
+                result.append("'")
+                index += 1
+            else:
+                quoted = not quoted
+        elif char == "[" and not quoted:
+            depth = 1
+            comment_start = index
+        else:
+            result.append(char)
+        index += 1
+    if depth or quoted:
+        raise ValueError("Unterminated Newick comment or quoted label")
+    return "".join(result)
+
+
+def figtree_newick(statement: str) -> str:
+    newick = TREE_ASSIGNMENT_RE.sub("", statement).strip()
+    # Native NEXUS trees may carry an [&R] prefix before the root.
+    while newick.startswith("["):
+        closing = newick.find("]")
+        if closing < 0:
+            raise ValueError("Unterminated Newick root annotation")
+        newick = newick[closing + 1:].lstrip()
+    return newick
+
+
+def figtree_tree_kind(statement: str) -> str | None:
+    from ete4 import Tree
+    from ete4.parser.newick import NewickError
+
+    try:
+        newick = figtree_newick(statement)
+        comment_spans = []
+        text = uncomment_newick(newick, comment_spans)
+        tree = Tree(text, parser=1)
+        leaves = list(tree.leaves())
+        names = [leaf.name for leaf in leaves]
+        if len(names) < 2 or any(not name for name in names) or len(set(names)) != len(names):
+            return None
+        distances = [node.dist for node in tree.traverse() if node is not tree]
+        if all(distance is None for distance in distances):
+            return "topology"
+        if any(distance is None or not math.isfinite(distance) or distance < 0 for distance in distances):
+            return None
+        if tree.dist is not None and (not math.isfinite(tree.dist) or tree.dist < 0):
+            return None
+        for start, end in comment_spans:
+            annotation = newick[start:end]
+            if not HPD_COMMENT_RE.fullmatch(annotation):
+                continue
+            intervals = list(BRACE_RE.finditer(annotation))
+            if not intervals:
+                return None
+            for interval in intervals:
+                values = [parse_decimal(value) for value in interval.group("body").split(",")]
+                if len(values) != 2 or any(value is None or not value.is_finite() or value < 0 for value in values):
+                    return None
+                if values[0] > values[1]:
+                    return None
+        return "dated"
+    except (ValueError, NewickError):
+        return None
+
+
+def figtree_statements(text: str) -> tuple[str, list[str]]:
+    """Read validated tree statements from a public block or native NEXUS file."""
+    header = "Species tree for FigTree"
+    in_block = False
+    nexus = bool(re.search(r"^\s*#NEXUS\s*$", text, re.IGNORECASE | re.MULTILINE))
+    if nexus and re.search(r"^\s*TRANSLATE\b", text, re.IGNORECASE | re.MULTILINE):
+        return header, []
+    statements = []
+    kinds = []
+    pending = []
     for line in text.splitlines():
         if "Species tree for FigTree" in line:
-            output_lines.append(line)
-            in_figtree = True
+            if pending:
+                return header, []
+            header = line
+            in_block = True
             continue
-        if not in_figtree:
+        if nexus and re.match(r"^\s*BEGIN\s+TREES\s*;", line, re.IGNORECASE):
+            in_block = True
             continue
-        if looks_like_figtree_tree_line(line):
-            output_lines.append(scale_newick_time_values(line, scale, direction))
-            tree_count += 1
-            if tree_count >= 3:
-                break
-    if tree_count == 0:
+        if not in_block:
+            continue
+        if not pending:
+            if not (line.lstrip().startswith("(") or re.match(r"^\s*(?:UTREE|TREE)\b", line, re.IGNORECASE)):
+                continue
+        pending.append(line)
+        statement = "\n".join(pending)
+        try:
+            complete = uncomment_newick(statement).rstrip().endswith(";")
+        except ValueError:
+            complete = False
+        if not complete:
+            continue
+        kind = figtree_tree_kind(statement)
+        if kind is None:
+            return header, []
+        statements.append(statement)
+        kinds.append(kind)
+        pending = []
+        if len(statements) == 3:
+            break
+    if pending or "dated" not in kinds:
+        return header, []
+    return header, statements
+
+
+def extract_figtree_text(text: str, scale: Decimal, direction: str) -> str:
+    header, statements = figtree_statements(text)
+    if not statements:
         return ""
-    return "\n".join(output_lines) + "\n"
+    return "\n".join([header] + [
+        scale_newick_time_values(line, scale, direction) if figtree_tree_kind(line) == "dated" else line
+        for line in statements
+    ]) + "\n"
 
 
 def has_figtree_tree(text: str) -> bool:
-    """Return whether a FigTree section contains at least one Newick tree."""
-    return bool(extract_figtree_text(text, Decimal("1"), "up"))
+    return bool(figtree_statements(text)[1])
+
+
+def cmd_conversion_inputs(args: argparse.Namespace) -> int:
+    _, statements = figtree_statements(read_text(args.infile))
+    if not statements:
+        print(f"No valid dated FigTree tree was found in {args.infile}", file=sys.stderr)
+        return 1
+    newick = figtree_newick([line for line in statements if figtree_tree_kind(line) == "dated"][-1])
+    comment_spans = []
+    uncomment_newick(newick, comment_spans)
+    without_ci = newick
+    for start, end in reversed(comment_spans):
+        if HPD_COMMENT_RE.fullmatch(newick[start:end]):
+            without_ci = without_ci[:start] + without_ci[end:]
+    without_ci = re.sub(r":\s+", ":", without_ci)
+    write_text(args.outdir / "mcmctree_95CI.nwk", newick + "\n")
+    write_text(args.outdir / "mcmctree_no95CI.nwk", without_ci + "\n")
+    return 0
 
 
 def parse_scale(value: str) -> Decimal:
@@ -354,6 +493,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validate.add_argument("--infile", type=Path, required=True)
     validate.set_defaults(func=cmd_validate_figtree)
+
+    conversion = subparsers.add_parser("conversion-inputs", help="Extract validated CI sidecars from a public FigTree artifact.")
+    conversion.add_argument("--infile", type=Path, required=True)
+    conversion.add_argument("--outdir", type=Path, required=True)
+    conversion.set_defaults(func=cmd_conversion_inputs)
 
     return parser
 

@@ -1025,3 +1025,230 @@ def test_recovery_does_not_bypass_other_missing_required_outputs(tmp_path):
     result = run_cli("needs-run", *args, "--stale-policy", "reuse")
     assert result.returncode == 3
     assert not manifest.exists()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_recovery_preflights_entire_legacy_output_set(tmp_path, dry_run):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "derived.txt"
+    other = tmp_path / "unrecoverable.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("source\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    args += ["--output", f"other={other}", "--recover-output", f"stat_branch={source}"]
+    result = run_cli("needs-run", *args, *(["--dry-run"] if dry_run else []))
+    assert result.returncode == 3, result.stderr
+    assert not output.exists()
+    assert not manifest.exists()
+
+
+def test_recovery_allows_explicit_rebuild_when_another_tracked_output_is_missing(tmp_path):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "derived.txt"
+    other = tmp_path / "unrecoverable.txt"
+    manifest = tmp_path / "provenance.json"
+    for path in (source, output, other):
+        path.write_text("source\n")
+    args = contract_args(tmp_path, manifest, source, output) + ["--output", f"other={other}"]
+    assert run_cli("record", *args).returncode == 0
+    output.unlink()
+    other.unlink()
+    result = run_cli("needs-run", *args, "--recover-output", f"stat_branch={source}", "--stale-policy", "rebuild")
+    assert result.returncode == 0, result.stderr
+    assert not output.exists()
+
+
+def test_recovery_preserves_shared_file_permissions(tmp_path):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "derived.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("source\n")
+    source.chmod(0o640)
+    args = contract_args(tmp_path, manifest, source, output)
+    result = run_cli("needs-run", *args, "--recover-output", f"stat_branch={source}")
+    assert result.returncode == 1, result.stderr
+    assert output.stat().st_mode & 0o777 == 0o640
+
+
+def test_recovery_preflights_malformed_parameters_without_publishing(tmp_path):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "derived.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("source\n")
+    args = contract_args(tmp_path, manifest, source, output, parameter="not-key-value")
+    result = run_cli("needs-run", *args, "--recover-output", f"stat_branch={source}")
+    assert result.returncode == 2, result.stderr
+    assert not output.exists()
+    assert not manifest.exists()
+
+
+def test_recovery_uses_target_reference_for_a_temporary_candidate(tmp_path):
+    root = tmp_path / "output" / "orthogroup"
+    source = tmp_path / "input.txt"
+    output = root / "stat_branch" / "OG0001.tsv"
+    candidate = root / "tmp" / "recovery" / "candidate.tsv"
+    manifest = root / "artifact_provenance" / "OG0001.json"
+    source.write_text("source\n")
+    output.parent.mkdir(parents=True)
+    candidate.parent.mkdir(parents=True)
+    output.write_text("result\n")
+    candidate.write_bytes(output.read_bytes())
+    args = contract_args(tmp_path, manifest, source, output)
+    assert run_cli("record", *args).returncode == 0
+    output.unlink()
+    result = run_cli("needs-run", *args, "--recover-output", f"stat_branch={candidate}")
+    assert result.returncode == 1, result.stderr
+
+
+def test_parallel_recovery_serializes_manifest_writers(tmp_path):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "derived.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("source\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    args += ["--recover-output", f"stat_branch={source}"]
+    worker = """
+import sys, time
+sys.path.insert(0, sys.argv.pop(1))
+import artifact_provenance as p
+original = p.snapshot_recovery_candidate
+def delayed(*args):
+    time.sleep(0.05)
+    return original(*args)
+p.snapshot_recovery_candidate = delayed
+sys.exit(p.dispatch(sys.argv[1:]))
+"""
+    processes = [subprocess.Popen(
+        [sys.executable, "-c", worker, str(SCRIPT.parent), "needs-run", *map(str, args)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    ) for _ in range(3)]
+    for process in processes:
+        stdout, stderr = process.communicate(timeout=30)
+        assert process.returncode == 1, stdout + stderr
+    assert output.read_bytes() == source.read_bytes()
+    assert run_cli("needs-run", *args).returncode == 1
+
+
+def test_recovery_validates_snapshot_not_a_mutable_candidate(tmp_path):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "derived.fa"
+    manifest = tmp_path / "provenance.json"
+    candidate = tmp_path / "candidate.fa"
+    source.write_text("source\n")
+    candidate.write_text(">gene\nATG\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    args += ["--recover-output", f"stat_branch={candidate}", "--output-fasta-type", "stat_branch=dna"]
+    worker = """
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv.pop(1))
+source = Path(sys.argv.pop(1))
+import artifact_provenance as p
+original = p.output_fasta_contract_failure
+def mutate_after_validation(args):
+    result = original(args)
+    source.write_text('invalid fasta\\n')
+    return result
+p.output_fasta_contract_failure = mutate_after_validation
+sys.exit(p.dispatch(sys.argv[1:]))
+"""
+    result = subprocess.run([sys.executable, "-c", worker, str(SCRIPT.parent), str(candidate),
+                             "needs-run", *map(str, args)], capture_output=True, text=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert output.read_text() == ">gene\nATG\n"
+
+
+@pytest.mark.parametrize("kind", ["symlink", "malformed_diagnostics", "missing_input"])
+def test_recovery_rejects_unverifiable_tracked_state_without_publishing(tmp_path, kind):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "derived.txt"
+    candidate = tmp_path / "candidate.txt"
+    manifest = tmp_path / "provenance.json"
+    for path in (source, output, candidate):
+        path.write_text("source\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    assert run_cli("record", *args).returncode == 0
+    output.unlink()
+    if kind == "symlink":
+        moved = manifest.with_suffix(".original")
+        manifest.rename(moved)
+        manifest.symlink_to(moved)
+    elif kind == "malformed_diagnostics":
+        payload = json.loads(manifest.read_text())
+        payload["diagnostics"] = "corrupt"
+        manifest.write_text(json.dumps(payload))
+    else:
+        source.unlink()
+    before = manifest.read_bytes()
+    result = run_cli("needs-run", *args, "--recover-output", f"stat_branch={candidate}")
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not output.exists()
+    assert manifest.read_bytes() == before
+
+
+@pytest.mark.parametrize("collision", ["label", "path"])
+def test_recovery_rejects_ambiguous_output_contract_before_publication(tmp_path, collision):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "derived.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("source\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    args += ["--recover-output", f"stat_branch={source}"]
+    if collision == "label":
+        args += ["--optional-output", f"stat_branch={source}"]
+    else:
+        args += ["--output", f"same_path={output}", "--recover-output", f"same_path={source}"]
+    result = run_cli("needs-run", *args)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not output.exists()
+
+
+def test_recovery_resumes_actual_partial_publication(tmp_path):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "result.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("source\n")
+    output.write_text("result\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    assert run_cli("record", *args).returncode == 0
+    before = manifest.read_bytes()
+    first, second = tmp_path / "a.txt", tmp_path / "b.txt"
+    args += ["--output", f"a={first}", "--output", f"b={second}",
+             "--recover-output", f"a={output}", "--recover-output", f"b={output}"]
+    worker = """
+import sys
+sys.path.insert(0, sys.argv.pop(1))
+import artifact_provenance as p
+original = p.os.link
+count = 0
+def interrupt(source, target):
+    global count
+    count += 1
+    if count == 2:
+        raise OSError('simulated publication interruption')
+    return original(source, target)
+p.os.link = interrupt
+sys.exit(p.dispatch(sys.argv[1:]))
+"""
+    result = subprocess.run([sys.executable, "-c", worker, str(SCRIPT.parent), "needs-run", *map(str, args)],
+                            capture_output=True, text=True)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert first.read_bytes() == output.read_bytes()
+    assert not second.exists()
+    assert manifest.read_bytes() == before
+    result = run_cli("needs-run", *args)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert second.read_bytes() == output.read_bytes()
+    assert len(json.loads(manifest.read_text())["outputs"]) == 3
+
+
+def test_legacy_missing_input_diagnostic_identifies_the_actual_path(tmp_path):
+    source = tmp_path / "missing-input.txt"
+    output = tmp_path / "result.txt"
+    manifest = tmp_path / "provenance.json"
+    output.write_text("result\n")
+    result = run_cli("needs-run", *contract_args(tmp_path, manifest, source, output))
+    assert result.returncode == 1, result.stderr
+    assert str(source) in result.stdout
+    assert "missing: None" not in result.stdout
+    assert not manifest.exists()

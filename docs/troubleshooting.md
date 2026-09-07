@@ -141,6 +141,23 @@ never a recovery source. Existing dated trees can supply their canonical
 summary; the public FigTree artifact can regenerate the conversion's CI
 sidecars without rerunning MCMCtree or replacing the dated tree.
 
+Recovery checks the entire proposed output set before publishing files, even
+when no historical manifest exists. It validates private snapshots of candidate
+files and preserves their permissions, so shared project files remain readable.
+A second unrecoverable output or invalid contract stops recovery before any
+output is published. Explicit `rebuild` remains available for incomplete output
+sets. Per-manifest locks under `.gg_cache/artifact_provenance_locks/` serialize
+provenance writers; dry-run does not create locks. Stage recipes remain available
+after file publication so an interrupted manifest migration can finish on retry.
+
+FigTree checks parse Newick syntax, require distinct named tips and valid dated
+branch lengths, and validate HPD intervals. Public MCMCtree blocks may include
+the program's topology/index line alongside dated trees; those node indices are
+preserved when time values are scaled. Native NEXUS FigTree files and multiline
+trees are supported without a `TRANSLATE` table. Translation tables are rejected
+rather than silently substituting numeric tip identifiers. Conversion selects
+one dated tree and removes HPD annotations from its no-CI sidecar.
+
 For tracked artifacts, recovery must reproduce recorded output bytes and match
 all recorded inputs and parameters. A newly introduced derived output can extend
 the output contract only after those checks pass. Existing files (including
