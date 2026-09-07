@@ -151,6 +151,10 @@ Storage conversion and controlled failed-run cleanup may archive an incomplete
 family without marking it complete. Before a rerun starts, GeneGalleon
 materializes only that family's archived artifacts at their historical paths,
 preserves their mtimes, and then applies the normal stage skip/staleness tests.
+ZIP headers represent years 1980–2107; timestamps outside that range are clamped
+only in the ZIP header. The manifest retains the original nanosecond mtime for
+restoration. Publication stays inside the reader lock so maintenance cannot
+commit a newer result before an older restored snapshot is published.
 Consequently, a legacy run converted after MAFFT, for example, can resume from
 the later stages instead of starting over. A controlled failure records
 `failed`, removes unchanged materialized copies, and archives new or changed
@@ -257,7 +261,9 @@ redundant recompression. Configure routine workflow archiving with:
 - `GG_COMMON_GENE_FAMILY_FINAL_ZIP_MAX_BYTES=0..` (`0` keeps the one-final-ZIP behavior)
 
 `store` prioritizes packing files into a small number of inodes over reducing
-bytes. Worker concurrency is deliberately capped at four to avoid an
+bytes. Compression levels apply to each streamed DEFLATE member during both
+initial archiving and compaction; level `0` uses uncompressed DEFLATE blocks.
+Worker concurrency is deliberately capped at four to avoid an
 unbounded burst of metadata and read traffic on a shared filesystem.
 
 ### Adding, replacing, and deleting files manually
@@ -266,7 +272,10 @@ Do not edit `*.zip` in place. The archive manifest intentionally detects
 direct ZIP edits as an error.
 
 To add or replace an artifact, put it at its historical path. A live file
-always overrides the archived version:
+always overrides the archived version when it and its output directory are
+regular filesystem entries. Symlinked files and directories do not count as
+live overrides. ZIP writers reject symlinked destinations and ancestors.
+For example, replace a regular live file with:
 
 ```bash
 cp replacement.tsv \
@@ -371,6 +380,11 @@ bash workflow/gg_gene_family_archive.sh repair \
   --root workspace/output/query2family \
   --progress-interval 10
 ```
+
+Repair also checks finalized ZIP identities retained in readable family or
+subdirectory indexes. If one of those ZIPs is missing or corrupt, repair stops
+before replacing the indexes; restore the ZIP bytes before retrying. Repair
+reconstructs metadata from valid ZIPs, not damaged ZIP contents.
 
 Add `--remove-orphans` only after reviewing the reported orphan paths.
 Both explicit `repair` and `finalize` commands emit the same periodic progress

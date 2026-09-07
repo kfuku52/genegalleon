@@ -1767,7 +1767,7 @@ class GeneFamilyOutputStore:
     def _live_artifact(self, subdir: str, name: str) -> Optional[Artifact]:
         logical_path = _safe_logical_path(subdir, name)
         live_path = self.root / subdir / name
-        if not live_path.is_file() or live_path.is_symlink() or live_path.name.startswith("."):
+        if not live_path.is_file() or live_path.is_symlink() or live_path.parent.is_symlink() or live_path.name.startswith("."):
             return None
         return Artifact(
             logical_path=logical_path,
@@ -2002,6 +2002,7 @@ class GeneFamilyOutputStore:
         *,
         _producer_locked: bool = False,
     ) -> Path:
+        _safe_logical_path(subdir, name)
         destination_root = self.root if destination_root is None else Path(destination_root).resolve()
         destination = destination_root / subdir / name
         if destination.is_symlink() or destination.parent.is_symlink():
@@ -2029,10 +2030,12 @@ class GeneFamilyOutputStore:
                     shutil.copyfileobj(source, target, length=1024 * 1024)
                     target.flush()
                     os.fsync(target.fileno())
-            if artifact.mtime_ns is not None:
-                os.utime(temporary, ns=(artifact.mtime_ns, artifact.mtime_ns))
-            os.replace(temporary, destination)
-            _fsync_directory(destination.parent)
+                # Keep publication inside the read lock: a maintenance writer may
+                # otherwise commit newer content before this old snapshot replaces it.
+                if artifact.mtime_ns is not None:
+                    os.utime(temporary, ns=(artifact.mtime_ns, artifact.mtime_ns))
+                os.replace(temporary, destination)
+                _fsync_directory(destination.parent)
         finally:
             if temporary.exists():
                 temporary.unlink()
@@ -3031,12 +3034,12 @@ def _archive_chunk(
     byte_progress_callback: Optional[Callable[[int], None]] = None,
     verification_progress_callback: Optional[Callable[[int, int, int, int], None]] = None,
 ) -> Tuple[Path, List[Artifact], Dict[Path, ArchivedSourceSignature]]:
-    shard_dir = Path(destination_path).resolve().parent if destination_path is not None else payload_root / subdir
-    if shard_dir.is_symlink():
+    shard_dir = Path(destination_path).absolute().parent if destination_path is not None else payload_root / subdir
+    if any(parent.is_symlink() for parent in (shard_dir, *shard_dir.parents)):
         raise ArchiveStoreError(f"Symlinked archive shard directories are not supported: {shard_dir}")
     shard_dir.mkdir(parents=True, exist_ok=True)
     final_path = (
-        Path(destination_path).resolve()
+        Path(destination_path).absolute()
         if destination_path is not None
         else shard_dir / f"{subdir}.part-{generation:06d}.zip"
     )
@@ -3061,8 +3064,10 @@ def _archive_chunk(
                 logical_path = _safe_logical_path(subdir, path.name)
                 member_name = logical_path
                 digest = hashlib.sha256()
-                zip_info = zipfile.ZipInfo.from_file(path, arcname=member_name)
+                zip_info = zipfile.ZipInfo.from_file(path, arcname=member_name, strict_timestamps=False)
                 zip_info.compress_type = _compression_for(path, compression)
+                # Streaming ZipInfo writes do not inherit ZipFile.compresslevel.
+                zip_info._compresslevel = compression_level
                 with (
                     path.open("rb") as source,
                     archive.open(
@@ -3153,12 +3158,12 @@ def _compact_artifact_chunk(
     byte_progress_callback: Optional[Callable[[int], None]] = None,
     verification_progress_callback: Optional[Callable[[int, int, int, int], None]] = None,
 ) -> Tuple[Path, List[Artifact]]:
-    shard_dir = Path(destination_path).resolve().parent if destination_path is not None else payload_root / subdir
-    if shard_dir.is_symlink():
+    shard_dir = Path(destination_path).absolute().parent if destination_path is not None else payload_root / subdir
+    if any(parent.is_symlink() for parent in (shard_dir, *shard_dir.parents)):
         raise ArchiveStoreError(f"Symlinked archive shard directories are not supported: {shard_dir}")
     shard_dir.mkdir(parents=True, exist_ok=True)
     final_path = (
-        Path(destination_path).resolve()
+        Path(destination_path).absolute()
         if destination_path is not None
         else shard_dir / f"{subdir}.pack-{archive_generation:06d}.zip"
     )
@@ -3187,8 +3192,10 @@ def _compact_artifact_chunk(
                 digest = hashlib.sha256()
                 zip_info = zipfile.ZipInfo(artifact.logical_path)
                 if artifact.mtime_ns is not None:
-                    zip_info.date_time = time.localtime(artifact.mtime_ns / 1_000_000_000)[:6]
+                    date_time = time.localtime(artifact.mtime_ns / 1_000_000_000)[:6]
+                    zip_info.date_time = max((1980, 1, 1, 0, 0, 0), min((2107, 12, 31, 23, 59, 59), date_time))
                 zip_info.compress_type = _compression_for(Path(artifact.name), compression)
+                zip_info._compresslevel = compression_level
                 if artifact.zip_path.is_symlink() or artifact.zip_path.parent.is_symlink():
                     raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {artifact.zip_path}")
                 source_archive = source_archives.get(artifact.zip_path)
@@ -6098,6 +6105,47 @@ def migrate_archive_layout(root: Path) -> List[Tuple[Path, Path]]:
     return moved
 
 
+def _indexed_final_archives_for_repair(root: Path) -> Set[Path]:
+    """Recover final ZIP identities even when their central directory is broken.
+
+    Repair cannot require healthy indexes, but any readable index copy supplies
+    evidence that a root-level ZIP is managed rather than an unrelated user ZIP.
+    """
+    archive_root = _archive_state_root(root)
+    index_paths = []
+    for name in (INDEX_DIR_NAME, SUBDIR_INDEX_DIR_NAME):
+        directory = archive_root / name
+        if directory.is_symlink():
+            raise ArchiveStoreError(f"Symlinked archive index directories are not supported: {directory}")
+        index_paths.extend(directory.glob("*.json"))
+    legacy = archive_root / INDEX_FILE
+    if legacy.exists() or legacy.is_symlink():
+        index_paths.append(legacy)
+    result: Set[Path] = set()
+    for index_path in index_paths:
+        if index_path.is_symlink():
+            raise ArchiveStoreError(f"Symlinked archive indexes are not supported: {index_path}")
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeError):
+            # Rebuilding damaged index JSON from ZIP manifests is repair's job.
+            continue
+        records = payload.get("artifacts") if isinstance(payload, dict) else None
+        if not isinstance(records, dict):
+            continue
+        for logical_path, record in records.items():
+            if not isinstance(record, dict) or record.get("zip_location") != "final":
+                continue
+            subdir = str(logical_path).split("/", 1)[0]
+            try:
+                expected = _final_archive_path(root, subdir)
+            except ArchiveStoreError:
+                continue  # Invalid index paths cannot authorize filesystem access.
+            if record.get("zip_path") == expected.name:
+                result.add(expected)
+    return result
+
+
 def repair_archive_index(
     root: Path,
     *,
@@ -6118,7 +6166,12 @@ def repair_archive_index(
             rebuilt: Dict[str, Artifact] = {}
             rebuilt_ranks: Dict[str, Tuple[int, int, str]] = {}
             mode_by_path: Dict[Path, str] = {}
-            physical_paths = _physical_archive_paths(root)
+            physical_paths = sorted(set(_physical_archive_paths(root)) | _indexed_final_archives_for_repair(root))
+            for path in physical_paths:
+                if path.is_symlink() or path.parent.is_symlink():
+                    raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {path}")
+                if not path.is_file():
+                    raise ArchiveStoreError(f"Indexed ZIP archive is missing; restore it before repair: {path}")
             physical_sizes = {path: path.stat().st_size for path in physical_paths}
             processed_zip_bytes = 0
             verified_members = 0
