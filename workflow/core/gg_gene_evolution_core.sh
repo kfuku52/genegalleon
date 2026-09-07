@@ -1619,6 +1619,12 @@ if [[
     exit 1
   fi
 fi
+# The run lock and shared family lock prevent collection while cancelling an
+# earlier ZIP request. Files/debug runs must preserve their live outputs.
+if [[ "${gene_family_output_storage}" != "zip" || ${gg_debug_mode:-0} -ne 0 ]]; then
+  python "${gene_family_store_script}" cancel-family-archive \
+    --root "${dir_output_active}" --family-id "${og_id}" || exit 1
+fi
 if [[ "${gene_family_output_storage}" == "zip" ]]; then
   GG_FAMILY_OUTPUT_INVENTORY=$(python "${gene_family_store_script}" inventory-path \
     --root "${dir_output_active}" --family-id "${og_id}") || exit 1
@@ -1638,10 +1644,12 @@ if [[ "${gene_family_output_storage}" == "zip" ]]; then
   fi
   # Publish a durable request before computation, so a scheduler kill cannot
   # leave a completed family absent from the collection queue.
-  python "${gene_family_store_script}" enqueue-family \
-    --root "${dir_output_active}" --mode "${mode_gene_evolution}" \
-    "${gene_family_archive_write_args[@]}" \
-    --family-id "${og_id}" --run-token "${gene_family_run_token}" || exit 1
+  if [[ ${gg_debug_mode:-0} -eq 0 ]]; then
+    python "${gene_family_store_script}" enqueue-family \
+      --root "${dir_output_active}" --mode "${mode_gene_evolution}" \
+      "${gene_family_archive_write_args[@]}" \
+      --family-id "${og_id}" --run-token "${gene_family_run_token}" || exit 1
+  fi
 fi
 
 dir_sp_genome="${gg_workspace_input_dir}/species_genome"

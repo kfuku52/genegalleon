@@ -393,9 +393,10 @@ _gg_record_family_output() {
     [[ "${path}" == /* ]] || path="${PWD}/${path}"
     case "${path}" in
       "${GG_FAMILY_OUTPUT_ROOT}/"*)
-        path="${GG_FAMILY_OUTPUT_CANONICAL_ROOT:-${GG_FAMILY_OUTPUT_ROOT}}/${path#"${GG_FAMILY_OUTPUT_ROOT}/"}"
+        path="${path#"${GG_FAMILY_OUTPUT_ROOT}/"}"
         ;;
-      "${GG_FAMILY_OUTPUT_CANONICAL_ROOT:-${GG_FAMILY_OUTPUT_ROOT}}/"*) ;;
+      "${GG_FAMILY_OUTPUT_CANONICAL_ROOT:-${GG_FAMILY_OUTPUT_ROOT}}/"*)
+        path="${path#"${GG_FAMILY_OUTPUT_CANONICAL_ROOT:-${GG_FAMILY_OUTPUT_ROOT}}/"}" ;;
       *) return 0 ;;
     esac
     # Per-process journals avoid concurrent NFS appends; record before publishing.

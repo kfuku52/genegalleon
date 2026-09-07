@@ -69,7 +69,7 @@ with tempfile.TemporaryDirectory(dir=args.work_dir) as temporary:
             path = root / "mafft" / f"{family}_cds.aln.fa.gz"
             inventory = m.family_inventory_path(root, family)
             inventory.mkdir(parents=True, exist_ok=True)
-            (inventory / "worker.paths").write_bytes(os.fsencode(path) + b"\0")
+            (inventory / "worker.paths").write_bytes(os.fsencode(path.relative_to(root)) + b"\0")
             m.enqueue_family_archive(root, "orthogroup", family)
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.queue_workers) as executor:
             list(executor.map(enqueue, range(args.completed)))

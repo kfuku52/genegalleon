@@ -316,8 +316,8 @@ printf 'third\n' | cp_out "$2/mafft/OG0000001_third.fa"
         "--max-final-zip-bytes", "20",
     ])
     assert store.run_cli(args) == 0
-    assert [path.name for path in inventory.glob("*.paths")] == ["inventory.paths"]
     assert drain(tmp_path)["archived_files"] == 3
+    assert [path.name for path in inventory.glob("*.paths")] == ["inventory.paths"]
     for archive_path in (tmp_path / "archives" / "mafft").glob("*.zip"):
         with zipfile.ZipFile(archive_path) as archive:
             for info in archive.infolist():
@@ -384,3 +384,120 @@ def test_queue_commit_preserves_unrelated_family_index_bucket(tmp_path):
     logical = store.GeneFamilyOutputStore(tmp_path)
     assert read_bytes(logical, "mafft", first.name) == b"alignment\n"
     assert read_bytes(logical, "mafft", second.name) == b"alignment\n"
+
+
+def test_relocated_inventory_still_archives_published_outputs(tmp_path, monkeypatch):
+    root = tmp_path / 'original'
+    root.mkdir()
+    path, _ = queued(root)
+    inventory = store.family_inventory_path(root, 'OG0000001')
+    for journal in inventory.glob('*.paths'):
+        journal.unlink()
+    monkeypatch.setenv('GG_FAMILY_OUTPUT_INVENTORY', str(inventory))
+    store.record_family_output_inventory(root, 'OG0000001', path)
+    store.enqueue_family_archive(root, 'orthogroup', 'OG0000001', 'run-1')
+    moved = tmp_path / 'moved'
+    root.rename(moved)
+    assert drain(moved)['archived_files'] == 1
+    assert read_bytes(store.GeneFamilyOutputStore(moved), 'mafft', path.name) == b'alignment\n'
+
+
+@pytest.mark.parametrize('missing', ['directory', 'journals'])
+def test_missing_inventory_never_acknowledges_request(tmp_path, missing):
+    path, request = queued(tmp_path)
+    inventory = store.family_inventory_path(tmp_path, 'OG0000001')
+    for journal in inventory.glob('*.paths'):
+        journal.unlink()
+    if missing == 'directory':
+        inventory.rmdir()
+    with pytest.raises(store.ArchiveStoreError, match='inventory'):
+        drain(tmp_path)
+    assert request.exists() and path.exists()
+
+
+def test_enqueue_does_not_touch_active_publisher_journal(tmp_path):
+    path, _ = queued(tmp_path)
+    journal = store.family_inventory_path(tmp_path, "OG0000001") / "worker.paths"
+    # An open append handle must remain attached to the collected journal.
+    with journal.open("ab") as publisher:
+        store.enqueue_family_archive(tmp_path, "orthogroup", "OG0000001", "run-1")
+        second = path.with_name("OG0000001_second.fa")
+        publisher.write(os.fsencode(second.relative_to(tmp_path)) + b"\0")
+        publisher.flush()
+        second.write_bytes(b"second")
+    assert drain(tmp_path)["archived_files"] == 2
+
+
+def test_cancel_request_preserves_live_outputs(tmp_path):
+    path, request = queued(tmp_path)
+    args = store.build_parser().parse_args([
+        "cancel-family-archive", "--root", str(tmp_path), "--family-id", "OG0000001",
+    ])
+    assert store.run_cli(args) == 0
+    assert store.run_cli(args) == 0
+    assert not request.exists()
+    assert drain(tmp_path)["archived_files"] == 0
+    assert path.exists()
+
+
+def test_collector_defers_during_offline_maintenance(tmp_path):
+    path, request = queued(tmp_path)
+    with store.all_family_bucket_locks(store._archive_state_root(tmp_path)):
+        assert drain(tmp_path)["status"] == "maintenance-busy"
+    assert path.exists() and request.exists()
+
+
+@pytest.mark.parametrize("level", [0, 1, 2])
+def test_inventory_symlink_ancestors_are_rejected(tmp_path, level):
+    path, request = queued(tmp_path)
+    directory = store.family_inventory_path(tmp_path, "OG0000001")
+    for _ in range(level):
+        directory = directory.parent
+    moved = tmp_path / "outside-inventory"
+    directory.rename(moved)
+    directory.symlink_to(moved, target_is_directory=True)
+    with pytest.raises(store.ArchiveStoreError, match="Symlinked output inventory"):
+        drain(tmp_path)
+    assert path.exists() and request.exists()
+
+
+@pytest.mark.parametrize("storage,debug,expected", [
+    ("files", 0, False), ("zip", 1, False), ("zip", 0, True),
+])
+def test_core_startup_only_queues_normal_zip_runs(tmp_path, storage, debug, expected):
+    import subprocess
+
+    repo = Path(__file__).resolve().parents[2]
+    core = (repo / "workflow/core/gg_gene_evolution_core.sh").read_text()
+    block = core.split("# The run lock and shared family lock", 1)[1].split('\ndir_sp_genome=', 1)[0]
+    block = "# The run lock and shared family lock" + block
+    script = r'''
+set -eu
+root=$1
+log="$root/commands"
+gene_family_output_storage=$2
+gg_debug_mode=$3
+dir_output_active=$root
+gene_family_store_script=store.py
+og_id=OG0000001
+mode_gene_evolution=orthogroup
+gene_family_archive_write_args=()
+python() {
+  printf '%s\n' "$2" >> "$log"
+  if [[ "$2" == inventory-path ]]; then printf '%s\n' "$root/inventory"; fi
+}
+''' + block
+    subprocess.run(["bash", "-c", script, "bash", str(tmp_path), storage, str(debug)], check=True)
+    commands = (tmp_path / "commands").read_text().splitlines()
+    assert ("enqueue-family" in commands) is expected
+    assert ("cancel-family-archive" in commands) is (not expected)
+
+
+@pytest.mark.parametrize("entry", ["../mafft/OG0000001.fa", "/old-workspace/mafft/OG0000001.fa"])
+def test_unsafe_inventory_entry_is_not_acknowledged(tmp_path, entry):
+    path, request = queued(tmp_path)
+    inventory = store.family_inventory_path(tmp_path, "OG0000001")
+    (inventory / "worker.paths").write_bytes(os.fsencode(entry) + b"\0")
+    with pytest.raises(store.ArchiveStoreError, match="inventory"):
+        drain(tmp_path)
+    assert path.exists() and request.exists()

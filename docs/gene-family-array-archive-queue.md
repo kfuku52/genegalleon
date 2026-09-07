@@ -81,8 +81,13 @@ state-file bucket, so all writers of one JSON file share the same lock.
 Output inventories are recorded before publication by the file-movement helpers.
 The workflow also records declared `file_og_*` destinations, covering tools that
 publish directly, and records existing outputs encountered during materialization.
-Per-process journals avoid concurrent appends to the same NFS file. Enqueue merges
-those journals into one durable inventory per family; inventories survive reruns.
+Per-process journals avoid concurrent appends to the same NFS file. The collector merges
+those journals under the exclusive family lock; enqueue never replaces or deletes
+a publisher’s open journal. Inventories survive reruns. New entries use paths
+relative to the output root so pending work survives workspace relocation. Missing
+inventories, symlinked inventory directories, and absolute entries outside the
+current root fail collection without acknowledging the request. Collect older
+absolute-path inventories at their original location before moving the workspace.
 Failed and skipped publication candidates are harmless: collection checks current
 file existence, family ownership, and regular-file/symlink constraints.
 
@@ -182,3 +187,10 @@ in 105.48 seconds, producing 100 ZIP shards with all 10,000 logical SHA-256
 checks passing. Peak process RSS was about 60.4 MiB. This is a synthetic
 container-local storage measurement; Docker shares host resources, and no
 production shared-filesystem throughput or full-workflow speedup is claimed.
+
+Files-mode and debug reruns cancel prior collection requests before publishing
+outputs, while holding the producer run lock and shared family lock. Debug runs
+do not submit new requests. The `cancel-family-archive --root ROOT --family-id ID`
+command performs this cancellation; callers must serialize family producers.
+Collectors hold the shared maintenance gate throughout queue enumeration and
+staging, and return `maintenance-busy` while offline conversion owns that gate.

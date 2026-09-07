@@ -3423,7 +3423,7 @@ def record_family_output_inventory(root: Path, family_id: str, path: Path) -> No
         return
     journal = Path(configured) / f"python-{os.getpid()}.paths"
     with journal.open("ab") as handle:
-        handle.write(os.fsencode(path) + b"\0")
+        handle.write(os.fsencode(path.relative_to(root)) + b"\0")
         handle.flush()
         os.fsync(handle.fileno())
 
@@ -3433,12 +3433,29 @@ def _queue_path(root: Path, family_id: str) -> Path:
     return _archive_state_root(root) / ARCHIVE_QUEUE_DIR / digest[:2] / f"{digest}.json"
 
 
+def _inventory_relative_path(root: Path, value: bytes) -> Path:
+    path = Path(os.fsdecode(value))
+    if '..' in path.parts:
+        raise ArchiveStoreError(f"Unsafe output inventory path: {path}")
+    if path.is_absolute():
+        # Accept existing journals at their original root and migrate them on
+        # collection. Never silently acknowledge entries from an unknown old root.
+        try:
+            path = path.relative_to(root)
+        except ValueError as exc:
+            raise ArchiveStoreError(f"Output inventory path is outside the current root: {path}") from exc
+    return path
+
+
 def _inventory_paths(root: Path, family_id: str, family_from_name: Callable[[str], Optional[str]]) -> List[Path]:
     directory = family_inventory_path(root, family_id)
-    if directory.is_symlink():
+    if any(parent.is_symlink() for parent in (directory, directory.parent, directory.parent.parent)):
         raise ArchiveStoreError(f"Symlinked output inventory: {directory}")
+    journals = sorted(directory.glob("*.paths"))
+    if not directory.is_dir() or not journals:
+        raise ArchiveStoreError(f"Missing output inventory: {directory}")
     paths: Set[Path] = set()
-    for journal in sorted(directory.glob("*.paths")):
+    for journal in journals:
         if journal.is_symlink():
             raise ArchiveStoreError(f"Symlinked output inventory journal: {journal}")
         data = journal.read_bytes()
@@ -3447,13 +3464,9 @@ def _inventory_paths(root: Path, family_id: str, family_from_name: Callable[[str
         for value in data.split(b"\0"):
             if not value:
                 continue
-            path = Path(os.path.normpath(os.fsdecode(value)))
-            # Reject aliases and symlinks before normalization. Inventory may
-            # also contain shared/non-family outputs published by the worker.
-            try:
-                relative = path.relative_to(root)
-            except ValueError:
-                continue
+            relative = _inventory_relative_path(root, value)
+            path = root / relative
+            # Inventory may also contain shared/non-family outputs.
             if len(relative.parts) != 2 or relative.parts[0].startswith(".") or relative.parts[0] in EXCLUDED_SUBDIRS:
                 continue
             if family_from_name(path.name) != family_id:
@@ -3464,6 +3477,34 @@ def _inventory_paths(root: Path, family_id: str, family_from_name: Callable[[str
             if path.is_file():
                 paths.add(path)
     return sorted(paths)
+
+
+def _compact_family_inventory(root: Path, family_id: str) -> None:
+    """Caller must hold the exclusive family lock, excluding publishers."""
+    inventory = family_inventory_path(root, family_id)
+    journals = sorted(inventory.glob("*.paths"))
+    entries = set()
+    for journal in journals:
+        for value in journal.read_bytes().split(b"\0"):
+            if value:
+                path = Path(os.fsdecode(value))
+                entries.add(os.fsencode(path.relative_to(root) if path.is_absolute() else path))
+    target = inventory / "inventory.paths"
+    temporary = inventory / f".inventory.{uuid.uuid4().hex}"
+    try:
+        with temporary.open("wb") as handle:
+            for value in sorted(entries):
+                handle.write(value + b"\0")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        _fsync_directory(inventory)
+        for journal in journals:
+            if journal != target:
+                journal.unlink()
+        _fsync_directory(inventory)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def enqueue_family_archive(root: Path, mode: str, family_id: str, run_token: str = "",
@@ -3477,35 +3518,8 @@ def enqueue_family_archive(root: Path, mode: str, family_id: str, run_token: str
         current = states.get(family_id)
         if run_token and (current is None or current[2] != run_token):
             raise ArchiveStoreError(f"Stale archive request for {family_id}: run token changed")
-        inventory = family_inventory_path(root, family_id)
-        journals = sorted(inventory.glob("*.paths"))
-        inventory_entries: Set[bytes] = set()
-        for journal in journals:
-            if journal.is_symlink():
-                raise ArchiveStoreError(f"Symlinked output inventory journal: {journal}")
-            data = journal.read_bytes()
-            if data and not data.endswith(b"\0"):
-                raise ArchiveStoreError(f"Incomplete output inventory journal: {journal}")
-            inventory_entries.update(value for value in data.split(b"\0") if value)
-        if inventory.is_dir():
-            # Collapse per-publisher journals into one durable inventory. The
-            # producer run lock excludes a new run until enqueue has finished.
-            target = inventory / "inventory.paths"
-            temporary = inventory / f".inventory.{uuid.uuid4().hex}"
-            try:
-                with temporary.open("wb") as handle:
-                    for value in sorted(inventory_entries):
-                        handle.write(value + b"\0")
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temporary, target)
-                _fsync_directory(inventory)
-                for journal in journals:
-                    if journal != target:
-                        journal.unlink()
-                _fsync_directory(inventory)
-            finally:
-                temporary.unlink(missing_ok=True)
+        # Publishers hold shared family locks too. Never read, replace, or
+        # unlink their append journals here; only the exclusive collector may.
         request = _queue_path(root, family_id)
         store._write_json_index_payload(request, {
             "schema_version": 1, "family_id": family_id, "mode": mode,
@@ -3567,7 +3581,16 @@ def drain_archive_queue(
     started = time.monotonic()
     default_options = (compression, compression_level, workers, max_bytes_per_shard)
     # Single collector bounds shared-filesystem load independently of array size.
-    with _bucket_lock(archive_root / "collector.lock", exclusive=True, nonblocking=True) as collector:
+    with contextlib.ExitStack() as collector_guards:
+        # Pin the queue namespace even before the first family lock: offline
+        # conversion may otherwise remove it during enumeration or staging.
+        if not collector_guards.enter_context(_bucket_lock(
+            family_gate_path(archive_root), exclusive=False, nonblocking=True,
+        )):
+            return {**stats, "status": "maintenance-busy"}
+        collector = collector_guards.enter_context(_bucket_lock(
+            archive_root / "collector.lock", exclusive=True, nonblocking=True,
+        ))
         if not collector:
             return {**stats, "status": "collector-busy"}
         queue_root = archive_root / ARCHIVE_QUEUE_DIR
@@ -3618,6 +3641,7 @@ def drain_archive_queue(
                     continue
                 try:
                     paths = _inventory_paths(root, family_id, family_from_name)
+                    _compact_family_inventory(root, family_id)
                     size = sum(path.stat().st_size for path in paths)
                 except BaseException:
                     family_lock.close()
@@ -6581,6 +6605,13 @@ def run_cli(args: argparse.Namespace) -> int:
     root = args.root.resolve()
     if args.command == "inventory-path":
         print(family_inventory_path(root, args.family_id))
+        return 0
+    if args.command == "cancel-family-archive":
+        with family_bucket_lock(_archive_state_root(root), args.family_id, exclusive=False):
+            request = _queue_path(root, args.family_id)
+            request.unlink(missing_ok=True)
+            if request.parent.exists():
+                _fsync_directory(request.parent)
         return 0
     if args.command == "queue-status":
         print(json.dumps(archive_queue_status(root), sort_keys=True))
