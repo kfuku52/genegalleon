@@ -126,7 +126,8 @@ def test_genome_evolution_rebuilds_invalid_cached_mcmctree_without_reuse_fallbac
     assert "stop|reuse)" in core[core.index(validation):core.index(prepare)]
     assert "mcmctree_needs_update=1" in core[core.index(prepare):]
     assert "run_mcmctree2=1" in core[core.index(prepare):]
-    assert 'extract_scaled_mcmctree_figtree "${file_mcmctree_raw_output}" "tmp.mcmctree2.txt" 1' in core
+    recovery = 'extract_scaled_mcmctree_figtree "${file_mcmctree_raw_output}" "${mcmctree_recovery_dir}/FigTree.tre" 1'
+    assert core.index(validation) < core.index(recovery) < core.index(prepare)
     assert "Copying raw file instead" not in core
 
 

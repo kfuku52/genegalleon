@@ -896,3 +896,132 @@ def test_audit_checks_all_csubst_and_stat_branch_clades(tmp_path):
     frame = pd.read_csv(report, sep="\t", keep_default_na=False)
     assert frame.loc[0, "status"] == "semantic_mismatch"
     assert "inconsistent rooted trees" in frame.loc[0, "reason"]
+
+
+@pytest.mark.parametrize("tracked", [False, True])
+def test_recovery_restores_only_missing_derived_output_and_is_idempotent(tmp_path, tracked):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "result.txt"
+    candidate = tmp_path / "candidate.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("input\n")
+    output.write_text("result\n")
+    candidate.write_text("result\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    if tracked:
+        assert run_cli("record", *args).returncode == 0
+    output.unlink()
+    args += ["--recover-output", f"stat_branch={candidate}"]
+    dry = run_cli("needs-run", *args, "--dry-run")
+    assert dry.returncode == 0, dry.stderr
+    assert "Would restore" in dry.stdout
+    assert not output.exists()
+    recovered = run_cli("needs-run", *args)
+    assert recovered.returncode == 1, recovered.stderr
+    assert output.read_bytes() == candidate.read_bytes()
+    baseline = (output.stat().st_mtime_ns, manifest.read_bytes())
+    assert run_cli("needs-run", *args).returncode == 1
+    assert (output.stat().st_mtime_ns, manifest.read_bytes()) == baseline
+
+
+@pytest.mark.parametrize("change", ["input", "candidate", "parameter"])
+def test_recovery_refuses_changes_to_recorded_contract(tmp_path, change):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "result.txt"
+    candidate = tmp_path / "candidate.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("input\n")
+    output.write_text("result\n")
+    candidate.write_text("result\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    assert run_cli("record", *args).returncode == 0
+    original_manifest = manifest.read_bytes()
+    output.unlink()
+    if change == "parameter":
+        args[-1] = "mode=b"
+    else:
+        {"input": source, "candidate": candidate}[change].write_text("changed\n")
+    result = run_cli("needs-run", *args, "--recover-output", f"stat_branch={candidate}")
+    assert result.returncode == 3
+    assert "Recovery refused" in result.stderr
+    assert not output.exists()
+    assert manifest.read_bytes() == original_manifest
+    rebuild = run_cli("needs-run", *args, "--recover-output", f"stat_branch={candidate}", "--stale-policy", "rebuild")
+    assert rebuild.returncode == 0, rebuild.stderr
+    assert not output.exists()
+
+
+def test_recovery_migrates_added_output_without_rewriting_history(tmp_path):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "result.txt"
+    derived = tmp_path / "derived.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("input\n")
+    output.write_text("result\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    assert run_cli("record", *args, "--diagnostic", "producer=historical").returncode == 0
+    original = json.loads(manifest.read_text())
+    args += ["--output", f"derived={derived}", "--recover-output", f"derived={output}"]
+    result = run_cli("needs-run", *args)
+    assert result.returncode == 1, result.stderr
+    updated = json.loads(manifest.read_text())
+    assert updated["created_utc"] == original["created_utc"]
+    assert updated["parameters"] == original["parameters"]
+    assert updated["diagnostics"]["producer"] == "historical"
+    assert derived.read_bytes() == output.read_bytes()
+
+
+def test_dry_run_does_not_adopt_legacy_or_create_digest_cache(tmp_path):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "result.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("input\n")
+    output.write_text("result\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    assert run_cli("needs-run", *args, "--dry-run").returncode == 1
+    assert not manifest.exists()
+    assert not (tmp_path / ".gg_cache").exists()
+
+
+def test_recovery_never_overwrites_existing_output(tmp_path):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "result.txt"
+    candidate = tmp_path / "candidate.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("input\n")
+    output.write_text("original\n")
+    candidate.write_text("different\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    result = run_cli("needs-run", *args, "--recover-output", f"stat_branch={candidate}")
+    assert result.returncode == 1, result.stderr
+    assert output.read_text() == "original\n"
+
+
+def test_recovery_resumes_after_output_publication_before_manifest_update(tmp_path):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "result.txt"
+    derived = tmp_path / "derived.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("input\n")
+    output.write_text("result\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    assert run_cli("record", *args).returncode == 0
+    derived.write_bytes(output.read_bytes())
+    args += ["--output", f"derived={derived}", "--recover-output", f"derived={output}"]
+    result = run_cli("needs-run", *args)
+    assert result.returncode == 1, result.stderr
+    assert len(json.loads(manifest.read_text())["outputs"]) == 2
+
+
+def test_recovery_does_not_bypass_other_missing_required_outputs(tmp_path):
+    source = tmp_path / "input.txt"
+    output = tmp_path / "result.txt"
+    other = tmp_path / "other.txt"
+    manifest = tmp_path / "provenance.json"
+    source.write_text("input\n")
+    output.write_text("result\n")
+    args = contract_args(tmp_path, manifest, source, output)
+    args += ["--output", f"other={other}"]
+    result = run_cli("needs-run", *args, "--stale-policy", "reuse")
+    assert result.returncode == 3
+    assert not manifest.exists()

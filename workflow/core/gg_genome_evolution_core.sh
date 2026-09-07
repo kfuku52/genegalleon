@@ -1589,6 +1589,33 @@ validate_mcmctree_figtree() {
     --infile "${infile}"
 }
 
+extract_mcmctree_conversion_inputs() {
+  local infile=$1
+  local outdir=$2
+  local tree_line=""
+  if grep -q -e "UTREE" "${infile}"; then
+    grep -e "UTREE" "${infile}" |
+      sed -e "s/.*UTREE 1 = //" -e "s/;.*/;/" \
+        > "${outdir}/mcmctree_95CI.nwk"
+
+    grep -e "UTREE" "${infile}" |
+      sed -e "s/.*UTREE 1 = //" -e "s/;.*/;/" -e "s/[[:space:]]*\[&95%={[0-9.]*,[[:space:]][0-9.]*}\][[:space:]]*//g" -e "s/:[[:space:]]/:/g" \
+        > "${outdir}/mcmctree_no95CI.nwk"
+  else
+    tree_line="$(awk '/^[[:space:]]*\(/ {line=$0} END {print line}' "${infile}")"
+    if [[ -n "${tree_line}" ]]; then
+      echo "${tree_line}" > "${outdir}/mcmctree_95CI.nwk"
+      echo "${tree_line}" |
+        sed -e "s/[[:space:]]*\[&95%={[0-9.]*,[[:space:]][0-9.]*}\][[:space:]]*//g" -e "s/:[[:space:]]/:/g" \
+          > "${outdir}/mcmctree_no95CI.nwk"
+    else
+      echo "Error: Failed to detect a tree string in ${infile}"
+      rm -f -- "${outdir}/mcmctree_95CI.nwk" "${outdir}/mcmctree_no95CI.nwk"
+      return 1
+    fi
+  fi
+}
+
 mcmctree_requires_bdparas_flag() {
   local probe_dir
   local probe_stdout
@@ -3872,7 +3899,30 @@ mcmctree_provenance_args+=(
   --parameter "print=1"
   --parameter "time_scale=automatic_safe_iq2mc_unit"
 )
-gg_artifact_prepare_stage mcmctree_needs_update run_mcmctree2 "${mcmctree_provenance_args[@]}" || exit $?
+# Only public-unit artifacts are recovery sources. Never use the internal
+# scaled working directory, or overwrite a present (possibly corrupt) output.
+mcmctree_recovery_dir=""
+if [[ ${mcmctree_cached_tree_contract_invalid} -eq 0 ]]; then
+  if [[ ! -e "${file_mcmctree_figtree_tre}" && ! -L "${file_mcmctree_figtree_tre}" && -s "${file_mcmctree_raw_output}" ]]; then
+    mcmctree_recovery_dir=$(mktemp -d "${dir_tmp%/}/mcmctree-recovery.XXXXXX")
+    extract_scaled_mcmctree_figtree "${file_mcmctree_raw_output}" "${mcmctree_recovery_dir}/FigTree.tre" 1 || exit $?
+    mcmctree_provenance_args+=(--recover-output "figtree=${mcmctree_recovery_dir}/FigTree.tre")
+  elif [[ ! -e "${file_mcmctree_raw_output}" && ! -L "${file_mcmctree_raw_output}" && -s "${file_mcmctree_figtree_tre}" && ! -e "${genome_evolution_provenance_dir}/species_tree.mcmctree.json" ]]; then
+    mcmctree_recovery_dir=$(mktemp -d "${dir_tmp%/}/mcmctree-recovery.XXXXXX")
+    {
+      echo "GeneGalleon recovered this public summary from the existing FigTree artifact."
+      echo "Historical execution parameters and raw MCMCTree output are unknown."
+      cat "${file_mcmctree_figtree_tre}"
+    } > "${mcmctree_recovery_dir}/summary.out"
+    mcmctree_provenance_args+=(--recover-output "public_raw_summary=${mcmctree_recovery_dir}/summary.out")
+  fi
+fi
+mcmctree_prepare_status=0
+gg_artifact_prepare_stage mcmctree_needs_update run_mcmctree2 "${mcmctree_provenance_args[@]}" || mcmctree_prepare_status=$?
+if [[ -n "${mcmctree_recovery_dir}" ]]; then
+  rm -rf -- "${mcmctree_recovery_dir}"
+fi
+[[ ${mcmctree_prepare_status} -eq 0 ]] || exit "${mcmctree_prepare_status}"
 if [[ ${mcmctree_cached_tree_contract_invalid} -eq 1 ]]; then
   mcmctree_needs_update=1
   run_mcmctree2=1
@@ -3936,17 +3986,6 @@ else
   gg_step_skip "${task}"
 fi
 
-if [[ ! -s "${genome_evolution_provenance_dir}/species_tree.mcmctree.json" && ! -s "${file_mcmctree_figtree_tre}" && -s "${file_mcmctree_raw_output}" ]]; then
-  echo "Backfilling legacy ${file_mcmctree_figtree_tre} from ${file_mcmctree_raw_output} before provenance adoption."
-  if extract_scaled_mcmctree_figtree "${file_mcmctree_raw_output}" "tmp.mcmctree2.txt" 1; then
-    mv_out "tmp.mcmctree2.txt" "${file_mcmctree_figtree_tre}"
-  else
-    rm -f -- "tmp.mcmctree2.txt"
-    echo "Error: Legacy MCMCtree output contains no FigTree Newick tree; refusing provenance adoption." >&2
-    exit 1
-  fi
-fi
-
 task="Convert tree format"
 disable_if_no_input_file "run_convert_tree_format" "${file_mcmctree_figtree_tre}"
 convert_tree_needs_update=0
@@ -3959,31 +3998,29 @@ convert_tree_provenance_args+=(
   --output "tree_without_ci=${dir_mcmctree2}/mcmctree_no95CI.nwk"
   --parameter "internal_node_labels=sequential_s"
 )
-gg_artifact_prepare_stage convert_tree_needs_update run_convert_tree_format "${convert_tree_provenance_args[@]}" || exit $?
+convert_tree_recovery_dir=""
+if [[ -s "${file_mcmctree_dated_nwk}" ]]; then
+  convert_tree_recovery_dir=$(mktemp -d "${dir_tmp%/}/mcmctree-conversion-recovery.XXXXXX")
+  if [[ -s "${file_mcmctree_figtree_tre}" ]]; then
+    extract_mcmctree_conversion_inputs "${file_mcmctree_figtree_tre}" "${convert_tree_recovery_dir}" || exit $?
+    convert_tree_provenance_args+=(
+      --recover-output "tree_with_ci=${convert_tree_recovery_dir}/mcmctree_95CI.nwk"
+      --recover-output "tree_without_ci=${convert_tree_recovery_dir}/mcmctree_no95CI.nwk"
+    )
+  fi
+  convert_tree_provenance_args+=(--recover-output "dated_tree_summary=${file_mcmctree_dated_nwk}")
+fi
+convert_tree_prepare_status=0
+gg_artifact_prepare_stage convert_tree_needs_update run_convert_tree_format "${convert_tree_provenance_args[@]}" || convert_tree_prepare_status=$?
+if [[ -n "${convert_tree_recovery_dir}" ]]; then
+  rm -rf -- "${convert_tree_recovery_dir}"
+fi
+[[ ${convert_tree_prepare_status} -eq 0 ]] || exit "${convert_tree_prepare_status}"
 if [[ ${convert_tree_needs_update} -eq 1 && ${run_convert_tree_format} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_parent_dir "${file_mcmctree_dated_nwk}"
 
-  if grep -q -e "UTREE" "${file_mcmctree_figtree_tre}"; then
-    grep -e "UTREE" "${file_mcmctree_figtree_tre}" |
-      sed -e "s/.*UTREE 1 = //" -e "s/;.*/;/" \
-        > "${dir_mcmctree2}/mcmctree_95CI.nwk"
-
-    grep -e "UTREE" "${file_mcmctree_figtree_tre}" |
-      sed -e "s/.*UTREE 1 = //" -e "s/;.*/;/" -e "s/[[:space:]]*\[&95%={[0-9.]*,[[:space:]][0-9.]*}\][[:space:]]*//g" -e "s/:[[:space:]]/:/g" \
-        > "${dir_mcmctree2}/mcmctree_no95CI.nwk"
-  else
-    tree_line="$(awk '/^[[:space:]]*\(/ {line=$0} END {print line}' "${file_mcmctree_figtree_tre}")"
-    if [[ -n "${tree_line}" ]]; then
-      echo "${tree_line}" > "${dir_mcmctree2}/mcmctree_95CI.nwk"
-      echo "${tree_line}" |
-        sed -e "s/[[:space:]]*\[&95%={[0-9.]*,[[:space:]][0-9.]*}\][[:space:]]*//g" -e "s/:[[:space:]]/:/g" \
-          > "${dir_mcmctree2}/mcmctree_no95CI.nwk"
-    else
-      echo "Error: Failed to detect a tree string in ${file_mcmctree_figtree_tre}"
-      rm -f -- "${dir_mcmctree2}/mcmctree_95CI.nwk" "${dir_mcmctree2}/mcmctree_no95CI.nwk"
-    fi
-  fi
+  extract_mcmctree_conversion_inputs "${file_mcmctree_figtree_tre}" "${dir_mcmctree2}" || exit $?
 
   if [[ -s "${dir_mcmctree2}/mcmctree_no95CI.nwk" ]]; then
     Rscript -e "library(ape); t=read.tree(\"${dir_mcmctree2}/mcmctree_no95CI.nwk\"); \

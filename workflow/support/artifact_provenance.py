@@ -59,6 +59,10 @@ class ProvenanceError(RuntimeError):
     """Raised for malformed or unsafe artifact provenance data."""
 
 
+class RecoveryNotApplicable(ProvenanceError):
+    """A derived candidate does not match the recorded artifact contract."""
+
+
 def parse_key_value(raw: str, option: str) -> tuple[str, str]:
     if "=" not in raw:
         raise ProvenanceError(f"{option} must use KEY=VALUE syntax: {raw!r}")
@@ -690,7 +694,97 @@ def write_manifest_atomic(path: Path, payload: dict[str, object]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def recover_declared_outputs(args: argparse.Namespace) -> bool:
+    """Publish only explicitly derived, absent files after validating the contract.
+
+    Candidates are made by stage-specific recipes, never by guessing a missing
+    result. Tracked outputs must reproduce their recorded bytes; new outputs
+    may extend a contract only when every previously recorded field matches.
+    """
+    outputs = dict(parse_path_pairs(args.output, "--output"))
+    candidates = dict(parse_path_pairs(args.recover_output, "--recover-output"))
+    unknown = candidates.keys() - outputs.keys()
+    if unknown:
+        raise ProvenanceError(f"Recovery requires declared file outputs: {sorted(unknown)}")
+    missing = {label: source for label, source in candidates.items()
+               if not os.path.lexists(outputs[label])}
+    recorded = load_manifest(args.manifest) if candidates and args.manifest.exists() else None
+    added = candidates.keys() - entries_by_label(recorded, "outputs").keys() if recorded is not None else set()
+    if not missing and not added:
+        return False
+    # A previous interrupted attempt may have published a new output before
+    # extending the manifest. Verify it against the recipe before adoption.
+    for label in added - missing.keys():
+        if sha256_path(Path(outputs[label])) != sha256_path(Path(candidates[label])):
+            raise RecoveryNotApplicable(f"Recovery refused: existing derived output differs from candidate: {label}")
+    projected_args = argparse.Namespace(**vars(args))
+    projected_args.output = [f"{label}={missing.get(label, path)}" for label, path in outputs.items()]
+    failure = output_fasta_contract_failure(projected_args)
+    if failure:
+        raise ProvenanceError(failure)
+    for source in missing.values():
+        if Path(source).is_symlink() or not Path(source).is_file():
+            raise ProvenanceError(f"Recovery candidate must be a regular file: {source}")
+    projected = None
+    if recorded is not None:
+        projected = build_contract(projected_args, include_diagnostics=False)
+        for entry in projected["outputs"]:
+            label = entry["label"]
+            if label in missing:
+                entry.update(path_reference(Path(outputs[label]), args.logical_root.absolute(),
+                                            args.workspace_root.absolute()))
+        comparison = contract_comparison_payload(projected)
+        comparison["outputs"] = [entry for entry in comparison["outputs"] if entry["label"] not in added]
+        if comparison != contract_comparison_payload(recorded):
+            raise RecoveryNotApplicable("Recovery refused: existing inputs, parameters, or output content differ from the recorded contract")
+    for label in missing:
+        print(f"{'Would restore' if args.dry_run else 'Restoring'} derived output {label}: {outputs[label]}")
+    if added:
+        print(f"Derived output contract additions: {', '.join(sorted(added))}")
+    if args.dry_run:
+        return True
+    # Stage all candidates first. link() publishes atomically without replacing
+    # an existing file, including one created by a concurrent task.
+    staged = []
+    try:
+        for label, source in missing.items():
+            target = Path(outputs[label])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=target.parent, prefix=f".{target.name}.recover-", delete=False) as handle:
+                temporary = Path(handle.name)
+                staged.append((temporary, target))
+                with Path(source).open("rb") as reader:
+                    shutil.copyfileobj(reader, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if sha256_path(temporary) != sha256_path(Path(source)):
+                raise ProvenanceError(f"Recovery candidate changed while copying: {source}")
+            if projected is not None:
+                expected = entries_by_label(projected, "outputs")[label]
+                digest, size, _ = sha256_path(temporary)
+                if (digest, size) != (expected["sha256"], expected["size_bytes"]):
+                    raise ProvenanceError(f"Recovery candidate changed after validation: {source}")
+        for temporary, target in staged:
+            os.link(temporary, target)
+        if recorded is not None and added:
+            recorded["outputs"] = projected["outputs"]
+            recorded.setdefault("diagnostics", {})["output_contract_migration"] = {
+                "added_derived_outputs": sorted(added),
+                "migrated_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+            }
+            write_manifest_atomic(args.manifest, recorded)
+    finally:
+        for temporary, _ in staged:
+            temporary.unlink(missing_ok=True)
+    return True
+
+
 def needs_run(args: argparse.Namespace) -> int:
+    try:
+        if recover_declared_outputs(args) and args.dry_run:
+            return NEEDS_RUN
+    except RecoveryNotApplicable as exc:
+        return stale_policy_result(args, str(exc), reusable=False)
     fasta_failure = output_fasta_contract_failure(args)
     if fasta_failure:
         return stale_policy_result(args, fasta_failure, reusable=False)
@@ -721,9 +815,11 @@ def needs_run(args: argparse.Namespace) -> int:
             adopted["created_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
             adopted["diagnostics"] = {
                 "provenance_state": "adopted_legacy_optional_output_without_rebuild",
+                "historical_generation_parameters": "unknown; parameters are an adoption-time baseline",
             }
-            write_manifest_atomic(args.manifest, adopted)
-            print(f"Reusing legacy optional artifact and backfilled its provenance manifest: {args.manifest}")
+            if not args.dry_run:
+                write_manifest_atomic(args.manifest, adopted)
+            print(f"{'Would adopt' if args.dry_run else 'Adopted'} legacy optional artifact with an adoption-time provenance baseline: {args.manifest}")
             return CURRENT
         present_outputs = []
         missing_outputs = []
@@ -761,9 +857,11 @@ def needs_run(args: argparse.Namespace) -> int:
         adopted["created_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
         adopted["diagnostics"] = {
             "provenance_state": "adopted_legacy_output_without_rebuild",
+            "historical_generation_parameters": "unknown; parameters are an adoption-time baseline",
         }
-        write_manifest_atomic(args.manifest, adopted)
-        print(f"Reusing legacy artifact and backfilled its provenance manifest: {args.manifest}")
+        if not args.dry_run:
+            write_manifest_atomic(args.manifest, adopted)
+        print(f"{'Would adopt' if args.dry_run else 'Reusing legacy artifact and backfilled'} its provenance manifest: {args.manifest}")
         return CURRENT
     try:
         recorded = load_manifest(args.manifest)
@@ -818,8 +916,9 @@ def needs_run(args: argparse.Namespace) -> int:
             diagnostics = recorded.setdefault("diagnostics", {})
             if isinstance(diagnostics, dict):
                 diagnostics["optional_output_provenance_state"] = "adopted_legacy_optional_outputs"
-            write_manifest_atomic(args.manifest, recorded)
-            print(f"Adopted previously untracked optional outputs: {args.manifest}")
+            if not args.dry_run:
+                write_manifest_atomic(args.manifest, recorded)
+            print(f"{'Would adopt' if args.dry_run else 'Adopted'} previously untracked optional outputs: {args.manifest}")
             return CURRENT
     if contract_comparison_payload(recorded) != contract_comparison_payload(current):
         return stale_policy_result(
@@ -1220,6 +1319,8 @@ def add_contract_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="LABEL={dna,codon,protein}",
         help="Validate a declared FASTA output before adoption, reuse, or recording",
     )
+    parser.add_argument("--recover-output", action="append", default=[], metavar="LABEL=CANDIDATE",
+                        help="Restore an absent declared output from a stage-validated derived file")
     parser.add_argument("--parameter", action="append", default=[], metavar="KEY=VALUE")
 
 
@@ -1231,6 +1332,8 @@ def build_parser() -> argparse.ArgumentParser:
         "needs-run", help="Return 0 when a declared artifact must be regenerated and 1 when current"
     )
     add_contract_arguments(needs_parser)
+    needs_parser.add_argument("--dry-run", action="store_true",
+                              help="Inspect without writing outputs, manifests, or the digest cache")
     needs_parser.add_argument(
         "--stale-policy",
         choices=("stop", "reuse", "rebuild"),
@@ -1269,7 +1372,9 @@ def dispatch(argv: list[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     workspace_root = getattr(args, "workspace_root", None)
-    if workspace_root is not None:
+    if getattr(args, "dry_run", False):
+        configure_digest_cache(None)
+    elif workspace_root is not None:
         cache_path = Path(workspace_root).absolute() / ".gg_cache" / "content_digests.sqlite3"
         os.environ["GG_CONTENT_DIGEST_CACHE"] = str(cache_path)
         configure_digest_cache(cache_path)

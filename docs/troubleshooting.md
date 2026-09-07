@@ -132,6 +132,40 @@ parameters so later changes can be detected. Optional outputs record either a
 present or absent state, so a tool that legitimately produces no result (for
 example, no valid CSUBST foreground branch combination) is still complete.
 
+Legacy restart recovery preserves existing files and restores only missing,
+explicitly derivable outputs. MCMCtree public output can supply a missing
+`FigTree.tre` before the required-output check. A legacy `FigTree.tre` can also
+supply a public summary marked as recovered, with historical execution
+parameters explicitly unknown. The internal scaled MCMCtree working output is
+never a recovery source. Existing dated trees can supply their canonical
+summary; the public FigTree artifact can regenerate the conversion's CI
+sidecars without rerunning MCMCtree or replacing the dated tree.
+
+For tracked artifacts, recovery must reproduce recorded output bytes and match
+all recorded inputs and parameters. A newly introduced derived output can extend
+the output contract only after those checks pass. Existing files (including
+empty or corrupt files) are never overwritten by recovery. Unrecoverable missing
+outputs still require the producing stage; `reuse` does not bypass this check.
+A missing tracked input still prevents verification. There is no global skip
+of disabled stages, since their outputs may be required downstream.
+
+Legacy provenance adoption records the current inputs and settings as a baseline
+for future changes, **not** as evidence of the historical generation conditions.
+New adoption records explicitly mark those historical conditions as unknown.
+The manifest schema and existing artifact paths remain unchanged; new
+migration information is confined to diagnostics.
+
+For a read-only check of one stage contract, developers can call
+`workflow/support/artifact_provenance.py needs-run --dry-run` with the same
+`--manifest`, `--step`, roots, inputs, outputs, and parameters as the stage.
+This writes neither artifacts, manifests, nor the digest cache. Exit status 1
+means reusable, 0 means generation/recovery is proposed, 3 means stale/incomplete,
+and 2 means an invalid or unverifiable contract. Stage-specific recovery recipes
+supply `--recover-output LABEL=CANDIDATE`; candidates must already be derived and
+validated by that recipe. This is a per-contract diagnostic, not a workspace-wide
+planner. Recovery publishes files without replacing existing paths and can
+resume after interruption before a manifest update.
+
 `artifact_stale_policy` controls a detected input, output, or parameter mismatch:
 
 - `stop` (default) prints the mismatched family, stage, manifest, and reason,
