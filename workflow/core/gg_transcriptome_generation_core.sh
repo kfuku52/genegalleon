@@ -3399,7 +3399,7 @@ elif [[ "${selected_transcriptome_mode}" == "metadata" ]]; then
   fi
 fi
 
-dir_tmp="${dir_transcriptome_assembly_output}/tmp/${GG_ARRAY_TASK_ID}_${sp_ub}"
+dir_tmp=$(gg_task_tmp_path "${dir_transcriptome_assembly_output}/tmp/${GG_ARRAY_TASK_ID}_${sp_ub}") || exit 1
 dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
 dir_amalgkit_download_dir="${gg_workspace_downloads_dir}"
 dir_amalgkit_download_lock_dir="${dir_amalgkit_download_dir}/locks"

@@ -111,7 +111,7 @@ if [[ ${task_index} -lt 0 || ${task_index} -ge ${#infiles[@]} ]]; then
 fi
 file_sp_cds="${infiles[${task_index}]}"
 sp_ub=$(gg_species_name_from_path "${file_sp_cds}")
-dir_sp_tmp="${dir_tmp}/${GG_ARRAY_TASK_ID}_${sp_ub}"
+dir_sp_tmp=$(gg_task_tmp_path "${dir_tmp}/${GG_ARRAY_TASK_ID}_${sp_ub}") || exit 1
 echo "${#infiles[@]} input fasta files were detected in: ${dir_sp_cds}"
 echo "Processing ${GG_ARRAY_TASK_ID}th file: ${file_sp_cds}"
 echo "Scientific name: ${sp_ub}"

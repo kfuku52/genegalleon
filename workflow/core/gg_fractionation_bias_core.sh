@@ -61,7 +61,7 @@ resolve_species_file() {
   printf '%s\n' "${matches[0]}"
 }
 
-dir_tmp_root="${gg_workspace_output_dir}/tmp/kffractbias"
+dir_tmp_root=$(gg_task_tmp_path "${gg_workspace_output_dir}/tmp/kffractbias") || exit 1
 ensure_dir "${dir_tmp_root}"
 pair_values_file="${dir_tmp_root}/.pair.${GG_ARRAY_TASK_ID}.$$.values"
 trap 'rm -f -- "${pair_values_file}"' EXIT HUP INT TERM

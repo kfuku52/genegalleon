@@ -2314,7 +2314,7 @@ dir_concat_fasta="${dir_species_tree}/concatenated_alignment"
 dir_concat_iqtree_dna="${dir_species_tree}/concatenated_iqtree_dna"
 dir_concat_iqtree_pep="${dir_species_tree}/concatenated_iqtree_pep"
 dir_mcmctree2="${dir_species_tree}/mcmctree_main"
-dir_tmp="${dir_species_tree}/tmp"
+dir_tmp=$(gg_task_tmp_path "${dir_species_tree}/tmp") || exit 1
 dir_nwkit_download_dir="${gg_workspace_downloads_dir}/nwkit_downloads"
 
 species_tree_managed_directory_paths=(

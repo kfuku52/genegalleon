@@ -1684,8 +1684,9 @@ dir_rpsblastdb="/usr/local/db/Pfam_LE"
 
 # Directory PATHs
 # Directories for temporary files
-dir_tmp="${gene_family_task_tmp_dir}" #_${RANDOM}
-gene_family_materialization_receipt="${dir_tmp}/.gg_materialized.jsonl"
+dir_tmp=$(gg_task_tmp_path "${gene_family_task_tmp_dir}") || exit 1
+gene_family_materialization_receipt="${gene_family_task_tmp_dir}/.gg_materialized.jsonl"
+ensure_dir "${gene_family_task_tmp_dir}"
 
 # File PATHs
 # Alignment and gene tree preparation and others

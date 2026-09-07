@@ -651,6 +651,7 @@ set_singularityenv() {
 	resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")
 	gg_add_container_bind_mount "${resolved_workspace_dir}:/workspace"
 	gg_add_container_bind_mount "${resolved_workflow_dir}:/script"
+	gg_configure_task_tmp_mount || return 1
 	export SINGULARITYENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1} APPTAINERENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1} SINGULARITYENV_GG_ARRAY_TASK_COUNT=${GG_ARRAY_TASK_COUNT:-} APPTAINERENV_GG_ARRAY_TASK_COUNT=${GG_ARRAY_TASK_COUNT:-} SINGULARITYENV_GG_SCHEDULER_KIND=${GG_SCHEDULER_KIND:-local} APPTAINERENV_GG_SCHEDULER_KIND=${GG_SCHEDULER_KIND:-local}
 	if [[ -n "${GG_RESOURCE_PROFILE:-}" ]]; then
 		export SINGULARITYENV_GG_RESOURCE_PROFILE=${GG_RESOURCE_PROFILE}
@@ -734,4 +735,37 @@ set_singularityenv() {
 		export APPTAINERENV_delete_tmp_dir=1
 	fi
 gg_print_container_env_summary
+}
+
+# Scratch configuration is resolved on the execution host, before container launch.
+gg_configure_task_tmp_mount() {
+  local requested="${GG_COMMON_TMP_ROOT:-workspace}"
+  local resolved=""
+  gg_export_var_to_container_env_if_set GG_COMMON_TMP_ROOT
+  [[ "${requested}" != workspace ]] || return 0
+  if [[ "${requested}" == env ]]; then
+    requested="${TMPDIR:-}"
+    if [[ -z "${requested}" ]]; then
+      echo "GG_COMMON_TMP_ROOT=env requires TMPDIR on the execution node." >&2
+      return 1
+    fi
+  fi
+  if [[ "${requested}" != /* || "${requested}" == *[:,]* || "${requested}" == *$'\n'* ]]; then
+    echo "Scratch root must be an absolute path without colons, commas or newlines: ${requested}" >&2
+    return 1
+  fi
+  if [[ ! -d "${requested}" || ! -w "${requested}" || ! -x "${requested}" ]]; then
+    echo "Scratch root must be an existing writable directory: ${requested}" >&2
+    return 1
+  fi
+  resolved=$(cd "${requested}" && pwd -P) || return 1
+  if gg_container_bind_destination_exists "/gg_tmp"; then
+    echo "Reserved scratch mount /gg_tmp is already configured." >&2
+    return 1
+  fi
+  gg_add_container_bind_mount "${resolved}:/gg_tmp"
+  export GG_TMP_MOUNT=/gg_tmp GG_TMP_HOST_ROOT="${resolved}" GG_TMP_WORKSPACE_ID="${gg_workspace_dir}"
+  gg_export_var_to_container_env_if_set GG_TMP_MOUNT
+  gg_export_var_to_container_env_if_set GG_TMP_HOST_ROOT
+  gg_export_var_to_container_env_if_set GG_TMP_WORKSPACE_ID
 }

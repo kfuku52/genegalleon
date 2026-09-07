@@ -396,6 +396,10 @@ gg_run_container_shell_script() {
 			--cpus "${GG_TASK_CPUS:-1}" --memory-gb "${GG_MEM_TOTAL_GB:-1}" -- bash -s --)
 	fi
 
+	if [[ "$(basename "${script_path}")" == gg_*_core.sh && "${GG_COMMON_TMP_ROOT:-workspace}" != workspace ]]; then
+		shell_argv=(python /script/support/task_tmp.py --workflow "$(basename "${script_path}" _core.sh)" -- "${shell_argv[@]}")
+	fi
+
 	if ! gg_container_shell_command_is_set; then
 		echo "gg_run_container_shell_script: container shell command is not initialized." >&2
 		return 1

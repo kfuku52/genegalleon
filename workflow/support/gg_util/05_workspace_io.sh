@@ -775,3 +775,21 @@ gg_entrypoint_enter_workspace() {
 	mkdir -p "${gg_workspace_dir}"
 	cd "${gg_workspace_dir}" || exit 1
 }
+
+# Map only disposable computation directories; shared plans and receipts stay put.
+gg_task_tmp_path() {
+  local original=$1
+  if [[ "${GG_COMMON_TMP_ROOT:-workspace}" == workspace ]]; then
+    printf '%s\n' "${original}"
+  elif [[ -z "${GG_TMP_TASK_ROOT:-}" ]]; then
+    echo "External scratch requires the GeneGalleon entrypoint supervisor." >&2
+    return 1
+  else
+    local relative="${original#"${gg_workspace_dir%/}/"}"
+    if [[ "${relative}" == /* || "/${relative}/" == */../* ]]; then
+      echo "Temporary path is outside the workspace: ${original}" >&2
+      return 1
+    fi
+    printf '%s/%s\n' "${GG_TMP_TASK_ROOT}" "${relative}"
+  fi
+}
