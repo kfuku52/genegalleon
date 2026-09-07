@@ -135,18 +135,6 @@ revision, and the complete copied container context. Platform is a separate
 part of the SIF cache key. Cached SIFs are saved only
 after authoritative runtime tests succeed.
 
-Until [bioconda-recipes#68643](https://github.com/bioconda/bioconda-recipes/pull/68643)
-is published, container builds apply a narrow dependency correction for
-Bioconda ASTER 1.25 build 0. The correction removes only its two known loader
-hooks after checking the package identity and the SHA-256 of both files. It
-fails instead of changing an unknown ASTER build or changed hook, records the
-correction in `/opt/pg/logs/aster_dependency_correction.txt`, and becomes a
-no-op when the solver selects a hook-free package. The Docker and native SIF
-build paths use the same correction. Remove the correction script and both
-build calls after a normal Bioconda solve passes the ASTER and OR-Tools runtime
-checks. Do not work around the conflict by unsetting loader variables in
-GeneGalleon jobs.
-
 ## One-command build (local/public selectable)
 
 ```bash
