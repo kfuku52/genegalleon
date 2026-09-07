@@ -3674,7 +3674,7 @@ def drain_archive_queue(
                                           family_from_name, compression=compression,
                                           compression_level=compression_level)
                 with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-                    results = list(executor.map(prepare, zip(specs, generations)))
+                    results = list(executor.map(prepare, zip(specs, generations, strict=True)))
                 # Verify source content outside the global lock. The family
                 # locks remain held; commit rechecks metadata before unlinking.
                 for _, _, signatures in results:

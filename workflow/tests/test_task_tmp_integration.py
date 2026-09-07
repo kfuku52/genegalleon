@@ -11,6 +11,7 @@ def test_input_array_workers_with_separate_scratch_roots(tmp_path, monkeypatch):
     # existing deterministic toolchain fixture. Each job has isolated scratch,
     # as on separate compute nodes; shared plans and shards must still work.
     import shlex
+
     import test_gg_input_generation_end_to_end as integration
 
     original_core = integration.CORE_PATH

@@ -13,8 +13,8 @@ import argparse
 import contextlib
 import json
 import os
-import re
 import random
+import re
 import socket
 import stat
 import time

@@ -1,6 +1,5 @@
 """Queue/collector invariants, including failures at publication boundaries."""
 import concurrent.futures
-import json
 import os
 from pathlib import Path
 
@@ -191,6 +190,7 @@ def test_sigkill_requires_explicit_owner_reconciliation_then_retries(tmp_path, b
     import signal
     import subprocess
     import sys
+
     from workflow.support import shared_namespace_lock as locks
 
     path, request = queued(tmp_path)

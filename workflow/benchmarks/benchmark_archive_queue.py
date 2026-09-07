@@ -10,11 +10,11 @@ import hashlib
 import importlib
 import json
 import os
-from pathlib import Path
 import resource
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--implementation", choices=["per-family", "queued"], required=True)

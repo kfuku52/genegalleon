@@ -750,7 +750,8 @@ def snapshot_recovery_candidate(source: Path, target: Path) -> None:
         with target.open("wb") as writer:
             shutil.copyfileobj(reader, writer)
         after = os.fstat(reader.fileno())
-    signature = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    def signature(value):
+        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
     if signature(before) != signature(after):
         raise ProvenanceError(f"Recovery candidate changed while copying: {source}")
     target.chmod(stat.S_IMODE(before.st_mode))

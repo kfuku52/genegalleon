@@ -5,9 +5,8 @@ import fcntl
 import hashlib
 import json
 import math
-import re
 import os
-from pathlib import Path
+import re
 import shutil
 import signal
 import socket
@@ -15,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 
 def owned_directory(path):
@@ -166,7 +166,7 @@ def main():
     defaults = (7, 100, 107374182400, 100000) if is_gene else (0, 0, 0, 0)
     names = ('retention_days', 'max_dirs', 'max_bytes', 'max_files')
     limits = tuple(int(os.environ.get(f'gene_family_tmp_{name}', str(default)))
-                   if is_gene else 0 for name, default in zip(names, defaults))
+                   if is_gene else 0 for name, default in zip(names, defaults, strict=True))
     if any(value < 0 for value in limits):
         raise ValueError('Temporary retention limits must be nonnegative')
     root = Path(os.environ['GG_TMP_MOUNT'])
