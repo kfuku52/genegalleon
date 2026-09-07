@@ -157,6 +157,9 @@ preserved when time values are scaled. Native NEXUS FigTree files and multiline
 trees are supported without a `TRANSLATE` table. Translation tables are rejected
 rather than silently substituting numeric tip identifiers. Conversion selects
 one dated tree and removes HPD annotations from its no-CI sidecar.
+Time scaling processes complete multiline tree statements and preserves quoted
+tip names and unrelated comments. Scale factors must be finite and positive;
+nonfinite calibration ages are rejected before choosing a scale factor.
 
 For tracked artifacts, recovery must reproduce recorded output bytes and match
 all recorded inputs and parameters. A newly introduced derived output can extend

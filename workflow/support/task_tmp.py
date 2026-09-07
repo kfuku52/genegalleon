@@ -215,6 +215,9 @@ def main():
     if interrupted:
         forward(interrupted, None)
     status = child.wait()
+    # Completion mutates the same namespace scanned by invocation/retention.
+    # Keep the run lock while waiting so another launcher cannot reuse it.
+    fcntl.flock(scope_fd, fcntl.LOCK_EX)
     if interrupted:
         status = 128 + interrupted
     record.update(updated=time.time(), state='finished', exit_code=status)
@@ -226,7 +229,6 @@ def main():
     else:
         print(f'GeneGalleon scratch retained: {host_path}', flush=True)
     os.close(run_fd)
-    fcntl.flock(scope_fd, fcntl.LOCK_EX)
     # Apply retention without treating completion as a new same-task invocation.
     prune(scope, '', False, limits)
     os.close(scope_fd)

@@ -311,3 +311,33 @@ def test_figtree_validation_and_conversion_preserve_quoted_tip_annotations(tmp_p
     assert mcmctree_time_scale.has_figtree_tree(source.read_text())
     assert mcmctree_time_scale.main(["conversion-inputs", "--infile", str(source), "--outdir", str(tmp_path)]) == 0
     assert quoted_name in (tmp_path / "mcmctree_no95CI.nwk").read_text()
+
+
+def test_scale_figtree_scales_complete_multiline_nexus_statement():
+    text = '#NEXUS\nBEGIN TREES;\n tree dated = [&R] (a:0.1,\nb:0.1)[&95%HPD={0.05,0.15}];\nEND;\n'
+    result = mcmctree_time_scale.scale_figtree_text(text, mcmctree_time_scale.Decimal(1000), 'up')
+    assert 'a:100,\nb:100' in result
+    assert '[&95%HPD={50,150}]' in result
+    assert result.startswith('#NEXUS\nBEGIN TREES;\n') and result.endswith('END;\n')
+
+
+def test_scaling_preserves_quoted_tip_names_and_non_time_comments():
+    text = "('a:1,b[&95%={2,3}]':0.1,b:0.1)[note='x:2,y'][&95%HPD={0.05,0.15}];"
+    result = mcmctree_time_scale.scale_newick_time_values(text, mcmctree_time_scale.Decimal(1000), 'up')
+    assert "'a:1,b[&95%={2,3}]':100" in result
+    assert "[note='x:2,y']" in result
+    assert '[&95%HPD={50,150}]' in result
+
+
+@pytest.mark.parametrize('value', ['NaN', 'sNaN', 'Infinity', '-Infinity', '0', '-1'])
+def test_time_scale_requires_finite_positive_number(value):
+    import argparse
+
+    with pytest.raises(argparse.ArgumentTypeError, match='positive'):
+        mcmctree_time_scale.parse_scale(value)
+
+
+@pytest.mark.parametrize('value', ['NaN', 'Infinity'])
+def test_nonfinite_calibration_age_is_rejected(value):
+    with pytest.raises(ValueError, match='finite'):
+        mcmctree_time_scale.choose_scale_factor(f"(a,b)'U({value})';", mcmctree_time_scale.Decimal(10))

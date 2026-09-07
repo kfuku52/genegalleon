@@ -53,6 +53,9 @@ the most recent matching idle directory. Query mode also requires an unchanged
 query filename inventory and sorting locale; orthogroup mode checks the family
 assigned to that table row. Active runs are protected with
 file locks inherited by the computation, including through the metrics monitor.
+Completion cleanup takes the same scope lock as startup and retention scans,
+so a finishing job cannot remove a directory another launcher is inspecting.
+Termination while waiting for that lock retains scratch and returns failure.
 Changing workspace, workflow, scratch root or compute node does not
 recover node-local files from a different location.
 

@@ -95,6 +95,8 @@ def calibration_ages(text: str) -> list[Decimal]:
         for idx in range(calibration_age_field_count(kind, len(fields))):
             value = parse_decimal(fields[idx])
             if value is not None:
+                if not value.is_finite():
+                    raise ValueError('Calibration ages must be finite numbers')
                 ages.append(value)
     return ages
 
@@ -143,44 +145,52 @@ def scale_hpd_comment(comment: str, scale: Decimal, direction: str) -> str:
 def scale_newick_time_values(text: str, scale: Decimal, direction: str) -> str:
     if scale == 1:
         return text
-
-    scaled = BRANCH_LENGTH_RE.sub(
-        lambda match: match.group("prefix")
-        + scale_number_text(match.group("number"), scale, direction),
-        text,
-    )
-    scaled = HPD_COMMENT_RE.sub(
-        lambda match: scale_hpd_comment(match.group(0), scale, direction),
-        scaled,
-    )
-
-    def replace_internal_label(match: re.Match[str]) -> str:
-        label = match.group("label")
-        scaled_label = re.sub(
-            NUMERIC_RE,
-            lambda num_match: scale_number_text(num_match.group(0), scale, direction),
-            label,
-        )
-        return match.group("prefix") + scaled_label
-
-    return INTERNAL_NUMERIC_LABEL_RE.sub(replace_internal_label, scaled)
-
-
-def looks_like_figtree_tree_line(line: str) -> bool:
-    stripped = line.strip()
-    if "UTREE" in line:
-        return True
-    return stripped.startswith("(") and stripped.endswith(";") and ")" in stripped
+    comments, quotes = [], []
+    uncomment_newick(text, comments, quotes)
+    edits = []
+    for match in BRANCH_LENGTH_RE.finditer(text):
+        if not any(start < match.end() and end > match.start() for start, end in comments + quotes):
+            edits.append((match.start('number'), match.end('number'),
+                          scale_number_text(match.group('number'), scale, direction)))
+    for match in INTERNAL_NUMERIC_LABEL_RE.finditer(text):
+        if any(start < match.end() and end > match.start() for start, end in comments):
+            continue
+        # Numeric internal CI labels may be quoted, but a regex match starting
+        # inside a quoted name must never alter that name.
+        if any(start < match.end() and end > match.start()
+               and not (match.start('label') <= start and end <= match.end('label'))
+               for start, end in quotes):
+            continue
+        label = re.sub(NUMERIC_RE, lambda number: scale_number_text(number.group(), scale, direction),
+                       match.group('label'))
+        edits.append((match.start('label'), match.end('label'), label))
+    for start, end in comments:
+        if HPD_COMMENT_RE.fullmatch(text[start:end]):
+            edits.append((start, end, scale_hpd_comment(text[start:end], scale, direction)))
+    for start, end, replacement in sorted(edits, reverse=True):
+        text = text[:start] + replacement + text[end:]
+    return text
 
 
 def scale_figtree_text(text: str, scale: Decimal, direction: str) -> str:
     lines = text.splitlines(keepends=True)
     scaled_lines = []
+    pending = []
     for line in lines:
-        if looks_like_figtree_tree_line(line) and figtree_tree_kind(line) == "dated":
-            scaled_lines.append(scale_newick_time_values(line, scale, direction))
-        else:
+        if not pending and not (line.lstrip().startswith('(') or TREE_ASSIGNMENT_RE.match(line)):
             scaled_lines.append(line)
+            continue
+        pending.append(line)
+        statement = ''.join(pending)
+        try:
+            complete = uncomment_newick(statement).rstrip().endswith(';')
+        except ValueError:
+            complete = False
+        if complete:
+            scaled_lines.append(scale_newick_time_values(statement, scale, direction)
+                                if figtree_tree_kind(statement) == 'dated' else statement)
+            pending = []
+    scaled_lines.extend(pending)
     return "".join(scaled_lines)
 
 
@@ -214,12 +224,14 @@ def scale_ctl_rootage_text(text: str, scale: Decimal, direction: str) -> str:
 TREE_ASSIGNMENT_RE = re.compile(r"^\s*(?:UTREE|TREE)\s+(?:\*\s+)?(?:'[^']*'|[^\s=]+)\s*=\s*", re.IGNORECASE)
 
 
-def uncomment_newick(text: str, comment_spans: list[tuple[int, int]] | None = None) -> str:
+def uncomment_newick(text: str, comment_spans: list[tuple[int, int]] | None = None,
+                     quote_spans: list[tuple[int, int]] | None = None) -> str:
     """Strip Newick annotations while preserving quoted tip/internal labels."""
     result = []
     depth = 0
     comment_start = 0
     quoted = False
+    quote_start = 0
     index = 0
     while index < len(text):
         char = text[index]
@@ -236,6 +248,10 @@ def uncomment_newick(text: str, comment_spans: list[tuple[int, int]] | None = No
                 result.append("'")
                 index += 1
             else:
+                if not quoted:
+                    quote_start = index
+                elif quote_spans is not None:
+                    quote_spans.append((quote_start, index + 1))
                 quoted = not quoted
         elif char == "[" and not quoted:
             depth = 1
@@ -377,7 +393,7 @@ def cmd_conversion_inputs(args: argparse.Namespace) -> int:
 
 def parse_scale(value: str) -> Decimal:
     scale = parse_decimal(value)
-    if scale is None or scale <= 0:
+    if scale is None or not scale.is_finite() or scale <= 0:
         raise argparse.ArgumentTypeError("scale must be a positive number")
     return scale
 

@@ -310,3 +310,38 @@ def test_changed_family_assignment_preserves_other_family_scratch(tmp_path, mode
         table.write_text('Orthogroup\tSpecies\nOG0002\t1\n')
     assert run(env, 'true').returncode == 0
     assert record.exists()
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_success_cleanup_waits_for_retention_scan(tmp_path, interrupt):
+    import fcntl
+
+    env = run_env(tmp_path)
+    ready, finish = tmp_path / 'ready', tmp_path / 'finish'
+    command = [sys.executable, str(RUNNER), '--workflow', 'gg_gene_evolution', '--',
+               'bash', '-c', f'touch "{ready}"; while test ! -e "{finish}"; do sleep .02; done']
+    child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        for _ in range(200):
+            if ready.exists():
+                break
+            time.sleep(.02)
+        assert ready.exists()
+        record = records(tmp_path)[0]
+        # Another invocation is scanning idle runs under the shared scope lock.
+        with (record.parent.parent / 'scope.lock').open('rb') as scope:
+            fcntl.flock(scope, fcntl.LOCK_EX)
+            finish.touch()
+            time.sleep(.3)
+            assert record.exists(), 'Completion removed a run during a retention scan'
+            if interrupt:
+                child.send_signal(signal.SIGTERM)
+                time.sleep(.1)
+        stdout, stderr = child.communicate(timeout=10)
+        assert child.returncode == (143 if interrupt else 0), stdout + stderr
+        assert bool(records(tmp_path)) == interrupt
+    finally:
+        finish.touch()
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=10)
