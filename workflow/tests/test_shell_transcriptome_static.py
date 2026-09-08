@@ -183,7 +183,7 @@ def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_fa
     body = _function_body(text, "download_public_original_fastqs_for_metadata")
 
     assert (
-        'download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_tmp}/getfastq"' in text
+        'download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_tmp}/getfastq_public_original"' in text
     )
     assert (
         "amalgkit getfastq did not safely finish. Attempting fallback download of public original FASTQ files." in text
@@ -193,13 +193,15 @@ def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_fa
     assert 'xml_url = "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}".format(' in body
     assert 'if node.attrib.get("semantic_name") != "fastq":' in body
     assert 'if node.attrib.get("supertype") != "Original":' in body
-    assert 'source_is_gzip = first_chunk.startswith(b"\\x1f\\x8b")' in body
+    assert 'source_is_gzip = append_response or first_chunk.startswith(b"\\x1f\\x8b")' in body
     assert "response.read(DOWNLOAD_CHUNK_BYTES)" in body
     assert "return response.read()" not in body
     assert "is_valid_fastq_gzip(part)" in body
     assert 'dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)' in body
     assert 'print("Reusing validated fallback FASTQ for {}: {}".format(run, dest))' in body
-    assert '".{}.part.{}.{}".format(dest.name, os.getpid(), time.time_ns())' in body
+    assert '".{}.download.part".format(dest.name)' in body
+    assert '"Range": "bytes={}-".format(resume_offset)' in body
+    assert 'response_header(response, "Content-Range")' in body
     assert "os.replace(part, dest)" in body
     assert "preserve_previous_completion_manifest()" in body
     assert "os.replace(manifest_part, completion_manifest)" in body
@@ -218,11 +220,13 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     attempt_body = _function_body(text, "run_amalgkit_getfastq_attempt")
 
     assert "rm -rf" not in prepare_body
-    assert 'ensure_dir "${dir_tmp}/getfastq"' in prepare_body
+    assert 'ensure_dir "${dir_tmp}/getfastq_public_original"' in prepare_body
+    assert 'ensure_dir "${dir_tmp}/getfastq"' not in prepare_body
     assert 'mv -- "${dir_amalgkit_getfastq_sp}" "${dir_tmp}/getfastq"' in stage_body
     assert "discard_partial_getfastq_outputs" not in attempt_body
     assert "grep -Eq '^ERROR: '" in detect_body
-    assert 'other_fatal_count == 0' in exhaustion_body
+    assert 'entries != failed or failed > total' in exhaustion_body
+    assert 'match.start() != position' in exhaustion_body
     assert 'ERROR: Configured download sources were exhausted.' in exhaustion_body
     assert "Detected fatal message in amalgkit getfastq log despite a zero exit code" in attempt_body
     assert '--download_lock_dir "${dir_amalgkit_download_lock_dir}"' in attempt_body
@@ -240,6 +244,8 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     assert 'gg_artifact_prepare_stage getfastq_needs_update run_amalgkit_getfastq' in text
     assert 'if [[ ${run_amalgkit_getfastq} -eq 1 && ${getfastq_needs_update} -eq 1 ]]; then' in text
     assert 'if ! stage_getfastq_outputs_for_resume; then' in text
+    assert 'download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_tmp}/getfastq_public_original"' in text
+    assert 'mv_out_replace_dir "${dir_tmp}/getfastq_public_original" "${dir_amalgkit_getfastq_sp}"' in text
     assert 'run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"' in text
     assert "return 3" in attempt_body
     assert "The fatal-condition retry produced an incomplete all-run manifest." in text
@@ -248,7 +254,9 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
         in text
     )
     assert 'mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"' in text
-    assert "Fallback direct FASTQ recovery finished without a valid all-run completion manifest." in text
+    assert "Fallback direct FASTQ recovery finished without a valid all-run completion index." in text
+    assert "validate_amalgkit_getfastq_completion_manifest \\" not in attempt_body
+    assert "mark_amalgkit_getfastq_content_validated" in attempt_body
 
 
 def test_transcriptome_entrypoint_exposes_auto_assembly_and_metadata_detection():
@@ -357,6 +365,7 @@ def test_transcriptome_entrypoint_exposes_amalgkit_rrna_resource_limits():
     core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
 
+    assert 'amalgkit_rrna_filter="no"' in entrypoint
     assert 'amalgkit_rrna_filter_jobs="${amalgkit_rrna_filter_jobs:-1}"' in entrypoint
     assert 'amalgkit_rrna_filter_chunk_spots="${amalgkit_rrna_filter_chunk_spots:-5000000}"' in entrypoint
     assert 'amalgkit_rrna_filter_memory_limit="${amalgkit_rrna_filter_memory_limit:-32G}"' in entrypoint
@@ -395,6 +404,8 @@ def test_transcriptome_core_passes_shared_mmseqs_db_to_amalgkit_getfastq():
     getfastq_block = _function_body(text, "run_amalgkit_getfastq_attempt")
     assert 'dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"' in text
     assert '--contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"' in getfastq_block
+    assert "else\n    status_amalgkit_attempt=$?\n  fi" in getfastq_block
+    assert "local status_amalgkit_attempt=$?" not in getfastq_block
 
 
 def test_transcriptome_core_delegates_ncbi_parallelism_to_amalgkit():
@@ -714,6 +725,25 @@ def test_transcriptome_core_busco_summary_loop_guards_missing_dir_before_find():
         'if [[ ! -d "${dir_busco}" || -z "$(find "${dir_busco}" -mindepth 1 -print -quit 2> /dev/null)" ]]; then'
         in text
     )
+
+
+def test_transcriptome_quant_migrates_legacy_public_manifest_offline_before_provenance():
+    text = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    migration = (
+        'is_public_original_completion_manifest_v3 \\\n'
+        '    "${dir_amalgkit_getfastq_sp}/getfastq_completion.json"'
+    )
+    assert migration in text
+    start = text.index(migration)
+    quant_contract = text.index(
+        'gg_artifact_contract_init quant_provenance_args "transcriptome_quant"',
+        start,
+    )
+    block = text[start:quant_contract]
+    assert '"reuse-only"' in block
+    assert "refusing a redundant all-run download" in block
+    assert 'gg_artifact_record "${getfastq_provenance_args[@]}"' in block
+    assert 'gg_artifact_record "${assembly_provenance_args[@]}"' in block
 
 
 def test_transcriptome_core_guards_array_task_id_range_before_array_indexing():

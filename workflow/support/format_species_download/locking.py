@@ -395,8 +395,8 @@ def acquire_download_lock(lock_path, stale_seconds, warnings, lock_context):
     )
 
 
-def release_download_lock(lock_path, heartbeat_state=None):
-    release_lock(lock_path, heartbeat_state)
+def release_download_lock(lock_path, ownership):
+    release_lock(lock_path, ownership)
 
 
 def download_url_to_file(
@@ -429,7 +429,7 @@ def download_url_to_file(
         archive_cache_dir.mkdir(parents=True, exist_ok=True)
         archive_cache_path = archive_cache_dir / "{}__{}".format(archive_hash, archive_name)
         lock_path = Path(str(archive_cache_path) + ".lock")
-    heartbeat_state = acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
+    ownership = acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
     tmp = Path(str(destination) + ".tmp.{}".format(os.getpid()))
     try:
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
@@ -568,5 +568,5 @@ def download_url_to_file(
             pass
         raise
     finally:
-        release_download_lock(lock_path, heartbeat_state)
+        release_download_lock(lock_path, ownership)
     return True

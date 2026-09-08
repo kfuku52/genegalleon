@@ -132,6 +132,60 @@ parameters so later changes can be detected. Optional outputs record either a
 present or absent state, so a tool that legitimately produces no result (for
 example, no valid CSUBST foreground branch combination) is still complete.
 
+Legacy restart recovery preserves existing files and restores only missing,
+explicitly derivable outputs. MCMCtree public output can supply a missing
+`FigTree.tre` before the required-output check. A legacy `FigTree.tre` can also
+supply a public summary marked as recovered, with historical execution
+parameters explicitly unknown. The internal scaled MCMCtree working output is
+never a recovery source. Existing dated trees can supply their canonical
+summary; the public FigTree artifact can regenerate the conversion's CI
+sidecars without rerunning MCMCtree or replacing the dated tree.
+
+Recovery checks the entire proposed output set before publishing files, even
+when no historical manifest exists. It validates private snapshots of candidate
+files and preserves their permissions, so shared project files remain readable.
+A second unrecoverable output or invalid contract stops recovery before any
+output is published. Explicit `rebuild` remains available for incomplete output
+sets. Per-manifest locks under `.gg_cache/artifact_provenance_locks/` serialize
+provenance writers; dry-run does not create locks. Stage recipes remain available
+after file publication so an interrupted manifest migration can finish on retry.
+
+FigTree checks parse Newick syntax, require distinct named tips and valid dated
+branch lengths, and validate HPD intervals. Public MCMCtree blocks may include
+the program's topology/index line alongside dated trees; those node indices are
+preserved when time values are scaled. Native NEXUS FigTree files and multiline
+trees are supported without a `TRANSLATE` table. Translation tables are rejected
+rather than silently substituting numeric tip identifiers. Conversion selects
+one dated tree and removes HPD annotations from its no-CI sidecar.
+Time scaling processes complete multiline tree statements and preserves quoted
+tip names and unrelated comments. Scale factors must be finite and positive;
+nonfinite calibration ages are rejected before choosing a scale factor.
+
+For tracked artifacts, recovery must reproduce recorded output bytes and match
+all recorded inputs and parameters. A newly introduced derived output can extend
+the output contract only after those checks pass. Existing files (including
+empty or corrupt files) are never overwritten by recovery. Unrecoverable missing
+outputs still require the producing stage; `reuse` does not bypass this check.
+A missing tracked input still prevents verification. There is no global skip
+of disabled stages, since their outputs may be required downstream.
+
+Legacy provenance adoption records the current inputs and settings as a baseline
+for future changes, **not** as evidence of the historical generation conditions.
+New adoption records explicitly mark those historical conditions as unknown.
+The manifest schema and existing artifact paths remain unchanged; new
+migration information is confined to diagnostics.
+
+For a read-only check of one stage contract, developers can call
+`workflow/support/artifact_provenance.py needs-run --dry-run` with the same
+`--manifest`, `--step`, roots, inputs, outputs, and parameters as the stage.
+This writes neither artifacts, manifests, nor the digest cache. Exit status 1
+means reusable, 0 means generation/recovery is proposed, 3 means stale/incomplete,
+and 2 means an invalid or unverifiable contract. Stage-specific recovery recipes
+supply `--recover-output LABEL=CANDIDATE`; candidates must already be derived and
+validated by that recipe. This is a per-contract diagnostic, not a workspace-wide
+planner. Recovery publishes files without replacing existing paths and can
+resume after interruption before a manifest update.
+
 `artifact_stale_policy` controls a detected input, output, or parameter mismatch:
 
 - `stop` (default) prints the mismatched family, stage, manifest, and reason,
@@ -144,6 +198,14 @@ freshness decision. Tool, container, and GeneGalleon versions are retained as
 diagnostics and do not cause regeneration. Raw and ZIP-backed managed output
 directories use the same logical content digest, so storage conversion alone
 does not cause regeneration.
+
+An input-generation provenance rebuild regenerates formatted outputs without
+forcing a download of every raw input again. The formatter's
+`--overwrite-formatted` option reuses valid cached downloads while still
+fetching missing or corrupt inputs through the normal integrity checks.
+Explicit `overwrite=1` (CLI `--overwrite`) continues to refresh both raw
+downloads and formatted outputs. A changed format contract alone must not
+discard download progress or turn a restart into a full network refresh.
 
 When `run_gene_family_database_build=1`, inspect
 `gene_summary/<source>/<source>_artifact_provenance_audit.tsv` for the exact HOG,
@@ -219,6 +281,67 @@ What to do:
 - inspect whether another job is still using the shared lock,
 - remove stale lock files only when you are sure no active job is using the cache,
 - rerun after cleaning only the specific broken cache subtree rather than the whole workspace.
+
+### Shared-filesystem locking fails or behaves inconsistently
+
+ZIP-backed gene-family stores and their active-task/temporary-directory guards
+use atomic shared-filesystem namespace locks, not `flock`. This protects active
+tasks even on Lustre `localflock` mounts. The `.gg_store_locks/` tree (including
+`.lock.namespace-v1` sidecars) is persistent coordination state outside the
+movable store metadata and must not be deleted by cleanup tools.
+Other workflows' array finalizers still require cross-node `flock` semantics.
+
+Shared download/cache, output-publication, and stage-transaction leases use `shared-lock-v3`
+metadata with a unique token for each acquisition. An old owner's heartbeat
+or release cannot modify a replacement owner's lease. Python callers must
+retain the ownership object returned by `acquire_lock` and pass it to
+`release_lock`; shell helpers retain ownership per lock path.
+
+Lease creation, stale recovery, heartbeat updates, and release are serialized
+by a short namespace lock in `.<lease-name>.guard.namespace-v1`. Its sibling
+`.<lease-name>.guard` marker and namespace directory are persistent coordination
+state. They must not be deleted during a run. A killed process or node loss
+inside that critical section can leave an abandoned guard; stop all users of
+that exact lease before inspecting and reconciling its owner records. Lease
+heartbeat expiry does not authorize stealing the mutation guard. Stop jobs
+using older shared-lock protocols before upgrading a shared workspace. Bundle
+publication now uses token-bearing regular lock files in place of empty
+`.gg-bundle.lock` directories; reconcile any abandoned directories after the
+old publishers have stopped before starting a new publisher.
+
+What to check:
+
+- verify the same namespace lock from two compute nodes on the actual workspace
+  filesystem; a writer must block while any reader is active,
+- confirm the Lustre, BeeGFS, or NFS mount options with the site administrator;
+  workflows still using `flock` cannot use node-local locking,
+- stop all users of a gene-family store before switching from a flock-only
+  runtime; old and new protocols must never run concurrently,
+- namespace locks are never stolen based on age or a remote PID. After a crash,
+  timeout is fail-closed: verify that every job and reader using that exact
+  store has stopped, retain the owner records for audit, and reconcile only the
+  abandoned lock. Never remove a lock just to make a retry proceed.
+
+### A replacement transcriptome task reaches the shared summary concurrently
+
+Current GeneGalleon releases serialize the complete multispecies-summary
+transaction across scheduler job IDs. Each writer builds in a private sibling
+directory and atomically publishes the finished `annotation_summary` tree.
+Seeing `getcwd() failed` together with a missing `expression.imputed.tsv`
+indicates an older workflow release that allowed one replacement job to remove
+another writer's current directory. Update the immutable workflow release
+before retrying; repeatedly resubmitting that older release can reproduce the
+same race.
+
+### A large public FASTQ download stops at the same byte offset
+
+The public-original fallback keeps a hidden `*.download.part` file and resumes
+gzip downloads with a validated HTTPS byte range. Do not delete that partial
+file between bounded retries. GeneGalleon verifies `Content-Range`, total size,
+the provider checksum when available, gzip/FASTQ structure, and then atomically
+publishes the completed file. A server that ignores Range is handled as a full
+restart; a checksum mismatch or non-FASTQ response is never appended to the
+saved partial file.
 
 ### `gg_genome_evolution` protein mode does not behave as expected
 

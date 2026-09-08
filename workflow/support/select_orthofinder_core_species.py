@@ -121,14 +121,13 @@ def find_busco_short_file(busco_short_dir: Path, leaf_name: str) -> Optional[Pat
         and matches_species_label(path.name, leaf_label, strip_extension=True)
     )
     if len(matches) > 1:
-        print(
-            "Multiple BUSCO short files matched species label {}: {}".format(
+        raise SystemExit(
+            "Multiple BUSCO short files matched species label {}: {}. "
+            "Refusing to treat this ambiguity as missing BUSCO data.".format(
                 leaf_label,
                 ", ".join(path.name for path in matches),
-            ),
-            file=sys.stderr,
+            )
         )
-        return None
     return matches[0] if matches else None
 
 
@@ -400,6 +399,20 @@ def main() -> int:
 
     validate_selected_rows(selected_rows, candidate_rows)
     write_selected_list(args.selected_list, selected_rows)
+    target_count = min(args.max_core_species, len(candidate_rows))
+    if len(selected_rows) < target_count:
+        print(
+            "Warning: OrthoFinder core selection returned {} species although the "
+            "requested target was {} ({} candidates, {} passed active filters). "
+            "Review {} before accepting the reduced phylogenetic coverage.".format(
+                len(selected_rows),
+                target_count,
+                len(candidate_rows),
+                len(filtered_rows),
+                args.selected_table,
+            ),
+            file=sys.stderr,
+        )
     print(f"Selected {len(selected_rows)} OrthoFinder core species.")
     return 0
 

@@ -13,7 +13,6 @@ import argparse
 import concurrent.futures
 import contextlib
 import csv
-import fcntl
 import hashlib
 import json
 import os
@@ -36,6 +35,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from content_digest_cache import cached_sha256_file
+from shared_namespace_lock import NamespaceLockError, namespace_lock
 
 STORE_DIR_NAME = ".gg_store"
 ACTIVE_ARCHIVE_DIR_NAME = "archives"
@@ -65,7 +65,7 @@ PRODUCER_LOCK_FILE = "producer.lock"
 ARCHIVE_SCHEMA_VERSION = 1
 INDEX_SCHEMA_VERSION = 1
 STORE_METADATA_SCHEMA_VERSION = 1
-FAMILY_LOCK_STRIPES = 16
+STATE_LOCK_STRIPES = 16
 MAX_REFERENCED_SHARDS_PER_SUBDIR = 8
 MAX_OPEN_COMPACTION_SOURCES = 32
 TOMBSTONE_LOG_COMPACT_BYTES = 4 * 1024 * 1024
@@ -143,6 +143,7 @@ def _equivalent_output_logical_paths(subdir: str, name: str) -> Set[str]:
     logical_paths = {_safe_logical_path(subdir, name)}
     canonical_subdir, canonical_name = _canonical_output_path(subdir, name)
     logical_paths.add(_safe_logical_path(canonical_subdir, canonical_name))
+    logical_paths.update(_safe_logical_path(*candidate) for candidate in _legacy_output_candidates(canonical_subdir, canonical_name))
     return logical_paths
 
 
@@ -322,10 +323,11 @@ def _family_index_bucket(family_id: Optional[str]) -> str:
     return hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:2]
 
 
-def _family_lock_bucket(family_id: Optional[str]) -> str:
-    key = family_id if family_id not in {None, ""} else "__legacy__"
-    bucket = int(hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:8], 16)
-    return f"{bucket % FAMILY_LOCK_STRIPES:02x}"
+def _state_lock_bucket(family_id: Optional[str]) -> str:
+    # State JSON files are keyed by the first digest byte. Every writer to a
+    # given file MUST select the same lock; hashing the whole family separately
+    # allows two read-modify-write operations to lose each other's records.
+    return f"{int(_family_index_bucket(family_id), 16) % STATE_LOCK_STRIPES:02x}"
 
 
 def _subdir_index_name(subdir: str) -> str:
@@ -334,8 +336,22 @@ def _subdir_index_name(subdir: str) -> str:
     return f"{digest}.json"
 
 
+def _store_lock_path(path: Path) -> Path:
+    # Store migration and pure-raw conversion move/remove the metadata tree
+    # while locks are held. Coordination must outlive both representations.
+    for parent in path.parents:
+        if parent.name in {STORE_DIR_NAME, LEGACY_ARCHIVE_DIR_NAME}:
+            return parent.parent / ".gg_store_locks" / path.relative_to(parent)
+    return path
+
+
+def family_gate_path(archive_root: Path) -> Path:
+    return _store_lock_path(archive_root / "families-v2.lock")
+
+
 def family_lock_path(archive_root: Path, family_id: str) -> Path:
-    return archive_root / FAMILY_LOCK_DIR_NAME / f"{_family_lock_bucket(family_id)}.lock"
+    digest = hashlib.sha256(family_id.encode("utf-8")).hexdigest()
+    return _store_lock_path(archive_root / "family-locks-v2" / digest[:2] / f"{digest}.lock")
 
 
 @contextlib.contextmanager
@@ -345,49 +361,31 @@ def _bucket_lock(
     exclusive: bool,
     nonblocking: bool = False,
 ) -> Iterator[bool]:
-    if lock_path.parent.is_symlink():
-        raise ArchiveStoreError(f"Symlinked lock directories are not supported: {lock_path.parent}")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    open_flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        open_flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(lock_path, open_flags, 0o600)
-    except OSError as exc:
-        raise ArchiveStoreError(f"Failed to open GeneGalleon lock {lock_path}: {exc}") from exc
-    acquired = False
-    try:
-        try:
-            operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-            if nonblocking:
-                operation |= fcntl.LOCK_NB
-            fcntl.flock(descriptor, operation)
-            acquired = True
-        except BlockingIOError:
-            if nonblocking:
-                yield False
-                return
-            raise
-        yield True
-    finally:
-        if acquired:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
+        with namespace_lock(_store_lock_path(lock_path), exclusive=exclusive, nonblocking=nonblocking) as acquired:
+            yield acquired
+    except NamespaceLockError as exc:
+        raise ArchiveStoreError(str(exc)) from exc
 
 
+@contextlib.contextmanager
 def family_bucket_lock(
     archive_root: Path,
     family_id: str,
     *,
     exclusive: bool,
     nonblocking: bool = False,
-) -> contextlib.AbstractContextManager[bool]:
+) -> Iterator[bool]:
+    # A shared gate lets unrelated families proceed while offline maintenance
+    # can exclude every family, including locks that do not exist yet.
     _validate_archive_root(archive_root)
-    return _bucket_lock(
-        family_lock_path(archive_root, family_id),
-        exclusive=exclusive,
-        nonblocking=nonblocking,
-    )
+    with _bucket_lock(family_gate_path(archive_root), exclusive=False, nonblocking=nonblocking) as gate:
+        if not gate:
+            yield False
+            return
+        with _bucket_lock(family_lock_path(archive_root, family_id),
+                          exclusive=exclusive, nonblocking=nonblocking) as acquired:
+            yield acquired
 
 
 def state_bucket_lock(
@@ -395,7 +393,7 @@ def state_bucket_lock(
     family_id: str,
 ) -> contextlib.AbstractContextManager[bool]:
     _validate_archive_root(archive_root)
-    path = archive_root / FAMILY_STATE_LOCK_DIR_NAME / f"{_family_lock_bucket(family_id)}.lock"
+    path = archive_root / FAMILY_STATE_LOCK_DIR_NAME / f"{_state_lock_bucket(family_id)}.lock"
     return _bucket_lock(path, exclusive=True)
 
 
@@ -406,38 +404,20 @@ def lock_available_family_ids(
     *,
     nonblocking: bool,
 ) -> Iterator[Set[str]]:
-    family_ids_set = {str(family_id) for family_id in family_ids}
-    representative_by_bucket: Dict[str, str] = {}
-    for family_id in sorted(family_ids_set):
-        representative_by_bucket.setdefault(_family_lock_bucket(family_id), family_id)
-    acquired_buckets: Set[str] = set()
+    acquired_ids: Set[str] = set()
     with contextlib.ExitStack() as stack:
-        for bucket, representative in sorted(representative_by_bucket.items()):
-            acquired = stack.enter_context(
-                family_bucket_lock(
-                    archive_root,
-                    representative,
-                    exclusive=True,
-                    nonblocking=nonblocking,
-                )
-            )
-            if acquired:
-                acquired_buckets.add(bucket)
-        yield {family_id for family_id in family_ids_set if _family_lock_bucket(family_id) in acquired_buckets}
+        for family_id in sorted(set(family_ids)):
+            if stack.enter_context(family_bucket_lock(
+                archive_root, family_id, exclusive=True, nonblocking=nonblocking,
+            )):
+                acquired_ids.add(family_id)
+        yield acquired_ids
 
 
 @contextlib.contextmanager
 def all_family_bucket_locks(archive_root: Path) -> Iterator[None]:
     _validate_archive_root(archive_root)
-    with contextlib.ExitStack() as stack:
-        for bucket_number in range(FAMILY_LOCK_STRIPES):
-            bucket = f"{bucket_number:02x}"
-            stack.enter_context(
-                _bucket_lock(
-                    archive_root / FAMILY_LOCK_DIR_NAME / f"{bucket}.lock",
-                    exclusive=True,
-                )
-            )
+    with _bucket_lock(family_gate_path(archive_root), exclusive=True):
         yield
 
 
@@ -573,13 +553,15 @@ def _write_store_metadata(
         raise ArchiveStoreError(f"Archive store metadata uses a different gene-family mode: {existing.get('mode')}")
     family_ids_set = sorted({str(value) for value in family_ids})
     payload = dict(existing or {})
+    payload.pop("family_lock_stripes", None)
     payload.update(
         {
             "schema_version": STORE_METADATA_SCHEMA_VERSION,
             "mode": mode,
             "compression": compression,
             "compression_level": int(compression_level),
-            "family_lock_stripes": FAMILY_LOCK_STRIPES,
+            "family_lock_layout": "per-family-v2",
+            "state_lock_stripes": STATE_LOCK_STRIPES,
         }
     )
     if not preserve_existing_catalog or existing is None:
@@ -619,7 +601,12 @@ def _write_archive_readme(root: Path | str) -> None:
         "New or manually changed files remain in <subdirectory>/ and override ZIP members.\n"
         "While a run is active, immutable ZIP parts are visible below archives/<subdirectory>/.\n"
         "ARCHIVE_STATUS.tsv is a snapshot of the physical location of every logical output set.\n"
-        "Internal indexes, locks, and deletion records are under .gg_store/; do not edit them.\n"
+        "Array tasks queue their output inventories; progress-summary drains bounded ZIP batches.\n"
+        "Use gg_gene_family_archive.sh queue-status --root THIS_DIRECTORY to see pending families.\n"
+        "Run drain-queue during arrays and compact/finalize separately after completion.\n"
+        "Per-family cleanup does not refresh this snapshot; its file timestamp marks publication.\n"
+        "Internal indexes and deletion records are under .gg_store/; locks are under .gg_store_locks/.\n"
+        "Do not edit or remove either internal tree.\n"
         "After manual file changes, run gg_gene_family_archive.sh refresh-status --root THIS_DIRECTORY.\n"
         "Use gg_gene_family_archive.sh list, verify, restore, delete, or finalize to manage files.\n"
     )
@@ -729,27 +716,23 @@ class ProgressReporter:
 
 
 @contextlib.contextmanager
-def producer_read_lock(archive_root: Path) -> Iterator[None]:
+def producer_read_lock(
+    archive_root: Path,
+    *,
+    nonblocking: bool = False,
+) -> Iterator[bool]:
     """Keep archive maintenance from replacing a source while it is open."""
 
     _validate_archive_root(archive_root)
     if not archive_root.is_dir():
-        yield
+        yield True
         return
-    lock_path = archive_root / PRODUCER_LOCK_FILE
-    open_flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        open_flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(lock_path, open_flags, 0o600)
-    except OSError as exc:
-        raise ArchiveStoreError(f"Failed to open GeneGalleon archive maintenance lock {lock_path}: {exc}") from exc
-    try:
-        fcntl.flock(descriptor, fcntl.LOCK_SH)
-        yield
-    finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
+    with _bucket_lock(
+        archive_root / PRODUCER_LOCK_FILE,
+        exclusive=False,
+        nonblocking=nonblocking,
+    ) as acquired:
+        yield acquired
 
 
 class GeneFamilyOutputStore:
@@ -1339,7 +1322,12 @@ class GeneFamilyOutputStore:
     def _merge_index_subdirs_uncommitted(
         self,
         updated_subdirs: Dict[str, Dict[str, Artifact]],
+        *,
+        changed_paths: Optional[Set[str]] = None,
     ) -> None:
+        # Queue commits know the exact additions. Preserve unrelated family
+        # buckets instead of rewriting every bucket for a changed subdirectory.
+        # Full replacements (compaction/deletion) keep the original path.
         catalog = self._load_index_catalog()
         if catalog is None:
             catalog = {
@@ -1359,6 +1347,7 @@ class GeneFamilyOutputStore:
             previous_artifacts = self._load_subdir_artifacts(subdir)
             affected_buckets.update(
                 _family_index_bucket(artifact.family_id) for artifact in previous_artifacts.values()
+                if changed_paths is None or artifact.logical_path in changed_paths
             )
             if artifacts:
                 subdir_counts[subdir] = len(artifacts)
@@ -1380,6 +1369,8 @@ class GeneFamilyOutputStore:
                 if subdir_path.is_file() and not subdir_path.is_symlink():
                     subdir_path.unlink()
             for logical_path, artifact in artifacts.items():
+                if changed_paths is not None and logical_path not in changed_paths:
+                    continue
                 bucket = _family_index_bucket(artifact.family_id)
                 affected_buckets.add(bucket)
                 affected_by_bucket.setdefault(bucket, {})[logical_path] = artifact
@@ -1392,7 +1383,8 @@ class GeneFamilyOutputStore:
             bucket_artifacts = {
                 logical_path: artifact
                 for logical_path, artifact in bucket_artifacts.items()
-                if artifact.subdir not in changed_subdirs
+                if (artifact.subdir not in changed_subdirs if changed_paths is None
+                    else logical_path not in changed_paths)
             }
             bucket_artifacts.update(replacements)
             bucket_path = index_dir / f"{bucket}.json"
@@ -1776,7 +1768,7 @@ class GeneFamilyOutputStore:
     def _live_artifact(self, subdir: str, name: str) -> Optional[Artifact]:
         logical_path = _safe_logical_path(subdir, name)
         live_path = self.root / subdir / name
-        if not live_path.is_file() or live_path.is_symlink() or live_path.name.startswith("."):
+        if not live_path.is_file() or live_path.is_symlink() or live_path.parent.is_symlink() or live_path.name.startswith("."):
             return None
         return Artifact(
             logical_path=logical_path,
@@ -1789,15 +1781,14 @@ class GeneFamilyOutputStore:
             sha256=_sha256_path(live_path),
         )
 
+    def _latest_tombstone(self, subdir: str, name: str) -> Optional[Tuple[int, str]]:
+        records = [self._tombstones[path] for path in _equivalent_output_logical_paths(subdir, name)
+                   if path in self._tombstones]
+        return max(records, key=lambda record: (record[0], record[1] == "delete"), default=None)
+
     def _archived_artifact_is_deleted(self, artifact: Artifact) -> bool:
-        for equivalent_path in _equivalent_output_logical_paths(
-            artifact.subdir,
-            artifact.name,
-        ):
-            tombstone = self._tombstones.get(equivalent_path)
-            if tombstone is not None and tombstone[1] == "delete" and tombstone[0] >= artifact.generation:
-                return True
-        return False
+        tombstone = self._latest_tombstone(artifact.subdir, artifact.name)
+        return tombstone is not None and tombstone[1] == "delete" and tombstone[0] >= artifact.generation
 
     def _archived_artifact_unchecked(
         self,
@@ -1838,7 +1829,7 @@ class GeneFamilyOutputStore:
             )
             if artifact is None:
                 continue
-            tombstone = self._tombstones.get(requested_logical_path)
+            tombstone = self._latest_tombstone(subdir, name)
             if tombstone is not None and tombstone[1] == "delete" and tombstone[0] >= artifact.generation:
                 return None
             return replace(
@@ -1854,15 +1845,32 @@ class GeneFamilyOutputStore:
             self._refresh_if_index_changed()
             return self._artifact_unchecked(subdir, name)
 
-    def _physical_file_names_unlocked(self, subdir: str) -> List[str]:
+    def _physical_file_names_unlocked(
+        self,
+        subdir: str,
+        *,
+        family_ids: Optional[Set[str]] = None,
+        family_from_name: Optional[Callable[[str], Optional[str]]] = None,
+    ) -> List[str]:
         self._refresh_if_index_changed()
+
+        def selected_name(name: str) -> bool:
+            if family_ids is None:
+                return True
+            assert family_from_name is not None
+            _, canonical_name = _canonical_output_path(subdir, name)
+            return family_from_name(canonical_name) in family_ids
+
         live_names: Set[str] = set()
         live_dir = self.root / subdir
         if live_dir.is_dir():
             live_names.update(
                 entry.name
                 for entry in live_dir.iterdir()
-                if entry.is_file() and not entry.is_symlink() and not entry.name.startswith(".")
+                if not entry.name.startswith(".")
+                and selected_name(entry.name)
+                and entry.is_file()
+                and not entry.is_symlink()
             )
         if self.family_filter is None:
             archived_values = self._load_subdir_artifacts(subdir).values()
@@ -1870,11 +1878,23 @@ class GeneFamilyOutputStore:
             self._load_archives()
             archived_values = (artifact for artifact in self._archived.values() if artifact.subdir == subdir)
         archived_names = {
-            artifact.name for artifact in archived_values if not self._archived_artifact_is_deleted(artifact)
+            artifact.name
+            for artifact in archived_values
+            if (
+                family_ids is None
+                or (artifact.family_id in family_ids if artifact.family_id is not None else selected_name(artifact.name))
+            )
+            and not self._archived_artifact_is_deleted(artifact)
         }
         return sorted(live_names | archived_names)
 
-    def _file_names_unlocked(self, subdir: str) -> List[str]:
+    def _file_names_unlocked(
+        self,
+        subdir: str,
+        *,
+        family_ids: Optional[Set[str]] = None,
+        family_from_name: Optional[Callable[[str], Optional[str]]] = None,
+    ) -> List[str]:
         self._refresh_if_index_changed()
         physical_subdirs = {subdir}
         physical_subdirs.update(
@@ -1882,7 +1902,9 @@ class GeneFamilyOutputStore:
         )
         names: Set[str] = set()
         for physical_subdir in physical_subdirs:
-            for physical_name in self._physical_file_names_unlocked(physical_subdir):
+            for physical_name in self._physical_file_names_unlocked(
+                physical_subdir, family_ids=family_ids, family_from_name=family_from_name
+            ):
                 canonical_subdir, canonical_name = _canonical_output_path(
                     physical_subdir,
                     physical_name,
@@ -1980,6 +2002,7 @@ class GeneFamilyOutputStore:
         *,
         _producer_locked: bool = False,
     ) -> Path:
+        _safe_logical_path(subdir, name)
         destination_root = self.root if destination_root is None else Path(destination_root).resolve()
         destination = destination_root / subdir / name
         if destination.is_symlink() or destination.parent.is_symlink():
@@ -2007,10 +2030,12 @@ class GeneFamilyOutputStore:
                     shutil.copyfileobj(source, target, length=1024 * 1024)
                     target.flush()
                     os.fsync(target.fileno())
-            if artifact.mtime_ns is not None:
-                os.utime(temporary, ns=(artifact.mtime_ns, artifact.mtime_ns))
-            os.replace(temporary, destination)
-            _fsync_directory(destination.parent)
+                # Keep publication inside the read lock: a maintenance writer may
+                # otherwise commit newer content before this old snapshot replaces it.
+                if artifact.mtime_ns is not None:
+                    os.utime(temporary, ns=(artifact.mtime_ns, artifact.mtime_ns))
+                os.replace(temporary, destination)
+                _fsync_directory(destination.parent)
         finally:
             if temporary.exists():
                 temporary.unlink()
@@ -2053,7 +2078,11 @@ class GeneFamilyOutputStore:
             for subdir in logical_subdirs:
                 if subdirs is not None and subdir not in subdirs:
                     continue
-                for name in self._file_names_unlocked(subdir):
+                # Filter names before stat/hash: another family (or a shared
+                # lockfile) can disappear while its producer is running.
+                for name in self._file_names_unlocked(
+                    subdir, family_ids=family_ids, family_from_name=family_from_name
+                ):
                     artifact = self._artifact_unchecked(subdir, name)
                     if artifact is None:
                         continue
@@ -2062,6 +2091,9 @@ class GeneFamilyOutputStore:
                     )
                     if artifact_family_id not in family_ids:
                         continue
+                    if destination_root_resolved == self.root:
+                        record_family_output_inventory(self.root, artifact_family_id,
+                                                       self.root / artifact.subdir / artifact.name)
                     if artifact.is_live and destination_root_resolved == self.root:
                         continue
                     selected.append((artifact, str(artifact_family_id)))
@@ -2199,24 +2231,36 @@ class GeneFamilyOutputStore:
         counter_generation = 0
         if counter_path.is_file():
             try:
-                counter_generation = int(counter_path.read_text(encoding="utf-8").strip() or "0")
+                counter_generation = int(counter_path.read_text(encoding="utf-8").strip())
+                if counter_generation < 1:
+                    raise ValueError("generation counter must be positive")
             except (OSError, ValueError) as exc:
                 raise ArchiveStoreError(f"Invalid GeneGalleon generation counter {counter_path}: {exc}") from exc
         else:
+            self._reset_cache()
             self._load_archives()
+            # Compaction preserves member generations, so indexes alone cannot
+            # recover the generation used in physical ZIP filenames/manifests.
+            for zip_path in _physical_archive_paths(self.root):
+                self._index_generation = max(self._index_generation, int(self._read_manifest(zip_path)["generation"]))
         self._index_generation = max(self._index_generation, counter_generation) + 1
+        self._write_generation_counter(self._index_generation)
+        return self._index_generation
+
+    def _write_generation_counter(self, generation: int) -> None:
+        counter_path = self.archive_root / GENERATION_FILE
+        if counter_path.is_symlink():
+            raise ArchiveStoreError(f"Symlinked generation counters are not supported: {counter_path}")
         temporary = counter_path.with_name(f".{GENERATION_FILE}.partial.{os.getpid()}.{uuid.uuid4().hex}")
         try:
             with temporary.open("w", encoding="utf-8") as handle:
-                handle.write(f"{self._index_generation}\n")
+                handle.write(f"{generation}\n")
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, counter_path)
             _fsync_directory(self.archive_root)
         finally:
-            if temporary.exists():
-                temporary.unlink()
-        return self._index_generation
+            temporary.unlink(missing_ok=True)
 
     def _index_record(self, artifact: Artifact) -> dict:
         if artifact.zip_path is None or artifact.member_name is None:
@@ -2515,15 +2559,7 @@ class GeneFamilyOutputStore:
     ) -> None:
         subdir, name = logical_path.split("/", 1)
         _safe_logical_path(subdir, name)
-        live_path = self.root / subdir / name
-        equivalent_live_paths = [live_path]
-        equivalent_live_paths.extend(
-            self.root / legacy_subdir / legacy_name
-            for legacy_subdir, legacy_name in _legacy_output_candidates(
-                subdir,
-                name,
-            )
-        )
+        equivalent_live_paths = [self.root / path for path in sorted(_equivalent_output_logical_paths(subdir, name))]
         family_id = self._managed_family_id(logical_path, family_id, "deletion")
         family_context = family_bucket_lock(
             self.archive_root,
@@ -2592,8 +2628,8 @@ class GeneFamilyOutputStore:
                     raise ArchiveStoreError("Failed to acquire the archive maintenance lock")
                 self._reset_cache()
                 self._load_archives()
-                previous_tombstone = self._tombstones.get(logical_path)
                 subdir, name = logical_path.split("/", 1)
+                previous_tombstone = self._latest_tombstone(subdir, name)
                 _safe_logical_path(subdir, name)
                 physical_candidates = [(subdir, name)]
                 physical_candidates.extend(_legacy_output_candidates(subdir, name))
@@ -2881,42 +2917,8 @@ class GeneFamilyOutputStore:
 def archive_lock(archive_root: Path, nonblocking: bool = False) -> Iterator[bool]:
     _validate_archive_root(archive_root)
     archive_root.mkdir(parents=True, exist_ok=True)
-    lock_path = archive_root / LOCK_FILE
-    acquired = False
-    open_flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        open_flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(lock_path, open_flags, 0o600)
-    except OSError as exc:
-        raise ArchiveStoreError(f"Failed to open GeneGalleon archive lock {lock_path}: {exc}") from exc
-    try:
-        try:
-            flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
-            fcntl.flock(descriptor, flags)
-            os.ftruncate(descriptor, 0)
-            os.write(
-                descriptor,
-                json.dumps(
-                    {
-                        "pid": os.getpid(),
-                        "hostname": os.uname().nodename,
-                        "created_ns": time.time_ns(),
-                    }
-                ).encode("utf-8"),
-            )
-            os.fsync(descriptor)
-            acquired = True
-        except BlockingIOError:
-            if nonblocking:
-                yield False
-                return
-            raise
+    with _bucket_lock(archive_root / LOCK_FILE, exclusive=True, nonblocking=nonblocking) as acquired:
         yield acquired
-    finally:
-        if acquired:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
 
 
 @contextlib.contextmanager
@@ -2933,30 +2935,8 @@ def producer_quiescence_lock(
 
     _validate_archive_root(archive_root)
     archive_root.mkdir(parents=True, exist_ok=True)
-    lock_path = archive_root / PRODUCER_LOCK_FILE
-    open_flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        open_flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(lock_path, open_flags, 0o600)
-    except OSError as exc:
-        raise ArchiveStoreError(f"Failed to open GeneGalleon archive maintenance lock {lock_path}: {exc}") from exc
-    acquired = False
-    try:
-        try:
-            flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
-            fcntl.flock(descriptor, flags)
-            acquired = True
-        except BlockingIOError:
-            if nonblocking:
-                yield False
-                return
-            raise
-        yield True
-    finally:
-        if acquired:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
+    with _bucket_lock(archive_root / PRODUCER_LOCK_FILE, exclusive=True, nonblocking=nonblocking) as acquired:
+        yield acquired
 
 
 def default_completion_paths(family_id: str) -> List[str]:
@@ -3058,12 +3038,12 @@ def _archive_chunk(
     byte_progress_callback: Optional[Callable[[int], None]] = None,
     verification_progress_callback: Optional[Callable[[int, int, int, int], None]] = None,
 ) -> Tuple[Path, List[Artifact], Dict[Path, ArchivedSourceSignature]]:
-    shard_dir = Path(destination_path).resolve().parent if destination_path is not None else payload_root / subdir
-    if shard_dir.is_symlink():
+    shard_dir = Path(destination_path).absolute().parent if destination_path is not None else payload_root / subdir
+    if any(parent.is_symlink() for parent in (shard_dir, *shard_dir.parents)):
         raise ArchiveStoreError(f"Symlinked archive shard directories are not supported: {shard_dir}")
     shard_dir.mkdir(parents=True, exist_ok=True)
     final_path = (
-        Path(destination_path).resolve()
+        Path(destination_path).absolute()
         if destination_path is not None
         else shard_dir / f"{subdir}.part-{generation:06d}.zip"
     )
@@ -3088,8 +3068,10 @@ def _archive_chunk(
                 logical_path = _safe_logical_path(subdir, path.name)
                 member_name = logical_path
                 digest = hashlib.sha256()
-                zip_info = zipfile.ZipInfo.from_file(path, arcname=member_name)
+                zip_info = zipfile.ZipInfo.from_file(path, arcname=member_name, strict_timestamps=False)
                 zip_info.compress_type = _compression_for(path, compression)
+                # Streaming ZipInfo writes do not inherit ZipFile.compresslevel.
+                zip_info._compresslevel = compression_level
                 with (
                     path.open("rb") as source,
                     archive.open(
@@ -3180,12 +3162,12 @@ def _compact_artifact_chunk(
     byte_progress_callback: Optional[Callable[[int], None]] = None,
     verification_progress_callback: Optional[Callable[[int, int, int, int], None]] = None,
 ) -> Tuple[Path, List[Artifact]]:
-    shard_dir = Path(destination_path).resolve().parent if destination_path is not None else payload_root / subdir
-    if shard_dir.is_symlink():
+    shard_dir = Path(destination_path).absolute().parent if destination_path is not None else payload_root / subdir
+    if any(parent.is_symlink() for parent in (shard_dir, *shard_dir.parents)):
         raise ArchiveStoreError(f"Symlinked archive shard directories are not supported: {shard_dir}")
     shard_dir.mkdir(parents=True, exist_ok=True)
     final_path = (
-        Path(destination_path).resolve()
+        Path(destination_path).absolute()
         if destination_path is not None
         else shard_dir / f"{subdir}.pack-{archive_generation:06d}.zip"
     )
@@ -3214,8 +3196,10 @@ def _compact_artifact_chunk(
                 digest = hashlib.sha256()
                 zip_info = zipfile.ZipInfo(artifact.logical_path)
                 if artifact.mtime_ns is not None:
-                    zip_info.date_time = time.localtime(artifact.mtime_ns / 1_000_000_000)[:6]
+                    date_time = time.localtime(artifact.mtime_ns / 1_000_000_000)[:6]
+                    zip_info.date_time = max((1980, 1, 1, 0, 0, 0), min((2107, 12, 31, 23, 59, 59), date_time))
                 zip_info.compress_type = _compression_for(Path(artifact.name), compression)
+                zip_info._compresslevel = compression_level
                 if artifact.zip_path.is_symlink() or artifact.zip_path.parent.is_symlink():
                     raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {artifact.zip_path}")
                 source_archive = source_archives.get(artifact.zip_path)
@@ -3300,9 +3284,22 @@ def _compact_artifact_chunk(
     return final_path, compacted
 
 
+def _hash_archive_source(path: Path) -> str:
+    # Source removal requires a fresh content check, not the digest cache used
+    # by ordinary logical reads and materialization receipts.
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _remove_archived_sources(
     root: Path,
     signatures: Dict[Path, ArchivedSourceSignature],
+    *,
+    content_verified: bool = False,
+    prune_empty: bool = True,
 ) -> int:
     removed = 0
     touched_subdirs: Set[Path] = set()
@@ -3311,21 +3308,18 @@ def _remove_archived_sources(
         metadata_signature = signature[:5]
         expected_sha256 = signature[5]
         if _signature_matches(path, metadata_signature):
-            digest = hashlib.sha256()
             try:
-                with path.open("rb") as handle:
-                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                        digest.update(chunk)
+                digest = expected_sha256 if content_verified else _hash_archive_source(path)
             except FileNotFoundError:
                 continue
-            if digest.hexdigest() != expected_sha256 or not _signature_matches(path, metadata_signature):
+            if digest != expected_sha256 or not _signature_matches(path, metadata_signature):
                 continue
             path.unlink()
             removed += 1
     for live_dir in touched_subdirs:
         _fsync_directory(live_dir)
         try:
-            if live_dir.is_dir() and not any(live_dir.iterdir()):
+            if prune_empty and live_dir.is_dir() and not any(live_dir.iterdir()):
                 live_dir.rmdir()
         except OSError:
             pass
@@ -3417,6 +3411,369 @@ def _balanced_artifact_chunks(
     if current:
         chunks.append(current)
     return chunks
+
+
+# Durable requests contain paths, never copies of analytical results. Only a
+# bounded collector writes the shared index; array workers append their own
+# inventory and atomically publish a request.
+ARCHIVE_QUEUE_DIR = "archive-queue"
+OUTPUT_INVENTORY_DIR = "output-inventory"
+DEFAULT_QUEUE_BATCH_FAMILIES = 100
+DEFAULT_QUEUE_BATCH_BYTES = 1024 * 1024 * 1024
+
+
+def family_inventory_path(root: Path, family_id: str) -> Path:
+    digest = hashlib.sha256(family_id.encode("utf-8")).hexdigest()
+    return _archive_state_root(root) / OUTPUT_INVENTORY_DIR / digest[:2] / digest
+
+
+def record_family_output_inventory(root: Path, family_id: str, path: Path) -> None:
+    # Explicitly enabled by the workflow. Other readers/exporters stay read-only.
+    configured = os.environ.get("GG_FAMILY_OUTPUT_INVENTORY")
+    if not configured or Path(configured) != family_inventory_path(root, family_id):
+        return
+    journal = Path(configured) / f"python-{os.getpid()}.paths"
+    with journal.open("ab") as handle:
+        handle.write(os.fsencode(path.relative_to(root)) + b"\0")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _queue_path(root: Path, family_id: str) -> Path:
+    digest = hashlib.sha256(family_id.encode("utf-8")).hexdigest()
+    return _archive_state_root(root) / ARCHIVE_QUEUE_DIR / digest[:2] / f"{digest}.json"
+
+
+def _inventory_relative_path(root: Path, value: bytes) -> Path:
+    path = Path(os.fsdecode(value))
+    if '..' in path.parts:
+        raise ArchiveStoreError(f"Unsafe output inventory path: {path}")
+    if path.is_absolute():
+        # Accept existing journals at their original root and migrate them on
+        # collection. Never silently acknowledge entries from an unknown old root.
+        try:
+            path = path.relative_to(root)
+        except ValueError as exc:
+            raise ArchiveStoreError(f"Output inventory path is outside the current root: {path}") from exc
+    return path
+
+
+def _inventory_paths(root: Path, family_id: str, family_from_name: Callable[[str], Optional[str]]) -> List[Path]:
+    directory = family_inventory_path(root, family_id)
+    if any(parent.is_symlink() for parent in (directory, directory.parent, directory.parent.parent)):
+        raise ArchiveStoreError(f"Symlinked output inventory: {directory}")
+    journals = sorted(directory.glob("*.paths"))
+    if not directory.is_dir() or not journals:
+        raise ArchiveStoreError(f"Missing output inventory: {directory}")
+    paths: Set[Path] = set()
+    for journal in journals:
+        if journal.is_symlink():
+            raise ArchiveStoreError(f"Symlinked output inventory journal: {journal}")
+        data = journal.read_bytes()
+        if data and not data.endswith(b"\0"):
+            raise ArchiveStoreError(f"Incomplete output inventory journal: {journal}")
+        for value in data.split(b"\0"):
+            if not value:
+                continue
+            relative = _inventory_relative_path(root, value)
+            path = root / relative
+            # Inventory may also contain shared/non-family outputs.
+            if len(relative.parts) != 2 or relative.parts[0].startswith(".") or relative.parts[0] in EXCLUDED_SUBDIRS:
+                continue
+            if family_from_name(path.name) != family_id:
+                continue
+            _safe_logical_path(*relative.parts)
+            if path.is_symlink() or path.parent.is_symlink():
+                raise ArchiveStoreError(f"Symlinked output inventory target: {path}")
+            if path.is_file():
+                paths.add(path)
+    return sorted(paths)
+
+
+def _compact_family_inventory(root: Path, family_id: str) -> None:
+    """Caller must hold the exclusive family lock, excluding publishers."""
+    inventory = family_inventory_path(root, family_id)
+    journals = sorted(inventory.glob("*.paths"))
+    entries = set()
+    for journal in journals:
+        for value in journal.read_bytes().split(b"\0"):
+            if value:
+                path = Path(os.fsdecode(value))
+                entries.add(os.fsencode(path.relative_to(root) if path.is_absolute() else path))
+    target = inventory / "inventory.paths"
+    temporary = inventory / f".inventory.{uuid.uuid4().hex}"
+    try:
+        with temporary.open("wb") as handle:
+            for value in sorted(entries):
+                handle.write(value + b"\0")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        _fsync_directory(inventory)
+        for journal in journals:
+            if journal != target:
+                journal.unlink()
+        _fsync_directory(inventory)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def enqueue_family_archive(root: Path, mode: str, family_id: str, run_token: str = "",
+                           write_options: Optional[dict] = None) -> Path:
+    root = Path(root).resolve()
+    if mode not in {"orthogroup", "query2family"}:
+        raise ValueError(f"Unsupported gene-family mode: {mode}")
+    store = GeneFamilyOutputStore(root, family_filter=family_id)
+    with family_bucket_lock(store.archive_root, family_id, exclusive=False):
+        if _read_storage_conversion_marker(root) is not None:
+            raise ArchiveStoreError("Cannot enqueue outputs while a storage conversion is pending")
+        states = store._read_state_bucket(store._state_bucket_path(family_id))
+        current = states.get(family_id)
+        if run_token and (current is None or current[2] != run_token):
+            raise ArchiveStoreError(f"Stale archive request for {family_id}: run token changed")
+        # Publishers hold shared family locks too. Never read, replace, or
+        # unlink their append journals here; only the exclusive collector may.
+        request = _queue_path(root, family_id)
+        store._write_json_index_payload(request, {
+            "schema_version": 1, "family_id": family_id, "mode": mode,
+            "run_token": run_token, "queued_ns": time.time_ns(), "write_options": write_options,
+        })
+        _fsync_directory(request.parent)
+    return request
+
+
+def archive_queue_status(root: Path) -> dict:
+    requests = list((_archive_state_root(root) / ARCHIVE_QUEUE_DIR).glob("*/*.json"))
+    queued_times = []
+    counts = {"running_families": 0, "ready_families": 0, "stale_requests": 0}
+    logical = GeneFamilyOutputStore(root)
+    state_buckets = {}
+    for path in requests:
+        try:
+            record = json.loads(path.read_text())
+        except FileNotFoundError:
+            continue  # A collector acknowledged this request.
+        queued_times.append(record["queued_ns"])
+        family_id = record["family_id"]
+        state_path = logical._state_bucket_path(family_id)
+        if state_path not in state_buckets:
+            state_buckets[state_path] = logical._read_state_bucket(state_path)
+        current = state_buckets[state_path].get(family_id)
+        if current and current[1] == "running":
+            counts["running_families"] += 1
+        elif record.get("run_token") and (current is None or record["run_token"] != current[2]):
+            counts["stale_requests"] += 1
+        else:
+            counts["ready_families"] += 1
+    return {**counts, "pending_families": len(queued_times),
+            "oldest_pending_seconds": max(0, (time.time_ns() - min(queued_times)) / 1e9) if queued_times else 0}
+
+
+def drain_archive_queue(
+    root: Path, mode: str, family_from_name: Callable[[str], Optional[str]], *,
+    batch_families: int = DEFAULT_QUEUE_BATCH_FAMILIES,
+    batch_bytes: int = DEFAULT_QUEUE_BATCH_BYTES,
+    compression: str = "adaptive", compression_level: int = 6, workers: int = 1,
+    max_files_per_shard: int = 5000, max_bytes_per_shard: int = DEFAULT_QUEUE_BATCH_BYTES,
+    nonblocking: bool = False,
+) -> dict:
+    """Collect one bounded batch. Compression never holds the store-wide lock.
+
+    The family locks pin the sources through commit. Staging is outside the
+    payload namespace, so compaction/repair cannot mistake uncommitted ZIPs for
+    published generations. A request is acknowledged only after index commit
+    and verified source removal; retries can safely archive retained live files.
+    """
+    if batch_families < 1 or batch_bytes < 1 or max_files_per_shard < 1 or max_bytes_per_shard < 1:
+        raise ValueError("Archive queue batch/shard limits must be positive")
+    root = Path(root).resolve()
+    archive_root = _archive_state_root(root)
+    payload_root = _archive_payload_root(root)
+    stats = {"selected_families": 0, "archived_files": 0, "source_bytes": 0,
+             "zip_bytes": 0, "deferred_families": 0, "stale_requests": 0}
+    started = time.monotonic()
+    default_options = (compression, compression_level, workers, max_bytes_per_shard)
+    # Single collector bounds shared-filesystem load independently of array size.
+    with contextlib.ExitStack() as collector_guards:
+        # Pin the queue namespace even before the first family lock: offline
+        # conversion may otherwise remove it during enumeration or staging.
+        if not collector_guards.enter_context(_bucket_lock(
+            family_gate_path(archive_root), exclusive=False, nonblocking=True,
+        )):
+            return {**stats, "status": "maintenance-busy"}
+        collector = collector_guards.enter_context(_bucket_lock(
+            archive_root / "collector.lock", exclusive=True, nonblocking=True,
+        ))
+        if not collector:
+            return {**stats, "status": "collector-busy"}
+        if _read_storage_conversion_marker(root) is not None:
+            return {**stats, "status": "conversion-pending"}
+        queue_root = archive_root / ARCHIVE_QUEUE_DIR
+        if queue_root.is_symlink():
+            raise ArchiveStoreError(f"Symlinked archive queue: {queue_root}")
+        with contextlib.ExitStack() as locks:
+            selected = []
+            selected_options = None
+            paths_by_subdir: Dict[str, List[Path]] = {}
+            for request in sorted(queue_root.glob("*/*.json")):
+                if request.is_symlink() or request.parent.is_symlink():
+                    raise ArchiveStoreError(f"Symlinked archive request: {request}")
+                record = json.loads(request.read_text())
+                family_id = record["family_id"]
+                if record.get("schema_version") != 1 or request != _queue_path(root, family_id) or record.get("mode") != mode:
+                    raise ArchiveStoreError(f"Invalid archive request: {request}")
+                family_lock = contextlib.ExitStack()
+                locks.callback(family_lock.close)
+                if not family_lock.enter_context(family_bucket_lock(archive_root, family_id, exclusive=True, nonblocking=True)):
+                    family_lock.close()
+                    stats["deferred_families"] += 1
+                    continue
+                record = json.loads(request.read_text())
+                if record.get("family_id") != family_id or record.get("mode") != mode or record.get("schema_version") != 1:
+                    family_lock.close()
+                    raise ArchiveStoreError(f"Archive request changed identity: {request}")
+                options = record.get("write_options")
+                options = default_options if options is None else (
+                    options["compression"], options["compression_level"], options["workers"],
+                    options["max_final_zip_bytes"] or DEFAULT_QUEUE_BATCH_BYTES,
+                )
+                if options[0] not in {"adaptive", "deflate", "store"} or not 0 <= options[1] <= 9 or not 1 <= options[2] <= 4 or options[3] < 1:
+                    family_lock.close()
+                    raise ArchiveStoreError(f"Invalid archive write options: {request}")
+                if selected_options is not None and options != selected_options:
+                    family_lock.close()
+                    stats["deferred_families"] += 1
+                    continue
+                store = GeneFamilyOutputStore(root, family_filter=family_id)
+                current = store._read_state_bucket(store._state_bucket_path(family_id)).get(family_id)
+                if current and current[1] == "running":
+                    family_lock.close()
+                    stats["deferred_families"] += 1
+                    continue
+                if record.get("run_token") and (current is None or record["run_token"] != current[2]):
+                    family_lock.close()
+                    stats["stale_requests"] += 1
+                    continue
+                try:
+                    paths = _inventory_paths(root, family_id, family_from_name)
+                    _compact_family_inventory(root, family_id)
+                    size = sum(path.stat().st_size for path in paths)
+                except BaseException:
+                    family_lock.close()
+                    raise
+                if selected and stats["source_bytes"] + size > batch_bytes:
+                    family_lock.close()
+                    break
+                selected_options = options
+                selected.append(request)
+                stats["source_bytes"] += size
+                for path in paths:
+                    paths_by_subdir.setdefault(path.parent.name, []).append(path)
+                if len(selected) >= batch_families or stats["source_bytes"] >= batch_bytes:
+                    break
+            stats["selected_families"] = len(selected)
+            if not selected:
+                return {**stats, "status": "idle", "elapsed_seconds": time.monotonic() - started}
+            compression, compression_level, workers, max_bytes_per_shard = selected_options
+            specs = [(subdir, chunk) for subdir, paths in sorted(paths_by_subdir.items())
+                     for chunk in _balanced_archive_chunks(sorted(set(paths)), max_files_per_shard, max_bytes_per_shard)]
+            # Reserve globally ordered generations, then release both store
+            # locks before any compression or CRC reads.
+            with producer_quiescence_lock(archive_root, nonblocking=nonblocking) as idle:
+                if not idle:
+                    return {**stats, "status": "readers-busy"}
+                with archive_lock(archive_root, nonblocking=nonblocking) as acquired:
+                    if not acquired:
+                        return {**stats, "status": "index-busy"}
+                    store = GeneFamilyOutputStore(root)
+                    _assert_archive_mode(store, mode)
+                    store._assert_no_pending_index_update()
+                    _write_store_metadata(root, mode, [], compression=compression,
+                                          compression_level=compression_level, preserve_existing_catalog=True)
+                    if store._load_index_catalog() is None and _physical_archive_paths(root):
+                        store._load_archives()
+                        store._write_index()
+                    generations = [store._next_generation() for _ in specs]
+            staging_root = archive_root / "queue-staging"
+            _validate_archive_root(staging_root)
+            staging_root.mkdir(parents=True, exist_ok=True)
+            # Only a collector uses this namespace. Once its exclusive lock is
+            # held, leftovers from a reconciled crashed owner are uncommitted.
+            for abandoned in staging_root.iterdir():
+                if abandoned.is_symlink() or not abandoned.is_dir() or not re.fullmatch(r"[a-f0-9]{32}", abandoned.name):
+                    raise ArchiveStoreError(f"Unexpected queue staging entry: {abandoned}")
+                shutil.rmtree(abandoned)
+            staging = staging_root / uuid.uuid4().hex
+            staging.mkdir()
+            results = []
+            try:
+                def prepare(spec):
+                    (subdir, paths), generation = spec
+                    return _archive_chunk(root, staging, subdir, paths, mode, generation,
+                                          family_from_name, compression=compression,
+                                          compression_level=compression_level)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                    results = list(executor.map(prepare, zip(specs, generations, strict=True)))
+                # Verify source content outside the global lock. The family
+                # locks remain held; commit rechecks metadata before unlinking.
+                for _, _, signatures in results:
+                    for path, signature in signatures.items():
+                        if not _signature_matches(path, signature[:5]) or _hash_archive_source(path) != signature[5]:
+                            raise ArchiveStoreError("Output changed during archive preparation; live files preserved")
+                compression_done = time.monotonic()
+                with producer_quiescence_lock(archive_root, nonblocking=nonblocking) as idle:
+                    if not idle:
+                        return {**stats, "status": "readers-busy"}
+                    with archive_lock(archive_root, nonblocking=nonblocking) as acquired:
+                        if not acquired:
+                            return {**stats, "status": "index-busy"}
+                        store = GeneFamilyOutputStore(root)
+                        store._assert_no_pending_index_update()
+                        updated: Dict[str, Dict[str, Artifact]] = {}
+                        signatures: Dict[Path, ArchivedSourceSignature] = {}
+                        # Mark the transaction before publishing the first ZIP,
+                        # including crashes between payload and index updates.
+                        with store._index_update() if results else contextlib.nullcontext():
+                            for staged, artifacts, source_signatures in results:
+                                # Even a producer bypassing family locks must not
+                                # cause stale content to be committed or deleted.
+                                if any(not _signature_matches(path, signature[:5]) for path, signature in source_signatures.items()):
+                                    raise ArchiveStoreError("Output changed during archive preparation; live files preserved")
+                                subdir = artifacts[0].subdir
+                                final_dir = payload_root / subdir
+                                if final_dir.is_symlink():
+                                    raise ArchiveStoreError(f"Symlinked archive destination: {final_dir}")
+                                final_dir.mkdir(parents=True, exist_ok=True)
+                                destination = final_dir / staged.name
+                                if destination.exists() or destination.is_symlink():
+                                    raise ArchiveStoreError(f"Archive generation already exists: {destination}")
+                                os.replace(staged, destination)
+                                _fsync_directory(final_dir)
+                                stats["zip_bytes"] += destination.stat().st_size
+                                if subdir not in updated:
+                                    updated[subdir] = dict(store._load_subdir_artifacts(subdir))
+                                updated[subdir].update({artifact.logical_path: replace(artifact, zip_path=destination)
+                                                       for artifact in artifacts})
+                                signatures.update(source_signatures)
+                            if updated:
+                                store._merge_index_subdirs_uncommitted(
+                                    updated, changed_paths={artifact.logical_path for _, artifacts, _ in results for artifact in artifacts},
+                                )
+                        stats["archived_files"] = _remove_archived_sources(root, signatures, content_verified=True, prune_empty=False)
+                        # Publication may have committed while a source was
+                        # modified outside the protocol. Leave its request for
+                        # retry rather than claiming it was fully archived.
+                        if any(path.exists() for path in signatures):
+                            raise ArchiveStoreError("Archived source changed; request retained for retry")
+                        for request in selected:
+                            request.unlink()
+                            _fsync_directory(request.parent)
+                stats["preparation_seconds"] = compression_done - started
+                stats["commit_seconds"] = time.monotonic() - compression_done
+                return {**stats, "status": "committed", "elapsed_seconds": time.monotonic() - started}
+            finally:
+                # Only this collector's staging, never another writer's files.
+                shutil.rmtree(staging)
 
 
 def archive_completed_outputs(
@@ -4223,11 +4580,16 @@ def storage_conversion_session(
     ) as acquired:
         if not acquired:
             raise ArchiveStoreError(f"Another storage conversion is active below {root}")
-        existing = _read_storage_conversion_marker(root)
-        if require_resume and existing is None:
-            raise ArchiveStoreError("--resume was requested, but no interrupted storage conversion exists")
-        resumed = _write_storage_conversion_marker(root, mode, target)
-        yield resumed
+        # Pin collection across all conversion phases, including gaps between
+        # extraction and purge. The collector takes this lock nonblockingly.
+        with _bucket_lock(archive_root / "collector.lock", exclusive=True, nonblocking=True) as collector_idle:
+            if not collector_idle:
+                raise ArchiveStoreError("An archive collector is active; retry conversion after it finishes")
+            existing = _read_storage_conversion_marker(root)
+            if require_resume and existing is None:
+                raise ArchiveStoreError("--resume was requested, but no interrupted storage conversion exists")
+            resumed = _write_storage_conversion_marker(root, mode, target)
+            yield resumed
 
 
 def _assert_archive_mode(store: GeneFamilyOutputStore, mode: str) -> None:
@@ -4534,7 +4896,8 @@ def storage_conversion_status(root: Path) -> dict:
                 "catalog_family_ids_sha256": str(metadata.get("catalog_family_ids_sha256", "")),
                 "compression": str(metadata.get("compression", "unknown")),
                 "compression_level": metadata.get("compression_level", "unknown"),
-                "family_lock_stripes": int(metadata.get("family_lock_stripes", FAMILY_LOCK_STRIPES)),
+                "family_lock_layout": metadata.get("family_lock_layout", "legacy-stripes"),
+                "state_lock_stripes": int(metadata.get("state_lock_stripes", STATE_LOCK_STRIPES)),
             }
         )
     if marker is not None:
@@ -4584,7 +4947,7 @@ def optimize_archive_metadata(root: Path) -> dict:
     archive_root = _archive_state_root(root)
     if not archive_root.is_dir():
         return {"removed_legacy_lock_files": 0, "remaining_lock_files": 0}
-    current_names = {f"{value:02x}.lock" for value in range(FAMILY_LOCK_STRIPES)}
+    current_names = {f"{value:02x}.lock" for value in range(STATE_LOCK_STRIPES)}
     all_stripe_paths = []
     candidate_paths = []
     for directory_name in (FAMILY_LOCK_DIR_NAME, FAMILY_STATE_LOCK_DIR_NAME):
@@ -4595,7 +4958,8 @@ def optimize_archive_metadata(root: Path) -> dict:
             path for path in sorted(directory.glob("*.lock")) if path.is_file() and not path.is_symlink()
         ]
         all_stripe_paths.extend(directory_paths)
-        candidate_paths.extend(path for path in directory_paths if path.name not in current_names)
+        candidate_paths.extend(path for path in directory_paths
+                               if directory_name == FAMILY_LOCK_DIR_NAME or path.name not in current_names)
     removed = 0
     metadata_created = False
     with _bucket_lock(
@@ -4646,7 +5010,8 @@ def optimize_archive_metadata(root: Path) -> dict:
     return {
         "removed_legacy_lock_files": removed,
         "remaining_lock_files": remaining,
-        "family_lock_stripes": FAMILY_LOCK_STRIPES,
+        "family_lock_layout": "per-family-v2",
+        "state_lock_stripes": STATE_LOCK_STRIPES,
         "store_metadata_created": metadata_created,
     }
 
@@ -5091,8 +5456,13 @@ def convert_storage_to_raw(
                         "Pass quota remaining as --available-bytes for a "
                         "quota-aware preflight."
                     )
+                total_inodes = int(filesystem_stats.f_files)
                 available_inodes = int(filesystem_stats.f_favail)
-                if available_inodes >= 0 and required_inodes > available_inodes:
+                if (
+                    total_inodes > 0
+                    and available_inodes >= 0
+                    and required_inodes > available_inodes
+                ):
                     raise ArchiveStoreError(
                         "Insufficient filesystem inodes for ZIP-to-raw conversion: "
                         f"required={required_inodes}, available={available_inodes}. "
@@ -5177,6 +5547,14 @@ def convert_storage_to_raw(
             raise ArchiveStoreError(
                 "ZIP shards remained after raw conversion: " + ", ".join(str(path) for path in remaining_shards[:10])
             )
+        # A raw conversion supersedes every earlier ZIP request. Collection is
+        # still excluded by storage_conversion_session until this is durable.
+        queue_root = _archive_state_root(root) / ARCHIVE_QUEUE_DIR
+        if queue_root.is_symlink():
+            raise ArchiveStoreError(f"Symlinked archive queue: {queue_root}")
+        if queue_root.is_dir():
+            shutil.rmtree(queue_root)
+            _fsync_directory(queue_root.parent)
         if pure_raw:
             archive_root = _archive_state_root(root)
             if archive_root.is_symlink():
@@ -5316,11 +5694,21 @@ def compact_archives(
             return [path for path in created if path.is_file()]
 
 
-def _write_archive_status(root: Path, store: Optional[GeneFamilyOutputStore] = None) -> Path:
+def _write_archive_status(
+    root: Path,
+    store: Optional[GeneFamilyOutputStore] = None,
+    *,
+    nonblocking: bool = False,
+) -> Optional[Path]:
     root = Path(root).resolve()
     store = store or GeneFamilyOutputStore(root)
     rows: List[Tuple[str, str, int, int, int, str]] = []
-    with producer_read_lock(store.archive_root):
+    with producer_read_lock(
+        store.archive_root,
+        nonblocking=nonblocking,
+    ) as acquired:
+        if not acquired:
+            return None
         store._refresh_if_index_changed()
         for subdir in store._logical_subdirs_unlocked():
             artifacts = store._load_subdir_artifacts(subdir)
@@ -5738,6 +6126,47 @@ def migrate_archive_layout(root: Path) -> List[Tuple[Path, Path]]:
     return moved
 
 
+def _indexed_final_archives_for_repair(root: Path) -> Set[Path]:
+    """Recover final ZIP identities even when their central directory is broken.
+
+    Repair cannot require healthy indexes, but any readable index copy supplies
+    evidence that a root-level ZIP is managed rather than an unrelated user ZIP.
+    """
+    archive_root = _archive_state_root(root)
+    index_paths = []
+    for name in (INDEX_DIR_NAME, SUBDIR_INDEX_DIR_NAME):
+        directory = archive_root / name
+        if directory.is_symlink():
+            raise ArchiveStoreError(f"Symlinked archive index directories are not supported: {directory}")
+        index_paths.extend(directory.glob("*.json"))
+    legacy = archive_root / INDEX_FILE
+    if legacy.exists() or legacy.is_symlink():
+        index_paths.append(legacy)
+    result: Set[Path] = set()
+    for index_path in index_paths:
+        if index_path.is_symlink():
+            raise ArchiveStoreError(f"Symlinked archive indexes are not supported: {index_path}")
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeError):
+            # Rebuilding damaged index JSON from ZIP manifests is repair's job.
+            continue
+        records = payload.get("artifacts") if isinstance(payload, dict) else None
+        if not isinstance(records, dict):
+            continue
+        for logical_path, record in records.items():
+            if not isinstance(record, dict) or record.get("zip_location") != "final":
+                continue
+            subdir = str(logical_path).split("/", 1)[0]
+            try:
+                expected = _final_archive_path(root, subdir)
+            except ArchiveStoreError:
+                continue  # Invalid index paths cannot authorize filesystem access.
+            if record.get("zip_path") == expected.name:
+                result.add(expected)
+    return result
+
+
 def repair_archive_index(
     root: Path,
     *,
@@ -5758,7 +6187,13 @@ def repair_archive_index(
             rebuilt: Dict[str, Artifact] = {}
             rebuilt_ranks: Dict[str, Tuple[int, int, str]] = {}
             mode_by_path: Dict[Path, str] = {}
-            physical_paths = _physical_archive_paths(root)
+            max_archive_generation = 0
+            physical_paths = sorted(set(_physical_archive_paths(root)) | _indexed_final_archives_for_repair(root))
+            for path in physical_paths:
+                if path.is_symlink() or path.parent.is_symlink():
+                    raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {path}")
+                if not path.is_file():
+                    raise ArchiveStoreError(f"Indexed ZIP archive is missing; restore it before repair: {path}")
             physical_sizes = {path: path.stat().st_size for path in physical_paths}
             processed_zip_bytes = 0
             verified_members = 0
@@ -5782,6 +6217,7 @@ def repair_archive_index(
                 manifest = store._read_manifest(zip_path)
                 mode_by_path[zip_path.resolve()] = str(manifest["mode"])
                 manifest_generation = int(manifest["generation"])
+                max_archive_generation = max(max_archive_generation, manifest_generation)
                 with zipfile.ZipFile(zip_path, "r") as archive:
                     for member in manifest["members"]:
                         digest = hashlib.sha256()
@@ -5855,6 +6291,24 @@ def repair_archive_index(
                     "Cannot repair indexes whose referenced ZIP shards use mixed "
                     "gene-family modes: " + ", ".join(sorted(referenced_modes))
                 )
+            # Recover the allocator too: a stale counter must never overwrite a
+            # surviving ZIP or place new outputs before deletion history.
+            store._load_tombstones()
+            store._index_generation = max(max_archive_generation, max(
+                (generation for generation, _ in store._tombstones.values()), default=0,
+            ))
+            counter_path = archive_root / GENERATION_FILE
+            if counter_path.is_symlink():
+                raise ArchiveStoreError(f"Symlinked generation counters are not supported: {counter_path}")
+            if counter_path.is_file():
+                try:
+                    existing_generation = int(counter_path.read_text(encoding="utf-8").strip())
+                except (ValueError, UnicodeError):
+                    existing_generation = 0  # Explicit repair rebuilds malformed allocator metadata.
+                store._index_generation = max(store._index_generation, existing_generation)
+            # Reserve the recovered high-water mark before replacing indexes;
+            # failed repairs may leave a harmless gap, never a reused generation.
+            store._write_generation_counter(max(1, store._index_generation))
             store._write_index(rebuilt, recover_pending=True)
             if referenced_modes and _read_store_metadata(root) is None:
                 repaired_mode = next(iter(referenced_modes))
@@ -5902,14 +6356,7 @@ def purge_archives(
                 archived = store._load_subdir_artifacts(subdir)
                 retained: List[Artifact] = []
                 for logical_path, artifact in archived.items():
-                    if any(
-                        tombstone is not None and tombstone[1] == "delete" and tombstone[0] >= artifact.generation
-                        for equivalent_path in _equivalent_output_logical_paths(
-                            artifact.subdir,
-                            artifact.name,
-                        )
-                        if (tombstone := store._tombstones.get(equivalent_path)) is not None
-                    ):
+                    if store._archived_artifact_is_deleted(artifact):
                         continue
                     family_id = artifact.family_id
                     if family_id is None and family_from_name is not None:
@@ -6243,6 +6690,50 @@ def run_cli(args: argparse.Namespace) -> int:
         return 0
 
     root = args.root.resolve()
+    if args.command == "inventory-path":
+        print(family_inventory_path(root, args.family_id))
+        return 0
+    if args.command == "cancel-family-archive":
+        with family_bucket_lock(_archive_state_root(root), args.family_id, exclusive=False):
+            request = _queue_path(root, args.family_id)
+            request.unlink(missing_ok=True)
+            if request.parent.exists():
+                _fsync_directory(request.parent)
+        return 0
+    if args.command == "queue-status":
+        print(json.dumps(archive_queue_status(root), sort_keys=True))
+        return 0
+    if args.command == "enqueue-family":
+        # Workers pass an explicit mode; the collector validates it against
+        # the store under its maintenance lock. Do not scan ZIPs on task exit.
+        mode = args.mode or _resolve_cli_mode(args, root)
+        _validate_zip_write_options(args)
+        if args.max_final_zip_bytes < 0:
+            raise ValueError("--max-final-zip-bytes must be nonnegative")
+        options = {"compression": args.compression, "compression_level": args.compression_level,
+                   "workers": args.workers, "max_final_zip_bytes": args.max_final_zip_bytes}
+        print(f"queued\t{enqueue_family_archive(root, mode, args.family_id, args.run_token, options)}")
+        return 0
+    if args.command == "drain-queue":
+        _validate_zip_write_options(args)
+        if args.max_batches < 1 or args.max_final_zip_bytes < 0:
+            raise ValueError("--max-batches must be positive and --max-final-zip-bytes nonnegative")
+        mode = _resolve_cli_mode(args, root)
+        _, family_from_name = family_context(mode, query_dir=args.query_dir, genecount=args.genecount)
+        for _ in range(args.max_batches):
+            result = drain_archive_queue(
+                root, mode, family_from_name, batch_families=args.batch_families,
+                batch_bytes=args.batch_bytes, compression=args.compression,
+                compression_level=args.compression_level, workers=args.workers, max_files_per_shard=args.max_files_per_shard,
+                max_bytes_per_shard=args.max_final_zip_bytes or DEFAULT_QUEUE_BATCH_BYTES,
+                nonblocking=args.nonblocking,
+            )
+            print(json.dumps(result, sort_keys=True), flush=True)
+            if result["status"] != "committed":
+                break
+        _write_archive_status(root, nonblocking=args.nonblocking)
+        print(json.dumps(archive_queue_status(root), sort_keys=True))
+        return 0
     if args.command == "conversion-status":
         status_payload = storage_conversion_status(root)
         if args.json:
@@ -6292,7 +6783,7 @@ def run_cli(args: argparse.Namespace) -> int:
         )
         for zip_path, removed in results:
             print(f"archived\t{removed}\t{zip_path}")
-        _write_archive_status(root)
+        _write_archive_status(root, nonblocking=args.nonblocking)
         if mode == "orthogroup":
             completion_store = GeneFamilyOutputStore(root)
             if completed_family_ids(completion_store, family_ids) == set(family_ids):
@@ -6355,7 +6846,10 @@ def run_cli(args: argparse.Namespace) -> int:
         )
         for zip_path, removed in results:
             print(f"archived-partial\t{removed}\t{zip_path}")
-        _write_archive_status(root)
+        # A task finalizes only its own family. A display-only full-store census
+        # here makes N task completions perform N whole-store scans under the
+        # producer lock. Explicit refresh-status / parent archive operations
+        # remain the owners of the timestamped ARCHIVE_STATUS.tsv snapshot.
         return 0
     if args.command in {"convert-storage", "storage-status"}:
         if args.command == "convert-storage":
@@ -6609,7 +7103,8 @@ def run_cli(args: argparse.Namespace) -> int:
             print(f"{action}\t{path}")
         return 0
     if args.command == "lock-path":
-        print(family_lock_path(_archive_state_root(root), args.family_id))
+        print(family_gate_path(_archive_state_root(root)) if args.gate else
+              family_lock_path(_archive_state_root(root), args.family_id))
         return 0
 
     family_filter = (

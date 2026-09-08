@@ -1,7 +1,10 @@
 import os
+import shlex
 import stat
 import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT = REPO_ROOT / "gg_container_build_entrypoint.sh"
@@ -86,6 +89,8 @@ def _run_entrypoint(tmp_path: Path, runtime_name: str, extra_env: dict[str, str]
         "KFU52_CDSKIT_REPO_SHA",
         "KFU52_CSUBST_REPO_SHA",
         "KFU52_NWKIT_REPO_SHA",
+        "BUSCO_REPO_SHA",
+        "PAML_REPO_SHA",
         "KFL1OU_REPO_SHA",
         "KFFRACTBIAS_REPO_SHA",
         "KFTOOLS_REPO_SHA",
@@ -117,6 +122,8 @@ def _run_entrypoint_with_buildx(tmp_path: Path, runtime_name: str, extra_env: di
         "KFU52_CDSKIT_REPO_SHA",
         "KFU52_CSUBST_REPO_SHA",
         "KFU52_NWKIT_REPO_SHA",
+        "BUSCO_REPO_SHA",
+        "PAML_REPO_SHA",
         "KFL1OU_REPO_SHA",
         "KFFRACTBIAS_REPO_SHA",
         "KFTOOLS_REPO_SHA",
@@ -137,6 +144,19 @@ def _run_entrypoint_with_buildx(tmp_path: Path, runtime_name: str, extra_env: di
     return completed, runtime_log, docker_log, Path(env["OUT"])
 
 
+def _assert_atomic_sif_build(runtime_log: Path, out_path: Path, source: str) -> None:
+    lines = runtime_log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    args = shlex.split(lines[0])
+    assert args[0] == "build"
+    staged_out = Path(args[1])
+    assert staged_out.name == out_path.name
+    assert staged_out.parent.parent == out_path.parent
+    assert staged_out.parent.name.startswith(".gg-sif-build.")
+    assert args[2:] == [source]
+    assert not staged_out.parent.exists()
+
+
 def test_container_build_entrypoint_uses_public_image_without_docker_with_apptainer(tmp_path: Path):
     completed, runtime_log, out_path = _run_entrypoint(
         tmp_path,
@@ -153,9 +173,11 @@ def test_container_build_entrypoint_uses_public_image_without_docker_with_apptai
     assert "[gg_container_build] image_source=public" in completed.stdout
     assert "[gg_container_build] engine=apptainer" in completed.stdout
     assert "[gg_container_build] step 1/1: build SIF from registry image" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker://ghcr.io/example/genegalleon:20260306-test"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker://ghcr.io/example/genegalleon:20260306-test",
+    )
 
 
 def test_container_build_entrypoint_auto_detects_singularity_without_docker(tmp_path: Path):
@@ -172,9 +194,11 @@ def test_container_build_entrypoint_auto_detects_singularity_without_docker(tmp_
     assert completed.returncode == 0, completed.stderr
     assert out_path.is_file()
     assert "[gg_container_build] engine=singularity" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker://ghcr.io/example/genegalleon:latest"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker://ghcr.io/example/genegalleon:latest",
+    )
 
 
 def test_container_build_entrypoint_falls_back_to_official_registry_image_when_defaults_are_used(tmp_path: Path):
@@ -184,9 +208,11 @@ def test_container_build_entrypoint_falls_back_to_official_registry_image_when_d
     assert out_path.is_file()
     assert "[gg_container_build] image_source=auto" in completed.stdout
     assert "falling back to published image ghcr.io/kfuku52/genegalleon:latest" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker://ghcr.io/kfuku52/genegalleon:latest"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker://ghcr.io/kfuku52/genegalleon:latest",
+    )
 
 
 def test_container_build_entrypoint_falls_back_to_latest_when_local_default_tag_is_explicit(tmp_path: Path):
@@ -201,9 +227,11 @@ def test_container_build_entrypoint_falls_back_to_latest_when_local_default_tag_
     assert completed.returncode == 0, completed.stderr
     assert out_path.is_file()
     assert "falling back to published image ghcr.io/kfuku52/genegalleon:latest" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker://ghcr.io/kfuku52/genegalleon:latest"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker://ghcr.io/kfuku52/genegalleon:latest",
+    )
 
 
 def test_container_build_entrypoint_prefers_public_pull_for_remote_image_in_auto_mode_even_with_buildx(tmp_path: Path):
@@ -220,9 +248,11 @@ def test_container_build_entrypoint_prefers_public_pull_for_remote_image_in_auto
     assert out_path.is_file()
     assert "[gg_container_build] resolved_image_source=public" in completed.stdout
     assert "skipping local Docker build" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker://ghcr.io/example/genegalleon:20260306-test"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker://ghcr.io/example/genegalleon:20260306-test",
+    )
     assert not docker_log.exists()
 
 
@@ -241,13 +271,19 @@ def test_container_build_entrypoint_uses_native_local_build_without_docker(tmp_p
     assert out_path.is_file()
     assert "step 1/1: native local build from repository" in completed.stdout
     assert "[apptainer_local_build] definition=" in completed.stdout
-    runtime_log_lines = runtime_log.read_text(encoding="utf-8").strip().splitlines()
-    assert len(runtime_log_lines) == 1
-    assert runtime_log_lines[0].startswith(f"build {out_path} ")
-    assert runtime_log_lines[0].endswith(".def")
+    runtime_log_args = shlex.split(runtime_log.read_text(encoding="utf-8").strip())
+    assert len(runtime_log_args) == 3
+    staged_out = Path(runtime_log_args[1])
+    assert runtime_log_args[0] == "build"
+    assert staged_out.name == out_path.name
+    assert staged_out.parent.parent == out_path.parent
+    assert staged_out.parent.name.startswith(".gg-sif-build.")
+    assert not staged_out.parent.exists()
+    assert runtime_log_args[2].endswith(".def")
 
 
-def test_container_build_entrypoint_native_local_build_renders_repo_version_label(tmp_path: Path):
+@pytest.mark.parametrize("target", ["runtime", "development"])
+def test_container_build_entrypoint_native_local_build_renders_build_identity(tmp_path: Path, target: str):
     completed, runtime_log, out_path = _run_entrypoint(
         tmp_path,
         "apptainer",
@@ -257,6 +293,8 @@ def test_container_build_entrypoint_native_local_build_renders_repo_version_labe
             "TAG": "dev",
             "NATIVE_BUILD_KEEP_WORKDIR": "1",
             "SECURITY_REFRESH_EPOCH": "2026-08-26",
+            "BUILD_TARGET": target,
+            "GG_BUILD_JOBS": "3",
         },
     )
 
@@ -272,6 +310,10 @@ def test_container_build_entrypoint_native_local_build_renders_repo_version_labe
     assert f"org.opencontainers.image.version {REPO_VERSION}" in definition_text
     assert "io.genegalleon.security-refresh-epoch 2026-08-26" in definition_text
     assert 'security_refresh_epoch="2026-08-26"' in definition_text
+    assert f"io.genegalleon.build-target {target}" in definition_text
+    assert f'build_target="{target}"' in definition_text
+    assert 'export GG_BUILD_JOBS="3"' in definition_text
+    assert "@@" not in definition_text
     assert 'kfu52_amalgkit_auto_select_ref="0"' in definition_text
     assert 'kfu52_amalgkit_repo_ref="master"' in definition_text
     assert 'kfu52_csubst_repo_ref="master"' in definition_text
@@ -292,12 +334,61 @@ def test_container_build_entrypoint_uses_docker_daemon_for_local_buildx_image(tm
     assert completed.returncode == 0, completed.stderr
     assert out_path.is_file()
     assert "[gg_container_build] sif_source=docker-daemon" in completed.stdout
-    assert runtime_log.read_text(encoding="utf-8").strip().splitlines() == [
-        f"build {out_path} docker-daemon:local/genegalleon:dev"
-    ]
+    _assert_atomic_sif_build(
+        runtime_log,
+        out_path,
+        "docker-daemon:local/genegalleon:dev",
+    )
     docker_log_text = docker_log.read_text(encoding="utf-8")
     assert "buildx build" in docker_log_text
     assert f"--build-arg GG_VERSION={REPO_VERSION}" in docker_log_text
+    assert "--target runtime" in docker_log_text
+    assert "--build-arg BUILD_TARGET=runtime" in docker_log_text
+    assert "--build-arg GG_BUILD_JOBS=2" in docker_log_text
+
+
+def test_container_build_entrypoint_forwards_development_target(tmp_path: Path):
+    completed, runtime_log, docker_log, out_path = _run_entrypoint_with_buildx(
+        tmp_path, "apptainer",
+        {"IMAGE_SOURCE": "local", "BUILD_SIF": "0", "BUILD_TARGET": "development", "GG_BUILD_JOBS": "3"},
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert not runtime_log.exists()
+    assert not out_path.exists()
+    calls = docker_log.read_text()
+    assert "--target development" in calls
+    assert "--build-arg BUILD_TARGET=development" in calls
+    assert "--build-arg GG_BUILD_JOBS=3" in calls
+
+
+@pytest.mark.parametrize("use_buildx", [True, False])
+@pytest.mark.parametrize("override", [
+    {"BUILD_TARGET": "unknown"}, {"GG_BUILD_JOBS": "0"}, {"GG_BUILD_JOBS": "2;false"},
+])
+def test_invalid_build_profile_or_jobs_never_starts_a_build(tmp_path: Path, use_buildx: bool, override):
+    run = _run_entrypoint_with_buildx if use_buildx else _run_entrypoint
+    completed, runtime_log, *logs = run(tmp_path, "apptainer", {"IMAGE_SOURCE": "local", **override})
+    assert completed.returncode != 0
+    assert not runtime_log.exists()
+    assert not logs[-1].exists()
+    if use_buildx and logs[0].exists():
+        assert "buildx build" not in logs[0].read_text()
+    assert next(iter(override)) in completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize("use_buildx", [True, False])
+def test_source_resolution_failure_never_starts_a_build(tmp_path: Path, use_buildx: bool):
+    run = _run_entrypoint_with_buildx if use_buildx else _run_entrypoint
+    completed, runtime_log, *logs = run(
+        tmp_path, "apptainer", {"IMAGE_SOURCE": "local", "KFU52_CSUBST_REPO_SHA": "invalid"},
+    )
+    assert completed.returncode != 0
+    assert "One or more upstream source revisions could not be resolved" in completed.stderr
+    assert "Resolved KFU52_AMALGKIT_REPO_SHA" not in completed.stdout
+    assert not runtime_log.exists()
+    assert not logs[-1].exists()
+    if use_buildx:
+        assert "buildx build" not in logs[0].read_text()
 
 
 def test_container_build_entrypoint_rejects_non_registry_image_for_public_source(tmp_path: Path):

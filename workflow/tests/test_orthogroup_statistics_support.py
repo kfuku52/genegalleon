@@ -1,3 +1,5 @@
+import sys
+import types
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -12,6 +14,12 @@ TARGET_MODULE_PATH = (
 
 
 def load_module():
+    if "kftools" not in sys.modules:
+        package = types.ModuleType("kftools")
+        package.__path__ = []
+        sys.modules["kftools"] = package
+    if "kftools.kfog" not in sys.modules:
+        sys.modules["kftools.kfog"] = types.ModuleType("kftools.kfog")
     spec = spec_from_file_location("orthogroup_statistics_support_test", MODULE_PATH)
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -29,6 +37,63 @@ def add_branch_ids(tree):
     for branch_id, node in enumerate(tree.traverse()):
         node.add_prop("branch_id", branch_id)
     return tree
+
+
+def test_species_mapping_clone_handles_observed_deep_tree_without_recursion():
+    module = load_module()
+    source = module.ete4.PhyloTree()
+    spine = source
+    leaf_count = 0
+    for depth in range(199):
+        spine.add_child(
+            name=f"gene_{leaf_count}:Species_{depth % 17}",
+            dist=float((depth % 7) + 1),
+            support=0.75,
+        )
+        leaf_count += 1
+        spine = spine.add_child(name=f"node_{depth}", dist=0.5, support=0.9)
+    while leaf_count < 804:
+        spine.add_child(
+            name=f"gene_{leaf_count}:Species_{leaf_count % 17}",
+            dist=1.0,
+            support=0.8,
+        )
+        leaf_count += 1
+
+    cloned = module.clone_tree_for_species_mapping(source)
+    source_nodes = list(source.traverse())
+    cloned_nodes = list(cloned.traverse())
+
+    assert cloned is not source
+    assert len(list(cloned.leaves())) == 804
+    assert len(cloned_nodes) == len(source_nodes)
+    assert [len(node.get_children()) for node in cloned_nodes] == [
+        len(node.get_children()) for node in source_nodes
+    ]
+    assert [node.name for node in cloned_nodes] == [node.name for node in source_nodes]
+    assert [node.dist for node in cloned_nodes] == [node.dist for node in source_nodes]
+    assert [node.support for node in cloned_nodes] == [node.support for node in source_nodes]
+
+    next(cloned.leaves()).name = "changed:Species"
+    assert next(source.leaves()).name != "changed:Species"
+
+
+def test_node_gene2species_uses_depth_safe_tree_clone():
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    assert "gene_tree2 = clone_tree_for_species_mapping(gene_tree)" in source
+    assert "copy.deepcopy(gene_tree)" not in source
+
+
+def test_gff_join_rejects_duplicate_gene_rows_before_multiplying_branches(tmp_path):
+    module = load_module()
+    path = tmp_path / "gff.tsv"
+    path.write_text("gene_id\tfeature_size\tnum_intron\nGene1\t6\t0\nGene1\t9\t1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unique before branch join"):
+        module.load_gff_gene_traits(path)
+    path.write_text("gene_id\tfeature_size\tnum_intron\nGene1\t6\t0\n", encoding="utf-8")
+    traits = module.load_gff_gene_traits(path)
+    assert traits.columns.tolist() == ["node_name", "intron_feature_size"]
+    assert traits.iloc[0]["node_name"] == "Gene1"
 
 
 def test_prepared_generax_target_is_unrooted_and_preserves_tips_and_tree_length(

@@ -35,6 +35,19 @@ def run_label_check(payload, label, *expected):
     )
 
 
+def run_exact_label_check(payload, label, *expected):
+    arguments = [sys.executable, str(SCRIPT), "--label", label]
+    for value in expected:
+        arguments.extend(("--expected-value", value))
+    return subprocess.run(
+        arguments,
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def image_payload(amd64_hash=AMD64_HASH, arm64_hash=ARM64_HASH, revision="c" * 40):
     return {
         "linux/amd64": {
@@ -92,6 +105,29 @@ def test_runtime_input_label_can_be_compared_independently_of_release_metadata()
 
     assert completed.returncode == 0, completed.stderr
     assert "io.genegalleon.runtime-input values match" in completed.stderr
+
+
+def test_runtime_contract_label_requires_an_exact_value():
+    payload = image_payload()
+    payload["linux/amd64"]["config"]["Labels"]["io.genegalleon.build-target"] = "runtime"
+
+    completed = run_exact_label_check(
+        payload,
+        "io.genegalleon.build-target",
+        "linux/amd64=runtime",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "io.genegalleon.build-target values match" in completed.stderr
+
+    payload["linux/amd64"]["config"]["Labels"]["io.genegalleon.build-target"] = "development"
+    completed = run_exact_label_check(
+        payload,
+        "io.genegalleon.build-target",
+        "linux/amd64=runtime",
+    )
+    assert completed.returncode == 1
+    assert "published=development expected=runtime" in completed.stderr
 
 
 def test_missing_platform_or_label_requires_rebuild():

@@ -6,32 +6,47 @@ gg_advisory_shared_lock_acquire() {
     echo "Advisory shared lock path is empty." >&2
     return 1
   fi
-  if [[ -n "${GG_ADVISORY_SHARED_LOCK_FD:-}" ]]; then
-    echo "An advisory shared lock is already held on fd ${GG_ADVISORY_SHARED_LOCK_FD}." >&2
+  if [[ -n "${GG_ADVISORY_SHARED_LOCK_TOKEN:-}" ]]; then
+    echo "A gene-family shared lock is already held." >&2
     return 1
   fi
-  if ! command -v flock >/dev/null 2>&1; then
-    echo "Advisory shared locking requires flock inside the runtime." >&2
-    return 1
+  local py_exec helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  helper_script="$(dirname "${helper_script}")/shared_namespace_lock.py"
+  if [[ -n "${2:-}" ]]; then
+    GG_ADVISORY_GATE_PATH=$2
+    GG_ADVISORY_GATE_TOKEN=$("${py_exec}" "${helper_script}" acquire-shared \
+      "$2" --owner-pid "$$" --timeout "$(gg_lock_acquire_timeout_seconds)") || return 1
   fi
-  mkdir -p "$(dirname "${lock_file}")"
-  exec {GG_ADVISORY_SHARED_LOCK_FD}>"${lock_file}" || return 1
-  if ! flock -s "${GG_ADVISORY_SHARED_LOCK_FD}"; then
-    exec {GG_ADVISORY_SHARED_LOCK_FD}>&-
-    GG_ADVISORY_SHARED_LOCK_FD=""
+  GG_ADVISORY_SHARED_LOCK_TOKEN=$("${py_exec}" "${helper_script}" acquire-shared \
+    "${lock_file}" --owner-pid "$$" --timeout "$(gg_lock_acquire_timeout_seconds)") || {
+    gg_advisory_shared_lock_release
     return 1
-  fi
+  }
+  GG_ADVISORY_SHARED_LOCK_PATH=${lock_file}
 }
 
 gg_advisory_shared_lock_release() {
-  local release_status=0
-  if [[ -z "${GG_ADVISORY_SHARED_LOCK_FD:-}" ]]; then
+  if [[ -z "${GG_ADVISORY_SHARED_LOCK_TOKEN:-}" && -z "${GG_ADVISORY_GATE_TOKEN:-}" ]]; then
     return 0
   fi
-  flock -u "${GG_ADVISORY_SHARED_LOCK_FD}" || release_status=$?
-  exec {GG_ADVISORY_SHARED_LOCK_FD}>&- || release_status=$?
-  GG_ADVISORY_SHARED_LOCK_FD=""
-  return "${release_status}"
+  local py_exec helper_script
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  helper_script="$(dirname "${helper_script}")/shared_namespace_lock.py"
+  if [[ -n "${GG_ADVISORY_SHARED_LOCK_TOKEN:-}" ]]; then
+    "${py_exec}" "${helper_script}" release-shared "${GG_ADVISORY_SHARED_LOCK_PATH}" \
+      --token "${GG_ADVISORY_SHARED_LOCK_TOKEN}" || return 1
+    GG_ADVISORY_SHARED_LOCK_TOKEN=""
+  fi
+  if [[ -n "${GG_ADVISORY_GATE_TOKEN:-}" ]]; then
+    "${py_exec}" "${helper_script}" release-shared "${GG_ADVISORY_GATE_PATH}" \
+      --token "${GG_ADVISORY_GATE_TOKEN}" || return 1
+    GG_ADVISORY_GATE_TOKEN=""
+  fi
+  GG_ADVISORY_SHARED_LOCK_TOKEN=""
+  GG_ADVISORY_SHARED_LOCK_PATH=""
 }
 
 gg_lock_stale_seconds() {
@@ -164,7 +179,7 @@ gg_array_finalizer_claim() {
     return 2
   fi
   expected_count=$(gg_array_expected_task_count "${fallback_count}")
-  run_id=$(printf '%s' "${GG_JOB_ID:-local}" | sed 's/[^[:alnum:]._-]/_/g')
+  run_id=$(printf '%s' "${GG_ARRAY_JOB_ID:-${GG_JOB_ID:-local}}" | sed 's/[^[:alnum:]._-]/_/g')
   task_id=$(printf '%s' "${GG_ARRAY_TASK_ID:-1}" | sed 's/[^[:alnum:]._-]/_/g')
   stage_name=$(printf '%s' "${stage_name}" | sed 's/[^[:alnum:]._-]/_/g')
   # Local, non-array invocations commonly reuse the synthetic job ID "1".
@@ -178,6 +193,7 @@ gg_array_finalizer_claim() {
   mkdir -p "${run_dir}"
   exec {GG_ARRAY_FINALIZER_LOCK_FD}>"${lock_file}" || return 2
   if ! flock -x "${GG_ARRAY_FINALIZER_LOCK_FD}"; then
+    echo "Failed to acquire the array finalizer lock: ${lock_file}. Verify that the shared workspace provides cross-node flock semantics." >&2
     exec {GG_ARRAY_FINALIZER_LOCK_FD}>&-
     GG_ARRAY_FINALIZER_LOCK_FD=""
     return 2
@@ -229,6 +245,49 @@ gg_array_finalizer_release() {
   GG_ARRAY_FINALIZER_RUN_DIR=""
 }
 
+gg_stage_transaction_lock_acquire() {
+  local state_root=${1:-}
+  local stage_name=${2:-}
+  local safe_stage_name=""
+  local lock_file=""
+  if [[ -z "${state_root}" || "${state_root}" == "/" || "${state_root}" == "." \
+    || "${state_root}" == ".." || -z "${stage_name}" ]]; then
+    echo "gg_stage_transaction_lock_acquire requires a safe STATE_ROOT and STAGE_NAME." >&2
+    return 2
+  fi
+  if [[ -n "${GG_STAGE_TRANSACTION_LOCK_FILE:-}" ]]; then
+    echo "A stage transaction lock is already held: ${GG_STAGE_TRANSACTION_LOCK_FILE}" >&2
+    return 2
+  fi
+  safe_stage_name=$(printf '%s' "${stage_name}" | sed 's/[^[:alnum:]._-]/_/g')
+  if [[ -z "${safe_stage_name}" ]]; then
+    echo "The stage transaction name is empty after normalization." >&2
+    return 2
+  fi
+  lock_file="${state_root%/}/stage_transactions/${safe_stage_name}.lock"
+  if ! gg_shared_lock_acquire "${lock_file}" "${safe_stage_name} stage transaction"; then
+    return 1
+  fi
+  gg_shared_lock_start_heartbeat "${lock_file}"
+  GG_STAGE_TRANSACTION_LOCK_FILE="${lock_file}"
+  GG_STAGE_TRANSACTION_LOCK_HEARTBEAT_PID="${GG_SHARED_LOCK_HEARTBEAT_PID:-}"
+  echo "Acquired stage transaction lock: ${safe_stage_name}" >&2
+}
+
+gg_stage_transaction_lock_release() {
+  local lock_file=${GG_STAGE_TRANSACTION_LOCK_FILE:-}
+  local heartbeat_pid=${GG_STAGE_TRANSACTION_LOCK_HEARTBEAT_PID:-}
+  local release_status=0
+  if [[ -z "${lock_file}" ]]; then
+    return 0
+  fi
+  gg_shared_lock_stop_heartbeat "${heartbeat_pid}" || release_status=$?
+  gg_shared_lock_release "${lock_file}" || release_status=$?
+  GG_STAGE_TRANSACTION_LOCK_FILE=""
+  GG_STAGE_TRANSACTION_LOCK_HEARTBEAT_PID=""
+  return "${release_status}"
+}
+
 gg_shared_lock_helper_script() {
   local helper_dir="${gg_support_dir:-}"
   if [[ -z "${helper_dir}" ]]; then
@@ -242,7 +301,26 @@ gg_shared_lock_helper_script() {
 }
 
 gg_shared_lock_python() {
-  gg_find_python_exec
+  if declare -F gg_find_python_exec >/dev/null 2>&1; then
+    gg_find_python_exec
+    return $?
+  fi
+
+  # gg_shared_lock.sh is also sourced directly by lightweight utilities and
+  # tests, without the rest of gg_util.sh. Keep lock coordination usable in
+  # that mode instead of spinning forever when the shared helper cannot run.
+  local candidate
+  for candidate in python python3 /opt/conda/bin/python /usr/bin/python3; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      command -v "${candidate}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 gg_lock_hostname() {
@@ -284,20 +362,44 @@ gg_shared_lock_try_create() {
   local owner_pid=${2:-$$}
   local py_exec
   local helper_script
-  py_exec=$(gg_shared_lock_python) || return 1
-  helper_script=$(gg_shared_lock_helper_script) || return 1
-  "${py_exec}" "${helper_script}" try-create "${lock_file}" --pid "${owner_pid}"
+  local owner_index owner_token create_status
+  py_exec=$(gg_shared_lock_python) || return 2
+  helper_script=$(gg_shared_lock_helper_script) || return 2
+  gg_shared_lock_owner_index "${lock_file}"
+  owner_index=${GG_SHARED_LOCK_OWNER_INDEX}
+  # Preserve the first acquisition if this shell tries the same path twice.
+  [[ -z "${GG_SHARED_LOCK_OWNER_TOKENS[owner_index]}" ]] || return 1
+  owner_token=$("${py_exec}" "${helper_script}" new-token) || return 2
+  GG_SHARED_LOCK_OWNER_TOKENS[owner_index]=${owner_token}
+  GG_SHARED_LOCK_PENDING_FILE=${lock_file}
+  if "${py_exec}" "${helper_script}" try-create "${lock_file}" --pid "${owner_pid}" --token "${owner_token}"; then
+    GG_SHARED_LOCK_PENDING_FILE=""
+    return 0
+  else
+    create_status=$?
+    GG_SHARED_LOCK_OWNER_TOKENS[owner_index]=""
+    GG_SHARED_LOCK_PENDING_FILE=""
+    return "${create_status}"
+  fi
 }
 
-gg_shared_lock_remove_if_unchanged() {
+gg_shared_lock_owner_index() {
   local lock_file=$1
-  local expected_device=$2
-  local expected_inode=$3
-  local py_exec
-  local helper_script
-  py_exec=$(gg_shared_lock_python) || return 1
-  helper_script=$(gg_shared_lock_helper_script) || return 1
-  "${py_exec}" "${helper_script}" remove-if-unchanged "${lock_file}" "${expected_device}" "${expected_inode}"
+  local index
+  # Indexed arrays also work in entrypoints launched by macOS's Bash 3.
+  if ! declare -p GG_SHARED_LOCK_OWNER_PATHS >/dev/null 2>&1; then
+    GG_SHARED_LOCK_OWNER_PATHS=("")
+    GG_SHARED_LOCK_OWNER_TOKENS=("")
+  fi
+  for index in "${!GG_SHARED_LOCK_OWNER_PATHS[@]}"; do
+    if [[ "${GG_SHARED_LOCK_OWNER_PATHS[index]}" == "${lock_file}" ]]; then
+      GG_SHARED_LOCK_OWNER_INDEX=${index}
+      return 0
+    fi
+  done
+  GG_SHARED_LOCK_OWNER_INDEX=${#GG_SHARED_LOCK_OWNER_PATHS[@]}
+  GG_SHARED_LOCK_OWNER_PATHS[GG_SHARED_LOCK_OWNER_INDEX]=${lock_file}
+  GG_SHARED_LOCK_OWNER_TOKENS[GG_SHARED_LOCK_OWNER_INDEX]=""
 }
 
 gg_shared_lock_reclaim_if_stale() {
@@ -316,22 +418,33 @@ gg_shared_lock_reclaim_if_stale() {
   if stale_summary=$("${py_exec}" "${helper_script}" reclaim-if-stale "${lock_file}" --stale-seconds "${stale_seconds}"); then
     echo "Recovered stale shared lock: ${description} (${stale_summary})" >&2
     return 0
+  else
+    return $?
   fi
-  return 1
 }
 
 gg_shared_lock_start_heartbeat() {
   local lock_file=$1
-  local interval_seconds
+  local interval_seconds owner_token py_exec helper_script
+  gg_shared_lock_owner_index "${lock_file}"
+  owner_token=${GG_SHARED_LOCK_OWNER_TOKENS[GG_SHARED_LOCK_OWNER_INDEX]}
+  [[ -n "${owner_token}" ]] || return 1
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
   interval_seconds=$(gg_lock_heartbeat_seconds)
   (
     local heartbeat_sleep_pid=""
 
     stop_heartbeat_process() {
-      if [[ "${heartbeat_sleep_pid}" =~ ^[0-9]+$ ]]; then
-        kill "${heartbeat_sleep_pid}" 2>/dev/null || true
-        wait "${heartbeat_sleep_pid}" 2>/dev/null || true
-      fi
+      local child_pid
+      trap '' HUP INT TERM
+      # TERM may arrive after sleep was forked but before $! was assigned.
+      # The shell job table already owns that child; reap it there so it cannot
+      # retain the workflow's output pipes or inherited advisory-lock fd.
+      while IFS= read -r child_pid; do
+        kill "${child_pid}" 2>/dev/null || true
+        wait "${child_pid}" 2>/dev/null || true
+      done < <(jobs -pr)
       exit 0
     }
 
@@ -341,9 +454,7 @@ gg_shared_lock_start_heartbeat() {
       heartbeat_sleep_pid=$!
       wait "${heartbeat_sleep_pid}" || exit 0
       heartbeat_sleep_pid=""
-      if [[ -e "${lock_file}" ]]; then
-        touch -c -- "${lock_file}" 2>/dev/null || true
-      fi
+      "${py_exec}" "${helper_script}" heartbeat "${lock_file}" --token "${owner_token}" || exit 0
     done
   ) &
   GG_SHARED_LOCK_HEARTBEAT_PID=$!
@@ -360,7 +471,15 @@ gg_shared_lock_stop_heartbeat() {
 
 gg_shared_lock_release() {
   local lock_file=$1
-  rm -f -- "${lock_file}"
+  local owner_index owner_token py_exec helper_script
+  gg_shared_lock_owner_index "${lock_file}"
+  owner_index=${GG_SHARED_LOCK_OWNER_INDEX}
+  owner_token=${GG_SHARED_LOCK_OWNER_TOKENS[owner_index]}
+  [[ -n "${owner_token}" ]] || return 0
+  py_exec=$(gg_shared_lock_python) || return 1
+  helper_script=$(gg_shared_lock_helper_script) || return 1
+  "${py_exec}" "${helper_script}" release "${lock_file}" --token "${owner_token}" || return 1
+  GG_SHARED_LOCK_OWNER_TOKENS[owner_index]=""
 }
 
 gg_shared_lock_acquire() {
@@ -371,6 +490,7 @@ gg_shared_lock_acquire() {
   local timeout_seconds
   local wait_started
   local wait_logged=0
+  local acquire_status
   poll_seconds=$(gg_lock_poll_seconds)
   timeout_seconds=$(gg_lock_acquire_timeout_seconds)
   wait_started=$(date +%s)
@@ -378,9 +498,15 @@ gg_shared_lock_acquire() {
   while true; do
     if gg_shared_lock_try_create "${lock_file}"; then
       return 0
+    else
+      acquire_status=$?
+      [[ ${acquire_status} -eq 1 ]] || return "${acquire_status}"
     fi
     if gg_shared_lock_reclaim_if_stale "${lock_file}" "${description}"; then
       continue
+    else
+      acquire_status=$?
+      [[ ${acquire_status} -eq 1 ]] || return "${acquire_status}"
     fi
     local owner_summary
     owner_summary=$(gg_shared_lock_owner_summary "${lock_file}")
@@ -421,6 +547,7 @@ gg_shared_semaphore_acquire() {
   local wait_logged=0
   local slot_idx=0
   local slot_lock=""
+  local acquire_status
 
   max_slots=$(gg_shared_semaphore_max_slots "${requested_slots}")
   if (( max_slots < 1 )); then
@@ -442,6 +569,9 @@ gg_shared_semaphore_acquire() {
         GG_SHARED_SEMAPHORE_SLOT_INDEX="${slot_idx}"
         GG_SHARED_SEMAPHORE_MAX_SLOTS="${max_slots}"
         return 0
+      else
+        acquire_status=$?
+        [[ ${acquire_status} -eq 1 ]] || return "${acquire_status}"
       fi
       if gg_shared_lock_reclaim_if_stale "${slot_lock}" "${description} slot ${slot_idx}/${max_slots}"; then
         if gg_shared_lock_try_create "${slot_lock}"; then
@@ -449,7 +579,13 @@ gg_shared_semaphore_acquire() {
           GG_SHARED_SEMAPHORE_SLOT_INDEX="${slot_idx}"
           GG_SHARED_SEMAPHORE_MAX_SLOTS="${max_slots}"
           return 0
+        else
+          acquire_status=$?
+          [[ ${acquire_status} -eq 1 ]] || return "${acquire_status}"
         fi
+      else
+        acquire_status=$?
+        [[ ${acquire_status} -eq 1 ]] || return "${acquire_status}"
       fi
     done
     if [[ ${wait_logged} -eq 0 ]]; then
@@ -499,12 +635,13 @@ gg_run_with_shared_semaphore() {
   if (( max_slots < 1 )); then
     if "$@"; then
       return 0
+    else
+      return $?
     fi
-    return $?
   fi
 
   cleanup_shared_semaphore() {
-    local acquired_slot_lock="${slot_lock}"
+    local acquired_slot_lock="${slot_lock:-${GG_SHARED_LOCK_PENDING_FILE:-}}"
     if [[ -z "${acquired_slot_lock}" \
       && "${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}" != "${initial_slot_lock}" ]]; then
       acquired_slot_lock="${GG_SHARED_SEMAPHORE_SLOT_LOCK_FILE:-}"

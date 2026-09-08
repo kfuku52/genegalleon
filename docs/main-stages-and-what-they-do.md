@@ -138,10 +138,43 @@ Purpose:
 - optional contamination filtering,
 - BUSCO and expression quantification summaries.
 
-For SRA-derived inputs, `getfastq_completion.json` binds every published FASTQ
-to its relative path, byte size, SHA-256, and a complete gzip/FASTQ integrity
-check. Resume staging, assembly/subsampling, long-read reuse, and quantification
-revalidate that exact byte contract before consuming the reads.
+For SRA-derived inputs, schema-4 `getfastq_completion.json` binds every published FASTQ
+and its per-run `getfastq_stats.tsv` to relative paths, byte sizes, and SHA-256
+digests, and also requires a complete gzip/FASTQ integrity check. The statistics
+contract must contain positive extracted spot and base counts so downstream
+quantification can recover incomplete public SRA metadata without guessing.
+GeneGalleon performs one full byte/integrity validation per invocation
+that consumes the reads. Later consumers in the same invocation verify the
+manifest index and file identity (device, inode, size, mtime, and ctime); any
+identity change triggers another full byte/integrity validation.
+
+If amalgkit exhausts its configured download sources, GeneGalleon can recover
+the public original FASTQs from bounded ENA/SRA endpoints. That recovery is
+built in a directory isolated from any partially completed, filtered amalgkit
+files, so a published read set cannot mix filtered and original reads. The
+completion manifest records `read_source=amalgkit` or
+`read_source=public-original`; the latter means all runs use public originals
+and have not passed through amalgkit's rRNA/contamination filters. FASTQ files
+from public-original recovery are scanned once per filesystem identity to derive
+the bound spot/base statistics; repeated validation in the same recovery process
+reuses those metrics. Native amalgkit schema-3 completion manifests are converted
+to the bound GeneGalleon schema only after their exact run layouts, FASTQs, and
+statistics sidecars validate, avoiding a redundant all-run public download.
+Older schema-3 `public-original` manifests are migrated before quantification by
+validating and reusing their exact FASTQ byte contracts, deriving the missing
+statistics locally, and performing no network retrieval. FASTQ files not
+referenced by the current metadata are quarantined outside the
+`*.amalgkit.fastq.gz` namespace, and validation rejects any extra FASTQ that is
+not bound by the manifest.
+
+Interrupted public FASTQ downloads keep a `.download.part.json` sidecar next
+to the partial gzip. It records the source URL, expected checksum, remote
+validator (strong ETag or Last-Modified when available), and total byte size.
+Resumption requires matching identity and validated HTTP ranges; unidentifiable
+partials and changed objects restart from byte zero. A syntactically valid gzip
+prefix is never sufficient evidence that the remote file is complete. Publishing
+requires a verified complete transfer and gzip/FASTQ integrity, plus the expected
+MD5 when supplied. Partial plaintext downloads are restarted before recompression.
 
 Main outputs:
 
@@ -334,6 +367,13 @@ Notable defaults:
   falls back to the root-level `Phylogenetic_Hierarchical_Orthogroups/N0.tsv`
   when required by OrthoFinder 3.1+ output differences, and rejects clade-level
   `N*.tsv` files as substitutes for the root table.
+- the complete validated OrthoFinder directory is published as one recoverable
+  replacement. Failed runs leave the previous public directory intact, and
+  outputs that disappeared in a newer OrthoFinder run cannot survive as stale
+  top-level entries.
+- core-species selection reports the selected, requested, candidate, and
+  filter-passing counts when fewer species are retained. Ambiguous BUSCO summary
+  matches stop selection instead of being treated as missing completeness data.
 
 ### Inlined Stage: Species Tree
 
@@ -603,6 +643,13 @@ Notable defaults:
   without manifests are reported as `legacy_untracked` and remain usable,
 - overwrite builds use a temporary SQLite file and replace the published database
   only after every input has been loaded and indexed successfully,
+- database input reads keep at most twice `--ncpu` file chunks in flight and
+  release consumed results; each chunk has at most `min(--row_threshold, 50000)`
+  rows. Large TSVs, including ZIP members, use a bounded type-discovery pass
+  before insertion so later values cannot silently change a column's type.
+  Small family files retain a single-read path. SQL buffers and the subsequent
+  global BH-FDR calculation have their own memory costs; this is not a fixed
+  cap on total process memory,
 - when present, `csubst_scan/` is imported as DB table `aa_change`, and
   `csubst_scan_units/` is imported as `aa_change_unit`; `aa_change` receives
   global BH-FDR columns after all candidate substitutions are loaded,

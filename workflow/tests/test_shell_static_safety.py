@@ -194,8 +194,9 @@ def test_gg_versions_uses_shared_core_bootstrap_runtime():
 def test_entrypoint_bootstrap_sets_python_pycacheprefix_outside_repo():
     text = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_bootstrap.sh")
     body = _function_body(text, "gg_configure_python_pycacheprefix")
-    assert 'default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache"' in body
-    assert 'mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true' in body
+    assert 'default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache_${pycache_uid}"' in body
+    assert '! -O "${default_pycache_prefix}"' in body
+    assert 'chmod 700 "${default_pycache_prefix}"' in body
     assert 'export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"' in body
     init_body = _function_body(text, "gg_entrypoint_initialize")
     assert "gg_configure_python_pycacheprefix" in init_body
@@ -204,8 +205,9 @@ def test_entrypoint_bootstrap_sets_python_pycacheprefix_outside_repo():
 def test_core_bootstrap_sets_python_pycacheprefix_under_tmp():
     text = _read_text(WORKFLOW_DIR / "support" / "gg_core_bootstrap.sh")
     body = _function_body(text, "gg_configure_python_pycacheprefix_from_core")
-    assert 'default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache"' in body
-    assert 'mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true' in body
+    assert 'default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache_${pycache_uid}"' in body
+    assert '! -O "${default_pycache_prefix}"' in body
+    assert 'chmod 700 "${default_pycache_prefix}"' in body
     assert 'export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"' in body
     runtime_body = _function_body(text, "gg_bootstrap_core_runtime")
     assert "export PYTHONNOUSERSITE=1" in runtime_body
@@ -576,6 +578,8 @@ def test_detect_ou_shift_kfl1ou_enables_measurement_error_by_default():
     text = _read_text(script)
     assert "measurement_error = TRUE" in text
     assert "input_error = input_error_fit" in text
+    assert "replicate_column_mask(original_cols, trait_name, replicate_sep)" in text
+    assert "startsWith(original_cols, paste0(trait_name, replicate_sep))" not in text
 
 
 def test_expression_matrix_allows_a_valid_no_data_result():
@@ -640,8 +644,12 @@ def test_set_singularityenv_forwards_gg_common_variables():
     assert 'gg_workflow_dir="${resolved_workflow_dir}"' in body
     assert 'gg_container_image_path="${resolved_container_image_path}"' in body
     assert 'resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")' in body
-    assert "export SINGULARITYENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache" in body
-    assert "export APPTAINERENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache" in body
+    assert 'container_pycache_prefix="/tmp/genegalleon_pycache_$(id -u)"' in body
+    assert 'export SINGULARITYENV_PYTHONPYCACHEPREFIX="${container_pycache_prefix}"' in body
+    assert 'export APPTAINERENV_PYTHONPYCACHEPREFIX="${container_pycache_prefix}"' in body
+    assert '[[ -L "${container_pycache_prefix}"' in body
+    assert '! -O "${container_pycache_prefix}"' in body
+    assert 'chmod 700 "${container_pycache_prefix}"' in body
     assert "export SINGULARITYENV_PYTHONNOUSERSITE=1" in body
     assert "export APPTAINERENV_PYTHONNOUSERSITE=1" in body
     assert "for gg_common_var_name in ${!GG_COMMON_@}; do" in body
@@ -1364,7 +1372,7 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
 
     assert "lock-path" in core
-    assert 'gene_family_run_lock_path="${dir_output_active}/.gg_run_locks/task.${GG_ARRAY_TASK_ID}.lock"' in core
+    assert 'gene_family_run_lock_path="${dir_output_active}/.gg_run_locks/family.' in core
     assert '"${gene_family_run_lock_path}" \\' in core
     assert '"gene-family producer (${og_id})"' in core
     assert 'gg_shared_lock_start_heartbeat "${gene_family_run_lock_path}"' in core
@@ -1379,7 +1387,8 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     assert "mark-running \\" in core
     assert "mark-complete \\" in core
     assert "mark-failed \\" in core
-    assert "archive-family \\" in core
+    assert core.count("enqueue-family \\") == 3
+    assert "archive-completed \\" not in core
     assert "storage-conversion.pending" in core
     assert "is-complete" not in core
     assert "finalize_gene_family_run_success" in core
@@ -1393,7 +1402,7 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     assert "gene_family_run_succeeded=1" in finalize_body
     cleanup_body = _function_body(core, "cleanup_tmp_dir_on_normal_exit")
     assert cleanup_body.index("gg_advisory_shared_lock_release") < cleanup_body.index("cleanup-materialized")
-    assert cleanup_body.index("cleanup-materialized") < cleanup_body.index("archive-family")
+    assert cleanup_body.index("cleanup-materialized") < cleanup_body.index("enqueue-family")
     assert 'gg_shared_lock_stop_heartbeat "${gene_family_run_lock_heartbeat_pid:-}"' in cleanup_body
     assert 'gg_shared_lock_release "${gene_family_run_lock_path}"' in cleanup_body
 
@@ -1709,6 +1718,9 @@ def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_suppor
     )
     assert 'assert_gene_evolution_aa_model_for_protein_mode "${task}"' in core
     assert 'disable_if_no_input_file "run_collect_gff_info" "${file_og_primary_fasta}"' in core
+    assert '--parameter "gff_annotation_schema=2"' in core
+    assert '--input "sequence_source_index=${gff_info_sequence_manifest}"' in core
+    assert '--sequence-store "${gff_info_sequence_store}"' in core
     assert (
         'seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"'
         in core
@@ -2330,6 +2342,53 @@ def test_no_cp_out_or_mv_out_glob_arguments_in_core_scripts():
         assert pattern.search(text) is None, f"Use nullglob+array guard instead of cp_out/mv_out glob in {script}"
 
 
+def test_orthofinder_core_result_publication_replaces_existing_trees_transactionally():
+    core = (WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh").read_text()
+    start = core.index("    orthofinder_all_outputs=(")
+    end = core.index(
+        '    orthofinder_output_directory_cleanup "${dir_orthofinder}/core"',
+        start,
+    )
+    block = core[start:end]
+
+    assert "orthofinder_publication_pairs=()" in block
+    assert block.count('orthofinder_publication_pairs+=(') == 2
+    assert '"${dir_orthofinder}/${orthofinder_output##*/}"' in block
+    assert '"${dir_orthofinder}/core/${orthofinder_output##*/}"' in block
+    assert 'mv_out_bundle "${orthofinder_publication_pairs[@]}"' in block
+    assert 'mv_out "${orthofinder_all_outputs[@]}"' not in block
+    assert 'mv_out "${orthofinder_core_outputs[@]}"' not in block
+
+
+def test_orthofinder_single_round_publication_replaces_existing_trees_transactionally():
+    core = (WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh").read_text()
+    start = core.index("    orthofinder_main_outputs=(")
+    end = core.index('    rm -rf -- "${dir_orthofinder}/main"', start)
+    block = core[start:end]
+
+    assert "orthofinder_publication_pairs=()" in block
+    assert block.count('orthofinder_publication_pairs+=(') == 1
+    assert '"${dir_orthofinder}/${orthofinder_output##*/}"' in block
+    assert 'mv_out_bundle "${orthofinder_publication_pairs[@]}"' in block
+    assert 'mv_out "${orthofinder_main_outputs[@]}"' not in block
+
+
+def test_orthofinder_replaces_complete_publication_to_remove_stale_outputs():
+    core = (WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh").read_text()
+    start = core.index(
+        'if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then'
+    )
+    end = core.index('  gg_artifact_record "${orthofinder_provenance_args[@]}"', start)
+    block = core[start:end]
+
+    assert 'orthofinder_stage_parent=$(mktemp -d "${dir_tmp}/orthofinder.publish.XXXXXX")' in block
+    assert 'dir_orthofinder="${orthofinder_stage_parent}/orthofinder"' in block
+    assert 'mv_out_bundle "${dir_orthofinder}" "${orthofinder_public_dir}"' in block
+    assert block.index('mv_out_bundle "${dir_orthofinder}" "${orthofinder_public_dir}"') > block.index(
+        'Required root-level HOG table was not found'
+    )
+
+
 def test_gene_evolution_core_quotes_notung_zip_and_provenances_summary_outputs():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
@@ -2773,7 +2832,7 @@ def test_memory_limited_tool_invocations_use_tool_budget():
     transcriptome_core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
 
     expected_genome_tokens = [
-        'memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")',
+        'memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_GENOME_PARALLEL_JOBS}")',
         'iqtree_full_mem_args=(-mem "${GG_MEM_TOOL_GB}G")',
         'iqtree_parallel_mem_args=(-mem "${memory_iqtree_parallel}G")',
         '"${iqtree_full_mem_args[@]}" \\',
@@ -3089,7 +3148,7 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         assert f"{output_name}_repo_sha: ${{{{ steps.vars.outputs.{output_name}_repo_sha }}}}" in workflow
 
     assert "source container/source_branches.env" in workflow
-    assert "container/scripts/resolve_git_branch_sha.sh" in workflow
+    assert "container/scripts/resolve_source_revisions.sh --format env --scope all" in workflow
     assert "GG_PIN_" not in workflow
     for build_arg, output_name in (
         ("KFU52_AMALGKIT_REPO_SHA", "amalgkit_repo_sha"),
@@ -3118,8 +3177,11 @@ def test_release_sif_builds_platforms_concurrently_on_native_runners():
     assert "- platform: linux/arm64\n            runner: ubuntu-24.04-arm" in build_block
     assert "docker/setup-qemu-action" not in workflow
     assert "scope=container-${{ steps.platform.outputs.pair }}" in build_block
+    assert "cache-to:" not in build_block
     assert "push-by-digest=true" in build_block
-    assert "source container/source_branches.env" in workflow
+    assert "Build amd64 SIF from exact platform digest" in build_block
+    assert "Publish content-addressed amd64 SIF artifact" in build_block
+    assert "container/scripts/resolve_source_revisions.sh --format env --scope all" in workflow
     assert "GG_PIN_" not in workflow
 
 

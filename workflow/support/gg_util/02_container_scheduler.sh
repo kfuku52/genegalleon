@@ -407,12 +407,14 @@ gg_memory_fraction_gb() {
 
 gg_sge_memory_value_to_gb() {
 	local raw_value=${1:-}
+	local slots=${2:-1}
+	local rounding=${3:-ceil}
 	[[ "${raw_value}" =~ ^([0-9]+([.][0-9]+)?)([bBkKmMgGtTpP]?)$ ]] || return 1
 	local number="${BASH_REMATCH[1]}"
 	local unit
 	unit=$(printf '%s' "${BASH_REMATCH[3]}" | tr '[:lower:]' '[:upper:]')
 
-	awk -v number="${number}" -v unit="${unit}" '
+	awk -v number="${number}" -v unit="${unit}" -v slots="${slots}" -v rounding="${rounding}" '
 		BEGIN {
 			factor = 1 / 1073741824
 			if (unit == "K") factor = 1 / 1048576
@@ -420,9 +422,9 @@ gg_sge_memory_value_to_gb() {
 			else if (unit == "G") factor = 1
 			else if (unit == "T") factor = 1024
 			else if (unit == "P") factor = 1048576
-			value = number * factor
+			value = number * factor * slots
 			rounded = int(value)
-			if (rounded < value) rounded++
+			if (rounding == "ceil" && rounded < value) rounded++
 			if (rounded < 1 && value > 0) rounded = 1
 			print rounded
 		}
@@ -453,13 +455,14 @@ gg_sge_requested_mem_per_slot_gb() {
 	if [[ -z "${requested_value}" ]]; then
 		return 1
 	fi
-	gg_sge_memory_value_to_gb "${requested_value}"
+	gg_sge_memory_value_to_gb "${requested_value}" "${2:-1}" "${3:-ceil}"
 }
 
 gg_normalize_scheduler_env() {
 	local echo_header='gg_normalize_scheduler_env: '
 	local scheduler_kind
 	local pbs_slots=""
+	local explicit_memory_per_cpu="${GG_MEM_PER_CPU_GB:-${MEM_PER_SLOT:-}}"
 	scheduler_kind=$(gg_detect_scheduler_kind)
 	GG_SCHEDULER_KIND=${scheduler_kind}
 	echo ${echo_header}'Scheduler metadata is normalized to GG_* variables.'
@@ -504,6 +507,9 @@ gg_normalize_scheduler_env() {
 			GG_JOB_ID=1
 		fi
 	fi
+	if [[ -z "${GG_ARRAY_JOB_ID:-}" ]]; then
+		GG_ARRAY_JOB_ID=${SLURM_ARRAY_JOB_ID:-${GG_JOB_ID}}
+	fi
 	if [[ -z "${GG_ARRAY_TASK_ID:-}" ]]; then
 		if [[ "${SGE_TASK_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
 			echo ${echo_header}'GG_ARRAY_TASK_ID=${SGE_TASK_ID} (from legacy SGE_TASK_ID)'
@@ -537,6 +543,11 @@ gg_normalize_scheduler_env() {
 		GG_MEM_PER_CPU_GB=${MEM_PER_SLOT}
 	fi
 	if [[ -z "${GG_MEM_PER_CPU_GB:-}" ]] && type qstat >/dev/null 2>&1; then
+		if [[ -z "${GG_MEM_TOTAL_GB:-${MEM_PER_HOST:-}}" ]]; then
+			# Convert only after multiplying the exact per-slot request. Rounding
+			# each slot up to GiB first can substantially exceed the allocation.
+			GG_MEM_TOTAL_GB=$(gg_sge_requested_mem_per_slot_gb "${GG_JOB_ID}" "${GG_TASK_CPUS}" floor || true)
+		fi
 		GG_MEM_PER_CPU_GB=$(gg_sge_requested_mem_per_slot_gb "${GG_JOB_ID}" || true)
 		if [[ -n "${GG_MEM_PER_CPU_GB}" ]]; then
 			echo ${echo_header}'GG_MEM_PER_CPU_GB='"${GG_MEM_PER_CPU_GB}"' (from AGE s_vmem)'
@@ -547,6 +558,8 @@ gg_normalize_scheduler_env() {
 		if [[ -n "${SLURM_MEM_PER_CPU:-}" ]]; then
 			echo ${echo_header}'GG_MEM_PER_CPU_GB=$((${SLURM_MEM_PER_CPU}/1024))'
 			GG_MEM_PER_CPU_GB=$((${SLURM_MEM_PER_CPU}/1024))
+		elif [[ "${SLURM_MEM_PER_NODE:-}" =~ ^[1-9][0-9]*$ ]]; then
+			GG_MEM_PER_CPU_GB=$((SLURM_MEM_PER_NODE / 1024 / GG_TASK_CPUS))
 		else
 			echo ${echo_header}'No scheduler memory-per-CPU metadata was detected. GG_MEM_PER_CPU_GB=3'
 			GG_MEM_PER_CPU_GB=3
@@ -557,19 +570,26 @@ gg_normalize_scheduler_env() {
 		GG_MEM_TOTAL_GB=${MEM_PER_HOST}
 	fi
 	if [[ -z "${GG_MEM_TOTAL_GB:-}" ]]; then
-		GG_MEM_TOTAL_GB=$((${GG_MEM_PER_CPU_GB}*${GG_TASK_CPUS}))
+		if [[ -z "${explicit_memory_per_cpu}" && "${SLURM_MEM_PER_NODE:-}" =~ ^[1-9][0-9]*$ ]]; then
+			GG_MEM_TOTAL_GB=$((SLURM_MEM_PER_NODE / 1024))
+		elif [[ -z "${explicit_memory_per_cpu}" && "${SLURM_MEM_PER_CPU:-}" =~ ^[1-9][0-9]*$ ]]; then
+			GG_MEM_TOTAL_GB=$((SLURM_MEM_PER_CPU * GG_TASK_CPUS / 1024))
+		else
+			GG_MEM_TOTAL_GB=$((${GG_MEM_PER_CPU_GB}*${GG_TASK_CPUS}))
+		fi
 	fi
 	gg_normalize_memory_budget
 	gg_sync_legacy_scheduler_aliases
 	echo ${echo_header}"GG_TASK_CPUS=${GG_TASK_CPUS}"
 	echo ${echo_header}"GG_JOB_ID=${GG_JOB_ID}"
+	echo ${echo_header}"GG_ARRAY_JOB_ID=${GG_ARRAY_JOB_ID}"
 	echo ${echo_header}"GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID}"
 	echo ${echo_header}"GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB}"
 	echo ${echo_header}"GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB}"
 	echo ${echo_header}"GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB}"
 	echo ${echo_header}"GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB}"
 	echo ""
-	export GG_SCHEDULER_KIND GG_ARRAY_TASK_COUNT
+	export GG_SCHEDULER_KIND GG_ARRAY_TASK_COUNT GG_ARRAY_JOB_ID
 }
 
 variable_SGEnizer() {
@@ -591,7 +611,7 @@ gg_print_scheduler_runtime_summary() {
 	fi
 
 	echo "${echo_header}scheduler=${scheduler}"
-	echo "${echo_header}requested.slurm cpus_per_task=${SLURM_CPUS_PER_TASK:-NA} mem_per_cpu_mb=${SLURM_MEM_PER_CPU:-NA} array_task_id=${SLURM_ARRAY_TASK_ID:-NA} job_id=${SLURM_JOB_ID:-NA}"
+	echo "${echo_header}requested.slurm cpus_per_task=${SLURM_CPUS_PER_TASK:-NA} mem_per_cpu_mb=${SLURM_MEM_PER_CPU:-NA} mem_per_node_mb=${SLURM_MEM_PER_NODE:-NA} array_task_id=${SLURM_ARRAY_TASK_ID:-NA} array_job_id=${SLURM_ARRAY_JOB_ID:-NA} job_id=${SLURM_JOB_ID:-NA}"
 	echo "${echo_header}requested.pbs nodefile_slots=${pbs_slots} array_index=${PBS_ARRAY_INDEX:-NA} array_id=${PBS_ARRAYID:-NA} job_id=${PBS_JOBID:-NA}"
 	echo "${echo_header}legacy_aliases NSLOTS=${NSLOTS:-NA} SGE_TASK_ID=${SGE_TASK_ID:-NA} JOB_ID=${JOB_ID:-NA} MEM_PER_SLOT=${MEM_PER_SLOT:-NA} MEM_PER_HOST=${MEM_PER_HOST:-NA}"
 	echo "${echo_header}detected GG_TASK_CPUS=${GG_TASK_CPUS:-NA} GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-NA} GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-NA} GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB:-NA} GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB:-NA} GG_JOB_ID=${GG_JOB_ID:-NA} GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-NA}"
@@ -631,7 +651,12 @@ set_singularityenv() {
 	resolved_workspace_layout=$(gg_resolve_workspace_layout "${gg_workspace_dir}")
 	gg_add_container_bind_mount "${resolved_workspace_dir}:/workspace"
 	gg_add_container_bind_mount "${resolved_workflow_dir}:/script"
+	gg_configure_task_tmp_mount || return 1
 	export SINGULARITYENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1} APPTAINERENV_GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID:-1} SINGULARITYENV_GG_ARRAY_TASK_COUNT=${GG_ARRAY_TASK_COUNT:-} APPTAINERENV_GG_ARRAY_TASK_COUNT=${GG_ARRAY_TASK_COUNT:-} SINGULARITYENV_GG_SCHEDULER_KIND=${GG_SCHEDULER_KIND:-local} APPTAINERENV_GG_SCHEDULER_KIND=${GG_SCHEDULER_KIND:-local}
+	if [[ -n "${GG_RESOURCE_PROFILE:-}" ]]; then
+		export SINGULARITYENV_GG_RESOURCE_PROFILE=${GG_RESOURCE_PROFILE}
+		export APPTAINERENV_GG_RESOURCE_PROFILE=${GG_RESOURCE_PROFILE}
+	fi
 	export SINGULARITYENV_GG_TASK_CPUS=${GG_TASK_CPUS:-1}
 	export APPTAINERENV_GG_TASK_CPUS=${GG_TASK_CPUS:-1}
 	export SINGULARITYENV_OMP_NUM_THREADS=${GG_TASK_CPUS:-1}
@@ -652,6 +677,8 @@ set_singularityenv() {
 	unset APPTAINERENV_KMP_TEAMS_THREAD_LIMIT
 	export SINGULARITYENV_GG_JOB_ID=${GG_JOB_ID:-1}
 	export APPTAINERENV_GG_JOB_ID=${GG_JOB_ID:-1}
+	export SINGULARITYENV_GG_ARRAY_JOB_ID=${GG_ARRAY_JOB_ID:-${GG_JOB_ID:-1}}
+	export APPTAINERENV_GG_ARRAY_JOB_ID=${GG_ARRAY_JOB_ID:-${GG_JOB_ID:-1}}
 	export SINGULARITYENV_GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-3}
 	export APPTAINERENV_GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-3}
 	export SINGULARITYENV_GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-3}
@@ -670,8 +697,20 @@ set_singularityenv() {
 	export APPTAINERENV_MEM_PER_SLOT=${MEM_PER_SLOT:-3}
 	export SINGULARITYENV_MEM_PER_HOST=${MEM_PER_HOST:-3}
 	export APPTAINERENV_MEM_PER_HOST=${MEM_PER_HOST:-3}
-	export SINGULARITYENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache
-	export APPTAINERENV_PYTHONPYCACHEPREFIX=/tmp/genegalleon_pycache
+	local container_pycache_prefix=""
+	container_pycache_prefix="/tmp/genegalleon_pycache_$(id -u)"
+	if [[ -L "${container_pycache_prefix}" || ( -e "${container_pycache_prefix}" && ( ! -d "${container_pycache_prefix}" || ! -O "${container_pycache_prefix}" ) ) ]]; then
+		echo "Refusing unsafe container Python bytecode cache path: ${container_pycache_prefix}" >&2
+		return 1
+	fi
+	(umask 077; mkdir -p -- "${container_pycache_prefix}") || return 1
+	if [[ -L "${container_pycache_prefix}" || ! -d "${container_pycache_prefix}" || ! -O "${container_pycache_prefix}" ]]; then
+		echo "Container Python bytecode cache path is not an owned directory: ${container_pycache_prefix}" >&2
+		return 1
+	fi
+	chmod 700 "${container_pycache_prefix}" || return 1
+	export SINGULARITYENV_PYTHONPYCACHEPREFIX="${container_pycache_prefix}"
+	export APPTAINERENV_PYTHONPYCACHEPREFIX="${container_pycache_prefix}"
 	export SINGULARITYENV_PYTHONNOUSERSITE=1
 	export APPTAINERENV_PYTHONNOUSERSITE=1
   local gg_common_var_name
@@ -696,4 +735,42 @@ set_singularityenv() {
 		export APPTAINERENV_delete_tmp_dir=1
 	fi
 gg_print_container_env_summary
+}
+
+# Scratch configuration is resolved on the execution host, before container launch.
+gg_configure_task_tmp_mount() {
+  local requested="${GG_COMMON_TMP_ROOT:-workspace}"
+  local resolved=""
+  gg_export_var_to_container_env_if_set GG_COMMON_TMP_ROOT
+  [[ "${requested}" != workspace ]] || return 0
+  if [[ "${requested}" == env ]]; then
+    requested="${TMPDIR:-}"
+    if [[ -z "${requested}" ]]; then
+      echo "GG_COMMON_TMP_ROOT=env requires TMPDIR on the execution node." >&2
+      return 1
+    fi
+  fi
+  if [[ "${requested}" != /* || "${requested}" == *[:,]* || "${requested}" == *$'\n'* ]]; then
+    echo "Scratch root must be an absolute path without colons, commas or newlines: ${requested}" >&2
+    return 1
+  fi
+  if [[ ! -d "${requested}" || ! -w "${requested}" || ! -x "${requested}" ]]; then
+    echo "Scratch root must be an existing writable directory: ${requested}" >&2
+    return 1
+  fi
+  resolved=$(cd -P -- "${requested}" && printf '%s.' "$PWD") || return 1
+  resolved=${resolved%.}
+  if [[ "${resolved}" == *[:,]* || "${resolved}" == *$'\n'* ]]; then
+    echo "Resolved scratch root contains a container bind delimiter: ${resolved}" >&2
+    return 1
+  fi
+  if gg_container_bind_destination_exists "/gg_tmp"; then
+    echo "Reserved scratch mount /gg_tmp is already configured." >&2
+    return 1
+  fi
+  gg_add_container_bind_mount "${resolved}:/gg_tmp"
+  export GG_TMP_MOUNT=/gg_tmp GG_TMP_HOST_ROOT="${resolved}" GG_TMP_WORKSPACE_ID="${gg_workspace_dir}"
+  gg_export_var_to_container_env_if_set GG_TMP_MOUNT
+  gg_export_var_to_container_env_if_set GG_TMP_HOST_ROOT
+  gg_export_var_to_container_env_if_set GG_TMP_WORKSPACE_ID
 }

@@ -566,6 +566,19 @@ exit 0
     )
 
     _write_executable(
+        bin_dir / "mcmctree",
+        """#!/usr/bin/env bash
+set -euo pipefail
+outfile=$(sed -n 's/^[[:space:]]*outfile[[:space:]]*=[[:space:]]*//p' "$1" | head -n 1)
+cat > "${outfile:-mcmctree.out}" <<'EOF'
+MCMCtree test output
+Species tree for FigTree
+(a:0.1,(b:0.2,c:0.3):0.4);
+EOF
+""",
+    )
+
+    _write_executable(
         bin_dir / "omamer",
         f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -1328,6 +1341,94 @@ def test_genome_evolution_rebuilds_missing_summary_from_cached_astral_tree(tmp_p
 @pytest.mark.skipif(
     SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
 )
+@pytest.mark.parametrize("stale_policy", ["stop", "reuse"])
+def test_genome_evolution_rejects_invalid_cached_mcmctree_without_modifying_outputs(
+    tmp_path: Path,
+    stale_policy: str,
+):
+    workspace = tmp_path / "workspace"
+    species_cds = workspace / "input" / "species_cds"
+    mcmctree_dir = workspace / "output" / "species_tree" / "mcmctree_main"
+    species_cds.mkdir(parents=True)
+    mcmctree_dir.mkdir(parents=True)
+    (species_cds / "Arabidopsis_thaliana_cds.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nATGAAA\n", encoding="utf-8"
+    )
+    header_only = "Species tree for FigTree\n"
+    figtree = mcmctree_dir / "FigTree.tre"
+    public_summary = mcmctree_dir / "iq2mc.mcmctree.out"
+    figtree.write_text(header_only, encoding="utf-8")
+    public_summary.write_text(header_only, encoding="utf-8")
+
+    completed = _run_core(
+        tmp_path,
+        {
+            "artifact_stale_policy": stale_policy,
+            "input_sequence_mode": "cds",
+            "run_orthofinder": "0",
+            "species_tree_output_storage": "files",
+        },
+    )
+
+    assert completed.returncode == 3
+    assert "Invalid cached MCMCtree output cannot be reused" in completed.stderr
+    assert figtree.read_text(encoding="utf-8") == header_only
+    assert public_summary.read_text(encoding="utf-8") == header_only
+
+
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
+def test_genome_evolution_rebuilds_only_invalid_cached_mcmctree_stage(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    species_cds = workspace / "input" / "species_cds"
+    species_tree = workspace / "output" / "species_tree"
+    iq2mc_dir = species_tree / "mcmctree_parameter_estimation"
+    mcmctree_dir = species_tree / "mcmctree_main"
+    species_cds.mkdir(parents=True)
+    iq2mc_dir.mkdir(parents=True)
+    mcmctree_dir.mkdir(parents=True)
+    (species_cds / "Arabidopsis_thaliana_cds.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nATGAAA\n", encoding="utf-8"
+    )
+    inputs = {
+        "iq2mc.mcmctree.ctl": "outfile = iq2mc.mcmctree.out\nRootAge = <1\nBDparas = 1 1 0.5\n",
+        "iq2mc.mcmctree.hessian": "verified hessian\n",
+        "iq2mc.rooted.nwk": "((a,b)'B(0.1,0.2,0.025,0.025)',c);\n",
+        "iq2mc.dummy.phy": "3 4\na ACGT\nb ACGT\nc ACGT\n",
+    }
+    for name, content in inputs.items():
+        (iq2mc_dir / name).write_text(content, encoding="utf-8")
+    (mcmctree_dir / "FigTree.tre").write_text(
+        "Species tree for FigTree\n", encoding="utf-8"
+    )
+    (mcmctree_dir / "iq2mc.mcmctree.out").write_text(
+        "Species tree for FigTree\n", encoding="utf-8"
+    )
+
+    completed = _run_core(
+        tmp_path,
+        {
+            "artifact_stale_policy": "rebuild",
+            "input_sequence_mode": "cds",
+            "run_orthofinder": "0",
+            "species_tree_output_storage": "files",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "Regenerating only the invalid MCMCtree stage" in completed.stdout
+    assert "(a:0.1,(b:0.2,c:0.3):0.4);" in (
+        mcmctree_dir / "FigTree.tre"
+    ).read_text(encoding="utf-8")
+    assert (iq2mc_dir / "iq2mc.mcmctree.hessian").read_text(encoding="utf-8") == inputs[
+        "iq2mc.mcmctree.hessian"
+    ]
+
+
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_refuses_orthofinder_when_species_tree_lacks_input_species(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
@@ -1767,3 +1868,93 @@ def test_genome_evolution_omark_auto_downloads_database_and_summarizes_results(t
 
     omamer_db_paths = (tmp_path / "capture" / "omamer_db_paths.txt").read_text(encoding="utf-8").splitlines()
     assert omamer_db_paths == [str(runtime_db)]
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("surviving_file", ["iq2mc.mcmctree.out", "FigTree.tre"])
+def test_genome_evolution_recovers_legacy_mcmctree_before_required_output_check(tmp_path, surviving_file):
+    workspace = tmp_path / "workspace"
+    species_cds = workspace / "input" / "species_cds"
+    directory = workspace / "output" / "species_tree" / "mcmctree_main"
+    species_cds.mkdir(parents=True)
+    directory.mkdir(parents=True)
+    (species_cds / "Arabidopsis_thaliana_cds.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nATGAAA\n", encoding="utf-8"
+    )
+    original = "Species tree for FigTree\n(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    (directory / surviving_file).write_text(original)
+    settings = {"artifact_stale_policy": "stop", "input_sequence_mode": "cds",
+                "run_orthofinder": "0", "species_tree_output_storage": "files"}
+    result = _run_core(tmp_path, settings)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Restoring derived output" in result.stdout + result.stderr
+    assert (directory / surviving_file).read_text() == original
+    assert (directory / "FigTree.tre").is_file()
+    assert (directory / "iq2mc.mcmctree.out").is_file()
+    before = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
+    result = _run_core(tmp_path, settings)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Restoring derived output" not in result.stdout + result.stderr
+    assert before == {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("native", [False, True])
+def test_genome_evolution_recovers_conversion_sidecars_without_rerunning_dating(tmp_path, native):
+    workspace = tmp_path / "workspace"
+    species_cds = workspace / "input" / "species_cds"
+    directory = workspace / "output" / "species_tree" / "mcmctree_main"
+    species_cds.mkdir(parents=True)
+    directory.mkdir(parents=True)
+    (species_cds / "Arabidopsis_thaliana_cds.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nATGAAA\n", encoding="utf-8"
+    )
+    figtree = "Species tree for FigTree\n(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    if native:
+        figtree = "#NEXUS\nBEGIN TREES;\nUTREE tree_1 = [&R] (a:0.1,(b:0.2,c:0.3):0.4);\nEND;\n"
+    (directory / "FigTree.tre").write_text(figtree)
+    dated = "(a:0.1,(b:0.2,c:0.3)s2:0.4)s1;\n"
+    (directory / "dated_species_tree.nwk").write_text(dated)
+    result = _run_core(tmp_path, {
+        "artifact_stale_policy": "stop", "input_sequence_mode": "cds",
+        "run_orthofinder": "0", "species_tree_output_storage": "files",
+    })
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (directory / "dated_species_tree.nwk").read_text() == dated
+    assert (directory / "mcmctree_95CI.nwk").read_text() == "(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    assert (directory / "mcmctree_no95CI.nwk").is_file()
+    summary = directory.parent / "species_tree_summary" / "dated_species_tree.nwk"
+    assert summary.read_text() == dated
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+def test_genome_evolution_completes_interrupted_figtree_contract_migration(tmp_path):
+    import json
+
+    workspace = tmp_path / "workspace"
+    species_cds = workspace / "input" / "species_cds"
+    directory = workspace / "output" / "species_tree" / "mcmctree_main"
+    parameters = directory.parent / "mcmctree_parameter_estimation"
+    species_cds.mkdir(parents=True)
+    directory.mkdir(parents=True)
+    parameters.mkdir()
+    (species_cds / "Arabidopsis_thaliana_cds.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nATGAAA\n"
+    )
+    for name in ("iq2mc.mcmctree.ctl", "iq2mc.mcmctree.hessian", "iq2mc.rooted.nwk", "iq2mc.dummy.phy"):
+        (parameters / name).write_text("historical input\n")
+    figtree = "Species tree for FigTree\n(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    (directory / "FigTree.tre").write_text(figtree)
+    (directory / "iq2mc.mcmctree.out").write_text(figtree)
+    settings = {"artifact_stale_policy": "stop", "input_sequence_mode": "cds",
+                "run_orthofinder": "0", "species_tree_output_storage": "files"}
+    first = _run_core(tmp_path, settings)
+    assert first.returncode == 0, first.stdout + first.stderr
+    manifest = workspace / "output" / "artifact_provenance" / "genome_evolution" / "species_tree.mcmctree.json"
+    payload = json.loads(manifest.read_text())
+    payload["outputs"] = [entry for entry in payload["outputs"] if entry["label"] != "figtree"]
+    manifest.write_text(json.dumps(payload))
+    second = _run_core(tmp_path, settings)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "figtree" in {entry["label"] for entry in json.loads(manifest.read_text())["outputs"]}
+    assert (directory / "FigTree.tre").read_text() == figtree

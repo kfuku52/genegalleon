@@ -25,6 +25,12 @@ Accepted query-file forms are:
 
 See [Input Conventions](input-conventions.md) for concrete examples.
 
+Family-scoped materialization checks a live filename's family before reading
+its metadata or content. Other families' transient provenance files and shared
+lockfiles cannot abort a selected family's restoration. Archived records retain
+their explicit family identity; corruption or unreadability of a selected
+artifact remains an error rather than being silently skipped.
+
 ## Main per-family outputs
 
 If the input file is `workspace/input/query_gene/2_WOX`, the main outputs are
@@ -145,6 +151,10 @@ Storage conversion and controlled failed-run cleanup may archive an incomplete
 family without marking it complete. Before a rerun starts, GeneGalleon
 materializes only that family's archived artifacts at their historical paths,
 preserves their mtimes, and then applies the normal stage skip/staleness tests.
+ZIP headers represent years 1980–2107; timestamps outside that range are clamped
+only in the ZIP header. The manifest retains the original nanosecond mtime for
+restoration. Publication stays inside the reader lock so maintenance cannot
+commit a newer result before an older restored snapshot is published.
 Consequently, a legacy run converted after MAFFT, for example, can resume from
 the later stages instead of starting over. A controlled failure records
 `failed`, removes unchanged materialized copies, and archives new or changed
@@ -162,28 +172,27 @@ raw-to-ZIP conversion without rewriting every archive member first.
 The other output subdirectories do not have to contain every expected family.
 For example, files for completed families can be moved from a partially
 complete `mafft/` directory into ZIP storage while incomplete-family files
-remain live. Array tasks archive in batches controlled by
-`GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES` (default `100`); the progress
-summary flushes smaller completed batches.
+remain live. Each array task records its own output inventory and queues a
+storage request. The progress summary collects bounded batches; array-task exit
+never scans the whole output tree or rewrites shared ZIPs. Live outputs remain
+readable until collection succeeds. Run progress summaries regularly during large
+arrays to reclaim space; no collector is started in the background.
 
-Gene-family tasks hold a shared lock for their family while they may read or
-write live outputs. Lock files use 16 fixed hash stripes, so lock
-metadata itself cannot grow with the number of families. Archive maintenance
-takes only the relevant buckets exclusively and nonblockingly: an active
-family is skipped while completed families in other buckets can still be
-archived. A separate reader-maintenance lock prevents a ZIP shard from being
-replaced while a downstream reader has it open.
+See [large-array ZIP collection](gene-family-array-archive-queue.md) for commands,
+batching limits, diagnostics, upgrade requirements and recovery procedures.
+`GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES` remains a deprecated compatibility
+setting and does not control collection.
 
-The bounded internal metadata under `.gg_store/` costs at most 16 family-lock
-files, 16 state-lock files, 256 family-index JSON files, and 256 state-index
-JSON files, plus a small number of global/per-subdirectory files. Existing stores
-created by an older build can remove unused 256-way lock files with
-`optimize-metadata` after every job using that output root has stopped.
+Gene-family tasks use independent family locks, distributed across 256 directories,
+and a shared gate for offline maintenance. Lock/inventory metadata grows with
+family count; short state updates retain 16 lock stripes and 256 state-index files.
+Family indexes retain 256 buckets. Stop all workspace jobs before upgrading from
+the old striped family-lock layout; do not mix runtimes using the two protocols.
 
-Immutable shards are compacted automatically before the number of referenced
-shards in one logical subdirectory becomes large. Index updates and obsolete
-shard reclamation are committed one subdirectory at a time, bounding peak
-space during archive and compaction. A durable update marker makes readers
+The collector creates immutable ZIP shards outside the store-wide exclusive lock,
+then commits their indexes and removes verified sources under that lock. It does
+not compact existing shards. Run explicit `compact` or `finalize` maintenance
+after the array completes. A durable update marker makes readers
 fail closed if a process stops between updates to the denormalized index
 views; `repair` then rebuilds every view from the ZIP manifests. Family-bucket
 and subdirectory indexes, plus an epoch used to invalidate long-lived reader
@@ -218,7 +227,7 @@ Archives are ordinary, visible ZIP files. While a run is active, immutable
 parts are stored under
 `<gene-family-root>/archives/<subdirectory>/<subdirectory>.part-NNNNNN.zip`.
 Once an orthogroup catalog is fully complete and no family task holds a lock,
-progress-summary maintenance consolidates each logical output set once into
+explicit `finalize` maintenance can consolidate each logical output set into
 `<gene-family-root>/<subdirectory>.zip` and removes its parts. Raw-to-ZIP
 conversion writes previously raw subdirectories directly to this finalized
 layout, in parallel up to `--workers`, rather than creating parts and then
@@ -236,8 +245,8 @@ visible parts below `archives/`. The logical reader overlays the parts on the
 base, and an explicit `finalize` safely rebuilds the single ZIP when desired.
 GeneGalleon writes `README_GENE_FAMILY_OUTPUTS.txt` and `ARCHIVE_STATUS.tsv`
 at the output root so a user browsing with Finder, FileZilla, or `ls` can see
-where each logical output set is stored. Only locks, indexes, tombstones, and
-transaction markers remain hidden under `.gg_store/`.
+where each logical output set is stored. Inventories, pending requests, indexes, tombstones, and
+transaction markers remain hidden under `.gg_store/`; locks live in `.gg_store_locks/`.
 Rows whose ZIP storage also has visible overrides or shared files use a
 `+live` storage suffix (for example `finalized+live`) and report the live count
 separately.
@@ -252,7 +261,9 @@ redundant recompression. Configure routine workflow archiving with:
 - `GG_COMMON_GENE_FAMILY_FINAL_ZIP_MAX_BYTES=0..` (`0` keeps the one-final-ZIP behavior)
 
 `store` prioritizes packing files into a small number of inodes over reducing
-bytes. Worker concurrency is deliberately capped at four to avoid an
+bytes. Compression levels apply to each streamed DEFLATE member during both
+initial archiving and compaction; level `0` uses uncompressed DEFLATE blocks.
+Worker concurrency is deliberately capped at four to avoid an
 unbounded burst of metadata and read traffic on a shared filesystem.
 
 ### Adding, replacing, and deleting files manually
@@ -261,15 +272,21 @@ Do not edit `*.zip` in place. The archive manifest intentionally detects
 direct ZIP edits as an error.
 
 To add or replace an artifact, put it at its historical path. A live file
-always overrides the archived version:
+always overrides the archived version when it and its output directory are
+regular filesystem entries. Symlinked files and directories do not count as
+live overrides. ZIP writers reject symlinked destinations and ancestors.
+For example, replace a regular live file with:
 
 ```bash
 cp replacement.tsv \
   workspace/output/query2family/stat_branch/2_WOX_stat.branch.tsv
 ```
 
-`ARCHIVE_STATUS.tsv` is a snapshot rather than a filesystem watcher. After
-manual `cp`, `mv`, or `rm` operations, refresh its live-file counts with:
+`ARCHIVE_STATUS.tsv` is a snapshot rather than a filesystem watcher; its file
+modification time is the snapshot publication time. Per-task `enqueue-family`
+does not refresh it or scan the whole store. `drain-queue` refreshes it once
+after its bounded batches. After individual task
+completions or manual `cp`, `mv`, or `rm` operations, refresh its counts once with:
 
 ```bash
 bash workflow/gg_gene_family_archive.sh refresh-status \
@@ -318,6 +335,11 @@ bash workflow/gg_gene_family_archive.sh restore \
   --path stat_branch/2_WOX_stat.branch.tsv
 ```
 
+Deletion and restoration through historical dotted names and current underscore
+names share one ordered history. The newest delete or undelete wins across both
+names, including during purge. If restoration fails, the previous deletion stays
+in effect even when it was recorded under the other name.
+
 Consolidate the current base and parts into one ordinary ZIP per logical
 subdirectory only while the affected gene-family jobs are stopped:
 
@@ -364,10 +386,22 @@ bash workflow/gg_gene_family_archive.sh repair \
   --progress-interval 10
 ```
 
+Repair restores the generation counter from ZIP manifest generations and deletion
+history, retaining a higher existing counter. Missing counters also account for
+compaction generations, which may exceed every member's original generation.
+This prevents later writes from reusing an existing ZIP generation. Empty, zero,
+negative, or malformed counters stop normal writes; explicit repair rebuilds
+them from verified ZIP manifests and deletion history.
+
+Repair also checks finalized ZIP identities retained in readable family or
+subdirectory indexes. If one of those ZIPs is missing or corrupt, repair stops
+before replacing the indexes; restore the ZIP bytes before retrying. Repair
+reconstructs metadata from valid ZIPs, not damaged ZIP contents.
+
 Add `--remove-orphans` only after reviewing the reported orphan paths.
 Both explicit `repair` and `finalize` commands emit the same periodic progress
-fields as conversion. The orthogroup finalization automatically triggered by
-`gg_progress_summary` does so as well.
+fields as conversion. The orthogroup finalization triggered by explicit
+`archive-completed` does so as well.
 
 ### Converting an existing workspace
 

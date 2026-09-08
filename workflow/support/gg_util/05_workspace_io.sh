@@ -387,6 +387,22 @@ _gg_atomic_copy_one() (
 	trap - EXIT HUP INT TERM
 )
 
+_gg_record_family_output() {
+    [[ -n "${GG_FAMILY_OUTPUT_INVENTORY:-}" ]] || return 0
+    local path=$1
+    [[ "${path}" == /* ]] || path="${PWD}/${path}"
+    case "${path}" in
+      "${GG_FAMILY_OUTPUT_ROOT}/"*)
+        path="${path#"${GG_FAMILY_OUTPUT_ROOT}/"}"
+        ;;
+      "${GG_FAMILY_OUTPUT_CANONICAL_ROOT:-${GG_FAMILY_OUTPUT_ROOT}}/"*)
+        path="${path#"${GG_FAMILY_OUTPUT_CANONICAL_ROOT:-${GG_FAMILY_OUTPUT_ROOT}}/"}" ;;
+      *) return 0 ;;
+    esac
+    # Per-process journals avoid concurrent NFS appends; record before publishing.
+    printf '%s\0' "${path}" >> "${GG_FAMILY_OUTPUT_INVENTORY}/${BASHPID:-$$}.paths" || return 1
+}
+
 cp_out() {
 	if [[ $# -eq 1 ]]; then
 		if [[ -p /dev/stdin ]]; then
@@ -444,51 +460,24 @@ mv_out() {
 	else
 		ensure_parent_dir "${dest}"
 	fi
+    local source_index source destination
+    for ((source_index = 1; source_index < $#; source_index++)); do
+        source=${!source_index}
+        destination=${dest}
+        if [[ -d "${dest}" || "${dest}" == */ ]]; then
+            destination="${dest%/}/$(basename -- "${source}")"
+        fi
+        _gg_record_family_output "${destination}" || return 1
+    done
 	mv -- "$@"
 }
 
 _gg_publish_lock_acquire() {
-	local lock_dir=$1
-	local description=$2
-	local poll_seconds
-	local timeout_seconds
-	local stale_seconds
-	local wait_started
-	local wait_logged=0
-	poll_seconds=$(gg_lock_poll_seconds)
-	timeout_seconds=$(gg_lock_acquire_timeout_seconds)
-	stale_seconds=$(gg_lock_stale_seconds)
-	wait_started=$(date +%s)
-	ensure_parent_dir "${lock_dir}" || return 1
-	while true; do
-		if mkdir -- "${lock_dir}" 2>/dev/null; then
-			return 0
-		fi
-		local now_epoch
-		local lock_mtime
-		now_epoch=$(date +%s)
-		lock_mtime=$(gg_stat_mtime_epoch "${lock_dir}")
-		if [[ "${lock_mtime}" =~ ^[0-9]+$ ]] && (( now_epoch - lock_mtime >= stale_seconds )); then
-			if rmdir -- "${lock_dir}" 2>/dev/null; then
-				echo "Recovered stale publication lock: ${description}" >&2
-				continue
-			fi
-		fi
-		if [[ ${wait_logged} -eq 0 ]]; then
-			echo "Waiting for publication lock: ${description}" >&2
-			wait_logged=1
-		fi
-		if (( now_epoch - wait_started >= timeout_seconds )); then
-			echo "Timed out waiting for publication lock: ${description}" >&2
-			return 1
-		fi
-		sleep "${poll_seconds}"
-	done
+	gg_shared_lock_acquire "$1" "$2"
 }
 
 _gg_publish_lock_release() {
-	local lock_dir=$1
-	rmdir -- "${lock_dir}"
+	gg_shared_lock_release "$1"
 }
 
 mv_out_bundle() (
@@ -511,8 +500,10 @@ mv_out_bundle() (
 	local -a publish_attempted=()
 	local -a bundle_lock_paths=()
 	local -a bundle_acquired_paths=()
+	local -a bundle_lock_heartbeat_pids=()
 	local argument_index pair_index previous_index source destination parent basename token canonical_source canonical_destination lock_path swap_path
 	local pair_count=$(( $# / 2 ))
+	local LC_ALL=C
 	for ((argument_index = 1; argument_index <= $#; argument_index += 2)); do
 		source=${!argument_index}
 		pair_index=$(( argument_index + 1 ))
@@ -547,6 +538,7 @@ mv_out_bundle() (
 		destinations+=("${destination}")
 		canonical_sources+=("${canonical_source}")
 		canonical_destinations+=("${canonical_destination}")
+        _gg_record_family_output "${canonical_destination}" || return 1
 	done
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
 		for ((previous_index = 0; previous_index < pair_count; previous_index++)); do
@@ -556,7 +548,7 @@ mv_out_bundle() (
 			fi
 		done
 	done
-	token="$$.${RANDOM}"
+	token="${BASHPID:-$$}.${RANDOM}"
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
 		destination=${destinations[pair_index]}
 		parent=$(dirname -- "${destination}")
@@ -588,9 +580,11 @@ mv_out_bundle() (
 	_mv_out_bundle_release_lock() {
 		local release_index
 		for ((release_index = ${#bundle_acquired_paths[@]} - 1; release_index >= 0; release_index--)); do
+			gg_shared_lock_stop_heartbeat "${bundle_lock_heartbeat_pids[release_index]:-}"
 			_gg_publish_lock_release "${bundle_acquired_paths[release_index]}" || true
 		done
 		bundle_acquired_paths=()
+		bundle_lock_heartbeat_pids=()
 	}
 	_mv_out_bundle_rollback() {
 		local rollback_index
@@ -641,6 +635,8 @@ mv_out_bundle() (
 			return 1
 		fi
 		bundle_acquired_paths+=("${lock_path}")
+		gg_shared_lock_start_heartbeat "${lock_path}"
+		bundle_lock_heartbeat_pids+=("${GG_SHARED_LOCK_HEARTBEAT_PID:-}")
 	done
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
 		if [[ -e "${destinations[pair_index]}" || -L "${destinations[pair_index]}" ]]; then
@@ -742,9 +738,10 @@ remove_empty_subdirs() {
 		sub_directories+=( "${d}" )
 	done < <(find "${dir_main}" -mindepth 1 -maxdepth 1 -type d -print0)
 	for d in "${sub_directories[@]}"; do
-		if [[ -z "$(find "${d}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
-			echo "${echo_header}deleting ${d}"
-				rm -rf -- "${d}"
+		# Check emptiness and remove in one filesystem operation. A concurrent
+		# publisher must never lose files written after a separate empty check.
+		if rmdir -- "${d}" 2>/dev/null; then
+			echo "${echo_header}deleted empty directory ${d}"
 		fi
 	done
 	echo ""
@@ -803,4 +800,22 @@ gg_entrypoint_activate_container_runtime() {
 gg_entrypoint_enter_workspace() {
 	mkdir -p "${gg_workspace_dir}"
 	cd "${gg_workspace_dir}" || exit 1
+}
+
+# Map only disposable computation directories; shared plans and receipts stay put.
+gg_task_tmp_path() {
+  local original=$1
+  if [[ "${GG_COMMON_TMP_ROOT:-workspace}" == workspace ]]; then
+    printf '%s\n' "${original}"
+  elif [[ -z "${GG_TMP_TASK_ROOT:-}" ]]; then
+    echo "External scratch requires the GeneGalleon entrypoint supervisor." >&2
+    return 1
+  else
+    local relative="${original#"${gg_workspace_dir%/}/"}"
+    if [[ "${relative}" == /* || "/${relative}/" == */../* ]]; then
+      echo "Temporary path is outside the workspace: ${original}" >&2
+      return 1
+    fi
+    printf '%s/%s\n' "${GG_TMP_TASK_ROOT}" "${relative}"
+  fi
 }

@@ -380,8 +380,9 @@ def annotate_representative_genes(df_gc_original_quartile, args):
     tmp_query_fasta = "tmp.query.fasta"
     tmp_query_list = "tmp.query.txt"
     tmp_search_out = "tmp.{}.out.tsv".format(method)
-    if os.path.exists(tmp_query_fasta):
-        os.remove(tmp_query_fasta)
+    for path in (tmp_query_fasta, tmp_query_list, tmp_search_out):
+        if os.path.islink(path) or os.path.isfile(path):
+            os.remove(path)
     with open(tmp_query_fasta, "w"):
         pass
     cols = ["geneid_" + str(val) for val in args.gene_size_quantiles.split(",")]
@@ -389,7 +390,7 @@ def annotate_representative_genes(df_gc_original_quartile, args):
     query_ids = [str(x) for x in raw_query_ids if pandas.notna(x) and str(x) != ""]
     numpy.savetxt(tmp_query_list, query_ids, fmt="%s")
     species_protein_files = get_species_protein_files(args.dir_species_protein)
-    if (not os.path.exists(tmp_search_out)) and (len(query_ids) > 0):
+    if len(query_ids) > 0:
         print("Generating {}".format(tmp_search_out))
         for species_protein_file in species_protein_files:
             species_protein_path = os.path.join(args.dir_species_protein, species_protein_file)
@@ -485,17 +486,15 @@ def prepare_annotation(args):
         sys.exit(1)
 
     quartile_path = "tmp.Orthogroups.GeneCount.quartile_genes.tsv"
-    if os.path.exists(quartile_path):
-        print("Loading: {}".format(quartile_path))
-        df_gc_original_quartile = pandas.read_csv(quartile_path, header=0, sep="\t", low_memory=False)
-    else:
-        print("Generating {}".format(quartile_path))
-        file_og_in = os.path.join(args.dir_orthofinder_og, "Orthogroups.tsv")
-        df_og_original = pandas.read_csv(file_og_in, header=0, sep="\t", low_memory=False)
-        file_genecount_in = os.path.join(args.dir_orthofinder_og, "Orthogroups.GeneCount.tsv")
-        df_gc_original = pandas.read_csv(file_genecount_in, header=0, sep="\t", low_memory=False)
-        df_gc_original_quartile = get_df_gc_original(df_og_original, df_gc_original, fx2tab, args)
-        df_gc_original_quartile.to_csv(quartile_path, sep="\t", index=False)
+    if os.path.islink(quartile_path) or os.path.isfile(quartile_path):
+        os.remove(quartile_path)
+    print("Generating {}".format(quartile_path))
+    file_og_in = os.path.join(args.dir_orthofinder_og, "Orthogroups.tsv")
+    df_og_original = pandas.read_csv(file_og_in, header=0, sep="\t", low_memory=False)
+    file_genecount_in = os.path.join(args.dir_orthofinder_og, "Orthogroups.GeneCount.tsv")
+    df_gc_original = pandas.read_csv(file_genecount_in, header=0, sep="\t", low_memory=False)
+    df_gc_original_quartile = get_df_gc_original(df_og_original, df_gc_original, fx2tab, args)
+    df_gc_original_quartile.to_csv(quartile_path, sep="\t", index=False)
     df_gc_original_annotated = annotate_representative_genes(df_gc_original_quartile, args)
     df_gc_original_annotated.to_csv(file_genecount_annot, sep="\t", index=False)
     return file_genecount_annot
@@ -608,13 +607,16 @@ def plot_gene_number(args, df_gc_original, df_gc):
 def remove_tmp_files(paths=ORTHOGROUP_SELECTION_TMP_FILES):
     for tmp_file in paths:
         tmp_path = Path(tmp_file)
-        if not tmp_path.exists() or not tmp_path.is_file():
+        if not tmp_path.is_symlink() and not tmp_path.is_file():
             continue
         print("Removing: {}".format(tmp_path))
         tmp_path.unlink()
 
 
 def run(args):
+    # Interrupted runs can leave derived tables behind. They are not keyed by
+    # their inputs, so never reuse them on a later invocation.
+    remove_tmp_files()
     file_genecount_in = prepare_annotation(args)
     df_gc_original, df_gc, sp_cols = select_orthogroups(args, file_genecount_in)
     print_selection_stats(args, df_gc_original, df_gc, sp_cols)

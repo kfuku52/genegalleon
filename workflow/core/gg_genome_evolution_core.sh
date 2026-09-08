@@ -49,6 +49,9 @@ orthofinder_core_filters="${orthofinder_core_filters:-busco_complete_pct:ge:80,n
 orthofinder_core_rank="${orthofinder_core_rank:-num_seq:asc,busco_complete_pct:desc}"
 orthofinder_core_method="${orthofinder_core_method:-max-pd}"
 orthofinder_algorithm_threads="${orthofinder_algorithm_threads:-auto}"
+orthofinder_memory_gb_per_thread="${orthofinder_memory_gb_per_thread:-4}"
+genome_parallel_jobs="${genome_parallel_jobs:-auto}"
+genome_parallel_memory_gb_per_job="${genome_parallel_memory_gb_per_job:-2}"
 run_busco_dupaware_extract_fasta="${run_busco_dupaware_extract_fasta:-0}"
 run_busco_dupaware_mafft="${run_busco_dupaware_mafft:-0}"
 run_busco_dupaware_trimal="${run_busco_dupaware_trimal:-0}"
@@ -1579,6 +1582,18 @@ extract_scaled_mcmctree_figtree() {
     --direction "up"
 }
 
+validate_mcmctree_figtree() {
+  local infile=$1
+  python "${gg_support_dir}/mcmctree_time_scale.py" \
+    validate-figtree \
+    --infile "${infile}"
+}
+
+extract_mcmctree_conversion_inputs() {
+  python "${gg_support_dir}/mcmctree_time_scale.py" \
+    conversion-inputs --infile "$1" --outdir "$2"
+}
+
 mcmctree_requires_bdparas_flag() {
   local probe_dir
   local probe_stdout
@@ -2277,7 +2292,7 @@ dir_concat_fasta="${dir_species_tree}/concatenated_alignment"
 dir_concat_iqtree_dna="${dir_species_tree}/concatenated_iqtree_dna"
 dir_concat_iqtree_pep="${dir_species_tree}/concatenated_iqtree_pep"
 dir_mcmctree2="${dir_species_tree}/mcmctree_main"
-dir_tmp="${dir_species_tree}/tmp"
+dir_tmp=$(gg_task_tmp_path "${dir_species_tree}/tmp") || exit 1
 dir_nwkit_download_dir="${gg_workspace_downloads_dir}/nwkit_downloads"
 
 species_tree_managed_directory_paths=(
@@ -2384,7 +2399,7 @@ species_tree_archive_managed_directories() {
 }
 
 # Orthogroup
-dir_sp_protein="${gg_workspace_downloads_dir}/tmp/species_protein"
+dir_sp_protein=$(gg_task_tmp_path "${gg_workspace_downloads_dir}/tmp/species_protein") || exit 1
 dir_orthofinder="${gg_workspace_output_dir}/orthofinder"
 dir_orthofinder_og="${dir_orthofinder}/Orthogroups"
 dir_orthofinder_filtered="${dir_orthofinder}/Orthogroups_filtered"
@@ -2585,8 +2600,19 @@ if [[ "${species_tree_output_storage}" == "zip" ]]; then
 fi
 refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
 refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}" || exit $?
-memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
-memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_TASK_CPUS}")
+GG_GENOME_PARALLEL_JOBS=${GG_TASK_CPUS}
+if [[ "${genome_parallel_jobs}" != "auto" ]]; then
+  if [[ ! "${genome_parallel_jobs}" =~ ^[0-9]+$ || ${genome_parallel_jobs} -lt 1 ]]; then
+    echo "genome_parallel_jobs must be auto or a positive integer." >&2
+    exit 2
+  fi
+  [[ ${genome_parallel_jobs} -lt ${GG_GENOME_PARALLEL_JOBS} ]] && GG_GENOME_PARALLEL_JOBS=${genome_parallel_jobs}
+fi
+genome_parallel_memory_cap=$(gg_memory_parallel_job_cap "${GG_MEM_TOOL_GB}" "${genome_parallel_memory_gb_per_job}") || exit 2
+[[ ${genome_parallel_memory_cap} -lt ${GG_GENOME_PARALLEL_JOBS} ]] && GG_GENOME_PARALLEL_JOBS=${genome_parallel_memory_cap}
+echo "Genome per-gene parallelism: jobs=${GG_GENOME_PARALLEL_JOBS}, tool_memory=${GG_MEM_TOOL_GB}G"
+memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_GENOME_PARALLEL_JOBS}")
+memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_GENOME_PARALLEL_JOBS}")
 iqtree_full_mem_args=(-mem "${GG_MEM_TOOL_GB}G")
 iqtree_parallel_mem_args=(-mem "${memory_iqtree_parallel}G")
 
@@ -2739,7 +2765,7 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
   }
   mapfile -t busco_batch_raw_files < <(find "${busco_batch_raw_dir}" -maxdepth 1 -type f -name '*.raw.fa' | sort)
   for busco_batch_raw_file in "${busco_batch_raw_files[@]}"; do
-    wait_until_jobn_le "${GG_TASK_CPUS}"
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     finalize_species_tree_busco_fasta "${busco_batch_raw_file}" &
     gg_background_register "$!"
   done
@@ -2830,7 +2856,7 @@ if [[ ${individual_mafft_needs_update} -eq 1 && ${run_individual_mafft} -eq 1 ]]
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_fasta}" "${single_copy_fasta_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_mafft "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -2895,7 +2921,7 @@ if [[ ${individual_trimal_needs_update} -eq 1 && ${run_individual_trimal} -eq 1 
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_mafft}" "${single_copy_aln_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_trimal "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -3220,7 +3246,7 @@ if [[ ${individual_iqtree_pep_needs_update} -eq 1 && ${run_individual_iqtree_pep
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}" "${single_copy_trimal_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_iqtree_pep "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -3369,7 +3395,7 @@ if [[ ${individual_iqtree_dna_needs_update} -eq 1 && ${run_individual_iqtree_dna
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_single_copy_trimal}" "*.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_iqtree_dna "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -3817,6 +3843,29 @@ fi
 task="IQ2MC step 3 (MCMCtree dating run)"
 disable_if_no_input_file "run_mcmctree2" "${file_iq2mc_ctl}" "${file_iq2mc_hessian}" "${file_iq2mc_rooted_tree}" "${file_iq2mc_dummy_phy}"
 mcmctree_needs_update=0
+mcmctree_cached_tree_contract_invalid=0
+for mcmctree_cached_tree in "${file_mcmctree_figtree_tre}" "${file_mcmctree_raw_output}"; do
+  if [[ -e "${mcmctree_cached_tree}" ]] && ! validate_mcmctree_figtree "${mcmctree_cached_tree}" >/dev/null 2>&1; then
+    echo "Cached MCMCtree output contains no FigTree Newick tree: ${mcmctree_cached_tree}" >&2
+    mcmctree_cached_tree_contract_invalid=1
+  fi
+done
+if [[ ${mcmctree_cached_tree_contract_invalid} -eq 1 ]]; then
+  case "${artifact_stale_policy:-stop}" in
+    rebuild)
+      echo "Regenerating only the invalid MCMCtree stage and its dependent outputs because artifact_stale_policy=rebuild."
+      ;;
+    stop|reuse)
+      echo "Invalid cached MCMCtree output cannot be reused. No artifact files were modified." >&2
+      echo "Set artifact_stale_policy=rebuild to regenerate the MCMCtree stage from its verified inputs." >&2
+      exit 3
+      ;;
+    *)
+      echo "Invalid artifact_stale_policy=${artifact_stale_policy:-}; expected stop, reuse, or rebuild." >&2
+      exit 2
+      ;;
+  esac
+fi
 gg_artifact_contract_init mcmctree_provenance_args "species_tree_mcmctree" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.mcmctree.json"
 mcmctree_provenance_args+=(
   --input "control=${file_iq2mc_ctl}"
@@ -3828,7 +3877,37 @@ mcmctree_provenance_args+=(
   --parameter "print=1"
   --parameter "time_scale=automatic_safe_iq2mc_unit"
 )
-gg_artifact_prepare_stage mcmctree_needs_update run_mcmctree2 "${mcmctree_provenance_args[@]}" || exit $?
+# Only public-unit artifacts are recovery sources. Never use the internal
+# scaled working directory, or overwrite a present (possibly corrupt) output.
+mcmctree_recovery_dir=""
+if [[ ${mcmctree_cached_tree_contract_invalid} -eq 0 ]]; then
+  if [[ -s "${file_mcmctree_raw_output}" ]]; then
+    mcmctree_recovery_dir=$(mktemp -d "${dir_tmp%/}/mcmctree-recovery.XXXXXX")
+    if ! extract_scaled_mcmctree_figtree "${file_mcmctree_raw_output}" "${mcmctree_recovery_dir}/FigTree.tre" 1; then
+      rm -rf -- "${mcmctree_recovery_dir}"
+      exit 1
+    fi
+    mcmctree_provenance_args+=(--recover-output "figtree=${mcmctree_recovery_dir}/FigTree.tre")
+  elif [[ ! -e "${file_mcmctree_raw_output}" && ! -L "${file_mcmctree_raw_output}" && -s "${file_mcmctree_figtree_tre}" && ! -e "${genome_evolution_provenance_dir}/species_tree.mcmctree.json" ]]; then
+    mcmctree_recovery_dir=$(mktemp -d "${dir_tmp%/}/mcmctree-recovery.XXXXXX")
+    {
+      echo "GeneGalleon recovered this public summary from the existing FigTree artifact."
+      echo "Historical execution parameters and raw MCMCTree output are unknown."
+      cat "${file_mcmctree_figtree_tre}"
+    } > "${mcmctree_recovery_dir}/summary.out"
+    mcmctree_provenance_args+=(--recover-output "public_raw_summary=${mcmctree_recovery_dir}/summary.out")
+  fi
+fi
+mcmctree_prepare_status=0
+gg_artifact_prepare_stage mcmctree_needs_update run_mcmctree2 "${mcmctree_provenance_args[@]}" || mcmctree_prepare_status=$?
+if [[ -n "${mcmctree_recovery_dir}" ]]; then
+  rm -rf -- "${mcmctree_recovery_dir}"
+fi
+[[ ${mcmctree_prepare_status} -eq 0 ]] || exit "${mcmctree_prepare_status}"
+if [[ ${mcmctree_cached_tree_contract_invalid} -eq 1 ]]; then
+  mcmctree_needs_update=1
+  run_mcmctree2=1
+fi
 if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_mcmctree2}"
@@ -3888,21 +3967,6 @@ else
   gg_step_skip "${task}"
 fi
 
-if [[ ! -s "${genome_evolution_provenance_dir}/species_tree.mcmctree.json" && ! -s "${file_mcmctree_figtree_tre}" && -s "${file_mcmctree_raw_output}" ]]; then
-  echo "Backfilling legacy ${file_mcmctree_figtree_tre} from ${file_mcmctree_raw_output} before provenance adoption."
-  awk '
-  /Species tree for FigTree/ {print; in_figtree=1; next}
-  in_figtree && /^\(\(/ {print; count++; if (count >= 3) exit}
-  ' "${file_mcmctree_raw_output}" > "tmp.mcmctree2.txt"
-  if [[ -s "tmp.mcmctree2.txt" ]]; then
-    mv_out "tmp.mcmctree2.txt" "${file_mcmctree_figtree_tre}"
-  fi
-  if [[ ! -s "${file_mcmctree_figtree_tre}" ]]; then
-    echo "Warning: Failed to extract FigTree content from ${file_mcmctree_raw_output}. Copying raw file instead."
-    cp_out "${file_mcmctree_raw_output}" "${file_mcmctree_figtree_tre}"
-  fi
-fi
-
 task="Convert tree format"
 disable_if_no_input_file "run_convert_tree_format" "${file_mcmctree_figtree_tre}"
 convert_tree_needs_update=0
@@ -3915,31 +3979,32 @@ convert_tree_provenance_args+=(
   --output "tree_without_ci=${dir_mcmctree2}/mcmctree_no95CI.nwk"
   --parameter "internal_node_labels=sequential_s"
 )
-gg_artifact_prepare_stage convert_tree_needs_update run_convert_tree_format "${convert_tree_provenance_args[@]}" || exit $?
+convert_tree_recovery_dir=""
+if [[ -s "${file_mcmctree_dated_nwk}" ]]; then
+  convert_tree_recovery_dir=$(mktemp -d "${dir_tmp%/}/mcmctree-conversion-recovery.XXXXXX")
+  if [[ -s "${file_mcmctree_figtree_tre}" ]]; then
+    if ! extract_mcmctree_conversion_inputs "${file_mcmctree_figtree_tre}" "${convert_tree_recovery_dir}"; then
+      rm -rf -- "${convert_tree_recovery_dir}"
+      exit 1
+    fi
+    convert_tree_provenance_args+=(
+      --recover-output "tree_with_ci=${convert_tree_recovery_dir}/mcmctree_95CI.nwk"
+      --recover-output "tree_without_ci=${convert_tree_recovery_dir}/mcmctree_no95CI.nwk"
+    )
+  fi
+  convert_tree_provenance_args+=(--recover-output "dated_tree_summary=${file_mcmctree_dated_nwk}")
+fi
+convert_tree_prepare_status=0
+gg_artifact_prepare_stage convert_tree_needs_update run_convert_tree_format "${convert_tree_provenance_args[@]}" || convert_tree_prepare_status=$?
+if [[ -n "${convert_tree_recovery_dir}" ]]; then
+  rm -rf -- "${convert_tree_recovery_dir}"
+fi
+[[ ${convert_tree_prepare_status} -eq 0 ]] || exit "${convert_tree_prepare_status}"
 if [[ ${convert_tree_needs_update} -eq 1 && ${run_convert_tree_format} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_parent_dir "${file_mcmctree_dated_nwk}"
 
-  if grep -q -e "UTREE" "${file_mcmctree_figtree_tre}"; then
-    grep -e "UTREE" "${file_mcmctree_figtree_tre}" |
-      sed -e "s/.*UTREE 1 = //" -e "s/;.*/;/" \
-        > "${dir_mcmctree2}/mcmctree_95CI.nwk"
-
-    grep -e "UTREE" "${file_mcmctree_figtree_tre}" |
-      sed -e "s/.*UTREE 1 = //" -e "s/;.*/;/" -e "s/[[:space:]]*\[&95%={[0-9.]*,[[:space:]][0-9.]*}\][[:space:]]*//g" -e "s/:[[:space:]]/:/g" \
-        > "${dir_mcmctree2}/mcmctree_no95CI.nwk"
-  else
-    tree_line="$(awk '/^\(\(/ {line=$0} END {print line}' "${file_mcmctree_figtree_tre}")"
-    if [[ -n "${tree_line}" ]]; then
-      echo "${tree_line}" > "${dir_mcmctree2}/mcmctree_95CI.nwk"
-      echo "${tree_line}" |
-        sed -e "s/[[:space:]]*\[&95%={[0-9.]*,[[:space:]][0-9.]*}\][[:space:]]*//g" -e "s/:[[:space:]]/:/g" \
-          > "${dir_mcmctree2}/mcmctree_no95CI.nwk"
-    else
-      echo "Error: Failed to detect a tree string in ${file_mcmctree_figtree_tre}"
-      rm -f -- "${dir_mcmctree2}/mcmctree_95CI.nwk" "${dir_mcmctree2}/mcmctree_no95CI.nwk"
-    fi
-  fi
+  extract_mcmctree_conversion_inputs "${file_mcmctree_figtree_tre}" "${dir_mcmctree2}" || exit $?
 
   if [[ -s "${dir_mcmctree2}/mcmctree_no95CI.nwk" ]]; then
     Rscript -e "library(ape); t=read.tree(\"${dir_mcmctree2}/mcmctree_no95CI.nwk\"); \
@@ -4043,6 +4108,16 @@ orthofinder_provenance_args+=(
 )
 gg_artifact_prepare_stage orthofinder_needs_update run_orthofinder "${orthofinder_provenance_args[@]}" || exit $?
 if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then
+  orthofinder_public_dir="${dir_orthofinder}"
+  orthofinder_stage_parent=$(mktemp -d "${dir_tmp}/orthofinder.publish.XXXXXX")
+  dir_orthofinder="${orthofinder_stage_parent}/orthofinder"
+  dir_orthofinder_og="${dir_orthofinder}/Orthogroups"
+  dir_orthofinder_hog2og="${dir_orthofinder}/hog2og"
+  file_orthofinder_done_marker="${dir_orthofinder_hog2og}/README.txt"
+  file_orthofinder_core_candidates="${dir_orthofinder}/orthofinder_core_species.candidates.tsv"
+  file_orthofinder_core_selected="${dir_orthofinder}/orthofinder_core_species.selected.tsv"
+  file_orthofinder_core_selected_list="${dir_orthofinder}/orthofinder_core_species.selected_files.txt"
+  file_orthofinder_core_species_tree="${dir_orthofinder}/species_tree_core.nwk"
   dir_sp_protein_orthofinder="${dir_sp_protein}_orthofinder"
   gg_step_start "${task}"
   prepare_species_protein_tmp
@@ -4051,7 +4126,8 @@ if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then
   ensure_dir "${dir_orthofinder_hog2og}"
 
   if [[ "${orthofinder_algorithm_threads}" == "auto" ]]; then
-    orthofinder_algorithm_threads=${GG_TASK_CPUS}
+    orthofinder_algorithm_threads=$((GG_TASK_CPUS / 8))
+    [[ ${orthofinder_algorithm_threads} -lt 1 ]] && orthofinder_algorithm_threads=1
   elif [[ ! "${orthofinder_algorithm_threads}" =~ ^[0-9]+$ || ${orthofinder_algorithm_threads} -lt 1 ]]; then
     echo "Invalid orthofinder_algorithm_threads=${orthofinder_algorithm_threads}; expected auto or a positive integer." >&2
     exit 1
@@ -4059,6 +4135,11 @@ if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then
   if [[ ${orthofinder_algorithm_threads} -gt ${GG_TASK_CPUS} ]]; then
     echo "Capping orthofinder_algorithm_threads=${orthofinder_algorithm_threads} at GG_TASK_CPUS=${GG_TASK_CPUS}."
     orthofinder_algorithm_threads=${GG_TASK_CPUS}
+  fi
+  orthofinder_memory_cap=$(gg_memory_parallel_job_cap "${GG_MEM_TOOL_GB}" "${orthofinder_memory_gb_per_thread}") || exit 2
+  if [[ ${orthofinder_algorithm_threads} -gt ${orthofinder_memory_cap} ]]; then
+    echo "Capping OrthoFinder analysis threads at ${orthofinder_memory_cap} for ${GG_MEM_TOOL_GB}G tool memory."
+    orthofinder_algorithm_threads=${orthofinder_memory_cap}
   fi
   param_species_tree=()
   species_tree=""
@@ -4334,8 +4415,20 @@ PY
       echo "OrthoFinder core/main output files were expected but not found after completion."
       exit 1
     fi
-    mv_out "${orthofinder_all_outputs[@]}" "${dir_orthofinder}"
-    mv_out "${orthofinder_core_outputs[@]}" "${dir_orthofinder}/core"
+    orthofinder_publication_pairs=()
+    for orthofinder_output in "${orthofinder_all_outputs[@]}"; do
+      orthofinder_publication_pairs+=(
+        "${orthofinder_output}"
+        "${dir_orthofinder}/${orthofinder_output##*/}"
+      )
+    done
+    for orthofinder_output in "${orthofinder_core_outputs[@]}"; do
+      orthofinder_publication_pairs+=(
+        "${orthofinder_output}"
+        "${dir_orthofinder}/core/${orthofinder_output##*/}"
+      )
+    done
+    mv_out_bundle "${orthofinder_publication_pairs[@]}"
     shopt -s nullglob
     orthofinder_result_dirs=("${dir_orthofinder}/core/Results_"*)
     shopt -u nullglob
@@ -4373,7 +4466,14 @@ PY
       echo "OrthoFinder main output files were expected but not found after completion."
       exit 1
     fi
-    mv_out "${orthofinder_main_outputs[@]}" "${dir_orthofinder}"
+    orthofinder_publication_pairs=()
+    for orthofinder_output in "${orthofinder_main_outputs[@]}"; do
+      orthofinder_publication_pairs+=(
+        "${orthofinder_output}"
+        "${dir_orthofinder}/${orthofinder_output##*/}"
+      )
+    done
+    mv_out_bundle "${orthofinder_publication_pairs[@]}"
     rm -rf -- "${dir_orthofinder}/main"
   fi
 
@@ -4419,6 +4519,16 @@ PY
     fi
     exit 1
   fi
+  mv_out_bundle "${dir_orthofinder}" "${orthofinder_public_dir}"
+  rmdir -- "${orthofinder_stage_parent}" 2>/dev/null || true
+  dir_orthofinder="${orthofinder_public_dir}"
+  dir_orthofinder_og="${dir_orthofinder}/Orthogroups"
+  dir_orthofinder_hog2og="${dir_orthofinder}/hog2og"
+  file_orthofinder_done_marker="${dir_orthofinder_hog2og}/README.txt"
+  file_orthofinder_core_candidates="${dir_orthofinder}/orthofinder_core_species.candidates.tsv"
+  file_orthofinder_core_selected="${dir_orthofinder}/orthofinder_core_species.selected.tsv"
+  file_orthofinder_core_selected_list="${dir_orthofinder}/orthofinder_core_species.selected_files.txt"
+  file_orthofinder_core_species_tree="${dir_orthofinder}/species_tree_core.nwk"
   echo "OrthoFinder finished successfully."
   gg_artifact_record "${orthofinder_provenance_args[@]}"
 else
@@ -4773,7 +4883,7 @@ if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta}
   }
   mapfile -t genome_busco_batch_raw_files < <(find "${genome_busco_batch_raw_dir}" -maxdepth 1 -type f -name '*.raw.fa' | sort)
   for genome_busco_batch_raw_file in "${genome_busco_batch_raw_files[@]}"; do
-    wait_until_jobn_le "${GG_TASK_CPUS}"
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     finalize_genome_busco_fasta "${genome_busco_batch_raw_file}" &
     gg_background_register "$!"
   done
@@ -4876,7 +4986,7 @@ if [[ ${busco_mafft_needs_update} -eq 1 && ${run_busco_dupaware_mafft} -eq 1 ]];
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_fasta}" "${genome_busco_fasta_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_mafft "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -4936,7 +5046,7 @@ if [[ ${busco_trimal_needs_update} -eq 1 && ${run_busco_dupaware_trimal} -eq 1 ]
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_mafft}" "${genome_busco_aln_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     run_trimal "${input_alignment_file}" &
     gg_background_register "$!"
   done
@@ -4993,7 +5103,7 @@ if [[ ${busco_iqtree_dna_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_dna}
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}" "*.busco.trimal.fa.gz")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_iqtree_dna "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_dna}" &
     gg_background_register "$!"
   done
@@ -5057,7 +5167,7 @@ if [[ ${busco_iqtree_pep_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_pep}
   mapfile -t input_alignment_files < <(gg_find_file_basenames "${dir_busco_trimal}" "${genome_busco_trimal_glob}")
   echo "Number of input alignments: ${#input_alignment_files[@]}"
   for input_alignment_file in "${input_alignment_files[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_iqtree_pep "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_pep}" &
     gg_background_register "$!"
   done
@@ -5091,7 +5201,7 @@ if [[ ${busco_notung_dna_needs_update} -eq 1 && ${run_busco_dupaware_notung_root
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_dna}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le $((${GG_TASK_CPUS} / 2))
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_notung "${infile}" "${dir_busco_iqtree_dna}" "${dir_busco_notung_dna}" &
     gg_background_register "$!"
   done
@@ -5124,7 +5234,7 @@ if [[ ${busco_notung_pep_needs_update} -eq 1 && ${run_busco_dupaware_notung_root
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_pep}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le $((${GG_TASK_CPUS} / 2))
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_notung "${infile}" "${dir_busco_iqtree_pep}" "${dir_busco_notung_pep}" &
     gg_background_register "$!"
   done
@@ -5157,7 +5267,7 @@ if [[ ${busco_root_dna_needs_update} -eq 1 && ${run_busco_dupaware_root_dna} -eq
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_dna}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_dna}" "${dir_busco_iqtree_dna}" "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}" &
     gg_background_register "$!"
   done
@@ -5189,7 +5299,7 @@ if [[ ${busco_root_pep_needs_update} -eq 1 && ${run_busco_dupaware_root_pep} -eq
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_pep}")
   for infile in "${infiles[@]}"; do
-    wait_until_jobn_le ${GG_TASK_CPUS}
+    wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
     busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_pep}" "${dir_busco_iqtree_pep}" "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}" &
     gg_background_register "$!"
   done

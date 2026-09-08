@@ -1,0 +1,11 @@
+# Build-only additions to the common runtime package set.
+build-essential
+cmake
+gfortran
+libboost-dev
+libbpp-phyl-dev
+libcurl4-openssl-dev
+libeigen3-dev
+libssl-dev
+libxml2-dev
+pkg-config

@@ -168,7 +168,8 @@ fi
 input_generation_root="${gg_workspace_output_dir}/input_generation"
 input_generation_tmp_root="${input_generation_root}/tmp"
 input_generation_provenance_dir="${input_generation_root}/artifact_provenance"
-download_tmp_root="${input_generation_tmp_root}"
+download_tmp_root=$(gg_task_tmp_path "${input_generation_tmp_root}") || exit 1
+ensure_dir "${download_tmp_root}"
 dir_species_summary_shards="${input_generation_tmp_root}/species_summary_shards"
 dir_task_stats_shards="${input_generation_tmp_root}/task_stats_shards"
 dir_task_meta_shards="${input_generation_tmp_root}/task_meta_shards"
@@ -868,8 +869,10 @@ run_format_stage_single() {
   if [[ -n "${input_dir}" ]]; then
     cmd+=(--input-dir "${input_dir}")
   fi
-  if [[ ${format_force_overwrite} -eq 1 ]]; then
+  if [[ ${overwrite} -eq 1 ]]; then
     cmd+=(--overwrite)
+  elif [[ ${format_force_overwrite} -eq 1 ]]; then
+    cmd+=(--overwrite-formatted)
   fi
   if [[ ${strict} -eq 1 ]]; then
     cmd+=(--strict)
@@ -1122,7 +1125,7 @@ run_cds_fx2tab_for_one_file() {
 
   ensure_dir "${species_cds_fx2tab_dir}"
   rm -f -- "${file_sp_cds_fx2tab}"
-  tmp_fx2tab_tsv=$(mktemp "${input_generation_tmp_root}/fx2tab.${species_name}.XXXXXX.tsv")
+  tmp_fx2tab_tsv=$(mktemp "${download_tmp_root}/fx2tab.${species_name}.XXXXXX.tsv")
   if seqkit fx2tab \
     --threads "${GG_TASK_CPUS:-1}" \
     --length \
@@ -1306,7 +1309,7 @@ run_species_busco_for_one_file() {
   fi
   remove_busco_outputs_for_species "${species_busco_full_dir}" "${species_name}" "*busco.full.tsv"
   remove_busco_outputs_for_species "${species_busco_short_dir}" "${species_name}" "*busco.short.txt"
-  busco_work_root=$(mktemp -d "${input_generation_tmp_root}/busco.${species_name}.XXXXXX")
+  busco_work_root=$(mktemp -d "${download_tmp_root}/busco.${species_name}.XXXXXX")
   busco_input_fasta="${busco_work_root}/input.fasta"
   busco_output_dir="${busco_work_root}/busco_tmp"
   seqkit seq --threads "${busco_threads}" "${seq_full}" --out-file "${busco_input_fasta}"

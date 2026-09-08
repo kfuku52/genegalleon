@@ -83,18 +83,21 @@ git_clone_ref() {
 
   rm -rf -- "${dest}"
   if [[ -z "${ref}" ]]; then
-    git clone --depth 1 --recursive "${url}" "${dest}" >/dev/null
+    if ! git clone --depth 1 --recursive "${url}" "${dest}" >/dev/null; then
+      return 1
+    fi
     return 0
   fi
 
-  mkdir -p "${dest}"
-  git -C "${dest}" init -q
-  git -C "${dest}" remote add origin "${url}"
-  git -C "${dest}" fetch --depth 1 origin "${ref}" >/dev/null
-  git -C "${dest}" checkout -q --detach FETCH_HEAD
+  mkdir -p "${dest}" || return 1
+  git -C "${dest}" init -q || return 1
+  git -C "${dest}" remote add origin "${url}" || return 1
+  git -C "${dest}" fetch --depth 1 origin "${ref}" >/dev/null || return 1
+  git -C "${dest}" checkout -q --detach FETCH_HEAD || return 1
   if [[ -f "${dest}/.gitmodules" ]]; then
-    git -C "${dest}" submodule update --init --recursive >/dev/null
+    git -C "${dest}" submodule update --init --recursive >/dev/null || return 1
   fi
+  return 0
 }
 
 fetch_from_source() {

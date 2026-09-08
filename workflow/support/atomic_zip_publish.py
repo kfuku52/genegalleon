@@ -83,6 +83,8 @@ def publish_zip(
     if destination.is_symlink():
         raise ZipPublishError(f"Symlinked ZIP destinations are unsupported: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    source_location = source.resolve(strict=True)
+    destination_location = destination.resolve(strict=False)
     source_signature = _signature(source)
     temporary = destination.parent / (
         f".{destination.name}.partial.{os.getpid()}.{uuid.uuid4().hex}"
@@ -130,7 +132,7 @@ def publish_zip(
             raise ZipPublishError(f"Source ZIP changed while being published: {source}")
         os.replace(temporary, destination)
         _fsync_directory(destination.parent)
-        if remove_source and source.absolute() != destination.absolute():
+        if remove_source and source_location != destination_location:
             source.unlink()
             _fsync_directory(source.parent)
         return destination

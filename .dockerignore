@@ -6,3 +6,12 @@ workflow/*
 workflow/support/*
 !workflow/support/treevis/
 !workflow/support/treevis/**
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/*.pyc
+**/*.pyo
+**/.DS_Store
+**/*.swp
+**/*.swo
+**/*~

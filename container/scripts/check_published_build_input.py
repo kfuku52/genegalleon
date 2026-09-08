@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Compare published multi-architecture image labels with expected build inputs."""
+"""Compare published multi-architecture image labels with exact expectations."""
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -10,6 +12,21 @@ BUILD_INPUT_LABEL = "io.genegalleon.build-input"
 REVISION_LABEL = "org.opencontainers.image.revision"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 GIT_REVISION_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def platform_mapping(image_payload: object) -> object:
+    """Normalize Buildx's single-platform and multi-platform JSON shapes."""
+    if not isinstance(image_payload, dict):
+        return image_payload
+    operating_system = image_payload.get("os")
+    architecture = image_payload.get("architecture")
+    if isinstance(operating_system, str) and isinstance(architecture, str):
+        platform = f"{operating_system}/{architecture}"
+        variant = image_payload.get("variant")
+        if isinstance(variant, str) and variant:
+            platform = f"{platform}/{variant}"
+        return {platform: image_payload}
+    return image_payload
 
 
 def parse_expected(values: list[str]) -> dict[str, str]:
@@ -26,11 +43,31 @@ def parse_expected(values: list[str]) -> dict[str, str]:
     return expected
 
 
+def parse_expected_values(values: list[str]) -> dict[str, str]:
+    expected: dict[str, str] = {}
+    for value in values:
+        platform, separator, label_value = value.partition("=")
+        if (
+            not separator
+            or not platform
+            or not label_value
+            or any(ord(character) < 32 or ord(character) == 127 for character in label_value)
+        ):
+            raise ValueError(f"Expected label value must use PLATFORM=VALUE: {value!r}")
+        if platform in expected:
+            raise ValueError(f"Duplicate expected platform: {platform}")
+        expected[platform] = label_value
+    if not expected:
+        raise ValueError("At least one expected label value is required.")
+    return expected
+
+
 def compare_build_inputs(
     image_payload: object,
     expected: dict[str, str],
     label: str = BUILD_INPUT_LABEL,
 ) -> list[str]:
+    image_payload = platform_mapping(image_payload)
     if not isinstance(image_payload, dict):
         return ["Published image metadata is not a platform mapping."]
 
@@ -52,7 +89,36 @@ def compare_build_inputs(
     return problems
 
 
+def compare_label_values(
+    image_payload: object,
+    expected: dict[str, str],
+    label: str,
+) -> list[str]:
+    image_payload = platform_mapping(image_payload)
+    if not isinstance(image_payload, dict):
+        return ["Published image metadata is not a platform mapping."]
+
+    problems: list[str] = []
+    for platform, expected_value in sorted(expected.items()):
+        image = image_payload.get(platform)
+        if not isinstance(image, dict):
+            problems.append(f"Published image is missing platform {platform}.")
+            continue
+        config = image.get("config")
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        observed = labels.get(label) if isinstance(labels, dict) else None
+        if not isinstance(observed, str) or not observed:
+            problems.append(f"Published image {platform} lacks a valid {label} label.")
+        elif observed != expected_value:
+            problems.append(
+                f"Published image {platform} {label} changed: "
+                f"published={observed} expected={expected_value}."
+            )
+    return problems
+
+
 def common_revision(image_payload: object, platforms: list[str]) -> tuple[str | None, list[str]]:
+    image_payload = platform_mapping(image_payload)
     if not isinstance(image_payload, dict):
         return None, ["Published image metadata is not a platform mapping."]
 
@@ -98,6 +164,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expected build-input label for one platform; repeat for every platform.",
     )
     mode.add_argument(
+        "--expected-value",
+        action="append",
+        metavar="PLATFORM=VALUE",
+        help="Expected exact non-empty label value for one platform; repeat as needed.",
+    )
+    mode.add_argument(
         "--print-common-revision",
         action="append",
         metavar="PLATFORM",
@@ -124,12 +196,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        expected = parse_expected(args.expected)
+        if args.expected_value:
+            expected = parse_expected_values(args.expected_value)
+        else:
+            expected = parse_expected(args.expected)
     except ValueError as exc:
         print(f"Published image build-input comparison failed: {exc}", file=sys.stderr)
         return 1
 
-    problems = compare_build_inputs(image_payload, expected, label=args.label)
+    if args.expected_value:
+        problems = compare_label_values(image_payload, expected, label=args.label)
+    else:
+        problems = compare_build_inputs(image_payload, expected, label=args.label)
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)

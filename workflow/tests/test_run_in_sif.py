@@ -81,3 +81,35 @@ def test_run_in_sif_rejects_relative_extra_bind(tmp_path):
 
     assert completed.returncode == 1
     assert "Invalid GENEGALLEON_SIF_EXTRA_BINDS path" in completed.stderr
+
+
+def test_run_in_sif_rejects_comma_delimited_extra_bind(tmp_path):
+    runtime_dir = tmp_path / "bin"
+    _fake_runtime(runtime_dir / "apptainer")
+    sif = tmp_path / "genegalleon.sif"
+    sif.touch()
+    extra = tmp_path / "first,second"
+    extra.mkdir()
+    captured = tmp_path / "runtime-args.txt"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{runtime_dir}:/usr/bin:/bin",
+            "GENEGALLEON_SIF": str(sif),
+            "GENEGALLEON_SIF_EXTRA_BINDS": str(extra),
+            "GG_CAPTURE_ARGS": str(captured),
+        }
+    )
+
+    completed = subprocess.run(
+        ["/bin/bash", str(RUN_IN_SIF), "true"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 1
+    assert "Invalid GENEGALLEON_SIF_EXTRA_BINDS path" in completed.stderr
+    assert not captured.exists()

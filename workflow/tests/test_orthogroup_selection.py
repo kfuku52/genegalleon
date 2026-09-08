@@ -177,22 +177,104 @@ def test_attach_besthits_maps_gene_columns_without_repeated_merges():
     assert pandas.isna(out.loc[out["Orthogroup"] == "OG2", "besthit_0.75"].iloc[0])
 
 
-def test_annotation_search_handles_empty_existing_output(tmp_path, monkeypatch):
+def test_annotation_search_does_not_reuse_existing_output(tmp_path, monkeypatch):
     mod = load_module()
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "tmp.blastp.out.tsv").write_text("", encoding="utf-8")
+    (tmp_path / "tmp.blastp.out.tsv").write_text(
+        "g1\tstale hit\t1e-50\t200\n",
+        encoding="utf-8",
+    )
+    db_prefix = tmp_path / "uniprot"
+    for extension in (".pin", ".phr", ".psq"):
+        (tmp_path / ("uniprot" + extension)).write_text("db\n", encoding="utf-8")
+    calls = []
+
+    def fake_run_command(command, stdout_file=None, append=False, tool_name="tool", capture_output=False):
+        calls.append(command)
+        if command[0] == "blastp":
+            Path(command[command.index("-out") + 1]).write_text(
+                "g1\tfresh hit\t1e-20\t100\n",
+                encoding="utf-8",
+            )
+        return b""
+
+    monkeypatch.setattr(mod, "run_command", fake_run_command)
+    monkeypatch.setattr(mod, "get_species_protein_files", lambda _path: [])
     df_gc = pandas.DataFrame([{"Orthogroup": "OG1", "geneid_0.5": "g1"}])
     args = SimpleNamespace(
         annotation_search_method="blastp",
         gene_size_quantiles="0.5",
         dir_species_protein=str(tmp_path),
         ncpu=1,
-        path_search_db="dummy",
+        path_search_db=str(db_prefix),
         evalue="1e-2",
     )
     out = mod.annotate_representative_genes(df_gc, args)
     assert "besthit_0.5" in out.columns
-    assert out["besthit_0.5"].iloc[0] == ""
+    assert out["besthit_0.5"].iloc[0] == "fresh hit"
+    assert any(command[0] == "blastp" for command in calls)
+
+
+def test_prepare_annotation_does_not_reuse_stale_quartile_table(tmp_path, monkeypatch):
+    mod = load_module()
+    monkeypatch.chdir(tmp_path)
+    orthogroup_dir = tmp_path / "Orthogroups_filtered"
+    orthogroup_dir.mkdir()
+    pandas.DataFrame(
+        [{"Orthogroup": "OG_FRESH", "spA": "geneA"}]
+    ).to_csv(orthogroup_dir / "Orthogroups.tsv", sep="\t", index=False)
+    pandas.DataFrame(
+        [{"Orthogroup": "OG_FRESH", "spA": 1, "Total": 1}]
+    ).to_csv(
+        orthogroup_dir / "Orthogroups.GeneCount.tsv",
+        sep="\t",
+        index=False,
+    )
+    stale = tmp_path / "tmp.Orthogroups.GeneCount.quartile_genes.tsv"
+    pandas.DataFrame(
+        [{"Orthogroup": "OG_STALE", "spA": 1, "Total": 1}]
+    ).to_csv(stale, sep="\t", index=False)
+    monkeypatch.setattr(
+        mod,
+        "get_concatenated_fx2tab",
+        lambda _args: pandas.DataFrame([{"#id": "geneA", "length": 10}]),
+    )
+
+    def add_fresh_quantile(df_og, df_gc, _fx2tab, _args):
+        assert df_og["Orthogroup"].tolist() == ["OG_FRESH"]
+        result = df_gc.copy()
+        result["geneid_0.5"] = "geneA"
+        return result
+
+    monkeypatch.setattr(mod, "get_df_gc_original", add_fresh_quantile)
+    monkeypatch.setattr(
+        mod,
+        "annotate_representative_genes",
+        lambda frame, _args: frame.assign(**{"besthit_0.5": "fresh hit"}),
+    )
+    args = SimpleNamespace(
+        dir_orthofinder_og=str(orthogroup_dir),
+        gene_size_quantiles="0.5",
+    )
+
+    annotated_path = mod.prepare_annotation(args)
+
+    annotated = pandas.read_csv(annotated_path, sep="\t")
+    assert annotated["Orthogroup"].tolist() == ["OG_FRESH"]
+    refreshed_quartile = pandas.read_csv(stale, sep="\t")
+    assert refreshed_quartile["Orthogroup"].tolist() == ["OG_FRESH"]
+
+
+def test_remove_tmp_files_unlinks_dangling_symlink(tmp_path, monkeypatch):
+    mod = load_module()
+    monkeypatch.chdir(tmp_path)
+    dangling = tmp_path / "tmp.query.fasta"
+    dangling.symlink_to(tmp_path / "missing-target")
+
+    mod.remove_tmp_files()
+
+    assert not dangling.exists()
+    assert not dangling.is_symlink()
 
 
 def test_load_besthit_table_reads_only_first_two_columns(tmp_path):

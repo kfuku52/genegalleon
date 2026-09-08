@@ -52,13 +52,24 @@ gg_source_common_params_from_core() {
 
 gg_configure_python_pycacheprefix_from_core() {
   local default_pycache_prefix=""
+  local pycache_uid=""
 
   if [[ -n "${PYTHONPYCACHEPREFIX:-}" ]]; then
     return 0
   fi
 
-  default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache"
-  mkdir -p -- "${default_pycache_prefix}" 2>/dev/null || true
+  pycache_uid="$(id -u)" || return 1
+  default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache_${pycache_uid}"
+  if [[ -L "${default_pycache_prefix}" || ( -e "${default_pycache_prefix}" && ( ! -d "${default_pycache_prefix}" || ! -O "${default_pycache_prefix}" ) ) ]]; then
+    echo "Refusing unsafe Python bytecode cache path: ${default_pycache_prefix}" >&2
+    return 1
+  fi
+  (umask 077; mkdir -p -- "${default_pycache_prefix}") || return 1
+  if [[ -L "${default_pycache_prefix}" || ! -d "${default_pycache_prefix}" || ! -O "${default_pycache_prefix}" ]]; then
+    echo "Python bytecode cache path is not an owned directory: ${default_pycache_prefix}" >&2
+    return 1
+  fi
+  chmod 700 "${default_pycache_prefix}" || return 1
   export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"
 }
 
@@ -73,6 +84,8 @@ gg_bootstrap_core_runtime() {
   # Python user site again inside the core process so host ~/.local packages
   # cannot shadow the versions installed in the GeneGalleon image.
   export PYTHONNOUSERSITE=1
+  export GG_RESOURCE_OWNER_PID=${BASHPID}
+
 
   if [[ "${GG_CORE_COMMON_PARAMS_LOADED:-0}" -ne 1 ]]; then
     gg_source_common_params_from_core "${core_script_path}"

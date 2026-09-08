@@ -5,6 +5,8 @@
 # Host-side entrypoint path bootstrap lives in support/gg_entrypoint_bootstrap.sh
 # because this file is also sourced inside the container by core scripts.
 
+: "${GG_COMMON_TMP_ROOT:=workspace}" # workspace | env (execution-node TMPDIR) | absolute host directory.
+
 : "${GG_COMMON_GENETIC_CODE:=1}" # NCBI genetic code table ID used for translation/ORF-related steps.
 : "${GG_COMMON_BUSCO_LINEAGE:=eukaryota_odb12}" # Shared BUSCO lineage dataset default; override per workflow when a narrower lineage or auto inference is needed.
 : "${GG_COMMON_REFERENCE_SPECIES:=auto}" # Reference species, or "auto" to detect a model species from the dataset.
@@ -14,7 +16,7 @@
 : "${GG_COMMON_SPECIES_LABEL_REGEX:=}" # Optional regex for downstream tools that support parser-driven species extraction from nonstandard labels.
 : "${GG_COMMON_SPECIES_LABEL_MAP_TSV:=}" # Optional mapping table for downstream tools that support parser-driven species extraction.
 : "${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:=zip}" # zip|files|raw; raw is an alias for the historical files layout, while ZIP mode uses transparent per-subdirectory shards.
-: "${GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES:=100}" # Minimum live files per output subdirectory before an array task opportunistically creates a ZIP shard; progress summary flushes smaller completed batches.
+: "${GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES:=100}" # Deprecated compatibility setting; array tasks archive only their own family and progress summary flushes all completed outputs.
 : "${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION:=adaptive}" # adaptive stores already-compressed members and deflates other files; deflate or store forces one method for all artifact members.
 : "${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL:=6}" # Deflate level from 0 through 9; ignored for members stored without compression.
 : "${GG_COMMON_GENE_FAMILY_ZIP_WORKERS:=1}" # Bounded ZIP shard writers per subdirectory; valid range is 1 through 4.

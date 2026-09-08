@@ -10,6 +10,9 @@ GeneGalleon wrappers are designed so the same `gg_*_entrypoint.sh` can be run:
 The wrapper normalizes host/scheduler/runtime details first, then streams the matching
 `workflow/core/gg_*_core.sh` into the container shell.
 
+For disposable computation on `/tmp`, `/scratch`, or the execution node's `$TMPDIR`,
+see [Temporary computation storage](temporary-storage.md). The default stays in the workspace.
+
 ## High-level flow
 
 Typical execution path:
@@ -68,6 +71,7 @@ Inside the runtime, GeneGalleon consistently uses:
 
 - `GG_TASK_CPUS`
 - `GG_JOB_ID`
+- `GG_ARRAY_JOB_ID`
 - `GG_ARRAY_TASK_ID`
 - `GG_MEM_TOTAL_GB`
 - `GG_MEM_TOOL_GB`

@@ -1,4 +1,4 @@
-<!-- BEGIN KF AGENT POLICY: source=https://github.com/kfuku52/kf-agent-policy; version=5; sha256=6514955d4b37e0fc3fda64cff2d9be83e0672f43ab38d0f49ae68b2de287a98b -->
+<!-- BEGIN KF AGENT POLICY: source=https://github.com/kfuku52/kf-agent-policy; version=9; sha256=03e7ad2c21924fa609040d9176d1a9c3a7f0c6785f2efe97dfe03e48be13411e -->
 # Common agent policy
 
 Repository-specific instructions override these defaults.
@@ -17,17 +17,21 @@ Repository-specific instructions override these defaults.
   testing compatibility.
 - Interface, option, format, filename, or schema changes must update all
   producers, consumers, tests, examples, and documentation.
-- Keep each repository's top-level README concise: do not add feature-specific
-  guides or extended examples. Put them in dedicated documentation or the wiki,
-  linking from the README only when needed for discoverability.
+- Keep top-level READMEs concise and retain useful visuals inline. Put
+  feature-specific guides and extended examples in dedicated documentation or
+  the wiki, linking only as needed.
+- Proactively use visuals when they improve understanding.
 - Changes confined to unpushed local commits need no backward compatibility.
 - Prefer verified root-cause fixes to fallbacks or relaxed validation that only
   hide failures. Document unavoidable workarounds and their removal conditions.
-- Run focused checks and, when practical, the standard suite. Directly exercise
-  affected behavior or rendered artifacts; report exactly what did and did not
-  run.
-- For performance work, benchmark representative workloads before and after,
-  verify equivalent output, and report wall time and peak memory when relevant.
+- When changing GitHub Actions, preserve required coverage and never execute
+  untrusted pull-request code on self-hosted runners.
+- Run checks appropriate to the change and all repository-required checks.
+  Directly verify affected behavior or artifacts; report what did and did not
+  run. After success, expand or repeat checks only for new changes, failures,
+  or unresolved concerns.
+- Performance claims require representative before-and-after measurements and
+  equivalent output.
 - Individual local commits need no version bump. Before GitHub pushes, bump the
   version even if unrequested, using the repository's scheme or Semantic
   Versioning (`MAJOR.MINOR.PATCH`) if absent.
@@ -48,40 +52,14 @@ Cryptographic hashes used only to verify downloaded artifacts, digest-pinned
 base images and GitHub Actions, and compatibility constraints with a documented
 demonstrated incompatibility are outside this rule.
 
-Use a GeneGalleon container runtime for workflow validation, integration tests, R helper checks, and toolchain-dependent behavior.
+Use a GeneGalleon container runtime for workflow integration, R helpers,
+and toolchain-dependent validation. For those changes, read
+[runtime validation](docs/agent-runtime-validation.md). Host syntax and narrow
+static checks are sufficient only when runtime dependencies do not matter;
+do not claim SIF compatibility from host or Docker results.
 
-On Linux/HPC hosts with Apptainer or Singularity, prefer the repository `genegalleon.sif` runtime.
-
-On macOS, where SIF execution is normally unavailable, use the Docker-backed GeneGalleon runtime instead. For validation of local code changes, prefer a Docker image built from the current repository rather than a stale public image:
-
-```bash
-BUILD_SIF=0 IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
-docker run --rm -i -v "$PWD:$PWD" -w "$PWD" local/genegalleon:dev python -m pytest -q workflow/tests/test_hgt_end_to_end.py
-docker run --rm -i -v "$PWD:$PWD" -w "$PWD" local/genegalleon:dev Rscript workflow/tests/test_treevis_main.R
-```
-
-GeneGalleon entrypoint wrappers can also dispatch through the Docker-backed singularity shim:
-
-```bash
-GG_CONTAINER_RUNTIME=docker \
-GG_CONTAINER_DOCKER_IMAGE=local/genegalleon:dev \
-bash workflow/gg_progress_summary_entrypoint.sh
-```
-
-Do not treat host-local Python, R, or command-line tool behavior as authoritative for GeneGalleon runtime compatibility. Host-local checks are acceptable for quick syntax or narrow static checks, but container-backed checks are the source of truth when dependencies matter.
-
-Preferred SIF validation entrypoint:
-
-```bash
-bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_end_to_end.py
-bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_treevis_main.R
-```
-
-If `genegalleon.sif` or an Apptainer/Singularity runtime is unavailable, report that clearly and do not conclude SIF compatibility from host-local results. If Docker is available, use Docker-backed container validation and report it as Docker/container validation rather than SIF validation. If no GeneGalleon container runtime is available, report that clearly and do not conclude runtime compatibility from host-local results.
-
-Do not add backward-compatibility workarounds for older dependency behavior.
-
-If the root cause is in a dependency program or package, do not patch GeneGalleon to absorb it. Report it as dependency-side so the dependency can be fixed or updated instead.
+Do not absorb dependency-side defects into GeneGalleon or add workarounds for
+older dependency behavior; identify and fix/update the owning dependency.
 
 # Core Workflow Architecture
 

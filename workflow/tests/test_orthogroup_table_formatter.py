@@ -73,3 +73,47 @@ def test_hog2og_long_cells_do_not_require_fixed_width_numpy_strings(tmp_path, mo
     assert gene_counts.loc[1, "spB"] == 1
     assert gene_counts.loc[1, "Total"] == 1
     assert unrelated_tmp.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_hog2og_preserves_numeric_gene_ids_and_removes_only_leading_prefix(tmp_path):
+    mod = load_module()
+    input_path = tmp_path / "Ntsv1.tsv"
+    out_dir = tmp_path / "Orthogroups"
+    pandas.DataFrame(
+        [
+            {
+                "OG": "OG0000001",
+                "HOG": "Ntsv1.HOGNtsv1.0000001",
+                "Gene Tree Parent Clade": "Ntsv1",
+                "numeric_species": 101,
+            },
+            {
+                "OG": "OG0000002",
+                "HOG": "HOGNtsv1.0000002",
+                "Gene Tree Parent Clade": "Ntsv1",
+                "numeric_species": "NA",
+            },
+        ]
+    ).to_csv(input_path, sep="\t", index=False)
+
+    mod.run(
+        SimpleNamespace(
+            file_orthogroup_table=str(input_path),
+            mode="hog2og",
+            dir_out=str(out_dir),
+        )
+    )
+
+    orthogroups = pandas.read_csv(
+        out_dir / "Orthogroups.tsv",
+        sep="\t",
+        dtype=str,
+        keep_default_na=False,
+    )
+    gene_counts = pandas.read_csv(out_dir / "Orthogroups.GeneCount.tsv", sep="\t")
+    assert orthogroups["Orthogroup"].tolist() == [
+        "HOGNtsv1.0000001",
+        "HOGNtsv1.0000002",
+    ]
+    assert orthogroups["numeric_species"].tolist() == ["101", "NA"]
+    assert gene_counts["numeric_species"].tolist() == [1, 1]

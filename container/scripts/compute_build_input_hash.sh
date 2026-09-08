@@ -43,8 +43,15 @@ if [[ $# -ne 1 || ! "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
   exit 2
 fi
 security_refresh_epoch="$1"
+build_target="${GG_BUILD_TARGET:-${BUILD_TARGET:-runtime}}"
+if [[ "${build_target}" != "runtime" && "${build_target}" != "development" ]]; then
+  echo "BUILD_TARGET must be runtime or development." >&2
+  exit 2
+fi
 
-platforms="${GG_BUILD_PLATFORMS:-${PLATFORMS:-linux/amd64,linux/arm64}}"
+# The image architecture is validated independently from Docker/SIF metadata.
+# Excluding the requested platform list lets each image from one multi-platform
+# Buildx invocation carry the same content-input identity.
 vcs_revision="${GG_BUILD_VCS_REF:-${vcs_ref:-unknown}}"
 version="${GG_BUILD_VERSION:-${gg_version:-unknown}}"
 notung_download_page="${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}"
@@ -88,15 +95,7 @@ cafe5_sha="${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba7
 
 context_digest="$(
   cd "${repo_root}"
-  {
-    printf '%s\n' \
-      .dockerignore \
-      container/Dockerfile \
-      container/pip-compatibility.requirements.txt \
-      container/source_branches.env
-    find container/env container/spec container/testdata container/scripts -type f -print
-    find workflow/support/treevis -type f -print
-  } | LC_ALL=C sort | while IFS= read -r path; do
+  python3 "${script_dir}/list_build_inputs.py" | while IFS= read -r path; do
     printf '%s\t%s\n' "${path}" "$(sha256_file "${path}")"
   done | sha256_stream
 )"
@@ -104,8 +103,8 @@ context_digest="$(
 {
   printf '%s\n' \
     "hash_mode=${hash_mode}" \
-    "context=${context_digest}" \
-    "platforms=${platforms}"
+    "build_target=${build_target}" \
+    "context=${context_digest}"
   if [[ "${hash_mode}" == "full" ]]; then
     printf '%s\n' \
       "vcs_ref=${vcs_revision}" \

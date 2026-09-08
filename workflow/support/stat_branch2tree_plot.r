@@ -40,6 +40,16 @@ parse_amino_acid_site_list = function(site_text) {
   return(selected_amino_acid_sites)
 }
 
+add_named_heatmap_column = function(g, args, df_trait, fill_label, gname) {
+  return(add_heatmap_column(
+    g,
+    args,
+    df_trait,
+    fill_label = fill_label,
+    gname = gname
+  ))
+}
+
 ensure_plot_topology_columns = function(b) {
   if (!('numerical_label' %in% colnames(b))) {
     numerical_label = suppressWarnings(as.integer(as.character(b[['branch_id']])))
@@ -272,7 +282,7 @@ for (col in unlist(args[grep("^panel", names(args))])) {
       df_trait = merge_replicates(trait_table = df_trait, replicate_sep = replicate_sep)
     }
     args[['trait_colors']] = get_trait_colors(ncol(df_trait), method = 'continuous')
-    g = add_heatmap_column(
+    g = add_named_heatmap_column(
       g,
       args,
       df_trait,

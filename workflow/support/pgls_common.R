@@ -410,21 +410,26 @@ fit_phylopars_lm_with_retries = function(formula_obj, trait_data, tree, model = 
   ))
 }
 
-escape_regex = function(x) {
-  gsub("([][{}()+*^$|\\\\.?])", "\\\\\\1", x)
-}
-
 expression_replicate_columns = function(column_names, expression_base, replicate_sep = "_") {
   column_names = as.character(column_names)
   expression_base = as.character(expression_base)
   if (!length(column_names) || !nzchar(expression_base)) {
     return(character(0))
   }
-  exact = column_names == expression_base
+  exact = !is.na(column_names) & column_names == expression_base
   if (is.null(replicate_sep) || is.na(replicate_sep) || replicate_sep == "") {
-    replicated = grepl(paste0("^", escape_regex(expression_base), "[0-9]+$"), column_names)
+    replicated = rep(FALSE, length(column_names))
   } else {
-    replicated = startsWith(column_names, paste0(expression_base, replicate_sep))
+    replicated = vapply(column_names, function(column_name) {
+      if (is.na(column_name)) {
+        return(FALSE)
+      }
+      parts = strsplit(column_name, replicate_sep, fixed = TRUE)[[1]]
+      length(parts) > 1 && identical(
+        paste(parts[-length(parts)], collapse = replicate_sep),
+        expression_base
+      )
+    }, logical(1))
   }
   column_names[exact | replicated]
 }
@@ -557,8 +562,14 @@ run_phylopars_regression = function(df_trait_exp, tree, trait_cols, expression_b
 
       if (!is.null(out_phylopars)) {
         cat('PGLS fit mode:', fit_mode, '\n')
-        for (stat in output_cols[1:6]) {
-          df_stat[i, stat] = out_phylopars[stat]
+        phylopars_stat_cols = intersect(
+          c('R2', 'R2adj', 'sigma', 'Fstat', 'pval', 'logLik'),
+          output_cols
+        )
+        for (stat in phylopars_stat_cols) {
+          if (stat %in% names(out_phylopars)) {
+            df_stat[i, stat] = out_phylopars[[stat]]
+          }
         }
         df_stat[i, 'AIC'] = AIC(out_phylopars)
         df_stat[i, 'BIC'] = BIC(out_phylopars)

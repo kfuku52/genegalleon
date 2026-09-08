@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+if [[ "${GG_CORE_SOURCE_ONLY:-0}" != "1" ]]; then
+  set -euo pipefail
+fi
 
 gg_core_bootstrap="/script/support/gg_core_bootstrap.sh"
 if [[ ! -s "${gg_core_bootstrap}" ]]; then
@@ -8,6 +10,7 @@ fi
 # shellcheck disable=SC1090
 source "${gg_core_bootstrap}"
 unset gg_core_bootstrap
+if [[ "${GG_CORE_SOURCE_ONLY:-0}" != "1" ]]; then
 gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 ### Start: Job-supplied configuration ###
@@ -65,6 +68,9 @@ classified_short_right_fastq_files=()
 classified_long_fastq_files=()
 classified_pacbio_fastq_files=()
 classified_ont_fastq_files=()
+getfastq_content_validated=0
+getfastq_content_validation_fingerprint=""
+fi
 
 # Named stage functions for gg_transcriptome_generation_core.sh.
 # This file is sourced by workflow/core/gg_transcriptome_generation_core.sh.
@@ -930,7 +936,9 @@ run_amalgkit_metadata_query() {
 }
 
 prepare_getfastq_outputs_for_public_fallback() {
-  ensure_dir "${dir_tmp}/getfastq"
+  # Keep public-original recovery isolated from amalgkit's potentially filtered
+  # resumable files so one completion manifest can never mix both sources.
+  ensure_dir "${dir_tmp}/getfastq_public_original"
 }
 
 stage_getfastq_outputs_for_resume() {
@@ -1014,8 +1022,10 @@ import csv
 import gzip
 import hashlib
 import json
+import math
 import os
 import pathlib
+import re
 import sys
 
 manifest_path = pathlib.Path(sys.argv[1])
@@ -1096,9 +1106,83 @@ def file_contract(raw_value):
     return {"path": value, "size": after.st_size, "sha256": digest.hexdigest()}
 
 
+def positive_number(value):
+    try:
+        numeric = float(value)
+        return math.isfinite(numeric) and numeric > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def stats_contract(run):
+    value = "{}/getfastq_stats.tsv".format(run)
+    relative = pathlib.PurePosixPath(value)
+    path = output_root.joinpath(*relative.parts)
+    try:
+        resolved = path.resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        raise SystemExit("Completed amalgkit run lacks getfastq statistics: {}".format(run))
+    if (
+        os.path.commonpath((str(output_root), str(resolved))) != str(output_root)
+        or path.is_symlink()
+        or resolved != path
+        or not path.is_file()
+        or path.stat().st_size == 0
+    ):
+        raise SystemExit("Completed amalgkit run has unsafe getfastq statistics: {}".format(run))
+    with path.open("rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    matching_rows = [
+        row for row in rows
+        if str(row.get("run", "") or "").strip() == run
+    ]
+    if len(matching_rows) != 1:
+        raise SystemExit("Completed amalgkit run has ambiguous getfastq statistics: {}".format(run))
+    row = matching_rows[0]
+    if not positive_number(row.get("num_written")) or not any(
+        positive_number(row.get(column_name))
+        for column_name in ("bp_fastp_in", "bp_rrna_in", "bp_contam_in")
+    ):
+        raise SystemExit("Completed amalgkit run has unusable getfastq statistics: {}".format(run))
+    before = path.stat()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    after = path.stat()
+    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+        raise SystemExit("getfastq statistics changed while binding: {}".format(run))
+    return {"path": value, "size": after.st_size, "sha256": digest.hexdigest()}
+
+
+def quarantine_unbound_fastqs(bound_paths):
+    for path in sorted(output_root.rglob("*.amalgkit.fastq.gz")):
+        if not path.is_file() and not path.is_symlink():
+            continue
+        relative = path.relative_to(output_root).as_posix()
+        if relative in bound_paths:
+            continue
+        counter = 0
+        while True:
+            suffix = ".not_in_completion_manifest"
+            if counter:
+                suffix += ".{}".format(counter)
+            backup = path.with_name(path.name + suffix)
+            if not backup.exists() and not backup.is_symlink():
+                break
+            counter += 1
+        os.replace(path, backup)
+        print("Quarantined FASTQ not referenced by current metadata: {}".format(backup))
+
+
 with manifest_path.open("rt", encoding="utf-8") as handle:
     manifest = json.load(handle)
-if manifest.get("status") != "complete" or not isinstance(manifest.get("runs"), list):
+if (
+    manifest.get("schema_version") != 3
+    or manifest.get("status") != "complete"
+    or manifest.get("read_source") is not None
+    or not isinstance(manifest.get("runs"), list)
+):
     raise SystemExit("amalgkit getfastq completion manifest is not complete: {}".format(manifest_path))
 with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
@@ -1112,26 +1196,64 @@ if len(expected_runs) != len(set(expected_runs)):
 bound_runs = []
 seen_runs = set()
 seen_paths = set()
+run_id_pattern = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 for entry in manifest["runs"]:
     if not isinstance(entry, dict):
         raise SystemExit("Completion manifest contains a non-object run entry: {}".format(manifest_path))
     run = str(entry.get("run", "") or "").strip()
-    files = entry.get("files")
-    if run == "" or run in seen_runs or entry.get("status") != "complete" or not isinstance(files, list) or not files:
+    layout = str(entry.get("layout", "") or "").strip().lower()
+    outputs = entry.get("outputs")
+    fingerprint = str(entry.get("fingerprint", "") or "").strip()
+    if (
+        run == ""
+        or run_id_pattern.fullmatch(run) is None
+        or run in seen_runs
+        or layout not in {"single", "paired"}
+        or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+        or not isinstance(outputs, list)
+        or not outputs
+    ):
         raise SystemExit("Completion manifest contains an incomplete or duplicate run: {}".format(run))
-    contracts = [file_contract(item) for item in files]
+    expected_names = (
+        ["{}.amalgkit.fastq.gz".format(run)]
+        if layout == "single"
+        else [
+            "{}_1.amalgkit.fastq.gz".format(run),
+            "{}_2.amalgkit.fastq.gz".format(run),
+        ]
+    )
+    output_names = []
+    for output in outputs:
+        if not isinstance(output, dict):
+            raise SystemExit("Completion manifest has an invalid output snapshot for run: {}".format(run))
+        output_names.append(str(output.get("name", "") or "").strip())
+    if sorted(output_names) != sorted(expected_names) or len(output_names) != len(set(output_names)):
+        raise SystemExit("Completion manifest output set differs from the run layout: {}".format(run))
+    contracts = [
+        file_contract("{}/{}".format(run, output_name))
+        for output_name in expected_names
+    ]
     paths = [item["path"] for item in contracts]
     if len(paths) != len(set(paths)) or any(path in seen_paths for path in paths):
         raise SystemExit("Completion manifest contains a duplicate FASTQ path for run: {}".format(run))
     seen_runs.add(run)
     seen_paths.update(paths)
-    bound_runs.append({"run": run, "status": "complete", "files": contracts})
+    bound_runs.append({
+        "run": run,
+        "status": "complete",
+        "files": contracts,
+        "stats": stats_contract(run),
+    })
 if sorted(seen_runs) != sorted(expected_runs):
     raise SystemExit("Completion manifest run IDs differ from metadata.")
+if manifest.get("run_count") != len(bound_runs):
+    raise SystemExit("Completion manifest run_count does not match its runs list.")
+quarantine_unbound_fastqs(seen_paths)
 
 bound_manifest = {
-    "schema_version": 2,
+    "schema_version": 4,
     "status": "complete",
+    "read_source": "amalgkit",
     "run_count": len(bound_runs),
     "runs": bound_runs,
 }
@@ -1160,6 +1282,7 @@ import csv
 import gzip
 import hashlib
 import json
+import math
 import os
 import pathlib
 import re
@@ -1171,7 +1294,20 @@ if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.st
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 with manifest_path.open("rt", encoding="utf-8") as handle:
     manifest = json.load(handle)
-if manifest.get("schema_version") != 2 or manifest.get("status") != "complete":
+schema_version = manifest.get("schema_version")
+legacy_public_original = (
+    schema_version == 3 and manifest.get("read_source") == "public-original"
+)
+if not (
+    manifest.get("status") == "complete"
+    and (
+        legacy_public_original
+        or (
+            schema_version == 4
+            and manifest.get("read_source") in {"amalgkit", "public-original"}
+        )
+    )
+):
     raise SystemExit("amalgkit getfastq completion manifest is not complete: {}".format(manifest_path))
 output_root = manifest_path.parent.resolve(strict=True)
 
@@ -1257,6 +1393,62 @@ def validate_file_contract(contract, run, seen_paths):
     seen_paths.add(value)
 
 
+def positive_number(value):
+    try:
+        numeric = float(value)
+        return math.isfinite(numeric) and numeric > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def validate_stats_contract(contract, run, seen_paths):
+    if not isinstance(contract, dict) or set(contract) != {"path", "size", "sha256"}:
+        raise SystemExit("Completion manifest has an invalid stats contract for run: {}".format(run))
+    value = str(contract.get("path", "") or "").strip()
+    expected_value = "{}/getfastq_stats.tsv".format(run)
+    expected_size = contract.get("size")
+    expected_sha256 = str(contract.get("sha256", "") or "")
+    if (
+        value != expected_value
+        or not isinstance(expected_size, int)
+        or expected_size <= 0
+        or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+        or value in seen_paths
+    ):
+        raise SystemExit("Completion manifest has an unsafe stats contract for run: {}".format(run))
+    path = output_root.joinpath(*pathlib.PurePosixPath(value).parts)
+    try:
+        resolved = path.resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        raise SystemExit("Completion manifest getfastq statistics are missing: {}".format(value))
+    if (
+        os.path.commonpath((str(output_root), str(resolved))) != str(output_root)
+        or path.is_symlink()
+        or resolved != path
+        or not path.is_file()
+    ):
+        raise SystemExit("Completion manifest getfastq statistics path changed: {}".format(value))
+    before = path.stat()
+    digest = hashlib.sha256(path.read_bytes())
+    after = path.stat()
+    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+        raise SystemExit("Completion manifest getfastq statistics changed while validating: {}".format(value))
+    if after.st_size != expected_size or digest.hexdigest() != expected_sha256:
+        raise SystemExit("Completion manifest getfastq statistics content contract changed: {}".format(value))
+    with path.open("rt", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    matching_rows = [row for row in rows if str(row.get("run", "") or "").strip() == run]
+    if len(matching_rows) != 1:
+        raise SystemExit("Completion manifest getfastq statistics are ambiguous for run: {}".format(run))
+    row = matching_rows[0]
+    if not positive_number(row.get("num_written")) or not any(
+        positive_number(row.get(column_name))
+        for column_name in ("bp_fastp_in", "bp_rrna_in", "bp_contam_in")
+    ):
+        raise SystemExit("Completion manifest getfastq statistics are unusable for quant: {}".format(run))
+    seen_paths.add(value)
+
+
 with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
     if "run" not in (reader.fieldnames or []):
@@ -1271,8 +1463,14 @@ if not isinstance(manifest_entries, list):
     raise SystemExit("Completion manifest lacks a runs list: {}".format(manifest_path))
 manifest_runs = []
 seen_paths = set()
+seen_stats_paths = set()
 for entry in manifest_entries:
-    if not isinstance(entry, dict) or set(entry) != {"run", "status", "files"}:
+    expected_entry_keys = (
+        {"run", "status", "files"}
+        if legacy_public_original
+        else {"run", "status", "files", "stats"}
+    )
+    if not isinstance(entry, dict) or set(entry) != expected_entry_keys:
         raise SystemExit("Completion manifest contains an invalid run contract: {}".format(manifest_path))
     run = str(entry.get("run", "") or "").strip()
     files = entry.get("files")
@@ -1280,6 +1478,8 @@ for entry in manifest_entries:
         raise SystemExit("Completion manifest contains an incomplete run contract: {}".format(run))
     for contract in files:
         validate_file_contract(contract, run, seen_paths)
+    if not legacy_public_original:
+        validate_stats_contract(entry.get("stats"), run, seen_stats_paths)
     manifest_runs.append(run)
 if manifest.get("run_count") != len(manifest_runs):
     raise SystemExit("Completion manifest run_count does not match its runs list: {}".format(manifest_path))
@@ -1292,14 +1492,40 @@ if sorted(manifest_runs) != sorted(expected_runs):
     )
 if len(manifest_runs) != len(set(manifest_runs)):
     raise SystemExit("Completion manifest contains duplicate run IDs: {}".format(manifest_path))
+actual_paths = {
+    path.relative_to(output_root).as_posix()
+    for path in output_root.rglob("*.amalgkit.fastq.gz")
+    if path.is_file() or path.is_symlink()
+}
+if actual_paths != seen_paths:
+    raise SystemExit(
+        "Completion manifest FASTQ set differs from files on disk. extra={} missing={}".format(
+            ",".join(sorted(actual_paths - seen_paths)),
+            ",".join(sorted(seen_paths - actual_paths)),
+        )
+    )
+if not legacy_public_original:
+    actual_stats_paths = {
+        path.relative_to(output_root).as_posix()
+        for path in output_root.rglob("getfastq_stats.tsv")
+        if path.is_file() or path.is_symlink()
+    }
+    if actual_stats_paths != seen_stats_paths:
+        raise SystemExit(
+            "Completion manifest stats set differs from files on disk. extra={} missing={}".format(
+                ",".join(sorted(actual_stats_paths - seen_stats_paths)),
+                ",".join(sorted(seen_stats_paths - actual_stats_paths)),
+            )
+        )
 PY
 }
 
 validate_amalgkit_getfastq_completion_manifest_index() {
   local completion_manifest=$1
   local metadata_tsv=$2
+  local print_stat_fingerprint=${3:-no}
 
-  python - "${completion_manifest}" "${metadata_tsv}" <<'PY'
+  python - "${completion_manifest}" "${metadata_tsv}" "${print_stat_fingerprint}" <<'PY'
 import csv
 import json
 import os
@@ -1309,11 +1535,25 @@ import sys
 
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
+print_stat_fingerprint = sys.argv[3] == "yes"
 if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 with manifest_path.open("rt", encoding="utf-8") as handle:
     manifest = json.load(handle)
-if manifest.get("schema_version") != 2 or manifest.get("status") != "complete":
+schema_version = manifest.get("schema_version")
+legacy_public_original = (
+    schema_version == 3 and manifest.get("read_source") == "public-original"
+)
+if not (
+    manifest.get("status") == "complete"
+    and (
+        legacy_public_original
+        or (
+            schema_version == 4
+            and manifest.get("read_source") in {"amalgkit", "public-original"}
+        )
+    )
+):
     raise SystemExit("amalgkit getfastq completion manifest is not content-bound: {}".format(manifest_path))
 output_root = manifest_path.parent.resolve(strict=True)
 
@@ -1331,8 +1571,15 @@ if not isinstance(entries, list):
     raise SystemExit("Completion manifest lacks a runs list: {}".format(manifest_path))
 manifest_runs = []
 seen_paths = set()
+seen_stats_paths = set()
+stat_fingerprint = []
 for entry in entries:
-    if not isinstance(entry, dict) or set(entry) != {"run", "status", "files"}:
+    expected_entry_keys = (
+        {"run", "status", "files"}
+        if legacy_public_original
+        else {"run", "status", "files", "stats"}
+    )
+    if not isinstance(entry, dict) or set(entry) != expected_entry_keys:
         raise SystemExit("Completion manifest contains an invalid run contract: {}".format(manifest_path))
     run = str(entry.get("run", "") or "").strip()
     files = entry.get("files")
@@ -1368,9 +1615,62 @@ for entry in entries:
             or not path.is_file()
         ):
             raise SystemExit("Completion manifest FASTQ path changed: {}".format(value))
-        if path.stat().st_size != expected_size:
+        stat_result = path.stat()
+        if stat_result.st_size != expected_size:
             raise SystemExit("Completion manifest FASTQ size changed: {}".format(value))
+        stat_fingerprint.append(
+            [
+                value,
+                stat_result.st_dev,
+                stat_result.st_ino,
+                stat_result.st_size,
+                stat_result.st_mtime_ns,
+                stat_result.st_ctime_ns,
+            ]
+        )
         seen_paths.add(value)
+    if not legacy_public_original:
+        stats_contract = entry.get("stats")
+        if not isinstance(stats_contract, dict) or set(stats_contract) != {"path", "size", "sha256"}:
+            raise SystemExit("Completion manifest has an invalid stats contract for run: {}".format(run))
+        stats_value = str(stats_contract.get("path", "") or "").strip()
+        expected_stats_value = "{}/getfastq_stats.tsv".format(run)
+        expected_stats_size = stats_contract.get("size")
+        expected_stats_sha256 = str(stats_contract.get("sha256", "") or "")
+        if (
+            stats_value != expected_stats_value
+            or not isinstance(expected_stats_size, int)
+            or expected_stats_size <= 0
+            or re.fullmatch(r"[0-9a-f]{64}", expected_stats_sha256) is None
+            or stats_value in seen_stats_paths
+        ):
+            raise SystemExit("Completion manifest has an unsafe stats contract for run: {}".format(run))
+        stats_path = output_root.joinpath(*pathlib.PurePosixPath(stats_value).parts)
+        try:
+            resolved_stats = stats_path.resolve(strict=True)
+        except (FileNotFoundError, OSError):
+            raise SystemExit("Completion manifest getfastq statistics are missing: {}".format(stats_value))
+        if (
+            os.path.commonpath((str(output_root), str(resolved_stats))) != str(output_root)
+            or stats_path.is_symlink()
+            or resolved_stats != stats_path
+            or not stats_path.is_file()
+        ):
+            raise SystemExit("Completion manifest getfastq statistics path changed: {}".format(stats_value))
+        stats_stat = stats_path.stat()
+        if stats_stat.st_size != expected_stats_size:
+            raise SystemExit("Completion manifest getfastq statistics size changed: {}".format(stats_value))
+        stat_fingerprint.append(
+            [
+                stats_value,
+                stats_stat.st_dev,
+                stats_stat.st_ino,
+                stats_stat.st_size,
+                stats_stat.st_mtime_ns,
+                stats_stat.st_ctime_ns,
+            ]
+        )
+        seen_stats_paths.add(stats_value)
     manifest_runs.append(run)
 if manifest.get("run_count") != len(manifest_runs):
     raise SystemExit("Completion manifest run_count does not match its runs list: {}".format(manifest_path))
@@ -1378,7 +1678,82 @@ if sorted(manifest_runs) != sorted(expected_runs):
     raise SystemExit("Completion manifest run IDs differ from metadata.")
 if len(manifest_runs) != len(set(manifest_runs)):
     raise SystemExit("Completion manifest contains duplicate run IDs: {}".format(manifest_path))
+actual_paths = {
+    path.relative_to(output_root).as_posix()
+    for path in output_root.rglob("*.amalgkit.fastq.gz")
+    if path.is_file() or path.is_symlink()
+}
+if actual_paths != seen_paths:
+    raise SystemExit(
+        "Completion manifest FASTQ set differs from files on disk. extra={} missing={}".format(
+            ",".join(sorted(actual_paths - seen_paths)),
+            ",".join(sorted(seen_paths - actual_paths)),
+        )
+    )
+if not legacy_public_original:
+    actual_stats_paths = {
+        path.relative_to(output_root).as_posix()
+        for path in output_root.rglob("getfastq_stats.tsv")
+        if path.is_file() or path.is_symlink()
+    }
+    if actual_stats_paths != seen_stats_paths:
+        raise SystemExit(
+            "Completion manifest stats set differs from files on disk. extra={} missing={}".format(
+                ",".join(sorted(actual_stats_paths - seen_stats_paths)),
+                ",".join(sorted(seen_stats_paths - actual_stats_paths)),
+            )
+        )
+if print_stat_fingerprint:
+    print(json.dumps(stat_fingerprint, separators=(",", ":")))
 PY
+}
+
+mark_amalgkit_getfastq_content_validated() {
+  local completion_manifest=$1
+  local metadata_tsv=$2
+  local stat_fingerprint=""
+
+  if ! stat_fingerprint=$(validate_amalgkit_getfastq_completion_manifest_index \
+    "${completion_manifest}" \
+    "${metadata_tsv}" \
+    yes)
+  then
+    return 1
+  fi
+  if [[ -z "${stat_fingerprint}" ]]; then
+    echo "Failed to capture the getfastq FASTQ filesystem identity." >&2
+    return 1
+  fi
+  getfastq_content_validation_fingerprint=${stat_fingerprint}
+  getfastq_content_validated=1
+}
+
+validate_amalgkit_getfastq_completion_manifest_once() {
+  local completion_manifest=$1
+  local metadata_tsv=$2
+  local current_stat_fingerprint=""
+
+  if [[ ${getfastq_content_validated:-0} -eq 1 && -n "${getfastq_content_validation_fingerprint:-}" ]]; then
+    if ! current_stat_fingerprint=$(validate_amalgkit_getfastq_completion_manifest_index \
+      "${completion_manifest}" \
+      "${metadata_tsv}" \
+      yes)
+    then
+      return 1
+    fi
+    if [[ "${current_stat_fingerprint}" == "${getfastq_content_validation_fingerprint}" ]]; then
+      return 0
+    fi
+    echo "getfastq FASTQ filesystem identity changed; repeating the full content check." >&2
+  fi
+
+  if ! validate_amalgkit_getfastq_completion_manifest \
+    "${completion_manifest}" \
+    "${metadata_tsv}"
+  then
+    return 1
+  fi
+  mark_amalgkit_getfastq_content_validated "${completion_manifest}" "${metadata_tsv}"
 }
 
 prepare_amalgkit_getfastq_contract_recovery() {
@@ -1414,7 +1789,7 @@ try:
 except (json.JSONDecodeError, UnicodeDecodeError):
     manifest = {}
 
-if manifest.get("schema_version") == 2 and isinstance(manifest.get("runs"), list):
+if manifest.get("schema_version") in {2, 3, 4} and isinstance(manifest.get("runs"), list):
     for entry in manifest["runs"]:
         files = entry.get("files", []) if isinstance(entry, dict) else []
         for contract in files:
@@ -1499,17 +1874,51 @@ amalgkit_getfastq_log_has_fatal_message() {
 amalgkit_getfastq_log_has_only_download_source_exhaustion() {
   local log_file=$1
   [[ -s "${log_file}" ]] || return 1
-  awk '
-    /^ERROR: / {
-      fatal_count += 1
-      if ($0 != "ERROR: Configured download sources were exhausted.") {
-        other_fatal_count += 1
-      }
-    }
-    END {
-      exit !(fatal_count > 0 && other_fatal_count == 0)
-    }
-  ' "${log_file}"
+  python - "${log_file}" <<'PY'
+import pathlib
+import re
+import sys
+
+log_path = pathlib.Path(sys.argv[1])
+fatal_lines = [
+    line.rstrip("\n")
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if line.startswith("ERROR: ")
+]
+if not fatal_lines:
+    raise SystemExit(1)
+
+legacy_exhaustion = "ERROR: Configured download sources were exhausted."
+summary_pattern = re.compile(
+    r"^ERROR: getfastq failed for (?P<failed>[1-9][0-9]*)/"
+    r"(?P<total>[1-9][0-9]*) SRA runs\. (?P<details>.+)$"
+)
+entry_pattern = re.compile(
+    r"(?P<run>[A-Za-z0-9][A-Za-z0-9._-]*): "
+    r"SRA file download failed for (?P=run)\. "
+    r"Expected PATH: \S+\. Configured download sources were exhausted\."
+    r"(?: |$)"
+)
+
+for line in fatal_lines:
+    if line == legacy_exhaustion:
+        continue
+    summary = summary_pattern.fullmatch(line)
+    if summary is None:
+        raise SystemExit(1)
+    failed = int(summary.group("failed"))
+    total = int(summary.group("total"))
+    details = summary.group("details")
+    position = 0
+    entries = 0
+    for match in entry_pattern.finditer(details):
+        if match.start() != position:
+            raise SystemExit(1)
+        position = match.end()
+        entries += 1
+    if position != len(details) or entries != failed or failed > total:
+        raise SystemExit(1)
+PY
 }
 
 run_amalgkit_getfastq_attempt() {
@@ -1517,6 +1926,7 @@ run_amalgkit_getfastq_attempt() {
   local attempt_label=$2
   local log_file="${dir_tmp}/amalgkit_getfastq.${attempt_label}.log"
   local getfastq_cmd=()
+  local status_amalgkit_attempt=0
 
   rm -f -- "${log_file}"
   echo "Running amalgkit getfastq attempt '${attempt_label}' with --rrna_filter ${rrna_filter_value}"
@@ -1574,20 +1984,35 @@ run_amalgkit_getfastq_attempt() {
     echo "amalgkit getfastq log: ${log_file}"
     if ! bind_amalgkit_getfastq_completion_manifest \
       "${dir_tmp}/getfastq/getfastq_completion.json" \
-      "${file_amalgkit_metadata}" || \
-      ! validate_amalgkit_getfastq_completion_manifest \
-      "${dir_tmp}/getfastq/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
     then
       echo "amalgkit getfastq finished without a valid all-run completion manifest."
       return 3
     fi
-    mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"
+    if ! validate_amalgkit_getfastq_completion_manifest_index \
+      "${dir_tmp}/getfastq/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+    then
+      echo "amalgkit getfastq produced an invalid completion index." >&2
+      return 3
+    fi
+    if ! mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"; then
+      echo "Failed to atomically publish the completed amalgkit getfastq output." >&2
+      return 3
+    fi
+    if ! mark_amalgkit_getfastq_content_validated \
+      "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+    then
+      echo "Published amalgkit getfastq output failed its completion-index check." >&2
+      return 3
+    fi
     rm -rf -- "${dir_tmp}/getfastq"
     return 0
+  else
+    status_amalgkit_attempt=$?
   fi
 
-  local status_amalgkit_attempt=$?
   echo "amalgkit getfastq exit code: ${status_amalgkit_attempt}"
   echo "amalgkit getfastq log: ${log_file}"
   if amalgkit_getfastq_log_has_fatal_message "${log_file}"; then
@@ -1770,18 +2195,41 @@ configure_transcriptome_runtime_from_detected_metadata() {
   echo "Effective assembly method: ${effective_assembly_method}"
 }
 
+cleanup_transcriptome_summary_transaction() {
+  local cleanup_status=$?
+  if [[ -n "${transcriptome_summary_stage_parent:-}" \
+    && "${transcriptome_summary_stage_parent}" == "${dir_transcriptome_assembly_output%/}/.annotation_summary.gg-work."* \
+    && -d "${transcriptome_summary_stage_parent}" ]]; then
+    rm -rf -- "${transcriptome_summary_stage_parent}" || true
+  fi
+  transcriptome_summary_stage_parent=""
+  if [[ ${transcriptome_summary_transaction_lock_acquired:-0} -eq 1 ]]; then
+    gg_stage_transaction_lock_release || true
+    transcriptome_summary_transaction_lock_acquired=0
+  fi
+  if [[ ${transcriptome_summary_finalizer_claimed:-0} -eq 1 ]]; then
+    gg_array_finalizer_release || true
+    transcriptome_summary_finalizer_claimed=0
+  fi
+  return "${cleanup_status}"
+}
+
 download_public_original_fastqs_for_metadata() {
   local metadata_tsv="$1"
   local output_dir="$2"
-  python - "${metadata_tsv}" "${output_dir}" <<'PY'
+  local recovery_mode="${3:-network}"
+  python - "${metadata_tsv}" "${output_dir}" "${recovery_mode}" <<'PY'
 import csv
 import gzip
 import hashlib
 import json
 import os
+import pathlib
 import re
 import sys
+import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -1789,11 +2237,16 @@ from pathlib import Path
 
 metadata_path = Path(sys.argv[1])
 output_root = Path(sys.argv[2])
+recovery_mode = sys.argv[3]
+if recovery_mode not in {"network", "reuse-only"}:
+    raise SystemExit("Unsupported public FASTQ recovery mode: {}".format(recovery_mode))
 completion_manifest = output_root / "getfastq_completion.json"
 
 
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 METADATA_MAX_BYTES = 16 * 1024 * 1024
+FASTQ_METRICS_CACHE = {}
+FASTQ_CONTRACT_CACHE = {}
 
 
 def fetch_text(url: str) -> str:
@@ -1835,48 +2288,82 @@ def sort_key(item):
     return (2, name)
 
 
-def is_valid_fastq_gzip(path: Path) -> bool:
+def fastq_metrics(path: Path) -> tuple[int, int]:
     if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
-        return False
-    try:
-        with gzip.open(path, "rb") as handle:
-            record_count = 0
+        raise ValueError("FASTQ is missing, empty, or a symbolic link: {}".format(path))
+    path_stat = path.stat()
+    cache_key = (
+        path_stat.st_dev,
+        path_stat.st_ino,
+        path_stat.st_size,
+        path_stat.st_mtime_ns,
+        path_stat.st_ctime_ns,
+    )
+    cached = FASTQ_METRICS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    record_count = 0
+    total_bases = 0
+    with gzip.open(path, "rb") as handle:
+        while True:
+            header = handle.readline()
+            if not header:
+                break
+            if not header.startswith(b"@") or len(header.rstrip(b"\r\n")) < 2:
+                raise ValueError("FASTQ has an invalid record header: {}".format(path))
+
+            sequence_length = 0
             while True:
-                header = handle.readline()
-                if not header:
+                line = handle.readline()
+                if not line:
+                    raise ValueError("FASTQ ended inside a sequence: {}".format(path))
+                if line.startswith(b"+"):
                     break
-                if not header.startswith(b"@") or len(header.rstrip(b"\r\n")) < 2:
-                    return False
+                sequence_length += len(line.rstrip(b"\r\n"))
+            if sequence_length == 0:
+                raise ValueError("FASTQ contains an empty sequence: {}".format(path))
 
-                sequence_length = 0
-                while True:
-                    line = handle.readline()
-                    if not line:
-                        return False
-                    if line.startswith(b"+"):
-                        break
-                    sequence_length += len(line.rstrip(b"\r\n"))
-                if sequence_length == 0:
-                    return False
+            quality_length = 0
+            while quality_length < sequence_length:
+                line = handle.readline()
+                if not line:
+                    raise ValueError("FASTQ ended inside a quality record: {}".format(path))
+                quality_length += len(line.rstrip(b"\r\n"))
+            if quality_length != sequence_length:
+                raise ValueError("FASTQ sequence/quality lengths differ: {}".format(path))
+            record_count += 1
+            total_bases += sequence_length
+    if record_count <= 0 or total_bases <= 0:
+        raise ValueError("FASTQ contains no reads: {}".format(path))
+    metrics = (record_count, total_bases)
+    FASTQ_METRICS_CACHE[cache_key] = metrics
+    return metrics
 
-                quality_length = 0
-                while quality_length < sequence_length:
-                    line = handle.readline()
-                    if not line:
-                        return False
-                    quality_length += len(line.rstrip(b"\r\n"))
-                if quality_length != sequence_length:
-                    return False
-                record_count += 1
+
+def is_valid_fastq_gzip(path: Path) -> bool:
+    try:
+        fastq_metrics(path)
     except (EOFError, OSError, ValueError):
         return False
-    return record_count > 0
+    return True
 
 
 def manifest_file_contract(path: Path) -> dict:
     if not is_valid_fastq_gzip(path):
         raise SystemExit("FASTQ is not complete enough to bind into the completion manifest: {}".format(path))
     before = path.stat()
+    relative_path = str(path.relative_to(output_root))
+    cache_key = (
+        relative_path,
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    cached = FASTQ_CONTRACT_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(DOWNLOAD_CHUNK_BYTES), b""):
@@ -1884,11 +2371,79 @@ def manifest_file_contract(path: Path) -> dict:
     after = path.stat()
     if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
         raise SystemExit("FASTQ changed while binding its completion manifest: {}".format(path))
-    return {
-        "path": str(path.relative_to(output_root)),
+    contract = {
+        "path": relative_path,
         "size": after.st_size,
         "sha256": digest.hexdigest(),
     }
+    FASTQ_CONTRACT_CACHE[cache_key] = contract
+    return dict(contract)
+
+
+def write_quant_stats(run: str, fastq_paths: list[Path]) -> dict:
+    metrics = [fastq_metrics(path) for path in fastq_paths]
+    if len(metrics) not in {1, 2}:
+        raise SystemExit("Fallback FASTQ layout is unsupported for run: {}".format(run))
+    if len(metrics) == 2 and metrics[0][0] != metrics[1][0]:
+        raise SystemExit("Fallback paired FASTQ record counts differ for run: {}".format(run))
+    num_written = metrics[0][0]
+    total_bases = sum(item[1] for item in metrics)
+    run_dir = output_root / run
+    stats_path = run_dir / "getfastq_stats.tsv"
+    if stats_path.is_symlink() or (stats_path.exists() and not stats_path.is_file()):
+        raise SystemExit("Fallback getfastq statistics path is unsafe: {}".format(stats_path))
+    fd, temporary = tempfile.mkstemp(prefix=".getfastq_stats.", suffix=".tsv", dir=run_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["run", "num_written", "bp_written", "bp_fastp_in", "bp_fastp_out"],
+                delimiter="\t",
+                lineterminator="\n",
+            )
+            writer.writeheader()
+            writer.writerow({
+                "run": run,
+                "num_written": num_written,
+                "bp_written": total_bases,
+                "bp_fastp_in": total_bases,
+                "bp_fastp_out": total_bases,
+            })
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, stats_path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    before = stats_path.stat()
+    digest = hashlib.sha256(stats_path.read_bytes())
+    after = stats_path.stat()
+    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+        raise SystemExit("Fallback getfastq statistics changed while binding: {}".format(run))
+    return {
+        "path": str(stats_path.relative_to(output_root)),
+        "size": after.st_size,
+        "sha256": digest.hexdigest(),
+    }
+
+
+def quarantine_unbound_fastqs(bound_paths) -> None:
+    for path in sorted(output_root.rglob("*.amalgkit.fastq.gz")):
+        if not path.is_file() and not path.is_symlink():
+            continue
+        relative = path.relative_to(output_root).as_posix()
+        if relative in bound_paths:
+            continue
+        counter = 0
+        while True:
+            suffix = ".not_in_completion_manifest"
+            if counter:
+                suffix += ".{}".format(counter)
+            backup = path.with_name(path.name + suffix)
+            if not backup.exists() and not backup.is_symlink():
+                break
+            counter += 1
+        os.replace(path, backup)
+        print("Quarantined fallback FASTQ not referenced by current metadata: {}".format(backup))
 
 
 def normalize_ena_fastq_url(value: str) -> str:
@@ -2026,15 +2581,31 @@ def trace_fastq_files(run: str):
     return unique_source_files(files)
 
 
-def preserve_previous_completion_manifest() -> None:
+def preserve_previous_completion_manifest(copy_only: bool = False) -> None:
     if not completion_manifest.exists():
         return
     suffix = ""
     counter = 0
     while True:
         backup = output_root / "getfastq_completion.pre_public_fallback{}.json".format(suffix)
-        if not backup.exists():
-            os.replace(completion_manifest, backup)
+        if not backup.exists() and not backup.is_symlink():
+            if copy_only:
+                before = completion_manifest.stat()
+                payload = completion_manifest.read_bytes()
+                after = completion_manifest.stat()
+                if (
+                    before.st_size != after.st_size
+                    or before.st_mtime_ns != after.st_mtime_ns
+                ):
+                    raise SystemExit(
+                        "Completion manifest changed while preserving offline migration input."
+                    )
+                with backup.open("xb") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            else:
+                os.replace(completion_manifest, backup)
             print("Preserved previous getfastq completion manifest: {}".format(backup))
             return
         counter += 1
@@ -2055,75 +2626,273 @@ def preserve_invalid_fastq(path: Path) -> None:
         counter += 1
 
 
-def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> None:
-    part = dest.with_name(
-        ".{}.part.{}.{}".format(dest.name, os.getpid(), time.time_ns())
-    )
-    if part.exists() or part.is_symlink():
-        part.unlink()
-    last_exc = None
+def file_md5(path: Path) -> str:
+    digest = hashlib.md5()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(DOWNLOAD_CHUNK_BYTES), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def response_status(response):
+    status = getattr(response, "status", None)
+    if status is None and hasattr(response, "getcode"):
+        status = response.getcode()
+    return status
+
+
+def response_header(response, name: str) -> str:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return ""
     try:
-        for attempt in range(1, 6):
-            digest = hashlib.md5()
-            source_bytes = 0
-            try:
-                with urllib.request.urlopen(url, timeout=120) as response:
-                    first_chunk = response.read(DOWNLOAD_CHUNK_BYTES)
-                    if not first_chunk:
-                        raise ValueError("Downloaded FASTQ response was empty: {}".format(url))
-                    source_is_gzip = first_chunk.startswith(b"\x1f\x8b")
-                    with part.open("wb") as raw_out:
-                        if source_is_gzip:
+        return str(headers.get(name, "") or "").strip()
+    except (AttributeError, TypeError):
+        return ""
+
+
+def content_range_contract(value: str):
+    match = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", value, re.I)
+    if not match:
+        return None
+    start = int(match.group(1))
+    end = int(match.group(2))
+    total = None if match.group(3) == "*" else int(match.group(3))
+    if end < start or (total is not None and (total <= end or total <= 0)):
+        return None
+    return start, end, total
+
+
+def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> None:
+    part = dest.with_name(".{}.download.part".format(dest.name))
+    state_path = part.with_name(part.name + ".json")
+    for path in (part, state_path):
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise SystemExit("Resumable FASTQ partial path is unsafe: {}".format(path))
+
+    def discard_partial():
+        part.unlink(missing_ok=True)
+        state_path.unlink(missing_ok=True)
+
+    def publish_partial():
+        os.replace(part, dest)
+        state_path.unlink(missing_ok=True)
+
+    def save_state(state):
+        fd, temporary = tempfile.mkstemp(prefix=state_path.name + ".", dir=state_path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(state, handle, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, state_path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+
+    resume_state = {}
+    if state_path.exists():
+        try:
+            if state_path.stat().st_size <= 16384:
+                resume_state = json.loads(state_path.read_text(encoding="utf-8"))
+            if not isinstance(resume_state, dict):
+                resume_state = {}
+        except (ValueError, UnicodeError):
+            resume_state = {}
+    if part.exists() and part.stat().st_size > 0:
+        with part.open("rb") as handle:
+            resumable_gzip = handle.read(2) == b"\x1f\x8b"
+        # A complete gzip member can still be a prefix of a larger FASTQ.
+        # Only an externally supplied digest can prove offline completion.
+        if resumable_gzip and expected_md5 and is_valid_fastq_gzip(part):
+            if file_md5(part) == expected_md5:
+                publish_partial()
+                return
+        total = resume_state.get("total_bytes")
+        if (
+            not resumable_gzip
+            or resume_state.get("version") != 1
+            or resume_state.get("url") != url
+            or resume_state.get("expected_md5") != expected_md5
+            or not isinstance(resume_state.get("validator", ""), str)
+            or not (expected_md5 or resume_state.get("validator"))
+            or (total is not None and (type(total) is not int or total <= 0 or part.stat().st_size > total))
+        ):
+            discard_partial()
+            resume_state = {}
+    else:
+        discard_partial()
+        resume_state = {}
+
+    last_exc = None
+    for attempt in range(1, 6):
+        source_digest = hashlib.md5()
+        source_bytes = 0
+        retain_resumable_part = False
+        try:
+            resume_offset = part.stat().st_size if part.exists() else 0
+            retain_resumable_part = bool(resume_offset)
+            request = url
+            if resume_offset:
+                headers = {"Accept-Encoding": "identity", "Range": "bytes={}-".format(resume_offset)}
+                if resume_state.get("validator"):
+                    headers["If-Range"] = resume_state["validator"]
+                request = urllib.request.Request(
+                    url,
+                    headers=headers,
+                )
+            with urllib.request.urlopen(request, timeout=120) as response:
+                status = response_status(response)
+                content_range = content_range_contract(
+                    response_header(response, "Content-Range")
+                )
+                content_length_text = response_header(response, "Content-Length")
+                content_length = (
+                    int(content_length_text)
+                    if re.fullmatch(r"\d+", content_length_text)
+                    else None
+                )
+                append_response = False
+                expected_total = content_length
+                expected_response_bytes = content_length
+                etag = response_header(response, "ETag")
+                validator = etag if etag and not etag.startswith("W/") else response_header(response, "Last-Modified")
+                if resume_offset and status == 206:
+                    if content_range is None or content_range[0] != resume_offset:
+                        retain_resumable_part = False
+                        raise ValueError(
+                            "invalid resumed Content-Range for offset {}: {!r}".format(
+                                resume_offset,
+                                response_header(response, "Content-Range"),
+                            )
+                        )
+                    append_response = True
+                    expected_response_bytes = content_range[1] - content_range[0] + 1
+                    expected_total = content_range[2]
+                    if (
+                        (resume_state.get("total_bytes") is not None and expected_total != resume_state["total_bytes"])
+                        or (resume_state.get("validator") and validator and validator != resume_state["validator"])
+                        or (expected_total is None and not expected_md5)
+                    ):
+                        retain_resumable_part = False
+                        raise ValueError("Resumed FASTQ source identity or total size changed")
+                    if content_length is not None and content_length != expected_response_bytes:
+                        retain_resumable_part = False
+                        raise ValueError(
+                            "resumed Content-Length disagrees with Content-Range: {} != {}".format(
+                                content_length,
+                                expected_response_bytes,
+                            )
+                        )
+                elif resume_offset:
+                    if status not in (None, 200):
+                        retain_resumable_part = False
+                        raise ValueError(
+                            "FASTQ server rejected byte-range resume with HTTP status {}".format(
+                                status
+                            )
+                        )
+                    discard_partial()
+                    resume_offset = 0
+                    retain_resumable_part = False
+                elif status not in (None, 200):
+                    raise ValueError("Expected a complete FASTQ response, received HTTP {}".format(status))
+
+                first_chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                if not first_chunk:
+                    raise ValueError("Downloaded FASTQ response was empty: {}".format(url))
+                source_is_gzip = append_response or first_chunk.startswith(b"\x1f\x8b")
+                resume_state = {
+                    "version": 1,
+                    "url": url,
+                    "expected_md5": expected_md5,
+                    "validator": validator or (resume_state.get("validator", "") if append_response else ""),
+                    "total_bytes": expected_total,
+                }
+                retain_resumable_part = source_is_gzip and bool(expected_md5 or resume_state["validator"])
+                output_mode = "ab" if append_response else "wb"
+                with part.open(output_mode) as raw_out:
+                    # Truncate before assigning a new source identity. A crash
+                    # must never associate old bytes with a new URL/validator.
+                    if source_is_gzip:
+                        save_state(resume_state)
+                        chunk = first_chunk
+                        while chunk:
+                            source_bytes += len(chunk)
+                            raw_out.write(chunk)
+                            chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                    else:
+                        with gzip.GzipFile(fileobj=raw_out, mode="wb") as gzip_out:
                             chunk = first_chunk
                             while chunk:
-                                digest.update(chunk)
+                                source_digest.update(chunk)
                                 source_bytes += len(chunk)
-                                raw_out.write(chunk)
+                                gzip_out.write(chunk)
                                 chunk = response.read(DOWNLOAD_CHUNK_BYTES)
-                        else:
-                            with gzip.GzipFile(fileobj=raw_out, mode="wb") as gzip_out:
-                                chunk = first_chunk
-                                while chunk:
-                                    digest.update(chunk)
-                                    source_bytes += len(chunk)
-                                    gzip_out.write(chunk)
-                                    chunk = response.read(DOWNLOAD_CHUNK_BYTES)
-                        raw_out.flush()
-                        os.fsync(raw_out.fileno())
-                actual_md5 = digest.hexdigest()
-                if expected_md5 and actual_md5 != expected_md5:
+                    raw_out.flush()
+                    os.fsync(raw_out.fileno())
+
+                if expected_response_bytes is not None and source_bytes != expected_response_bytes:
                     raise ValueError(
-                        "checksum mismatch expected={} actual={} bytes={}".format(
-                            expected_md5,
-                            actual_md5,
+                        "truncated FASTQ response expected={} received={} total_part_bytes={}".format(
+                            expected_response_bytes,
                             source_bytes,
+                            part.stat().st_size,
                         )
                     )
-                if not is_valid_fastq_gzip(part):
+                if source_is_gzip and expected_total is not None and part.stat().st_size != expected_total:
                     raise ValueError(
-                        "incomplete FASTQ gzip actual_md5={} bytes={}".format(
-                            actual_md5,
-                            source_bytes,
+                        "incomplete resumed FASTQ expected_total={} actual={}".format(
+                            expected_total,
+                            part.stat().st_size,
                         )
                     )
-                os.replace(part, dest)
-                return
-            except Exception as exc:  # pragma: no cover - network retry integration
-                last_exc = exc
-                if part.exists() or part.is_symlink():
-                    part.unlink()
-                if attempt == 5:
-                    break
-                time.sleep(2)
-        raise SystemExit(
-            "Downloaded FASTQ failed bounded integrity retries: {} ({})".format(
-                dest,
-                last_exc,
-            )
+
+            if source_is_gzip:
+                source_bytes = part.stat().st_size
+                actual_md5 = file_md5(part)
+            else:
+                actual_md5 = source_digest.hexdigest()
+            if expected_md5 and actual_md5 != expected_md5:
+                retain_resumable_part = False
+                raise ValueError(
+                    "checksum mismatch expected={} actual={} bytes={}".format(
+                        expected_md5,
+                        actual_md5,
+                        source_bytes,
+                    )
+                )
+            if not is_valid_fastq_gzip(part):
+                raise ValueError(
+                    "incomplete FASTQ gzip actual_md5={} bytes={}".format(
+                        actual_md5,
+                        source_bytes,
+                    )
+                )
+            publish_partial()
+            return
+        except Exception as exc:  # pragma: no cover - network retry integration
+            last_exc = exc
+            if isinstance(exc, urllib.error.HTTPError) and exc.code == 416:
+                retain_resumable_part = False
+            if part.exists() and not retain_resumable_part:
+                discard_partial()
+                resume_state = {}
+            if attempt == 5:
+                break
+            time.sleep(2)
+    partial_detail = ""
+    if part.exists():
+        partial_detail = "; resumable_part={} bytes={}".format(
+            part,
+            part.stat().st_size,
         )
-    finally:
-        if part.exists() or part.is_symlink():
-            part.unlink()
+    raise SystemExit(
+        "Downloaded FASTQ failed bounded integrity retries: {} ({}{})".format(
+            dest,
+            last_exc,
+            partial_detail,
+        )
+    )
 
 
 with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
@@ -2148,7 +2917,85 @@ if not runs:
 if output_root.is_symlink():
     raise SystemExit("Fallback output root must not be a symlink: {}".format(output_root))
 output_root.mkdir(parents=True, exist_ok=True)
-preserve_previous_completion_manifest()
+
+if recovery_mode == "reuse-only":
+    if not completion_manifest.is_file() or completion_manifest.is_symlink():
+        raise SystemExit("No regular public-original manifest is available for offline migration.")
+    with completion_manifest.open("rt", encoding="utf-8") as handle:
+        previous_manifest = json.load(handle)
+    if (
+        previous_manifest.get("schema_version") != 3
+        or previous_manifest.get("status") != "complete"
+        or previous_manifest.get("read_source") != "public-original"
+        or not isinstance(previous_manifest.get("runs"), list)
+    ):
+        raise SystemExit("The existing manifest is not a migratable schema-3 public-original contract.")
+    previous_runs = []
+    previous_paths = set()
+    for entry in previous_manifest["runs"]:
+        if not isinstance(entry, dict) or set(entry) != {"run", "status", "files"}:
+            raise SystemExit("The existing public-original manifest has an invalid run contract.")
+        run = str(entry.get("run", "") or "").strip()
+        files = entry.get("files")
+        if run == "" or entry.get("status") != "complete" or not isinstance(files, list) or not files:
+            raise SystemExit("The existing public-original manifest has an incomplete run: {}".format(run))
+        names = []
+        for contract in files:
+            if not isinstance(contract, dict) or set(contract) != {"path", "size", "sha256"}:
+                raise SystemExit("The existing public-original manifest has an invalid FASTQ contract: {}".format(run))
+            value = str(contract.get("path", "") or "").strip()
+            expected_size = contract.get("size")
+            expected_sha256 = str(contract.get("sha256", "") or "")
+            relative = pathlib.PurePosixPath(value)
+            if (
+                len(relative.parts) != 2
+                or relative.parts[0] != run
+                or not value.endswith(".amalgkit.fastq.gz")
+                or not isinstance(expected_size, int)
+                or expected_size <= 0
+                or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+                or value in previous_paths
+            ):
+                raise SystemExit("The existing public-original manifest has an unsafe FASTQ contract: {}".format(run))
+            path = output_root.joinpath(*relative.parts)
+            if path.is_symlink() or not path.is_file() or path.resolve(strict=True) != path:
+                raise SystemExit("A public-original FASTQ is unavailable for offline migration: {}".format(value))
+            if path.stat().st_size != expected_size:
+                raise SystemExit("A public-original FASTQ size changed before offline migration: {}".format(value))
+            actual_contract = manifest_file_contract(path)
+            if (
+                actual_contract["size"] != expected_size
+                or actual_contract["sha256"] != expected_sha256
+            ):
+                raise SystemExit("A public-original FASTQ failed offline migration validation: {}".format(value))
+            names.append(relative.parts[1])
+            previous_paths.add(value)
+        expected_names = (
+            ["{}.amalgkit.fastq.gz".format(run)]
+            if len(names) == 1
+            else [
+                "{}_1.amalgkit.fastq.gz".format(run),
+                "{}_2.amalgkit.fastq.gz".format(run),
+            ]
+        )
+        if sorted(names) != sorted(expected_names):
+            raise SystemExit("The public-original FASTQ layout is ambiguous for offline migration: {}".format(run))
+        previous_runs.append(run)
+    if (
+        previous_manifest.get("run_count") != len(previous_runs)
+        or sorted(previous_runs) != sorted(runs)
+        or len(previous_runs) != len(set(previous_runs))
+    ):
+        raise SystemExit("The public-original manifest run set changed before offline migration.")
+    actual_paths = {
+        path.relative_to(output_root).as_posix()
+        for path in output_root.rglob("*.amalgkit.fastq.gz")
+        if path.is_file() or path.is_symlink()
+    }
+    if actual_paths != previous_paths:
+        raise SystemExit("The public-original FASTQ set changed before offline migration.")
+if recovery_mode != "reuse-only":
+    preserve_previous_completion_manifest()
 manifest_runs = []
 
 for run in runs:
@@ -2182,11 +3029,18 @@ for run in runs:
                     run, ",".join(item["path"] for item in completed_files)
                 )
             )
-            manifest_runs.append({"run": run, "status": "complete", "files": completed_files})
+            manifest_runs.append({
+                "run": run,
+                "status": "complete",
+                "files": completed_files,
+                "stats": write_quant_stats(run, existing_fastqs),
+            })
             continue
 
     fastq_files = metadata_fastq_files(rows_by_run[run])
     if not fastq_files:
+        if recovery_mode == "reuse-only":
+            raise SystemExit("Offline migration cannot retrieve a missing FASTQ for run: {}".format(run))
         fastq_files = trace_fastq_files(run)
     if not fastq_files:
         fastq_files = ena_fastq_files(run)
@@ -2212,11 +3066,26 @@ for run in runs:
         download_fastq_atomically(dest, url, expected_md5)
         print("Recovered public FASTQ for {} via {}: {} -> {}".format(run, provider, filename or url, dest))
         completed_files.append(manifest_file_contract(dest))
-    manifest_runs.append({"run": run, "status": "complete", "files": completed_files})
+    manifest_runs.append({
+        "run": run,
+        "status": "complete",
+        "files": completed_files,
+        "stats": write_quant_stats(
+            run,
+            [output_root / item["path"] for item in completed_files],
+        ),
+    })
 
+bound_paths = {
+    contract["path"]
+    for entry in manifest_runs
+    for contract in entry["files"]
+}
+quarantine_unbound_fastqs(bound_paths)
 manifest = {
-    "schema_version": 2,
+    "schema_version": 4,
     "status": "complete",
+    "read_source": "public-original",
     "run_count": len(manifest_runs),
     "runs": manifest_runs,
 }
@@ -2229,10 +3098,40 @@ try:
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
+    if recovery_mode == "reuse-only":
+        preserve_previous_completion_manifest(copy_only=True)
     os.replace(manifest_part, completion_manifest)
 finally:
     if manifest_part.exists() or manifest_part.is_symlink():
         manifest_part.unlink()
+PY
+}
+
+is_public_original_completion_manifest_v3() {
+  local completion_manifest=$1
+  python - "${completion_manifest}" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+    raise SystemExit(1)
+try:
+    with path.open("rt", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+except (json.JSONDecodeError, OSError, UnicodeError):
+    raise SystemExit(1)
+raise SystemExit(
+    0
+    if (
+        manifest.get("schema_version") == 3
+        and manifest.get("status") == "complete"
+        and manifest.get("read_source") == "public-original"
+        and isinstance(manifest.get("runs"), list)
+    )
+    else 1
+)
 PY
 }
 
@@ -2280,16 +3179,26 @@ run_amalgkit_getfastq_or_fallback() {
   fi
   echo "amalgkit getfastq did not safely finish. Attempting fallback download of public original FASTQ files."
   prepare_getfastq_outputs_for_public_fallback
-  if download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_tmp}/getfastq"; then
-    if ! validate_amalgkit_getfastq_completion_manifest \
-      "${dir_tmp}/getfastq/getfastq_completion.json" \
+  if download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_tmp}/getfastq_public_original"; then
+    if ! validate_amalgkit_getfastq_completion_manifest_index \
+      "${dir_tmp}/getfastq_public_original/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
     then
-      echo "Fallback direct FASTQ recovery finished without a valid all-run completion manifest. Exiting."
+      echo "Fallback direct FASTQ recovery finished without a valid all-run completion index. Exiting." >&2
       return 1
     fi
-    mv_out_replace_dir "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}"
-    rm -rf -- "${dir_tmp}/getfastq"
+    if ! mv_out_replace_dir "${dir_tmp}/getfastq_public_original" "${dir_amalgkit_getfastq_sp}"; then
+      echo "Failed to atomically publish fallback direct FASTQ recovery. Exiting." >&2
+      return 1
+    fi
+    if ! mark_amalgkit_getfastq_content_validated \
+      "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+    then
+      echo "Fallback direct FASTQ recovery finished without a valid all-run completion index. Exiting." >&2
+      return 1
+    fi
+    rm -rf -- "${dir_tmp}/getfastq_public_original"
     echo "Fallback download of public original FASTQ files succeeded and was atomically published."
     return 0
   fi
@@ -2328,6 +3237,10 @@ run_amalgkit_getfastq_or_fallback() {
 
 
 
+
+if [[ "${GG_CORE_SOURCE_ONLY:-0}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 # Setting modes
 if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
@@ -2486,7 +3399,7 @@ elif [[ "${selected_transcriptome_mode}" == "metadata" ]]; then
   fi
 fi
 
-dir_tmp="${dir_transcriptome_assembly_output}/tmp/${GG_ARRAY_TASK_ID}_${sp_ub}"
+dir_tmp=$(gg_task_tmp_path "${dir_transcriptome_assembly_output}/tmp/${GG_ARRAY_TASK_ID}_${sp_ub}") || exit 1
 dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
 dir_amalgkit_download_dir="${gg_workspace_downloads_dir}"
 dir_amalgkit_download_lock_dir="${dir_amalgkit_download_dir}/locks"
@@ -2686,7 +3599,7 @@ if [[ ${run_amalgkit_getfastq} -eq 1 && ${getfastq_needs_update} -eq 1 ]]; then
 
   clear_getfastq_safely_removed_markers
   if [[ -s "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" ]] && \
-    ! validate_amalgkit_getfastq_completion_manifest \
+    ! validate_amalgkit_getfastq_completion_manifest_once \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
   then
@@ -2738,7 +3651,7 @@ gg_artifact_prepare_stage assembly_needs_update run_assembly "${assembly_provena
 if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ "${selected_transcriptome_mode}" == "sraid" ]] && \
-    ! validate_amalgkit_getfastq_completion_manifest \
+    ! validate_amalgkit_getfastq_completion_manifest_once \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
   then
@@ -3079,7 +3992,7 @@ fi
 if [[ "${effective_assembly_method}" == 'rna-bloom2' && -s "${file_isoform}" && ${corset_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ "${selected_transcriptome_mode}" == "sraid" ]] && \
-    ! validate_amalgkit_getfastq_completion_manifest \
+    ! validate_amalgkit_getfastq_completion_manifest_once \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
   then
@@ -3630,6 +4543,42 @@ else
   echo "Please check the input parameter. kallisto_reference must not be: ${kallisto_reference}"
   exit 1
 fi
+if [[ ${run_amalgkit_quant} -eq 1 ]] && \
+  is_public_original_completion_manifest_v3 \
+    "${dir_amalgkit_getfastq_sp}/getfastq_completion.json"
+then
+  echo "Migrating validated schema-3 public FASTQs to the quant-statistics-bound schema without network retrieval."
+  if ! download_public_original_fastqs_for_metadata \
+    "${file_amalgkit_metadata}" \
+    "${dir_amalgkit_getfastq_sp}" \
+    "reuse-only"
+  then
+    echo "The existing public FASTQs could not be migrated offline; refusing a redundant all-run download. Exiting." >&2
+    exit 1
+  fi
+  if ! validate_amalgkit_getfastq_completion_manifest \
+      "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+      "${file_amalgkit_metadata}" || \
+    ! mark_amalgkit_getfastq_content_validated \
+      "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+      "${file_amalgkit_metadata}"
+  then
+    echo "The migrated public FASTQ/statistics contract did not validate. Exiting." >&2
+    exit 1
+  fi
+  gg_artifact_record "${getfastq_provenance_args[@]}"
+  if [[ ${run_assembly} -eq 1 && -s "${file_isoform}" ]]; then
+    # The migration proves that every FASTQ byte contract is unchanged; only
+    # the quant statistics contract was added, so the existing assembly stays
+    # derivationally current and can be rebound without recomputation.
+    gg_artifact_record "${assembly_provenance_args[@]}"
+  fi
+  if [[ "${effective_assembly_method}" == "rna-bloom2" && \
+    ${run_longestcds} -eq 1 && -s "${file_corset_clusters}" ]]; then
+    gg_artifact_record "${corset_provenance_args[@]}"
+  fi
+  echo "Migrated public FASTQ completion metadata without re-downloading reads or rebuilding the assembly."
+fi
 quant_needs_update=0
 gg_artifact_contract_init quant_provenance_args "transcriptome_quant" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.quant.json"
 quant_provenance_args+=(
@@ -3658,7 +4607,7 @@ fi
 if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ "${selected_transcriptome_mode}" == "sraid" ]] && \
-    ! validate_amalgkit_getfastq_completion_manifest \
+    ! validate_amalgkit_getfastq_completion_manifest_once \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
   then
@@ -3834,18 +4783,28 @@ case "${selected_transcriptome_mode}" in
 esac
 transcriptome_summary_finalizer_should_run=0
 transcriptome_summary_finalizer_claimed=0
+transcriptome_summary_transaction_lock_acquired=0
+transcriptome_summary_stage_parent=""
 if gg_array_finalizer_claim \
   "${transcriptome_provenance_dir}/array_finalizers" \
   "multispecies_summary" \
   "${transcriptome_expected_tasks}"; then
   transcriptome_summary_finalizer_should_run=1
   transcriptome_summary_finalizer_claimed=1
-  trap 'gg_array_finalizer_release' EXIT
+  trap 'cleanup_transcriptome_summary_transaction' EXIT
 else
   transcriptome_summary_finalizer_status=$?
   if [[ ${transcriptome_summary_finalizer_status} -ne 1 ]]; then
     exit "${transcriptome_summary_finalizer_status}"
   fi
+fi
+if [[ ${transcriptome_summary_finalizer_should_run} -eq 1 ]]; then
+  if ! gg_stage_transaction_lock_acquire \
+    "${transcriptome_provenance_dir}/array_finalizers" \
+    "multispecies_summary"; then
+    exit 1
+  fi
+  transcriptome_summary_transaction_lock_acquired=1
 fi
 transcriptome_summary_needs_update=0
 gg_artifact_contract_init transcriptome_summary_provenance_args "transcriptome_multispecies_summary" "all_species" "${transcriptome_provenance_dir}/all_species.summary.json"
@@ -3868,12 +4827,15 @@ if [[ ${transcriptome_summary_finalizer_should_run} -eq 1 && ${run_multispecies_
   transcriptome_summary_output_dir=$(dirname "${file_multispecies_summary}")
   if [[ -z "${dir_transcriptome_assembly_output}" || "${dir_transcriptome_assembly_output}" == "/" \
     || "${transcriptome_summary_output_dir}" != "${dir_transcriptome_assembly_output%/}/annotation_summary" ]]; then
-    echo "Refusing to clear an unsafe transcriptome summary output path: ${transcriptome_summary_output_dir}" >&2
+    echo "Refusing to publish to an unsafe transcriptome summary output path: ${transcriptome_summary_output_dir}" >&2
     exit 1
   fi
-  rm -rf -- "${transcriptome_summary_output_dir}"
-  ensure_dir "${transcriptome_summary_output_dir}"
-  cd "$(dirname "${file_multispecies_summary}")" || exit 1
+  ensure_dir "${dir_transcriptome_assembly_output}"
+  transcriptome_summary_stage_parent=$(mktemp -d \
+    "${dir_transcriptome_assembly_output%/}/.annotation_summary.gg-work.XXXXXX")
+  transcriptome_summary_stage_dir="${transcriptome_summary_stage_parent}/annotation_summary"
+  ensure_dir "${transcriptome_summary_stage_dir}"
+  cd "${transcriptome_summary_stage_dir}" || exit 1
 
   python "${gg_support_dir}/collect_common_BUSCO_genes.py" \
     --busco_outdir "$(dirname "${file_busco_full_longest_cds}")" \
@@ -3907,8 +4869,17 @@ if [[ ${transcriptome_summary_finalizer_should_run} -eq 1 && ${run_multispecies_
   if [[ -e "Rplots.pdf" ]]; then
     rm -f -- "Rplots.pdf"
   fi
-  gg_artifact_record "${transcriptome_summary_provenance_args[@]}"
   cd "${dir_tmp}" || exit 1
+  if [[ ! -s "${transcriptome_summary_stage_dir}/$(basename "${file_multispecies_summary}")" ]]; then
+    echo "Transcriptome multispecies summary did not create its required PDF in private staging." >&2
+    exit 1
+  fi
+  mv_out_replace_dir \
+    "${transcriptome_summary_stage_dir}" \
+    "${transcriptome_summary_output_dir}"
+  rmdir -- "${transcriptome_summary_stage_parent}"
+  transcriptome_summary_stage_parent=""
+  gg_artifact_record "${transcriptome_summary_provenance_args[@]}"
 
   echo "$(date): End: ${task}"
 else
@@ -3917,6 +4888,12 @@ fi
 if [[ ${transcriptome_summary_finalizer_claimed} -eq 1 ]]; then
   gg_array_finalizer_complete
   transcriptome_summary_finalizer_claimed=0
+fi
+if [[ ${transcriptome_summary_transaction_lock_acquired} -eq 1 ]]; then
+  gg_stage_transaction_lock_release
+  transcriptome_summary_transaction_lock_acquired=0
+fi
+if [[ ${transcriptome_summary_finalizer_should_run} -eq 1 ]]; then
   trap - EXIT
 fi
 
@@ -3929,7 +4906,6 @@ else
   echo "fastp fastq files will not be removed."
 fi
 
-remove_empty_subdirs "${dir_transcriptome_assembly_output}"
 if [[ ${delete_tmp_dir} -eq 1 ]]; then
   echo "delete_tmp_dir=1: Normal completion. Deleting ${dir_tmp}"
   if [[ -n "${dir_tmp:-}" && "${dir_tmp}" != "/" ]]; then

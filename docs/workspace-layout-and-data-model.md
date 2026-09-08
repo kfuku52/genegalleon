@@ -136,7 +136,7 @@ As a rule of thumb:
 For the newer protein-mode workflow, this distinction matters:
 
 - `workspace/input/species_protein/` is curated input that you provide on purpose,
-- `workspace/downloads/tmp/species_protein/` is temporary derived state created from `species_cds`,
+- `workspace/downloads/tmp/species_protein/` is the default location for temporary derived state created from `species_cds`; [external scratch](temporary-storage.md) relocates it,
 - the temporary directory is regenerated when GeneGalleon detects input-sequence-mode or genetic-code changes.
 
 That means:

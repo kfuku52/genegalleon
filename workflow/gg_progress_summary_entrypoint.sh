@@ -93,7 +93,7 @@ gg_entrypoint_name="gg_progress_summary_entrypoint.sh"
 
 # Mode
 mode_transcriptome_assembly="auto" # {"auto", "sraid", "fastq", "metadata"}; input mode used to interpret transcriptome-generation progress directories, with auto detecting the available workspace/input layout.
-gene_family_output_storage="${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}" # zip|files|raw; raw aliases files, while zip flushes completed live gene-family artifacts after archive-aware summaries.
+gene_family_output_storage="${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}" # zip|files|raw; raw aliases files, while zip collects queued gene-family outputs in bounded batches after archive-aware summaries.
 gene_family_zip_compression="${gene_family_zip_compression:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION:-adaptive}}" # adaptive|deflate|store.
 gene_family_zip_compression_level="${gene_family_zip_compression_level:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL:-6}}" # Deflate level 0-9.
 gene_family_zip_workers="${gene_family_zip_workers:-${GG_COMMON_GENE_FAMILY_ZIP_WORKERS:-1}}" # Concurrent ZIP writers, capped at 4.

@@ -129,6 +129,51 @@ def test_inode_preflight_treats_zero_as_exhausted(
         SAFE.extract_expected_prefix(archive_path, tmp_path / "output", "result")
 
 
+def test_inode_preflight_accepts_filesystem_without_inode_accounting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    archive_path = tmp_path / "result.zip"
+    _write_zip(archive_path, [("result/value.txt", b"value")])
+    real_statvfs = SAFE.os.statvfs
+
+    def inode_accounting_unavailable(path):
+        values = list(real_statvfs(path))
+        values[5] = 0
+        values[7] = 0
+        return os.statvfs_result(values)
+
+    monkeypatch.setattr(SAFE.os, "statvfs", inode_accounting_unavailable)
+
+    extracted = SAFE.extract_expected_prefix(
+        archive_path,
+        tmp_path / "output",
+        "result",
+    )
+
+    assert (extracted / "value.txt").read_bytes() == b"value"
+
+
+def test_timestamp_conversion_failure_is_wrapped_and_cleans_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    archive_path = tmp_path / "result.zip"
+    _write_zip(archive_path, [("result/value.txt", b"value")])
+    output_root = tmp_path / "output"
+
+    def invalid_timestamp(_value):
+        raise ValueError("timestamp out of range")
+
+    monkeypatch.setattr(SAFE.time, "mktime", invalid_timestamp)
+
+    with pytest.raises(SAFE.SafeZipError, match="timestamp out of range"):
+        SAFE.extract_expected_prefix(archive_path, output_root, "result")
+
+    assert not (output_root / "result").exists()
+    assert not list(output_root.glob(".result.extract.partial.*"))
+
+
 def test_corrupt_archive_preserves_existing_directory(tmp_path: Path):
     archive_path = tmp_path / "truncated.zip"
     _write_zip(archive_path, [("result/tree.nwk", b"(A,B);\n")])

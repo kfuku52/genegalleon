@@ -4,8 +4,8 @@
 import argparse
 import atexit
 import datetime
-import gc
 import glob
+import io
 import logging
 import math
 import os
@@ -13,7 +13,8 @@ import re
 import sys
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import ExitStack
 from pathlib import Path
 
 import numpy as np
@@ -385,8 +386,87 @@ def validate_directories(required_dirs, db_path):
             exit(1)
 
 
-@retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(Exception), reraise=True)
-def process_files(
+def read_csv_chunks(file_path, filtered_cols, chunksize, store, logical_subdir, logical_name):
+    """Read bounded chunks with column types consistent across the whole file.
+
+    Small files need one read. Larger files get a bounded type-discovery pass
+    before insertion, so a late text value cannot change a numeric SQL schema.
+    """
+    options = dict(sep="\t", header=0, usecols=filtered_cols, low_memory=True)
+
+    if chunksize is not None and store is None:
+        # Count physical line breaks in a bounded small-file buffer. They are
+        # an upper bound on CSV rows, including quoted multiline fields. This
+        # avoids constructing a chunk reader for the usual small family TSVs.
+        with open(file_path, "rb") as handle:
+            small_file = handle.read(256 * 1024 + 1)
+        if len(small_file) <= 256 * 1024 and small_file.count(b"\n") + small_file.count(b"\r") <= chunksize:
+            yield pd.read_csv(io.BytesIO(small_file), **options)
+            return
+        del small_file
+
+    def source(stack):
+        return file_path if store is None else stack.enter_context(store.open_binary(logical_subdir, logical_name))
+
+    with ExitStack() as stack:
+        input_file = source(stack)
+        if chunksize is None:
+            yield pd.read_csv(input_file, **options)
+            return
+        reader = stack.enter_context(pd.read_csv(input_file, chunksize=chunksize, **options))
+        first = next(reader, None)
+        if first is None:
+            return
+        second = next(reader, None)
+        if second is None:
+            yield first
+            return
+        def inferred_types(frame):
+            return {
+                column: pd.BooleanDtype()
+                if dtype.kind == "O" and pd.api.types.infer_dtype(frame[column], skipna=True) == "boolean"
+                else dtype
+                for column, dtype in frame.dtypes.items()
+            }
+
+        dtypes = inferred_types(first)
+        only_missing = first.isna().all().to_dict()
+
+        def merge_types(frame):
+            for column, incoming in inferred_types(frame).items():
+                current = dtypes[column]
+                if current == incoming:
+                    if only_missing[column]:
+                        only_missing[column] = frame[column].isna().all()
+                    continue
+                incoming_missing = frame[column].isna().all()
+                if (current.kind == "b" and (incoming.kind == "b" or incoming_missing)) or (
+                    incoming.kind == "b" and only_missing[column]
+                ):
+                    # A null-only chunk is inferred as float by read_csv.
+                    # Preserve boolean values and SQL BOOLEAN, including when
+                    # the first inserted chunk contains nothing but nulls.
+                    dtypes[column] = pd.BooleanDtype()
+                elif current.kind in "iuf" and incoming.kind in "iuf":
+                    dtypes[column] = np.promote_types(current, incoming)
+                else:
+                    # Use pandas' normal inferred text dtype, including its
+                    # missing-value representation, rather than a version shim.
+                    dtypes[column] = pd.Series(["text"]).dtype
+                only_missing[column] = only_missing[column] and incoming_missing
+
+        merge_types(second)
+        del first, second
+        for frame in reader:
+            merge_types(frame)
+            del frame
+
+    with ExitStack() as stack:
+        reader = stack.enter_context(pd.read_csv(source(stack), chunksize=chunksize, dtype=dtypes, **options))
+        yield from reader
+
+
+def iter_processed_file_chunks(
     file_path,
     columns_to_read,
     available_cols_set=None,
@@ -394,10 +474,12 @@ def process_files(
     store=None,
     logical_subdir=None,
     logical_name=None,
+    *,
+    chunksize=None,
 ):
     """
     Read a TSV file, add the 'orthogroup' column, ensure any missing columns become NaN,
-    and return the trimmed DataFrame with the columns we want to keep (including 'orthogroup').
+    and yield trimmed DataFrames with the columns we want to keep (including 'orthogroup').
     If requested columns are missing, raise an error unless fill_missing_columns
     is enabled. Structural columns are validated before this function is called;
     optional analysis columns in stat and CSUBST scan tables are filled with NaN.
@@ -435,47 +517,90 @@ def process_files(
                 preview += f", ... ({len(missing_cols)} total)"
             raise ValueError(f"Missing required columns in '{file_path}': {preview}")
 
-        # Read only the available columns using the filtered list.
-        if store is None:
-            df = pd.read_csv(
-                file_path,
-                sep="\t",
-                header=0,
-                usecols=filtered_cols,
-                low_memory=True,
-            )
-        else:
-            with store.open_binary(logical_subdir, logical_name) as file_handle:
-                df = pd.read_csv(
-                    file_handle,
-                    sep="\t",
-                    header=0,
-                    usecols=filtered_cols,
-                    low_memory=True,
-                )
-
-        if fill_missing_columns:
-            for col in missing_cols:
-                df[col] = np.nan
-
-        # --- Clean null characters ---
-        # Apply cleaning only on object-type columns so that numeric columns remain unaffected.
-        # object_cols = df.select_dtypes(include=[object]).columns
-        # for col in object_cols:
-        #    df[col] = df[col].str.replace('\x00', '')
-
-        # Insert the 'orthogroup' column derived from the file name.
-        df["orthogroup"] = og
-
-        # Reorder the columns to ensure 'orthogroup' is first.
-        # Use columns_to_read which includes 'orthogroup' and all expected columns
-        df = df[columns_to_read]
-
-        return df
+        for df in read_csv_chunks(file_path, filtered_cols, chunksize, store, logical_subdir, logical_name):
+            if fill_missing_columns:
+                for col in missing_cols:
+                    df[col] = np.nan
+            df["orthogroup"] = og
+            yield df[columns_to_read]
 
     except Exception:
         logger.exception("Error processing file %s", file_path)
         raise
+
+
+@retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(Exception), reraise=True)
+def process_files(file_path, columns_to_read, available_cols_set=None, fill_missing_columns=False,
+                  store=None, logical_subdir=None, logical_name=None):
+    """Read one complete frame for callers that explicitly request a full file."""
+    with ExitStack() as stack:
+        iterator = iter_processed_file_chunks(file_path, columns_to_read, available_cols_set,
+                                              fill_missing_columns, store, logical_subdir, logical_name)
+        stack.callback(iterator.close)
+        return next(iterator)
+
+
+def bounded_file_chunks(jobs, *, max_workers, chunksize):
+    """Yield (table, path, frame, error), with None frames marking file completion.
+
+    At most two reads per worker are pending. Consume and drop each Future
+    before advancing that file's iterator; completed frames cannot accumulate
+    in an all-files Future dictionary. Failure aborts the final DB publication.
+    """
+    jobs = iter(jobs)
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    pending = {}
+    open_readers = set()
+
+    def read_chunk(iterator):
+        frame = next(iterator, None)
+        # A short CSV chunk is the last one. Most family tables are small;
+        # avoid a second thread-pool round trip just to discover their EOF.
+        return frame, frame is None or len(frame) < chunksize
+
+    def submit_file():
+        job = next(jobs, None)
+        if job is None:
+            return
+        iterator = iter_processed_file_chunks(*job[1:], chunksize=chunksize)
+        open_readers.add(iterator)
+        pending[executor.submit(read_chunk, iterator)] = (job[0], job[1], iterator)
+
+    try:
+        for _ in range(2 * max_workers):
+            submit_file()
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            while done:
+                future = done.pop()
+                table, path, iterator = pending.pop(future)
+                try:
+                    frame, finished = future.result()
+                except Exception as exc:
+                    error = str(exc)
+                    iterator.close()
+                    open_readers.discard(iterator)
+                    del future
+                    yield table, path, None, error
+                    submit_file()
+                    continue
+                del future
+                if frame is not None:
+                    yield table, path, frame, None
+                    del frame
+                if finished:
+                    iterator.close()
+                    open_readers.discard(iterator)
+                    yield table, path, None, None
+                    submit_file()
+                else:
+                    pending[executor.submit(read_chunk, iterator)] = (table, path, iterator)
+    finally:
+        for future in pending:
+            future.cancel()
+        executor.shutdown(wait=True, cancel_futures=True)
+        for iterator in open_readers:
+            iterator.close()
 
 
 def gene_family_id_from_path(file_path):
@@ -590,7 +715,7 @@ def main():
         metavar="INT",
         default=10000,
         type=int,
-        help="Number of rows to accumulate before inserting into SQL.",
+        help="Rows to accumulate before SQL insertion; also caps each input chunk (maximum 50000).",
     )
     parser.add_argument(
         "--cb_categories",
@@ -616,6 +741,8 @@ def main():
 
     params = vars(args)
     params["max_workers"] = max(1, int(params["max_workers"]))
+    if params["row_threshold"] < 1:
+        parser.error("--row_threshold must be a positive integer")
     final_db_path = params["dbpath"]
     output_store = GeneFamilyOutputStore(params["dir_gene_family"]) if params["dir_gene_family"] else None
 
@@ -840,9 +967,9 @@ def main():
     # Process files concurrently. Any unreadable or malformed input makes the
     # complete database build fail; a partial database must never be reported
     # as a successful result.
-    futures = {}
     processing_errors = []
-    with ThreadPoolExecutor(max_workers=params["max_workers"]) as executor:
+
+    def input_jobs():
         for stat, files in infiles.items():
             for infile in files:
                 file_path = os.path.join(indirs[stat], infile)
@@ -858,8 +985,8 @@ def main():
                 if file_size == 0:
                     processing_errors.append((file_path, "input file is empty"))
                     continue
-                future = executor.submit(
-                    process_files,
+                yield (
+                    stat,
                     file_path,
                     columns[stat],
                     header_columns_set_by_file[stat].get(infile),
@@ -868,19 +995,24 @@ def main():
                     logical_subdir,
                     infile,
                 )
-                futures[future] = (stat, file_path)
-
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing files"):
-            stat, file_path = futures[future]
+    chunks = bounded_file_chunks(input_jobs(), max_workers=params["max_workers"],
+                                 chunksize=min(params["row_threshold"], 50000))
+    try:
+        for stat, file_path, df, error in tqdm(chunks, desc="Processing input chunks"):
+            if error is not None:
+                logger.error("Error processing file %s: %s", file_path, error)
+                processing_errors.append((file_path, error))
+                continue
+            if df is None:
+                processed_files[stat] += 1
+                continue
             try:
-                df = future.result()
                 # If it's a csubst table, apply cutoff
                 if stat.startswith("cb"):
                     df = apply_cutoff(df, params["cutoff_stat"])
                 if not df.empty:
                     buffers[stat].append(df)
                     buffer_row_counts[stat] += len(df)
-                processed_files[stat] += 1
                 # Check if buffer exceeds threshold and insert into DB
                 if buffer_row_counts[stat] >= params["row_threshold"]:
                     full_df = pd.concat(buffers[stat], ignore_index=True)
@@ -893,7 +1025,9 @@ def main():
                                 index=False,
                                 dtype=None,
                                 chunksize=chunksizes[stat],
-                                method="multi",
+                                # Batch bound parameters through the DB driver;
+                                # avoid building SQL expressions for every cell.
+                                method=None,
                             )
                         remaining = total_files[stat] - processed_files[stat]
                         logger.info(
@@ -901,10 +1035,14 @@ def main():
                         )
                     buffers[stat] = []
                     buffer_row_counts[stat] = 0
-                    gc.collect()
+                    del full_df
             except Exception as e:
                 logger.error(f"Error processing file {file_path}: {e}")
                 processing_errors.append((file_path, str(e)))
+    finally:
+        chunks.close()
+    # The loop target otherwise retains the final chunk during indexing/FDR.
+    df = None
 
     if processing_errors:
         engine.dispose()
@@ -938,7 +1076,7 @@ def main():
                         index=False,
                         dtype=None,
                         chunksize=chunksizes[stat],
-                        method="multi",
+                        method=None,
                     )
                 logger.info(
                     f"{datetime.datetime.today()}: Inserted remaining {buffer_row_counts[stat]} rows for '{stat}'."
@@ -947,8 +1085,9 @@ def main():
                 logger.info(f"No rows to insert for '{stat}' (buffer empty).")
             buffers[stat] = []
             buffer_row_counts[stat] = 0
-            gc.collect()
+            del full_df
 
+    buffer_list = None
     logger.info(f"{datetime.datetime.today()}: Completed adding infiles to the database.")
 
     # Retrieve table info

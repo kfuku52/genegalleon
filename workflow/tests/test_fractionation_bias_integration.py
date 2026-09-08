@@ -64,7 +64,8 @@ def _write_self_genome(directory: Path, species: str) -> None:
     os.environ.get("KFFRACTBIAS_RUN_INTEGRATION") != "1",
     reason="set KFFRACTBIAS_RUN_INTEGRATION=1 to run the JCVI/LAST workflow integration",
 )
-def test_fractionation_bias_core_runs_pair_and_publishes_bundle(tmp_path: Path) -> None:
+@pytest.mark.parametrize("external_scratch", [False, True])
+def test_fractionation_bias_core_runs_pair_and_publishes_bundle(tmp_path: Path, external_scratch: bool) -> None:
     assert shutil.which("kffractbias"), "kffractbias must be installed in the GeneGalleon runtime"
     workspace = tmp_path / "workspace"
     input_dir = workspace / "input"
@@ -90,8 +91,16 @@ def test_fractionation_bias_core_runs_pair_and_publishes_bundle(tmp_path: Path) 
             "artifact_stale_policy": "rebuild",
         }
     )
+    command = ["bash", str(CORE)]
+    if external_scratch:
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        env.update(GG_COMMON_TMP_ROOT=str(scratch), GG_TMP_MOUNT=str(scratch),
+                   GG_TMP_WORKSPACE_ID=str(workspace))
+        command = ["python", str(REPO_ROOT / "workflow/support/task_tmp.py"),
+                   "--workflow", "gg_fractionation_bias", "--", *command]
     completed = subprocess.run(
-        ["bash", str(CORE)],
+        command,
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
@@ -110,7 +119,11 @@ def test_fractionation_bias_core_runs_pair_and_publishes_bundle(tmp_path: Path) 
         "synthetic.plot.png",
         "synthetic.synteny.zip",
     }
-    assert {path.name for path in result_dir.iterdir()} == expected
+    # Persistent publication guards are coordination state, not tool outputs.
+    assert {
+        path.name for path in result_dir.iterdir()
+        if not path.name.endswith((".gg-bundle.lock.guard", ".gg-bundle.lock.guard.namespace-v1"))
+    } == expected
     assert all((result_dir / filename).stat().st_size > 0 for filename in expected)
 
     summary = json.loads((result_dir / "synthetic.summary.json").read_text(encoding="utf-8"))

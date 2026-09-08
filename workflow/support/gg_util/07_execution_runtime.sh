@@ -306,12 +306,22 @@ gg_test_shell_commands() {
 
 gg_step_start() {
   local task_name=$1
+  if [[ -n "${GG_RESOURCE_EVENT_FILE:-}" && "${GG_RESOURCE_OWNER_PID:-}" == "${BASHPID}" ]]; then
+    if ! { times > "${GG_RESOURCE_TIMES_FILE}" && python "${gg_support_dir}/resource_metrics.py" event "${task_name}"; }; then
+      echo "Resource stage observation unavailable: ${task_name}" >&2
+    fi
+  fi
   echo "$(date): Start: ${task_name}"
   echo "$(date): Start: ${task_name}" >&2
 }
 
 gg_step_skip() {
   local task_name=$1
+  if [[ -n "${GG_RESOURCE_EVENT_FILE:-}" && "${GG_RESOURCE_OWNER_PID:-}" == "${BASHPID}" ]]; then
+    if ! { times > "${GG_RESOURCE_TIMES_FILE}" && python "${gg_support_dir}/resource_metrics.py" event "${task_name}" skip; }; then
+      echo "Resource stage observation unavailable: ${task_name}" >&2
+    fi
+  fi
   echo "$(date): Skipped: ${task_name}"
 }
 

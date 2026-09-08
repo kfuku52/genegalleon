@@ -29,6 +29,15 @@ def test_amino_acid_site_panel_noops_on_empty_site_list():
     assert "return(g)" in fimo_motif
 
 
+def test_heatmap_panel_uses_current_treevis_named_panel_api():
+    stat_branch2tree = (SUPPORT_DIR / "stat_branch2tree_plot.r").read_text(encoding="utf-8")
+
+    assert "add_named_heatmap_column = function(g, args, df_trait, fill_label, gname)" in stat_branch2tree
+    assert "fill_label = fill_label," in stat_branch2tree
+    assert "gname = gname" in stat_branch2tree
+    assert "g[[gname]] = g[['heatmap']]" not in stat_branch2tree
+
+
 def test_query2family_busco_plot_uses_shared_species_label_parser():
     text = (SUPPORT_DIR / "plot_query2family_presence_absence.R").read_text(encoding="utf-8")
 

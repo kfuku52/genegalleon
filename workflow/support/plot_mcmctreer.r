@@ -36,9 +36,21 @@ extract_tree_strings = function(infile) {
     return(list(ci_tree = ci_tree, mean_tree = mean_tree, source = 'UTREE'))
   }
 
-  tree_lines = grep('^\\(\\(', lines, value = TRUE)
+  # A valid root can have a leaf as its first child; it need not start with ((.
+  tree_lines = grep('^\\(', lines, value = TRUE)
   if (length(tree_lines) == 0) {
     stop(paste0('No Newick tree line found in: ', infile))
+  }
+  for (tree_line in tree_lines) {
+    if (!grepl(';[[:space:]]*$', tree_line) ||
+        lengths(regmatches(tree_line, gregexpr(';', tree_line, fixed = TRUE))) != 1L) {
+      stop(paste0('Invalid Newick tree line in: ', infile))
+    }
+    parsed_tree = tryCatch(ape::read.tree(text = tree_line), error = function(e) NULL)
+    if (is.null(parsed_tree) || !inherits(parsed_tree, 'phylo') ||
+        length(parsed_tree$tip.label) < 2L || parsed_tree$Nnode < 1L) {
+      stop(paste0('Invalid Newick tree line in: ', infile))
+    }
   }
   if (length(tree_lines) == 1) {
     return(list(ci_tree = tree_lines[1], mean_tree = tree_lines[1], source = 'FIGTREE_SINGLE'))

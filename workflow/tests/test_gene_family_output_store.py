@@ -41,6 +41,7 @@ from workflow.support.gene_family_output_store import (
     storage_conversion_status,
     storage_conversion_summary,
 )
+from workflow.support.shared_namespace_lock import acquire, release
 
 
 def _write_family_outputs(root: Path, family_id: str, complete: bool = True):
@@ -578,6 +579,60 @@ def test_materialize_family_restores_only_requested_family(tmp_path: Path):
     assert not (root / "mafft" / "HOG0000002_cds.aln.fa.gz").exists()
 
 
+def test_materialize_family_never_stats_unselected_live_files(tmp_path: Path, monkeypatch):
+    root = tmp_path / "orthogroup"
+    _write_family_outputs(root, "OG0000001", complete=True)
+    unrelated = root / "artifact_provenance" / "OG0000002.generax_ufboot.json"
+    shared_lock = root / "parameters" / "undated_species_tree.pruned.nwk.lock"
+    for path in (unrelated, shared_lock):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("concurrent producer metadata\n", encoding="utf-8")
+    original_stat = Path.stat
+
+    def fail_if_unselected(path, *args, **kwargs):
+        if path in (unrelated, shared_lock):
+            raise FileNotFoundError("unselected metadata disappeared concurrently")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_if_unselected)
+    destination = tmp_path / "selected"
+    restored = GeneFamilyOutputStore(root).materialize_family(
+        "OG0000001", orthogroup_id_from_name, destination_root=destination
+    )
+
+    assert len(restored) == 4
+    assert (destination / "stat_branch" / "OG0000001_stat.branch.tsv").is_file()
+
+
+def test_materialize_family_does_not_hide_selected_source_errors(tmp_path: Path, monkeypatch):
+    root = tmp_path / "orthogroup"
+    paths = _write_family_outputs(root, "OG0000001", complete=True)
+    original_stat = Path.stat
+
+    def fail_selected(path, *args, **kwargs):
+        if path == paths["stat_branch"]:
+            raise OSError("selected artifact is unreadable")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_selected)
+    with pytest.raises(OSError, match="selected artifact is unreadable"):
+        GeneFamilyOutputStore(root).materialize_family(
+            "OG0000001", orthogroup_id_from_name, destination_root=tmp_path / "selected"
+        )
+
+
+def test_materialize_family_preserves_archive_record_family_identity(tmp_path: Path):
+    root = tmp_path / "orthogroup"
+    _write_family_outputs(root, "OG0000001", complete=True)
+    archive_completed_outputs(root, "orthogroup", ["OG0000001"], orthogroup_id_from_name)
+    # The index is authoritative even if the caller cannot infer an archived name.
+    restored = GeneFamilyOutputStore(root).materialize_family(
+        "OG0000001", lambda _name: None, destination_root=tmp_path / "selected"
+    )
+
+    assert len(restored) == 4
+
+
 def test_materialize_family_cli_does_not_require_full_family_catalog(tmp_path: Path):
     root = tmp_path / "orthogroup"
     genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
@@ -1055,8 +1110,7 @@ def test_active_family_shared_lock_prevents_nonblocking_archive(tmp_path: Path):
     archive_root = root / ".gg_store"
     lock_path = family_lock_path(archive_root, "OG0000001")
     lock_path.parent.mkdir(parents=True)
-    lock_handle = lock_path.open("a+b")
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_SH)
+    token = acquire(lock_path, exclusive=False)
     try:
         assert archive_completed_outputs(
             root,
@@ -1067,8 +1121,21 @@ def test_active_family_shared_lock_prevents_nonblocking_archive(tmp_path: Path):
         ) == []
         assert paths["stat_branch"].is_file()
     finally:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        lock_handle.close()
+        release(lock_path, token, exclusive=False)
+
+
+def test_bucket_lock_does_not_depend_on_node_local_flock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    monkeypatch.setattr(fcntl, "flock", lambda *_: None)
+    path = tmp_path / "locks" / "00.lock"
+    with output_store_module._bucket_lock(path, exclusive=False) as shared:
+        assert shared
+        with output_store_module._bucket_lock(path, exclusive=True, nonblocking=True) as writer:
+            assert not writer
 
 
 def test_active_family_does_not_block_archiving_an_unrelated_family(tmp_path: Path):
@@ -1085,8 +1152,7 @@ def test_active_family_does_not_block_archiving_an_unrelated_family(tmp_path: Pa
     archive_root = root / ".gg_store"
     lock_path = family_lock_path(archive_root, active_family)
     lock_path.parent.mkdir(parents=True)
-    lock_handle = lock_path.open("a+b")
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_SH)
+    token = acquire(lock_path, exclusive=False)
     try:
         archived = archive_completed_outputs(
             root,
@@ -1096,8 +1162,7 @@ def test_active_family_does_not_block_archiving_an_unrelated_family(tmp_path: Pa
             nonblocking=True,
         )
     finally:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        lock_handle.close()
+        release(lock_path, token, exclusive=False)
 
     assert archived
     assert active_paths["stat_branch"].is_file()
@@ -1116,8 +1181,7 @@ def test_managed_delete_waits_for_the_active_family_lock(tmp_path: Path):
     live_path.write_text("active output\n", encoding="utf-8")
     lock_path = family_lock_path(root / ".gg_store", family_id)
     lock_path.parent.mkdir(parents=True)
-    lock_handle = lock_path.open("a+b")
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_SH)
+    token = acquire(lock_path, exclusive=False)
     started = threading.Event()
     finished = threading.Event()
     failures = []
@@ -1140,8 +1204,7 @@ def test_managed_delete_waits_for_the_active_family_lock(tmp_path: Path):
     time.sleep(0.05)
     assert not finished.is_set()
     assert live_path.is_file()
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-    lock_handle.close()
+    release(lock_path, token, exclusive=False)
     worker.join(timeout=2)
 
     assert finished.is_set()
@@ -1262,6 +1325,38 @@ def test_active_store_reader_prevents_nonblocking_archive(tmp_path: Path):
         lambda name: "OG0000002" if name.startswith("OG0000002_") else None,
         nonblocking=True,
     )
+
+
+def test_nonblocking_archive_family_does_not_wait_to_refresh_status(
+    tmp_path: Path,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "orthogroup"
+    family_id = "OG0000001"
+    _write_family_outputs(root, family_id, complete=False)
+    args = build_parser().parse_args(
+        [
+            "archive-family",
+            "--root",
+            str(root),
+            "--mode",
+            "orthogroup",
+            "--family-id",
+            family_id,
+            "--nonblocking",
+        ]
+    )
+
+    archive_root = root / ".gg_store"
+    with output_store_module.producer_quiescence_lock(archive_root) as acquired:
+        assert acquired
+        started = time.monotonic()
+        assert run_cli(args) == 0
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 1
+    assert not (root / "ARCHIVE_STATUS.tsv").exists()
 
 
 def test_query_prefix_family_metadata_prevents_cross_family_materialization(tmp_path: Path):
@@ -1500,8 +1595,7 @@ def test_stale_tmp_cleanup_skips_only_the_active_family(tmp_path: Path):
     archive_root = root / ".gg_store"
     lock_path = family_lock_path(archive_root, "OG0000001")
     lock_path.parent.mkdir(parents=True)
-    lock_handle = lock_path.open("a+b")
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_SH)
+    token = acquire(lock_path, exclusive=False)
     try:
         removed = cleanup_stale_tmp(
             root,
@@ -1512,8 +1606,7 @@ def test_stale_tmp_cleanup_skips_only_the_active_family(tmp_path: Path):
         assert old_dir.is_dir()
         assert not unrelated_dir.exists()
     finally:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        lock_handle.close()
+        release(lock_path, token, exclusive=False)
 
 
 def test_tmp_cleanup_caps_failed_directories_and_ignores_manual_directories(
@@ -2993,7 +3086,11 @@ def test_strict_conversion_rejects_family_owned_parameter_outside_catalog(
     assert not (root / ".gg_store" / "storage-conversion.pending").exists()
 
 
-def test_archive_family_cli_archives_failed_partial_outputs(tmp_path: Path):
+def test_archive_family_cli_archives_failed_partial_outputs(tmp_path: Path, monkeypatch):
+    import workflow.support.gene_family_output_store as output_store_module
+    def forbid_full_status(*args, **kwargs):
+        raise AssertionError("per-family cleanup must not scan the full store")
+    monkeypatch.setattr(output_store_module, "_write_archive_status", forbid_full_status)
     root = tmp_path / "query2family"
     query_dir = tmp_path / "query_gene"
     query_dir.mkdir()
@@ -3205,6 +3302,39 @@ def test_zip_to_raw_conversion_treats_zero_available_inodes_as_exhausted(
 
     assert not paths["mafft"].exists()
     assert GeneFamilyOutputStore(root).logical_exists("mafft/A_cds.aln.fa.gz")
+
+
+def test_zip_to_raw_conversion_accepts_missing_inode_accounting(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import workflow.support.gene_family_output_store as output_store_module
+
+    root = tmp_path / "query2family"
+    query_dir = tmp_path / "query_gene"
+    query_dir.mkdir()
+    (query_dir / "A").write_text("geneA\n", encoding="utf-8")
+    paths = _write_family_outputs(root, "A", complete=True)
+    family_ids, family_from_name = family_context("query2family", query_dir=query_dir)
+    archive_completed_outputs(root, "query2family", family_ids, family_from_name)
+    real_stats = os.statvfs(root)
+    unavailable = SimpleNamespace(
+        **{
+            field: (
+                0
+                if field in {"f_files", "f_favail"}
+                else getattr(real_stats, field)
+            )
+            for field in dir(real_stats)
+            if field.startswith("f_")
+        }
+    )
+    monkeypatch.setattr(output_store_module.os, "statvfs", lambda _path: unavailable)
+
+    convert_storage_to_raw(root, "query2family")
+
+    assert paths["mafft"].exists()
+    assert paths["mafft"].read_bytes() == b"mafft:A\n"
 
 
 def test_storage_status_cli_can_inspect_physical_store_without_catalog(
@@ -3555,12 +3685,12 @@ def test_lock_striping_and_metadata_optimization_reduce_legacy_lock_files(
         family_lock_path(archive_root, f"OG{index:07d}").name
         for index in range(1000)
     }
-    assert len(stripe_names) <= 16
-    assert all(int(name.removesuffix(".lock"), 16) < 16 for name in stripe_names)
+    assert len(stripe_names) == 1000
+    assert all(len(name.removesuffix(".lock")) == 64 for name in stripe_names)
 
     result = optimize_archive_metadata(root)
-    assert result["removed_legacy_lock_files"] == 3
-    assert (family_locks / "00.lock").is_file()
-    assert (family_locks / "0f.lock").is_file()
+    assert result["removed_legacy_lock_files"] == 5
+    assert not (family_locks / "00.lock").exists()
+    assert not (family_locks / "0f.lock").exists()
     assert not (family_locks / "ff.lock").exists()
     assert not (state_locks / "fe.lock").exists()

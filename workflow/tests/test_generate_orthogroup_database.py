@@ -1,7 +1,9 @@
+import gc
 import math
 import sqlite3
 import subprocess
 import sys
+import weakref
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -82,6 +84,109 @@ def test_process_files_can_fill_missing_optional_columns(tmp_path):
 
     assert out.columns.tolist() == ["orthogroup", "a", "b", "future_optional"]
     assert pandas.isna(out.loc[0, "future_optional"])
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 4, 100])
+def test_chunked_reader_preserves_whole_file_values_types_and_optional_columns(tmp_path, chunk_size):
+    mod = load_module()
+    infile = tmp_path / "OG0001_stat.branch.tsv"
+    infile.write_text("number\tlabel\n1\t001\n2\t002\n3.5\tlater-text\n4\t\n")
+    columns = ["orthogroup", "number", "label", "optional"]
+    expected = mod.process_files(str(infile), columns, fill_missing_columns=True)
+    chunks = list(mod.iter_processed_file_chunks(str(infile), columns,
+                                                 fill_missing_columns=True, chunksize=chunk_size))
+    assert all(len(chunk) <= chunk_size for chunk in chunks)
+    pandas.testing.assert_frame_equal(pandas.concat(chunks, ignore_index=True), expected)
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 4])
+@pytest.mark.parametrize("values", [
+    ["NA", "NA", "True", "False"],
+    ["True", "False", "NA", "True"],
+    ["True", "False", "2", "3"],
+    ["NA", "NA", "001", "later-text"],
+])
+def test_chunked_reader_keeps_null_and_boolean_sql_types(tmp_path, chunk_size, values):
+    mod = load_module()
+    infile = tmp_path / "OG0001_stat.branch.tsv"
+    infile.write_text("id\tvalue\n" + "".join(f"{index}\t{value}\n" for index, value in enumerate(values)))
+    columns = ["orthogroup", "id", "value"]
+    expected = mod.process_files(str(infile), columns)
+    reference = mod.sqlalchemy.create_engine("sqlite://")
+    streamed = mod.sqlalchemy.create_engine("sqlite://")
+    try:
+        with reference.begin() as connection:
+            expected.to_sql("branch", connection, index=False)
+        for chunk in mod.iter_processed_file_chunks(str(infile), columns, chunksize=chunk_size):
+            with streamed.begin() as connection:
+                chunk.to_sql("branch", connection, index=False, if_exists="append")
+        for query in ("PRAGMA table_info(branch)", "SELECT * FROM branch ORDER BY id"):
+            with reference.connect() as left, streamed.connect() as right:
+                assert left.exec_driver_sql(query).fetchall() == right.exec_driver_sql(query).fetchall()
+    finally:
+        reference.dispose()
+        streamed.dispose()
+
+
+def test_file_chunk_scheduler_does_not_read_every_file_ahead_of_consumer(tmp_path, monkeypatch):
+    mod = load_module()
+    started = set()
+    closed = set()
+
+    def reader(path, *_args, **_kwargs):
+        started.add(path)
+        try:
+            yield pandas.DataFrame({"value": [1]})
+            yield pandas.DataFrame({"value": [2]})
+        finally:
+            closed.add(path)
+
+    monkeypatch.setattr(mod, "iter_processed_file_chunks", reader)
+    jobs = (("branch", str(tmp_path / f"OG{n}.tsv"), ["value"]) for n in range(100))
+    chunks = mod.bounded_file_chunks(jobs, max_workers=2, chunksize=1)
+    first = next(chunks)
+    assert first[2]["value"].tolist() == [1]
+    assert 1 <= len(started) <= 4
+    chunks.close()
+    assert closed == started
+
+
+def test_database_releases_consumed_input_frames_before_indexing(tmp_path, monkeypatch):
+    mod = load_module()
+    monkeypatch.chdir(tmp_path)
+    tree_dir = tmp_path / "stat_tree"
+    branch_dir = tmp_path / "stat_branch"
+    tree_dir.mkdir()
+    branch_dir.mkdir()
+    for number in range(16):
+        stat_tree_frame().to_csv(tree_dir / f"OG{number}_stat.tree.tsv", sep="\t", index=False)
+        pandas.concat([stat_branch_frame()] * 8, ignore_index=True).to_csv(
+            branch_dir / f"OG{number}_stat.branch.tsv", sep="\t", index=False)
+    references = []
+    original_reader = mod.read_csv_chunks
+    original_fdr = mod.add_global_aa_change_fdr_columns
+
+    def read(*args, **kwargs):
+        for frame in original_reader(*args, **kwargs):
+            references.append(weakref.ref(frame))
+            yield frame
+
+    def check_released(*args, **kwargs):
+        gc.collect()
+        assert references
+        assert not any(reference() is not None for reference in references)
+        return original_fdr(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "read_csv_chunks", read)
+    monkeypatch.setattr(mod, "add_global_aa_change_fdr_columns", check_released)
+    database = tmp_path / "result.sqlite3"
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT_PATH), "--overwrite", "1", "--dbpath", str(database),
+                                    "--dir_stat_tree", str(tree_dir), "--dir_stat_branch", str(branch_dir),
+                                    "--row_threshold", "3", "--ncpu", "2"])
+    mod.main()
+    with sqlite3.connect(database) as connection:
+        assert connection.execute('SELECT COUNT(*) FROM "tree"').fetchone()[0] == 16
+        assert connection.execute('SELECT COUNT(*) FROM "branch"').fetchone()[0] == 128
 
 
 def test_parse_cutoff_stat_parses_valid_tokens_and_ignores_invalid():
@@ -232,7 +337,9 @@ def test_database_builder_reads_stat_tables_from_zip_shards(
     stat_branch_subdir = "stat.branch" if legacy_layout else "stat_branch"
     for subdir, frame in (
         (stat_tree_subdir, stat_tree_frame(tree_metric=1.25)),
-        (stat_branch_subdir, stat_branch_frame(branch_id=1, branch_metric=2.5)),
+        (stat_branch_subdir, pandas.concat([
+            stat_branch_frame(branch_id=index, branch_metric=2.5 + index) for index in range(3)
+        ], ignore_index=True)),
         ("tree_plot", None),
     ):
         suffix = {
@@ -270,6 +377,8 @@ def test_database_builder_reads_stat_tables_from_zip_shards(
             str(root / stat_branch_subdir),
             "--ncpu",
             "1",
+            "--row_threshold",
+            "1",
         ],
         cwd=str(tmp_path),
         capture_output=True,
@@ -282,7 +391,9 @@ def test_database_builder_reads_stat_tables_from_zip_shards(
         tree = pandas.read_sql_query("SELECT orthogroup, tree_metric FROM tree", conn)
         branch = pandas.read_sql_query("SELECT orthogroup, branch_metric FROM branch", conn)
     assert tree.to_dict("records") == [{"orthogroup": family_id, "tree_metric": 1.25}]
-    assert branch.to_dict("records") == [{"orthogroup": family_id, "branch_metric": 2.5}]
+    assert branch.to_dict("records") == [
+        {"orthogroup": family_id, "branch_metric": 2.5 + index} for index in range(3)
+    ]
 
 
 def test_database_builder_rejects_legacy_scan_schema_before_overwriting_database(tmp_path):

@@ -1,0 +1,120 @@
+{
+  "baseline_revision": "c3ca724e61aaf82c1b46be0c5625bdb483414945",
+  "baseline_runs": [
+    {
+      "compactions": 24,
+      "completed": 200,
+      "elapsed_seconds": 26.276845428000115,
+      "enqueue_seconds": null,
+      "families": 10000,
+      "implementation": "per-family",
+      "output_sha256_verified": 10000,
+      "path_iterdir_entries": 1982099,
+      "peak_rss_kib": 36584,
+      "zip_bytes_written": 3343356,
+      "zip_writes": 224
+    },
+    {
+      "compactions": 24,
+      "completed": 200,
+      "elapsed_seconds": 27.332153844999993,
+      "enqueue_seconds": null,
+      "families": 10000,
+      "implementation": "per-family",
+      "output_sha256_verified": 10000,
+      "path_iterdir_entries": 1982099,
+      "peak_rss_kib": 36312,
+      "zip_bytes_written": 3343489,
+      "zip_writes": 224
+    },
+    {
+      "compactions": 24,
+      "completed": 200,
+      "elapsed_seconds": 25.811966053000106,
+      "enqueue_seconds": null,
+      "families": 10000,
+      "implementation": "per-family",
+      "output_sha256_verified": 10000,
+      "path_iterdir_entries": 1982099,
+      "peak_rss_kib": 36532,
+      "zip_bytes_written": 3343566,
+      "zip_writes": 224
+    }
+  ],
+  "data_filesystem": "container-local /tmp; repository mounted for code only",
+  "date": "2026-09-07",
+  "full_collection_32_publishers": {
+    "compactions": 0,
+    "completed": 10000,
+    "elapsed_seconds": 105.48024396399978,
+    "enqueue_seconds": 40.98814610199997,
+    "families": 10000,
+    "implementation": "queued",
+    "output_sha256_verified": 10000,
+    "path_iterdir_entries": 0,
+    "peak_rss_kib": 61892,
+    "queue_workers": 32,
+    "zip_bytes_written": 12553405,
+    "zip_writes": 100
+  },
+  "limitations": [
+    "Synthetic small-file workload, not an end-to-end evolutionary analysis.",
+    "Shared Docker host resources; timings are indicative and distributions are provided.",
+    "Path.iterdir entry counter excludes glob traversal and is not a filesystem IOPS counter.",
+    "HPC scheduler and NFS/Lustre behavior have not been validated."
+  ],
+  "median_seconds": {
+    "baseline": 26.276845428000115,
+    "queued": 2.2777680429999236
+  },
+  "platform": "linux/arm64 Docker on macOS",
+  "queued_runs": [
+    {
+      "compactions": 0,
+      "completed": 200,
+      "elapsed_seconds": 2.2777680429999236,
+      "enqueue_seconds": 1.5371043350000946,
+      "families": 10000,
+      "implementation": "queued",
+      "output_sha256_verified": 10000,
+      "path_iterdir_entries": 0,
+      "peak_rss_kib": 35096,
+      "queue_workers": 1,
+      "zip_bytes_written": 249420,
+      "zip_writes": 2
+    },
+    {
+      "compactions": 0,
+      "completed": 200,
+      "elapsed_seconds": 2.3720126270000037,
+      "enqueue_seconds": 0.9487087930001508,
+      "families": 10000,
+      "implementation": "queued",
+      "output_sha256_verified": 10000,
+      "path_iterdir_entries": 0,
+      "peak_rss_kib": 35020,
+      "queue_workers": 1,
+      "zip_bytes_written": 249477,
+      "zip_writes": 2
+    },
+    {
+      "compactions": 0,
+      "completed": 200,
+      "elapsed_seconds": 1.6630965009999272,
+      "enqueue_seconds": 0.8020300009998209,
+      "families": 10000,
+      "implementation": "queued",
+      "output_sha256_verified": 10000,
+      "path_iterdir_entries": 0,
+      "peak_rss_kib": 35092,
+      "queue_workers": 1,
+      "zip_bytes_written": 249446,
+      "zip_writes": 2
+    }
+  ],
+  "runtime_image": "local/genegalleon:zip-array-dev",
+  "runtime_image_id": "sha256:98b5fcf35880453b7b2838ec8e1ac076e81bcba84b49ae4d1aa3b5722b479e82",
+  "timing_scope": "archive operations including enqueue/inventory preparation; fixture creation and final SHA-256 verification excluded",
+  "validation": "591 related Docker tests passed, including HGT integration, multiprocess state writes and SIGKILL at compression/publication/index/removal boundaries.",
+  "workload": "10,000 families, one deterministic 1,024-byte artifact per family; archive 200 families"
+}

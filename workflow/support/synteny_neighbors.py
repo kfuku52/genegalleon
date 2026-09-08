@@ -147,14 +147,23 @@ def load_gene_info(path):
         return pandas.DataFrame(columns=["gene_id", "chromosome", "start", "end", "strand"])
     out = df.loc[:, [c for c in ["gene_id", "chromosome", "start", "end", "strand"] if c in df.columns]].copy()
     if "strand" not in out.columns:
-        out.loc[:, "strand"] = "+"
-    out.loc[:, "gene_id"] = out["gene_id"].astype(str)
-    out.loc[:, "chromosome"] = out["chromosome"].fillna("").astype(str)
-    out.loc[:, "start"] = pandas.to_numeric(out["start"], errors="coerce")
-    out.loc[:, "end"] = pandas.to_numeric(out["end"], errors="coerce")
+        out["strand"] = "+"
+    # Whole-column assignment must be allowed to replace the inferred dtype.
+    # ``.loc[:, column] = ...`` attempts an in-place write on recent pandas
+    # releases and rejects numeric chromosome columns when the normalized
+    # values are strings.
+    out["gene_id"] = out["gene_id"].astype(str)
+    out["chromosome"] = out["chromosome"].fillna("").astype(str)
+    out["start"] = pandas.to_numeric(out["start"], errors="coerce")
+    out["end"] = pandas.to_numeric(out["end"], errors="coerce")
     out = out.dropna(subset=["start", "end"])
-    out.loc[:, "start"] = out[["start", "end"]].min(axis=1).astype(int)
-    out.loc[:, "end"] = out[["start", "end"]].max(axis=1).astype(int)
+    # Row-wise agg cannot concatenate results from a header-only annotation
+    # table. Compute both bounds before assignment, including for zero rows,
+    # so main() can handle empty gene information with its existing warning.
+    interval_start = out[["start", "end"]].min(axis=1)
+    interval_end = out[["start", "end"]].max(axis=1)
+    out["start"] = interval_start.astype(int)
+    out["end"] = interval_end.astype(int)
     out = out.loc[out["chromosome"] != "", :]
     out = out.drop_duplicates(subset=["gene_id"], keep="first")
     out = out.sort_values(["chromosome", "start", "end", "gene_id"], kind="mergesort").reset_index(drop=True)
@@ -177,7 +186,7 @@ def species_gene_cache_contract(species_name, species_cds_path, species_gff_path
             "cds_sha256": sha256_file(species_cds_path),
             "gff_sha256": sha256_file(species_gff_path),
         },
-        "parameters": {"feature": "CDS", "multiple_hits": "longest"},
+        "parameters": {"feature": "CDS", "multiple_hits": "longest", "gff_annotation_schema": 2},
     }
 
 
@@ -185,11 +194,8 @@ def species_gene_cache_is_current(out_path, manifest_path, contract):
     if not os.path.isfile(out_path) or os.path.getsize(out_path) == 0:
         return False
     if not os.path.isfile(manifest_path):
-        adopted = dict(contract)
-        adopted["output_sha256"] = sha256_file(out_path)
-        adopted["provenance_state"] = "adopted_legacy_output_without_rebuild"
-        write_species_gene_cache_manifest(manifest_path, adopted)
-        return True
+        # An unversioned cache may contain summed alternative transcripts.
+        return False
     try:
         with open(manifest_path, "r", encoding="utf-8") as handle:
             recorded = json.load(handle)

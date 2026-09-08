@@ -10,7 +10,9 @@ unset_singularity_envs() {
 	unset GG_CONTAINER_BIND_MOUNTS
 	unset SINGULARITYENV_GG_ARRAY_TASK_ID
 	unset SINGULARITYENV_GG_TASK_CPUS
+	unset SINGULARITYENV_GG_RESOURCE_PROFILE
 	unset SINGULARITYENV_GG_JOB_ID
+	unset SINGULARITYENV_GG_ARRAY_JOB_ID
 	unset SINGULARITYENV_GG_MEM_PER_CPU_GB
 	unset SINGULARITYENV_GG_MEM_TOTAL_GB
 	unset SINGULARITYENV_GG_MEM_TOOL_RESERVE_GB
@@ -30,7 +32,9 @@ unset_singularity_envs() {
 	unset SINGULARITYENV_MEM_PER_HOST
 	unset APPTAINERENV_GG_ARRAY_TASK_ID
 	unset APPTAINERENV_GG_TASK_CPUS
+	unset APPTAINERENV_GG_RESOURCE_PROFILE
 	unset APPTAINERENV_GG_JOB_ID
+	unset APPTAINERENV_GG_ARRAY_JOB_ID
 	unset APPTAINERENV_GG_MEM_PER_CPU_GB
 	unset APPTAINERENV_GG_MEM_TOTAL_GB
 	unset APPTAINERENV_GG_MEM_TOOL_RESERVE_GB
@@ -61,6 +65,7 @@ gg_scheduler_runtime_prelude() {
 
 gg_resolve_physical_path() {
 	local path=${1:-}
+	local parent=""
 	local resolved_path=""
 
 	if [[ -z "${path}" ]]; then
@@ -72,7 +77,8 @@ gg_resolve_physical_path() {
 			return 0
 		fi
 	fi
-	resolved_path=$(cd "$(dirname "${path}")" && pwd -P)/$(basename "${path}")
+	parent=$(cd "$(dirname "${path}")" && pwd -P) || return 1
+	resolved_path="${parent}/$(basename -- "${path}")"
 	printf '%s\n' "${resolved_path}"
 }
 
@@ -380,6 +386,19 @@ gg_run_container_shell_script() {
 	local image_path=$1
 	local script_path=$2
 	local subcommand=""
+	local -a shell_argv=(bash -s --)
+	if [[ "$(basename "${script_path}")" == gg_*_core.sh && "${GG_RESOURCE_METRICS:-1}" == 1 ]]; then
+		shell_argv=(python /script/support/resource_metrics.py
+			--directory /workspace/output/resource_metrics
+			--workflow "$(basename "${script_path}" _core.sh)"
+			--runtime-id "${GG_RESOURCE_RUNTIME_ID:-unidentified}"
+			--server-id "${GG_RESOURCE_SERVER_ID:-unidentified}"
+			--cpus "${GG_TASK_CPUS:-1}" --memory-gb "${GG_MEM_TOTAL_GB:-1}" -- bash -s --)
+	fi
+
+	if [[ "$(basename "${script_path}")" == gg_*_core.sh && "${GG_COMMON_TMP_ROOT:-workspace}" != workspace ]]; then
+		shell_argv=(python /script/support/task_tmp.py --workflow "$(basename "${script_path}" _core.sh)" -- "${shell_argv[@]}")
+	fi
 
 	if ! gg_container_shell_command_is_set; then
 		echo "gg_run_container_shell_script: container shell command is not initialized." >&2
@@ -390,10 +409,14 @@ gg_run_container_shell_script() {
 		return 1
 	fi
 	subcommand=$(gg_container_shell_command_subcommand || true)
+	if [[ "$(basename "${script_path}")" == gg_*_core.sh && "${GG_COMMON_TMP_ROOT:-workspace}" != workspace && "${subcommand}" != exec ]]; then
+		echo "External scratch requires an exec container adapter." >&2
+		return 1
+	fi
 	case "$(declare -p singularity_command 2>/dev/null)" in
 		declare\ -a*)
 			if [[ "${subcommand}" == "exec" ]]; then
-				"${singularity_command[@]}" "${image_path}" bash -s -- < "${script_path}"
+				"${singularity_command[@]}" "${image_path}" "${shell_argv[@]}" < "${script_path}"
 			else
 				"${singularity_command[@]}" "${image_path}" < "${script_path}"
 			fi
@@ -401,7 +424,7 @@ gg_run_container_shell_script() {
 		*)
 			# Backward compatibility for external site adapters that still set a string command.
 			if [[ "${subcommand}" == "exec" ]]; then
-				${singularity_command} "${image_path}" bash -s -- < "${script_path}"
+				${singularity_command} "${image_path}" "${shell_argv[@]}" < "${script_path}"
 			else
 				${singularity_command} "${image_path}" < "${script_path}"
 			fi
@@ -424,11 +447,16 @@ gg_entrypoint_runtime_snapshot_dir() {
 	local job_id=""
 	local task_id=""
 	local output_root=""
+	local scheduler_kind=""
 
 	entrypoint_stem="$(basename "${entrypoint_name}")"
 	entrypoint_stem="${entrypoint_stem%.sh}"
 	job_id="${GG_JOB_ID:-${SLURM_JOB_ID:-${PBS_JOBID:-${JOB_ID:-local_$$}}}}"
 	task_id="${GG_ARRAY_TASK_ID:-${SLURM_ARRAY_TASK_ID:-${PBS_ARRAY_INDEX:-${PBS_ARRAYID:-${SGE_TASK_ID:-1}}}}}"
+	scheduler_kind="${GG_SCHEDULER_KIND:-$(gg_detect_scheduler_kind)}"
+	if [[ "${scheduler_kind}" == "local" ]]; then
+		job_id="${job_id}.${BASHPID:-$$}"
+	fi
 
 	output_root="${gg_workspace_output_dir:-}"
 	if [[ -z "${output_root}" && -n "${gg_workspace_dir:-}" ]]; then

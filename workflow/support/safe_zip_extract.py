@@ -62,8 +62,13 @@ def _preflight_extraction(
             f"required={required_bytes}, available={available_bytes}"
         )
     required_inodes = len(files) + len(implied_directories) + 1
+    total_inodes = int(filesystem_stats.f_files)
     available_inodes = int(filesystem_stats.f_favail)
-    if available_inodes >= 0 and required_inodes > available_inodes:
+    if (
+        total_inodes > 0
+        and available_inodes >= 0
+        and required_inodes > available_inodes
+    ):
         raise SafeZipError(
             "Insufficient filesystem inodes for ZIP extraction: "
             f"required={required_inodes}, available={available_inodes}"
@@ -237,7 +242,13 @@ def extract_expected_prefix(
                 ):
                     _fsync_directory(path)
                 _fsync_directory(temporary_root)
-        except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            OverflowError,
+            zipfile.BadZipFile,
+        ) as exc:
             raise SafeZipError(f"Failed to extract {archive_path}: {exc}") from exc
 
         backup = destination_root / (
