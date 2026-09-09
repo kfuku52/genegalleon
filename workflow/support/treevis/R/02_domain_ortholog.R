@@ -200,7 +200,7 @@ get_df_intron = function(df_tip) {
     return(df_intron)
 }
 
-add_protein_domain_column = function(g, args, df_rpsblast=NULL) {
+add_protein_domain_column = function(g, args, df_rpsblast=NULL, show_introns=FALSE) {
     cat(as.character(Sys.time()), 'Adding protein domain column.\n')
     if (is.null(df_rpsblast)) {
         cat('df_rpsblast is empty. Protein domain column will not be added.\n')
@@ -218,7 +218,7 @@ add_protein_domain_column = function(g, args, df_rpsblast=NULL) {
     if ('label' %in% colnames(df_domain)) {
         df_domain[,'label'] = factor(df_domain[,'label'], levels=df_tip[,'label'])
     }
-    if ('intron_positions' %in% colnames(df_tip)) {
+    if (isTRUE(show_introns) && 'intron_positions' %in% colnames(df_tip)) {
         cat('Intron position info is detected. Adding it to the protein domain column.\n')
         df_intron = get_df_intron(df_tip)
     }
@@ -255,10 +255,12 @@ add_protein_domain_column = function(g, args, df_rpsblast=NULL) {
         g[['domain']] = g[['domain']] + 
             geom_rect(data=df_domain, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, fill=sacc), alpha=1, inherit.aes=FALSE) +
             scale_fill_manual(values=mycolors)
+        attr(g[['domain']], 'treevis_legend_counts') = table(as.character(df_rps[['sacc']]))
     }
-    if ('intron_positions' %in% colnames(df_tip)) {
+    if (isTRUE(show_introns) && 'intron_positions' %in% colnames(df_tip)) {
         if (!all(is.na(df_tip[['intron_positions']]))) {
             g[['domain']] = g[['domain']] + geom_point(data=df_intron, aes(x=x, y=label), shape='|', color='gray50')
+            attr(g[['domain']]$layers[[length(g[['domain']]$layers)]], 'treevis_intron_marks') = TRUE
         }
     }
     return(g)

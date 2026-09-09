@@ -429,7 +429,7 @@ if [[ -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
       --input "gene_candidates=${file_hgt_gene}"
       --output "annotated_stat_branch=${file_hgt_stat_branch}"
       --output "tree_plot=${file_hgt_tree_plot}"
-      --parameter "column_layout=physical-mm-v1"
+      --parameter "column_layout=physical-mm-v2-compact-legends"
       --parameter "tree_width_mm=${hgt_tree_width_mm}"
       --parameter "promoter_bp=${hgt_promoter_bp}"
       --parameter "fimo_qvalue=${hgt_fimo_qvalue}"

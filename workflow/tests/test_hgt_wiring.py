@@ -24,7 +24,7 @@ def test_gene_evolution_core_passes_uniprot_metadata_and_synteny_to_summary():
     assert '--trimmed_aln "${summary_trimmed_fasta}"' in text
     assert 'synteny_source_dir="${dir_sp_cds}"' in text
     assert '--input_sequence_mode "${synteny_sequence_mode}"' in text
-    assert 'if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then' in text
+    assert 'if [[ ${treevis_synteny} -eq 1 || ${treevis_synteny_similarity} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then' in text
 
 
 def test_gene_evolution_hgt_profile_is_wired_as_a_preset():

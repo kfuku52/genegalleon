@@ -186,7 +186,7 @@ def species_gene_cache_contract(species_name, species_cds_path, species_gff_path
             "cds_sha256": sha256_file(species_cds_path),
             "gff_sha256": sha256_file(species_gff_path),
         },
-        "parameters": {"feature": "CDS", "multiple_hits": "longest", "gff_annotation_schema": 2},
+        "parameters": {"feature": "CDS", "multiple_hits": "longest", "gff_annotation_schema": 5},
     }
 
 

@@ -28,7 +28,10 @@
     ["Rscript", "workflow/tests/test_treevis_main.R"],
     ["Rscript", "workflow/tests/test_treevis_peroxisome.R"],
     ["Rscript", "workflow/tests/test_treevis_layout.R"],
+    ["Rscript", "workflow/tests/test_treevis_gene_structure.R"],
     ["Rscript", "workflow/tests/test_treevis_synteny_palette.R"],
+    ["Rscript", "workflow/tests/test_treevis_synteny_similarity.R"],
+    ["Rscript", "workflow/tests/test_treevis_sequence_cis_similarity.R"],
     ["Rscript", "workflow/tests/test_treevis_synteny.R"],
     ["Rscript", "workflow/tests/test_treevis_legends.R"],
     ["Rscript", "workflow/tests/test_kf_dependency_integrations.R"]

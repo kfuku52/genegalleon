@@ -394,6 +394,9 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
 
     legend_labels = c('Focal gene', 'Other neighbor',
                       paste0('Same gene family\n(', cutoff_label, ')'), 'Same-group link')
+    legend_display = c('Focal gene', 'Other\nneighbor',
+        paste0('Same gene\nfamily\n(', gsub(' <= ', '\n<= ', cutoff_label, fixed=TRUE), ')'),
+        'Same-group\nlink')
     df_legend = data.frame(x=NA_real_, y=NA_real_,
                            role=factor(legend_labels, levels=legend_labels))
     # A semantic key explains the encodings without listing arbitrary group IDs.
@@ -424,7 +427,7 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
                    inherit.aes=FALSE, show.legend=TRUE, na.rm=TRUE,
                    key_glyph=synteny_key) +
         scale_shape_manual(values=c(16, 16, 16, 95), breaks=legend_labels,
-                           name=NULL) +
+                           labels=legend_display, name=NULL) +
         scale_color_manual(values=point_palette) +
         xlab('Neighboring genes') +
         theme_minimal(base_size=args[['font_size']]) +

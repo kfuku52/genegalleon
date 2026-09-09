@@ -1,0 +1,1702 @@
+{
+  "inputs": {
+    "gff": {
+      "filename": "Cephalotus_follicularis_annos1-cds1-id-typename-nu1-upa1-add-chr0.gid29002.gff",
+      "sha256": "f9c84940723134323fd875b7430ee68183964d7e58666222b9b328dd25cf0b53"
+    },
+    "cds": {
+      "filename": "Cephalotus_follicularis_29002-CDS.fa",
+      "sha256": "0ef2cd1ab4c34ab6c22e2065a6e8b6546207be327ea50c1751f379f73cd9b340"
+    },
+    "genome": {
+      "filename": "Cephalotus_follicularis_29002.fa.gz",
+      "sha256": "5754480a88cb6678e1f155f6924ac61104525c5ed6474a9dd0f056c5bdfb4ccb"
+    }
+  },
+  "repairs": [
+    {
+      "gene": "Cfol_v3_18548",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-18548",
+      "transcript": "Cfol_v3_18548.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_18548.mRNA10",
+        "Cfol_v3_18548.mRNA11",
+        "Cfol_v3_18548.mRNA12",
+        "Cfol_v3_18548.mRNA13",
+        "Cfol_v3_18548.mRNA14",
+        "Cfol_v3_18548.mRNA15",
+        "Cfol_v3_18548.mRNA2",
+        "Cfol_v3_18548.mRNA3",
+        "Cfol_v3_18548.mRNA4",
+        "Cfol_v3_18548.mRNA5",
+        "Cfol_v3_18548.mRNA6",
+        "Cfol_v3_18548.mRNA7",
+        "Cfol_v3_18548.mRNA8",
+        "Cfol_v3_18548.mRNA9"
+      ],
+      "cds_blocks": 15,
+      "cds_length": 11385,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_03630",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-03630",
+      "transcript": "Cfol_v3_03630.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_03630.mRNA2",
+        "Cfol_v3_03630.mRNA3",
+        "Cfol_v3_03630.mRNA4",
+        "Cfol_v3_03630.mRNA5"
+      ],
+      "cds_blocks": 5,
+      "cds_length": 591,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_03631",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-03631",
+      "transcript": "Cfol_v3_03631.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_03631.mRNA10",
+        "Cfol_v3_03631.mRNA11",
+        "Cfol_v3_03631.mRNA12",
+        "Cfol_v3_03631.mRNA13",
+        "Cfol_v3_03631.mRNA14",
+        "Cfol_v3_03631.mRNA2",
+        "Cfol_v3_03631.mRNA3",
+        "Cfol_v3_03631.mRNA4",
+        "Cfol_v3_03631.mRNA5",
+        "Cfol_v3_03631.mRNA6",
+        "Cfol_v3_03631.mRNA7",
+        "Cfol_v3_03631.mRNA8",
+        "Cfol_v3_03631.mRNA9"
+      ],
+      "cds_blocks": 14,
+      "cds_length": 15306,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_19081",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-19081",
+      "transcript": "Cfol_v3_19081.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_19081.mRNA2",
+        "Cfol_v3_19081.mRNA3",
+        "Cfol_v3_19081.mRNA4",
+        "Cfol_v3_19081.mRNA5",
+        "Cfol_v3_19081.mRNA6",
+        "Cfol_v3_19081.mRNA7"
+      ],
+      "cds_blocks": 7,
+      "cds_length": 636,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_04239",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-04239",
+      "transcript": "Cfol_v3_04239.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_04239.mRNA2",
+        "Cfol_v3_04239.mRNA3",
+        "Cfol_v3_04239.mRNA4",
+        "Cfol_v3_04239.mRNA5",
+        "Cfol_v3_04239.mRNA6"
+      ],
+      "cds_blocks": 6,
+      "cds_length": 609,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21340",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21340",
+      "transcript": "Cfol_v3_21340.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21340.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 270,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21341",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21341",
+      "transcript": "Cfol_v3_21341.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21341.mRNA2",
+        "Cfol_v3_21341.mRNA3",
+        "Cfol_v3_21341.mRNA4"
+      ],
+      "cds_blocks": 4,
+      "cds_length": 1938,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21342",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21342",
+      "transcript": "Cfol_v3_21342.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21342.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 270,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21343",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21343",
+      "transcript": "Cfol_v3_21343.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21343.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 258,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21344",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21344",
+      "transcript": "Cfol_v3_21344.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21344.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 258,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21345",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21345",
+      "transcript": "Cfol_v3_21345.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21345.mRNA2",
+        "Cfol_v3_21345.mRNA3"
+      ],
+      "cds_blocks": 3,
+      "cds_length": 822,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21346",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21346",
+      "transcript": "Cfol_v3_21346.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21346.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 741,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21347",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21347",
+      "transcript": "Cfol_v3_21347.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21347.mRNA2",
+        "Cfol_v3_21347.mRNA3",
+        "Cfol_v3_21347.mRNA4"
+      ],
+      "cds_blocks": 4,
+      "cds_length": 2847,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21348",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21348",
+      "transcript": "Cfol_v3_21348.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21348.mRNA2",
+        "Cfol_v3_21348.mRNA3",
+        "Cfol_v3_21348.mRNA4",
+        "Cfol_v3_21348.mRNA5",
+        "Cfol_v3_21348.mRNA6"
+      ],
+      "cds_blocks": 6,
+      "cds_length": 1284,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21349",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21349",
+      "transcript": "Cfol_v3_21349.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21349.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 591,
+      "masked_bases": 0,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21351",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21351",
+      "transcript": "Cfol_v3_21351.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21351.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 663,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21354",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21354",
+      "transcript": "Cfol_v3_21354.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21354.mRNA2",
+        "Cfol_v3_21354.mRNA3",
+        "Cfol_v3_21354.mRNA4",
+        "Cfol_v3_21354.mRNA5"
+      ],
+      "cds_blocks": 5,
+      "cds_length": 1665,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21356",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21356",
+      "transcript": "Cfol_v3_21356.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21356.mRNA10",
+        "Cfol_v3_21356.mRNA11",
+        "Cfol_v3_21356.mRNA12",
+        "Cfol_v3_21356.mRNA13",
+        "Cfol_v3_21356.mRNA2",
+        "Cfol_v3_21356.mRNA3",
+        "Cfol_v3_21356.mRNA4",
+        "Cfol_v3_21356.mRNA5",
+        "Cfol_v3_21356.mRNA6",
+        "Cfol_v3_21356.mRNA7",
+        "Cfol_v3_21356.mRNA8",
+        "Cfol_v3_21356.mRNA9"
+      ],
+      "cds_blocks": 13,
+      "cds_length": 1044,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21357",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21357",
+      "transcript": "Cfol_v3_21357.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21357.mRNA10",
+        "Cfol_v3_21357.mRNA11",
+        "Cfol_v3_21357.mRNA12",
+        "Cfol_v3_21357.mRNA13",
+        "Cfol_v3_21357.mRNA14",
+        "Cfol_v3_21357.mRNA15",
+        "Cfol_v3_21357.mRNA16",
+        "Cfol_v3_21357.mRNA2",
+        "Cfol_v3_21357.mRNA3",
+        "Cfol_v3_21357.mRNA4",
+        "Cfol_v3_21357.mRNA5",
+        "Cfol_v3_21357.mRNA6",
+        "Cfol_v3_21357.mRNA7",
+        "Cfol_v3_21357.mRNA8",
+        "Cfol_v3_21357.mRNA9"
+      ],
+      "cds_blocks": 16,
+      "cds_length": 2856,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21358",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21358",
+      "transcript": "Cfol_v3_21358.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21358.mRNA10",
+        "Cfol_v3_21358.mRNA11",
+        "Cfol_v3_21358.mRNA2",
+        "Cfol_v3_21358.mRNA3",
+        "Cfol_v3_21358.mRNA4",
+        "Cfol_v3_21358.mRNA5",
+        "Cfol_v3_21358.mRNA6",
+        "Cfol_v3_21358.mRNA7",
+        "Cfol_v3_21358.mRNA8",
+        "Cfol_v3_21358.mRNA9"
+      ],
+      "cds_blocks": 11,
+      "cds_length": 1644,
+      "masked_bases": 0,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21359",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21359",
+      "transcript": "Cfol_v3_21359.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21359.mRNA2",
+        "Cfol_v3_21359.mRNA3",
+        "Cfol_v3_21359.mRNA4",
+        "Cfol_v3_21359.mRNA5",
+        "Cfol_v3_21359.mRNA6"
+      ],
+      "cds_blocks": 6,
+      "cds_length": 1239,
+      "masked_bases": 6,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21360",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21360",
+      "transcript": "Cfol_v3_21360.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21360.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 936,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21361",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21361",
+      "transcript": "Cfol_v3_21361.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21361.mRNA10",
+        "Cfol_v3_21361.mRNA11",
+        "Cfol_v3_21361.mRNA12",
+        "Cfol_v3_21361.mRNA13",
+        "Cfol_v3_21361.mRNA14",
+        "Cfol_v3_21361.mRNA15",
+        "Cfol_v3_21361.mRNA16",
+        "Cfol_v3_21361.mRNA17",
+        "Cfol_v3_21361.mRNA18",
+        "Cfol_v3_21361.mRNA19",
+        "Cfol_v3_21361.mRNA2",
+        "Cfol_v3_21361.mRNA20",
+        "Cfol_v3_21361.mRNA21",
+        "Cfol_v3_21361.mRNA22",
+        "Cfol_v3_21361.mRNA3",
+        "Cfol_v3_21361.mRNA4",
+        "Cfol_v3_21361.mRNA5",
+        "Cfol_v3_21361.mRNA6",
+        "Cfol_v3_21361.mRNA7",
+        "Cfol_v3_21361.mRNA8",
+        "Cfol_v3_21361.mRNA9"
+      ],
+      "cds_blocks": 22,
+      "cds_length": 4065,
+      "masked_bases": 6,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_21362",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-21362",
+      "transcript": "Cfol_v3_21362.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_21362.mRNA10",
+        "Cfol_v3_21362.mRNA2",
+        "Cfol_v3_21362.mRNA3",
+        "Cfol_v3_21362.mRNA4",
+        "Cfol_v3_21362.mRNA5",
+        "Cfol_v3_21362.mRNA6",
+        "Cfol_v3_21362.mRNA7",
+        "Cfol_v3_21362.mRNA8",
+        "Cfol_v3_21362.mRNA9"
+      ],
+      "cds_blocks": 10,
+      "cds_length": 861,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_04529",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-04529",
+      "transcript": "Cfol_v3_04529.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_04529.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 1476,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_04530",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-04530",
+      "transcript": "Cfol_v3_04530.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_04530.mRNA10",
+        "Cfol_v3_04530.mRNA11",
+        "Cfol_v3_04530.mRNA12",
+        "Cfol_v3_04530.mRNA13",
+        "Cfol_v3_04530.mRNA2",
+        "Cfol_v3_04530.mRNA3",
+        "Cfol_v3_04530.mRNA4",
+        "Cfol_v3_04530.mRNA5",
+        "Cfol_v3_04530.mRNA6",
+        "Cfol_v3_04530.mRNA7",
+        "Cfol_v3_04530.mRNA8",
+        "Cfol_v3_04530.mRNA9"
+      ],
+      "cds_blocks": 13,
+      "cds_length": 14289,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_04531",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-04531",
+      "transcript": "Cfol_v3_04531.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_04531.mRNA2",
+        "Cfol_v3_04531.mRNA3",
+        "Cfol_v3_04531.mRNA4",
+        "Cfol_v3_04531.mRNA5",
+        "Cfol_v3_04531.mRNA6",
+        "Cfol_v3_04531.mRNA7",
+        "Cfol_v3_04531.mRNA8",
+        "Cfol_v3_04531.mRNA9"
+      ],
+      "cds_blocks": 9,
+      "cds_length": 1848,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_04538",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-04538",
+      "transcript": "Cfol_v3_04538.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_04538.mRNA2",
+        "Cfol_v3_04538.mRNA3",
+        "Cfol_v3_04538.mRNA4",
+        "Cfol_v3_04538.mRNA5",
+        "Cfol_v3_04538.mRNA6"
+      ],
+      "cds_blocks": 6,
+      "cds_length": 1698,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_04540",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-04540",
+      "transcript": "Cfol_v3_04540.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_04540.mRNA2",
+        "Cfol_v3_04540.mRNA3",
+        "Cfol_v3_04540.mRNA4",
+        "Cfol_v3_04540.mRNA5",
+        "Cfol_v3_04540.mRNA6"
+      ],
+      "cds_blocks": 6,
+      "cds_length": 723,
+      "masked_bases": 0,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_04541",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-04541",
+      "transcript": "Cfol_v3_04541.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_04541.mRNA2",
+        "Cfol_v3_04541.mRNA3"
+      ],
+      "cds_blocks": 3,
+      "cds_length": 519,
+      "masked_bases": 0,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23428",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23428",
+      "transcript": "Cfol_v3_23428.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23428.mRNA10",
+        "Cfol_v3_23428.mRNA11",
+        "Cfol_v3_23428.mRNA12",
+        "Cfol_v3_23428.mRNA13",
+        "Cfol_v3_23428.mRNA2",
+        "Cfol_v3_23428.mRNA3",
+        "Cfol_v3_23428.mRNA4",
+        "Cfol_v3_23428.mRNA5",
+        "Cfol_v3_23428.mRNA6",
+        "Cfol_v3_23428.mRNA7",
+        "Cfol_v3_23428.mRNA8",
+        "Cfol_v3_23428.mRNA9"
+      ],
+      "cds_blocks": 13,
+      "cds_length": 2862,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23430",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23430",
+      "transcript": "Cfol_v3_23430.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23430.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 135,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23431",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23431",
+      "transcript": "Cfol_v3_23431.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23431.mRNA2",
+        "Cfol_v3_23431.mRNA3",
+        "Cfol_v3_23431.mRNA4",
+        "Cfol_v3_23431.mRNA5",
+        "Cfol_v3_23431.mRNA6",
+        "Cfol_v3_23431.mRNA7",
+        "Cfol_v3_23431.mRNA8",
+        "Cfol_v3_23431.mRNA9"
+      ],
+      "cds_blocks": 9,
+      "cds_length": 717,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23433",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23433",
+      "transcript": "Cfol_v3_23433.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23433.mRNA2",
+        "Cfol_v3_23433.mRNA3",
+        "Cfol_v3_23433.mRNA4",
+        "Cfol_v3_23433.mRNA5",
+        "Cfol_v3_23433.mRNA6",
+        "Cfol_v3_23433.mRNA7",
+        "Cfol_v3_23433.mRNA8",
+        "Cfol_v3_23433.mRNA9"
+      ],
+      "cds_blocks": 9,
+      "cds_length": 1041,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23434",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23434",
+      "transcript": "Cfol_v3_23434.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23434.mRNA2",
+        "Cfol_v3_23434.mRNA3",
+        "Cfol_v3_23434.mRNA4",
+        "Cfol_v3_23434.mRNA5"
+      ],
+      "cds_blocks": 5,
+      "cds_length": 882,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23438",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23438",
+      "transcript": "Cfol_v3_23438.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23438.mRNA2",
+        "Cfol_v3_23438.mRNA3",
+        "Cfol_v3_23438.mRNA4"
+      ],
+      "cds_blocks": 4,
+      "cds_length": 1773,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23439",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23439",
+      "transcript": "Cfol_v3_23439.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23439.mRNA2",
+        "Cfol_v3_23439.mRNA3",
+        "Cfol_v3_23439.mRNA4",
+        "Cfol_v3_23439.mRNA5"
+      ],
+      "cds_blocks": 5,
+      "cds_length": 2058,
+      "masked_bases": 6,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23440",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23440",
+      "transcript": "Cfol_v3_23440.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23440.mRNA10",
+        "Cfol_v3_23440.mRNA11",
+        "Cfol_v3_23440.mRNA12",
+        "Cfol_v3_23440.mRNA13",
+        "Cfol_v3_23440.mRNA2",
+        "Cfol_v3_23440.mRNA3",
+        "Cfol_v3_23440.mRNA4",
+        "Cfol_v3_23440.mRNA5",
+        "Cfol_v3_23440.mRNA6",
+        "Cfol_v3_23440.mRNA7",
+        "Cfol_v3_23440.mRNA8",
+        "Cfol_v3_23440.mRNA9"
+      ],
+      "cds_blocks": 13,
+      "cds_length": 1548,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23441",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23441",
+      "transcript": "Cfol_v3_23441.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23441.mRNA10",
+        "Cfol_v3_23441.mRNA11",
+        "Cfol_v3_23441.mRNA12",
+        "Cfol_v3_23441.mRNA13",
+        "Cfol_v3_23441.mRNA2",
+        "Cfol_v3_23441.mRNA3",
+        "Cfol_v3_23441.mRNA4",
+        "Cfol_v3_23441.mRNA5",
+        "Cfol_v3_23441.mRNA6",
+        "Cfol_v3_23441.mRNA7",
+        "Cfol_v3_23441.mRNA8",
+        "Cfol_v3_23441.mRNA9"
+      ],
+      "cds_blocks": 13,
+      "cds_length": 1554,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23442",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23442",
+      "transcript": "Cfol_v3_23442.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23442.mRNA2",
+        "Cfol_v3_23442.mRNA3",
+        "Cfol_v3_23442.mRNA4",
+        "Cfol_v3_23442.mRNA5",
+        "Cfol_v3_23442.mRNA6",
+        "Cfol_v3_23442.mRNA7",
+        "Cfol_v3_23442.mRNA8"
+      ],
+      "cds_blocks": 8,
+      "cds_length": 1917,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23443",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23443",
+      "transcript": "Cfol_v3_23443.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23443.mRNA2",
+        "Cfol_v3_23443.mRNA3"
+      ],
+      "cds_blocks": 3,
+      "cds_length": 519,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23444",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23444",
+      "transcript": "Cfol_v3_23444.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23444.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 558,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23445",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23445",
+      "transcript": "Cfol_v3_23445.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23445.mRNA2",
+        "Cfol_v3_23445.mRNA3",
+        "Cfol_v3_23445.mRNA4",
+        "Cfol_v3_23445.mRNA5",
+        "Cfol_v3_23445.mRNA6"
+      ],
+      "cds_blocks": 6,
+      "cds_length": 600,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23446",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23446",
+      "transcript": "Cfol_v3_23446.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23446.mRNA2",
+        "Cfol_v3_23446.mRNA3",
+        "Cfol_v3_23446.mRNA4",
+        "Cfol_v3_23446.mRNA5",
+        "Cfol_v3_23446.mRNA6",
+        "Cfol_v3_23446.mRNA7",
+        "Cfol_v3_23446.mRNA8",
+        "Cfol_v3_23446.mRNA9"
+      ],
+      "cds_blocks": 9,
+      "cds_length": 2250,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23447",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23447",
+      "transcript": "Cfol_v3_23447.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23447.mRNA2",
+        "Cfol_v3_23447.mRNA3"
+      ],
+      "cds_blocks": 3,
+      "cds_length": 393,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_23593",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-23593",
+      "transcript": "Cfol_v3_23593.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_23593.mRNA10",
+        "Cfol_v3_23593.mRNA11",
+        "Cfol_v3_23593.mRNA12",
+        "Cfol_v3_23593.mRNA13",
+        "Cfol_v3_23593.mRNA14",
+        "Cfol_v3_23593.mRNA15",
+        "Cfol_v3_23593.mRNA16",
+        "Cfol_v3_23593.mRNA17",
+        "Cfol_v3_23593.mRNA18",
+        "Cfol_v3_23593.mRNA19",
+        "Cfol_v3_23593.mRNA2",
+        "Cfol_v3_23593.mRNA20",
+        "Cfol_v3_23593.mRNA21",
+        "Cfol_v3_23593.mRNA22",
+        "Cfol_v3_23593.mRNA23",
+        "Cfol_v3_23593.mRNA24",
+        "Cfol_v3_23593.mRNA25",
+        "Cfol_v3_23593.mRNA26",
+        "Cfol_v3_23593.mRNA27",
+        "Cfol_v3_23593.mRNA28",
+        "Cfol_v3_23593.mRNA29",
+        "Cfol_v3_23593.mRNA3",
+        "Cfol_v3_23593.mRNA30",
+        "Cfol_v3_23593.mRNA31",
+        "Cfol_v3_23593.mRNA32",
+        "Cfol_v3_23593.mRNA33",
+        "Cfol_v3_23593.mRNA34",
+        "Cfol_v3_23593.mRNA35",
+        "Cfol_v3_23593.mRNA36",
+        "Cfol_v3_23593.mRNA37",
+        "Cfol_v3_23593.mRNA38",
+        "Cfol_v3_23593.mRNA39",
+        "Cfol_v3_23593.mRNA4",
+        "Cfol_v3_23593.mRNA40",
+        "Cfol_v3_23593.mRNA41",
+        "Cfol_v3_23593.mRNA42",
+        "Cfol_v3_23593.mRNA43",
+        "Cfol_v3_23593.mRNA44",
+        "Cfol_v3_23593.mRNA45",
+        "Cfol_v3_23593.mRNA46",
+        "Cfol_v3_23593.mRNA47",
+        "Cfol_v3_23593.mRNA48",
+        "Cfol_v3_23593.mRNA49",
+        "Cfol_v3_23593.mRNA5",
+        "Cfol_v3_23593.mRNA50",
+        "Cfol_v3_23593.mRNA51",
+        "Cfol_v3_23593.mRNA52",
+        "Cfol_v3_23593.mRNA53",
+        "Cfol_v3_23593.mRNA54",
+        "Cfol_v3_23593.mRNA55",
+        "Cfol_v3_23593.mRNA56",
+        "Cfol_v3_23593.mRNA57",
+        "Cfol_v3_23593.mRNA58",
+        "Cfol_v3_23593.mRNA59",
+        "Cfol_v3_23593.mRNA6",
+        "Cfol_v3_23593.mRNA60",
+        "Cfol_v3_23593.mRNA61",
+        "Cfol_v3_23593.mRNA62",
+        "Cfol_v3_23593.mRNA63",
+        "Cfol_v3_23593.mRNA64",
+        "Cfol_v3_23593.mRNA65",
+        "Cfol_v3_23593.mRNA66",
+        "Cfol_v3_23593.mRNA67",
+        "Cfol_v3_23593.mRNA68",
+        "Cfol_v3_23593.mRNA69",
+        "Cfol_v3_23593.mRNA7",
+        "Cfol_v3_23593.mRNA70",
+        "Cfol_v3_23593.mRNA71",
+        "Cfol_v3_23593.mRNA72",
+        "Cfol_v3_23593.mRNA73",
+        "Cfol_v3_23593.mRNA74",
+        "Cfol_v3_23593.mRNA75",
+        "Cfol_v3_23593.mRNA76",
+        "Cfol_v3_23593.mRNA8",
+        "Cfol_v3_23593.mRNA9"
+      ],
+      "cds_blocks": 76,
+      "cds_length": 16206,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_25951",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-25951",
+      "transcript": "Cfol_v3_25951.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_25951.mRNA2",
+        "Cfol_v3_25951.mRNA3",
+        "Cfol_v3_25951.mRNA4",
+        "Cfol_v3_25951.mRNA5",
+        "Cfol_v3_25951.mRNA6",
+        "Cfol_v3_25951.mRNA7"
+      ],
+      "cds_blocks": 7,
+      "cds_length": 567,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_07006",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-07006",
+      "transcript": "Cfol_v3_07006.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_07006.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 981,
+      "masked_bases": 0,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_07007",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-07007",
+      "transcript": "Cfol_v3_07007.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_07007.mRNA2",
+        "Cfol_v3_07007.mRNA3",
+        "Cfol_v3_07007.mRNA4"
+      ],
+      "cds_blocks": 4,
+      "cds_length": 1755,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_07009",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-07009",
+      "transcript": "Cfol_v3_07009.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_07009.mRNA2",
+        "Cfol_v3_07009.mRNA3",
+        "Cfol_v3_07009.mRNA4"
+      ],
+      "cds_blocks": 4,
+      "cds_length": 252,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_07010",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-07010",
+      "transcript": "Cfol_v3_07010.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_07010.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 936,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_07011",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-07011",
+      "transcript": "Cfol_v3_07011.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_07011.mRNA2",
+        "Cfol_v3_07011.mRNA3"
+      ],
+      "cds_blocks": 3,
+      "cds_length": 414,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_07012",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-07012",
+      "transcript": "Cfol_v3_07012.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_07012.mRNA10",
+        "Cfol_v3_07012.mRNA11",
+        "Cfol_v3_07012.mRNA12",
+        "Cfol_v3_07012.mRNA13",
+        "Cfol_v3_07012.mRNA14",
+        "Cfol_v3_07012.mRNA15",
+        "Cfol_v3_07012.mRNA16",
+        "Cfol_v3_07012.mRNA17",
+        "Cfol_v3_07012.mRNA18",
+        "Cfol_v3_07012.mRNA19",
+        "Cfol_v3_07012.mRNA2",
+        "Cfol_v3_07012.mRNA20",
+        "Cfol_v3_07012.mRNA21",
+        "Cfol_v3_07012.mRNA3",
+        "Cfol_v3_07012.mRNA4",
+        "Cfol_v3_07012.mRNA5",
+        "Cfol_v3_07012.mRNA6",
+        "Cfol_v3_07012.mRNA7",
+        "Cfol_v3_07012.mRNA8",
+        "Cfol_v3_07012.mRNA9"
+      ],
+      "cds_blocks": 21,
+      "cds_length": 2871,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_07015",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-07015",
+      "transcript": "Cfol_v3_07015.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_07015.mRNA10",
+        "Cfol_v3_07015.mRNA11",
+        "Cfol_v3_07015.mRNA12",
+        "Cfol_v3_07015.mRNA13",
+        "Cfol_v3_07015.mRNA14",
+        "Cfol_v3_07015.mRNA15",
+        "Cfol_v3_07015.mRNA16",
+        "Cfol_v3_07015.mRNA17",
+        "Cfol_v3_07015.mRNA18",
+        "Cfol_v3_07015.mRNA19",
+        "Cfol_v3_07015.mRNA2",
+        "Cfol_v3_07015.mRNA20",
+        "Cfol_v3_07015.mRNA21",
+        "Cfol_v3_07015.mRNA22",
+        "Cfol_v3_07015.mRNA23",
+        "Cfol_v3_07015.mRNA24",
+        "Cfol_v3_07015.mRNA25",
+        "Cfol_v3_07015.mRNA26",
+        "Cfol_v3_07015.mRNA27",
+        "Cfol_v3_07015.mRNA28",
+        "Cfol_v3_07015.mRNA29",
+        "Cfol_v3_07015.mRNA3",
+        "Cfol_v3_07015.mRNA30",
+        "Cfol_v3_07015.mRNA4",
+        "Cfol_v3_07015.mRNA5",
+        "Cfol_v3_07015.mRNA6",
+        "Cfol_v3_07015.mRNA7",
+        "Cfol_v3_07015.mRNA8",
+        "Cfol_v3_07015.mRNA9"
+      ],
+      "cds_blocks": 30,
+      "cds_length": 3159,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_07016",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-07016",
+      "transcript": "Cfol_v3_07016.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_07016.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 837,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_07017",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-07017",
+      "transcript": "Cfol_v3_07017.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_07017.mRNA10",
+        "Cfol_v3_07017.mRNA11",
+        "Cfol_v3_07017.mRNA12",
+        "Cfol_v3_07017.mRNA13",
+        "Cfol_v3_07017.mRNA14",
+        "Cfol_v3_07017.mRNA15",
+        "Cfol_v3_07017.mRNA16",
+        "Cfol_v3_07017.mRNA2",
+        "Cfol_v3_07017.mRNA3",
+        "Cfol_v3_07017.mRNA4",
+        "Cfol_v3_07017.mRNA5",
+        "Cfol_v3_07017.mRNA6",
+        "Cfol_v3_07017.mRNA7",
+        "Cfol_v3_07017.mRNA8",
+        "Cfol_v3_07017.mRNA9"
+      ],
+      "cds_blocks": 16,
+      "cds_length": 1446,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_07020",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-07020",
+      "transcript": "Cfol_v3_07020.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_07020.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 837,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_07401",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-07401",
+      "transcript": "Cfol_v3_07401.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_07401.mRNA2",
+        "Cfol_v3_07401.mRNA3",
+        "Cfol_v3_07401.mRNA4",
+        "Cfol_v3_07401.mRNA5",
+        "Cfol_v3_07401.mRNA6"
+      ],
+      "cds_blocks": 6,
+      "cds_length": 477,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_28822",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-28822",
+      "transcript": "Cfol_v3_28822.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_28822.mRNA2",
+        "Cfol_v3_28822.mRNA3",
+        "Cfol_v3_28822.mRNA4",
+        "Cfol_v3_28822.mRNA5",
+        "Cfol_v3_28822.mRNA6"
+      ],
+      "cds_blocks": 6,
+      "cds_length": 522,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_28933",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-28933",
+      "transcript": "Cfol_v3_28933.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_28933.mRNA2",
+        "Cfol_v3_28933.mRNA3",
+        "Cfol_v3_28933.mRNA4",
+        "Cfol_v3_28933.mRNA5",
+        "Cfol_v3_28933.mRNA6"
+      ],
+      "cds_blocks": 6,
+      "cds_length": 981,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_28936",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-28936",
+      "transcript": "Cfol_v3_28936.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_28936.mRNA10",
+        "Cfol_v3_28936.mRNA11",
+        "Cfol_v3_28936.mRNA2",
+        "Cfol_v3_28936.mRNA3",
+        "Cfol_v3_28936.mRNA4",
+        "Cfol_v3_28936.mRNA5",
+        "Cfol_v3_28936.mRNA6",
+        "Cfol_v3_28936.mRNA7",
+        "Cfol_v3_28936.mRNA8",
+        "Cfol_v3_28936.mRNA9"
+      ],
+      "cds_blocks": 11,
+      "cds_length": 942,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_28937",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-28937",
+      "transcript": "Cfol_v3_28937.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_28937.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 243,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_28938",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-28938",
+      "transcript": "Cfol_v3_28938.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_28938.mRNA10",
+        "Cfol_v3_28938.mRNA11",
+        "Cfol_v3_28938.mRNA12",
+        "Cfol_v3_28938.mRNA13",
+        "Cfol_v3_28938.mRNA14",
+        "Cfol_v3_28938.mRNA15",
+        "Cfol_v3_28938.mRNA16",
+        "Cfol_v3_28938.mRNA2",
+        "Cfol_v3_28938.mRNA3",
+        "Cfol_v3_28938.mRNA4",
+        "Cfol_v3_28938.mRNA5",
+        "Cfol_v3_28938.mRNA6",
+        "Cfol_v3_28938.mRNA7",
+        "Cfol_v3_28938.mRNA8",
+        "Cfol_v3_28938.mRNA9"
+      ],
+      "cds_blocks": 16,
+      "cds_length": 2856,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_28939",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-28939",
+      "transcript": "Cfol_v3_28939.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_28939.mRNA10",
+        "Cfol_v3_28939.mRNA11",
+        "Cfol_v3_28939.mRNA12",
+        "Cfol_v3_28939.mRNA13",
+        "Cfol_v3_28939.mRNA14",
+        "Cfol_v3_28939.mRNA15",
+        "Cfol_v3_28939.mRNA16",
+        "Cfol_v3_28939.mRNA17",
+        "Cfol_v3_28939.mRNA2",
+        "Cfol_v3_28939.mRNA3",
+        "Cfol_v3_28939.mRNA4",
+        "Cfol_v3_28939.mRNA5",
+        "Cfol_v3_28939.mRNA6",
+        "Cfol_v3_28939.mRNA7",
+        "Cfol_v3_28939.mRNA8",
+        "Cfol_v3_28939.mRNA9"
+      ],
+      "cds_blocks": 17,
+      "cds_length": 1851,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_31885",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-31885",
+      "transcript": "Cfol_v3_31885.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_31885.mRNA2",
+        "Cfol_v3_31885.mRNA3",
+        "Cfol_v3_31885.mRNA4"
+      ],
+      "cds_blocks": 4,
+      "cds_length": 1827,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_31886",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-31886",
+      "transcript": "Cfol_v3_31886.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_31886.mRNA10",
+        "Cfol_v3_31886.mRNA11",
+        "Cfol_v3_31886.mRNA12",
+        "Cfol_v3_31886.mRNA13",
+        "Cfol_v3_31886.mRNA14",
+        "Cfol_v3_31886.mRNA15",
+        "Cfol_v3_31886.mRNA16",
+        "Cfol_v3_31886.mRNA17",
+        "Cfol_v3_31886.mRNA18",
+        "Cfol_v3_31886.mRNA19",
+        "Cfol_v3_31886.mRNA2",
+        "Cfol_v3_31886.mRNA20",
+        "Cfol_v3_31886.mRNA21",
+        "Cfol_v3_31886.mRNA3",
+        "Cfol_v3_31886.mRNA4",
+        "Cfol_v3_31886.mRNA5",
+        "Cfol_v3_31886.mRNA6",
+        "Cfol_v3_31886.mRNA7",
+        "Cfol_v3_31886.mRNA8",
+        "Cfol_v3_31886.mRNA9"
+      ],
+      "cds_blocks": 21,
+      "cds_length": 2871,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_32279",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-32279",
+      "transcript": "Cfol_v3_32279.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_32279.mRNA2",
+        "Cfol_v3_32279.mRNA3",
+        "Cfol_v3_32279.mRNA4",
+        "Cfol_v3_32279.mRNA5"
+      ],
+      "cds_blocks": 5,
+      "cds_length": 1644,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_32280",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-32280",
+      "transcript": "Cfol_v3_32280.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_32280.mRNA10",
+        "Cfol_v3_32280.mRNA11",
+        "Cfol_v3_32280.mRNA12",
+        "Cfol_v3_32280.mRNA13",
+        "Cfol_v3_32280.mRNA14",
+        "Cfol_v3_32280.mRNA15",
+        "Cfol_v3_32280.mRNA16",
+        "Cfol_v3_32280.mRNA17",
+        "Cfol_v3_32280.mRNA2",
+        "Cfol_v3_32280.mRNA3",
+        "Cfol_v3_32280.mRNA4",
+        "Cfol_v3_32280.mRNA5",
+        "Cfol_v3_32280.mRNA6",
+        "Cfol_v3_32280.mRNA7",
+        "Cfol_v3_32280.mRNA8",
+        "Cfol_v3_32280.mRNA9"
+      ],
+      "cds_blocks": 17,
+      "cds_length": 2364,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_32284",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-32284",
+      "transcript": "Cfol_v3_32284.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_32284.mRNA2",
+        "Cfol_v3_32284.mRNA3",
+        "Cfol_v3_32284.mRNA4"
+      ],
+      "cds_blocks": 4,
+      "cds_length": 726,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_13262",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-13262",
+      "transcript": "Cfol_v3_13262.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_13262.mRNA10",
+        "Cfol_v3_13262.mRNA11",
+        "Cfol_v3_13262.mRNA12",
+        "Cfol_v3_13262.mRNA13",
+        "Cfol_v3_13262.mRNA14",
+        "Cfol_v3_13262.mRNA15",
+        "Cfol_v3_13262.mRNA16",
+        "Cfol_v3_13262.mRNA17",
+        "Cfol_v3_13262.mRNA18",
+        "Cfol_v3_13262.mRNA19",
+        "Cfol_v3_13262.mRNA2",
+        "Cfol_v3_13262.mRNA20",
+        "Cfol_v3_13262.mRNA21",
+        "Cfol_v3_13262.mRNA22",
+        "Cfol_v3_13262.mRNA23",
+        "Cfol_v3_13262.mRNA24",
+        "Cfol_v3_13262.mRNA25",
+        "Cfol_v3_13262.mRNA26",
+        "Cfol_v3_13262.mRNA27",
+        "Cfol_v3_13262.mRNA28",
+        "Cfol_v3_13262.mRNA29",
+        "Cfol_v3_13262.mRNA3",
+        "Cfol_v3_13262.mRNA30",
+        "Cfol_v3_13262.mRNA31",
+        "Cfol_v3_13262.mRNA32",
+        "Cfol_v3_13262.mRNA33",
+        "Cfol_v3_13262.mRNA34",
+        "Cfol_v3_13262.mRNA35",
+        "Cfol_v3_13262.mRNA36",
+        "Cfol_v3_13262.mRNA37",
+        "Cfol_v3_13262.mRNA38",
+        "Cfol_v3_13262.mRNA39",
+        "Cfol_v3_13262.mRNA4",
+        "Cfol_v3_13262.mRNA40",
+        "Cfol_v3_13262.mRNA41",
+        "Cfol_v3_13262.mRNA42",
+        "Cfol_v3_13262.mRNA43",
+        "Cfol_v3_13262.mRNA44",
+        "Cfol_v3_13262.mRNA45",
+        "Cfol_v3_13262.mRNA46",
+        "Cfol_v3_13262.mRNA47",
+        "Cfol_v3_13262.mRNA48",
+        "Cfol_v3_13262.mRNA49",
+        "Cfol_v3_13262.mRNA5",
+        "Cfol_v3_13262.mRNA50",
+        "Cfol_v3_13262.mRNA51",
+        "Cfol_v3_13262.mRNA52",
+        "Cfol_v3_13262.mRNA53",
+        "Cfol_v3_13262.mRNA54",
+        "Cfol_v3_13262.mRNA55",
+        "Cfol_v3_13262.mRNA56",
+        "Cfol_v3_13262.mRNA6",
+        "Cfol_v3_13262.mRNA7",
+        "Cfol_v3_13262.mRNA8",
+        "Cfol_v3_13262.mRNA9"
+      ],
+      "cds_blocks": 56,
+      "cds_length": 7851,
+      "masked_bases": 6,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15267",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15267",
+      "transcript": "Cfol_v3_15267.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15267.mRNA2",
+        "Cfol_v3_15267.mRNA3",
+        "Cfol_v3_15267.mRNA4",
+        "Cfol_v3_15267.mRNA5",
+        "Cfol_v3_15267.mRNA6",
+        "Cfol_v3_15267.mRNA7"
+      ],
+      "cds_blocks": 7,
+      "cds_length": 636,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15851",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15851",
+      "transcript": "Cfol_v3_15851.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15851.mRNA2",
+        "Cfol_v3_15851.mRNA3",
+        "Cfol_v3_15851.mRNA4",
+        "Cfol_v3_15851.mRNA5"
+      ],
+      "cds_blocks": 5,
+      "cds_length": 1350,
+      "masked_bases": 0,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15852",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15852",
+      "transcript": "Cfol_v3_15852.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15852.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 348,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15853",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15853",
+      "transcript": "Cfol_v3_15853.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15853.mRNA2",
+        "Cfol_v3_15853.mRNA3",
+        "Cfol_v3_15853.mRNA4"
+      ],
+      "cds_blocks": 4,
+      "cds_length": 546,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15854",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15854",
+      "transcript": "Cfol_v3_15854.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15854.mRNA2",
+        "Cfol_v3_15854.mRNA3"
+      ],
+      "cds_blocks": 3,
+      "cds_length": 342,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15855",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15855",
+      "transcript": "Cfol_v3_15855.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15855.mRNA2",
+        "Cfol_v3_15855.mRNA3",
+        "Cfol_v3_15855.mRNA4",
+        "Cfol_v3_15855.mRNA5",
+        "Cfol_v3_15855.mRNA6",
+        "Cfol_v3_15855.mRNA7"
+      ],
+      "cds_blocks": 7,
+      "cds_length": 1893,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15856",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15856",
+      "transcript": "Cfol_v3_15856.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15856.mRNA2",
+        "Cfol_v3_15856.mRNA3"
+      ],
+      "cds_blocks": 3,
+      "cds_length": 345,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15857",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15857",
+      "transcript": "Cfol_v3_15857.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15857.mRNA2",
+        "Cfol_v3_15857.mRNA3",
+        "Cfol_v3_15857.mRNA4",
+        "Cfol_v3_15857.mRNA5",
+        "Cfol_v3_15857.mRNA6"
+      ],
+      "cds_blocks": 6,
+      "cds_length": 1887,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15859",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15859",
+      "transcript": "Cfol_v3_15859.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15859.mRNA2",
+        "Cfol_v3_15859.mRNA3",
+        "Cfol_v3_15859.mRNA4",
+        "Cfol_v3_15859.mRNA5"
+      ],
+      "cds_blocks": 5,
+      "cds_length": 921,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15862",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15862",
+      "transcript": "Cfol_v3_15862.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15862.mRNA2",
+        "Cfol_v3_15862.mRNA3",
+        "Cfol_v3_15862.mRNA4",
+        "Cfol_v3_15862.mRNA5"
+      ],
+      "cds_blocks": 5,
+      "cds_length": 675,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15863",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15863",
+      "transcript": "Cfol_v3_15863.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15863.mRNA2",
+        "Cfol_v3_15863.mRNA3"
+      ],
+      "cds_blocks": 3,
+      "cds_length": 516,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15865",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15865",
+      "transcript": "Cfol_v3_15865.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15865.mRNA2",
+        "Cfol_v3_15865.mRNA3"
+      ],
+      "cds_blocks": 3,
+      "cds_length": 753,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15866",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15866",
+      "transcript": "Cfol_v3_15866.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15866.mRNA2",
+        "Cfol_v3_15866.mRNA3",
+        "Cfol_v3_15866.mRNA4"
+      ],
+      "cds_blocks": 4,
+      "cds_length": 738,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15867",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15867",
+      "transcript": "Cfol_v3_15867.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15867.mRNA2",
+        "Cfol_v3_15867.mRNA3"
+      ],
+      "cds_blocks": 3,
+      "cds_length": 681,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15868",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15868",
+      "transcript": "Cfol_v3_15868.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15868.mRNA2",
+        "Cfol_v3_15868.mRNA3",
+        "Cfol_v3_15868.mRNA4",
+        "Cfol_v3_15868.mRNA5",
+        "Cfol_v3_15868.mRNA6",
+        "Cfol_v3_15868.mRNA7",
+        "Cfol_v3_15868.mRNA8",
+        "Cfol_v3_15868.mRNA9"
+      ],
+      "cds_blocks": 9,
+      "cds_length": 696,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15869",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15869",
+      "transcript": "Cfol_v3_15869.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15869.mRNA2",
+        "Cfol_v3_15869.mRNA3",
+        "Cfol_v3_15869.mRNA4",
+        "Cfol_v3_15869.mRNA5"
+      ],
+      "cds_blocks": 5,
+      "cds_length": 3126,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15870",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15870",
+      "transcript": "Cfol_v3_15870.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15870.mRNA10",
+        "Cfol_v3_15870.mRNA2",
+        "Cfol_v3_15870.mRNA3",
+        "Cfol_v3_15870.mRNA4",
+        "Cfol_v3_15870.mRNA5",
+        "Cfol_v3_15870.mRNA6",
+        "Cfol_v3_15870.mRNA7",
+        "Cfol_v3_15870.mRNA8",
+        "Cfol_v3_15870.mRNA9"
+      ],
+      "cds_blocks": 10,
+      "cds_length": 996,
+      "masked_bases": 0,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15871",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15871",
+      "transcript": "Cfol_v3_15871.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15871.mRNA2"
+      ],
+      "cds_blocks": 2,
+      "cds_length": 552,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15872",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15872",
+      "transcript": "Cfol_v3_15872.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15872.mRNA10",
+        "Cfol_v3_15872.mRNA11",
+        "Cfol_v3_15872.mRNA12",
+        "Cfol_v3_15872.mRNA13",
+        "Cfol_v3_15872.mRNA14",
+        "Cfol_v3_15872.mRNA2",
+        "Cfol_v3_15872.mRNA3",
+        "Cfol_v3_15872.mRNA4",
+        "Cfol_v3_15872.mRNA5",
+        "Cfol_v3_15872.mRNA6",
+        "Cfol_v3_15872.mRNA7",
+        "Cfol_v3_15872.mRNA8",
+        "Cfol_v3_15872.mRNA9"
+      ],
+      "cds_blocks": 14,
+      "cds_length": 2805,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15873",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15873",
+      "transcript": "Cfol_v3_15873.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15873.mRNA2",
+        "Cfol_v3_15873.mRNA3",
+        "Cfol_v3_15873.mRNA4"
+      ],
+      "cds_blocks": 4,
+      "cds_length": 510,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15874",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15874",
+      "transcript": "Cfol_v3_15874.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15874.mRNA10",
+        "Cfol_v3_15874.mRNA2",
+        "Cfol_v3_15874.mRNA3",
+        "Cfol_v3_15874.mRNA4",
+        "Cfol_v3_15874.mRNA5",
+        "Cfol_v3_15874.mRNA6",
+        "Cfol_v3_15874.mRNA7",
+        "Cfol_v3_15874.mRNA8",
+        "Cfol_v3_15874.mRNA9"
+      ],
+      "cds_blocks": 10,
+      "cds_length": 1326,
+      "masked_bases": 3,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    },
+    {
+      "gene": "Cfol_v3_15875",
+      "cds_id": "Cephalotus_follicularis_Cfol-v3-15875",
+      "transcript": "Cfol_v3_15875.mRNA1",
+      "removed_transcripts": [
+        "Cfol_v3_15875.mRNA2",
+        "Cfol_v3_15875.mRNA3"
+      ],
+      "cds_blocks": 3,
+      "cds_length": 891,
+      "masked_bases": 0,
+      "verification": "equal length and all non-N CDS bases identical to genome"
+    }
+  ],
+  "output_sha256": "cd43f64866b1d7a7709435bd7fc61cc873a345be46e9cb4505abf42e7cc4121b"
+}

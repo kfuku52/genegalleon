@@ -399,6 +399,14 @@ add_node_points = function(g, args) {
 }
 
 get_rel_widths = function(g, args_rel_widths) {
+    fixed = vapply(g, function(p) !is.null(attr(p, 'treevis_width_mm')), logical(1))
+    if (any(fixed) && any(!fixed)) {
+        # Fixed-mm additions must not affect tiplabel's share of the original
+        # figure. The driver assigns their physical widths after this step.
+        out = setNames(rep(1, length(g)), names(g))
+        out[!fixed] = get_rel_widths(g[!fixed], args_rel_widths)
+        return(out)
+    }
     rel_widths = rep(1, length(g))
     names(rel_widths) = names(g)
     for (gname in names(rel_widths)) {
@@ -414,6 +422,8 @@ get_rel_widths = function(g, args_rel_widths) {
             rel_widths[gname] = 0.55
         } else if (grepl('^text,', gname)) {
             rel_widths[gname] = 0.7
+        } else if (grepl('^localization$', gname)) {
+            rel_widths[gname] = 0.2
         } else if (grepl('^signal_peptide$', gname)) {
             rel_widths[gname] = 0.1
         } else if (grepl('^peroxisome$', gname)) {

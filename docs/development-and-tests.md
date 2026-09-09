@@ -371,6 +371,9 @@ Artifacts are written under:
 ## Building a smaller development dataset
 
 `workflow/support/build_minimal_test_dataset.py` extracts a compact analysis-ready subset from an existing workspace.
+It does not add synthetic neighbors or overwrite an existing output directory.
+For the checked-in AHA dataset, use the preservation-first real-neighborhood
+builder described in [Test dataset provenance and regeneration](test-dataset.md).
 
 Typical use:
 

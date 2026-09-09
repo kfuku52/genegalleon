@@ -76,6 +76,8 @@ def build_arg_parser():
         choices=["intron_num", "gene_delim"],
     )
     parser.add_argument("--dir_gff", metavar="PATH", default="", type=str, help="Path used by --dir_gff.")
+    parser.add_argument("--validate-cds-length", action="store_true",
+                        help="Require each selected CDS annotation to match its nucleotide FASTA length.")
     parser.add_argument("--seqfile", metavar="PATH", default="", type=str, help="Path used by --seqfile.")
     parser.add_argument(
         "--sequence-store", default="", metavar="PATH",
@@ -539,7 +541,8 @@ def select_longest_transcripts(gff):
     selected = []
     for gene_id, candidates in by_gene.items():
         if len(candidates) == 1:
-            selected.extend(next(iter(candidates.values())))
+            transcript, indices = next(iter(candidates.items()))
+            selected.append(gff.iloc[indices].assign(selected_transcript=transcript))
             continue
         if coordinate_rows is None:
             coordinate_rows = list(gff[["sequence", "strand", "start", "end"]].itertuples(index=False, name=None))
@@ -564,8 +567,61 @@ def select_longest_transcripts(gff):
                     ",".join(tied_transcripts),
                 )
             )
-        selected.extend(best_indices)
-    return gff.iloc[selected]
+        selected.append(gff.iloc[best_indices].assign(selected_transcript=tied_transcripts[0]))
+    return pandas.concat(selected, ignore_index=True) if selected else gff.assign(selected_transcript="")
+
+
+
+def attach_transcript_structure(selected_cds, gff):
+    """Attach only explicit UTRs from the exact transcript selected for CDS."""
+    selected_cds = selected_cds.copy()
+    utr_by_transcript = {}
+    utr_types = {"utr", "five_prime_utr", "three_prime_utr", "5utr", "3utr"}
+    for row in gff.loc[gff["feature"].str.lower().isin(utr_types)].itertuples(index=False):
+        for transcript in transcript_ids(row.attributes, ""):
+            if transcript:
+                utr_by_transcript.setdefault(transcript, []).append(
+                    (row.sequence, row.strand, row.start, row.end))
+    annotation = {}
+    first_phase = {}
+    for gene_id, cds in selected_cds.groupby("gene_id", sort=False):
+        transcript = cds["selected_transcript"].unique()
+        if len(transcript) != 1:
+            raise ValueError(f"Multiple selected transcripts for {gene_id}")
+        cds_blocks = ordered_feature_blocks(
+            cds[["sequence", "strand", "start", "end"]].itertuples(index=False, name=None), gene_id)
+        utr_rows = utr_by_transcript.get(transcript[0], [])
+        utr_blocks = ordered_feature_blocks(utr_rows, gene_id) if utr_rows else []
+        # Reject annotation overlap or a different contig/strand.
+        if set(cds_blocks) & set(utr_blocks):
+            raise ValueError(f"Overlapping CDS/UTR annotation for {gene_id}")
+        ordered_feature_blocks(cds_blocks + utr_blocks, gene_id)
+        annotation[gene_id] = ";".join(f"{block[2]}-{block[3]}" for block in utr_blocks)
+        # Every known block phase must imply the same initial coding frame.
+        # Deduplicated coordinates contribute length once, but all phase records
+        # are validated, including duplicate annotations.
+        implied_phases = set()
+        offset = 0
+        for block in cds_blocks:
+            phase_rows = cds.loc[(cds["start"].astype(int) == block[2]) &
+                                 (cds["end"].astype(int) == block[3]), "phase"]
+            for value in phase_rows:
+                if pandas.isna(value) or str(value).strip() in {".", ""}:
+                    continue
+                try:
+                    phase = float(value)
+                except (TypeError, ValueError):
+                    raise ValueError(f"Invalid CDS phase for {gene_id}: {value}") from None
+                if phase not in {0, 1, 2}:
+                    raise ValueError(f"Invalid CDS phase for {gene_id}: {value}")
+                implied_phases.add((int(phase) + offset) % 3)
+            offset += block[3] - block[2] + 1
+        if len(implied_phases) > 1:
+            raise ValueError(f"Conflicting CDS phases for {gene_id}")
+        first_phase[gene_id] = next(iter(implied_phases)) if implied_phases else numpy.nan
+    selected_cds["utr_blocks"] = selected_cds["gene_id"].map(annotation)
+    selected_cds["cds_first_phase"] = selected_cds["gene_id"].map(first_phase)
+    return selected_cds
 
 
 def add_id_column(gff, seq_names, new_col="gene_id"):
@@ -589,20 +645,32 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
         if gene_id == "":
             continue
         by_gene.setdefault(gene_id, []).append((sequence, strand, start, end))
+    feature_types = gff.groupby(id_col, sort=False)["feature"].first().to_dict() if "feature" in gff else {}
+    metadata_columns = [c for c in ("selected_transcript", "utr_blocks", "cds_first_phase") if c in gff]
+    metadata = gff.groupby(id_col, sort=False)[metadata_columns].first().to_dict("index") if metadata_columns else {}
     rows = []
     for gene_id, group in by_gene.items():
         blocks = ordered_feature_blocks(group, gene_id)
         length = 0
         intron_offsets = []
-        for _sequence, _strand, start, end in blocks:
+        for index, (_sequence, strand, start, end) in enumerate(blocks):
             length += end - start + 1
-            intron_offsets.append(length)
+            if index + 1 < len(blocks):
+                following = blocks[index + 1]
+                gap = following[2] - end - 1 if strand == "+" else start - following[3] - 1
+                if gap > 0:
+                    intron_offsets.append(length)
         rows.append(
             {
                 "gene_id": gene_id,
                 "feature_size": length,
-                "num_intron": len(blocks) - 1,
-                "intron_positions": ";".join(str(pos) for pos in intron_offsets[:-1]),
+                "num_intron": len(intron_offsets),
+                "intron_positions": ";".join(str(pos) for pos in intron_offsets),
+                "feature_blocks": ";".join(f"{block[2]}-{block[3]}" for block in blocks),
+                "feature_type": feature_types.get(gene_id, ""),
+                "gff_transcript_id": metadata.get(gene_id, {}).get("selected_transcript", ""),
+                "utr_blocks": metadata.get(gene_id, {}).get("utr_blocks", ""),
+                "cds_first_phase": metadata.get(gene_id, {}).get("cds_first_phase", numpy.nan),
                 "chromosome": blocks[0][0],
                 "start": min(block[2] for block in blocks),
                 "end": max(block[3] for block in blocks),
@@ -619,7 +687,6 @@ def add_intron_info(gff, df_all, id_col="gene_id"):
     for j, seq_name in enumerate(seq_names):
         gff_gene = gff.loc[(gff.loc[:, id_col] == seq_name), :].reset_index()
         feature_size = ((gff_gene.loc[:, "end"] + 1).values - gff_gene.loc[:, "start"].values).sum()
-        num_intron = gff_gene.shape[0] - 1
         intron_positions = list()
         current_offset = 0
         max_intron_pos = 0
@@ -627,12 +694,20 @@ def add_intron_info(gff, df_all, id_col="gene_id"):
             feature_block_size = gff_gene.at[i, "end"] - gff_gene.at[i, "start"] + 1
             intron_pos = current_offset + feature_block_size
             max_intron_pos = intron_pos if (intron_pos > max_intron_pos) else max_intron_pos
-            intron_positions.append(str(intron_pos))
+            start = int(gff_gene.at[i, "start"])
+            end = int(gff_gene.at[i, "end"])
+            next_start = int(gff_gene.at[i + 1, "start"])
+            next_end = int(gff_gene.at[i + 1, "end"])
+            gap = next_start - end - 1 if next_start > start else start - next_end - 1
+            if gap < 0:
+                raise ValueError(f"Overlapping feature blocks for {seq_name}")
+            if gap > 0:
+                intron_positions.append(str(intron_pos))
             current_offset += feature_block_size
         str_intron_positions = ";".join(intron_positions)
         df_intron.at[j, "gene_id"] = seq_name
         df_intron.at[j, "feature_size"] = feature_size
-        df_intron.at[j, "num_intron"] = num_intron
+        df_intron.at[j, "num_intron"] = len(intron_positions)
         df_intron.at[j, "intron_positions"] = str_intron_positions
         if max_intron_pos > feature_size:
             txt = "Intron position cannot be greater than feature size: {}, feature_size={}, max intron position = {}"
@@ -709,7 +784,23 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
     if gff_id.shape[0] == 0:
         return pandas.DataFrame(columns=out_cols)
     print("Summarizing gene features: {}".format(datetime.datetime.now()), flush=True)
+    if feature == "CDS":
+        gff_id = attach_transcript_structure(gff_id, gff)
     return summarize_gene_features(gff=gff_id, out_cols=out_cols)
+
+
+def validate_cds_lengths(traits, records):
+    lengths = {}
+    for identifier, _header, sequence in records:
+        sequence = sequence.upper()
+        if not sequence or re.search(r"[^ACGTRYSWKMBDHVN?]", sequence):
+            raise ValueError(f"CDS length validation requires ungapped nucleotide FASTA: {identifier}")
+        lengths[identifier] = len(sequence)
+    mismatches = [f"{row.gene_id} (GFF={int(row.feature_size)}, CDS={lengths[row.gene_id]})"
+                  for row in traits.itertuples(index=False)
+                  if row.feature_size != lengths[row.gene_id]]
+    if mismatches:
+        raise ValueError("Selected GFF transcript does not match CDS length: " + "; ".join(mismatches))
 
 
 def main():
@@ -719,7 +810,7 @@ def main():
     start_time = time.time()
     print("gff2genestat.py started: {}".format(datetime.datetime.now()))
 
-    out_cols = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand"]
+    out_cols = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type", "gff_transcript_id", "utr_blocks", "cds_first_phase"]
     gff_cols = ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
     records = list(fasta_records(Path(args.seqfile)))
     seq_names = pandas.Series([identifier for identifier, _header, _sequence in records], dtype=str)
@@ -807,6 +898,10 @@ def main():
         raise ValueError("Ambiguous GFF source for genes: {}. Supply the exact indexed FASTA source.".format(
             ", ".join(conflicts[:20])
         ))
+    if args.validate_cds_length:
+        if args.feature != "CDS":
+            raise ValueError("--validate-cds-length requires --feature CDS")
+        validate_cds_lengths(df_all, records)
     num_input = len(seq_names)
     num_output = df_all.shape[0]
     print("Number of input genes: {}".format(num_input), flush=True)

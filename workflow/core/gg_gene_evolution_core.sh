@@ -2657,7 +2657,7 @@ gff_info_provenance_args=(
   --output "gff_info=${file_og_gff_info}"
   --parameter "feature=CDS"
   --parameter "multiple_hits=longest"
-  --parameter "gff_annotation_schema=2"
+  --parameter "gff_annotation_schema=5"
 )
 gff_info_sequence_store="${file_species_cds_store_db}"
 gff_info_sequence_manifest="${file_species_cds_store_manifest}"
@@ -2674,7 +2674,12 @@ if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
   fi
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"
 
+  gff_cds_validation_args=()
+  if [[ "${input_sequence_mode}" == "cds" ]]; then
+    gff_cds_validation_args+=(--validate-cds-length)
+  fi
   python "${gg_support_dir}/gff2genestat.py" \
+    "${gff_cds_validation_args[@]}" \
     --dir_gff "${dir_sp_gff}" \
     --feature "CDS" \
     --multiple_hits "longest" \
@@ -6091,7 +6096,7 @@ summary_input_files=(
   "${file_og_synteny}"
 )
 task="Synteny neighborhood grouping"
-if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then
+if [[ ${treevis_synteny} -eq 1 || ${treevis_synteny_similarity} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then
   synteny_source_dir="${dir_sp_cds}"
   synteny_sequence_mode="cds"
   if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
@@ -6410,7 +6415,9 @@ tree_plot_provenance_args=(
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --output "tree_plot=${file_og_tree_plot}"
-  --parameter "column_layout=physical-mm-v1"
+  --parameter "column_layout=physical-mm-v2-compact-legends"
+  --parameter "localization_layout=paired-squares-v3-black-labels"
+  --parameter "domain_intron_marks=no"
   --parameter "branch_length=${treevis_branch_length}"
   --parameter "support_value_requested=${treevis_support_value}"
   --parameter "support_value_resolved=${treevis_support_value_resolved}"
@@ -6418,6 +6425,22 @@ tree_plot_provenance_args=(
   --parameter "heatmap_transform=${treevis_heatmap_transform}"
   --parameter "max_intergenic_dist=${treevis_max_intergenic_dist}"
   --parameter "synteny_window=${treevis_synteny_window}"
+  --parameter "sequence_similarity=${treevis_sequence_similarity}"
+  --parameter "pairwise_tip_suffix=last3"
+  --parameter "pairwise_layout_version=3"
+  --parameter "gene_structure=compressed,23,utr-v1"
+  --parameter "intron_correspondence=inline-confidence-bands-v5-no-labels,nearby_nt=3"
+  --parameter "pairwise_input_validation_version=2"
+  --parameter "sequence_similarity_width_mm=${treevis_sequence_similarity_width_mm}"
+  --parameter "sequence_similarity_mode=${input_sequence_mode}"
+  --parameter "sequence_similarity_metric=amino_acid_identity"
+  --parameter "sequence_similarity_genetic_code=${genetic_code}"
+  --parameter "pairwise_panel_order=synteny,cis,sequence"
+  --parameter "cis_similarity=${treevis_cis_similarity}"
+  --parameter "cis_similarity_width_mm=${treevis_cis_similarity_width_mm}"
+  --parameter "synteny_similarity=${treevis_synteny_similarity}"
+  --parameter "synteny_search_window=${synteny_search_window}"
+  --parameter "synteny_similarity_width_mm=${treevis_synteny_similarity_width_mm}"
   --parameter "query_marker=${treevis_query_marker}"
   --parameter "retrotransposition_delta_intron=${treevis_retrotransposition_delta_intron}"
   --parameter "clade_ortholog=${treevis_clade_ortholog}"
@@ -6433,6 +6456,7 @@ tree_plot_provenance_args=(
   --parameter "csubst_cutoff_stat=${csubst_cutoff_stat}"
   --parameter "promoter_bp=${promoter_bp}"
   --parameter "fimo_qvalue=${fimo_qvalue}"
+  --parameter "promoter_motif_axis_unit=kb"
   --parameter "species_label_parser=${species_label_parser}"
 )
 tree_plot_input_files=(
@@ -6449,6 +6473,8 @@ tree_plot_input_files=(
   "${file_og_rpsblast}"
   "${file_og_meme}"
   "${file_og_dated_tree}"
+  "${file_og_fimo}"
+  "${file_og_promoter_fasta}"
 )
 for ((i = 2; i <= csubst_max_arity; i++)); do
   csubst_cb_varname="file_og_csubst_cb_${i}"
@@ -6543,11 +6569,7 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
     panel_index=$((panel_index + 1))
   fi
   tree_plot_panel_args+=(
-    "--panel${panel_index}=signal_peptide"
-  )
-  panel_index=$((panel_index + 1))
-  tree_plot_panel_args+=(
-    "--panel${panel_index}=peroxisome"
+    "--panel${panel_index}=localization"
   )
   panel_index=$((panel_index + 1))
   tree_plot_panel_args+=(
@@ -6556,6 +6578,14 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
   panel_index=$((panel_index + 1))
   tree_plot_panel_args+=(
     "--panel${panel_index}=intron_number"
+  )
+  panel_index=$((panel_index + 1))
+  gene_structure_alignment=""
+  if [[ "${input_sequence_mode}" == "cds" ]]; then
+    gene_structure_alignment="${panel11_untrimmed_aln}"
+  fi
+  tree_plot_panel_args+=(
+    "--panel${panel_index}=gene_structure,compressed,23,${gene_structure_alignment}"
   )
   panel_index=$((panel_index + 1))
   tree_plot_panel_args+=(
@@ -6577,6 +6607,18 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
   tree_plot_panel_args+=(
     "--panel${panel_index}=ortholog,${ortholog_prefix},${file_og_dated_tree}"
   )
+  if [[ ${treevis_synteny_similarity} -eq 1 ]]; then
+    panel_index=$((panel_index + 1))
+    tree_plot_panel_args+=("--panel${panel_index}=synteny_similarity,${file_og_synteny},${synteny_search_window},${treevis_synteny_similarity_width_mm}")
+  fi
+  if [[ ${treevis_cis_similarity} -eq 1 ]]; then
+    panel_index=$((panel_index + 1))
+    tree_plot_panel_args+=("--panel${panel_index}=cis_similarity,${file_og_fimo},${file_og_promoter_fasta},${fimo_qvalue},${treevis_cis_similarity_width_mm}")
+  fi
+  if [[ ${treevis_sequence_similarity} -eq 1 ]]; then
+    panel_index=$((panel_index + 1))
+    tree_plot_panel_args+=("--panel${panel_index}=sequence_similarity,${file_og_trimmed_aln_analysis},${input_sequence_mode},${treevis_sequence_similarity_width_mm},${genetic_code}")
+  fi
 
   TREEVIS_SPECIES_PARSER="${species_label_parser}" \
   Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \

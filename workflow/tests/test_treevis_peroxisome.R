@@ -49,3 +49,26 @@ for (n_tip in c(10L, 60L)) {
     dev.off()
 }
 cat('Square localization bar layout tests passed.\n')
+
+# A single localization column contains two independent adjacent squares.
+input <- tree
+for (key in c('noTP','SP','mTP','cTP','lTP')) input$data[[paste0('cdskit_localize_p_',key)]] <- 0.2
+combined <- add_localization_column(list(tree=input),args)
+stopifnot(identical(names(combined),c('tree','localization')))
+b <- ggplot_build(combined$localization)
+rectangles <- b$data[[3]]
+left <- rectangles[rectangles$xmin < 1,]
+right <- rectangles[rectangles$xmin > 1,]
+stopifnot(all(abs(tapply(left$xmax-left$xmin,left$ymin,sum)-1)<1e-10),
+          identical(as.numeric(right$xmax-right$xmin),c(1,0.5,0)),
+          all(abs(right$xmin-1.4)<1e-10))
+# The peroxisome prediction never rescales the five-way targeting stack.
+input$data$cdskit_localize_p_peroxisome <- NA_real_
+stopifnot(!is.null(add_localization_column(list(tree=input),args)$localization))
+input$data$cdskit_localize_p_peroxisome <- NULL
+stopifnot(!is.null(add_localization_column(list(tree=input),args)$localization))
+only_perox <- add_localization_column(list(tree=tree),args)
+stopifnot(!is.null(only_perox$localization))
+for (key in c('noTP','SP','mTP','cTP','lTP')) input$data[[paste0('cdskit_localize_p_',key)]] <- NULL
+stopifnot(is.null(add_localization_column(list(tree=input),args)$localization))
+cat('Combined localization probabilities and missing-data tests passed.\n')

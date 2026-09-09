@@ -15,7 +15,7 @@ from workflow.support.gff2genestat import (
 )
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "gff2genestat.py"
-OUT_COLS = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand"]
+OUT_COLS = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type"]
 
 
 def test_longest_selects_one_transcript_before_summarizing():
@@ -37,6 +37,8 @@ def test_longest_selects_one_transcript_before_summarizing():
         assert out.iloc[0]["feature_size"] == 300
         assert out.iloc[0]["num_intron"] == 1
         assert out.iloc[0]["intron_positions"] == "200"
+        assert out.iloc[0]["feature_blocks"] == "1-200;401-500"
+        assert out.iloc[0]["feature_type"] == "CDS"
 
 
 def test_longest_gtf_transcripts_do_not_merge_isoforms():
@@ -74,6 +76,7 @@ def test_reverse_strand_cds_uses_transcript_order_and_genomic_bounds():
     out = summarize_gene_features(gff, OUT_COLS).iloc[0]
     assert out["feature_size"] == 60
     assert out["intron_positions"] == "30;50"
+    assert out["feature_blocks"] == "201-230;101-120;1-10"
     assert (out["start"], out["end"]) == (1, 230)
 
 
@@ -371,3 +374,62 @@ def test_process_single_gff_skips_file_with_fewer_than_nine_columns(tmp_path, ca
     captured = capsys.readouterr()
     assert out.empty
     assert "Skipping malformed GFF with fewer than 9 columns" in captured.err
+
+
+def test_utr_annotation_follows_selected_transcript_and_preserves_phase():
+    from workflow.support.gff2genestat import attach_transcript_structure
+    gff = pandas.DataFrame([
+        ["chr1", "CDS", 101, 160, "-", "1", "Parent=gene1.long"],
+        ["chr1", "CDS", 21, 50, "-", "1", "Parent=gene1.long"],
+        ["chr1", "CDS", 101, 130, "-", "0", "Parent=gene1.short"],
+        ["chr1", "five_prime_UTR", 161, 180, "-", ".", "Parent=gene1.long"],
+        ["chr1", "three_prime_UTR", 1, 20, "-", ".", "Parent=gene1.long"],
+        ["chr1", "five_prime_UTR", 131, 250, "-", ".", "Parent=gene1.short"],
+    ], columns=["sequence", "feature", "start", "end", "strand", "phase", "attributes"])
+    selected = extract_by_ids(gff, pandas.Series(["Species_a_gene1"]), "CDS", "longest")
+    annotated = attach_transcript_structure(selected, gff)
+    cols = OUT_COLS + ["gff_transcript_id", "utr_blocks", "cds_first_phase"]
+    row = summarize_gene_features(annotated, cols).iloc[0]
+    assert row.gff_transcript_id == "gene1.long"
+    assert row.utr_blocks == "161-180;1-20"
+    assert row.cds_first_phase == 1
+    # A transcript interval alone does not establish UTR sequence.
+    no_utr = attach_transcript_structure(selected, gff[gff.feature == "CDS"])
+    assert no_utr.utr_blocks.eq("").all()
+
+
+@pytest.mark.parametrize('strand,starts,ends', [('+',[1,4,20],[3,6,22]), ('-',[20,17,1],[22,19,3])])
+def test_adjacent_cds_fragments_are_not_introns(strand, starts, ends):
+    gff = pandas.DataFrame(dict(gene_id=['g']*3,sequence=['chr1']*3,strand=[strand]*3,start=starts,end=ends))
+    row = summarize_gene_features(gff,OUT_COLS).iloc[0]
+    assert row.feature_size == 9
+    assert row.num_intron == 1
+    assert row.intron_positions == '6'
+    legacy = add_intron_info(gff, pandas.DataFrame(columns=OUT_COLS)).iloc[0]
+    assert legacy.num_intron == 1 and legacy.intron_positions == '6'
+
+
+def test_all_cds_phases_are_validated_and_missing_initial_phase_is_inferred():
+    from workflow.support.gff2genestat import attach_transcript_structure
+    cds = pandas.DataFrame(dict(gene_id=['g','g'],selected_transcript=['t','t'],
+        sequence=['chr1','chr1'],feature=['CDS','CDS'],start=[1,10],end=[4,14],
+        strand=['+','+'],phase=[float("nan"),2.0],attributes=['Parent=t','Parent=t']))
+    annotated = attach_transcript_structure(cds,cds)
+    assert annotated.cds_first_phase.eq(0).all()
+    cds['phase'] = ['0','1']
+    with pytest.raises(ValueError,match='Conflicting CDS phases'):
+        attach_transcript_structure(cds,cds)
+    cds['phase'] = ['.','.']
+    assert attach_transcript_structure(cds,cds).cds_first_phase.isna().all()
+
+
+def test_cds_length_validation_rejects_wrong_transcript_and_preserves_missing():
+    from workflow.support.gff2genestat import validate_cds_lengths
+    traits=pandas.DataFrame(dict(gene_id=['a'],feature_size=[6]))
+    records=[('a','a','ATGNNN'),('missing','missing','ATG')]
+    validate_cds_lengths(traits,records)
+    traits.loc[0,'feature_size']=3
+    with pytest.raises(ValueError,match='GFF=3, CDS=6'):
+        validate_cds_lengths(traits,records)
+    with pytest.raises(ValueError,match='ungapped nucleotide'):
+        validate_cds_lengths(traits,[('a','a','MKE')])

@@ -67,9 +67,8 @@ for (prefix in c('Arabidopsis_thaliana_', 'Species_a_subsp_b_', 'Species_a_x_Spe
     stopifnot(is.expression(label), inherits(gt,'gtable'))
 }
 
-# A long domain legend must remain complete when it overflows onto a plot
-# with an opaque background. Exercise the actual driver, not a copy of its
-# plot assembly. Its domain panel must keep exactly the same coordinates.
+# A long domain legend is limited to the available width. Exercise the
+# actual driver and confirm that fitting keys preserves panel coordinates.
 file_arg <- grep('^--file=', commandArgs(), value=TRUE)[1]
 repo <- normalizePath(file.path(dirname(sub('^--file=', '', file_arg)), '..','..'))
 driver <- file.path(repo,'workflow/support/stat_branch2tree_plot.r')
@@ -85,6 +84,7 @@ write.table(rps,file.path(output,'rps.tsv'),sep='\t',quote=FALSE,row.names=FALSE
 runner <- file.path(output,'render.R')
 writeLines(c(sprintf('source(%s)',encodeString(driver,quote='"')),
     "stopifnot(length(cp$layers) == length(g))",
+    "stopifnot(length(layout_mm$legend_entries$domain) < 7)",
     "domain_position <- match('domain',names(g))",
     "expected_x <- sum(rel_widths[seq_len(domain_position-1)]) / sum(rel_widths)",
     "last <- cp$layers[[length(cp$layers)]]$geom_params",
@@ -103,3 +103,12 @@ if (!is.null(attr(logs,'status'))) stop(paste(logs,collapse='\n'))
 stopifnot(file.info(file.path(output,'stat_branch2tree_plot.pdf'))$size > 1000)
 dev.off()
 cat('Treevis event, query, species-label, and domain-overflow tests passed.\n')
+
+# Intron overlays are opt-in even when annotation is available.
+input <- base
+input$tree$data$intron_positions <- '30;60'
+default_domain <- add_protein_domain_column(input,args,rps)$domain
+marked_domain <- add_protein_domain_column(input,args,rps,show_introns=TRUE)$domain
+has_marks <- function(p) any(vapply(p$layers,function(layer)
+    isTRUE(attr(layer,'treevis_intron_marks')),logical(1)))
+stopifnot(!has_marks(default_domain),has_marks(marked_domain))
