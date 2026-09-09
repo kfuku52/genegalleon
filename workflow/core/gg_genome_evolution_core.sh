@@ -4180,18 +4180,25 @@ if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then
       species_base=${species_base%.*}
       species_ids+=("${species_base}")
     done
-    if ! python - "${species_tree}" "${species_label_parser}" "${species_label_regex}" "${species_label_map_tsv}" "${species_ids[@]}" << 'PY'
+    orthofinder_species_tree="${dir_orthofinder}/species_tree_inputs.nwk"
+    if ! python - "${species_tree}" "${orthofinder_species_tree}" "${species_label_parser}" "${species_label_regex}" "${species_label_map_tsv}" "${species_ids[@]}" << 'PY'
+import hashlib
+import io
+import json
+import re
 import sys
 from collections import defaultdict
+from pathlib import Path
 
 from Bio import Phylo
 from nwkit.species_parser import get_species_parser
 
 tree_file = sys.argv[1]
-species_parser_name = sys.argv[2]
-species_regex = sys.argv[3] or None
-species_map_tsv = sys.argv[4] or None
-protein_species = sys.argv[5:]
+output_tree = Path(sys.argv[2])
+species_parser_name = sys.argv[3]
+species_regex = sys.argv[4] or None
+species_map_tsv = sys.argv[5] or None
+protein_species = sys.argv[6:]
 
 
 def fail(message):
@@ -4232,7 +4239,9 @@ def parse_records(raw_labels, source_name):
 
 
 try:
-    tree = Phylo.read(tree_file, "newick")
+    source_bytes = Path(tree_file).read_bytes()
+    source_text = source_bytes.decode("utf-8")
+    tree = Phylo.read(io.StringIO(source_text), "newick")
 except Exception as exc:
     fail("could not parse species tree {}: {}".format(tree_file, exc))
 tree_leaves = [terminal.name for terminal in tree.get_terminals()]
@@ -4296,6 +4305,53 @@ if missing_queries or unexpected_queries:
 matched_count = len(exact_labels) + len(protein_by_query)
 if matched_count != len(protein_records) or matched_count != len(tree_records):
     fail("species mapping is not one-to-one")
+raw_mapping = {tree_by_label[label][0]: protein_by_label[label][0] for label in exact_labels}
+raw_mapping.update({tree_by_query[query][0]: protein_by_query[query][0] for query in protein_by_query})
+# OrthoFinder and core-species selection consume raw FASTA basenames, not
+# NWKit taxonomy queries. Adapt only this staged copy, retaining the source
+# tree and a hash-bound record of the existing validated correspondence.
+# Replace terminal-label tokens only: a Newick reserialization can introduce
+# absent zero-length branches or round lengths/supports. Keep all other bytes.
+tokens = re.finditer(r"'(?:[^']|'')*'|\[(?:\\.|[^\]])*\]|[(),:;]|[^\s'()[\],:;]+|\s+", source_text)
+parts, seen, end, expect_leaf = [], set(), 0, True
+for match in tokens:
+    if match.start() != end:
+        fail("unsupported Newick token in species tree")
+    token = match.group()
+    end = match.end()
+    if token.isspace() or token.startswith("["):
+        pass
+    elif token in ("(", ","):
+        expect_leaf = True
+    elif token in (")", ":", ";"):
+        expect_leaf = False
+    elif expect_leaf:
+        label = token[1:-1].replace("''", "'") if token.startswith("'") else token
+        if label not in raw_mapping or label in seen:
+            fail("terminal token does not match the validated species mapping")
+        seen.add(label)
+        replacement = raw_mapping[label]
+        if replacement != label:
+            token = replacement if re.fullmatch(r"[^\s'()[\],:;]+", replacement) else "'" + replacement.replace("'", "''") + "'"
+        expect_leaf = False
+    parts.append(token)
+if end != len(source_text) or seen != set(raw_mapping):
+    fail("species-tree terminal token mapping is incomplete")
+adapted_text = "".join(parts)
+adapted_tree = Phylo.read(io.StringIO(adapted_text), "newick")
+def structure(clade, rename=False):
+    return (raw_mapping[clade.name] if rename and clade.is_terminal() else clade.name,
+            clade.branch_length, clade.confidence, clade.comment,
+            tuple(structure(child, rename) for child in clade.clades))
+if structure(tree.root, True) != structure(adapted_tree.root):
+    fail("species-tree adaptation changed more than terminal labels")
+output_tree.write_bytes(adapted_text.encode("utf-8"))
+output_tree.with_suffix(".mapping.json").write_text(json.dumps({
+    "schema_version": 1,
+    "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+    "output_sha256": hashlib.sha256(output_tree.read_bytes()).hexdigest(),
+    "tree_to_protein_labels": dict(sorted(raw_mapping.items())),
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print("Validated one-to-one OrthoFinder species-tree mapping for {} species.".format(matched_count))
 PY
     then
@@ -4303,6 +4359,8 @@ PY
       echo "Please regenerate workspace/output/species_tree, update the species inputs, or provide an unambiguous species-label map for the current inputs."
       exit 1
     fi
+    species_tree="${orthofinder_species_tree}"
+    param_species_tree=(-s "${species_tree}")
   fi
   if [[ ${num_sp} -gt ${max_orthofinder_core_species} ]]; then
     echo "The number of species (${num_sp}) is greater than the maximum number of core species (${max_orthofinder_core_species}) for OrthoFinder."
