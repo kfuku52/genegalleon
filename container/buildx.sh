@@ -160,7 +160,7 @@ cache_args=()
 cache_dir_new=""
 buildx_driver=""
 if buildx_inspect="$(docker buildx inspect --bootstrap 2>/dev/null)"; then
-  buildx_driver="$(printf '%s\n' "${buildx_inspect}" | awk -F': *' '/^Driver:/ {print $2; exit}' | xargs)"
+  buildx_driver="$(printf '%s\n' "${buildx_inspect}" | awk -F': *' '/^Driver:/ && !seen {print $2; seen = 1}' | xargs)"
 else
   echo "[buildx] Could not inspect the builder; continuing without local cache configuration."
 fi
