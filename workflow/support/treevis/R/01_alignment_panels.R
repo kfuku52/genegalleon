@@ -290,7 +290,7 @@ add_heatmap_column = function(g, args, df_trait, fill_label='Expression', gname=
         return(g)
     }
     font_size = args[['font_size']]
-    if (any(grepl('^pointplot', unlist(args[grep("^panel", names(args))])))) {
+    if (any(grepl('^pointplot', unlist(args[grep("^panel[0-9]+$", names(args))])))) {
         trait_colors = args[['trait_colors']]
     } else {
         trait_colors = 'black'
@@ -366,11 +366,21 @@ add_tiplabel_column = function(g, args) {
     df_tip[,'hjust'] = 0
     g[['tiplabel']] = ggplot(df_tip, aes(x=x_dummy, y=label, label=label, hjust=hjust)) +
         geom_text(size=args[['font_size']] * args[['font_size_factor']], colour=df_tip[['tiplab_color']]) +
-        xlim(0,1) +
+        scale_x_continuous(limits=c(0, 1), expand=expansion(mult=0)) +
         theme_void() +
         theme(
             plot.margin=unit(args[['margins']], "cm")
         )
+    # Measure rendered glyphs, not a fraction of the requested figure width.
+    labels = as.character(df_tip[['label']])
+    labels = labels[!is.na(labels)]
+    text_mm = if (length(labels)) max(vapply(labels, function(label) {
+        grid::convertWidth(grid::grobWidth(grid::textGrob(label,
+            gp=grid::gpar(fontsize=args[['font_size']] *
+                args[['font_size_factor']] * ggplot2::.pt))), 'mm', valueOnly=TRUE)
+    }, numeric(1))) else 0
+    attr(g[['tiplabel']], 'treevis_tiplabel_width_mm') =
+        text_mm + sum(rep(args[['margins']], length.out=4)[c(2, 4)]) * 10 + 2
     return(g)
 }
 
@@ -469,6 +479,11 @@ add_categorical_column = function(g, args, gname, col, xlab, missing_label = '-'
     if (missing_label %in% levels) {
         palette[missing_label] = '#e6e6e6'
     }
+    is_query_marker = identical(col, 'query_marker')
+    if (is_query_marker) {
+        palette['Best hit'] = 'black'
+        if (identical(xlab, 'Query')) xlab = 'Query\nbest\nhit'
+    }
     df_tip[['plot_value']] = factor(values, levels = levels)
     df_tip[['panel_x']] = 1
     g[[gname]] = ggplot(df_tip, aes(x = panel_x, y = label, fill = plot_value)) +
@@ -484,7 +499,7 @@ add_categorical_column = function(g, args, gname, col, xlab, missing_label = '-'
             axis.text.x = element_blank(),
             axis.ticks = element_blank(),
             axis.line = element_blank(),
-            legend.position = 'bottom',
+            legend.position = if (is_query_marker) 'none' else 'bottom',
             legend.title = element_blank(),
             legend.text = element_text(size = args[['font_size']]),
             legend.key.size = unit(0.35, 'lines'),
@@ -492,6 +507,10 @@ add_categorical_column = function(g, args, gname, col, xlab, missing_label = '-'
             plot.margin = unit(args[['margins']] / 4, 'cm')
         ) +
         guides(fill = guide_legend(nrow = min(4, length(levels)), byrow = TRUE))
+    if (is_query_marker) {
+        attr(g[[gname]], 'treevis_square_bar_height') = 0.9
+        attr(g[[gname]], 'treevis_square_item_width') = 0.9
+    }
     return(g)
 }
 

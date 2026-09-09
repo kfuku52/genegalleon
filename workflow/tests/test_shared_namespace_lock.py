@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,30 @@ from workflow.support.shared_namespace_lock import (
 
 HELPER = Path(__file__).resolve().parents[1] / "support" / "shared_namespace_lock.py"
 SHELL = HELPER.with_name("gg_shared_lock.sh")
+
+
+@pytest.mark.parametrize("ending,retained", [("exit 0", False), ("exit 7", False), ("exit 137", True), ("kill -TERM $$", True)])
+def test_input_core_lock_cleanup_retains_interrupted_ownership(tmp_path, ending, retained):
+    core = HELPER.parents[1] / "core" / "gg_input_generation_core.sh"
+    text = core.read_text()
+    # Exercise the actual lifecycle definitions, without unrelated workflow stages.
+    lifecycle = text[text.index("array_lock_paths=()"):text.index("prepare_input_generation_tmp_dirs()")]
+    path = tmp_path / "worker.lock"
+    script = f"""
+set -euo pipefail
+gg_support_dir={shlex.quote(str(HELPER.parent))}
+write_gg_input_generation_summary_on_exit() {{ return 0; }}
+{lifecycle}
+input_generation_lock {shlex.quote(str(path))} exclusive
+{ending}
+"""
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    if retained:
+        assert result.returncode >= 128, result.stderr
+        assert acquire(path, exclusive=True, nonblocking=True) is None
+    else:
+        with namespace_lock(path, exclusive=True, nonblocking=True) as held:
+            assert held, result.stderr
 
 
 def test_readers_share_but_exclude_writer_across_processes(tmp_path):
@@ -148,3 +173,34 @@ gg_advisory_shared_lock_release
         if process.poll() is None:
             process.kill()
             process.wait()
+
+
+def test_input_core_shared_lock_retries_registration_contention(tmp_path):
+    core = HELPER.parents[1] / "core" / "gg_input_generation_core.sh"
+    text = core.read_text()
+    lifecycle = text[text.index("array_lock_paths=()"):text.index("prepare_input_generation_tmp_dirs()")]
+    path = tmp_path / "phase.lock"
+    holder = acquire(path, exclusive=True)
+    script = f"""
+set -euo pipefail
+gg_support_dir={shlex.quote(str(HELPER.parent))}
+write_gg_input_generation_summary_on_exit() {{ return 0; }}
+{lifecycle}
+printf 'starting\\n'
+input_generation_lock "$1" shared
+printf 'acquired\\n'
+"""
+    process = subprocess.Popen(["bash", "-c", script, "test", str(path)],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert process.stdout.readline() == "starting\n"
+        # The old nonblocking reader exits while the registration gate is held.
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.wait(timeout=0.5)
+    finally:
+        release(path, holder, exclusive=True)
+        stdout, stderr = process.communicate(timeout=10)
+    assert process.returncode == 0, stdout + stderr
+    assert stdout == "acquired\n"
+    with namespace_lock(path, exclusive=True, nonblocking=True) as available:
+        assert available

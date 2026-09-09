@@ -49,9 +49,9 @@ expected_ortholog_width <- 0.76 / (1.5 + 0.76)
 if (abs(unname(w_ortholog["ortholog,Arabidopsis_thaliana_"]) - expected_ortholog_width) > 1e-9) {
   stop("get_rel_widths should allocate the expanded default width to ortholog panels.")
 }
-expected_ortholog_xlab <- "Arabidopsis\nthaliana\nclosest\ngene"
+expected_ortholog_xlab <- expression(atop(displaystyle(italic("Arabidopsis")), displaystyle(atop(displaystyle(italic("thaliana")), displaystyle(atop(displaystyle("closest"), displaystyle("gene")))))))
 if (!identical(treevis_ortholog_axis_label("Arabidopsis_thaliana_"), expected_ortholog_xlab)) {
-  stop("treevis_ortholog_axis_label should put every word on its own line.")
+  stop("treevis_ortholog_axis_label should stack words and italicize only the species name.")
 }
 
 # 2e) read_site_state_alignment: recoded symbols are preserved as plain characters.
@@ -527,8 +527,7 @@ run_tree_plot_trait_case <- function(include_expression, heatmap_transform = "no
     plot_script,
     paste0("--stat_branch=", stat_branch),
     "--max_delta_intron_present=-0.5",
-    "--width=7.2",
-    "--rel_widths=",
+    "--panel_widths_mm=tree:60",
     "--panel1=tree,bl_rooted,no,no,L",
     paste0("--panel2=heatmap,", heatmap_transform, ",abs,_,expression_"),
     "--panel3=pointplot,no,rel,_,expression_",
@@ -1059,3 +1058,22 @@ if (!identical(domain_order, alignment_order)) {
 }
 
 cat("genegalleon.treevis package tests passed.\n")
+
+
+# Tip labels reserve rendered glyph width and scale with font size.
+tip_width <- function(label, font_size=6, figure_width=7.2) {
+    tree <- list(data=data.frame(isTip=TRUE, label=label, y=1, tiplab_color="black"))
+    args <- list(font_size=font_size, font_size_factor=0.352777778,
+                 margins=c(0, 0, 0, 0), width=figure_width)
+    attr(add_tiplabel_column(list(tree=tree), args)$tiplabel, "treevis_tiplabel_width_mm")
+}
+stopifnot(tip_width("WWWW") > tip_width("iiii"),
+          tip_width("long_label", figure_width=7.2) == tip_width("long_label", figure_width=16),
+          abs((tip_width("long_label", 12)-2) / (tip_width("long_label", 6)-2) - 2) < 1e-6)
+
+intron_tree <- list(data=data.frame(isTip=c(TRUE,TRUE,TRUE), label=c("a","b","c"),
+    y=1:3, tiplab_color="black", num_intron=c(0,20,NA)))
+intron_plot <- add_integer_column(list(tree=intron_tree),
+    list(font_size=6,font_size_factor=0.352777778,margins=c(0,0,0,0)),
+    "intron", "num_intron", "I")$intron
+stopifnot(identical(intron_plot$data$num_intron, c(0L,20L,NA_integer_)))

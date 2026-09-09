@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import contextvars
 import csv
 import datetime as dt
 import fcntl
+import gzip
 import hashlib
 import io
 import json
@@ -33,13 +35,15 @@ if str(SCRIPT_DIR) not in sys.path:
 from content_digest_cache import cache as digest_cache
 from content_digest_cache import cached_sha256_file
 from content_digest_cache import configure as configure_digest_cache
-from fasta_sequence_contract import SequenceContractError, validate_fasta
+from fasta_sequence_contract import SequenceContractError, validate_fasta, validate_fasta_stream
 from gene_family_output_store import (
     GeneFamilyOutputStore,
     query_id_from_name,
     query_id_matchers,
+    read_only_observation,
 )
 from safe_zip_extract import extract_expected_prefix, validated_members
+from workflow_observation import observe_path, observing_files, strict_json_loads
 
 SCHEMA_VERSION = 1
 CURRENT = 1
@@ -48,6 +52,7 @@ ERROR = 2
 STALE_STOP = 3
 CHUNK_SIZE = 1024 * 1024
 MANIFEST_SUBDIR = "artifact_provenance"
+_LOGICAL_OBSERVATION_STORE = contextvars.ContextVar("genegalleon_logical_observation_store", default=None)
 DEFAULT_REQUIRED_STEP_SUBDIRS = {
     "iqtree_anc": "iqtree_anc",
     "csubst": "csubst_b",
@@ -63,6 +68,54 @@ class ProvenanceError(RuntimeError):
 
 class RecoveryNotApplicable(ProvenanceError):
     """A derived candidate does not match the recorded artifact contract."""
+
+
+@contextlib.contextmanager
+def logical_observation(args):
+    """Read the same logical bytes runtime materialization would provide."""
+    store = GeneFamilyOutputStore(args.logical_root, family_filter=args.family_id)
+    token = _LOGICAL_OBSERVATION_STORE.set(store)
+    try:
+        with read_only_observation():
+            yield
+    finally:
+        _LOGICAL_OBSERVATION_STORE.reset(token)
+
+
+def observation_artifact(path):
+    store = _LOGICAL_OBSERVATION_STORE.get()
+    if store is None:
+        return None
+    try:
+        relative = path.absolute().relative_to(store.root)
+    except ValueError:
+        return None
+    if len(relative.parts) != 2 or ".." in relative.parts:
+        return None
+    return store.artifact(*relative.parts)
+
+
+def declared_path_exists(path):
+    observe_path(path)
+    return os.path.lexists(path) or observation_artifact(path) is not None
+
+
+@contextlib.contextmanager
+def open_declared_binary(path):
+    observe_path(path)
+    if path.is_symlink():
+        raise ProvenanceError(f"Symlinked declared paths are unsupported: {path}")
+    if path.exists():
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ProvenanceError(f"Declared path must be a regular file: {path}")
+            yield handle
+        return
+    artifact = observation_artifact(path)
+    if artifact is None:
+        raise FileNotFoundError(path)
+    with _LOGICAL_OBSERVATION_STORE.get().open_binary(artifact.subdir, artifact.name) as handle:
+        yield handle
 
 
 def parse_key_value(raw: str, option: str) -> tuple[str, str]:
@@ -109,10 +162,17 @@ def declared_output_fasta_contracts(args: argparse.Namespace) -> list[tuple[str,
 
 def output_fasta_contract_failure(args: argparse.Namespace) -> str:
     for label, path, expected in declared_output_fasta_contracts(args):
-        if not path.exists() and not path.is_symlink():
+        if not declared_path_exists(path):
             continue
         try:
-            validate_fasta(path, expected)
+            if path.exists() or path.is_symlink():
+                validate_fasta(path, expected)
+            else:
+                with open_declared_binary(path) as source:
+                    buffered = io.BufferedReader(source)
+                    decoded = gzip.GzipFile(fileobj=buffered) if buffered.peek(2)[:2] == b"\x1f\x8b" else buffered
+                    with io.TextIOWrapper(decoded, encoding="utf-8", errors="strict") as handle:
+                        validate_fasta_stream(handle, expected, path=path)
         except (OSError, UnicodeError, SequenceContractError) as exc:
             return f"output {label!r} violates its {expected} FASTA contract: {exc}"
     return ""
@@ -128,17 +188,23 @@ def sha256_stream(handle: BinaryIO) -> tuple[str, int]:
 
 
 def sha256_path(path: Path) -> tuple[str, int, str]:
+    observe_path(path)
     if path.is_symlink():
         raise ProvenanceError(f"Symlinked provenance inputs and outputs are unsupported: {path}")
     if path.is_file():
         digest, size = cached_sha256_file(path)
         return digest, size, "file"
     if not path.is_dir():
+        if observation_artifact(path) is not None:
+            with open_declared_binary(path) as handle:
+                digest, size = sha256_stream(handle)
+            return digest, size, "file"
         raise FileNotFoundError(path)
 
     digest = hashlib.sha256()
     total_size = 0
     for child in sorted(path.rglob("*")):
+        observe_path(child)
         if child.is_symlink():
             raise ProvenanceError(f"Symlinked directory members are unsupported: {child}")
         if not child.is_file():
@@ -262,7 +328,7 @@ def gene_family_store_digest(root: Path) -> tuple[str, int, int]:
         for artifact in store.artifacts(subdir):
             artifact_digest = artifact.sha256
             artifact_size = artifact.size
-            if not artifact_digest or artifact_size is None:
+            if observing_files() or not artifact_digest or artifact_size is None:
                 with store.open_binary(artifact.subdir, artifact.name) as handle:
                     artifact_digest, artifact_size = sha256_stream(handle)
             logical_path = artifact.logical_path.encode("utf-8")
@@ -294,7 +360,7 @@ def gene_family_subdir_digest(root: Path, subdir: str) -> tuple[str, int, int]:
     for artifact in store.artifacts(subdir):
         artifact_digest = artifact.sha256
         artifact_size = artifact.size
-        if not artifact_digest or artifact_size is None:
+        if observing_files() or not artifact_digest or artifact_size is None:
             with store.open_binary(artifact.subdir, artifact.name) as handle:
                 artifact_digest, artifact_size = sha256_stream(handle)
         logical_path = artifact.logical_path.encode("utf-8")
@@ -331,7 +397,7 @@ def gene_family_artifact_digest(root: Path, subdir: str, name: str) -> tuple[str
         raise FileNotFoundError(root / subdir / name)
     artifact_digest = artifact.sha256
     artifact_size = artifact.size
-    if not artifact_digest or artifact_size is None:
+    if observing_files() or not artifact_digest or artifact_size is None:
         with store.open_binary(artifact.subdir, artifact.name) as handle:
             artifact_digest, artifact_size = sha256_stream(handle)
     return str(artifact_digest), int(artifact_size)
@@ -655,6 +721,17 @@ def describe_contract_difference(recorded: dict[str, object], current: dict[str,
     return "artifact contract changed"
 
 
+def contract_difference_code(recorded: dict[str, object], current: dict[str, object]) -> str:
+    """Stable machine code derived from contracts, independent of log wording."""
+    for key, code in (("schema_version", "schema_changed"), ("step", "identity_changed"),
+                      ("family_id", "identity_changed"), ("parameters", "parameters_changed"),
+                      ("inputs", "inputs_changed"), ("outputs", "outputs_changed"),
+                      ("optional_outputs", "optional_outputs_changed")):
+        if recorded.get(key, [] if key == "optional_outputs" else None) != current.get(key, [] if key == "optional_outputs" else None):
+            return code
+    return "artifact_stale"
+
+
 def print_stale_message(args: argparse.Namespace, reason: str, action: str) -> None:
     print("Stale artifact detected.", file=sys.stderr)
     print(f"Family: {args.family_id}", file=sys.stderr)
@@ -665,7 +742,7 @@ def print_stale_message(args: argparse.Namespace, reason: str, action: str) -> N
 
 
 def stale_policy_result(
-    args: argparse.Namespace, reason: str, *, reusable: bool = True
+    args: argparse.Namespace, reason: str, *, reusable: bool = True, error_code: str = "artifact_stale"
 ) -> int:
     policy = args.stale_policy
     if policy == "rebuild":
@@ -675,6 +752,9 @@ def stale_policy_result(
         print_stale_message(args, reason, "reuse stale output without changing its manifest")
         return CURRENT
 
+    if not args.dry_run and os.environ.get("GG_OBSERVATION_ATTEMPT_DIR"):
+        from workflow_observation import report_error
+        report_error(error_code, step=args.step, retryability="after_contract_resolution", detail=reason)
     print_stale_message(args, reason, "stop before modifying outputs")
     print("No artifact files were modified.", file=sys.stderr)
     print("Choose one of:", file=sys.stderr)
@@ -686,11 +766,14 @@ def stale_policy_result(
 
 def load_manifest(path: Path) -> dict[str, object]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        with open_declared_binary(path) as handle:
+            payload = strict_json_loads(handle.read())
+    except (OSError, ValueError) as exc:
         raise ProvenanceError(f"Failed to read provenance manifest {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ProvenanceError(f"Provenance manifest must contain a JSON object: {path}")
+    if type(payload.get("schema_version")) is not int:
+        raise ProvenanceError(f"Provenance schema_version must be an integer: {path}")
     return payload
 
 
@@ -769,8 +852,8 @@ def recover_declared_outputs(args: argparse.Namespace) -> bool:
     unknown = candidates.keys() - outputs.keys()
     if unknown:
         raise ProvenanceError(f"Recovery requires declared file outputs: {sorted(unknown)}")
-    missing = {label for label in candidates if not os.path.lexists(outputs[label])}
-    recorded = load_manifest(args.manifest) if candidates and os.path.lexists(args.manifest) else None
+    missing = {label for label in candidates if not declared_path_exists(Path(outputs[label]))}
+    recorded = load_manifest(args.manifest) if candidates and declared_path_exists(args.manifest) else None
     added = candidates.keys() - entries_by_label(recorded, "outputs").keys() if recorded is not None else set()
     if not missing and not added:
         return False
@@ -852,7 +935,7 @@ def needs_run(args: argparse.Namespace) -> int:
     fasta_failure = output_fasta_contract_failure(args)
     if fasta_failure:
         return stale_policy_result(args, fasta_failure, reusable=False)
-    if not args.manifest.is_file():
+    if not declared_path_exists(args.manifest):
         output_pairs = parse_path_pairs(args.output, "--output")
         logical_output_pairs = parse_path_pairs(
             args.output_logical_directory, "--output-logical-directory"
@@ -860,7 +943,7 @@ def needs_run(args: argparse.Namespace) -> int:
         if not output_pairs and not logical_output_pairs:
             optional_pairs = parse_path_pairs(args.optional_output, "--optional-output")
             present_optional = [
-                label for label, raw_path in optional_pairs if Path(raw_path).is_file() or Path(raw_path).is_dir()
+                label for label, raw_path in optional_pairs if declared_path_exists(Path(raw_path))
             ]
             if not present_optional:
                 print(
@@ -988,6 +1071,7 @@ def needs_run(args: argparse.Namespace) -> int:
         return stale_policy_result(
             args,
             describe_contract_difference(recorded, current),
+            error_code=contract_difference_code(recorded, current),
         )
         return NEEDS_RUN
     print(f"Artifact provenance is current: {args.manifest}")
@@ -999,6 +1083,9 @@ def record(args: argparse.Namespace) -> int:
     if fasta_failure:
         raise ProvenanceError(fasta_failure)
     payload = build_contract(args, include_diagnostics=True)
+    attempt_dir = os.environ.get("GG_OBSERVATION_ATTEMPT_DIR")
+    if attempt_dir:
+        payload["diagnostics"]["observation_attempt_id"] = Path(attempt_dir).name
     write_manifest_atomic(args.manifest, payload)
     print(f"Recorded artifact provenance: {args.manifest}")
     return 0
@@ -1007,8 +1094,8 @@ def record(args: argparse.Namespace) -> int:
 def read_manifest_from_store(store: GeneFamilyOutputStore, name: str) -> dict[str, object]:
     try:
         with store.open_binary(MANIFEST_SUBDIR, name) as handle:
-            payload = json.load(io.TextIOWrapper(handle, encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeError, zipfile.BadZipFile) as exc:
+            payload = strict_json_loads(handle.read())
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
         raise ProvenanceError(f"Failed to read logical provenance manifest {name}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ProvenanceError(f"Logical provenance manifest must contain a JSON object: {name}")
@@ -1032,10 +1119,35 @@ def open_reference(
             yield handle
         return
     path = resolve_reference({"scope": str(scope), "path": raw_path}, logical_root, workspace_root)
+    observe_path(path)
     if not path.is_file() or path.is_symlink():
         raise FileNotFoundError(path)
     with path.open("rb") as handle:
         yield handle
+
+
+def audit_entry_digest(entry, store, logical_root, workspace_root):
+    """Reuse runtime directory hashing as well as archive-aware file reads."""
+    artifact_type = entry.get("artifact_type")
+    if entry.get("state") == "absent":
+        path = resolve_reference(entry, logical_root, workspace_root)
+        observe_path(path)
+        if os.path.lexists(path) and (path.is_symlink() or not (path.is_file() or path.is_dir())):
+            raise ProvenanceError(f"Unsupported optional output type: {path}")
+        if path.is_dir():
+            digest, size, _ = sha256_path(path)
+            return digest, size
+    if artifact_type in {"directory", "logical_directory"}:
+        path = resolve_reference(entry, logical_root, workspace_root)
+        if artifact_type == "logical_directory":
+            digest, size, members = raw_or_zip_directory_digest(path)
+            if members != entry.get("member_count"):
+                raise ProvenanceError("logical directory member count changed")
+        else:
+            digest, size, _ = sha256_path(path)
+        return digest, size
+    with open_reference(entry, store, logical_root, workspace_root) as handle:
+        return sha256_stream(handle)
 
 
 def audit_manifest(
@@ -1044,7 +1156,7 @@ def audit_manifest(
     logical_root: Path,
     workspace_root: Path,
 ) -> tuple[str, str]:
-    if payload.get("schema_version") != SCHEMA_VERSION:
+    if type(payload.get("schema_version")) is not int or payload["schema_version"] != SCHEMA_VERSION:
         return "invalid_manifest", f"unsupported schema_version={payload.get('schema_version')!r}"
     for collection_name in ("inputs", "outputs"):
         entries = payload.get(collection_name)
@@ -1089,8 +1201,7 @@ def audit_manifest(
                     return "changed_input", label
                 continue
             try:
-                with open_reference(entry, store, logical_root, workspace_root) as handle:
-                    digest, size = sha256_stream(handle)
+                digest, size = audit_entry_digest(entry, store, logical_root, workspace_root)
             except FileNotFoundError:
                 return f"missing_{collection_name[:-1]}", label
             except Exception as exc:
@@ -1109,8 +1220,7 @@ def audit_manifest(
         if state not in {"present", "absent"}:
             return "invalid_manifest", f"optional output {label!r} has invalid state={state!r}"
         try:
-            with open_reference(entry, store, logical_root, workspace_root) as handle:
-                digest, size = sha256_stream(handle)
+            digest, size = audit_entry_digest(entry, store, logical_root, workspace_root)
         except FileNotFoundError:
             if state == "absent":
                 continue
@@ -1444,12 +1554,24 @@ def dispatch(argv: list[str]) -> int:
         configure_digest_cache(cache_path)
     try:
         if args.command in {"needs-run", "record"}:
-            with artifact_manifest_lock(args):
-                return needs_run(args) if args.command == "needs-run" else record(args)
+            observation = logical_observation(args) if getattr(args, "dry_run", False) else contextlib.nullcontext()
+            with observation, artifact_manifest_lock(args):
+                result = needs_run(args) if args.command == "needs-run" else record(args)
+                if os.environ.get("GG_OBSERVATION_ATTEMPT_DIR") and not getattr(args, "dry_run", False):
+                    from workflow_observation import record_contract_result
+                    record_contract_result(args, result)
+                return result
         if args.command == "audit":
             return audit(args)
         parser.error(f"Unsupported command: {args.command}")
     except (OSError, ProvenanceError, ValueError) as exc:
+        if not getattr(args, "dry_run", False) and os.environ.get("GG_OBSERVATION_ATTEMPT_DIR"):
+            from workflow_observation import record_contract_result, report_error
+            if args.command in {"needs-run", "record"}:
+                record_contract_result(args, ERROR)
+            report_error("provenance_error", step=getattr(args, "step", args.command),
+                         affected_input=str(exc.filename) if isinstance(exc, FileNotFoundError) and exc.filename else None,
+                         detail=str(exc))
         print(f"Artifact provenance error: {exc}", file=sys.stderr)
         return ERROR
     return ERROR

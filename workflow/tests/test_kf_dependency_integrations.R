@@ -99,44 +99,6 @@ if (nrow(ou_empty_bootstrap) != 15L || sum(is.na(ou_empty_bootstrap$bootstrap_su
   stop("The empty-trait kfl1ou path did not create a valid placeholder bootstrap table.")
 }
 
-pgls_dir <- tempfile("gg-gene-tree-pgls-")
-dir.create(pgls_dir)
-pgls_tips <- paste0("Genus", 1:8, "_species", 1:8, "_gene")
-pgls_tree <- sprintf(
-  "(((%s:1,%s:1):1,(%s:1,%s:1):1):1,((%s:1,%s:1):1,(%s:1,%s:1):1):1);",
-  pgls_tips[1], pgls_tips[2], pgls_tips[3], pgls_tips[4],
-  pgls_tips[5], pgls_tips[6], pgls_tips[7], pgls_tips[8]
-)
-writeLines(pgls_tree, file.path(pgls_dir, "tree.nwk"))
-pgls_trait <- data.frame(
-  species = paste0("Genus", 1:8, " species", 1:8),
-  habitat = c(1.0, 2.0, 1.5, 2.4, 4.0, 4.5, 4.2, 5.0)
-)
-pgls_expression <- data.frame(
-  gene_id = pgls_tips,
-  root_leaf_1 = c(1.0, 1.2, 1.1, 1.4, 3.8, 4.1, 4.0, 4.3),
-  root_leaf_2 = c(1.1, 1.3, 1.2, 1.5, 3.9, 4.2, 4.1, 4.4),
-  root_stem_1 = c(4.5, 4.1, 4.3, 3.9, 1.5, 1.2, 1.4, 1.0),
-  root_stem_2 = c(4.4, 4.2, 4.2, 4.0, 1.4, 1.3, 1.3, 1.1),
-  check.names = FALSE
-)
-write.table(pgls_trait, file.path(pgls_dir, "trait.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
-write.table(pgls_expression, file.path(pgls_dir, "expression.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
-pgls_output <- run_r_script(
-  "gene_tree_pgls.r",
-  c(
-    "--file_tree=tree.nwk",
-    "--file_trait=trait.tsv",
-    "--file_exp=expression.tsv",
-    "--merge_replicates=yes",
-    "--replicate_sep=_"
-  ),
-  pgls_dir
-)
-pgls_result <- read.delim(file.path(pgls_dir, "gene_tree_PGLS.tsv"), check.names = FALSE)
-if (nrow(pgls_result) != 2L || !setequal(pgls_result$variable, c("root_leaf", "root_stem"))) {
-  stop("Merged multi-underscore expression bases were combined into the wrong PGLS model.")
-}
-
-unlink(c(ou_dir, ou_empty_dir, pgls_dir), recursive = TRUE)
+# PGLS is exercised by the NWKIT runtime and copy-number integration tests.
+unlink(c(ou_dir, ou_empty_dir), recursive = TRUE)
 cat("test_kf_dependency_integrations.R: OK\n")

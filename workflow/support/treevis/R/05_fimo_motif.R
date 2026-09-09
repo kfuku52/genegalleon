@@ -1054,7 +1054,7 @@ add_fimo_column = function(g, args, qname, xmax=2000, qvalue=0.01, multiple_conn
         }
     }
     xbreaks = (0:(xmax%/%(10**power))) * (10**power)
-    xlabels = xbreaks - xmax
+    xlabels = (xbreaks - xmax) / 1000
     polygon_layer = NULL
     alpha_scale = NULL
     if (nrow(df_polygon) > 0L) {
@@ -1083,7 +1083,7 @@ add_fimo_column = function(g, args, qname, xmax=2000, qvalue=0.01, multiple_conn
         scale_color_manual(values=my_palette) +
         alpha_scale +
         #aplot::ylim2(gg=g[['tree']]) +
-        xlab('Motif position') +
+        xlab('Promoter motif position (kb)') +
         theme_minimal(base_size=args[['font_size']]) +
         guides(
             fill=guide_legend(title="", nrow=6, byrow=FALSE),
@@ -1110,6 +1110,7 @@ add_fimo_column = function(g, args, qname, xmax=2000, qvalue=0.01, multiple_conn
             rect=element_rect(fill="transparent"),
             plot.margin=unit(args[['margins']], "cm")
         )
+    attr(g[[qname]], 'treevis_legend_counts') = table(as.character(df_fimo[['motif_altid']]))
     return(g)
 }
 

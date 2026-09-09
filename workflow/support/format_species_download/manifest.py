@@ -1,7 +1,9 @@
 """Download runtime implementation: manifest."""
 
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import time
+from collections import defaultdict, deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -16,6 +18,7 @@ from format_species_manifest import (
     resolved_manifest_fieldnames,
     write_resolved_manifest_tsv,
 )
+from format_species_network import isolated_request_provider, request_database, request_provider, set_request_provider
 from format_species_provider_config import (
     DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS,
     ENSEMBL_LIKE_PROVIDERS,
@@ -42,6 +45,7 @@ from format_species_provider_urls import (
     extract_ncbi_accession_from_source_id,
 )
 from format_species_taxonomy import invalid_species_key_error, normalize_species_key_for_runtime
+from input_download_limiter import Admission
 
 from .local import (
     quarantine_corrupt_gzip,
@@ -61,13 +65,17 @@ from .targets import (
 )
 
 
-def execute_download_target_job(
+def execute_download_target_job(job, headers, timeout, overwrite, lock_stale_seconds):
+    with request_provider(job["provider"]):
+        return _execute_download_target_job(job, headers, timeout, overwrite, lock_stale_seconds)
+
+
+def _execute_download_target_job(
     job,
     headers,
     timeout,
     overwrite,
     lock_stale_seconds,
-    provider_semaphores,
 ):
     provider = job["provider"]
     source_id = job["source_id"]
@@ -81,97 +89,142 @@ def execute_download_target_job(
     downloaded = 0
     failed = []
 
-    sem = provider_semaphores.get(provider)
-    if sem is None:
-        sem = threading.Semaphore(1)
-
-    with sem:
-        if target.exists() and target.stat().st_size > 0 and not overwrite:
-            if quarantine_corrupt_gzip(
-                target,
-                local_warnings,
-                "[download:{}] {} {}".format(provider, species_key, label),
-            ):
-                pass
-            else:
-                local_warnings.append(
-                    "[download:{}] {} {} already exists. Skipping: {}".format(provider, species_key, label, target)
-                )
-                return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded, "failed": failed}
-
-        try:
-            did_download = download_url_to_file(
-                url,
-                target,
-                headers=headers,
-                timeout=timeout,
-                dry_run=False,
-                overwrite=overwrite,
-                lock_stale_seconds=lock_stale_seconds,
-                warnings=local_warnings,
-                lock_context="[download:{}] {} {}".format(provider, species_key, label),
-                archive_member=archive_member,
+    if target.exists() and target.stat().st_size > 0 and not overwrite:
+        if quarantine_corrupt_gzip(
+            target,
+            local_warnings,
+            "[download:{}] {} {}".format(provider, species_key, label),
+        ):
+            pass
+        else:
+            local_warnings.append(
+                "[download:{}] {} {} already exists. Skipping: {}".format(provider, species_key, label, target)
             )
-            if did_download:
-                downloaded += 1
-            elif target.exists() and target.stat().st_size > 0 and not overwrite:
-                local_warnings.append(
-                    "[download:{}] {} {} already exists after lock. Skipping: {}".format(
-                        provider, species_key, label, target
-                    )
+            return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded, "failed": failed}
+
+    try:
+        did_download = download_url_to_file(
+            url,
+            target,
+            headers=headers,
+            timeout=timeout,
+            dry_run=False,
+            overwrite=overwrite,
+            lock_stale_seconds=lock_stale_seconds,
+            warnings=local_warnings,
+            lock_context="[download:{}] {} {}".format(provider, species_key, label),
+            archive_member=archive_member,
+        )
+        if did_download:
+            downloaded += 1
+        elif target.exists() and target.stat().st_size > 0 and not overwrite:
+            local_warnings.append(
+                "[download:{}] {} {} already exists after lock. Skipping: {}".format(
+                    provider, species_key, label, target
                 )
-        except Exception as exc:
-            fallback_exc = None
-            if provider in ("ncbi", "refseq", "genbank") and source_id != "":
-                try:
-                    did_download = download_ncbi_datasets_file_from_id(
-                        source_id=source_id,
-                        label=label,
-                        destination=target,
-                        headers=headers,
-                        timeout=timeout,
-                        dry_run=False,
-                        overwrite=overwrite,
-                        lock_stale_seconds=lock_stale_seconds,
-                        warnings=local_warnings,
-                        lock_context="[download:{}] {} {} datasets".format(provider, species_key, label),
-                    )
-                    if did_download:
-                        downloaded += 1
-                        local_warnings.append(
-                            "[download:{}] {} {} fallback via NCBI Datasets API for id '{}'".format(
-                                provider, species_key, label, source_id
-                            )
+            )
+    except Exception as exc:
+        fallback_exc = None
+        if provider in ("ncbi", "refseq", "genbank") and source_id != "":
+            try:
+                did_download = download_ncbi_datasets_file_from_id(
+                    source_id=source_id,
+                    label=label,
+                    destination=target,
+                    headers=headers,
+                    timeout=timeout,
+                    dry_run=False,
+                    overwrite=overwrite,
+                    lock_stale_seconds=lock_stale_seconds,
+                    warnings=local_warnings,
+                    lock_context="[download:{}] {} {} datasets".format(provider, species_key, label),
+                )
+                if did_download:
+                    downloaded += 1
+                    local_warnings.append(
+                        "[download:{}] {} {} fallback via NCBI Datasets API for id '{}'".format(
+                            provider, species_key, label, source_id
                         )
-                        return {
-                            "warnings": local_warnings,
-                            "errors": local_errors,
-                            "downloaded": downloaded,
-                            "failed": failed,
-                        }
-                except Exception as fallback_error:
-                    fallback_exc = fallback_error
-            if fallback_exc is None:
-                failed.append(
-                    {
-                        "row_id": job.get("row_id"),
-                        "message": "[download:{}] failed {} {} from {} -> {} ({})".format(
-                            provider, species_key, label, url, target, exc
-                        ),
+                    )
+                    return {
+                        "warnings": local_warnings,
+                        "errors": local_errors,
+                        "downloaded": downloaded,
+                        "failed": failed,
                     }
-                )
-            else:
-                failed.append(
-                    {
-                        "row_id": job.get("row_id"),
-                        "message": "[download:{}] failed {} {} from {} -> {} ({}) ; fallback datasets failed ({})".format(
-                            provider, species_key, label, url, target, exc, fallback_exc
-                        ),
-                    }
-                )
+            except Exception as fallback_error:
+                fallback_exc = fallback_error
+        if fallback_exc is None:
+            failed.append(
+                {
+                    "row_id": job.get("row_id"),
+                    "message": "[download:{}] failed {} {} from {} -> {} ({})".format(
+                        provider, species_key, label, url, target, exc
+                    ),
+                }
+            )
+        else:
+            failed.append(
+                {
+                    "row_id": job.get("row_id"),
+                    "message": "[download:{}] failed {} {} from {} -> {} ({}) ; fallback datasets failed ({})".format(
+                        provider, species_key, label, url, target, exc, fallback_exc
+                    ),
+                }
+            )
     return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded, "failed": failed}
 
 
+def run_download_jobs(download_jobs, max_workers, headers, timeout, overwrite, lock_stale_seconds):
+    """Fairly dispatch database queues without parking the pool behind one DB.
+
+    Readiness is advisory: the transport still acquires the shared permit at
+    every actual request/redirect. Concurrent dispatchers may race for a slot.
+    """
+    queues = defaultdict(deque)
+    for job in download_jobs:
+        key = request_database(job["url"], job["provider"]) if urlparse(job["url"]).scheme in ("http", "https", "ftp") else "local"
+        queues[key].append(job)
+    keys = deque(queues)
+    active = defaultdict(int)
+    futures = {}
+    provider_limits = resolve_provider_download_limits(max_workers)
+    permits = {key: Admission(queue[0]["url"], database=key) for key, queue in queues.items() if key != "local"}
+    limits = {key: (max_workers if key == "local" else min(
+        provider_limits.get("direct" if key.startswith("host:") else key, 1),
+        permits[key].limit if permits[key].directory is not None else max_workers)) for key in keys}
+    wait_timeout = float(os.environ.get("GG_INPUT_DOWNLOAD_LIMIT_WAIT", "3600"))
+    last_progress = time.monotonic()
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        while keys or futures:
+            for _ in range(len(keys)):
+                key = keys.popleft()
+                queue = queues[key]
+                if len(futures) < max_workers and active[key] < limits[key] and (key == "local" or permits[key].ready()):
+                    job = queue.popleft()
+                    future = pool.submit(execute_download_target_job, job, headers, timeout, overwrite, lock_stale_seconds)
+                    futures[future] = key
+                    active[key] += 1
+                    last_progress = time.monotonic()
+                if queue:
+                    keys.append(key)
+            if futures:
+                done, _ = wait(futures, timeout=0.05, return_when=FIRST_COMPLETED)
+                for future in done:
+                    key = futures.pop(future)
+                    active[key] -= 1
+                    last_progress = time.monotonic()
+                    try:
+                        yield future.result()
+                    except Exception as exc:
+                        yield {"errors": ["Unhandled download worker error: {}".format(exc)]}
+            elif keys:
+                if time.monotonic() - last_progress >= wait_timeout:
+                    raise TimeoutError("Timed out waiting for database download queues: " + ", ".join(keys))
+                time.sleep(0.05)
+
+
+@isolated_request_provider
 def download_from_manifest(
     manifest_path,
     download_root,
@@ -240,6 +293,7 @@ def download_from_manifest(
 
     for i, row in enumerate(rows, start=2):
         provider = (row.get("provider") or "").strip().lower()
+        set_request_provider(provider)
         source_id_raw = (row.get("id") or "").strip()
         source_id = normalize_manifest_source_id(provider, source_id_raw)
         species_key = (row.get("species_key") or "").strip()
@@ -712,34 +766,11 @@ def download_from_manifest(
 
     if len(download_jobs) > 0:
         max_workers = max(1, int(jobs))
-        provider_limits = resolve_provider_download_limits(max_workers)
-        provider_semaphores = {
-            provider_name: threading.Semaphore(provider_limits.get(provider_name, 1)) for provider_name in PROVIDERS
-        }
-
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = [
-                pool.submit(
-                    execute_download_target_job,
-                    job,
-                    headers,
-                    timeout,
-                    overwrite,
-                    lock_stale_seconds,
-                    provider_semaphores,
-                )
-                for job in download_jobs
-            ]
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    errors.append("Unhandled download worker error: {}".format(exc))
-                    continue
-                warnings.extend(result.get("warnings", []))
-                errors.extend(result.get("errors", []))
-                downloaded += int(result.get("downloaded", 0))
-                failed_downloads.extend(result.get("failed", []))
+        for result in run_download_jobs(download_jobs, max_workers, headers, timeout, overwrite, lock_stale_seconds):
+            warnings.extend(result.get("warnings", []))
+            errors.extend(result.get("errors", []))
+            downloaded += int(result.get("downloaded", 0))
+            failed_downloads.extend(result.get("failed", []))
 
     if not dry_run:
         for row_info in row_target_paths.values():

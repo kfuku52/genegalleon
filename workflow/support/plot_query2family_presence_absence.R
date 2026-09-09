@@ -223,98 +223,36 @@ format_support_labels <- function(labels) {
   ifelse(is.na(values), "", sprintf("%.0f", round(values, digits = 0)))
 }
 
-extract_numeric_ci_from_label <- function(label_text) {
-  if (is.na(label_text) || nchar(trimws(label_text)) == 0) {
-    return(NULL)
-  }
-  nums <- regmatches(label_text, gregexpr("[-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?", label_text, perl = TRUE))[[1]]
-  nums <- suppressWarnings(as.numeric(nums))
-  nums <- nums[is.finite(nums)]
-  if (length(nums) < 2) {
-    return(NULL)
-  }
-  c(min(nums[1], nums[2]), max(nums[1], nums[2]))
-}
-
 extract_ci_table <- function(ci_tree_text) {
-  ci_pattern <- "\\[&95%(?:HPD)?=\\{[[:space:]]*[-+0-9.eE]+[[:space:]]*,[[:space:]]*[-+0-9.eE]+[[:space:]]*\\}\\]"
-  ci_hits <- gregexpr(ci_pattern, ci_tree_text, perl = TRUE)
-  hit_texts <- regmatches(ci_tree_text, ci_hits)[[1]]
-  ci_tree_tagged <- ci_tree_text
-
-  ci_table <- data.frame(
-    tag = character(0),
-    lower = numeric(0),
-    upper = numeric(0),
-    stringsAsFactors = FALSE
-  )
-
-  if (length(hit_texts) == 0) {
-    cleaned <- gsub("\\[&[^]]*\\]", "", ci_tree_text, perl = TRUE)
-    tree_ci <- ape::read.tree(text = cleaned)
-  } else {
-    for (i in seq_along(hit_texts)) {
-      h <- hit_texts[i]
-      mm <- regexec("\\{[[:space:]]*([-+0-9.eE]+)[[:space:]]*,[[:space:]]*([-+0-9.eE]+)[[:space:]]*\\}", h, perl = TRUE)
-      cap <- regmatches(h, mm)[[1]]
-      if (length(cap) < 3) {
-        next
-      }
-      nums <- as.numeric(cap[2:3])
-      if (any(is.na(nums))) {
-        next
-      }
-      tag <- paste0("CI_TAG_", i)
-      ci_tree_tagged <- sub(ci_pattern, tag, ci_tree_tagged, perl = TRUE)
-      ci_table <- rbind(
-        ci_table,
-        data.frame(
-          tag = tag,
-          lower = min(nums[1], nums[2]),
-          upper = max(nums[1], nums[2]),
-          stringsAsFactors = FALSE
-        )
-      )
-    }
-    ci_tree_tagged <- gsub("\\[&[^]]*\\]", "", ci_tree_tagged, perl = TRUE)
-    tree_ci <- ape::read.tree(text = ci_tree_tagged)
+  # NWKIT owns container and annotation syntax. treeio maps NHX properties to
+  # ape node numbers, including named nodes and comments after branch lengths.
+  source <- tempfile(fileext = ".tre")
+  converted <- tempfile(fileext = ".nhx")
+  diagnostics <- tempfile()
+  on.exit(unlink(c(source, converted, diagnostics)), add = TRUE)
+  writeLines(ci_tree_text, source)
+  status <- system2("nwkit", c("convert", "--infile", shQuote(source),
+    "--outfile", shQuote(converted), "--to", "nhx"), stderr = diagnostics)
+  if (status != 0) {
+    stop("Cannot read time CI tree: ", paste(readLines(diagnostics, warn = FALSE), collapse = "\n"))
   }
-
-  node_labels <- tree_ci[["node.label"]]
-  if (!is.null(node_labels) && length(node_labels) > 0) {
-    n_tip <- length(tree_ci[["tip.label"]])
-    for (i in seq_along(node_labels)) {
-      ci_vals <- extract_numeric_ci_from_label(node_labels[i])
-      if (is.null(ci_vals)) {
-        next
-      }
-      ci_table <- rbind(
-        ci_table,
-        data.frame(
-          tag = paste0("NODE_LABEL_", i),
-          lower = ci_vals[1],
-          upper = ci_vals[2],
-          node_ci = n_tip + i,
-          stringsAsFactors = FALSE
-        )
-      )
-    }
-  }
-
-  if (nrow(ci_table) == 0) {
+  parsed <- treeio::read.nhx(converted)
+  tree_ci <- parsed@phylo
+  attributes <- as.data.frame(parsed@data)
+  required <- c("age_ci_low", "age_ci_high", "age_ci_kind", "age_ci_level")
+  if (!all(required %in% names(attributes))) {
     return(list(tree_ci = tree_ci, ci_table = data.frame()))
   }
-
-  if (!"node_ci" %in% colnames(ci_table)) {
-    ci_table$node_ci <- NA_integer_
-  }
-  idx_missing_node <- is.na(ci_table$node_ci)
-  if (any(idx_missing_node)) {
-    n_tip <- length(tree_ci[["tip.label"]])
-    node_labels <- tree_ci[["node.label"]]
-    ci_table$node_ci[idx_missing_node] <- n_tip + match(ci_table$tag[idx_missing_node], node_labels)
-  }
-  ci_table <- ci_table[!is.na(ci_table$node_ci), c("tag", "lower", "upper", "node_ci"), drop = FALSE]
+  # This plot displays supplied 95% intervals without changing their method.
+  selected <- !is.na(attributes$age_ci_level) & as.numeric(attributes$age_ci_level) == 0.95
+  attributes <- attributes[selected, , drop = FALSE]
+  ci_table <- data.frame(
+    tag = paste0("NODE_", attributes$node),
+    lower = as.numeric(attributes$age_ci_low),
+    upper = as.numeric(attributes$age_ci_high),
+    node_ci = as.integer(attributes$node),
+    stringsAsFactors = FALSE
+  )
   list(tree_ci = tree_ci, ci_table = ci_table)
 }
 
@@ -346,11 +284,11 @@ read_time_ci_table <- function(tree_ci_path, tree_mean) {
   if (!has_nonempty_file(tree_ci_path)) {
     return(data.frame())
   }
-  ci_tree_text <- paste(readLines(tree_ci_path, warn = FALSE), collapse = "")
+  ci_tree_text <- paste(readLines(tree_ci_path, warn = FALSE), collapse = "\n")
   ci_parsed <- extract_ci_table(ci_tree_text)
   ci_table <- map_ci_nodes_to_mean_tree(ci_parsed$tree_ci, tree_mean, ci_parsed$ci_table)
   if (nrow(ci_table) == 0) {
-    warning("No mappable 95% HPD annotations were found in: ", tree_ci_path)
+    warning("No mappable 95% node-age intervals were found in: ", tree_ci_path)
   }
   ci_table
 }

@@ -186,7 +186,7 @@ def species_gene_cache_contract(species_name, species_cds_path, species_gff_path
             "cds_sha256": sha256_file(species_cds_path),
             "gff_sha256": sha256_file(species_gff_path),
         },
-        "parameters": {"feature": "CDS", "multiple_hits": "longest", "gff_annotation_schema": 2},
+        "parameters": {"feature": "CDS", "multiple_hits": "longest", "gff_annotation_schema": 5},
     }
 
 
@@ -447,6 +447,7 @@ def write_empty_output(path):
         "neighbor_gene",
         "group_id",
         "group_size",
+        "evalue_cutoff",
     ]
     pandas.DataFrame(columns=cols).to_csv(path, sep="\t", index=False)
 
@@ -580,6 +581,7 @@ def main():
         gid = gene_to_group[neighbor_gene]
         row_out["group_id"] = gid
         row_out["group_size"] = int(group_size.get(gid, 1))
+        row_out["evalue_cutoff"] = args.evalue
         out_rows.append(row_out)
     ensure_parent_dir(args.outfile)
     if len(out_rows) == 0:

@@ -160,14 +160,19 @@ def inspect_lock(path: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["acquire-shared", "release-shared", "release-exclusive", "inspect"])
+    parser.add_argument("operation", choices=["acquire-shared", "acquire-exclusive", "release-shared", "release-exclusive", "inspect"])
     parser.add_argument("path", type=Path)
     parser.add_argument("--owner-pid", type=int)
     parser.add_argument("--token")
     parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument("--nonblocking", action="store_true")
     args = parser.parse_args()
-    if args.operation == "acquire-shared":
-        print(acquire(args.path, exclusive=False, owner_pid=args.owner_pid, timeout=args.timeout))
+    if args.operation.startswith("acquire-"):
+        token = acquire(args.path, exclusive=args.operation == "acquire-exclusive", owner_pid=args.owner_pid,
+                        timeout=args.timeout, nonblocking=args.nonblocking)
+        if token is None:
+            raise SystemExit(1)
+        print(token)
     elif args.operation == "inspect":
         print(json.dumps(inspect_lock(args.path), indent=2, sort_keys=True))
     else:

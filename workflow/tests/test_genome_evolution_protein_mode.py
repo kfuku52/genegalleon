@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import re
 import shlex
@@ -343,6 +345,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -s)
+      cp "$2" "${{capture_dir}}/orthofinder_species_tree.$(wc -l < "${{capture_dir}}/orthofinder_args.txt").nwk"
       shift 2
       ;;
     *)
@@ -409,6 +412,12 @@ from functools import cmp_to_key
 from pathlib import Path
 import sys
 
+if len(sys.argv) > 1 and (sys.argv[1] in ("convert", "validate") or (sys.argv[1] == "label" and "s" in sys.argv)):
+    sys.path = [entry for entry in sys.path if Path(entry).name != "python_stubs"]
+    from nwkit.cli import main
+    main(sys.argv[1:])
+    sys.exit(0)
+
 capture_dir = {str(capture_dir)!r}
 
 
@@ -474,6 +483,7 @@ def sample(args):
     trait = ""
     report = ""
     outfile = ""
+    infile = ""
     n = 0
     filters = []
     ranks = []
@@ -498,12 +508,20 @@ def sample(args):
         elif arg == "--rank":
             ranks.append(args[idx + 1])
             idx += 2
-        elif arg in {{"--infile", "--method", "--allow-fewer"}}:
+        elif arg == "--infile":
+            infile = args[idx + 1]
+            idx += 2
+        elif arg in {{"--method", "--allow-fewer"}}:
             idx += 2
         else:
             idx += 1
     with open(trait, encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle, delimiter="\\t"))
+    if infile:
+        from Bio import Phylo
+        leaves = {{leaf.name for leaf in Phylo.read(infile, "newick").get_terminals()}}
+        assert {{row["leaf_name"] for row in rows}} == leaves
+        Path(capture_dir, "core_selection_tree.nwk").write_text(Path(infile).read_text())
     selected = [row for row in rows if all(row_passes(row, spec) for spec in filters)]
     if ranks:
         selected = sorted(selected, key=cmp_to_key(compare_rows(ranks)))
@@ -1478,6 +1496,8 @@ def test_genome_evolution_matches_genus_only_placeholder_by_shared_taxonomy_quer
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "Validated one-to-one OrthoFinder species-tree mapping for 1 species." in completed.stdout
     assert "-s " in (tmp_path / "capture" / "orthofinder_args.txt").read_text(encoding="utf-8")
+    assert "Ficus_sp_unknown:" in (tmp_path / "capture" / "orthofinder_species_tree.1.nwk").read_text()
+    assert (species_tree_summary_dir / "undated_species_tree.nwk").read_text() == "(Ficus_sp:0.1);\n"
 
 
 @pytest.mark.skipif(
@@ -1504,6 +1524,37 @@ def test_genome_evolution_rejects_ambiguous_genus_only_taxonomy_fallback(tmp_pat
     assert completed.returncode != 0
     assert "protein inputs has ambiguous unmatched taxonomy queries: Ficus" in completed.stderr
     assert not (tmp_path / "capture" / "orthofinder_args.txt").exists()
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("core_limit", [1, 50])
+def test_genome_evolution_adapts_tree_labels_for_selection_and_all_runs(tmp_path: Path, core_limit):
+    workspace = tmp_path / "workspace"
+    proteins = workspace / "input/species_protein"
+    trees = workspace / "output/species_tree/species_tree_summary"
+    buscos = workspace / "output/species_protein_busco_short"
+    for directory in (proteins, trees, buscos):
+        directory.mkdir(parents=True)
+    for species in ("Ficus_sp_unknown", "Oryza_sativa", "Arabidopsis_thaliana"):
+        (proteins / f"{species}_pep.fa").write_text(f">{species}_gene1\nMPEP\n")
+        (buscos / f"{species}.busco.short.txt").write_text("C:95.0%[S:95.0%,D:0.0%],F:0.0%,M:5.0%,n:100\n")
+    original = "( ('Ficus_sp'[source=Ficus_sp]:0.1234567890123456789,Oryza_sativa)98.7654321:1e-8,Arabidopsis_thaliana:0)Ficus_sp;\n"
+    source = trees / "undated_species_tree.nwk"
+    source.write_text(original)
+    completed = _run_core(tmp_path, {"max_orthofinder_core_species": str(core_limit)})
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    expected = original.replace("'Ficus_sp'", "Ficus_sp_unknown")
+    assert source.read_text() == original
+    call_count = 2 if core_limit == 1 else 1
+    assert (tmp_path / "capture" / f"orthofinder_species_tree.{call_count}.nwk").read_text() == expected
+    if core_limit == 1:
+        assert (tmp_path / "capture/core_selection_tree.nwk").read_text() == expected
+    records = list(workspace.glob("output/**/species_tree_inputs.mapping.json"))
+    assert len(records) == 1
+    mapping = json.loads(records[0].read_text())
+    assert mapping["tree_to_protein_labels"] == {"Ficus_sp": "Ficus_sp_unknown", "Oryza_sativa": "Oryza_sativa", "Arabidopsis_thaliana": "Arabidopsis_thaliana"}
+    assert mapping["source_sha256"] == hashlib.sha256(original.encode()).hexdigest()
+    assert mapping["output_sha256"] == hashlib.sha256(expected.encode()).hexdigest()
 
 
 @pytest.mark.skipif(
@@ -1921,7 +1972,7 @@ def test_genome_evolution_recovers_conversion_sidecars_without_rerunning_dating(
     })
     assert result.returncode == 0, result.stdout + result.stderr
     assert (directory / "dated_species_tree.nwk").read_text() == dated
-    assert (directory / "mcmctree_95CI.nwk").read_text() == "(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    assert (directory / "mcmctree_95CI.nhx").read_text() == ("[&R]" if native else "") + "(a:0.1,(b:0.2,c:0.3):0.4);\n"
     assert (directory / "mcmctree_no95CI.nwk").is_file()
     summary = directory.parent / "species_tree_summary" / "dated_species_tree.nwk"
     assert summary.read_text() == dated
@@ -1943,7 +1994,9 @@ def test_genome_evolution_completes_interrupted_figtree_contract_migration(tmp_p
     )
     for name in ("iq2mc.mcmctree.ctl", "iq2mc.mcmctree.hessian", "iq2mc.rooted.nwk", "iq2mc.dummy.phy"):
         (parameters / name).write_text("historical input\n")
-    figtree = "Species tree for FigTree\n(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    from nwkit.convert import convert_tree_text
+
+    figtree = convert_tree_text("(a:0.1,(b:0.2,c:0.3):0.4);", target="figtree")
     (directory / "FigTree.tre").write_text(figtree)
     (directory / "iq2mc.mcmctree.out").write_text(figtree)
     settings = {"artifact_stale_policy": "stop", "input_sequence_mode": "cds",

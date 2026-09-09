@@ -136,6 +136,29 @@ def run_script_with_env(tmp_path: Path, extra_args: list[str], env_overrides: di
     return pandas.read_csv(branch_out, sep="\t")
 
 
+def test_score_hgt_candidates_excludes_imputed_introns_from_sqlite_evidence(tmp_path):
+    db_path = tmp_path / "gg_orthogroup.db"
+    write_branch_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        rows = pandas.read_sql_query("SELECT * FROM branch", conn).drop(columns=["num_intron"])
+        rows["intron_is_imputed"] = rows.node_name.eq("geneB")
+        rows.loc[rows.node_name.eq("geneB"), "intron_present"] = 0.904
+        rows.to_sql("branch", conn, index=False, if_exists="replace")
+    branch_out, gene_out = tmp_path / "branches.tsv", tmp_path / "genes.tsv"
+    completed = subprocess.run([
+        sys.executable, str(SCRIPT_PATH), "--dbpath", str(db_path),
+        "--branch_out", str(branch_out), "--gene_out", str(gene_out),
+        "--orthogroup_out", str(tmp_path / "families.tsv"),
+    ], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    branch = pandas.read_csv(branch_out, sep="\t").iloc[0]
+    genes = pandas.read_csv(gene_out, sep="\t").set_index("gene_id")
+    assert branch.intron_measured_gene_count == 1
+    assert branch.intron_supported_gene_count == 1
+    assert bool(genes.loc["geneA", "intron_supported"])
+    assert not bool(genes.loc["geneB", "intron_supported"])
+
+
 def test_score_hgt_candidates_emits_branch_gene_and_orthogroup_outputs(tmp_path):
     branch_out, gene_out, orthogroup_out = run_script(tmp_path)
 

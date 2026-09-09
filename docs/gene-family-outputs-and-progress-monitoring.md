@@ -47,6 +47,12 @@ typically written under `workspace/output/query2family/` as:
 - `stat_tree/2_WOX_stat.tree.tsv`
 - `tree_plot/2_WOX_tree_plot.pdf`
 
+With `run_asr_intron=1`, NWKIT adds `asr_intron_summary/`,
+`asr_intron_model/`, `asr_intron_tree/`, and `asr_intron_plot/` for intron
+presence probabilities, model metadata, an annotated tree, and probability pies.
+See [intron ancestral-state reconstruction](intron-ancestral-reconstruction.md)
+for the output schema and migration from the retired SCM stage.
+
 When `run_orthogroup_extraction=1`, GeneGalleon extracts the seed-containing
 orthogroup from the rooted homolog tree before GeneRax. The extracted tree and
 FASTA are written below `orthogroup_extraction_nwk/`,
@@ -74,11 +80,7 @@ Species-tree comparison members are:
 
 - `pgls_species_nwkit/`: NWKIT ordinary PGLS after within-sample paralog
   aggregation,
-- `pgls_species_rphylopars/`: the matched Rphylopars comparator; unsupported
-  categorical or covariance combinations remain header-only and are explained
-  in the status table,
-- `pgls_comparison/`: long-form coefficient rows from RSC and both species
-  methods, with `analysis_method`, `aggregation`, `estimand`, and explicit
+- `pgls_comparison/`: long-form coefficient rows from RSC and species-tree PGLS, with `analysis_method`, `aggregation`, `estimand`, and explicit
   comparability notes,
 - `pgls_method_status/` and `pgls_method_audit/`: one place to distinguish
   successful, non-estimable, and unrequested methods and to record engine
@@ -101,8 +103,7 @@ a recoverable transaction; a failed move or caught interruption restores the
 previous complete bundle before provenance is recorded. `stat_tree/*.tsv`
 includes the family status and best overall RSC
 summary plus namespaced per-response/per-term fields, all beginning with
-`rsc_`. It also includes bounded `pgls_species_nwkit_*` and
-`pgls_species_rphylopars_*` status/best-row fields. To keep `stat_tree` bounded
+`rsc_`. It also includes bounded `pgls_species_nwkit_*` status/best-row fields. To keep `stat_tree` bounded
 for large screens, it contains counts and
 fields from the best usable (successfully converged) row only, under
 `rsc_best_*`; it does not flatten every RSC result row into a new group of
@@ -640,6 +641,27 @@ command when logical deletion is intended.
 
 ## How to read `tree_plot`
 
+Column widths are physical minima in millimetres. Each column reserves its data
+panel plus axes, legends, and margins; the PDF width is their sum. Adding or
+omitting a column does not resize the remaining columns. Text columns follow
+rendered glyph widths, heatmaps reserve at least 4 mm per group, and selected
+site columns reserve at least 3 mm per site. Trees default to a 60 mm data panel;
+domain, alignment, and neighboring-gene panels default to 22.5 mm; structure
+panels default to 23 mm, without intron-number labels. Promoter motif panels follow the protein-domain width
+(22.5 mm even when the domain panel is absent). Full alignments reserve at least 0.15 mm per
+aligned position. Very wide plots retain their size; select fewer panels when
+a smaller page is needed.
+
+For direct calls to `stat_branch2tree_plot.r`, use
+`--panel_widths_mm=tree:80,domain:60` to increase minimum data-panel widths.
+The workflow records the layout version so existing plots are regenerated on
+the next enabled tree-plot run. Keys match column-name prefixes; absent optional columns add no width. A
+requested width below the content minimum never shrinks it. The former
+`--width` (inches) and nonempty `--rel_widths` options are rejected with a
+migration message. HGT uses `hgt_summary_tree_width_mm` (default 60), replacing
+`hgt_summary_tree_plot_width`; direct HGT core calls use `hgt_tree_width_mm`.
+
+
 `tree_plot` is generated from `stat_branch/*.tsv` and summarizes many
 gene-family attributes around the inferred tree. In the current default
 GeneGalleon configuration, the panel order is:
@@ -650,14 +672,18 @@ GeneGalleon configuration, the panel order is:
 4. cluster-membership panel
 5. local synteny panel
 6. tip labels
-7. signal peptide summary
+7. combined cdskit localization (targeting and peroxisome probabilities)
 8. transmembrane-domain summary
 9. intron-count panel
-10. protein-domain panel from RPS-BLAST
-11. alignment panel
-12. promoter-motif panel from FIMO
-13. MEME motif summary
-14. ortholog-context panel
+10. CDS/UTR and intron structure panel
+11. protein-domain panel from RPS-BLAST
+12. alignment panel
+13. promoter-motif panel from FIMO
+14. MEME motif summary
+15. ortholog-context panel
+16. triangular syntenic-similarity heatmap (when neighborhood input is available)
+17. triangular promoter cis-element similarity heatmap (when FIMO and promoter FASTA are available)
+18. triangular amino-acid sequence-identity heatmap (when the analysis alignment is available)
 
 Practical interpretation:
 
@@ -669,6 +695,120 @@ Practical interpretation:
   predictions on the same row order as the tree tips,
 - if an upstream analysis was disabled, or the corresponding inputs were not
   available, the associated panel may be blank or minimally populated.
+
+The default `localization` panel combines two adjacent square bars per tip:
+targeting probabilities on the left and independent peroxisome probability on
+the right. The gap is 40% of one square's width. Both use a 0-1 scale; the
+peroxisome probability is never added to the targeting stack. Colors and a
+single graphical legend identify the predictions. Missing values remain blank;
+if only one prediction type is available, the panel displays that type alone.
+Legacy direct `signal_peptide` and `peroxisome` panels remain available.
+The square bars follow physical tip-row height; the shared legend reserves
+side space without separating the bars or stretching their data widths.
+Narrow annotation columns (including `Intron number`, `TM`, `Peroxisome probability`, and categorical
+markers) rotate their x-axis titles by 90 degrees. Multi-line titles become
+a single vertical line; numerical tick labels remain horizontal.
+
+Protein-domain and promoter-motif graphical legends use the same rule: rank
+by plotted hit occurrence count, with alphabetical ties, and retain the largest
+high-frequency prefix that fits the column in at most six rows. Domain counts
+are taken before overlapping hits are split into rectangles; motif counts
+are taken before links are expanded into polygons. Only graphical keys are
+omitted: all hits, colors, and source tables remain unchanged. The log reports
+how many keys were shown and omitted.
+
+The closest-gene column stacks its axis label one word per line and italicizes
+only the species name (for example, *Arabidopsis thaliana*).
+
+The **Query** marker column uses black tiles for best hits and pale gray tiles
+for other tips. Its axis label reads `Query best hit` vertically,
+without a graphical legend. Each marker is square, with width computed from
+the physical tip-row height, as for the localization bars.
+
+The **Branching event** legend uses full event names: Duplication (D),
+Speciation (S), Transfer (H), and Retrotransposition (R).
+
+The **Neighboring genes** similarity search includes up to 20 genes on each
+side of each focal gene (`synteny_search_window=20`), while the plot
+displays only five on each side (`treevis_synteny_window=5`). The search window
+controls the full synteny TSV and its downstream summary statistics; the display
+window only limits the plot. Changing the search window invalidates the synteny
+artifact so it is regenerated on the next enabled summary/tree-plot run.
+Keep `run_summary=1` when changing the search window: the regenerated synteny
+table also invalidates summary statistics, and a plot-only run refuses to use
+the stale summary. Changing only the display window does not rerun the search.
+
+The **Neighboring genes** column includes a graphical legend underneath:
+black dots mark focal genes, pale gray dots mark other recorded neighbors,
+colored dots mark selected members of similarity groups shared across tips,
+and matching colored lines connect members on the same upstream/downstream
+side. Colors identify groups within the plot; they do not encode E-values. These
+similarity groups are connected components of accepted search hits, so two
+members can be connected indirectly rather than by a qualifying pairwise hit.
+Colors are allocated only to groups actually drawn after filtering to the
+display window and plotted tips and retaining groups shared across tips.
+Groups outside that selection do not consume palette colors.
+Repeated members of a group on one side of a tip are represented by the nearest
+member. Blank positions have no recorded neighbor.
+The title-free legend labels the colored marker `Same gene family` and reports
+the similarity search E-value cutoff in parentheses, using the value stored in the
+synteny TSV's `evalue_cutoff` column, including the effective value when
+`query_blast_evalue=auto`. Older tables without this metadata display
+`E-value cutoff: unavailable`; regenerate the synteny input to record it.
+
+The **Syntenic similarity** triangle appears to the right of the ortholog panel
+by default (`treevis_synteny_similarity=1`). Its fixed width is 15 mm
+(`treevis_synteny_similarity_width_mm`), added to the PDF width so existing
+columns are not squeezed. It uses viridis on a fixed 0–1 scale without cell
+numbers. Each cell compares a pair of tips; its vertical position is their
+midpoint, and its horizontal position is proportional to their separation in
+the displayed tip order, as in a rotated triangular distance matrix.
+
+Similarity is the Jaccard index of the observed neighboring homology-group
+sets: shared groups divided by their union. The calculation uses
+`synteny_search_window` genes per side (default 20), independently of the
+five-gene neighboring-gene display, and the axis label states this window.
+Repeated copies of a group count once; gene order and orientation do not enter
+this score. Missing neighbors at chromosome ends or without sequence data
+contribute no observations, so incomplete annotations can affect comparability.
+Pairs involving a tip with no usable neighborhood are gray, not zero.
+The panel is omitted if the input is missing/empty or fewer than two plotted
+tips have usable neighborhoods. Set `treevis_synteny_similarity=0` to hide it.
+
+The **Sequence identity** triangle uses the trimmed analysis alignment, without
+running an additional search or substituting unaligned sequences. It reports
+the fraction of matching positions among sites where both sequences contain
+one of the 20 standard amino acids. CDS input is translated codon by codon
+using `genetic_code`; protein input is used directly. CDS alignment length must
+be divisible by three. Gap-containing/ambiguous codons, gaps, ambiguous amino
+acids, and stops are excluded pairwise. Missing sequences or
+pairs with no comparable sites are gray. Very few comparable sites can still
+produce a high identity; this is identity, not alignment coverage. Unequal
+sequence lengths or duplicate FASTA IDs are rejected.
+
+The **Promoter cis similarity** triangle compares unique FIMO `motif_id` sets
+passing `fimo_qvalue` (inclusive), using their Jaccard index. Repeated hits,
+position, strand, and motif order do not affect this score. Promoter FASTA
+identifies which tips were scanned: an empty set versus a nonempty set scores
+zero, whereas two empty sets or an unavailable promoter yield gray (undefined).
+FIMO must provide q-values; p-values are not substituted. Missing either input
+omits this column. The axis label states the q-value threshold.
+Missing, nonnumeric, or out-of-range q-values in hit rows are errors, not
+evidence of no hits. Motif and synteny-group IDs are retained as exact strings,
+including numeric-looking IDs with leading zeroes.
+
+Both columns are enabled by default (`treevis_sequence_similarity=1` and
+`treevis_cis_similarity=1`). Each adds 15 mm to the PDF, controlled by
+`treevis_sequence_similarity_width_mm` and `treevis_cis_similarity_width_mm`.
+Like syntenic similarity, they use viridis from 0 to 1 and no cell numbers.
+The default order after ortholog is synteny, promoter cis similarity, then
+amino-acid sequence identity. Set the respective flag to zero to omit a column.
+An 8 mm label column appears immediately before the first available triangle,
+showing each tip as `...` plus the literal last three characters of its gene ID.
+It appears only once, even when several triangles are shown, and follows the
+same tip order as the tree. The triangles retain their individual 15 mm widths.
+Suffixes can repeat (and may include transcript suffixes such as `0.1`); use
+the full tip labels on the same rows to distinguish them.
 
 `stat.branch.tsv` is the master table that collects per-branch and per-tip
 annotations for plotting. `stat.tree.tsv` is the paired tree-level summary.
@@ -765,3 +905,8 @@ GG_ARRAY_TASK_ID=17 GG_TASK_CPUS=4 bash workflow/gg_gene_evolution_entrypoint.sh
 
 If your site prefers one submission per task rather than an explicit list-style
 array, submit a short loop around the same wrapper.
+
+See [CDS and intron structure](gene-structure-tree-plot.md) for the tree plot’s gene-structure column and coordinate modes.
+
+Protein-domain panels (`Amino acid position (aa)`) hide intron marks by default.
+Use `domain,INFILE,yes` to request them when the exon/intron panel is absent.

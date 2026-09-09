@@ -57,6 +57,39 @@ def run_bash(cmd: str, cwd: Path):
     )
 
 
+def test_version_report_namespace_lock_releases_after_failure_and_reuses_success(tmp_path):
+    image = tmp_path / "fixture.sif"
+    image.write_text("fixture runtime identity")
+    workspace = tmp_path / "workspace"
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(GG_UTIL_PATH))}
+gg_support_dir={shlex.quote(str(GG_UTIL_PATH.parent))}
+gg_workflow_dir={shlex.quote(str(WORKFLOW_DIR))}
+gg_workspace_dir={shlex.quote(str(workspace))}
+gg_container_image_path={shlex.quote(str(image))}
+gg_container_shell_command_is_set() {{ return 0; }}
+gg_container_shell_command_runtime_bin() {{ command -v true; }}
+gg_container_bind_destination_exists() {{ return 0; }}
+gg_print_version_summary() {{ :; }}
+gg_run_container_shell_script() {{ echo 'fixture versions'; return "$GG_TEST_VERSION_RC"; }}
+gg_require_versions_dump fixture
+[[ -n "${{SINGULARITYENV_GG_VERSION:-}}" && "${{SINGULARITYENV_GG_VERSION}}" == "${{APPTAINERENV_GG_VERSION}}" ]]
+"""
+    # Use an executable, not the shell builtin returned by command -v true.
+    runtime = tmp_path / "runtime"
+    runtime.write_text("#!/bin/sh\nexit 0\n")
+    runtime.chmod(0o755)
+    script = script.replace("command -v true;", f"echo {shlex.quote(str(runtime))};")
+    for code, expected in ((37, 37), (0, 0), (37, 0)):
+        result = subprocess.run(["bash", "-c", script], cwd=REPO_ROOT,
+                                env={**os.environ, "GG_TEST_VERSION_RC": str(code)}, capture_output=True, text=True)
+        assert result.returncode == expected, result.stdout + result.stderr
+        assert not list(workspace.rglob("gate/owner.json"))
+    assert len(list(workspace.rglob("*.versions.log"))) == 1
+    assert len(list(workspace.rglob("*.versions.failed.*.log"))) == 1
+
+
 def _canonical_sha256(payload):
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

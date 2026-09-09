@@ -418,6 +418,21 @@ def is_leaf_row(df: pandas.DataFrame) -> pandas.Series:
     return pandas.Series(False, index=df.index)
 
 
+def intron_observation_masks(leaf_rows: pandas.DataFrame):
+    """Observed introns support HGT candidates; imputed ASR states do not."""
+    if "num_intron" in leaf_rows.columns:
+        counts = pandas.to_numeric(leaf_rows["num_intron"], errors="coerce")
+        return counts.notna(), counts.fillna(0).gt(0)
+    if "intron_present" in leaf_rows.columns:
+        present = pandas.to_numeric(leaf_rows["intron_present"], errors="coerce")
+        observed = present.notna()
+        if "intron_is_imputed" in leaf_rows.columns:
+            observed &= ~leaf_rows["intron_is_imputed"].astype(str).str.lower().isin(["true", "1", "1.0"])
+        return observed, observed & present.fillna(0).gt(0)
+    empty = pandas.Series(False, index=leaf_rows.index)
+    return empty, empty.copy()
+
+
 def intron_support_from_leaf_rows(leaf_rows: pandas.DataFrame) -> Dict[str, object]:
     if leaf_rows.empty:
         return {
@@ -425,16 +440,7 @@ def intron_support_from_leaf_rows(leaf_rows: pandas.DataFrame) -> Dict[str, obje
             "supported_count": 0,
             "support_fraction": numpy.nan,
         }
-    measured_mask = pandas.Series(False, index=leaf_rows.index)
-    supported_mask = pandas.Series(False, index=leaf_rows.index)
-    if "num_intron" in leaf_rows.columns:
-        num_intron = pandas.to_numeric(leaf_rows["num_intron"], errors="coerce")
-        measured_mask = measured_mask | num_intron.notna()
-        supported_mask = supported_mask | num_intron.fillna(0).gt(0)
-    if "intron_present" in leaf_rows.columns:
-        intron_present = pandas.to_numeric(leaf_rows["intron_present"], errors="coerce")
-        measured_mask = measured_mask | intron_present.notna()
-        supported_mask = supported_mask | intron_present.fillna(0).gt(0)
+    measured_mask, supported_mask = intron_observation_masks(leaf_rows)
     measured_count = int(measured_mask.sum())
     supported_count = int((supported_mask & measured_mask).sum())
     support_fraction = supported_count / measured_count if measured_count > 0 else numpy.nan
@@ -687,15 +693,7 @@ def summarize_candidate_branch(
     contamination_per_gene = evidence["contamination"]["per_gene"]
     intron_supported = {}
     if not matched_leaf_rows.empty:
-        supported_mask = pandas.Series(False, index=matched_leaf_rows.index)
-        if "num_intron" in matched_leaf_rows.columns:
-            supported_mask = supported_mask | pandas.to_numeric(
-                matched_leaf_rows["num_intron"], errors="coerce"
-            ).fillna(0).gt(0)
-        if "intron_present" in matched_leaf_rows.columns:
-            supported_mask = supported_mask | pandas.to_numeric(
-                matched_leaf_rows["intron_present"], errors="coerce"
-            ).fillna(0).gt(0)
+        _, supported_mask = intron_observation_masks(matched_leaf_rows)
         intron_supported = dict(zip(matched_leaf_rows["node_name"], supported_mask, strict=True))
     expression_measured = {}
     if not matched_leaf_rows.empty and len(expression_cols) > 0:
@@ -841,6 +839,7 @@ def main():
                     "clade_min_expression_pearsoncor",
                     "num_intron",
                     "intron_present",
+                    "intron_is_imputed",
                     "synteny_support_score",
                     "sprot_best",
                     "organism",

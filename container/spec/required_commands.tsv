@@ -56,5 +56,5 @@ base	prodigal
 base	hyphy
 base	python
 base	pytest
-base	radte.r
 base	Rscript
+base	flock

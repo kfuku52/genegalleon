@@ -13,7 +13,6 @@ import argparse
 import importlib.metadata
 import json
 import math
-import subprocess
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,7 +22,7 @@ import numpy
 import pandas
 from scipy import sparse
 
-METHODS = ("rsc", "species-nwkit", "species-rphylopars")
+METHODS = ("rsc", "species-nwkit")
 AGGREGATIONS = ("sum", "mean", "max")
 MISSING_STRINGS = {"", "NA", "NaN", "nan", "?", "missing", "unknown", "."}
 
@@ -714,51 +713,6 @@ def _read_trait_inputs(
     )
 
 
-def _covariance_diagonal_and_offdiagonal(covariance: Any, leaf_names: Sequence[str]) -> tuple[numpy.ndarray, bool]:
-    covariance_type = type(covariance)
-    if covariance_type.__module__ == "nwkit.gaussian" and covariance_type.__name__ == "DiagonalLowRankCovariance":
-        low_rank = covariance.low_rank
-        if sparse.issparse(low_rank):
-            low_rank = low_rank.tocsr()
-            squared_norm = numpy.asarray(low_rank.multiply(low_rank).sum(axis=1)).ravel()
-        else:
-            low_rank = numpy.asarray(low_rank, dtype=float)
-            squared_norm = numpy.sum(low_rank * low_rank, axis=1)
-        diagonal = numpy.asarray(covariance.diagonal, dtype=float) + squared_norm
-        # Inspect the low-rank Gram matrix in bounded blocks.  Materializing
-        # the complete n-by-n product defeats the representation and used
-        # hundreds of MiB for only 5,000 tips.
-        n_rows = low_rank.shape[0]
-        target_entries = 1_000_000
-        block_size = max(1, min(n_rows, target_entries // max(1, n_rows)))
-        for start in range(0, n_rows, block_size):
-            stop = min(n_rows, start + block_size)
-            gram = low_rank[start:stop] @ low_rank.T
-            if sparse.issparse(gram):
-                coordinates = gram.tocoo()
-                offdiagonal = coordinates.col != coordinates.row + start
-                has_offdiagonal = numpy.any(numpy.abs(coordinates.data[offdiagonal]) > 1e-12)
-            else:
-                gram[numpy.arange(stop - start), numpy.arange(start, stop)] = 0.0
-                has_offdiagonal = numpy.any(numpy.abs(gram) > 1e-12)
-            if has_offdiagonal:
-                return diagonal, True
-        return diagonal, False
-    if isinstance(covariance, pandas.DataFrame):
-        matrix = covariance.loc[list(leaf_names), list(leaf_names)].to_numpy(dtype=float)
-    elif sparse.issparse(covariance):
-        matrix = covariance.tocsr()
-        diagonal = numpy.asarray(matrix.diagonal(), dtype=float)
-        offdiagonal = matrix - sparse.diags(diagonal, format="csr")
-        has_offdiagonal = bool(offdiagonal.nnz and numpy.any(numpy.abs(offdiagonal.data) > 1e-12))
-        return diagonal, has_offdiagonal
-    else:
-        matrix = numpy.asarray(covariance, dtype=float)
-    if matrix.ndim == 1:
-        return matrix, False
-    off = matrix.copy()
-    numpy.fill_diagonal(off, 0.0)
-    return numpy.diag(matrix), bool(numpy.any(numpy.abs(off) > 1e-12))
 
 
 def _sampling_table(
@@ -771,42 +725,6 @@ def _sampling_table(
     return table
 
 
-def _summary_long(
-    aggregation: str,
-    leaf_names: Sequence[str],
-    response_estimates: Any,
-    predictor_estimates_by_analysis: dict[str, Any],
-) -> pandas.DataFrame:
-    rows: list[dict[str, object]] = []
-    sources = [("response", response_estimates)] + [
-        (f"predictor:{analysis_id}", estimate) for analysis_id, estimate in predictor_estimates_by_analysis.items()
-    ]
-    seen: set[tuple[str, str]] = set()
-    for source, estimates in sources:
-        for trait, values in estimates.values_by_trait.items():
-            key = (source if source == "response" else source, trait)
-            if key in seen:
-                continue
-            seen.add(key)
-            covariance = estimates.sampling_covariance_by_trait.get(trait)
-            if covariance is None:
-                diagonal = numpy.zeros(len(leaf_names), dtype=float)
-                offdiagonal = False
-            else:
-                diagonal, offdiagonal = _covariance_diagonal_and_offdiagonal(covariance, leaf_names)
-            for index, leaf_name in enumerate(leaf_names):
-                rows.append(
-                    {
-                        "aggregation": aggregation,
-                        "source": source,
-                        "leaf_name": leaf_name,
-                        "trait": trait,
-                        "value": values[leaf_name],
-                        "sampling_variance": float(diagonal[index]),
-                        "has_offdiagonal_sampling_covariance": "yes" if offdiagonal else "no",
-                    }
-                )
-    return pandas.DataFrame(rows)
 
 
 def _native_status(
@@ -851,70 +769,11 @@ def _native_status(
     return rows
 
 
-def _run_rphylopars(
-    args: argparse.Namespace,
-    tree: Any,
-    summary_long: pandas.DataFrame,
-    plan: pandas.DataFrame,
-    responses: Sequence[str],
-) -> tuple[pandas.DataFrame, pandas.DataFrame, dict[str, object]]:
-    with tempfile.TemporaryDirectory(prefix="genegalleon-rphylopars-") as temporary:
-        directory = Path(temporary)
-        summary_path = directory / "summary.tsv"
-        plan_path = directory / "plan.tsv"
-        tree_path = directory / "family-species-tree.nwk"
-        results_path = directory / "results.tsv"
-        status_path = directory / "status.tsv"
-        summary_long.to_csv(summary_path, sep="\t", index=False, na_rep="NA")
-        plan.to_csv(plan_path, sep="\t", index=False, na_rep="NA")
-        _write_tree(tree, tree_path)
-        command = [
-            "Rscript",
-            str(args.rphylopars_script),
-            f"--tree={tree_path}",
-            f"--summary={summary_path}",
-            f"--plan={plan_path}",
-            f"--responses={','.join(responses)}",
-            f"--tree_id={args.tree_id}",
-            f"--model={args.response_evolution_model}",
-            f"--parameter={args.response_evolution_parameter}",
-            f"--predictor_model={args.predictor_evolution_model}",
-            f"--predictor_parameter={args.predictor_evolution_parameter}",
-            f"--branch_length={args.branch_length}",
-            f"--predictor_branch_length={args.predictor_branch_length}",
-            f"--reml={args.reml}",
-            f"--confidence_level={args.confidence_level}",
-            f"--inference={args.inference}",
-            f"--sampling_covariance={args.rphylopars_sampling_covariance}",
-            f"--outfile={results_path}",
-            f"--status_out={status_path}",
-        ]
-        completed = subprocess.run(command, check=False, text=True, capture_output=True)
-        audit = {
-            "analysis_method": "species_rphylopars",
-            "command": command,
-            "returncode": completed.returncode,
-            "stdout": completed.stdout,
-            "stderr": completed.stderr,
-        }
-        if completed.returncode != 0:
-            raise RuntimeError(
-                "Rphylopars adapter failed with exit status {}: {}".format(
-                    completed.returncode,
-                    " ".join(completed.stderr.split()) or "no diagnostic",
-                )
-            )
-        results = pandas.read_csv(results_path, sep="\t", low_memory=False)
-        status = pandas.read_csv(status_path, sep="\t", low_memory=False)
-        if "engine_version" in status:
-            audit["rphylopars_version"] = sorted(set(status["engine_version"].dropna().astype(str)))
-        return results, status, audit
 
 
 def _comparison_table(
     rsc_path: Path | None,
     native: pandas.DataFrame,
-    rphylopars: pandas.DataFrame,
 ) -> pandas.DataFrame:
     frames: list[pandas.DataFrame] = []
     if rsc_path and rsc_path.is_file():
@@ -930,14 +789,6 @@ def _comparison_table(
         current = native.copy()
         current["directly_comparable_to_rsc"] = "no"
         current["comparison_note"] = "species-tip estimand after within-sample paralog aggregation"
-        frames.append(current)
-    if not rphylopars.empty:
-        current = rphylopars.copy()
-        current["directly_comparable_to_rsc"] = "no"
-        current["comparison_note"] = (
-            "species-tip estimand; Rphylopars uses a joint trait model, and likelihood, "
-            "parameter counting, and optimizer reporting are engine-specific"
-        )
         frames.append(current)
     if not frames:
         return pandas.DataFrame(
@@ -956,16 +807,6 @@ def _comparison_table(
             ]
         )
     combined = pandas.concat(frames, ignore_index=True, sort=False)
-    combined["coefficient_difference_vs_species_nwkit"] = numpy.nan
-    keys = ["aggregation", "analysis_id", "response", "term"]
-    if not native.empty and not rphylopars.empty and all(column in combined for column in keys):
-        native_coefficients = native.drop_duplicates(keys, keep="first").set_index(keys)["coefficient"]
-        for index, row in combined.loc[combined["analysis_method"] == "species_rphylopars"].iterrows():
-            key = tuple(row[column] for column in keys)
-            if key in native_coefficients.index:
-                combined.at[index, "coefficient_difference_vs_species_nwkit"] = pandas.to_numeric(
-                    row.get("coefficient"), errors="coerce"
-                ) - pandas.to_numeric(native_coefficients.loc[key], errors="coerce")
     return combined
 
 
@@ -1036,7 +877,6 @@ def _audit_status_record(row: dict[str, object]) -> dict[str, object]:
 
 def _write_empty_outputs(args: argparse.Namespace, methods: Sequence[str], reason: str) -> int:
     native = pandas.DataFrame(columns=MINIMAL_RESULT_COLUMNS)
-    rphylopars = pandas.DataFrame(columns=MINIMAL_RESULT_COLUMNS)
     status_rows = _read_rsc_method_status(args.rsc_status)
     for method in methods:
         if method == "rsc":
@@ -1058,7 +898,6 @@ def _write_empty_outputs(args: argparse.Namespace, methods: Sequence[str], reaso
     _append_unrequested_status(status_rows, methods, args.tree_id)
     for path in (
         args.native_out,
-        args.rphylopars_out,
         args.comparison_out,
         args.status_out,
         args.audit_out,
@@ -1071,8 +910,7 @@ def _write_empty_outputs(args: argparse.Namespace, methods: Sequence[str], reaso
     ):
         path.parent.mkdir(parents=True, exist_ok=True)
     native.to_csv(args.native_out, sep="\t", index=False)
-    rphylopars.to_csv(args.rphylopars_out, sep="\t", index=False)
-    _comparison_table(args.rsc_results, native, rphylopars).to_csv(
+    _comparison_table(args.rsc_results, native).to_csv(
         args.comparison_out, sep="\t", index=False, na_rep="NA"
     )
     pandas.DataFrame(status_rows, columns=STATUS_COLUMNS).to_csv(args.status_out, sep="\t", index=False, na_rep="NA")
@@ -1123,7 +961,7 @@ def summarize_for_stat_tree(comparison_path: str | Path, status_path: str | Path
     if status_file.is_file() and status_file.stat().st_size > 0:
         status = pandas.read_csv(status_file, sep="\t", low_memory=False)
         if {"analysis_method", "status"}.issubset(status.columns):
-            for method in ("species_nwkit", "species_rphylopars"):
+            for method in ("species_nwkit",):
                 selected = status.loc[status["analysis_method"].astype(str) == method]
                 out[f"pgls_{method}_num_ok"] = int((selected["status"] == "ok").sum())
                 out[f"pgls_{method}_num_not_estimable"] = int((selected["status"] == "not_estimable").sum())
@@ -1136,7 +974,7 @@ def summarize_for_stat_tree(comparison_path: str | Path, status_path: str | Path
     out["pgls_comparison_num_result_rows"] = int(comparison.shape[0])
     if comparison.empty or "analysis_method" not in comparison:
         return out
-    for method in ("species_nwkit", "species_rphylopars"):
+    for method in ("species_nwkit",):
         selected = comparison.loc[comparison["analysis_method"].astype(str) == method].copy()
         selected = _usable_association_rows(selected)
         if selected.empty or "p_value" not in selected:
@@ -1173,15 +1011,35 @@ def summarize_for_stat_tree(comparison_path: str | Path, status_path: str | Path
         # available under the explicit ``_raw`` name for descriptive ranking.
         out[f"{prefix}_best_p_value"] = float(best["_p_value_holm"])
         out[f"{prefix}_best_p_value_adjustment"] = "holm"
-    if "coefficient_difference_vs_species_nwkit" in comparison:
-        differences = pandas.to_numeric(comparison["coefficient_difference_vs_species_nwkit"], errors="coerce").abs()
-        differences = differences.loc[numpy.isfinite(differences)]
-        if not differences.empty:
-            out["pgls_nwkit_rphylopars_max_abs_coefficient_difference"] = float(differences.max())
     return out
 
 
 def run(args: argparse.Namespace) -> int:
+    from nwkit.file_paths import validate_outputs_do_not_replace_inputs
+    from nwkit.output_transaction import output_transaction
+
+    output_fields = (
+        "native_out", "comparison_out", "status_out", "audit_out",
+        "expression_summary_out", "expression_audit_out", "response_tip_summary_out",
+        "response_sampling_covariance_out", "predictor_tip_summary_out", "predictor_sampling_covariance_out",
+    )
+    input_fields = (
+        "species_tree", "reconciliation", "expression", "species_traits", "analysis_plan", "metadata",
+        "paralog_sampling_covariance", "rsc_results", "rsc_status",
+    )
+    outputs = {field: getattr(args, field) for field in output_fields}
+    validate_outputs_do_not_replace_inputs(
+        [(field, getattr(args, field)) for field in input_fields if getattr(args, field, None) is not None],
+        list(outputs.items()),
+    )
+    with output_transaction(outputs.values(), create_parents=True) as staged:
+        staged_args = argparse.Namespace(**vars(args))
+        for field, path in outputs.items():
+            setattr(staged_args, field, Path(staged[path]))
+        return _run_staged(staged_args)
+
+
+def _run_staged(args: argparse.Namespace) -> int:
     from nwkit.ordinary_regression import fit_ordinary_regression
     from nwkit.util import read_tree
 
@@ -1193,7 +1051,6 @@ def run(args: argparse.Namespace) -> int:
         return _write_empty_outputs(args, methods, "species_methods_not_requested")
     for path in (
         args.native_out,
-        args.rphylopars_out,
         args.comparison_out,
         args.status_out,
         args.audit_out,
@@ -1248,7 +1105,6 @@ def run(args: argparse.Namespace) -> int:
     response_covariance_frames: list[pandas.DataFrame] = []
     predictor_summary_frames: list[pandas.DataFrame] = []
     predictor_covariance_frames: list[pandas.DataFrame] = []
-    rphylopars_summary_frames: list[pandas.DataFrame] = []
 
     for aggregation, frame in aggregated.items():
         with tempfile.TemporaryDirectory(prefix="genegalleon-species-pgls-") as temporary:
@@ -1276,7 +1132,6 @@ def run(args: argparse.Namespace) -> int:
                     _sampling_table(response_estimates.sampling_covariance_by_trait, leaf_names, aggregation)
                 )
 
-            predictor_estimates_by_analysis: dict[str, Any] = {}
             for plan_row in plan.to_dict("records"):
                 analysis_id = str(plan_row["analysis_id"])
                 predictors = _csv(plan_row["predictors"])
@@ -1306,7 +1161,6 @@ def run(args: argparse.Namespace) -> int:
                     ordered=ordered,
                     categorical_policy=args.categorical_replicate_policy,
                 )
-                predictor_estimates_by_analysis[analysis_id] = predictor_estimates
                 if not predictor_estimates.tip_summary.empty:
                     predictor_summary_frames.append(
                         predictor_estimates.tip_summary.assign(aggregation=aggregation, analysis_id=analysis_id)
@@ -1400,15 +1254,6 @@ def run(args: argparse.Namespace) -> int:
                             "nwkit_version": nwkit_version,
                         }
                     )
-            if "species-rphylopars" in methods:
-                rphylopars_summary_frames.append(
-                    _summary_long(
-                        aggregation,
-                        leaf_names,
-                        response_estimates,
-                        predictor_estimates_by_analysis,
-                    )
-                )
 
     native = (
         pandas.concat(native_frames, ignore_index=True, sort=False)
@@ -1427,21 +1272,8 @@ def run(args: argparse.Namespace) -> int:
             ]
         )
     )
-    rphylopars = pandas.DataFrame(columns=native.columns)
-    if "species-rphylopars" in methods:
-        rphylopars, r_status, r_audit = _run_rphylopars(
-            args,
-            tree,
-            pandas.concat(rphylopars_summary_frames, ignore_index=True, sort=False),
-            plan,
-            responses,
-        )
-        status_rows.extend(r_status.to_dict("records"))
-        audit_records.append(r_audit)
-
     native.to_csv(args.native_out, sep="\t", index=False, na_rep="NA")
-    rphylopars.to_csv(args.rphylopars_out, sep="\t", index=False, na_rep="NA")
-    _comparison_table(args.rsc_results, native, rphylopars).to_csv(
+    _comparison_table(args.rsc_results, native).to_csv(
         args.comparison_out, sep="\t", index=False, na_rep="NA"
     )
     _append_unrequested_status(status_rows, methods, args.tree_id)
@@ -1533,15 +1365,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confidence-level", type=float, default=0.95)
     parser.add_argument("--reml", choices=["yes", "no"], default="yes")
     parser.add_argument("--allow-large-dense", choices=["yes", "no"], default="no")
-    parser.add_argument(
-        "--rphylopars-sampling-covariance", choices=["require-diagonal", "diagonalize"], default="require-diagonal"
-    )
-    parser.add_argument("--rphylopars-script", required=True, type=Path)
     parser.add_argument("--rsc-results", type=Path)
     parser.add_argument("--rsc-status", type=Path)
     parser.add_argument("--empty-reason", default="")
     parser.add_argument("--native-out", required=True, type=Path)
-    parser.add_argument("--rphylopars-out", required=True, type=Path)
     parser.add_argument("--comparison-out", required=True, type=Path)
     parser.add_argument("--status-out", required=True, type=Path)
     parser.add_argument("--audit-out", required=True, type=Path)

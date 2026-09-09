@@ -560,7 +560,7 @@ def test_gene_evolution_core_passes_gg_task_cpus_to_kfl1ou():
 def test_gene_evolution_core_uses_kfl1ou_wrapper_with_supported_args_only():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    block_start = text.index('task="l1ou"')
+    block_start = text.index('task="kfl1ou OU shift detection"')
     block_end = text.index("mv_out fit_ind.RData", block_start)
     l1ou_block = text[block_start:block_end]
 
@@ -1718,7 +1718,7 @@ def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_suppor
     )
     assert 'assert_gene_evolution_aa_model_for_protein_mode "${task}"' in core
     assert 'disable_if_no_input_file "run_collect_gff_info" "${file_og_primary_fasta}"' in core
-    assert '--parameter "gff_annotation_schema=2"' in core
+    assert '--parameter "gff_annotation_schema=5"' in core
     assert '--input "sequence_source_index=${gff_info_sequence_manifest}"' in core
     assert '--sequence-store "${gff_info_sequence_store}"' in core
     assert (
@@ -1732,7 +1732,7 @@ def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_suppor
         in core
     )
     assert 'disable_flag_with_reason "run_collect_gff_info"' not in core
-    assert 'disable_flag_with_reason "run_scm_intron"' not in core
+    assert 'disable_flag_with_reason "run_asr_intron"' not in core
     assert 'disable_flag_with_reason "run_extract_promoter_fasta"' not in core
     assert 'disable_flag_with_reason "run_fimo"' not in core
     assert 'disable_flag_with_reason "treevis_synteny"' not in core
@@ -1875,7 +1875,7 @@ def test_common_params_and_rooting_helpers_expose_shared_species_label_parser():
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
     genome_core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
     gene_core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
-    rooting_helper = _read_text(WORKFLOW_DIR / "support" / "species_tree_guided_gene_tree_rooting.r")
+    rooting_helper = _read_text(WORKFLOW_DIR / "support" / "species_tree_guided_gene_tree_rooting.py")
     treevis_core = _read_text(WORKFLOW_DIR / "support" / "treevis" / "R" / "00_core.R")
 
     assert ': "${GG_COMMON_SPECIES_LABEL_PARSER:=taxonomic}"' in common
@@ -1887,10 +1887,10 @@ def test_common_params_and_rooting_helpers_expose_shared_species_label_parser():
     assert 'species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"' in genome_core
     assert 'species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"' in genome_core
     assert 'species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"' in genome_core
-    assert '"--species_parser=${species_label_parser}" \\' in genome_core
-    assert "species_parser = args[['species_parser']]" in rooting_helper
-    assert "species_parser = 'taxonomic'" in rooting_helper
-    assert "get_species_overlap_score(phy=rt, dc_cutoff=0, species_parser=species_parser)" in rooting_helper
+    assert '--species-parser "${species_label_parser}" \\' in genome_core
+    assert '"--species-parser", args.species_parser' in rooting_helper
+    assert 'parser.add_argument("--species-parser", default="taxonomic")' in rooting_helper
+    assert '"nwkit", "rootcompare"' in rooting_helper
     assert 'species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"' in gene_core
     assert 'species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"' in gene_core
     assert 'species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"' in gene_core
@@ -2191,7 +2191,7 @@ def test_gene_evolution_core_quotes_trait_promoter_and_summary_path_options():
         "--codeml_tsv ${file_og_codeml_two_ratio}",
         "--character_gff ${file_og_gff_info}",
         "--fimo ${file_og_fimo}",
-        "--scm_intron ${file_og_scm_intron_summary}",
+        "--asr_intron ${file_og_asr_intron_summary}",
         "--csubst_b ${file_og_csubst_b}",
         "--gene_pgls_stats ${file_og_gene_pgls}",
         "--species_pgls_stats ${file_og_species_pgls}",
@@ -2229,7 +2229,7 @@ def test_gene_evolution_core_quotes_trait_promoter_and_summary_path_options():
         '--codeml_tsv "${file_og_codeml_two_ratio}"',
         '--character_gff "${file_og_gff_info}"',
         '--fimo "${file_og_fimo}"',
-        '--scm_intron "${file_og_scm_intron_summary}"',
+        '--asr_intron "${file_og_asr_intron_summary}"',
         '--csubst_b "${file_og_csubst_b}"',
         '--gene_pgls_stats "${file_og_gene_pgls}"',
         '--pgls_comparison "${file_og_pgls_comparison}"',
@@ -2445,7 +2445,7 @@ def test_genome_evolution_core_quotes_notung_unzip_and_rooting_temp_paths():
         'safe_zip_extract.py"',
         '--archive "${indir}/${infile}"',
         '--expected-prefix "${busco_id}.notung.root"',
-        '"--notung_root_dir=${notung_root_dir}"',
+        '--notung-root-dir "${notung_root_dir}"',
         '2>&1 | tee "${busco_id}.root.txt"',
         'if [[ -s "${busco_id}.root.nwk" ]]; then',
         'run_mafft "${input_alignment_file}" &',
@@ -2529,8 +2529,8 @@ def test_genome_evolution_core_quotes_parallel_function_call_args():
         'busco_iqtree_pep "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_pep}" &',
         'busco_notung "${infile}" "${dir_busco_iqtree_dna}" "${dir_busco_notung_dna}" &',
         'busco_notung "${infile}" "${dir_busco_iqtree_pep}" "${dir_busco_notung_pep}" &',
-        'busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_dna}" "${dir_busco_iqtree_dna}" "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}" &',
-        'busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_pep}" "${dir_busco_iqtree_pep}" "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}" &',
+        'busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_dna}" "${dir_busco_iqtree_dna}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &',
+        'busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_pep}" "${dir_busco_iqtree_pep}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &',
     ]
     for token in expected_tokens:
         assert token in text, f"Missing quoted parallel call args token: {token}"
@@ -2574,8 +2574,9 @@ def test_genome_evolution_core_requires_requested_species_tree_before_orthofinde
         in text
     )
     assert "from nwkit.species_parser import get_species_parser" in text
-    assert "species_regex = sys.argv[3] or None" in text
-    assert "species_map_tsv = sys.argv[4] or None" in text
+    assert "output_tree = Path(sys.argv[2])" in text
+    assert "species_regex = sys.argv[4] or None" in text
+    assert "species_map_tsv = sys.argv[5] or None" in text
     assert "protein_by_query = index_unmatched_by_taxonomy_query" in text
     assert "species mapping is not one-to-one" in text
 
@@ -3142,7 +3143,6 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         "kffractbias",
         "kftools",
         "rkftools",
-        "radte",
     )
     for output_name in source_names:
         assert f"{output_name}_repo_sha: ${{{{ steps.vars.outputs.{output_name}_repo_sha }}}}" in workflow
@@ -3161,7 +3161,6 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         ("KFFRACTBIAS_REPO_SHA", "kffractbias_repo_sha"),
         ("KFTOOLS_REPO_SHA", "kftools_repo_sha"),
         ("RKFTOOLS_REPO_SHA", "rkftools_repo_sha"),
-        ("RADTE_REPO_SHA", "radte_repo_sha"),
     ):
         assert f"{build_arg}=${{{{ needs.prepare-build.outputs.{output_name} }}}}" in workflow
 
@@ -3612,7 +3611,7 @@ def test_gene_evolution_core_quotes_path_in_deactivation_messages():
     text = _read_text(script)
     banned_tokens = [
         "echo '${run_collect_gff_info} is deactivated. Empty input:' ${dir_sp_gff}",
-        "echo '${run_scm_intron} is deactivated. Empty input:' ${dir_sp_gff}",
+        "echo '${run_asr_intron} is deactivated. Empty input:' ${dir_sp_gff}",
         "echo '${dir_sp_expression} is not empty. Continued:' ${dir_sp_expression}",
         "echo '${dir_sp_expression} is empty:' ${dir_sp_expression}",
         "echo '${dir_sp_genome} is not empty. Continued:' ${dir_sp_genome}",
@@ -3622,7 +3621,7 @@ def test_gene_evolution_core_quotes_path_in_deactivation_messages():
         assert token not in text
     expected_tokens = [
         'echo "\\${run_collect_gff_info} is deactivated. Empty input: ${dir_sp_gff}"',
-        'echo "\\${run_scm_intron} is deactivated. Empty input: ${dir_sp_gff}"',
+        'echo "\\${run_asr_intron} is deactivated. Empty input: ${dir_sp_gff}"',
         'echo "\\${dir_sp_expression} is not empty. Continued: ${dir_sp_expression}"',
         'echo "\\${dir_sp_expression} is empty: ${dir_sp_expression}"',
         'echo "\\${dir_sp_genome} is not empty. Continued: ${dir_sp_genome}"',
@@ -3649,7 +3648,7 @@ def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
     banned_tokens = [
         "if [[ -s ${file_og_expression} && ${run_l1ou} -eq 1 ]]; then",
         "if [[ ! -s ${file_og_hyphy_relax_reversed} && ${run_hyphy_relax_reversed} -eq 1 ]]; then",
-        "if [[ ! -s ${file_og_scm_intron_summary} && ${run_scm_intron} -eq 1 ]]; then",
+        "if [[ ! -s ${file_og_asr_intron_summary} && ${run_asr_intron} -eq 1 ]]; then",
         "if [[ ( ! -s ${file_og_l1ou_fit_rdata} || ! -s ${file_og_l1ou_fit_tree} || ! -s ${file_og_l1ou_fit_regime} || ! -s ${file_og_l1ou_fit_leaf} ) && ${run_l1ou} -eq 1 ]]; then",
         "if ( [[ ${summary_flag} -eq 1 || ! -s ${file_og_tree_plot} ]] ) && [[ ${run_tree_plot} -eq 1 ]]; then",
         "if [[ -s ${file_og_stat_branch} && -s ${file_og_stat_tree} && -s ${file_og_tree_plot} && ${gg_debug_mode:-0} -eq 0 ]]; then",
@@ -3659,7 +3658,7 @@ def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
     expected_tokens = [
         'if [[ -s "${file_og_expression}" && ${run_l1ou} -eq 1 ]]; then',
         "if [[ ${hyphy_relax_reversed_needs_update} -eq 1 && ${run_hyphy_relax_reversed} -eq 1 ]]; then",
-        "if [[ ${scm_intron_needs_update} -eq 1 && ${run_scm_intron} -eq 1 ]]; then",
+        "if [[ ${asr_intron_needs_update} -eq 1 && ${run_asr_intron} -eq 1 ]]; then",
         "if [[ ${l1ou_needs_update} -eq 1 && ${run_l1ou} -eq 1 ]]; then",
         "if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then",
         'if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" ]]; then',
@@ -3874,7 +3873,6 @@ def test_gene_evolution_wires_matched_expression_trait_pgls_through_stat_tree():
     assert '--allow-large-dense "${rsc_allow_large_dense}"' in core
     assert "/opt/pg/logs/source_revisions.tsv" in core
     assert '--parameter "nwkit_identity=${rsc_nwkit_identity}"' in core
-    assert '--parameter "rphylopars_identity=${rsc_rphylopars_identity}"' in core
     assert '--parameter "expression_input=unavailable"' in core
     assert "requires the gene-expression matrix" not in core
     assert 'inspect-audit-error' in core
@@ -3887,10 +3885,8 @@ def test_gene_evolution_wires_matched_expression_trait_pgls_through_stat_tree():
     assert '--output "response_sampling_covariance=${file_og_rsc_response_sampling_covariance}"' in core
     assert '--output "predictor_sampling_covariance=${file_og_rsc_predictor_sampling_covariance}"' in core
     assert '--output "species_nwkit=${file_og_species_nwkit_pgls}"' in core
-    assert '--output "species_rphylopars=${file_og_species_rphylopars_pgls}"' in core
     assert '--output "comparison=${file_og_pgls_comparison}"' in core
     assert 'python "${gg_support_dir}/species_tree_pgls.py" "${species_pgls_args[@]}"' in core
-    assert '--rphylopars-script "${gg_support_dir}/species_tree_rphylopars.R"' in core
     assert '--paralog-sampling-covariance "${species_paralog_sampling_covariance}"' in core
     assert 'mv_out_bundle \\' in core
     assert 'mv_out "${rsc_combined_status}"' not in core

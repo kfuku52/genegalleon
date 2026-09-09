@@ -17,7 +17,7 @@ gg_trigger_versions_dump() {
   local tmp_log_file
   local lock_file
   local failed_log_file
-  local had_flock=0
+  local lock_python lock_helper lock_token lock_owner_pid
   local singularity_bin
   local container_runtime_bin
   local versions_exit_code=0
@@ -116,17 +116,28 @@ gg_trigger_versions_dump() {
   tmp_log_file="${log_file}.tmp.$$"
   lock_file="${log_file}.lock"
 
-  if command -v flock >/dev/null 2>&1; then
-    exec 9>"${lock_file}"
-    flock 9
-    had_flock=1
-  fi
+  # Keep version/runtime environment setup in the caller; isolate only lock
+  # ownership and its EXIT cleanup from the caller's traps.
+  (
+  lock_python=$(gg_shared_lock_python) || return 1
+  lock_helper="${gg_support_dir}/shared_namespace_lock.py"
+  # Capture the owner before command substitution creates a shorter-lived shell.
+  # macOS Bash 3 has no BASHPID; its waiting parent is a safe lifetime envelope.
+  lock_owner_pid="${BASHPID:-$$}"
+  lock_token=$("${lock_python}" "${lock_helper}" acquire-exclusive "${lock_file}" --owner-pid "${lock_owner_pid}" \
+    --timeout "$(gg_lock_acquire_timeout_seconds)") || return 1
+  trap '
+    lock_status=$?
+    if (( lock_status < 128 )); then
+      "${lock_python}" "${lock_helper}" release-exclusive "${lock_file}" --token "${lock_token}" || lock_status=1
+    fi
+    exit "${lock_status}"
+  ' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   if [[ -s "${log_file}" ]]; then
     echo "gg_trigger_versions_dump: skipped existing ${log_file}"
-    if [[ ${had_flock} -eq 1 ]]; then
-      flock -u 9
-      exec 9>&-
-    fi
     return 0
   fi
 
@@ -193,10 +204,6 @@ gg_trigger_versions_dump() {
     else
       : > "${failed_log_file}"
     fi
-    if [[ ${had_flock} -eq 1 ]]; then
-      flock -u 9
-      exec 9>&-
-    fi
     echo "gg_trigger_versions_dump: failed (exit=${versions_exit_code}). Log: ${failed_log_file}" >&2
     return "${versions_exit_code}"
   fi
@@ -204,12 +211,9 @@ gg_trigger_versions_dump() {
   if [[ -s "${tmp_log_file}" ]]; then
     mv_out "${tmp_log_file}" "${log_file}"
   fi
-  if [[ ${had_flock} -eq 1 ]]; then
-    flock -u 9
-    exec 9>&-
-  fi
   echo "gg_trigger_versions_dump: wrote ${log_file}"
   return 0
+  )
 }
 
 gg_require_versions_dump() {

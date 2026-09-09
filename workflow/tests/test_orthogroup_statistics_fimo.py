@@ -6,6 +6,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import pandas
+import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "orthogroup_statistics.py"
 
@@ -213,52 +214,69 @@ def test_load_fimo_hits_parses_legacy_fimo_txt_header(tmp_path):
     assert df.loc[df["sequence_name"] == "geneC", "motif_alt_id"].iloc[0] == "MA0123.1"
 
 
-def test_load_scm_intron_branch_table_maps_dated_tree_labels_to_branch_ids(tmp_path):
-    mod = load_module()
-    rooted_tree = tmp_path / "rooted.nwk"
-    dated_tree = tmp_path / "dated.nwk"
-    scm_intron = tmp_path / "scm.tsv"
-
-    rooted_tree.write_text("((A:1,B:1)n1:1,(C:1,D:1)n2:1)n0;\n", encoding="utf-8")
-    dated_tree.write_text("((A:1,B:1)n11:1,(C:1,D:1)n12:1)n99;\n", encoding="utf-8")
-    scm_intron.write_text(
-        (
-            "leaf\tnum_intron\tintron_present\tintron_absent\n"
-            "n99\t2\t1\t0\n"
-            "n11\t1\t0.7\t0.3\n"
-            "n12\t0\t0.2\t0.8\n"
-            "A\t3\t1\t0\n"
-            "B\t0\t0\t1\n"
-            "C\t4\t1\t0\n"
-            "D\t0\t0\t1\n"
-            "n404\t9\t1\t0\n"
-        ),
+def write_asr_fixture(path):
+    path.write_text(
+        "branch_id\tparent\tnode_class\tname\tnum_intron\tis_imputed\tp_intron_present\tp_intron_absent\n"
+        "6\t2\tleaf\tD\tNA\tTrue\t0.1\t0.9\n"
+        "0\t-1\troot\tn99\tNA\tFalse\t0.9\t0.1\n"
+        "2\t0\tintnode\tn12\tNA\tFalse\t0.2\t0.8\n"
+        "1\t0\tintnode\tn11\tNA\tFalse\t0.7\t0.3\n"
+        "3\t1\tleaf\tA\t3\tFalse\t1\t0\n"
+        "4\t1\tleaf\tB\t0\tFalse\t0\t1\n"
+        "5\t2\tleaf\tC\t4\tFalse\t1\t0\n",
         encoding="utf-8",
     )
 
-    df_scm = mod.load_scm_intron_branch_table(str(scm_intron), str(dated_tree))
-    assert "branch_id" in df_scm.columns
-    assert df_scm["branch_id"].isna().sum() == 0
-    assert "n404" not in set(df_scm["node_name"].tolist())
 
-    rooted = mod._ensure_branch_ids(mod.new_tree(str(rooted_tree), format=1))
-    df_branch = mod.pandas.DataFrame(
-        {
-            "branch_id": [mod._get_node_label(node) for node in rooted.traverse()],
-            "node_name": [node.name for node in rooted.traverse()],
-        }
-    )
-    merged = mod.pandas.merge(
-        df_branch,
-        df_scm.drop(columns=["node_name"]),
-        on="branch_id",
-        how="outer",
-    )
+def test_load_asr_intron_branch_table_translates_native_ids_and_preserves_counts(tmp_path):
+    mod = load_module()
+    dated_tree = tmp_path / "dated.nwk"
+    asr_intron = tmp_path / "asr.tsv"
+    dated_tree.write_text("((A:1,B:1)n11:1,(C:1,D:1)n12:1)n99;\n", encoding="utf-8")
+    write_asr_fixture(asr_intron)
+    df_asr = mod.load_asr_intron_branch_table(str(asr_intron), str(dated_tree))
+    # Different child ordering and internal labels must still join by clade ID.
+    rooted = mod._ensure_branch_ids(mod.new_tree("((D:1,C:1)n2:1,(B:1,A:1)n1:1)n0;", format=1))
+    df_branch = mod.pandas.DataFrame({
+        "branch_id": [mod._get_node_label(node) for node in rooted.traverse()],
+        "node_name": [node.name for node in rooted.traverse()],
+    })
+    merged = mod.pandas.merge(df_branch, df_asr.drop(columns=["node_name"]), on="branch_id", validate="one_to_one")
+    assert len(merged) == 7
+    by_name = merged.set_index("node_name")
+    assert by_name.loc["n0", "intron_present"] == 0.9
+    assert by_name.loc["n1", "intron_present"] == 0.7
+    assert by_name.loc["n2", "intron_present"] == 0.2
+    assert by_name.loc[["n0", "n1", "n2", "D"], "num_intron"].isna().all()
+    assert by_name.loc["A", "num_intron"] == 3
+    assert by_name.loc["B", "num_intron"] == 0
+    assert by_name.loc["C", "num_intron"] == 4
+    assert by_name.loc["D", "intron_is_imputed"]
 
-    assert merged["branch_id"].isna().sum() == 0
-    assert merged.loc[merged["node_name"] == "n0", "num_intron"].iloc[0] == 2
-    assert merged.loc[merged["node_name"] == "n1", "num_intron"].iloc[0] == 1
-    assert merged.loc[merged["node_name"] == "n2", "num_intron"].iloc[0] == 0
+
+@pytest.mark.parametrize("column,value,message", [
+    ("branch_id", "99", "branch IDs"),
+    ("name", "wrong", "does not match"),
+    ("parent", "-1", "does not match"),
+    ("p_intron_present", "1.2", "probabilities"),
+    ("is_imputed", "unknown", "boolean"),
+    ("num_intron", "-1", "non-negative integer"),
+    ("num_intron", "1.5", "non-negative integer"),
+    ("num_intron", "inf", "non-negative integer"),
+    ("num_intron", "2", "imputation flags"),
+    ("is_imputed", "False", "imputation flags"),
+])
+def test_load_asr_intron_branch_table_rejects_mismatched_or_invalid_results(tmp_path, column, value, message):
+    mod = load_module()
+    tree = tmp_path / "dated.nwk"
+    tree.write_text("((A:1,B:1)n11:1,(C:1,D:1)n12:1)n99;", encoding="utf-8")
+    table = tmp_path / "asr.tsv"
+    write_asr_fixture(table)
+    df = pandas.read_csv(table, sep="\t", dtype=str, keep_default_na=False)
+    df.loc[0, column] = value
+    df.to_csv(table, sep="\t", index=False)
+    with pytest.raises(ValueError, match=message):
+        mod.load_asr_intron_branch_table(str(table), str(tree))
 
 
 def test_flatten_trait_variable_stats_builds_tree_info_keys():
@@ -336,3 +354,23 @@ def test_load_synteny_summary_returns_empty_for_missing_required_columns(tmp_pat
     )
     out = mod.load_synteny_summary(str(infile))
     assert out.empty
+
+
+@pytest.mark.parametrize("row,column,value,message", [
+    (1, "num_intron", "1", "imputation flags"),
+    (1, "is_imputed", "True", "imputation flags"),
+    (4, "p_intron_present", "0", "observed counts"),
+])
+def test_load_asr_intron_rejects_internally_inconsistent_observations(tmp_path, row, column, value, message):
+    mod = load_module()
+    tree = tmp_path / "dated.nwk"
+    tree.write_text("((A:1,B:1)n11:1,(C:1,D:1)n12:1)n99;")
+    table = tmp_path / "asr.tsv"
+    write_asr_fixture(table)
+    df = pandas.read_csv(table, sep="\t", dtype=str, keep_default_na=False)
+    df.loc[row, column] = value
+    if column == "p_intron_present":
+        df.loc[row, "p_intron_absent"] = "1"
+    df.to_csv(table, sep="\t", index=False)
+    with pytest.raises(ValueError, match=message):
+        mod.load_asr_intron_branch_table(str(table), str(tree))

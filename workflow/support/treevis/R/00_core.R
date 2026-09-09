@@ -60,7 +60,8 @@ treevis_ortholog_axis_label <- function(ortholog_prefix) {
     label <- treevis_ortholog_prefix_target(ortholog_prefix)
     words <- strsplit(label, "[_[:space:]]+")[[1]]
     words <- words[nzchar(words)]
-    paste(c(words, "closest", "gene"), collapse = "\n")
+    lines <- c(lapply(words, function(word) call("italic", word)), list("closest", "gene"))
+    as.expression(Reduce(function(top, bottom) call("atop", call("displaystyle", top), call("displaystyle", bottom)), lines, right = TRUE))
 }
 
 treevis_site_panel_width <- function(num_sites) {
@@ -380,7 +381,10 @@ add_node_points = function(g, args) {
         position='identity', 
         show.legend=TRUE
     ) + 
-    scale_colour_manual(values=args[['node_colors']]) +
+    scale_colour_manual(
+        values=args[['node_colors']],
+        labels=c(D='Duplication', S='Speciation', H='Transfer', R='Retrotransposition')
+    ) +
     theme(
         legend.title = element_text(size=args[['font_size']]),
         legend.text = element_text(size=args[['font_size']]),
@@ -395,6 +399,14 @@ add_node_points = function(g, args) {
 }
 
 get_rel_widths = function(g, args_rel_widths) {
+    fixed = vapply(g, function(p) !is.null(attr(p, 'treevis_width_mm')), logical(1))
+    if (any(fixed) && any(!fixed)) {
+        # Fixed-mm additions must not affect tiplabel's share of the original
+        # figure. The driver assigns their physical widths after this step.
+        out = setNames(rep(1, length(g)), names(g))
+        out[!fixed] = get_rel_widths(g[!fixed], args_rel_widths)
+        return(out)
+    }
     rel_widths = rep(1, length(g))
     names(rel_widths) = names(g)
     for (gname in names(rel_widths)) {
@@ -404,11 +416,17 @@ get_rel_widths = function(g, args_rel_widths) {
             rel_widths[gname] = 0.5
         } else if (grepl('^pointplot$', gname)) {
             rel_widths[gname] = 0.5
+        } else if (grepl('^categorical,query_marker,', gname)) {
+            rel_widths[gname] = 0.275
         } else if (grepl('^categorical,', gname)) {
             rel_widths[gname] = 0.55
         } else if (grepl('^text,', gname)) {
             rel_widths[gname] = 0.7
+        } else if (grepl('^localization$', gname)) {
+            rel_widths[gname] = 0.2
         } else if (grepl('^signal_peptide$', gname)) {
+            rel_widths[gname] = 0.1
+        } else if (grepl('^peroxisome$', gname)) {
             rel_widths[gname] = 0.1
         } else if (grepl('^tm$', gname)) {
             rel_widths[gname] = 0.12

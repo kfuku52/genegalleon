@@ -23,7 +23,7 @@ hgt_use_taxonomy_db="${hgt_use_taxonomy_db:-1}"
 hgt_contamination_dir="${hgt_contamination_dir:-}"
 hgt_taxonomy_flow_rank="${hgt_taxonomy_flow_rank:-phylum}"
 hgt_taxonomy_flow_max_categories="${hgt_taxonomy_flow_max_categories:-12}"
-hgt_tree_plot_width="${hgt_tree_plot_width:-24}"
+hgt_tree_width_mm="${hgt_tree_width_mm:-60}"
 hgt_promoter_bp="${hgt_promoter_bp:-2000}"
 hgt_fimo_qvalue="${hgt_fimo_qvalue:-0.05}"
 
@@ -60,8 +60,8 @@ if ! [[ "${hgt_taxonomy_flow_max_categories}" =~ ^[0-9]+$ ]]; then
   echo "Invalid hgt_taxonomy_flow_max_categories: ${hgt_taxonomy_flow_max_categories}"
   exit 1
 fi
-if ! [[ "${hgt_tree_plot_width}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-  echo "Invalid hgt_tree_plot_width: ${hgt_tree_plot_width}"
+if ! [[ "${hgt_tree_width_mm}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "Invalid hgt_tree_width_mm: ${hgt_tree_width_mm}"
   exit 1
 fi
 if ! [[ "${hgt_promoter_bp}" =~ ^[0-9]+$ ]]; then
@@ -429,7 +429,8 @@ if [[ -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
       --input "gene_candidates=${file_hgt_gene}"
       --output "annotated_stat_branch=${file_hgt_stat_branch}"
       --output "tree_plot=${file_hgt_tree_plot}"
-      --parameter "tree_plot_width=${hgt_tree_plot_width}"
+      --parameter "column_layout=physical-mm-v2-compact-legends"
+      --parameter "tree_width_mm=${hgt_tree_width_mm}"
       --parameter "promoter_bp=${hgt_promoter_bp}"
       --parameter "fimo_qvalue=${hgt_fimo_qvalue}"
     )
@@ -516,8 +517,7 @@ if [[ -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
       Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
         --stat_branch="${file_hgt_stat_branch}" \
         --max_delta_intron_present="-0.5" \
-        --width="${hgt_tree_plot_width}" \
-        --rel_widths="tree,2.2,heatmap,0.65,pointplot,0.55,cluster_membership,0.55,synteny,0.9,tiplabel,0.45,categorical,0.8,signal_peptide,0.12,tm,0.12,intron,0.12,domain,1.0,alignment,1.2,meme,0.95,ortholog,0.8" \
+        --panel_widths_mm="tree:${hgt_tree_width_mm}" \
         --panel1="tree,bl_rooted,support_unrooted,species,L" \
         --panel2="heatmap,no,abs,_,expression_,Expression" \
         --panel3="pointplot,no,rel,_,expression_" \

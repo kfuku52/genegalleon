@@ -339,10 +339,7 @@ propagated as latent uncertainty by default
 (`rsc_categorical_replicate_policy="latent"`).
 
 Categorical species traits are supported by RSC and `species-nwkit`, using the
-same detected or declared factor levels and reference coding. The
-`species-rphylopars` comparator is limited to continuous predictors; a selected
-categorical analysis receives an explicit `not_estimable` status rather than a
-numeric recoding or Gaussian fallback.
+same detected or declared factor levels and reference coding.
 
 ### Transcriptome assembly input modes
 
@@ -707,20 +704,25 @@ Alternative runtime overrides (without editing files) via env vars:
   `GG_INPUT_GBIF_MIN_MATCH_CONFIDENCE`,
   `GG_INPUT_GBIF_MAX_COORDINATE_UNCERTAINTY_M`,
   `GG_INPUT_GBIF_MAX_DISTANCE_FROM_CENTROID_M`.
-- per-provider download caps:
+- database download caps (also used by the fair in-process dispatcher;
+  RefSeq/GenBank use NCBI and Ensembl variants use ENSEMBL;
+  see [shared database limits](input-generation-arrays.md#shared-database-request-limits)):
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBL`,
-  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBLPLANTS`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_PHYCOCOSM`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_PHYTOZOME`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_NCBI`,
-  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_REFSEQ`,
-  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_GENBANK`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_COGE`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_CNGB`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_FLYBASE`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_WORMBASE`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_VECTORBASE`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_FERNBASE`.
+
+Trait generation preserves missing binary observations rather than converting them
+to absence. Strict mode rejects output traits with no observed values before
+replacing the output table. The optional stats JSON includes observed species
+counts per output trait (`num_observed_by_trait`). These counts do not by
+themselves establish sufficient coverage for downstream cross-validation.
 
 Quick preset example (enable trait stage with GIFT starter config):
 

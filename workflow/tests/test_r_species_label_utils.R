@@ -67,10 +67,10 @@ if (
   stop(sprintf("Duplicate guard did not report colliding files: %s", duplicate_message))
 }
 
-source("workflow/support/pgls_common.R")
+source("workflow/support/tree_label_formatting.R")
 if (!identical(extract_species_label("Cenchrus_americanus_x_Cenchrus_purpureus_gene1"), "Cenchrus_americanus_x_Cenchrus_purpureus")) {
-  stop("pgls_common extract_species_label should preserve hybrid binomial species labels.")
+  stop("tree_label_formatting extract_species_label should preserve hybrid binomial species labels.")
 }
 if (!identical(scientific_name_from_label("Cenchrus_americanus_x_Cenchrus_purpureus"), "Cenchrus americanus x Cenchrus purpureus")) {
-  stop("pgls_common scientific_name_from_label should display hybrid binomial species labels.")
+  stop("tree_label_formatting scientific_name_from_label should display hybrid binomial species labels.")
 }

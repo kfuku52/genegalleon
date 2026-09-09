@@ -119,7 +119,7 @@ run_query_blast=1 # Activated if mode_gene_evolution=query2family; search query 
 run_extract_primary_fasta=1 # Generate in-frame CDS fasta file.
 run_rps_blast=1 # RPS-BLAST protein domain search.
 run_uniprot_annotation=0 # Annotation against UniProt Swiss-Prot.
-run_cdskit_localize=0 # Predict targeting-peptide and peroxisome localization signals with cdskit localize.
+run_cdskit_localize=1 # Predict targeting-peptide and peroxisome localization signals with cdskit localize.
 
 # Alignment and tree workflow flags
 run_mafft=1 # In-frame nucleotide alignment using MAFFT.
@@ -135,7 +135,7 @@ run_tree_root=1 # Root gene tree using tree_rooting_method.
 run_orthogroup_extraction=0 # Optional query2family refinement; extract from the pre-GeneRax rooted homolog tree, then run GeneRax on the extracted tree and FASTA when enabled.
 run_generax=0 # GeneRax off by default for local/smoke environments without MPI setup.
 run_notung_reconcil=0 # Run NOTUNG for RADTE.
-run_tree_dating=0 # Species-tree-guided divergence time estimation with RADTE.
+run_tree_dating=0 # Species-tree-guided divergence time estimation with NWKIT; native or IQ-TREE sequence engine.
 
 # Trait and promoter workflow flags
 run_generate_expression_matrix=0 # Generate trait matrix of gene expression level.
@@ -156,7 +156,7 @@ run_hyphy_relax="${run_hyphy_relax:-0}" # Run HyPhy RELAX.
 run_hyphy_relax_reversed="${run_hyphy_relax_reversed:-0}" # Run HyPhy RELAX with reversed foreground/background.
 
 # Comparative-analysis workflow flags
-run_scm_intron=0 # Stochastic character mapping of intron traits.
+run_asr_intron=0 # NWKIT ancestral-state probabilities of intron presence/absence.
 run_l1ou=0 # OU modeling of gene expression using the kfl1ou-backed l1ou-compatible outputs.
 run_expression_trait_pgls=0 # Unified expression ~ species-trait analysis with selectable RSC and species-tree PGLS methods.
 run_iqtree_anc=0 # Ancestral state reconstruction required for CSUBST.
@@ -186,14 +186,32 @@ tree_rooting_method="${tree_rooting_method:-mad}" # mad|reconciliation|notung|mi
 generax_model="GTR+G4" # GeneRax substitution model.
 generax_rec_model="UndatedDL" # "UndatedDTL" or "UndatedDL"; GeneRax reconciliation model, with DL modeling duplication/loss and DTL also allowing transfer events for HGT-oriented analyses.
 radte_max_age=1000 # Upper limit of estimated divergence time in MY.
+radte_sequence_engine="${radte_sequence_engine:-native}" # native|iqtree; NWKIT handles dates for both.
+radte_iqtree_interface="${radte_iqtree_interface:-auto}" # auto|cli|library; optional externally built library worker.
+radte_iqtree_worker="${radte_iqtree_worker:-}" # Optional external worker executable.
+radte_iqtree_model="${radte_iqtree_model:-}" # Optional complete IQ-TREE model, e.g. GY+F3X4+R4.
+radte_substitution_model="${radte_substitution_model:-auto}" # auto: GY94 for CDS, LG for protein; also ecmk07, ecmrest, hky, gtr.
+radte_codon_frequencies="${radte_codon_frequencies:-}" # Empty: GY94 f3x4, ECM published frequencies; f selects alignment codon frequencies.
+radte_kappa="${radte_kappa:-}" # Empty estimates HKY/GY94 kappa; a number fixes it.
+radte_omega="${radte_omega:-}" # Empty estimates GY94 omega; a number fixes it.
+radte_gamma_shape="${radte_gamma_shape:-}" # Empty estimates gamma shape.
+radte_gamma_categories="${radte_gamma_categories:-4}" # Number of site-rate gamma categories.
+radte_inference="${radte_inference:-auto}" # auto|marginal|joint-map.
+radte_likelihood="${radte_likelihood:-auto}" # auto|exact|quadratic.
+radte_uncertainty="${radte_uncertainty:-profile}" # profile|laplace|bootstrap|none; conditional on fixed species ages.
+radte_interval_level="${radte_interval_level:-0.95}" # Coverage of conditional gene-age intervals.
+radte_rate_sd="${radte_rate_sd:-}" # Empty estimates relaxed-clock SD; 0 selects a strict clock.
+radte_maxiter="${radte_maxiter:-1000}" # Maximum optimizer iterations.
+radte_seed="${radte_seed:-1}" # Random seed.
+radte_species_intervals_tsv="${radte_species_intervals_tsv:-}" # Optional external species intervals for display only; workspace-relative or absolute TSV.
+
 
 # species_expression data (value in input files)
 exp_value_type="log2p1" # Expression scale used in species_expression input tables.
-pgls_methods="rsc" # rsc,species-nwkit,species-rphylopars, or all; selected methods share the same prepared expression/trait inputs.
+pgls_methods="rsc" # rsc,species-nwkit, or all; selected methods share the same prepared expression/trait inputs.
 species_expression_aggregation="sum" # sum|mean|max|all; paralogs are combined within each biological sample on the linear expression scale before species-tree PGLS.
 species_paralog_missing="error" # error|ignore for incomplete paralog measurements within a species/sample.
 species_paralog_sampling_covariance="" # Optional workspace-relative or absolute TSV of response,gene_name_1,gene_name_2,sampling_covariance (and optional tree_id) for known-SE species PGLS aggregation.
-rphylopars_sampling_covariance="require-diagonal" # require-diagonal|diagonalize; Rphylopars cannot represent cross-species sampling covariance exactly.
 
 # Reconciled speciation contrast (RSC) PGLS
 rsc_responses="all" # all or comma-separated expression response names after removing the replicate suffix (for example root,leaf).
@@ -285,8 +303,8 @@ csubst_scan_tree_site_plot_format="${csubst_scan_tree_site_plot_format:-pdf}" # 
 csubst_scan_tree_site_plot_max_sites="${csubst_scan_tree_site_plot_max_sites:-30}" # Maximum detected sites shown in the csubst scan site plot.
 
 # Intron and chromosomal character evolution
-intron_gain_rate="0.0001" # Prior intron-gain rate used by stochastic character mapping of intron presence/absence.
-retrotransposition_rate="0.001" # Prior retrotransposition rate used by stochastic character mapping of intron loss patterns.
+intron_gain_rate="0.0001" # Fixed absent-to-present rate for intron ASR, per dated-tree branch-length unit.
+retrotransposition_rate="0.001" # Fixed present-to-absent rate for intron ASR, per dated-tree branch-length unit.
 
 # Tree visualization
 treevis_event_method="species_overlap" # "auto", "generax", or "species_overlap"; source for duplication/transfer/loss event labels in treevis plots.
@@ -299,7 +317,14 @@ treevis_heatmap_transform="no" # "no", "log2", "log10p1", "log2p1"; transform ap
 treevis_pie_chart_value_transformation="identity" # identity|delog2|delog2p1|delog10|delog10p1; transform expression-like values before pie-chart rendering.
 treevis_max_intergenic_dist=100000 # Maximum distance between genes in bp.
 treevis_synteny=1 # Generate and display local synteny evidence around orthogroup genes when genome/GFF inputs are available.
-treevis_synteny_window=5 # Number of neighboring genes on each side used for the treevis synteny panel.
+treevis_sequence_similarity=1 # Display pairwise amino-acid identity from the analysis alignment when available.
+treevis_sequence_similarity_width_mm=15 # Physical width of the sequence identity triangle.
+treevis_cis_similarity=1 # Display motif-set similarity when FIMO and promoter FASTA are available.
+treevis_cis_similarity_width_mm=15 # Physical width of the promoter cis-element triangle.
+treevis_synteny_similarity=1 # Display pairwise synteny similarity when neighborhood input is available.
+treevis_synteny_similarity_width_mm=15 # Physical width of the triangular similarity column.
+synteny_search_window=20 # Number of neighboring genes on each side included in the similarity search.
+treevis_synteny_window=5 # Number of neighboring genes on each side displayed in the treevis synteny panel.
 treevis_query_marker=1 # In query2family mode, display query best-hit markers as a treevis categorical panel.
 treevis_long_branch_display="auto" # "auto" or "no"; auto detects unusually long branches and compresses their displayed length using the long-branch thresholds below.
 treevis_long_branch_ref_quantile="0.95" # Reference branch-length quantile used for long-branch detection.
@@ -316,6 +341,11 @@ delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Se
 delete_preexisting_tmp_dir=1 # Before starting this job, delete tmp directory created by previous run.
 
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
+# Reject retired SCM overrides instead of silently leaving ASR disabled.
+if [[ -n "${run_scm_intron+x}" || -n "${GG_GENE_EVOLUTION_RUN_SCM_INTRON+x}" ]]; then
+  echo "run_scm_intron is retired; use run_asr_intron (GG_GENE_EVOLUTION_RUN_ASR_INTRON for environment overrides)." >&2
+  exit 1
+fi
 # Forward config variables (including external overrides) into container environment.
 gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir" "delete_preexisting_tmp_dir"
 forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir" "delete_preexisting_tmp_dir"

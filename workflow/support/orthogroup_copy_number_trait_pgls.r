@@ -28,15 +28,6 @@ script_dir <- if (length(script_path_arg) > 0) {
 } else {
   getwd()
 }
-pgls_common_candidates <- unique(c(
-  file.path(script_dir, "pgls_common.R"),
-  file.path(getwd(), "workflow", "support", "pgls_common.R")
-))
-pgls_common_path <- pgls_common_candidates[file.exists(pgls_common_candidates)][1]
-if (is.na(pgls_common_path)) {
-  stop("Could not locate pgls_common.R. Checked: ", paste(pgls_common_candidates, collapse = ", "))
-}
-source(pgls_common_path)
 
 parse_args <- function(argv) {
   out <- list()
@@ -292,13 +283,20 @@ make_empty_result_row <- function(family_id, trait_col, n_species = 0L, status =
     trait = trait_col,
     n_species = as.integer(n_species),
     R2 = NA_real_,
-    R2adj = NA_real_,
-    sigma = NA_real_,
-    Fstat = NA_real_,
     pval = NA_real_,
     logLik = NA_real_,
-    AIC = NA_real_,
-    BIC = NA_real_,
+    coefficient = NA_real_,
+    standard_error = NA_real_,
+    statistic = NA_real_,
+    degrees_of_freedom = NA_real_,
+    evolutionary_rate = NA_real_,
+    covariance_estimator = "gaussian-REML",
+    evolution_model = "brownian",
+    measurement_error_model = "none",
+    inference_method = "wald",
+    inference_status = "",
+    optimizer_message = "",
+    small_sample_warning = "",
     PCC = NA_real_,
     OLS_slope = NA_real_,
     p.adj.global = NA_real_,
@@ -316,8 +314,39 @@ empty_orthogroup_copy_number_trait_result <- function() {
   out[0, , drop = FALSE]
 }
 
+# Brownian GLS with intercept and REML residual rate preserves the old
+# Rphylopars coefficient/SE test for one complete observation per species.
+# Rphylopars disables phenotype error for those unreplicated inputs.
+fit_nwkit_copy_number_model <- function(model_df, tree) {
+  executable <- Sys.which("nwkit")
+  if (!nzchar(executable)) stop("nwkit regress is required for copy-number PGLS.")
+  work <- tempfile("nwkit-copy-number-")
+  dir.create(work)
+  on.exit(unlink(work, recursive = TRUE), add = TRUE)
+  tree_path <- file.path(work, "tree.nwk")
+  data_path <- file.path(work, "data.tsv")
+  result_path <- file.path(work, "result.tsv")
+  ape::write.tree(tree, file = tree_path)
+  data <- model_df[, c("species", "trait_value", "copy_number"), drop = FALSE]
+  names(data)[[1]] <- "leaf_name"
+  write_tsv_base(data, data_path)
+  command <- c("regress", "--tree", tree_path, "--data", data_path,
+               "--responses", "trait_value", "--predictors", "copy_number",
+               "--evolution-model", "brownian", "--intercept", "yes",
+               "--reml", "yes", "--inference", "wald", "--outfile", result_path)
+  log <- suppressWarnings(system2(executable, shQuote(command), stdout = TRUE, stderr = TRUE))
+  status <- attr(log, "status")
+  if (!is.null(status) && status != 0L) {
+    stop(paste(c("nwkit regress failed:", log), collapse = "\n"))
+  }
+  result <- read_tsv_base(result_path, na = c("NA", ""))
+  result <- result[result$term == "copy_number", , drop = FALSE]
+  if (nrow(result) != 1L) stop("NWKIT must return one copy_number coefficient.")
+  result
+}
+
 fit_one_orthogroup_copy_number_trait <- function(model_df, tree, family_id, trait_col, min_species = 4L,
-                               fit_fun = NULL, verbose = FALSE) {
+                               verbose = FALSE) {
   model_df$trait_value <- suppressWarnings(as.numeric(model_df$trait_value))
   model_df$copy_number <- suppressWarnings(as.numeric(model_df$copy_number))
   model_df <- model_df[
@@ -348,46 +377,31 @@ fit_one_orthogroup_copy_number_trait <- function(model_df, tree, family_id, trai
   pcc <- suppressWarnings(cor(model_df$copy_number, model_df$trait_value, method = "pearson", use = "complete.obs"))
   ols_slope <- suppressWarnings(stats::coef(stats::lm(trait_value ~ copy_number, data = model_df))[["copy_number"]])
 
-  fit_out <- suppressWarnings(fit_phylopars_lm_with_retries(
-    formula_obj = trait_value ~ copy_number,
-    trait_data = model_df[, c("species", "trait_value", "copy_number"), drop = FALSE],
-    tree = tree_use,
-    model = "BM",
-    pheno_error = TRUE,
-    phylo_correlated = TRUE,
-    pheno_correlated = TRUE,
-    phenocov_list = list(),
-    trait_col = "trait_value",
-    expression_col = "copy_number",
-    fit_mode_label = "orthogroup_copy_number",
-    fit_fun = fit_fun,
-    verbose = verbose
-  ))
-
-  if (is.null(fit_out$fit)) {
+  fitted <- tryCatch(fit_nwkit_copy_number_model(model_df, tree_use), error = identity)
+  if (inherits(fitted, "error")) {
     out <- make_empty_result_row(family_id, trait_col, n_species, "error", "fit_failed")
     out$PCC <- safe_as_num(pcc)
     out$OLS_slope <- safe_as_num(ols_slope)
-    out$fit_mode <- fit_out$fit_mode
-    out$error_message <- fit_out$error_message
+    out$fit_mode <- "nwkit_brownian_reml"
+    out$error_message <- conditionMessage(fitted)
     return(out)
   }
-
-  fit <- fit_out$fit
-  out <- make_empty_result_row(family_id, trait_col, n_species, "ok", "")
-  for (stat in c("R2", "R2adj", "sigma", "Fstat", "pval", "logLik")) {
-    out[[stat]] <- safe_as_num(fit[[stat]])
-  }
-  out$AIC <- safe_as_num(tryCatch(AIC(fit), error = function(e) NA_real_))
-  out$BIC <- safe_as_num(tryCatch(BIC(fit), error = function(e) NA_real_))
+  usable <- identical(as.character(fitted$inference_status[[1]]), "ok")
+  out <- make_empty_result_row(family_id, trait_col, n_species,
+                               if (usable) "ok" else "not_estimable",
+                               if (usable) "" else "nwkit_inference_unavailable")
+  for (field in intersect(names(out), names(fitted))) out[[field]] <- fitted[[field]][[1]]
+  out$R2 <- safe_as_num(fitted$r_squared)
+  out$pval <- safe_as_num(fitted$p_value)
+  out$logLik <- safe_as_num(fitted$log_likelihood)
   out$PCC <- safe_as_num(pcc)
   out$OLS_slope <- safe_as_num(ols_slope)
-  out$fit_mode <- fit_out$fit_mode
+  out$fit_mode <- "nwkit_brownian_reml"
   out
 }
 
 run_orthogroup_copy_number_trait_associations <- function(copy_matrix, trait, tree, trait_cols, min_species = 4L,
-                                        p_adjust_method = "BH", fit_fun = NULL, verbose = FALSE) {
+                                        p_adjust_method = "BH", verbose = FALSE) {
   rows <- list()
   idx <- 0L
   for (trait_col in trait_cols) {
@@ -406,7 +420,6 @@ run_orthogroup_copy_number_trait_associations <- function(copy_matrix, trait, tr
         family_id = family_id,
         trait_col = trait_col,
         min_species = min_species,
-        fit_fun = fit_fun,
         verbose = verbose
       )
     }
@@ -415,7 +428,7 @@ run_orthogroup_copy_number_trait_associations <- function(copy_matrix, trait, tr
     return(empty_orthogroup_copy_number_trait_result())
   }
   out <- do.call(rbind, rows)
-  ok <- is.finite(out$pval)
+  ok <- out$status == "ok" & is.finite(out$pval)
   if (any(ok)) {
     out$p.adj.global[ok] <- p.adjust(out$pval[ok], method = p_adjust_method)
     for (trait_col in unique(out$trait)) {
@@ -462,12 +475,33 @@ save_summary_plot <- function(df_stat, outdir, alpha = 0.05, top_n = 50L) {
   ggsave(plot_file_svg, p, width = 7.2, height = height, dpi = 300)
 }
 
+publish_copy_number_results <- function(work, outdir, inputs) {
+  # Use the same NWKIT rollback primitive as the Python workflow adapters.
+  code <- paste(c(
+    "import pathlib, shutil, sys",
+    "from nwkit.file_paths import validate_outputs_do_not_replace_inputs",
+    "from nwkit.output_transaction import output_transaction",
+    "work, target = map(pathlib.Path, sys.argv[1:3])",
+    "sources = sorted(work.iterdir())",
+    "outputs = [target / source.name for source in sources]",
+    "validate_outputs_do_not_replace_inputs([(str(i), p) for i, p in enumerate(sys.argv[3:])], [(str(i), p) for i, p in enumerate(outputs)])",
+    "with output_transaction(outputs, create_parents=True) as staged:",
+    "    for source, output in zip(sources, outputs, strict=True):",
+    "        shutil.copyfile(source, staged[output])"
+  ), collapse = "\n")
+  status <- system2("python", shQuote(c("-c", code, work, outdir, inputs)))
+  if (status != 0L) stop("Could not publish the complete copy-number result bundle.")
+}
+
 run_orthogroup_copy_number_trait_pgls <- function(file_orthogroup_copy_number, file_sptree, file_trait, outdir,
                                 trait_arg = "all", min_species = 4L,
                                 family_ids = "", family_file = "", max_families = "all",
                                 p_adjust_method = "BH", alpha = 0.05, plot_top_n = 50L,
-                                fit_fun = NULL, verbose = FALSE) {
-  dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+                                verbose = FALSE) {
+  if (!nzchar(Sys.which("nwkit"))) stop("nwkit regress is required for copy-number PGLS.")
+  work <- tempfile("nwkit-copy-number-results-")
+  dir.create(work)
+  on.exit(unlink(work, recursive = TRUE), add = TRUE)
   tree <- load_tree_normalized(file_sptree)
   trait <- load_trait_table(file_trait)
   trait_cols <- resolve_trait_cols(trait, trait_arg)
@@ -479,7 +513,7 @@ run_orthogroup_copy_number_trait_pgls <- function(file_orthogroup_copy_number, f
     max_families = max_families
   )
 
-  write_tsv_base(copy_matrix_to_table(copy_matrix), file.path(outdir, "orthogroup_copy_number_matrix.tsv"))
+  write_tsv_base(copy_matrix_to_table(copy_matrix), file.path(work, "orthogroup_copy_number_matrix.tsv"))
 
   df_stat <- run_orthogroup_copy_number_trait_associations(
     copy_matrix = copy_matrix,
@@ -488,13 +522,14 @@ run_orthogroup_copy_number_trait_pgls <- function(file_orthogroup_copy_number, f
     trait_cols = trait_cols,
     min_species = min_species,
     p_adjust_method = p_adjust_method,
-    fit_fun = fit_fun,
     verbose = verbose
   )
-  write_tsv_base(df_stat, file.path(outdir, "orthogroup_copy_number_trait_pgls.tsv"))
+  write_tsv_base(df_stat, file.path(work, "orthogroup_copy_number_trait_pgls.tsv"))
   df_sig <- df_stat[df_stat$status == "ok" & is.finite(df_stat$p.adj.global) & df_stat$p.adj.global < alpha, , drop = FALSE]
-  write_tsv_base(df_sig, file.path(outdir, "orthogroup_copy_number_trait_pgls.significant.tsv"))
-  save_summary_plot(df_stat, outdir = outdir, alpha = alpha, top_n = plot_top_n)
+  write_tsv_base(df_sig, file.path(work, "orthogroup_copy_number_trait_pgls.significant.tsv"))
+  save_summary_plot(df_stat, outdir = work, alpha = alpha, top_n = plot_top_n)
+  publish_copy_number_results(work, outdir, c(file_orthogroup_copy_number, file_sptree, file_trait,
+                                            if (nzchar(family_file)) family_file))
   invisible(list(copy_matrix = copy_matrix, stats = df_stat, significant = df_sig))
 }
 

@@ -1504,8 +1504,7 @@ def run_stat_branch2tree_plot(
     cmd = ["Rscript", os.path.join(dir_myscript, "stat_branch2tree_plot.r")]
     cmd.append("--stat_branch=" + file_stat_branch)
     cmd.append("--max_delta_intron_present=-0.5")
-    cmd.append("--width=7.2")
-    cmd.append("--rel_widths=")
+    cmd.append("--panel_widths_mm=tree:60")
     cmd.extend(
         build_tree_plot_panel_args(
             file_og_rpsblast=file_og_rpsblast,

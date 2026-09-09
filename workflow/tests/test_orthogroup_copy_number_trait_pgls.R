@@ -77,9 +77,9 @@ writeLines(
   c(
     "species\theight\tbinary_trait\tconstant_trait",
     "sp1\t1\t0\t5",
-    "sp2\t2\t0\t5",
-    "sp3\t3\t1\t5",
-    "sp4\t4\t1\t5"
+    "sp2\t3\t0\t5",
+    "sp3\t2\t1\t5",
+    "sp4\t6\t1\t5"
   ),
   trait_file
 )
@@ -100,15 +100,6 @@ trait <- load_trait_table(trait_file)
 stopifnot(identical(resolve_trait_cols(trait, "all"), c("height", "binary_trait", "constant_trait")))
 stopifnot(identical(resolve_trait_cols(trait, "height,binary_trait"), c("height", "binary_trait")))
 
-mock_phylopars <- function(...) {
-  structure(
-    list(R2 = 0.8, R2adj = 0.7, sigma = 0.1, Fstat = 10, pval = 0.01, logLik = -2),
-    class = "mock_copy_number_phylopars"
-  )
-}
-AIC.mock_copy_number_phylopars <- function(object, ...) 12
-BIC.mock_copy_number_phylopars <- function(object, ...) 14
-
 df_stat <- run_orthogroup_copy_number_trait_associations(
   copy_matrix = copy_matrix,
   trait = trait,
@@ -116,16 +107,27 @@ df_stat <- run_orthogroup_copy_number_trait_associations(
   trait_cols = c("height", "constant_trait"),
   min_species = 4,
   p_adjust_method = "BH",
-  fit_fun = mock_phylopars,
   verbose = FALSE
 )
 
 og1_height <- df_stat[df_stat$Orthogroup == "OG1" & df_stat$trait == "height", , drop = FALSE]
 stopifnot(nrow(og1_height) == 1)
 stopifnot(identical(og1_height$status, "ok"))
-stopifnot(isTRUE(all.equal(og1_height$R2, 0.8)))
-stopifnot(isTRUE(all.equal(og1_height$pval, 0.01)))
-stopifnot(isTRUE(all.equal(og1_height$PCC, 1)))
+# Independent GLS calculation using ape's Brownian covariance.
+X <- cbind(1, 1:4)
+y <- c(1, 3, 2, 6)
+V <- ape::vcv.phylo(tree)
+precision <- solve(V)
+beta <- solve(t(X) %*% precision %*% X, t(X) %*% precision %*% y)
+residual <- y - as.vector(X %*% beta)
+rate <- as.numeric(t(residual) %*% precision %*% residual) / (length(y) - ncol(X))
+standard_error <- sqrt(diag(rate * solve(t(X) %*% precision %*% X)))[[2]]
+p_value <- 2 * pt(-abs(beta[[2]] / standard_error), df = length(y) - ncol(X))
+stopifnot(isTRUE(all.equal(og1_height$coefficient, beta[[2]], tolerance = 1e-10)),
+          isTRUE(all.equal(og1_height$standard_error, standard_error, tolerance = 1e-10)),
+          isTRUE(all.equal(og1_height$pval, p_value, tolerance = 1e-10)),
+          identical(og1_height$fit_mode, "nwkit_brownian_reml"),
+          identical(og1_height$covariance_estimator, "gaussian-REML"))
 
 og10_height <- df_stat[df_stat$Orthogroup == "OG10" & df_stat$trait == "height", , drop = FALSE]
 stopifnot(nrow(og10_height) == 1)
@@ -147,7 +149,6 @@ run_orthogroup_copy_number_trait_pgls(
   min_species = 4,
   family_ids = "OG1",
   max_families = "all",
-  fit_fun = mock_phylopars,
   verbose = FALSE
 )
 
@@ -160,5 +161,47 @@ written_stats <- read.delim(file.path(outdir, "orthogroup_copy_number_trait_pgls
 stopifnot(identical(written_stats$Orthogroup, "OG1"))
 stopifnot(identical(written_stats$trait, "height"))
 stopifnot(identical(written_stats$status, "ok"))
+
+# A failed late plot must leave every member of the previous bundle intact.
+output_names <- c("orthogroup_copy_number_matrix.tsv", "orthogroup_copy_number_trait_pgls.tsv",
+                  "orthogroup_copy_number_trait_pgls.significant.tsv",
+                  "orthogroup_copy_number_trait_pgls.summary.pdf", "orthogroup_copy_number_trait_pgls.summary.svg")
+for (name in output_names) writeLines(paste("previous", name), file.path(outdir, name))
+previous <- lapply(file.path(outdir, output_names), readBin, what = "raw", n = 10000)
+original_save_summary_plot <- save_summary_plot
+save_summary_plot <- function(...) stop("injected plot failure")
+failed <- tryCatch(run_orthogroup_copy_number_trait_pgls(
+  file_orthogroup_copy_number = copy_number_file, file_sptree = tree_file,
+  file_trait = trait_file, outdir = outdir, trait_arg = "height", family_ids = "OG1"
+), error = identity)
+save_summary_plot <- original_save_summary_plot
+stopifnot(inherits(failed, "error"), grepl("injected plot failure", conditionMessage(failed)))
+stopifnot(identical(previous, lapply(file.path(outdir, output_names), readBin, what = "raw", n = 10000)))
+
+# Output names must not overwrite a supplied input, even through an alias.
+alias_out <- file.path(tmp, "alias output")
+dir.create(alias_out)
+alias_input <- file.path(alias_out, "orthogroup_copy_number_trait_pgls.tsv")
+file.copy(copy_number_file, alias_input)
+alias_before <- readBin(alias_input, "raw", n = 100000)
+alias_failure <- tryCatch(run_orthogroup_copy_number_trait_pgls(
+  file_orthogroup_copy_number = alias_input, file_sptree = tree_file,
+  file_trait = trait_file, outdir = alias_out, trait_arg = "height", family_ids = "OG1"
+), error = identity)
+stopifnot(inherits(alias_failure, "error"),
+          identical(alias_before, readBin(alias_input, "raw", n = 100000)),
+          length(list.files(alias_out)) == 1L)
+
+# Destination errors must also preserve the other members of the old bundle.
+blocked_name <- file.path(outdir, "orthogroup_copy_number_trait_pgls.summary.svg")
+unlink(blocked_name)
+dir.create(blocked_name)
+blocked_before <- lapply(file.path(outdir, head(output_names, -1)), readBin, what = "raw", n = 10000)
+blocked_failure <- tryCatch(run_orthogroup_copy_number_trait_pgls(
+  file_orthogroup_copy_number = copy_number_file, file_sptree = tree_file,
+  file_trait = trait_file, outdir = outdir, trait_arg = "height", family_ids = "OG1"
+), error = identity)
+stopifnot(inherits(blocked_failure, "error"), dir.exists(blocked_name),
+          identical(blocked_before, lapply(file.path(outdir, head(output_names, -1)), readBin, what = "raw", n = 10000)))
 
 cat("test_orthogroup_copy_number_trait_pgls.R: OK\n")

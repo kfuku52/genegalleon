@@ -116,7 +116,7 @@ csubst_scan_candidate_sites_pdb="${csubst_scan_candidate_sites_pdb:-none}" # non
 
 # Gene-family species-tree presence/absence parameters
 presence_absence_species_tree="${presence_absence_species_tree:-auto}" # Species tree path, or auto to use query2family/species_tree outputs.
-presence_absence_species_tree_ci="${presence_absence_species_tree_ci:-auto}" # Dated species-tree CI path, or auto to use mcmctree_95CI.nwk when available.
+presence_absence_species_tree_ci="${presence_absence_species_tree_ci:-auto}" # Dated species-tree CI path, or auto to use mcmctree_95CI.nhx when available.
 presence_absence_species_tree_support="${presence_absence_species_tree_support:-auto}" # Species tree with numeric branch-support labels, or auto to use species_tree outputs.
 presence_absence_busco_table="${presence_absence_busco_table:-auto}" # BUSCO full-table directory or species summary table for the right-side stacked bars, or auto to use workspace outputs.
 presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}" # Include query files without stat_branch as NA columns.
@@ -133,7 +133,7 @@ hgt_summary_use_taxonomy_db="${hgt_summary_use_taxonomy_db:-1}" # Resolve UniPro
 hgt_summary_contamination_dir="${hgt_summary_contamination_dir:-}" # Optional directory containing species_cds_contamination_removal_tsv files; empty auto-detects the workspace default.
 hgt_summary_taxonomy_flow_rank="${hgt_summary_taxonomy_flow_rank:-phylum}" # Taxonomic rank used to collapse recipient/best-hit lineages in the flow plot.
 hgt_summary_taxonomy_flow_max_categories="${hgt_summary_taxonomy_flow_max_categories:-12}" # Maximum recipient and best-hit categories retained before collapsing to Other.
-hgt_summary_tree_plot_width="${hgt_summary_tree_plot_width:-24}" # Width in inches for HGT-specific tree plot PDFs.
+hgt_summary_tree_width_mm="${hgt_summary_tree_width_mm:-60}" # Minimum tree data-panel width in mm; PDF width is automatic.
 hgt_summary_promoter_bp="${hgt_summary_promoter_bp:-2000}" # Promoter length used when re-rendering FIMO panels in HGT tree plots.
 hgt_summary_fimo_qvalue="${hgt_summary_fimo_qvalue:-0.05}" # FIMO q-value threshold used when re-rendering HGT tree plots.
 hgt_summary_output_dir="${hgt_summary_output_dir:-auto}" # HGT output directory; auto is source-specific.

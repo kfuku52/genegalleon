@@ -106,7 +106,7 @@ IMAGE=ghcr.io/<your-org>/genegalleon TAG=dev MODE=push ./container/buildx.sh
 
 By default, upstream source installs follow the moving branches in
 `container/source_branches.env` (`amalgkit`, `cdskit`, `csubst`, `nwkit`,
-`BUSCO`, `paml`, `kfl1ou`, `kfFractBias`, `kftools`, `rkftools`, `RADTE`). The wrapper resolves
+`BUSCO`, `paml`, `kfl1ou`, `kfFractBias`, `kftools`, `rkftools`). The wrapper resolves
 each branch once, concurrently, at build start so all architectures use one internally
 consistent snapshot, without writing those commits back as repository
 defaults. Downloaded `BioPP/testnh` and `CAFE5` tarballs are still verified by
@@ -240,8 +240,8 @@ Runtime profile highlights in the current container scaffold:
   the matching `NOTUNG_ZIP_SHA256`, and
   `NOTUNG_DOWNLOAD_HOST_IP` can be used to override the fallback IP for the
   official `amberjack.compbio.cs.cmu.edu` host,
-- Git-sourced programs, including `BUSCO`, `paml`, `kfl1ou`, `kftools`,
-  `rkftools`, and `RADTE`, follow their configured moving branches; the
+- Git-sourced programs, including `BUSCO`, `paml`, `kfl1ou`, `kftools`, and
+  `rkftools`, follow their configured moving branches; the
   effective per-build revisions are recorded in
   `/opt/pg/logs/source_revisions.tsv`,
 - GitHub/GitLab source fetches prefer tarball/archive downloads and fall back to `git` retry logic when archive fetches fail,

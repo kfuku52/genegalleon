@@ -355,7 +355,7 @@ def build_arg_parser():
     )
 
     parser.add_argument("--character_gff", metavar="PATH", default="", type=str, help="Path used by --character_gff.")
-    parser.add_argument("--scm_intron", metavar="PATH", default="", type=str, help="Path used by --scm_intron.")
+    parser.add_argument("--asr_intron", metavar="PATH", default="", type=str, help="NWKIT intron ASR summary table.")
     parser.add_argument("--fimo", metavar="PATH", default="", type=str, help="Path used by --fimo.")
     parser.add_argument("--promoter_fasta", metavar="PATH", default="", type=str, help="Path used by --promoter_fasta.")
 
@@ -684,37 +684,57 @@ def _ensure_branch_ids(tree):
     return tree
 
 
-def load_scm_intron_branch_table(scm_intron_path, dated_tree_path):
-    df_out = pandas.read_csv(scm_intron_path, sep="\t", header=0, index_col=None)
-    if "leaf" not in df_out.columns:
-        return df_out
-
-    df_out = df_out.rename(columns={"leaf": "node_name"})
-    if (not dated_tree_path) or (not os.path.exists(dated_tree_path)):
-        return df_out
-
-    dated_tree = new_tree(dated_tree_path, format=1)
-    dated_tree = _ensure_branch_ids(dated_tree)
-    branch_id_by_name = {}
-    for node in dated_tree.traverse():
-        if node.name and (node.name not in branch_id_by_name):
-            branch_id_by_name[node.name] = _get_node_label(node)
-    df_out = df_out.copy()
-    df_out.loc[:, "branch_id"] = df_out["node_name"].map(branch_id_by_name)
-
-    if "branch_id" in df_out.columns:
-        is_unmapped = df_out["branch_id"].isna()
-        if is_unmapped.any():
-            unmapped_names = sorted(df_out.loc[is_unmapped, "node_name"].astype(str).unique())
-            print(
-                "Warning: dropping {} scm_intron row(s) that do not map to dated_tree branch IDs: {}".format(
-                    is_unmapped.sum(),
-                    ", ".join(unmapped_names[:10]),
-                )
-            )
-            df_out = df_out.loc[~is_unmapped].copy()
-            df_out["branch_id"] = df_out["branch_id"].astype(int)
-    return df_out
+def load_asr_intron_branch_table(asr_intron_path, dated_tree_path):
+    """Translate validated NWKIT level-order IDs to GeneGalleon clade-rank IDs."""
+    df = pandas.read_csv(asr_intron_path, sep="\t", dtype={"name": str}, keep_default_na=False)
+    required = {"branch_id", "parent", "node_class", "name", "num_intron", "is_imputed",
+                "p_intron_present", "p_intron_absent"}
+    if not required.issubset(df.columns):
+        raise ValueError("Intron ASR summary is missing columns: " + ", ".join(sorted(required - set(df))))
+    tree = _ensure_branch_ids(new_tree(dated_tree_path, format=1))
+    # NWKIT IDs are traversal indices, not the clade ranks used by stat_branch.
+    nodes = list(tree.traverse(strategy="levelorder"))
+    native_ids = {node: i for i, node in enumerate(nodes)}
+    ids = pandas.to_numeric(df.branch_id, errors="raise")
+    if ids.duplicated().any() or set(ids) != set(range(len(nodes))):
+        raise ValueError("Intron ASR branch IDs do not match the dated tree.")
+    df["branch_id"] = ids.astype(int)
+    parents = pandas.to_numeric(df.parent, errors="raise")
+    for index, row in df.iterrows():
+        node = nodes[row.branch_id]
+        node_class = "root" if node_is_root(node) else "leaf" if node_is_leaf(node) else "intnode"
+        parent = -1 if node_is_root(node) else native_ids[node.up]
+        if row["name"] != (node.name or "") or row.node_class != node_class or parents[index] != parent:
+            raise ValueError(f"Intron ASR node {row.branch_id} does not match the dated tree.")
+    probabilities = df[["p_intron_present", "p_intron_absent"]].apply(pandas.to_numeric, errors="raise")
+    if (not numpy.isfinite(probabilities.to_numpy()).all()
+            or ((probabilities < 0) | (probabilities > 1)).any().any()
+            or not numpy.allclose(probabilities.sum(axis=1), 1, rtol=0, atol=1e-8)):
+        raise ValueError("Invalid intron ASR probabilities.")
+    imputed = df.is_imputed.astype(str).str.lower()
+    if not imputed.isin(["true", "false"]).all():
+        raise ValueError("Intron ASR is_imputed must be boolean.")
+    counts = pandas.to_numeric(df.num_intron.replace({"NA": numpy.nan, "": numpy.nan}), errors="raise")
+    observed_counts = counts.dropna()
+    if (not numpy.isfinite(observed_counts).all()
+            or (observed_counts < 0).any()
+            or (observed_counts != numpy.floor(observed_counts)).any()):
+        raise ValueError("Intron ASR num_intron must be a non-negative integer or missing.")
+    leaves = df.node_class.eq("leaf")
+    measured = counts.notna()
+    if (measured & ~leaves).any() or not imputed.eq("true").equals(leaves & ~measured):
+        raise ValueError("Intron ASR counts and imputation flags disagree with node observations.")
+    if not numpy.allclose(probabilities.loc[measured, "p_intron_present"],
+                          counts[measured].gt(0).astype(float), rtol=0, atol=1e-8):
+        raise ValueError("Intron ASR probabilities disagree with observed counts.")
+    return pandas.DataFrame({
+        "branch_id": df.branch_id.map({i: _get_node_label(node) for i, node in enumerate(nodes)}),
+        "node_name": df["name"],
+        "num_intron": counts,
+        "intron_present": probabilities.p_intron_present,
+        "intron_absent": probabilities.p_intron_absent,
+        "intron_is_imputed": imputed.eq("true"),
+    })
 
 
 def flatten_trait_variable_stats(df, key_prefix):
@@ -732,13 +752,29 @@ def flatten_trait_variable_stats(df, key_prefix):
 
 
 def load_gff_gene_traits(path):
-    traits = pandas.read_csv(path, sep="\t", header=0, index_col=None, usecols=lambda col: col != "num_intron")
+    traits = pandas.read_csv(path, sep="\t", header=0, index_col=None)
     duplicates = sorted(traits.loc[traits["gene_id"].duplicated(keep=False), "gene_id"].astype(str).unique())
     if duplicates:
         raise ValueError("GFF gene traits must be unique before branch join: {}".format(
             ", ".join(duplicates[:20])
         ))
     return traits.rename(columns={"gene_id": "node_name", "feature_size": "intron_feature_size"})
+
+
+def merge_asr_intron_traits(branches, asr):
+    """Keep observed GFF counts while adding validated ASR traits by branch ID."""
+    asr = asr.drop(columns=["node_name"]).rename(columns={"num_intron": "_asr_num_intron"})
+    merged = pandas.merge(branches, asr, on="branch_id", how="outer", validate="one_to_one")
+    if "num_intron" in merged:
+        observed = merged["num_intron"]
+        reconstructed = merged["_asr_num_intron"]
+        conflict = observed.notna() & reconstructed.notna() & observed.ne(reconstructed)
+        if conflict.any():
+            raise ValueError("GFF and ASR observed intron counts disagree")
+        merged["num_intron"] = observed.combine_first(reconstructed)
+    else:
+        merged["num_intron"] = merged["_asr_num_intron"]
+    return merged.drop(columns=["_asr_num_intron"])
 
 
 def main():
@@ -1591,13 +1627,9 @@ def main():
     if all([os.path.exists(params[key]) for key in ["character_gff"]]):
         df_tmp = load_gff_gene_traits(params["character_gff"])
         df_branch = pandas.merge(df_branch, df_tmp, on="node_name", how="left", validate="many_to_one")
-    if all([os.path.exists(params[key]) for key in ["scm_intron"]]):
-        df_tmp = load_scm_intron_branch_table(params["scm_intron"], params["dated_tree"])
-        if "branch_id" in df_tmp.columns:
-            df_tmp = df_tmp.drop(columns=["node_name"], errors="ignore")
-            df_branch = pandas.merge(df_branch, df_tmp, on="branch_id", how="outer")
-        else:
-            df_branch = pandas.merge(df_branch, df_tmp, on="node_name", how="outer")
+    if os.path.exists(params["asr_intron"]):
+        df_tmp = load_asr_intron_branch_table(params["asr_intron"], params["dated_tree"])
+        df_branch = merge_asr_intron_traits(df_branch, df_tmp)
         df_branch = df_branch.drop("intron_absent", axis=1)
         df_branch = kfog.compute_delta(df_branch, "intron_present")
     if os.path.exists(params["cdskit_localize"]):

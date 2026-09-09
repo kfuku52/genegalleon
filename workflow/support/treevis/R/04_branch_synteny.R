@@ -215,6 +215,15 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
         cat('Synteny table is empty. Synteny column will not be added.\n')
         return(g)
     }
+    # Read the cutoff used to generate the table, including resolved auto values.
+    cutoff_label = 'E-value cutoff: unavailable'
+    if ('evalue_cutoff' %in% colnames(df_syn)) {
+        cutoffs = unique(suppressWarnings(as.numeric(df_syn[['evalue_cutoff']])))
+        if (length(cutoffs) != 1L || !is.finite(cutoffs) || cutoffs < 0) {
+            stop('Synteny evalue_cutoff must contain one finite non-negative value.')
+        }
+        cutoff_label = paste0('E-value <= ', format(cutoffs, scientific=TRUE, trim=TRUE, digits=15))
+    }
     required_cols = c('node_name', 'offset', 'group_id')
     if (!all(required_cols %in% colnames(df_syn))) {
         cat('Synteny table lacks required columns (node_name, offset, group_id). Synteny column will not be added.\n')
@@ -383,6 +392,25 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
     }
     node_size = 1.5
 
+    legend_labels = c('Focal gene', 'Other neighbor',
+                      paste0('Same gene family\n(', cutoff_label, ')'), 'Same-group link')
+    legend_display = c('Focal gene', 'Other\nneighbor',
+        paste0('Same gene\nfamily\n(', gsub(' <= ', '\n<= ', cutoff_label, fixed=TRUE), ')'),
+        'Same-group\nlink')
+    df_legend = data.frame(x=NA_real_, y=NA_real_,
+                           role=factor(legend_labels, levels=legend_labels))
+    # A semantic key explains the encodings without listing arbitrary group IDs.
+    synteny_key = function(data, params, size) {
+        if (isTRUE(data$shape == 95)) {
+            data$linewidth = 1.8
+            data$linetype = 1
+            data$alpha = 0.5
+            ggplot2::draw_key_path(data, params, size)
+        } else {
+            ggplot2::draw_key_point(data, params, size)
+        }
+    }
+
     g[[gname]] = ggplot(data=df_point) +
         geom_blank(data=df_tip, aes(y=label)) +
         geom_segment(data=df_tip, mapping=aes(y=y, yend=y), x=1, xend=x_max, linewidth=0.25, color='gray90') +
@@ -395,14 +423,27 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
             labels=x_tick_df[['label']],
             limits=c(0.5, x_max + 0.5)
         ) +
+        geom_point(data=df_legend, mapping=aes(x=x, y=y, shape=.data[['role']]),
+                   inherit.aes=FALSE, show.legend=TRUE, na.rm=TRUE,
+                   key_glyph=synteny_key) +
+        scale_shape_manual(values=c(16, 16, 16, 95), breaks=legend_labels,
+                           labels=legend_display, name=NULL) +
         scale_color_manual(values=point_palette) +
         xlab('Neighboring genes') +
         theme_minimal(base_size=args[['font_size']]) +
         guides(
-            color='none'
+            color='none',
+            shape=guide_legend(ncol=1, title=NULL, override.aes=list(
+                colour=c('black', 'gray90', point_palette[1], point_palette[1]),
+                size=1.5, alpha=1))
         ) +
         coord_cartesian(clip='off') +
         theme(
+            legend.position='bottom',
+            legend.title=element_blank(),
+            legend.text=element_text(size=args[['font_size']]),
+            legend.key.height=unit(0.35, 'cm'),
+            legend.key.width=unit(0.45, 'cm'),
             axis.title.y=element_blank(),
             axis.title.x=element_text(size=args[['font_size']]),
             axis.text.y=element_blank(),

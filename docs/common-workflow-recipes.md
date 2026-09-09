@@ -67,9 +67,11 @@ Wrapper note:
 If `input_generation_mode` is unclear, treat it as follows:
 
 - `single`: the normal mode; one run does everything.
-- `array_prepare`: generate `task_plan.json` before launching array workers.
+- `array_prepare`: download reference files together and freeze local tasks in `task_plan.json` before launching array workers.
 - `array_worker`: one scheduler task handles one species indexed by `GG_ARRAY_TASK_ID`.
 - `array_finalize`: merge worker outputs and run shared checks and summaries once.
+
+See [species array submission, restart, and shared download limits](input-generation-arrays.md).
 
 Typical array sequence:
 
@@ -235,15 +237,15 @@ GG_GENE_EVOLUTION_RUN_GENERATE_EXPRESSION_MATRIX=1 \
 GG_GENE_EVOLUTION_RUN_TREE_PRUNING=1 \
 GG_GENE_EVOLUTION_RUN_TREE_DATING=1 \
 GG_GENE_EVOLUTION_RUN_EXPRESSION_TRAIT_PGLS=1 \
-GG_GENE_EVOLUTION_PGLS_METHODS=rsc,species-nwkit,species-rphylopars \
+GG_GENE_EVOLUTION_PGLS_METHODS=rsc,species-nwkit \
 bash gg_gene_evolution_entrypoint.sh
 ```
 
-`pgls_methods` accepts `rsc`, `species-nwkit`, `species-rphylopars`, any
+`pgls_methods` accepts `rsc`, `species-nwkit`, any
 comma-separated subset, or `all`. `rsc` is the default. All selected methods
 use one prepared input and the same direction, `expression ~ species trait`.
 The estimands nevertheless differ: RSC models reconciled gene-lineage changes,
-whereas both species-tree methods model one expression value per species after
+whereas species-tree PGLS models one expression value per species after
 within-biological-sample paralog aggregation. They are complementary analyses,
 not interchangeable likelihood implementations.
 
@@ -276,7 +278,7 @@ family to occur in every species of the global tree.
 
 Known-SE analyses can also set `species_paralog_sampling_covariance` to a TSV
 of `response`, `gene_name_1`, `gene_name_2`, and `sampling_covariance` (plus
-optional `tree_id`). NWKIT and Rphylopars then receive the correctly propagated
+optional `tree_id`). NWKIT then receives the correctly propagated
 species-level diagonal uncertainty for `sum` and `mean`; invalid non-positive-
 semidefinite combinations are rejected. Raw paired replicates need no such
 file because cross-paralog co-variation is preserved in the per-sample
@@ -306,31 +308,16 @@ Set `rsc_allow_large_dense=yes` only when the normal sparse/structured route is
 unavailable and the host has enough memory; this asks NWKIT to attempt the
 allocation rather than guaranteeing that it will fit.
 
-The RSC result is under `rsc_regression/`, and the species comparators are under
-`pgls_species_nwkit/` and `pgls_species_rphylopars/`. The long-form
+The RSC result is under `rsc_regression/`, and species-tree PGLS is under
+`pgls_species_nwkit/`. The long-form
 `pgls_comparison/` table places their coefficient rows together while retaining
 the method and aggregation. It explicitly labels species-tip estimates as not
 directly comparable to the RSC event-level estimand. `pgls_method_status/` and
 `pgls_method_audit/` report requested, non-estimable, and successful methods
 without silently changing models.
 
-Rphylopars receives the same species means and available diagonal sampling
-variances as NWKIT. It does not support categorical predictors in this
-comparator, separate response/predictor evolutionary transformations, or full
-cross-species sampling covariance. Such fits are recorded as `not_estimable`;
-`rphylopars_sampling_covariance=diagonalize` is an explicit opt-in to discard
-off-diagonal sampling covariance. Rphylopars 0.3.10 also fails on a singular
-`phenocov_list`, so a comparison that mixes positive sampling variances with
-exact zero-variance trait/species values is reported as `not_estimable` instead
-of applying an artificial variance floor. Coefficients can then be compared, but
-log-likelihood, AIC, BIC, optimizer reporting, and parameter counting remain
-engine-specific. The adapter implements Wald inference only. If
-`rsc_inference=parametric-bootstrap` is requested, the Rphylopars comparator is
-reported as `not_estimable`; it is never relabeled as a successful bootstrap
-or silently replaced by Wald inference.
-
-The unified stage records the resolved NWKIT revision (and the Rphylopars
-package version when requested) in its artifact manifest. Updating a moving
+The unified stage records the resolved NWKIT revision in its artifact manifest.
+Updating a moving
 upstream branch therefore invalidates cached RSC/species-comparator outputs
 without pinning that branch in GeneGalleon configuration.
 
@@ -562,8 +549,8 @@ Inferno circle per glyph shows Gene tree UFBoot; reference-self and unavailable
 UFBoot glyphs have no circle.
 
 If the selected species tree is dated and
-`workspace/output/species_tree/mcmctree_main/mcmctree_95CI.nwk` exists, the
-figure adds node-age 95% HPD bars. Numeric branch-support labels are
+`workspace/output/species_tree/mcmctree_main/mcmctree_95CI.nhx` exists, the
+figure adds supplied 95% node-age interval bars. Numeric branch-support labels are
 transferred from available species-tree support files when their splits match
 the plotted tree. When BUSCO full tables or a BUSCO summary table are
 available, the figure also adds right-side per-species BUSCO stacked bars;

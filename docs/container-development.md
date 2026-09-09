@@ -21,7 +21,7 @@ flowchart LR
 The source stages start from the same dependency environment. Each stage
 declares only its own revision arguments; none inherits another moving source
 stage. Seven Python wheels, two installed R packages, the PAML `mcmctree`
-binary, and the RADTE script are mounted read-only during assembly. Their
+binary are mounted read-only during assembly. Their
 archives and source checkouts never become distribution-image layers.
 The final image copies `/opt/conda` once, not once per upstream tool.
 

@@ -1,5 +1,7 @@
 \name{treevis-api}
 \alias{treevis-api}
+\alias{treevis_layout_mm}
+\alias{add_gene_structure_column}
 \alias{abbreviate_clade_labels}
 \alias{add_alignment_column}
 \alias{add_amino_acid_site_column}
@@ -22,9 +24,14 @@
 \alias{add_protein_domain_column}
 \alias{add_scale_bar}
 \alias{add_signal_peptide_column}
+\alias{add_peroxisome_column}
+\alias{add_localization_column}
 \alias{add_site_state_column}
 \alias{add_symbol_site_column}
 \alias{add_synteny_column}
+\alias{add_synteny_similarity_column}
+\alias{add_sequence_similarity_column}
+\alias{add_cis_similarity_column}
 \alias{add_text_column}
 \alias{add_tiplabel_column}
 \alias{add_tree_column}

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import builtins
 import math
 import tracemalloc
 
@@ -11,7 +10,6 @@ from scipy import sparse
 
 from workflow.support.species_tree_pgls import (
     _aggregate_values,
-    _covariance_diagonal_and_offdiagonal,
     _native_status,
     _parse_aggregations,
     _parse_methods,
@@ -22,7 +20,7 @@ from workflow.support.species_tree_pgls import (
 
 
 def test_method_and_aggregation_selection_are_explicit():
-    assert _parse_methods("all") == ["rsc", "species-nwkit", "species-rphylopars"]
+    assert _parse_methods("all") == ["rsc", "species-nwkit"]
     assert _parse_methods("species-nwkit,rsc") == ["species-nwkit", "rsc"]
     assert _parse_aggregations("all") == ["sum", "mean", "max"]
     with pytest.raises(ValueError, match="Unknown PGLS"):
@@ -119,47 +117,10 @@ def test_max_aggregation_tie_uses_order_invariant_conservative_standard_error():
     assert reverse == pytest.approx(forward)
 
 
-def test_sparse_sampling_covariance_is_inspected_without_nwkit_or_dense_conversion(monkeypatch):
-    original_import = builtins.__import__
-
-    def reject_nwkit_import(name, *args, **kwargs):
-        if name == "nwkit" or name.startswith("nwkit."):
-            raise ModuleNotFoundError("No module named 'nwkit'")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", reject_nwkit_import)
-    covariance = sparse.csr_matrix([[1.0, 0.0, 0.2], [0.0, 2.0, 0.0], [0.2, 0.0, 3.0]])
-    diagonal, has_offdiagonal = _covariance_diagonal_and_offdiagonal(covariance, ["A", "B", "C"])
-    assert diagonal.tolist() == [1.0, 2.0, 3.0]
-    assert has_offdiagonal is True
 
 
-def test_low_rank_covariance_inspection_has_bounded_memory_at_5000_tips():
-    DiagonalLowRankCovariance = pytest.importorskip("nwkit.gaussian").DiagonalLowRankCovariance
-    covariance = DiagonalLowRankCovariance(
-        diagonal=numpy.ones(5_000),
-        low_rank=numpy.zeros((5_000, 2)),
-    )
-    tracemalloc.start()
-    diagonal, has_offdiagonal = _covariance_diagonal_and_offdiagonal(
-        covariance, [f"S{index}" for index in range(5_000)]
-    )
-    _current, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    numpy.testing.assert_allclose(diagonal, numpy.ones(5_000))
-    assert has_offdiagonal is False
-    assert peak < 64 * 1024**2
 
 
-def test_sparse_low_rank_covariance_factor_stays_sparse_and_detects_offdiagonal():
-    DiagonalLowRankCovariance = pytest.importorskip("nwkit.gaussian").DiagonalLowRankCovariance
-    covariance = DiagonalLowRankCovariance(
-        diagonal=numpy.asarray([0.5, 0.5, 0.5]),
-        low_rank=sparse.csr_matrix([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]),
-    )
-    diagonal, has_offdiagonal = _covariance_diagonal_and_offdiagonal(covariance, ["A", "B", "C"])
-    numpy.testing.assert_allclose(diagonal, [1.5, 1.5, 1.5])
-    assert has_offdiagonal is True
 
 
 def test_family_species_pruning_preserves_induced_pairwise_branch_length(tmp_path):
@@ -370,34 +331,17 @@ def test_species_comparison_summary_is_bounded_and_method_specific(tmp_path):
                 "evolution_model": "brownian",
                 "n_species": 20,
             },
-            {
-                "analysis_method": "species_rphylopars",
-                "aggregation": "sum",
-                "analysis_id": "p001_size",
-                "response": "expression",
-                "term": "size",
-                "coefficient": 2.1,
-                "standard_error": 0.25,
-                "p_value": 0.02,
-                "inference_status": "ok",
-                "evolution_model": "brownian",
-                "n_species": 20,
-                "coefficient_difference_vs_species_nwkit": 0.1,
-            },
         ]
     ).to_csv(comparison, sep="\t", index=False)
     pandas.DataFrame(
         [
             {"analysis_method": "species_nwkit", "status": "ok"},
-            {"analysis_method": "species_rphylopars", "status": "ok"},
         ]
     ).to_csv(status, sep="\t", index=False)
 
     summary = summarize_for_stat_tree(comparison, status)
     assert summary["pgls_species_nwkit_num_ok"] == 1
     assert summary["pgls_species_nwkit_best_term"] == "size"
-    assert summary["pgls_species_rphylopars_best_coefficient"] == pytest.approx(2.1)
-    assert summary["pgls_nwkit_rphylopars_max_abs_coefficient_difference"] == pytest.approx(0.1)
 
 
 def test_species_summary_adjusts_across_all_method_associations(tmp_path):

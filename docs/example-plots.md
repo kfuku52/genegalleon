@@ -23,6 +23,24 @@ rendered from the bundled quick-start `AHA` query2family test output.
 
 ![Query2family tree plot example](assets/example-plots/query2family-tree-plot.png)
 
+## Neighboring genes legend
+
+This synthetic three-tip example shows focal genes (black), other recorded
+neighbors (gray), shared similarity groups (colors), and same-group links.
+The bottom legend has no title; its `Same gene family` entry includes the
+search cutoff, here `E-value <= 1e-10`.
+
+![Neighboring genes with graphical legend](assets/example-plots/neighboring-genes-legend.png)
+
+Regenerate it in a GeneGalleon runtime containing the current treevis package:
+
+```bash
+Rscript workflow/tests/test_treevis_synteny.R output/examples/synteny-legend
+```
+
+This also exercises the workflow's `stat_branch2tree_plot.r` driver and writes
+its PDF alongside the compact PNG/PDF example and input TSVs.
+
 ## Gene-family presence/absence summary
 
 `gg_gene_summary_entrypoint.sh` can summarize query2family or orthogroup output

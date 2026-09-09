@@ -167,6 +167,8 @@ fi
 
 input_generation_root="${gg_workspace_output_dir}/input_generation"
 input_generation_tmp_root="${input_generation_root}/tmp"
+# Shared across arrays and preserved when task scratch directories are cleaned.
+export download_limit_dir="${download_limit_dir:-${gg_workspace_dir}/.gg_cache/input_download_limits}"
 input_generation_provenance_dir="${input_generation_root}/artifact_provenance"
 download_tmp_root=$(gg_task_tmp_path "${input_generation_tmp_root}") || exit 1
 ensure_dir "${download_tmp_root}"
@@ -285,7 +287,7 @@ for path in sorted(manifest_dir.iterdir()):
 PY
 }
 
-if [[ -z "${download_manifest}" ]]; then
+if [[ -z "${download_manifest}" && "${input_generation_mode}" != array_worker && "${input_generation_mode}" != array_finalize ]]; then
   default_download_manifests=()
   while IFS= read -r discovered_manifest; do
     [[ -n "${discovered_manifest}" ]] || continue
@@ -588,7 +590,7 @@ ensure_shared_busco_lineage_ready() {
 }
 
 write_gg_input_generation_summary_on_exit() {
-  local exit_code=$?
+  local exit_code=${1:-$?}
   local run_ended_iso
   local run_duration_sec
   local header
@@ -684,7 +686,46 @@ write_gg_input_generation_summary_on_exit() {
   printf '%b\n' "${row}" >> "${summary_output}"
 }
 
-trap write_gg_input_generation_summary_on_exit EXIT
+array_lock_paths=()
+array_lock_tokens=()
+array_lock_modes=()
+
+input_generation_lock() {
+  local path=$1 mode=$2 token
+  local -a contention_args=(--nonblocking)
+  # Shared readers briefly serialize while registering their ownership. Retry
+  # that gate contention instead of rejecting a compatible parallel worker.
+  if [[ ${mode} == shared ]]; then
+    contention_args=(--timeout 30)
+  fi
+  token=$(python "${gg_support_dir}/shared_namespace_lock.py" "acquire-${mode}" "${path}" --owner-pid "$$" "${contention_args[@]}") || {
+    echo "Input-generation location is already in use: ${path}" >&2
+    return 1
+  }
+  array_lock_paths+=("${path}")
+  array_lock_tokens+=("${token}")
+  array_lock_modes+=("${mode}")
+}
+
+input_generation_on_exit() {
+  local status=$? index interrupted=0
+  trap - EXIT
+  (( status < 128 )) || interrupted=1
+  write_gg_input_generation_summary_on_exit "${status}" || status=1
+  if [[ ${interrupted} -eq 1 ]]; then
+    echo "Interrupted input generation: retaining namespace locks until the job and its children are reconciled." >&2
+    exit "${status}"
+  fi
+  for ((index=${#array_lock_paths[@]}-1; index>=0; index--)); do
+    python "${gg_support_dir}/shared_namespace_lock.py" "release-${array_lock_modes[index]}" \
+      "${array_lock_paths[index]}" --token "${array_lock_tokens[index]}" || status=1
+  done
+  exit "${status}"
+}
+trap input_generation_on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 prepare_input_generation_tmp_dirs() {
   ensure_dir "${input_generation_tmp_root}"
@@ -1600,7 +1641,10 @@ run_trait_stage() {
   stage_trait_status="running"
 
   trait_manifest_path="${download_manifest}"
-  if [[ -z "${trait_manifest_path}" ]]; then
+  if [[ "${input_generation_mode}" == array_finalize ]]; then
+    trait_manifest_path="${task_plan_output}.manifest.tsv"
+    python "${gg_support_dir}/input_generation_array_state.py" export-manifest --task-plan "${task_plan_output}" --outfile "${trait_manifest_path}"
+  elif [[ -z "${trait_manifest_path}" ]]; then
     trait_manifest_default="${gg_workspace_input_dir}/input_generation/download_plan.xlsx"
     if [[ -s "${trait_manifest_default}" ]]; then
       trait_manifest_path="${trait_manifest_default}"
@@ -1716,8 +1760,8 @@ run_array_prepare_mode() {
   local expected_tasks=0
 
   write_run_summary_on_exit=0
+  rm -f -- "${task_plan_output}.prepared.json"
   prepare_input_generation_tmp_dirs
-  clean_input_generation_shards
 
   gg_step_start "${task}"
   stage_format_status="running"
@@ -1727,41 +1771,6 @@ run_array_prepare_mode() {
     exit 1
   fi
 
-  if [[ -n "${download_manifest}" ]]; then
-    cmd=(python "${gg_support_dir}/format_species_inputs.py")
-    cmd+=(--provider "${provider}")
-    cmd+=(--download-manifest "${download_manifest}")
-    cmd+=(--download-dir "${download_dir}")
-    cmd+=(--resolved-manifest-output "${resolved_manifest_output}")
-    cmd+=(--download-only)
-    cmd+=(--download-timeout "${download_timeout}")
-    cmd+=(--jobs "${GG_TASK_CPUS:-1}")
-    cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
-    cmd+=(--gff-repair-mode "${gff_repair_mode}")
-    if [[ ${overwrite} -eq 1 ]]; then
-      cmd+=(--overwrite)
-    fi
-    if [[ ${strict} -eq 1 ]]; then
-      cmd+=(--strict)
-    fi
-    if [[ -n "${auth_bearer_token_env}" ]]; then
-      cmd+=(--auth-bearer-token-env "${auth_bearer_token_env}")
-    fi
-    if [[ -n "${http_header}" ]]; then
-      cmd+=(--http-header "${http_header}")
-    fi
-    echo "Running: ${cmd[*]}"
-    if "${cmd[@]}"; then
-      cmd_status=0
-    else
-      cmd_status=$?
-    fi
-    if [[ ${cmd_status} -ne 0 ]]; then
-      stage_format_status="failed"
-      echo "Failed: download-manifest prepare stage (exit=${cmd_status})"
-      exit "${cmd_status}"
-    fi
-  fi
 
   effective_input_dir=$(input_generation_effective_input_dir_path)
   if [[ -z "${effective_input_dir}" ]]; then
@@ -1774,6 +1783,9 @@ run_array_prepare_mode() {
   cmd+=(--provider "${provider}")
   cmd+=(--input-dir "${effective_input_dir}")
   cmd+=(--outfile "${task_plan_output}")
+  if [[ -n "${download_manifest}" ]]; then
+    cmd+=(--download-manifest "${download_manifest}" --download-dir "${download_dir}" --stage-downloads)
+  fi
   cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
   cmd+=(--gff-repair-mode "${gff_repair_mode}")
   if [[ ${strict} -eq 1 ]]; then
@@ -1791,6 +1803,14 @@ run_array_prepare_mode() {
     exit "${cmd_status}"
   fi
 
+  python "${gg_support_dir}/input_generation_array_state.py" claim-workspace --task-plan "${task_plan_output}" --workspace "${input_generation_root}" "${array_output_args[@]}" --prepare
+  if [[ -n "${download_manifest}" ]]; then
+    cmd=(python "${gg_support_dir}/stage_input_generation_downloads.py" --task-plan "${task_plan_output}"
+      --jobs "${GG_TASK_CPUS:-1}" --download-timeout "${download_timeout}")
+    [[ -z "${auth_bearer_token_env}" ]] || cmd+=(--auth-bearer-token-env "${auth_bearer_token_env}")
+    [[ -z "${http_header}" ]] || cmd+=(--http-header "${http_header}")
+    "${cmd[@]}"
+  fi
   expected_tasks=$(task_plan_task_count "${task_plan_output}")
   num_species_cds="${expected_tasks}"
   num_species_gff="${expected_tasks}"
@@ -1799,7 +1819,20 @@ run_array_prepare_mode() {
   if [[ ${run_species_busco} -eq 1 ]]; then
     ensure_parent_dir "${file_busco_lineage_resolved}"
     resolve_busco_lineage_from_task_plan "${task_plan_output}"
+    ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}" >/dev/null || exit 1
   fi
+  if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+    echo "Warning: Failed to prepare ETE taxonomy DB before array workers." >&2
+  fi
+  local prepared_cmd=(python "${gg_support_dir}/input_generation_array_state.py" prepared --task-plan "${task_plan_output}")
+  if [[ -n "${download_manifest}" ]]; then
+    local staged_file
+    for staged_file in "${task_plan_output}.tasks/"*.json "${task_plan_output}.tasks/"*.resolved.tsv; do
+      prepared_cmd+=(--file "${staged_file}")
+    done
+  fi
+  [[ ${run_species_busco} -ne 1 ]] || prepared_cmd+=(--file "${file_busco_lineage_resolved}")
+  "${prepared_cmd[@]}"
   stage_format_status="ok"
 }
 
@@ -1831,11 +1864,17 @@ run_array_worker_mode() {
     echo "Task plan not found for array worker: ${task_plan_output}"
     exit 1
   fi
-  if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then
+  if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]]; then
     echo "Invalid GG_ARRAY_TASK_ID value (must be a positive integer): ${GG_ARRAY_TASK_ID}"
     exit 1
   fi
 
+  GG_ARRAY_TASK_ID=$(python "${gg_support_dir}/input_generation_array_state.py" index --task-plan "${task_plan_output}" --task-index "${GG_ARRAY_TASK_ID}")
+
+  # Namespace ownership prevents duplicate/requeued tasks from sharing outputs.
+  ensure_dir "${task_plan_output}.locks"
+  input_generation_lock "${task_plan_output}.locks/${GG_ARRAY_TASK_ID}.lock" exclusive
+  python "${gg_support_dir}/input_generation_array_state.py" invalidate --task-plan "${task_plan_output}" --task-index "${GG_ARRAY_TASK_ID}"
   gg_step_start "${task}"
   stage_format_status="running"
   task_stats_file="${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.json"
@@ -1850,7 +1889,9 @@ run_array_worker_mode() {
   describe_cmd+=(--species-gff-dir "${species_gff_dir}")
   describe_cmd+=(--species-genome-dir "${species_genome_dir}")
   describe_cmd+=(--task-meta-output "${task_meta_file}")
-  describe_cmd+=(--describe-only)
+  describe_cmd+=(--describe-only --download-timeout "${download_timeout}")
+  [[ -z "${http_header}" ]] || describe_cmd+=(--http-header "${http_header}")
+  [[ -z "${auth_bearer_token_env}" ]] || describe_cmd+=(--auth-bearer-token-env "${auth_bearer_token_env}")
   if ! "${describe_cmd[@]}"; then
     stage_format_status="failed"
     echo "Failed to describe input-generation array task ${GG_ARRAY_TASK_ID}."
@@ -1946,9 +1987,36 @@ run_array_worker_mode() {
   run_species_busco_stage_one_worker
   stage_multispecies_summary_status="skipped"
   stage_trait_status="skipped"
+  local receipt_cmd=(python "${gg_support_dir}/input_generation_array_state.py" complete
+    --task-plan "${task_plan_output}" --task-index "${GG_ARRAY_TASK_ID}"
+    --file "${task_plan_output}.settings.json" --file "${task_stats_file}" --file "${task_summary_file}" --file "${task_meta_file}"
+    --file "${cds_output_path}" --file "${gff_output_path}")
+  local raw_input_path
+  for raw_input_path in "${cds_input_path}" "${gff_input_path}" "${gbff_input_path}" "${genome_input_path}"; do
+    [[ -z "${raw_input_path}" ]] || receipt_cmd+=(--file "${raw_input_path}")
+  done
+  if [[ -s "${task_plan_output}.tasks/${GG_ARRAY_TASK_ID}.resolved.tsv" ]]; then
+    receipt_cmd+=(--file "${task_plan_output}.tasks/${GG_ARRAY_TASK_ID}.resolved.tsv" --file "${task_plan_output}.tasks/${GG_ARRAY_TASK_ID}.json")
+  fi
+  [[ -z "${genome_output_path}" ]] || receipt_cmd+=(--file "${genome_output_path}")
+  if [[ ${run_cds_fx2tab} -eq 1 ]]; then
+    receipt_cmd+=(--file "${species_cds_fx2tab_dir}/${species_prefix}_fx2tab_cds.tsv")
+  fi
+  if [[ ${run_species_busco} -eq 1 ]]; then
+    receipt_cmd+=(--file "${species_busco_full_dir}/${species_prefix}.busco.full.tsv"
+      --file "${species_busco_short_dir}/${species_prefix}.busco.short.txt")
+  fi
+  "${receipt_cmd[@]}"
 }
 
 run_array_finalize_mode() {
+  local canonical_summary_output="${species_summary_output}"
+  local species_summary_output=""
+  local staged_resolved_manifest=""
+  ensure_parent_dir "${canonical_summary_output}"
+  ensure_parent_dir "${resolved_manifest_output}"
+  species_summary_output=$(mktemp "${canonical_summary_output}.array.XXXXXX")
+  staged_resolved_manifest=$(mktemp "${resolved_manifest_output}.array.XXXXXX")
   local task="Finalize input-generation array outputs"
   local merge_stats_file="${input_generation_tmp_root}/merged_task_stats.json"
   local expected_tasks=0
@@ -1975,7 +2043,8 @@ run_array_finalize_mode() {
   cmd+=(--species-summary-output "${species_summary_output}")
   cmd+=(--task-stats-dir "${dir_task_stats_shards}")
   cmd+=(--aggregate-stats-output "${merge_stats_file}")
-  cmd+=(--expected-task-count "${expected_tasks}")
+  cmd+=(--expected-task-count "${expected_tasks}" --task-plan "${task_plan_output}")
+  cmd+=(--resolved-manifest-output "${staged_resolved_manifest}")
   echo "Running: ${cmd[*]}"
   if "${cmd[@]}"; then
     cmd_status=0
@@ -2037,10 +2106,61 @@ run_array_finalize_mode() {
   else
     stage_species_busco_status="skipped"
   fi
+  # Optional shared stages must also succeed before publishing canonical tables.
   run_trait_stage
   run_multispecies_summary_stage
-  cleanup_input_generation_tmp=1
+  mv -- "${species_summary_output}" "${canonical_summary_output}"
+  species_summary_output="${canonical_summary_output}"
+  if [[ -s "${staged_resolved_manifest}" ]]; then
+    mv -- "${staged_resolved_manifest}" "${resolved_manifest_output}"
+  else
+    rm -f -- "${staged_resolved_manifest}"
+  fi
+  # Preserve the immutable plan and completion receipts for audit/retry.
+  cleanup_input_generation_tmp=0
 }
+
+# Serialize shared stages against active species workers in this output workspace.
+ensure_dir "${input_generation_root}"
+array_lock_mode=exclusive
+if [[ "${input_generation_mode}" == array_worker ]]; then
+  array_lock_mode=shared
+fi
+input_generation_lock "${input_generation_root}/.array-phase.lock" "${array_lock_mode}"
+
+# Custom output directories can be shared across workspace paths. Lock their
+# canonical locations as well, and bind array outputs to one plan at prepare.
+array_output_args=(--file "${species_cds_dir}" --file "${species_gff_dir}" --file "${species_genome_dir}")
+[[ ${run_cds_fx2tab} -ne 1 ]] || array_output_args+=(--file "${species_cds_fx2tab_dir}")
+[[ ${run_species_busco} -ne 1 ]] || array_output_args+=(--file "${species_busco_full_dir}" --file "${species_busco_short_dir}")
+array_output_locks=$(python "${gg_support_dir}/input_generation_array_state.py" output-lock-paths --task-plan "${task_plan_output}" "${array_output_args[@]}")
+while IFS= read -r array_output_lock; do
+  input_generation_lock "${array_output_lock}" "${array_lock_mode}"
+done <<< "${array_output_locks}"
+
+if [[ "${input_generation_mode}" == array_* ]]; then
+  array_settings_cmd=(python "${gg_support_dir}/input_generation_array_state.py" configure --task-plan "${task_plan_output}")
+  for array_setting in provider download_limit_dir gene_grouping_mode gff_repair_mode strict busco_lineage \
+    run_validate_inputs run_cds_fx2tab run_species_busco run_generate_species_trait run_multispecies_summary \
+    species_cds_dir species_gff_dir species_genome_dir species_cds_fx2tab_dir species_busco_full_dir species_busco_short_dir \
+    species_summary_output resolved_manifest_output species_trait_output file_multispecies_summary \
+    trait_profile trait_species_source trait_databases trait_plan trait_database_sources trait_download_dir trait_download_timeout \
+    gbif_api gbif_page_size gbif_max_occurrences_per_species gbif_grid_degrees gbif_min_match_confidence \
+    gbif_max_coordinate_uncertainty_m gbif_max_distance_from_centroid_m; do
+    array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
+  done
+  if [[ ${run_generate_species_trait} -eq 1 ]]; then
+    array_settings_cmd+=(--file "${trait_plan}" --file "${trait_database_sources}")
+  fi
+  [[ "${input_generation_mode}" != array_prepare ]] || array_settings_cmd+=(--prepare)
+  "${array_settings_cmd[@]}"
+  if [[ "${input_generation_mode}" != array_prepare ]]; then
+    python "${gg_support_dir}/input_generation_array_state.py" check-prepared --task-plan "${task_plan_output}" || {
+      echo "Array prepare did not complete for this plan and settings. Run array_prepare first."; exit 1;
+    }
+    python "${gg_support_dir}/input_generation_array_state.py" claim-workspace --task-plan "${task_plan_output}" --workspace "${input_generation_root}" "${array_output_args[@]}"
+  fi
+fi
 
 case "${input_generation_mode}" in
   single)

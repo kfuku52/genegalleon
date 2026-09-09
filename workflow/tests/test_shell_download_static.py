@@ -71,8 +71,8 @@ def test_nonconda_download_helpers_use_archive_files_and_wget_fallback():
     cafe_body = _function_body(text, "install_cafe5")
     assert 'archive_path="${workdir}/CAFE5-5.1.0.tar.gz"' in cafe_body
     assert "if ! download_checked_url_to_file \\" in cafe_body
-    assert 'install_r_cran_packages "${r_env_name}" Rphylopars Rtsne' in text
-    assert "pkgs <- c('Rphylopars','Rtsne'" in text
+    assert 'install_r_cran_packages "${r_env_name}" Rtsne' in text
+    assert "pkgs <- c('Rtsne'" in text
     assert 'if ! tar -xzf "${archive_path}" -C "${workdir}"; then' in cafe_body
 
 

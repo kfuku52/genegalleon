@@ -304,7 +304,7 @@ def generate_query2family_presence_absence() -> None:
             f"--out_pdf={out_dir / 'query2family_presence_absence.pdf'}",
             f"--out_svg={ASSET_DIR / 'query2family-presence-absence.svg'}",
             "--value=presence",
-            "--width=7.2",
+            "--panel_widths_mm=tree:60",
         ]
     )
     convert_pdf_first_page_to_png(

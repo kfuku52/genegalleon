@@ -6,4 +6,4 @@ Description: Tree visualization helpers for GeneGalleon workflows.
 Depends: R (>= 4.4.0)
 License: BSD_3_clause + file LICENSE
 Encoding: UTF-8
-Imports: ape, colorspace, ggplot2, ggrepel, ggtree, grDevices, grid, RColorBrewer, rkftools, scales, stats, utils, viridis, rlang
+Imports: ape, colorspace, cowplot, ggplot2, ggrepel, ggtree, grDevices, grid, RColorBrewer, rkftools, scales, stats, utils, viridis, rlang

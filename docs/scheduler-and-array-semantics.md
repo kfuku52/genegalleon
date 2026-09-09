@@ -88,9 +88,11 @@ These wrappers are intended to run as one task:
 `gg_input_generation_entrypoint.sh` is not fixed single-task only. It has staged modes controlled by `input_generation_mode`:
 
 - `single`: run the whole wrapper in one process
-- `array_prepare`: create `workspace/output/input_generation/tmp/task_plan.json`
-- `array_worker`: run one task-plan row per scheduler array index
+- `array_prepare`: download references with database-specific parallel limits, freeze local inputs, and create `workspace/output/input_generation/tmp/task_plan.json`
+- `array_worker`: compute one staged local task-plan row per scheduler array index
 - `array_finalize`: merge worker shards and run shared validation and summary steps
+
+See [species array submission, restart, and shared download limits](input-generation-arrays.md).
 
 ## Array-size rules
 

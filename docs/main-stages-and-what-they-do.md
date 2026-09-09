@@ -61,8 +61,8 @@ Wrapper-specific notes:
 `input_generation_mode` semantics:
 
 - `single`: one process runs formatting, validation, per-species BUSCO, optional trait generation, and the final multi-species BUSCO summary.
-- `array_prepare`: prepares downloads if needed, discovers species tasks, and writes `workspace/output/input_generation/tmp/task_plan.json`; this is the setup step before scheduler array workers run.
-- `array_worker`: each array task reads one row from `task_plan.json` using `GG_ARRAY_TASK_ID`, formats one species, and optionally runs BUSCO for that species; outputs are written as shard files under `workspace/output/input_generation/tmp/`.
+- `array_prepare`: freezes manifest rows, downloads references together with database-specific parallel limits, hashes local inputs, and prepares shared taxonomy/BUSCO data. It writes `workspace/output/input_generation/tmp/task_plan.json` and staged task receipts before scheduler array workers run. Local input directories skip the reference download step.
+- `array_worker`: each array task reads one row from `task_plan.json` using `GG_ARRAY_TASK_ID`, formats the staged local inputs, and optionally runs BUSCO for that species; outputs are written as shard files under `workspace/output/input_generation/tmp/`.
 - `array_finalize`: a single follow-up run merges shard outputs, validates the merged species set, checks BUSCO counts, then runs the shared post-processing steps such as trait generation and `run_multispecies_summary`.
 
 Practical rule:
@@ -196,7 +196,7 @@ Purpose:
 - per-species CDS/genome annotation and QC,
 - BUSCO (CDS/genome),
 - UniProt annotation (`blastp` or `mmseqs2`),
-- optional `cdskit localize` targeting-peptide and peroxisome localization prediction,
+- `cdskit localize` targeting-peptide and peroxisome localization prediction (enabled by default),
 - optional MMseqs2 taxonomy and contamination removal,
 - optional genome analyses (SubPhaser, dotplot, GenomeScope).
 
@@ -211,6 +211,7 @@ Notable defaults:
 
 - most heavy tasks default to `0`,
 - `uniprot_annotation_method="mmseqs2"` (set `blastp` to use NCBI BLASTP for UniProt annotation),
+- `run_cdskit_localize=1` (set `0` to disable localization prediction),
 - `cdskit_localize_organism_group="auto"` infers plant/non-plant mode from `busco_lineage` where possible,
 - `run_multispecies_summary=1` by default.
 
@@ -356,6 +357,15 @@ Notable defaults:
   parser's taxonomy query only when that mapping is one-to-one. True omissions,
   duplicate parsed labels, and ambiguous genus-level matches stop before
   OrthoFinder.
+- the validated correspondence is applied to a staged
+  `species_tree_inputs.nwk` copy for both core selection and OrthoFinder.
+  Only terminal labels change to the protein FASTA basenames; topology,
+  branch lengths, support labels, comments, and the original tree remain
+  unchanged. `species_tree_inputs.mapping.json` records the label mapping and
+  source/output hashes alongside the published OrthoFinder results. A unique
+  taxonomy query is not evidence that two independently supplied samples are
+  identical; review input provenance or provide an explicit species-label map
+  when combining such data.
 - when the species count exceeds `max_orthofinder_core_species`, the core
   species set is selected with size and BUSCO filters by default:
   `orthofinder_core_filters="busco_complete_pct:ge:80,num_seq:le:100000"`.
@@ -423,7 +433,7 @@ Main outputs:
 
 - `workspace/output/query2family/*` in query2family mode,
 - `workspace/output/orthogroup/*` in orthogroup mode.
-- optional localization tables under `workspace/output/query2family/cdskit_localize/`
+- localization tables (enabled by default) under `workspace/output/query2family/cdskit_localize/`
   or `workspace/output/orthogroup/cdskit_localize/`.
 - optional `csubst scan` outputs under `csubst_scan/`, `csubst_scan_units/`,
   `csubst_scan_foreground_branch/`, `csubst_scan_plot/`, and `csubst_scan_log/`.
@@ -435,11 +445,17 @@ Notable defaults:
 - `run_tree_plot=1`
 - `run_summary=1`
 - `uniprot_annotation_method="mmseqs2"` (set `blastp` for NCBI BLASTP-based UniProt annotation),
+- `run_cdskit_localize=1` (set `0` to disable localization prediction),
 - `cdskit_localize_organism_group="auto"` infers plant/non-plant mode from `busco_lineage` where possible,
 - many advanced analyses default to `0`.
 
 Current behavior notes:
 
+- `run_asr_intron=1` infers intron presence/absence probabilities with a fixed
+  asymmetric Q and equal root prior in NWKIT. It writes probability/model tables,
+  an annotated tree, and a PDF; the `hgt` profile enables it. See
+  [intron ancestral-state reconstruction](intron-ancestral-reconstruction.md)
+  for settings, outputs, and migration from SCM.
 - if `run_generax=1`, initial IQ-TREE disables UFBOOT; after GeneRax,
   IQ-TREE performs an unconstrained UFBoot search and the resulting bootstrap
   split frequencies are mapped onto the GeneRax topology. The GeneRax tree is
@@ -448,11 +464,10 @@ Current behavior notes:
   explicitly as `support_generax_ufboot`,
 - Pfam RPS-BLAST DB (`Pfam_LE`) is auto-prepared when missing, with lock-based
   synchronization for array jobs,
-- gene-tree PGLS remains a separate legacy analysis; matched expression-trait
-  results are written to `rsc_regression`, `pgls_species_nwkit`,
-  `pgls_species_rphylopars`, and `pgls_comparison`,
+- expression-trait results are written to `rsc_regression`,
+  `pgls_species_nwkit`, and `pgls_comparison`,
 - `run_expression_trait_pgls=1` runs the methods selected by `pgls_methods`
-  (`rsc`, `species-nwkit`, `species-rphylopars`, or `all`) with gene expression
+  (`rsc`, `species-nwkit`, or `all`) with gene expression
   as the response and species traits as predictors; repeated paralog contrasts
   mapping to one species-tree event are handled by event weighting and the
   hierarchical model instead of being treated as independent species
@@ -614,8 +629,8 @@ Notable defaults:
 - `presence_absence_family_ids` and `presence_absence_family_file` select an explicit plotted subset for either mode
 - `presence_absence_species_tree=auto` prefers query2family-pruned dated species
   trees when available
-- `presence_absence_species_tree_ci=auto` adds MCMCtree 95% HPD node-age bars for
-  dated species trees when `mcmctree_95CI.nwk` is available
+- `presence_absence_species_tree_ci=auto` adds supplied MCMCtree 95% node-age interval bars for
+  dated species trees when `mcmctree_95CI.nhx` is available
 - `presence_absence_species_tree_support=auto` transfers numeric branch-support
   labels from matching species-tree support files
 - `presence_absence_busco_table=auto` adds per-species BUSCO stacked bars when
@@ -717,3 +732,29 @@ Note:
 - Minimal dataset builder:
   - `workflow/support/build_minimal_test_dataset.py`
   - extracts a smaller development dataset from an existing workspace
+
+### MCMCtree tree serialization
+
+Dating uses `nwkit convert` to return branch lengths and explicit node-age
+intervals to public time units and write `FigTree.tre` as NEXUS. Calibration
+selection and control-file scaling remain GeneGalleon workflow policy. The CI
+sidecar is `mcmctree_95CI.nhx`, with `age_ci_low`, `age_ci_high`, `age_ci_kind`
+and `age_ci_level` attributes; `mcmctree_no95CI.nwk` explicitly omits intervals.
+`nwkit label` assigns internal names beginning at `s1` in level order.
+
+The container must include NWKIT's `convert` command and
+`validate --require-all-lengths` option. Build the container from current sources
+after updating NWKIT. Provenance records include the serializer and label policy,
+so tracked outputs from the previous format are stale; use
+`artifact_stale_policy=rebuild` to regenerate them from verified inputs.
+Untracked public summaries can be recovered when the existing artifact contract
+allows it. Supplied interval methods and levels are preserved; plots display
+supplied 95% intervals. Numeric node labels are not interpreted as intervals.
+
+The tested R runtime (`treeio` 1.30.0, `ape` 5.8.1) crashes when its NHX reader
+receives certain quoted labels, for example `(A:1,B:1)"0.5,1.5";`. NWKIT retains
+such labels correctly; this is an R dependency limitation, with no GeneGalleon
+parser fallback. An upstream reader fix is needed for plotting those inputs.
+
+For dated-tree plots, root selection, and the copy-number regression model, see
+[NWKIT tree and regression integration](nwkit-tree-and-regression-integration.md).

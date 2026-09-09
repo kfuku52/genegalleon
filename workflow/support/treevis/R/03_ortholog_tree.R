@@ -712,7 +712,8 @@ add_signal_peptide_column = function(g, args) {
     df_tip2 = merge(df_tip2, df_tip[,c('label','y')], by='y', all.x=TRUE)
     g[[gname]] = ggplot(data=df_tip2) +
         geom_blank(aes(y=label)) + 
-        geom_bar(mapping=aes(x=value, y=label, fill=key), data=df_tip2, position='fill', stat='identity') +
+        geom_bar(mapping=aes(x=value, y=label, fill=key), data=df_tip2, position='fill', stat='identity', width=0.8) +
+        scale_x_continuous(limits=c(0, 1), expand=c(0.04, 0)) +
         coord_cartesian(clip="off") +
         ylab(NULL) +
         xlab(NULL) +
@@ -734,7 +735,107 @@ add_signal_peptide_column = function(g, args) {
             rect=element_rect(fill="transparent"),
             plot.margin=unit(args[['margins']]/4, "cm")
         )
+    attr(g[[gname]], 'treevis_square_bar_height') = 0.8
     return(g)
+}
+
+add_peroxisome_column = function(g, args) {
+    col = 'cdskit_localize_p_peroxisome'
+    df_tip = get_df_tip(g[['tree']])
+    if (!(col %in% colnames(df_tip))) {
+        cat('cdskit localize peroxisome probability was not found. Peroxisome column will not be shown.\n')
+        return(g)
+    }
+    df_tip$probability = as.numeric(df_tip[[col]])
+    observed = !is.na(df_tip$probability)
+    if (any(!is.finite(df_tip$probability[observed]) |
+            df_tip$probability[observed] < 0 | df_tip$probability[observed] > 1)) {
+        stop('cdskit localize peroxisome probabilities must be between 0 and 1.')
+    }
+    # This is an independent binary prediction, not a sixth targeting class.
+    g[['peroxisome']] = ggplot(df_tip, aes(y=label)) +
+        geom_blank(aes(x=0)) +
+        geom_col(data=df_tip[observed, , drop=FALSE], aes(x=1), fill='grey92', width=0.8) +
+        geom_col(data=df_tip[observed, , drop=FALSE], aes(x=probability), fill='#0072B2', width=0.8) +
+        scale_x_continuous(limits=c(0, 1), breaks=c(0, 1), expand=c(0.04, 0)) +
+        labs(x='Peroxisome\nprobability', y=NULL) +
+        theme_minimal(base_size=args[['font_size']]) +
+        theme(axis.text.y=element_blank(), axis.ticks=element_blank(),
+              panel.grid=element_blank(),
+              plot.margin=unit(args[['margins']]/4, 'cm'))
+    attr(g[['peroxisome']], 'treevis_square_bar_height') = 0.8
+    return(g)
+}
+
+add_localization_column = function(g, args) {
+    tips = get_df_tip(g[['tree']])
+    # Preserve the existing targeting stack's left-to-right order and colors.
+    targeting = c('SP', 'noTP', 'mTP', 'lTP', 'cTP')
+    columns = paste0('cdskit_localize_p_', targeting)
+    has_targeting = all(columns %in% names(tips))
+    has_perox = 'cdskit_localize_p_peroxisome' %in% names(tips)
+    if (!has_targeting && !has_perox) return(g)
+    validate = function(values) {
+        known = values[!is.na(values)]
+        if (any(!is.finite(known) | known < 0 | known > 1)) {
+            stop('cdskit localize probabilities must be between 0 and 1.')
+        }
+        values
+    }
+    rectangles = list()
+    if (has_targeting) {
+        probabilities = as.matrix(tips[, columns, drop=FALSE])
+        storage.mode(probabilities) = 'double'
+        probabilities = validate(probabilities)
+        for (i in seq_len(nrow(tips))) {
+            values = probabilities[i, ]
+            if (anyNA(values) || sum(values) == 0) next
+            edges = c(0, cumsum(values / sum(values)))
+            rectangles[[length(rectangles)+1L]] = data.frame(
+                label=as.character(tips$label[i]), ymin=i-0.4, ymax=i+0.4,
+                xmin=edges[1:5], xmax=edges[2:6], key=targeting)
+        }
+    }
+    gap = 0.4
+    perox_start = if (has_targeting) 1 + gap else 0
+    background = data.frame()
+    if (has_perox) {
+        probability = validate(as.numeric(tips$cdskit_localize_p_peroxisome))
+        rows = which(!is.na(probability))
+        background = data.frame(label=as.character(tips$label[rows]),
+            ymin=rows-0.4, ymax=rows+0.4, xmin=rep(perox_start,length(rows)), xmax=rep(perox_start+1,length(rows)))
+        if (length(rows)) {
+            rectangles[[length(rectangles)+1L]] = transform(background,
+                xmax=perox_start+probability[rows], key='Peroxisome')
+        }
+    }
+    palette = setNames(scales::hue_pal()(5), sort(targeting))
+    if (!has_targeting) palette = character()
+    if (has_perox) palette = c(palette, 'Peroxisome'='#0072B2')
+    centers = c(if (has_targeting) 0.5, if (has_perox) perox_start+0.5)
+    labels = c(if (has_targeting) 'Targeting', if (has_perox) 'Peroxisome')
+    xmax = if (has_perox) perox_start+1 else 1
+    p = ggplot(tips, aes(y=label)) + geom_blank(aes(x=0))
+    if (nrow(background)) p = p + geom_rect(data=background,
+        aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax),
+        inherit.aes=FALSE, fill='grey92')
+    if (length(rectangles)) p = p + geom_rect(data=do.call(rbind, rectangles),
+        aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, fill=key), inherit.aes=FALSE)
+    legend_labels = names(palette)
+    legend_labels[legend_labels == 'Peroxisome'] = 'Perox.'
+    p = p + scale_fill_manual(values=palette, limits=names(palette), labels=legend_labels, drop=FALSE) +
+        scale_x_continuous(limits=c(0,xmax), breaks=centers, labels=labels, expand=c(0.04,0)) +
+        labs(x=NULL, y=NULL, fill=NULL) + theme_minimal(base_size=args[['font_size']]) +
+        guides(fill=guide_legend(ncol=1, title=NULL)) +
+        theme(axis.text.y=element_blank(), axis.ticks=element_blank(), panel.grid=element_blank(),
+              axis.text.x=element_text(size=args[['font_size']], colour='black', angle=90, hjust=1, vjust=0.5),
+              legend.text=element_text(size=args[['font_size']]),
+              legend.position='bottom', legend.key.size=unit(0.4,'lines'),
+              plot.margin=unit(args[['margins']]/4,'cm'))
+    attr(p, 'treevis_square_bar_height') = 0.8
+    attr(p, 'treevis_localization_gap') = if (has_targeting && has_perox) gap else 0
+    g[['localization']] = p
+    g
 }
 
 add_integer_column = function(g, args, gname, col, xlab) {
@@ -746,7 +847,7 @@ add_integer_column = function(g, args, gname, col, xlab) {
     }
     df_tip[,'x_dummy'] = 0.5
     df_tip[,'hjust'] = 0.5
-    df_tip[is.na(df_tip[[col]]),col] = 0
+    if (col != 'num_intron') df_tip[is.na(df_tip[[col]]),col] = 0
     df_tip[,col] = as.integer(df_tip[[col]])
     g[[gname]] = ggplot(df_tip, aes(x=x_dummy, y=label, label=!!rlang::sym(col), hjust=hjust)) +
         geom_blank(aes(y=label)) + 

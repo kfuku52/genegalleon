@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ $# -lt 5 || $# -gt 6 ]]; then
-  echo "Usage: $0 python|r|paml|radte SOURCE REPO_URL REVISION OUTPUT_DIR [MIRROR_URL]" >&2
+  echo "Usage: $0 python|r|paml SOURCE REPO_URL REVISION OUTPUT_DIR [MIRROR_URL]" >&2
   exit 2
 fi
 kind="$1"
@@ -18,7 +18,7 @@ if [[ ! "${jobs}" =~ ^[1-9][0-9]*$ || ! "${source_name}" =~ ^[A-Za-z][A-Za-z0-9]
   exit 2
 fi
 case "${kind}" in
-  python|r|paml|radte) ;;
+  python|r|paml) ;;
   *) echo "Unknown source artifact kind: ${kind}" >&2; exit 2 ;;
 esac
 if [[ ! "${revision}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -57,13 +57,6 @@ case "${kind}" in
     install -D -m 0755 "${binary}" "${output_dir}/rootfs/usr/local/bin/mcmctree"
     mkdir -p "${output_dir}/rootfs/opt/conda/bin"
     ln -s /usr/local/bin/mcmctree "${output_dir}/rootfs/opt/conda/bin/mcmctree"
-    ;;
-  radte)
-    if [[ ! -s "${work_dir}/source/radte.r" ]]; then
-      echo "RADTE script was not found in ${repo_url}" >&2
-      exit 1
-    fi
-    install -D -m 0755 "${work_dir}/source/radte.r" "${output_dir}/rootfs/usr/local/bin/radte.r"
     ;;
 esac
 printf '%s\t%s\n' "${source_name}" "${revision}" > "${output_dir}/source.tsv"

@@ -320,7 +320,8 @@ def test_reconciled_speciation_contrast_end_to_end_with_nwkit(tmp_path: Path):
     assert set(predictor_summary["variance_method"]) == {"known-se"}
 
 
-def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path):
+@pytest.mark.parametrize("model,parameter", [("brownian", "auto"), ("lambda", "0.6"), ("eb", "-0.1")])
+def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path, model, parameter):
     species = [f"Genus_{letter}" for letter in "abcde"]
     outgroup = "Genus_f"
     species_tree = tmp_path / "species.nwk"
@@ -412,7 +413,7 @@ def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path):
         sys.executable,
         Path(__file__).resolve().parents[1] / "support" / "species_tree_pgls.py",
         "--methods",
-        "species-nwkit,species-rphylopars",
+        "species-nwkit",
         "--tree-id",
         "OG1",
         "--species-tree",
@@ -433,16 +434,11 @@ def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path):
         "identity",
         "--within-variance",
         "pooled",
-        "--response-evolution-model",
-        "brownian",
-        "--predictor-evolution-model",
-        "brownian",
-        "--rphylopars-script",
-        Path(__file__).resolve().parents[1] / "support" / "species_tree_rphylopars.R",
+        "--response-evolution-model", model,
+        "--response-evolution-parameter", parameter,
+        "--predictor-evolution-model", "brownian",
         "--native-out",
         f"{prefix}.native.tsv",
-        "--rphylopars-out",
-        f"{prefix}.rphylopars.tsv",
         "--comparison-out",
         f"{prefix}.comparison.tsv",
         "--status-out",
@@ -463,28 +459,21 @@ def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path):
         f"{prefix}.predictor-covariance.tsv",
     )
     native = pandas.read_csv(f"{prefix}.native.tsv", sep="\t")
-    rphylopars = pandas.read_csv(f"{prefix}.rphylopars.tsv", sep="\t")
     comparison = pandas.read_csv(f"{prefix}.comparison.tsv", sep="\t")
     status = pandas.read_csv(f"{prefix}.status.tsv", sep="\t")
+    assert set(native["evolution_model"]) == {model}
+    if parameter != "auto":
+        assert native["evolution_parameter"].iloc[0] == pytest.approx(float(parameter))
     assert "body_size" in set(native["term"])
     assert native["term"].astype(str).str.contains("habitat").any()
     assert native["term"].astype(str).str.contains("stage").any()
     stage_rows = native.query("analysis_id == 'p003_stage' and predictor_type != 'intercept'")
     assert set(stage_rows["predictor_type"]) == {"ordered"}
     assert set(native["n_species"]) == {len(species)}
-    assert "body_size" in set(rphylopars["term"])
     assert set(comparison["analysis_method"]) == {
         "species_nwkit",
-        "species_rphylopars",
     }
     assert set(status.query("analysis_method == 'species_nwkit'")["status"]) == {"ok"}
-    rphylopars_status = status.query("analysis_method == 'species_rphylopars'")
-    assert rphylopars_status.query("analysis_id == 'p001_body_size'")["status"].tolist() == ["ok"]
-    assert rphylopars_status.query("analysis_id == 'p002_habitat'")["status"].tolist() == ["not_estimable"]
-    assert rphylopars_status.query("analysis_id == 'p003_stage'")["status"].tolist() == ["not_estimable"]
-    assert (
-        rphylopars_status.query("analysis_id == 'p002_habitat'")["reason"].str.contains("continuous predictors").all()
-    )
     assert status.query("analysis_method == 'rsc'")["status"].tolist() == ["not_requested"]
 
 
@@ -528,20 +517,15 @@ def test_rsc_only_method_does_not_require_species_aggregation_inputs(tmp_path: P
         tmp_path / "absent-plan.tsv",
         "--metadata",
         tmp_path / "absent-metadata.tsv",
-        "--response-evolution-model",
-        "brownian",
-        "--predictor-evolution-model",
-        "brownian",
-        "--rphylopars-script",
-        Path(__file__).resolve().parents[1] / "support" / "species_tree_rphylopars.R",
+        "--response-evolution-model", "brownian",
+        "--response-evolution-parameter", "auto",
+        "--predictor-evolution-model", "brownian",
         "--rsc-results",
         rsc_results,
         "--rsc-status",
         rsc_status,
         "--native-out",
         f"{prefix}.native.tsv",
-        "--rphylopars-out",
-        f"{prefix}.rphylopars.tsv",
         "--comparison-out",
         f"{prefix}.comparison.tsv",
         "--status-out",
@@ -568,156 +552,29 @@ def test_rsc_only_method_does_not_require_species_aggregation_inputs(tmp_path: P
     assert set(status.query("analysis_method != 'rsc'")["status"]) == {"not_requested"}
 
 
-@pytest.mark.parametrize(
-    (
-        "model",
-        "parameter",
-        "predictor_model",
-        "predictor_parameter",
-        "parameter_name",
-        "expected_parameter",
-        "expected_parameter_status",
-        "expected_status",
-        "inference",
-        "expected_reason",
-        "predictor_sampling_variance",
-    ),
-    [
-        ("lambda", "0.6", "lambda", "0.6", "lambda", 0.6, "fixed", "ok", "wald", "", 0.02),
-        ("eb", "-0.1", "eb", "-0.1", "rate_change", -0.1, "fixed", "ok", "wald", "", 0.02),
-        ("lambda", "auto", "lambda", "auto", "lambda", None, "estimated", "ok", "wald", "", 0.02),
-        (
-            "lambda",
-            "0.6",
-            "brownian",
-            "auto",
-            "",
-            None,
-            "",
-            "not_estimable",
-            "wald",
-            "joint evolutionary model",
-            0.02,
-        ),
-        (
-            "brownian",
-            "auto",
-            "brownian",
-            "auto",
-            "",
-            None,
-            "",
-            "not_estimable",
-            "parametric-bootstrap",
-            "does not implement requested inference",
-            0.02,
-        ),
-        (
-            "brownian",
-            "auto",
-            "brownian",
-            "auto",
-            "",
-            None,
-            "",
-            "not_estimable",
-            "wald",
-            "cannot fit a singular sampling-error matrix",
-            0.0,
-        ),
-    ],
-)
-def test_rphylopars_comparator_handles_shape_parameters_and_rejects_unmatched_models(
-    tmp_path: Path,
-    model: str,
-    parameter: str,
-    predictor_model: str,
-    predictor_parameter: str,
-    parameter_name: str,
-    expected_parameter: float | None,
-    expected_parameter_status: str,
-    expected_status: str,
-    inference: str,
-    expected_reason: str,
-    predictor_sampling_variance: float,
-):
-    species = list("ABCDEFGH")
-    tree = tmp_path / "species.nwk"
-    tree.write_text(
-        "(((A:1,B:1):1,(C:1,D:1):1):1,((E:1,F:1):1,(G:1,H:1):1):1);",
-        encoding="utf-8",
-    )
-    summary_rows = []
-    for index, name in enumerate(species):
-        summary_rows.extend(
-            [
-                {
-                    "aggregation": "sum",
-                    "source": "response",
-                    "leaf_name": name,
-                    "trait": "expression",
-                    "value": 1.0 + 1.4 * index + (0.2 if index % 2 else -0.2),
-                    "sampling_variance": 0.01,
-                    "has_offdiagonal_sampling_covariance": "no",
-                },
-                {
-                    "aggregation": "sum",
-                    "source": "predictor:p001_size",
-                    "leaf_name": name,
-                    "trait": "size",
-                    "value": float(index),
-                    "sampling_variance": predictor_sampling_variance,
-                    "has_offdiagonal_sampling_covariance": "no",
-                },
-            ]
-        )
-    summary = tmp_path / "summary.tsv"
-    pandas.DataFrame(summary_rows).to_csv(summary, sep="\t", index=False)
-    plan = tmp_path / "plan.tsv"
-    pandas.DataFrame(
-        [
-            {
-                "analysis_id": "p001_size",
-                "predictors": "size",
-                "categorical_predictors": ".",
-                "ordered_predictors": ".",
-            }
-        ]
-    ).to_csv(plan, sep="\t", index=False)
-    result = tmp_path / "result.tsv"
-    status = tmp_path / "status.tsv"
-    run(
-        "Rscript",
-        Path(__file__).resolve().parents[1] / "support" / "species_tree_rphylopars.R",
-        f"--tree={tree}",
-        f"--summary={summary}",
-        f"--plan={plan}",
-        "--responses=expression",
-        "--tree_id=OG1",
-        f"--model={model}",
-        f"--parameter={parameter}",
-        f"--predictor_model={predictor_model}",
-        f"--predictor_parameter={predictor_parameter}",
-        "--branch_length=original",
-        "--predictor_branch_length=original",
-        "--reml=yes",
-        "--confidence_level=0.95",
-        f"--inference={inference}",
-        "--sampling_covariance=require-diagonal",
-        f"--outfile={result}",
-        f"--status_out={status}",
-    )
-    fitted = pandas.read_csv(result, sep="\t")
-    method_status = pandas.read_csv(status, sep="\t")
-    assert set(method_status["status"]) == {expected_status}
-    if expected_status == "not_estimable":
-        assert fitted.empty
-        assert method_status["reason"].str.contains(expected_reason).all()
-        return
-    assert set(fitted["evolution_parameter_name"]) == {parameter_name}
-    assert set(fitted["evolution_parameter_status"]) == {expected_parameter_status}
-    if expected_parameter is None:
-        assert pandas.to_numeric(fitted["evolution_parameter"], errors="coerce").notna().all()
+@pytest.mark.parametrize("failure", ["input_alias", "duplicate_output", "late_destination_error"])
+def test_species_pgls_cli_preserves_inputs_and_complete_previous_bundle(tmp_path, failure):
+    rsc = tmp_path / "rsc.tsv"
+    rsc.write_text("analysis_id\ttree_id\tresponse\tterm\tcoefficient\tstandard_error\tp_value\tinference_status\nA\tOG1\texpression\tsize\t1.2\t0.3\t0.02\tok\n")
+    fields = ["native", "comparison", "status", "audit", "expression-summary", "expression-audit",
+              "response-tip-summary", "response-sampling-covariance", "predictor-tip-summary", "predictor-sampling-covariance"]
+    outputs = {field: tmp_path / (field + ".tsv") for field in fields}
+    for path in outputs.values():
+        path.write_bytes(b"previous output")
+    if failure == "input_alias":
+        outputs["native"] = rsc
+    elif failure == "duplicate_output":
+        outputs["native"] = outputs["comparison"]
     else:
-        assert fitted["evolution_parameter"].iloc[0] == pytest.approx(expected_parameter)
-    assert set(fitted["optimizer_converged"]) == {"not_reported"}
+        outputs[fields[-1]].unlink()
+        outputs[fields[-1]].mkdir()
+    saved = {p: p.read_bytes() for p in [rsc, *outputs.values()] if p.is_file()}
+    command = [sys.executable, SUPPORT.with_name("species_tree_pgls.py"), "--methods", "rsc", "--tree-id", "OG1",
+               "--response-evolution-model", "brownian", "--predictor-evolution-model", "brownian", "--rsc-results", rsc]
+    for field in ("species-tree", "reconciliation", "expression", "species-traits", "analysis-plan", "metadata"):
+        command += ["--" + field, tmp_path / (field + ".unused")]
+    for field, output in outputs.items():
+        command += ["--" + field + "-out", output]
+    completed = subprocess.run([str(arg) for arg in command], capture_output=True, text=True)
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+    assert {p: p.read_bytes() for p in saved} == saved

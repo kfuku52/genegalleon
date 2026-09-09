@@ -134,7 +134,6 @@ def test_container_defaults_install_program_sources_from_moving_branches():
         "KFFRACTBIAS_REPO_SHA",
         "KFTOOLS_REPO_SHA",
         "RKFTOOLS_REPO_SHA",
-        "RADTE_REPO_SHA",
     )
     for sha_var in sha_overrides:
         expected = f"{sha_var}=${{{sha_var}:-}}"

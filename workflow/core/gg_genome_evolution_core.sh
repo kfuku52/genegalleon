@@ -1574,24 +1574,17 @@ extract_scaled_mcmctree_figtree() {
   local infile=$1
   local outfile=$2
   local scale_factor=$3
-  python "${gg_support_dir}/mcmctree_time_scale.py" \
-    extract-figtree \
-    --infile "${infile}" \
-    --outfile "${outfile}" \
-    --scale "${scale_factor}" \
-    --direction "up"
+  nwkit convert --infile "${infile}" --outfile "${outfile}" \
+    --from auto --to figtree --time-factor "${scale_factor}"
 }
 
 validate_mcmctree_figtree() {
-  local infile=$1
-  python "${gg_support_dir}/mcmctree_time_scale.py" \
-    validate-figtree \
-    --infile "${infile}"
+  nwkit validate --infile "$1" --require-all-lengths yes --fail-on-issue yes > /dev/null
 }
 
 extract_mcmctree_conversion_inputs() {
-  python "${gg_support_dir}/mcmctree_time_scale.py" \
-    conversion-inputs --infile "$1" --outdir "$2"
+  nwkit convert --infile "$1" --outfile "$2/mcmctree_95CI.nhx" --to nhx || return $?
+  nwkit convert --infile "$1" --outfile "$2/mcmctree_no95CI.nwk" --to newick --age-ci drop
 }
 
 mcmctree_requires_bdparas_flag() {
@@ -2034,10 +2027,12 @@ busco_species_tree_assisted_gene_tree_rooting() {
   intree="${intreedir}/${busco_id}.busco.nwk"
   outfile_txt="${outdir_txt}/${busco_id}.busco.root.txt"
   outfile_nwk="${outdir_nwk}/${busco_id}.busco.root.nwk"
-  if [[ -s "${outfile_txt}" && -s "${outfile_nwk}" ]]; then
+  local outfile_comparison="${outdir_txt}/${busco_id}.busco.root.tsv"
+  local outfile_plot="${outdir_txt}/${busco_id}.busco.root.pdf"
+  if [[ -s "${outfile_txt}" && -s "${outfile_nwk}" && -s "${outfile_comparison}" && -s "${outfile_plot}" ]]; then
     return 0
   fi
-  echo "Start NOTUNG root: ${busco_id}"
+  echo "Start NWKIT root selection against NOTUNG candidates: ${busco_id}"
   if [[ -e "./${busco_id}.notung.root" ]]; then
     rm -rf -- "./${busco_id}.notung.root"
   fi
@@ -2047,17 +2042,21 @@ busco_species_tree_assisted_gene_tree_rooting() {
     --destination-root . \
     --expected-prefix "${busco_id}.notung.root") || return 1
 
-  Rscript "${gg_support_dir}/species_tree_guided_gene_tree_rooting.r" \
-    "--notung_root_dir=${notung_root_dir}" \
-    "--in_tree=${intree}" \
-    "--out_tree=${busco_id}.root.nwk" \
-    "--species_parser=${species_label_parser}" \
-    "--ncpu=${GG_TASK_CPUS}" \
-    2>&1 | tee "${busco_id}.root.txt"
+  python "${gg_support_dir}/species_tree_guided_gene_tree_rooting.py" \
+    --notung-root-dir "${notung_root_dir}" \
+    --in-tree "${intree}" \
+    --out-tree "${busco_id}.root.nwk" \
+    --comparison-table "${busco_id}.root.tsv" \
+    --comparison-plot "${busco_id}.root.pdf" \
+    --species-parser "${species_label_parser}" \
+    2>&1 | tee "${busco_id}.root.txt" || return $?
 
   if [[ -s "${busco_id}.root.nwk" ]]; then
-    mv_out "${busco_id}".root.txt "${outfile_txt}"
-    mv_out "${busco_id}".root.nwk "${outfile_nwk}"
+    mv_out_bundle \
+      "${busco_id}.root.txt" "${outfile_txt}" \
+      "${busco_id}.root.nwk" "${outfile_nwk}" \
+      "${busco_id}.root.tsv" "${outfile_comparison}" \
+      "${busco_id}.root.pdf" "${outfile_plot}" || return $?
     rm -rf -- "${busco_id}.notung.root"
   fi
 }
@@ -2496,6 +2495,34 @@ file_orthogroup_copy_number_trait_pgls_significant="${dir_orthogroup_copy_number
 file_orthogroup_copy_number_trait_pgls_summary_pdf="${dir_orthogroup_copy_number_trait_pgls}/orthogroup_copy_number_trait_pgls.summary.pdf"
 file_go_enrichment_significant="${dir_cafe}/go_enrichment/enrichment_significant_${change_direction_go}_${target_branch_go}_significant_go.tsv"
 genome_evolution_provenance_dir="${gg_workspace_output_dir}/artifact_provenance/genome_evolution"
+# Moving dependency revisions are part of the artifact contract, never defaults.
+genome_nwkit_identity=$(python - <<'PY_NWKIT_IDENTITY'
+import hashlib
+import importlib.metadata
+import importlib.util
+from pathlib import Path
+
+spec = importlib.util.find_spec("nwkit")
+if spec is None or spec.origin is None:
+    print("unavailable")
+else:
+    try:
+        version = importlib.metadata.version("nwkit")
+    except importlib.metadata.PackageNotFoundError:
+        version = "unpackaged"
+    root = Path(spec.origin).parent
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*.py")):
+        digest.update(str(path.relative_to(root)).encode() + b"\0")
+        digest.update(path.read_bytes())
+    print(f"nwkit {version} source_sha256={digest.hexdigest()}")
+PY_NWKIT_IDENTITY
+) || exit $?
+if [[ -s /opt/pg/logs/source_revisions.tsv ]]; then
+  genome_nwkit_revision=$(awk -F '\t' '$1 == "nwkit" { print $2; exit }' /opt/pg/logs/source_revisions.tsv)
+  genome_nwkit_identity+=" ${genome_nwkit_revision}"
+fi
+
 
 # Runtime helpers
 shared_species_busco_stage_done=0
@@ -3842,6 +3869,14 @@ fi
 
 task="IQ2MC step 3 (MCMCtree dating run)"
 disable_if_no_input_file "run_mcmctree2" "${file_iq2mc_ctl}" "${file_iq2mc_hessian}" "${file_iq2mc_rooted_tree}" "${file_iq2mc_dummy_phy}"
+# Check the dependency before classifying cached artifacts or rebuilding them.
+if [[ ${run_mcmctree2} -eq 1 || -e "${file_mcmctree_figtree_tre}" || -e "${file_mcmctree_raw_output}" ]]; then
+  nwkit_validate_help=$(nwkit validate --help 2>/dev/null) || nwkit_validate_help=""
+  if [[ "${nwkit_validate_help}" != *"--require-all-lengths"* ]] || ! nwkit convert --help >/dev/null 2>&1; then
+    echo "Error: MCMCtree processing requires NWKIT convert and validate --require-all-lengths. Rebuild the GeneGalleon container with current NWKIT sources." >&2
+    exit 1
+  fi
+fi
 mcmctree_needs_update=0
 mcmctree_cached_tree_contract_invalid=0
 for mcmctree_cached_tree in "${file_mcmctree_figtree_tre}" "${file_mcmctree_raw_output}"; do
@@ -3876,6 +3911,7 @@ mcmctree_provenance_args+=(
   --output "public_raw_summary=${file_mcmctree_raw_output}"
   --parameter "print=1"
   --parameter "time_scale=automatic_safe_iq2mc_unit"
+  --parameter "tree_serialization=nwkit_convert_nexus_v1"
 )
 # Only public-unit artifacts are recovery sources. Never use the internal
 # scaled working directory, or overwrite a present (possibly corrupt) output.
@@ -3975,9 +4011,10 @@ convert_tree_provenance_args+=(
   --input "figtree=${file_mcmctree_figtree_tre}"
   --output "dated_tree=${file_mcmctree_dated_nwk}"
   --output "dated_tree_summary=${file_dated_species_tree}"
-  --output "tree_with_ci=${dir_mcmctree2}/mcmctree_95CI.nwk"
+  --output "tree_with_ci=${dir_mcmctree2}/mcmctree_95CI.nhx"
   --output "tree_without_ci=${dir_mcmctree2}/mcmctree_no95CI.nwk"
-  --parameter "internal_node_labels=sequential_s"
+  --parameter "internal_node_labels=nwkit_levelorder_s1"
+  --parameter "ci_serialization=nhx_age_ci_v1"
 )
 convert_tree_recovery_dir=""
 if [[ -s "${file_mcmctree_dated_nwk}" ]]; then
@@ -3988,7 +4025,7 @@ if [[ -s "${file_mcmctree_dated_nwk}" ]]; then
       exit 1
     fi
     convert_tree_provenance_args+=(
-      --recover-output "tree_with_ci=${convert_tree_recovery_dir}/mcmctree_95CI.nwk"
+      --recover-output "tree_with_ci=${convert_tree_recovery_dir}/mcmctree_95CI.nhx"
       --recover-output "tree_without_ci=${convert_tree_recovery_dir}/mcmctree_no95CI.nwk"
     )
   fi
@@ -4007,9 +4044,9 @@ if [[ ${convert_tree_needs_update} -eq 1 && ${run_convert_tree_format} -eq 1 ]];
   extract_mcmctree_conversion_inputs "${file_mcmctree_figtree_tre}" "${dir_mcmctree2}" || exit $?
 
   if [[ -s "${dir_mcmctree2}/mcmctree_no95CI.nwk" ]]; then
-    Rscript -e "library(ape); t=read.tree(\"${dir_mcmctree2}/mcmctree_no95CI.nwk\"); \
-    t[['node.label']]=paste0('s',1:(length(t[['tip.label']])-1)); \
-    write.tree(t, \"${file_mcmctree_dated_nwk}\")"
+    nwkit label --infile "${dir_mcmctree2}/mcmctree_no95CI.nwk" \
+      --outfile "${file_mcmctree_dated_nwk}" --target intnode --prefix s --start 1 --force yes \
+      --outformat 1 || exit $?
   else
     echo "Error: Missing mcmctree_no95CI.nwk. Skipping tree conversion."
   fi
@@ -4024,11 +4061,19 @@ else
 fi
 
 task="Dated species tree plotting"
-disable_if_no_input_file "run_plot_mcmctreer" "${file_mcmctree_dated_nwk}"
+dated_tree_plot_input="${dir_mcmctree2}/mcmctree_95CI.nhx"
+if [[ ! -s "${dated_tree_plot_input}" ]]; then
+  dated_tree_plot_input="${file_mcmctree_dated_nwk}"
+fi
+disable_if_no_input_file "run_plot_mcmctreer" "${dated_tree_plot_input}"
 dated_tree_plot_needs_update=0
 gg_artifact_contract_init dated_tree_plot_provenance_args "species_tree_dated_plot" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.dated_plot.json"
 dated_tree_plot_provenance_args+=(
-  --input "dated_tree=${file_mcmctree_dated_nwk}"
+  --input "dated_tree=${dated_tree_plot_input}"
+  --input "adapter=${gg_support_dir}/plot_dated_tree.py"
+  --parameter "engine=nwkit_draw"
+  --parameter "nwkit_identity=${genome_nwkit_identity}"
+  --parameter "branch_length_unit=Ma"
   --output "plot=${file_plot_mcmctree_pdf}"
 )
 if [[ -s "${file_dated_species_tree}" ]]; then
@@ -4038,22 +4083,15 @@ gg_artifact_prepare_stage dated_tree_plot_needs_update run_plot_mcmctreer "${dat
 if [[ ${dated_tree_plot_needs_update} -eq 1 && ${run_plot_mcmctreer} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  Rscript "${gg_support_dir}/plot_mcmctreer.r" \
-    --infile="${file_mcmctree_dated_nwk}" \
-    --outfile="tmp.plot_mcmctreer.pdf"
-  if [[ -s "tmp.plot_mcmctreer.pdf" ]]; then
-    mv_out "tmp.plot_mcmctreer.pdf" "${file_plot_mcmctree_pdf}"
+  python "${gg_support_dir}/plot_dated_tree.py" \
+    --infile "${dated_tree_plot_input}" \
+    --outfile "tmp.plot_mcmctreer.pdf" || exit $?
+  dated_tree_plot_publish_args=("tmp.plot_mcmctreer.pdf" "${file_plot_mcmctree_pdf}")
+  if [[ -s "${file_dated_species_tree}" ]]; then
+    cp -- "tmp.plot_mcmctreer.pdf" "tmp.dated_species_tree.summary.pdf" || exit $?
+    dated_tree_plot_publish_args+=("tmp.dated_species_tree.summary.pdf" "${file_dated_species_tree_pdf}")
   fi
-
-  if [[ -s "${file_plot_mcmctree_pdf}" ]]; then
-    echo "Output file found for the task: ${task}"
-    echo "Output file: ${file_plot_mcmctree_pdf}"
-    if [[ -s "${file_dated_species_tree}" ]]; then
-      echo "Copying from: ${file_plot_mcmctree_pdf}"
-      echo "Copying to: ${file_dated_species_tree_pdf}"
-      cp_out "${file_plot_mcmctree_pdf}" "${file_dated_species_tree_pdf}"
-    fi
-  fi
+  mv_out_bundle "${dated_tree_plot_publish_args[@]}" || exit $?
   gg_artifact_record "${dated_tree_plot_provenance_args[@]}"
 else
   gg_step_skip "${task}"
@@ -4180,18 +4218,25 @@ if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then
       species_base=${species_base%.*}
       species_ids+=("${species_base}")
     done
-    if ! python - "${species_tree}" "${species_label_parser}" "${species_label_regex}" "${species_label_map_tsv}" "${species_ids[@]}" << 'PY'
+    orthofinder_species_tree="${dir_orthofinder}/species_tree_inputs.nwk"
+    if ! python - "${species_tree}" "${orthofinder_species_tree}" "${species_label_parser}" "${species_label_regex}" "${species_label_map_tsv}" "${species_ids[@]}" << 'PY'
+import hashlib
+import io
+import json
+import re
 import sys
 from collections import defaultdict
+from pathlib import Path
 
 from Bio import Phylo
 from nwkit.species_parser import get_species_parser
 
 tree_file = sys.argv[1]
-species_parser_name = sys.argv[2]
-species_regex = sys.argv[3] or None
-species_map_tsv = sys.argv[4] or None
-protein_species = sys.argv[5:]
+output_tree = Path(sys.argv[2])
+species_parser_name = sys.argv[3]
+species_regex = sys.argv[4] or None
+species_map_tsv = sys.argv[5] or None
+protein_species = sys.argv[6:]
 
 
 def fail(message):
@@ -4232,7 +4277,9 @@ def parse_records(raw_labels, source_name):
 
 
 try:
-    tree = Phylo.read(tree_file, "newick")
+    source_bytes = Path(tree_file).read_bytes()
+    source_text = source_bytes.decode("utf-8")
+    tree = Phylo.read(io.StringIO(source_text), "newick")
 except Exception as exc:
     fail("could not parse species tree {}: {}".format(tree_file, exc))
 tree_leaves = [terminal.name for terminal in tree.get_terminals()]
@@ -4296,6 +4343,53 @@ if missing_queries or unexpected_queries:
 matched_count = len(exact_labels) + len(protein_by_query)
 if matched_count != len(protein_records) or matched_count != len(tree_records):
     fail("species mapping is not one-to-one")
+raw_mapping = {tree_by_label[label][0]: protein_by_label[label][0] for label in exact_labels}
+raw_mapping.update({tree_by_query[query][0]: protein_by_query[query][0] for query in protein_by_query})
+# OrthoFinder and core-species selection consume raw FASTA basenames, not
+# NWKit taxonomy queries. Adapt only this staged copy, retaining the source
+# tree and a hash-bound record of the existing validated correspondence.
+# Replace terminal-label tokens only: a Newick reserialization can introduce
+# absent zero-length branches or round lengths/supports. Keep all other bytes.
+tokens = re.finditer(r"'(?:[^']|'')*'|\[(?:\\.|[^\]])*\]|[(),:;]|[^\s'()[\],:;]+|\s+", source_text)
+parts, seen, end, expect_leaf = [], set(), 0, True
+for match in tokens:
+    if match.start() != end:
+        fail("unsupported Newick token in species tree")
+    token = match.group()
+    end = match.end()
+    if token.isspace() or token.startswith("["):
+        pass
+    elif token in ("(", ","):
+        expect_leaf = True
+    elif token in (")", ":", ";"):
+        expect_leaf = False
+    elif expect_leaf:
+        label = token[1:-1].replace("''", "'") if token.startswith("'") else token
+        if label not in raw_mapping or label in seen:
+            fail("terminal token does not match the validated species mapping")
+        seen.add(label)
+        replacement = raw_mapping[label]
+        if replacement != label:
+            token = replacement if re.fullmatch(r"[^\s'()[\],:;]+", replacement) else "'" + replacement.replace("'", "''") + "'"
+        expect_leaf = False
+    parts.append(token)
+if end != len(source_text) or seen != set(raw_mapping):
+    fail("species-tree terminal token mapping is incomplete")
+adapted_text = "".join(parts)
+adapted_tree = Phylo.read(io.StringIO(adapted_text), "newick")
+def structure(clade, rename=False):
+    return (raw_mapping[clade.name] if rename and clade.is_terminal() else clade.name,
+            clade.branch_length, clade.confidence, clade.comment,
+            tuple(structure(child, rename) for child in clade.clades))
+if structure(tree.root, True) != structure(adapted_tree.root):
+    fail("species-tree adaptation changed more than terminal labels")
+output_tree.write_bytes(adapted_text.encode("utf-8"))
+output_tree.with_suffix(".mapping.json").write_text(json.dumps({
+    "schema_version": 1,
+    "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+    "output_sha256": hashlib.sha256(output_tree.read_bytes()).hexdigest(),
+    "tree_to_protein_labels": dict(sorted(raw_mapping.items())),
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print("Validated one-to-one OrthoFinder species-tree mapping for {} species.".format(matched_count))
 PY
     then
@@ -4303,6 +4397,8 @@ PY
       echo "Please regenerate workspace/output/species_tree, update the species inputs, or provide an unambiguous species-label map for the current inputs."
       exit 1
     fi
+    species_tree="${orthofinder_species_tree}"
+    param_species_tree=(-s "${species_tree}")
   fi
   if [[ ${num_sp} -gt ${max_orthofinder_core_species} ]]; then
     echo "The number of species (${num_sp}) is greater than the maximum number of core species (${max_orthofinder_core_species}) for OrthoFinder."
@@ -5250,6 +5346,9 @@ disable_if_no_input_file "run_busco_dupaware_root_dna" "${file_dated_species_tre
 busco_root_dna_needs_update=0
 gg_artifact_contract_init busco_root_dna_provenance_args "genome_evolution_busco_root_dna" "all_buscos" "${genome_evolution_provenance_dir}/busco.root_dna.json"
 busco_root_dna_provenance_args+=(
+  --input "adapter=${gg_support_dir}/species_tree_guided_gene_tree_rooting.py"
+  --parameter "engine=nwkit_root_rootcompare"
+  --parameter "nwkit_identity=${genome_nwkit_identity}"
   --input "notung_directory=${dir_busco_notung_dna}"
   --input "unrooted_tree_directory=${dir_busco_iqtree_dna}"
   --input "species_tree=${file_dated_species_tree}"
@@ -5260,18 +5359,22 @@ busco_root_dna_provenance_args+=(
 gg_artifact_prepare_stage busco_root_dna_needs_update run_busco_dupaware_root_dna "${busco_root_dna_provenance_args[@]}" || exit $?
 if [[ ${busco_root_dna_needs_update} -eq 1 && ${run_busco_dupaware_root_dna} -eq 1 ]]; then
   gg_step_start "${task}"
-  rm -rf -- "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}"
-  ensure_dir "${dir_busco_rooted_txt_dna}"
-  ensure_dir "${dir_busco_rooted_nwk_dna}"
+  busco_root_stage_dir=$(mktemp -d "./tmp.busco-root-dna.XXXXXX")
+  ensure_dir "${busco_root_stage_dir}/reports"
+  ensure_dir "${busco_root_stage_dir}/trees"
 
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_dna}")
   for infile in "${infiles[@]}"; do
     wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
-    busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_dna}" "${dir_busco_iqtree_dna}" "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}" &
+    busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_dna}" "${dir_busco_iqtree_dna}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &
     gg_background_register "$!"
   done
-  wait_for_background_jobs
+  wait_for_background_jobs || exit $?
+  mv_out_bundle \
+    "${busco_root_stage_dir}/reports" "${dir_busco_rooted_txt_dna}" \
+    "${busco_root_stage_dir}/trees" "${dir_busco_rooted_nwk_dna}" || exit $?
+  rmdir "${busco_root_stage_dir}"
   gg_artifact_record "${busco_root_dna_provenance_args[@]}"
 else
   gg_step_skip "${task}"
@@ -5282,6 +5385,9 @@ disable_if_no_input_file "run_busco_dupaware_root_pep" "${file_dated_species_tre
 busco_root_pep_needs_update=0
 gg_artifact_contract_init busco_root_pep_provenance_args "genome_evolution_busco_root_pep" "all_buscos" "${genome_evolution_provenance_dir}/busco.root_pep.json"
 busco_root_pep_provenance_args+=(
+  --input "adapter=${gg_support_dir}/species_tree_guided_gene_tree_rooting.py"
+  --parameter "engine=nwkit_root_rootcompare"
+  --parameter "nwkit_identity=${genome_nwkit_identity}"
   --input "notung_directory=${dir_busco_notung_pep}"
   --input "unrooted_tree_directory=${dir_busco_iqtree_pep}"
   --input "species_tree=${file_dated_species_tree}"
@@ -5292,18 +5398,22 @@ busco_root_pep_provenance_args+=(
 gg_artifact_prepare_stage busco_root_pep_needs_update run_busco_dupaware_root_pep "${busco_root_pep_provenance_args[@]}" || exit $?
 if [[ ${busco_root_pep_needs_update} -eq 1 && ${run_busco_dupaware_root_pep} -eq 1 ]]; then
   gg_step_start "${task}"
-  rm -rf -- "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}"
-  ensure_dir "${dir_busco_rooted_txt_pep}"
-  ensure_dir "${dir_busco_rooted_nwk_pep}"
+  busco_root_stage_dir=$(mktemp -d "./tmp.busco-root-pep.XXXXXX")
+  ensure_dir "${busco_root_stage_dir}/reports"
+  ensure_dir "${busco_root_stage_dir}/trees"
 
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_pep}")
   for infile in "${infiles[@]}"; do
     wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
-    busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_pep}" "${dir_busco_iqtree_pep}" "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}" &
+    busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_pep}" "${dir_busco_iqtree_pep}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &
     gg_background_register "$!"
   done
-  wait_for_background_jobs
+  wait_for_background_jobs || exit $?
+  mv_out_bundle \
+    "${busco_root_stage_dir}/reports" "${dir_busco_rooted_txt_pep}" \
+    "${busco_root_stage_dir}/trees" "${dir_busco_rooted_nwk_pep}" || exit $?
+  rmdir "${busco_root_stage_dir}"
   gg_artifact_record "${busco_root_pep_provenance_args[@]}"
 else
   gg_step_skip "${task}"
@@ -5558,10 +5668,17 @@ copy_number_pgls_provenance_args+=(
   --input "copy_number=${file_orthogroup_copy_number}"
   --input "dated_species_tree=${file_dated_species_tree}"
   --input "trait_table=${file_trait}"
+  --input "adapter=${gg_support_dir}/orthogroup_copy_number_trait_pgls.r"
+  --parameter "engine=nwkit_regress"
+  --parameter "nwkit_identity=${genome_nwkit_identity}"
+  --parameter "model=brownian"
+  --parameter "covariance_estimator=gaussian-REML"
+  --parameter "measurement_error_model=none"
   --output "matrix=${file_orthogroup_copy_number_matrix}"
   --output "pgls=${file_orthogroup_copy_number_trait_pgls}"
   --output "summary_plot=${file_orthogroup_copy_number_trait_pgls_summary_pdf}"
-  --optional-output "significant=${file_orthogroup_copy_number_trait_pgls_significant}"
+  --output "significant=${file_orthogroup_copy_number_trait_pgls_significant}"
+  --output "summary_svg=${file_orthogroup_copy_number_trait_pgls_summary_pdf%.pdf}.svg"
   --parameter "trait=${orthogroup_copy_number_trait}"
   --parameter "min_species=${orthogroup_copy_number_trait_min_species}"
   --parameter "family_ids=${orthogroup_copy_number_trait_family_ids}"
@@ -5574,7 +5691,6 @@ gg_artifact_add_input_if_present copy_number_pgls_provenance_args "family_file" 
 gg_artifact_prepare_stage copy_number_pgls_needs_update run_orthogroup_copy_number_trait_pgls "${copy_number_pgls_provenance_args[@]}" || exit $?
 if [[ ${copy_number_pgls_needs_update} -eq 1 && ${run_orthogroup_copy_number_trait_pgls} -eq 1 ]]; then
   gg_step_start "${task}"
-  rm -f -- "${file_orthogroup_copy_number_trait_pgls_significant}"
   ensure_dir "${dir_orthogroup_copy_number_trait_pgls}"
   if ! Rscript "${gg_support_dir}/orthogroup_copy_number_trait_pgls.r" \
     --file_orthogroup_copy_number="${file_orthogroup_copy_number}" \

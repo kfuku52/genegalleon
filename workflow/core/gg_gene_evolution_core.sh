@@ -33,13 +33,33 @@ treevis_query_marker="${treevis_query_marker:-1}"
 query_blast_evalue="${query_blast_evalue:-auto}"
 query_blast_auto_evalue_maxlen_cutoffs="${query_blast_auto_evalue_maxlen_cutoffs:-40:1000,80:100,150:10,300:1,inf:0.01}"
 
+
+# Native sequence dating; species ages remain fixed.
+radte_sequence_engine="${radte_sequence_engine:-native}" # native|iqtree; NWKIT handles dates for both.
+radte_iqtree_interface="${radte_iqtree_interface:-auto}" # auto|cli|library; library worker is an optional external installation.
+radte_iqtree_worker="${radte_iqtree_worker:-}" # Optional external worker executable.
+radte_iqtree_model="${radte_iqtree_model:-}" # Optional complete IQ-TREE model, e.g. GY+F3X4+R4.
+radte_substitution_model="${radte_substitution_model:-auto}"
+radte_codon_frequencies="${radte_codon_frequencies:-}"
+radte_kappa="${radte_kappa:-}"
+radte_omega="${radte_omega:-}"
+radte_gamma_shape="${radte_gamma_shape:-}"
+radte_gamma_categories="${radte_gamma_categories:-4}"
+radte_inference="${radte_inference:-auto}"
+radte_likelihood="${radte_likelihood:-auto}"
+radte_uncertainty="${radte_uncertainty:-profile}"
+radte_interval_level="${radte_interval_level:-0.95}"
+radte_rate_sd="${radte_rate_sd:-}"
+radte_maxiter="${radte_maxiter:-1000}"
+radte_seed="${radte_seed:-1}"
+radte_species_intervals_tsv="${radte_species_intervals_tsv:-}"
+
 # Unified RSC/species-tree expression-trait PGLS. Defaults are repeated here so
 # direct core-script invocations remain safe under set -u.
 pgls_methods="${pgls_methods:-rsc}"
 species_expression_aggregation="${species_expression_aggregation:-sum}"
 species_paralog_missing="${species_paralog_missing:-error}"
 species_paralog_sampling_covariance="${species_paralog_sampling_covariance:-}"
-rphylopars_sampling_covariance="${rphylopars_sampling_covariance:-require-diagonal}"
 rsc_responses="${rsc_responses:-all}"
 rsc_predictors="${rsc_predictors:-all}"
 rsc_predictor_mode="${rsc_predictor_mode:-separate}"
@@ -443,7 +463,7 @@ apply_gene_evolution_profile() {
       set_profile_default_override generax_rec_model "UndatedDL" "UndatedDTL"
       set_profile_default_override run_collect_gff_info "0" "1"
       set_profile_default_override run_generate_expression_matrix "0" "1"
-      set_profile_default_override run_scm_intron "0" "1"
+      set_profile_default_override run_asr_intron "0" "1"
       set_profile_default_override treevis_event_method "species_overlap" "auto"
       ;;
     *)
@@ -1179,7 +1199,6 @@ tree_rooting_method=$(echo "${tree_rooting_method}" | tr '[:upper:]' '[:lower:]'
 pgls_methods=$(printf '%s' "${pgls_methods}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
 species_expression_aggregation=$(printf '%s' "${species_expression_aggregation}" | tr '[:upper:]' '[:lower:]')
 species_paralog_missing=$(printf '%s' "${species_paralog_missing}" | tr '[:upper:]' '[:lower:]')
-rphylopars_sampling_covariance=$(printf '%s' "${rphylopars_sampling_covariance}" | tr '[:upper:]' '[:lower:]')
 rsc_predictor_mode=$(printf '%s' "${rsc_predictor_mode}" | tr '[:upper:]' '[:lower:]')
 rsc_event_source=$(printf '%s' "${rsc_event_source}" | tr '[:upper:]' '[:lower:]')
 rsc_speciation_coverage=$(printf '%s' "${rsc_speciation_coverage}" | tr '[:upper:]' '[:lower:]')
@@ -1209,9 +1228,8 @@ rsc_origin_leave_one_out=$(printf '%s' "${rsc_origin_leave_one_out}" | tr '[:upp
 rsc_allow_large_dense=$(printf '%s' "${rsc_allow_large_dense}" | tr '[:upper:]' '[:lower:]')
 apply_gene_evolution_profile
 pgls_run_rsc=0
-pgls_run_species_rphylopars=0
 if [[ "${pgls_methods}" == "all" ]]; then
-  pgls_methods="rsc,species-nwkit,species-rphylopars"
+  pgls_methods="rsc,species-nwkit"
 fi
 if [[ -z "${pgls_methods}" ]]; then
   echo "pgls_methods must select at least one method." >&2
@@ -1228,9 +1246,8 @@ for pgls_method in "${pgls_method_items[@]}"; do
   case "${pgls_method}" in
     rsc) pgls_run_rsc=1 ;;
     species-nwkit) : ;;
-    species-rphylopars) pgls_run_species_rphylopars=1 ;;
     *)
-      echo "Invalid pgls_methods entry: ${pgls_method}. Use rsc, species-nwkit, species-rphylopars, or all." >&2
+      echo "Invalid pgls_methods entry: ${pgls_method}. Use rsc, species-nwkit, or all." >&2
       exit 1
       ;;
   esac
@@ -1239,7 +1256,6 @@ unset pgls_method pgls_method_items pgls_seen_methods
 if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
   rsc_validate_choice species_expression_aggregation "${species_expression_aggregation}" sum mean max all
   rsc_validate_choice species_paralog_missing "${species_paralog_missing}" error ignore
-  rsc_validate_choice rphylopars_sampling_covariance "${rphylopars_sampling_covariance}" require-diagonal diagonalize
   rsc_validate_choice rsc_predictor_mode "${rsc_predictor_mode}" separate joint
   rsc_validate_choice rsc_event_source "${rsc_event_source}" auto nhx lca species-overlap
   rsc_validate_choice rsc_speciation_coverage "${rsc_speciation_coverage}" complete any
@@ -1703,6 +1719,9 @@ fi
 species_tree_generax="${file_og_parameters_dir}/${species_tree_basename}.generax.nwk" # generated later
 species_tree_pruned="${file_og_parameters_dir}/${species_tree_basename}.pruned.nwk"
 ensure_dir "${file_og_parameters_dir}"
+if [[ -n "${radte_species_intervals_tsv}" && "${radte_species_intervals_tsv}" != /* ]]; then
+  radte_species_intervals_tsv="${gg_workspace_dir}/${radte_species_intervals_tsv}"
+fi
 notung_jar="/usr/local/bin/Notung.jar"
 dir_rpsblastdb="/usr/local/db/Pfam_LE"
 
@@ -1738,6 +1757,7 @@ file_og_rooted_tree="${dir_output_active}/rooted_tree/${og_id}_root.nwk"
 file_og_rooted_log="${dir_output_active}/rooted_tree_log/${og_id}_root.txt"
 file_og_notung_reconcil="${dir_output_active}/notung_reconcile/${og_id}_notung_reconcile.zip"
 file_og_dated_tree="${dir_output_active}/dated_tree/${og_id}_dated.nwk"
+file_og_radte_prefix="${dir_output_active}/dated_tree_native/${og_id}_radte"
 file_og_dated_tree_log="${dir_output_active}/dated_tree_log/${og_id}_dated.log.txt"
 file_og_mapdnds_parameter="${dir_output_active}/mapdnds_parameter/${og_id}_parameter.zip"
 file_og_mapdnds_dn="${dir_output_active}/mapdnds_dn_tree/${og_id}_mapdNdS.dN.nwk"
@@ -1748,8 +1768,10 @@ file_og_hyphy_relax="${dir_output_active}/hyphy_relax/${og_id}_hyphy.relax.json"
 file_og_hyphy_relax_reversed="${dir_output_active}/hyphy_relax_reversed/${og_id}_hyphy.relax.reversed.json"
 file_og_expression="${dir_output_active}/character_expression/${og_id}_expression.tsv"
 file_og_gff_info="${dir_output_active}/character_gff_info/${og_id}_gff.tsv"
-file_og_scm_intron_summary="${dir_output_active}/scm_intron_summary/${og_id}_scm.intron.tsv"
-file_og_scm_intron_plot="${dir_output_active}/scm_intron_plot/${og_id}_scm.intron.pdf"
+file_og_asr_intron_summary="${dir_output_active}/asr_intron_summary/${og_id}_asr.intron.tsv"
+file_og_asr_intron_plot="${dir_output_active}/asr_intron_plot/${og_id}_asr.intron.pdf"
+file_og_asr_intron_model="${dir_output_active}/asr_intron_model/${og_id}_asr.intron.model.tsv"
+file_og_asr_intron_tree="${dir_output_active}/asr_intron_tree/${og_id}_asr.intron.nhx"
 # Cis-regulatory motif
 file_og_promoter_fasta="${dir_output_active}/promoter_fasta/${og_id}_promoter.fa.gz"
 file_og_meme="${dir_output_active}/meme/${og_id}_meme.xml"
@@ -1786,7 +1808,6 @@ fi
 file_og_gene_pgls="${dir_output_active}/pgls_gene_tree/${og_id}_gene_tree_PGLS.tsv"
 file_og_gene_pgls_plot="${dir_output_active}/pgls_gene_tree_plot/${og_id}_gene_PGLS.barplot.pdf"
 file_og_species_nwkit_pgls="${dir_output_active}/pgls_species_nwkit/${og_id}_species_nwkit.pgls.tsv"
-file_og_species_rphylopars_pgls="${dir_output_active}/pgls_species_rphylopars/${og_id}_species_rphylopars.pgls.tsv"
 file_og_pgls_comparison="${dir_output_active}/pgls_comparison/${og_id}_pgls.comparison.tsv"
 file_og_pgls_method_status="${dir_output_active}/pgls_method_status/${og_id}_pgls.method-status.tsv"
 file_og_pgls_method_audit="${dir_output_active}/pgls_method_audit/${og_id}_pgls.method-audit.jsonl"
@@ -1864,9 +1885,9 @@ if [[ ! -d "${dir_sp_gff}" ]] || [[ -z "$(find "${dir_sp_gff}" -mindepth 1 -maxd
     echo "\${run_collect_gff_info} is deactivated. Empty input: ${dir_sp_gff}"
     run_collect_gff_info=0
   fi
-  if [[ ${run_scm_intron} -eq 1 ]]; then
-    echo "\${run_scm_intron} is deactivated. Empty input: ${dir_sp_gff}"
-    run_scm_intron=0
+  if [[ ${run_asr_intron} -eq 1 ]]; then
+    echo "\${run_asr_intron} is deactivated. Empty input: ${dir_sp_gff}"
+    run_asr_intron=0
   fi
 fi
 if [[ -d "${dir_sp_expression}" ]] && [[ -n "$(find "${dir_sp_expression}" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null)" ]]; then
@@ -2661,7 +2682,7 @@ gff_info_provenance_args=(
   --output "gff_info=${file_og_gff_info}"
   --parameter "feature=CDS"
   --parameter "multiple_hits=longest"
-  --parameter "gff_annotation_schema=2"
+  --parameter "gff_annotation_schema=5"
 )
 gff_info_sequence_store="${file_species_cds_store_db}"
 gff_info_sequence_manifest="${file_species_cds_store_manifest}"
@@ -2678,7 +2699,12 @@ if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
   fi
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_primary_fasta}" --out-file "${og_id}.gff2genestat_input.fasta"
 
+  gff_cds_validation_args=()
+  if [[ "${input_sequence_mode}" == "cds" ]]; then
+    gff_cds_validation_args+=(--validate-cds-length)
+  fi
   python "${gg_support_dir}/gff2genestat.py" \
+    "${gff_cds_validation_args[@]}" \
     --dir_gff "${dir_sp_gff}" \
     --feature "CDS" \
     --multiple_hits "longest" \
@@ -4046,8 +4072,41 @@ else
 fi
 
 task="Species-tree-guided divergence time estimation"
-disable_if_no_input_file "run_tree_dating" "${species_tree_pruned}" "${file_og_unrooted_tree_analysis}"
+disable_if_no_input_file "run_tree_dating" "${species_tree_pruned}" "${file_og_unrooted_tree_analysis}" "${file_og_trimmed_aln_analysis}"
 tree_dating_needs_update=0
+radte_sequence_engine="${radte_sequence_engine:-native}"
+radte_iqtree_interface="${radte_iqtree_interface:-auto}"
+radte_iqtree_worker="${radte_iqtree_worker:-}"
+radte_iqtree_model="${radte_iqtree_model:-}"
+radte_iqtree_identity="unused"
+radte_iqtree_library_identity="unused"
+if [[ "${radte_sequence_engine}" == "iqtree" && "${run_tree_dating}" -eq 1 ]]; then
+  radte_iqtree_identity=$(iqtree3 --version 2>&1) || exit $?
+  radte_iqtree_binary=$(command -v iqtree3) || exit $?
+  radte_iqtree_digest=$(sha256sum "${radte_iqtree_binary}") || exit $?
+  radte_iqtree_identity+=" ${radte_iqtree_digest%% *}"
+  radte_iqtree_check_args=(check --interface "${radte_iqtree_interface}")
+  if [[ -n "${radte_iqtree_worker}" ]]; then
+    radte_iqtree_check_args+=(--worker "${radte_iqtree_worker}")
+  fi
+  radte_iqtree_library_identity=$(python -m nwkit.iqtree_library "${radte_iqtree_check_args[@]}") || exit $?
+fi
+radte_model_resolved="${radte_substitution_model}"
+if [[ "${radte_model_resolved}" == "auto" ]]; then
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    radte_model_resolved="lg"
+  else
+    radte_model_resolved="gy94"
+  fi
+fi
+radte_nwkit_identity="unavailable"
+if command -v nwkit >/dev/null 2>&1; then
+  radte_nwkit_identity=$(nwkit --version 2>&1) || exit $?
+fi
+if [[ -s /opt/pg/logs/source_revisions.tsv ]]; then
+  radte_nwkit_identity+=" $(awk -F '\t' '$1 == "nwkit" {print $2; exit}' /opt/pg/logs/source_revisions.tsv)"
+fi
+radte_bundle_suffixes=(dated.nwk nodes.tsv species.tsv events.tsv shared-ages.tsv age-samples.tsv conditional-intervals.tsv uncertainty-components.tsv likelihood.json mcmctree-trace.tsv manifest.json pdf)
 tree_dating_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.tree_dating.json"
   --step "tree_dating"
@@ -4055,14 +4114,39 @@ tree_dating_provenance_args=(
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --input "species_tree=${species_tree_pruned}"
+  --input "alignment=${file_og_trimmed_aln_analysis}"
   --input "unrooted_tree=${file_og_unrooted_tree_analysis}"
   --output "dated_tree=${file_og_dated_tree}"
   --output "dating_log=${file_og_dated_tree_log}"
+  --parameter "engine=nwkit-${radte_sequence_engine}-sequence-v1"
+  --parameter "iqtree_model=${radte_iqtree_model}"
+  --parameter "iqtree_identity=${radte_iqtree_identity}"
+  --parameter "iqtree_interface=${radte_iqtree_interface}"
+  --parameter "iqtree_library_identity=${radte_iqtree_library_identity}"
+  --parameter "nwkit_identity=${radte_nwkit_identity}"
   --parameter "generax_enabled=${run_generax}"
   --parameter "max_age=${radte_max_age}"
+  --parameter "substitution_model=${radte_model_resolved}"
+  --parameter "codon_frequencies=${radte_codon_frequencies}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "kappa=${radte_kappa}"
+  --parameter "omega=${radte_omega}"
+  --parameter "gamma_shape=${radte_gamma_shape}"
+  --parameter "gamma_categories=${radte_gamma_categories}"
+  --parameter "inference=${radte_inference}"
+  --parameter "likelihood=${radte_likelihood}"
+  --parameter "uncertainty=${radte_uncertainty}"
+  --parameter "interval_level=${radte_interval_level}"
+  --parameter "rate_sd=${radte_rate_sd}"
+  --parameter "maxiter=${radte_maxiter}"
+  --parameter "seed=${radte_seed}"
+  --parameter "species_age_policy=fixed-external-intervals-display-only"
   --parameter "species_parser=${species_label_parser}"
   --parameter "species_regex=${species_label_regex}"
 )
+for radte_suffix in "${radte_bundle_suffixes[@]}"; do
+  tree_dating_provenance_args+=(--output "native_${radte_suffix}=${file_og_radte_prefix}.${radte_suffix}")
+done
 if [[ ${run_generax} -eq 1 ]]; then
   tree_dating_provenance_args+=(
     --input "generax_species_tree=${species_tree_generax}"
@@ -4074,14 +4158,23 @@ fi
 if [[ -n "${species_label_map_tsv}" ]]; then
   tree_dating_provenance_args+=(--input "species_map=${species_label_map_tsv}")
 fi
+if [[ -n "${radte_species_intervals_tsv}" ]]; then
+  tree_dating_provenance_args+=(--input "species_intervals=${radte_species_intervals_tsv}")
+fi
+if [[ -s "${file_species_genetic_code}" ]]; then
+  tree_dating_provenance_args+=(--input "species_genetic_code=${file_species_genetic_code}")
+fi
 gg_artifact_prepare_stage tree_dating_needs_update run_tree_dating "${tree_dating_provenance_args[@]}" || exit $?
 if [[ ${tree_dating_needs_update} -eq 1 && ${run_tree_dating} -eq 1 ]]; then
   gg_step_start "${task}"
-  radte_args=()
-
+  if [[ "${species_tree_basename}" != "dated_species_tree" ]]; then
+    echo "Tree dating requires dated_species_tree.nwk with time branch lengths." >&2
+    exit 1
+  fi
+  radte_args=("--species-tree=${species_tree_pruned}")
   if [[ ${run_generax} -eq 1 ]]; then
-    radte_args+=("--species_tree=${species_tree_generax}")
-    radte_args+=("--generax_nhx=${file_og_generax_nhx}")
+    radte_args+=("--reconciliation-species-tree=${species_tree_generax}")
+    radte_args+=("--generax-nhx=${file_og_generax_nhx}")
   else
     gg_extract_expected_zip_prefix \
       "${file_og_notung_reconcil}" \
@@ -4090,9 +4183,8 @@ if [[ ${tree_dating_needs_update} -eq 1 && ${run_tree_dating} -eq 1 ]]; then
       cp_out ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.0 ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled
       cp_out ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.0.parsable.txt ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.parsable.txt
     fi
-    radte_args+=("--species_tree=${species_tree_pruned}")
-    radte_args+=("--gene_tree=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled")
-    radte_args+=("--notung_parsable=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.parsable.txt")
+    radte_args+=("--gene-tree=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled")
+    radte_args+=("--notung-parsable=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.parsable.txt")
   fi
   radte_args+=("--species-parser=${species_label_parser}")
   if [[ -n "${species_label_regex}" ]]; then
@@ -4101,41 +4193,74 @@ if [[ ${tree_dating_needs_update} -eq 1 && ${run_tree_dating} -eq 1 ]]; then
   if [[ -n "${species_label_map_tsv}" ]]; then
     radte_args+=("--species-map-tsv=${species_label_map_tsv}")
   fi
-
-  radte.r \
+  if [[ -n "${radte_species_intervals_tsv}" ]]; then
+    radte_args+=("--species-node-intervals-tsv=${radte_species_intervals_tsv}")
+  fi
+  for radte_option in kappa omega gamma_shape rate_sd codon_frequencies; do
+    radte_variable="radte_${radte_option}"
+    if [[ -n "${!radte_variable}" ]]; then
+      radte_args+=("--${radte_option//_/-}=${!radte_variable}")
+    fi
+  done
+  case "${radte_model_resolved}" in
+    gy94|ecmk07|ecmrest)
+      # Every species represented in this family must use the supported code.
+      python - "${species_tree_pruned}" "${file_species_genetic_code}" "${genetic_code}" <<'PY'
+import csv
+import os
+import sys
+from nwkit.util import read_tree
+species_path, code_path, default_code = sys.argv[1:]
+codes = {}
+if os.path.isfile(code_path):
+    with open(code_path, encoding="utf-8") as handle:
+        codes = {row["species"]: int(row["genetic_code"]) for row in csv.DictReader(handle, delimiter="\t")}
+tree = read_tree(species_path, "auto", True)
+unsupported = {str(n.name): codes.get(str(n.name), int(default_code)) for n in tree.leaves() if codes.get(str(n.name), int(default_code)) != 1}
+if unsupported:
+    raise ValueError(f"Native codon dating currently requires genetic code 1 for all family species: {unsupported}")
+PY
+      radte_args+=("--genetic-code=1")
+      ;;
+  esac
+  radte_args+=("--sequence-engine=${radte_sequence_engine}")
+  if [[ "${radte_sequence_engine}" == "iqtree" ]]; then
+    radte_args+=("--iqtree-threads=${GG_TASK_CPUS}" "--iqtree-interface=${radte_iqtree_interface}")
+    if [[ -n "${radte_iqtree_worker}" ]]; then
+      radte_args+=("--iqtree-worker=${radte_iqtree_worker}")
+    fi
+  fi
+  if [[ -n "${radte_iqtree_model}" ]]; then
+    radte_args+=("--iqtree-model=${radte_iqtree_model}")
+  else
+    radte_args+=("--gamma-categories=${radte_gamma_categories}")
+  fi
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file radte.alignment.fasta
+  nwkit radte \
     "${radte_args[@]}" \
-    --max_age="${radte_max_age}" \
-    --chronos_lambda=1 \
-    --chronos_model=discrete \
-    --pad_short_edge=0.001 \
+    --backend native \
+    --alignment radte.alignment.fasta \
+    --substitution-model "${radte_model_resolved}" \
+    --max-age "${radte_max_age}" \
+    --inference "${radte_inference}" \
+    --likelihood "${radte_likelihood}" \
+    --uncertainty "${radte_uncertainty}" \
+    --interval-level "${radte_interval_level}" \
+    --maxiter "${radte_maxiter}" \
+    --seed "${radte_seed}" \
+    --out-prefix radte \
+    --figure-out radte.pdf \
     2>&1 | tee radte.log
 
-  constrained_node=$(awk -F': *' '/^Calibrated nodes:/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' radte.log)
-  echo "${constrained_node}" > "${og_id}.dated.log.txt"
-
-  if grep -q ":-" radte_gene_tree_output.nwk; then
-    contain_negative_bl=1
-  else
-    contain_negative_bl=0
-  fi
-  if [[ ${contain_negative_bl} -eq 1 ]]; then
-    echo "Dated tree has negative branch length. Deleting output files depending on the tree file."
-    for key in l1ou pem scm dated stat tree_plot; do
-      files=()
-      mapfile -t files < <(compgen -A variable "file_og_${key}")
-      for f in "${files[@]}"; do
-        target_file="${!f}"
-        if [[ -e "${target_file}" ]]; then
-          echo "deleting: ${target_file}"
-          rm -f -- "${target_file}"
-        fi
-      done
-    done
-  else
-    echo "Dated tree has no negative branch length. Continue."
-    cp_out radte_calibrated_nodes.txt "${file_og_dated_tree_log}"
-    cp_out radte_gene_tree_output.nwk "${file_og_dated_tree}"
-  fi
+  # NWKIT validates the chronology and reports failed intervals explicitly.
+  # Publish the complete result with the established downstream filenames.
+  cp radte.dated.nwk radte.compat.nwk
+  cp radte.manifest.json radte.compat.log.txt
+  radte_publish_args=(radte.compat.nwk "${file_og_dated_tree}" radte.compat.log.txt "${file_og_dated_tree_log}")
+  for radte_suffix in "${radte_bundle_suffixes[@]}"; do
+    radte_publish_args+=("radte.${radte_suffix}" "${file_og_radte_prefix}.${radte_suffix}")
+  done
+  mv_out_bundle "${radte_publish_args[@]}" || exit $?
   gg_artifact_record "${tree_dating_provenance_args[@]}"
 else
   gg_step_skip "${task}"
@@ -4452,8 +4577,10 @@ if [[ ${check_pruned} -eq 1 ]]; then
     "${file_og_mapdnds_ds}"
     "${file_og_hyphy_dnds}"
     "${file_og_gff_info}"
-    "${file_og_scm_intron_summary}"
-    "${file_og_scm_intron_plot}"
+    "${file_og_asr_intron_summary}"
+    "${file_og_asr_intron_plot}"
+    "${file_og_asr_intron_model}"
+    "${file_og_asr_intron_tree}"
     "${file_og_l1ou_fit_rdata}"
     "${file_og_l1ou_fit_conv_rdata}"
     "${file_og_l1ou_fit_tree}"
@@ -4471,7 +4598,6 @@ if [[ ${check_pruned} -eq 1 ]]; then
     "${file_og_gene_pgls}"
     "${file_og_gene_pgls_plot}"
     "${file_og_species_nwkit_pgls}"
-    "${file_og_species_rphylopars_pgls}"
     "${file_og_pgls_comparison}"
     "${file_og_pgls_method_status}"
     "${file_og_pgls_method_audit}"
@@ -4931,49 +5057,65 @@ else
   gg_step_skip "${task}"
 fi
 
-task="Stochastic character mapping of intron evolution"
-disable_if_no_input_file "run_scm_intron" "${file_og_gff_info}" "${file_og_dated_tree_analysis}"
-scm_intron_needs_update=0
-scm_intron_provenance_args=(
-  --manifest "${dir_output_active}/artifact_provenance/${og_id}.scm_intron.json"
-  --step "scm_intron"
+task="Ancestral reconstruction of intron presence with NWKIT"
+disable_if_no_input_file "run_asr_intron" "${file_og_gff_info}" "${file_og_dated_tree_analysis}"
+asr_intron_needs_update=0
+asr_intron_nwkit_identity="unavailable"
+if command -v nwkit >/dev/null 2>&1; then
+  asr_intron_nwkit_identity=$(nwkit --version 2>&1) || exit $?
+fi
+if [[ -s /opt/pg/logs/source_revisions.tsv ]]; then
+  asr_intron_nwkit_revision=$(awk -F '\t' '$1 == "nwkit" { print $2; exit }' /opt/pg/logs/source_revisions.tsv)
+  asr_intron_nwkit_identity+=" ${asr_intron_nwkit_revision}"
+fi
+asr_intron_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.asr_intron.json"
+  --step "asr_intron"
   --family-id "${og_id}"
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --input "gff_info=${file_og_gff_info}"
   --input "dated_tree=${file_og_dated_tree_analysis}"
-  --output "scm_summary=${file_og_scm_intron_summary}"
-  --optional-output "scm_plot=${file_og_scm_intron_plot}"
+  --input "adapter=${gg_support_dir}/asr_intron_evolution.py"
+  --output "asr_summary=${file_og_asr_intron_summary}"
+  --output "asr_plot=${file_og_asr_intron_plot}"
+  --output "asr_model=${file_og_asr_intron_model}"
+  --output "asr_tree=${file_og_asr_intron_tree}"
   --parameter "intron_gain_rate=${intron_gain_rate}"
   --parameter "retrotransposition_rate=${retrotransposition_rate}"
-  --parameter "nrep=1000"
+  --parameter "model=CUSTOM"
+  --parameter "states=intron_absent,intron_present"
+  --parameter "root_prior=equal"
+  --parameter "branch_lengths=original"
+  --parameter "nwkit_identity=${asr_intron_nwkit_identity}"
 )
-gg_artifact_prepare_stage scm_intron_needs_update run_scm_intron "${scm_intron_provenance_args[@]}" || exit $?
-if [[ ${scm_intron_needs_update} -eq 1 && ${run_scm_intron} -eq 1 ]]; then
+gg_artifact_prepare_stage asr_intron_needs_update run_asr_intron "${asr_intron_provenance_args[@]}" || exit $?
+if [[ ${asr_intron_needs_update} -eq 1 && ${run_asr_intron} -eq 1 ]]; then
   gg_step_start "${task}"
-  rm -f -- "${file_og_scm_intron_summary}" "${file_og_scm_intron_plot}"
-  rm -f -- intron_evolution_summary.tsv intron_evolution_plot.pdf
+  python "${gg_support_dir}/asr_intron_evolution.py" \
+    --tree-file "${file_og_dated_tree_analysis}" \
+    --trait-file "${file_og_gff_info}" \
+    --intron-gain-rate "${intron_gain_rate}" \
+    --retrotransposition-rate "${retrotransposition_rate}" \
+    --output-prefix intron_asr || exit $?
 
-  Rscript "${gg_support_dir}/scm_intron_evolution.r" \
-    --tree_file="${file_og_dated_tree_analysis}" \
-    --trait_file="${file_og_gff_info}" \
-    --intron_gain_rate="${intron_gain_rate}" \
-    --retrotransposition_rate="${retrotransposition_rate}" \
-    --nrep=1000 \
-    --nslots="${GG_TASK_CPUS}"
-
-  cp_out intron_evolution_summary.tsv "${file_og_scm_intron_summary}"
-  if [[ -e intron_evolution_plot.pdf ]]; then
-    cp_out intron_evolution_plot.pdf "${file_og_scm_intron_plot}"
-  fi
-  gg_artifact_record "${scm_intron_provenance_args[@]}"
+  mv_out_bundle \
+    intron_asr.model.tsv "${file_og_asr_intron_model}" \
+    intron_asr.nhx "${file_og_asr_intron_tree}" \
+    intron_asr.pdf "${file_og_asr_intron_plot}" \
+    intron_asr.tsv "${file_og_asr_intron_summary}" || exit $?
+  gg_artifact_record "${asr_intron_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
-task="l1ou"
+task="kfl1ou OU shift detection"
 disable_if_no_input_file "run_l1ou" "${file_og_trimmed_aln_analysis}" "${file_og_expression}" "${file_og_dated_tree_analysis}"
 l1ou_needs_update=0
+kfl1ou_identity="unavailable"
+if [[ ${run_l1ou} -eq 1 ]]; then
+  kfl1ou_identity=$(Rscript -e 'cat(as.character(packageVersion("kfl1ou")))') || exit $?
+fi
 l1ou_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.l1ou.json"
   --step "l1ou"
@@ -4988,6 +5130,9 @@ l1ou_provenance_args=(
   --output "regime=${file_og_l1ou_fit_regime}"
   --output "leaf=${file_og_l1ou_fit_leaf}"
   --output "plot=${file_og_l1ou_fit_plot}"
+  --input "adapter=${gg_support_dir}/detect_OU_shift_kfl1ou.r"
+  --parameter "engine=kfl1ou"
+  --parameter "kfl1ou_identity=${kfl1ou_identity}"
   --parameter "criterion=${l1ou_criterion}"
   --parameter "alpha_upper=${l1ou_alpha_upper}"
   --parameter "convergence=${l1ou_convergence}"
@@ -5078,12 +5223,6 @@ if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
     echo "run_expression_trait_pgls=1 requires nwkit with the regress and reconcile commands." >&2
     exit 1
   fi
-  if [[ ${pgls_run_species_rphylopars} -eq 1 ]]; then
-    if ! command -v Rscript >/dev/null 2>&1; then
-      echo "pgls_methods includes species-rphylopars, but Rscript is unavailable." >&2
-      exit 1
-    fi
-  fi
   if [[ -s "${file_og_expression}" ]]; then
     if [[ ! -s "${file_sp_trait}" ]]; then
       echo "run_expression_trait_pgls=1 requires the species-trait table: ${file_sp_trait}" >&2
@@ -5135,11 +5274,6 @@ if [[ -z "${rsc_nwkit_identity}" ]] && command -v nwkit >/dev/null 2>&1; then
   rsc_nwkit_identity=$(nwkit --version 2>&1 | tail -n 1 || true)
 fi
 rsc_nwkit_identity="${rsc_nwkit_identity:-unavailable}"
-rsc_rphylopars_identity="not-requested"
-if [[ ${pgls_run_species_rphylopars} -eq 1 ]]; then
-  rsc_rphylopars_identity=$(Rscript -e 'cat(as.character(utils::packageVersion("Rphylopars")))' 2>/dev/null || true)
-  rsc_rphylopars_identity="${rsc_rphylopars_identity:-unavailable}"
-fi
 
 rsc_needs_update=0
 rsc_provenance_args=(
@@ -5150,7 +5284,6 @@ rsc_provenance_args=(
   --workspace-root "${gg_workspace_dir}"
   --input "adapter=${gg_support_dir}/reconciled_speciation_contrast.py"
   --input "species_comparator=${gg_support_dir}/species_tree_pgls.py"
-  --input "rphylopars_adapter=${gg_support_dir}/species_tree_rphylopars.R"
   --output "status=${file_og_rsc_status}"
   --output "regression=${file_og_rsc_regression}"
   --output "reconciliation=${file_og_rsc_reconciliation}"
@@ -5166,7 +5299,6 @@ rsc_provenance_args=(
   --output "audit=${file_og_rsc_audit}"
   --output "log=${file_og_rsc_log}"
   --output "species_nwkit=${file_og_species_nwkit_pgls}"
-  --output "species_rphylopars=${file_og_species_rphylopars_pgls}"
   --output "comparison=${file_og_pgls_comparison}"
   --output "method_status=${file_og_pgls_method_status}"
   --output "method_audit=${file_og_pgls_method_audit}"
@@ -5180,7 +5312,6 @@ rsc_provenance_args=(
   --parameter "methods=${pgls_methods}"
   --parameter "species_expression_aggregation=${species_expression_aggregation}"
   --parameter "species_paralog_missing=${species_paralog_missing}"
-  --parameter "rphylopars_sampling_covariance=${rphylopars_sampling_covariance}"
   --parameter "responses=${rsc_responses}"
   --parameter "predictors=${rsc_predictors}"
   --parameter "predictor_mode=${rsc_predictor_mode}"
@@ -5230,7 +5361,6 @@ rsc_provenance_args=(
   --parameter "species_parser=${species_label_parser}"
   --parameter "species_regex=${species_label_regex}"
   --parameter "nwkit_identity=${rsc_nwkit_identity}"
-  --parameter "rphylopars_identity=${rsc_rphylopars_identity}"
 )
 if [[ -s "${file_og_expression}" ]]; then
   rsc_provenance_args+=(
@@ -5272,7 +5402,6 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
   rsc_log_tmp="${rsc_work_dir}/${og_id}_rsc.log"
   pgls_log_tmp="${rsc_work_dir}/${og_id}_expression_trait_pgls.log"
   species_nwkit_tmp="${rsc_work_dir}/${og_id}_species_nwkit.pgls.tsv"
-  species_rphylopars_tmp="${rsc_work_dir}/${og_id}_species_rphylopars.pgls.tsv"
   pgls_comparison_tmp="${rsc_work_dir}/${og_id}_pgls.comparison.tsv"
   pgls_method_status_tmp="${rsc_work_dir}/${og_id}_pgls.method-status.tsv"
   pgls_method_audit_tmp="${rsc_work_dir}/${og_id}_pgls.method-audit.jsonl"
@@ -5606,12 +5735,9 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
     --confidence-level "${rsc_confidence_level}"
     --reml "${rsc_reml}"
     --allow-large-dense "${rsc_allow_large_dense}"
-    --rphylopars-sampling-covariance "${rphylopars_sampling_covariance}"
-    --rphylopars-script "${gg_support_dir}/species_tree_rphylopars.R"
     --rsc-results "${rsc_combined_prefix}.regression.tsv"
     --rsc-status "${rsc_combined_status}"
     --native-out "${species_nwkit_tmp}"
-    --rphylopars-out "${species_rphylopars_tmp}"
     --comparison-out "${pgls_comparison_tmp}"
     --status-out "${pgls_method_status_tmp}"
     --audit-out "${pgls_method_audit_tmp}"
@@ -5647,7 +5773,6 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
     "${rsc_combined_audit}" "${file_og_rsc_audit}" \
     "${rsc_log_tmp}" "${file_og_rsc_log}" \
     "${species_nwkit_tmp}" "${file_og_species_nwkit_pgls}" \
-    "${species_rphylopars_tmp}" "${file_og_species_rphylopars_pgls}" \
     "${pgls_comparison_tmp}" "${file_og_pgls_comparison}" \
     "${pgls_method_status_tmp}" "${file_og_pgls_method_status}" \
     "${pgls_method_audit_tmp}" "${file_og_pgls_method_audit}" \
@@ -5661,8 +5786,7 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
   nwkit_version_text=$(nwkit --version 2>&1 | tail -n 1 || true)
   gg_artifact_record \
     "${rsc_provenance_args[@]}" \
-    --diagnostic "nwkit_version=${nwkit_version_text:-unknown}" \
-    --diagnostic "rphylopars_version=recorded_in_method_status"
+    --diagnostic "nwkit_version=${nwkit_version_text:-unknown}"
   rm -rf -- "${rsc_work_dir}"
 else
   gg_step_skip "${task}"
@@ -6090,7 +6214,7 @@ summary_input_files=(
   "${file_og_gff_info}"
   "${file_og_fimo}"
   "${file_og_promoter_fasta}"
-  "${file_og_scm_intron_summary}"
+  "${file_og_asr_intron_summary}"
   "${file_og_csubst_b}"
   "${file_og_gene_pgls}"
   "${file_og_pgls_comparison}"
@@ -6103,7 +6227,7 @@ summary_input_files=(
   "${file_og_synteny}"
 )
 task="Synteny neighborhood grouping"
-if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then
+if [[ ${treevis_synteny} -eq 1 || ${treevis_synteny_similarity} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then
   synteny_source_dir="${dir_sp_cds}"
   synteny_sequence_mode="cds"
   if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
@@ -6121,7 +6245,7 @@ if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tr
     --input "primary_fasta=${file_og_primary_fasta}"
     --optional-output "synteny=${file_og_synteny}"
     --parameter "input_sequence_mode=${synteny_sequence_mode}"
-    --parameter "window=${treevis_synteny_window}"
+    --parameter "window=${synteny_search_window}"
     --parameter "query_blast_evalue=${query_blast_evalue}"
     --parameter "auto_evalue_cutoffs=${query_blast_auto_evalue_maxlen_cutoffs}"
     --parameter "genetic_code=${genetic_code}"
@@ -6170,7 +6294,7 @@ if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tr
         --lock_dir "${file_og_parameters_dir}/synteny_locks" \
         --gff2genestat_script "${gg_support_dir}/gff2genestat.py" \
         --input_sequence_mode "${synteny_sequence_mode}" \
-        --window "${treevis_synteny_window}" \
+        --window "${synteny_search_window}" \
         --evalue "${synteny_evalue}" \
         --genetic_code "${genetic_code}" \
         --threads "${GG_TASK_CPUS}" \
@@ -6304,7 +6428,7 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
     --character_gff "${file_og_gff_info}" \
     --fimo "${file_og_fimo}" \
     --promoter_fasta "${summary_promoter_fasta}" \
-    --scm_intron "${file_og_scm_intron_summary}" \
+    --asr_intron "${file_og_asr_intron_summary}" \
     --csubst_b "${file_og_csubst_b}" \
     --gene_pgls_stats "${file_og_gene_pgls}" \
     --pgls_comparison "${file_og_pgls_comparison}" \
@@ -6422,6 +6546,9 @@ tree_plot_provenance_args=(
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --output "tree_plot=${file_og_tree_plot}"
+  --parameter "column_layout=physical-mm-v2-compact-legends"
+  --parameter "localization_layout=paired-squares-v3-black-labels"
+  --parameter "domain_intron_marks=no"
   --parameter "branch_length=${treevis_branch_length}"
   --parameter "support_value_requested=${treevis_support_value}"
   --parameter "support_value_resolved=${treevis_support_value_resolved}"
@@ -6429,6 +6556,22 @@ tree_plot_provenance_args=(
   --parameter "heatmap_transform=${treevis_heatmap_transform}"
   --parameter "max_intergenic_dist=${treevis_max_intergenic_dist}"
   --parameter "synteny_window=${treevis_synteny_window}"
+  --parameter "sequence_similarity=${treevis_sequence_similarity}"
+  --parameter "pairwise_tip_suffix=last3"
+  --parameter "pairwise_layout_version=3"
+  --parameter "gene_structure=compressed,23,utr-v1"
+  --parameter "intron_correspondence=inline-confidence-bands-v5-no-labels,nearby_nt=3"
+  --parameter "pairwise_input_validation_version=2"
+  --parameter "sequence_similarity_width_mm=${treevis_sequence_similarity_width_mm}"
+  --parameter "sequence_similarity_mode=${input_sequence_mode}"
+  --parameter "sequence_similarity_metric=amino_acid_identity"
+  --parameter "sequence_similarity_genetic_code=${genetic_code}"
+  --parameter "pairwise_panel_order=synteny,cis,sequence"
+  --parameter "cis_similarity=${treevis_cis_similarity}"
+  --parameter "cis_similarity_width_mm=${treevis_cis_similarity_width_mm}"
+  --parameter "synteny_similarity=${treevis_synteny_similarity}"
+  --parameter "synteny_search_window=${synteny_search_window}"
+  --parameter "synteny_similarity_width_mm=${treevis_synteny_similarity_width_mm}"
   --parameter "query_marker=${treevis_query_marker}"
   --parameter "retrotransposition_delta_intron=${treevis_retrotransposition_delta_intron}"
   --parameter "clade_ortholog=${treevis_clade_ortholog}"
@@ -6444,6 +6587,7 @@ tree_plot_provenance_args=(
   --parameter "csubst_cutoff_stat=${csubst_cutoff_stat}"
   --parameter "promoter_bp=${promoter_bp}"
   --parameter "fimo_qvalue=${fimo_qvalue}"
+  --parameter "promoter_motif_axis_unit=kb"
   --parameter "species_label_parser=${species_label_parser}"
 )
 tree_plot_input_files=(
@@ -6460,6 +6604,8 @@ tree_plot_input_files=(
   "${file_og_rpsblast}"
   "${file_og_meme}"
   "${file_og_dated_tree}"
+  "${file_og_fimo}"
+  "${file_og_promoter_fasta}"
 )
 for ((i = 2; i <= csubst_max_arity; i++)); do
   csubst_cb_varname="file_og_csubst_cb_${i}"
@@ -6554,7 +6700,7 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
     panel_index=$((panel_index + 1))
   fi
   tree_plot_panel_args+=(
-    "--panel${panel_index}=signal_peptide"
+    "--panel${panel_index}=localization"
   )
   panel_index=$((panel_index + 1))
   tree_plot_panel_args+=(
@@ -6563,6 +6709,14 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
   panel_index=$((panel_index + 1))
   tree_plot_panel_args+=(
     "--panel${panel_index}=intron_number"
+  )
+  panel_index=$((panel_index + 1))
+  gene_structure_alignment=""
+  if [[ "${input_sequence_mode}" == "cds" ]]; then
+    gene_structure_alignment="${panel11_untrimmed_aln}"
+  fi
+  tree_plot_panel_args+=(
+    "--panel${panel_index}=gene_structure,compressed,23,${gene_structure_alignment}"
   )
   panel_index=$((panel_index + 1))
   tree_plot_panel_args+=(
@@ -6584,13 +6738,24 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
   tree_plot_panel_args+=(
     "--panel${panel_index}=ortholog,${ortholog_prefix},${file_og_dated_tree}"
   )
+  if [[ ${treevis_synteny_similarity} -eq 1 ]]; then
+    panel_index=$((panel_index + 1))
+    tree_plot_panel_args+=("--panel${panel_index}=synteny_similarity,${file_og_synteny},${synteny_search_window},${treevis_synteny_similarity_width_mm}")
+  fi
+  if [[ ${treevis_cis_similarity} -eq 1 ]]; then
+    panel_index=$((panel_index + 1))
+    tree_plot_panel_args+=("--panel${panel_index}=cis_similarity,${file_og_fimo},${file_og_promoter_fasta},${fimo_qvalue},${treevis_cis_similarity_width_mm}")
+  fi
+  if [[ ${treevis_sequence_similarity} -eq 1 ]]; then
+    panel_index=$((panel_index + 1))
+    tree_plot_panel_args+=("--panel${panel_index}=sequence_similarity,${file_og_trimmed_aln_analysis},${input_sequence_mode},${treevis_sequence_similarity_width_mm},${genetic_code}")
+  fi
 
   TREEVIS_SPECIES_PARSER="${species_label_parser}" \
   Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
     --stat_branch="${file_og_stat_branch}" \
     --max_delta_intron_present="${treevis_retrotransposition_delta_intron}" \
-    --width="7.2" \
-    --rel_widths="" \
+    --panel_widths_mm="tree:60" \
     "${tree_plot_panel_args[@]}" \
     --show_branch_id="yes" \
     --event_method="${treevis_event_method}" \
