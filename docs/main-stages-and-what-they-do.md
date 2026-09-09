@@ -357,6 +357,15 @@ Notable defaults:
   parser's taxonomy query only when that mapping is one-to-one. True omissions,
   duplicate parsed labels, and ambiguous genus-level matches stop before
   OrthoFinder.
+- the validated correspondence is applied to a staged
+  `species_tree_inputs.nwk` copy for both core selection and OrthoFinder.
+  Only terminal labels change to the protein FASTA basenames; topology,
+  branch lengths, support labels, comments, and the original tree remain
+  unchanged. `species_tree_inputs.mapping.json` records the label mapping and
+  source/output hashes alongside the published OrthoFinder results. A unique
+  taxonomy query is not evidence that two independently supplied samples are
+  identical; review input provenance or provide an explicit species-label map
+  when combining such data.
 - when the species count exceeds `max_orthofinder_core_species`, the core
   species set is selected with size and BUSCO filters by default:
   `orthofinder_core_filters="busco_complete_pct:ge:80,num_seq:le:100000"`.

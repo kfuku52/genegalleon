@@ -2574,8 +2574,9 @@ def test_genome_evolution_core_requires_requested_species_tree_before_orthofinde
         in text
     )
     assert "from nwkit.species_parser import get_species_parser" in text
-    assert "species_regex = sys.argv[3] or None" in text
-    assert "species_map_tsv = sys.argv[4] or None" in text
+    assert "output_tree = Path(sys.argv[2])" in text
+    assert "species_regex = sys.argv[4] or None" in text
+    assert "species_map_tsv = sys.argv[5] or None" in text
     assert "protein_by_query = index_unmatched_by_taxonomy_query" in text
     assert "species mapping is not one-to-one" in text
 

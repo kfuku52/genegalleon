@@ -151,6 +151,11 @@ the explicit config registry.
 
 ## What gets logged
 
+For optional structured run records and read-only status, restart preflight,
+artifact verification, and runtime inspection, see the
+[workflow inspection API](workflow-inspection-api.md). Existing commands and
+progress-summary behavior remain unchanged.
+
 During startup, wrappers print:
 
 - the detected scheduler kind,

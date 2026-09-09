@@ -47,6 +47,14 @@ def validate_fasta(path: Path, expected: str) -> FastaSummary:
     if not path.is_file():
         raise FileNotFoundError(path)
 
+    with _open_text(path) as handle:
+        return validate_fasta_stream(handle, expected, path=path)
+
+
+def validate_fasta_stream(handle: TextIO, expected: str, *, path: Path = Path("<stream>")) -> FastaSummary:
+    """Apply the same sequence checks to raw or archive-backed text streams."""
+    if expected not in {"dna", "codon", "protein"}:
+        raise SequenceContractError(f"Unsupported FASTA sequence type: {expected}")
     allowed = PROTEIN_ALPHABET if expected == "protein" else DNA_ALPHABET
     record_lengths: list[int] = []
     ungapped_lengths: list[int] = []
@@ -55,29 +63,28 @@ def validate_fasta(path: Path, expected: str) -> FastaSummary:
     invalid: set[str] = set()
     residues = 0
 
-    with _open_text(path) as handle:
-        for line_number, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            if line.startswith(">"):
-                if len(line) == 1:
-                    raise SequenceContractError(f"Empty FASTA header at line {line_number}: {path}")
-                if current_length is not None:
-                    record_lengths.append(current_length)
-                    ungapped_lengths.append(current_ungapped)
-                current_length = 0
-                current_ungapped = 0
-                continue
-            if current_length is None:
-                raise SequenceContractError(
-                    f"FASTA sequence data appears before the first header at line {line_number}: {path}"
-                )
-            sequence = "".join(line.split()).upper()
-            invalid.update(set(sequence) - allowed)
-            current_length += len(sequence)
-            current_ungapped += sum(character not in "-?." for character in sequence)
-            residues += len(sequence)
+    for line_number, raw_line in enumerate(handle, start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith(">"):
+            if len(line) == 1:
+                raise SequenceContractError(f"Empty FASTA header at line {line_number}: {path}")
+            if current_length is not None:
+                record_lengths.append(current_length)
+                ungapped_lengths.append(current_ungapped)
+            current_length = 0
+            current_ungapped = 0
+            continue
+        if current_length is None:
+            raise SequenceContractError(
+                f"FASTA sequence data appears before the first header at line {line_number}: {path}"
+            )
+        sequence = "".join(line.split()).upper()
+        invalid.update(set(sequence) - allowed)
+        current_length += len(sequence)
+        current_ungapped += sum(character not in "-?." for character in sequence)
+        residues += len(sequence)
 
     if current_length is not None:
         record_lengths.append(current_length)
