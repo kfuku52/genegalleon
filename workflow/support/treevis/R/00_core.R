@@ -416,6 +416,8 @@ get_rel_widths = function(g, args_rel_widths) {
             rel_widths[gname] = 0.7
         } else if (grepl('^signal_peptide$', gname)) {
             rel_widths[gname] = 0.1
+        } else if (grepl('^peroxisome$', gname)) {
+            rel_widths[gname] = 0.1
         } else if (grepl('^tm$', gname)) {
             rel_widths[gname] = 0.12
         } else if (grepl('^intron$', gname)) {

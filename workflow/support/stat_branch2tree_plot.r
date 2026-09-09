@@ -139,6 +139,7 @@ cat('long_branch_display settings:',
 # MAXDIST: Maximum distance between genes in bp to call the cluster membership.
 
 # signal_peptide: Stacked bar plot for cdskit localize signal probabilities.
+# peroxisome: Independent cdskit localize peroxisome probability (0-1).
 
 # transmembrane_domain: Number of transmembrane domains predicted by TMHMM.
 
@@ -327,6 +328,8 @@ for (col in unlist(args[grep("^panel[0-9]+$", names(args))])) {
     g = add_text_column(g, args, gname = paste('text', text_col, text_xlab, sep=','), col = text_col, xlab = text_xlab, max_nchar = text_max_nchar)
   } else if (grepl('^signal_peptide', col)) {
     g = add_signal_peptide_column(g, args)
+  } else if (grepl('^peroxisome$', col)) {
+    g = add_peroxisome_column(g, args)
   } else if (grepl('^transmembrane_domain', col)) {
     g = add_integer_column(g = g, args = args, gname = 'tm', col = 'tmhmm_predhel', xlab = 'TM')
   } else if (grepl('^intron_number', col)) {
@@ -407,10 +410,12 @@ for (col in unlist(args[grep("^panel[0-9]+$", names(args))])) {
   }
 }
 
+height = max(3, length(tree[['tip.label']]) / 10)
+if ('synteny' %in% names(g)) height = height + 1.4
 # Measure using the same device/font metrics as the final PDF.
 measurement_pdf = tempfile(fileext='.pdf')
 grDevices::pdf(measurement_pdf)
-layout_mm = tryCatch(treevis_layout_mm(g, args[['panel_widths_mm']]),
+layout_mm = tryCatch(treevis_layout_mm(g, args[['panel_widths_mm']], height_mm=height * 25.4),
     finally = { grDevices::dev.off(); unlink(measurement_pdf) })
 rel_widths = layout_mm$widths_mm
 base_width = layout_mm$width_mm / 25.4
@@ -424,9 +429,6 @@ if ('domain' %in% names(g)) {
     cp$layers = cp$layers[c(setdiff(seq_along(cp$layers), domain_layer), domain_layer)]
 }
 cat('Writing the plot pdf and svg.\n')
-height = max(3, length(tree[['tip.label']]) / 10)
-# Reserve physical space for the bottom synteny key without compressing tip rows.
-if ('synteny' %in% names(g)) height = height + 1.4
 extensions = c('.pdf')
 for (extension in extensions) {
   cowplot::save_plot(

@@ -712,7 +712,8 @@ add_signal_peptide_column = function(g, args) {
     df_tip2 = merge(df_tip2, df_tip[,c('label','y')], by='y', all.x=TRUE)
     g[[gname]] = ggplot(data=df_tip2) +
         geom_blank(aes(y=label)) + 
-        geom_bar(mapping=aes(x=value, y=label, fill=key), data=df_tip2, position='fill', stat='identity') +
+        geom_bar(mapping=aes(x=value, y=label, fill=key), data=df_tip2, position='fill', stat='identity', width=0.8) +
+        scale_x_continuous(limits=c(0, 1), expand=c(0.04, 0)) +
         coord_cartesian(clip="off") +
         ylab(NULL) +
         xlab(NULL) +
@@ -734,6 +735,35 @@ add_signal_peptide_column = function(g, args) {
             rect=element_rect(fill="transparent"),
             plot.margin=unit(args[['margins']]/4, "cm")
         )
+    attr(g[[gname]], 'treevis_square_bar_height') = 0.8
+    return(g)
+}
+
+add_peroxisome_column = function(g, args) {
+    col = 'cdskit_localize_p_peroxisome'
+    df_tip = get_df_tip(g[['tree']])
+    if (!(col %in% colnames(df_tip))) {
+        cat('cdskit localize peroxisome probability was not found. Peroxisome column will not be shown.\n')
+        return(g)
+    }
+    df_tip$probability = as.numeric(df_tip[[col]])
+    observed = !is.na(df_tip$probability)
+    if (any(!is.finite(df_tip$probability[observed]) |
+            df_tip$probability[observed] < 0 | df_tip$probability[observed] > 1)) {
+        stop('cdskit localize peroxisome probabilities must be between 0 and 1.')
+    }
+    # This is an independent binary prediction, not a sixth targeting class.
+    g[['peroxisome']] = ggplot(df_tip, aes(y=label)) +
+        geom_blank(aes(x=0)) +
+        geom_col(data=df_tip[observed, , drop=FALSE], aes(x=1), fill='grey92', width=0.8) +
+        geom_col(data=df_tip[observed, , drop=FALSE], aes(x=probability), fill='#0072B2', width=0.8) +
+        scale_x_continuous(limits=c(0, 1), breaks=c(0, 1), expand=c(0.04, 0)) +
+        labs(x='Perox.\nprob.', y=NULL) +
+        theme_minimal(base_size=args[['font_size']]) +
+        theme(axis.text.y=element_blank(), axis.ticks=element_blank(),
+              panel.grid=element_blank(),
+              plot.margin=unit(args[['margins']]/4, 'cm'))
+    attr(g[['peroxisome']], 'treevis_square_bar_height') = 0.8
     return(g)
 }
 

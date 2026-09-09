@@ -1,6 +1,6 @@
 # Physical widths are resolved on a PDF device, before combining the columns.
 # Overrides are lower bounds for the data panel, never fractions of the page.
-treevis_layout_mm = function(g, panel_widths_mm = NULL) {
+treevis_layout_mm = function(g, panel_widths_mm = NULL, height_mm = NULL) {
     overrides = numeric()
     if (!is.null(panel_widths_mm) && !is.na(panel_widths_mm) && nzchar(panel_widths_mm)) {
         entries = strsplit(panel_widths_mm, ",", fixed=TRUE)[[1]]
@@ -13,13 +13,26 @@ treevis_layout_mm = function(g, panel_widths_mm = NULL) {
         }
         # Optional panels may be absent for a particular family.
     }
-    grobs = vector('list', length(g))
+    built_plots = lapply(g, ggplot2::ggplot_build)
+    grobs = lapply(built_plots, ggplot2::ggplot_gtable)
+    grobs = cowplot::align_plots(plotlist=grobs, align='h', axis='bt')
     names(grobs) = names(g)
+    if (is.null(height_mm)) {
+        n_tip = max(vapply(g, function(p) length(unique(p$data$label)), integer(1)))
+        height_mm = (max(3, n_tip / 10) + if ('synteny' %in% names(g)) 1.4 else 0) * 25.4
+    }
+    vertical_margin = vapply(grobs, function(gt) {
+        panel = gt$layout[gt$layout$name == 'panel', , drop=FALSE]
+        outside = setdiff(seq_along(gt$heights), seq.int(panel$t[1], panel$b[1]))
+        sum(grid::convertHeight(gt$heights[outside], 'mm', valueOnly=TRUE))
+    }, numeric(1))
+    panel_height_mm = height_mm - max(vertical_margin)
+
     widths = panel_widths = setNames(numeric(length(g)), names(g))
     for (name in names(g)) {
         p = g[[name]]
-        built = ggplot2::ggplot_build(p)
-        gt = ggplot2::ggplot_gtable(built)
+        built = built_plots[[name]]
+        gt = grobs[[name]]
         panel_cells = gt$layout[grepl('^panel($|-)', gt$layout$name), , drop=FALSE]
         if (nrow(panel_cells) != 1) stop('Expected one data panel in column: ', name)
         panel_cols = seq.int(panel_cells$l[1], panel_cells$r[1])
@@ -33,6 +46,12 @@ treevis_layout_mm = function(g, panel_widths_mm = NULL) {
             8
         } else {
             20
+        }
+        square_bar_height = attr(p, 'treevis_square_bar_height')
+        if (!is.null(square_bar_height)) {
+            if (panel_height_mm <= 0) stop('Figure height leaves no space for localization bars.')
+            ranges = built$layout$panel_params[[1]]
+            needed = panel_height_mm * square_bar_height / diff(ranges$y.range) * diff(ranges$x.range)
         }
         fixed = attr(p, 'treevis_width_mm')
         if (!is.null(fixed)) needed = fixed
@@ -70,16 +89,35 @@ treevis_layout_mm = function(g, panel_widths_mm = NULL) {
         }
         outside = setdiff(seq_along(gt$widths), panel_cols)
         outside_mm = if (length(outside)) sum(grid::convertWidth(gt$widths[outside], 'mm', valueOnly=TRUE)) else 0
+        data_width = needed
         # Bottom/top titles and legends can span the panel or the whole column.
         # Reserve their intrinsic width rather than letting them spill into neighbors.
         for (i in seq_along(gt$grobs)) {
             if (!grepl('^(guide-box|xlab|title|subtitle|caption)', gt$layout$name[i])) next
             child = gt$grobs[[i]]
             child_mm = grid::convertWidth(grid::grobWidth(child), 'mm', valueOnly=TRUE)
+            if (!is.null(square_bar_height) && inherits(child, 'titleGrob')) {
+                # titleGrob itself has a null width; measure its text children.
+                child_mm = max(c(child_mm, vapply(child$children, function(text) {
+                    grid::convertWidth(grid::grobWidth(text), 'mm', valueOnly=TRUE)
+                }, numeric(1))))
+            }
             span = seq.int(gt$layout$l[i], gt$layout$r[i])
             extra = intersect(span, outside)
             extra_mm = if (length(extra)) sum(grid::convertWidth(gt$widths[extra], 'mm', valueOnly=TRUE)) else 0
             needed = max(needed, child_mm - extra_mm + 2)
+        }
+        if (!is.null(square_bar_height)) {
+            # Keep each probability bar square; let the legend/title use a
+            # separate gutter instead of stretching the data panel.
+            gutter = needed - data_width
+            edges = c(1L, length(gt$widths))
+            gt$widths[edges] = gt$widths[edges] + grid::unit(gutter / 2, 'mm')
+            outside_mm = outside_mm + gutter
+            labels = grepl('^(guide-box|xlab|title|subtitle|caption)', gt$layout$name)
+            gt$layout$l[labels] = 1L
+            gt$layout$r[labels] = length(gt$widths)
+            needed = data_width
         }
         gt$widths[panel_cols] = grid::unit(rep(needed / length(panel_cols), length(panel_cols)), 'mm')
         panel_widths[name] = needed

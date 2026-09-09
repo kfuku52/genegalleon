@@ -671,13 +671,14 @@ GeneGalleon configuration, the panel order is:
 5. local synteny panel
 6. tip labels
 7. signal peptide summary
-8. transmembrane-domain summary
-9. intron-count panel
-10. protein-domain panel from RPS-BLAST
-11. alignment panel
-12. promoter-motif panel from FIMO
-13. MEME motif summary
-14. ortholog-context panel
+8. peroxisome probability (independent cdskit localize prediction)
+9. transmembrane-domain summary
+10. intron-count panel
+11. protein-domain panel from RPS-BLAST
+12. alignment panel
+13. promoter-motif panel from FIMO
+14. MEME motif summary
+15. ortholog-context panel
 
 Practical interpretation:
 
@@ -689,6 +690,16 @@ Practical interpretation:
   predictions on the same row order as the tree tips,
 - if an upstream analysis was disabled, or the corresponding inputs were not
   available, the associated panel may be blank or minimally populated.
+
+The default `peroxisome` panel follows `signal_peptide` and displays
+`cdskit_localize_p_peroxisome` as a blue bar on a fixed 0-1 scale. The gray
+background shows the full scale; missing values remain blank. This binary
+probability is independent of the five targeting classes and is not stacked
+with them. The panel is omitted when its input column is absent.
+Both localization panels size their data width to the physical height of one
+bar, so each full-scale bar is square. Titles and legends reserve separate
+side space without widening the data bars. Explicit `--panel_widths_mm`
+overrides can still enlarge these panels.
 
 The protein-domain legend is left-aligned and may extend to the right beyond
 its column; adjacent column backgrounds do not cover it.

@@ -23,6 +23,7 @@
 \alias{add_protein_domain_column}
 \alias{add_scale_bar}
 \alias{add_signal_peptide_column}
+\alias{add_peroxisome_column}
 \alias{add_site_state_column}
 \alias{add_symbol_site_column}
 \alias{add_synteny_column}

@@ -6547,6 +6547,10 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
   )
   panel_index=$((panel_index + 1))
   tree_plot_panel_args+=(
+    "--panel${panel_index}=peroxisome"
+  )
+  panel_index=$((panel_index + 1))
+  tree_plot_panel_args+=(
     "--panel${panel_index}=transmembrane_domain"
   )
   panel_index=$((panel_index + 1))
