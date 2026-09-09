@@ -92,6 +92,8 @@ These wrappers are intended to run as one task:
 - `array_worker`: run one task-plan row per scheduler array index
 - `array_finalize`: merge worker shards and run shared validation and summary steps
 
+See [species array submission, restart, and shared download limits](input-generation-arrays.md).
+
 ## Array-size rules
 
 - `gg_input_generation_entrypoint.sh`:

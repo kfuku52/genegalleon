@@ -389,6 +389,7 @@ EOF
 auth_bearer_token_env
 busco_lineage
 download_dir
+download_limit_dir
 download_manifest
 download_only
 download_timeout

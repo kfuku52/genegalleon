@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 
 import argparse
+import csv
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import format_species_inputs as fsi
+from input_generation_array_state import digest, load_plan, verify_receipt
 
 
 def build_arg_parser():
@@ -38,6 +42,8 @@ def build_arg_parser():
         default=0,
         help="Optional expected number of completed task shards/stats.",
     )
+    parser.add_argument("--resolved-manifest-output", default="")
+    parser.add_argument("--task-plan", default="", help="Require verified completion receipts for this exact plan.")
     return parser
 
 
@@ -65,7 +71,22 @@ def main():
             )
         )
 
-    merged_rows = fsi.retain_existing_species_summary_rows(
+    if args.task_plan:
+        plan = load_plan(args.task_plan)
+        indices = range(1, plan["task_count"] + 1)
+        plan_sha256 = digest(args.task_plan)
+        if any(not verify_receipt(args.task_plan, index, plan_sha256) for index in indices):
+            parser.error("Missing, stale, or changed worker completion receipts")
+        expected_stats = {str(index) + ".json" for index in indices}
+        expected_summaries = {str(index) + ".tsv" for index in indices}
+        if {path.name for path in stats_paths} != expected_stats or {path.name for path in shard_paths} != expected_summaries:
+            parser.error("Shard identities do not match the immutable task plan")
+        for index, task in enumerate(plan["tasks"], start=1):
+            stats = read_task_stats(task_stats_dir / (str(index) + ".json"))
+            rows = fsi.read_species_summary_rows(species_summary_shard_dir / (str(index) + ".tsv"))
+            if stats.get("species_prefix") != task["species_prefix"] or len(rows) != 1 or next(iter(rows.values()))["species_prefix"] != task["species_prefix"]:
+                parser.error("Species identity mismatch in task " + str(index))
+    merged_rows = {} if args.task_plan else fsi.retain_existing_species_summary_rows(
         fsi.read_species_summary_rows(species_summary_output)
     )
     shard_row_count = 0
@@ -73,7 +94,6 @@ def main():
         shard_rows = fsi.read_species_summary_rows(shard_path)
         shard_row_count += len(shard_rows)
         merged_rows.update(shard_rows)
-    fsi.write_species_summary_rows(species_summary_output, merged_rows)
 
     species_processed = 0
     num_species_cds_files = 0
@@ -149,6 +169,33 @@ def main():
             indent=2,
             sort_keys=True,
         )
+
+    if args.task_plan and args.resolved_manifest_output and any("manifest_row" in task for task in plan["tasks"]):
+        resolved_rows = []
+        for index, task in enumerate(plan["tasks"], start=1):
+            source = Path(args.task_plan + ".tasks") / (str(index) + ".resolved.tsv")
+            with open(source, newline="") as handle:
+                rows = list(csv.DictReader(handle, delimiter="\t"))
+            if len(rows) != 1 or rows[0]["species_key"] != task["species_key"]:
+                parser.error("Resolved manifest identity mismatch in task " + str(index))
+            resolved_rows.extend(rows)
+        target = Path(args.resolved_manifest_output)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, delete=False, newline="") as handle:
+            staged_manifest = Path(handle.name)
+            writer = csv.DictWriter(handle, fieldnames=sorted({key for row in resolved_rows for key in row}), delimiter="\t")
+            writer.writeheader()
+            writer.writerows(resolved_rows)
+        os.replace(staged_manifest, target)
+
+    species_summary_output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=species_summary_output.parent, delete=False) as handle:
+        staged = Path(handle.name)
+    try:
+        fsi.write_species_summary_rows(staged, merged_rows)
+        os.replace(staged, species_summary_output)
+    finally:
+        staged.unlink(missing_ok=True)
 
     print(
         "Merged {} species summary shards and {} task stats shards.".format(

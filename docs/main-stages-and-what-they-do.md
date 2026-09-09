@@ -61,8 +61,8 @@ Wrapper-specific notes:
 `input_generation_mode` semantics:
 
 - `single`: one process runs formatting, validation, per-species BUSCO, optional trait generation, and the final multi-species BUSCO summary.
-- `array_prepare`: prepares downloads if needed, discovers species tasks, and writes `workspace/output/input_generation/tmp/task_plan.json`; this is the setup step before scheduler array workers run.
-- `array_worker`: each array task reads one row from `task_plan.json` using `GG_ARRAY_TASK_ID`, formats one species, and optionally runs BUSCO for that species; outputs are written as shard files under `workspace/output/input_generation/tmp/`.
+- `array_prepare`: freezes manifest rows or discovers local species tasks, prepares shared taxonomy/BUSCO data, and writes `workspace/output/input_generation/tmp/task_plan.json`; this is the setup step before scheduler array workers run.
+- `array_worker`: each array task reads one row from `task_plan.json` using `GG_ARRAY_TASK_ID`, downloads and formats one species, and optionally runs BUSCO for that species; outputs are written as shard files under `workspace/output/input_generation/tmp/`.
 - `array_finalize`: a single follow-up run merges shard outputs, validates the merged species set, checks BUSCO counts, then runs the shared post-processing steps such as trait generation and `run_multispecies_summary`.
 
 Practical rule:

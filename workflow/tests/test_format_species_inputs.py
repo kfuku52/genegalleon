@@ -2780,6 +2780,7 @@ def test_format_species_inputs_uses_locus_tag_for_genbank_style_ncbi_cds(tmp_pat
                 "ATGGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATCGCCGAAATC\n"
             )
         )
+    # Negative-strand block lengths 214, 136, 79 imply phases 0, 2, 1.
     with gzip.open(gff_path, "wt", encoding="utf-8") as handle:
         handle.write(
             "\n".join(
@@ -2792,8 +2793,8 @@ def test_format_species_inputs_uses_locus_tag_for_genbank_style_ncbi_cds(tmp_pat
                     "JBTAPH010000036.1\tGenbank\tgene\t2114\t2691\t.\t-\t.\tID=gene-ACTFIY_010593;Name=ACTFIY_010593;gbkey=Gene;gene_biotype=protein_coding;locus_tag=ACTFIY_010593",
                     "JBTAPH010000036.1\tGenbank\tmRNA\t2114\t2691\t.\t-\t.\tID=rna-mrna.DD_M4_00007443-RA:cds;Parent=gene-ACTFIY_010593;gbkey=mRNA;locus_tag=ACTFIY_010593;orig_protein_id=gnl|WGS:JBTAPH|DD_M4_00007443-RA:cds;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007443-RA:cds;product=hypothetical protein",
                     "JBTAPH010000036.1\tGenbank\tCDS\t2478\t2691\t.\t-\t0\tID=cds-KAM9986188.1;Parent=rna-mrna.DD_M4_00007443-RA:cds;Dbxref=NCBI_GP:KAM9986188.1;Name=KAM9986188.1;gbkey=CDS;locus_tag=ACTFIY_010593;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007443-RA:cds;product=hypothetical protein;protein_id=KAM9986188.1",
-                    "JBTAPH010000036.1\tGenbank\tCDS\t2246\t2381\t.\t-\t0\tID=cds-KAM9986188.1;Parent=rna-mrna.DD_M4_00007443-RA:cds;Dbxref=NCBI_GP:KAM9986188.1;Name=KAM9986188.1;gbkey=CDS;locus_tag=ACTFIY_010593;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007443-RA:cds;product=hypothetical protein;protein_id=KAM9986188.1",
-                    "JBTAPH010000036.1\tGenbank\tCDS\t2114\t2192\t.\t-\t0\tID=cds-KAM9986188.1;Parent=rna-mrna.DD_M4_00007443-RA:cds;Dbxref=NCBI_GP:KAM9986188.1;Name=KAM9986188.1;gbkey=CDS;locus_tag=ACTFIY_010593;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007443-RA:cds;product=hypothetical protein;protein_id=KAM9986188.1",
+                    "JBTAPH010000036.1\tGenbank\tCDS\t2246\t2381\t.\t-\t2\tID=cds-KAM9986188.1;Parent=rna-mrna.DD_M4_00007443-RA:cds;Dbxref=NCBI_GP:KAM9986188.1;Name=KAM9986188.1;gbkey=CDS;locus_tag=ACTFIY_010593;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007443-RA:cds;product=hypothetical protein;protein_id=KAM9986188.1",
+                    "JBTAPH010000036.1\tGenbank\tCDS\t2114\t2192\t.\t-\t1\tID=cds-KAM9986188.1;Parent=rna-mrna.DD_M4_00007443-RA:cds;Dbxref=NCBI_GP:KAM9986188.1;Name=KAM9986188.1;gbkey=CDS;locus_tag=ACTFIY_010593;orig_transcript_id=gnl|WGS:JBTAPH|mrna.DD_M4_00007443-RA:cds;product=hypothetical protein;protein_id=KAM9986188.1",
                     "",
                 ]
             )

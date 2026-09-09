@@ -16,6 +16,7 @@ from format_species_manifest import (
     resolved_manifest_fieldnames,
     write_resolved_manifest_tsv,
 )
+from format_species_network import isolated_request_provider, request_provider, set_request_provider
 from format_species_provider_config import (
     DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS,
     ENSEMBL_LIKE_PROVIDERS,
@@ -61,7 +62,12 @@ from .targets import (
 )
 
 
-def execute_download_target_job(
+def execute_download_target_job(job, headers, timeout, overwrite, lock_stale_seconds, provider_semaphores):
+    with request_provider(job["provider"]):
+        return _execute_download_target_job(job, headers, timeout, overwrite, lock_stale_seconds, provider_semaphores)
+
+
+def _execute_download_target_job(
     job,
     headers,
     timeout,
@@ -172,6 +178,7 @@ def execute_download_target_job(
     return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded, "failed": failed}
 
 
+@isolated_request_provider
 def download_from_manifest(
     manifest_path,
     download_root,
@@ -240,6 +247,7 @@ def download_from_manifest(
 
     for i, row in enumerate(rows, start=2):
         provider = (row.get("provider") or "").strip().lower()
+        set_request_provider(provider)
         source_id_raw = (row.get("id") or "").strip()
         source_id = normalize_manifest_source_id(provider, source_id_raw)
         species_key = (row.get("species_key") or "").strip()

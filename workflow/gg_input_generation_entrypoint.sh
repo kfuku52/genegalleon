@@ -130,6 +130,7 @@ http_header="" # Extra HTTP header forwarded to download requests, e.g., "User-A
 input_dir="" # Local raw input directory to ingest instead of downloading.
 download_manifest="" # Path to the download manifest file.
 download_dir="" # Directory for downloaded raw files.
+download_limit_dir="" # Shared flock directory for cross-worker database request limits; blank uses workspace/.gg_cache/input_download_limits.
 summary_output="" # Output path for the run summary table.
 species_cds_dir="" # Output directory for formatted CDS FASTA files.
 species_cds_fx2tab_dir="" # Output directory for CDS fx2tab TSV files.
@@ -174,6 +175,8 @@ export GG_INPUT_MAX_CONCURRENT_DOWNLOADS_DIRECT
 
 # Provider-specific download caps are consumed directly downstream.
 gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_MAX_CONCURRENT_DOWNLOADS_"
+gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_REQUEST_INTERVAL_"
+gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_DOWNLOAD_LIMIT_"
 
 if ! gg_entrypoint_prepare_container_runtime 0; then
   exit 1

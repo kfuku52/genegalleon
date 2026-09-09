@@ -704,7 +704,8 @@ Alternative runtime overrides (without editing files) via env vars:
   `GG_INPUT_GBIF_MIN_MATCH_CONFIDENCE`,
   `GG_INPUT_GBIF_MAX_COORDINATE_UNCERTAINTY_M`,
   `GG_INPUT_GBIF_MAX_DISTANCE_FROM_CENTROID_M`.
-- per-provider download caps:
+- per-process provider download caps (shared request limits additionally apply
+  across array jobs; see [shared database limits](input-generation-arrays.md#shared-database-request-limits)):
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBL`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBLPLANTS`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_PHYCOCOSM`,

@@ -153,3 +153,245 @@ def test_run_input_generation_task_and_merge_shards(tmp_path: Path):
     assert payload["num_species_genome_files"] == 2
     assert payload["cds_gff_records_mapped"] == 2
     assert payload["cds_gff_records_unmapped"] == 0
+
+
+def test_manifest_planning_defers_downloads_and_freezes_inputs(tmp_path):
+    source = tmp_path / "sources"
+    write_direct_species_fixture(source, "Arabidopsis_thaliana")
+    manifest = tmp_path / "manifest.tsv"
+    species = "Arabidopsis_thaliana"
+    raw = source / species
+    fields = ["provider", "id", "species_key", "cds_url", "gff_url", "genome_url"]
+    row = ["direct", "fixture", species, (raw / (species + ".cds.fa")).as_uri(),
+           (raw / (species + ".gff")).as_uri(), (raw / (species + ".genome.fa")).as_uri()]
+    manifest.write_text("\t".join(fields) + "\n" + "\t".join(row) + "\n")
+    plan = tmp_path / "plan.json"
+    downloads = tmp_path / "downloads"
+    args = ["--provider", "all", "--download-manifest", str(manifest), "--download-dir", str(downloads), "--outfile", str(plan)]
+    prepared = run_python(PLAN_SCRIPT, *args)
+    assert prepared.returncode == 0, prepared.stderr
+    assert not downloads.exists()
+    frozen = plan.read_bytes()
+    manifest.unlink()  # The worker must consume the frozen row, not mutable input.
+    worker = run_python(RUN_TASK_SCRIPT, "--task-plan", str(plan), "--task-index", "1",
+                        "--species-cds-dir", str(tmp_path / "cds"), "--species-gff-dir", str(tmp_path / "gff"),
+                        "--species-genome-dir", str(tmp_path / "genome"), "--describe-only",
+                        "--task-meta-output", str(tmp_path / "meta.json"))
+    assert worker.returncode == 0, worker.stderr + worker.stdout
+    assert downloads.exists()
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert meta["species_prefix"] == species
+    assert Path(meta["cds_path"]).is_file()
+    assert plan.read_bytes() == frozen
+
+
+def test_duplicate_species_and_changed_plan_are_rejected(tmp_path):
+    raw = tmp_path / "raw"
+    write_direct_species_fixture(raw, "Arabidopsis_thaliana")
+    plan = tmp_path / "plan.json"
+    args = ["--provider", "direct", "--input-dir", str(raw), "--outfile", str(plan)]
+    assert run_python(PLAN_SCRIPT, *args).returncode == 0
+    frozen = plan.read_bytes()
+    assert run_python(PLAN_SCRIPT, *args).returncode == 0
+    write_direct_species_fixture(raw, "Oryza_sativa")
+    assert run_python(PLAN_SCRIPT, *args).returncode != 0
+    assert plan.read_bytes() == frozen
+    manifest = tmp_path / "duplicate.tsv"
+    manifest.write_text("provider\tid\tspecies_key\n" + "direct\tx\tArabidopsis_thaliana\n" * 2)
+    result = run_python(PLAN_SCRIPT, "--provider", "all", "--download-manifest", str(manifest),
+                        "--download-dir", str(tmp_path / "downloads"), "--outfile", str(tmp_path / "bad.json"))
+    assert result.returncode != 0
+    assert "Duplicate species" in result.stderr
+
+
+def test_receipts_detect_changed_outputs_and_retry_selects_only_pending(tmp_path):
+    state = SUPPORT_DIR / "input_generation_array_state.py"
+    raw = tmp_path / "raw"
+    write_direct_species_fixture(raw, "Arabidopsis_thaliana")
+    write_direct_species_fixture(raw, "Oryza_sativa")
+    plan = tmp_path / "plan.json"
+    assert run_python(PLAN_SCRIPT, "--provider", "direct", "--input-dir", str(raw), "--outfile", str(plan)).returncode == 0
+    assert run_python(state, "configure", "--task-plan", str(plan), "--prepare").returncode == 0
+    assert run_python(state, "prepared", "--task-plan", str(plan)).returncode == 0
+    output = tmp_path / "result"
+    output.write_text("valid")
+    assert run_python(state, "complete", "--task-plan", str(plan), "--task-index", "1", "--file", str(output)).returncode == 0
+    pending = run_python(state, "pending", "--task-plan", str(plan))
+    assert pending.stdout.strip() == "2"
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    preview = run_python(helper, "--task-plan", str(plan), "--retry", "--cpus", "3", "--max-running", "2")
+    assert preview.returncode == 0, preview.stderr
+    assert "--array=2%2" in preview.stdout
+    assert "--dependency=afterok:WORKER_JOB_ID" in preview.stdout
+    assert "--cpus-per-task=3" in preview.stdout
+    output.write_text("corrupt")
+    assert run_python(state, "pending", "--task-plan", str(plan)).stdout.strip() == "1,2"
+
+
+def test_slurm_helper_waits_for_prepare_and_submits_afterok(tmp_path, monkeypatch):
+    import os
+    plan = tmp_path / "plan.json"
+    calls = tmp_path / "calls.jsonl"
+    fake = tmp_path / "sbatch"
+    fake.write_text("#!" + sys.executable + "\n" + '''import hashlib, json, os, sys
+from pathlib import Path
+log = Path(os.environ["TEST_CALLS"])
+mode = os.environ["GG_INPUT_INPUT_GENERATION_MODE"]
+with log.open("a") as handle:
+    handle.write(json.dumps({"mode": mode, "argv": sys.argv[1:]}) + "\\n")
+if mode == "array_prepare":
+    if os.environ.get("TEST_PREPARE_FAIL"):
+        print("simulated Slurm rejection", file=sys.stderr)
+        sys.exit(1)
+    Path(os.environ["GG_INPUT_TASK_PLAN_OUTPUT"]).write_text(json.dumps({"task_count": 2, "tasks": [{"species_prefix": "A_b"}, {"species_prefix": "C_d"}]}))
+    plan = Path(os.environ["GG_INPUT_TASK_PLAN_OUTPUT"])
+    Path(str(plan) + ".settings.json").write_text("{}")
+    Path(str(plan) + ".prepared.json").write_text(json.dumps({"plan_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(), "settings_sha256": hashlib.sha256(b"{}").hexdigest()}))
+print({"array_prepare": "101", "array_worker": "102", "array_finalize": "103"}[mode])
+''')
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("TEST_CALLS", str(calls))
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    result = run_python(helper, "--task-plan", str(plan), "--submit", "--max-running", "5")
+    assert result.returncode == 0, result.stderr
+    submissions = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert [call["mode"] for call in submissions] == ["array_prepare", "array_worker", "array_finalize"]
+    assert "--wait" in submissions[0]["argv"]
+    assert "--array=1-2%5" in submissions[1]["argv"]
+    assert "--dependency=afterok:102" in submissions[2]["argv"]
+    assert not any("--mem-per-cpu" in arg for call in submissions for arg in call["argv"])
+    assert all(any(arg.startswith("--wrap=") for arg in call["argv"]) for call in submissions)
+    calls.unlink()
+    monkeypatch.setenv("TEST_PREPARE_FAIL", "1")
+    result = run_python(helper, "--task-plan", str(plan), "--submit")
+    assert result.returncode != 0
+    assert len(calls.read_text().splitlines()) == 1
+    assert "simulated Slurm rejection" in result.stderr
+
+
+def test_workspace_rejects_second_plan_and_malformed_receipt_is_pending(tmp_path):
+    state = SUPPORT_DIR / "input_generation_array_state.py"
+    raw = tmp_path / "raw"
+    write_direct_species_fixture(raw, "Arabidopsis_thaliana")
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    for plan in (first, second):
+        assert run_python(PLAN_SCRIPT, "--provider", "direct", "--input-dir", str(raw), "--outfile", str(plan)).returncode == 0
+    workspace = tmp_path / "workspace"
+    claim = ["claim-workspace", "--workspace", str(workspace), "--prepare", "--task-plan"]
+    assert run_python(state, *claim, str(first)).returncode == 0
+    assert run_python(state, *claim, str(second)).returncode != 0
+    assert run_python(state, "index", "--task-plan", str(first), "--task-index", "01").stdout.strip() == "1"
+    output = tmp_path / "output"
+    output.write_text("ok")
+    assert run_python(state, "complete", "--task-plan", str(first), "--task-index", "1", "--file", str(output)).returncode == 0
+    receipt = Path(str(first) + ".completed") / "1.json"
+    content = json.loads(receipt.read_text())
+    content["files"] = ["bad structure"]
+    receipt.write_text(json.dumps(content))
+    pending = run_python(state, "pending", "--task-plan", str(first))
+    assert pending.returncode == 0, pending.stderr
+    assert pending.stdout.strip() == "1"
+
+
+def test_manifest_source_change_and_foreign_resolved_cache_are_rejected(tmp_path):
+    species = "Arabidopsis_thaliana"
+    raw_root = tmp_path / "raw"
+    write_direct_species_fixture(raw_root, species)
+    raw = raw_root / species
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text("provider\tid\tspecies_key\nlocal\t" + str(raw) + "\t" + species + "\n")
+    plan = tmp_path / "plan.json"
+    downloads = tmp_path / "downloads"
+    assert run_python(PLAN_SCRIPT, "--provider", "local", "--download-manifest", str(manifest),
+                      "--download-dir", str(downloads), "--outfile", str(plan)).returncode == 0
+    worker_args = ["--task-plan", str(plan), "--task-index", "1", "--species-cds-dir", str(tmp_path / "cds"),
+                   "--species-gff-dir", str(tmp_path / "gff"), "--species-genome-dir", str(tmp_path / "genome"), "--describe-only"]
+    source = raw / (species + ".cds.fa")
+    original = source.read_bytes()
+    source.write_bytes(original + b"AAA\n")
+    changed = run_python(RUN_TASK_SCRIPT, *worker_args)
+    assert changed.returncode != 0 and "changed after planning" in changed.stderr
+    assert not downloads.exists()
+    source.write_bytes(original)
+    assert run_python(RUN_TASK_SCRIPT, *worker_args).returncode == 0
+    cache = Path(str(plan) + ".tasks") / "1.json"
+    content = json.loads(cache.read_text())
+    content["plan_sha256"] = "belongs to another plan"
+    cache.write_text(json.dumps(content))
+    foreign = run_python(RUN_TASK_SCRIPT, *worker_args)
+    assert foreign.returncode != 0 and "another plan/task" in foreign.stderr
+    assert not (tmp_path / "cds").exists()
+
+
+def test_completion_rejects_raw_changes_during_worker(tmp_path):
+    state = SUPPORT_DIR / "input_generation_array_state.py"
+    raw = tmp_path / "raw"
+    write_direct_species_fixture(raw, "Arabidopsis_thaliana")
+    plan = tmp_path / "plan.json"
+    assert run_python(PLAN_SCRIPT, "--provider", "direct", "--input-dir", str(raw), "--outfile", str(plan)).returncode == 0
+    source = next(raw.glob("*/*.cds.fa"))
+    source.write_text(source.read_text() + "AAA\n")
+    output = tmp_path / "output"
+    output.write_text("would be stale")
+    completed = run_python(state, "complete", "--task-plan", str(plan), "--task-index", "1", "--file", str(output))
+    assert completed.returncode != 0
+    assert not (Path(str(plan) + ".completed") / "1.json").exists()
+
+
+def test_custom_output_directory_cannot_be_claimed_by_two_workspaces(tmp_path):
+    state = SUPPORT_DIR / "input_generation_array_state.py"
+    raw = tmp_path / "raw"
+    write_direct_species_fixture(raw, "Arabidopsis_thaliana")
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    shared = tmp_path / "custom_species_cds"
+    for plan in (first, second):
+        assert run_python(PLAN_SCRIPT, "--provider", "direct", "--input-dir", str(raw), "--outfile", str(plan)).returncode == 0
+    assert run_python(state, "claim-workspace", "--prepare", "--task-plan", str(first), "--workspace", str(tmp_path / "ws1"), "--file", str(shared)).returncode == 0
+    second_claim = run_python(state, "claim-workspace", "--prepare", "--task-plan", str(second), "--workspace", str(tmp_path / "ws2"), "--file", str(shared))
+    assert second_claim.returncode != 0 and "another array plan" in second_claim.stderr
+    assert not (tmp_path / "ws2" / ".array-plan.json").exists()
+
+
+def test_prepared_marker_rejects_changed_shared_lineage(tmp_path):
+    state = SUPPORT_DIR / "input_generation_array_state.py"
+    raw = tmp_path / "raw"
+    write_direct_species_fixture(raw, "Arabidopsis_thaliana")
+    plan = tmp_path / "plan.json"
+    assert run_python(PLAN_SCRIPT, "--provider", "direct", "--input-dir", str(raw), "--outfile", str(plan)).returncode == 0
+    assert run_python(state, "configure", "--prepare", "--task-plan", str(plan)).returncode == 0
+    lineage = tmp_path / "lineage.txt"
+    lineage.write_text("eukaryota_odb12")
+    assert run_python(state, "prepared", "--task-plan", str(plan), "--file", str(lineage)).returncode == 0
+    assert run_python(state, "check-prepared", "--task-plan", str(plan)).returncode == 0
+    lineage.write_text("different_lineage")
+    assert run_python(state, "check-prepared", "--task-plan", str(plan)).returncode != 0
+
+
+def test_nonregular_receipt_input_fails_without_blocking(tmp_path):
+    import os
+    raw = tmp_path / "raw"
+    write_direct_species_fixture(raw, "Arabidopsis_thaliana")
+    plan = tmp_path / "plan.json"
+    assert run_python(PLAN_SCRIPT, "--provider", "direct", "--input-dir", str(raw), "--outfile", str(plan)).returncode == 0
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+    result = subprocess.run([sys.executable, str(SUPPORT_DIR / "input_generation_array_state.py"), "complete",
+                             "--task-plan", str(plan), "--task-index", "1", "--file", str(fifo)],
+                            capture_output=True, text=True, timeout=3)
+    assert result.returncode != 0
+
+
+def test_array_plan_rejects_escaping_species_and_download_filenames(tmp_path):
+    for index, (species, filename) in enumerate((("../Arabidopsis_thaliana", "cds.fa"),
+                                               ("Arabidopsis_thaliana", "../../outside.fa"),
+                                               (".hidden_species", "cds.fa"))):
+        manifest = tmp_path / f"bad{index}.tsv"
+        manifest.write_text(f"provider\tid\tspecies_key\tcds_filename\ndirect\tx\t{species}\t{filename}\n")
+        output = tmp_path / f"bad{index}.json"
+        result = run_python(PLAN_SCRIPT, "--provider", "all", "--download-manifest", str(manifest),
+                            "--download-dir", str(tmp_path / "downloads"), "--outfile", str(output))
+        assert result.returncode != 0 and "filename components" in result.stderr
+        assert not output.exists()

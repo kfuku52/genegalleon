@@ -729,8 +729,8 @@ def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_pat
     _write_minimal_ete_taxonomy_db(workspace)
     fake_bin = _install_fake_toolchain(tmp_path)
 
-    _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_prepare")
     _write_runtime_busco_dataset(workspace)
+    _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_prepare")
 
     worker1 = _run_core_async(
         workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_worker", task_id=1
@@ -753,6 +753,23 @@ def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_pat
     _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_finalize")
 
     _assert_expected_outputs(workspace / "output" / "input_generation", expected_last_mode="array_finalize")
+    single_workspace = tmp_path / "single_comparison_workspace"
+    _write_minimal_ete_taxonomy_db(single_workspace)
+    _write_runtime_busco_dataset(single_workspace)
+    _run_core(workspace=single_workspace, input_dir=input_dir, fake_bin=fake_bin, mode="single")
+    for directory in ("species_cds", "species_gff", "species_genome", "species_cds_fx2tab"):
+        array_dir = workspace / "output" / "input_generation" / directory
+        single_dir = single_workspace / "output" / "input_generation" / directory
+        # Biological outputs are equivalent; audit JSON embeds workspace paths.
+        array_files = sorted(path.name for path in array_dir.iterdir() if path.name.endswith((".gz", ".tsv")))
+        assert array_files == sorted(path.name for path in single_dir.iterdir() if path.name.endswith((".gz", ".tsv")))
+        for name in array_files:
+            if name.endswith(".gz"):
+                with gzip.open(array_dir / name, "rb") as first, gzip.open(single_dir / name, "rb") as second:
+                    assert first.read() == second.read()
+            else:
+                assert (array_dir / name).read_bytes() == (single_dir / name).read_bytes()
+
 
 
 def test_gg_input_generation_missing_input_dirs_do_not_emit_find_errors(tmp_path: Path):
@@ -774,3 +791,91 @@ def test_gg_input_generation_missing_input_dirs_do_not_emit_find_errors(tmp_path
     assert "No such file or directory" not in completed.stderr
     assert "No input source was specified for formatting." in completed.stdout
     assert "Set one of input_dir / download_manifest." in completed.stdout
+
+
+def test_array_manifest_workers_and_incomplete_finalize_preserve_summary(tmp_path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "manifest_array_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    _write_tsv_download_manifest(workspace, input_dir)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    _run_core(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="array_prepare")
+    root = workspace / "output" / "input_generation"
+    assert not (root / "tmp" / "input_download_cache").exists()
+    _run_core(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="array_worker", task_id=1)
+    summary = root / "gg_input_generation_species.tsv"
+    summary.write_text("previous canonical summary\n")
+    result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT,
+                            env=_core_env(workspace, None, fake_bin, "array_finalize"),
+                            capture_output=True, text=True, timeout=180)
+    assert result.returncode != 0
+    assert summary.read_text() == "previous canonical summary\n"
+    _run_core(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="array_worker", task_id=2)
+    _run_core(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="array_finalize")
+    assert len(_read_tsv_rows(summary)) == 2
+    assert (root / "tmp" / "task_plan.json").is_file()
+
+
+def test_array_failed_busco_worker_retries_without_completed_receipt(tmp_path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "retry_array_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    busco = fake_bin / "busco"
+    busco.write_text(busco.read_text().replace("import os\n", 'import os\nif os.environ.get("GG_TEST_FAIL_BUSCO"):\n    raise SystemExit(43)\n'))
+    _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_prepare")
+    env = _core_env(workspace, input_dir, fake_bin, "array_worker", 1)
+    env["overwrite"] = "0"
+    env["GG_TEST_FAIL_BUSCO"] = "1"
+    failed = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                            capture_output=True, text=True, timeout=180)
+    assert failed.returncode != 0
+    root = workspace / "output" / "input_generation" / "tmp"
+    assert (root / "task_stats_shards" / "1.json").is_file()
+    assert not (root / "task_plan.json.completed" / "1.json").exists()
+    del env["GG_TEST_FAIL_BUSCO"]
+    resumed = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                             capture_output=True, text=True, timeout=180)
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    pending = subprocess.run([sys.executable, str(REPO_ROOT / "workflow" / "support" / "input_generation_array_state.py"),
+                              "pending", "--task-plan", str(root / "task_plan.json")],
+                             capture_output=True, text=True, timeout=30)
+    assert pending.returncode == 0, pending.stderr
+    assert pending.stdout.strip() == "2"
+
+
+def test_failed_final_shared_stage_preserves_canonical_tables_and_frozen_species(tmp_path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "finalize_failure_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    manifest = _write_tsv_download_manifest(workspace, input_dir)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    rscript = fake_bin / "Rscript"
+    rscript.write_text(rscript.read_text().replace("import sys\n", 'import sys\nimport os\nif os.environ.get("GG_TEST_FAIL_SUMMARY"):\n    raise SystemExit(47)\n'))
+    _run_core(workspace, None, fake_bin, "array_prepare")
+    # Worker and finalize must not rediscover/reload this now-invalid manifest.
+    manifest.write_text("changed external source\n")
+    _run_core(workspace, None, fake_bin, "array_worker", "01")
+    _run_core(workspace, None, fake_bin, "array_worker", 2)
+    root = workspace / "output" / "input_generation"
+    assert (root / "tmp" / "task_plan.json.completed" / "1.json").is_file()
+    assert not (root / "tmp" / "task_plan.json.completed" / "01.json").exists()
+    summary = root / "gg_input_generation_species.tsv"
+    resolved = root / "download_plan.resolved.tsv"
+    summary.write_text("previous summary\n")
+    resolved.write_text("previous manifest\n")
+    env = _core_env(workspace, None, fake_bin, "array_finalize")
+    env["GG_TEST_FAIL_SUMMARY"] = "1"
+    failed = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                            capture_output=True, text=True, timeout=180)
+    assert failed.returncode != 0
+    assert summary.read_text() == "previous summary\n"
+    assert resolved.read_text() == "previous manifest\n"
+    frozen = Path(str(root / "tmp" / "task_plan.json") + ".manifest.tsv")
+    assert len(_read_tsv_rows(frozen)) == 2
+    _run_core(workspace, None, fake_bin, "array_finalize")
+    assert len(_read_tsv_rows(summary)) == 2
+    assert len(_read_tsv_rows(resolved)) == 2

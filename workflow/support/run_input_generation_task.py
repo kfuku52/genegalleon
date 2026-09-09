@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 
 import argparse
+import csv
 import json
+import os
 import sys
 from pathlib import Path
 
 import format_species_inputs as fsi
+from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS
+from input_generation_array_state import atomic_json, digest, load_plan
 
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         description="Run a single gg_input_generation species-formatting task from a task-plan JSON."
     )
+    parser.add_argument("--download-timeout", type=float, default=120)
+    parser.add_argument("--http-header", action="append", default=[])
+    parser.add_argument("--auth-bearer-token-env", default="")
     parser.add_argument("--task-plan", required=True, help="Task-plan JSON created by plan_input_generation_tasks.py.")
     parser.add_argument("--task-index", type=int, required=True, help="1-based task index to execute.")
     parser.add_argument(
@@ -49,7 +56,7 @@ def build_arg_parser():
     parser.add_argument(
         "--describe-only",
         action="store_true",
-        help="Write task metadata with raw and expected formatted paths without creating outputs.",
+        help="Resolve manifest downloads if needed and write metadata without formatting outputs.",
     )
     parser.add_argument(
         "--reuse-existing",
@@ -60,8 +67,7 @@ def build_arg_parser():
 
 
 def load_task_plan(path):
-    with open(path, "rt", encoding="utf-8") as handle:
-        return json.load(handle)
+    return load_plan(path)
 
 
 def deserialize_task(raw_task):
@@ -81,6 +87,51 @@ def write_json(path_text, payload):
         json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
 
 
+def resolve_manifest_task(task, args):
+    if "manifest_row" not in task:
+        return task
+    for path, expected in task.get("input_sha256", {}).items():
+        if digest(path) != expected:
+            raise ValueError("Local manifest input changed after planning: " + path)
+    plan_sha256 = digest(args.task_plan)
+    root = Path(str(args.task_plan) + ".tasks")
+    root.mkdir(parents=True, exist_ok=True)
+    resolved = root / (str(args.task_index) + ".json")
+    if resolved.exists():
+        cached = json.loads(resolved.read_text())
+        if cached.get("plan_sha256") != plan_sha256 or cached.get("task_index") != args.task_index:
+            raise ValueError("Resolved download cache belongs to another plan/task")
+        actual = deserialize_task(cached["task"])
+        if any(actual.get(key) != task.get(key) for key in ("species_prefix", "species_key", "provider")):
+            raise ValueError("Resolved download cache species/provider mismatch")
+        return actual
+    manifest = root / (str(args.task_index) + ".tsv")
+    row = task["manifest_row"]
+    with open(manifest, "w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row), delimiter="\t")
+        writer.writeheader()
+        writer.writerow(row)
+    download_root = Path(task["download_dir"]) / "array" / plan_sha256 / str(args.task_index)
+    report = fsi.download_from_manifest(
+        manifest_path=manifest, download_root=download_root, provider_filter=task["provider"],
+        overwrite=False, headers=fsi.parse_http_headers(args.http_header, args.auth_bearer_token_env),
+        timeout=args.download_timeout, dry_run=False, jobs=int(os.environ.get("GG_TASK_CPUS", "1")),
+        resolved_manifest_output_path=root / (str(args.task_index) + ".resolved.tsv"))
+    if report["errors"]:
+        raise ValueError("; ".join(report["errors"]))
+    tasks, warnings, errors = fsi.discover_tasks(task["provider"], download_root / DEFAULT_INPUT_RELATIVE_DIRS[task["provider"]])
+    tasks = [candidate for candidate in tasks if candidate["species_prefix"] == task["species_prefix"]]
+    if errors or len(tasks) != 1:
+        raise ValueError("Expected exactly one downloaded species task: " + repr(errors))
+    actual = tasks[0]
+    actual["input_sha256"] = {**task.get("input_sha256", {}), **{str(actual[key]): digest(actual[key]) for key in ("cds_path", "gff_path", "gbff_path", "genome_path") if actual.get(key)}}
+    for key in ("gene_grouping_mode", "gff_repair_mode", "format_strict"):
+        actual[key] = task[key]
+    atomic_json(resolved, {"plan_sha256": plan_sha256, "task_index": args.task_index,
+                          "task": {key: str(value) if isinstance(value, Path) else value for key, value in actual.items()}})
+    return actual
+
+
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
@@ -96,7 +147,12 @@ def main():
             "--task-index {} is out of range for {} tasks".format(args.task_index, len(tasks))
         )
 
-    task = deserialize_task(tasks[args.task_index - 1])
+    if args.dry_run and "manifest_row" in tasks[args.task_index - 1]:
+        parser.error("Use the array submission helper for a download-free manifest preview")
+    task = resolve_manifest_task(deserialize_task(tasks[args.task_index - 1]), args)
+    for path, expected in task.get("input_sha256", {}).items():
+        if digest(path) != expected:
+            parser.error("Raw input changed after planning: " + path)
     output_cds_dir = Path(args.species_cds_dir).expanduser().resolve()
     output_gff_dir = Path(args.species_gff_dir).expanduser().resolve()
     output_genome_dir = Path(args.species_genome_dir).expanduser().resolve()
@@ -279,7 +335,7 @@ def main():
             task["species_prefix"],
             task["cds_path"].name if task.get("cds_path") is not None else "DERIVED_FROM_GFF_GENOME",
             cds_result["status"],
-            task["gff_path"].name,
+            task["gff_path"].name if task.get("gff_path") else "DERIVED_FROM_GBFF",
             gff_result["status"],
             task["genome_path"].name if task.get("genome_path") is not None else "NA",
             genome_result["status"],
