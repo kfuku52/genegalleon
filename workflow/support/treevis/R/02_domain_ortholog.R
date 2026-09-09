@@ -242,8 +242,10 @@ add_protein_domain_column = function(g, args, df_rpsblast=NULL) {
             panel.grid.major.y=element_blank(),
             legend.position="bottom",
             legend.title=element_text(size=args[['font_size']]),
-            legend.text=element_text(size=args[['font_size']]),
-            legend.box.just='center',
+            legend.text=element_text(size=args[['font_size']], margin=margin(l=2, r=8)),
+            legend.box.just='left',
+            legend.justification.bottom='left',
+            legend.key.spacing.x=unit(0.2, 'cm'),
             legend.key.size=unit(0.4, 'lines'), 
             rect=element_rect(fill="transparent"),
             plot.margin=unit(args[['margins']], "cm")

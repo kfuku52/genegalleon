@@ -469,6 +469,11 @@ add_categorical_column = function(g, args, gname, col, xlab, missing_label = '-'
     if (missing_label %in% levels) {
         palette[missing_label] = '#e6e6e6'
     }
+    is_query_marker = identical(col, 'query_marker')
+    if (is_query_marker) {
+        palette['Best hit'] = 'black'
+        if (identical(xlab, 'Query')) xlab = 'Query\nbest\nhit'
+    }
     df_tip[['plot_value']] = factor(values, levels = levels)
     df_tip[['panel_x']] = 1
     g[[gname]] = ggplot(df_tip, aes(x = panel_x, y = label, fill = plot_value)) +
@@ -484,7 +489,7 @@ add_categorical_column = function(g, args, gname, col, xlab, missing_label = '-'
             axis.text.x = element_blank(),
             axis.ticks = element_blank(),
             axis.line = element_blank(),
-            legend.position = 'bottom',
+            legend.position = if (is_query_marker) 'none' else 'bottom',
             legend.title = element_blank(),
             legend.text = element_text(size = args[['font_size']]),
             legend.key.size = unit(0.35, 'lines'),

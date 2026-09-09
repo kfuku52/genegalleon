@@ -670,6 +670,20 @@ Practical interpretation:
 - if an upstream analysis was disabled, or the corresponding inputs were not
   available, the associated panel may be blank or minimally populated.
 
+The protein-domain legend is left-aligned and may extend to the right beyond
+its column; adjacent column backgrounds do not cover it.
+
+The closest-gene column stacks its axis label one word per line and italicizes
+only the species name (for example, *Arabidopsis thaliana*).
+
+The **Query** marker column uses black tiles for best hits and pale gray tiles
+for other tips. Its axis label reads `Query`, `best`, `hit` on three lines,
+without a graphical legend. Its default relative width is 0.275 (half the
+width of a general categorical column).
+
+The **Branching event** legend uses full event names: Duplication (D),
+Speciation (S), Transfer (H), and Retrotransposition (R).
+
 The **Neighboring genes** similarity search includes up to 20 genes on each
 side of each focal gene (`synteny_search_window=20`), while the plot
 displays only five on each side (`treevis_synteny_window=5`). The search window
@@ -680,9 +694,23 @@ Keep `run_summary=1` when changing the search window: the regenerated synteny
 table also invalidates summary statistics, and a plot-only run refuses to use
 the stale summary. Changing only the display window does not rerun the search.
 
+The **Neighboring genes** column includes a graphical legend underneath:
+black dots mark focal genes, pale gray dots mark other recorded neighbors,
+colored dots mark selected members of similarity groups shared across tips,
+and matching colored lines connect members on the same upstream/downstream
+side. Colors identify groups within the plot; they do not encode E-values. These
+similarity groups are connected components of accepted search hits, so two
+members can be connected indirectly rather than by a qualifying pairwise hit.
 Colors are allocated only to groups actually drawn after filtering to the
 display window and plotted tips and retaining groups shared across tips.
 Groups outside that selection do not consume palette colors.
+Repeated members of a group on one side of a tip are represented by the nearest
+member. Blank positions have no recorded neighbor.
+The title-free legend labels the colored marker `Same gene family` and reports
+the similarity search E-value cutoff in parentheses, using the value stored in the
+synteny TSV's `evalue_cutoff` column, including the effective value when
+`query_blast_evalue=auto`. Older tables without this metadata display
+`E-value cutoff: unavailable`; regenerate the synteny input to record it.
 
 `stat.branch.tsv` is the master table that collects per-branch and per-tip
 annotations for plotting. `stat.tree.tsv` is the paired tree-level summary.

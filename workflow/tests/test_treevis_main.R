@@ -49,9 +49,9 @@ expected_ortholog_width <- 0.76 / (1.5 + 0.76)
 if (abs(unname(w_ortholog["ortholog,Arabidopsis_thaliana_"]) - expected_ortholog_width) > 1e-9) {
   stop("get_rel_widths should allocate the expanded default width to ortholog panels.")
 }
-expected_ortholog_xlab <- "Arabidopsis\nthaliana\nclosest\ngene"
+expected_ortholog_xlab <- expression(atop(displaystyle(italic("Arabidopsis")), displaystyle(atop(displaystyle(italic("thaliana")), displaystyle(atop(displaystyle("closest"), displaystyle("gene")))))))
 if (!identical(treevis_ortholog_axis_label("Arabidopsis_thaliana_"), expected_ortholog_xlab)) {
-  stop("treevis_ortholog_axis_label should put every word on its own line.")
+  stop("treevis_ortholog_axis_label should stack words and italicize only the species name.")
 }
 
 # 2e) read_site_state_alignment: recoded symbols are preserved as plain characters.
