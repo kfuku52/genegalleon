@@ -18,7 +18,6 @@ EXPECTED_SOURCES = {
     "kfFractBias",
     "kftools",
     "rkftools",
-    "RADTE",
 }
 
 

@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+# Local source overlay; no upstream revision is embedded in repository defaults.
+ARG BASE_IMAGE=local/genegalleon:dev
+FROM ${BASE_IMAGE} AS build
+USER root
+ARG GG_BUILD_JOBS=2
+ARG IQTREE_SOURCE_REVISION
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake libboost-dev libeigen3-dev zlib1g-dev \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=iqtree_source . /iqtree-source
+RUN cmake -S /iqtree-source -B /iqtree-build -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build /iqtree-build -j "${GG_BUILD_JOBS}"
+
+RUN mkdir -p /overlay-logs \
+ && printf '%s\n' "${IQTREE_SOURCE_REVISION}" > /overlay-logs/iqtree_session_base_revision.txt \
+ && find /iqtree-source -type f ! -path '*/.git/*' -print0 | sort -z | xargs -0 sha256sum > /overlay-logs/iqtree_session_source.sha256 \
+ && /iqtree-build/iqtree3 --help > /overlay-logs/iqtree_session_help.txt \
+ && grep -q -- --likelihood-session /overlay-logs/iqtree_session_help.txt
+
+FROM ${BASE_IMAGE}
+USER root
+# Install the local NWKIT producer/consumer together with the new protocol.
+COPY --from=nwkit_source nwkit /tmp/nwkit-local/nwkit
+COPY --from=nwkit_source pyproject.toml setup.py README.md LICENSE /tmp/nwkit-local/
+RUN python -m pip install --no-deps --no-build-isolation /tmp/nwkit-local \
+ && mkdir -p /opt/pg/logs \
+ && find /tmp/nwkit-local/nwkit -type f ! -name '*.pyc' -print0 | sort -z | xargs -0 sha256sum > /opt/pg/logs/nwkit_local_source.sha256 \
+ && rm -rf /tmp/nwkit-local
+COPY --from=build /iqtree-build/iqtree3 /opt/pg/iqtree-session/iqtree3
+COPY --from=build /overlay-logs/ /opt/pg/logs/
+RUN ln -sf /opt/pg/iqtree-session/iqtree3 /opt/conda/bin/iqtree3 \
+ && ln -sf /opt/pg/iqtree-session/iqtree3 /opt/conda/bin/iqtree \
+ && ln -sf /opt/pg/iqtree-session/iqtree3 /usr/local/bin/iqtree3 \
+ && ln -sf /opt/pg/iqtree-session/iqtree3 /usr/local/bin/iqtree \
+ && sha256sum /opt/pg/iqtree-session/iqtree3 > /opt/pg/logs/iqtree_session_binary.sha256 \
+ && iqtree --version \
+ && python -c 'from nwkit.radte_iqtree_session import IQTreeSession'

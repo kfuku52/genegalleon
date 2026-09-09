@@ -237,18 +237,6 @@ RUN source /opt/pg/source_branches.env \
       "${RKFTOOLS_REPO_SHA:-${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}}" \
       /opt/pg/artifact
 
-FROM source-builder AS radte-build
-
-ARG RADTE_REPO_URL="https://github.com/kfuku52/RADTE.git"
-ARG RADTE_REPO_REF=""
-ARG RADTE_REPO_SHA=""
-
-RUN source /opt/pg/source_branches.env \
- && bash /opt/pg/scripts/build_source_artifact.sh radte RADTE \
-      "${RADTE_REPO_URL}" \
-      "${RADTE_REPO_SHA:-${RADTE_REPO_REF:-${GG_SOURCE_RADTE_REPO_REF}}}" \
-      /opt/pg/artifact
-
 FROM base AS runtime-system
 RUN bash /opt/pg/scripts/install_system_packages.sh runtime
 
@@ -278,7 +266,6 @@ RUN --mount=from=amalgkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/am
  --mount=from=kffractbias-build,source=/opt/pg/artifact,target=/tmp/artifacts/kfFractBias \
  --mount=from=kftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/kftools \
  --mount=from=rkftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/rkftools \
- --mount=from=radte-build,source=/opt/pg/artifact,target=/tmp/artifacts/RADTE \
  bash /opt/pg/scripts/install_source_artifacts.sh /tmp/artifacts \
  && bash /opt/pg/scripts/install_helvetica_compat_font.sh base
 

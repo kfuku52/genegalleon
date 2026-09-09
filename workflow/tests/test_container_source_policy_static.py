@@ -18,7 +18,6 @@ PROGRAM_SHA_VARS = (
     "KFFRACTBIAS_REPO_SHA",
     "KFTOOLS_REPO_SHA",
     "RKFTOOLS_REPO_SHA",
-    "RADTE_REPO_SHA",
 )
 
 
@@ -165,7 +164,6 @@ def test_native_apptainer_build_records_source_revisions():
         "kfFractBias",
         "kftools",
         "rkftools",
-        "RADTE",
     ):
         assert source in apptainer_template
 
@@ -210,7 +208,7 @@ def test_source_resolution_runs_concurrently_and_publishes_only_complete_snapsho
     barrier = tmp_path / "barrier"
     barrier.mkdir()
     git = bin_dir / "git"
-    # Every lookup waits for all eleven to start. A serial implementation fails
+    # Every lookup waits for all ten to start. A serial implementation fails
     # at this barrier instead of relying on a timing-sensitive speed assertion.
     git.write_text(f"""#!{sys.executable}
 import hashlib
@@ -224,7 +222,7 @@ name = sys.argv[3].rsplit("/", 1)[-1].removesuffix(".git")
 barrier = Path(os.environ["MOCK_GIT_BARRIER"])
 (barrier / name).touch()
 deadline = time.monotonic() + 10
-while len(list(barrier.iterdir())) != 11:
+while len(list(barrier.iterdir())) != 10:
     if time.monotonic() >= deadline:
         sys.exit("source lookups did not start concurrently")
     time.sleep(0.01)
@@ -245,7 +243,7 @@ print(hashlib.sha1(name.encode()).hexdigest(), sys.argv[4], sep="\\t")
         ["bash", str(REPO_ROOT / "container/scripts/resolve_source_revisions.sh")],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=20,
     )
-    assert len(list(barrier.iterdir())) == 11
+    assert len(list(barrier.iterdir())) == 10
     if fail_source:
         assert completed.returncode != 0
         assert completed.stdout == ""

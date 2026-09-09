@@ -7,6 +7,7 @@
   "runtime_python_files": [
     "test_nwkit_tree_workflows_runtime.py",
     "test_asr_intron_runtime.py",
+    "test_native_tree_dating.py",
     "test_synteny_search_integration.py",
     "test_aster_ortools_runtime.py",
     "test_csubst_scan_runtime_integration.py",

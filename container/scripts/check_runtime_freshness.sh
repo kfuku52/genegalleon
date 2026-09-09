@@ -196,7 +196,6 @@ sha_variables=(
   KFFRACTBIAS_REPO_SHA
   KFTOOLS_REPO_SHA
   RKFTOOLS_REPO_SHA
-  RADTE_REPO_SHA
 )
 resolution_variables=(
   "${sha_variables[@]}"
@@ -216,8 +215,6 @@ resolution_variables=(
   KFTOOLS_REPO_REF
   RKFTOOLS_REPO_URL
   RKFTOOLS_REPO_REF
-  RADTE_REPO_URL
-  RADTE_REPO_REF
 )
 override_fingerprint="$(
   for variable in "${resolution_variables[@]}"; do
@@ -295,7 +292,6 @@ if [[ "${missing_manifest_revisions}" == "1" ]]; then
       kfFractBias) variable=KFFRACTBIAS_REPO_SHA ;;
       kftools) variable=KFTOOLS_REPO_SHA ;;
       rkftools) variable=RKFTOOLS_REPO_SHA ;;
-      RADTE) variable=RADTE_REPO_SHA ;;
       *)
         echo "Unknown source in runtime manifest: ${source_name}" >&2
         exit 1

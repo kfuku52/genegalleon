@@ -560,7 +560,7 @@ def test_gene_evolution_core_passes_gg_task_cpus_to_kfl1ou():
 def test_gene_evolution_core_uses_kfl1ou_wrapper_with_supported_args_only():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    block_start = text.index('task="l1ou"')
+    block_start = text.index('task="kfl1ou OU shift detection"')
     block_end = text.index("mv_out fit_ind.RData", block_start)
     l1ou_block = text[block_start:block_end]
 
@@ -3143,7 +3143,6 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         "kffractbias",
         "kftools",
         "rkftools",
-        "radte",
     )
     for output_name in source_names:
         assert f"{output_name}_repo_sha: ${{{{ steps.vars.outputs.{output_name}_repo_sha }}}}" in workflow
@@ -3162,7 +3161,6 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         ("KFFRACTBIAS_REPO_SHA", "kffractbias_repo_sha"),
         ("KFTOOLS_REPO_SHA", "kftools_repo_sha"),
         ("RKFTOOLS_REPO_SHA", "rkftools_repo_sha"),
-        ("RADTE_REPO_SHA", "radte_repo_sha"),
     ):
         assert f"{build_arg}=${{{{ needs.prepare-build.outputs.{output_name} }}}}" in workflow
 

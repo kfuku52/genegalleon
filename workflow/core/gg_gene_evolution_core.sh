@@ -33,6 +33,26 @@ treevis_query_marker="${treevis_query_marker:-1}"
 query_blast_evalue="${query_blast_evalue:-auto}"
 query_blast_auto_evalue_maxlen_cutoffs="${query_blast_auto_evalue_maxlen_cutoffs:-40:1000,80:100,150:10,300:1,inf:0.01}"
 
+
+# Native sequence dating; species ages remain fixed.
+radte_sequence_engine="${radte_sequence_engine:-native}" # native|iqtree; NWKIT handles dates for both.
+radte_iqtree_mode="${radte_iqtree_mode:-persistent}" # persistent or subprocess
+radte_iqtree_model="${radte_iqtree_model:-}" # Optional complete IQ-TREE model, e.g. GY+F3X4+R4.
+radte_substitution_model="${radte_substitution_model:-auto}"
+radte_codon_frequencies="${radte_codon_frequencies:-}"
+radte_kappa="${radte_kappa:-}"
+radte_omega="${radte_omega:-}"
+radte_gamma_shape="${radte_gamma_shape:-}"
+radte_gamma_categories="${radte_gamma_categories:-4}"
+radte_inference="${radte_inference:-auto}"
+radte_likelihood="${radte_likelihood:-auto}"
+radte_uncertainty="${radte_uncertainty:-profile}"
+radte_interval_level="${radte_interval_level:-0.95}"
+radte_rate_sd="${radte_rate_sd:-}"
+radte_maxiter="${radte_maxiter:-1000}"
+radte_seed="${radte_seed:-1}"
+radte_species_intervals_tsv="${radte_species_intervals_tsv:-}"
+
 # Unified RSC/species-tree expression-trait PGLS. Defaults are repeated here so
 # direct core-script invocations remain safe under set -u.
 pgls_methods="${pgls_methods:-rsc}"
@@ -1698,6 +1718,9 @@ fi
 species_tree_generax="${file_og_parameters_dir}/${species_tree_basename}.generax.nwk" # generated later
 species_tree_pruned="${file_og_parameters_dir}/${species_tree_basename}.pruned.nwk"
 ensure_dir "${file_og_parameters_dir}"
+if [[ -n "${radte_species_intervals_tsv}" && "${radte_species_intervals_tsv}" != /* ]]; then
+  radte_species_intervals_tsv="${gg_workspace_dir}/${radte_species_intervals_tsv}"
+fi
 notung_jar="/usr/local/bin/Notung.jar"
 dir_rpsblastdb="/usr/local/db/Pfam_LE"
 
@@ -1733,6 +1756,7 @@ file_og_rooted_tree="${dir_output_active}/rooted_tree/${og_id}_root.nwk"
 file_og_rooted_log="${dir_output_active}/rooted_tree_log/${og_id}_root.txt"
 file_og_notung_reconcil="${dir_output_active}/notung_reconcile/${og_id}_notung_reconcile.zip"
 file_og_dated_tree="${dir_output_active}/dated_tree/${og_id}_dated.nwk"
+file_og_radte_prefix="${dir_output_active}/dated_tree_native/${og_id}_radte"
 file_og_dated_tree_log="${dir_output_active}/dated_tree_log/${og_id}_dated.log.txt"
 file_og_mapdnds_parameter="${dir_output_active}/mapdnds_parameter/${og_id}_parameter.zip"
 file_og_mapdnds_dn="${dir_output_active}/mapdnds_dn_tree/${og_id}_mapdNdS.dN.nwk"
@@ -4047,8 +4071,34 @@ else
 fi
 
 task="Species-tree-guided divergence time estimation"
-disable_if_no_input_file "run_tree_dating" "${species_tree_pruned}" "${file_og_unrooted_tree_analysis}"
+disable_if_no_input_file "run_tree_dating" "${species_tree_pruned}" "${file_og_unrooted_tree_analysis}" "${file_og_trimmed_aln_analysis}"
 tree_dating_needs_update=0
+radte_sequence_engine="${radte_sequence_engine:-native}"
+radte_iqtree_mode="${radte_iqtree_mode:-persistent}" # persistent or subprocess
+radte_iqtree_model="${radte_iqtree_model:-}"
+radte_iqtree_identity="unused"
+if [[ "${radte_sequence_engine}" == "iqtree" && "${run_tree_dating}" -eq 1 ]]; then
+  radte_iqtree_identity=$(iqtree --version 2>&1) || exit $?
+  radte_iqtree_binary=$(command -v iqtree) || exit $?
+  radte_iqtree_digest=$(sha256sum "${radte_iqtree_binary}") || exit $?
+  radte_iqtree_identity+=" ${radte_iqtree_digest%% *}"
+fi
+radte_model_resolved="${radte_substitution_model}"
+if [[ "${radte_model_resolved}" == "auto" ]]; then
+  if [[ "${input_sequence_mode}" == "protein" ]]; then
+    radte_model_resolved="lg"
+  else
+    radte_model_resolved="gy94"
+  fi
+fi
+radte_nwkit_identity="unavailable"
+if command -v nwkit >/dev/null 2>&1; then
+  radte_nwkit_identity=$(nwkit --version 2>&1) || exit $?
+fi
+if [[ -s /opt/pg/logs/source_revisions.tsv ]]; then
+  radte_nwkit_identity+=" $(awk -F '\t' '$1 == "nwkit" {print $2; exit}' /opt/pg/logs/source_revisions.tsv)"
+fi
+radte_bundle_suffixes=(dated.nwk nodes.tsv species.tsv events.tsv shared-ages.tsv age-samples.tsv conditional-intervals.tsv uncertainty-components.tsv likelihood.json mcmctree-trace.tsv manifest.json pdf)
 tree_dating_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.tree_dating.json"
   --step "tree_dating"
@@ -4056,14 +4106,38 @@ tree_dating_provenance_args=(
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --input "species_tree=${species_tree_pruned}"
+  --input "alignment=${file_og_trimmed_aln_analysis}"
   --input "unrooted_tree=${file_og_unrooted_tree_analysis}"
   --output "dated_tree=${file_og_dated_tree}"
   --output "dating_log=${file_og_dated_tree_log}"
+  --parameter "engine=nwkit-${radte_sequence_engine}-sequence-v1"
+  --parameter "iqtree_mode=${radte_iqtree_mode}"
+  --parameter "iqtree_model=${radte_iqtree_model}"
+  --parameter "iqtree_identity=${radte_iqtree_identity}"
+  --parameter "nwkit_identity=${radte_nwkit_identity}"
   --parameter "generax_enabled=${run_generax}"
   --parameter "max_age=${radte_max_age}"
+  --parameter "substitution_model=${radte_model_resolved}"
+  --parameter "codon_frequencies=${radte_codon_frequencies}"
+  --parameter "genetic_code=${genetic_code}"
+  --parameter "kappa=${radte_kappa}"
+  --parameter "omega=${radte_omega}"
+  --parameter "gamma_shape=${radte_gamma_shape}"
+  --parameter "gamma_categories=${radte_gamma_categories}"
+  --parameter "inference=${radte_inference}"
+  --parameter "likelihood=${radte_likelihood}"
+  --parameter "uncertainty=${radte_uncertainty}"
+  --parameter "interval_level=${radte_interval_level}"
+  --parameter "rate_sd=${radte_rate_sd}"
+  --parameter "maxiter=${radte_maxiter}"
+  --parameter "seed=${radte_seed}"
+  --parameter "species_age_policy=fixed-external-intervals-display-only"
   --parameter "species_parser=${species_label_parser}"
   --parameter "species_regex=${species_label_regex}"
 )
+for radte_suffix in "${radte_bundle_suffixes[@]}"; do
+  tree_dating_provenance_args+=(--output "native_${radte_suffix}=${file_og_radte_prefix}.${radte_suffix}")
+done
 if [[ ${run_generax} -eq 1 ]]; then
   tree_dating_provenance_args+=(
     --input "generax_species_tree=${species_tree_generax}"
@@ -4075,14 +4149,23 @@ fi
 if [[ -n "${species_label_map_tsv}" ]]; then
   tree_dating_provenance_args+=(--input "species_map=${species_label_map_tsv}")
 fi
+if [[ -n "${radte_species_intervals_tsv}" ]]; then
+  tree_dating_provenance_args+=(--input "species_intervals=${radte_species_intervals_tsv}")
+fi
+if [[ -s "${file_species_genetic_code}" ]]; then
+  tree_dating_provenance_args+=(--input "species_genetic_code=${file_species_genetic_code}")
+fi
 gg_artifact_prepare_stage tree_dating_needs_update run_tree_dating "${tree_dating_provenance_args[@]}" || exit $?
 if [[ ${tree_dating_needs_update} -eq 1 && ${run_tree_dating} -eq 1 ]]; then
   gg_step_start "${task}"
-  radte_args=()
-
+  if [[ "${species_tree_basename}" != "dated_species_tree" ]]; then
+    echo "Tree dating requires dated_species_tree.nwk with time branch lengths." >&2
+    exit 1
+  fi
+  radte_args=("--species-tree=${species_tree_pruned}")
   if [[ ${run_generax} -eq 1 ]]; then
-    radte_args+=("--species_tree=${species_tree_generax}")
-    radte_args+=("--generax_nhx=${file_og_generax_nhx}")
+    radte_args+=("--reconciliation-species-tree=${species_tree_generax}")
+    radte_args+=("--generax-nhx=${file_og_generax_nhx}")
   else
     gg_extract_expected_zip_prefix \
       "${file_og_notung_reconcil}" \
@@ -4091,9 +4174,8 @@ if [[ ${tree_dating_needs_update} -eq 1 && ${run_tree_dating} -eq 1 ]]; then
       cp_out ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.0 ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled
       cp_out ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.0.parsable.txt ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.parsable.txt
     fi
-    radte_args+=("--species_tree=${species_tree_pruned}")
-    radte_args+=("--gene_tree=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled")
-    radte_args+=("--notung_parsable=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.parsable.txt")
+    radte_args+=("--gene-tree=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled")
+    radte_args+=("--notung-parsable=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.parsable.txt")
   fi
   radte_args+=("--species-parser=${species_label_parser}")
   if [[ -n "${species_label_regex}" ]]; then
@@ -4102,41 +4184,71 @@ if [[ ${tree_dating_needs_update} -eq 1 && ${run_tree_dating} -eq 1 ]]; then
   if [[ -n "${species_label_map_tsv}" ]]; then
     radte_args+=("--species-map-tsv=${species_label_map_tsv}")
   fi
-
-  radte.r \
+  if [[ -n "${radte_species_intervals_tsv}" ]]; then
+    radte_args+=("--species-node-intervals-tsv=${radte_species_intervals_tsv}")
+  fi
+  for radte_option in kappa omega gamma_shape rate_sd codon_frequencies; do
+    radte_variable="radte_${radte_option}"
+    if [[ -n "${!radte_variable}" ]]; then
+      radte_args+=("--${radte_option//_/-}=${!radte_variable}")
+    fi
+  done
+  case "${radte_model_resolved}" in
+    gy94|ecmk07|ecmrest)
+      # Every species represented in this family must use the supported code.
+      python - "${species_tree_pruned}" "${file_species_genetic_code}" "${genetic_code}" <<'PY'
+import csv
+import os
+import sys
+from nwkit.util import read_tree
+species_path, code_path, default_code = sys.argv[1:]
+codes = {}
+if os.path.isfile(code_path):
+    with open(code_path, encoding="utf-8") as handle:
+        codes = {row["species"]: int(row["genetic_code"]) for row in csv.DictReader(handle, delimiter="\t")}
+tree = read_tree(species_path, "auto", True)
+unsupported = {str(n.name): codes.get(str(n.name), int(default_code)) for n in tree.leaves() if codes.get(str(n.name), int(default_code)) != 1}
+if unsupported:
+    raise ValueError(f"Native codon dating currently requires genetic code 1 for all family species: {unsupported}")
+PY
+      radte_args+=("--genetic-code=1")
+      ;;
+  esac
+  radte_args+=("--sequence-engine=${radte_sequence_engine}")
+  if [[ "${radte_sequence_engine}" == "iqtree" ]]; then
+    radte_args+=("--iqtree-threads=${GG_TASK_CPUS}" "--iqtree-mode=${radte_iqtree_mode}")
+  fi
+  if [[ -n "${radte_iqtree_model}" ]]; then
+    radte_args+=("--iqtree-model=${radte_iqtree_model}")
+  else
+    radte_args+=("--gamma-categories=${radte_gamma_categories}")
+  fi
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file radte.alignment.fasta
+  nwkit radte \
     "${radte_args[@]}" \
-    --max_age="${radte_max_age}" \
-    --chronos_lambda=1 \
-    --chronos_model=discrete \
-    --pad_short_edge=0.001 \
+    --backend native \
+    --alignment radte.alignment.fasta \
+    --substitution-model "${radte_model_resolved}" \
+    --max-age "${radte_max_age}" \
+    --inference "${radte_inference}" \
+    --likelihood "${radte_likelihood}" \
+    --uncertainty "${radte_uncertainty}" \
+    --interval-level "${radte_interval_level}" \
+    --maxiter "${radte_maxiter}" \
+    --seed "${radte_seed}" \
+    --out-prefix radte \
+    --figure-out radte.pdf \
     2>&1 | tee radte.log
 
-  constrained_node=$(awk -F': *' '/^Calibrated nodes:/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' radte.log)
-  echo "${constrained_node}" > "${og_id}.dated.log.txt"
-
-  if grep -q ":-" radte_gene_tree_output.nwk; then
-    contain_negative_bl=1
-  else
-    contain_negative_bl=0
-  fi
-  if [[ ${contain_negative_bl} -eq 1 ]]; then
-    echo "Dated tree has negative branch length. Deleting output files depending on the tree file."
-    for key in l1ou pem asr dated stat tree_plot; do
-      files=()
-      mapfile -t files < <(compgen -A variable "file_og_${key}")
-      for f in "${files[@]}"; do
-        target_file="${!f}"
-        if [[ -e "${target_file}" ]]; then
-          echo "deleting: ${target_file}"
-          rm -f -- "${target_file}"
-        fi
-      done
-    done
-  else
-    echo "Dated tree has no negative branch length. Continue."
-    cp_out radte_calibrated_nodes.txt "${file_og_dated_tree_log}"
-    cp_out radte_gene_tree_output.nwk "${file_og_dated_tree}"
-  fi
+  # NWKIT validates the chronology and reports failed intervals explicitly.
+  # Publish the complete result with the established downstream filenames.
+  cp radte.dated.nwk radte.compat.nwk
+  cp radte.manifest.json radte.compat.log.txt
+  radte_publish_args=(radte.compat.nwk "${file_og_dated_tree}" radte.compat.log.txt "${file_og_dated_tree_log}")
+  for radte_suffix in "${radte_bundle_suffixes[@]}"; do
+    radte_publish_args+=("radte.${radte_suffix}" "${file_og_radte_prefix}.${radte_suffix}")
+  done
+  mv_out_bundle "${radte_publish_args[@]}" || exit $?
   gg_artifact_record "${tree_dating_provenance_args[@]}"
 else
   gg_step_skip "${task}"
@@ -4985,9 +5097,13 @@ else
   gg_step_skip "${task}"
 fi
 
-task="l1ou"
+task="kfl1ou OU shift detection"
 disable_if_no_input_file "run_l1ou" "${file_og_trimmed_aln_analysis}" "${file_og_expression}" "${file_og_dated_tree_analysis}"
 l1ou_needs_update=0
+kfl1ou_identity="unavailable"
+if [[ ${run_l1ou} -eq 1 ]]; then
+  kfl1ou_identity=$(Rscript -e 'cat(as.character(packageVersion("kfl1ou")))') || exit $?
+fi
 l1ou_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.l1ou.json"
   --step "l1ou"
@@ -5002,6 +5118,9 @@ l1ou_provenance_args=(
   --output "regime=${file_og_l1ou_fit_regime}"
   --output "leaf=${file_og_l1ou_fit_leaf}"
   --output "plot=${file_og_l1ou_fit_plot}"
+  --input "adapter=${gg_support_dir}/detect_OU_shift_kfl1ou.r"
+  --parameter "engine=kfl1ou"
+  --parameter "kfl1ou_identity=${kfl1ou_identity}"
   --parameter "criterion=${l1ou_criterion}"
   --parameter "alpha_upper=${l1ou_alpha_upper}"
   --parameter "convergence=${l1ou_convergence}"

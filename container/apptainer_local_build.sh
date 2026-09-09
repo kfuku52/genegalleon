@@ -48,13 +48,10 @@ KFFRACTBIAS_REPO_REF=${KFFRACTBIAS_REPO_REF:-${GG_SOURCE_KFFRACTBIAS_REPO_REF}}
 KFFRACTBIAS_REPO_SHA=${KFFRACTBIAS_REPO_SHA:-}
 KFTOOLS_REPO_URL=${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}
 RKFTOOLS_REPO_URL=${RKFTOOLS_REPO_URL:-https://github.com/kfuku52/rkftools.git}
-RADTE_REPO_URL=${RADTE_REPO_URL:-https://github.com/kfuku52/RADTE.git}
 KFTOOLS_REPO_REF=${KFTOOLS_REPO_REF:-${GG_SOURCE_KFTOOLS_REPO_REF}}
 RKFTOOLS_REPO_REF=${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}
-RADTE_REPO_REF=${RADTE_REPO_REF:-${GG_SOURCE_RADTE_REPO_REF}}
 KFTOOLS_REPO_SHA=${KFTOOLS_REPO_SHA:-}
 RKFTOOLS_REPO_SHA=${RKFTOOLS_REPO_SHA:-}
-RADTE_REPO_SHA=${RADTE_REPO_SHA:-}
 TESTNH_TARBALL_SHA256=${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}
 CAFE5_TARBALL_SHA256=${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}
 if [[ -z "${SECURITY_REFRESH_EPOCH:-}" ]]; then
@@ -144,13 +141,10 @@ render_definition() {
     -e "s|@@KFFRACTBIAS_REPO_SHA@@|$(escape_sed_replacement "${KFFRACTBIAS_REPO_SHA}")|g" \
     -e "s|@@KFTOOLS_REPO_URL@@|$(escape_sed_replacement "${KFTOOLS_REPO_URL}")|g" \
     -e "s|@@RKFTOOLS_REPO_URL@@|$(escape_sed_replacement "${RKFTOOLS_REPO_URL}")|g" \
-    -e "s|@@RADTE_REPO_URL@@|$(escape_sed_replacement "${RADTE_REPO_URL}")|g" \
     -e "s|@@KFTOOLS_REPO_REF@@|$(escape_sed_replacement "${KFTOOLS_REPO_REF}")|g" \
     -e "s|@@RKFTOOLS_REPO_REF@@|$(escape_sed_replacement "${RKFTOOLS_REPO_REF}")|g" \
-    -e "s|@@RADTE_REPO_REF@@|$(escape_sed_replacement "${RADTE_REPO_REF}")|g" \
     -e "s|@@KFTOOLS_REPO_SHA@@|$(escape_sed_replacement "${KFTOOLS_REPO_SHA}")|g" \
     -e "s|@@RKFTOOLS_REPO_SHA@@|$(escape_sed_replacement "${RKFTOOLS_REPO_SHA}")|g" \
-    -e "s|@@RADTE_REPO_SHA@@|$(escape_sed_replacement "${RADTE_REPO_SHA}")|g" \
     -e "s|@@TESTNH_TARBALL_SHA256@@|$(escape_sed_replacement "${TESTNH_TARBALL_SHA256}")|g" \
     -e "s|@@CAFE5_TARBALL_SHA256@@|$(escape_sed_replacement "${CAFE5_TARBALL_SHA256}")|g" \
     "${template_path}" > "${definition_path}"

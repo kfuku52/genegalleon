@@ -73,6 +73,7 @@ Detailed guides are split by topic:
 - [Repository Layout](docs/repository-layout.md)
 - [Execution Model](docs/execution-model.md)
 - [Common Workflow Recipes](docs/common-workflow-recipes.md)
+- [Gene-Tree Dating and OU Shifts](docs/gene-tree-dating.md)
 - [Gene-Family Outputs and Progress Monitoring](docs/gene-family-outputs-and-progress-monitoring.md)
 - [Species-Tree Stage ZIP Storage](docs/species-tree-stage-zip-storage.md)
 - [Migrating Legacy Unzipped Workspaces to ZIP Storage (audit, conversion, and rollback)](docs/workspace-storage-management.md)

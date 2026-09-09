@@ -83,13 +83,10 @@ kffractbias_ref="${KFFRACTBIAS_REPO_REF:-${GG_SOURCE_KFFRACTBIAS_REPO_REF}}"
 kffractbias_sha="${KFFRACTBIAS_REPO_SHA:-}"
 kftools_url="${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}"
 rkftools_url="${RKFTOOLS_REPO_URL:-https://github.com/kfuku52/rkftools.git}"
-radte_url="${RADTE_REPO_URL:-https://github.com/kfuku52/RADTE.git}"
 kftools_ref="${KFTOOLS_REPO_REF:-${GG_SOURCE_KFTOOLS_REPO_REF}}"
 rkftools_ref="${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}"
-radte_ref="${RADTE_REPO_REF:-${GG_SOURCE_RADTE_REPO_REF}}"
 kftools_sha="${KFTOOLS_REPO_SHA:-}"
 rkftools_sha="${RKFTOOLS_REPO_SHA:-}"
-radte_sha="${RADTE_REPO_SHA:-}"
 testnh_sha="${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}"
 cafe5_sha="${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}"
 
@@ -145,9 +142,6 @@ context_digest="$(
     "rkftools_url=${rkftools_url}" \
     "rkftools_ref=${rkftools_ref}" \
     "rkftools_sha=${rkftools_sha}" \
-    "radte_url=${radte_url}" \
-    "radte_ref=${radte_ref}" \
-    "radte_sha=${radte_sha}" \
     "testnh_sha=${testnh_sha}" \
     "cafe5_sha=${cafe5_sha}"
 } | sha256_stream

@@ -73,13 +73,10 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     kffractbias_repo_sha="@@KFFRACTBIAS_REPO_SHA@@"
     kftools_repo_url="@@KFTOOLS_REPO_URL@@"
     rkftools_repo_url="@@RKFTOOLS_REPO_URL@@"
-    radte_repo_url="@@RADTE_REPO_URL@@"
     kftools_repo_ref_override="@@KFTOOLS_REPO_REF@@"
     rkftools_repo_ref_override="@@RKFTOOLS_REPO_REF@@"
-    radte_repo_ref="@@RADTE_REPO_REF@@"
     kftools_repo_sha="@@KFTOOLS_REPO_SHA@@"
     rkftools_repo_sha="@@RKFTOOLS_REPO_SHA@@"
-    radte_repo_sha="@@RADTE_REPO_SHA@@"
     testnh_tarball_sha256="@@TESTNH_TARBALL_SHA256@@"
     cafe5_tarball_sha256="@@CAFE5_TARBALL_SHA256@@"
 
@@ -158,9 +155,6 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     bash /opt/pg/scripts/build_source_artifact.sh r rkftools \
         "${rkftools_repo_url}" "${rkftools_repo_sha:-${rkftools_repo_ref_override:-${kfu52_repo_ref}}}" \
         "${artifact_root}/rkftools"
-    bash /opt/pg/scripts/build_source_artifact.sh radte RADTE \
-        "${radte_repo_url}" "${radte_repo_sha:-${radte_repo_ref}}" \
-        "${artifact_root}/RADTE"
     bash /opt/pg/scripts/install_source_artifacts.sh "${artifact_root}"
     rm -rf -- "${artifact_root}"
     /opt/pg/scripts/install_helvetica_compat_font.sh base

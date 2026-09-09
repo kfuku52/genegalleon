@@ -135,7 +135,7 @@ run_tree_root=1 # Root gene tree using tree_rooting_method.
 run_orthogroup_extraction=0 # Optional query2family refinement; extract from the pre-GeneRax rooted homolog tree, then run GeneRax on the extracted tree and FASTA when enabled.
 run_generax=0 # GeneRax off by default for local/smoke environments without MPI setup.
 run_notung_reconcil=0 # Run NOTUNG for RADTE.
-run_tree_dating=0 # Species-tree-guided divergence time estimation with RADTE.
+run_tree_dating=0 # Species-tree-guided divergence time estimation with NWKIT; native or IQ-TREE sequence engine.
 
 # Trait and promoter workflow flags
 run_generate_expression_matrix=0 # Generate trait matrix of gene expression level.
@@ -186,6 +186,24 @@ tree_rooting_method="${tree_rooting_method:-mad}" # mad|reconciliation|notung|mi
 generax_model="GTR+G4" # GeneRax substitution model.
 generax_rec_model="UndatedDL" # "UndatedDTL" or "UndatedDL"; GeneRax reconciliation model, with DL modeling duplication/loss and DTL also allowing transfer events for HGT-oriented analyses.
 radte_max_age=1000 # Upper limit of estimated divergence time in MY.
+radte_sequence_engine="${radte_sequence_engine:-native}" # native|iqtree; NWKIT handles dates for both.
+radte_iqtree_mode="${radte_iqtree_mode:-persistent}" # persistent or subprocess
+radte_iqtree_model="${radte_iqtree_model:-}" # Optional complete IQ-TREE model, e.g. GY+F3X4+R4.
+radte_substitution_model="${radte_substitution_model:-auto}" # auto: GY94 for CDS, LG for protein; also ecmk07, ecmrest, hky, gtr.
+radte_codon_frequencies="${radte_codon_frequencies:-}" # Empty: GY94 f3x4, ECM published frequencies; f selects alignment codon frequencies.
+radte_kappa="${radte_kappa:-}" # Empty estimates HKY/GY94 kappa; a number fixes it.
+radte_omega="${radte_omega:-}" # Empty estimates GY94 omega; a number fixes it.
+radte_gamma_shape="${radte_gamma_shape:-}" # Empty estimates gamma shape.
+radte_gamma_categories="${radte_gamma_categories:-4}" # Number of site-rate gamma categories.
+radte_inference="${radte_inference:-auto}" # auto|marginal|joint-map.
+radte_likelihood="${radte_likelihood:-auto}" # auto|exact|quadratic.
+radte_uncertainty="${radte_uncertainty:-profile}" # profile|laplace|bootstrap|none; conditional on fixed species ages.
+radte_interval_level="${radte_interval_level:-0.95}" # Coverage of conditional gene-age intervals.
+radte_rate_sd="${radte_rate_sd:-}" # Empty estimates relaxed-clock SD; 0 selects a strict clock.
+radte_maxiter="${radte_maxiter:-1000}" # Maximum optimizer iterations.
+radte_seed="${radte_seed:-1}" # Random seed.
+radte_species_intervals_tsv="${radte_species_intervals_tsv:-}" # Optional external species intervals for display only; workspace-relative or absolute TSV.
+
 
 # species_expression data (value in input files)
 exp_value_type="log2p1" # Expression scale used in species_expression input tables.
