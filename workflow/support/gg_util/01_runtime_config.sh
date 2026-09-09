@@ -386,7 +386,9 @@ gg_run_container_shell_script() {
 	local image_path=$1
 	local script_path=$2
 	local subcommand=""
+	local config_key=""
 	local -a shell_argv=(bash -s --)
+	local -a observation_argv=()
 	if [[ "$(basename "${script_path}")" == gg_*_core.sh && "${GG_RESOURCE_METRICS:-1}" == 1 ]]; then
 		shell_argv=(python /script/support/resource_metrics.py
 			--directory /workspace/output/resource_metrics
@@ -400,6 +402,23 @@ gg_run_container_shell_script() {
 		shell_argv=(python /script/support/task_tmp.py --workflow "$(basename "${script_path}" _core.sh)" -- "${shell_argv[@]}")
 	fi
 
+	# Additive and opt-in: old entrypoints and adapters retain their exact path.
+	if [[ "$(basename "${script_path}")" == gg_*_core.sh && "${GG_OBSERVABILITY:-0}" == 1 ]]; then
+		observation_argv=(python /script/support/workflow_observation.py
+			--directory /workspace/output/observations
+			--workflow "$(basename "${script_path}" _core.sh)" --workflow-root /script --stdin-script)
+		if [[ "$(basename "${script_path}")" == gg_gene_evolution_core.sh ]]; then
+			observation_argv+=(--accept-exit-code 8)
+		fi
+		if [[ -n "${gg_workflow_dir:-}" && -r "${gg_workflow_dir}/../VERSION" ]]; then
+			observation_argv+=(--genegalleon-version "$(< "${gg_workflow_dir}/../VERSION")")
+		fi
+		while IFS= read -r config_key; do
+			[[ -n "${config_key}" ]] && observation_argv+=(--config-key "${config_key}")
+		done < <(gg_print_entrypoint_config_vars "$(basename "${script_path}" _core.sh)_entrypoint.sh")
+		shell_argv=("${observation_argv[@]}" -- "${shell_argv[@]}")
+	fi
+
 	if ! gg_container_shell_command_is_set; then
 		echo "gg_run_container_shell_script: container shell command is not initialized." >&2
 		return 1
@@ -409,6 +428,10 @@ gg_run_container_shell_script() {
 		return 1
 	fi
 	subcommand=$(gg_container_shell_command_subcommand || true)
+	if [[ "${#observation_argv[@]}" -gt 0 && "${subcommand}" != exec ]]; then
+		echo "GG_OBSERVABILITY=1 requires an exec container adapter." >&2
+		return 1
+	fi
 	if [[ "$(basename "${script_path}")" == gg_*_core.sh && "${GG_COMMON_TMP_ROOT:-workspace}" != workspace && "${subcommand}" != exec ]]; then
 		echo "External scratch requires an exec container adapter." >&2
 		return 1

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
+import contextvars
 import csv
 import hashlib
 import json
@@ -36,8 +37,10 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from content_digest_cache import cached_sha256_file
 from shared_namespace_lock import NamespaceLockError, namespace_lock
+from workflow_observation import observe_files, observe_path
 
 STORE_DIR_NAME = ".gg_store"
+_OBSERVATION_STORES = contextvars.ContextVar("genegalleon_observation_stores", default=None)
 ACTIVE_ARCHIVE_DIR_NAME = "archives"
 LEGACY_ARCHIVE_DIR_NAME = ".gg_archives"
 # ARCHIVE_DIR_NAME remains the metadata/locking root name for callers that
@@ -361,6 +364,8 @@ def _bucket_lock(
     exclusive: bool,
     nonblocking: bool = False,
 ) -> Iterator[bool]:
+    if _OBSERVATION_STORES.get() is not None:
+        raise ArchiveStoreError("Mutating/namespace-lock operations are forbidden during a read-only observation")
     try:
         with namespace_lock(_store_lock_path(lock_path), exclusive=exclusive, nonblocking=nonblocking) as acquired:
             yield acquired
@@ -716,6 +721,30 @@ class ProgressReporter:
 
 
 @contextlib.contextmanager
+def read_only_observation() -> Iterator[None]:
+    """Optimistic reads with an index fence and no namespace-lock file writes.
+
+    These observations cannot authorize a mutation. Normal execution still uses
+    its existing locks. An archive generation change invalidates the response.
+    """
+    if _OBSERVATION_STORES.get() is not None:
+        yield
+        return
+    stores = {}
+    token = _OBSERVATION_STORES.set(stores)
+    try:
+        with observe_files():
+            yield
+        for root, expected in stores.items():
+            store = GeneFamilyOutputStore(root)
+            store._assert_no_pending_index_update()
+            if store._read_index_epoch() != expected:
+                raise ArchiveStoreError("Archive changed during observation; retry the query")
+    finally:
+        _OBSERVATION_STORES.reset(token)
+
+
+@contextlib.contextmanager
 def producer_read_lock(
     archive_root: Path,
     *,
@@ -724,6 +753,16 @@ def producer_read_lock(
     """Keep archive maintenance from replacing a source while it is open."""
 
     _validate_archive_root(archive_root)
+    observations = _OBSERVATION_STORES.get()
+    if observations is not None:
+        root = archive_root.parent
+        store = GeneFamilyOutputStore(root)
+        store._assert_no_pending_index_update()
+        epoch = store._read_index_epoch()
+        if observations.setdefault(root, epoch) != epoch:
+            raise ArchiveStoreError("Archive changed during observation; retry the query")
+        yield True
+        return
     if not archive_root.is_dir():
         yield True
         return
@@ -1512,6 +1551,11 @@ class GeneFamilyOutputStore:
             raise ArchiveStoreError(f"Failed to read GeneGalleon archive index: {exc}") from exc
 
     def family_state(self, family_id: str) -> Optional[str]:
+        observation = self.family_observation(family_id)
+        return None if observation is None else observation["status"]
+
+    def family_observation(self, family_id: str) -> Optional[dict]:
+        """Read the published family identity without exposing storage layout."""
         self._refresh_if_index_changed()
         if self.family_filter is not None:
             state_dir = self.archive_root / FAMILY_STATE_DIR_NAME
@@ -1523,10 +1567,10 @@ class GeneFamilyOutputStore:
                 )
             if marker.is_file():
                 state = self._read_state_bucket(self._state_bucket_path(family_id)).get(family_id)
-                return None if state is None else state[1]
+                return None if state is None else {"generation": state[0], "status": state[1], "run_token": state[2]}
         self._load_family_states()
         state = self._family_states.get(family_id)
-        return None if state is None else state[1]
+        return None if state is None else {"generation": state[0], "status": state[1], "run_token": state[2]}
 
     def _read_manifest(self, zip_path: Path) -> dict:
         try:
@@ -1812,6 +1856,7 @@ class GeneFamilyOutputStore:
         subdir: str,
         name: str,
     ) -> Optional[Artifact]:
+        observe_path(self.root / _safe_logical_path(subdir, name))
         live_artifact = self._live_artifact(subdir, name)
         if live_artifact is not None:
             return live_artifact
@@ -1946,10 +1991,12 @@ class GeneFamilyOutputStore:
             if artifact is None:
                 raise FileNotFoundError(self.root / subdir / name)
             if artifact.live_path is not None:
+                observe_path(artifact.live_path)
                 with artifact.live_path.open("rb") as handle:
                     yield handle
                 return
             assert artifact.zip_path is not None
+            observe_path(artifact.zip_path)
             assert artifact.member_name is not None
             if artifact.zip_path.is_symlink() or artifact.zip_path.parent.is_symlink():
                 raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {artifact.zip_path}")
