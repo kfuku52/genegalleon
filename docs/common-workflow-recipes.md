@@ -67,7 +67,7 @@ Wrapper note:
 If `input_generation_mode` is unclear, treat it as follows:
 
 - `single`: the normal mode; one run does everything.
-- `array_prepare`: generate `task_plan.json` before launching array workers.
+- `array_prepare`: download reference files together and freeze local tasks in `task_plan.json` before launching array workers.
 - `array_worker`: one scheduler task handles one species indexed by `GG_ARRAY_TASK_ID`.
 - `array_finalize`: merge worker outputs and run shared checks and summaries once.
 

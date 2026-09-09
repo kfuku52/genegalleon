@@ -107,14 +107,14 @@ run_generate_species_trait=0 # Generate species_trait.tsv from downloaded or loc
 
 # Shared parameters
 provider="all" # all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|ddbj|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local; selects which provider-specific local layout or download-manifest rows are formatted, with all scanning every supported provider directory.
-input_generation_mode="single" # single=all stages in one run | array_prepare=build task plan | array_worker=run one species task per GG_ARRAY_TASK_ID | array_finalize=merge shards and run shared validation/summaries; use array_* for large downloads/formatting across many species.
+input_generation_mode="single" # single=all stages | array_prepare=download together and freeze local tasks | array_worker=compute one species per GG_ARRAY_TASK_ID | array_finalize=merge shards and run shared validation/summaries.
 species_busco_parallel_jobs="auto" # In single mode, auto runs up to four species BUSCO jobs within GG_TASK_CPUS; array_worker still runs one species per task.
 species_busco_memory_gb_per_job=4 # Minimum tool-memory budget per concurrent BUSCO species job; parallelism is capped by GG_MEM_TOOL_GB / this value.
 trait_profile="none" # none|gift_starter|gbif_distribution; optional preset for generating species_trait.tsv from external trait databases.
 busco_lineage="${GG_COMMON_BUSCO_LINEAGE:-auto}" # BUSCO lineage dataset name, or auto to infer a shared dataset from the discovered species set.
 strict=0 # Treat input formatting and validation warnings as fatal errors.
 overwrite=0 # Regenerate formatted/downloaded outputs even when existing non-empty outputs are present.
-download_only=0 # Stop after provider/download-manifest download and formatting; skip validation, BUSCO, summaries, and trait generation.
+download_only=0 # Single mode only: stop after manifest downloads, before formatting or downstream processing.
 dry_run=0 # Print planned downloads/formatting actions without writing formatted outputs.
 download_timeout=120 # Per-request timeout in seconds for remote downloads.
 gene_grouping_mode="rescue_overlap" # strict|rescue_overlap; strict keeps provider gene models as-is, while rescue_overlap merges likely fragmented/overlapping CDS records into a gene-level representative when possible.
@@ -130,7 +130,7 @@ http_header="" # Extra HTTP header forwarded to download requests, e.g., "User-A
 input_dir="" # Local raw input directory to ingest instead of downloading.
 download_manifest="" # Path to the download manifest file.
 download_dir="" # Directory for downloaded raw files.
-download_limit_dir="" # Shared flock directory for cross-worker database request limits; blank uses workspace/.gg_cache/input_download_limits.
+download_limit_dir="" # Shared atomic-namespace directory for database request limits; blank uses workspace/.gg_cache/input_download_limits. Stop old clients before migrating protocols.
 summary_output="" # Output path for the run summary table.
 species_cds_dir="" # Output directory for formatted CDS FASTA files.
 species_cds_fx2tab_dir="" # Output directory for CDS fx2tab TSV files.

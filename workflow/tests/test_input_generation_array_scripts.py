@@ -9,6 +9,63 @@ SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 PLAN_SCRIPT = SUPPORT_DIR / "plan_input_generation_tasks.py"
 RUN_TASK_SCRIPT = SUPPORT_DIR / "run_input_generation_task.py"
 MERGE_SCRIPT = SUPPORT_DIR / "merge_input_generation_shards.py"
+STAGE_SCRIPT = SUPPORT_DIR / "stage_input_generation_downloads.py"
+
+
+def test_staged_http_inputs_run_without_server_and_reject_missing_or_changed_cache(tmp_path):
+    import functools
+    import threading
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    raw = tmp_path / "raw"
+    species = "Arabidopsis_thaliana"
+    write_direct_species_fixture(raw, species)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=str(raw)))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    manifest = tmp_path / "source.tsv"
+    base = f"http://127.0.0.1:{server.server_port}/{species}/{species}"
+    manifest.write_text("provider\tid\tspecies_key\tcds_url\tgff_url\tgenome_url\n"
+                        f"direct\tfixture\t{species}\t{base}.cds.fa\t{base}.gff\t{base}.genome.fa\n")
+    plan = tmp_path / "plan.json"
+    planned = run_python(PLAN_SCRIPT, "--provider", "all", "--download-manifest", str(manifest),
+                         "--download-dir", str(tmp_path / "downloads"), "--stage-downloads", "--outfile", str(plan))
+    assert planned.returncode == 0, planned.stderr
+    args = ("--task-plan", str(plan), "--task-index", "1", "--species-cds-dir", str(tmp_path / "cds"),
+            "--species-gff-dir", str(tmp_path / "gff"), "--species-genome-dir", str(tmp_path / "genome"))
+    try:
+        missing = run_python(RUN_TASK_SCRIPT, *args)
+        assert missing.returncode != 0 and "Staged download receipt is missing" in missing.stderr
+        staged = run_python(STAGE_SCRIPT, "--task-plan", str(plan), "--jobs", "3")
+        assert staged.returncode == 0, staged.stdout + staged.stderr
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(3)
+    manifest.write_text("no longer valid\n")
+    completed = run_python(RUN_TASK_SCRIPT, *args)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert list((tmp_path / "cds").glob("*.fa.gz"))
+    restaged = run_python(STAGE_SCRIPT, "--task-plan", str(plan))
+    assert restaged.returncode == 0 and "no downloads needed" in restaged.stdout, restaged.stderr
+    cached = json.loads(Path(str(plan) + ".tasks/1.json").read_text())["task"]
+    Path(cached["cds_path"]).write_text(">changed\nATG\n")
+    rejected = run_python(RUN_TASK_SCRIPT, *args)
+    assert rejected.returncode != 0 and "Raw input changed" in rejected.stderr
+    rejected_stage = run_python(STAGE_SCRIPT, "--task-plan", str(plan))
+    assert rejected_stage.returncode != 0 and "Staged raw input changed" in rejected_stage.stderr
+
+
+def test_prepare_resources_are_separate_from_compute_array(tmp_path):
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    result = run_python(helper, "--task-plan", str(tmp_path / "plan.json"), "--cpus", "4", "--memory", "32G",
+                        "--prepare-cpus", "8", "--prepare-memory", "8G", "--partition", "compute",
+                        "--prepare-partition", "network")
+    assert result.returncode == 0, result.stderr
+    prepare = next(line for line in result.stdout.splitlines() if "MODE=array_prepare " in line)
+    worker = next(line for line in result.stdout.splitlines() if "MODE=array_worker " in line)
+    assert "--cpus-per-task=8" in prepare and "--mem=8G" in prepare and "--partition=network" in prepare
+    assert "--cpus-per-task=4" in worker and "--mem=32G" in worker and "--partition=compute" in worker
 
 
 def run_python(script: Path, *args):

@@ -704,21 +704,25 @@ Alternative runtime overrides (without editing files) via env vars:
   `GG_INPUT_GBIF_MIN_MATCH_CONFIDENCE`,
   `GG_INPUT_GBIF_MAX_COORDINATE_UNCERTAINTY_M`,
   `GG_INPUT_GBIF_MAX_DISTANCE_FROM_CENTROID_M`.
-- per-process provider download caps (shared request limits additionally apply
-  across array jobs; see [shared database limits](input-generation-arrays.md#shared-database-request-limits)):
+- database download caps (also used by the fair in-process dispatcher;
+  RefSeq/GenBank use NCBI and Ensembl variants use ENSEMBL;
+  see [shared database limits](input-generation-arrays.md#shared-database-request-limits)):
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBL`,
-  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_ENSEMBLPLANTS`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_PHYCOCOSM`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_PHYTOZOME`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_NCBI`,
-  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_REFSEQ`,
-  `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_GENBANK`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_COGE`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_CNGB`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_FLYBASE`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_WORMBASE`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_VECTORBASE`,
   `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_FERNBASE`.
+
+Trait generation preserves missing binary observations rather than converting them
+to absence. Strict mode rejects output traits with no observed values before
+replacing the output table. The optional stats JSON includes observed species
+counts per output trait (`num_observed_by_trait`). These counts do not by
+themselves establish sufficient coverage for downstream cross-validation.
 
 Quick preset example (enable trait stage with GIFT starter config):
 

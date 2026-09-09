@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preview or submit input-generation prepare -> species array -> finalize on Slurm."""
+"""Preview or submit input-generation download/prepare -> compute array -> finalize on Slurm."""
 import argparse
 import json
 import os
@@ -30,22 +30,28 @@ def main():
     parser.add_argument("--max-running", type=int, default=8)
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--memory", default="32G", help="Total memory per worker")
+    parser.add_argument("--prepare-cpus", type=int, help="Download/prepare CPUs and download workers (default: --cpus)")
+    parser.add_argument("--prepare-memory", help="Total download/prepare memory (default: --memory)")
+    parser.add_argument("--prepare-partition", help="Network-enabled download/prepare partition (default: --partition)")
     parser.add_argument("--time", default="3-00:00:00")
     parser.add_argument("--partition", default="", help="Slurm partition (default: scheduler default)")
     parser.add_argument("--retry", action="store_true", help="Skip prepare and submit only workers without verified receipts")
     parser.add_argument("--submit", action="store_true", help="Submit jobs; default prints a dry-run preview")
     args = parser.parse_args()
-    if min(args.cpus, args.max_running) < 1:
+    if min(args.cpus, args.max_running, args.prepare_cpus if args.prepare_cpus is not None else args.cpus) < 1:
         parser.error("CPU and concurrency counts must be positive")
     plan_path = Path(args.task_plan).expanduser().resolve()
-    base = ["sbatch", "--parsable", "--cpus-per-task=" + str(args.cpus), "--mem=" + args.memory,
-            "--time=" + args.time]
-    if args.partition:
-        base += ["--partition=" + args.partition]
     env = os.environ.copy()
     env["GG_INPUT_TASK_PLAN_OUTPUT"] = str(plan_path)
 
     def command(mode, extra):
+        preparing = mode == "array_prepare"
+        cpus = (args.prepare_cpus or args.cpus) if preparing else args.cpus
+        memory = (args.prepare_memory or args.memory) if preparing else args.memory
+        partition = (args.prepare_partition if args.prepare_partition is not None else args.partition) if preparing else args.partition
+        base = ["sbatch", "--parsable", "--cpus-per-task=" + str(cpus), "--mem=" + memory, "--time=" + args.time]
+        if partition:
+            base += ["--partition=" + partition]
         # Values are inherited via the process environment, avoiding comma/space
         # escaping problems in Slurm's --export parser.
         return base + ["--export=ALL", "--job-name=gg_input_" + mode] + extra + ["--wrap=" + shlex.join(["exec", "bash", str(Path(args.entrypoint).resolve())])]

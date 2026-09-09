@@ -1,9 +1,8 @@
-"""Cross-process request admission on a shared filesystem with working flock locks.
+"""Cross-node request admission using atomic shared-filesystem namespace locks.
 
-Never delete lock files while clients may be running. Kernel-held slot locks are
-released on process exit; timestamps limit request starts, not lock ownership.
+No age-based stealing. An abruptly killed owner leaves a fail-closed slot; stop
+all clients before explicitly reconciling its ownership record.
 """
-import fcntl
 import hashlib
 import json
 import math
@@ -13,13 +12,18 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
+from shared_namespace_lock import NamespaceLockError, acquire, namespace_lock, release
+
 DATABASE_DOMAINS = {
     "ncbi": ("ncbi.nlm.nih.gov",),
-    "ensembl": ("ensembl.org", "ensemblgenomes.org"),
+    "ensembl": ("ensembl.org", "ensemblgenomes.org", "ensemblgenomes.ebi.ac.uk"),
     "coge": ("genomevolution.org",),
     "cngb": ("cngb.org",),
     "gwh": ("big.ac.cn", "ngdc.cncb.ac.cn"),
     "ddbj": ("ddbj.nig.ac.jp",),
+    "figshare": ("figshare.com",),
+    "flybase": ("flybase.org",),
+    "wormbase": ("wormbase.org",),
 }
 
 
@@ -33,16 +37,11 @@ def database_key(url):
 
 @contextmanager
 def locked(path, deadline):
-    with open(path, "a+b") as handle:
-        while True:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("Timed out waiting for download admission metadata lock") from None
-                time.sleep(0.05)
-        yield
+    try:
+        with namespace_lock(path, exclusive=True, timeout=max(0, deadline - time.monotonic())):
+            yield
+    except NamespaceLockError as exc:
+        raise TimeoutError("Failed to acquire/release download admission metadata lock: " + str(exc)) from exc
 
 
 def limit_directory():
@@ -63,7 +62,8 @@ class Admission:
         self.wait_timeout = float(os.environ.get("GG_INPUT_DOWNLOAD_LIMIT_WAIT", "3600"))
         if self.limit < 1 or not math.isfinite(self.interval) or self.interval < 0 or not math.isfinite(self.wait_timeout) or self.wait_timeout <= 0:
             raise ValueError("Invalid shared download limit for " + self.key)
-        self.directory = Path(root).expanduser().resolve() / hashlib.sha256(self.key.encode()).hexdigest()
+        # Separate state layout; migration still requires stopping old flock clients.
+        self.directory = Path(root).expanduser().resolve() / "namespace-v1" / hashlib.sha256(self.key.encode()).hexdigest()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.state_path = self.directory / "state.json"
         self.policy = {"database": self.key, "limit": self.limit, "interval": self.interval}
@@ -93,13 +93,11 @@ class Admission:
                 now = time.time()
                 if now >= max(state["next_start"], state["cooldown"]):
                     for index in range(self.limit):
-                        slot = open(self.directory / (str(index) + ".slot"), "a+b")
-                        try:
-                            fcntl.flock(slot, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        except BlockingIOError:
-                            slot.close()
+                        slot_path = self.directory / (str(index) + ".slot")
+                        token = acquire(slot_path, exclusive=True, nonblocking=True)
+                        if token is None:
                             continue
-                        self.slot = slot
+                        self.slot = (slot_path, token)
                         state["next_start"] = now + self.interval
                         try:
                             self.save(state)
@@ -110,6 +108,19 @@ class Admission:
             time.sleep(0.05)
         raise TimeoutError("Timed out waiting for shared download admission: " + self.key)
 
+    def ready(self):
+        """Advisory scheduler check; actual opening still atomically acquires a slot."""
+        if self.directory is None:
+            return True
+        with namespace_lock(self.directory / "admission.lock", exclusive=True, nonblocking=True) as held:
+            if not held:
+                return False
+            state = self.state()
+            if time.time() < max(state["next_start"], state["cooldown"]):
+                return False
+            return any(not Path(str(self.directory / (str(index) + ".slot")) + ".namespace-v1/gate").exists()
+                       for index in range(self.limit))
+
     def cooldown(self, seconds):
         if self.directory is not None:
             with locked(self.directory / "admission.lock", time.monotonic() + self.wait_timeout):
@@ -119,5 +130,5 @@ class Admission:
 
     def close(self):
         if self.slot is not None:
-            self.slot.close()
+            release(self.slot[0], self.slot[1], exclusive=True)
             self.slot = None

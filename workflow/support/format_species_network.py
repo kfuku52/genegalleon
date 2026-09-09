@@ -19,13 +19,22 @@ NETWORK_GUARD_ENV = "GG_TEST_ALLOW_ONLY_LOOPBACK_HTTP"
 _REQUEST_PROVIDER = ContextVar("input_request_provider", default=None)
 
 
-def set_request_provider(provider):
+def normalize_request_provider(provider):
     key = str(provider or "").lower()
     if key in ("refseq", "genbank"):
         key = "ncbi"
     elif key.startswith("ensembl"):
         key = "ensembl"
-    _REQUEST_PROVIDER.set(key if key not in ("", "all", "direct", "local") else None)
+    return key if key not in ("", "all", "direct", "local") else None
+
+
+def request_database(url, provider=None):
+    destination = database_key(url)
+    return destination if not destination.startswith("host:") else normalize_request_provider(provider) or destination
+
+
+def set_request_provider(provider):
+    _REQUEST_PROVIDER.set(normalize_request_provider(provider))
 
 
 @contextmanager

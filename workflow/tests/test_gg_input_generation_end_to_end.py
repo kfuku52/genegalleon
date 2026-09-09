@@ -802,7 +802,11 @@ def test_array_manifest_workers_and_incomplete_finalize_preserve_summary(tmp_pat
     fake_bin = _install_fake_toolchain(tmp_path)
     _run_core(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="array_prepare")
     root = workspace / "output" / "input_generation"
-    assert not (root / "tmp" / "input_download_cache").exists()
+    task_root = root / "tmp" / "task_plan.json.tasks"
+    assert (task_root / "1.json").is_file()
+    assert (task_root / "2.json").is_file()
+    staged = json.loads((task_root / "1.json").read_text())["task"]
+    assert Path(staged["cds_path"]).is_file()
     _run_core(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="array_worker", task_id=1)
     summary = root / "gg_input_generation_species.tsv"
     summary.write_text("previous canonical summary\n")
