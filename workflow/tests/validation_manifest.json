@@ -26,6 +26,7 @@
     ["Rscript", "workflow/tests/test_dated_tree_intervals.R"],
     ["Rscript", "workflow/tests/test_orthogroup_copy_number_trait_pgls.R"],
     ["Rscript", "workflow/tests/test_treevis_main.R"],
+    ["Rscript", "workflow/tests/test_treevis_layout.R"],
     ["Rscript", "workflow/tests/test_treevis_synteny_palette.R"],
     ["Rscript", "workflow/tests/test_treevis_synteny.R"],
     ["Rscript", "workflow/tests/test_treevis_legends.R"],

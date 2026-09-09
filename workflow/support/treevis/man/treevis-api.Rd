@@ -1,5 +1,6 @@
 \name{treevis-api}
 \alias{treevis-api}
+\alias{treevis_layout_mm}
 \alias{abbreviate_clade_labels}
 \alias{add_alignment_column}
 \alias{add_amino_acid_site_column}

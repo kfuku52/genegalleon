@@ -290,7 +290,7 @@ add_heatmap_column = function(g, args, df_trait, fill_label='Expression', gname=
         return(g)
     }
     font_size = args[['font_size']]
-    if (any(grepl('^pointplot', unlist(args[grep("^panel", names(args))])))) {
+    if (any(grepl('^pointplot', unlist(args[grep("^panel[0-9]+$", names(args))])))) {
         trait_colors = args[['trait_colors']]
     } else {
         trait_colors = 'black'

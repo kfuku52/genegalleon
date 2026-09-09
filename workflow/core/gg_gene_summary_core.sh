@@ -832,7 +832,7 @@ run_hgt_summary_for_source() {
   hgt_contamination_dir="${hgt_summary_contamination_dir:-}" \
   hgt_taxonomy_flow_rank="${hgt_summary_taxonomy_flow_rank:-phylum}" \
   hgt_taxonomy_flow_max_categories="${hgt_summary_taxonomy_flow_max_categories:-12}" \
-  hgt_tree_plot_width="${hgt_summary_tree_plot_width:-24}" \
+  hgt_tree_width_mm="${hgt_summary_tree_width_mm:-60}" \
   hgt_promoter_bp="${hgt_summary_promoter_bp:-2000}" \
   hgt_fimo_qvalue="${hgt_summary_fimo_qvalue:-0.05}" \
     bash "${gg_core_dir}/gg_hgt_core.sh"

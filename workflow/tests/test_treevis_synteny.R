@@ -100,7 +100,7 @@ branch <- data.frame(
 write.table(branch, file.path(outdir, 'stat_branch.tsv'), sep='\t', quote=FALSE, row.names=FALSE)
 oldwd <- setwd(outdir)
 result <- system2('Rscript', c(file.path(repo, 'workflow/support/stat_branch2tree_plot.r'),
-    '--stat_branch=stat_branch.tsv', '--width=6', '--rel_widths=',
+    '--stat_branch=stat_branch.tsv', '--panel_widths_mm=tree:60',
     '--panel1=tree,bl_rooted,no,no,L', paste0('--panel2=synteny,', infile, ',3'),
     '--show_branch_id=no', '--event_method=species_overlap',
     '--species_color_table=PLACEHOLDER', '--pie_chart_value_transformation=identity',

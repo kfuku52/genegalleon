@@ -92,8 +92,8 @@ writeLines(c(sprintf('source(%s)',encodeString(driver,quote='"')),
     "stopifnot(abs((last$xmax-last$xmin) - rel_widths[domain_position]/sum(rel_widths)) < 1e-12)",
     "ggplot2::ggsave('domain-overflow.png',cp,width=9,height=4,dpi=120,bg='white')"), runner)
 oldwd <- setwd(output)
-logs <- system2('Rscript', c(shQuote(runner), '--stat_branch=branch.tsv','--width=9',
-    '--rel_widths=tree,1,domain,1,pointplot,3', '--panel1=tree,bl_rooted,no,no,L',
+logs <- system2('Rscript', c(shQuote(runner), '--stat_branch=branch.tsv',
+    '--panel_widths_mm=tree:60,domain:45,pointplot:90', '--panel1=tree,bl_rooted,no,no,L',
     '--panel2=domain,rps.tsv','--panel3=pointplot,no,rel,_,expression_',
     '--show_branch_id=no','--event_method=species_overlap','--species_color_table=PLACEHOLDER',
     '--pie_chart_value_transformation=identity','--max_delta_intron_present=-0.5',

@@ -24,6 +24,12 @@ if (length(script_file_arg) > 0) {
 cat('arguments:\n')
 args = rkftools::get_parsed_args(args, print = TRUE)
 
+# Global/relative widths cannot guarantee readable physical column widths.
+for (old_option in c('width', 'rel_widths')) {
+    if (!is.null(args[[old_option]]) && nzchar(as.character(args[[old_option]])))
+        stop('--', old_option, ' is no longer supported; use --panel_widths_mm=tree:60,domain:45 (minimum data-panel mm).')
+}
+
 set_default_arg = function(args, key, value) {
   if (!(key %in% names(args)) || is.null(args[[key]]) || !nzchar(as.character(args[[key]]))) {
     args[[key]] = value
@@ -105,6 +111,9 @@ cat('long_branch_display settings:',
     ),
     '\n')
 
+# --panel_widths_mm: minimum data-panel widths, e.g. tree:60,domain:45.
+# PDF width is computed from content, decorations, and these minima.
+
 # --panelINT: order-sensitive comma-delimited parameters for plotting panels (INT=1, leftmost). e.g., "--panel1 tree,FOO --panel2 heatmap,BAR --panel3 tiplabel"
 
 # tree: phylogenetic tree. format = tree,BRANCH_LENGTH,NODE_LABEL,BRANCH_COLOR,ORIENTATION
@@ -136,6 +145,7 @@ cat('long_branch_display settings:',
 # intron_number: Number of introns in CDS regions originally obtained from gff file.
 
 # tiplabel: gene names. format = tiplabel
+# Width follows rendered text size; --panel_widths_mm supplies minimum panel widths.
 
 # categorical: single-column categorical tile. format = categorical,COLUMN,XLABEL[,MISSING_LABEL]
 # COLUMN: the column name in --stat_branch to render for tip rows.
@@ -224,7 +234,7 @@ cat('node_colors:', names(args[['node_colors']]), '=', args[['node_colors']], '\
 tree_flag = 0
 g = list()
 df_rpsblast = NULL
-panel_specs = unlist(args[grep("^panel", names(args))])
+panel_specs = unlist(args[grep("^panel[0-9]+$", names(args))])
 domain_specs = panel_specs[grepl('^domain', panel_specs)]
 if (length(domain_specs) > 0) {
   path_rpsblast = strsplit(domain_specs[[1]], ',')[[1]][2]
@@ -232,7 +242,7 @@ if (length(domain_specs) > 0) {
     df_rpsblast = read.table(path_rpsblast, sep = '\t', header = TRUE, stringsAsFactors = FALSE, comment.char = '', quote = '', check.name = FALSE)
   }
 }
-for (col in unlist(args[grep("^panel", names(args))])) {
+for (col in unlist(args[grep("^panel[0-9]+$", names(args))])) {
   if (grepl('^tree', col)) {
     dist_col = strsplit(col, ',')[[1]][2]
     nodelabel_col = strsplit(col, ',')[[1]][3]
@@ -397,9 +407,16 @@ for (col in unlist(args[grep("^panel", names(args))])) {
   }
 }
 
-rel_widths = get_rel_widths(g, args[['rel_widths']])
-base_width = as.numeric(args[['width']])
-cp = cowplot::plot_grid(plotlist = g, nrow = 1, align = 'h', axis = 'bt', rel_widths = rel_widths)
+# Measure using the same device/font metrics as the final PDF.
+measurement_pdf = tempfile(fileext='.pdf')
+grDevices::pdf(measurement_pdf)
+layout_mm = tryCatch(treevis_layout_mm(g, args[['panel_widths_mm']]),
+    finally = { grDevices::dev.off(); unlink(measurement_pdf) })
+rel_widths = layout_mm$widths_mm
+base_width = layout_mm$width_mm / 25.4
+cat('Column widths (mm):', paste(names(rel_widths), round(rel_widths, 2), collapse='; '), '\n')
+cat('PDF width (mm):', layout_mm$width_mm, '\n')
+cp = cowplot::plot_grid(plotlist = layout_mm$plots, nrow = 1, align = 'h', axis = 'bt', rel_widths = rel_widths)
 # plot_grid adds one layer per column. Draw domains last so the backgrounds
 # of columns on the right cannot cover its overflowing bottom legend.
 if ('domain' %in% names(g)) {

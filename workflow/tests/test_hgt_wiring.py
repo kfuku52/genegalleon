@@ -56,14 +56,14 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     assert 'run_hgt_summary_plots="${run_hgt_summary_plots:-0}"' in entrypoint_text
     assert 'hgt_summary_contamination_dir="${hgt_summary_contamination_dir:-}"' in entrypoint_text
     assert 'hgt_summary_taxonomy_flow_rank="${hgt_summary_taxonomy_flow_rank:-phylum}"' in entrypoint_text
-    assert 'hgt_summary_tree_plot_width="${hgt_summary_tree_plot_width:-24}"' in entrypoint_text
+    assert 'hgt_summary_tree_width_mm="${hgt_summary_tree_width_mm:-60}"' in entrypoint_text
     assert "hgt_min_branch_score" not in entrypoint_text
     assert 'bash "${gg_core_dir}/gg_hgt_core.sh"' in summary_core_text
     assert 'run_hgt_eval="${run_hgt_candidate_summary}"' in summary_core_text
     assert 'run_hgt_plot="${run_hgt_summary_plots}"' in summary_core_text
     assert 'hgt_contamination_dir="${hgt_summary_contamination_dir:-}"' in summary_core_text
     assert 'run_hgt_plot="${run_hgt_plot:-1}"' in core_text
-    assert 'hgt_tree_plot_width="${hgt_tree_plot_width:-24}"' in core_text
+    assert 'hgt_tree_width_mm="${hgt_tree_width_mm:-60}"' in core_text
     assert 'hgt_contamination_dir="${hgt_contamination_dir:-}"' in core_text
     assert 'default_hgt_contamination_dir="${gg_workspace_output_dir}/species_cds_contamination_removal_tsv"' in core_text
     assert 'if [[ -n "${hgt_contamination_dir}" ]]; then' in core_text

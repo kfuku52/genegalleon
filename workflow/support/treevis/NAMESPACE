@@ -1,3 +1,4 @@
+export(treevis_layout_mm)
 export(abbreviate_clade_labels)
 export(add_alignment_column)
 export(add_amino_acid_site_column)

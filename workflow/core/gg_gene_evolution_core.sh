@@ -6410,6 +6410,7 @@ tree_plot_provenance_args=(
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --output "tree_plot=${file_og_tree_plot}"
+  --parameter "column_layout=physical-mm-v1"
   --parameter "branch_length=${treevis_branch_length}"
   --parameter "support_value_requested=${treevis_support_value}"
   --parameter "support_value_resolved=${treevis_support_value_resolved}"
@@ -6577,8 +6578,7 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
   Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
     --stat_branch="${file_og_stat_branch}" \
     --max_delta_intron_present="${treevis_retrotransposition_delta_intron}" \
-    --width="7.2" \
-    --rel_widths="" \
+    --panel_widths_mm="tree:60" \
     "${tree_plot_panel_args[@]}" \
     --show_branch_id="yes" \
     --event_method="${treevis_event_method}" \

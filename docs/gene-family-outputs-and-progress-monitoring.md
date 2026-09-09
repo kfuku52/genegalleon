@@ -641,6 +641,25 @@ command when logical deletion is intended.
 
 ## How to read `tree_plot`
 
+Column widths are physical minima in millimetres. Each column reserves its data
+panel plus axes, legends, and margins; the PDF width is their sum. Adding or
+omitting a column does not resize the remaining columns. Text columns follow
+rendered glyph widths, heatmaps reserve at least 4 mm per group, and selected
+site columns reserve at least 3 mm per site. Trees default to a 60 mm data panel;
+domain, alignment, motif, and structure panels default to 45 mm. Legends and
+labels can increase these minima. Full alignments reserve at least 0.3 mm per
+aligned position. Very wide plots retain their size; select fewer panels when
+a smaller page is needed.
+
+For direct calls to `stat_branch2tree_plot.r`, use
+`--panel_widths_mm=tree:80,domain:60` to increase minimum data-panel widths.
+The workflow records the layout version so existing plots are regenerated on
+the next enabled tree-plot run. Keys match column-name prefixes; absent optional columns add no width. A
+requested width below the content minimum never shrinks it. The former
+`--width` (inches) and nonempty `--rel_widths` options are rejected with a
+migration message. HGT uses `hgt_summary_tree_width_mm` (default 60), replacing
+`hgt_summary_tree_plot_width`; direct HGT core calls use `hgt_tree_width_mm`.
+
 `tree_plot` is generated from `stat_branch/*.tsv` and summarizes many
 gene-family attributes around the inferred tree. In the current default
 GeneGalleon configuration, the panel order is:
