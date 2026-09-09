@@ -5,6 +5,8 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_nwkit_tree_workflows_runtime.py",
+    "test_asr_intron_runtime.py",
     "test_synteny_search_integration.py",
     "test_aster_ortools_runtime.py",
     "test_csubst_scan_runtime_integration.py",
@@ -20,9 +22,8 @@
   "r_commands": [
     ["bash", "workflow/tests/check_treevis_package.sh"],
     ["Rscript", "workflow/tests/test_r_scripts_parse.R"],
-    ["Rscript", "workflow/tests/test_pgls_common_rphylopars.R"],
     ["Rscript", "workflow/tests/test_r_species_label_utils.R"],
-    ["Rscript", "workflow/tests/test_plot_mcmctreer_input.R"],
+    ["Rscript", "workflow/tests/test_dated_tree_intervals.R"],
     ["Rscript", "workflow/tests/test_orthogroup_copy_number_trait_pgls.R"],
     ["Rscript", "workflow/tests/test_treevis_main.R"],
     ["Rscript", "workflow/tests/test_treevis_synteny_palette.R"],

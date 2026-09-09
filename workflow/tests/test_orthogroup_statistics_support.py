@@ -92,7 +92,7 @@ def test_gff_join_rejects_duplicate_gene_rows_before_multiplying_branches(tmp_pa
         module.load_gff_gene_traits(path)
     path.write_text("gene_id\tfeature_size\tnum_intron\nGene1\t6\t0\n", encoding="utf-8")
     traits = module.load_gff_gene_traits(path)
-    assert traits.columns.tolist() == ["node_name", "intron_feature_size"]
+    assert traits.columns.tolist() == ["node_name", "intron_feature_size", "num_intron"]
     assert traits.iloc[0]["node_name"] == "Gene1"
 
 
@@ -202,3 +202,23 @@ def test_reports_all_one_hundred_without_rejecting_a_valid_distribution():
     )
 
     assert diagnostics["all_support_100"] is True
+
+
+def test_observed_intron_counts_survive_without_asr_and_merge_without_suffixes(tmp_path):
+    import pandas as pd
+    module = load_module()
+    path = tmp_path / "gff.tsv"
+    path.write_text("gene_id\tnum_intron\nA\t0\nB\t20\nC\t\n")
+    traits = module.load_gff_gene_traits(path)
+    assert traits.num_intron.iloc[:2].tolist() == [0, 20]
+    assert pd.isna(traits.num_intron.iloc[2])
+    branches = traits.assign(branch_id=[0, 1, 2])
+    asr = pd.DataFrame({"branch_id": [0, 1, 2, 3], "node_name": ["A", "B", "C", "root"],
+                        "num_intron": [0, 20, None, None], "intron_present": [0, 1, .4, .8]})
+    merged = module.merge_asr_intron_traits(branches, asr)
+    assert merged.num_intron.iloc[:2].tolist() == [0, 20]
+    assert merged.num_intron.iloc[2:].isna().all()
+    assert not any(c.endswith(("_x", "_y")) for c in merged.columns)
+    asr.loc[1, "num_intron"] = 19
+    with pytest.raises(ValueError, match="counts disagree"):
+        module.merge_asr_intron_traits(branches, asr)

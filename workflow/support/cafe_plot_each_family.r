@@ -17,7 +17,7 @@ script_dir <- if (length(script_path_arg) > 0) {
 } else {
   getwd()
 }
-source(file.path(script_dir, "pgls_common.R"))
+source(file.path(script_dir, "tree_label_formatting.R"))
 
 # Input
 args <- commandArgs(trailingOnly = TRUE)

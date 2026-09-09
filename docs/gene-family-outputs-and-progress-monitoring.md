@@ -47,6 +47,12 @@ typically written under `workspace/output/query2family/` as:
 - `stat_tree/2_WOX_stat.tree.tsv`
 - `tree_plot/2_WOX_tree_plot.pdf`
 
+With `run_asr_intron=1`, NWKIT adds `asr_intron_summary/`,
+`asr_intron_model/`, `asr_intron_tree/`, and `asr_intron_plot/` for intron
+presence probabilities, model metadata, an annotated tree, and probability pies.
+See [intron ancestral-state reconstruction](intron-ancestral-reconstruction.md)
+for the output schema and migration from the retired SCM stage.
+
 When `run_orthogroup_extraction=1`, GeneGalleon extracts the seed-containing
 orthogroup from the rooted homolog tree before GeneRax. The extracted tree and
 FASTA are written below `orthogroup_extraction_nwk/`,
@@ -74,11 +80,7 @@ Species-tree comparison members are:
 
 - `pgls_species_nwkit/`: NWKIT ordinary PGLS after within-sample paralog
   aggregation,
-- `pgls_species_rphylopars/`: the matched Rphylopars comparator; unsupported
-  categorical or covariance combinations remain header-only and are explained
-  in the status table,
-- `pgls_comparison/`: long-form coefficient rows from RSC and both species
-  methods, with `analysis_method`, `aggregation`, `estimand`, and explicit
+- `pgls_comparison/`: long-form coefficient rows from RSC and species-tree PGLS, with `analysis_method`, `aggregation`, `estimand`, and explicit
   comparability notes,
 - `pgls_method_status/` and `pgls_method_audit/`: one place to distinguish
   successful, non-estimable, and unrequested methods and to record engine
@@ -101,8 +103,7 @@ a recoverable transaction; a failed move or caught interruption restores the
 previous complete bundle before provenance is recorded. `stat_tree/*.tsv`
 includes the family status and best overall RSC
 summary plus namespaced per-response/per-term fields, all beginning with
-`rsc_`. It also includes bounded `pgls_species_nwkit_*` and
-`pgls_species_rphylopars_*` status/best-row fields. To keep `stat_tree` bounded
+`rsc_`. It also includes bounded `pgls_species_nwkit_*` status/best-row fields. To keep `stat_tree` bounded
 for large screens, it contains counts and
 fields from the best usable (successfully converged) row only, under
 `rsc_best_*`; it does not flatten every RSC result row into a new group of

@@ -135,7 +135,7 @@ bash ./dev check full
 ```
 
 `workflow/tests/validation_manifest.json` declares the required runtime Python
-files, extra runtime scenarios, integration environment, and all seven R
+files, extra runtime scenarios, integration environment, and all required R
 commands. `run_checks.py` executes this same list for `dev`, Docker image
 publication, release SIFs, and the CI SIF job. `dev check full` runs all Python
 tests and every declared R check; `dev check r` runs the complete R list.

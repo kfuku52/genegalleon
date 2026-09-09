@@ -116,7 +116,7 @@ csubst_scan_candidate_sites_pdb="${csubst_scan_candidate_sites_pdb:-none}" # non
 
 # Gene-family species-tree presence/absence parameters
 presence_absence_species_tree="${presence_absence_species_tree:-auto}" # Species tree path, or auto to use query2family/species_tree outputs.
-presence_absence_species_tree_ci="${presence_absence_species_tree_ci:-auto}" # Dated species-tree CI path, or auto to use mcmctree_95CI.nwk when available.
+presence_absence_species_tree_ci="${presence_absence_species_tree_ci:-auto}" # Dated species-tree CI path, or auto to use mcmctree_95CI.nhx when available.
 presence_absence_species_tree_support="${presence_absence_species_tree_support:-auto}" # Species tree with numeric branch-support labels, or auto to use species_tree outputs.
 presence_absence_busco_table="${presence_absence_busco_table:-auto}" # BUSCO full-table directory or species summary table for the right-side stacked bars, or auto to use workspace outputs.
 presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}" # Include query files without stat_branch as NA columns.

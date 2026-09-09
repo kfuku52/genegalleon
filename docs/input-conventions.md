@@ -339,10 +339,7 @@ propagated as latent uncertainty by default
 (`rsc_categorical_replicate_policy="latent"`).
 
 Categorical species traits are supported by RSC and `species-nwkit`, using the
-same detected or declared factor levels and reference coding. The
-`species-rphylopars` comparator is limited to continuous predictors; a selected
-categorical analysis receives an explicit `not_estimable` status rather than a
-numeric recoding or Gaussian fallback.
+same detected or declared factor levels and reference coding.
 
 ### Transcriptome assembly input modes
 

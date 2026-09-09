@@ -409,6 +409,12 @@ from functools import cmp_to_key
 from pathlib import Path
 import sys
 
+if len(sys.argv) > 1 and (sys.argv[1] in ("convert", "validate") or (sys.argv[1] == "label" and "s" in sys.argv)):
+    sys.path = [entry for entry in sys.path if Path(entry).name != "python_stubs"]
+    from nwkit.cli import main
+    main(sys.argv[1:])
+    sys.exit(0)
+
 capture_dir = {str(capture_dir)!r}
 
 
@@ -1921,7 +1927,7 @@ def test_genome_evolution_recovers_conversion_sidecars_without_rerunning_dating(
     })
     assert result.returncode == 0, result.stdout + result.stderr
     assert (directory / "dated_species_tree.nwk").read_text() == dated
-    assert (directory / "mcmctree_95CI.nwk").read_text() == "(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    assert (directory / "mcmctree_95CI.nhx").read_text() == ("[&R]" if native else "") + "(a:0.1,(b:0.2,c:0.3):0.4);\n"
     assert (directory / "mcmctree_no95CI.nwk").is_file()
     summary = directory.parent / "species_tree_summary" / "dated_species_tree.nwk"
     assert summary.read_text() == dated
@@ -1943,7 +1949,9 @@ def test_genome_evolution_completes_interrupted_figtree_contract_migration(tmp_p
     )
     for name in ("iq2mc.mcmctree.ctl", "iq2mc.mcmctree.hessian", "iq2mc.rooted.nwk", "iq2mc.dummy.phy"):
         (parameters / name).write_text("historical input\n")
-    figtree = "Species tree for FigTree\n(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    from nwkit.convert import convert_tree_text
+
+    figtree = convert_tree_text("(a:0.1,(b:0.2,c:0.3):0.4);", target="figtree")
     (directory / "FigTree.tre").write_text(figtree)
     (directory / "iq2mc.mcmctree.out").write_text(figtree)
     settings = {"artifact_stale_policy": "stop", "input_sequence_mode": "cds",

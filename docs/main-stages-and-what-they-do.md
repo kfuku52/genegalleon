@@ -440,6 +440,11 @@ Notable defaults:
 
 Current behavior notes:
 
+- `run_asr_intron=1` infers intron presence/absence probabilities with a fixed
+  asymmetric Q and equal root prior in NWKIT. It writes probability/model tables,
+  an annotated tree, and a PDF; the `hgt` profile enables it. See
+  [intron ancestral-state reconstruction](intron-ancestral-reconstruction.md)
+  for settings, outputs, and migration from SCM.
 - if `run_generax=1`, initial IQ-TREE disables UFBOOT; after GeneRax,
   IQ-TREE performs an unconstrained UFBoot search and the resulting bootstrap
   split frequencies are mapped onto the GeneRax topology. The GeneRax tree is
@@ -448,11 +453,10 @@ Current behavior notes:
   explicitly as `support_generax_ufboot`,
 - Pfam RPS-BLAST DB (`Pfam_LE`) is auto-prepared when missing, with lock-based
   synchronization for array jobs,
-- gene-tree PGLS remains a separate legacy analysis; matched expression-trait
-  results are written to `rsc_regression`, `pgls_species_nwkit`,
-  `pgls_species_rphylopars`, and `pgls_comparison`,
+- expression-trait results are written to `rsc_regression`,
+  `pgls_species_nwkit`, and `pgls_comparison`,
 - `run_expression_trait_pgls=1` runs the methods selected by `pgls_methods`
-  (`rsc`, `species-nwkit`, `species-rphylopars`, or `all`) with gene expression
+  (`rsc`, `species-nwkit`, or `all`) with gene expression
   as the response and species traits as predictors; repeated paralog contrasts
   mapping to one species-tree event are handled by event weighting and the
   hierarchical model instead of being treated as independent species
@@ -614,8 +618,8 @@ Notable defaults:
 - `presence_absence_family_ids` and `presence_absence_family_file` select an explicit plotted subset for either mode
 - `presence_absence_species_tree=auto` prefers query2family-pruned dated species
   trees when available
-- `presence_absence_species_tree_ci=auto` adds MCMCtree 95% HPD node-age bars for
-  dated species trees when `mcmctree_95CI.nwk` is available
+- `presence_absence_species_tree_ci=auto` adds supplied MCMCtree 95% node-age interval bars for
+  dated species trees when `mcmctree_95CI.nhx` is available
 - `presence_absence_species_tree_support=auto` transfers numeric branch-support
   labels from matching species-tree support files
 - `presence_absence_busco_table=auto` adds per-species BUSCO stacked bars when
@@ -717,3 +721,29 @@ Note:
 - Minimal dataset builder:
   - `workflow/support/build_minimal_test_dataset.py`
   - extracts a smaller development dataset from an existing workspace
+
+### MCMCtree tree serialization
+
+Dating uses `nwkit convert` to return branch lengths and explicit node-age
+intervals to public time units and write `FigTree.tre` as NEXUS. Calibration
+selection and control-file scaling remain GeneGalleon workflow policy. The CI
+sidecar is `mcmctree_95CI.nhx`, with `age_ci_low`, `age_ci_high`, `age_ci_kind`
+and `age_ci_level` attributes; `mcmctree_no95CI.nwk` explicitly omits intervals.
+`nwkit label` assigns internal names beginning at `s1` in level order.
+
+The container must include NWKIT's `convert` command and
+`validate --require-all-lengths` option. Build the container from current sources
+after updating NWKIT. Provenance records include the serializer and label policy,
+so tracked outputs from the previous format are stale; use
+`artifact_stale_policy=rebuild` to regenerate them from verified inputs.
+Untracked public summaries can be recovered when the existing artifact contract
+allows it. Supplied interval methods and levels are preserved; plots display
+supplied 95% intervals. Numeric node labels are not interpreted as intervals.
+
+The tested R runtime (`treeio` 1.30.0, `ape` 5.8.1) crashes when its NHX reader
+receives certain quoted labels, for example `(A:1,B:1)"0.5,1.5";`. NWKIT retains
+such labels correctly; this is an R dependency limitation, with no GeneGalleon
+parser fallback. An upstream reader fix is needed for plotting those inputs.
+
+For dated-tree plots, root selection, and the copy-number regression model, see
+[NWKIT tree and regression integration](nwkit-tree-and-regression-integration.md).

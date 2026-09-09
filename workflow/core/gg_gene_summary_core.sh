@@ -285,8 +285,8 @@ resolve_presence_absence_species_tree_ci() {
   esac
 
   local candidates=(
-    "${dir_gene_family}/parameters/mcmctree_95CI.nwk"
-    "${gg_workspace_output_dir}/species_tree/mcmctree_main/mcmctree_95CI.nwk"
+    "${dir_gene_family}/parameters/mcmctree_95CI.nhx"
+    "${gg_workspace_output_dir}/species_tree/mcmctree_main/mcmctree_95CI.nhx"
   )
   local candidate
   for candidate in "${candidates[@]}"; do

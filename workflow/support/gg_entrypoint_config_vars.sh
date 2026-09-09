@@ -129,7 +129,6 @@ query_blast_method
 radte_max_age
 retain_query_in_maxalign
 retrotransposition_rate
-rphylopars_sampling_covariance
 rsc_bootstrap_replicates
 rsc_categorical_origin_diagnostics
 rsc_categorical_replicate_policy
@@ -205,7 +204,7 @@ run_orthogroup_extraction
 run_query_blast
 run_rps_blast
 run_expression_trait_pgls
-run_scm_intron
+run_asr_intron
 run_summary
 run_tree_dating
 run_tree_plot

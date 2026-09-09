@@ -39,7 +39,6 @@ pgls_methods="${pgls_methods:-rsc}"
 species_expression_aggregation="${species_expression_aggregation:-sum}"
 species_paralog_missing="${species_paralog_missing:-error}"
 species_paralog_sampling_covariance="${species_paralog_sampling_covariance:-}"
-rphylopars_sampling_covariance="${rphylopars_sampling_covariance:-require-diagonal}"
 rsc_responses="${rsc_responses:-all}"
 rsc_predictors="${rsc_predictors:-all}"
 rsc_predictor_mode="${rsc_predictor_mode:-separate}"
@@ -443,7 +442,7 @@ apply_gene_evolution_profile() {
       set_profile_default_override generax_rec_model "UndatedDL" "UndatedDTL"
       set_profile_default_override run_collect_gff_info "0" "1"
       set_profile_default_override run_generate_expression_matrix "0" "1"
-      set_profile_default_override run_scm_intron "0" "1"
+      set_profile_default_override run_asr_intron "0" "1"
       set_profile_default_override treevis_event_method "species_overlap" "auto"
       ;;
     *)
@@ -1179,7 +1178,6 @@ tree_rooting_method=$(echo "${tree_rooting_method}" | tr '[:upper:]' '[:lower:]'
 pgls_methods=$(printf '%s' "${pgls_methods}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
 species_expression_aggregation=$(printf '%s' "${species_expression_aggregation}" | tr '[:upper:]' '[:lower:]')
 species_paralog_missing=$(printf '%s' "${species_paralog_missing}" | tr '[:upper:]' '[:lower:]')
-rphylopars_sampling_covariance=$(printf '%s' "${rphylopars_sampling_covariance}" | tr '[:upper:]' '[:lower:]')
 rsc_predictor_mode=$(printf '%s' "${rsc_predictor_mode}" | tr '[:upper:]' '[:lower:]')
 rsc_event_source=$(printf '%s' "${rsc_event_source}" | tr '[:upper:]' '[:lower:]')
 rsc_speciation_coverage=$(printf '%s' "${rsc_speciation_coverage}" | tr '[:upper:]' '[:lower:]')
@@ -1209,9 +1207,8 @@ rsc_origin_leave_one_out=$(printf '%s' "${rsc_origin_leave_one_out}" | tr '[:upp
 rsc_allow_large_dense=$(printf '%s' "${rsc_allow_large_dense}" | tr '[:upper:]' '[:lower:]')
 apply_gene_evolution_profile
 pgls_run_rsc=0
-pgls_run_species_rphylopars=0
 if [[ "${pgls_methods}" == "all" ]]; then
-  pgls_methods="rsc,species-nwkit,species-rphylopars"
+  pgls_methods="rsc,species-nwkit"
 fi
 if [[ -z "${pgls_methods}" ]]; then
   echo "pgls_methods must select at least one method." >&2
@@ -1228,9 +1225,8 @@ for pgls_method in "${pgls_method_items[@]}"; do
   case "${pgls_method}" in
     rsc) pgls_run_rsc=1 ;;
     species-nwkit) : ;;
-    species-rphylopars) pgls_run_species_rphylopars=1 ;;
     *)
-      echo "Invalid pgls_methods entry: ${pgls_method}. Use rsc, species-nwkit, species-rphylopars, or all." >&2
+      echo "Invalid pgls_methods entry: ${pgls_method}. Use rsc, species-nwkit, or all." >&2
       exit 1
       ;;
   esac
@@ -1239,7 +1235,6 @@ unset pgls_method pgls_method_items pgls_seen_methods
 if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
   rsc_validate_choice species_expression_aggregation "${species_expression_aggregation}" sum mean max all
   rsc_validate_choice species_paralog_missing "${species_paralog_missing}" error ignore
-  rsc_validate_choice rphylopars_sampling_covariance "${rphylopars_sampling_covariance}" require-diagonal diagonalize
   rsc_validate_choice rsc_predictor_mode "${rsc_predictor_mode}" separate joint
   rsc_validate_choice rsc_event_source "${rsc_event_source}" auto nhx lca species-overlap
   rsc_validate_choice rsc_speciation_coverage "${rsc_speciation_coverage}" complete any
@@ -1748,8 +1743,10 @@ file_og_hyphy_relax="${dir_output_active}/hyphy_relax/${og_id}_hyphy.relax.json"
 file_og_hyphy_relax_reversed="${dir_output_active}/hyphy_relax_reversed/${og_id}_hyphy.relax.reversed.json"
 file_og_expression="${dir_output_active}/character_expression/${og_id}_expression.tsv"
 file_og_gff_info="${dir_output_active}/character_gff_info/${og_id}_gff.tsv"
-file_og_scm_intron_summary="${dir_output_active}/scm_intron_summary/${og_id}_scm.intron.tsv"
-file_og_scm_intron_plot="${dir_output_active}/scm_intron_plot/${og_id}_scm.intron.pdf"
+file_og_asr_intron_summary="${dir_output_active}/asr_intron_summary/${og_id}_asr.intron.tsv"
+file_og_asr_intron_plot="${dir_output_active}/asr_intron_plot/${og_id}_asr.intron.pdf"
+file_og_asr_intron_model="${dir_output_active}/asr_intron_model/${og_id}_asr.intron.model.tsv"
+file_og_asr_intron_tree="${dir_output_active}/asr_intron_tree/${og_id}_asr.intron.nhx"
 # Cis-regulatory motif
 file_og_promoter_fasta="${dir_output_active}/promoter_fasta/${og_id}_promoter.fa.gz"
 file_og_meme="${dir_output_active}/meme/${og_id}_meme.xml"
@@ -1786,7 +1783,6 @@ fi
 file_og_gene_pgls="${dir_output_active}/pgls_gene_tree/${og_id}_gene_tree_PGLS.tsv"
 file_og_gene_pgls_plot="${dir_output_active}/pgls_gene_tree_plot/${og_id}_gene_PGLS.barplot.pdf"
 file_og_species_nwkit_pgls="${dir_output_active}/pgls_species_nwkit/${og_id}_species_nwkit.pgls.tsv"
-file_og_species_rphylopars_pgls="${dir_output_active}/pgls_species_rphylopars/${og_id}_species_rphylopars.pgls.tsv"
 file_og_pgls_comparison="${dir_output_active}/pgls_comparison/${og_id}_pgls.comparison.tsv"
 file_og_pgls_method_status="${dir_output_active}/pgls_method_status/${og_id}_pgls.method-status.tsv"
 file_og_pgls_method_audit="${dir_output_active}/pgls_method_audit/${og_id}_pgls.method-audit.jsonl"
@@ -1864,9 +1860,9 @@ if [[ ! -d "${dir_sp_gff}" ]] || [[ -z "$(find "${dir_sp_gff}" -mindepth 1 -maxd
     echo "\${run_collect_gff_info} is deactivated. Empty input: ${dir_sp_gff}"
     run_collect_gff_info=0
   fi
-  if [[ ${run_scm_intron} -eq 1 ]]; then
-    echo "\${run_scm_intron} is deactivated. Empty input: ${dir_sp_gff}"
-    run_scm_intron=0
+  if [[ ${run_asr_intron} -eq 1 ]]; then
+    echo "\${run_asr_intron} is deactivated. Empty input: ${dir_sp_gff}"
+    run_asr_intron=0
   fi
 fi
 if [[ -d "${dir_sp_expression}" ]] && [[ -n "$(find "${dir_sp_expression}" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null)" ]]; then
@@ -4120,7 +4116,7 @@ if [[ ${tree_dating_needs_update} -eq 1 && ${run_tree_dating} -eq 1 ]]; then
   fi
   if [[ ${contain_negative_bl} -eq 1 ]]; then
     echo "Dated tree has negative branch length. Deleting output files depending on the tree file."
-    for key in l1ou pem scm dated stat tree_plot; do
+    for key in l1ou pem asr dated stat tree_plot; do
       files=()
       mapfile -t files < <(compgen -A variable "file_og_${key}")
       for f in "${files[@]}"; do
@@ -4452,8 +4448,10 @@ if [[ ${check_pruned} -eq 1 ]]; then
     "${file_og_mapdnds_ds}"
     "${file_og_hyphy_dnds}"
     "${file_og_gff_info}"
-    "${file_og_scm_intron_summary}"
-    "${file_og_scm_intron_plot}"
+    "${file_og_asr_intron_summary}"
+    "${file_og_asr_intron_plot}"
+    "${file_og_asr_intron_model}"
+    "${file_og_asr_intron_tree}"
     "${file_og_l1ou_fit_rdata}"
     "${file_og_l1ou_fit_conv_rdata}"
     "${file_og_l1ou_fit_tree}"
@@ -4471,7 +4469,6 @@ if [[ ${check_pruned} -eq 1 ]]; then
     "${file_og_gene_pgls}"
     "${file_og_gene_pgls_plot}"
     "${file_og_species_nwkit_pgls}"
-    "${file_og_species_rphylopars_pgls}"
     "${file_og_pgls_comparison}"
     "${file_og_pgls_method_status}"
     "${file_og_pgls_method_audit}"
@@ -4931,42 +4928,54 @@ else
   gg_step_skip "${task}"
 fi
 
-task="Stochastic character mapping of intron evolution"
-disable_if_no_input_file "run_scm_intron" "${file_og_gff_info}" "${file_og_dated_tree_analysis}"
-scm_intron_needs_update=0
-scm_intron_provenance_args=(
-  --manifest "${dir_output_active}/artifact_provenance/${og_id}.scm_intron.json"
-  --step "scm_intron"
+task="Ancestral reconstruction of intron presence with NWKIT"
+disable_if_no_input_file "run_asr_intron" "${file_og_gff_info}" "${file_og_dated_tree_analysis}"
+asr_intron_needs_update=0
+asr_intron_nwkit_identity="unavailable"
+if command -v nwkit >/dev/null 2>&1; then
+  asr_intron_nwkit_identity=$(nwkit --version 2>&1) || exit $?
+fi
+if [[ -s /opt/pg/logs/source_revisions.tsv ]]; then
+  asr_intron_nwkit_revision=$(awk -F '\t' '$1 == "nwkit" { print $2; exit }' /opt/pg/logs/source_revisions.tsv)
+  asr_intron_nwkit_identity+=" ${asr_intron_nwkit_revision}"
+fi
+asr_intron_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.asr_intron.json"
+  --step "asr_intron"
   --family-id "${og_id}"
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --input "gff_info=${file_og_gff_info}"
   --input "dated_tree=${file_og_dated_tree_analysis}"
-  --output "scm_summary=${file_og_scm_intron_summary}"
-  --optional-output "scm_plot=${file_og_scm_intron_plot}"
+  --input "adapter=${gg_support_dir}/asr_intron_evolution.py"
+  --output "asr_summary=${file_og_asr_intron_summary}"
+  --output "asr_plot=${file_og_asr_intron_plot}"
+  --output "asr_model=${file_og_asr_intron_model}"
+  --output "asr_tree=${file_og_asr_intron_tree}"
   --parameter "intron_gain_rate=${intron_gain_rate}"
   --parameter "retrotransposition_rate=${retrotransposition_rate}"
-  --parameter "nrep=1000"
+  --parameter "model=CUSTOM"
+  --parameter "states=intron_absent,intron_present"
+  --parameter "root_prior=equal"
+  --parameter "branch_lengths=original"
+  --parameter "nwkit_identity=${asr_intron_nwkit_identity}"
 )
-gg_artifact_prepare_stage scm_intron_needs_update run_scm_intron "${scm_intron_provenance_args[@]}" || exit $?
-if [[ ${scm_intron_needs_update} -eq 1 && ${run_scm_intron} -eq 1 ]]; then
+gg_artifact_prepare_stage asr_intron_needs_update run_asr_intron "${asr_intron_provenance_args[@]}" || exit $?
+if [[ ${asr_intron_needs_update} -eq 1 && ${run_asr_intron} -eq 1 ]]; then
   gg_step_start "${task}"
-  rm -f -- "${file_og_scm_intron_summary}" "${file_og_scm_intron_plot}"
-  rm -f -- intron_evolution_summary.tsv intron_evolution_plot.pdf
+  python "${gg_support_dir}/asr_intron_evolution.py" \
+    --tree-file "${file_og_dated_tree_analysis}" \
+    --trait-file "${file_og_gff_info}" \
+    --intron-gain-rate "${intron_gain_rate}" \
+    --retrotransposition-rate "${retrotransposition_rate}" \
+    --output-prefix intron_asr || exit $?
 
-  Rscript "${gg_support_dir}/scm_intron_evolution.r" \
-    --tree_file="${file_og_dated_tree_analysis}" \
-    --trait_file="${file_og_gff_info}" \
-    --intron_gain_rate="${intron_gain_rate}" \
-    --retrotransposition_rate="${retrotransposition_rate}" \
-    --nrep=1000 \
-    --nslots="${GG_TASK_CPUS}"
-
-  cp_out intron_evolution_summary.tsv "${file_og_scm_intron_summary}"
-  if [[ -e intron_evolution_plot.pdf ]]; then
-    cp_out intron_evolution_plot.pdf "${file_og_scm_intron_plot}"
-  fi
-  gg_artifact_record "${scm_intron_provenance_args[@]}"
+  mv_out_bundle \
+    intron_asr.model.tsv "${file_og_asr_intron_model}" \
+    intron_asr.nhx "${file_og_asr_intron_tree}" \
+    intron_asr.pdf "${file_og_asr_intron_plot}" \
+    intron_asr.tsv "${file_og_asr_intron_summary}" || exit $?
+  gg_artifact_record "${asr_intron_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -5078,12 +5087,6 @@ if [[ ${run_expression_trait_pgls} -eq 1 ]]; then
     echo "run_expression_trait_pgls=1 requires nwkit with the regress and reconcile commands." >&2
     exit 1
   fi
-  if [[ ${pgls_run_species_rphylopars} -eq 1 ]]; then
-    if ! command -v Rscript >/dev/null 2>&1; then
-      echo "pgls_methods includes species-rphylopars, but Rscript is unavailable." >&2
-      exit 1
-    fi
-  fi
   if [[ -s "${file_og_expression}" ]]; then
     if [[ ! -s "${file_sp_trait}" ]]; then
       echo "run_expression_trait_pgls=1 requires the species-trait table: ${file_sp_trait}" >&2
@@ -5135,11 +5138,6 @@ if [[ -z "${rsc_nwkit_identity}" ]] && command -v nwkit >/dev/null 2>&1; then
   rsc_nwkit_identity=$(nwkit --version 2>&1 | tail -n 1 || true)
 fi
 rsc_nwkit_identity="${rsc_nwkit_identity:-unavailable}"
-rsc_rphylopars_identity="not-requested"
-if [[ ${pgls_run_species_rphylopars} -eq 1 ]]; then
-  rsc_rphylopars_identity=$(Rscript -e 'cat(as.character(utils::packageVersion("Rphylopars")))' 2>/dev/null || true)
-  rsc_rphylopars_identity="${rsc_rphylopars_identity:-unavailable}"
-fi
 
 rsc_needs_update=0
 rsc_provenance_args=(
@@ -5150,7 +5148,6 @@ rsc_provenance_args=(
   --workspace-root "${gg_workspace_dir}"
   --input "adapter=${gg_support_dir}/reconciled_speciation_contrast.py"
   --input "species_comparator=${gg_support_dir}/species_tree_pgls.py"
-  --input "rphylopars_adapter=${gg_support_dir}/species_tree_rphylopars.R"
   --output "status=${file_og_rsc_status}"
   --output "regression=${file_og_rsc_regression}"
   --output "reconciliation=${file_og_rsc_reconciliation}"
@@ -5166,7 +5163,6 @@ rsc_provenance_args=(
   --output "audit=${file_og_rsc_audit}"
   --output "log=${file_og_rsc_log}"
   --output "species_nwkit=${file_og_species_nwkit_pgls}"
-  --output "species_rphylopars=${file_og_species_rphylopars_pgls}"
   --output "comparison=${file_og_pgls_comparison}"
   --output "method_status=${file_og_pgls_method_status}"
   --output "method_audit=${file_og_pgls_method_audit}"
@@ -5180,7 +5176,6 @@ rsc_provenance_args=(
   --parameter "methods=${pgls_methods}"
   --parameter "species_expression_aggregation=${species_expression_aggregation}"
   --parameter "species_paralog_missing=${species_paralog_missing}"
-  --parameter "rphylopars_sampling_covariance=${rphylopars_sampling_covariance}"
   --parameter "responses=${rsc_responses}"
   --parameter "predictors=${rsc_predictors}"
   --parameter "predictor_mode=${rsc_predictor_mode}"
@@ -5230,7 +5225,6 @@ rsc_provenance_args=(
   --parameter "species_parser=${species_label_parser}"
   --parameter "species_regex=${species_label_regex}"
   --parameter "nwkit_identity=${rsc_nwkit_identity}"
-  --parameter "rphylopars_identity=${rsc_rphylopars_identity}"
 )
 if [[ -s "${file_og_expression}" ]]; then
   rsc_provenance_args+=(
@@ -5272,7 +5266,6 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
   rsc_log_tmp="${rsc_work_dir}/${og_id}_rsc.log"
   pgls_log_tmp="${rsc_work_dir}/${og_id}_expression_trait_pgls.log"
   species_nwkit_tmp="${rsc_work_dir}/${og_id}_species_nwkit.pgls.tsv"
-  species_rphylopars_tmp="${rsc_work_dir}/${og_id}_species_rphylopars.pgls.tsv"
   pgls_comparison_tmp="${rsc_work_dir}/${og_id}_pgls.comparison.tsv"
   pgls_method_status_tmp="${rsc_work_dir}/${og_id}_pgls.method-status.tsv"
   pgls_method_audit_tmp="${rsc_work_dir}/${og_id}_pgls.method-audit.jsonl"
@@ -5606,12 +5599,9 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
     --confidence-level "${rsc_confidence_level}"
     --reml "${rsc_reml}"
     --allow-large-dense "${rsc_allow_large_dense}"
-    --rphylopars-sampling-covariance "${rphylopars_sampling_covariance}"
-    --rphylopars-script "${gg_support_dir}/species_tree_rphylopars.R"
     --rsc-results "${rsc_combined_prefix}.regression.tsv"
     --rsc-status "${rsc_combined_status}"
     --native-out "${species_nwkit_tmp}"
-    --rphylopars-out "${species_rphylopars_tmp}"
     --comparison-out "${pgls_comparison_tmp}"
     --status-out "${pgls_method_status_tmp}"
     --audit-out "${pgls_method_audit_tmp}"
@@ -5647,7 +5637,6 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
     "${rsc_combined_audit}" "${file_og_rsc_audit}" \
     "${rsc_log_tmp}" "${file_og_rsc_log}" \
     "${species_nwkit_tmp}" "${file_og_species_nwkit_pgls}" \
-    "${species_rphylopars_tmp}" "${file_og_species_rphylopars_pgls}" \
     "${pgls_comparison_tmp}" "${file_og_pgls_comparison}" \
     "${pgls_method_status_tmp}" "${file_og_pgls_method_status}" \
     "${pgls_method_audit_tmp}" "${file_og_pgls_method_audit}" \
@@ -5661,8 +5650,7 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
   nwkit_version_text=$(nwkit --version 2>&1 | tail -n 1 || true)
   gg_artifact_record \
     "${rsc_provenance_args[@]}" \
-    --diagnostic "nwkit_version=${nwkit_version_text:-unknown}" \
-    --diagnostic "rphylopars_version=recorded_in_method_status"
+    --diagnostic "nwkit_version=${nwkit_version_text:-unknown}"
   rm -rf -- "${rsc_work_dir}"
 else
   gg_step_skip "${task}"
@@ -6090,7 +6078,7 @@ summary_input_files=(
   "${file_og_gff_info}"
   "${file_og_fimo}"
   "${file_og_promoter_fasta}"
-  "${file_og_scm_intron_summary}"
+  "${file_og_asr_intron_summary}"
   "${file_og_csubst_b}"
   "${file_og_gene_pgls}"
   "${file_og_pgls_comparison}"
@@ -6304,7 +6292,7 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
     --character_gff "${file_og_gff_info}" \
     --fimo "${file_og_fimo}" \
     --promoter_fasta "${summary_promoter_fasta}" \
-    --scm_intron "${file_og_scm_intron_summary}" \
+    --asr_intron "${file_og_asr_intron_summary}" \
     --csubst_b "${file_og_csubst_b}" \
     --gene_pgls_stats "${file_og_gene_pgls}" \
     --pgls_comparison "${file_og_pgls_comparison}" \

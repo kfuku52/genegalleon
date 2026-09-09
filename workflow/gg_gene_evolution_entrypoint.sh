@@ -156,7 +156,7 @@ run_hyphy_relax="${run_hyphy_relax:-0}" # Run HyPhy RELAX.
 run_hyphy_relax_reversed="${run_hyphy_relax_reversed:-0}" # Run HyPhy RELAX with reversed foreground/background.
 
 # Comparative-analysis workflow flags
-run_scm_intron=0 # Stochastic character mapping of intron traits.
+run_asr_intron=0 # NWKIT ancestral-state probabilities of intron presence/absence.
 run_l1ou=0 # OU modeling of gene expression using the kfl1ou-backed l1ou-compatible outputs.
 run_expression_trait_pgls=0 # Unified expression ~ species-trait analysis with selectable RSC and species-tree PGLS methods.
 run_iqtree_anc=0 # Ancestral state reconstruction required for CSUBST.
@@ -189,11 +189,10 @@ radte_max_age=1000 # Upper limit of estimated divergence time in MY.
 
 # species_expression data (value in input files)
 exp_value_type="log2p1" # Expression scale used in species_expression input tables.
-pgls_methods="rsc" # rsc,species-nwkit,species-rphylopars, or all; selected methods share the same prepared expression/trait inputs.
+pgls_methods="rsc" # rsc,species-nwkit, or all; selected methods share the same prepared expression/trait inputs.
 species_expression_aggregation="sum" # sum|mean|max|all; paralogs are combined within each biological sample on the linear expression scale before species-tree PGLS.
 species_paralog_missing="error" # error|ignore for incomplete paralog measurements within a species/sample.
 species_paralog_sampling_covariance="" # Optional workspace-relative or absolute TSV of response,gene_name_1,gene_name_2,sampling_covariance (and optional tree_id) for known-SE species PGLS aggregation.
-rphylopars_sampling_covariance="require-diagonal" # require-diagonal|diagonalize; Rphylopars cannot represent cross-species sampling covariance exactly.
 
 # Reconciled speciation contrast (RSC) PGLS
 rsc_responses="all" # all or comma-separated expression response names after removing the replicate suffix (for example root,leaf).
@@ -285,8 +284,8 @@ csubst_scan_tree_site_plot_format="${csubst_scan_tree_site_plot_format:-pdf}" # 
 csubst_scan_tree_site_plot_max_sites="${csubst_scan_tree_site_plot_max_sites:-30}" # Maximum detected sites shown in the csubst scan site plot.
 
 # Intron and chromosomal character evolution
-intron_gain_rate="0.0001" # Prior intron-gain rate used by stochastic character mapping of intron presence/absence.
-retrotransposition_rate="0.001" # Prior retrotransposition rate used by stochastic character mapping of intron loss patterns.
+intron_gain_rate="0.0001" # Fixed absent-to-present rate for intron ASR, per dated-tree branch-length unit.
+retrotransposition_rate="0.001" # Fixed present-to-absent rate for intron ASR, per dated-tree branch-length unit.
 
 # Tree visualization
 treevis_event_method="species_overlap" # "auto", "generax", or "species_overlap"; source for duplication/transfer/loss event labels in treevis plots.
@@ -317,6 +316,11 @@ delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Se
 delete_preexisting_tmp_dir=1 # Before starting this job, delete tmp directory created by previous run.
 
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
+# Reject retired SCM overrides instead of silently leaving ASR disabled.
+if [[ -n "${run_scm_intron+x}" || -n "${GG_GENE_EVOLUTION_RUN_SCM_INTRON+x}" ]]; then
+  echo "run_scm_intron is retired; use run_asr_intron (GG_GENE_EVOLUTION_RUN_ASR_INTRON for environment overrides)." >&2
+  exit 1
+fi
 # Forward config variables (including external overrides) into container environment.
 gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir" "delete_preexisting_tmp_dir"
 forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir" "delete_preexisting_tmp_dir"
