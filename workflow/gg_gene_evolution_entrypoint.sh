@@ -119,7 +119,7 @@ run_query_blast=1 # Activated if mode_gene_evolution=query2family; search query 
 run_extract_primary_fasta=1 # Generate in-frame CDS fasta file.
 run_rps_blast=1 # RPS-BLAST protein domain search.
 run_uniprot_annotation=0 # Annotation against UniProt Swiss-Prot.
-run_cdskit_localize=0 # Predict targeting-peptide and peroxisome localization signals with cdskit localize.
+run_cdskit_localize=1 # Predict targeting-peptide and peroxisome localization signals with cdskit localize.
 
 # Alignment and tree workflow flags
 run_mafft=1 # In-frame nucleotide alignment using MAFFT.
