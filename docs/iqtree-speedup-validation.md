@@ -1,5 +1,9 @@
 # IQ-TREE／NWKITの追加最適化（2026-09-09）
 
+> Historical report: these custom IQ-TREE session measurements predate the switch
+> to unmodified official IQ-TREE 3. They do not apply to the current standard CLI.
+> See [current setup](gene-tree-dating.md).
+
 [性能レビュー](iqtree-performance-review.md)の優先項目1〜3を実装した。
 
 - IQ-TREEの `SCORE` 要求は尤度と全枝の一次微分のみを計算・返却する。二階微分が必要な `EVAL` は維持する。通常の `value_gradient()` は `SCORE` を使い、同じ点で後から対角を要求した場合はキャッシュを一度更新する。

@@ -128,8 +128,9 @@ query_blast_evalue
 query_blast_method
 radte_max_age
 radte_sequence_engine
+radte_iqtree_interface
+radte_iqtree_worker
 radte_iqtree_model
-radte_iqtree_mode
 radte_substitution_model
 radte_codon_frequencies
 radte_kappa

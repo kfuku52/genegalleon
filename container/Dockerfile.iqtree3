@@ -1,0 +1,47 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+# Official unmodified source overlay; moving branch resolved by the build wrapper.
+ARG BASE_IMAGE=local/genegalleon:dev
+FROM ${BASE_IMAGE} AS build
+USER root
+ARG GG_BUILD_JOBS=2
+ARG IQTREE_SOURCE_REVISION
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake libboost-dev libeigen3-dev zlib1g-dev \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=iqtree_source . /iqtree-source
+RUN cmake -S /iqtree-source -B /iqtree-build -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build /iqtree-build -j "${GG_BUILD_JOBS}"
+
+RUN cmake -S /iqtree-source -B /iqtree-library -DBUILD_LIB=ON \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+ && cmake --build /iqtree-library -j "${GG_BUILD_JOBS}"
+# The worker is a separate runtime program, never included in NWKIT's wheel.
+COPY --from=nwkit_source nwkit/iqtree_library.py /adapter/iqtree_library.py
+COPY --from=nwkit_source nwkit/data_iqtree/worker.cpp /adapter/data_iqtree/worker.cpp
+RUN python /adapter/iqtree_library.py build --build-dir /iqtree-library --prefix /worker
+
+RUN mkdir -p /overlay-logs \
+ && printf '%s\n' "${IQTREE_SOURCE_REVISION}" > /overlay-logs/iqtree3_base_revision.txt \
+ && find /iqtree-source -type f ! -path '*/.git/*' -print0 | sort -z | xargs -0 sha256sum > /overlay-logs/iqtree3_source.sha256 \
+ && /iqtree-build/iqtree3 --help > /overlay-logs/iqtree3_help.txt \
+ && /iqtree-build/iqtree3 --version > /overlay-logs/iqtree3_version.txt
+
+FROM ${BASE_IMAGE}
+USER root
+# Install NWKIT and the unmodified official IQ-TREE 3 executable.
+COPY --from=nwkit_source nwkit /tmp/nwkit-local/nwkit
+COPY --from=nwkit_source pyproject.toml setup.py README.md LICENSE /tmp/nwkit-local/
+RUN python -m pip install --no-deps --no-build-isolation /tmp/nwkit-local \
+ && mkdir -p /opt/pg/logs \
+ && find /tmp/nwkit-local/nwkit -type f ! -name '*.pyc' -print0 | sort -z | xargs -0 sha256sum > /opt/pg/logs/nwkit_local_source.sha256 \
+ && rm -rf /tmp/nwkit-local
+COPY --from=build /iqtree-build/iqtree3 /opt/pg/iqtree3/iqtree3
+COPY --from=build /worker/bin/nwkit-iqtree-worker /usr/local/bin/nwkit-iqtree-worker
+COPY --from=build /overlay-logs/ /opt/pg/logs/
+RUN ln -sf /opt/pg/iqtree3/iqtree3 /opt/conda/bin/iqtree3 \
+ && ln -sf /opt/pg/iqtree3/iqtree3 /opt/conda/bin/iqtree \
+ && ln -sf /opt/pg/iqtree3/iqtree3 /usr/local/bin/iqtree3 \
+ && ln -sf /opt/pg/iqtree3/iqtree3 /usr/local/bin/iqtree \
+ && sha256sum /opt/pg/iqtree3/iqtree3 > /opt/pg/logs/iqtree3_binary.sha256 \
+ && iqtree3 --version \
+ && python -m nwkit.iqtree_library check > /opt/pg/logs/iqtree3_library_worker.json

@@ -40,7 +40,8 @@ def test_program_source_defaults_are_moving_branches_not_commit_pins():
     assert "GG_PIN_" not in branches
     assert "_REPO_SHA=" not in branches
     branch_assignments = re.findall(r"^GG_SOURCE_[A-Z0-9_]+_REPO_REF=(\S+)$", branches, re.MULTILINE)
-    assert len(branch_assignments) == len(PROGRAM_SHA_VARS)
+    assert len(branch_assignments) == len(PROGRAM_SHA_VARS) + 1
+    assert "GG_SOURCE_IQTREE_REPO_REF=master" in branches
     assert set(branch_assignments) <= {"main", "master"}
 
     for sha_var in PROGRAM_SHA_VARS:
@@ -341,3 +342,20 @@ def test_container_build_paths_include_archive_interoperability_commands():
     assert "unzip" in apt_runtime
     assert "base\tunzip" in required_commands
     assert "base\tunzip" in arm64_required_commands
+
+
+def test_iqtree3_overlay_uses_unmodified_official_source():
+    wrapper = (REPO_ROOT / "container/build_iqtree3_overlay.sh").read_text()
+    dockerfile = (REPO_ROOT / "container/Dockerfile.iqtree3").read_text()
+    assert "https://github.com/iqtree/iqtree3.git" in wrapper
+    assert 'source "${script_dir}/source_branches.env"' in wrapper
+    assert '${GG_SOURCE_IQTREE_REPO_REF}' in wrapper
+    assert "submodule update --init --recursive" in wrapper
+    assert 'git -C "${build_directory}/iqtree" rev-parse HEAD' in wrapper
+    assert "IQTREE_SOURCE_REVISION=${revision}" in wrapper
+    assert "likelihood-session" not in wrapper + dockerfile
+    assert "radte_iqtree_session" not in dockerfile
+    assert "COPY --from=build /iqtree-build/iqtree3" in dockerfile
+    assert "-DBUILD_LIB=ON" in dockerfile
+    assert "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON" in dockerfile
+    assert "COPY --from=build /worker/bin/nwkit-iqtree-worker /usr/local/bin/" in dockerfile

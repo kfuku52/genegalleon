@@ -38,7 +38,8 @@ export GG_GENE_EVOLUTION_RADTE_CODON_FREQUENCIES=f
 | Parameter | Default | Meaning |
 |---|---|---|
 | `radte_sequence_engine` | `native` | `native` or `iqtree`; both use NWKIT dating constraints and conditional intervals |
-| `radte_iqtree_mode` | `persistent` | Keep the frozen model/alignment loaded; `subprocess` explicitly selects the original CLI route |
+| `radte_iqtree_interface` | `auto` | Use an installed external library worker when available; `cli` selects standard exports, `library` requires the worker |
+| `radte_iqtree_worker` | empty | Optional path to an externally built `nwkit-iqtree-worker` |
 | `radte_iqtree_model` | empty | Complete IQ-TREE model such as `GY+F3X4+R4`; overrides the substitution model and gamma category setting |
 | `radte_substitution_model` | `auto` | GY94 for CDS, LG for protein; `gy94`, `ecmk07`, `ecmrest`, and NWKIT NT/AA models can be selected |
 | `radte_codon_frequencies` | empty | GY94: `f3x4`; ECM: published frequencies. Alternatives: `f`, `f1x4`, `f3x4`, `fq` |
@@ -80,15 +81,14 @@ use the internal likelihood implementation.
 
 IQ-TREE receives the reconciled topology and the same alignment used for dating.
 NWKIT retains the species-age constraints, clock optimization and CI computation.
-IQ-TREE model parameters are fitted once and frozen during dating. After this
-separate prefit, one persistent worker keeps the alignment, topology and model
-loaded and accepts branch-length vectors over pipes. It returns likelihoods and
-scores directly without repeatedly writing a full Hessian. Full curvature is
-computed from those scores, and the same exact-validation/profile-refit rules
-apply. Worker threads follow `GG_TASK_CPUS`. No MCMCTree process is launched.
-Use `GG_GENE_EVOLUTION_RADTE_IQTREE_MODE=subprocess` to explicitly select the
-original per-evaluation CLI route. There is no automatic fallback when the
-persistent protocol is absent or fails.
+IQ-TREE model parameters are fitted once and frozen during dating. NWKIT uses
+unmodified IQ-TREE 3 through its standard IQ2MC CLI (`iqtree3`) for the initial
+model fit. For repeated branch evaluations, `auto` uses an installed external
+library worker when available, otherwise the CLI. `library` explicitly requires
+the worker. No analysis downloads or builds software. NWKIT computes full observed
+curvature from branch scores, caches repeated evaluations and retains shared
+marginal-profile matrices. Threads follow `GG_TASK_CPUS`. No MCMCTree process is
+launched and no upstream source extension is needed.
 
 The adapter supports reversible NT models JC/HKY/GTR/F81, AA models
 Poisson/LG/WAG/JTT, and codon models GY/MG/ECMK07/ECMrest, with compatible frequency,
@@ -102,29 +102,29 @@ its codon-event rate differs from the native nucleotide-change rate. Compare
 absolute rates only after converting units. The manifest records the engine,
 requested/frozen model, fitted parameters and IQ-TREE executable identity. The
 normal downstream filenames and fixed-species-age/display-only-CI policy apply
-to both engines. Persistent mode requires the updated NWKIT package and the local
-IQ-TREE source extension providing `--likelihood-session`, as well as IQ2MC
-support for the prefit. Stock released IQ-TREE binaries are not assumed to
-provide the session extension.
+to both engines. The executable must be IQ-TREE 3 or later with IQ2MC support.
 
-Build a local GeneGalleon overlay from the two updated source checkouts:
+Build a local GeneGalleon overlay using the official moving source branch and
+the current NWKIT checkout:
 
 ```sh
 BASE_IMAGE=local/genegalleon:dev \
-IMAGE=local/genegalleon:iqtree-session-dev \
-bash container/build_iqtree_session_overlay.sh /path/to/iqtree /path/to/nwkit
+IMAGE=local/genegalleon:iqtree3-dev \
+bash container/build_iqtree3_overlay.sh /path/to/nwkit
 ```
 
-Initialize IQ-TREE's submodules before building. The overlay keeps the IQ-TREE
-source extension in its owning repository, installs the matching NWKIT package,
-and records the source-content checksums and compiled binary identity under
-`/opt/pg/logs`. It does not embed upstream version or commit defaults. Use this
-image with `GG_CONTAINER_RUNTIME=docker` and
-`GG_CONTAINER_DOCKER_IMAGE=local/genegalleon:iqtree-session-dev`. This is Docker
-validation/build support; it does not establish SIF compatibility.
-
-See the [persistent-session validation measurements](iqtree-session-benchmark.md)
-for controlled timing comparisons, numerical checks and their limits.
+The wrapper clones https://github.com/iqtree/iqtree3 recursively without source
+changes. It builds the CLI and library from the same snapshot and installs the
+library worker as a separate runtime executable, outside NWKIT’s Python package. The default branch is declared in `container/source_branches.env`;
+`IQTREE_REPO_SHA` may select a one-off reproduction. Resolved revisions, source
+checksums and binary identity are build metadata under `/opt/pg/logs`.
+The worker identity is recorded in `iqtree3_library_worker.json`. For manual
+setup outside this overlay, see the
+[NWKIT library guide](https://github.com/kfuku52/nwkit/blob/master/IQTREE_LIBRARY.md).
+Use `GG_CONTAINER_RUNTIME=docker` and
+`GG_CONTAINER_DOCKER_IMAGE=local/genegalleon:iqtree3-dev` for this image.
+Docker validation does not establish SIF compatibility. Historical custom-session
+benchmark reports do not describe this official CLI path.
 
 ## Reconciliation, results and reruns
 
@@ -142,7 +142,8 @@ manifest. Historical text logs remain readable for historical results.
 
 The cache includes the alignment, reconciliation, species tree, model settings,
 external interval table, genetic-code overrides, NWKIT identity, and the selected
-sequence engine and IQ-TREE model/executable identity. Old RADTE
+sequence engine, IQ-TREE model/executable identity, selected interface and
+external library/worker identity. Old RADTE
 results do not satisfy this provenance. To recompute stale results, use the
 workflow's explicit `artifact_stale_policy=rerun` setting. Output publication is
 transactional: an inference or rendering failure preserves the previous bundle
@@ -158,17 +159,17 @@ for the separate species-tree workflow.
 
 ### IQ-TREE numerical limits
 
-The locally extended persistent worker checks for spectral cancellation and
-recomputes ill-conditioned requests inside IQ-TREE using original-state pruning
-and a stable matrix exponential of the same fitted generator. A regression with
-two sibling codon branches near `8e-11` and `6e-11` checks likelihood and scores
-against an independent SciPy matrix exponential. Branch lengths are not floored,
-and the sequence engine and fitted model remain unchanged. Such requests take
-more computation than ordinary spectral evaluations.
+IQ-TREE can produce nonfinite scores near zero-length codon branches. NWKIT
+rejects nonfinite exports and preserves the previous published bundle. It does
+not patch IQ-TREE, floor branches or change the fitted model to conceal numerical
+failures. Upstream numerical defects require an upstream fix. Validation of
+ordinary Gamma and FreeRate inputs does not cover every numerical boundary.
 
-The subprocess/IQ2MC route can still return nonfinite branch scores for this
-boundary case (observed in IQ-TREE 3.1.3); a finite reported likelihood alone does
-not establish accuracy. NWKIT rejects nonfinite results and preserves the
-previous published bundle. The default Gamma and FreeRate end-to-end tests,
-and the numerical regression, do not establish support for every alignment and
-boundary case.
+The unmodified official IQ-TREE 3.1.4 validation also compares sibling codon
+branches near `8e-11` and `6e-11` with independent SciPy matrix-exponential
+pruning. This case passes at the existing IQ2MC text-export tolerances
+(NLL absolute `2e-5`; score relative `1e-5`, absolute `3e-4`). It requires no
+upstream patch and does not establish accuracy at every numerical boundary.
+
+See the [official IQ-TREE 3 validation record](iqtree3-validation.md) for the
+container build and completed checks.

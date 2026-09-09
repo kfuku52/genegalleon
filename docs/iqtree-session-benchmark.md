@@ -1,5 +1,9 @@
 # IQ-TREE persistent-session validation (2026-09-09)
 
+> Historical report: these custom IQ-TREE session measurements predate the switch
+> to unmodified official IQ-TREE 3. They do not apply to the current standard CLI.
+> See [current setup](gene-tree-dating.md).
+
 The persistent connection reuses the loaded alignment, fixed model, topology and
 allocated likelihood buffers. It reduces repeated-call overhead, most clearly
 for small alignments. These measurements do **not** show a substantial speedup

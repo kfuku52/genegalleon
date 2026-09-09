@@ -5,7 +5,7 @@ that can target both:
 - `linux/amd64` (x86_64)
 - `linux/arm64` (AArch64, Apple Silicon compatible runtime via Linux VM/container host)
 
-For the local persistent IQ-TREE dating extension, see the
+For the unmodified official IQ-TREE 3 CLI and external-library dating overlay, see the
 [Gene-tree dating overlay instructions](../docs/gene-tree-dating.md#selecting-iq-tree).
 
 ## Why this runtime exists

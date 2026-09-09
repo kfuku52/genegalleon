@@ -1,5 +1,9 @@
 # IQ-TREE常駐経路の性能レビュー（2026-09-09）
 
+> Historical report: these custom IQ-TREE session measurements predate the switch
+> to unmodified official IQ-TREE 3. They do not apply to the current standard CLI.
+> See [current setup](gene-tree-dating.md).
+
 さらに高速化できる余地はある。次に優先すべきなのは、要求する微分の削減、固定データの再利用、区間推定で反復する共通計算の共有である。通信方式を変えるだけでは、大規模コドン入力の改善は期待しにくい。
 
 このレビューは実装前にコードと既存の測定成果物を照合したもの。後続の実装・測定は [最適化の検証結果](iqtree-speedup-validation.md) に分けて記録する。以下の「候補」は速度向上を実測したという意味ではない。

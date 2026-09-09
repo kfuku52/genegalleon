@@ -36,7 +36,8 @@ query_blast_auto_evalue_maxlen_cutoffs="${query_blast_auto_evalue_maxlen_cutoffs
 
 # Native sequence dating; species ages remain fixed.
 radte_sequence_engine="${radte_sequence_engine:-native}" # native|iqtree; NWKIT handles dates for both.
-radte_iqtree_mode="${radte_iqtree_mode:-persistent}" # persistent or subprocess
+radte_iqtree_interface="${radte_iqtree_interface:-auto}" # auto|cli|library; library worker is an optional external installation.
+radte_iqtree_worker="${radte_iqtree_worker:-}" # Optional external worker executable.
 radte_iqtree_model="${radte_iqtree_model:-}" # Optional complete IQ-TREE model, e.g. GY+F3X4+R4.
 radte_substitution_model="${radte_substitution_model:-auto}"
 radte_codon_frequencies="${radte_codon_frequencies:-}"
@@ -4074,14 +4075,21 @@ task="Species-tree-guided divergence time estimation"
 disable_if_no_input_file "run_tree_dating" "${species_tree_pruned}" "${file_og_unrooted_tree_analysis}" "${file_og_trimmed_aln_analysis}"
 tree_dating_needs_update=0
 radte_sequence_engine="${radte_sequence_engine:-native}"
-radte_iqtree_mode="${radte_iqtree_mode:-persistent}" # persistent or subprocess
+radte_iqtree_interface="${radte_iqtree_interface:-auto}"
+radte_iqtree_worker="${radte_iqtree_worker:-}"
 radte_iqtree_model="${radte_iqtree_model:-}"
 radte_iqtree_identity="unused"
+radte_iqtree_library_identity="unused"
 if [[ "${radte_sequence_engine}" == "iqtree" && "${run_tree_dating}" -eq 1 ]]; then
-  radte_iqtree_identity=$(iqtree --version 2>&1) || exit $?
-  radte_iqtree_binary=$(command -v iqtree) || exit $?
+  radte_iqtree_identity=$(iqtree3 --version 2>&1) || exit $?
+  radte_iqtree_binary=$(command -v iqtree3) || exit $?
   radte_iqtree_digest=$(sha256sum "${radte_iqtree_binary}") || exit $?
   radte_iqtree_identity+=" ${radte_iqtree_digest%% *}"
+  radte_iqtree_check_args=(check --interface "${radte_iqtree_interface}")
+  if [[ -n "${radte_iqtree_worker}" ]]; then
+    radte_iqtree_check_args+=(--worker "${radte_iqtree_worker}")
+  fi
+  radte_iqtree_library_identity=$(python -m nwkit.iqtree_library "${radte_iqtree_check_args[@]}") || exit $?
 fi
 radte_model_resolved="${radte_substitution_model}"
 if [[ "${radte_model_resolved}" == "auto" ]]; then
@@ -4111,9 +4119,10 @@ tree_dating_provenance_args=(
   --output "dated_tree=${file_og_dated_tree}"
   --output "dating_log=${file_og_dated_tree_log}"
   --parameter "engine=nwkit-${radte_sequence_engine}-sequence-v1"
-  --parameter "iqtree_mode=${radte_iqtree_mode}"
   --parameter "iqtree_model=${radte_iqtree_model}"
   --parameter "iqtree_identity=${radte_iqtree_identity}"
+  --parameter "iqtree_interface=${radte_iqtree_interface}"
+  --parameter "iqtree_library_identity=${radte_iqtree_library_identity}"
   --parameter "nwkit_identity=${radte_nwkit_identity}"
   --parameter "generax_enabled=${run_generax}"
   --parameter "max_age=${radte_max_age}"
@@ -4216,7 +4225,10 @@ PY
   esac
   radte_args+=("--sequence-engine=${radte_sequence_engine}")
   if [[ "${radte_sequence_engine}" == "iqtree" ]]; then
-    radte_args+=("--iqtree-threads=${GG_TASK_CPUS}" "--iqtree-mode=${radte_iqtree_mode}")
+    radte_args+=("--iqtree-threads=${GG_TASK_CPUS}" "--iqtree-interface=${radte_iqtree_interface}")
+    if [[ -n "${radte_iqtree_worker}" ]]; then
+      radte_args+=("--iqtree-worker=${radte_iqtree_worker}")
+    fi
   fi
   if [[ -n "${radte_iqtree_model}" ]]; then
     radte_args+=("--iqtree-model=${radte_iqtree_model}")

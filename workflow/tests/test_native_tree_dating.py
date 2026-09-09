@@ -14,7 +14,7 @@ from scipy.linalg import expm
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _fixture(tmp_path, model, route, bad_codon=False, use_defaults=False, engine="native", iqtree_model="", iqtree_mode="persistent"):
+def _fixture(tmp_path, model, route, bad_codon=False, use_defaults=False, engine="native", iqtree_model="", iqtree_interface="auto"):
 
     from nwkit.radte_codon import CODONS, codon_matrix
 
@@ -57,7 +57,7 @@ def _fixture(tmp_path, model, route, bad_codon=False, use_defaults=False, engine
     defaults = dict(
         radte_sequence_engine=engine,
         radte_iqtree_model=iqtree_model,
-        radte_iqtree_mode=iqtree_mode,
+        radte_iqtree_interface=iqtree_interface,
         radte_substitution_model=model,
         radte_codon_frequencies="fq",
         radte_kappa="2" if model == "gy94" else "",
@@ -189,13 +189,12 @@ def test_default_cds_model_estimates_nuisance_parameters(tmp_path):
 
 @pytest.mark.parametrize("iqtree_model", ["", "GY+F3X4+R4"])
 def test_iqtree_stage_retains_profile_and_species_age_contract(tmp_path, iqtree_model):
-    result = _fixture(tmp_path, "gy94", "generax", engine="iqtree", iqtree_model=iqtree_model, use_defaults=not iqtree_model)
+    result = _fixture(tmp_path, "gy94", "generax", engine="iqtree", iqtree_model=iqtree_model, use_defaults=not iqtree_model, iqtree_interface="cli")
     assert result.returncode == 0, result.stdout + result.stderr
     prefix = tmp_path / "out/dated_tree_native/OG0000001_radte"
     manifest = json.loads(Path(str(prefix) + ".manifest.json").read_text())
     assert manifest["sequence_model"]["engine"] == "iqtree"
-    assert manifest["sequence_model"]["iqtree_mode"] == "persistent"
-    assert manifest["sequence_model"]["iqtree_session_protocol"] == 1
+    assert manifest["sequence_model"]["iqtree_interface"] == "standard-cli-iq2mc"
     assert manifest["sequence_model"]["frozen_model"].startswith("GY{")
     assert manifest["uncertainty"].startswith("conditional-profile")
     assert manifest["options"]["backend"] == "native"
@@ -209,21 +208,26 @@ def test_iqtree_stage_retains_profile_and_species_age_contract(tmp_path, iqtree_
     assert root.age == root.age_min == root.age_max == 10
 
 
-def test_iqtree_session_matches_subprocess_profile(tmp_path):
+@pytest.mark.parametrize("iqtree_model", ["", "GY+F3X4+R4"])
+def test_external_iqtree_library_stage_preserves_outputs_and_provenance(tmp_path, iqtree_model):
+    from nwkit.iqtree_library import find_worker
+
+    if find_worker() is None:
+        pytest.skip("External IQ-TREE library worker is not installed")
+    result = _fixture(tmp_path, "gy94", "generax", engine="iqtree", iqtree_model=iqtree_model, use_defaults=not iqtree_model, iqtree_interface="library")
+    assert result.returncode == 0, result.stdout + result.stderr
+    prefix = tmp_path / "out/dated_tree_native/OG0000001_radte"
+    manifest = json.loads(Path(str(prefix) + ".manifest.json").read_text())
+    assert manifest["sequence_model"]["iqtree_interface"] == "library-worker-v1"
+    library = manifest["sequence_model"]["iqtree_library"]
+    assert len(library["library_sha256"]) == len(library["worker_sha256"]) == 64
+    assert manifest["uncertainty"].startswith("conditional-profile")
+    assert Path(str(prefix) + ".pdf").read_bytes().startswith(b"%PDF")
+    provenance = (tmp_path / "recorded-provenance.txt").read_text()
+    assert "iqtree_interface=library" in provenance
+    assert library["library_sha256"] in provenance
     import pandas as pd
 
-    frames = []
-    for mode in ["subprocess", "persistent"]:
-        directory = tmp_path / mode
-        directory.mkdir()
-        result = _fixture(directory, "gy94", "generax", engine="iqtree", use_defaults=True, iqtree_mode=mode)
-        assert result.returncode == 0, result.stdout + result.stderr
-        prefix = directory / "out/dated_tree_native/OG0000001_radte"
-        manifest = json.loads(Path(str(prefix) + ".manifest.json").read_text())
-        assert manifest["sequence_model"]["iqtree_mode"] == mode
-        assert "iqtree_mode=" + mode in (directory / "recorded-provenance.txt").read_text()
-        frames.append(pd.read_csv(str(prefix) + ".nodes.tsv", sep="\t"))
-    assert frames[0].gene_clade_id.tolist() == frames[1].gene_clade_id.tolist()
-    assert frames[0].interval_status.tolist() == frames[1].interval_status.tolist()
-    columns = ["estimated_age", "interval_lower", "interval_upper", "estimated_rate"]
-    np.testing.assert_allclose(frames[0][columns], frames[1][columns], rtol=1e-4, atol=1e-4, equal_nan=True)
+    species = pd.read_csv(str(prefix) + ".species.tsv", sep="\t")
+    root = species[species.node == "Root"].iloc[0]
+    assert root.age == root.age_min == root.age_max == 10
