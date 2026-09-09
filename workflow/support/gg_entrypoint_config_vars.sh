@@ -238,6 +238,7 @@ treevis_retrotransposition_delta_intron
 treevis_support_value
 treevis_synteny
 treevis_synteny_window
+synteny_search_window
 uniprot_annotation_method
 EOF
       ;;

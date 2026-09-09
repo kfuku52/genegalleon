@@ -6121,7 +6121,7 @@ if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tr
     --input "primary_fasta=${file_og_primary_fasta}"
     --optional-output "synteny=${file_og_synteny}"
     --parameter "input_sequence_mode=${synteny_sequence_mode}"
-    --parameter "window=${treevis_synteny_window}"
+    --parameter "window=${synteny_search_window}"
     --parameter "query_blast_evalue=${query_blast_evalue}"
     --parameter "auto_evalue_cutoffs=${query_blast_auto_evalue_maxlen_cutoffs}"
     --parameter "genetic_code=${genetic_code}"
@@ -6170,7 +6170,7 @@ if [[ ${treevis_synteny} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tr
         --lock_dir "${file_og_parameters_dir}/synteny_locks" \
         --gff2genestat_script "${gg_support_dir}/gff2genestat.py" \
         --input_sequence_mode "${synteny_sequence_mode}" \
-        --window "${treevis_synteny_window}" \
+        --window "${synteny_search_window}" \
         --evalue "${synteny_evalue}" \
         --genetic_code "${genetic_code}" \
         --threads "${GG_TASK_CPUS}" \

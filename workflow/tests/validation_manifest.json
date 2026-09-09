@@ -5,6 +5,7 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_synteny_search_integration.py",
     "test_aster_ortools_runtime.py",
     "test_csubst_scan_runtime_integration.py",
     "test_owned_runtime_contracts.py",
@@ -24,6 +25,7 @@
     ["Rscript", "workflow/tests/test_plot_mcmctreer_input.R"],
     ["Rscript", "workflow/tests/test_orthogroup_copy_number_trait_pgls.R"],
     ["Rscript", "workflow/tests/test_treevis_main.R"],
+    ["Rscript", "workflow/tests/test_treevis_synteny_palette.R"],
     ["Rscript", "workflow/tests/test_kf_dependency_integrations.R"]
   ],
   "allowed_skips": {}

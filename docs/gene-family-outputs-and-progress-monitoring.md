@@ -670,6 +670,20 @@ Practical interpretation:
 - if an upstream analysis was disabled, or the corresponding inputs were not
   available, the associated panel may be blank or minimally populated.
 
+The **Neighboring genes** similarity search includes up to 20 genes on each
+side of each focal gene (`synteny_search_window=20`), while the plot
+displays only five on each side (`treevis_synteny_window=5`). The search window
+controls the full synteny TSV and its downstream summary statistics; the display
+window only limits the plot. Changing the search window invalidates the synteny
+artifact so it is regenerated on the next enabled summary/tree-plot run.
+Keep `run_summary=1` when changing the search window: the regenerated synteny
+table also invalidates summary statistics, and a plot-only run refuses to use
+the stale summary. Changing only the display window does not rerun the search.
+
+Colors are allocated only to groups actually drawn after filtering to the
+display window and plotted tips and retaining groups shared across tips.
+Groups outside that selection do not consume palette colors.
+
 `stat.branch.tsv` is the master table that collects per-branch and per-tip
 annotations for plotting. `stat.tree.tsv` is the paired tree-level summary.
 Its `original_num_site` and `cleaned_num_site` fields are the alignment-column
