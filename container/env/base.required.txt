@@ -29,7 +29,7 @@ diamond
 generax
 grampa
 hyphy
-iqtree=3.*
+# IQ-TREE CLI and library worker are built together from official source.
 jcvi
 kallisto
 jellyfish

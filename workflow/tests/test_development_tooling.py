@@ -26,6 +26,7 @@ SOURCE_SHA_VARS = (
     "KFU52_NWKIT_REPO_SHA",
     "BUSCO_REPO_SHA",
     "PAML_REPO_SHA",
+    "IQTREE_REPO_SHA",
     "KFL1OU_REPO_SHA",
     "KFFRACTBIAS_REPO_SHA",
     "KFTOOLS_REPO_SHA",
@@ -318,6 +319,7 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
     assert expected.returncode == 0, expected.stderr
     busco_sha = env.pop("BUSCO_REPO_SHA")
     paml_sha = env.pop("PAML_REPO_SHA")
+    iqtree_sha = env.pop("IQTREE_REPO_SHA")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -332,6 +334,7 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
         "    printf 'source\\trevision\\n'\n"
         f"    printf 'BUSCO\\t%s\\n' '{busco_sha}'\n"
         f"    printf 'paml\\t%s\\n' '{paml_sha}'\n"
+        f"    printf 'iqtree\\t%s\\n' '{iqtree_sha}'\n"
         "    ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",

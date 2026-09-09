@@ -14,6 +14,7 @@ PROGRAM_SHA_VARS = (
     "KFU52_NWKIT_REPO_SHA",
     "BUSCO_REPO_SHA",
     "PAML_REPO_SHA",
+    "IQTREE_REPO_SHA",
     "KFL1OU_REPO_SHA",
     "KFFRACTBIAS_REPO_SHA",
     "KFTOOLS_REPO_SHA",
@@ -40,7 +41,8 @@ def test_program_source_defaults_are_moving_branches_not_commit_pins():
     assert "GG_PIN_" not in branches
     assert "_REPO_SHA=" not in branches
     branch_assignments = re.findall(r"^GG_SOURCE_[A-Z0-9_]+_REPO_REF=(\S+)$", branches, re.MULTILINE)
-    assert len(branch_assignments) == len(PROGRAM_SHA_VARS) + 1
+    assert len(branch_assignments) == len(PROGRAM_SHA_VARS)
+    assert "GG_SOURCE_PAML_REPO_REF=master" in branches
     assert "GG_SOURCE_IQTREE_REPO_REF=master" in branches
     assert set(branch_assignments) <= {"main", "master"}
 
@@ -161,6 +163,7 @@ def test_native_apptainer_build_records_source_revisions():
         "nwkit",
         "BUSCO",
         "paml",
+        "iqtree",
         "kfl1ou",
         "kfFractBias",
         "kftools",
@@ -198,6 +201,7 @@ def test_shared_source_resolver_preserves_exact_overrides_and_owned_scope():
     assert owned_sources.stdout.splitlines()[0] == "source\trevision"
     assert "BUSCO\t" not in owned_sources.stdout
     assert "paml\t" not in owned_sources.stdout
+    assert "iqtree\t" not in owned_sources.stdout
     assert "nwkit\t" in owned_sources.stdout
     assert "csubst\t" in owned_sources.stdout
 
@@ -209,7 +213,7 @@ def test_source_resolution_runs_concurrently_and_publishes_only_complete_snapsho
     barrier = tmp_path / "barrier"
     barrier.mkdir()
     git = bin_dir / "git"
-    # Every lookup waits for all ten to start. A serial implementation fails
+    # Every lookup waits for all eleven to start. A serial implementation fails
     # at this barrier instead of relying on a timing-sensitive speed assertion.
     git.write_text(f"""#!{sys.executable}
 import hashlib
@@ -223,7 +227,7 @@ name = sys.argv[3].rsplit("/", 1)[-1].removesuffix(".git")
 barrier = Path(os.environ["MOCK_GIT_BARRIER"])
 (barrier / name).touch()
 deadline = time.monotonic() + 10
-while len(list(barrier.iterdir())) != 10:
+while len(list(barrier.iterdir())) != 11:
     if time.monotonic() >= deadline:
         sys.exit("source lookups did not start concurrently")
     time.sleep(0.01)
@@ -244,7 +248,7 @@ print(hashlib.sha1(name.encode()).hexdigest(), sys.argv[4], sep="\\t")
         ["bash", str(REPO_ROOT / "container/scripts/resolve_source_revisions.sh")],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=20,
     )
-    assert len(list(barrier.iterdir())) == 10
+    assert len(list(barrier.iterdir())) == len(PROGRAM_SHA_VARS)
     if fail_source:
         assert completed.returncode != 0
         assert completed.stdout == ""
@@ -359,3 +363,43 @@ def test_iqtree3_overlay_uses_unmodified_official_source():
     assert "-DBUILD_LIB=ON" in dockerfile
     assert "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON" in dockerfile
     assert "COPY --from=build /worker/bin/nwkit-iqtree-worker /usr/local/bin/" in dockerfile
+
+
+def test_standard_container_builds_iqtree_cli_library_and_matching_nwkit_worker():
+    dockerfile = (REPO_ROOT / "container/Dockerfile").read_text()
+    native = (REPO_ROOT / "container/apptainer_local_build.def.template").read_text()
+    builder = (REPO_ROOT / "container/scripts/build_iqtree_artifact.sh").read_text()
+    installer = (REPO_ROOT / "container/scripts/install_source_artifacts.sh").read_text()
+    validator = (REPO_ROOT / "container/scripts/validate_runtime.sh").read_text()
+    assert "FROM source-builder AS iqtree-build" in dockerfile
+    assert "FROM iqtree-build AS iqtree-worker-build" in dockerfile
+    assert "--mount=from=nwkit-build" in dockerfile
+    assert "--mount=from=iqtree-worker-build" in dockerfile
+    for path in (dockerfile, native):
+        assert "build_iqtree_artifact.sh library" in path
+        assert "build_iqtree_artifact.sh worker" in path
+    assert "submodule update --init --recursive" in builder
+    assert "-DBUILD_LIB=ON" in builder
+    assert "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON" in builder
+    assert "nwkit/data_iqtree/worker.cpp" in builder
+    assert "source.tar.gz" in builder
+    assert "LICENSE.nwkit" in builder
+    assert "iqtree3_library_worker.json" in installer
+    assert "check_iqtree_library.py" in validator
+    for filename in ("required_commands.tsv", "required_commands.arm64.tsv"):
+        required = (REPO_ROOT / "container/spec" / filename).read_text()
+        assert "base\tnwkit-iqtree-worker\n" in required
+        assert "base\tmcmctree\n" in required
+        assert "base\tcodeml\n" in required
+
+
+def test_standard_environment_omits_superseded_explicit_dependencies():
+    for filename in ("base.required.txt", "base.arm64.required.txt"):
+        requirements = (REPO_ROOT / "container/env" / filename).read_text().splitlines()
+        assert not any(re.match(r"iqtree(?:[=<>!]|$)", line) for line in requirements)
+        assert "paml" in requirements
+    requirements = (REPO_ROOT / "container/env/base.r.required.txt").read_text().splitlines()
+    assert "r-magic" not in requirements
+    assert "r-grplasso" not in requirements
+    assert "r-ape" in requirements
+    assert "r-phytools" in requirements

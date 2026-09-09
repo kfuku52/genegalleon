@@ -104,8 +104,12 @@ requested/frozen model, fitted parameters and IQ-TREE executable identity. The
 normal downstream filenames and fixed-species-age/display-only-CI policy apply
 to both engines. The executable must be IQ-TREE 3 or later with IQ2MC support.
 
-Build a local GeneGalleon overlay using the official moving source branch and
-the current NWKIT checkout:
+New standard GeneGalleon container builds include the official IQ-TREE 3 CLI
+and external library worker. With `radte_sequence_engine=iqtree`, the default
+`radte_iqtree_interface=auto` selects it automatically. Check availability with
+`python -m nwkit.iqtree_library check --interface library` inside the container.
+
+For development against a local NWKIT checkout, an overlay is also available:
 
 ```sh
 BASE_IMAGE=local/genegalleon:dev \

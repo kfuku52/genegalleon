@@ -2,7 +2,7 @@
 set -euo pipefail
 
 artifact_root="${1:?Usage: install_source_artifacts.sh ARTIFACT_ROOT}"
-sources=(amalgkit cdskit csubst nwkit BUSCO paml kfl1ou kfFractBias kftools rkftools)
+sources=(amalgkit cdskit csubst nwkit BUSCO paml iqtree kfl1ou kfFractBias kftools rkftools)
 wheels=()
 shopt -s nullglob
 for source_name in "${sources[@]}"; do
@@ -32,22 +32,10 @@ for source_name in "${sources[@]}"; do
   cat "${artifact}/source.tsv" >> /opt/pg/logs/source_revisions.tsv
 done
 
-# Preserve the existing IQ-TREE entrypoints while using the independently
-# compiled IQ2MC-compatible mcmctree artifact.
-if [[ -x /opt/conda/bin/iqtree3 ]]; then
-  ln -sf /opt/conda/bin/iqtree3 /usr/local/bin/iqtree3
-  ln -sf /opt/conda/bin/iqtree3 /opt/conda/bin/iqtree
-elif [[ -x /opt/conda/bin/iqtree ]]; then
-  ln -sf /opt/conda/bin/iqtree /usr/local/bin/iqtree3
-else
-  echo "The conda environment does not provide IQ-TREE." >&2
-  exit 1
-fi
-ln -sf /usr/local/bin/iqtree3 /usr/local/bin/iqtree
-if [[ ! -e /opt/conda/bin/iqtree3 ]]; then
-  ln -sf /usr/local/bin/iqtree3 /opt/conda/bin/iqtree3
-fi
-rm -f /usr/local/bin/iqtree2 /opt/conda/bin/iqtree2
+# Both IQ-TREE entrypoints and the external worker come from one source build.
+# The separate IQ2MC-compatible PAML artifact remains required by species dating.
+micromamba run -n base python -m nwkit.iqtree_library check --interface library \
+  > /opt/pg/logs/iqtree3_library_worker.json
 micromamba run -n base python -m pip check
 micromamba run -n base Rscript -e \
   'stopifnot(requireNamespace("kfl1ou", quietly = TRUE), requireNamespace("rkftools", quietly = TRUE))'

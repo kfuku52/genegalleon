@@ -81,6 +81,7 @@ Exact source commits and checksums can be overridden at build time:
 KFU52_CSUBST_REPO_SHA=<40-character-commit-sha> \
 BUSCO_REPO_SHA=<40-character-commit-sha> \
 PAML_REPO_SHA=<40-character-commit-sha> \
+IQTREE_REPO_SHA=<40-character-commit-sha> \
 TESTNH_TARBALL_SHA256=598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2 \
 CAFE5_TARBALL_SHA256=71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8 \
 IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.sh
@@ -90,9 +91,9 @@ Default source behavior:
 - Git-sourced programs follow the moving branches recorded in `source_branches.env`
 - build wrappers resolve every branch once per build in parallel and pass the resulting commits into Docker; resolution fails before building if any source is unavailable
 - `/opt/pg/logs/source_revisions.tsv` records the effective source revision in both Docker and native Apptainer images
-- `BUSCO` and `paml` follow their upstream `master` branches too
+- `BUSCO`, `paml` and official `iqtree3` follow their upstream `master` branches too
 - `Notung`, `BioPP/testnh`, and `CAFE5` release archives are verified with SHA-256 before extraction
-- GitHub/GitLab source fetches prefer release/archive downloads and fall back to `git` retry logic only when needed
+- GitHub/GitLab source fetches normally prefer archives; IQ-TREE uses recursive Git checkout so its submodules match the selected revision
 
 Override rules:
 - an explicitly supplied `*_REPO_SHA` takes precedence over the moving branch for that one build
@@ -274,7 +275,7 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
 - `Notung` is downloaded at build time from the official Notung 2.9 source
   and installed as:
   - `/usr/local/bin/Notung.jar`
-- `BUSCO` and `paml` are fetched from the current tips of their configured branches by default.
+- `BUSCO`, `paml` and official `iqtree3` are fetched from the current tips of their configured branches by default.
 - `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kfFractBias`, `kftools`, and `rkftools`
   install from the moving branches in `source_branches.env` by default.
 - `Notung`, `BioPP/testnh`, and `CAFE5` archives are checksum-verified during build.
@@ -313,3 +314,25 @@ Then run one pipeline smoke workflow with minimal data.
 # Verify conda env coverage against pipeline scripts
 container/scripts/check_env_coverage.sh .
 ```
+
+## IQ-TREE library runtime and dependency audit
+
+Standard Docker and native Apptainer builds install the official IQ-TREE 3 CLI
+and a separate `nwkit-iqtree-worker` linked to its `BUILD_LIB=ON` build. NWKIT
+selects the worker automatically for repeated sequence-likelihood evaluations;
+its initial model fit still uses the ordinary CLI. No overlay or analysis-time
+compilation is needed in a newly built standard image.
+
+```sh
+python -m nwkit.iqtree_library check --interface library
+```
+
+The build validates likelihoods, gradients and diagonal second derivatives
+against the CLI over repeated requests to one process. Results are recorded in
+`/opt/pg/logs/iqtree3_library_validation.json`. The original IQ-TREE source,
+submodule contents, notices and adapter/build materials are available under
+`/usr/local/share/iqtree3`; NWKIT's wheel contains no IQ-TREE code or binaries.
+
+See the [dependency audit](../docs/container-dependency-audit.md) for removed
+explicit packages and the separate PAML, kfl1ou and R plotting dependencies
+that remain required.

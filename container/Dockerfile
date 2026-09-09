@@ -189,6 +189,24 @@ RUN source /opt/pg/source_branches.env \
       "${PAML_REPO_SHA:-${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}}" \
       /opt/pg/artifact
 
+FROM source-builder AS iqtree-build
+
+ARG IQTREE_REPO_URL="https://github.com/iqtree/iqtree3.git"
+ARG IQTREE_REPO_REF=""
+ARG IQTREE_REPO_SHA=""
+COPY container/scripts/build_iqtree_artifact.sh /opt/pg/scripts/build_iqtree_artifact.sh
+
+RUN source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_iqtree_artifact.sh library \
+      "${IQTREE_REPO_URL}" \
+      "${IQTREE_REPO_SHA:-${IQTREE_REPO_REF:-${GG_SOURCE_IQTREE_REPO_REF}}}" \
+      /opt/pg/artifact
+
+# Updating NWKIT rebuilds only its thin adapter, not the IQ-TREE library.
+FROM iqtree-build AS iqtree-worker-build
+RUN --mount=from=nwkit-build,source=/opt/pg/artifact,target=/tmp/nwkit-artifact \
+ bash /opt/pg/scripts/build_iqtree_artifact.sh worker /opt/pg/artifact /tmp/nwkit-artifact
+
 FROM source-builder AS kfl1ou-build
 
 ARG KFL1OU_REPO_URL="https://github.com/kfuku52/kfl1ou.git"
@@ -262,6 +280,7 @@ RUN --mount=from=amalgkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/am
  --mount=from=nwkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/nwkit \
  --mount=from=busco-build,source=/opt/pg/artifact,target=/tmp/artifacts/BUSCO \
  --mount=from=paml-build,source=/opt/pg/artifact,target=/tmp/artifacts/paml \
+ --mount=from=iqtree-worker-build,source=/opt/pg/artifact,target=/tmp/artifacts/iqtree \
  --mount=from=kfl1ou-build,source=/opt/pg/artifact,target=/tmp/artifacts/kfl1ou \
  --mount=from=kffractbias-build,source=/opt/pg/artifact,target=/tmp/artifacts/kfFractBias \
  --mount=from=kftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/kftools \
@@ -312,6 +331,7 @@ RUN [[ "${SECURITY_REFRESH_EPOCH}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
 
 COPY container/spec /opt/pg/spec
 COPY container/scripts/validate_runtime.sh /opt/pg/scripts/validate_runtime.sh
+COPY container/scripts/check_iqtree_library.py /opt/pg/scripts/check_iqtree_library.py
 COPY container/scripts/post_install_notes.sh /opt/pg/scripts/post_install_notes.sh
 
 RUN chmod +x /opt/pg/scripts/validate_runtime.sh \

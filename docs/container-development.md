@@ -19,10 +19,12 @@ flowchart LR
 ```
 
 The source stages start from the same dependency environment. Each stage
-declares only its own revision arguments; none inherits another moving source
-stage. Seven Python wheels, two installed R packages, the PAML `mcmctree`
-binary are mounted read-only during assembly. Their
-archives and source checkouts never become distribution-image layers.
+declares only its own revision arguments; the IQ-TREE adapter stage additionally consumes the matching NWKIT wheel.
+Seven Python wheels, two installed R packages, PAML `mcmctree`, and the IQ-TREE
+CLI/library worker are mounted read-only during assembly. Build checkouts and
+static libraries remain in build stages. IQ-TREE corresponding source and
+adapter/build materials are retained under `/usr/local/share/iqtree3` with the
+separate GPL executables. NWKIT itself remains an MIT Python distribution.
 The final image copies `/opt/conda` once, not once per upstream tool.
 
 ## Choosing an image
@@ -62,6 +64,7 @@ change the contents of a public image that is only being pulled.
 | --- | --- |
 | Mounted workflow scripts or tests | No image build unless they are also copied into the image |
 | One upstream source revision | Its artifact, runtime assembly, bundled `treevis`, and validation |
+| NWKIT source revision | Its wheel and the IQ-TREE adapter; reuse the unchanged IQ-TREE library build |
 | Bundled `workflow/support/treevis` | `treevis` installation and subsequent validation |
 | Runtime validation scripts or command manifests | Final validation |
 | Security-refresh date | Late APT security refresh and subsequent validation |

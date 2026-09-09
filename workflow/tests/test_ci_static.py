@@ -74,7 +74,7 @@ def test_publish_preparation_forwards_one_complete_source_snapshot(
 ):
     variables = (
         "KFU52_AMALGKIT_REPO_SHA", "KFU52_CDSKIT_REPO_SHA", "KFU52_CSUBST_REPO_SHA",
-        "KFU52_NWKIT_REPO_SHA", "BUSCO_REPO_SHA", "PAML_REPO_SHA", "KFL1OU_REPO_SHA",
+        "KFU52_NWKIT_REPO_SHA", "BUSCO_REPO_SHA", "PAML_REPO_SHA", "IQTREE_REPO_SHA", "KFL1OU_REPO_SHA",
         "KFFRACTBIAS_REPO_SHA", "KFTOOLS_REPO_SHA", "RKFTOOLS_REPO_SHA",
     )
     values = {variable: f"{index:040x}" for index, variable in enumerate(variables, start=1)}

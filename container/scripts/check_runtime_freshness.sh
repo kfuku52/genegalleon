@@ -20,7 +20,7 @@ GG_RUNTIME_FRESHNESS=daily  Resolve moving upstreams at most once per UTC day (d
 GG_RUNTIME_FRESHNESS=always Resolve moving upstreams on every check.
 GG_RUNTIME_FRESHNESS=off    Skip the freshness check for intentional offline use.
 GG_RUNTIME_FRESHNESS_SCOPE=owned checks repository-owned upstreams (default).
-GG_RUNTIME_FRESHNESS_SCOPE=all also checks BUSCO and PAML branch tips.
+GG_RUNTIME_FRESHNESS_SCOPE=all also checks BUSCO, PAML and IQ-TREE branch tips.
 
 --expected-hash SHA256 compares only the embedded runtime identity. CI uses
 this after restoring a cache entry and does not resolve moving branches again.
@@ -192,6 +192,7 @@ sha_variables=(
   KFU52_NWKIT_REPO_SHA
   BUSCO_REPO_SHA
   PAML_REPO_SHA
+  IQTREE_REPO_SHA
   KFL1OU_REPO_SHA
   KFFRACTBIAS_REPO_SHA
   KFTOOLS_REPO_SHA
@@ -206,7 +207,9 @@ resolution_variables=(
   BUSCO_REPO_URL
   BUSCO_REPO_REF
   PAML_REPO_URL
+  IQTREE_REPO_URL
   PAML_REPO_REF
+  IQTREE_REPO_REF
   KFL1OU_REPO_URL
   KFL1OU_REPO_REF
   KFFRACTBIAS_REPO_URL
@@ -218,7 +221,7 @@ resolution_variables=(
 )
 override_fingerprint="$(
   for variable in "${resolution_variables[@]}"; do
-    if [[ "${scope}" == "owned" && ( "${variable}" == BUSCO_REPO_* || "${variable}" == PAML_REPO_* ) ]]; then
+    if [[ "${scope}" == "owned" && ( "${variable}" == BUSCO_REPO_* || "${variable}" == PAML_REPO_* || "${variable}" == IQTREE_REPO_* ) ]]; then
       continue
     fi
     printf '%s=%s\n' "${variable}" "${!variable:-}"
@@ -288,6 +291,7 @@ if [[ "${missing_manifest_revisions}" == "1" ]]; then
       nwkit) variable=KFU52_NWKIT_REPO_SHA ;;
       BUSCO) variable=BUSCO_REPO_SHA ;;
       paml) variable=PAML_REPO_SHA ;;
+      iqtree) variable=IQTREE_REPO_SHA ;;
       kfl1ou) variable=KFL1OU_REPO_SHA ;;
       kfFractBias) variable=KFFRACTBIAS_REPO_SHA ;;
       kftools) variable=KFTOOLS_REPO_SHA ;;

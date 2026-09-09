@@ -16,6 +16,7 @@ base	fimo
 base	generax
 base	grampa.py
 base	iqtree3
+base	nwkit-iqtree-worker
 base	jellyfish
 base	kallisto
 base	kffractbias

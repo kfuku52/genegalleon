@@ -109,11 +109,26 @@ mkdir -p "$(dirname "${report_file}")"
 printf 'tier\tenv\tcommand\tfound\n' > "${report_file}"
 
 required_failed=0
+library_required=0
 while IFS=$'\t' read -r env_name command_name; do
+  if [[ "${command_name}" == "nwkit-iqtree-worker" ]]; then
+    library_required=1
+  fi
   if ! check_one "required" "${env_name}" "${command_name}"; then
     required_failed=1
   fi
 done < <(read_tsv "${required_file}")
+
+if [[ "${library_required}" -eq 1 ]]; then
+  library_log="$(dirname "${report_file}")/iqtree3_library_validation.json"
+  if micromamba run -n base python "$(dirname "${BASH_SOURCE[0]}")/check_iqtree_library.py" > "${library_log}"; then
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "IQ-TREE library/CLI agreement" "1" >> "${report_file}"
+  else
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "IQ-TREE library/CLI agreement" "0" >> "${report_file}"
+    echo "[validate_runtime] IQ-TREE library numerical validation failed."
+    required_failed=1
+  fi
+fi
 
 if micromamba run -n base bash -lc "command -v csubst >/dev/null 2>&1"; then
   if micromamba run -n base csubst scan -h >/dev/null 2>&1; then

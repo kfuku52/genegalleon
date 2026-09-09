@@ -3,12 +3,10 @@ r-base
 r-ape
 r-aplot
 r-cowplot
-r-grplasso
 r-ggimage
 r-ggrepel
 bioconductor-ggtree
 r-igraph
-r-magic
 r-missmda
 r-nlme
 r-phangorn

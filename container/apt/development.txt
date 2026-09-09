@@ -9,3 +9,4 @@ libeigen3-dev
 libssl-dev
 libxml2-dev
 pkg-config
+zlib1g-dev

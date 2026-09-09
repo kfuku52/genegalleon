@@ -106,14 +106,15 @@ IMAGE=ghcr.io/<your-org>/genegalleon TAG=dev MODE=push ./container/buildx.sh
 
 By default, upstream source installs follow the moving branches in
 `container/source_branches.env` (`amalgkit`, `cdskit`, `csubst`, `nwkit`,
-`BUSCO`, `paml`, `kfl1ou`, `kfFractBias`, `kftools`, `rkftools`). The wrapper resolves
+`BUSCO`, `paml`, `iqtree3`, `kfl1ou`, `kfFractBias`, `kftools`, `rkftools`). The wrapper resolves
 each branch once, concurrently, at build start so all architectures use one internally
 consistent snapshot, without writing those commits back as repository
 defaults. Downloaded `BioPP/testnh` and `CAFE5` tarballs are still verified by
 SHA-256.
 
 Docker builds each moving source in an independent stage and transfers only
-its wheel, R package, or binary into the shared runtime. `runtime` is the
+its wheel, R package, or binary into the shared runtime. The separate IQ-TREE
+worker also carries corresponding source/build materials and license notices. `runtime` is the
 published target; `development` adds APT build dependencies without changing
 the scientific package set. Native Apptainer uses the same artifact scripts,
 then removes APT build dependencies for the runtime target. See
@@ -240,7 +241,7 @@ Runtime profile highlights in the current container scaffold:
   the matching `NOTUNG_ZIP_SHA256`, and
   `NOTUNG_DOWNLOAD_HOST_IP` can be used to override the fallback IP for the
   official `amberjack.compbio.cs.cmu.edu` host,
-- Git-sourced programs, including `BUSCO`, `paml`, `kfl1ou`, `kftools`, and
+- Git-sourced programs, including `BUSCO`, `paml`, `iqtree3`, `kfl1ou`, `kftools`, and
   `rkftools`, follow their configured moving branches; the
   effective per-build revisions are recorded in
   `/opt/pg/logs/source_revisions.tsv`,

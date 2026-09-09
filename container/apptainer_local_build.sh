@@ -38,8 +38,11 @@ BUSCO_MIRROR_REPO_URL=${BUSCO_MIRROR_REPO_URL:-}
 BUSCO_REPO_REF=${BUSCO_REPO_REF:-${GG_SOURCE_BUSCO_REPO_REF}}
 BUSCO_REPO_SHA=${BUSCO_REPO_SHA:-}
 PAML_REPO_URL=${PAML_REPO_URL:-https://github.com/iqtree/paml.git}
+IQTREE_REPO_URL=${IQTREE_REPO_URL:-https://github.com/iqtree/iqtree3.git}
 PAML_REPO_REF=${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}
+IQTREE_REPO_REF=${IQTREE_REPO_REF:-${GG_SOURCE_IQTREE_REPO_REF}}
 PAML_REPO_SHA=${PAML_REPO_SHA:-}
+IQTREE_REPO_SHA=${IQTREE_REPO_SHA:-}
 KFL1OU_REPO_URL=${KFL1OU_REPO_URL:-https://github.com/kfuku52/kfl1ou.git}
 KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-${GG_SOURCE_KFL1OU_REPO_REF}}
 KFL1OU_REPO_SHA=${KFL1OU_REPO_SHA:-}
@@ -131,8 +134,11 @@ render_definition() {
     -e "s|@@BUSCO_REPO_REF@@|$(escape_sed_replacement "${BUSCO_REPO_REF}")|g" \
     -e "s|@@BUSCO_REPO_SHA@@|$(escape_sed_replacement "${BUSCO_REPO_SHA}")|g" \
     -e "s|@@PAML_REPO_URL@@|$(escape_sed_replacement "${PAML_REPO_URL}")|g" \
+    -e "s|@@IQTREE_REPO_URL@@|$(escape_sed_replacement "${IQTREE_REPO_URL}")|g" \
     -e "s|@@PAML_REPO_REF@@|$(escape_sed_replacement "${PAML_REPO_REF}")|g" \
+    -e "s|@@IQTREE_REPO_REF@@|$(escape_sed_replacement "${IQTREE_REPO_REF}")|g" \
     -e "s|@@PAML_REPO_SHA@@|$(escape_sed_replacement "${PAML_REPO_SHA}")|g" \
+    -e "s|@@IQTREE_REPO_SHA@@|$(escape_sed_replacement "${IQTREE_REPO_SHA}")|g" \
     -e "s|@@KFL1OU_REPO_URL@@|$(escape_sed_replacement "${KFL1OU_REPO_URL}")|g" \
     -e "s|@@KFL1OU_REPO_REF@@|$(escape_sed_replacement "${KFL1OU_REPO_REF}")|g" \
     -e "s|@@KFL1OU_REPO_SHA@@|$(escape_sed_replacement "${KFL1OU_REPO_SHA}")|g" \
