@@ -24,6 +24,7 @@ def build_arg_parser():
     )
     parser.add_argument("--download-manifest", default="")
     parser.add_argument("--download-dir", default="")
+    parser.add_argument("--stage-downloads", action="store_true", help="Require prepare to stage manifest inputs before workers run.")
     parser.add_argument(
         "--input-dir",
         default="",
@@ -156,6 +157,8 @@ def main():
         "species": [task["species_prefix"] for task in all_tasks],
         "tasks": [serialize_task(task) for task in all_tasks],
     }
+    if args.stage_downloads:
+        payload["download_mode"] = "staged"
     atomic_json(outfile, payload, immutable=True)
 
     print("Discovered {} species tasks -> {}".format(len(all_tasks), outfile))

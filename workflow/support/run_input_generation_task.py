@@ -105,6 +105,8 @@ def resolve_manifest_task(task, args):
         if any(actual.get(key) != task.get(key) for key in ("species_prefix", "species_key", "provider")):
             raise ValueError("Resolved download cache species/provider mismatch")
         return actual
+    if load_plan(args.task_plan).get("download_mode") == "staged":
+        raise ValueError("Staged download receipt is missing; rerun array_prepare before workers")
     manifest = root / (str(args.task_index) + ".tsv")
     row = task["manifest_row"]
     with open(manifest, "w", newline="") as handle:

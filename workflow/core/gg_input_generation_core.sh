@@ -590,7 +590,7 @@ ensure_shared_busco_lineage_ready() {
 }
 
 write_gg_input_generation_summary_on_exit() {
-  local exit_code=$?
+  local exit_code=${1:-$?}
   local run_ended_iso
   local run_duration_sec
   local header
@@ -686,7 +686,46 @@ write_gg_input_generation_summary_on_exit() {
   printf '%b\n' "${row}" >> "${summary_output}"
 }
 
-trap write_gg_input_generation_summary_on_exit EXIT
+array_lock_paths=()
+array_lock_tokens=()
+array_lock_modes=()
+
+input_generation_lock() {
+  local path=$1 mode=$2 token
+  local -a contention_args=(--nonblocking)
+  # Shared readers briefly serialize while registering their ownership. Retry
+  # that gate contention instead of rejecting a compatible parallel worker.
+  if [[ ${mode} == shared ]]; then
+    contention_args=(--timeout 30)
+  fi
+  token=$(python "${gg_support_dir}/shared_namespace_lock.py" "acquire-${mode}" "${path}" --owner-pid "$$" "${contention_args[@]}") || {
+    echo "Input-generation location is already in use: ${path}" >&2
+    return 1
+  }
+  array_lock_paths+=("${path}")
+  array_lock_tokens+=("${token}")
+  array_lock_modes+=("${mode}")
+}
+
+input_generation_on_exit() {
+  local status=$? index interrupted=0
+  trap - EXIT
+  (( status < 128 )) || interrupted=1
+  write_gg_input_generation_summary_on_exit "${status}" || status=1
+  if [[ ${interrupted} -eq 1 ]]; then
+    echo "Interrupted input generation: retaining namespace locks until the job and its children are reconciled." >&2
+    exit "${status}"
+  fi
+  for ((index=${#array_lock_paths[@]}-1; index>=0; index--)); do
+    python "${gg_support_dir}/shared_namespace_lock.py" "release-${array_lock_modes[index]}" \
+      "${array_lock_paths[index]}" --token "${array_lock_tokens[index]}" || status=1
+  done
+  exit "${status}"
+}
+trap input_generation_on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 prepare_input_generation_tmp_dirs() {
   ensure_dir "${input_generation_tmp_root}"
@@ -1745,7 +1784,7 @@ run_array_prepare_mode() {
   cmd+=(--input-dir "${effective_input_dir}")
   cmd+=(--outfile "${task_plan_output}")
   if [[ -n "${download_manifest}" ]]; then
-    cmd+=(--download-manifest "${download_manifest}" --download-dir "${download_dir}")
+    cmd+=(--download-manifest "${download_manifest}" --download-dir "${download_dir}" --stage-downloads)
   fi
   cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
   cmd+=(--gff-repair-mode "${gff_repair_mode}")
@@ -1765,6 +1804,13 @@ run_array_prepare_mode() {
   fi
 
   python "${gg_support_dir}/input_generation_array_state.py" claim-workspace --task-plan "${task_plan_output}" --workspace "${input_generation_root}" "${array_output_args[@]}" --prepare
+  if [[ -n "${download_manifest}" ]]; then
+    cmd=(python "${gg_support_dir}/stage_input_generation_downloads.py" --task-plan "${task_plan_output}"
+      --jobs "${GG_TASK_CPUS:-1}" --download-timeout "${download_timeout}")
+    [[ -z "${auth_bearer_token_env}" ]] || cmd+=(--auth-bearer-token-env "${auth_bearer_token_env}")
+    [[ -z "${http_header}" ]] || cmd+=(--http-header "${http_header}")
+    "${cmd[@]}"
+  fi
   expected_tasks=$(task_plan_task_count "${task_plan_output}")
   num_species_cds="${expected_tasks}"
   num_species_gff="${expected_tasks}"
@@ -1779,6 +1825,12 @@ run_array_prepare_mode() {
     echo "Warning: Failed to prepare ETE taxonomy DB before array workers." >&2
   fi
   local prepared_cmd=(python "${gg_support_dir}/input_generation_array_state.py" prepared --task-plan "${task_plan_output}")
+  if [[ -n "${download_manifest}" ]]; then
+    local staged_file
+    for staged_file in "${task_plan_output}.tasks/"*.json "${task_plan_output}.tasks/"*.resolved.tsv; do
+      prepared_cmd+=(--file "${staged_file}")
+    done
+  fi
   [[ ${run_species_busco} -ne 1 ]] || prepared_cmd+=(--file "${file_busco_lineage_resolved}")
   "${prepared_cmd[@]}"
   stage_format_status="ok"
@@ -1819,10 +1871,9 @@ run_array_worker_mode() {
 
   GG_ARRAY_TASK_ID=$(python "${gg_support_dir}/input_generation_array_state.py" index --task-plan "${task_plan_output}" --task-index "${GG_ARRAY_TASK_ID}")
 
-  # Kernel-held worker locks prevent duplicate/requeued tasks from sharing outputs.
+  # Namespace ownership prevents duplicate/requeued tasks from sharing outputs.
   ensure_dir "${task_plan_output}.locks"
-  exec {array_worker_lock_fd}>"${task_plan_output}.locks/${GG_ARRAY_TASK_ID}.lock"
-  flock -n "${array_worker_lock_fd}" || { echo "Array worker is already running: ${GG_ARRAY_TASK_ID}"; exit 1; }
+  input_generation_lock "${task_plan_output}.locks/${GG_ARRAY_TASK_ID}.lock" exclusive
   python "${gg_support_dir}/input_generation_array_state.py" invalidate --task-plan "${task_plan_output}" --task-index "${GG_ARRAY_TASK_ID}"
   gg_step_start "${task}"
   stage_format_status="running"
@@ -2071,12 +2122,11 @@ run_array_finalize_mode() {
 
 # Serialize shared stages against active species workers in this output workspace.
 ensure_dir "${input_generation_root}"
-exec {array_phase_lock_fd}>"${input_generation_root}/.array-phase.lock"
+array_lock_mode=exclusive
 if [[ "${input_generation_mode}" == array_worker ]]; then
-  flock -s -n "${array_phase_lock_fd}" || { echo "A shared input-generation stage is active."; exit 1; }
-else
-  flock -n "${array_phase_lock_fd}" || { echo "Input-generation workers or a shared stage are active."; exit 1; }
+  array_lock_mode=shared
 fi
+input_generation_lock "${input_generation_root}/.array-phase.lock" "${array_lock_mode}"
 
 # Custom output directories can be shared across workspace paths. Lock their
 # canonical locations as well, and bind array outputs to one plan at prepare.
@@ -2085,12 +2135,7 @@ array_output_args=(--file "${species_cds_dir}" --file "${species_gff_dir}" --fil
 [[ ${run_species_busco} -ne 1 ]] || array_output_args+=(--file "${species_busco_full_dir}" --file "${species_busco_short_dir}")
 array_output_locks=$(python "${gg_support_dir}/input_generation_array_state.py" output-lock-paths --task-plan "${task_plan_output}" "${array_output_args[@]}")
 while IFS= read -r array_output_lock; do
-  exec {array_output_lock_fd}>"${array_output_lock}"
-  if [[ "${input_generation_mode}" == array_worker ]]; then
-    flock -s -n "${array_output_lock_fd}" || { echo "An output directory is in use by a shared stage."; exit 1; }
-  else
-    flock -n "${array_output_lock_fd}" || { echo "An output directory is in use by another workflow."; exit 1; }
-  fi
+  input_generation_lock "${array_output_lock}" "${array_lock_mode}"
 done <<< "${array_output_locks}"
 
 if [[ "${input_generation_mode}" == array_* ]]; then

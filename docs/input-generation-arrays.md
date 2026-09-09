@@ -1,10 +1,22 @@
 # Input generation with species arrays
 
-`array_prepare` freezes a species task plan and prepares shared taxonomy/BUSCO
-resources. With a download manifest, each `array_worker` downloads its own
-species and runs formatting, validation, fx2tab, and BUSCO. `array_finalize`
+`array_prepare` is one download/prepare job: it freezes a species task plan,
+downloads manifest inputs with database-specific parallel queues, hashes the
+local files, and prepares shared taxonomy/BUSCO resources. Each `array_worker`
+uses those staged files for formatting, validation, fx2tab, and BUSCO; it does
+not fetch missing reference files. `array_finalize`
 requires verified completion receipts for every planned species before publishing
 the merged species summary and resolved download manifest.
+
+```mermaid
+flowchart LR
+  D[Single download/prepare job<br/>Independent database queues] --> L[Hashed local inputs]
+  L --> A[Species compute array<br/>Multiple nodes]
+  A --> F[Single finalize job]
+```
+
+This applies to `gg_input_generation`. RNA `amalgkit getfastq` belongs to
+`gg_transcriptome_generation` and is not changed by this execution model.
 
 ## Slurm submission
 
@@ -26,6 +38,14 @@ prepare has run, the count is shown as `N`, to be read from the resulting plan.
 settings come from these options rather than scheduler headers in the entrypoint.
 Set the workspace through the project's common configuration as usual; the plan
 path alone does not change the workspace.
+
+Download workers and compute resources are independent. Use `--prepare-cpus`
+to set the download/prepare job's CPUs and internal worker count,
+`--prepare-memory` for its total memory, and `--prepare-partition` for a
+network-enabled partition when needed. Omitted values inherit `--cpus`,
+`--memory`, and `--partition`. For example, `--prepare-cpus 8 --prepare-memory 8G`
+can be combined with `--cpus 4 --memory 32G --max-running 8`. These are resource
+requests, not database connection limits; choose them from measured usage.
 
 Add `--submit` to run prepare with `sbatch --wait`, then submit the species array
 and a finalizer with `afterok` on that array. Keep the helper running until those
@@ -58,8 +78,10 @@ supported `provider`, and an `id`. Duplicate output species prefixes are rejecte
 even across providers. Species keys and explicit download filenames must be
 non-hidden filename components, without directory separators or control characters. Prepare embeds the selected rows; workers do not reread a
 mutable manifest. Local source references are resolved before embedding. Local
-raw inputs, including file URLs in manifests, are hashed during planning; worker-resolved downloads are hashed before
-formatting. Changed raw inputs are rejected instead of silently reusing a plan.
+raw inputs, including file URLs in manifests, are hashed during planning;
+downloaded inputs are hashed by prepare. Resolved tasks and manifests are bound
+to the prepare-completion marker. Changed raw inputs or missing staged receipts
+are rejected instead of silently downloading during a worker run.
 
 Plans and execution settings are immutable. A workspace and its custom output
 directories are bound to one plan; a different plan cannot reuse their shard
@@ -79,13 +101,20 @@ renamed only after the optional final shared stages succeed. Each table rename
 is atomic; publication of multiple files is not a filesystem-wide transaction. Shared stages and workers also hold workspace
 locks to prevent simultaneous publication or cleanup.
 
-Array mode retains `tmp/task_plan.json`, settings, worker downloads, and receipts
+Array mode retains `tmp/task_plan.json`, settings, staged downloads, and receipts
 for auditing/retry. Storage can be reclaimed after the run is no longer needed,
 with no jobs active. Shared lock/ownership sidecars must also be preserved while
 a plan remains in use. Retrying after deleting raw downloads requires a new plan;
-those raw files are part of the completion evidence. For clusters without compute
-node internet access, download in a network-enabled job first, then run arrays
-with `input_dir` over those local inputs and no download manifest.
+those raw files are part of the completion evidence. A failed prepare can resume
+partial downloads; a successful prepare rerun verifies staged files without
+contacting their original servers. Use a fresh workspace if previously frozen
+files have changed. For clusters without compute-node internet access, select a
+network-enabled `--prepare-partition`; workers use local references and the
+shared taxonomy/BUSCO resources prepared there.
+
+The low-level plan script supports on-demand manifest tasks for direct callers.
+The core always requests `--stage-downloads`; its staged plans cannot fall back
+to worker-side downloading. Do not switch runtimes for an active plan.
 
 ## Shared database request limits
 
@@ -93,7 +122,7 @@ All input-generation jobs in the same workspace default to the shared directory
 `workspace/.gg_cache/input_download_limits`. To coordinate different workspaces,
 set the same `GG_INPUT_DOWNLOAD_LIMIT_DIR` in all jobs. This path must be visible
 at the same absolute path inside their containers, on a shared filesystem with
-cross-node `flock` support. Node-local `/tmp` is unsuitable.
+atomic `mkdir` and exclusive file creation. Node-local `/tmp` is unsuitable.
 
 ```bash
 export GG_INPUT_DOWNLOAD_LIMIT_DIR=/shared/project/download_limits
@@ -105,7 +134,9 @@ The concurrency limit covers request opening and streaming until response close.
 Start intervals are in seconds, independent of the number of worker jobs or CPUs.
 The default is two requests per logical database, with 0.4 seconds between starts.
 NCBI API/FTP/www domains share `NCBI`; Ensembl/EnsemblGenomes share `ENSEMBL`.
-CoGe, CNGB, GWH and DDBJ also have domain groups. Other supported providers use
+CoGe, CNGB, GWH, DDBJ, Figshare, FlyBase and WormBase also have domain groups.
+EnsemblGenomes' `ensemblgenomes.ebi.ac.uk` endpoints share `ENSEMBL`;
+unrelated EBI services do not. Other supported providers use
 their provider name for `GG_INPUT_MAX_CONCURRENT_DOWNLOADS_<PROVIDER>` and
 `GG_INPUT_REQUEST_INTERVAL_<PROVIDER>`. A recognized destination database takes
 precedence over a provider hint. Unrecognized CDN destinations inherit the
@@ -123,12 +154,31 @@ seconds).
 Different policies in the same bucket are rejected. To change a policy, stop all
 clients before selecting a fresh shared limit directory for all of them.
 
-Slots use kernel-held locks, released on process exit, including SIGKILL. There
-is no age-based eviction that could admit extra transfers while an old owner is
-alive. Lock files persist and must not be deleted while clients exist. Request
-interval/cooldown timestamps require synchronized node clocks. Docker tests cover
-multiple processes and SIGKILL; cross-node lock behavior on the target HPC mount
-and SIF must be validated before relying on these limits there. A filesystem that
-does not honor remote locks cannot be made safe by this implementation alone.
+The dispatcher groups transfers by destination database, using the provider only
+as a fallback for unknown hosts. Different `direct` hosts have independent
+queues; local copies do not consume network slots. It rotates runnable queues
+and checks shared slot/cooldown readiness before assigning workers. The check is
+advisory: another downloader can win a slot in between, so the transport still
+performs authoritative admission on each request and redirect.
+
+Slots, input-generation output locks, and version-report locks use atomic shared
+namespace operations, including on Lustre mounts with `localflock`. There is no
+age-based eviction that could admit extra work while an owner is alive. Normal
+completion and ordinary command failures release ownership. Signals, signal-like
+exit statuses (128 and above), or node failure leave fail-closed owner records,
+because child processes may still be writing. Inspect records with
+`shared_namespace_lock.py inspect PATH`, stop all
+clients, verify the owning job and its children have ended, and reconcile the
+specific ownership record before resuming. Never remove locks merely because a
+timeout expired. Request interval/cooldown timestamps require synchronized clocks.
+
+The admission protocol uses a `namespace-v1` subdirectory. **Stop all old
+flock-based clients before migration**: old and new protocols do not coordinate,
+even if configured with the same parent limit directory. Use a fresh output
+workspace for the new runtime and preserve old plans/receipts for audit. Validate
+normal admission, release, crash behavior, and output locking across the target
+nodes before increasing compute concurrency.
 
 See the [implementation review and validation limits](input-generation-array-review.md).
+
+Shared worker lock acquisition retries transient reader-registration contention for up to 30 seconds; exclusive phase and duplicate-worker locks remain nonblocking. A timeout leaves existing ownership untouched.

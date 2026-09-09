@@ -1,5 +1,9 @@
 # Input-generation array review — 2026-09-09
 
+This records the September 9 review. For the subsequent single download/prepare
+job, staged local workers, and atomic namespace locks, see the current
+[input-generation array guide](input-generation-arrays.md).
+
 The review found correctness and isolation problems in the initial array changes.
 The items below have been fixed and covered by regression tests. These are
 software checks, not evidence that a particular HPC shared filesystem honors
