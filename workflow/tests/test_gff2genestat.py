@@ -433,3 +433,50 @@ def test_cds_length_validation_rejects_wrong_transcript_and_preserves_missing():
         validate_cds_lengths(traits,records)
     with pytest.raises(ValueError,match='ungapped nucleotide'):
         validate_cds_lengths(traits,[('a','a','MKE')])
+
+
+@pytest.mark.parametrize('strands,starts,ends,junction,length', [
+    (['-', '-'], [67538, 90708], [67666, 90950], '129', 372),
+    (['+', '-'], [102764, 114799], [102973, 115773], '210', 1185),
+])
+def test_explicit_trans_splicing_keeps_part_order_and_coordinates(strands, starts, ends, junction, length):
+    from workflow.support.gff2genestat import attach_transcript_structure
+    attrs = ['Parent=t;exception=trans-splicing;part=1/2', 'Parent=t;exception=trans-splicing;part=2/2']
+    cds = pandas.DataFrame(dict(gene_id=['g', 'g'], selected_transcript=['t', 't'],
+                               sequence=['NC_021762.1']*2, strand=strands, start=starts, end=ends,
+                               feature=['CDS']*2, phase=[0, 0], attributes=attrs))
+    columns = OUT_COLS + ['splice_mode', 'feature_block_sequences', 'feature_block_strands',
+                          'transcript_junction_positions', 'cds_first_phase']
+    for frame in (cds, cds.iloc[::-1]):
+        result = summarize_gene_features(attach_transcript_structure(frame, frame), columns).iloc[0]
+        assert result.feature_size == length and pandas.isna(result.num_intron)
+        assert result.splice_mode == 'trans-splicing'
+        assert result.feature_blocks == ';'.join(f'{a}-{b}' for a, b in zip(starts, ends, strict=True))
+        assert result.feature_block_sequences == 'NC_021762.1;NC_021762.1'
+        assert result.feature_block_strands == ';'.join(strands)
+        assert result.transcript_junction_positions == junction
+        assert result.intron_positions == '' and result.cds_first_phase == 0
+
+
+@pytest.mark.parametrize('attrs', [
+    ['exception=trans-splicing', 'exception=trans-splicing'],
+    ['exception=trans-splicing;part=1', 'exception=trans-splicing;part=1'],
+    ['exception=trans-splicing;part=1', 'exception=trans-splicing;part=3'],
+    ['exception=trans-splicing;part=1/3', 'exception=trans-splicing;part=2/3'],
+    ['exception=trans-splicing;part=1', 'part=2'],
+])
+def test_trans_splicing_rejects_missing_or_conflicting_order(attrs):
+    from workflow.support.gff_feature_structure import ordered_annotated_blocks
+    with pytest.raises(ValueError, match='trans-splicing|Trans-splicing'):
+        ordered_annotated_blocks([('chr', '+', 1, 3, attrs[0]), ('chr', '-', 10, 12, attrs[1])], 'g')
+
+
+def test_trans_splicing_validates_phase_in_part_order_and_full_coordinate_system():
+    from workflow.support.gff2genestat import attach_transcript_structure
+    cds = pandas.DataFrame(dict(gene_id=['g', 'g'], selected_transcript=['t', 't'],
+        sequence=['a', 'b'], strand=['+', '-'], start=[1, 1], end=[4, 5], phase=[0, 2],
+        attributes=['exception=trans-splicing;part=1', 'exception=trans-splicing;part=2']))
+    assert attach_transcript_structure(cds, cds.assign(feature='CDS')).cds_first_phase.eq(0).all()
+    cds['phase'] = [0, 1]
+    with pytest.raises(ValueError, match='Conflicting CDS phases'):
+        attach_transcript_structure(cds, cds.assign(feature='CDS'))

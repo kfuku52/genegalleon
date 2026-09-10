@@ -100,3 +100,28 @@ shared CoGe feature ID, nonoverlapping CDS/exon pairs, matching total CDS length
 and agreement of every non-N CDS base with reconstructed genomic sequence. It
 writes a new GFF and a JSON audit, preserving source inputs. It does not merge
 ordinary alternative transcripts or infer missing phase.
+
+## Explicit trans-splicing
+
+CDS rows that all declare `exception=trans-splicing` may use `part=1`, `part=2`,
+etc., or the `part=X/Y` form to specify their complete transcript order.
+[NCBI documents this ordering attribute](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/file-formats/annotation-files/about-ncbi-gff3/#unofficial-attributes).
+Missing, conflicting, or incomplete part orders are rejected. GeneGalleon does
+not infer trans-splicing from inconsistent coordinates alone.
+
+The summary preserves numeric `feature_blocks` in that order and adds
+`splice_mode`, `feature_block_sequences` (semicolon-separated, URL-escaped
+sequence IDs), `feature_block_strands`, and `transcript_junction_positions`
+(cumulative CDS lengths before each join). These fields also accompany ordinary
+CDS rows. Genome-to-CDS extraction uses each block's own strand before joining.
+A mixed-strand transcript has scalar `strand=?`; a multi-contig transcript has
+no single chromosome/start/end envelope. Per-block coordinates remain complete.
+
+Trans-spliced CDS remain in sequence analyses and structure plots. Their joins
+are drawn as dashed vertical boundaries on cumulative CDS coordinates, without
+an invented genomic gap. Because the transcript-level exception alone does not
+classify each join as a cis intron, `num_intron` is missing and
+`intron_positions` is empty for these transcripts. Cis-intron correspondence
+reports `trans_splicing` explicitly rather than treating them as intron-free.
+CDS length checks still apply. Trans-spliced transcripts with explicit UTRs are
+rejected until their UTR order can also be represented unambiguously.

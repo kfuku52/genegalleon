@@ -131,3 +131,35 @@ bad_tree=inline_tree
 bad_tree$data$intron_feature_size[bad_tree$data$label=='zero']=3
 bad_tree$data$feature_blocks[bad_tree$data$label=='zero']='1-3'
 stopifnot(inherits(try(add_gene_structure_column(list(tree=bad_tree),args,path_alignment=aln),silent=TRUE),'try-error'))
+
+# Retain annotated part order; a trans-spliced join has no genomic intron length.
+trans_tips = data.frame(label=c('rps12','ndhH'), y=1:2,
+    feature_blocks=c('67538-67666;90708-90950','102764-102973;114799-115773'),
+    feature_type='CDS', strand=c('-','?'), splice_mode='trans-splicing',
+    feature_block_sequences='NC_021762.1;NC_021762.1',
+    feature_block_strands=c('-;-','+;-'), transcript_junction_positions=c('129','210'),
+    num_intron=NA_real_, intron_positions='', intron_feature_size=c(372,1185), cds_first_phase=0)
+trans_data = make_data(trans_tips,'linear')
+stopifnot(nrow(trans_data$boxes)==4,nrow(trans_data$introns)==0,
+    identical(trans_data$trans_splices$position,c(129,210)),
+    identical(trans_data$boxes$end,c(129,372,210,1185)),
+    identical(make_data(trans_tips,'compressed')$boxes, trans_data$boxes))
+bad = trans_tips; bad$transcript_junction_positions[1]='243'
+stopifnot(inherits(try(make_data(bad),silent=TRUE),'try-error'))
+bad = trans_tips; bad$feature_block_strands[1]='-'
+stopifnot(inherits(try(make_data(bad),silent=TRUE),'try-error'))
+trans_sites = genegalleon.treevis:::treevis_intron_site_data(trans_tips[1,,drop=FALSE],
+    c(rps12=paste(rep('A',372),collapse='')))
+stopifnot(nrow(trans_sites$events)==0, trans_sites$diagnostics$reason=='trans_splicing')
+bad_sites = genegalleon.treevis:::treevis_intron_site_data(trans_tips[1,,drop=FALSE],c(rps12='AAA'))
+stopifnot(bad_sites$diagnostics$reason=='CDS_length_mismatch')
+cat('Explicit trans-splicing order, coordinates and symbolic junctions passed.\n')
+trans_tree = ggtree::ggtree(ape::read.tree(text='(rps12:1,ndhH:1);'))
+idx = match(trans_tree$data$label,trans_tips$label)
+for (key in setdiff(names(trans_tips),c('label','y'))) trans_tree$data[[key]] = trans_tips[[key]][idx]
+trans_plot = add_gene_structure_column(list(tree=trans_tree),args,mode='linear')$gene_structure
+stopifnot(any(vapply(trans_plot$layers,function(layer) identical(layer$aes_params$linetype,'dashed'),logical(1))),
+    grepl('no genomic distance',trans_plot$labels$caption,fixed=TRUE))
+if (nzchar(Sys.getenv('GG_TRANS_SPLICING_PLOT'))) {
+    ggsave(Sys.getenv('GG_TRANS_SPLICING_PLOT'), trans_plot, width=5, height=3, dpi=180, bg="white")
+}

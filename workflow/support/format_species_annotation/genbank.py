@@ -6,6 +6,7 @@ from collections import defaultdict
 from urllib.parse import quote
 
 from format_species_writers import apply_common_replacements, open_text
+from gff_feature_structure import has_trans_splicing_exception, ordered_annotated_blocks
 
 try:
     from Bio import SeqIO
@@ -378,6 +379,7 @@ def derive_cds_records_from_gff_and_genome(task):
                         "end": end,
                         "strand": str(strand or "").strip() or "+",
                         "gene_token": gene_token,
+                        "attributes": attr_text,
                     }
                 )
 
@@ -412,6 +414,25 @@ def derive_cds_records_from_gff_and_genome(task):
     for transcript_id in sorted(cds_features_by_transcript.keys()):
         features = cds_features_by_transcript[transcript_id]
         if len(features) == 0:
+            continue
+        if any(has_trans_splicing_exception(f["attributes"]) for f in features):
+            blocks, _mode = ordered_annotated_blocks(
+                ((f["seqid"], f["strand"], f["start"], f["end"], f["attributes"]) for f in features),
+                transcript_id)
+            if utr_features_by_transcript.get(transcript_id):
+                raise ValueError(f"Trans-spliced UTR order is not represented for {transcript_id}")
+            pieces = []
+            for seqid, block_strand, start, end in blocks:
+                sequence = genome_sequences[genome_seqid_map.get(seqid, seqid)]
+                if start < 1 or end > len(sequence):
+                    raise ValueError(f"Trans-spliced CDS outside genome bounds for {transcript_id}")
+                piece = sequence[start - 1:end]
+                pieces.append(reverse_complement(piece) if block_strand == "-" else piece)
+            gene_token = rescued_gene_tokens.get(transcript_id, "") or transcript_feature_gene_token(features)
+            header = str(transcript_id)
+            if gene_token:
+                header += f" [gene={gene_token}]"
+            yield header, "".join(pieces)
             continue
         strands = sorted({feature["strand"] for feature in features})
         if len(strands) > 1:

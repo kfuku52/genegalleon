@@ -3938,3 +3938,19 @@ def test_remove_stale_ensembl_like_partial_gff_outputs_keeps_full_annotation(tmp
     assert not chromosome.exists()
     assert not abinitio_audit.exists()
     assert not chromosome_audit.exists()
+
+
+@pytest.mark.parametrize('strands,expected', [(['-', '-'], 'CATGGG'), (['+', '-'], 'ATGGGG')])
+def test_derive_explicit_trans_splicing_without_dropping_or_reordering(tmp_path, monkeypatch, strands, expected):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    from format_species_annotation.genbank import derive_cds_records_from_gff_and_genome
+    gff = tmp_path/'annotation.gff3'
+    genome = tmp_path/'genome.fa'
+    genome.write_text('>chr\nATGAAACCC\n')
+    gff.write_text('chr\tsrc\tgene\t1\t9\t.\t?\t.\tID=g\n' +
+        'chr\tsrc\tmRNA\t1\t9\t.\t?\t.\tID=t;Parent=g\n' +
+        f'chr\tsrc\tCDS\t7\t9\t.\t{strands[1]}\t0\tParent=t;exception=trans-splicing;part=2\n' +
+        f'chr\tsrc\tCDS\t1\t3\t.\t{strands[0]}\t0\tParent=t;exception=trans-splicing;part=1\n')
+    records = list(derive_cds_records_from_gff_and_genome(dict(
+        provider='direct',species_key='Species_a',gff_path=gff,genome_path=genome,gene_grouping_mode='strict')))
+    assert len(records)==1 and records[0][0].split()[0]=='t' and records[0][1]==expected

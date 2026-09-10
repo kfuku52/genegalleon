@@ -3,6 +3,7 @@ treevis_gene_structure_data = function(tips, mode='compressed') {
     if (!(mode %in% c('compressed', 'linear'))) stop('Unknown gene structure mode: ', mode)
     boxes = list()
     lines = list()
+    trans_splices = list()
     for (i in seq_len(nrow(tips))) {
         value = as.character(tips[['feature_blocks']][i])
         if (is.na(value) || !nzchar(value)) next
@@ -12,6 +13,41 @@ treevis_gene_structure_data = function(tips, mode='compressed') {
         blocks = do.call(rbind, lapply(strsplit(fields, '-', fixed=TRUE), as.numeric))
         if (any(!is.finite(blocks)) || any(blocks[,1] < 1 | blocks[,2] < blocks[,1])) {
             stop('Invalid GFF coordinates for ', tips[['label']][i])
+        }
+        trans = 'splice_mode' %in% names(tips) &&
+            !is.na(tips[['splice_mode']][i]) && tips[['splice_mode']][i] == 'trans-splicing'
+        if (trans) {
+            required = c('feature_block_sequences','feature_block_strands','transcript_junction_positions')
+            if (!all(required %in% names(tips)) || any(is.na(tips[i,required]))) {
+                stop('Missing trans-splicing coordinates for ', tips[['label']][i])
+            }
+            sequences = strsplit(as.character(tips[['feature_block_sequences']][i]), ';', fixed=TRUE)[[1]]
+            strands = strsplit(as.character(tips[['feature_block_strands']][i]), ';', fixed=TRUE)[[1]]
+            if (length(sequences) != nrow(blocks) || any(!nzchar(sequences)) ||
+                length(strands) != nrow(blocks) || any(!strands %in% c('+','-'))) {
+                stop('Invalid trans-splicing coordinate systems')
+            }
+            lens = blocks[,2] - blocks[,1] + 1
+            boundary_text = as.character(tips[['transcript_junction_positions']][i])
+            boundaries = if (nzchar(boundary_text)) suppressWarnings(as.numeric(strsplit(boundary_text, ';', fixed=TRUE)[[1]])) else numeric()
+            expected = head(cumsum(lens), -1)
+            if (!identical(boundaries, expected)) stop('Invalid trans-splicing junction positions')
+            if ('num_intron' %in% names(tips) && !is.na(tips[['num_intron']][i])) {
+                stop('Trans-splicing must not be reported as a cis-intron count')
+            }
+            if ('intron_feature_size' %in% names(tips) && !is.na(tips[['intron_feature_size']][i]) &&
+                tips[['intron_feature_size']][i] != sum(lens)) stop('CDS length disagrees with GFF blocks')
+            if ('utr_blocks' %in% names(tips) && !is.na(tips[['utr_blocks']][i]) && nzchar(tips[['utr_blocks']][i])) {
+                stop('Trans-spliced UTR order is not represented')
+            }
+            starts = c(0, expected)
+            color = if ('tiplab_color' %in% names(tips)) as.character(tips[['tiplab_color']][i]) else 'black'
+            boxes[[length(boxes)+1]] = data.frame(label=as.character(tips[['label']][i]),
+                y=tips[['y']][i], start=starts, end=starts+lens, colour=color,
+                feature='CDS', fill=color, half_height=0.27)
+            if (length(boundaries)) trans_splices[[length(trans_splices)+1]] = data.frame(
+                label=as.character(tips[['label']][i]), y=tips[['y']][i], position=boundaries)
+            next
         }
         strand = as.character(tips[['strand']][i])
         if (is.na(strand) || !(strand %in% c('+', '-'))) stop('Unknown GFF strand for ', tips[['label']][i])
@@ -63,7 +99,8 @@ treevis_gene_structure_data = function(tips, mode='compressed') {
             cds_offset=cumsum(ifelse(feature == 'CDS', lens, 0))[seq_along(gaps)])[gaps > 0,,drop=FALSE]
     }
     list(boxes=if (length(boxes)) do.call(rbind, boxes) else data.frame(),
-         introns=if (length(lines)) do.call(rbind, lines) else data.frame())
+         introns=if (length(lines)) do.call(rbind, lines) else data.frame(),
+         trans_splices=if (length(trans_splices)) do.call(rbind, trans_splices) else data.frame())
 }
 
 add_gene_structure_column = function(g, args, mode='compressed', width_mm=23, path_alignment=NULL) {
@@ -109,6 +146,14 @@ add_gene_structure_column = function(g, args, mode='compressed', width_mm=23, pa
         geom_segment(data=data$introns,
             aes(x=.data[['start']], xend=.data[['end']], yend=.data[['y']],
                 colour=.data[['colour']]), linewidth=0.25)
+    if (nrow(data$trans_splices)) {
+        p = p + geom_segment(data=data$trans_splices,
+            aes(x=.data[['position']], xend=.data[['position']],
+                y=.data[['y']]-0.33, yend=.data[['y']]+0.33),
+            inherit.aes=FALSE, linetype='dashed', linewidth=0.3) +
+            labs(caption=paste0(p$labels$caption,
+                '\nDashed vertical: trans-spliced joins\n(no genomic distance inferred)'))
+    }
     if (nrow(labels)) {
         units_per_mm = max(data$boxes$end) / width_mm
         polygons = treevis_intron_connection_polygons(labels, half_width=0.3 * units_per_mm)

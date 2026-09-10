@@ -10,16 +10,19 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.parse import quote
 
 import numpy
 import pandas
 
 try:
     from fasta_sequence_store import fasta_records
+    from gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
     from gff_source_contract import source_bound_gff_names
     from species_labeling import extract_species_label, strip_species_label
 except ImportError:  # pragma: no cover - package import path used in tests
     from .fasta_sequence_store import fasta_records
+    from .gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
     from .gff_source_contract import source_bound_gff_names
     from .species_labeling import extract_species_label, strip_species_label
 
@@ -518,16 +521,10 @@ def transcript_ids(attributes, gene_id):
     return (gene_id,)
 
 
-def ordered_feature_blocks(rows, gene_id):
-    blocks = {(str(sequence), str(strand), int(start), int(end)) for sequence, strand, start, end in rows}
-    if len({(sequence, strand) for sequence, strand, _start, _end in blocks}) != 1:
-        raise ValueError("Conflicting GFF coordinate systems for {}".format(gene_id))
-    if any(start < 1 or end < start for _sequence, _strand, start, end in blocks):
-        raise ValueError("Invalid GFF coordinates for {}".format(gene_id))
-    blocks = sorted(blocks, key=lambda block: (block[2], block[3]))
-    if any(right[2] <= left[3] for left, right in zip(blocks, blocks[1:], strict=False)):
-        raise ValueError("Overlapping GFF feature blocks for {}".format(gene_id))
-    return blocks[::-1] if blocks[0][1] == "-" else blocks
+def transcript_blocks(frame, gene_id):
+    fields = frame[["sequence", "strand", "start", "end"]].itertuples(index=False, name=None)
+    attributes = frame["attributes"] if "attributes" in frame else [""] * len(frame)
+    return ordered_annotated_blocks(((*block, attr) for block, attr in zip(fields, attributes, strict=True)), gene_id)
 
 
 def select_longest_transcripts(gff):
@@ -537,21 +534,22 @@ def select_longest_transcripts(gff):
         candidates = by_gene.setdefault(gene_id, {})
         for transcript in transcript_ids(attributes, gene_id):
             candidates.setdefault(transcript, []).append(index)
-    coordinate_rows = None
+    annotated_rows = None
     selected = []
     for gene_id, candidates in by_gene.items():
         if len(candidates) == 1:
             transcript, indices = next(iter(candidates.items()))
             selected.append(gff.iloc[indices].assign(selected_transcript=transcript))
             continue
-        if coordinate_rows is None:
-            coordinate_rows = list(gff[["sequence", "strand", "start", "end"]].itertuples(index=False, name=None))
+        if annotated_rows is None:
+            annotated_rows = list(gff[["sequence", "strand", "start", "end", "attributes"]].itertuples(index=False, name=None))
         best_length = -1
         best_indices = None
         best_signature = None
         tied_transcripts = []
         for transcript in sorted(candidates):
-            blocks = ordered_feature_blocks((coordinate_rows[index] for index in candidates[transcript]), gene_id)
+            blocks, _mode = ordered_annotated_blocks(
+                (annotated_rows[index] for index in candidates[transcript]), gene_id)
             length = sum(end - start + 1 for _sequence, _strand, start, end in blocks)
             signature = tuple(blocks)
             if length > best_length:
@@ -588,14 +586,17 @@ def attach_transcript_structure(selected_cds, gff):
         transcript = cds["selected_transcript"].unique()
         if len(transcript) != 1:
             raise ValueError(f"Multiple selected transcripts for {gene_id}")
-        cds_blocks = ordered_feature_blocks(
-            cds[["sequence", "strand", "start", "end"]].itertuples(index=False, name=None), gene_id)
+        cds_blocks, splice_mode = transcript_blocks(cds, gene_id)
         utr_rows = utr_by_transcript.get(transcript[0], [])
         utr_blocks = ordered_feature_blocks(utr_rows, gene_id) if utr_rows else []
         # Reject annotation overlap or a different contig/strand.
         if set(cds_blocks) & set(utr_blocks):
             raise ValueError(f"Overlapping CDS/UTR annotation for {gene_id}")
-        ordered_feature_blocks(cds_blocks + utr_blocks, gene_id)
+        if splice_mode == "trans-splicing":
+            if utr_blocks:
+                raise ValueError(f"Trans-spliced UTR order is not represented for {gene_id}")
+        else:
+            ordered_feature_blocks(cds_blocks + utr_blocks, gene_id)
         annotation[gene_id] = ";".join(f"{block[2]}-{block[3]}" for block in utr_blocks)
         # Every known block phase must imply the same initial coding frame.
         # Deduplicated coordinates contribute length once, but all phase records
@@ -603,7 +604,9 @@ def attach_transcript_structure(selected_cds, gff):
         implied_phases = set()
         offset = 0
         for block in cds_blocks:
-            phase_rows = cds.loc[(cds["start"].astype(int) == block[2]) &
+            phase_rows = cds.loc[(cds["sequence"].astype(str) == block[0]) &
+                                 (cds["strand"].astype(str) == block[1]) &
+                                 (cds["start"].astype(int) == block[2]) &
                                  (cds["end"].astype(int) == block[3]), "phase"]
             for value in phase_rows:
                 if pandas.isna(value) or str(value).strip() in {".", ""}:
@@ -641,21 +644,28 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
     if gff.empty:
         return pandas.DataFrame(columns=out_cols)
     by_gene = {}
-    for gene_id, sequence, strand, start, end in gff[[id_col, "sequence", "strand", "start", "end"]].itertuples(index=False, name=None):
+    attributes = gff["attributes"] if "attributes" in gff else [""] * len(gff)
+    for (gene_id, sequence, strand, start, end), attr in zip(
+            gff[[id_col, "sequence", "strand", "start", "end"]].itertuples(index=False, name=None),
+            attributes, strict=True):
         if gene_id == "":
             continue
-        by_gene.setdefault(gene_id, []).append((sequence, strand, start, end))
+        by_gene.setdefault(gene_id, []).append((sequence, strand, start, end, attr))
     feature_types = gff.groupby(id_col, sort=False)["feature"].first().to_dict() if "feature" in gff else {}
     metadata_columns = [c for c in ("selected_transcript", "utr_blocks", "cds_first_phase") if c in gff]
     metadata = gff.groupby(id_col, sort=False)[metadata_columns].first().to_dict("index") if metadata_columns else {}
     rows = []
     for gene_id, group in by_gene.items():
-        blocks = ordered_feature_blocks(group, gene_id)
+        blocks, splice_mode = ordered_annotated_blocks(group, gene_id)
         length = 0
         intron_offsets = []
+        junction_offsets = []
         for index, (_sequence, strand, start, end) in enumerate(blocks):
             length += end - start + 1
             if index + 1 < len(blocks):
+                junction_offsets.append(length)
+                if splice_mode == "trans-splicing":
+                    continue
                 following = blocks[index + 1]
                 gap = following[2] - end - 1 if strand == "+" else start - following[3] - 1
                 if gap > 0:
@@ -664,17 +674,21 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
             {
                 "gene_id": gene_id,
                 "feature_size": length,
-                "num_intron": len(intron_offsets),
+                "num_intron": numpy.nan if splice_mode == "trans-splicing" else len(intron_offsets),
                 "intron_positions": ";".join(str(pos) for pos in intron_offsets),
                 "feature_blocks": ";".join(f"{block[2]}-{block[3]}" for block in blocks),
                 "feature_type": feature_types.get(gene_id, ""),
+                "splice_mode": splice_mode,
+                "feature_block_sequences": ";".join(quote(b[0], safe="") for b in blocks),
+                "feature_block_strands": ";".join(b[1] for b in blocks),
+                "transcript_junction_positions": ";".join(map(str, junction_offsets)),
                 "gff_transcript_id": metadata.get(gene_id, {}).get("selected_transcript", ""),
                 "utr_blocks": metadata.get(gene_id, {}).get("utr_blocks", ""),
                 "cds_first_phase": metadata.get(gene_id, {}).get("cds_first_phase", numpy.nan),
-                "chromosome": blocks[0][0],
-                "start": min(block[2] for block in blocks),
-                "end": max(block[3] for block in blocks),
-                "strand": blocks[0][1],
+                "chromosome": blocks[0][0] if len({b[0] for b in blocks}) == 1 else "",
+                "start": min(b[2] for b in blocks) if len({b[0] for b in blocks}) == 1 else numpy.nan,
+                "end": max(b[3] for b in blocks) if len({b[0] for b in blocks}) == 1 else numpy.nan,
+                "strand": blocks[0][1] if len({b[1] for b in blocks}) == 1 else "?",
             }
         )
     return pandas.DataFrame(rows, columns=out_cols)
@@ -810,7 +824,8 @@ def main():
     start_time = time.time()
     print("gff2genestat.py started: {}".format(datetime.datetime.now()))
 
-    out_cols = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type", "gff_transcript_id", "utr_blocks", "cds_first_phase"]
+    out_cols = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type", "gff_transcript_id", "utr_blocks", "cds_first_phase",
+                "splice_mode", "feature_block_sequences", "feature_block_strands", "transcript_junction_positions"]
     gff_cols = ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
     records = list(fasta_records(Path(args.seqfile)))
     seq_names = pandas.Series([identifier for identifier, _header, _sequence in records], dtype=str)

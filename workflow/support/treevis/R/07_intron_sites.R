@@ -15,12 +15,15 @@ treevis_intron_site_data = function(tips, seqs) {
         count = tips[['num_intron']][i]
         length_cds = tips[['intron_feature_size']][i]
         phase = tips[['cds_first_phase']][i]
-        if (is.na(count) || is.na(length_cds)) reason = 'missing_GFF'
+        trans = 'splice_mode' %in% names(tips) &&
+            !is.na(tips[['splice_mode']][i]) && tips[['splice_mode']][i] == 'trans-splicing'
+        if ((!trans && is.na(count)) || is.na(length_cds)) reason = 'missing_GFF'
         if (is.na(reason)) {
             chars = strsplit(seqs[[id]], '', fixed=TRUE)[[1]]
             nongap = which(!chars %in% c('-', '.'))
             if (length(nongap) != length_cds) reason = 'CDS_length_mismatch'
         }
+        if (is.na(reason) && trans) reason = 'trans_splicing'
         if (!is.na(reason)) {
             diagnostics[[length(diagnostics)+1]] = data.frame(node_name=id, reason=reason)
             next
