@@ -111,3 +111,43 @@ tryCatch({
     file.exists(file.path(tmp, 'source_evidence', 'cache.txt')))
 }, finally=unlink(tmp, recursive=TRUE))
 cat('CAFE GO failed-input publication regression passed\n')
+
+# Exercise the full CLI when CAFE reports no significant families, and when an
+# internal target has both gains and losses.
+tmp <- tempfile('cafe-go-boundary-'); dir.create(tmp)
+tryCatch({
+  put <- function(d, name) e$write_tsv_base(d, file.path(tmp, name))
+  native_changes <- changes
+  native_changes[['<4>']] <- 0L
+  put(native_changes, 'Base_change.tab')
+  writeLines(c('#nexus', 'BEGIN TREES;',
+    ' TREE family = ((A<1>_9:1,B<2>_3:1)<5>_4:1,C<3>_4:2)<4>_4;', 'END;'), file.path(tmp, 'Base_asr.tre'))
+  put(data.frame(Orthogroup=ids,ref=paste0('g',seq_along(ids))), 'ids.tsv')
+  put(data.frame(gene_id=paste0('g',seq_along(ids)),go_ids=paste0('GO:',seq_along(ids)),
+    go_aspects='BP',go_terms=ids), 'ref.annotation.tsv')
+  run <- function(out, target='A<1>') {
+    argv <- c(file.path(root,'workflow/support/cafe_go_enrichment.r'),
+      file.path(tmp,c('Base_change.tab','Base_branch_probabilities.tab','ids.tsv','ref.annotation.tsv')),
+      file.path(tmp,out),target,'both','BP','cafe_branch_flags','.05')
+    result <- suppressWarnings(system2(file.path(R.home('bin'),'Rscript'),shQuote(argv),stdout=TRUE,stderr=TRUE))
+    if (!is.null(attr(result,'status'))) stop(paste(result,collapse='\n'))
+    file.path(tmp,out)
+  }
+  put(prob[0,], 'Base_branch_probabilities.tab')
+  put(transform(fam,pvalue=1), 'Base_family_results.txt')
+  out <- run('none')
+  screened <- e$read_tsv_base(file.path(out,'family_branch_flags.tsv'))
+  stopifnot(nrow(screened)==length(ids),!any(screened$selected),!any(screened$branch_reported),
+    nrow(e$read_tsv_base(file.path(out,'enrichment_significant_both_A<1>_all_go.tsv')))==0)
+  native_changes[['<5>']][1:2] <- c(3,-3)
+  native_changes[['A<1>']][1:2] <- 0L
+  put(native_changes,'Base_change.tab')
+  native_prob <- prob; native_prob[['<5>']][1:2] <- .001
+  # Write native root N/A, not the output-table NA spelling.
+  write.table(native_prob,file.path(tmp,'Base_branch_probabilities.tab'),sep='\t',quote=FALSE,row.names=FALSE,na='N/A')
+  put(fam,'Base_family_results.txt')
+  out <- run('internal','<5>')
+  screened <- e$read_tsv_base(file.path(out,'family_branch_flags.tsv'))
+  stopifnot(setequal(screened$FamilyID[screened$selected],c('gain','loss')))
+},finally=unlink(tmp,recursive=TRUE))
+cat('CAFE GO empty-report and internal-target CLI regressions passed\n')

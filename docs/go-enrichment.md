@@ -48,7 +48,9 @@ The existing change, branch-probability, orthogroup and annotation files are
 used, plus matching native `*_family_results.txt` and `*_asr.tre` files. Both
 `Gamma_*` and `Base_*` prefixes are supported. The ASR tree identifies the root
 exactly so it is not counted as another branch. Family IDs, columns, integer
-changes and probability ranges are checked for consistency.
+changes and probability ranges are checked for consistency. The branch-probability
+path must match the change-file prefix; mixing reports from separate runs or
+models is rejected even when their family IDs and columns happen to agree.
 
 CAFE normally writes branch-probability rows only for families passing its
 family-wide reporting threshold. A missing row is recorded as **not reported**,
@@ -124,9 +126,11 @@ python -m pytest -q --gg-strict-runtime workflow/tests/test_cafe_branch_flags_ru
 The R regressions check family BH, both signs, exclusion of flags on other
 branches (including the opposite sign), normal missing reports, malformed input,
 unique-family GO counts, empty selections and unchanged legacy numerical/CLI
-results. The runtime test generates standard CAFE output using its ordinary
-fixed-lambda option, consumes those files, and checks gain/loss screening,
-reprocessing and source-file integrity. This tests execution, not statistical
+results. The runtime tests generate standard Base and Gamma CAFE outputs using ordinary
+fixed-parameter options, consume those files, and check gain/loss screening,
+rejection of other-branch flags, preservation of unselected GO candidates,
+reprocessing, source-file integrity and rejection of mismatched report paths.
+Full CLI regressions also cover empty branch reports and internal targets. This tests execution, not statistical
 power or end-to-end calibration. Docker validation does not establish SIF
 compatibility.
 

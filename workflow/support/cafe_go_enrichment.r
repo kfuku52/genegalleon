@@ -494,6 +494,11 @@ if (nrow(orthogroup_go_df) > 0) {
 if (go_method == "cafe_branch_flags") {
   if (!grepl("_change\\.tab$", args[1])) stop("cafe_branch_flags requires a native *_change.tab input path.")
   cafe_prefix <- sub("_change\\.tab$", "", args[1])
+  expected_probabilities <- paste0(cafe_prefix, "_branch_probabilities.tab")
+  if (!file.exists(expected_probabilities) ||
+      normalizePath(args[2], mustWork = TRUE) != normalizePath(expected_probabilities, mustWork = TRUE)) {
+    stop("cafe_branch_flags requires the matching native *_branch_probabilities.tab file from the change-file prefix.")
+  }
   family_file <- paste0(cafe_prefix, "_family_results.txt")
   asr_file <- paste0(cafe_prefix, "_asr.tre")
   if (!all(file.exists(c(family_file, asr_file)))) stop("cafe_branch_flags requires native *_family_results.txt and *_asr.tre files.")
