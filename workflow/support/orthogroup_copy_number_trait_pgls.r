@@ -28,6 +28,8 @@ script_dir <- if (length(script_path_arg) > 0) {
 } else {
   getwd()
 }
+source_path <- tryCatch(sys.frame(1)$ofile, error = function(e) NULL)
+support_dir <- if (!is.null(source_path)) dirname(normalizePath(source_path, mustWork = TRUE)) else script_dir
 
 parse_args <- function(argv) {
   out <- list()
@@ -81,15 +83,25 @@ parse_bool <- function(args, key, default = TRUE) {
   stop("Invalid boolean value for --", key, ": ", value)
 }
 
-read_tsv_base <- function(path, na = character()) {
+read_tsv_base <- function(path, na = character(), col_classes = NA) {
+  fields <- count.fields(path, sep = "\t", quote = "\"", comment.char = "", blank.lines.skip = FALSE)
+  # NA entries represent continued lines within quoted fields.
+  if (!length(fields) || any(fields[!is.na(fields)] != fields[[1]])) stop("TSV rows have inconsistent field counts: ", path)
+  header <- read.delim(path, nrows = 0L, sep = "\t", quote = "\"", comment.char = "", check.names = FALSE)
+  labels <- names(header)
+  if (anyDuplicated(labels) || any(!nzchar(trimws(labels))) || any(labels != trimws(labels)) || any(grepl("[\t\r\n]", labels))) {
+    stop("TSV headers must be unique, non-empty and unpadded: ", path)
+  }
   read.delim(
     path,
     header = TRUE,
     sep = "\t",
-    quote = "",
+    quote = "\"",
     comment.char = "",
     stringsAsFactors = FALSE,
     check.names = FALSE,
+    fill = FALSE,
+    colClasses = col_classes,
     na.strings = na
   )
 }
@@ -206,20 +218,44 @@ load_tree_normalized <- function(path) {
 }
 
 load_trait_table <- function(path) {
-  trait <- read_tsv_base(path)
+  trait <- read_tsv_base(path, col_classes = "character")
   if (ncol(trait) < 2L) {
     stop("Trait table must contain a species column and at least one trait column: ", path)
   }
+  if ("species" %in% names(trait)[-1]) stop("Species key conflicts with a species trait column.")
   colnames(trait)[1] <- "species"
   trait$species <- normalize_species_label(trait$species)
   trait <- trait[!is.na(trait$species) & nzchar(trait$species), , drop = FALSE]
   assert_unique_labels(trait$species, "Trait table")
+  attr(trait, "source_path") <- normalizePath(path, mustWork = TRUE)
   trait
 }
 
+resolve_trait_selection <- function(trait, trait_arg = "all") {
+  path <- attr(trait, "source_path")
+  if (is.null(path)) {
+    cols <- resolve_trait_cols(trait, trait_arg)
+    return(data.frame(trait = cols, value_type = "unspecified", status = "selected", reason = ""))
+  }
+  report_path <- tempfile("trait-selection-", fileext = ".tsv")
+  on.exit(unlink(report_path), add = TRUE)
+  command <- c(file.path(support_dir, "species_trait_schema.py"), "--table", path,
+               "--trait", trait_arg, "--report", report_path)
+  log <- suppressWarnings(system2("python", shQuote(command), stdout = TRUE, stderr = TRUE))
+  status <- attr(log, "status")
+  if (!is.null(status) && status != 0L) stop(paste(c("Trait selection failed:", log), collapse = "\n"))
+  read_tsv_base(report_path)
+}
+
 resolve_trait_cols <- function(trait, trait_arg = "all") {
+  if (!is.null(attr(trait, "source_path"))) {
+    report <- resolve_trait_selection(trait, trait_arg)
+    return(report$trait[report$status == "selected"])
+  }
+  if (anyDuplicated(names(trait))) stop("Trait headers must be unique.")
   available <- setdiff(colnames(trait), "species")
   requested <- split_tokens(trait_arg)
+  if (anyDuplicated(requested)) stop("Requested traits must be unique.")
   if (!length(requested) || identical(tolower(trait_arg), "all")) {
     return(available)
   }
@@ -231,7 +267,7 @@ resolve_trait_cols <- function(trait, trait_arg = "all") {
 }
 
 load_orthogroup_copy_number_matrix <- function(file_orthogroup_copy_number, tree, family_ids = "", family_file = "", max_families = "all") {
-  copy_number_df <- read_tsv_base(file_orthogroup_copy_number)
+  copy_number_df <- read_tsv_base(file_orthogroup_copy_number, col_classes = "character")
   family_col <- detect_family_col(copy_number_df)
   family_all <- as.character(copy_number_df[[family_col]])
   if (any(!nzchar(family_all))) {
@@ -256,7 +292,13 @@ load_orthogroup_copy_number_matrix <- function(file_orthogroup_copy_number, tree
   selected_rows <- match(selected_families, family_all)
   species_raw_cols <- unname(col_map[species])
   count_df <- copy_number_df[selected_rows, species_raw_cols, drop = FALSE]
-  count_df[] <- lapply(count_df, function(x) suppressWarnings(as.numeric(x)))
+  count_df[] <- lapply(count_df, function(x) {
+    numeric <- suppressWarnings(as.numeric(x))
+    if (any(!is.finite(numeric) | numeric < 0 | numeric != floor(numeric))) {
+      stop("Predictor copy numbers must be finite non-negative integers.")
+    }
+    numeric
+  })
   count_mat <- t(as.matrix(count_df))
   rownames(count_mat) <- species
   colnames(count_mat) <- selected_families
@@ -404,15 +446,16 @@ fit_one_orthogroup_copy_number_trait <- function(model_df, tree, family_id, trai
   model_df$trait_value <- parse_response_values(model_df$trait_value, response_family)
   validate_response_values(model_df$trait_value, response_family)
   model_df$copy_number <- suppressWarnings(as.numeric(model_df$copy_number))
+  if (any(!is.finite(model_df$copy_number) | model_df$copy_number < 0 |
+          model_df$copy_number != floor(model_df$copy_number))) {
+    stop("Predictor copy numbers must be finite non-negative integers.")
+  }
   model_df <- model_df[
     !is.na(model_df$species) & nzchar(model_df$species) &
       is.finite(model_df$trait_value) & is.finite(model_df$copy_number),
     ,
     drop = FALSE
   ]
-  if (any(model_df$copy_number < 0 | model_df$copy_number != floor(model_df$copy_number))) {
-    stop("Predictor copy numbers must be non-negative integers.")
-  }
   model_df$copy_number <- log1p(model_df$copy_number)
   n_species <- length(unique(model_df$species))
   if (n_species < min_species) {
@@ -568,7 +611,9 @@ run_orthogroup_copy_number_trait_pgls <- function(file_orthogroup_copy_number, f
   on.exit(unlink(work, recursive = TRUE), add = TRUE)
   tree <- load_tree_normalized(file_sptree)
   trait <- load_trait_table(file_trait)
-  trait_cols <- resolve_trait_cols(trait, trait_arg)
+  trait_selection <- resolve_trait_selection(trait, trait_arg)
+  trait_cols <- trait_selection$trait[trait_selection$status == "selected"]
+  write_tsv_base(trait_selection, file.path(work, "trait_selection.tsv"))
   copy_matrix <- load_orthogroup_copy_number_matrix(
     file_orthogroup_copy_number = file_orthogroup_copy_number,
     tree = tree,
@@ -594,6 +639,7 @@ run_orthogroup_copy_number_trait_pgls <- function(file_orthogroup_copy_number, f
   write_tsv_base(df_sig, file.path(work, "orthogroup_copy_number_trait_pgls.significant.tsv"))
   save_summary_plot(df_stat, outdir = work, alpha = alpha, top_n = plot_top_n)
   publish_copy_number_results(work, outdir, c(file_orthogroup_copy_number, file_sptree, file_trait,
+                                            if (file.exists(paste0(file_trait, ".schema.json"))) paste0(file_trait, ".schema.json"),
                                             if (nzchar(family_file)) family_file))
   invisible(list(copy_matrix = copy_matrix, stats = df_stat, significant = df_sig))
 }

@@ -5826,12 +5826,14 @@ copy_number_pgls_provenance_args+=(
   --input "adapter=${gg_support_dir}/orthogroup_copy_number_trait_pgls.r"
   --parameter "engine=nwkit_regress"
   --parameter "predictor_transform=log1p"
+  --parameter "trait_schema_present=$([[ -f "${file_trait}.schema.json" ]] && echo 1 || echo 0)"
   --parameter "nwkit_identity=${genome_nwkit_identity}"
   --parameter "model=brownian"
   --parameter "covariance_estimator=family-specific-REML-or-ML"
   --parameter "measurement_error_model=none"
   --output "matrix=${file_orthogroup_copy_number_matrix}"
   --output "pgls=${file_orthogroup_copy_number_trait_pgls}"
+  --output "trait_selection=${dir_orthogroup_copy_number_trait_pgls}/trait_selection.tsv"
   --output "summary_plot=${file_orthogroup_copy_number_trait_pgls_summary_pdf}"
   --output "significant=${file_orthogroup_copy_number_trait_pgls_significant}"
   --output "summary_svg=${file_orthogroup_copy_number_trait_pgls_summary_pdf%.pdf}.svg"
@@ -5844,6 +5846,8 @@ copy_number_pgls_provenance_args+=(
   --parameter "alpha=${orthogroup_copy_number_trait_alpha}"
   --parameter "plot_top_n=${orthogroup_copy_number_trait_plot_top_n}"
 )
+gg_artifact_add_input_if_present copy_number_pgls_provenance_args "trait_schema" "${file_trait}.schema.json"
+copy_number_pgls_provenance_args+=(--input "trait_schema_adapter=${gg_support_dir}/species_trait_schema.py")
 gg_artifact_add_input_if_present copy_number_pgls_provenance_args "family_file" "${orthogroup_copy_number_trait_family_file}"
 gg_artifact_prepare_stage copy_number_pgls_needs_update run_orthogroup_copy_number_trait_pgls "${copy_number_pgls_provenance_args[@]}" || exit $?
 if [[ ${copy_number_pgls_needs_update} -eq 1 && ${run_orthogroup_copy_number_trait_pgls} -eq 1 ]]; then
@@ -5886,6 +5890,7 @@ copy_number_selection_provenance_args+=(
   --input "adapter=${gg_support_dir}/orthogroup_copy_number_trait_selection.py"
   --output-logical-directory "selection_bundle=${dir_orthogroup_copy_number_trait_selection}"
   --parameter "predictor_transform=log1p"
+  --parameter "trait_schema_present=$([[ -f "${file_trait}.schema.json" ]] && echo 1 || echo 0)"
   --parameter "nwkit_identity=${genome_nwkit_identity}"
   --parameter "response_families=${orthogroup_copy_number_trait_response_families}"
   --parameter "trait=${orthogroup_copy_number_trait}"
@@ -5896,6 +5901,8 @@ copy_number_selection_provenance_args+=(
   --parameter "prediction=${orthogroup_copy_number_trait_selection_prediction}"
 )
 gg_artifact_add_input_if_present copy_number_selection_provenance_args "folds" "${orthogroup_copy_number_trait_selection_folds}"
+gg_artifact_add_input_if_present copy_number_selection_provenance_args "trait_schema" "${file_trait}.schema.json"
+copy_number_selection_provenance_args+=(--input "trait_schema_adapter=${gg_support_dir}/species_trait_schema.py")
 gg_artifact_add_input_if_present copy_number_selection_provenance_args "family_file" "${orthogroup_copy_number_trait_family_file}"
 gg_artifact_prepare_stage copy_number_selection_needs_update run_orthogroup_copy_number_trait_selection "${copy_number_selection_provenance_args[@]}" || exit $?
 if [[ ${copy_number_selection_needs_update} -eq 1 && ${run_orthogroup_copy_number_trait_selection} -eq 1 ]]; then

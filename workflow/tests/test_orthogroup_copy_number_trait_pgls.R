@@ -255,3 +255,16 @@ stopifnot(isTRUE(all.equal(
   ape::vcv(rooted_subset_source)[rooted_subset_names, rooted_subset_names],
   tolerance = 1e-14
 )))
+
+# Reject corruption before dropping species or fitting, including R logical literals.
+for (bad in c("BAD", "NA", "NaN", "Inf", "-1", "1.5", "TRUE", "")) {
+  malformed <- file.path(tmp, "invalid_counts.tsv")
+  writeLines(c("Orthogroup\tsp1\tsp2\tsp3\tsp4", paste0("OG1\t1\t", bad, "\t3\t4")), malformed)
+  error <- tryCatch(load_orthogroup_copy_number_matrix(malformed, tree), error = identity)
+  stopifnot(inherits(error, "error"), grepl("finite non-negative integers", conditionMessage(error)))
+}
+for (header in c("species\theight\theight", "species\t\theight", "species\t height\theight")) {
+  malformed <- file.path(tmp, "invalid_traits.tsv")
+  writeLines(c(header, "sp1\t10\t90"), malformed)
+  stopifnot(inherits(tryCatch(load_trait_table(malformed), error = identity), "error"))
+}

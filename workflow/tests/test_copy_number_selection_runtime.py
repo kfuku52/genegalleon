@@ -23,6 +23,13 @@ def selection_module():
     return module
 
 
+def trait_schema_module():
+    spec = importlib.util.spec_from_file_location("trait_schema", SUPPORT / "species_trait_schema.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_missing_species_preserves_original_brownian_covariance(tmp_path):
     from ete4 import Tree
     from nwkit.ordinary_regression import build_phylogenetic_covariance
@@ -63,9 +70,16 @@ def test_copy_selection_mixed_families_and_rollback(tmp_path):
             "size": counts[0] + rng.normal(size=18),
             "state": np.tile([0, 1], 9),
             "copies": rng.poisson(3, 18),
+            "habit": np.tile(["tree", "herb"], 9),
+            "category_code": np.tile([1, 2], 9),
         }
     )
     trait_data.to_csv(traits, sep="\t", index=False)
+    schema = trait_schema_module()
+    schema_path, schema_payload = schema.schema_path, schema.schema_payload
+    trait_types = {"size": "numeric", "state": "binary", "copies": "numeric",
+                   "habit": "text", "category_code": "categorical"}
+    schema_path(traits).write_bytes(schema_payload(traits.read_bytes(), trait_types))
     folds = tmp_path / "folds.tsv"
     pd.DataFrame({"leaf_name": leaves, "fold": np.repeat(["cladeA", "cladeB", "cladeC"], 6)}).to_csv(
         folds, sep="\t", index=False
@@ -96,6 +110,10 @@ def test_copy_selection_mixed_families_and_rollback(tmp_path):
     manifest = pd.read_csv(output / "manifest.tsv", sep="\t")
     assert manifest.response_family.tolist() == ["gaussian", "binomial", "negative-binomial"]
     assert manifest.predictor_transform.eq("log1p").all()
+    selection = pd.read_csv(output / "trait_selection.tsv", sep="\t", keep_default_na=False)
+    excluded = selection.loc[selection.status == "excluded"]
+    assert excluded.trait.tolist() == ["habit", "category_code"]
+    assert excluded.reason.tolist() == ["declared_text", "declared_categorical"]
     assert len(list(output.glob("*.predictions.tsv"))) == 3
     for path in output.glob("*.coefficients.tsv"):
         coefficients = pd.read_csv(path, sep="\t")
@@ -107,6 +125,7 @@ def test_copy_selection_mixed_families_and_rollback(tmp_path):
     # Last trait fails only after the first two fits: nothing may be published.
     trait_data["copies"] = -1
     trait_data.to_csv(traits, sep="\t", index=False)
+    schema_path(traits).write_bytes(schema_payload(traits.read_bytes(), trait_types))
     failed = subprocess.run(command, capture_output=True, text=True)
     assert failed.returncode != 0
     assert {file.name: file.read_bytes() for file in output.iterdir()} == before
@@ -168,6 +187,16 @@ exec bash {shlex.quote(str(workflow / "core/gg_genome_evolution_core.sh"))}
     assert pd.read_csv(manifest, sep="\t").n_species.tolist() == [18]
     assert "Copy-number selection only" in result.stdout
     assert not list((tmp_path / "input/species_cds").iterdir())
+    # Adding or removing a sidecar must invalidate an otherwise cached analysis.
+    schema = trait_schema_module()
+    schema_path, schema_payload = schema.schema_path, schema.schema_payload
+    trait_path = trait_dir / "species_trait.tsv"
+    schema_path(trait_path).write_bytes(schema_payload(trait_path.read_bytes(), {"height": "categorical"}))
+    rebuild = script.replace("${GG_TEST_MIXED_COMMAND:-:}", "artifact_stale_policy=rebuild")
+    invalidated = subprocess.run(["bash", "-c", rebuild], cwd=workflow.parent, capture_output=True, text=True)
+    assert invalidated.returncode != 0
+    assert "explicitly encode" in invalidated.stdout + invalidated.stderr
+    schema_path(trait_path).unlink()
     # Enabling a sequence-consuming stage must restore the normal prerequisite.
     mixed = script.replace("${GG_TEST_MIXED_COMMAND:-:}", "run_species_busco=1")
     failed = subprocess.run(["bash", "-c", mixed], cwd=workflow.parent, capture_output=True, text=True)

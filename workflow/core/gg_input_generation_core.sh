@@ -1661,6 +1661,7 @@ run_trait_stage() {
   trait_provenance_args+=(
     --input "trait_adapter=${gg_support_dir}/generate_species_trait.py"
     --input "gift_retrieval=${gg_support_dir}/gift_retrieval.py"
+    --input "trait_schema_adapter=${gg_support_dir}/species_trait_schema.py"
     --input "gift_reviewed_mappings=${gg_support_dir}/gift_species_mappings.tsv"
   )
   local gift_mapping_inputs=""
@@ -1674,6 +1675,7 @@ run_trait_stage() {
   done <<< "${gift_mapping_inputs}"
   trait_provenance_args+=(
     --output "species_trait=${species_trait_output}"
+    --output "species_trait_schema=${species_trait_output}.schema.json"
     --parameter "trait_profile=${trait_profile}"
     --parameter "trait_species_source=${trait_species_source}"
     --parameter "trait_databases=${trait_databases}"

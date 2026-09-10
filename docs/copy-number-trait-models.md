@@ -31,6 +31,27 @@ copy-number matrix remains unchanged. Coefficients, PCC and OLS slopes refer
 to the transformed predictor, not a one-copy increase. Output
 `predictor_transform=log1p` records this convention. The transform compresses
 large counts but does not eliminate extrapolation or guarantee better prediction.
+
+Trait acquisition writes `<table>.schema.json` beside the TSV, containing the
+declared value types and a SHA-256 fingerprint of the exact table bytes. Keep
+these files together. Both association and selection use this schema: `all`
+selects numeric/binary traits and excludes declared text/categorical traits,
+including categories encoded as numbers. Each result bundle contains
+`trait_selection.tsv` with the type, selection status and reason for every column.
+An explicitly requested text/category trait fails with an encoding instruction;
+create a meaningful numeric/binary column before analyzing it. The schema does
+not choose response distributions or transform responses. Binary-source
+aggregations such as `mean` or `sum` can produce fractions/counts; choose the
+response family for the resulting values explicitly.
+
+Legacy or manually supplied tables without a schema retain strict numeric
+validation. For a mixed legacy table, explicitly select its numeric columns;
+unparseable values are never silently classified as text or excluded. A stale
+schema, duplicate/empty column names, malformed rows, and invalid predictor
+counts fail before fitting. Predictor counts must be finite non-negative
+integers; an invalid count is not treated as a missing species. After editing a
+generated table, regenerate its schema with the declared types, rather than
+reusing a fingerprint from another version of the table.
 Coefficient regularization is explicitly disabled for these ordinary Wald
 coefficient tests. Sparse binary data may have unavailable inference; inspect
 `status`, `inference_status` and optimizer diagnostics rather than interpreting

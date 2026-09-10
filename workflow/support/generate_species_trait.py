@@ -27,6 +27,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from format_species_network import guarded_urlopen as urlopen
 from gift_retrieval import GiftRetrieval, load_reviewed_mappings
 from species_labeling import base_species_label, species_label_from_taxonomic_text
+from species_trait_schema import schema_path, schema_payload
 
 try:
     from openpyxl import load_workbook
@@ -320,6 +321,8 @@ def validate_trait_plan_row(row):
                "categorical": {"first", "mode"}, "text": {"unique", "first"}}
     if row.value_type not in allowed or row.aggregation not in allowed[row.value_type]:
         raise ValueError("Unsupported trait type/aggregation: {}/{}".format(row.value_type, row.aggregation))
+    if any(char in row.output_trait for char in "\t\r\n"):
+        raise ValueError("Output trait names must not contain tabs or newlines")
     if row.output_trait in {"species", "__species_norm"}:
         raise ValueError("Reserved output trait name: " + row.output_trait)
     if row.positive_values and row.value_type != "binary":
@@ -2051,6 +2054,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     db_sources_path = Path(args.database_sources).expanduser().resolve()
     downloads_dir = Path(args.downloads_dir).expanduser().resolve()
     output_path = Path(args.output).expanduser().absolute()
+    schema_output_path = schema_path(output_path)
     stats_output_path = Path(args.stats_output).expanduser().absolute() if args.stats_output else None
 
     warnings: List[str] = []
@@ -2083,7 +2087,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         warnings.append("Database source map not found: {}".format(db_sources_path))
 
     input_paths = [manifest_path, trait_plan_path, db_sources_path, Path(__file__),
-                   SCRIPT_DIR / "gift_retrieval.py", SCRIPT_DIR / "gift_species_mappings.tsv"]
+                   SCRIPT_DIR / "gift_retrieval.py", SCRIPT_DIR / "gift_species_mappings.tsv",
+                   SCRIPT_DIR / "species_trait_schema.py"]
     for config in source_rows.values():
         if config.get("gift_species_mapping_file"):
             input_paths.append(Path(config["gift_species_mapping_file"]))
@@ -2095,7 +2100,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.species_source == "species_cds":
         protected_directories.append(species_cds_dir)
     try:
-        validate_trait_output_paths([output_path, stats_output_path], input_paths, protected_directories)
+        validate_trait_output_paths([output_path, schema_output_path, stats_output_path], input_paths, protected_directories)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -2118,9 +2123,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             continue
         target_species_by_base.setdefault(base_label, set()).add(species_name)
     result = pandas.DataFrame({"species": species_sorted}).set_index("species")
+    trait_types = {}
     for row in plan_rows:
         if row.database in requested_databases:
             validate_trait_plan_row(row)
+            if row.output_trait in trait_types and trait_types[row.output_trait] != row.value_type:
+                raise ValueError("Conflicting value types for output trait: " + row.output_trait)
+            trait_types[row.output_trait] = row.value_type
             result[row.output_trait] = ""
     db_frames: Dict[str, pandas.DataFrame] = {}
     db_configs: Dict[str, Dict[str, str]] = {}
@@ -2288,7 +2297,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
 
     payloads = {output_path: output_df.to_csv(sep="\t", index=False).encode("utf-8")}
+    payloads[schema_output_path] = schema_payload(payloads[output_path], trait_types)
     if args.dry_run:
+        _log("[dry-run] trait schema would be written to: {}".format(schema_output_path))
         _log("[dry-run] species_trait output would be written to: {}".format(output_path))
 
     if stats_output_path is not None:
@@ -2308,7 +2319,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             _log("[dry-run] stats output would be written to: {}".format(stats_output_path))
 
     if not args.dry_run:
-        validate_trait_output_paths([output_path, stats_output_path], input_paths, protected_directories)
+        validate_trait_output_paths([output_path, schema_output_path, stats_output_path], input_paths, protected_directories)
         publish_trait_outputs(payloads)
         _log("species_trait.tsv written: {}".format(output_path))
 

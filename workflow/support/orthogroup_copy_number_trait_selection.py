@@ -11,6 +11,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -21,6 +22,11 @@ from nwkit.file_paths import validate_outputs_do_not_replace_inputs
 from nwkit.output_transaction import output_transaction
 from nwkit.rooting_state import require_rooted
 from nwkit.util import read_tree
+
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+from species_trait_schema import schema_path, select_traits
 
 FAMILIES = {"gaussian", "binomial", "poisson", "negative-binomial"}
 
@@ -131,7 +137,8 @@ def run(args):
     # A fixed transform uses no held-out statistics; NWKIT standardizes within folds.
     copy_matrix = np.log1p(copy_matrix)
     trait_table, folds = load_species_table(args.traits), load_species_table(args.folds)
-    traits = list(trait_table.columns) if args.trait == "all" else tokens(args.trait)
+    trait_selection = select_traits(args.traits, args.trait)
+    traits = [row["trait"] for row in trait_selection if row["status"] == "selected"]
     if not traits or len(set(traits)) != len(traits) or not set(traits) <= set(trait_table.columns):
         raise ValueError("Trait selection must contain unique existing trait columns.")
     if "fold" not in folds or not set(leaves) <= set(folds.index):
@@ -151,6 +158,7 @@ def run(args):
             result / "predictors.tsv", sep="\t", index=False
         )
         (work / "predictors.txt").write_text("\n".join(predictor_names) + "\n")
+        pd.DataFrame(trait_selection).to_csv(result / "trait_selection.tsv", sep="\t", index=False)
         manifest = []
         for i, trait in enumerate(traits):
             raw_response = trait_table[trait].reindex(leaves)
@@ -228,6 +236,8 @@ def run(args):
             ("traits", args.traits),
             ("folds", args.folds),
         ]
+        if schema_path(args.traits).exists():
+            inputs.append(("trait_schema", str(schema_path(args.traits))))
         if args.family_file:
             inputs.append(("family_file", args.family_file))
         validate_outputs_do_not_replace_inputs(inputs, [(str(i), str(path)) for i, path in enumerate(targets)])

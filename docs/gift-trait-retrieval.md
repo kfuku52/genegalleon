@@ -138,10 +138,21 @@ has no matching rows, and observation counts then report zero.
 
 Input/output aliases (including existing hard links), output symlinks and output
 paths inside the GIFT cache or species-input directory are rejected. The trait
-TSV and optional stats JSON are both prepared before installation; ordinary
+TSV, its `<output>.schema.json` type metadata, and optional stats JSON are
+prepared before installation; ordinary
 publication errors roll back previously installed files. A hard process kill
 between file replacements is not a transactional guarantee; the workflow must
 complete successfully before its output receipt is recorded.
+
+The schema records each output column's declared `value_type` and the TSV's
+SHA-256 fingerprint. Multiple source rows may fill the same output column only
+when their declared types agree. Both copy-number analysis stages use it to
+exclude text/categorical columns from `all` and publish `trait_selection.tsv`
+with exclusion reasons; numeric columns remain strictly validated. The workflow
+tracks the schema as an acquisition output and an analysis input, so schema
+changes or removal invalidate the corresponding cached analysis. Preserve the
+sidecar when copying a generated table. See
+[copy-number models](copy-number-trait-models.md) for legacy table behavior.
 
 The [integrity audit](gift-trait-retrieval-audit.md) records reproduced defects,
 regression coverage and the full saved-dataset replay.

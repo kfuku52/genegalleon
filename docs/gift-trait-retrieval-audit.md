@@ -44,6 +44,26 @@ API and compares a subsequent offline run with that live result and the reviewed
 reference. The reviewed synonym mappings recover four previously missed species;
 the broader Citrus aggregate remains excluded.
 
+## Acquisition-to-analysis validation
+
+A follow-up audit reproduced three adapter defects: malformed R copy counts
+became missing species, duplicate trait headers silently selected the first
+column, and `all` attempted numeric parsing of declared text/category traits.
+The adapters now reject invalid counts and headers before fitting. Acquisition
+publishes a fingerprinted type schema with the table; both analysis stages use
+the same selector and record included/excluded columns in `trait_selection.tsv`.
+An invalid numeric value is never automatically excluded as a text trait.
+
+Container regressions cover invalid strings, missing/non-finite/negative/fractional
+counts, duplicate/empty headers, categories encoded as numbers, stale schemas,
+report/input aliases, complete-result preservation on failure, and cache
+invalidation when a schema is added. A generated mixed-type table runs through
+the actual R analysis, and mixed-type predictor selection runs through NWKIT.
+Replaying the 109-item saved dataset again produces the same TSV bytes; the
+declared types select 59 numeric/binary columns and exclude 50 text/category
+columns. This type selection does not imply sufficient observations or
+estimable models for every selected column.
+
 ## Boundaries
 
 The API still requires global pages on a cold acquisition. GIFT releases and
