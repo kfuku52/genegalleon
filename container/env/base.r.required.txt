@@ -11,6 +11,7 @@ r-missmda
 r-nlme
 r-phangorn
 r-phytools
+r-posterior
 r-rcpp
 r-rtsne
 r-svglite

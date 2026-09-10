@@ -64,6 +64,10 @@ run_busco_dupaware_root_pep="${run_busco_dupaware_root_pep:-0}"
 run_busco_dupaware_grampa_dna="${run_busco_dupaware_grampa_dna:-0}"
 run_busco_dupaware_grampa_pep="${run_busco_dupaware_grampa_pep:-0}"
 mcmctree_divergence_time_constraints_str="${mcmctree_divergence_time_constraints_str:-}"
+mcmctree_calibration_manifest="${mcmctree_calibration_manifest:-}"
+run_mcmctree_calibration_diagnostics="${run_mcmctree_calibration_diagnostics:-0}"
+mcmctree_calibration_diagnostic_chains="${mcmctree_calibration_diagnostic_chains:-4}"
+mcmctree_calibration_diagnostic_seed="${mcmctree_calibration_diagnostic_seed:-1729}"
 grampa_h1="${grampa_h1:-}"
 target_branch_go="${target_branch_go:-}"
 orthogroup_copy_number_max_size_differential="${orthogroup_copy_number_max_size_differential:-9999999}"
@@ -3696,6 +3700,14 @@ else
 fi
 
 task="Time-constrained tree preparation"
+if [[ "${run_mcmctree_calibration_diagnostics}" != "0" && "${run_mcmctree_calibration_diagnostics}" != "1" ]]; then
+  echo "Error: run_mcmctree_calibration_diagnostics must be 0 or 1." >&2
+  exit 2
+fi
+if [[ ( -n "${mcmctree_calibration_manifest}" || "${run_mcmctree_calibration_diagnostics}" == "1" ) && "${artifact_stale_policy:-stop}" == "reuse" ]]; then
+  echo "Error: Reviewed calibrations and calibration diagnostics require artifact_stale_policy=stop or rebuild; stale dating inputs cannot be mixed with the requested analysis." >&2
+  exit 2
+fi
 disable_if_no_input_file "run_constrained_tree" "${file_undated_species_tree}"
 constrained_tree_needs_update=0
 gg_artifact_contract_init constrained_tree_provenance_args "species_tree_time_constraints" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.constrained_tree.json"
@@ -3710,12 +3722,35 @@ constrained_tree_provenance_args+=(
   --parameter "species_label_regex=${species_label_regex}"
 )
 gg_artifact_add_input_if_present constrained_tree_provenance_args "species_label_map" "${species_label_map_tsv}"
+# The legacy contract is deliberately unchanged when no reviewed manifest is supplied.
+# Validate reviewed input before any existing dating artifact can be replaced.
+reviewed_calibration_work=""
+if [[ -n "${mcmctree_calibration_manifest}" ]]; then
+  reviewed_calibration_work=$(mktemp -d "${dir_tmp}/calibration-review.XXXXXX")
+  python "${gg_support_dir}/mcmctree_calibration_audit.py" apply \
+    --tree "${file_undated_species_tree}" --manifest "${mcmctree_calibration_manifest}" \
+    --outfile "${reviewed_calibration_work}/constrained.nwk" \
+    --audit-out "${reviewed_calibration_work}/reviewed_calibrations.json" || exit $?
+  constrained_tree_provenance_args+=(
+    --input "reviewed_manifest=${mcmctree_calibration_manifest}"
+    --input "calibration_adapter=${gg_support_dir}/mcmctree_calibration_audit.py"
+    --parameter "calibration_selection=reviewed_manifest_v1"
+    --output "reviewed_calibrations=$(dirname "${file_constrained_tree}")/reviewed_calibrations.json"
+  )
+fi
 gg_artifact_prepare_stage constrained_tree_needs_update run_constrained_tree "${constrained_tree_provenance_args[@]}" || exit $?
 if [[ ${constrained_tree_needs_update} -eq 1 && ${run_constrained_tree} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_parent_dir "${file_constrained_tree}"
   ensure_dir "${dir_nwkit_download_dir}"
-  if [[ ${timetree_constraint} -eq 1 ]]; then
+  if [[ -s "${file_constrained_tree}" ]]; then
+    python "${gg_support_dir}/mcmctree_calibration_audit.py" archive \
+      --species-dir "${dir_species_tree}" --provenance-dir "${genome_evolution_provenance_dir}" || exit $?
+  fi
+  if [[ -n "${mcmctree_calibration_manifest}" ]]; then
+    cp_out "${reviewed_calibration_work}/constrained.nwk" "${file_constrained_tree}"
+    cp_out "${reviewed_calibration_work}/reviewed_calibrations.json" "$(dirname "${file_constrained_tree}")/reviewed_calibrations.json"
+  elif [[ ${timetree_constraint} -eq 1 ]]; then
     nwkit_args=(
       --download-dir "${dir_nwkit_download_dir}"
       --infile "${file_undated_species_tree}"
@@ -3782,6 +3817,21 @@ if [[ ${constrained_tree_needs_update} -eq 1 && ${run_constrained_tree} -eq 1 ]]
   gg_artifact_record "${constrained_tree_provenance_args[@]}"
 else
   gg_step_skip "${task}"
+fi
+if [[ -n "${reviewed_calibration_work}" ]]; then
+  rm -rf -- "${reviewed_calibration_work}"
+fi
+# Additive, immutable observations do not invalidate legacy dating results or
+# infer that a historical run used today's TimeTree data or passed diagnostics.
+if [[ -s "${file_constrained_tree}" ]]; then
+  calibration_inventory_args=(
+    --tree "${file_constrained_tree}"
+    --outdir "$(dirname "${file_constrained_tree}")/calibration_audit"
+  )
+  if [[ -n "${mcmctree_calibration_manifest}" ]]; then
+    calibration_inventory_args+=(--manifest "${mcmctree_calibration_manifest}")
+  fi
+  python "${gg_support_dir}/mcmctree_calibration_audit.py" inventory "${calibration_inventory_args[@]}" || exit $?
 fi
 
 task="Constrained range plotting"
@@ -4020,6 +4070,31 @@ if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
     rm -rf -- "${mcmctree_work_dir}"
   fi
   gg_artifact_record "${mcmctree_provenance_args[@]}"
+else
+  gg_step_skip "${task}"
+fi
+
+task="MCMCtree calibration diagnostics"
+if [[ "${run_mcmctree_calibration_diagnostics}" == "1" ]]; then
+  gg_step_start "${task}"
+  calibration_diagnostic_work=$(mktemp -d "${dir_tmp}/calibration-diagnostics.XXXXXX")
+  cp_out "${file_iq2mc_ctl}" "${calibration_diagnostic_work}/mcmctree.ctl"
+  normalize_mcmctree_ctl_for_installed_paml "${calibration_diagnostic_work}/mcmctree.ctl"
+  calibration_diagnostic_args=(
+    --control "${calibration_diagnostic_work}/mcmctree.ctl"
+    --tree "${file_iq2mc_rooted_tree}"
+    --alignment "${file_iq2mc_dummy_phy}"
+    --hessian "${file_iq2mc_hessian}"
+    --outdir "${dir_species_tree}/mcmctree_calibration_diagnostics"
+    --chains "${mcmctree_calibration_diagnostic_chains}"
+    --seed "${mcmctree_calibration_diagnostic_seed}"
+    --time-scale "$(resolve_mcmctree_time_scale_factor)"
+  )
+  if [[ -n "${mcmctree_calibration_manifest}" ]]; then
+    calibration_diagnostic_args+=(--manifest "${mcmctree_calibration_manifest}")
+  fi
+  python "${gg_support_dir}/mcmctree_calibration_experiments.py" "${calibration_diagnostic_args[@]}" || exit $?
+  rm -rf -- "${calibration_diagnostic_work}"
 else
   gg_step_skip "${task}"
 fi

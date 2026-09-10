@@ -161,6 +161,10 @@ species_busco_memory_gb_per_job=4 # Minimum tool-memory budget per concurrent BU
 astral_min_tips=4 # Minimum tip count required for per-gene trees used by ASTRAL.
 timetree_constraint=1 # Use TimeTree confidence intervals for species-tree dating when set to 1.
 mcmctree_divergence_time_constraints_str="" # Used only when timetree_constraint=0. Example: "Arabidopsis_thaliana,Oryza_sativa,130,-|Arabidopsis_thaliana,Amborella_trichopoda,150,200"
+mcmctree_calibration_manifest="" # Optional reviewed calibration TSV; overrides legacy automatic/manual selection. See docs/species-tree-calibrations.md.
+run_mcmctree_calibration_diagnostics=0 # Opt in to separate prior-only/posterior and leave-calibration-out runs; never replaces the main dated tree.
+mcmctree_calibration_diagnostic_chains=4 # Independent chains per calibration scenario and target distribution.
+mcmctree_calibration_diagnostic_seed=1729 # Positive base seed for reproducible diagnostic chains.
 mcmc_burnin=20000 # Burn-in iterations for MCMCTree.
 mcmc_sampfreq=100 # Sampling frequency for MCMCTree.
 mcmc_nsample=20000 # Number of posterior samples retained by MCMCTree.

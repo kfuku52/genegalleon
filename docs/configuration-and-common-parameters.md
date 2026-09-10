@@ -2,6 +2,9 @@
 
 ## Routine configuration
 
+For compatible species-tree calibration auditing, reviewed calibration inputs and
+opt-in prior-only/sensitivity runs, see [species-tree calibrations](species-tree-calibrations.md).
+
 For a persistent project configuration, edit the top config block in each
 `workflow/gg_*_entrypoint.sh`:
 
