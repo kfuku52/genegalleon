@@ -1659,6 +1659,20 @@ run_trait_stage() {
   gg_artifact_add_input_if_present trait_provenance_args "trait_plan" "${trait_plan}"
   gg_artifact_add_input_if_present trait_provenance_args "database_sources" "${trait_database_sources}"
   trait_provenance_args+=(
+    --input "trait_adapter=${gg_support_dir}/generate_species_trait.py"
+    --input "gift_retrieval=${gg_support_dir}/gift_retrieval.py"
+    --input "gift_reviewed_mappings=${gg_support_dir}/gift_species_mappings.tsv"
+  )
+  local gift_mapping_inputs=""
+  local gift_mapping_path=""
+  local gift_mapping_index=0
+  gift_mapping_inputs=$(python "${gg_support_dir}/generate_species_trait.py" --print-gift-mapping-inputs --database-sources "${trait_database_sources}") || return $?
+  while IFS= read -r gift_mapping_path; do
+    [[ -n "${gift_mapping_path}" ]] || continue
+    trait_provenance_args+=(--input "gift_custom_mapping_${gift_mapping_index}=${gift_mapping_path}")
+    gift_mapping_index=$((gift_mapping_index + 1))
+  done <<< "${gift_mapping_inputs}"
+  trait_provenance_args+=(
     --output "species_trait=${species_trait_output}"
     --parameter "trait_profile=${trait_profile}"
     --parameter "trait_species_source=${trait_species_source}"

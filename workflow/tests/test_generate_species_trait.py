@@ -621,7 +621,8 @@ def test_generate_species_trait_non_strict_warns_and_continues_on_source_load_fa
     assert completed.returncode == 0, completed.stderr + completed.stdout
     assert "WARNING: [gift] failed to load source:" in completed.stdout
     df = pandas.read_csv(output, sep="\t")
-    assert list(df.columns) == ["species"]
+    assert list(df.columns) == ["species", "woodiness"]
+    assert df["woodiness"].isna().all()
     assert df["species"].tolist() == ["Homo_sapiens"]
 
 

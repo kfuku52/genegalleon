@@ -5,6 +5,8 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_gift_retrieval.py",
+    "test_gift_retrieval_audit.py",
     "test_copy_number_selection_runtime.py",
     "test_nwkit_tree_workflows_runtime.py",
     "test_asr_intron_runtime.py",

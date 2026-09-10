@@ -73,7 +73,7 @@ Trait generation inputs:
 
 - trait plan TSV (default: `workspace/input/input_generation/trait_plan.tsv`)
   - required columns: `database`, `source_column`, `output_trait`
-  - optional columns: `value_type` (`numeric|binary|categorical`),
+  - optional columns: `value_type` (`numeric|binary|categorical|text`),
     `aggregation`, `positive_values` (comma-separated, for binary mapping),
     `trait_key`, `trait_key_column`
   - for `gift`, `trait_key` can be either a trait ID (`Lvl3`, e.g. `1.1.1`)
@@ -85,7 +85,8 @@ Trait generation inputs:
     `archive_member`, `trait_key_column`,
     `gift_version`, `gift_trait_ids`, `gift_page_size`,
     `gift_max_pages_per_trait`, `gift_bias_ref`, `gift_bias_deriv`,
-    `gift_agreement_min`, `gift_versions_api`
+    `gift_agreement_min`, `gift_versions_api`, `gift_cache_mode`, `gift_retries`,
+    `gift_species_mapping_file`
 - starter templates are bundled at:
   - `workspace/input/input_generation/trait_plan.tsv`
   - `workspace/input/input_generation/trait_database_sources.tsv`
@@ -105,7 +106,9 @@ Trait DB retrieval policy in `generate_species_trait.py`:
 - `gift_api`: resolve target species `work_ID` via GIFT
   `names_matched_unique`, resolve trait tokens from `trait_key` /
   `gift_trait_ids` (ID or name via `traits_meta`), then query trait pages
-  and filter to target species.
+  and filter to target species. Validated page caching supports interrupted-run
+  recovery, and reviewed synonym mappings preserve taxonomic scope. See
+  [GIFT retrieval](gift-trait-retrieval.md) for controls, reports and missing data.
 
 Supported DB IDs can be listed with:
 

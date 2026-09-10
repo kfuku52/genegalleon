@@ -1,0 +1,6 @@
+species	gift_version	work_ID	work_species	decision	evidence_url	note
+Mimulus_guttatus	3.2	153907	Erythranthe guttata	map	https://powo.science.kew.org/taxon/urn%3Alsid%3Aipni.org%3Anames%3A162201-2	Genus transfer; exclude infraspecific lookup rows that map to Erythranthe nasuta.
+Populus_trichocarpa	3.2	355859	Populus tristis	map	https://powo.science.kew.org/taxon/urn%3Alsid%3Aipni.org%3Anames%3A208350-2	POWO treats P. trichocarpa as a synonym; species-level aggregate follows that taxonomic concept.
+Dendrobium_catenatum	3.2	439741	Dendrobium officinale	map	https://powo.science.kew.org/taxon/urn%3Alsid%3Aipni.org%3Anames%3A627046-1	Current POWO accepts officinale; GIFT old catenatum lookup points to moniliforme and is not merged.
+Physcomitrium_patens	3.2	149898	Physcomitrella patens	map	https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=3218&lvl=0	Current and former generic combinations of the same species.
+Citrus_sinensis	3.2	9801	Citrus × aurantium	exclude	https://powo.science.kew.org/taxon/772052-1	POWO maps sweet orange to f. aurantium; GIFT species aggregate can include a broader hybrid concept.

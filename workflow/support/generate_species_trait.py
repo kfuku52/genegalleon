@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import sys
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 from io import StringIO, TextIOWrapper
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, unquote, urlencode, urlparse
 from urllib.request import Request
 
 import pandas
@@ -24,6 +25,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from format_species_network import guarded_urlopen as urlopen
+from gift_retrieval import GiftRetrieval, load_reviewed_mappings
 from species_labeling import base_species_label, species_label_from_taxonomic_text
 
 try:
@@ -175,7 +177,7 @@ def builtin_gbif_trait_plan_rows() -> List[TraitPlanRow]:
             source_column=source_column,
             output_trait=source_column,
             value_type=value_type,
-            aggregation="median",
+            aggregation="any" if value_type == "binary" else "median",
             positive_values={"1"} if value_type == "binary" else set(),
             trait_key="",
             trait_key_column="",
@@ -294,14 +296,38 @@ def species_from_cds_dir(path: Path) -> Set[str]:
     return species
 
 
+def read_config_rows(path: Path, required: Set[str]):
+    with path.open("rt", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t", strict=True)
+        columns = reader.fieldnames or []
+        if len(columns) != len(set(columns)) or any(not col or col != col.strip() for col in columns):
+            raise ValueError("Duplicate, empty or padded columns in " + str(path))
+        if not required.issubset(columns):
+            raise ValueError("Missing required columns in {}: {}".format(path, sorted(required - set(columns))))
+        rows = []
+        for row in reader:
+            if None in row:
+                raise ValueError("Too many fields in " + str(path))
+            if any(not str(row.get(key, "") or "").strip() for key in required):
+                raise ValueError("Empty required field in " + str(path))
+            rows.append({key: str(value or "").strip() for key, value in row.items()})
+        return rows
+
+
+def validate_trait_plan_row(row):
+    allowed = {"numeric": {"median", "mean", "min", "max"},
+               "binary": {"any", "all", "min", "max", "sum", "mean"},
+               "categorical": {"first", "mode"}, "text": {"unique", "first"}}
+    if row.value_type not in allowed or row.aggregation not in allowed[row.value_type]:
+        raise ValueError("Unsupported trait type/aggregation: {}/{}".format(row.value_type, row.aggregation))
+    if row.output_trait in {"species", "__species_norm"}:
+        raise ValueError("Reserved output trait name: " + row.output_trait)
+    if row.positive_values and row.value_type != "binary":
+        raise ValueError("positive_values requires a binary trait")
+
+
 def read_trait_plan(path: Path) -> List[TraitPlanRow]:
-    with open(path, "rt", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        rows = list(reader)
-    required_columns = {"database", "source_column", "output_trait"}
-    missing = [col for col in required_columns if col not in (reader.fieldnames or [])]
-    if missing:
-        raise ValueError("Trait plan is missing required columns: {}".format(", ".join(sorted(missing))))
+    rows = read_config_rows(path, {"database", "source_column", "output_trait"})
     out: List[TraitPlanRow] = []
     for raw in rows:
         database = str(raw.get("database", "") or "").strip().lower()
@@ -312,7 +338,7 @@ def read_trait_plan(path: Path) -> List[TraitPlanRow]:
         value_type = str(raw.get("value_type", "numeric") or "numeric").strip().lower()
         aggregation = str(raw.get("aggregation", "") or "").strip().lower()
         if aggregation == "":
-            aggregation = "any" if value_type == "binary" else "median"
+            aggregation = {"binary": "any", "categorical": "mode", "text": "unique"}.get(value_type, "median")
         positive_raw = str(raw.get("positive_values", "") or "").strip()
         positive_values = {token.strip().lower() for token in positive_raw.split(",") if token.strip() != ""}
         trait_key = str(raw.get("trait_key", "") or "").strip()
@@ -329,24 +355,30 @@ def read_trait_plan(path: Path) -> List[TraitPlanRow]:
                 trait_key_column=trait_key_column,
             )
         )
+    for row in out:
+        validate_trait_plan_row(row)
     return out
 
 
 def read_database_sources(path: Path) -> Dict[str, Dict[str, str]]:
-    with open(path, "rt", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        rows = list(reader)
+    rows = read_config_rows(path, {"database"})
     out: Dict[str, Dict[str, str]] = {}
     for raw in rows:
         database = str(raw.get("database", "") or "").strip().lower()
         if database == "":
             continue
+        if database in out:
+            raise ValueError("Duplicate database source: " + database)
         normalized = {str(k or "").strip(): str(v or "").strip() for k, v in raw.items()}
         uri = normalized.get("uri", "")
         if uri != "":
             parsed = urlparse(uri)
             if parsed.scheme == "" and not Path(uri).is_absolute():
                 normalized["uri"] = str((path.parent / uri).resolve())
+        mapping_path = normalized.get("gift_species_mapping_file", "")
+        if mapping_path:
+            candidate = Path(mapping_path).expanduser()
+            normalized["gift_species_mapping_file"] = str((path.parent / candidate).resolve() if not candidate.is_absolute() else candidate.resolve())
         out[database] = normalized
     return out
 
@@ -384,14 +416,14 @@ def detect_species_column(df: pandas.DataFrame, requested: str) -> str:
 def read_table(path: Path, delimiter: str) -> pandas.DataFrame:
     suffix = "".join(path.suffixes).lower()
     if suffix.endswith(".xlsx"):
-        return pandas.read_excel(path, dtype=str)
+        return pandas.read_excel(path, dtype=str, keep_default_na=False)
     sep = parse_delimiter(path, delimiter)
-    return pandas.read_csv(path, sep=sep, dtype=str, encoding_errors="replace")
+    return pandas.read_csv(path, sep=sep, dtype=str, keep_default_na=False)
 
 
 def read_table_from_text(text: str, delimiter: str) -> pandas.DataFrame:
     sep = parse_delimiter(Path("response.tsv"), delimiter)
-    return pandas.read_csv(StringIO(text), sep=sep, dtype=str)
+    return pandas.read_csv(StringIO(text), sep=sep, dtype=str, keep_default_na=False)
 
 
 def split_uri_list(uri_raw: str) -> List[str]:
@@ -473,7 +505,7 @@ def copy_or_download_file(
         shutil.copyfile(src, destination)
         return destination
     if parsed.scheme == "file":
-        src = Path(parsed.path).resolve()
+        src = Path(unquote(parsed.path)).resolve()
         if not src.exists():
             return None
         if src == destination:
@@ -583,7 +615,7 @@ def fetch_species_api_table(
             continue
         request = Request(url, headers={"User-Agent": "genegalleon-trait-generator"})
         with urlopen(request, timeout=timeout) as response:
-            payload = response.read().decode("utf-8", errors="replace")
+            payload = response.read().decode("utf-8")
         if response_format in ("tsv", "csv"):
             sep = "\t" if response_format == "tsv" else ","
             if str(delimiter or "").strip() != "":
@@ -649,7 +681,7 @@ def fetch_json_payload(url: str, timeout: float) -> object:
         },
     )
     with urlopen(request, timeout=timeout) as response:
-        payload = response.read().decode("utf-8", errors="replace")
+        payload = response.read().decode("utf-8")
     try:
         return json.loads(payload)
     except json.JSONDecodeError as exc:
@@ -675,6 +707,7 @@ def resolve_gift_version(
     requested_version: str,
     timeout: float,
     versions_api: str,
+    fetcher=None,
 ) -> str:
     version = str(requested_version or "").strip()
     if version == "":
@@ -688,7 +721,7 @@ def resolve_gift_version(
     else:
         versions_base = data_api_base
     versions_url = "{}index.php?query=versions".format(versions_base)
-    rows = json_payload_to_rows(fetch_json_payload(url=versions_url, timeout=timeout))
+    rows = json_payload_to_rows((fetcher or fetch_json_payload)(url=versions_url, timeout=timeout))
     if len(rows) == 0:
         raise ValueError("GIFT versions endpoint returned no rows: {}".format(versions_url))
     resolved = str(rows[-1].get("version", "") or "").strip()
@@ -734,79 +767,58 @@ def remap_species_name_to_target(
     return ""
 
 
-def score_gift_species_match(row: Dict[str, object], target_species: str) -> Sequence[float]:
-    normalized_work_species = normalize_species_name(row.get("work_species", ""))
-    exact_match = 1.0 if normalized_work_species == target_species else 0.0
-    accepted = 1.0 if str(row.get("accepted", "")).strip() == "1" else 0.0
-    resolved = 1.0 if str(row.get("resolved", "")).strip() == "1" else 0.0
-    matched = 1.0 if str(row.get("matched", "")).strip() == "1" else 0.0
-    overall_score_raw = str(row.get("overallscore", "")).strip()
-    try:
-        overall_score = float(overall_score_raw)
-    except Exception:
-        overall_score = 0.0
-    return (exact_match, accepted, resolved, matched, overall_score)
-
-
-def pick_best_gift_species_match(
-    rows: Sequence[Dict[str, object]],
-    target_species: str,
-) -> Optional[Dict[str, object]]:
-    if len(rows) == 0:
-        return None
-    ranked_rows = sorted(
-        rows,
-        key=lambda row: score_gift_species_match(row=row, target_species=target_species),
-        reverse=True,
-    )
-    return ranked_rows[0]
-
-
 def resolve_gift_species_map(
     index_url: str,
     species: Sequence[str],
     timeout: float,
+    fetcher=None,
+    reviewed_mappings=None,
+    report=None,
 ) -> pandas.DataFrame:
-    records: List[Dict[str, str]] = []
-    work_id_to_species: Dict[str, str] = {}
+    records = []
+    mappings = reviewed_mappings or {}
+    fetch = fetcher or fetch_json_payload
     for species_name in species:
-        genus_epithet = split_genus_epithet(species_name)
-        if genus_epithet is None:
-            continue
-        genus, epithet = genus_epithet[0], genus_epithet[1]
-        lookup_url = "{}?query=names_matched_unique&genus={}&epithet={}".format(
-            index_url,
-            quote(genus),
-            quote(epithet),
-        )
-        rows = json_payload_to_rows(fetch_json_payload(url=lookup_url, timeout=timeout))
-        best = pick_best_gift_species_match(rows=rows, target_species=species_name)
-        if best is None:
-            continue
-        work_id = str(best.get("work_ID", "") or "").strip()
-        if work_id == "":
-            continue
-        if work_id in work_id_to_species and work_id_to_species[work_id] != species_name:
-            _log(
-                "WARNING: [gift] work_ID {} matched multiple target species ('{}', '{}'); keeping first.".format(
-                    work_id,
-                    work_id_to_species[work_id],
-                    species_name,
-                )
-            )
-            continue
-        work_id_to_species[work_id] = species_name
-        work_species = str(best.get("work_species", "") or "").strip()
-        if work_species == "":
-            work_species = species_name.replace("_", " ")
-        records.append(
-            {
-                "species": species_name,
-                "work_ID": work_id,
-                "work_species": work_species,
-            }
-        )
-    return pandas.DataFrame(records)
+        target = base_species_label(species_name)
+        reviewed = mappings.get(target)
+        audit = {"species": species_name, "status": "unmatched", "candidates": []}
+        if reviewed:
+            audit["reviewed_mapping"] = reviewed
+        if normalize_species_name(species_name) != target:
+            audit["status"] = "qualified_taxon_requires_review"
+        elif reviewed and reviewed["decision"] == "exclude":
+            audit["status"] = "excluded_taxonomic_scope"
+        else:
+            lookup_name = normalize_species_name(reviewed["work_species"]) if reviewed else target
+            genus_epithet = split_genus_epithet(lookup_name)
+            if genus_epithet:
+                lookup_url = "{}?query=names_matched_unique&genus={}&epithet={}".format(
+                    index_url, quote(genus_epithet[0]), quote(genus_epithet[1]))
+                rows = json_payload_to_rows(fetch(url=lookup_url, timeout=timeout))
+                candidates = {(str(row.get("work_ID", "") or "").strip(),
+                               str(row.get("work_species", "") or "").strip()) for row in rows}
+                audit["candidates"] = [{"work_ID": key, "work_species": name} for key, name in sorted(candidates)]
+                # Never select an arbitrary high-score synonym or an infraspecific hit.
+                eligible = {(str(row.get("work_ID", "") or "").strip(), str(row.get("work_species", "") or "").strip())
+                            for row in rows if all(str(row.get(flag, "1")) == "1" for flag in ("matched", "resolved", "accepted"))}
+                exact = {(key, name) for key, name in eligible
+                         if key.isdigit() and int(key) > 0 and normalize_species_name(name) == lookup_name}
+                if reviewed:
+                    exact = {(key, name) for key, name in exact if key == reviewed["work_ID"]}
+                if len(exact) == 1:
+                    key, name = next(iter(exact))
+                    record = {"species": species_name, "work_ID": key, "work_species": name}
+                    records.append(record)
+                    audit.update(record, status="reviewed_synonym" if reviewed else "exact")
+                elif reviewed:
+                    audit["status"] = "reviewed_mapping_mismatch"
+                elif candidates:
+                    audit["status"] = "ambiguous_or_synonym_requires_review"
+        if audit["status"] not in {"exact", "reviewed_synonym"}:
+            _log("WARNING: [gift] {}: {}".format(species_name, audit["status"]))
+        if report is not None:
+            report.append(audit)
+    return pandas.DataFrame(records, columns=["species", "work_ID", "work_species"])
 
 
 def dedupe_keep_order(values: Sequence[str]) -> List[str]:
@@ -884,30 +896,17 @@ def aggregate_categorical_mode(
     return counts.drop_duplicates(subset="__species_norm", keep="first").set_index("__species_norm")["__value"]
 
 
-def fetch_gift_traits_meta_rows(index_url: str, timeout: float) -> List[Dict[str, object]]:
+def fetch_gift_traits_meta_rows(index_url: str, timeout: float, fetcher=None) -> List[Dict[str, object]]:
     traits_meta_url = "{}?query=traits_meta".format(index_url)
-    rows = json_payload_to_rows(fetch_json_payload(url=traits_meta_url, timeout=timeout))
+    rows = json_payload_to_rows((fetcher or fetch_json_payload)(url=traits_meta_url, timeout=timeout))
     return [row for row in rows if isinstance(row, dict)]
-
-
-def pick_best_gift_trait_match(rows: Sequence[Dict[str, object]]) -> Optional[Dict[str, object]]:
-    if len(rows) == 0:
-        return None
-    ranked = sorted(
-        rows,
-        key=lambda row: (
-            parse_float_or_default(row.get("count", 0), 0.0),
-            str(row.get("Lvl3", "") or ""),
-        ),
-        reverse=True,
-    )
-    return ranked[0]
 
 
 def resolve_gift_trait_token_map(
     index_url: str,
     trait_tokens: Sequence[str],
     timeout: float,
+    fetcher=None,
 ) -> Dict[str, str]:
     tokens = dedupe_keep_order([str(token or "").strip() for token in trait_tokens])
     if len(tokens) == 0:
@@ -920,46 +919,18 @@ def resolve_gift_trait_token_map(
     if len(name_tokens) == 0:
         return resolved_map
 
-    traits_meta_rows = fetch_gift_traits_meta_rows(index_url=index_url, timeout=timeout)
-    if len(traits_meta_rows) == 0:
-        _log("WARNING: [gift] traits_meta returned no rows; trait name resolution skipped.")
-        return resolved_map
+    traits_meta_rows = fetch_gift_traits_meta_rows(index_url=index_url, timeout=timeout, fetcher=fetcher)
     for token in name_tokens:
-        token_norm = token.strip().lower()
-        exact = [
-            row
-            for row in traits_meta_rows
-            if str(row.get("Trait2", "") or "").strip().lower() == token_norm
-            or str(row.get("Trait1", "") or "").strip().lower() == token_norm
-        ]
-        candidates = exact
-        if len(candidates) == 0:
-            candidates = [
-                row
-                for row in traits_meta_rows
-                if token_norm in str(row.get("Trait2", "") or "").strip().lower()
-                or token_norm in str(row.get("Trait1", "") or "").strip().lower()
-            ]
-        if len(candidates) == 0:
-            _log("WARNING: [gift] trait token '{}' was not found in traits_meta.".format(token))
-            continue
-        selected = pick_best_gift_trait_match(candidates)
-        if selected is None:
-            continue
-        selected_id = str(selected.get("Lvl3", "") or "").strip()
-        if selected_id == "":
-            _log("WARNING: [gift] trait token '{}' matched row without Lvl3.".format(token))
-            continue
-        if len(candidates) > 1:
-            _log(
-                "WARNING: [gift] trait token '{}' matched {} traits; selected '{}' ({}) by highest count.".format(
-                    token,
-                    len(candidates),
-                    selected_id,
-                    str(selected.get("Trait2", "") or "").strip(),
-                )
-            )
-        resolved_map[token] = selected_id
+        token_norm = token.casefold()
+        candidates = [row for row in traits_meta_rows if str(row.get("Trait2", "")).strip().casefold() == token_norm]
+        if not candidates:
+            candidates = [row for row in traits_meta_rows if str(row.get("Trait1", "")).strip().casefold() == token_norm]
+        identities = {str(row.get("Lvl3", "")).strip() for row in candidates}
+        if not identities:
+            raise ValueError("Unknown GIFT trait name '{}'; use an exact Trait2 name or trait ID".format(token))
+        if len(identities) != 1 or not all(is_gift_trait_id(value) for value in identities):
+            raise ValueError("GIFT trait name '{}' is ambiguous; choose one trait ID from {}".format(token, sorted(identities)))
+        resolved_map[token] = next(iter(identities))
     return resolved_map
 
 
@@ -1029,6 +1000,7 @@ def fetch_gift_api_table(
     species: Sequence[str],
     timeout: float,
     dry_run: bool,
+    downloads_dir: Optional[Path] = None,
 ) -> Optional[pandas.DataFrame]:
     data_api_base = normalize_base_uri(config.get("uri", ""), DEFAULT_GIFT_API)
     requested_version = str(config.get("gift_version", "latest") or "latest").strip().lower()
@@ -1051,16 +1023,26 @@ def fetch_gift_api_table(
             key_name="gift_max_pages_per_trait",
             default=0,
         )
+    if page_size > 10000:
+        raise ValueError("gift_page_size must be between 1 and 10000")
     bias_ref = parse_bool_option(config.get("gift_bias_ref", ""), key_name="gift_bias_ref", default=True)
     bias_deriv = parse_bool_option(config.get("gift_bias_deriv", ""), key_name="gift_bias_deriv", default=True)
     agreement_min: Optional[float] = None
     agreement_min_raw = str(config.get("gift_agreement_min", "") or "").strip()
     if agreement_min_raw != "":
         agreement_min = float(agreement_min_raw)
+        if not math.isfinite(agreement_min) or not 0 <= agreement_min <= 1:
+            raise ValueError("gift_agreement_min must be finite and between 0 and 1")
+
+    mode = str(config.get("gift_cache_mode", "reuse") or "reuse").strip().lower()
+    retries = int(config.get("gift_retries", "2") or "2")
+    if mode not in {"reuse", "refresh", "offline"} or not 0 <= retries <= 5:
+        raise ValueError("Invalid gift_cache_mode or gift_retries")
 
     if dry_run:
         display_version = requested_version if requested_version != "latest" else "<latest>"
         display_index_url = build_gift_index_url(data_api_base=data_api_base, version=display_version)
+        _log("[dry-run] GIFT names below are candidates; reviewed mappings are applied after release resolution.")
         for species_name in species:
             genus_epithet = split_genus_epithet(species_name)
             if genus_epithet is None:
@@ -1076,33 +1058,53 @@ def fetch_gift_api_table(
             )
         for trait_token in trait_tokens:
             _log(
-                "[dry-run] {} request: {}?query=traits&traitid={}&biasref={}&biasderiv={}&startat=0".format(
+                "[dry-run] {} request: {}?query=traits&traitid={}&biasref={}&biasderiv={}&startat=0&limit={}".format(
                     database,
                     display_index_url,
                     quote(trait_token),
                     int(bias_ref),
                     int(bias_deriv),
+                    page_size,
                 )
             )
         return None
 
+    directory = downloads_dir / "gift" if downloads_dir is not None else None
+    with GiftRetrieval(directory, fetch_json_payload, mode=mode, retries=retries, logger=_log) as client:
+        return _fetch_gift_api_table(database, config, plan_rows, species, timeout, data_api_base,
+                                     requested_version, trait_tokens, page_size, max_pages,
+                                     bias_ref, bias_deriv, agreement_min, client)
+
+
+def _fetch_gift_api_table(database, config, plan_rows, species, timeout, data_api_base,
+                          requested_version, trait_tokens, page_size, max_pages,
+                          bias_ref, bias_deriv, agreement_min, client):
     resolved_version = resolve_gift_version(
         data_api_base=data_api_base,
         requested_version=requested_version,
         timeout=timeout,
         versions_api=str(config.get("gift_versions_api", "") or "").strip(),
+        fetcher=client.fetch,
     )
     index_url = build_gift_index_url(data_api_base=data_api_base, version=resolved_version)
     trait_token_map = resolve_gift_trait_token_map(
         index_url=index_url,
         trait_tokens=trait_tokens,
         timeout=timeout,
+        fetcher=client.fetch,
     )
     trait_ids = dedupe_keep_order(list(trait_token_map.values()))
     if len(trait_ids) == 0:
         _log("WARNING: [gift] no trait IDs resolved after applying traits_meta lookup.")
         return None
-    species_map = resolve_gift_species_map(index_url=index_url, species=species, timeout=timeout)
+    mappings, mapping_receipts = load_reviewed_mappings(
+        resolved_version, str(config.get("gift_species_mapping_file", "") or ""),
+        include_bundled=urlparse(index_url).hostname == "gift.uni-goettingen.de")
+    client.report.update(resolved_version=resolved_version, mapping_sources=mapping_receipts,
+                         requested_species=list(species), trait_token_map=trait_token_map,
+                         agreement_min=agreement_min)
+    species_map = resolve_gift_species_map(index_url=index_url, species=species, timeout=timeout,
+        fetcher=client.fetch, reviewed_mappings=mappings, report=client.report["species"])
     if species_map.shape[0] == 0:
         return pandas.DataFrame(columns=["species", "work_ID", "work_species", "trait_ID", "trait_value"])
     work_ids = set(species_map["work_ID"].astype(str).tolist())
@@ -1119,25 +1121,28 @@ def fetch_gift_api_table(
             required_columns.add(trait_key_column)
 
     frames: List[pandas.DataFrame] = []
-    for trait_token in trait_tokens:
-        trait_id = trait_token_map.get(trait_token, "")
-        if trait_id == "":
-            continue
+    for trait_id in trait_ids:
+        trait_token = next(token for token in trait_tokens if trait_token_map[token] == trait_id)
         page_index = 0
+        start_at = 0
+        trait_row_count = 0
+        seen_pages = set()
         while True:
-            start_at = page_index * page_size
-            traits_url = "{}?query=traits&traitid={}&biasref={}&biasderiv={}&startat={}".format(
+            traits_url = "{}?query=traits&traitid={}&biasref={}&biasderiv={}&startat={}&limit={}".format(
                 index_url,
                 quote(trait_id),
                 int(bias_ref),
                 int(bias_deriv),
                 start_at,
+                page_size,
             )
-            rows = json_payload_to_rows(fetch_json_payload(url=traits_url, timeout=timeout))
+            rows = json_payload_to_rows(client.fetch(url=traits_url, timeout=timeout))
             if len(rows) == 0:
                 break
-            if not any(isinstance(row, dict) and "work_ID" in row for row in rows):
-                break
+            page_signature = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+            if page_signature in seen_pages:
+                raise ValueError("GIFT returned a repeated page for trait " + trait_id)
+            seen_pages.add(page_signature)
             matched_rows: List[Dict[str, object]] = []
             for row in rows:
                 if not isinstance(row, dict):
@@ -1146,39 +1151,32 @@ def fetch_gift_api_table(
                 if work_id == "" or work_id not in work_ids:
                     continue
                 matched_row: Dict[str, object] = {"work_ID": work_id, "trait_ID": trait_id, "trait_token": trait_token}
-                for column in required_columns:
+                for column in sorted(required_columns):
                     matched_row[column] = row.get(column, "")
                 matched_rows.append(matched_row)
             if len(matched_rows) > 0:
                 frames.append(pandas.DataFrame.from_records(matched_rows))
+                trait_row_count += len(matched_rows)
             page_index += 1
-            if max_pages > 0 and page_index >= max_pages:
-                _log(
-                    "WARNING: [gift] reached gift_max_pages_per_trait={} for trait_ID '{}'.".format(
-                        max_pages,
-                        trait_id,
-                    )
-                )
-                break
+            start_at += len(rows)
             if len(rows) < page_size:
                 break
+            if max_pages > 0 and page_index >= max_pages:
+                raise ValueError("GIFT acquisition incomplete: gift_max_pages_per_trait={} for trait {}".format(max_pages, trait_id))
+        client.report["traits"].append({"trait_ID": trait_id, "trait_token": trait_token,
+                                        "pages": page_index, "matched_rows": trait_row_count})
 
     if len(frames) == 0:
         return pandas.DataFrame(columns=["species", "work_ID", "work_species", "trait_ID", "trait_value"])
 
     merged = pandas.concat(frames, ignore_index=True)
-    species_lookup = (
-        species_map.loc[:, ["work_ID", "species", "work_species"]]
-        .drop_duplicates(subset=["work_ID"])
-        .assign(work_ID=lambda df: df["work_ID"].astype(str))
-        .set_index("work_ID")
-    )
-    merged["species"] = merged["work_ID"].map(species_lookup["species"])
-    merged["work_species"] = merged["work_ID"].map(species_lookup["work_species"])
+    # Multiple input labels can name the same taxon; retain all instead of keeping the first.
+    merged = merged.merge(species_map, on="work_ID", how="inner", validate="many_to_many")
 
     if agreement_min is not None and "agreement" in merged.columns:
         agreement_numeric = pandas.to_numeric(merged["agreement"], errors="coerce")
         merged = merged.loc[(agreement_numeric >= agreement_min) | agreement_numeric.isna(), :]
+    merged.attrs["gift_trait_token_map"] = trait_token_map
     return merged
 
 
@@ -1657,6 +1655,7 @@ def load_database_table(
             species=species,
             timeout=timeout,
             dry_run=dry_run,
+            downloads_dir=downloads_dir,
         )
     if acquisition_mode == "gbif_distribution":
         return fetch_gbif_distribution_table(
@@ -1670,54 +1669,6 @@ def load_database_table(
     raise ValueError("Unsupported acquisition_mode '{}' for '{}'".format(acquisition_mode, database))
 
 
-def as_numeric_or_nan(series: pandas.Series) -> pandas.Series:
-    return pandas.to_numeric(series, errors="coerce")
-
-
-def aggregate_numeric(values: pandas.Series, aggregation: str) -> object:
-    numeric = as_numeric_or_nan(values).dropna()
-    if numeric.shape[0] == 0:
-        return pandas.NA
-    if aggregation == "mean":
-        return float(numeric.mean())
-    if aggregation == "min":
-        return float(numeric.min())
-    if aggregation == "max":
-        return float(numeric.max())
-    return float(numeric.median())
-
-
-def aggregate_binary(values: pandas.Series, aggregation: str, positive_values: Set[str]) -> object:
-    if positive_values:
-        lowered = values.astype(str).str.strip().str.lower()
-        mapped = lowered.isin(positive_values).astype(int)
-    else:
-        numeric = as_numeric_or_nan(values).fillna(0)
-        mapped = (numeric > 0).astype(int)
-    if mapped.shape[0] == 0:
-        return pandas.NA
-    if aggregation in ("all", "min"):
-        return int(mapped.min())
-    if aggregation in ("sum",):
-        return int(mapped.sum())
-    if aggregation in ("mean",):
-        return float(mapped.mean())
-    return int(mapped.max())
-
-
-def aggregate_categorical(values: pandas.Series, aggregation: str) -> object:
-    valid = values.astype(str).str.strip()
-    valid = valid[valid != ""]
-    if valid.shape[0] == 0:
-        return pandas.NA
-    if aggregation == "first":
-        return str(valid.iloc[0])
-    mode_values = valid.mode(dropna=True)
-    if mode_values.shape[0] == 0:
-        return str(valid.iloc[0])
-    return str(mode_values.iloc[0])
-
-
 def format_output_value(value: object) -> str:
     if value is pandas.NA:
         return ""
@@ -1728,7 +1679,9 @@ def format_output_value(value: object) -> str:
             return ""
         if value.is_integer():
             return str(int(value))
-        return "{:.6g}".format(value)
+        if not math.isfinite(value):
+            raise ValueError("Cannot publish a non-finite trait")
+        return repr(value)
     if isinstance(value, (int,)):
         return str(value)
     text = str(value).strip()
@@ -1739,15 +1692,23 @@ def aggregate_trait_column(
     db_df: pandas.DataFrame,
     plan_row: TraitPlanRow,
 ) -> pandas.Series:
+    validate_trait_plan_row(plan_row)
     group_keys = db_df["__species_norm"]
     values = db_df[plan_row.source_column]
+    if plan_row.value_type == "text":
+        valid = strip_string_series(values)
+        mask = values.notna() & valid.ne("")
+        grouped_text = valid[mask].groupby(group_keys[mask], observed=True, sort=False)
+        if plan_row.aggregation == "first":
+            return grouped_text.first()
+        return grouped_text.agg(lambda items: json.dumps(sorted(set(items)), ensure_ascii=False))
     if plan_row.value_type == "binary":
         if plan_row.positive_values:
             normalized = strip_string_series(values, lower=True)
-            missing = values.isna() | normalized.isin(["", "na", "nan", "n/a", "null", "none"])
+            missing = values.isna() | normalized.isin(["", "na", "nan", "n/a", "null", "none", "unknown"])
             mapped = normalized.isin(plan_row.positive_values).astype(float).mask(missing)
         else:
-            numeric = pandas.to_numeric(values, errors="coerce")
+            numeric = finite_trait_values(values)
             mapped = (numeric > 0).astype(float).mask(numeric.isna())
         grouped = mapped.groupby(group_keys, observed=True, sort=False)
         if plan_row.aggregation in ("all", "min"):
@@ -1760,6 +1721,7 @@ def aggregate_trait_column(
 
     if plan_row.value_type == "categorical":
         normalized = strip_string_series(values)
+        normalized = normalized.mask(normalized.str.lower().isin(["na", "nan", "n/a", "null", "none", "unknown"]), "")
         if plan_row.aggregation == "first":
             valid_mask = normalized != ""
             if not valid_mask.any():
@@ -1767,15 +1729,22 @@ def aggregate_trait_column(
             return normalized.loc[valid_mask].groupby(group_keys.loc[valid_mask], observed=True, sort=False).first()
         return aggregate_categorical_mode(values=normalized, group_keys=group_keys)
 
-    numeric = pandas.to_numeric(values, errors="coerce")
+    numeric = finite_trait_values(values)
     grouped = numeric.groupby(group_keys, observed=True, sort=False)
-    if plan_row.aggregation == "mean":
-        return grouped.mean()
-    if plan_row.aggregation == "min":
-        return grouped.min()
-    if plan_row.aggregation == "max":
-        return grouped.max()
-    return grouped.median()
+    result = getattr(grouped, plan_row.aggregation)()
+    if result.dropna().map(lambda value: not math.isfinite(float(value))).any():
+        raise ValueError("Numeric trait aggregation overflowed")
+    return result
+
+
+def finite_trait_values(values):
+    normalized = strip_string_series(values, lower=True)
+    missing = values.isna() | normalized.isin(["", "na", "nan", "n/a", "null", "none", "unknown"])
+    numeric = pandas.to_numeric(values.mask(missing), errors="coerce")
+    invalid = ~missing & (numeric.isna() | numeric.map(lambda value: not math.isfinite(float(value))))
+    if invalid.any():
+        raise ValueError("Non-numeric or non-finite trait values: " + repr(values[invalid].head(3).tolist()))
+    return numeric
 
 
 def validate_species_source(
@@ -1868,6 +1837,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=120.0,
         help="Network timeout in seconds for database retrieval.",
     )
+    parser.add_argument("--print-gift-mapping-inputs", action="store_true",
+                        help="Print configured reviewed mapping files for local provenance; no network requests.")
     parser.add_argument(
         "--strict",
         action="store_true",
@@ -1986,10 +1957,74 @@ def apply_gbif_cli_overrides(config: Dict[str, str], args: argparse.Namespace) -
     return merged
 
 
+def validate_trait_output_paths(outputs, input_paths, protected_directories):
+    outputs = [Path(path) for path in outputs if path is not None]
+    for index, path in enumerate(outputs):
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise ValueError("Trait output must be a regular file: " + str(path))
+        for other in list(input_paths) + outputs[:index]:
+            other = Path(other)
+            if path.resolve() == other.resolve() or (path.exists() and other.exists() and os.path.samefile(path, other)):
+                raise ValueError("Trait output aliases an input or another output: " + str(path))
+        if any(path.resolve().is_relative_to(Path(directory).resolve()) for directory in protected_directories):
+            raise ValueError("Trait output is inside an input/cache directory: " + str(path))
+
+
+def publish_trait_outputs(payloads):
+    """Prepare every file before installation and roll back on publication errors."""
+    staged = {}
+    backups = {}
+    installed = []
+    try:
+        for path, payload in payloads.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.is_symlink() or (path.exists() and not path.is_file()):
+                raise ValueError("Trait output must be a regular file: " + str(path))
+            with tempfile.NamedTemporaryFile(dir=path.parent, prefix="." + path.name, mode="wb", delete=False) as handle:
+                staged[path] = Path(handle.name)
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if path.exists():
+                with tempfile.NamedTemporaryFile(dir=path.parent, prefix="." + path.name + ".backup", delete=False) as handle:
+                    backups[path] = Path(handle.name)
+                shutil.copy2(path, backups[path])
+                shutil.copymode(path, staged[path])
+        for path, temporary in staged.items():
+            os.replace(temporary, path)
+            installed.append(path)
+    except BaseException as original_error:
+        recovery_errors = []
+        for path in reversed(installed):
+            try:
+                if path in backups:
+                    backup = backups[path]
+                    os.replace(backup, path)
+                    del backups[path]
+                else:
+                    path.unlink()
+            except OSError as recovery_error:
+                backup = backups.pop(path, None)
+                recovery_errors.append("{}: {}; retained backup: {}".format(path, recovery_error, backup))
+        if recovery_errors:
+            raise RuntimeError("Trait publication rollback needs recovery: " + "; ".join(recovery_errors)) from original_error
+        raise
+    finally:
+        for temporary in list(staged.values()) + list(backups.values()):
+            temporary.unlink(missing_ok=True)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
+    if args.print_gift_mapping_inputs:
+        path = Path(args.database_sources).expanduser().resolve()
+        if path.exists():
+            for config in read_database_sources(path).values():
+                if config.get("gift_species_mapping_file"):
+                    print(config["gift_species_mapping_file"])
+        return 0
     if args.print_supported_databases:
         print_supported_databases()
         return 0
@@ -2015,8 +2050,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     trait_plan_path = Path(args.trait_plan).expanduser().resolve()
     db_sources_path = Path(args.database_sources).expanduser().resolve()
     downloads_dir = Path(args.downloads_dir).expanduser().resolve()
-    output_path = Path(args.output).expanduser().resolve()
-    stats_output_path = Path(args.stats_output).expanduser().resolve() if args.stats_output else None
+    output_path = Path(args.output).expanduser().absolute()
+    stats_output_path = Path(args.stats_output).expanduser().absolute() if args.stats_output else None
 
     warnings: List[str] = []
     errors: List[str] = []
@@ -2047,6 +2082,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         source_rows = {}
         warnings.append("Database source map not found: {}".format(db_sources_path))
 
+    input_paths = [manifest_path, trait_plan_path, db_sources_path, Path(__file__),
+                   SCRIPT_DIR / "gift_retrieval.py", SCRIPT_DIR / "gift_species_mappings.tsv"]
+    for config in source_rows.values():
+        if config.get("gift_species_mapping_file"):
+            input_paths.append(Path(config["gift_species_mapping_file"]))
+        for uri in split_uri_list(config.get("uri", "")):
+            parsed = urlparse(uri)
+            if parsed.scheme in {"", "file"}:
+                input_paths.append(Path(unquote(parsed.path)))
+    protected_directories = [downloads_dir / "gift"]
+    if args.species_source == "species_cds":
+        protected_directories.append(species_cds_dir)
+    try:
+        validate_trait_output_paths([output_path, stats_output_path], input_paths, protected_directories)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     requested_databases = resolve_requested_databases(
         databases_arg=args.databases,
         plan_rows=plan_rows,
@@ -2066,6 +2118,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             continue
         target_species_by_base.setdefault(base_label, set()).add(species_name)
     result = pandas.DataFrame({"species": species_sorted}).set_index("species")
+    for row in plan_rows:
+        if row.database in requested_databases:
+            validate_trait_plan_row(row)
+            result[row.output_trait] = ""
     db_frames: Dict[str, pandas.DataFrame] = {}
     db_configs: Dict[str, Dict[str, str]] = {}
     trait_key_series_cache: Dict[Tuple[str, str], pandas.Series] = {}
@@ -2106,7 +2162,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         db_configs[database] = config
         species_column = detect_species_column(db_table, config.get("species_column", ""))
         db_table = db_table.copy()
-        db_table["__species_norm"] = db_table[species_column].map(normalize_species_name)
+        db_table["__species_norm"] = db_table[species_column].map(
+            lambda value: str(value) if str(value) in target_species else normalize_species_name(value))
         db_table["__species_norm"] = db_table["__species_norm"].map(
             lambda value: remap_species_name_to_target(
                 species_name=value,
@@ -2123,6 +2180,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     for plan_row in plan_rows:
         if plan_row.database not in requested_databases:
+            continue
+        if args.dry_run:
             continue
         db_df = db_frames.get(plan_row.database)
         if db_df is None:
@@ -2153,7 +2212,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if trait_key_values is None:
                 trait_key_values = strip_string_series(db_df[trait_key_column])
                 trait_key_series_cache[cache_key] = trait_key_values
-            db_filtered = db_filtered.loc[trait_key_values == plan_row.trait_key, :]
+            resolved_key = db_df.attrs.get("gift_trait_token_map", {}).get(plan_row.trait_key, plan_row.trait_key)
+            if plan_row.database == "gift" and trait_key_column in {"trait_ID", "trait_token"}:
+                db_filtered = db_filtered.loc[strip_string_series(db_df["trait_ID"]) == resolved_key, :]
+            else:
+                db_filtered = db_filtered.loc[trait_key_values == plan_row.trait_key, :]
             if (
                 db_filtered.shape[0] == 0
                 and plan_row.database == "gift"
@@ -2187,7 +2250,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 warnings.append(message)
             continue
 
-        aggregated = aggregate_trait_column(db_df=db_filtered, plan_row=plan_row)
+        try:
+            aggregated = aggregate_trait_column(db_df=db_filtered, plan_row=plan_row)
+        except ValueError as exc:
+            message = "[{}] invalid trait '{}': {}".format(plan_row.database, plan_row.output_trait, exc)
+            (errors if args.strict else warnings).append(message)
+            continue
         colname = plan_row.output_trait
         if colname not in result.columns:
             result[colname] = ""
@@ -2219,12 +2287,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _log("ERROR: No observed values for requested traits: {}".format(", ".join(empty_traits)))
         return 1
 
+    payloads = {output_path: output_df.to_csv(sep="\t", index=False).encode("utf-8")}
     if args.dry_run:
         _log("[dry-run] species_trait output would be written to: {}".format(output_path))
-    else:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_df.to_csv(output_path, sep="\t", index=False)
-        _log("species_trait.tsv written: {}".format(output_path))
 
     if stats_output_path is not None:
         stats = {
@@ -2238,12 +2303,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "output_path": str(output_path),
             "dry_run": int(bool(args.dry_run)),
         }
-        if not args.dry_run:
-            stats_output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(stats_output_path, "wt", encoding="utf-8") as handle:
-                json.dump(stats, handle, indent=2, ensure_ascii=False)
-        else:
+        payloads[stats_output_path] = json.dumps(stats, indent=2, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        if args.dry_run:
             _log("[dry-run] stats output would be written to: {}".format(stats_output_path))
+
+    if not args.dry_run:
+        validate_trait_output_paths([output_path, stats_output_path], input_paths, protected_directories)
+        publish_trait_outputs(payloads)
+        _log("species_trait.tsv written: {}".format(output_path))
 
     for message in warnings:
         _log("WARNING: {}".format(message))
