@@ -398,7 +398,7 @@ Purpose:
   proteins translated from `species_cds`),
 - per-gene alignments and trees,
 - concatenated and ASTRAL species trees,
-- IQ2MC/mcmctree dating pipeline,
+- IQ2MC/mcmctree dating pipeline with [four parallel chains, retained evidence and advisory convergence diagnostics](species-dating-mcmc.md),
 - constrained-tree plotting.
 
 Main outputs:

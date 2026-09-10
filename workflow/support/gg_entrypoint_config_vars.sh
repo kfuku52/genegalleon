@@ -314,6 +314,8 @@ run_mcmctree_calibration_diagnostics
 mcmctree_calibration_diagnostic_chains
 mcmctree_calibration_diagnostic_seed
 mcmc_birth_death_sampling
+mcmc_parallel_jobs
+mcmc_seed
 mcmc_burnin
 mcmc_clock_model
 mcmc_nsample

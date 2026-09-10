@@ -1709,6 +1709,8 @@ dir_species_tree_summary="${dir_species_tree}/species_tree_summary"
 if [[ -s "${dir_species_tree_summary}/dated_species_tree.nwk" ]]; then
   species_tree_basename="dated_species_tree"
   species_tree="${dir_species_tree_summary}/${species_tree_basename}.nwk"
+  python "${gg_support_dir}/mcmctree_status.py" warn --tree "${species_tree}" \
+    --status "${species_tree}.convergence.json"
 elif [[ -s "${dir_species_tree_summary}/undated_species_tree.nwk" ]]; then
   species_tree_basename="undated_species_tree"
   species_tree="${dir_species_tree_summary}/${species_tree_basename}.nwk"

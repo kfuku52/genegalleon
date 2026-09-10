@@ -3939,6 +3939,18 @@ else
 fi
 
 task="IQ2MC step 3 (MCMCtree dating run)"
+mcmctree_parallel_jobs_effective="${mcmc_parallel_jobs:-4}"
+if [[ ! "${mcmctree_parallel_jobs_effective}" =~ ^[1-4]$ ]]; then
+  echo "Invalid mcmc_parallel_jobs; expected an integer from 1 to 4." >&2
+  exit 2
+fi
+if [[ ! "${mcmc_seed:-1729}" =~ ^[1-9][0-9]{0,9}$ ]] || (( ${mcmc_seed:-1729} < 1 || ${mcmc_seed:-1729} > 2147483642 )); then
+  echo "Invalid mcmc_seed; expected an integer from 1 to 2147483642." >&2
+  exit 2
+fi
+if [[ "${GG_TASK_CPUS:-}" =~ ^[1-9][0-9]*$ ]] && (( mcmctree_parallel_jobs_effective > GG_TASK_CPUS )); then
+  mcmctree_parallel_jobs_effective=${GG_TASK_CPUS}
+fi
 disable_if_no_input_file "run_mcmctree2" "${file_iq2mc_ctl}" "${file_iq2mc_hessian}" "${file_iq2mc_rooted_tree}" "${file_iq2mc_dummy_phy}"
 # Check the dependency before classifying cached artifacts or rebuilding them.
 if [[ ${run_mcmctree2} -eq 1 || -e "${file_mcmctree_figtree_tre}" || -e "${file_mcmctree_raw_output}" ]]; then
@@ -3983,6 +3995,11 @@ mcmctree_provenance_args+=(
   --parameter "print=1"
   --parameter "time_scale=automatic_safe_iq2mc_unit"
   --parameter "tree_serialization=nwkit_convert_nexus_v1"
+  --parameter "chains=4"
+  --parameter "seed=${mcmc_seed:-1729}"
+  --parameter "diagnostics=rank_rhat_1.01_bulk_tail_400_warn"
+  --input "chain_runner=${gg_support_dir}/mcmctree_chains.py"
+  --input "diagnostic_adapter=${gg_support_dir}/mcmctree_diagnostics.R"
 )
 # Only public-unit artifacts are recovery sources. Never use the internal
 # scaled working directory, or overwrite a present (possibly corrupt) output.
@@ -4019,10 +4036,7 @@ if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_mcmctree2}"
 
-  if ! clear_directory_contents_safe "${dir_mcmctree2}"; then
-    echo "Error: Failed to clear MCMCtree working directory safely."
-    exit 1
-  fi
+  # Keep prior run evidence and completed chains across rebuilds/interruption.
   mcmctree_time_scale_factor=$(resolve_mcmctree_time_scale_factor)
   cd "${dir_mcmctree2}" || exit 1
   cp_out "${file_iq2mc_ctl}" ./
@@ -4045,22 +4059,33 @@ if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
   fi
   normalize_mcmctree_ctl_for_installed_paml "${ctl_basename}"
 
-  if ! mcmctree "${ctl_basename}"; then
+  if ! python "${gg_support_dir}/mcmctree_chains.py" \
+    --template "${mcmctree_work_dir}" --control "${ctl_basename}" \
+    --store "${dir_mcmctree2}/runs" \
+    --output "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" \
+    --status "${dir_mcmctree2}/convergence.json" \
+    --seed "${mcmc_seed:-1729}" --jobs "${mcmctree_parallel_jobs_effective}" \
+    --time-factor "${mcmctree_time_scale_factor}"; then
     echo "Error: IQ2MC step 3 failed."
-    rm -f -- "${file_mcmctree_raw_output}"
+    exit 1
   elif [[ ! -s "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" ]]; then
     echo "Error: IQ2MC step 3 did not generate $(basename "${file_mcmctree_raw_output}")."
-    rm -f -- "${file_mcmctree_raw_output}" "${file_mcmctree_figtree_tre}"
-  elif extract_scaled_mcmctree_figtree "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" "${file_mcmctree_figtree_tre}" "${mcmctree_time_scale_factor}"; then
+    exit 1
+  elif extract_scaled_mcmctree_figtree "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" "${mcmctree_work_dir}/FigTree.tre" "${mcmctree_time_scale_factor}"; then
+    validate_mcmctree_figtree "${mcmctree_work_dir}/FigTree.tre" || exit $?
     {
       echo "GeneGalleon ran MCMCTree in an internal scaled time unit."
-      echo "Raw scaled MCMCTree output is not retained by default."
+      echo "Raw chains, executed controls and logs are retained in mcmctree_main/runs."
+      echo "Convergence diagnostics are advisory; see mcmctree_main/convergence.json."
       echo "The FigTree block below is converted back to the original public time unit."
-      cat "${file_mcmctree_figtree_tre}"
-    } > "${file_mcmctree_raw_output}"
+      cat "${mcmctree_work_dir}/FigTree.tre"
+    } > "${mcmctree_work_dir}/public-summary.out"
+    mv_out_bundle "${mcmctree_work_dir}/FigTree.tre" "${file_mcmctree_figtree_tre}" \
+      "${mcmctree_work_dir}/public-summary.out" "${file_mcmctree_raw_output}" || exit $?
+    python "${gg_support_dir}/mcmctree_status.py" bind --tree "${file_mcmctree_figtree_tre}" --status "${dir_mcmctree2}/convergence.json" || exit $?
   else
     echo "Error: Failed to extract an original-unit FigTree tree block from MCMCTree output."
-    rm -f -- "${file_mcmctree_raw_output}" "${file_mcmctree_figtree_tre}"
+    exit 1
   fi
   cd "${dir_tmp}" || exit 1
   if [[ "${GG_KEEP_MCMCTREE_RAW_DEBUG:-0}" == "1" ]]; then
@@ -4097,6 +4122,9 @@ if [[ "${run_mcmctree_calibration_diagnostics}" == "1" ]]; then
   rm -rf -- "${calibration_diagnostic_work}"
 else
   gg_step_skip "${task}"
+fi
+if [[ -s "${file_mcmctree_figtree_tre}" ]]; then
+  python "${gg_support_dir}/mcmctree_status.py" warn --tree "${file_mcmctree_figtree_tre}" --status "${dir_mcmctree2}/convergence.json"
 fi
 
 task="Convert tree format"
@@ -4150,10 +4178,24 @@ if [[ ${convert_tree_needs_update} -eq 1 && ${run_convert_tree_format} -eq 1 ]];
   if [[ -s "${file_mcmctree_dated_nwk}" ]]; then
     echo "Copying converted dated tree to the canonical GeneGalleon summary: ${file_dated_species_tree}"
     cp_out "${file_mcmctree_dated_nwk}" "${file_dated_species_tree}"
+    for mcmctree_status_target in "${file_mcmctree_dated_nwk}" "${file_dated_species_tree}"; do
+      python "${gg_support_dir}/mcmctree_status.py" copy --tree "${file_mcmctree_figtree_tre}" \
+        --status "${dir_mcmctree2}/convergence.json" --target "${mcmctree_status_target}" || exit $?
+    done
   fi
   gg_artifact_record "${convert_tree_provenance_args[@]}"
 else
   gg_step_skip "${task}"
+fi
+
+# Refresh advisory metadata even when unchanged tree bytes allow conversion reuse.
+if [[ -s "${file_mcmctree_figtree_tre}" ]]; then
+  for mcmctree_status_target in "${file_mcmctree_dated_nwk}" "${file_dated_species_tree}"; do
+    if [[ -s "${mcmctree_status_target}" ]]; then
+      python "${gg_support_dir}/mcmctree_status.py" copy --cached --tree "${file_mcmctree_figtree_tre}" \
+        --status "${dir_mcmctree2}/convergence.json" --target "${mcmctree_status_target}" || exit $?
+    fi
+  done
 fi
 
 task="Dated species tree plotting"
@@ -5640,6 +5682,10 @@ else
 fi
 
 fi # sequence/tree producer stages
+if [[ -s "${file_dated_species_tree}" ]]; then
+  python "${gg_support_dir}/mcmctree_status.py" warn --tree "${file_dated_species_tree}" \
+    --status "${file_dated_species_tree}.convergence.json"
+fi
 
 if [[ ${run_cafe} -eq 1 ]]; then
   if [[ -s "${file_orthogroup_copy_number}" ]]; then

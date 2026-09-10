@@ -335,7 +335,7 @@ def test_safe_directory_clear_helper_is_used_for_mcmctree_dirs():
     text = _read_text(script)
     assert "clear_directory_contents_safe()" in text
     assert 'clear_directory_contents_safe "$(dirname "${file_iq2mc_ctl}")"' in text
-    assert 'clear_directory_contents_safe "${dir_mcmctree2}"' in text
+    assert '--store "${dir_mcmctree2}/runs"' in text
 
 
 def test_support_python_shebangs_use_python3():
@@ -1043,8 +1043,8 @@ def test_genome_evolution_core_runs_mcmctree_time_scaling_in_scratch():
         '-te "${iq2mc_scaled_constraint_tree}"',
         'scale_mcmctree_calibrations_file "${iq2mc_work_dir}/iq2mc.rooted.nwk" "${file_iq2mc_rooted_tree}" "${mcmctree_time_scale_factor}" "up"',
         'mcmctree_work_dir=$(mktemp -d "${dir_tmp}/tmp.mcmctree.work.XXXXXX")',
-        'extract_scaled_mcmctree_figtree "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" "${file_mcmctree_figtree_tre}" "${mcmctree_time_scale_factor}"',
-        "Raw scaled MCMCTree output is not retained by default.",
+        'extract_scaled_mcmctree_figtree "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" "${mcmctree_work_dir}/FigTree.tre" "${mcmctree_time_scale_factor}"',
+        "Raw chains, executed controls and logs are retained in mcmctree_main/runs.",
     ]
     for token in expected_tokens:
         assert token in text, f"Missing MCMCTree scaling token: {token}"
