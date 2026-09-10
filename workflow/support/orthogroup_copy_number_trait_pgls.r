@@ -408,7 +408,7 @@ validate_response_values <- function(values, family) {
   }
 }
 
-fit_nwkit_copy_number_model <- function(model_df, tree, response_family = "gaussian") {
+fit_nwkit_copy_number_model <- function(model_df, tree, response_family = "gaussian", covariates = character()) {
   executable <- Sys.which("nwkit")
   if (!nzchar(executable)) stop("nwkit regress is required for copy-number PGLS.")
   work <- tempfile("nwkit-copy-number-")
@@ -418,11 +418,11 @@ fit_nwkit_copy_number_model <- function(model_df, tree, response_family = "gauss
   data_path <- file.path(work, "data.tsv")
   result_path <- file.path(work, "result.tsv")
   ape::write.tree(tree, file = tree_path, digits = 17)
-  data <- model_df[, c("species", "trait_value", "copy_number"), drop = FALSE]
+  data <- model_df[, c("species", "trait_value", "copy_number", covariates), drop = FALSE]
   names(data)[[1]] <- "leaf_name"
   write_tsv_base(data, data_path)
   command <- c("regress", "--tree", tree_path, "--data", data_path,
-               "--responses", "trait_value", "--predictors", "copy_number",
+               "--responses", "trait_value", "--predictors", paste(c("copy_number", covariates), collapse = ","),
                "--evolution-model", "brownian", "--intercept", "yes",
                "--reml", if (response_family == "gaussian") "yes" else "no",
                "--response-family", paste0("trait_value=", response_family),
@@ -443,7 +443,7 @@ fit_nwkit_copy_number_model <- function(model_df, tree, response_family = "gauss
 }
 
 fit_one_orthogroup_copy_number_trait <- function(model_df, tree, family_id, trait_col, min_species = 4L,
-                               verbose = FALSE, response_family = "gaussian") {
+                               verbose = FALSE, response_family = "gaussian", covariates = character()) {
   model_df$trait_value <- parse_response_values(model_df$trait_value, response_family)
   validate_response_values(model_df$trait_value, response_family)
   model_df$copy_number <- suppressWarnings(as.numeric(model_df$copy_number))
@@ -458,6 +458,10 @@ fit_one_orthogroup_copy_number_trait <- function(model_df, tree, family_id, trai
     drop = FALSE
   ]
   model_df$copy_number <- log1p(model_df$copy_number)
+  for (column in covariates) {
+    model_df[[column]] <- suppressWarnings(as.numeric(model_df[[column]]))
+    model_df <- model_df[is.finite(model_df[[column]]), , drop = FALSE]
+  }
   n_species <- length(unique(model_df$species))
   if (n_species < min_species) {
     return(make_empty_result_row(family_id, trait_col, n_species, "skipped", "too_few_species"))
@@ -477,10 +481,15 @@ fit_one_orthogroup_copy_number_trait <- function(model_df, tree, family_id, trai
     return(make_empty_result_row(family_id, trait_col, n_species, "skipped", "too_few_tree_matched_species"))
   }
 
+  design <- cbind(1, as.matrix(model_df[, c("copy_number", covariates), drop = FALSE]))
+  if (qr(design)$rank < ncol(design) || nrow(design) <= ncol(design)) {
+    return(make_empty_result_row(family_id, trait_col, n_species, "not_estimable", "rank_deficient_or_no_residual_df"))
+  }
+
   pcc <- suppressWarnings(cor(model_df$copy_number, model_df$trait_value, method = "pearson", use = "complete.obs"))
   ols_slope <- suppressWarnings(stats::coef(stats::lm(trait_value ~ copy_number, data = model_df))[["copy_number"]])
 
-  fitted <- tryCatch(fit_nwkit_copy_number_model(model_df, tree_use, response_family), error = identity)
+  fitted <- tryCatch(fit_nwkit_copy_number_model(model_df, tree_use, response_family, covariates = covariates), error = identity)
   if (inherits(fitted, "error")) {
     out <- make_empty_result_row(family_id, trait_col, n_species, "error", "fit_failed")
     out$PCC <- safe_as_num(pcc)

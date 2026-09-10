@@ -549,6 +549,10 @@ Notable defaults:
   `Gamma_change.tab`,
 - orthogroup copy-number trait-PGLS outputs are written under
   `workspace/output/genome_evolution/orthogroup_copy_number/trait_pgls/`,
+- `run_copy_number_quality_diagnostics=1` adds BUSCO quality flags, descriptive
+  trait correlations and optional PGLS sensitivity comparisons under
+  `orthogroup_copy_number/quality_diagnostics/`; it defaults to `0` and never
+  automatically excludes candidates. See [quality diagnostics](copy-number-quality-diagnostics.md),
 - `grampa_h1` and `target_branch_go` default to empty strings; leaving them empty skips GRAMPA or GO enrichment only,
 - GO target can be specified by species name or branch ID.
 

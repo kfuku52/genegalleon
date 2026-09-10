@@ -211,6 +211,12 @@ with species-tree PGLS. It does not use CAFE5 result files such as
 `Gamma_change.tab`; `run_cafe=1` is only needed when you also want the separate
 CAFE family-size evolution analysis.
 
+Enable `run_copy_number_quality_diagnostics=1` to add a BUSCO/trait correlation
+matrix, family quality flags and BUSCO-adjusted/high-completeness PGLS comparisons.
+The flags do not automatically exclude candidates. See
+[BUSCO quality diagnostics](copy-number-quality-diagnostics.md) for inputs,
+interpretation, outputs and standalone plotting.
+
 ## 6. Run gene-family analyses in query2family mode
 
 This is the default mode of `gg_gene_evolution_entrypoint.sh`.

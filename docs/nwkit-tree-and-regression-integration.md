@@ -62,6 +62,12 @@ exploratory coefficients, nested-CV predictions and selection frequencies.
 See [copy-number models](copy-number-trait-models.md) for configuration and the
 explicit distinction between ordinary tests and selection outputs.
 
+The optional [BUSCO quality diagnostic stage](copy-number-quality-diagnostics.md)
+adds separate `log1p`-count PGLS comparisons with BUSCO as a covariate or a
+cohort restriction. It preserves the original root/shared Brownian history
+when dropping species and uses full-precision branch lengths. This is a
+sensitivity analysis, not a copy-number measurement-error model.
+
 ## Failure handling and cache invalidation
 
 The dated-tree PDF and its summary copy are published together. Rooting computes

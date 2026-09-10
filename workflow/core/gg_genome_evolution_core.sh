@@ -86,6 +86,11 @@ orthogroup_copy_number_trait_max_families="${orthogroup_copy_number_trait_max_fa
 orthogroup_copy_number_trait_p_adjust_method="${orthogroup_copy_number_trait_p_adjust_method:-BH}"
 orthogroup_copy_number_trait_alpha="${orthogroup_copy_number_trait_alpha:-0.05}"
 orthogroup_copy_number_trait_plot_top_n="${orthogroup_copy_number_trait_plot_top_n:-50}"
+run_copy_number_quality_diagnostics="${run_copy_number_quality_diagnostics:-0}"
+copy_number_quality_busco_table="${copy_number_quality_busco_table:-auto}"
+copy_number_quality_high_completeness="${copy_number_quality_high_completeness:-95}"
+copy_number_quality_correlation_method="${copy_number_quality_correlation_method:-spearman}"
+copy_number_quality_sensitivity="${copy_number_quality_sensitivity:-1}"
 file_trait="${file_trait:-auto}"
 mcmctree_divergence_time_constraints=()
 if [[ -n "${mcmctree_divergence_time_constraints_str:-}" ]]; then
@@ -5715,7 +5720,7 @@ fi
 
 task="Orthogroup copy-number matrix preparation"
 run_orthogroup_copy_number_stage=0
-if [[ ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 || ${run_orthogroup_copy_number_trait_selection} -eq 1 ]]; then
+if [[ ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 || ${run_orthogroup_copy_number_trait_selection} -eq 1 || ${run_copy_number_quality_diagnostics} -eq 1 ]]; then
   run_orthogroup_copy_number_stage=1
 fi
 copy_number_needs_update=0
@@ -5753,6 +5758,7 @@ cafe_provenance_args+=(
   --output "ancestral_counts=${dir_cafe_output}/Gamma_count.tab"
   --output "branch_changes=${dir_cafe_output}/Gamma_change.tab"
   --output "branch_probabilities=${dir_cafe_output}/Gamma_branch_probabilities.tab"
+  --output "family_results=${dir_cafe_output}/Gamma_family_results.txt"
   --output "summary_all=${file_cafe_summary_all_pdf}"
   --output "summary_significant=${file_cafe_summary_significant_pdf}"
   --parameter "gamma_categories=${n_gamma_cats_cafe}"
@@ -5764,7 +5770,7 @@ if [[ ${cafe_needs_update} -eq 1 && ${run_cafe} -eq 1 ]]; then
   rm -rf -- "${dir_cafe}"
   ensure_dir "${dir_cafe}"
 
-  if [[ ! -s "${dir_cafe_output}/Gamma_asr.tre" || ! -s "${dir_cafe_output}/Gamma_count.tab" || ! -s "${dir_cafe_output}/Gamma_change.tab" ]]; then
+  if [[ ! -s "${dir_cafe_output}/Gamma_asr.tre" || ! -s "${dir_cafe_output}/Gamma_count.tab" || ! -s "${dir_cafe_output}/Gamma_change.tab" || ! -s "${dir_cafe_output}/Gamma_family_results.txt" ]]; then
     if [[ -d "${dir_cafe_output}" ]]; then
       rm -rf -- "${dir_cafe_output}"
     fi
@@ -5931,6 +5937,89 @@ if [[ ${copy_number_selection_needs_update} -eq 1 && ${run_orthogroup_copy_numbe
     --prediction "${orthogroup_copy_number_trait_selection_prediction}" \
     --outdir "${dir_orthogroup_copy_number_trait_selection}" || exit $?
   gg_artifact_record "${copy_number_selection_provenance_args[@]}"
+else
+  gg_step_skip "${task}"
+fi
+
+task="Copy-number BUSCO quality diagnostics and trait correlations"
+quality_needs_update=0
+dir_copy_number_quality="${dir_orthogroup_copy_number}/quality_diagnostics"
+quality_busco_args=()
+quality_cafe_args=()
+quality_pgls_args=()
+quality_trait_args=()
+gg_artifact_contract_init quality_provenance_args "copy_number_quality_diagnostics" "all_orthogroups" "${genome_evolution_provenance_dir}/orthogroup.quality_diagnostics.json"
+quality_provenance_args+=(
+  --input "copy_number=${file_orthogroup_copy_number}"
+  --input "dated_species_tree=${file_dated_species_tree}"
+  --input "adapter=${gg_support_dir}/copy_number_quality_diagnostics.r"
+  --input "pgls_adapter=${gg_support_dir}/orthogroup_copy_number_trait_pgls.r"
+  --input "busco_parser=${gg_support_dir}/busco_quality_metadata.py"
+  --input "species_labeling=${gg_support_dir}/species_labeling.py"
+  --input "trait_schema_adapter=${gg_support_dir}/species_trait_schema.py"
+  --input "trait_contract=${gg_support_dir}/species_trait_contract.py"
+  --input "gbif_contract=${gg_support_dir}/gbif_observations.py"
+  --output-logical-directory "quality_bundle=${dir_copy_number_quality}"
+  --parameter "nwkit_identity=${genome_nwkit_identity}"
+  --parameter "busco_table=${copy_number_quality_busco_table}"
+  --parameter "trait=${orthogroup_copy_number_trait}"
+  --parameter "response_families=${orthogroup_copy_number_trait_response_families}"
+  --parameter "trait_schema_present=$([[ -f "${file_trait}.schema.json" ]] && echo 1 || echo 0)"
+  --parameter "trait_metadata_present=$([[ -f "${file_trait}.metadata.json" ]] && echo 1 || echo 0)"
+  --parameter "min_species=${orthogroup_copy_number_trait_min_species}"
+  --parameter "family_ids=${orthogroup_copy_number_trait_family_ids}"
+  --parameter "max_families=${orthogroup_copy_number_trait_max_families}"
+  --parameter "alpha=${orthogroup_copy_number_trait_alpha}"
+  --parameter "high_completeness=${copy_number_quality_high_completeness}"
+  --parameter "correlation_method=${copy_number_quality_correlation_method}"
+  --parameter "sensitivity=${copy_number_quality_sensitivity}"
+  --parameter "p_adjust=BH_all_planned_per_analysis_variant"
+  --parameter "predictor_transform=log1p"
+)
+if [[ "${copy_number_quality_busco_table}" == "auto" ]]; then
+  quality_busco_args+=(--busco_short_dir="${dir_species_busco_short}")
+  gg_artifact_add_input_if_present quality_provenance_args "busco_short_directory" "${dir_species_busco_short}"
+else
+  if [[ "${copy_number_quality_busco_table}" != /* ]]; then
+    copy_number_quality_busco_table="${gg_workspace_dir}/${copy_number_quality_busco_table}"
+  fi
+  quality_busco_args+=(--file_busco="${copy_number_quality_busco_table}")
+  quality_provenance_args+=(--input "busco_table=${copy_number_quality_busco_table}")
+fi
+if [[ -s "${file_trait}" ]]; then
+  quality_trait_args+=(--file_trait="${file_trait}")
+  quality_provenance_args+=(--input "trait_table=${file_trait}")
+  gg_artifact_add_input_if_present quality_provenance_args "trait_schema" "${file_trait}.schema.json"
+  gg_artifact_add_input_if_present quality_provenance_args "trait_metadata" "${file_trait}.metadata.json"
+fi
+if [[ ${run_cafe} -eq 1 ]]; then
+  quality_cafe_args+=(--file_cafe_results="${dir_cafe_output}/Gamma_family_results.txt")
+  quality_provenance_args+=(--input "cafe_family_results=${dir_cafe_output}/Gamma_family_results.txt")
+fi
+if [[ ${run_orthogroup_copy_number_trait_pgls} -eq 1 ]]; then
+  quality_pgls_args+=(--file_pgls_results="${file_orthogroup_copy_number_trait_pgls}")
+  quality_provenance_args+=(--input "pgls_results=${file_orthogroup_copy_number_trait_pgls}")
+fi
+gg_artifact_add_input_if_present quality_provenance_args "family_file" "${orthogroup_copy_number_trait_family_file}"
+gg_artifact_prepare_stage quality_needs_update run_copy_number_quality_diagnostics "${quality_provenance_args[@]}" || exit $?
+if [[ ${quality_needs_update} -eq 1 && ${run_copy_number_quality_diagnostics} -eq 1 ]]; then
+  gg_step_start "${task}"
+  Rscript "${gg_support_dir}/copy_number_quality_diagnostics.r" \
+    --file_sptree="${file_dated_species_tree}" \
+    --file_copy_number="${file_orthogroup_copy_number}" \
+    --outdir="${dir_copy_number_quality}" \
+    --trait="${orthogroup_copy_number_trait}" \
+    --response_families="${orthogroup_copy_number_trait_response_families}" \
+    --family_ids="${orthogroup_copy_number_trait_family_ids}" \
+    --family_file="${orthogroup_copy_number_trait_family_file}" \
+    --max_families="${orthogroup_copy_number_trait_max_families}" \
+    --min_species="${orthogroup_copy_number_trait_min_species}" \
+    --alpha="${orthogroup_copy_number_trait_alpha}" \
+    --high_threshold="${copy_number_quality_high_completeness}" \
+    --correlation_method="${copy_number_quality_correlation_method}" \
+    --sensitivity="${copy_number_quality_sensitivity}" \
+    "${quality_busco_args[@]}" "${quality_trait_args[@]}" "${quality_cafe_args[@]}" "${quality_pgls_args[@]}" || exit $?
+  gg_artifact_record "${quality_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi

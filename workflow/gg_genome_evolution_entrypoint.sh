@@ -140,6 +140,7 @@ run_orthogroup_grampa=1 # Run GRAMPA on orthogroup gene trees; requires rooted t
 run_cafe=0 # Run CAFE family-size evolution analysis on selected orthogroup gene-count tables and the dated species tree.
 run_orthogroup_copy_number_trait_selection=0 # Exploratory joint elastic-net selection with nested phylogenetic-group CV; no post-selection P-values.
 run_orthogroup_copy_number_trait_pgls=0 # Test associations between orthogroup copy numbers and species traits with species-tree PGLS.
+run_copy_number_quality_diagnostics=0 # Plot traits with BUSCO and flag quality-associated families; never automatically exclude candidates.
 run_go_enrichment=0 # Run GO enrichment for branches or orthogroups selected by family-size change tests.
 
 # Shared parameters
@@ -213,6 +214,10 @@ orthogroup_copy_number_trait_max_families="all" # Maximum orthogroups tested: al
 orthogroup_copy_number_trait_p_adjust_method="BH" # P-value adjustment method passed to p.adjust for orthogroup copy-number trait PGLS.
 orthogroup_copy_number_trait_alpha=0.05 # Adjusted P-value cutoff used for orthogroup_copy_number_trait_pgls.significant.tsv and summary plot guide line.
 orthogroup_copy_number_trait_plot_top_n=50 # Number of strongest orthogroup copy-number trait associations shown in the summary plot.
+copy_number_quality_busco_table="auto" # auto reads shared species BUSCO short summaries; otherwise a workspace-relative TSV with species and busco_complete_pct (0–100).
+copy_number_quality_high_completeness=95 # Prespecified percent cutoff for the high-completeness sensitivity cohort; not a universal quality guarantee.
+copy_number_quality_correlation_method="spearman" # spearman|pearson; descriptive pairwise trait correlations, without phylogenetic correction.
+copy_number_quality_sensitivity=1 # Also fit log1p-count PGLS baselines, BUSCO-adjusted models, and a high-completeness cohort.
 file_trait="auto" # Species trait table path for orthogroup copy-number trait PGLS, or auto for workspace/input/species_trait/species_trait.tsv.
 target_branch_go="" # Optional GO-enrichment target branch. Leave empty to skip GO enrichment. Example: "<1>" or "Arabidopsis_thaliana".
 change_direction_go="increase" # "increase" or "decrease"; family-size direction tested for GO enrichment on target_branch_go.
